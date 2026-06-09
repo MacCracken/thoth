@@ -1,0 +1,16 @@
+[package]
+name = "thoth"
+version = "${file:VERSION}"
+description = "thoth — sovereign agentic coding TUI; a model-switching scribe driving the AGNOS stack"
+license = "GPL-3.0-only"
+repository = "https://github.com/MacCracken/thoth"
+language = "cyrius"
+cyrius = "6.1.14"
+
+[build]
+entry = "src/main.cyr"
+test = "src/test.cyr"
+output = "build/thoth"
+
+[deps]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
