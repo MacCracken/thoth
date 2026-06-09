@@ -1,0 +1,80 @@
+# thoth — small target-neutral I/O + text utilities.
+#
+# These are SUBSTRATE helpers: they write through the portable syscall
+# interface and never touch the capability spine. Both src/main.cyr and the
+# test suite include this module; keep it free of top-level execution.
+
+# Buffered stdin line reader state. The carry buffer lets one read() satisfy
+# many lines (Linux pipes deliver multi-line blobs) while still returning
+# exactly one line per call (agnos line-discipline delivers one).
+var _rl_buf[4096];
+var _rl_len = 0;
+var _rl_pos = 0;
+
+# emit: write a NUL-terminated string to stdout, no trailing newline.
+fn emit(s) {
+    syscall(SYS_WRITE, 1, s, strlen(s));
+    return 0;
+}
+
+# emit_n: write n bytes from ptr to stdout.
+fn emit_n(ptr, n) {
+    syscall(SYS_WRITE, 1, ptr, n);
+    return 0;
+}
+
+# read_line: read one line from stdin into buf (NUL-terminated, newline
+# stripped). Returns the line length (>= 0), or (0 - 1) on EOF with no input.
+# Avoids `break` inside a var-bearing loop per the Cyrius break caveat — uses
+# a sentinel (ret) and an inner stop flag instead.
+fn read_line(buf, maxlen) {
+    var i = 0;
+    var ret = 0 - 2;
+    while (ret == (0 - 2)) {
+        if (_rl_pos >= _rl_len) {
+            _rl_pos = 0;
+            _rl_len = syscall(SYS_READ, 0, &_rl_buf, 4095);
+            # A read error (negative) is treated as EOF intentionally: with no
+            # buffered input there is nothing to recover, so we end the line /
+            # session rather than spin re-reading a persistently failing fd.
+            if (_rl_len <= 0) {
+                if (i == 0) { ret = 0 - 1; }
+                else { store8(buf + i, 0); ret = i; }
+            }
+        }
+        if (ret == (0 - 2)) {
+            var stop = 0;
+            while (_rl_pos < _rl_len && stop == 0) {
+                var ch = load8(&_rl_buf + _rl_pos);
+                _rl_pos = _rl_pos + 1;
+                if (ch == 10) {
+                    store8(buf + i, 0);
+                    ret = i;
+                    stop = 1;
+                } else {
+                    if (i < (maxlen - 1)) {
+                        store8(buf + i, ch);
+                        i = i + 1;
+                    }
+                }
+            }
+        }
+    }
+    return ret;
+}
+
+# cstr_starts_with: 1 if NUL-terminated s begins with NUL-terminated prefix.
+fn cstr_starts_with(s, prefix) {
+    var i = 0;
+    var ret = 0 - 2;
+    while (ret == (0 - 2)) {
+        var pc = load8(prefix + i);
+        if (pc == 0) { ret = 1; }
+        else {
+            var sc = load8(s + i);
+            if (sc != pc) { ret = 0; }
+            else { i = i + 1; }
+        }
+    }
+    return ret;
+}

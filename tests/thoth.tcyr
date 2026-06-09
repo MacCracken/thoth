@@ -1,11 +1,98 @@
-# thoth test suite
-# Stdlib auto-included via cyrius.cyml
+# thoth test suite — unit tests for the driver's pure logic.
+#
+# Includes the driver modules directly (NOT src/main.cyr or src/repl.cyr, which
+# carry top-level execution / pure I/O). Stdlib + process deps auto-resolve
+# from cyrius.cyml. Run via `cyrius test`.
+include "src/util.cyr"
+include "src/seams.cyr"
+include "src/session.cyr"
+include "src/exec.cyr"
+include "src/commands.cyr"
+
+fn test_classify() {
+    test_group("classify_input");
+    assert_eq(classify_input(""), CMD_EMPTY, "empty -> CMD_EMPTY");
+    assert_eq(classify_input("/help"), CMD_HELP, "/help");
+    assert_eq(classify_input("/?"), CMD_HELP, "/? alias");
+    assert_eq(classify_input("/quit"), CMD_QUIT, "/quit");
+    assert_eq(classify_input("/exit"), CMD_QUIT, "/exit alias");
+    assert_eq(classify_input("/seams"), CMD_SEAMS, "/seams");
+    assert_eq(classify_input("/state"), CMD_STATE, "/state");
+    assert_eq(classify_input("/model"), CMD_MODEL, "/model bare");
+    assert_eq(classify_input("/model gpt-5"), CMD_MODEL, "/model with arg");
+    assert_eq(classify_input("/read foo.txt"), CMD_READ, "/read with arg");
+    assert_eq(classify_input("/write a b"), CMD_WRITE, "/write");
+    assert_eq(classify_input("/run echo hi"), CMD_RUN, "/run");
+    assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
+    assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
+    assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
+    assert_eq(classify_input("hello"), CMD_TASK, "plain word -> task");
+    return 0;
+}
+
+fn test_tokens() {
+    test_group("token_is + arg_after");
+    assert_eq(token_is("/help", "/help"), 1, "exact token");
+    assert_eq(token_is("/model gpt", "/model"), 1, "token + space");
+    assert_eq(token_is("/models", "/model"), 0, "prefix is not a token");
+    assert_eq(token_is("/modelx", "/model"), 0, "no word boundary");
+    assert_eq(arg_after("/help"), 0, "no arg -> 0");
+    assert(streq(arg_after("/read foo.txt"), "foo.txt"), "arg extracted");
+    assert(streq(arg_after("/model   gpt-5"), "gpt-5"), "skips extra spaces");
+    assert(streq(arg_after("/write a.txt hi there"), "a.txt hi there"), "rest after first token");
+    return 0;
+}
+
+fn test_cstr() {
+    test_group("cstr_starts_with");
+    assert_eq(cstr_starts_with("hello", "he"), 1, "prefix");
+    assert_eq(cstr_starts_with("hello", "hello"), 1, "equal");
+    assert_eq(cstr_starts_with("he", "hello"), 0, "shorter than prefix");
+    assert_eq(cstr_starts_with("abc", "x"), 0, "mismatch");
+    assert_eq(cstr_starts_with("", ""), 1, "empty prefix of empty");
+    return 0;
+}
+
+fn test_seams() {
+    test_group("seam registry");
+    assert_eq(SEAM_COUNT, 5, "five seams");
+    assert(streq(seam_name(SEAM_HOOSH), "hoosh"), "hoosh name");
+    assert(streq(seam_name(SEAM_DAIMON), "daimon"), "daimon name");
+    assert(streq(seam_name(SEAM_BOTE), "bote"), "bote name");
+    assert(streq(seam_name(SEAM_TRON), "t-ron"), "t-ron name");
+    assert(streq(seam_name(SEAM_AVATARA), "avatara"), "avatara name");
+    assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent in 0.1.0");
+    assert_eq(seam_status(SEAM_TRON), SEAM_ABSENT, "t-ron absent in 0.1.0");
+    assert_eq(seam_any_wired(), 0, "nothing wired");
+    assert(streq(seam_status_label(SEAM_ABSENT), "absent"), "absent label");
+    assert(streq(seam_status_label(SEAM_REMOTE), "remote-client"), "remote label");
+    assert(streq(seam_status_label(SEAM_NATIVE), "native"), "native label");
+    return 0;
+}
+
+fn test_session() {
+    test_group("session state");
+    session_reset();
+    assert_eq(session_turns(), 0, "turns start 0");
+    assert_eq(session_model(), 0, "model starts none");
+    session_bump_turn();
+    session_bump_turn();
+    assert_eq(session_turns(), 2, "two turns counted");
+    session_set_model("gpt-5");
+    assert(streq(session_model(), "gpt-5"), "model set");
+    session_reset();
+    assert_eq(session_turns(), 0, "reset clears turns");
+    assert_eq(session_model(), 0, "reset clears model");
+    return 0;
+}
 
 fn main() {
     alloc_init();
-    test_group("smoke");
-    assert(1, "true is true");
-    assert_eq(1 + 1, 2, "math works");
+    test_classify();
+    test_tokens();
+    test_cstr();
+    test_seams();
+    test_session();
     return assert_summary();
 }
 

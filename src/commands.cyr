@@ -1,0 +1,219 @@
+# thoth — input classification + command handlers.
+#
+# classify_input / token_is / arg_after are PURE and unit-tested. The cmd_*
+# handlers do I/O. All of this is DRIVER logic: it dispatches to capability
+# seams and local substrate built-ins; it never reimplements a spine domain.
+
+enum Cmd {
+    CMD_EMPTY = 0;
+    CMD_HELP = 1;
+    CMD_QUIT = 2;
+    CMD_SEAMS = 3;
+    CMD_STATE = 4;
+    CMD_MODEL = 5;
+    CMD_READ = 6;
+    CMD_WRITE = 7;
+    CMD_RUN = 8;
+    CMD_UNKNOWN_SLASH = 9;
+    CMD_TASK = 10;
+}
+
+# token_is: 1 if line's first whitespace-delimited token equals word exactly.
+fn token_is(line, word) {
+    if (cstr_starts_with(line, word) == 0) { return 0; }
+    var after = load8(line + strlen(word));
+    if (after == 0) { return 1; }
+    if (after == 32) { return 1; }
+    return 0;
+}
+
+# arg_after: pointer to the first non-space char after the first token, or 0.
+fn arg_after(line) {
+    var i = 0;
+    while (load8(line + i) != 0 && load8(line + i) != 32) { i = i + 1; }
+    while (load8(line + i) == 32) { i = i + 1; }
+    if (load8(line + i) == 0) { return 0; }
+    return line + i;
+}
+
+# classify_input: map a trimmed input line to a Cmd id. Pure — unit-tested.
+fn classify_input(line) {
+    if (load8(line) == 0) { return CMD_EMPTY; }
+    if (load8(line) != 47) { return CMD_TASK; }   # 47 = '/'
+    if (token_is(line, "/help") == 1) { return CMD_HELP; }
+    if (token_is(line, "/?") == 1) { return CMD_HELP; }
+    if (token_is(line, "/quit") == 1) { return CMD_QUIT; }
+    if (token_is(line, "/exit") == 1) { return CMD_QUIT; }
+    if (token_is(line, "/seams") == 1) { return CMD_SEAMS; }
+    if (token_is(line, "/state") == 1) { return CMD_STATE; }
+    if (token_is(line, "/model") == 1) { return CMD_MODEL; }
+    if (token_is(line, "/read") == 1) { return CMD_READ; }
+    if (token_is(line, "/write") == 1) { return CMD_WRITE; }
+    if (token_is(line, "/run") == 1) { return CMD_RUN; }
+    return CMD_UNKNOWN_SLASH;
+}
+
+fn cmd_help() {
+    println("thoth - a model-switching scribe. commands:");
+    println("  /help              this help");
+    println("  /seams             capability ladder (spine seam status)");
+    println("  /state             session state");
+    println("  /model [id]        show model, or attempt a mid-session switch (hoosh)");
+    println("  /read <file>       print a file (safe, read-only built-in)");
+    println("  /write <f> <text>  write text to a file (t-ron-gated)");
+    println("  /run <cmd>         run a shell command (t-ron-gated local escape)");
+    println("  /quit              exit (or Ctrl-D)");
+    println("  <anything else>    a coding task -> routed to the model (hoosh)");
+    return 0;
+}
+
+# confirm: fail-closed authorization stand-in for the absent t-ron seam.
+# Names the exact object being authorized (verb + obj) so the answer is
+# informed. Returns 1 ONLY on explicit y/yes; default (empty/EOF/other) DENIES.
+fn confirm(verb, obj) {
+    emit("  [t-ron absent: fail-closed] authorize ");
+    emit(verb); emit(" "); emit(obj);
+    emit("? [y/N] ");
+    var ans[64];
+    var n = read_line(&ans, 64);
+    if (n <= 0) { return 0; }
+    if (streq(&ans, "y") == 1) { return 1; }
+    if (streq(&ans, "Y") == 1) { return 1; }
+    if (streq(&ans, "yes") == 1) { return 1; }
+    return 0;
+}
+
+fn cmd_state() {
+    println("session:");
+    emit("  turns   : "); fmt_int(session_turns()); println("");
+    emit("  model   : ");
+    if (session_model() == 0) { println("(none - hoosh seam absent)"); }
+    else { println(session_model()); }
+    emit("  spine   : ");
+    if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
+    else { println("partially wired"); }
+    println("  build   : thoth 0.1.0");
+    return 0;
+}
+
+fn cmd_model(line) {
+    var arg = arg_after(line);
+    if (arg == 0) {
+        emit("model: ");
+        if (session_model() == 0) { println("(none)"); }
+        else { println(session_model()); }
+        println("the hoosh seam is absent in 0.1.0 - no model can run yet.");
+        return 0;
+    }
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+        emit("cannot switch to '"); emit(arg); println("': hoosh seam is absent.");
+        println("mid-session switching routes through hoosh; it is not wired in 0.1.0.");
+        println("(native on AGNOS, a client elsewhere - neither yet. see /seams.)");
+        return 0;
+    }
+    session_set_model(arg);
+    emit("model -> "); println(arg);
+    return 0;
+}
+
+# /read uses one reused heap buffer (the bump allocator never frees, so a
+# fresh alloc per call would accrete over a long session). Files larger than
+# the cap are truncated to it.
+var _read_buf = 0;
+var READ_BUF_CAP = 1048576;     # 1 MB
+
+fn cmd_read(line) {
+    var path = arg_after(line);
+    if (path == 0) { println("usage: /read <file>"); return 0; }
+    if (file_exists(path) == 0) { emit("no such file: "); println(path); return 0; }
+    if (_read_buf == 0) { _read_buf = alloc(READ_BUF_CAP); }
+    var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
+    if (n < 0) { emit("read failed: "); println(path); return 0; }
+    store8(_read_buf + n, 0);
+    emit("--- "); emit(path); emit(" ("); fmt_int(n); println(" bytes) ---");
+    emit_n(_read_buf, n);
+    if (n > 0) { if (load8(_read_buf + n - 1) != 10) { println(""); } }
+    println("--- end ---");
+    return 0;
+}
+
+# /write reuses two static buffers (the path copy + the content+newline
+# output) so repeated writes don't accrete in the never-freeing bump heap —
+# matching the /read and /run convention. Both are bounded by the 4096-byte
+# input line. A trailing newline is appended to the content.
+var _write_path = 0;
+var _write_out = 0;
+var WRITE_BUF_CAP = 4096;
+
+fn cmd_write(line) {
+    var rest = arg_after(line);
+    if (rest == 0) { println("usage: /write <path> <content>"); return 0; }
+    if (_write_path == 0) { _write_path = alloc(WRITE_BUF_CAP); }
+    if (_write_out == 0) { _write_out = alloc(WRITE_BUF_CAP); }
+    var i = 0;
+    while (load8(rest + i) != 0 && load8(rest + i) != 32) {
+        if (i < (WRITE_BUF_CAP - 1)) { store8(_write_path + i, load8(rest + i)); }
+        i = i + 1;
+    }
+    var plen = i;
+    if (plen > (WRITE_BUF_CAP - 1)) { plen = WRITE_BUF_CAP - 1; }
+    store8(_write_path + plen, 0);
+    var content = 0;
+    var j = i;
+    while (load8(rest + j) == 32) { j = j + 1; }
+    if (load8(rest + j) != 0) { content = rest + j; }
+    if (content == 0) { println("usage: /write <path> <content>"); return 0; }
+    emit("propose write -> "); println(_write_path);
+    if (confirm("write to", _write_path) == 0) { println("  denied (default). nothing written."); return 0; }
+    var clen = strlen(content);
+    if (clen > (WRITE_BUF_CAP - 2)) { clen = WRITE_BUF_CAP - 2; }
+    memcpy(_write_out, content, clen);
+    store8(_write_out + clen, 10);
+    store8(_write_out + clen + 1, 0);
+    var rc = file_write_all(_write_path, _write_out, clen + 1);
+    if (rc < 0) { emit("write failed: "); println(_write_path); return 0; }
+    emit("wrote "); fmt_int(clen + 1); emit(" bytes (+newline) -> "); println(_write_path);
+    return 0;
+}
+
+fn cmd_run(line) {
+    var cmdline = arg_after(line);
+    if (cmdline == 0) { println("usage: /run <shell command>"); return 0; }
+    println("tool execution is daimon+bote's domain, gated by t-ron - none wired in 0.1.0.");
+    println("this /run is a local built-in shell escape (substrate), not the MCP tool spine.");
+    emit("  proposed: "); println(cmdline);
+    if (confirm("run", cmdline) == 0) { println("  denied (default). nothing ran."); return 0; }
+    var rc = run_shell(cmdline);
+    if (rc == (0 - 1)) { println("  (failed to spawn /bin/sh)"); return 0; }
+    emit("  exit "); fmt_int(rc); println("");
+    return 0;
+}
+
+fn cmd_task(line) {
+    session_bump_turn();
+    emit("task: "); println(line);
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+        println("  hoosh seam absent - no model backend is wired in 0.1.0.");
+        println("  thoth drives; reasoning/codegen routes through hoosh (native on AGNOS,");
+        println("  a client elsewhere) - neither yet. degraded honestly, never faked.");
+        return 0;
+    }
+    return 0;
+}
+
+# dispatch: run one input line. Returns 1 to keep looping, 0 to quit.
+fn dispatch(line) {
+    var c = classify_input(line);
+    if (c == CMD_QUIT) { return 0; }
+    if (c == CMD_EMPTY) { return 1; }
+    if (c == CMD_HELP) { cmd_help(); return 1; }
+    if (c == CMD_SEAMS) { cmd_seams(); return 1; }
+    if (c == CMD_STATE) { cmd_state(); return 1; }
+    if (c == CMD_MODEL) { cmd_model(line); return 1; }
+    if (c == CMD_READ) { cmd_read(line); return 1; }
+    if (c == CMD_WRITE) { cmd_write(line); return 1; }
+    if (c == CMD_RUN) { cmd_run(line); return 1; }
+    if (c == CMD_UNKNOWN_SLASH) { println("unknown command (try /help)"); return 1; }
+    cmd_task(line);
+    return 1;
+}

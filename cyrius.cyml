@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.1.14"
+cyrius = "6.1.15"
 
 [build]
 entry = "src/main.cyr"
@@ -13,4 +13,4 @@ test = "src/test.cyr"
 output = "build/thoth"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "assert", "bench"]
+stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "result", "tagged", "process", "assert", "bench"]

@@ -1,0 +1,89 @@
+# thoth — capability-seam registry.
+#
+# thoth owns NO domain logic of its own (see docs/architecture/001). Every
+# AGNOS-owned domain is reached through a thin capability seam with three
+# binding modes. In 0.1.0 every spine seam is ABSENT — the seams exist and
+# report their status honestly; nothing is wired or faked. Each future
+# milestone flips one seam from absent -> remote/native.
+#
+# Pure functions only (plus one display helper). Unit-tested in tests/.
+
+# Binding mode of a seam.
+enum SeamStatus {
+    SEAM_ABSENT = 0;     # not reachable; the feature degrades honestly
+    SEAM_REMOTE = 1;     # reached as a client over a portable transport
+    SEAM_NATIVE = 2;     # AGNOS-native, co-resident, sandboxed (canonical)
+}
+
+# The five spine seams thoth consumes.
+enum SeamId {
+    SEAM_HOOSH = 0;
+    SEAM_DAIMON = 1;
+    SEAM_BOTE = 2;
+    SEAM_TRON = 3;
+    SEAM_AVATARA = 4;
+}
+
+var SEAM_COUNT = 5;
+
+# seam_name: crate name for a seam id.
+fn seam_name(id) {
+    if (id == SEAM_HOOSH) { return "hoosh"; }
+    if (id == SEAM_DAIMON) { return "daimon"; }
+    if (id == SEAM_BOTE) { return "bote"; }
+    if (id == SEAM_TRON) { return "t-ron"; }
+    if (id == SEAM_AVATARA) { return "avatara"; }
+    return "?";
+}
+
+# seam_domain: the domain the seam owns (and that thoth never reimplements).
+fn seam_domain(id) {
+    if (id == SEAM_HOOSH) { return "LLM inference - model routing + mid-session switch"; }
+    if (id == SEAM_DAIMON) { return "agent orchestration + MCP tool execution + host registry"; }
+    if (id == SEAM_BOTE) { return "MCP protocol"; }
+    if (id == SEAM_TRON) { return "MCP per-tool authorization (the security gate)"; }
+    if (id == SEAM_AVATARA) { return "personality / archetype overlay (Thoth / Librarian)"; }
+    return "?";
+}
+
+# seam_status: current binding mode. 0.1.0 is fermenting — all absent.
+fn seam_status(id) {
+    return SEAM_ABSENT;
+}
+
+# seam_status_label: human label for a binding mode.
+fn seam_status_label(st) {
+    if (st == SEAM_NATIVE) { return "native"; }
+    if (st == SEAM_REMOTE) { return "remote-client"; }
+    return "absent";
+}
+
+# seam_any_wired: 1 if any seam is reachable (remote or native), else 0.
+fn seam_any_wired() {
+    var i = 0;
+    var wired = 0;
+    while (i < SEAM_COUNT) {
+        if (seam_status(i) != SEAM_ABSENT) { wired = 1; }
+        i = i + 1;
+    }
+    return wired;
+}
+
+# cmd_seams: render the capability ladder. I/O — not unit-tested.
+fn cmd_seams() {
+    println("capability ladder - the AGNOS spine thoth drives:");
+    var i = 0;
+    while (i < SEAM_COUNT) {
+        emit("  ");
+        emit(seam_name(i));
+        emit("  [");
+        emit(seam_status_label(seam_status(i)));
+        emit("]  ");
+        println(seam_domain(i));
+        i = i + 1;
+    }
+    println("");
+    println("  0.1.0 is fermenting: every spine seam is absent. Nothing is faked.");
+    println("  port the floor; never fork the spine.");
+    return 0;
+}

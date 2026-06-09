@@ -1,0 +1,22 @@
+# thoth — the interactive driver loop.
+#
+# read a line -> dispatch -> iterate. EOF (Ctrl-D) ends the session. This is
+# the platform-neutral core (M2): it reads through the portable substrate
+# (read_line) and dispatches to driver commands. No spine bindings.
+fn repl_loop() {
+    var line[4096];
+    var running = 1;
+    while (running == 1) {
+        emit("thoth> ");
+        var n = read_line(&line, 4096);
+        if (n == (0 - 1)) {
+            running = 0;
+            println("");
+        } else {
+            if (n > 0) {
+                if (dispatch(&line) == 0) { running = 0; }
+            }
+        }
+    }
+    return 0;
+}

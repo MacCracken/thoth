@@ -61,17 +61,17 @@ whole spine is native._
 - [ ] At least one downstream consumer green **on AGNOS**
 - [ ] CHANGELOG complete from the first real release onward
 - [ ] Security review pass
-- [ ] First real release tagged under **CalVer (`YYYY.M.D`)** — see
-      Versioning below
+- [ ] 1.0 versioning scheme decided (SemVer vs CalVer) — see Versioning below
+      and [ADR-0004](../adr/0004-semver-pre-release.md)
 
 ## Versioning
 
-thoth is a **consumer app / binary**, so per the first-party standards it
-uses **CalVer (`YYYY.M.D[-N]`)** at its first real release. The current
-`VERSION` (SemVer `0.1.0`) is a fermenting placeholder and stays
-**untouched** until thoth leaves the fermenting stage — do not force the
-switch now. The CalVer cutover happens at the first tagged release, not
-before.
+thoth uses **SemVer `0.x`** through its pre-1.0 phase — see
+[ADR-0004](../adr/0004-semver-pre-release.md). This supersedes the earlier
+"CalVer at first release" plan: a `0.x` number honestly signals that the
+surface is still moving (the spine is absent; commands and the seam interface
+will change). Whether thoth adopts CalVer (the binary standard) or stays SemVer
+at 1.0 is deferred to a later ADR.
 
 ## Milestones
 
@@ -103,17 +103,20 @@ one. No feature code — docs and manifest hygiene only.
   described in **prose only** here and in `state.md`; `cyrius.cyml` keeps
   **stdlib deps only** while fermenting
 
-### M2 — REPL/TUI driver core (provisional)
+### M2 — REPL/TUI driver core — ✅ 0.1.0 (2026-06-09)
 
-The platform-neutral skeleton: read a task, plan, present a turn loop,
-edit files, run tools, iterate. No spine bindings yet — a local,
-self-contained loop that proves the driver shape.
+The platform-neutral skeleton: read → dispatch → iterate. No spine bindings —
+a local, self-contained loop that proves the driver shape. Shipped:
 
-- Interactive REPL/TUI over the portable terminal-I/O interface (no
-  per-OS terminal code)
-- Driver loop: read → plan → edit → run → iterate
-- Capability-seam scaffolding (thin seams where the spine will bind),
-  with every seam reporting **absent** honestly for now
+- ✅ Interactive REPL/TUI over the portable buffered line reader (no per-OS
+  terminal code)
+- ✅ Command dispatch: `/help` `/seams` `/state` `/model` `/read` `/write`
+  `/run` `/quit`, plus free-text routed as a coding task
+- ✅ Capability-seam registry — the five spine seams report **absent** honestly
+  (`/seams` renders the ladder)
+- ✅ Fail-closed t-ron-absent gate on `/run` and `/write`; portable local shell
+  escape via `process.cyr` with honest exit codes
+- ✅ 47-assertion unit suite
 
 ### M3 — hoosh inference + mid-session model switch (provisional)
 

@@ -8,10 +8,12 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: early / fermenting.** thoth is captured as an idea-log and a
-> scaffold, not yet built into feature code. Nothing below describes shipped
-> behavior — it describes the intended shape. Don't expect a working agent
-> loop yet. See [`docs/development/state.md`](docs/development/state.md) and
+> **Status: 0.1.0 — driver core (pre-1.0).** The interactive REPL/TUI loop is
+> real and usable, but the capability spine (hoosh/daimon/bote/t-ron/avatara)
+> is **absent** — no model-backed reasoning, MCP tools, or authorization are
+> wired yet, and they degrade honestly (`/seams` shows the ladder). SemVer
+> `0.x` while the surface moves. See
+> [`docs/development/state.md`](docs/development/state.md) and
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live
 > picture.
 

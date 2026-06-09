@@ -1,0 +1,35 @@
+# thoth — session state + the avatara persona descriptor.
+#
+# Session state is plain globals: one interactive session per process. The
+# avatara seam is absent in 0.1.0, so the persona is a STATIC bundled
+# descriptor — a descriptor, NOT a reimplementation of avatara (ADR-0003).
+# No top-level execution; included by main and by the test suite.
+
+var _sess_turns = 0;
+var _sess_model = 0;     # 0 = none; else a cstring model id
+
+fn session_reset() {
+    _sess_turns = 0;
+    _sess_model = 0;
+    return 0;
+}
+
+fn session_turns() { return _sess_turns; }
+fn session_bump_turn() { _sess_turns = _sess_turns + 1; return _sess_turns; }
+fn session_model() { return _sess_model; }
+fn session_set_model(m) { _sess_model = m; return 0; }
+
+fn persona_name() { return "Thoth"; }
+fn persona_role() { return "the Librarian"; }
+fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"; }
+
+# print_banner: the scribe greeting (the static avatara stand-in). I/O.
+fn print_banner() {
+    println("");
+    emit("  "); emit(persona_name()); emit(", "); emit(persona_role());
+    println(" - thoth 0.1.0");
+    emit("  "); println(persona_tagline());
+    println("  a sovereign agentic coding TUI (fermenting). /help for commands.");
+    println("");
+    return 0;
+}

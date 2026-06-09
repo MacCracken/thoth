@@ -22,3 +22,4 @@ Decisions about thoth — what we chose, the context, and the consequences we ac
 - [0001 — OS-agnostic reach, AGNOS-primary home](0001-os-agnostic-agnos-primary.md) — *Accepted.* thoth is OS-agnostic at the substrate layer and AGNOS-sovereign at the capability layer: port the floor, never fork the spine.
 - [0002 — Consume the AGNOS stack, do not reimplement](0002-consume-the-agnos-stack.md) — *Accepted.* thoth depends on hoosh / daimon / bote / t-ron / avatara for every domain it touches and builds none of that logic itself.
 - [0003 — Wear the avatara Thoth archetype](0003-wear-the-avatara-thoth-archetype.md) — *Accepted.* thoth pulls the existing avatara Thoth/Librarian archetype as its personality overlay; the shared name is the design, not a collision.
+- [0004 — SemVer 0.x in pre-release, not CalVer](0004-semver-pre-release.md) — *Accepted.* thoth keeps SemVer 0.x through pre-1.0 rather than cut to CalVer now; the post-1.0 scheme is deferred.

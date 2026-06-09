@@ -1,0 +1,20 @@
+# thoth — local shell-escape substrate for /run.
+#
+# This is the driver's OWN local hands (a shell escape), NOT the daimon MCP
+# tool-execution spine (which is an absent seam). It is ALWAYS invoked behind
+# the t-ron-absent fail-closed confirm gate in cmd_run.
+#
+# run_shell executes `/bin/sh -c <cmdline>` via the PORTABLE process.cyr surface
+# (process.cyr #ifdefs to the agnos sys_spawn and Windows CreateProcessW
+# variants; POSIX fork/exec here). The child INHERITS thoth's stdout/stderr, so
+# output streams live to the terminal and we return the REAL exit code (or
+# (0 - 1) on spawn failure) — honest on every target, no capture-vs-empty
+# ambiguity. Explicit argv (exec_vec form) per the CLAUDE.md "exec_vec, not
+# sys_system" rule: the cmdline is the user's own, authorized this turn.
+fn run_shell(cmdline) {
+    var args = vec_new();
+    vec_push(args, "/bin/sh");
+    vec_push(args, "-c");
+    vec_push(args, cmdline);
+    return exec_vec(args);
+}
