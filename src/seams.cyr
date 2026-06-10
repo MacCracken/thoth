@@ -2,9 +2,9 @@
 #
 # thoth owns NO domain logic of its own (see docs/architecture/001). Every
 # AGNOS-owned domain is reached through a thin capability seam with three
-# binding modes. In 0.1.0 every spine seam is ABSENT — the seams exist and
-# report their status honestly; nothing is wired or faked. Each future
-# milestone flips one seam from absent -> remote/native.
+# binding modes. As of M3 the hoosh seam is REMOTE (when thoth.cyml declares an
+# endpoint); the other four are still ABSENT. The seams report their status
+# honestly; nothing is faked. Each milestone flips one more seam.
 #
 # Pure functions only (plus one display helper). Unit-tested in tests/.
 
@@ -46,8 +46,15 @@ fn seam_domain(id) {
     return "?";
 }
 
-# seam_status: current binding mode. 0.1.0 is fermenting — all absent.
+# seam_status: current binding mode. hoosh (M3) binds REMOTE when thoth.cyml
+# declares an endpoint — reached as a client over HTTP via sandhi (native on
+# AGNOS, a client elsewhere; both are the same contract, here the client mode).
+# No endpoint declared -> absent, never faked. The other four seams are still
+# absent (daimon/bote -> M4, t-ron -> M4, avatara -> M5).
 fn seam_status(id) {
+    if (id == SEAM_HOOSH) {
+        if (config_hoosh_configured() == 1) { return SEAM_REMOTE; }
+    }
     return SEAM_ABSENT;
 }
 
@@ -83,7 +90,12 @@ fn cmd_seams() {
         i = i + 1;
     }
     println("");
-    println("  0.1.0 is fermenting: every spine seam is absent. Nothing is faked.");
+    if (seam_any_wired() == 0) {
+        println("  every spine seam is absent. Nothing is faked.");
+    } else {
+        println("  hoosh wired (remote-client over HTTP via sandhi); the rest absent.");
+        println("  absent seams degrade honestly — never faked, never reimplemented.");
+    }
     println("  port the floor; never fork the spine.");
     return 0;
 }

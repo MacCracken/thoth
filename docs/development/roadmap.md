@@ -118,16 +118,24 @@ a local, self-contained loop that proves the driver shape. Shipped:
   escape via `process.cyr` with honest exit codes
 - ✅ 47-assertion unit suite
 
-### M3 — hoosh inference + mid-session model switch (provisional)
+### M3 — hoosh inference + mid-session model switch — ✅ 0.2.0 (2026-06-10)
 
 The signature feature. Route a turn to a backing model; switch the
-backing model mid-session. Routing is OS-independent by construction.
+backing model mid-session. Routing is OS-independent by construction. Shipped:
 
-- Turn inference routed through hoosh
-- Mid-session model / tier / provider switch
-- AGNOS: hoosh reached natively/co-resident. Off-AGNOS: hoosh reached as
-  a remote/networked gateway over the same contract, capability-gated;
-  unreachable host degrades the feature **honestly and announced**
+- ✅ Turn inference routed through hoosh — an OpenAI-compatible HTTP gateway
+  reached as a remote client, transported by sandhi (compose, never hand-roll).
+  Free-text turns POST chat completions and print the result.
+- ✅ Mid-session model / provider switch — `/model <id>` re-routes the next
+  request; hoosh routes per request by the `model` field. Verified live across
+  providers (Anthropic → OpenAI in one session).
+- ✅ `thoth.cyml` runtime config gates the seam; off-AGNOS this is the
+  networked gateway. Unconfigured → seam absent; unreachable host → transport
+  error announced. Degraded **honestly and announced**, never faked.
+- ✅ Pure request/response logic unit-tested; see
+  [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
+- ↪ Deferred: AGNOS-native co-resident binding (same contract), streaming/SSE,
+  multi-turn context — future milestones.
 
 ### M4 — MCP tool execution: daimon + bote + t-ron (provisional)
 

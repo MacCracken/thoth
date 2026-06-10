@@ -1,0 +1,26 @@
+# thoth runtime config — copy to `thoth.cyml` and edit.
+#
+# This is NOT the build manifest (that is cyrius.cyml). It is thoth's own
+# runtime config, read once at startup. It is a CYML file: TOML above an
+# optional `---`, markdown below (the body, if any, is ignored).
+#
+# The [hoosh] table wires the hoosh seam (M3). Declaring a `url` is what flips
+# the seam from absent -> remote-client: thoth POSTs OpenAI-compatible chat
+# completions to that gateway over HTTP (via sandhi) and routes turns through
+# it. No [hoosh].url, no remote claim — the seam degrades honestly. hoosh owns
+# inference + provider routing + the mid-session model switch; thoth only drives
+# it. Run a gateway with `hoosh serve 8088` (see the hoosh repo).
+
+[hoosh]
+# Gateway base URL. thoth appends the well-known /v1/chat/completions path.
+url   = "http://127.0.0.1:8088"
+
+# Optional bearer token, if the gateway's [[auth]] requires one. Omit for an
+# unauthenticated local gateway. Keep real tokens out of version control —
+# thoth.cyml is gitignored; this .example is the committed template.
+# token = "your-secret-token"
+
+# Optional default model. Omit to let hoosh route by its own provider config.
+# /model <id> overrides this per session (the mid-session switch); hoosh routes
+# each request by the model name, so switching providers is just a new id.
+model = "claude-haiku-4-5-20251001"

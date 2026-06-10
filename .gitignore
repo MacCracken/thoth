@@ -11,3 +11,7 @@
 .env.*
 *.pem
 *.key
+
+# Runtime config — may carry a hoosh bearer token. Commit thoth.cyml.example
+# (no secrets); keep the real thoth.cyml local.
+/thoth.cyml

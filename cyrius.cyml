@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.1.15"
+cyrius = "6.1.23"
 
 [build]
 entry = "src/main.cyr"
@@ -13,4 +13,30 @@ test = "src/test.cyr"
 output = "build/thoth"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "io", "vec", "str", "syscalls", "result", "tagged", "process", "assert", "bench"]
+# Libs are OPT-IN and Cyrius does NOT resolve transitive deps — so the hoosh
+# seam's transport (sandhi) drags its whole transitive stdlib set in here by
+# hand. Under-declaring is not a link error: cyrius non-strict mode patches the
+# missing call sites with placeholder bytes that loop back into init (the
+# 2026-04-24 sandhi HTTPS-loop saga), so every module sandhi.cyr references
+# must be listed. Grouped: driver core · config (thoth.cyml) · hoosh transport.
+# Order matters: most stdlib modules don't self-`include` their cross-deps, so
+# the resolver falls back to this array order. Low-level floor first, then the
+# crypto + dynamic-link layers, then the high-level transport that consumes
+# them (tls/ws/sandhi). dynlib uses mmap's PROT_NONE without including it, so
+# mmap MUST precede dynlib — and dynlib/fdlopen/mmap MUST precede tls + sandhi.
+stdlib = [
+    # driver core (M2) — base substrate + text
+    "syscalls", "alloc", "result", "tagged", "fmt", "io", "fs", "str", "string", "vec", "args", "process", "assert", "bench",
+    # general utilities sandhi/json/sigil build on
+    "fnptr", "freelist", "bigint", "hashmap", "chrono", "base64",
+    # crypto floor (sigil's transitive deps, then sigil)
+    "ct", "keccak", "thread_local", "sigil",
+    # dynamic-link floor TLS needs (mmap before dynlib — PROT_NONE)
+    "mmap", "dynlib", "fdlopen",
+    # concurrency (sandhi's epoll server)
+    "thread", "atomic", "async",
+    # transport: net/http/tls/ws + json wire format + sakshi spans, then sandhi
+    "net", "http", "tls", "ws", "json", "sakshi", "sandhi",
+    # thoth.cyml runtime config — cyml splits header/body, toml reads the header
+    "toml", "cyml",
+]

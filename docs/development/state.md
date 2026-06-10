@@ -7,8 +7,9 @@
 
 ## Version
 
-**0.1.0** — first real release, 2026-06-09 (roadmap M2: the driver core).
-Scaffolded 2026-06-08 via `cyrius init`.
+**0.2.0** — the hoosh seam, 2026-06-10 (roadmap M3: inference + mid-session
+model switch). First real release was **0.1.0**, 2026-06-09 (M2: the driver
+core). Scaffolded 2026-06-08 via `cyrius init`.
 
 thoth uses **SemVer `0.x`** through its pre-1.0 phase
 ([ADR-0004](../adr/0004-semver-pre-release.md)) — this supersedes the earlier
@@ -16,11 +17,18 @@ thoth uses **SemVer `0.x`** through its pre-1.0 phase
 
 ## Posture
 
-thoth 0.1.0 is the **driver core**: the interactive REPL/TUI loop is real and
-usable, but every capability seam is **absent** — no model-backed reasoning
-(hoosh), MCP tools (daimon/bote), authorization (t-ron), or live personality
-(avatara) is wired yet. Absent capabilities degrade honestly; nothing is faked.
-Each future milestone flips one seam from absent → remote/native.
+thoth 0.2.0 wires the **first capability seam**: hoosh is now **remote-client**
+— thoth routes a turn to a backing model and switches the backing model
+mid-session, both through the hoosh inference gateway, reached as an
+OpenAI-compatible HTTP client transported by sandhi. The other four seams remain
+**absent** — MCP tools (daimon/bote) and authorization (t-ron) land in M4, live
+personality (avatara) in M5. Absent capabilities degrade honestly; nothing is
+faked. Each milestone flips one more seam from absent → remote/native.
+
+The hoosh seam binds only when `thoth.cyml` declares `[hoosh].url` — no endpoint
+declared, no remote claim. Verified end-to-end against a live gateway (a turn
+routed to a real provider; a mid-session `/model` switch re-routed Anthropic →
+OpenAI in one session). See [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
 
 The settled identity (recorded so code doesn't entrench the wrong shape):
 thoth is OS-agnostic in its reach and AGNOS-sovereign in its spine, and the
@@ -54,8 +62,8 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.15` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc`.
+- **Cyrius pin**: `6.1.23` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc` (bumped from `6.1.15` for the M3 sandhi consumption).
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,
@@ -71,53 +79,72 @@ floor; never fork the spine.**
 
 ## Source
 
-The 0.1.0 driver core — ~500 lines across these Cyrius modules:
+The driver core (M2) plus the hoosh seam (M3), across these Cyrius modules:
 
-- `src/main.cyr` — entry; includes the modules and runs the loop.
+- `src/main.cyr` — entry; includes the modules, runs `config_load` then the loop.
 - `src/repl.cyr` — the read → dispatch → iterate loop.
-- `src/commands.cyr` — input classification + command handlers.
-- `src/seams.cyr` — the capability-seam registry.
-- `src/session.cyr` — session state + the static avatara persona descriptor.
+- `src/commands.cyr` — input classification + command handlers (task/model route
+  through hoosh when the seam is remote).
+- `src/seams.cyr` — the capability-seam registry; `seam_status` is dynamic for hoosh.
+- `src/session.cyr` — session state (incl. the copy-on-set model) + the static
+  avatara persona descriptor.
+- `src/config.cyr` — **M3**: `thoth.cyml` runtime config (hoosh endpoint/token/model).
+- `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
+  response/error extraction).
 - `src/exec.cyr` — the portable local shell escape for `/run`.
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
 
-Binary: ~124 KB (`build/thoth`, x86_64-linux).
+Binary: ~1.3 MB (`build/thoth`, x86_64-linux) — up from ~124 KB at 0.1.0; the
+sandhi/TLS transport surface (static data) dominates.
 
 ## Tests
 
-- `tests/thoth.tcyr` — **47 assertions** over the pure logic (`classify_input`,
-  `token_is` / `arg_after`, the seam registry, session state, `cstr_starts_with`).
+- `tests/thoth.tcyr` — **67 assertions** over the pure logic: M2's
+  `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
+  `cstr_starts_with`; plus M3's JSON escaping, chat-request building,
+  response/error extraction, config defaults, and the copy-on-set model switch.
   Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
 ## Dependencies
 
-**Current (declared in `cyrius.cyml`):** stdlib only — `string`, `fmt`,
-`alloc`, `io`, `vec`, `str`, `syscalls`, `result`, `tagged`, `process`,
-`assert`, `bench`. (`result` / `tagged` / `process` back the portable `/run`
-shell escape; `process.cyr` abstracts spawn across Linux / macOS / agnos /
-Windows.)
+**Current (declared in `cyrius.cyml`, all stdlib).** Driver core: `string`,
+`fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `result`, `tagged`, `process`,
+`assert`, `bench` (`result` / `tagged` / `process` back the portable `/run`
+shell escape). M3 config: `fs`, `cyml`, `toml` (parse `thoth.cyml`). M3 hoosh
+transport: **`sandhi`** (the HTTP/TLS client, folded into stdlib as
+`lib/sandhi.cyr`) plus its full transitive set — `net`, `http`, `tls`, `ws`,
+`json`, `base64`, `sakshi`, `sigil`, `args`, `hashmap`, `thread`,
+`thread_local`, `fnptr`, `async`, `atomic`, `chrono`, `mmap`, `dynlib`,
+`fdlopen`, `bigint`, `freelist`, `ct`, `keccak`. Libs are opt-in and Cyrius does
+**not** resolve transitive deps, so the set is declared by hand and ordered
+low-level-floor-first (see the `[deps]` comment in `cyrius.cyml`).
 
-**Intended spine deps (NOT yet declared — seams absent).** When a seam is
-wired, thoth will consume the owning crate rather than reimplement it
-(own-the-stack). None are wired up today:
+**Spine seams.**
 
-- **hoosh** — LLM inference gateway: model routing and the mid-session switch.
-- **daimon** — agent orchestration + MCP tool execution + host registry.
-- **bote** — the MCP protocol.
+- **hoosh** — LLM inference gateway: **wired (remote-client over HTTP via
+  sandhi)**. Consumed as a running gateway, not a linked crate (hoosh ships no
+  distlib — it is a server). See [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
+- **daimon** — agent orchestration + MCP tool execution + host registry: absent (M4).
+- **bote** — the MCP protocol: absent (M4).
 - **t-ron** — MCP per-tool authorization (the gate around file-edits and shell
-  commands; today stood in for by the fail-closed confirm gate).
-- **avatara** — personality / archetype overlay; the Thoth / Librarian persona.
+  commands; today stood in for by the fail-closed confirm gate): absent (M4).
+- **avatara** — personality / archetype overlay; the Thoth / Librarian persona: absent (M5).
 
-These become `cyrius.cyml` git-deps (each with a tag + explicit `modules` list)
-as each seam is wired; the off-AGNOS reach transport is deferred to a later ADR.
+The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
+deferred to a later ADR.
 
-## Known limitations (0.1.0)
+## Known limitations (0.2.0)
 
-- Spine seams are absent — no model, MCP tools, or t-ron authorization yet.
-- No structured logging (sakshi). Audit-worthy events (`/run`, `/write`) are not
-  yet logged; this lands when the t-ron / daimon seams wire up.
+- hoosh is the only wired seam; daimon/bote/t-ron (M4) and avatara (M5) are absent.
+- hoosh responses are **non-streaming** — thoth waits for the full completion,
+  then prints it. Streaming/SSE is future work.
+- The hoosh request is fixed (`max_tokens` 4096, single user message, no system
+  prompt, no conversation history). Multi-turn context and request tuning are
+  future work.
+- No structured logging (sakshi) of audit-worthy events (`/run`, `/write`, hoosh
+  calls); this lands when the t-ron / daimon seams wire up.
 - `/read` is read-only but unrestricted; sandboxing belongs to the t-ron seam,
   not an in-tree allowlist.
 - `/write` takes single-line content; multi-line editing is future work.
@@ -128,5 +155,6 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) — M3 wires the hoosh seam (inference +
-mid-session model switch).
+See [`roadmap.md`](roadmap.md) — M4 gives the agent real hands: MCP tool
+execution via daimon + bote, gated by t-ron (the security-critical seam,
+fail-closed off AGNOS).

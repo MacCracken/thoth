@@ -4,9 +4,11 @@
 # carry top-level execution / pure I/O). Stdlib + process deps auto-resolve
 # from cyrius.cyml. Run via `cyrius test`.
 include "src/util.cyr"
+include "src/config.cyr"
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/exec.cyr"
+include "src/hoosh.cyr"
 include "src/commands.cyr"
 
 fn test_classify() {
@@ -86,6 +88,79 @@ fn test_session() {
     return 0;
 }
 
+# Config defaults when no thoth.cyml is loaded (the test process loads none).
+fn test_config() {
+    test_group("hoosh config (unconfigured)");
+    assert_eq(config_hoosh_configured(), 0, "not configured by default");
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088"), "localhost default url");
+    assert_eq(config_hoosh_token(), 0, "no token by default");
+    assert_eq(config_hoosh_model(), 0, "no model by default");
+    # unconfigured -> hoosh seam stays absent (honest degradation)
+    assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
+    return 0;
+}
+
+# The hoosh client's pure pieces: escape, int-append, request building, and
+# response/error extraction (no network).
+fn test_hoosh() {
+    test_group("hoosh request building");
+    var eb[64];
+    var n = _json_escape_into(&eb, 0, "a\"b");      # a " b
+    store8(&eb + n, 0);
+    assert(streq(&eb, "a\\\"b"), "escape double-quote");
+    var n2 = _json_escape_into(&eb, 0, "x\ny");     # x <LF> y
+    store8(&eb + n2, 0);
+    assert(streq(&eb, "x\\ny"), "escape newline");
+    var n3 = _json_escape_into(&eb, 0, "c\\d");     # c \ d
+    store8(&eb + n3, 0);
+    assert(streq(&eb, "c\\\\d"), "escape backslash");
+
+    var ib[32];
+    var inn = _append_int(&ib, 0, 4096);
+    store8(&ib + inn, 0);
+    assert(streq(&ib, "4096"), "append_int 4096");
+    var iz = _append_int(&ib, 0, 0);
+    store8(&ib + iz, 0);
+    assert(streq(&ib, "0"), "append_int 0");
+
+    var rb[256];
+    hoosh_build_request(&rb, "m", "hi");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "chat-completions request shape");
+
+    test_group("hoosh response extraction");
+    var body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello world\"}}]}";
+    var s = hoosh_extract_content(body, strlen(body));
+    assert(s != 0, "content present");
+    assert(str_eq_cstr(s, "hello world"), "content matches");
+
+    var empty = "{\"choices\":[]}";
+    assert_eq(hoosh_extract_content(empty, strlen(empty)), 0, "empty choices -> 0");
+    var nojson = "not json";
+    assert_eq(hoosh_extract_content(nojson, strlen(nojson)), 0, "unparseable -> 0");
+
+    var ebody = "{\"error\":{\"message\":\"no provider for model\"}}";
+    var em = hoosh_extract_error(ebody, strlen(ebody));
+    assert(em != 0, "error present");
+    assert(str_eq_cstr(em, "no provider for model"), "error message matches");
+    assert_eq(hoosh_extract_error(body, strlen(body)), 0, "no error field -> 0");
+    return 0;
+}
+
+# Mid-session model switch stores a COPY (the arg aliases a reused line buffer).
+fn test_model_switch() {
+    test_group("mid-session model switch");
+    session_reset();
+    assert_eq(session_model(), 0, "no model after reset");
+    var scratch[16];
+    store8(&scratch + 0, 103); store8(&scratch + 1, 112); store8(&scratch + 2, 116);
+    store8(&scratch + 3, 0);                                   # "gpt"
+    session_set_model_copy(&scratch);
+    store8(&scratch + 0, 88);                                  # clobber to "Xpt"
+    assert(streq(session_model(), "gpt"), "model is a stable copy, not an alias");
+    session_reset();
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -93,6 +168,9 @@ fn main() {
     test_cstr();
     test_seams();
     test_session();
+    test_config();
+    test_hoosh();
+    test_model_switch();
     return assert_summary();
 }
 

@@ -87,12 +87,17 @@ fn cmd_state() {
     println("session:");
     emit("  turns   : "); fmt_int(session_turns()); println("");
     emit("  model   : ");
-    if (session_model() == 0) { println("(none - hoosh seam absent)"); }
-    else { println(session_model()); }
+    var m = session_model();
+    if (m == 0) { m = config_hoosh_model(); }
+    if (m == 0) { println("(none set)"); }
+    else { println(m); }
+    emit("  hoosh   : ");
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { println("absent (set [hoosh].url in thoth.cyml)"); }
+    else { println(config_hoosh_url()); }
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
-    else { println("partially wired"); }
-    println("  build   : thoth 0.1.0");
+    else { println("hoosh wired; rest absent"); }
+    println("  build   : thoth 0.2.0");
     return 0;
 }
 
@@ -100,19 +105,23 @@ fn cmd_model(line) {
     var arg = arg_after(line);
     if (arg == 0) {
         emit("model: ");
-        if (session_model() == 0) { println("(none)"); }
-        else { println(session_model()); }
-        println("the hoosh seam is absent in 0.1.0 - no model can run yet.");
+        var m = session_model();
+        if (m == 0) { m = config_hoosh_model(); }
+        if (m == 0) { println("(none set - hoosh routes by its own provider config)"); }
+        else { println(m); }
+        if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+            println("hoosh seam absent - set [hoosh].url in thoth.cyml to enable switching.");
+        }
         return 0;
     }
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         emit("cannot switch to '"); emit(arg); println("': hoosh seam is absent.");
-        println("mid-session switching routes through hoosh; it is not wired in 0.1.0.");
-        println("(native on AGNOS, a client elsewhere - neither yet. see /seams.)");
+        println("set [hoosh].url in thoth.cyml; mid-session switching routes through hoosh. see /seams.");
         return 0;
     }
-    session_set_model(arg);
+    session_set_model_copy(arg);
     emit("model -> "); println(arg);
+    emit("  next turn routes to hoosh as '"); emit(arg); println("' (mid-session switch).");
     return 0;
 }
 
@@ -179,7 +188,7 @@ fn cmd_write(line) {
 fn cmd_run(line) {
     var cmdline = arg_after(line);
     if (cmdline == 0) { println("usage: /run <shell command>"); return 0; }
-    println("tool execution is daimon+bote's domain, gated by t-ron - none wired in 0.1.0.");
+    println("tool execution is daimon+bote's domain, gated by t-ron - none wired yet (M4).");
     println("this /run is a local built-in shell escape (substrate), not the MCP tool spine.");
     emit("  proposed: "); println(cmdline);
     if (confirm("run", cmdline) == 0) { println("  denied (default). nothing ran."); return 0; }
@@ -193,12 +202,12 @@ fn cmd_task(line) {
     session_bump_turn();
     emit("task: "); println(line);
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        println("  hoosh seam absent - no model backend is wired in 0.1.0.");
-        println("  thoth drives; reasoning/codegen routes through hoosh (native on AGNOS,");
-        println("  a client elsewhere) - neither yet. degraded honestly, never faked.");
+        println("  hoosh seam absent - no model backend is wired.");
+        println("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
+        println("  elsewhere). set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
-    return 0;
+    return hoosh_send(line);
 }
 
 # dispatch: run one input line. Returns 1 to keep looping, 0 to quit.

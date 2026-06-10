@@ -4,6 +4,47 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-10
+
+The signature feature, wired (roadmap M3): the **hoosh seam** flips from absent
+→ **remote-client**. thoth routes a turn to a backing model and switches the
+backing model mid-session — both through hoosh, the AGNOS inference gateway,
+reached as an OpenAI-compatible HTTP client transported by **sandhi**. Verified
+end-to-end against a live gateway: a turn routed to a real provider, and a
+mid-session `/model` switch re-routed Anthropic → OpenAI within one session.
+thoth still owns no domain logic — hoosh owns inference, routing, and the
+switch; thoth drives. See [ADR-0005](docs/adr/0005-hoosh-seam-remote-over-sandhi.md).
+
+### Added
+- **hoosh seam client** (`src/hoosh.cyr`): builds an OpenAI-compatible
+  chat-completions request (with a JSON string escaper), POSTs it via
+  `sandhi_http_post`, and extracts `choices[0].message.content` with the stdlib
+  `json` value parser. The request builder, escaper, and response/error
+  extractors are pure; only the round-trip does I/O.
+- **`thoth.cyml` runtime config** (`src/config.cyr`): thoth's own CYML config
+  (distinct from the `cyrius.cyml` build manifest), parsed once at startup via
+  the stdlib `cyml` + `toml` modules. `[hoosh].url` / `token` / `model`.
+  `thoth.cyml` is gitignored (it may hold a token); `thoth.cyml.example` is the
+  committed template.
+- **Mid-session model switch made real**: `/model <id>` stores a stable copy
+  (`session_set_model_copy`) used on the next turn; hoosh routes per request by
+  the `model` field, so a new id is the switch.
+- **20 new unit assertions** (67 total): JSON escaping, request building, and
+  response/error extraction against canned bodies, plus config defaults and the
+  copy-not-alias model switch.
+
+### Changed
+- **Seam status is honest and dynamic**: `seam_status(SEAM_HOOSH)` returns
+  `remote` when `thoth.cyml` declares an endpoint, else `absent`. `/seams`,
+  `/state`, `/model`, and free-text task routing reflect it — a configured turn
+  POSTs to hoosh; an unconfigured one degrades with a pointer to `thoth.cyml`;
+  an unreachable gateway announces the transport error. Never faked.
+- **`cyrius.cyml`**: toolchain pin `6.1.15` → `6.1.23`; opted `sandhi` and its
+  full transitive stdlib set (plus `cyml`/`toml`) into `[deps].stdlib`, ordered
+  so the low-level floor precedes the transport that consumes it (libs are
+  opt-in and Cyrius does not resolve transitive deps).
+- Version strings and the banner bumped to `0.2.0`.
+
 ## [0.1.0] - 2026-06-09
 
 First real release: the platform-neutral **driver core** (roadmap M2). thoth is

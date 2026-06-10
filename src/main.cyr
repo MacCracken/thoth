@@ -1,21 +1,25 @@
 # thoth — main entry point. Sovereign agentic coding TUI / driver.
 #
 # thoth is a DRIVER: it owns no domain logic of its own and reaches the AGNOS
-# spine (hoosh/daimon/bote/t-ron/avatara) through capability seams. In 0.1.0
-# every seam is absent, so this is the platform-neutral driver shell — read,
-# dispatch, iterate — with honest degradation. See docs/adr/0001, 0002, 0003.
+# spine (hoosh/daimon/bote/t-ron/avatara) through capability seams. The hoosh
+# seam is wired (remote-client over HTTP); the rest are still absent and degrade
+# honestly. config_load() reads thoth.cyml before the loop. See docs/adr/0001,
+# 0002, 0003, 0005.
 #
 # Stdlib auto-resolves from cyrius.cyml; project modules are included here once,
 # in dependency order. The test suite includes the same modules WITHOUT main.
 include "src/util.cyr"
+include "src/config.cyr"
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/exec.cyr"
+include "src/hoosh.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
 
 fn main() {
     alloc_init();
+    config_load();          # read thoth.cyml -> flips the hoosh seam to remote if [hoosh].url is set
     print_banner();
     repl_loop();
     println("scribe out.");

@@ -1,0 +1,245 @@
+# thoth — hoosh seam client (M3).
+#
+# The signature seam. hoosh owns LLM inference, multi-provider routing, and the
+# mid-session model switch; thoth only DRIVES it (own-the-stack, never reic). It
+# is reached as a REMOTE client over HTTP: thoth POSTs an OpenAI-compatible
+# chat-completions request to the configured gateway (thoth.cyml [hoosh].url)
+# and prints the completion. Off AGNOS this is the networked gateway; on AGNOS
+# the same contract is reached co-resident. Transport is sandhi — we COMPOSE a
+# client, never hand-roll sockets. No spine domain logic lives here.
+#
+# Mid-session model switching needs no session protocol: hoosh routes per
+# request by the "model" field, so a different model on the next request IS the
+# switch. The current model comes from session state (set by /model), falling
+# back to thoth.cyml [hoosh].model, then to hoosh's own routing default.
+#
+# The request builder + JSON escaper + response extractor are PURE and unit-
+# tested in tests/. Only hoosh_send does I/O (the network round-trip).
+
+# Reused request buffer — the bump allocator never frees, so one buffer avoids
+# accreting a fresh alloc every turn over a long session. The prompt is bounded
+# by the 4096-byte input line; worst-case escaping (~6x) plus framing fits well
+# under this cap.
+var _hoosh_req = 0;
+var HOOSH_REQ_CAP = 32768;
+var HOOSH_MAX_TOKENS = 4096;
+var _hoosh_auth = 0;        # cached "Bearer <token>" header value
+var _hoosh_endpoint = 0;    # cached base url + the OpenAI path
+var HOOSH_PATH = "/v1/chat/completions";
+
+# _hoosh_endpoint_url: the full POST target = configured base url + the
+# well-known OpenAI-compatible path. thoth owns this path (it is fixed by the
+# contract hoosh speaks), so thoth.cyml carries only the gateway base. One
+# trailing slash on the base is trimmed. Cached.
+fn _hoosh_endpoint_url() {
+    if (_hoosh_endpoint != 0) { return _hoosh_endpoint; }
+    var base = config_hoosh_url();
+    var blen = strlen(base);
+    if (blen > 0) { if (load8(base + blen - 1) == 47) { blen = blen - 1; } }   # trim one '/'
+    _hoosh_endpoint = alloc(blen + strlen(HOOSH_PATH) + 1);
+    var off = 0;
+    var i = 0;
+    while (i < blen) { store8(_hoosh_endpoint + off, load8(base + i)); off = off + 1; i = i + 1; }
+    off = _append_cstr(_hoosh_endpoint, off, HOOSH_PATH);
+    store8(_hoosh_endpoint + off, 0);
+    return _hoosh_endpoint;
+}
+
+# _hex_digit: 0..15 -> ASCII hex (lowercase). Pure.
+fn _hex_digit(n) {
+    if (n < 10) { return 48 + n; }      # '0'..'9'
+    return 87 + n;                      # 'a'..'f'  (97 - 10)
+}
+
+# _append_cstr: copy NUL-terminated s into dst at off; return new off. Pure.
+fn _append_cstr(dst, off, s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        store8(dst + off, load8(s + i));
+        off = off + 1;
+        i = i + 1;
+    }
+    return off;
+}
+
+# _append_int: write non-negative n as decimal into dst at off; return new off.
+fn _append_int(dst, off, n) {
+    if (n == 0) { store8(dst + off, 48); return off + 1; }
+    var tmp[24];
+    var ti = 0;
+    while (n > 0) {
+        store8(&tmp + ti, 48 + (n - (n / 10) * 10));
+        ti = ti + 1;
+        n = n / 10;
+    }
+    while (ti > 0) {
+        ti = ti - 1;
+        store8(dst + off, load8(&tmp + ti));
+        off = off + 1;
+    }
+    return off;
+}
+
+# _json_escape_into: append src (cstring) into dst at off as the BODY of a JSON
+# string (no surrounding quotes); return new off. Escapes ", \, and control
+# bytes (\n \r \t, else \u00XX) so an arbitrary prompt is valid JSON. Pure —
+# unit-tested. Caller sizes dst for the ~6x worst case.
+fn _json_escape_into(dst, off, src) {
+    var i = 0;
+    while (load8(src + i) != 0) {
+        var c = load8(src + i);
+        if (c == 34) {                  # "
+            store8(dst + off, 92); off = off + 1;
+            store8(dst + off, 34); off = off + 1;
+        } elif (c == 92) {              # backslash
+            store8(dst + off, 92); off = off + 1;
+            store8(dst + off, 92); off = off + 1;
+        } elif (c == 10) {              # \n
+            store8(dst + off, 92); off = off + 1;
+            store8(dst + off, 110); off = off + 1;
+        } elif (c == 13) {              # \r
+            store8(dst + off, 92); off = off + 1;
+            store8(dst + off, 114); off = off + 1;
+        } elif (c == 9) {               # \t
+            store8(dst + off, 92); off = off + 1;
+            store8(dst + off, 116); off = off + 1;
+        } elif (c < 32) {               # other control -> \u00XX
+            var hi = c / 16;
+            var lo = c - hi * 16;
+            store8(dst + off, 92); off = off + 1;       # backslash
+            store8(dst + off, 117); off = off + 1;      # u
+            store8(dst + off, 48); off = off + 1;       # 0
+            store8(dst + off, 48); off = off + 1;       # 0
+            store8(dst + off, _hex_digit(hi)); off = off + 1;
+            store8(dst + off, _hex_digit(lo)); off = off + 1;
+        } else {
+            store8(dst + off, c); off = off + 1;
+        }
+        i = i + 1;
+    }
+    return off;
+}
+
+# hoosh_build_request: write a chat-completions JSON request for (model, prompt)
+# into dst, NUL-terminated; return the byte length. Pure — unit-tested. Shape:
+#   {"model":"M","messages":[{"role":"user","content":"P"}],"max_tokens":N,"stream":false}
+fn hoosh_build_request(dst, model, prompt) {
+    var off = 0;
+    off = _append_cstr(dst, off, "{\"model\":\"");
+    off = _json_escape_into(dst, off, model);
+    off = _append_cstr(dst, off, "\",\"messages\":[{\"role\":\"user\",\"content\":\"");
+    off = _json_escape_into(dst, off, prompt);
+    off = _append_cstr(dst, off, "\"}],\"max_tokens\":");
+    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_cstr(dst, off, ",\"stream\":false}");
+    store8(dst + off, 0);
+    return off;
+}
+
+# hoosh_extract_content: parse an OpenAI-shaped response body and return the
+# assistant text as a Str (choices[0].message.content), or 0 if absent/wrong
+# shape. Pure — unit-tested against canned bodies.
+fn hoosh_extract_content(body, body_len) {
+    var v = json_v_parse_str(body, body_len);
+    if (v == 0) { return 0; }
+    var choices = json_v_obj_get(v, "choices");
+    if (choices == 0) { return 0; }
+    var first = json_v_arr_get(choices, 0);
+    if (first == 0) { return 0; }
+    var msg = json_v_obj_get(first, "message");
+    if (msg == 0) { return 0; }
+    var content = json_v_obj_get(msg, "content");
+    if (content == 0) { return 0; }
+    return json_v_str(content);
+}
+
+# hoosh_extract_error: pull error.message out of an error response body as a
+# Str, or 0 if not present. Pure — unit-tested.
+fn hoosh_extract_error(body, body_len) {
+    var v = json_v_parse_str(body, body_len);
+    if (v == 0) { return 0; }
+    var err = json_v_obj_get(v, "error");
+    if (err == 0) { return 0; }
+    var m = json_v_obj_get(err, "message");
+    if (m == 0) { return 0; }
+    return json_v_str(m);
+}
+
+# _hoosh_model: the model for this turn — session override, else config default,
+# else "default" (let hoosh route by its own provider config).
+fn _hoosh_model() {
+    var m = session_model();
+    if (m != 0) { return m; }
+    m = config_hoosh_model();
+    if (m != 0) { return m; }
+    return "default";
+}
+
+# _hoosh_auth_header: cache and return the "Bearer <token>" header value, or 0
+# if no token is configured (unauthenticated gateway).
+fn _hoosh_auth_header() {
+    var tok = config_hoosh_token();
+    if (tok == 0) { return 0; }
+    if (_hoosh_auth != 0) { return _hoosh_auth; }
+    _hoosh_auth = alloc(strlen(tok) + 8);
+    var off = _append_cstr(_hoosh_auth, 0, "Bearer ");
+    off = _append_cstr(_hoosh_auth, off, tok);
+    store8(_hoosh_auth + off, 0);
+    return _hoosh_auth;
+}
+
+# _hoosh_print_str: write a Str (ptr+len) to stdout with a trailing newline if
+# it doesn't already end in one. I/O.
+fn _hoosh_print_str(s) {
+    var d = str_data(s);
+    var n = str_len(s);
+    emit_n(d, n);
+    if (n > 0) { if (load8(d + n - 1) != 10) { println(""); } }
+    return 0;
+}
+
+# hoosh_send: route one turn through the hoosh gateway and print the completion.
+# Returns 0 on success, a negative on transport failure, or the HTTP status on a
+# non-2xx response. Degrades honestly: an unreachable gateway is announced, not
+# faked. I/O — the only impure function in this module.
+fn hoosh_send(prompt) {
+    var url = _hoosh_endpoint_url();
+    var model = _hoosh_model();
+    if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
+    var len = hoosh_build_request(_hoosh_req, model, prompt);
+
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    var auth = _hoosh_auth_header();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+
+    emit("  -> hoosh ("); emit(model); emit(") "); println(url);
+    var r = sandhi_http_post(url, h, _hoosh_req, len);
+    var ek = sandhi_http_err_kind(r);
+    if (ek != SANDHI_OK) {
+        # NB: bind to a var before println — passing an explicitly `: i64`-typed
+        # sandhi getter straight into println(cstring) mis-dispatches to the int
+        # print path in this cyrius (6.1.22). Storing first prints the name.
+        var ename = sandhi_err_kind_name(ek);
+        emit("  hoosh transport error: "); println(ename);
+        emit("  endpoint "); emit(url);
+        println(" unreachable — is the gateway up? (degraded, not faked)");
+        return 0 - 1;
+    }
+    var status = sandhi_http_status(r);
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    if ((status < 200) || (status >= 300)) {
+        emit("  hoosh returned HTTP "); fmt_int(status); println("");
+        var em = hoosh_extract_error(body, blen);
+        if (em != 0) { emit("  "); _hoosh_print_str(em); }
+        return status;
+    }
+    var content = hoosh_extract_content(body, blen);
+    if (content == 0) {
+        println("  hoosh: response received but no completion could be parsed.");
+        return 0 - 1;
+    }
+    _hoosh_print_str(content);
+    return 0;
+}
