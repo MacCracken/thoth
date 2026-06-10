@@ -4,10 +4,12 @@
 > this file is the sequencing — what ships, in what order, against
 > what dependency gates.
 >
-> **Status: fermenting.** thoth is a long-horizon idea-log, not yet
-> built into feature code. Everything below M0 is **provisional** —
-> the ordering, the version labels, and the dep gates will move as the
-> design settles. Treat this as direction, not commitment.
+> **Status: active — driver core + hoosh seam shipped (0.2.0).** thoth is
+> real, usable feature code now: the M2 driver loop and the M3 hoosh seam
+> (inference + mid-session model switch) are live. **M0–M3 are done**; **M4
+> onward remain provisional** — their ordering, version labels, and dep gates
+> may still move as the design settles. Treat the unshipped milestones as
+> direction, not commitment.
 
 ## Framing (read first)
 
@@ -49,7 +51,7 @@ whole spine is native._
 
 - [ ] Core driver loop (read → plan → edit → run → iterate) usable on
       AGNOS and at least one off-AGNOS target
-- [ ] Mid-session model switch routes turns through hoosh
+- [x] Mid-session model switch routes turns through hoosh — M3 (0.2.0)
 - [ ] MCP tool execution via daimon + bote, gated by t-ron on AGNOS
 - [ ] Off-AGNOS security **fails closed** — absent t-ron degrades to a
       conservative built-in deny/prompt, never silent allow; absence is
@@ -69,9 +71,9 @@ whole spine is native._
 thoth uses **SemVer `0.x`** through its pre-1.0 phase — see
 [ADR-0004](../adr/0004-semver-pre-release.md). This supersedes the earlier
 "CalVer at first release" plan: a `0.x` number honestly signals that the
-surface is still moving (the spine is absent; commands and the seam interface
-will change). Whether thoth adopts CalVer (the binary standard) or stays SemVer
-at 1.0 is deferred to a later ADR.
+surface is still moving (most of the spine is still absent; commands and the
+seam interface will change). Whether thoth adopts CalVer (the binary standard)
+or stays SemVer at 1.0 is deferred to a later ADR.
 
 ## Milestones
 
@@ -81,7 +83,7 @@ at 1.0 is deferred to a later ADR.
 - Doc-tree per [first-party-documentation.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-documentation.md)
 - ADRs / architecture notes / guides / examples folders ready
 
-### M1 — Identity & posture fixed (fermenting) — ✅ 2026-06-08
+### M1 — Identity & posture fixed — ✅ 2026-06-08
 
 Lock the standards/identity shape before any code can entrench the wrong
 one. No feature code — docs and manifest hygiene only.
@@ -100,8 +102,9 @@ one. No feature code — docs and manifest hygiene only.
 - ✅ CLAUDE.md, `cyrius.cyml`, README aligned to the canonical framing and
   the first-party/ standards path
 - ✅ Intended spine deps (hoosh / daimon / bote / t-ron / avatara)
-  described in **prose only** here and in `state.md`; `cyrius.cyml` keeps
-  **stdlib deps only** while fermenting
+  described in **prose only** here and in `state.md`; at this stage
+  `cyrius.cyml` carried **stdlib deps only** (M3 later added the sandhi
+  transport for the hoosh seam)
 
 ### M2 — REPL/TUI driver core — ✅ 0.1.0 (2026-06-09)
 
@@ -197,8 +200,11 @@ the spine or diluting the identity by accident.
   capabilities fail closed and are announced — never faked.
 - **A separate per-OS agent UX or "AGNOS edition" fork.** One driver, one
   UX, many substrates.
-- **Declaring the spine crates as real `cyrius.cyml` deps** while
-  fermenting. Future git-deps (hoosh / daimon / bote / t-ron / avatara,
-  each with a tag + explicit `modules = [...]` list) are deferred until
-  thoth leaves the fermenting stage; the **off-AGNOS reach transport** is
-  deferred to a later ADR once that work is real.
+- **Declaring a spine crate as a dep before its seam milestone wires it.**
+  Each seam binds in its own milestone, not speculatively ahead of design:
+  daimon / bote / t-ron land in M4, avatara in M5. (hoosh, wired in M3, is the
+  exception that proves the rule — it is consumed as a *running HTTP gateway*,
+  not a linked crate, so it never becomes a `cyrius.cyml` git-dep; the stdlib
+  `sandhi` transport is what M3 declared.) The **off-AGNOS reach transport** —
+  the native-vs-remote binding distinction — is deferred to a later ADR once
+  that work is real.

@@ -53,15 +53,14 @@ thing that drives them:
 | **t-ron**  | MCP per-tool authorization |
 | **avatara**| personality / archetype overlay (the Thoth / Librarian persona) |
 
-When AGNOS owns a domain, thoth depends on it and never reimplements it. The
+When AGNOS owns a domain, thoth consumes it and never reimplements it. The
 "Thoth" archetype pulled from avatara is the personality overlay for
 thoth-the-tool — name, archetype, and function aligned on purpose.
 
 **hoosh is wired** as of 0.2.0 — consumed as a running HTTP gateway (it ships no
-linkable crate), reached over the stdlib `sandhi` transport. The remaining four
-(daimon/bote/t-ron/avatara) are **described here as intent, not yet declared**,
-and land in later milestones. When AGNOS owns a domain, thoth consumes it and
-never reimplements it.
+linkable crate), reached over the stdlib `sandhi` transport and configured via
+`thoth.cyml`. The other four (daimon/bote/t-ron/avatara) are intent here, not
+yet wired; they land in later milestones (`/seams` shows the live ladder).
 
 ## OS-agnostic in reach, AGNOS-sovereign in spine
 
