@@ -2,9 +2,10 @@
 #
 # thoth owns NO domain logic of its own (see docs/architecture/001). Every
 # AGNOS-owned domain is reached through a thin capability seam with three
-# binding modes. As of M3 the hoosh seam is REMOTE (when thoth.cyml declares an
-# endpoint); the other four are still ABSENT. The seams report their status
-# honestly; nothing is faked. Each milestone flips one more seam.
+# binding modes. As of M5: bote + avatara bind NATIVE by construction (vendored
+# in-process bundles); t-ron binds NATIVE when a policy loads; hoosh + daimon
+# bind REMOTE when thoth.cyml declares an endpoint; anything else reports
+# ABSENT. The seams report their status honestly; nothing is faked.
 #
 # Pure functions only (plus one display helper). Unit-tested in tests/.
 
@@ -55,7 +56,9 @@ fn seam_domain(id) {
 #  - t-ron (M4) binds NATIVE when a [tron].policy loads (the vendored t-ron
 #    bundle, in-process); otherwise absent and the built-in fail-closed
 #    confirm gate stands in (announced, never silent).
-#  - avatara -> M5, still absent.
+#  - avatara (M5) is NATIVE by construction: the vendored avatara archetype
+#    bundle supplies the Thoth/Librarian persona in-process — the off-AGNOS
+#    bundled descriptor over the same contract AGNOS serves co-resident.
 fn seam_status(id) {
     if (id == SEAM_HOOSH) {
         if (config_hoosh_configured() == 1) { return SEAM_REMOTE; }
@@ -64,6 +67,7 @@ fn seam_status(id) {
         if (config_daimon_configured() == 1) { return SEAM_REMOTE; }
     }
     if (id == SEAM_BOTE) { return SEAM_NATIVE; }
+    if (id == SEAM_AVATARA) { return SEAM_NATIVE; }
     if (id == SEAM_TRON) {
         if (gate_active() == 1) { return SEAM_NATIVE; }
     }

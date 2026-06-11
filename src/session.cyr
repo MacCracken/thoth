@@ -1,9 +1,13 @@
-# thoth — session state + the avatara persona descriptor.
+# thoth — session state + the avatara persona overlay.
 #
 # Session state is plain globals: one interactive session per process. The
-# avatara seam is absent (M5), so the persona is a STATIC bundled
-# descriptor — a descriptor, NOT a reimplementation of avatara (ADR-0003).
-# No top-level execution; included by main and by the test suite.
+# avatara seam is NATIVE (M5): the Thoth/Librarian persona is SOURCED from the
+# vendored avatara archetype bundle (egyptian_thoth() + the prof_* accessors),
+# in-process — thoth READS the emitted profile and authors only profile->string
+# glue, NOT a reimplementation of avatara (ADR-0003). The "the Librarian" role
+# and the THOTH backronym tagline are thoth's own overlay framing over avatara's
+# Egyptian wisdom-scribe archetype. No top-level execution; included by main and
+# by the test suite.
 
 var _sess_turns = 0;
 var _sess_model = 0;     # 0 = none; else a cstring model id
@@ -37,15 +41,63 @@ fn session_set_model_copy(m) {
     return 0;
 }
 
-fn persona_name() { return "Thoth"; }
+# The avatara archetype profile, built once (egyptian_thoth allocs from the
+# bump heap, so the pointer is stable for the process). Lazy: the first persona
+# query after alloc_init() constructs it. This is the M5 seam binding — the
+# persona is READ from avatara, never reimplemented (ADR-0003).
+var _persona_profile = 0;
+fn persona_profile() {
+    if (_persona_profile == 0) { _persona_profile = egyptian_thoth(); }
+    return _persona_profile;
+}
+
+# Identity sourced from the avatara archetype.
+fn persona_name() { return prof_name(persona_profile()); }
+# soul + spirit are avatara's emitted persona prose — they feed the hoosh system
+# prompt so the archetype actually steers the turn (see hoosh.cyr, M5 step 2).
+fn persona_soul() { return prof_soul(persona_profile()); }
+fn persona_spirit() { return prof_spirit(persona_profile()); }
+fn persona_desc() { return prof_desc(persona_profile()); }
+
+# thoth's own overlay framing over avatara's Thoth archetype: the "Librarian"
+# role and the THOTH backronym are thoth's, not avatara domain logic.
 fn persona_role() { return "the Librarian"; }
 fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"; }
 
-# print_banner: the scribe greeting (the static avatara stand-in). I/O.
+# persona_system_prompt: the hoosh system message that makes the backing model
+# wear the Thoth/Librarian persona (M5 step 2). Built ONCE from avatara's emitted
+# soul + spirit prose (the archetype's own voice) plus thoth's operating clause
+# (how the overlay applies to coding — thoth's framing, not avatara logic).
+# Cached in the never-freeing bump heap. This is what stops the persona being
+# banner-only: it actually steers the turn (see hoosh_send).
+var _persona_sys = 0;
+var PERSONA_SYS_CAP = 1024;
+fn _persona_append(dst, off, s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        store8(dst + off, load8(s + i));
+        off = off + 1;
+        i = i + 1;
+    }
+    return off;
+}
+fn persona_system_prompt() {
+    if (_persona_sys != 0) { return _persona_sys; }
+    _persona_sys = alloc(PERSONA_SYS_CAP);
+    var off = 0;
+    off = _persona_append(_persona_sys, off, persona_soul());
+    off = _persona_append(_persona_sys, off, " ");
+    off = _persona_append(_persona_sys, off, persona_spirit());
+    off = _persona_append(_persona_sys, off, " You are thoth, a sovereign agentic coding scribe: weigh each change, measure twice, edit precisely, and record your reasoning.");
+    store8(_persona_sys + off, 0);
+    return _persona_sys;
+}
+
+# print_banner: the scribe greeting (sourced from the avatara persona). I/O.
 fn print_banner() {
     println("");
     emit("  "); emit(persona_name()); emit(", "); emit(persona_role());
-    println(" - thoth 0.3.0");
+    println(" - thoth 0.4.0");
     emit("  "); println(persona_tagline());
     println("  a sovereign agentic coding TUI (fermenting). /help for commands.");
     println("");

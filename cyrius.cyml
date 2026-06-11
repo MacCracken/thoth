@@ -32,8 +32,9 @@ stdlib = [
     # libro→agnosys subscript syntax (M4)
     "syscalls", "alloc", "result", "tagged", "fmt", "io", "fs", "str", "string", "vec", "slice", "args", "process", "assert", "bench",
     # general utilities sandhi/sigil build on; regex carries glob_match for
-    # the vendored t-ron policy globs (M4)
-    "fnptr", "freelist", "hashmap", "chrono", "regex",
+    # the vendored t-ron policy globs (M4); math carries f64_le/f64_ge for the
+    # vendored avatara archetype f64 ops (M5 — the other f64 ops are builtins)
+    "fnptr", "freelist", "hashmap", "chrono", "regex", "math",
     # data formats (json/toml/cyml/base64/bigint) — before sigil + transport
     "bayan",
     # structured logging the vendored libro audit chain emits through (M4)

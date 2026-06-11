@@ -14,11 +14,14 @@
 # NOT [deps.X] blocks: bote's and t-ron's manifests both declare git sub-deps
 # (libro/majra, libro/bote) that `cyrius deps` would resolve transitively into
 # colliding compile sets. The bundles are consumed directly; re-sync with
-# scripts/sync-{bote,tron,libro}.sh <tag>. Order: bote-core (MCP protocol),
-# libro (audit chain — t-ron's audit log), then t-ron (calls into both).
+# scripts/sync-{bote,tron,libro,avatara}.sh <tag>. Order: bote-core (MCP
+# protocol), libro (audit chain — t-ron's audit log), then t-ron (calls into
+# both); avatara (the Thoth/Librarian archetype, M5) is independent of the
+# three and only needs the stdlib `math` f64 ops.
 include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
+include "src/vendor/avatara.cyr"
 # Project modules, callee-first (single-pass forward-reference resolution):
 # gate (t-ron binding + confirm) precedes seams, which reports its status;
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).

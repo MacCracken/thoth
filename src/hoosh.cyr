@@ -18,8 +18,8 @@
 
 # Reused request buffer — the bump allocator never frees, so one buffer avoids
 # accreting a fresh alloc every turn over a long session. The prompt is bounded
-# by the 4096-byte input line; worst-case escaping (~6x) plus framing fits well
-# under this cap.
+# by the 4096-byte input line; worst-case escaping (~6x) plus the avatara system
+# prompt (~0.5 KB, M5) plus framing fits well under this cap.
 var _hoosh_req = 0;
 var HOOSH_REQ_CAP = 32768;
 var HOOSH_MAX_TOKENS = 4096;
@@ -121,14 +121,23 @@ fn _json_escape_into(dst, off, src) {
     return off;
 }
 
-# hoosh_build_request: write a chat-completions JSON request for (model, prompt)
-# into dst, NUL-terminated; return the byte length. Pure — unit-tested. Shape:
-#   {"model":"M","messages":[{"role":"user","content":"P"}],"max_tokens":N,"stream":false}
-fn hoosh_build_request(dst, model, prompt) {
+# hoosh_build_request: write a chat-completions JSON request for
+# (model, system, prompt) into dst, NUL-terminated; return the byte length.
+# Pure — unit-tested. A non-empty `system` (the avatara persona, M5 step 2) is
+# emitted as a leading {role:system} message; an empty/0 system is omitted (the
+# original single-user-message shape, preserved). Shape:
+#   {"model":"M","messages":[{"role":"system","content":"S"},{"role":"user","content":"P"}],"max_tokens":N,"stream":false}
+fn hoosh_build_request(dst, model, system, prompt) {
     var off = 0;
     off = _append_cstr(dst, off, "{\"model\":\"");
     off = _json_escape_into(dst, off, model);
-    off = _append_cstr(dst, off, "\",\"messages\":[{\"role\":\"user\",\"content\":\"");
+    off = _append_cstr(dst, off, "\",\"messages\":[");
+    if ((system != 0) && (load8(system) != 0)) {
+        off = _append_cstr(dst, off, "{\"role\":\"system\",\"content\":\"");
+        off = _json_escape_into(dst, off, system);
+        off = _append_cstr(dst, off, "\"},");
+    }
+    off = _append_cstr(dst, off, "{\"role\":\"user\",\"content\":\"");
     off = _json_escape_into(dst, off, prompt);
     off = _append_cstr(dst, off, "\"}],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
@@ -207,7 +216,12 @@ fn hoosh_send(prompt) {
     var url = _hoosh_endpoint_url();
     var model = _hoosh_model();
     if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
-    var len = hoosh_build_request(_hoosh_req, model, prompt);
+    # The avatara persona (M5) becomes the system message when the seam is bound
+    # (native by construction); absent -> 0 and the request degrades to the bare
+    # user turn. thoth only carries the persona; hoosh owns the inference.
+    var sys = 0;
+    if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
+    var len = hoosh_build_request(_hoosh_req, model, sys, prompt);
 
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");

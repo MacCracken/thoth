@@ -6,6 +6,7 @@
 include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
+include "src/vendor/avatara.cyr"
 include "src/util.cyr"
 include "src/config.cyr"
 include "src/gate.cyr"
@@ -74,7 +75,7 @@ fn test_seams() {
     assert_eq(seam_status(SEAM_DAIMON), SEAM_ABSENT, "daimon absent when unconfigured");
     assert_eq(seam_status(SEAM_TRON), SEAM_ABSENT, "t-ron absent without a policy");
     assert_eq(seam_status(SEAM_BOTE), SEAM_NATIVE, "bote native (vendored core, M4)");
-    assert_eq(seam_status(SEAM_AVATARA), SEAM_ABSENT, "avatara absent until M5");
+    assert_eq(seam_status(SEAM_AVATARA), SEAM_NATIVE, "avatara native (vendored archetype, M5)");
     assert_eq(seam_any_wired(), 1, "bote wired by construction");
     assert(streq(seam_status_label(SEAM_ABSENT), "absent"), "absent label");
     assert(streq(seam_status_label(SEAM_REMOTE), "remote-client"), "remote label");
@@ -95,6 +96,26 @@ fn test_session() {
     session_reset();
     assert_eq(session_turns(), 0, "reset clears turns");
     assert_eq(session_model(), 0, "reset clears model");
+    return 0;
+}
+
+# The avatara persona overlay (M5): identity SOURCED from the vendored archetype
+# bundle (egyptian_thoth via the prof_* accessors), not a hardcoded stub. soul +
+# spirit are the prose that feeds the hoosh system prompt.
+fn test_persona() {
+    test_group("avatara persona (M5)");
+    assert(streq(persona_name(), "Thoth"), "name from avatara archetype");
+    assert(streq(persona_role(), "the Librarian"), "role is thoth's overlay framing");
+    assert(persona_soul() != 0, "soul present from avatara");
+    assert_eq(cstr_starts_with(persona_soul(), "You are Thoth"), 1, "soul is the Thoth archetype voice");
+    assert(persona_spirit() != 0, "spirit present from avatara");
+    assert_eq(cstr_starts_with(persona_spirit(), "Your nature is precision"), 1, "spirit is precision");
+    assert(persona_desc() != 0, "desc present from avatara");
+    # the hoosh system prompt (M5 step 2): soul + spirit + thoth's operating clause
+    var sysp = persona_system_prompt();
+    assert(sysp != 0, "system prompt built");
+    assert_eq(cstr_starts_with(sysp, "You are Thoth"), 1, "system prompt opens with the archetype soul");
+    assert(strlen(sysp) > strlen(persona_soul()), "system prompt appends spirit + operating clause");
     return 0;
 }
 
@@ -134,8 +155,12 @@ fn test_hoosh() {
     assert(streq(&ib, "0"), "append_int 0");
 
     var rb[256];
-    hoosh_build_request(&rb, "m", "hi");
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "chat-completions request shape");
+    hoosh_build_request(&rb, "m", 0, "hi");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "request shape, no system (0)");
+    hoosh_build_request(&rb, "m", "", "hi");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "empty system omitted");
+    hoosh_build_request(&rb, "m", "be precise", "hi");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be precise\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "system message prepended");
 
     test_group("hoosh response extraction");
     var body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello world\"}}]}";
@@ -239,6 +264,7 @@ fn main() {
     test_cstr();
     test_seams();
     test_session();
+    test_persona();
     test_config();
     test_hoosh();
     test_config_m4();

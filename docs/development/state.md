@@ -7,6 +7,10 @@
 
 ## Version
 
+**0.4.0** — the avatara seam, 2026-06-11 (roadmap M5: avatara binds native via a
+vendored dist bundle; the Thoth/Librarian persona is sourced from the archetype
+(`egyptian_thoth()`) and threaded into the hoosh system prompt — **all five
+spine seams now wired**).
 **0.3.0** — the M4 tool spine, 2026-06-11 (daimon remote-client; bote + t-ron
 native via vendored dist bundles; one fail-closed authorization choke point).
 **0.2.1** — toolchain + hoosh refresh, 2026-06-11 (Cyrius 6.1.32 / the bayan
@@ -21,16 +25,21 @@ thoth uses **SemVer `0.x`** through its pre-1.0 phase
 
 ## Posture
 
-thoth 0.3.0 wires **four of the five seams**. hoosh (M3) is **remote-client**:
+thoth 0.4.0 wires **all five seams**. hoosh (M3) is **remote-client**:
 turns route to a backing model and switch mid-session through the inference
 gateway over sandhi. M4 adds the tool spine: **daimon remote-client** (the MCP
 host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
 (the vendored bote-core bundle IS the MCP protocol, in-process), and **t-ron
 native** (the vendored authorization engine gates `/run`, `/write`, and
 `/call` through one choke point — deny is final, no policy means the
-fail-closed confirm prompt). Only avatara (M5) remains absent. Absent and
-unconfigured capabilities degrade honestly; nothing is faked. See
-[ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md).
+fail-closed confirm prompt). M5 adds **avatara native**: the vendored archetype
+bundle (avatara 2.7.1) supplies the Thoth/Librarian persona in-process — sourced
+from `egyptian_thoth()` via the `prof_*` accessors and threaded into the hoosh
+`{role:system}` message so the precision-0.95 scribe archetype steers the turn,
+not just the banner. Unconfigured capabilities (no hoosh/daimon url, no t-ron
+policy) still degrade honestly; nothing is faked. See
+[ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md) and
+[ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
 
 The hoosh seam binds only when `thoth.cyml` declares `[hoosh].url` — no endpoint
 declared, no remote claim. Verified end-to-end against a live gateway (a turn
@@ -71,10 +80,12 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.33` (in `cyrius.cyml [package].cyrius`), matching the
+- **Cyrius pin**: `6.1.34` (in `cyrius.cyml [package].cyrius`), matching the
   installed `cycc` (0.2.1 took 6.1.23 → 6.1.32 with the 6.1.25 bayan
-  data-domain carve; 0.3.0 takes 6.1.33 — dep-resolver CVE hardening, no
-  stdlib migration).
+  data-domain carve; 0.3.0 took 6.1.33 — dep-resolver CVE hardening; 0.4.0 is on
+  6.1.34, no stdlib migration). M5 added the **`math`** stdlib dep (the vendored
+  avatara bundle's `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via
+  `cyrius lib sync` (88 modules).
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,
@@ -98,36 +109,45 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
 - `src/commands.cyr` — input classification + command handlers (incl. M4's
   `/tools` and `/call`).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
-- `src/session.cyr` — session state (incl. the copy-on-set model) + the static
-  avatara persona descriptor.
+- `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
+  persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
+  `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
+  clause once).
 - `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
   `[daimon]` url, `[tron]` policy/agent).
 - `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
-  response/error extraction).
+  response/error extraction). **M5**: `hoosh_build_request` takes a `system`
+  param; `hoosh_send` passes the avatara persona as a `{role:system}` message.
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction).
 - `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
   `gate_authorize`) + the fail-closed `confirm` fallback.
 - `src/exec.cyr` — the portable local shell escape for `/run`.
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
-- `src/vendor/` — **M4**: committed spine dist bundles — `bote-core.cyr`
+- `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
   (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
-  `libro.cyr` (libro 2.7.2, t-ron's audit chain). Re-sync via
-  `scripts/sync-{bote,tron,libro}.sh`; never hand-edit.
+  `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
+  (avatara 2.7.1, the Thoth/Librarian archetype). Re-sync via
+  `scripts/sync-{bote,tron,libro,avatara}.sh`; never hand-edit.
 
-Binary: ~2.4 MB (`build/thoth`, x86_64-linux) — the sandhi/TLS transport
-surface plus the three vendored spine bundles dominate.
+Binary: ~2.6 MB (`build/thoth`, x86_64-linux) — the sandhi/TLS transport
+surface plus the four vendored spine bundles dominate (most of the avatara
+bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **93 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **105 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
   switch; M4's daimon call building + MCP result extraction, t-ron verdicts
   through the real vendored engine (allow/deny globs, deny-by-default unknown
   agent/tool — doubling as the libro `chain_append` SIGILL canary), and the
-  `[daimon]`/`[tron]` config defaults. Passes on `cyrius test`.
+  `[daimon]`/`[tron]` config defaults; M5's persona group (identity sourced from
+  the avatara archetype, soul/spirit prose, the built system prompt) and the
+  hoosh request-shape cases (no system preserves the prior shape, empty system
+  omitted, non-empty system prepended as `{role:system}`). Passes on
+  `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
@@ -146,7 +166,9 @@ transitive set — `net`, `http`, `tls`, `ws`, `sakshi`, `sigil`, `args`,
 `hashmap`, `thread`, `thread_local`, `fnptr`, `async`, `atomic`, `chrono`,
 `mmap`, `dynlib`, `fdlopen`, `freelist`, `ct`, `keccak`. M4 vendored-bundle
 surfaces: `regex` (t-ron's policy `glob_match`), `random` (sigil's ML-DSA /
-AES-GCM refs), `patra` (libro's structured logging). **Ordering constraint
+AES-GCM refs), `patra` (libro's structured logging). M5 vendored-bundle surface:
+`math` (the avatara bundle's `f64_le`/`f64_ge`; the other f64 ops are builtins).
+**Ordering constraint
 (M4):** `atomic`/`thread`/`thread_local`/`ct`/`keccak`/`random` must precede
 `sigil`, or libro's `chain_append` SIGILLs (sigil's hash path self-installs a
 per-thread scratch bank) — t-ron 2.1.5's documented note, now thoth's too.
@@ -156,11 +178,14 @@ comment in `cyrius.cyml`).
 
 **Vendored (committed dist bundles in `src/vendor/`, not `[deps]` blocks):**
 bote-core **2.7.3**, t-ron **2.1.5**, libro **2.7.2** (t-ron's audit chain;
-keep in lockstep with t-ron's own `[deps.libro]` pin). Both bote's and
+keep in lockstep with t-ron's own `[deps.libro]` pin), avatara **2.7.1** (the
+Thoth/Librarian archetype; needs the `math` stdlib dep, carries a benign
+`ERR_NONE = 0` matching libro's and a self-contained `xalloc`). bote's and
 t-ron's manifests declare git sub-deps that `cyrius deps` resolves
 transitively into colliding compile sets, so the self-contained bundles are
-consumed directly — the pattern hoosh established. Re-sync via
-`scripts/sync-{bote,tron,libro}.sh <tag>`.
+consumed directly — the pattern hoosh established (avatara likewise ships a
+`cyrius distlib` bundle, not a server). Re-sync via
+`scripts/sync-{bote,tron,libro,avatara}.sh <tag>`.
 
 **Spine seams.**
 
@@ -182,14 +207,23 @@ consumed directly — the pattern hoosh established. Re-sync via
   2.1.5 + libro 2.7.2, in-process)** when `[tron].policy` loads; otherwise
   absent with the fail-closed confirm gate standing in, announced. Deny is
   final; unknown agents/tools deny by default.
-- **avatara** — personality / archetype overlay; the Thoth / Librarian persona: absent (M5).
+- **avatara** — personality / archetype overlay; the Thoth / Librarian persona:
+  **wired (native — vendored avatara 2.7.1, in-process)**. The persona is sourced
+  from `egyptian_thoth()` (the `prof_*` accessors) and threaded into the hoosh
+  system prompt; native by construction (always available from the bundle). See
+  [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
 
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.3.0)
+## Known limitations (0.4.0)
 
-- avatara (M5) is the one remaining absent seam.
+- All five seams are wired; no seam is absent by milestone. The avatara persona
+  is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
+  only as the vendored bundle — the live/co-resident avatara binding is the same
+  deferred reach-transport question as the other native seams.
+- t-ron's bundle carries a benign `ERR_NONE = 0` shared with libro's identical
+  constant (same value; last definition wins) — re-check on bundle bumps.
 - **daimon 1.2.4 upstream bug**: its MCP host registry stores strings that
   alias the transient request buffer — registrations corrupt as later
   requests arrive (calls 502, `/tools` renders garbage). Filed by thoth as
@@ -204,9 +238,9 @@ deferred to a later ADR.
   (`free text` → hoosh) is not a gated action (it executes nothing locally).
 - hoosh responses are **non-streaming** — thoth waits for the full completion,
   then prints it. Streaming/SSE is future work.
-- The hoosh request is fixed (`max_tokens` 4096, single user message, no system
-  prompt, no conversation history). Multi-turn context and request tuning are
-  future work.
+- The hoosh request carries the avatara persona as a `{role:system}` message
+  (M5) but is otherwise fixed (`max_tokens` 4096, single user turn, no
+  conversation history). Multi-turn context and request tuning are future work.
 - t-ron audit events live in its in-process libro ring; thoth does not yet
   surface them (`/audit` is future work), and sakshi-structured logging of
   driver events remains unwired.
@@ -220,8 +254,12 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) — M5 pulls the live Thoth / Librarian persona
-from avatara (the static banner descriptor becomes the off-AGNOS fallback of
-the same contract). Also queued: re-verify the daimon seam end-to-end once
-the upstream registry-corruption fix ships, and surface t-ron's audit chain
-(`/audit`).
+See [`roadmap.md`](roadmap.md). M5 (avatara) is shipped, so all five seams are
+wired; the next milestone is **M6** — OS-agnostic build targets and the honest
+capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport
+ADR + the ladder) is design-ready; the cross-build half is blocked on upstream
+Cyrius stdlib / AGNOS-ABI gaps. Also queued (daimon-gated): re-verify the daimon
+seam end-to-end and light up the model-driven tool-calling loop once daimon
+ships the 1.2.4 registry-corruption fix. Unblocked polish: surface t-ron's audit
+chain (`/audit`), hoosh streaming/SSE, multi-turn context, sakshi-structured
+logging.

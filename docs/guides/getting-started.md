@@ -45,7 +45,7 @@ see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md).
 - `src/commands.cyr` — input classification + command handlers (the pure
   `classify_input` / `token_is` / `arg_after` helpers are unit-tested).
 - `src/seams.cyr` — the capability-seam registry (the five spine seams + status).
-- `src/session.cyr` — session state + the static avatara persona descriptor.
+- `src/session.cyr` — session state + the avatara persona overlay (sourced from the archetype bundle, M5).
 - `src/exec.cyr` — the local shell escape for `/run` (portable `process.cyr`).
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
 - `tests/thoth.tcyr` — the unit suite (`cyrius test`).

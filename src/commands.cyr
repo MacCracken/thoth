@@ -114,7 +114,7 @@ fn cmd_state() {
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
     else { println("see /seams"); }
-    println("  build   : thoth 0.3.0");
+    println("  build   : thoth 0.4.0");
     return 0;
 }
 

@@ -4,6 +4,62 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-11
+
+The last absent seam flips (roadmap M5): **avatara** binds **native** as a
+vendored dist bundle, in-process — the same vendored-bundle pattern as
+bote-core / t-ron / libro. thoth now wires **all five spine seams**. The
+Thoth/Librarian persona stops being a hardcoded stub: it is **sourced from the
+avatara archetype** (`egyptian_thoth()` via the `prof_*` accessors), and — the
+half that matters — its soul + spirit prose is threaded into a leading
+`{role:system}` message so the precision-0.95 scribe archetype actually
+**steers the backing model**, not just the banner. thoth still owns no domain
+logic: avatara owns the archetype; thoth reads the emitted profile and authors
+only profile→string glue (ADR-0003).
+
+### Added
+- **avatara seam, native** (`src/vendor/avatara.cyr`, avatara **2.7.1**): the
+  vendored archetype bundle, consumed in-process. `seam_status(SEAM_AVATARA)`
+  reports **native** by construction; `/seams` and `/state` reflect it.
+- **Persona sourced from avatara** (`src/session.cyr`): `persona_name` now reads
+  `prof_name(egyptian_thoth())`; new `persona_soul` / `persona_spirit` /
+  `persona_desc` expose the archetype's emitted prose. The profile is built once
+  (lazy, stable bump-heap pointer). The "Librarian" role and the THOTH backronym
+  tagline remain thoth's own overlay framing over avatara's Egyptian
+  wisdom-scribe archetype — not avatara logic.
+- **Persona system prompt** (`src/session.cyr` `persona_system_prompt`): soul +
+  spirit + thoth's coding operating clause, built once and cached. Threaded into
+  the hoosh request as a `{role:system}` message when the avatara seam is bound;
+  absent → omitted (the bare user turn), degraded honestly.
+- **`scripts/sync-avatara.sh`**: re-sync the vendored bundle from the
+  GitHub-tagged dist (default `2.7.1`), mirroring `sync-{bote,tron,libro}.sh`.
+- **12 new unit assertions (105 total)**: a persona group (identity sourced from
+  the archetype, soul/spirit prose, the built system prompt) and the hoosh
+  request-shape cases (no system preserves the original shape, empty system is
+  omitted, a non-empty system is prepended).
+
+### Changed
+- **`hoosh_build_request` gained a `system` parameter** (`src/hoosh.cyr`):
+  signature `(dst, model, system, prompt)`. A non-empty system emits a leading
+  `{role:system}` message; an empty/0 system preserves the prior
+  single-user-message shape exactly. `hoosh_send` passes the avatara persona,
+  gated on the seam being native.
+- **Seam registry**: `SEAM_AVATARA` is now `native` (was `absent`); the
+  `seam_status` comment block and `src/session.cyr` / `src/main.cyr` headers
+  updated — the persona is an overlay sourced from avatara, no longer a "static
+  descriptor".
+- **`cyrius.cyml`**: `[deps].stdlib` gained **`math`** (the avatara bundle's
+  `f64_le` / `f64_ge`; the other f64 ops are compiler builtins). `lib/` re-synced
+  to the 6.1.34 pin via `cyrius lib sync` (88 modules).
+- Version strings and the banner bumped to `0.4.0`.
+
+### Notes
+- The avatara bundle carries a benign `ERR_NONE = 0` that matches the vendored
+  libro's identical constant (same value; last definition wins), and its own
+  self-contained `xalloc` (an OOM guard over stdlib `alloc`, defined nowhere
+  else). No fn/type collisions with the other bundles, the stdlib, or thoth's
+  own source.
+
 ## [0.3.0] - 2026-06-11
 
 The agent gets real hands (roadmap M4): **three seams flip at once**. daimon

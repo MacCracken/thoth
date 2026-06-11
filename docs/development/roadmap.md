@@ -4,12 +4,14 @@
 > this file is the sequencing — what ships, in what order, against
 > what dependency gates.
 >
-> **Status: active — driver core + hoosh seam + tool spine shipped (0.3.0).**
+> **Status: active — driver core + hoosh seam + tool spine + avatara overlay shipped (0.4.0).**
 > thoth is real, usable feature code now: the M2 driver loop, the M3 hoosh
-> seam (inference + mid-session model switch), and the M4 tool spine (daimon
-> remote, bote + t-ron native, one fail-closed authorization choke point) are
-> live. **M0–M4 are done**; **M5 onward remain provisional** — their
-> ordering, version labels, and dep gates may still move as the design
+> seam (inference + mid-session model switch), the M4 tool spine (daimon
+> remote, bote + t-ron native, one fail-closed authorization choke point), and
+> the M5 avatara overlay (the Thoth/Librarian persona, native via a vendored
+> bundle, threaded into the hoosh system prompt) are live — **all five spine
+> seams are wired**. **M0–M5 are done**; **M6 onward remain provisional** —
+> their ordering, version labels, and dep gates may still move as the design
 > settles. Treat the unshipped milestones as direction, not commitment.
 
 ## Framing (read first)
@@ -58,7 +60,7 @@ whole spine is native._
       conservative built-in deny/prompt, never silent allow; absence is
       announced, never faked — M2 posture, made fully real by M4 (0.3.0):
       wired t-ron denies by default; absent t-ron prompts deny-by-default
-- [ ] avatara Thoth/Librarian archetype overlay applied
+- [x] avatara Thoth/Librarian archetype overlay applied — M5 (0.4.0)
 - [ ] Capability ladder documented and honest (per dependency:
       native vs. remote-client vs. absent; full / degraded / absent
       semantics)
@@ -164,14 +166,24 @@ the security-critical seam. Shipped:
   lifecycle/orchestration surfaces beyond MCP tools, AGNOS-native
   co-resident bindings
 
-### M5 — avatara personality overlay (provisional)
+### M5 — avatara personality overlay — ✅ 0.4.0 (2026-06-11)
 
 Pull the Thoth / scribe / Librarian persona straight from avatara — the
-on-the-nose case where name = archetype = function align.
+on-the-nose case where name = archetype = function align. Shipped:
 
-- Thoth/Librarian archetype overlay applied from avatara on AGNOS
-- Off-AGNOS: overlay reduced to a static bundled persona descriptor over
-  the same contract (a descriptor, **not** a reimplementation of avatara)
+- ✅ avatara binds **native** as a vendored dist bundle (avatara 2.7.1,
+  `src/vendor/avatara.cyr`) — the same pattern as bote/t-ron/libro. All five
+  spine seams are now wired.
+- ✅ The persona is **sourced from the archetype** (`egyptian_thoth()` via the
+  `prof_*` accessors), not a hardcoded stub; thoth authors only profile→string
+  glue. The "Librarian" role and the THOTH backronym remain thoth's own overlay
+  framing over avatara's Egyptian wisdom-scribe archetype.
+- ✅ The persona **steers the turn**: soul + spirit prose threaded into a leading
+  `{role:system}` message in the hoosh request (M5 step 2). Off the seam the
+  system message is omitted — degraded honestly.
+- ✅ The vendored bundle is the off-AGNOS descriptor over the same contract; the
+  live / co-resident avatara binding is the deferred reach-transport question.
+- ↪ See [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
 
 ### M6 — OS-agnostic build targets + capability ladder (provisional)
 
