@@ -22,9 +22,13 @@ var _cfg_loaded = 0;
 var _cfg_hoosh_url = 0;      # cstring, or 0 if unset
 var _cfg_hoosh_token = 0;    # cstring, or 0 if unset
 var _cfg_hoosh_model = 0;    # cstring, or 0 if unset
+var _cfg_daimon_url = 0;     # cstring, or 0 if unset (daimon seam stays absent)
+var _cfg_tron_policy = 0;    # cstring path to a t-ron policy TOML, or 0
+var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
 
 var CONFIG_PATH = "thoth.cyml";
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
+var TRON_AGENT_DEFAULT = "thoth";
 
 # _cfg_section_pairs: the pairs vec for table [name] in a parsed sections vec,
 # or 0 if the table is absent.
@@ -58,6 +62,11 @@ fn config_load() {
     _cfg_hoosh_url = _cfg_str(hoosh, "url");
     _cfg_hoosh_token = _cfg_str(hoosh, "token");
     _cfg_hoosh_model = _cfg_str(hoosh, "model");
+    var daimon = _cfg_section_pairs(sections, "daimon");
+    _cfg_daimon_url = _cfg_str(daimon, "url");
+    var tron = _cfg_section_pairs(sections, "tron");
+    _cfg_tron_policy = _cfg_str(tron, "policy");
+    _cfg_tron_agent = _cfg_str(tron, "agent");
     if (_cfg_hoosh_url == 0) { return 0; }
     return 1;
 }
@@ -79,3 +88,23 @@ fn config_hoosh_token() { return _cfg_hoosh_token; }
 
 # config_hoosh_model: the default model cstring, or 0 if none.
 fn config_hoosh_model() { return _cfg_hoosh_model; }
+
+# config_daimon_configured: 1 if a daimon MCP host endpoint is declared, else 0.
+fn config_daimon_configured() {
+    if (_cfg_daimon_url == 0) { return 0; }
+    return 1;
+}
+
+# config_daimon_url: the configured daimon endpoint, or 0 if unset (the daimon
+# seam never claims remote without a declared endpoint — no default here).
+fn config_daimon_url() { return _cfg_daimon_url; }
+
+# config_tron_policy: path to the t-ron policy TOML, or 0 if unset (the t-ron
+# seam stays absent and the built-in fail-closed confirm gate stands in).
+fn config_tron_policy() { return _cfg_tron_policy; }
+
+# config_tron_agent: the agent id thoth authorizes as, default "thoth".
+fn config_tron_agent() {
+    if (_cfg_tron_agent == 0) { return TRON_AGENT_DEFAULT; }
+    return _cfg_tron_agent;
+}

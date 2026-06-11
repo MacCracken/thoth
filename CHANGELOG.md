@@ -4,6 +4,65 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-11
+
+The agent gets real hands (roadmap M4): **three seams flip at once**. daimon
+(MCP tool execution + host registry) binds **remote-client** over HTTP via
+sandhi; bote (the MCP protocol) and t-ron (per-tool authorization) bind
+**native** as vendored dist bundles, in-process. Every dangerous action —
+`/run`, `/write`, and the new MCP `/call` — now flows through one t-ron-backed
+authorization choke point that fails closed at every layer. Live-verified
+end-to-end across the real spine: thoth → t-ron allow → daimon → MCP JSON-RPC
+→ hoosh's bote-backed `/v1/tools/call` → echo back up the chain; a deny-listed
+tool refused with no request sent. See [ADR-0006](docs/adr/0006-m4-tool-spine-daimon-bote-tron.md).
+
+### Added
+- **daimon seam client** (`src/daimon.cyr`): `/tools` lists the MCP host
+  registry (`GET /v1/mcp/tools`); `/call <tool> [json]` invokes a tool
+  (`POST /v1/mcp/call`) and prints the MCP tool-result text. Binds when
+  `thoth.cyml [daimon].url` is declared; degrades honestly otherwise.
+- **t-ron authorization gate** (`src/gate.cyr`): when `[tron].policy` names a
+  loadable policy TOML, every gated action becomes a t-ron `ToolCall` —
+  **deny is final** (no prompt can override policy), flag falls back to the
+  interactive confirm, allow proceeds. Without a policy the M2 fail-closed
+  confirm prompt stands in, announced. Built-ins authorize as `thoth_run` /
+  `thoth_write`; MCP tools under their real name, checked *before* any
+  request leaves thoth. t-ron's own defaults deny unknown agents/tools.
+- **Vendored spine bundles** (`src/vendor/`): bote-core 2.7.3 (MCP protocol,
+  transport-free), t-ron 2.1.5 (policy/rate/scan/audit engine), libro 2.7.2
+  (the audit chain t-ron writes). Committed dist files with re-sync scripts
+  (`scripts/sync-{bote,tron,libro}.sh`) — NOT `[deps.X]` blocks, whose
+  transitive git sub-deps collide (the hoosh-discovered pattern).
+- **26 new unit assertions (93 total)**: daimon call building + result/error
+  extraction against canned bodies, t-ron verdicts through the real vendored
+  engine (allow/deny globs, deny-by-default for unknown agent/tool — also the
+  libro `chain_append` SIGILL canary), `[daimon]`/`[tron]` config defaults,
+  `/tools` + `/call` classification, and M4 seam statuses.
+
+### Changed
+- **Seam registry is fully dynamic**: bote reports **native** by construction
+  (the bundle is in-process); daimon remote when configured; t-ron native when
+  a policy loads. `/seams`, `/state`, and the gate all reflect it.
+- **`cyrius.cyml`**: toolchain pin `6.1.32` → `6.1.33` (dep-resolver CVE
+  hardening; no stdlib migration). Stdlib deps gained `regex` (t-ron policy
+  globs), `random`, `patra`, `slice` (vendored libro/t-ron surfaces), and the
+  concurrency+crypto floor (`atomic`/`thread`/`thread_local`/`ct`/`keccak`/
+  `random`) moved **before** `sigil` — t-ron 2.1.5's documented ordering
+  constraint (without it, libro's `chain_append` SIGILLs).
+- `confirm` moved from `src/commands.cyr` into `src/gate.cyr`, beside the
+  seam it stands in for; thoth's private `_hex_digit` renamed
+  `_hoosh_hex_digit` (stdlib patra now carries an identical private one).
+- Version strings and the banner bumped to `0.3.0`.
+
+### Known issues
+- **daimon 1.2.4 upstream**: the MCP host registry stores strings aliasing
+  the transient request buffer, so registrations corrupt as later requests
+  arrive (calls 502, `/tools` shows garbage). Filed as
+  `daimon/docs/development/issues/2026-06-11-mcp-registry-aliases-request-buffer.md`.
+  thoth's seam is correct against a fresh registration.
+- t-ron's bundle duplicates sigil's `chacha20_xor` (same signature/semantics;
+  last definition wins) — benign, accepted in t-ron's own 2.1.5 notes.
+
 ## [0.2.1] - 2026-06-11
 
 Maintenance release: toolchain **Cyrius 6.1.23 → 6.1.32** (the bayan stdlib

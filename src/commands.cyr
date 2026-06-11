@@ -16,6 +16,8 @@ enum Cmd {
     CMD_RUN = 8;
     CMD_UNKNOWN_SLASH = 9;
     CMD_TASK = 10;
+    CMD_TOOLS = 11;
+    CMD_CALL = 12;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -50,6 +52,8 @@ fn classify_input(line) {
     if (token_is(line, "/read") == 1) { return CMD_READ; }
     if (token_is(line, "/write") == 1) { return CMD_WRITE; }
     if (token_is(line, "/run") == 1) { return CMD_RUN; }
+    if (token_is(line, "/tools") == 1) { return CMD_TOOLS; }
+    if (token_is(line, "/call") == 1) { return CMD_CALL; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -62,25 +66,32 @@ fn cmd_help() {
     println("  /read <file>       print a file (safe, read-only built-in)");
     println("  /write <f> <text>  write text to a file (t-ron-gated)");
     println("  /run <cmd>         run a shell command (t-ron-gated local escape)");
+    println("  /tools             list the MCP tools daimon hosts");
+    println("  /call <tool> [json]  invoke an MCP tool via daimon (t-ron-gated)");
     println("  /quit              exit (or Ctrl-D)");
     println("  <anything else>    a coding task -> routed to the model (hoosh)");
     return 0;
 }
 
-# confirm: fail-closed authorization stand-in for the absent t-ron seam.
-# Names the exact object being authorized (verb + obj) so the answer is
-# informed. Returns 1 ONLY on explicit y/yes; default (empty/EOF/other) DENIES.
-fn confirm(verb, obj) {
-    emit("  [t-ron absent: fail-closed] authorize ");
-    emit(verb); emit(" "); emit(obj);
-    emit("? [y/N] ");
-    var ans[64];
-    var n = read_line(&ans, 64);
-    if (n <= 0) { return 0; }
-    if (streq(&ans, "y") == 1) { return 1; }
-    if (streq(&ans, "Y") == 1) { return 1; }
-    if (streq(&ans, "yes") == 1) { return 1; }
-    return 0;
+# (confirm — the fail-closed interactive prompt — lives in src/gate.cyr now,
+# alongside the t-ron seam binding it stands in for.)
+
+# _params_one: build {"<key>":"<escaped val>"} in a reused static buffer — the
+# t-ron ToolCall params for the built-in actions. Bounded: val is capped by
+# the 4096-byte input line; worst-case escaping (~6x) fits the cap.
+var _gate_params = 0;
+var GATE_PARAMS_CAP = 32768;
+
+fn _params_one(key, val) {
+    if (_gate_params == 0) { _gate_params = alloc(GATE_PARAMS_CAP); }
+    var off = 0;
+    off = _append_cstr(_gate_params, off, "{\"");
+    off = _append_cstr(_gate_params, off, key);
+    off = _append_cstr(_gate_params, off, "\":\"");
+    off = _json_escape_into(_gate_params, off, val);
+    off = _append_cstr(_gate_params, off, "\"}");
+    store8(_gate_params + off, 0);
+    return _gate_params;
 }
 
 fn cmd_state() {
@@ -94,10 +105,16 @@ fn cmd_state() {
     emit("  hoosh   : ");
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { println("absent (set [hoosh].url in thoth.cyml)"); }
     else { println(config_hoosh_url()); }
+    emit("  daimon  : ");
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("absent (set [daimon].url in thoth.cyml)"); }
+    else { println(config_daimon_url()); }
+    emit("  t-ron   : ");
+    if (gate_active() == 0) { println("absent (fail-closed confirm gate; set [tron].policy in thoth.cyml)"); }
+    else { println(config_tron_policy()); }
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
-    else { println("hoosh wired; rest absent"); }
-    println("  build   : thoth 0.2.1");
+    else { println("see /seams"); }
+    println("  build   : thoth 0.3.0");
     return 0;
 }
 
@@ -173,7 +190,11 @@ fn cmd_write(line) {
     if (load8(rest + j) != 0) { content = rest + j; }
     if (content == 0) { println("usage: /write <path> <content>"); return 0; }
     emit("propose write -> "); println(_write_path);
-    if (confirm("write to", _write_path) == 0) { println("  denied (default). nothing written."); return 0; }
+    var wparams = _params_one("path", _write_path);
+    if (gate_authorize("thoth_write", wparams, "write to", _write_path) == 0) {
+        println("  denied. nothing written.");
+        return 0;
+    }
     var clen = strlen(content);
     if (clen > (WRITE_BUF_CAP - 2)) { clen = WRITE_BUF_CAP - 2; }
     memcpy(_write_out, content, clen);
@@ -188,14 +209,62 @@ fn cmd_write(line) {
 fn cmd_run(line) {
     var cmdline = arg_after(line);
     if (cmdline == 0) { println("usage: /run <shell command>"); return 0; }
-    println("tool execution is daimon+bote's domain, gated by t-ron - none wired yet (M4).");
     println("this /run is a local built-in shell escape (substrate), not the MCP tool spine.");
     emit("  proposed: "); println(cmdline);
-    if (confirm("run", cmdline) == 0) { println("  denied (default). nothing ran."); return 0; }
+    var rparams = _params_one("cmd", cmdline);
+    if (gate_authorize("thoth_run", rparams, "run", cmdline) == 0) {
+        println("  denied. nothing ran.");
+        return 0;
+    }
     var rc = run_shell(cmdline);
     if (rc == (0 - 1)) { println("  (failed to spawn /bin/sh)"); return 0; }
     emit("  exit "); fmt_int(rc); println("");
     return 0;
+}
+
+# cmd_tools: list the MCP tools daimon hosts. The daimon seam must be bound.
+fn cmd_tools() {
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
+        println("daimon seam absent - no MCP tool host is wired.");
+        println("tool listing/execution is daimon's domain (the MCP host registry).");
+        println("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
+        return 0;
+    }
+    return daimon_list_tools();
+}
+
+# cmd_call: invoke one MCP tool by name through daimon, t-ron-gated. Usage:
+# /call <tool> [json-arguments]. The args default to {}.
+var _call_name = 0;
+var CALL_NAME_CAP = 256;
+
+fn cmd_call(line) {
+    var rest = arg_after(line);
+    if (rest == 0) { println("usage: /call <tool> [json-arguments]"); return 0; }
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
+        println("daimon seam absent - no MCP tool host is wired.");
+        println("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
+        return 0;
+    }
+    if (_call_name == 0) { _call_name = alloc(CALL_NAME_CAP); }
+    var i = 0;
+    while (load8(rest + i) != 0 && load8(rest + i) != 32) {
+        if (i < (CALL_NAME_CAP - 1)) { store8(_call_name + i, load8(rest + i)); }
+        i = i + 1;
+    }
+    var nlen = i;
+    if (nlen > (CALL_NAME_CAP - 1)) { nlen = CALL_NAME_CAP - 1; }
+    store8(_call_name + nlen, 0);
+    var args = 0;
+    while (load8(rest + i) == 32) { i = i + 1; }
+    if (load8(rest + i) != 0) { args = rest + i; }
+    var gp = args;
+    if (gp == 0) { gp = "{}"; }
+    if (gate_authorize(_call_name, gp, "call tool", _call_name) == 0) {
+        println("  denied. no request sent.");
+        return 0;
+    }
+    return daimon_call(_call_name, args);
 }
 
 fn cmd_task(line) {
@@ -222,6 +291,8 @@ fn dispatch(line) {
     if (c == CMD_READ) { cmd_read(line); return 1; }
     if (c == CMD_WRITE) { cmd_write(line); return 1; }
     if (c == CMD_RUN) { cmd_run(line); return 1; }
+    if (c == CMD_TOOLS) { cmd_tools(); return 1; }
+    if (c == CMD_CALL) { cmd_call(line); return 1; }
     if (c == CMD_UNKNOWN_SLASH) { println("unknown command (try /help)"); return 1; }
     cmd_task(line);
     return 1;

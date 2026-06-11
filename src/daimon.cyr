@@ -1,0 +1,191 @@
+# thoth — daimon seam client (M4).
+#
+# daimon owns agent orchestration, MCP tool execution, and the host registry;
+# thoth only DRIVES it (own-the-stack, never reimplement). It is reached as a
+# REMOTE client over HTTP via sandhi, exactly like the hoosh seam: thoth lists
+# the MCP tools daimon hosts (GET /v1/mcp/tools) and invokes one by name
+# (POST /v1/mcp/call). daimon executes — built-in tools in-host, external
+# tools forwarded as MCP JSON-RPC to their registered callback endpoint. The
+# MCP protocol itself is bote's domain: the vendored bote-core bundle carries
+# the JSON-RPC codec/structs, and the wire shapes thoth consumes here are the
+# MCP tool-result shapes daimon relays.
+#
+# The seam binds only when thoth.cyml declares [daimon].url — no endpoint, no
+# remote claim, never faked. Every tool call is authorized through the t-ron
+# gate (src/gate.cyr) BEFORE it leaves thoth: deny means no request is sent.
+#
+# The request builder + response extractors are PURE and unit-tested. Only
+# daimon_list_tools / daimon_call do I/O.
+
+var _daimon_req = 0;
+var DAIMON_REQ_CAP = 32768;
+var _daimon_tools_url = 0;   # cached base + /v1/mcp/tools
+var _daimon_call_url = 0;    # cached base + /v1/mcp/call
+var DAIMON_TOOLS_PATH = "/v1/mcp/tools";
+var DAIMON_CALL_PATH = "/v1/mcp/call";
+
+# _daimon_url_join: base url (one trailing '/' trimmed) + path, NUL-terminated,
+# freshly allocated. Pure.
+fn _daimon_url_join(base, path) {
+    var blen = strlen(base);
+    if (blen > 0) { if (load8(base + blen - 1) == 47) { blen = blen - 1; } }
+    var dst = alloc(blen + strlen(path) + 1);
+    var off = 0;
+    var i = 0;
+    while (i < blen) { store8(dst + off, load8(base + i)); off = off + 1; i = i + 1; }
+    off = _append_cstr(dst, off, path);
+    store8(dst + off, 0);
+    return dst;
+}
+
+fn _daimon_tools_endpoint() {
+    if (_daimon_tools_url != 0) { return _daimon_tools_url; }
+    _daimon_tools_url = _daimon_url_join(config_daimon_url(), DAIMON_TOOLS_PATH);
+    return _daimon_tools_url;
+}
+
+fn _daimon_call_endpoint() {
+    if (_daimon_call_url != 0) { return _daimon_call_url; }
+    _daimon_call_url = _daimon_url_join(config_daimon_url(), DAIMON_CALL_PATH);
+    return _daimon_call_url;
+}
+
+# daimon_build_call: write the /v1/mcp/call body for (name, args_json) into
+# dst, NUL-terminated; return the byte length. args_json is the caller's raw
+# JSON object (already valid JSON) or 0 for no arguments. Pure — unit-tested.
+# Shape: {"name":"N","arguments":A}
+fn daimon_build_call(dst, name, args_json) {
+    var off = 0;
+    off = _append_cstr(dst, off, "{\"name\":\"");
+    off = _json_escape_into(dst, off, name);
+    off = _append_cstr(dst, off, "\",\"arguments\":");
+    if (args_json == 0) { off = _append_cstr(dst, off, "{}"); }
+    else { off = _append_cstr(dst, off, args_json); }
+    off = _append_cstr(dst, off, "}");
+    store8(dst + off, 0);
+    return off;
+}
+
+# daimon_extract_text: parse an MCP tool-result body and return the first
+# content[].text as a Str, or 0 if absent/wrong shape. Pure — unit-tested.
+# Shape consumed: {"content":[{"type":"text","text":"..."}],"isError":...}
+fn daimon_extract_text(body, body_len) {
+    var v = bayan_json_v_parse_str(body, body_len);
+    if (v == 0) { return 0; }
+    var content = bayan_json_v_obj_get(v, "content");
+    if (content == 0) { return 0; }
+    var first = bayan_json_v_arr_get(content, 0);
+    if (first == 0) { return 0; }
+    var text = bayan_json_v_obj_get(first, "text");
+    if (text == 0) { return 0; }
+    return bayan_json_v_str(text);
+}
+
+# daimon_extract_is_error: the isError flag of a tool-result body. Returns 1
+# (error), 0 (success), or -1 when the field is absent/unparseable. Pure.
+fn daimon_extract_is_error(body, body_len) {
+    var v = bayan_json_v_parse_str(body, body_len);
+    if (v == 0) { return 0 - 1; }
+    var ie = bayan_json_v_obj_get(v, "isError");
+    if (ie == 0) { return 0 - 1; }
+    if (bayan_json_v_is_bool(ie) == 0) { return 0 - 1; }
+    return bayan_json_v_bool(ie);
+}
+
+# _daimon_print_str: write a Str (ptr+len) to stdout, newline-terminated. I/O.
+fn _daimon_print_str(s) {
+    var d = str_data(s);
+    var n = str_len(s);
+    emit_n(d, n);
+    if (n > 0) { if (load8(d + n - 1) != 10) { println(""); } }
+    if (n == 0) { println(""); }
+    return 0;
+}
+
+# _daimon_announce_transport_error: honest degradation for an unreachable host.
+fn _daimon_announce_transport_error(r, url) {
+    var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
+    emit("  daimon transport error: "); println(ename);
+    emit("  endpoint "); emit(url);
+    println(" unreachable — is daimon up? (degraded, not faked)");
+    return 0;
+}
+
+# daimon_list_tools: GET the MCP host registry and print each tool. Returns 0
+# on success, negative on transport failure, the HTTP status on non-2xx. I/O.
+fn daimon_list_tools() {
+    var url = _daimon_tools_endpoint();
+    var h = sandhi_headers_new();
+    emit("  -> daimon "); println(url);
+    var r = sandhi_http_get(url, h);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) {
+        _daimon_announce_transport_error(r, url);
+        return 0 - 1;
+    }
+    var status = sandhi_http_status(r);
+    if ((status < 200) || (status >= 300)) {
+        emit("  daimon returned HTTP "); fmt_int(status); println("");
+        return status;
+    }
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    var v = bayan_json_v_parse_str(body, blen);
+    if (v == 0) { println("  daimon: response received but not parseable."); return 0 - 1; }
+    var tools = bayan_json_v_obj_get(v, "tools");
+    if (tools == 0) { println("  daimon: no tools array in response."); return 0 - 1; }
+    var n = bayan_json_v_arr_len(tools);
+    emit("tools daimon hosts ("); fmt_int(n); println("):");
+    if (n == 0) { println("  (none registered)"); }
+    var i = 0;
+    while (i < n) {
+        var t = bayan_json_v_arr_get(tools, i);
+        var name = bayan_json_v_obj_get(t, "name");
+        var desc = bayan_json_v_obj_get(t, "description");
+        emit("  ");
+        if (name != 0) { var ns = bayan_json_v_str(name); emit_n(str_data(ns), str_len(ns)); }
+        else { emit("(unnamed)"); }
+        if (desc != 0) {
+            emit("  - ");
+            var ds = bayan_json_v_str(desc);
+            emit_n(str_data(ds), str_len(ds));
+        }
+        println("");
+        i = i + 1;
+    }
+    return 0;
+}
+
+# daimon_call: invoke one MCP tool through daimon and print the result text.
+# The caller has ALREADY passed the t-ron gate. Returns 0 on success, negative
+# on transport failure, the HTTP status on non-2xx. I/O.
+fn daimon_call(name, args_json) {
+    var url = _daimon_call_endpoint();
+    if (_daimon_req == 0) { _daimon_req = alloc(DAIMON_REQ_CAP); }
+    var len = daimon_build_call(_daimon_req, name, args_json);
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    emit("  -> daimon tool '"); emit(name); emit("' "); println(url);
+    var r = sandhi_http_post(url, h, _daimon_req, len);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) {
+        _daimon_announce_transport_error(r, url);
+        return 0 - 1;
+    }
+    var status = sandhi_http_status(r);
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    if ((status < 200) || (status >= 300)) {
+        emit("  daimon returned HTTP "); fmt_int(status); println("");
+        var em = daimon_extract_text(body, blen);
+        if (em != 0) { emit("  "); _daimon_print_str(em); }
+        return status;
+    }
+    var ie = daimon_extract_is_error(body, blen);
+    if (ie == 1) { println("  tool reported an error:"); }
+    var text = daimon_extract_text(body, blen);
+    if (text == 0) {
+        println("  daimon: result received but no text content could be parsed.");
+        return 0 - 1;
+    }
+    _daimon_print_str(text);
+    return 0;
+}

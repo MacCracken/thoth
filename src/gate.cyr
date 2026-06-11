@@ -1,0 +1,106 @@
+# thoth — the t-ron authorization gate (M4).
+#
+# t-ron owns MCP per-tool authorization — the security gate around the very
+# file-edits, shell commands, and MCP tool calls the agent runs. thoth
+# consumes it IN-PROCESS via the vendored dist bundle (src/vendor/t-ron.cyr):
+# policy engine, rate limiter, payload scanner, pattern analyzer, audit chain
+# (libro). thoth owns none of that logic; this module only binds it.
+#
+# The seam binds when thoth.cyml [tron].policy names a policy TOML that loads
+# cleanly. Without it the seam is ABSENT and authorization falls back to the
+# built-in fail-closed confirm prompt (deny by default) — degraded honestly
+# and announced, never silent. With it, every gated action becomes a t-ron
+# ToolCall: deny refuses outright (no prompt can override policy), flag falls
+# back to the interactive confirm, allow proceeds. t-ron's own defaults deny
+# unknown agents and unknown tools — fail closed end to end.
+#
+# Built-in actions are authorized under reserved tool names so a policy can
+# target them: thoth_run (the /run shell escape), thoth_write (/write). MCP
+# tool calls are authorized under their real tool name BEFORE any request
+# leaves thoth.
+
+var _gate_tron = 0;          # TRon instance, or 0 -> seam absent
+
+# gate_active: 1 if the t-ron seam is bound (policy loaded), else 0.
+fn gate_active() {
+    if (_gate_tron == 0) { return 0; }
+    return 1;
+}
+
+# confirm: fail-closed interactive authorization — the stand-in when the
+# t-ron seam is absent, and the resolution for a t-ron FLAG verdict. Names
+# the exact object being authorized (verb + obj) so the answer is informed.
+# Returns 1 ONLY on explicit y/yes; default (empty/EOF/other) DENIES.
+fn confirm(verb, obj) {
+    if (gate_active() == 0) { emit("  [t-ron absent: fail-closed] authorize "); }
+    else { emit("  [t-ron flag: confirm] authorize "); }
+    emit(verb); emit(" "); emit(obj);
+    emit("? [y/N] ");
+    var ans[64];
+    var n = read_line(&ans, 64);
+    if (n <= 0) { return 0; }
+    if (streq(&ans, "y") == 1) { return 1; }
+    if (streq(&ans, "Y") == 1) { return 1; }
+    if (streq(&ans, "yes") == 1) { return 1; }
+    return 0;
+}
+
+# gate_init: bind the t-ron seam if thoth.cyml names a loadable policy. Call
+# once at startup, after config_load. Announces failures honestly; a broken
+# policy file leaves the seam ABSENT (fail closed to the confirm prompt), it
+# never half-loads. I/O (reads the policy file).
+fn gate_init() {
+    var path = config_tron_policy();
+    if (path == 0) { return 0; }
+    var t = tron_new(tron_config_default());
+    var rc = tron_load_policy_file(t, path);
+    if (rc != TRON_ERR_NONE) {
+        emit("t-ron: policy '"); emit(path);
+        if (rc == TRON_ERR_IO) { println("' unreadable — seam stays absent (fail-closed confirm gate)."); }
+        else { println("' failed to parse — seam stays absent (fail-closed confirm gate)."); }
+        return 0;
+    }
+    _gate_tron = t;
+    emit("t-ron: policy loaded from "); emit(path);
+    emit(" (agent '"); emit(config_tron_agent()); println("')");
+    return 1;
+}
+
+# gate_verdict: run one t-ron check. Returns the verdict kind (VK_ALLOW /
+# VK_DENY / VK_FLAG). Caller must ensure gate_active() == 1. The params are
+# NUL-terminated JSON text (or a plain string — t-ron scans it as payload).
+fn gate_verdict(tool_name, params) {
+    var p = params;
+    if (p == 0) { p = "{}"; }
+    var call = tool_call_new(config_tron_agent(), tool_name, p, clock_now_ns());
+    var v = tron_check(_gate_tron, call);
+    var k = verdict_kind(v);
+    if (k == VK_DENY) {
+        emit("  [t-ron] DENY: ");
+        var reason = verdict_reason(v);
+        if (reason != 0) { println(reason); } else { println("(no reason)"); }
+    }
+    if (k == VK_FLAG) {
+        emit("  [t-ron] FLAG: ");
+        var freason = verdict_reason(v);
+        if (freason != 0) { println(freason); } else { println("(no reason)"); }
+    }
+    return k;
+}
+
+# gate_authorize: the single authorization choke point for every dangerous
+# action. Returns 1 to proceed, 0 to refuse.
+#   - t-ron bound:  allow -> 1; deny -> 0 (policy is final — no prompt can
+#     override it); flag -> interactive confirm (deny by default).
+#   - t-ron absent: the built-in fail-closed confirm prompt (deny by default),
+#     announced as the stand-in it is.
+fn gate_authorize(tool_name, params, verb, obj) {
+    if (gate_active() == 0) { return confirm(verb, obj); }
+    var k = gate_verdict(tool_name, params);
+    if (k == VK_ALLOW) {
+        emit("  [t-ron] allow: "); emit(verb); emit(" "); println(obj);
+        return 1;
+    }
+    if (k == VK_FLAG) { return confirm(verb, obj); }
+    return 0;
+}

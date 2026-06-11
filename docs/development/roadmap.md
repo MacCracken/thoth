@@ -4,12 +4,13 @@
 > this file is the sequencing — what ships, in what order, against
 > what dependency gates.
 >
-> **Status: active — driver core + hoosh seam shipped (0.2.0).** thoth is
-> real, usable feature code now: the M2 driver loop and the M3 hoosh seam
-> (inference + mid-session model switch) are live. **M0–M3 are done**; **M4
-> onward remain provisional** — their ordering, version labels, and dep gates
-> may still move as the design settles. Treat the unshipped milestones as
-> direction, not commitment.
+> **Status: active — driver core + hoosh seam + tool spine shipped (0.3.0).**
+> thoth is real, usable feature code now: the M2 driver loop, the M3 hoosh
+> seam (inference + mid-session model switch), and the M4 tool spine (daimon
+> remote, bote + t-ron native, one fail-closed authorization choke point) are
+> live. **M0–M4 are done**; **M5 onward remain provisional** — their
+> ordering, version labels, and dep gates may still move as the design
+> settles. Treat the unshipped milestones as direction, not commitment.
 
 ## Framing (read first)
 
@@ -53,9 +54,10 @@ whole spine is native._
       AGNOS and at least one off-AGNOS target
 - [x] Mid-session model switch routes turns through hoosh — M3 (0.2.0)
 - [ ] MCP tool execution via daimon + bote, gated by t-ron on AGNOS
-- [ ] Off-AGNOS security **fails closed** — absent t-ron degrades to a
+- [x] Off-AGNOS security **fails closed** — absent t-ron degrades to a
       conservative built-in deny/prompt, never silent allow; absence is
-      announced, never faked
+      announced, never faked — M2 posture, made fully real by M4 (0.3.0):
+      wired t-ron denies by default; absent t-ron prompts deny-by-default
 - [ ] avatara Thoth/Librarian archetype overlay applied
 - [ ] Capability ladder documented and honest (per dependency:
       native vs. remote-client vs. absent; full / degraded / absent
@@ -140,17 +142,27 @@ backing model mid-session. Routing is OS-independent by construction. Shipped:
 - ↪ Deferred: AGNOS-native co-resident binding (same contract), streaming/SSE,
   multi-turn context — future milestones.
 
-### M4 — MCP tool execution: daimon + bote + t-ron (provisional)
+### M4 — MCP tool execution: daimon + bote + t-ron — ✅ 0.3.0 (2026-06-11)
 
 Give the agent real hands — tool execution under authorization. This is
-the security-critical seam.
+the security-critical seam. Shipped:
 
-- Tool execution via daimon (orchestration + MCP tool host + host
-  registry) speaking bote (the MCP protocol)
-- **t-ron** wraps the very file-edits and shell commands the agent runs
-- **Fail-closed** off AGNOS: absent t-ron ⇒ conservative built-in
-  deny/prompt around file-edit and shell-exec; never silent allow; absence
-  surfaced to the user
+- ✅ Tool execution via daimon (orchestration + MCP tool host + host
+  registry, remote-client over sandhi: `/tools` + `/call`) speaking bote
+  (the MCP protocol — vendored bote-core 2.7.3, native in-process)
+- ✅ **t-ron** (vendored 2.1.5 + libro 2.7.2, native in-process) wraps the
+  very file-edits, shell commands, and MCP tool calls the agent runs —
+  one `gate_authorize` choke point; policy deny is final
+- ✅ **Fail-closed** off AGNOS: absent t-ron ⇒ the built-in deny-by-default
+  confirm around file-edit/shell-exec/tool-call; never silent allow;
+  absence surfaced to the user. t-ron's own defaults deny unknown
+  agents/tools.
+- ✅ Live-verified across the real spine (thoth → t-ron → daimon → hoosh's
+  bote-backed MCP endpoint → back); surfaced + filed an upstream daimon
+  1.2.4 registry bug (see [ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md))
+- ↪ Deferred: surfacing t-ron's audit chain (`/audit`), daimon agent
+  lifecycle/orchestration surfaces beyond MCP tools, AGNOS-native
+  co-resident bindings
 
 ### M5 — avatara personality overlay (provisional)
 

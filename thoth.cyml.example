@@ -24,3 +24,35 @@ url   = "http://127.0.0.1:8088"
 # /model <id> overrides this per session (the mid-session switch); hoosh routes
 # each request by the model name, so switching providers is just a new id.
 model = "claude-haiku-4-5-20251001"
+
+# The [daimon] table wires the daimon seam (M4). Declaring a `url` flips the
+# seam from absent -> remote-client: /tools lists daimon's MCP host registry
+# (GET /v1/mcp/tools) and /call invokes a tool (POST /v1/mcp/call). daimon
+# owns orchestration + MCP tool execution + the host registry; the protocol
+# is bote (the vendored bote-core bundle); thoth only drives. Run a host with
+# `daimon serve 8090` (see the daimon repo).
+
+# [daimon]
+# url = "http://127.0.0.1:8090"
+
+# The [tron] table wires the t-ron seam (M4): MCP per-tool authorization,
+# consumed IN-PROCESS via the vendored t-ron dist bundle. `policy` names a
+# t-ron policy TOML; when it loads, every gated action (/run, /write, /call)
+# becomes a t-ron ToolCall — deny is final, flag falls back to the interactive
+# confirm, allow proceeds. Without a policy the seam is absent and the
+# built-in fail-closed confirm prompt stands in (deny by default). t-ron
+# denies unknown agents and unknown tools by default — fail closed end to end.
+#
+# Policy file shape (see the t-ron repo for the full surface):
+#   [agent."thoth"]
+#   allow = ["bote_echo*", "thoth_run", "thoth_write"]
+#   deny  = ["danger_*"]
+#   [agent."thoth".rate_limit]
+#   calls_per_minute = 60
+#
+# The built-ins authorize under reserved names: thoth_run (/run) and
+# thoth_write (/write); MCP tools authorize under their real tool name.
+
+# [tron]
+# policy = "tron-policy.toml"
+# agent = "thoth"

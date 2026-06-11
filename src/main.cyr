@@ -1,25 +1,42 @@
 # thoth — main entry point. Sovereign agentic coding TUI / driver.
 #
 # thoth is a DRIVER: it owns no domain logic of its own and reaches the AGNOS
-# spine (hoosh/daimon/bote/t-ron/avatara) through capability seams. The hoosh
-# seam is wired (remote-client over HTTP); the rest are still absent and degrade
-# honestly. config_load() reads thoth.cyml before the loop. See docs/adr/0001,
-# 0002, 0003, 0005.
+# spine (hoosh/daimon/bote/t-ron/avatara) through capability seams. hoosh and
+# daimon are remote-client over HTTP (sandhi); bote and t-ron are native via
+# vendored dist bundles; avatara is still absent and degrades honestly.
+# config_load() + gate_init() run before the loop. See docs/adr/0001, 0002,
+# 0003, 0005, 0006.
 #
 # Stdlib auto-resolves from cyrius.cyml; project modules are included here once,
 # in dependency order. The test suite includes the same modules WITHOUT main.
+#
+# src/vendor/ holds committed dist bundles for the in-process spine seams,
+# NOT [deps.X] blocks: bote's and t-ron's manifests both declare git sub-deps
+# (libro/majra, libro/bote) that `cyrius deps` would resolve transitively into
+# colliding compile sets. The bundles are consumed directly; re-sync with
+# scripts/sync-{bote,tron,libro}.sh <tag>. Order: bote-core (MCP protocol),
+# libro (audit chain — t-ron's audit log), then t-ron (calls into both).
+include "src/vendor/bote-core.cyr"
+include "src/vendor/libro.cyr"
+include "src/vendor/t-ron.cyr"
+# Project modules, callee-first (single-pass forward-reference resolution):
+# gate (t-ron binding + confirm) precedes seams, which reports its status;
+# daimon follows hoosh (it reuses hoosh's cstr/json append helpers).
 include "src/util.cyr"
 include "src/config.cyr"
+include "src/gate.cyr"
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
+include "src/daimon.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
 
 fn main() {
     alloc_init();
-    config_load();          # read thoth.cyml -> flips the hoosh seam to remote if [hoosh].url is set
+    config_load();          # read thoth.cyml -> flips hoosh/daimon seams to remote when urls are set
+    gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm
     print_banner();
     repl_loop();
     println("scribe out.");

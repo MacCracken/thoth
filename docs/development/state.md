@@ -7,6 +7,8 @@
 
 ## Version
 
+**0.3.0** — the M4 tool spine, 2026-06-11 (daimon remote-client; bote + t-ron
+native via vendored dist bundles; one fail-closed authorization choke point).
 **0.2.1** — toolchain + hoosh refresh, 2026-06-11 (Cyrius 6.1.32 / the bayan
 stdlib migration; seam re-verified against hoosh 2.4.5). **0.2.0** — the hoosh
 seam, 2026-06-10 (roadmap M3: inference + mid-session model switch). First real
@@ -19,13 +21,16 @@ thoth uses **SemVer `0.x`** through its pre-1.0 phase
 
 ## Posture
 
-thoth 0.2.x wires the **first capability seam**: hoosh is now **remote-client**
-— thoth routes a turn to a backing model and switches the backing model
-mid-session, both through the hoosh inference gateway, reached as an
-OpenAI-compatible HTTP client transported by sandhi. The other four seams remain
-**absent** — MCP tools (daimon/bote) and authorization (t-ron) land in M4, live
-personality (avatara) in M5. Absent capabilities degrade honestly; nothing is
-faked. Each milestone flips one more seam from absent → remote/native.
+thoth 0.3.0 wires **four of the five seams**. hoosh (M3) is **remote-client**:
+turns route to a backing model and switch mid-session through the inference
+gateway over sandhi. M4 adds the tool spine: **daimon remote-client** (the MCP
+host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
+(the vendored bote-core bundle IS the MCP protocol, in-process), and **t-ron
+native** (the vendored authorization engine gates `/run`, `/write`, and
+`/call` through one choke point — deny is final, no policy means the
+fail-closed confirm prompt). Only avatara (M5) remains absent. Absent and
+unconfigured capabilities degrade honestly; nothing is faked. See
+[ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md).
 
 The hoosh seam binds only when `thoth.cyml` declares `[hoosh].url` — no endpoint
 declared, no remote claim. Verified end-to-end against a live gateway (a turn
@@ -66,9 +71,10 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.32` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc` (bumped from `6.1.23` for 0.2.1; carries the 6.1.25 bayan
-  data-domain carve — see Dependencies).
+- **Cyrius pin**: `6.1.33` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc` (0.2.1 took 6.1.23 → 6.1.32 with the 6.1.25 bayan
+  data-domain carve; 0.3.0 takes 6.1.33 — dep-resolver CVE hardening, no
+  stdlib migration).
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,
@@ -84,50 +90,77 @@ floor; never fork the spine.**
 
 ## Source
 
-The driver core (M2) plus the hoosh seam (M3), across these Cyrius modules:
+The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
 
-- `src/main.cyr` — entry; includes the modules, runs `config_load` then the loop.
+- `src/main.cyr` — entry; includes the modules callee-first, runs
+  `config_load` + `gate_init` then the loop.
 - `src/repl.cyr` — the read → dispatch → iterate loop.
-- `src/commands.cyr` — input classification + command handlers (task/model route
-  through hoosh when the seam is remote).
-- `src/seams.cyr` — the capability-seam registry; `seam_status` is dynamic for hoosh.
+- `src/commands.cyr` — input classification + command handlers (incl. M4's
+  `/tools` and `/call`).
+- `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the static
   avatara persona descriptor.
-- `src/config.cyr` — **M3**: `thoth.cyml` runtime config (hoosh endpoint/token/model).
+- `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
+  `[daimon]` url, `[tron]` policy/agent).
 - `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
   response/error extraction).
+- `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
+  tool call build/POST, MCP tool-result extraction).
+- `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
+  `gate_authorize`) + the fail-closed `confirm` fallback.
 - `src/exec.cyr` — the portable local shell escape for `/run`.
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
+- `src/vendor/` — **M4**: committed spine dist bundles — `bote-core.cyr`
+  (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
+  `libro.cyr` (libro 2.7.2, t-ron's audit chain). Re-sync via
+  `scripts/sync-{bote,tron,libro}.sh`; never hand-edit.
 
-Binary: ~1.5 MB (`build/thoth`, x86_64-linux) — up from ~124 KB at 0.1.0; the
-sandhi/TLS transport surface (static data) dominates.
+Binary: ~2.4 MB (`build/thoth`, x86_64-linux) — the sandhi/TLS transport
+surface plus the three vendored spine bundles dominate.
 
 ## Tests
 
-- `tests/thoth.tcyr` — **67 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **93 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
-  `cstr_starts_with`; plus M3's JSON escaping, chat-request building,
-  response/error extraction, config defaults, and the copy-on-set model switch.
-  Passes on `cyrius test`.
+  `cstr_starts_with`; M3's JSON escaping, chat-request building,
+  response/error extraction, config defaults, and the copy-on-set model
+  switch; M4's daimon call building + MCP result extraction, t-ron verdicts
+  through the real vendored engine (allow/deny globs, deny-by-default unknown
+  agent/tool — doubling as the libro `chain_append` SIGILL canary), and the
+  `[daimon]`/`[tron]` config defaults. Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
 ## Dependencies
 
 **Current (declared in `cyrius.cyml`, all stdlib).** Driver core: `string`,
-`fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `result`, `tagged`, `process`,
-`assert`, `bench` (`result` / `tagged` / `process` back the portable `/run`
-shell escape). Data formats: **`bayan`** — the Cyrius 6.1.25 data-domain carve
-(json / toml / cyml / base64 / bigint / u128 / csv in one distlib fold); it
-carries both the `thoth.cyml` config surface (with `fs`) and the JSON wire
-format, and must precede `sigil` (u256) and the transport. Call sites use the
-canonical `bayan_*` names. M3 hoosh transport: **`sandhi`** (the HTTP/TLS
-client, folded into stdlib as `lib/sandhi.cyr`) plus its full transitive set —
-`net`, `http`, `tls`, `ws`, `sakshi`, `sigil`, `args`, `hashmap`, `thread`,
-`thread_local`, `fnptr`, `async`, `atomic`, `chrono`, `mmap`, `dynlib`,
-`fdlopen`, `freelist`, `ct`, `keccak`. Libs are opt-in and Cyrius does
-**not** resolve transitive deps, so the set is declared by hand and ordered
-low-level-floor-first (see the `[deps]` comment in `cyrius.cyml`).
+`fmt`, `alloc`, `io`, `vec`, `str`, `slice`, `syscalls`, `result`, `tagged`,
+`process`, `assert`, `bench` (`result` / `tagged` / `process` back the
+portable `/run` shell escape). Data formats: **`bayan`** — the Cyrius 6.1.25
+data-domain carve (json / toml / cyml / base64 / bigint / u128 / csv in one
+distlib fold); it carries both the `thoth.cyml` config surface (with `fs`)
+and the JSON wire format, and must precede `sigil` (u256) and the transport.
+Call sites use the canonical `bayan_*` names. M3 hoosh transport: **`sandhi`**
+(the HTTP/TLS client, folded into stdlib as `lib/sandhi.cyr`) plus its full
+transitive set — `net`, `http`, `tls`, `ws`, `sakshi`, `sigil`, `args`,
+`hashmap`, `thread`, `thread_local`, `fnptr`, `async`, `atomic`, `chrono`,
+`mmap`, `dynlib`, `fdlopen`, `freelist`, `ct`, `keccak`. M4 vendored-bundle
+surfaces: `regex` (t-ron's policy `glob_match`), `random` (sigil's ML-DSA /
+AES-GCM refs), `patra` (libro's structured logging). **Ordering constraint
+(M4):** `atomic`/`thread`/`thread_local`/`ct`/`keccak`/`random` must precede
+`sigil`, or libro's `chain_append` SIGILLs (sigil's hash path self-installs a
+per-thread scratch bank) — t-ron 2.1.5's documented note, now thoth's too.
+Libs are opt-in and Cyrius does **not** resolve transitive deps, so the set
+is declared by hand and ordered low-level-floor-first (see the `[deps]`
+comment in `cyrius.cyml`).
+
+**Vendored (committed dist bundles in `src/vendor/`, not `[deps]` blocks):**
+bote-core **2.7.3**, t-ron **2.1.5**, libro **2.7.2** (t-ron's audit chain;
+keep in lockstep with t-ron's own `[deps.libro]` pin). Both bote's and
+t-ron's manifests declare git sub-deps that `cyrius deps` resolves
+transitively into colliding compile sets, so the self-contained bundles are
+consumed directly — the pattern hoosh established. Re-sync via
+`scripts/sync-{bote,tron,libro}.sh <tag>`.
 
 **Spine seams.**
 
@@ -138,26 +171,46 @@ low-level-floor-first (see the `[deps]` comment in `cyrius.cyml`).
   17 providers, configurable routing strategy) is server-side or M4+ seam
   material — the chat contract thoth consumes is unchanged. See
   [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
-- **daimon** — agent orchestration + MCP tool execution + host registry: absent (M4).
-- **bote** — the MCP protocol: absent (M4).
-- **t-ron** — MCP per-tool authorization (the gate around file-edits and shell
-  commands; today stood in for by the fail-closed confirm gate): absent (M4).
+- **daimon** — agent orchestration + MCP tool execution + host registry:
+  **wired (remote-client over HTTP via sandhi)** when `[daimon].url` is
+  declared. `/tools` lists the registry, `/call` invokes. Verified live
+  against daimon 1.2.4 — which has an upstream registry-corruption bug thoth
+  filed (see Known limitations).
+- **bote** — the MCP protocol: **wired (native — vendored bote-core 2.7.3,
+  in-process)**.
+- **t-ron** — MCP per-tool authorization: **wired (native — vendored t-ron
+  2.1.5 + libro 2.7.2, in-process)** when `[tron].policy` loads; otherwise
+  absent with the fail-closed confirm gate standing in, announced. Deny is
+  final; unknown agents/tools deny by default.
 - **avatara** — personality / archetype overlay; the Thoth / Librarian persona: absent (M5).
 
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.2.1)
+## Known limitations (0.3.0)
 
-- hoosh is the only wired seam; daimon/bote/t-ron (M4) and avatara (M5) are absent.
+- avatara (M5) is the one remaining absent seam.
+- **daimon 1.2.4 upstream bug**: its MCP host registry stores strings that
+  alias the transient request buffer — registrations corrupt as later
+  requests arrive (calls 502, `/tools` renders garbage). Filed by thoth as
+  `daimon/docs/development/issues/2026-06-11-mcp-registry-aliases-request-buffer.md`;
+  thoth's seam is verified correct against a fresh registration. Re-verify
+  end-to-end when daimon ships the fix.
+- t-ron's bundle duplicates sigil's `chacha20_xor` (same signature and
+  semantics; last definition wins) — benign per t-ron's own 2.1.5 notes, but
+  worth re-checking on sigil bumps since sigil's TLS ChaCha20 path now runs
+  t-ron's copy.
+- t-ron authorization is per-tool name + payload scan; the model-driven turn
+  (`free text` → hoosh) is not a gated action (it executes nothing locally).
 - hoosh responses are **non-streaming** — thoth waits for the full completion,
   then prints it. Streaming/SSE is future work.
 - The hoosh request is fixed (`max_tokens` 4096, single user message, no system
   prompt, no conversation history). Multi-turn context and request tuning are
   future work.
-- No structured logging (sakshi) of audit-worthy events (`/run`, `/write`, hoosh
-  calls); this lands when the t-ron / daimon seams wire up.
-- `/read` is read-only but unrestricted; sandboxing belongs to the t-ron seam,
+- t-ron audit events live in its in-process libro ring; thoth does not yet
+  surface them (`/audit` is future work), and sakshi-structured logging of
+  driver events remains unwired.
+- `/read` is read-only but unrestricted; sandboxing posture stays with t-ron,
   not an in-tree allowlist.
 - `/write` takes single-line content; multi-line editing is future work.
 
@@ -167,6 +220,8 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) — M4 gives the agent real hands: MCP tool
-execution via daimon + bote, gated by t-ron (the security-critical seam,
-fail-closed off AGNOS).
+See [`roadmap.md`](roadmap.md) — M5 pulls the live Thoth / Librarian persona
+from avatara (the static banner descriptor becomes the off-AGNOS fallback of
+the same contract). Also queued: re-verify the daimon seam end-to-end once
+the upstream registry-corruption fix ships, and surface t-ron's audit chain
+(`/audit`).

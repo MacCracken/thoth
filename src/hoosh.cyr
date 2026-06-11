@@ -45,8 +45,9 @@ fn _hoosh_endpoint_url() {
     return _hoosh_endpoint;
 }
 
-# _hex_digit: 0..15 -> ASCII hex (lowercase). Pure.
-fn _hex_digit(n) {
+# _hoosh_hex_digit: 0..15 -> ASCII hex (lowercase). Pure. (Named to avoid
+# colliding with stdlib patra's identical private _hex_digit.)
+fn _hoosh_hex_digit(n) {
     if (n < 10) { return 48 + n; }      # '0'..'9'
     return 87 + n;                      # 'a'..'f'  (97 - 10)
 }
@@ -110,8 +111,8 @@ fn _json_escape_into(dst, off, src) {
             store8(dst + off, 117); off = off + 1;      # u
             store8(dst + off, 48); off = off + 1;       # 0
             store8(dst + off, 48); off = off + 1;       # 0
-            store8(dst + off, _hex_digit(hi)); off = off + 1;
-            store8(dst + off, _hex_digit(lo)); off = off + 1;
+            store8(dst + off, _hoosh_hex_digit(hi)); off = off + 1;
+            store8(dst + off, _hoosh_hex_digit(lo)); off = off + 1;
         } else {
             store8(dst + off, c); off = off + 1;
         }

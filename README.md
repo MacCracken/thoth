@@ -8,13 +8,15 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.2.1 — the hoosh seam (pre-1.0).** The interactive REPL/TUI loop is
-> real and usable, and the signature feature is wired: thoth routes a turn to a
-> backing model and switches the model mid-session through **hoosh**, reached as
-> an OpenAI-compatible HTTP gateway (transported by sandhi, configured via
-> `thoth.cyml`). The rest of the spine (daimon/bote/t-ron/avatara) is still
-> **absent** and degrades honestly (`/seams` shows the ladder). SemVer `0.x`
-> while the surface moves. See
+> **Status: 0.3.0 — the tool spine (pre-1.0).** The interactive REPL/TUI loop
+> is real and usable; four of the five seams are wired. The signature feature
+> (M3): turns route to a backing model and switch models mid-session through
+> **hoosh**. The hands (M4): MCP tools list and execute through **daimon**,
+> speaking **bote** (the vendored MCP protocol bundle), with every dangerous
+> action — `/run`, `/write`, `/call` — authorized through **t-ron** (vendored
+> in-process; deny is final, no policy means a fail-closed confirm). Only
+> avatara (M5) is still **absent**, degrading honestly (`/seams` shows the
+> ladder). SemVer `0.x` while the surface moves. See
 > [`docs/development/state.md`](docs/development/state.md) and
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live
 > picture.
@@ -57,10 +59,13 @@ When AGNOS owns a domain, thoth consumes it and never reimplements it. The
 "Thoth" archetype pulled from avatara is the personality overlay for
 thoth-the-tool — name, archetype, and function aligned on purpose.
 
-**hoosh is wired** as of 0.2.0 — consumed as a running HTTP gateway (it ships no
-linkable crate), reached over the stdlib `sandhi` transport and configured via
-`thoth.cyml`. The other four (daimon/bote/t-ron/avatara) are intent here, not
-yet wired; they land in later milestones (`/seams` shows the live ladder).
+**hoosh is wired** as of 0.2.0 — consumed as a running HTTP gateway (it ships
+no linkable crate), reached over the stdlib `sandhi` transport and configured
+via `thoth.cyml`. **daimon, bote, and t-ron are wired** as of 0.3.0 — daimon
+as a running MCP host reached the same way (`[daimon].url`); bote and t-ron
+in-process as vendored dist bundles (`src/vendor/`), with t-ron binding when
+`[tron].policy` loads. Only avatara is intent here, landing in M5 (`/seams`
+shows the live ladder).
 
 ## OS-agnostic in reach, AGNOS-sovereign in spine
 

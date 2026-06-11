@@ -46,14 +46,26 @@ fn seam_domain(id) {
     return "?";
 }
 
-# seam_status: current binding mode. hoosh (M3) binds REMOTE when thoth.cyml
-# declares an endpoint — reached as a client over HTTP via sandhi (native on
-# AGNOS, a client elsewhere; both are the same contract, here the client mode).
-# No endpoint declared -> absent, never faked. The other four seams are still
-# absent (daimon/bote -> M4, t-ron -> M4, avatara -> M5).
+# seam_status: current binding mode.
+#  - hoosh (M3) binds REMOTE when thoth.cyml declares [hoosh].url — reached as
+#    a client over HTTP via sandhi. No endpoint -> absent, never faked.
+#  - daimon (M4) binds REMOTE the same way, via [daimon].url (the MCP host).
+#  - bote (M4) is NATIVE: the vendored bote-core bundle is the MCP protocol,
+#    in-process — the same contract AGNOS serves co-resident.
+#  - t-ron (M4) binds NATIVE when a [tron].policy loads (the vendored t-ron
+#    bundle, in-process); otherwise absent and the built-in fail-closed
+#    confirm gate stands in (announced, never silent).
+#  - avatara -> M5, still absent.
 fn seam_status(id) {
     if (id == SEAM_HOOSH) {
         if (config_hoosh_configured() == 1) { return SEAM_REMOTE; }
+    }
+    if (id == SEAM_DAIMON) {
+        if (config_daimon_configured() == 1) { return SEAM_REMOTE; }
+    }
+    if (id == SEAM_BOTE) { return SEAM_NATIVE; }
+    if (id == SEAM_TRON) {
+        if (gate_active() == 1) { return SEAM_NATIVE; }
     }
     return SEAM_ABSENT;
 }
@@ -93,7 +105,7 @@ fn cmd_seams() {
     if (seam_any_wired() == 0) {
         println("  every spine seam is absent. Nothing is faked.");
     } else {
-        println("  hoosh wired (remote-client over HTTP via sandhi); the rest absent.");
+        println("  remote seams ride sandhi; native seams are vendored dist bundles.");
         println("  absent seams degrade honestly — never faked, never reimplemented.");
     }
     println("  port the floor; never fork the spine.");

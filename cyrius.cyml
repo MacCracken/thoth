@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.1.32"
+cyrius = "6.1.34"
 
 [build]
 entry = "src/main.cyr"
@@ -28,18 +28,25 @@ output = "build/thoth"
 # MUST precede sigil (u256) and the transport (json/base64); it also carries
 # the thoth.cyml config surface (cyml header split + toml pairs).
 stdlib = [
-    # driver core (M2) — base substrate + text
-    "syscalls", "alloc", "result", "tagged", "fmt", "io", "fs", "str", "string", "vec", "args", "process", "assert", "bench",
-    # general utilities sandhi/sigil build on
-    "fnptr", "freelist", "hashmap", "chrono",
+    # driver core (M2) — base substrate + text; slice for the vendored
+    # libro→agnosys subscript syntax (M4)
+    "syscalls", "alloc", "result", "tagged", "fmt", "io", "fs", "str", "string", "vec", "slice", "args", "process", "assert", "bench",
+    # general utilities sandhi/sigil build on; regex carries glob_match for
+    # the vendored t-ron policy globs (M4)
+    "fnptr", "freelist", "hashmap", "chrono", "regex",
     # data formats (json/toml/cyml/base64/bigint) — before sigil + transport
     "bayan",
-    # crypto floor (sigil's transitive deps, then sigil)
-    "ct", "keccak", "thread_local", "sigil",
+    # structured logging the vendored libro audit chain emits through (M4)
+    "patra",
+    # concurrency + crypto floor, ALL before sigil: sigil 3.7.8's serial hash
+    # path self-installs a per-thread TLS scratch bank and its batch verify
+    # spawns workers — without atomic/thread/thread_local first, the SHA-256
+    # in the vendored libro's chain_append traps SIGILL (t-ron 2.1.5 note).
+    "atomic", "thread", "thread_local", "ct", "keccak", "random", "sigil",
     # dynamic-link floor TLS needs (mmap before dynlib — PROT_NONE)
     "mmap", "dynlib", "fdlopen",
-    # concurrency (sandhi's epoll server)
-    "thread", "atomic", "async",
+    # async (sandhi's epoll server)
+    "async",
     # transport: net/http/tls/ws + sakshi spans, then sandhi
     "net", "http", "tls", "ws", "sakshi", "sandhi",
 ]
