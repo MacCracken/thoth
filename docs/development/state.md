@@ -7,9 +7,11 @@
 
 ## Version
 
-**0.2.0** — the hoosh seam, 2026-06-10 (roadmap M3: inference + mid-session
-model switch). First real release was **0.1.0**, 2026-06-09 (M2: the driver
-core). Scaffolded 2026-06-08 via `cyrius init`.
+**0.2.1** — toolchain + hoosh refresh, 2026-06-11 (Cyrius 6.1.32 / the bayan
+stdlib migration; seam re-verified against hoosh 2.4.5). **0.2.0** — the hoosh
+seam, 2026-06-10 (roadmap M3: inference + mid-session model switch). First real
+release was **0.1.0**, 2026-06-09 (M2: the driver core). Scaffolded 2026-06-08
+via `cyrius init`.
 
 thoth uses **SemVer `0.x`** through its pre-1.0 phase
 ([ADR-0004](../adr/0004-semver-pre-release.md)) — this supersedes the earlier
@@ -17,7 +19,7 @@ thoth uses **SemVer `0.x`** through its pre-1.0 phase
 
 ## Posture
 
-thoth 0.2.0 wires the **first capability seam**: hoosh is now **remote-client**
+thoth 0.2.x wires the **first capability seam**: hoosh is now **remote-client**
 — thoth routes a turn to a backing model and switches the backing model
 mid-session, both through the hoosh inference gateway, reached as an
 OpenAI-compatible HTTP client transported by sandhi. The other four seams remain
@@ -28,7 +30,9 @@ faked. Each milestone flips one more seam from absent → remote/native.
 The hoosh seam binds only when `thoth.cyml` declares `[hoosh].url` — no endpoint
 declared, no remote claim. Verified end-to-end against a live gateway (a turn
 routed to a real provider; a mid-session `/model` switch re-routed Anthropic →
-OpenAI in one session). See [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
+OpenAI in one session) — wired against hoosh 2.2.2, re-verified at **hoosh
+2.4.5** (0.2.1); the `/v1/chat/completions` contract is unchanged across that
+span. See [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
 
 The settled identity (recorded so code doesn't entrench the wrong shape):
 thoth is OS-agnostic in its reach and AGNOS-sovereign in its spine, and the
@@ -62,8 +66,9 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.23` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc` (bumped from `6.1.15` for the M3 sandhi consumption).
+- **Cyrius pin**: `6.1.32` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc` (bumped from `6.1.23` for 0.2.1; carries the 6.1.25 bayan
+  data-domain carve — see Dependencies).
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,
@@ -94,7 +99,7 @@ The driver core (M2) plus the hoosh seam (M3), across these Cyrius modules:
 - `src/exec.cyr` — the portable local shell escape for `/run`.
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
 
-Binary: ~1.3 MB (`build/thoth`, x86_64-linux) — up from ~124 KB at 0.1.0; the
+Binary: ~1.5 MB (`build/thoth`, x86_64-linux) — up from ~124 KB at 0.1.0; the
 sandhi/TLS transport surface (static data) dominates.
 
 ## Tests
@@ -112,12 +117,15 @@ sandhi/TLS transport surface (static data) dominates.
 **Current (declared in `cyrius.cyml`, all stdlib).** Driver core: `string`,
 `fmt`, `alloc`, `io`, `vec`, `str`, `syscalls`, `result`, `tagged`, `process`,
 `assert`, `bench` (`result` / `tagged` / `process` back the portable `/run`
-shell escape). M3 config: `fs`, `cyml`, `toml` (parse `thoth.cyml`). M3 hoosh
-transport: **`sandhi`** (the HTTP/TLS client, folded into stdlib as
-`lib/sandhi.cyr`) plus its full transitive set — `net`, `http`, `tls`, `ws`,
-`json`, `base64`, `sakshi`, `sigil`, `args`, `hashmap`, `thread`,
+shell escape). Data formats: **`bayan`** — the Cyrius 6.1.25 data-domain carve
+(json / toml / cyml / base64 / bigint / u128 / csv in one distlib fold); it
+carries both the `thoth.cyml` config surface (with `fs`) and the JSON wire
+format, and must precede `sigil` (u256) and the transport. Call sites use the
+canonical `bayan_*` names. M3 hoosh transport: **`sandhi`** (the HTTP/TLS
+client, folded into stdlib as `lib/sandhi.cyr`) plus its full transitive set —
+`net`, `http`, `tls`, `ws`, `sakshi`, `sigil`, `args`, `hashmap`, `thread`,
 `thread_local`, `fnptr`, `async`, `atomic`, `chrono`, `mmap`, `dynlib`,
-`fdlopen`, `bigint`, `freelist`, `ct`, `keccak`. Libs are opt-in and Cyrius does
+`fdlopen`, `freelist`, `ct`, `keccak`. Libs are opt-in and Cyrius does
 **not** resolve transitive deps, so the set is declared by hand and ordered
 low-level-floor-first (see the `[deps]` comment in `cyrius.cyml`).
 
@@ -125,7 +133,11 @@ low-level-floor-first (see the `[deps]` comment in `cyrius.cyml`).
 
 - **hoosh** — LLM inference gateway: **wired (remote-client over HTTP via
   sandhi)**. Consumed as a running gateway, not a linked crate (hoosh ships no
-  distlib — it is a server). See [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
+  distlib — it is a server). Re-verified at hoosh **2.4.5**; its 2.2.3–2.4.5
+  growth (tool calling, batch, `/v1/tools/*` MCP endpoints, DLP, observability,
+  17 providers, configurable routing strategy) is server-side or M4+ seam
+  material — the chat contract thoth consumes is unchanged. See
+  [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
 - **daimon** — agent orchestration + MCP tool execution + host registry: absent (M4).
 - **bote** — the MCP protocol: absent (M4).
 - **t-ron** — MCP per-tool authorization (the gate around file-edits and shell
@@ -135,7 +147,7 @@ low-level-floor-first (see the `[deps]` comment in `cyrius.cyml`).
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.2.0)
+## Known limitations (0.2.1)
 
 - hoosh is the only wired seam; daimon/bote/t-ron (M4) and avatara (M5) are absent.
 - hoosh responses are **non-streaming** — thoth waits for the full completion,

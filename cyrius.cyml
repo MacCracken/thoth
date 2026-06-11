@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.1.23"
+cyrius = "6.1.32"
 
 [build]
 entry = "src/main.cyr"
@@ -24,19 +24,22 @@ output = "build/thoth"
 # crypto + dynamic-link layers, then the high-level transport that consumes
 # them (tls/ws/sandhi). dynlib uses mmap's PROT_NONE without including it, so
 # mmap MUST precede dynlib — and dynlib/fdlopen/mmap MUST precede tls + sandhi.
+# bayan (the 6.1.25 data-domain carve: json/toml/cyml/base64/bigint/u128/csv)
+# MUST precede sigil (u256) and the transport (json/base64); it also carries
+# the thoth.cyml config surface (cyml header split + toml pairs).
 stdlib = [
     # driver core (M2) — base substrate + text
     "syscalls", "alloc", "result", "tagged", "fmt", "io", "fs", "str", "string", "vec", "args", "process", "assert", "bench",
-    # general utilities sandhi/json/sigil build on
-    "fnptr", "freelist", "bigint", "hashmap", "chrono", "base64",
+    # general utilities sandhi/sigil build on
+    "fnptr", "freelist", "hashmap", "chrono",
+    # data formats (json/toml/cyml/base64/bigint) — before sigil + transport
+    "bayan",
     # crypto floor (sigil's transitive deps, then sigil)
     "ct", "keccak", "thread_local", "sigil",
     # dynamic-link floor TLS needs (mmap before dynlib — PROT_NONE)
     "mmap", "dynlib", "fdlopen",
     # concurrency (sandhi's epoll server)
     "thread", "atomic", "async",
-    # transport: net/http/tls/ws + json wire format + sakshi spans, then sandhi
-    "net", "http", "tls", "ws", "json", "sakshi", "sandhi",
-    # thoth.cyml runtime config — cyml splits header/body, toml reads the header
-    "toml", "cyml",
+    # transport: net/http/tls/ws + sakshi spans, then sandhi
+    "net", "http", "tls", "ws", "sakshi", "sandhi",
 ]

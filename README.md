@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.2.0 — the hoosh seam (pre-1.0).** The interactive REPL/TUI loop is
+> **Status: 0.2.1 — the hoosh seam (pre-1.0).** The interactive REPL/TUI loop is
 > real and usable, and the signature feature is wired: thoth routes a turn to a
 > backing model and switches the model mid-session through **hoosh**, reached as
 > an OpenAI-compatible HTTP gateway (transported by sandhi, configured via

@@ -4,6 +4,34 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-11
+
+Maintenance release: toolchain **Cyrius 6.1.23 → 6.1.32** (the bayan stdlib
+migration) and the hoosh seam re-verified against **hoosh 2.4.5** (was wired
+against 2.2.2). The `/v1/chat/completions` contract thoth consumes is unchanged
+across hoosh 2.2.3–2.4.5 — the gateway's new surface (tool calling, batch, MCP
+tool endpoints, DLP, observability, new providers, configurable routing
+strategy) is server-side or belongs to later seams (M4: daimon/bote/t-ron).
+No thoth behavior change.
+
+### Changed
+- **Toolchain: Cyrius 6.1.32** (pin, was 6.1.23). Clean `lib/` re-sync
+  (52 modules).
+- **Stdlib migration: `json` / `toml` / `cyml` / `base64` / `bigint` → `bayan`.**
+  Cyrius 6.1.25 carved the data-domain modules out of stdlib into the bayan
+  distlib; those five names no longer resolve. `[deps].stdlib` now lists
+  `bayan` in their place, ordered before `sigil` (u256) and the transport
+  (json/base64). Call sites migrated to the canonical `bayan_*` names
+  (`bayan_json_v_*` in `src/hoosh.cyr`, `bayan_toml_*` / `bayan_cyml_*` in
+  `src/config.cyr`) rather than the deprecated back-compat aliases.
+- Version strings and the banner bumped to `0.2.1`.
+
+### Verified
+- 67/67 unit assertions on `cyrius test`; live end-to-end against a local
+  hoosh **2.4.5** gateway — a turn routed to Anthropic, then a mid-session
+  `/model` switch re-routed to OpenAI in the same session, both through the
+  bayan-migrated response parser.
+
 ## [0.2.0] - 2026-06-10
 
 The signature feature, wired (roadmap M3): the **hoosh seam** flips from absent

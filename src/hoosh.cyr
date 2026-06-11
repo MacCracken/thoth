@@ -140,29 +140,29 @@ fn hoosh_build_request(dst, model, prompt) {
 # assistant text as a Str (choices[0].message.content), or 0 if absent/wrong
 # shape. Pure — unit-tested against canned bodies.
 fn hoosh_extract_content(body, body_len) {
-    var v = json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_str(body, body_len);
     if (v == 0) { return 0; }
-    var choices = json_v_obj_get(v, "choices");
+    var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { return 0; }
-    var first = json_v_arr_get(choices, 0);
+    var first = bayan_json_v_arr_get(choices, 0);
     if (first == 0) { return 0; }
-    var msg = json_v_obj_get(first, "message");
+    var msg = bayan_json_v_obj_get(first, "message");
     if (msg == 0) { return 0; }
-    var content = json_v_obj_get(msg, "content");
+    var content = bayan_json_v_obj_get(msg, "content");
     if (content == 0) { return 0; }
-    return json_v_str(content);
+    return bayan_json_v_str(content);
 }
 
 # hoosh_extract_error: pull error.message out of an error response body as a
 # Str, or 0 if not present. Pure — unit-tested.
 fn hoosh_extract_error(body, body_len) {
-    var v = json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_str(body, body_len);
     if (v == 0) { return 0; }
-    var err = json_v_obj_get(v, "error");
+    var err = bayan_json_v_obj_get(v, "error");
     if (err == 0) { return 0; }
-    var m = json_v_obj_get(err, "message");
+    var m = bayan_json_v_obj_get(err, "message");
     if (m == 0) { return 0; }
-    return json_v_str(m);
+    return bayan_json_v_str(m);
 }
 
 # _hoosh_model: the model for this turn — session override, else config default,
