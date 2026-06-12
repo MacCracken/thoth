@@ -22,6 +22,7 @@ var _cfg_loaded = 0;
 var _cfg_hoosh_url = 0;      # cstring, or 0 if unset
 var _cfg_hoosh_token = 0;    # cstring, or 0 if unset
 var _cfg_hoosh_model = 0;    # cstring, or 0 if unset
+var _cfg_hoosh_stream = 1;   # 1 = stream completions (default), 0 = blocking
 var _cfg_daimon_url = 0;     # cstring, or 0 if unset (daimon seam stays absent)
 var _cfg_tron_policy = 0;    # cstring path to a t-ron policy TOML, or 0
 var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
@@ -47,6 +48,17 @@ fn _cfg_str(pairs, key) {
     return str_cstr(v);
 }
 
+# _cfg_bool: read a TOML bool key (the parser keeps `true`/`false` as literal
+# text) as 1/0, returning `dflt` when absent or unrecognized. Pure.
+fn _cfg_bool(pairs, key, dflt) {
+    if (pairs == 0) { return dflt; }
+    var v = bayan_toml_get(pairs, key);
+    if (v == 0) { return dflt; }
+    if (str_eq_cstr(v, "true") == 1) { return 1; }
+    if (str_eq_cstr(v, "false") == 1) { return 0; }
+    return dflt;
+}
+
 # config_load: parse thoth.cyml if present and populate the hoosh fields.
 # Returns 1 if a [hoosh] url was found (seam can bind remote), else 0 (absent
 # file, no [hoosh] table, or no url -> seam stays absent). Call once at startup.
@@ -62,6 +74,7 @@ fn config_load() {
     _cfg_hoosh_url = _cfg_str(hoosh, "url");
     _cfg_hoosh_token = _cfg_str(hoosh, "token");
     _cfg_hoosh_model = _cfg_str(hoosh, "model");
+    _cfg_hoosh_stream = _cfg_bool(hoosh, "stream", 1);   # default on
     var daimon = _cfg_section_pairs(sections, "daimon");
     _cfg_daimon_url = _cfg_str(daimon, "url");
     var tron = _cfg_section_pairs(sections, "tron");
@@ -88,6 +101,10 @@ fn config_hoosh_token() { return _cfg_hoosh_token; }
 
 # config_hoosh_model: the default model cstring, or 0 if none.
 fn config_hoosh_model() { return _cfg_hoosh_model; }
+
+# config_hoosh_stream: 1 if turns should stream (SSE) the completion as it
+# arrives (the default), 0 if [hoosh].stream = false (blocking round-trip).
+fn config_hoosh_stream() { return _cfg_hoosh_stream; }
 
 # config_daimon_configured: 1 if a daimon MCP host endpoint is declared, else 0.
 fn config_daimon_configured() {

@@ -107,7 +107,11 @@ fn cmd_state() {
     else { println(m); }
     emit("  hoosh   : ");
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { println("absent (set [hoosh].url in thoth.cyml)"); }
-    else { println(config_hoosh_url()); }
+    else {
+        emit(config_hoosh_url());
+        if (config_hoosh_stream() == 1) { println(" (streaming)"); }
+        else { println(" (blocking)"); }
+    }
     emit("  daimon  : ");
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("absent (set [daimon].url in thoth.cyml)"); }
     else { println(config_daimon_url()); }

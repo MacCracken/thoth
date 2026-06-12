@@ -156,12 +156,14 @@ fn test_hoosh() {
     assert(streq(&ib, "0"), "append_int 0");
 
     var rb[256];
-    hoosh_build_request(&rb, "m", 0, "hi");
+    hoosh_build_request(&rb, "m", 0, "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "request shape, no system (0)");
-    hoosh_build_request(&rb, "m", "", "hi");
+    hoosh_build_request(&rb, "m", "", "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "empty system omitted");
-    hoosh_build_request(&rb, "m", "be precise", "hi");
+    hoosh_build_request(&rb, "m", "be precise", "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be precise\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "system message prepended");
+    hoosh_build_request(&rb, "m", 0, "hi", 1);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true}"), "stream=1 sets stream:true");
 
     test_group("hoosh response extraction");
     var body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello world\"}}]}";
@@ -179,6 +181,35 @@ fn test_hoosh() {
     assert(em != 0, "error present");
     assert(str_eq_cstr(em, "no provider for model"), "error message matches");
     assert_eq(hoosh_extract_error(body, strlen(body)), 0, "no error field -> 0");
+
+    test_group("hoosh SSE delta extraction");
+    var d1 = "{\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}";
+    var ds = hoosh_extract_delta(d1, strlen(d1));
+    assert(ds != 0, "delta content present");
+    assert(str_eq_cstr(ds, "Hel"), "delta content matches");
+    var drole = "{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}";
+    assert_eq(hoosh_extract_delta(drole, strlen(drole)), 0, "role-only delta -> 0");
+    var dfin = "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}";
+    assert_eq(hoosh_extract_delta(dfin, strlen(dfin)), 0, "finish frame -> 0");
+    var dnojson = "[DONE]";
+    assert_eq(hoosh_extract_delta(dnojson, strlen(dnojson)), 0, "[DONE] sentinel -> 0");
+    return 0;
+}
+
+# [hoosh].stream config toggle: default on; the _cfg_bool reader maps the TOML
+# literal true/false (parsed as text) and falls back on absent/garbage.
+fn test_stream_config() {
+    test_group("hoosh stream config");
+    assert_eq(config_hoosh_stream(), 1, "streaming on by default (no config loaded)");
+    assert_eq(_cfg_bool(0, "x", 1), 1, "null pairs -> default 1");
+    assert_eq(_cfg_bool(0, "x", 0), 0, "null pairs -> default 0");
+    var toml = "[hoosh]\nstream = false\non = true\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    var secs = bayan_toml_get_sections(sections, "hoosh");
+    var pairs = bayan_toml_section_pairs(vec_get(secs, 0));
+    assert_eq(_cfg_bool(pairs, "stream", 1), 0, "explicit false read as 0");
+    assert_eq(_cfg_bool(pairs, "on", 0), 1, "explicit true read as 1");
+    assert_eq(_cfg_bool(pairs, "missing", 1), 1, "absent key -> default");
     return 0;
 }
 
@@ -302,6 +333,7 @@ fn main() {
     test_persona();
     test_config();
     test_hoosh();
+    test_stream_config();
     test_config_m4();
     test_daimon();
     test_tron();

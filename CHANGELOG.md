@@ -5,6 +5,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **hoosh streaming (SSE)** (`src/hoosh.cyr`, `src/config.cyr`): free-text turns
+  now **stream the completion as it is generated** — thoth POSTs with
+  `"stream":true` and prints each `choices[0].delta.content` as the
+  Server-Sent-Events frames arrive (via sandhi's `sandhi_http_stream` + the SSE
+  parser; the `[DONE]` sentinel ends the turn). A new pure `hoosh_extract_delta`
+  (the streaming sibling of `hoosh_extract_content`) and the `_hoosh_sse_cb`
+  event callback do the per-frame work; transport errors and non-2xx still
+  degrade honestly (announced, not faked). thoth owns none of the inference —
+  hoosh streams, thoth renders.
+  - **`[hoosh].stream` toggle** (default **true**): set `stream = false` in
+    `thoth.cyml` for a single blocking round-trip (the prior behavior; also the
+    only mode that can surface a gateway error *body*, since the stream result
+    exposes status but not body). `/state` shows the active mode
+    (`… (streaming)` / `(blocking)`). New `config_hoosh_stream` + a `_cfg_bool`
+    TOML-boolean reader.
 - **`/audit` — surface t-ron's audit chain** (`src/gate.cyr`, `src/commands.cyr`):
   a new command that renders t-ron's in-process, libro-backed audit chain — the
   cryptographic record of every gated action (`/write`, `/run`, `/call`) this
@@ -16,11 +31,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   glue thoth authors is the pure `audit_kind_str` verdict-label. With the t-ron
   seam absent, `/audit` says so plainly — the fail-closed confirm gate keeps no
   cryptographic log — degraded honestly. Closes a `state.md` future-work item.
-- **14 new unit assertions (119 total)**: a `t-ron audit chain` group driving the
-  real vendored engine — three `tron_check` calls (one allow, two deny) then
-  asserting the logged event/denial counts, the libro chain length + integrity,
-  and newest-first ordering — plus the pure `audit_kind_str` cases and the
-  `/audit` classification.
+- **26 new unit assertions (131 total)**: the `/audit` group (a `t-ron audit
+  chain` set driving the real vendored engine — three `tron_check` calls then
+  asserting event/denial counts, the libro chain length + integrity, newest-first
+  ordering — plus the pure `audit_kind_str` cases and the `/audit`
+  classification); and the streaming group (the `stream:true` request shape,
+  `hoosh_extract_delta` across content/role-only/finish/`[DONE]` frames, and the
+  `[hoosh].stream` config toggle through the real TOML parser).
+
+### Changed
+- **`hoosh_build_request` gained a `stream` parameter** (`src/hoosh.cyr`):
+  signature `(dst, model, system, prompt, stream)`. `stream == 1` emits
+  `"stream":true`; anything else preserves the prior `"stream":false` shape.
 
 ## [0.4.1] - 2026-06-11
 

@@ -25,6 +25,12 @@ url   = "http://127.0.0.1:8088"
 # each request by the model name, so switching providers is just a new id.
 model = "claude-haiku-4-5-20251001"
 
+# Stream the completion as it is generated (Server-Sent Events). Default: true —
+# thoth prints each delta as it arrives, the natural interactive experience. Set
+# to false for a single blocking round-trip (the whole completion prints at once;
+# also the mode that surfaces a gateway error body, which SSE mode cannot).
+# stream = true
+
 # The [daimon] table wires the daimon seam (M4). Declaring a `url` flips the
 # seam from absent -> remote-client: /tools lists daimon's MCP host registry
 # (GET /v1/mcp/tools) and /call invokes a tool (POST /v1/mcp/call). daimon

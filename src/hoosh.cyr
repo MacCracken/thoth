@@ -125,9 +125,10 @@ fn _json_escape_into(dst, off, src) {
 # (model, system, prompt) into dst, NUL-terminated; return the byte length.
 # Pure — unit-tested. A non-empty `system` (the avatara persona, M5 step 2) is
 # emitted as a leading {role:system} message; an empty/0 system is omitted (the
-# original single-user-message shape, preserved). Shape:
-#   {"model":"M","messages":[{"role":"system","content":"S"},{"role":"user","content":"P"}],"max_tokens":N,"stream":false}
-fn hoosh_build_request(dst, model, system, prompt) {
+# original single-user-message shape, preserved). `stream` (1/0) sets the
+# OpenAI `"stream"` field — true makes the gateway answer with SSE deltas. Shape:
+#   {"model":"M","messages":[{"role":"system","content":"S"},{"role":"user","content":"P"}],"max_tokens":N,"stream":true|false}
+fn hoosh_build_request(dst, model, system, prompt, stream) {
     var off = 0;
     off = _append_cstr(dst, off, "{\"model\":\"");
     off = _json_escape_into(dst, off, model);
@@ -141,7 +142,8 @@ fn hoosh_build_request(dst, model, system, prompt) {
     off = _json_escape_into(dst, off, prompt);
     off = _append_cstr(dst, off, "\"}],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
-    off = _append_cstr(dst, off, ",\"stream\":false}");
+    if (stream == 1) { off = _append_cstr(dst, off, ",\"stream\":true}"); }
+    else { off = _append_cstr(dst, off, ",\"stream\":false}"); }
     store8(dst + off, 0);
     return off;
 }
@@ -159,6 +161,25 @@ fn hoosh_extract_content(body, body_len) {
     var msg = bayan_json_v_obj_get(first, "message");
     if (msg == 0) { return 0; }
     var content = bayan_json_v_obj_get(msg, "content");
+    if (content == 0) { return 0; }
+    return bayan_json_v_str(content);
+}
+
+# hoosh_extract_delta: pull choices[0].delta.content out of ONE OpenAI SSE
+# streaming frame's `data:` JSON as a Str, or 0 when absent (the role-only
+# opening delta, the finish frame, or a malformed payload). Pure — unit-tested.
+# This is the streaming sibling of hoosh_extract_content (which reads the
+# non-streaming message.content).
+fn hoosh_extract_delta(body, body_len) {
+    var v = bayan_json_v_parse_str(body, body_len);
+    if (v == 0) { return 0; }
+    var choices = bayan_json_v_obj_get(v, "choices");
+    if (choices == 0) { return 0; }
+    var first = bayan_json_v_arr_get(choices, 0);
+    if (first == 0) { return 0; }
+    var delta = bayan_json_v_obj_get(first, "delta");
+    if (delta == 0) { return 0; }
+    var content = bayan_json_v_obj_get(delta, "content");
     if (content == 0) { return 0; }
     return bayan_json_v_str(content);
 }
@@ -208,10 +229,62 @@ fn _hoosh_print_str(s) {
     return 0;
 }
 
+# _hoosh_sse_cb: the SSE event callback (sandhi calls cb(ctx, event) per parsed
+# frame; return 1 to keep consuming, 0 to stop). Each OpenAI streaming frame's
+# `data:` is a JSON delta — we print choices[0].delta.content as it arrives. The
+# `[DONE]` sentinel ends the stream cleanly. ctx is an i64 cell counting bytes
+# emitted, so the caller can finish the line honestly and detect an empty stream.
+fn _hoosh_sse_cb(ctx, ev) {
+    var data = sandhi_sse_event_data(ev);
+    if (data == 0) { return 1; }
+    if (streq(data, "[DONE]") == 1) { return 0; }
+    var s = hoosh_extract_delta(data, strlen(data));
+    if (s == 0) { return 1; }                 # role-only / finish / non-content frame
+    var n = str_len(s);
+    if (n > 0) {
+        emit_n(str_data(s), n);
+        store64(ctx, load64(ctx) + n);
+    }
+    return 1;
+}
+
+# _hoosh_stream_turn: the streaming branch of a turn. POSTs the (stream:true)
+# request and prints SSE deltas as they arrive. Same honest-degradation contract
+# as the blocking path. Returns 0 on success, negative on transport failure, the
+# HTTP status on non-2xx. The stream result exposes status but not the body, so a
+# non-2xx error message is not surfaced here (point the user at stream=false).
+fn _hoosh_stream_turn(url, h, len, model) {
+    sandhi_headers_set(h, "Accept", "text/event-stream");
+    var cell = alloc(8);
+    store64(cell, 0);
+    emit("  -> hoosh ("); emit(model); emit(", stream) "); println(url);
+    var sr = sandhi_http_stream(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell);
+    var serr = sandhi_stream_err(sr);
+    var emitted = load64(cell);
+    if (serr != SANDHI_OK) {
+        if (emitted > 0) { println(""); }
+        var ename = sandhi_err_kind_name(serr);
+        emit("  hoosh stream error: "); println(ename);
+        emit("  endpoint "); emit(url);
+        println(" unreachable or interrupted — is the gateway up? (degraded, not faked)");
+        return 0 - 1;
+    }
+    var status = sandhi_stream_status(sr);
+    if ((status < 200) || (status >= 300)) {
+        emit("  hoosh returned HTTP "); fmt_int(status); println("");
+        println("  (error body not surfaced in stream mode; set [hoosh].stream=false to see it)");
+        return status;
+    }
+    if (emitted > 0) { println(""); return 0; }
+    println("  hoosh: stream completed but no content was parsed.");
+    return 0 - 1;
+}
+
 # hoosh_send: route one turn through the hoosh gateway and print the completion.
-# Returns 0 on success, a negative on transport failure, or the HTTP status on a
-# non-2xx response. Degrades honestly: an unreachable gateway is announced, not
-# faked. I/O — the only impure function in this module.
+# Streams the deltas (SSE) by default, or does one blocking round-trip when
+# [hoosh].stream = false. Returns 0 on success, a negative on transport failure,
+# or the HTTP status on a non-2xx response. Degrades honestly: an unreachable
+# gateway is announced, not faked. I/O — the only impure path in this module.
 fn hoosh_send(prompt) {
     var url = _hoosh_endpoint_url();
     var model = _hoosh_model();
@@ -221,12 +294,15 @@ fn hoosh_send(prompt) {
     # user turn. thoth only carries the persona; hoosh owns the inference.
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
-    var len = hoosh_build_request(_hoosh_req, model, sys, prompt);
+    var want_stream = config_hoosh_stream();
+    var len = hoosh_build_request(_hoosh_req, model, sys, prompt, want_stream);
 
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+
+    if (want_stream == 1) { return _hoosh_stream_turn(url, h, len, model); }
 
     emit("  -> hoosh ("); emit(model); emit(") "); println(url);
     var r = sandhi_http_post(url, h, _hoosh_req, len);
