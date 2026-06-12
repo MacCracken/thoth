@@ -7,6 +7,11 @@
 
 ## Version
 
+**0.5.1** — multi-turn context, 2026-06-11 (unblocked polish): free-text turns
+carry prior exchanges so the model has conversation memory — a bounded,
+byte-budgeted window (`/reset` clears it, `[hoosh].history=false` reverts to
+stateless). Plus a routine toolchain refresh to Cyrius **6.1.38** (floor-only
+`lib/` churn, no source change). 148 assertions; multi-turn live-verified.
 **0.5.0** — streaming + audit, 2026-06-11 (unblocked polish, no milestone gate):
 hoosh turns **stream the completion (SSE)** as it is generated — each delta
 printed as the frames arrive, `[hoosh].stream=false` reverts to blocking; and
@@ -90,7 +95,7 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.37` (in `cyrius.cyml [package].cyrius`), matching the
+- **Cyrius pin**: `6.1.38` (in `cyrius.cyml [package].cyrius`), matching the
   installed `cycc` (0.2.1 took 6.1.23 → 6.1.32 with the 6.1.25 bayan
   data-domain carve; 0.3.0 took 6.1.33 — dep-resolver CVE hardening; 0.4.0 was on
   6.1.34, no stdlib migration; **0.4.1** took 6.1.34 → 6.1.37 — forced by a cycc
@@ -98,7 +103,9 @@ floor; never fork the spine.**
   include; the 6.1.37 sigil drops it. The re-sync touched only the
   transport/crypto floor — `sigil`, `sandhi`, `tls`, `tls_native`, `ws`,
   `syscalls_{windows,x86_64_agnos}` — no stdlib API migration, no thoth source
-  change). M5 added the **`math`** stdlib dep (the vendored avatara bundle's
+  change. **0.5.1** took 6.1.37 → 6.1.38 — a routine refresh, floor-only churn
+  (`alloc`, `alloc_agnos`, `atomic`, `str`), again no source change). M5 added
+  the **`math`** stdlib dep (the vendored avatara bundle's
   `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via `cyrius lib sync`
   (88 modules).
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
@@ -122,21 +129,27 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `config_load` + `gate_init` then the loop.
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (incl. M4's
-  `/tools` and `/call`; **0.5.0:** `/audit`, `/state` shows the stream mode).
+  `/tools` and `/call`; **0.5.0:** `/audit`, `/state` shows the stream mode;
+  **0.5.1:** `/reset`, `/state` shows the multi-turn context + count).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
   persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
   `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
-  clause once).
+  clause once). **0.5.1 (multi-turn):** the capped conversation history
+  (`session_history_*` — append/accessors/pop/clear; stable content copies).
 - `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
   `[daimon]` url, `[tron]` policy/agent; **0.5.0:** `[hoosh].stream`
-  bool via a `_cfg_bool` reader).
+  bool via a `_cfg_bool` reader; **0.5.1:** `[hoosh].history`).
 - `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
   response/error extraction). **M5**: `hoosh_build_request` takes a `system`
   param; `hoosh_send` passes the avatara persona as a `{role:system}` message.
   **0.5.0:** SSE streaming — `hoosh_build_request` gained a `stream` param;
   `_hoosh_stream_turn` + `_hoosh_sse_cb` print `hoosh_extract_delta` deltas as
   the frames arrive (default on, `[hoosh].stream=false` reverts to blocking).
+  **0.5.1 (multi-turn):** `hoosh_build_messages` + `_hoosh_history_start`
+  serialize the byte-budgeted conversation tail; `_hoosh_blocking_turn` extracted;
+  both turn paths leave the reply in `_hoosh_acc` for history; `HOOSH_REQ_CAP`
+  raised to 256 KiB.
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction).
 - `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
@@ -158,7 +171,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **131 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **148 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -174,7 +187,10 @@ bundle is DCE-unreachable).
   ordering, and the pure `audit_kind_str` label; and **0.5.0's** streaming
   group — the `stream:true` request shape, `hoosh_extract_delta` across
   content/role-only/finish/`[DONE]` frames, and the `[hoosh].stream` toggle
-  through the real TOML parser. Passes on `cyrius test`.
+  through the real TOML parser; and **0.5.1's** multi-turn group — history
+  append/accessors + the stable-copy guarantee, pop/clear, the drop-oldest cap,
+  `_hoosh_history_start` budgeting, and the `hoosh_build_messages` shape. Passes
+  on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
@@ -243,7 +259,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.5.0)
+## Known limitations (0.5.1)
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -269,9 +285,11 @@ deferred to a later ADR.
   non-2xx *error message* is only surfaced in blocking mode — streaming announces
   the status and points the user at `stream=false`.
 - The hoosh request carries the avatara persona as a `{role:system}` message
-  (M5) but is otherwise fixed (`max_tokens` 4096, single user turn, no
-  conversation history). Multi-turn context and request tuning are future work
-  (multi-turn slated for 0.5.1).
+  (M5) and (**0.5.1**) the multi-turn conversation tail (`[hoosh].history`,
+  default on; `/reset` clears it). Remaining fixed bits: `max_tokens` 4096 and no
+  other request tuning. Context is a byte-budgeted window (oldest turns drop) held
+  in-process only — not persisted across runs. `[hoosh].history=false` reverts to
+  the stateless single-turn shape.
 - t-ron audit events live in its in-process libro ring; **0.5.0's** `/audit`
   surfaces them (counts, chain integrity, agent risk score, recent events). The
   audit view is read-only and session-scoped (the ring is in-process, not
@@ -294,5 +312,6 @@ ADR + the ladder) is design-ready; the cross-build half is blocked on upstream
 Cyrius stdlib / AGNOS-ABI gaps. Also queued (daimon-gated): re-verify the daimon
 seam end-to-end and light up the model-driven tool-calling loop once daimon
 ships the 1.2.4 registry-corruption fix. Unblocked polish: `/audit` (t-ron audit
-chain) and **hoosh streaming/SSE** **shipped in 0.5.0**; remaining — multi-turn
-context (slated for 0.5.1), sakshi-structured logging.
+chain) and **hoosh streaming/SSE** **shipped in 0.5.0**; **multi-turn context**
+(+ `/reset`, `[hoosh].history`) **shipped in 0.5.1**; remaining —
+sakshi-structured logging.

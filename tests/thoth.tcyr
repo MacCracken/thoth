@@ -34,6 +34,7 @@ fn test_classify() {
     assert_eq(classify_input("/tools"), CMD_TOOLS, "/tools");
     assert_eq(classify_input("/call echo {}"), CMD_CALL, "/call with args");
     assert_eq(classify_input("/audit"), CMD_AUDIT, "/audit");
+    assert_eq(classify_input("/reset"), CMD_RESET, "/reset");
     assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
     assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
     assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
@@ -213,6 +214,61 @@ fn test_stream_config() {
     return 0;
 }
 
+# Multi-turn conversation history (0.5.1): append/accessors, stable copy,
+# pop/clear, and the drop-oldest cap.
+fn test_history() {
+    test_group("multi-turn history");
+    session_reset();
+    assert_eq(session_history_len(), 0, "history empty after reset");
+    assert_eq(config_hoosh_history(), 1, "history on by default");
+
+    session_history_append("user", "hello", 5);
+    session_history_append("assistant", "hi there", 8);
+    assert_eq(session_history_len(), 2, "two messages recorded");
+    assert(streq(session_history_role(0), "user"), "msg 0 role user");
+    assert(streq(session_history_content(0), "hello"), "msg 0 content");
+    assert(streq(session_history_role(1), "assistant"), "msg 1 role assistant");
+    assert(streq(session_history_content(1), "hi there"), "msg 1 content");
+
+    # content is a STABLE COPY, not an alias of the caller's buffer.
+    var buf[8];
+    store8(&buf + 0, 104); store8(&buf + 1, 105); store8(&buf + 2, 0);   # "hi"
+    session_history_append("user", &buf, 2);
+    store8(&buf + 0, 88);                                                # clobber -> "Xi"
+    assert(streq(session_history_content(2), "hi"), "content copied, not aliased");
+
+    session_history_pop_last();
+    assert_eq(session_history_len(), 2, "pop_last drops the newest turn");
+    session_history_clear();
+    assert_eq(session_history_len(), 0, "clear empties history");
+
+    var i = 0;
+    while (i < SESS_HIST_MAX + 5) { session_history_append("user", "x", 1); i = i + 1; }
+    assert_eq(session_history_len(), SESS_HIST_MAX, "capped at SESS_HIST_MAX (oldest dropped)");
+    session_reset();
+    return 0;
+}
+
+# The multi-turn request builder + the byte-budget that bounds it.
+fn test_history_request() {
+    test_group("multi-turn request building");
+    session_reset();
+    assert_eq(_hoosh_history_start(262144), 0, "empty history -> start 0");
+    session_history_append("user", "a", 1);
+    session_history_append("assistant", "b", 1);
+    session_history_append("user", "c", 1);
+    assert_eq(_hoosh_history_start(262144), 0, "ample budget includes all");
+    assert_eq(_hoosh_history_start(8), 2, "tiny budget keeps only the newest");
+
+    var rb[512];
+    hoosh_build_messages(&rb, "m", 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":false}"), "multi-turn shape, no system");
+    hoosh_build_messages(&rb, "m", "sys", 1);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":true}"), "multi-turn shape, system + stream");
+    session_reset();
+    return 0;
+}
+
 # M4 config defaults when no thoth.cyml is loaded.
 fn test_config_m4() {
     test_group("daimon/tron config (unconfigured)");
@@ -334,6 +390,8 @@ fn main() {
     test_config();
     test_hoosh();
     test_stream_config();
+    test_history();
+    test_history_request();
     test_config_m4();
     test_daimon();
     test_tron();

@@ -4,6 +4,50 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-11
+
+**Multi-turn conversation context** — the headline: free-text turns now carry
+prior exchanges, so the backing model has conversation memory (a bounded,
+byte-budgeted window; `/reset` clears it, `[hoosh].history = false` reverts to
+stateless). Plus a routine toolchain refresh to **Cyrius 6.1.38**. thoth still
+owns no domain logic — it holds the transport-side context window; hoosh owns
+the inference. 148 unit assertions pass; multi-turn live-verified end-to-end
+(context accumulates across turns, `/reset` clears it, the toggle stays
+stateless).
+
+### Added
+- **Multi-turn conversation context** (`src/session.cyr`, `src/hoosh.cyr`,
+  `src/config.cyr`): free-text turns now carry the prior exchanges, so the
+  backing model has conversation memory. `session.cyr` keeps a capped history
+  (role + a stable content copy; oldest dropped past `SESS_HIST_MAX`); each turn
+  records the user message, sends the whole conversation via the new
+  `hoosh_build_messages`, and records the assistant reply on success (rolled back
+  on failure so history holds only completed exchanges). The streaming path
+  accumulates the SSE deltas (`_hoosh_acc`) so the full reply enters history; the
+  blocking path copies the parsed content. The request is **byte-budgeted**
+  (`_hoosh_history_start`, budget = `HOOSH_REQ_CAP/8`) so the conversation tail
+  can never overflow the request buffer (raised to 256 KiB), always keeping at
+  least the newest turn. thoth owns only this transport-side context window —
+  hoosh owns the inference.
+  - **`/reset` command**: clears the conversation context (fresh start; keeps the
+    model id and turn counter), reporting how many messages were dropped.
+  - **`[hoosh].history` toggle** (default **true**): `history = false` makes each
+    turn stateless (the prior single-turn behavior — lower token use, no memory).
+    `/state` shows the context mode + message count.
+- **17 new unit assertions (148 total)**: the multi-turn history group
+  (append/accessors, the stable-copy guarantee, pop/clear, the drop-oldest cap),
+  the request group (`_hoosh_history_start` budgeting + the multi-turn
+  `hoosh_build_messages` shape with/without system and stream), and the `/reset`
+  classification.
+
+### Changed
+- **`HOOSH_REQ_CAP` raised 32 KiB → 256 KiB** (`src/hoosh.cyr`) to hold a
+  multi-turn request; the per-turn builder byte-budgets against it.
+- **Toolchain: Cyrius 6.1.37 → 6.1.38** (`cyrius.cyml`); `lib/` re-synced via
+  `cyrius lib sync` (88 modules). Floor-only churn — `alloc`, `alloc_agnos`,
+  `atomic`, `str` — no stdlib API migration, no thoth source change from the bump.
+  Clears the 6.1.38 drift warning (pin now matches the installed `cycc`).
+
 ## [0.5.0] - 2026-06-11
 
 Two unblocked-polish capabilities land on top of the 0.4.x spine (no milestone,

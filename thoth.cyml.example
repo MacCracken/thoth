@@ -31,6 +31,12 @@ model = "claude-haiku-4-5-20251001"
 # also the mode that surfaces a gateway error body, which SSE mode cannot).
 # stream = true
 
+# Carry multi-turn conversation context. Default: true — each turn sends the
+# prior exchanges so the model has context (a bounded, byte-budgeted window;
+# /reset clears it). Set to false for stateless single-turn requests (every turn
+# independent — lower token use, no memory).
+# history = true
+
 # The [daimon] table wires the daimon seam (M4). Declaring a `url` flips the
 # seam from absent -> remote-client: /tools lists daimon's MCP host registry
 # (GET /v1/mcp/tools) and /call invokes a tool (POST /v1/mcp/call). daimon

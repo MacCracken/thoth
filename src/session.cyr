@@ -12,9 +12,68 @@
 var _sess_turns = 0;
 var _sess_model = 0;     # 0 = none; else a cstring model id
 
+# Conversation history (0.5.1, multi-turn): a vec of message structs so the
+# backing model sees prior turns. Each message is alloc(16): +0 role (a stable
+# string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
+# aliases the reused input line and the streamed reply lives in a scratch buffer,
+# so both must be copied). Capped at SESS_HIST_MAX messages (oldest dropped) to
+# bound the never-freeing bump heap; the request builder byte-budgets what it
+# actually sends (see hoosh.cyr). thoth owns only this transport-side context
+# window — hoosh owns the inference.
+var _sess_hist = 0;          # vec of message ptrs, lazily created
+var SESS_HIST_MAX = 40;
+
 fn session_reset() {
     _sess_turns = 0;
     _sess_model = 0;
+    _sess_hist = 0;          # drop the conversation (a fresh vec on next append)
+    return 0;
+}
+
+fn _sess_hist_vec() {
+    if (_sess_hist == 0) { _sess_hist = vec_new(); }
+    return _sess_hist;
+}
+
+# session_history_len / _role / _content: read the conversation. role and content
+# are NUL-terminated cstrings (role a literal, content the stored copy).
+fn session_history_len() {
+    if (_sess_hist == 0) { return 0; }
+    return vec_len(_sess_hist);
+}
+fn session_history_role(i)    { return load64(vec_get(_sess_hist, i)); }
+fn session_history_content(i) { return load64(vec_get(_sess_hist, i) + 8); }
+
+# session_history_append: record (role, content[0..clen)) as a turn, copying the
+# content to stable storage. Drops the oldest message past SESS_HIST_MAX.
+fn session_history_append(role, content, clen) {
+    var m = alloc(16);
+    store64(m, role);
+    var c = alloc(clen + 1);
+    if (clen > 0) { memcpy(c, content, clen); }
+    store8(c + clen, 0);
+    store64(m + 8, c);
+    var v = _sess_hist_vec();
+    vec_push(v, m);
+    while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
+    return 0;
+}
+
+# session_history_pop_last: drop the most recent message — used to roll back the
+# just-appended user turn when the gateway call fails, so history stays a clean
+# sequence of completed exchanges.
+fn session_history_pop_last() {
+    if (_sess_hist == 0) { return 0; }
+    var n = vec_len(_sess_hist);
+    if (n == 0) { return 0; }
+    vec_remove(_sess_hist, n - 1);
+    return 0;
+}
+
+# session_history_clear: start a fresh conversation (the /reset command). Keeps
+# the model and turn counter; only the context window is dropped.
+fn session_history_clear() {
+    _sess_hist = 0;
     return 0;
 }
 
@@ -97,7 +156,7 @@ fn persona_system_prompt() {
 fn print_banner() {
     println("");
     emit("  "); emit(persona_name()); emit(", "); emit(persona_role());
-    println(" - thoth 0.5.0");
+    println(" - thoth 0.5.1");
     emit("  "); println(persona_tagline());
     println("  a sovereign agentic coding TUI (fermenting). /help for commands.");
     println("");
