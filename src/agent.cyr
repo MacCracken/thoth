@@ -85,7 +85,11 @@ fn _agent_add_result(id, text) {
 # agent_format_tools: serialize a daimon tools array value into an OpenAI `tools`
 # array (NUL-terminated) in dst; return the byte length, or 0 if no tools. daimon
 # gives {name, description}; we wrap each as a function tool with a permissive
-# object schema (daimon does not export per-tool JSON Schemas). Pure.
+# object schema. daimon 1.2.6 does NOT export per-tool JSON Schemas (its manifest
+# omits the `input_schema` it stores, and registration hardcodes `{}`) — filed as
+# daimon issue 2026-06-11-mcp-manifest-omits-tool-input-schema. When daimon emits
+# `inputSchema`, pass it through here as `function.parameters` (fall back to the
+# permissive `{"type":"object"}` when a tool omits it). Pure.
 fn agent_format_tools(dst, tools_arr) {
     if (tools_arr == 0) { return 0; }
     var n = bayan_json_v_arr_len(tools_arr);

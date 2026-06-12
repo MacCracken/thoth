@@ -375,7 +375,12 @@ capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport AD
 + the ladder) is design-ready; the cross-build half is blocked on upstream Cyrius
 stdlib / AGNOS-ABI gaps. Smaller follow-ups on the agentic loop: **streaming
 landed in 0.6.1** (content live + tool_calls assembled from deltas); remaining —
-richer per-tool JSON Schemas (daimon exports only name/description today),
-parallel tool calls, and surfacing tool rounds in `/audit`. Full-stack live e2e
-of the loop against **real** daimon is a host-side step (daimon's server won't run
-in thoth's build sandbox — signal 16).
+richer per-tool JSON Schemas (**daimon-gated**: daimon 1.2.6 stores an
+`input_schema` but its manifest omits it and registration hardcodes `{}` — filed
+as daimon issue `2026-06-11-mcp-manifest-omits-tool-input-schema`; thoth
+advertises a permissive `{"type":"object"}` until daimon emits `inputSchema`, then
+passes it through as `function.parameters`), parallel tool calls, and surfacing
+tool rounds in `/audit`. Full-stack live e2e of the loop against **real** daimon
+is a host-side step (daimon's server won't run in thoth's build sandbox — signal
+16, confirmed repeatedly; thoth's seam is verified wire-compatible with 1.2.6's
+actual code + responses, and the loop against faithful mocks of that wire).
