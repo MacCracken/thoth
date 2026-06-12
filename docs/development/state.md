@@ -7,6 +7,11 @@
 
 ## Version
 
+**0.5.2** — structured logging, 2026-06-11 (unblocked polish): thoth logs its own
+driver events (`event=… key=value` via the vendored sakshi logger) — turns,
+authz verdicts, model switches, session start. Off by default (`[log]` opt-in);
+operational, distinct from t-ron's `/audit` chain. Toolchain pin unchanged
+(6.1.38). 163 assertions; logging live-verified to a file.
 **0.5.1** — multi-turn context, 2026-06-11 (unblocked polish): free-text turns
 carry prior exchanges so the model has conversation memory — a bounded,
 byte-budgeted window (`/reset` clears it, `[hoosh].history=false` reverts to
@@ -269,7 +274,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.5.1)
+## Known limitations (0.5.2)
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -327,6 +332,6 @@ seam end-to-end and light up the model-driven tool-calling loop once daimon
 ships the 1.2.4 registry-corruption fix. Unblocked polish: `/audit` (t-ron audit
 chain) and **hoosh streaming/SSE** **shipped in 0.5.0**; **multi-turn context**
 (+ `/reset`, `[hoosh].history`) **shipped in 0.5.1**; **sakshi-structured driver
-logging** (`[log]`, **unreleased — slated for 0.5.2**) is done. With the polish
-backlog cleared, the next substantial work is **M6** (capability-ladder doc half)
-or the daimon-gated tool-calling loop once daimon ships its fix.
+logging** (`[log]`) **shipped in 0.5.2**. With the polish backlog cleared, the
+next substantial work is **M6** (capability-ladder doc half) or the daimon-gated
+tool-calling loop once daimon ships its fix.

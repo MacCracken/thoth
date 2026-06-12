@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-11
+
+**Structured driver-event logging** — thoth now logs its own driver events
+(turns routed to hoosh, t-ron authorization decisions, mid-session model
+switches, session start) as structured `event=… key=value` lines through the
+vendored sakshi logger. Off by default (binds only when `[log]` is configured),
+so an unconfigured session stays quiet. This is thoth's operational log, distinct
+from t-ron's cryptographic audit chain (`/audit`): sakshi records what the driver
+did; t-ron records the security verdicts. thoth still owns no logging domain
+logic — sakshi owns the envelope/transport/levels. Toolchain pin unchanged
+(Cyrius 6.1.38). 163 unit assertions pass; logging live-verified end-to-end (all
+five event types written to a file with correct levels).
+
 ### Added
 - **Structured driver-event logging** (`src/log.cyr`, `src/config.cyr`): thoth
   now logs its own driver events — turns routed to hoosh, t-ron authorization
