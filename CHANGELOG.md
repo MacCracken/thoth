@@ -4,6 +4,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-11
+
+**Streaming in the agentic loop.** The 0.6.0 agentic loop was non-streaming, so
+wiring daimon silently turned off the SSE streaming shipped in 0.5.0. Now the loop
+streams when `[hoosh].stream` is on (the default): content prints live, and the
+model's `tool_calls` are assembled from the streamed deltas. `[hoosh].stream =
+false` still gives a blocking round-trip. Toolchain pin unchanged (Cyrius 6.1.38).
+180 unit assertions pass; both paths live-verified end-to-end (streamed deltas
+reassembled, gated, executed, final answer streamed; blocking path intact).
+
+### Added
+- **Streaming in the agentic loop** (`src/agent.cyr`): the loop now streams the
+  model's output via SSE when `[hoosh].stream` is on (the default) — content
+  prints live as it arrives, and the model's `tool_calls` are assembled from the
+  streamed deltas (the `arguments` JSON arrives fragmented and is concatenated by
+  index, then reconstructed into the same tool_calls array text the blocking path
+  produces, so execution and the assistant echo reuse one code path). This closes
+  the 0.6.0 rough edge where wiring daimon silently disabled streaming for every
+  turn. `[hoosh].stream = false` still gives a blocking round-trip. The streaming
+  banner shows `(…, agentic, stream, N tool-bytes)`.
+- **4 new unit assertions (180 total)**: the streamed tool_call delta assembly
+  (`_ag_reset`/`_agent_accum_delta`/`_ag_build_array` — fragmented `arguments`
+  reassembled, then re-parsed through the same `agent_tc_*` accessors) and the
+  streaming request shape.
+
+### Changed
+- **`agent_build_request` gained a `stream` parameter**; `agent_turn` is
+  refactored into per-iteration `_agent_iter_stream` / `_agent_iter_block` helpers
+  with a shared outcome (final answer vs tool calls vs error), so the loop body is
+  transport-agnostic.
+
 ## [0.6.0] - 2026-06-11
 
 **The agentic tool-calling loop — the M4 vision realized.** A free-text turn

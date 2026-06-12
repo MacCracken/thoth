@@ -7,6 +7,10 @@
 
 ## Version
 
+**0.6.1** — agentic streaming, 2026-06-11: the agentic loop streams via SSE when
+`[hoosh].stream` is on — content live, `tool_calls` assembled from fragmented
+deltas. Closes the 0.6.0 edge where wiring daimon disabled streaming. Pin
+unchanged (6.1.38). 180 assertions; both stream/block paths live-verified.
 **0.6.0** — agentic tool-calling loop, 2026-06-11: free-text turns become a loop —
 thoth advertises daimon's MCP tools to hoosh, the model calls them, thoth executes
 each through daimon (t-ron-gated), feeds results back, repeats until the model
@@ -178,8 +182,11 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   (`agent_tool_calls`/`agent_tc_*`/`_agent_raw_tool_calls`), assembles each
   request (system + budgeted history + ephemeral tool rounds + `tools`), and
   drives the loop (`agent_turn`) — each tool call t-ron-gated, results fed back as
-  `{role:tool}`, capped at `AGENT_MAX_ITERS`. Non-streaming. `agent_enabled` gates
-  on daimon-wired + `[hoosh].tools`.
+  `{role:tool}`, capped at `AGENT_MAX_ITERS`. `agent_enabled` gates on
+  daimon-wired + `[hoosh].tools`. **0.6.1:** streams via SSE when `[hoosh].stream`
+  is on (content live; `tool_calls` assembled from fragmented deltas by index, via
+  `_agent_accum_delta`/`_ag_build_array`); per-iteration split into
+  `_agent_iter_stream`/`_agent_iter_block` with a shared outcome.
 - `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
   `gate_authorize`) + the fail-closed `confirm` fallback. **0.5.0:**
   `gate_audit_report` surfaces t-ron's libro-backed audit chain (counts,
@@ -199,7 +206,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **176 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **180 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -222,8 +229,10 @@ bundle is DCE-unreachable).
   null-value `-` and negative ints), the `_log_parse_level` cases, and the
   `[log]` config defaults / `log_active`-off; and **0.6.0's** agentic group —
   tool advertisement formatting, `tool_calls` parsing (id/name/arguments + the
-  no-calls case), the raw tool_calls extractor, the agentic request shape, and
-  `agent_enabled` gating. Passes on `cyrius test`.
+  no-calls case), the raw tool_calls extractor, the agentic request shape,
+  `agent_enabled` gating, and (**0.6.1**) the streamed delta assembly (fragmented
+  `arguments` reassembled, re-parsed through the same accessors). Passes on
+  `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
@@ -300,7 +309,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.6.0)
+## Known limitations (0.6.1)
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -364,8 +373,9 @@ the M4 vision realized: hoosh decides, t-ron gates, daimon executes, results loo
 back. The next milestone is **M6** — OS-agnostic build targets and the honest
 capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport ADR
 + the ladder) is design-ready; the cross-build half is blocked on upstream Cyrius
-stdlib / AGNOS-ABI gaps. Smaller follow-ups on the agentic loop: streaming the
-final answer, richer per-tool JSON Schemas (daimon exports only name/description
-today), parallel tool calls, and surfacing tool rounds in `/audit`. Full-stack
-live e2e of the loop against **real** daimon is a host-side step (daimon's server
-won't run in thoth's build sandbox — signal 16).
+stdlib / AGNOS-ABI gaps. Smaller follow-ups on the agentic loop: **streaming
+landed in 0.6.1** (content live + tool_calls assembled from deltas); remaining —
+richer per-tool JSON Schemas (daimon exports only name/description today),
+parallel tool calls, and surfacing tool rounds in `/audit`. Full-stack live e2e
+of the loop against **real** daimon is a host-side step (daimon's server won't run
+in thoth's build sandbox — signal 16).

@@ -340,12 +340,29 @@ fn test_agent() {
     session_reset();
     session_history_append("user", "hi", 2);
     var rb[512];
-    agent_build_request(&rb, "m", 0, 0, 0);
+    agent_build_request(&rb, "m", 0, 0, 0, 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: history, no tools");
     var toolsb = "[{\"type\":\"function\"}]";
-    agent_build_request(&rb, "m", 0, toolsb, strlen(toolsb));
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: with tools array");
+    agent_build_request(&rb, "m", 0, toolsb, strlen(toolsb), 1);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":true}"), "agent request: with tools, streaming");
     session_reset();
+
+    # streamed tool_call assembly: deltas arrive fragmented (id+name first, then
+    # arguments in pieces), reconstructed into the same array text the block path
+    # produces. Mirrors OpenAI streaming tool_calls.
+    _ag_reset();
+    var d1 = "{\"index\":0,\"id\":\"call_9\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"t\\\":\"}}";
+    _agent_accum_delta(bayan_json_v_parse_str(d1, strlen(d1)));
+    var d2 = "{\"index\":0,\"function\":{\"arguments\":\"42}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_str(d2, strlen(d2)));
+    var ab[1024];
+    _ag_build_array(&ab);
+    assert(streq(&ab, "[{\"id\":\"call_9\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"t\\\":42}\"}}]"), "streamed deltas reassemble into the tool_calls array");
+    # and the reassembled array parses back through the same accessors
+    var av = bayan_json_v_parse_str(&ab, strlen(&ab));
+    assert_eq(agent_tc_count(av), 1, "reassembled: one call");
+    assert(streq(agent_tc_name(av, 0), "echo"), "reassembled: name");
+    assert(streq(agent_tc_args(av, 0), "{\"t\":42}"), "reassembled: args decoded");
     return 0;
 }
 
