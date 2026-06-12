@@ -4,15 +4,18 @@
 > this file is the sequencing — what ships, in what order, against
 > what dependency gates.
 >
-> **Status: active — driver core + hoosh seam + tool spine + avatara overlay shipped (0.4.0).**
-> thoth is real, usable feature code now: the M2 driver loop, the M3 hoosh
-> seam (inference + mid-session model switch), the M4 tool spine (daimon
-> remote, bote + t-ron native, one fail-closed authorization choke point), and
-> the M5 avatara overlay (the Thoth/Librarian persona, native via a vendored
-> bundle, threaded into the hoosh system prompt) are live — **all five spine
-> seams are wired**. **M0–M5 are done**; **M6 onward remain provisional** —
-> their ordering, version labels, and dep gates may still move as the design
-> settles. Treat the unshipped milestones as direction, not commitment.
+> **Forward-facing only — what's left to v1.0.** Shipped history lives in
+> [`../../CHANGELOG.md`](../../CHANGELOG.md) and the version log in
+> [`state.md`](state.md); this file is just the road ahead.
+>
+> **Where we are:** **M0–M5 are done** — driver core, the hoosh seam (inference
+> + mid-session model switch), the M4 tool spine (daimon remote; bote + t-ron
+> native; one fail-closed authorization choke point), and the M5 avatara overlay
+> are all live, so **all five spine seams are wired**, with the model-driven
+> agentic tool-calling loop (0.6.0) running on top. **M6 is in progress** —
+> multi-target builds began with the Linux target shipping (0.6.3). What remains
+> below is **provisional**: ordering, version labels, and dep gates may still
+> move. Treat the unshipped milestones as direction, not commitment.
 
 ## Framing (read first)
 
@@ -75,126 +78,38 @@ whole spine is native._
 thoth uses **SemVer `0.x`** through its pre-1.0 phase — see
 [ADR-0004](../adr/0004-semver-pre-release.md). This supersedes the earlier
 "CalVer at first release" plan: a `0.x` number honestly signals that the
-surface is still moving (most of the spine is still absent; commands and the
-seam interface will change). Whether thoth adopts CalVer (the binary standard)
-or stays SemVer at 1.0 is deferred to a later ADR.
+surface is still moving (commands and the seam interface still change release to
+release). Whether thoth adopts CalVer (the binary standard) or stays SemVer at
+1.0 is deferred to a later ADR.
 
 ## Milestones
 
-### M0 — Scaffold (v0.1.0) — ✅ shipped 2026-06-08
+> **Shipped (M0–M5, 0.1.0 → 0.4.0, plus the 0.5.x–0.6.x polish line):** the
+> scaffold and identity ADRs, the driver core, the hoosh seam, the M4 tool spine,
+> and the M5 avatara overlay — then streaming, multi-turn context, structured
+> logging, the `/audit` / `/models` views, the model-driven agentic tool-calling
+> loop, and per-tool input schemas. Per-release detail is in
+> [`../../CHANGELOG.md`](../../CHANGELOG.md) and the version log in
+> [`state.md`](state.md). The road ahead:
 
-- `cyrius init` scaffold landed
-- Doc-tree per [first-party-documentation.md](https://github.com/MacCracken/agnosticos/blob/main/docs/development/first-party/first-party-documentation.md)
-- ADRs / architecture notes / guides / examples folders ready
+### M6 — OS-agnostic build targets + capability ladder (in progress)
 
-### M1 — Identity & posture fixed — ✅ 2026-06-08
+Ratify the reach posture and make degradation explicit. The build driver
+(`scripts/build.sh`) and [ADR-0008](../adr/0008-multi-target-builds.md) landed
+with **0.6.3**; the rest is open.
 
-Lock the standards/identity shape before any code can entrench the wrong
-one. No feature code — docs and manifest hygiene only.
-
-- ✅ Identity ADR ([0001](../adr/0001-os-agnostic-agnos-primary.md)):
-  OS-agnostic substrate + AGNOS-sovereign spine, with the bright line
-  "port the floor, never fork the spine"; plus
-  [0002](../adr/0002-consume-the-agnos-stack.md) (consume the stack) and
-  [0003](../adr/0003-wear-the-avatara-thoth-archetype.md) (wear the
-  avatara archetype)
-- ✅ Architecture note
-  [001](../architecture/001-consumer-only-no-domain-logic.md) recording
-  the invariants: thoth holds no domain logic; portability comes from
-  capability-seam fallbacks, never in-tree reimplementation; security
-  degrades **closed**
-- ✅ CLAUDE.md, `cyrius.cyml`, README aligned to the canonical framing and
-  the first-party/ standards path
-- ✅ Intended spine deps (hoosh / daimon / bote / t-ron / avatara)
-  described in **prose only** here and in `state.md`; at this stage
-  `cyrius.cyml` carried **stdlib deps only** (M3 later added the sandhi
-  transport for the hoosh seam)
-
-### M2 — REPL/TUI driver core — ✅ 0.1.0 (2026-06-09)
-
-The platform-neutral skeleton: read → dispatch → iterate. No spine bindings —
-a local, self-contained loop that proves the driver shape. Shipped:
-
-- ✅ Interactive REPL/TUI over the portable buffered line reader (no per-OS
-  terminal code)
-- ✅ Command dispatch: `/help` `/seams` `/state` `/model` `/read` `/write`
-  `/run` `/quit`, plus free-text routed as a coding task
-- ✅ Capability-seam registry — the five spine seams report **absent** honestly
-  (`/seams` renders the ladder)
-- ✅ Fail-closed t-ron-absent gate on `/run` and `/write`; portable local shell
-  escape via `process.cyr` with honest exit codes
-- ✅ 47-assertion unit suite
-
-### M3 — hoosh inference + mid-session model switch — ✅ 0.2.0 (2026-06-10)
-
-The signature feature. Route a turn to a backing model; switch the
-backing model mid-session. Routing is OS-independent by construction. Shipped:
-
-- ✅ Turn inference routed through hoosh — an OpenAI-compatible HTTP gateway
-  reached as a remote client, transported by sandhi (compose, never hand-roll).
-  Free-text turns POST chat completions and print the result.
-- ✅ Mid-session model / provider switch — `/model <id>` re-routes the next
-  request; hoosh routes per request by the `model` field. Verified live across
-  providers (Anthropic → OpenAI in one session).
-- ✅ `thoth.cyml` runtime config gates the seam; off-AGNOS this is the
-  networked gateway. Unconfigured → seam absent; unreachable host → transport
-  error announced. Degraded **honestly and announced**, never faked.
-- ✅ Pure request/response logic unit-tested; see
-  [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
-- ↪ Deferred: AGNOS-native co-resident binding (same contract), streaming/SSE,
-  multi-turn context — future milestones.
-
-### M4 — MCP tool execution: daimon + bote + t-ron — ✅ 0.3.0 (2026-06-11)
-
-Give the agent real hands — tool execution under authorization. This is
-the security-critical seam. Shipped:
-
-- ✅ Tool execution via daimon (orchestration + MCP tool host + host
-  registry, remote-client over sandhi: `/tools` + `/call`) speaking bote
-  (the MCP protocol — vendored bote-core 2.7.3, native in-process)
-- ✅ **t-ron** (vendored 2.1.5 + libro 2.7.2, native in-process) wraps the
-  very file-edits, shell commands, and MCP tool calls the agent runs —
-  one `gate_authorize` choke point; policy deny is final
-- ✅ **Fail-closed** off AGNOS: absent t-ron ⇒ the built-in deny-by-default
-  confirm around file-edit/shell-exec/tool-call; never silent allow;
-  absence surfaced to the user. t-ron's own defaults deny unknown
-  agents/tools.
-- ✅ Live-verified across the real spine (thoth → t-ron → daimon → hoosh's
-  bote-backed MCP endpoint → back); surfaced + filed an upstream daimon
-  1.2.4 registry bug (see [ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md))
-- ↪ Deferred: surfacing t-ron's audit chain (`/audit`), daimon agent
-  lifecycle/orchestration surfaces beyond MCP tools, AGNOS-native
-  co-resident bindings
-
-### M5 — avatara personality overlay — ✅ 0.4.0 (2026-06-11)
-
-Pull the Thoth / scribe / Librarian persona straight from avatara — the
-on-the-nose case where name = archetype = function align. Shipped:
-
-- ✅ avatara binds **native** as a vendored dist bundle (avatara 2.7.1,
-  `src/vendor/avatara.cyr`) — the same pattern as bote/t-ron/libro. All five
-  spine seams are now wired.
-- ✅ The persona is **sourced from the archetype** (`egyptian_thoth()` via the
-  `prof_*` accessors), not a hardcoded stub; thoth authors only profile→string
-  glue. The "Librarian" role and the THOTH backronym remain thoth's own overlay
-  framing over avatara's Egyptian wisdom-scribe archetype.
-- ✅ The persona **steers the turn**: soul + spirit prose threaded into a leading
-  `{role:system}` message in the hoosh request (M5 step 2). Off the seam the
-  system message is omitted — degraded honestly.
-- ✅ The vendored bundle is the off-AGNOS descriptor over the same contract; the
-  live / co-resident avatara binding is the deferred reach-transport question.
-- ↪ See [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
-
-### M6 — OS-agnostic build targets + capability ladder (provisional)
-
-Ratify the reach posture and make degradation explicit.
-
-- Build thoth for AGNOS (primary), Linux, macOS, Windows via the
-  per-target Cyrius stdlib behind the one portable interface
-- Capability-ladder / feature-gate matrix: per dependency, native vs.
-  remote-client vs. absent, with **full / degraded / absent** semantics
-  defined and kept honest so it can't drift and mislead
-- Confirm: identical agent UX everywhere; AGNOS is the only parity promise
+- ✅ **x86_64 Linux** ships as a named target (0.6.3).
+- ☐ **AGNOS, macOS, Windows, aarch64** — staged in the driver, each blocked on a
+  named upstream gap: AGNOS needs `SYS_LSEEK` in its syscall floor; macOS/aarch64
+  need the cycc `#pure`/aarch64 pass-1 scanner fix (filed
+  `cyrius/.../2026-06-12-main-aarch64-pass1-missing-annotation-tokens-unexpected-enum`);
+  Windows needs an epoll equivalent (or the sandhi server pruned per target).
+  Each lights up with zero thoth source change once its gap closes.
+- ☐ **Capability-ladder / feature-gate matrix**: per dependency, native vs.
+  remote-client vs. absent, with **full / degraded / absent** semantics defined
+  and kept honest so it can't drift and mislead. (The target matrix in `state.md`
+  is the start; the per-capability ladder is still owed.)
+- ☐ Confirm: identical agent UX everywhere; AGNOS is the only parity promise.
 
 ### M7 — Release readiness (provisional)
 

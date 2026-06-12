@@ -8,15 +8,18 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.3.0 — the tool spine (pre-1.0).** The interactive REPL/TUI loop
-> is real and usable; four of the five seams are wired. The signature feature
-> (M3): turns route to a backing model and switch models mid-session through
-> **hoosh**. The hands (M4): MCP tools list and execute through **daimon**,
-> speaking **bote** (the vendored MCP protocol bundle), with every dangerous
-> action — `/run`, `/write`, `/call` — authorized through **t-ron** (vendored
-> in-process; deny is final, no policy means a fail-closed confirm). Only
-> avatara (M5) is still **absent**, degrading honestly (`/seams` shows the
-> ladder). SemVer `0.x` while the surface moves. See
+> **Status: 0.6.3 — all five seams wired, agentic tool-calling live (pre-1.0).**
+> The interactive REPL/TUI loop is real and usable, and the full AGNOS spine is
+> wired. A free-text turn drives a **model-driven agentic loop**: thoth advertises
+> **daimon**'s MCP tools to **hoosh**, the backing model calls them, thoth
+> executes each through daimon (speaking **bote**, the vendored MCP protocol)
+> under **t-ron** authorization (deny is final; no policy means a fail-closed
+> confirm), and loops results back until the model answers — streaming the output
+> (SSE) as it arrives. The signature move (M3): switch the backing model
+> mid-session through hoosh (`/model`, and `/models` to see the catalog). The
+> persona (M5): the Thoth/Librarian archetype from **avatara** steers the turn.
+> Multi-target builds began in M6 — Linux ships; AGNOS/macOS/Windows are staged.
+> SemVer `0.x` while the surface moves. See
 > [`docs/development/state.md`](docs/development/state.md) and
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live
 > picture.
@@ -59,13 +62,14 @@ When AGNOS owns a domain, thoth consumes it and never reimplements it. The
 "Thoth" archetype pulled from avatara is the personality overlay for
 thoth-the-tool — name, archetype, and function aligned on purpose.
 
-**hoosh is wired** as of 0.2.0 — consumed as a running HTTP gateway (it ships
-no linkable crate), reached over the stdlib `sandhi` transport and configured
-via `thoth.cyml`. **daimon, bote, and t-ron are wired** as of 0.3.0 — daimon
-as a running MCP host reached the same way (`[daimon].url`); bote and t-ron
-in-process as vendored dist bundles (`src/vendor/`), with t-ron binding when
-`[tron].policy` loads. Only avatara is intent here, landing in M5 (`/seams`
-shows the live ladder).
+**All five seams are wired.** hoosh (0.2.0) and daimon (0.3.0) are consumed as
+running HTTP services — they ship no linkable crate — reached over the stdlib
+`sandhi` transport and configured via `thoth.cyml` (`[hoosh].url`,
+`[daimon].url`). bote and t-ron (0.3.0) and avatara (0.4.0) bind **in-process**
+as vendored dist bundles (`src/vendor/`): bote is the MCP protocol, t-ron
+authorizes every gated action (binding when `[tron].policy` loads, else a
+fail-closed confirm), and avatara supplies the persona. Any seam left
+unconfigured degrades honestly — `/seams` shows the live ladder.
 
 ## OS-agnostic in reach, AGNOS-sovereign in spine
 
@@ -97,9 +101,14 @@ The bright line: **port the floor; never fork the spine.** See
 
 ```sh
 cyrius deps                              # resolve stdlib deps
-cyrius build src/main.cyr build/thoth    # compile
+cyrius build src/main.cyr build/thoth    # compile (x86_64 Linux)
 cyrius test                              # run [build].test + tests/*.tcyr
+./build/thoth                            # start the REPL
 ```
+
+For multi-target builds use the driver — `./scripts/build.sh [linux|agnos|all]`
+(Linux ships; other targets are staged, see
+[ADR-0008](docs/adr/0008-multi-target-builds.md)).
 
 The toolchain version is pinned in `cyrius.cyml` (`[package].cyrius`) — that
 pin is the source of truth; don't hardcode it elsewhere.

@@ -74,9 +74,10 @@ thoth uses **SemVer `0.x`** through its pre-1.0 phase
 
 ## Posture
 
-thoth 0.4.0 wires **all five seams**. hoosh (M3) is **remote-client**:
-turns route to a backing model and switch mid-session through the inference
-gateway over sandhi. M4 adds the tool spine: **daimon remote-client** (the MCP
+thoth wires **all five seams** (since 0.4.0), and a free-text turn drives the
+**model-driven agentic tool-calling loop** (0.6.0) on top of them. hoosh (M3) is
+**remote-client**: turns route to a backing model and switch mid-session through
+the inference gateway over sandhi. M4 adds the tool spine: **daimon remote-client** (the MCP
 host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
 (the vendored bote-core bundle IS the MCP protocol, in-process), and **t-ron
 native** (the vendored authorization engine gates `/run`, `/write`, and
@@ -416,10 +417,14 @@ See [`roadmap.md`](roadmap.md). All five seams are wired; the polish backlog
 (streaming/audit/multi-turn/logging, 0.5.0–0.5.2) is cleared; and **0.6.0** lights
 up the **model-driven agentic tool-calling loop** (daimon 1.2.6 unblocked it) —
 the M4 vision realized: hoosh decides, t-ron gates, daimon executes, results loop
-back. The next milestone is **M6** — OS-agnostic build targets and the honest
-capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport ADR
-+ the ladder) is design-ready; the cross-build half is blocked on upstream Cyrius
-stdlib / AGNOS-ABI gaps. Smaller follow-ups on the agentic loop: **streaming
+back. The current milestone is **M6** — OS-agnostic build targets and the honest
+capability-ladder / feature-gate matrix. **x86_64 Linux ships** (0.6.3, via
+`scripts/build.sh` + [ADR-0008](../adr/0008-multi-target-builds.md)); AGNOS,
+macOS, Windows, and aarch64 are staged, each blocked on a named upstream gap
+(AGNOS `SYS_LSEEK`; the cycc `#pure`/aarch64 pass-1 scanner fix, filed; a Windows
+epoll equivalent) and lighting up with zero thoth change once its gap closes. The
+per-capability ladder matrix is still owed. Smaller follow-ups on the agentic
+loop: **streaming
 landed in 0.6.1** (content live + tool_calls assembled from deltas); **richer
 per-tool JSON Schemas landed in 0.6.3** — daimon **1.2.7** now emits `inputSchema`
 per tool (its manifest gap, filed as daimon issue

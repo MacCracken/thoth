@@ -1,11 +1,16 @@
 # Getting started with thoth
 
-thoth 0.1.0 is a **driver core**: an interactive REPL/TUI that reads a line,
-dispatches it, and iterates. The AGNOS capability spine
-(hoosh/daimon/bote/t-ron/avatara) is reached through *seams* that are all
-**absent** in 0.1.0 — so the agent loop is real, but model-backed reasoning,
-MCP tools, and authorization are not wired yet. Absent capabilities degrade
-honestly; nothing is faked.
+thoth is an interactive REPL/TUI that reads a line, dispatches it, and iterates.
+The full AGNOS capability spine (hoosh/daimon/bote/t-ron/avatara) is **wired**
+through *seams*: a free-text turn routes to a backing model via **hoosh** and,
+when **daimon** is configured, drives a model-driven agentic loop — the model
+calls daimon's MCP tools, **t-ron** authorizes each, and results loop back until
+the model answers. A seam that isn't configured degrades honestly; nothing is
+faked (`/seams` shows the live ladder).
+
+The two things that bind only when you point them at a service: `[hoosh].url`
+(model backend) and `[daimon].url` (MCP tool host) in `thoth.cyml`. Without them,
+the loop still runs and says so honestly.
 
 ## Build, run, test
 
@@ -24,19 +29,27 @@ hardcode it elsewhere.
 ```
 thoth> /help              show commands
 thoth> /seams             the capability ladder — which spine seams are wired
-thoth> /state             session state (turns, model, spine)
+thoth> /state             session state (turns, model, context, spine)
+thoth> /model [id]        show the model, or switch it mid-session (routes via hoosh)
+thoth> /models            list the models the hoosh gateway offers
 thoth> /read <file>       print a file (safe, read-only)
-thoth> /model gpt-5       attempt a mid-session model switch (routes via hoosh — absent)
-thoth> /run <cmd>         run a shell command — t-ron-gated (fail-closed)
 thoth> /write <f> <text>  write a file — t-ron-gated
-thoth> write me a quicksort   free text → a coding task → routed to hoosh (absent)
+thoth> /run <cmd>         run a shell command — t-ron-gated (fail-closed)
+thoth> /tools             list the MCP tools daimon hosts
+thoth> /call <tool> [json]  invoke an MCP tool via daimon — t-ron-gated
+thoth> /audit             show t-ron's audit chain (gated-action log)
+thoth> /reset             clear the multi-turn conversation context
+thoth> write me a quicksort   free text → a coding task → the model (agentic loop if daimon is wired)
 thoth> /quit              exit (or Ctrl-D)
 ```
 
-`/run` and `/write` pass a **fail-closed confirm gate** that stands in for the
-absent t-ron authorization seam: it denies by default and proceeds only on an
-explicit `y`. That is the documented off-AGNOS security posture, made real —
-see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md).
+`/run`, `/write`, and `/call` route through **one t-ron authorization choke
+point**. When `[tron].policy` is configured, t-ron's verdict is final — a policy
+deny means the action does not run. When it isn't, a **fail-closed confirm gate**
+stands in: it denies by default and proceeds only on an explicit `y`. Either way
+security degrades **closed**, never silent-allow — the documented off-AGNOS
+posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
+[ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md)).
 
 ## Source layout
 
@@ -44,10 +57,17 @@ see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md).
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (the pure
   `classify_input` / `token_is` / `arg_after` helpers are unit-tested).
+- `src/config.cyr` — `thoth.cyml` runtime config (seam URLs, toggles).
 - `src/seams.cyr` — the capability-seam registry (the five spine seams + status).
-- `src/session.cyr` — session state + the avatara persona overlay (sourced from the archetype bundle, M5).
+- `src/session.cyr` — session state, multi-turn history, the avatara persona overlay.
+- `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`).
+- `src/daimon.cyr` — the daimon seam client (MCP tool list + call).
+- `src/agent.cyr` — the model-driven agentic tool-calling loop.
+- `src/gate.cyr` — the t-ron authorization choke point (and fail-closed confirm).
+- `src/log.cyr` — structured driver-event logging (`[log]`, off by default).
 - `src/exec.cyr` — the local shell escape for `/run` (portable `process.cyr`).
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
+- `src/vendor/` — committed spine dist bundles (bote-core, libro, t-ron, avatara).
 - `tests/thoth.tcyr` — the unit suite (`cyrius test`).
 
 ## Adding a command
