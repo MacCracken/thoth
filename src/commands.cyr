@@ -20,6 +20,7 @@ enum Cmd {
     CMD_CALL = 12;
     CMD_AUDIT = 13;
     CMD_RESET = 14;
+    CMD_MODELS = 15;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -50,6 +51,7 @@ fn classify_input(line) {
     if (token_is(line, "/exit") == 1) { return CMD_QUIT; }
     if (token_is(line, "/seams") == 1) { return CMD_SEAMS; }
     if (token_is(line, "/state") == 1) { return CMD_STATE; }
+    if (token_is(line, "/models") == 1) { return CMD_MODELS; }
     if (token_is(line, "/model") == 1) { return CMD_MODEL; }
     if (token_is(line, "/read") == 1) { return CMD_READ; }
     if (token_is(line, "/write") == 1) { return CMD_WRITE; }
@@ -67,6 +69,7 @@ fn cmd_help() {
     println("  /seams             capability ladder (spine seam status)");
     println("  /state             session state");
     println("  /model [id]        show model, or attempt a mid-session switch (hoosh)");
+    println("  /models            list the models the hoosh gateway offers");
     println("  /read <file>       print a file (safe, read-only built-in)");
     println("  /write <f> <text>  write text to a file (t-ron-gated)");
     println("  /run <cmd>         run a shell command (t-ron-gated local escape)");
@@ -137,7 +140,7 @@ fn cmd_state() {
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
     else { println("see /seams"); }
-    println("  build   : thoth 0.6.1");
+    println("  build   : thoth 0.6.2");
     return 0;
 }
 
@@ -164,6 +167,20 @@ fn cmd_model(line) {
     emit("  next turn routes to hoosh as '"); emit(arg); println("' (mid-session switch).");
     log_begin("model_switch"); log_kv_str("model", arg); log_commit(SK_INFO);
     return 0;
+}
+
+# cmd_models: list the models the hoosh gateway advertises (GET /v1/models). The
+# catalog is hoosh's domain (multi-provider routing) — thoth only asks and shows
+# what to pick from, marking the active routing target. The hoosh seam must be
+# bound; absent, it degrades honestly (no endpoint, no catalog claim).
+fn cmd_models() {
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+        println("hoosh seam absent - no model gateway is wired.");
+        println("the model catalog is hoosh's domain (multi-provider routing).");
+        println("set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
+        return 0;
+    }
+    return hoosh_list_models();
 }
 
 # /read uses one reused heap buffer (the bump allocator never frees, so a
@@ -339,6 +356,7 @@ fn dispatch(line) {
     if (c == CMD_SEAMS) { cmd_seams(); return 1; }
     if (c == CMD_STATE) { cmd_state(); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
+    if (c == CMD_MODELS) { cmd_models(); return 1; }
     if (c == CMD_READ) { cmd_read(line); return 1; }
     if (c == CMD_WRITE) { cmd_write(line); return 1; }
     if (c == CMD_RUN) { cmd_run(line); return 1; }

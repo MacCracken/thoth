@@ -185,6 +185,18 @@ fn test_hoosh() {
     assert(str_eq_cstr(em, "no provider for model"), "error message matches");
     assert_eq(hoosh_extract_error(body, strlen(body)), 0, "no error field -> 0");
 
+    test_group("hoosh model catalog extraction");
+    var mbody = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4-6\"},{\"id\":\"gpt-4o\"}]}";
+    var data = hoosh_extract_models(mbody, strlen(mbody));
+    assert(data != 0, "model list present");
+    assert_eq(bayan_json_v_arr_len(data), 2, "two models in data array");
+    var m0 = bayan_json_v_obj_get(bayan_json_v_arr_get(data, 0), "id");
+    assert(str_eq_cstr(bayan_json_v_str(m0), "claude-sonnet-4-6"), "first model id matches");
+    var mempty = "{\"object\":\"list\",\"data\":[]}";
+    assert_eq(bayan_json_v_arr_len(hoosh_extract_models(mempty, strlen(mempty))), 0, "empty catalog -> 0-length array");
+    assert_eq(hoosh_extract_models(body, strlen(body)), 0, "no data field -> 0");
+    assert_eq(hoosh_extract_models(nojson, strlen(nojson)), 0, "unparseable -> 0");
+
     test_group("hoosh SSE delta extraction");
     var d1 = "{\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}";
     var ds = hoosh_extract_delta(d1, strlen(d1));

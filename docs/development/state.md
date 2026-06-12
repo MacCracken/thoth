@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.6.2** — model catalog, 2026-06-12: `/models` asks the hoosh gateway for its
+catalog (GET `/v1/models`, OpenAI-compatible) and lists every model id, marking
+the session's active routing target — the mid-session `/model` switch now has a
+menu, not a guess. Catalog is hoosh's domain; thoth only asks. Seam absent →
+honest degradation (like `/tools`). Pin unchanged (6.1.38). 186 assertions (+6);
+bound + absent paths live-verified.
 **0.6.1** — agentic streaming, 2026-06-11: the agentic loop streams via SSE when
 `[hoosh].stream` is on — content live, `tool_calls` assembled from fragmented
 deltas. Closes the 0.6.0 edge where wiring daimon disabled streaming. Pin
@@ -147,7 +153,7 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `/tools` and `/call`; **0.5.0:** `/audit`, `/state` shows the stream mode;
   **0.5.1:** `/reset`, `/state` shows the multi-turn context + count; **0.6.0:**
   free-text turns route to the agentic loop when `agent_enabled`, `/state` shows
-  the agent mode).
+  the agent mode; **0.6.2:** `/models` lists the hoosh gateway's catalog).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
   persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
@@ -172,7 +178,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   **0.5.1 (multi-turn):** `hoosh_build_messages` + `_hoosh_history_start`
   serialize the byte-budgeted conversation tail; `_hoosh_blocking_turn` extracted;
   both turn paths leave the reply in `_hoosh_acc` for history; `HOOSH_REQ_CAP`
-  raised to 256 KiB.
+  raised to 256 KiB. **0.6.2 (catalog):** `hoosh_list_models` GETs `/v1/models`
+  and prints the catalog (`_hoosh_models_url` builds the endpoint, pure
+  `hoosh_extract_models` returns the `data` array).
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
   (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool

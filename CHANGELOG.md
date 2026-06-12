@@ -4,6 +4,32 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-12
+
+**See what models you can pick from.** `/model <id>` could switch the backing
+model mid-session, but you had to already know the id. `/models` now asks the
+hoosh gateway for its catalog (GET `/v1/models`, the OpenAI-compatible list) and
+prints every model id, marking the one this session routes to — so the
+mid-session switch has a menu, not a guess. The catalog is hoosh's domain
+(multi-provider routing); thoth only asks and shows. Hoosh seam absent → honest
+degradation (no endpoint, no catalog claim), exactly like `/tools`. Toolchain
+pin unchanged (Cyrius 6.1.38). 186 unit assertions pass (+6); both the bound and
+absent paths live-verified.
+
+### Added
+- **`/models` command** (`src/commands.cyr`, `src/hoosh.cyr`): lists the models
+  the hoosh gateway advertises. `cmd_models` gates on the hoosh seam (absent →
+  the same honest-degradation message shape as `/tools`/`/audit`); `hoosh_list_models`
+  does the GET (auth header reused), parses the OpenAI `{"data":[{"id":…}]}` list,
+  and prints each id, marking the active routing target (`*`) and naming it in the
+  footer. `_hoosh_models_url` builds the `/v1/models` endpoint (base trailing
+  slash trimmed, cached) mirroring `_hoosh_endpoint_url`.
+- **`hoosh_extract_models`** (`src/hoosh.cyr`): pure extractor returning the
+  `data` array value of a `/v1/models` body (or 0 on absent/wrong shape), unit-
+  tested.
+- **6 new unit assertions (186 total)**: the model-catalog extractor (two-model
+  list, id match, empty catalog, missing `data` field, unparseable body).
+
 ## [0.6.1] - 2026-06-11
 
 **Streaming in the agentic loop.** The 0.6.0 agentic loop was non-streaming, so

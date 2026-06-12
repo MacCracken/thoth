@@ -27,7 +27,9 @@ var HOOSH_REQ_CAP = 262144;
 var HOOSH_MAX_TOKENS = 4096;
 var _hoosh_auth = 0;        # cached "Bearer <token>" header value
 var _hoosh_endpoint = 0;    # cached base url + the OpenAI path
+var _hoosh_models_ep = 0;   # cached base url + the OpenAI /v1/models path
 var HOOSH_PATH = "/v1/chat/completions";
+var HOOSH_MODELS_PATH = "/v1/models";
 
 # Assistant-reply accumulator (0.5.1): both turn paths leave the full assistant
 # text here (streaming appends each delta; blocking copies the parsed content) so
@@ -63,6 +65,23 @@ fn _hoosh_endpoint_url() {
     off = _append_cstr(_hoosh_endpoint, off, HOOSH_PATH);
     store8(_hoosh_endpoint + off, 0);
     return _hoosh_endpoint;
+}
+
+# _hoosh_models_url: the GET target for the model catalog = configured base url
+# + the well-known OpenAI-compatible /v1/models path. Same base-trim + cache
+# convention as _hoosh_endpoint_url. Cached.
+fn _hoosh_models_url() {
+    if (_hoosh_models_ep != 0) { return _hoosh_models_ep; }
+    var base = config_hoosh_url();
+    var blen = strlen(base);
+    if (blen > 0) { if (load8(base + blen - 1) == 47) { blen = blen - 1; } }   # trim one '/'
+    _hoosh_models_ep = alloc(blen + strlen(HOOSH_MODELS_PATH) + 1);
+    var off = 0;
+    var i = 0;
+    while (i < blen) { store8(_hoosh_models_ep + off, load8(base + i)); off = off + 1; i = i + 1; }
+    off = _append_cstr(_hoosh_models_ep, off, HOOSH_MODELS_PATH);
+    store8(_hoosh_models_ep + off, 0);
+    return _hoosh_models_ep;
 }
 
 # _hoosh_hex_digit: 0..15 -> ASCII hex (lowercase). Pure. (Named to avoid
@@ -278,6 +297,70 @@ fn hoosh_extract_error(body, body_len) {
     var m = bayan_json_v_obj_get(err, "message");
     if (m == 0) { return 0; }
     return bayan_json_v_str(m);
+}
+
+# hoosh_extract_models: parse an OpenAI /v1/models list body and return the
+# `data` JSON array value (each element `{"id":"...","object":"model",...}`), or
+# 0 if absent/wrong shape. The caller iterates it with bayan_json_v_arr_*. Pure —
+# unit-tested. Shape consumed: {"object":"list","data":[{"id":"M"},...]}
+fn hoosh_extract_models(body, body_len) {
+    var v = bayan_json_v_parse_str(body, body_len);
+    if (v == 0) { return 0; }
+    var data = bayan_json_v_obj_get(v, "data");
+    if (data == 0) { return 0; }
+    return data;
+}
+
+# hoosh_list_models: GET the gateway's model catalog and print each model id,
+# marking the one this session would route to (session override, else config
+# default). Returns 0 on success, negative on transport failure, the HTTP status
+# on non-2xx. Degrades honestly: an unreachable gateway is announced, not faked.
+# I/O — the catalog itself is hoosh's domain (provider routing); thoth only asks.
+fn hoosh_list_models() {
+    var url = _hoosh_models_url();
+    var h = sandhi_headers_new();
+    var auth = _hoosh_auth_header();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    emit("  -> hoosh "); println(url);
+    var r = sandhi_http_get(url, h);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) {
+        var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
+        emit("  hoosh transport error: "); println(ename);
+        emit("  endpoint "); emit(url);
+        println(" unreachable — is the gateway up? (degraded, not faked)");
+        return 0 - 1;
+    }
+    var status = sandhi_http_status(r);
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    if ((status < 200) || (status >= 300)) {
+        emit("  hoosh returned HTTP "); fmt_int(status); println("");
+        var em = hoosh_extract_error(body, blen);
+        if (em != 0) { emit("  "); _hoosh_print_str(em); }
+        return status;
+    }
+    var data = hoosh_extract_models(body, blen);
+    if (data == 0) { println("  hoosh: response received but no model list could be parsed."); return 0 - 1; }
+    var n = bayan_json_v_arr_len(data);
+    var cur = _hoosh_model();
+    emit("models hoosh offers ("); fmt_int(n); println("):");
+    if (n == 0) { println("  (none advertised — hoosh routes by its own provider config)"); }
+    var i = 0;
+    while (i < n) {
+        var m = bayan_json_v_arr_get(data, i);
+        var id = bayan_json_v_obj_get(m, "id");
+        if (id != 0) {
+            var ids = bayan_json_v_str(id);
+            var marker = "  ";
+            if (str_eq_cstr(ids, cur) == 1) { marker = "* "; }   # the active routing target
+            emit(marker);
+            emit_n(str_data(ids), str_len(ids));
+            println("");
+        }
+        i = i + 1;
+    }
+    emit("(* = current; switch with /model <id>. routing target now: "); emit(cur); println(")");
+    return 0;
 }
 
 # _hoosh_model: the model for this turn — session override, else config default,
