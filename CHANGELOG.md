@@ -4,6 +4,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-11
+
+Two unblocked-polish capabilities land on top of the 0.4.x spine (no milestone,
+no upstream gate): **hoosh streaming (SSE)** and **`/audit`**. Turns now stream
+the completion as it is generated — thoth prints each delta as the SSE frames
+arrive, the natural interactive experience — with `[hoosh].stream = false` as the
+blocking escape hatch. `/audit` surfaces t-ron's in-process, libro-backed audit
+chain: counts, a tamper-check, the agent risk score, and the recent gated
+actions. thoth still owns no domain logic — hoosh streams, t-ron audits; thoth
+renders. Toolchain pin unchanged (Cyrius 6.1.37). 131 unit assertions pass; both
+features live-verified end-to-end (streaming against a real SSE gateway, `/audit`
+against the real vendored t-ron engine). Multi-turn context is deferred to 0.5.1.
+
 ### Added
 - **hoosh streaming (SSE)** (`src/hoosh.cyr`, `src/config.cyr`): free-text turns
   now **stream the completion as it is generated** — thoth POSTs with

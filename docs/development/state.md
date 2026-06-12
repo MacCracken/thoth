@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.5.0** — streaming + audit, 2026-06-11 (unblocked polish, no milestone gate):
+hoosh turns **stream the completion (SSE)** as it is generated — each delta
+printed as the frames arrive, `[hoosh].stream=false` reverts to blocking; and
+**`/audit`** surfaces t-ron's in-process, libro-backed audit chain (counts,
+tamper-check, agent risk score, recent gated actions). Toolchain pin unchanged
+(6.1.37). 131 assertions; both live-verified end-to-end. Multi-turn → 0.5.1.
 **0.4.1** — toolchain refresh, 2026-06-11 (Cyrius 6.1.34 → 6.1.37; `lib/`
 re-synced. Forced by a cycc 6.1.37 guarded-`include` behavior change that fired
 the 6.1.34 sigil's redundant `src/sha_ni.cyr` include and broke the build; the
@@ -116,25 +122,25 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `config_load` + `gate_init` then the loop.
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (incl. M4's
-  `/tools` and `/call`; **unreleased:** `/audit`).
+  `/tools` and `/call`; **0.5.0:** `/audit`, `/state` shows the stream mode).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
   persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
   `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
   clause once).
 - `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
-  `[daimon]` url, `[tron]` policy/agent; **unreleased:** `[hoosh].stream`
+  `[daimon]` url, `[tron]` policy/agent; **0.5.0:** `[hoosh].stream`
   bool via a `_cfg_bool` reader).
 - `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
   response/error extraction). **M5**: `hoosh_build_request` takes a `system`
   param; `hoosh_send` passes the avatara persona as a `{role:system}` message.
-  **Unreleased:** SSE streaming — `hoosh_build_request` gained a `stream` param;
+  **0.5.0:** SSE streaming — `hoosh_build_request` gained a `stream` param;
   `_hoosh_stream_turn` + `_hoosh_sse_cb` print `hoosh_extract_delta` deltas as
   the frames arrive (default on, `[hoosh].stream=false` reverts to blocking).
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction).
 - `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
-  `gate_authorize`) + the fail-closed `confirm` fallback. **Unreleased:**
+  `gate_authorize`) + the fail-closed `confirm` fallback. **0.5.0:**
   `gate_audit_report` surfaces t-ron's libro-backed audit chain (counts,
   integrity, risk score, recent events) for the `/audit` command; the pure
   `audit_kind_str` verdict-label is thoth's only glue over it.
@@ -162,10 +168,10 @@ bundle is DCE-unreachable).
   `[daimon]`/`[tron]` config defaults; M5's persona group (identity sourced from
   the avatara archetype, soul/spirit prose, the built system prompt) and the
   hoosh request-shape cases (no system preserves the prior shape, empty system
-  omitted, non-empty system prepended as `{role:system}`); and the **unreleased**
+  omitted, non-empty system prepended as `{role:system}`); and **0.5.0's**
   audit group — three real `tron_check` calls then asserting the logged
   event/denial counts, the libro chain length + integrity, newest-first
-  ordering, and the pure `audit_kind_str` label; and the **unreleased** streaming
+  ordering, and the pure `audit_kind_str` label; and **0.5.0's** streaming
   group — the `stream:true` request shape, `hoosh_extract_delta` across
   content/role-only/finish/`[DONE]` frames, and the `[hoosh].stream` toggle
   through the real TOML parser. Passes on `cyrius test`.
@@ -237,7 +243,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.4.0)
+## Known limitations (0.5.0)
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -257,7 +263,7 @@ deferred to a later ADR.
   t-ron's copy.
 - t-ron authorization is per-tool name + payload scan; the model-driven turn
   (`free text` → hoosh) is not a gated action (it executes nothing locally).
-- hoosh responses **stream by default** (**unreleased**): SSE deltas print as
+- hoosh responses **stream by default** (**0.5.0**): SSE deltas print as
   they arrive (`[hoosh].stream=false` reverts to the blocking round-trip). One
   asymmetry: the streaming result exposes the HTTP status but not the body, so a
   non-2xx *error message* is only surfaced in blocking mode — streaming announces
@@ -266,7 +272,7 @@ deferred to a later ADR.
   (M5) but is otherwise fixed (`max_tokens` 4096, single user turn, no
   conversation history). Multi-turn context and request tuning are future work
   (multi-turn slated for 0.5.1).
-- t-ron audit events live in its in-process libro ring; **unreleased**, `/audit`
+- t-ron audit events live in its in-process libro ring; **0.5.0's** `/audit`
   surfaces them (counts, chain integrity, agent risk score, recent events). The
   audit view is read-only and session-scoped (the ring is in-process, not
   persisted across runs); sakshi-structured logging of driver events remains
@@ -288,5 +294,5 @@ ADR + the ladder) is design-ready; the cross-build half is blocked on upstream
 Cyrius stdlib / AGNOS-ABI gaps. Also queued (daimon-gated): re-verify the daimon
 seam end-to-end and light up the model-driven tool-calling loop once daimon
 ships the 1.2.4 registry-corruption fix. Unblocked polish: `/audit` (t-ron audit
-chain) and **hoosh streaming/SSE** are **done (unreleased, slated for 0.5.0)**;
-remaining — multi-turn context (slated for 0.5.1), sakshi-structured logging.
+chain) and **hoosh streaming/SSE** **shipped in 0.5.0**; remaining — multi-turn
+context (slated for 0.5.1), sakshi-structured logging.
