@@ -139,7 +139,13 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   (`session_history_*` — append/accessors/pop/clear; stable content copies).
 - `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
   `[daimon]` url, `[tron]` policy/agent; **0.5.0:** `[hoosh].stream`
-  bool via a `_cfg_bool` reader; **0.5.1:** `[hoosh].history`).
+  bool via a `_cfg_bool` reader; **0.5.1:** `[hoosh].history`; **0.5.2:**
+  `[log].file` / `[log].level`).
+- `src/log.cyr` — **0.5.2**: structured driver-event logging over the vendored
+  sakshi logger. `log_init` binds to `[log]` (off unless configured); the pure
+  `event=… key=value` builder (`log_begin`/`log_kv_str`/`log_kv_int`/`log_message`)
+  + `_log_parse_level` + the level-gated `log_commit`. Instruments `gate.cyr`
+  (authz verdicts), `hoosh.cyr` (turn results), `commands.cyr` (model switch).
 - `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
   response/error extraction). **M5**: `hoosh_build_request` takes a `system`
   param; `hoosh_send` passes the avatara persona as a `{role:system}` message.
@@ -171,7 +177,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **148 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **163 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -189,8 +195,10 @@ bundle is DCE-unreachable).
   content/role-only/finish/`[DONE]` frames, and the `[hoosh].stream` toggle
   through the real TOML parser; and **0.5.1's** multi-turn group — history
   append/accessors + the stable-copy guarantee, pop/clear, the drop-oldest cap,
-  `_hoosh_history_start` budgeting, and the `hoosh_build_messages` shape. Passes
-  on `cyrius test`.
+  `_hoosh_history_start` budgeting, and the `hoosh_build_messages` shape; and
+  **0.5.2's** logging group — the structured `event=… key=value` builder (incl.
+  null-value `-` and negative ints), the `_log_parse_level` cases, and the
+  `[log]` config defaults / `log_active`-off. Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
@@ -207,7 +215,9 @@ Call sites use the canonical `bayan_*` names. M3 hoosh transport: **`sandhi`**
 (the HTTP/TLS client, folded into stdlib as `lib/sandhi.cyr`) plus its full
 transitive set — `net`, `http`, `tls`, `ws`, `sakshi`, `sigil`, `args`,
 `hashmap`, `thread`, `thread_local`, `fnptr`, `async`, `atomic`, `chrono`,
-`mmap`, `dynlib`, `fdlopen`, `freelist`, `ct`, `keccak`. M4 vendored-bundle
+`mmap`, `dynlib`, `fdlopen`, `freelist`, `ct`, `keccak`. (`sakshi` arrived as a
+sandhi transitive; **0.5.2** consumes it directly for thoth's structured driver
+log — `src/log.cyr`.) M4 vendored-bundle
 surfaces: `regex` (t-ron's policy `glob_match`), `random` (sigil's ML-DSA /
 AES-GCM refs), `patra` (libro's structured logging). M5 vendored-bundle surface:
 `math` (the avatara bundle's `f64_le`/`f64_ge`; the other f64 ops are builtins).
@@ -293,8 +303,11 @@ deferred to a later ADR.
 - t-ron audit events live in its in-process libro ring; **0.5.0's** `/audit`
   surfaces them (counts, chain integrity, agent risk score, recent events). The
   audit view is read-only and session-scoped (the ring is in-process, not
-  persisted across runs); sakshi-structured logging of driver events remains
-  unwired.
+  persisted across runs). **0.5.2** adds thoth's own **sakshi-structured driver
+  log** (`[log]`, off by default; `event=… key=value` for turns, authz verdicts,
+  model switches) — operational, distinct from t-ron's cryptographic chain. It
+  covers the driver event spine but not yet every command (`/read`, `/tools`,
+  `/call` results are not logged); broaden as needed.
 - `/read` is read-only but unrestricted; sandboxing posture stays with t-ron,
   not an in-tree allowlist.
 - `/write` takes single-line content; multi-line editing is future work.
@@ -313,5 +326,7 @@ Cyrius stdlib / AGNOS-ABI gaps. Also queued (daimon-gated): re-verify the daimon
 seam end-to-end and light up the model-driven tool-calling loop once daimon
 ships the 1.2.4 registry-corruption fix. Unblocked polish: `/audit` (t-ron audit
 chain) and **hoosh streaming/SSE** **shipped in 0.5.0**; **multi-turn context**
-(+ `/reset`, `[hoosh].history`) **shipped in 0.5.1**; remaining —
-sakshi-structured logging.
+(+ `/reset`, `[hoosh].history`) **shipped in 0.5.1**; **sakshi-structured driver
+logging** (`[log]`, **unreleased — slated for 0.5.2**) is done. With the polish
+backlog cleared, the next substantial work is **M6** (capability-ladder doc half)
+or the daimon-gated tool-calling loop once daimon ships its fix.

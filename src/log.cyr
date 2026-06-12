@@ -1,0 +1,140 @@
+# thoth — structured driver-event logging (0.5.2).
+#
+# thoth logs its own DRIVER events — turns routed to hoosh, authorization
+# decisions, mid-session model switches — as structured `event=… key=value`
+# lines through the vendored sakshi logger (timestamp + level envelope, zero
+# heap alloc). This is thoth's operational log, distinct from t-ron's
+# cryptographic audit chain (surfaced by /audit): sakshi records what the driver
+# did; t-ron records the security verdicts. thoth owns no logging domain logic —
+# sakshi owns the envelope, transport, and levels; this module only composes the
+# structured message and gates it on configuration.
+#
+# Off by default: logging binds only when thoth.cyml declares [log].file or
+# [log].level, so an unconfigured session prints nothing extra (the TUI stays
+# clean). A file target appends; with only a level set, sakshi's stderr default
+# applies. Degrades honestly — an unopenable file is announced and logging stays
+# off, never silently faked.
+
+var _log_enabled = 0;        # 1 once log_init binds an output
+
+# The structured-message builder writes into one reused buffer (sakshi is
+# zero-alloc; this keeps thoth's side allocation-free per event too). Bounded —
+# appends past the cap are dropped, never overflow.
+var _log_buf = 0;
+var LOG_BUF_CAP = 1024;
+var _log_off = 0;
+
+# log_active: 1 if structured logging is bound, else 0.
+fn log_active() { return _log_enabled; }
+
+# _log_parse_level: map a level cstring to a sakshi SK_* level, or -1 for "off".
+# 0/unrecognized -> SK_INFO (the sensible default). Pure.
+fn _log_parse_level(s) {
+    if (s == 0) { return SK_INFO; }
+    if (streq(s, "off") == 1)   { return 0 - 1; }
+    if (streq(s, "fatal") == 1) { return SK_FATAL; }
+    if (streq(s, "error") == 1) { return SK_ERROR; }
+    if (streq(s, "warn") == 1)  { return SK_WARN; }
+    if (streq(s, "info") == 1)  { return SK_INFO; }
+    if (streq(s, "debug") == 1) { return SK_DEBUG; }
+    if (streq(s, "trace") == 1) { return SK_TRACE; }
+    return SK_INFO;
+}
+
+# _log_append: copy cstring s into the message buffer at _log_off, bounded. Pure.
+fn _log_append(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (_log_off < (LOG_BUF_CAP - 1)) {
+            store8(_log_buf + _log_off, load8(s + i));
+            _log_off = _log_off + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _log_append_int: write n as decimal into the message buffer, bounded. Pure.
+fn _log_append_int(n) {
+    if (n < 0) { _log_append("-"); n = 0 - n; }
+    if (n == 0) {
+        if (_log_off < (LOG_BUF_CAP - 1)) { store8(_log_buf + _log_off, 48); _log_off = _log_off + 1; }
+        return 0;
+    }
+    var tmp[24];
+    var ti = 0;
+    while (n > 0) { store8(&tmp + ti, 48 + (n - (n / 10) * 10)); ti = ti + 1; n = n / 10; }
+    while (ti > 0) {
+        ti = ti - 1;
+        if (_log_off < (LOG_BUF_CAP - 1)) { store8(_log_buf + _log_off, load8(&tmp + ti)); _log_off = _log_off + 1; }
+    }
+    return 0;
+}
+
+# log_begin: start a structured event message — `event=<name>`. log_kv_* append
+# fields; log_commit emits it (or log_message reads it, for tests). Pure.
+fn log_begin(event) {
+    if (_log_buf == 0) { _log_buf = alloc(LOG_BUF_CAP); }
+    _log_off = 0;
+    _log_append("event=");
+    _log_append(event);
+    return 0;
+}
+
+# log_kv_str / log_kv_int: append ` key=value`. A 0 string value renders as `-`.
+fn log_kv_str(k, v) {
+    _log_append(" "); _log_append(k); _log_append("=");
+    if (v != 0) { _log_append(v); } else { _log_append("-"); }
+    return 0;
+}
+fn log_kv_int(k, n) {
+    _log_append(" "); _log_append(k); _log_append("=");
+    _log_append_int(n);
+    return 0;
+}
+
+# log_message: the NUL-terminated structured message built so far (for tests and
+# introspection). Does not emit.
+fn log_message() {
+    if (_log_buf == 0) { return 0; }
+    store8(_log_buf + _log_off, 0);
+    return _log_buf;
+}
+
+# log_commit: emit the built message at `level` through sakshi, if logging is
+# bound (else a no-op). sakshi applies the runtime-level filter and the envelope.
+fn log_commit(level) {
+    if (_log_enabled == 0) { return 0; }
+    store8(_log_buf + _log_off, 0);
+    if (level == SK_ERROR)      { sakshi_error(_log_buf, _log_off); }
+    elif (level == SK_WARN)     { sakshi_warn(_log_buf, _log_off); }
+    elif (level == SK_DEBUG)    { sakshi_debug(_log_buf, _log_off); }
+    else                        { sakshi_info(_log_buf, _log_off); }
+    return 0;
+}
+
+# log_init: bind structured logging to thoth.cyml [log]. Off unless [log].file or
+# [log].level is set; "off" level keeps it off. A file target appends; a bad path
+# is announced and logging stays off. Call once at startup after config_load. I/O.
+fn log_init() {
+    var file = config_log_file();
+    var lvls = config_log_level();
+    if ((file == 0) && (lvls == 0)) { return 0; }   # not configured -> stays off
+    var level = _log_parse_level(lvls);
+    if (level < 0) { return 0; }                     # explicit "off"
+    if (file != 0) {
+        if (sakshi_output_file(file) < 0) {
+            emit("log: cannot open '"); emit(file); println("' — structured logging disabled.");
+            return 0;
+        }
+    }
+    sakshi_set_level(level);
+    _log_enabled = 1;
+    log_begin("session_start");
+    log_commit(SK_INFO);
+    if (file != 0) {
+        emit("log: structured driver events -> "); emit(file);
+        emit(" (level "); emit(lvls); println(")");
+    }
+    return 1;
+}

@@ -451,5 +451,13 @@ fn hoosh_send(prompt) {
             session_history_pop_last();   # roll back the unanswered user turn
         }
     }
+
+    log_begin("hoosh_turn");
+    log_kv_str("model", model);
+    log_kv_int("stream", want_stream);
+    log_kv_int("multi", multi);
+    if (rc == 0) { log_kv_str("result", "ok"); log_commit(SK_INFO); }
+    elif (rc < 0) { log_kv_str("result", "transport_error"); log_commit(SK_WARN); }
+    else { log_kv_str("result", "http_error"); log_kv_int("status", rc); log_commit(SK_WARN); }
     return rc;
 }

@@ -9,6 +9,7 @@ include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
 include "src/util.cyr"
 include "src/config.cyr"
+include "src/log.cyr"
 include "src/gate.cyr"
 include "src/seams.cyr"
 include "src/session.cyr"
@@ -269,6 +270,40 @@ fn test_history_request() {
     return 0;
 }
 
+# Structured driver-event logging (0.5.2): the pure message builder + level
+# parse + config defaults. The sakshi emit path is I/O and not unit-tested here.
+fn test_logging() {
+    test_group("structured logging");
+    # off by default (no config, no init)
+    assert_eq(config_log_file(), 0, "no log file by default");
+    assert_eq(config_log_level(), 0, "no log level by default");
+    assert_eq(log_active(), 0, "logging off without init");
+
+    # level parse
+    assert_eq(_log_parse_level("off"), 0 - 1, "off -> disabled");
+    assert_eq(_log_parse_level("fatal"), SK_FATAL, "fatal");
+    assert_eq(_log_parse_level("error"), SK_ERROR, "error");
+    assert_eq(_log_parse_level("warn"), SK_WARN, "warn");
+    assert_eq(_log_parse_level("info"), SK_INFO, "info");
+    assert_eq(_log_parse_level("debug"), SK_DEBUG, "debug");
+    assert_eq(_log_parse_level("trace"), SK_TRACE, "trace");
+    assert_eq(_log_parse_level(0), SK_INFO, "unset -> default info");
+    assert_eq(_log_parse_level("bogus"), SK_INFO, "unknown -> default info");
+
+    # structured message builder
+    log_begin("hoosh_turn");
+    log_kv_str("model", "gpt-5");
+    log_kv_int("status", 200);
+    assert(streq(log_message(), "event=hoosh_turn model=gpt-5 status=200"), "structured message shape");
+    log_begin("authz");
+    log_kv_str("tool", 0);
+    assert(streq(log_message(), "event=authz tool=-"), "null value renders as -");
+    log_begin("x");
+    log_kv_int("d", 0 - 5);
+    assert(streq(log_message(), "event=x d=-5"), "negative int field");
+    return 0;
+}
+
 # M4 config defaults when no thoth.cyml is loaded.
 fn test_config_m4() {
     test_group("daimon/tron config (unconfigured)");
@@ -392,6 +427,7 @@ fn main() {
     test_stream_config();
     test_history();
     test_history_request();
+    test_logging();
     test_config_m4();
     test_daimon();
     test_tron();

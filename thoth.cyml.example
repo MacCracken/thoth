@@ -68,3 +68,18 @@ model = "claude-haiku-4-5-20251001"
 # [tron]
 # policy = "tron-policy.toml"
 # agent = "thoth"
+
+# The [log] table wires structured driver-event logging via the vendored sakshi
+# logger. thoth logs its OWN driver events — turns routed to hoosh, authorization
+# decisions, mid-session model switches — as `event=… key=value` lines with a
+# timestamp + level envelope. This is thoth's operational log, distinct from
+# t-ron's cryptographic audit chain (the /audit command). Off unless `file` or
+# `level` is set, so an unconfigured session stays quiet.
+#
+#   file  — append structured events to this path; omit to use stderr.
+#   level — minimum severity: off | fatal | error | warn | info | debug | trace
+#           (default info). "off" disables logging even if a file is named.
+
+# [log]
+# file = "thoth-driver.log"
+# level = "info"

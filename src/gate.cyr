@@ -95,13 +95,27 @@ fn gate_verdict(tool_name, params) {
 #   - t-ron absent: the built-in fail-closed confirm prompt (deny by default),
 #     announced as the stand-in it is.
 fn gate_authorize(tool_name, params, verb, obj) {
-    if (gate_active() == 0) { return confirm(verb, obj); }
+    if (gate_active() == 0) {
+        var ok = confirm(verb, obj);
+        log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("gate", "confirm");
+        log_kv_int("allow", ok); log_commit(SK_INFO);
+        return ok;
+    }
     var k = gate_verdict(tool_name, params);
     if (k == VK_ALLOW) {
         emit("  [t-ron] allow: "); emit(verb); emit(" "); println(obj);
+        log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("verdict", "allow");
+        log_commit(SK_INFO);
         return 1;
     }
-    if (k == VK_FLAG) { return confirm(verb, obj); }
+    if (k == VK_FLAG) {
+        var okf = confirm(verb, obj);
+        log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("verdict", "flag");
+        log_kv_int("allow", okf); log_commit(SK_WARN);
+        return okf;
+    }
+    log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("verdict", "deny");
+    log_commit(SK_WARN);
     return 0;
 }
 

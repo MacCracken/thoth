@@ -118,6 +118,12 @@ fn cmd_state() {
     emit("  context : ");
     if (config_hoosh_history() == 0) { println("stateless (single-turn; [hoosh].history = false)"); }
     else { emit("multi-turn, "); fmt_int(session_history_len()); println(" messages (/reset clears)"); }
+    emit("  log     : ");
+    if (log_active() == 0) { println("off (set [log].file or [log].level in thoth.cyml)"); }
+    else {
+        if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
+        println(" (structured driver events)");
+    }
     emit("  daimon  : ");
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("absent (set [daimon].url in thoth.cyml)"); }
     else { println(config_daimon_url()); }
@@ -152,6 +158,7 @@ fn cmd_model(line) {
     session_set_model_copy(arg);
     emit("model -> "); println(arg);
     emit("  next turn routes to hoosh as '"); emit(arg); println("' (mid-session switch).");
+    log_begin("model_switch"); log_kv_str("model", arg); log_commit(SK_INFO);
     return 0;
 }
 

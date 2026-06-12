@@ -4,6 +4,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Structured driver-event logging** (`src/log.cyr`, `src/config.cyr`): thoth
+  now logs its own driver events — turns routed to hoosh, t-ron authorization
+  decisions, mid-session model switches, session start — as structured
+  `event=<name> key=value` lines through the vendored **sakshi** logger (its
+  `[timestamp] [LEVEL]` envelope, zero heap alloc). This is thoth's *operational*
+  log, distinct from t-ron's cryptographic audit chain (the `/audit` command):
+  sakshi records what the driver did; t-ron records the security verdicts. thoth
+  owns no logging domain logic — sakshi owns the envelope/transport/levels;
+  `log.cyr` only composes the message and gates it on config.
+  - **`[log]` config** (`file`, `level`): **off by default** — logging binds only
+    when `[log].file` or `[log].level` is set, so an unconfigured session stays
+    quiet (the TUI is uncluttered). `file` appends; with only a `level`, sakshi's
+    stderr default applies. `level` is `off|fatal|error|warn|info|debug|trace`
+    (default `info`). An unopenable file is announced and logging stays off
+    (degraded honestly). `/state` shows the log target.
+  - Events: `session_start`; `model_switch model=…`; `hoosh_turn model=… stream=…
+    multi=… result=ok|transport_error|http_error [status=…]`; `authz tool=…
+    verdict=allow|deny|flag` (or `gate=confirm allow=…` when t-ron is absent).
+- **15 new unit assertions (163 total)**: the structured-message builder
+  (`log_begin`/`log_kv_str`/`log_kv_int` → `log_message`, incl. null-value `-`
+  and negative ints), the level parse (`off`→disabled, each named level, unknown
+  → default), and the `[log]` config defaults / `log_active` off-without-init.
+
 ## [0.5.1] - 2026-06-11
 
 **Multi-turn conversation context** — the headline: free-text turns now carry
