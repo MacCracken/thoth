@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.6.3** — multi-target builds (M6), 2026-06-12: `scripts/build.sh` is the build
+driver that fans one source tree to targets (`linux`|`agnos`|`all`); **x86_64
+Linux ships** as a named target (`build/thoth`). The **AGNOS** target is staged
+but blocked **upstream** — `patra` needs `SYS_LSEEK`, absent from the AGNOS
+syscall floor (6.1.38→6.2.0); announced, never faked. No source logic change;
+186 assertions still pass. Pin unchanged (6.1.38). See [ADR-0008](../adr/0008-multi-target-builds.md).
 **0.6.2** — model catalog, 2026-06-12: `/models` asks the hoosh gateway for its
 catalog (GET `/v1/models`, OpenAI-compatible) and lists every model id, marking
 the session's active routing target — the mid-session `/model` switch now has a
@@ -141,6 +147,31 @@ floor; never fork the spine.**
 
   AGNOS is the primary target; Linux, macOS, and Windows are capability-gated
   reach targets.
+
+## Targets (build matrix)
+
+The one source tree fans out to targets at **build time** via the build driver
+`scripts/build.sh` (`linux` | `agnos` | `all`); no per-OS source. Status as of
+0.6.3 — see [ADR-0008](../adr/0008-multi-target-builds.md):
+
+| Target | Flag | Status | Output |
+|---|---|---|---|
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (186), released | `build/thoth` |
+| AGNOS (x86_64) | `--agnos` | **staged, blocked upstream** | `build/thoth_agnos` |
+| aarch64 Linux | `--aarch64` | future (M6) | — |
+| macOS | _(floor present)_ | future (M6) | — |
+| Windows | `--win` | future (M6) | — |
+
+**AGNOS block (upstream, not thoth):** `cyrius build --agnos` does not link —
+`patra.cyr` references `SYS_LSEEK`, absent from `syscalls_x86_64_agnos.cyr`
+across Cyrius 6.1.38 → 6.2.0 (present on linux/macos/windows/aarch64). The chain:
+thoth → t-ron audit → libro `patra_store` → patra `_pt_seek` → `SYS_LSEEK`. patra
+(an embedded SQL store) must seek within its DB file to persist the audit ledger.
+This is a **floor** gap in the Cyrius stdlib; fixing it is out of this repo, and
+neither forking the floor nor cutting the t-ron audit chain on AGNOS is taken.
+The AGNOS lane lights up with zero thoth changes once the floor gains `lseek`.
+Corroboration: `kriya`/`klug` ship AGNOS and use no `patra`; only `hoosh`/`thoth`
+depend on it.
 
 ## Source
 

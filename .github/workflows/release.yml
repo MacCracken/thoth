@@ -39,11 +39,13 @@ jobs:
           echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
           echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
 
-      - name: Build
+      - name: Build (linux target)
+        # The multi-target driver is the single build entry point (M6, 0.6.3).
+        # AGNOS is staged but blocked upstream (SYS_LSEEK floor gap), so the
+        # release ships the linux x86_64 target -> build/thoth.
         run: |
           cyrius deps
-          mkdir -p build
-          cyrius build src/main.cyr build/${{ github.event.repository.name }}
+          ./scripts/build.sh linux
 
       - name: Create release
         uses: softprops/action-gh-release@v2

@@ -4,6 +4,42 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-06-12
+
+**Multi-target builds begin (M6): Linux first, honestly.** thoth is OS-agnostic
+at the substrate layer — one source tree, the target picked at build time. This
+slice makes that real: `scripts/build.sh` is the single build driver that fans
+the source to targets (`linux` | `agnos` | `all`), and **x86_64 Linux is a
+named, first-class target** (`build/thoth`), built and tested exactly as before.
+The **AGNOS** target is wired and staged but does **not link today** — and this
+is announced, not faked: thoth's t-ron audit chain persists through libro's
+patra store, and patra's `_pt_seek` needs `SYS_LSEEK`, which the AGNOS syscall
+floor (`syscalls_x86_64_agnos.cyr`) lacks across Cyrius 6.1.38 → 6.2.0 (present
+on linux/macos/windows/aarch64). That gap is upstream in the Cyrius stdlib, not
+thoth; the AGNOS lane lights up with zero thoth changes once the floor gains
+`lseek`. No source logic changed; 186 unit assertions still pass. Toolchain pin
+unchanged (Cyrius 6.1.38).
+
+### Added
+- **`scripts/build.sh`** — the multi-target build driver. `linux` (default) →
+  `build/thoth`; `agnos` attempts `cyrius build --agnos` and surfaces the real
+  result (the honest `SYS_LSEEK` block today, `build/thoth_agnos` once the floor
+  catches up); `all` builds Linux (the release gate) then attempts AGNOS without
+  letting the known block fail the run. The target matrix and its honesty live in
+  the script header.
+- **[ADR-0008](docs/adr/0008-multi-target-builds.md)** — records the multi-target
+  posture (one source tree, target at build time), ships Linux, and documents the
+  AGNOS block (cause, dependency chain, and the rejected alternatives: forking the
+  floor, cutting the audit chain, or silently omitting AGNOS).
+- **Target matrix in `state.md`** — per-target status (Linux shipped; AGNOS
+  staged/blocked-upstream; aarch64/macOS/Windows future) with the `SYS_LSEEK`
+  cause spelled out.
+
+### Notes
+- AGNOS is the primary, most-capable home and is **not** abandoned — the block is
+  upstream and tracked; no capability is cut and the floor is not forked to force
+  a link.
+
 ## [0.6.2] - 2026-06-12
 
 **See what models you can pick from.** `/model <id>` could switch the backing

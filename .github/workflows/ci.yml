@@ -35,10 +35,10 @@ jobs:
       - name: Resolve dependencies
         run: cyrius deps
 
-      - name: Build
-        run: |
-          mkdir -p build
-          cyrius build src/main.cyr build/${{ github.event.repository.name }}
+      - name: Build (linux target)
+        # The multi-target driver is the single build entry point (M6, 0.6.3).
+        # `linux` builds the shipped x86_64 host target -> build/thoth.
+        run: ./scripts/build.sh linux
 
       - name: Test
         # v5.6.28: bare `cyrius test` picks up the [build].test entry
