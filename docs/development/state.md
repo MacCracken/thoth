@@ -7,12 +7,19 @@
 
 ## Version
 
-**0.6.3** — multi-target builds (M6), 2026-06-12: `scripts/build.sh` is the build
-driver that fans one source tree to targets (`linux`|`agnos`|`all`); **x86_64
-Linux ships** as a named target (`build/thoth`). The **AGNOS** target is staged
-but blocked **upstream** — `patra` needs `SYS_LSEEK`, absent from the AGNOS
-syscall floor (6.1.38→6.2.0); announced, never faked. No source logic change;
-186 assertions still pass. Pin unchanged (6.1.38). See [ADR-0008](../adr/0008-multi-target-builds.md).
+**0.6.3** — multi-target builds (M6) + per-tool input schemas, 2026-06-12:
+`scripts/build.sh` is the build driver that fans one source tree to targets
+(`linux`|`agnos`|`all`); **x86_64 Linux ships** as a named target (`build/thoth`).
+The **AGNOS** target is staged but blocked **upstream** — `patra` needs
+`SYS_LSEEK`, absent from the AGNOS syscall floor (6.1.38→6.2.0); announced, never
+faked. Also: daimon **1.2.7** emits `inputSchema` per MCP tool, so
+`agent_format_tools` passes it through verbatim as the model's
+`function.parameters` instead of a permissive `{"type":"object"}` guess — the
+model now sees each tool's real argument shape (closing daimon issue
+`2026-06-11-mcp-manifest-omits-tool-input-schema`; backward-compatible).
+187 assertions. Pin unchanged (6.1.38). See [ADR-0008](../adr/0008-multi-target-builds.md).
+NB: M6 macOS/aarch64 builds remain paused pending the filed cycc fix
+(`#pure`/aarch64 pass-1 scanner); see below.
 **0.6.2** — model catalog, 2026-06-12: `/models` asks the hoosh gateway for its
 catalog (GET `/v1/models`, OpenAI-compatible) and lists every model id, marking
 the session's active routing target — the mid-session `/model` switch now has a
@@ -413,13 +420,13 @@ back. The next milestone is **M6** — OS-agnostic build targets and the honest
 capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport ADR
 + the ladder) is design-ready; the cross-build half is blocked on upstream Cyrius
 stdlib / AGNOS-ABI gaps. Smaller follow-ups on the agentic loop: **streaming
-landed in 0.6.1** (content live + tool_calls assembled from deltas); remaining —
-richer per-tool JSON Schemas (**daimon-gated**: daimon 1.2.6 stores an
-`input_schema` but its manifest omits it and registration hardcodes `{}` — filed
-as daimon issue `2026-06-11-mcp-manifest-omits-tool-input-schema`; thoth
-advertises a permissive `{"type":"object"}` until daimon emits `inputSchema`, then
-passes it through as `function.parameters`), parallel tool calls, and surfacing
-tool rounds in `/audit`. Full-stack live e2e of the loop against **real** daimon
+landed in 0.6.1** (content live + tool_calls assembled from deltas); **richer
+per-tool JSON Schemas landed in 0.6.3** — daimon **1.2.7** now emits `inputSchema`
+per tool (its manifest gap, filed as daimon issue
+`2026-06-11-mcp-manifest-omits-tool-input-schema`, is closed), and
+`agent_format_tools` passes it through verbatim as `function.parameters` (tools
+with none fall back to `{"type":"object"}`). Remaining — parallel tool calls and
+surfacing tool rounds in `/audit`. Full-stack live e2e of the loop against **real** daimon
 is a host-side step (daimon's server won't run in thoth's build sandbox — signal
 16, confirmed repeatedly; thoth's seam is verified wire-compatible with 1.2.6's
 actual code + responses, and the loop against faithful mocks of that wire).

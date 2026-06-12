@@ -17,8 +17,18 @@ patra store, and patra's `_pt_seek` needs `SYS_LSEEK`, which the AGNOS syscall
 floor (`syscalls_x86_64_agnos.cyr`) lacks across Cyrius 6.1.38 → 6.2.0 (present
 on linux/macos/windows/aarch64). That gap is upstream in the Cyrius stdlib, not
 thoth; the AGNOS lane lights up with zero thoth changes once the floor gains
-`lseek`. No source logic changed; 186 unit assertions still pass. Toolchain pin
+`lseek`. The build machinery itself changed no source logic. Toolchain pin
 unchanged (Cyrius 6.1.38).
+
+**Also in 0.6.3 — real per-tool argument schemas reach the model.** The agentic
+loop advertised daimon's MCP tools to hoosh with a permissive
+`"parameters":{"type":"object"}` guess, because daimon's manifest omitted the
+input schema it stored (thoth filed that gap as daimon issue
+`2026-06-11-mcp-manifest-omits-tool-input-schema`). **daimon 1.2.7** now emits
+`inputSchema` per tool in `GET /v1/mcp/tools`, so thoth passes it through verbatim
+as `function.parameters` — the backing model now sees each tool's real argument
+shape instead of a guess, the last gap blocking high-fidelity model-driven tool
+calling. 187 unit assertions pass (+1).
 
 ### Added
 - **`scripts/build.sh`** — the multi-target build driver. `linux` (default) →
@@ -34,6 +44,15 @@ unchanged (Cyrius 6.1.38).
 - **Target matrix in `state.md`** — per-target status (Linux shipped; AGNOS
   staged/blocked-upstream; aarch64/macOS/Windows future) with the `SYS_LSEEK`
   cause spelled out.
+- **1 new unit assertion (187 total)**: a tool carrying `inputSchema` passes
+  through verbatim while a schemaless tool falls back to the object schema.
+
+### Changed
+- **`agent_format_tools`** (`src/agent.cyr`): reads each daimon tool's
+  `inputSchema` (a JSON Schema object) and re-emits it verbatim
+  (`bayan_json_v_build`) as the OpenAI `function.parameters`. Tools that advertise
+  no schema (e.g. builtins) still fall back to `{"type":"object"}`, so the change
+  is backward-compatible with pre-1.2.7 daimon.
 
 ### Notes
 - AGNOS is the primary, most-capable home and is **not** abandoned — the block is

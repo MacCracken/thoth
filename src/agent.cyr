@@ -84,12 +84,12 @@ fn _agent_add_result(id, text) {
 
 # agent_format_tools: serialize a daimon tools array value into an OpenAI `tools`
 # array (NUL-terminated) in dst; return the byte length, or 0 if no tools. daimon
-# gives {name, description}; we wrap each as a function tool with a permissive
-# object schema. daimon 1.2.6 does NOT export per-tool JSON Schemas (its manifest
-# omits the `input_schema` it stores, and registration hardcodes `{}`) — filed as
-# daimon issue 2026-06-11-mcp-manifest-omits-tool-input-schema. When daimon emits
-# `inputSchema`, pass it through here as `function.parameters` (fall back to the
-# permissive `{"type":"object"}` when a tool omits it). Pure.
+# gives {name, description, inputSchema}; we wrap each as a function tool, passing
+# the tool's `inputSchema` (a JSON Schema object) through verbatim as
+# `function.parameters` so the model sees real argument shapes. daimon 1.2.7
+# (issue 2026-06-11-mcp-manifest-omits-tool-input-schema) emits `inputSchema` per
+# tool in GET /v1/mcp/tools; earlier daimon omitted it. A tool with no/empty schema
+# (builtins) falls back to the permissive `{"type":"object"}`. Pure.
 fn agent_format_tools(dst, tools_arr) {
     if (tools_arr == 0) { return 0; }
     var n = bayan_json_v_arr_len(tools_arr);
@@ -106,7 +106,19 @@ fn agent_format_tools(dst, tools_arr) {
         off = _append_cstr(dst, off, "\",\"description\":\"");
         var ds = bayan_json_v_obj_get(t, "description");
         if (ds != 0) { var dss = bayan_json_v_str(ds); if (dss != 0) { off = _json_escape_into(dst, off, str_cstr(dss)); } }
-        off = _append_cstr(dst, off, "\",\"parameters\":{\"type\":\"object\"}}}");
+        # Pass daimon's per-tool inputSchema through verbatim as the OpenAI
+        # `parameters` (it is already a JSON object); fall back to a permissive
+        # object schema when a tool advertises none.
+        off = _append_cstr(dst, off, "\",\"parameters\":");
+        var sc = bayan_json_v_obj_get(t, "inputSchema");
+        if ((sc != 0) && (bayan_json_v_is_obj(sc) == 1)) {
+            var scs = bayan_json_v_build(sc);
+            if (scs != 0) { off = _append_cstr(dst, off, str_cstr(scs)); }
+            else { off = _append_cstr(dst, off, "{\"type\":\"object\"}"); }
+        } else {
+            off = _append_cstr(dst, off, "{\"type\":\"object\"}");
+        }
+        off = _append_cstr(dst, off, "}}");
         i = i + 1;
     }
     off = _append_cstr(dst, off, "]");

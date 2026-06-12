@@ -331,6 +331,13 @@ fn test_agent() {
     assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"echo\",\"description\":\"echo back\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "tools formatted as OpenAI functions");
     assert_eq(agent_format_tools(&tb, 0), 0, "no tools value -> 0 length");
 
+    # daimon 1.2.7: per-tool inputSchema passes through verbatim as `parameters`;
+    # a tool without one falls back to the permissive object schema.
+    var ts = "[{\"name\":\"rd\",\"description\":\"read\",\"inputSchema\":{\"type\":\"string\"}},{\"name\":\"clk\",\"description\":\"time\"}]";
+    var tsv = bayan_json_v_parse_str(ts, strlen(ts));
+    agent_format_tools(&tb, tsv);
+    assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"rd\",\"description\":\"read\",\"parameters\":{\"type\":\"string\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "inputSchema passed through; absent -> object fallback");
+
     # tool_calls parsing from an OpenAI-shaped response
     var resp = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
     var tcs = agent_tool_calls(resp, strlen(resp));
