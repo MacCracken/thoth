@@ -116,7 +116,7 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `config_load` + `gate_init` then the loop.
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (incl. M4's
-  `/tools` and `/call`).
+  `/tools` and `/call`; **unreleased:** `/audit`).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
   persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
@@ -130,7 +130,10 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction).
 - `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
-  `gate_authorize`) + the fail-closed `confirm` fallback.
+  `gate_authorize`) + the fail-closed `confirm` fallback. **Unreleased:**
+  `gate_audit_report` surfaces t-ron's libro-backed audit chain (counts,
+  integrity, risk score, recent events) for the `/audit` command; the pure
+  `audit_kind_str` verdict-label is thoth's only glue over it.
 - `src/exec.cyr` — the portable local shell escape for `/run`.
 - `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
 - `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
@@ -145,7 +148,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **105 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **119 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -155,8 +158,10 @@ bundle is DCE-unreachable).
   `[daimon]`/`[tron]` config defaults; M5's persona group (identity sourced from
   the avatara archetype, soul/spirit prose, the built system prompt) and the
   hoosh request-shape cases (no system preserves the prior shape, empty system
-  omitted, non-empty system prepended as `{role:system}`). Passes on
-  `cyrius test`.
+  omitted, non-empty system prepended as `{role:system}`); and the **unreleased**
+  audit group — three real `tron_check` calls then asserting the logged
+  event/denial counts, the libro chain length + integrity, newest-first
+  ordering, and the pure `audit_kind_str` label. Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
@@ -250,9 +255,11 @@ deferred to a later ADR.
 - The hoosh request carries the avatara persona as a `{role:system}` message
   (M5) but is otherwise fixed (`max_tokens` 4096, single user turn, no
   conversation history). Multi-turn context and request tuning are future work.
-- t-ron audit events live in its in-process libro ring; thoth does not yet
-  surface them (`/audit` is future work), and sakshi-structured logging of
-  driver events remains unwired.
+- t-ron audit events live in its in-process libro ring; **unreleased**, `/audit`
+  surfaces them (counts, chain integrity, agent risk score, recent events). The
+  audit view is read-only and session-scoped (the ring is in-process, not
+  persisted across runs); sakshi-structured logging of driver events remains
+  unwired.
 - `/read` is read-only but unrestricted; sandboxing posture stays with t-ron,
   not an in-tree allowlist.
 - `/write` takes single-line content; multi-line editing is future work.
@@ -269,6 +276,6 @@ capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport
 ADR + the ladder) is design-ready; the cross-build half is blocked on upstream
 Cyrius stdlib / AGNOS-ABI gaps. Also queued (daimon-gated): re-verify the daimon
 seam end-to-end and light up the model-driven tool-calling loop once daimon
-ships the 1.2.4 registry-corruption fix. Unblocked polish: surface t-ron's audit
-chain (`/audit`), hoosh streaming/SSE, multi-turn context, sakshi-structured
-logging.
+ships the 1.2.4 registry-corruption fix. Unblocked polish: `/audit` (surfacing
+t-ron's audit chain) is **done (unreleased)**; remaining — hoosh streaming/SSE,
+multi-turn context, sakshi-structured logging.

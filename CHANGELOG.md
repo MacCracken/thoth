@@ -4,6 +4,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`/audit` — surface t-ron's audit chain** (`src/gate.cyr`, `src/commands.cyr`):
+  a new command that renders t-ron's in-process, libro-backed audit chain — the
+  cryptographic record of every gated action (`/write`, `/run`, `/call`) this
+  session. Reports total events, denials, the chain length + a tamper-check
+  (`audit_verify_chain`), the agent's rolling risk score (0–100%), and the 10
+  newest events (id · verdict · tool · reason, newest first). thoth owns none of
+  this: `gate_audit_report` reads t-ron's query API (`query_total_events` /
+  `query_total_denials` / `audit_recent` / `risk_score`) and renders; the only
+  glue thoth authors is the pure `audit_kind_str` verdict-label. With the t-ron
+  seam absent, `/audit` says so plainly — the fail-closed confirm gate keeps no
+  cryptographic log — degraded honestly. Closes a `state.md` future-work item.
+- **14 new unit assertions (119 total)**: a `t-ron audit chain` group driving the
+  real vendored engine — three `tron_check` calls (one allow, two deny) then
+  asserting the logged event/denial counts, the libro chain length + integrity,
+  and newest-first ordering — plus the pure `audit_kind_str` cases and the
+  `/audit` classification.
+
 ## [0.4.1] - 2026-06-11
 
 Maintenance release: toolchain **Cyrius 6.1.34 → 6.1.37**. The vendored stdlib

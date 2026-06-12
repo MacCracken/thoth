@@ -33,6 +33,7 @@ fn test_classify() {
     assert_eq(classify_input("/run echo hi"), CMD_RUN, "/run");
     assert_eq(classify_input("/tools"), CMD_TOOLS, "/tools");
     assert_eq(classify_input("/call echo {}"), CMD_CALL, "/call with args");
+    assert_eq(classify_input("/audit"), CMD_AUDIT, "/audit");
     assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
     assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
     assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
@@ -242,6 +243,40 @@ fn test_tron() {
     return 0;
 }
 
+# The audit chain: every tron_check logs to t-ron's AuditLogger (operational
+# ring + libro cryptographic chain). thoth's /audit surfaces it; this drives
+# the real vendored engine and asserts the counts, integrity, and the pure
+# kind-label glue thoth authors over it.
+fn test_audit() {
+    test_group("t-ron audit chain (vendored engine)");
+    # pure glue first — independent of any engine state.
+    assert(streq(audit_kind_str(VK_ALLOW), "allow"), "VK_ALLOW -> allow");
+    assert(streq(audit_kind_str(VK_DENY), "deny"), "VK_DENY -> deny");
+    assert(streq(audit_kind_str(VK_FLAG), "flag"), "VK_FLAG -> flag");
+    assert(streq(audit_kind_str(99), "?"), "unknown kind -> ?");
+
+    var t = tron_new(tron_config_default());
+    var pol = "[agent.\"thoth\"]\nallow = [\"echo_*\"]\ndeny = [\"danger_*\"]\n";
+    assert_eq(tron_load_policy(t, pol), TRON_ERR_NONE, "policy parses");
+    var a = tron_audit(t);
+    assert_eq(query_total_events(a), 0, "empty chain before any check");
+
+    tron_check(t, tool_call_new("thoth", "echo_hi", "{}", 1000));    # allow
+    tron_check(t, tool_call_new("thoth", "danger_rm", "{}", 2000));  # deny
+    tron_check(t, tool_call_new("thoth", "unlisted", "{}", 3000));   # deny (fail closed)
+
+    assert_eq(query_total_events(a), 3, "three gated actions logged");
+    assert_eq(query_total_denials(a), 2, "two denials counted");
+    assert_eq(audit_chain_len(a), 3, "libro chain has three entries");
+    assert_eq(audit_verify_chain(a), 0, "chain integrity intact (no tamper)");
+    # newest-first: the most recent event is the unlisted deny.
+    var recent = audit_recent(a, 10);
+    assert_eq(vec_len(recent), 3, "recent returns all three");
+    assert_eq(security_event_kind(vec_get(recent, 0)), VK_DENY, "newest is a deny");
+    assert(streq(security_event_tool_name(vec_get(recent, 0)), "unlisted"), "newest tool is 'unlisted'");
+    return 0;
+}
+
 # Mid-session model switch stores a COPY (the arg aliases a reused line buffer).
 fn test_model_switch() {
     test_group("mid-session model switch");
@@ -270,6 +305,7 @@ fn main() {
     test_config_m4();
     test_daimon();
     test_tron();
+    test_audit();
     test_model_switch();
     return assert_summary();
 }

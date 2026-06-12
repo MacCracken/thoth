@@ -18,6 +18,7 @@ enum Cmd {
     CMD_TASK = 10;
     CMD_TOOLS = 11;
     CMD_CALL = 12;
+    CMD_AUDIT = 13;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -54,6 +55,7 @@ fn classify_input(line) {
     if (token_is(line, "/run") == 1) { return CMD_RUN; }
     if (token_is(line, "/tools") == 1) { return CMD_TOOLS; }
     if (token_is(line, "/call") == 1) { return CMD_CALL; }
+    if (token_is(line, "/audit") == 1) { return CMD_AUDIT; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -68,6 +70,7 @@ fn cmd_help() {
     println("  /run <cmd>         run a shell command (t-ron-gated local escape)");
     println("  /tools             list the MCP tools daimon hosts");
     println("  /call <tool> [json]  invoke an MCP tool via daimon (t-ron-gated)");
+    println("  /audit             show t-ron's audit chain (gated-action log)");
     println("  /quit              exit (or Ctrl-D)");
     println("  <anything else>    a coding task -> routed to the model (hoosh)");
     return 0;
@@ -267,6 +270,19 @@ fn cmd_call(line) {
     return daimon_call(_call_name, args);
 }
 
+# cmd_audit: surface t-ron's audit chain. With the seam absent there is no
+# chain — the fail-closed confirm gate keeps no cryptographic log; said plainly,
+# degraded honestly. With it bound, gate.cyr renders t-ron's query API.
+fn cmd_audit() {
+    if (gate_active() == 0) {
+        println("t-ron seam absent - no audit chain.");
+        println("the fail-closed confirm gate keeps no cryptographic log; the libro");
+        println("audit chain is t-ron's domain. set [tron].policy in thoth.cyml.");
+        return 0;
+    }
+    return gate_audit_report();
+}
+
 fn cmd_task(line) {
     session_bump_turn();
     emit("task: "); println(line);
@@ -293,6 +309,7 @@ fn dispatch(line) {
     if (c == CMD_RUN) { cmd_run(line); return 1; }
     if (c == CMD_TOOLS) { cmd_tools(); return 1; }
     if (c == CMD_CALL) { cmd_call(line); return 1; }
+    if (c == CMD_AUDIT) { cmd_audit(); return 1; }
     if (c == CMD_UNKNOWN_SLASH) { println("unknown command (try /help)"); return 1; }
     cmd_task(line);
     return 1;

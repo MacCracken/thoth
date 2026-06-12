@@ -104,3 +104,58 @@ fn gate_authorize(tool_name, params, verb, obj) {
     if (k == VK_FLAG) { return confirm(verb, obj); }
     return 0;
 }
+
+# audit_kind_str: render a t-ron VerdictKind to a short label. Pure — the only
+# glue thoth authors over the audit chain; the chain itself is t-ron's domain.
+fn audit_kind_str(kind) {
+    if (kind == VK_ALLOW) { return "allow"; }
+    if (kind == VK_DENY)  { return "deny"; }
+    if (kind == VK_FLAG)  { return "flag"; }
+    return "?";
+}
+
+# gate_audit: the AuditLogger of the bound t-ron seam, or 0 when absent. Every
+# tron_check (every gated action) logs to it — operational ring + libro chain.
+fn gate_audit() {
+    if (_gate_tron == 0) { return 0; }
+    return tron_audit(_gate_tron);
+}
+
+# gate_audit_report: surface t-ron's in-process audit chain — the cryptographic
+# (libro-backed) record of every gated action this session, plus the agent's
+# rolling risk score and a tamper-check. Caller ensures gate_active() == 1.
+# thoth owns none of this: it reads t-ron's query API and renders. I/O.
+fn gate_audit_report() {
+    var a = gate_audit();
+    var total = query_total_events(a);
+    println("t-ron audit chain (libro-backed, in-process):");
+    emit("  events  : "); fmt_int(total); println("");
+    emit("  denials : "); fmt_int(query_total_denials(a)); println("");
+    emit("  chain   : "); fmt_int(audit_chain_len(a)); emit(" entries, ");
+    if (audit_verify_chain(a) == 0) { println("integrity OK"); }
+    else { println("INTEGRITY FAILED (tamper detected)"); }
+    # risk score is basis points of 1000 (1000 = max); /10 renders as percent.
+    var risk = query_agent_risk_score(a, config_tron_agent());
+    emit("  risk    : agent '"); emit(config_tron_agent()); emit("' ");
+    fmt_int(risk / 10); emit("."); fmt_int(risk % 10);
+    println("% (0=trusted, 100=max)");
+    if (total == 0) {
+        println("  (no gated actions yet — run /write, /run, or /call)");
+        return 0;
+    }
+    var recent = audit_recent(a, 10);
+    var n = vec_len(recent);
+    emit("  recent ("); fmt_int(n); println(", newest first):");
+    var i = 0;
+    while (i < n) {
+        var e = vec_get(recent, i);
+        emit("    #"); fmt_int(security_event_id(e));
+        emit(" ["); emit(audit_kind_str(security_event_kind(e))); emit("] ");
+        emit(security_event_tool_name(e));
+        var r = security_event_reason(e);
+        if (r != 0 && load8(r) != 0) { emit(" — "); emit(r); }
+        println("");
+        i = i + 1;
+    }
+    return 0;
+}
