@@ -1,0 +1,357 @@
+# thoth — the model-driven agentic tool-calling loop (0.6.0).
+#
+# This is the payoff of the M4 tool spine: a free-text turn becomes a LOOP. thoth
+# advertises daimon's MCP tools to hoosh; the backing model decides which to call;
+# thoth executes each through daimon — every call gated by t-ron — feeds the
+# results back as {role:tool} messages, and repeats until the model answers with
+# plain content. thoth owns none of the moving parts: hoosh decides, daimon
+# executes, bote is the protocol, t-ron authorizes. thoth only drives the loop.
+#
+# Engages when the daimon seam is wired AND [hoosh].tools is on (the default);
+# otherwise free-text turns fall back to the plain hoosh_send path. Agentic turns
+# are NON-streaming — the full response must be parsed for tool_calls before the
+# next step. Standard OpenAI tool-calling contract (hoosh normalizes every
+# provider to it): request `tools`, response `choices[0].message.tool_calls`,
+# each `{id, function:{name, arguments}}`; results returned as
+# {role:tool, tool_call_id, content}.
+
+var AGENT_MAX_ITERS = 8;
+var _agent_req = 0;
+var AGENT_REQ_CAP = 524288;
+var _agent_tools_buf = 0;
+var AGENT_TOOLS_CAP = 32768;
+
+# The working buffer holds THIS turn's tool-round messages (assistant-with-
+# tool_calls + tool results) as raw comma-joined JSON objects. The persisted
+# conversation (session history) supplies the user turn and prior exchanges; the
+# tool rounds are ephemeral — only the user turn and the final answer enter
+# history. Bounded; appends past the cap are dropped.
+var _agent_work = 0;
+var AGENT_WORK_CAP = 131072;
+var _agent_work_len = 0;
+
+fn _agent_work_reset() { _agent_work_len = 0; return 0; }
+fn _agent_work_putc(c) {
+    if (_agent_work_len < (AGENT_WORK_CAP - 1)) { store8(_agent_work + _agent_work_len, c); _agent_work_len = _agent_work_len + 1; }
+    return 0;
+}
+fn _agent_work_puts(s) {
+    var i = 0;
+    while (load8(s + i) != 0) { _agent_work_putc(load8(s + i)); i = i + 1; }
+    return 0;
+}
+# _agent_work_puts_esc: append s as a JSON string body (bounded, escaped).
+fn _agent_work_puts_esc(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (_agent_work_len >= (AGENT_WORK_CAP - 8)) { return 0; }
+        var c = load8(s + i);
+        if (c == 34) { _agent_work_putc(92); _agent_work_putc(34); }
+        elif (c == 92) { _agent_work_putc(92); _agent_work_putc(92); }
+        elif (c == 10) { _agent_work_putc(92); _agent_work_putc(110); }
+        elif (c == 13) { _agent_work_putc(92); _agent_work_putc(114); }
+        elif (c == 9) { _agent_work_putc(92); _agent_work_putc(116); }
+        elif (c < 32) {
+            _agent_work_putc(92); _agent_work_putc(117); _agent_work_putc(48); _agent_work_putc(48);
+            _agent_work_putc(_hoosh_hex_digit(c / 16));
+            _agent_work_putc(_hoosh_hex_digit(c - (c / 16) * 16));
+        } else { _agent_work_putc(c); }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _agent_work_sep() { if (_agent_work_len > 0) { _agent_work_putc(44); } return 0; }   # comma
+
+# Append the assistant message that carries the model's tool_calls, verbatim
+# (raw_tcs is the already-valid JSON array text from the response).
+fn _agent_add_assistant(raw_tcs) {
+    _agent_work_sep();
+    _agent_work_puts("{\"role\":\"assistant\",\"content\":null,\"tool_calls\":");
+    _agent_work_puts(raw_tcs);
+    _agent_work_puts("}");
+    return 0;
+}
+# Append a tool-result message for a given tool_call id.
+fn _agent_add_result(id, text) {
+    _agent_work_sep();
+    _agent_work_puts("{\"role\":\"tool\",\"tool_call_id\":\"");
+    if (id != 0) { _agent_work_puts_esc(id); }
+    _agent_work_puts("\",\"content\":\"");
+    if (text != 0) { _agent_work_puts_esc(text); }
+    _agent_work_puts("\"}");
+    return 0;
+}
+
+# agent_format_tools: serialize a daimon tools array value into an OpenAI `tools`
+# array (NUL-terminated) in dst; return the byte length, or 0 if no tools. daimon
+# gives {name, description}; we wrap each as a function tool with a permissive
+# object schema (daimon does not export per-tool JSON Schemas). Pure.
+fn agent_format_tools(dst, tools_arr) {
+    if (tools_arr == 0) { return 0; }
+    var n = bayan_json_v_arr_len(tools_arr);
+    if (n == 0) { return 0; }
+    var off = 0;
+    off = _append_cstr(dst, off, "[");
+    var i = 0;
+    while (i < n) {
+        if (i > 0) { off = _append_cstr(dst, off, ","); }
+        var t = bayan_json_v_arr_get(tools_arr, i);
+        off = _append_cstr(dst, off, "{\"type\":\"function\",\"function\":{\"name\":\"");
+        var nm = bayan_json_v_obj_get(t, "name");
+        if (nm != 0) { var nms = bayan_json_v_str(nm); if (nms != 0) { off = _json_escape_into(dst, off, str_cstr(nms)); } }
+        off = _append_cstr(dst, off, "\",\"description\":\"");
+        var ds = bayan_json_v_obj_get(t, "description");
+        if (ds != 0) { var dss = bayan_json_v_str(ds); if (dss != 0) { off = _json_escape_into(dst, off, str_cstr(dss)); } }
+        off = _append_cstr(dst, off, "\",\"parameters\":{\"type\":\"object\"}}}");
+        i = i + 1;
+    }
+    off = _append_cstr(dst, off, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
+# _agent_copy: raw-copy n bytes of src into dst at off, bounded by cap. Pure.
+fn _agent_copy(dst, off, src, n, cap) {
+    var i = 0;
+    while ((i < n) && (off < (cap - 1))) { store8(dst + off, load8(src + i)); off = off + 1; i = i + 1; }
+    return off;
+}
+
+# agent_build_request: assemble the chat request — system + budgeted history +
+# this turn's working tool-rounds, plus the advertised tools. NUL-terminated;
+# returns the byte length. Non-streaming (tool_calls must be parsed whole).
+fn agent_build_request(dst, model, system, tools_buf, tools_len) {
+    var off = 0;
+    off = _append_cstr(dst, off, "{\"model\":\"");
+    off = _json_escape_into(dst, off, model);
+    off = _append_cstr(dst, off, "\",\"messages\":[");
+    var wrote = 0;
+    if ((system != 0) && (load8(system) != 0)) { off = _hoosh_emit_msg(dst, off, "system", system); wrote = 1; }
+    var total = session_history_len();
+    var start = _hoosh_history_start(AGENT_REQ_CAP);
+    var i = start;
+    while (i < total) {
+        if (wrote == 1) { off = _append_cstr(dst, off, ","); }
+        off = _hoosh_emit_msg(dst, off, session_history_role(i), session_history_content(i));
+        wrote = 1;
+        i = i + 1;
+    }
+    if (_agent_work_len > 0) {
+        if (wrote == 1) { off = _append_cstr(dst, off, ","); }
+        off = _agent_copy(dst, off, _agent_work, _agent_work_len, AGENT_REQ_CAP);
+        wrote = 1;
+    }
+    off = _append_cstr(dst, off, "]");
+    if (tools_len > 0) {
+        off = _append_cstr(dst, off, ",\"tools\":");
+        off = _agent_copy(dst, off, tools_buf, tools_len, AGENT_REQ_CAP);
+    }
+    off = _append_cstr(dst, off, ",\"max_tokens\":");
+    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_cstr(dst, off, ",\"stream\":false}");
+    store8(dst + off, 0);
+    return off;
+}
+
+# agent_tool_calls: the choices[0].message.tool_calls array value, or 0. Pure.
+fn agent_tool_calls(body, len) {
+    var v = bayan_json_v_parse_str(body, len);
+    if (v == 0) { return 0; }
+    var choices = bayan_json_v_obj_get(v, "choices");
+    if (choices == 0) { return 0; }
+    var first = bayan_json_v_arr_get(choices, 0);
+    if (first == 0) { return 0; }
+    var msg = bayan_json_v_obj_get(first, "message");
+    if (msg == 0) { return 0; }
+    return bayan_json_v_obj_get(msg, "tool_calls");
+}
+fn agent_tc_count(tcs) { if (tcs == 0) { return 0; } return bayan_json_v_arr_len(tcs); }
+fn _agent_tc_str(tcs, i, key) {
+    var e = bayan_json_v_arr_get(tcs, i);
+    if (e == 0) { return 0; }
+    var v = bayan_json_v_obj_get(e, key);
+    if (v == 0) { return 0; }
+    var s = bayan_json_v_str(v);
+    if (s == 0) { return 0; }
+    return str_cstr(s);
+}
+fn agent_tc_id(tcs, i) { return _agent_tc_str(tcs, i, "id"); }
+fn _agent_tc_fn_str(tcs, i, key) {
+    var e = bayan_json_v_arr_get(tcs, i);
+    if (e == 0) { return 0; }
+    var f = bayan_json_v_obj_get(e, "function");
+    if (f == 0) { return 0; }
+    var v = bayan_json_v_obj_get(f, key);
+    if (v == 0) { return 0; }
+    var s = bayan_json_v_str(v);
+    if (s == 0) { return 0; }
+    return str_cstr(s);
+}
+fn agent_tc_name(tcs, i) { return _agent_tc_fn_str(tcs, i, "name"); }
+fn agent_tc_args(tcs, i) { return _agent_tc_fn_str(tcs, i, "arguments"); }
+
+# _agent_match: 1 if the NUL-terminated literal `lit` matches bytes at p. Pure.
+fn _agent_match(p, lit) {
+    var k = 0;
+    while (load8(lit + k) != 0) {
+        if (load8(p + k) != load8(lit + k)) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# _agent_raw_tool_calls: extract the raw "tool_calls":[...] array text as a
+# NUL-terminated cstr (for echoing the assistant message back verbatim), or 0.
+# Balanced-bracket scan that skips over JSON strings. Pure.
+fn _agent_raw_tool_calls(body, len) {
+    var i = 0;
+    var result = 0;
+    while (((i + 13) < len) && (result == 0)) {
+        if (_agent_match(body + i, "\"tool_calls\":") == 1) {
+            var j = i + 13;
+            while ((j < len) && (load8(body + j) == 32)) { j = j + 1; }
+            if ((j < len) && (load8(body + j) == 91)) {
+                var depth = 1;
+                var start = j;
+                j = j + 1;
+                while ((j < len) && (depth > 0)) {
+                    var ch = load8(body + j);
+                    if (ch == 34) {
+                        j = j + 1;
+                        var instr = 1;
+                        while ((j < len) && (instr == 1)) {
+                            var sc = load8(body + j);
+                            if (sc == 92) { j = j + 2; }
+                            elif (sc == 34) { instr = 0; j = j + 1; }
+                            else { j = j + 1; }
+                        }
+                    } else {
+                        if (ch == 91) { depth = depth + 1; }
+                        if (ch == 93) { depth = depth - 1; }
+                        j = j + 1;
+                    }
+                }
+                var slen = j - start;
+                if (slen > 2) {
+                    var out = alloc(slen + 1);
+                    memcpy(out, body + start, slen);
+                    store8(out + slen, 0);
+                    result = out;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+# agent_enabled: 1 if a free-text turn should use the agentic loop — daimon wired
+# AND [hoosh].tools on. Else the caller uses the plain hoosh_send path.
+fn agent_enabled() {
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { return 0; }
+    if (config_hoosh_tools() == 0) { return 0; }
+    return 1;
+}
+
+# _agent_run_calls: execute every tool_call in this round — gate, invoke, record
+# the result message. Each call is t-ron-gated; a deny becomes a result the model
+# can react to, never an abort. I/O.
+fn _agent_run_calls(tcs, nc) {
+    var ci = 0;
+    while (ci < nc) {
+        var nm = agent_tc_name(tcs, ci);
+        var ar = agent_tc_args(tcs, ci);
+        var id = agent_tc_id(tcs, ci);
+        emit("  tool-call: "); if (nm != 0) { emit(nm); } else { emit("(unnamed)"); }
+        if (ar != 0) { emit(" "); emit(ar); } println("");
+        var gp = ar; if (gp == 0) { gp = "{}"; }
+        var res = 0;
+        if (nm == 0) { res = "(no tool name)"; }
+        elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
+            res = daimon_invoke(nm, ar);
+            if (res == 0) { res = "(tool returned no result)"; }
+            emit("  result: "); println(res);
+        } else {
+            res = "denied by authorization policy";
+        }
+        _agent_add_result(id, res);
+        ci = ci + 1;
+    }
+    return 0;
+}
+
+# agent_turn: drive one free-text turn as an agentic tool-calling loop. Returns 0
+# on success, negative on transport failure, the HTTP status on a non-2xx. On any
+# failure the user turn is rolled back from history (completed exchanges only).
+# I/O — the orchestrator.
+fn agent_turn(prompt) {
+    var model = _hoosh_model();
+    var sys = 0;
+    if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
+    if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
+    if (_agent_tools_buf == 0) { _agent_tools_buf = alloc(AGENT_TOOLS_CAP); }
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+
+    var tools_len = agent_format_tools(_agent_tools_buf, daimon_tools_value());
+    session_history_append("user", prompt, strlen(prompt));
+    _agent_work_reset();
+
+    emit("  -> hoosh ("); emit(model); emit(", agentic, "); fmt_int(tools_len); emit(" tool-bytes) ");
+    println(_hoosh_endpoint_url());
+
+    var iter = 0;
+    var done = 0;
+    var rc = 0;
+    while ((done == 0) && (iter < AGENT_MAX_ITERS)) {
+        var len = agent_build_request(_agent_req, model, sys, _agent_tools_buf, tools_len);
+        var h = sandhi_headers_new();
+        sandhi_headers_set(h, "Content-Type", "application/json");
+        var auth = _hoosh_auth_header();
+        if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+        var r = sandhi_http_post(_hoosh_endpoint_url(), h, _agent_req, len);
+        if (sandhi_http_err_kind(r) != SANDHI_OK) {
+            var en = sandhi_err_kind_name(sandhi_http_err_kind(r));
+            emit("  hoosh transport error: "); println(en);
+            session_history_pop_last();
+            log_begin("agent_turn"); log_kv_str("result", "transport_error"); log_commit(SK_WARN);
+            return 0 - 1;
+        }
+        var status = sandhi_http_status(r);
+        var body = sandhi_http_body(r);
+        var blen = sandhi_http_body_len(r);
+        if ((status < 200) || (status >= 300)) {
+            emit("  hoosh returned HTTP "); fmt_int(status); println("");
+            var em = hoosh_extract_error(body, blen);
+            if (em != 0) { emit("  "); _hoosh_print_str(em); }
+            session_history_pop_last();
+            log_begin("agent_turn"); log_kv_str("result", "http_error"); log_kv_int("status", status); log_commit(SK_WARN);
+            return status;
+        }
+        var tcs = agent_tool_calls(body, blen);
+        var nc = agent_tc_count(tcs);
+        if (nc == 0) {
+            var content = hoosh_extract_content(body, blen);
+            if (content != 0) {
+                _hoosh_print_str(content);
+                session_history_append("assistant", str_data(content), str_len(content));
+            } else {
+                println("  hoosh: response had neither tool calls nor content.");
+                session_history_pop_last();
+            }
+            done = 1;
+            log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "ok"); log_commit(SK_INFO);
+        } else {
+            var raw = _agent_raw_tool_calls(body, blen);
+            if (raw == 0) { raw = "[]"; }
+            _agent_add_assistant(raw);
+            _agent_run_calls(tcs, nc);
+        }
+        iter = iter + 1;
+    }
+    if (done == 0) {
+        println("  agentic loop hit the iteration cap (no final answer).");
+        session_history_pop_last();
+        log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "max_iters"); log_commit(SK_WARN);
+    }
+    return rc;
+}

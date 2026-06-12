@@ -124,6 +124,10 @@ fn cmd_state() {
         if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
         println(" (structured driver events)");
     }
+    emit("  agent   : ");
+    if (agent_enabled() == 1) { println("agentic tool-calling on (daimon tools, t-ron gated)"); }
+    elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("plain turns (no daimon seam; /tools needs [daimon].url)"); }
+    else { println("plain turns ([hoosh].tools = false)"); }
     emit("  daimon  : ");
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("absent (set [daimon].url in thoth.cyml)"); }
     else { println(config_daimon_url()); }
@@ -133,7 +137,7 @@ fn cmd_state() {
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
     else { println("see /seams"); }
-    println("  build   : thoth 0.5.2");
+    println("  build   : thoth 0.6.0");
     return 0;
 }
 
@@ -320,6 +324,9 @@ fn cmd_task(line) {
         println("  elsewhere). set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
+    # When daimon is wired and tools are on, drive the agentic tool-calling loop
+    # (the model can call MCP tools, gated by t-ron); else a plain hoosh turn.
+    if (agent_enabled() == 1) { return agent_turn(line); }
     return hoosh_send(line);
 }
 

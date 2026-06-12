@@ -156,7 +156,7 @@ fn persona_system_prompt() {
 fn print_banner() {
     println("");
     emit("  "); emit(persona_name()); emit(", "); emit(persona_role());
-    println(" - thoth 0.5.2");
+    println(" - thoth 0.6.0");
     emit("  "); println(persona_tagline());
     println("  a sovereign agentic coding TUI (fermenting). /help for commands.");
     println("");

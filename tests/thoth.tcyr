@@ -16,6 +16,7 @@ include "src/session.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/daimon.cyr"
+include "src/agent.cyr"
 include "src/commands.cyr"
 
 fn test_classify() {
@@ -304,6 +305,50 @@ fn test_logging() {
     return 0;
 }
 
+# Agentic tool-calling loop (0.6.0): the pure pieces — tool advertisement,
+# tool_calls parsing, raw extraction, and request shaping. The loop itself is I/O.
+fn test_agent() {
+    test_group("agentic tool-calling");
+    assert_eq(agent_enabled(), 0, "agentic off when daimon absent (no config)");
+
+    # tool advertisement: daimon {name,description} -> OpenAI function tools
+    var ta = "[{\"name\":\"echo\",\"description\":\"echo back\"},{\"name\":\"clk\",\"description\":\"time\"}]";
+    var tav = bayan_json_v_parse_str(ta, strlen(ta));
+    var tb[1024];
+    agent_format_tools(&tb, tav);
+    assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"echo\",\"description\":\"echo back\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "tools formatted as OpenAI functions");
+    assert_eq(agent_format_tools(&tb, 0), 0, "no tools value -> 0 length");
+
+    # tool_calls parsing from an OpenAI-shaped response
+    var resp = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
+    var tcs = agent_tool_calls(resp, strlen(resp));
+    assert(tcs != 0, "tool_calls present");
+    assert_eq(agent_tc_count(tcs), 1, "one tool call");
+    assert(streq(agent_tc_id(tcs, 0), "call_1"), "tool_call id");
+    assert(streq(agent_tc_name(tcs, 0), "echo"), "tool_call name");
+    assert(streq(agent_tc_args(tcs, 0), "{}"), "tool_call arguments");
+
+    var plain = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}";
+    assert_eq(agent_tc_count(agent_tool_calls(plain, strlen(plain))), 0, "no tool_calls -> count 0");
+
+    # raw tool_calls substring (echoed back verbatim as the assistant message)
+    var raw = _agent_raw_tool_calls(resp, strlen(resp));
+    assert(raw != 0, "raw tool_calls extracted");
+    assert_eq(cstr_starts_with(raw, "[{\"id\":\"call_1\""), 1, "raw is the array text");
+
+    # request shaping: history + tools
+    session_reset();
+    session_history_append("user", "hi", 2);
+    var rb[512];
+    agent_build_request(&rb, "m", 0, 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: history, no tools");
+    var toolsb = "[{\"type\":\"function\"}]";
+    agent_build_request(&rb, "m", 0, toolsb, strlen(toolsb));
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: with tools array");
+    session_reset();
+    return 0;
+}
+
 # M4 config defaults when no thoth.cyml is loaded.
 fn test_config_m4() {
     test_group("daimon/tron config (unconfigured)");
@@ -428,6 +473,7 @@ fn main() {
     test_history();
     test_history_request();
     test_logging();
+    test_agent();
     test_config_m4();
     test_daimon();
     test_tron();

@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.6.0** — agentic tool-calling loop, 2026-06-11: free-text turns become a loop —
+thoth advertises daimon's MCP tools to hoosh, the model calls them, thoth executes
+each through daimon (t-ron-gated), feeds results back, repeats until the model
+answers. The M4 vision realized; unblocked by daimon 1.2.6. `[hoosh].tools`
+(default on). Pin unchanged (6.1.38). 176 assertions; loop live-verified on the
+happy and policy-deny paths.
 **0.5.2** — structured logging, 2026-06-11 (unblocked polish): thoth logs its own
 driver events (`event=… key=value` via the vendored sakshi logger) — turns,
 authz verdicts, model switches, session start. Off by default (`[log]` opt-in);
@@ -135,7 +141,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (incl. M4's
   `/tools` and `/call`; **0.5.0:** `/audit`, `/state` shows the stream mode;
-  **0.5.1:** `/reset`, `/state` shows the multi-turn context + count).
+  **0.5.1:** `/reset`, `/state` shows the multi-turn context + count; **0.6.0:**
+  free-text turns route to the agentic loop when `agent_enabled`, `/state` shows
+  the agent mode).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
   persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
@@ -162,7 +170,16 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   both turn paths leave the reply in `_hoosh_acc` for history; `HOOSH_REQ_CAP`
   raised to 256 KiB.
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
-  tool call build/POST, MCP tool-result extraction).
+  tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
+  (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool
+  array) for the agentic loop.
+- `src/agent.cyr` — **0.6.0**: the model-driven agentic tool-calling loop.
+  Advertises daimon's tools to hoosh (`agent_format_tools`), parses `tool_calls`
+  (`agent_tool_calls`/`agent_tc_*`/`_agent_raw_tool_calls`), assembles each
+  request (system + budgeted history + ephemeral tool rounds + `tools`), and
+  drives the loop (`agent_turn`) — each tool call t-ron-gated, results fed back as
+  `{role:tool}`, capped at `AGENT_MAX_ITERS`. Non-streaming. `agent_enabled` gates
+  on daimon-wired + `[hoosh].tools`.
 - `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
   `gate_authorize`) + the fail-closed `confirm` fallback. **0.5.0:**
   `gate_audit_report` surfaces t-ron's libro-backed audit chain (counts,
@@ -182,7 +199,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **163 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **176 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -203,7 +220,10 @@ bundle is DCE-unreachable).
   `_hoosh_history_start` budgeting, and the `hoosh_build_messages` shape; and
   **0.5.2's** logging group — the structured `event=… key=value` builder (incl.
   null-value `-` and negative ints), the `_log_parse_level` cases, and the
-  `[log]` config defaults / `log_active`-off. Passes on `cyrius test`.
+  `[log]` config defaults / `log_active`-off; and **0.6.0's** agentic group —
+  tool advertisement formatting, `tool_calls` parsing (id/name/arguments + the
+  no-calls case), the raw tool_calls extractor, the agentic request shape, and
+  `agent_enabled` gating. Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 
@@ -256,9 +276,15 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
   [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
 - **daimon** — agent orchestration + MCP tool execution + host registry:
   **wired (remote-client over HTTP via sandhi)** when `[daimon].url` is
-  declared. `/tools` lists the registry, `/call` invokes. Verified live
-  against daimon 1.2.4 — which has an upstream registry-corruption bug thoth
-  filed (see Known limitations).
+  declared. `/tools` lists the registry, `/call` invokes. **Re-verified
+  wire-compatible against daimon 1.2.6** (2026-06-11), which ships the fix for
+  the registry-aliases-request-buffer bug thoth filed. 1.2.6's `GET
+  /v1/mcp/tools` returns the manifest `{"tools":[{name,description}],"count":N}`
+  (thoth parses, ignores `count`) and `POST /v1/mcp/call` passes the upstream MCP
+  `result` through (`content[0].text` + `isError`); both match thoth's seam — no
+  code change needed. Round-trip confirmed against a 1.2.6-faithful mock (real
+  daimon's server binary won't run inside thoth's build sandbox — signal 16 — so
+  full-stack live e2e is a host-side step).
 - **bote** — the MCP protocol: **wired (native — vendored bote-core 2.7.3,
   in-process)**.
 - **t-ron** — MCP per-tool authorization: **wired (native — vendored t-ron
@@ -274,7 +300,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.5.2)
+## Known limitations (0.6.0)
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -282,12 +308,20 @@ deferred to a later ADR.
   deferred reach-transport question as the other native seams.
 - t-ron's bundle carries a benign `ERR_NONE = 0` shared with libro's identical
   constant (same value; last definition wins) — re-check on bundle bumps.
-- **daimon 1.2.4 upstream bug**: its MCP host registry stores strings that
-  alias the transient request buffer — registrations corrupt as later
-  requests arrive (calls 502, `/tools` renders garbage). Filed by thoth as
+- **daimon registry bug — RESOLVED in daimon 1.2.6** (was 1.2.4): the MCP host
+  registry aliased the transient request buffer, corrupting registrations as
+  later requests arrived. Filed by thoth as
   `daimon/docs/development/issues/2026-06-11-mcp-registry-aliases-request-buffer.md`;
-  thoth's seam is verified correct against a fresh registration. Re-verify
-  end-to-end when daimon ships the fix.
+  fixed upstream (daimon commit `6af75a4`). thoth's seam is re-verified
+  wire-compatible with 1.2.6 (see the daimon seam note above). Full-stack live
+  e2e (thoth → t-ron → real daimon → bote MCP → back) is a host-side step —
+  daimon's server binary won't run inside thoth's build sandbox (signal 16).
+- thoth is **not** exposed to the cyrius address-taken-local-array static-overlap
+  bug daimon hit in 1.2.6 (its `docs/.../cyrius-addr-taken-local-array-static-overlap`):
+  that needs an 8-byte-slot `var a[N]` written at its last slot via `store64(&a…)`;
+  thoth's address-taken locals (`tmp[24]`, `line[4096]`, `ans[64]`) are byte
+  buffers written via `store8` within bounds. Re-check if a `store64(&local…)`
+  is ever introduced.
 - t-ron's bundle duplicates sigil's `chacha20_xor` (same signature and
   semantics; last definition wins) — benign per t-ron's own 2.1.5 notes, but
   worth re-checking on sigil bumps since sigil's TLS ChaCha20 path now runs
@@ -323,15 +357,15 @@ _None yet._
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). M5 (avatara) is shipped, so all five seams are
-wired; the next milestone is **M6** — OS-agnostic build targets and the honest
-capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport
-ADR + the ladder) is design-ready; the cross-build half is blocked on upstream
-Cyrius stdlib / AGNOS-ABI gaps. Also queued (daimon-gated): re-verify the daimon
-seam end-to-end and light up the model-driven tool-calling loop once daimon
-ships the 1.2.4 registry-corruption fix. Unblocked polish: `/audit` (t-ron audit
-chain) and **hoosh streaming/SSE** **shipped in 0.5.0**; **multi-turn context**
-(+ `/reset`, `[hoosh].history`) **shipped in 0.5.1**; **sakshi-structured driver
-logging** (`[log]`) **shipped in 0.5.2**. With the polish backlog cleared, the
-next substantial work is **M6** (capability-ladder doc half) or the daimon-gated
-tool-calling loop once daimon ships its fix.
+See [`roadmap.md`](roadmap.md). All five seams are wired; the polish backlog
+(streaming/audit/multi-turn/logging, 0.5.0–0.5.2) is cleared; and **0.6.0** lights
+up the **model-driven agentic tool-calling loop** (daimon 1.2.6 unblocked it) —
+the M4 vision realized: hoosh decides, t-ron gates, daimon executes, results loop
+back. The next milestone is **M6** — OS-agnostic build targets and the honest
+capability-ladder / feature-gate matrix. The M6 doc half (the reach-transport ADR
++ the ladder) is design-ready; the cross-build half is blocked on upstream Cyrius
+stdlib / AGNOS-ABI gaps. Smaller follow-ups on the agentic loop: streaming the
+final answer, richer per-tool JSON Schemas (daimon exports only name/description
+today), parallel tool calls, and surfacing tool rounds in `/audit`. Full-stack
+live e2e of the loop against **real** daimon is a host-side step (daimon's server
+won't run in thoth's build sandbox — signal 16).

@@ -4,6 +4,54 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-11
+
+**The agentic tool-calling loop — the M4 vision realized.** A free-text turn
+becomes a loop: thoth advertises daimon's MCP tools to hoosh, the model decides
+which to call, thoth executes each through daimon (every call **t-ron-gated**),
+feeds the results back, and repeats until the model answers. hoosh decides,
+daimon executes, bote is the protocol, t-ron authorizes — thoth only drives.
+Unblocked by **daimon 1.2.6** (its registry-aliasing fix); thoth's seam needed no
+change to integrate. Engages when the daimon seam is wired and `[hoosh].tools` is
+on (the default). Toolchain pin unchanged (Cyrius 6.1.38). 176 unit assertions
+pass; the loop is live-verified end-to-end on both the happy path
+(call→gate→execute→result→answer) and the security path (a t-ron policy deny
+blocks the call before it reaches daimon and feeds the denial back to the model).
+
+### Added
+- **Model-driven agentic tool-calling loop** (`src/agent.cyr`, `src/daimon.cyr`,
+  `src/config.cyr`) — the payoff of the M4 tool spine. When the daimon seam is
+  wired, a free-text turn becomes a LOOP: thoth advertises daimon's MCP tools to
+  hoosh, the backing model decides which to call (`tool_calls`), thoth executes
+  each through daimon — **every call gated by t-ron** — feeds the results back as
+  `{role:tool}` messages, and repeats until the model answers with plain content.
+  Standard OpenAI tool-calling contract (hoosh normalizes every provider to it).
+  thoth owns none of the moving parts: hoosh decides, daimon executes, bote is
+  the protocol, t-ron authorizes — thoth only drives the loop.
+  - **`agent.cyr`**: advertises tools (`agent_format_tools` — daimon's
+    `{name,description}` → OpenAI function tools with a permissive object schema),
+    parses `choices[0].message.tool_calls` (`agent_tool_calls` / `agent_tc_*`),
+    echoes the assistant tool-call message back verbatim (`_agent_raw_tool_calls`,
+    a string-aware balanced-bracket scan), and assembles each request (system +
+    budgeted history + this turn's ephemeral tool rounds + the `tools` array).
+    Iteration-capped (`AGENT_MAX_ITERS = 8`); failures roll the user turn back out
+    of history. Agentic turns are **non-streaming** (the full response must be
+    parsed for tool calls).
+  - **t-ron-gated execution**: each tool call passes `gate_authorize` before any
+    request leaves thoth — a policy deny (or fail-closed confirm when t-ron is
+    absent) blocks the call and feeds the denial back to the model, never an
+    abort. Verified: a policy-denied tool never reaches daimon.
+  - **daimon helpers**: `daimon_invoke` (invoke + return the MCP result text as a
+    cstr, no chatty printing) and `daimon_tools_value` (fetch the registry's tool
+    array for advertisement).
+  - **`[hoosh].tools` toggle** (default **true**): the loop engages when daimon is
+    wired and tools are on; `tools = false` keeps plain single-shot turns. `/state`
+    shows the agent mode. Events logged via sakshi (`agent_turn` result/iters).
+- **13 new unit assertions (176 total)**: tool advertisement formatting,
+  `tool_calls` parsing (id/name/arguments, and the no-tool-calls case), the raw
+  tool_calls extractor, the agentic request shape (history + tools), and
+  `agent_enabled` gating.
+
 ## [0.5.2] - 2026-06-11
 
 **Structured driver-event logging** — thoth now logs its own driver events
