@@ -7,6 +7,10 @@
 
 ## Version
 
+**0.4.1** — toolchain refresh, 2026-06-11 (Cyrius 6.1.34 → 6.1.37; `lib/`
+re-synced. Forced by a cycc 6.1.37 guarded-`include` behavior change that fired
+the 6.1.34 sigil's redundant `src/sha_ni.cyr` include and broke the build; the
+6.1.37 sigil drops it. No thoth source change; 105/105 still pass).
 **0.4.0** — the avatara seam, 2026-06-11 (roadmap M5: avatara binds native via a
 vendored dist bundle; the Thoth/Librarian persona is sourced from the archetype
 (`egyptian_thoth()`) and threaded into the hoosh system prompt — **all five
@@ -80,12 +84,17 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.34` (in `cyrius.cyml [package].cyrius`), matching the
+- **Cyrius pin**: `6.1.37` (in `cyrius.cyml [package].cyrius`), matching the
   installed `cycc` (0.2.1 took 6.1.23 → 6.1.32 with the 6.1.25 bayan
-  data-domain carve; 0.3.0 took 6.1.33 — dep-resolver CVE hardening; 0.4.0 is on
-  6.1.34, no stdlib migration). M5 added the **`math`** stdlib dep (the vendored
-  avatara bundle's `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via
-  `cyrius lib sync` (88 modules).
+  data-domain carve; 0.3.0 took 6.1.33 — dep-resolver CVE hardening; 0.4.0 was on
+  6.1.34, no stdlib migration; **0.4.1** took 6.1.34 → 6.1.37 — forced by a cycc
+  guarded-`include` behavior change that fired sigil's redundant `src/sha_ni.cyr`
+  include; the 6.1.37 sigil drops it. The re-sync touched only the
+  transport/crypto floor — `sigil`, `sandhi`, `tls`, `tls_native`, `ws`,
+  `syscalls_{windows,x86_64_agnos}` — no stdlib API migration, no thoth source
+  change). M5 added the **`math`** stdlib dep (the vendored avatara bundle's
+  `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via `cyrius lib sync`
+  (88 modules).
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,

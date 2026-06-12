@@ -4,6 +4,35 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-06-11
+
+Maintenance release: toolchain **Cyrius 6.1.34 → 6.1.37**. The vendored stdlib
+(`lib/`) is re-synced to the 6.1.37 snapshot; thoth's own source is unchanged and
+all 105 unit assertions pass without modification. No behavior change.
+
+The bump was forced by a real breakage: cycc 6.1.37 changed how an
+`#ifndef`-guarded `include` is handled — it now opens the guarded file even when
+the guard symbol is already defined. The 6.1.34 `lib/sigil.cyr` carried a
+redundant, guard-skipped `include "src/sha_ni.cyr"` (and `aes_ni.cyr`); under
+6.1.37 that include fired and failed (`cannot open include file: src/sha_ni.cyr`),
+breaking every build/test on a host with the newer wrapper. 6.1.37's own sigil
+snapshot drops the redundant include, so re-syncing `lib/` to the matching pin
+resolves it.
+
+### Changed
+- **Toolchain: Cyrius 6.1.37** (`cyrius.cyml [package].cyrius`, was 6.1.34).
+  `lib/` re-synced via `cyrius lib sync` (88 modules). Only the transport/crypto
+  floor moved: `sigil` (the dropped sha_ni/aes_ni includes), `sandhi`, `tls`,
+  `tls_native`, `ws`, and the `syscalls_{windows,x86_64_agnos}` variants. No
+  stdlib API migration — every `bayan_*` / `sandhi_*` / sigil call site is
+  unchanged, so no thoth source touched.
+- Version strings and the banner bumped to `0.4.1`.
+
+### Verified
+- 105/105 unit assertions on `cyrius test` under 6.1.37; `cyrius build` produces
+  a clean ~2.7 MB `build/thoth`. The toolchain-drift warning is gone (pin now
+  matches the installed `cycc`).
+
 ## [0.4.0] - 2026-06-11
 
 The last absent seam flips (roadmap M5): **avatara** binds **native** as a
