@@ -87,6 +87,29 @@ fn test_seams() {
     return 0;
 }
 
+fn test_capability_ladder() {
+    test_group("capability ladder (full/degraded/absent)");
+    # effect labels
+    assert(streq(cap_state_label(CAP_FULL), "full"), "full label");
+    assert(streq(cap_state_label(CAP_DEGRADED), "degraded"), "degraded label");
+    assert(streq(cap_state_label(CAP_ABSENT), "absent"), "absent label");
+    # always-native vendored seams are FULL regardless of config
+    assert_eq(seam_cap_state(SEAM_BOTE), CAP_FULL, "bote full (vendored)");
+    assert_eq(seam_cap_state(SEAM_AVATARA), CAP_FULL, "avatara full (vendored)");
+    # unconfigured: hoosh/daimon have no fallback -> ABSENT (never faked)
+    assert_eq(seam_cap_state(SEAM_HOOSH), CAP_ABSENT, "hoosh absent when unconfigured");
+    assert_eq(seam_cap_state(SEAM_DAIMON), CAP_ABSENT, "daimon absent when unconfigured");
+    # the honesty case: absent t-ron is DEGRADED (confirm gate), never ABSENT,
+    # never silently allowing — security degrades CLOSED.
+    assert_eq(seam_cap_state(SEAM_TRON), CAP_DEGRADED, "t-ron degrades closed, not absent");
+    # full + fallback prose carry the honest semantics
+    assert(streq(seam_cap_full(SEAM_TRON), "per-tool authorization on /run, /write, /call; deny is final"), "t-ron full prose");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_HOOSH), "absent:"), 1, "hoosh fallback is absent");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_DAIMON), "absent:"), 1, "daimon fallback is absent");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_TRON), "degraded:"), 1, "t-ron fallback is degraded");
+    return 0;
+}
+
 fn test_session() {
     test_group("session state");
     session_reset();
@@ -501,6 +524,7 @@ fn main() {
     test_tokens();
     test_cstr();
     test_seams();
+    test_capability_ladder();
     test_session();
     test_persona();
     test_config();

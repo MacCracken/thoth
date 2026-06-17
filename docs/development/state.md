@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.6.5** — M6 capability ladder (effect dimension), 2026-06-16: the seam registry
+gains the **full / degraded / absent capability-effect** dimension on top of the
+existing native/remote-client/absent **binding mode** — two orthogonal axes, the
+second not inferable from the first. `seam_cap_state` derives the effect from live
+binding status; **t-ron** is the defining case (binding `native→absent`, effect
+`full→degraded` — the fail-closed confirm gate, never silent-allow). `/seams` now
+renders both axes + the live effect line; computed, not narrated, so doc and binary
+can't drift. New [architecture note 002](../architecture/002-capability-ladder.md).
+199 assertions (+12). Pin unchanged (6.2.15).
 **0.6.4** — toolchain refresh + aarch64 lane lights up, 2026-06-16: the source
 pin moves 6.1.38 → **6.2.15** (`lib/` re-synced via `cyrius lib sync`, 97 floor
 modules; no thoth source change), clearing the drift warning. The **aarch64 Linux**
@@ -234,7 +243,12 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   **0.5.1:** `/reset`, `/state` shows the multi-turn context + count; **0.6.0:**
   free-text turns route to the agentic loop when `agent_enabled`, `/state` shows
   the agent mode; **0.6.2:** `/models` lists the hoosh gateway's catalog).
-- `src/seams.cyr` — the capability-seam registry; statuses fully dynamic.
+- `src/seams.cyr` — the capability-seam registry; statuses fully dynamic. **0.6.5
+  (M6 ladder):** adds the **capability-effect** dimension (`CapState`
+  full/degraded/absent) on top of the binding mode — `seam_cap_state` derives it
+  from live status (t-ron degrades closed, never absent), `seam_cap_full` /
+  `seam_cap_fallback` carry the prose; `cmd_seams` renders both axes. See
+  [architecture note 002](../architecture/002-capability-ladder.md).
 - `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
   persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
   `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
@@ -294,7 +308,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **180 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **199 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -319,7 +333,10 @@ bundle is DCE-unreachable).
   tool advertisement formatting, `tool_calls` parsing (id/name/arguments + the
   no-calls case), the raw tool_calls extractor, the agentic request shape,
   `agent_enabled` gating, and (**0.6.1**) the streamed delta assembly (fragmented
-  `arguments` reassembled, re-parsed through the same accessors). Passes on
+  `arguments` reassembled, re-parsed through the same accessors); and **0.6.5's**
+  capability-ladder group — the effect-state resolver (vendored seams full,
+  hoosh/daimon absent unconfigured, t-ron degrades closed not absent), the
+  `cap_state_label` cases, and the full/fallback prose semantics. Passes on
   `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.

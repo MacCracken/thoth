@@ -66,9 +66,10 @@ whole spine is native._
       announced, never faked — M2 posture, made fully real by M4 (0.3.0):
       wired t-ron denies by default; absent t-ron prompts deny-by-default
 - [x] avatara Thoth/Librarian archetype overlay applied — M5 (0.4.0)
-- [ ] Capability ladder documented and honest (per dependency:
+- [x] Capability ladder documented and honest (per dependency:
       native vs. remote-client vs. absent; full / degraded / absent
-      semantics)
+      semantics) — M6 (0.6.5); computed live from `src/seams.cyr`, see
+      [architecture note 002](../architecture/002-capability-ladder.md)
 - [ ] At least one downstream consumer green **on AGNOS**
 - [ ] CHANGELOG complete from the first real release onward
 - [ ] Security review pass
@@ -118,10 +119,12 @@ with **0.6.3**; the rest is open.
   sits behind it); Windows hits `SYS_FUTEX` first (patra's mutex; Win uses
   `WaitOnAddress`), then the epoll gap. Each lights up with zero thoth source change
   once its gap closes.
-- ☐ **Capability-ladder / feature-gate matrix**: per dependency, native vs.
-  remote-client vs. absent, with **full / degraded / absent** semantics defined
-  and kept honest so it can't drift and mislead. (The target matrix in `state.md`
-  is the start; the per-capability ladder is still owed.)
+- ✅ **Capability-ladder / feature-gate matrix** (0.6.5): per dependency, the
+  binding mode (native / remote-client / absent) **and** the orthogonal capability
+  effect (**full / degraded / absent**), derived live from the seam status so it
+  can't drift — t-ron degrades *closed* (the fail-closed gate), never to absent.
+  `/seams` renders both axes; [architecture note 002](../architecture/002-capability-ladder.md)
+  records the invariant.
 - ☐ Confirm: identical agent UX everywhere; AGNOS is the only parity promise.
 
 ### M7 — Release readiness (provisional)

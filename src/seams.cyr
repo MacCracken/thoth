@@ -81,6 +81,68 @@ fn seam_status_label(st) {
     return "absent";
 }
 
+# --- Capability ladder: the full / degraded / absent effect dimension (M6). ---
+#
+# The binding mode above (native / remote-client / absent) says HOW a seam is
+# reached. This second dimension says WHAT the user actually gets — the honest
+# capability ladder. The two are distinct: a seam can be ABSENT at the binding
+# layer yet still DEGRADED (not absent) at the capability layer, because thoth
+# stands a fail-closed fallback in its place. t-ron is exactly that case — no
+# policy means the built-in confirm gate, never a silent allow. This mapping is
+# derived from the LIVE binding status (seam_status), so the ladder cannot drift
+# away from what the binary actually does.
+
+# What a capability delivers, by effect.
+enum CapState {
+    CAP_ABSENT = 0;     # the capability is gone; announced, never faked
+    CAP_DEGRADED = 1;   # a reduced, fail-closed fallback stands in; announced
+    CAP_FULL = 2;       # the capability is fully present
+}
+
+# cap_state_label: human label for a capability effect.
+fn cap_state_label(c) {
+    if (c == CAP_FULL) { return "full"; }
+    if (c == CAP_DEGRADED) { return "degraded"; }
+    return "absent";
+}
+
+# seam_cap_state: the live capability effect, derived from the binding status.
+#  - bote / avatara are NATIVE by construction -> always FULL.
+#  - hoosh / daimon are FULL when wired (remote), else ABSENT (no fallback —
+#    no inference and no tool host can be faked).
+#  - t-ron is FULL when its policy loads (native), else DEGRADED: the built-in
+#    fail-closed confirm gate stands in. Security degrades CLOSED, never to
+#    ABSENT — there is no state in which an action is silently allowed.
+fn seam_cap_state(id) {
+    if (id == SEAM_TRON) {
+        if (seam_status(id) == SEAM_NATIVE) { return CAP_FULL; }
+        return CAP_DEGRADED;
+    }
+    if (seam_status(id) == SEAM_ABSENT) { return CAP_ABSENT; }
+    return CAP_FULL;
+}
+
+# seam_cap_full: what the seam delivers at FULL capability.
+fn seam_cap_full(id) {
+    if (id == SEAM_HOOSH) { return "free-text turns route to a backing model; mid-session /model switch"; }
+    if (id == SEAM_DAIMON) { return "MCP tool registry (/tools) + execution (/call); the agentic loop"; }
+    if (id == SEAM_BOTE) { return "MCP protocol framing, in-process"; }
+    if (id == SEAM_TRON) { return "per-tool authorization on /run, /write, /call; deny is final"; }
+    if (id == SEAM_AVATARA) { return "the Thoth/Librarian archetype steers every turn"; }
+    return "?";
+}
+
+# seam_cap_fallback: what stands in when the seam is NOT at FULL — the honest
+# degraded/absent behaviour. "n/a" for the always-native vendored seams.
+fn seam_cap_fallback(id) {
+    if (id == SEAM_HOOSH) { return "absent: no model turns - local REPL commands only (set [hoosh].url)"; }
+    if (id == SEAM_DAIMON) { return "absent: no tools - /tools, /call, the agentic loop report absent"; }
+    if (id == SEAM_BOTE) { return "n/a: vendored, native by construction"; }
+    if (id == SEAM_TRON) { return "degraded: built-in fail-closed confirm gate (deny/prompt); never silent allow"; }
+    if (id == SEAM_AVATARA) { return "n/a: vendored, native by construction"; }
+    return "?";
+}
+
 # seam_any_wired: 1 if any seam is reachable (remote or native), else 0.
 fn seam_any_wired() {
     var i = 0;
@@ -92,17 +154,31 @@ fn seam_any_wired() {
     return wired;
 }
 
-# cmd_seams: render the capability ladder. I/O — not unit-tested.
+# cmd_seams: render the capability ladder — two dimensions per seam: the binding
+# mode (how it's reached) and the capability effect (what you get). I/O — the
+# pure accessors it composes are unit-tested; this renderer is not.
 fn cmd_seams() {
     println("capability ladder - the AGNOS spine thoth drives:");
+    println("  per seam: [binding mode] [capability effect] domain; then the live effect.");
     var i = 0;
     while (i < SEAM_COUNT) {
+        # binding row: name, binding mode, capability effect, domain.
         emit("  ");
         emit(seam_name(i));
         emit("  [");
         emit(seam_status_label(seam_status(i)));
+        emit("]  [");
+        emit(cap_state_label(seam_cap_state(i)));
         emit("]  ");
         println(seam_domain(i));
+        # effect row: full delivers / fallback when not full.
+        if (seam_cap_state(i) == CAP_FULL) {
+            emit("      full:     ");
+            println(seam_cap_full(i));
+        } else {
+            emit("      now:      ");
+            println(seam_cap_fallback(i));
+        }
         i = i + 1;
     }
     println("");
@@ -111,6 +187,7 @@ fn cmd_seams() {
     } else {
         println("  remote seams ride sandhi; native seams are vendored dist bundles.");
         println("  absent seams degrade honestly — never faked, never reimplemented.");
+        println("  security degrades CLOSED: absent t-ron is the fail-closed gate, never a silent allow.");
     }
     println("  port the floor; never fork the spine.");
     return 0;

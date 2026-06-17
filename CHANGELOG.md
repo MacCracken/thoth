@@ -4,6 +4,43 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-06-16
+
+**M6 capability ladder — the full / degraded / absent dimension.** The seam
+registry already reported each spine seam's **binding mode** (native /
+remote-client / absent — *how* it's reached). This release adds the second,
+orthogonal dimension the M6 ladder owed: the **capability effect** (full /
+degraded / absent — *what the user actually gets*), and the two cannot be inferred
+from each other. A seam can be `absent` at the binding layer yet `degraded` (not
+`absent`) at the capability layer when thoth stands a fail-closed fallback in its
+place — the whole point of "fails closed, announced, never faked" lives in that
+gap. The defining case is **t-ron**: its binding goes `native → absent`, but its
+capability effect goes `full → degraded` (the built-in confirm gate), never to
+`absent`. There is no reachable state in which an action is silently allowed.
+
+The ladder is **computed, not narrated**: `seam_cap_state(id)` resolves the effect
+from the live binding status, so `/seams` and the binary can't drift from the doc.
+`/seams` now renders both dimensions per seam plus the live effect line. 199 unit
+assertions (+12). Toolchain pin unchanged (Cyrius 6.2.15).
+
+### Added
+- **Capability-effect dimension** in `src/seams.cyr`: `CapState`
+  (full/degraded/absent), `seam_cap_state` (derives effect from live binding
+  status; t-ron special-cased to degrade closed, never absent), `seam_cap_full`
+  (what FULL delivers) and `seam_cap_fallback` (the degraded/absent stand-in), plus
+  `cap_state_label`.
+- **[architecture note 002](docs/architecture/002-capability-ladder.md)** — the
+  binding-mode × capability-effect invariant, the per-seam ladder table, and the
+  "computed, not narrated" enforcement rule.
+- **`test_capability_ladder`** in `tests/thoth.tcyr` — asserts the effect states
+  (vendored seams full; hoosh/daimon absent unconfigured; t-ron degrades closed)
+  and the fallback semantics. +12 assertions (199 total).
+
+### Changed
+- **`/seams`** now renders two dimensions per seam — `[binding] [effect] domain`,
+  then the live effect line (what FULL delivers, or the degraded/absent stand-in) —
+  with a closing note that security degrades CLOSED.
+
 ## [0.6.4] - 2026-06-16
 
 **Toolchain refresh to Cyrius 6.2.15 — and aarch64 Linux joins the build matrix.**
@@ -48,9 +85,10 @@ cycc fix lands. So macOS is "builds + runs, audit path gated upstream."
 
 ### Fixed
 - **Banner/`/state` version drift** — two hardcoded `thoth 0.6.3` strings
-  (`src/session.cyr` startup banner, `src/commands.cyr` `/state` build line) were
-  bumped to `0.6.4`. Surfaced by the macOS smoke test (the running binary announced
-  a stale version). Version-sync now covers these in-source strings too.
+  (`src/session.cyr` startup banner, `src/commands.cyr` `/state` build line) had
+  fallen behind the `VERSION` file. Surfaced by the macOS smoke test (the running
+  binary announced a stale version). Now kept in sync with `VERSION` as part of the
+  per-release version-sync step (they ride forward to the current release number).
 
 ## [0.6.3] - 2026-06-12
 
