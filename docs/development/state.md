@@ -183,9 +183,9 @@ source. Status as of 0.6.4 (Cyrius 6.2.15) — see
 |---|---|---|---|
 | x86_64 Linux | _(default)_ | **shipped** — built, tested (187), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (since 0.6.4 / Cyrius v6.2.2) — cross-built, not yet ARM-run-tested | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **builds + runs** natively (verified on Apple Silicon); audit path gated upstream | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **staged, blocked upstream** (`SYS_LSEEK`, filed) | `build/thoth_agnos` |
 | Windows | `--win` | **staged, blocked upstream** (`SYS_FUTEX`, then epoll) | `build/thoth.exe` |
-| macOS | _(Mac host)_ | future (M6) — native Mach-O on a macOS runner | — |
 
 **aarch64 (unblocked, 0.6.4):** `cyrius build --aarch64` now produces a valid
 statically-linked ARM ELF. It had been blocked on a cycc `#pure`/aarch64 pass-1
@@ -211,6 +211,16 @@ with zero thoth change once the floor gains `lseek` (+ futex). Corroboration:
 futex — it uses `WaitOnAddress`), and behind it the sandhi/epoll gap. Both are
 by-design Win32 differences, not raw-syscall-mappable; `scripts/build.sh` lists
 `SYS_FUTEX` among its sanctioned best-effort gaps so the lane warns honestly.
+
+**macOS (builds + runs, audit path gated upstream):** built natively on an Apple
+Silicon host (Cyrius emits Mach-O there; cross-emit from Linux is not the path),
+`./scripts/build.sh macos` produces `build/thoth_macos` (Mach-O arm64) which
+launches the REPL and exits cleanly — **verified 0.6.4**. cycc emits ~86 "syscall
+not routed by the Mach-O ARM translation (ESYSXLAT/__got)" warnings: the
+`var SYS_*; syscall(SYS_*,…)` first arg doesn't const-fold, so the reroute misses
+(upstream cyrius issue `2026-06-16-var-syscall-number-defeats-macho-pe-reroute`).
+The basic driver path is fine; patra's `lseek`/`futex` (t-ron's audit ledger) will
+fault at runtime once a `[tron].policy` is configured, until that cycc fix lands.
 
 ## Source
 

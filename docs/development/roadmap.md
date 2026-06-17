@@ -105,13 +105,19 @@ with **0.6.3**; the rest is open.
   (filed `cyrius/.../2026-06-12-main-aarch64-pass1-missing-annotation-tokens-unexpected-enum`)
   landed upstream in **Cyrius v6.2.2**; the 0.6.4 pin bump picked it up with zero
   thoth change. Cross-built; running on real ARM hardware is a host-side step.
-- ☐ **AGNOS, Windows, macOS** — staged in the driver, each blocked on a named
-  upstream gap: AGNOS needs `SYS_LSEEK` in its syscall floor (**filed**:
+- ◐ **macOS (arm64)** builds + runs natively (verified 0.6.4 on Apple Silicon):
+  `./scripts/build.sh macos` → `build/thoth_macos`, REPL launches and exits clean.
+  The basic driver path works; the **t-ron audit path is gated upstream** — cycc's
+  `var SYS_*` Mach-O reroute miss (issue
+  `cyrius/.../2026-06-16-var-syscall-number-defeats-macho-pe-reroute`) means patra's
+  `lseek`/`futex` fault at runtime once a `[tron].policy` is set. Closes with that
+  cycc fix, zero thoth change.
+- ☐ **AGNOS, Windows** — staged in the driver, each blocked on a named upstream gap:
+  AGNOS needs `SYS_LSEEK` in its syscall floor (**filed**:
   `agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`; a second gap `SYS_FUTEX`
   sits behind it); Windows hits `SYS_FUTEX` first (patra's mutex; Win uses
-  `WaitOnAddress`), then the epoll gap; macOS is a native Mach-O build on a macOS
-  runner (cross-emit from Linux is not the path). Each lights up with zero thoth
-  source change once its gap closes.
+  `WaitOnAddress`), then the epoll gap. Each lights up with zero thoth source change
+  once its gap closes.
 - ☐ **Capability-ladder / feature-gate matrix**: per dependency, native vs.
   remote-client vs. absent, with **full / degraded / absent** semantics defined
   and kept honest so it can't drift and mislead. (The target matrix in `state.md`

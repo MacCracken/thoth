@@ -25,6 +25,17 @@ gap surfaced (not faked) by the build driver:
   `scripts/build.sh` now recognizes `SYS_FUTEX` as a sanctioned best-effort gap so
   the lane warns cleanly instead of reading as a regression.
 
+**macOS builds and runs natively on Apple Silicon (verified).** Built on a macOS
+arm64 host (Cyrius emits Mach-O there; cross-emit from Linux is not the path),
+`./scripts/build.sh macos` produces `build/thoth_macos` (Mach-O arm64), and it
+launches the REPL and exits cleanly. **Caveat, honestly flagged:** cycc emits ~86
+"syscall not routed by the Mach-O ARM translation (ESYSXLAT/__got)" warnings — the
+`var SYS_*; syscall(SYS_*,…)` first-arg-doesn't-const-fold reroute miss (upstream
+cyrius issue `2026-06-16-var-syscall-number-defeats-macho-pe-reroute`). The basic
+driver path is unaffected, but patra's `lseek`/`futex` calls (the t-ron audit
+ledger) will **fault at runtime** when a `[tron].policy` is configured, until that
+cycc fix lands. So macOS is "builds + runs, audit path gated upstream."
+
 187 unit assertions pass (unchanged) under the new pin; Linux ships as before.
 
 ### Changed
@@ -34,6 +45,12 @@ gap surfaced (not faked) by the build driver:
   Cyrius v6.2.2); `SYS_FUTEX` added to the sanctioned `KNOWN_GAP` set so the
   Windows/AGNOS best-effort lanes warn on it instead of failing as a regression;
   header target notes refreshed (AGNOS lseek issue now filed).
+
+### Fixed
+- **Banner/`/state` version drift** — two hardcoded `thoth 0.6.3` strings
+  (`src/session.cyr` startup banner, `src/commands.cyr` `/state` build line) were
+  bumped to `0.6.4`. Surfaced by the macOS smoke test (the running binary announced
+  a stale version). Version-sync now covers these in-source strings too.
 
 ## [0.6.3] - 2026-06-12
 
