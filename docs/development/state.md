@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.6.4** — toolchain refresh + aarch64 lane lights up, 2026-06-16: the source
+pin moves 6.1.38 → **6.2.15** (`lib/` re-synced via `cyrius lib sync`, 97 floor
+modules; no thoth source change), clearing the drift warning. The **aarch64 Linux**
+target now **builds** (`build/thoth_aarch64`, a valid statically-linked ARM ELF) —
+the cycc `#pure`/aarch64 pass-1 scanner gap that blocked it closed upstream in
+Cyrius **v6.2.2**, so the lane lights up with zero thoth change. AGNOS stays blocked
+on `SYS_LSEEK` — now **filed upstream**
+(`agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`), with a second gap
+(`SYS_FUTEX`, patra's mutex) behind it. Windows now surfaces `SYS_FUTEX` first
+(Win uses `WaitOnAddress`); `scripts/build.sh` recognizes it as a sanctioned
+best-effort gap. 187 assertions (unchanged). Pin **6.2.15**.
 **0.6.3** — multi-target builds (M6) + per-tool input schemas, 2026-06-12:
 `scripts/build.sh` is the build driver that fans one source tree to targets
 (`linux`|`agnos`|`all`); **x86_64 Linux ships** as a named target (`build/thoth`).
@@ -17,9 +28,9 @@ faked. Also: daimon **1.2.7** emits `inputSchema` per MCP tool, so
 `function.parameters` instead of a permissive `{"type":"object"}` guess — the
 model now sees each tool's real argument shape (closing daimon issue
 `2026-06-11-mcp-manifest-omits-tool-input-schema`; backward-compatible).
-187 assertions. Pin unchanged (6.1.38). See [ADR-0008](../adr/0008-multi-target-builds.md).
-NB: M6 macOS/aarch64 builds remain paused pending the filed cycc fix
-(`#pure`/aarch64 pass-1 scanner); see below.
+187 assertions. Pin 6.1.38 at the time. See [ADR-0008](../adr/0008-multi-target-builds.md).
+NB superseded by 0.6.4: the cycc `#pure`/aarch64 pass-1 scanner fix landed in
+Cyrius v6.2.2 and aarch64 now builds; macOS remains a Mac-host build.
 **0.6.2** — model catalog, 2026-06-12: `/models` asks the hoosh gateway for its
 catalog (GET `/v1/models`, OpenAI-compatible) and lists every model id, marking
 the session's active routing target — the mid-session `/model` switch now has a
@@ -130,8 +141,13 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.1.38` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc` (0.2.1 took 6.1.23 → 6.1.32 with the 6.1.25 bayan
+- **Cyrius pin**: `6.2.15` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc`. **0.6.4** took 6.1.38 → 6.2.15 — a toolchain refresh:
+  `cyrius lib sync` re-synced 97 floor modules (incl. new `*_agnos` peer-splits and
+  the expanded `tls_native_*` set from the 6.2.7 agnos-completeness pass); floor-only
+  churn, no thoth source change, 187 assertions unchanged. This is the refresh that
+  lit up aarch64 (the cycc `#pure`/pass-1 scanner fix landed in v6.2.2). History
+  (each matching the then-installed `cycc`): 0.2.1 took 6.1.23 → 6.1.32 with the 6.1.25 bayan
   data-domain carve; 0.3.0 took 6.1.33 — dep-resolver CVE hardening; 0.4.0 was on
   6.1.34, no stdlib migration; **0.4.1** took 6.1.34 → 6.1.37 — forced by a cycc
   guarded-`include` behavior change that fired sigil's redundant `src/sha_ni.cyr`
@@ -159,27 +175,42 @@ floor; never fork the spine.**
 ## Targets (build matrix)
 
 The one source tree fans out to targets at **build time** via the build driver
-`scripts/build.sh` (`linux` | `agnos` | `all`); no per-OS source. Status as of
-0.6.3 — see [ADR-0008](../adr/0008-multi-target-builds.md):
+`scripts/build.sh` (`linux` | `win` | `aarch64` | `agnos` | `all`); no per-OS
+source. Status as of 0.6.4 (Cyrius 6.2.15) — see
+[ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (186), released | `build/thoth` |
-| AGNOS (x86_64) | `--agnos` | **staged, blocked upstream** | `build/thoth_agnos` |
-| aarch64 Linux | `--aarch64` | future (M6) | — |
-| macOS | _(floor present)_ | future (M6) | — |
-| Windows | `--win` | future (M6) | — |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (187), released | `build/thoth` |
+| aarch64 Linux | `--aarch64` | **builds** (since 0.6.4 / Cyrius v6.2.2) — cross-built, not yet ARM-run-tested | `build/thoth_aarch64` |
+| AGNOS (x86_64) | `--agnos` | **staged, blocked upstream** (`SYS_LSEEK`, filed) | `build/thoth_agnos` |
+| Windows | `--win` | **staged, blocked upstream** (`SYS_FUTEX`, then epoll) | `build/thoth.exe` |
+| macOS | _(Mac host)_ | future (M6) — native Mach-O on a macOS runner | — |
+
+**aarch64 (unblocked, 0.6.4):** `cyrius build --aarch64` now produces a valid
+statically-linked ARM ELF. It had been blocked on a cycc `#pure`/aarch64 pass-1
+scanner bug (filed
+`cyrius/.../2026-06-12-main-aarch64-pass1-missing-annotation-tokens-unexpected-enum`),
+**resolved upstream in Cyrius v6.2.2**; the 0.6.4 pin bump picked it up with zero
+thoth change. Cross-built here; running it on real ARM hardware is a host-side step.
 
 **AGNOS block (upstream, not thoth):** `cyrius build --agnos` does not link —
-`patra.cyr` references `SYS_LSEEK`, absent from `syscalls_x86_64_agnos.cyr`
-across Cyrius 6.1.38 → 6.2.0 (present on linux/macos/windows/aarch64). The chain:
-thoth → t-ron audit → libro `patra_store` → patra `_pt_seek` → `SYS_LSEEK`. patra
-(an embedded SQL store) must seek within its DB file to persist the audit ledger.
-This is a **floor** gap in the Cyrius stdlib; fixing it is out of this repo, and
-neither forking the floor nor cutting the t-ron audit chain on AGNOS is taken.
-The AGNOS lane lights up with zero thoth changes once the floor gains `lseek`.
-Corroboration: `kriya`/`klug` ship AGNOS and use no `patra`; only `hoosh`/`thoth`
-depend on it.
+`patra.cyr` references `SYS_LSEEK`, absent from `syscalls_x86_64_agnos.cyr` (present
+on linux/macos/windows/aarch64). The chain: thoth → t-ron audit → libro
+`patra_store` → patra `_pt_seek` → `SYS_LSEEK`. patra (an embedded SQL store) must
+seek within its DB file to persist the audit ledger. This is a **floor** gap in the
+AGNOS syscall surface; neither forking the floor nor cutting the t-ron audit chain
+on AGNOS is taken. **Filed upstream** (0.6.4):
+`agnos/docs/development/issues/2026-06-16-cyrius-patra-lseek-syscall-gap.md`. A
+second AGNOS gap (`SYS_FUTEX`, patra's mutex) sits behind it. The lane lights up
+with zero thoth change once the floor gains `lseek` (+ futex). Corroboration:
+`kriya`/`klug` ship AGNOS and use no `patra`; only `hoosh`/`thoth` depend on it.
+
+**Windows block (upstream, not thoth):** under the 6.2.15 floor, `cyrius build
+--win` first hits `SYS_FUTEX` (patra's `_patra_lock` mutex; Windows has no raw
+futex — it uses `WaitOnAddress`), and behind it the sandhi/epoll gap. Both are
+by-design Win32 differences, not raw-syscall-mappable; `scripts/build.sh` lists
+`SYS_FUTEX` among its sanctioned best-effort gaps so the lane warns honestly.
 
 ## Source
 

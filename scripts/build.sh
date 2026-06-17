@@ -16,16 +16,20 @@
 #            from Linux is NOT the path (the ecosystem uses a macOS runner).
 #                                                                    build/thoth_macos
 #   win      Windows x86_64 — cross via cycc_win (`cyrius build --win`).
-#            BEST-EFFORT: thoth's sandhi server references epoll, which the
-#            Windows floor has no Win32 equivalent for (by design). Until the
-#            stdlib gates that one symbol (cyrius 2026-05-10 async-epoll issue,
-#            the same gap daimon's aarch64 lane rides), this lane WARNS on that
-#            specific error and continues — no feature removed; the .exe ships
-#            automatically when the gate lands.                      build/thoth.exe
-#   aarch64  aarch64 Linux — cross via --aarch64. BEST-EFFORT, same epoll-class
-#            stdlib gap.                                             build/thoth_aarch64
-#   agnos    AGNOS (early-demo OS) — staged (0.6.3); its floor still lacks lseek.
-#            BEST-EFFORT.                                            build/thoth_agnos
+#            BEST-EFFORT: the Windows floor lacks POSIX primitives the stdlib
+#            composes on — `SYS_FUTEX` (patra's mutex; Win uses WaitOnAddress)
+#            surfaces first under the 6.2.15 floor, behind it the sandhi/epoll
+#            gap. Both are by-design Win32 differences with no raw-syscall
+#            equivalent; this lane WARNS on those specific symbols and continues
+#            — no feature removed; the .exe ships when the floor gates them.
+#                                                                    build/thoth.exe
+#   aarch64  aarch64 Linux — cross via --aarch64. BUILDS as of cyrius 6.2.15
+#            (the cycc #pure/pass-1 scanner gap closed in v6.2.2); still run as a
+#            best-effort lane so a future floor regression stays visible.
+#                                                                    build/thoth_aarch64
+#   agnos    AGNOS (early-demo OS) — staged (0.6.3); its floor still lacks lseek
+#            (filed: agnos 2026-06-16-cyrius-patra-lseek-syscall-gap) — and, behind
+#            it, futex. BEST-EFFORT.                                build/thoth_agnos
 #
 # Usage:
 #   ./scripts/build.sh                 # host-appropriate default (macos on a Mac, else linux)
@@ -47,7 +51,7 @@ mkdir -p "$OUT"
 # The known, sanctioned stdlib portability gaps a best-effort lane may ride
 # (and ONLY these). A lane that fails on one of these warns + continues; any
 # other error fails the lane. Keep this list tight so real breakage surfaces.
-KNOWN_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_LSEEK'
+KNOWN_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_LSEEK|SYS_FUTEX'
 
 is_macos_host() { [ "$(uname -s 2>/dev/null)" = "Darwin" ]; }
 

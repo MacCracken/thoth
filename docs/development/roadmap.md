@@ -13,9 +13,11 @@
 > native; one fail-closed authorization choke point), and the M5 avatara overlay
 > are all live, so **all five spine seams are wired**, with the model-driven
 > agentic tool-calling loop (0.6.0) running on top. **M6 is in progress** —
-> multi-target builds began with the Linux target shipping (0.6.3). What remains
-> below is **provisional**: ordering, version labels, and dep gates may still
-> move. Treat the unshipped milestones as direction, not commitment.
+> multi-target builds began with the Linux target shipping (0.6.3), and **aarch64
+> Linux joined as a building lane in 0.6.4** (on the Cyrius 6.2.15 refresh). AGNOS,
+> Windows, and macOS remain staged, each gated on a named upstream floor gap. What
+> remains below is **provisional**: ordering, version labels, and dep gates may
+> still move. Treat the unshipped milestones as direction, not commitment.
 
 ## Framing (read first)
 
@@ -99,12 +101,17 @@ Ratify the reach posture and make degradation explicit. The build driver
 with **0.6.3**; the rest is open.
 
 - ✅ **x86_64 Linux** ships as a named target (0.6.3).
-- ☐ **AGNOS, macOS, Windows, aarch64** — staged in the driver, each blocked on a
-  named upstream gap: AGNOS needs `SYS_LSEEK` in its syscall floor; macOS/aarch64
-  need the cycc `#pure`/aarch64 pass-1 scanner fix (filed
-  `cyrius/.../2026-06-12-main-aarch64-pass1-missing-annotation-tokens-unexpected-enum`);
-  Windows needs an epoll equivalent (or the sandhi server pruned per target).
-  Each lights up with zero thoth source change once its gap closes.
+- ✅ **aarch64 Linux** builds (0.6.4) — the cycc `#pure`/aarch64 pass-1 scanner fix
+  (filed `cyrius/.../2026-06-12-main-aarch64-pass1-missing-annotation-tokens-unexpected-enum`)
+  landed upstream in **Cyrius v6.2.2**; the 0.6.4 pin bump picked it up with zero
+  thoth change. Cross-built; running on real ARM hardware is a host-side step.
+- ☐ **AGNOS, Windows, macOS** — staged in the driver, each blocked on a named
+  upstream gap: AGNOS needs `SYS_LSEEK` in its syscall floor (**filed**:
+  `agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`; a second gap `SYS_FUTEX`
+  sits behind it); Windows hits `SYS_FUTEX` first (patra's mutex; Win uses
+  `WaitOnAddress`), then the epoll gap; macOS is a native Mach-O build on a macOS
+  runner (cross-emit from Linux is not the path). Each lights up with zero thoth
+  source change once its gap closes.
 - ☐ **Capability-ladder / feature-gate matrix**: per dependency, native vs.
   remote-client vs. absent, with **full / degraded / absent** semantics defined
   and kept honest so it can't drift and mislead. (The target matrix in `state.md`

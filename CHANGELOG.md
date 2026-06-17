@@ -4,6 +4,37 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-06-16
+
+**Toolchain refresh to Cyrius 6.2.15 — and aarch64 Linux joins the build matrix.**
+The source pin moves 6.1.38 → **6.2.15** (`cyrius.cyml` + a `lib/` re-sync via
+`cyrius lib sync` — 97 floor modules, no thoth source change), clearing the
+toolchain-drift warning. The headline: the **aarch64 Linux** lane now **builds a
+binary** (`build/thoth_aarch64`, a valid statically-linked ARM ELF). It had been
+staged-blocked on a cycc `#pure`/aarch64 pass-1 scanner bug; that fix landed
+upstream in **Cyrius v6.2.2**, so the lane lights up with zero thoth change — the
+"port the floor; never fork the spine" posture paying off exactly as designed.
+
+The remaining cross targets stay honestly gated, each on a named upstream floor
+gap surfaced (not faked) by the build driver:
+- **AGNOS** — still blocked on `SYS_LSEEK` (the patra audit-store seek). Now
+  **filed upstream**: `agnos/docs/development/issues/2026-06-16-cyrius-patra-lseek-syscall-gap.md`.
+  A second gap (`SYS_FUTEX`, patra's mutex) sits behind it.
+- **Windows** — the 6.2.15 floor surfaces `SYS_FUTEX` first (patra's mutex; Windows
+  uses `WaitOnAddress`, no raw-syscall equivalent), behind it the sandhi/epoll gap.
+  `scripts/build.sh` now recognizes `SYS_FUTEX` as a sanctioned best-effort gap so
+  the lane warns cleanly instead of reading as a regression.
+
+187 unit assertions pass (unchanged) under the new pin; Linux ships as before.
+
+### Changed
+- **`cyrius.cyml`** — `[package].cyrius` pin `6.1.38` → `6.2.15`; `lib/` re-synced
+  to the pin (floor-only churn, no source change).
+- **`scripts/build.sh`** — aarch64 documented as a building lane (gap closed in
+  Cyrius v6.2.2); `SYS_FUTEX` added to the sanctioned `KNOWN_GAP` set so the
+  Windows/AGNOS best-effort lanes warn on it instead of failing as a regression;
+  header target notes refreshed (AGNOS lseek issue now filed).
+
 ## [0.6.3] - 2026-06-12
 
 **Multi-target builds begin (M6): Linux first, honestly.** thoth is OS-agnostic
