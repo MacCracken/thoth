@@ -113,12 +113,19 @@ with **0.6.3**; the rest is open.
   `cyrius/.../2026-06-16-var-syscall-number-defeats-macho-pe-reroute`) means patra's
   `lseek`/`futex` fault at runtime once a `[tron].policy` is set. Closes with that
   cycc fix, zero thoth change.
-- ☐ **AGNOS, Windows** — staged in the driver, each blocked on a named upstream gap:
-  AGNOS needs `SYS_LSEEK` in its syscall floor (**filed**:
-  `agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`; a second gap `SYS_FUTEX`
-  sits behind it); Windows hits `SYS_FUTEX` first (patra's mutex; Win uses
-  `WaitOnAddress`), then the epoll gap. Each lights up with zero thoth source change
-  once its gap closes.
+- ☐ **AGNOS, Windows** — staged in the driver (re-verified at the 6.2.37 floor,
+  0.6.6). Two of the symbols the lanes hit are **fixable upstream bugs**, not
+  capability gaps:
+  - AGNOS's old `SYS_LSEEK` blocker is **RESOLVED** (6.2.37 agnos peer defines
+    `SYS_LSEEK=58`/`SYS_GETRANDOM=45`; closes the filed lseek issue). It now gates
+    on `SIGHUP` — agnos signal infra is DONE (`sigprocmask`#17/`signalfd`#18); the
+    peer just omits the signal-number constants. **Filed**
+    (`agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md`).
+  - Windows `SYS_GETRANDOM` is **fixed** — Windows has ProcessPrng; the raw-syscall
+    call was a patra bug, **fixed in patra v1.12.4**. thoth's lane clears on the
+    toolchain re-bundle. The genuine, *architectural* Windows gaps are `SYS_FUTEX`
+    (`WaitOnAddress`) + epoll (IOCP).
+  Each lights up with zero thoth source change once its gap closes.
 - ✅ **Capability-ladder / feature-gate matrix** (0.6.5): per dependency, the
   binding mode (native / remote-client / absent) **and** the orthogonal capability
   effect (**full / degraded / absent**), derived live from the seam status so it

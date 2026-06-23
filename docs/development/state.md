@@ -7,12 +7,22 @@
 
 ## Version
 
+**0.6.7** — cross-target re-verification of the 6.2.37 floor + getrandom root cause,
+2026-06-23: re-ran `./scripts/build.sh all` on x86_64 Linux. Two symbols the gated
+lanes hit are **fixable upstream bugs, not capability gaps** (correcting an earlier
+"known gap" misread): **Windows `SYS_GETRANDOM`** — Windows HAS ProcessPrng via the
+`sys_getrandom()` wrapper; patra issued a raw Linux `syscall(SYS_GETRANDOM,…)`, **fixed
+in patra v1.12.4**; and **AGNOS `SIGHUP`** — agnos signal infra is DONE
+(`sigprocmask`#17/`signalfd`#18), the peer just omits the signal-number constants,
+**filed**. AGNOS's old `SYS_LSEEK` blocker is RESOLVED (agnos peer now has it). aarch64
+re-confirmed building; macOS not re-run (Mac host). `scripts/build.sh` gap set split
+into `ARCH_GAP` (permanent: futex/epoll) vs `TRANSIENT_GAP` (getrandom/SIGHUP). No
+thoth runtime source change; 199 assertions. Pin unchanged (6.2.37).
 **0.6.6** — toolchain refresh to Cyrius 6.2.37, 2026-06-23: the source pin moves
 6.2.15 → **6.2.37** (`lib/` re-synced via `cyrius lib sync` — 98 floor modules,
 two new snapshot modules `protobuf`/`yantra`; no thoth source change), clearing the
 drift warning. 199 assertions (unchanged); x86_64 Linux builds + ships as before.
-Cross-target posture unchanged from 0.6.4/0.6.5 (aarch64 builds, macOS builds+runs
-with the audit path gated upstream, AGNOS/Windows honestly gated on named floor gaps).
+Cross-target re-verification of the new floor landed in 0.6.7 (above).
 **0.6.5** — M6 capability ladder (effect dimension), 2026-06-16: the seam registry
 gains the **full / degraded / absent capability-effect** dimension on top of the
 existing native/remote-client/absent **binding mode** — two orthogonal axes, the
@@ -194,46 +204,59 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. Status as of 0.6.4 (Cyrius 6.2.15) — see
-[ADR-0008](../adr/0008-multi-target-builds.md):
+source. Cross-target lanes re-verified at 0.6.6 (Cyrius 6.2.37) on this x86_64
+Linux host; the macOS lane was last verified 0.6.4 (its native Mach-O build needs a
+Mac host) — see [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (187), released | `build/thoth` |
-| aarch64 Linux | `--aarch64` | **builds** (since 0.6.4 / Cyrius v6.2.2) — cross-built, not yet ARM-run-tested | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **builds + runs** natively (verified on Apple Silicon); audit path gated upstream | `build/thoth_macos` |
-| AGNOS (x86_64) | `--agnos` | **staged, blocked upstream** (`SYS_LSEEK`, filed) | `build/thoth_agnos` |
-| Windows | `--win` | **staged, blocked upstream** (`SYS_FUTEX`, then epoll) | `build/thoth.exe` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (199), released | `build/thoth` |
+| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.6.6 / Cyrius 6.2.37) — valid static ARM ELF, not yet ARM-run-tested | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **builds + runs** natively (verified 0.6.4 on Apple Silicon; not re-run at 6.2.37); audit path gated upstream | `build/thoth_macos` |
+| AGNOS (x86_64) | `--agnos` | **staged** — old `SYS_LSEEK` blocker RESOLVED; now gated on `SIGHUP` (agnos signal infra DONE, peer just omits signal-number consts — **filed**, fixable) | `build/thoth_agnos` |
+| Windows | `--win` | **staged** — `SYS_GETRANDOM` is **fixed** (patra v1.12.4, transient lag); genuine remaining gaps are `SYS_FUTEX` + epoll (Win32 architectural) | `build/thoth.exe` |
 
-**aarch64 (unblocked, 0.6.4):** `cyrius build --aarch64` now produces a valid
-statically-linked ARM ELF. It had been blocked on a cycc `#pure`/aarch64 pass-1
-scanner bug (filed
+**aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
+produces a valid statically-linked ARM ELF (`file` → `ELF 64-bit … ARM aarch64`;
+exec-format error on the x86 host confirms it's genuinely cross). It had been
+blocked on a cycc `#pure`/aarch64 pass-1 scanner bug (filed
 `cyrius/.../2026-06-12-main-aarch64-pass1-missing-annotation-tokens-unexpected-enum`),
-**resolved upstream in Cyrius v6.2.2**; the 0.6.4 pin bump picked it up with zero
-thoth change. Cross-built here; running it on real ARM hardware is a host-side step.
+**resolved upstream in Cyrius v6.2.2**. Cross-built here; running it on real ARM
+hardware is a host-side step.
 
-**AGNOS block (upstream, not thoth):** `cyrius build --agnos` does not link —
-`patra.cyr` references `SYS_LSEEK`, absent from `syscalls_x86_64_agnos.cyr` (present
-on linux/macos/windows/aarch64). The chain: thoth → t-ron audit → libro
-`patra_store` → patra `_pt_seek` → `SYS_LSEEK`. patra (an embedded SQL store) must
-seek within its DB file to persist the audit ledger. This is a **floor** gap in the
-AGNOS syscall surface; neither forking the floor nor cutting the t-ron audit chain
-on AGNOS is taken. **Filed upstream** (0.6.4):
-`agnos/docs/development/issues/2026-06-16-cyrius-patra-lseek-syscall-gap.md`. A
-second AGNOS gap (`SYS_FUTEX`, patra's mutex) sits behind it. The lane lights up
-with zero thoth change once the floor gains `lseek` (+ futex). Corroboration:
-`kriya`/`klug` ship AGNOS and use no `patra`; only `hoosh`/`thoth` depend on it.
+**AGNOS block (upstream, not thoth) — the lseek gap RESOLVED at 6.2.37:** the
+old blocker (`patra.cyr` → `SYS_LSEEK`, the filed
+`agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`) is **closed** — the 6.2.37
+agnos peer `syscalls_x86_64_agnos.cyr` now defines `SYS_LSEEK = 58` (and
+`SYS_GETRANDOM = 45`). `cyrius build --agnos` now advances past patra and fails
+later, in vendored `src/vendor/t-ron.cyr:3436`, on **`SIGHUP`**. This is **not**
+"AGNOS has no signals": the agnos peer already defines `SYS_SIGPROCMASK=17` /
+`SYS_SIGNALFD=18` with wrappers (signal infra DONE per agnos `syscall-additions.md`),
+and t-ron's `sighup_init` uses exactly those. The peer merely omits the signal-NUMBER
+constants (`SIGHUP`, … — defined `SIGHUP=1 … SIGPWR=30` on the linux/macos/aarch64
+peers), so the bare `SIGHUP` literal can't resolve. A **fixable floor gap, filed**:
+`agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md` (the agnos
+ABI owner should confirm the numbers rather than have it guessed). Behind it sit
+`SYS_FUTEX`/epoll. The lane lights up once the agnos peer gains the signal enum.
 
-**Windows block (upstream, not thoth):** under the 6.2.15 floor, `cyrius build
---win` first hits `SYS_FUTEX` (patra's `_patra_lock` mutex; Windows has no raw
-futex — it uses `WaitOnAddress`), and behind it the sandhi/epoll gap. Both are
-by-design Win32 differences, not raw-syscall-mappable; `scripts/build.sh` lists
-`SYS_FUTEX` among its sanctioned best-effort gaps so the lane warns honestly.
+**Windows: `SYS_GETRANDOM` was a patra bug (now fixed), NOT a Win32 gap.** Windows
+has a CSPRNG — `bcryptprimitives!ProcessPrng`, wired as the `sys_getrandom()` peer
+wrapper. patra's `_wal_gen_salts` drew its WAL salts via a raw
+`syscall(SYS_GETRANDOM,…)` — a Linux-shaped call the Windows peer deliberately omits
+the constant for — so `--win` failed to link. **Fixed in patra v1.12.4**
+(`src/wal.cyr`, `#ifdef CYRIUS_TARGET_WIN` → `sys_getrandom()`; verified: patra builds
+`--win`, 834 Linux tests still pass). thoth's `--win` lane clears the moment the
+toolchain re-bundles patra ≥1.12.4. The genuine, **architectural** Windows gaps remain
+`SYS_FUTEX` (patra's mutex; Win uses `WaitOnAddress`) and the sandhi/epoll set (IOCP) —
+by-design Win32 differences with no raw-syscall equivalent. `scripts/build.sh` now
+separates these `ARCH_GAP`s from the transient `SYS_GETRANDOM`/`SIGHUP` lag.
 
 **macOS (builds + runs, audit path gated upstream):** built natively on an Apple
 Silicon host (Cyrius emits Mach-O there; cross-emit from Linux is not the path),
 `./scripts/build.sh macos` produces `build/thoth_macos` (Mach-O arm64) which
-launches the REPL and exits cleanly — **verified 0.6.4**. cycc emits ~86 "syscall
+launches the REPL and exits cleanly — **verified 0.6.4** (not re-run at 6.2.37:
+the native Mach-O build needs the Mac host, and the 0.6.6 cross-pass ran on
+x86_64 Linux). cycc emits ~86 "syscall
 not routed by the Mach-O ARM translation (ESYSXLAT/__got)" warnings: the
 `var SYS_*; syscall(SYS_*,…)` first arg doesn't const-fold, so the reroute misses
 (upstream cyrius issue `2026-06-16-var-syscall-number-defeats-macho-pe-reroute`).

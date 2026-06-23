@@ -16,20 +16,28 @@
 #            from Linux is NOT the path (the ecosystem uses a macOS runner).
 #                                                                    build/thoth_macos
 #   win      Windows x86_64 — cross via cycc_win (`cyrius build --win`).
-#            BEST-EFFORT: the Windows floor lacks POSIX primitives the stdlib
-#            composes on — `SYS_FUTEX` (patra's mutex; Win uses WaitOnAddress)
-#            surfaces first under the 6.2.15 floor, behind it the sandhi/epoll
-#            gap. Both are by-design Win32 differences with no raw-syscall
-#            equivalent; this lane WARNS on those specific symbols and continues
-#            — no feature removed; the .exe ships when the floor gates them.
+#            BEST-EFFORT. Under the 6.2.37 floor the vendored snapshot surfaces
+#            `SYS_GETRANDOM` first — but that is NOT a Win32 gap: Windows has a
+#            CSPRNG (ProcessPrng) and the fix landed in patra v1.12.4; it shows
+#            only because thoth's vendored patra lags the toolchain re-bundle
+#            (TRANSIENT_GAP). Behind it are the genuine ARCHITECTURAL gaps —
+#            `SYS_FUTEX` (Win uses WaitOnAddress) and the sandhi/epoll set (IOCP)
+#            — by-design Win32 differences with no raw-syscall equivalent. This
+#            lane WARNS on those symbols and continues; the .exe ships when the
+#            transient lag clears and the floor gates the architectural set.
 #                                                                    build/thoth.exe
 #   aarch64  aarch64 Linux — cross via --aarch64. BUILDS as of cyrius 6.2.15
 #            (the cycc #pure/pass-1 scanner gap closed in v6.2.2); still run as a
 #            best-effort lane so a future floor regression stays visible.
 #                                                                    build/thoth_aarch64
-#   agnos    AGNOS (early-demo OS) — staged (0.6.3); its floor still lacks lseek
-#            (filed: agnos 2026-06-16-cyrius-patra-lseek-syscall-gap) — and, behind
-#            it, futex. BEST-EFFORT.                                build/thoth_agnos
+#   agnos    AGNOS (early-demo OS) — staged (0.6.3). Its old `SYS_LSEEK` blocker
+#            (filed: agnos 2026-06-16-cyrius-patra-lseek-syscall-gap) was RESOLVED
+#            upstream — the 6.2.37 agnos peer defines SYS_LSEEK=58 + SYS_GETRANDOM=45.
+#            The lane now surfaces `SIGHUP` — a TRANSIENT_GAP, not a capability
+#            limit: agnos signal infra is DONE (sigprocmask#17/signalfd#18), the
+#            peer just omits the signal-NUMBER constants. FILED: agnos
+#            2026-06-23-cyrius-agnos-peer-missing-signal-number-constants. BEST-EFFORT.
+#                                                                    build/thoth_agnos
 #
 # Usage:
 #   ./scripts/build.sh                 # host-appropriate default (macos on a Mac, else linux)
@@ -48,10 +56,33 @@ SRC="src/main.cyr"
 OUT="build"
 mkdir -p "$OUT"
 
-# The known, sanctioned stdlib portability gaps a best-effort lane may ride
-# (and ONLY these). A lane that fails on one of these warns + continues; any
-# other error fails the lane. Keep this list tight so real breakage surfaces.
-KNOWN_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_LSEEK|SYS_FUTEX'
+# Symbols a best-effort lane may ride (warn + continue); any OTHER error fails the
+# lane. Keep these tight so real breakage surfaces. TWO distinct classes — do not
+# conflate them:
+#
+# ARCH_GAP — ARCHITECTURAL: a primitive the target genuinely lacks with NO
+# raw-syscall equivalent. Win32 has no futex (uses WaitOnAddress) and no epoll
+# (uses IOCP). These are PERMANENT by design; the lane gates closed, announced.
+ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX'
+#
+# TRANSIENT_GAP — a FIXABLE upstream bug already fixed-or-filed; present ONLY
+# because thoth's vendored snapshot (lib/, synced from the cyrius toolchain) lags
+# the fix. NOT a capability limit — the target CAN do these. DELETE each entry
+# when the toolchain re-bundles the fix and `cyrius lib sync` picks it up:
+#   SYS_GETRANDOM — Windows CSPRNG IS available (bcryptprimitives!ProcessPrng via
+#     the sys_getrandom() wrapper). This was a patra bug: _wal_gen_salts issued a
+#     raw syscall(SYS_GETRANDOM,…) (Linux-shaped; the Win peer omits the constant
+#     by design). FIXED in patra v1.12.4 (src/wal.cyr, #ifdef CYRIUS_TARGET_WIN →
+#     sys_getrandom()). Remove once the toolchain re-bundles patra ≥1.12.4.
+#   SIGHUP — agnos signal infra is DONE (SYS_SIGPROCMASK=17 / SYS_SIGNALFD=18);
+#     the agnos peer merely omits the signal-NUMBER constants the other peers
+#     define. FILED: agnos 2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.
+#     Remove once the agnos peer defines the signal enum.
+# (The 6.2.15-era SYS_LSEEK entry is gone — RESOLVED: the 6.2.37 agnos peer now
+#  defines SYS_LSEEK=58, and every peer has lseek.)
+TRANSIENT_GAP='SYS_GETRANDOM|SIGHUP'
+
+KNOWN_GAP="$ARCH_GAP|$TRANSIENT_GAP"
 
 is_macos_host() { [ "$(uname -s 2>/dev/null)" = "Darwin" ]; }
 

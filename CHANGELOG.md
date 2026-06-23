@@ -4,16 +4,62 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-06-23
+
+**Cross-target re-verification of the 6.2.37 floor — and the getrandom root cause.**
+After 0.6.6 pinned 6.2.37, `./scripts/build.sh all` was re-run on x86_64 Linux to
+re-verify every lane. Two symbols the gated lanes hit turned out to be **fixable
+upstream bugs, not capability gaps** — the earlier instinct to bucket them as
+permanent "known gaps" was wrong and is corrected here.
+
+- **Windows `SYS_GETRANDOM` was a patra bug — fixed, not a Win32 gap.** Windows
+  HAS a CSPRNG: `bcryptprimitives!ProcessPrng`, wired as the `sys_getrandom()` peer
+  wrapper. patra's `_wal_gen_salts` drew its WAL salts via a raw
+  `syscall(SYS_GETRANDOM,…)` — a Linux-shaped call the Windows peer deliberately
+  omits the constant for — so `cyrius build --win` failed to link. **Fixed in patra
+  v1.12.4** (`src/wal.cyr`, `#ifdef CYRIUS_TARGET_WIN` → `sys_getrandom()`); patra
+  now builds `--win` and its 834 Linux tests still pass. thoth's `--win` lane clears
+  the moment the toolchain re-bundles patra ≥1.12.4.
+- **AGNOS's old `SYS_LSEEK` blocker is RESOLVED upstream.** The 6.2.37 agnos peer
+  now defines `SYS_LSEEK = 58` (+ `SYS_GETRANDOM = 45`), closing the filed
+  `agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`. The lane now gates on
+  **`SIGHUP`** — and that is **not** "agnos has no signals": the agnos peer already
+  ships `SYS_SIGPROCMASK=17`/`SYS_SIGNALFD=18` (signal infra DONE), it merely omits
+  the signal-NUMBER constants the other peers define, so t-ron's `sighup_init` can't
+  resolve the bare `SIGHUP`. A fixable floor gap, **filed**:
+  `agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md`.
+- **aarch64 Linux** re-confirmed building — `build/thoth_aarch64` is a valid static
+  ARM ELF (exec-format error on the x86 host confirms it's genuinely cross).
+- **macOS** not re-run at 6.2.37 (native Mach-O needs the Mac host); last verified
+  0.6.4.
+
+### Changed
+- **`scripts/build.sh`** — gap set split into `ARCH_GAP` (genuine, permanent Win32
+  differences: `SYS_FUTEX`/epoll, no raw-syscall equivalent) and `TRANSIENT_GAP`
+  (`SYS_GETRANDOM`, `SIGHUP` — fixable, fixed-or-filed upstream, present only while
+  the vendored snapshot lags; each tagged for deletion on toolchain pickup). The
+  resolved `SYS_LSEEK` entry was dropped. Per-lane header comments corrected to stop
+  calling getrandom a Win32 gap.
+- **Banner/`/state` version** — `src/session.cyr` startup banner and
+  `src/commands.cyr` `/state` build line ride forward to `0.6.7`.
+- **Targets table + cross-target narrative** in `docs/development/state.md` and
+  `roadmap.md` rewritten to separate fixable-transient symbols from architectural
+  gaps.
+
+### Upstream (fixed/filed while cross-verifying — not in this repo)
+- **patra v1.12.4** — `src/wal.cyr` Windows getrandom fix (`~/Repos/patra`; dist
+  regenerated, CHANGELOG + VERSION bumped).
+- **Filed** `agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md`
+  — the agnos syscall peer needs its signal-number enum (`SIGHUP`, …).
+
 ## [0.6.6] - 2026-06-23
 
 **Toolchain refresh to Cyrius 6.2.37.** The source pin moves 6.2.15 → **6.2.37**
 (`cyrius.cyml` + a `lib/` re-sync via `cyrius lib sync` — 98 floor modules, two
 new snapshot modules pulled in: `protobuf` and `yantra`; no thoth source change),
 clearing the toolchain-drift warning. 199 unit assertions pass (unchanged) under
-the new pin; x86_64 Linux builds and ships as before. The cross-target posture is
-unchanged from 0.6.4/0.6.5 — aarch64 Linux still builds, macOS builds + runs
-(audit path gated upstream), AGNOS/Windows still honestly gated on their named
-upstream floor gaps.
+the new pin; x86_64 Linux builds and ships as before. (Cross-target re-verification
+of the new floor — and the getrandom/SIGHUP findings it surfaced — landed in 0.6.7.)
 
 ### Changed
 - **`cyrius.cyml`** — `[package].cyrius` pin `6.2.15` → `6.2.37`; `lib/` re-synced
