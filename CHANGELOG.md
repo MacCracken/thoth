@@ -4,10 +4,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-06-23
+> **0.7.0 is HELD — not yet released.** The `/audit` tool-rounds feature below has
+> landed in-tree, but the **0.7.0 release will not be cut until parallel tool calls
+> also land** — which is gated on the upstream **sandhi** + **bayan** reentrancy
+> repairs (filed; see "Deferred + filed upstream"). 0.7.0 ships both features
+> together. Until then this work stays unreleased.
 
-**`/audit` tool-rounds ships; parallel-tool-calls floor blockers filed upstream.**
-Two agentic-loop follow-ups were scoped. One ships (a display feature with no
+### Held for 0.7.0 — `/audit` tool-rounds; parallel-tool-calls floor blockers filed
+
+**`/audit` tool-rounds lands in-tree; parallel-tool-calls floor blockers filed upstream.**
+Two agentic-loop follow-ups were scoped. One lands in-tree (a display feature with no
 concurrency dependency); the other — real parallel tool execution — is blocked at
 the stdlib transport floor and is filed upstream for repair rather than worked
 around. No thoth runtime regression; pin unchanged (Cyrius 6.2.37); 221 unit

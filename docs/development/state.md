@@ -7,8 +7,10 @@
 
 ## Version
 
-**0.7.0** — `/audit` tool-rounds + parallel-tool-calls floor blockers filed, 2026-06-23:
-two agentic-loop follow-ups scoped. **Shipped:** `/audit` now surfaces a
+**0.7.0 (UNRELEASED — HELD)** — `/audit` tool-rounds + parallel-tool-calls floor
+blockers filed, landed in-tree 2026-06-23. **The 0.7.0 release is held until parallel
+tool calls also land** (gated on the filed sandhi + bayan reentrancy repairs); 0.7.0
+will ship both together. Two agentic-loop follow-ups scoped. **Landed:** `/audit` now surfaces a
 session-local trace of the agentic loop's tool **rounds** (new module
 `src/roundlog.cyr`) — grouped by turn/round with `[allow|deny|noname] <tool> ok|err`
 per call — alongside (and independent of) t-ron's canonical libro chain, so it
