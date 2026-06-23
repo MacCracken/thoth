@@ -397,14 +397,19 @@ fn _agent_run_calls(tcs, nc) {
         if (ar != 0) { emit(" "); emit(ar); } println("");
         var gp = ar; if (gp == 0) { gp = "{}"; }
         var res = 0;
-        if (nm == 0) { res = "(no tool name)"; }
+        var rl_kind = RL_DENIED;
+        var rl_ok = 0;
+        if (nm == 0) { res = "(no tool name)"; rl_kind = RL_NONAME; }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
+            rl_kind = RL_ALLOWED;
             res = daimon_invoke(nm, ar);
-            if (res == 0) { res = "(tool returned no result)"; }
+            if (res == 0) { res = "(tool returned no result)"; rl_ok = 0; }
+            else { rl_ok = 1; }
             emit("  result: "); println(res);
         } else {
             res = "denied by authorization policy";
         }
+        roundlog_add_call(nm, rl_kind, rl_ok);
         _agent_add_result(id, res);
         ci = ci + 1;
     }
@@ -559,6 +564,7 @@ fn agent_turn(prompt) {
 
     var iter = 0;
     var done = 0;
+    var round_no = 0;
     while ((done == 0) && (iter < AGENT_MAX_ITERS)) {
         _hoosh_acc_reset();
         if (want_stream == 1) { _agent_iter_stream(model, sys, _agent_tools_buf, tools_len); }
@@ -578,6 +584,8 @@ fn agent_turn(prompt) {
             var raw = _agent_round_raw;
             if (raw == 0) { raw = "[]"; }
             _agent_add_assistant(raw);
+            round_no = round_no + 1;
+            roundlog_open(session_turns(), round_no);
             _agent_run_calls(_agent_round_val, _agent_round_n);
         } else {
             if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); }

@@ -140,7 +140,7 @@ fn cmd_state() {
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
     else { println("see /seams"); }
-    println("  build   : thoth 0.6.7");
+    println("  build   : thoth 0.7.0");
     return 0;
 }
 
@@ -314,6 +314,7 @@ fn cmd_call(line) {
 fn cmd_reset() {
     var n = session_history_len();
     session_history_clear();
+    roundlog_reset();
     if (n == 0) { println("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); fmt_int(n); println(" messages dropped). fresh context."); }
     return 0;
@@ -327,9 +328,12 @@ fn cmd_audit() {
         println("t-ron seam absent - no audit chain.");
         println("the fail-closed confirm gate keeps no cryptographic log; the libro");
         println("audit chain is t-ron's domain. set [tron].policy in thoth.cyml.");
+        roundlog_report();
         return 0;
     }
-    return gate_audit_report();
+    gate_audit_report();
+    roundlog_report();
+    return 0;
 }
 
 fn cmd_task(line) {

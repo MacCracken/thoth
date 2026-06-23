@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.7.0** — `/audit` tool-rounds + parallel-tool-calls floor blockers filed, 2026-06-23:
+two agentic-loop follow-ups scoped. **Shipped:** `/audit` now surfaces a
+session-local trace of the agentic loop's tool **rounds** (new module
+`src/roundlog.cyr`) — grouped by turn/round with `[allow|deny|noname] <tool> ok|err`
+per call — alongside (and independent of) t-ron's canonical libro chain, so it
+renders even when t-ron is absent. **Deferred:** real parallel tool execution is
+blocked at the stdlib floor (sandhi dispatch globals + bayan parser global cursor,
+both vendored `lib/`, both single-threaded by design); a 3-lens adversarial audit
+confirmed UNSAFE, both gaps **filed upstream** (sandhi + bayan), and thoth's piece
+is fully designed to drop in once the floor is repaired — no dead scaffolding
+shipped. 221 assertions (+22, `test_roundlog`). Pin unchanged (6.2.37).
 **0.6.7** — cross-target re-verification of the 6.2.37 floor + getrandom root cause,
 2026-06-23: re-ran `./scripts/build.sh all` on x86_64 Linux. Two symbols the gated
 lanes hit are **fixable upstream bugs, not capability gaps** (correcting an earlier
@@ -286,6 +297,12 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
   clause once). **0.5.1 (multi-turn):** the capped conversation history
   (`session_history_*` — append/accessors/pop/clear; stable content copies).
+- `src/roundlog.cyr` — **0.7.0**: the session-local agentic tool-**round** trace
+  `/audit` surfaces. A ring (last 16 rounds) of `{turn, round, calls[]}` with each
+  call's verdict (`allow`/`deny`/`noname`) + ok/err; recorded by the agentic loop
+  (`roundlog_open`/`roundlog_add_call`), rendered by `roundlog_report`, cleared by
+  `/reset`. Display-only loop-structure view, orthogonal to and independent of
+  t-ron's security chain — owns no security logic, never touches the libro chain.
 - `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
   `[daimon]` url, `[tron]` policy/agent; **0.5.0:** `[hoosh].stream`
   bool via a `_cfg_bool` reader; **0.5.1:** `[hoosh].history`; **0.5.2:**

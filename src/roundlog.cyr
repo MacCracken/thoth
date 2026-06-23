@@ -1,0 +1,160 @@
+# roundlog.cyr — session-local trace of the agentic loop's tool-call ROUNDS.
+#
+# thoth's agentic loop (src/agent.cyr) runs up to AGENT_MAX_ITERS rounds per
+# turn; each round the model returns a batch of tool_calls that the loop gates
+# (t-ron) and executes (daimon). t-ron's libro chain (src/gate.cyr) is the
+# canonical *security* record — a flat, newest-first, cryptographically chained
+# log of every gated action. This module adds the orthogonal *loop-structure*
+# dimension /audit was missing: which tool calls happened in which round,
+# grouped. It owns NO security logic and never touches t-ron's chain — it is a
+# display-only, session-scoped ring of the most recent rounds, recorded by the
+# loop and rendered by /audit. Because it is independent of t-ron, /audit can
+# surface the loop's rounds even when the t-ron seam is absent.
+#
+# Ring of the last ROUNDLOG_CAP rounds; older rounds are elided (announced, not
+# faked). Each round records up to RL_MAX_CALLS calls (matching the loop cap).
+
+var ROUNDLOG_CAP = 16;       # ring: retain the most recent 16 rounds
+var RL_MAX_CALLS = 8;        # per round (matches AGENT_MAX_CALLS)
+var RL_NAME_CAP = 64;        # bytes copied of each tool name (NUL-terminated)
+
+# Verdict kinds recorded per call.
+var RL_DENIED = 0;           # gate denied (policy / absent-gate deny)
+var RL_ALLOWED = 1;          # gate allowed and the call was invoked
+var RL_NONAME = 2;           # the model emitted a call with no tool name
+
+var _roundlog = 0;           # ring base (ROUNDLOG_CAP slots), lazily alloc'd
+var _roundlog_total = 0;     # rounds opened this session (global index)
+var _roundlog_cur = 0;       # slot ptr of the round being filled (0 = none open)
+
+# per-call entry  = RL_NAME_CAP name bytes + kind (8) + ok (8)
+fn _rl_call_sz() { return RL_NAME_CAP + 16; }
+# per-round slot  = turn (8) + round (8) + n_calls (8) + RL_MAX_CALLS call entries
+fn _rl_slot_sz() { return 24 + RL_MAX_CALLS * _rl_call_sz(); }
+
+fn _roundlog_init() {
+    if (_roundlog == 0) { _roundlog = alloc(ROUNDLOG_CAP * _rl_slot_sz()); }
+    return 0;
+}
+
+# slot ptr for global round index g (ring-wrapped).
+fn _roundlog_slot(g) { return _roundlog + (g % ROUNDLOG_CAP) * _rl_slot_sz(); }
+
+# roundlog_reset: clear the session round trace (called by /reset).
+fn roundlog_reset() {
+    _roundlog_total = 0;
+    _roundlog_cur = 0;
+    return 0;
+}
+
+# roundlog_open: begin a new round and mark it current. round_no is 1-based
+# within the turn; turn_no is session_turns() at the time of the round.
+fn roundlog_open(turn_no, round_no) {
+    _roundlog_init();
+    var s = _roundlog_slot(_roundlog_total);
+    store64(s + 0, turn_no);
+    store64(s + 8, round_no);
+    store64(s + 16, 0);
+    _roundlog_cur = s;
+    _roundlog_total = _roundlog_total + 1;
+    return 0;
+}
+
+# Copy a NUL-terminated name into dst, bounded to RL_NAME_CAP-1 bytes + NUL.
+# (No `break` — the codebase avoids it; a done-flag drives the loop.)
+fn _rl_copy_name(dst, name) {
+    var i = 0;
+    var done = 0;
+    if (name == 0) { done = 1; }
+    while ((done == 0) && (i < (RL_NAME_CAP - 1))) {
+        var c = load8(name + i);
+        if (c == 0) { done = 1; }
+        else { store8(dst + i, c); i = i + 1; }
+    }
+    store8(dst + i, 0);
+    return 0;
+}
+
+# roundlog_add_call: record one tool call in the current round. kind is
+# RL_ALLOWED / RL_DENIED / RL_NONAME; ok is 1 when an allowed call returned a
+# result. Calls past RL_MAX_CALLS in one round are dropped (the loop caps at 8).
+fn roundlog_add_call(name, kind, ok) {
+    if (_roundlog_cur == 0) { return 0; }
+    var n = load64(_roundlog_cur + 16);
+    if (n >= RL_MAX_CALLS) { return 0; }
+    var e = _roundlog_cur + 24 + n * _rl_call_sz();
+    _rl_copy_name(e, name);
+    store64(e + RL_NAME_CAP, kind);
+    store64(e + RL_NAME_CAP + 8, ok);
+    store64(_roundlog_cur + 16, n + 1);
+    return 0;
+}
+
+# --- read side: accessors (pure, unit-tested) + render (I/O) ---
+
+# Total rounds opened this session (may exceed what the ring retains).
+fn roundlog_total() { return _roundlog_total; }
+
+# Rounds currently retained in the ring (<= ROUNDLOG_CAP).
+fn roundlog_count() {
+    if (_roundlog_total < ROUNDLOG_CAP) { return _roundlog_total; }
+    return ROUNDLOG_CAP;
+}
+
+# kept-index i (0 = oldest retained, count-1 = newest) -> slot ptr.
+fn _roundlog_kept_slot(i) {
+    var first = _roundlog_total - roundlog_count();
+    return _roundlog_slot(first + i);
+}
+
+fn roundlog_round_turn(i)   { return load64(_roundlog_kept_slot(i) + 0); }
+fn roundlog_round_no(i)     { return load64(_roundlog_kept_slot(i) + 8); }
+fn roundlog_round_ncalls(i) { return load64(_roundlog_kept_slot(i) + 16); }
+fn roundlog_call_name(i, ci) { return _roundlog_kept_slot(i) + 24 + ci * _rl_call_sz(); }
+fn roundlog_call_kind(i, ci) { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP); }
+fn roundlog_call_ok(i, ci)   { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 8); }
+
+fn roundlog_kind_str(k) {
+    if (k == RL_ALLOWED) { return "allow"; }
+    if (k == RL_DENIED) { return "deny"; }
+    return "noname";
+}
+
+# roundlog_report: render the session's recent tool rounds, grouped by round. I/O.
+# Complements gate_audit_report (the t-ron chain) with the loop-structure view.
+fn roundlog_report() {
+    println("agentic tool rounds (this session):");
+    if (_roundlog_total == 0) {
+        println("  (none yet — ask a task that calls tools)");
+        return 0;
+    }
+    var kept = roundlog_count();
+    if (_roundlog_total > kept) {
+        emit("  ("); fmt_int(_roundlog_total - kept); println(" earlier round(s) elided)");
+    }
+    var i = 0;
+    while (i < kept) {
+        emit("  turn "); fmt_int(roundlog_round_turn(i));
+        emit(", round "); fmt_int(roundlog_round_no(i));
+        var nc = roundlog_round_ncalls(i);
+        emit(" ("); fmt_int(nc); emit(" call");
+        if (nc != 1) { emit("s"); }
+        emit("): ");
+        if (nc == 0) { emit("(no calls)"); }
+        var ci = 0;
+        while (ci < nc) {
+            if (ci > 0) { emit(", "); }
+            var k = roundlog_call_kind(i, ci);
+            emit("["); emit(roundlog_kind_str(k)); emit("] ");
+            emit(roundlog_call_name(i, ci));
+            if (k == RL_ALLOWED) {
+                if (roundlog_call_ok(i, ci) == 1) { emit(" ok"); }
+                else { emit(" err"); }
+            }
+            ci = ci + 1;
+        }
+        println("");
+        i = i + 1;
+    }
+    return 0;
+}

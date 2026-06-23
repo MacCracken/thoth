@@ -4,6 +4,56 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-23
+
+**`/audit` tool-rounds ships; parallel-tool-calls floor blockers filed upstream.**
+Two agentic-loop follow-ups were scoped. One ships (a display feature with no
+concurrency dependency); the other — real parallel tool execution — is blocked at
+the stdlib transport floor and is filed upstream for repair rather than worked
+around. No thoth runtime regression; pin unchanged (Cyrius 6.2.37); 221 unit
+assertions pass (+22).
+
+### Added
+- **Agentic tool-round trace in `/audit`** (new module `src/roundlog.cyr`). The
+  agentic loop runs up to `AGENT_MAX_ITERS` rounds per turn, each a batch of gated
+  tool calls. t-ron's libro chain (the existing `/audit` view) is the canonical
+  *security* record — flat, newest-first. `/audit` now also surfaces the orthogonal
+  *loop-structure* view: a session-local ring (last 16 rounds) of recent tool
+  rounds, grouped — each line shows `turn N, round R (K calls): [allow|deny|noname]
+  <tool> ok|err, …`. It owns no security logic and never touches t-ron's chain, so
+  it renders even when the t-ron seam is absent (the loop runs under the
+  fail-closed confirm gate regardless). Recorded by `_agent_run_calls` /
+  `agent_turn`, rendered by `cmd_audit` (both branches), cleared by `/reset`.
+  `test_roundlog` (+22 assertions): recording, accessors, per-round cap, ring
+  eviction. 221 total.
+
+### Deferred + filed upstream (parallel tool calls)
+- **Real parallel tool execution is blocked at the stdlib floor** — confirmed by a
+  three-lens adversarial audit (sockets, allocator/arena, TLS/dispatch globals; all
+  three returned UNSAFE). Two vendored-`lib/` modules hold per-call state in
+  process-global words: safe single-threaded, not thread-safe:
+  - **sandhi** — the HTTP client dispatch stashes `_sandhi_allow_0rtt` /
+    `_sandhi_cred_digest` / `_sandhi_tls_policy_pending` / `_sandhi_conn_last_err`
+    in module globals via a reentrancy-safe-but-not-thread-safe save/restore (the
+    code itself says "Single-threaded today. Multi-threaded clients would need a
+    per-pool mutex"). **Filed**:
+    `sandhi/docs/issues/2026-06-23-thoth-http-client-dispatch-globals-not-thread-safe.md`.
+  - **bayan** — `bayan_json_v_parse_str` uses a process-global parser cursor
+    (`_jp_buf`/`_jp_len`/`_jp_pos`); two concurrent parses corrupt each other, and
+    `daimon_extract_text` parses every tool result through it. **Filed**:
+    `bayan/docs/development/issues/2026-06-23-thoth-json-value-parser-global-cursor-not-thread-safe.md`.
+  Fixing these in thoth would mean forking the spine (vendored `lib/`), which the
+  project forbids. thoth's own piece is fully designed and recipe-captured (a
+  reentrant `daimon_invoke_a` with a per-call arena + request buffer; a phased
+  `snapshot → gate → execute → ordered-append` `_agent_run_calls`; the established
+  `thread_create` fan-out from sigil). It drops in with zero further restructuring
+  once the floor is repaired — the same "port the floor; never fork the spine"
+  pattern as the AGNOS lseek gap. No dead parallel scaffolding was shipped.
+
+### Changed
+- **Banner/`/state` version** — `src/session.cyr` startup banner and
+  `src/commands.cyr` `/state` build line ride forward to `0.7.0`.
+
 ## [0.6.7] - 2026-06-23
 
 **Cross-target re-verification of the 6.2.37 floor — and the getrandom root cause.**

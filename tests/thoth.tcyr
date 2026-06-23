@@ -13,6 +13,7 @@ include "src/log.cyr"
 include "src/gate.cyr"
 include "src/seams.cyr"
 include "src/session.cyr"
+include "src/roundlog.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/daimon.cyr"
@@ -518,6 +519,60 @@ fn test_model_switch() {
     return 0;
 }
 
+# Agentic tool-round trace (roundlog): the session-local ring /audit surfaces.
+# Pure data-structure ops — no I/O — so the recording + ring eviction is testable.
+fn test_roundlog() {
+    test_group("agentic tool rounds (roundlog)");
+    roundlog_reset();
+    assert_eq(roundlog_total(), 0, "empty total");
+    assert_eq(roundlog_count(), 0, "empty count");
+
+    # one round (turn 5, round 1) with three calls: allow+ok, deny, noname
+    roundlog_open(5, 1);
+    roundlog_add_call("read_file", RL_ALLOWED, 1);
+    roundlog_add_call("write_file", RL_DENIED, 0);
+    roundlog_add_call(0, RL_NONAME, 0);
+    assert_eq(roundlog_total(), 1, "one round opened");
+    assert_eq(roundlog_count(), 1, "one round retained");
+    assert_eq(roundlog_round_turn(0), 5, "round turn = 5");
+    assert_eq(roundlog_round_no(0), 1, "round no = 1");
+    assert_eq(roundlog_round_ncalls(0), 3, "three calls recorded");
+    assert(streq(roundlog_call_name(0, 0), "read_file"), "call0 name copied");
+    assert_eq(roundlog_call_kind(0, 0), RL_ALLOWED, "call0 allowed");
+    assert_eq(roundlog_call_ok(0, 0), 1, "call0 ok");
+    assert(streq(roundlog_call_name(0, 1), "write_file"), "call1 name copied");
+    assert_eq(roundlog_call_kind(0, 1), RL_DENIED, "call1 denied");
+    assert_eq(roundlog_call_kind(0, 2), RL_NONAME, "call2 noname");
+    assert(streq(roundlog_call_name(0, 2), ""), "call2 empty name (null in)");
+
+    # verdict labels
+    assert(streq(roundlog_kind_str(RL_ALLOWED), "allow"), "kind str allow");
+    assert(streq(roundlog_kind_str(RL_DENIED), "deny"), "kind str deny");
+    assert(streq(roundlog_kind_str(RL_NONAME), "noname"), "kind str noname");
+
+    # a round caps at RL_MAX_CALLS calls; extra calls are dropped (announced via report)
+    roundlog_reset();
+    roundlog_open(1, 1);
+    var c = 0;
+    while (c < (RL_MAX_CALLS + 3)) { roundlog_add_call("t", RL_ALLOWED, 1); c = c + 1; }
+    assert_eq(roundlog_round_ncalls(0), RL_MAX_CALLS, "round caps at RL_MAX_CALLS calls");
+
+    # ring eviction: open CAP+2 rounds (round_no = global index); oldest two drop off
+    roundlog_reset();
+    var g = 1;
+    while (g <= (ROUNDLOG_CAP + 2)) {
+        roundlog_open(1, g);
+        roundlog_add_call("x", RL_ALLOWED, 1);
+        g = g + 1;
+    }
+    assert_eq(roundlog_total(), ROUNDLOG_CAP + 2, "total counts every round opened");
+    assert_eq(roundlog_count(), ROUNDLOG_CAP, "ring retains only CAP rounds");
+    assert_eq(roundlog_round_no(0), 3, "oldest retained is global round 3 (1,2 evicted)");
+    assert_eq(roundlog_round_no(roundlog_count() - 1), ROUNDLOG_CAP + 2, "newest retained is last opened");
+    roundlog_reset();
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -538,6 +593,7 @@ fn main() {
     test_daimon();
     test_tron();
     test_audit();
+    test_roundlog();
     test_model_switch();
     return assert_summary();
 }

@@ -134,6 +134,25 @@ with **0.6.3**; the rest is open.
   records the invariant.
 - ☐ Confirm: identical agent UX everywhere; AGNOS is the only parity promise.
 
+### Agentic loop — post-0.6.0 polish
+
+The model-driven tool-calling loop (0.6.0, streaming 0.6.1, per-tool schemas 0.6.3)
+gains incremental polish; these are not milestone-gating.
+
+- ✅ **Tool rounds in `/audit`** (0.7.0): `/audit` surfaces a session-local trace of
+  the loop's tool **rounds** (`src/roundlog.cyr`), grouped by turn/round with each
+  call's verdict + ok/err — the loop-structure view alongside t-ron's security chain.
+- ☐ **Parallel tool calls** — blocked at the stdlib floor, **filed upstream**, NOT a
+  thoth change. A 3-lens adversarial audit confirmed concurrent `daimon_invoke` is
+  unsafe: **sandhi** stashes per-request dispatch state in module globals
+  (`sandhi/docs/issues/2026-06-23-thoth-http-client-dispatch-globals-not-thread-safe.md`)
+  and **bayan**'s JSON value parser uses a process-global cursor
+  (`bayan/docs/.../2026-06-23-thoth-json-value-parser-global-cursor-not-thread-safe.md`).
+  Once both lift their per-call state out of globals, thoth's piece (a reentrant
+  `daimon_invoke_a` + a phased `snapshot → gate → execute → ordered-append`
+  `_agent_run_calls` + the sigil `thread_create` fan-out — all designed) drops in
+  with zero further restructuring. "Port the floor; never fork the spine."
+
 ### M7 — Release readiness (provisional)
 
 - Satisfy the v1.0 criteria above (AGNOS downstream-green gate)
