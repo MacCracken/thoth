@@ -1,5 +1,5 @@
 # sakshi.cyr — tracing, error handling, and structured logging for Cyrius
-# Bundled distribution of sakshi v2.3.0
+# Bundled distribution of sakshi v2.4.1
 # Source: https://github.com/MacCracken/sakshi
 # License: GPL-3.0-only
 #
@@ -35,15 +35,32 @@
 # `cyrius build --aarch64`. Pre-v2.2.2 the numbers were inlined as bare
 # integers, so the aarch64 binary called the wrong syscall (silent UB).
 
+# clock_gettime / nanosleep are NOT defined here: their reroute-required numbers
+# (228 / 35) must be LITERALS at the call site (clock.cyr) — a `var`/named constant
+# does not const-fold, so the macOS/Windows reroute silently fails (cyrius issue
+# 2026-06-16-var-syscall-number-defeats-macho-pe-reroute).
+# AGNOS (ring-3) is x86_64 but NOT Linux: its syscall numbers and `open` ABI
+# differ, and `CYRIUS_ARCH_X86` is predefined on every x86 build (agnos
+# included), so the agnos branch must come FIRST and the Linux branches must be
+# excluded under it — otherwise agnos silently took the Linux numbers (open #2,
+# close #3, exit #60 → agnos getpid/spawn/undefined) and corrupted every log.
+# agnos has no BSD sockets (socket/sendto), so UDP transport is unavailable here
+# (output.cyr returns -1 → caller keeps stderr).
+#ifdef CYRIUS_TARGET_AGNOS
+var _SK_SYS_WRITE         = 1;
+var _SK_SYS_OPEN          = 7;
+var _SK_SYS_CLOSE         = 6;
+var _SK_SYS_EXIT          = 0;
+#endif
+
+#ifndef CYRIUS_TARGET_AGNOS
 #ifdef CYRIUS_ARCH_X86
 var _SK_SYS_WRITE         = 1;
 var _SK_SYS_OPEN          = 2;
 var _SK_SYS_CLOSE         = 3;
-var _SK_SYS_NANOSLEEP     = 35;
 var _SK_SYS_SOCKET        = 41;
 var _SK_SYS_SENDTO        = 44;
 var _SK_SYS_EXIT          = 60;
-var _SK_SYS_CLOCK_GETTIME = 228;
 #endif
 
 #ifdef CYRIUS_ARCH_AARCH64
@@ -52,22 +69,35 @@ var _SK_SYS_OPENAT        = 56;
 var _SK_SYS_CLOSE         = 57;
 var _SK_SYS_WRITE         = 64;
 var _SK_SYS_EXIT          = 93;
-var _SK_SYS_NANOSLEEP     = 101;
-var _SK_SYS_CLOCK_GETTIME = 113;
 var _SK_SYS_SOCKET        = 198;
 var _SK_SYS_SENDTO        = 206;
 var _SK_AT_FDCWD          = 0 - 100;
 #endif
+#endif
 
-# open(path, flags, mode) — arity-stable wrapper. x86_64 calls `open`;
-# aarch64 calls `openat(AT_FDCWD, path, flags, mode)`. Returns fd or
+# open(path, flags, mode) — arity-stable wrapper. x86_64 Linux calls `open`;
+# aarch64 calls `openat(AT_FDCWD, path, flags, mode)`; agnos `open` is
+# (name, namelen, flags) with AO_* bits (differ from Linux O_*), so compute the
+# byte length and remap the flags (mirrors lib/io.cyr file_open). Returns fd or
 # negative errno.
 fn _sk_open(path, flags, mode): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    var n = 0;
+    while (load8(path + n) != 0) { n = n + 1; }
+    var ao = 0;
+    if ((flags & 3) != 0) { ao = ao | 0x1; }        # O_WRONLY/O_RDWR -> AO_WRONLY
+    if ((flags & 64) != 0) { ao = ao | 0x100; }     # O_CREAT  -> AO_CREAT
+    if ((flags & 512) != 0) { ao = ao | 0x200; }    # O_TRUNC  -> AO_TRUNC
+    if ((flags & 1024) != 0) { ao = ao | 0x400; }   # O_APPEND -> AO_APPEND
+    return syscall(_SK_SYS_OPEN, path, n, ao);
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     #ifdef CYRIUS_ARCH_X86
     return syscall(_SK_SYS_OPEN, path, flags, mode);
     #endif
     #ifdef CYRIUS_ARCH_AARCH64
     return syscall(_SK_SYS_OPENAT, _SK_AT_FDCWD, path, flags, mode);
+    #endif
     #endif
 }
 
@@ -167,10 +197,24 @@ fn _sk_clock_panic(msg, len): i64 {
 # Inlines the same syscall the v2.1.x _sk_now_ns used so the calibration
 # anchor is in the same time base as a non-cycle-counter implementation.
 fn _sk_clock_now_ns_raw(): i64 {
-    var ts[16];   # timespec {tv_sec, tv_nsec} = 16 bytes; was [2]=8B (byte-sized) → clock_gettime's 16-B write + load64(&ts+8) ran 8 B OOB. The sibling of the v2.2.9 sleep_ts[2] fix.
-    var ret = syscall(_SK_SYS_CLOCK_GETTIME, 4, &ts);
+    var ts[16];   # {tv_sec,tv_nsec} = 16 B (var[N] byte-sized; [2] would OOB the +8 store).
+    # The syscall NUMBER 228 MUST be a literal — a `var`/named constant does not
+    # const-fold, so the macOS __got reroute and the Windows IAT reroute never fire
+    # and a raw bad syscall results (returned -9 / garbage). cyrius issue 2026-06-16.
+    # Only reached on the x86 calibration path (aarch64 uses CNTFRQ_EL0, no syscall).
+    #ifdef CYRIUS_TARGET_WIN
+    # Windows: syscall(228) → kernel32!GetTickCount64 → ms since boot in the return
+    # register (NOT &ts); ×1e6 = ns. Coarse (~15 ms tick), but it is the only
+    # monotonic reference the PE reroute set provides for TSC calibration.
+    return syscall(228, 4, &ts) * 1000000;
+    #endif
+    #ifndef CYRIUS_TARGET_WIN
+    # Linux: clock_gettime(MONOTONIC_RAW=4) fills the timespec. (x86-macOS is HELD —
+    # 228 is unrouted on x86-macho; arm64-macOS never reaches here.)
+    var ret = syscall(228, 4, &ts);
     if (ret < 0) { return 0; }
     return load64(&ts) * 1000000000 + load64(&ts + 8);
+    #endif
 }
 
 # One-shot init: panic if invariant TSC is absent, then calibrate freq with
@@ -196,10 +240,14 @@ fn _sk_clock_init(): i64 {
     # nanosleep(35) to Sleep on PE. Earlier runtimes returned -ENOSYS on PE,
     # which forced a now-removed clock_gettime busy-spin window here (and the
     # GetTickCount64 fallback in _sk_now_ns) — both retired in v2.2.10.
+    # The number 35 MUST be a literal — a `var` does not const-fold, so the PE
+    # reroute (and the macOS reroute) never fires (cyrius issue 2026-06-16). The
+    # old `_SK_SYS_NANOSLEEP` var silently defeated exactly the PE routing this
+    # comment relies on.
     var sleep_ts[16];
     store64(&sleep_ts, 0);
     store64(&sleep_ts + 8, 10000000);
-    syscall(_SK_SYS_NANOSLEEP, &sleep_ts, 0);
+    syscall(35, &sleep_ts, 0);
 
     var t1_ticks = _sk_now_ticks();
     var t1_ns = _sk_clock_now_ns_raw();
@@ -511,10 +559,19 @@ var _sk_file_fd: i64 = 0 - 1;
 
 # Open a file for append-mode logging. Returns fd or negative on error.
 # path must be a trusted, hardcoded or config-derived value — no user input.
-# flags: O_WRONLY | O_CREAT | O_APPEND = 1 | 64 | 1024 = 1089
-# mode: 0644 = 0x1A4
+# flags = O_WRONLY | O_CREAT | O_APPEND. These bits DIFFER on Darwin, so the
+# literal must be per-target — a Linux 1089 passed to Darwin's open() is the
+# wrong flag set and the file is never created (cyrius issue 2026-06-17):
+#   Linux/Windows:  1 | 64    | 1024  = 1089  (0x441)
+#   Darwin (macOS): 1 | 0x200 | 0x8   = 521   (0x209)
+# mode: 0644 = 0x1A4 (same on all targets).
 fn sakshi_output_file(path): i64 {
+    #ifdef CYRIUS_TARGET_MACOS
+    var fd = _sk_open(path, 521, 0x1A4);
+    #endif
+    #ifndef CYRIUS_TARGET_MACOS
     var fd = _sk_open(path, 1089, 0x1A4);
+    #endif
     if (fd < 0) { return fd; }
     _sk_file_fd = fd;
     _sk_output_target = SK_OUT_FILE;
@@ -828,6 +885,12 @@ var _sk_udp_addr[16];
 # ip: 32-bit IPv4 address in network byte order
 # port: 16-bit port in host byte order
 fn sakshi_output_udp(ip, port): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no BSD socket/sendto syscalls — UDP log transport is unavailable.
+    # Return error so the caller keeps the current stderr/file target.
+    return 0 - 1;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     # socket(AF_INET=2, SOCK_DGRAM=2, 0)
     var fd = syscall(_SK_SYS_SOCKET, 2, 2, 0);
     if (fd < 0) { return fd; }
@@ -842,6 +905,7 @@ fn sakshi_output_udp(ip, port): i64 {
 
     _sk_output_target = SK_OUT_UDP;
     return fd;
+    #endif
 }
 
 # Close UDP socket, revert to stderr
@@ -872,7 +936,9 @@ fn _sk_write_udp_event(ts, level, category, msg, msg_len): i64 {
     _sk_memcpy(&pkt + 12, msg, pkt_msg_len);
 
     var total = 12 + pkt_msg_len;
+    #ifndef CYRIUS_TARGET_AGNOS
     syscall(_SK_SYS_SENDTO, _sk_udp_fd, &pkt, total, 0, &_sk_udp_addr, 16);
+    #endif
     return 0;
 }
 
@@ -1234,6 +1300,49 @@ fn sakshi_trace(msg, msg_len): i64 {
     _sk_log(SK_TRACE, msg, msg_len);
     #endif
     #endif
+    return 0;
+}
+
+# Log a message with one key=value context pair at a runtime-chosen level.
+# Composes "msg key=value" into a 256-byte scratch and emits ONE event, so it
+# routes through every output target (stderr/file/ring/UDP/hook) — unlike a
+# multi-write, which would only reach the text targets and would tear binary
+# events. Truncates at 256 bytes (matching _sk_emit's text/UDP buffers).
+#
+# Level is a runtime arg, so there is no compile-time per-level elision here
+# (unlike sakshi_info etc.); gate at the call site with the per-level fns if a
+# zero-cost path is needed. Runtime level filtering still applies. All lengths
+# are explicit byte counts (sakshi convention — no strlen, no NUL requirement).
+# Folded from agnosys logging.cyr (log_msg_kv) in the agnosys → agnodrm
+# decomposition; sakshi is the ecosystem logging home.
+fn sakshi_log_kv(level, msg, msg_len, key, key_len, val, val_len): i64 {
+    if (level > _sk_log_level) { return 0; }
+    var buf[256];
+    var pos = 0;
+    var i = 0;
+    while (i < msg_len) {
+        if (pos >= 256) { break; }
+        store8(&buf + pos, load8(msg + i));
+        pos = pos + 1;
+        i = i + 1;
+    }
+    if (pos < 256) { store8(&buf + pos, 32); pos = pos + 1; }    # ' '
+    i = 0;
+    while (i < key_len) {
+        if (pos >= 256) { break; }
+        store8(&buf + pos, load8(key + i));
+        pos = pos + 1;
+        i = i + 1;
+    }
+    if (pos < 256) { store8(&buf + pos, 61); pos = pos + 1; }    # '='
+    i = 0;
+    while (i < val_len) {
+        if (pos >= 256) { break; }
+        store8(&buf + pos, load8(val + i));
+        pos = pos + 1;
+        i = i + 1;
+    }
+    _sk_emit(level, 0, &buf, pos);
     return 0;
 }
 

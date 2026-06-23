@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.6.6** — toolchain refresh to Cyrius 6.2.37, 2026-06-23: the source pin moves
+6.2.15 → **6.2.37** (`lib/` re-synced via `cyrius lib sync` — 98 floor modules,
+two new snapshot modules `protobuf`/`yantra`; no thoth source change), clearing the
+drift warning. 199 assertions (unchanged); x86_64 Linux builds + ships as before.
+Cross-target posture unchanged from 0.6.4/0.6.5 (aarch64 builds, macOS builds+runs
+with the audit path gated upstream, AGNOS/Windows honestly gated on named floor gaps).
 **0.6.5** — M6 capability ladder (effect dimension), 2026-06-16: the seam registry
 gains the **full / degraded / absent capability-effect** dimension on top of the
 existing native/remote-client/absent **binding mode** — two orthogonal axes, the
@@ -150,8 +156,11 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.15` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc`. **0.6.4** took 6.1.38 → 6.2.15 — a toolchain refresh:
+- **Cyrius pin**: `6.2.37` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc`. **0.6.6** took 6.2.15 → 6.2.37 — a toolchain refresh:
+  `cyrius lib sync` re-synced 98 floor modules (two new snapshot modules,
+  `protobuf` and `yantra`); floor-only churn, no thoth source change, 199
+  assertions unchanged. **0.6.4** took 6.1.38 → 6.2.15 — a toolchain refresh:
   `cyrius lib sync` re-synced 97 floor modules (incl. new `*_agnos` peer-splits and
   the expanded `tls_native_*` set from the 6.2.7 agnos-completeness pass); floor-only
   churn, no thoth source change, 187 assertions unchanged. This is the refresh that

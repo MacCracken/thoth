@@ -4,6 +4,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-06-23
+
+**Toolchain refresh to Cyrius 6.2.37.** The source pin moves 6.2.15 → **6.2.37**
+(`cyrius.cyml` + a `lib/` re-sync via `cyrius lib sync` — 98 floor modules, two
+new snapshot modules pulled in: `protobuf` and `yantra`; no thoth source change),
+clearing the toolchain-drift warning. 199 unit assertions pass (unchanged) under
+the new pin; x86_64 Linux builds and ships as before. The cross-target posture is
+unchanged from 0.6.4/0.6.5 — aarch64 Linux still builds, macOS builds + runs
+(audit path gated upstream), AGNOS/Windows still honestly gated on their named
+upstream floor gaps.
+
+### Changed
+- **`cyrius.cyml`** — `[package].cyrius` pin `6.2.15` → `6.2.37`; `lib/` re-synced
+  to the pin via `cyrius lib sync` (98 modules; `protobuf.cyr` + `yantra.cyr` new;
+  floor-only churn, no source change).
+- **Banner/`/state` version** — `src/session.cyr` startup banner and
+  `src/commands.cyr` `/state` build line ride forward to `0.6.6`.
+
 ## [0.6.5] - 2026-06-16
 
 **M6 capability ladder — the full / degraded / absent dimension.** The seam
