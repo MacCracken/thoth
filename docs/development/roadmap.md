@@ -156,7 +156,35 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   `_agent_run_calls` + the sigil `thread_create` fan-out — all designed) drops in
   with zero further restructuring. "Port the floor; never fork the spine."
 
-### M7 — Release readiness (provisional)
+### M7 — Presentation capability ladder (T0→T2)
+
+> The front-end transformation toward the `Thoth.dc.html` look. Full rationale +
+> scope in [ADR-0009](../adr/0009-presentation-capability-ladder.md). Presentation
+> is a third capability axis (T0 plain → T1 ANSI → T2 rich-TUI → T3 desktop):
+> terminal-first, consume AGNOS libs (never hand-roll the floor), degrade closed,
+> `{(o> ` stays the T0 floor.
+
+- **Render surface first** — `src/surface.cyr`: route every `emit`/`println`
+  through tier-agnostic semantic intents (T0 renderer = today, byte-identical) +
+  startup tier detection (isatty + `TERM`/`COLORTERM`; **mihi** for the GPU/T3
+  gate), surfaced in `/seams`.
+- **T1 ANSI — the MVP (cheap; no new substrate)** — semantic amber palette
+  (truecolor→256→16→none); colored + **vyakarana**-highlighted diffs; a one-line
+  status (model/mode/cwd via a getcwd wrapper); `/tree`; **bnrmr+anuenue** banner.
+  Rich-by-default on a TTY, auto-`plain` when piped/CI.
+- **T2 rich-TUI — gated; vendor darshana** — raw-mode composer + slash palette,
+  alt-screen status bar + panes, file-tree pane, spinner (`chakshu/src/tui.cyr` is
+  the reference loop). A separable, explicit-go-ahead milestone — landed together,
+  not piecemeal.
+- **Data producers (parallel; honest-omit until present)** — hoosh `usage` →
+  tokens; opt-in `[pricing]` → cost; git branch + diff via **sit** (`.sit/` repos
+  today). **Real `.git/` repos are GATED on sit's `.git/` read-mode** (filed on
+  sit's roadmap) — until it lands, the branch field + real-git diffs omit, never
+  fake.
+- **T3 desktop — ceiling, off the v1.0 path** — thoth-in-**puka** (puka's own v3
+  command center names thoth as its consumer). No webview in the sovereign core.
+
+### M8 — Release readiness (provisional)
 
 - Satisfy the v1.0 criteria above (AGNOS downstream-green gate)
 - Security review pass

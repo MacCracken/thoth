@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%}
+  ::selection{background:rgba(230,171,92,.28)}
+  /* dark fallback before theme attr resolves */
+  :root{
+    --bg:#15120d; --bg2:#1b1812; --panel:#1d1a13; --inset:#13110c;
+    --border:#2c2820; --border2:#3a3428;
+    --fg:#ece5d3; --muted:#9b927d; --faint:#6d6553;
+    --accent:#e6ab5c; --accent-dim:#b9863f;
+    --green:#94b87c; --green-bg:rgba(148,184,124,.10);
+    --red:#d28a78; --red-bg:rgba(210,138,120,.10);
+    --blue:#82a9c6;
+  }
+  [data-theme="dark"]{
+    --bg:#15120d; --bg2:#1b1812; --panel:#1d1a13; --inset:#13110c;
+    --border:#2c2820; --border2:#3a3428;
+    --fg:#ece5d3; --muted:#9b927d; --faint:#6d6553;
+    --accent:#e6ab5c; --accent-dim:#b9863f;
+    --green:#94b87c; --green-bg:rgba(148,184,124,.10);
+    --red:#d28a78; --red-bg:rgba(210,138,120,.10);
+    --blue:#82a9c6;
+  }
+  [data-theme="light"]{
+    --bg:#f5f0e4; --bg2:#efe8d9; --panel:#f1ebdd; --inset:#e9e1cf;
+    --border:#ddd3bf; --border2:#ccc0a6;
+    --fg:#2c2820; --muted:#766c58; --faint:#9a9079;
+    --accent:#b07a25; --accent-dim:#946423;
+    --green:#5d7a45; --green-bg:rgba(93,122,69,.10);
+    --red:#b15740; --red-bg:rgba(177,87,64,.10);
+    --blue:#436a86;
+  }
+  @keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadein{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .thoth-scroll{scrollbar-width:thin;scrollbar-color:var(--border2) transparent}
+  .thoth-scroll::-webkit-scrollbar{width:9px}
+  .thoth-scroll::-webkit-scrollbar-thumb{background:var(--border2);border-radius:9px}
+  .thoth-scroll::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="height:100vh;width:100%;display:flex;flex-direction:column;background:var(--bg);color:var(--fg);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:13.5px;line-height:1.65;overflow:hidden">
+
+  <!-- ===== top status bar ===== -->
+  <sc-if value="{{ showStatus }}" hint-placeholder-val="{{ true }}">
+  <div style="flex:0 0 auto;display:flex;align-items:center;gap:18px;padding:0 16px;height:38px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);user-select:none">
+    <span style="display:flex;align-items:center;gap:8px;color:var(--fg);font-weight:600;letter-spacing:.04em"><span style="color:var(--accent)">◆</span> thoth</span>
+    <span style="color:var(--border2)">│</span>
+    <span><span style="color:var(--faint)"></span> agent</span>
+    <span style="color:var(--accent)">model</span> qwen2.5-coder:32b
+    <span style="color:var(--faint)"> main</span>
+    <span style="color:var(--faint)"> ~/dev/ratelimit</span>
+    <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+      <span style="color:var(--faint)">ctx</span>
+      <span style="display:inline-block;width:80px;height:6px;border-radius:3px;background:var(--border);overflow:hidden;vertical-align:middle"><span style="display:block;height:100%;width:38%;background:var(--accent)"></span></span>
+      <span>38%</span>
+    </span>
+    <span onClick="{{ toggleTheme }}" style="cursor:pointer;color:var(--faint);padding:2px 8px;border:1px solid var(--border2);border-radius:5px" style-hover="color:var(--accent);border-color:var(--accent-dim)" title="toggle theme  (⌃T)">{{ themeGlyph }} theme</span>
+  </div>
+  </sc-if>
+
+  <!-- ===== body (optional file tree + chat) ===== -->
+  <div style="flex:1 1 auto;display:flex;min-height:0">
+
+    <sc-if value="{{ showTree }}" hint-placeholder-val="{{ false }}">
+    <div class="thoth-scroll" style="flex:0 0 230px;border-right:1px solid var(--border);background:var(--bg2);overflow:auto;padding:14px 4px 14px 14px;font-size:12.5px">
+      <div style="color:var(--faint);text-transform:uppercase;letter-spacing:.12em;font-size:10.5px;margin-bottom:10px"> ratelimit</div>
+      <div style="color:var(--muted);line-height:1.95">
+        <div><span style="color:var(--blue)"></span> src</div>
+        <div style="padding-left:18px;color:var(--fg)"><span style="color:var(--accent)"></span> lib.rs</div>
+        <div style="padding-left:18px"><span style="color:var(--faint)"></span> bucket.rs</div>
+        <div><span style="color:var(--faint)"></span> Cargo.toml</div>
+        <div><span style="color:var(--faint)"></span> Cargo.lock</div>
+        <div><span style="color:var(--blue)"></span> target</div>
+        <div><span style="color:var(--faint)"></span> .gitignore</div>
+      </div>
+    </div>
+    </sc-if>
+
+    <div ref="{{ setScrollRef }}" class="thoth-scroll" style="flex:1 1 auto;overflow-y:auto;overflow-x:hidden;padding:26px 0 8px">
+    <div style="max-width:860px;margin:0 auto;padding:0 26px">
+
+      <!-- session banner -->
+      <div style="color:var(--faint);font-size:12px;border-bottom:1px dashed var(--border);padding-bottom:14px;margin-bottom:22px">
+        <span style="color:var(--accent)">◆ thoth</span> · session <span style="color:var(--muted)">a3f9c1</span> · resumed <span style="color:var(--muted)">2m ago</span> · <span style="color:var(--muted)">9 turns</span>
+      </div>
+
+      <!-- USER 1 -->
+      <div style="margin:0 0 22px">
+        <div style="display:flex;gap:10px">
+          <span style="color:var(--accent);font-weight:700;flex:0 0 auto">❯</span>
+          <span style="color:var(--fg)">Let's add a token-bucket rate limiter as its own module. Thread-safe, configurable capacity and refill rate.</span>
+        </div>
+      </div>
+
+      <!-- AGENT 1 -->
+      <div style="margin:0 0 18px;animation:fadein .3s ease both">
+        <div style="color:var(--fg)">Plan: scaffold a <span style="color:var(--accent)">ratelimit</span> lib crate, implement <span style="color:var(--accent)">TokenBucket</span> behind a <span style="color:var(--accent)">Mutex</span>, expose a <span style="color:var(--accent)">try_acquire(n)</span> API that refills lazily, then add unit tests. Starting now.</div>
+        <sc-if value="{{ showStats }}" hint-placeholder-val="{{ true }}">
+        <div style="color:var(--faint);font-size:11px;margin-top:6px">· 312 tokens · 0.8s · $0.001</div>
+        </sc-if>
+      </div>
+
+      <!-- TOOL: cargo new -->
+      <div style="margin:0 0 16px;border-left:2px solid var(--border2);padding-left:14px;animation:fadein .3s ease both">
+        <div style="display:flex;align-items:center;gap:9px;color:var(--fg)">
+          <span style="color:var(--accent)">❯</span>
+          <span>cargo new --lib ratelimit</span>
+          <span style="margin-left:auto;color:var(--green);font-size:12px">✓ 0.4s</span>
+        </div>
+        <div style="color:var(--muted);font-size:12.5px;margin-top:6px">
+          <span style="color:var(--green)">Created</span> library `ratelimit` package
+        </div>
+      </div>
+
+      <!-- TOOL: write file w/ diff -->
+      <div style="margin:0 0 16px;border-left:2px solid var(--border2);padding-left:14px;animation:fadein .3s ease both">
+        <div style="display:flex;align-items:center;gap:9px;color:var(--fg)">
+          <span style="color:var(--accent)"></span>
+          <span>write <span style="color:var(--blue)">src/bucket.rs</span></span>
+          <span style="margin-left:auto;font-size:12px"><span style="color:var(--green)">+34</span> <span style="color:var(--red)">-0</span></span>
+        </div>
+
+        <sc-if value="{{ showDiffs }}" hint-placeholder-val="{{ true }}">
+        <div style="margin-top:9px;border:1px solid var(--border);border-radius:7px;overflow:hidden;background:var(--inset);font-size:12.5px;line-height:1.7">
+          <div style="padding:5px 12px;background:var(--bg2);border-bottom:1px solid var(--border);color:var(--faint);font-size:11px">src/bucket.rs</div>
+          <div style="padding:6px 0">
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">1</span><span style="flex:0 0 16px;color:var(--green)">+</span><span style="color:var(--accent)">use</span>&nbsp;std::sync::Mutex;</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">2</span><span style="flex:0 0 16px;color:var(--green)">+</span><span style="color:var(--accent)">use</span>&nbsp;std::time::Instant;</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">3</span><span style="flex:0 0 16px;color:var(--green)">+</span></div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">4</span><span style="flex:0 0 16px;color:var(--green)">+</span><span style="color:var(--blue)">pub struct</span>&nbsp;TokenBucket&nbsp;{ inner: Mutex&lt;State&gt; }</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">5</span><span style="flex:0 0 16px;color:var(--green)">+</span></div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">6</span><span style="flex:0 0 16px;color:var(--green)">+</span><span style="color:var(--blue)">struct</span>&nbsp;State&nbsp;{ tokens: f64, cap: f64, rate: f64, last: Instant }</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">7</span><span style="flex:0 0 16px;color:var(--green)">+</span></div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">8</span><span style="flex:0 0 16px;color:var(--green)">+</span><span style="color:var(--blue)">impl</span>&nbsp;TokenBucket&nbsp;{</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">9</span><span style="flex:0 0 16px;color:var(--green)">+</span>&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--blue)">pub fn</span>&nbsp;try_acquire(&amp;<span style="color:var(--accent)">self</span>, n: f64) -&gt; <span style="color:var(--accent)">bool</span>&nbsp;{</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">10</span><span style="flex:0 0 16px;color:var(--green)">+</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--blue)">let</span>&nbsp;<span style="color:var(--accent)">mut</span>&nbsp;s = self.inner.lock().unwrap();</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">11</span><span style="flex:0 0 16px;color:var(--green)">+</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;s.refill();&nbsp;<span style="color:var(--faint)">// lazy top-up</span></div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">12</span><span style="flex:0 0 16px;color:var(--green)">+</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:var(--blue)">if</span>&nbsp;s.tokens &gt;= n { s.tokens -= n; <span style="color:var(--accent)">true</span> } <span style="color:var(--blue)">else</span> { <span style="color:var(--accent)">false</span> }</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">13</span><span style="flex:0 0 16px;color:var(--green)">+</span>&nbsp;&nbsp;&nbsp;&nbsp;}</div>
+            <div style="display:flex;background:var(--green-bg)"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">14</span><span style="flex:0 0 16px;color:var(--green)">+</span>}</div>
+            <div style="display:flex;padding-top:3px"><span style="flex:0 0 42px;text-align:right;padding-right:12px;color:var(--faint)">⋮</span><span style="flex:0 0 16px"></span><span style="color:var(--faint)">20 more lines</span></div>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+
+      <!-- AGENT 2 -->
+      <div style="margin:0 0 18px;animation:fadein .3s ease both">
+        <div style="color:var(--fg)">Wired it into <span style="color:var(--blue)">lib.rs</span> and added three tests — exhaustion, refill-over-time, and a 8-thread contention check. Running the suite:</div>
+      </div>
+
+      <!-- TOOL: cargo test -->
+      <div style="margin:0 0 16px;border-left:2px solid var(--border2);padding-left:14px;animation:fadein .3s ease both">
+        <div style="display:flex;align-items:center;gap:9px;color:var(--fg)">
+          <span style="color:var(--accent)">❯</span>
+          <span>cargo test</span>
+          <span style="margin-left:auto;color:var(--green);font-size:12px">✓ 1.9s</span>
+        </div>
+        <div style="color:var(--muted);font-size:12.5px;margin-top:6px;line-height:1.75">
+          <div><span style="color:var(--green)">Compiling</span> ratelimit v0.1.0</div>
+          <div><span style="color:var(--green)">Finished</span> test profile in 1.43s</div>
+          <div style="margin-top:4px">running 3 tests</div>
+          <div>test bucket::tests::exhausts_then_refills ... <span style="color:var(--green)">ok</span></div>
+          <div>test bucket::tests::concurrent_acquire_is_safe ... <span style="color:var(--green)">ok</span></div>
+          <div>test bucket::tests::respects_capacity ... <span style="color:var(--green)">ok</span></div>
+          <div style="margin-top:4px;color:var(--fg)">test result: <span style="color:var(--green)">ok</span>. 3 passed; 0 failed; 0 ignored</div>
+        </div>
+      </div>
+
+      <!-- AGENT 3 (final, streaming) -->
+      <div style="margin:0 0 4px;animation:fadein .3s ease both">
+        <div style="color:var(--fg)">Done — <span style="color:var(--accent)">TokenBucket</span> is thread-safe via <span style="color:var(--accent)">Mutex</span> and refills lazily on each <span style="color:var(--accent)">try_acquire</span>, so there's no background timer to manage. All three tests pass.<sc-if value="{{ showStream }}" hint-placeholder-val="{{ true }}"><span style="display:inline-block;width:8px;height:15px;background:var(--accent);margin-left:3px;vertical-align:text-bottom;animation:blink 1s steps(1) infinite"></span></sc-if></div>
+        <div style="color:var(--muted);margin-top:8px">Want a <span style="color:var(--accent)">tokio</span>-friendly async wrapper that awaits instead of returning false, or some criterion benchmarks?</div>
+        <sc-if value="{{ showStats }}" hint-placeholder-val="{{ true }}">
+        <div style="color:var(--faint);font-size:11px;margin-top:8px">· 1,284 tokens · 2.1s · $0.004 · 12.3k ctx</div>
+        </sc-if>
+      </div>
+
+      <!-- dynamic feed -->
+      <sc-for list="{{ feed }}" as="m" hint-placeholder-count="0">
+        <div style="margin:22px 0 0;animation:fadein .25s ease both">
+          <sc-if value="{{ m.isUser }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;gap:10px">
+              <span style="color:var(--accent);font-weight:700;flex:0 0 auto">❯</span>
+              <span style="color:var(--fg)">{{ m.text }}</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ m.isAgent }}" hint-placeholder-val="{{ false }}">
+            <div style="color:var(--fg)">{{ m.text }}</div>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <sc-if value="{{ thinking }}" hint-placeholder-val="{{ false }}">
+        <div style="margin:22px 0 0;color:var(--muted);display:flex;align-items:center;gap:10px">
+          <span style="display:inline-block;width:13px;height:13px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite"></span>
+          thoth is working…
+        </div>
+      </sc-if>
+
+      <div style="height:14px"></div>
+    </div>
+    </div>
+  </div>
+
+  <!-- ===== composer ===== -->
+  <div style="flex:0 0 auto;position:relative;border-top:1px solid var(--border);background:var(--bg2)">
+
+    <!-- slash palette -->
+    <sc-if value="{{ slashOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="position:absolute;left:26px;right:26px;bottom:100%;margin-bottom:8px;max-width:520px;background:var(--panel);border:1px solid var(--border2);border-radius:9px;overflow:hidden;box-shadow:0 12px 34px rgba(0,0,0,.35)">
+        <sc-for list="{{ slashItems }}" as="c" hint-placeholder-count="4">
+          <div onClick="{{ c.pick }}" style="display:flex;gap:14px;padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border)" style-hover="background:var(--bg2)">
+            <span style="color:var(--accent);flex:0 0 96px">{{ c.cmd }}</span>
+            <span style="color:var(--muted);font-size:12.5px">{{ c.desc }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <div style="display:flex;align-items:flex-start;gap:11px;padding:13px 26px">
+      <span style="color:var(--accent);font-weight:700;padding-top:1px">❯</span>
+      <textarea value="{{ input }}" onChange="{{ onInput }}" onKeyDown="{{ onKey }}" rows="1" placeholder="Ask thoth, or / for commands…" spellcheck="false" style="flex:1 1 auto;resize:none;border:none;outline:none;background:transparent;color:var(--fg);font-family:inherit;font-size:13.5px;line-height:1.6;max-height:140px"></textarea>
+      <span onClick="{{ send }}" style="cursor:pointer;color:var(--faint);font-size:12px;padding:3px 11px;border:1px solid var(--border2);border-radius:6px;align-self:flex-end" style-hover="color:var(--accent);border-color:var(--accent-dim)">send ⏎</span>
+    </div>
+    <div style="display:flex;gap:18px;padding:0 26px 10px 50px;font-size:11px;color:var(--faint);user-select:none">
+      <span><span style="color:var(--muted)">/</span> commands</span>
+      <span><span style="color:var(--muted)">⏎</span> send</span>
+      <span><span style="color:var(--muted)">⇧⏎</span> newline</span>
+      <span><span style="color:var(--muted)">⌃T</span> theme</span>
+      <span style="margin-left:auto">esc to interrupt</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: &quot;100%&quot;, &quot;height&quot;: &quot;100%&quot; },
+  &quot;theme&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;'dark' | 'light'&quot; },
+  &quot;statusBar&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot; },
+  &quot;streaming&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot; },
+  &quot;tokenStats&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot; },
+  &quot;fileTree&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot; },
+  &quot;slashCommands&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot; },
+  &quot;diffs&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot; }
+}">
+class Component extends DCLogic {
+  state = { theme: null, input: "", feed: [], thinking: false };
+
+  componentDidMount() {
+    this._key = (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "t" || e.key === "T")) {
+        e.preventDefault();
+        this.toggleTheme();
+      }
+    };
+    window.addEventListener("keydown", this._key);
+  }
+  componentWillUnmount() { window.removeEventListener("keydown", this._key); }
+  componentDidUpdate() { if (this.scrollEl) this.scrollEl.scrollTop = this.scrollEl.scrollHeight; }
+
+  toggleTheme = () => {
+    const cur = this.state.theme ?? (this.props.theme || "dark");
+    this.setState({ theme: cur === "dark" ? "light" : "dark" });
+  };
+
+  onInput = (e) => this.setState({ input: e.target.value });
+
+  onKey = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(); }
+  };
+
+  pickCmd = (cmd) => this.setState({ input: cmd + " " });
+
+  reply(text) {
+    const t = text.toLowerCase();
+    if (t.startsWith("/clear")) return "Context cleared. Starting a fresh session.";
+    if (t.startsWith("/model")) return "Switched model. Now running deepseek-coder-v2:16b.";
+    if (t.startsWith("/cost")) return "This session: 3,914 tokens · $0.011 · 9 turns.";
+    if (t.startsWith("/diff")) return "Showing unstaged changes for src/bucket.rs (+34 −0).";
+    if (t.startsWith("/help")) return "Commands: /model /clear /diff /cost /tree /help. Or just describe what you want built.";
+    if (t.includes("async") || t.includes("tokio"))
+      return "On it — I'll add an `AsyncTokenBucket` that holds a `tokio::sync::Mutex` and a `Notify`, so `acquire(n)` awaits a permit instead of returning false. I'll keep the sync API intact behind a feature flag.";
+    if (t.includes("bench"))
+      return "Adding a criterion benchmark group: single-thread acquire throughput plus an 8-thread contention sweep. Results will land in target/criterion.";
+    return "Got it. I'll work through that against the ratelimit crate and report back with the commands I run and any diffs.";
+  }
+
+  send = () => {
+    const text = this.state.input.trim();
+    if (!text) return;
+    this.setState((s) => ({ feed: [...s.feed, { isUser: true, isAgent: false, text }], input: "", thinking: true }));
+    clearTimeout(this._t);
+    this._t = setTimeout(() => {
+      this.setState((s) => ({ feed: [...s.feed, { isUser: false, isAgent: true, text: this.reply(text) }], thinking: false }));
+    }, 750);
+  };
+
+  renderVals() {
+    const p = this.props || {};
+    const theme = this.state.theme ?? (p.theme || "dark");
+    const trimmed = this.state.input.trimStart();
+    const slashOn = (p.slashCommands ?? true);
+    const slashOpen = slashOn && trimmed.startsWith("/");
+    const allCmds = [
+      { cmd: "/model", desc: "switch the active model" },
+      { cmd: "/diff", desc: "show pending file changes" },
+      { cmd: "/cost", desc: "token + dollar usage this session" },
+      { cmd: "/tree", desc: "print the project file tree" },
+      { cmd: "/clear", desc: "clear conversation context" },
+      { cmd: "/help", desc: "list available commands" },
+    ];
+    const q = trimmed.slice(1).toLowerCase();
+    const slashItems = allCmds
+      .filter((c) => c.cmd.slice(1).startsWith(q))
+      .map((c) => ({ ...c, pick: () => this.pickCmd(c.cmd) }));
+
+    return {
+      theme,
+      themeGlyph: theme === "dark" ? "☀" : "☾",
+      toggleTheme: this.toggleTheme,
+      showStatus: p.statusBar ?? true,
+      showStream: p.streaming ?? true,
+      showStats: p.tokenStats ?? true,
+      showTree: p.fileTree ?? false,
+      showDiffs: p.diffs ?? true,
+      input: this.state.input,
+      onInput: this.onInput,
+      onKey: this.onKey,
+      send: this.send,
+      feed: this.state.feed,
+      thinking: this.state.thinking,
+      slashOpen,
+      slashItems,
+      setScrollRef: (el) => { this.scrollEl = el; },
+    };
+  }
+}
+</script>
+</body>
+</html>
