@@ -7,19 +7,23 @@
 
 ## Version
 
-**0.7.0 (UNRELEASED — HELD)** — `/audit` tool-rounds + parallel-tool-calls floor
-blockers filed, landed in-tree 2026-06-23. **The 0.7.0 release is held until parallel
-tool calls also land** (gated on the filed sandhi + bayan reentrancy repairs); 0.7.0
-will ship both together. Two agentic-loop follow-ups scoped. **Landed:** `/audit` now surfaces a
-session-local trace of the agentic loop's tool **rounds** (new module
-`src/roundlog.cyr`) — grouped by turn/round with `[allow|deny|noname] <tool> ok|err`
-per call — alongside (and independent of) t-ron's canonical libro chain, so it
-renders even when t-ron is absent. **Deferred:** real parallel tool execution is
-blocked at the stdlib floor (sandhi dispatch globals + bayan parser global cursor,
-both vendored `lib/`, both single-threaded by design); a 3-lens adversarial audit
-confirmed UNSAFE, both gaps **filed upstream** (sandhi + bayan), and thoth's piece
-is fully designed to drop in once the floor is repaired — no dead scaffolding
-shipped. 221 assertions (+22, `test_roundlog`). Pin unchanged (6.2.37).
+**0.7.0** — parallel tool calls + `/audit` tool-rounds + a security-hardening pass,
+2026-06-24. **Parallel tool execution LANDED, on by default** (`[hoosh].parallel`): a
+round's calls fan out across OS threads — t-ron gating and bayan parsing stay serial,
+only the daimon network invoke is concurrent (`_agent_run_calls_par` over the reentrant
+`daimon_fetch_into`). Unblocked by the floor repairs the toolchain bump carried: cyrius
+**6.2.40**, sandhi **1.6.13** (per-dispatch arena context), bayan **1.0.3** (per-call
+parser state) — the earlier "HELD/UNSAFE at 6.2.37" framing is obsolete. `/audit`
+surfaces a session-local trace of the loop's tool **rounds** (`src/roundlog.cyr`),
+grouped by turn/round, independent of t-ron's libro chain (renders even when t-ron is
+absent). **Hardening (audit-driven):** every model/MCP-controlled request builder now
+writes through bounded `_append_cstr_cap` / `_json_escape_into_cap` helpers — an
+oversized tool name/arguments or daimon tool registry truncates in-buffer instead of
+overflowing a fixed heap buffer (closed 6 confirmed overflow paths in the serial,
+streaming, and tool-advertise code; the parallel path was already bounded). Oversized
+tool arguments are now uniformly REFUSED on both paths with a result the model can react
+to, gated on the full payload so t-ron never scans a clipped one. Tool registry is
+fetched + serialized once per session, not per turn. 235 assertions (+14). Pin **6.2.40**.
 **0.6.7** — cross-target re-verification of the 6.2.37 floor + getrandom root cause,
 2026-06-23: re-ran `./scripts/build.sh all` on x86_64 Linux. Two symbols the gated
 lanes hit are **fixable upstream bugs, not capability gaps** (correcting an earlier

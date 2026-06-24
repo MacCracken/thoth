@@ -102,6 +102,68 @@ fn _append_cstr(dst, off, s) {
     return off;
 }
 
+# _append_cstr_cap: bounded _append_cstr — copy NUL-terminated s into dst at off
+# but NEVER write at or past `cap` - 1 (one byte reserved for a trailing NUL the
+# caller writes). Returns the new off (<= cap - 1). The defensive form used for
+# any source that is NOT length-trusted — model tool_call name/arguments, daimon
+# tool metadata — so an oversized untrusted string truncates in-buffer instead of
+# overflowing a fixed destination (load8/store8 are unchecked). Pure.
+fn _append_cstr_cap(dst, off, cap, s) {
+    var i = 0;
+    while ((load8(s + i) != 0) && (off < (cap - 1))) {
+        store8(dst + off, load8(s + i));
+        off = off + 1;
+        i = i + 1;
+    }
+    return off;
+}
+
+# _json_escape_into_cap: bounded _json_escape_into. A single source byte expands
+# to at most 6 output bytes (\u00XX), so it stops before any char whose worst-case
+# expansion could reach `cap` - 1 — guaranteeing the write stays in-buffer with a
+# byte left for the caller's terminator. Truncation is at a CHARACTER boundary, so
+# the partial output is still well-formed escaped text (never a split escape). The
+# defensive sibling of _json_escape_into for untrusted (model/MCP) strings. Pure.
+fn _json_escape_into_cap(dst, off, cap, src) {
+    var i = 0;
+    var stop = 0;
+    while ((load8(src + i) != 0) && (stop == 0)) {
+        if ((off + 6) >= cap) { stop = 1; }
+        else {
+            var c = load8(src + i);
+            if (c == 34) {                  # "
+                store8(dst + off, 92); off = off + 1;
+                store8(dst + off, 34); off = off + 1;
+            } elif (c == 92) {              # backslash
+                store8(dst + off, 92); off = off + 1;
+                store8(dst + off, 92); off = off + 1;
+            } elif (c == 10) {              # \n
+                store8(dst + off, 92); off = off + 1;
+                store8(dst + off, 110); off = off + 1;
+            } elif (c == 13) {              # \r
+                store8(dst + off, 92); off = off + 1;
+                store8(dst + off, 114); off = off + 1;
+            } elif (c == 9) {               # \t
+                store8(dst + off, 92); off = off + 1;
+                store8(dst + off, 116); off = off + 1;
+            } elif (c < 32) {               # other control -> \u00XX
+                var hi = c / 16;
+                var lo = c - hi * 16;
+                store8(dst + off, 92); off = off + 1;
+                store8(dst + off, 117); off = off + 1;
+                store8(dst + off, 48); off = off + 1;
+                store8(dst + off, 48); off = off + 1;
+                store8(dst + off, _hoosh_hex_digit(hi)); off = off + 1;
+                store8(dst + off, _hoosh_hex_digit(lo)); off = off + 1;
+            } else {
+                store8(dst + off, c); off = off + 1;
+            }
+            i = i + 1;
+        }
+    }
+    return off;
+}
+
 # _append_int: write non-negative n as decimal into dst at off; return new off.
 fn _append_int(dst, off, n) {
     if (n == 0) { store8(dst + off, 48); return off + 1; }
@@ -168,21 +230,22 @@ fn _json_escape_into(dst, off, src) {
 # OpenAI `"stream"` field — true makes the gateway answer with SSE deltas. Shape:
 #   {"model":"M","messages":[{"role":"system","content":"S"},{"role":"user","content":"P"}],"max_tokens":N,"stream":true|false}
 fn hoosh_build_request(dst, model, system, prompt, stream) {
+    var cap = HOOSH_REQ_CAP;
     var off = 0;
-    off = _append_cstr(dst, off, "{\"model\":\"");
-    off = _json_escape_into(dst, off, model);
-    off = _append_cstr(dst, off, "\",\"messages\":[");
+    off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
+    off = _json_escape_into_cap(dst, off, cap, model);
+    off = _append_cstr_cap(dst, off, cap, "\",\"messages\":[");
     if ((system != 0) && (load8(system) != 0)) {
-        off = _append_cstr(dst, off, "{\"role\":\"system\",\"content\":\"");
-        off = _json_escape_into(dst, off, system);
-        off = _append_cstr(dst, off, "\"},");
+        off = _append_cstr_cap(dst, off, cap, "{\"role\":\"system\",\"content\":\"");
+        off = _json_escape_into_cap(dst, off, cap, system);
+        off = _append_cstr_cap(dst, off, cap, "\"},");
     }
-    off = _append_cstr(dst, off, "{\"role\":\"user\",\"content\":\"");
-    off = _json_escape_into(dst, off, prompt);
-    off = _append_cstr(dst, off, "\"}],\"max_tokens\":");
+    off = _append_cstr_cap(dst, off, cap, "{\"role\":\"user\",\"content\":\"");
+    off = _json_escape_into_cap(dst, off, cap, prompt);
+    off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
-    if (stream == 1) { off = _append_cstr(dst, off, ",\"stream\":true}"); }
-    else { off = _append_cstr(dst, off, ",\"stream\":false}"); }
+    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true}"); }
+    else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
     return off;
 }
@@ -195,6 +258,19 @@ fn _hoosh_emit_msg(dst, off, role, content) {
     off = _append_cstr(dst, off, "\",\"content\":\"");
     off = _json_escape_into(dst, off, content);
     off = _append_cstr(dst, off, "\"}");
+    return off;
+}
+
+# _hoosh_emit_msg_cap: bounded _hoosh_emit_msg — every write is clamped to `cap`
+# so a long history `content` (e.g. a prior assistant reply up to HOOSH_ACC_CAP,
+# re-sent on the next turn) truncates in-buffer instead of overflowing the request
+# buffer. `role` is a trusted literal; `content` is the untrusted part. Pure.
+fn _hoosh_emit_msg_cap(dst, off, cap, role, content) {
+    off = _append_cstr_cap(dst, off, cap, "{\"role\":\"");
+    off = _append_cstr_cap(dst, off, cap, role);
+    off = _append_cstr_cap(dst, off, cap, "\",\"content\":\"");
+    off = _json_escape_into_cap(dst, off, cap, content);
+    off = _append_cstr_cap(dst, off, cap, "\"}");
     return off;
 }
 
@@ -225,28 +301,29 @@ fn _hoosh_history_start(cap) {
 # history. Pure (reads the session history). Shape mirrors hoosh_build_request
 # but with N messages instead of one.
 fn hoosh_build_messages(dst, model, system, stream) {
+    var cap = HOOSH_REQ_CAP;
     var start = _hoosh_history_start(HOOSH_REQ_CAP);
     var total = session_history_len();
     var off = 0;
-    off = _append_cstr(dst, off, "{\"model\":\"");
-    off = _json_escape_into(dst, off, model);
-    off = _append_cstr(dst, off, "\",\"messages\":[");
+    off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
+    off = _json_escape_into_cap(dst, off, cap, model);
+    off = _append_cstr_cap(dst, off, cap, "\",\"messages\":[");
     var wrote = 0;
     if ((system != 0) && (load8(system) != 0)) {
-        off = _hoosh_emit_msg(dst, off, "system", system);
+        off = _hoosh_emit_msg_cap(dst, off, cap, "system", system);
         wrote = 1;
     }
     var i = start;
     while (i < total) {
-        if (wrote == 1) { off = _append_cstr(dst, off, ","); }
-        off = _hoosh_emit_msg(dst, off, session_history_role(i), session_history_content(i));
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, session_history_role(i), session_history_content(i));
         wrote = 1;
         i = i + 1;
     }
-    off = _append_cstr(dst, off, "],\"max_tokens\":");
+    off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
-    if (stream == 1) { off = _append_cstr(dst, off, ",\"stream\":true}"); }
-    else { off = _append_cstr(dst, off, ",\"stream\":false}"); }
+    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true}"); }
+    else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
     return off;
 }

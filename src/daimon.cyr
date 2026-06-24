@@ -54,14 +54,22 @@ fn _daimon_call_endpoint() {
 # dst, NUL-terminated; return the byte length. args_json is the caller's raw
 # JSON object (already valid JSON) or 0 for no arguments. Pure — unit-tested.
 # Shape: {"name":"N","arguments":A}
+# Every caller writes into a DAIMON_REQ_CAP-sized buffer (_daimon_req, or a
+# per-slot _par_req of the same size), and `name`/`args_json` are model-controlled
+# (the LLM's tool_call). Bounding every write to the cap turns an oversized name or
+# arguments string into in-buffer truncation instead of a raw heap overflow — the
+# fixed framing is trusted, the two untrusted fields are clamped. (Truncation can
+# yield daimon-rejectable JSON; the agent loop already surfaces a tool error to the
+# model, and the call sites additionally pre-detect oversize — see _agent_run_calls.)
 fn daimon_build_call(dst, name, args_json) {
+    var cap = DAIMON_REQ_CAP;
     var off = 0;
-    off = _append_cstr(dst, off, "{\"name\":\"");
-    off = _json_escape_into(dst, off, name);
-    off = _append_cstr(dst, off, "\",\"arguments\":");
-    if (args_json == 0) { off = _append_cstr(dst, off, "{}"); }
-    else { off = _append_cstr(dst, off, args_json); }
-    off = _append_cstr(dst, off, "}");
+    off = _append_cstr_cap(dst, off, cap, "{\"name\":\"");
+    off = _json_escape_into_cap(dst, off, cap, name);
+    off = _append_cstr_cap(dst, off, cap, "\",\"arguments\":");
+    if (args_json == 0) { off = _append_cstr_cap(dst, off, cap, "{}"); }
+    else { off = _append_cstr_cap(dst, off, cap, args_json); }
+    off = _append_cstr_cap(dst, off, cap, "}");
     store8(dst + off, 0);
     return off;
 }

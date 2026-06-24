@@ -595,6 +595,45 @@ fn test_parallel() {
     return 0;
 }
 
+# Bounded request-assembly helpers: the defensive primitives every model/MCP-fed
+# builder now writes through, so an oversized untrusted string truncates in-buffer
+# instead of overflowing a fixed destination. Each check plants a canary one byte
+# past the cap and asserts it survives.
+fn test_bounds_hardening() {
+    test_group("bounded request assembly (untrusted-input clamp)");
+    # _append_cstr_cap stops at cap-1 (reserving the last byte for the caller's NUL);
+    # the byte at index cap is never touched.
+    var ab[64];
+    store8(&ab + 16, 123);                                     # canary at the cap
+    var n = _append_cstr_cap(&ab, 0, 16, "0123456789abcdefghij");   # 20 chars into cap 16
+    assert_eq(n, 15, "append_cstr_cap stops at cap-1");
+    assert_eq(load8(&ab + 16), 123, "append_cstr_cap leaves the byte at cap untouched");
+
+    # _json_escape_into_cap stops before a worst-case 6-byte escape can reach the
+    # cap, truncating on a character boundary (never a split escape).
+    var eb[64];
+    store8(&eb + 20, 77);                                      # canary
+    var nl = "\n\n\n\n\n\n\n\n\n\n\n\n";                        # 12 LF bytes, each -> "\n" (2 bytes)
+    var m = _json_escape_into_cap(&eb, 0, 20, nl);
+    assert(m <= 19, "json_escape_into_cap stays within cap-1");
+    assert_eq(load8(&eb + 20), 77, "json_escape_into_cap leaves the byte at cap untouched");
+    assert_eq(m - (m / 2) * 2, 0, "escape truncates on a character boundary (whole escapes only)");
+
+    # end-to-end: an oversized model `arguments` string cannot overflow the fixed
+    # 32 KB daimon request buffer — daimon_build_call clamps to DAIMON_REQ_CAP and a
+    # canary one byte past the buffer survives.
+    var big = alloc(DAIMON_REQ_CAP + 16);
+    store8(big + DAIMON_REQ_CAP, 200);                         # canary just past the cap
+    var hug = alloc(DAIMON_REQ_CAP + 1024);
+    var k = 0;
+    while (k < (DAIMON_REQ_CAP + 1023)) { store8(hug + k, 97); k = k + 1; }   # 'a' * (cap+1023)
+    store8(hug + (DAIMON_REQ_CAP + 1023), 0);
+    var bo = daimon_build_call(big, "x", hug);
+    assert(bo <= (DAIMON_REQ_CAP - 1), "daimon_build_call clamps oversized args to cap-1");
+    assert_eq(load8(big + DAIMON_REQ_CAP), 200, "oversized args do not overflow _daimon_req (canary intact)");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -617,6 +656,7 @@ fn main() {
     test_audit();
     test_roundlog();
     test_parallel();
+    test_bounds_hardening();
     test_model_switch();
     return assert_summary();
 }

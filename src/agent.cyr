@@ -20,6 +20,8 @@ var _agent_req = 0;
 var AGENT_REQ_CAP = 524288;
 var _agent_tools_buf = 0;
 var AGENT_TOOLS_CAP = 32768;
+var _agent_tools_len = 0;     # cached serialized-tools byte length (session-stable)
+var _agent_tools_ready = 0;   # 1 once the registry was fetched + formatted at least once
 
 # The working buffer holds THIS turn's tool-round messages (assistant-with-
 # tool_calls + tool results) as raw comma-joined JSON objects. The persisted
@@ -94,34 +96,44 @@ fn agent_format_tools(dst, tools_arr) {
     if (tools_arr == 0) { return 0; }
     var n = bayan_json_v_arr_len(tools_arr);
     if (n == 0) { return 0; }
+    # dst is _agent_tools_buf (AGENT_TOOLS_CAP). name/description/inputSchema come
+    # from the daimon (MCP) registry — semi-trusted, not length-bounded — so every
+    # write is clamped to the cap. A per-tool headroom guard stops adding tools once
+    # near the cap, so an over-large registry yields a SHORTER but VALID tools array
+    # rather than a half-written element or a buffer overrun.
+    var cap = AGENT_TOOLS_CAP;
     var off = 0;
-    off = _append_cstr(dst, off, "[");
+    off = _append_cstr_cap(dst, off, cap, "[");
     var i = 0;
-    while (i < n) {
-        if (i > 0) { off = _append_cstr(dst, off, ","); }
-        var t = bayan_json_v_arr_get(tools_arr, i);
-        off = _append_cstr(dst, off, "{\"type\":\"function\",\"function\":{\"name\":\"");
-        var nm = bayan_json_v_obj_get(t, "name");
-        if (nm != 0) { var nms = bayan_json_v_str(nm); if (nms != 0) { off = _json_escape_into(dst, off, str_cstr(nms)); } }
-        off = _append_cstr(dst, off, "\",\"description\":\"");
-        var ds = bayan_json_v_obj_get(t, "description");
-        if (ds != 0) { var dss = bayan_json_v_str(ds); if (dss != 0) { off = _json_escape_into(dst, off, str_cstr(dss)); } }
-        # Pass daimon's per-tool inputSchema through verbatim as the OpenAI
-        # `parameters` (it is already a JSON object); fall back to a permissive
-        # object schema when a tool advertises none.
-        off = _append_cstr(dst, off, "\",\"parameters\":");
-        var sc = bayan_json_v_obj_get(t, "inputSchema");
-        if ((sc != 0) && (bayan_json_v_is_obj(sc) == 1)) {
-            var scs = bayan_json_v_build(sc);
-            if (scs != 0) { off = _append_cstr(dst, off, str_cstr(scs)); }
-            else { off = _append_cstr(dst, off, "{\"type\":\"object\"}"); }
-        } else {
-            off = _append_cstr(dst, off, "{\"type\":\"object\"}");
+    var done = 0;
+    while ((i < n) && (done == 0)) {
+        if (off > (cap - 256)) { done = 1; }
+        else {
+            if (i > 0) { off = _append_cstr_cap(dst, off, cap, ","); }
+            var t = bayan_json_v_arr_get(tools_arr, i);
+            off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"");
+            var nm = bayan_json_v_obj_get(t, "name");
+            if (nm != 0) { var nms = bayan_json_v_str(nm); if (nms != 0) { off = _json_escape_into_cap(dst, off, cap, str_cstr(nms)); } }
+            off = _append_cstr_cap(dst, off, cap, "\",\"description\":\"");
+            var ds = bayan_json_v_obj_get(t, "description");
+            if (ds != 0) { var dss = bayan_json_v_str(ds); if (dss != 0) { off = _json_escape_into_cap(dst, off, cap, str_cstr(dss)); } }
+            # Pass daimon's per-tool inputSchema through verbatim as the OpenAI
+            # `parameters` (it is already a JSON object); fall back to a permissive
+            # object schema when a tool advertises none.
+            off = _append_cstr_cap(dst, off, cap, "\",\"parameters\":");
+            var sc = bayan_json_v_obj_get(t, "inputSchema");
+            if ((sc != 0) && (bayan_json_v_is_obj(sc) == 1)) {
+                var scs = bayan_json_v_build(sc);
+                if (scs != 0) { off = _append_cstr_cap(dst, off, cap, str_cstr(scs)); }
+                else { off = _append_cstr_cap(dst, off, cap, "{\"type\":\"object\"}"); }
+            } else {
+                off = _append_cstr_cap(dst, off, cap, "{\"type\":\"object\"}");
+            }
+            off = _append_cstr_cap(dst, off, cap, "}}");
+            i = i + 1;
         }
-        off = _append_cstr(dst, off, "}}");
-        i = i + 1;
     }
-    off = _append_cstr(dst, off, "]");
+    off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
     return off;
 }
@@ -137,35 +149,41 @@ fn _agent_copy(dst, off, src, n, cap) {
 # this turn's working tool-rounds, plus the advertised tools. NUL-terminated;
 # returns the byte length. Non-streaming (tool_calls must be parsed whole).
 fn agent_build_request(dst, model, system, tools_buf, tools_len, stream) {
+    var cap = AGENT_REQ_CAP;
     var off = 0;
-    off = _append_cstr(dst, off, "{\"model\":\"");
-    off = _json_escape_into(dst, off, model);
-    off = _append_cstr(dst, off, "\",\"messages\":[");
+    off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
+    off = _json_escape_into_cap(dst, off, cap, model);
+    off = _append_cstr_cap(dst, off, cap, "\",\"messages\":[");
     var wrote = 0;
-    if ((system != 0) && (load8(system) != 0)) { off = _hoosh_emit_msg(dst, off, "system", system); wrote = 1; }
+    if ((system != 0) && (load8(system) != 0)) { off = _hoosh_emit_msg_cap(dst, off, cap, "system", system); wrote = 1; }
     var total = session_history_len();
-    var start = _hoosh_history_start(AGENT_REQ_CAP);
+    # Budget history against the room left AFTER this turn's working tool-rounds
+    # (_agent_work) and the advertised tools, so history + work + tools cannot
+    # collectively approach the cap. _hoosh_history_start takes a tenth of its arg
+    # as the raw-content budget (leaving headroom for ~6x JSON escaping).
+    var hist_cap = AGENT_REQ_CAP - AGENT_WORK_CAP - AGENT_TOOLS_CAP;
+    var start = _hoosh_history_start(hist_cap);
     var i = start;
     while (i < total) {
-        if (wrote == 1) { off = _append_cstr(dst, off, ","); }
-        off = _hoosh_emit_msg(dst, off, session_history_role(i), session_history_content(i));
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, session_history_role(i), session_history_content(i));
         wrote = 1;
         i = i + 1;
     }
     if (_agent_work_len > 0) {
-        if (wrote == 1) { off = _append_cstr(dst, off, ","); }
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
         off = _agent_copy(dst, off, _agent_work, _agent_work_len, AGENT_REQ_CAP);
         wrote = 1;
     }
-    off = _append_cstr(dst, off, "]");
+    off = _append_cstr_cap(dst, off, cap, "]");
     if (tools_len > 0) {
-        off = _append_cstr(dst, off, ",\"tools\":");
+        off = _append_cstr_cap(dst, off, cap, ",\"tools\":");
         off = _agent_copy(dst, off, tools_buf, tools_len, AGENT_REQ_CAP);
     }
-    off = _append_cstr(dst, off, ",\"max_tokens\":");
+    off = _append_cstr_cap(dst, off, cap, ",\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
-    if (stream == 1) { off = _append_cstr(dst, off, ",\"stream\":true}"); }
-    else { off = _append_cstr(dst, off, ",\"stream\":false}"); }
+    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true}"); }
+    else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
     return off;
 }
@@ -352,26 +370,33 @@ fn _agent_accum_delta(e) {
 # _ag_build_array: reconstruct the tool_calls array text from the slots into dst
 # (NUL-terminated); return the length. `arguments` is emitted as an escaped JSON
 # string (the accumulated value is raw JSON). Mirrors the non-streaming raw shape.
+# dst is _agent_arr_buf (AGENT_ARR_CAP). The id/name/arguments come from the
+# model's streamed deltas (up to AGENT_MAX_CALLS slots, each arguments up to
+# AG_ARGS_CAP-1 raw bytes that escape up to ~6x) — bounding every write to the cap
+# stops an adversarial round of 8 max-size calls from overflowing the buffer; the
+# reconstructed array truncates in-buffer (and bayan rejects a clipped element)
+# instead of corrupting the bump heap.
 fn _ag_build_array(dst) {
+    var cap = AGENT_ARR_CAP;
     var off = 0;
-    off = _append_cstr(dst, off, "[");
+    off = _append_cstr_cap(dst, off, cap, "[");
     var wrote = 0;
     var i = 0;
     while (i < _ag_max) {
         if (load8(_ag_seen + i) == 1) {
-            if (wrote == 1) { off = _append_cstr(dst, off, ","); }
-            off = _append_cstr(dst, off, "{\"id\":\"");
-            off = _json_escape_into(dst, off, _ag_ids + (i * AG_ID_CAP));
-            off = _append_cstr(dst, off, "\",\"type\":\"function\",\"function\":{\"name\":\"");
-            off = _json_escape_into(dst, off, _ag_names + (i * AG_NAME_CAP));
-            off = _append_cstr(dst, off, "\",\"arguments\":\"");
-            off = _json_escape_into(dst, off, _ag_args + (i * AG_ARGS_CAP));
-            off = _append_cstr(dst, off, "\"}}");
+            if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+            off = _append_cstr_cap(dst, off, cap, "{\"id\":\"");
+            off = _json_escape_into_cap(dst, off, cap, _ag_ids + (i * AG_ID_CAP));
+            off = _append_cstr_cap(dst, off, cap, "\",\"type\":\"function\",\"function\":{\"name\":\"");
+            off = _json_escape_into_cap(dst, off, cap, _ag_names + (i * AG_NAME_CAP));
+            off = _append_cstr_cap(dst, off, cap, "\",\"arguments\":\"");
+            off = _json_escape_into_cap(dst, off, cap, _ag_args + (i * AG_ARGS_CAP));
+            off = _append_cstr_cap(dst, off, cap, "\"}}");
             wrote = 1;
         }
         i = i + 1;
     }
-    off = _append_cstr(dst, off, "]");
+    off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
     return off;
 }
@@ -421,6 +446,13 @@ fn agent_enabled() {
 var PAR_MAX = 8;              # max concurrent workers per batch (matches AGENT_MAX_CALLS)
 var PAR_NAME_CAP = 256;
 var PAR_ARGS_CAP = 16384;
+# Max tool-call `arguments` bytes accepted, shared by BOTH execution paths (=
+# PAR_ARGS_CAP-1, the parallel slot's usable size). A call whose arguments exceed
+# this is REFUSED with a result the model can react to — the serial and parallel
+# paths never POST a truncated/malformed body, and the parallel path never gates a
+# clipped payload (t-ron scans the same bytes daimon would receive). Unifies the
+# previously divergent serial-unbounded / parallel-silently-truncated behavior.
+var AGENT_ARGS_MAX = 16383;
 var PAR_ID_CAP = 128;
 var PAR_OUT_CAP = 131072;    # per-call result text, copied out of the arena
 var PAR_ARENA_CAP = 524288;  # per-call arena: headers + url + conn buffers + response body
@@ -438,13 +470,14 @@ var _par_thread = 0;         # PAR_MAX thread handles (i64 each)
 var _par_has_name = 0;       # PAR_MAX byte flags: 1 if the call had a name
 var _par_allowed = 0;        # PAR_MAX byte flags: 1 if the gate allowed it
 var _par_kind = 0;           # PAR_MAX i64 roundlog verdict kinds
+var _par_over = 0;           # PAR_MAX byte flags: 1 if args exceeded AGENT_ARGS_MAX (refused)
 
 fn _par_ctx_ptr(s) { return _par_ctx + s * PAR_CTX_SZ; }
 
 # _par_alloc: lazily allocate the fixed slot storage (once per session). Each slot
 # gets its own arena allocator so concurrent workers never share a bump pointer.
 fn _par_alloc() {
-    if (_par_ready == 1) { return 0; }
+    if (_par_ready == 1) { return 1; }
     _par_arena = alloc(PAR_MAX * 8);
     _par_req = alloc(PAR_MAX * DAIMON_REQ_CAP);
     _par_out = alloc(PAR_MAX * PAR_OUT_CAP);
@@ -456,13 +489,18 @@ fn _par_alloc() {
     _par_has_name = alloc(PAR_MAX);
     _par_allowed = alloc(PAR_MAX);
     _par_kind = alloc(PAR_MAX * 8);
+    _par_over = alloc(PAR_MAX);
     var i = 0;
+    var ok = 1;
     while (i < PAR_MAX) {
-        store64(_par_arena + i * 8, arena_allocator(PAR_ARENA_CAP));
+        var aa = arena_allocator(PAR_ARENA_CAP);
+        store64(_par_arena + i * 8, aa);
+        if (aa == 0) { ok = 0; }    # OOM: an unusable slot arena
         i = i + 1;
     }
+    if (ok == 0) { return 0; }      # caller falls back to the serial path (no null-arena deref)
     _par_ready = 1;
-    return 0;
+    return 1;
 }
 
 # _par_cstr_copy: bounded copy of NUL-terminated src into dst (cap bytes incl. the
@@ -520,8 +558,14 @@ fn _agent_run_calls_par(tcs, nc) {
             if (ar != 0) { emit(" "); emit(ar); } println("");
             var allowed = 0;
             var kind = RL_DENIED;
+            store8(_par_over + k, 0);
+            # Refuse oversize args BEFORE gating, and gate on the FULL `ga` (an
+            # accepted call's slot copy equals it, since strlen(ga) <= AGENT_ARGS_MAX
+            # = PAR_ARGS_CAP-1) — so t-ron never scans a truncated payload and no
+            # clipped/malformed body is ever POSTed.
             if (nm == 0) { kind = RL_NONAME; }
-            elif (gate_authorize(nm, _par_args + k * PAR_ARGS_CAP, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
+            elif (strlen(ga) > AGENT_ARGS_MAX) { store8(_par_over + k, 1); kind = RL_DENIED; }
+            elif (gate_authorize(nm, ga, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
             store8(_par_allowed + k, allowed);
             store64(_par_kind + k * 8, kind);
             k = k + 1;
@@ -559,8 +603,12 @@ fn _agent_run_calls_par(tcs, nc) {
             if (kind2 == RL_NONAME) { res = "(no tool name)"; }
             elif (load8(_par_allowed + k) == 1) {
                 var rlen = load64(_par_ctx_ptr(k) + 40);
-                res = "(tool returned no result)";
-                if (rlen >= 0) {
+                if (rlen < 0) {
+                    # worker's daimon_fetch_into returned -1 (transport failure) — kept
+                    # distinct from a parsed-but-empty 2xx body so the model sees why.
+                    res = "(tool call failed: transport error)";
+                } else {
+                    res = "(tool returned no result)";
                     # SERIAL bayan parse of the raw body the worker fetched.
                     var text = daimon_extract_text(_par_out + k * PAR_OUT_CAP, rlen);
                     if (text != 0) { res = str_cstr(text); rl_ok = 1; }
@@ -568,6 +616,7 @@ fn _agent_run_calls_par(tcs, nc) {
                 emit("  result: "); println(res);
             } else {
                 res = "denied by authorization policy";
+                if (load8(_par_over + k) == 1) { res = "(tool arguments too large; call refused — split into smaller calls)"; }
             }
             var nmout = 0;
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
@@ -585,7 +634,7 @@ fn _agent_run_calls_par(tcs, nc) {
 # call; otherwise runs the serial path. Either way every call is t-ron-gated and a
 # deny becomes a result the model can react to, never an abort.
 fn _agent_run_calls(tcs, nc) {
-    if ((config_hoosh_parallel() == 1) && (nc > 1)) { return _agent_run_calls_par(tcs, nc); }
+    if ((config_hoosh_parallel() == 1) && (nc > 1) && (_par_alloc() == 1)) { return _agent_run_calls_par(tcs, nc); }
     return _agent_run_calls_serial(tcs, nc);
 }
 
@@ -605,6 +654,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         var rl_kind = RL_DENIED;
         var rl_ok = 0;
         if (nm == 0) { res = "(no tool name)"; rl_kind = RL_NONAME; }
+        elif (strlen(gp) > AGENT_ARGS_MAX) { res = "(tool arguments too large; call refused — split into smaller calls)"; rl_kind = RL_DENIED; }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
             res = daimon_invoke(nm, ar);
@@ -758,7 +808,17 @@ fn agent_turn(prompt) {
     if (_agent_tools_buf == 0) { _agent_tools_buf = alloc(AGENT_TOOLS_CAP); }
     if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
 
-    var tools_len = agent_format_tools(_agent_tools_buf, daimon_tools_value());
+    # Tool advertisement is session-stable (the daimon endpoint and its registry do
+    # not change mid-session), so fetch + parse + serialize it ONCE and reuse the
+    # formatted buffer every turn — not a daimon GET + bayan parse + re-serialize per
+    # turn. Cache only on success: a transient daimon-down on the first turn leaves
+    # _agent_tools_ready=0 so a later turn retries (degraded honestly, never sticky).
+    if (_agent_tools_ready == 0) {
+        var tl = agent_format_tools(_agent_tools_buf, daimon_tools_value());
+        _agent_tools_len = tl;
+        if (tl > 0) { _agent_tools_ready = 1; }
+    }
+    var tools_len = _agent_tools_len;
     var want_stream = config_hoosh_stream();
     session_history_append("user", prompt, strlen(prompt));
     _agent_work_reset();

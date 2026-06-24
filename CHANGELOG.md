@@ -2,22 +2,14 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.7.0] - 2026-06-24
 
-> **0.7.0 is HELD — not yet released.** The `/audit` tool-rounds feature below has
-> landed in-tree, but the **0.7.0 release will not be cut until parallel tool calls
-> also land** — which is gated on the upstream **sandhi** + **bayan** reentrancy
-> repairs (filed; see "Deferred + filed upstream"). 0.7.0 ships both features
-> together. Until then this work stays unreleased.
-
-### Held for 0.7.0 — `/audit` tool-rounds; parallel-tool-calls floor blockers filed
-
-**`/audit` tool-rounds lands in-tree; parallel-tool-calls floor blockers filed upstream.**
-Two agentic-loop follow-ups were scoped. One lands in-tree (a display feature with no
-concurrency dependency); the other — real parallel tool execution — is blocked at
-the stdlib transport floor and is filed upstream for repair rather than worked
-around. No thoth runtime regression; pin unchanged (Cyrius 6.2.37); 221 unit
-assertions pass (+22).
+**Parallel tool execution, `/audit` tool-rounds, and a security-hardening pass.**
+The floor blockers a prior note recorded as "HELD/UNSAFE at 6.2.37" are repaired: the
+toolchain bump to Cyrius **6.2.40** carries sandhi **1.6.13** (per-dispatch arena
+context) and bayan **1.0.3** (per-call parser state), so parallel tool calls land on
+by default. An audit-driven hardening pass then closed six model-controlled heap
+overflows. Pin **6.2.40**; 235 unit assertions pass (+14).
 
 ### Added
 - **Agentic tool-round trace in `/audit`** (new module `src/roundlog.cyr`). The
@@ -31,32 +23,39 @@ assertions pass (+22).
   fail-closed confirm gate regardless). Recorded by `_agent_run_calls` /
   `agent_turn`, rendered by `cmd_audit` (both branches), cleared by `/reset`.
   `test_roundlog` (+22 assertions): recording, accessors, per-round cap, ring
-  eviction. 221 total.
+  eviction.
 
-### Deferred + filed upstream (parallel tool calls)
-- **Real parallel tool execution is blocked at the stdlib floor** — confirmed by a
-  three-lens adversarial audit (sockets, allocator/arena, TLS/dispatch globals; all
-  three returned UNSAFE). Two vendored-`lib/` modules hold per-call state in
-  process-global words: safe single-threaded, not thread-safe:
-  - **sandhi** — the HTTP client dispatch stashes `_sandhi_allow_0rtt` /
-    `_sandhi_cred_digest` / `_sandhi_tls_policy_pending` / `_sandhi_conn_last_err`
-    in module globals via a reentrancy-safe-but-not-thread-safe save/restore (the
-    code itself says "Single-threaded today. Multi-threaded clients would need a
-    per-pool mutex"). **Filed**:
-    `sandhi/docs/issues/2026-06-23-thoth-http-client-dispatch-globals-not-thread-safe.md`.
-  - **bayan** — `bayan_json_v_parse_str` uses a process-global parser cursor
-    (`_jp_buf`/`_jp_len`/`_jp_pos`); two concurrent parses corrupt each other, and
-    `daimon_extract_text` parses every tool result through it. **Filed**:
-    `bayan/docs/development/issues/2026-06-23-thoth-json-value-parser-global-cursor-not-thread-safe.md`.
-  Fixing these in thoth would mean forking the spine (vendored `lib/`), which the
-  project forbids. thoth's own piece is fully designed and recipe-captured (a
-  reentrant `daimon_invoke_a` with a per-call arena + request buffer; a phased
-  `snapshot → gate → execute → ordered-append` `_agent_run_calls`; the established
-  `thread_create` fan-out from sigil). It drops in with zero further restructuring
-  once the floor is repaired — the same "port the floor; never fork the spine"
-  pattern as the AGNOS lseek gap. No dead parallel scaffolding was shipped.
+### Added — parallel tool execution
+- **A round's tool calls now run concurrently** (`[hoosh].parallel`, on by default;
+  a single-call round or `parallel = false` takes the serial path). Phased so the
+  security path stays serial: Phase 1 (main thread) snapshots each call and runs the
+  t-ron gate in order — the libro audit chain is hash-linked, so gating must not
+  race; Phase 2 fans the ALLOWED calls across OS threads, each worker doing ONLY the
+  network (`daimon_fetch_into`) on its own arena + request/response buffers over a
+  fresh connection — the reentrant shape sandhi 1.6.13 certifies; Phase 3 (main
+  thread, in call order) parses each raw body with bayan and appends results, so
+  bayan never runs concurrently (its value parser is not thread-safe). If
+  `thread_create` is unavailable (Windows/AGNOS) or a slot arena cannot be
+  allocated, the call runs inline — correct, just serial.
+
+### Security
+- **Bounded request assembly closes six confirmed model-controlled heap overflows.**
+  Every builder that writes LLM- or MCP-controlled text into a fixed buffer
+  (`daimon_build_call`, `_ag_build_array`, `agent_format_tools`, `agent_build_request`,
+  and the hoosh request builders) now writes through bounded `_append_cstr_cap` /
+  `_json_escape_into_cap` helpers, so an oversized tool name/arguments or daimon tool
+  registry truncates in-buffer instead of overrunning the heap (`load8`/`store8` are
+  unchecked — an overrun is silent corruption). The parallel path was already bounded.
+  `test_bounds_hardening` (+7, canary-guarded).
+- **Oversized tool arguments are uniformly refused** on both the serial and parallel
+  paths (`AGENT_ARGS_MAX`) with a result the model can react to, and the parallel path
+  now gates on the FULL payload — so t-ron never scans a clipped argument string and no
+  truncated/malformed body is ever sent to daimon.
 
 ### Changed
+- **Tool registry fetched once per session, not per turn** — the agentic loop now
+  caches the daimon registry GET + bayan parse + re-serialize (it is session-stable),
+  retrying only if the first fetch failed so a transient daimon-down is not sticky.
 - **Banner/`/state` version** — `src/session.cyr` startup banner and
   `src/commands.cyr` `/state` build line ride forward to `0.7.0`.
 
