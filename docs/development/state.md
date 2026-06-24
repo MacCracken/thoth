@@ -7,6 +7,13 @@
 
 ## Version
 
+**0.8.1** — design-palette color across the core surfaces (M7 Phase 1a), 2026-06-24.
+The banner, `/seams`, the agent loop's tool-call/result lines, and the t-ron gate
+verdicts now render through `src/ui.cyr`'s semantic color roles at T1 (the mockup's
+warm amber). Pure T1, no new substrate; **byte-identical when piped/CI** (roles are
+empty on the T0 floor — 0 escape bytes verified). `/seams` colors the live ladder so
+degrade-closed is visible (t-ron `absent` binding gray, `degraded` effect amber). New
+`ui_emit`/`ui_label` helpers. 256 assertions. Pin unchanged (6.2.40).
 **0.8.0** — presentation surface, the render foundation (M7 Phase 0), 2026-06-24.
 Opens the **0.8.x design-style arc** ([ADR-0009](../adr/0009-presentation-capability-ladder.md)):
 presentation becomes a capability tier (T0 plain → T1 ANSI → T2 rich-TUI → T3

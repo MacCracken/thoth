@@ -554,8 +554,8 @@ fn _agent_run_calls_par(tcs, nc) {
             var ga = ar; if (ga == 0) { ga = "{}"; }
             _par_cstr_copy(_par_args + k * PAR_ARGS_CAP, PAR_ARGS_CAP, ga);
             _par_cstr_copy(_par_id + k * PAR_ID_CAP, PAR_ID_CAP, id);
-            emit("  tool-call: "); if (nm != 0) { emit(nm); } else { emit("(unnamed)"); }
-            if (ar != 0) { emit(" "); emit(ar); } println("");
+            ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
+            if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } println("");
             var allowed = 0;
             var kind = RL_DENIED;
             store8(_par_over + k, 0);
@@ -613,7 +613,7 @@ fn _agent_run_calls_par(tcs, nc) {
                     var text = daimon_extract_text(_par_out + k * PAR_OUT_CAP, rlen);
                     if (text != 0) { res = str_cstr(text); rl_ok = 1; }
                 }
-                emit("  result: "); println(res);
+                ui_emit(ROLE_FAINT, "  result: "); println(res);
             } else {
                 res = "denied by authorization policy";
                 if (load8(_par_over + k) == 1) { res = "(tool arguments too large; call refused — split into smaller calls)"; }
@@ -647,8 +647,8 @@ fn _agent_run_calls_serial(tcs, nc) {
         var nm = agent_tc_name(tcs, ci);
         var ar = agent_tc_args(tcs, ci);
         var id = agent_tc_id(tcs, ci);
-        emit("  tool-call: "); if (nm != 0) { emit(nm); } else { emit("(unnamed)"); }
-        if (ar != 0) { emit(" "); emit(ar); } println("");
+        ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
+        if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } println("");
         var gp = ar; if (gp == 0) { gp = "{}"; }
         var res = 0;
         var rl_kind = RL_DENIED;
@@ -660,7 +660,7 @@ fn _agent_run_calls_serial(tcs, nc) {
             res = daimon_invoke(nm, ar);
             if (res == 0) { res = "(tool returned no result)"; rl_ok = 0; }
             else { rl_ok = 1; }
-            emit("  result: "); println(res);
+            ui_emit(ROLE_FAINT, "  result: "); println(res);
         } else {
             res = "denied by authorization policy";
         }

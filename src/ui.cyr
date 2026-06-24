@@ -234,6 +234,17 @@ fn ui_reset() {
     return _ui_reset_ptr;
 }
 
+# ui_emit: write s wrapped in the role's color (just s at T0 — byte-identical on
+# the floor). The common "one colored span" case over the ui_sgr/ui_reset pair.
+fn ui_emit(role, s) {
+    emit(ui_sgr(role));
+    emit(s);
+    emit(ui_reset());
+    return 0;
+}
+# ui_label: a dim label span (faint role) — sugar for "  key : " prefixes.
+fn ui_label(s) { return ui_emit(ROLE_FAINT, s); }
+
 # Introspection (announced in /state; future /seams presentation row).
 fn ui_tier() { return _ui_tier; }
 fn ui_color_depth() { return _ui_depth; }

@@ -32,8 +32,8 @@ fn gate_active() {
 # the exact object being authorized (verb + obj) so the answer is informed.
 # Returns 1 ONLY on explicit y/yes; default (empty/EOF/other) DENIES.
 fn confirm(verb, obj) {
-    if (gate_active() == 0) { emit("  [t-ron absent: fail-closed] authorize "); }
-    else { emit("  [t-ron flag: confirm] authorize "); }
+    if (gate_active() == 0) { ui_emit(ROLE_ACCENT, "  [t-ron absent: fail-closed] authorize "); }
+    else { ui_emit(ROLE_ACCENT, "  [t-ron flag: confirm] authorize "); }
     emit(verb); emit(" "); emit(obj);
     emit("? [y/N] ");
     var ans[64];
@@ -76,12 +76,12 @@ fn gate_verdict(tool_name, params) {
     var v = tron_check(_gate_tron, call);
     var k = verdict_kind(v);
     if (k == VK_DENY) {
-        emit("  [t-ron] DENY: ");
+        ui_emit(ROLE_RED, "  [t-ron] DENY: ");
         var reason = verdict_reason(v);
         if (reason != 0) { println(reason); } else { println("(no reason)"); }
     }
     if (k == VK_FLAG) {
-        emit("  [t-ron] FLAG: ");
+        ui_emit(ROLE_ACCENT, "  [t-ron] FLAG: ");
         var freason = verdict_reason(v);
         if (freason != 0) { println(freason); } else { println("(no reason)"); }
     }
@@ -103,7 +103,7 @@ fn gate_authorize(tool_name, params, verb, obj) {
     }
     var k = gate_verdict(tool_name, params);
     if (k == VK_ALLOW) {
-        emit("  [t-ron] allow: "); emit(verb); emit(" "); println(obj);
+        ui_emit(ROLE_GREEN, "  [t-ron] allow: "); emit(verb); emit(" "); println(obj);
         log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("verdict", "allow");
         log_commit(SK_INFO);
         return 1;

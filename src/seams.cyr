@@ -154,41 +154,53 @@ fn seam_any_wired() {
     return wired;
 }
 
+# Live-ladder palette: a capability effect / binding mode maps to a color role —
+# full/wired green, degraded amber (accent), absent red/faint. (T1+; "" at T0.)
+fn _cap_role(c) {
+    if (c == CAP_FULL) { return ROLE_GREEN; }
+    if (c == CAP_DEGRADED) { return ROLE_ACCENT; }
+    return ROLE_RED;
+}
+fn _bind_role(st) {
+    if (st == SEAM_ABSENT) { return ROLE_FAINT; }
+    return ROLE_GREEN;
+}
+
 # cmd_seams: render the capability ladder — two dimensions per seam: the binding
 # mode (how it's reached) and the capability effect (what you get). I/O — the
 # pure accessors it composes are unit-tested; this renderer is not.
 fn cmd_seams() {
-    println("capability ladder - the AGNOS spine thoth drives:");
-    println("  per seam: [binding mode] [capability effect] domain; then the live effect.");
+    ui_emit(ROLE_ACCENT, "capability ladder - the AGNOS spine thoth drives:"); println("");
+    ui_emit(ROLE_FAINT, "  per seam: [binding mode] [capability effect] domain; then the live effect."); println("");
     var i = 0;
     while (i < SEAM_COUNT) {
         # binding row: name, binding mode, capability effect, domain.
         emit("  ");
-        emit(seam_name(i));
+        ui_emit(ROLE_ACCENT, seam_name(i));
         emit("  [");
-        emit(seam_status_label(seam_status(i)));
+        ui_emit(_bind_role(seam_status(i)), seam_status_label(seam_status(i)));
         emit("]  [");
-        emit(cap_state_label(seam_cap_state(i)));
+        ui_emit(_cap_role(seam_cap_state(i)), cap_state_label(seam_cap_state(i)));
         emit("]  ");
-        println(seam_domain(i));
+        ui_emit(ROLE_FAINT, seam_domain(i)); println("");
         # effect row: full delivers / fallback when not full.
         if (seam_cap_state(i) == CAP_FULL) {
-            emit("      full:     ");
-            println(seam_cap_full(i));
+            ui_emit(ROLE_FAINT, "      full:     ");
+            ui_emit(ROLE_GREEN, seam_cap_full(i)); println("");
         } else {
-            emit("      now:      ");
-            println(seam_cap_fallback(i));
+            ui_emit(ROLE_FAINT, "      now:      ");
+            ui_emit(ROLE_MUTED, seam_cap_fallback(i)); println("");
         }
         i = i + 1;
     }
     println("");
     if (seam_any_wired() == 0) {
-        println("  every spine seam is absent. Nothing is faked.");
+        ui_emit(ROLE_FAINT, "  every spine seam is absent. Nothing is faked."); println("");
     } else {
-        println("  remote seams ride sandhi; native seams are vendored dist bundles.");
-        println("  absent seams degrade honestly — never faked, never reimplemented.");
-        println("  security degrades CLOSED: absent t-ron is the fail-closed gate, never a silent allow.");
+        ui_emit(ROLE_FAINT, "  remote seams ride sandhi; native seams are vendored dist bundles."); println("");
+        ui_emit(ROLE_FAINT, "  absent seams degrade honestly — never faked, never reimplemented."); println("");
+        ui_emit(ROLE_FAINT, "  security degrades CLOSED: absent t-ron is the fail-closed gate, never a silent allow."); println("");
     }
-    println("  port the floor; never fork the spine.");
+    ui_emit(ROLE_ACCENT_DIM, "  port the floor; never fork the spine."); println("");
     return 0;
 }

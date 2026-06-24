@@ -148,7 +148,7 @@ fn cmd_state() {
     emit(ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); emit(ui_color_depth_name()); emit(")"); }
     println("");
-    println("  build   : thoth 0.8.0");
+    println("  build   : thoth 0.8.1");
     return 0;
 }
 

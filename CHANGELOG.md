@@ -2,6 +2,27 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1] - 2026-06-24
+
+**Design-palette color across the core surfaces (M7 Phase 1a).** First visible step
+of the 0.8.x design arc: the banner, `/seams`, the agent loop's tool-call/result
+lines, and the t-ron gate verdicts now render through the semantic color roles
+(`src/ui.cyr`) at T1 — the warm amber palette from the mockup. Still pure T1 (no new
+substrate); output stays **byte-identical when piped/CI** (every role resolves to the
+empty string on the T0 floor — verified: 0 escape bytes piped).
+
+### Changed
+- **Banner** — persona name/role + `thoth` brand in accent amber, tagline muted.
+- **`/seams`** — the live capability ladder is colored: seam names accent, binding
+  mode green (wired) / faint (absent), capability effect green (full) / amber
+  (degraded) / red (absent) — so "degrade closed" is now visible (t-ron reads
+  `absent` binding in gray but `degraded` effect in amber).
+- **Agent loop** — `tool-call:` lines color the tool name accent + args muted;
+  `result:` label faint.
+- **t-ron gate** — `allow` green, `DENY` red, `FLAG` + the fail-closed confirm
+  prompt amber.
+- New surface helpers `ui_emit(role, s)` / `ui_label(s)`.
+
 ## [0.8.0] - 2026-06-24
 
 **Presentation surface — the render foundation (M7 Phase 0).** Opens the **0.8.x
