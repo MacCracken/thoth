@@ -69,7 +69,7 @@ fn cmd_help() {
     println("  /seams             capability ladder (spine seam status)");
     println("  /state             session state");
     println("  /model [id]        show model, or attempt a mid-session switch (hoosh)");
-    println("  /models            list the models the hoosh gateway offers");
+    println("  /models [provider] list providers; with one, its switchable models");
     println("  /read <file>       print a file (safe, read-only built-in)");
     println("  /write <f> <text>  write text to a file (t-ron-gated)");
     println("  /run <cmd>         run a shell command (t-ron-gated local escape)");
@@ -144,7 +144,7 @@ fn cmd_state() {
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
     else { println("see /seams"); }
-    println("  build   : thoth 0.7.0");
+    println("  build   : thoth 0.7.1");
     return 0;
 }
 
@@ -177,14 +177,18 @@ fn cmd_model(line) {
 # catalog is hoosh's domain (multi-provider routing) — thoth only asks and shows
 # what to pick from, marking the active routing target. The hoosh seam must be
 # bound; absent, it degrades honestly (no endpoint, no catalog claim).
-fn cmd_models() {
+fn cmd_models(line) {
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         println("hoosh seam absent - no model gateway is wired.");
         println("the model catalog is hoosh's domain (multi-provider routing).");
         println("set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
-    return hoosh_list_models();
+    # Bare /models lists the providers hoosh routes to; /models <provider> drills
+    # into that provider's concrete, switchable models (hoosh's per-provider catalog).
+    var prov = arg_after(line);
+    if (prov == 0) { return hoosh_list_models(); }
+    return hoosh_list_provider_models(prov);
 }
 
 # /read uses one reused heap buffer (the bump allocator never frees, so a
@@ -364,7 +368,7 @@ fn dispatch(line) {
     if (c == CMD_SEAMS) { cmd_seams(); return 1; }
     if (c == CMD_STATE) { cmd_state(); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
-    if (c == CMD_MODELS) { cmd_models(); return 1; }
+    if (c == CMD_MODELS) { cmd_models(line); return 1; }
     if (c == CMD_READ) { cmd_read(line); return 1; }
     if (c == CMD_WRITE) { cmd_write(line); return 1; }
     if (c == CMD_RUN) { cmd_run(line); return 1; }

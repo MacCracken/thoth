@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.7.1** — `/models <provider>` drill-down, 2026-06-24. `/models` lists the
+providers hoosh routes to; **`/models <provider>`** now lists that provider's
+concrete, switchable model ids (e.g. `/models anthropic` → `claude-opus-4`,
+`claude-sonnet-4`, …), marking the active routing target. Consumes **hoosh 2.4.9**'s
+new `GET /v1/models/catalog` (`{object:list, data:[{id, owned_by}]}`, only models an
+enabled route can serve), filtered by `owned_by` (case-insensitive). Bare `/models`
+unchanged; unknown provider and pre-2.4.9 hoosh (404) degrade honestly. The catalog
+is hoosh's domain — thoth only asks. 244 assertions (+9, `test_provider_catalog`).
+Pin unchanged (6.2.40).
 **0.7.0** — parallel tool calls + `/audit` tool-rounds + a security-hardening pass,
 2026-06-24. **Parallel tool execution LANDED, on by default** (`[hoosh].parallel`): a
 round's calls fan out across OS threads — t-ron gating and bayan parsing stay serial,

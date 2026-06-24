@@ -2,6 +2,24 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-06-24
+
+**`/models <provider>` — drill into a provider's switchable models.** `/models`
+lists the providers hoosh routes to; previously there was no way to see the actual
+model ids to switch to. Pairs with **hoosh 2.4.9**, which adds the per-provider
+catalog endpoint.
+
+### Added
+- **`/models <provider>`** lists the concrete, switchable model ids a provider
+  offers (e.g. `/models anthropic` → `claude-opus-4`, `claude-sonnet-4`,
+  `claude-3.5-haiku`, …), marking the active routing target. Consumes hoosh's
+  `GET /v1/models/catalog` (`{object:list, data:[{id, owned_by}]}`) and filters on
+  `owned_by` with a case-insensitive match, so `/models Anthropic` works too. Bare
+  `/models` (the provider list) is unchanged. An unknown provider degrades honestly
+  ("no models for 'X' — run /models …"), as does an older hoosh without the catalog
+  endpoint (404 → a one-line "needs hoosh >= 2.4.9" note). `test_provider_catalog`
+  (+9): catalog parse, owned_by filter, case-insensitive provider match.
+
 ## [0.7.0] - 2026-06-24
 
 **Parallel tool execution, `/audit` tool-rounds, and a security-hardening pass.**

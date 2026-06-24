@@ -30,6 +30,8 @@ var _hoosh_endpoint = 0;    # cached base url + the OpenAI path
 var _hoosh_models_ep = 0;   # cached base url + the OpenAI /v1/models path
 var HOOSH_PATH = "/v1/chat/completions";
 var HOOSH_MODELS_PATH = "/v1/models";
+var _hoosh_catalog_ep = 0;  # cached base url + the concrete per-provider catalog path
+var HOOSH_CATALOG_PATH = "/v1/models/catalog";
 
 # Assistant-reply accumulator (0.5.1): both turn paths leave the full assistant
 # text here (streaming appends each delta; blocking copies the parsed content) so
@@ -82,6 +84,41 @@ fn _hoosh_models_url() {
     off = _append_cstr(_hoosh_models_ep, off, HOOSH_MODELS_PATH);
     store8(_hoosh_models_ep + off, 0);
     return _hoosh_models_ep;
+}
+
+# _hoosh_catalog_url: GET target for hoosh's concrete per-provider model catalog
+# (hoosh >= 2.4.9: GET /v1/models/catalog → {object:list, data:[{id, owned_by}]}).
+# Same base-trim + cache convention as _hoosh_endpoint_url. Cached.
+fn _hoosh_catalog_url() {
+    if (_hoosh_catalog_ep != 0) { return _hoosh_catalog_ep; }
+    var base = config_hoosh_url();
+    var blen = strlen(base);
+    if (blen > 0) { if (load8(base + blen - 1) == 47) { blen = blen - 1; } }   # trim one '/'
+    _hoosh_catalog_ep = alloc(blen + strlen(HOOSH_CATALOG_PATH) + 1);
+    var off = 0;
+    var i = 0;
+    while (i < blen) { store8(_hoosh_catalog_ep + off, load8(base + i)); off = off + 1; i = i + 1; }
+    off = _append_cstr(_hoosh_catalog_ep, off, HOOSH_CATALOG_PATH);
+    store8(_hoosh_catalog_ep + off, 0);
+    return _hoosh_catalog_ep;
+}
+
+# _ci_eq: 1 if NUL-terminated a and b are equal ignoring ASCII case. Pure. Used to
+# match a user-typed provider (e.g. "Anthropic") against hoosh's lowercase
+# owned_by ("anthropic").
+fn _ci_eq(a, b) {
+    var i = 0;
+    var ret = 0 - 2;
+    while (ret == (0 - 2)) {
+        var ca = load8(a + i);
+        var cb = load8(b + i);
+        if ((ca >= 65) && (ca <= 90)) { ca = ca + 32; }
+        if ((cb >= 65) && (cb <= 90)) { cb = cb + 32; }
+        if (ca != cb) { ret = 0; }
+        elif (ca == 0) { ret = 1; }
+        else { i = i + 1; }
+    }
+    return ret;
 }
 
 # _hoosh_hex_digit: 0..15 -> ASCII hex (lowercase). Pure. (Named to avoid
@@ -437,6 +474,72 @@ fn hoosh_list_models() {
         i = i + 1;
     }
     emit("(* = current; switch with /model <id>. routing target now: "); emit(cur); println(")");
+    return 0;
+}
+
+# hoosh_list_provider_models: list the concrete, switchable models a given provider
+# offers (GET /v1/models/catalog, filtered by owned_by), marking the active routing
+# target. The catalog is hoosh's domain (hoosh >= 2.4.9 enumerates the routable
+# models per provider); thoth only asks and filters. Returns 0 on success, negative
+# on transport failure, the HTTP status on non-2xx. Degrades honestly: an old hoosh
+# without the catalog endpoint (404) is announced, not faked. I/O.
+fn hoosh_list_provider_models(provider) {
+    var url = _hoosh_catalog_url();
+    var h = sandhi_headers_new();
+    var auth = _hoosh_auth_header();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    emit("  -> hoosh "); println(url);
+    var r = sandhi_http_get(url, h);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) {
+        var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
+        emit("  hoosh transport error: "); println(ename);
+        emit("  endpoint "); emit(url);
+        println(" unreachable — is the gateway up? (degraded, not faked)");
+        return 0 - 1;
+    }
+    var status = sandhi_http_status(r);
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    if ((status < 200) || (status >= 300)) {
+        emit("  hoosh returned HTTP "); fmt_int(status); println("");
+        if (status == 404) { println("  (this gateway has no per-provider catalog — needs hoosh >= 2.4.9; /models lists providers)"); }
+        else { var em = hoosh_extract_error(body, blen); if (em != 0) { emit("  "); _hoosh_print_str(em); } }
+        return status;
+    }
+    # The catalog shares /v1/models' {object:list, data:[...]} shape, each entry
+    # {id, owned_by}; reuse the same extractor and filter on owned_by.
+    var data = hoosh_extract_models(body, blen);
+    if (data == 0) { println("  hoosh: response received but no model catalog could be parsed."); return 0 - 1; }
+    var n = bayan_json_v_arr_len(data);
+    var cur = _hoosh_model();
+    emit("models for provider '"); emit(provider); println("':");
+    var i = 0;
+    var shown = 0;
+    while (i < n) {
+        var m = bayan_json_v_arr_get(data, i);
+        var ob = bayan_json_v_obj_get(m, "owned_by");
+        if (ob != 0) {
+            var obs = bayan_json_v_str(ob);
+            if ((obs != 0) && (_ci_eq(str_cstr(obs), provider) == 1)) {
+                var id = bayan_json_v_obj_get(m, "id");
+                if (id != 0) {
+                    var ids = bayan_json_v_str(id);
+                    var marker = "  ";
+                    if (str_eq_cstr(ids, cur) == 1) { marker = "* "; }   # active routing target
+                    emit(marker);
+                    emit_n(str_data(ids), str_len(ids));
+                    println("");
+                    shown = shown + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    if (shown == 0) {
+        emit("  (no models for '"); emit(provider); println("' — run /models to list providers)");
+        return 0;
+    }
+    emit("(* = current; switch with /model <id>. "); fmt_int(shown); println(" model(s).)");
     return 0;
 }
 

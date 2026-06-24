@@ -236,6 +236,36 @@ fn test_hoosh() {
     return 0;
 }
 
+# /models <provider> (0.7.1): hoosh's concrete per-provider catalog shares the
+# /v1/models {object:list, data:[{id, owned_by}]} shape; the drill-down reuses
+# hoosh_extract_models and filters owned_by with the case-insensitive _ci_eq.
+fn test_provider_catalog() {
+    test_group("provider model catalog (/models <provider>)");
+    var cat = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"claude-opus-4\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"gpt-4o\",\"object\":\"model\",\"owned_by\":\"openai\"}]}";
+    var d = hoosh_extract_models(cat, strlen(cat));
+    assert(d != 0, "catalog data array present");
+    assert_eq(bayan_json_v_arr_len(d), 3, "three catalog entries");
+    var e0 = bayan_json_v_arr_get(d, 0);
+    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get(e0, "owned_by")), "anthropic"), "entry owned_by parsed");
+    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get(e0, "id")), "claude-sonnet-4"), "entry id parsed");
+    # case-insensitive provider match (user may type 'Anthropic'; hoosh emits 'anthropic')
+    assert_eq(_ci_eq("anthropic", "anthropic"), 1, "exact provider matches");
+    assert_eq(_ci_eq("Anthropic", "anthropic"), 1, "provider match ignores case");
+    assert_eq(_ci_eq("openai", "anthropic"), 0, "different providers do not match");
+    assert_eq(_ci_eq("anthropic", "anthropi"), 0, "prefix is not a full match");
+    # filter the catalog by provider (mirrors hoosh_list_provider_models)
+    var matches = 0;
+    var i = 0;
+    while (i < bayan_json_v_arr_len(d)) {
+        var m = bayan_json_v_arr_get(d, i);
+        var ob = bayan_json_v_str(bayan_json_v_obj_get(m, "owned_by"));
+        if (_ci_eq(str_cstr(ob), "anthropic") == 1) { matches = matches + 1; }
+        i = i + 1;
+    }
+    assert_eq(matches, 2, "two anthropic models filtered from the catalog");
+    return 0;
+}
+
 # [hoosh].stream config toggle: default on; the _cfg_bool reader maps the TOML
 # literal true/false (parsed as text) and falls back on absent/garbage.
 fn test_stream_config() {
@@ -645,6 +675,7 @@ fn main() {
     test_persona();
     test_config();
     test_hoosh();
+    test_provider_catalog();
     test_stream_config();
     test_history();
     test_history_request();
