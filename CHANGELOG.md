@@ -2,6 +2,27 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-06-24
+
+**Presentation surface — the render foundation (M7 Phase 0).** Opens the **0.8.x
+arc** that brings thoth's front-end toward the warm-amber agentic-IDE design
+([ADR-0009](docs/adr/0009-presentation-capability-ladder.md)). Presentation is now a
+capability tier — **T0 plain → T1 ANSI → T2 rich-TUI → T3 desktop** — resolved once
+at startup and degrading **closed**: output is byte-identical to 0.7.2 when piped/CI,
+and the `{(o> ` prompt is the T0 floor.
+
+### Added
+- **`src/ui.cyr` — the render surface.** A tier model + startup detection (`isatty`
+  via `ioctl` + `TERM`/`COLORTERM`/`NO_COLOR`, with a `THOTH_TIER` override; degrades
+  closed to plain when color can't be proven) + a **semantic color-role API**
+  (`ui_sgr(ROLE_*)` / `ui_reset()`) so feature code never hardcodes an escape:
+  empty strings at T0, the design's exact amber palette (`#e6ab5c`, truecolor → 256 →
+  16) at T1. The active tier is announced in `/state` (`surface : …`). `test_ui`
+  (+12): the T0 floor emits no escapes; T1 produces the exact amber SGR; 256-color
+  fallback maps the accent to its cube index.
+- The `{(o> ` prompt now wears the accent role — the first surface call-site, and
+  byte-identical on the T0 floor.
+
 ## [0.7.2] - 2026-06-24
 
 ### Changed

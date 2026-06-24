@@ -144,7 +144,11 @@ fn cmd_state() {
     emit("  spine   : ");
     if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
     else { println("see /seams"); }
-    println("  build   : thoth 0.7.2");
+    emit("  surface : ");
+    emit(ui_tier_name());
+    if (ui_tier() != PT_PLAIN) { emit(" ("); emit(ui_color_depth_name()); emit(")"); }
+    println("");
+    println("  build   : thoth 0.8.0");
     return 0;
 }
 

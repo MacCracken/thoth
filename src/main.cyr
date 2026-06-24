@@ -26,6 +26,7 @@ include "src/vendor/avatara.cyr"
 # gate (t-ron binding + confirm) precedes seams, which reports its status;
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).
 include "src/util.cyr"
+include "src/ui.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -42,6 +43,7 @@ include "src/repl.cyr"
 fn main() {
     alloc_init();
     config_load();          # read thoth.cyml -> flips hoosh/daimon seams to remote when urls are set
+    ui_detect_tier();       # resolve the presentation tier (T0..T3) once; degrades closed to plain
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm
     print_banner();

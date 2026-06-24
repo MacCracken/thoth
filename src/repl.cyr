@@ -7,7 +7,7 @@ fn repl_loop() {
     var line[4096];
     var running = 1;
     while (running == 1) {
-        emit("{(o> ");
+        emit(ui_sgr(ROLE_ACCENT)); emit("{(o> "); emit(ui_reset());
         var n = read_line(&line, 4096);
         if (n == (0 - 1)) {
             running = 0;

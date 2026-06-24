@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.8.0** — presentation surface, the render foundation (M7 Phase 0), 2026-06-24.
+Opens the **0.8.x design-style arc** ([ADR-0009](../adr/0009-presentation-capability-ladder.md)):
+presentation becomes a capability tier (T0 plain → T1 ANSI → T2 rich-TUI → T3
+desktop). New `src/ui.cyr` — startup tier detection (`isatty` + `TERM`/`COLORTERM`/
+`NO_COLOR`/`THOTH_TIER`, degrade-closed) + a semantic color-role API (`ui_sgr`/
+`ui_reset`): empty at T0 so piped/CI output is **byte-identical to 0.7.2**, the
+design's exact amber (`#e6ab5c`, truecolor→256→16) at T1. Tier shown in `/state`
+(`surface : …`); the `{(o> ` prompt wears the accent role. 256 assertions (+12,
+`test_ui`). Pin unchanged (6.2.40).
 **0.7.2** — REPL prompt restyled to `{(o> ` (was `thoth> `), 2026-06-24. Prompt-only
 change (`src/repl.cyr`); no behavior change. 244 assertions. Pin unchanged (6.2.40).
 **0.7.1** — `/models <provider>` drill-down, 2026-06-24. `/models` lists the

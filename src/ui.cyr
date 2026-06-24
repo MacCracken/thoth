@@ -1,0 +1,251 @@
+# thoth — presentation capability surface (M7 / ADR-0009).
+#
+# The render surface's FOUNDATION. Presentation is a third capability axis
+# alongside the spine seams (src/seams.cyr, docs/architecture/002): a tier
+# resolved once at startup — T0 plain -> T1 ANSI -> T2 rich-TUI -> T3 desktop —
+# plus a SEMANTIC color-role API the rest of the codebase emits through, so
+# feature code never hardcodes an escape. This is Phase 0: at T0 every role
+# resolves to the EMPTY STRING, so output is byte-identical to the pre-surface
+# binary (pipes / CI / dumb terminals stay exactly as before, the {(o> prompt
+# included). T1+ call-site wiring and the T2 raw-mode renderer land in later
+# phases. Degrade CLOSED, announce (see /state), never fake.
+
+# Presentation tiers.
+var PT_PLAIN = 0;     # T0: line-oriented, no escapes (the floor; today's binary)
+var PT_ANSI = 1;      # T1: SGR color + cursor (most terminals)
+var PT_RICH = 2;      # T2: raw-mode, alt-screen, panes (reserved — renderer not built yet)
+var PT_DESKTOP = 3;   # T3: graphics/desktop host via puka (reserved)
+
+# Color depth within an ANSI-capable tier.
+var CD_NONE = 0;
+var CD_16 = 1;
+var CD_256 = 2;
+var CD_TRUE = 3;
+
+# Semantic color roles (named slots — the design's CSS custom properties). Feature
+# code asks for a ROLE, never a hex/ANSI code; the active tier+depth resolves it.
+var ROLE_ACCENT = 0;       # #e6ab5c amber — the signature accent
+var ROLE_ACCENT_DIM = 1;   # #b9863f
+var ROLE_FG = 2;           # #ece5d3 warm foreground
+var ROLE_MUTED = 3;        # #9b927d
+var ROLE_FAINT = 4;        # #6d6553
+var ROLE_GREEN = 5;        # #94b87c diff-add / ok
+var ROLE_RED = 6;          # #d28a78 diff-del / error
+var ROLE_BLUE = 7;         # #82a9c6 paths
+var UI_ROLE_COUNT = 8;
+
+var _ui_tier = 0;          # active tier (PT_*)
+var _ui_depth = 0;         # active color depth (CD_*)
+var _ui_detected = 0;      # 1 once detection/override ran
+var _ui_role_ptr = 0;      # alloc: UI_ROLE_COUNT i64 cstr pointers (the per-role SGR prefix)
+var _ui_reset_ptr = 0;     # the "ESC[0m" reset cstr
+var UI_SGR_BUF_CAP = 256;
+
+# Linux x86_64: ioctl(fd, TCGETS) returns 0 iff fd is a terminal. (Not in the
+# vendored syscall constants; the well-known Linux value.)
+var UI_TCGETS = 0x5401;
+
+# ui_isatty: 1 if fd is a tty, else 0 — ioctl(TCGETS) into a throwaway termios buf.
+fn ui_isatty(fd) {
+    var tbuf[64];
+    if (syscall(SYS_IOCTL, fd, UI_TCGETS, &tbuf) == 0) { return 1; }
+    return 0;
+}
+
+# _ui_dec: write non-negative n as decimal into buf at off; return new off.
+fn _ui_dec(buf, off, n) {
+    if (n == 0) { store8(buf + off, 48); return off + 1; }
+    var tmp[12];
+    var ti = 0;
+    while (n > 0) { store8(&tmp + ti, 48 + (n - (n / 10) * 10)); ti = ti + 1; n = n / 10; }
+    while (ti > 0) { ti = ti - 1; store8(buf + off, load8(&tmp + ti)); off = off + 1; }
+    return off;
+}
+
+# _ui_contains: 1 if NUL-terminated s contains NUL-terminated sub. (Used for TERM
+# detection — "*-256color" — and reusable.)
+fn _ui_contains(s, sub) {
+    var i = 0;
+    var ret = 0;
+    var done = 0;
+    while ((load8(s + i) != 0) && (done == 0)) {
+        var j = 0;
+        var same = 1;
+        while ((load8(sub + j) != 0) && (same == 1)) {
+            if (load8(s + i + j) != load8(sub + j)) { same = 0; }
+            else { j = j + 1; }
+        }
+        if (same == 1) { ret = 1; done = 1; }
+        else { i = i + 1; }
+    }
+    return ret;
+}
+
+fn _ui_env_has(name) {
+    var v = getenv(name);
+    if (v == 0) { return 0; }
+    if (load8(v) == 0) { return 0; }
+    return 1;
+}
+
+# Per-role color data. RGB packed as r*65536 + g*256 + b (the design palette);
+# the 256-color and 16-color fallbacks are the nearest readable approximations.
+fn _ui_rgb(role) {
+    if (role == ROLE_ACCENT) { return 230 * 65536 + 171 * 256 + 92; }
+    if (role == ROLE_ACCENT_DIM) { return 185 * 65536 + 134 * 256 + 63; }
+    if (role == ROLE_FG) { return 236 * 65536 + 229 * 256 + 211; }
+    if (role == ROLE_MUTED) { return 155 * 65536 + 146 * 256 + 125; }
+    if (role == ROLE_FAINT) { return 109 * 65536 + 101 * 256 + 83; }
+    if (role == ROLE_GREEN) { return 148 * 65536 + 184 * 256 + 124; }
+    if (role == ROLE_RED) { return 210 * 65536 + 138 * 256 + 120; }
+    if (role == ROLE_BLUE) { return 130 * 65536 + 169 * 256 + 198; }
+    return 236 * 65536 + 229 * 256 + 211;
+}
+fn _ui_idx256(role) {
+    if (role == ROLE_ACCENT) { return 179; }
+    if (role == ROLE_ACCENT_DIM) { return 137; }
+    if (role == ROLE_FG) { return 223; }
+    if (role == ROLE_MUTED) { return 144; }
+    if (role == ROLE_FAINT) { return 242; }
+    if (role == ROLE_GREEN) { return 108; }
+    if (role == ROLE_RED) { return 174; }
+    if (role == ROLE_BLUE) { return 110; }
+    return 223;
+}
+fn _ui_code16(role) {
+    if (role == ROLE_ACCENT) { return 33; }       # yellow
+    if (role == ROLE_ACCENT_DIM) { return 33; }
+    if (role == ROLE_FG) { return 39; }            # default fg
+    if (role == ROLE_MUTED) { return 90; }         # bright black (gray)
+    if (role == ROLE_FAINT) { return 90; }
+    if (role == ROLE_GREEN) { return 32; }
+    if (role == ROLE_RED) { return 31; }
+    if (role == ROLE_BLUE) { return 34; }
+    return 39;
+}
+
+# Build the per-role SGR prefix table + reset for the active depth, ONCE. Each
+# role's escape is a stable NUL-terminated cstr in a bump-heap buffer.
+fn _ui_build_palette() {
+    _ui_role_ptr = alloc(UI_ROLE_COUNT * 8);
+    var buf = alloc(UI_SGR_BUF_CAP);
+    var off = 0;
+    var role = 0;
+    while (role < UI_ROLE_COUNT) {
+        store64(_ui_role_ptr + role * 8, buf + off);
+        store8(buf + off, 27); off = off + 1;       # ESC
+        store8(buf + off, 91); off = off + 1;        # [
+        if (_ui_depth == CD_TRUE) {
+            var rgb = _ui_rgb(role);
+            var r = rgb / 65536;
+            var rem = rgb - r * 65536;
+            var g = rem / 256;
+            var b = rem - g * 256;
+            off = _ui_dec(buf, off, 38);
+            store8(buf + off, 59); off = off + 1;
+            store8(buf + off, 50); off = off + 1;    # 2
+            store8(buf + off, 59); off = off + 1;
+            off = _ui_dec(buf, off, r);
+            store8(buf + off, 59); off = off + 1;
+            off = _ui_dec(buf, off, g);
+            store8(buf + off, 59); off = off + 1;
+            off = _ui_dec(buf, off, b);
+        } elif (_ui_depth == CD_256) {
+            off = _ui_dec(buf, off, 38);
+            store8(buf + off, 59); off = off + 1;
+            store8(buf + off, 53); off = off + 1;    # 5
+            store8(buf + off, 59); off = off + 1;
+            off = _ui_dec(buf, off, _ui_idx256(role));
+        } else {
+            off = _ui_dec(buf, off, _ui_code16(role));
+        }
+        store8(buf + off, 109); off = off + 1;       # m
+        store8(buf + off, 0); off = off + 1;          # NUL
+        role = role + 1;
+    }
+    _ui_reset_ptr = buf + off;
+    store8(buf + off, 27); off = off + 1;
+    store8(buf + off, 91); off = off + 1;
+    store8(buf + off, 48); off = off + 1;            # 0
+    store8(buf + off, 109); off = off + 1;           # m
+    store8(buf + off, 0);
+    return 0;
+}
+
+# _ui_apply: set the active tier+depth and (for a color tier) build the palette.
+fn _ui_apply(tier, depth) {
+    _ui_tier = tier;
+    _ui_depth = depth;
+    _ui_detected = 1;
+    if (tier != PT_PLAIN) { _ui_build_palette(); }
+    return 0;
+}
+
+# _ui_detect_depth: truecolor (COLORTERM) -> 256 (TERM *-256color) -> 16.
+fn _ui_detect_depth() {
+    var ct = getenv("COLORTERM");
+    if (ct != 0) {
+        if (streq(ct, "truecolor") == 1) { return CD_TRUE; }
+        if (streq(ct, "24bit") == 1) { return CD_TRUE; }
+    }
+    var term = getenv("TERM");
+    if (term != 0) { if (_ui_contains(term, "256color") == 1) { return CD_256; } }
+    return CD_16;
+}
+
+# ui_detect_tier: resolve the active presentation tier ONCE at startup. Degrades
+# CLOSED to T0 whenever color cannot be PROVEN — not a tty, NO_COLOR set, TERM
+# dumb/empty/unset. THOTH_TIER=plain|ansi overrides (tests + explicit control).
+fn ui_detect_tier() {
+    var ov = getenv("THOTH_TIER");
+    if (ov != 0) {
+        if (streq(ov, "plain") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+        if (streq(ov, "ansi") == 1) { _ui_apply(PT_ANSI, _ui_detect_depth()); return 0; }
+    }
+    if (_ui_env_has("NO_COLOR") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+    if (ui_isatty(1) == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+    var term = getenv("TERM");
+    if (term == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+    if (load8(term) == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+    if (streq(term, "dumb") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+    _ui_apply(PT_ANSI, _ui_detect_depth());
+    return 0;
+}
+
+# ui_force: explicit tier+depth override — test hook and the future --tier flag.
+fn ui_force(tier, depth) { _ui_apply(tier, depth); return 0; }
+
+# --- the surface API feature code calls ---
+
+# ui_sgr: the SGR prefix cstr for a semantic role at the active tier, or "" at T0
+# (so `emit(ui_sgr(r)); emit(s); emit(ui_reset())` is byte-identical to `emit(s)`
+# on the plain floor). The returned pointer is stable for the session.
+fn ui_sgr(role) {
+    if (_ui_tier == PT_PLAIN) { return ""; }
+    if (_ui_role_ptr == 0) { return ""; }
+    if (role < 0) { return ""; }
+    if (role >= UI_ROLE_COUNT) { return ""; }
+    return load64(_ui_role_ptr + role * 8);
+}
+# ui_reset: the SGR reset cstr, or "" at T0.
+fn ui_reset() {
+    if (_ui_tier == PT_PLAIN) { return ""; }
+    if (_ui_reset_ptr == 0) { return ""; }
+    return _ui_reset_ptr;
+}
+
+# Introspection (announced in /state; future /seams presentation row).
+fn ui_tier() { return _ui_tier; }
+fn ui_color_depth() { return _ui_depth; }
+fn ui_tier_name() {
+    if (_ui_tier == PT_ANSI) { return "T1 ansi"; }
+    if (_ui_tier == PT_RICH) { return "T2 rich-tui"; }
+    if (_ui_tier == PT_DESKTOP) { return "T3 desktop"; }
+    return "T0 plain";
+}
+fn ui_color_depth_name() {
+    if (_ui_depth == CD_TRUE) { return "truecolor"; }
+    if (_ui_depth == CD_256) { return "256-color"; }
+    if (_ui_depth == CD_16) { return "16-color"; }
+    return "no color";
+}

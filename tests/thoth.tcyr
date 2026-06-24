@@ -8,6 +8,7 @@ include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
 include "src/util.cyr"
+include "src/ui.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -664,6 +665,43 @@ fn test_bounds_hardening() {
     return 0;
 }
 
+# Presentation surface (M7 / ADR-0009): the T0 floor must emit NO escapes (so
+# piped/CI output is byte-identical), and T1 must produce the design's exact amber.
+fn test_ui() {
+    test_group("presentation surface (M7 ui.cyr)");
+    # substrate helpers
+    assert_eq(_ui_contains("xterm-256color", "256color"), 1, "_ui_contains finds substring");
+    assert_eq(_ui_contains("xterm", "256color"), 0, "_ui_contains misses absent substring");
+    var db[8];
+    var dn = _ui_dec(&db, 0, 230); store8(&db + dn, 0);
+    assert(streq(&db, "230"), "_ui_dec writes decimal");
+
+    # T0 floor: every role + reset resolves to the empty string
+    ui_force(PT_PLAIN, CD_NONE);
+    assert_eq(ui_tier(), PT_PLAIN, "forced T0 plain");
+    assert_eq(streq(ui_sgr(ROLE_ACCENT), ""), 1, "T0 accent role -> empty (no escapes)");
+    assert_eq(streq(ui_sgr(ROLE_GREEN), ""), 1, "T0 green role -> empty");
+    assert_eq(streq(ui_reset(), ""), 1, "T0 reset -> empty");
+
+    # T1 truecolor: exact #e6ab5c amber + well-formed SGR envelope
+    ui_force(PT_ANSI, CD_TRUE);
+    var acc = ui_sgr(ROLE_ACCENT);
+    assert_eq(load8(acc), 27, "T1 SGR starts with ESC");
+    assert_eq(load8(acc + 1), 91, "T1 SGR second byte is '['");
+    assert_eq(_ui_contains(acc, "38;2;230;171;92"), 1, "T1 accent is the #e6ab5c truecolor SGR");
+    var rexp[8];
+    store8(&rexp, 27); store8(&rexp + 1, 91); store8(&rexp + 2, 48); store8(&rexp + 3, 109); store8(&rexp + 4, 0);
+    assert_eq(streq(ui_reset(), &rexp), 1, "T1 reset is ESC[0m");
+
+    # 256-color fallback maps the accent to its cube index
+    ui_force(PT_ANSI, CD_256);
+    assert_eq(_ui_contains(ui_sgr(ROLE_ACCENT), "38;5;179"), 1, "256-color accent -> index 179");
+
+    # restore detection (the suite runs piped -> resolves back to T0)
+    ui_detect_tier();
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -688,6 +726,7 @@ fn main() {
     test_roundlog();
     test_parallel();
     test_bounds_hardening();
+    test_ui();
     test_model_switch();
     return assert_summary();
 }
