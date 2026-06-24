@@ -131,23 +131,18 @@ fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"
 # banner-only: it actually steers the turn (see hoosh_send).
 var _persona_sys = 0;
 var PERSONA_SYS_CAP = 1024;
-fn _persona_append(dst, off, s) {
-    var i = 0;
-    while (load8(s + i) != 0) {
-        store8(dst + off, load8(s + i));
-        off = off + 1;
-        i = i + 1;
-    }
-    return off;
-}
+# Built from avatara's emitted soul + spirit prose, which is fixed-but-not-length-
+# bounded — if the archetype's prose ever grows past PERSONA_SYS_CAP the writes must
+# clamp, not overrun the 1 KB buffer. Reuses the shared bounded helper (hoosh.cyr).
 fn persona_system_prompt() {
     if (_persona_sys != 0) { return _persona_sys; }
     _persona_sys = alloc(PERSONA_SYS_CAP);
+    var cap = PERSONA_SYS_CAP;
     var off = 0;
-    off = _persona_append(_persona_sys, off, persona_soul());
-    off = _persona_append(_persona_sys, off, " ");
-    off = _persona_append(_persona_sys, off, persona_spirit());
-    off = _persona_append(_persona_sys, off, " You are thoth, a sovereign agentic coding scribe: weigh each change, measure twice, edit precisely, and record your reasoning.");
+    off = _append_cstr_cap(_persona_sys, off, cap, persona_soul());
+    off = _append_cstr_cap(_persona_sys, off, cap, " ");
+    off = _append_cstr_cap(_persona_sys, off, cap, persona_spirit());
+    off = _append_cstr_cap(_persona_sys, off, cap, " You are thoth, a sovereign agentic coding scribe: weigh each change, measure twice, edit precisely, and record your reasoning.");
     store8(_persona_sys + off, 0);
     return _persona_sys;
 }
