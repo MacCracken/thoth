@@ -128,7 +128,11 @@ fn cmd_state() {
         println(" (structured driver events)");
     }
     emit("  agent   : ");
-    if (agent_enabled() == 1) { println("agentic tool-calling on (daimon tools, t-ron gated)"); }
+    if (agent_enabled() == 1) {
+        emit("agentic tool-calling on (daimon tools, t-ron gated, ");
+        if (config_hoosh_parallel() == 1) { emit("parallel"); } else { emit("serial"); }
+        println(" calls)");
+    }
     elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("plain turns (no daimon seam; /tools needs [daimon].url)"); }
     else { println("plain turns ([hoosh].tools = false)"); }
     emit("  daimon  : ");

@@ -209,6 +209,38 @@ fn daimon_invoke(name, args_json) {
     return str_cstr(text);                          # cstr for the agent loop
 }
 
+# daimon_fetch_into: the REENTRANT raw fetch behind the agentic loop's parallel
+# tool execution — POST the MCP call for (name, args_json) and copy the RAW
+# response body bytes into the caller-owned `out` buffer (bounded by out_cap),
+# returning the byte length, or -1 on transport failure. It deliberately does NO
+# JSON parsing: bayan's value parser is NOT thread-safe — beyond the 1.0.3 cursor
+# fix its parse path still shares process state, and concurrent parses corrupt
+# (empirically ~98% wrong/empty under 8 threads; filed upstream). So the worker
+# only does the network — which sandhi 1.6.13 DOES make reentrant (per-dispatch
+# arena context + fresh un-pooled connection) — and the SERIAL phase parses each
+# raw body with daimon_extract_text. Every transient allocation here (headers, URL
+# parse, connection, response struct + body) comes from the caller's arena `a`,
+# the request bytes go into the caller's `req_buf` (sized to hold the bounded
+# name+args), and the body is copied OUT of the arena into `out` BEFORE the caller
+# resets `a`. The endpoint URL must be pre-warmed on the calling thread (see
+# _daimon_call_endpoint); the caller has ALREADY passed the t-ron gate. I/O —
+# reentrant. See the parallel design in src/agent.cyr.
+fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap) {
+    var url = _daimon_call_endpoint();
+    var len = daimon_build_call(req_buf, name, args_json);
+    var h = sandhi_headers_new_a(a);
+    sandhi_headers_set_a(a, h, "Content-Type", "application/json");
+    var r = sandhi_http_post_a(a, url, h, req_buf, len);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0 - 1; }
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    var n = blen;
+    if (n > (out_cap - 1)) { n = out_cap - 1; }
+    if (n > 0) { memcpy(out, body, n); }
+    store8(out + n, 0);
+    return n;
+}
+
 # daimon_tools_value: GET the MCP registry and return the parsed "tools" array
 # JSON value (or 0 on failure/empty) — so the agentic loop can advertise the
 # available tools to hoosh. I/O.

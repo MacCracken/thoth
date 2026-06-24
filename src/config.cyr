@@ -25,6 +25,7 @@ var _cfg_hoosh_model = 0;    # cstring, or 0 if unset
 var _cfg_hoosh_stream = 1;   # 1 = stream completions (default), 0 = blocking
 var _cfg_hoosh_history = 1;  # 1 = multi-turn context (default), 0 = stateless
 var _cfg_hoosh_tools = 1;    # 1 = agentic tool-calling when daimon wired (default), 0 = off
+var _cfg_hoosh_parallel = 1; # 1 = run a round's tool calls concurrently (default), 0 = serial
 var _cfg_daimon_url = 0;     # cstring, or 0 if unset (daimon seam stays absent)
 var _cfg_tron_policy = 0;    # cstring path to a t-ron policy TOML, or 0
 var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
@@ -81,6 +82,7 @@ fn config_load() {
     _cfg_hoosh_stream = _cfg_bool(hoosh, "stream", 1);    # default on
     _cfg_hoosh_history = _cfg_bool(hoosh, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg_bool(hoosh, "tools", 1);        # default on
+    _cfg_hoosh_parallel = _cfg_bool(hoosh, "parallel", 1);  # default on
     var daimon = _cfg_section_pairs(sections, "daimon");
     _cfg_daimon_url = _cfg_str(daimon, "url");
     var tron = _cfg_section_pairs(sections, "tron");
@@ -122,6 +124,12 @@ fn config_hoosh_history() { return _cfg_hoosh_history; }
 # config_hoosh_tools: 1 if free-text turns use the agentic tool-calling loop when
 # the daimon seam is wired (the default), 0 if [hoosh].tools = false (plain turns).
 fn config_hoosh_tools() { return _cfg_hoosh_tools; }
+
+# config_hoosh_parallel: 1 if a round's tool calls run concurrently (the default),
+# 0 if [hoosh].parallel = false (one call at a time). Gating stays serial either
+# way (t-ron audit-chain order + interactive confirm); only the daimon invoke fans
+# out. The serial path is also taken implicitly for a single-call round.
+fn config_hoosh_parallel() { return _cfg_hoosh_parallel; }
 
 # config_daimon_configured: 1 if a daimon MCP host endpoint is declared, else 0.
 fn config_daimon_configured() {

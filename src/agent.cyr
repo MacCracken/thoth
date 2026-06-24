@@ -384,10 +384,215 @@ fn agent_enabled() {
     return 1;
 }
 
-# _agent_run_calls: execute every tool_call in this round — gate, invoke, record
-# the result message. Each call is t-ron-gated; a deny becomes a result the model
-# can react to, never an abort. I/O.
+# --- parallel tool execution (0.7.0) ---
+#
+# A round's tool calls fan out across OS threads (lib/thread.cyr). This was held
+# at the stdlib floor until cyrius 6.2.40 made the transport reentrant: sandhi
+# 1.6.13 lifts its per-dispatch state into an arena-threaded request context, and
+# bayan 1.0.3 makes the JSON value parser key off a per-call state struct (nodes
+# still parse through the thread-safe global bump). thoth's piece is the PHASING
+# that keeps the security path serial while only the network invoke is concurrent:
+#
+#   Phase 1 (serial, main thread): snapshot each call's {id,name,args} into stable
+#     per-slot buffers, print the tool-call line, and run the t-ron gate. Gating
+#     MUST stay serial — it may interactively confirm, and t-ron's libro audit
+#     chain is an ordered, hash-linked record; concurrent appends would scramble it.
+#   Phase 2 (concurrent): each ALLOWED call gets a worker running daimon_fetch_into
+#     on its OWN arena + request buffer + raw-body buffer, over a fresh (un-pooled)
+#     connection — the exact "distinct arenas + fresh connections" shape sandhi
+#     1.6.13 certifies safe (its connection POOL stays single-threaded, so we never
+#     share one). The worker does ONLY the network; it does NOT parse. Denied/noname
+#     calls need no worker.
+#   Phase 3 (serial, main thread, in call order): PARSE each raw body with bayan
+#     (daimon_extract_text), print results, record the roundlog verdict, and append
+#     each {role:tool} result to _agent_work — one unlocked buffer touched only here,
+#     so order is deterministic and the tool_call_ids line up regardless of which
+#     worker finished first.
+#
+# Why parse serially? bayan's JSON value parser is NOT thread-safe — beyond the
+# 1.0.3 cursor fix its parse path still shares process state, and concurrent parses
+# corrupt (measured ~98% wrong/empty across 8 threads; filed upstream). Keeping ALL
+# bayan use on the main thread sidesteps that entirely; only sandhi — which IS
+# reentrant in 1.6.13 — runs concurrently. Workers otherwise touch no shared mutable
+# state: the endpoint URL is pre-warmed on the main thread, each slot owns its
+# arena/req/out, and arena allocs are disjoint. If thread_create is unavailable
+# (Win/AGNOS) or fails, the worker runs inline — correct, just serial. A round is
+# processed in batches of PAR_MAX slots.
+var PAR_MAX = 8;              # max concurrent workers per batch (matches AGENT_MAX_CALLS)
+var PAR_NAME_CAP = 256;
+var PAR_ARGS_CAP = 16384;
+var PAR_ID_CAP = 128;
+var PAR_OUT_CAP = 131072;    # per-call result text, copied out of the arena
+var PAR_ARENA_CAP = 524288;  # per-call arena: headers + url + conn buffers + response body
+var PAR_CTX_SZ = 48;         # worker ctx: arena, req, name, args, out, result_len
+
+var _par_ready = 0;          # 1 once the slot storage is allocated
+var _par_arena = 0;          # PAR_MAX allocator handles (i64 each)
+var _par_req = 0;            # PAR_MAX request buffers (DAIMON_REQ_CAP each)
+var _par_out = 0;            # PAR_MAX result buffers (PAR_OUT_CAP each)
+var _par_name = 0;           # PAR_MAX name buffers (PAR_NAME_CAP each)
+var _par_args = 0;           # PAR_MAX args buffers (PAR_ARGS_CAP each)
+var _par_id = 0;             # PAR_MAX id buffers (PAR_ID_CAP each)
+var _par_ctx = 0;            # PAR_MAX ctx structs (PAR_CTX_SZ each)
+var _par_thread = 0;         # PAR_MAX thread handles (i64 each)
+var _par_has_name = 0;       # PAR_MAX byte flags: 1 if the call had a name
+var _par_allowed = 0;        # PAR_MAX byte flags: 1 if the gate allowed it
+var _par_kind = 0;           # PAR_MAX i64 roundlog verdict kinds
+
+fn _par_ctx_ptr(s) { return _par_ctx + s * PAR_CTX_SZ; }
+
+# _par_alloc: lazily allocate the fixed slot storage (once per session). Each slot
+# gets its own arena allocator so concurrent workers never share a bump pointer.
+fn _par_alloc() {
+    if (_par_ready == 1) { return 0; }
+    _par_arena = alloc(PAR_MAX * 8);
+    _par_req = alloc(PAR_MAX * DAIMON_REQ_CAP);
+    _par_out = alloc(PAR_MAX * PAR_OUT_CAP);
+    _par_name = alloc(PAR_MAX * PAR_NAME_CAP);
+    _par_args = alloc(PAR_MAX * PAR_ARGS_CAP);
+    _par_id = alloc(PAR_MAX * PAR_ID_CAP);
+    _par_ctx = alloc(PAR_MAX * PAR_CTX_SZ);
+    _par_thread = alloc(PAR_MAX * 8);
+    _par_has_name = alloc(PAR_MAX);
+    _par_allowed = alloc(PAR_MAX);
+    _par_kind = alloc(PAR_MAX * 8);
+    var i = 0;
+    while (i < PAR_MAX) {
+        store64(_par_arena + i * 8, arena_allocator(PAR_ARENA_CAP));
+        i = i + 1;
+    }
+    _par_ready = 1;
+    return 0;
+}
+
+# _par_cstr_copy: bounded copy of NUL-terminated src into dst (cap bytes incl. the
+# terminator); returns the copied length. src == 0 yields an empty string. Pure.
+fn _par_cstr_copy(dst, cap, src) {
+    var n = 0;
+    if (src != 0) {
+        while ((load8(src + n) != 0) && (n < (cap - 1))) {
+            store8(dst + n, load8(src + n));
+            n = n + 1;
+        }
+    }
+    store8(dst + n, 0);
+    return n;
+}
+
+# _agent_call_worker: one tool FETCH on slot ctx — reset the slot arena, POST the
+# call, stash the raw-body length at ctx+40 (parsing happens later, serially).
+# Runs on a worker thread OR inline. Reentrant — touches only its own slot + sandhi.
+fn _agent_call_worker(ctx) {
+    var a = load64(ctx + 0);
+    reset_via(a);
+    var req = load64(ctx + 8);
+    var name = load64(ctx + 16);
+    var args = load64(ctx + 24);
+    var out = load64(ctx + 32);
+    var rl = daimon_fetch_into(a, req, name, args, out, PAR_OUT_CAP);
+    store64(ctx + 40, rl);
+    return 0;
+}
+
+# _agent_run_calls_par: the phased parallel executor (see the block comment above).
+# I/O — the network invokes run concurrently; gating + result append stay serial.
+fn _agent_run_calls_par(tcs, nc) {
+    _par_alloc();
+    _daimon_call_endpoint();         # pre-warm the cached URL on the main thread
+    var base = 0;
+    while (base < nc) {
+        var batch = nc - base;
+        if (batch > PAR_MAX) { batch = PAR_MAX; }
+        # Phase 1 — snapshot {id,name,args} into stable slots + serial t-ron gate.
+        var k = 0;
+        while (k < batch) {
+            var ci = base + k;
+            var nm = agent_tc_name(tcs, ci);
+            var ar = agent_tc_args(tcs, ci);
+            var id = agent_tc_id(tcs, ci);
+            _par_cstr_copy(_par_name + k * PAR_NAME_CAP, PAR_NAME_CAP, nm);
+            store8(_par_has_name + k, 0);
+            if (nm != 0) { store8(_par_has_name + k, 1); }
+            var ga = ar; if (ga == 0) { ga = "{}"; }
+            _par_cstr_copy(_par_args + k * PAR_ARGS_CAP, PAR_ARGS_CAP, ga);
+            _par_cstr_copy(_par_id + k * PAR_ID_CAP, PAR_ID_CAP, id);
+            emit("  tool-call: "); if (nm != 0) { emit(nm); } else { emit("(unnamed)"); }
+            if (ar != 0) { emit(" "); emit(ar); } println("");
+            var allowed = 0;
+            var kind = RL_DENIED;
+            if (nm == 0) { kind = RL_NONAME; }
+            elif (gate_authorize(nm, _par_args + k * PAR_ARGS_CAP, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
+            store8(_par_allowed + k, allowed);
+            store64(_par_kind + k * 8, kind);
+            k = k + 1;
+        }
+        # Phase 2 — fan out the allowed calls; each worker owns its slot's arena.
+        var s = 0;
+        while (s < batch) {
+            store64(_par_thread + s * 8, 0);
+            if (load8(_par_allowed + s) == 1) {
+                var ctx = _par_ctx_ptr(s);
+                store64(ctx + 0, load64(_par_arena + s * 8));
+                store64(ctx + 8, _par_req + s * DAIMON_REQ_CAP);
+                store64(ctx + 16, _par_name + s * PAR_NAME_CAP);
+                store64(ctx + 24, _par_args + s * PAR_ARGS_CAP);
+                store64(ctx + 32, _par_out + s * PAR_OUT_CAP);
+                store64(ctx + 40, 0 - 1);
+                var t = thread_create(&_agent_call_worker, ctx);
+                if (t == 0) { _agent_call_worker(ctx); }   # no threads -> inline (serial fallback)
+                else { store64(_par_thread + s * 8, t); }
+            }
+            s = s + 1;
+        }
+        s = 0;
+        while (s < batch) {
+            var th = load64(_par_thread + s * 8);
+            if (th != 0) { thread_join(th); }
+            s = s + 1;
+        }
+        # Phase 3 — print + record + append results in deterministic call order.
+        k = 0;
+        while (k < batch) {
+            var kind2 = load64(_par_kind + k * 8);
+            var rl_ok = 0;
+            var res = 0;
+            if (kind2 == RL_NONAME) { res = "(no tool name)"; }
+            elif (load8(_par_allowed + k) == 1) {
+                var rlen = load64(_par_ctx_ptr(k) + 40);
+                res = "(tool returned no result)";
+                if (rlen >= 0) {
+                    # SERIAL bayan parse of the raw body the worker fetched.
+                    var text = daimon_extract_text(_par_out + k * PAR_OUT_CAP, rlen);
+                    if (text != 0) { res = str_cstr(text); rl_ok = 1; }
+                }
+                emit("  result: "); println(res);
+            } else {
+                res = "denied by authorization policy";
+            }
+            var nmout = 0;
+            if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
+            roundlog_add_call(nmout, kind2, rl_ok);
+            _agent_add_result(_par_id + k * PAR_ID_CAP, res);
+            k = k + 1;
+        }
+        base = base + batch;
+    }
+    return 0;
+}
+
+# _agent_run_calls: execute this round's tool calls. Fans them out concurrently
+# (_agent_run_calls_par) when [hoosh].parallel is on AND there is more than one
+# call; otherwise runs the serial path. Either way every call is t-ron-gated and a
+# deny becomes a result the model can react to, never an abort.
 fn _agent_run_calls(tcs, nc) {
+    if ((config_hoosh_parallel() == 1) && (nc > 1)) { return _agent_run_calls_par(tcs, nc); }
+    return _agent_run_calls_serial(tcs, nc);
+}
+
+# _agent_run_calls_serial: execute every tool_call in this round one at a time —
+# gate, invoke, record the result message. The fallback path (parallel off, or a
+# single-call round); also the structure the parallel executor mirrors. I/O.
+fn _agent_run_calls_serial(tcs, nc) {
     var ci = 0;
     while (ci < nc) {
         var nm = agent_tc_name(tcs, ci);

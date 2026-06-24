@@ -419,6 +419,24 @@ Libs are opt-in and Cyrius does **not** resolve transitive deps, so the set
 is declared by hand and ordered low-level-floor-first (see the `[deps]`
 comment in `cyrius.cyml`).
 
+**sandhi fix pending toolchain fold (2026-06-24).** The toolchain-bundled
+sandhi **1.6.12** (cyrius 6.2.39) carries a critical client bug: the server and
+client conn structs both defined `enum SandhiConnOff` with the symbol
+`SANDHI_CONN_OFF_FD` at different offsets (client 8 / server 16). Under cyrius
+last-definition-wins the client resolved it to 16, colliding with its own
+`SANDHI_CONN_OFF_TLS_CTX` — `finalize` zeroed the socket fd, so every hoosh
+request went to fd 0 (terminal echo / `CONNECT`) and the gateway saw nothing.
+Fixed in **sandhi 1.6.13** (server offsets namespaced to `SANDHI_SRVCONN_OFF_*`;
+see sandhi `docs/development/issues/2026-06-24-server-conn-off-fd-collision.md`).
+thoth stays on the **stdlib** `"sandhi"` entry (pristine `lib/`); the temp
+workaround — pin `[deps.sandhi]` `tag = "1.6.13"` `modules = ["dist/sandhi.cyr"]`
+— is **held**: the sandhi 1.6.13 tag isn't pushed yet, and a `[deps.sandhi]`
+block perturbs thoth's hand-ordered stdlib set (breaks `patra`'s `SK_WARN`
+resolve). **Action at cyrius 6.2.40:** once 6.2.40 folds sandhi 1.6.13 into the
+toolchain bundle, keep the stdlib `"sandhi"` style and drop any temp
+`[deps.sandhi]` pin — i.e. revert dep-style → stdlib-style. Until then thoth
+builds against the buggy 1.6.12 (hoosh roundtrip broken on a fresh build).
+
 **Vendored (committed dist bundles in `src/vendor/`, not `[deps]` blocks):**
 bote-core **2.7.3**, t-ron **2.1.5**, libro **2.7.2** (t-ron's audit chain;
 keep in lockstep with t-ron's own `[deps.libro]` pin), avatara **2.7.1** (the

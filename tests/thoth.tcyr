@@ -154,6 +154,7 @@ fn test_config() {
     assert(streq(config_hoosh_url(), "http://127.0.0.1:8088"), "localhost default url");
     assert_eq(config_hoosh_token(), 0, "no token by default");
     assert_eq(config_hoosh_model(), 0, "no model by default");
+    assert_eq(config_hoosh_parallel(), 1, "parallel tool calls on by default");
     # unconfigured -> hoosh seam stays absent (honest degradation)
     assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
     return 0;
@@ -573,6 +574,27 @@ fn test_roundlog() {
     return 0;
 }
 
+# The parallel executor's pure piece: the bounded snapshot copy that lifts each
+# call's name/args/id out of the (soon-overwritten) parser value into a stable
+# per-slot buffer before fan-out. The phasing + threads themselves are I/O and
+# exercised live against daimon; this guards the copy's bounds + NUL-termination.
+fn test_parallel() {
+    test_group("parallel tool-call snapshot copy");
+    var b[16];
+    var n = _par_cstr_copy(&b, 16, "read_file");
+    assert_eq(n, 9, "copies full length");
+    assert(streq(&b, "read_file"), "exact copy NUL-terminated");
+    # truncation: cap 4 keeps 3 bytes + NUL
+    var t = _par_cstr_copy(&b, 4, "abcdef");
+    assert_eq(t, 3, "truncates to cap-1 bytes");
+    assert(streq(&b, "abc"), "truncated copy NUL-terminated");
+    # null src -> empty string, length 0
+    var z = _par_cstr_copy(&b, 16, 0);
+    assert_eq(z, 0, "null src copies nothing");
+    assert(streq(&b, ""), "null src yields empty string");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -594,6 +616,7 @@ fn main() {
     test_tron();
     test_audit();
     test_roundlog();
+    test_parallel();
     test_model_switch();
     return assert_summary();
 }
