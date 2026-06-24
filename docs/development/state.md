@@ -7,6 +7,8 @@
 
 ## Version
 
+**0.7.2** — REPL prompt restyled to `{(o> ` (was `thoth> `), 2026-06-24. Prompt-only
+change (`src/repl.cyr`); no behavior change. 244 assertions. Pin unchanged (6.2.40).
 **0.7.1** — `/models <provider>` drill-down, 2026-06-24. `/models` lists the
 providers hoosh routes to; **`/models <provider>`** now lists that provider's
 concrete, switchable model ids (e.g. `/models anthropic` → `claude-opus-4`,

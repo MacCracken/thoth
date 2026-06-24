@@ -7,7 +7,7 @@ fn repl_loop() {
     var line[4096];
     var running = 1;
     while (running == 1) {
-        emit("thoth> ");
+        emit("{(o> ");
         var n = read_line(&line, 4096);
         if (n == (0 - 1)) {
             running = 0;

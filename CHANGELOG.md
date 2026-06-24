@@ -2,6 +2,11 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-06-24
+
+### Changed
+- **REPL prompt** is now `{(o> ` (was `thoth> `).
+
 ## [0.7.1] - 2026-06-24
 
 **`/models <provider>` — drill into a provider's switchable models.** `/models`
