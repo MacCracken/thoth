@@ -435,7 +435,7 @@ fn hoosh_list_models() {
     var h = sandhi_headers_new();
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    emit("  -> hoosh "); println(url);
+    ui_emit(ROLE_FAINT, "  -> hoosh "); println(url);
     var r = sandhi_http_get(url, h);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
@@ -457,7 +457,7 @@ fn hoosh_list_models() {
     if (data == 0) { println("  hoosh: response received but no model list could be parsed."); return 0 - 1; }
     var n = bayan_json_v_arr_len(data);
     var cur = _hoosh_model();
-    emit("models hoosh offers ("); fmt_int(n); println("):");
+    ui_emit(ROLE_ACCENT, "models hoosh offers ("); fmt_int(n); ui_emit(ROLE_ACCENT, "):"); println("");
     if (n == 0) { println("  (none advertised — hoosh routes by its own provider config)"); }
     var i = 0;
     while (i < n) {
@@ -465,10 +465,8 @@ fn hoosh_list_models() {
         var id = bayan_json_v_obj_get(m, "id");
         if (id != 0) {
             var ids = bayan_json_v_str(id);
-            var marker = "  ";
-            if (str_eq_cstr(ids, cur) == 1) { marker = "* "; }   # the active routing target
-            emit(marker);
-            emit_n(str_data(ids), str_len(ids));
+            if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
+            else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
             println("");
         }
         i = i + 1;
@@ -488,7 +486,7 @@ fn hoosh_list_provider_models(provider) {
     var h = sandhi_headers_new();
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    emit("  -> hoosh "); println(url);
+    ui_emit(ROLE_FAINT, "  -> hoosh "); println(url);
     var r = sandhi_http_get(url, h);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
@@ -512,7 +510,7 @@ fn hoosh_list_provider_models(provider) {
     if (data == 0) { println("  hoosh: response received but no model catalog could be parsed."); return 0 - 1; }
     var n = bayan_json_v_arr_len(data);
     var cur = _hoosh_model();
-    emit("models for provider '"); emit(provider); println("':");
+    ui_emit(ROLE_ACCENT, "models for provider '"); ui_emit(ROLE_ACCENT, provider); ui_emit(ROLE_ACCENT, "':"); println("");
     var i = 0;
     var shown = 0;
     while (i < n) {
@@ -524,10 +522,8 @@ fn hoosh_list_provider_models(provider) {
                 var id = bayan_json_v_obj_get(m, "id");
                 if (id != 0) {
                     var ids = bayan_json_v_str(id);
-                    var marker = "  ";
-                    if (str_eq_cstr(ids, cur) == 1) { marker = "* "; }   # active routing target
-                    emit(marker);
-                    emit_n(str_data(ids), str_len(ids));
+                    if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
+                    else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
                     println("");
                     shown = shown + 1;
                 }
@@ -608,7 +604,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
     sandhi_headers_set(h, "Accept", "text/event-stream");
     var cell = alloc(8);
     store64(cell, 0);
-    emit("  -> hoosh ("); emit(model); emit(", stream) "); println(url);
+    ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", stream) "); println(url);
     var sr = sandhi_http_stream(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell);
     var serr = sandhi_stream_err(sr);
     var emitted = load64(cell);
@@ -637,7 +633,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
 # return negative, non-2xx returns the status (and surfaces the error body, which
 # stream mode cannot). I/O.
 fn _hoosh_blocking_turn(url, h, len, model) {
-    emit("  -> hoosh ("); emit(model); emit(") "); println(url);
+    ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ") "); println(url);
     var r = sandhi_http_post(url, h, _hoosh_req, len);
     var ek = sandhi_http_err_kind(r);
     if (ek != SANDHI_OK) {

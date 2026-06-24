@@ -124,7 +124,7 @@ fn _daimon_announce_transport_error(r, url) {
 fn daimon_list_tools() {
     var url = _daimon_tools_endpoint();
     var h = sandhi_headers_new();
-    emit("  -> daimon "); println(url);
+    ui_emit(ROLE_FAINT, "  -> daimon "); println(url);
     var r = sandhi_http_get(url, h);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
@@ -142,7 +142,7 @@ fn daimon_list_tools() {
     var tools = bayan_json_v_obj_get(v, "tools");
     if (tools == 0) { println("  daimon: no tools array in response."); return 0 - 1; }
     var n = bayan_json_v_arr_len(tools);
-    emit("tools daimon hosts ("); fmt_int(n); println("):");
+    ui_emit(ROLE_ACCENT, "tools daimon hosts ("); fmt_int(n); ui_emit(ROLE_ACCENT, "):"); println("");
     if (n == 0) { println("  (none registered)"); }
     var i = 0;
     while (i < n) {
@@ -150,12 +150,12 @@ fn daimon_list_tools() {
         var name = bayan_json_v_obj_get(t, "name");
         var desc = bayan_json_v_obj_get(t, "description");
         emit("  ");
-        if (name != 0) { var ns = bayan_json_v_str(name); emit_n(str_data(ns), str_len(ns)); }
-        else { emit("(unnamed)"); }
+        if (name != 0) { var ns = bayan_json_v_str(name); ui_emit_n(ROLE_ACCENT, str_data(ns), str_len(ns)); }
+        else { ui_emit(ROLE_FAINT, "(unnamed)"); }
         if (desc != 0) {
-            emit("  - ");
+            ui_emit(ROLE_FAINT, "  - ");
             var ds = bayan_json_v_str(desc);
-            emit_n(str_data(ds), str_len(ds));
+            ui_emit_n(ROLE_MUTED, str_data(ds), str_len(ds));
         }
         println("");
         i = i + 1;
@@ -172,7 +172,7 @@ fn daimon_call(name, args_json) {
     var len = daimon_build_call(_daimon_req, name, args_json);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    emit("  -> daimon tool '"); emit(name); emit("' "); println(url);
+    ui_emit(ROLE_FAINT, "  -> daimon tool '"); ui_emit(ROLE_ACCENT, name); ui_emit(ROLE_FAINT, "' "); println(url);
     var r = sandhi_http_post(url, h, _daimon_req, len);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);

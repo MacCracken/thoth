@@ -823,9 +823,9 @@ fn agent_turn(prompt) {
     session_history_append("user", prompt, strlen(prompt));
     _agent_work_reset();
 
-    emit("  -> hoosh ("); emit(model); emit(", agentic");
-    if (want_stream == 1) { emit(", stream"); }
-    emit(", "); fmt_int(tools_len); emit(" tool-bytes) "); println(_hoosh_endpoint_url());
+    ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", agentic");
+    if (want_stream == 1) { ui_emit(ROLE_FAINT, ", stream"); }
+    ui_emit(ROLE_FAINT, ", "); fmt_int(tools_len); ui_emit(ROLE_FAINT, " tool-bytes) "); println(_hoosh_endpoint_url());
 
     var iter = 0;
     var done = 0;

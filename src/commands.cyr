@@ -63,22 +63,26 @@ fn classify_input(line) {
     return CMD_UNKNOWN_SLASH;
 }
 
+# _help_line: one help row — command token in accent, the padded description in
+# muted. c + rest reproduces the original line verbatim (byte-identical at T0).
+fn _help_line(c, rest) { ui_emit(ROLE_ACCENT, c); ui_emit(ROLE_MUTED, rest); println(""); return 0; }
+
 fn cmd_help() {
-    println("thoth - a model-switching scribe. commands:");
-    println("  /help              this help");
-    println("  /seams             capability ladder (spine seam status)");
-    println("  /state             session state");
-    println("  /model [id]        show model, or attempt a mid-session switch (hoosh)");
-    println("  /models [provider] list providers; with one, its switchable models");
-    println("  /read <file>       print a file (safe, read-only built-in)");
-    println("  /write <f> <text>  write text to a file (t-ron-gated)");
-    println("  /run <cmd>         run a shell command (t-ron-gated local escape)");
-    println("  /tools             list the MCP tools daimon hosts");
-    println("  /call <tool> [json]  invoke an MCP tool via daimon (t-ron-gated)");
-    println("  /audit             show t-ron's audit chain (gated-action log)");
-    println("  /reset             clear the conversation context (start fresh)");
-    println("  /quit              exit (or Ctrl-D)");
-    println("  <anything else>    a coding task -> routed to the model (hoosh)");
+    ui_emit(ROLE_ACCENT, "thoth - a model-switching scribe. commands:"); println("");
+    _help_line("  /help", "              this help");
+    _help_line("  /seams", "             capability ladder (spine seam status)");
+    _help_line("  /state", "             session state");
+    _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh)");
+    _help_line("  /models [provider]", " list providers; with one, its switchable models");
+    _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
+    _help_line("  /write <f> <text>", "  write text to a file (t-ron-gated)");
+    _help_line("  /run <cmd>", "         run a shell command (t-ron-gated local escape)");
+    _help_line("  /tools", "             list the MCP tools daimon hosts");
+    _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
+    _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
+    _help_line("  /reset", "             clear the conversation context (start fresh)");
+    _help_line("  /quit", "              exit (or Ctrl-D)");
+    _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
 }
 
@@ -104,51 +108,51 @@ fn _params_one(key, val) {
 }
 
 fn cmd_state() {
-    println("session:");
-    emit("  turns   : "); fmt_int(session_turns()); println("");
-    emit("  model   : ");
+    ui_emit(ROLE_ACCENT, "session:"); println("");
+    ui_label("  turns   : "); fmt_int(session_turns()); println("");
+    ui_label("  model   : ");
     var m = session_model();
     if (m == 0) { m = config_hoosh_model(); }
-    if (m == 0) { println("(none set)"); }
-    else { println(m); }
-    emit("  hoosh   : ");
-    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { println("absent (set [hoosh].url in thoth.cyml)"); }
+    if (m == 0) { ui_emit(ROLE_FAINT, "(none set)"); println(""); }
+    else { ui_emit(ROLE_ACCENT, m); println(""); }
+    ui_label("  hoosh   : ");
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [hoosh].url in thoth.cyml)"); println(""); }
     else {
         emit(config_hoosh_url());
-        if (config_hoosh_stream() == 1) { println(" (streaming)"); }
-        else { println(" (blocking)"); }
+        if (config_hoosh_stream() == 1) { ui_emit(ROLE_MUTED, " (streaming)"); println(""); }
+        else { ui_emit(ROLE_MUTED, " (blocking)"); println(""); }
     }
-    emit("  context : ");
-    if (config_hoosh_history() == 0) { println("stateless (single-turn; [hoosh].history = false)"); }
-    else { emit("multi-turn, "); fmt_int(session_history_len()); println(" messages (/reset clears)"); }
-    emit("  log     : ");
-    if (log_active() == 0) { println("off (set [log].file or [log].level in thoth.cyml)"); }
+    ui_label("  context : ");
+    if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); println(""); }
+    else { emit("multi-turn, "); fmt_int(session_history_len()); ui_emit(ROLE_MUTED, " messages (/reset clears)"); println(""); }
+    ui_label("  log     : ");
+    if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in thoth.cyml)"); println(""); }
     else {
         if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
-        println(" (structured driver events)");
+        ui_emit(ROLE_MUTED, " (structured driver events)"); println("");
     }
-    emit("  agent   : ");
+    ui_label("  agent   : ");
     if (agent_enabled() == 1) {
         emit("agentic tool-calling on (daimon tools, t-ron gated, ");
-        if (config_hoosh_parallel() == 1) { emit("parallel"); } else { emit("serial"); }
+        if (config_hoosh_parallel() == 1) { ui_emit(ROLE_GREEN, "parallel"); } else { emit("serial"); }
         println(" calls)");
     }
-    elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("plain turns (no daimon seam; /tools needs [daimon].url)"); }
-    else { println("plain turns ([hoosh].tools = false)"); }
-    emit("  daimon  : ");
-    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { println("absent (set [daimon].url in thoth.cyml)"); }
+    elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_MUTED, "plain turns (no daimon seam; /tools needs [daimon].url)"); println(""); }
+    else { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); println(""); }
+    ui_label("  daimon  : ");
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in thoth.cyml)"); println(""); }
     else { println(config_daimon_url()); }
-    emit("  t-ron   : ");
-    if (gate_active() == 0) { println("absent (fail-closed confirm gate; set [tron].policy in thoth.cyml)"); }
+    ui_label("  t-ron   : ");
+    if (gate_active() == 0) { ui_emit(ROLE_FAINT, "absent (fail-closed confirm gate; set [tron].policy in thoth.cyml)"); println(""); }
     else { println(config_tron_policy()); }
-    emit("  spine   : ");
-    if (seam_any_wired() == 0) { println("all seams absent (fermenting)"); }
-    else { println("see /seams"); }
-    emit("  surface : ");
-    emit(ui_tier_name());
-    if (ui_tier() != PT_PLAIN) { emit(" ("); emit(ui_color_depth_name()); emit(")"); }
+    ui_label("  spine   : ");
+    if (seam_any_wired() == 0) { ui_emit(ROLE_FAINT, "all seams absent (fermenting)"); println(""); }
+    else { ui_emit(ROLE_MUTED, "see /seams"); println(""); }
+    ui_label("  surface : ");
+    ui_emit(ROLE_GREEN, ui_tier_name());
+    if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     println("");
-    println("  build   : thoth 0.8.1");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.2"); println("");
     return 0;
 }
 

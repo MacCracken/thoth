@@ -244,6 +244,14 @@ fn ui_emit(role, s) {
 }
 # ui_label: a dim label span (faint role) — sugar for "  key : " prefixes.
 fn ui_label(s) { return ui_emit(ROLE_FAINT, s); }
+# ui_emit_n: like ui_emit but for (ptr,len) Str data that isn't a NUL-terminated
+# cstr (model ids, tool names). Just the bytes at T0.
+fn ui_emit_n(role, ptr, n) {
+    emit(ui_sgr(role));
+    emit_n(ptr, n);
+    emit(ui_reset());
+    return 0;
+}
 
 # Introspection (announced in /state; future /seams presentation row).
 fn ui_tier() { return _ui_tier; }

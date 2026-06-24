@@ -7,6 +7,13 @@
 
 ## Version
 
+**0.8.2** — color breadth, the rest of the core views (M7 Phase 1b), 2026-06-24.
+Extends 0.8.1's palette to `/state` (faint labels, accent model/build, green live
+tier), `/help` (accent commands, muted descriptions, alignment preserved), `/models`
++ `/models <provider>` (active target a green `*` + accent id), `/tools`, and the
+`-> hoosh`/`-> daimon` turn lines — all via `src/ui.cyr` roles at T1. No new
+substrate; **byte-identical when piped/CI** (0 escape bytes verified). New
+`ui_emit_n` helper. 256 assertions. Pin unchanged (6.2.40).
 **0.8.1** — design-palette color across the core surfaces (M7 Phase 1a), 2026-06-24.
 The banner, `/seams`, the agent loop's tool-call/result lines, and the t-ron gate
 verdicts now render through `src/ui.cyr`'s semantic color roles at T1 (the mockup's

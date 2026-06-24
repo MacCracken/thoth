@@ -2,6 +2,25 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.2] - 2026-06-24
+
+**Color breadth — the rest of the core views (M7 Phase 1b).** Extends 0.8.1's
+palette to the remaining surfaces, all through `src/ui.cyr`'s semantic roles at T1.
+Still no new substrate; output stays **byte-identical when piped/CI** (verified: 0
+escape bytes across `/help` + `/state` + `/seams`; `/help` column alignment intact).
+
+### Changed
+- **`/state`** — labels faint, model + build version accent, seam `absent` states
+  faint, `parallel` / live surface tier green, status notes muted.
+- **`/help`** — command tokens in accent amber, descriptions muted (alignment
+  preserved exactly).
+- **`/models`** + **`/models <provider>`** — header accent, the active routing
+  target marked with a green `*` and its id in accent, other ids in the warm fg.
+- **`/tools`** — header accent, tool names accent, descriptions muted.
+- **Turn lines** — the `-> hoosh (…)` / `-> daimon …` request lines dim the framing
+  to faint and lift the model/tool name to accent.
+- New surface helper `ui_emit_n(role, ptr, n)` for `Str` (ptr,len) spans.
+
 ## [0.8.1] - 2026-06-24
 
 **Design-palette color across the core surfaces (M7 Phase 1a).** First visible step
