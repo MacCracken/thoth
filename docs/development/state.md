@@ -7,6 +7,14 @@
 
 ## Version
 
+**0.8.3** — diff producer + colored hunks (M7 Phase 2), 2026-06-24. `/write` reads
+the old file and renders a colored old→new diff (new `src/diff.cyr`: a bounded LCS
+line-diff — green add / red del / faint context, line numbers, blue path, `+A −D`
+counts) through the T1 surface, plain when piped. Crosses from formatting into a real
+capability (the first diff DATA thoth produces). A 3-lens adversarial review cleared
+the engine (memory + LCS correctness sound) and caught two honesty gaps — newline-aware
+line identity + announced old-file truncation — both fixed before cut. 263 assertions
+(+7, `test_diff`). Pin unchanged (6.2.40).
 **0.8.2** — color breadth, the rest of the core views (M7 Phase 1b), 2026-06-24.
 Extends 0.8.1's palette to `/state` (faint labels, accent model/build, green live
 tier), `/help` (accent commands, muted descriptions, alignment preserved), `/models`

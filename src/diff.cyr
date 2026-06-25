@@ -1,0 +1,192 @@
+# thoth — line-level diff producer + colored renderer (M7 / 0.8.3).
+#
+# The mockup's tool-call cards show syntax-colored +/- diffs. That presumes diff
+# DATA thoth did not have: /write overwrote a file without ever reading the old
+# one. This module is the producer — a bounded LCS line diff of old vs new bytes —
+# plus a renderer that emits green-add / red-del / faint-context hunks with line
+# numbers through the presentation surface (src/ui.cyr): colored at T1, plain bytes
+# at T0. Syntax-highlighting the line bodies (vyakarana) is a later layer on top.
+#
+# Pure core (_diff_run with render=0 returns the add/del counts) is unit-tested;
+# the renderer is the same walk with render=1. Bounded: at most DIFF_MAX_LINES per
+# side; a larger file falls back to a byte-count summary, announced (never a fake
+# or a runaway allocation). Reused static buffers — no per-call accretion.
+
+var DIFF_MAX_LINES = 256;          # cap per side; beyond it, summarize honestly
+var _diff_ol = 0;                  # old line table: DIFF_MAX_LINES * {off(8), len(8)}
+var _diff_nl = 0;                  # new line table
+var _diff_dp = 0;                  # LCS DP: (MAX+1)*(MAX+1) i64
+var _diff_ready = 0;
+
+fn _diff_alloc() {
+    if (_diff_ready == 1) { return 0; }
+    _diff_ol = alloc(DIFF_MAX_LINES * 16);
+    _diff_nl = alloc(DIFF_MAX_LINES * 16);
+    _diff_dp = alloc((DIFF_MAX_LINES + 1) * (DIFF_MAX_LINES + 1) * 8);
+    _diff_ready = 1;
+    return 0;
+}
+
+# _diff_split: index buf[0..len) into `out` as up to `cap` line records {off,len}
+# (len EXCLUDES the newline). A trailing unterminated line counts. Returns the
+# line count (<= cap; == cap signals "hit the cap", caller treats as too-big).
+fn _diff_split(buf, len, out, cap) {
+    var n = 0;
+    var i = 0;
+    var start = 0;
+    while ((i < len) && (n < cap)) {
+        if (load8(buf + i) == 10) {
+            store64(out + n * 16, start);
+            store64(out + n * 16 + 8, i - start + 1);   # INCLUDE the \n: a terminated
+            n = n + 1;                                   # line differs from an unterminated
+            start = i + 1;                               # one (newline-aware identity)
+        }
+        i = i + 1;
+    }
+    if ((start < len) && (n < cap)) {
+        store64(out + n * 16, start);
+        store64(out + n * 16 + 8, len - start);
+        n = n + 1;
+    }
+    return n;
+}
+
+# _diff_line_eq: 1 if old line ai equals new line bi (same bytes). Pure.
+fn _diff_line_eq(ob, ol, ai, nb, nl, bi) {
+    var ao = load64(ol + ai * 16);
+    var al = load64(ol + ai * 16 + 8);
+    var bo = load64(nl + bi * 16);
+    var bl = load64(nl + bi * 16 + 8);
+    if (al != bl) { return 0; }
+    var k = 0;
+    while (k < al) {
+        if (load8(ob + ao + k) != load8(nb + bo + k)) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# _diff_emit_line: render one hunk line — line-number gutter (faint), a colored
+# +/-/space gutter, then the raw line body. kind 0=context 1=del 2=add. I/O.
+fn _diff_emit_line(role, gutter, lineno, body_buf, off, len) {
+    if (lineno > 0) {
+        # right-aligned 4-col line number, faint
+        var pad = 0;
+        if (lineno < 1000) { pad = pad + 1; }
+        if (lineno < 100) { pad = pad + 1; }
+        if (lineno < 10) { pad = pad + 1; }
+        emit(ui_sgr(ROLE_FAINT));
+        while (pad > 0) { emit(" "); pad = pad - 1; }
+        fmt_int(lineno);
+        emit(ui_reset());
+    } else {
+        emit(ui_sgr(ROLE_FAINT)); emit("    "); emit(ui_reset());
+    }
+    emit(" ");
+    ui_emit(role, gutter);
+    # the line span now includes its trailing \n (newline-aware identity); don't
+    # emit it — println supplies the line break.
+    var rl = len;
+    if (rl > 0) { if (load8(body_buf + off + rl - 1) == 10) { rl = rl - 1; } }
+    ui_emit_n(role, body_buf + off, rl);
+    println("");
+    return 0;
+}
+
+# _diff_run: LCS line-diff of old vs new. render=1 prints a colored hunk; render=0
+# only counts. Returns adds*1000000 + dels (packed, both < DIFF_MAX_LINES). A side
+# at the line cap returns 0 - 1 (too big) and, if rendering, prints a summary.
+fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render) {
+    _diff_alloc();
+    var on = _diff_split(ob, ol_bytes, _diff_ol, DIFF_MAX_LINES);
+    var nn = _diff_split(nb, nl_bytes, _diff_nl, DIFF_MAX_LINES);
+    if ((on >= DIFF_MAX_LINES) || (nn >= DIFF_MAX_LINES)) {
+        if (render == 1) {
+            emit("  "); ui_emit(ROLE_FAINT, "(diff omitted: over "); fmt_int(DIFF_MAX_LINES);
+            ui_emit(ROLE_FAINT, " lines)"); println("");
+        }
+        return 0 - 1;
+    }
+    var stride = nn + 1;
+    # DP: dp[i*stride+j] = LCS(old[i..on), new[j..nn)). Fill bottom-up.
+    var i = on;
+    while (i >= 0) {
+        var j = nn;
+        while (j >= 0) {
+            var v = 0;
+            if ((i < on) && (j < nn)) {
+                if (_diff_line_eq(ob, _diff_ol, i, nb, _diff_nl, j) == 1) {
+                    v = load64(_diff_dp + ((i + 1) * stride + (j + 1)) * 8) + 1;
+                } else {
+                    var down = load64(_diff_dp + ((i + 1) * stride + j) * 8);
+                    var right = load64(_diff_dp + (i * stride + (j + 1)) * 8);
+                    if (down >= right) { v = down; } else { v = right; }
+                }
+            }
+            store64(_diff_dp + (i * stride + j) * 8, v);
+            j = j - 1;
+        }
+        i = i - 1;
+    }
+    # Backtrace from (0,0), emitting/counting ops in order.
+    var adds = 0;
+    var dels = 0;
+    i = 0;
+    var j = 0;
+    while ((i < on) || (j < nn)) {
+        if ((i < on) && (j < nn) && (_diff_line_eq(ob, _diff_ol, i, nb, _diff_nl, j) == 1)) {
+            if (render == 1) {
+                _diff_emit_line(ROLE_FAINT, " ", j + 1, nb, load64(_diff_nl + j * 16), load64(_diff_nl + j * 16 + 8));
+            }
+            i = i + 1; j = j + 1;
+        } else {
+            var take_add = 0;
+            if (j < nn) {
+                if (i >= on) { take_add = 1; }
+                else {
+                    var d = load64(_diff_dp + ((i + 1) * stride + j) * 8);
+                    var r = load64(_diff_dp + (i * stride + (j + 1)) * 8);
+                    if (r >= d) { take_add = 1; }
+                }
+            }
+            if (take_add == 1) {
+                if (render == 1) {
+                    _diff_emit_line(ROLE_GREEN, "+", j + 1, nb, load64(_diff_nl + j * 16), load64(_diff_nl + j * 16 + 8));
+                }
+                adds = adds + 1; j = j + 1;
+            } else {
+                if (render == 1) {
+                    _diff_emit_line(ROLE_RED, "-", i + 1, ob, load64(_diff_ol + i * 16), load64(_diff_ol + i * 16 + 8));
+                }
+                dels = dels + 1; i = i + 1;
+            }
+        }
+    }
+    return adds * 1000000 + dels;
+}
+
+# diff_render: print a colored diff card for path (old `ob` -> new `nb`). The path
+# header (blue) + a +A -D count line (green/red) + the hunk. I/O.
+fn diff_render(path, ob, ol_bytes, nb, nl_bytes) {
+    emit("  "); ui_emit(ROLE_BLUE, path); println("");
+    var packed = _diff_run(path, ob, ol_bytes, nb, nl_bytes, 0);   # count first for the header
+    if (packed == (0 - 1)) {
+        _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1);            # prints the "too big" note
+        return 0;
+    }
+    var adds = packed / 1000000;
+    var dels = packed - adds * 1000000;
+    emit("  ");
+    emit(ui_sgr(ROLE_GREEN)); emit("+"); fmt_int(adds); emit(ui_reset());
+    emit(" ");
+    emit(ui_sgr(ROLE_RED)); emit("-"); fmt_int(dels); emit(ui_reset());
+    println("");
+    _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1);
+    return 0;
+}
+
+# diff_stats: the pure add/del result (packed adds*1000000+dels), or -1 if a side
+# exceeds the line cap. No I/O — the unit-test entry point.
+fn diff_stats(ob, ol_bytes, nb, nl_bytes) {
+    return _diff_run(0, ob, ol_bytes, nb, nl_bytes, 0);
+}

@@ -37,6 +37,7 @@ include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/daimon.cyr"
 include "src/agent.cyr"
+include "src/diff.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
 

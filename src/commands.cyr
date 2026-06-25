@@ -152,7 +152,7 @@ fn cmd_state() {
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     println("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.2"); println("");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.3"); println("");
     return 0;
 }
 
@@ -226,7 +226,9 @@ fn cmd_read(line) {
 # input line. A trailing newline is appended to the content.
 var _write_path = 0;
 var _write_out = 0;
+var _write_old = 0;
 var WRITE_BUF_CAP = 4096;
+var WRITE_OLD_CAP = 65536;   # old-file snapshot for the diff (capped; larger -> summarized)
 
 fn cmd_write(line) {
     var rest = arg_after(line);
@@ -246,10 +248,10 @@ fn cmd_write(line) {
     while (load8(rest + j) == 32) { j = j + 1; }
     if (load8(rest + j) != 0) { content = rest + j; }
     if (content == 0) { println("usage: /write <path> <content>"); return 0; }
-    emit("propose write -> "); println(_write_path);
+    ui_emit(ROLE_FAINT, "propose write -> "); ui_emit(ROLE_BLUE, _write_path); println("");
     var wparams = _params_one("path", _write_path);
     if (gate_authorize("thoth_write", wparams, "write to", _write_path) == 0) {
-        println("  denied. nothing written.");
+        ui_emit(ROLE_RED, "  denied. nothing written."); println("");
         return 0;
     }
     var clen = strlen(content);
@@ -257,6 +259,20 @@ fn cmd_write(line) {
     memcpy(_write_out, content, clen);
     store8(_write_out + clen, 10);
     store8(_write_out + clen + 1, 0);
+    # colored diff of the proposed change: old on disk (if any) -> the new content.
+    if (_write_old == 0) { _write_old = alloc(WRITE_OLD_CAP); }
+    var oldlen = 0;
+    var old_toobig = 0;
+    if (file_exists(_write_path) == 1) {
+        var rn = file_read_all(_write_path, _write_old, WRITE_OLD_CAP - 1);
+        if (rn >= (WRITE_OLD_CAP - 1)) { old_toobig = 1; }   # truncated read -> don't diff a lie
+        elif (rn > 0) { oldlen = rn; }
+    }
+    if (old_toobig == 1) {
+        emit("  "); ui_emit(ROLE_FAINT, "(old file > 64KB — diff skipped)"); println("");
+    } else {
+        diff_render(_write_path, _write_old, oldlen, _write_out, clen + 1);
+    }
     var rc = file_write_all(_write_path, _write_out, clen + 1);
     if (rc < 0) { emit("write failed: "); println(_write_path); return 0; }
     emit("wrote "); fmt_int(clen + 1); emit(" bytes (+newline) -> "); println(_write_path);

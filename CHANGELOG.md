@@ -2,6 +2,32 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.3] - 2026-06-24
+
+**Diff producer + colored hunks (M7 Phase 2).** `/write` now reads the old file and
+renders a colored old→new diff before committing — the first step from *formatting*
+into a real *capability* (the first diff DATA thoth produces). An adversarial 3-lens
+review (memory / LCS-correctness / edge+integration, each finding double-verified)
+cleared the engine and caught two honesty-contract gaps, both fixed before this cut.
+
+### Added
+- **`src/diff.cyr`** — a bounded (256-line) LCS line-diff: `diff_render` (the colored
+  card: green `+` add / red `−` del / faint context, line numbers, blue path header,
+  green/red `+A −D` counts, through the T1 surface — plain when piped) + the pure
+  `diff_stats` (add/del counts). Reused buffers, no per-call accretion; an over-cap
+  input summarizes honestly rather than running away. `test_diff` (+7).
+- **`/write` shows the diff** of the proposed change (old on disk → new content)
+  after the t-ron gate and before the write; path / denied / wrote lines colored.
+
+### Fixed
+- **Newline-aware line identity** — a line ending in `\n` no longer compares equal to
+  one that doesn't, so rewriting a file that lacked a trailing newline is shown as a
+  real change (was `+0 −0` while the committed bytes changed). The card never
+  under-reports what is written.
+- **Old-file truncation is announced** — an old file over 64 KB is no longer silently
+  diffed against a truncated copy; `/write` prints `(old file > 64KB — diff skipped)`
+  (degrade-closed, announced — never a fake).
+
 ## [0.8.2] - 2026-06-24
 
 **Color breadth — the rest of the core views (M7 Phase 1b).** Extends 0.8.1's

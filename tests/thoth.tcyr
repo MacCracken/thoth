@@ -19,6 +19,7 @@ include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/daimon.cyr"
 include "src/agent.cyr"
+include "src/diff.cyr"
 include "src/commands.cyr"
 
 fn test_classify() {
@@ -702,6 +703,32 @@ fn test_ui() {
     return 0;
 }
 
+# Diff producer (0.8.3): the pure LCS line-diff core. diff_stats returns
+# adds*1000000 + dels (or -1 if a side exceeds the line cap). Identity is
+# NEWLINE-AWARE (a terminated line differs from an unterminated one) so the card
+# can never under-report the bytes written.
+fn test_diff() {
+    test_group("diff producer (0.8.3)");
+    var a = "a\nb\nc\n";
+    assert_eq(diff_stats(a, strlen(a), a, strlen(a)), 0, "identical -> 0 adds 0 dels");
+    var e = "";
+    var x = "x\n";
+    assert_eq(diff_stats(e, 0, x, strlen(x)), 1000000, "empty old -> one add");
+    assert_eq(diff_stats(x, strlen(x), e, 0), 1, "empty new -> one del");
+    var c2 = "a\nB\nc\n";
+    assert_eq(diff_stats(a, strlen(a), c2, strlen(c2)), 1000001, "one line changed -> 1 add 1 del");
+    var ins1 = "a\nc\n";
+    assert_eq(diff_stats(ins1, strlen(ins1), a, strlen(a)), 1000000, "insert middle (b) -> 1 add");
+    # newline-aware: an unterminated final line vs a terminated one is a REAL change
+    var nl1 = "hello";
+    var nl2 = "hello\n";
+    assert_eq(diff_stats(nl1, strlen(nl1), nl2, strlen(nl2)), 1000001, "newline-only change is visible (1 add 1 del)");
+    var r1 = "one\ntwo\n";
+    var r2 = "uno\ndos\n";
+    assert_eq(diff_stats(r1, strlen(r1), r2, strlen(r2)), 2000002, "full replace -> 2 add 2 del");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -727,6 +754,7 @@ fn main() {
     test_parallel();
     test_bounds_hardening();
     test_ui();
+    test_diff();
     test_model_switch();
     return assert_summary();
 }
