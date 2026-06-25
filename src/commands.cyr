@@ -152,7 +152,7 @@ fn cmd_state() {
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     println("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.5"); println("");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.6"); println("");
     return 0;
 }
 
@@ -213,7 +213,7 @@ fn _read_highlight(path, buf, n) {
     if (ui_tier() == PT_PLAIN) { return 0; }
     var lang = detect_language(path);
     if (lang == 0) { return 0; }
-    return _hl_span(lang, buf, n);
+    return _hl_span(lang, buf, n, ui_reset());
 }
 
 fn cmd_read(line) {

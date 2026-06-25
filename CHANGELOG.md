@@ -2,6 +2,20 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.6] - 2026-06-24
+
+**Diff row background tint (M7 Phase 2d).** Add/del diff rows now carry a subtle
+background tint — green for additions, red for deletions — with the syntax-highlighted
+code on top, completing the mockup's diff card. Only at 256-color and up; degrades to
+the gutter-only style at 16-color and to plain bytes when piped (byte-identical floor).
+
+### Changed
+- **Tinted diff rows** — `_diff_emit_line` sets a per-row background (`ui_bg`), uses
+  fg-only resets (`ui_reset_fg` → `ESC[39m`) so the tint survives the colored spans,
+  and fills the row to its end (`ui_eol` → `ESC[K`) before a final full reset. New
+  `ui_bg` / `ui_eol` / `ui_reset_fg` surface accessors + a bg-escape builder. T0 /
+  16-color / context rows are untinted, so piped/CI output is unchanged.
+
 ## [0.8.5] - 2026-06-24
 
 **Syntax-highlighted diff bodies (M7 Phase 2c).** The colored diff card now

@@ -39,7 +39,11 @@ var _ui_depth = 0;         # active color depth (CD_*)
 var _ui_detected = 0;      # 1 once detection/override ran
 var _ui_role_ptr = 0;      # alloc: UI_ROLE_COUNT i64 cstr pointers (the per-role SGR prefix)
 var _ui_reset_ptr = 0;     # the "ESC[0m" reset cstr
-var UI_SGR_BUF_CAP = 256;
+var _ui_addbg_ptr = 0;     # diff add-row background tint (48;..), or 0 below 256-color
+var _ui_delbg_ptr = 0;     # diff del-row background tint
+var _ui_eol_ptr = 0;       # "ESC[K" — fill the rest of the row with the active bg
+var _ui_fgreset_ptr = 0;   # "ESC[39m" — reset fg ONLY (keep bg across colored spans)
+var UI_SGR_BUF_CAP = 320;
 
 # Linux x86_64: ioctl(fd, TCGETS) returns 0 iff fd is a terminal. (Not in the
 # vendored syscall constants; the well-known Linux value.)
@@ -124,6 +128,33 @@ fn _ui_code16(role) {
     return 39;
 }
 
+# _ui_bg_escape: write a background SGR (48;2;R;G;B truecolor, or 48;5;idx256) into
+# buf at off; return new off. The diff-row tints.
+fn _ui_bg_escape(buf, off, r, g, b, idx256) {
+    store8(buf + off, 27); off = off + 1;
+    store8(buf + off, 91); off = off + 1;
+    if (_ui_depth == CD_TRUE) {
+        off = _ui_dec(buf, off, 48);
+        store8(buf + off, 59); off = off + 1;
+        store8(buf + off, 50); off = off + 1;        # 2
+        store8(buf + off, 59); off = off + 1;
+        off = _ui_dec(buf, off, r);
+        store8(buf + off, 59); off = off + 1;
+        off = _ui_dec(buf, off, g);
+        store8(buf + off, 59); off = off + 1;
+        off = _ui_dec(buf, off, b);
+    } else {
+        off = _ui_dec(buf, off, 48);
+        store8(buf + off, 59); off = off + 1;
+        store8(buf + off, 53); off = off + 1;        # 5
+        store8(buf + off, 59); off = off + 1;
+        off = _ui_dec(buf, off, idx256);
+    }
+    store8(buf + off, 109); off = off + 1;           # m
+    store8(buf + off, 0); off = off + 1;             # NUL
+    return off;
+}
+
 # Build the per-role SGR prefix table + reset for the active depth, ONCE. Each
 # role's escape is a stable NUL-terminated cstr in a bump-heap buffer.
 fn _ui_build_palette() {
@@ -168,7 +199,24 @@ fn _ui_build_palette() {
     store8(buf + off, 91); off = off + 1;
     store8(buf + off, 48); off = off + 1;            # 0
     store8(buf + off, 109); off = off + 1;           # m
-    store8(buf + off, 0);
+    store8(buf + off, 0); off = off + 1;
+    # diff-row background tints (subtle; only at >=256 color), + ESC[K row-fill and
+    # ESC[39m fg-only reset (so the bg survives the colored spans on a tinted row).
+    _ui_addbg_ptr = 0;
+    _ui_delbg_ptr = 0;
+    if ((_ui_depth == CD_256) || (_ui_depth == CD_TRUE)) {
+        _ui_addbg_ptr = buf + off;
+        off = _ui_bg_escape(buf, off, 34, 35, 24, 22);
+        _ui_delbg_ptr = buf + off;
+        off = _ui_bg_escape(buf, off, 40, 30, 24, 52);
+    }
+    _ui_eol_ptr = buf + off;
+    store8(buf + off, 27); off = off + 1; store8(buf + off, 91); off = off + 1;
+    store8(buf + off, 75); off = off + 1; store8(buf + off, 0); off = off + 1;    # ESC[K
+    _ui_fgreset_ptr = buf + off;
+    store8(buf + off, 27); off = off + 1; store8(buf + off, 91); off = off + 1;
+    store8(buf + off, 51); off = off + 1; store8(buf + off, 57); off = off + 1;   # 3 9
+    store8(buf + off, 109); off = off + 1; store8(buf + off, 0); off = off + 1;   # m NUL
     return 0;
 }
 
@@ -232,6 +280,27 @@ fn ui_reset() {
     if (_ui_tier == PT_PLAIN) { return ""; }
     if (_ui_reset_ptr == 0) { return ""; }
     return _ui_reset_ptr;
+}
+
+# ui_bg: the background-tint escape for a diff row (which 0=add, 1=del), or "" at the
+# plain tier / below 256-color (row tints aren't drawn there). Stable for the session.
+fn ui_bg(which) {
+    if (_ui_tier == PT_PLAIN) { return ""; }
+    if (which == 0) { if (_ui_addbg_ptr == 0) { return ""; } return _ui_addbg_ptr; }
+    if (_ui_delbg_ptr == 0) { return ""; }
+    return _ui_delbg_ptr;
+}
+# ui_eol: ESC[K — fill the rest of the current row with the active bg (or "" at T0).
+fn ui_eol() {
+    if (_ui_tier == PT_PLAIN) { return ""; }
+    if (_ui_eol_ptr == 0) { return ""; }
+    return _ui_eol_ptr;
+}
+# ui_reset_fg: ESC[39m — reset FG only, keeping the active bg (or "" at T0).
+fn ui_reset_fg() {
+    if (_ui_tier == PT_PLAIN) { return ""; }
+    if (_ui_fgreset_ptr == 0) { return ""; }
+    return _ui_fgreset_ptr;
 }
 
 # ui_emit: write s wrapped in the role's color (just s at T0 — byte-identical on

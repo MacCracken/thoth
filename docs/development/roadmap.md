@@ -172,10 +172,12 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   (truecolor→256→16→none); colored + **vyakarana**-highlighted diffs; a one-line
   status (model/mode/cwd via a getcwd wrapper); `/tree`; **bnrmr+anuenue** banner.
   Rich-by-default on a TTY, auto-`plain` when piped/CI.
-- **T2 rich-TUI — gated; vendor darshana** — raw-mode composer + slash palette,
-  alt-screen status bar + panes, file-tree pane, spinner (`chakshu/src/tui.cyr` is
-  the reference loop). A separable, explicit-go-ahead milestone — landed together,
-  not piecemeal.
+- **T2 rich-TUI — `0.9.0`, gated; vendor darshana** — the interactive layout:
+  raw-mode composer + slash palette, alt-screen, a spinner (`chakshu/src/tui.cyr` is
+  the reference loop), and a **togglable status bar + file-tree pane** — keyboard
+  toggles, **no mouse assumed** (the panes are chrome you summon/dismiss, so thoth
+  stays usable in a non-mouse / minimal terminal). A separable, explicit-go-ahead
+  milestone — landed together, not piecemeal.
 - **Data producers (parallel; honest-omit until present)** — hoosh `usage` →
   tokens; opt-in `[pricing]` → cost; git branch + diff via **sit** (`.sit/` repos
   today). **Real `.git/` repos are GATED on sit's `.git/` read-mode** (filed on

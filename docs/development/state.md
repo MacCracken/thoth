@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.8.6** — diff row background tint (M7 Phase 2d), 2026-06-24. Add/del diff rows now
+carry a subtle background tint (green add / red del) under the syntax-highlighted code
+— completing the mockup's diff card. Built with fg-only resets (`ESC[39m`) so the tint
+survives the colored spans + `ESC[K` row-fill; only at 256-color+, gutter-only at
+16-color, plain when piped (byte-identical floor). New `ui_bg`/`ui_eol`/`ui_reset_fg`
+accessors. 270 assertions. Pin unchanged (6.2.40).
 **0.8.5** — syntax-highlighted diff bodies (M7 Phase 2c), 2026-06-24. The colored diff
 card now syntax-colors the line bodies (keywords amber, strings green, …) via the SAME
 coverage-guarded highlighter `/read` uses (`_hl_span`, shared into `src/diff.cyr`) — no

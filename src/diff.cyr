@@ -83,7 +83,7 @@ fn _tok_role(kind) {
 # diff bodies. CRITICAL honesty guard: it tracks the cursor and emits any uncovered
 # gap + trailing bytes VERBATIM, so highlighting never drops or reorders a byte. If
 # the stream can't open it emits the whole span verbatim. Returns 1.
-fn _hl_span(lang, buf, n) {
+fn _hl_span(lang, buf, n, reset_str) {
     var s = tokenize_stream_new(lang);
     if (s == 0) { emit_n(buf, n); return 1; }
     tokenize_stream_feed(s, buf, n);
@@ -100,7 +100,7 @@ fn _hl_span(lang, buf, n) {
         if ((start + len) <= n) {
             var role = _tok_role(tokenbuf_kind(tb, i));
             if (role < 0) { emit_n(buf + start, len); }
-            else { ui_emit_n(role, buf + start, len); }
+            else { emit(ui_sgr(role)); emit_n(buf + start, len); emit(reset_str); }
             pos = start + len;
         }
         i = i + 1;
@@ -114,6 +114,21 @@ fn _hl_span(lang, buf, n) {
 # +/-/space gutter, then the line body: syntax-highlighted via `lang` (or emitted in
 # the gutter `role` when lang==0 / plain tier). kind 0=context 1=del 2=add. I/O.
 fn _diff_emit_line(role, gutter, lineno, body_buf, off, len, lang) {
+    var plain = 0;
+    if (ui_tier() == PT_PLAIN) { plain = 1; }
+    # add/del rows get a subtle background tint (>=256 color). On a tinted row the
+    # colored spans use a fg-only reset (rst = ESC[39m) so the bg persists, and the
+    # row is filled to its end (ESC[K) before a final full reset. Plain tier / <256
+    # color / context rows: rst is the full reset and no tint is drawn.
+    var bg = "";
+    var rst = ui_reset();
+    if (plain == 0) {
+        if (role == ROLE_GREEN) { bg = ui_bg(0); }
+        elif (role == ROLE_RED) { bg = ui_bg(1); }
+    }
+    var has_bg = 0;
+    if (load8(bg) != 0) { has_bg = 1; rst = ui_reset_fg(); }
+    emit(bg);
     if (lineno > 0) {
         # right-aligned 4-col line number, faint
         var pad = 0;
@@ -123,18 +138,20 @@ fn _diff_emit_line(role, gutter, lineno, body_buf, off, len, lang) {
         emit(ui_sgr(ROLE_FAINT));
         while (pad > 0) { emit(" "); pad = pad - 1; }
         fmt_int(lineno);
-        emit(ui_reset());
+        emit(rst);
     } else {
-        emit(ui_sgr(ROLE_FAINT)); emit("    "); emit(ui_reset());
+        emit(ui_sgr(ROLE_FAINT)); emit("    "); emit(rst);
     }
     emit(" ");
-    ui_emit(role, gutter);
-    # the line span now includes its trailing \n (newline-aware identity); don't
-    # emit it — println supplies the line break.
+    emit(ui_sgr(role)); emit(gutter); emit(rst);
+    # the line span includes its trailing \n (newline-aware identity); don't emit it
+    # — println supplies the break.
     var rl = len;
     if (rl > 0) { if (load8(body_buf + off + rl - 1) == 10) { rl = rl - 1; } }
-    if ((lang != 0) && (ui_tier() != PT_PLAIN)) { _hl_span(lang, body_buf + off, rl); }
-    else { ui_emit_n(role, body_buf + off, rl); }
+    if ((lang != 0) && (plain == 0)) { _hl_span(lang, body_buf + off, rl, rst); }
+    elif (plain == 0) { emit(ui_sgr(role)); emit_n(body_buf + off, rl); emit(rst); }
+    else { emit_n(body_buf + off, rl); }
+    if (has_bg == 1) { emit(ui_eol()); emit(ui_reset()); }
     println("");
     return 0;
 }
