@@ -40,6 +40,13 @@ var _hoosh_acc = 0;
 var _hoosh_acc_len = 0;
 var HOOSH_ACC_CAP = 65536;
 fn _hoosh_acc_reset() { _hoosh_acc_len = 0; return 0; }
+
+# hoosh_last_reply / _len (0.11.0): the most recent turn's full assistant text and
+# its byte length (the blocking path copies the parsed content here, streaming
+# appends each delta; agent_turn leaves the final answer here too). One-shot mode
+# reads this AFTER the turn to print just the clean answer to stdout.
+fn hoosh_last_reply() { return _hoosh_acc; }
+fn hoosh_last_reply_len() { return _hoosh_acc_len; }
 fn _hoosh_acc_append(p, n) {
     if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
     var room = HOOSH_ACC_CAP - 1 - _hoosh_acc_len;

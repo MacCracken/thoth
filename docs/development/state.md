@@ -7,6 +7,29 @@
 
 ## Version
 
+**0.11.0** — one-shot / argv front-door, the 0.11.x keystone, 2026-06-25. thoth becomes a
+non-interactive shell citizen: `thoth 'task'`, `git diff | thoth 'review'`, `thoth -p <
+f`, `thoth --version|--help` run ONE turn through the EXISTING `cmd_task →
+hoosh_send/agent_turn` seam and exit — **no new spine path**, only a new input source
+(argv + slurped stdin) + a clean output contract. Mode gated on **explicit argv intent**
+(NOT `isTTY==false` — piped stdin already drives the line-REPL), so no-argv-task falls
+through to the TUI/REPL unchanged (**byte-identical floor**). New `src/oneshot.cyr` (pure
+`_oneshot_parse` classifier + bounded task assembly + `_oneshot_append_stdin` payload slurp
++ `one_shot_run`). Clean stdout via a new `OUT_NULL` discard sink (`src/util.cyr`): the turn
+runs with output discarded, then `one_shot_run` prints ONLY the reply accumulator
+(`hoosh_last_reply`) to fd 1; diagnostics → stderr (`emit_err`); exit 0 on a real answer,
+nonzero otherwise. Degrade-closed: the t-ron confirm **denies** in one-shot (announced on
+stderr, never silent-allow/blocking-prompt), and a bound-policy DENY/FLAG is mirrored to
+stderr. **Pre-cut adversarial review (4 lenses, all verified):** core sound; caught + fixed
+3 contract gaps before cut — (1) `gate_init`/`log_init` startup chrome leaked to stdout when
+`[tron]`/`[log]` configured (fixed: classify mode first + discard init chrome under
+OUT_NULL + 2 raw `println`→`oprintln` in `log.cyr`; verified byte-clean), (2) streaming
+max-iters left interim narration in the accumulator → one-shot could print it as success
+(fixed: clear the accumulator on max-iters in `agent.cyr` → reports failure), (3) silent
+bound-DENY (fixed: stderr mirror). [ADR-0011](../adr/0011-one-shot-argv-front-door.md). Live
+success round-trip is host-side (sandbox blocks compiled-binary TCP); error paths + parser
+covered by smoke + `test_oneshot`. 438 assertions (+13). Pin unchanged (6.2.43; note: local
+cycc has drifted to 6.2.44 — a future maintenance bump, not bundled here).
 **0.10.3** — cost, the second data producer (0.10.x arc), 2026-06-25. thoth surfaces a
 running session **cost** (`$d.cc`), priced from hoosh's token usage times an opt-in,
 user-declared `[pricing.<model>]` rate, **priced at accumulate** (each response costed with
@@ -592,7 +615,17 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   the TUI chrome + painter use these), the OUT_RING branch in `emit`/`emit_n` (→
   `feed_write`), and the mode-aware stdlib shadows `oprintln`/`ofmt_int` (byte-identical
   to `println`/`fmt_int` under OUT_FD1; the 9 dispatch files call these so their output
-  is captured under OUT_RING).
+  is captured under OUT_RING). **0.11.0:** the **`OUT_NULL`** discard mode (one-shot arms
+  it around the turn so chrome is suppressed), `emit_err`/`emit_err_n` (always fd 2, for
+  one-shot diagnostics), and the `_one_shot` flag (`one_shot_active`/`one_shot_set` — the
+  t-ron confirm reads it to fail closed).
+- `src/oneshot.cyr` — **0.11.0**: the one-shot / argv front-door. PURE + unit-tested:
+  `_oneshot_parse` (the argv classifier → `ONESHOT_NONE`/`RUN`/`VERSION`/`HELP`, joining
+  positionals into a bounded heap task buffer) + `oneshot_mode` (snapshots `argc`/`argv`).
+  I/O: `_oneshot_append_stdin` (slurps stdin as the payload when fd 0 is not a tty) and
+  `one_shot_run` (runs the turn under `OUT_NULL`, then prints only `hoosh_last_reply` to
+  fd 1; stderr error + nonzero exit otherwise). Routes through the existing
+  `cmd_task → hoosh_send/agent_turn` seam — no new spine path. [ADR-0011].
 - `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
   4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
   evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE
@@ -625,7 +658,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **425 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **438 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -675,7 +708,10 @@ bundle is DCE-unreachable).
   `/reset`-clears semantics); and **0.10.3** `test_cost` (the pricing math, the `$d.cc`
   formatter truncating down, the `[pricing.<model>]` table with verbatim dashed-id match +
   missing-key→`-1`, the cost accumulator + honest-omit flags, an end-to-end price-at-accumulate
-  assertion through the active model, and the unpriced- + half-declared-model degrade paths).
+  assertion through the active model, and the unpriced- + half-declared-model degrade paths);
+  and **0.11.0** `test_oneshot` (the pure argv classifier — `NONE`/`RUN`/`VERSION`/`HELP`,
+  the `-p` force, flag-vs-positional, positional joining — and the bounded task buffer,
+  driven by a hand-built argv snapshot).
   Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).

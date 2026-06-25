@@ -49,14 +49,35 @@ include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
+include "src/oneshot.cyr"   # one-shot / argv front-door (0.11.0); after commands (uses cmd_task)
 include "src/tui.cyr"       # T2 rich-TUI front-end (alt-screen); active only at PT_RICH
 
 fn main() {
     alloc_init();
+    args_init();            # snapshot the command line (one-shot/argv front-door, 0.11.0)
+    # Classify the one-shot mode from argv FIRST (it needs no config). For any one-shot
+    # mode, discard the seam-init chrome that follows: gate_init / log_init print to fd 1
+    # when [tron].policy / [log].file are configured, and that would leak onto the clean
+    # one-shot stdout (e.g. into a `thoth | thoth` chain). ONESHOT_NONE leaves OUT_FD1
+    # untouched, so the interactive TUI/REPL floor is byte-identical (a configured seam
+    # still announces itself to the interactive user).
+    var mode = oneshot_mode();
+    if (mode != ONESHOT_NONE) { out_mode_set(OUT_NULL); }
     config_load();          # read thoth.cyml -> flips hoosh/daimon seams to remote when urls are set
     ui_detect_tier();       # resolve the presentation tier (T0..T3) once; degrades closed to plain
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm
+    out_mode_set(OUT_FD1);  # restore before any one-shot output (no-op when mode == NONE)
+    # One-shot dispatch: an explicit task on argv (or -p) runs ONE turn and exits;
+    # --version / --help short-circuit. one_shot_run manages OUT_NULL around the turn.
+    if (mode == ONESHOT_VERSION) { oneshot_print_version(); return 0; }
+    if (mode == ONESHOT_HELP) { oneshot_print_help(); return 0; }
+    if (mode == ONESHOT_RUN) {
+        one_shot_set(1);
+        var rc = one_shot_run();
+        one_shot_set(0);
+        return rc;
+    }
     # T2 rich-TUI when the tier resolves to PT_RICH on a real tty; otherwise the
     # line-mode REPL (the guaranteed fallback — pipes / CI / T0-T1 / no raw mode).
     if (tui_active() == 1) {

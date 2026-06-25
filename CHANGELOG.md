@@ -2,6 +2,75 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] - 2026-06-25
+
+**One-shot / argv front-door — the 0.11.x keystone.** thoth becomes a first-class shell
+citizen: a non-interactive mode that runs ONE turn and prints the answer, so it composes
+in pipes and scripts.
+
+```
+thoth 'review this diff'              # run one task, print the answer, exit
+git diff | thoth 'review this'        # piped stdin is APPENDED to the task
+cat err.log | thoth 'explain'
+thoth -p < prompt.txt                 # piped stdin IS the whole task
+thoth 'draft' | thoth 'critique it'   # chains cleanly (stdout = answer only)
+thoth --version   ·   thoth --help
+```
+
+It owns **no new spine path** — a one-shot turn runs through the EXISTING `cmd_task →
+hoosh_send / agent_turn` seam; thoth adds only a new input source (argv + slurped stdin)
+and a clean output contract. Mode is gated on **explicit argv intent**, NOT `isTTY ==
+false` (piped stdin already drives the line-REPL), so with no argv task thoth falls
+through to the TUI/REPL unchanged — the piped/CI floor stays **byte-identical**. See
+[ADR-0011](docs/adr/0011-one-shot-argv-front-door.md). Opens the **0.11.x terminal-citizen
+line** (the SecureYeoman-TUI-review backlog). 438 unit assertions (+13). Pin unchanged
+(6.2.43).
+
+### Added
+- **`src/oneshot.cyr`** — the one-shot front-door. A PURE argv classifier (`_oneshot_parse`
+  → `ONESHOT_NONE`/`RUN`/`VERSION`/`HELP`, joining positionals into a bounded heap task
+  buffer; unit-tested via a hand-built argv snapshot), `oneshot_mode` (snapshots
+  `argc`/`argv` over the portable args API — Linux `/proc/self/cmdline`, AGNOS the captured
+  rsp, capped at 8 args so long tasks belong on stdin), `_oneshot_append_stdin` (slurps
+  stdin as the payload only when fd 0 is **not** a tty), and `one_shot_run` (the orchestrator).
+- **Clean-stdout contract.** The turn runs with output **discarded** (new `OUT_NULL` sink
+  mode in `src/util.cyr`) so no human-progress chrome leaks; `one_shot_run` then prints
+  ONLY the accumulated reply (`hoosh_last_reply`) to fd 1, with a trailing newline.
+  Diagnostics (transport/HTTP error, empty reply, denied authorization) go to **stderr**
+  (`emit_err`). Exit 0 on a real answer, nonzero otherwise.
+- **`--version` / `-v` and `--help` / `-h`** (to stdout, exit 0).
+- **`test_oneshot`** (+13): the argv classifier (`NONE`/`RUN`/`VERSION`/`HELP`, `-p` force,
+  flag-vs-positional, positional joining) and the bounded task buffer.
+
+### Security / degrade-closed
+- **The t-ron confirm gate denies in one-shot** (`src/gate.cyr`): a non-interactive
+  invocation can't safely authorize and the prompt would be discarded under `OUT_NULL`, so
+  it fails **closed** — denied, announced on stderr, never a silent allow or a blocking
+  invisible prompt.
+- A **bound-policy DENY/FLAG** is mirrored to stderr in one-shot (`_gate_verdict_err`), so a
+  refusal under `OUT_NULL` is announced, not silently swallowed.
+
+### Notes
+- **Pre-cut adversarial review (4 lenses, every finding verified)** confirmed the core sound
+  (memory discipline, byte-identical floor via explicit-intent gating, consumer posture,
+  degrade-closed exit codes, the confirm guard placed before `read_line`). It caught three
+  honest-omit/contract gaps, **all fixed before cut**: (1) `gate_init`/`log_init` startup
+  chrome leaked to stdout before one-shot dispatch when `[tron].policy`/`[log].file` were
+  configured — fixed by classifying the mode first and discarding init chrome under
+  `OUT_NULL` (and converting two raw `println` in `log.cyr` to the mode-aware `oprintln`);
+  verified: `--version`/one-shot stdout is byte-clean with `[log]` set, REPL floor
+  unchanged. (2) A streaming agentic turn that hit the iteration cap left interim narration
+  in the reply accumulator, so one-shot could print it as a successful answer — fixed by
+  clearing the accumulator on max-iters (`src/agent.cyr`) so one-shot reports failure
+  (exit nonzero). (3) The bound-DENY stderr mirror above.
+- A live one-shot **success** round-trip (a real answer on stdout) is a host-side step — the
+  build sandbox blocks a compiled binary's TCP and a real call costs tokens; the wiring is
+  covered by the smoke (clean stdout/stderr split + exit codes on the error paths) and the
+  unit tests.
+- Known: one-shot is **quiet** (progress discarded; the gateway's verbose error *body* is
+  not surfaced — the concise stderr line + nonzero exit are). Run interactively or with
+  `[hoosh].stream=false` for the body.
+
 ## [0.10.3] - 2026-06-25
 
 **Cost — the second data producer (0.10.x arc).** thoth now surfaces a running session

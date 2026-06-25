@@ -26,10 +26,29 @@ var _rl_pos = 0;
 # through emit_raw/emit_raw_n (always fd 1, blind to the mode).
 var OUT_FD1 = 0;
 var OUT_RING = 1;
-var _out_mode = 0;          # OUT_FD1 until the TUI arms capture around dispatch
+# OUT_NULL (0.11.0) — DISCARD all emit output. One-shot/argv mode arms this around
+# the dispatch window so the turn's human-progress chrome (banner, the "-> hoosh"
+# line, agent tool-call/result lines, the streamed-or-blocking answer copy) is
+# suppressed; one_shot_run then prints ONLY the final answer (from the reply
+# accumulator) to fd 1, so a piped/redirected one-shot stdout is the clean answer.
+var OUT_NULL = 2;
+var _out_mode = 0;          # OUT_FD1 until the TUI arms capture / one-shot arms discard
 
 fn out_mode() { return _out_mode; }
 fn out_mode_set(m) { _out_mode = m; return 0; }
+
+# emit_err / emit_err_n: ALWAYS write to stderr (fd 2), ignoring _out_mode. One-shot
+# diagnostics (a transport/HTTP error, a denied authorization, an empty reply) go
+# here so stdout stays the clean answer channel for piping/`thoth | thoth` chaining.
+fn emit_err(s) { syscall(SYS_WRITE, 2, s, strlen(s)); return 0; }
+fn emit_err_n(ptr, n) { syscall(SYS_WRITE, 2, ptr, n); return 0; }
+
+# _one_shot (0.11.0): set while a one-shot/argv turn runs. The t-ron confirm gate
+# reads it to DENY (fail-closed) instead of blocking on an unanswerable prompt — a
+# non-interactive invocation can't safely authorize, so it degrades closed.
+var _one_shot = 0;
+fn one_shot_active() { return _one_shot; }
+fn one_shot_set(v) { _one_shot = v; return 0; }
 
 # emit_raw / emit_raw_n: ALWAYS write to stdout, ignoring _out_mode. The TUI
 # chrome (status bar, composer, hint, feed paint, the tree) draws the terminal
@@ -43,6 +62,7 @@ fn emit_raw_n(ptr, n) { syscall(SYS_WRITE, 1, ptr, n); return 0; }
 # armed), no trailing newline.
 fn emit(s) {
     if (_out_mode == OUT_RING) { feed_write(s, strlen(s)); return 0; }
+    if (_out_mode == OUT_NULL) { return 0; }
     syscall(SYS_WRITE, 1, s, strlen(s));
     return 0;
 }
@@ -50,6 +70,7 @@ fn emit(s) {
 # emit_n: write n bytes from ptr to stdout (or the feed ring when capture is armed).
 fn emit_n(ptr, n) {
     if (_out_mode == OUT_RING) { feed_write(ptr, n); return 0; }
+    if (_out_mode == OUT_NULL) { return 0; }
     syscall(SYS_WRITE, 1, ptr, n);
     return 0;
 }
@@ -62,6 +83,7 @@ fn emit_n(ptr, n) {
 # included later); Cyrius resolves it whole-unit.
 fn oprintln(s) {
     if (_out_mode == OUT_RING) { feed_write(s, strlen(s)); feed_write("\n", 1); return 0; }
+    if (_out_mode == OUT_NULL) { return 0; }
     return println(s);
 }
 fn ofmt_int(n) {
@@ -71,6 +93,7 @@ fn ofmt_int(n) {
         feed_write(&b, len);
         return 0;
     }
+    if (_out_mode == OUT_NULL) { return 0; }
     return fmt_int(n);
 }
 

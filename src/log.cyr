@@ -124,7 +124,7 @@ fn log_init() {
     if (level < 0) { return 0; }                     # explicit "off"
     if (file != 0) {
         if (sakshi_output_file(file) < 0) {
-            emit("log: cannot open '"); emit(file); println("' — structured logging disabled.");
+            emit("log: cannot open '"); emit(file); oprintln("' — structured logging disabled.");
             return 0;
         }
     }
@@ -134,7 +134,7 @@ fn log_init() {
     log_commit(SK_INFO);
     if (file != 0) {
         emit("log: structured driver events -> "); emit(file);
-        emit(" (level "); emit(lvls); println(")");
+        emit(" (level "); emit(lvls); oprintln(")");
     }
     return 1;
 }

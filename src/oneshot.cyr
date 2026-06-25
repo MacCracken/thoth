@@ -1,0 +1,198 @@
+# thoth — one-shot / argv front-door (0.11.0).
+#
+# thoth's primary surface is the interactive TUI / line-REPL. This module adds a
+# NON-interactive one-shot mode so thoth is a first-class shell citizen for the
+# coding workflow:
+#
+#   thoth 'review this diff'              # run one task, print the answer, exit
+#   git diff | thoth 'review this'        # piped stdin is APPENDED to the task
+#   cat err.log | thoth 'explain'         # ditto
+#   thoth -p < prompt.txt                 # piped stdin IS the whole task
+#   thoth 'summarize' | thoth 'critique'  # chains cleanly (stdout = answer only)
+#   thoth --version | thoth --help
+#
+# It owns NO new spine path: a one-shot turn runs through the EXISTING
+# cmd_task -> hoosh_send / agent_turn seam. It only adds a new INPUT SOURCE (argv +
+# slurped stdin) and a clean OUTPUT contract.
+#
+# Mode selection is gated on EXPLICIT argv intent, NOT on `isTTY == false`: piped
+# stdin already has meaning (the line-by-line REPL), so silently slurping it would
+# change existing behavior. With no argv task thoth falls through to the TUI/REPL
+# unchanged — the piped/CI floor is byte-identical. See ADR-0011.
+#
+# Clean stdout: the turn runs with output DISCARDED (OUT_NULL) so none of the
+# human-progress chrome leaks; one_shot_run then prints ONLY the final answer (the
+# hoosh reply accumulator) to fd 1. Diagnostics go to stderr (fd 2). The exit code
+# is 0 on a real answer, nonzero otherwise (degrade closed).
+
+var ONESHOT_NONE = 0;       # no argv task -> fall through to the TUI / REPL
+var ONESHOT_RUN = 1;        # run one-shot with the parsed task
+var ONESHOT_VERSION = 2;    # print the version and exit
+var ONESHOT_HELP = 3;       # print usage and exit
+
+# The assembled task (argv positionals joined by spaces, then the stdin payload).
+# Lazily heap-allocated so the .bss stays small; bounded — overflow truncates (long
+# content belongs on stdin, but the cap is a hard safety bound either way).
+var ONESHOT_TASK_CAP = 65536;
+var _oneshot_task = 0;
+var _oneshot_task_len = 0;
+
+# A snapshot of argv (cstr ptrs) so the per-arg classifier is a PURE function the
+# test suite can drive with a hand-built array (argc/argv read /proc/self/cmdline).
+var ONESHOT_ARGV_MAX = 64;
+var _oneshot_argv[512];     # ONESHOT_ARGV_MAX * 8 bytes
+
+fn _oneshot_task_reset() {
+    if (_oneshot_task == 0) { _oneshot_task = alloc(ONESHOT_TASK_CAP); }
+    _oneshot_task_len = 0;
+    store8(_oneshot_task, 0);
+    return 0;
+}
+
+# _oneshot_task_append: append n bytes, clamped to the cap (one byte reserved for the
+# NUL). Returns the bytes actually appended.
+fn _oneshot_task_append(ptr, n) {
+    if (_oneshot_task == 0) { _oneshot_task_reset(); }
+    var room = ONESHOT_TASK_CAP - 1 - _oneshot_task_len;
+    if (n > room) { n = room; }
+    if (n <= 0) { return 0; }
+    memcpy(_oneshot_task + _oneshot_task_len, ptr, n);
+    _oneshot_task_len = _oneshot_task_len + n;
+    store8(_oneshot_task + _oneshot_task_len, 0);
+    return n;
+}
+fn _oneshot_task_append_cstr(s) { return _oneshot_task_append(s, strlen(s)); }
+
+# _oneshot_parse: classify a snapshot of argv (args = ptr to an array of n cstr ptrs,
+# args[0] = program name) into a mode, assembling the task from positional (non-flag)
+# args joined by single spaces. PURE (no I/O) — unit-tested. `-v`/`--version` and
+# `-h`/`--help` short-circuit; `-p`/`--print` forces one-shot (task may then come
+# wholly from stdin). A positional arg is the explicit one-shot intent.
+fn _oneshot_parse(args, n) {
+    if (n <= 1) { return ONESHOT_NONE; }
+    _oneshot_task_reset();
+    var positional = 0;
+    var force = 0;
+    var i = 1;
+    while (i < n) {
+        var a = load64(args + i * 8);
+        if ((streq(a, "--version") == 1) || (streq(a, "-v") == 1)) { return ONESHOT_VERSION; }
+        if ((streq(a, "--help") == 1) || (streq(a, "-h") == 1)) { return ONESHOT_HELP; }
+        if ((streq(a, "-p") == 1) || (streq(a, "--print") == 1)) { force = 1; }
+        else {
+            if (positional > 0) { _oneshot_task_append_cstr(" "); }
+            _oneshot_task_append_cstr(a);
+            positional = positional + 1;
+        }
+        i = i + 1;
+    }
+    if ((positional > 0) || (force == 1)) { return ONESHOT_RUN; }
+    return ONESHOT_NONE;
+}
+
+# oneshot_mode: snapshot argc/argv and classify. Reads the command line via the
+# portable args API (argc/argv over /proc/self/cmdline on Linux, the captured rsp on
+# AGNOS — capped at 8 there, so long tasks belong on stdin).
+fn oneshot_mode() {
+    var n = argc();
+    if (n > ONESHOT_ARGV_MAX) { n = ONESHOT_ARGV_MAX; }
+    var i = 0;
+    while (i < n) {
+        store64(&_oneshot_argv + i * 8, argv(i));
+        i = i + 1;
+    }
+    return _oneshot_parse(&_oneshot_argv, n);
+}
+
+# _oneshot_append_stdin: slurp ALL of stdin and append it to the task as the payload
+# (a blank-line separator first if an argv task is already present). Only called when
+# stdin is NOT a tty (a real pipe/redirect) — never blocks an interactive terminal.
+fn _oneshot_append_stdin() {
+    var chunk[4096];
+    var first = 1;
+    var rd = 1;
+    while (rd > 0) {
+        rd = syscall(SYS_READ, 0, &chunk, 4096);
+        if (rd > 0) {
+            if (first == 1) {
+                if (_oneshot_task_len > 0) { _oneshot_task_append("\n\n", 2); }
+                first = 0;
+            }
+            _oneshot_task_append(&chunk, rd);
+        }
+    }
+    return 0;
+}
+
+# emit_err_int: write a non-negative int to stderr (fd 2). For the HTTP-status error.
+fn emit_err_int(v) {
+    var b[24];
+    var ln = fmt_int_buf(v, &b);
+    emit_err_n(&b, ln);
+    return 0;
+}
+
+# oneshot_print_version / oneshot_print_help: the --version / --help output. These ARE
+# the requested output, so they go to stdout (emit_raw, mode-blind).
+fn oneshot_print_version() {
+    emit_raw("thoth "); emit_raw(thoth_version()); emit_raw("\n");
+    return 0;
+}
+fn oneshot_print_help() {
+    emit_raw("thoth — sovereign agentic coding TUI\n\n");
+    emit_raw("Usage:\n");
+    emit_raw("  thoth                     start the interactive TUI / REPL\n");
+    emit_raw("  thoth <task>...           run one task through the model, print the answer, exit\n");
+    emit_raw("  cmd | thoth <task>...     append piped stdin to the task (e.g. git diff | thoth 'review')\n");
+    emit_raw("  cmd | thoth -p            use piped stdin as the whole task\n");
+    emit_raw("  thoth -v, --version       print the version\n");
+    emit_raw("  thoth -h, --help          show this help\n\n");
+    emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
+    emit_raw("cleanly); progress is suppressed and an action needing authorization is denied\n");
+    emit_raw("(configure [tron].policy or run interactively). Config: thoth.cyml.\n");
+    return 0;
+}
+
+# _oneshot_report_error: a concise stderr diagnostic when a one-shot turn produced no
+# answer. Derived from the seam status + the turn's return code (the verbose gateway
+# body went to the discarded sink; run interactively or with [hoosh].stream=false for it).
+fn _oneshot_report_error(rc) {
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+        emit_err("thoth: no model backend wired — set [hoosh].url in thoth.cyml (degraded, not faked)\n");
+        return 0;
+    }
+    if (rc < 0) { emit_err("thoth: hoosh gateway unreachable (transport error) — is it up?\n"); return 0; }
+    if (rc > 0) {
+        emit_err("thoth: hoosh returned HTTP "); emit_err_int(rc);
+        emit_err(" (run interactively or set [hoosh].stream=false to see the body)\n");
+        return 0;
+    }
+    emit_err("thoth: no completion returned\n");
+    return 0;
+}
+
+# one_shot_run: execute the assembled one-shot task and print only the clean answer to
+# stdout. Returns the process exit code (0 = a real answer, 1 = any failure). Assumes
+# oneshot_mode() already filled _oneshot_task. I/O — the orchestrator for one-shot.
+fn one_shot_run() {
+    # Append piped stdin as the payload (never read an interactive tty here).
+    if (tty_isatty(0) == 0) { _oneshot_append_stdin(); }
+    if (_oneshot_task_len == 0) {
+        emit_err("thoth: no task given (provide it on argv, or pipe it in with -p)\n");
+        return 1;
+    }
+    # Run the turn through the existing seam with output discarded, then print only the
+    # accumulated reply to fd 1 — so stdout is exactly the answer (clean for piping).
+    out_mode_set(OUT_NULL);
+    var rc = cmd_task(_oneshot_task);
+    out_mode_set(OUT_FD1);
+    if ((rc == 0) && (hoosh_last_reply_len() > 0)) {
+        var p = hoosh_last_reply();
+        var ln = hoosh_last_reply_len();
+        emit_raw_n(p, ln);
+        if (load8(p + ln - 1) != 10) { emit_raw("\n"); }   # ensure a trailing newline
+        return 0;
+    }
+    _oneshot_report_error(rc);
+    return 1;
+}

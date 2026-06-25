@@ -866,6 +866,12 @@ fn agent_turn(prompt) {
     if (done == 0) {
         oprintln("  agentic loop hit the iteration cap (no final answer).");
         session_history_pop_last();
+        # No FINAL answer was produced — clear the reply accumulator so a one-shot run
+        # reports failure (exit nonzero) instead of printing the last capped round's
+        # interim narration as if it were the answer (the streaming path appends content
+        # even on a tool-call round). The interactive REPL is unaffected (it ignores this
+        # return and the narration already streamed live). 0.11.0.
+        _hoosh_acc_reset();
         log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "max_iters"); log_commit(SK_WARN);
     }
     return 0;

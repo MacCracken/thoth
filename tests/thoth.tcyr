@@ -27,6 +27,7 @@ include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
+include "src/oneshot.cyr"
 include "src/tui.cyr"
 
 fn test_classify() {
@@ -409,6 +410,40 @@ fn test_cost() {
     assert_eq(session_cost_unpriced_count(), 1, "half-declared pricing -> noted unpriced");
     session_set_model(0);   # don't leak the test model into later tests
     session_reset();
+    return 0;
+}
+
+# One-shot / argv front-door (0.11.0): the pure argv classifier + task assembly.
+# _oneshot_parse takes a hand-built argv snapshot (cstr-ptr array) so the mode
+# selection and positional-joining are testable without the real /proc/self/cmdline.
+fn test_oneshot() {
+    test_group("one-shot / argv (0.11.0)");
+    var av[64];   # 8 cstr pointers x 8 bytes (buffers are BYTES, not entries)
+    store64(&av + 0, "thoth");
+    assert_eq(_oneshot_parse(&av, 1), ONESHOT_NONE, "no argv task -> NONE (TUI/REPL)");
+    store64(&av + 8, "review");
+    store64(&av + 16, "this");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "positionals -> RUN");
+    assert(streq(_oneshot_task, "review this"), "positionals joined by a space");
+    store64(&av + 8, "--version");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_VERSION, "--version -> VERSION");
+    store64(&av + 8, "-v");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_VERSION, "-v -> VERSION");
+    store64(&av + 8, "--help");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_HELP, "--help -> HELP");
+    store64(&av + 8, "-h");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_HELP, "-h -> HELP");
+    store64(&av + 8, "-p");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "-p forces RUN (task from stdin)");
+    store64(&av + 8, "-p");
+    store64(&av + 16, "summarize");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "-p + positional -> RUN");
+    assert(streq(_oneshot_task, "summarize"), "the -p flag is not part of the task");
+    # task buffer: reset + bounded append
+    _oneshot_task_reset();
+    assert_eq(_oneshot_task_len, 0, "task reset clears the length");
+    assert_eq(_oneshot_task_append_cstr("abc"), 3, "append returns bytes written");
+    assert(streq(_oneshot_task, "abc"), "append assembles the task");
     return 0;
 }
 
@@ -1178,6 +1213,7 @@ fn main() {
     test_stream_config();
     test_usage();
     test_cost();
+    test_oneshot();
     test_history();
     test_history_request();
     test_logging();

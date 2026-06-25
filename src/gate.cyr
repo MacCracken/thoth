@@ -32,6 +32,16 @@ fn gate_active() {
 # the exact object being authorized (verb + obj) so the answer is informed.
 # Returns 1 ONLY on explicit y/yes; default (empty/EOF/other) DENIES.
 fn confirm(verb, obj) {
+    # One-shot/argv mode is non-interactive: stdin is the piped payload or absent, and
+    # the prompt would be discarded under OUT_NULL. Degrade CLOSED — deny, and say so
+    # on stderr so the refusal is never silent. (Piped stdin already EOFs to a deny
+    # below; this also covers a tty one-shot, where read_line would otherwise block on
+    # an invisible prompt.)
+    if (one_shot_active() == 1) {
+        emit_err("  [authorization required: "); emit_err(verb); emit_err(" "); emit_err(obj);
+        emit_err(" — denied; one-shot is non-interactive. configure [tron].policy or run interactively]\n");
+        return 0;
+    }
     # In the T2 TUI, dispatch output is captured into the feed ring (OUT_RING);
     # bracket back to the live screen so this prompt and its cooked y/n echo are
     # VISIBLE rather than buried in the ring. Off the TUI (REPL/piped, OUT_FD1)
@@ -76,6 +86,17 @@ fn gate_init() {
 # gate_verdict: run one t-ron check. Returns the verdict kind (VK_ALLOW /
 # VK_DENY / VK_FLAG). Caller must ensure gate_active() == 1. The params are
 # NUL-terminated JSON text (or a plain string — t-ron scans it as payload).
+# _gate_verdict_err: in one-shot mode the verdict chrome below is discarded (OUT_NULL),
+# so mirror a DENY/FLAG label + reason to stderr — a refusal/flag must be announced, not
+# silently swallowed (announce, never fake). No-op off one-shot. 0.11.0.
+fn _gate_verdict_err(label, reason) {
+    if (one_shot_active() == 0) { return 0; }
+    emit_err("  [t-ron] "); emit_err(label); emit_err(": ");
+    if (reason != 0) { emit_err(reason); } else { emit_err("(no reason)"); }
+    emit_err("\n");
+    return 0;
+}
+
 fn gate_verdict(tool_name, params) {
     var p = params;
     if (p == 0) { p = "{}"; }
@@ -86,11 +107,13 @@ fn gate_verdict(tool_name, params) {
         ui_emit(ROLE_RED, "  [t-ron] DENY: ");
         var reason = verdict_reason(v);
         if (reason != 0) { oprintln(reason); } else { oprintln("(no reason)"); }
+        _gate_verdict_err("DENY", reason);
     }
     if (k == VK_FLAG) {
         ui_emit(ROLE_ACCENT, "  [t-ron] FLAG: ");
         var freason = verdict_reason(v);
         if (freason != 0) { oprintln(freason); } else { oprintln("(no reason)"); }
+        _gate_verdict_err("FLAG", freason);
     }
     return k;
 }
