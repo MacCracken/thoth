@@ -1,0 +1,294 @@
+# thoth — the togglable file-tree pane (M7 / 0.9.3).
+#
+# A keyboard-navigated (no-mouse) inline expand/collapse tree of the working
+# directory, shown as a LEFT COLUMN. The self-managed feed (0.9.1) + the
+# escape-aware clip make this possible: when the tree is shown, the feed paints
+# into the NARROWED right column (feed_clip into [feed_left, cols]) and the tree
+# paints columns [1, tree_w]. Toggled with Ctrl-B; Tab focuses it; ↑/↓ move,
+# →/← expand/collapse, Enter on a file inserts "/read <path>" into the composer.
+#
+# DESIGN SPLIT (mirrors feed.cyr/tui.cyr): the LAYOUT GEOMETRY and the FLATTENED
+# TREE MODEL (a flat array of visible nodes; an expanded dir splices its children
+# in after it; collapse removes the subtree) are PURE and unit-tested. The
+# directory listing (ftree_load/ftree_expand via lib/fs.cyr dir_list + getcwd) and
+# the paint (tui_draw_tree in src/tui.cyr) are I/O, verified on a live TTY.
+#
+# Stored as parallel fixed-slot arrays (Cyrius literal dims): per visible node a
+# name (in a bump-heap name block), an is-dir flag, a tree depth, and an expanded
+# flag. A node's absolute path is reconstructed by walking ancestors (the nearest
+# preceding node at each shallower depth) — pure, so it is unit-tested too.
+
+var TREE_ROWS = 256;          # max visible nodes; beyond this the tree truncates (a known limit)
+var TREE_NAME_CAP = 256;      # bytes per node-name slot
+var TREE_MAX_DEPTH = 64;      # ancestor-chain cap for path reconstruction
+
+var _tree_name = 0;           # alloc(TREE_ROWS * TREE_NAME_CAP): the per-slot names
+var _tree_isdir[256];         # 0/1 per node (literal dim == TREE_ROWS)
+var _tree_depth[256];         # tree depth per node
+var _tree_exp[256];           # 1 if a dir node is expanded
+var _tree_count = 0;          # live visible-node count (<= TREE_ROWS)
+var _tree_sel = 0;            # selected node index
+var _tree_cwd_buf = 0;        # the base directory the tree is rooted at (cstr)
+
+# --- layout geometry (PURE) -----------------------------------------------
+# The tree occupies columns [1, tree_w]; a 1-col separator sits at tree_w+1; the
+# feed occupies [tree_w+2, cols]. All three collapse to a full-width feed when the
+# tree is hidden (show == 0), so 0.9.1/0.9.2 behaviour is the show==0 case.
+fn tui_tree_w(cols, show) {
+    if (show == 0) { return 0; }
+    var w = cols / 3;
+    if (w > 28) { w = 28; }
+    if (w < 8) { w = 8; }                 # a minimum usable width
+    if (w > (cols - 4)) { w = cols - 4; } # always leave room for the feed
+    if (w < 1) { w = 1; }
+    return w;
+}
+fn tui_feed_left(cols, show) {
+    if (show == 0) { return 1; }
+    return tui_tree_w(cols, show) + 2;    # past the tree + the separator column
+}
+fn tui_feed_width(cols, show) {
+    var w = cols - tui_feed_left(cols, show) + 1;
+    if (w < 1) { w = 1; }
+    return w;
+}
+
+# --- the flattened tree model (PURE) --------------------------------------
+
+fn ftree_init() {
+    if (_tree_name == 0) { _tree_name = alloc(TREE_ROWS * TREE_NAME_CAP); }
+    _tree_count = 0;
+    _tree_sel = 0;
+    return 0;
+}
+fn _tree_name_slot(i) { return _tree_name + i * TREE_NAME_CAP; }
+
+# _tree_set_name: copy a NUL-terminated name into slot i (bounded by TREE_NAME_CAP).
+fn _tree_set_name(i, nameptr) {
+    var dst = _tree_name_slot(i);
+    var j = 0;
+    while ((load8(nameptr + j) != 0) && (j < (TREE_NAME_CAP - 1))) {
+        store8(dst + j, load8(nameptr + j));
+        j = j + 1;
+    }
+    store8(dst + j, 0);
+    return 0;
+}
+
+fn ftree_reset() { _tree_count = 0; _tree_sel = 0; return 0; }
+
+# _tree_copy_node: copy one node's name + metadata from index `src` to `dst` (used by
+# the insert/collapse shifts). Both indices must be < TREE_ROWS.
+fn _tree_copy_node(dst, src) {
+    var sname = _tree_name_slot(src);
+    var dname = _tree_name_slot(dst);
+    var k = 0;
+    while (k < TREE_NAME_CAP) { store8(dname + k, load8(sname + k)); k = k + 1; }
+    store8(&_tree_isdir + dst, load8(&_tree_isdir + src));
+    store8(&_tree_depth + dst, load8(&_tree_depth + src));
+    store8(&_tree_exp + dst, load8(&_tree_exp + src));
+    return 0;
+}
+
+# _ftree_append: append a node at the end. Returns the new index, or -1 if full.
+fn _ftree_append(nameptr, isdir, depth) {
+    if (_tree_count >= TREE_ROWS) { return 0 - 1; }
+    var i = _tree_count;
+    _tree_set_name(i, nameptr);
+    store8(&_tree_isdir + i, isdir);
+    store8(&_tree_depth + i, depth);
+    store8(&_tree_exp + i, 0);
+    _tree_count = _tree_count + 1;
+    return i;
+}
+
+# _ftree_insert_at: insert a node at index `at` (shifting [at, count) right by 1).
+# Splices one child on expand. Returns 0, or -1 if full (the child is dropped).
+fn _ftree_insert_at(at, nameptr, isdir, depth) {
+    if (_tree_count >= TREE_ROWS) { return 0 - 1; }
+    var i = _tree_count;
+    while (i > at) { _tree_copy_node(i, i - 1); i = i - 1; }
+    _tree_set_name(at, nameptr);
+    store8(&_tree_isdir + at, isdir);
+    store8(&_tree_depth + at, depth);
+    store8(&_tree_exp + at, 0);
+    _tree_count = _tree_count + 1;
+    return 0;
+}
+
+# ftree_move: move the selection by delta, clamped to [0, count-1].
+fn ftree_move(delta) {
+    var s = _tree_sel + delta;
+    if (s < 0) { s = 0; }
+    if (s >= _tree_count) { s = _tree_count - 1; }
+    if (s < 0) { s = 0; }
+    _tree_sel = s;
+    return 0;
+}
+
+# ftree_collapse_at: remove the subtree under node `idx` — every following node with
+# depth > depth[idx] — and clear its expanded flag. Returns the count removed. Keeps
+# the selection in range.
+fn ftree_collapse_at(idx) {
+    var d = load8(&_tree_depth + idx);
+    var j = idx + 1;
+    while ((j < _tree_count) && (load8(&_tree_depth + j) > d)) { j = j + 1; }
+    var removed = j - (idx + 1);
+    if (removed > 0) {
+        var dst = idx + 1;
+        var src = j;
+        while (src < _tree_count) { _tree_copy_node(dst, src); dst = dst + 1; src = src + 1; }
+        _tree_count = _tree_count - removed;
+    }
+    store8(&_tree_exp + idx, 0);
+    if (_tree_sel >= _tree_count) { _tree_sel = _tree_count - 1; }
+    if (_tree_sel < 0) { _tree_sel = 0; }
+    return removed;
+}
+
+# accessors
+fn ftree_count() { return _tree_count; }
+fn ftree_sel() { return _tree_sel; }
+fn ftree_set_sel(i) { if (i < 0) { i = 0; } if (i >= _tree_count) { i = _tree_count - 1; } if (i < 0) { i = 0; } _tree_sel = i; return 0; }
+fn ftree_name(i) { return _tree_name_slot(i); }
+fn ftree_isdir(i) { return load8(&_tree_isdir + i); }
+fn ftree_depth(i) { return load8(&_tree_depth + i); }
+fn ftree_exp(i) { return load8(&_tree_exp + i); }
+fn ftree_set_exp(i, v) { store8(&_tree_exp + i, v); return 0; }
+
+# cwd (the directory the tree is rooted at)
+fn _ftree_set_cwd(s) {
+    if (_tree_cwd_buf == 0) { _tree_cwd_buf = alloc(4096); }
+    var j = 0;
+    while ((load8(s + j) != 0) && (j < 4095)) { store8(_tree_cwd_buf + j, load8(s + j)); j = j + 1; }
+    store8(_tree_cwd_buf + j, 0);
+    return 0;
+}
+fn ftree_cwd() { if (_tree_cwd_buf == 0) { return ""; } return _tree_cwd_buf; }
+
+# _ftree_append_cstr: append NUL-terminated s into dst at off, bounded by cap; new off.
+fn _ftree_append_cstr(dst, off, cap, s) {
+    var j = 0;
+    while ((load8(s + j) != 0) && (off < (cap - 1))) {
+        store8(dst + off, load8(s + j)); off = off + 1; j = j + 1;
+    }
+    return off;
+}
+
+# ftree_path: build node idx's absolute path into dst (cap bytes incl. NUL). PURE
+# given the model + cwd: the ancestor at depth t is the nearest preceding node with
+# depth t, so a backward scan collecting one index per depth level yields the chain
+# root..leaf; the path is cwd + ("/" + name) for each. Returns the byte length.
+fn ftree_path(idx, dst, cap) {
+    var d = load8(&_tree_depth + idx);
+    if (d >= TREE_MAX_DEPTH) { d = TREE_MAX_DEPTH - 1; }
+    var chain[512];                       # TREE_MAX_DEPTH (64) i64 node indices
+    var target = d;
+    var k = idx;
+    while (target >= 0) {
+        if (k < 0) { target = 0 - 1; }    # ran off the top (malformed) -> stop
+        else {
+            if (load8(&_tree_depth + k) == target) {
+                store64(&chain + target * 8, k);
+                target = target - 1;
+            }
+            k = k - 1;
+        }
+    }
+    var off = 0;
+    off = _ftree_append_cstr(dst, off, cap, ftree_cwd());
+    var lvl = 0;
+    while (lvl <= d) {
+        if (off < (cap - 1)) { store8(dst + off, 47); off = off + 1; }   # '/'
+        off = _ftree_append_cstr(dst, off, cap, _tree_name_slot(load64(&chain + lvl * 8)));
+        lvl = lvl + 1;
+    }
+    store8(dst + off, 0);
+    return off;
+}
+
+# --- directory listing (I/O — consumes lib/fs.cyr; live-verified) ----------
+# Strings cross into the stdlib as `Str` (a {data,len} fat pointer): str_from(cstr)
+# wraps a cstr, dir_list/is_dir/path_join take/return Str, and a returned entry's
+# str_data is a NUL-terminated cstr (str_from_buf terminates it). These alloc into
+# the never-freeing bump heap, but listing is user-driven (expand/collapse), not
+# per-frame, so the accretion is bounded in practice.
+
+var _ftree_pathbuf = 0;       # reused scratch for a node's reconstructed path
+
+# _ftree_list_into: list directory `pathcstr` and splice its entries in at index
+# `at_start` with `depth`, DIRS FIRST (is_dir computed once per entry into a temp
+# flag block, then two passes). Returns the number inserted (capped at TREE_ROWS).
+fn _ftree_list_into(pathcstr, depth, at_start) {
+    var dirstr = str_from(pathcstr);
+    var v = dir_list(dirstr);
+    var n = vec_len(v);
+    if (n <= 0) { return 0; }
+    var flags = alloc(n);                 # is_dir(entry) cached once
+    var i = 0;
+    while (i < n) {
+        store8(flags + i, is_dir(path_join(dirstr, vec_get(v, i))));
+        i = i + 1;
+    }
+    var at = at_start;
+    var inserted = 0;
+    var pass = 0;
+    while (pass < 2) {
+        var j = 0;
+        while (j < n) {
+            var isd = load8(flags + j);
+            var want = 0;
+            if (pass == 0) { if (isd == 1) { want = 1; } }
+            else { if (isd == 0) { want = 1; } }
+            if (want == 1) {
+                if (_ftree_insert_at(at, str_data(vec_get(v, j)), isd, depth) == 0) {
+                    at = at + 1;
+                    inserted = inserted + 1;
+                }
+            }
+            j = j + 1;
+        }
+        pass = pass + 1;
+    }
+    return inserted;
+}
+
+# ftree_load: (re)build the tree rooted at $PWD (portable; "." when unset/empty — a
+# relative root still lists + reads correctly). Lists the root at depth 0, dirs first.
+fn ftree_load() {
+    ftree_init();
+    ftree_reset();
+    var cwd = getenv("PWD");
+    if (cwd == 0) { cwd = "."; }
+    elif (load8(cwd) == 0) { cwd = "."; }
+    _ftree_set_cwd(cwd);
+    _ftree_list_into(cwd, 0, 0);
+    return 0;
+}
+
+# ftree_expand: if the selected node is a COLLAPSED DIR, list its children and splice
+# them in after it (depth+1, dirs-first), marking it expanded. No-op on a file or an
+# already-expanded dir.
+fn ftree_expand() {
+    var sel = _tree_sel;
+    if (sel < 0) { return 0; }
+    if (sel >= _tree_count) { return 0; }
+    if (ftree_isdir(sel) == 0) { return 0; }
+    if (ftree_exp(sel) == 1) { return 0; }
+    if (_ftree_pathbuf == 0) { _ftree_pathbuf = alloc(4096); }
+    ftree_path(sel, _ftree_pathbuf, 4096);
+    _ftree_list_into(_ftree_pathbuf, ftree_depth(sel) + 1, sel + 1);
+    ftree_set_exp(sel, 1);
+    return 0;
+}
+
+# ftree_collapse: collapse the selected dir (remove its subtree). No-op otherwise.
+fn ftree_collapse() {
+    var sel = _tree_sel;
+    if (sel < 0) { return 0; }
+    if (sel >= _tree_count) { return 0; }
+    if (ftree_isdir(sel) == 0) { return 0; }
+    if (ftree_exp(sel) == 0) { return 0; }
+    ftree_collapse_at(sel);
+    return 0;
+}

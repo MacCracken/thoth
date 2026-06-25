@@ -152,7 +152,7 @@ fn print_banner() {
     oprintln("");
     emit("  ");
     ui_emit(ROLE_ACCENT, persona_name()); emit(", "); ui_emit(ROLE_ACCENT_DIM, persona_role());
-    emit(" - "); ui_emit(ROLE_ACCENT, "thoth 0.9.2"); oprintln("");
+    emit(" - "); ui_emit(ROLE_ACCENT, "thoth 0.9.3"); oprintln("");
     emit("  "); ui_emit(ROLE_MUTED, persona_tagline()); oprintln("");
     emit("  "); ui_emit(ROLE_FAINT, "a sovereign agentic coding TUI (fermenting). /help for commands."); oprintln("");
     oprintln("");

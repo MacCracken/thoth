@@ -34,6 +34,7 @@ include "src/vendor/darshana.cyr"
 include "src/util.cyr"
 include "src/ui.cyr"
 include "src/feed.cyr"     # self-managed feed buffer (M7 / 0.9.1); after ui (feed_clip calls ui_reset)
+include "src/ftree.cyr"    # file-tree pane geometry + model (M7 / 0.9.3)
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"

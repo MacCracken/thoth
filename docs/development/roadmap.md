@@ -194,11 +194,13 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   spinner animates per chunk while streaming, holds still on a blocking turn (honest —
   the loop is blocked inside `dispatch()`), and suspends across the gate confirm. Also
   closed the 0.9.0 SIGINT-signalfd teardown leak.
-- **`0.9.3` — the togglable left-column file-tree pane** — a keyboard-navigated
-  (no-mouse) tree of the cwd (`lib/fs.cyr` `dir_list`/`is_dir` + getcwd) as a left
-  column; the feed paints into the narrowed right column via the 0.9.1 escape-aware
-  clip. The pure geometry + tree model land testable; the paint + listing are
-  live-verified.
+- **`0.9.3` — the togglable left-column file-tree pane (LANDED)** — a keyboard-navigated
+  (no-mouse) inline expand/collapse tree of `$PWD` (`src/ftree.cyr` via `lib/fs.cyr`
+  `dir_list`/`is_dir`) as a left column; the feed paints into the narrowed right column
+  via the 0.9.1 escape-aware clip. Ctrl-B toggles, Tab focuses, ↑/↓ move, →/← expand/
+  collapse, Enter reads a file (keeping tree focus). The pure geometry + flattened-tree
+  model are unit-tested; the paint + listing are live-verified. Hidden by default →
+  byte-identical floor.
 - **`/theme` (0.9.x)** — a theme switch, almost free given the semantic role surface
   (`src/ui.cyr`): a theme is just a different role→color table. `/theme dark` (today's
   amber default) · `/theme light` (the mockup's warm-light palette) · `/theme rainbow`

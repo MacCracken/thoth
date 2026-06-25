@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.9.3** — the togglable file-tree pane (M7), 2026-06-25. The headline of the
+presentation arc: a keyboard-navigated (no-mouse) inline expand/collapse tree of the
+working directory as a LEFT COLUMN, made possible by the 0.9.1 self-managed feed +
+escape-aware clip. **Ctrl-B** toggles it; **Tab** focuses it; **↑/↓** move, **→/←**
+expand/collapse, **Enter** reads a file (keeping tree focus, so you browse file-to-file)
+or toggles a folder. New `src/ftree.cyr` — a PURE, unit-tested core (the tree/feed layout
+geometry; the flattened-tree model: `ftree_move`/`ftree_collapse_at` + the expand splice
++ `ftree_path` ancestor-walk) + the I/O listing (`dir_list`/`is_dir` via `lib/fs.cyr`,
+dirs-first, rooted at `$PWD` — portable, no Linux-only `SYS_GETCWD`, so it compiles for
+every target). The feed paints into the narrowed right column (`tui_feed_left`/
+`tui_feed_width` → `feed_clip`); `tui_draw_tree` paints the left (dir blue / file muted,
+selected row a reverse-video bar) + a `│` separator. Hidden by default → the REPL/piped/CI
+floor stays byte-identical. Adversarially reviewed pre-cut (4 lenses, every finding
+verified): zero correctness/crash/floor/security findings. **TUI render verifies only on
+a real tty (`THOTH_TIER=rich`)**, not the harness. 362 assertions (+21, `test_ftree`).
+Pin unchanged (6.2.40 — cycc locally at 6.2.42; staying on the pin, the drift/arity
+warnings are toolchain-side). Known limit: 256-node cap; no in-dir alphabetical sort yet.
 **0.9.2** — instant SIGWINCH + the working spinner + incremental streaming paint
 (M7), 2026-06-25. The second course on the 0.9.1 self-managed feed. **Instant resize:**
 the bare blocking key-read is replaced by an **epoll multiplex** of stdin + a SIGWINCH
@@ -477,6 +494,17 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   the dispatch-window capture (`tui_run_line`), and the confirm bracket
   (`tui_confirm_begin`/`_end`, called from `gate.cyr`) live in `src/tui.cyr`. Replaces
   0.9.0's DECSTBM scroll-region; the prerequisite for the file-tree pane + SIGWINCH.
+  **0.9.2:** `feed_repaint` also renders the unsealed pending line (incremental streaming
+  paint via `feed_stream_tick`, pinged from the SSE callbacks).
+- `src/ftree.cyr` — **0.9.3**: the file-tree pane. PURE + unit-tested: the tree/feed
+  layout geometry (`tui_tree_w`/`tui_feed_left`/`tui_feed_width`) and the flattened-tree
+  model (parallel fixed-slot arrays; `_ftree_insert_at` splices children on expand,
+  `ftree_collapse_at` removes a subtree, `ftree_path` reconstructs an absolute path by
+  walking ancestors). I/O (live): `ftree_load`/`ftree_expand` list directories via
+  `lib/fs.cyr` `dir_list`/`is_dir`, dirs-first, rooted at `$PWD` (portable — no
+  `SYS_GETCWD`). The paint (`tui_draw_tree`: tree cols `[1, tree_w]` + `│` separator, a
+  reverse-video selection bar) + the nav keys (Ctrl-B/Tab/↑↓→← + focus) live in
+  `src/tui.cyr`; `feed_repaint` paints the feed into `[tree_w+2, cols]` when shown.
 - `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
   (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
   `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
@@ -489,7 +517,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **341 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **362 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -527,7 +555,9 @@ bundle is DCE-unreachable).
   UTF-8 — the ring seal/evict/flush machine, and the OUT_RING capture sink's
   logical-line reconstruction + `oprintln`/`ofmt_int` byte-identity); and **0.9.2**
   `test_spinner` (the pure braille frame cycle — `spin_glyph` mod `SPIN_FRAMES`,
-  `spin_advance`). Passes on `cyrius test`.
+  `spin_advance`); and **0.9.3** `test_ftree` (the file-tree layout geometry +
+  flattened-tree model: append/insert/move-clamp/collapse-subtree, the ancestor-walk
+  `ftree_path`, and a real `src/` dir-listing smoke). Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 

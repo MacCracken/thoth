@@ -38,6 +38,14 @@ var KEY_HOME = 8;
 var KEY_END = 9;
 var KEY_KILL = 10;
 var KEY_TOGGLE_STATUS = 11;   # Ctrl-G — toggle the pinned status bar
+var KEY_TOGGLE_TREE = 12;     # Ctrl-B — toggle the file-tree pane (0.9.3)
+var KEY_TAB = 13;             # Tab — cycle focus composer <-> tree
+var KEY_UP = 14;              # CSI A — tree selection up
+var KEY_DOWN = 15;            # CSI B — tree selection down
+
+# Focus targets (which surface the nav keys drive when the tree is shown).
+var FOCUS_COMPOSER = 0;
+var FOCUS_TREE = 1;
 
 # Editor outcomes.
 var ACT_NONE = 0;
@@ -115,7 +123,9 @@ fn tui_feed_bot(rows) { return rows - 2; }
 # --- I/O: raw-mode terminal control (verified on a live TTY) ---------------
 
 var _tui_running = 0;
-var _tui_show_status = 1;   # togglable (Ctrl-G); file-tree pane is a later step
+var _tui_show_status = 1;   # togglable (Ctrl-G)
+var _tui_show_tree = 0;     # the file-tree pane (Ctrl-B), hidden by default (0.9.3)
+var _tui_focus = 0;         # FOCUS_COMPOSER / FOCUS_TREE — which surface nav keys drive
 var _tui_rows = 24;
 var _tui_cols = 80;
 
@@ -144,11 +154,15 @@ fn tui_read_key() {
     if (b == 1) { return KEY_HOME; }
     if (b == 5) { return KEY_END; }
     if (b == 7) { return KEY_TOGGLE_STATUS; }   # Ctrl-G
+    if (b == 2) { return KEY_TOGGLE_TREE; }     # Ctrl-B — toggle the file-tree pane
+    if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
         if (load8(&c) == 91) {
             if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
             var d = load8(&c);
+            if (d == 65) { return KEY_UP; }
+            if (d == 66) { return KEY_DOWN; }
             if (d == 67) { return KEY_RIGHT; }
             if (d == 68) { return KEY_LEFT; }
             if (d == 72) { return KEY_HOME; }
@@ -259,8 +273,12 @@ fn tui_draw_palette() {
 fn tui_draw_hint() {
     tty_move(tui_hint_row(_tui_rows), 1);
     tty_clear_to_eol();
-    if (tui_palette_active() == 1) { tui_draw_palette(); }
-    else { ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Enter send"); }
+    if ((_tui_show_tree == 1) && (_tui_focus == FOCUS_TREE)) {
+        ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
+    } elif (tui_palette_active() == 1) { tui_draw_palette(); }
+    elif (_tui_show_tree == 1) {
+        ui_emit(ROLE_FAINT, "Tab tree · Ctrl-B hide · Ctrl-G status · Enter send");
+    } else { ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Ctrl-B files · Enter send"); }
     return 0;
 }
 
@@ -367,6 +385,12 @@ fn feed_repaint() {
     var bot = tui_feed_bot(_tui_rows);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
+    # 0.9.3: when the tree pane is shown, the feed lives in the RIGHT column
+    # [feed_left, cols]; clip each line to feed_width and paint from feed_left. The
+    # tree (cols [1, tree_w]) is painted separately and is left of feed_left, so the
+    # per-row tty_clear_to_eol (which clears feed_left..EOL) never touches it.
+    var fleft = tui_feed_left(_tui_cols, _tui_show_tree);
+    var fwidth = tui_feed_width(_tui_cols, _tui_show_tree);
     var total = feed_count();
     var pend = feed_pending_len();
     var virt = total;
@@ -375,14 +399,14 @@ fn feed_repaint() {
     if (virt > rows) { first = virt - rows; }     # pin to the newest `rows` (incl. pending)
     var i = 0;
     while (i < rows) {
-        tty_move(top + i, 1);
+        tty_move(top + i, fleft);
         var li = first + i;
         if (li < total) {
-            var w = feed_clip(_paint_buf, PAINT_CAP, feed_line_ptr(li), feed_line_len(li), _tui_cols);
+            var w = feed_clip(_paint_buf, PAINT_CAP, feed_line_ptr(li), feed_line_len(li), fwidth);
             if (w > 0) { emit_raw_n(_paint_buf, w); }
         } elif (li == total) {
             if (pend > 0) {
-                var wp = feed_clip(_paint_buf, PAINT_CAP, feed_pending_ptr(), pend, _tui_cols);
+                var wp = feed_clip(_paint_buf, PAINT_CAP, feed_pending_ptr(), pend, fwidth);
                 if (wp > 0) { emit_raw_n(_paint_buf, wp); }
             }
         }
@@ -429,6 +453,138 @@ fn tui_confirm_end() {
     return 0;
 }
 
+# --- the file-tree pane painter (0.9.3) -----------------------------------
+# Paints the tree into columns [1, tree_w] over the feed rows, with a vertical
+# separator at tree_w+1; the feed (feed_repaint) paints [tree_w+2, cols]. Chrome:
+# always emit_raw. The tree rows pad to the full tree width (no clear_to_eol, which
+# would wipe the feed to the right). The model lives in src/ftree.cyr.
+var _tree_rowbuf = 0;        # plain row text (indent + marker + name)
+var _tree_paint = 0;         # clipped paint bytes
+var _tui_pathbuf = 0;        # scratch for a selected node's path
+var _tui_cmdbuf = 0;         # scratch for the "/read <path>" command
+var TREE_ROW_CAP = 1024;
+
+# _ftree_scroll_first: the first visible tree row, so the selection stays on screen.
+fn _ftree_scroll_first(total, rows) {
+    var sel = ftree_sel();
+    var first = 0;
+    if (sel >= rows) { first = sel - rows + 1; }
+    var maxfirst = total - rows;
+    if (maxfirst < 0) { maxfirst = 0; }
+    if (first > maxfirst) { first = maxfirst; }
+    if (first < 0) { first = 0; }
+    return first;
+}
+fn _tui_pad_cols(n) { while (n > 0) { emit_raw(" "); n = n - 1; } return 0; }
+
+# _tui_tree_row_build: compose node li's display text — depth indent + a ▾/▸/space
+# marker + the name — into _tree_rowbuf (the marker glyphs are printable UTF-8).
+fn _tui_tree_row_build(li) {
+    if (_tree_rowbuf == 0) { _tree_rowbuf = alloc(TREE_ROW_CAP); }
+    var off = 0;
+    var ind = ftree_depth(li) * 2;
+    var k = 0;
+    while ((k < ind) && (off < (TREE_ROW_CAP - 8))) { store8(_tree_rowbuf + off, 32); off = off + 1; k = k + 1; }
+    if (ftree_isdir(li) == 1) {
+        if (ftree_exp(li) == 1) { off = _ftree_append_cstr(_tree_rowbuf, off, TREE_ROW_CAP, "▾ "); }
+        else { off = _ftree_append_cstr(_tree_rowbuf, off, TREE_ROW_CAP, "▸ "); }
+    } else {
+        store8(_tree_rowbuf + off, 32); off = off + 1;
+        store8(_tree_rowbuf + off, 32); off = off + 1;
+    }
+    off = _ftree_append_cstr(_tree_rowbuf, off, TREE_ROW_CAP, ftree_name(li));
+    store8(_tree_rowbuf + off, 0);
+    return off;
+}
+
+# _tui_paint_tree_row: paint node li into tree cols [1, tw] on row r — dir blue / file
+# muted, the selected row a reverse-video bar, padded to the full tree width.
+fn _tui_paint_tree_row(li, tw, r) {
+    var n = _tui_tree_row_build(li);
+    if (_tree_paint == 0) { _tree_paint = alloc(TREE_ROW_CAP); }
+    var w = feed_clip(_tree_paint, TREE_ROW_CAP, _tree_rowbuf, n, tw);
+    var vis = feed_visible_cols(_tree_rowbuf, n);
+    if (vis > tw) { vis = tw; }
+    var role = ROLE_MUTED;
+    if (ftree_isdir(li) == 1) { role = ROLE_BLUE; }
+    tty_move(r, 1);
+    if (li == ftree_sel()) { emit_raw("\x1b[7m"); }     # reverse-video highlight bar
+    emit_raw(ui_sgr(role));
+    emit_raw_n(_tree_paint, w);
+    emit_raw(ui_sgr(ROLE_FG));
+    _tui_pad_cols(tw - vis);                            # fill to the full tree width
+    emit_raw(ui_reset());                               # closes color + reverse
+    return 0;
+}
+
+# tui_draw_tree: paint the file-tree pane + the vertical separator over the feed
+# rows. Only when shown; scrolls to keep the selection visible.
+fn tui_draw_tree() {
+    if (_tui_show_tree == 0) { return 0; }
+    var tw = tui_tree_w(_tui_cols, 1);
+    var top = tui_feed_top(_tui_show_status);
+    var bot = tui_feed_bot(_tui_rows);
+    if (bot < top) { return 0; }
+    var rows = bot - top + 1;
+    var total = ftree_count();
+    var first = _ftree_scroll_first(total, rows);
+    var i = 0;
+    while (i < rows) {
+        var r = top + i;
+        var li = first + i;
+        if (li < total) { _tui_paint_tree_row(li, tw, r); }
+        else { tty_move(r, 1); _tui_pad_cols(tw); }
+        tty_move(r, tw + 1); emit_raw(ui_sgr(ROLE_FAINT)); emit_raw("│"); emit_raw(ui_reset());
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _tui_tree_enter: Enter on the selected node — a DIR toggles expand/collapse; a FILE
+# is READ immediately (/read) with focus KEPT ON THE TREE, so you keep browsing
+# file-to-file without the composer stealing focus (the earlier insert-then-run flow
+# stranded focus on the composer and the tree felt locked). The read runs through the
+# normal capture/dispatch path so its output lands in the feed.
+fn _tui_tree_enter() {
+    var sel = ftree_sel();
+    if (sel < 0) { return 0; }
+    if (sel >= ftree_count()) { return 0; }
+    if (ftree_isdir(sel) == 1) {
+        if (ftree_exp(sel) == 1) { ftree_collapse(); } else { ftree_expand(); }
+        tui_relayout();
+        return 0;
+    }
+    if (_tui_pathbuf == 0) { _tui_pathbuf = alloc(4096); }
+    if (_tui_cmdbuf == 0) { _tui_cmdbuf = alloc(4160); }
+    ftree_path(sel, _tui_pathbuf, 4096);
+    var off = 0;
+    off = _ftree_append_cstr(_tui_cmdbuf, off, 4160, "/read ");
+    off = _ftree_append_cstr(_tui_cmdbuf, off, 4160, _tui_pathbuf);
+    store8(_tui_cmdbuf + off, 0);
+    var keep = tui_run_line(_tui_cmdbuf);   # capture + dispatch + repaint feed; focus stays on the tree
+    if (keep == 0) { _tui_running = 0; } else { tui_relayout(); }
+    return 0;
+}
+
+# _tui_tree_key: handle one key while the tree pane is focused. ↑/↓ move; →/← expand/
+# collapse (full relayout — the visible row count changes); Enter acts on the node; a
+# printable char returns focus to the composer and inserts it; Ctrl-C/EOF exit.
+fn _tui_tree_key(key) {
+    if (key == KEY_UP) { ftree_move(0 - 1); tui_draw_tree(); tui_park_cursor(); }
+    elif (key == KEY_DOWN) { ftree_move(1); tui_draw_tree(); tui_park_cursor(); }
+    elif (key == KEY_RIGHT) { ftree_expand(); tui_relayout(); }
+    elif (key == KEY_LEFT) { ftree_collapse(); tui_relayout(); }
+    elif (key == KEY_ENTER) { _tui_tree_enter(); }
+    elif (key == KEY_CTRLC) { _tui_running = 0; }
+    elif (key == KEY_EOF) { _tui_running = 0; }
+    elif (key == KEY_CHAR) {
+        _tui_focus = FOCUS_COMPOSER;
+        led_feed(KEY_CHAR, _tui_key_ch);
+        tui_draw_hint(); tui_draw_composer();
+    }
+    return 0;
+}
+
 # tui_relayout: re-read the terminal size and repaint the whole frame (status bar,
 # feed, hint, composer). No scroll region — the feed is self-managed now. The
 # composer is drawn LAST so the cursor parks at the edit position.
@@ -442,6 +598,7 @@ fn tui_relayout() {
     }
     tui_draw_status();
     feed_repaint();
+    tui_draw_tree();
     tui_draw_hint();
     tui_draw_composer();
     return 0;
@@ -568,6 +725,22 @@ fn tui_loop() {
                 if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
                 tty_clear();           # the feed band moves; full repaint
                 tui_relayout();
+            } elif (key == KEY_TOGGLE_TREE) {
+                if (_tui_show_tree == 1) { _tui_show_tree = 0; _tui_focus = FOCUS_COMPOSER; }
+                else {
+                    _tui_show_tree = 1;
+                    if (ftree_count() == 0) { ftree_load(); }   # lazily list $PWD on first show
+                    _tui_focus = FOCUS_TREE;
+                }
+                tty_clear();           # the feed narrows/widens; full repaint
+                tui_relayout();
+            } elif (key == KEY_TAB) {
+                if (_tui_show_tree == 1) {
+                    if (_tui_focus == FOCUS_TREE) { _tui_focus = FOCUS_COMPOSER; } else { _tui_focus = FOCUS_TREE; }
+                    tui_draw_hint(); tui_park_cursor();
+                }
+            } elif (_tui_focus == FOCUS_TREE) {
+                _tui_tree_key(key);    # tree navigation (↑↓→← Enter; a char hands focus back)
             } else {
                 var act = led_feed(key, _tui_key_ch);
                 if (act == ACT_SUBMIT) {

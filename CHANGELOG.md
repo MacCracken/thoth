@@ -2,6 +2,44 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.3] - 2026-06-25
+
+**The togglable file-tree pane (M7).** A keyboard-navigated (no-mouse) inline
+expand/collapse tree of the working directory, shown as a left column — the headline
+of the M7 presentation arc, made possible by the 0.9.1 self-managed feed + escape-aware
+clip. Toggle with **Ctrl-B**; **Tab** focuses it; **↑/↓** move, **→/←** expand/collapse,
+**Enter** reads a file (or toggles a folder). The feed paints into the narrowed right
+column; the tree paints the left. Kept portable — rooted at `$PWD` (no Linux-only
+syscall), so `src/ftree.cyr` compiles for every target — and hidden by default, so the
+REPL / piped / CI floor stays byte-identical. Adversarially reviewed pre-cut (4 lenses,
+every finding verified): zero correctness/crash/floor/security findings. 362 unit
+assertions (+21). Pin unchanged (6.2.40).
+
+### Added
+- **`src/ftree.cyr` — the file-tree pane.** A PURE, unit-tested core: the layout
+  geometry (`tui_tree_w`/`tui_feed_left`/`tui_feed_width` — tree `[1, tree_w]`, a `│`
+  separator, feed `[tree_w+2, cols]`; all collapse to a full-width feed when hidden) and
+  the flattened-tree model (`ftree_move`/`ftree_collapse_at` + the splice on expand +
+  `ftree_path`, which reconstructs a node's absolute path by walking ancestors). Plus the
+  I/O listing (`ftree_load`/`ftree_expand` via `lib/fs.cyr` `dir_list`/`is_dir`,
+  dirs-first, rooted at `$PWD`). `test_ftree` (+21): geometry, the splice/collapse
+  mechanics, ancestor-walk paths, and a real `src/` listing smoke.
+- **The two-column TUI** (`src/tui.cyr`): `feed_repaint` paints the feed into the right
+  column via the 0.9.1 escape-aware clip; `tui_draw_tree` paints the tree (dir blue /
+  file muted, the selected row a reverse-video bar) + the separator. New keys
+  (Ctrl-B / Tab / ↑ / ↓) and a focus model (`_tui_focus`); the terminal cursor stays on
+  the composer during tree nav (the bar is the tree's selection). Hidden by default.
+
+### Changed
+- **Enter on a file reads it immediately and keeps focus on the tree** (so you browse
+  file-to-file without the composer stealing focus). The read runs through the normal
+  capture/dispatch path, so its output lands in the feed.
+
+### Known limitations (→ later)
+- The tree caps at 256 visible nodes; beyond that it truncates (rare in practice; no
+  alphabetical sort within the dirs-first grouping yet). An empty expanded folder shows
+  the `▾` marker with nothing under it.
+
 ## [0.9.2] - 2026-06-25
 
 **Instant SIGWINCH resize + the working spinner + incremental streaming paint (M7).**

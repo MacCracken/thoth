@@ -12,6 +12,7 @@ include "src/vendor/darshana.cyr"
 include "src/util.cyr"
 include "src/ui.cyr"
 include "src/feed.cyr"
+include "src/ftree.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -947,6 +948,60 @@ fn test_spinner() {
     return 0;
 }
 
+# File-tree pane (0.9.3): the layout geometry (tree/feed split) and the flattened-tree
+# model (append, splice children on expand, collapse a subtree, ancestor-walk path
+# reconstruction) are PURE; the directory listing + paint are I/O (live-verified).
+fn test_ftree() {
+    test_group("file-tree model + geometry (ftree.cyr)");
+    # geometry: hidden tree -> full-width feed (the 0.9.1/0.9.2 case)
+    assert_eq(tui_tree_w(80, 0), 0, "tree width 0 when hidden");
+    assert_eq(tui_feed_left(80, 0), 1, "feed starts at col 1 when hidden");
+    assert_eq(tui_feed_width(80, 0), 80, "feed full width when hidden");
+    # geometry: shown -> tree + separator + feed
+    assert_eq(tui_tree_w(120, 1), 28, "tree width caps at 28 (120/3=40 -> 28)");
+    assert_eq(tui_tree_w(30, 1), 10, "tree width = cols/3 below the cap");
+    assert_eq(tui_feed_left(120, 1), 30, "feed starts past tree(28)+separator -> col 30");
+    assert_eq(tui_feed_width(120, 1), 91, "feed width = 120 - 30 + 1");
+    # model: two root entries
+    ftree_init();
+    ftree_reset();
+    _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0);
+    _ftree_append("VERSION", 0, 0);
+    assert_eq(ftree_count(), 2, "two root entries");
+    assert_eq(ftree_isdir(0), 1, "src is a dir");
+    var pb[256];
+    ftree_path(1, &pb, 256);
+    assert(streq(&pb, "/repo/VERSION"), "root file path = cwd/name");
+    # expand src: splice two children in at depth 1
+    _ftree_insert_at(1, "main.cyr", 0, 1);
+    _ftree_insert_at(2, "tui.cyr", 0, 1);
+    ftree_set_exp(0, 1);
+    assert_eq(ftree_count(), 4, "two children spliced in -> 4 nodes");
+    assert_eq(ftree_depth(2), 1, "child at depth 1");
+    ftree_path(2, &pb, 256);
+    assert(streq(&pb, "/repo/src/tui.cyr"), "nested path walks ancestors");
+    # selection clamps
+    ftree_set_sel(0); ftree_move(10);
+    assert_eq(ftree_sel(), 3, "move clamps to the last node");
+    ftree_move(0 - 100);
+    assert_eq(ftree_sel(), 0, "move clamps to the first node");
+    # collapse src removes its subtree
+    assert_eq(ftree_collapse_at(0), 2, "collapse removes the 2 children");
+    assert_eq(ftree_count(), 2, "back to 2 nodes");
+    assert_eq(ftree_exp(0), 0, "src marked collapsed");
+    assert(streq(ftree_name(1), "VERSION"), "VERSION shifted back to index 1");
+    # I/O smoke: list the repo's src/ — exercises the Str plumbing + dirs-first on a
+    # real directory (src/ has the vendor/ subdir + many .cyr files). Run from the
+    # project root by `cyrius test`.
+    ftree_init();
+    ftree_reset();
+    _ftree_list_into("src", 0, 0);
+    assert(ftree_count() > 5, "listed src/ — the dir_list/is_dir/Str plumbing works");
+    assert_eq(ftree_isdir(0), 1, "dirs-first: a directory (vendor/) sorts before the files");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -979,6 +1034,7 @@ fn main() {
     test_feed_ring();
     test_capture();
     test_spinner();
+    test_ftree();
     test_model_switch();
     return assert_summary();
 }
