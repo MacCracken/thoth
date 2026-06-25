@@ -2,6 +2,46 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-06-24
+
+**The T2 rich-TUI front-end (M7).** thoth gains an interactive alt-screen TUI — a
+pinned status bar, a scrolling feed, a raw-mode composer with line editing, a
+slash-command palette, and keybinding hints: the jump from a colored REPL to a TUI
+app. It activates only at the T2 tier on a real terminal (`THOTH_TIER=rich`); the
+line-mode REPL stays the guaranteed fallback for pipes / CI / lower tiers (piped
+output byte-identical). Built on the vendored darshana TTY substrate. The new module
+was adversarially reviewed (4 issues found, all fixed) before this cut.
+
+### Added
+- **`src/tui.cyr` + vendored `src/vendor/darshana.cyr`** — the alt-screen T2 layout:
+  - **Pinned status bar** (`{(o> thoth · model · turns · surface`), **togglable with
+    Ctrl-G** (keyboard, no mouse — the feed reclaims the row when hidden).
+  - **Scrolling feed** (a DECSTBM scroll region); the composer clears the instant you
+    press Enter, so the sent line moves into the feed and the response streams below.
+  - **Raw-mode composer** — a line editor (insert / Backspace / ←→ / Home/End / Ctrl-U)
+    with horizontal scroll so long lines never wrap onto the chrome.
+  - **Slash-command palette** — a live-filtered command list on the hint row while you
+    type a `/command` token.
+  - **Exit**: `Ctrl-X` (clean, signal-free), `Ctrl-D` (empty line), `Ctrl-C`, or `/quit`
+    — all restore the terminal (cooked + scroll region + alt-screen) cleanly.
+  - Detection: `THOTH_TIER=rich` + a real tty → PT_RICH → the TUI; else the REPL.
+  - Pure pieces unit-tested (`test_tui`, +25): line-editor state machine, geometry,
+    palette matchers.
+
+### Fixed (pre-cut adversarial review of src/tui.cyr)
+- **SIGINT can no longer garble the terminal** — Ctrl-C during the cooked-mode dispatch
+  window (a slow `/task` / `/run` / `/call`) raised an unhandled SIGINT that killed
+  thoth with the alt-screen still up. SIGINT is now blocked for the TUI session.
+- **Composer can't scribble the chrome** — long lines are clamped to the visible width
+  with a horizontal-scroll window.
+- **Raw-mode re-entry after dispatch is checked** — a failed re-raw ends the session
+  cleanly instead of spinning half-cooked.
+
+### Known limitations (→ 0.9.1)
+- **Mid-session resize** redraws on the next keystroke / submit / toggle, not the
+  instant the terminal changes size (SIGWINCH handling lands with the file-tree pane).
+- **The file-tree pane** is not yet present — it needs the feed-buffer redraw model.
+
 ## [0.8.6] - 2026-06-24
 
 **Diff row background tint (M7 Phase 2d).** Add/del diff rows now carry a subtle

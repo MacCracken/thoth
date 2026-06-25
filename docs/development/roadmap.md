@@ -172,12 +172,16 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   (truecolor→256→16→none); colored + **vyakarana**-highlighted diffs; a one-line
   status (model/mode/cwd via a getcwd wrapper); `/tree`; **bnrmr+anuenue** banner.
   Rich-by-default on a TTY, auto-`plain` when piped/CI.
-- **T2 rich-TUI — `0.9.0`, gated; vendor darshana** — the interactive layout:
-  raw-mode composer + slash palette, alt-screen, a spinner (`chakshu/src/tui.cyr` is
-  the reference loop), and a **togglable status bar + file-tree pane** — keyboard
-  toggles, **no mouse assumed** (the panes are chrome you summon/dismiss, so thoth
-  stays usable in a non-mouse / minimal terminal). A separable, explicit-go-ahead
-  milestone — landed together, not piecemeal.
+- **T2 rich-TUI — `0.9.0` LANDED; vendor darshana** — the interactive alt-screen
+  layout: raw-mode composer (line editing + horizontal scroll), slash-command palette,
+  a **Ctrl-G-togglable status bar**, scrolling feed, keybinding hints, clean exits
+  (Ctrl-X / Ctrl-D / Ctrl-C / /quit). Activates at PT_RICH on a real tty
+  (`THOTH_TIER=rich`); the line REPL is the fallback.
+- **`0.9.1` — file-tree pane + the feed-buffer redraw model** — switch the feed from
+  the terminal-scroll trick to a self-managed redraw (capture command output into a
+  feed buffer, paint the visible window each frame) so a **togglable file-tree pane**
+  (keyboard, no mouse) can coexist as a left column, and instant **SIGWINCH** resize
+  drops in. Plus the working spinner.
 - **Data producers (parallel; honest-omit until present)** — hoosh `usage` →
   tokens; opt-in `[pricing]` → cost; git branch + diff via **sit** (`.sit/` repos
   today). **Real `.git/` repos are GATED on sit's `.git/` read-mode** (filed on

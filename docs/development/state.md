@@ -7,6 +7,16 @@
 
 ## Version
 
+**0.9.0** — the T2 rich-TUI front-end (M7), 2026-06-24. An interactive alt-screen TUI
+(new `src/tui.cyr` + vendored `src/vendor/darshana.cyr`): a pinned, Ctrl-G-togglable
+status bar, a scrolling feed (the composer clears on Enter; the response streams
+below), a raw-mode composer with line editing + horizontal scroll, a slash-command
+palette, and keybinding hints; exit via Ctrl-X / Ctrl-D / Ctrl-C / /quit (all restore
+the terminal). Active only at PT_RICH on a real tty (`THOTH_TIER=rich`); the line REPL
+is the guaranteed fallback (piped output byte-identical). Adversarially reviewed
+pre-cut — 4 issues fixed, incl. a critical SIGINT-during-dispatch teardown leak. 295
+assertions (+25, `test_tui`). Known → 0.9.1: instant SIGWINCH resize + the file-tree
+pane (the feed-buffer redraw model). Pin unchanged (6.2.40).
 **0.8.6** — diff row background tint (M7 Phase 2d), 2026-06-24. Add/del diff rows now
 carry a subtle background tint (green add / red del) under the syntax-highlighted code
 — completing the mockup's diff card. Built with fg-only resets (`ESC[39m`) so the tint

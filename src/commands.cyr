@@ -152,7 +152,7 @@ fn cmd_state() {
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     println("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.6"); println("");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.9.0"); println("");
     return 0;
 }
 

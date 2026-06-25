@@ -20,6 +20,8 @@ var _composer = 0;          # the edit buffer (NUL-terminated), lazily alloc'd
 var _comp_len = 0;          # bytes in the buffer
 var _comp_cur = 0;          # cursor index [0.._comp_len]
 var _tui_key_ch = 0;        # the byte for a KEY_CHAR (set by tui_read_key)
+var _tui_line = 0;          # stable copy of a submitted line (the composer is cleared
+                            # before dispatch, so the text can't be read from _composer)
 
 # Decoded keys.
 var KEY_NONE = 0;
@@ -50,6 +52,17 @@ fn led_reset() {
 fn led_buf() { if (_composer == 0) { led_reset(); } return _composer; }
 fn led_len() { return _comp_len; }
 fn led_cur() { return _comp_cur; }
+
+# _tui_copy_line: snapshot the composer into _tui_line (a stable cstr) so a submitted
+# line survives led_reset() — the composer is cleared BEFORE the (slow) dispatch.
+fn _tui_copy_line() {
+    if (_tui_line == 0) { _tui_line = alloc(COMPOSER_CAP); }
+    var n = _comp_len;
+    var i = 0;
+    while (i < n) { store8(_tui_line + i, load8(_composer + i)); i = i + 1; }
+    store8(_tui_line + n, 0);
+    return _tui_line;
+}
 
 # led_feed: fold one decoded key into the editor; return ACT_NONE / ACT_SUBMIT (the
 # line is ready in led_buf) / ACT_EOF (empty-buffer Ctrl-D). Pure (mutates the buf).
@@ -122,6 +135,7 @@ fn tui_read_key() {
     if (b == 10) { return KEY_ENTER; }
     if (b == 127) { return KEY_BACKSPACE; }
     if (b == 8) { return KEY_BACKSPACE; }
+    if (b == 24) { return KEY_CTRLC; }   # Ctrl-X — clean unconditional close (no signal semantics)
     if (b == 3) { return KEY_CTRLC; }
     if (b == 4) { return KEY_CTRLD; }
     if (b == 21) { return KEY_KILL; }
@@ -244,7 +258,7 @@ fn tui_draw_hint() {
     tty_move(tui_hint_row(_tui_rows), 1);
     tty_clear_to_eol();
     if (tui_palette_active() == 1) { tui_draw_palette(); }
-    else { ui_emit(ROLE_FAINT, "Ctrl-G status · Ctrl-D / Ctrl-C exit · Enter send"); }
+    else { ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Enter send"); }
     return 0;
 }
 
@@ -255,9 +269,19 @@ fn tui_draw_composer() {
     tty_move(row, 1);
     tty_clear_to_eol();
     ui_emit(ROLE_ACCENT, "{(o> ");
-    emit_n(led_buf(), led_len());
-    # cursor column = 1 + promptwidth(5) + cursor index
-    tty_move(row, 6 + led_cur());
+    # clamp to the visible width with a horizontal-scroll window ending at the cursor,
+    # so a long line can't wrap onto the hint/status rows (they sit OUTSIDE the feed
+    # scroll region and would otherwise be scribbled).
+    var avail = _tui_cols - 6;
+    if (avail < 1) { avail = 1; }
+    var start = 0;
+    if (led_cur() > avail) { start = led_cur() - avail; }
+    var shown = led_len() - start;
+    if (shown > avail) { shown = avail; }
+    if (shown > 0) { emit_n(led_buf() + start, shown); }
+    var col = 6 + (led_cur() - start);
+    if (col > _tui_cols) { col = _tui_cols; }
+    tty_move(row, col);
     return 0;
 }
 
@@ -288,7 +312,7 @@ fn tui_run_line(line) {
     ui_emit(ROLE_ACCENT, "{(o> "); println(line);   # echo the submitted command
     tty_cooked();                                # canonical mode for read_line-based confirms
     var keep = dispatch(line);
-    tty_raw(0);
+    if (tty_raw(0) < 0) { return 0; }            # couldn't re-enter raw -> end the session cleanly
     return keep;
 }
 
@@ -298,6 +322,12 @@ fn tui_run_line(line) {
 fn tui_loop() {
     if (tty_isatty(0) == 0) { return repl_loop(); }
     if (tty_raw(0) < 0) { return repl_loop(); }   # no raw mode -> degrade to the REPL
+    # Block SIGINT for the whole TUI session (sigprocmask via signalfd). The dispatch
+    # window runs in COOKED mode (ISIG on) so a Ctrl-C there would otherwise raise
+    # SIGINT and, with no handler, kill us WITH the alt-screen up + scroll region set
+    # (garbled terminal). Blocked, it's queued to the signalfd (unread) and discarded
+    # at exit; the raw-mode composer's own Ctrl-C still exits cleanly (KEY_CTRLC).
+    tty_open_signalfd(2);   # mask bit for SIGINT (signal 2)
     tty_alt_enter();
     tty_clear();
     led_reset();
@@ -312,8 +342,10 @@ fn tui_loop() {
         } else {
             var act = led_feed(key, _tui_key_ch);
             if (act == ACT_SUBMIT) {
-                var keep = tui_run_line(led_buf());
+                var line = _tui_copy_line();   # snapshot the line before clearing
                 led_reset();
+                tui_draw_composer();           # composer empties IMMEDIATELY, before dispatch
+                var keep = tui_run_line(line);
                 if (keep == 0) { _tui_running = 0; }
                 else { tui_relayout(); }
             } elif (act == ACT_EOF) {
