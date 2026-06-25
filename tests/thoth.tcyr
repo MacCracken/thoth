@@ -8,6 +8,7 @@ include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
 include "src/vendor/vyakarana.cyr"
+include "src/vendor/darshana.cyr"
 include "src/util.cyr"
 include "src/ui.cyr"
 include "src/config.cyr"
@@ -22,6 +23,8 @@ include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/commands.cyr"
+include "src/repl.cyr"
+include "src/tui.cyr"
 
 fn test_classify() {
     test_group("classify_input");
@@ -760,6 +763,35 @@ fn test_highlight() {
     return 0;
 }
 
+# T2 rich-TUI (0.9.0): the PURE pieces — the composer line-editor state machine and
+# the layout geometry. The raw-mode I/O loop is verified on a live tty, not here.
+fn test_tui() {
+    test_group("T2 composer + layout (tui.cyr)");
+    led_reset();
+    led_feed(KEY_CHAR, 104); led_feed(KEY_CHAR, 105);            # h i
+    assert_eq(led_len(), 2, "two chars typed");
+    assert(streq(led_buf(), "hi"), "buffer is 'hi'");
+    led_feed(KEY_LEFT, 0);
+    led_feed(KEY_CHAR, 88);                                      # X before 'i'
+    assert(streq(led_buf(), "hXi"), "insert at cursor");
+    assert_eq(led_cur(), 2, "cursor sits after the inserted char");
+    led_feed(KEY_BACKSPACE, 0);
+    assert(streq(led_buf(), "hi"), "backspace removes the inserted char");
+    led_feed(KEY_END, 0); led_feed(KEY_CHAR, 33);                # End, '!'
+    assert(streq(led_buf(), "hi!"), "End + append");
+    assert_eq(led_feed(KEY_ENTER, 0), ACT_SUBMIT, "Enter submits");
+    led_feed(KEY_KILL, 0);
+    assert_eq(led_len(), 0, "Ctrl-U clears the line");
+    assert_eq(led_feed(KEY_CTRLD, 0), ACT_EOF, "Ctrl-D on an empty line -> EOF");
+    # geometry
+    assert_eq(tui_status_row(), 1, "status bar at row 1");
+    assert_eq(tui_composer_row(24), 24, "composer at the last row");
+    assert_eq(tui_feed_top(1), 2, "feed starts below a shown status bar");
+    assert_eq(tui_feed_top(0), 1, "feed reclaims row 1 when status hidden");
+    assert_eq(tui_feed_bot(24), 23, "feed bottom sits above the composer");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -787,6 +819,7 @@ fn main() {
     test_ui();
     test_diff();
     test_highlight();
+    test_tui();
     test_model_switch();
     return assert_summary();
 }

@@ -249,6 +249,10 @@ fn ui_detect_tier() {
     if (ov != 0) {
         if (streq(ov, "plain") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
         if (streq(ov, "ansi") == 1) { _ui_apply(PT_ANSI, _ui_detect_depth()); return 0; }
+        if (streq(ov, "rich") == 1) {
+            # T2 needs a real tty both ways; requested-but-piped falls through to auto (degrade)
+            if ((ui_isatty(0) == 1) && (ui_isatty(1) == 1)) { _ui_apply(PT_RICH, _ui_detect_depth()); return 0; }
+        }
     }
     if (_ui_env_has("NO_COLOR") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
     if (ui_isatty(1) == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }

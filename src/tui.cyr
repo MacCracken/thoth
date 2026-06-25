@@ -1,0 +1,252 @@
+# thoth — the T2 rich-TUI front-end (M7 / 0.9.0, in progress).
+#
+# The alt-screen, raw-mode interactive layout: a pinned status bar (row 1), a
+# scrolling feed (the conversation/command output, in a DECSTBM scroll region), and
+# a raw-mode composer at the bottom. It is an ALTERNATIVE front-end to repl_loop(),
+# selected only when the presentation tier is T2 (PT_RICH) on a real TTY; everywhere
+# else the line-mode REPL stands in unchanged — degrade closed, port the floor.
+# Built on the vendored darshana substrate (tty_raw/alt/move/winsize/...).
+#
+# DESIGN SPLIT: the line-editor state machine (led_*) and the layout geometry are
+# PURE and unit-tested. The I/O loop (tui_loop) is raw-mode terminal control that
+# only manifests on a live TTY — it is verified interactively, not in the harness.
+# Command dispatch runs in COOKED mode so the existing read_line-based confirms
+# (the t-ron gate) keep working; the composer's own editing is raw.
+
+# --- pure: the composer line editor ---------------------------------------
+
+var COMPOSER_CAP = 4096;
+var _composer = 0;          # the edit buffer (NUL-terminated), lazily alloc'd
+var _comp_len = 0;          # bytes in the buffer
+var _comp_cur = 0;          # cursor index [0.._comp_len]
+var _tui_key_ch = 0;        # the byte for a KEY_CHAR (set by tui_read_key)
+
+# Decoded keys.
+var KEY_NONE = 0;
+var KEY_CHAR = 1;
+var KEY_BACKSPACE = 2;
+var KEY_ENTER = 3;
+var KEY_CTRLC = 4;
+var KEY_CTRLD = 5;
+var KEY_LEFT = 6;
+var KEY_RIGHT = 7;
+var KEY_HOME = 8;
+var KEY_END = 9;
+var KEY_KILL = 10;
+
+# Editor outcomes.
+var ACT_NONE = 0;
+var ACT_SUBMIT = 1;
+var ACT_EOF = 2;
+
+fn led_reset() {
+    if (_composer == 0) { _composer = alloc(COMPOSER_CAP); }
+    _comp_len = 0;
+    _comp_cur = 0;
+    store8(_composer, 0);
+    return 0;
+}
+fn led_buf() { if (_composer == 0) { led_reset(); } return _composer; }
+fn led_len() { return _comp_len; }
+fn led_cur() { return _comp_cur; }
+
+# led_feed: fold one decoded key into the editor; return ACT_NONE / ACT_SUBMIT (the
+# line is ready in led_buf) / ACT_EOF (empty-buffer Ctrl-D). Pure (mutates the buf).
+fn led_feed(key, ch) {
+    if (_composer == 0) { led_reset(); }
+    if (key == KEY_CHAR) {
+        if (_comp_len < (COMPOSER_CAP - 1)) {
+            var i = _comp_len;
+            while (i > _comp_cur) { store8(_composer + i, load8(_composer + i - 1)); i = i - 1; }
+            store8(_composer + _comp_cur, ch);
+            _comp_len = _comp_len + 1;
+            _comp_cur = _comp_cur + 1;
+            store8(_composer + _comp_len, 0);
+        }
+        return ACT_NONE;
+    }
+    if (key == KEY_BACKSPACE) {
+        if (_comp_cur > 0) {
+            var i = _comp_cur - 1;
+            while (i < (_comp_len - 1)) { store8(_composer + i, load8(_composer + i + 1)); i = i + 1; }
+            _comp_len = _comp_len - 1;
+            _comp_cur = _comp_cur - 1;
+            store8(_composer + _comp_len, 0);
+        }
+        return ACT_NONE;
+    }
+    if (key == KEY_LEFT) { if (_comp_cur > 0) { _comp_cur = _comp_cur - 1; } return ACT_NONE; }
+    if (key == KEY_RIGHT) { if (_comp_cur < _comp_len) { _comp_cur = _comp_cur + 1; } return ACT_NONE; }
+    if (key == KEY_HOME) { _comp_cur = 0; return ACT_NONE; }
+    if (key == KEY_END) { _comp_cur = _comp_len; return ACT_NONE; }
+    if (key == KEY_KILL) { _comp_len = 0; _comp_cur = 0; store8(_composer, 0); return ACT_NONE; }
+    if (key == KEY_CTRLC) { _comp_len = 0; _comp_cur = 0; store8(_composer, 0); return ACT_NONE; }
+    if (key == KEY_ENTER) { return ACT_SUBMIT; }
+    if (key == KEY_CTRLD) { if (_comp_len == 0) { return ACT_EOF; } return ACT_NONE; }
+    return ACT_NONE;
+}
+
+# --- pure: layout geometry ------------------------------------------------
+# For a terminal of `rows`: status bar pinned at row 1, composer at the last row,
+# the feed scrolls in rows 2..(rows-1). Toggling the status bar off frees row 1
+# into the feed (feed_top -> 1). (File-tree pane: a left column, a later step.)
+fn tui_status_row() { return 1; }
+fn tui_composer_row(rows) { return rows; }
+fn tui_feed_top(show_status) { if (show_status == 1) { return 2; } return 1; }
+fn tui_feed_bot(rows) { return rows - 1; }
+
+# --- I/O: raw-mode terminal control (verified on a live TTY) ---------------
+
+var _tui_running = 0;
+var _tui_show_status = 1;   # togglable (Ctrl-G); file-tree pane is a later step
+var _tui_rows = 24;
+var _tui_cols = 80;
+
+# tui_active: 1 if the T2 front-end should drive this session (PT_RICH + a real tty).
+fn tui_active() {
+    if (ui_tier() != PT_RICH) { return 0; }
+    if (tty_isatty(0) == 0) { return 0; }
+    if (tty_isatty(1) == 0) { return 0; }
+    return 1;
+}
+
+# tui_read_key: read + decode one keypress in raw mode (ASCII + the common CSI
+# arrows/home/end). KEY_CHAR sets _tui_key_ch. EOF -> KEY_CTRLD.
+fn tui_read_key() {
+    var c[8];
+    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_CTRLD; }
+    var b = load8(&c);
+    if (b == 13) { return KEY_ENTER; }
+    if (b == 10) { return KEY_ENTER; }
+    if (b == 127) { return KEY_BACKSPACE; }
+    if (b == 8) { return KEY_BACKSPACE; }
+    if (b == 3) { return KEY_CTRLC; }
+    if (b == 4) { return KEY_CTRLD; }
+    if (b == 21) { return KEY_KILL; }
+    if (b == 1) { return KEY_HOME; }
+    if (b == 5) { return KEY_END; }
+    if (b == 7) { return KEY_NONE; }   # Ctrl-G handled by the caller (toggle)
+    if (b == 27) {
+        if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+        if (load8(&c) == 91) {
+            if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+            var d = load8(&c);
+            if (d == 67) { return KEY_RIGHT; }
+            if (d == 68) { return KEY_LEFT; }
+            if (d == 72) { return KEY_HOME; }
+            if (d == 70) { return KEY_END; }
+        }
+        return KEY_NONE;
+    }
+    if ((b >= 32) && (b < 127)) { _tui_key_ch = b; return KEY_CHAR; }
+    return KEY_NONE;
+}
+
+# _tui_scroll_region: set DECSTBM to rows [top,bot] (1-indexed) — ESC[top;botr.
+# Built byte-wise (ESC is a control char, not a source literal).
+fn _tui_scroll_region(top, bot) {
+    var b[24];
+    var o = 0;
+    store8(&b + o, 27); o = o + 1;        # ESC
+    store8(&b + o, 91); o = o + 1;        # [
+    o = _append_int(&b, o, top);
+    store8(&b + o, 59); o = o + 1;        # ;
+    o = _append_int(&b, o, bot);
+    store8(&b + o, 114); o = o + 1;       # r
+    store8(&b + o, 0);
+    emit(&b);
+    return 0;
+}
+
+# tui_draw_status: render the pinned status bar at row 1 (or clear it when hidden).
+# ◆ thoth · model · the live presentation tier. Cursor is left for the caller to
+# reposition at the composer.
+fn tui_draw_status() {
+    tty_move(1, 1);
+    tty_clear_to_eol();
+    if (_tui_show_status == 0) { return 0; }
+    ui_emit(ROLE_ACCENT, "◆ thoth");                  # the diamond brand glyph (UTF-8 literal)
+    ui_emit(ROLE_FAINT, "  model ");
+    ui_emit(ROLE_ACCENT, _hoosh_model());
+    ui_emit(ROLE_FAINT, "  turns ");
+    emit(ui_sgr(ROLE_FG)); fmt_int(session_turns()); emit(ui_reset());
+    ui_emit(ROLE_FAINT, "  surface ");
+    ui_emit(ROLE_GREEN, ui_tier_name());
+    return 0;
+}
+
+# tui_draw_composer: redraw the composer line (prompt + buffer) and park the cursor
+# at the edit position. The {(o> prompt is preserved as the composer prompt.
+fn tui_draw_composer() {
+    var row = tui_composer_row(_tui_rows);
+    tty_move(row, 1);
+    tty_clear_to_eol();
+    ui_emit(ROLE_ACCENT, "{(o> ");
+    emit_n(led_buf(), led_len());
+    # cursor column = 1 + promptwidth(5) + cursor index
+    tty_move(row, 6 + led_cur());
+    return 0;
+}
+
+# tui_relayout: re-read the terminal size, (re)set the scroll region for the feed,
+# and redraw the status bar + composer. Called at start and whenever size changes.
+fn tui_relayout() {
+    var rr[8];
+    var cc[8];
+    store64(&rr, 0); store64(&cc, 0);
+    if (tty_winsize(1, &rr, &cc) == 0) {
+        if (load64(&rr) > 4) { _tui_rows = load64(&rr); }
+        if (load64(&cc) > 0) { _tui_cols = load64(&cc); }
+    }
+    _tui_scroll_region(tui_feed_top(_tui_show_status), tui_feed_bot(_tui_rows));
+    tui_draw_status();
+    tui_draw_composer();
+    return 0;
+}
+
+# tui_run_line: submit `line` — echo it into the feed, then dispatch it in COOKED
+# mode (so gate confirms via read_line work), with output scrolling in the feed
+# region. Returns dispatch's keep-going flag (0 = quit).
+fn tui_run_line(line) {
+    var feedrow = tui_feed_bot(_tui_rows);
+    tty_move(feedrow, 1);
+    emit("\n");                                  # advance into / scroll the feed
+    ui_emit(ROLE_ACCENT, "{(o> "); println(line);   # echo the submitted command
+    tty_cooked();                                # canonical mode for read_line-based confirms
+    var keep = dispatch(line);
+    tty_raw(0);
+    return keep;
+}
+
+# tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / scrolling-
+# feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
+# is interactive terminal control — verify on a live TTY (THOTH_TIER=rich), not piped.
+fn tui_loop() {
+    if (tty_isatty(0) == 0) { return repl_loop(); }
+    if (tty_raw(0) < 0) { return repl_loop(); }   # no raw mode -> degrade to the REPL
+    tty_alt_enter();
+    tty_clear();
+    led_reset();
+    _tui_running = 1;
+    tui_relayout();
+    while (_tui_running == 1) {
+        var key = tui_read_key();
+        var act = led_feed(key, _tui_key_ch);
+        if (act == ACT_SUBMIT) {
+            var keep = tui_run_line(led_buf());
+            led_reset();
+            if (keep == 0) { _tui_running = 0; }
+            else { tui_relayout(); }
+        } elif (act == ACT_EOF) {
+            _tui_running = 0;
+        } else {
+            tui_draw_composer();
+        }
+    }
+    # teardown — restore the terminal on every exit path.
+    tty_cursor_show();
+    tty_cooked();
+    _tui_scroll_region(1, _tui_rows);
+    tty_alt_leave();
+    return 0;
+}

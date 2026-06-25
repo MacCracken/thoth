@@ -25,6 +25,9 @@ include "src/vendor/avatara.cyr"
 # vyakarana (2.2.3) — source-code tokenizer for syntax highlighting (/read, diffs).
 # Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
 include "src/vendor/vyakarana.cyr"
+# darshana (0.8.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
+# (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
+include "src/vendor/darshana.cyr"
 # Project modules, callee-first (single-pass forward-reference resolution):
 # gate (t-ron binding + confirm) precedes seams, which reports its status;
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).
@@ -43,6 +46,7 @@ include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
+include "src/tui.cyr"       # T2 rich-TUI front-end (alt-screen); active only at PT_RICH
 
 fn main() {
     alloc_init();
@@ -50,9 +54,15 @@ fn main() {
     ui_detect_tier();       # resolve the presentation tier (T0..T3) once; degrades closed to plain
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm
-    print_banner();
-    repl_loop();
-    println("scribe out.");
+    # T2 rich-TUI when the tier resolves to PT_RICH on a real tty; otherwise the
+    # line-mode REPL (the guaranteed fallback — pipes / CI / T0-T1 / no raw mode).
+    if (tui_active() == 1) {
+        tui_loop();
+    } else {
+        print_banner();
+        repl_loop();
+        println("scribe out.");
+    }
     return 0;
 }
 
