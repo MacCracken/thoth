@@ -792,6 +792,21 @@ fn test_tui() {
     assert_eq(tui_feed_top(1), 2, "feed starts below a shown status bar");
     assert_eq(tui_feed_top(0), 1, "feed reclaims row 1 when status hidden");
     assert_eq(tui_feed_bot(24), 22, "feed bottom sits above the composer + hint");
+    # slash-command palette matchers
+    assert_eq(_buf_has_space("/seams x", 8), 1, "space detected -> command token complete");
+    assert_eq(_buf_has_space("/se", 3), 0, "no space -> still typing the token");
+    assert_eq(tui_palette_count("/s"), 2, "'/s' matches /seams + /state");
+    assert_eq(tui_palette_count("/se"), 1, "'/se' matches /seams only");
+    assert_eq(tui_palette_count("/m"), 2, "'/m' matches /model + /models");
+    assert_eq(tui_palette_count("/zz"), 0, "no command matches '/zz'");
+    led_reset();
+    led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 115);            # "/s"
+    assert_eq(tui_palette_active(), 1, "palette active while typing '/s'");
+    led_feed(KEY_CHAR, 32);                                     # "/s "
+    assert_eq(tui_palette_active(), 0, "palette closes once a space is typed");
+    led_reset();
+    led_feed(KEY_CHAR, 104);                                    # "h"
+    assert_eq(tui_palette_active(), 0, "palette inactive for non-slash input");
     return 0;
 }
 

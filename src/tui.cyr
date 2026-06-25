@@ -177,12 +177,74 @@ fn tui_draw_status() {
     return 0;
 }
 
-# tui_draw_hint: the bottom keybinding strip (faint) — discoverability matters in a
-# non-mouse environment. Drawn at the last row.
+# --- slash-command palette ------------------------------------------------
+# While the composer holds a partial '/command' token (no space yet), the hint row
+# becomes a filtered list of matching commands. The matchers are pure + unit-tested;
+# the render is I/O. (A multi-row dropdown above the composer is a later refinement —
+# it needs the feed-buffer redraw model.)
+var SLASH_N = 13;
+fn _slash_name(i) {
+    if (i == 0) { return "/help"; }
+    if (i == 1) { return "/seams"; }
+    if (i == 2) { return "/state"; }
+    if (i == 3) { return "/model"; }
+    if (i == 4) { return "/models"; }
+    if (i == 5) { return "/read"; }
+    if (i == 6) { return "/write"; }
+    if (i == 7) { return "/run"; }
+    if (i == 8) { return "/tools"; }
+    if (i == 9) { return "/call"; }
+    if (i == 10) { return "/audit"; }
+    if (i == 11) { return "/reset"; }
+    if (i == 12) { return "/quit"; }
+    return "";
+}
+# _buf_has_space: 1 if buf[0..n) holds a space (the command token is complete).
+fn _buf_has_space(buf, n) {
+    var i = 0;
+    while (i < n) { if (load8(buf + i) == 32) { return 1; } i = i + 1; }
+    return 0;
+}
+# tui_palette_count: how many slash commands start with NUL-terminated `prefix`.
+fn tui_palette_count(prefix) {
+    var c = 0;
+    var i = 0;
+    while (i < SLASH_N) {
+        if (cstr_starts_with(_slash_name(i), prefix) == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+# tui_palette_active: 1 if the composer is mid-typing a '/command' token.
+fn tui_palette_active() {
+    if (led_len() == 0) { return 0; }
+    if (load8(led_buf()) != 47) { return 0; }                      # not a '/'
+    if (_buf_has_space(led_buf(), led_len()) == 1) { return 0; }   # token complete
+    return 1;
+}
+# tui_draw_palette: render the matching commands (accent) for the current prefix.
+fn tui_draw_palette() {
+    var prefix = led_buf();
+    var any = 0;
+    var i = 0;
+    while (i < SLASH_N) {
+        if (cstr_starts_with(_slash_name(i), prefix) == 1) {
+            emit(" "); ui_emit(ROLE_ACCENT, _slash_name(i));
+            any = 1;
+        }
+        i = i + 1;
+    }
+    if (any == 0) { ui_emit(ROLE_FAINT, "  (no command — Enter sends as a task)"); }
+    return 0;
+}
+
+# tui_draw_hint: the bottom strip — the slash-command palette while typing a
+# '/command', else the keybinding hints. Discoverability matters without a mouse.
 fn tui_draw_hint() {
     tty_move(tui_hint_row(_tui_rows), 1);
     tty_clear_to_eol();
-    ui_emit(ROLE_FAINT, "Ctrl-G status · Ctrl-D / Ctrl-C exit · Enter send");
+    if (tui_palette_active() == 1) { tui_draw_palette(); }
+    else { ui_emit(ROLE_FAINT, "Ctrl-G status · Ctrl-D / Ctrl-C exit · Enter send"); }
     return 0;
 }
 
@@ -257,6 +319,7 @@ fn tui_loop() {
             } elif (act == ACT_EOF) {
                 _tui_running = 0;
             } else {
+                tui_draw_hint();        # refresh the slash palette for the new buffer
                 tui_draw_composer();
             }
         }
