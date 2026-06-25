@@ -1,0 +1,305 @@
+# thoth — the self-managed feed buffer (M7 / 0.9.1).
+#
+# 0.9.0's T2 TUI scrolled command output natively inside a DECSTBM scroll region
+# (the "terminal-scroll trick"). DECSTBM sets only TOP/BOTTOM margins, so that
+# scroll always spans the FULL terminal width — which makes a left-column pane
+# (the file-tree, 0.9.3) physically impossible and leaves resize at the mercy of
+# the terminal. 0.9.1 replaces it: thoth OWNS the feed. Dispatch output is
+# captured into a ring of lines here (via feed_write, the OUT_RING sink target —
+# see src/util.cyr), and the visible window is PAINTED each frame (feed_clip).
+# A self-managed feed makes instant SIGWINCH a pure recompute+repaint (0.9.2) and
+# lets a narrower right-column feed coexist with a tree pane (0.9.3).
+#
+# DESIGN SPLIT (mirrors src/tui.cyr): the ring state machine and the escape-aware
+# clip are PURE and unit-tested (test_feed / test_feed_ring). The capture wiring
+# (emit -> feed_write) and the painter are I/O, verified on a live TTY.
+#
+# Stored lines keep their ANSI color escapes VERBATIM — the bytes stored are the
+# bytes that were emitted, so the floor invariant (piped output byte-identical)
+# is trivial: capture is only ever armed inside the PT_RICH dispatch window.
+# Painting a stored line into a width-W column needs ESCAPE-AWARE clipping:
+# escapes are zero-width and must never be severed mid-sequence, and ESC[K (erase
+# to physical EOL) must be SUPPRESSED so it can't scribble a neighbour column.
+#
+# This module is included AFTER src/ui.cyr (feed_clip's defensive close calls
+# ui_reset) and feeds OUT_RING from src/util.cyr (emit's sink branch calls
+# feed_write — a forward reference Cyrius resolves whole-unit).
+
+# --- ring storage -----------------------------------------------------------
+# A ring of FEED_ROWS fixed-width slots in one bump-heap block (alloc sidesteps
+# the literal-array-dim limit: slot i lives at _feed_base + i*FEED_LINE_CAP).
+# FEED_LINE_CAP is generous: a truecolor syntax-highlighted /read line spends
+# ~19 bytes per token on the SGR escape alone, so a wide colored row blows past
+# 1 KiB of escapes+text — 2 KiB leaves headroom before the (escape-boundary-aware)
+# store truncation kicks in. 2048 rows x 2 KiB = a 4 MiB one-time scrollback.
+var FEED_ROWS = 2048;
+var FEED_LINE_CAP = 2048;
+
+var _feed_base = 0;        # alloc(FEED_ROWS*FEED_LINE_CAP), lazy — the slot bytes
+var _feed_len = 0;         # alloc(FEED_ROWS*8): stored byte length per slot
+var _feed_vis = 0;         # alloc(FEED_ROWS*8): cached visible cols per slot
+var _feed_head = 0;        # ring index of the OLDEST live line
+var _feed_count = 0;       # live line count (<= FEED_ROWS)
+var _feed_scroll = 0;      # rows scrolled back from the newest (0 = pinned bottom)
+
+# The in-progress (un-newlined) line. LITERAL size — MUST equal FEED_LINE_CAP
+# (Cyrius array dims can't be a `var` constant); if FEED_LINE_CAP moves, move this.
+var _feed_pending[2048];
+var _feed_pending_len = 0;
+
+# feed_init_ensure: lazily allocate the ring (idempotent). Separated from
+# feed_init so the sink path can allocate on first write without resetting state.
+fn feed_init_ensure() {
+    if (_feed_base == 0) {
+        _feed_base = alloc(FEED_ROWS * FEED_LINE_CAP);
+        _feed_len = alloc(FEED_ROWS * 8);
+        _feed_vis = alloc(FEED_ROWS * 8);
+    }
+    return 0;
+}
+
+# feed_init: allocate (if needed) AND reset the ring to empty. Called once at TUI
+# start; called by each unit test for a clean slate.
+fn feed_init() {
+    feed_init_ensure();
+    _feed_head = 0;
+    _feed_count = 0;
+    _feed_scroll = 0;
+    _feed_pending_len = 0;
+    return 0;
+}
+
+# --- the escape / UTF-8 scanner (shared by clip, visible-cols, safe-copy) ----
+
+# _is_csi_final: 1 if b is a CSI final byte (0x40..0x7e inclusive — '@'..'~').
+fn _is_csi_final(b) { if (b >= 64) { if (b <= 126) { return 1; } } return 0; }
+
+# _feed_esc_len: byte length of the escape sequence starting at src[i] (== 0x1b).
+# CSI (ESC '[') runs to its final byte; the 2-byte form is ESC + one byte; a lone
+# or unterminated ESC reports the bytes present (to src_len). Never reads past
+# src_len.
+fn _feed_esc_len(src, i, src_len) {
+    if ((i + 1) >= src_len) { return 1; }            # lone ESC at the boundary
+    if (load8(src + i + 1) != 91) { return 2; }      # ESC + single byte (2-byte form)
+    var j = i + 2;
+    while (j < src_len) {
+        if (_is_csi_final(load8(src + j)) == 1) { return j - i + 1; }
+        j = j + 1;
+    }
+    return src_len - i;                               # unterminated CSI -> to end
+}
+
+# _feed_esc_terminated: 1 if the escape at src[i] is FULLY present in [i,src_len)
+# (has its final byte). Used at store time to drop a severed trailing escape so a
+# stored slot never ends mid-CSI.
+fn _feed_esc_terminated(src, i, src_len) {
+    if ((i + 1) >= src_len) { return 0; }            # lone ESC -> severed
+    if (load8(src + i + 1) != 91) { return 1; }      # complete 2-byte form
+    var j = i + 2;
+    while (j < src_len) {
+        if (_is_csi_final(load8(src + j)) == 1) { return 1; }
+        j = j + 1;
+    }
+    return 0;                                         # ran off end, no final byte
+}
+
+# _feed_glyph_len: byte length of the glyph starting at src[i]. ASCII = 1; a
+# UTF-8 lead is followed by its 0x80..0xBF continuations (greedy, bounded by
+# src_len so a lead at the boundary never over-reads).
+fn _feed_glyph_len(src, i, src_len) {
+    if (load8(src + i) < 128) { return 1; }
+    var j = i + 1;
+    while (j < src_len) {
+        var c = load8(src + j);
+        if (c >= 128) { if (c < 192) { j = j + 1; } else { return j - i; } }
+        else { return j - i; }
+    }
+    return j - i;
+}
+
+# _feed_is_reset: 1 if the SGR sequence at src[i] of length sl is a FULL reset
+# (ESC[m or ESC[0m). Anything else that ends in 'm' is treated as opening color.
+fn _feed_is_reset(src, i, sl) {
+    if (sl == 3) { return 1; }                        # ESC [ m
+    if (sl == 4) { if (load8(src + i + 2) == 48) { return 1; } }   # ESC [ 0 m
+    return 0;
+}
+
+# --- the clip: paint a stored line into a width-W column (PURE) --------------
+# feed_clip(dst, dst_cap, src, src_len, max_cols) -> bytes written.
+# Single left-to-right pass. Copies up to max_cols VISIBLE glyphs, passing color
+# escapes through verbatim (zero width) so the row stays colored. Guarantees:
+#   - never writes past dst[dst_cap-1] (every copy is capacity-checked);
+#   - never severs a CSI / a UTF-8 glyph (whole units only);
+#   - SUPPRESSES ESC[K (the painter issues its own column-bounded clear-to-eol —
+#     an in-line ES[K would erase to the terminal's PHYSICAL eol, scribbling the
+#     pane to the right);
+#   - if a color span is left open at the clip point, appends ui_reset() (room
+#     permitting) so color can't bleed past the column.
+fn feed_clip(dst, dst_cap, src, src_len, max_cols) {
+    var cols = 0;
+    var i = 0;
+    var wrote = 0;
+    var sgr_open = 0;
+    while (i < src_len) {
+        var b = load8(src + i);
+        if (b == 27) {
+            var sl = _feed_esc_len(src, i, src_len);
+            var lastb = load8(src + i + sl - 1);
+            # Suppress only a real CSI erase-line (ESC[...K, sl>=3 implies the '['
+            # was found by _feed_esc_len). A 2-byte ESC-K (sl==2) — which untrusted
+            # model/tool output captured into the feed could contain — is NOT a
+            # CSI and is copied verbatim, not dropped.
+            if ((sl >= 3) && (lastb == 75)) {
+                i = i + sl;                           # ESC[...K -> suppress
+            } else {
+                if ((wrote + sl) <= dst_cap) {
+                    var k = 0;
+                    while (k < sl) { store8(dst + wrote + k, load8(src + i + k)); k = k + 1; }
+                    wrote = wrote + sl;
+                    if (lastb == 109) {
+                        if (_feed_is_reset(src, i, sl) == 1) { sgr_open = 0; } else { sgr_open = 1; }
+                    }
+                }
+                i = i + sl;
+            }
+        } else {
+            var gl = _feed_glyph_len(src, i, src_len);
+            if (cols < max_cols) {
+                if ((wrote + gl) <= dst_cap) {
+                    var k2 = 0;
+                    while (k2 < gl) { store8(dst + wrote + k2, load8(src + i + k2)); k2 = k2 + 1; }
+                    wrote = wrote + gl;
+                    cols = cols + 1;
+                }
+            }
+            # at/over max_cols: stop copying glyphs but keep scanning to drain
+            # trailing color resets (so the row closes cleanly).
+            i = i + gl;
+        }
+    }
+    if (sgr_open == 1) {
+        var rst = ui_reset();
+        var rl = strlen(rst);
+        if ((wrote + rl) <= dst_cap) {
+            var kr = 0;
+            while (kr < rl) { store8(dst + wrote + kr, load8(rst + kr)); kr = kr + 1; }
+            wrote = wrote + rl;
+        }
+    }
+    return wrote;
+}
+
+# feed_visible_cols: visible glyph count of src[0..src_len) — escapes are
+# zero-width. The cached _feed_vis value; also the painter's width oracle.
+fn feed_visible_cols(src, src_len) {
+    var cols = 0;
+    var i = 0;
+    while (i < src_len) {
+        if (load8(src + i) == 27) { i = i + _feed_esc_len(src, i, src_len); }
+        else { i = i + _feed_glyph_len(src, i, src_len); cols = cols + 1; }
+    }
+    return cols;
+}
+
+# _feed_safe_copy: copy src[0..src_len) into dst (cap dst_cap) one WHOLE unit
+# (escape or glyph) at a time, stopping before any unit that would exceed dst_cap
+# OR a severed (unterminated) trailing escape. So a truncated slot never ends
+# mid-CSI / mid-glyph. Returns bytes copied. The store-time truncation primitive.
+fn _feed_safe_copy(dst, dst_cap, src, src_len) {
+    var i = 0;
+    var wrote = 0;
+    var stop = 0;
+    while (i < src_len) {
+        if (stop == 0) {
+            var b = load8(src + i);
+            if (b == 27) {
+                if (_feed_esc_terminated(src, i, src_len) == 0) { stop = 1; }
+                else {
+                    var sl = _feed_esc_len(src, i, src_len);
+                    if ((wrote + sl) > dst_cap) { stop = 1; }
+                    else {
+                        var k = 0;
+                        while (k < sl) { store8(dst + wrote + k, load8(src + i + k)); k = k + 1; }
+                        wrote = wrote + sl;
+                        i = i + sl;
+                    }
+                }
+            } else {
+                var gl = _feed_glyph_len(src, i, src_len);
+                if ((wrote + gl) > dst_cap) { stop = 1; }
+                else {
+                    var k2 = 0;
+                    while (k2 < gl) { store8(dst + wrote + k2, load8(src + i + k2)); k2 = k2 + 1; }
+                    wrote = wrote + gl;
+                    i = i + gl;
+                }
+            }
+        } else { i = src_len; }                       # stop -> drain the loop
+    }
+    return wrote;
+}
+
+# --- the sink: accumulate dispatch output, seal a slot per newline ------------
+
+# _feed_seal_pending: copy the pending bytes into the next ring slot (escape-
+# boundary truncated to FEED_LINE_CAP), cache its length + visible cols, and
+# advance the ring (evicting the oldest line in O(1) when full). Seals even an
+# EMPTY pending — a bare '\n' is a real blank feed row.
+fn _feed_seal_pending() {
+    feed_init_ensure();
+    var slot = (_feed_head + _feed_count) % FEED_ROWS;   # == _feed_head when full
+    var dst = _feed_base + slot * FEED_LINE_CAP;
+    var copied = _feed_safe_copy(dst, FEED_LINE_CAP, &_feed_pending, _feed_pending_len);
+    store64(_feed_len + slot * 8, copied);
+    store64(_feed_vis + slot * 8, feed_visible_cols(dst, copied));
+    if (_feed_count < FEED_ROWS) { _feed_count = _feed_count + 1; }
+    else { _feed_head = (_feed_head + 1) % FEED_ROWS; }   # ring full -> evict oldest
+    _feed_pending_len = 0;
+    return 0;
+}
+
+# feed_write: the OUT_RING sink target (src/util.cyr's emit branch routes here
+# when capture is armed). Accumulates bytes into the pending line; a '\n' seals a
+# slot (the newline itself is NOT stored — the painter supplies row breaks,
+# mirroring println). Bytes past FEED_LINE_CAP-1 for one logical line are dropped
+# (the sealed slot is re-truncated on an escape boundary by _feed_safe_copy).
+fn feed_write(ptr, n) {
+    feed_init_ensure();
+    var i = 0;
+    while (i < n) {
+        var b = load8(ptr + i);
+        if (b == 10) { _feed_seal_pending(); }
+        else {
+            if (_feed_pending_len < (FEED_LINE_CAP - 1)) {
+                store8(&_feed_pending + _feed_pending_len, b);
+                _feed_pending_len = _feed_pending_len + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# feed_flush_pending: seal a trailing un-newlined line (a prompt with no '\n', or
+# output that didn't end in a newline) as a final feed row. Unlike the '\n' path
+# it does NOT seal an empty pending (no spurious blank row). Called at dispatch
+# end and before an interactive confirm repaint.
+fn feed_flush_pending() {
+    if (_feed_pending_len > 0) { _feed_seal_pending(); }
+    return 0;
+}
+
+# feed_pending_len: bytes in the un-sealed line (the painter renders it as the
+# in-progress bottom row so a no-newline prompt is visible before its read).
+fn feed_pending_len() { return _feed_pending_len; }
+fn feed_pending_ptr() { return &_feed_pending; }
+
+# --- accessors (row 0 = OLDEST live line; documented for test determinism) ----
+fn feed_count() { return _feed_count; }
+fn _feed_row_slot(row) { return (_feed_head + row) % FEED_ROWS; }
+fn feed_line_ptr(row) { return _feed_base + _feed_row_slot(row) * FEED_LINE_CAP; }
+fn feed_line_len(row) { return load64(_feed_len + _feed_row_slot(row) * 8); }
+fn feed_vis(row) { return load64(_feed_vis + _feed_row_slot(row) * 8); }
+fn feed_scroll() { return _feed_scroll; }
+fn feed_scroll_set(off) { if (off < 0) { off = 0; } _feed_scroll = off; return 0; }

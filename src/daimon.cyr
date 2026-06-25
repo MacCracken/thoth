@@ -105,17 +105,17 @@ fn _daimon_print_str(s) {
     var d = str_data(s);
     var n = str_len(s);
     emit_n(d, n);
-    if (n > 0) { if (load8(d + n - 1) != 10) { println(""); } }
-    if (n == 0) { println(""); }
+    if (n > 0) { if (load8(d + n - 1) != 10) { oprintln(""); } }
+    if (n == 0) { oprintln(""); }
     return 0;
 }
 
 # _daimon_announce_transport_error: honest degradation for an unreachable host.
 fn _daimon_announce_transport_error(r, url) {
     var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
-    emit("  daimon transport error: "); println(ename);
+    emit("  daimon transport error: "); oprintln(ename);
     emit("  endpoint "); emit(url);
-    println(" unreachable — is daimon up? (degraded, not faked)");
+    oprintln(" unreachable — is daimon up? (degraded, not faked)");
     return 0;
 }
 
@@ -124,7 +124,7 @@ fn _daimon_announce_transport_error(r, url) {
 fn daimon_list_tools() {
     var url = _daimon_tools_endpoint();
     var h = sandhi_headers_new();
-    ui_emit(ROLE_FAINT, "  -> daimon "); println(url);
+    ui_emit(ROLE_FAINT, "  -> daimon "); oprintln(url);
     var r = sandhi_http_get(url, h);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
@@ -132,18 +132,18 @@ fn daimon_list_tools() {
     }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) {
-        emit("  daimon returned HTTP "); fmt_int(status); println("");
+        emit("  daimon returned HTTP "); ofmt_int(status); oprintln("");
         return status;
     }
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
     var v = bayan_json_v_parse_str(body, blen);
-    if (v == 0) { println("  daimon: response received but not parseable."); return 0 - 1; }
+    if (v == 0) { oprintln("  daimon: response received but not parseable."); return 0 - 1; }
     var tools = bayan_json_v_obj_get(v, "tools");
-    if (tools == 0) { println("  daimon: no tools array in response."); return 0 - 1; }
+    if (tools == 0) { oprintln("  daimon: no tools array in response."); return 0 - 1; }
     var n = bayan_json_v_arr_len(tools);
-    ui_emit(ROLE_ACCENT, "tools daimon hosts ("); fmt_int(n); ui_emit(ROLE_ACCENT, "):"); println("");
-    if (n == 0) { println("  (none registered)"); }
+    ui_emit(ROLE_ACCENT, "tools daimon hosts ("); ofmt_int(n); ui_emit(ROLE_ACCENT, "):"); oprintln("");
+    if (n == 0) { oprintln("  (none registered)"); }
     var i = 0;
     while (i < n) {
         var t = bayan_json_v_arr_get(tools, i);
@@ -157,7 +157,7 @@ fn daimon_list_tools() {
             var ds = bayan_json_v_str(desc);
             ui_emit_n(ROLE_MUTED, str_data(ds), str_len(ds));
         }
-        println("");
+        oprintln("");
         i = i + 1;
     }
     return 0;
@@ -172,7 +172,7 @@ fn daimon_call(name, args_json) {
     var len = daimon_build_call(_daimon_req, name, args_json);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    ui_emit(ROLE_FAINT, "  -> daimon tool '"); ui_emit(ROLE_ACCENT, name); ui_emit(ROLE_FAINT, "' "); println(url);
+    ui_emit(ROLE_FAINT, "  -> daimon tool '"); ui_emit(ROLE_ACCENT, name); ui_emit(ROLE_FAINT, "' "); oprintln(url);
     var r = sandhi_http_post(url, h, _daimon_req, len);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
@@ -182,16 +182,16 @@ fn daimon_call(name, args_json) {
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
     if ((status < 200) || (status >= 300)) {
-        emit("  daimon returned HTTP "); fmt_int(status); println("");
+        emit("  daimon returned HTTP "); ofmt_int(status); oprintln("");
         var em = daimon_extract_text(body, blen);
         if (em != 0) { emit("  "); _daimon_print_str(em); }
         return status;
     }
     var ie = daimon_extract_is_error(body, blen);
-    if (ie == 1) { println("  tool reported an error:"); }
+    if (ie == 1) { oprintln("  tool reported an error:"); }
     var text = daimon_extract_text(body, blen);
     if (text == 0) {
-        println("  daimon: result received but no text content could be parsed.");
+        oprintln("  daimon: result received but no text content could be parsed.");
         return 0 - 1;
     }
     _daimon_print_str(text);

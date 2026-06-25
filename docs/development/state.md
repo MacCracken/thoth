@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.9.1** — the self-managed feed-redraw model (M7), 2026-06-24. The T2 feed stops
+relying on the DECSTBM terminal-scroll trick and becomes thoth-owned: dispatch output
+is captured into a line ring (new `src/feed.cyr` — 2048×2 KiB, escape-aware clip) and
+the visible window is painted each frame. The prerequisite for the file-tree pane
+(0.9.3) and instant SIGWINCH (0.9.2): once thoth owns the feed it can repaint it at a
+new size or in a narrower column. Capture is a **surface-routed output sink** (new
+`_out_mode`/`emit_raw`/`oprintln`/`ofmt_int` in `src/util.cyr`; emit/emit_n branch to
+`feed_write` under OUT_RING) — NOT fd-1 redirection, which the design workflow rejected
+as floor-forking (AGNOS has no `sys_dup2`) and confirm-breaking. Armed only around the
+`dispatch()` window; the REPL/piped/CI floor never arms it → **byte-identical** (golden
+`/help`+`/state`+`/seams` diff unchanged across the 206-site `println`/`fmt_int`→shadow
+rename). The t-ron gate confirm brackets back to the live screen under capture
+(`tui_confirm_begin`/`_end`), staying answerable + fail-closed; the REPL path is
+unchanged. Adversarially reviewed pre-cut (5 lenses, every finding verified): zero
+correctness/crash/floor/security findings. **TUI render verifies only on a real tty
+(`THOTH_TIER=rich`)**, not the harness. 337 assertions (+42, `test_feed`/`test_feed_ring`/
+`test_capture`). Pin unchanged (6.2.40). Known → 0.9.2: instant SIGWINCH + working
+spinner + incremental streaming paint; → 0.9.3: the togglable left-column file-tree pane.
 **0.9.0** — the T2 rich-TUI front-end (M7), 2026-06-24. An interactive alt-screen TUI
 (new `src/tui.cyr` + vendored `src/vendor/darshana.cyr`): a pinned, Ctrl-G-togglable
 status bar, a scrolling feed (the composer clears on Enter; the response streams
@@ -421,7 +439,22 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   integrity, risk score, recent events) for the `/audit` command; the pure
   `audit_kind_str` verdict-label is thoth's only glue over it.
 - `src/exec.cyr` — the portable local shell escape for `/run`.
-- `src/util.cyr` — buffered stdin `read_line`, `emit`, small helpers.
+- `src/util.cyr` — buffered stdin `read_line`, `emit`/`emit_n`, small helpers.
+  **0.9.1:** the **output-capture sink** — `_out_mode` (OUT_FD1 default / OUT_RING),
+  `out_mode`/`out_mode_set`, `emit_raw`/`emit_raw_n` (always fd 1, blind to the mode —
+  the TUI chrome + painter use these), the OUT_RING branch in `emit`/`emit_n` (→
+  `feed_write`), and the mode-aware stdlib shadows `oprintln`/`ofmt_int` (byte-identical
+  to `println`/`fmt_int` under OUT_FD1; the 9 dispatch files call these so their output
+  is captured under OUT_RING).
+- `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
+  4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
+  evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE
+  load-bearing `feed_clip(dst, dst_cap, src, src_len, max_cols)` — paints a stored line
+  into a width-W column, color escapes verbatim (zero width), never severing a CSI /
+  UTF-8 glyph, suppressing `ESC[…K`, `dst_cap`-bounded. The painter (`feed_repaint`),
+  the dispatch-window capture (`tui_run_line`), and the confirm bracket
+  (`tui_confirm_begin`/`_end`, called from `gate.cyr`) live in `src/tui.cyr`. Replaces
+  0.9.0's DECSTBM scroll-region; the prerequisite for the file-tree pane + SIGWINCH.
 - `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
   (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
   `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
@@ -434,7 +467,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **199 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **337 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -462,7 +495,15 @@ bundle is DCE-unreachable).
   `arguments` reassembled, re-parsed through the same accessors); and **0.6.5's**
   capability-ladder group — the effect-state resolver (vendored seams full,
   hoosh/daimon absent unconfigured, t-ron degrades closed not absent), the
-  `cap_state_label` cases, and the full/fallback prose semantics. Passes on
+  `cap_state_label` cases, and the full/fallback prose semantics. The 0.7.0–0.9.1
+  groups extend it: **0.7.0** `test_roundlog` + `test_parallel` + `test_bounds_hardening`
+  (the agentic tool-round trace, the parallel snapshot copy, the untrusted-input clamp);
+  **0.8.x** `test_ui` + `test_diff` + `test_highlight` (the presentation surface, the
+  LCS diff core, the vyakarana highlighter); **0.9.0** `test_tui` (the composer line
+  editor + layout geometry + palette matchers); and **0.9.1** `test_feed` +
+  `test_feed_ring` + `test_capture` (the escape-aware clip — width/`dst_cap`/`ESC[K`/
+  UTF-8 — the ring seal/evict/flush machine, and the OUT_RING capture sink's
+  logical-line reconstruction + `oprintln`/`ofmt_int` byte-identity). Passes on
   `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.

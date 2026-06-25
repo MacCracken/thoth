@@ -170,8 +170,8 @@ fn _bind_role(st) {
 # mode (how it's reached) and the capability effect (what you get). I/O — the
 # pure accessors it composes are unit-tested; this renderer is not.
 fn cmd_seams() {
-    ui_emit(ROLE_ACCENT, "capability ladder - the AGNOS spine thoth drives:"); println("");
-    ui_emit(ROLE_FAINT, "  per seam: [binding mode] [capability effect] domain; then the live effect."); println("");
+    ui_emit(ROLE_ACCENT, "capability ladder - the AGNOS spine thoth drives:"); oprintln("");
+    ui_emit(ROLE_FAINT, "  per seam: [binding mode] [capability effect] domain; then the live effect."); oprintln("");
     var i = 0;
     while (i < SEAM_COUNT) {
         # binding row: name, binding mode, capability effect, domain.
@@ -182,25 +182,25 @@ fn cmd_seams() {
         emit("]  [");
         ui_emit(_cap_role(seam_cap_state(i)), cap_state_label(seam_cap_state(i)));
         emit("]  ");
-        ui_emit(ROLE_FAINT, seam_domain(i)); println("");
+        ui_emit(ROLE_FAINT, seam_domain(i)); oprintln("");
         # effect row: full delivers / fallback when not full.
         if (seam_cap_state(i) == CAP_FULL) {
             ui_emit(ROLE_FAINT, "      full:     ");
-            ui_emit(ROLE_GREEN, seam_cap_full(i)); println("");
+            ui_emit(ROLE_GREEN, seam_cap_full(i)); oprintln("");
         } else {
             ui_emit(ROLE_FAINT, "      now:      ");
-            ui_emit(ROLE_MUTED, seam_cap_fallback(i)); println("");
+            ui_emit(ROLE_MUTED, seam_cap_fallback(i)); oprintln("");
         }
         i = i + 1;
     }
-    println("");
+    oprintln("");
     if (seam_any_wired() == 0) {
-        ui_emit(ROLE_FAINT, "  every spine seam is absent. Nothing is faked."); println("");
+        ui_emit(ROLE_FAINT, "  every spine seam is absent. Nothing is faked."); oprintln("");
     } else {
-        ui_emit(ROLE_FAINT, "  remote seams ride sandhi; native seams are vendored dist bundles."); println("");
-        ui_emit(ROLE_FAINT, "  absent seams degrade honestly — never faked, never reimplemented."); println("");
-        ui_emit(ROLE_FAINT, "  security degrades CLOSED: absent t-ron is the fail-closed gate, never a silent allow."); println("");
+        ui_emit(ROLE_FAINT, "  remote seams ride sandhi; native seams are vendored dist bundles."); oprintln("");
+        ui_emit(ROLE_FAINT, "  absent seams degrade honestly — never faked, never reimplemented."); oprintln("");
+        ui_emit(ROLE_FAINT, "  security degrades CLOSED: absent t-ron is the fail-closed gate, never a silent allow."); oprintln("");
     }
-    ui_emit(ROLE_ACCENT_DIM, "  port the floor; never fork the spine."); println("");
+    ui_emit(ROLE_ACCENT_DIM, "  port the floor; never fork the spine."); oprintln("");
     return 0;
 }

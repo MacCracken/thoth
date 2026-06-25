@@ -149,12 +149,12 @@ fn persona_system_prompt() {
 
 # print_banner: the scribe greeting (sourced from the avatara persona). I/O.
 fn print_banner() {
-    println("");
+    oprintln("");
     emit("  ");
     ui_emit(ROLE_ACCENT, persona_name()); emit(", "); ui_emit(ROLE_ACCENT_DIM, persona_role());
-    emit(" - "); ui_emit(ROLE_ACCENT, "thoth 0.9.0"); println("");
-    emit("  "); ui_emit(ROLE_MUTED, persona_tagline()); println("");
-    emit("  "); ui_emit(ROLE_FAINT, "a sovereign agentic coding TUI (fermenting). /help for commands."); println("");
-    println("");
+    emit(" - "); ui_emit(ROLE_ACCENT, "thoth 0.9.1"); oprintln("");
+    emit("  "); ui_emit(ROLE_MUTED, persona_tagline()); oprintln("");
+    emit("  "); ui_emit(ROLE_FAINT, "a sovereign agentic coding TUI (fermenting). /help for commands."); oprintln("");
+    oprintln("");
     return 0;
 }

@@ -11,16 +11,67 @@ var _rl_buf[4096];
 var _rl_len = 0;
 var _rl_pos = 0;
 
-# emit: write a NUL-terminated string to stdout, no trailing newline.
+# --- the feed-capture output sink (M7 / 0.9.1) -------------------------------
+# The T2 feed is SELF-MANAGED (src/feed.cyr): dispatch output is captured into a
+# line ring instead of scrolling the terminal natively, so it can be repainted at
+# a new size (instant SIGWINCH, 0.9.2) or in a narrowed column (the file-tree
+# pane, 0.9.3). Capture is a module-global mode the TUI arms ONLY around the
+# dispatch() window:
+#   OUT_FD1  (default) — write straight to stdout: the REPL / piped / CI floor,
+#            byte-identical to the pre-0.9.1 binary (capture is NEVER armed here);
+#   OUT_RING — route writes into feed_write (inside the PT_RICH dispatch window).
+# Three writer classes reach fd 1: emit/emit_n here (ui_emit funnels through
+# them); the stdlib bypass println/fmt_int (shadowed as oprintln/ofmt_int below);
+# and the renderer's OWN chrome — which must NEVER be captured, so it writes
+# through emit_raw/emit_raw_n (always fd 1, blind to the mode).
+var OUT_FD1 = 0;
+var OUT_RING = 1;
+var _out_mode = 0;          # OUT_FD1 until the TUI arms capture around dispatch
+
+fn out_mode() { return _out_mode; }
+fn out_mode_set(m) { _out_mode = m; return 0; }
+
+# emit_raw / emit_raw_n: ALWAYS write to stdout, ignoring _out_mode. The TUI
+# chrome (status bar, composer, hint, feed paint, the tree) draws the terminal
+# directly and MUST bypass the capture branch — else feed paint would feed its
+# own bytes back into the ring (self-recursion) and the chrome would be captured
+# rather than shown.
+fn emit_raw(s) { syscall(SYS_WRITE, 1, s, strlen(s)); return 0; }
+fn emit_raw_n(ptr, n) { syscall(SYS_WRITE, 1, ptr, n); return 0; }
+
+# emit: write a NUL-terminated string to stdout (or the feed ring when capture is
+# armed), no trailing newline.
 fn emit(s) {
+    if (_out_mode == OUT_RING) { feed_write(s, strlen(s)); return 0; }
     syscall(SYS_WRITE, 1, s, strlen(s));
     return 0;
 }
 
-# emit_n: write n bytes from ptr to stdout.
+# emit_n: write n bytes from ptr to stdout (or the feed ring when capture is armed).
 fn emit_n(ptr, n) {
+    if (_out_mode == OUT_RING) { feed_write(ptr, n); return 0; }
     syscall(SYS_WRITE, 1, ptr, n);
     return 0;
+}
+
+# oprintln / ofmt_int: mode-aware shadows of stdlib println / fmt_int, which write
+# fd 1 DIRECTLY (bypassing emit). The dispatch tree calls these instead of the
+# stdlib twins so its output is captured under OUT_RING; under OUT_FD1 each is
+# byte-identical to its twin (oprintln -> println, ofmt_int -> fmt_int), so the
+# piped/CI floor is unchanged. feed_write is a forward reference (feed.cyr is
+# included later); Cyrius resolves it whole-unit.
+fn oprintln(s) {
+    if (_out_mode == OUT_RING) { feed_write(s, strlen(s)); feed_write("\n", 1); return 0; }
+    return println(s);
+}
+fn ofmt_int(n) {
+    if (_out_mode == OUT_RING) {
+        var b[24];
+        var len = fmt_int_buf(n, &b);
+        feed_write(&b, len);
+        return 0;
+    }
+    return fmt_int(n);
 }
 
 # read_line: read one line from stdin into buf (NUL-terminated, newline

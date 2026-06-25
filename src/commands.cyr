@@ -65,10 +65,10 @@ fn classify_input(line) {
 
 # _help_line: one help row — command token in accent, the padded description in
 # muted. c + rest reproduces the original line verbatim (byte-identical at T0).
-fn _help_line(c, rest) { ui_emit(ROLE_ACCENT, c); ui_emit(ROLE_MUTED, rest); println(""); return 0; }
+fn _help_line(c, rest) { ui_emit(ROLE_ACCENT, c); ui_emit(ROLE_MUTED, rest); oprintln(""); return 0; }
 
 fn cmd_help() {
-    ui_emit(ROLE_ACCENT, "thoth - a model-switching scribe. commands:"); println("");
+    ui_emit(ROLE_ACCENT, "thoth - a model-switching scribe. commands:"); oprintln("");
     _help_line("  /help", "              this help");
     _help_line("  /seams", "             capability ladder (spine seam status)");
     _help_line("  /state", "             session state");
@@ -108,51 +108,51 @@ fn _params_one(key, val) {
 }
 
 fn cmd_state() {
-    ui_emit(ROLE_ACCENT, "session:"); println("");
-    ui_label("  turns   : "); fmt_int(session_turns()); println("");
+    ui_emit(ROLE_ACCENT, "session:"); oprintln("");
+    ui_label("  turns   : "); ofmt_int(session_turns()); oprintln("");
     ui_label("  model   : ");
     var m = session_model();
     if (m == 0) { m = config_hoosh_model(); }
-    if (m == 0) { ui_emit(ROLE_FAINT, "(none set)"); println(""); }
-    else { ui_emit(ROLE_ACCENT, m); println(""); }
+    if (m == 0) { ui_emit(ROLE_FAINT, "(none set)"); oprintln(""); }
+    else { ui_emit(ROLE_ACCENT, m); oprintln(""); }
     ui_label("  hoosh   : ");
-    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [hoosh].url in thoth.cyml)"); println(""); }
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [hoosh].url in thoth.cyml)"); oprintln(""); }
     else {
         emit(config_hoosh_url());
-        if (config_hoosh_stream() == 1) { ui_emit(ROLE_MUTED, " (streaming)"); println(""); }
-        else { ui_emit(ROLE_MUTED, " (blocking)"); println(""); }
+        if (config_hoosh_stream() == 1) { ui_emit(ROLE_MUTED, " (streaming)"); oprintln(""); }
+        else { ui_emit(ROLE_MUTED, " (blocking)"); oprintln(""); }
     }
     ui_label("  context : ");
-    if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); println(""); }
-    else { emit("multi-turn, "); fmt_int(session_history_len()); ui_emit(ROLE_MUTED, " messages (/reset clears)"); println(""); }
+    if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); oprintln(""); }
+    else { emit("multi-turn, "); ofmt_int(session_history_len()); ui_emit(ROLE_MUTED, " messages (/reset clears)"); oprintln(""); }
     ui_label("  log     : ");
-    if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in thoth.cyml)"); println(""); }
+    if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in thoth.cyml)"); oprintln(""); }
     else {
         if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
-        ui_emit(ROLE_MUTED, " (structured driver events)"); println("");
+        ui_emit(ROLE_MUTED, " (structured driver events)"); oprintln("");
     }
     ui_label("  agent   : ");
     if (agent_enabled() == 1) {
         emit("agentic tool-calling on (daimon tools, t-ron gated, ");
         if (config_hoosh_parallel() == 1) { ui_emit(ROLE_GREEN, "parallel"); } else { emit("serial"); }
-        println(" calls)");
+        oprintln(" calls)");
     }
-    elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_MUTED, "plain turns (no daimon seam; /tools needs [daimon].url)"); println(""); }
-    else { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); println(""); }
+    elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_MUTED, "plain turns (no daimon seam; /tools needs [daimon].url)"); oprintln(""); }
+    else { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); oprintln(""); }
     ui_label("  daimon  : ");
-    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in thoth.cyml)"); println(""); }
-    else { println(config_daimon_url()); }
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in thoth.cyml)"); oprintln(""); }
+    else { oprintln(config_daimon_url()); }
     ui_label("  t-ron   : ");
-    if (gate_active() == 0) { ui_emit(ROLE_FAINT, "absent (fail-closed confirm gate; set [tron].policy in thoth.cyml)"); println(""); }
-    else { println(config_tron_policy()); }
+    if (gate_active() == 0) { ui_emit(ROLE_FAINT, "absent (fail-closed confirm gate; set [tron].policy in thoth.cyml)"); oprintln(""); }
+    else { oprintln(config_tron_policy()); }
     ui_label("  spine   : ");
-    if (seam_any_wired() == 0) { ui_emit(ROLE_FAINT, "all seams absent (fermenting)"); println(""); }
-    else { ui_emit(ROLE_MUTED, "see /seams"); println(""); }
+    if (seam_any_wired() == 0) { ui_emit(ROLE_FAINT, "all seams absent (fermenting)"); oprintln(""); }
+    else { ui_emit(ROLE_MUTED, "see /seams"); oprintln(""); }
     ui_label("  surface : ");
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
-    println("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.9.0"); println("");
+    oprintln("");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.9.1"); oprintln("");
     return 0;
 }
 
@@ -162,21 +162,21 @@ fn cmd_model(line) {
         emit("model: ");
         var m = session_model();
         if (m == 0) { m = config_hoosh_model(); }
-        if (m == 0) { println("(none set - hoosh routes by its own provider config)"); }
-        else { println(m); }
+        if (m == 0) { oprintln("(none set - hoosh routes by its own provider config)"); }
+        else { oprintln(m); }
         if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-            println("hoosh seam absent - set [hoosh].url in thoth.cyml to enable switching.");
+            oprintln("hoosh seam absent - set [hoosh].url in thoth.cyml to enable switching.");
         }
         return 0;
     }
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        emit("cannot switch to '"); emit(arg); println("': hoosh seam is absent.");
-        println("set [hoosh].url in thoth.cyml; mid-session switching routes through hoosh. see /seams.");
+        emit("cannot switch to '"); emit(arg); oprintln("': hoosh seam is absent.");
+        oprintln("set [hoosh].url in thoth.cyml; mid-session switching routes through hoosh. see /seams.");
         return 0;
     }
     session_set_model_copy(arg);
-    emit("model -> "); println(arg);
-    emit("  next turn routes to hoosh as '"); emit(arg); println("' (mid-session switch).");
+    emit("model -> "); oprintln(arg);
+    emit("  next turn routes to hoosh as '"); emit(arg); oprintln("' (mid-session switch).");
     log_begin("model_switch"); log_kv_str("model", arg); log_commit(SK_INFO);
     return 0;
 }
@@ -187,9 +187,9 @@ fn cmd_model(line) {
 # bound; absent, it degrades honestly (no endpoint, no catalog claim).
 fn cmd_models(line) {
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        println("hoosh seam absent - no model gateway is wired.");
-        println("the model catalog is hoosh's domain (multi-provider routing).");
-        println("set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("hoosh seam absent - no model gateway is wired.");
+        oprintln("the model catalog is hoosh's domain (multi-provider routing).");
+        oprintln("set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
     # Bare /models lists the providers hoosh routes to; /models <provider> drills
@@ -218,18 +218,18 @@ fn _read_highlight(path, buf, n) {
 
 fn cmd_read(line) {
     var path = arg_after(line);
-    if (path == 0) { println("usage: /read <file>"); return 0; }
-    if (file_exists(path) == 0) { emit("no such file: "); println(path); return 0; }
+    if (path == 0) { oprintln("usage: /read <file>"); return 0; }
+    if (file_exists(path) == 0) { emit("no such file: "); oprintln(path); return 0; }
     if (_read_buf == 0) { _read_buf = alloc(READ_BUF_CAP); }
     var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
-    if (n < 0) { emit("read failed: "); println(path); return 0; }
+    if (n < 0) { emit("read failed: "); oprintln(path); return 0; }
     store8(_read_buf + n, 0);
     ui_emit(ROLE_FAINT, "--- "); ui_emit(ROLE_BLUE, path); ui_emit(ROLE_FAINT, " (");
-    emit(ui_sgr(ROLE_FAINT)); fmt_int(n); emit(ui_reset());
-    ui_emit(ROLE_FAINT, " bytes) ---"); println("");
+    emit(ui_sgr(ROLE_FAINT)); ofmt_int(n); emit(ui_reset());
+    ui_emit(ROLE_FAINT, " bytes) ---"); oprintln("");
     if (_read_highlight(path, _read_buf, n) == 0) { emit_n(_read_buf, n); }
-    if (n > 0) { if (load8(_read_buf + n - 1) != 10) { println(""); } }
-    ui_emit(ROLE_FAINT, "--- end ---"); println("");
+    if (n > 0) { if (load8(_read_buf + n - 1) != 10) { oprintln(""); } }
+    ui_emit(ROLE_FAINT, "--- end ---"); oprintln("");
     return 0;
 }
 
@@ -245,7 +245,7 @@ var WRITE_OLD_CAP = 65536;   # old-file snapshot for the diff (capped; larger ->
 
 fn cmd_write(line) {
     var rest = arg_after(line);
-    if (rest == 0) { println("usage: /write <path> <content>"); return 0; }
+    if (rest == 0) { oprintln("usage: /write <path> <content>"); return 0; }
     if (_write_path == 0) { _write_path = alloc(WRITE_BUF_CAP); }
     if (_write_out == 0) { _write_out = alloc(WRITE_BUF_CAP); }
     var i = 0;
@@ -260,11 +260,11 @@ fn cmd_write(line) {
     var j = i;
     while (load8(rest + j) == 32) { j = j + 1; }
     if (load8(rest + j) != 0) { content = rest + j; }
-    if (content == 0) { println("usage: /write <path> <content>"); return 0; }
-    ui_emit(ROLE_FAINT, "propose write -> "); ui_emit(ROLE_BLUE, _write_path); println("");
+    if (content == 0) { oprintln("usage: /write <path> <content>"); return 0; }
+    ui_emit(ROLE_FAINT, "propose write -> "); ui_emit(ROLE_BLUE, _write_path); oprintln("");
     var wparams = _params_one("path", _write_path);
     if (gate_authorize("thoth_write", wparams, "write to", _write_path) == 0) {
-        ui_emit(ROLE_RED, "  denied. nothing written."); println("");
+        ui_emit(ROLE_RED, "  denied. nothing written."); oprintln("");
         return 0;
     }
     var clen = strlen(content);
@@ -282,38 +282,38 @@ fn cmd_write(line) {
         elif (rn > 0) { oldlen = rn; }
     }
     if (old_toobig == 1) {
-        emit("  "); ui_emit(ROLE_FAINT, "(old file > 64KB — diff skipped)"); println("");
+        emit("  "); ui_emit(ROLE_FAINT, "(old file > 64KB — diff skipped)"); oprintln("");
     } else {
         diff_render(_write_path, _write_old, oldlen, _write_out, clen + 1);
     }
     var rc = file_write_all(_write_path, _write_out, clen + 1);
-    if (rc < 0) { emit("write failed: "); println(_write_path); return 0; }
-    emit("wrote "); fmt_int(clen + 1); emit(" bytes (+newline) -> "); println(_write_path);
+    if (rc < 0) { emit("write failed: "); oprintln(_write_path); return 0; }
+    emit("wrote "); ofmt_int(clen + 1); emit(" bytes (+newline) -> "); oprintln(_write_path);
     return 0;
 }
 
 fn cmd_run(line) {
     var cmdline = arg_after(line);
-    if (cmdline == 0) { println("usage: /run <shell command>"); return 0; }
-    println("this /run is a local built-in shell escape (substrate), not the MCP tool spine.");
-    emit("  proposed: "); println(cmdline);
+    if (cmdline == 0) { oprintln("usage: /run <shell command>"); return 0; }
+    oprintln("this /run is a local built-in shell escape (substrate), not the MCP tool spine.");
+    emit("  proposed: "); oprintln(cmdline);
     var rparams = _params_one("cmd", cmdline);
     if (gate_authorize("thoth_run", rparams, "run", cmdline) == 0) {
-        println("  denied. nothing ran.");
+        oprintln("  denied. nothing ran.");
         return 0;
     }
     var rc = run_shell(cmdline);
-    if (rc == (0 - 1)) { println("  (failed to spawn /bin/sh)"); return 0; }
-    emit("  exit "); fmt_int(rc); println("");
+    if (rc == (0 - 1)) { oprintln("  (failed to spawn /bin/sh)"); return 0; }
+    emit("  exit "); ofmt_int(rc); oprintln("");
     return 0;
 }
 
 # cmd_tools: list the MCP tools daimon hosts. The daimon seam must be bound.
 fn cmd_tools() {
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
-        println("daimon seam absent - no MCP tool host is wired.");
-        println("tool listing/execution is daimon's domain (the MCP host registry).");
-        println("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("daimon seam absent - no MCP tool host is wired.");
+        oprintln("tool listing/execution is daimon's domain (the MCP host registry).");
+        oprintln("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
     return daimon_list_tools();
@@ -326,10 +326,10 @@ var CALL_NAME_CAP = 256;
 
 fn cmd_call(line) {
     var rest = arg_after(line);
-    if (rest == 0) { println("usage: /call <tool> [json-arguments]"); return 0; }
+    if (rest == 0) { oprintln("usage: /call <tool> [json-arguments]"); return 0; }
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
-        println("daimon seam absent - no MCP tool host is wired.");
-        println("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("daimon seam absent - no MCP tool host is wired.");
+        oprintln("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
     if (_call_name == 0) { _call_name = alloc(CALL_NAME_CAP); }
@@ -347,7 +347,7 @@ fn cmd_call(line) {
     var gp = args;
     if (gp == 0) { gp = "{}"; }
     if (gate_authorize(_call_name, gp, "call tool", _call_name) == 0) {
-        println("  denied. no request sent.");
+        oprintln("  denied. no request sent.");
         return 0;
     }
     return daimon_call(_call_name, args);
@@ -360,8 +360,8 @@ fn cmd_reset() {
     var n = session_history_len();
     session_history_clear();
     roundlog_reset();
-    if (n == 0) { println("conversation already empty — nothing to clear."); }
-    else { emit("conversation cleared ("); fmt_int(n); println(" messages dropped). fresh context."); }
+    if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
+    else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }
     return 0;
 }
 
@@ -370,9 +370,9 @@ fn cmd_reset() {
 # degraded honestly. With it bound, gate.cyr renders t-ron's query API.
 fn cmd_audit() {
     if (gate_active() == 0) {
-        println("t-ron seam absent - no audit chain.");
-        println("the fail-closed confirm gate keeps no cryptographic log; the libro");
-        println("audit chain is t-ron's domain. set [tron].policy in thoth.cyml.");
+        oprintln("t-ron seam absent - no audit chain.");
+        oprintln("the fail-closed confirm gate keeps no cryptographic log; the libro");
+        oprintln("audit chain is t-ron's domain. set [tron].policy in thoth.cyml.");
         roundlog_report();
         return 0;
     }
@@ -383,11 +383,11 @@ fn cmd_audit() {
 
 fn cmd_task(line) {
     session_bump_turn();
-    emit("task: "); println(line);
+    emit("task: "); oprintln(line);
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        println("  hoosh seam absent - no model backend is wired.");
-        println("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
-        println("  elsewhere). set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("  hoosh seam absent - no model backend is wired.");
+        oprintln("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
+        oprintln("  elsewhere). set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
         return 0;
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop
@@ -413,7 +413,7 @@ fn dispatch(line) {
     if (c == CMD_CALL) { cmd_call(line); return 1; }
     if (c == CMD_AUDIT) { cmd_audit(); return 1; }
     if (c == CMD_RESET) { cmd_reset(); return 1; }
-    if (c == CMD_UNKNOWN_SLASH) { println("unknown command (try /help)"); return 1; }
+    if (c == CMD_UNKNOWN_SLASH) { oprintln("unknown command (try /help)"); return 1; }
     cmd_task(line);
     return 1;
 }

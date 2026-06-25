@@ -555,7 +555,7 @@ fn _agent_run_calls_par(tcs, nc) {
             _par_cstr_copy(_par_args + k * PAR_ARGS_CAP, PAR_ARGS_CAP, ga);
             _par_cstr_copy(_par_id + k * PAR_ID_CAP, PAR_ID_CAP, id);
             ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
-            if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } println("");
+            if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } oprintln("");
             var allowed = 0;
             var kind = RL_DENIED;
             store8(_par_over + k, 0);
@@ -613,7 +613,7 @@ fn _agent_run_calls_par(tcs, nc) {
                     var text = daimon_extract_text(_par_out + k * PAR_OUT_CAP, rlen);
                     if (text != 0) { res = str_cstr(text); rl_ok = 1; }
                 }
-                ui_emit(ROLE_FAINT, "  result: "); println(res);
+                ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
             } else {
                 res = "denied by authorization policy";
                 if (load8(_par_over + k) == 1) { res = "(tool arguments too large; call refused — split into smaller calls)"; }
@@ -648,7 +648,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         var ar = agent_tc_args(tcs, ci);
         var id = agent_tc_id(tcs, ci);
         ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
-        if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } println("");
+        if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } oprintln("");
         var gp = ar; if (gp == 0) { gp = "{}"; }
         var res = 0;
         var rl_kind = RL_DENIED;
@@ -660,7 +660,7 @@ fn _agent_run_calls_serial(tcs, nc) {
             res = daimon_invoke(nm, ar);
             if (res == 0) { res = "(tool returned no result)"; rl_ok = 0; }
             else { rl_ok = 1; }
-            ui_emit(ROLE_FAINT, "  result: "); println(res);
+            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
         } else {
             res = "denied by authorization policy";
         }
@@ -732,14 +732,14 @@ fn _agent_iter_block(model, sys, tools_buf, tools_len) {
     var r = sandhi_http_post(_hoosh_endpoint_url(), h, _agent_req, len);
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var en = sandhi_err_kind_name(sandhi_http_err_kind(r));
-        emit("  hoosh transport error: "); println(en);
+        emit("  hoosh transport error: "); oprintln(en);
         _agent_round_kind = 2; return 0;
     }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
     if ((status < 200) || (status >= 300)) {
-        emit("  hoosh returned HTTP "); fmt_int(status); println("");
+        emit("  hoosh returned HTTP "); ofmt_int(status); oprintln("");
         var em = hoosh_extract_error(body, blen);
         if (em != 0) { emit("  "); _hoosh_print_str(em); }
         _agent_round_kind = 3; _agent_round_status = status; return 0;
@@ -771,16 +771,16 @@ fn _agent_iter_stream(model, sys, tools_buf, tools_len) {
     if (_agent_cell == 0) { _agent_cell = alloc(8); }
     store64(_agent_cell, 0);
     var sr = sandhi_http_stream(_hoosh_endpoint_url(), "POST", h, _agent_req, len, &_agent_sse_cb, _agent_cell);
-    if (_hoosh_acc_len > 0) { println(""); }   # finish the streamed line
+    if (_hoosh_acc_len > 0) { oprintln(""); }   # finish the streamed line
     if (sandhi_stream_err(sr) != SANDHI_OK) {
         var en = sandhi_err_kind_name(sandhi_stream_err(sr));
-        emit("  hoosh stream error: "); println(en);
+        emit("  hoosh stream error: "); oprintln(en);
         _agent_round_kind = 2; return 0;
     }
     var status = sandhi_stream_status(sr);
     if ((status < 200) || (status >= 300)) {
-        emit("  hoosh returned HTTP "); fmt_int(status); println("");
-        println("  (error body not surfaced in stream mode; set [hoosh].stream=false to see it)");
+        emit("  hoosh returned HTTP "); ofmt_int(status); oprintln("");
+        oprintln("  (error body not surfaced in stream mode; set [hoosh].stream=false to see it)");
         _agent_round_kind = 3; _agent_round_status = status; return 0;
     }
     if (_ag_max > 0) {
@@ -825,7 +825,7 @@ fn agent_turn(prompt) {
 
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", agentic");
     if (want_stream == 1) { ui_emit(ROLE_FAINT, ", stream"); }
-    ui_emit(ROLE_FAINT, ", "); fmt_int(tools_len); ui_emit(ROLE_FAINT, " tool-bytes) "); println(_hoosh_endpoint_url());
+    ui_emit(ROLE_FAINT, ", "); ofmt_int(tools_len); ui_emit(ROLE_FAINT, " tool-bytes) "); oprintln(_hoosh_endpoint_url());
 
     var iter = 0;
     var done = 0;
@@ -854,14 +854,14 @@ fn agent_turn(prompt) {
             _agent_run_calls(_agent_round_val, _agent_round_n);
         } else {
             if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); }
-            else { println("  hoosh: response had neither tool calls nor content."); session_history_pop_last(); }
+            else { oprintln("  hoosh: response had neither tool calls nor content."); session_history_pop_last(); }
             done = 1;
             log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "ok"); log_commit(SK_INFO);
         }
         iter = iter + 1;
     }
     if (done == 0) {
-        println("  agentic loop hit the iteration cap (no final answer).");
+        oprintln("  agentic loop hit the iteration cap (no final answer).");
         session_history_pop_last();
         log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "max_iters"); log_commit(SK_WARN);
     }

@@ -137,7 +137,7 @@ fn _diff_emit_line(role, gutter, lineno, body_buf, off, len, lang) {
         if (lineno < 10) { pad = pad + 1; }
         emit(ui_sgr(ROLE_FAINT));
         while (pad > 0) { emit(" "); pad = pad - 1; }
-        fmt_int(lineno);
+        ofmt_int(lineno);
         emit(rst);
     } else {
         emit(ui_sgr(ROLE_FAINT)); emit("    "); emit(rst);
@@ -152,7 +152,7 @@ fn _diff_emit_line(role, gutter, lineno, body_buf, off, len, lang) {
     elif (plain == 0) { emit(ui_sgr(role)); emit_n(body_buf + off, rl); emit(rst); }
     else { emit_n(body_buf + off, rl); }
     if (has_bg == 1) { emit(ui_eol()); emit(ui_reset()); }
-    println("");
+    oprintln("");
     return 0;
 }
 
@@ -165,8 +165,8 @@ fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render, lang) {
     var nn = _diff_split(nb, nl_bytes, _diff_nl, DIFF_MAX_LINES);
     if ((on >= DIFF_MAX_LINES) || (nn >= DIFF_MAX_LINES)) {
         if (render == 1) {
-            emit("  "); ui_emit(ROLE_FAINT, "(diff omitted: over "); fmt_int(DIFF_MAX_LINES);
-            ui_emit(ROLE_FAINT, " lines)"); println("");
+            emit("  "); ui_emit(ROLE_FAINT, "(diff omitted: over "); ofmt_int(DIFF_MAX_LINES);
+            ui_emit(ROLE_FAINT, " lines)"); oprintln("");
         }
         return 0 - 1;
     }
@@ -233,7 +233,7 @@ fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render, lang) {
 fn diff_render(path, ob, ol_bytes, nb, nl_bytes) {
     var lang = 0;                                                  # grammar for body highlighting
     if (ui_tier() != PT_PLAIN) { lang = detect_language(path); }   # 0 if unknown -> plain bodies
-    emit("  "); ui_emit(ROLE_BLUE, path); println("");
+    emit("  "); ui_emit(ROLE_BLUE, path); oprintln("");
     var packed = _diff_run(path, ob, ol_bytes, nb, nl_bytes, 0, lang);   # count first for the header
     if (packed == (0 - 1)) {
         _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1, lang);           # prints the "too big" note
@@ -242,10 +242,10 @@ fn diff_render(path, ob, ol_bytes, nb, nl_bytes) {
     var adds = packed / 1000000;
     var dels = packed - adds * 1000000;
     emit("  ");
-    emit(ui_sgr(ROLE_GREEN)); emit("+"); fmt_int(adds); emit(ui_reset());
+    emit(ui_sgr(ROLE_GREEN)); emit("+"); ofmt_int(adds); emit(ui_reset());
     emit(" ");
-    emit(ui_sgr(ROLE_RED)); emit("-"); fmt_int(dels); emit(ui_reset());
-    println("");
+    emit(ui_sgr(ROLE_RED)); emit("-"); ofmt_int(dels); emit(ui_reset());
+    oprintln("");
     _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1, lang);
     return 0;
 }

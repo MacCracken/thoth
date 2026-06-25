@@ -2,6 +2,74 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.1] - 2026-06-24
+
+**The self-managed feed-redraw model (M7).** The T2 TUI's feed stops relying on the
+DECSTBM terminal-scroll trick and becomes thoth-owned: dispatch output is captured
+into a line ring (`src/feed.cyr`) and the visible window is PAINTED each frame. This
+is the foundational change the rest of M7 needs — a togglable left-column file-tree
+pane (0.9.3) and instant SIGWINCH resize (0.9.2) are only possible once thoth owns the
+feed content (DECSTBM sets only top/bottom margins, so terminal-native scroll always
+spans the full width). The capture mechanism is a **surface-routed output sink** — no
+fd-1 redirection, which would have forked the floor (AGNOS has no `sys_dup2`) and
+broken the interactive gate confirm — so the REPL / piped / CI floor stays
+byte-identical (a golden `/help`+`/state`+`/seams` diff is unchanged across the
+206-site rename) and the t-ron confirm stays answerable. Adversarially reviewed
+pre-cut (5 lenses, every finding verified against the code): zero
+correctness/crash/floor/security findings. 337 unit assertions (+42). Pin unchanged
+(6.2.40).
+
+### Added
+- **`src/feed.cyr` — the self-managed feed ring + escape-aware clip.** A ring of 2048
+  lines × 2 KiB (one 4 MiB bump alloc) capturing dispatch output, sealed per newline
+  (the `\n` not stored — the painter supplies row breaks), evicting the oldest in O(1)
+  when full. The load-bearing PURE primitive is
+  `feed_clip(dst, dst_cap, src, src_len, max_cols)`: it paints a stored line into a
+  width-W column, passing ANSI color escapes through verbatim (zero width), never
+  severing a CSI or a UTF-8 glyph, **suppressing `ESC[…K`** (which would erase to the
+  physical EOL and scribble a neighbour column), appending a defensive reset if a
+  color span is left open at the clip point, and never writing past `dst_cap`.
+  Store-time truncation is escape-boundary-aware (a slot never ends mid-escape).
+  `test_feed` / `test_feed_ring` (+31): the clip width/escape/`dst_cap`/`ESC[K`/UTF-8
+  cases and the ring seal/evict/flush machine.
+- **The output-capture sink** (`src/util.cyr`): `_out_mode` (OUT_FD1 default /
+  OUT_RING), `emit`/`emit_n` gain a one-line branch routing to `feed_write` when
+  capture is armed, `emit_raw`/`emit_raw_n` ALWAYS reach fd 1 (the chrome + painter
+  use these, structurally immune to OUT_RING self-recursion), and `oprintln`/`ofmt_int`
+  shadow the stdlib `println`/`fmt_int` (which bypass `emit` and write fd 1 directly) —
+  byte-identical to their twins under OUT_FD1, captured under OUT_RING. `test_capture`
+  (+11): mixed-call logical-line reconstruction + shadow byte-identity (incl. zero and
+  negatives).
+- **The self-managed painter** (`src/tui.cyr`): `feed_repaint` paints the newest feed
+  lines into the feed band each frame (via `emit_raw`, so it is safe even while capture
+  is armed); `tui_run_line` arms capture around the dispatch window, echoes the
+  submitted command immediately, and repaints on return; the DECSTBM scroll region is
+  gone. A welcome line seeds the feed at launch.
+
+### Changed
+- **The dispatch tree routes through the capture sink** — a mechanical rename of
+  `println`/`fmt_int` to the mode-aware `oprintln`/`ofmt_int` across the 9 dispatch
+  files (206 sites). Verified overload-safe (thoth source carries no `: i64`
+  annotations, so cyrius's `println(i64)→println_int` overload can't fire) and
+  byte-identical on the floor (the golden diff is unchanged).
+- **The t-ron gate confirm** (`src/gate.cyr`) brackets back to the live screen when
+  capture is armed (`tui_confirm_begin`/`tui_confirm_end`): it seals + repaints the
+  dispatch output so far (so the user sees e.g. the `/write` diff), then drops to
+  OUT_FD1 with the cursor on the composer row so the prompt and its cooked y/N echo are
+  VISIBLE rather than buried in the ring, then resumes capture. The REPL/piped path
+  (OUT_FD1) skips the bracket entirely — fail-closed semantics and byte output
+  unchanged (verified: piped `/write` and `/run` deny/allow paths intact).
+
+### Known limitations (→ 0.9.2 / 0.9.3)
+- **Streamed SSE output is not painted incrementally** in the TUI — it is captured and
+  appears when the turn completes (the line REPL still streams live). Incremental paint
+  lands with the spinner in 0.9.2 (both ride hoosh's per-chunk callback).
+- **Instant SIGWINCH resize** and the **working spinner** are 0.9.2; the **togglable
+  file-tree pane** is 0.9.3 — the self-managed feed is their prerequisite, now in place.
+- **No scrollback-scroll keys yet** — the feed pins to the newest screenful (the ring
+  retains 2048 lines for when scroll keys land). Diff-row background tint covers the
+  text width, not the full row, in the captured feed (`ESC[K` is suppressed).
+
 ## [0.9.0] - 2026-06-24
 
 **The T2 rich-TUI front-end (M7).** thoth gains an interactive alt-screen TUI — a

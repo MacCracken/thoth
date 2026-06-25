@@ -1,8 +1,10 @@
-# thoth — the T2 rich-TUI front-end (M7 / 0.9.0, in progress).
+# thoth — the T2 rich-TUI front-end (M7; landed 0.9.0, self-managed feed 0.9.1).
 #
 # The alt-screen, raw-mode interactive layout: a pinned status bar (row 1), a
-# scrolling feed (the conversation/command output, in a DECSTBM scroll region), and
-# a raw-mode composer at the bottom. It is an ALTERNATIVE front-end to repl_loop(),
+# SELF-MANAGED feed (0.9.1: dispatch output is captured into the src/feed.cyr ring
+# and painted here each frame — replacing 0.9.0's DECSTBM scroll-region trick, the
+# prerequisite for the file-tree pane + instant SIGWINCH), and a raw-mode composer
+# at the bottom. It is an ALTERNATIVE front-end to repl_loop(),
 # selected only when the presentation tier is T2 (PT_RICH) on a real TTY; everywhere
 # else the line-mode REPL stands in unchanged — degrade closed, port the floor.
 # Built on the vendored darshana substrate (tty_raw/alt/move/winsize/...).
@@ -285,8 +287,62 @@ fn tui_draw_composer() {
     return 0;
 }
 
-# tui_relayout: re-read the terminal size, (re)set the scroll region for the feed,
-# and redraw the status bar + composer. Called at start and whenever size changes.
+# --- the self-managed feed painter (0.9.1) --------------------------------
+# 0.9.0 scrolled command output natively in a DECSTBM region. 0.9.1 OWNS the
+# feed: dispatch output is captured into the ring (src/feed.cyr) and PAINTED here
+# each frame. This is what makes the file-tree pane (0.9.3, a narrower feed
+# column) and instant SIGWINCH (0.9.2, a pure recompute+repaint) possible.
+var _paint_buf = 0;
+var PAINT_CAP = 2112;        # FEED_LINE_CAP (2048) + headroom for clip's defensive reset
+
+# feed_repaint: paint the newest feed lines into rows [feed_top..feed_bot], each
+# clipped to the terminal width (the 0.9.3 pane will narrow this). Uses emit_raw
+# (NOT emit): it can run while capture is armed (the confirm bracket) and must
+# reach the SCREEN, never the ring it is painting FROM. tty_clear_to_eol wipes any
+# remnant of a longer previous frame on each row.
+fn feed_repaint() {
+    if (_paint_buf == 0) { _paint_buf = alloc(PAINT_CAP); }
+    var top = tui_feed_top(_tui_show_status);
+    var bot = tui_feed_bot(_tui_rows);
+    if (bot < top) { return 0; }
+    var rows = bot - top + 1;
+    var total = feed_count();
+    var first = 0;
+    if (total > rows) { first = total - rows; }   # pin to the newest `rows` lines
+    var i = 0;
+    while (i < rows) {
+        tty_move(top + i, 1);
+        var li = first + i;
+        if (li < total) {
+            var w = feed_clip(_paint_buf, PAINT_CAP, feed_line_ptr(li), feed_line_len(li), _tui_cols);
+            if (w > 0) { emit_raw_n(_paint_buf, w); }
+        }
+        tty_clear_to_eol();
+        i = i + 1;
+    }
+    return 0;
+}
+
+# tui_confirm_begin / tui_confirm_end: bracket an interactive gate confirm
+# (src/gate.cyr) running INSIDE the captured dispatch window. begin seals + paints
+# the dispatch output so far (so the user sees the /write diff etc.), then drops to
+# OUT_FD1 with the cursor on the composer row, so the confirm prompt and its cooked
+# y/n echo go LIVE to the screen instead of into the (invisible) ring; end resumes
+# capture for the remainder of dispatch. The REPL path never calls these (capture
+# isn't armed there) — the confirm stays byte-identical off the TUI.
+fn tui_confirm_begin() {
+    feed_flush_pending();
+    feed_repaint();
+    out_mode_set(OUT_FD1);
+    tty_move(tui_composer_row(_tui_rows), 1);
+    tty_clear_to_eol();
+    return 0;
+}
+fn tui_confirm_end() { out_mode_set(OUT_RING); return 0; }
+
+# tui_relayout: re-read the terminal size and repaint the whole frame (status bar,
+# feed, hint, composer). No scroll region — the feed is self-managed now. The
+# composer is drawn LAST so the cursor parks at the edit position.
 fn tui_relayout() {
     var rr[8];
     var cc[8];
@@ -295,24 +351,28 @@ fn tui_relayout() {
         if (load64(&rr) > 4) { _tui_rows = load64(&rr); }
         if (load64(&cc) > 0) { _tui_cols = load64(&cc); }
     }
-    _tui_scroll_region(tui_feed_top(_tui_show_status), tui_feed_bot(_tui_rows));
     tui_draw_status();
+    feed_repaint();
     tui_draw_hint();
     tui_draw_composer();
     return 0;
 }
 
-# tui_run_line: submit `line` — echo it into the feed, then dispatch it in COOKED
-# mode (so gate confirms via read_line work), with output scrolling in the feed
-# region. Returns dispatch's keep-going flag (0 = quit).
+# tui_run_line: submit `line` — echo it into the feed, then dispatch it with output
+# CAPTURED into the ring (OUT_RING) and dispatched in COOKED mode (so the gate
+# confirm's read_line works; the confirm itself brackets back to the screen).
+# On return the feed is repainted. Returns dispatch's keep-going flag (0 = quit).
 fn tui_run_line(line) {
-    var feedrow = tui_feed_bot(_tui_rows);
-    tty_move(feedrow, 1);
-    emit("\n");                                  # advance into / scroll the feed
-    ui_emit(ROLE_ACCENT, "{(o> "); println(line);   # echo the submitted command
+    out_mode_set(OUT_RING);                      # capture dispatch output into the feed ring
+    ui_emit(ROLE_ACCENT, "{(o> "); emit(line);   # echo the submitted command (captured)
+    feed_flush_pending();                        # seal the echo as its own feed line
+    feed_repaint();                              # show the echo IMMEDIATELY (before a slow turn)
     tty_cooked();                                # canonical mode for read_line-based confirms
     var keep = dispatch(line);
+    out_mode_set(OUT_FD1);                        # stop capturing before any chrome paints
     if (tty_raw(0) < 0) { return 0; }            # couldn't re-enter raw -> end the session cleanly
+    feed_flush_pending();                        # seal a trailing un-newlined dispatch line
+    feed_repaint();                              # paint the captured output
     return keep;
 }
 
@@ -331,13 +391,18 @@ fn tui_loop() {
     tty_alt_enter();
     tty_clear();
     led_reset();
+    feed_init();                                  # 0.9.1: the self-managed feed ring
+    out_mode_set(OUT_RING);                        # seed a welcome line into the feed
+    ui_emit(ROLE_FAINT, "thoth ready — type a task, or /help. Ctrl-X exits.");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
     _tui_running = 1;
     tui_relayout();
     while (_tui_running == 1) {
         var key = tui_read_key();
         if (key == KEY_TOGGLE_STATUS) {
             if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
-            tty_clear();           # the scroll region changes; repaint cleanly
+            tty_clear();           # the feed band moves; full repaint
             tui_relayout();
         } else {
             var act = led_feed(key, _tui_key_ch);

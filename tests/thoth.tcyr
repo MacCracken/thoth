@@ -11,6 +11,7 @@ include "src/vendor/vyakarana.cyr"
 include "src/vendor/darshana.cyr"
 include "src/util.cyr"
 include "src/ui.cyr"
+include "src/feed.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -810,6 +811,128 @@ fn test_tui() {
     return 0;
 }
 
+# Feed escape-aware clip (0.9.1): paint a stored line into a width-W column
+# without severing a CSI / UTF-8 glyph, suppressing ESC[K, never overrunning
+# dst_cap, and counting color escapes as zero width. Pure — the load-bearing
+# primitive for the self-managed feed (and the 0.9.3 left-column pane).
+fn test_feed() {
+    test_group("feed escape-aware clip (feed.cyr)");
+    feed_init();
+    var dst[512];
+    var w = feed_clip(&dst, 512, "hello", 5, 3);
+    store8(&dst + w, 0);
+    assert(streq(&dst, "hel"), "clip 'hello' to 3 cols -> 'hel'");
+    assert_eq(w, 3, "wrote 3 bytes for 3 ASCII cols");
+    var w0 = feed_clip(&dst, 512, "hi", 2, 80);
+    store8(&dst + w0, 0);
+    assert(streq(&dst, "hi"), "short line copied whole under a wide column");
+    # visible width counts glyphs, never the escapes
+    assert_eq(feed_visible_cols("\x1b[33mAB\x1b[0m", 11), 2, "visible cols counts glyphs not escapes");
+    assert_eq(feed_visible_cols("plain", 5), 5, "visible cols of plain text");
+    # a clipped color span keeps its opening escape + the glyph + a closing reset
+    var w1 = feed_clip(&dst, 512, "\x1b[33mAB\x1b[0m", 11, 1);
+    assert_eq(w1, 10, "color clip: open escape (5) + 'A' (1) + reset (4)");
+    assert_eq(load8(&dst), 27, "clipped row begins with ESC (color preserved)");
+    assert_eq(load8(&dst + 5), 65, "the single visible glyph is 'A'");
+    assert_eq(load8(&dst + 6), 27, "trailing reset escape follows the glyph");
+    # dst_cap is a hard ceiling even with a huge max_cols (no heap overrun)
+    var w2 = feed_clip(&dst, 4, "hello", 5, 100);
+    assert_eq(w2, 4, "dst_cap=4 clamps output to 4 bytes");
+    # ESC[K is dropped (it would erase to the physical eol, scribbling a neighbour)
+    var w3 = feed_clip(&dst, 512, "A\x1b[KB", 5, 80);
+    store8(&dst + w3, 0);
+    assert(streq(&dst, "AB"), "ESC[K dropped from the painted row");
+    assert_eq(w3, 2, "ESC[K contributes zero bytes");
+    # only a real CSI ESC[...K is suppressed; a 2-byte ESC-K (which untrusted model
+    # output could contain) is preserved verbatim, not dropped
+    var w3b = feed_clip(&dst, 512, "A\x1bKB", 4, 80);
+    assert_eq(w3b, 4, "2-byte ESC-K preserved (only CSI ESC[...K is suppressed)");
+    # a color escape after the clip point is copied WHOLE, never severed mid-CSI
+    var w4 = feed_clip(&dst, 512, "X\x1b[31mY", 7, 1);
+    assert_eq(load8(&dst), 88, "first visible glyph 'X'");
+    assert_eq(w4, 6, "'X' + the whole ESC[31m (zero-width), 'Y' clipped");
+    # a UTF-8 glyph is one column and is copied as a unit (never half a codepoint)
+    var w5 = feed_clip(&dst, 512, "\xc3\xa9z", 3, 1);   # 'e-acute' (2 bytes) + 'z'
+    assert_eq(w5, 2, "one UTF-8 glyph = one col, copied whole; 'z' clipped");
+    assert_eq(load8(&dst), 195, "UTF-8 lead byte copied");
+    assert_eq(load8(&dst + 1), 169, "UTF-8 continuation copied (glyph not severed)");
+    return 0;
+}
+
+# Feed ring (0.9.1): feed_write accumulates a logical line across calls, seals a
+# slot per newline (the '\n' itself not stored), seals a bare newline as a blank
+# row, flushes an un-newlined tail, and evicts the oldest line in O(1) when the
+# ring fills. Row 0 = the oldest LIVE line.
+fn test_feed_ring() {
+    test_group("feed ring buffer (feed.cyr)");
+    feed_init();
+    assert_eq(feed_count(), 0, "empty ring");
+    feed_write("a", 1);
+    feed_write("b", 1);
+    assert_eq(feed_count(), 0, "no newline yet -> nothing sealed");
+    feed_write("\n", 1);
+    assert_eq(feed_count(), 1, "newline seals one slot");
+    assert_eq(feed_line_len(0), 2, "sealed slot holds 2 bytes");
+    var p = feed_line_ptr(0);
+    assert_eq(load8(p), 97, "first byte 'a'");
+    assert_eq(load8(p + 1), 98, "second byte 'b' (multi-call line reconstructed)");
+    assert_eq(feed_vis(0), 2, "cached visible cols = 2");
+    feed_write("\n", 1);
+    assert_eq(feed_count(), 2, "bare newline yields a blank row");
+    assert_eq(feed_line_len(1), 0, "blank row has zero length");
+    feed_write("tail", 4);
+    feed_flush_pending();
+    assert_eq(feed_count(), 3, "flush seals the un-newlined tail");
+    assert_eq(feed_line_len(2), 4, "tail row holds 4 bytes");
+    # eviction: write FEED_ROWS+3 distinct lines; count caps, the oldest 3 drop.
+    feed_init();
+    var ch[2];
+    store8(&ch + 1, 10);                       # trailing newline (constant)
+    var i = 0;
+    while (i < (FEED_ROWS + 3)) {
+        store8(&ch, 65 + (i % 26));            # 'A'..'Z' cycling
+        feed_write(&ch, 2);
+        i = i + 1;
+    }
+    assert_eq(feed_count(), FEED_ROWS, "ring caps at FEED_ROWS lines");
+    # the 4th line written (index 3) is the oldest survivor: 'A' + (3%26) = 'D'.
+    assert_eq(load8(feed_line_ptr(0)), 68, "oldest surviving line is the 4th written (O(1) head-advance eviction)");
+    return 0;
+}
+
+# Output capture (0.9.1): with OUT_RING armed, emit/emit_n/oprintln/ofmt_int route
+# into the feed ring (not fd 1); a logical line assembled across mixed calls lands
+# as ONE row, and ofmt_int captures the same digits fmt_int would print. NOTE:
+# always restore OUT_FD1 before asserting — an assert under OUT_RING would be
+# captured into the ring instead of printed.
+fn test_capture() {
+    test_group("output capture sink (util.cyr / feed.cyr)");
+    feed_init();
+    assert_eq(out_mode(), OUT_FD1, "default mode is OUT_FD1 (the floor)");
+    out_mode_set(OUT_RING);
+    emit("a"); emit_n("bc", 2); oprintln("d");     # one logical line across 3 calls
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 1, "emit + emit_n + oprintln reconstruct one captured line");
+    assert_eq(feed_line_len(0), 4, "captured line is 'abcd' (4 bytes)");
+    var p = feed_line_ptr(0);
+    assert_eq(load8(p), 97, "byte 0 'a' (emit)");
+    assert_eq(load8(p + 1), 98, "byte 1 'b' (emit_n)");
+    assert_eq(load8(p + 3), 100, "byte 3 'd' (oprintln, before its newline seal)");
+    # ofmt_int captures the same bytes fmt_int prints (incl. zero + negatives)
+    feed_init();
+    out_mode_set(OUT_RING);
+    ofmt_int(0); oprintln("");                      # "0" then a newline seals the row
+    ofmt_int(0 - 42);                               # "-42" left pending
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "two captured rows");
+    assert_eq(feed_line_len(0), 1, "ofmt_int(0) captured as '0'");
+    assert_eq(load8(feed_line_ptr(0)), 48, "the digit '0'");
+    assert_eq(feed_line_len(1), 3, "ofmt_int(-42) captured as '-42'");
+    assert_eq(load8(feed_line_ptr(1)), 45, "leading '-' preserved");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -838,6 +961,9 @@ fn main() {
     test_diff();
     test_highlight();
     test_tui();
+    test_feed();
+    test_feed_ring();
+    test_capture();
     test_model_switch();
     return assert_summary();
 }

@@ -177,11 +177,23 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   a **Ctrl-G-togglable status bar**, scrolling feed, keybinding hints, clean exits
   (Ctrl-X / Ctrl-D / Ctrl-C / /quit). Activates at PT_RICH on a real tty
   (`THOTH_TIER=rich`); the line REPL is the fallback.
-- **`0.9.1` — file-tree pane + the feed-buffer redraw model** — switch the feed from
-  the terminal-scroll trick to a self-managed redraw (capture command output into a
-  feed buffer, paint the visible window each frame) so a **togglable file-tree pane**
-  (keyboard, no mouse) can coexist as a left column, and instant **SIGWINCH** resize
-  drops in. Plus the working spinner.
+- **`0.9.1` — the self-managed feed-redraw model (LANDED)** — the feed left the
+  terminal-scroll trick (DECSTBM) for a thoth-owned redraw: dispatch output is captured
+  into a line ring (`src/feed.cyr`) via a surface-routed output sink (`src/util.cyr`'s
+  `_out_mode`/`emit_raw`/`oprintln`/`ofmt_int`) and painted each frame, with an
+  escape-aware clip and the t-ron confirm bracketed back to the live screen. fd-1
+  redirection was rejected (AGNOS has no `sys_dup2` → floor-forking; breaks the
+  confirm). The floor stays byte-identical (capture armed only inside `dispatch()`).
+  This is the prerequisite the next two phases build on.
+- **`0.9.2` — instant SIGWINCH resize + the working spinner** — now that the feed is
+  self-managed, resize is a pure recompute+repaint: a SIGWINCH signalfd multiplexed
+  with stdin (darshana's `TTY_SIGMASK_WINCH` + epoll). Plus the spinner and incremental
+  streaming paint (both ride hoosh's per-SSE-chunk callback).
+- **`0.9.3` — the togglable left-column file-tree pane** — a keyboard-navigated
+  (no-mouse) tree of the cwd (`lib/fs.cyr` `dir_list`/`is_dir` + getcwd) as a left
+  column; the feed paints into the narrowed right column via the 0.9.1 escape-aware
+  clip. The pure geometry + tree model land testable; the paint + listing are
+  live-verified.
 - **`/theme` (0.9.x)** — a theme switch, almost free given the semantic role surface
   (`src/ui.cyr`): a theme is just a different role→color table. `/theme dark` (today's
   amber default) · `/theme light` (the mockup's warm-light palette) · `/theme rainbow`

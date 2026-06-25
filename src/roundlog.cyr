@@ -123,21 +123,21 @@ fn roundlog_kind_str(k) {
 # roundlog_report: render the session's recent tool rounds, grouped by round. I/O.
 # Complements gate_audit_report (the t-ron chain) with the loop-structure view.
 fn roundlog_report() {
-    println("agentic tool rounds (this session):");
+    oprintln("agentic tool rounds (this session):");
     if (_roundlog_total == 0) {
-        println("  (none yet — ask a task that calls tools)");
+        oprintln("  (none yet — ask a task that calls tools)");
         return 0;
     }
     var kept = roundlog_count();
     if (_roundlog_total > kept) {
-        emit("  ("); fmt_int(_roundlog_total - kept); println(" earlier round(s) elided)");
+        emit("  ("); ofmt_int(_roundlog_total - kept); oprintln(" earlier round(s) elided)");
     }
     var i = 0;
     while (i < kept) {
-        emit("  turn "); fmt_int(roundlog_round_turn(i));
-        emit(", round "); fmt_int(roundlog_round_no(i));
+        emit("  turn "); ofmt_int(roundlog_round_turn(i));
+        emit(", round "); ofmt_int(roundlog_round_no(i));
         var nc = roundlog_round_ncalls(i);
-        emit(" ("); fmt_int(nc); emit(" call");
+        emit(" ("); ofmt_int(nc); emit(" call");
         if (nc != 1) { emit("s"); }
         emit("): ");
         if (nc == 0) { emit("(no calls)"); }
@@ -153,7 +153,7 @@ fn roundlog_report() {
             }
             ci = ci + 1;
         }
-        println("");
+        oprintln("");
         i = i + 1;
     }
     return 0;

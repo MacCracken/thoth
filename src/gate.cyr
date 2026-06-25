@@ -32,12 +32,19 @@ fn gate_active() {
 # the exact object being authorized (verb + obj) so the answer is informed.
 # Returns 1 ONLY on explicit y/yes; default (empty/EOF/other) DENIES.
 fn confirm(verb, obj) {
+    # In the T2 TUI, dispatch output is captured into the feed ring (OUT_RING);
+    # bracket back to the live screen so this prompt and its cooked y/n echo are
+    # VISIBLE rather than buried in the ring. Off the TUI (REPL/piped, OUT_FD1)
+    # both hooks are skipped and this path is byte-identical to before.
+    var capturing = (out_mode() == OUT_RING);
+    if (capturing == 1) { tui_confirm_begin(); }
     if (gate_active() == 0) { ui_emit(ROLE_ACCENT, "  [t-ron absent: fail-closed] authorize "); }
     else { ui_emit(ROLE_ACCENT, "  [t-ron flag: confirm] authorize "); }
     emit(verb); emit(" "); emit(obj);
     emit("? [y/N] ");
     var ans[64];
     var n = read_line(&ans, 64);
+    if (capturing == 1) { tui_confirm_end(); }
     if (n <= 0) { return 0; }
     if (streq(&ans, "y") == 1) { return 1; }
     if (streq(&ans, "Y") == 1) { return 1; }
@@ -56,13 +63,13 @@ fn gate_init() {
     var rc = tron_load_policy_file(t, path);
     if (rc != TRON_ERR_NONE) {
         emit("t-ron: policy '"); emit(path);
-        if (rc == TRON_ERR_IO) { println("' unreadable — seam stays absent (fail-closed confirm gate)."); }
-        else { println("' failed to parse — seam stays absent (fail-closed confirm gate)."); }
+        if (rc == TRON_ERR_IO) { oprintln("' unreadable — seam stays absent (fail-closed confirm gate)."); }
+        else { oprintln("' failed to parse — seam stays absent (fail-closed confirm gate)."); }
         return 0;
     }
     _gate_tron = t;
     emit("t-ron: policy loaded from "); emit(path);
-    emit(" (agent '"); emit(config_tron_agent()); println("')");
+    emit(" (agent '"); emit(config_tron_agent()); oprintln("')");
     return 1;
 }
 
@@ -78,12 +85,12 @@ fn gate_verdict(tool_name, params) {
     if (k == VK_DENY) {
         ui_emit(ROLE_RED, "  [t-ron] DENY: ");
         var reason = verdict_reason(v);
-        if (reason != 0) { println(reason); } else { println("(no reason)"); }
+        if (reason != 0) { oprintln(reason); } else { oprintln("(no reason)"); }
     }
     if (k == VK_FLAG) {
         ui_emit(ROLE_ACCENT, "  [t-ron] FLAG: ");
         var freason = verdict_reason(v);
-        if (freason != 0) { println(freason); } else { println("(no reason)"); }
+        if (freason != 0) { oprintln(freason); } else { oprintln("(no reason)"); }
     }
     return k;
 }
@@ -103,7 +110,7 @@ fn gate_authorize(tool_name, params, verb, obj) {
     }
     var k = gate_verdict(tool_name, params);
     if (k == VK_ALLOW) {
-        ui_emit(ROLE_GREEN, "  [t-ron] allow: "); emit(verb); emit(" "); println(obj);
+        ui_emit(ROLE_GREEN, "  [t-ron] allow: "); emit(verb); emit(" "); oprintln(obj);
         log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("verdict", "allow");
         log_commit(SK_INFO);
         return 1;
@@ -142,33 +149,33 @@ fn gate_audit() {
 fn gate_audit_report() {
     var a = gate_audit();
     var total = query_total_events(a);
-    println("t-ron audit chain (libro-backed, in-process):");
-    emit("  events  : "); fmt_int(total); println("");
-    emit("  denials : "); fmt_int(query_total_denials(a)); println("");
-    emit("  chain   : "); fmt_int(audit_chain_len(a)); emit(" entries, ");
-    if (audit_verify_chain(a) == 0) { println("integrity OK"); }
-    else { println("INTEGRITY FAILED (tamper detected)"); }
+    oprintln("t-ron audit chain (libro-backed, in-process):");
+    emit("  events  : "); ofmt_int(total); oprintln("");
+    emit("  denials : "); ofmt_int(query_total_denials(a)); oprintln("");
+    emit("  chain   : "); ofmt_int(audit_chain_len(a)); emit(" entries, ");
+    if (audit_verify_chain(a) == 0) { oprintln("integrity OK"); }
+    else { oprintln("INTEGRITY FAILED (tamper detected)"); }
     # risk score is basis points of 1000 (1000 = max); /10 renders as percent.
     var risk = query_agent_risk_score(a, config_tron_agent());
     emit("  risk    : agent '"); emit(config_tron_agent()); emit("' ");
-    fmt_int(risk / 10); emit("."); fmt_int(risk % 10);
-    println("% (0=trusted, 100=max)");
+    ofmt_int(risk / 10); emit("."); ofmt_int(risk % 10);
+    oprintln("% (0=trusted, 100=max)");
     if (total == 0) {
-        println("  (no gated actions yet — run /write, /run, or /call)");
+        oprintln("  (no gated actions yet — run /write, /run, or /call)");
         return 0;
     }
     var recent = audit_recent(a, 10);
     var n = vec_len(recent);
-    emit("  recent ("); fmt_int(n); println(", newest first):");
+    emit("  recent ("); ofmt_int(n); oprintln(", newest first):");
     var i = 0;
     while (i < n) {
         var e = vec_get(recent, i);
-        emit("    #"); fmt_int(security_event_id(e));
+        emit("    #"); ofmt_int(security_event_id(e));
         emit(" ["); emit(audit_kind_str(security_event_kind(e))); emit("] ");
         emit(security_event_tool_name(e));
         var r = security_event_reason(e);
         if (r != 0 && load8(r) != 0) { emit(" — "); emit(r); }
-        println("");
+        oprintln("");
         i = i + 1;
     }
     return 0;
