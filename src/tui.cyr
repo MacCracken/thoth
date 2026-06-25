@@ -264,6 +264,21 @@ fn tui_draw_hint() {
     return 0;
 }
 
+# tui_park_cursor: move the cursor to the composer's edit position (the prompt line),
+# mirroring tui_draw_composer's horizontal-scroll window. Called after any paint that
+# left the cursor elsewhere (the feed, the spinner) so the cursor always returns to
+# where you type — never stranded on the spinner / hint row.
+fn tui_park_cursor() {
+    var avail = _tui_cols - 6;
+    if (avail < 1) { avail = 1; }
+    var start = 0;
+    if (led_cur() > avail) { start = led_cur() - avail; }
+    var col = 6 + (led_cur() - start);
+    if (col > _tui_cols) { col = _tui_cols; }
+    tty_move(tui_composer_row(_tui_rows), col);
+    return 0;
+}
+
 # tui_draw_composer: redraw the composer line (prompt + buffer) and park the cursor
 # at the edit position. The {(o> prompt is preserved as the composer prompt.
 fn tui_draw_composer() {
@@ -273,7 +288,7 @@ fn tui_draw_composer() {
     ui_emit(ROLE_ACCENT, "{(o> ");
     # clamp to the visible width with a horizontal-scroll window ending at the cursor,
     # so a long line can't wrap onto the hint/status rows (they sit OUTSIDE the feed
-    # scroll region and would otherwise be scribbled).
+    # band and would otherwise be scribbled).
     var avail = _tui_cols - 6;
     if (avail < 1) { avail = 1; }
     var start = 0;
@@ -281,11 +296,55 @@ fn tui_draw_composer() {
     var shown = led_len() - start;
     if (shown > avail) { shown = avail; }
     if (shown > 0) { emit_n(led_buf() + start, shown); }
-    var col = 6 + (led_cur() - start);
-    if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(row, col);
+    tui_park_cursor();
     return 0;
 }
+
+# --- the working-state spinner (0.9.2) ------------------------------------
+# The main loop is BLOCKED inside dispatch() during a turn, so nothing can animate
+# from the loop. The only in-dispatch heartbeat is hoosh's per-SSE-chunk callback:
+# a STREAMING turn advances the frame on each chunk (feed_stream_tick → animated);
+# a BLOCKING turn / /run shows the SAME glyph held still — honest, never faked
+# motion. The indicator lives on the hint row for the dispatch window, suspended
+# across an interactive confirm (which owns the composer/hint rows).
+var _spin_frame = 0;
+var _spin_active = 0;        # 1 while a dispatch is in flight (the indicator shows)
+var _spin_suspended = 0;     # saved _spin_active across a confirm
+var SPIN_FRAMES = 10;        # braille spinner cycle length
+
+# spin_glyph: the braille spinner glyph for frame `f` (mod the cycle). Pure — the
+# dots are printable multibyte UTF-8 (valid Cyrius string literals).
+fn spin_glyph(f) {
+    var i = f % SPIN_FRAMES;
+    if (i == 0) { return "⠋"; }
+    if (i == 1) { return "⠙"; }
+    if (i == 2) { return "⠹"; }
+    if (i == 3) { return "⠸"; }
+    if (i == 4) { return "⠼"; }
+    if (i == 5) { return "⠴"; }
+    if (i == 6) { return "⠦"; }
+    if (i == 7) { return "⠧"; }
+    if (i == 8) { return "⠇"; }
+    return "⠏";
+}
+fn spin_advance() { _spin_frame = _spin_frame + 1; return 0; }
+fn spin_frame() { return _spin_frame; }
+fn spin_active() { return _spin_active; }
+
+# spin_paint: draw the working indicator on the hint row (chrome — emit_raw, never
+# captured). No-op when inactive. The caller restores the hint row via tui_draw_hint
+# once the dispatch ends.
+fn spin_paint() {
+    if (_spin_active == 0) { return 0; }
+    tty_move(tui_hint_row(_tui_rows), 1);
+    tty_clear_to_eol();
+    emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw(spin_glyph(_spin_frame)); emit_raw(ui_reset());
+    emit_raw(ui_sgr(ROLE_FAINT)); emit_raw(" working…"); emit_raw(ui_reset());
+    tui_park_cursor();          # return the cursor to the prompt line, not the spinner row
+    return 0;
+}
+fn spin_begin() { _spin_frame = 0; _spin_active = 1; spin_paint(); return 0; }   # start each turn at frame 0
+fn spin_end() { _spin_active = 0; return 0; }   # caller redraws the hint row after
 
 # --- the self-managed feed painter (0.9.1) --------------------------------
 # 0.9.0 scrolled command output natively in a DECSTBM region. 0.9.1 OWNS the
@@ -297,9 +356,11 @@ var PAINT_CAP = 2112;        # FEED_LINE_CAP (2048) + headroom for clip's defens
 
 # feed_repaint: paint the newest feed lines into rows [feed_top..feed_bot], each
 # clipped to the terminal width (the 0.9.3 pane will narrow this). Uses emit_raw
-# (NOT emit): it can run while capture is armed (the confirm bracket) and must
-# reach the SCREEN, never the ring it is painting FROM. tty_clear_to_eol wipes any
-# remnant of a longer previous frame on each row.
+# (NOT emit): it can run while capture is armed (the confirm bracket / a streaming
+# tick) and must reach the SCREEN, never the ring it is painting FROM.
+# tty_clear_to_eol wipes any remnant of a longer previous frame on each row.
+# 0.9.2: the UNSEALED pending line (an in-progress streamed response, no newline
+# yet) is rendered as a virtual bottom row so streaming is INCREMENTAL.
 fn feed_repaint() {
     if (_paint_buf == 0) { _paint_buf = alloc(PAINT_CAP); }
     var top = tui_feed_top(_tui_show_status);
@@ -307,8 +368,11 @@ fn feed_repaint() {
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
     var total = feed_count();
+    var pend = feed_pending_len();
+    var virt = total;
+    if (pend > 0) { virt = total + 1; }           # the pending line is a virtual row
     var first = 0;
-    if (total > rows) { first = total - rows; }   # pin to the newest `rows` lines
+    if (virt > rows) { first = virt - rows; }     # pin to the newest `rows` (incl. pending)
     var i = 0;
     while (i < rows) {
         tty_move(top + i, 1);
@@ -316,10 +380,28 @@ fn feed_repaint() {
         if (li < total) {
             var w = feed_clip(_paint_buf, PAINT_CAP, feed_line_ptr(li), feed_line_len(li), _tui_cols);
             if (w > 0) { emit_raw_n(_paint_buf, w); }
+        } elif (li == total) {
+            if (pend > 0) {
+                var wp = feed_clip(_paint_buf, PAINT_CAP, feed_pending_ptr(), pend, _tui_cols);
+                if (wp > 0) { emit_raw_n(_paint_buf, wp); }
+            }
         }
         tty_clear_to_eol();
         i = i + 1;
     }
+    return 0;
+}
+
+# feed_stream_tick: the in-dispatch heartbeat the SSE callbacks (src/hoosh.cyr,
+# src/agent.cyr) ping on each streamed chunk. Under OUT_RING (the TUI) it advances
+# the spinner and repaints the growing pending line so a streaming turn renders
+# INCREMENTALLY + animated. Under OUT_FD1 (REPL / piped / CI) it is a no-op — the
+# chunk's emit already wrote live, so the floor stays byte-identical.
+fn feed_stream_tick() {
+    if (out_mode() != OUT_RING) { return 0; }
+    spin_advance();
+    feed_repaint();
+    spin_paint();
     return 0;
 }
 
@@ -333,12 +415,19 @@ fn feed_repaint() {
 fn tui_confirm_begin() {
     feed_flush_pending();
     feed_repaint();
+    _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt
+    tty_move(tui_hint_row(_tui_rows), 1); tty_clear_to_eol();
     out_mode_set(OUT_FD1);
     tty_move(tui_composer_row(_tui_rows), 1);
     tty_clear_to_eol();
     return 0;
 }
-fn tui_confirm_end() { out_mode_set(OUT_RING); return 0; }
+fn tui_confirm_end() {
+    out_mode_set(OUT_RING);
+    _spin_active = _spin_suspended;     # resume the spinner if a turn is still in flight
+    spin_paint();
+    return 0;
+}
 
 # tui_relayout: re-read the terminal size and repaint the whole frame (status bar,
 # feed, hint, composer). No scroll region — the feed is self-managed now. The
@@ -367,8 +456,10 @@ fn tui_run_line(line) {
     ui_emit(ROLE_ACCENT, "{(o> "); emit(line);   # echo the submitted command (captured)
     feed_flush_pending();                        # seal the echo as its own feed line
     feed_repaint();                              # show the echo IMMEDIATELY (before a slow turn)
+    spin_begin();                                # show the working indicator for the dispatch window
     tty_cooked();                                # canonical mode for read_line-based confirms
     var keep = dispatch(line);
+    spin_end();                                  # stop the indicator (relayout restores the hint row)
     out_mode_set(OUT_FD1);                        # stop capturing before any chrome paints
     if (tty_raw(0) < 0) { return 0; }            # couldn't re-enter raw -> end the session cleanly
     feed_flush_pending();                        # seal a trailing un-newlined dispatch line
@@ -376,7 +467,71 @@ fn tui_run_line(line) {
     return keep;
 }
 
-# tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / scrolling-
+# --- SIGWINCH multiplex (0.9.2): instant resize ---------------------------
+# The self-managed feed makes resize a pure recompute+repaint. We multiplex stdin
+# with a SIGWINCH signalfd via epoll, so when the loop is idle (blocked in
+# epoll_wait) a resize wakes us INSTANTLY — not on the next keystroke (the 0.9.1
+# limitation). A SIGWINCH arriving DURING a blocking dispatch is queued on the
+# level-triggered signalfd and serviced when the loop returns (an accepted gap, the
+# same class as the blocked SIGINT). epoll/signalfd are Linux-only; the rich loop is
+# already Linux-gated and non-rich runs the REPL, so this never gates a target.
+var EV_KEY = 0;
+var EV_WINCH = 1;
+var _winch_fd = 0 - 1;
+var _sigint_fd = 0 - 1;       # the blocked-SIGINT signalfd (tracked so teardown can close it)
+var _epfd = 0 - 1;
+var _events_ok = 0;           # 1 if the epoll multiplex is up (else a bare blocking read)
+var _ev_buf = 0;              # epoll_wait output: maxevents * 12 (packed epoll_event)
+var _winch_drain = 0;         # 128-byte signalfd_siginfo drain buffer
+
+# tui_events_init: open the WINCH signalfd, create the epoll instance, and register
+# stdin (fd 0) + the WINCH fd. Returns 1 on success, 0 if epoll/signalfd is
+# unavailable (the loop then falls back to a bare blocking read — correct, just no
+# instant resize). The SIGINT fd is opened separately and kept blocked but NOT
+# epoll-registered (we want SIGINT ignored, not delivered).
+fn tui_events_init() {
+    _winch_fd = tty_open_signalfd(TTY_SIGMASK_WINCH);
+    if (_winch_fd < 0) { return 0; }
+    _epfd = sys_epoll_create();
+    if (_epfd < 0) { return 0; }
+    if (_ev_buf == 0) { _ev_buf = alloc(64); }
+    if (_winch_drain == 0) { _winch_drain = alloc(128); }
+    sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, 0, epoll_event_new(EPOLLIN, 0));            # stdin, data=0
+    sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, _winch_fd, epoll_event_new(EPOLLIN, _winch_fd));
+    return 1;
+}
+
+# tui_wait_event: block until stdin or the WINCH signalfd is readable. Returns
+# EV_WINCH (resize) or EV_KEY (a keypress awaits tui_read_key). WINCH is prioritized
+# so a key is decoded against the NEW geometry. Level-triggered epoll: a ready fd not
+# acted on re-fires next call, so returning one event per call loses nothing.
+fn tui_wait_event() {
+    var n = sys_epoll_wait(_epfd, _ev_buf, 2, 0 - 1);   # timeout -1: block until ready
+    if (n <= 0) { return EV_KEY; }                      # EINTR/spurious -> attempt a read
+    var i = 0;
+    while (i < n) {
+        if (load64(_ev_buf + i * 12 + 4) == _winch_fd) { return EV_WINCH; }   # data @ +4
+        i = i + 1;
+    }
+    return EV_KEY;
+}
+
+# tui_drain_winch: consume one signalfd_siginfo (128 bytes) — epoll said the fd is
+# readable so this won't block. Coalesced resizes that queued more re-fire epoll and
+# are drained next pass (each just re-relayouts, idempotent).
+fn tui_drain_winch() { syscall(SYS_READ, _winch_fd, _winch_drain, 128); return 0; }
+
+# tui_events_teardown: close both signalfds (restoring the thread signal mask) and the
+# epoll fd. Also fixes the 0.9.0/0.9.1 leak where the SIGINT signalfd was opened but
+# never closed (its SIG_BLOCK persisted after the TUI exited).
+fn tui_events_teardown() {
+    if (_winch_fd >= 0) { tty_close_signalfd(_winch_fd, TTY_SIGMASK_WINCH); _winch_fd = 0 - 1; }
+    if (_sigint_fd >= 0) { tty_close_signalfd(_sigint_fd, 2); _sigint_fd = 0 - 1; }
+    if (_epfd >= 0) { file_close(_epfd); _epfd = 0 - 1; }
+    return 0;
+}
+
+# tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / self-managed
 # feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
 # is interactive terminal control — verify on a live TTY (THOTH_TIER=rich), not piped.
 fn tui_loop() {
@@ -387,7 +542,8 @@ fn tui_loop() {
     # SIGINT and, with no handler, kill us WITH the alt-screen up + scroll region set
     # (garbled terminal). Blocked, it's queued to the signalfd (unread) and discarded
     # at exit; the raw-mode composer's own Ctrl-C still exits cleanly (KEY_CTRLC).
-    tty_open_signalfd(2);   # mask bit for SIGINT (signal 2)
+    _sigint_fd = tty_open_signalfd(2);   # block SIGINT (mask bit for signal 2) for the session
+    _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize)
     tty_alt_enter();
     tty_clear();
     led_reset();
@@ -399,25 +555,34 @@ fn tui_loop() {
     _tui_running = 1;
     tui_relayout();
     while (_tui_running == 1) {
-        var key = tui_read_key();
-        if (key == KEY_TOGGLE_STATUS) {
-            if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
-            tty_clear();           # the feed band moves; full repaint
+        # wait on stdin + the SIGWINCH signalfd (instant resize); EV_KEY -> read a key.
+        var ev = EV_KEY;
+        if (_events_ok == 1) { ev = tui_wait_event(); }
+        if (ev == EV_WINCH) {
+            tui_drain_winch();
+            tty_clear();                 # geometry changed; full repaint at the new size
             tui_relayout();
         } else {
-            var act = led_feed(key, _tui_key_ch);
-            if (act == ACT_SUBMIT) {
-                var line = _tui_copy_line();   # snapshot the line before clearing
-                led_reset();
-                tui_draw_composer();           # composer empties IMMEDIATELY, before dispatch
-                var keep = tui_run_line(line);
-                if (keep == 0) { _tui_running = 0; }
-                else { tui_relayout(); }
-            } elif (act == ACT_EOF) {
-                _tui_running = 0;
+            var key = tui_read_key();
+            if (key == KEY_TOGGLE_STATUS) {
+                if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
+                tty_clear();           # the feed band moves; full repaint
+                tui_relayout();
             } else {
-                tui_draw_hint();        # refresh the slash palette for the new buffer
-                tui_draw_composer();
+                var act = led_feed(key, _tui_key_ch);
+                if (act == ACT_SUBMIT) {
+                    var line = _tui_copy_line();   # snapshot the line before clearing
+                    led_reset();
+                    tui_draw_composer();           # composer empties IMMEDIATELY, before dispatch
+                    var keep = tui_run_line(line);
+                    if (keep == 0) { _tui_running = 0; }
+                    else { tui_relayout(); }
+                } elif (act == ACT_EOF) {
+                    _tui_running = 0;
+                } else {
+                    tui_draw_hint();        # refresh the slash palette for the new buffer
+                    tui_draw_composer();
+                }
             }
         }
     }
@@ -426,5 +591,6 @@ fn tui_loop() {
     tty_cooked();
     _tui_scroll_region(1, _tui_rows);
     tty_alt_leave();
+    tui_events_teardown();          # close the signalfds (restore the signal mask) + epoll fd
     return 0;
 }

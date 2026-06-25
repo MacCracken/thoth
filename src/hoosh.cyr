@@ -591,6 +591,7 @@ fn _hoosh_sse_cb(ctx, ev) {
         emit_n(str_data(s), n);
         store64(ctx, load64(ctx) + n);
         _hoosh_acc_append(str_data(s), n);
+        feed_stream_tick();   # 0.9.2: TUI incremental paint + spinner (no-op off the TUI)
     }
     return 1;
 }

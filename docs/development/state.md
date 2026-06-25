@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.9.2** — instant SIGWINCH + the working spinner + incremental streaming paint
+(M7), 2026-06-25. The second course on the 0.9.1 self-managed feed. **Instant resize:**
+the bare blocking key-read is replaced by an **epoll multiplex** of stdin + a SIGWINCH
+signalfd (`tty_open_signalfd(TTY_SIGMASK_WINCH)` + `sys_epoll_create/_ctl/_wait`) — idle,
+the loop blocks in `epoll_wait`, so a resize wakes it the instant it happens (not on the
+next keystroke), and `tui_relayout` recomputes geometry + full-repaints; a resize during a
+blocking dispatch queues on the level-triggered fd and is serviced on return (accepted
+gap). Falls back to the 0.9.1 blocking read where epoll/signalfd are absent (degrade
+closed). **Incremental streaming:** `feed_repaint` renders the unsealed pending line as a
+virtual bottom row, and `feed_stream_tick` (pinged from the hoosh/agent SSE callbacks)
+repaints it per chunk, so a streamed turn renders as it arrives in the TUI (was
+shown-only-on-completion in 0.9.1); no-op off the TUI → REPL stream byte-identical.
+**Working spinner:** a braille indicator on the hint row for the dispatch window —
+animated per SSE chunk when streaming, held still on a blocking turn / `/run` (honest, no
+faked motion since the loop is blocked inside `dispatch()`), suspended across the gate
+confirm. Also **fixes the 0.9.0 SIGINT-signalfd teardown leak** (both signalfds + epoll
+now closed on every exit, restoring the signal mask). Adversarially reviewed pre-cut (4
+lenses, every finding verified): zero correctness/hang/crash/floor/security findings.
+**TUI render verifies only on a real tty (`THOTH_TIER=rich`)**, not the harness. 341
+assertions (+4, `test_spinner`). Pin unchanged (6.2.40 — cycc locally at 6.2.41; staying
+on the pin, the drift/arity warnings are toolchain-side). Known → 0.9.3: the togglable
+left-column file-tree pane.
 **0.9.1** — the self-managed feed-redraw model (M7), 2026-06-24. The T2 feed stops
 relying on the DECSTBM terminal-scroll trick and becomes thoth-owned: dispatch output
 is captured into a line ring (new `src/feed.cyr` — 2048×2 KiB, escape-aware clip) and
@@ -467,7 +489,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **337 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **341 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -503,8 +525,9 @@ bundle is DCE-unreachable).
   editor + layout geometry + palette matchers); and **0.9.1** `test_feed` +
   `test_feed_ring` + `test_capture` (the escape-aware clip — width/`dst_cap`/`ESC[K`/
   UTF-8 — the ring seal/evict/flush machine, and the OUT_RING capture sink's
-  logical-line reconstruction + `oprintln`/`ofmt_int` byte-identity). Passes on
-  `cyrius test`.
+  logical-line reconstruction + `oprintln`/`ofmt_int` byte-identity); and **0.9.2**
+  `test_spinner` (the pure braille frame cycle — `spin_glyph` mod `SPIN_FRAMES`,
+  `spin_advance`). Passes on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 

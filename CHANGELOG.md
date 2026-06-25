@@ -2,6 +2,55 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.2] - 2026-06-25
+
+**Instant SIGWINCH resize + the working spinner + incremental streaming paint (M7).**
+The second course on the 0.9.1 self-managed feed: now that thoth owns the feed, a
+terminal resize is a pure recompute+repaint, the streamed response paints as it
+arrives, and a "working" indicator shows during a turn. Built entirely on the
+vendored darshana substrate (signalfd) + the stdlib epoll wrappers — no hand-rolled
+floor. The REPL / piped / CI floor stays byte-identical (the streaming hook no-ops off
+the TUI; `_out_mode` defaults to OUT_FD1). Adversarially reviewed pre-cut (4 lenses,
+every finding verified against the code): zero correctness/hang/crash/floor/security
+findings. 341 unit assertions (+4). Pin unchanged (6.2.40).
+
+### Added
+- **Instant SIGWINCH resize** (`src/tui.cyr`): the bare blocking key-read is replaced
+  by an **epoll multiplex** of stdin + a SIGWINCH signalfd (`tty_open_signalfd(
+  TTY_SIGMASK_WINCH)`, `sys_epoll_create`/`_ctl`/`_wait`). Idle, the loop blocks in
+  `epoll_wait`, so a resize wakes it **instantly** — not on the next keystroke (the
+  0.9.1 limitation) — and `tui_relayout` recomputes geometry + full-repaints at the new
+  size. A resize during a blocking dispatch queues on the level-triggered signalfd and
+  is serviced on return (an accepted gap). Where epoll/signalfd are absent the loop
+  falls back to the 0.9.1 blocking read (no instant resize) — degrade closed.
+- **Incremental streaming paint** (`src/tui.cyr`, `src/feed.cyr`): `feed_repaint` now
+  renders the **unsealed pending line** (an in-progress streamed response, no newline
+  yet) as a virtual bottom row, and the new `feed_stream_tick` — pinged from the hoosh
+  and agent SSE callbacks on each chunk — repaints it so a streaming turn renders **as
+  it arrives** in the TUI (it was captured-but-not-shown-until-completion in 0.9.1).
+  Off the TUI (OUT_FD1) the tick is a no-op (the chunk's `emit` already wrote live), so
+  the REPL stream is byte-identical.
+- **The working spinner** (`src/tui.cyr`): a braille indicator (`spin_glyph`, +
+  `spin_advance`/`spin_begin`/`spin_end`/`spin_paint`) on the hint row for the dispatch
+  window. The main loop is blocked inside `dispatch()` during a turn, so the only
+  in-dispatch heartbeat is the SSE callback: a **streaming** turn animates the spinner
+  per chunk; a **blocking** turn / `/run` holds the same glyph still — honest, never
+  faked motion. Suspended across an interactive gate confirm (which owns the
+  composer/hint rows) and resumed after. `test_spinner` (+4): the pure frame cycle.
+
+### Fixed
+- **The SIGINT signalfd is now closed on teardown** — `tty_open_signalfd(SIGINT)` was
+  opened-and-forgotten since 0.9.0, leaking the fd and leaving SIGINT blocked on the
+  thread after exit. `tui_events_teardown` now closes both signalfds (restoring the
+  signal mask) and the epoll fd on every exit path.
+
+### Known limitations (→ 0.9.3)
+- The togglable **left-column file-tree pane** is next (the self-managed feed + the
+  escape-aware clip are its prerequisites, both in place since 0.9.1). No
+  scrollback-scroll keys yet (the feed pins to the newest screenful).
+- SIGWINCH during a blocking dispatch repaints on dispatch return, not mid-turn;
+  the cursor may flicker through the feed rows during a streaming repaint (cosmetic).
+
 ## [0.9.1] - 2026-06-24
 
 **The self-managed feed-redraw model (M7).** The T2 TUI's feed stops relying on the

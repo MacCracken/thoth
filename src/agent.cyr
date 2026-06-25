@@ -719,6 +719,7 @@ fn _agent_sse_cb(ctx, ev) {
         var i = 0;
         while (i < tn) { _agent_accum_delta(bayan_json_v_arr_get(tcs, i)); i = i + 1; }
     }
+    feed_stream_tick();   # 0.9.2: TUI incremental paint + spinner (no-op off the TUI)
     return 1;
 }
 

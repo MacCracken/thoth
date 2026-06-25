@@ -185,10 +185,15 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   redirection was rejected (AGNOS has no `sys_dup2` → floor-forking; breaks the
   confirm). The floor stays byte-identical (capture armed only inside `dispatch()`).
   This is the prerequisite the next two phases build on.
-- **`0.9.2` — instant SIGWINCH resize + the working spinner** — now that the feed is
-  self-managed, resize is a pure recompute+repaint: a SIGWINCH signalfd multiplexed
-  with stdin (darshana's `TTY_SIGMASK_WINCH` + epoll). Plus the spinner and incremental
-  streaming paint (both ride hoosh's per-SSE-chunk callback).
+- **`0.9.2` — instant SIGWINCH resize + the working spinner + incremental streaming
+  paint (LANDED)** — the bare blocking key-read became an **epoll multiplex** of stdin +
+  a SIGWINCH signalfd (`tty_open_signalfd(TTY_SIGMASK_WINCH)` + `sys_epoll_*`), so a
+  resize wakes the idle loop instantly (pure recompute+repaint). `feed_repaint` renders
+  the unsealed pending line, and `feed_stream_tick` (pinged from the hoosh/agent SSE
+  callbacks) repaints it per chunk so a streamed turn renders as it arrives. The braille
+  spinner animates per chunk while streaming, holds still on a blocking turn (honest —
+  the loop is blocked inside `dispatch()`), and suspends across the gate confirm. Also
+  closed the 0.9.0 SIGINT-signalfd teardown leak.
 - **`0.9.3` — the togglable left-column file-tree pane** — a keyboard-navigated
   (no-mouse) tree of the cwd (`lib/fs.cyr` `dir_list`/`is_dir` + getcwd) as a left
   column; the feed paints into the narrowed right column via the 0.9.1 escape-aware

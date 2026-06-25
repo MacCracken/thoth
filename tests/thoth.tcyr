@@ -933,6 +933,20 @@ fn test_capture() {
     return 0;
 }
 
+# Working spinner (0.9.2): the frame cycle is PURE (the animated indicator + its
+# hint-row paint are I/O, live-verified). spin_glyph cycles mod SPIN_FRAMES;
+# spin_advance steps the frame.
+fn test_spinner() {
+    test_group("working spinner (tui.cyr)");
+    assert(streq(spin_glyph(0), spin_glyph(SPIN_FRAMES)), "spinner glyph cycles mod the frame count");
+    assert_eq(streq(spin_glyph(0), spin_glyph(1)), 0, "adjacent spinner frames differ");
+    assert(streq(spin_glyph(0), "\xe2\xa0\x8b"), "frame 0 is the braille glyph ⠋");
+    var f0 = spin_frame();
+    spin_advance(); spin_advance();
+    assert_eq(spin_frame() - f0, 2, "spin_advance steps the frame");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -964,6 +978,7 @@ fn main() {
     test_feed();
     test_feed_ring();
     test_capture();
+    test_spinner();
     test_model_switch();
     return assert_summary();
 }
