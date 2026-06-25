@@ -645,23 +645,19 @@ Libs are opt-in and Cyrius does **not** resolve transitive deps, so the set
 is declared by hand and ordered low-level-floor-first (see the `[deps]`
 comment in `cyrius.cyml`).
 
-**sandhi fix pending toolchain fold (2026-06-24).** The toolchain-bundled
-sandhi **1.6.12** (cyrius 6.2.39) carries a critical client bug: the server and
-client conn structs both defined `enum SandhiConnOff` with the symbol
-`SANDHI_CONN_OFF_FD` at different offsets (client 8 / server 16). Under cyrius
+**sandhi conn-off-fd collision — RESOLVED (cyrius 6.2.40, 2026-06-24).** A prior
+toolchain-bundled sandhi (**1.6.12**, cyrius 6.2.39) carried a critical client bug:
+the server and client conn structs both defined `enum SandhiConnOff` with
+`SANDHI_CONN_OFF_FD` at different offsets (client 8 / server 16); under cyrius
 last-definition-wins the client resolved it to 16, colliding with its own
-`SANDHI_CONN_OFF_TLS_CTX` — `finalize` zeroed the socket fd, so every hoosh
-request went to fd 0 (terminal echo / `CONNECT`) and the gateway saw nothing.
-Fixed in **sandhi 1.6.13** (server offsets namespaced to `SANDHI_SRVCONN_OFF_*`;
-see sandhi `docs/development/issues/2026-06-24-server-conn-off-fd-collision.md`).
-thoth stays on the **stdlib** `"sandhi"` entry (pristine `lib/`); the temp
-workaround — pin `[deps.sandhi]` `tag = "1.6.13"` `modules = ["dist/sandhi.cyr"]`
-— is **held**: the sandhi 1.6.13 tag isn't pushed yet, and a `[deps.sandhi]`
-block perturbs thoth's hand-ordered stdlib set (breaks `patra`'s `SK_WARN`
-resolve). **Action at cyrius 6.2.40:** once 6.2.40 folds sandhi 1.6.13 into the
-toolchain bundle, keep the stdlib `"sandhi"` style and drop any temp
-`[deps.sandhi]` pin — i.e. revert dep-style → stdlib-style. Until then thoth
-builds against the buggy 1.6.12 (hoosh roundtrip broken on a fresh build).
+`SANDHI_CONN_OFF_TLS_CTX` — `finalize` zeroed the socket fd, so every hoosh request
+went to fd 0 and the gateway saw nothing. **Fixed in sandhi 1.6.13** (server offsets
+namespaced to `SANDHI_SRVCONN_OFF_*`) and folded into the toolchain at **cyrius
+6.2.40**; thoth has stayed on the **stdlib `"sandhi"`** entry (pristine `lib/`) the
+whole time — no `[deps.sandhi]` pin was ever needed. thoth is now on **6.2.43**
+(0.10.1), so this is closed; recorded as the canary for the dep-style-vs-stdlib-style
+ordering hazard (a `[deps.sandhi]` block perturbs thoth's hand-ordered stdlib set and
+breaks `patra`'s `SK_WARN` resolve — keep sandhi as a plain stdlib entry).
 
 **Vendored (committed dist bundles in `src/vendor/`, not `[deps]` blocks):**
 bote-core **2.7.3**, t-ron **2.1.5**, libro **2.7.2** (t-ron's audit chain;
@@ -709,7 +705,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.6.1)
+## Known limitations (0.10.1)
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -762,29 +758,34 @@ deferred to a later ADR.
 
 ## Consumers
 
-_None yet._
+_None yet._ — "at least one downstream consumer green **on AGNOS**" is **v1.0 gate 2**
+(see [`roadmap.md`](roadmap.md) → *Path to v1.0*); it follows gate 1 (the AGNOS lane
+lighting up). A tracked blocker, not a gap to fill in-tree.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md). All five seams are wired; the polish backlog
-(streaming/audit/multi-turn/logging, 0.5.0–0.5.2) is cleared; and **0.6.0** lights
-up the **model-driven agentic tool-calling loop** (daimon 1.2.6 unblocked it) —
-the M4 vision realized: hoosh decides, t-ron gates, daimon executes, results loop
-back. The current milestone is **M6** — OS-agnostic build targets and the honest
-capability-ladder / feature-gate matrix. **x86_64 Linux ships** (0.6.3, via
-`scripts/build.sh` + [ADR-0008](../adr/0008-multi-target-builds.md)); AGNOS,
-macOS, Windows, and aarch64 are staged, each blocked on a named upstream gap
-(AGNOS `SYS_LSEEK`; the cycc `#pure`/aarch64 pass-1 scanner fix, filed; a Windows
-epoll equivalent) and lighting up with zero thoth change once its gap closes. The
-per-capability ladder matrix is still owed. Smaller follow-ups on the agentic
-loop: **streaming
-landed in 0.6.1** (content live + tool_calls assembled from deltas); **richer
-per-tool JSON Schemas landed in 0.6.3** — daimon **1.2.7** now emits `inputSchema`
-per tool (its manifest gap, filed as daimon issue
-`2026-06-11-mcp-manifest-omits-tool-input-schema`, is closed), and
-`agent_format_tools` passes it through verbatim as `function.parameters` (tools
-with none fall back to `{"type":"object"}`). Remaining — parallel tool calls and
-surfacing tool rounds in `/audit`. Full-stack live e2e of the loop against **real** daimon
-is a host-side step (daimon's server won't run in thoth's build sandbox — signal
-16, confirmed repeatedly; thoth's seam is verified wire-compatible with 1.2.6's
-actual code + responses, and the loop against faithful mocks of that wire).
+See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 are done** (0.1.0 →
+0.10.1): the driver core, the hoosh seam (inference + mid-session model switch), the
+M4 tool spine, the M5 avatara overlay, the model-driven agentic tool-calling loop
+with **parallel tool execution** + `/audit` tool-rounds (0.7.0), the M6 multi-target
+build ladder + the live capability ladder (0.6.5), and the M7 presentation ladder —
+T1 amber/colored diffs (0.8.x), the T2 rich-TUI (0.9.0), the self-managed feed
+redraw (0.9.1), instant SIGWINCH + spinner + incremental streaming paint (0.9.2),
+the togglable file-tree pane (0.9.3), `/clear` + scrollback (0.9.4), version
+single-source + welcome banner (0.9.5), `/theme` dark/light (0.10.0), and the 6.2.43
+toolchain refresh (0.10.1).
+
+**Remaining (non-gating polish):** the 0.10.x data producers — tokens (0.10.2),
+cost (0.10.3), git omit-until-sit (0.10.4) — honest-omit fields layered on the
+shipped surface, per [ADR-0010](../adr/0010-data-producer-honest-omit.md). The
+rainbow theme is deferred (needs **anuenue** vendored).
+
+**The path to v1.0 is dominated by AGNOS lighting up, not by feature work in
+thoth.** Four gates (see [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS
+lane clears once the agnos peer ships the `SIGHUP` signal-number constants (filed
+upstream; zero thoth change); (2) ≥1 downstream consumer green on AGNOS (external);
+(3) a security review (not scheduled); (4) the SemVer-vs-CalVer 1.0 decision
+(deferred ADR-0004). x86_64 Linux ships; aarch64 builds; macOS builds+runs (audit
+path gated upstream); Windows staged on architectural floor gaps. Full-stack live
+e2e against the real spine (hoosh/daimon) is a host-side step — the build sandbox
+blocks a compiled binary's TCP.

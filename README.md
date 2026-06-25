@@ -8,21 +8,24 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.6.3 — all five seams wired, agentic tool-calling live (pre-1.0).**
-> The interactive REPL/TUI loop is real and usable, and the full AGNOS spine is
-> wired. A free-text turn drives a **model-driven agentic loop**: thoth advertises
-> **daimon**'s MCP tools to **hoosh**, the backing model calls them, thoth
-> executes each through daimon (speaking **bote**, the vendored MCP protocol)
-> under **t-ron** authorization (deny is final; no policy means a fail-closed
-> confirm), and loops results back until the model answers — streaming the output
-> (SSE) as it arrives. The signature move (M3): switch the backing model
-> mid-session through hoosh (`/model`, and `/models` to see the catalog). The
-> persona (M5): the Thoth/Librarian archetype from **avatara** steers the turn.
-> Multi-target builds began in M6 — Linux ships; AGNOS/macOS/Windows are staged.
-> SemVer `0.x` while the surface moves. See
-> [`docs/development/state.md`](docs/development/state.md) and
-> [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live
-> picture.
+> **Status: 0.10.1 — all five seams wired, agentic tool-calling live, a rich TUI
+> front-end (pre-1.0).** The interactive REPL/TUI loop is real and usable, and the
+> full AGNOS spine is wired. A free-text turn drives a **model-driven agentic loop**:
+> thoth advertises **daimon**'s MCP tools to **hoosh**, the backing model calls them,
+> thoth executes each through daimon (speaking **bote**, the vendored MCP protocol)
+> under **t-ron** authorization (deny is final; no policy means a fail-closed confirm),
+> and loops results back until the model answers — streaming the output (SSE) as it
+> arrives, with parallel tool calls. The signature move (M3): switch the backing model
+> mid-session through hoosh (`/model`, `/models` for the catalog). The persona (M5):
+> the Thoth/Librarian archetype from **avatara** steers the turn. The **M7 front-end**
+> (0.8.x–0.10.x): a T2 alt-screen rich-TUI — a semantic amber palette,
+> syntax-highlighted diffs, a self-managed scrolling feed, instant SIGWINCH resize, a
+> working spinner, a togglable file-tree pane, scrollback, `/clear`, and `/theme`
+> (dark/light) — degrading **closed** to a byte-identical line-mode floor when
+> piped/CI. Multi-target builds (M6): Linux ships; aarch64 builds; macOS builds+runs;
+> AGNOS/Windows staged on named upstream floor gaps. SemVer `0.x` while the surface
+> moves. See [`docs/development/state.md`](docs/development/state.md) and
+> [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.
 
 ## What thoth is
 
