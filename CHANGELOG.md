@@ -2,6 +2,63 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] - 2026-06-25
+
+**`/theme` — dark / light (M7).** A runtime color-theme switch over the existing
+semantic-role surface: a theme axis now sits in front of the role color tables, so a
+theme is just a different role→color mapping. `dark` is today's amber (byte-identical
+default); `light` is the mockup's warm-light palette. Switch with `/theme dark|light` or
+toggle with **⌃T** in the TUI; the active theme shows in the status bar and `/state`.
+`rainbow` is announced as not-yet-available (it's a per-grapheme HSV render mode, not a
+role table — it needs the anuenue lib vendored, a separate effort) — never faked. Opens
+the **0.10.x arc** (themes + data producers). 380 unit assertions (+14). Pin unchanged
+(6.2.40).
+
+### Added
+- **The theme axis** (`src/ui.cyr`): `_ui_rgb`/`_ui_idx256`/`_ui_code16` now branch on
+  `_ui_theme` into `_dark` (the pre-0.10.0 values verbatim) and `_light` leaves;
+  `ui_set_theme(t)` rebuilds the cached SGR table under the new theme while keeping the
+  detected tier/depth; `ui_theme`/`ui_theme_name`/`ui_theme_from_name`. PT_PLAIN stays
+  empty-string under any theme, so the piped/CI floor is byte-identical. `test_theme`
+  (+12): the dark byte-identical anchor, the light palette, the T1 rebuild, and the
+  PT_PLAIN floor under both themes.
+- **`/theme` command** (`src/commands.cyr`) + the **⌃T** toggle (`src/tui.cyr`): bare
+  `/theme` shows the active theme + choices; `/theme dark|light` switches; `/theme
+  rainbow` honestly degrades. The status bar gains a `theme <name>` field and `/state` a
+  `theme` row.
+
+### Known limitations
+- A theme switch re-colors the chrome (status bar, composer, tree) and all NEW output;
+  existing feed lines keep their baked-in colors (the feed is a byte transcript) — run
+  `/clear` for a fully re-themed window. At 16-color, `light` shares the dark codes (the
+  named-color floor can't render warm-light hues). Each switch leaks ~390 B into the
+  bump heap (bounded; switches are rare). rainbow is deferred (needs anuenue).
+
+## [0.9.5] - 2026-06-25
+
+**Version single-source + the TUI welcome banner + status-bar version.** Small polish
+and infra ahead of the 0.10.x arc. The runtime version is now derived from one place —
+the `VERSION` file — and the TUI gains the full scribe greeting + its version in the
+status bar.
+
+### Added
+- **The full welcome banner in the TUI feed** — the alt-screen view now seeds the scribe
+  greeting (sourced from the avatara persona, mirroring the line-REPL banner) instead of
+  a one-line note: `<name>, <role> - {(o>` · the THOTH backronym tagline · `READY — type
+  a task, or /help. Ctrl-X exits.`
+- **The version in the status bar** — `{(o> thoth (<version>)  model …  turns …  surface
+  …`, read from the single version source.
+
+### Changed
+- **Version is a single source of truth (`VERSION`).** New `scripts/gen-version.sh`
+  generates `src/version.cyr` (`thoth_version()` — the one runtime copy) from the
+  `VERSION` file; `scripts/build.sh` regenerates it before every build so it can't drift,
+  and the generated file is committed so a raw `cyrius build` stays in sync. The banner,
+  the `/state` build line, and the status bar all read `thoth_version()` — the previously
+  scattered `"thoth X.Y.Z"` literals are gone. (`cyrius.cyml` already read `VERSION` via
+  `${file:VERSION}`.) The per-release version sync is now: edit `VERSION`, run
+  `gen-version.sh` (or build), bump the CHANGELOG header.
+
 ## [0.9.4] - 2026-06-25
 
 **`/clear` + feed scrollback (M7).** Two quality-of-life additions to the T2 TUI, both

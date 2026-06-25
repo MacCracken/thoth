@@ -34,6 +34,16 @@ var ROLE_RED = 6;          # #d28a78 diff-del / error
 var ROLE_BLUE = 7;         # #82a9c6 paths
 var UI_ROLE_COUNT = 8;
 
+# Theme axis (0.10.0): a theme sits IN FRONT of the role axis — the three color
+# dispatchers (_ui_rgb/_ui_idx256/_ui_code16) branch on _ui_theme. dark is today's
+# amber (the byte-identical default); light is the mockup's warm-light palette. The
+# cached SGR table is rebuilt on a /theme switch (ui_set_theme). rainbow is DEFERRED
+# (a per-grapheme HSV render mode, not a role table — it needs anuenue vendored).
+var THEME_DARK = 0;
+var THEME_LIGHT = 1;
+var UI_THEME_COUNT = 2;
+var _ui_theme = 0;         # default dark -> byte-identical to pre-0.10.0
+
 var _ui_tier = 0;          # active tier (PT_*)
 var _ui_depth = 0;         # active color depth (CD_*)
 var _ui_detected = 0;      # 1 once detection/override ran
@@ -92,9 +102,12 @@ fn _ui_env_has(name) {
     return 1;
 }
 
-# Per-role color data. RGB packed as r*65536 + g*256 + b (the design palette);
-# the 256-color and 16-color fallbacks are the nearest readable approximations.
-fn _ui_rgb(role) {
+# Per-role color data, theme-dispatched. RGB packed as r*65536 + g*256 + b; the
+# 256-color and 16-color fallbacks are the nearest readable approximations. Each
+# public dispatcher branches on _ui_theme; the _dark leaves are the pre-0.10.0
+# values verbatim (so dark output is bit-for-bit unchanged).
+fn _ui_rgb(role) { if (_ui_theme == THEME_LIGHT) { return _ui_rgb_light(role); } return _ui_rgb_dark(role); }
+fn _ui_rgb_dark(role) {
     if (role == ROLE_ACCENT) { return 230 * 65536 + 171 * 256 + 92; }
     if (role == ROLE_ACCENT_DIM) { return 185 * 65536 + 134 * 256 + 63; }
     if (role == ROLE_FG) { return 236 * 65536 + 229 * 256 + 211; }
@@ -105,7 +118,21 @@ fn _ui_rgb(role) {
     if (role == ROLE_BLUE) { return 130 * 65536 + 169 * 256 + 198; }
     return 236 * 65536 + 229 * 256 + 211;
 }
-fn _ui_idx256(role) {
+# Light: the mockup's warm-light palette — a dark warm-amber accent on light paper,
+# dark ink fg, the diff/path hues darkened for contrast on a light background.
+fn _ui_rgb_light(role) {
+    if (role == ROLE_ACCENT) { return 176 * 65536 + 122 * 256 + 37; }
+    if (role == ROLE_ACCENT_DIM) { return 148 * 65536 + 100 * 256 + 35; }
+    if (role == ROLE_FG) { return 44 * 65536 + 40 * 256 + 32; }
+    if (role == ROLE_MUTED) { return 118 * 65536 + 108 * 256 + 88; }
+    if (role == ROLE_FAINT) { return 154 * 65536 + 144 * 256 + 121; }
+    if (role == ROLE_GREEN) { return 93 * 65536 + 122 * 256 + 69; }
+    if (role == ROLE_RED) { return 177 * 65536 + 87 * 256 + 64; }
+    if (role == ROLE_BLUE) { return 67 * 65536 + 106 * 256 + 134; }
+    return 44 * 65536 + 40 * 256 + 32;
+}
+fn _ui_idx256(role) { if (_ui_theme == THEME_LIGHT) { return _ui_idx256_light(role); } return _ui_idx256_dark(role); }
+fn _ui_idx256_dark(role) {
     if (role == ROLE_ACCENT) { return 179; }
     if (role == ROLE_ACCENT_DIM) { return 137; }
     if (role == ROLE_FG) { return 223; }
@@ -116,7 +143,19 @@ fn _ui_idx256(role) {
     if (role == ROLE_BLUE) { return 110; }
     return 223;
 }
-fn _ui_code16(role) {
+fn _ui_idx256_light(role) {
+    if (role == ROLE_ACCENT) { return 136; }
+    if (role == ROLE_ACCENT_DIM) { return 94; }
+    if (role == ROLE_FG) { return 235; }
+    if (role == ROLE_MUTED) { return 242; }
+    if (role == ROLE_FAINT) { return 245; }
+    if (role == ROLE_GREEN) { return 65; }
+    if (role == ROLE_RED) { return 131; }
+    if (role == ROLE_BLUE) { return 60; }
+    return 235;
+}
+fn _ui_code16(role) { if (_ui_theme == THEME_LIGHT) { return _ui_code16_light(role); } return _ui_code16_dark(role); }
+fn _ui_code16_dark(role) {
     if (role == ROLE_ACCENT) { return 33; }       # yellow
     if (role == ROLE_ACCENT_DIM) { return 33; }
     if (role == ROLE_FG) { return 39; }            # default fg
@@ -127,6 +166,9 @@ fn _ui_code16(role) {
     if (role == ROLE_BLUE) { return 34; }
     return 39;
 }
+# 16-color: the named-color floor genuinely can't render warm-light hues, so light
+# shares the dark codes (honest — at CD_16 'light' just isn't visually light).
+fn _ui_code16_light(role) { return _ui_code16_dark(role); }
 
 # _ui_bg_escape: write a background SGR (48;2;R;G;B truecolor, or 48;5;idx256) into
 # buf at off; return new off. The diff-row tints.
@@ -227,6 +269,29 @@ fn _ui_apply(tier, depth) {
     _ui_detected = 1;
     if (tier != PT_PLAIN) { _ui_build_palette(); }
     return 0;
+}
+
+# --- theme switch (0.10.0) ---
+# ui_set_theme: select a theme and REBUILD the cached SGR table under it, KEEPING the
+# detected tier/depth (so we don't re-run detection). _ui_build_palette alloc()s a
+# fresh role table each call and re-reads the (now theme-branching) color fns, so this
+# cleanly re-colors every cached prefix. The old buffer leaks ~390 B into the
+# never-freeing bump heap — bounded + idiomatic (theme switches are rare interactive
+# actions; NEVER call this from a paint loop). At PT_PLAIN it only records the theme
+# (every role stays "" — the floor is byte-identical regardless of theme).
+fn ui_set_theme(t) {
+    _ui_theme = t;
+    if (_ui_tier != PT_PLAIN) { _ui_build_palette(); }
+    return 0;
+}
+fn ui_theme() { return _ui_theme; }
+fn ui_theme_name() { if (_ui_theme == THEME_LIGHT) { return "light"; } return "dark"; }
+# ui_theme_from_name: theme id for a name, or -1 if unknown (rainbow is deferred, so
+# it resolves to -1 too — the /theme command announces it, never fakes a cycle).
+fn ui_theme_from_name(s) {
+    if (streq(s, "dark") == 1) { return THEME_DARK; }
+    if (streq(s, "light") == 1) { return THEME_LIGHT; }
+    return 0 - 1;
 }
 
 # _ui_detect_depth: truecolor (COLORTERM) -> 256 (TERM *-256color) -> 16.

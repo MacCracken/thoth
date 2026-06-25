@@ -86,7 +86,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 3. **Test + benchmark additions** for new code
 4. **Internal review** — performance, memory, correctness, edge cases; for every new feature, ask "is this substrate or capability?" — substrate ports, capability binds to the spine
 5. **Documentation** — update CHANGELOG, `docs/development/state.md`, any ADR the change earned
-6. **Version sync** — `VERSION`, `cyrius.cyml`, CHANGELOG header
+6. **Version sync** — edit `VERSION` (the single source of truth), run `scripts/gen-version.sh` to regenerate `src/version.cyr` (`thoth_version()`; `scripts/build.sh` also does this before each build), bump the CHANGELOG header. `cyrius.cyml` already reads `VERSION` via `${file:VERSION}`; never inline the version in `.cyr` source — read `thoth_version()`.
 
 ## Scaffolding
 

@@ -22,6 +22,7 @@ enum Cmd {
     CMD_RESET = 14;
     CMD_MODELS = 15;
     CMD_CLEAR = 16;
+    CMD_THEME = 17;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -62,6 +63,7 @@ fn classify_input(line) {
     if (token_is(line, "/audit") == 1) { return CMD_AUDIT; }
     if (token_is(line, "/reset") == 1) { return CMD_RESET; }
     if (token_is(line, "/clear") == 1) { return CMD_CLEAR; }
+    if (token_is(line, "/theme") == 1) { return CMD_THEME; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -84,6 +86,7 @@ fn cmd_help() {
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
     _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
+    _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /quit", "              exit (or Ctrl-D)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
@@ -155,7 +158,8 @@ fn cmd_state() {
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     oprintln("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.9.4"); oprintln("");
+    ui_label("  theme   : "); ui_emit(ROLE_ACCENT, ui_theme_name()); oprintln("");
+    ui_label("  build   : "); emit(ui_sgr(ROLE_ACCENT)); emit("thoth "); emit(thoth_version()); emit(ui_reset()); oprintln("");
     return 0;
 }
 
@@ -410,6 +414,32 @@ fn cmd_clear() {
     return 0;
 }
 
+# cmd_theme: switch the color theme. Bare /theme shows the active theme + the choices;
+# `/theme dark|light` switches (rebuilds the cached SGR table — chrome + new output
+# re-color; existing feed lines keep their baked colors, a transcript). rainbow is
+# announced as not-yet-available (it needs the anuenue lib vendored), never faked.
+fn cmd_theme(line) {
+    var arg = arg_after(line);
+    if (arg == 0) {
+        emit("theme: "); ui_emit(ROLE_ACCENT, ui_theme_name()); oprintln("");
+        oprintln("  /theme dark · /theme light   (rainbow: not yet — needs the anuenue lib)");
+        return 0;
+    }
+    var t = ui_theme_from_name(arg);
+    if (t < 0) {
+        if (streq(arg, "rainbow") == 1) {
+            oprintln("theme 'rainbow' isn't available yet — it needs the anuenue lib vendored");
+            oprintln("(it's a per-grapheme HSV cycle, not a color table). dark + light are live.");
+            return 0;
+        }
+        emit("unknown theme '"); emit(arg); oprintln("' — try: dark, light");
+        return 0;
+    }
+    ui_set_theme(t);
+    emit("theme -> "); ui_emit(ROLE_ACCENT, ui_theme_name()); oprintln("");
+    return 0;
+}
+
 # dispatch: run one input line. Returns 1 to keep looping, 0 to quit.
 fn dispatch(line) {
     var c = classify_input(line);
@@ -428,6 +458,7 @@ fn dispatch(line) {
     if (c == CMD_AUDIT) { cmd_audit(); return 1; }
     if (c == CMD_RESET) { cmd_reset(); return 1; }
     if (c == CMD_CLEAR) { cmd_clear(); return 1; }
+    if (c == CMD_THEME) { cmd_theme(line); return 1; }
     if (c == CMD_UNKNOWN_SLASH) { oprintln("unknown command (try /help)"); return 1; }
     cmd_task(line);
     return 1;

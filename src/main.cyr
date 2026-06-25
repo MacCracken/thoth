@@ -32,6 +32,7 @@ include "src/vendor/darshana.cyr"
 # gate (t-ron binding + confirm) precedes seams, which reports its status;
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).
 include "src/util.cyr"
+include "src/version.cyr"  # thoth_version() — GENERATED from VERSION (scripts/gen-version.sh)
 include "src/ui.cyr"
 include "src/feed.cyr"     # self-managed feed buffer (M7 / 0.9.1); after ui (feed_clip calls ui_reset)
 include "src/ftree.cyr"    # file-tree pane geometry + model (M7 / 0.9.3)

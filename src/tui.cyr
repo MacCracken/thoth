@@ -46,6 +46,7 @@ var KEY_SCROLL_UP = 16;       # Shift-Up (CSI 1;2A) — scroll the feed back (0.
 var KEY_SCROLL_DOWN = 17;     # Shift-Down (CSI 1;2B) — scroll the feed forward
 var KEY_PGUP = 18;            # PageUp (CSI 5~) — page the feed back
 var KEY_PGDN = 19;            # PageDown (CSI 6~) — page the feed forward
+var KEY_TOGGLE_THEME = 20;    # Ctrl-T — toggle dark/light theme (0.10.0)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -159,6 +160,7 @@ fn tui_read_key() {
     if (b == 5) { return KEY_END; }
     if (b == 7) { return KEY_TOGGLE_STATUS; }   # Ctrl-G
     if (b == 2) { return KEY_TOGGLE_TREE; }     # Ctrl-B — toggle the file-tree pane
+    if (b == 20) { return KEY_TOGGLE_THEME; }   # Ctrl-T — toggle dark/light theme
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
@@ -235,13 +237,16 @@ fn tui_draw_status() {
     tty_move(1, 1);
     tty_clear_to_eol();
     if (_tui_show_status == 0) { return 0; }
-    ui_emit(ROLE_ACCENT, "{(o> thoth");               # the owl prompt doubles as the brand glyph
+    emit(ui_sgr(ROLE_ACCENT)); emit("{(o> thoth (");  # the owl prompt doubles as the brand glyph
+    emit(thoth_version()); emit(")"); emit(ui_reset());
     ui_emit(ROLE_FAINT, "  model ");
     ui_emit(ROLE_ACCENT, _hoosh_model());
     ui_emit(ROLE_FAINT, "  turns ");
     emit(ui_sgr(ROLE_FG)); fmt_int(session_turns()); emit(ui_reset());
     ui_emit(ROLE_FAINT, "  surface ");
     ui_emit(ROLE_GREEN, ui_tier_name());
+    ui_emit(ROLE_FAINT, "  theme ");
+    ui_emit(ROLE_ACCENT, ui_theme_name());
     return 0;
 }
 
@@ -250,7 +255,7 @@ fn tui_draw_status() {
 # becomes a filtered list of matching commands. The matchers are pure + unit-tested;
 # the render is I/O. (A multi-row dropdown above the composer is a later refinement —
 # it needs the feed-buffer redraw model.)
-var SLASH_N = 14;
+var SLASH_N = 15;
 fn _slash_name(i) {
     if (i == 0) { return "/help"; }
     if (i == 1) { return "/seams"; }
@@ -265,7 +270,8 @@ fn _slash_name(i) {
     if (i == 10) { return "/audit"; }
     if (i == 11) { return "/reset"; }
     if (i == 12) { return "/clear"; }
-    if (i == 13) { return "/quit"; }
+    if (i == 13) { return "/theme"; }
+    if (i == 14) { return "/quit"; }
     return "";
 }
 # _buf_has_space: 1 if buf[0..n) holds a space (the command token is complete).
@@ -773,8 +779,14 @@ fn tui_loop() {
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
-    out_mode_set(OUT_RING);                        # seed a welcome line into the feed
-    ui_emit(ROLE_FAINT, "thoth ready — type a task, or /help. Ctrl-X exits.");
+    out_mode_set(OUT_RING);                        # seed the welcome banner into the feed
+    # the scribe greeting, sourced from the avatara persona (mirrors print_banner):
+    ui_emit(ROLE_ACCENT, persona_name()); emit(", "); ui_emit(ROLE_ACCENT_DIM, persona_role());
+    emit(" - "); ui_emit(ROLE_ACCENT, "{(o>");
+    feed_flush_pending();
+    ui_emit(ROLE_MUTED, persona_tagline());
+    feed_flush_pending();
+    ui_emit(ROLE_GREEN, "READY"); ui_emit(ROLE_FAINT, " — type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
     out_mode_set(OUT_FD1);
     _tui_running = 1;
@@ -801,6 +813,10 @@ fn tui_loop() {
                     _tui_focus = FOCUS_TREE;
                 }
                 tty_clear();           # the feed narrows/widens; full repaint
+                tui_relayout();
+            } elif (key == KEY_TOGGLE_THEME) {
+                ui_set_theme(1 - ui_theme());   # dark <-> light; rebuilds the SGR table
+                tty_clear();           # re-color the whole frame
                 tui_relayout();
             } elif (key == KEY_TAB) {
                 if (_tui_show_tree == 1) {

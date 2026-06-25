@@ -7,6 +7,31 @@
 
 ## Version
 
+**0.10.0** — `/theme` dark/light (M7), 2026-06-25. Opens the 0.10.x arc (themes + data
+producers). A runtime color-theme switch over the semantic-role surface: a **theme axis**
+in `src/ui.cyr` sits in front of the role color tables — `_ui_rgb`/`_ui_idx256`/
+`_ui_code16` branch on `_ui_theme` into `_dark` (pre-0.10.0 values verbatim → byte-
+identical default) and `_light` (the mockup's warm-light) leaves; `ui_set_theme(t)`
+rebuilds the cached SGR table while keeping the detected tier/depth. `/theme dark|light`
+switches, **⌃T** toggles in the TUI, the status bar + `/state` show the active theme.
+PT_PLAIN stays empty-string under any theme → piped/CI floor byte-identical (verified: 0
+escapes). `rainbow` is announced not-yet-available (a per-grapheme HSV render mode, not a
+role table — needs anuenue vendored; user deferred it). Known: a switch re-colors chrome
++ new output but existing feed lines keep baked colors (/clear for a clean window); light
+shares dark's 16-color codes. TUI render verifies on a real tty. 380 assertions (+14,
+`test_theme`). Pin unchanged (6.2.40 → 0.10.1 will refresh to 6.2.43).
+**0.9.5** — version single-source + the TUI welcome banner + status-bar version,
+2026-06-25. Small polish/infra ahead of the 0.10.x arc. **Version is now a single source
+of truth (`VERSION`):** new `scripts/gen-version.sh` generates `src/version.cyr`
+(`thoth_version()`, the one runtime copy) from `VERSION`; `scripts/build.sh` regenerates
+it before each build (committed too, so a raw `cyrius build` stays in sync). The banner,
+the `/state` build line, and the status bar all read `thoth_version()` — the scattered
+`"thoth X.Y.Z"` literals are gone (cyrius.cyml already read `VERSION` via `${file:VERSION}`).
+Proven: bump `VERSION` → regen → rebuild → the runtime string follows. **TUI welcome
+banner:** the alt-screen feed seeds the full scribe greeting (avatara-sourced, mirroring
+the REPL banner) — `<name>, <role> - {(o>` · the THOTH backronym · `READY — …`. **Status
+bar:** `{(o> thoth (<version>)  model …  turns …  surface …`. TUI render verifies on a
+real tty; 366 assertions (unchanged). Pin unchanged (6.2.40).
 **0.9.4** — `/clear` + feed scrollback (M7), 2026-06-25. Two quality-of-life additions
 to the T2 TUI, both riding the 0.9.1 self-managed feed. **`/clear`** empties the content
 window: in the TUI it clears the feed ring (`feed_clear`); in the line REPL on a tty it
@@ -531,7 +556,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **366 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **380 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -572,7 +597,10 @@ bundle is DCE-unreachable).
   `spin_advance`); and **0.9.3** `test_ftree` (the file-tree layout geometry +
   flattened-tree model: append/insert/move-clamp/collapse-subtree, the ancestor-walk
   `ftree_path`, and a real `src/` dir-listing smoke); and **0.9.4** the `/clear`
-  classification, `feed_clear` (ring + scroll reset), and the `/c` palette match. Passes
+  classification, `feed_clear` (ring + scroll reset), and the `/c` palette match; and
+  **0.10.0** `test_theme` (the theme axis — dark byte-identical anchor, the light palette,
+  the T1 SGR-table rebuild on a switch, and the PT_PLAIN floor staying empty under both
+  themes). Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.

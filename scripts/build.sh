@@ -143,6 +143,11 @@ build_macos() {
 }
 
 target="${1:-$(is_macos_host && echo macos || echo linux)}"
+
+# Regenerate src/version.cyr from VERSION (single source of truth) before any build,
+# so thoth_version() can never drift from the VERSION file. See scripts/gen-version.sh.
+"$(dirname "$0")/gen-version.sh"
+
 case "$target" in
     linux)   build_linux ;;
     macos)   build_macos ;;

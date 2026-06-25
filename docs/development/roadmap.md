@@ -206,16 +206,23 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   **Shift-↑/↓** (the non-mouse wheel fallback) + **PageUp/PageDown** page back through the
   ring's retained 2048 lines (`feed_repaint` honors `feed_scroll()`); a submitted turn
   resets to the bottom. TUI-only; byte-identical floor.
-- **`/theme` (0.9.x)** — a theme switch, almost free given the semantic role surface
-  (`src/ui.cyr`): a theme is just a different role→color table. `/theme dark` (today's
-  amber default) · `/theme light` (the mockup's warm-light palette) · `/theme rainbow`
-  (vendor **anuenue** — its HSV grapheme-cycle, same one-file consume pattern as
-  vyakarana/darshana — and route the surface through its tinter). The active theme
-  shows in the TUI status bar. (The mockup's ⌃T toggle is the dark/light shape.) 🌈
-- **Data producers (parallel; honest-omit until present)** — hoosh `usage` →
-  tokens; opt-in `[pricing]` → cost; git branch + diff via **sit** (`.sit/` repos
-  today). **Real `.git/` repos are GATED on sit's `.git/` read-mode** (filed on
-  sit's roadmap) — until it lands, the branch field + real-git diffs omit, never
+### 0.10.x — themes + data producers (in progress)
+
+- **`0.10.0` — `/theme` dark/light (LANDED)** — a theme axis in front of the semantic
+  role color tables (`src/ui.cyr`): `/theme dark` (amber default) · `/theme light` (the
+  mockup's warm-light) · **⌃T** toggles; the active theme shows in the status bar +
+  `/state`. `ui_set_theme` rebuilds the cached SGR table; PT_PLAIN stays byte-identical.
+  `rainbow` (vendor **anuenue**, an HSV per-grapheme render mode) is **deferred** — a
+  separate effort, announced not-yet-available, never faked. 🌈→later
+- **`0.10.1` — toolchain refresh to Cyrius 6.2.43** (maintenance; bumps the pin +
+  `cyrius lib sync`, clearing the 6.2.40-vs-cycc drift).
+- **`0.10.2`+ — Data producers (honest-omit until present)** — hoosh `usage` →
+  tokens (`tok <n>` status field, omits until usage arrives; streaming via
+  `include_usage`); opt-in `[pricing.<model>]` → cost (integer micro-USD,
+  price-at-accumulate across mid-session model switches); git branch + diff via **sit**
+  — **omit-until-sit** (one faint `/state` honesty line; no faked branch/diff). Real
+  `.git/` repos are GATED on sit's `.git/` read-mode (filed on sit's roadmap) — the
+  branch field + real-git diffs omit, never
   fake.
 - **T3 desktop — ceiling, off the v1.0 path** — thoth-in-**puka** (puka's own v3
   command center names thoth as its consumer). No webview in the sovereign core.
