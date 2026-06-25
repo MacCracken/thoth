@@ -783,6 +783,8 @@ fn test_tui() {
     led_feed(KEY_KILL, 0);
     assert_eq(led_len(), 0, "Ctrl-U clears the line");
     assert_eq(led_feed(KEY_CTRLD, 0), ACT_EOF, "Ctrl-D on an empty line -> EOF");
+    led_feed(KEY_CHAR, 122);                                    # 'z' (non-empty line)
+    assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
     # geometry
     assert_eq(tui_status_row(), 1, "status bar at row 1");
     assert_eq(tui_composer_row(24), 24, "composer at the last row");

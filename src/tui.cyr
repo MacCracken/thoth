@@ -80,7 +80,7 @@ fn led_feed(key, ch) {
     if (key == KEY_HOME) { _comp_cur = 0; return ACT_NONE; }
     if (key == KEY_END) { _comp_cur = _comp_len; return ACT_NONE; }
     if (key == KEY_KILL) { _comp_len = 0; _comp_cur = 0; store8(_composer, 0); return ACT_NONE; }
-    if (key == KEY_CTRLC) { _comp_len = 0; _comp_cur = 0; store8(_composer, 0); return ACT_NONE; }
+    if (key == KEY_CTRLC) { return ACT_EOF; }   # Ctrl-C exits unconditionally (interrupt), with teardown
     if (key == KEY_ENTER) { return ACT_SUBMIT; }
     if (key == KEY_CTRLD) { if (_comp_len == 0) { return ACT_EOF; } return ACT_NONE; }
     return ACT_NONE;
@@ -165,7 +165,7 @@ fn tui_draw_status() {
     tty_move(1, 1);
     tty_clear_to_eol();
     if (_tui_show_status == 0) { return 0; }
-    ui_emit(ROLE_ACCENT, "◆ thoth");                  # the diamond brand glyph (UTF-8 literal)
+    ui_emit(ROLE_ACCENT, "{(o> thoth");               # the owl prompt doubles as the brand glyph
     ui_emit(ROLE_FAINT, "  model ");
     ui_emit(ROLE_ACCENT, _hoosh_model());
     ui_emit(ROLE_FAINT, "  turns ");
