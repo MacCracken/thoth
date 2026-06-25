@@ -182,6 +182,12 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   feed buffer, paint the visible window each frame) so a **togglable file-tree pane**
   (keyboard, no mouse) can coexist as a left column, and instant **SIGWINCH** resize
   drops in. Plus the working spinner.
+- **`/theme` (0.9.x)** — a theme switch, almost free given the semantic role surface
+  (`src/ui.cyr`): a theme is just a different role→color table. `/theme dark` (today's
+  amber default) · `/theme light` (the mockup's warm-light palette) · `/theme rainbow`
+  (vendor **anuenue** — its HSV grapheme-cycle, same one-file consume pattern as
+  vyakarana/darshana — and route the surface through its tinter). The active theme
+  shows in the TUI status bar. (The mockup's ⌃T toggle is the dark/light shape.) 🌈
 - **Data producers (parallel; honest-omit until present)** — hoosh `usage` →
   tokens; opt-in `[pricing]` → cost; git branch + diff via **sit** (`.sit/` repos
   today). **Real `.git/` repos are GATED on sit's `.git/` read-mode** (filed on
