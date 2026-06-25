@@ -2,6 +2,23 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.5] - 2026-06-24
+
+**Syntax-highlighted diff bodies (M7 Phase 2c).** The colored diff card now
+syntax-highlights the line bodies too — keywords amber, strings green, and the rest —
+sharing the SAME coverage-guarded highlighter `/read` uses (`_hl_span`), so no byte is
+dropped or reordered. The green `+` / red `−` gutter + faint line numbers carry the
+add/del signal; the grammar is auto-detected from the file path. Plain when piped.
+(The mockup's per-row background tint is left as future polish.)
+
+### Changed
+- **Diff line bodies are syntax-colored** — `diff_render` detects the grammar from the
+  path and tokenizes each line via vyakarana; context / add / del bodies all render in
+  token colors with the structural gutter on top. T0 and unknown-language fall back to
+  the plain body.
+- **One shared highlighter** — `_hl_span` + `_tok_role` moved into `src/diff.cyr`, so
+  `/read` and the diff bodies use a single tested, coverage-guarded path instead of two.
+
 ## [0.8.4] - 2026-06-24
 
 **Syntax highlighting via vyakarana (M7 Phase 2b).** `/read` now renders source files

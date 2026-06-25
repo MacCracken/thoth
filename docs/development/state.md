@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.8.5** — syntax-highlighted diff bodies (M7 Phase 2c), 2026-06-24. The colored diff
+card now syntax-colors the line bodies (keywords amber, strings green, …) via the SAME
+coverage-guarded highlighter `/read` uses (`_hl_span`, shared into `src/diff.cyr`) — no
+byte dropped; the green `+`/red `−` gutter + faint line numbers carry the add/del
+signal; grammar auto-detected from the path. Plain when piped. 270 assertions. Pin
+unchanged (6.2.40).
 **0.8.4** — syntax highlighting via vyakarana (M7 Phase 2b), 2026-06-24. `/read`
 renders source syntax-colored (keywords amber, strings green, comments faint, …) via
 the newly vendored `src/vendor/vyakarana.cyr` (2.2.3 — the AGNOS tokenizer, 45

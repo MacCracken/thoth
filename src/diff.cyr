@@ -66,9 +66,54 @@ fn _diff_line_eq(ob, ol, ai, nb, nl, bi) {
     return 1;
 }
 
+# _tok_role: a vyakarana token kind -> a semantic color role, or -1 to leave
+# uncolored (idents / punctuation / whitespace / error -> terminal default).
+fn _tok_role(kind) {
+    if (kind == TK_KEYWORD) { return ROLE_ACCENT; }
+    if (kind == TK_STRING) { return ROLE_GREEN; }
+    if (kind == TK_NUMBER) { return ROLE_BLUE; }
+    if (kind == TK_COMMENT) { return ROLE_FAINT; }
+    if (kind == TK_PREPROCESSOR) { return ROLE_BLUE; }
+    if (kind == TK_OPERATOR) { return ROLE_MUTED; }
+    return 0 - 1;
+}
+
+# _hl_span: syntax-color buf[0..n) via vyakarana grammar `lang`, emitting each token
+# in its role color (fg + reset per token). The SHARED highlighter for /read and
+# diff bodies. CRITICAL honesty guard: it tracks the cursor and emits any uncovered
+# gap + trailing bytes VERBATIM, so highlighting never drops or reorders a byte. If
+# the stream can't open it emits the whole span verbatim. Returns 1.
+fn _hl_span(lang, buf, n) {
+    var s = tokenize_stream_new(lang);
+    if (s == 0) { emit_n(buf, n); return 1; }
+    tokenize_stream_feed(s, buf, n);
+    var tb = tokenbuf_new();
+    tokenize_stream_drain(s, tb);
+    tokenize_stream_finish(s, tb);
+    var count = tokenbuf_count(tb);
+    var pos = 0;
+    var i = 0;
+    while (i < count) {
+        var start = tokenbuf_start(tb, i);
+        var len = tokenbuf_len(tb, i);
+        if (start > pos) { emit_n(buf + pos, start - pos); }
+        if ((start + len) <= n) {
+            var role = _tok_role(tokenbuf_kind(tb, i));
+            if (role < 0) { emit_n(buf + start, len); }
+            else { ui_emit_n(role, buf + start, len); }
+            pos = start + len;
+        }
+        i = i + 1;
+    }
+    if (pos < n) { emit_n(buf + pos, n - pos); }
+    tokenize_stream_free(s);
+    return 1;
+}
+
 # _diff_emit_line: render one hunk line — line-number gutter (faint), a colored
-# +/-/space gutter, then the raw line body. kind 0=context 1=del 2=add. I/O.
-fn _diff_emit_line(role, gutter, lineno, body_buf, off, len) {
+# +/-/space gutter, then the line body: syntax-highlighted via `lang` (or emitted in
+# the gutter `role` when lang==0 / plain tier). kind 0=context 1=del 2=add. I/O.
+fn _diff_emit_line(role, gutter, lineno, body_buf, off, len, lang) {
     if (lineno > 0) {
         # right-aligned 4-col line number, faint
         var pad = 0;
@@ -88,7 +133,8 @@ fn _diff_emit_line(role, gutter, lineno, body_buf, off, len) {
     # emit it — println supplies the line break.
     var rl = len;
     if (rl > 0) { if (load8(body_buf + off + rl - 1) == 10) { rl = rl - 1; } }
-    ui_emit_n(role, body_buf + off, rl);
+    if ((lang != 0) && (ui_tier() != PT_PLAIN)) { _hl_span(lang, body_buf + off, rl); }
+    else { ui_emit_n(role, body_buf + off, rl); }
     println("");
     return 0;
 }
@@ -96,7 +142,7 @@ fn _diff_emit_line(role, gutter, lineno, body_buf, off, len) {
 # _diff_run: LCS line-diff of old vs new. render=1 prints a colored hunk; render=0
 # only counts. Returns adds*1000000 + dels (packed, both < DIFF_MAX_LINES). A side
 # at the line cap returns 0 - 1 (too big) and, if rendering, prints a summary.
-fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render) {
+fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render, lang) {
     _diff_alloc();
     var on = _diff_split(ob, ol_bytes, _diff_ol, DIFF_MAX_LINES);
     var nn = _diff_split(nb, nl_bytes, _diff_nl, DIFF_MAX_LINES);
@@ -136,7 +182,7 @@ fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render) {
     while ((i < on) || (j < nn)) {
         if ((i < on) && (j < nn) && (_diff_line_eq(ob, _diff_ol, i, nb, _diff_nl, j) == 1)) {
             if (render == 1) {
-                _diff_emit_line(ROLE_FAINT, " ", j + 1, nb, load64(_diff_nl + j * 16), load64(_diff_nl + j * 16 + 8));
+                _diff_emit_line(ROLE_FAINT, " ", j + 1, nb, load64(_diff_nl + j * 16), load64(_diff_nl + j * 16 + 8), lang);
             }
             i = i + 1; j = j + 1;
         } else {
@@ -151,12 +197,12 @@ fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render) {
             }
             if (take_add == 1) {
                 if (render == 1) {
-                    _diff_emit_line(ROLE_GREEN, "+", j + 1, nb, load64(_diff_nl + j * 16), load64(_diff_nl + j * 16 + 8));
+                    _diff_emit_line(ROLE_GREEN, "+", j + 1, nb, load64(_diff_nl + j * 16), load64(_diff_nl + j * 16 + 8), lang);
                 }
                 adds = adds + 1; j = j + 1;
             } else {
                 if (render == 1) {
-                    _diff_emit_line(ROLE_RED, "-", i + 1, ob, load64(_diff_ol + i * 16), load64(_diff_ol + i * 16 + 8));
+                    _diff_emit_line(ROLE_RED, "-", i + 1, ob, load64(_diff_ol + i * 16), load64(_diff_ol + i * 16 + 8), lang);
                 }
                 dels = dels + 1; i = i + 1;
             }
@@ -168,10 +214,12 @@ fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render) {
 # diff_render: print a colored diff card for path (old `ob` -> new `nb`). The path
 # header (blue) + a +A -D count line (green/red) + the hunk. I/O.
 fn diff_render(path, ob, ol_bytes, nb, nl_bytes) {
+    var lang = 0;                                                  # grammar for body highlighting
+    if (ui_tier() != PT_PLAIN) { lang = detect_language(path); }   # 0 if unknown -> plain bodies
     emit("  "); ui_emit(ROLE_BLUE, path); println("");
-    var packed = _diff_run(path, ob, ol_bytes, nb, nl_bytes, 0);   # count first for the header
+    var packed = _diff_run(path, ob, ol_bytes, nb, nl_bytes, 0, lang);   # count first for the header
     if (packed == (0 - 1)) {
-        _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1);            # prints the "too big" note
+        _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1, lang);           # prints the "too big" note
         return 0;
     }
     var adds = packed / 1000000;
@@ -181,12 +229,12 @@ fn diff_render(path, ob, ol_bytes, nb, nl_bytes) {
     emit(" ");
     emit(ui_sgr(ROLE_RED)); emit("-"); fmt_int(dels); emit(ui_reset());
     println("");
-    _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1);
+    _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1, lang);
     return 0;
 }
 
 # diff_stats: the pure add/del result (packed adds*1000000+dels), or -1 if a side
 # exceeds the line cap. No I/O — the unit-test entry point.
 fn diff_stats(ob, ol_bytes, nb, nl_bytes) {
-    return _diff_run(0, ob, ol_bytes, nb, nl_bytes, 0);
+    return _diff_run(0, ob, ol_bytes, nb, nl_bytes, 0, 0);   # lang 0 -> count only, no highlight
 }
