@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.1] - 2026-06-25
+
+**Toolchain refresh to Cyrius 6.2.43.** Maintenance: the source pin moves `6.2.40 →
+6.2.43` (`cyrius.cyml` + a `lib/` re-sync via `cyrius lib sync` — 67 floor modules), so
+the pin matches the installed `cycc` again and the toolchain-drift warning is gone. **No
+thoth source change** — 380 unit assertions pass unchanged on the new floor and x86_64
+Linux builds + ships as before. The `run_capture` arity warning the older `cycc` surfaced
+also cleared.
+
+### Notes
+- One **benign** build warning remains and is accepted: `lib/sandhi.cyr` calls
+  `_sandhi_conn_open_v6_fully_timed_a` with 8 args (missing the TLS `ctx`) in the
+  HTTP/**2** connection-promotion path (`_sandhi_http_try_h2_promote_a`). That path runs
+  **only for pooled requests**; thoth issues one-shot `sandhi_http_post` /
+  `sandhi_http_stream` with `opts = 0` (no pool), so it takes the HTTP/1.1 path and never
+  reaches the call — unreachable from thoth at runtime. It is an upstream sandhi h2-path
+  inconsistency (the promote call-site lags the 9-arg signature), not a thoth bug; `lib/`
+  is vendored and never hand-edited. The hoosh/daimon live round-trip on 6.2.43 is a
+  host-side step (the build sandbox blocks a compiled binary's TCP).
+
 ## [0.10.0] - 2026-06-25
 
 **`/theme` — dark / light (M7).** A runtime color-theme switch over the existing

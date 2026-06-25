@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.10.1** — toolchain refresh to Cyrius 6.2.43, 2026-06-25. Maintenance: the source pin
+moves `6.2.40 → 6.2.43` (`cyrius.cyml` + `cyrius lib sync` — 67 floor modules), clearing
+the toolchain-drift warning (cycc had drifted to 6.2.43 locally). **No thoth source
+change**; 380 assertions pass unchanged; x86_64 Linux builds + ships as before. The
+`run_capture` arity warning the older cycc surfaced also cleared. One **benign** warning
+is accepted: `lib/sandhi.cyr`'s HTTP/2 connection-promotion path
+(`_sandhi_http_try_h2_promote_a`) calls `_sandhi_conn_open_v6_fully_timed_a` with 8 args
+(missing the TLS `ctx`) — but that path runs only for **pooled** requests, and thoth
+issues one-shot `sandhi_http_post`/`_stream` with `opts = 0` (no pool → HTTP/1.1), so it
+never reaches the call. An upstream sandhi h2-path inconsistency, unreachable from thoth;
+`lib/` is vendored, never hand-edited. Pin **6.2.43**.
 **0.10.0** — `/theme` dark/light (M7), 2026-06-25. Opens the 0.10.x arc (themes + data
 producers). A runtime color-theme switch over the semantic-role surface: a **theme axis**
 in `src/ui.cyr` sits in front of the role color tables — `_ui_rgb`/`_ui_idx256`/
@@ -350,8 +361,10 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.37` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc`. **0.6.6** took 6.2.15 → 6.2.37 — a toolchain refresh:
+- **Cyrius pin**: `6.2.43` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc`. **0.10.1** took 6.2.40 → 6.2.43 (`cyrius lib sync`, 67 floor
+  modules; no thoth source change). The 0.7.0 line had run on 6.2.40. Earlier:
+  **0.6.6** took 6.2.15 → 6.2.37 — a toolchain refresh:
   `cyrius lib sync` re-synced 98 floor modules (two new snapshot modules,
   `protobuf` and `yantra`); floor-only churn, no thoth source change, 199
   assertions unchanged. **0.6.4** took 6.1.38 → 6.2.15 — a toolchain refresh:

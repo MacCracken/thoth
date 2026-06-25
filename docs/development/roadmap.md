@@ -214,8 +214,9 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   `/state`. `ui_set_theme` rebuilds the cached SGR table; PT_PLAIN stays byte-identical.
   `rainbow` (vendor **anuenue**, an HSV per-grapheme render mode) is **deferred** — a
   separate effort, announced not-yet-available, never faked. 🌈→later
-- **`0.10.1` — toolchain refresh to Cyrius 6.2.43** (maintenance; bumps the pin +
-  `cyrius lib sync`, clearing the 6.2.40-vs-cycc drift).
+- **`0.10.1` — toolchain refresh to Cyrius 6.2.43 (LANDED)** — pin `6.2.40 → 6.2.43` +
+  `cyrius lib sync` (67 modules), clearing the drift; no thoth source change. One benign
+  sandhi h2-promote arity warning remains (unreachable — thoth uses HTTP/1.1 one-shot).
 - **`0.10.2`+ — Data producers (honest-omit until present)** — hoosh `usage` →
   tokens (`tok <n>` status field, omits until usage arrives; streaming via
   `include_usage`); opt-in `[pricing.<model>]` → cost (integer micro-USD,
