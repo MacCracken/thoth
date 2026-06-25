@@ -7,6 +7,13 @@
 
 ## Version
 
+**0.8.4** — syntax highlighting via vyakarana (M7 Phase 2b), 2026-06-24. `/read`
+renders source syntax-colored (keywords amber, strings green, comments faint, …) via
+the newly vendored `src/vendor/vyakarana.cyr` (2.2.3 — the AGNOS tokenizer, 45
+grammars; no hand-rolled highlighter; clean integration, zero collisions). Coverage-
+guarded so the full file is shown verbatim, only colored (verified byte-identical);
+plain at T0 / for unknown languages. 270 assertions (+7, `test_highlight`). Pin
+unchanged (6.2.40).
 **0.8.3** — diff producer + colored hunks (M7 Phase 2), 2026-06-24. `/write` reads
 the old file and renders a colored old→new diff (new `src/diff.cyr`: a bounded LCS
 line-diff — green add / red del / faint context, line numbers, blue path, `+A −D`

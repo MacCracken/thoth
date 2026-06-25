@@ -22,6 +22,9 @@ include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
+# vyakarana (2.2.3) — source-code tokenizer for syntax highlighting (/read, diffs).
+# Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
+include "src/vendor/vyakarana.cyr"
 # Project modules, callee-first (single-pass forward-reference resolution):
 # gate (t-ron binding + confirm) precedes seams, which reports its status;
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).

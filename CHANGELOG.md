@@ -2,6 +2,25 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.4] - 2026-06-24
+
+**Syntax highlighting via vyakarana (M7 Phase 2b).** `/read` now renders source files
+syntax-colored — keywords amber, strings green, numbers/preprocessor blue, comments
+faint, operators muted — through the T1 surface, plain when piped. Consumes the
+vendored vyakarana tokenizer (no hand-rolled highlighter), and the rendering is
+coverage-guarded so the FULL file is always shown verbatim, only colored.
+
+### Added
+- **Vendored `src/vendor/vyakarana.cyr`** (2.2.3) — the AGNOS source-code tokenizer
+  (45 grammars incl. Cyrius; 10 stable token kinds). Clean integration: no symbol
+  collisions, all of its stdlib deps already present in thoth.
+- **`/read` syntax highlighting** — `detect_language(path)` → `tokenize_stream_*` →
+  token kind mapped to a color role (`_tok_role`). Unknown languages / the plain tier
+  fall back to verbatim. A cursor guard emits any uncovered gap + trailing bytes plain,
+  so highlighting never drops or reorders a byte (verified: highlighted-then-stripped
+  equals the file exactly). The `/read` header is colored too (path blue, frame faint).
+  `test_highlight` (+7).
+
 ## [0.8.3] - 2026-06-24
 
 **Diff producer + colored hunks (M7 Phase 2).** `/write` now reads the old file and

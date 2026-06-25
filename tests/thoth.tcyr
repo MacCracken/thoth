@@ -7,6 +7,7 @@ include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
+include "src/vendor/vyakarana.cyr"
 include "src/util.cyr"
 include "src/ui.cyr"
 include "src/config.cyr"
@@ -729,6 +730,36 @@ fn test_diff() {
     return 0;
 }
 
+# Syntax highlighting (0.8.4): the vyakarana integration — language detection,
+# tokenization, and the token-kind -> color-role mapping for /read.
+fn test_highlight() {
+    test_group("syntax highlighting (vyakarana, 0.8.4)");
+    var lang = detect_language("foo.cyr");
+    assert(lang != 0, "detect_language finds a grammar for .cyr");
+    var s = tokenize_stream_new(lang);
+    assert(s != 0, "stream opens for the detected language");
+    var src = "var x = 1;";
+    tokenize_stream_feed(s, src, strlen(src));
+    var tb = tokenbuf_new();
+    tokenize_stream_drain(s, tb);
+    tokenize_stream_finish(s, tb);
+    var count = tokenbuf_count(tb);
+    assert(count > 0, "produced tokens");
+    var i = 0;
+    var found_kw = 0;
+    while (i < count) {
+        if (tokenbuf_kind(tb, i) == TK_KEYWORD) { found_kw = 1; }
+        i = i + 1;
+    }
+    assert_eq(found_kw, 1, "'var' tokenized as a keyword");
+    tokenize_stream_free(s);
+    # the kind -> role map
+    assert_eq(_tok_role(TK_KEYWORD), ROLE_ACCENT, "keyword -> accent");
+    assert_eq(_tok_role(TK_STRING), ROLE_GREEN, "string -> green");
+    assert(_tok_role(TK_IDENT) < 0, "ident -> uncolored (-1)");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -755,6 +786,7 @@ fn main() {
     test_bounds_hardening();
     test_ui();
     test_diff();
+    test_highlight();
     test_model_switch();
     return assert_summary();
 }

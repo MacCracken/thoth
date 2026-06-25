@@ -152,7 +152,7 @@ fn cmd_state() {
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     println("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.3"); println("");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.8.4"); println("");
     return 0;
 }
 
@@ -205,6 +205,53 @@ fn cmd_models(line) {
 var _read_buf = 0;
 var READ_BUF_CAP = 1048576;     # 1 MB
 
+# _tok_role: map a vyakarana token kind to a semantic color role, or -1 to leave
+# uncolored (idents / punctuation / whitespace / error -> terminal default).
+fn _tok_role(kind) {
+    if (kind == TK_KEYWORD) { return ROLE_ACCENT; }
+    if (kind == TK_STRING) { return ROLE_GREEN; }
+    if (kind == TK_NUMBER) { return ROLE_BLUE; }
+    if (kind == TK_COMMENT) { return ROLE_FAINT; }
+    if (kind == TK_PREPROCESSOR) { return ROLE_BLUE; }
+    if (kind == TK_OPERATOR) { return ROLE_MUTED; }
+    return 0 - 1;
+}
+
+# _read_highlight: syntax-color buf[0..n) for `path` via vyakarana, emitting tokens
+# in their role colors. Returns 1 if it rendered (highlighted), 0 if it declined
+# (plain tier / unknown language) so the caller emits the file plain. CRITICAL: it
+# tracks the cursor and emits any uncovered gap + trailing bytes plain, so the FULL
+# file is always shown verbatim — highlighting never drops or reorders content.
+fn _read_highlight(path, buf, n) {
+    if (ui_tier() == PT_PLAIN) { return 0; }
+    var lang = detect_language(path);
+    if (lang == 0) { return 0; }
+    var s = tokenize_stream_new(lang);
+    if (s == 0) { return 0; }
+    tokenize_stream_feed(s, buf, n);
+    var tb = tokenbuf_new();
+    tokenize_stream_drain(s, tb);
+    tokenize_stream_finish(s, tb);
+    var count = tokenbuf_count(tb);
+    var pos = 0;
+    var i = 0;
+    while (i < count) {
+        var start = tokenbuf_start(tb, i);
+        var len = tokenbuf_len(tb, i);
+        if (start > pos) { emit_n(buf + pos, start - pos); }   # gap -> verbatim
+        if ((start + len) <= n) {
+            var role = _tok_role(tokenbuf_kind(tb, i));
+            if (role < 0) { emit_n(buf + start, len); }
+            else { ui_emit_n(role, buf + start, len); }
+            pos = start + len;
+        }
+        i = i + 1;
+    }
+    if (pos < n) { emit_n(buf + pos, n - pos); }                # trailing -> verbatim
+    tokenize_stream_free(s);
+    return 1;
+}
+
 fn cmd_read(line) {
     var path = arg_after(line);
     if (path == 0) { println("usage: /read <file>"); return 0; }
@@ -213,10 +260,12 @@ fn cmd_read(line) {
     var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
     if (n < 0) { emit("read failed: "); println(path); return 0; }
     store8(_read_buf + n, 0);
-    emit("--- "); emit(path); emit(" ("); fmt_int(n); println(" bytes) ---");
-    emit_n(_read_buf, n);
+    ui_emit(ROLE_FAINT, "--- "); ui_emit(ROLE_BLUE, path); ui_emit(ROLE_FAINT, " (");
+    emit(ui_sgr(ROLE_FAINT)); fmt_int(n); emit(ui_reset());
+    ui_emit(ROLE_FAINT, " bytes) ---"); println("");
+    if (_read_highlight(path, _read_buf, n) == 0) { emit_n(_read_buf, n); }
     if (n > 0) { if (load8(_read_buf + n - 1) != 10) { println(""); } }
-    println("--- end ---");
+    ui_emit(ROLE_FAINT, "--- end ---"); println("");
     return 0;
 }
 
