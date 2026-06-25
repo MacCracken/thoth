@@ -58,14 +58,21 @@ fn feed_init_ensure() {
     return 0;
 }
 
-# feed_init: allocate (if needed) AND reset the ring to empty. Called once at TUI
-# start; called by each unit test for a clean slate.
-fn feed_init() {
-    feed_init_ensure();
+# feed_clear: empty the ring (head/count/scroll/pending) WITHOUT freeing the backing
+# store. Backs the /clear command and the per-session reset.
+fn feed_clear() {
     _feed_head = 0;
     _feed_count = 0;
     _feed_scroll = 0;
     _feed_pending_len = 0;
+    return 0;
+}
+
+# feed_init: allocate (if needed) AND reset the ring to empty. Called once at TUI
+# start; called by each unit test for a clean slate.
+fn feed_init() {
+    feed_init_ensure();
+    feed_clear();
     return 0;
 }
 

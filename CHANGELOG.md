@@ -2,6 +2,28 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.4] - 2026-06-25
+
+**`/clear` + feed scrollback (M7).** Two quality-of-life additions to the T2 TUI, both
+on the self-managed feed the 0.9.1 redraw model already provides. `/clear` empties the
+content window; **Shift-↑/↓** (the non-mouse wheel fallback) and **PageUp/PageDown**
+page back through the retained feed history (the ring keeps the last 2048 lines). A new
+turn jumps back to the newest output. The REPL / piped / CI floor is unchanged. 366 unit
+assertions (+4). Pin unchanged (6.2.40).
+
+### Added
+- **`/clear` command** (`src/commands.cyr`, `src/feed.cyr`): clears the content window.
+  In the TUI (output captured, OUT_RING) it empties the feed ring (`feed_clear` — the
+  post-dispatch repaint shows a clean window); in the line REPL on a real terminal it
+  clears the screen; piped/CI it is a no-op so nothing leaks. Distinct from `/reset`
+  (which clears the conversation *context*, not the screen). Listed in `/help` + the TUI
+  slash palette.
+- **Feed scrollback** (`src/tui.cyr`): **Shift-↑/↓** scroll a few lines (CSI `1;2A`/
+  `1;2B`), **PageUp/PageDown** a screenful (CSI `5~`/`6~`), paging back into the ring's
+  retained history (`feed_repaint` now honors `feed_scroll()`; `_tui_feed_scroll_by`
+  clamps to the available history). Works in either focus (the tree keeps its own ↑/↓).
+  Submitting a turn resets the scroll to the bottom so fresh output is always visible.
+
 ## [0.9.3] - 2026-06-25
 
 **The togglable file-tree pane (M7).** A keyboard-navigated (no-mouse) inline

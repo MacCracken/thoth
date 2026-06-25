@@ -46,6 +46,7 @@ fn test_classify() {
     assert_eq(classify_input("/call echo {}"), CMD_CALL, "/call with args");
     assert_eq(classify_input("/audit"), CMD_AUDIT, "/audit");
     assert_eq(classify_input("/reset"), CMD_RESET, "/reset");
+    assert_eq(classify_input("/clear"), CMD_CLEAR, "/clear");
     assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
     assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
     assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
@@ -800,6 +801,7 @@ fn test_tui() {
     assert_eq(tui_palette_count("/s"), 2, "'/s' matches /seams + /state");
     assert_eq(tui_palette_count("/se"), 1, "'/se' matches /seams only");
     assert_eq(tui_palette_count("/m"), 2, "'/m' matches /model + /models");
+    assert_eq(tui_palette_count("/c"), 2, "'/c' matches /call + /clear");
     assert_eq(tui_palette_count("/zz"), 0, "no command matches '/zz'");
     led_reset();
     led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 115);            # "/s"
@@ -898,6 +900,11 @@ fn test_feed_ring() {
     assert_eq(feed_count(), FEED_ROWS, "ring caps at FEED_ROWS lines");
     # the 4th line written (index 3) is the oldest survivor: 'A' + (3%26) = 'D'.
     assert_eq(load8(feed_line_ptr(0)), 68, "oldest surviving line is the 4th written (O(1) head-advance eviction)");
+    # feed_clear empties the ring (the /clear command + per-session reset)
+    feed_scroll_set(5);
+    feed_clear();
+    assert_eq(feed_count(), 0, "feed_clear empties the ring");
+    assert_eq(feed_scroll(), 0, "feed_clear resets the scroll offset");
     return 0;
 }
 

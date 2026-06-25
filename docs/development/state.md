@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.9.4** — `/clear` + feed scrollback (M7), 2026-06-25. Two quality-of-life additions
+to the T2 TUI, both riding the 0.9.1 self-managed feed. **`/clear`** empties the content
+window: in the TUI it clears the feed ring (`feed_clear`); in the line REPL on a tty it
+clears the screen; piped/CI it's a no-op (no window) — distinct from `/reset` (which
+clears the conversation *context*). **Scrollback:** **Shift-↑/↓** (the non-mouse wheel
+fallback; CSI `1;2A`/`1;2B`) scroll a few lines and **PageUp/PageDown** (CSI `5~`/`6~`,
+incl. the modified `5;2~`/`6;2~` form) a screenful, paging back through the ring's
+retained 2048 lines (`feed_repaint` honors `feed_scroll()`; `_tui_feed_scroll_by` clamps
+to the available history); a submitted turn resets to the bottom so fresh output shows.
+Scroll works in either focus (the tree keeps its own ↑/↓). Adversarially reviewed pre-cut
+(2 lenses): one low finding (modified-PageUp decode) fixed; zero must-fix. **TUI verifies
+only on a real tty (`THOTH_TIER=rich`)**, not the harness. The REPL/piped/CI floor is
+byte-identical (`/clear` no-ops at T0; scroll/CSI-decode are TUI-only). 366 assertions
+(+4). Pin unchanged (6.2.40 — cycc locally at 6.2.42; staying on the pin).
 **0.9.3** — the togglable file-tree pane (M7), 2026-06-25. The headline of the
 presentation arc: a keyboard-navigated (no-mouse) inline expand/collapse tree of the
 working directory as a LEFT COLUMN, made possible by the 0.9.1 self-managed feed +
@@ -517,7 +531,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **362 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **366 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -557,7 +571,9 @@ bundle is DCE-unreachable).
   `test_spinner` (the pure braille frame cycle — `spin_glyph` mod `SPIN_FRAMES`,
   `spin_advance`); and **0.9.3** `test_ftree` (the file-tree layout geometry +
   flattened-tree model: append/insert/move-clamp/collapse-subtree, the ancestor-walk
-  `ftree_path`, and a real `src/` dir-listing smoke). Passes on `cyrius test`.
+  `ftree_path`, and a real `src/` dir-listing smoke); and **0.9.4** the `/clear`
+  classification, `feed_clear` (ring + scroll reset), and the `/c` palette match. Passes
+  on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.
 

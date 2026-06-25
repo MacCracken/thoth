@@ -201,6 +201,11 @@ cut until parallel tool calls also land (gated on the filed sandhi + bayan repai
   collapse, Enter reads a file (keeping tree focus). The pure geometry + flattened-tree
   model are unit-tested; the paint + listing are live-verified. Hidden by default →
   byte-identical floor.
+- **`0.9.4` — `/clear` + feed scrollback (LANDED)** — `/clear` empties the content
+  window (the feed ring in the TUI; the screen in the line REPL; a no-op when piped);
+  **Shift-↑/↓** (the non-mouse wheel fallback) + **PageUp/PageDown** page back through the
+  ring's retained 2048 lines (`feed_repaint` honors `feed_scroll()`); a submitted turn
+  resets to the bottom. TUI-only; byte-identical floor.
 - **`/theme` (0.9.x)** — a theme switch, almost free given the semantic role surface
   (`src/ui.cyr`): a theme is just a different role→color table. `/theme dark` (today's
   amber default) · `/theme light` (the mockup's warm-light palette) · `/theme rainbow`

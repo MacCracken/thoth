@@ -42,6 +42,10 @@ var KEY_TOGGLE_TREE = 12;     # Ctrl-B — toggle the file-tree pane (0.9.3)
 var KEY_TAB = 13;             # Tab — cycle focus composer <-> tree
 var KEY_UP = 14;              # CSI A — tree selection up
 var KEY_DOWN = 15;            # CSI B — tree selection down
+var KEY_SCROLL_UP = 16;       # Shift-Up (CSI 1;2A) — scroll the feed back (0.9.4)
+var KEY_SCROLL_DOWN = 17;     # Shift-Down (CSI 1;2B) — scroll the feed forward
+var KEY_PGUP = 18;            # PageUp (CSI 5~) — page the feed back
+var KEY_PGDN = 19;            # PageDown (CSI 6~) — page the feed forward
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -167,6 +171,40 @@ fn tui_read_key() {
             if (d == 68) { return KEY_LEFT; }
             if (d == 72) { return KEY_HOME; }
             if (d == 70) { return KEY_END; }
+            # PageUp / PageDown: ESC[5~ / ESC[6~, and the modified form ESC[5;2~ /
+            # ESC[6;2~ (Shift, etc. — xterm kPRV/kNXT). On a modifier (';') drain the
+            # modifier digit + final '~' and scroll all the same, so the sequence never
+            # leaks bytes into the composer.
+            if ((d == 53) || (d == 54)) {
+                if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+                var e = load8(&c);
+                if (e == 59) {                                  # ';' -> a modifier sub-param
+                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }   # modifier digit
+                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }   # final '~' (drain)
+                    if (d == 53) { return KEY_PGUP; }
+                    return KEY_PGDN;
+                }
+                if (e == 126) {                                 # bare '~'
+                    if (d == 53) { return KEY_PGUP; }
+                    return KEY_PGDN;
+                }
+                return KEY_NONE;                                # unexpected byte: drained, ignored
+            }
+            # Modified arrows: ESC[1;2A / ESC[1;2B — '2' is the Shift modifier
+            if (d == 49) {
+                if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+                if (load8(&c) == 59) {                          # ';'
+                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+                    var m = load8(&c);
+                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+                    var f = load8(&c);
+                    if (m == 50) {                              # Shift
+                        if (f == 65) { return KEY_SCROLL_UP; }
+                        if (f == 66) { return KEY_SCROLL_DOWN; }
+                    }
+                }
+                return KEY_NONE;
+            }
         }
         return KEY_NONE;
     }
@@ -212,7 +250,7 @@ fn tui_draw_status() {
 # becomes a filtered list of matching commands. The matchers are pure + unit-tested;
 # the render is I/O. (A multi-row dropdown above the composer is a later refinement —
 # it needs the feed-buffer redraw model.)
-var SLASH_N = 13;
+var SLASH_N = 14;
 fn _slash_name(i) {
     if (i == 0) { return "/help"; }
     if (i == 1) { return "/seams"; }
@@ -226,7 +264,8 @@ fn _slash_name(i) {
     if (i == 9) { return "/call"; }
     if (i == 10) { return "/audit"; }
     if (i == 11) { return "/reset"; }
-    if (i == 12) { return "/quit"; }
+    if (i == 12) { return "/clear"; }
+    if (i == 13) { return "/quit"; }
     return "";
 }
 # _buf_has_space: 1 if buf[0..n) holds a space (the command token is complete).
@@ -395,8 +434,11 @@ fn feed_repaint() {
     var pend = feed_pending_len();
     var virt = total;
     if (pend > 0) { virt = total + 1; }           # the pending line is a virtual row
+    # newest `rows` lines by default; feed_scroll() pages back into the retained
+    # history (0.9.4 Shift-↑/↓ / PageUp/Dn). Clamp so we never page past the oldest.
     var first = 0;
-    if (virt > rows) { first = virt - rows; }     # pin to the newest `rows` (incl. pending)
+    if (virt > rows) { first = virt - rows - feed_scroll(); }
+    if (first < 0) { first = 0; }
     var i = 0;
     while (i < rows) {
         tty_move(top + i, fleft);
@@ -413,6 +455,31 @@ fn feed_repaint() {
         tty_clear_to_eol();
         i = i + 1;
     }
+    return 0;
+}
+
+# --- feed scrollback (0.9.4) ----------------------------------------------
+# The ring retains the last 2048 lines; these page back into them. Shift-↑/↓
+# (KEY_SCROLL_*) scroll a few lines (the non-mouse wheel fallback); PageUp/Dn a
+# screenful. feed_scroll() is "lines back from the newest"; a new turn resets it to
+# 0 (tui_run_line) so fresh output is always visible.
+fn _tui_feed_rows() {
+    var r = tui_feed_bot(_tui_rows) - tui_feed_top(_tui_show_status) + 1;
+    if (r < 1) { r = 1; }
+    return r;
+}
+fn _tui_feed_scroll_by(delta) {
+    var rows = _tui_feed_rows();
+    var total = feed_count();
+    if (feed_pending_len() > 0) { total = total + 1; }
+    var maxscroll = total - rows;
+    if (maxscroll < 0) { maxscroll = 0; }       # nothing to scroll (history fits)
+    var s = feed_scroll() + delta;
+    if (s < 0) { s = 0; }
+    if (s > maxscroll) { s = maxscroll; }
+    feed_scroll_set(s);
+    feed_repaint();
+    tui_park_cursor();
     return 0;
 }
 
@@ -609,6 +676,7 @@ fn tui_relayout() {
 # confirm's read_line works; the confirm itself brackets back to the screen).
 # On return the feed is repainted. Returns dispatch's keep-going flag (0 = quit).
 fn tui_run_line(line) {
+    feed_scroll_set(0);                          # a new turn jumps back to the newest output
     out_mode_set(OUT_RING);                      # capture dispatch output into the feed ring
     ui_emit(ROLE_ACCENT, "{(o> "); emit(line);   # echo the submitted command (captured)
     feed_flush_pending();                        # seal the echo as its own feed line
@@ -739,6 +807,10 @@ fn tui_loop() {
                     if (_tui_focus == FOCUS_TREE) { _tui_focus = FOCUS_COMPOSER; } else { _tui_focus = FOCUS_TREE; }
                     tui_draw_hint(); tui_park_cursor();
                 }
+            } elif (key == KEY_SCROLL_UP) { _tui_feed_scroll_by(3);
+            } elif (key == KEY_SCROLL_DOWN) { _tui_feed_scroll_by(0 - 3);
+            } elif (key == KEY_PGUP) { _tui_feed_scroll_by(_tui_feed_rows() - 1);
+            } elif (key == KEY_PGDN) { _tui_feed_scroll_by(0 - (_tui_feed_rows() - 1));
             } elif (_tui_focus == FOCUS_TREE) {
                 _tui_tree_key(key);    # tree navigation (↑↓→← Enter; a char hands focus back)
             } else {

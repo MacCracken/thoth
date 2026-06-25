@@ -21,6 +21,7 @@ enum Cmd {
     CMD_AUDIT = 13;
     CMD_RESET = 14;
     CMD_MODELS = 15;
+    CMD_CLEAR = 16;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -60,6 +61,7 @@ fn classify_input(line) {
     if (token_is(line, "/call") == 1) { return CMD_CALL; }
     if (token_is(line, "/audit") == 1) { return CMD_AUDIT; }
     if (token_is(line, "/reset") == 1) { return CMD_RESET; }
+    if (token_is(line, "/clear") == 1) { return CMD_CLEAR; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -81,6 +83,7 @@ fn cmd_help() {
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
+    _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
     _help_line("  /quit", "              exit (or Ctrl-D)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
@@ -152,7 +155,7 @@ fn cmd_state() {
     ui_emit(ROLE_GREEN, ui_tier_name());
     if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     oprintln("");
-    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.9.3"); oprintln("");
+    ui_label("  build   : "); ui_emit(ROLE_ACCENT, "thoth 0.9.4"); oprintln("");
     return 0;
 }
 
@@ -396,6 +399,17 @@ fn cmd_task(line) {
     return hoosh_send(line);
 }
 
+# cmd_clear: clear the content window. In the T2 TUI (output captured, OUT_RING) it
+# empties the feed ring — the post-dispatch repaint shows a clean window. In the line
+# REPL on a real terminal it clears the screen; piped/CI (no window) it is a no-op so
+# nothing leaks. Distinct from /reset, which clears the conversation CONTEXT, not the
+# on-screen feed.
+fn cmd_clear() {
+    if (out_mode() == OUT_RING) { feed_clear(); return 0; }
+    if (ui_tier() != PT_PLAIN) { tty_clear(); tty_cursor_home(); }
+    return 0;
+}
+
 # dispatch: run one input line. Returns 1 to keep looping, 0 to quit.
 fn dispatch(line) {
     var c = classify_input(line);
@@ -413,6 +427,7 @@ fn dispatch(line) {
     if (c == CMD_CALL) { cmd_call(line); return 1; }
     if (c == CMD_AUDIT) { cmd_audit(); return 1; }
     if (c == CMD_RESET) { cmd_reset(); return 1; }
+    if (c == CMD_CLEAR) { cmd_clear(); return 1; }
     if (c == CMD_UNKNOWN_SLASH) { oprintln("unknown command (try /help)"); return 1; }
     cmd_task(line);
     return 1;
