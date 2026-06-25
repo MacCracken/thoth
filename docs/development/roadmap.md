@@ -10,23 +10,15 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.11.0):** **M0–M7 are done**, the **0.10.x data-producer line is
-> complete for the producers thoth owned** (`0.10.2` tokens, `0.10.3` cost), and the
-> **0.11.x terminal-citizen line has opened** — `0.11.0` shipped the keystone one-shot /
-> argv front-door (`git diff | thoth 'review'`), unlocking the JSON-envelope, `-o` tee,
-> and completion riders. The git producer is **externally gated on sit** (not vendored),
-> so it lives in its own **0.12.x** minor. The 0.11.x line is the vetted,
-> adversarially-reviewed port backlog from the SecureYeoman TUI review (SecureYeoman's TUI
-> is being reskinned onto thoth's, so thoth's front-end is the shared canonical surface).
-> The driver core,
-> the hoosh seam (inference + mid-session model switch), the M4 tool spine (daimon
-> remote; bote + t-ron native; one fail-closed authorization choke point), the M5
-> avatara overlay, the model-driven agentic tool-calling loop with parallel tool
-> execution, the M6 multi-target build ladder, and the M7 presentation ladder
-> (T0 plain → T1 ANSI → T2 rich-TUI) have all shipped (0.1.0 → 0.10.3). What's left
-> is the **0.11.x composability / TUI-substrate line**, the **0.12.x git producer**
-> (sit-gated), and the **four v1.0 gates** below — which are dominated by AGNOS
-> lighting up, not by feature work in thoth.
+> **Where we are (0.11.0):** **M0–M7 are done and shipping** (0.1.0 → 0.11.0; the log
+> lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
+> line is complete for the producers thoth owned (tokens, cost), and the **0.11.x
+> terminal-citizen line is open** — `0.11.0` shipped its keystone, the one-shot/argv
+> front-door. **What's left:** the rest of the **0.11.x** line (the vetted SecureYeoman-TUI
+> -review backlog — substrate/floor ports and thin seam bindings, never a spine fork; that
+> TUI is being reskinned onto thoth's, so thoth's front-end is the shared canonical
+> surface), the **0.12.x git producer** (externally gated on sit), and the **four v1.0
+> gates** below — which are dominated by AGNOS lighting up, not by feature work in thoth.
 
 ## Framing (read first)
 
@@ -96,22 +88,14 @@ Four gates remain, in rough dependency order:
 
 ### v1.0 criteria checklist
 
-- [x] Core driver loop (read → plan → edit → run → iterate) usable on at
-      least one off-AGNOS target — **Linux ships**; AGNOS reachable,
-      gated on gate 1 above
-- [x] Mid-session model switch routes turns through hoosh — M3 (0.2.0)
-- [x] MCP tool execution via daimon + bote, gated by t-ron — **works on
-      Linux**; AGNOS reachable, gated on gate 1 above
-- [x] Off-AGNOS security **fails closed** — absent t-ron degrades to a
-      conservative built-in deny/prompt, never silent allow; absence is
-      announced, never faked — M2 posture, made fully real by M4 (0.3.0)
-- [x] avatara Thoth/Librarian archetype overlay applied — M5 (0.4.0)
-- [x] Capability ladder documented and honest (per dependency: native vs.
-      remote-client vs. absent; full / degraded / absent semantics) —
-      M6 (0.6.5); computed live from `src/seams.cyr`, see
-      [architecture note 002](../architecture/002-capability-ladder.md)
+**Satisfied on Linux (shipped — see CHANGELOG/state.md):** the core driver loop, the
+mid-session model switch through hoosh (M3), MCP tool execution via daimon + bote gated by
+t-ron (M4), off-AGNOS security that fails closed, the avatara overlay (M5), the honest
+capability ladder (M6), and a complete CHANGELOG. These are AGNOS-reachable, gated on gate 1.
+
+**Open:**
+
 - [ ] **At least one downstream consumer green on AGNOS** — gate 2 (external)
-- [x] CHANGELOG complete from the first real release onward
 - [ ] **Security review pass** — gate 3 (not scheduled)
 - [ ] **1.0 versioning scheme decided (SemVer vs CalVer)** — gate 4
       (deferred ADR; see [ADR-0004](../adr/0004-semver-pre-release.md))
@@ -127,51 +111,23 @@ above, deferred to a later ADR.
 
 ## Remaining work — the post-M7 lines (post-release polish; NON-GATING)
 
-> **None of this blocks v1.0** — the four v1.0 gates above take priority.
-> These are honest-omit data fields plus substrate/UX ports layered onto the
-> shipped T1/T2 surface. Data fields follow the **omit-until-present** policy
-> ([ADR-0010](../adr/0010-data-producer-honest-omit.md)): a field surfaces only
-> when its producer has real data, and announces absence in `/state` — never
-> faked. The 0.11.x line is the vetted, adversarially-reviewed port backlog from
-> the SecureYeoman TUI review; **every item is a substrate/floor port or a thin
-> binding to an existing spine seam — never a spine fork** — because thoth's TUI
-> is becoming the shared canonical front-end SecureYeoman reskins onto.
-
-### 0.10.x — data producers (the producers thoth owned) ✅
-
-- **`0.10.2` — tokens. ✅ DONE (2026-06-25).** Extracts hoosh `usage.total_tokens`
-  → a `tok <n>` status field that **omits until usage arrives** (status bar + a
-  `/state` row). Both paths: the blocking completion's `usage`, and the streaming
-  usage frame via `stream_options:{include_usage:true}`. See CHANGELOG / state.md.
-- **`0.10.3` — cost. ✅ DONE (2026-06-25).** Opt-in `[pricing.<model>]` rates
-  (integer micro-USD per 1K tokens) × hoosh's token usage → a `$d.cc` session
-  cost, priced **at accumulate** (each response costed with the model active at
-  that moment, so mid-session `/model` switches are correct). Status-bar field +
-  `/state` row, **omitted until a priced response** (and a half-declared rate
-  degrades to unpriced+noted, never `$0`). See CHANGELOG / state.md.
-- The **git** producer was `0.10.4` on this line; because its producer is
-  **external** (sit, not vendored) — unlike tokens/cost, which thoth owned — it is
-  relocated to its own **`0.12.x`** minor (below) rather than gate the line on sit.
-- **`rainbow` theme — deferred.** A per-grapheme HSV render mode (needs
-  **anuenue** vendored); announced not-yet-available, never faked. A separate
-  effort, not on a data-producer line.
+> **None of this blocks v1.0** — the four v1.0 gates above take priority. These are
+> substrate/UX ports plus honest-omit data fields layered onto the shipped T1/T2 surface.
+> Data fields follow the **omit-until-present** policy
+> ([ADR-0010](../adr/0010-data-producer-honest-omit.md)): a field surfaces only when its
+> producer has real data, and announces absence in `/state` — never faked. The 0.11.x line
+> is the vetted, adversarially-reviewed port backlog from the SecureYeoman TUI review;
+> **every item is a substrate/floor port or a thin binding to an existing spine seam —
+> never a spine fork** — because thoth's TUI is becoming the shared canonical front-end
+> SecureYeoman reskins onto.
 
 ### 0.11.x — terminal citizen + TUI substrate (the SecureYeoman-review backlog)
 
-> Ranked by the 2026-06-25 multi-agent review (each candidate adversarially
-> verified against thoth's hard constraints — Cyrius language, consume-the-spine,
-> degrade-closed, byte-identical floor). `0.11.0` is the **keystone**: thoth parses
-> no argv today, so a one-shot/argv front-door unlocks the JSON-envelope, `-o` tee,
-> and shell-completion riders.
+> Ranked by the 2026-06-25 multi-agent review (each candidate adversarially verified
+> against thoth's hard constraints — Cyrius language, consume-the-spine, degrade-closed,
+> byte-identical floor). `0.11.0` (the one-shot/argv front-door) shipped the keystone and
+> unlocked the JSON-envelope, `-o` tee, and shell-completion riders below.
 
-- **`0.11.0` — one-shot / argv front-door (keystone). ✅ DONE (2026-06-25).**
-  `thoth 'task'`, `git diff | thoth 'review'`, `thoth -p < f`, `thoth --version|--help`
-  run ONE turn through the EXISTING `cmd_task → hoosh_send / agent_turn` seam and exit —
-  no new spine path. Gated on **explicit argv intent** (NOT `isTTY==false`); stdin slurped
-  as the payload; **clean stdout** via an `OUT_NULL` discard sink (chrome suppressed; only
-  the reply accumulator printed to fd 1; diagnostics → stderr); **degrade-closed** nonzero
-  exit + the t-ron confirm denies in one-shot. New `src/oneshot.cyr`;
-  [ADR-0011](../adr/0011-one-shot-argv-front-door.md). See CHANGELOG / state.md.
 - **Pure-substrate TUI wins (no argv dependency — ship anytime):**
   - **composer input-history recall** — Up/Down recall submitted lines; persistence
     **OFF by default**, `0600` when enabled; recall gated on palette-closed.
@@ -202,9 +158,14 @@ above, deferred to a later ADR.
 - **`0.12.0` — git. Omit-until-sit.** One faint `/state` honesty line
   (`git: absent — gated on sit`). **No faked branch/diff** — real `.git/` reads are
   gated on **sit**'s `.git/` read-mode (sit owns VCS and is not vendored; thoth
-  never hand-rolls a `.git/` parser, which would fork sit's domain — ADR-0010).
-  Relocated off the 0.10.x line because, unlike tokens/cost, its producer is
-  external; it advances when sit ships `.git/` read-mode.
+  never hand-rolls a `.git/` parser, which would fork sit's domain — ADR-0010). It is
+  its own minor — unlike the tokens/cost producers, its producer is external — and it
+  advances when sit ships `.git/` read-mode.
+
+### Deferred (off the lines)
+
+- **`rainbow` theme** — a per-grapheme HSV render mode (a render mode, not a role table);
+  needs the **anuenue** lib vendored. Announced not-yet-available, never faked.
 
 ## Off the v1.0 path
 
