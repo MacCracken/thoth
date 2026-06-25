@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.10.2** — token usage, the first data producer (0.10.x arc), 2026-06-25. thoth
+surfaces a live `tok <n>` session token count, sourced from hoosh's own
+`usage.total_tokens` and summed across the session (every agentic-loop iteration, and
+across mid-session model switches). Follows **omit-until-present**
+([ADR-0010](../adr/0010-data-producer-honest-omit.md)): the field appears **only once
+hoosh reports usage** — never a `0`/`(n/a)` placeholder — and `/state` shows an honest
+absent line until then. New pure `hoosh_extract_usage` (+ shared `_hoosh_usage_total`):
+reads `usage.total_tokens` from a blocking body or a streaming usage frame, `-1` when
+absent. Session tally in `src/session.cyr` (`session_tokens`/`_seen`/`add_tokens` — the
+seen-flag distinguishes "0 tokens" from "no usage yet"; only a `>= 0` figure flips it;
+cleared by `/reset`). Surfaced as `tok <n>` in the TUI status bar (omitted until seen)
+and a `tokens` row in `/state`. **Streaming now sends `stream_options:{include_usage:true}`**
+(`hoosh_build_request`/`hoosh_build_messages`/`agent_build_request`) so the gateway
+appends a usage frame to the SSE stream; `_hoosh_sse_cb` parses each frame once and reads
+content + usage on one pass. hoosh owns the count; thoth only sums. Floor stays clean
+(status field TUI-only; `/state` row emits 0 escapes at T0 — verified). Live `usage`
+round-trip is a host-side step (sandbox blocks compiled-binary TCP); wire shape covered
+by `test_usage`. 393 assertions (+13). Pin unchanged (6.2.43).
 **0.10.1** — toolchain refresh to Cyrius 6.2.43, 2026-06-25. Maintenance: the source pin
 moves `6.2.40 → 6.2.43` (`cyrius.cyml` + `cyrius lib sync` — 67 floor modules), clearing
 the toolchain-drift warning (cycc had drifted to 6.2.43 locally). **No thoth source
@@ -483,6 +501,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
   clause once). **0.5.1 (multi-turn):** the capped conversation history
   (`session_history_*` — append/accessors/pop/clear; stable content copies).
+  **0.10.2 (tokens):** the session token tally (`session_tokens`/`session_tokens_seen`/
+  `session_add_tokens` — running sum + a seen-flag for omit-until-present; cleared by
+  `/reset`).
 - `src/roundlog.cyr` — **0.7.0**: the session-local agentic tool-**round** trace
   `/audit` surfaces. A ring (last 16 rounds) of `{turn, round, calls[]}` with each
   call's verdict (`allow`/`deny`/`noname`) + ok/err; recorded by the agentic loop
@@ -509,7 +530,11 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   both turn paths leave the reply in `_hoosh_acc` for history; `HOOSH_REQ_CAP`
   raised to 256 KiB. **0.6.2 (catalog):** `hoosh_list_models` GETs `/v1/models`
   and prints the catalog (`_hoosh_models_url` builds the endpoint, pure
-  `hoosh_extract_models` returns the `data` array).
+  `hoosh_extract_models` returns the `data` array). **0.10.2 (tokens):** pure
+  `hoosh_extract_usage` (+ shared `_hoosh_usage_total`) reads `usage.total_tokens` from a
+  blocking body or a streaming usage frame (`-1` when absent); both turn paths feed it to
+  `session_add_tokens`; streaming requests send `stream_options:{include_usage:true}` and
+  `_hoosh_sse_cb` reads content + usage on one parse.
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
   (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool
@@ -569,7 +594,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **380 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **393 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -613,7 +638,10 @@ bundle is DCE-unreachable).
   classification, `feed_clear` (ring + scroll reset), and the `/c` palette match; and
   **0.10.0** `test_theme` (the theme axis — dark byte-identical anchor, the light palette,
   the T1 SGR-table rebuild on a switch, and the PT_PLAIN floor staying empty under both
-  themes). Passes
+  themes); and **0.10.2** `test_usage` (the token producer — `hoosh_extract_usage` across a
+  blocking body, a streaming usage frame, a plain delta, a `usage` without `total_tokens`,
+  and an unparseable body; the session accumulator's sum / seen-flag / absent-ignored /
+  `/reset`-clears semantics). Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.

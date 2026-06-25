@@ -10,7 +10,9 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.10.1):** **M0–M7 are done.** The driver core, the
+> **Where we are (0.10.2):** **M0–M7 are done**, and the **0.10.x data-producer
+> line has started** — `0.10.2` shipped token usage (`tok <n>`, omit-until-present),
+> the first of the honest-omit data fields. The driver core, the
 > hoosh seam (inference + mid-session model switch), the M4 tool spine
 > (daimon remote; bote + t-ron native; one fail-closed authorization choke
 > point), the M5 avatara overlay, the model-driven agentic tool-calling
@@ -126,9 +128,10 @@ above, deferred to a later ADR.
 > absence in `/state` — never faked. Closing the four v1.0 gates above
 > takes priority over this line.
 
-- **`0.10.2` — tokens.** Extract hoosh `usage` → a `tok <n>` status field
-  that **omits until usage arrives**. Blocking path first; streaming via
-  `stream_options:{include_usage:true}`.
+- **`0.10.2` — tokens. ✅ DONE (2026-06-25).** Extracts hoosh `usage.total_tokens`
+  → a `tok <n>` status field that **omits until usage arrives** (status bar + a
+  `/state` row). Both paths: the blocking completion's `usage`, and the streaming
+  usage frame via `stream_options:{include_usage:true}`. See CHANGELOG / state.md.
 - **`0.10.3` — cost.** Opt-in `[pricing.<model>]` → integer micro-USD,
   priced **at accumulate** across mid-session model switches. A `$d.cc`
   field that **omits when unpriced**.

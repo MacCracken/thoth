@@ -12,6 +12,15 @@
 var _sess_turns = 0;
 var _sess_model = 0;     # 0 = none; else a cstring model id
 
+# Token accounting (0.10.2): the running sum of hoosh-reported usage.total_tokens
+# across this session, and whether ANY usage has been reported. The pair is the
+# honest-omit contract (ADR-0010): _sess_tokens_seen distinguishes "0 tokens" from
+# "no usage yet" so the status field omits until hoosh actually returns usage and
+# is never faked with a placeholder. hoosh owns the count; thoth only sums what it
+# is told. Streaming carries usage only when stream_options:{include_usage} is sent.
+var _sess_tokens = 0;
+var _sess_tokens_seen = 0;
+
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
 # backing model sees prior turns. Each message is alloc(16): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
@@ -27,6 +36,21 @@ fn session_reset() {
     _sess_turns = 0;
     _sess_model = 0;
     _sess_hist = 0;          # drop the conversation (a fresh vec on next append)
+    _sess_tokens = 0;
+    _sess_tokens_seen = 0;
+    return 0;
+}
+
+# session_tokens / _seen / session_add_tokens (0.10.2): the session token tally.
+# session_add_tokens is called only with a real usage figure (>= 0) — a negative
+# (absent) value is ignored, so _sess_tokens_seen flips only when hoosh actually
+# reports usage. The status surface reads _seen to decide whether to show the field.
+fn session_tokens() { return _sess_tokens; }
+fn session_tokens_seen() { return _sess_tokens_seen; }
+fn session_add_tokens(n) {
+    if (n < 0) { return 0; }
+    _sess_tokens = _sess_tokens + n;
+    _sess_tokens_seen = 1;
     return 0;
 }
 

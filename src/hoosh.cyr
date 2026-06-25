@@ -281,7 +281,9 @@ fn hoosh_build_request(dst, model, system, prompt, stream) {
     off = _json_escape_into_cap(dst, off, cap, prompt);
     off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
-    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true}"); }
+    # stream_options:{include_usage} makes the gateway append a final usage frame to
+    # the SSE stream (0.10.2) — without it a streamed turn carries no token count.
+    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
     return off;
@@ -359,7 +361,7 @@ fn hoosh_build_messages(dst, model, system, stream) {
     }
     off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
-    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true}"); }
+    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
     return off;
@@ -423,6 +425,27 @@ fn hoosh_extract_models(body, body_len) {
     var data = bayan_json_v_obj_get(v, "data");
     if (data == 0) { return 0; }
     return data;
+}
+
+# _hoosh_usage_total: given an already-parsed JSON value, return usage.total_tokens
+# as an int, or -1 when there is no usage object / total field (a normal streaming
+# delta frame, or a gateway that omits usage). Pure. The shared core so the SSE
+# callback can reuse the value it already parsed instead of parsing twice per frame.
+fn _hoosh_usage_total(v) {
+    if (v == 0) { return 0 - 1; }
+    var u = bayan_json_v_obj_get(v, "usage");
+    if (u == 0) { return 0 - 1; }
+    var t = bayan_json_v_obj_get(u, "total_tokens");
+    if (t == 0) { return 0 - 1; }
+    return bayan_json_v_int(t);
+}
+
+# hoosh_extract_usage: pull usage.total_tokens out of a response body (the blocking
+# completion, or a streaming usage frame when stream_options:{include_usage} was
+# sent) as an int, or -1 when absent. Pure — unit-tested. hoosh owns the count;
+# thoth only reads what it's told (ADR-0010: omit-until-present, never faked).
+fn hoosh_extract_usage(body, body_len) {
+    return _hoosh_usage_total(bayan_json_v_parse_str(body, body_len));
 }
 
 # hoosh_list_models: GET the gateway's model catalog and print each model id,
@@ -584,8 +607,23 @@ fn _hoosh_sse_cb(ctx, ev) {
     var data = sandhi_sse_event_data(ev);
     if (data == 0) { return 1; }
     if (streq(data, "[DONE]") == 1) { return 0; }
-    var s = hoosh_extract_delta(data, strlen(data));
-    if (s == 0) { return 1; }                 # role-only / finish / non-content frame
+    # Parse the frame once (was: hoosh_extract_delta re-parsing) so the trailing
+    # usage frame (0.10.2 — choices:[] + a usage object, sent because the request
+    # carried stream_options:{include_usage}) is captured on the same pass.
+    var v = bayan_json_v_parse_str(data, strlen(data));
+    if (v == 0) { return 1; }
+    var tot = _hoosh_usage_total(v);
+    if (tot >= 0) { session_add_tokens(tot); }
+    var choices = bayan_json_v_obj_get(v, "choices");
+    if (choices == 0) { return 1; }
+    var first = bayan_json_v_arr_get(choices, 0);
+    if (first == 0) { return 1; }            # usage frame / empty choices
+    var delta = bayan_json_v_obj_get(first, "delta");
+    if (delta == 0) { return 1; }
+    var content = bayan_json_v_obj_get(delta, "content");
+    if (content == 0) { return 1; }          # role-only / finish / non-content frame
+    var s = bayan_json_v_str(content);
+    if (s == 0) { return 1; }
     var n = str_len(s);
     if (n > 0) {
         emit_n(str_data(s), n);
@@ -662,6 +700,8 @@ fn _hoosh_blocking_turn(url, h, len, model) {
         return 0 - 1;
     }
     _hoosh_acc_append(str_data(content), str_len(content));
+    var tot = hoosh_extract_usage(body, blen);
+    if (tot >= 0) { session_add_tokens(tot); }
     _hoosh_print_str(content);
     return 0;
 }

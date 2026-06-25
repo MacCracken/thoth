@@ -2,6 +2,53 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.2] - 2026-06-25
+
+**Token usage — the first data producer (0.10.x arc).** thoth now surfaces a live
+`tok <n>` session token count, sourced from hoosh's own `usage.total_tokens` and
+summed across the session (including every iteration of an agentic turn and across
+mid-session model switches). It follows the **omit-until-present** doctrine
+([ADR-0010](docs/adr/0010-data-producer-honest-omit.md)): the field appears **only
+once hoosh actually reports usage** — never a `0` or `(n/a)` placeholder — and
+`/state` carries an honest absent line until then. hoosh owns the count; thoth only
+sums what it is told. 393 unit assertions (+13). Pin unchanged (6.2.43).
+
+### Added
+- **`hoosh_extract_usage`** (`src/hoosh.cyr`): pulls `usage.total_tokens` out of a
+  response body (the blocking completion, or a streaming usage frame) as an int, or
+  `-1` when absent — pure, unit-tested. The shared `_hoosh_usage_total` core lets the
+  SSE callback read the figure from the value it already parsed (no double-parse per
+  frame).
+- **Session token tally** (`src/session.cyr`): `session_tokens` / `session_tokens_seen`
+  / `session_add_tokens` — a running sum plus a seen-flag so "0 tokens" is
+  distinguishable from "no usage yet"; only a real (`>= 0`) figure flips the flag, so
+  an absent report never fakes presence. Cleared by `/reset`.
+- **`tok <n>` in the TUI status bar** (`src/tui.cyr`) — shown after `turns`, **omitted
+  entirely** until usage is seen.
+- **`tokens` row in `/state`** (`src/commands.cyr`) — the running total once reported,
+  else `(none reported yet — shows once hoosh returns usage)`.
+- **`test_usage`** (+13): `hoosh_extract_usage` across a blocking body, a streaming
+  usage frame (`choices:[]` + `usage`), a plain delta frame, a `usage` without
+  `total_tokens`, and an unparseable body; the accumulator's sum / seen-flag / absent-
+  report-ignored / `/reset`-clears semantics.
+
+### Changed
+- **Streaming requests carry `stream_options:{include_usage:true}`** (`hoosh_build_request`,
+  `hoosh_build_messages`, `agent_build_request`) so the gateway appends a final usage
+  frame to the SSE stream — without it a streamed turn carries no token count. The
+  three streaming request-shape assertions ride forward.
+- **`_hoosh_sse_cb`** now parses each frame once (was: delegating to
+  `hoosh_extract_delta`, which re-parsed) and reads both the content delta and the
+  trailing usage frame on the same pass.
+
+### Notes
+- The piped/CI floor stays clean: the status field is TUI-only and the `/state` row
+  emits no escapes at T0 (verified: 0 escape bytes). The `/state` surface gains one
+  honest row — a deliberate field addition, not a regression of existing output.
+- Live hoosh round-trip (a turn returning a real `usage`) is a host-side step — the
+  build sandbox blocks a compiled binary's TCP; the wire shape is covered by the unit
+  tests.
+
 ## [0.10.1] - 2026-06-25
 
 **Toolchain refresh to Cyrius 6.2.43.** Maintenance: the source pin moves `6.2.40 →

@@ -202,7 +202,7 @@ fn test_hoosh() {
     hoosh_build_request(&rb, "m", "be precise", "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be precise\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "system message prepended");
     hoosh_build_request(&rb, "m", 0, "hi", 1);
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true}"), "stream=1 sets stream:true");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "stream=1 sets stream:true + usage opt");
 
     test_group("hoosh response extraction");
     var body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello world\"}}]}";
@@ -294,6 +294,44 @@ fn test_stream_config() {
     return 0;
 }
 
+# Token usage accounting (0.10.2): hoosh_extract_usage reads usage.total_tokens
+# from a blocking completion body and from a streaming usage frame (choices:[] +
+# usage), -1 when absent; the session accumulator sums only real figures and the
+# seen-flag drives the honest-omit surface (ADR-0010).
+fn test_usage() {
+    test_group("token usage (0.10.2)");
+    # blocking-completion body carrying usage
+    var full = "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}";
+    assert_eq(hoosh_extract_usage(full, strlen(full)), 17, "blocking usage total_tokens parsed");
+    # the streaming usage frame: choices empty, usage present (include_usage)
+    var uframe = "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}";
+    assert_eq(hoosh_extract_usage(uframe, strlen(uframe)), 7, "streaming usage frame total parsed");
+    # a normal delta frame has no usage -> -1 (absent, never 0)
+    var delta = "{\"choices\":[{\"delta\":{\"content\":\"x\"}}]}";
+    assert_eq(hoosh_extract_usage(delta, strlen(delta)), 0 - 1, "delta frame -> -1 (no usage)");
+    # usage object without total_tokens -> -1
+    var notot = "{\"usage\":{\"prompt_tokens\":1}}";
+    assert_eq(hoosh_extract_usage(notot, strlen(notot)), 0 - 1, "usage without total_tokens -> -1");
+    var nojson = "not json";
+    assert_eq(hoosh_extract_usage(nojson, strlen(nojson)), 0 - 1, "unparseable body -> -1");
+
+    # the session accumulator + seen-flag (the honest-omit gate)
+    session_reset();
+    assert_eq(session_tokens_seen(), 0, "no usage seen after reset");
+    assert_eq(session_tokens(), 0, "zero tokens after reset");
+    session_add_tokens(0 - 1);   # an absent (-1) report is ignored, never flips seen
+    assert_eq(session_tokens_seen(), 0, "negative report ignored, still unseen");
+    session_add_tokens(17);
+    assert_eq(session_tokens_seen(), 1, "seen flips on first real report");
+    assert_eq(session_tokens(), 17, "first report summed");
+    session_add_tokens(7);
+    assert_eq(session_tokens(), 24, "second report accumulates");
+    session_reset();
+    assert_eq(session_tokens(), 0, "reset clears the tally");
+    assert_eq(session_tokens_seen(), 0, "reset clears the seen-flag");
+    return 0;
+}
+
 # Multi-turn conversation history (0.5.1): append/accessors, stable copy,
 # pop/clear, and the drop-oldest cap.
 fn test_history() {
@@ -344,7 +382,7 @@ fn test_history_request() {
     hoosh_build_messages(&rb, "m", 0, 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":false}"), "multi-turn shape, no system");
     hoosh_build_messages(&rb, "m", "sys", 1);
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":true}"), "multi-turn shape, system + stream");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "multi-turn shape, system + stream + usage opt");
     session_reset();
     return 0;
 }
@@ -429,7 +467,7 @@ fn test_agent() {
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: history, no tools");
     var toolsb = "[{\"type\":\"function\"}]";
     agent_build_request(&rb, "m", 0, toolsb, strlen(toolsb), 1);
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":true}"), "agent request: with tools, streaming");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "agent request: with tools, streaming + usage opt");
     session_reset();
 
     # streamed tool_call assembly: deltas arrive fragmented (id+name first, then
@@ -1058,6 +1096,7 @@ fn main() {
     test_hoosh();
     test_provider_catalog();
     test_stream_config();
+    test_usage();
     test_history();
     test_history_request();
     test_logging();

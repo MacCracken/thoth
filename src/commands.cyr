@@ -131,6 +131,9 @@ fn cmd_state() {
     ui_label("  context : ");
     if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); oprintln(""); }
     else { emit("multi-turn, "); ofmt_int(session_history_len()); ui_emit(ROLE_MUTED, " messages (/reset clears)"); oprintln(""); }
+    ui_label("  tokens  : ");
+    if (session_tokens_seen() == 0) { ui_emit(ROLE_FAINT, "(none reported yet — shows once hoosh returns usage)"); oprintln(""); }
+    else { ofmt_int(session_tokens()); ui_emit(ROLE_MUTED, " total (hoosh usage, this session)"); oprintln(""); }
     ui_label("  log     : ");
     if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in thoth.cyml)"); oprintln(""); }
     else {

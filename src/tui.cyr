@@ -243,6 +243,11 @@ fn tui_draw_status() {
     ui_emit(ROLE_ACCENT, _hoosh_model());
     ui_emit(ROLE_FAINT, "  turns ");
     emit(ui_sgr(ROLE_FG)); fmt_int(session_turns()); emit(ui_reset());
+    # tok: omitted until hoosh reports usage (0.10.2, ADR-0010 — never a placeholder).
+    if (session_tokens_seen() == 1) {
+        ui_emit(ROLE_FAINT, "  tok ");
+        emit(ui_sgr(ROLE_FG)); fmt_int(session_tokens()); emit(ui_reset());
+    }
     ui_emit(ROLE_FAINT, "  surface ");
     ui_emit(ROLE_GREEN, ui_tier_name());
     ui_emit(ROLE_FAINT, "  theme ");
