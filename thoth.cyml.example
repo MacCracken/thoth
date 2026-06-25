@@ -45,6 +45,31 @@ model = "claude-haiku-4-5-20251001"
 # daimon is wired (tools are not advertised; the model just answers).
 # tools = true
 
+# The [pricing.<model>] tables price token usage so /state and the TUI status bar
+# can show a running session cost ($d.cc). Opt-in and honest: with no [pricing] for
+# the active model, the cost field is OMITTED (never a faked $0) and /state says so.
+# hoosh reports the token counts (usage); thoth only multiplies them by the rate you
+# declare here. Cost is priced AT ACCUMULATE — each turn uses the model active at that
+# moment — so a mid-session /model switch is costed correctly.
+#
+# Rates are integer micro-USD per 1000 tokens, i.e. (USD per 1M tokens) x 1000:
+#   $3.00 / 1M  -> 3000      $15.00 / 1M -> 15000
+#   $0.25 / 1M  -> 250       $1.25  / 1M -> 1250
+# The section name must match the model id thoth REQUESTS, exactly (session /model,
+# else [hoosh].model, else the literal "default" when you let hoosh route). So price a
+# default-routed session with [pricing.default], or set [hoosh].model and price that id.
+# input = prompt-token rate, output = completion-token rate. BOTH must be set for a
+# model to be priced — a section with only one side is treated as unpriced (and /state
+# says so), never billed at $0 on the missing side. A deliberately-free side is `= 0`.
+
+# [pricing.claude-haiku-4-5-20251001]
+# input  = 800     # $0.80 per 1M input tokens
+# output = 4000    # $4.00 per 1M output tokens
+
+# [pricing.claude-sonnet-4-6]
+# input  = 3000    # $3.00 per 1M input tokens
+# output = 15000   # $15.00 per 1M output tokens
+
 # The [daimon] table wires the daimon seam (M4). Declaring a `url` flips the
 # seam from absent -> remote-client: /tools lists daimon's MCP host registry
 # (GET /v1/mcp/tools) and /call invokes a tool (POST /v1/mcp/call). daimon

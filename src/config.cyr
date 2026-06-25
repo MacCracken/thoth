@@ -36,6 +36,17 @@ var CONFIG_PATH = "thoth.cyml";
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
 var TRON_AGENT_DEFAULT = "thoth";
 
+# Pricing table (0.10.3): each [pricing.<model>] section's input/output rate, cached
+# at load time into a stable fixed table. The model id (the part after "pricing.") is
+# kept as a stable cstring (str_cstr copies into the bump heap) so price-at-accumulate
+# can look it up per turn WITHOUT retaining the transient parse buffers. Rates are
+# micro-USD per 1000 tokens — i.e. (USD per 1M tokens) x 1000 — kept as -1 when unset.
+var PRICE_MAX = 32;
+var _price_models = 0;   # PRICE_MAX cstr ptrs (model id)
+var _price_in = 0;       # PRICE_MAX i64 input rates  (micro-USD / 1K tokens), -1 unset
+var _price_out = 0;      # PRICE_MAX i64 output rates (micro-USD / 1K tokens), -1 unset
+var _price_n = 0;
+
 # _cfg_section_pairs: the pairs vec for table [name] in a parsed sections vec,
 # or 0 if the table is absent.
 fn _cfg_section_pairs(sections, name) {
@@ -64,6 +75,78 @@ fn _cfg_bool(pairs, key, dflt) {
     return dflt;
 }
 
+# _cfg_int: read key from pairs as a non-negative integer, or -1 when absent, empty,
+# or non-numeric (decimal digits only — pricing rates are whole micro-USD/1K). Pure.
+fn _cfg_int(pairs, key) {
+    if (pairs == 0) { return 0 - 1; }
+    var v = bayan_toml_get(pairs, key);
+    if (v == 0) { return 0 - 1; }
+    var d = str_data(v);
+    var n = str_len(v);
+    if (n == 0) { return 0 - 1; }
+    var acc = 0;
+    var i = 0;
+    while (i < n) {
+        var ch = load8(d + i);
+        if ((ch < 48) || (ch > 57)) { return 0 - 1; }   # any non-digit -> reject
+        acc = acc * 10 + (ch - 48);
+        i = i + 1;
+    }
+    return acc;
+}
+
+# _price_load: scan the parsed sections for [pricing.<model>] tables and cache each
+# model's input/output rate into the stable fixed table (capped at PRICE_MAX). The
+# section name is matched verbatim (bayan keeps the raw bracket text), so a model id
+# with dots or dashes works. Called once from config_load.
+fn _price_load(sections) {
+    if (_price_models == 0) {
+        _price_models = alloc(PRICE_MAX * 8);
+        _price_in = alloc(PRICE_MAX * 8);
+        _price_out = alloc(PRICE_MAX * 8);
+    }
+    _price_n = 0;
+    var n = vec_len(sections);
+    var i = 0;
+    while (i < n) {
+        var sec = vec_get(sections, i);
+        var nm = str_cstr(bayan_toml_section_name(sec));   # stable copy (bump heap)
+        if ((cstr_starts_with(nm, "pricing.") == 1) && (_price_n < PRICE_MAX)) {
+            var prs = bayan_toml_section_pairs(sec);
+            store64(_price_models + _price_n * 8, nm + 8);   # model id = past "pricing."
+            store64(_price_in + _price_n * 8, _cfg_int(prs, "input"));
+            store64(_price_out + _price_n * 8, _cfg_int(prs, "output"));
+            _price_n = _price_n + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _price_idx: the table index for model, or -1 if no [pricing.<model>] was declared.
+fn _price_idx(model) {
+    var i = 0;
+    while (i < _price_n) {
+        if (streq(load64(_price_models + i * 8), model) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# config_price_input / config_price_output: the [pricing.<model>] rate (micro-USD per
+# 1000 tokens) for model, or -1 when no rate is declared for it (cost stays unpriced
+# for that model — honest-omit, ADR-0010). thoth multiplies; hoosh owns the numbers.
+fn config_price_input(model) {
+    var idx = _price_idx(model);
+    if (idx < 0) { return 0 - 1; }
+    return load64(_price_in + idx * 8);
+}
+fn config_price_output(model) {
+    var idx = _price_idx(model);
+    if (idx < 0) { return 0 - 1; }
+    return load64(_price_out + idx * 8);
+}
+
 # config_load: parse thoth.cyml if present and populate the hoosh fields.
 # Returns 1 if a [hoosh] url was found (seam can bind remote), else 0 (absent
 # file, no [hoosh] table, or no url -> seam stays absent). Call once at startup.
@@ -75,6 +158,7 @@ fn config_load() {
     var hp = bayan_cyml_doc_header(doc);
     var hl = bayan_cyml_doc_header_len(doc);
     var sections = bayan_toml_parse(str_new(hp, hl));
+    _price_load(sections);
     var hoosh = _cfg_section_pairs(sections, "hoosh");
     _cfg_hoosh_url = _cfg_str(hoosh, "url");
     _cfg_hoosh_token = _cfg_str(hoosh, "token");

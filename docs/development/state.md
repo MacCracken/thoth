@@ -7,6 +7,29 @@
 
 ## Version
 
+**0.10.3** — cost, the second data producer (0.10.x arc), 2026-06-25. thoth surfaces a
+running session **cost** (`$d.cc`), priced from hoosh's token usage times an opt-in,
+user-declared `[pricing.<model>]` rate, **priced at accumulate** (each response costed with
+the model active at that moment, so a mid-session `/model` switch is costed correctly).
+Omit-until-present ([ADR-0010](../adr/0010-data-producer-honest-omit.md)): the field shows
+only once a priced response arrives — never a faked `$0` — and `/state` announces the gap.
+New `[pricing.<model>]` config (`src/config.cyr`): per-model `input`/`output` rates in
+integer micro-USD per 1000 tokens (= USD-per-1M × 1000), cached at load into a stable fixed
+table (cap 32) keyed by the verbatim model id (dots/dashes OK); `_cfg_int` distinguishes an
+omitted key (`-1`) from `= 0`. Pure math: `hoosh_cost_micro = (p·in + c·out)/1000`;
+`cost_fmt` renders `$d.cc` truncating DOWN (never overstates). Session tally in
+`src/session.cyr` (`session_cost_micro`/`_seen`/`_unpriced_count` + `add_cost`/`note_unpriced`;
+`/reset` clears). `_hoosh_account_usage` folds tokens+cost from each response's usage, wired
+into all four turn paths (blocking+SSE, hoosh+agent). Surfaced as `$d.cc` in the status bar
+(after `tok`, omitted until priced) and a `cost` row in `/state` (honest absent line, plus an
+unpriced-omitted count for partially-priced sessions). hoosh owns the counts; thoth only
+multiplies. **Pre-cut adversarial review (4 lenses, all verified):** core sound; caught one
+honest-omit gap — a half-declared `[pricing]` (one side omitted) billed the missing side at
+`$0` — fixed before cut (`&&`→`||` guard → unpriced+noted, regression-tested). Keying
+contract documented (key matches the REQUESTED model id; default routing → `[pricing.default]`).
+Floor byte-clean (status TUI-only; `/state` row 0 escapes at T0 — verified). Live priced
+round-trip is host-side (sandbox blocks compiled-binary TCP); covered by `test_cost`. 425
+assertions (+32). Pin unchanged (6.2.43).
 **0.10.2** — token usage, the first data producer (0.10.x arc), 2026-06-25. thoth
 surfaces a live `tok <n>` session token count, sourced from hoosh's own
 `usage.total_tokens` and summed across the session (every agentic-loop iteration, and
@@ -503,7 +526,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   (`session_history_*` — append/accessors/pop/clear; stable content copies).
   **0.10.2 (tokens):** the session token tally (`session_tokens`/`session_tokens_seen`/
   `session_add_tokens` — running sum + a seen-flag for omit-until-present; cleared by
-  `/reset`).
+  `/reset`). **0.10.3 (cost):** the session cost tally (`session_cost_micro`/`_seen`/
+  `_unpriced_count` + `session_add_cost`/`session_note_unpriced`) and the pure `cost_fmt`
+  `$d.cc` formatter (truncates down); also cleared by `/reset`.
 - `src/roundlog.cyr` — **0.7.0**: the session-local agentic tool-**round** trace
   `/audit` surfaces. A ring (last 16 rounds) of `{turn, round, calls[]}` with each
   call's verdict (`allow`/`deny`/`noname`) + ok/err; recorded by the agentic loop
@@ -513,7 +538,10 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
 - `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
   `[daimon]` url, `[tron]` policy/agent; **0.5.0:** `[hoosh].stream`
   bool via a `_cfg_bool` reader; **0.5.1:** `[hoosh].history`; **0.5.2:**
-  `[log].file` / `[log].level`).
+  `[log].file` / `[log].level`; **0.10.3:** the `[pricing.<model>]` table — `_price_load`
+  caches each model's `input`/`output` rate (micro-USD per 1K tokens) into a stable fixed
+  table at load, `config_price_input`/`_output` look it up verbatim by model id, `_cfg_int`
+  parses an integer rate (`-1` absent, `0` explicit-free)).
 - `src/log.cyr` — **0.5.2**: structured driver-event logging over the vendored
   sakshi logger. `log_init` binds to `[log]` (off unless configured); the pure
   `event=… key=value` builder (`log_begin`/`log_kv_str`/`log_kv_int`/`log_message`)
@@ -534,7 +562,10 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `hoosh_extract_usage` (+ shared `_hoosh_usage_total`) reads `usage.total_tokens` from a
   blocking body or a streaming usage frame (`-1` when absent); both turn paths feed it to
   `session_add_tokens`; streaming requests send `stream_options:{include_usage:true}` and
-  `_hoosh_sse_cb` reads content + usage on one parse.
+  `_hoosh_sse_cb` reads content + usage on one parse. **0.10.3 (cost):** generalized to
+  `_hoosh_usage_field(v,key)` (prompt/completion/total); pure `hoosh_cost_micro` +
+  `_hoosh_account_usage` price each response at the ACTIVE model's `[pricing]` rate (price-at-
+  accumulate) — a half-declared rate degrades to unpriced+noted, never billed at `$0`.
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
   (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool
@@ -594,7 +625,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **393 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **425 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -641,7 +672,11 @@ bundle is DCE-unreachable).
   themes); and **0.10.2** `test_usage` (the token producer — `hoosh_extract_usage` across a
   blocking body, a streaming usage frame, a plain delta, a `usage` without `total_tokens`,
   and an unparseable body; the session accumulator's sum / seen-flag / absent-ignored /
-  `/reset`-clears semantics). Passes
+  `/reset`-clears semantics); and **0.10.3** `test_cost` (the pricing math, the `$d.cc`
+  formatter truncating down, the `[pricing.<model>]` table with verbatim dashed-id match +
+  missing-key→`-1`, the cost accumulator + honest-omit flags, an end-to-end price-at-accumulate
+  assertion through the active model, and the unpriced- + half-declared-model degrade paths).
+  Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
 - `tests/thoth.fcyr` — fuzz stub.

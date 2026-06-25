@@ -427,17 +427,55 @@ fn hoosh_extract_models(body, body_len) {
     return data;
 }
 
-# _hoosh_usage_total: given an already-parsed JSON value, return usage.total_tokens
-# as an int, or -1 when there is no usage object / total field (a normal streaming
-# delta frame, or a gateway that omits usage). Pure. The shared core so the SSE
-# callback can reuse the value it already parsed instead of parsing twice per frame.
-fn _hoosh_usage_total(v) {
+# _hoosh_usage_field: given an already-parsed JSON value, return usage.<key> as an
+# int, or -1 when there is no usage object / no such field (a normal streaming delta
+# frame, or a gateway that omits usage). Pure. The shared core so the SSE callback can
+# reuse the value it already parsed instead of parsing twice per frame.
+fn _hoosh_usage_field(v, key) {
     if (v == 0) { return 0 - 1; }
     var u = bayan_json_v_obj_get(v, "usage");
     if (u == 0) { return 0 - 1; }
-    var t = bayan_json_v_obj_get(u, "total_tokens");
+    var t = bayan_json_v_obj_get(u, key);
     if (t == 0) { return 0 - 1; }
     return bayan_json_v_int(t);
+}
+
+# _hoosh_usage_total: usage.total_tokens, or -1 when absent. Pure.
+fn _hoosh_usage_total(v) { return _hoosh_usage_field(v, "total_tokens"); }
+
+# hoosh_cost_micro: the micro-USD cost of (prompt, completion) tokens at the given
+# input/output rates (each micro-USD per 1000 tokens). Integer division truncates the
+# sub-micro-USD remainder, so cost is never overstated. Pure — unit-tested.
+fn hoosh_cost_micro(prompt, completion, in_rate, out_rate) {
+    return (prompt * in_rate + completion * out_rate) / 1000;
+}
+
+# _hoosh_account_usage: fold one response's usage (from an already-parsed value) into
+# the session token + cost tallies (0.10.2/0.10.3). Tokens come from total_tokens; cost
+# is priced AT ACCUMULATE — prompt/completion tokens times the ACTIVE model's
+# [pricing.<model>] rate, so a mid-session switch prices each turn correctly. A frame
+# with no usage is a no-op; usage present but the model unpriced is recorded honestly
+# (session_note_unpriced) rather than counted as $0. Called from both turn paths.
+fn _hoosh_account_usage(v) {
+    if (v == 0) { return 0; }
+    var tot = _hoosh_usage_field(v, "total_tokens");
+    if (tot >= 0) { session_add_tokens(tot); }
+    var p = _hoosh_usage_field(v, "prompt_tokens");
+    var c = _hoosh_usage_field(v, "completion_tokens");
+    if ((p < 0) && (c < 0)) { return 0; }     # no token breakdown -> nothing to price
+    if (p < 0) { p = 0; }
+    if (c < 0) { c = 0; }
+    var model = _hoosh_model();
+    var in_rate = config_price_input(model);
+    var out_rate = config_price_output(model);
+    # Price only when BOTH rates are declared. A half-declared section (one side
+    # omitted -> -1) degrades to unpriced+noted rather than silently billing the
+    # missing side at $0 and showing an understated total (ADR-0010 honest-omit).
+    # An explicit `= 0` reads as 0 (declared free), so a deliberately-free side
+    # still prices — _cfg_int distinguishes an omitted key (-1) from `= 0`.
+    if ((in_rate < 0) || (out_rate < 0)) { session_note_unpriced(); return 0; }
+    session_add_cost(hoosh_cost_micro(p, c, in_rate, out_rate));
+    return 0;
 }
 
 # hoosh_extract_usage: pull usage.total_tokens out of a response body (the blocking
@@ -612,8 +650,7 @@ fn _hoosh_sse_cb(ctx, ev) {
     # carried stream_options:{include_usage}) is captured on the same pass.
     var v = bayan_json_v_parse_str(data, strlen(data));
     if (v == 0) { return 1; }
-    var tot = _hoosh_usage_total(v);
-    if (tot >= 0) { session_add_tokens(tot); }
+    _hoosh_account_usage(v);
     var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { return 1; }
     var first = bayan_json_v_arr_get(choices, 0);
@@ -700,8 +737,7 @@ fn _hoosh_blocking_turn(url, h, len, model) {
         return 0 - 1;
     }
     _hoosh_acc_append(str_data(content), str_len(content));
-    var tot = hoosh_extract_usage(body, blen);
-    if (tot >= 0) { session_add_tokens(tot); }
+    _hoosh_account_usage(bayan_json_v_parse_str(body, blen));
     _hoosh_print_str(content);
     return 0;
 }

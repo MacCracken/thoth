@@ -21,6 +21,18 @@ var _sess_model = 0;     # 0 = none; else a cstring model id
 var _sess_tokens = 0;
 var _sess_tokens_seen = 0;
 
+# Cost accounting (0.10.3): the running session spend in integer micro-USD (1e-6
+# USD), priced AT ACCUMULATE — each turn's prompt/completion tokens are multiplied
+# by the ACTIVE model's [pricing.<model>] rate when the usage arrives and summed, so
+# a mid-session /model switch prices each turn at the right rate (a single end-of-
+# session multiply would be wrong across switches). _sess_cost_seen distinguishes
+# "$0.00 priced" from "nothing priced yet" (honest-omit, ADR-0010); _sess_cost_unpriced
+# counts responses whose usage arrived but whose model had no [pricing] entry, so
+# /state can honestly note they were excluded rather than silently under-report.
+var _sess_cost_micro = 0;
+var _sess_cost_seen = 0;
+var _sess_cost_unpriced = 0;
+
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
 # backing model sees prior turns. Each message is alloc(16): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
@@ -38,6 +50,9 @@ fn session_reset() {
     _sess_hist = 0;          # drop the conversation (a fresh vec on next append)
     _sess_tokens = 0;
     _sess_tokens_seen = 0;
+    _sess_cost_micro = 0;
+    _sess_cost_seen = 0;
+    _sess_cost_unpriced = 0;
     return 0;
 }
 
@@ -52,6 +67,39 @@ fn session_add_tokens(n) {
     _sess_tokens = _sess_tokens + n;
     _sess_tokens_seen = 1;
     return 0;
+}
+
+# session_cost_micro / _seen / _unpriced_count + add/note (0.10.3): the session cost
+# tally in integer micro-USD. session_add_cost folds one priced response's micro-USD
+# in and flips _seen; session_note_unpriced records a response whose usage arrived but
+# whose model was unpriced (so the surface can say so honestly, never fake a $0).
+fn session_cost_micro() { return _sess_cost_micro; }
+fn session_cost_seen() { return _sess_cost_seen; }
+fn session_cost_unpriced_count() { return _sess_cost_unpriced; }
+fn session_add_cost(micro) {
+    if (micro < 0) { return 0; }
+    _sess_cost_micro = _sess_cost_micro + micro;
+    _sess_cost_seen = 1;
+    return 0;
+}
+fn session_note_unpriced() { _sess_cost_unpriced = _sess_cost_unpriced + 1; return 0; }
+
+# cost_fmt: render integer micro-USD as a "$d.cc" cstring into dst (caller sizes it,
+# >= 24 B), returning the byte length. Truncates to whole cents (1 cent = 10000
+# micro-USD) — the displayed value rounds DOWN, never up, so cost is never overstated.
+# Pure — unit-tested. Used by both the TUI status bar and /state.
+fn cost_fmt(dst, micro) {
+    var cents_total = micro / 10000;          # 1 cent = 10000 micro-USD
+    var dollars = cents_total / 100;
+    var cents = cents_total - dollars * 100;
+    var off = 0;
+    store8(dst + off, 36); off = off + 1;     # '$'
+    off = _append_int(dst, off, dollars);
+    store8(dst + off, 46); off = off + 1;     # '.'
+    store8(dst + off, 48 + (cents / 10)); off = off + 1;
+    store8(dst + off, 48 + (cents - (cents / 10) * 10)); off = off + 1;
+    store8(dst + off, 0);
+    return off;
 }
 
 fn _sess_hist_vec() {

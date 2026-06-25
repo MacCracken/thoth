@@ -702,8 +702,7 @@ fn _agent_sse_cb(ctx, ev) {
     if (streq(data, "[DONE]") == 1) { return 0; }
     var v = bayan_json_v_parse_str(data, strlen(data));
     if (v == 0) { return 1; }
-    var tot = _hoosh_usage_total(v);   # 0.10.2: the trailing usage frame, same pass
-    if (tot >= 0) { session_add_tokens(tot); }
+    _hoosh_account_usage(v);   # 0.10.2/0.10.3: tokens + cost from the trailing usage frame
     var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { return 1; }
     var first = bayan_json_v_arr_get(choices, 0);
@@ -747,8 +746,7 @@ fn _agent_iter_block(model, sys, tools_buf, tools_len) {
         if (em != 0) { emit("  "); _hoosh_print_str(em); }
         _agent_round_kind = 3; _agent_round_status = status; return 0;
     }
-    var tot = hoosh_extract_usage(body, blen);
-    if (tot >= 0) { session_add_tokens(tot); }
+    _hoosh_account_usage(bayan_json_v_parse_str(body, blen));
     var tcs = agent_tool_calls(body, blen);
     var nc = agent_tc_count(tcs);
     if (nc == 0) {

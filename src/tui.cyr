@@ -248,6 +248,13 @@ fn tui_draw_status() {
         ui_emit(ROLE_FAINT, "  tok ");
         emit(ui_sgr(ROLE_FG)); fmt_int(session_tokens()); emit(ui_reset());
     }
+    # cost: omitted until a priced response accumulates (0.10.3, ADR-0010).
+    if (session_cost_seen() == 1) {
+        var _cbuf[24];
+        cost_fmt(&_cbuf, session_cost_micro());
+        ui_emit(ROLE_FAINT, "  ");
+        emit(ui_sgr(ROLE_GREEN)); emit(&_cbuf); emit(ui_reset());
+    }
     ui_emit(ROLE_FAINT, "  surface ");
     ui_emit(ROLE_GREEN, ui_tier_name());
     ui_emit(ROLE_FAINT, "  theme ");

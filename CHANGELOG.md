@@ -2,6 +2,57 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.3] - 2026-06-25
+
+**Cost — the second data producer (0.10.x arc).** thoth now surfaces a running session
+**cost** (`$d.cc`), priced from hoosh's own token usage times an opt-in, user-declared
+`[pricing.<model>]` rate. Cost is **priced at accumulate** — each response is costed with
+the model active at that moment — so a mid-session `/model` switch is costed correctly
+(a single end-of-session multiply would be wrong across switches). It follows the
+**omit-until-present** doctrine ([ADR-0010](docs/adr/0010-data-producer-honest-omit.md)):
+the field appears only once a priced response arrives — never a faked `$0` — and `/state`
+announces the gap (unconfigured, or a model with no rate) honestly. hoosh owns the token
+counts; thoth only multiplies them by the rate you declare. 425 unit assertions (+32).
+Pin unchanged (6.2.43).
+
+### Added
+- **`[pricing.<model>]` config** (`src/config.cyr`): per-model `input`/`output` rates in
+  integer **micro-USD per 1,000 tokens** (= USD-per-1M × 1000; `$3.00/1M → 3000`,
+  `$0.25/1M → 250`). Cached at load into a stable fixed table (cap 32 models) keyed by the
+  model id — matched **verbatim** against the bracket text, so ids with dots/dashes work.
+  `config_price_input`/`config_price_output` return `-1` when a rate is undeclared;
+  `_cfg_int` distinguishes an omitted key (`-1`) from an explicit `= 0` (declared free).
+- **Pure cost math** (`src/hoosh.cyr`, `src/session.cyr`): `hoosh_cost_micro(p,c,in,out)
+  = (p·in + c·out)/1000` (micro-USD); `cost_fmt` renders `$d.cc`, **truncating down** to
+  whole cents so cost is never overstated.
+- **Session cost tally** (`src/session.cyr`): `session_cost_micro` / `session_cost_seen`
+  / `session_cost_unpriced_count` (+ `session_add_cost` / `session_note_unpriced`), cleared
+  by `/reset`. `_hoosh_account_usage` folds tokens **and** cost from each response's usage
+  (prompt/completion/total), wired into all four turn paths — blocking + SSE, hoosh + agent.
+- **`$d.cc` in the TUI status bar** (after `tok`, **omitted** until a priced response) and a
+  **`cost` row in `/state`** (the total once priced, else an honest absent line; a partially-
+  priced session names how many responses were unpriced-and-omitted).
+- **`test_cost`** (+32): the pricing math, the `$d.cc` formatter, the `[pricing]` table
+  (verbatim dashed-id match, missing-key → `-1`), the accumulator + honest-omit flags, and
+  an **end-to-end** assertion pricing a real usage body through the active model → `[pricing]`
+  → accumulator, plus the unpriced- and half-declared-model degrade paths.
+
+### Notes
+- **Pre-cut adversarial review (4 lenses, every finding verified)** confirmed the core sound
+  (cost_fmt sizing, pointer stability, byte-identical floor, truncation honesty, clean
+  spine-consumer posture, price-at-accumulate correctly wired across all paths + multi-round
+  agentic turns + the streaming usage frame). It caught one honest-omit gap, fixed before cut:
+  a **half-declared** `[pricing.<model>]` (only `input` or only `output`) used to bill the
+  missing side at `$0` and show an understated total — now any undeclared rate degrades the
+  model to **unpriced + noted** (`&&` → `||` guard), with a regression test.
+- **Keying contract:** `[pricing.<model>]` must match the model id thoth **requests**
+  (session `/model`, else `[hoosh].model`, else the literal `"default"` under hoosh routing).
+  Price a default-routed session with `[pricing.default]`, or set `[hoosh].model`. Documented
+  in `thoth.cyml.example`.
+- The piped/CI floor stays byte-identical (status field TUI-only; the `/state` row emits 0
+  escapes at T0 — verified). A live priced round-trip is a host-side step (the build sandbox
+  blocks a compiled binary's TCP); the math + wiring are covered by `test_cost`.
+
 ## [0.10.2] - 2026-06-25
 
 **Token usage — the first data producer (0.10.x arc).** thoth now surfaces a live

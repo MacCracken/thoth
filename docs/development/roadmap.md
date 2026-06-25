@@ -10,9 +10,10 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.10.2):** **M0–M7 are done**, and the **0.10.x data-producer
-> line has started** — `0.10.2` shipped token usage (`tok <n>`, omit-until-present),
-> the first of the honest-omit data fields. The driver core, the
+> **Where we are (0.10.3):** **M0–M7 are done**, and the **0.10.x data-producer
+> line is underway** — `0.10.2` shipped token usage (`tok <n>`) and `0.10.3` shipped
+> cost (`$d.cc`, priced-at-accumulate), the first two honest-omit data fields; only
+> `0.10.4` git (omit-until-sit) remains on the line. The driver core, the
 > hoosh seam (inference + mid-session model switch), the M4 tool spine
 > (daimon remote; bote + t-ron native; one fail-closed authorization choke
 > point), the M5 avatara overlay, the model-driven agentic tool-calling
@@ -132,9 +133,12 @@ above, deferred to a later ADR.
   → a `tok <n>` status field that **omits until usage arrives** (status bar + a
   `/state` row). Both paths: the blocking completion's `usage`, and the streaming
   usage frame via `stream_options:{include_usage:true}`. See CHANGELOG / state.md.
-- **`0.10.3` — cost.** Opt-in `[pricing.<model>]` → integer micro-USD,
-  priced **at accumulate** across mid-session model switches. A `$d.cc`
-  field that **omits when unpriced**.
+- **`0.10.3` — cost. ✅ DONE (2026-06-25).** Opt-in `[pricing.<model>]` rates
+  (integer micro-USD per 1K tokens) × hoosh's token usage → a `$d.cc` session
+  cost, priced **at accumulate** (each response costed with the model active at
+  that moment, so mid-session `/model` switches are correct). Status-bar field +
+  `/state` row, **omitted until a priced response** (and a half-declared rate
+  degrades to unpriced+noted, never `$0`). See CHANGELOG / state.md.
 - **`0.10.4` — git.** **Omit-until-sit:** one faint `/state` honesty line
   (`git: absent — gated on sit`). **No faked branch/diff.** Real `.git/`
   reads are gated on sit's `.git/` read-mode — sit's project roadmap
