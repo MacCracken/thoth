@@ -787,10 +787,11 @@ fn test_tui() {
     assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
     # geometry
     assert_eq(tui_status_row(), 1, "status bar at row 1");
-    assert_eq(tui_composer_row(24), 24, "composer at the last row");
+    assert_eq(tui_composer_row(24), 23, "composer just above the hint row");
+    assert_eq(tui_hint_row(24), 24, "keybinding hint at the last row");
     assert_eq(tui_feed_top(1), 2, "feed starts below a shown status bar");
     assert_eq(tui_feed_top(0), 1, "feed reclaims row 1 when status hidden");
-    assert_eq(tui_feed_bot(24), 23, "feed bottom sits above the composer");
+    assert_eq(tui_feed_bot(24), 22, "feed bottom sits above the composer + hint");
     return 0;
 }
 

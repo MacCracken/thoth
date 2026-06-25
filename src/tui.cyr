@@ -33,6 +33,7 @@ var KEY_RIGHT = 7;
 var KEY_HOME = 8;
 var KEY_END = 9;
 var KEY_KILL = 10;
+var KEY_TOGGLE_STATUS = 11;   # Ctrl-G — toggle the pinned status bar
 
 # Editor outcomes.
 var ACT_NONE = 0;
@@ -91,9 +92,10 @@ fn led_feed(key, ch) {
 # the feed scrolls in rows 2..(rows-1). Toggling the status bar off frees row 1
 # into the feed (feed_top -> 1). (File-tree pane: a left column, a later step.)
 fn tui_status_row() { return 1; }
-fn tui_composer_row(rows) { return rows; }
+fn tui_composer_row(rows) { return rows - 1; }
+fn tui_hint_row(rows) { return rows; }
 fn tui_feed_top(show_status) { if (show_status == 1) { return 2; } return 1; }
-fn tui_feed_bot(rows) { return rows - 1; }
+fn tui_feed_bot(rows) { return rows - 2; }
 
 # --- I/O: raw-mode terminal control (verified on a live TTY) ---------------
 
@@ -125,7 +127,7 @@ fn tui_read_key() {
     if (b == 21) { return KEY_KILL; }
     if (b == 1) { return KEY_HOME; }
     if (b == 5) { return KEY_END; }
-    if (b == 7) { return KEY_NONE; }   # Ctrl-G handled by the caller (toggle)
+    if (b == 7) { return KEY_TOGGLE_STATUS; }   # Ctrl-G
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
         if (load8(&c) == 91) {
@@ -175,6 +177,15 @@ fn tui_draw_status() {
     return 0;
 }
 
+# tui_draw_hint: the bottom keybinding strip (faint) — discoverability matters in a
+# non-mouse environment. Drawn at the last row.
+fn tui_draw_hint() {
+    tty_move(tui_hint_row(_tui_rows), 1);
+    tty_clear_to_eol();
+    ui_emit(ROLE_FAINT, "Ctrl-G status · Ctrl-D / Ctrl-C exit · Enter send");
+    return 0;
+}
+
 # tui_draw_composer: redraw the composer line (prompt + buffer) and park the cursor
 # at the edit position. The {(o> prompt is preserved as the composer prompt.
 fn tui_draw_composer() {
@@ -200,6 +211,7 @@ fn tui_relayout() {
     }
     _tui_scroll_region(tui_feed_top(_tui_show_status), tui_feed_bot(_tui_rows));
     tui_draw_status();
+    tui_draw_hint();
     tui_draw_composer();
     return 0;
 }
@@ -231,16 +243,22 @@ fn tui_loop() {
     tui_relayout();
     while (_tui_running == 1) {
         var key = tui_read_key();
-        var act = led_feed(key, _tui_key_ch);
-        if (act == ACT_SUBMIT) {
-            var keep = tui_run_line(led_buf());
-            led_reset();
-            if (keep == 0) { _tui_running = 0; }
-            else { tui_relayout(); }
-        } elif (act == ACT_EOF) {
-            _tui_running = 0;
+        if (key == KEY_TOGGLE_STATUS) {
+            if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
+            tty_clear();           # the scroll region changes; repaint cleanly
+            tui_relayout();
         } else {
-            tui_draw_composer();
+            var act = led_feed(key, _tui_key_ch);
+            if (act == ACT_SUBMIT) {
+                var keep = tui_run_line(led_buf());
+                led_reset();
+                if (keep == 0) { _tui_running = 0; }
+                else { tui_relayout(); }
+            } elif (act == ACT_EOF) {
+                _tui_running = 0;
+            } else {
+                tui_draw_composer();
+            }
         }
     }
     # teardown — restore the terminal on every exit path.
