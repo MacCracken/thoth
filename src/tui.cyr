@@ -29,7 +29,7 @@ var KEY_CHAR = 1;
 var KEY_BACKSPACE = 2;
 var KEY_ENTER = 3;
 var KEY_CTRLC = 4;
-var KEY_CTRLD = 5;
+var KEY_EOF = 5;              # real stdin EOF (read <=0), NOT the Ctrl-D keypress
 var KEY_LEFT = 6;
 var KEY_RIGHT = 7;
 var KEY_HOME = 8;
@@ -96,7 +96,7 @@ fn led_feed(key, ch) {
     if (key == KEY_KILL) { _comp_len = 0; _comp_cur = 0; store8(_composer, 0); return ACT_NONE; }
     if (key == KEY_CTRLC) { return ACT_EOF; }   # Ctrl-C exits unconditionally (interrupt), with teardown
     if (key == KEY_ENTER) { return ACT_SUBMIT; }
-    if (key == KEY_CTRLD) { if (_comp_len == 0) { return ACT_EOF; } return ACT_NONE; }
+    if (key == KEY_EOF) { return ACT_EOF; }   # stdin closed -> end the session
     return ACT_NONE;
 }
 
@@ -126,18 +126,18 @@ fn tui_active() {
 }
 
 # tui_read_key: read + decode one keypress in raw mode (ASCII + the common CSI
-# arrows/home/end). KEY_CHAR sets _tui_key_ch. EOF -> KEY_CTRLD.
+# arrows/home/end). KEY_CHAR sets _tui_key_ch. stdin EOF -> KEY_EOF. Ctrl-X / Ctrl-C
+# close; Ctrl-D is NOT bound (a stray Ctrl-D is ignored).
 fn tui_read_key() {
     var c[8];
-    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_CTRLD; }
+    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_EOF; }
     var b = load8(&c);
     if (b == 13) { return KEY_ENTER; }
     if (b == 10) { return KEY_ENTER; }
     if (b == 127) { return KEY_BACKSPACE; }
     if (b == 8) { return KEY_BACKSPACE; }
     if (b == 24) { return KEY_CTRLC; }   # Ctrl-X — clean unconditional close (no signal semantics)
-    if (b == 3) { return KEY_CTRLC; }
-    if (b == 4) { return KEY_CTRLD; }
+    if (b == 3) { return KEY_CTRLC; }    # Ctrl-C — fallback close
     if (b == 21) { return KEY_KILL; }
     if (b == 1) { return KEY_HOME; }
     if (b == 5) { return KEY_END; }

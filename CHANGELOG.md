@@ -22,8 +22,9 @@ was adversarially reviewed (4 issues found, all fixed) before this cut.
     with horizontal scroll so long lines never wrap onto the chrome.
   - **Slash-command palette** — a live-filtered command list on the hint row while you
     type a `/command` token.
-  - **Exit**: `Ctrl-X` (clean, signal-free), `Ctrl-D` (empty line), `Ctrl-C`, or `/quit`
-    — all restore the terminal (cooked + scroll region + alt-screen) cleanly.
+  - **Exit**: `Ctrl-X` (the clean, signal-free close) or `Ctrl-C` fallback or `/quit` —
+    all restore the terminal (cooked + scroll region + alt-screen) cleanly. (A real
+    stdin EOF — terminal closed — also exits.)
   - Detection: `THOTH_TIER=rich` + a real tty → PT_RICH → the TUI; else the REPL.
   - Pure pieces unit-tested (`test_tui`, +25): line-editor state machine, geometry,
     palette matchers.

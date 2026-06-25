@@ -11,8 +11,8 @@
 (new `src/tui.cyr` + vendored `src/vendor/darshana.cyr`): a pinned, Ctrl-G-togglable
 status bar, a scrolling feed (the composer clears on Enter; the response streams
 below), a raw-mode composer with line editing + horizontal scroll, a slash-command
-palette, and keybinding hints; exit via Ctrl-X / Ctrl-D / Ctrl-C / /quit (all restore
-the terminal). Active only at PT_RICH on a real tty (`THOTH_TIER=rich`); the line REPL
+palette, and keybinding hints; exit via Ctrl-X / Ctrl-C / /quit (all restore the
+terminal). Active only at PT_RICH on a real tty (`THOTH_TIER=rich`); the line REPL
 is the guaranteed fallback (piped output byte-identical). Adversarially reviewed
 pre-cut — 4 issues fixed, incl. a critical SIGINT-during-dispatch teardown leak. 295
 assertions (+25, `test_tui`). Known → 0.9.1: instant SIGWINCH resize + the file-tree

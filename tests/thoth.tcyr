@@ -782,7 +782,7 @@ fn test_tui() {
     assert_eq(led_feed(KEY_ENTER, 0), ACT_SUBMIT, "Enter submits");
     led_feed(KEY_KILL, 0);
     assert_eq(led_len(), 0, "Ctrl-U clears the line");
-    assert_eq(led_feed(KEY_CTRLD, 0), ACT_EOF, "Ctrl-D on an empty line -> EOF");
+    assert_eq(led_feed(KEY_EOF, 0), ACT_EOF, "real stdin EOF -> exit");
     led_feed(KEY_CHAR, 122);                                    # 'z' (non-empty line)
     assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
     # geometry
