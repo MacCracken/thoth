@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.11.5** — `/dry` request-body preview (0.11.x terminal-citizen line), 2026-06-25. `/dry
+<task>` renders the EXACT hoosh request body thoth would compose for `<task>` and SKIPS the
+POST — a local introspection command ("what goes to the model?"). **Side-effect-free** (no
+session history / token / cost mutation) and **network-free** (no hoosh POST, no daimon fetch);
+NEVER a hoosh `/preview` endpoint (that would fork the inference spine) — it renders thoth's OWN
+composed request buffer. New `hoosh_build_dry` (`src/hoosh.cyr`) composes the multi-turn body
+(persona system + budgeted history tail + the pending user turn) WITHOUT mutating history (the
+live `hoosh_send` appends the turn first; this reads only), reusing the same
+`_hoosh_emit_msg_cap`/`_hoosh_history_start`/cap-bounded builders so the bytes match a real turn;
+plus `hoosh_model_cur()` (the exact `hoosh_send` model precedence) and `hoosh_dry_buf()`.
+`cmd_dry` (`src/commands.cyr`, `CMD_DRY`) mirrors `hoosh_send`'s path selection, prints the
+endpoint + flags (model/stream/history/agent/bytes) + the body, degrades honestly when
+`[hoosh].url` is unset (composes locally, never refuses), and in agentic mode shows the message
+envelope + ANNOTATES (never fetches) the `tools` array. REPL/TUI-only (one-shot routes argv to
+`cmd_task`); a >2 KiB body truncates in the TUI feed (noted; the line REPL shows it whole).
+Documented faithfulness edge: `_hoosh_history_start` budgets without the pending prompt's bytes,
+so at a ~32 KiB-history boundary the preview can include one extra old message. **Two-pass
+adversarial review:** design pass confirmed the side-effect-free/network-free design + pinned
+fixes (reuse `_hoosh_model`, annotate-not-fetch tools, honest absent handling, read-only build
+over a lossy temp-append); diff pass returned ZERO must-fixes. Verified live (piped REPL): the
+body for configured + absent seams, and `turns: 0` after two `/dry` calls. 551 assertions (+9,
+`test_dry`). Pin unchanged (6.2.43).
 **0.11.4** — `[alias]` prompt macros (0.11.x terminal-citizen line), 2026-06-25. User-defined
 slash macros in `thoth.cyml`: a `[alias]` table of `name = "expansion"` pairs. Typing
 `/<name> [args]` that is NOT a built-in expands to the configured text (+ any trailing args)
@@ -642,7 +664,11 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   and re-dispatches one level deeper, bounded by `ALIAS_MAX_DEPTH` (guard before the write,
   so a cycle is refused, never an OOB). An `aliases` row in `/state` (only when > 0). An
   alias to `/run`/`/write`/`/call` re-dispatches through the SAME t-ron gate; built-ins
-  always win (aliases only fill the unknown-slash gap).
+  always win (aliases only fill the unknown-slash gap). **0.11.5 (`/dry`):** `cmd_dry`
+  (`CMD_DRY`) previews the request `hoosh_send` would compose for a task (multi-turn →
+  `hoosh_build_dry`, else `hoosh_build_request`) and skips the POST — side-effect-free +
+  network-free; prints endpoint/flags/body, degrades honestly when the seam is absent, and
+  annotates (never fetches) the agentic `tools` array.
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic. **0.6.5
   (M6 ladder):** adds the **capability-effect** dimension (`CapState`
   full/degraded/absent) on top of the binding mode — `seam_cap_state` derives it
@@ -699,6 +725,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `_hoosh_usage_field(v,key)` (prompt/completion/total); pure `hoosh_cost_micro` +
   `_hoosh_account_usage` price each response at the ACTIVE model's `[pricing]` rate (price-at-
   accumulate) — a half-declared rate degrades to unpriced+noted, never billed at `$0`.
+  **0.11.5 (`/dry`):** `hoosh_build_dry` composes the request body NON-destructively (history
+  tail + the pending user turn, no append) so `/dry` is side-effect-free; `hoosh_model_cur`
+  exposes the exact model precedence; `hoosh_dry_buf` lazily allocates the shared request buffer.
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
   (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool

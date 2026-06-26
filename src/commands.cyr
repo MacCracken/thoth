@@ -23,6 +23,7 @@ enum Cmd {
     CMD_MODELS = 15;
     CMD_CLEAR = 16;
     CMD_THEME = 17;
+    CMD_DRY = 18;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -120,6 +121,7 @@ fn classify_input(line) {
     if (token_is(line, "/reset") == 1) { return CMD_RESET; }
     if (token_is(line, "/clear") == 1) { return CMD_CLEAR; }
     if (token_is(line, "/theme") == 1) { return CMD_THEME; }
+    if (token_is(line, "/dry") == 1) { return CMD_DRY; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -143,6 +145,7 @@ fn cmd_help() {
     _help_line("  /reset", "             clear the conversation context (start fresh)");
     _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
     _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
+    _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /quit", "              exit (or Ctrl-D)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
@@ -517,6 +520,56 @@ fn cmd_theme(line) {
     return 0;
 }
 
+# cmd_dry: preview the hoosh request body thoth WOULD send for <task>, and SKIP the POST.
+# A local introspection command for "what goes to the model?": SIDE-EFFECT-FREE (no session
+# history / token / cost / _hoosh_acc mutation — `hoosh_build_dry` only READS history) and
+# NETWORK-FREE (no hoosh POST, no daimon fetch — the agentic tools array is annotated, never
+# fetched). It is NEVER a hoosh `/preview` endpoint (that would fork the inference spine). The
+# message envelope is byte-exact in plain mode; in agentic mode the live turn additionally
+# sends a `tools` array (noted, not shown). Composes locally even when the hoosh seam is
+# absent (degrade-note, never refuses). REPL/TUI-only (one-shot routes argv to cmd_task).
+fn cmd_dry(line) {
+    var task = arg_after(line);
+    if (task == 0) {
+        oprintln("usage: /dry <task>   — preview the hoosh request body, without sending it");
+        return 0;
+    }
+    var model = hoosh_model_cur();
+    var sys = 0;
+    if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
+    var stream = config_hoosh_stream();
+    var multi = config_hoosh_history();
+    var buf = hoosh_dry_buf();
+    var len = 0;
+    if (multi == 1) { len = hoosh_build_dry(buf, model, sys, task, stream); }
+    else { len = hoosh_build_request(buf, model, sys, task, stream); }
+
+    ui_label("-> POST  : "); emit(_hoosh_endpoint_url());
+    ui_emit(ROLE_FAINT, "  (dry-run — not sent)"); oprintln("");
+    if (config_hoosh_configured() == 0) {
+        ui_emit(ROLE_FAINT, "           [hoosh].url not set — the body thoth WOULD send once configured"); oprintln("");
+    }
+    ui_label("   model : "); ui_emit(ROLE_ACCENT, model); oprintln("");
+    ui_label("   flags : ");
+    emit("stream="); if (stream == 1) { emit("on"); } else { emit("off"); }
+    emit(" · history="); if (multi == 1) { emit("on"); } else { emit("off"); }
+    emit(" · agent="); if (agent_enabled() == 1) { emit("on"); } else { emit("off"); }
+    emit(" · "); ofmt_int(len); emit(" bytes"); oprintln("");
+    # the agentic tools array is part of the live request but not composed here (it can
+    # require a daimon fetch) — announce it honestly rather than fake or fetch it.
+    if (agent_enabled() == 1) {
+        ui_emit(ROLE_FAINT, "           agentic: the live turn also sends a \"tools\" array (see /tools) and may loop"); oprintln("");
+    }
+    # in the TUI a body over the feed slot cap truncates on screen — note it (the line REPL
+    # and piped output show the body whole).
+    if ((out_mode() == OUT_RING) && (len > FEED_LINE_CAP)) {
+        ui_emit(ROLE_FAINT, "           (body exceeds the feed slot — best viewed in the line REPL or piped)"); oprintln("");
+    }
+    ui_emit(ROLE_FAINT, "   ── request body ──"); oprintln("");
+    emit_n(buf, len); oprintln("");
+    return 0;
+}
+
 # dispatch: run one input line. Returns 1 to keep looping, 0 to quit. The public entry —
 # repl.cyr / tui.cyr / oneshot.cyr call this; it seeds the alias-expansion depth at 0.
 fn dispatch(line) { return _dispatch_d(line, 0); }
@@ -544,6 +597,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_RESET) { cmd_reset(); return 1; }
     if (c == CMD_CLEAR) { cmd_clear(); return 1; }
     if (c == CMD_THEME) { cmd_theme(line); return 1; }
+    if (c == CMD_DRY) { cmd_dry(line); return 1; }
     if (c == CMD_UNKNOWN_SLASH) {
         # Guard FIRST: refuse at the depth bound BEFORE writing a slot, so a cycle can never
         # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).

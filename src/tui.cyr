@@ -327,7 +327,7 @@ fn tui_draw_status() {
 # becomes a filtered list of matching commands. The matchers are pure + unit-tested;
 # the render is I/O. (A multi-row dropdown above the composer is a later refinement —
 # it needs the feed-buffer redraw model.)
-var SLASH_N = 15;
+var SLASH_N = 16;
 fn _slash_name(i) {
     if (i == 0) { return "/help"; }
     if (i == 1) { return "/seams"; }
@@ -343,7 +343,8 @@ fn _slash_name(i) {
     if (i == 11) { return "/reset"; }
     if (i == 12) { return "/clear"; }
     if (i == 13) { return "/theme"; }
-    if (i == 14) { return "/quit"; }
+    if (i == 14) { return "/dry"; }
+    if (i == 15) { return "/quit"; }
     return "";
 }
 # _buf_has_space: 1 if buf[0..n) holds a space (the command token is complete).

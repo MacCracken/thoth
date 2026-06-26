@@ -10,14 +10,15 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.11.4):** **M0–M7 are done and shipping** (0.1.0 → 0.11.4; the log
+> **Where we are (0.11.5):** **M0–M7 are done and shipping** (0.1.0 → 0.11.5; the log
 > lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
 > line is complete for the producers thoth owned (tokens, cost), and the **0.11.x
 > terminal-citizen line is advancing** — `0.11.0` shipped its keystone (the one-shot/argv
 > front-door), `0.11.1` the first pure-substrate win (composer input-history recall),
 > `0.11.2` its opt-in `[history].file` persistence, `0.11.3` feed soft-wrap (wide lines
-> reflow across physical rows instead of truncating), and `0.11.4` `[alias]` prompt macros
-> (user-defined slash macros that expand-then-redispatch). **What's left:** the rest of the
+> reflow across physical rows instead of truncating), `0.11.4` `[alias]` prompt macros
+> (user-defined slash macros that expand-then-redispatch), and `0.11.5` `/dry` (preview the
+> composed request body without sending). **What's left:** the rest of the
 > **0.11.x** line (the vetted SecureYeoman-TUI-review backlog — substrate/floor ports and
 > thin seam bindings, never a spine fork; that TUI is being reskinned onto thoth's, so
 > thoth's front-end is the shared canonical surface), the **0.12.x git producer** (externally
@@ -138,7 +139,9 @@ above, deferred to a later ADR.
 > are tracked under **Deferred** below); `0.11.3` feed soft-wrap (painter-only reflow +
 > physical-row scrollback; `feed_clip_seg` carries SGR color across the wrap); `0.11.4`
 > `[alias]` prompt macros (`[alias]` table → expand-then-redispatch at `CMD_UNKNOWN_SLASH`,
-> bounded recursion; built-ins win, t-ron still gates an aliased `/run`).
+> bounded recursion; built-ins win, t-ron still gates an aliased `/run`); `0.11.5` `/dry`
+> request-body preview (`hoosh_build_dry` composes the body side-effect-free + network-free,
+> skips the POST — never a hoosh preview endpoint).
 
 **Remaining — pure-substrate TUI wins (no argv dependency — ship anytime):**
 - _(Both shipped: **soft-wrap long feed lines** in 0.11.3 and **`[alias]` prompt macros** in
@@ -146,12 +149,11 @@ above, deferred to a later ADR.
   next, several unblocked by the 0.11.0 one-shot front-door.)_
 
 **Remaining — introspection slot:**
-- **dry-run / request-body preview (`/dry`)** — render thoth's OWN composed
-  request buffer and skip the POST; **never** a hoosh `/preview` endpoint (that
-  would creep toward forking the inference spine).
 - **JSON-envelope output** — opt-in `{response, model, turns, tokens?, cost?,
   elapsed?}` per turn for jq/CI; **unblocked by 0.11.0** (the one-shot front-door is the
   clean-stdout seam it rides); mutes the human-progress stdout.
+  (**dry-run / request-body preview (`/dry`) shipped in 0.11.5** — renders thoth's OWN composed
+  request buffer and skips the POST; side-effect-free + network-free, never a hoosh endpoint.)
 
 **Remaining — riders / conditional:**
 - **`-o` file tee** — **unblocked by 0.11.0** (forces PT_PLAIN for clean bytes; the

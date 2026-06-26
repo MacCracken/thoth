@@ -2,6 +2,52 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.5] - 2026-06-25
+
+**`/dry` — request-body preview (0.11.x terminal-citizen line).** `/dry <task>` renders the
+exact hoosh request body thoth would compose for `<task>` and **skips the POST** — a local
+introspection command for "what goes to the model?". It is **side-effect-free** (no session
+history / token / cost mutation) and **network-free** (no hoosh POST, no daimon fetch). It is
+NEVER a hoosh `/preview` endpoint — that would creep toward forking the inference spine;
+`/dry` only renders thoth's *own* composed request buffer. The introspection slot's first
+item. 551 unit assertions (+9). Pin unchanged (6.2.43).
+
+### Added
+- **`hoosh_build_dry`** (`src/hoosh.cyr`) — composes the multi-turn request body (system
+  persona + the budgeted history tail + the pending user turn) **without mutating** session
+  history, so the preview has no side effects (the live `hoosh_send` appends the turn to
+  history first; this reads only). Reuses the same `_hoosh_emit_msg_cap` / `_hoosh_history_start`
+  / cap-bounded builders, so the bytes match a real turn. Plus `hoosh_model_cur()` (the exact
+  model precedence `hoosh_send` uses — session `/model` → `[hoosh].model` → `"default"`) and
+  `hoosh_dry_buf()` (the shared request buffer).
+- **`/dry` command** (`src/commands.cyr`, `CMD_DRY`) — mirrors `hoosh_send`'s path selection
+  (multi-turn → `hoosh_build_dry`, else `hoosh_build_request`), prints the endpoint + active
+  flags (model, stream, history, agent, byte count) and the request body, and degrades
+  honestly: when `[hoosh].url` is unset it notes "the body thoth WOULD send" and still composes
+  it locally (never refuses). In **agentic mode** it shows the message envelope and **annotates**
+  (never fetches/fakes) that the live turn also sends a `tools` array (see `/tools`). Listed in
+  `/help` and the TUI slash palette.
+- **`test_dry`** (+9): the classifier, `hoosh_model_cur` precedence, exact body shapes
+  (bare user turn, system + user, streaming flags, history tail + pending turn), the prompt
+  JSON-escape, and the **no-mutation invariant** (`session_history_len` before == after).
+
+### Notes
+- **REPL/TUI-only** — one-shot (`thoth 'task'`) routes its whole argv to `cmd_task` as a
+  free-text task by design, so it does not interpret `/dry`. Use it interactively (the line
+  REPL also accepts it piped). In the TUI feed a body over the 2 KiB feed-slot cap truncates
+  on screen (noted on output); the line REPL / piped shows it whole.
+- Known faithfulness edge (documented in the builder): `_hoosh_history_start` budgets the
+  history tail without the pending prompt's bytes, so at a ~32 KiB-of-history boundary the
+  preview can include one more old message than the live turn. Faithful for any normal
+  conversation; the prompt is bounded by the 4 KiB input line.
+- **Two-pass adversarial review (Workflow).** A DESIGN pass (4 lenses, before code) confirmed
+  the side-effect-free / network-free design and pinned the fixes folded in pre-implementation
+  (reuse `_hoosh_model` to avoid model drift; annotate-not-fetch agent tools; honest hoosh-absent
+  handling; the read-only build over a lossy temp-append). A DIFF pass (4 lenses, each finding
+  independently verified) returned **zero must-fixes**. Verified live (piped REPL): the composed
+  body for configured + absent seams, and `turns: 0` / `0 messages` after two `/dry` calls
+  (side-effect-free).
+
 ## [0.11.4] - 2026-06-25
 
 **`[alias]` prompt macros (0.11.x terminal-citizen line).** User-defined slash macros in

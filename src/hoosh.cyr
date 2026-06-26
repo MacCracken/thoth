@@ -374,6 +374,60 @@ fn hoosh_build_messages(dst, model, system, stream) {
     return off;
 }
 
+# hoosh_build_dry: the request body thoth WOULD send for `prompt` in multi-turn mode,
+# built WITHOUT mutating session history — so the `/dry` preview (src/commands.cyr) has no
+# side effects. Like hoosh_build_messages, but it serializes the current history tail and
+# then appends `prompt` as the final user message itself (the real path appends to history
+# first; here we read-only). NUL-terminates, returns the byte length. Pure.
+#
+# KNOWN second-order edge (acceptable for a preview): `_hoosh_history_start` budgets the
+# history tail over the CURRENT history (without `prompt`'s bytes), whereas the live turn
+# appends `prompt` first so its budget includes them. At a ~32 KiB-of-history boundary the
+# preview can include one more old message than the live turn would (the prompt is bounded
+# by the 4 KiB input line, so the skew is small). Faithful for any normal conversation.
+fn hoosh_build_dry(dst, model, system, prompt, stream) {
+    var cap = HOOSH_REQ_CAP;
+    var start = _hoosh_history_start(HOOSH_REQ_CAP);
+    var total = session_history_len();
+    var off = 0;
+    off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
+    off = _json_escape_into_cap(dst, off, cap, model);
+    off = _append_cstr_cap(dst, off, cap, "\",\"messages\":[");
+    var wrote = 0;
+    if ((system != 0) && (load8(system) != 0)) {
+        off = _hoosh_emit_msg_cap(dst, off, cap, "system", system);
+        wrote = 1;
+    }
+    var i = start;
+    while (i < total) {
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, session_history_role(i), session_history_content(i));
+        wrote = 1;
+        i = i + 1;
+    }
+    if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }   # the pending user turn
+    off = _hoosh_emit_msg_cap(dst, off, cap, "user", prompt);
+    off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
+    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
+    else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
+    store8(dst + off, 0);
+    return off;
+}
+
+# hoosh_model_cur: the model id the NEXT turn would request — the exact precedence
+# `hoosh_send` uses (session /model override, else [hoosh].model, else "default" under
+# hoosh routing). A public accessor so /dry can't drift from the real path.
+fn hoosh_model_cur() { return _hoosh_model(); }
+
+# hoosh_dry_buf: the shared request buffer (lazily allocated). /dry composes into the
+# SAME buffer a real turn uses — harmless (it is overwritten by the next turn) and keeps
+# the preview byte-for-byte what the turn would build.
+fn hoosh_dry_buf() {
+    if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
+    return _hoosh_req;
+}
+
 # hoosh_extract_content: parse an OpenAI-shaped response body and return the
 # assistant text as a Str (choices[0].message.content), or 0 if absent/wrong
 # shape. Pure — unit-tested against canned bodies.

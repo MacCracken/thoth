@@ -488,6 +488,59 @@ fn test_alias() {
     return 0;
 }
 
+# /dry request-body preview (0.11.5): hoosh_build_dry composes the EXACT request body
+# thoth would send for a task WITHOUT mutating session history (so /dry is side-effect-free).
+# The bodies are deterministic, so we pin them with exact string equality; the no-mutation
+# invariant is the load-bearing guarantee.
+fn test_dry() {
+    test_group("/dry request preview (hoosh.cyr / commands.cyr)");
+    session_set_model(0);
+    session_reset();
+    var dst[4096];
+
+    # /dry classifies + the model accessor mirrors hoosh_send's precedence.
+    assert_eq(classify_input("/dry write a fn"), CMD_DRY, "/dry classifies to CMD_DRY");
+    assert(streq(hoosh_model_cur(), "default"), "no model set -> 'default' (hoosh routes)");
+    session_set_model("claude-x");
+    assert(streq(hoosh_model_cur(), "claude-x"), "session model wins");
+    session_set_model(0);
+
+    # bare body: empty history, no system, blocking -> a single user message.
+    var l1 = hoosh_build_dry(&dst, "m", 0, "hi", 0);
+    store8(&dst + l1, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: bare user turn");
+
+    # with a system (persona) message prepended.
+    var l2 = hoosh_build_dry(&dst, "m", "SYS", "hi", 0);
+    store8(&dst + l2, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: system + user");
+
+    # streaming adds stream + stream_options (matching the real request shape).
+    var l3 = hoosh_build_dry(&dst, "m", 0, "hi", 1);
+    store8(&dst + l3, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "dry body: streaming flags");
+
+    # with conversation history: the tail is serialized, then the PENDING user turn,
+    # and history is NOT mutated by the preview.
+    session_history_append("user", "Q", 1);
+    session_history_append("assistant", "A", 1);
+    var before = session_history_len();
+    var l4 = hoosh_build_dry(&dst, "m", 0, "now", 0);
+    store8(&dst + l4, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"Q\"},{\"role\":\"assistant\",\"content\":\"A\"},{\"role\":\"user\",\"content\":\"now\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: history tail + pending user");
+    assert_eq(session_history_len(), before, "hoosh_build_dry does NOT mutate history (side-effect-free)");
+
+    # the prompt is JSON-escaped like the real builders (a quote can't break the body).
+    session_reset();                       # clear the history appended above
+    var l5 = hoosh_build_dry(&dst, "m", 0, "a\"b", 0);
+    store8(&dst + l5, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\\\"b\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: prompt is JSON-escaped");
+
+    session_set_model(0);
+    session_reset();
+    return 0;
+}
+
 # One-shot / argv front-door (0.11.0): the pure argv classifier + task assembly.
 # _oneshot_parse takes a hand-built argv snapshot (cstr-ptr array) so the mode
 # selection and positional-joining are testable without the real /proc/self/cmdline.
@@ -1518,6 +1571,7 @@ fn main() {
     test_usage();
     test_cost();
     test_alias();
+    test_dry();
     test_oneshot();
     test_history();
     test_history_request();
