@@ -50,6 +50,17 @@ var _oneshot_json = 0;
 # action; the path is fixed from argv before the turn runs, so the model can't influence it).
 var _oneshot_out_path = 0;   # cstr ptr into the argv snapshot, or 0
 
+# --tier <mode> (0.11.10): a global MODIFIER flag selecting the presentation tier — auto
+# (default) / rich (TUI) / simple (line). NOT a one-shot mode and NOT a run-forcer: it applies to
+# the interactive TUI/REPL selection (and is harmless in one-shot). Parsed here (before
+# ui_detect_tier runs in main); the parser stays PURE — it only sets these globals (unit-tested),
+# and src/main.cyr applies them via ui_set_tier_pref + reports a bad value to stderr. Replaces the
+# old THOTH_TIER env-var (dropped in 0.11.10). Accepts `--tier=<mode>` and `--tier <mode>`.
+var _oneshot_tier = 0;       # the parsed TIER_* preference (default TIER_AUTO == 0)
+var _oneshot_tier_bad = 0;   # 1 if --tier was given an unknown value (main warns; falls back to auto)
+fn oneshot_tier() { return _oneshot_tier; }
+fn oneshot_tier_bad() { return _oneshot_tier_bad; }
+
 # The JSON envelope buffer (lazy). Sized for a worst-case 6x-escaped max reply (HOOSH_ACC_CAP)
 # + a 6x-escaped model id (MODEL_BUF_CAP — a session /model id; a normal [hoosh].model id is
 # far shorter) + the fixed framing/ints, with headroom — so the escape core's cap-stop never
@@ -97,10 +108,20 @@ fn _oneshot_task_append_cstr(s) { return _oneshot_task_append(s, strlen(s)); }
 # args joined by single spaces. PURE (no I/O) — unit-tested. `-v`/`--version` and
 # `-h`/`--help` short-circuit; `-p`/`--print` forces one-shot (task may then come
 # wholly from stdin). A positional arg is the explicit one-shot intent.
+# _oneshot_set_tier: map a --tier value to the TIER_* pref (src/ui.cyr) and record it, or flag an
+# unknown value. No I/O — main reports the bad flag (keeps the parser pure/testable).
+fn _oneshot_set_tier(v) {
+    var p = ui_tier_pref_from_name(v);
+    if (p >= 0) { _oneshot_tier = p; } else { _oneshot_tier_bad = 1; }
+    return 0;
+}
+
 fn _oneshot_parse(args, n) {
     _oneshot_json = 0;                          # reset BEFORE the early return (no stale flag)
     _oneshot_out_path = 0;
     _oneshot_compl_shell = 0;
+    _oneshot_tier = 0;                          # default TIER_AUTO
+    _oneshot_tier_bad = 0;
     if (n <= 1) { return ONESHOT_NONE; }
     _oneshot_task_reset();
     var positional = 0;
@@ -121,6 +142,17 @@ fn _oneshot_parse(args, n) {
             # consume the NEXT token as the output path (verbatim). A dangling -o at the end
             # has no path -> ignored (path stays 0). Like --json, -o does not force a run.
             if ((i + 1) < n) { _oneshot_out_path = load64(args + (i + 1) * 8); i = i + 1; }
+        }
+        elif (cstr_starts_with(a, "--tier=") == 1) { _oneshot_set_tier(a + 7); }   # --tier=<mode>
+        elif (streq(a, "--tier") == 1) {
+            # --tier <mode>: consume the NEXT token as the value — but ONLY a real value, never a
+            # following flag (tier names never start with '-'). So `--tier --version` does NOT eat
+            # `--version` (it's processed normally); a dangling `--tier` is ignored (stays auto).
+            # Does not force a run / is not a positional (like -o/--json).
+            if ((i + 1) < n) {
+                var nxt = load64(args + (i + 1) * 8);
+                if (load8(nxt) != 45) { _oneshot_set_tier(nxt); i = i + 1; }   # 45 == '-'
+            }
         }
         else {
             if (positional > 0) { _oneshot_task_append_cstr(" "); }
@@ -192,7 +224,8 @@ fn oneshot_print_help() {
     emit_raw("  thoth -o <file> <task>... also write the answer to <file> (your redirect)\n");
     emit_raw("  thoth -v, --version       print the version\n");
     emit_raw("  thoth -h, --help          show this help\n");
-    emit_raw("  thoth --completion <sh>   print a bash|zsh completion script (source it)\n\n");
+    emit_raw("  thoth --completion <sh>   print a bash|zsh completion script (source it)\n");
+    emit_raw("  thoth --tier <mode>       presentation tier: auto (default) | rich (TUI) | simple (line)\n\n");
     emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
     emit_raw("cleanly); progress is suppressed and an action needing authorization is denied\n");
     emit_raw("(configure [tron].policy or run interactively). Config: thoth.cyml.\n\n");
@@ -243,9 +276,13 @@ fn _completion_bash() {
     emit_raw("            COMPREPLY=( $(compgen -W 'bash zsh' -- \"$cur\") )\n");
     emit_raw("            return 0\n");
     emit_raw("            ;;\n");
+    emit_raw("        --tier)\n");
+    emit_raw("            COMPREPLY=( $(compgen -W 'auto rich simple' -- \"$cur\") )\n");
+    emit_raw("            return 0\n");
+    emit_raw("            ;;\n");
     emit_raw("    esac\n");
     emit_raw("    if [[ \"$cur\" == -* ]]; then\n");
-    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j -o --out -v --version -h --help --completion --completions' -- \"$cur\") )\n");
+    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j -o --out --tier -v --version -h --help --completion --completions' -- \"$cur\") )\n");
     emit_raw("    else\n");
     emit_raw("        COMPREPLY=( $(compgen -f -- \"$cur\") )\n");
     emit_raw("    fi\n");
@@ -270,6 +307,7 @@ fn _completion_zsh() {
     emit_raw("        '(-v --version)'{-v,--version}'[print the version]' \\\n");
     emit_raw("        '(-h --help)'{-h,--help}'[show this help]' \\\n");
     emit_raw("        '(--completion --completions)'{--completion,--completions}'[print a shell completion script]:shell:(bash zsh)' \\\n");
+    emit_raw("        '--tier[presentation tier]:tier:(auto rich simple)' \\\n");
     emit_raw("        '*::task:_files'\n");
     emit_raw("}\n");
     emit_raw("compdef _thoth thoth\n");

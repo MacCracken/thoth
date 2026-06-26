@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.11.10** — `--tier` flag (replaces the `THOTH_TIER` env-var), 2026-06-26. The presentation tier
+is now a first-class flag — `thoth --tier=simple|rich|auto` (also `--tier <mode>`) — with
+capability-aware auto-detection, REPLACING `THOTH_TIER` (dropped; no `getenv("THOTH_TIER")` remains).
+**`auto` is the default and now launches the rich TUI on a capable terminal** (stdin+stdout TTYs +
+color-provable) — a deliberate BEHAVIOR CHANGE: bare `thoth` opens the TUI where it can (was the
+line REPL); pipes/CI/dumb/`NO_COLOR` still degrade to plain, and one-shot is untouched. `simple` =
+line mode (PT_ANSI when color is provable, else PT_PLAIN; never the TUI). `rich` = force the TUI when
+usable, degrading to the line tier otherwise. **ui.cyr:** new `TIER_AUTO`/`_SIMPLE`/`_RICH` +
+`_ui_tier_pref` + `ui_set_tier_pref`/`ui_tier_pref`/`ui_tier_pref_from_name`; the old NO_COLOR/isatty/
+TERM checks factored into a pure `_ui_color_capable()`; `ui_detect_tier` rewritten around the pref
+(PT_RICH requires a tty BOTH ways AND color-capability, since the TUI renders in color). **oneshot.cyr:**
+`--tier=<v>` / `--tier <v>` parsed as a global MODIFIER (not a one-shot mode, not a run-forcer) into
+`_oneshot_tier`/`_oneshot_tier_bad` (pure parser; main applies it); the space form will NOT swallow a
+following flag (`--tier --version` still prints the version — guarded on the next token not starting
+with `-`); `--help` gains a `--tier` line; bash/zsh completion complete `auto rich simple`. **main.cyr:**
+applies `ui_set_tier_pref(oneshot_tier())` before `ui_detect_tier`, with a stderr note (fd2, honest in
+one-shot) on an unknown value (falls back to auto). The live-verify command is now `./build/thoth
+--tier=rich`. 675 assertions (+17: `test_oneshot` parse cases + `test_ui` name mapping). **TUI render +
+the auto-rich default verify only on a real tty (`--tier=rich`)**, not the harness. Pin unchanged (6.2.43).
 **0.11.9** — TUI polish: faint rules + multi-line composer + live status line, 2026-06-26. Three
 T2-only fixes (the line REPL / piped / one-shot floor is byte-identical — `tui_read_key`, the
 composer, and the greeting only run inside `tui_loop`; a one-line composer renders exactly as
@@ -47,7 +66,7 @@ scroll on every terminal, MISSED by the initial tests (which fed the raw byte `5
 never produces) and CAUGHT by the adversarial diff-review (5 dimensions, all converged on it); the
 masking tests were corrected to feed the parsed int. 658 assertions (+59: `test_tui` geometry/
 multi-line/decode + `test_inhist_persist` round-trip). **TUI render verifies only on a real tty
-(`THOTH_TIER=rich`)**, not the harness. Pin unchanged (6.2.43).
+(`--tier=rich`)**, not the harness. Pin unchanged (6.2.43).
 **0.11.8** — shell completion (0.11.x terminal-citizen line), 2026-06-26. `thoth --completion
 <shell>` prints a bash or zsh completion script to stdout (completing thoth's argv flags + a
 filename after `-o`/`--out`) for the non-interactive front door — the interactive REPL
@@ -178,7 +197,7 @@ verified) confirmed the change correct on every input the live caller produces (
 proven `PAINT_CAP` headroom), and two zero-risk hardening edits (empty-window guard +
 whole-or-drop carry) aligned the canonical primitive with its docstring before downstream
 reuse. 522 assertions (+42, `test_softwrap`). Painter verifies on a real tty
-(`THOTH_TIER=rich`), not the harness. Pin unchanged (6.2.43).
+(`--tier=rich`), not the harness. Pin unchanged (6.2.43).
 **0.11.2** — opt-in persistent input history (0.11.x terminal-citizen line), 2026-06-25.
 Completes the 0.11.1 composer input-history recall: set `[history].file` in `thoth.cyml` and
 thoth **loads** prior submitted lines into the recall ring at TUI startup and **saves** new
@@ -338,7 +357,7 @@ retained 2048 lines (`feed_repaint` honors `feed_scroll()`; `_tui_feed_scroll_by
 to the available history); a submitted turn resets to the bottom so fresh output shows.
 Scroll works in either focus (the tree keeps its own ↑/↓). Adversarially reviewed pre-cut
 (2 lenses): one low finding (modified-PageUp decode) fixed; zero must-fix. **TUI verifies
-only on a real tty (`THOTH_TIER=rich`)**, not the harness. The REPL/piped/CI floor is
+only on a real tty (`--tier=rich`)**, not the harness. The REPL/piped/CI floor is
 byte-identical (`/clear` no-ops at T0; scroll/CSI-decode are TUI-only). 366 assertions
 (+4). Pin unchanged (6.2.40 — cycc locally at 6.2.42; staying on the pin).
 **0.9.3** — the togglable file-tree pane (M7), 2026-06-25. The headline of the
@@ -355,7 +374,7 @@ every target). The feed paints into the narrowed right column (`tui_feed_left`/
 selected row a reverse-video bar) + a `│` separator. Hidden by default → the REPL/piped/CI
 floor stays byte-identical. Adversarially reviewed pre-cut (4 lenses, every finding
 verified): zero correctness/crash/floor/security findings. **TUI render verifies only on
-a real tty (`THOTH_TIER=rich`)**, not the harness. 362 assertions (+21, `test_ftree`).
+a real tty (`--tier=rich`)**, not the harness. 362 assertions (+21, `test_ftree`).
 Pin unchanged (6.2.40 — cycc locally at 6.2.42; staying on the pin, the drift/arity
 warnings are toolchain-side). Known limit: 256-node cap; no in-dir alphabetical sort yet.
 **0.9.2** — instant SIGWINCH + the working spinner + incremental streaming paint
@@ -376,7 +395,7 @@ faked motion since the loop is blocked inside `dispatch()`), suspended across th
 confirm. Also **fixes the 0.9.0 SIGINT-signalfd teardown leak** (both signalfds + epoll
 now closed on every exit, restoring the signal mask). Adversarially reviewed pre-cut (4
 lenses, every finding verified): zero correctness/hang/crash/floor/security findings.
-**TUI render verifies only on a real tty (`THOTH_TIER=rich`)**, not the harness. 341
+**TUI render verifies only on a real tty (`--tier=rich`)**, not the harness. 341
 assertions (+4, `test_spinner`). Pin unchanged (6.2.40 — cycc locally at 6.2.41; staying
 on the pin, the drift/arity warnings are toolchain-side). Known → 0.9.3: the togglable
 left-column file-tree pane.
@@ -395,7 +414,7 @@ rename). The t-ron gate confirm brackets back to the live screen under capture
 (`tui_confirm_begin`/`_end`), staying answerable + fail-closed; the REPL path is
 unchanged. Adversarially reviewed pre-cut (5 lenses, every finding verified): zero
 correctness/crash/floor/security findings. **TUI render verifies only on a real tty
-(`THOTH_TIER=rich`)**, not the harness. 337 assertions (+42, `test_feed`/`test_feed_ring`/
+(`--tier=rich`)**, not the harness. 337 assertions (+42, `test_feed`/`test_feed_ring`/
 `test_capture`). Pin unchanged (6.2.40). Known → 0.9.2: instant SIGWINCH + working
 spinner + incremental streaming paint; → 0.9.3: the togglable left-column file-tree pane.
 **0.9.0** — the T2 rich-TUI front-end (M7), 2026-06-24. An interactive alt-screen TUI
@@ -403,7 +422,7 @@ spinner + incremental streaming paint; → 0.9.3: the togglable left-column file
 status bar, a scrolling feed (the composer clears on Enter; the response streams
 below), a raw-mode composer with line editing + horizontal scroll, a slash-command
 palette, and keybinding hints; exit via Ctrl-X / Ctrl-C / /quit (all restore the
-terminal). Active only at PT_RICH on a real tty (`THOTH_TIER=rich`); the line REPL
+terminal). Active only at PT_RICH on a real tty (`--tier=rich`); the line REPL
 is the guaranteed fallback (piped output byte-identical). Adversarially reviewed
 pre-cut — 4 issues fixed, incl. a critical SIGINT-during-dispatch teardown leak. 295
 assertions (+25, `test_tui`). Known → 0.9.1: instant SIGWINCH resize + the file-tree
@@ -453,7 +472,7 @@ degrade-closed is visible (t-ron `absent` binding gray, `degraded` effect amber)
 Opens the **0.8.x design-style arc** ([ADR-0009](../adr/0009-presentation-capability-ladder.md)):
 presentation becomes a capability tier (T0 plain → T1 ANSI → T2 rich-TUI → T3
 desktop). New `src/ui.cyr` — startup tier detection (`isatty` + `TERM`/`COLORTERM`/
-`NO_COLOR`/`THOTH_TIER`, degrade-closed) + a semantic color-role API (`ui_sgr`/
+`NO_COLOR`/`--tier`, degrade-closed) + a semantic color-role API (`ui_sgr`/
 `ui_reset`): empty at T0 so piped/CI output is **byte-identical to 0.7.2**, the
 design's exact amber (`#e6ab5c`, truecolor→256→16) at T1. Tier shown in `/state`
 (`surface : …`); the `{(o> ` prompt wears the accent role. 256 assertions (+12,
@@ -880,7 +899,11 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   (`ONESHOT_COMPLETION`, short-circuits like `--version`, captures the next token as the shell →
   default bash, unsupported → stderr + nonzero) + `oneshot_print_completion` →
   `_completion_bash`/`_completion_zsh` (EMIT static scripts; no spine path / security surface;
-  flag lists mirror `_oneshot_parse`).
+  flag lists mirror `_oneshot_parse`). **0.11.10 (`--tier`):** the `--tier=<mode>` / `--tier <mode>`
+  global modifier (maps to a `TIER_*` pref via `ui_tier_pref_from_name` into `_oneshot_tier`/
+  `_oneshot_tier_bad`; not a mode, not a run-forcer; the space form won't swallow a following flag);
+  `--help` + both completion scripts gain it (`auto rich simple`). `main.cyr` applies it via
+  `ui_set_tier_pref` before `ui_detect_tier`, warning on a bad value. Replaces `THOTH_TIER`.
 - `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
   4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
   evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE
@@ -948,7 +971,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **658 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **675 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -1026,7 +1049,11 @@ bundle is DCE-unreachable).
   `led_up`/`led_down` + the backspace-over-newline join, the palette closing on a newline, and
   `_tui_csi_final`/`_tui_kitty_u` decode of every CSI form incl. `CSI 13;<mod>u`→newline and the
   Ctrl-combos) and the history newline-escape round-trip (`test_inhist_persist` — a multi-line +
-  backslash entry survives save→reload, plus `_inhist_escape_into` directly).
+  backslash entry survives save→reload, plus `_inhist_escape_into` directly);
+  and **0.11.10** the `--tier` flag (`test_oneshot` — `--tier=rich`/`--tier simple`/`auto` parse to
+  the right pref without forcing a run, a bad value flags + falls back to auto, `--tier --version`
+  does NOT eat the following flag, and `--tier rich <task>` still RUNs with the task; `test_ui` —
+  the pure `ui_tier_pref_from_name` mapping).
   Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).

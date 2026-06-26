@@ -306,26 +306,61 @@ fn _ui_detect_depth() {
     return CD_16;
 }
 
-# ui_detect_tier: resolve the active presentation tier ONCE at startup. Degrades
-# CLOSED to T0 whenever color cannot be PROVEN — not a tty, NO_COLOR set, TERM
-# dumb/empty/unset. THOTH_TIER=plain|ansi overrides (tests + explicit control).
-fn ui_detect_tier() {
-    var ov = getenv("THOTH_TIER");
-    if (ov != 0) {
-        if (streq(ov, "plain") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
-        if (streq(ov, "ansi") == 1) { _ui_apply(PT_ANSI, _ui_detect_depth()); return 0; }
-        if (streq(ov, "rich") == 1) {
-            # T2 needs a real tty both ways; requested-but-piped falls through to auto (degrade)
-            if ((ui_isatty(0) == 1) && (ui_isatty(1) == 1)) { _ui_apply(PT_RICH, _ui_detect_depth()); return 0; }
-        }
-    }
-    if (_ui_env_has("NO_COLOR") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
-    if (ui_isatty(1) == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
+# --- presentation-tier preference (0.11.10: the --tier flag) ---
+# The user's requested tier, set from `--tier=<mode>` (src/oneshot.cyr parses it; src/main.cyr
+# applies it via ui_set_tier_pref BEFORE ui_detect_tier). AUTO is the default — no flag means
+# auto. This REPLACES the old THOTH_TIER env-var (dropped in 0.11.10; the flag is the only control).
+var TIER_AUTO = 0;     # detect the best tier the terminal supports (rich TUI when capable)
+var TIER_SIMPLE = 1;   # line mode — ANSI color when provable, else plain; never the TUI
+var TIER_RICH = 2;     # force the rich TUI when usable; degrade to the line tier otherwise
+var _ui_tier_pref = 0; # default TIER_AUTO
+
+fn ui_set_tier_pref(p) { _ui_tier_pref = p; return 0; }
+fn ui_tier_pref() { return _ui_tier_pref; }
+# ui_tier_pref_from_name: map a --tier value to a TIER_* preference, or -1 if unknown. Pure.
+fn ui_tier_pref_from_name(s) {
+    if (streq(s, "auto") == 1) { return TIER_AUTO; }
+    if (streq(s, "simple") == 1) { return TIER_SIMPLE; }
+    if (streq(s, "rich") == 1) { return TIER_RICH; }
+    return 0 - 1;
+}
+
+# _ui_color_capable: 1 iff color can be PROVEN — NO_COLOR unset, stdout is a tty, TERM
+# set/non-empty/non-dumb. The degrade-closed gate for any colored tier (ANSI or rich). Pure-ish
+# (reads env + isatty); factored out of the old ui_detect_tier so SIMPLE/RICH/AUTO share it.
+fn _ui_color_capable() {
+    if (_ui_env_has("NO_COLOR") == 1) { return 0; }
+    if (ui_isatty(1) == 0) { return 0; }
     var term = getenv("TERM");
-    if (term == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
-    if (load8(term) == 0) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
-    if (streq(term, "dumb") == 1) { _ui_apply(PT_PLAIN, CD_NONE); return 0; }
-    _ui_apply(PT_ANSI, _ui_detect_depth());
+    if (term == 0) { return 0; }
+    if (load8(term) == 0) { return 0; }
+    if (streq(term, "dumb") == 1) { return 0; }
+    return 1;
+}
+
+# ui_detect_tier: resolve the active presentation tier ONCE at startup, from the --tier
+# preference (default AUTO). The rich TUI renders in color, so PT_RICH requires BOTH a real tty
+# (stdin+stdout) AND color-capability — NO_COLOR / dumb / piped degrade CLOSED to the line tier
+# (ANSI when color is provable, else plain). _ui_detect_depth never returns CD_NONE, so PT_RICH /
+# PT_ANSI always carry a real depth.
+fn ui_detect_tier() {
+    var pref = _ui_tier_pref;
+    var capable = _ui_color_capable();
+    # SIMPLE: line mode only — color when provable, else plain.
+    if (pref == TIER_SIMPLE) {
+        if (capable == 1) { _ui_apply(PT_ANSI, _ui_detect_depth()); return 0; }
+        _ui_apply(PT_PLAIN, CD_NONE);
+        return 0;
+    }
+    # RICH / AUTO: the rich TUI when interactive + color-capable; else the SIMPLE fallback. (A
+    # requested-but-unusable `rich` degrades, never errors — same posture the old THOTH_TIER=rich
+    # had, plus the color check. tui_active + tui_loop are the further safety nets.)
+    if ((ui_isatty(0) == 1) && (ui_isatty(1) == 1) && (capable == 1)) {
+        _ui_apply(PT_RICH, _ui_detect_depth());
+        return 0;
+    }
+    if (capable == 1) { _ui_apply(PT_ANSI, _ui_detect_depth()); return 0; }
+    _ui_apply(PT_PLAIN, CD_NONE);
     return 0;
 }
 

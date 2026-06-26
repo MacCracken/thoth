@@ -2,6 +2,34 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.10] - 2026-06-26
+
+**`--tier` flag replaces the `THOTH_TIER` env-var.** The presentation tier is now a first-class
+flag — `thoth --tier=simple|rich|auto` (also `--tier <mode>`) — with capability-aware
+auto-detection. `THOTH_TIER` is **dropped entirely** (no `getenv` for it remains). 675 unit
+assertions (+17). Pin unchanged (6.2.43).
+
+### Added
+- **`--tier=<mode>` / `--tier <mode>`** (`src/oneshot.cyr`) — a global modifier flag selecting the
+  presentation tier: `auto` (default), `rich`, `simple`. Not a one-shot mode, does not force a run;
+  the space form won't swallow a following flag (`--tier --version` still prints the version); an
+  unknown value warns on stderr and falls back to auto. `--help` + the bash/zsh completion scripts
+  gain it (completing `auto rich simple`).
+- **Tier preference in `src/ui.cyr`** — `TIER_AUTO`/`TIER_SIMPLE`/`TIER_RICH`,
+  `ui_set_tier_pref`/`ui_tier_pref`/`ui_tier_pref_from_name`, and a factored-out pure
+  `_ui_color_capable()` (NO_COLOR/isatty/TERM). `main.cyr` applies the pref before `ui_detect_tier`.
+
+### Changed
+- **`auto` (the default) now launches the rich TUI on a capable terminal** (stdin+stdout are TTYs,
+  TERM not dumb/empty, color provable) — a deliberate behavior change: bare `thoth` opens the TUI
+  where it can (was the line REPL). Pipes / CI / dumb terminals / `NO_COLOR` still degrade to plain;
+  one-shot (`git diff | thoth 'x'`) is unchanged. `simple` = line mode (ANSI when color is provable,
+  else plain); `rich` = force the TUI when usable, degrading to the line tier otherwise.
+- The live-verify command for the TUI is now `./build/thoth --tier=rich` (was `THOTH_TIER=rich`).
+
+### Removed
+- **`THOTH_TIER` environment variable** — superseded by `--tier`. `ui_detect_tier` no longer reads it.
+
 ## [0.11.9] - 2026-06-26
 
 **TUI polish — faint rules, a multi-line composer, a live status line.** Three rough edges in

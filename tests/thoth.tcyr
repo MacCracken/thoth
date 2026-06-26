@@ -567,6 +567,29 @@ fn test_oneshot() {
     store64(&av + 16, "summarize");
     assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "-p + positional -> RUN");
     assert(streq(_oneshot_task, "summarize"), "the -p flag is not part of the task");
+    # --tier (0.11.10): a global modifier — parsed, mapped to a pref, does NOT force a run.
+    store64(&av + 8, "--tier=rich");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "--tier alone -> NONE (no run forced)");
+    assert_eq(oneshot_tier(), TIER_RICH, "--tier=rich -> TIER_RICH");
+    assert_eq(oneshot_tier_bad(), 0, "valid tier -> not bad");
+    store64(&av + 8, "--tier"); store64(&av + 16, "simple");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_NONE, "--tier simple (space form) -> NONE");
+    assert_eq(oneshot_tier(), TIER_SIMPLE, "--tier simple -> TIER_SIMPLE");
+    store64(&av + 8, "--tier"); store64(&av + 16, "auto");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_NONE, "--tier auto -> NONE");
+    assert_eq(oneshot_tier(), TIER_AUTO, "--tier auto -> TIER_AUTO");
+    store64(&av + 8, "--tier=bogus");
+    _oneshot_parse(&av, 2);
+    assert_eq(oneshot_tier_bad(), 1, "--tier=bogus -> bad flag");
+    assert_eq(oneshot_tier(), TIER_AUTO, "a bad tier value falls back to AUTO");
+    # the space form must NOT swallow a following flag: --tier --version still yields VERSION
+    store64(&av + 8, "--tier"); store64(&av + 16, "--version");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_VERSION, "--tier --version -> VERSION (flag not eaten)");
+    # a real value still leaves a following positional as the task -> RUN
+    store64(&av + 8, "--tier"); store64(&av + 16, "rich"); store64(&av + 24, "do"); store64(&av + 32, "x");
+    assert_eq(_oneshot_parse(&av, 5), ONESHOT_RUN, "--tier rich + positional -> RUN");
+    assert_eq(oneshot_tier(), TIER_RICH, "--tier rich applied alongside a task");
+    assert(streq(_oneshot_task, "do x"), "the task excludes '--tier rich'");
     # task buffer: reset + bounded append
     _oneshot_task_reset();
     assert_eq(_oneshot_task_len, 0, "task reset clears the length");
@@ -1301,7 +1324,16 @@ fn test_ui() {
     ui_force(PT_ANSI, CD_256);
     assert_eq(_ui_contains(ui_sgr(ROLE_ACCENT), "38;5;179"), 1, "256-color accent -> index 179");
 
+    # --tier preference (0.11.10): the pure name->pref mapping (the tty-dependent detection —
+    # auto/rich -> PT_RICH on a real terminal — is verified live, not here, since the suite may
+    # run on a tty or piped).
+    assert_eq(ui_tier_pref_from_name("auto"), TIER_AUTO, "tier name 'auto' -> TIER_AUTO");
+    assert_eq(ui_tier_pref_from_name("rich"), TIER_RICH, "tier name 'rich' -> TIER_RICH");
+    assert_eq(ui_tier_pref_from_name("simple"), TIER_SIMPLE, "tier name 'simple' -> TIER_SIMPLE");
+    assert_eq(ui_tier_pref_from_name("bogus"), 0 - 1, "unknown tier name -> -1");
+
     # restore detection (the suite runs piped -> resolves back to T0)
+    ui_set_tier_pref(TIER_AUTO);
     ui_detect_tier();
     return 0;
 }

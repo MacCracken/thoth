@@ -65,6 +65,11 @@ fn main() {
     var mode = oneshot_mode();
     if (mode != ONESHOT_NONE) { out_mode_set(OUT_NULL); }
     config_load();          # read thoth.cyml -> flips hoosh/daimon seams to remote when urls are set
+    # 0.11.10: apply the --tier preference (parsed from argv above) BEFORE detection. A bad value
+    # is announced on stderr (fd2 — honest even in one-shot, where fd1 is the OUT_NULL discard) and
+    # falls back to auto. Replaces the old THOTH_TIER env-var.
+    if (oneshot_tier_bad() == 1) { emit_err("thoth: unknown --tier (use auto|rich|simple); using auto\n"); }
+    ui_set_tier_pref(oneshot_tier());
     ui_detect_tier();       # resolve the presentation tier (T0..T3) once; degrades closed to plain
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm

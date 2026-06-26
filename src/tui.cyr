@@ -1110,7 +1110,7 @@ fn tui_kitty_disable() { emit_raw("\x1b[<u"); return 0; }
 
 # tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / self-managed
 # feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
-# is interactive terminal control — verify on a live TTY (THOTH_TIER=rich), not piped.
+# is interactive terminal control — verify on a live TTY (`--tier=rich`), not piped.
 fn tui_loop() {
     if (tty_isatty(0) == 0) { return repl_loop(); }
     if (tty_raw(0) < 0) { return repl_loop(); }   # no raw mode -> degrade to the REPL
