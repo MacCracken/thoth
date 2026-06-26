@@ -120,3 +120,138 @@ fn inhist_nav_down() {
     if (_inhist_cur >= _inhist_count) { return 0 - 1; }
     return _inhist_cur;
 }
+
+# --- I/O: OPT-IN on-disk persistence (0.11.2) -----------------------------
+# OFF by default: only when `[history].file` is configured (the TUI passes that path
+# in — this module never forward-references config). The file holds the user's typed
+# composer lines, so it MAY contain secrets they typed; we create it with mode 0x180
+# (0600, `rw-------`) so a freshly-created file is owner-only on POSIX targets. The
+# doctrine is degrade-closed + HONEST: a path that cannot be written is announced and
+# persistence stays OFF, never silently faked.
+#
+# SECURITY HONESTY — the 0600 guarantee is BEST-EFFORT, not asserted as fact (the
+# runtime banner never prints a mode it cannot universally verify):
+#   - The mode is applied by the kernel only on CREATE. If `[history].file` points at a
+#     PRE-EXISTING file with looser perms, O_TRUNC keeps those perms — we do NOT silently
+#     re-tighten (no portable fchmod: sys_chmod is absent on Windows + a frozen-ABI no-op
+#     on AGNOS, so calling it would fork the floor / break the --win lane). Keep the file
+#     in an owner-only directory and don't point it at a world-readable file.
+#   - On AGNOS the create-mode is dropped by the frozen-ABI open bridge (a documented
+#     substrate gap), so the file lands at the kernel default there.
+#   - The path is opened FOLLOWING symlinks (no portable O_NOFOLLOW), so a hostile
+#     directory could redirect it — put it somewhere only you can write.
+# These residuals are DOCUMENTED here + in thoth.cyml.example rather than asserted away.
+#
+# Model: rewrite-the-ring (not append). On load we stream the file in and push each
+# line through `inhist_push` (ring keeps the most-recent INHIST_CAP, deduped). Init is
+# NON-DESTRUCTIVE — it only probes writability (create-if-absent without truncating), so
+# merely starting thoth never rewrites/trims the user's file; the rewrite happens on the
+# first stored submit (`inhist_persist_save` truncates + rewrites FROM the ring), keeping
+# the file bounded at <= INHIST_CAP lines. Not atomic and not locked: a hard kill
+# mid-rewrite or two concurrent thoths sharing one file is last-writer-wins (known limit).
+#
+# Uses the PORTABLE lib/io.cyr wrappers (`file_open`/`file_read`/`file_write`/
+# `file_close`) which bridge the AGNOS `AO_*`/namelen open ABI — never a raw sys_open.
+
+var _inhist_path = 0;          # the active history-file path (cstr), or 0 == persistence OFF
+var _inhist_broke = 0;         # 1 if a save failed mid-session (persistence auto-disabled)
+var INHIST_MODE = 0x180;       # 0600 rw------- — the CREATE mode (owner-only; best-effort)
+var INHIST_CHUNK = 4096;       # read-buffer size for streaming the file in on load
+var _inhist_chunk = 0;         # alloc(INHIST_CHUNK), lazy — load read buffer
+var _inhist_line = 0;          # alloc(INHIST_LINE_CAP), lazy — load line accumulator
+
+# _inhist_load_file: stream `path` in, splitting on '\n', pushing each line through the
+# ring (ignoredups/skip-empty/evict apply, so the ring keeps the most-recent CAP). A
+# missing/unreadable file is a no-op (no history yet). Bounded buffers — an overlong
+# line (we never write one) drops its overflow tail rather than overrun.
+fn _inhist_load_file(path) {
+    var fd = file_open(path, 0, 0);          # O_RDONLY (0); <0 if absent -> nothing to load
+    if (fd < 0) { return 0; }
+    if (_inhist_chunk == 0) { _inhist_chunk = alloc(INHIST_CHUNK); }
+    if (_inhist_line == 0) { _inhist_line = alloc(INHIST_LINE_CAP); }
+    var llen = 0;
+    var go = 1;
+    while (go == 1) {
+        var n = file_read(fd, _inhist_chunk, INHIST_CHUNK);
+        if (n <= 0) { go = 0; }
+        else {
+            var i = 0;
+            while (i < n) {
+                var b = load8(_inhist_chunk + i);
+                if (b == 10) { inhist_push(_inhist_line, llen); llen = 0; }   # newline -> end of line
+                elif (llen < (INHIST_LINE_CAP - 1)) { store8(_inhist_line + llen, b); llen = llen + 1; }
+                i = i + 1;
+            }
+        }
+    }
+    if (llen > 0) { inhist_push(_inhist_line, llen); }   # a trailing line with no newline
+    file_close(fd);
+    return 0;
+}
+
+# _inhist_probe_writable: NON-DESTRUCTIVE writability check — create the file at 0600 if
+# absent (O_CREAT, NO O_TRUNC), or open an existing one WITHOUT touching its content, then
+# close. Returns 0 if writable, -1 otherwise. So binding persistence never mutates/trims
+# the user's file on mere startup.
+fn _inhist_probe_writable(path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT, INHIST_MODE);   # no O_TRUNC -> content preserved
+    if (fd < 0) { return 0 - 1; }
+    file_close(fd);
+    return 0;
+}
+
+# _inhist_write_file: truncate + rewrite `path` from the ring (oldest->newest, one line
+# each + '\n'). Returns 0 on success, -1 if the file cannot be opened OR a write
+# short-writes (so the caller degrades closed rather than silently leaving a truncated
+# file). Created 0600 if absent (best-effort — see the header note on pre-existing perms).
+fn _inhist_write_file(path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, INHIST_MODE);
+    if (fd < 0) { return 0 - 1; }
+    var ok = 0;
+    var i = 0;
+    while (i < _inhist_count) {
+        var elen = inhist_entry_len(i);
+        if (file_write(fd, inhist_entry_ptr(i), elen) != elen) { ok = 0 - 1; }   # short/failed write
+        if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+        i = i + 1;
+    }
+    file_close(fd);
+    return ok;
+}
+
+# inhist_persist_init: bind persistence to `path` (0 -> OFF). Loads any existing file into
+# the ring, resets the nav cursor to the draft past the loaded entries, then NON-
+# DESTRUCTIVELY probes writability (create-if-absent at 0600, no truncate). Returns the
+# number of entries recalled (>=0) on success, or -1 if the path is set but unwritable
+# (persistence stays OFF; the ring is still usable in-memory).
+fn inhist_persist_init(path) {
+    _inhist_path = 0;
+    _inhist_broke = 0;
+    if (path == 0) { return 0; }                 # not configured -> persistence OFF
+    _inhist_load_file(path);
+    inhist_nav_reset();                          # cursor -> draft, past the loaded entries
+    if (_inhist_probe_writable(path) < 0) { return 0 - 1; }   # unwritable -> announce + stay OFF
+    _inhist_path = path;                         # persistence ACTIVE
+    return inhist_count();
+}
+
+# inhist_persist_active: 1 if persistence is bound to a writable file.
+fn inhist_persist_active() { if (_inhist_path != 0) { return 1; } return 0; }
+
+# inhist_persist_broke / _ack: 1 if a save FAILED mid-session (persistence was auto-
+# disabled); the TUI reads + acks it to announce the degrade ONCE, never silently faked.
+fn inhist_persist_broke() { return _inhist_broke; }
+fn inhist_persist_broke_ack() { _inhist_broke = 0; return 0; }
+
+# inhist_persist_save: rewrite the history file from the ring, if persistence is active
+# (else a no-op). Called by the TUI after each line is STORED in the ring on submit. On a
+# write FAILURE it degrades closed — disables persistence + raises the broke flag — so the
+# user is told it stopped, rather than believing their history is still being saved.
+fn inhist_persist_save() {
+    if (_inhist_path == 0) { return 0; }
+    if (_inhist_write_file(_inhist_path) < 0) {
+        _inhist_path = 0;            # stop trying (degrade closed)
+        _inhist_broke = 1;          # the TUI announces this once
+    }
+    return 0;
+}

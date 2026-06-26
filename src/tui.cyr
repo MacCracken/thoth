@@ -867,6 +867,25 @@ fn tui_loop() {
     feed_flush_pending();
     ui_emit(ROLE_GREEN, "READY"); ui_emit(ROLE_FAINT, " — type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
+    # 0.11.2: bind opt-in input-history persistence ([history].file). Loads prior lines
+    # into the recall ring and announces honestly into the feed — the active path + how
+    # many were recalled, or a degrade-closed "cannot write" note (recall then stays
+    # in-memory only). The banner does NOT assert a file mode: 0600 is the best-effort
+    # CREATE mode (see src/inhist.cyr — not guaranteed for a pre-existing file or on the
+    # AGNOS frozen ABI), so we never print a permission we can't universally verify. Off
+    # entirely when [history].file is unset.
+    var _hpath = config_history_file();
+    if (_hpath != 0) {
+        var _hn = inhist_persist_init(_hpath);
+        if (_hn >= 0) {
+            ui_emit(ROLE_FAINT, "input history: "); emit(_hpath);
+            ui_emit(ROLE_FAINT, " ("); ofmt_int(_hn); ui_emit(ROLE_FAINT, " recalled)");
+        } else {
+            ui_emit(ROLE_FAINT, "input history: cannot write "); emit(_hpath);
+            ui_emit(ROLE_FAINT, " — not persisted (in-memory only)");
+        }
+        feed_flush_pending();
+    }
     out_mode_set(OUT_FD1);
     _tui_running = 1;
     tui_relayout();
@@ -921,12 +940,20 @@ fn tui_loop() {
             } else {
                 var act = led_feed(key, _tui_key_ch);
                 if (act == ACT_SUBMIT) {
-                    inhist_push(led_buf(), led_len());   # record the submitted line (ignoredups, skip-empty)
+                    var stored = inhist_push(led_buf(), led_len());   # record (ignoredups, skip-empty)
+                    if (stored == 1) { inhist_persist_save(); }       # 0.11.2: mirror to [history].file if active
                     inhist_nav_reset();                  # next Up starts from the newest again
                     var line = _tui_copy_line();   # snapshot the line before clearing
                     led_reset();
                     tui_draw_composer();           # composer empties IMMEDIATELY, before dispatch
                     var keep = tui_run_line(line);
+                    if (inhist_persist_broke() == 1) {   # 0.11.2: a save failed mid-session -> announce ONCE
+                        inhist_persist_broke_ack();
+                        out_mode_set(OUT_RING);
+                        ui_emit(ROLE_FAINT, "input history: write failed — persistence disabled for this session");
+                        feed_flush_pending();
+                        out_mode_set(OUT_FD1);
+                    }
                     if (keep == 0) { _tui_running = 0; }
                     else { tui_relayout(); }
                 } elif (act == ACT_EOF) {

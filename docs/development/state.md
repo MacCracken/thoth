@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.11.2** — opt-in persistent input history (0.11.x terminal-citizen line), 2026-06-25.
+Completes the 0.11.1 composer input-history recall: set `[history].file` in `thoth.cyml` and
+thoth **loads** prior submitted lines into the recall ring at TUI startup and **saves** new
+ones across sessions. **Off by default** (no `[history].file` → in-memory-only recall, floor
+untouched); DISTINCT from `[hoosh].history` (conversation memory). New `[history].file`
+config (`src/config.cyr`, `config_history_file`, mirrors `[log].file`). `src/inhist.cyr`
+gains a PORTABLE-I/O section (lib/io.cyr `file_open`/`_read`/`_write`/`_close`, which bridge
+the AGNOS open ABI — never a raw `sys_open`): a streaming loader (chunked, bounded; each line
+pushed through the ring so dedup/skip-empty/evict keep the most-recent 128), a NON-DESTRUCTIVE
+writability probe at init (create-if-absent without truncate — starting thoth never rewrites
+your file), and a rewrite-the-ring saver after each stored submit (file bounded to the ring,
+not append-grow). **Security, honest:** the file holds typed composer lines (may contain
+secrets), so a FRESH file is **0600** (owner-only) on POSIX — **best-effort, NEVER asserted in
+the UI**: the create-mode applies only on CREATE (a pre-existing looser file keeps its perms —
+no silent re-tighten, since `chmod` is absent on Windows + a frozen-ABI no-op on AGNOS, so
+calling it would fork the floor), and the path follows symlinks. Documented in
+`thoth.cyml.example`. Degrades closed: an unwritable path or a mid-session write failure is
+ANNOUNCED (startup feed line + a one-time "persistence disabled" note), never faked. **Pre-cut
+adversarial review (4 lenses)** caught a real honesty defect — the first draft hardcoded
+"0600" in the announce (a guarantee not held on AGNOS / for a pre-existing file); fixed before
+cut (announce asserts no mode, init non-destructive, saver checks write returns + degrades
+closed, residuals documented), then a targeted re-review confirmed the fixes clean. 0600
+create-mode verified empirically (`stat`). 480 assertions (+13, `test_inhist_persist`). Pin
+unchanged (6.2.43).
 **0.11.1** — composer input-history recall (0.11.x terminal-citizen line), 2026-06-25. The
 top-ranked pure-substrate win from the SecureYeoman-TUI review: the T2 raw-mode composer
 recalls previously-**submitted** lines with **Up/Down** (Up older, Down newer, past-newest
@@ -675,10 +699,17 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   count/`% INHIST_CAP`, O(1) eviction) with `inhist_push` (ignoredups vs the newest +
   skip-empty), `inhist_entry_ptr`/`_len`, and the nav cursor
   `inhist_nav_up`/`_down`/`_reset`/`_at_draft`/`_pos` over `[0, count]` (count == "the live
-  draft"). Session-local memory ONLY (persistence is 0.11.2). DISTINCT from the multi-turn
-  conversation history (`session_history_*`). The TUI glue (`_tui_recall_*` — draft stash +
-  load-into-composer) and the Up/Down `tui_loop` binding (composer focus, palette-gated)
-  live in `src/tui.cyr`; TUI-only, so the REPL/piped floor is untouched.
+  draft"). DISTINCT from the multi-turn conversation history (`session_history_*`). The TUI
+  glue (`_tui_recall_*` — draft stash + load-into-composer) and the Up/Down `tui_loop`
+  binding (composer focus, palette-gated) live in `src/tui.cyr`; TUI-only, so the REPL/piped
+  floor is untouched. **0.11.2** adds the OPT-IN persistence I/O section (gated on
+  `[history].file`): `_inhist_load_file` (streaming load → ring), `_inhist_probe_writable`
+  (non-destructive create-if-absent at 0600, no truncate), `_inhist_write_file`
+  (rewrite-the-ring on save; checks write returns → -1 on short write), and
+  `inhist_persist_init`/`_save`/`_active`/`_broke`/`_broke_ack` — degrade-closed (unwritable
+  or mid-session write failure announced, never faked). Portable via lib/io.cyr
+  (`file_open`/`_read`/`_write`/`_close`); 0600 is the best-effort CREATE mode, never
+  asserted in the UI.
 - `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
   (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
   `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
@@ -691,7 +722,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **467 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **480 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -747,7 +778,10 @@ bundle is DCE-unreachable).
   driven by a hand-built argv snapshot); and **0.11.1** `test_inhist` (the input-history
   ring — store/ignoredups/skip-empty/eviction/order — the full nav state machine
   draft↔newest↔oldest with clamps + the draft boundary, and the composer load/stash/restore
-  glue).
+  glue); and **0.11.2** `test_inhist_persist` (the opt-in history file — load→ring, the
+  NON-DESTRUCTIVE-init guarantee (file bytes unchanged after binding), save→rewrite→reload
+  round-trip, the unwritable-path degrade; the 0600 create-mode asserted empirically by
+  `stat` after the suite).
   Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).

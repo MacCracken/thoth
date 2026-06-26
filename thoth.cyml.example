@@ -116,3 +116,26 @@ model = "claude-haiku-4-5-20251001"
 # [log]
 # file = "thoth-driver.log"
 # level = "info"
+
+# The [history] table enables PERSISTENT input-history recall (0.11.2). In the rich
+# TUI, Up/Down recall previously-submitted composer lines; by default that history is
+# session-local (in-memory only). Set `file` to persist it across sessions: thoth loads
+# it at startup and rewrites it (most-recent first, bounded to the recall ring) after
+# each submitted line.
+#
+# This is the user's TYPED INPUT — it MAY contain secrets you typed. A FRESH file is
+# created mode 0600 (owner-only) on POSIX targets (best-effort: a PRE-EXISTING file keeps
+# its current perms — thoth does not re-tighten it — and on AGNOS the frozen-ABI open
+# drops the create mode). The path is opened following symlinks. So: keep it in a
+# directory only YOU can write, and don't point it at a pre-existing world-readable file.
+# Off by default; an unwritable path is announced and recall stays in-memory
+# (degrade-closed). DISTINCT from [hoosh].history, which toggles the model's multi-turn
+# CONVERSATION memory. Delete the file to clear your history.
+#
+#   file — path to the persistent input-history file (fresh file created 0600). Omit for
+#          in-memory-only recall (the default). Used VERBATIM — there is no shell `~`
+#          expansion, so give a relative path (resolved from where thoth is launched)
+#          or a full absolute path, not "~/...".
+
+# [history]
+# file = ".thoth_history"             # project-local; or an absolute "/home/you/.thoth_history"

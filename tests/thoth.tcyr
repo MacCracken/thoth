@@ -571,6 +571,58 @@ fn test_inhist() {
     return 0;
 }
 
+# Input-history PERSISTENCE (0.11.2): the opt-in on-disk file. Uses real file I/O under
+# build/ (gitignored). Verifies load->ring, save->reload round-trip, ignoredups across
+# persistence, and the degrade-closed unwritable-path path. The 0600 create-mode is
+# asserted empirically by the shell (stat) after the suite creates the mode-check file.
+fn test_inhist_persist() {
+    test_group("input-history persistence (0.11.2)");
+    var lpath = "build/.thoth_hist_load.tmp";
+    var seed = "alpha\nalpha\nbeta\n";          # a consecutive dup -> proves init is non-destructive
+    file_write_all(lpath, seed, strlen(seed));
+    inhist_init();
+    var n = inhist_persist_init(lpath);
+    assert_eq(n, 2, "two recalled (the consecutive dup collapses in the ring)");
+    assert_eq(inhist_count(), 2, "ring holds two");
+    assert(streq(inhist_entry_ptr(0), "alpha"), "oldest = alpha");
+    assert(streq(inhist_entry_ptr(1), "beta"), "newest = beta");
+    assert_eq(inhist_nav_at_draft(), 1, "cursor at the draft after load");
+    assert_eq(inhist_persist_active(), 1, "persistence active (file writable)");
+    assert_eq(inhist_persist_broke(), 0, "not broken after a clean init");
+
+    # init is NON-DESTRUCTIVE: the file is untouched (still holds the raw dup, not rewritten).
+    var rbuf[64];
+    var r1 = file_read_all(lpath, &rbuf, 63);
+    store8(&rbuf + r1, 0);
+    assert(streq(&rbuf, "alpha\nalpha\nbeta\n"), "init did not rewrite the file");
+
+    # a stored submit rewrites the file FROM the ring (deduped/normalized); a reload sees it.
+    inhist_push("gamma", 5);
+    inhist_persist_save();
+    var r2 = file_read_all(lpath, &rbuf, 63);
+    store8(&rbuf + r2, 0);
+    assert(streq(&rbuf, "alpha\nbeta\ngamma\n"), "save rewrote the file from the ring");
+    inhist_init();
+    _inhist_load_file(lpath);
+    assert_eq(inhist_count(), 3, "gamma persisted -> three on reload");
+    assert(streq(inhist_entry_ptr(2), "gamma"), "newest reloaded = gamma");
+
+    # degrade-closed: an unwritable path -> persistence stays OFF (-1); the caller announces.
+    inhist_init();
+    var bad = inhist_persist_init("build/.no_such_dir_xyz/hist.tmp");
+    assert_eq(bad, 0 - 1, "unwritable path -> -1");
+    assert_eq(inhist_persist_active(), 0, "persistence OFF after a write failure");
+
+    # create the 0600 mode-check file (fresh path); the shell asserts the perms post-suite.
+    inhist_init();
+    inhist_persist_init("build/.thoth_hist_mode.tmp");
+
+    inhist_persist_init(0);          # unbind persistence -> clean slate for later tests
+    inhist_init();
+    led_reset();
+    return 0;
+}
+
 # Structured driver-event logging (0.5.2): the pure message builder + level
 # parse + config defaults. The sakshi emit path is I/O and not unit-tested here.
 fn test_logging() {
@@ -1286,6 +1338,7 @@ fn main() {
     test_history();
     test_history_request();
     test_inhist();
+    test_inhist_persist();
     test_logging();
     test_agent();
     test_config_m4();

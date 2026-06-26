@@ -2,6 +2,54 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.2] - 2026-06-25
+
+**Opt-in persistent input history.** Completes the 0.11.1 composer input-history recall:
+set `[history].file` in `thoth.cyml` and thoth loads your prior submitted lines into the
+recall ring at TUI startup and saves new ones across sessions. **Off by default** (no
+`[history].file` → in-memory-only recall, the floor untouched). DISTINCT from
+`[hoosh].history` (the model's multi-turn conversation memory). 480 unit assertions (+13).
+Pin unchanged (6.2.43).
+
+### Added
+- **`[history].file` config** (`src/config.cyr`, `config_history_file`) — path to the
+  persistent input-history file; mirrors the `[log].file` opt-in. Unset → persistence off.
+- **Persistence I/O** (`src/inhist.cyr`) — a streaming loader (chunked, bounded buffers;
+  each line pushed through the ring so dedup/skip-empty/evict apply, keeping the most-recent
+  128), a **non-destructive** writability probe at init (create-if-absent without truncating
+  — merely starting thoth never rewrites your file), and a rewrite-the-ring saver invoked
+  after each stored submit (so the file stays bounded to the recall ring, not append-grow).
+  Created mode **0600** on POSIX (best-effort, see below). Uses the portable `lib/io.cyr`
+  wrappers (which bridge the AGNOS open ABI), never a raw `sys_open`.
+- **Honest startup announce** in the TUI feed — the active path + how many lines were
+  recalled, or a degrade-closed "cannot write — in-memory only" note when the path is
+  unwritable; plus a one-time "write failed — persistence disabled" note if a save fails
+  mid-session.
+- **`test_inhist_persist`** (+13): load→ring, the non-destructive-init guarantee (file
+  bytes unchanged after binding), save→rewrite→reload round-trip, and the unwritable-path
+  degrade. The 0600 create-mode is asserted empirically by `stat` after the suite.
+
+### Security / degrade-closed
+- The file holds your **typed composer lines** (which may contain secrets), so a freshly
+  created file is **0600** (owner-only) on POSIX targets. This is **best-effort and is
+  never asserted as fact in the UI**: the create mode applies only on CREATE (a pre-existing
+  looser file keeps its perms — thoth does not silently re-tighten it, since `chmod` is
+  absent on Windows and a frozen-ABI no-op on AGNOS, so calling it would fork the floor),
+  and the path is opened following symlinks. Documented honestly in `thoth.cyml.example`
+  (keep the file in an owner-only directory; don't point it at a pre-existing world-readable
+  file). Persistence degrades closed: an unwritable path or a mid-session write failure is
+  **announced**, never silently faked.
+
+### Notes
+- **Pre-cut adversarial review (4 perspective-diverse lenses — security/file-mode, file-I/O
+  + fd safety, floor/posture/portability, integration)** found a real honesty defect — the
+  first draft's announce hardcoded "0600", a guarantee not held on AGNOS or for a
+  pre-existing file. Fixed before cut: the announce no longer asserts a mode, the init is
+  non-destructive, the saver checks write returns and degrades closed, and the residual
+  caveats are documented. A targeted re-review confirmed the fixes complete with no
+  regression. Persistence + the live TUI verify on a real tty (`THOTH_TIER=rich`), not the
+  harness; the load/save/round-trip + degrade paths are covered by `test_inhist_persist`.
+
 ## [0.11.1] - 2026-06-25
 
 **Composer input-history recall (0.11.x terminal-citizen line).** The T2 raw-mode
