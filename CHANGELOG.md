@@ -2,6 +2,47 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.7] - 2026-06-25
+
+**`-o` / `--out` file tee (0.11.x terminal-citizen line).** `thoth -o <file> <task>` tees the
+turn's answer — the plain reply, or the `--json` envelope — to `<file>` (plain bytes) **as well
+as** stdout. It is the user's OWN redirection (the path is an argv token, like shell `>`), so
+it is **NOT t-ron-gated** — t-ron gates the MODEL writing files (`/write`); choosing where
+thoth's own output goes is not a model action (the path is fixed from argv before the turn, so
+the model can't influence it). The first item of the riders slot. 588 unit assertions (+19).
+Pin unchanged (6.2.43).
+
+### Added
+- **`-o` / `--out <file>`** (`src/oneshot.cyr`) — a one-shot **modifier** flag that consumes the
+  next argv token as the output path (verbatim). Like `--json` it does not force a run on its
+  own (a positional task or `-p` is still the run intent); a dangling `-o` with no following
+  token is ignored. Composes with `--json` (`thoth --json -o out.json <task>` tees the envelope).
+- **`_oneshot_write_out`** (`src/oneshot.cyr`) — writes the answer plus a trailing newline (if
+  absent) so the file matches stdout byte-for-byte; create + truncate at 0644 through the
+  portable `lib/io.cyr` wrappers (the AGNOS `AO_*` open bridge — never a raw `sys_open`).
+  Degrades closed: an open / short / newline-write failure returns an error; `one_shot_run`
+  announces it on stderr and exits nonzero (the answer still reached stdout — a best-effort tee).
+  A FAILED turn writes no file (the tee is inside the success path).
+- **`test_oneshot_out`** (+19): the flag parse (path consumed, not a positional; the `--out`
+  alias; a dangling `-o`; reset across calls; `-o` + `--json` composition) and the writer
+  (bytes + a trailing newline read back; an already-newline reply not doubled; O_TRUNC re-write;
+  the unwritable-path error). The writer is unit-tested against a scratch file under `build/`
+  (file I/O works in the harness, unlike a live TCP turn).
+
+### Notes
+- **Perms:** the file is created at `0644` (umask-respecting; tighter than shell `>`'s
+  `0666 & ~umask`); on AGNOS the create-mode is dropped by the frozen-ABI open bridge. The
+  answer may contain secrets, so keep secret-bearing output in an owner-only directory — noted
+  in `--help`. REPL/TUI-only by scope (one-shot is where clean output to a file matters).
+- **Two-pass adversarial review (Workflow).** A DESIGN pass (4 lenses, before code) confirmed
+  the flag-with-an-argument parse and the security calls (0644 like `>`, not t-ron-gated) and
+  pinned one required fix folded in pre-implementation — check the trailing-newline write so a
+  failed newline forces degrade-closed (keeping file/stdout tee-identical). A DIFF pass (4
+  lenses, each finding independently verified) returned **zero must-fixes**. Verified live:
+  `--help`, and that a failed turn writes no file; the success tee + trailing-newline + degrade
+  are exact-tested (a live gateway round-trip is host-side — the sandbox blocks a compiled
+  binary's TCP).
+
 ## [0.11.6] - 2026-06-25
 
 **JSON-envelope output (0.11.x terminal-citizen line).** `thoth --json <task>` runs the

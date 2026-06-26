@@ -36,6 +36,13 @@ var ONESHOT_HELP = 3;       # print usage and exit
 # through to the TUI like any no-task invocation.
 var _oneshot_json = 0;
 
+# -o / --out <file> (0.11.7): a MODIFIER flag that TEES the answer (plain reply or the --json
+# envelope) to <file> as well as stdout. The flag CONSUMES the next argv token as the path
+# (verbatim). It is the user's OWN redirection (like shell `>`) — NOT t-ron-gated (t-ron gates
+# the MODEL writing files via /write; choosing where thoth's own output goes is not a model
+# action; the path is fixed from argv before the turn runs, so the model can't influence it).
+var _oneshot_out_path = 0;   # cstr ptr into the argv snapshot, or 0
+
 # The JSON envelope buffer (lazy). Sized for a worst-case 6x-escaped max reply (HOOSH_ACC_CAP)
 # + a 6x-escaped model id (MODEL_BUF_CAP — a session /model id; a normal [hoosh].model id is
 # far shorter) + the fixed framing/ints, with headroom — so the escape core's cap-stop never
@@ -85,6 +92,7 @@ fn _oneshot_task_append_cstr(s) { return _oneshot_task_append(s, strlen(s)); }
 # wholly from stdin). A positional arg is the explicit one-shot intent.
 fn _oneshot_parse(args, n) {
     _oneshot_json = 0;                          # reset BEFORE the early return (no stale flag)
+    _oneshot_out_path = 0;
     if (n <= 1) { return ONESHOT_NONE; }
     _oneshot_task_reset();
     var positional = 0;
@@ -96,6 +104,11 @@ fn _oneshot_parse(args, n) {
         if ((streq(a, "--help") == 1) || (streq(a, "-h") == 1)) { return ONESHOT_HELP; }
         if ((streq(a, "-p") == 1) || (streq(a, "--print") == 1)) { force = 1; }
         elif ((streq(a, "--json") == 1) || (streq(a, "-j") == 1)) { _oneshot_json = 1; }
+        elif ((streq(a, "-o") == 1) || (streq(a, "--out") == 1)) {
+            # consume the NEXT token as the output path (verbatim). A dangling -o at the end
+            # has no path -> ignored (path stays 0). Like --json, -o does not force a run.
+            if ((i + 1) < n) { _oneshot_out_path = load64(args + (i + 1) * 8); i = i + 1; }
+        }
         else {
             if (positional > 0) { _oneshot_task_append_cstr(" "); }
             _oneshot_task_append_cstr(a);
@@ -163,6 +176,7 @@ fn oneshot_print_help() {
     emit_raw("  cmd | thoth <task>...     append piped stdin to the task (e.g. git diff | thoth 'review')\n");
     emit_raw("  cmd | thoth -p            use piped stdin as the whole task\n");
     emit_raw("  thoth --json <task>...    emit one JSON object per turn (for jq/CI)\n");
+    emit_raw("  thoth -o <file> <task>... also write the answer to <file> (your redirect)\n");
     emit_raw("  thoth -v, --version       print the version\n");
     emit_raw("  thoth -h, --help          show this help\n\n");
     emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
@@ -170,7 +184,11 @@ fn oneshot_print_help() {
     emit_raw("(configure [tron].policy or run interactively). Config: thoth.cyml.\n\n");
     emit_raw("--json (or -j) prints {response, model, turns, tokens?, cost?, elapsed_ms} per\n");
     emit_raw("turn instead of the plain answer; tokens/cost appear only once reported. On any\n");
-    emit_raw("failure nothing goes to stdout (diagnostic on stderr, nonzero exit).\n");
+    emit_raw("failure nothing goes to stdout (diagnostic on stderr, nonzero exit).\n\n");
+    emit_raw("-o / --out <file> tees the answer to <file> as well as stdout (it is your own\n");
+    emit_raw("redirection, like `>`, NOT security-gated). The file is created at `>`-like\n");
+    emit_raw("default perms (umask-respecting; on AGNOS the mode is dropped) — keep secret-\n");
+    emit_raw("bearing output in an owner-only directory. A write failure exits nonzero.\n");
     return 0;
 }
 
@@ -225,9 +243,30 @@ fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
     return off;
 }
 
+# _oneshot_write_out: TEE the answer to `path` for the `-o` flag — write `buf[0..len)` plus a
+# trailing newline (if absent) so the file matches stdout byte-for-byte. Create + truncate at
+# 0644 (the `>`-like default; the user's OWN argv-named redirection — NOT t-ron-gated, since the
+# path is fixed from argv before the turn and the model can't influence it). Portable via the
+# lib/io.cyr wrappers (the AGNOS `AO_*` open bridge — never a raw `sys_open`). Returns 0 on
+# success, -1 on any open / short / newline write failure (so one_shot_run degrades closed).
+fn _oneshot_write_out(path, buf, len) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0x1A4 = 0644
+    if (fd < 0) { return 0 - 1; }
+    var w = file_write(fd, buf, len);
+    if (w == len) {
+        if ((len == 0) || (load8(buf + len - 1) != 10)) {
+            if (file_write(fd, "\n", 1) != 1) { w = 0 - 1; }   # drop into the w != len failure
+        }
+    }
+    file_close(fd);
+    if (w != len) { return 0 - 1; }
+    return 0;
+}
+
 # one_shot_run: execute the assembled one-shot task and print only the clean answer to
-# stdout. Returns the process exit code (0 = a real answer, 1 = any failure). Assumes
-# oneshot_mode() already filled _oneshot_task. I/O — the orchestrator for one-shot.
+# stdout (and tee it to the `-o` file when requested). Returns the process exit code (0 = a
+# real answer + any -o write succeeded, 1 = any failure). Assumes oneshot_mode() filled
+# _oneshot_task. I/O — the orchestrator for one-shot.
 fn one_shot_run() {
     # Append piped stdin as the payload (never read an interactive tty here).
     if (tty_isatty(0) == 0) { _oneshot_append_stdin(); }
@@ -244,21 +283,30 @@ fn one_shot_run() {
     var elapsed = clock_now_ms() - t0;
     if (elapsed < 0) { elapsed = 0; }            # guard a non-monotonic clock step
     if ((rc == 0) && (hoosh_last_reply_len() > 0)) {
-        var p = hoosh_last_reply();
-        var ln = hoosh_last_reply_len();
+        # Compute the output bytes ONCE — the plain reply, or the JSON envelope.
+        var obuf = hoosh_last_reply();
+        var olen = hoosh_last_reply_len();
         if (_oneshot_json == 1) {
-            # one JSON object on stdout (clean for jq/CI); the field set is honest
-            # (tokens/cost omit-until-present). The buffer is sized so it never truncates.
+            # one JSON object (clean for jq/CI); honest fields (tokens/cost omit-until-present),
+            # the buffer sized so it never truncates.
             if (_oneshot_json_buf == 0) {
                 ONESHOT_JSON_CAP = HOOSH_ACC_CAP * 6 + MODEL_BUF_CAP * 6 + 256;
                 _oneshot_json_buf = alloc(ONESHOT_JSON_CAP);
             }
-            var jl = oneshot_json_envelope(_oneshot_json_buf, ONESHOT_JSON_CAP, p, ln, elapsed);
-            emit_raw_n(_oneshot_json_buf, jl);
-            emit_raw("\n");
-        } else {
-            emit_raw_n(p, ln);
-            if (load8(p + ln - 1) != 10) { emit_raw("\n"); }   # ensure a trailing newline
+            olen = oneshot_json_envelope(_oneshot_json_buf, ONESHOT_JSON_CAP, obuf, olen, elapsed);
+            obuf = _oneshot_json_buf;
+        }
+        # TEE the SAME bytes to the -o file (the user's own redirection) and to stdout, each
+        # with a trailing newline if absent — identical bytes to both sinks.
+        var orc = 0;
+        if (_oneshot_out_path != 0) { orc = _oneshot_write_out(_oneshot_out_path, obuf, olen); }
+        emit_raw_n(obuf, olen);
+        if ((olen == 0) || (load8(obuf + olen - 1) != 10)) { emit_raw("\n"); }
+        if (orc < 0) {
+            # the user asked for a file and we couldn't deliver it -> degrade closed (the
+            # answer still reached stdout; the failure is announced + a nonzero exit).
+            emit_err("thoth: could not write -o file ("); emit_err(_oneshot_out_path); emit_err(")\n");
+            return 1;
         }
         return 0;
     }

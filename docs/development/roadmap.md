@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.11.6):** **M0–M7 are done and shipping** (0.1.0 → 0.11.6; the log
+> **Where we are (0.11.7):** **M0–M7 are done and shipping** (0.1.0 → 0.11.7; the log
 > lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
 > line is complete for the producers thoth owned (tokens, cost), and the **0.11.x
 > terminal-citizen line is advancing** — `0.11.0` shipped its keystone (the one-shot/argv
@@ -18,8 +18,9 @@
 > `0.11.2` its opt-in `[history].file` persistence, `0.11.3` feed soft-wrap (wide lines
 > reflow across physical rows instead of truncating), `0.11.4` `[alias]` prompt macros
 > (user-defined slash macros that expand-then-redispatch), `0.11.5` `/dry` (preview the
-> composed request body without sending), and `0.11.6` `--json` envelope output (one JSON
-> object per one-shot turn, for jq/CI). **What's left:** the rest of the
+> composed request body without sending), `0.11.6` `--json` envelope output (one JSON
+> object per one-shot turn, for jq/CI), and `0.11.7` `-o`/`--out` file tee (write the answer
+> to a file as well as stdout). **What's left:** the rest of the
 > **0.11.x** line (the vetted SecureYeoman-TUI-review backlog — substrate/floor ports and
 > thin seam bindings, never a spine fork; that TUI is being reskinned onto thoth's, so
 > thoth's front-end is the shared canonical surface), the **0.12.x git producer** (externally
@@ -144,7 +145,9 @@ above, deferred to a later ADR.
 > request-body preview (`hoosh_build_dry` composes the body side-effect-free + network-free,
 > skips the POST — never a hoosh preview endpoint); `0.11.6` `--json` envelope output
 > (`thoth --json <task>` → one `{response,model,turns,tokens?,cost?,elapsed_ms}` object per
-> turn for jq/CI; rides the one-shot clean-stdout seam, omit-until-present, valid-JSON-or-exit).
+> turn for jq/CI; rides the one-shot clean-stdout seam, omit-until-present, valid-JSON-or-exit);
+> `0.11.7` `-o`/`--out` file tee (`thoth -o <file> <task>` tees the answer to a file as well as
+> stdout; the user's own redirection, NOT t-ron-gated; degrades closed on a write failure).
 
 **Remaining — pure-substrate TUI wins (no argv dependency — ship anytime):**
 - _(Both shipped: **soft-wrap long feed lines** in 0.11.3 and **`[alias]` prompt macros** in
@@ -159,11 +162,11 @@ above, deferred to a later ADR.
   The introspection slot is now clear; the riders below are next._
 
 **Remaining — riders / conditional:**
-- **`-o` file tee** — **unblocked by 0.11.0** (forces PT_PLAIN for clean bytes; the
-  user's own redirection, so NOT t-ron-gated).
 - **shell completion** — **unblocked by 0.11.0** (its argv command-table now exists);
   an argv-scoped completion script (the live palette already completes REPL slash
-  commands, so this is for the non-interactive front door).
+  commands, so this is for the non-interactive front door). _(Next.)_
+  (**`-o` file tee shipped in 0.11.7** — tees the answer to a file as well as stdout; the
+  user's own redirection, plain bytes at 0644, NOT t-ron-gated, degrades closed.)
 - **live spine-health** — traffic-outcome reachability + Ctrl-R refresh; defer the
   timerfd tick + active probe until idle-drop detection is actually wanted.
 - **clipboard sink** — effort L; needs an upstream cyrius `process` stdin-feed

@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.11.7** — `-o` / `--out` file tee (0.11.x terminal-citizen line), 2026-06-25. `thoth -o
+<file> <task>` tees the answer (plain reply or the `--json` envelope) to `<file>` (plain bytes)
+AS WELL AS stdout. It is the user's OWN redirection (an argv-token path, like shell `>`), so it
+is **NOT t-ron-gated** — t-ron gates the MODEL writing files (`/write`); choosing where thoth's
+own output goes is not a model action (the path is fixed from argv before the turn, so the model
+cannot influence it). `-o`/`--out` is a one-shot MODIFIER flag (consumes the next token as the
+path; does not force a run; a dangling `-o` is ignored; composes with `--json`). New
+`_oneshot_write_out` (`src/oneshot.cyr`) writes the answer + a trailing newline (if absent) so
+the file matches stdout byte-for-byte, create+truncate at 0644 via the portable `lib/io.cyr`
+wrappers (the AGNOS open bridge — never a raw `sys_open`); degrades closed (open/short/newline
+write failure → stderr + nonzero exit; the answer still reached stdout — best-effort tee); a
+FAILED turn writes no file. **Perms:** 0644 (umask-respecting, tighter than `>`'s
+`0666 & ~umask`); AGNOS drops the create-mode (frozen-ABI bridge) — keep secret-bearing output
+in an owner-only dir (noted in `--help`). REPL/TUI-only scope. **Two-pass review:** design pass
+confirmed the parse + the 0644/not-gated security calls and pinned one fix (check the
+trailing-newline write → degrade-closed); diff pass ZERO must-fixes. Verified live: `--help` +
+a failed turn writes no file; the success tee + degrade are exact-tested (writer unit-tested
+against a scratch file under `build/`). 588 assertions (+19, `test_oneshot_out`). Pin unchanged
+(6.2.43).
 **0.11.6** — JSON-envelope output (0.11.x terminal-citizen line), 2026-06-25. `thoth --json
 <task>` runs the one-shot turn and prints a single JSON object to stdout instead of the plain
 reply — `{response, model, turns, tokens?, cost?, elapsed_ms}` — for jq/CI. Rides the 0.11.0
@@ -793,7 +812,12 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   reset before the `n<=1` early return) + the pure `oneshot_json_envelope`
   (`{response, model, turns, tokens?, cost?, elapsed_ms}`; reply escaped by length,
   tokens/cost omit-until-present, `elapsed_ms` via `clock_now_ms`); a sized buffer
-  guarantees valid JSON; failure emits nothing to stdout in either mode.
+  guarantees valid JSON; failure emits nothing to stdout in either mode. **0.11.7 (`-o`
+  tee):** the `-o`/`--out <file>` modifier flag (consumes the next argv token as the path,
+  not a positional; does not force a run; reset before the early return) + `_oneshot_write_out`
+  (writes the answer + a trailing newline so the file matches stdout, create+truncate at 0644
+  via the portable `lib/io.cyr` wrappers; degrades closed). The user's OWN redirection — NOT
+  t-ron-gated (the path is argv-fixed before the turn; the model can't influence it).
 - `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
   4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
   evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE

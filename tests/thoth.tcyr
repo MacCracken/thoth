@@ -647,6 +647,62 @@ fn test_json_envelope() {
     return 0;
 }
 
+# -o / --out file tee (0.11.7): the flag parse (consumes the next token as the path, not a
+# positional; dangling -o; reset across calls) and the file writer (tees bytes + a trailing
+# newline, matching stdout; degrades closed on an unwritable path). The writer is unit-testable
+# because file I/O works in the harness (a scratch file under build/), unlike a live TCP turn.
+fn test_oneshot_out() {
+    test_group("-o / --out file tee (oneshot.cyr)");
+    var av[64];
+    store64(&av + 0, "thoth");
+    # -o consumes the NEXT token as the path; the path is NOT joined into the task.
+    store64(&av + 8, "-o");
+    store64(&av + 16, "out.txt");
+    store64(&av + 24, "task");
+    assert_eq(_oneshot_parse(&av, 4), ONESHOT_RUN, "-o <file> <task> -> RUN");
+    assert(streq(_oneshot_out_path, "out.txt"), "-o records the output path");
+    assert(streq(_oneshot_task, "task"), "the -o path is not part of the task");
+    # --out alias + -o is a modifier (path but no task -> NONE, like --json alone).
+    store64(&av + 8, "--out");
+    store64(&av + 16, "f2");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_NONE, "--out <file> alone -> NONE (no task)");
+    assert(streq(_oneshot_out_path, "f2"), "--out still records the path");
+    # a dangling -o (no following token) leaves no path and no crash.
+    store64(&av + 8, "-o");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "dangling -o -> NONE");
+    assert_eq(_oneshot_out_path, 0, "dangling -o leaves no path");
+    # reset across calls: a plain task clears the out path.
+    store64(&av + 8, "plain");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "plain task -> RUN");
+    assert_eq(_oneshot_out_path, 0, "no -o -> out path reset to 0");
+    # -o composes with --json and a positional task.
+    store64(&av + 8, "-o");
+    store64(&av + 16, "o.json");
+    store64(&av + 24, "--json");
+    store64(&av + 32, "do it");
+    assert_eq(_oneshot_parse(&av, 5), ONESHOT_RUN, "-o + --json + task -> RUN");
+    assert(streq(_oneshot_out_path, "o.json"), "-o path set with --json present");
+    assert_eq(_oneshot_json, 1, "--json flag set alongside -o");
+
+    # the writer: a reply with no trailing newline gets one (matching stdout).
+    var path = "build/.thoth_out_test.tmp";
+    var rbuf[64];
+    assert_eq(_oneshot_write_out(path, "hello", 5), 0, "write_out succeeds");
+    var n1 = file_read_all(path, &rbuf, 63);
+    assert_eq(n1, 6, "file = 'hello' + a trailing newline");
+    store8(&rbuf + n1, 0);
+    assert(streq(&rbuf, "hello\n"), "file content is the bytes + a newline");
+    # a reply ALREADY ending in a newline is not doubled.
+    assert_eq(_oneshot_write_out(path, "bye\n", 4), 0, "write_out (already-newline) succeeds");
+    var n2 = file_read_all(path, &rbuf, 63);
+    assert_eq(n2, 4, "already-newline reply is not doubled");
+    store8(&rbuf + n2, 0);
+    assert(streq(&rbuf, "bye\n"), "no extra newline appended");
+    # an unwritable path degrades closed (-1), not a crash or a silent success.
+    assert_eq(_oneshot_write_out("/no_such_dir_thoth_xyz/f", "x", 1), 0 - 1, "unwritable path -> -1 (degrade closed)");
+    return 0;
+}
+
 # Multi-turn conversation history (0.5.1): append/accessors, stable copy,
 # pop/clear, and the drop-oldest cap.
 fn test_history() {
@@ -1646,6 +1702,7 @@ fn main() {
     test_dry();
     test_oneshot();
     test_json_envelope();
+    test_oneshot_out();
     test_history();
     test_history_request();
     test_inhist();
