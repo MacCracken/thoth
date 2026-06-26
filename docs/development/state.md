@@ -7,6 +7,34 @@
 
 ## Version
 
+**0.11.3** — soft-wrap long feed lines (0.11.x terminal-citizen line), 2026-06-25. The
+top-ranked pure-substrate win from the SecureYeoman-TUI review: the T2 feed stops
+TRUNCATING a logical line wider than the feed column and REFLOWS it across several physical
+rows. Painter + scrollback-math only — no argv dependency, no spine touched; the
+line-REPL/piped/CI floor never paints the feed, so it is **byte-identical** by construction
+(`feed_clip` and the file-tree painter are untouched). New PURE `feed_clip_seg` in
+`src/feed.cyr` paints the visible-column WINDOW `[skip_cols, skip_cols+max_cols)` of a
+stored line (segment N == `feed_clip_seg(.., N*width, width)`), carrying SGR color across the
+wrap boundary via a bounded 64-byte SGR-since-last-reset carry (whole-or-drop flush — never a
+severed CSI), suppressing `ESC[...K`, never severing a UTF-8 glyph, closing an open span with
+`ui_reset()`. Plus pure `feed_rows_for` (`ceil(vis/width)`, blank = 1 row) + `_feed_total_phys`
+(the document's soft-wrapped height). `feed_repaint` (`src/tui.cyr`) rewritten to the
+physical-row model (each physical row → a `(logical line, segment)` pair); **scrollback is now
+PHYSICAL (soft-wrapped) rows** (`feed_scroll()` redefined; `_tui_feed_maxscroll` shared by the
+scroll keys + a `tui_relayout` upper-clamp, since a width change re-flows the document).
+**Honest limitations (declared):** glyph width counted as 1 col (a double-width CJK/emoji
+wraps a column late + undercounts `_feed_total_phys` → approximate scroll/segment mapping for
+CJK-heavy captured output; ASCII/thoth output exact), and the 64-byte cumulative-SGR carry cap
+(over-cap run drops the overflow whole — bounded cosmetic glitch; thoth's single-span output
+never overflows). **Two-pass pre-cut adversarial review:** a DESIGN pass (4 lenses, before any
+code) caught the one real gap — `feed_scroll()`'s unit had to become physical + clamp on
+resize — folded in pre-implementation; a DIFF pass (4 lenses, each finding independently
+verified) confirmed the change correct on every input the live caller produces (the raised
+`feed_clip_seg` contract edges are unreachable through `feed_repaint`: `fwidth >= 1` and
+proven `PAINT_CAP` headroom), and two zero-risk hardening edits (empty-window guard +
+whole-or-drop carry) aligned the canonical primitive with its docstring before downstream
+reuse. 522 assertions (+42, `test_softwrap`). Painter verifies on a real tty
+(`THOTH_TIER=rich`), not the harness. Pin unchanged (6.2.43).
 **0.11.2** — opt-in persistent input history (0.11.x terminal-citizen line), 2026-06-25.
 Completes the 0.11.1 composer input-history recall: set `[history].file` in `thoth.cyml` and
 thoth **loads** prior submitted lines into the recall ring at TUI startup and **saves** new
@@ -684,7 +712,14 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   (`tui_confirm_begin`/`_end`, called from `gate.cyr`) live in `src/tui.cyr`. Replaces
   0.9.0's DECSTBM scroll-region; the prerequisite for the file-tree pane + SIGWINCH.
   **0.9.2:** `feed_repaint` also renders the unsealed pending line (incremental streaming
-  paint via `feed_stream_tick`, pinged from the SSE callbacks).
+  paint via `feed_stream_tick`, pinged from the SSE callbacks). **0.11.3 (soft-wrap):** the
+  PURE `feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols)` paints a visible-column
+  WINDOW of a stored line (carries SGR color across a wrap via a 64-byte whole-or-drop carry;
+  same CSI/UTF-8/`ESC[…K`/`dst_cap` guarantees as `feed_clip`, which is UNCHANGED), plus
+  `feed_rows_for` (`ceil(vis/width)`, blank = 1 row) and `_feed_total_phys` (the document's
+  soft-wrapped height); `feed_scroll()` is redefined to PHYSICAL rows. `feed_repaint`
+  (`src/tui.cyr`) now reflows each wide line across rows instead of truncating, and
+  `tui_relayout` clamps the scroll offset on a width change.
 - `src/ftree.cyr` — **0.9.3**: the file-tree pane. PURE + unit-tested: the tree/feed
   layout geometry (`tui_tree_w`/`tui_feed_left`/`tui_feed_width`) and the flattened-tree
   model (parallel fixed-slot arrays; `_ftree_insert_at` splices children on expand,

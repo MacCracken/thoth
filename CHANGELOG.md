@@ -2,6 +2,68 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.3] - 2026-06-25
+
+**Soft-wrap long feed lines (0.11.x terminal-citizen line).** The T2 TUI feed stops
+TRUNCATING a logical line wider than the feed column and instead REFLOWS it across
+several physical rows — the top-ranked pure-substrate win from the SecureYeoman-TUI
+review (no argv dependency, no spine touched). It is a painter + scrollback-math change
+only; the line-REPL / piped / CI floor never paints the feed, so it is **byte-identical**
+by construction (`feed_clip` and the file-tree pane painter are untouched). 522 unit
+assertions (+42). Pin unchanged (6.2.43).
+
+### Added
+- **`feed_clip_seg`** (`src/feed.cyr`) — soft-wrap's load-bearing PURE primitive: paints
+  the visible-column WINDOW `[skip_cols, skip_cols+max_cols)` of a stored line (segment N
+  of a reflowed line is `feed_clip_seg(.., N*width, width)`). It carries SGR color across
+  the wrap boundary via a bounded 64-byte carry of the active SGR-since-last-reset, so a
+  color opened on one row continues onto the next; whole-or-drop carry flush (never a
+  severed CSI), suppresses `ESC[...K`, never severs a UTF-8 glyph, closes an open span
+  with `ui_reset()` (room permitting). `feed_clip` is left UNCHANGED (it still drives the
+  fixed-width tree column, which truncates by design).
+- **`feed_rows_for(vis, width)`** + **`_feed_total_phys(width)`** (`src/feed.cyr`) — the
+  physical-row height of a logical line (`ceil(vis/width)`, a blank line is one row) and
+  of the whole virtual document. The painter's scroll oracle under soft-wrap.
+- **`test_softwrap`** (+42): `feed_rows_for` (ceil / blank / width<1 guard); `feed_clip_seg`
+  (window/skip, SGR continuity incl. cumulative carry + reset-mid-skip, empty window,
+  whole-or-drop carry, `ESC[...K`, `dst_cap`, UTF-8 across the skip boundary, plus a
+  forced-PT_ANSI proof that the defensive close emits real reset bytes); and
+  `_feed_total_phys` across sealed + blank + pending lines at several widths.
+
+### Changed
+- **`feed_repaint`** (`src/tui.cyr`) rewritten to the physical-row model: it maps each
+  physical row to a `(logical line, segment)` pair and paints that segment's window, so a
+  wide line spans several rows instead of being clipped. Top-pinned when the document is
+  shorter than the band, as before.
+- **Scrollback is now reckoned in PHYSICAL (soft-wrapped) rows** (`feed_scroll()`
+  redefinition; `src/feed.cyr` accessor + `_tui_feed_scroll_by` / new `_tui_feed_maxscroll`
+  in `src/tui.cyr`). A width change (resize / tree toggle) re-flows the document, so
+  `tui_relayout` upper-clamps the stored scroll offset before repainting (cross-width
+  scroll position is an approximate physical offset, not a logical anchor).
+
+### Known limitations (honest, declared)
+- **Glyph width = 1 column.** Visible width counts glyphs (the existing `feed_visible_cols`
+  contract), so a double-width CJK / emoji glyph is counted as one column: a CJK-heavy line
+  wraps a column late and `_feed_total_phys` undercounts its rows, drifting the scroll /
+  segment mapping by up to a row for such captured output. ASCII / thoth's own output is
+  exact. Cosmetic; never a correctness or floor issue.
+- **Cumulative-SGR carry cap.** The carry tracks SGR-since-last-reset up to 64 bytes; an
+  over-cap cumulative run (pathological captured tool output) drops the overflow WHOLE —
+  a bounded cosmetic color glitch across that one wrap. thoth's own output is
+  single-span-then-reset, so it never overflows.
+
+### Notes
+- **Pre-cut adversarial review, two passes.** A DESIGN-verification pass (4 perspective-diverse
+  lenses, each refuting against the real source) ran BEFORE implementation; its one real
+  finding — `feed_scroll()`'s unit had to be redefined to physical rows and clamped on a
+  width change — was folded in before any code. A DIFF-review pass (4 lenses, each finding
+  then independently verified) confirmed the change correct on every input the live caller
+  can produce (the `feed_clip_seg` contract edges it raised were unreachable through
+  `feed_repaint` because `fwidth >= 1` and `PAINT_CAP` headroom is proven); two zero-risk
+  contract-hardening edits (empty-window guard + whole-or-drop carry flush) were applied to
+  bring the canonical feed primitive into line with its own docstring before it is reused
+  downstream. The painter itself verifies on a real tty (`THOTH_TIER=rich`), not the harness.
+
 ## [0.11.2] - 2026-06-25
 
 **Opt-in persistent input history.** Completes the 0.11.1 composer input-history recall:

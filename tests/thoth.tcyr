@@ -1185,6 +1185,115 @@ fn test_feed_ring() {
     return 0;
 }
 
+# Soft-wrap (0.11.3): feed_rows_for (physical rows a logical line occupies at a
+# column width), feed_clip_seg (paint a visible-column WINDOW of a line, carrying
+# SGR color across the wrap boundary), and _feed_total_phys (the document's
+# soft-wrapped physical height — the painter's scroll oracle). All PURE; the painter
+# itself (feed_repaint) is TUI-only and verifies on a real tty.
+fn test_softwrap() {
+    test_group("soft-wrap (feed.cyr): rows_for / clip_seg / total_phys");
+    # feed_rows_for: ceil(vis/width), blank = 1 row, width clamped >= 1.
+    assert_eq(feed_rows_for(0, 80), 1, "blank line (vis 0) is one row");
+    assert_eq(feed_rows_for(5, 80), 1, "narrow line is one row");
+    assert_eq(feed_rows_for(80, 80), 1, "exactly-full line is one row");
+    assert_eq(feed_rows_for(81, 80), 2, "one col over wraps to two rows");
+    assert_eq(feed_rows_for(160, 80), 2, "exactly two rows");
+    assert_eq(feed_rows_for(161, 80), 3, "one over two rows -> three");
+    assert_eq(feed_rows_for(10, 1), 10, "width 1: one row per glyph");
+    assert_eq(feed_rows_for(7, 0), 7, "width < 1 clamps to 1 (no div-by-zero)");
+
+    var dst[512];
+    # the window: skip_cols glyphs, then up to max_cols.
+    var w = feed_clip_seg(&dst, 512, "abcdef", 6, 0, 3);
+    store8(&dst + w, 0);
+    assert(streq(&dst, "abc"), "seg [0,3) of 'abcdef' -> 'abc'");
+    assert_eq(w, 3, "first segment wrote 3 bytes");
+    var w2 = feed_clip_seg(&dst, 512, "abcdef", 6, 3, 3);
+    store8(&dst + w2, 0);
+    assert(streq(&dst, "def"), "seg [3,6) of 'abcdef' -> 'def'");
+    var w3 = feed_clip_seg(&dst, 512, "abcdef", 6, 3, 10);
+    store8(&dst + w3, 0);
+    assert(streq(&dst, "def"), "last segment: only the remaining glyphs");
+    assert_eq(w3, 3, "remaining-glyph segment wrote 3 bytes");
+    # a segment whose skip is at/past the line's glyphs paints nothing.
+    assert_eq(feed_clip_seg(&dst, 512, "abc", 3, 3, 3), 0, "skip past end -> empty segment");
+
+    # SGR continuity: an amber span split across a wrap. (The harness default tier is
+    # PT_PLAIN, so the DEFENSIVE close ui_reset() is the empty string here — exactly as
+    # the existing test_feed assumes; the forced-PT_ANSI block below proves the real
+    # close. The CARRY re-emission uses the SOURCE's real escape bytes, so it is present
+    # at every tier and is the soft-wrap-specific behaviour under test.)
+    var ws0 = feed_clip_seg(&dst, 512, "\x1b[33mabcdef\x1b[0m", 15, 0, 3);
+    assert_eq(load8(&dst), 27, "seg0 starts with the color escape");
+    assert_eq(load8(&dst + 5), 97, "seg0 glyph 'a' after ESC[33m");
+    assert_eq(ws0, 8, "seg0 = ESC[33m(5)+abc(3); defensive reset is empty at PT_PLAIN");
+    var ws1 = feed_clip_seg(&dst, 512, "\x1b[33mabcdef\x1b[0m", 15, 3, 3);
+    assert_eq(load8(&dst), 27, "seg1 RE-EMITS the carried color before its first glyph");
+    assert_eq(load8(&dst + 5), 100, "seg1 paints 'd' under the carried color");
+    assert_eq(ws1, 8, "seg1 = carried ESC[33m(5)+def(3)");
+
+    # a reset DURING the skip region clears the carry -> the segment is uncolored.
+    var wr = feed_clip_seg(&dst, 512, "\x1b[33mab\x1b[0mcdef", 15, 3, 3);
+    assert_eq(load8(&dst), 100, "carry cleared by a skipped reset -> seg starts at 'd' uncolored");
+    assert_eq(wr, 3, "uncolored segment is just its 3 glyphs");
+
+    # cumulative SGR (bold THEN color) is carried WHOLE across the wrap.
+    var wc = feed_clip_seg(&dst, 512, "\x1b[1m\x1b[33mabcd", 13, 2, 2);
+    assert_eq(load8(&dst), 27, "cumulative carry begins with ESC");
+    assert_eq(load8(&dst + 9), 99, "both carried SGRs (ESC[1m + ESC[33m = 9 bytes) precede 'c'");
+    assert_eq(wc, 11, "wc = carry(9) + 'cd'(2); defensive reset empty at PT_PLAIN");
+
+    # forced PT_ANSI: prove the defensive close emits the REAL reset bytes (the
+    # production path — the TUI runs at PT_RICH). Restore PT_PLAIN for later tests.
+    ui_force(PT_ANSI, CD_TRUE);
+    var rl = strlen(ui_reset());
+    var wa = feed_clip_seg(&dst, 512, "\x1b[33mabcdef", 11, 0, 3);   # leaves a span open at the clip
+    assert(rl > 0, "PT_ANSI: ui_reset() is non-empty");
+    assert_eq(wa, 8 + rl, "PT_ANSI: open span closed with ui_reset()");
+    assert_eq(load8(&dst + 8), 27, "PT_ANSI: the defensive reset is a real ESC sequence");
+    ui_force(PT_PLAIN, CD_NONE);
+
+    # ESC[...K is suppressed in a painted segment (would scribble a neighbour column),
+    # both when it lands in the window and when it lands in the skip region. The
+    # source "ab\x1b[Kcd" is 7 bytes (a,b,ESC,[,K,c,d).
+    var wk = feed_clip_seg(&dst, 512, "ab\x1b[Kcd", 7, 0, 4);
+    store8(&dst + wk, 0);
+    assert(streq(&dst, "abcd"), "ESC[K dropped within the window");
+    var wk2 = feed_clip_seg(&dst, 512, "ab\x1b[Kcd", 7, 2, 2);
+    store8(&dst + wk2, 0);
+    assert(streq(&dst, "cd"), "ESC[K dropped across the skip boundary too");
+
+    # dst_cap is a hard ceiling even with a huge max_cols.
+    assert_eq(feed_clip_seg(&dst, 4, "abcdef", 6, 0, 100), 4, "dst_cap clamps the segment");
+    # an empty window (max_cols 0) paints NOTHING — not even the boundary glyph.
+    assert_eq(feed_clip_seg(&dst, 512, "abcdef", 6, 2, 0), 0, "empty window (max_cols 0) writes 0 bytes");
+    # the carry flushes WHOLE-or-drop: a dst_cap too small for the 5-byte ESC[33m
+    # carry drops it ENTIRE (never a severed CSI) and paints the glyphs uncolored.
+    var wd = feed_clip_seg(&dst, 3, "\x1b[33mabcdef", 11, 2, 2);
+    assert_eq(wd, 2, "carry dropped whole -> just the 2 window glyphs fit");
+    assert_eq(load8(&dst), 99, "no partial escape: row starts at the glyph 'c', not ESC");
+
+    # a UTF-8 glyph is one column and is never split by the skip boundary.
+    var wu = feed_clip_seg(&dst, 512, "\xc3\xa9z", 3, 0, 1);   # 'e-acute'(2 bytes) + 'z'
+    assert_eq(wu, 2, "skip 0: one UTF-8 glyph (2 bytes) = one column");
+    assert_eq(load8(&dst), 195, "UTF-8 lead byte painted whole");
+    var wu2 = feed_clip_seg(&dst, 512, "\xc3\xa9z", 3, 1, 1);
+    store8(&dst + wu2, 0);
+    assert(streq(&dst, "z"), "skip 1 skips the whole multibyte glyph, paints 'z'");
+
+    # _feed_total_phys: the soft-wrapped height of the whole document at a width.
+    feed_init();
+    feed_write("abcdefgh\n", 9);                  # 8 visible cols
+    assert_eq(_feed_total_phys(3), 3, "8-col line is 3 rows at width 3");
+    assert_eq(_feed_total_phys(80), 1, "8-col line is 1 row at width 80");
+    feed_write("\n", 1);                          # a blank row
+    assert_eq(_feed_total_phys(3), 4, "blank line adds one physical row");
+    feed_write("xyz", 3);                         # an un-newlined pending line (3 cols)
+    assert_eq(_feed_total_phys(3), 5, "pending 'xyz' adds 1 row at width 3");
+    assert_eq(_feed_total_phys(2), 7, "at width 2: 4 + 1 (blank) + 2 (pending) physical rows");
+    return 0;
+}
+
 # Output capture (0.9.1): with OUT_RING armed, emit/emit_n/oprintln/ofmt_int route
 # into the feed ring (not fd 1); a logical line assembled across mixed calls lands
 # as ONE row, and ofmt_int captures the same digits fmt_int would print. NOTE:
@@ -1354,6 +1463,7 @@ fn main() {
     test_tui();
     test_feed();
     test_feed_ring();
+    test_softwrap();
     test_capture();
     test_spinner();
     test_ftree();

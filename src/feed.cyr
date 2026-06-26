@@ -40,7 +40,8 @@ var _feed_len = 0;         # alloc(FEED_ROWS*8): stored byte length per slot
 var _feed_vis = 0;         # alloc(FEED_ROWS*8): cached visible cols per slot
 var _feed_head = 0;        # ring index of the OLDEST live line
 var _feed_count = 0;       # live line count (<= FEED_ROWS)
-var _feed_scroll = 0;      # rows scrolled back from the newest (0 = pinned bottom)
+var _feed_scroll = 0;      # PHYSICAL rows scrolled back from the newest (0 = pinned bottom).
+                           # 0.11.3: physical (soft-wrapped) rows, not logical lines.
 
 # The in-progress (un-newlined) line. LITERAL size — MUST equal FEED_LINE_CAP
 # (Cyrius array dims can't be a `var` constant); if FEED_LINE_CAP moves, move this.
@@ -197,6 +198,159 @@ fn feed_clip(dst, dst_cap, src, src_len, max_cols) {
     return wrote;
 }
 
+# --- the segmented clip: paint a visible-column WINDOW of a line (PURE) -------
+# feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) -> bytes written.
+# Soft-wrap's load-bearing primitive (0.11.3). Where feed_clip paints the FIRST
+# max_cols glyphs (truncating a wide line), this paints the WINDOW of visible
+# columns [skip_cols, skip_cols+max_cols) — segment N of a reflowed line is
+# feed_clip_seg(.., N*width, width). feed_clip is UNCHANGED (still drives the
+# fixed-width tree column, which truncates by design).
+#
+# Single left-to-right pass, phased by a running visible-glyph counter `cols`:
+#   - SKIP (cols < skip_cols): glyphs are NOT emitted (just counted). SGR color
+#     state is tracked into _feed_carry so color CONTINUES across the wrap
+#     boundary — a full reset (ESC[m / ESC[0m) clears the carry; any other SGR is
+#     appended WHOLE (never a partial/severed escape). ESC[...K is suppressed;
+#     non-SGR escapes (OSC/cursor) in the skip region are dropped — state, not
+#     position, so they can't be re-applied mid-line (declared limitation).
+#   - BOUNDARY (cols first reaches skip_cols): the carry is flushed to dst before
+#     the first in-window byte (glyph OR escape), so a color opened off-segment
+#     paints from the segment's first column.
+#   - PAINT (skip_cols <= cols < skip_cols+max_cols): glyphs + escapes pass
+#     through verbatim (ESC[...K suppressed), tracking sgr_open.
+#   - STOP at the window end: unlike feed_clip it does NOT drain trailing escapes;
+#     an open color span is closed with ui_reset() (room permitting).
+# Same hard guarantees as feed_clip: never writes past dst[dst_cap-1]; never
+# severs a CSI / a UTF-8 glyph; suppresses ESC[...K; closes an open span (room
+# permitting — an exhausted dst leaves it open, exactly as feed_clip does).
+# For a line that FITS (vis <= width) feed_clip_seg(.., 0, width) is
+# byte-identical to feed_clip; they diverge only for WIDER lines, and never share
+# a call site — and feed_repaint is TUI-only, so the floor is untouched either way.
+var FEED_CARRY_CAP = 64;     # SGR-since-last-reset carried across a wrap boundary
+var _feed_carry[64];         # LITERAL size — MUST equal FEED_CARRY_CAP
+var _feed_carry_len = 0;
+
+# _feed_carry_append: append the WHOLE escape src[i..i+sl) to the carry, but only
+# if it fits — an over-cap sequence is DROPPED entire (never a partial/severed
+# escape), so emitting the carry can never produce a malformed CSI. A drop is a
+# bounded cosmetic glitch across a wrap on pathological cumulative-SGR captured
+# output; thoth's own output is single-span-then-reset, so it never overflows.
+fn _feed_carry_append(src, i, sl) {
+    if ((_feed_carry_len + sl) > FEED_CARRY_CAP) { return 0; }
+    var k = 0;
+    while (k < sl) { store8(&_feed_carry + _feed_carry_len + k, load8(src + i + k)); k = k + 1; }
+    _feed_carry_len = _feed_carry_len + sl;
+    return 0;
+}
+
+fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
+    _feed_carry_len = 0;
+    var cols = 0;
+    var i = 0;
+    var wrote = 0;
+    var sgr_open = 0;
+    var emitted = 0;                                  # 0 = SKIP phase, 1 = past the boundary
+    var winend = skip_cols + max_cols;
+    while (i < src_len) {
+        if ((emitted == 1) && (cols >= winend)) {
+            i = src_len;                              # window full -> stop (no draining)
+        } else {
+            if ((emitted == 0) && (cols >= skip_cols) && (cols < winend)) {   # cross into the window: flush carry
+                # flush the carry WHOLE-or-drop — never a partial/severed CSI (matches
+                # feed_clip's whole-unit copy). At the real call site wrote==0 here (the
+                # SKIP phase emits nothing), so a <=64 B carry always lands; the guard only
+                # bites a pathologically tiny dst_cap, where dropping whole is correct.
+                if ((_feed_carry_len > 0) && ((wrote + _feed_carry_len) <= dst_cap)) {
+                    var ci = 0;
+                    while (ci < _feed_carry_len) { store8(dst + wrote + ci, load8(&_feed_carry + ci)); ci = ci + 1; }
+                    wrote = wrote + _feed_carry_len;
+                    sgr_open = 1;                          # span open only if the carry actually landed
+                }
+                emitted = 1;
+            }
+            var b = load8(src + i);
+            if (b == 27) {
+                var sl = _feed_esc_len(src, i, src_len);
+                var lastb = load8(src + i + sl - 1);
+                var isk = 0;
+                if ((sl >= 3) && (lastb == 75)) { isk = 1; }     # a real CSI ESC[...K
+                if (emitted == 0) {                              # SKIP: track SGR into carry, drop the escape
+                    if (isk == 0) {
+                        if (lastb == 109) {                      # an SGR (ends 'm')
+                            if (_feed_is_reset(src, i, sl) == 1) { _feed_carry_len = 0; }
+                            else { _feed_carry_append(src, i, sl); }
+                        }
+                    }
+                    i = i + sl;
+                } else {                                         # PAINT: pass through (suppress ESC[...K)
+                    if (isk == 1) {
+                        i = i + sl;
+                    } else {
+                        if ((wrote + sl) <= dst_cap) {
+                            var k = 0;
+                            while (k < sl) { store8(dst + wrote + k, load8(src + i + k)); k = k + 1; }
+                            wrote = wrote + sl;
+                            if (lastb == 109) {
+                                if (_feed_is_reset(src, i, sl) == 1) { sgr_open = 0; } else { sgr_open = 1; }
+                            }
+                        }
+                        i = i + sl;
+                    }
+                }
+            } else {
+                var gl = _feed_glyph_len(src, i, src_len);
+                if (emitted == 1) {                              # PAINT: emit the glyph (always in-window here)
+                    if ((wrote + gl) <= dst_cap) {
+                        var k2 = 0;
+                        while (k2 < gl) { store8(dst + wrote + k2, load8(src + i + k2)); k2 = k2 + 1; }
+                        wrote = wrote + gl;
+                    }
+                }
+                cols = cols + 1;                                 # count the glyph in BOTH phases
+                i = i + gl;
+            }
+        }
+    }
+    if (sgr_open == 1) {
+        var rst = ui_reset();
+        var rl = strlen(rst);
+        if ((wrote + rl) <= dst_cap) {
+            var kr = 0;
+            while (kr < rl) { store8(dst + wrote + kr, load8(rst + kr)); kr = kr + 1; }
+            wrote = wrote + rl;
+        }
+    }
+    return wrote;
+}
+
+# feed_rows_for: physical rows a logical line of `vis` visible columns occupies at
+# column width `width` (soft-wrap, 0.11.3). A blank line (vis 0) is one row;
+# otherwise ceil(vis/width). width is clamped >= 1 (div-by-zero / runaway guard).
+fn feed_rows_for(vis, width) {
+    if (width < 1) { width = 1; }
+    if (vis <= 0) { return 1; }
+    return (vis + width - 1) / width;
+}
+
+# _feed_total_phys: physical-row height of the WHOLE virtual feed document at
+# column width `width` — the soft-wrapped sum of every live line plus the pending
+# (un-newlined) line. The painter's scroll oracle: replaces the old logical-line
+# count once a wide line spans several rows. O(feed_count) per call; the cached
+# feed_vis(i) is width-independent (glyph count), so it stays valid across resize.
+fn _feed_total_phys(width) {
+    var t = 0;
+    var n = _feed_count;
+    var i = 0;
+    while (i < n) {
+        t = t + feed_rows_for(feed_vis(i), width);
+        i = i + 1;
+    }
+    if (_feed_pending_len > 0) {
+        t = t + feed_rows_for(feed_visible_cols(&_feed_pending, _feed_pending_len), width);
+    }
+    return t;
+}
+
 # feed_visible_cols: visible glyph count of src[0..src_len) — escapes are
 # zero-width. The cached _feed_vis value; also the painter's width oracle.
 fn feed_visible_cols(src, src_len) {
@@ -308,5 +462,7 @@ fn _feed_row_slot(row) { return (_feed_head + row) % FEED_ROWS; }
 fn feed_line_ptr(row) { return _feed_base + _feed_row_slot(row) * FEED_LINE_CAP; }
 fn feed_line_len(row) { return load64(_feed_len + _feed_row_slot(row) * 8); }
 fn feed_vis(row) { return load64(_feed_vis + _feed_row_slot(row) * 8); }
+# feed_scroll: rows paged back from the newest, in PHYSICAL (soft-wrapped) rows
+# since 0.11.3 — the painter and _tui_feed_scroll_by both reckon in physical rows.
 fn feed_scroll() { return _feed_scroll; }
 fn feed_scroll_set(off) { if (off < 0) { off = 0; } _feed_scroll = off; return 0; }
