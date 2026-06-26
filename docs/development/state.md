@@ -895,7 +895,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **480 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **599 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -954,7 +954,20 @@ bundle is DCE-unreachable).
   glue); and **0.11.2** `test_inhist_persist` (the opt-in history file — load→ring, the
   NON-DESTRUCTIVE-init guarantee (file bytes unchanged after binding), save→rewrite→reload
   round-trip, the unwritable-path degrade; the 0600 create-mode asserted empirically by
-  `stat` after the suite).
+  `stat` after the suite); and **0.11.3** `test_softwrap` (`feed_rows_for`, the windowed
+  `feed_clip_seg` — skip/window, SGR continuity across a wrap + cumulative carry, `ESC[K`,
+  `dst_cap`, UTF-8, and a forced-PT_ANSI defensive-close proof — and `_feed_total_phys`); and
+  **0.11.4** `test_alias` (the `[alias]` table load — blank/dup-first-wins/over-256-name skip —
+  the bare-token name extraction, `alias_expand` value+args assembly, per-depth buffer
+  disjointness, and the no-alias byte-identical floor); and **0.11.5** `test_dry` (the exact
+  `hoosh_build_dry` body shapes — bare/system/streaming/history-tail — and the no-mutation
+  invariant); and **0.11.6** `test_json_envelope` (the `--json`/`-j` flag parse and the
+  envelope across field combos — incl. the embedded-NUL by-length escape and model-id escaping);
+  and **0.11.7** `test_oneshot_out` (the `-o`/`--out` parse — path-not-a-positional, dangling
+  `-o`, reset, `--json` composition — and the writer round-trip + trailing-newline + degrade);
+  and **0.11.8** `test_completion` (the `--completion`/`--completions` parse — COMPLETION mode,
+  the captured shell, default/reset/short-circuit; the emitted bash/zsh scripts are
+  host-validated by `bash -n`/`zsh -n` + a functional `COMPREPLY` check).
   Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
@@ -1047,7 +1060,7 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
 deferred to a later ADR.
 
-## Known limitations (0.10.1)
+## Known limitations
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
   is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
@@ -1106,21 +1119,23 @@ lighting up). A tracked blocker, not a gap to fill in-tree.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 are done** (0.1.0 →
-0.10.1): the driver core, the hoosh seam (inference + mid-session model switch), the
-M4 tool spine, the M5 avatara overlay, the model-driven agentic tool-calling loop
-with **parallel tool execution** + `/audit` tool-rounds (0.7.0), the M6 multi-target
-build ladder + the live capability ladder (0.6.5), and the M7 presentation ladder —
-T1 amber/colored diffs (0.8.x), the T2 rich-TUI (0.9.0), the self-managed feed
-redraw (0.9.1), instant SIGWINCH + spinner + incremental streaming paint (0.9.2),
-the togglable file-tree pane (0.9.3), `/clear` + scrollback (0.9.4), version
-single-source + welcome banner (0.9.5), `/theme` dark/light (0.10.0), and the 6.2.43
-toolchain refresh (0.10.1).
+See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 are done and shipping** (0.1.0 →
+0.11.8): the driver core, the hoosh seam (inference + mid-session model switch), the M4 tool
+spine (daimon/bote/t-ron), the M5 avatara overlay, the model-driven agentic loop with
+**parallel tool execution** + `/audit` tool-rounds (0.7.0), the M6 multi-target build ladder +
+the live capability ladder (0.6.5), the M7 presentation ladder (T1 amber/colored diffs 0.8.x →
+the T2 rich-TUI 0.9.x → `/theme` 0.10.0), the **0.10.x data producers** (tokens 0.10.2 + cost
+0.10.3, honest-omit per [ADR-0010](../adr/0010-data-producer-honest-omit.md)), and the **0.11.x
+terminal-citizen line in full** — the one-shot/argv front-door (0.11.0), input-history recall +
+opt-in persistence (0.11.1–0.11.2), feed soft-wrap (0.11.3), `[alias]` prompt macros (0.11.4),
+`/dry` (0.11.5), `--json` envelope output (0.11.6), `-o`/`--out` file tee (0.11.7), and shell
+completion (0.11.8).
 
-**Remaining (non-gating polish):** the 0.10.x data producers — tokens (0.10.2),
-cost (0.10.3), git omit-until-sit (0.10.4) — honest-omit fields layered on the
-shipped surface, per [ADR-0010](../adr/0010-data-producer-honest-omit.md). The
-rainbow theme is deferred (needs **anuenue** vendored).
+**Remaining work is no longer thoth feature work.** The leftover 0.11.x riders are deferred
+(live spine-health — not yet wanted) or AGNOS-impossible (clipboard — needs an upstream cyrius
+`process` stdin-feed primitive); the rainbow theme is deferred (needs **anuenue** vendored); and
+the **0.12.x git producer** is externally gated on **sit** shipping `.git/` read-mode (thoth
+never hand-rolls a `.git/` parser — ADR-0010).
 
 **The path to v1.0 is dominated by AGNOS lighting up, not by feature work in
 thoth.** Four gates (see [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS

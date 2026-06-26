@@ -8,21 +8,25 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.10.1 — all five seams wired, agentic tool-calling live, a rich TUI
-> front-end (pre-1.0).** The interactive REPL/TUI loop is real and usable, and the
-> full AGNOS spine is wired. A free-text turn drives a **model-driven agentic loop**:
-> thoth advertises **daimon**'s MCP tools to **hoosh**, the backing model calls them,
-> thoth executes each through daimon (speaking **bote**, the vendored MCP protocol)
-> under **t-ron** authorization (deny is final; no policy means a fail-closed confirm),
-> and loops results back until the model answers — streaming the output (SSE) as it
-> arrives, with parallel tool calls. The signature move (M3): switch the backing model
-> mid-session through hoosh (`/model`, `/models` for the catalog). The persona (M5):
-> the Thoth/Librarian archetype from **avatara** steers the turn. The **M7 front-end**
-> (0.8.x–0.10.x): a T2 alt-screen rich-TUI — a semantic amber palette,
-> syntax-highlighted diffs, a self-managed scrolling feed, instant SIGWINCH resize, a
-> working spinner, a togglable file-tree pane, scrollback, `/clear`, and `/theme`
-> (dark/light) — degrading **closed** to a byte-identical line-mode floor when
-> piped/CI. Multi-target builds (M6): Linux ships; aarch64 builds; macOS builds+runs;
+> **Status: 0.11.8 — all five seams wired, agentic tool-calling live, a rich TUI
+> front-end, and a first-class shell citizen (pre-1.0).** The interactive REPL/TUI loop
+> is real and usable, and the full AGNOS spine is wired. A free-text turn drives a
+> **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to **hoosh**,
+> the backing model calls them, thoth executes each through daimon (speaking **bote**,
+> the vendored MCP protocol) under **t-ron** authorization (deny is final; no policy
+> means a fail-closed confirm), and loops results back until the model answers —
+> streaming the output (SSE) as it arrives, with parallel tool calls. The signature move
+> (M3): switch the backing model mid-session through hoosh (`/model`, `/models` for the
+> catalog). The persona (M5): the Thoth/Librarian archetype from **avatara** steers the
+> turn. The **M7 front-end** (0.8.x–0.10.x): a T2 alt-screen rich-TUI — a semantic amber
+> palette, syntax-highlighted diffs, a self-managed scrolling feed with soft-wrap, instant
+> SIGWINCH resize, a working spinner, a togglable file-tree pane, scrollback, input-history
+> recall, `/clear`, and `/theme` (dark/light) — degrading **closed** to a byte-identical
+> line-mode floor when piped/CI. The **0.11.x terminal-citizen line** makes thoth a
+> non-interactive shell citizen too: a one-shot/argv front-door (`thoth 'task'`, `git diff |
+> thoth 'review'`), `--json` envelope output for jq/CI, `-o`/`--out` file tee, shell
+> completion (`--completion bash|zsh`), `[alias]` prompt macros, and `/dry` request-body
+> preview. Multi-target builds (M6): Linux ships; aarch64 builds; macOS builds+runs;
 > AGNOS/Windows staged on named upstream floor gaps. SemVer `0.x` while the surface
 > moves. See [`docs/development/state.md`](docs/development/state.md) and
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.
@@ -106,7 +110,19 @@ The bright line: **port the floor; never fork the spine.** See
 cyrius deps                              # resolve stdlib deps
 cyrius build src/main.cyr build/thoth    # compile (x86_64 Linux)
 cyrius test                              # run [build].test + tests/*.tcyr
-./build/thoth                            # start the REPL
+./build/thoth                            # start the interactive TUI / REPL
+```
+
+thoth is also a non-interactive shell citizen (the 0.11.x front-door) — run one task
+and exit, so it composes in pipes and scripts:
+
+```sh
+thoth 'review this diff'                 # run one task, print the answer, exit
+git diff | thoth 'review this'           # piped stdin is appended to the task
+thoth --json 'summarize' | jq .response  # one JSON object per turn (for jq/CI)
+thoth -o out.md 'draft a README'         # tee the answer to a file as well as stdout
+source <(thoth --completion bash)        # tab-complete thoth's flags (bash or zsh)
+thoth --help                             # the full one-shot reference
 ```
 
 For multi-target builds use the driver — `./scripts/build.sh [linux|agnos|all]`

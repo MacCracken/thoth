@@ -7,10 +7,12 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: fermenting.** thoth is a long-horizon idea-log, not yet built into
-> feature code. Right now the useful contributions are to the **identity, docs,
-> and standards alignment** — not feature work. See
-> [`docs/development/roadmap.md`](docs/development/roadmap.md).
+> **Status: 0.11.8 — built and shipping (pre-1.0).** thoth has a real interactive TUI/REPL
+> plus a one-shot/argv front-door, the full AGNOS spine wired, and a 599-assertion unit suite;
+> x86_64 Linux ships. The remaining road to v1.0 is dominated by AGNOS lighting up, not feature
+> work — see [`docs/development/roadmap.md`](docs/development/roadmap.md) and
+> [`docs/development/state.md`](docs/development/state.md). Contributions follow the one rule
+> below: drive the AGNOS spine, never fork it.
 
 ## Build and test
 

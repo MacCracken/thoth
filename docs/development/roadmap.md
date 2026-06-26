@@ -12,21 +12,16 @@
 >
 > **Where we are (0.11.8):** **M0–M7 are done and shipping** (0.1.0 → 0.11.8; the log
 > lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
-> line is complete for the producers thoth owned (tokens, cost), and the **0.11.x
-> terminal-citizen line is essentially complete** — `0.11.0` shipped its keystone (the
-> one-shot/argv front-door), `0.11.1` composer input-history recall, `0.11.2` its opt-in
-> `[history].file` persistence, `0.11.3` feed soft-wrap, `0.11.4` `[alias]` prompt macros,
-> `0.11.5` `/dry` (request-body preview), `0.11.6` `--json` envelope output, `0.11.7`
-> `-o`/`--out` file tee, and `0.11.8` shell completion (`--completion bash|zsh`). **The whole
-> vetted SecureYeoman-TUI-review backlog is now shipped; the remaining 0.11.x riders (live
-> spine-health, clipboard) are deferred/AGNOS-impossible (below).** **What's left:** the
-> **0.12.x git producer** (externally gated on sit) and the **four v1.0 gates** below
-> (dominated by AGNOS lighting up). Historical context: the rest of the
-> **0.11.x** line (the vetted SecureYeoman-TUI-review backlog — substrate/floor ports and
-> thin seam bindings, never a spine fork; that TUI is being reskinned onto thoth's, so
-> thoth's front-end is the shared canonical surface), the **0.12.x git producer** (externally
-> gated on sit), and the **four v1.0 gates** below — which are dominated by AGNOS lighting
-> up, not by feature work in thoth.
+> line (tokens, cost) is complete, and the **0.11.x terminal-citizen line is complete** —
+> the whole vetted SecureYeoman-TUI-review backlog shipped (`0.11.0` one-shot/argv
+> front-door, `0.11.1`–`0.11.2` input-history recall + persistence, `0.11.3` feed soft-wrap,
+> `0.11.4` `[alias]` macros, `0.11.5` `/dry`, `0.11.6` `--json` output, `0.11.7` `-o`/`--out`
+> tee, `0.11.8` shell completion). Every item was a substrate/floor port or a thin seam
+> binding, never a spine fork — that TUI is being reskinned onto thoth's, so thoth's
+> front-end is the shared canonical surface. **What's left is no longer thoth feature work:**
+> the remaining 0.11.x riders are deferred (live spine-health) or AGNOS-impossible (clipboard);
+> the **0.12.x git producer** is externally gated on **sit**; and the **four v1.0 gates** below
+> are dominated by AGNOS lighting up.
 
 ## Framing (read first)
 
@@ -117,59 +112,22 @@ surface is still moving (commands and the seam interface still change
 release to release). The 1.0 scheme (CalVer vs. staying SemVer) is gate 4
 above, deferred to a later ADR.
 
-## Remaining work — the post-M7 lines (post-release polish; NON-GATING)
+## Remaining work (post-M7; NON-GATING)
 
-> **None of this blocks v1.0** — the four v1.0 gates above take priority. These are
-> substrate/UX ports plus honest-omit data fields layered onto the shipped T1/T2 surface.
-> Data fields follow the **omit-until-present** policy
-> ([ADR-0010](../adr/0010-data-producer-honest-omit.md)): a field surfaces only when its
-> producer has real data, and announces absence in `/state` — never faked. The 0.11.x line
-> is the vetted, adversarially-reviewed port backlog from the SecureYeoman TUI review;
-> **every item is a substrate/floor port or a thin binding to an existing spine seam —
-> never a spine fork** — because thoth's TUI is becoming the shared canonical front-end
-> SecureYeoman reskins onto.
+> **None of this blocks v1.0** — the four gates above take priority. Data fields follow the
+> **omit-until-present** policy ([ADR-0010](../adr/0010-data-producer-honest-omit.md)): a
+> field surfaces only when its producer has real data, and announces absence in `/state` —
+> never faked.
 
-### 0.11.x — terminal citizen + TUI substrate (the SecureYeoman-review backlog)
+### 0.11.x — terminal citizen + TUI substrate — COMPLETE
 
-> Ranked by the 2026-06-25 multi-agent review (each candidate adversarially verified
-> against thoth's hard constraints — Cyrius language, consume-the-spine, degrade-closed,
-> byte-identical floor).
->
-> **Shipped on this line** (one-line pointers — detail in CHANGELOG/state.md): `0.11.0`
-> the one-shot/argv front-door (the keystone — unlocked the JSON-envelope / `-o` tee /
-> shell-completion riders below); `0.11.1` composer input-history recall (in-memory);
-> `0.11.2` opt-in `[history].file` persistence (its `0600`/`chmod`/`O_NOFOLLOW` follow-ups
-> are tracked under **Deferred** below); `0.11.3` feed soft-wrap (painter-only reflow +
-> physical-row scrollback; `feed_clip_seg` carries SGR color across the wrap); `0.11.4`
-> `[alias]` prompt macros (`[alias]` table → expand-then-redispatch at `CMD_UNKNOWN_SLASH`,
-> bounded recursion; built-ins win, t-ron still gates an aliased `/run`); `0.11.5` `/dry`
-> request-body preview (`hoosh_build_dry` composes the body side-effect-free + network-free,
-> skips the POST — never a hoosh preview endpoint); `0.11.6` `--json` envelope output
-> (`thoth --json <task>` → one `{response,model,turns,tokens?,cost?,elapsed_ms}` object per
-> turn for jq/CI; rides the one-shot clean-stdout seam, omit-until-present, valid-JSON-or-exit);
-> `0.11.7` `-o`/`--out` file tee (`thoth -o <file> <task>` tees the answer to a file as well as
-> stdout; the user's own redirection, NOT t-ron-gated; degrades closed on a write failure);
-> `0.11.8` shell completion (`thoth --completion bash|zsh` prints a completion script for the
-> non-interactive front door; static text thoth emits, the shell runs it; scripts host-validated).
+The vetted SecureYeoman-TUI-review backlog shipped in full (`0.11.0` → `0.11.8`; one-line
+detail in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)): the one-shot/argv front-door,
+input-history recall + opt-in `[history].file` persistence, feed soft-wrap, `[alias]` prompt
+macros, `/dry` request-body preview, `--json` envelope output, `-o`/`--out` file tee, and shell
+completion. Every item was a substrate/floor port or a thin seam binding, never a spine fork.
+The only 0.11.x items left are deferred:
 
-**Remaining — pure-substrate TUI wins (no argv dependency — ship anytime):**
-- _(Both shipped: **soft-wrap long feed lines** in 0.11.3 and **`[alias]` prompt macros** in
-  0.11.4. The pure-substrate TUI slot is now clear; the introspection + rider slots below are
-  next, several unblocked by the 0.11.0 one-shot front-door.)_
-
-**Introspection slot — DONE** (both shipped):
-- _**`/dry` request-body preview** in 0.11.5 (renders thoth's OWN composed request buffer and
-  skips the POST; side-effect-free + network-free, never a hoosh endpoint) and **`--json`
-  envelope output** in 0.11.6 (`thoth --json <task>` → one `{response,model,turns,tokens?,cost?,
-  elapsed_ms}` object per turn for jq/CI; opt-in, omit-until-present, valid-JSON-or-nonzero-exit).
-  The introspection slot is now clear; the riders below are next._
-
-**Riders — the active backlog is DONE; the rest are deferred/conditional:**
-- _Shipped: **`-o` file tee** in 0.11.7 (tees the answer to a file as well as stdout; the
-  user's own redirection, plain bytes at 0644, NOT t-ron-gated, degrades closed) and **shell
-  completion** in 0.11.8 (`--completion bash|zsh` prints a completion script for the
-  non-interactive front door — static text thoth emits, the shell runs it). The riders the
-  one-shot front-door unblocked are now all shipped._
 - **live spine-health** _(deferred — not yet wanted)_ — traffic-outcome reachability + Ctrl-R
   refresh; defer the timerfd tick + active probe until idle-drop detection is actually wanted.
 - **clipboard sink** — effort L; needs an upstream cyrius `process` stdin-feed
