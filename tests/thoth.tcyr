@@ -14,6 +14,7 @@ include "src/version.cyr"
 include "src/ui.cyr"
 include "src/feed.cyr"
 include "src/ftree.cyr"
+include "src/inhist.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -499,6 +500,74 @@ fn test_history_request() {
     hoosh_build_messages(&rb, "m", "sys", 1);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "multi-turn shape, system + stream + usage opt");
     session_reset();
+    return 0;
+}
+
+# Composer input-history recall (0.11.1): the in-memory ring + nav cursor
+# (src/inhist.cyr) and the TUI load/stash glue (src/tui.cyr _tui_recall_*). DISTINCT
+# from the multi-turn CONVERSATION history above — this is the user's own keystrokes,
+# navigated with Up/Down in the raw-mode composer (TUI-only; the REPL floor is
+# untouched).
+fn test_inhist() {
+    test_group("input-history recall");
+    inhist_init();
+    assert_eq(inhist_count(), 0, "empty after init");
+    assert_eq(inhist_nav_at_draft(), 1, "cursor starts at the draft");
+    assert_eq(inhist_nav_up(), 0 - 1, "Up with no history -> -1 (nothing)");
+
+    # push records lines; ignoredups + skip-empty.
+    assert_eq(inhist_push("first", 5), 1, "push 'first' stored");
+    assert_eq(inhist_push("second", 6), 1, "push 'second' stored");
+    assert_eq(inhist_push("", 0), 0, "empty line skipped");
+    assert_eq(inhist_push("second", 6), 0, "consecutive duplicate skipped (ignoredups)");
+    assert_eq(inhist_count(), 2, "two distinct lines stored");
+    assert(streq(inhist_entry_ptr(0), "first"), "entry 0 = oldest = 'first'");
+    assert(streq(inhist_entry_ptr(1), "second"), "entry 1 = newest = 'second'");
+    assert_eq(inhist_entry_len(1), 6, "newest length");
+
+    # nav: reset to draft, then Up walks newest->oldest, Down walks back to the draft.
+    inhist_nav_reset();
+    assert_eq(inhist_nav_at_draft(), 1, "reset -> draft");
+    assert_eq(inhist_nav_up(), 1, "Up #1 -> newest (idx 1)");
+    assert_eq(inhist_nav_at_draft(), 0, "now navigating");
+    assert_eq(inhist_nav_up(), 0, "Up #2 -> older (idx 0)");
+    assert_eq(inhist_nav_up(), 0, "Up at the oldest clamps (idx 0)");
+    assert_eq(inhist_nav_down(), 1, "Down -> newer (idx 1)");
+    assert_eq(inhist_nav_down(), 0 - 1, "Down past the newest -> draft (-1)");
+    assert_eq(inhist_nav_at_draft(), 1, "back at the draft");
+
+    # the TUI glue: stash a half-typed draft, load recalled entries, restore the draft.
+    led_reset();
+    led_feed(KEY_CHAR, 97); led_feed(KEY_CHAR, 98);   # type "ab"
+    assert_eq(led_len(), 2, "draft 'ab' in the composer");
+    _tui_recall_stash_draft();
+    _tui_recall_load(1);                              # load newest 'second'
+    assert(streq(led_buf(), "second"), "composer loaded with 'second'");
+    assert_eq(led_len(), 6, "composer len = 6 after recall");
+    assert_eq(led_cur(), 6, "cursor at end after recall");
+    _tui_recall_load(0);                              # load oldest 'first'
+    assert(streq(led_buf(), "first"), "composer loaded with 'first'");
+    _tui_recall_restore_draft();                     # back to the stashed draft
+    assert(streq(led_buf(), "ab"), "draft 'ab' restored");
+    assert_eq(led_len(), 2, "draft len restored");
+
+    # ring eviction: fill past INHIST_CAP — the oldest drops, count caps, order holds.
+    inhist_init();
+    var b[16];
+    var i = 0;
+    while (i < INHIST_CAP + 3) {
+        var o = 1;
+        store8(&b, 76);                              # 'L'
+        o = _append_int(&b, o, i);                   # distinct lines "L0".."L130"
+        store8(&b + o, 0);
+        inhist_push(&b, o);
+        i = i + 1;
+    }
+    assert_eq(inhist_count(), INHIST_CAP, "count caps at INHIST_CAP (oldest evicted)");
+    assert(streq(inhist_entry_ptr(0), "L3"), "oldest is 'L3' after evicting L0,L1,L2");
+    assert(streq(inhist_entry_ptr(INHIST_CAP - 1), "L130"), "newest is 'L130'");
+    inhist_init();
+    led_reset();
     return 0;
 }
 
@@ -1216,6 +1285,7 @@ fn main() {
     test_oneshot();
     test_history();
     test_history_request();
+    test_inhist();
     test_logging();
     test_agent();
     test_config_m4();

@@ -79,6 +79,66 @@ fn _tui_copy_line() {
     return _tui_line;
 }
 
+# --- composer input-history recall glue (0.11.1) --------------------------
+# The pure ring + nav cursor live in src/inhist.cyr; this is the TUI glue that
+# stashes the in-progress draft and loads a recalled line into the led_* composer.
+# Up recalls older submitted lines, Down newer; past the newest, the stashed draft
+# returns. Bound only in composer focus with the slash palette closed at the START of
+# recall (so Up/Down stay free while you compose a /command) — see tui_loop. Pure
+# memory ops over the composer buffer; no dispatch, no I/O.
+var _recall_draft = 0;        # stash of the in-progress composer line during recall
+var _recall_draft_len = 0;
+
+# _tui_recall_stash_draft: snapshot the live composer into the draft stash, so Down
+# can restore exactly what the user was typing before they reached for history.
+fn _tui_recall_stash_draft() {
+    if (_recall_draft == 0) { _recall_draft = alloc(COMPOSER_CAP); }
+    var src = led_buf();
+    var n = _comp_len;
+    var i = 0;
+    while (i < n) { store8(_recall_draft + i, load8(src + i)); i = i + 1; }
+    store8(_recall_draft + n, 0);
+    _recall_draft_len = n;
+    return 0;
+}
+
+# _tui_recall_set: load (src,len) into the composer, cursor at end, NUL-terminated.
+# Shared by load-entry and restore-draft. Clamps to the composer cap (defensive — a
+# recalled line / stashed draft is already <= COMPOSER_CAP-1).
+fn _tui_recall_set(src, len) {
+    var buf = led_buf();
+    var n = len;
+    if (n > (COMPOSER_CAP - 1)) { n = COMPOSER_CAP - 1; }
+    var i = 0;
+    while (i < n) { store8(buf + i, load8(src + i)); i = i + 1; }
+    store8(buf + n, 0);
+    _comp_len = n;
+    _comp_cur = n;
+    return 0;
+}
+fn _tui_recall_load(idx) { _tui_recall_set(inhist_entry_ptr(idx), inhist_entry_len(idx)); return 0; }
+fn _tui_recall_restore_draft() { _tui_recall_set(_recall_draft, _recall_draft_len); return 0; }
+
+# _tui_recall_key: fold one Up/Down into history recall. Up stashes the draft on the
+# first step then walks older; Down walks newer and restores the draft past the
+# newest. Redraws the composer + hint (a recalled "/cmd" re-opens the palette).
+fn _tui_recall_key(key) {
+    if (key == KEY_UP) {
+        if (inhist_count() == 0) { return 0; }                      # nothing to recall
+        if (inhist_nav_at_draft() == 1) { _tui_recall_stash_draft(); }
+        var idx = inhist_nav_up();
+        if (idx >= 0) { _tui_recall_load(idx); }
+        tui_draw_hint(); tui_draw_composer();
+        return 0;
+    }
+    # KEY_DOWN
+    if (inhist_nav_at_draft() == 1) { return 0; }                   # already editing the draft
+    var d = inhist_nav_down();
+    if (d < 0) { _tui_recall_restore_draft(); } else { _tui_recall_load(d); }
+    tui_draw_hint(); tui_draw_composer();
+    return 0;
+}
+
 # led_feed: fold one decoded key into the editor; return ACT_NONE / ACT_SUBMIT (the
 # line is ready in led_buf) / ACT_EOF (empty-buffer Ctrl-D). Pure (mutates the buf).
 fn led_feed(key, ch) {
@@ -334,8 +394,14 @@ fn tui_draw_hint() {
         ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
     } elif (tui_palette_active() == 1) { tui_draw_palette(); }
     elif (_tui_show_tree == 1) {
-        ui_emit(ROLE_FAINT, "Tab tree · Ctrl-B hide · Ctrl-G status · Enter send");
-    } else { ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Ctrl-B files · Enter send"); }
+        ui_emit(ROLE_FAINT, "Tab tree · Ctrl-B hide · Ctrl-G status · ");
+        if (inhist_count() > 0) { ui_emit(ROLE_FAINT, "↑↓ history · "); }
+        ui_emit(ROLE_FAINT, "Enter send");
+    } else {
+        ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Ctrl-B files · ");
+        if (inhist_count() > 0) { ui_emit(ROLE_FAINT, "↑↓ history · "); }
+        ui_emit(ROLE_FAINT, "Enter send");
+    }
     return 0;
 }
 
@@ -791,6 +857,7 @@ fn tui_loop() {
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
+    inhist_init();                                # 0.11.1: the composer input-history recall ring
     out_mode_set(OUT_RING);                        # seed the welcome banner into the feed
     # the scribe greeting, sourced from the avatara persona (mirrors print_banner):
     ui_emit(ROLE_ACCENT, persona_name()); emit(", "); ui_emit(ROLE_ACCENT_DIM, persona_role());
@@ -841,9 +908,21 @@ fn tui_loop() {
             } elif (key == KEY_PGDN) { _tui_feed_scroll_by(0 - (_tui_feed_rows() - 1));
             } elif (_tui_focus == FOCUS_TREE) {
                 _tui_tree_key(key);    # tree navigation (↑↓→← Enter; a char hands focus back)
+            } elif (((key == KEY_UP) || (key == KEY_DOWN)) && ((inhist_nav_at_draft() == 0) || (tui_palette_active() == 0))) {
+                # composer focus: Up/Down recall input history (0.11.1). Gated on the
+                # slash palette being CLOSED at the start of recall (so Up/Down stay
+                # free while composing a /command); once navigating, continue regardless
+                # so a recalled "/cmd" (which re-opens the palette) doesn't strand you.
+                # ORDERING IS LOAD-BEARING: this elif must stay AFTER the FOCUS_TREE
+                # branch — Up/Down are also the tree's nav keys, and at rest
+                # inhist_nav_at_draft()==1 makes this condition true, so it would steal
+                # tree nav if hoisted above the tree branch.
+                _tui_recall_key(key);
             } else {
                 var act = led_feed(key, _tui_key_ch);
                 if (act == ACT_SUBMIT) {
+                    inhist_push(led_buf(), led_len());   # record the submitted line (ignoredups, skip-empty)
+                    inhist_nav_reset();                  # next Up starts from the newest again
                     var line = _tui_copy_line();   # snapshot the line before clearing
                     led_reset();
                     tui_draw_composer();           # composer empties IMMEDIATELY, before dispatch

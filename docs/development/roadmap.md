@@ -10,15 +10,17 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.11.0):** **M0–M7 are done and shipping** (0.1.0 → 0.11.0; the log
+> **Where we are (0.11.1):** **M0–M7 are done and shipping** (0.1.0 → 0.11.1; the log
 > lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
 > line is complete for the producers thoth owned (tokens, cost), and the **0.11.x
-> terminal-citizen line is open** — `0.11.0` shipped its keystone, the one-shot/argv
-> front-door. **What's left:** the rest of the **0.11.x** line (the vetted SecureYeoman-TUI
-> -review backlog — substrate/floor ports and thin seam bindings, never a spine fork; that
-> TUI is being reskinned onto thoth's, so thoth's front-end is the shared canonical
-> surface), the **0.12.x git producer** (externally gated on sit), and the **four v1.0
-> gates** below — which are dominated by AGNOS lighting up, not by feature work in thoth.
+> terminal-citizen line is advancing** — `0.11.0` shipped its keystone (the one-shot/argv
+> front-door) and `0.11.1` shipped the first pure-substrate win (composer input-history
+> recall; persistence carved out to `0.11.2`). **What's left:** the rest of the **0.11.x**
+> line (the vetted SecureYeoman-TUI-review backlog — substrate/floor ports and thin seam
+> bindings, never a spine fork; that TUI is being reskinned onto thoth's, so thoth's
+> front-end is the shared canonical surface), the **0.12.x git producer** (externally gated
+> on sit), and the **four v1.0 gates** below — which are dominated by AGNOS lighting up,
+> not by feature work in thoth.
 
 ## Framing (read first)
 
@@ -129,8 +131,11 @@ above, deferred to a later ADR.
 > unlocked the JSON-envelope, `-o` tee, and shell-completion riders below.
 
 - **Pure-substrate TUI wins (no argv dependency — ship anytime):**
-  - **composer input-history recall** — Up/Down recall submitted lines; persistence
-    **OFF by default**, `0600` when enabled; recall gated on palette-closed.
+  - **composer input-history recall** — ✅ **shipped `0.11.1`** (in-memory): Up/Down recall
+    submitted lines, gated on palette-closed (`src/inhist.cyr` + the `_tui_recall_*` glue).
+    The opt-in **persistent** history file (`0600` when enabled, OFF by default) is carved
+    out to **`0.11.2`** — it adds file I/O + a security surface that earns its own pre-cut
+    review; the in-memory default experience is delivered in full at `0.11.1`.
   - **soft-wrap long feed lines** — painter-only reflow instead of today's truncate;
     declare the glyph-width (CJK/emoji) limitation honestly.
   - **`[alias]` prompt macros** — resolve only in the `CMD_UNKNOWN_SLASH` gap,

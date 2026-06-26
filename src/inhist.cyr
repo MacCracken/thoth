@@ -1,0 +1,122 @@
+# thoth — composer input-history recall (0.11.1; the SecureYeoman-TUI-review backlog,
+# top-ranked pure-substrate win on the 0.11.x terminal-citizen line).
+#
+# An in-memory ring of SUBMITTED composer lines, recalled with Up/Down in the T2
+# raw-mode composer. This is DISTINCT from the multi-turn CONVERSATION history
+# (session_history_*, 0.5.1): conversation history is the model's memory of the
+# exchange; THIS is the user's own keystrokes — the lines they typed — kept so they
+# can be navigated back to, re-edited, and re-sent.
+#
+# TUI-ONLY by construction: recall needs the raw-mode composer's per-keystroke
+# editing. The line-mode REPL reads through the kernel's COOKED line discipline
+# (read_line), which thoth does not replace — so the REPL / piped / CI floor is
+# byte-identical (this module is never reached off the PT_RICH TUI path).
+#
+# DESIGN SPLIT (mirrors src/feed.cyr, src/ftree.cyr): the ring + the navigation
+# cursor here are PURE and unit-tested (test_inhist). The draft-stash + loading a
+# recalled line INTO the composer is TUI glue in src/tui.cyr (_tui_recall_*), which
+# manipulates the led_* editor state.
+#
+# Persistence (opt-in history file, 0600 on disk) is the NEXT slice (0.11.2): this
+# cut is session-local memory ONLY, so there is no on-disk footprint and nothing to
+# secure yet — the DEFAULT experience (no persistence) is delivered in full here.
+
+var INHIST_CAP = 128;          # ring slots — submitted lines retained for recall
+var INHIST_LINE_CAP = 4096;    # bytes per slot (== COMPOSER_CAP, so any line round-trips)
+
+var _inhist_buf = 0;           # alloc(INHIST_CAP * INHIST_LINE_CAP): the slot bytes
+var _inhist_lens = 0;          # alloc(INHIST_CAP * 8): stored byte length per slot
+var _inhist_count = 0;         # logical entries stored (0..INHIST_CAP)
+var _inhist_head = 0;          # physical slot of the OLDEST entry (ring base)
+var _inhist_cur = 0;           # nav cursor in [0.._inhist_count]; == count means "the live draft"
+
+# inhist_init: allocate the ring (idempotent) and reset to empty. Called once at TUI
+# startup (alongside feed_init); each unit test calls it for a clean slate. The push
+# path also lazily allocates, so a stray call before init is safe.
+fn inhist_init() {
+    if (_inhist_buf == 0) {
+        _inhist_buf = alloc(INHIST_CAP * INHIST_LINE_CAP);
+        _inhist_lens = alloc(INHIST_CAP * 8);
+    }
+    _inhist_count = 0;
+    _inhist_head = 0;
+    _inhist_cur = 0;
+    return 0;
+}
+
+# _inhist_phys: physical slot index for logical entry i (0 = oldest .. count-1 = newest).
+fn _inhist_phys(i) { return (_inhist_head + i) % INHIST_CAP; }
+
+fn inhist_count() { return _inhist_count; }
+fn inhist_entry_ptr(i) { return _inhist_buf + _inhist_phys(i) * INHIST_LINE_CAP; }
+fn inhist_entry_len(i) { return load64(_inhist_lens + _inhist_phys(i) * 8); }
+
+# _inhist_eq: byte-equality of (a,alen) and (b,blen) — the ignoredups compare.
+fn _inhist_eq(a, alen, b, blen) {
+    if (alen != blen) { return 0; }
+    var i = 0;
+    while (i < alen) { if (load8(a + i) != load8(b + i)) { return 0; } i = i + 1; }
+    return 1;
+}
+
+# inhist_push: record a submitted line (ptr,len) as the new NEWEST entry. Skips an
+# empty line and a line identical to the current newest (ignoredups), so Enter on a
+# blank composer and re-sending the same command don't clutter recall. Truncates a
+# line longer than the slot (the composer caps at COMPOSER_CAP-1 == INHIST_LINE_CAP-1,
+# so this never fires in practice — defensive). Evicts the oldest in O(1) when full
+# (the same ring shape as src/feed.cyr). Returns 1 if stored, 0 if skipped.
+fn inhist_push(ptr, len) {
+    if (_inhist_buf == 0) { inhist_init(); }
+    if (len <= 0) { return 0; }
+    if (len > (INHIST_LINE_CAP - 1)) { len = INHIST_LINE_CAP - 1; }
+    if (_inhist_count > 0) {
+        var ni = _inhist_count - 1;
+        if (_inhist_eq(inhist_entry_ptr(ni), inhist_entry_len(ni), ptr, len) == 1) { return 0; }
+    }
+    var phys = 0;
+    if (_inhist_count < INHIST_CAP) {
+        phys = (_inhist_head + _inhist_count) % INHIST_CAP;
+        _inhist_count = _inhist_count + 1;
+    } else {
+        phys = _inhist_head;                                # full -> overwrite the oldest...
+        _inhist_head = (_inhist_head + 1) % INHIST_CAP;     # ...and advance the ring base
+    }
+    var dst = _inhist_buf + phys * INHIST_LINE_CAP;
+    var i = 0;
+    while (i < len) { store8(dst + i, load8(ptr + i)); i = i + 1; }
+    store8(dst + len, 0);
+    store64(_inhist_lens + phys * 8, len);
+    return 1;
+}
+
+# --- the navigation cursor (Up = older, Down = newer) ---------------------
+# _inhist_cur in [0, count]: count == "the live draft" (one past the newest entry);
+# count-1 == newest; 0 == oldest. The TUI stashes the draft on the transition OUT of
+# the draft position (first Up) and restores it on the transition back (Down past
+# the newest).
+
+# inhist_nav_reset: return the cursor to the live draft. Called after each submit so
+# the next Up starts from the newest again.
+fn inhist_nav_reset() { _inhist_cur = _inhist_count; return 0; }
+
+# inhist_nav_at_draft: 1 if the cursor is on the live draft (not showing history).
+fn inhist_nav_at_draft() { if (_inhist_cur >= _inhist_count) { return 1; } return 0; }
+
+fn inhist_nav_pos() { return _inhist_cur; }
+
+# inhist_nav_up: move toward an OLDER entry. Returns the logical entry index now shown
+# (>= 0), or -1 when there is no history at all. Clamps at the oldest (reloading it is
+# idempotent). The caller stashes the draft first iff it was at_draft.
+fn inhist_nav_up() {
+    if (_inhist_count == 0) { return 0 - 1; }
+    if (_inhist_cur > 0) { _inhist_cur = _inhist_cur - 1; }
+    return _inhist_cur;
+}
+
+# inhist_nav_down: move toward a NEWER entry. Returns the logical entry index now shown
+# (>= 0), or -1 meaning "restore the live draft" (the cursor stepped past the newest).
+fn inhist_nav_down() {
+    if (_inhist_cur < _inhist_count) { _inhist_cur = _inhist_cur + 1; }
+    if (_inhist_cur >= _inhist_count) { return 0 - 1; }
+    return _inhist_cur;
+}

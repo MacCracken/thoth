@@ -36,6 +36,7 @@ include "src/version.cyr"  # thoth_version() — GENERATED from VERSION (scripts
 include "src/ui.cyr"
 include "src/feed.cyr"     # self-managed feed buffer (M7 / 0.9.1); after ui (feed_clip calls ui_reset)
 include "src/ftree.cyr"    # file-tree pane geometry + model (M7 / 0.9.3)
+include "src/inhist.cyr"   # composer input-history recall ring (0.11.1); pure, TUI-only glue
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"

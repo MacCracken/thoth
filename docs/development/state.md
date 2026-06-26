@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.11.1** — composer input-history recall (0.11.x terminal-citizen line), 2026-06-25. The
+top-ranked pure-substrate win from the SecureYeoman-TUI review: the T2 raw-mode composer
+recalls previously-**submitted** lines with **Up/Down** (Up older, Down newer, past-newest
+restores the in-progress draft) — shell-style history, **distinct from the multi-turn
+CONVERSATION history** (`session_history_*`, 0.5.1; that is the model's memory, this is the
+user's keystrokes). New **`src/inhist.cyr`** — a PURE, unit-tested 128-slot ring of
+submitted lines (the same ring shape as `src/feed.cyr`): **ignoredups** + skip-empty +
+O(1) eviction, and a nav cursor (`inhist_nav_up`/`_down`/`_reset`/`_at_draft`) over
+`[0, count]` where `count` == "the live draft". The TUI glue (`src/tui.cyr` `_tui_recall_*`)
+stashes the draft, loads a recalled line into the `led_*` composer (cursor at end), and
+restores the draft past the newest; `tui_loop` binds Up/Down **in composer focus with the
+slash palette closed at the START of recall** (so Up/Down stay free while composing a
+`/command`; once navigating it continues, so a recalled `/cmd` doesn't strand you). A
+`↑↓ history` hint appears once there is history. **TUI-ONLY by construction** — recall needs
+the raw-mode composer; the line REPL reads through the kernel's cooked line discipline
+(`read_line`), unchanged → the REPL/piped/CI floor is **byte-identical** (this code is never
+reached off PT_RICH; the empty-history hint is byte-identical). **Persistence (opt-in,
+`0600`) is deliberately the next slice (0.11.2)** — it adds file I/O + a security surface
+that earns its own review; this cut is in-memory only, so the default experience is
+delivered in full with no on-disk footprint. **Pre-cut adversarial review (4
+perspective-diverse lenses — memory/bounds, ring+nav correctness, byte-identical
+floor+posture, Cyrius-language+integration): zero confirmed findings** (the lone raised item
+was a refuted nit — the `tui_loop` elif ordering is load-bearing, now documented inline).
+467 assertions (+29). Pin unchanged (6.2.43).
 **0.11.0** — one-shot / argv front-door, the 0.11.x keystone, 2026-06-25. thoth becomes a
 non-interactive shell citizen: `thoth 'task'`, `git diff | thoth 'review'`, `thoth -p <
 f`, `thoth --version|--help` run ONE turn through the EXISTING `cmd_task →
@@ -646,6 +670,15 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `SYS_GETCWD`). The paint (`tui_draw_tree`: tree cols `[1, tree_w]` + `│` separator, a
   reverse-video selection bar) + the nav keys (Ctrl-B/Tab/↑↓→← + focus) live in
   `src/tui.cyr`; `feed_repaint` paints the feed into `[tree_w+2, cols]` when shown.
+- `src/inhist.cyr` — **0.11.1**: the composer input-history recall ring. PURE +
+  unit-tested: a 128-slot ring of SUBMITTED lines (same shape as `src/feed.cyr` — head/
+  count/`% INHIST_CAP`, O(1) eviction) with `inhist_push` (ignoredups vs the newest +
+  skip-empty), `inhist_entry_ptr`/`_len`, and the nav cursor
+  `inhist_nav_up`/`_down`/`_reset`/`_at_draft`/`_pos` over `[0, count]` (count == "the live
+  draft"). Session-local memory ONLY (persistence is 0.11.2). DISTINCT from the multi-turn
+  conversation history (`session_history_*`). The TUI glue (`_tui_recall_*` — draft stash +
+  load-into-composer) and the Up/Down `tui_loop` binding (composer focus, palette-gated)
+  live in `src/tui.cyr`; TUI-only, so the REPL/piped floor is untouched.
 - `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
   (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
   `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
@@ -658,7 +691,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **438 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **467 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -711,7 +744,10 @@ bundle is DCE-unreachable).
   assertion through the active model, and the unpriced- + half-declared-model degrade paths);
   and **0.11.0** `test_oneshot` (the pure argv classifier — `NONE`/`RUN`/`VERSION`/`HELP`,
   the `-p` force, flag-vs-positional, positional joining — and the bounded task buffer,
-  driven by a hand-built argv snapshot).
+  driven by a hand-built argv snapshot); and **0.11.1** `test_inhist` (the input-history
+  ring — store/ignoredups/skip-empty/eviction/order — the full nav state machine
+  draft↔newest↔oldest with clamps + the draft boundary, and the composer load/stash/restore
+  glue).
   Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).

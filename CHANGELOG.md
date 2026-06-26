@@ -2,6 +2,50 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.1] - 2026-06-25
+
+**Composer input-history recall (0.11.x terminal-citizen line).** The T2 raw-mode
+composer now recalls previously-submitted lines with **Up / Down**, shell-style: Up
+walks older, Down newer, and stepping past the newest restores the line you were
+typing. This is the top-ranked pure-substrate win from the SecureYeoman-TUI review —
+no argv dependency, no spine touched. It is **distinct from the multi-turn conversation
+history** (`session_history_*`, 0.5.1): that is the model's memory of the exchange; this
+is the user's own keystrokes, kept so they can be navigated back to, re-edited, and
+re-sent. 467 unit assertions (+29). Pin unchanged (6.2.43).
+
+### Added
+- **`src/inhist.cyr`** — the input-history ring. A PURE, unit-tested core: a 128-slot
+  ring of submitted lines with **ignoredups** (a line identical to the newest is not
+  re-stored) + skip-empty, O(1) eviction when full (the same ring shape as
+  `src/feed.cyr`), and a navigation cursor (`inhist_nav_up`/`_down`/`_reset`/`_at_draft`)
+  over `[0, count]` where `count` is "the live draft". Session-local memory only.
+- **Recall in the TUI** (`src/tui.cyr`) — `_tui_recall_*` stashes the in-progress draft,
+  loads a recalled line into the `led_*` composer (cursor at end), and restores the draft
+  past the newest. Bound in `tui_loop` to Up/Down **in composer focus with the slash
+  palette closed at the start of recall** (so Up/Down stay free while you compose a
+  `/command`); once navigating, it continues regardless so a recalled `/cmd` doesn't
+  strand you. A `↑↓ history` hint appears on the hint row once there is history to recall.
+- **`test_inhist`** (+29): the ring (store/ignoredups/skip-empty/eviction/order), the full
+  nav state machine (draft↔newest↔oldest, clamps, the draft boundary), and the composer
+  load/stash/restore glue.
+
+### Notes
+- **TUI-only by construction** — recall needs the raw-mode composer's per-keystroke
+  editing; the line-mode REPL reads through the kernel's cooked line discipline
+  (`read_line`), which thoth does not replace. So the REPL / piped / CI floor is
+  **byte-identical** (this code is never reached off the PT_RICH path; the hint is
+  byte-identical when history is empty — the common first-use state).
+- **Persistence is the next slice (0.11.2).** The spec's opt-in on-disk history file
+  (`0600` when enabled, off by default) is deliberately separated — it adds file I/O,
+  path resolution, and a security surface that earns its own pre-cut review. This cut is
+  in-memory only, so the **default** experience (no persistence) is delivered in full and
+  there is no on-disk footprint to secure yet.
+- **Pre-cut adversarial review (4 perspective-diverse lenses — memory/bounds, ring +
+  nav-cursor correctness, byte-identical floor + consumer posture, Cyrius-language +
+  integration)**: zero confirmed findings (the lone raised item was a refuted
+  maintainability nit — the `tui_loop` elif ordering is load-bearing; documented inline).
+  The TUI render itself verifies on a real tty (`THOTH_TIER=rich`), not the harness.
+
 ## [0.11.0] - 2026-06-25
 
 **One-shot / argv front-door — the 0.11.x keystone.** thoth becomes a first-class shell
