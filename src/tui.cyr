@@ -47,6 +47,7 @@ var KEY_SCROLL_DOWN = 17;     # Shift-Down (CSI 1;2B) — scroll the feed forwar
 var KEY_PGUP = 18;            # PageUp (CSI 5~) — page the feed back
 var KEY_PGDN = 19;            # PageDown (CSI 6~) — page the feed forward
 var KEY_TOGGLE_THEME = 20;    # Ctrl-T — toggle dark/light theme (0.10.0)
+var KEY_NEWLINE = 21;         # Shift-Enter (kitty CSI-u) / Alt-Enter (ESC CR) — insert a newline (0.11.9)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -67,6 +68,80 @@ fn led_reset() {
 fn led_buf() { if (_composer == 0) { led_reset(); } return _composer; }
 fn led_len() { return _comp_len; }
 fn led_cur() { return _comp_cur; }
+
+# --- multi-line composer geometry (0.11.9) --------------------------------
+# The composer buffer may hold embedded '\n' bytes (Shift/Alt-Enter). These PURE
+# helpers split it into logical lines for the multi-row render + cursor parking. ONE
+# logical line == ONE physical composer row (no in-composer soft-wrap), so led_lines()
+# is the composer's height oracle. All are bounded by _comp_len / _comp_cur (both 0
+# before led_reset alloc's the buffer), so they are safe even when _composer == 0.
+
+# led_lines: number of logical lines = count of '\n' + 1 (>= 1, even when empty).
+fn led_lines() {
+    var n = 1;
+    var i = 0;
+    while (i < _comp_len) { if (load8(_composer + i) == 10) { n = n + 1; } i = i + 1; }
+    return n;
+}
+# led_cursor_line: logical line index (0-based) the cursor sits on = '\n' count before it.
+fn led_cursor_line() {
+    var n = 0;
+    var i = 0;
+    while (i < _comp_cur) { if (load8(_composer + i) == 10) { n = n + 1; } i = i + 1; }
+    return n;
+}
+# led_cursor_col: column within the cursor's logical line = bytes since the last '\n'.
+fn led_cursor_col() {
+    var c = 0;
+    var i = 0;
+    while (i < _comp_cur) {
+        if (load8(_composer + i) == 10) { c = 0; } else { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+# led_line_start: byte offset of logical line `li` (li past the end clamps to _comp_len).
+fn led_line_start(li) {
+    if (li <= 0) { return 0; }
+    var seen = 0;
+    var i = 0;
+    while (i < _comp_len) {
+        if (load8(_composer + i) == 10) {
+            seen = seen + 1;
+            if (seen == li) { return i + 1; }
+        }
+        i = i + 1;
+    }
+    return _comp_len;
+}
+# led_line_len: byte length of logical line `li` (excludes the terminating '\n').
+fn led_line_len(li) {
+    var s = led_line_start(li);
+    var e = s;
+    while ((e < _comp_len) && (load8(_composer + e) != 10)) { e = e + 1; }
+    return e - s;
+}
+# led_up / led_down: move the cursor to the same column on the adjacent logical line
+# (clamped to that line's length). Return 1 if it moved between lines, 0 at the top/
+# bottom edge — so the TUI loop falls through to input-history recall at the edges.
+fn led_up() {
+    var cl = led_cursor_line();
+    if (cl == 0) { return 0; }                   # first line -> edge
+    var col = led_cursor_col();
+    var pl = led_line_len(cl - 1);
+    if (col > pl) { col = pl; }
+    _comp_cur = led_line_start(cl - 1) + col;
+    return 1;
+}
+fn led_down() {
+    var cl = led_cursor_line();
+    if (cl >= (led_lines() - 1)) { return 0; }   # last line -> edge
+    var col = led_cursor_col();
+    var nl = led_line_len(cl + 1);
+    if (col > nl) { col = nl; }
+    _comp_cur = led_line_start(cl + 1) + col;
+    return 1;
+}
 
 # _tui_copy_line: snapshot the composer into _tui_line (a stable cstr) so a submitted
 # line survives led_reset() — the composer is cleared BEFORE the (slow) dispatch.
@@ -123,19 +198,20 @@ fn _tui_recall_restore_draft() { _tui_recall_set(_recall_draft, _recall_draft_le
 # first step then walks older; Down walks newer and restores the draft past the
 # newest. Redraws the composer + hint (a recalled "/cmd" re-opens the palette).
 fn _tui_recall_key(key) {
+    var before_h = tui_cur_composer_height();   # a recalled entry can be multi-line -> reflow on change
     if (key == KEY_UP) {
         if (inhist_count() == 0) { return 0; }                      # nothing to recall
         if (inhist_nav_at_draft() == 1) { _tui_recall_stash_draft(); }
         var idx = inhist_nav_up();
         if (idx >= 0) { _tui_recall_load(idx); }
-        tui_draw_hint(); tui_draw_composer();
+        tui_after_edit(before_h);
         return 0;
     }
     # KEY_DOWN
     if (inhist_nav_at_draft() == 1) { return 0; }                   # already editing the draft
     var d = inhist_nav_down();
     if (d < 0) { _tui_recall_restore_draft(); } else { _tui_recall_load(d); }
-    tui_draw_hint(); tui_draw_composer();
+    tui_after_edit(before_h);
     return 0;
 }
 
@@ -143,11 +219,16 @@ fn _tui_recall_key(key) {
 # line is ready in led_buf) / ACT_EOF (empty-buffer Ctrl-D). Pure (mutates the buf).
 fn led_feed(key, ch) {
     if (_composer == 0) { led_reset(); }
-    if (key == KEY_CHAR) {
+    if ((key == KEY_CHAR) || (key == KEY_NEWLINE)) {
+        # KEY_NEWLINE inserts a literal '\n' (10); KEY_CHAR inserts the decoded byte.
+        # The composer buffer holds embedded newlines now (0.11.9 multi-line composer);
+        # plain Enter (KEY_ENTER, below) still submits the WHOLE buffer.
+        var ins = ch;
+        if (key == KEY_NEWLINE) { ins = 10; }
         if (_comp_len < (COMPOSER_CAP - 1)) {
             var i = _comp_len;
             while (i > _comp_cur) { store8(_composer + i, load8(_composer + i - 1)); i = i - 1; }
-            store8(_composer + _comp_cur, ch);
+            store8(_composer + _comp_cur, ins);
             _comp_len = _comp_len + 1;
             _comp_cur = _comp_cur + 1;
             store8(_composer + _comp_len, 0);
@@ -175,15 +256,55 @@ fn led_feed(key, ch) {
     return ACT_NONE;
 }
 
-# --- pure: layout geometry ------------------------------------------------
-# For a terminal of `rows`: status bar pinned at row 1, composer at the last row,
-# the feed scrolls in rows 2..(rows-1). Toggling the status bar off frees row 1
-# into the feed (feed_top -> 1). (File-tree pane: a left column, a later step.)
+# --- pure: layout geometry (0.11.9: faint rules + dynamic multi-line composer) ---
+# Bands top-to-bottom (status shown): row 1 status · row 2 TOP RULE · feed ·
+# BOTTOM RULE · the composer block (1..MAX rows, grows upward with line count) ·
+# last row hint. Toggling the status bar off frees rows 1-2 into the feed (no status =
+# no top rule); the bottom rule above the composer always stands. The composer height
+# tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are PURE
+# and take explicit (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so
+# they unit-test without mutating the composer/show globals.
+var COMPOSER_MAX_ROWS = 8;    # the composer never grows past this (a long paste scrolls within)
+var MIN_FEED = 1;             # the feed never shrinks below this many rows
+
 fn tui_status_row() { return 1; }
-fn tui_composer_row(rows) { return rows - 1; }
 fn tui_hint_row(rows) { return rows; }
-fn tui_feed_top(show_status) { if (show_status == 1) { return 2; } return 1; }
-fn tui_feed_bot(rows) { return rows - 2; }
+fn tui_sep_top_row() { return 2; }                 # the rule under the status bar (status shown only)
+# tui_composer_max: the largest composer height that still leaves MIN_FEED feed rows,
+# capped at COMPOSER_MAX_ROWS. chrome above+below the feed = status+2rules+hint (4) when
+# status shown, else bottom-rule+hint (2). Clamped to >= 1.
+fn tui_composer_max(rows, show) {
+    var chrome = 2;
+    if (show == 1) { chrome = 4; }
+    var m = rows - chrome - MIN_FEED;
+    if (m < 1) { m = 1; }
+    if (m > COMPOSER_MAX_ROWS) { m = COMPOSER_MAX_ROWS; }
+    return m;
+}
+# tui_composer_height: composer rows = led line count, clamped to [1, tui_composer_max].
+fn tui_composer_height(rows, lines, show) {
+    var h = lines;
+    if (h < 1) { h = 1; }
+    var mx = tui_composer_max(rows, show);
+    if (h > mx) { h = mx; }
+    return h;
+}
+fn tui_composer_bot(rows) { return rows - 1; }     # composer block's last row (above the hint)
+fn tui_composer_top(rows, lines, show) { return rows - tui_composer_height(rows, lines, show); }
+fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }
+fn tui_feed_top(show_status) { if (show_status == 1) { return 3; } return 1; }
+fn tui_feed_bot(rows, lines, show) { return tui_sep_bottom_row(rows, lines, show) - 1; }
+# _comp_vscroll_first: first visible logical line so cursor line `cl` stays within a
+# window of `height` rows over `total` logical lines (mirrors _ftree_scroll_first). Pure.
+fn _comp_vscroll_first(cl, total, height) {
+    var first = 0;
+    if (cl >= height) { first = cl - height + 1; }
+    var maxfirst = total - height;
+    if (maxfirst < 0) { maxfirst = 0; }
+    if (first > maxfirst) { first = maxfirst; }
+    if (first < 0) { first = 0; }
+    return first;
+}
 
 # --- I/O: raw-mode terminal control (verified on a live TTY) ---------------
 
@@ -202,9 +323,56 @@ fn tui_active() {
     return 1;
 }
 
-# tui_read_key: read + decode one keypress in raw mode (ASCII + the common CSI
-# arrows/home/end). KEY_CHAR sets _tui_key_ch. stdin EOF -> KEY_EOF. Ctrl-X / Ctrl-C
-# close; Ctrl-D is NOT bound (a stray Ctrl-D is ignored).
+# _tui_kitty_u: map a kitty CSI-u key event (base codepoint `cp`, modifier `mod` = 1 +
+# bitmask: shift 1, alt 2, ctrl 4; -1 == none) to a KEY_*. The kitty keyboard protocol
+# (pushed with `CSI > 1 u`, disambiguate flag) sends Esc + ctrl/alt-combos as `CSI cp;modu`
+# instead of their legacy control bytes — so on kitty/ghostty/wezterm/foot the Ctrl-keys
+# arrive HERE, not as bytes 24/3/21/... in tui_read_key. We decode them back to the same
+# keys (or exit/toggles break under kitty). Enter (13) + any modifier inserts a newline —
+# this is the Shift+Enter path. Ctrl-letters report the UNSHIFTED letter codepoint.
+fn _tui_kitty_u(cp, modk) {
+    if (cp == 13) {                          # Enter
+        if (modk >= 2) { return KEY_NEWLINE; }  # Shift/Alt/Ctrl+Enter -> newline
+        return KEY_ENTER;                       # bare CSI 13 u (defensive; plain Enter stays legacy)
+    }
+    if (modk == 5) {                         # Ctrl (1 + 0b100)
+        if (cp == 120) { return KEY_CTRLC; }        # Ctrl-X (exit)
+        if (cp == 99) { return KEY_CTRLC; }         # Ctrl-C
+        if (cp == 117) { return KEY_KILL; }         # Ctrl-U (kill line)
+        if (cp == 97) { return KEY_HOME; }          # Ctrl-A
+        if (cp == 101) { return KEY_END; }          # Ctrl-E
+        if (cp == 103) { return KEY_TOGGLE_STATUS; }# Ctrl-G
+        if (cp == 98) { return KEY_TOGGLE_TREE; }   # Ctrl-B
+        if (cp == 116) { return KEY_TOGGLE_THEME; } # Ctrl-T
+    }
+    return KEY_NONE;                          # Esc (27) + unmapped combos -> ignore
+}
+
+# _tui_csi_final: map a parsed CSI sequence (final byte `final`, params p1 / p2; p2 == -1
+# when absent) to a KEY_*. One table for ALL CSI forms: arrows/Home/End (no-param letter
+# finals), the Shift-arrow feed-scroll keys (1;2A/B), PageUp/Dn (5~/6~), and the kitty
+# CSI-u keys (final 'u'). Unmodified arrows and the legacy '~'/'A'/'B' forms keep their
+# exact prior behavior, so a non-kitty terminal decodes byte-identically to before.
+fn _tui_csi_final(final, p1, p2) {
+    if (final == 65) { if (p2 == 2) { return KEY_SCROLL_UP; } return KEY_UP; }     # 'A' Up / Shift+Up (mod 2)
+    if (final == 66) { if (p2 == 2) { return KEY_SCROLL_DOWN; } return KEY_DOWN; } # 'B' Down / Shift+Down (mod 2)
+    if (final == 67) { return KEY_RIGHT; }                                          # 'C'
+    if (final == 68) { return KEY_LEFT; }                                           # 'D'
+    if (final == 72) { return KEY_HOME; }                                           # 'H'
+    if (final == 70) { return KEY_END; }                                            # 'F'
+    if (final == 126) {                                                             # '~' (p1 is the parsed int)
+        if (p1 == 5) { return KEY_PGUP; }                                           # CSI 5~ PageUp
+        if (p1 == 6) { return KEY_PGDN; }                                           # CSI 6~ PageDown
+        return KEY_NONE;
+    }
+    if (final == 117) { return _tui_kitty_u(p1, p2); }                              # 'u' kitty CSI-u
+    return KEY_NONE;
+}
+
+# tui_read_key: read + decode one keypress in raw mode (ASCII + CSI arrows/home/end/
+# page + the kitty CSI-u keys). KEY_CHAR sets _tui_key_ch. stdin EOF -> KEY_EOF. Ctrl-X /
+# Ctrl-C close; Ctrl-D is NOT bound (a stray Ctrl-D is ignored). Alt+Enter (ESC CR) and
+# Shift+Enter (kitty CSI 13;2u) decode to KEY_NEWLINE (0.11.9).
 fn tui_read_key() {
     var c[8];
     if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_EOF; }
@@ -224,51 +392,32 @@ fn tui_read_key() {
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
-        if (load8(&c) == 91) {
-            if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
-            var d = load8(&c);
-            if (d == 65) { return KEY_UP; }
-            if (d == 66) { return KEY_DOWN; }
-            if (d == 67) { return KEY_RIGHT; }
-            if (d == 68) { return KEY_LEFT; }
-            if (d == 72) { return KEY_HOME; }
-            if (d == 70) { return KEY_END; }
-            # PageUp / PageDown: ESC[5~ / ESC[6~, and the modified form ESC[5;2~ /
-            # ESC[6;2~ (Shift, etc. — xterm kPRV/kNXT). On a modifier (';') drain the
-            # modifier digit + final '~' and scroll all the same, so the sequence never
-            # leaks bytes into the composer.
-            if ((d == 53) || (d == 54)) {
+        var a = load8(&c);
+        if ((a == 13) || (a == 10)) { return KEY_NEWLINE; }   # Alt+Enter (legacy ESC CR/LF) -> newline
+        if (a != 91) { return KEY_NONE; }                      # not CSI '[' (incl. a lone Esc) -> ignore
+        # General CSI parse: drain the parameter/intermediate bytes (0x30-0x3F: digits, ';',
+        # ':' …) accumulating p1 and an optional p2 (after the first ';'), and stop at the
+        # final byte (0x40-0x7E). ONE parser for every CSI form — arrows, Home/End, PageUp/Dn,
+        # the Shift-arrow feed-scroll keys (1;2A/B), and the kitty CSI-u keys (<cp>;<mod>u).
+        # ':' sub-params and extra ';' groups are drained, never leaked into the composer.
+        var p1 = 0;
+        var p2 = 0 - 1;
+        var semi = 0;
+        if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+        var t = load8(&c);
+        var go = 1;
+        while (go == 1) {
+            if ((t >= 64) && (t <= 126)) { go = 0; }              # final byte -> done (t holds it)
+            else {
+                if ((t >= 48) && (t <= 57)) {                     # a digit
+                    if (semi == 0) { p1 = p1 * 10 + (t - 48); }
+                    elif (semi == 1) { if (p2 < 0) { p2 = 0; } p2 = p2 * 10 + (t - 48); }
+                } elif (t == 59) { semi = semi + 1; }             # ';' -> next parameter group
                 if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
-                var e = load8(&c);
-                if (e == 59) {                                  # ';' -> a modifier sub-param
-                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }   # modifier digit
-                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }   # final '~' (drain)
-                    if (d == 53) { return KEY_PGUP; }
-                    return KEY_PGDN;
-                }
-                if (e == 126) {                                 # bare '~'
-                    if (d == 53) { return KEY_PGUP; }
-                    return KEY_PGDN;
-                }
-                return KEY_NONE;                                # unexpected byte: drained, ignored
-            }
-            # Modified arrows: ESC[1;2A / ESC[1;2B — '2' is the Shift modifier
-            if (d == 49) {
-                if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
-                if (load8(&c) == 59) {                          # ';'
-                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
-                    var m = load8(&c);
-                    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
-                    var f = load8(&c);
-                    if (m == 50) {                              # Shift
-                        if (f == 65) { return KEY_SCROLL_UP; }
-                        if (f == 66) { return KEY_SCROLL_DOWN; }
-                    }
-                }
-                return KEY_NONE;
+                t = load8(&c);
             }
         }
-        return KEY_NONE;
+        return _tui_csi_final(t, p1, p2);
     }
     if ((b >= 32) && (b < 127)) { _tui_key_ch = b; return KEY_CHAR; }
     return KEY_NONE;
@@ -347,10 +496,11 @@ fn _slash_name(i) {
     if (i == 15) { return "/quit"; }
     return "";
 }
-# _buf_has_space: 1 if buf[0..n) holds a space (the command token is complete).
+# _buf_has_space: 1 if buf[0..n) holds a space OR a newline — either terminates the
+# leading command token (a newline means a multi-line buffer, never a /command typed).
 fn _buf_has_space(buf, n) {
     var i = 0;
-    while (i < n) { if (load8(buf + i) == 32) { return 1; } i = i + 1; }
+    while (i < n) { if ((load8(buf + i) == 32) || (load8(buf + i) == 10)) { return 1; } i = i + 1; }
     return 0;
 }
 # tui_palette_count: how many slash commands start with NUL-terminated `prefix`.
@@ -406,38 +556,73 @@ fn tui_draw_hint() {
     return 0;
 }
 
-# tui_park_cursor: move the cursor to the composer's edit position (the prompt line),
-# mirroring tui_draw_composer's horizontal-scroll window. Called after any paint that
-# left the cursor elsewhere (the feed, the spinner) so the cursor always returns to
-# where you type — never stranded on the spinner / hint row.
-fn tui_park_cursor() {
-    var avail = _tui_cols - 6;
-    if (avail < 1) { avail = 1; }
-    var start = 0;
-    if (led_cur() > avail) { start = led_cur() - avail; }
-    var col = 6 + (led_cur() - start);
-    if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_composer_row(_tui_rows), col);
+# tui_draw_rule: paint a faint full-width horizontal rule (─) on `row` (0.11.9). Chrome
+# (emit_raw); the per-column glyph is the 3-byte U+2500, each one visible column wide, so
+# `cols` of them fill the width. Painted under the status bar + above the composer.
+fn tui_draw_rule(row, cols) {
+    tty_move(row, 1);
+    tty_clear_to_eol();
+    emit_raw(ui_sgr(ROLE_FAINT));
+    var i = 0;
+    while (i < cols) { emit_raw("─"); i = i + 1; }
+    emit_raw(ui_reset());
     return 0;
 }
 
-# tui_draw_composer: redraw the composer line (prompt + buffer) and park the cursor
-# at the edit position. The {(o> prompt is preserved as the composer prompt.
-fn tui_draw_composer() {
-    var row = tui_composer_row(_tui_rows);
-    tty_move(row, 1);
-    tty_clear_to_eol();
-    ui_emit(ROLE_ACCENT, "{(o> ");
-    # clamp to the visible width with a horizontal-scroll window ending at the cursor,
-    # so a long line can't wrap onto the hint/status rows (they sit OUTSIDE the feed
-    # band and would otherwise be scribbled).
+# _comp_row_hstart: horizontal-scroll start (in bytes) for composer logical line `li`.
+# The CURSOR's line scrolls to keep the cursor visible (a window ending at the cursor);
+# every other line anchors at column 0. Shared by draw + park so they cannot drift.
+fn _comp_row_hstart(li) {
+    if (li != led_cursor_line()) { return 0; }
     var avail = _tui_cols - 6;
     if (avail < 1) { avail = 1; }
-    var start = 0;
-    if (led_cur() > avail) { start = led_cur() - avail; }
-    var shown = led_len() - start;
-    if (shown > avail) { shown = avail; }
-    if (shown > 0) { emit_n(led_buf() + start, shown); }
+    var cc = led_cursor_col();
+    if (cc > avail) { return cc - avail; }
+    return 0;
+}
+
+# tui_park_cursor: move the cursor to the composer's edit position. Multi-line (0.11.9):
+# the row is the cursor's logical line within the visible vertical window; the column
+# mirrors tui_draw_composer's per-line horizontal-scroll window. Called after any paint
+# that left the cursor elsewhere (the feed, the spinner) so it returns to where you type.
+fn tui_park_cursor() {
+    var lines = led_lines();
+    var H = tui_composer_height(_tui_rows, lines, _tui_show_status);
+    var top = tui_composer_top(_tui_rows, lines, _tui_show_status);
+    var cl = led_cursor_line();
+    var vf = _comp_vscroll_first(cl, lines, H);
+    var start = _comp_row_hstart(cl);
+    var col = 6 + (led_cursor_col() - start);
+    if (col > _tui_cols) { col = _tui_cols; }
+    tty_move(top + (cl - vf), col);
+    return 0;
+}
+
+# tui_draw_composer: redraw the composer block (one physical row per logical line, over a
+# cursor-anchored vertical window) and park the cursor. The {(o> prompt is on the first
+# row; continuation rows align content under it. Each line clamps to the width with a
+# horizontal-scroll window so a long line never wraps onto the rule/hint rows.
+fn tui_draw_composer() {
+    var lines = led_lines();
+    var H = tui_composer_height(_tui_rows, lines, _tui_show_status);
+    var top = tui_composer_top(_tui_rows, lines, _tui_show_status);
+    var vf = _comp_vscroll_first(led_cursor_line(), lines, H);
+    var avail = _tui_cols - 6;
+    if (avail < 1) { avail = 1; }
+    var p = 0;
+    while (p < H) {
+        var li = vf + p;
+        tty_move(top + p, 1);
+        tty_clear_to_eol();
+        if (p == 0) { ui_emit(ROLE_ACCENT, "{(o> "); } else { emit("     "); }   # prompt / continuation indent
+        if (li < lines) {
+            var start = _comp_row_hstart(li);
+            var shown = led_line_len(li) - start;
+            if (shown > avail) { shown = avail; }
+            if (shown > 0) { emit_n(led_buf() + led_line_start(li) + start, shown); }
+        }
+        p = p + 1;
+    }
     tui_park_cursor();
     return 0;
 }
@@ -511,7 +696,7 @@ var PAINT_CAP = 2112;        # FEED_LINE_CAP (2048) + headroom for the carry + d
 fn feed_repaint() {
     if (_paint_buf == 0) { _paint_buf = alloc(PAINT_CAP); }
     var top = tui_feed_top(_tui_show_status);
-    var bot = tui_feed_bot(_tui_rows);
+    var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
     # 0.9.3: when the tree pane is shown, the feed lives in the RIGHT column
@@ -577,7 +762,7 @@ fn feed_repaint() {
 # rows, not logical lines — a wide line spans several); a new turn resets it to 0
 # (tui_run_line) so fresh output is always visible.
 fn _tui_feed_rows() {
-    var r = tui_feed_bot(_tui_rows) - tui_feed_top(_tui_show_status) + 1;
+    var r = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status) - tui_feed_top(_tui_show_status) + 1;
     if (r < 1) { r = 1; }
     return r;
 }
@@ -628,7 +813,7 @@ fn tui_confirm_begin() {
     _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt
     tty_move(tui_hint_row(_tui_rows), 1); tty_clear_to_eol();
     out_mode_set(OUT_FD1);
-    tty_move(tui_composer_row(_tui_rows), 1);
+    tty_move(tui_composer_bot(_tui_rows), 1);
     tty_clear_to_eol();
     return 0;
 }
@@ -709,7 +894,7 @@ fn tui_draw_tree() {
     if (_tui_show_tree == 0) { return 0; }
     var tw = tui_tree_w(_tui_cols, 1);
     var top = tui_feed_top(_tui_show_status);
-    var bot = tui_feed_bot(_tui_rows);
+    var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
     var total = ftree_count();
@@ -771,9 +956,31 @@ fn _tui_tree_key(key) {
     return 0;
 }
 
-# tui_relayout: re-read the terminal size and repaint the whole frame (status bar,
-# feed, hint, composer). No scroll region — the feed is self-managed now. The
-# composer is drawn LAST so the cursor parks at the edit position.
+# tui_repaint_body: repaint the whole frame at the CURRENT geometry (no winsize read) —
+# status bar, the two faint rules, feed, tree, hint, composer. No tty_clear (every band
+# issues per-row clear_to_eol), so it is also the no-flash repaint for a composer height
+# change (a newline grew/shrank the composer, resizing the feed band). The composer is
+# drawn LAST so the cursor parks at the edit position.
+fn tui_repaint_body() {
+    var lines = led_lines();
+    # 0.11.3: a width OR composer-height change re-flows the document / resizes the band,
+    # so the stored PHYSICAL-row scroll offset can exceed the new height — clamp it before
+    # painting (the painter also floors start at 0, but clamping keeps feed_scroll() honest
+    # so the next scroll key resumes from a valid offset).
+    var m = _tui_feed_maxscroll();
+    if (feed_scroll() > m) { feed_scroll_set(m); }
+    tui_draw_status();
+    if (_tui_show_status == 1) { tui_draw_rule(tui_sep_top_row(), _tui_cols); }   # rule under the status bar
+    feed_repaint();
+    tui_draw_tree();
+    tui_draw_rule(tui_sep_bottom_row(_tui_rows, lines, _tui_show_status), _tui_cols);   # rule above the composer
+    tui_draw_hint();
+    tui_draw_composer();
+    return 0;
+}
+
+# tui_relayout: re-read the terminal size, then repaint the whole frame. No scroll region
+# — the feed is self-managed now.
 fn tui_relayout() {
     var rr[8];
     var cc[8];
@@ -782,18 +989,26 @@ fn tui_relayout() {
         if (load64(&rr) > 4) { _tui_rows = load64(&rr); }
         if (load64(&cc) > 0) { _tui_cols = load64(&cc); }
     }
-    # 0.11.3: a width change re-flows the soft-wrapped document, so the stored
-    # PHYSICAL-row scroll offset can now exceed the document height — clamp it before
-    # painting (the painter also floors start at 0, but clamping keeps feed_scroll()
-    # itself honest so the next scroll key resumes from a valid offset). Cross-width
-    # scroll position is approximate (a physical offset, not a logical anchor).
-    var m = _tui_feed_maxscroll();
-    if (feed_scroll() > m) { feed_scroll_set(m); }
-    tui_draw_status();
-    feed_repaint();
-    tui_draw_tree();
-    tui_draw_hint();
-    tui_draw_composer();
+    tui_repaint_body();
+    return 0;
+}
+
+# tui_cur_composer_height: the composer's current height at the live geometry — the
+# before/after probe for the redraw gate (wraps the pure tui_composer_height over the
+# _tui_rows/_tui_show_status globals, so callers above those declarations can use it).
+fn tui_cur_composer_height() { return tui_composer_height(_tui_rows, led_lines(), _tui_show_status); }
+
+# tui_after_edit: redraw after a composer edit, given the composer height BEFORE the edit.
+# If a newline was inserted/removed (height changed), the feed band resized -> reflow the
+# whole body (tui_repaint_body, no tty_clear -> no flash). Otherwise the cheap partial
+# redraw (hint + composer) suffices — ordinary typing never touches the feed.
+fn tui_after_edit(before_h) {
+    if (tui_cur_composer_height() != before_h) {
+        tui_repaint_body();
+    } else {
+        tui_draw_hint();
+        tui_draw_composer();
+    }
     return 0;
 }
 
@@ -882,6 +1097,17 @@ fn tui_events_teardown() {
     return 0;
 }
 
+# tui_kitty_enable / tui_kitty_disable: push/pop the kitty keyboard protocol with the
+# "disambiguate escape codes" flag (CSI > 1 u / CSI < u). With it active, Shift+Enter
+# arrives as a distinct CSI-u event (CSI 13;2u -> KEY_NEWLINE) on terminals that support
+# it (kitty/ghostty/wezterm/foot/recent alacritty/konsole) — and the Ctrl-combos arrive
+# as CSI-u too (decoded back in _tui_kitty_u). Terminals that don't understand the push
+# ignore it, so they stay fully legacy and Shift+Enter == Enter there (Alt+Enter is the
+# universal newline fallback). Chrome (emit_raw): pushed after alt-screen enter, popped
+# before alt-screen leave on every exit path so the keyboard mode is always restored.
+fn tui_kitty_enable() { emit_raw("\x1b[>1u"); return 0; }
+fn tui_kitty_disable() { emit_raw("\x1b[<u"); return 0; }
+
 # tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / self-managed
 # feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
 # is interactive terminal control — verify on a live TTY (THOTH_TIER=rich), not piped.
@@ -896,6 +1122,7 @@ fn tui_loop() {
     _sigint_fd = tty_open_signalfd(2);   # block SIGINT (mask bit for signal 2) for the session
     _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize)
     tty_alt_enter();
+    tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
@@ -907,7 +1134,18 @@ fn tui_loop() {
     feed_flush_pending();
     ui_emit(ROLE_MUTED, persona_tagline());
     feed_flush_pending();
-    ui_emit(ROLE_GREEN, "READY"); ui_emit(ROLE_FAINT, " — type a task, or /help. Ctrl-X exits.");
+    # 0.11.9: the greeting states the LIVE inference status (was a hardcoded "READY"). Derived
+    # from the hoosh seam's capability effect (src/seams.cyr) — wired (remote) => ready;
+    # absent => no model turns, local commands only. Honest, never faked. The "type a task"
+    # guidance moves to its own line below.
+    ui_emit(ROLE_FAINT, "Status: ");
+    if (seam_cap_state(SEAM_HOOSH) == CAP_FULL) {
+        ui_emit(ROLE_GREEN, "ready");
+    } else {
+        ui_emit(ROLE_RED, "hoosh absent — no model turns; local commands only (set [hoosh].url)");
+    }
+    feed_flush_pending();
+    ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
     # 0.11.2: bind opt-in input-history persistence ([history].file). Loads prior lines
     # into the recall ring and announces honestly into the feed — the active path + how
@@ -969,17 +1207,20 @@ fn tui_loop() {
             } elif (key == KEY_PGDN) { _tui_feed_scroll_by(0 - (_tui_feed_rows() - 1));
             } elif (_tui_focus == FOCUS_TREE) {
                 _tui_tree_key(key);    # tree navigation (↑↓→← Enter; a char hands focus back)
-            } elif (((key == KEY_UP) || (key == KEY_DOWN)) && ((inhist_nav_at_draft() == 0) || (tui_palette_active() == 0))) {
-                # composer focus: Up/Down recall input history (0.11.1). Gated on the
-                # slash palette being CLOSED at the start of recall (so Up/Down stay
-                # free while composing a /command); once navigating, continue regardless
-                # so a recalled "/cmd" (which re-opens the palette) doesn't strand you.
-                # ORDERING IS LOAD-BEARING: this elif must stay AFTER the FOCUS_TREE
-                # branch — Up/Down are also the tree's nav keys, and at rest
-                # inhist_nav_at_draft()==1 makes this condition true, so it would steal
-                # tree nav if hoisted above the tree branch.
-                _tui_recall_key(key);
+            } elif ((key == KEY_UP) || (key == KEY_DOWN)) {
+                # composer focus (the FOCUS_TREE branch above already took tree nav). FIRST
+                # move the cursor BETWEEN composer lines (multi-line draft, 0.11.9); only at
+                # the top/bottom EDGE fall through to input-history recall (0.11.1), which
+                # stays gated on the slash palette being closed at the start (Up/Down free
+                # while composing a /command). led_up/led_down return 1 if moved, 0 at the
+                # edge. ORDERING IS LOAD-BEARING: this elif must stay AFTER the FOCUS_TREE
+                # branch — Up/Down are also the tree's nav keys.
+                var moved = 0;
+                if (key == KEY_UP) { moved = led_up(); } else { moved = led_down(); }
+                if (moved == 1) { tui_draw_composer(); }   # cursor moved a line; height unchanged
+                elif ((inhist_nav_at_draft() == 0) || (tui_palette_active() == 0)) { _tui_recall_key(key); }
             } else {
+                var before_h = tui_composer_height(_tui_rows, led_lines(), _tui_show_status);
                 var act = led_feed(key, _tui_key_ch);
                 if (act == ACT_SUBMIT) {
                     var stored = inhist_push(led_buf(), led_len());   # record (ignoredups, skip-empty)
@@ -987,7 +1228,7 @@ fn tui_loop() {
                     inhist_nav_reset();                  # next Up starts from the newest again
                     var line = _tui_copy_line();   # snapshot the line before clearing
                     led_reset();
-                    tui_draw_composer();           # composer empties IMMEDIATELY, before dispatch
+                    tui_repaint_body();            # composer empties IMMEDIATELY (+ feed reflows if it was multi-line)
                     var keep = tui_run_line(line);
                     if (inhist_persist_broke() == 1) {   # 0.11.2: a save failed mid-session -> announce ONCE
                         inhist_persist_broke_ack();
@@ -1001,13 +1242,13 @@ fn tui_loop() {
                 } elif (act == ACT_EOF) {
                     _tui_running = 0;
                 } else {
-                    tui_draw_hint();        # refresh the slash palette for the new buffer
-                    tui_draw_composer();
+                    tui_after_edit(before_h);   # a newline grew/shrank the composer -> reflow; else cheap redraw
                 }
             }
         }
     }
     # teardown — restore the terminal on every exit path.
+    tui_kitty_disable();            # 0.11.9: pop the kitty keyboard protocol (restore legacy keys)
     tty_cursor_show();
     tty_cooked();
     _tui_scroll_region(1, _tui_rows);

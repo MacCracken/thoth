@@ -2,6 +2,50 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.9] - 2026-06-26
+
+**TUI polish — faint rules, a multi-line composer, a live status line.** Three rough edges in
+the T2 rich-TUI, all TUI-only (the line-mode REPL / piped / one-shot floor stays byte-identical
+— a one-line composer renders exactly as before). (1) A faint full-width rule (`─`) divides the
+status bar from the feed and the feed from the input prompt. (2) The composer is now multi-line:
+**Shift+Enter** (via the kitty keyboard protocol, on terminals that support it) and **Alt+Enter**
+(universal, legacy `ESC CR`) insert a newline; the composer grows upward, the feed shrinks, plain
+Enter still submits the whole buffer, and Up/Down navigate between lines (falling through to
+input-history recall at the top/bottom edge). (3) The hardcoded `READY` greeting is now `Status:
+ready` when hoosh is wired, or `Status: hoosh absent — …` when it isn't (derived from the live
+seam state, never faked); the "type a task" guidance moved to its own line below. 658 unit
+assertions (+59). Pin unchanged (6.2.43).
+
+### Added
+- **Faint horizontal rules** (`tui_draw_rule`, `src/tui.cyr`) under the status bar (suppressed
+  when the status bar is hidden via Ctrl-G) and above the composer.
+- **Multi-line composer** — `KEY_NEWLINE` inserts `\n`; pure `led_*` line helpers (`led_lines`,
+  `led_cursor_line`/`_col`, `led_line_start`/`_len`, `led_up`/`led_down`); a cursor-anchored
+  vertical window (`_comp_vscroll_first`) with one logical line per physical row + per-line
+  horizontal scroll. The composer height (clamped to `COMPOSER_MAX_ROWS`, always leaving
+  `MIN_FEED` feed rows) tracks the line count; the feed band reflows on a height change via the
+  `tui_after_edit` redraw gate (no flash — `tui_repaint_body`, no `tty_clear`).
+- **Shift+Enter / Alt+Enter newline decode** — the kitty keyboard protocol is pushed
+  (`CSI > 1 u`, disambiguate) on TUI entry and popped (`CSI < u`) on every exit; a unified CSI
+  parser + `_tui_csi_final`/`_tui_kitty_u` decode `CSI 13;<mod>u` → newline and the Ctrl-combos
+  (which kitty remaps to CSI-u) back to their keys, so exit/toggles + Shift-arrow feed-scroll
+  keep working under the protocol. Terminals that don't support it ignore the push and use the
+  universal Alt+Enter fallback.
+- **Live status greeting** — `Status: ready` / `Status: hoosh absent …`, derived from
+  `seam_cap_state(SEAM_HOOSH)` (`src/seams.cyr`); the guidance line sits below it.
+
+### Changed
+- Layout geometry (`src/tui.cyr`) is now pure over explicit `(rows, lines, show)` params
+  (mirroring `tui_tree_w`/`tui_feed_width`): `tui_feed_top` → 3 when the status bar shows;
+  `tui_feed_bot`/`tui_composer_top`/`tui_composer_height`/`tui_sep_bottom_row` take the composer
+  line count. `tui_relayout` now delegates to `tui_repaint_body`.
+
+### Fixed
+- **Multi-line input-history persistence** (`src/inhist.cyr`) — embedded newlines and literal
+  backslashes are escaped on write (`\` → `\\`, newline → `\n`) and decoded on read, so a
+  multi-line entry no longer shatters the line-oriented `[history].file` into bogus entries. The
+  decoder is backward-compatible (a stray `\X` in a pre-0.11.9 file is preserved verbatim).
+
 ## [0.11.8] - 2026-06-26
 
 **Shell completion (0.11.x terminal-citizen line).** `thoth --completion <shell>` prints a

@@ -899,6 +899,34 @@ fn test_inhist_persist() {
     assert_eq(inhist_count(), 3, "gamma persisted -> three on reload");
     assert(streq(inhist_entry_ptr(2), "gamma"), "newest reloaded = gamma");
 
+    # multi-line + backslash round-trip (0.11.9): embedded newlines (from the multi-line
+    # composer) and literal backslashes survive save->reload — escaped on write, decoded on
+    # read — instead of shattering the line-oriented file into bogus entries.
+    inhist_init();
+    var mpath = "build/.thoth_hist_ml.tmp";
+    file_write_all(mpath, "", 0);                # start empty (isolate from a prior run's file)
+    inhist_persist_init(mpath);                  # bind (empty -> ring empty)
+    inhist_push("a\nb", 3);                      # an embedded newline (a multi-line entry)
+    inhist_push("c\\d", 3);                      # a literal backslash
+    inhist_persist_save();
+    inhist_init();
+    _inhist_load_file(mpath);
+    assert_eq(inhist_count(), 2, "two entries round-trip (no shatter on embedded newline)");
+    assert_eq(inhist_entry_len(0), 3, "multi-line entry length intact (a<nl>b)");
+    assert(streq(inhist_entry_ptr(0), "a\nb"), "embedded newline preserved");
+    assert(streq(inhist_entry_ptr(1), "c\\d"), "literal backslash preserved");
+
+    # _inhist_escape_into (pure): '\' -> '\\', newline -> '\' 'n', plain bytes pass through.
+    var ebuf[32];
+    var en = _inhist_escape_into(&ebuf, 32, "a\nb", 3);
+    store8(&ebuf + en, 0);
+    assert_eq(en, 4, "3-byte 'a<nl>b' escapes to 4 bytes");
+    assert(streq(&ebuf, "a\\nb"), "newline encodes as backslash-n");
+    var en2 = _inhist_escape_into(&ebuf, 32, "c\\d", 3);
+    store8(&ebuf + en2, 0);
+    assert_eq(en2, 4, "3-byte 'c\\d' escapes to 4 bytes");
+    assert(streq(&ebuf, "c\\\\d"), "backslash encodes as double backslash");
+
     # degrade-closed: an unwritable path -> persistence stays OFF (-1); the caller announces.
     inhist_init();
     var bad = inhist_persist_init("build/.no_such_dir_xyz/hist.tmp");
@@ -1356,13 +1384,21 @@ fn test_tui() {
     assert_eq(led_feed(KEY_EOF, 0), ACT_EOF, "real stdin EOF -> exit");
     led_feed(KEY_CHAR, 122);                                    # 'z' (non-empty line)
     assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
-    # geometry
+    # geometry (0.11.9: faint rules + dynamic multi-line composer; pure (rows,lines,show))
     assert_eq(tui_status_row(), 1, "status bar at row 1");
-    assert_eq(tui_composer_row(24), 23, "composer just above the hint row");
     assert_eq(tui_hint_row(24), 24, "keybinding hint at the last row");
-    assert_eq(tui_feed_top(1), 2, "feed starts below a shown status bar");
-    assert_eq(tui_feed_top(0), 1, "feed reclaims row 1 when status hidden");
-    assert_eq(tui_feed_bot(24), 22, "feed bottom sits above the composer + hint");
+    assert_eq(tui_sep_top_row(), 2, "top rule under the status bar");
+    assert_eq(tui_composer_bot(24), 23, "composer block bottom just above the hint");
+    assert_eq(tui_composer_top(24, 1, 1), 23, "1-line composer top == bottom (one row)");
+    assert_eq(tui_composer_top(24, 2, 1), 22, "a 2-line composer grows up one row");
+    assert_eq(tui_sep_bottom_row(24, 1, 1), 22, "bottom rule above a 1-line composer");
+    assert_eq(tui_feed_top(1), 3, "feed starts below the status bar + its rule");
+    assert_eq(tui_feed_top(0), 1, "feed reclaims rows 1-2 when status hidden");
+    assert_eq(tui_feed_bot(24, 1, 1), 21, "feed bottom above the bottom rule + 1-line composer");
+    assert_eq(tui_feed_bot(24, 2, 1), 20, "a 2-line composer pushes the feed bottom up one");
+    assert_eq(tui_composer_height(24, 1, 1), 1, "one logical line -> one composer row");
+    assert_eq(tui_composer_height(24, 20, 1), 8, "composer height clamps to COMPOSER_MAX_ROWS");
+    assert(tui_composer_max(8, 0) > tui_composer_max(8, 1), "hidden status frees more composer rows (below the clamp)");
     # slash-command palette matchers
     assert_eq(_buf_has_space("/seams x", 8), 1, "space detected -> command token complete");
     assert_eq(_buf_has_space("/se", 3), 0, "no space -> still typing the token");
@@ -1380,6 +1416,70 @@ fn test_tui() {
     led_reset();
     led_feed(KEY_CHAR, 104);                                    # "h"
     assert_eq(tui_palette_active(), 0, "palette inactive for non-slash input");
+    # multi-line composer (0.11.9): KEY_NEWLINE inserts '\n'; logical-line + cursor geometry.
+    led_reset();
+    assert_eq(led_lines(), 1, "empty buffer is one logical line");
+    led_feed(KEY_CHAR, 97);                                     # "a"
+    led_feed(KEY_NEWLINE, 0);                                   # newline
+    led_feed(KEY_CHAR, 98); led_feed(KEY_CHAR, 99);            # "bc" -> "a\nbc"
+    assert_eq(led_len(), 4, "a + newline + bc = 4 bytes");
+    assert_eq(led_lines(), 2, "one newline -> two logical lines");
+    assert_eq(led_cursor_line(), 1, "cursor on the second logical line");
+    assert_eq(led_cursor_col(), 2, "cursor at column 2 of 'bc'");
+    assert_eq(led_line_len(0), 1, "line 0 'a' has length 1");
+    assert_eq(led_line_len(1), 2, "line 1 'bc' has length 2");
+    assert_eq(led_line_start(1), 2, "line 1 starts after 'a' + newline");
+    # Up/Down move between lines (1) and report the top/bottom edge (0) so recall takes over.
+    assert_eq(led_up(), 1, "Up moves to the first line");
+    assert_eq(led_cursor_line(), 0, "now on line 0");
+    assert_eq(led_cursor_col(), 1, "column clamps to line 0's length (1)");
+    assert_eq(led_up(), 0, "Up on the first line is an edge");
+    assert_eq(led_down(), 1, "Down moves back down a line");
+    assert_eq(led_down(), 0, "Down on the last line is an edge");
+    led_feed(KEY_KILL, 0);
+    assert_eq(led_lines(), 1, "Ctrl-U clears a multi-line buffer to one line");
+    # backspace over a newline joins the two logical lines
+    led_reset();
+    led_feed(KEY_CHAR, 97); led_feed(KEY_NEWLINE, 0); led_feed(KEY_CHAR, 98);   # "a\nb"
+    assert_eq(led_lines(), 2, "'a' newline 'b' is two lines");
+    led_feed(KEY_LEFT, 0);                                      # cursor between the newline and 'b'
+    led_feed(KEY_BACKSPACE, 0);                                 # remove the newline
+    assert_eq(led_lines(), 1, "backspace over the newline joins the lines");
+    assert(streq(led_buf(), "ab"), "joined buffer is 'ab'");
+    # a newline in the buffer closes the slash palette (multi-line is never a /command)
+    led_reset();
+    led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 115);           # "/s"
+    assert_eq(tui_palette_active(), 1, "palette active for '/s'");
+    led_feed(KEY_NEWLINE, 0);                                  # "/s" + newline
+    assert_eq(tui_palette_active(), 0, "a newline closes the palette");
+    led_reset();
+
+    # key decode (0.11.9): the pure CSI dispatch. Legacy forms keep their meaning; the kitty
+    # CSI-u 'u' final maps Shift+Enter -> newline and the Ctrl-combos back to their keys.
+    test_group("key decode: CSI + kitty CSI-u (tui.cyr)");
+    assert_eq(_tui_csi_final(65, 0, 0 - 1), KEY_UP, "CSI A -> Up");
+    assert_eq(_tui_csi_final(66, 0, 0 - 1), KEY_DOWN, "CSI B -> Down");
+    assert_eq(_tui_csi_final(67, 0, 0 - 1), KEY_RIGHT, "CSI C -> Right");
+    assert_eq(_tui_csi_final(68, 0, 0 - 1), KEY_LEFT, "CSI D -> Left");
+    assert_eq(_tui_csi_final(72, 0, 0 - 1), KEY_HOME, "CSI H -> Home");
+    assert_eq(_tui_csi_final(70, 0, 0 - 1), KEY_END, "CSI F -> End");
+    assert_eq(_tui_csi_final(65, 1, 2), KEY_SCROLL_UP, "CSI 1;2A (Shift+Up, parsed mod 2) -> feed scroll up");
+    assert_eq(_tui_csi_final(66, 1, 2), KEY_SCROLL_DOWN, "CSI 1;2B (Shift+Down, parsed mod 2) -> feed scroll down");
+    assert_eq(_tui_csi_final(65, 1, 0 - 1), KEY_UP, "CSI A (no modifier) -> plain Up, not scroll");
+    assert_eq(_tui_csi_final(126, 5, 0 - 1), KEY_PGUP, "CSI 5~ -> PageUp");
+    assert_eq(_tui_csi_final(126, 6, 2), KEY_PGDN, "CSI 6;2~ (parsed mod 2) -> PageDown (modifier ignored)");
+    assert_eq(_tui_csi_final(117, 13, 2), KEY_NEWLINE, "CSI 13;2u (Shift+Enter) -> newline");
+    assert_eq(_tui_csi_final(117, 13, 0 - 1), KEY_ENTER, "CSI 13u (bare Enter) -> submit");
+    assert_eq(_tui_kitty_u(13, 3), KEY_NEWLINE, "kitty Alt+Enter (13;3) -> newline");
+    assert_eq(_tui_kitty_u(120, 5), KEY_CTRLC, "kitty Ctrl-X (120;5) -> exit");
+    assert_eq(_tui_kitty_u(99, 5), KEY_CTRLC, "kitty Ctrl-C (99;5) -> exit");
+    assert_eq(_tui_kitty_u(117, 5), KEY_KILL, "kitty Ctrl-U (117;5) -> kill line");
+    assert_eq(_tui_kitty_u(103, 5), KEY_TOGGLE_STATUS, "kitty Ctrl-G (103;5) -> toggle status");
+    assert_eq(_tui_kitty_u(98, 5), KEY_TOGGLE_TREE, "kitty Ctrl-B (98;5) -> toggle tree");
+    assert_eq(_tui_kitty_u(116, 5), KEY_TOGGLE_THEME, "kitty Ctrl-T (116;5) -> toggle theme");
+    assert_eq(_tui_kitty_u(97, 5), KEY_HOME, "kitty Ctrl-A (97;5) -> Home");
+    assert_eq(_tui_kitty_u(101, 5), KEY_END, "kitty Ctrl-E (101;5) -> End");
+    assert_eq(_tui_kitty_u(27, 0 - 1), KEY_NONE, "kitty Esc (27) -> ignored");
     return 0;
 }
 

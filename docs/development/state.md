@@ -7,6 +7,41 @@
 
 ## Version
 
+**0.11.9** — TUI polish: faint rules + multi-line composer + live status line, 2026-06-26. Three
+T2-only fixes (the line REPL / piped / one-shot floor is byte-identical — `tui_read_key`, the
+composer, and the greeting only run inside `tui_loop`; a one-line composer renders exactly as
+before). **(1) Faint rules** (`tui_draw_rule`): a full-width `─` under the status bar (suppressed
+when status hidden) and above the composer. **(2) Multi-line composer**: `KEY_NEWLINE` inserts
+`\n`; the composer grows UPWARD (one logical line per physical row, no in-composer soft-wrap),
+the feed shrinks, plain Enter submits the whole buffer. Newline decode has TWO paths — **Alt+Enter**
+(universal, legacy `ESC CR`/`LF`) and **Shift+Enter** via the kitty keyboard protocol (pushed
+`CSI > 1 u` after alt-screen enter, popped `CSI < u` on every exit). Verified against the kitty
+spec: disambiguate keeps text keys, Tab, Backspace, plain Enter, unmodified arrows, Home/End/PgUp/
+PgDn, and the **Shift-arrow feed-scroll keys (`CSI 1;2A/B`)** legacy — only Esc + Ctrl/Alt-combos
+move to CSI-u, so a unified CSI parser + `_tui_csi_final`/`_tui_kitty_u` decode `CSI 13;<mod>u`→
+newline and the Ctrl-combos (`120;5`→exit, `103;5`→status, `98;5`→tree, `116;5`→theme, `117;5`→kill,
+`97/101;5`→Home/End) back to their keys (or they'd break under kitty). Geometry is rewritten PURE
+over `(rows, lines, show)` params (mirrors `tui_tree_w`/`tui_feed_width`): `tui_feed_top`→3 when
+status shown; height = `clamp(led_lines(), 1, COMPOSER_MAX_ROWS)` always leaving `MIN_FEED` feed
+rows; a cursor-anchored vertical window (`_comp_vscroll_first`) + per-line horizontal scroll, with
+`tui_draw_composer`/`tui_park_cursor` sharing `_comp_row_hstart` so they can't drift. A height-delta
+redraw gate (`tui_after_edit` → `tui_repaint_body`, no `tty_clear` = no flash) reflows the feed when
+a newline grows/shrinks the composer — wired into the input, submit, and recall paths. Up/Down
+navigate composer lines (`led_up`/`led_down`) and fall through to input-history recall only at the
+top/bottom EDGE. **(3) Live status greeting**: the hardcoded `READY` line became `Status: ready`
+(hoosh wired) / `Status: hoosh absent — no model turns; local commands only (set [hoosh].url)`
+(absent), derived from `seam_cap_state(SEAM_HOOSH)`, never faked; the guidance moved below it.
+**Cross-session fix**: multi-line entries no longer shatter the line-oriented `[history].file` —
+`src/inhist.cyr` escapes `\`→`\\` and newline→`\n` on write and decodes on read (backward-compatible:
+a stray `\X` in a pre-0.11.9 file is preserved verbatim). TWO ASCII-vs-int regressions from the
+parse-to-int CSI refactor, both caught + fixed pre-cut: (a) `_tui_csi_final`'s `~` branch compared
+`p1` against ASCII `53`/`54` (must be `5`/`6`) — caught by the new PageUp/Dn tests; (b) the Shift-
+arrow branches compared `p2` against ASCII `50` (must be `2`) — would have killed Shift+↑/↓ feed
+scroll on every terminal, MISSED by the initial tests (which fed the raw byte `50` the live parser
+never produces) and CAUGHT by the adversarial diff-review (5 dimensions, all converged on it); the
+masking tests were corrected to feed the parsed int. 658 assertions (+59: `test_tui` geometry/
+multi-line/decode + `test_inhist_persist` round-trip). **TUI render verifies only on a real tty
+(`THOTH_TIER=rich`)**, not the harness. Pin unchanged (6.2.43).
 **0.11.8** — shell completion (0.11.x terminal-citizen line), 2026-06-26. `thoth --completion
 <shell>` prints a bash or zsh completion script to stdout (completing thoth's argv flags + a
 filename after `-o`/`--out`) for the non-interactive front door — the interactive REPL
@@ -857,7 +892,16 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `feed_rows_for` (`ceil(vis/width)`, blank = 1 row) and `_feed_total_phys` (the document's
   soft-wrapped height); `feed_scroll()` is redefined to PHYSICAL rows. `feed_repaint`
   (`src/tui.cyr`) now reflows each wide line across rows instead of truncating, and
-  `tui_relayout` clamps the scroll offset on a width change.
+  `tui_relayout` clamps the scroll offset on a width change. **0.11.9 (rules + multi-line
+  composer):** two faint rules (`tui_draw_rule`); the layout geometry is pure over
+  `(rows, lines, show)` (`tui_feed_top`→3, `tui_feed_bot`/`tui_composer_top`/`_height`/
+  `tui_sep_bottom_row`); the composer renders multiple logical lines (`led_lines`/`led_cursor_*`/
+  `led_line_*`/`led_up`/`led_down`, `_comp_vscroll_first` + `_comp_row_hstart`) and grows upward;
+  a height-delta gate (`tui_after_edit`→`tui_repaint_body`) reflows the feed without flashing;
+  `KEY_NEWLINE` (Alt+Enter `ESC CR`, or the kitty `CSI 13;<mod>u` after a `CSI > 1 u` push)
+  inserts a `\n`; the unified CSI parser + `_tui_csi_final`/`_tui_kitty_u` keep every legacy key
+  byte-identical off-protocol and map the kitty Ctrl-combos back on-protocol; the greeting states
+  the live hoosh status (`Status: ready` / `… absent`).
 - `src/ftree.cyr` — **0.9.3**: the file-tree pane. PURE + unit-tested: the tree/feed
   layout geometry (`tui_tree_w`/`tui_feed_left`/`tui_feed_width`) and the flattened-tree
   model (parallel fixed-slot arrays; `_ftree_insert_at` splices children on expand,
@@ -882,7 +926,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `inhist_persist_init`/`_save`/`_active`/`_broke`/`_broke_ack` — degrade-closed (unwritable
   or mid-session write failure announced, never faked). Portable via lib/io.cyr
   (`file_open`/`_read`/`_write`/`_close`); 0600 is the best-effort CREATE mode, never
-  asserted in the UI.
+  asserted in the UI. **0.11.9** adds newline escaping to the persist I/O (`_inhist_escape_into`
+  + the unescaping load loop) so a multi-line entry (from the multi-line composer) round-trips
+  the line-oriented file instead of shattering; backward-compatible (a stray `\X` is preserved).
 - `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
   (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
   `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
@@ -895,7 +941,7 @@ bundle is DCE-unreachable).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **599 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **658 assertions** over the pure logic: M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -967,7 +1013,13 @@ bundle is DCE-unreachable).
   `-o`, reset, `--json` composition — and the writer round-trip + trailing-newline + degrade);
   and **0.11.8** `test_completion` (the `--completion`/`--completions` parse — COMPLETION mode,
   the captured shell, default/reset/short-circuit; the emitted bash/zsh scripts are
-  host-validated by `bash -n`/`zsh -n` + a functional `COMPREPLY` check).
+  host-validated by `bash -n`/`zsh -n` + a functional `COMPREPLY` check);
+  and **0.11.9** the multi-line composer + key decode (`test_tui` — the pure `(rows,lines,show)`
+  geometry incl. the two rules + composer-height clamp, `led_lines`/`led_cursor_line`/`_col`/
+  `led_up`/`led_down` + the backspace-over-newline join, the palette closing on a newline, and
+  `_tui_csi_final`/`_tui_kitty_u` decode of every CSI form incl. `CSI 13;<mod>u`→newline and the
+  Ctrl-combos) and the history newline-escape round-trip (`test_inhist_persist` — a multi-line +
+  backslash entry survives save→reload, plus `_inhist_escape_into` directly).
   Passes
   on `cyrius test`.
 - `tests/thoth.bcyr` — benchmark stub (no-op).
