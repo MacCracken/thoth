@@ -127,37 +127,40 @@ above, deferred to a later ADR.
 
 > Ranked by the 2026-06-25 multi-agent review (each candidate adversarially verified
 > against thoth's hard constraints — Cyrius language, consume-the-spine, degrade-closed,
-> byte-identical floor). `0.11.0` (the one-shot/argv front-door) shipped the keystone and
-> unlocked the JSON-envelope, `-o` tee, and shell-completion riders below.
+> byte-identical floor).
+>
+> **Shipped on this line** (one-line pointers — detail in CHANGELOG/state.md): `0.11.0`
+> the one-shot/argv front-door (the keystone — unlocked the JSON-envelope / `-o` tee /
+> shell-completion riders below); `0.11.1` composer input-history recall (in-memory);
+> `0.11.2` opt-in `[history].file` persistence (its `0600`/`chmod`/`O_NOFOLLOW` follow-ups
+> are tracked under **Deferred** below).
 
-- **Pure-substrate TUI wins (no argv dependency — ship anytime):**
-  - **composer input-history recall** — ✅ **shipped** `0.11.1` (in-memory recall: Up/Down
-    recall submitted lines, gated on palette-closed; `src/inhist.cyr` + the `_tui_recall_*`
-    glue) and `0.11.2` (opt-in `[history].file` persistence — load on startup, save per
-    submit, best-effort `0600` create-mode, degrade-closed; never asserts a file mode it
-    can't guarantee, since `chmod` isn't portable to Windows/AGNOS). A pre-cut review caught
-    a real honesty defect (a hardcoded "0600" announce) — fixed before cut.
-  - **soft-wrap long feed lines** — painter-only reflow instead of today's truncate;
-    declare the glyph-width (CJK/emoji) limitation honestly.
-  - **`[alias]` prompt macros** — resolve only in the `CMD_UNKNOWN_SLASH` gap,
-    expand-then-redispatch, bounded recursion; reuse the bayan parser, no second
-    config format.
-- **Introspection slot:**
-  - **dry-run / request-body preview (`/dry`)** — render thoth's OWN composed
-    request buffer and skip the POST; **never** a hoosh `/preview` endpoint (that
-    would creep toward forking the inference spine).
-  - **JSON-envelope output** — opt-in `{response, model, turns, tokens?, cost?,
-    elapsed?}` per turn for jq/CI; rides 0.11.0; mutes the human-progress stdout.
-- **Riders / conditional:**
-  - **`-o` file tee** — rides 0.11.0 (forces PT_PLAIN for clean bytes; the user's
-    own redirection, so NOT t-ron-gated).
-  - **live spine-health** — traffic-outcome reachability + Ctrl-R refresh; defer the
-    timerfd tick + active probe until idle-drop detection is actually wanted.
-  - **clipboard sink** — effort L; needs an upstream cyrius `process` stdin-feed
-    primitive (Linux/macOS/Windows). **Architecturally impossible on AGNOS** (frozen
-    0-33 ABI: no fork/exec/dup2) → degrades closed there, by ABI, announced.
-  - **shell completion** — deferred until 0.11.0's argv command-table exists (an
-    argv-scoped script can't complete REPL slash commands; the live palette already does).
+**Remaining — pure-substrate TUI wins (no argv dependency — ship anytime):**
+- **soft-wrap long feed lines** — painter-only reflow instead of today's truncate;
+  declare the glyph-width (CJK/emoji) limitation honestly.
+- **`[alias]` prompt macros** — resolve only in the `CMD_UNKNOWN_SLASH` gap,
+  expand-then-redispatch, bounded recursion; reuse the bayan parser, no second
+  config format.
+
+**Remaining — introspection slot:**
+- **dry-run / request-body preview (`/dry`)** — render thoth's OWN composed
+  request buffer and skip the POST; **never** a hoosh `/preview` endpoint (that
+  would creep toward forking the inference spine).
+- **JSON-envelope output** — opt-in `{response, model, turns, tokens?, cost?,
+  elapsed?}` per turn for jq/CI; **unblocked by 0.11.0** (the one-shot front-door is the
+  clean-stdout seam it rides); mutes the human-progress stdout.
+
+**Remaining — riders / conditional:**
+- **`-o` file tee** — **unblocked by 0.11.0** (forces PT_PLAIN for clean bytes; the
+  user's own redirection, so NOT t-ron-gated).
+- **shell completion** — **unblocked by 0.11.0** (its argv command-table now exists);
+  an argv-scoped completion script (the live palette already completes REPL slash
+  commands, so this is for the non-interactive front door).
+- **live spine-health** — traffic-outcome reachability + Ctrl-R refresh; defer the
+  timerfd tick + active probe until idle-drop detection is actually wanted.
+- **clipboard sink** — effort L; needs an upstream cyrius `process` stdin-feed
+  primitive (Linux/macOS/Windows). **Architecturally impossible on AGNOS** (frozen
+  0-33 ABI: no fork/exec/dup2) → degrades closed there, by ABI, announced.
 
 ### 0.12.x — git producer (omit-until-sit; sit-gated)
 
@@ -168,10 +171,39 @@ above, deferred to a later ADR.
   its own minor — unlike the tokens/cost producers, its producer is external — and it
   advances when sit ships `.git/` read-mode.
 
-### Deferred (off the lines)
+### Deferred / known limitations (captured so they're not lost)
+
+> Not on an active line — each is gated on an external/substrate primitive or is
+> low-priority hardening. **None is a correctness bug**; each degrades honestly today.
+> Recorded here so it isn't lost in code comments.
 
 - **`rainbow` theme** — a per-grapheme HSV render mode (a render mode, not a role table);
   needs the **anuenue** lib vendored. Announced not-yet-available, never faked.
+
+- **Input-history file hardening (0.11.2 follow-ups).** The opt-in `[history].file` is
+  best-effort-secured today (a fresh file is created `0600` on POSIX; degrade-closed —
+  an unwritable path / mid-session write failure is announced). The residuals below are
+  documented honestly in `thoth.cyml.example` + `src/inhist.cyr` and wait on portable
+  substrate primitives:
+  - **tighten a pre-existing / loosely-permissioned file to `0600`** — needs a portable
+    `chmod`/`fchmod` wrapper. Today `sys_chmod` is **absent on Windows** and a
+    **frozen-ABI no-op on AGNOS**, so calling it would fork the floor / break the `--win`
+    lane; a fresh file gets `0600` on create but an existing looser file is left as-is
+    (we never silently re-tighten — and never assert a mode we can't enforce). Lands if
+    `lib/io.cyr` grows a portable file-mode wrapper.
+  - **`O_NOFOLLOW` on the history-file open** — needs a portable no-follow bit (the AGNOS
+    `AO_*` open bridge defines none). Defense-in-depth against a symlink redirect on a
+    secret-bearing file; until then it's documented "keep it in an owner-only directory."
+  - **`~`/`$HOME` path expansion + a `histfilesize`-style trim** — the path is used
+    verbatim (no shell `~` expansion) and the file is bounded to the recall ring
+    (128 lines). Minor polish, not blocking.
+
+- **AGNOS substrate gap surfaced by 0.11.2 — `sys_open` carries no create-mode channel.**
+  The agnos open bridge (`lib/io.cyr`, against the frozen 0-33 ABI) maps `O_*`→`AO_*` but
+  has no permission-mode argument, so a file created on AGNOS lands at the kernel default,
+  not `0600`. A documented floor gap (same class as the SIGHUP one); a **candidate to file
+  against the agnos peer** if/when the ABI gains a mode channel. thoth already degrades
+  honestly (never asserts a mode it can't enforce). **Not a v1.0 blocker.**
 
 ## Off the v1.0 path
 
