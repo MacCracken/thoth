@@ -28,9 +28,15 @@ rows; a cursor-anchored vertical window (`_comp_vscroll_first`) + per-line horiz
 redraw gate (`tui_after_edit` → `tui_repaint_body`, no `tty_clear` = no flash) reflows the feed when
 a newline grows/shrinks the composer — wired into the input, submit, and recall paths. Up/Down
 navigate composer lines (`led_up`/`led_down`) and fall through to input-history recall only at the
-top/bottom EDGE. **(3) Live status greeting**: the hardcoded `READY` line became `Status: ready`
-(hoosh wired) / `Status: hoosh absent — no model turns; local commands only (set [hoosh].url)`
-(absent), derived from `seam_cap_state(SEAM_HOOSH)`, never faked; the guidance moved below it.
+top/bottom EDGE. **(3) Live status greeting**: the hardcoded `READY` line now reflects a live reachability
+PROBE — `Status: READY` only when the gateway actually answers, else `Status: hoosh unreachable —
+<url> (is the gateway up?)` (URL set, nothing responds) or `Status: hoosh absent — set [hoosh].url`
+(none). Driven by `hoosh_reachable()` (`src/hoosh.cyr`): a SILENT GET to the models endpoint — any
+HTTP status = reachable (even 404/401 = up), only a transport failure (refused/timeout/DNS) = down;
+reflects what a turn would find (refused localhost = instant; a black-hole remote uses the same
+blocking connect a turn would — bounded-connect is a later refinement). NOT `seam_cap_state` (that
+is config-presence, not liveness — the first cut wrongly showed `ready` with a URL set but the
+gateway down; the user caught it live). `READY` is uppercase, as before.
 **Cross-session fix**: multi-line entries no longer shatter the line-oriented `[history].file` —
 `src/inhist.cyr` escapes `\`→`\\` and newline→`\n` on write and decodes on read (backward-compatible:
 a stray `\X` in a pre-0.11.9 file is preserved verbatim). TWO ASCII-vs-int regressions from the
@@ -901,7 +907,8 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `KEY_NEWLINE` (Alt+Enter `ESC CR`, or the kitty `CSI 13;<mod>u` after a `CSI > 1 u` push)
   inserts a `\n`; the unified CSI parser + `_tui_csi_final`/`_tui_kitty_u` keep every legacy key
   byte-identical off-protocol and map the kitty Ctrl-combos back on-protocol; the greeting states
-  the live hoosh status (`Status: ready` / `… absent`).
+  the live hoosh status via a reachability PROBE (`hoosh_reachable` — silent GET; `Status: READY`
+  only when the gateway answers, else `hoosh unreachable — <url>` / `hoosh absent`).
 - `src/ftree.cyr` — **0.9.3**: the file-tree pane. PURE + unit-tested: the tree/feed
   layout geometry (`tui_tree_w`/`tui_feed_left`/`tui_feed_width`) and the flattened-tree
   model (parallel fixed-slot arrays; `_ftree_insert_at` splices children on expand,

@@ -1134,15 +1134,19 @@ fn tui_loop() {
     feed_flush_pending();
     ui_emit(ROLE_MUTED, persona_tagline());
     feed_flush_pending();
-    # 0.11.9: the greeting states the LIVE inference status (was a hardcoded "READY"). Derived
-    # from the hoosh seam's capability effect (src/seams.cyr) — wired (remote) => ready;
-    # absent => no model turns, local commands only. Honest, never faked. The "type a task"
-    # guidance moves to its own line below.
+    # 0.11.9: the greeting states the LIVE inference status (was a hardcoded "READY"). A real
+    # reachability PROBE (hoosh_reachable — a silent GET to the gateway), not mere config:
+    # READY when the gateway actually answers; otherwise it says so (unreachable when a URL is
+    # set, absent when none is) — honest, never faked. The "type a task" guidance is below.
     ui_emit(ROLE_FAINT, "Status: ");
-    if (seam_cap_state(SEAM_HOOSH) == CAP_FULL) {
-        ui_emit(ROLE_GREEN, "ready");
+    if (hoosh_reachable() == 1) {
+        ui_emit(ROLE_GREEN, "READY");
+    } elif (config_hoosh_configured() == 1) {
+        ui_emit(ROLE_RED, "hoosh unreachable");
+        ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); ui_emit(ROLE_FAINT, " (is the gateway up?)");
     } else {
-        ui_emit(ROLE_RED, "hoosh absent — no model turns; local commands only (set [hoosh].url)");
+        ui_emit(ROLE_RED, "hoosh absent");
+        ui_emit(ROLE_FAINT, " — no model turns; set [hoosh].url");
     }
     feed_flush_pending();
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");

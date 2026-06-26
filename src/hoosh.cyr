@@ -556,6 +556,24 @@ fn hoosh_extract_usage(body, body_len) {
     return _hoosh_usage_total(bayan_json_v_parse_str(body, body_len));
 }
 
+# hoosh_reachable: a SILENT reachability probe (0.11.9). GET the gateway's models endpoint
+# and return 1 iff the TRANSPORT reached the server — any HTTP status counts (even 404/401
+# means the gateway is UP); only a connection failure (refused / timeout / DNS) returns 0.
+# Emits NOTHING (unlike hoosh_list_models), so the TUI greeting can state the LIVE status
+# instead of merely "configured". Uses the same plain sandhi GET + default timeout a real
+# turn uses, so it reflects what a turn would actually find: a refused localhost gateway
+# (the common case) fails instantly; a black-hole REMOTE url uses the same blocking connect
+# a turn would (a bounded-connect probe is a possible later refinement).
+fn hoosh_reachable() {
+    var url = _hoosh_models_url();
+    var h = sandhi_headers_new();
+    var auth = _hoosh_auth_header();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    var r = sandhi_http_get(url, h);
+    if (sandhi_http_err_kind(r) == SANDHI_OK) { return 1; }
+    return 0;
+}
+
 # hoosh_list_models: GET the gateway's model catalog and print each model id,
 # marking the one this session would route to (session override, else config
 # default). Returns 0 on success, negative on transport failure, the HTTP status

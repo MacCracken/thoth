@@ -11,10 +11,11 @@ status bar from the feed and the feed from the input prompt. (2) The composer is
 **Shift+Enter** (via the kitty keyboard protocol, on terminals that support it) and **Alt+Enter**
 (universal, legacy `ESC CR`) insert a newline; the composer grows upward, the feed shrinks, plain
 Enter still submits the whole buffer, and Up/Down navigate between lines (falling through to
-input-history recall at the top/bottom edge). (3) The hardcoded `READY` greeting is now `Status:
-ready` when hoosh is wired, or `Status: hoosh absent — …` when it isn't (derived from the live
-seam state, never faked); the "type a task" guidance moved to its own line below. 658 unit
-assertions (+59). Pin unchanged (6.2.43).
+input-history recall at the top/bottom edge). (3) The hardcoded `READY` greeting now reflects a
+live reachability **probe**: `Status: READY` only when the hoosh gateway actually answers, else
+`Status: hoosh unreachable — <url> (is the gateway up?)` (a URL is set but nothing responds) or
+`Status: hoosh absent — set [hoosh].url` (none configured) — honest, never faked; the "type a
+task" guidance moved to its own line below. 658 unit assertions (+59). Pin unchanged (6.2.43).
 
 ### Added
 - **Faint horizontal rules** (`tui_draw_rule`, `src/tui.cyr`) under the status bar (suppressed
@@ -31,8 +32,11 @@ assertions (+59). Pin unchanged (6.2.43).
   (which kitty remaps to CSI-u) back to their keys, so exit/toggles + Shift-arrow feed-scroll
   keep working under the protocol. Terminals that don't support it ignore the push and use the
   universal Alt+Enter fallback.
-- **Live status greeting** — `Status: ready` / `Status: hoosh absent …`, derived from
-  `seam_cap_state(SEAM_HOOSH)` (`src/seams.cyr`); the guidance line sits below it.
+- **Live status greeting** — `Status: READY` / `hoosh unreachable — <url>` / `hoosh absent`,
+  driven by `hoosh_reachable()` (`src/hoosh.cyr`) — a silent GET to the gateway's models
+  endpoint; any HTTP response means reachable (even 404/401), only a transport failure (refused/
+  timeout/DNS) means down. Reflects what a turn would actually find (a refused localhost gateway
+  fails instantly); the guidance line sits below it.
 
 ### Changed
 - Layout geometry (`src/tui.cyr`) is now pure over explicit `(rows, lines, show)` params
