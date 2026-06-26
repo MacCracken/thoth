@@ -73,6 +73,7 @@ fn main() {
     # --version / --help short-circuit. one_shot_run manages OUT_NULL around the turn.
     if (mode == ONESHOT_VERSION) { oneshot_print_version(); return 0; }
     if (mode == ONESHOT_HELP) { oneshot_print_help(); return 0; }
+    if (mode == ONESHOT_COMPLETION) { return oneshot_print_completion(); }
     if (mode == ONESHOT_RUN) {
         one_shot_set(1);
         var rc = one_shot_run();

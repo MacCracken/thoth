@@ -703,6 +703,43 @@ fn test_oneshot_out() {
     return 0;
 }
 
+# shell completion (0.11.8): the --completion / --completions parse — the COMPLETION mode and
+# the captured shell name (default, reset, position-independent short-circuit). The emitted
+# bash/zsh SCRIPTS are validated by a host smoke (`thoth --completion bash | bash -n`, `zsh -n`,
+# and a functional COMPREPLY check) — shell tools the in-process unit harness lacks.
+fn test_completion() {
+    test_group("shell completion parse (oneshot.cyr)");
+    var av[64];
+    store64(&av + 0, "thoth");
+    # --completion <shell> -> COMPLETION mode + the captured shell name.
+    store64(&av + 8, "--completion");
+    store64(&av + 16, "bash");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_COMPLETION, "--completion <shell> -> COMPLETION");
+    assert(streq(_oneshot_compl_shell, "bash"), "--completion captures the shell name");
+    store64(&av + 16, "zsh");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_COMPLETION, "--completion zsh -> COMPLETION");
+    assert(streq(_oneshot_compl_shell, "zsh"), "shell = zsh");
+    # the --completions alias.
+    store64(&av + 8, "--completions");
+    store64(&av + 16, "bash");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_COMPLETION, "--completions alias -> COMPLETION");
+    # no shell given -> COMPLETION, shell stays 0 (the printer defaults to bash).
+    store64(&av + 8, "--completion");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_COMPLETION, "--completion (no shell) -> COMPLETION");
+    assert_eq(_oneshot_compl_shell, 0, "no shell -> 0 (printer defaults to bash)");
+    # position-independent short-circuit (like --version): a task before --completion still wins.
+    store64(&av + 8, "task");
+    store64(&av + 16, "--completion");
+    store64(&av + 24, "zsh");
+    assert_eq(_oneshot_parse(&av, 4), ONESHOT_COMPLETION, "--completion after a task still short-circuits");
+    assert(streq(_oneshot_compl_shell, "zsh"), "shell captured after a positional");
+    # reset across calls: a plain task clears the captured shell.
+    store64(&av + 8, "hello");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "plain task -> RUN");
+    assert_eq(_oneshot_compl_shell, 0, "no --completion -> shell reset to 0");
+    return 0;
+}
+
 # Multi-turn conversation history (0.5.1): append/accessors, stable copy,
 # pop/clear, and the drop-oldest cap.
 fn test_history() {
@@ -1703,6 +1740,7 @@ fn main() {
     test_oneshot();
     test_json_envelope();
     test_oneshot_out();
+    test_completion();
     test_history();
     test_history_request();
     test_inhist();

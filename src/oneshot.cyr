@@ -29,6 +29,13 @@ var ONESHOT_NONE = 0;       # no argv task -> fall through to the TUI / REPL
 var ONESHOT_RUN = 1;        # run one-shot with the parsed task
 var ONESHOT_VERSION = 2;    # print the version and exit
 var ONESHOT_HELP = 3;       # print usage and exit
+var ONESHOT_COMPLETION = 4; # print a shell-completion script and exit (0.11.8)
+
+# --completion <shell> (0.11.8): a print-and-exit mode (like --version/--help) that emits a
+# bash or zsh completion script for thoth's argv flags + an -o filename to stdout. The shell
+# name is the NEXT argv token (optional -> defaults to bash). The script is static text thoth
+# EMITS (the shell runs it; thoth never executes it) — no spine path, no security surface.
+var _oneshot_compl_shell = 0;   # the shell-name cstr captured from argv, or 0 (-> bash)
 
 # --json / -j (0.11.6): a MODIFIER flag (orthogonal to the mode) — set by the parser, read by
 # one_shot_run to print a single JSON envelope instead of the plain reply. It does NOT force a
@@ -93,6 +100,7 @@ fn _oneshot_task_append_cstr(s) { return _oneshot_task_append(s, strlen(s)); }
 fn _oneshot_parse(args, n) {
     _oneshot_json = 0;                          # reset BEFORE the early return (no stale flag)
     _oneshot_out_path = 0;
+    _oneshot_compl_shell = 0;
     if (n <= 1) { return ONESHOT_NONE; }
     _oneshot_task_reset();
     var positional = 0;
@@ -102,6 +110,11 @@ fn _oneshot_parse(args, n) {
         var a = load64(args + i * 8);
         if ((streq(a, "--version") == 1) || (streq(a, "-v") == 1)) { return ONESHOT_VERSION; }
         if ((streq(a, "--help") == 1) || (streq(a, "-h") == 1)) { return ONESHOT_HELP; }
+        if ((streq(a, "--completion") == 1) || (streq(a, "--completions") == 1)) {
+            # capture the shell (the next token, optional) and short-circuit, like --version
+            if ((i + 1) < n) { _oneshot_compl_shell = load64(args + (i + 1) * 8); }
+            return ONESHOT_COMPLETION;
+        }
         if ((streq(a, "-p") == 1) || (streq(a, "--print") == 1)) { force = 1; }
         elif ((streq(a, "--json") == 1) || (streq(a, "-j") == 1)) { _oneshot_json = 1; }
         elif ((streq(a, "-o") == 1) || (streq(a, "--out") == 1)) {
@@ -178,7 +191,8 @@ fn oneshot_print_help() {
     emit_raw("  thoth --json <task>...    emit one JSON object per turn (for jq/CI)\n");
     emit_raw("  thoth -o <file> <task>... also write the answer to <file> (your redirect)\n");
     emit_raw("  thoth -v, --version       print the version\n");
-    emit_raw("  thoth -h, --help          show this help\n\n");
+    emit_raw("  thoth -h, --help          show this help\n");
+    emit_raw("  thoth --completion <sh>   print a bash|zsh completion script (source it)\n\n");
     emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
     emit_raw("cleanly); progress is suppressed and an action needing authorization is denied\n");
     emit_raw("(configure [tron].policy or run interactively). Config: thoth.cyml.\n\n");
@@ -188,7 +202,77 @@ fn oneshot_print_help() {
     emit_raw("-o / --out <file> tees the answer to <file> as well as stdout (it is your own\n");
     emit_raw("redirection, like `>`, NOT security-gated). The file is created at `>`-like\n");
     emit_raw("default perms (umask-respecting; on AGNOS the mode is dropped) — keep secret-\n");
-    emit_raw("bearing output in an owner-only directory. A write failure exits nonzero.\n");
+    emit_raw("bearing output in an owner-only directory. A write failure exits nonzero.\n\n");
+    emit_raw("--completion (or --completions) <sh> prints a bash or zsh script; source it to\n");
+    emit_raw("tab-complete thoth's flags and -o files (default shell: bash). e.g.\n");
+    emit_raw("  source <(thoth --completion bash)\n");
+    return 0;
+}
+
+# oneshot_print_completion: emit the bash or zsh completion script for `_oneshot_compl_shell`
+# (default bash) to stdout (emit_raw, mode-blind). Returns 0, or 1 for an unsupported shell
+# (announced on stderr — degrade closed, nothing to stdout). The scripts are STATIC TEXT thoth
+# emits; the shell runs them, thoth never executes them (no spine path, no security surface).
+fn oneshot_print_completion() {
+    var sh = _oneshot_compl_shell;
+    if (sh == 0) { sh = "bash"; }
+    if (streq(sh, "bash") == 1) { _completion_bash(); return 0; }
+    if (streq(sh, "zsh") == 1) { _completion_zsh(); return 0; }
+    emit_err("thoth: unsupported shell for --completion: ");
+    emit_err(sh);
+    emit_err(" (try: bash, zsh)\n");
+    return 1;
+}
+
+# _completion_bash: the bash completion script (one emit_raw per line). The flag list MIRRORS
+# _oneshot_parse (the source of truth) — keep in sync. Cyrius literals: `$` is literal; an inner
+# `"` is `\"`; the flag list uses single quotes (literal) to minimize escaping.
+fn _completion_bash() {
+    emit_raw("# thoth bash completion. Source it:  source <(thoth --completion bash)\n");
+    emit_raw("# (flags mirror _oneshot_parse in src/oneshot.cyr; keep in sync)\n");
+    emit_raw("_thoth_complete() {\n");
+    emit_raw("    local cur prev\n");
+    emit_raw("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+    emit_raw("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n");
+    emit_raw("    case \"$prev\" in\n");
+    emit_raw("        -o|--out)\n");
+    emit_raw("            COMPREPLY=( $(compgen -f -- \"$cur\") )\n");
+    emit_raw("            return 0\n");
+    emit_raw("            ;;\n");
+    emit_raw("        --completion|--completions)\n");
+    emit_raw("            COMPREPLY=( $(compgen -W 'bash zsh' -- \"$cur\") )\n");
+    emit_raw("            return 0\n");
+    emit_raw("            ;;\n");
+    emit_raw("    esac\n");
+    emit_raw("    if [[ \"$cur\" == -* ]]; then\n");
+    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j -o --out -v --version -h --help --completion --completions' -- \"$cur\") )\n");
+    emit_raw("    else\n");
+    emit_raw("        COMPREPLY=( $(compgen -f -- \"$cur\") )\n");
+    emit_raw("    fi\n");
+    emit_raw("}\n");
+    emit_raw("complete -F _thoth_complete thoth\n");
+    return 0;
+}
+
+# _completion_zsh: the zsh completion script (source-style — ends with `compdef _thoth thoth`;
+# fpath users prepend a #compdef line, noted in the script). The flag list MIRRORS _oneshot_parse
+# — keep in sync. Cyrius literals: single quotes are literal; the only escape is a trailing
+# line-continuation `\` (written `\\`); the script has no `$` and no inner `"`.
+fn _completion_zsh() {
+    emit_raw("# thoth zsh completion. Source it:  source <(thoth --completion zsh)\n");
+    emit_raw("# (fpath users: prepend a #compdef thoth line and save this as _thoth on your fpath.)\n");
+    emit_raw("# (flags mirror _oneshot_parse in src/oneshot.cyr; keep in sync)\n");
+    emit_raw("_thoth() {\n");
+    emit_raw("    _arguments -s \\\n");
+    emit_raw("        '(-p --print)'{-p,--print}'[use piped stdin as the whole task]' \\\n");
+    emit_raw("        '(--json -j)'{--json,-j}'[emit one JSON object per turn (jq/CI)]' \\\n");
+    emit_raw("        '(-o --out)'{-o,--out}'[tee the answer to a file]:output file:_files' \\\n");
+    emit_raw("        '(-v --version)'{-v,--version}'[print the version]' \\\n");
+    emit_raw("        '(-h --help)'{-h,--help}'[show this help]' \\\n");
+    emit_raw("        '(--completion --completions)'{--completion,--completions}'[print a shell completion script]:shell:(bash zsh)' \\\n");
+    emit_raw("        '*::task:_files'\n");
+    emit_raw("}\n");
+    emit_raw("compdef _thoth thoth\n");
     return 0;
 }
 

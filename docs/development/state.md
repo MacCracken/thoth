@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.11.8** — shell completion (0.11.x terminal-citizen line), 2026-06-26. `thoth --completion
+<shell>` prints a bash or zsh completion script to stdout (completing thoth's argv flags + a
+filename after `-o`/`--out`) for the non-interactive front door — the interactive REPL
+slash-palette already completes commands live. A print-and-exit mode (`ONESHOT_COMPLETION`, like
+`--version`/`--help`): `--completion`/`--completions` short-circuits in `_oneshot_parse`,
+capturing the next argv token as the shell (optional → default bash); an unsupported shell
+degrades closed (stderr + nonzero exit). `oneshot_print_completion` dispatches to
+`_completion_bash`/`_completion_zsh` (`src/oneshot.cyr`), which EMIT static scripts (the shell
+runs them; thoth never executes them — no spine path, no security surface). bash completes flags
++ `-o` filenames + `bash zsh` after `--completion`; zsh uses `_arguments` (source-style, ending
+`compdef _thoth thoth`). The flag lists mirror `_oneshot_parse` (sync comments). **Cyrius
+escaping** (the risk): `$` is literal in Cyrius string literals (confirmed empirically — no
+`\$`); only an inner `"` (→`\"`) and a trailing `\` (→`\\`) escape; bash uses single-quoted
+flags. Verified byte-correct via `bash -n`/`zsh -n` + a functional `COMPREPLY` check. **Two-pass
+review:** design pass settled the escaping + pinned the folds (bash `--completion` arm, zsh
+`compdef` form, `--completions` alias, single-quoted flags); diff pass ZERO must-fixes. 599
+assertions (+11, `test_completion`; scripts host-validated). Pin unchanged (6.2.43).
 **0.11.7** — `-o` / `--out` file tee (0.11.x terminal-citizen line), 2026-06-25. `thoth -o
 <file> <task>` tees the answer (plain reply or the `--json` envelope) to `<file>` (plain bytes)
 AS WELL AS stdout. It is the user's OWN redirection (an argv-token path, like shell `>`), so it
@@ -817,7 +834,12 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   not a positional; does not force a run; reset before the early return) + `_oneshot_write_out`
   (writes the answer + a trailing newline so the file matches stdout, create+truncate at 0644
   via the portable `lib/io.cyr` wrappers; degrades closed). The user's OWN redirection — NOT
-  t-ron-gated (the path is argv-fixed before the turn; the model can't influence it).
+  t-ron-gated (the path is argv-fixed before the turn; the model can't influence it). **0.11.8
+  (shell completion):** the `--completion`/`--completions <shell>` print-and-exit mode
+  (`ONESHOT_COMPLETION`, short-circuits like `--version`, captures the next token as the shell →
+  default bash, unsupported → stderr + nonzero) + `oneshot_print_completion` →
+  `_completion_bash`/`_completion_zsh` (EMIT static scripts; no spine path / security surface;
+  flag lists mirror `_oneshot_parse`).
 - `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
   4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
   evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE

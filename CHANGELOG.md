@@ -2,6 +2,43 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.8] - 2026-06-26
+
+**Shell completion (0.11.x terminal-citizen line).** `thoth --completion <shell>` prints a
+bash or zsh completion script to stdout — completing thoth's argv flags and a filename after
+`-o`/`--out` — for the non-interactive front door (the interactive REPL slash-palette already
+completes commands live). The last clean rider on the 0.11.x line. A print-and-exit mode like
+`--version`/`--help`. 599 unit assertions (+11). Pin unchanged (6.2.43).
+
+### Added
+- **`--completion` / `--completions [shell]`** (`src/oneshot.cyr`, `ONESHOT_COMPLETION`) — a
+  print-and-exit mode that emits a completion script for `bash` (default) or `zsh` and exits.
+  The shell is the next argv token (optional); an unsupported shell degrades closed (stderr +
+  nonzero exit, nothing to stdout). Wired into `main.cyr`'s one-shot dispatch.
+- **`_completion_bash` / `_completion_zsh`** — the emitted scripts (static text thoth prints;
+  the shell runs them, thoth never executes them — no spine path, no security surface). bash
+  completes the flags (`compgen -W`), filenames after `-o`/`--out`, and `bash zsh` after
+  `--completion`; zsh uses `_arguments` (source-style, ending in `compdef _thoth thoth`; fpath
+  users prepend a `#compdef` line, noted in the script). The flag lists mirror `_oneshot_parse`
+  (the source of truth) — sync comments at each site.
+- **`test_completion`** (+11): the `--completion`/`--completions` parse (the COMPLETION mode,
+  the captured shell, the bash default, the position-independent short-circuit, reset across
+  calls). The emitted SCRIPTS are validated by a host smoke (`thoth --completion bash | bash -n`,
+  `zsh -n`, and a functional `COMPREPLY` check) — shell tooling the in-process unit harness lacks.
+- A `--completion` usage row + a sourcing example in `--help`.
+
+### Notes
+- **Cyrius string-literal escaping** (the risk this feature carried): a design pass confirmed
+  empirically that `$` is literal in Cyrius string literals (so no `\$` is needed); only an inner
+  `"` (written `\"`) and a trailing line-continuation `\` (written `\\`) escape, and the bash
+  flag list uses single quotes to minimize it. The emitted scripts were verified byte-correct via
+  `bash -n` / `zsh -n` + a functional completion check.
+- **Two-pass adversarial review (Workflow).** A DESIGN pass (4 lenses, before code) settled the
+  escaping question and pinned the folds applied pre-implementation (a bash `--completion` case
+  arm, the zsh `compdef` registration form, the `--completions` alias in both scripts, single-
+  quoted bash flags, sync comments). A DIFF pass (4 lenses, each finding independently verified,
+  and the host smoke re-run) returned **zero must-fixes**.
+
 ## [0.11.7] - 2026-06-25
 
 **`-o` / `--out` file tee (0.11.x terminal-citizen line).** `thoth -o <file> <task>` tees the
