@@ -2,6 +2,52 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.6] - 2026-06-25
+
+**JSON-envelope output (0.11.x terminal-citizen line).** `thoth --json <task>` runs the
+one-shot turn and prints a single JSON object to stdout instead of the plain reply —
+`{response, model, turns, tokens?, cost?, elapsed_ms}` — for `jq` / CI. It rides the 0.11.0
+one-shot clean-stdout seam (progress already discarded). Opt-in: default one-shot stays plain
+text and the interactive TUI/REPL + the byte-identical floor are untouched. Completes the
+introspection slot. 569 unit assertions (+13). Pin unchanged (6.2.43).
+
+### Added
+- **`--json` / `-j`** (`src/oneshot.cyr`) — a one-shot **modifier** flag (orthogonal to the
+  mode): it does not force a run on its own (a positional task or `-p` is still the run intent)
+  and is parsed as an `elif` on the `-p` chain (so it is never a positional and never breaks
+  `-p`). `thoth --json` alone falls through to the TUI.
+- **`oneshot_json_envelope`** (`src/oneshot.cyr`) — the pure serializer:
+  `{"response":…,"model":…,"turns":N[,"tokens":N][,"cost":"$d.cc"],"elapsed_ms":N}`. The reply
+  is escaped **by length** (an embedded NUL survives as `\u0000`, matching the plain path's
+  by-length print); `tokens`/`cost` follow ADR-0010 **omit-until-present** (shown only once
+  hoosh reports usage / a `[pricing]` rate prices it — never a faked `0`/`$0`); `turns` is
+  always present; `elapsed_ms` is the wall-clock turn time (`clock_now_ms`, with a
+  non-monotonic-step guard). The envelope buffer is sized so a worst-case 6×-escaped max reply
+  never truncates → the object is always complete, valid JSON.
+- **`_json_escape_n_into_cap`** (`src/hoosh.cyr`) — a length-bounded JSON escaper for the
+  by-length reply; `_json_escape_into_cap` is refactored to delegate to it at `strlen(src)`
+  (byte-identical for all existing callers — the request builders, `/dry`, …).
+- **`test_json_envelope`** (+13): the `--json`/`-j` flag parse (sets the flag, no force, not a
+  positional, reset across calls, `-p` still works), and the envelope across field combos
+  (response+model+turns, +tokens, +tokens+cost, the embedded-NUL by-length escape, model-id
+  escaping).
+
+### Notes
+- **Failure contract:** on any failure (no answer), **nothing** goes to stdout in either mode
+  (no partial/invalid JSON), a concise diagnostic goes to stderr, and the exit is nonzero — a
+  `jq`/CI consumer checks the exit code. Documented in `--help`.
+- `cost` is the `$d.cc` string (consistent with `/state` + the status bar); `tokens` is an
+  integer. **REPL/TUI-only by scope** — one-shot is where clean stdout matters; the
+  interactive surfaces are for humans.
+- **Two-pass adversarial review (Workflow).** A DESIGN pass (4 lenses, before code) confirmed
+  the buffer-sizing/valid-JSON guarantee and the failure contract, and pinned the fixes folded
+  in pre-implementation (parse `--json` as an `elif`, reset the flag before the early return,
+  a self-documenting cap, the by-length escaper). A DIFF pass (4 lenses, each finding
+  independently verified) returned **zero must-fixes**. Verified live: `--help`, and the
+  failure path (empty stdout + stderr + exit 1) with no hoosh configured; the success envelope
+  serialization is exact-tested (a live gateway round-trip is host-side — the sandbox blocks a
+  compiled binary's TCP).
+
 ## [0.11.5] - 2026-06-25
 
 **`/dry` — request-body preview (0.11.x terminal-citizen line).** `/dry <task>` renders the

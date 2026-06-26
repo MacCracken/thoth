@@ -7,6 +7,27 @@
 
 ## Version
 
+**0.11.6** — JSON-envelope output (0.11.x terminal-citizen line), 2026-06-25. `thoth --json
+<task>` runs the one-shot turn and prints a single JSON object to stdout instead of the plain
+reply — `{response, model, turns, tokens?, cost?, elapsed_ms}` — for jq/CI. Rides the 0.11.0
+one-shot clean-stdout seam; **opt-in** (default one-shot stays plain text; the interactive
+TUI/REPL + the byte-identical floor untouched). `--json`/`-j` is a one-shot MODIFIER flag (an
+`elif` on the `-p` chain — does not force a run, never a positional, never breaks `-p`; reset
+before the `n<=1` early return so no stale flag). New pure `oneshot_json_envelope`
+(`src/oneshot.cyr`) serializes the object: the reply escaped BY LENGTH (an embedded NUL
+survives as a `\u0000`, matching the plain path's by-length print); `tokens`/`cost` follow
+ADR-0010 omit-until-present (never a faked `0`/`$0`); `turns` always present; `elapsed_ms` =
+wall-clock turn time (`clock_now_ms`, non-monotonic-step guarded). The envelope buffer
+(`HOOSH_ACC_CAP*6 + MODEL_BUF_CAP*6 + 256`) is sized so a worst-case 6×-escaped max reply
+never truncates → always complete, valid JSON. New `_json_escape_n_into_cap` (`src/hoosh.cyr`,
+length-bounded); `_json_escape_into_cap` refactored to delegate to it at `strlen` (byte-identical
+for all existing callers). **Failure contract:** on any failure NOTHING goes to stdout in either
+mode (no partial/invalid JSON), a diagnostic to stderr, nonzero exit (the jq/CI consumer checks
+the exit code). **Two-pass adversarial review:** design pass confirmed the buffer/valid-JSON
+guarantee + failure contract and pinned the fixes (elif parse, flag reset, self-documenting cap,
+by-length escaper); diff pass returned ZERO must-fixes. Verified live: `--help` + the failure
+path (empty stdout + stderr + exit 1, no hoosh); the success envelope is exact-tested. 569
+assertions (+13, `test_json_envelope`). Pin unchanged (6.2.43).
 **0.11.5** — `/dry` request-body preview (0.11.x terminal-citizen line), 2026-06-25. `/dry
 <task>` renders the EXACT hoosh request body thoth would compose for `<task>` and SKIPS the
 POST — a local introspection command ("what goes to the model?"). **Side-effect-free** (no
@@ -728,6 +749,9 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   **0.11.5 (`/dry`):** `hoosh_build_dry` composes the request body NON-destructively (history
   tail + the pending user turn, no append) so `/dry` is side-effect-free; `hoosh_model_cur`
   exposes the exact model precedence; `hoosh_dry_buf` lazily allocates the shared request buffer.
+  **0.11.6 (JSON envelope):** `_json_escape_n_into_cap` is the length-bounded escape core (so
+  the one-shot reply, held by length, escapes faithfully incl. an embedded NUL);
+  `_json_escape_into_cap` now delegates to it at `strlen` (byte-identical for all callers).
 - `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
   tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
   (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool
@@ -764,7 +788,12 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   I/O: `_oneshot_append_stdin` (slurps stdin as the payload when fd 0 is not a tty) and
   `one_shot_run` (runs the turn under `OUT_NULL`, then prints only `hoosh_last_reply` to
   fd 1; stderr error + nonzero exit otherwise). Routes through the existing
-  `cmd_task → hoosh_send/agent_turn` seam — no new spine path. [ADR-0011].
+  `cmd_task → hoosh_send/agent_turn` seam — no new spine path. [ADR-0011]. **0.11.6 (JSON envelope):** the `--json`/`-j`
+  modifier flag (an `elif` on the `-p` chain — sets `_oneshot_json` without forcing a run;
+  reset before the `n<=1` early return) + the pure `oneshot_json_envelope`
+  (`{response, model, turns, tokens?, cost?, elapsed_ms}`; reply escaped by length,
+  tokens/cost omit-until-present, `elapsed_ms` via `clock_now_ms`); a sized buffer
+  guarantees valid JSON; failure emits nothing to stdout in either mode.
 - `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
   4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
   evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE

@@ -575,6 +575,78 @@ fn test_oneshot() {
     return 0;
 }
 
+# JSON-envelope output (0.11.6): the --json/-j one-shot flag (a modifier, not a mode) and the
+# pure envelope serializer. tokens/cost follow ADR-0010 omit-until-present; the reply escapes
+# BY LENGTH (an embedded NUL survives). elapsed_ms is a param so the builder is deterministic.
+fn test_json_envelope() {
+    test_group("JSON-envelope output (oneshot.cyr / hoosh.cyr)");
+    var av[64];
+    store64(&av + 0, "thoth");
+    # --json / -j set the flag without forcing a run or joining the task.
+    store64(&av + 8, "--json");
+    store64(&av + 16, "task");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "--json + task -> RUN");
+    assert_eq(_oneshot_json, 1, "--json sets the json flag");
+    assert(streq(_oneshot_task, "task"), "--json is not part of the task");
+    store64(&av + 8, "-j");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "-j + task -> RUN");
+    assert_eq(_oneshot_json, 1, "-j sets the json flag");
+    # --json alone records the flag but is no run intent -> NONE (falls through to the TUI).
+    store64(&av + 8, "--json");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "--json alone -> NONE (no task)");
+    # a plain task leaves the flag clear; the n<=1 early return RESETS it (no stale flag).
+    store64(&av + 8, "plain");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "plain task -> RUN");
+    assert_eq(_oneshot_json, 0, "no --json -> flag stays 0");
+    store64(&av + 8, "--json");
+    _oneshot_parse(&av, 2);
+    assert_eq(_oneshot_json, 1, "flag set before the reset check");
+    assert_eq(_oneshot_parse(&av, 1), ONESHOT_NONE, "n<=1 -> NONE");
+    assert_eq(_oneshot_json, 0, "the n<=1 early return resets the json flag (no stale)");
+    # the --json elif must not break -p (its else branch still runs the positional path).
+    store64(&av + 8, "-p");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "-p still forces RUN after the --json elif");
+    assert_eq(_oneshot_json, 0, "-p does not set json");
+
+    # the envelope serializer (deterministic — elapsed is a param).
+    session_set_model(0);
+    session_reset();
+    session_bump_turn();              # turns -> 1
+    session_set_model("m");
+    var jb[2048];
+    var e1 = oneshot_json_envelope(&jb, 2048, "hi", 2, 42);
+    store8(&jb + e1, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\",\"turns\":1,\"elapsed_ms\":42}"), "envelope: response+model+turns+elapsed (no tokens/cost yet)");
+    session_add_tokens(100);
+    var e2 = oneshot_json_envelope(&jb, 2048, "hi", 2, 42);
+    store8(&jb + e2, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\",\"turns\":1,\"tokens\":100,\"elapsed_ms\":42}"), "envelope: +tokens once seen");
+    session_add_cost(18000);          # 18000 micro-USD = $0.018 -> $0.01 (floors)
+    var e3 = oneshot_json_envelope(&jb, 2048, "hi", 2, 42);
+    store8(&jb + e3, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\",\"turns\":1,\"tokens\":100,\"cost\":\"$0.01\",\"elapsed_ms\":42}"), "envelope: +cost once priced");
+
+    # the reply is escaped BY LENGTH — an embedded NUL becomes \u0000, not a truncation.
+    session_reset();
+    session_bump_turn();
+    session_set_model("m");
+    var rbuf[8];
+    store8(&rbuf + 0, 97);            # 'a'
+    store8(&rbuf + 1, 0);             # NUL
+    store8(&rbuf + 2, 98);            # 'b'
+    var e4 = oneshot_json_envelope(&jb, 2048, &rbuf, 3, 7);
+    store8(&jb + e4, 0);
+    assert(streq(&jb, "{\"response\":\"a\\u0000b\",\"model\":\"m\",\"turns\":1,\"elapsed_ms\":7}"), "envelope: embedded NUL escaped by length");
+    # a model id with a quote is JSON-escaped (can't break the object).
+    session_set_model("m\"x");
+    var e5 = oneshot_json_envelope(&jb, 2048, "hi", 2, 0);
+    store8(&jb + e5, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\\\"x\",\"turns\":1,\"elapsed_ms\":0}"), "envelope: model id JSON-escaped");
+    session_set_model(0);
+    session_reset();
+    return 0;
+}
+
 # Multi-turn conversation history (0.5.1): append/accessors, stable copy,
 # pop/clear, and the drop-oldest cap.
 fn test_history() {
@@ -1573,6 +1645,7 @@ fn main() {
     test_alias();
     test_dry();
     test_oneshot();
+    test_json_envelope();
     test_history();
     test_history_request();
     test_inhist();

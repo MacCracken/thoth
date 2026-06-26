@@ -162,16 +162,18 @@ fn _append_cstr_cap(dst, off, cap, s) {
     return off;
 }
 
-# _json_escape_into_cap: bounded _json_escape_into. A single source byte expands
-# to at most 6 output bytes (\u00XX), so it stops before any char whose worst-case
-# expansion could reach `cap` - 1 — guaranteeing the write stays in-buffer with a
-# byte left for the caller's terminator. Truncation is at a CHARACTER boundary, so
-# the partial output is still well-formed escaped text (never a split escape). The
-# defensive sibling of _json_escape_into for untrusted (model/MCP) strings. Pure.
-fn _json_escape_into_cap(dst, off, cap, src) {
+# _json_escape_n_into_cap: the bounded JSON-escape core — escape src[0..src_len) into dst at
+# off, bounded to cap. A single source byte expands to at most 6 output bytes (\u00XX), so it
+# stops before any char whose worst-case expansion could reach `cap` - 1, guaranteeing the
+# write stays in-buffer with a byte left for the caller's terminator. Truncation is at a
+# CHARACTER boundary, so the partial output is still well-formed escaped text (never a split
+# escape). LENGTH-bounded (not NUL-terminated) so the one-shot reply — held by length and
+# possibly containing a legitimate 0 byte — escapes faithfully. The defensive escaper for
+# untrusted (model/MCP) strings. Pure.
+fn _json_escape_n_into_cap(dst, off, cap, src, src_len) {
     var i = 0;
     var stop = 0;
-    while ((load8(src + i) != 0) && (stop == 0)) {
+    while ((i < src_len) && (stop == 0)) {
         if ((off + 6) >= cap) { stop = 1; }
         else {
             var c = load8(src + i);
@@ -206,6 +208,13 @@ fn _json_escape_into_cap(dst, off, cap, src) {
         }
     }
     return off;
+}
+
+# _json_escape_into_cap: the NUL-terminated wrapper (escape up to the first 0 byte). The
+# defensive sibling of _json_escape_into for untrusted (model/MCP) cstrings. Delegates to the
+# length-bounded core at strlen(src) — byte-identical to the prior NUL-loop. Pure.
+fn _json_escape_into_cap(dst, off, cap, src) {
+    return _json_escape_n_into_cap(dst, off, cap, src, strlen(src));
 }
 
 # _append_int: write non-negative n as decimal into dst at off; return new off.
