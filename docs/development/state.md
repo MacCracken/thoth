@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.11.4** — `[alias]` prompt macros (0.11.x terminal-citizen line), 2026-06-25. User-defined
+slash macros in `thoth.cyml`: a `[alias]` table of `name = "expansion"` pairs. Typing
+`/<name> [args]` that is NOT a built-in expands to the configured text (+ any trailing args)
+and RE-DISPATCHES it — an alias can map to a built-in (`/ship → /run git status`), a free-text
+task, or `/quit`. Reuses the bayan TOML parser (no second config format). **Opt-in — with no
+`[alias]` table the unknown-command path is BYTE-IDENTICAL to before.** New `[alias]` table in
+`src/config.cyr` (`_alias_load` caches each pair's name/expansion into a stable fixed table,
+cap 64; blank skipped, duplicate key keeps the first, a name ≥ 256 chars skipped since it could
+never match a typed token; `config_alias_lookup`/`config_alias_count`). Expand-then-redispatch
+in `src/commands.cyr`: `_alias_name_of` (bare slash token) + `alias_expand(line, depth)` (value
++ ' ' + trailing args into a per-depth, cap-bounded, nul-terminated buffer); `dispatch(line)`
+is now a thin wrapper over `_dispatch_d(line, depth)` that, at `CMD_UNKNOWN_SLASH`, tries an
+alias and re-dispatches the expansion one level deeper — **bounded** (`ALIAS_MAX_DEPTH` = 8;
+the guard fires BEFORE the next slot is written, so a cycle is refused, never an OOB write or
+runaway). An `aliases : N defined` row in `/state` (shown only when N > 0, so default `/state`
+is unchanged). **Security/posture:** an alias to `/run`/`/write`/`/call` is re-dispatched
+through the SAME t-ron gate (no bypass); built-ins always win (aliases only fill the
+`CMD_UNKNOWN_SLASH` gap); it is a REPL/TUI feature (one-shot routes argv straight to `cmd_task`
+by design, so it doesn't interpret `/aliases`). **Two-pass adversarial review (Workflow):** a
+DESIGN pass caught two real blockers pre-code (the depth guard had to precede `alias_expand`
+or a cycle wrote one slot past the buffer; `_alias_bufs` needed lazy alloc); a DIFF pass
+surfaced one must-fix (a ≥256-char name was a dead, count-inflating entry), fixed +
+regression-tested. Verified live (piped REPL): `/st → /state`, a cycle refused, no-config
+floor unchanged. 542 assertions (+20, `test_alias`). Pin unchanged (6.2.43).
 **0.11.3** — soft-wrap long feed lines (0.11.x terminal-citizen line), 2026-06-25. The
 top-ranked pure-substrate win from the SecureYeoman-TUI review: the T2 feed stops
 TRUNCATING a logical line wider than the feed column and REFLOWS it across several physical
@@ -612,6 +636,13 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   **0.5.1:** `/reset`, `/state` shows the multi-turn context + count; **0.6.0:**
   free-text turns route to the agentic loop when `agent_enabled`, `/state` shows
   the agent mode; **0.6.2:** `/models` lists the hoosh gateway's catalog).
+  **0.11.4 ([alias] macros):** `dispatch(line)` is now a thin wrapper over
+  `_dispatch_d(line, depth)`; at `CMD_UNKNOWN_SLASH` it tries `alias_expand(line, depth)`
+  (`_alias_name_of` bare token + value/arg assembly into a per-depth, cap-bounded buffer)
+  and re-dispatches one level deeper, bounded by `ALIAS_MAX_DEPTH` (guard before the write,
+  so a cycle is refused, never an OOB). An `aliases` row in `/state` (only when > 0). An
+  alias to `/run`/`/write`/`/call` re-dispatches through the SAME t-ron gate; built-ins
+  always win (aliases only fill the unknown-slash gap).
 - `src/seams.cyr` — the capability-seam registry; statuses fully dynamic. **0.6.5
   (M6 ladder):** adds the **capability-effect** dimension (`CapState`
   full/degraded/absent) on top of the binding mode — `seam_cap_state` derives it
@@ -640,7 +671,10 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   `[log].file` / `[log].level`; **0.10.3:** the `[pricing.<model>]` table — `_price_load`
   caches each model's `input`/`output` rate (micro-USD per 1K tokens) into a stable fixed
   table at load, `config_price_input`/`_output` look it up verbatim by model id, `_cfg_int`
-  parses an integer rate (`-1` absent, `0` explicit-free)).
+  parses an integer rate (`-1` absent, `0` explicit-free); **0.11.4:** the `[alias]` table —
+  `_alias_load` caches each `name = "expansion"` pair into a stable fixed table (cap 64;
+  blank skipped, duplicate key keeps the first, a name ≥ 256 chars skipped as unmatchable),
+  `config_alias_lookup`/`config_alias_count`).
 - `src/log.cyr` — **0.5.2**: structured driver-event logging over the vendored
   sakshi logger. `log_init` binds to `[log]` (off unless configured); the pure
   `event=… key=value` builder (`log_begin`/`log_kv_str`/`log_kv_int`/`log_message`)

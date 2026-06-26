@@ -43,6 +43,62 @@ fn arg_after(line) {
     return line + i;
 }
 
+# --- [alias] prompt macros (0.11.4) ---------------------------------------
+# An alias lets the user define a slash macro in thoth.cyml ([alias] name = "expansion").
+# It resolves ONLY in the CMD_UNKNOWN_SLASH gap (so a built-in command always wins and an
+# alias can never shadow one), expands to its text with any trailing args appended, and
+# RE-DISPATCHES the result (so an alias can map to a built-in, a free-text task, even
+# /quit — and an alias to /run/write/call still passes through the SAME t-ron gate, since
+# the expansion goes back through dispatch). Recursion is bounded (cycle guard).
+var ALIAS_MAX_DEPTH = 8;     # max alias-expansion chain depth (cycle / runaway guard)
+var ALIAS_LINE_CAP = 1024;   # per-depth expanded-line buffer cap (bytes)
+var ALIAS_NAME_CAP = 256;    # max alias-name length + 1 (a typed name is the token after '/')
+var _alias_name[256];        # LITERAL size — MUST equal ALIAS_NAME_CAP
+var _alias_bufs = 0;         # alloc(ALIAS_MAX_DEPTH * ALIAS_LINE_CAP), lazy: per-depth slices
+
+# _alias_name_of: copy the bare alias token (the chars after '/' up to a space or nul) into
+# dst, cap-bounded and nul-terminated. line is known to start with '/'. A bare "/" or "/ "
+# yields the empty string (which matches no alias). Returns dst.
+fn _alias_name_of(line, dst, cap) {
+    var i = 1;                    # skip the leading '/'
+    var o = 0;
+    while ((load8(line + i) != 0) && (load8(line + i) != 32) && (o < (cap - 1))) {
+        store8(dst + o, load8(line + i));
+        o = o + 1;
+        i = i + 1;
+    }
+    store8(dst + o, 0);
+    return dst;
+}
+
+# alias_expand: if line's slash token names a configured alias, build the expansion (the
+# alias value + ' ' + the line's trailing args, when present) into the depth-th buffer slot
+# and return it; else return 0. Per-depth slots keep the active recursion chain's lines
+# disjoint (depth d reads slot d while a deeper expansion writes slot d+1). Every copy is
+# cap-bounded and the result is always nul-terminated (never a store past the slot).
+fn alias_expand(line, depth) {
+    _alias_name_of(line, &_alias_name, ALIAS_NAME_CAP);
+    var v = config_alias_lookup(&_alias_name);
+    if (v == 0) { return 0; }
+    if (_alias_bufs == 0) { _alias_bufs = alloc(ALIAS_MAX_DEPTH * ALIAS_LINE_CAP); }
+    var dst = _alias_bufs + depth * ALIAS_LINE_CAP;
+    var off = 0;
+    var vi = 0;
+    while ((load8(v + vi) != 0) && (off < (ALIAS_LINE_CAP - 1))) {
+        store8(dst + off, load8(v + vi)); off = off + 1; vi = vi + 1;
+    }
+    var rem = arg_after(line);
+    if ((rem != 0) && (off < (ALIAS_LINE_CAP - 1))) {
+        store8(dst + off, 32); off = off + 1;          # the separating space
+        var ri = 0;
+        while ((load8(rem + ri) != 0) && (off < (ALIAS_LINE_CAP - 1))) {
+            store8(dst + off, load8(rem + ri)); off = off + 1; ri = ri + 1;
+        }
+    }
+    store8(dst + off, 0);
+    return dst;
+}
+
 # classify_input: map a trimmed input line to a Cmd id. Pure — unit-tested.
 fn classify_input(line) {
     if (load8(line) == 0) { return CMD_EMPTY; }
@@ -153,6 +209,10 @@ fn cmd_state() {
     else {
         if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
         ui_emit(ROLE_MUTED, " (structured driver events)"); oprintln("");
+    }
+    if (config_alias_count() > 0) {        # omit the row entirely when none are defined
+        ui_label("  aliases : "); ofmt_int(config_alias_count());
+        ui_emit(ROLE_MUTED, " defined ([alias] in thoth.cyml; /<name> expands)"); oprintln("");
     }
     ui_label("  agent   : ");
     if (agent_enabled() == 1) {
@@ -457,8 +517,16 @@ fn cmd_theme(line) {
     return 0;
 }
 
-# dispatch: run one input line. Returns 1 to keep looping, 0 to quit.
-fn dispatch(line) {
+# dispatch: run one input line. Returns 1 to keep looping, 0 to quit. The public entry —
+# repl.cyr / tui.cyr / oneshot.cyr call this; it seeds the alias-expansion depth at 0.
+fn dispatch(line) { return _dispatch_d(line, 0); }
+
+# _dispatch_d: dispatch at alias-expansion depth `depth`. Identical to the classic dispatch
+# for every built-in; the CMD_UNKNOWN_SLASH gap additionally tries [alias] expansion and
+# re-dispatches the result one level deeper (bounded by ALIAS_MAX_DEPTH). With no [alias]
+# configured, config_alias_lookup is always 0 -> alias_expand is 0 -> the same "unknown
+# command" line as before, so the floor stays byte-identical.
+fn _dispatch_d(line, depth) {
     var c = classify_input(line);
     if (c == CMD_QUIT) { return 0; }
     if (c == CMD_EMPTY) { return 1; }
@@ -476,7 +544,15 @@ fn dispatch(line) {
     if (c == CMD_RESET) { cmd_reset(); return 1; }
     if (c == CMD_CLEAR) { cmd_clear(); return 1; }
     if (c == CMD_THEME) { cmd_theme(line); return 1; }
-    if (c == CMD_UNKNOWN_SLASH) { oprintln("unknown command (try /help)"); return 1; }
+    if (c == CMD_UNKNOWN_SLASH) {
+        # Guard FIRST: refuse at the depth bound BEFORE writing a slot, so a cycle can never
+        # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).
+        if (depth >= ALIAS_MAX_DEPTH) { oprintln("alias: expansion too deep (cycle?)"); return 1; }
+        var ex = alias_expand(line, depth);
+        if (ex != 0) { return _dispatch_d(ex, depth + 1); }
+        oprintln("unknown command (try /help)");
+        return 1;
+    }
     cmd_task(line);
     return 1;
 }

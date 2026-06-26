@@ -48,6 +48,17 @@ var _price_in = 0;       # PRICE_MAX i64 input rates  (micro-USD / 1K tokens), -
 var _price_out = 0;      # PRICE_MAX i64 output rates (micro-USD / 1K tokens), -1 unset
 var _price_n = 0;
 
+# Alias table (0.11.4): the [alias] section's name = "expansion" pairs, cached at load
+# into a stable fixed table (same shape as pricing). An alias lets the user define a slash
+# macro: typing /<name> that is NOT a built-in expands to <expansion> (+ any trailing args)
+# and re-dispatches. Names + expansions are stable cstrings (str_cstr copies into the bump
+# heap) so the dispatcher can look them up per turn without retaining the transient parse
+# buffers. First definition wins on a duplicate key; the table caps at ALIAS_MAX.
+var ALIAS_MAX = 64;
+var _alias_names = 0;    # ALIAS_MAX cstr ptrs (the alias name, no leading slash)
+var _alias_vals = 0;     # ALIAS_MAX cstr ptrs (the expansion text, verbatim)
+var _alias_n = 0;
+
 # _cfg_section_pairs: the pairs vec for table [name] in a parsed sections vec,
 # or 0 if the table is absent.
 fn _cfg_section_pairs(sections, name) {
@@ -148,6 +159,67 @@ fn config_price_output(model) {
     return load64(_price_out + idx * 8);
 }
 
+# _alias_load: cache the [alias] section's name = "expansion" pairs into the stable fixed
+# table (capped at ALIAS_MAX). Iterates the pairs vec directly (bayan_toml_pair_key/_value
+# give the raw Str); a blank name OR blank value is skipped (an alias must name and expand
+# to something). First definition wins (we keep the first, skip later duplicates implicitly
+# via lookup order). Called once from config_load.
+fn _alias_load(sections) {
+    if (_alias_names == 0) {
+        _alias_names = alloc(ALIAS_MAX * 8);
+        _alias_vals = alloc(ALIAS_MAX * 8);
+    }
+    _alias_n = 0;
+    var pairs = _cfg_section_pairs(sections, "alias");
+    if (pairs == 0) { return 0; }
+    var n = vec_len(pairs);
+    var i = 0;
+    while (i < n) {
+        if (_alias_n < ALIAS_MAX) {
+            var p = vec_get(pairs, i);
+            var k = bayan_toml_pair_key(p);
+            var v = bayan_toml_pair_value(p);
+            # A name >= 256 bytes can never match: the TUI name-extraction caps the typed
+            # token at 255 (ALIAS_NAME_CAP-1 in commands.cyr), so an over-cap name would be a
+            # dead, unmatchable entry inflating the count — skip it at load (the example doc
+            # promises "at most 255 chars"; this enforces it). 256 == ALIAS_NAME_CAP.
+            if ((str_len(k) > 0) && (str_len(v) > 0) && (str_len(k) < 256)) {
+                # first definition wins: skip a name already stored (bayan keeps both
+                # pairs of a duplicate key; we keep the first so the count is honest).
+                var dup = 0;
+                var j = 0;
+                while (j < _alias_n) {
+                    if (str_eq_cstr(k, load64(_alias_names + j * 8)) == 1) { dup = 1; }
+                    j = j + 1;
+                }
+                if (dup == 0) {
+                    store64(_alias_names + _alias_n * 8, str_cstr(k));   # stable copy (bump heap)
+                    store64(_alias_vals + _alias_n * 8, str_cstr(v));
+                    _alias_n = _alias_n + 1;
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# config_alias_lookup: the expansion cstring for the alias `name` (the bare token, no
+# slash), or 0 if no [alias] declares it. First-match (so a duplicate key uses the first
+# definition). Pure lookup; the dispatcher owns the expand-then-redispatch.
+fn config_alias_lookup(name) {
+    var i = 0;
+    while (i < _alias_n) {
+        if (streq(load64(_alias_names + i * 8), name) == 1) { return load64(_alias_vals + i * 8); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# config_alias_count: how many aliases are defined (0 -> the feature is dormant and the
+# CMD_UNKNOWN_SLASH path is byte-identical to a build with no [alias] support).
+fn config_alias_count() { return _alias_n; }
+
 # config_load: parse thoth.cyml if present and populate the hoosh fields.
 # Returns 1 if a [hoosh] url was found (seam can bind remote), else 0 (absent
 # file, no [hoosh] table, or no url -> seam stays absent). Call once at startup.
@@ -160,6 +232,7 @@ fn config_load() {
     var hl = bayan_cyml_doc_header_len(doc);
     var sections = bayan_toml_parse(str_new(hp, hl));
     _price_load(sections);
+    _alias_load(sections);
     var hoosh = _cfg_section_pairs(sections, "hoosh");
     _cfg_hoosh_url = _cfg_str(hoosh, "url");
     _cfg_hoosh_token = _cfg_str(hoosh, "token");

@@ -2,6 +2,59 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.4] - 2026-06-25
+
+**`[alias]` prompt macros (0.11.x terminal-citizen line).** User-defined slash macros in
+`thoth.cyml`: a `[alias]` table of `name = "expansion"` pairs. Typing `/<name> [args]` that
+is NOT a built-in command expands to the configured text (with any trailing args appended)
+and RE-DISPATCHES it — so an alias can map to a built-in (`/ship → /run git status`), a
+free-text task (`/explain foo → explain this code: foo`), or even `/quit`. Reuses the bayan
+TOML parser (no second config format). **Opt-in — with no `[alias]` table the behaviour is
+byte-identical to before** (an unknown `/x` still prints "unknown command"). Resolves in the
+interactive **REPL/TUI** dispatch path. 542 unit assertions (+20). Pin unchanged (6.2.43).
+
+### Added
+- **`[alias]` config table** (`src/config.cyr`): `_alias_load` caches each `[alias]` pair's
+  `name`/`expansion` into a stable fixed table (cap 64), iterating the section's pairs vec
+  directly (`bayan_toml_pair_key`/`_value`). Blank name/value skipped; a duplicate key keeps
+  the **first** definition; a name ≥ 256 chars is skipped (it could never match a typed token,
+  which the composer caps at 255 — so it is never a dead, count-inflating entry).
+  `config_alias_lookup(name)` (first-match) and `config_alias_count()`.
+- **Expand-then-redispatch** (`src/commands.cyr`): `_alias_name_of` extracts the bare slash
+  token; `alias_expand(line, depth)` builds `value [+ " " + trailing args]` into a per-depth
+  buffer (every copy cap-bounded, always nul-terminated). `dispatch(line)` is now a thin
+  wrapper over `_dispatch_d(line, depth)`: at `CMD_UNKNOWN_SLASH` it tries an alias and
+  re-dispatches the expansion one level deeper. Recursion is **bounded** (`ALIAS_MAX_DEPTH`
+  = 8): the guard fires **before** the next expansion writes a buffer slot, so a cycle is
+  refused ("alias: expansion too deep") — never an unbounded recursion or an out-of-bounds
+  write. Per-depth disjoint buffer slots keep a parent's line intact while a child expands.
+- **`aliases` row in `/state`** — `N defined`, shown **only when N > 0** (so default `/state`
+  is unchanged). `thoth.cyml.example` gains a documented `[alias]` block.
+- **`test_alias`** (+20): name extraction (bare `/`, spaces, truncation), the table load
+  (blank-skip, duplicate first-wins, the ≥256-char-name skip), expansion (value verbatim +
+  arg append), per-depth buffer disjointness, oversized-value truncation (nul-terminated),
+  and the no-alias byte-identical-floor case.
+
+### Security / posture
+- An alias that expands to `/run`, `/write`, or `/call` is **re-dispatched through the same
+  `_dispatch_d`**, so it still passes through the t-ron authorization gate unchanged — aliases
+  assemble the line that dispatch then gates; they cannot bypass authorization or pre-approve
+  an action.
+- **Built-ins always win** — aliases resolve only in the `CMD_UNKNOWN_SLASH` gap, so an alias
+  named like a real command (`read`, `run`, …) never fires (it is dead — documented).
+- Aliases are an interactive **REPL/TUI** feature (those front-ends run `dispatch`); one-shot
+  (`thoth 'task'`) routes its whole argv straight to `cmd_task` as a free-text task by design,
+  so it does not interpret `/aliases` — the user assembles the full command there anyway.
+
+### Notes
+- **Two-pass pre-cut adversarial review (Workflow).** A DESIGN pass (4 lenses, before any
+  code) caught two real blockers folded in pre-implementation — the depth guard had to fire
+  *before* `alias_expand` (else a cycle wrote one slot past the per-depth buffer) and
+  `_alias_bufs` needed lazy first-use allocation — plus the name-buffer pin and doc notes. A
+  DIFF pass (4 lenses, each finding independently verified) surfaced exactly one must-fix (the
+  ≥256-char-name dead entry), fixed + regression-tested before cut. Aliases verified live
+  (piped REPL): `/st → /state`, a 2-alias cycle refused, and the no-config floor unchanged.
+
 ## [0.11.3] - 2026-06-25
 
 **Soft-wrap long feed lines (0.11.x terminal-citizen line).** The T2 TUI feed stops

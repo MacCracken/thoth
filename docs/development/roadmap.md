@@ -10,13 +10,14 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.11.3):** **M0–M7 are done and shipping** (0.1.0 → 0.11.3; the log
+> **Where we are (0.11.4):** **M0–M7 are done and shipping** (0.1.0 → 0.11.4; the log
 > lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
 > line is complete for the producers thoth owned (tokens, cost), and the **0.11.x
 > terminal-citizen line is advancing** — `0.11.0` shipped its keystone (the one-shot/argv
 > front-door), `0.11.1` the first pure-substrate win (composer input-history recall),
-> `0.11.2` its opt-in `[history].file` persistence, and `0.11.3` feed soft-wrap (wide lines
-> reflow across physical rows instead of truncating). **What's left:** the rest of the
+> `0.11.2` its opt-in `[history].file` persistence, `0.11.3` feed soft-wrap (wide lines
+> reflow across physical rows instead of truncating), and `0.11.4` `[alias]` prompt macros
+> (user-defined slash macros that expand-then-redispatch). **What's left:** the rest of the
 > **0.11.x** line (the vetted SecureYeoman-TUI-review backlog — substrate/floor ports and
 > thin seam bindings, never a spine fork; that TUI is being reskinned onto thoth's, so
 > thoth's front-end is the shared canonical surface), the **0.12.x git producer** (externally
@@ -135,14 +136,14 @@ above, deferred to a later ADR.
 > shell-completion riders below); `0.11.1` composer input-history recall (in-memory);
 > `0.11.2` opt-in `[history].file` persistence (its `0600`/`chmod`/`O_NOFOLLOW` follow-ups
 > are tracked under **Deferred** below); `0.11.3` feed soft-wrap (painter-only reflow +
-> physical-row scrollback; `feed_clip_seg` carries SGR color across the wrap).
+> physical-row scrollback; `feed_clip_seg` carries SGR color across the wrap); `0.11.4`
+> `[alias]` prompt macros (`[alias]` table → expand-then-redispatch at `CMD_UNKNOWN_SLASH`,
+> bounded recursion; built-ins win, t-ron still gates an aliased `/run`).
 
 **Remaining — pure-substrate TUI wins (no argv dependency — ship anytime):**
-- **`[alias]` prompt macros** — resolve only in the `CMD_UNKNOWN_SLASH` gap,
-  expand-then-redispatch, bounded recursion; reuse the bayan parser, no second
-  config format.
-  (**soft-wrap long feed lines shipped in 0.11.3** — painter-only reflow + physical-row
-  scrollback; the glyph-width CJK/emoji limitation is declared honestly in CHANGELOG/state.md.)
+- _(Both shipped: **soft-wrap long feed lines** in 0.11.3 and **`[alias]` prompt macros** in
+  0.11.4. The pure-substrate TUI slot is now clear; the introspection + rider slots below are
+  next, several unblocked by the 0.11.0 one-shot front-door.)_
 
 **Remaining — introspection slot:**
 - **dry-run / request-body preview (`/dry`)** — render thoth's OWN composed

@@ -139,3 +139,26 @@ model = "claude-haiku-4-5-20251001"
 
 # [history]
 # file = ".thoth_history"             # project-local; or an absolute "/home/you/.thoth_history"
+
+# The [alias] table defines slash macros (0.11.4). Each `name = "expansion"` lets you type
+# /<name> as a shortcut: when /<name> is NOT a built-in command, thoth expands it to the
+# expansion text (with any trailing args appended) and re-runs the result. The expansion can
+# be another slash command OR free-text task. Examples:
+#
+#   /ship              ->  /run git status
+#   /explain foo.cyr   ->  explain this code thoroughly: foo.cyr   (the trailing arg is appended)
+#   /fix src/x.cyr     ->  /read src/x.cyr
+#
+# Notes / guarantees:
+#   - Built-ins always win — an alias named like a real command (read, run, …) never fires.
+#   - An alias to /run, /write, or /call still passes through the SAME t-ron authorization
+#     gate (the expansion is re-dispatched normally — aliases can't bypass security).
+#   - Recursion is bounded: an alias-to-alias chain is capped (a cycle is refused, not hung).
+#   - Values are taken VERBATIM (no shell/escape processing). Duplicate keys: the first wins.
+#   - The table is capped at 64 aliases; an alias name is at most 255 chars.
+#   - Off by default — with no [alias] table the unknown-command behavior is unchanged.
+
+# [alias]
+# ship    = "/run git status"
+# explain = "explain this code thoroughly:"
+# fix     = "/read"

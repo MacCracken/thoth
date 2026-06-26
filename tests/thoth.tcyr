@@ -414,6 +414,80 @@ fn test_cost() {
     return 0;
 }
 
+# [alias] macros (0.11.4): the config table load + name extraction + the expand step of
+# expand-then-redispatch. The dispatch recursion itself runs through dispatch() (verified
+# live); here we pin the PURE pieces — table lookup/dedup, _alias_name_of, alias_expand
+# (value verbatim + arg append + bounding), and the floor-identical-when-absent property.
+fn test_alias() {
+    test_group("[alias] macros (config.cyr / commands.cyr)");
+
+    # _alias_name_of: the bare token after '/', up to a space or nul, cap-bounded.
+    var nb[256];
+    _alias_name_of("/ship", &nb, 256);     assert(streq(&nb, "ship"), "name of /ship");
+    _alias_name_of("/ship arg", &nb, 256); assert(streq(&nb, "ship"), "name stops at the first space");
+    _alias_name_of("/", &nb, 256);         assert(streq(&nb, ""), "bare / -> empty name");
+    _alias_name_of("/  x", &nb, 256);      assert(streq(&nb, ""), "/<spaces> -> empty name");
+    _alias_name_of("/abcdef", &nb, 4);     assert(streq(&nb, "abc"), "name truncates to cap-1, nul-terminated");
+
+    # _alias_load from parsed TOML: a blank value is skipped; a duplicate key keeps the first.
+    var toml = "[alias]\nship = \"/run git status\"\nexplain = \"explain this:\"\nblank = \"\"\nship = \"/second\"\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    _alias_load(sections);
+    assert_eq(config_alias_count(), 2, "two valid aliases loaded (blank skipped, dup deduped)");
+    assert(streq(config_alias_lookup("ship"), "/run git status"), "duplicate key -> first definition wins");
+    assert(streq(config_alias_lookup("explain"), "explain this:"), "lookup explain");
+    assert_eq(config_alias_lookup("blank"), 0, "blank-value alias not stored");
+    assert_eq(config_alias_lookup("nope"), 0, "undeclared alias -> 0");
+
+    # alias_expand: the value verbatim, with any trailing args appended after one space.
+    assert(streq(alias_expand("/ship", 0), "/run git status"), "expand /ship");
+    assert(streq(alias_expand("/explain foo bar", 0), "explain this: foo bar"), "expand appends trailing args");
+    assert_eq(alias_expand("/nope", 0), 0, "no alias -> 0 (falls through to unknown-command)");
+
+    # per-depth buffers are disjoint: a depth-1 expansion must not clobber a depth-0 one.
+    var d0 = alias_expand("/ship", 0);
+    var d1 = alias_expand("/explain z", 1);
+    assert(d0 != d1, "different depths use different buffer slots");
+    assert(streq(d0, "/run git status"), "depth-0 line intact after a depth-1 expansion");
+
+    # bounding: a value longer than ALIAS_LINE_CAP truncates and stays nul-terminated
+    # (white-box: install an oversized value directly, past the parsed table).
+    var bigval[2100];
+    var bi = 0;
+    while (bi < 2048) { store8(&bigval + bi, 65); bi = bi + 1; }   # 2048 'A'
+    store8(&bigval + 2048, 0);
+    store64(_alias_names + config_alias_count() * 8, "big");
+    store64(_alias_vals + config_alias_count() * 8, &bigval);
+    _alias_n = _alias_n + 1;
+    var big = alias_expand("/big", 0);
+    assert(big != 0, "oversized-value alias still resolves");
+    assert_eq(strlen(big), ALIAS_LINE_CAP - 1, "expansion truncated to ALIAS_LINE_CAP-1");
+    assert_eq(load8(big + ALIAS_LINE_CAP - 1), 0, "truncated expansion stays nul-terminated");
+
+    # an alias name >= 256 chars is SKIPPED at load (it could never match a typed token,
+    # which the TUI caps at 255) — so it is not a dead, count-inflating entry. Build
+    # "[alias]\n<256 'a'> = \"x\"\n" and confirm the table stays empty.
+    var lt[400];
+    var lp = 0;
+    var hdr = "[alias]\n";
+    var hi = 0;
+    while (load8(hdr + hi) != 0) { store8(&lt + lp, load8(hdr + hi)); lp = lp + 1; hi = hi + 1; }
+    var ai = 0;
+    while (ai < 256) { store8(&lt + lp, 97); lp = lp + 1; ai = ai + 1; }   # a 256-char name
+    var tl = " = \"x\"\n";
+    var ti = 0;
+    while (load8(tl + ti) != 0) { store8(&lt + lp, load8(tl + ti)); lp = lp + 1; ti = ti + 1; }
+    var oversec = bayan_toml_parse(str_new(&lt, lp));
+    _alias_load(oversec);
+    assert_eq(config_alias_count(), 0, "256-char alias name skipped at load (no dead unmatchable entry)");
+
+    # floor: with no aliases loaded, expansion is always 0 -> the unknown-command path is
+    # byte-identical to a build without alias support.
+    _alias_n = 0;
+    assert_eq(alias_expand("/ship", 0), 0, "no aliases -> no expansion (byte-identical floor)");
+    return 0;
+}
+
 # One-shot / argv front-door (0.11.0): the pure argv classifier + task assembly.
 # _oneshot_parse takes a hand-built argv snapshot (cstr-ptr array) so the mode
 # selection and positional-joining are testable without the real /proc/self/cmdline.
@@ -1443,6 +1517,7 @@ fn main() {
     test_stream_config();
     test_usage();
     test_cost();
+    test_alias();
     test_oneshot();
     test_history();
     test_history_request();
