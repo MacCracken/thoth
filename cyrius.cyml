@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.2.43"
+cyrius = "6.3.15"
 
 [build]
 entry = "src/main.cyr"
@@ -43,7 +43,7 @@ stdlib = [
     # path self-installs a per-thread TLS scratch bank and its batch verify
     # spawns workers — without atomic/thread/thread_local first, the SHA-256
     # in the vendored libro's chain_append traps SIGILL (t-ron 2.1.5 note).
-    "atomic", "thread", "thread_local", "ct", "keccak", "random", "sigil",
+    "atomic", "sync", "thread", "thread_local", "ct", "keccak", "random", "sigil",
     # dynamic-link floor TLS needs (mmap before dynlib — PROT_NONE)
     "mmap", "dynlib", "fdlopen",
     # async (sandhi's epoll server)

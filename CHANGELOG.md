@@ -2,6 +2,22 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.11] - 2026-06-30
+
+**cyrius 6.3.15 base-stack migration.** thoth joins the coordinated migration onto
+cyrius **6.3.15**, over the freshly-released base security stack. Toolchain pin +
+vendored-bundle refresh + the 6.3.x stdlib reconciliation. All 675 assertions
+(+ the smoke) pass on the new stack; no thoth-side logic changed.
+
+### Changed
+- **Cyrius toolchain pin: 6.2.43 → 6.3.15.**
+- **Vendored bundles re-synced** to the migrated releases: `bote-core` 2.7.3 → **2.7.7**,
+  `libro` 2.7.2 → **2.7.9**, `t-ron` 2.1.5 → **2.1.7** (via `scripts/sync-*.sh <tag>`).
+  avatara / darshana / vyakarana unchanged (not in this migration; var-bomb-clean under 6.3.15).
+- **`[deps] stdlib`**: added `sync` — patra (pulled through the vendored libro/t-ron audit
+  chain) declares `lib/sync.cyr` as a hard stdlib dep on the 6.3.x line; `sync` builds on the
+  already-present `atomic`.
+
 ## [0.11.10] - 2026-06-26
 
 **`--tier` flag replaces the `THOTH_TIER` env-var.** The presentation tier is now a first-class
