@@ -1056,6 +1056,15 @@ var _winch_drain = 0;         # 128-byte signalfd_siginfo drain buffer
 # instant resize). The SIGINT fd is opened separately and kept blocked but NOT
 # epoll-registered (we want SIGINT ignored, not delivered).
 fn tui_events_init() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no signalfd and no epoll-on-signalfd multiplex, and the fb
+    # console emits no SIGWINCH resize event. Return 0 so the caller takes
+    # thoth's own bare-blocking-read fallback (instant resize disabled —
+    # an acceptable, already-coded degradation). Keeps TTY_SIGMASK_WINCH /
+    # tty_open_signalfd / sys_epoll_* off the agnos target.
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     _winch_fd = tty_open_signalfd(TTY_SIGMASK_WINCH);
     if (_winch_fd < 0) { return 0; }
     _epfd = sys_epoll_create();
@@ -1065,6 +1074,7 @@ fn tui_events_init() {
     sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, 0, epoll_event_new(EPOLLIN, 0));            # stdin, data=0
     sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, _winch_fd, epoll_event_new(EPOLLIN, _winch_fd));
     return 1;
+    #endif
 }
 
 # tui_wait_event: block until stdin or the WINCH signalfd is readable. Returns
@@ -1072,6 +1082,12 @@ fn tui_events_init() {
 # so a key is decoded against the NEW geometry. Level-triggered epoll: a ready fd not
 # acted on re-fires next call, so returning one event per call loses nothing.
 fn tui_wait_event() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # Unreachable on agnos (_events_ok is 0 → the loop uses the bare read), but
+    # it must still compile: agnos has no sys_epoll_wait. Safe default EV_KEY.
+    return EV_KEY;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var n = sys_epoll_wait(_epfd, _ev_buf, 2, 0 - 1);   # timeout -1: block until ready
     if (n <= 0) { return EV_KEY; }                      # EINTR/spurious -> attempt a read
     var i = 0;
@@ -1080,21 +1096,33 @@ fn tui_wait_event() {
         i = i + 1;
     }
     return EV_KEY;
+    #endif
 }
 
 # tui_drain_winch: consume one signalfd_siginfo (128 bytes) — epoll said the fd is
 # readable so this won't block. Coalesced resizes that queued more re-fire epoll and
 # are drained next pass (each just re-relayouts, idempotent).
-fn tui_drain_winch() { syscall(SYS_READ, _winch_fd, _winch_drain, 128); return 0; }
+fn tui_drain_winch() {
+    #ifndef CYRIUS_TARGET_AGNOS
+    syscall(SYS_READ, _winch_fd, _winch_drain, 128);
+    #endif
+    return 0;   # agnos: no WINCH signalfd was opened — nothing to drain
+}
 
 # tui_events_teardown: close both signalfds (restoring the thread signal mask) and the
 # epoll fd. Also fixes the 0.9.0/0.9.1 leak where the SIGINT signalfd was opened but
 # never closed (its SIG_BLOCK persisted after the TUI exited).
 fn tui_events_teardown() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # Nothing was opened on agnos (tui_events_init returned 0) — no teardown.
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (_winch_fd >= 0) { tty_close_signalfd(_winch_fd, TTY_SIGMASK_WINCH); _winch_fd = 0 - 1; }
     if (_sigint_fd >= 0) { tty_close_signalfd(_sigint_fd, 2); _sigint_fd = 0 - 1; }
     if (_epfd >= 0) { file_close(_epfd); _epfd = 0 - 1; }
     return 0;
+    #endif
 }
 
 # tui_kitty_enable / tui_kitty_disable: push/pop the kitty keyboard protocol with the
@@ -1119,8 +1147,10 @@ fn tui_loop() {
     # SIGINT and, with no handler, kill us WITH the alt-screen up + scroll region set
     # (garbled terminal). Blocked, it's queued to the signalfd (unread) and discarded
     # at exit; the raw-mode composer's own Ctrl-C still exits cleanly (KEY_CTRLC).
+    #ifndef CYRIUS_TARGET_AGNOS
     _sigint_fd = tty_open_signalfd(2);   # block SIGINT (mask bit for signal 2) for the session
-    _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize)
+    #endif
+    _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize; 0 on agnos)
     tty_alt_enter();
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tty_clear();

@@ -2,6 +2,28 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.12] - 2026-07-01
+
+**AGNOS cross-build readiness.** thoth now compiles cleanly under
+`cyrius build --agnos`. Host build byte-identical (every agnos change is
+`#ifdef CYRIUS_TARGET_AGNOS`-gated); 675 assertions still pass.
+
+### Changed
+- **Vendored bundle re-synced**: `darshana` 0.8.1 → **0.8.2** (adds the agnos
+  peers for `tty_isatty` / `tty_raw` / `tty_cooked`).
+
+### Fixed
+- **`--agnos` build** — guarded the Linux-only terminal paths that have no agnos
+  equivalent, each degrading to an existing thoth fallback:
+  - `src/ui.cyr` `ui_isatty`: agnos has no `ioctl(TCGETS)` (Linux syscall 16 is
+    `kill` on agnos) — returns "tty" (the fb console is ANSI/SGR-capable).
+  - `src/tui.cyr` signalfd(SIGWINCH)+epoll multiplex: no signalfd/epoll on agnos
+    — `tui_events_init` returns 0 so the loop uses the bare-blocking-read
+    fallback (instant resize disabled); `tui_wait_event` / `tui_drain_winch` /
+    `tui_events_teardown` + the SIGINT-signalfd open guarded to match.
+  - Full-screen TUI degrades to thoth's line REPL on agnos (darshana `tty_raw`
+    → -1: no termios raw mode).
+
 ## [0.11.11] - 2026-06-30
 
 **cyrius 6.3.15 base-stack migration.** thoth joins the coordinated migration onto

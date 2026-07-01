@@ -61,9 +61,18 @@ var UI_TCGETS = 0x5401;
 
 # ui_isatty: 1 if fd is a tty, else 0 — ioctl(TCGETS) into a throwaway termios buf.
 fn ui_isatty(fd) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no ioctl(TCGETS) tty probe — and Linux syscall 16 (SYS_IOCTL)
+    # is `kill` on agnos, so the raw call would be actively wrong, not merely
+    # undefined. The agnos fb console interprets ANSI/SGR, so treat any fd as
+    # an interactive terminal and let thoth emit its colored TUI.
+    return 1;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var tbuf[64];
     if (syscall(SYS_IOCTL, fd, UI_TCGETS, &tbuf) == 0) { return 1; }
     return 0;
+    #endif
 }
 
 # _ui_dec: write non-negative n as decimal into buf at off; return new off.
