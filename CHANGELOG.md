@@ -2,6 +2,54 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] - 2026-07-02
+
+**Memory seam + local `.thoth/memory` reader — the mneme fallback.** Opens the
+0.12.x line ([ADR-0012](docs/adr/0012-memory-seam-omit-until-mneme.md)). Memory
+is **mneme's** domain (the AGNOS knowledge base — semantic search / RAG; still
+Rust, not yet Cyrius-ported), so thoth does **not** build a memory engine. It
+models memory as a capability seam that binds native → mneme when present and
+degrades to a dumb project-local flat-file reader when absent — the same
+`git → sit` omit-until-owner shape. **Off by default → byte-identical floor.**
+(The git producer moves to **0.13.0**; memory, drivable now, takes 0.12.x.)
+
+### Added
+- **`SEAM_MEMORY` on the capability ladder** (`src/seams.cyr`) — owner `mneme`,
+  domain "persistent memory / project note library". `seam_cap_state` is
+  special-cased like t-ron: `absent` (off) → `degraded` (local reader) →
+  `full` (mneme). Rendered in `/seams`; the binding stays `absent` until
+  mneme's port registers with daimon (then discover `mneme_*` in the registry
+  and flip to `remote`/`full` — zero change to the injection point).
+- **`src/memory.cyr` — the local reader.** `memory_system_prompt()` reads
+  `.thoth/memory/MEMORY.md` (curated index, first) + `*.md` fact files
+  (dir order, whole-or-skip) up to **4 KB**, verbatim, cached once (mirrors
+  `persona_system_prompt`). `memory_context()` is the single injectable
+  contract (`a cstr or 0`) the mneme branch will marshal into.
+  **Content-blind by construction** — recency/budget only, NO search / rank /
+  embed / link (that is mneme's engine; the litmus is in the module + ADR).
+- **Injection** — a second `{role:system}` message **after** the avatara
+  persona, **before** history, threaded as a `mem` parameter through
+  `hoosh_build_request` / `hoosh_build_messages` / `hoosh_build_dry`
+  (`src/hoosh.cyr`) and `agent_build_request` (`src/agent.cyr`); acquired
+  gated on `seam_cap_state(SEAM_MEMORY) != CAP_ABSENT` at the three sites
+  (`hoosh_send`, `agent_turn`, `/dry`). Shown faithfully in the `/dry` preview.
+- **`[memory].enabled`** config (opt-in, default off — `src/config.cyr`): a
+  checked-in `.thoth/memory` is a prompt-injection surface (same trust as
+  `CLAUDE.md`), so auto-injection requires an explicit opt-in.
+- **`/state` memory row** + a documented `[memory]` block in
+  `thoth.cyml.example`.
+
+### Notes
+- **Byte-identical floor**: memory off (default) or `.thoth/memory` absent →
+  `memory_context()` returns 0 → the builders omit the message (verified via
+  `/dry`, 0 occurrences). All prior request bodies are byte-identical
+  (existing builder tests pass unchanged with `mem = 0`).
+- Notes carry frontmatter matching mneme's vault format, so the local store is
+  later ingestible by mneme — the fallback is not throwaway.
+- 688 assertions (+13: seam registry/ladder + `test_memory` injection & floor).
+  Pin unchanged (6.3.15). `/remember` (0.12.1) + `memory_write` tool (0.12.2)
+  are the next cuts.
+
 ## [0.11.12] - 2026-07-01
 
 **AGNOS cross-build readiness.** thoth now compiles cleanly under

@@ -282,7 +282,7 @@ fn _json_escape_into(dst, off, src) {
 # original single-user-message shape, preserved). `stream` (1/0) sets the
 # OpenAI `"stream"` field — true makes the gateway answer with SSE deltas. Shape:
 #   {"model":"M","messages":[{"role":"system","content":"S"},{"role":"user","content":"P"}],"max_tokens":N,"stream":true|false}
-fn hoosh_build_request(dst, model, system, prompt, stream) {
+fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
     var cap = HOOSH_REQ_CAP;
     var off = 0;
     off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
@@ -291,6 +291,13 @@ fn hoosh_build_request(dst, model, system, prompt, stream) {
     if ((system != 0) && (load8(system) != 0)) {
         off = _append_cstr_cap(dst, off, cap, "{\"role\":\"system\",\"content\":\"");
         off = _json_escape_into_cap(dst, off, cap, system);
+        off = _append_cstr_cap(dst, off, cap, "\"},");
+    }
+    # project memory (0.12.0): a second system message after the persona, before
+    # the user turn. Off/absent -> mem is 0 -> omitted (byte-identical floor).
+    if ((mem != 0) && (load8(mem) != 0)) {
+        off = _append_cstr_cap(dst, off, cap, "{\"role\":\"system\",\"content\":\"");
+        off = _json_escape_into_cap(dst, off, cap, mem);
         off = _append_cstr_cap(dst, off, cap, "\"},");
     }
     off = _append_cstr_cap(dst, off, cap, "{\"role\":\"user\",\"content\":\"");
@@ -355,7 +362,7 @@ fn _hoosh_history_start(cap) {
 # NUL-terminated; return the byte length. The newest user turn must already be in
 # history. Pure (reads the session history). Shape mirrors hoosh_build_request
 # but with N messages instead of one.
-fn hoosh_build_messages(dst, model, system, stream) {
+fn hoosh_build_messages(dst, model, system, mem, stream) {
     var cap = HOOSH_REQ_CAP;
     var start = _hoosh_history_start(HOOSH_REQ_CAP);
     var total = session_history_len();
@@ -366,6 +373,13 @@ fn hoosh_build_messages(dst, model, system, stream) {
     var wrote = 0;
     if ((system != 0) && (load8(system) != 0)) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", system);
+        wrote = 1;
+    }
+    # project memory (0.12.0): a second system message after the persona, before
+    # history. Off/absent -> mem is 0 -> omitted (byte-identical floor).
+    if ((mem != 0) && (load8(mem) != 0)) {
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
     var i = start;
@@ -394,7 +408,7 @@ fn hoosh_build_messages(dst, model, system, stream) {
 # appends `prompt` first so its budget includes them. At a ~32 KiB-of-history boundary the
 # preview can include one more old message than the live turn would (the prompt is bounded
 # by the 4 KiB input line, so the skew is small). Faithful for any normal conversation.
-fn hoosh_build_dry(dst, model, system, prompt, stream) {
+fn hoosh_build_dry(dst, model, system, mem, prompt, stream) {
     var cap = HOOSH_REQ_CAP;
     var start = _hoosh_history_start(HOOSH_REQ_CAP);
     var total = session_history_len();
@@ -405,6 +419,13 @@ fn hoosh_build_dry(dst, model, system, prompt, stream) {
     var wrote = 0;
     if ((system != 0) && (load8(system) != 0)) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", system);
+        wrote = 1;
+    }
+    # project memory (0.12.0): a second system message after the persona, before
+    # history (mirrors hoosh_build_messages so /dry shows the exact bytes).
+    if ((mem != 0) && (load8(mem) != 0)) {
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
     var i = start;
@@ -847,6 +868,10 @@ fn hoosh_send(prompt) {
     # user turn. thoth only carries the persona; hoosh owns the inference.
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
+    # project memory (0.12.0): the second system message when the memory seam is
+    # not absent (local .thoth/memory reader, or mneme when it binds). ADR-0012.
+    var mem = 0;
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(); }
     var want_stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     _hoosh_acc_reset();
@@ -854,9 +879,9 @@ fn hoosh_send(prompt) {
     var len = 0;
     if (multi == 1) {
         session_history_append("user", prompt, strlen(prompt));
-        len = hoosh_build_messages(_hoosh_req, model, sys, want_stream);
+        len = hoosh_build_messages(_hoosh_req, model, sys, mem, want_stream);
     } else {
-        len = hoosh_build_request(_hoosh_req, model, sys, prompt, want_stream);
+        len = hoosh_build_request(_hoosh_req, model, sys, mem, prompt, want_stream);
     }
 
     var h = sandhi_headers_new();

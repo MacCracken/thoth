@@ -7,6 +7,26 @@
 
 ## Version
 
+**0.12.0** — memory seam + local `.thoth/memory` reader (the mneme fallback), 2026-07-02. Opens the
+0.12.x line ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)). Memory is **mneme's** domain
+(the AGNOS knowledge base — semantic search / RAG; still Rust, not yet Cyrius-ported), so thoth builds
+NO memory engine. It models memory as a **capability seam** (`SEAM_MEMORY`, `src/seams.cyr`) that binds
+native → mneme when present and degrades to a dumb project-local flat-file reader when absent — the
+`git → sit` omit-until-owner shape; `seam_cap_state` special-cased like t-ron (off → `absent`, enabled →
+`degraded`, mneme → `full`), rendered in `/seams` + `/state`. New **`src/memory.cyr`**: `memory_system_prompt()`
+reads `.thoth/memory/MEMORY.md` (index first) + `*.md` facts (dir order, whole-or-skip) to a **4 KB** cap,
+verbatim, cached like the persona; **content-blind** (recency + budget only — NO search/rank/embed/link;
+that is mneme's engine, the litmus guarded in-module + ADR). `memory_context()` pins the injectable contract
+(`a cstr or 0`) the mneme branch marshals into. **Injected** as a second `{role:system}` message after the
+persona, before history — a new `mem` param through the 4 request builders (`hoosh_build_request`/`_messages`/
+`_dry`, `agent_build_request`), acquired gated on `seam_cap_state(SEAM_MEMORY) != CAP_ABSENT` at `hoosh_send`/
+`agent_turn`/`/dry` (shown in the `/dry` preview). **Opt-in** `[memory].enabled` (default off — a checked-in
+`.thoth/memory` is a prompt-injection surface, same trust as `CLAUDE.md`). `/state` memory row +
+`thoth.cyml.example` block. **Byte-identical floor** (off/absent → `mem`=0 → builders omit; verified via `/dry`,
+0 occurrences; prior request bodies unchanged). Notes match mneme's vault frontmatter → later ingestible by
+mneme (fallback not throwaway). **The git producer moves to 0.13.0** (externally sit-gated; memory is drivable
+now). 688 assertions (+13). Pin unchanged (6.3.15). Next: `/remember` (0.12.1) + `memory_write` tool (0.12.2).
+
 **0.11.10** — `--tier` flag (replaces the `THOTH_TIER` env-var), 2026-06-26. The presentation tier
 is now a first-class flag — `thoth --tier=simple|rich|auto` (also `--tier <mode>`) — with
 capability-aware auto-detection, REPLACING `THOTH_TIER` (dropped; no `getenv("THOTH_TIER")` remains).

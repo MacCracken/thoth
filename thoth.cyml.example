@@ -162,3 +162,25 @@ model = "claude-haiku-4-5-20251001"
 # ship    = "/run git status"
 # explain = "explain this code thoroughly:"
 # fix     = "/read"
+
+# The [memory] table wires the memory seam (0.12.0; ADR-0012). Memory is mneme's
+# domain (the AGNOS knowledge base — semantic search / RAG). Until mneme's Cyrius
+# port ships, thoth stands in a DUMB project-local fallback: it reads a
+# .thoth/memory/ flat-file store and injects it into each turn as a system
+# message (the same way it injects the avatara persona). It does NOT search,
+# rank, embed, or link — that is mneme's engine, never thoth's.
+#
+# OFF BY DEFAULT. A checked-in .thoth/memory becomes a system message the model
+# reads as context — a prompt-injection surface (the same trust question as
+# CLAUDE.md) — so auto-injection requires an explicit opt-in. Enable it only for
+# projects whose .thoth/memory you trust.
+#
+# Layout (project-local, cwd-relative):
+#   .thoth/memory/MEMORY.md   an index (read first, in full) — one bullet per fact
+#   .thoth/memory/*.md        fact notes (frontmatter + body), read verbatim to a
+#                             ~4 KB budget, whole-or-skip (never mid-fact truncation)
+# Notes match mneme's vault frontmatter, so they are later ingestible by mneme.
+# /state and /seams show the honest effect (off / local-degraded / mneme-full).
+
+# [memory]
+# enabled = true

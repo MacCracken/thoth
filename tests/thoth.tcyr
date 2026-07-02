@@ -23,6 +23,7 @@ include "src/session.cyr"
 include "src/roundlog.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
+include "src/memory.cyr"
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
@@ -208,13 +209,13 @@ fn test_hoosh() {
     assert(streq(&ib, "0"), "append_int 0");
 
     var rb[256];
-    hoosh_build_request(&rb, "m", 0, "hi", 0);
+    hoosh_build_request(&rb, "m", 0, 0, "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "request shape, no system (0)");
-    hoosh_build_request(&rb, "m", "", "hi", 0);
+    hoosh_build_request(&rb, "m", "", 0, "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "empty system omitted");
-    hoosh_build_request(&rb, "m", "be precise", "hi", 0);
+    hoosh_build_request(&rb, "m", "be precise", 0, "hi", 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be precise\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "system message prepended");
-    hoosh_build_request(&rb, "m", 0, "hi", 1);
+    hoosh_build_request(&rb, "m", 0, 0, "hi", 1);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "stream=1 sets stream:true + usage opt");
 
     test_group("hoosh response extraction");
@@ -517,17 +518,17 @@ fn test_dry() {
     session_set_model(0);
 
     # bare body: empty history, no system, blocking -> a single user message.
-    var l1 = hoosh_build_dry(&dst, "m", 0, "hi", 0);
+    var l1 = hoosh_build_dry(&dst, "m", 0, 0, "hi", 0);
     store8(&dst + l1, 0);
     assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: bare user turn");
 
     # with a system (persona) message prepended.
-    var l2 = hoosh_build_dry(&dst, "m", "SYS", "hi", 0);
+    var l2 = hoosh_build_dry(&dst, "m", "SYS", 0, "hi", 0);
     store8(&dst + l2, 0);
     assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: system + user");
 
     # streaming adds stream + stream_options (matching the real request shape).
-    var l3 = hoosh_build_dry(&dst, "m", 0, "hi", 1);
+    var l3 = hoosh_build_dry(&dst, "m", 0, 0, "hi", 1);
     store8(&dst + l3, 0);
     assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "dry body: streaming flags");
 
@@ -536,18 +537,51 @@ fn test_dry() {
     session_history_append("user", "Q", 1);
     session_history_append("assistant", "A", 1);
     var before = session_history_len();
-    var l4 = hoosh_build_dry(&dst, "m", 0, "now", 0);
+    var l4 = hoosh_build_dry(&dst, "m", 0, 0, "now", 0);
     store8(&dst + l4, 0);
     assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"Q\"},{\"role\":\"assistant\",\"content\":\"A\"},{\"role\":\"user\",\"content\":\"now\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: history tail + pending user");
     assert_eq(session_history_len(), before, "hoosh_build_dry does NOT mutate history (side-effect-free)");
 
     # the prompt is JSON-escaped like the real builders (a quote can't break the body).
     session_reset();                       # clear the history appended above
-    var l5 = hoosh_build_dry(&dst, "m", 0, "a\"b", 0);
+    var l5 = hoosh_build_dry(&dst, "m", 0, 0, "a\"b", 0);
     store8(&dst + l5, 0);
     assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\\\"b\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: prompt is JSON-escaped");
 
     session_set_model(0);
+    session_reset();
+    return 0;
+}
+
+# Project-memory injection (0.12.0, ADR-0012). The mem system message rides the
+# same builders as the persona — a second {role:system} block AFTER the persona,
+# BEFORE the user turn/history. mem == 0 (disabled/absent) -> byte-identical floor.
+fn test_memory() {
+    test_group("project memory injection (0.12.0)");
+    session_reset();
+    var dst[4096];
+
+    # persona + memory + user, in order (both system messages present).
+    var l1 = hoosh_build_dry(&dst, "m", "SYS", "MEM", "hi", 0);
+    store8(&dst + l1, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"system\",\"content\":\"MEM\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "memory: persona + memory + user, in order");
+
+    # mem == 0 -> NO memory message (byte-identical floor).
+    var l2 = hoosh_build_dry(&dst, "m", "SYS", 0, "hi", 0);
+    store8(&dst + l2, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "memory off: byte-identical (no memory message)");
+
+    # single-turn builder threads mem the same way (persona 0, memory present).
+    var l3 = hoosh_build_request(&dst, "m", 0, "MEM", "hi", 0);
+    store8(&dst + l3, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"MEM\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "single-turn: memory system message");
+
+    # reader is OFF by default -> content-blind gate returns 0, no I/O, no faked line.
+    assert_eq(config_memory_enabled(), 0, "memory off by default");
+    assert_eq(memory_context(), 0, "memory_context() 0 when disabled");
+    assert_eq(memory_system_prompt(), 0, "memory_system_prompt() 0 when disabled");
+    assert_eq(memory_fact_count(), 0, "memory_fact_count() 0 when disabled");
+
     session_reset();
     return 0;
 }
@@ -821,9 +855,9 @@ fn test_history_request() {
     assert_eq(_hoosh_history_start(8), 2, "tiny budget keeps only the newest");
 
     var rb[512];
-    hoosh_build_messages(&rb, "m", 0, 0);
+    hoosh_build_messages(&rb, "m", 0, 0, 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":false}"), "multi-turn shape, no system");
-    hoosh_build_messages(&rb, "m", "sys", 1);
+    hoosh_build_messages(&rb, "m", "sys", 0, 1);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "multi-turn shape, system + stream + usage opt");
     session_reset();
     return 0;
@@ -1053,10 +1087,10 @@ fn test_agent() {
     session_reset();
     session_history_append("user", "hi", 2);
     var rb[512];
-    agent_build_request(&rb, "m", 0, 0, 0, 0);
+    agent_build_request(&rb, "m", 0, 0, 0, 0, 0);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: history, no tools");
     var toolsb = "[{\"type\":\"function\"}]";
-    agent_build_request(&rb, "m", 0, toolsb, strlen(toolsb), 1);
+    agent_build_request(&rb, "m", 0, 0, toolsb, strlen(toolsb), 1);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "agent request: with tools, streaming + usage opt");
     session_reset();
 
@@ -1880,6 +1914,7 @@ fn main() {
     test_cost();
     test_alias();
     test_dry();
+    test_memory();
     test_oneshot();
     test_json_envelope();
     test_oneshot_out();

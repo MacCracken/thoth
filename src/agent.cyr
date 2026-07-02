@@ -148,7 +148,7 @@ fn _agent_copy(dst, off, src, n, cap) {
 # agent_build_request: assemble the chat request — system + budgeted history +
 # this turn's working tool-rounds, plus the advertised tools. NUL-terminated;
 # returns the byte length. Non-streaming (tool_calls must be parsed whole).
-fn agent_build_request(dst, model, system, tools_buf, tools_len, stream) {
+fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
     var cap = AGENT_REQ_CAP;
     var off = 0;
     off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
@@ -156,6 +156,13 @@ fn agent_build_request(dst, model, system, tools_buf, tools_len, stream) {
     off = _append_cstr_cap(dst, off, cap, "\",\"messages\":[");
     var wrote = 0;
     if ((system != 0) && (load8(system) != 0)) { off = _hoosh_emit_msg_cap(dst, off, cap, "system", system); wrote = 1; }
+    # project memory (0.12.0): second system message after the persona, before
+    # history + tool-rounds. Off/absent -> mem is 0 -> omitted. ADR-0012.
+    if ((mem != 0) && (load8(mem) != 0)) {
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
+        wrote = 1;
+    }
     var total = session_history_len();
     # Budget history against the room left AFTER this turn's working tool-rounds
     # (_agent_work) and the advertised tools, so history + work + tools cannot
@@ -725,8 +732,8 @@ fn _agent_sse_cb(ctx, ev) {
 }
 
 # _agent_iter_block: one non-streaming iteration (a full POST, parsed whole).
-fn _agent_iter_block(model, sys, tools_buf, tools_len) {
-    var len = agent_build_request(_agent_req, model, sys, tools_buf, tools_len, 0);
+fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
+    var len = agent_build_request(_agent_req, model, sys, mem, tools_buf, tools_len, 0);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
@@ -763,9 +770,9 @@ fn _agent_iter_block(model, sys, tools_buf, tools_len) {
 
 # _agent_iter_stream: one streaming iteration. SSE content prints live; tool_calls
 # assemble from the deltas and are reconstructed into the same array text shape.
-fn _agent_iter_stream(model, sys, tools_buf, tools_len) {
+fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     _ag_reset();
-    var len = agent_build_request(_agent_req, model, sys, tools_buf, tools_len, 1);
+    var len = agent_build_request(_agent_req, model, sys, mem, tools_buf, tools_len, 1);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
     sandhi_headers_set(h, "Accept", "text/event-stream");
@@ -807,6 +814,10 @@ fn agent_turn(prompt) {
     var model = _hoosh_model();
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
+    # project memory (0.12.0): the second system message, acquired once per turn
+    # (local .thoth/memory reader, or mneme when it binds). ADR-0012.
+    var mem = 0;
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(); }
     if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
     if (_agent_tools_buf == 0) { _agent_tools_buf = alloc(AGENT_TOOLS_CAP); }
     if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
@@ -835,8 +846,8 @@ fn agent_turn(prompt) {
     var round_no = 0;
     while ((done == 0) && (iter < AGENT_MAX_ITERS)) {
         _hoosh_acc_reset();
-        if (want_stream == 1) { _agent_iter_stream(model, sys, _agent_tools_buf, tools_len); }
-        else { _agent_iter_block(model, sys, _agent_tools_buf, tools_len); }
+        if (want_stream == 1) { _agent_iter_stream(model, sys, mem, _agent_tools_buf, tools_len); }
+        else { _agent_iter_block(model, sys, mem, _agent_tools_buf, tools_len); }
         var k = _agent_round_kind;
         if (k == 2) {
             session_history_pop_last();

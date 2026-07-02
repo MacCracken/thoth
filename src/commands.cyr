@@ -190,6 +190,10 @@ fn cmd_state() {
     ui_label("  context : ");
     if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); oprintln(""); }
     else { emit("multi-turn, "); ofmt_int(session_history_len()); ui_emit(ROLE_MUTED, " messages (/reset clears)"); oprintln(""); }
+    ui_label("  memory  : ");
+    if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall)"); oprintln(""); }
+    elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }
+    else { ui_emit(ROLE_FAINT, "off (set [memory].enabled in thoth.cyml)"); oprintln(""); }
     ui_label("  tokens  : ");
     if (session_tokens_seen() == 0) { ui_emit(ROLE_FAINT, "(none reported yet — shows once hoosh returns usage)"); oprintln(""); }
     else { ofmt_int(session_tokens()); ui_emit(ROLE_MUTED, " total (hoosh usage, this session)"); oprintln(""); }
@@ -537,12 +541,15 @@ fn cmd_dry(line) {
     var model = hoosh_model_cur();
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
+    # project memory (0.12.0): show the exact second system message /dry would send.
+    var mem = 0;
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(); }
     var stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     var buf = hoosh_dry_buf();
     var len = 0;
-    if (multi == 1) { len = hoosh_build_dry(buf, model, sys, task, stream); }
-    else { len = hoosh_build_request(buf, model, sys, task, stream); }
+    if (multi == 1) { len = hoosh_build_dry(buf, model, sys, mem, task, stream); }
+    else { len = hoosh_build_request(buf, model, sys, mem, task, stream); }
 
     ui_label("-> POST  : "); emit(_hoosh_endpoint_url());
     ui_emit(ROLE_FAINT, "  (dry-run — not sent)"); oprintln("");
