@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.12.1** — `/remember` (memory-seam write half), 2026-07-02. `/remember <fact>` appends a verbatim
+bullet to `.thoth/memory/MEMORY.md`, t-ron-gated under the reserved name `thoth_remember` (same choke
+point as `/write`; absent-t-ron → fail-closed confirm). Portable `file_append_locked` (creates the file;
+the AGNOS append-gap is handled in `lib/io.cyr`); `memory_invalidate()` makes the fact live on the next
+turn (verified live: `/remember` then `/dry` shows it). **Verbatim only** — no summarize/tag/dedupe/link
+(that is mneme's engine, ADR-0012). thoth does NOT create `.thoth/memory/` (no portable mkdir —
+`sys_mkdir`'s arg shape forks on AGNOS: `path,pathlen` vs `path,mode`); degrades CLOSED with guidance if
+the dir is missing (candidate to file against the agnos peer). Works whether or not `[memory].enabled`
+(saved either way; a note says it is not injected until enabled). 689 assertions (+1). Pin unchanged
+(6.3.15). Next: `memory_write` MCP tool + `AGENTS.md` pickup (0.12.2).
+
 **0.12.0** — memory seam + local `.thoth/memory` reader (the mneme fallback), 2026-07-02. Opens the
 0.12.x line ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)). Memory is **mneme's** domain
 (the AGNOS knowledge base — semantic search / RAG; still Rust, not yet Cyrius-ported), so thoth builds

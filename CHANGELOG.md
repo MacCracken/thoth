@@ -2,6 +2,33 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.1] - 2026-07-02
+
+**`/remember` — the memory-seam write half.** `/remember <fact>` appends a
+verbatim bullet to `.thoth/memory/MEMORY.md`, **t-ron-gated** under the reserved
+name `thoth_remember` (the same choke point as `/write` — a policy can allow it;
+absent-t-ron falls to the fail-closed confirm). No new security surface, no new
+spine.
+
+### Added
+- **`/remember <fact>`** (`CMD_REMEMBER`, `src/commands.cyr`) — appends `- <fact>`
+  to `.thoth/memory/MEMORY.md` via the portable `file_append_locked` (creates the
+  file; the AGNOS append gap is handled in `lib/io.cyr`), then calls
+  `memory_invalidate()` so the fact is live on the **next turn** (verified:
+  `/remember` then `/dry` shows it). Verbatim only — thoth does NOT summarize,
+  tag, dedupe, or link (that is mneme's engine — ADR-0012).
+
+### Notes
+- **No portable `mkdir`**: `sys_mkdir`'s arg shape differs on AGNOS
+  (`path, pathlen` vs `path, mode`), so thoth does NOT create `.thoth/memory/` —
+  it degrades **closed** with guidance if the dir is missing (a candidate to file
+  against the agnos peer, same class as the `sys_open` mode gap). A write failure
+  also degrades closed + announced.
+- Works whether or not `[memory].enabled` (the fact is saved either way; a note
+  says it is not injected until the seam is enabled).
+- 689 assertions (+1). Pin unchanged (6.3.15). Next: `memory_write` MCP tool +
+  `AGENTS.md` pickup (0.12.2).
+
 ## [0.12.0] - 2026-07-02
 
 **Memory seam + local `.thoth/memory` reader — the mneme fallback.** Opens the

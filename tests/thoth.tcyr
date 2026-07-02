@@ -558,6 +558,7 @@ fn test_dry() {
 # BEFORE the user turn/history. mem == 0 (disabled/absent) -> byte-identical floor.
 fn test_memory() {
     test_group("project memory injection (0.12.0)");
+    assert_eq(classify_input("/remember a durable fact"), CMD_REMEMBER, "/remember classifies to CMD_REMEMBER");
     session_reset();
     var dst[4096];
 
