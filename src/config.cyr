@@ -32,6 +32,7 @@ var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
 var _cfg_log_file = 0;       # cstring path for structured driver logs, or 0
 var _cfg_log_level = 0;      # cstring level (off/error/warn/info/debug/trace), or 0
 var _cfg_history_file = 0;   # cstring path for the persistent INPUT-history file (0.11.2), or 0
+var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 
 var CONFIG_PATH = "thoth.cyml";
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
@@ -251,6 +252,8 @@ fn config_load() {
     _cfg_log_level = _cfg_str(log, "level");
     var history = _cfg_section_pairs(sections, "history");
     _cfg_history_file = _cfg_str(history, "file");
+    var memory = _cfg_section_pairs(sections, "memory");
+    _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
     if (_cfg_hoosh_url == 0) { return 0; }
     return 1;
 }
@@ -300,6 +303,12 @@ fn config_daimon_configured() {
 # config_daimon_url: the configured daimon endpoint, or 0 if unset (the daimon
 # seam never claims remote without a declared endpoint — no default here).
 fn config_daimon_url() { return _cfg_daimon_url; }
+
+# config_memory_enabled: 1 if the project-local .thoth/memory seam is enabled
+# (0.12.0; opt-in, off by default). A checked-in .thoth/memory is a prompt-
+# injection surface (same trust question as CLAUDE.md), so auto-injection
+# requires an explicit [memory].enabled = true. See ADR-0012.
+fn config_memory_enabled() { return _cfg_memory_enabled; }
 
 # config_tron_policy: path to the t-ron policy TOML, or 0 if unset (the t-ron
 # seam stays absent and the built-in fail-closed confirm gate stands in).

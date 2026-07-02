@@ -20,8 +20,9 @@
 > binding, never a spine fork — that TUI is being reskinned onto thoth's, so thoth's
 > front-end is the shared canonical surface. **What's left is no longer thoth feature work:**
 > the remaining 0.11.x riders are deferred (live spine-health) or AGNOS-impossible (clipboard);
-> the **0.12.x git producer** is externally gated on **sit**; and the **four v1.0 gates** below
-> are dominated by AGNOS lighting up.
+> the **0.12.x memory seam** (a thoth-drivable mneme fallback — [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md))
+> is the next active line; the **0.13.x git producer** is externally gated on **sit**; and the
+> **four v1.0 gates** below are dominated by AGNOS lighting up.
 
 ## Framing (read first)
 
@@ -134,14 +135,41 @@ The only 0.11.x items left are deferred:
   primitive (Linux/macOS/Windows). **Architecturally impossible on AGNOS** (frozen
   0-33 ABI: no fork/exec/dup2) → degrades closed there, by ABI, announced.
 
-### 0.12.x — git producer (omit-until-sit; sit-gated)
+### 0.12.x — memory seam (omit-until-mneme; the mneme fallback)
 
-- **`0.12.0` — git. Omit-until-sit.** One faint `/state` honesty line
+- **`0.12.0` — memory seam + local reader.** A `SEAM_MEMORY` on the capability
+  ladder ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)): binds native →
+  **mneme** (its 8 `mneme_*` MCP tools, discovered through the daimon registry) when
+  mneme's Cyrius port lands; degrades to a thin thoth-owned reader of a project-local
+  `.thoth/memory/*.md` flat store (verbatim inject, recency + byte budget, **no
+  search** — search/ranking/graph are mneme's) when absent; `absent` (off) by default.
+  Opt-in `[memory].enabled` (a checked-in `.thoth/memory` is a prompt-injection
+  surface, same trust as `CLAUDE.md`). Injected as a second `{role:system}` message
+  after the avatara persona, before history — the same context-assembly verb thoth
+  already ships. Notes match mneme's vault frontmatter, so the fallback store is later
+  ingestible by mneme (not throwaway). Announced in `/seams` + `/state`, never faked.
+- **`0.12.1` — `/remember`.** Verbatim append to `.thoth/memory/MEMORY.md`,
+  t-ron-gated under the reserved name `thoth_remember` (no new security surface).
+  Never summarized or curated — curation is the human's or mneme's.
+- **`0.12.2` — `memory_write` MCP tool + `AGENTS.md` pickup.** The agentic loop can
+  write memories through the existing daimon + t-ron choke point; an optional
+  project-root `AGENTS.md` is added to the read set.
+
+The bright line ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)): thoth owns
+**reading + injecting** (content-blind recency + budget); mneme owns the **engine**
+(retrieval, embeddings, ranking, auto-link, graph, curation). The cardinal risk is
+relevance-creep — "select the *relevant* memories" is retrieval, a spine fork; the
+selection stays content-blind.
+
+### 0.13.x — git producer (omit-until-sit; sit-gated)
+
+- **`0.13.0` — git. Omit-until-sit.** One faint `/state` honesty line
   (`git: absent — gated on sit`). **No faked branch/diff** — real `.git/` reads are
   gated on **sit**'s `.git/` read-mode (sit owns VCS and is not vendored; thoth
   never hand-rolls a `.git/` parser, which would fork sit's domain — ADR-0010). It is
   its own minor — unlike the tokens/cost producers, its producer is external — and it
-  advances when sit ships `.git/` read-mode.
+  advances when sit ships `.git/` read-mode. **Re-sequenced 0.12.x → 0.13.0**: the
+  memory seam (thoth-drivable now) takes 0.12.x; git stays externally blocked on sit.
 
 ### Deferred / known limitations (captured so they're not lost)
 

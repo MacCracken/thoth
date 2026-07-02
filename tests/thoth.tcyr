@@ -83,12 +83,14 @@ fn test_cstr() {
 
 fn test_seams() {
     test_group("seam registry");
-    assert_eq(SEAM_COUNT, 5, "five seams");
+    assert_eq(SEAM_COUNT, 6, "six seams");
     assert(streq(seam_name(SEAM_HOOSH), "hoosh"), "hoosh name");
     assert(streq(seam_name(SEAM_DAIMON), "daimon"), "daimon name");
     assert(streq(seam_name(SEAM_BOTE), "bote"), "bote name");
     assert(streq(seam_name(SEAM_TRON), "t-ron"), "t-ron name");
     assert(streq(seam_name(SEAM_AVATARA), "avatara"), "avatara name");
+    assert(streq(seam_name(SEAM_MEMORY), "mneme"), "mneme name (memory domain owner)");
+    assert_eq(seam_status(SEAM_MEMORY), SEAM_ABSENT, "memory absent (mneme not yet Cyrius-ported)");
     assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
     assert_eq(seam_status(SEAM_DAIMON), SEAM_ABSENT, "daimon absent when unconfigured");
     assert_eq(seam_status(SEAM_TRON), SEAM_ABSENT, "t-ron absent without a policy");
@@ -121,6 +123,15 @@ fn test_capability_ladder() {
     assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_HOOSH), "absent:"), 1, "hoosh fallback is absent");
     assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_DAIMON), "absent:"), 1, "daimon fallback is absent");
     assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_TRON), "degraded:"), 1, "t-ron fallback is degraded");
+    # memory (0.12.0): OFF by default -> ABSENT (byte-identical floor); when
+    # [memory].enabled, the local .thoth/memory reader stands in -> DEGRADED
+    # (never faked). mneme's semantic engine would be FULL (not reachable today).
+    assert_eq(seam_cap_state(SEAM_MEMORY), CAP_ABSENT, "memory absent when disabled (default)");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_MEMORY), "absent:"), 1, "memory-off fallback is absent");
+    _cfg_memory_enabled = 1;
+    assert_eq(seam_cap_state(SEAM_MEMORY), CAP_DEGRADED, "memory degraded when enabled (local reader)");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_MEMORY), "degraded:"), 1, "memory-on fallback is degraded");
+    _cfg_memory_enabled = 0;
     return 0;
 }
 
