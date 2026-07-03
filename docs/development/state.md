@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.13.2** — toolchain refresh to Cyrius **6.3.41** (globals cap raised) + a detached-HEAD test fix,
+2026-07-03. Maintenance pin `6.3.38 → 6.3.41` (`cyrius.cyml` + `cyrius lib sync`, 70 floor modules);
+clears the drift warning. 6.3.41 **raised the `max 1024 initialized globals` cap** (the ceiling that
+forced sit's `[lib.read]` + sankoch's `[lib.zlib]` profiles) — those lean profiles are KEPT (worthwhile
+on their own: smaller bundles, less dead code; the raised cap just removes the *force*, not the merit).
+**Fixed the sole CI failure**: `test_git` assumed a present repo always has a named branch, but CI
+checks out a detached HEAD (bare SHA) where `git_branch()` is the `"?"` sentinel — now asserts a real
+branch only when attached, the sentinel when detached (production was always right; only the test was
+wrong). No source-logic change; 707 assertions; all lanes behave (linux ships, AGNOS builds git
+natively, aarch64 size-gapped, windows IOCP gap). Pin **6.3.41**.
+
 **0.13.1** — refold the git producer onto **patched sit 1.3.1 + sankoch 2.4.9**, 2026-07-03. Drops
 two of the three vendor workarounds 0.13.0 carried, no behavior change. **sankoch**: the full 2.2.5
 pin → the **2.4.9 `zlib` profile** (`dist/sankoch-zlib.cyr`, sankoch's new `[lib.zlib]` — DEFLATE/zlib

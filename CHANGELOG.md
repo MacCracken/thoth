@@ -2,6 +2,27 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.2] - 2026-07-03
+
+**Toolchain refresh to Cyrius 6.3.41 (globals cap raised) + a detached-HEAD test fix (CI green).**
+Maintenance: pin `6.3.38 → 6.3.41` (`cyrius.cyml` + `cyrius lib sync` — 70 floor modules). No thoth
+source-logic change; 707 assertions pass; all lanes behave (linux ships, AGNOS builds git natively,
+aarch64 size-gapped, windows IOCP gap).
+
+### Changed
+- **Pin `6.3.38 → 6.3.41`.** Clears the drift warning. 6.3.41 **raised the `max 1024 initialized
+  globals` per-compilation-unit cap** (the ceiling that forced sit's read profile + sankoch's zlib
+  profile). Those lean profiles are **kept** — they're worthwhile on their own (smaller bundles, less
+  dead code); the raised cap just means consumers are no longer *forced* into them, not that thoth
+  should revert to the full bundles.
+
+### Fixed
+- **`test_git` is now detached-HEAD-robust** — CI checks out a bare SHA (detached HEAD), where a
+  present repo has no named branch and `git_branch()` returns the `"?"` sentinel; the 0.13.0 test
+  wrongly assumed a present repo always has a named branch and failed CI. It now asserts a real branch
+  only when attached, and the sentinel when detached (the UI already rendered `(detached)` via
+  `git_detached()` — production was never wrong, only the test). 707 assertions unchanged.
+
 ## [0.13.1] - 2026-07-03
 
 **Refold the git producer onto patched sit + sankoch — drop two of the three vendor

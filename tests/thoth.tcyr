@@ -1938,7 +1938,15 @@ fn test_git() {
     if (git_present() == 1) {
         # cyrius test runs at the thoth repo root -> a real read through sit's .git backend
         assert_eq(seam_cap_state(SEAM_GIT), CAP_FULL, "repo present -> capability FULL");
-        assert_eq(streq(git_branch(), "?"), 0, "present -> a real branch, not the '?' sentinel");
+        # A present repo may be on a NAMED branch or a DETACHED HEAD — CI checkouts are
+        # commonly detached (GitHub Actions checks out a bare SHA), so don't assume a branch.
+        # Attached -> git_branch() is a real name; detached -> the '?' sentinel (the UI renders
+        # "(detached)" off git_detached(), never the sentinel). Assert whichever case holds.
+        if (git_detached() == 0) {
+            assert_eq(streq(git_branch(), "?"), 0, "attached -> a real branch, not the '?' sentinel");
+        } else {
+            assert_eq(streq(git_branch(), "?"), 1, "detached -> git_branch() is the '?' sentinel (UI shows (detached))");
+        }
         assert(git_dirty() >= 0, "dirty count is a non-negative snapshot");
     } else {
         assert_eq(seam_cap_state(SEAM_GIT), CAP_ABSENT, "no repo at cwd -> capability ABSENT (honest, never faked)");
