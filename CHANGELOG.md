@@ -2,6 +2,40 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.14.0] - 2026-07-03
+
+**Vendored bote 2.7.7 → 3.0.0 (MCP-protocol refresh) + a full vertical integration test.** Refreshes
+the in-process MCP-protocol bundle to bote 3.0.0 (a major upstream bump — minor here) and exercises
+the whole thoth → hoosh → daimon → bote stack live. No thoth source-logic change; 707 assertions pass.
+
+### Changed
+- **Vendored bote-core `2.7.7 → 3.0.0`** (`src/vendor/bote-core.cyr`; `scripts/sync-bote.sh`
+  default tag → `3.0.0`). bote 3.0.0's breaking changes are all in its HTTP-server/full-bundle
+  surface (session-less→404, `listChanged` notifications); the `[lib.core]` dispatcher bundle thoth
+  vendors — used only to satisfy the vendored t-ron's dispatcher references — stays API-compatible
+  (thoth builds clean, no undefined/arity errors, 707 tests).
+- **`scripts/stack.sh`**: the generated `thoth.cyml` no longer puts an inline `#` comment on the
+  `stream = false` value line (see the bug note below) — comments go on their own line.
+
+### Integration test (live vertical — hoosh + daimon + bote 3.0.0 + thoth)
+- **PROVEN end-to-end**: stack up (hoosh :8088 / daimon :8090 / bote 3.0.0 :9000); `thoth /tools`
+  lists daimon's registry (fs_mkdir/write/read + bote_echo); `thoth /call` round-trips a tool
+  (t-ron `allow` → daimon → bote 3.0.0 → executed); and an **agentic turn** runs the full loop —
+  thoth → hoosh(Opus) → tool-call → t-ron → daimon → bote 3.0.0 `fs_write` **executed** (file
+  written) + result parsed.
+- **Findings** (none in thoth's git-producer / spine code): **(1)** the agentic loop can't COMPLETE
+  — hoosh returns **HTTP 502 "provider backend unreachable"** on the tool-continuation turn (assistant
+  `tool_calls` + `tool` result messages); simple + repeated calls succeed, so it's specific to the
+  tool-continuation shape (a hoosh OpenAI→Anthropic tool-message translation bug, **filed on hoosh's
+  roadmap** with a minimal repro). **(2)** a **bayan** inline-comment config bug — `key = val # note`
+  is read with the comment attached, so thoth's `_cfg_*` mis-parse it (this is why `stream = false #…`
+  read as streaming); worked around in stack.sh, root cause is bayan. **(3)** bote's sample
+  `bote_echo` returns a bare `{…}` (not MCP content blocks) so `/call bote_echo` shows "no text
+  content" — the real fs tools return proper content blocks; a bote sample-tool quirk.
+
+### Notes
+- 707 assertions unchanged. Pin unchanged (6.3.41). Requires bote-core ≥ 3.0.0 (`sync-bote.sh 3.0.0`).
+
 ## [0.13.2] - 2026-07-03
 
 **Toolchain refresh to Cyrius 6.3.41 (globals cap raised) + a detached-HEAD test fix (CI green).**

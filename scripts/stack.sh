@@ -109,7 +109,11 @@ write_configs() {
 [hoosh]
 url    = "http://127.0.0.1:$HOOSH_PORT"
 model  = "$MODEL"
-stream = false   # agentic tool-call final-turn workaround (blocking mode)
+# stream=false is the agentic tool-call final-turn workaround (blocking mode).
+# NOTE: keep config comments on their OWN line — an inline comment on a value
+# line (\`stream = false  # ...\`) is currently NOT stripped by the bayan TOML
+# reader, so thoth mis-parses the value (reads it as streaming). Filed vs bayan.
+stream = false
 
 [daimon]
 url = "http://127.0.0.1:$DAIMON_PORT"

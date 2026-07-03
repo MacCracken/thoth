@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.14.0** — vendored **bote 2.7.7 → 3.0.0** (MCP-protocol refresh) + a full vertical integration test, 2026-07-03.
+Refreshes the in-process MCP-protocol bundle (`src/vendor/bote-core.cyr`; `sync-bote.sh` tag → 3.0.0);
+bote 3.0.0's breaking changes are server-side, so the `[lib.core]` dispatcher thoth vendors (for the
+vendored t-ron's references) stays API-compatible — thoth builds clean, 707 tests. **Integration test
+(thoth 0.14.0 + hoosh + daimon + bote 3.0.0), PROVEN end-to-end**: `/tools` lists daimon's registry;
+`/call` round-trips a tool (t-ron allow → daimon → bote 3.0.0 → executed); an agentic turn runs the
+full loop (thoth → hoosh Opus → tool-call → t-ron → daimon → bote 3.0.0 `fs_write` executed + result
+parsed). **Three findings, none in thoth's spine/git code**: (1) the agentic loop can't COMPLETE —
+hoosh returns HTTP 502 on the tool-continuation turn (assistant `tool_calls` + `tool` result);
+simple/repeated calls succeed → a hoosh OpenAI→Anthropic tool-message translation bug, **filed on
+hoosh's roadmap** with a minimal repro; (2) a **bayan** inline-comment config bug (`key = val # note`
+read with the comment attached → thoth's `_cfg_*` mis-parse; why `stream = false #…` read as
+streaming) — worked around in stack.sh, root cause bayan; (3) bote's sample `bote_echo` returns a bare
+`{…}` not MCP content blocks (real fs tools are conformant). Also fixed stack.sh's generated
+`thoth.cyml` to keep comments off value lines. 707 assertions; pin **6.3.41**; requires bote-core ≥ 3.0.0.
+
 **0.13.2** — toolchain refresh to Cyrius **6.3.41** (globals cap raised) + a detached-HEAD test fix,
 2026-07-03. Maintenance pin `6.3.38 → 6.3.41` (`cyrius.cyml` + `cyrius lib sync`, 70 floor modules);
 clears the drift warning. 6.3.41 **raised the `max 1024 initialized globals` cap** (the ceiling that
