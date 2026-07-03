@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.12.2** — `memory_write` tool (agentic write) + `AGENTS.md` pickup — closes the 0.12.x line,
+2026-07-02. The model can now save durable facts to project memory during an agentic turn:
+**`memory_write`** is advertised alongside daimon's tools (`agent_tools_add_memory`, `src/agent.cyr`)
+when `[memory].enabled`; on call, thoth **intercepts it locally** — gated under `thoth_remember` (same
+t-ron choke point as `/remember`), **never forwarded to daimon** — and a round containing it is forced
+through the serial executor so the parallel daimon workers never see it (`_agent_round_has_local`).
+Backed by the shared `memory_append` (`src/memory.cyr`; `/remember` refactored onto it). Verbatim only —
+no summarize/tag/dedupe/link (mneme's engine). The read set gains an optional project-root **`AGENTS.md`**
+(model-facing notes; `CLAUDE.md` stays the harness contract, not auto-injected); `memory_system_prompt` no
+longer early-returns on a missing `.thoth/memory` dir. **Live-verified**: an agentic turn where Opus called
+`memory_write` → `[t-ron] allow: remember to .thoth/memory/MEMORY.md` → the fact landed in `MEMORY.md`.
+Advertised only with daimon wired (the agentic precondition — the path the mneme MCP tools will ride);
+manual `/remember` covers the no-daimon case. 696 assertions (+7). Pin unchanged (6.3.15). **0.12.x
+memory-seam line COMPLETE**; next active line is the externally-gated 0.13.0 git producer.
+
 **0.12.1** — `/remember` (memory-seam write half), 2026-07-02. `/remember <fact>` appends a verbatim
 bullet to `.thoth/memory/MEMORY.md`, t-ron-gated under the reserved name `thoth_remember` (same choke
 point as `/write`; absent-t-ron → fail-closed confirm). Portable `file_append_locked` (creates the file;

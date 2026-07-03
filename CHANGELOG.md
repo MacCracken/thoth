@@ -2,6 +2,42 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.2] - 2026-07-02
+
+**`memory_write` tool (the agentic write path) + `AGENTS.md` pickup — closes the
+0.12.x memory-seam line.** The model can now save durable facts to project memory
+during an agentic turn, and the read set gains an optional project-root
+`AGENTS.md`. No new spine, no new security surface.
+
+### Added
+- **`memory_write` MCP tool** — advertised to the model **alongside daimon's
+  tools** (`agent_tools_add_memory`, `src/agent.cyr`) whenever the memory seam is
+  active (`[memory].enabled`). When the model calls it, thoth **intercepts it in
+  the executor** and handles it **locally** — gated under the reserved name
+  `thoth_remember` (the SAME t-ron choke point as `/remember`), **never forwarded
+  to daimon** (`_agent_run_calls_serial`). A round containing `memory_write` is
+  forced through the serial executor so the parallel daimon workers never see it
+  (`_agent_round_has_local`). Backed by the shared `memory_append`
+  (`src/memory.cyr`); `memory_write_tool` parses `{"text":…}` and returns a plain
+  result string. **Verbatim only** — no summarize/tag/dedupe/link (mneme's engine).
+- **Project-root `AGENTS.md`** — read (if present) into the memory system message
+  alongside `.thoth/memory` (model-facing project notes; `CLAUDE.md` stays the
+  harness's contract and is not auto-injected). `memory_system_prompt` no longer
+  early-returns on a missing `.thoth/memory` dir, so `AGENTS.md` alone is enough.
+- `/remember` refactored onto the shared `memory_append` (one writer for the
+  command and the tool). `thoth.cyml.example` `[memory]` note updated.
+
+### Notes
+- **Live-verified**: an agentic turn where Opus called `memory_write` →
+  `[t-ron] allow: remember to .thoth/memory/MEMORY.md` → the fact landed in
+  `MEMORY.md` (not routed through daimon).
+- Advertised only with daimon wired (the agentic loop's precondition) — the same
+  path the mneme MCP tools will ride when mneme's port lands. Manual `/remember`
+  covers the no-daimon case.
+- 696 assertions (+7: advertise splice + tool arg-validation). Pin unchanged
+  (6.3.15). **0.12.x memory-seam line complete**; next active line is the
+  externally-gated 0.13.0 git producer.
+
 ## [0.12.1] - 2026-07-02
 
 **`/remember` — the memory-seam write half.** `/remember <fact>` appends a

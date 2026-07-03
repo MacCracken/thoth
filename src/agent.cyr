@@ -138,6 +138,24 @@ fn agent_format_tools(dst, tools_arr) {
     return off;
 }
 
+# agent_tools_add_memory: append the thoth-native memory_write tool to the daimon
+# tools array in dst (0.12.2). tl == the current array length ("[...]" or 0 for an
+# empty registry). Advertised only when the memory seam is not absent (i.e.
+# [memory].enabled) — so the model can save durable facts to .thoth/memory during
+# an agentic turn. Executed LOCALLY + t-ron-gated (thoth_remember) in
+# _agent_run_calls_serial — never forwarded to daimon. ADR-0012.
+fn agent_tools_add_memory(dst, tl) {
+    if (seam_cap_state(SEAM_MEMORY) == CAP_ABSENT) { return tl; }
+    var cap = AGENT_TOOLS_CAP;
+    var off = tl;
+    if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
+    else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }   # back over the trailing "]"
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"memory_write\",\"description\":\"Save a durable fact about THIS project to local memory (.thoth/memory) so it persists across sessions. Use for decisions, conventions, or context worth remembering; keep each fact to one line.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"the fact to remember, one line\"}},\"required\":[\"text\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
 # _agent_copy: raw-copy n bytes of src into dst at off, bounded by cap. Pure.
 fn _agent_copy(dst, off, src, n, cap) {
     var i = 0;
@@ -640,8 +658,22 @@ fn _agent_run_calls_par(tcs, nc) {
 # (_agent_run_calls_par) when [hoosh].parallel is on AND there is more than one
 # call; otherwise runs the serial path. Either way every call is t-ron-gated and a
 # deny becomes a result the model can react to, never an abort.
+# _agent_round_has_local: 1 if any call in this round is a thoth-native tool
+# (memory_write) executed LOCALLY, not forwarded to daimon. Such a round is forced
+# through the SERIAL executor so the parallel daimon workers never see it (they
+# only ever forward to daimon). 0.12.2.
+fn _agent_round_has_local(tcs, nc) {
+    var i = 0;
+    while (i < nc) {
+        var nm = agent_tc_name(tcs, i);
+        if (nm != 0) { if (streq(nm, "memory_write") == 1) { return 1; } }
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn _agent_run_calls(tcs, nc) {
-    if ((config_hoosh_parallel() == 1) && (nc > 1) && (_par_alloc() == 1)) { return _agent_run_calls_par(tcs, nc); }
+    if ((config_hoosh_parallel() == 1) && (nc > 1) && (_agent_round_has_local(tcs, nc) == 0) && (_par_alloc() == 1)) { return _agent_run_calls_par(tcs, nc); }
     return _agent_run_calls_serial(tcs, nc);
 }
 
@@ -662,6 +694,18 @@ fn _agent_run_calls_serial(tcs, nc) {
         var rl_ok = 0;
         if (nm == 0) { res = "(no tool name)"; rl_kind = RL_NONAME; }
         elif (strlen(gp) > AGENT_ARGS_MAX) { res = "(tool arguments too large; call refused — split into smaller calls)"; rl_kind = RL_DENIED; }
+        elif (streq(nm, "memory_write") == 1) {
+            # thoth-native tool (0.12.2): the model saves a durable fact to project
+            # memory. Gated under thoth_remember — executed LOCALLY, NOT via daimon.
+            if (gate_authorize("thoth_remember", gp, "remember to", MEMORY_INDEX_PATH) == 1) {
+                rl_kind = RL_ALLOWED;
+                res = memory_write_tool(gp);
+                rl_ok = 1;
+                ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            } else {
+                res = "denied by authorization policy";
+            }
+        }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
             res = daimon_invoke(nm, ar);
@@ -829,6 +873,7 @@ fn agent_turn(prompt) {
     # _agent_tools_ready=0 so a later turn retries (degraded honestly, never sticky).
     if (_agent_tools_ready == 0) {
         var tl = agent_format_tools(_agent_tools_buf, daimon_tools_value());
+        tl = agent_tools_add_memory(_agent_tools_buf, tl);   # 0.12.2: + memory_write when [memory].enabled
         _agent_tools_len = tl;
         if (tl > 0) { _agent_tools_ready = 1; }
     }

@@ -180,6 +180,9 @@ model = "claude-haiku-4-5-20251001"
 #   .thoth/memory/*.md        fact notes (frontmatter + body), read verbatim to a
 #                             ~4 KB budget, whole-or-skip (never mid-fact truncation)
 # Notes match mneme's vault frontmatter, so they are later ingestible by mneme.
+# A project-root AGENTS.md (if present) is read too (model-facing project notes).
+# Write with /remember <fact> (a bullet), or the model's memory_write tool during
+# an agentic turn — both verbatim, t-ron-gated (thoth_remember), never curated.
 # /state and /seams show the honest effect (off / local-degraded / mneme-full).
 
 # [memory]

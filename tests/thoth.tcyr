@@ -583,6 +583,27 @@ fn test_memory() {
     assert_eq(memory_system_prompt(), 0, "memory_system_prompt() 0 when disabled");
     assert_eq(memory_fact_count(), 0, "memory_fact_count() 0 when disabled");
 
+    # 0.12.2: memory_write agentic tool — advertised only when the seam is active.
+    var tb[8192];
+    var pre = "[{\"x\":1}]";
+    var pl = strlen(pre);
+    memcpy(&tb, pre, pl); store8(&tb + pl, 0);
+    assert_eq(agent_tools_add_memory(&tb, pl), pl, "memory_write NOT advertised when memory disabled");
+    _cfg_memory_enabled = 1;
+    memcpy(&tb, pre, pl); store8(&tb + pl, 0);
+    var a2 = agent_tools_add_memory(&tb, pl);
+    store8(&tb + a2, 0);
+    assert(strstr(&tb, "\"x\":1},{\"type\":\"function\"") != 0, "memory_write spliced after comma into non-empty array");
+    assert_eq(load8(&tb + a2 - 1), 93, "tools array still closes with ']'");
+    var a3 = agent_tools_add_memory(&tb, 0);
+    store8(&tb + a3, 0);
+    assert_eq(load8(&tb), 91, "empty-registry tools array opens with '['");
+    assert(strstr(&tb, "memory_write") != 0, "memory_write advertised (empty registry)");
+    _cfg_memory_enabled = 0;
+    # memory_write_tool argument validation (no I/O on the error paths).
+    assert_eq(cstr_starts_with(memory_write_tool(0), "memory_write:"), 1, "memory_write_tool null args -> error");
+    assert_eq(cstr_starts_with(memory_write_tool("{}"), "memory_write:"), 1, "memory_write_tool missing text -> error");
+
     session_reset();
     return 0;
 }

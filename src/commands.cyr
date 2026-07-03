@@ -386,18 +386,13 @@ fn cmd_write(line) {
     return 0;
 }
 
-var _remember_buf = 0;
-var REMEMBER_CAP = 4096;
-
 # cmd_remember: append a fact VERBATIM to .thoth/memory/MEMORY.md as a bullet
 # (0.12.1). t-ron-gated under the reserved name thoth_remember — the SAME choke
 # point as /write, so a policy can target it and absent-t-ron falls to the
-# fail-closed confirm. thoth writes the literal bytes: it does NOT summarize,
-# tag, dedupe, or link (that is mneme's engine — ADR-0012). The .thoth/memory/
-# dir must already exist — thoth reads/writes it but does NOT create it (there is
-# no portable mkdir: sys_mkdir's arg shape differs on AGNOS, so calling it would
-# fork the floor). Degrades CLOSED on a missing dir / write failure (announced,
-# never silent).
+# fail-closed confirm. The shared writer is memory_append (src/memory.cyr; also
+# used by the memory_write agentic tool). Degrades CLOSED on a missing dir /
+# write failure (announced, never silent). Verbatim only — no summarize/tag/
+# dedupe/link (that is mneme's engine — ADR-0012).
 fn cmd_remember(line) {
     var text = arg_after(line);
     if (text == 0) { oprintln("usage: /remember <fact>"); return 0; }
@@ -406,24 +401,13 @@ fn cmd_remember(line) {
         ui_emit(ROLE_RED, "  denied. nothing remembered."); oprintln("");
         return 0;
     }
-    if (is_dir(str_from(MEMORY_DIR)) == 0) {
+    var rc = memory_append(text);
+    if (rc == (0 - 2)) {
         emit("  "); ui_emit(ROLE_RED, ".thoth/memory/ not found");
         ui_emit(ROLE_MUTED, " — create it first (mkdir -p .thoth/memory), then /remember."); oprintln("");
         return 0;
     }
-    if (_remember_buf == 0) { _remember_buf = alloc(REMEMBER_CAP); }
-    var tl = strlen(text);
-    if (tl > (REMEMBER_CAP - 4)) { tl = REMEMBER_CAP - 4; }
-    store8(_remember_buf, 45);            # '-'
-    store8(_remember_buf + 1, 32);        # ' '
-    memcpy(_remember_buf + 2, text, tl);
-    store8(_remember_buf + 2 + tl, 10);   # '\n'
-    var rc = file_append_locked(MEMORY_INDEX_PATH, _remember_buf, tl + 3);
-    if (rc < 0) {
-        emit("  "); ui_emit(ROLE_RED, "write failed - memory not saved"); oprintln("");
-        return 0;
-    }
-    memory_invalidate();                  # re-read .thoth/memory next turn so the fact is live
+    if (rc < 0) { emit("  "); ui_emit(ROLE_RED, "write failed - memory not saved"); oprintln(""); return 0; }
     emit("remembered -> "); ui_emit(ROLE_BLUE, MEMORY_INDEX_PATH); oprintln("");
     if (config_memory_enabled() == 0) {
         emit("  "); ui_emit(ROLE_FAINT, "note: [memory].enabled is off - the fact is saved but not injected until you enable it."); oprintln("");
