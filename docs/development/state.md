@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.13.1** — refold the git producer onto **patched sit 1.3.1 + sankoch 2.4.9**, 2026-07-03. Drops
+two of the three vendor workarounds 0.13.0 carried, no behavior change. **sankoch**: the full 2.2.5
+pin → the **2.4.9 `zlib` profile** (`dist/sankoch-zlib.cyr`, sankoch's new `[lib.zlib]` — DEFLATE/zlib
+only, **53 globals** vs the full 175), so thoth tracks CURRENT sankoch and stays under cyrius's
+1024-global cap (was the reason for the old pin). **sit**: 1.3.0 → **1.3.1**, whose `sit_repo_open`
+is now **chdir-free** (reads at process cwd; behavior-preserving — all consumers pass `"."`) — so
+thoth's `SYS_CHDIR` neutralisation sed is gone and the read profile is **AGNOS-native** (`build/
+thoth_agnos` builds with NO thoth-side patch; gate 1 intact, git works there). The `_stream_grow`
+rename is also gone (the zlib profile drops `stream.cyr`). Only the `entry_hash`/`ann_new` renames
+remain in `scripts/sync-sit.sh` (sit's fns vs thoth's libro/bote — an inherent integration collision).
+aarch64 stays best-effort size-gapped (the 16 MiB cap is the binary's static data, not sankoch's
+version). 707 assertions (unchanged — no source-logic change). Pin unchanged (6.3.38). Requires
+sit ≥ 1.3.1 + sankoch ≥ 2.4.9.
+
 **0.13.0** — the **git producer** (branch / status / diff by consuming sit), 2026-07-03. thoth
 reports the working repo's branch + working-tree status in `/state`, the TUI status bar, and a new
 `/git` command, reading real **git** and **.sit** repos through **sit 1.3.0**'s read-only VCS API

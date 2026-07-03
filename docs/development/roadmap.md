@@ -176,9 +176,15 @@ selection stays content-blind.
   `.git/` read-mode" gate cleared (sit 1.2.0 shipped read-mode; 1.3.0 made it cleanly consumable).
   Vendors sit-read + **sankoch 2.2.5** (the 2.4.8 pin overflows cyrius's 1024-global cap); the
   chdir-free open keeps the AGNOS build (gate 1) and works there. See CHANGELOG/state.md.
-- **`0.13.1` (deferred follow-up)** — per-file `sit_diff_path` diff rendering in `/git`; and, if
-  sit ships a chdir-free open + a decompress-only sankoch, drop thoth's two vendor patches and
-  track current sankoch (removes the aarch64 size-gap headroom pressure).
+- **`0.13.1` — refold onto patched deps. DONE (2026-07-03).** sit 1.3.1 made `sit_repo_open`
+  chdir-free and sankoch 2.4.9 shipped a lean `[lib.zlib]` distlib profile (53 globals vs 175), so
+  thoth dropped two of its three vendor workarounds: the `SYS_CHDIR` neutralisation (AGNOS now builds
+  git natively) and the `_stream_grow` rename (the zlib profile drops `stream.cyr`), and moved off the
+  old sankoch-2.2.5 pin onto the current 2.4.9 zlib profile. Only the `entry_hash`/`ann_new` renames
+  remain (sit's fns vs thoth's libro/bote — inherent). No behavior change. See CHANGELOG/state.md.
+- **`0.13.2` (deferred follow-up)** — per-file `sit_diff_path` diff rendering in `/git`. The aarch64
+  best-effort lane stays size-gapped until the binary's static data (sigil-dominated) shrinks or the
+  cyrius output cap rises — unrelated to sankoch's version.
 
 ### Deferred / known limitations (captured so they're not lost)
 

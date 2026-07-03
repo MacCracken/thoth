@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.1] - 2026-07-03
+
+**Refold the git producer onto patched sit + sankoch — drop two of the three vendor
+workarounds.** 0.13.0 shipped the git producer with three thoth-side patches on its vendored
+deps; two are now root-caused upstream and gone. No behavior change — same `/git`, `/state`,
+status-bar git; a cleaner, current-tracking dependency surface.
+
+### Changed
+- **sankoch: full 2.2.5 pin → the 2.4.9 `zlib` profile** (`dist/sankoch-zlib.cyr`, sankoch's new
+  `[lib.zlib]` distlib profile). thoth now tracks the **current** sankoch instead of pinning an old
+  release: the zlib profile is DEFLATE/zlib-only (**53 initialised globals** vs the full bundle's
+  175), so it stays well under cyrius's fixed `max 1024 initialised globals` cap — the reason 0.13.0
+  had to pin the lean-but-old 2.2.5.
+- **sit: 1.3.0 → 1.3.1 read profile** — sit made `sit_repo_open` **chdir-free** (reads at the process
+  cwd; behavior-preserving — every consumer passes `"."`). So thoth's `sit_repo_open` `SYS_CHDIR`
+  neutralisation sed is **dropped**, and the read profile is AGNOS-native with no thoth-side patch.
+
+### Removed (vendor workarounds, now upstream-fixed)
+- The `scripts/sync-sit.sh` **`_stream_grow` rename** — the zlib profile drops `stream.cyr`, so the
+  function that collided with vyakarana's is no longer in the bundle.
+- The **`SYS_CHDIR` neutralisation** — sit 1.3.1's chdir-free open removed the reference at the source.
+- Only the **`entry_hash`/`ann_new` renames** remain (sit's fns vs thoth's libro/bote — an inherent
+  thoth-integration collision sit can't know about, so it stays a thoth-side sed).
+
+### Notes
+- **AGNOS now builds git NATIVELY** (`build/thoth_agnos`, no sed) — v1.0 gate 1 intact, git works there.
+  aarch64 stays best-effort size-gapped (the 16 MiB cap is hit by the binary's static data, not
+  sankoch's version; unchanged by the refold). windows on its IOCP gap; linux ships. 707 assertions
+  (unchanged — no source logic change). Pin unchanged (6.3.38). Requires **sit ≥ 1.3.1** + **sankoch
+  ≥ 2.4.9**; re-vendor with `SIT_LOCAL=… SANKOCH_LOCAL=… ./scripts/sync-sit.sh 1.3.1 2.4.9`.
+
 ## [0.13.0] - 2026-07-03
 
 **The git producer — branch / status / diff, by consuming sit.** thoth reports the
