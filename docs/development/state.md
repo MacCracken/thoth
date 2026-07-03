@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.12.3** — toolchain refresh to Cyrius **6.3.38** + the **AGNOS build lane lights up (v1.0
+gate 1)**, 2026-07-03. Maintenance pin move `6.3.15 → 6.3.38` (`cyrius.cyml` + `cyrius lib sync` —
+70 floor modules, 15 changed; `sigil`/`patra`/`sandhi`/`bayan`/`async`/`thread*` the notable
+diffs). **No thoth source change**; 696 assertions pass unchanged; x86_64 Linux builds + ships as
+before. Clears the drift + shadow-lib warnings and the benign `_sandhi_conn_open_v6_fully_timed_a`
+arity warning (6.3.38 sandhi fixes the h2-promotion arg count). **The refresh is more than a
+drift-clear** — it cleared **both** documented transient floor gaps: (1) **AGNOS now BUILDS**
+(`build/thoth_agnos`, a valid statically-linked x86_64-AGNOS ELF, **zero undefined symbols**) — the
+peer's missing `SIGHUP` signal-NUMBER constant (filed
+`agnos 2026-06-23-cyrius-agnos-peer-missing-signal-number-constants`) is defined in the 6.3.38 peer,
+so **the BUILD half of v1.0 gate 1 is cleared** (the RUNTIME half — a consumer green on real AGNOS —
+is **gate 2**, external, unchanged: the ELF targets the AGNOS syscall ABI, un-runnable on a Linux
+host); (2) the **Windows `SYS_GETRANDOM`** transient gap cleared (patra ≥1.12.4 bundled), so `--win`
+now stops on the genuine ARCHITECTURAL `SYS_EPOLL_CREATE1` (IOCP) gap. **`scripts/build.sh`
+maintenance:** `TRANSIENT_GAP` emptied (both entries cleared — kept as RESOLVED history in-comment)
+with an empty-case guard so a trailing `|` can never make the known-gap regex swallow every failure;
+`win`/`agnos` docstrings refreshed. Re-verified `build.sh all`: linux ships, win skips on the epoll
+gap, **aarch64 + agnos both build**. The AGNOS *build* clear is verified (file type/size/clean
+`OK`/zero undefined symbols); the AGNOS *runtime* is NOT claimed. 696 assertions (unchanged). Pin
+**6.3.38**. **Next active line unchanged**: the externally-gated 0.13.0 git producer (sit); gate 2
+(external AGNOS runtime) is now the nearest v1.0 gate that can advance.
+
 **0.12.2** — `memory_write` tool (agentic write) + `AGENTS.md` pickup — closes the 0.12.x line,
 2026-07-02. The model can now save durable facts to project memory during an agentic turn:
 **`memory_write`** is advertised alongside daimon's tools (`agent_tools_add_memory`, `src/agent.cyr`)

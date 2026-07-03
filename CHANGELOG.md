@@ -2,6 +2,47 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.3] - 2026-07-03
+
+**Toolchain refresh to Cyrius 6.3.38 — and the AGNOS build lane lights up (v1.0
+gate 1).** Maintenance: the source pin moves `6.3.15 → 6.3.38` (`cyrius.cyml` +
+`cyrius lib sync` — 70 floor modules, 15 changed). **No thoth source change**; 696
+assertions pass unchanged; x86_64 Linux builds + ships as before. What makes this
+more than a routine drift-clear: refreshing the floor cleared **both** documented
+transient gaps and lit up the **AGNOS** lane.
+
+### Changed
+- **Pin `6.3.15 → 6.3.38`** (`cyrius.cyml`, `lib/` re-synced). Clears the
+  toolchain-drift + shadow-lib warnings. The benign `_sandhi_conn_open_v6_fully_timed_a`
+  arity warning (documented since 0.10.1) also cleared — the 6.3.38 sandhi bundle
+  fixes the h2-promotion arg count.
+
+### Fixed (upstream, picked up by the refresh)
+- **AGNOS lane now BUILDS** (`build/thoth_agnos`, a valid statically-linked
+  x86_64-AGNOS ELF, zero undefined symbols). The lane's last blocker — the agnos
+  peer omitting the `SIGHUP` signal-NUMBER constant (filed
+  `agnos 2026-06-23-cyrius-agnos-peer-missing-signal-number-constants`) — is
+  resolved: the 6.3.38 peer defines the signal enum. **This clears the BUILD half
+  of v1.0 gate 1** (roadmap.md). The RUNTIME half (a downstream consumer green on
+  real AGNOS) is **gate 2** — external, unchanged: the ELF targets the AGNOS
+  syscall ABI and cannot be exercised on a Linux host.
+- **Windows `SYS_GETRANDOM` transient gap cleared** (patra ≥1.12.4 now bundled).
+  The `--win` lane now stops on the genuine ARCHITECTURAL `SYS_EPOLL_CREATE1`
+  (IOCP) gap — where it *should* stop — instead of a fixable patra bug.
+
+### Maintenance
+- `scripts/build.sh`: emptied `TRANSIENT_GAP` (both `SYS_GETRANDOM` and `SIGHUP`
+  cleared — kept as RESOLVED history in-comment) and guarded the empty case so a
+  trailing `|` can never make the known-gap regex match every failure. Refreshed
+  the `win`/`agnos` target docstrings. Re-verified `build.sh all`: linux ships,
+  win skips on the architectural epoll gap, **aarch64 + agnos both build**.
+
+### Notes
+- 696 assertions (unchanged — no source change). Pin **6.3.38**.
+- The AGNOS *build* clearing is verified here (file type, size, clean `OK`, zero
+  undefined symbols); the AGNOS *runtime* (gate 2) still requires an AGNOS host and
+  is not claimed. See [roadmap.md](docs/development/roadmap.md) gates 1–2.
+
 ## [0.12.2] - 2026-07-02
 
 **`memory_write` tool (the agentic write path) + `AGENTS.md` pickup — closes the

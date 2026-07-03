@@ -63,21 +63,25 @@ v1.0 is an **AGNOS gate**: the downstream-green criterion is satisfied
 shipping; the remaining v1.0 work is dominated by AGNOS lighting up plus
 two process gates — **not** by presentation or data-producer polish.
 
-Four gates remain, in rough dependency order:
+Four gates remain, in rough dependency order (gate 1's **build** half cleared at
+0.12.3):
 
-1. **AGNOS lane lights up — `SIGHUP` floor gap (filed, upstream; no thoth
-   work).** The AGNOS build lane is staged and re-verified; its last
-   blocker is the agnos peer omitting the signal-number constants
-   (`SIGHUP`). The signal infrastructure is already DONE upstream
-   (`sigprocmask`#17 / `signalfd`#18); only the constants are missing.
-   Filed: `agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md`.
-   The lane clears with **zero thoth source change** once the peer ships
-   the constants. **Status: blocking · owner: agnos (upstream) · filed.**
+1. **AGNOS lane lights up — BUILD half CLEARED (0.12.3).** The last build blocker —
+   the agnos peer omitting the signal-number constants (`SIGHUP`; the signal infra
+   `sigprocmask`#17 / `signalfd`#18 was already DONE) — is resolved: the **Cyrius
+   6.3.38** agnos peer defines the signal enum, so the `--agnos` lane now compiles a
+   valid statically-linked x86_64-AGNOS ELF with **zero undefined symbols**, with
+   **zero thoth source change** (exactly as forecast). Filed issue
+   `agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md` →
+   resolved. What remains is the **runtime** half, which is gate 2 (the ELF targets
+   the AGNOS syscall ABI and cannot be exercised on a Linux host — it needs a real
+   AGNOS runner). **Status: build ✓ (done, 0.12.3) · runtime → gate 2.**
 
 2. **At least one downstream consumer green on AGNOS (external
-   verification gate).** Requires gate 1 first (the consumer runs the
-   spine natively on AGNOS). **Status: blocking · owner: external · not
-   started.**
+   verification gate).** Now the nearest advanceable v1.0 gate: gate 1's build
+   half is done (0.12.3), so this is unblocked to start — it needs a real AGNOS
+   runner to exercise the `build/thoth_agnos` ELF (the spine native, a consumer
+   green end to end). **Status: blocking · owner: external · needs an AGNOS host.**
 
 3. **Security review pass (process gate).** A full security review of the
    fail-closed posture, the t-ron authorization choke point, and the
@@ -95,7 +99,8 @@ Four gates remain, in rough dependency order:
 **Satisfied on Linux (shipped — see CHANGELOG/state.md):** the core driver loop, the
 mid-session model switch through hoosh (M3), MCP tool execution via daimon + bote gated by
 t-ron (M4), off-AGNOS security that fails closed, the avatara overlay (M5), the honest
-capability ladder (M6), and a complete CHANGELOG. These are AGNOS-reachable, gated on gate 1.
+capability ladder (M6), and a complete CHANGELOG. These are now AGNOS-**buildable** (gate 1
+build cleared, 0.12.3 → `build/thoth_agnos`); AGNOS-green pends the gate-2 runtime verification.
 
 **Open:**
 
