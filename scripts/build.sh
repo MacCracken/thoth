@@ -123,6 +123,19 @@ _run_best_effort() {
         echo "    Nothing removed; lane lights up when the floor/stdlib gates it. See ADR-0008."
         return 0
     fi
+    # SIZE_GAP — a target with a fixed cyrius output-size cap (the aarch64 lane caps at
+    # 16 MiB) that thoth+the vendored sit read bundle tips over (0.13.0). NOT a capability
+    # limit and NOT a regression in thoth's own code — the binary is dominated by static
+    # data (sigil + sankoch tables). Best-effort only; the shipping _run lane has no cap
+    # and still hard-fails on anything. Lane lights up on a static-data reduction (a
+    # decompress-only sankoch, or sigil trimming) or a cyrius cap raise.
+    if echo "$log" | grep -qE "output too large"; then
+        local sz; sz="$(echo "$log" | grep -oE "output too large \([0-9]+/[0-9]+ bytes\)" | head -1)"
+        echo "    BEST-EFFORT SKIP: over the target output-size cap ($sz) — no binary this run."
+        echo "    thoth+sit exceeds this target's fixed output cap; unblocks on static-data reduction"
+        echo "    (decompress-only sankoch / sigil trim) or a cyrius cap raise. See ADR-0008."
+        return 0
+    fi
     echo "    FAILED (not a known gap):" >&2
     echo "$log" | grep -E "^error" | head -5 >&2
     return 1

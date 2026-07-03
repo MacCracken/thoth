@@ -464,6 +464,18 @@ fn tui_draw_status() {
         ui_emit(ROLE_FAINT, "  ");
         emit(ui_sgr(ROLE_GREEN)); emit(&_cbuf); emit(ui_reset());
     }
+    # git: branch (+dirty count), omitted when there is no repo at cwd (0.13.0,
+    # ADR-0010 — never a faked branch). Reads the cache (probed at startup + after
+    # each turn + on /state|/git); the status paint never walks the worktree itself.
+    if (git_present() == 1) {
+        ui_emit(ROLE_FAINT, "  ");
+        emit(ui_sgr(ROLE_ACCENT));
+        if (git_detached() == 1) { emit("(detached)"); } else { emit(git_branch()); }
+        emit(ui_reset());
+        if (git_dirty() > 0) {
+            ui_emit(ROLE_FAINT, " +"); emit(ui_sgr(ROLE_FG)); fmt_int(git_dirty()); emit(ui_reset());
+        }
+    }
     ui_emit(ROLE_FAINT, "  surface ");
     ui_emit(ROLE_GREEN, ui_tier_name());
     ui_emit(ROLE_FAINT, "  theme ");
@@ -1027,6 +1039,7 @@ fn tui_run_line(line) {
     var keep = dispatch(line);
     spin_end();                                  # stop the indicator (relayout restores the hint row)
     out_mode_set(OUT_FD1);                        # stop capturing before any chrome paints
+    git_probe();                                 # the turn may have changed the worktree (/run, agentic edit) — refresh git for the status bar (the following tui_relayout repaints it)
     if (tty_raw(0) < 0) { return 0; }            # couldn't re-enter raw -> end the session cleanly
     feed_flush_pending();                        # seal a trailing un-newlined dispatch line
     feed_repaint();                              # paint the captured output

@@ -24,9 +24,10 @@ enum SeamId {
     SEAM_TRON = 3;
     SEAM_AVATARA = 4;
     SEAM_MEMORY = 5;    # persistent memory — owned by mneme (ADR-0012)
+    SEAM_GIT = 6;       # version control — owned by sit (0.13.0; vendored read profile)
 }
 
-var SEAM_COUNT = 6;
+var SEAM_COUNT = 7;
 
 # seam_name: crate name for a seam id.
 fn seam_name(id) {
@@ -36,6 +37,7 @@ fn seam_name(id) {
     if (id == SEAM_TRON) { return "t-ron"; }
     if (id == SEAM_AVATARA) { return "avatara"; }
     if (id == SEAM_MEMORY) { return "mneme"; }
+    if (id == SEAM_GIT) { return "sit"; }
     return "?";
 }
 
@@ -47,6 +49,7 @@ fn seam_domain(id) {
     if (id == SEAM_TRON) { return "MCP per-tool authorization (the security gate)"; }
     if (id == SEAM_AVATARA) { return "personality / archetype overlay (Thoth / Librarian)"; }
     if (id == SEAM_MEMORY) { return "persistent memory / project note library"; }
+    if (id == SEAM_GIT) { return "version control - branch / status / diff on git + .sit repos"; }
     return "?";
 }
 
@@ -71,6 +74,10 @@ fn seam_status(id) {
     }
     if (id == SEAM_BOTE) { return SEAM_NATIVE; }
     if (id == SEAM_AVATARA) { return SEAM_NATIVE; }
+    # git (0.13.0): sit is a vendored dist bundle, so the binding is NATIVE by
+    # construction — the same as bote/avatara. Whether it delivers anything is the
+    # capability-effect dimension (seam_cap_state): FULL at a repo, ABSENT otherwise.
+    if (id == SEAM_GIT) { return SEAM_NATIVE; }
     if (id == SEAM_TRON) {
         if (gate_active() == 1) { return SEAM_NATIVE; }
     }
@@ -130,6 +137,11 @@ fn seam_cap_state(id) {
         if (config_memory_enabled() == 1) { return CAP_DEGRADED; }  # local .thoth/memory reader stands in
         return CAP_ABSENT;                                          # off by default -> byte-identical floor
     }
+    if (id == SEAM_GIT) {
+        git_ensure_probed();
+        if (git_present() == 1) { return CAP_FULL; }   # a repo is present at cwd
+        return CAP_ABSENT;                             # sit native, but no repo here -> nothing to report
+    }
     if (seam_status(id) == SEAM_ABSENT) { return CAP_ABSENT; }
     return CAP_FULL;
 }
@@ -142,6 +154,7 @@ fn seam_cap_full(id) {
     if (id == SEAM_TRON) { return "per-tool authorization on /run, /write, /call; deny is final"; }
     if (id == SEAM_AVATARA) { return "the Thoth/Librarian archetype steers every turn"; }
     if (id == SEAM_MEMORY) { return "mneme notes: semantic + full-text recall, auto-link, knowledge graph"; }
+    if (id == SEAM_GIT) { return "branch + working-tree status (+ per-file diff) via sit's read-only .git/.sit API"; }
     return "?";
 }
 
@@ -157,6 +170,7 @@ fn seam_cap_fallback(id) {
         if (config_memory_enabled() == 1) { return "degraded: local .thoth/memory flat-file inject (verbatim; recency + budget, no search)"; }
         return "absent: memory off - set [memory].enabled (mneme not yet Cyrius-ported)";
     }
+    if (id == SEAM_GIT) { return "absent: no git/.sit repo at the working directory (sit reads at cwd; no ancestor walk)"; }
     return "?";
 }
 

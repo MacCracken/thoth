@@ -28,6 +28,15 @@ include "src/vendor/vyakarana.cyr"
 # darshana (0.8.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
 # (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
 include "src/vendor/darshana.cyr"
+# sit (1.3.0 read profile) — .git/ read-mode: branch/status/diff on real git +
+# .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
+# sit_repo_* API only (its command layer is dead here). sankoch (zlib 2.2.5,
+# source-vendored, _stream_grow renamed) supplies the git-object inflate the
+# bundle references bare — see scripts/sync-sit.sh for the version-pin + rename
+# rationale. BOTH before commands.cyr so thoth's cmd_reset wins the benign
+# last-def-wins vs sit's `sit reset`.
+include "src/vendor/sankoch.cyr"
+include "src/vendor/sit-read.cyr"
 # Project modules, callee-first (single-pass forward-reference resolution):
 # gate (t-ron binding + confirm) precedes seams, which reports its status;
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).
@@ -40,6 +49,7 @@ include "src/inhist.cyr"   # composer input-history recall ring (0.11.1); pure, 
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
+include "src/git.cyr"      # git producer (0.13.0) — consumes sit's read-only VCS API; before seams (SEAM_GIT reads git_present)
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/roundlog.cyr"
@@ -86,6 +96,10 @@ fn main() {
         one_shot_set(0);
         return rc;
     }
+    # Warm the git producer once so the first status-bar paint / /state reflects the
+    # working repo (0.13.0). Interactive-only — one-shot never shows git, so it skips
+    # the worktree walk. Absent repo -> the seam reports absent honestly.
+    git_ensure_probed();
     # T2 rich-TUI when the tier resolves to PT_RICH on a real tty; otherwise the
     # line-mode REPL (the guaranteed fallback — pipes / CI / T0-T1 / no raw mode).
     if (tui_active() == 1) {

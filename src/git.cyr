@@ -1,0 +1,76 @@
+# git.cyr — the git producer (0.13.0). thoth reports the working repository's
+# branch + working-tree status by CONSUMING sit's read-only VCS API
+# (sit_repo_open / sit_repo_branch / sit_repo_status; the vendored 1.3.0 read
+# profile). thoth owns NO VCS logic — sit owns the domain (git + .sit on-disk
+# formats, the delta interpreter, all of it); thoth only asks and renders.
+#
+# Omit-until-present (ADR-0010): the git status-bar segment appears ONLY when a
+# repo is present at the working directory; never a faked branch/count. /state
+# always shows a git row (present → branch + count, absent → the honest line).
+#
+# sit reads AT the working directory and does not walk ancestors (sit's ADR 0003
+# no-upward-discovery), so git is reported only when thoth runs at a repo root —
+# announced honestly, not faked, when it isn't.
+#
+# Freshness vs cost: git_probe() re-reads the repo (a worktree walk). It is called
+# at startup, after each dispatched turn (files may have changed via /run or an
+# agentic edit), and by /state and /git — NOT per status-bar paint. The status bar
+# reads the cache. sit's status vec + branch cstring come from sit's bump arena and
+# are not individually freeable; probing is coarse (per turn / per command), so the
+# per-probe residue is small and bounded — not a per-render leak.
+
+var GIT_BRANCH_CAP = 256;
+var _git_probed = 0;        # 1 once git_probe has run at least once this session
+var _git_present = 0;       # 1 if a git/.sit repo was found at the working directory
+var _git_branch_buf = 0;    # owner-copied branch name (sit's cstring is arena-owned)
+var _git_detached = 0;      # 1 if HEAD is detached / not a branch ref
+var _git_dirty = 0;         # count of changed files (modified/new/deleted, HEAD vs worktree)
+
+# _git_copy_branch: copy sit's heap branch cstring into our static buffer so we
+# never alias sit's arena past the probe (mirrors session_set_model_copy).
+fn _git_copy_branch(br) {
+    if (_git_branch_buf == 0) { _git_branch_buf = alloc(GIT_BRANCH_CAP); }
+    var i = 0;
+    while ((load8(br + i) != 0) && (i < (GIT_BRANCH_CAP - 1))) {
+        store8(_git_branch_buf + i, load8(br + i));
+        i = i + 1;
+    }
+    store8(_git_branch_buf + i, 0);
+    return 0;
+}
+
+# git_probe: (re)read the working repo through sit. sit_repo_open(".") chdirs to
+# "." (a no-op — thoth never leaves its launch cwd), detects .git/ or .sit/, and
+# returns 1/0. On a repo we snapshot the branch + the changed-file count. Returns
+# 1 if a repo is present, 0 if absent.
+fn git_probe() {
+    _git_probed = 1;
+    _git_present = 0;
+    _git_detached = 0;
+    _git_dirty = 0;
+    var repo = sit_repo_open(".");
+    if (repo == 0) { return 0; }     # no .git/ or .sit/ at the working directory
+    _git_present = 1;
+    var br = sit_repo_branch(repo);  # heap cstring, or 0 when HEAD is detached
+    if (br == 0) { _git_detached = 1; }
+    else { _git_copy_branch(br); }
+    var st = sit_repo_status(repo);  # vec of {path, kind}; we only need the count
+    if (st != 0) { _git_dirty = vec_len(st); }
+    sit_repo_close(repo);
+    return 1;
+}
+
+# git_ensure_probed: probe once lazily, for any reader that runs before the
+# startup probe (idempotent; cheap after the first call).
+fn git_ensure_probed() {
+    if (_git_probed == 0) { git_probe(); }
+    return 0;
+}
+
+fn git_present() { return _git_present; }
+fn git_detached() { return _git_detached; }
+fn git_dirty() { return _git_dirty; }
+fn git_branch() {
+    if (_git_branch_buf == 0) { return "?"; }
+    return _git_branch_buf;
+}

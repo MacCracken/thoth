@@ -166,15 +166,19 @@ The bright line ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)): thoth
 relevance-creep — "select the *relevant* memories" is retrieval, a spine fork; the
 selection stays content-blind.
 
-### 0.13.x — git producer (omit-until-sit; sit-gated)
+### 0.13.x — git producer (SHIPPED — consumes sit)
 
-- **`0.13.0` — git. Omit-until-sit.** One faint `/state` honesty line
-  (`git: absent — gated on sit`). **No faked branch/diff** — real `.git/` reads are
-  gated on **sit**'s `.git/` read-mode (sit owns VCS and is not vendored; thoth
-  never hand-rolls a `.git/` parser, which would fork sit's domain — ADR-0010). It is
-  its own minor — unlike the tokens/cost producers, its producer is external — and it
-  advances when sit ships `.git/` read-mode. **Re-sequenced 0.12.x → 0.13.0**: the
-  memory seam (thoth-drivable now) takes 0.12.x; git stays externally blocked on sit.
+- **`0.13.0` — git producer. DONE (2026-07-03).** Real branch / status via **sit**'s
+  read-only VCS API — no faked branch/diff, no hand-rolled `.git/` parser (sit owns VCS —
+  ADR-0010). Surfaced in `/state`, the TUI status bar (omit-until-present), and a new `/git`
+  command (per-file `M`/`A`/`D`). `SEAM_GIT` on the ladder; `src/git.cyr` + `scripts/sync-sit.sh`.
+  Unblocked by **sit 1.3.0**'s lean read-only dist profile (`dist/sit-read.cyr`) — the "sit ships
+  `.git/` read-mode" gate cleared (sit 1.2.0 shipped read-mode; 1.3.0 made it cleanly consumable).
+  Vendors sit-read + **sankoch 2.2.5** (the 2.4.8 pin overflows cyrius's 1024-global cap); the
+  chdir-free open keeps the AGNOS build (gate 1) and works there. See CHANGELOG/state.md.
+- **`0.13.1` (deferred follow-up)** — per-file `sit_diff_path` diff rendering in `/git`; and, if
+  sit ships a chdir-free open + a decompress-only sankoch, drop thoth's two vendor patches and
+  track current sankoch (removes the aarch64 size-gap headroom pressure).
 
 ### Deferred / known limitations (captured so they're not lost)
 

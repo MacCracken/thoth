@@ -9,6 +9,8 @@ include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
 include "src/vendor/vyakarana.cyr"
 include "src/vendor/darshana.cyr"
+include "src/vendor/sankoch.cyr"    # git-object inflate (0.13.0); before sit-read
+include "src/vendor/sit-read.cyr"   # sit read-only VCS API (branch/status/diff)
 include "src/util.cyr"
 include "src/version.cyr"
 include "src/ui.cyr"
@@ -18,6 +20,7 @@ include "src/inhist.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
+include "src/git.cyr"      # git producer (0.13.0); before seams (SEAM_GIT reads git_present)
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/roundlog.cyr"
@@ -84,13 +87,14 @@ fn test_cstr() {
 
 fn test_seams() {
     test_group("seam registry");
-    assert_eq(SEAM_COUNT, 6, "six seams");
+    assert_eq(SEAM_COUNT, 7, "seven seams (git added 0.13.0)");
     assert(streq(seam_name(SEAM_HOOSH), "hoosh"), "hoosh name");
     assert(streq(seam_name(SEAM_DAIMON), "daimon"), "daimon name");
     assert(streq(seam_name(SEAM_BOTE), "bote"), "bote name");
     assert(streq(seam_name(SEAM_TRON), "t-ron"), "t-ron name");
     assert(streq(seam_name(SEAM_AVATARA), "avatara"), "avatara name");
     assert(streq(seam_name(SEAM_MEMORY), "mneme"), "mneme name (memory domain owner)");
+    assert(streq(seam_name(SEAM_GIT), "sit"), "sit name (git/VCS domain owner)");
     assert_eq(seam_status(SEAM_MEMORY), SEAM_ABSENT, "memory absent (mneme not yet Cyrius-ported)");
     assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
     assert_eq(seam_status(SEAM_DAIMON), SEAM_ABSENT, "daimon absent when unconfigured");
@@ -1919,6 +1923,32 @@ fn test_theme() {
     return 0;
 }
 
+fn test_git() {
+    test_group("git producer (git.cyr / SEAM_GIT, 0.13.0)");
+    # seam registration on the capability ladder
+    assert_eq(SEAM_COUNT, 7, "SEAM_COUNT includes git (7)");
+    assert(streq(seam_name(SEAM_GIT), "sit"), "SEAM_GIT owner is sit");
+    assert_eq(seam_status(SEAM_GIT), SEAM_NATIVE, "sit binds native by construction (vendored bundle)");
+    assert_eq(_ui_contains(seam_domain(SEAM_GIT), "version control"), 1, "domain names version control");
+    # probe is callable; git_present() matches the probe result and is a clean 0/1
+    var p = git_probe();
+    assert(((p == 0) || (p == 1)), "git_probe returns 0/1");
+    assert_eq(git_present(), p, "git_present matches the probe result");
+    # capability-effect <-> presence invariant (holds whether or not there's a repo)
+    if (git_present() == 1) {
+        # cyrius test runs at the thoth repo root -> a real read through sit's .git backend
+        assert_eq(seam_cap_state(SEAM_GIT), CAP_FULL, "repo present -> capability FULL");
+        assert_eq(streq(git_branch(), "?"), 0, "present -> a real branch, not the '?' sentinel");
+        assert(git_dirty() >= 0, "dirty count is a non-negative snapshot");
+    } else {
+        assert_eq(seam_cap_state(SEAM_GIT), CAP_ABSENT, "no repo at cwd -> capability ABSENT (honest, never faked)");
+    }
+    # ensure_probed is idempotent — same result, no re-crash
+    git_ensure_probed();
+    assert_eq(git_present(), p, "ensure_probed keeps the probe result stable");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -1965,6 +1995,7 @@ fn main() {
     test_spinner();
     test_ftree();
     test_theme();
+    test_git();
     test_model_switch();
     return assert_summary();
 }

@@ -2,6 +2,55 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.0] - 2026-07-03
+
+**The git producer — branch / status / diff, by consuming sit.** thoth reports the
+working repository's branch and working-tree status in `/state`, the TUI status bar, and
+a new `/git` command — reading real `git` **and** `.sit` repos through **sit's** read-only
+VCS API, no shell-out to system `git`. thoth owns **no** VCS logic: sit owns the domain
+(git's on-disk format, the delta interpreter, all of it); thoth only asks and renders.
+Omit-until-present ([ADR-0010](docs/adr/0010-data-producer-honest-omit.md)): the status-bar
+segment appears only at a repo; `/state` shows a git row always (present → branch + count,
+absent → the honest line). Unblocked by **sit 1.3.0**'s lean read-only dist profile.
+
+### Added
+- **`SEAM_GIT`** on the capability ladder (`src/seams.cyr`, seam #6; `SEAM_COUNT` → 7) —
+  owner **sit**, binding **native** by construction (vendored dist bundle, like bote/avatara),
+  capability-effect **FULL** at a repo / **ABSENT** with no repo at cwd. Shown in `/seams`.
+- **`src/git.cyr`** — the producer. `git_probe()` reads branch + changed-file count through
+  `sit_repo_open(".")` / `sit_repo_branch` / `sit_repo_status`, copies the branch out of sit's
+  arena into a static buffer, and caches (probed at startup, after each dispatched turn, and on
+  `/state` / `/git` — never per status-bar paint). Content-blind: thoth only sums/renders.
+- **`/state` git row** (`branch — N changed`, or the honest absent line) + a **TUI status-bar
+  segment** (`⎇ branch +N`, omitted with no repo) + a new **`/git`** command listing the branch
+  and each changed file (`M`/`A`/`D` path) via `sit_status_path` / `sit_status_kind`.
+- **`scripts/sync-sit.sh`** — vendors sit's read profile (`dist/sit-read.cyr`) + **sankoch 2.2.5**
+  (git-object inflate), applying the collision + portability patches (below) on sync.
+
+### Notes
+- **Vendoring** (`src/vendor/sit-read.cyr` + `src/vendor/sankoch.cyr`, both source-included, NOT
+  `[deps]` blocks): sankoch pinned to **2.2.5** (50 globals) not sit's 2.4.8 (175) — 2.4.8 blows
+  cyrius's fixed max-1024-initialised-globals cap; 2.2.5 has both `zlib_*` functions, unchanged
+  base inflate, and the absolute 16 MiB output cap. Three same-name/different-semantics clashes
+  with thoth's spine bundles are `\b`-renamed on sync (`_stream_grow`→`_sk_stream_grow` vs
+  vyakarana; `entry_hash`→`_sit_entry_hash` vs **libro**'s audit-chain getter — an unrenamed
+  identity fn crashed `test_tron`; `ann_new`→`_sit_ann_new` vs bote-core). `sit_repo_open`'s
+  `syscall(SYS_CHDIR, cwd)` is neutralised (thoth always passes `"."`) — AGNOS has no chdir, so
+  this **keeps the AGNOS build (v1.0 gate 1) AND makes git work there** (sit reads at the real
+  cwd). Three `sign` symbols stay unresolved as dead-path placeholders (the read API never signs).
+- **Cross-target:** linux ships. **AGNOS builds with working git** (the chdir-free open made it
+  portable — gate 1 intact). **aarch64** now exceeds its fixed 16 MiB output cap with the sit
+  bundle → announced best-effort **size-gap** in `scripts/build.sh` (unblocks on a decompress-only
+  sankoch / sigil static-data trim, or a cyrius cap raise). windows stays on its architectural
+  IOCP gap.
+- **Floor byte-identical**: git probes only in the interactive path (one-shot skips it → clean
+  stdout); the `/state` row + status bar render through empty T0 ui-roles (verified: 0 escape
+  bytes piped). **Pre-cut adversarial review** (4 lenses — memory/correctness/floor/vendoring,
+  each finding independently verified): **zero confirmed findings**. 707 assertions (+11,
+  `test_git` + the seam-count bump). Pin unchanged (6.3.38). **Deferred to a follow-up:**
+  per-file `sit_diff_path` diff rendering in `/git`; sit shipping a chdir-free open + a
+  decompress-only sankoch would let thoth drop the two vendor patches and track current sankoch.
+
 ## [0.12.3] - 2026-07-03
 
 **Toolchain refresh to Cyrius 6.3.38 — and the AGNOS build lane lights up (v1.0

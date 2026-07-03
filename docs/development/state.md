@@ -7,6 +7,29 @@
 
 ## Version
 
+**0.13.0** — the **git producer** (branch / status / diff by consuming sit), 2026-07-03. thoth
+reports the working repo's branch + working-tree status in `/state`, the TUI status bar, and a new
+`/git` command, reading real **git** and **.sit** repos through **sit 1.3.0**'s read-only VCS API
+— no shell-out to system `git`. thoth owns **no** VCS logic (sit owns the domain). New **`SEAM_GIT`**
+on the capability ladder (`src/seams.cyr`, #6; `SEAM_COUNT` → 7; native binding, FULL-at-repo /
+ABSENT-otherwise) + **`src/git.cyr`** (`git_probe` reads via `sit_repo_open(".")`/`_branch`/`_status`,
+copies the branch out of sit's arena, caches — probed at startup / per turn / on `/state`|`/git`, never
+per paint; content-blind). Surfaced: `/state` git row (`branch — N changed` / honest absent line), a
+status-bar segment (`⎇ branch +N`, omit-until-present per ADR-0010), and `/git` (per-file `M`/`A`/`D`
+list via `sit_status_path`/`_kind`). **Vendored** `src/vendor/sit-read.cyr` + `src/vendor/sankoch.cyr`
+(source-included via `scripts/sync-sit.sh`, NOT `[deps]`): **sankoch 2.2.5** (50 globals) not sit's 2.4.8
+(175, which blows cyrius's 1024-global cap); `\b`-renames on sync for 3 harmful spine collisions
+(`_stream_grow`/`entry_hash`→libro's audit getter/`ann_new`→bote); `sit_repo_open`'s `SYS_CHDIR`
+neutralised (thoth passes `"."`) — **keeps the AGNOS build (gate 1) AND makes git work there** (sit reads
+at cwd). **Cross-target:** linux ships; **AGNOS builds with working git**; **aarch64** now over its fixed
+16 MiB output cap with the sit bundle → announced best-effort **size-gap** in `build.sh`; windows on its
+IOCP gap. **Floor byte-identical** (git interactive-only; one-shot skips it; `/state` row = empty T0
+roles, 0 escapes piped). Pre-cut adversarial review (4 lenses, each verified): **zero confirmed findings**.
+707 assertions (+11, `test_git` + seam-count). Pin unchanged (6.3.38). Deferred: `/git` per-file diff
+(`sit_diff_path`); a chdir-free sit open + decompress-only sankoch would drop the two vendor patches.
+**Next active line**: the four v1.0 gates (AGNOS-dominated — gate 1 build cleared, gate 2 runtime is
+nearest; see [[thoth-next-items-gate-map]]).
+
 **0.12.3** — toolchain refresh to Cyrius **6.3.38** + the **AGNOS build lane lights up (v1.0
 gate 1)**, 2026-07-03. Maintenance pin move `6.3.15 → 6.3.38` (`cyrius.cyml` + `cyrius lib sync` —
 70 floor modules, 15 changed; `sigil`/`patra`/`sandhi`/`bayan`/`async`/`thread*` the notable
