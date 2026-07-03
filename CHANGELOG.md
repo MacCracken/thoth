@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.14.1] - 2026-07-03
+
+**Agentic vertical now completes end-to-end — hoosh 2.4.12 resolves the tool-continuation 502.**
+Consumes the upstream hoosh fix for 0.14.0's finding **(1)**. No thoth source-logic change; the
+change is in the consumed spine (hoosh), re-verified live. 707 assertions pass.
+
+### Resolved (upstream)
+- **hoosh tool-continuation `502` → fixed in hoosh 2.4.12.** The 0.14.0 vertical proved every hop
+  except the *completion* of an agentic loop: hoosh returned `502 "provider backend unreachable"` on
+  the tool-continuation turn (an assistant `tool_calls` message + a `role:"tool"` result). Root cause
+  was in hoosh — its Anthropic request-builder copied the OpenAI tool messages verbatim instead of
+  translating them into `tool_use` / `tool_result` content blocks (a request-build error
+  misclassified as a transport error). hoosh **2.4.12** translates them; the loop now completes.
+  thoth needed no change — it already emitted OpenAI-shape tool messages correctly and consumes hoosh
+  over HTTP.
+
+### Verified (live vertical — hoosh 2.4.12 + daimon + bote 3.0.0 + thoth)
+- **Full loop CLOSES**: a one-shot agentic turn (`thoth '…use fs_write…'`) runs
+  thoth → hoosh (`claude-opus-4-8`) → tool call → t-ron `allow` → daimon → bote 3.0.0 `fs_write`
+  (file written under `BOTE_FS_ROOT`) → result fed back → **hoosh returns the final summary turn** →
+  thoth prints it and **exits 0**. Previously the continuation turn 502'd and one-shot exited 1 with
+  empty stdout despite the tool having executed. Streaming also restores the closing summary that
+  had come back empty.
+
+### Notes
+- **Requires hoosh ≥ 2.4.12** for agentic tool loops on Anthropic-backed models (earlier hoosh 502s
+  on the tool-continuation turn). No change to non-agentic turns. thoth pin unchanged (6.3.41);
+  vendored bote-core unchanged (3.0.0); 707 assertions unchanged.
+- 0.14.0's findings **(2)** (bayan inline-comment config parse) and **(3)** (bote `bote_echo` sample
+  tool returns a bare `{}`) are unchanged — both are upstream quirks, neither blocks the vertical.
+
 ## [0.14.0] - 2026-07-03
 
 **Vendored bote 2.7.7 → 3.0.0 (MCP-protocol refresh) + a full vertical integration test.** Refreshes

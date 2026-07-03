@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.14.1** — the agentic vertical now **completes end-to-end**; hoosh **2.4.12** resolves 0.14.0's
+finding (1), 2026-07-03. No thoth source change — the fix is in the consumed spine (hoosh's Anthropic
+request-builder now translates OpenAI `tool_calls`/`role:"tool"` messages into `tool_use`/`tool_result`
+content blocks instead of copying them verbatim; the former sent Anthropic-invalid shapes and surfaced
+as a misclassified `502`). **Re-verified live** (hoosh 2.4.12 + daimon + bote 3.0.0 + thoth): a one-shot
+agentic turn runs thoth → hoosh Opus → tool-call → t-ron allow → daimon → bote 3.0.0 `fs_write`
+(written) → result fed back → **hoosh returns the final summary** → thoth exits 0 (was: 502 on the
+continuation turn → exit 1 with empty stdout despite the tool executing). **Requires hoosh ≥ 2.4.12**
+for agentic loops on Anthropic-backed models. Findings (2) bayan inline-comment parse + (3) `bote_echo`
+bare-`{}` sample tool remain (upstream quirks, non-blocking). 707 assertions; pin **6.3.41**; bote-core 3.0.0.
+
 **0.14.0** — vendored **bote 2.7.7 → 3.0.0** (MCP-protocol refresh) + a full vertical integration test, 2026-07-03.
 Refreshes the in-process MCP-protocol bundle (`src/vendor/bote-core.cyr`; `sync-bote.sh` tag → 3.0.0);
 bote 3.0.0's breaking changes are server-side, so the `[lib.core]` dispatcher thoth vendors (for the
