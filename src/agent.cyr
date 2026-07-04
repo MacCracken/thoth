@@ -763,7 +763,7 @@ fn _agent_sse_cb(ctx, ev) {
     var content = bayan_json_v_obj_get(delta, "content");
     if (content != 0) {
         var s = bayan_json_v_str(content);
-        if (s != 0) { var n = str_len(s); if (n > 0) { emit_n(str_data(s), n); _hoosh_acc_append(str_data(s), n); } }
+        if (s != 0) { var n = str_len(s); if (n > 0) { mdhl_feed(str_data(s), n); _hoosh_acc_append(str_data(s), n); } }   # 0.15.1: fenced-code highlighter
     }
     var tcs = bayan_json_v_obj_get(delta, "tool_calls");
     if (tcs != 0) {
@@ -802,7 +802,7 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
     var nc = agent_tc_count(tcs);
     if (nc == 0) {
         var content = hoosh_extract_content(body, blen);
-        if (content != 0) { _hoosh_print_str(content); _hoosh_acc_append(str_data(content), str_len(content)); }
+        if (content != 0) { _hoosh_print_reply(content); _hoosh_acc_append(str_data(content), str_len(content)); }   # 0.15.1: fenced-code highlighting
         _agent_round_kind = 0;
     } else {
         var raw = _agent_raw_tool_calls(body, blen);
@@ -824,7 +824,9 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     if (_agent_cell == 0) { _agent_cell = alloc(8); }
     store64(_agent_cell, 0);
+    mdhl_reset();    # 0.15.1: bracket the fenced-code highlighter around this iteration's stream
     var sr = sandhi_http_stream(_hoosh_endpoint_url(), "POST", h, _agent_req, len, &_agent_sse_cb, _agent_cell);
+    mdhl_finish();   # drain the filter (residual line + open block) before the finishing newline / status branching
     if (_hoosh_acc_len > 0) { oprintln(""); }   # finish the streamed line
     if (sandhi_stream_err(sr) != SANDHI_OK) {
         var en = sandhi_err_kind_name(sandhi_stream_err(sr));

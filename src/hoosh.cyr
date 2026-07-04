@@ -742,6 +742,19 @@ fn _hoosh_print_str(s) {
     return 0;
 }
 
+# _hoosh_print_reply: like _hoosh_print_str but routes the assistant REPLY through the
+# markdown fenced-code highlighter (0.15.1). ONLY reply content uses this — error bodies
+# keep _hoosh_print_str (never highlighted). The trailing-newline courtesy reads the RAW
+# str, unchanged, so a plain (fence-free) reply is byte-identical and the floor holds
+# (mdhl_reply is a verbatim pass-through at PT_PLAIN).
+fn _hoosh_print_reply(s) {
+    var d = str_data(s);
+    var n = str_len(s);
+    mdhl_reply(d, n);
+    if (n > 0) { if (load8(d + n - 1) != 10) { oprintln(""); } }
+    return 0;
+}
+
 # _hoosh_sse_cb: the SSE event callback (sandhi calls cb(ctx, event) per parsed
 # frame; return 1 to keep consuming, 0 to stop). Each OpenAI streaming frame's
 # `data:` is a JSON delta — we print choices[0].delta.content as it arrives. The
@@ -772,7 +785,7 @@ fn _hoosh_sse_cb(ctx, ev) {
     if (s == 0) { return 1; }
     var n = str_len(s);
     if (n > 0) {
-        emit_n(str_data(s), n);
+        mdhl_feed(str_data(s), n);   # 0.15.1: fenced-code highlighter (verbatim pass-through at PT_PLAIN)
         store64(ctx, load64(ctx) + n);
         _hoosh_acc_append(str_data(s), n);
         feed_stream_tick();   # 0.9.2: TUI incremental paint + spinner (no-op off the TUI)
@@ -790,7 +803,9 @@ fn _hoosh_stream_turn(url, h, len, model) {
     var cell = alloc(8);
     store64(cell, 0);
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", stream) "); oprintln(url);
+    mdhl_reset();    # 0.15.1: bracket the fenced-code highlighter around the stream
     var sr = sandhi_http_stream(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell);
+    mdhl_finish();   # flush the filter (residual line + any open block) BEFORE status branching, so every exit path drains
     var serr = sandhi_stream_err(sr);
     var emitted = load64(cell);
     if (serr != SANDHI_OK) {
@@ -847,7 +862,7 @@ fn _hoosh_blocking_turn(url, h, len, model) {
     }
     _hoosh_acc_append(str_data(content), str_len(content));
     _hoosh_account_usage(bayan_json_v_parse_str(body, blen));
-    _hoosh_print_str(content);
+    _hoosh_print_reply(content);   # 0.15.1: fenced-code highlighting (raw acc already stored above)
     return 0;
 }
 

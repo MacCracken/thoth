@@ -651,6 +651,17 @@ var _spin_active = 0;        # 1 while a dispatch is in flight (the indicator sh
 var _spin_suspended = 0;     # saved _spin_active across a confirm
 var SPIN_FRAMES = 10;        # braille spinner cycle length
 
+# Streamed-frame paint throttle (0.15.0). The SSE callbacks ping feed_stream_tick
+# once per streamed chunk; at 80–150 tok/s that is 100+ full feed repaints/sec,
+# which thrashes the pending line + spinner and can outrun the terminal (visible
+# tearing). We COALESCE paints onto a frame budget — repaint at most once per
+# STREAM_FRAME_MS — so streaming stays SMOOTH without slowing the model (ingest is
+# untouched: the chunk's bytes are already in the ring from the emit that ran
+# BEFORE this tick). This is throttling, not a typewriter delay: content is never
+# held back, only the intermediate PAINT rate is capped.
+var STREAM_FRAME_MS = 33;         # ~30fps: smooth, well under the 80–150 tok/s tick rate
+var _stream_last_paint_ms = 0;    # clock_now_ms() of the last streamed-frame paint (0 = none yet)
+
 # spin_glyph: the braille spinner glyph for frame `f` (mod the cycle). Pure — the
 # dots are printable multibyte UTF-8 (valid Cyrius string literals).
 fn spin_glyph(f) {
@@ -682,7 +693,7 @@ fn spin_paint() {
     tui_park_cursor();          # return the cursor to the prompt line, not the spinner row
     return 0;
 }
-fn spin_begin() { _spin_frame = 0; _spin_active = 1; spin_paint(); return 0; }   # start each turn at frame 0
+fn spin_begin() { _spin_frame = 0; _spin_active = 1; _stream_last_paint_ms = 0; spin_paint(); return 0; }   # start each turn at frame 0; _stream_last=0 so the first streamed chunk paints instantly
 fn spin_end() { _spin_active = 0; return 0; }   # caller redraws the hint row after
 
 # --- the self-managed feed painter (0.9.1) --------------------------------
@@ -799,13 +810,32 @@ fn _tui_feed_scroll_by(delta) {
     return 0;
 }
 
+# _stream_should_paint: pure throttle decision (0.15.0) — 1 if a streamed chunk
+# arriving at `now` ms should trigger a repaint given the last paint at `last`,
+# else 0 (coalesce this tick into the current frame). Repaints at most once per
+# STREAM_FRAME_MS. clock_now_ms is monotonic, but a backward step (now < last)
+# FAILS OPEN (paints) rather than stalling. Pure -> unit-tested (test_stream_throttle).
+fn _stream_should_paint(now, last) {
+    var dt = now - last;
+    if (dt < 0) { return 1; }                  # clock stepped backward -> paint (fail-open)
+    if (dt >= STREAM_FRAME_MS) { return 1; }
+    return 0;
+}
+
 # feed_stream_tick: the in-dispatch heartbeat the SSE callbacks (src/hoosh.cyr,
 # src/agent.cyr) ping on each streamed chunk. Under OUT_RING (the TUI) it advances
 # the spinner and repaints the growing pending line so a streaming turn renders
 # INCREMENTALLY + animated. Under OUT_FD1 (REPL / piped / CI) it is a no-op — the
 # chunk's emit already wrote live, so the floor stays byte-identical.
+# THROTTLE (0.15.0): at 80–150 tok/s a per-chunk repaint thrashes; coalesce to the
+# STREAM_FRAME_MS budget (_stream_should_paint). Dropping an intra-budget tick never
+# withholds content — the bytes are already in the ring, and the guaranteed
+# post-dispatch feed_repaint (tui.cyr run-line, ~1045) always lands the final state.
 fn feed_stream_tick() {
     if (out_mode() != OUT_RING) { return 0; }
+    var now = clock_now_ms();
+    if (_stream_should_paint(now, _stream_last_paint_ms) == 0) { return 0; }
+    _stream_last_paint_ms = now;
     spin_advance();
     feed_repaint();
     spin_paint();

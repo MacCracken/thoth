@@ -61,6 +61,7 @@ include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallba
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
+include "src/mdhl.cyr"      # markdown fenced-code-block highlighter for the reply feed (0.15.1); after diff (calls _hl_span)
 include "src/commands.cyr"
 include "src/repl.cyr"
 include "src/oneshot.cyr"   # one-shot / argv front-door (0.11.0); after commands (uses cmd_task)

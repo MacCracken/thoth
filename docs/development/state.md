@@ -7,6 +7,46 @@
 
 ## Version
 
+**0.15.1** — **markdown fenced code blocks in the reply are syntax-highlighted**, 2026-07-03. The
+model's reply is markdown; where `/read` (0.8.4) and diff bodies (0.8.5) already colour source, a
+` ```bash `/` ```python `/`~~~c` block now renders highlighted in the TUI feed — reusing the SAME
+coverage-guarded `_hl_span` UNCHANGED. New **`src/mdhl.cyr`**: a line-assembling fence state machine
+in front of all four reply-emit paths (hoosh/agent × blocking/streaming) that buffers each fenced
+block until its closing fence, then highlights the WHOLE block in one `_hl_span` pass (multi-line
+strings/comments colour correctly), emitting fence delimiters + prose verbatim. Handles ` ``` `/`~~~`,
+indented (≤3)/longer-run/CRLF/unterminated/mixed fences; info-strings map to grammar names via a small
+alias-first table (`bash`/`sh`→`shell`, `py`→`python`, `js`→`javascript`, `rs`→`rust`, `c++`→`cpp`, …),
+every canonical name falls through, `_hl_span` self-heals unknown names to verbatim, `text`/`plain`/
+`diff` stay uncoloured. Wired via a new `_hoosh_print_reply` (blocking) + `mdhl_feed`/`_reset`/`_finish`
+(streaming); error bodies keep `_hoosh_print_str` (never highlighted). **STREAMING**: a fenced block is
+WITHHELD until its close then appears highlighted at once (whole-block-to-one-tokenizer correctness;
+spinner covers the gap); because a fence is a whole-line construct, TUI text renders LINE-BY-LINE not
+char-by-char (removes per-char flicker, complements the 0.15.0 throttle — a behaviour change). The
+fully-live "upgrade the block to a highlighted card in place" is deferred (must re-render sealed feed
+rows). **Floor byte-identical**: at `PT_PLAIN` `mdhl_feed`/`mdhl_reply` are a strict `emit_n`
+pass-through + `mdhl_finish` a no-op; `_hoosh_acc`/history/`--json`/`-o` read the RAW reply — proven by
+a `strip_sgr(output) == input` coverage property test (never drops/reorders a byte). 766 assertions
+(+52: `test_mdhl_tag_map`/`_fence`/`_render`/`_stream` — map, scanners, PT_PLAIN-0-escapes +
+PT_ANSI-coloured-with-verbatim-delimiters + SGR-strip coverage, byte-split chunk invariance,
+unterminated flush; colour live-verified on a real tty). [ADR-0013](../adr/0013-reply-code-highlighting-block-buffered.md).
+Pin **6.3.41**.
+
+**0.15.0** — **smoother streaming: coalesce feed repaints onto a frame budget**, 2026-07-03. Opens
+the 0.15.x streaming-polish line (0.15.1 = markdown fenced-code highlighting on top). The TUI feed
+was repainting on **every** SSE delta; at 80–150 tok/s that is 100+ full repaints/sec → the pending
+line + spinner thrash and the terminal can't keep up (tearing / "splash"). `feed_stream_tick`
+(`src/tui.cyr`) now decouples paint rate from token rate via a pure `_stream_should_paint(now, last)`:
+repaint at most once per **`STREAM_FRAME_MS` (33 ms, ~30fps)**, dropping intra-budget ticks (the
+chunk's bytes are already in the ring). **Throttling, not a typewriter delay** — the model is not
+slowed; only the intermediate PAINT is capped. A backward monotonic step fails open (paints, never
+stalls); `spin_begin` clears the paint clock so the first chunk of each turn paints instantly; the
+spinner advances only on painted frames (human ~30fps instead of a blur). No content stranded — the
+post-dispatch `feed_flush_pending`+`feed_repaint` (~line 1045) always lands the final state on every
+exit path. **Floor byte-identical** (`feed_stream_tick` still no-ops off `OUT_RING` → line REPL /
+piped / one-shot / CI never enter the throttle; `_hoosh_acc`/history/`--json`/`-o` untouched — paint
+timing only). 714 assertions (+7, `test_stream_throttle` — the frame boundary, fail-open backward
+step, first-tick instant paint; the paint itself is live-verified on a real tty). Pin **6.3.41**.
+
 **0.14.1** — the agentic vertical now **completes end-to-end**; hoosh **2.4.12** resolves 0.14.0's
 finding (1), 2026-07-03. No thoth source change — the fix is in the consumed spine (hoosh's Anthropic
 request-builder now translates OpenAI `tool_calls`/`role:"tool"` messages into `tool_use`/`tool_result`

@@ -2,6 +2,83 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.1] - 2026-07-03
+
+**Markdown fenced code blocks in the reply are now syntax-highlighted.**
+The model's reply is markdown; where `/read` (0.8.4) and diff bodies (0.8.5) already colour
+source, a ` ```bash ` / ` ```python ` / `~~~c` block in an answer now renders syntax-highlighted
+in the TUI feed — reusing the SAME coverage-guarded highlighter (`_hl_span`) with zero changes.
+New `src/mdhl.cyr`; [ADR-0013](docs/adr/0013-reply-code-highlighting-block-buffered.md). 766
+assertions; pin **6.3.41**.
+
+### Added
+- **`src/mdhl.cyr` — a fenced-code highlighter for the reply feed.** A line-assembling fence
+  state machine in front of all four reply-emit paths (hoosh/agent × blocking/streaming). It
+  buffers each fenced block until its closing fence, then highlights the **whole block in one
+  `_hl_span` pass** (so multi-line strings / block comments colour correctly), emitting fence
+  delimiters and prose verbatim. Handles ` ``` ` and `~~~` fences, indented (≤3) fences,
+  longer-run / CRLF / unterminated fences, and mixed fence types. Fence info-strings map to
+  vyakarana grammar names via a small alias-first table (`bash`/`sh`→`shell`, `py`→`python`,
+  `js`→`javascript`, `rs`→`rust`, `c++`→`cpp`, …); every canonical name falls through, and
+  `_hl_span` self-heals an unknown grammar to verbatim. `text`/`plain`/`diff`/… deliberately
+  stay uncoloured. Wired via a new `_hoosh_print_reply` (blocking) + `mdhl_feed`/`_reset`/
+  `_finish` (streaming); error bodies keep `_hoosh_print_str` (never highlighted).
+
+### Streaming behaviour
+- A fenced block is **withheld until its closing fence** arrives, then appears highlighted at
+  once (correctness: the whole block reaches one tokenizer; the spinner covers the gap; prose
+  is unaffected). Because a fence is a whole-line construct, TUI text renders **line-by-line**
+  rather than character-by-character — this removes per-character flicker (complementing the
+  0.15.0 throttle) but is a behaviour change. The fully-live "upgrade the block to a
+  highlighted card in place" is deferred to its own cut (it must re-render sealed feed rows).
+
+### Floor
+- **Byte-identical.** At `PT_PLAIN` (piped / one-shot / CI / `NO_COLOR`) `mdhl_feed`/`mdhl_reply`
+  are a strict `emit_n` pass-through and `mdhl_finish` is a no-op — same bytes, same order, once.
+  The raw reply accumulator (`_hoosh_acc`) is untouched, so history / `--json` / `-o` read the
+  RAW reply. Proven by a property test: `strip_sgr(output) == input` (never drops/reorders a byte).
+
+### Tests
+- `test_mdhl_tag_map` / `test_mdhl_fence` / `test_mdhl_render` / `test_mdhl_stream` (+52): the
+  tag→grammar map, the fence open/close/info scanners, the end-to-end render (PT_PLAIN floor =
+  0 escapes; PT_ANSI = code coloured + delimiters verbatim + SGR-strip coverage), and streaming
+  (byte-at-a-time chunk-split invariance; unterminated-fence flush with no phantom closer). The
+  colour on screen is live-verified on a real tty (`--tier=rich`).
+
+## [0.15.0] - 2026-07-03
+
+**Smoother streaming — coalesce per-chunk feed repaints onto a frame budget.**
+Opens the 0.15.x streaming-polish line (0.15.1 will add markdown fenced-code highlighting on top).
+At 80–150 tok/s the TUI feed was repainting on **every** SSE delta — 100+ full repaints/sec — which
+thrashes the pending line + spinner and can outrun the terminal (visible tearing / "splash"). This
+decouples paint rate from token rate: `feed_stream_tick` now coalesces repaints onto a
+`STREAM_FRAME_MS` (33 ms, ~30fps) budget. It is **throttling, not a typewriter delay** — content is
+never held back (the chunk's bytes are already in the ring from the emit that ran before the tick;
+the model is not slowed), only the intermediate PAINT rate is capped. 714 assertions; pin **6.3.41**.
+
+### Changed
+- **`feed_stream_tick` (`src/tui.cyr`) coalesces streamed repaints.** New pure
+  `_stream_should_paint(now, last)` decides whether a chunk arriving at `now` (ms) should repaint,
+  given the last paint at `last`: repaint at most once per `STREAM_FRAME_MS`; an intra-budget tick is
+  dropped (the bytes are already captured). `clock_now_ms` is monotonic, but a backward step
+  (`now < last`) **fails open** (paints) rather than stalling. The spinner now advances only on
+  painted frames, so at high throughput it animates at a human ~30fps instead of a blur; at
+  < 30 tok/s every tick still paints (unchanged cadence). `spin_begin` resets the paint clock so the
+  **first** streamed chunk of every turn paints instantly (no first-token latency).
+- No content can be stranded: the guaranteed post-dispatch `feed_flush_pending` + `feed_repaint`
+  (`src/tui.cyr` run-line, ~1045) always lands the final state after the stream ends, on every exit
+  path (success / error / early return).
+
+### Floor
+- **Byte-identical.** `feed_stream_tick` still early-returns off `OUT_RING`, so the line REPL / piped
+  / one-shot / CI floor never enters the throttle — the change is TUI-only by construction. The
+  reply accumulator (`_hoosh_acc`), history, `--json`, and `-o` are untouched (paint timing only).
+
+### Tests
+- `test_stream_throttle` (+7): the frame boundary (dt 0/32 coalesce, 33/large paint), the fail-open
+  backward-clock step, and the first-tick (last=0) instant paint. The paint itself is I/O
+  (live-verified on a real tty via `--tier=rich`, not the harness).
+
 ## [0.14.1] - 2026-07-03
 
 **Agentic vertical now completes end-to-end — hoosh 2.4.12 resolves the tool-continuation 502.**
