@@ -18,3 +18,148 @@ fn run_shell(cmdline) {
     vec_push(args, cmdline);
     return exec_vec(args);
 }
+
+# --- timed, output-capturing shell exec (0.16.0; the model's `shell` tool backend) ---
+#
+# The /run escape above STREAMS to the terminal and returns only an exit code — fine for a
+# human watching live. The agentic `shell` tool instead needs the OUTPUT back as a string to
+# feed to the model, plus a wall-clock TIMEOUT so a runaway command can't hang the loop. There
+# is no such primitive in the linked stdlib (lib/process.cyr's exec_capture has no timeout, and
+# lib/regression.cyr's timed helpers are NOT in thoth's [deps].stdlib so they can't be called).
+# So this COPIES regression.cyr's two proven patterns into thoth's own substrate module: a
+# child-stdout/err -> TEMP-FILE redirect (avoids the pipe-fill deadlock a blocking read would
+# hit, and PRESERVES partial output when the child is SIGKILLed) combined with a WNOHANG-poll-
+# with-deadline + SIGKILL reap. This is raw substrate (shell exec owned by no AGNOS domain), so
+# it lives here, not in lib/ (which is vendored) — "port the floor, never fork the spine".
+#
+# POSIX-only (fork/dup2/execve/waitpid-WNOHANG/kill + a per-arity sys_open/sys_unlink). AGNOS has
+# no /bin/sh -c (sys_spawn takes a program path only) and no WNOHANG waitpid; Windows has no
+# fork/exec — so the whole body is compiled out on those targets (exactly as lib/process.cyr
+# guards its POSIX block) and shell_supported() reports 0 there so the tool is never advertised.
+
+var _shell_tmp_ctr = 0;    # per-process monotonic counter — pid alone collides in a long-lived TUI
+var _shell_tmp_buf = 0;    # lazily-allocated scratch for the temp path
+
+# _exec_append_cstr: raw-copy NUL-terminated s into dst at off; return new off. Pure.
+fn _exec_append_cstr(dst, off, s) {
+    var i = 0;
+    while (load8(s + i) != 0) { store8(dst + off, load8(s + i)); off = off + 1; i = i + 1; }
+    return off;
+}
+
+# _shell_tmp_path: build a fresh /tmp/thoth_sh_<pid>_<counter> path (NUL-terminated) into the
+# shared scratch and bump the counter. pid+counter is bounded and collision-resistant within one
+# session (two shell calls share a pid). No RNG needed / available. Residual (documented, not
+# faked): /tmp is world-writable and the frozen open ABI has no O_NOFOLLOW, so a pre-planted
+# symlink at the path is a TOCTOU vector — mitigated best-effort by O_EXCL on create below.
+fn _shell_tmp_path() {
+    if (_shell_tmp_buf == 0) { _shell_tmp_buf = alloc(64); }
+    var off = 0;
+    off = _exec_append_cstr(_shell_tmp_buf, off, "/tmp/thoth_sh_");
+    off = _append_int(_shell_tmp_buf, off, sys_getpid());
+    store8(_shell_tmp_buf + off, 95); off = off + 1;         # '_'
+    off = _append_int(_shell_tmp_buf, off, _shell_tmp_ctr);
+    _shell_tmp_ctr = _shell_tmp_ctr + 1;
+    store8(_shell_tmp_buf + off, 0);
+    return _shell_tmp_buf;
+}
+
+#ifdef CYRIUS_TARGET_AGNOS
+# AGNOS: no /bin/sh, no fork/exec/dup2, no WNOHANG waitpid, different sys_open/sys_unlink arity —
+# so a capturing shell is architecturally impossible (the deferred-clipboard precedent). Announce,
+# never fake: report unsupported (-3) and 0 bytes; shell_supported() returns 0 so it is unadvertised.
+fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
+    store64(status_out, 0 - 3); store64(status_out + 8, 0); return 0;
+}
+fn shell_supported() { return 0; }
+#endif
+#ifdef CYRIUS_TARGET_WIN
+# Windows: no fork/exec and no SIGKILL-by-deadline in the frozen surface — the timeout protection
+# can't be honored the same way, so treat it like AGNOS for 0.16.0 (unadvertised; announced).
+fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
+    store64(status_out, 0 - 3); store64(status_out + 8, 0); return 0;
+}
+fn shell_supported() { return 0; }
+#endif
+
+#ifndef CYRIUS_TARGET_AGNOS
+#ifndef CYRIUS_TARGET_WIN
+# exec_shell_capture: run `/bin/sh -c cmdline`, capturing merged stdout+stderr into buf[0..buflen)
+# (a temp file under the hood), enforcing a wall-clock timeout. status_out points to TWO i64 slots:
+#   [0] = exit code: 0..127 normal, 128+sig on a signal, -1 on spawn/open failure, -2 on timeout-kill
+#   [1] = 1 if the command was SIGKILLed by the deadline, else 0
+# Returns the number of bytes captured (>= 0; may be partial on timeout). The child runs with an
+# EMPTY environment (the shell's compiled-in default PATH), matching /run's exec_vec convention;
+# stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
+# The caller owns NUL-termination of buf at the returned count (buf must be >= buflen+1).
+fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
+    # Open a fresh temp file with O_CREAT|O_EXCL|O_WRONLY (193), 0644 (420). O_EXCL fails on a
+    # pre-planted file/symlink; bump the counter and retry a few times before giving up closed.
+    var out_fd = 0 - 1;
+    var path = 0;
+    var tries = 0;
+    while ((tries < 8) && (out_fd < 0)) {
+        path = _shell_tmp_path();
+        out_fd = sys_open(path, 193, 420);
+        tries = tries + 1;
+    }
+    if (out_fd < 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; }
+
+    var pid = sys_fork();
+    if (pid < 0) {
+        sys_close(out_fd); sys_unlink(path);
+        store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
+    }
+    if (pid == 0) {
+        sys_dup2(out_fd, 1);            # stdout -> temp file
+        sys_dup2(out_fd, 2);            # stderr -> same file (merged, as a terminal shows it)
+        sys_close(out_fd);
+        var dn = sys_open("/dev/null", 0, 0);   # 0 = O_RDONLY
+        if (dn >= 0) { sys_dup2(dn, 0); sys_close(dn); }   # stdin <- /dev/null (no hang on read)
+        var argv[40];                  # N BYTES: 4 ptrs (/bin/sh, -c, cmdline, NUL) = 32 B, headroom to 40
+        store64(&argv,      "/bin/sh");
+        store64(&argv + 8,  "-c");
+        store64(&argv + 16, cmdline);  # the model's command flows as ONE argv element (no double-shell)
+        store64(&argv + 24, 0);
+        var envp[16];
+        store64(&envp, 0);
+        sys_execve("/bin/sh", &argv, &envp);
+        sys_exit(127);
+    }
+    sys_close(out_fd);                  # parent's write copy; the child holds its own duped fds
+
+    var stbuf[1];
+    var elapsed = 0;
+    var reaped = 0;
+    var code = 0;
+    while ((elapsed < timeout_ms) && (reaped == 0)) {
+        var w = sys_waitpid(pid, &stbuf, 1);          # 1 = WNOHANG
+        if (w == pid) {
+            var st = load32(&stbuf);
+            if (WIFEXITED(st) == 1) { code = WEXITSTATUS(st); }
+            elif (WIFSIGNALED(st) == 1) { code = 128 + WTERMSIG(st); }
+            else { code = 0 - 1; }
+            reaped = 1;
+        } else {
+            syscall(7, 0, 0, 100);                    # poll(NULL,0,100ms) — portable 100ms sleep
+            elapsed = elapsed + 100;
+        }
+    }
+    var timed = 0;
+    if (reaped == 0) {
+        sys_kill(pid, 9);                             # SIGKILL the shell
+        sys_waitpid(pid, &stbuf, 0);                  # BLOCKING reap — no zombie
+        timed = 1;
+        code = 0 - 2;
+    }
+    store64(status_out, code);
+    store64(status_out + 8, timed);
+
+    var total = file_read_all(path, buf, buflen);     # whatever landed (partial on kill)
+    sys_unlink(path);
+    if (total < 0) { total = 0; }
+    return total;
+}
+fn shell_supported() { return 1; }
+#endif
+#endif

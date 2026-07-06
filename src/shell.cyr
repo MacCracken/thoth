@@ -1,0 +1,231 @@
+# thoth — the model-invokable `shell` tool (0.16.0; ADR-0014).
+#
+# A thoth-NATIVE agentic tool, executed LOCALLY (never forwarded to daimon), that lets the backing
+# model propose a shell command during an agentic turn: thoth runs it under a wall-clock timeout,
+# captures the merged stdout+stderr, and feeds a bounded result string back to the model. It is the
+# exact shape of the memory_write local tool (src/memory.cyr): advertised in agent_turn only when
+# opt-in [shell].enabled AND the target can capture (shell_supported()), dispatched in the SERIAL
+# executor, gated at a single t-ron choke point — here under the reserved name `thoth_shell`,
+# DISTINCT from `thoth_run` (the human /run escape) so a policy can allow the operator's own /run
+# while independently denying / flagging / rate-limiting the untrusted model's shell.
+#
+# PROTECTIONS (in order, deny-biased at every layer):
+#   1. opt-in — [shell].enabled default off; unadvertised entirely when off / on a non-POSIX target.
+#   2. LOCAL glob filter ([shell.deny] then [shell.allow]) — checked FIRST, BEFORE t-ron, so the
+#      deny-list hard-blocks even with no [tron].policy loaded (the common case). deny wins; a
+#      non-empty allow-list is default-deny (a command must match one). This is a COARSE convenience
+#      pre-filter, NOT a sandbox: a shell can cd / chain / base64-decode around a string glob, so it
+#      reduces accidental damage — it does not confine a determined model. Never claimed otherwise.
+#   3. t-ron gate (thoth_shell) — the authority: the raw command is passed as the scanned payload so
+#      t-ron's injection scanner + pattern analyzer + rate limiter + risk score see what will run;
+#      deny is final, flag falls back to the fail-closed confirm (which DENIES in one-shot).
+#   4. bounded, timed capture — output capped ([shell].max_output), a runaway command SIGKILLed at
+#      [shell].timeout_ms (partial output preserved), audited (proposed + verdict + exit/bytes).
+#
+# HONEST LIMITS: binary NULs in output are scrubbed to spaces (text-tool contract — the result is a
+# JSON string the model reads); the timeout kills the /bin/sh, not a backgrounded grandchild; the
+# temp capture file lives in world-writable /tmp with no O_NOFOLLOW (best-effort O_EXCL create).
+
+var _shell_cap_buf = 0;      # capture buffer (config cap + 1 for the NUL terminator), lazy
+var _shell_res_buf = 0;      # result/deny-message buffer (config cap + 256), lazy
+var _shell_logcmd = 0;       # bounded command copy for the audit log, lazy
+var SHELL_LOGCMD_CAP = 208;  # audit-log command field is truncated to this (bounds the log line)
+var _shell_deny_pat = 0;     # the [shell.deny] pattern that matched (for the refusal message), or 0
+var _shell_last_allowed = 0; # 1 if the last shell_run_tool passed the gate (for roundlog accounting)
+var _shell_last_ok = 0;      # 1 if the last shell_run_tool actually ran + captured a result
+
+# shell_last_allowed / shell_last_ok: the roundlog outcome of the last shell_run_tool, read by the
+# dispatch site in agent.cyr (mirrors how the memory branch sets rl_kind/rl_ok inline).
+fn shell_last_allowed() { return _shell_last_allowed; }
+fn shell_last_ok() { return _shell_last_ok; }
+
+# _shell_is_blank: 1 if the cstr is empty or all ASCII whitespace (space/tab/nl/cr). Pure.
+fn _shell_is_blank(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var c = load8(s + i);
+        if ((c != 32) && (c != 9) && (c != 10) && (c != 13)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# _shell_glob_verdict: run the LOCAL glob filter over cmd. Returns 0 = pass (proceed to t-ron),
+# 1 = a [shell.deny] pattern matched (sets _shell_deny_pat), 2 = a non-empty [shell.allow] list had
+# no match. deny is evaluated first so it wins over allow. Patterns match the WHOLE command via
+# glob_match (* / ? only), so callers use leading/trailing * for substring intent. Pure.
+fn _shell_glob_verdict(cmd) {
+    _shell_deny_pat = 0;
+    var dn = config_shell_deny_count();
+    var i = 0;
+    while (i < dn) {
+        var pat = config_shell_deny_at(i);
+        if (glob_match(pat, cmd) == 1) { _shell_deny_pat = pat; return 1; }
+        i = i + 1;
+    }
+    var an = config_shell_allow_count();
+    if (an > 0) {
+        var j = 0;
+        var hit = 0;
+        while ((j < an) && (hit == 0)) {
+            if (glob_match(config_shell_allow_at(j), cmd) == 1) { hit = 1; }
+            j = j + 1;
+        }
+        if (hit == 0) { return 2; }
+    }
+    return 0;
+}
+
+# _shell_logcmd_copy: a bounded (SHELL_LOGCMD_CAP-1), NUL-terminated copy of cmd for the audit log
+# (the log line may contain command text the model proposed — the operator who enabled shell +
+# logging accepted that; captured OUTPUT is never logged, only exit code + byte count).
+fn _shell_logcmd_copy(cmd) {
+    if (_shell_logcmd == 0) { _shell_logcmd = alloc(SHELL_LOGCMD_CAP); }
+    var n = strlen(cmd);
+    if (n > (SHELL_LOGCMD_CAP - 1)) { n = SHELL_LOGCMD_CAP - 1; }
+    memcpy(_shell_logcmd, cmd, n);
+    store8(_shell_logcmd + n, 0);
+    return _shell_logcmd;
+}
+
+# _shell_audit_deny: structured log for a locally-refused command (before t-ron). SK_WARN.
+fn _shell_audit_deny(cmd, verdict) {
+    log_begin("shell");
+    log_kv_str("command", _shell_logcmd_copy(cmd));
+    log_kv_str("verdict", verdict);
+    log_commit(SK_WARN);
+    return 0;
+}
+
+# _shell_audit_run: structured log for an executed command — the exit code + captured byte count
+# (never the output bytes) + the outcome verdict. Severity SK_INFO on a clean exit, SK_WARN otherwise.
+fn _shell_audit_run(cmd, verdict, exitc, bytes, sev) {
+    log_begin("shell");
+    log_kv_str("command", _shell_logcmd_copy(cmd));
+    log_kv_str("verdict", verdict);
+    log_kv_int("exit", exitc);
+    log_kv_int("bytes", bytes);
+    log_commit(sev);
+    return 0;
+}
+
+# _shell_deny_msg: the refusal string for a deny-glob match, naming the matched pattern so the model
+# can react ("that command is blocked; try another"). Built in _shell_res_buf (short; sized cap+256).
+fn _shell_deny_msg() {
+    if (_shell_res_buf == 0) { _shell_res_buf = alloc(config_shell_output_cap() + 256); }
+    var off = 0;
+    off = _exec_append_cstr(_shell_res_buf, off, "(shell: refused - command matches a [shell.deny] pattern: ");
+    if (_shell_deny_pat != 0) { off = _exec_append_cstr(_shell_res_buf, off, _shell_deny_pat); }
+    off = _exec_append_cstr(_shell_res_buf, off, ")");
+    store8(_shell_res_buf + off, 0);
+    return _shell_res_buf;
+}
+
+# _shell_build_result: assemble the result STRING the model reads — the captured bytes (interior
+# NULs scrubbed to spaces so the footer stays visible and the JSON escaper doesn't cut the whole
+# result at a binary NUL), then a one-line footer with the exit code / timeout / truncation note.
+# _shell_cap_buf holds `cap_total` captured bytes; `truncated` (1/0) is the caller's real-overflow
+# signal (output exceeded the cap), NOT inferred from cap_total==cap — an output of exactly `cap`
+# bytes is COMPLETE, not truncated. code >= 0 here (spawn-fail/unsupported handled earlier). Built
+# in _shell_res_buf (sized cap+256). Returns the NUL-terminated result.
+fn _shell_build_result(cap_total, code, timed, timeout_ms, truncated) {
+    var cap = config_shell_output_cap();
+    if (_shell_res_buf == 0) { _shell_res_buf = alloc(cap + 256); }
+    var off = 0;
+    var i = 0;
+    while (i < cap_total) {
+        var c = load8(_shell_cap_buf + i);
+        if (c == 0) { c = 32; }               # scrub interior NUL -> space (text-tool contract)
+        store8(_shell_res_buf + off, c); off = off + 1;
+        i = i + 1;
+    }
+    if (cap_total == 0) {
+        # no output at all — a concise line so the model isn't handed an empty string.
+        off = _exec_append_cstr(_shell_res_buf, off, "(no output; ");
+        if (timed == 1) {
+            off = _exec_append_cstr(_shell_res_buf, off, "timed out after ");
+            off = _append_int(_shell_res_buf, off, timeout_ms);
+            off = _exec_append_cstr(_shell_res_buf, off, " ms - killed");
+        } else {
+            off = _exec_append_cstr(_shell_res_buf, off, "exit ");
+            off = _append_int(_shell_res_buf, off, code);
+        }
+        off = _exec_append_cstr(_shell_res_buf, off, ")");
+        store8(_shell_res_buf + off, 0);
+        return _shell_res_buf;
+    }
+    # ensure the footer starts on its own line
+    if (load8(_shell_res_buf + off - 1) != 10) { store8(_shell_res_buf + off, 10); off = off + 1; }
+    off = _exec_append_cstr(_shell_res_buf, off, "(");
+    if (timed == 1) {
+        off = _exec_append_cstr(_shell_res_buf, off, "timed out after ");
+        off = _append_int(_shell_res_buf, off, timeout_ms);
+        off = _exec_append_cstr(_shell_res_buf, off, " ms - killed; partial output above");
+    } else {
+        off = _exec_append_cstr(_shell_res_buf, off, "exit ");
+        off = _append_int(_shell_res_buf, off, code);
+        if (truncated == 1) {
+            off = _exec_append_cstr(_shell_res_buf, off, "; output truncated at ");
+            off = _append_int(_shell_res_buf, off, cap);
+            off = _exec_append_cstr(_shell_res_buf, off, " bytes");
+        }
+    }
+    off = _exec_append_cstr(_shell_res_buf, off, ")");
+    store8(_shell_res_buf + off, 0);
+    return _shell_res_buf;
+}
+
+# shell_run_tool: the agentic-loop tool (0.16.0). Extracts "command" from the MCP call arguments
+# ({"command":"..."}), runs it through the LOCAL glob filter then the t-ron thoth_shell gate, and on
+# a pass runs it via exec.cyr's timed capture, returning a plain result STRING for the model. Sets
+# _shell_last_allowed / _shell_last_ok for the caller's roundlog. Gated (enabled + supported) at the
+# dispatch site in src/agent.cyr — never reached when disabled. thoth-native, spine-safe (ADR-0014).
+fn shell_run_tool(args_cstr) {
+    _shell_last_allowed = 0;
+    _shell_last_ok = 0;
+    if (args_cstr == 0) { return "(shell: missing arguments)"; }
+    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    if (v == 0) { return "(shell: arguments are not valid JSON)"; }
+    var cv = bayan_json_v_obj_get(v, "command");
+    if (cv == 0) { return "(shell: missing required 'command' argument)"; }
+    var cs = bayan_json_v_str(cv);
+    if (cs == 0) { return "(shell: 'command' must be a string)"; }
+    var cmd = str_cstr(cs);
+    if (_shell_is_blank(cmd) == 1) { return "(shell: 'command' is empty)"; }
+
+    # 1) LOCAL glob filter (BEFORE t-ron so the deny-list holds with no policy loaded).
+    var gv = _shell_glob_verdict(cmd);
+    if (gv == 1) { _shell_audit_deny(cmd, "deny-pattern"); return _shell_deny_msg(); }
+    if (gv == 2) { _shell_audit_deny(cmd, "deny-allowlist"); return "(shell: refused - command not in the [shell.allow] allowlist)"; }
+
+    # 2) t-ron authorization (the authority). The command is the scanned payload. gate_authorize
+    #    audits its own verdict and prints it; in one-shot the fail-closed confirm DENIES.
+    if (gate_authorize("thoth_shell", _params_one("command", cmd), "run shell", cmd) == 0) {
+        _shell_audit_deny(cmd, "tron-deny");
+        return "denied by authorization policy";
+    }
+    _shell_last_allowed = 1;
+
+    # 3) run it (timed, captured).
+    var cap = config_shell_output_cap();
+    if (_shell_cap_buf == 0) { _shell_cap_buf = alloc(cap + 1); }
+    var status[16];                # two i64 slots: [0]=exit code, [1]=timed-out flag
+    # Read up to cap+1 bytes into the cap+1 buffer: total > cap is the TRUE-overflow signal (output
+    # exceeded the cap), so an output of exactly `cap` bytes is reported COMPLETE, not "truncated".
+    var total = exec_shell_capture(cmd, _shell_cap_buf, cap + 1, config_shell_timeout_ms(), &status);
+    var code = load64(&status);
+    var timed = load64(&status + 8);
+    if (code == (0 - 1)) { _shell_audit_run(cmd, "spawn-fail", code, 0, SK_WARN); return "(shell: failed to spawn /bin/sh)"; }
+    if (code == (0 - 3)) { _shell_audit_run(cmd, "unsupported", code, 0, SK_WARN); return "(shell: unsupported on this target)"; }
+    var truncated = 0;
+    if (total > cap) { truncated = 1; total = cap; }   # drop the overflow probe byte; flag truncation
+    store8(_shell_cap_buf + total, 0);          # NUL-terminate for the escaper (mandatory; index <= cap)
+    var sev = SK_INFO;
+    if (timed == 1) { sev = SK_WARN; }
+    elif (code != 0) { sev = SK_WARN; }
+    var verdict = "exit";
+    if (timed == 1) { verdict = "timeout"; }
+    _shell_audit_run(cmd, verdict, code, total, sev);
+    _shell_last_ok = 1;
+    return _shell_build_result(total, code, timed, config_shell_timeout_ms(), truncated);
+}

@@ -156,6 +156,25 @@ fn agent_tools_add_memory(dst, tl) {
     return off;
 }
 
+# agent_tools_add_shell: append the thoth-native `shell` tool to the daimon tools array in dst
+# (0.16.0, ADR-0014). Advertised ONLY when opt-in [shell].enabled AND the target can capture a shell
+# (shell_supported() — POSIX only; AGNOS/Windows have no capturing /bin/sh, announced not faked). When
+# off / unsupported this returns tl UNCHANGED — the whole byte-identical-floor proof for the advertise
+# side (no round can then name "shell"). Executed LOCALLY + t-ron-gated (thoth_shell) in
+# _agent_run_calls_serial — never forwarded to daimon. Same shape as agent_tools_add_memory.
+fn agent_tools_add_shell(dst, tl) {
+    if (config_shell_enabled() == 0) { return tl; }
+    if (shell_supported() == 0) { return tl; }
+    var cap = AGENT_TOOLS_CAP;
+    var off = tl;
+    if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
+    else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }   # back over the trailing "]"
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"shell\",\"description\":\"Run a shell command on the local machine (/bin/sh -c) and return its combined stdout+stderr and exit code. Use for build/test/git/file inspection in THIS project. One command per call; it runs with a wall-clock timeout and bounded output, cannot read stdin, and may be refused by policy.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\",\"description\":\"the shell command line to execute\"}},\"required\":[\"command\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
 # _agent_copy: raw-copy n bytes of src into dst at off, bounded by cap. Pure.
 fn _agent_copy(dst, off, src, n, cap) {
     var i = 0;
@@ -666,7 +685,14 @@ fn _agent_round_has_local(tcs, nc) {
     var i = 0;
     while (i < nc) {
         var nm = agent_tc_name(tcs, i);
-        if (nm != 0) { if (streq(nm, "memory_write") == 1) { return 1; } }
+        if (nm != 0) {
+            if (streq(nm, "memory_write") == 1) { return 1; }
+            # "shell" is matched UNCONDITIONALLY (not gated on config): a call named "shell" must
+            # always take the serial path so the local dispatch elif below decides its fate — even
+            # when disabled, where that elif returns an honest not-enabled string rather than letting
+            # a hallucinated/un-advertised "shell" fall through to daimon_invoke. 0.16.0.
+            if (streq(nm, "shell") == 1) { return 1; }
+        }
         i = i + 1;
     }
     return 0;
@@ -705,6 +731,23 @@ fn _agent_run_calls_serial(tcs, nc) {
             } else {
                 res = "denied by authorization policy";
             }
+        }
+        elif ((streq(nm, "shell") == 1) && (config_shell_enabled() == 1) && (shell_supported() == 1)) {
+            # thoth-native shell tool (0.16.0, ADR-0014): the model proposes a local command.
+            # shell_run_tool runs the LOCAL glob filter + the t-ron thoth_shell gate + the timed
+            # capture internally (globs BEFORE the gate, so a deny-list holds even with no policy),
+            # returning the result string plus the roundlog outcome. Executed LOCALLY, NOT via daimon.
+            res = shell_run_tool(gp);
+            if (shell_last_allowed() == 1) { rl_kind = RL_ALLOWED; }
+            rl_ok = shell_last_ok();
+            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+        }
+        elif (streq(nm, "shell") == 1) {
+            # "shell" emitted while the tool is disabled / unsupported (it was never advertised):
+            # return an honest not-enabled string. Do NOT run it and do NOT fall through to
+            # daimon_invoke — never execute or forward a tool the model was not offered. rl stays DENIED.
+            res = "(shell tool is not enabled in this session)";
+            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
         }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
@@ -876,6 +919,7 @@ fn agent_turn(prompt) {
     if (_agent_tools_ready == 0) {
         var tl = agent_format_tools(_agent_tools_buf, daimon_tools_value());
         tl = agent_tools_add_memory(_agent_tools_buf, tl);   # 0.12.2: + memory_write when [memory].enabled
+        tl = agent_tools_add_shell(_agent_tools_buf, tl);    # 0.16.0: + shell when [shell].enabled AND POSIX-capable
         _agent_tools_len = tl;
         if (tl > 0) { _agent_tools_ready = 1; }
     }

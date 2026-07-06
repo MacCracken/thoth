@@ -2,6 +2,65 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.0] - 2026-07-06
+
+**The model-invokable `shell` tool, with protections — plus a toolchain refresh to Cyrius 6.4.11.**
+The backing model can now propose a shell command during an agentic turn; thoth runs it locally under
+a wall-clock timeout, captures the combined stdout+stderr, and feeds a bounded result back into the
+loop. It mirrors the `memory_write` local-tool shape (advertised only when opt-in `[shell].enabled` and
+the target can capture, dispatched in the serial executor, never forwarded to daimon) and is gated at a
+single t-ron choke point under the **distinct reserved name `thoth_shell`** — separate from `thoth_run`
+(the human `/run`), so a policy can permit the operator's own shell while independently denying the
+model's. Opt-in and off by default. [ADR-0014](docs/adr/0014-model-shell-tool-local-posix-gated.md).
+806 assertions (+40). Pin **6.4.11**.
+
+### Added
+- **`src/shell.cyr` — the `shell` agentic tool.** `shell_run_tool({"command":…})` parses the command,
+  runs a **local `[shell.deny]`/`[shell.allow]` glob filter BEFORE t-ron** (so a deny-list holds even
+  with no `[tron].policy`: deny wins; a non-empty allow-list is default-deny), then the `thoth_shell`
+  t-ron gate (the raw command passed as the JSON-escaped scanned payload), then a bounded, timed
+  capture; it NUL-terminates + scrubs interior NULs→spaces, formats a result with an exit/timeout/
+  truncation footer, and audits every proposed + executed command (`log_begin("shell")`, exit + byte
+  count, never the output). Advertised via `agent_tools_add_shell` after `agent_tools_add_memory`.
+- **`src/exec.cyr` — `exec_shell_capture` (timed, output-capturing shell exec).** Copies
+  `lib/regression.cyr`'s proven pattern (child stdout+stderr → a `/tmp/thoth_sh_<pid>_<ctr>` temp file
+  with `O_CREAT|O_EXCL|O_WRONLY`, a `WNOHANG`-poll-with-deadline, `SIGKILL` + blocking reap, then
+  `file_read_all` + unlink) — combining capture and timeout so a runaway command is killed with its
+  partial output preserved and no pipe-fill deadlock. `shell_supported()` reports POSIX capability.
+- **`[shell]` config** (`src/config.cyr`): `enabled` (default off), `timeout_ms` (default 30 s, clamped
+  10 min), `max_output` (default 64 KiB, clamped 1 MiB), and `[shell.deny]`/`[shell.allow]` glob
+  tables loaded as sections of `label = "glob"` pairs (bayan has no TOML-array getter). A `/state`
+  `shell` row (omitted when off) showing timeout / cap / deny+allow counts, and honest "gated on
+  daimon" / "unsupported on this target" lines.
+
+### Security
+- **`thoth_shell` is a distinct t-ron reserved name** from `thoth_run` — the human-vs-model trust split
+  is real: a policy can allow `/run` and deny/flag/rate-limit the model's shell (or vice-versa). One-shot
+  is fail-closed (the confirm denies). The deny/allow globs are a **coarse pre-filter, explicitly NOT a
+  sandbox** (a shell can `cd`/chain/decode around a string glob) — stated honestly everywhere; real
+  containment is default-off + the operator's trust decision + the t-ron policy + OS confinement.
+
+### Portability / floor
+- **POSIX only, degrade closed.** The raw-syscall capture is compiled out on AGNOS (no `/bin/sh -c`, no
+  `WNOHANG`) and Windows (`#ifndef CYRIUS_TARGET_AGNOS`/`_WIN`, mirroring `lib/process.cyr`); the tool
+  is **not advertised** there and `/state` announces it — never faked. The AGNOS build stays clean.
+- **Byte-identical floor when disabled** (the default): `agent_tools_add_shell` returns the tools length
+  unchanged (zero writes), no `/state` row, no request-body delta. A hallucinated/un-advertised `"shell"`
+  call is neither executed **nor** forwarded to daimon (matched unconditionally in `_agent_round_has_local`
+  → serial dispatch re-checks enabled+supported → honest not-enabled string).
+
+### Toolchain
+- **Refresh Cyrius `6.3.41 → 6.4.11`** (`cyrius.cyml` pin + `cyrius lib sync` — 14 floor modules changed);
+  clears the toolchain-drift + shadow-lib warnings. No source change from the refresh; the existing 766
+  assertions pass unchanged on 6.4.11 before the feature. `aarch64` stays best-effort size-gapped (the
+  pre-existing 16 MiB output cap, unchanged); Windows stays on its pre-existing `SYS_EPOLL_CREATE1` gap.
+
+### Tests
+- `test_shell` (+40): config scalars + clamps, the `[shell.deny]`/`[shell.allow]` loader, the glob
+  verdict (deny-wins / allow-list default-deny / empty-allow allow-through), `shell_run_tool`'s pre-gate
+  returns (parse/blank/deny), and the real `exec_shell_capture` (capture, exit code, merged stderr,
+  timeout + partial output, over-cap truncation) plus the advertise-off floor.
+
 ## [0.15.1] - 2026-07-03
 
 **Markdown fenced code blocks in the reply are now syntax-highlighted.**

@@ -186,6 +186,27 @@ selection stays content-blind.
   best-effort lane stays size-gapped until the binary's static data (sigil-dominated) shrinks or the
   cyrius output cap rises — unrelated to sankoch's version.
 
+### 0.16.x — the model's `shell` tool (SHIPPED)
+
+- **`0.16.0` — model-invokable `shell` tool + protections. DONE (2026-07-06).** A thoth-native,
+  opt-in, POSIX-only agentic tool: the model proposes a command, thoth runs it under a timeout,
+  captures merged stdout+stderr, and returns a bounded result — mirroring the `memory_write`
+  local-tool shape, gated under the **distinct** reserved t-ron name `thoth_shell` (vs `thoth_run`).
+  Defense in depth: a local `[shell.deny]`/`[shell.allow]` glob filter **before** t-ron, the
+  `thoth_shell` gate, a bounded+timed capture (`exec_shell_capture` in `src/exec.cyr`), and an audit
+  of every command. `[shell]` config; a `/state` row (omit-when-off). Degrades closed on AGNOS/Windows
+  (no capturing `/bin/sh` — announced, not advertised). Byte-identical floor when off. Also bundled the
+  toolchain refresh to Cyrius **6.4.11**. [ADR-0014](../adr/0014-model-shell-tool-local-posix-gated.md).
+- **Deferred `shell` follow-ups** (none blocking; each degrades honestly today):
+  - **`agent_enabled()` relax** — let `[shell].enabled` enter the agentic loop even without daimon, so
+    the shell tool is usable standalone. A core-routing change (touches `cmd_task` + the request
+    builder + the iter paths); today the tool follows the `memory_write` precedent (advertised only
+    with daimon wired) and `/state` announces "gated on daimon", so it is never silently inert.
+  - **Windows timed capture** — a `WaitForSingleObject`(finite)+`TerminateProcess` + pipe/temp-file
+    drain, once verified on the Windows host; today Windows is treated like AGNOS (unadvertised, announced).
+  - **process-group kill on timeout** — `setpgid` the child + `kill(-pgid)` so a backgrounded grandchild
+    is also killed; today the SIGKILL reaps the `/bin/sh`, not its descendants (documented, matches `/run`).
+
 ### Deferred / known limitations (captured so they're not lost)
 
 > Not on an active line — each is gated on an external/substrate primitive or is

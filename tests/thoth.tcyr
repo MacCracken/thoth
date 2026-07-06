@@ -27,6 +27,7 @@ include "src/roundlog.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/memory.cyr"
+include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014)
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
@@ -502,6 +503,112 @@ fn test_alias() {
     # byte-identical to a build without alias support.
     _alias_n = 0;
     assert_eq(alias_expand("/ship", 0), 0, "no aliases -> no expansion (byte-identical floor)");
+    return 0;
+}
+
+# The model-invokable `shell` tool (0.16.0, ADR-0014): config surface + clamps, the LOCAL glob
+# filter (deny-wins, allow-list default-deny), shell_run_tool's PRE-GATE returns (parse/blank/deny —
+# the paths that never reach the confirm gate, so the test can't hang on stdin), the real timed
+# capture (exit code / merged stderr / timeout+partial / over-cap), and the advertise-off floor.
+fn test_shell() {
+    test_group("shell tool (config.cyr / exec.cyr / shell.cyr, 0.16.0)");
+
+    # --- config scalars + clamps (white-box the raw fields; the getters clamp) ---
+    _cfg_shell_enabled = 1;
+    assert(config_shell_enabled() == 1, "shell enabled reads through");
+    _cfg_shell_timeout_ms = 0 - 1;
+    assert_eq(config_shell_timeout_ms(), SHELL_TIMEOUT_DEFAULT_MS, "absent timeout -> default");
+    _cfg_shell_timeout_ms = 5000;
+    assert_eq(config_shell_timeout_ms(), 5000, "configured timeout passes through");
+    _cfg_shell_timeout_ms = SHELL_TIMEOUT_MAX_MS + 1;
+    assert_eq(config_shell_timeout_ms(), SHELL_TIMEOUT_MAX_MS, "over-max timeout clamped");
+    _cfg_shell_output_cap = 0 - 1;
+    assert_eq(config_shell_output_cap(), SHELL_OUT_DEFAULT, "absent cap -> default");
+    _cfg_shell_output_cap = 4096;
+    assert_eq(config_shell_output_cap(), 4096, "configured cap passes through");
+
+    # --- [shell.deny]/[shell.allow] as sections of `label = pattern` pairs (value is the glob) ---
+    var toml = "[shell.deny]\nd1 = \"*rm -rf*\"\nd2 = \"* | sh\"\nblank = \"\"\n[shell.allow]\na1 = \"git *\"\na2 = \"ls*\"\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    _shell_globs_load(sections);
+    assert_eq(config_shell_deny_count(), 2, "two deny globs (blank value skipped)");
+    assert_eq(config_shell_allow_count(), 2, "two allow globs");
+    assert(streq(config_shell_deny_at(0), "*rm -rf*"), "deny[0] is the VALUE, not the label");
+    assert(streq(config_shell_allow_at(0), "git *"), "allow[0] pattern");
+    assert_eq(config_shell_deny_at(9), 0, "deny_at out of range -> 0");
+
+    # --- glob verdict: 0 pass / 1 deny-match / 2 allow-list-miss; deny wins; empty allow allows ---
+    assert_eq(_shell_glob_verdict("rm -rf /tmp/x"), 1, "deny glob matches -> 1");
+    assert_eq(_shell_glob_verdict("git status"), 0, "allow match, no deny -> pass");
+    assert_eq(_shell_glob_verdict("cat /etc/passwd"), 2, "non-empty allow-list, no match -> 2");
+    assert_eq(_shell_glob_verdict("ls -la"), 0, "allow ls* matches -> pass");
+    store64(_shell_deny + _shell_deny_n * 8, "git *");   # white-box: add an overlapping deny
+    _shell_deny_n = _shell_deny_n + 1;
+    assert_eq(_shell_glob_verdict("git status"), 1, "deny wins over allow on overlap");
+    _shell_deny_n = _shell_deny_n - 1;                   # restore
+    _shell_allow_n = 0;
+    assert_eq(_shell_glob_verdict("cat /etc/passwd"), 0, "empty allow-list -> allow-through");
+
+    # --- shell_run_tool PRE-GATE returns (never reach the confirm gate, so no stdin hang) ---
+    assert(streq(shell_run_tool("{}"), "(shell: missing required 'command' argument)"), "missing command arg");
+    assert(streq(shell_run_tool("{\"command\":\"\"}"), "(shell: 'command' is empty)"), "empty command");
+    assert(streq(shell_run_tool("{\"command\":\"   \"}"), "(shell: 'command' is empty)"), "whitespace-only command");
+    assert(streq(shell_run_tool("not json"), "(shell: arguments are not valid JSON)"), "invalid JSON args");
+    var dres = shell_run_tool("{\"command\":\"rm -rf /\"}");   # matches *rm -rf* -> deny before t-ron
+    assert(dres != 0, "deny-glob command returns a refusal (before the gate)");
+    assert_eq(shell_last_allowed(), 0, "deny-glob -> not allowed (roundlog DENIED)");
+
+    # --- shell_supported() on this POSIX build ---
+    assert_eq(shell_supported(), 1, "shell supported on this POSIX target");
+
+    # --- exec_shell_capture: real exec, capture, exit code, merged stderr, timeout, over-cap ---
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];                                # two i64 slots: [0]=exit, [1]=timed-out
+    var n1 = exec_shell_capture("printf hello", buf, cap, 5000, &st);
+    store8(buf + n1, 0);
+    assert(streq(buf, "hello"), "capture: printf hello");
+    assert_eq(load64(&st), 0, "printf exits 0");
+    assert_eq(load64(&st + 8), 0, "not timed out");
+    exec_shell_capture("exit 3", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 3, "exit 3 reported");
+    var n3 = exec_shell_capture("echo oops 1>&2", buf, cap, 5000, &st);
+    store8(buf + n3, 0);
+    assert(streq(buf, "oops\n"), "stderr is captured (merged into the same stream)");
+    exec_shell_capture("sleep 5", buf, cap, 300, &st);
+    assert_eq(load64(&st + 8), 1, "sleep beyond timeout -> timed-out flag set");
+    assert_eq(load64(&st), 0 - 2, "timeout exit sentinel -2");
+    var n5 = exec_shell_capture("printf pre; sleep 5", buf, cap, 400, &st);
+    store8(buf + n5, 0);
+    assert(streq(buf, "pre"), "partial output preserved before the SIGKILL");
+    assert_eq(load64(&st + 8), 1, "still timed out (partial case)");
+    var n6 = exec_shell_capture("head -c 9000 /dev/zero", buf, cap, 5000, &st);
+    assert(n6 <= cap, "capture never exceeds buflen (over-cap truncation, no overrun)");
+    # exact-fit: reading a K-byte output with buflen = K+1 returns exactly K (not K+1) — the signal
+    # shell_run_tool uses so an output of exactly max_output bytes is NOT mislabeled "truncated".
+    var n7 = exec_shell_capture("head -c 100 /dev/zero", buf, 101, 5000, &st);
+    assert_eq(n7, 100, "K-byte output read with buflen K+1 returns K (exact-fit is not overflow)");
+    var n8 = exec_shell_capture("head -c 150 /dev/zero", buf, 101, 5000, &st);
+    assert_eq(n8, 101, "over-buflen output fills buflen (K+1) -> the >cap overflow signal");
+
+    # --- advertise floor: disabled -> agent_tools_add_shell returns tl unchanged, writes nothing ---
+    # tb is a heap buffer (>= the ~550-byte tool JSON); add_shell caps at AGENT_TOOLS_CAP, not tb's size.
+    var tb = alloc(2048);
+    _cfg_shell_enabled = 0;
+    store8(tb, 0);
+    assert_eq(agent_tools_add_shell(tb, 0), 0, "disabled -> add_shell returns tl unchanged (0)");
+    assert_eq(load8(tb), 0, "disabled -> add_shell wrote no bytes (floor)");
+    _cfg_shell_enabled = 1;
+    var tl_on = agent_tools_add_shell(tb, 0);
+    assert(tl_on > 0, "enabled -> add_shell appends the tool");
+    assert_eq(load8(tb), 91, "advertised tools array starts with '['");
+
+    # restore defaults so later tests / a fresh config see clean state
+    _cfg_shell_enabled = 0;
+    _cfg_shell_timeout_ms = 0 - 1;
+    _cfg_shell_output_cap = 0 - 1;
+    _shell_deny_n = 0;
+    _shell_allow_n = 0;
     return 0;
 }
 
@@ -2175,6 +2282,7 @@ fn main() {
     test_alias();
     test_dry();
     test_memory();
+    test_shell();
     test_oneshot();
     test_json_envelope();
     test_oneshot_out();

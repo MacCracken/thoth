@@ -187,3 +187,48 @@ model = "claude-haiku-4-5-20251001"
 
 # [memory]
 # enabled = true
+
+# The [shell] table arms the model-invokable `shell` tool (0.16.0; ADR-0014). When enabled AND the
+# [daimon] seam is wired (agentic turns only), thoth advertises a `shell` tool to the backing model:
+# the model can propose a shell command, thoth runs it under a timeout, captures the combined
+# stdout+stderr, and feeds the result back. This is DISTINCT from /run (the human's own shell escape,
+# gated as thoth_run) — the model's shell is gated under the SEPARATE reserved name `thoth_shell`, so a
+# [tron].policy can allow your /run while independently denying / flagging / rate-limiting the model.
+#
+# OFF BY DEFAULT, and for good reason: enabling it lets an UNTRUSTED model run commands on your
+# machine. A checked-in thoth.cyml with [shell].enabled = true is a trust decision equivalent to
+# running that project's code — enable it only for projects and models you trust, ideally alongside a
+# t-ron policy. For the tool to actually RUN a command you also need an [agent."thoth"] allow rule for
+# `thoth_shell` in your t-ron policy (with no policy, the fail-closed confirm prompt gates each call;
+# in one-shot/-p mode that prompt auto-DENIES). POSIX only — on AGNOS/Windows there is no capturing
+# /bin/sh, so the tool is announced-but-not-advertised (never silently faked). /state shows the state.
+#
+#   enabled    — true to advertise the shell tool (default false).
+#   timeout_ms — per-command wall-clock timeout; a command that exceeds it is SIGKILLed and its
+#                partial output kept (default 30000 = 30s; clamped to 600000).
+#   max_output — max bytes of captured output surfaced to the model; more is truncated with a marker
+#                (default 65536 = 64 KiB; clamped to 1048576). Binary NUL bytes are scrubbed to spaces.
+#
+# [shell.deny] / [shell.allow] are optional glob guardrails, checked LOCALLY and BEFORE t-ron (so a
+# deny-list holds even with no policy). Each line is `label = "glob"` (the label is arbitrary; the
+# VALUE is the pattern — bayan has no TOML arrays). glob_match supports only `*` (any run) and `?`
+# (one char) and matches the WHOLE command, so use leading/trailing `*` for substring intent. A deny
+# match hard-blocks (deny wins over allow); a NON-EMPTY allow-list is default-deny (a command must
+# match one). These are a COARSE convenience speed-bump against obvious footguns, NOT a sandbox — a
+# shell can cd / chain / base64-decode around a string glob. Real containment is: default-off, your
+# trust decision to enable, the t-ron policy, and running thoth itself under OS-level confinement.
+# Residual limits (documented, not faked): the capture temp file lives in world-writable /tmp
+# (best-effort O_EXCL create, no O_NOFOLLOW); the timeout kills the /bin/sh, not a backgrounded child.
+
+# [shell]
+# enabled    = true
+# timeout_ms = 30000
+# max_output = 65536
+# [shell.deny]
+# d1 = "*rm -rf*"
+# d2 = "* | sh"
+# d3 = "*curl*|*sh"
+# [shell.allow]
+# a1 = "git *"
+# a2 = "cyrius *"
+# a3 = "ls*"

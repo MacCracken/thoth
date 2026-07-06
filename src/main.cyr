@@ -58,6 +58,7 @@ include "src/roundlog.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallback (0.12.0, ADR-0012)
+include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014); after exec/hoosh (uses exec_shell_capture, _append_int), before agent
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"

@@ -237,6 +237,20 @@ fn cmd_state() {
         ui_label("  aliases : "); ofmt_int(config_alias_count());
         ui_emit(ROLE_MUTED, " defined ([alias] in thoth.cyml; /<name> expands)"); oprintln("");
     }
+    if (config_shell_enabled() == 1) {     # omit the row entirely when off (byte-identical floor)
+        ui_label("  shell   : ");
+        if (shell_supported() == 0) {
+            ui_emit(ROLE_ACCENT, "enabled but unsupported on this target");
+            ui_emit(ROLE_MUTED, " (needs POSIX /bin/sh -c; not advertised here)"); oprintln("");
+        } else {
+            ui_emit(ROLE_GREEN, "enabled");
+            emit(" — timeout "); ofmt_int(config_shell_timeout_ms()); emit("ms, cap "); ofmt_int(config_shell_output_cap()); emit("B, thoth_shell-gated");
+            if (config_shell_deny_count() > 0) { emit(", "); ofmt_int(config_shell_deny_count()); emit(" deny"); }
+            if (config_shell_allow_count() > 0) { emit(", "); ofmt_int(config_shell_allow_count()); emit(" allow"); }
+            if (agent_enabled() == 0) { ui_emit(ROLE_MUTED, " (gated on daimon — agentic turns only)"); }
+            oprintln("");
+        }
+    }
     ui_label("  agent   : ");
     if (agent_enabled() == 1) {
         emit("agentic tool-calling on (daimon tools, t-ron gated, ");

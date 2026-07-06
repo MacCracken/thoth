@@ -7,6 +7,44 @@
 
 ## Version
 
+**0.16.0** — **the model-invokable `shell` tool + protections**, and a toolchain refresh to Cyrius
+**6.4.11**, 2026-07-06. The backing model can now propose a shell command during an agentic turn:
+thoth runs it locally under a wall-clock timeout, captures merged stdout+stderr, and feeds a bounded
+result back — mirroring the `memory_write` local-tool shape (advertised only when opt-in
+`[shell].enabled` AND the target can capture, dispatched in the SERIAL executor, never forwarded to
+daimon; reachable only in agentic turns = daimon wired, the memory_write precedent). **NEW `src/shell.cyr`**
+`shell_run_tool({"command":…})`: parse → a LOCAL `[shell.deny]`/`[shell.allow]` glob filter checked
+**BEFORE t-ron** (deny-wins; a non-empty allow-list is default-deny; so a deny-list holds even with no
+`[tron].policy`) → the t-ron gate under the **DISTINCT reserved name `thoth_shell`** (separate from
+`thoth_run` = the human `/run`, so a policy can allow the operator's shell while denying the model's;
+the raw command is the JSON-escaped scanned payload via `_params_one`) → a bounded, timed capture;
+NUL-terminate + scrub interior NULs→spaces, format an exit/timeout/truncation footer, and audit every
+proposed+executed command (`log_begin("shell")`, exit+bytes, never the output). **NEW
+`exec_shell_capture` in `src/exec.cyr`** copies `lib/regression.cyr`'s pattern (child stdout+stderr →
+`/tmp/thoth_sh_<pid>_<ctr>` via `O_CREAT|O_EXCL|O_WRONLY` → `WNOHANG`-poll-with-deadline → `SIGKILL` +
+blocking reap → `file_read_all` + unlink) — combining capture + timeout so a runaway command is killed
+with partial output preserved and no pipe-fill deadlock; `shell_supported()` reports POSIX capability.
+**`[shell]` config**: `enabled` (off), `timeout_ms` (30 s, clamp 10 min), `max_output` (64 KiB, clamp
+1 MiB), and `[shell.deny]`/`[shell.allow]` glob tables as sections of `label = "glob"` pairs (bayan has
+no TOML-array getter; `glob_match` is `*`/`?`-only, whole-command). **POSIX-only, degrade closed**: the
+raw-syscall body is compiled out on AGNOS (no `/bin/sh -c`, no `WNOHANG`) and Windows (`#ifndef
+CYRIUS_TARGET_AGNOS`/`_WIN`, mirroring `lib/process.cyr`) — the tool is NOT advertised there and
+`/state` announces "unsupported on this target"; the AGNOS build stays clean (verified). **Byte-identical
+floor when off** (the default): `agent_tools_add_shell` returns `tl` unchanged (zero writes), no `/state`
+shell row, no request-body delta; a hallucinated/un-advertised `"shell"` call is matched unconditionally
+in `_agent_round_has_local` (→ serial), and the dispatch elif re-checks `config_shell_enabled() &&
+shell_supported()` → an honest not-enabled string, NEVER executed and NEVER forwarded to daimon. The
+deny/allow globs are a **coarse pre-filter, explicitly NOT a sandbox** (a shell can `cd`/chain/decode
+around a string glob) — stated honestly in code/`/state`/example; real containment is default-off + the
+operator's trust decision + the t-ron policy + OS confinement. Residuals documented (not faked):
+binary NULs scrubbed; the timeout kills the `/bin/sh` not a backgrounded grandchild; the temp file is in
+world-writable `/tmp` (best-effort `O_EXCL`, no `O_NOFOLLOW`). **Toolchain refresh** `6.3.41 → 6.4.11`
+(`cyrius lib sync`, 14 floor modules; clears drift+shadow warnings; the pre-feature 766 assertions pass
+unchanged before the feature). Deferred: an `agent_enabled()` relax (shell without daimon), a Windows
+timed capture, process-group kill. [ADR-0014](../adr/0014-model-shell-tool-local-posix-gated.md). 806
+assertions (+40, `test_shell`; the real exec/timeout cases spawn `/bin/sh` and pass in-sandbox). Pin
+**6.4.11**.
+
 **0.15.1** — **markdown fenced code blocks in the reply are syntax-highlighted**, 2026-07-03. The
 model's reply is markdown; where `/read` (0.8.4) and diff bodies (0.8.5) already colour source, a
 ` ```bash `/` ```python `/`~~~c` block now renders highlighted in the TUI feed — reusing the SAME

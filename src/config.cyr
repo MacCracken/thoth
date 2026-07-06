@@ -33,6 +33,9 @@ var _cfg_log_file = 0;       # cstring path for structured driver logs, or 0
 var _cfg_log_level = 0;      # cstring level (off/error/warn/info/debug/trace), or 0
 var _cfg_history_file = 0;   # cstring path for the persistent INPUT-history file (0.11.2), or 0
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
+var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
+var _cfg_shell_timeout_ms = 0 - 1;  # per-command wall-clock timeout (ms); -1 = unset -> default (clamped in the getter)
+var _cfg_shell_output_cap = 0 - 1;  # captured-output byte cap; -1 = unset -> default (clamped in the getter)
 
 var CONFIG_PATH = "thoth.cyml";
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
@@ -59,6 +62,22 @@ var ALIAS_MAX = 64;
 var _alias_names = 0;    # ALIAS_MAX cstr ptrs (the alias name, no leading slash)
 var _alias_vals = 0;     # ALIAS_MAX cstr ptrs (the expansion text, verbatim)
 var _alias_n = 0;
+
+# Shell tool guardrails (0.16.0): defaults + upper clamps for the [shell] scalars, and the
+# [shell.deny]/[shell.allow] glob tables. bayan has NO TOML-array getter, so allow/deny lists
+# are modeled as SECTIONS of `label = "glob-pattern"` pairs (the key is a free label; the VALUE
+# is the glob), iterated like _alias_load. Patterns are stable cstrings (str_cstr into the bump
+# heap). These are a COARSE pre-filter matched with glob_match BEFORE the t-ron thoth_shell gate —
+# a convenience speed-bump against obvious footguns, NOT a sandbox (a shell can cd / chain / decode).
+var SHELL_TIMEOUT_DEFAULT_MS = 30000;    # 30s: lets a real build/test finish without hanging the loop
+var SHELL_TIMEOUT_MAX_MS = 600000;       # 10min hard ceiling
+var SHELL_OUT_DEFAULT = 65536;           # 64 KiB of captured output surfaced to the model
+var SHELL_OUT_MAX = 1048576;             # 1 MiB hard ceiling
+var SHELL_GLOB_MAX = 64;                 # max patterns per allow/deny table
+var _shell_deny = 0;     # SHELL_GLOB_MAX cstr ptrs (deny glob patterns)
+var _shell_deny_n = 0;
+var _shell_allow = 0;    # SHELL_GLOB_MAX cstr ptrs (allow glob patterns)
+var _shell_allow_n = 0;
 
 # _cfg_section_pairs: the pairs vec for table [name] in a parsed sections vec,
 # or 0 if the table is absent.
@@ -221,6 +240,39 @@ fn config_alias_lookup(name) {
 # CMD_UNKNOWN_SLASH path is byte-identical to a build with no [alias] support).
 fn config_alias_count() { return _alias_n; }
 
+# _shell_glob_table_load: fill `tbl` (SHELL_GLOB_MAX cstr slots) from a [shell.deny]/[shell.allow]
+# section's pairs, taking each pair's VALUE as the glob pattern (the key is an arbitrary label).
+# Blank values are skipped; the table caps at SHELL_GLOB_MAX. Returns the count. Same section-of-
+# pairs shape as _alias_load; patterns are stable str_cstr copies (bump heap).
+fn _shell_glob_table_load(pairs, tbl) {
+    if (pairs == 0) { return 0; }
+    var n = vec_len(pairs);
+    var i = 0;
+    var c = 0;
+    while (i < n) {
+        if (c < SHELL_GLOB_MAX) {
+            var p = vec_get(pairs, i);
+            var v = bayan_toml_pair_value(p);
+            if (str_len(v) > 0) {
+                store64(tbl + c * 8, str_cstr(v));
+                c = c + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+# _shell_globs_load: cache the [shell.deny] and [shell.allow] glob tables. Called once from
+# config_load. With neither section present both counts are 0 (no local glob filter).
+fn _shell_globs_load(sections) {
+    if (_shell_deny == 0) { _shell_deny = alloc(SHELL_GLOB_MAX * 8); }
+    if (_shell_allow == 0) { _shell_allow = alloc(SHELL_GLOB_MAX * 8); }
+    _shell_deny_n = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.deny"), _shell_deny);
+    _shell_allow_n = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.allow"), _shell_allow);
+    return 0;
+}
+
 # config_load: parse thoth.cyml if present and populate the hoosh fields.
 # Returns 1 if a [hoosh] url was found (seam can bind remote), else 0 (absent
 # file, no [hoosh] table, or no url -> seam stays absent). Call once at startup.
@@ -254,6 +306,11 @@ fn config_load() {
     _cfg_history_file = _cfg_str(history, "file");
     var memory = _cfg_section_pairs(sections, "memory");
     _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
+    var shell = _cfg_section_pairs(sections, "shell");
+    _cfg_shell_enabled = _cfg_bool(shell, "enabled", 0);    # opt-in; default off (0.16.0 shell tool; the model can propose local commands)
+    _cfg_shell_timeout_ms = _cfg_int(shell, "timeout_ms");  # -1 when absent -> default in the getter
+    _cfg_shell_output_cap = _cfg_int(shell, "max_output");  # -1 when absent -> default in the getter
+    _shell_globs_load(sections);
     if (_cfg_hoosh_url == 0) { return 0; }
     return 1;
 }
@@ -309,6 +366,48 @@ fn config_daimon_url() { return _cfg_daimon_url; }
 # injection surface (same trust question as CLAUDE.md), so auto-injection
 # requires an explicit [memory].enabled = true. See ADR-0012.
 fn config_memory_enabled() { return _cfg_memory_enabled; }
+
+# config_shell_enabled: 1 if the model-invokable `shell` tool is enabled (0.16.0; opt-in, off by
+# default). A checked-in thoth.cyml enabling it lets the backing MODEL propose local shell commands
+# during an agentic turn — a trust decision equivalent to running that project's code — so it is
+# opt-in and gated by t-ron (thoth_shell) + the [shell.deny]/[shell.allow] globs. See ADR-0014.
+fn config_shell_enabled() { return _cfg_shell_enabled; }
+
+# config_shell_timeout_ms: the per-command wall-clock timeout (ms). Absent / <= 0 -> the 30s default;
+# clamped to SHELL_TIMEOUT_MAX_MS. A command exceeding it is SIGKILLed (partial output preserved).
+fn config_shell_timeout_ms() {
+    var t = _cfg_shell_timeout_ms;
+    if (t <= 0) { return SHELL_TIMEOUT_DEFAULT_MS; }
+    if (t > SHELL_TIMEOUT_MAX_MS) { return SHELL_TIMEOUT_MAX_MS; }
+    return t;
+}
+
+# config_shell_output_cap: the max bytes of captured output surfaced to the model. Absent / <= 0 ->
+# the 64 KiB default; clamped to SHELL_OUT_MAX. Output past the cap is truncated with a marker.
+fn config_shell_output_cap() {
+    var c = _cfg_shell_output_cap;
+    if (c <= 0) { return SHELL_OUT_DEFAULT; }
+    if (c > SHELL_OUT_MAX) { return SHELL_OUT_MAX; }
+    return c;
+}
+
+# config_shell_deny_count / _at: the [shell.deny] glob patterns (checked first; a match hard-blocks
+# BEFORE t-ron, so the deny-list holds even with no [tron].policy loaded). _at returns 0 out of range.
+fn config_shell_deny_count() { return _shell_deny_n; }
+fn config_shell_deny_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _shell_deny_n) { return 0; }
+    return load64(_shell_deny + i * 8);
+}
+
+# config_shell_allow_count / _at: the [shell.allow] glob patterns. When NON-EMPTY, a command must
+# match at least one (default-deny); empty allow-list = allow anything not denied. _at returns 0 OOR.
+fn config_shell_allow_count() { return _shell_allow_n; }
+fn config_shell_allow_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _shell_allow_n) { return 0; }
+    return load64(_shell_allow + i * 8);
+}
 
 # config_tron_policy: path to the t-ron policy TOML, or 0 if unset (the t-ron
 # seam stays absent and the built-in fail-closed confirm gate stands in).
