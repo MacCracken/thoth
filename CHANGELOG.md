@@ -2,6 +2,49 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.2] - 2026-07-07
+
+**SGR mouse — wheel scrolls the feed, click focuses the composer/tree, a tree-row click selects/expands.**
+Continues the 0.17.x input-completeness line. The T2 TUI now enables SGR mouse reporting (`CSI ?1000h` +
+`CSI ?1006h`) on enter (disabled on every exit, paired with the kitty/bracketed-paste push/pop) and decodes
+`ESC[<Cb;Cx;Cy(M|m)` events: the wheel scrolls the feed (in any focus), a left-click in the file-tree pane
+selects the node under the cursor (a directory toggles expand/collapse, a file just selects) and focuses the
+tree, and a click anywhere else focuses the composer. Pure decode + the existing scroll/focus/tree seams;
+TUI-only, so the line REPL / piped / one-shot / CI floor is **byte-identical** by construction (every new
+symbol lives only in `src/tui.cyr`). 872 assertions (+11). Pin **6.4.16**.
+
+### Added
+- **Decode** (`src/tui.cyr`): new `KEY_MOUSE`. `tui_read_key` branches on the `ESC[<` private prefix to
+  `_tui_read_mouse`, which reads `Cb;Cx;Cy` + the final `M`/`m` (until the terminator or EOF) and calls the
+  pure `_tui_mouse_decode(cb, final)`: a wheel (button bit 64) maps buttons 0/1 to `KEY_SCROLL_UP`/`_DOWN`
+  (reusing the existing feed-scroll arm — so the wheel scrolls the feed in any focus) while a horizontal
+  wheel (66/67) is ignored; a **left-button press** (`cb & 3 == 0`, not motion, final `M`) becomes
+  `KEY_MOUSE` with the coords stashed; release (`m`), middle/right, and motion are ignored. The normal CSI
+  path (arrows, `~`, kitty CSI-u, paste) is untouched — `ESC[<` occurs for no other key.
+- **`_tui_mouse_click`** (`src/tui.cyr`): a left-click in the tree pane (shown; within columns `[1, tw]`
+  and the feed-band rows) maps the screen row to the tree node via the SAME `_ftree_scroll_first` geometry
+  the painter uses (`li = first + (row - feed_top)`), `ftree_set_sel`s it, and — for a directory — toggles
+  expand/collapse (`tui_relayout`, the visible row count changed); a file just moves the selection; a click
+  elsewhere focuses the composer. Wired as a `tui_loop` dispatch arm placed before the `FOCUS_TREE` branch
+  so a click sets focus regardless of the current focus.
+- **`tui_mouse_enable`/`tui_mouse_disable`** (`CSI ?1000h?1006h` / `?1006l?1000l`), wired into the
+  `tui_loop` enter/teardown next to the kitty/bracketed-paste pair — balanced on every exit so the terminal
+  is never left in mouse-reporting mode after thoth quits. A terminal that ignores the mode sends no events
+  (degrades to no mouse). Trade-off (documented): while mouse mode is on the terminal routes clicks to thoth,
+  so native click-drag selection in the feed is intercepted — Shift+drag bypasses it in most terminals.
+- **11 assertions** (`tests/thoth.tcyr`, `test_tui`): the pure `_tui_mouse_decode` across wheel up/down
+  (with and without modifier bits), horizontal-wheel ignored, left press → click, release/middle/right/
+  motion/no-terminator → ignored.
+
+### Process
+- **Two-pass adversarial review** (Workflow): a **design pass** (3 lenses — decode, click-mapping, integration)
+  returned no blockers and folded two decode nits (drop the reader byte-cap → read to the `M`/`m` terminator
+  so an over-long report can't desync stdin; gate the wheel strictly to buttons 0/1 so a horizontal wheel is
+  ignored rather than scrolling vertically). A **diff pass** (3 lenses, each finding independently adversarially
+  verified) returned **zero findings**. **The live mouse behavior verifies on a real tty (`--tier=rich`), not
+  the harness** — the unit tests cover the pure decode; the reader + click mapping are live-tty verified (like
+  the rest of the tree interaction).
+
 ## [0.17.1] - 2026-07-07
 
 **Word-wise composer editing — readline-basics parity in the raw-mode composer.**

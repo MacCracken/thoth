@@ -10,14 +10,15 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.17.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.17.2):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` toolchain refresh to
 > Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a TOML array-value getter +
 > aarch64 trig polyfills) then opened the **0.17.x input-completeness line** — `0.17.0`
 > **bracketed paste** (multi-line paste lands in the composer, never submits at the first
-> newline) and `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow word motion, Ctrl-W,
-> Ctrl-K — readline parity): the 0.10.x data producers
+> newline), `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow word motion, Ctrl-W,
+> Ctrl-K — readline parity), and `0.17.2` **SGR mouse** (wheel scrolls the feed, click
+> focuses composer/tree, tree-row click selects/expands): the 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -238,9 +239,13 @@ selection stays content-blind.
   `_led_kill_eol` (WERASE word model, `i > 0`-first bounds), decoded across legacy CSI/control
   bytes + the kitty CSI-u forms. TUI-only → floor byte-identical. Two-pass adversarial review:
   design pass folded 2 should-fixes, diff pass zero findings. 861 assertions. See CHANGELOG/state.md.
-- **`0.17.2` — mouse.** SGR mouse mode (1006): wheel scrolls the feed, click focuses
-  composer/tree, click on a tree row selects/expands. Pure CSI decode + the existing
-  focus/scroll seams; enable on TUI enter, disable on every exit.
+- **`0.17.2` — mouse. DONE (2026-07-07).** SGR mouse (`?1000h`+`?1006h`): the wheel scrolls
+  the feed (any focus), a left-click in the tree pane selects the node (dir toggles expand/collapse,
+  file selects) + focuses the tree, a click elsewhere focuses the composer. Pure `_tui_mouse_decode`
+  + `_tui_read_mouse` (`ESC[<Cb;Cx;Cy(M|m)`) + `_tui_mouse_click` (row→node via the painter's own
+  `_ftree_scroll_first` geometry); enabled on TUI enter, disabled on every exit (no mouse-mode leak).
+  TUI-only → floor byte-identical. Two-pass adversarial review: design pass folded 2 decode nits, diff
+  pass zero findings. 872 assertions. See CHANGELOG/state.md.
 - **`0.17.3` — OSC 52 clipboard copy.** `/copy` writes the last reply to the system
   clipboard via OSC 52 — a terminal escape WRITE (no fork/exec/dup2), so it sidesteps
   the process-primitive gate on the deferred clipboard sink and works on AGNOS and

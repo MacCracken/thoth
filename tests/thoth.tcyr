@@ -1844,6 +1844,21 @@ fn test_tui() {
     led_feed(KEY_KILL_EOL, 0);
     assert_eq(led_len(), 0, "Ctrl-K on an empty buffer -> no-op");
     led_reset();
+
+    # SGR mouse (0.17.2): the pure button-code decode. cb = xterm SGR button (low 2 bits = button,
+    # bit 5 = motion, bit 6 = wheel); final = 'M'(77) press / 'm'(109) release / 0 = no terminator.
+    test_group("SGR mouse decode (tui.cyr)");
+    assert_eq(_tui_mouse_decode(64, 77), KEY_SCROLL_UP, "wheel up (cb 64) -> scroll feed back");
+    assert_eq(_tui_mouse_decode(65, 77), KEY_SCROLL_DOWN, "wheel down (cb 65) -> scroll feed forward");
+    assert_eq(_tui_mouse_decode(68, 77), KEY_SCROLL_UP, "Shift+wheel-up (cb 64+4) still scrolls (modifier ignored)");
+    assert_eq(_tui_mouse_decode(66, 77), KEY_NONE, "horizontal wheel-left (cb 66) is ignored (not vertical scroll)");
+    assert_eq(_tui_mouse_decode(67, 77), KEY_NONE, "horizontal wheel-right (cb 67) is ignored");
+    assert_eq(_tui_mouse_decode(0, 77), KEY_MOUSE, "left-button PRESS -> click");
+    assert_eq(_tui_mouse_decode(0, 109), KEY_NONE, "left-button RELEASE ('m') is ignored (click fires once, on press)");
+    assert_eq(_tui_mouse_decode(1, 77), KEY_NONE, "middle-button press is ignored");
+    assert_eq(_tui_mouse_decode(2, 77), KEY_NONE, "right-button press is ignored");
+    assert_eq(_tui_mouse_decode(32, 77), KEY_NONE, "motion (bit 5) is ignored (we don't track drag)");
+    assert_eq(_tui_mouse_decode(0, 0), KEY_NONE, "no terminator (EOF/malformed) -> KEY_NONE");
     return 0;
 }
 

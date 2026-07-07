@@ -53,6 +53,7 @@ var KEY_WORD_LEFT = 23;       # Ctrl/Alt-Left, Alt-b — move the cursor one wor
 var KEY_WORD_RIGHT = 24;      # Ctrl/Alt-Right, Alt-f — move the cursor one word right (0.17.1)
 var KEY_DELWORD = 25;         # Ctrl-W — delete the word before the cursor (0.17.1)
 var KEY_KILL_EOL = 26;        # Ctrl-K — kill from the cursor to the end of the line (0.17.1)
+var KEY_MOUSE = 27;           # SGR mouse left-click (coords in _mouse_row/_mouse_col) (0.17.2)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -529,11 +530,65 @@ fn _tui_paste_slurp() {
     return 0;
 }
 
+# --- SGR mouse (0.17.2): decode ESC[<Cb;Cx;Cy(M|m) ------------------------
+var _mouse_row = 0;           # last click row (1-based), set by _tui_read_mouse
+var _mouse_col = 0;           # last click column (1-based)
+
+# _tui_mouse_decode: map an SGR button code `cb` + final byte (`M`=77 press / `m`=109 release,
+# 0 = no terminator seen) to a KEY_*. PURE, unit-tested. The xterm SGR button layout: low 2 bits
+# = button (0 left / 1 middle / 2 right), bit 2/3/4 = Shift/Meta/Ctrl (ignored here), bit 5 (32) =
+# motion, bit 6 (64) = wheel. Wheel is gated on button 0/1 so a horizontal wheel (66/67) is ignored
+# rather than scrolling vertically; only a LEFT PRESS (not motion, not release) becomes a click.
+fn _tui_mouse_decode(cb, final) {
+    if (final == 0) { return KEY_NONE; }                 # no terminator (EOF / malformed)
+    if ((cb & 64) != 0) {                                # a wheel event
+        var btn = cb & 3;
+        if (btn == 0) { return KEY_SCROLL_UP; }          # wheel up (64) -> scroll feed back
+        if (btn == 1) { return KEY_SCROLL_DOWN; }        # wheel down (65) -> scroll feed forward
+        return KEY_NONE;                                 # horizontal wheel (66/67) -> ignore
+    }
+    if (final == 77) {                                   # a PRESS ('M'); release ('m') is ignored
+        if (((cb & 3) == 0) && ((cb & 32) == 0)) { return KEY_MOUSE; }   # left button, not motion
+    }
+    return KEY_NONE;                                     # middle/right / release / motion
+}
+
+# _tui_read_mouse: the fd sits just after ESC[< — read Cb;Cx;Cy and the final M/m, decode, and stash
+# the click coords for _tui_mouse_click. Reads until the terminator or EOF (a well-formed SGR report
+# always ends in M/m, both < 128; a dead tty breaks via read <= 0 -> final 0 -> KEY_NONE). I/O —
+# verified on a live tty, not the harness.
+fn _tui_read_mouse() {
+    var cb = 0; var cx = 0; var cy = 0;
+    var field = 0;               # 0 = Cb, 1 = Cx, 2 = Cy
+    var fin = 0;
+    var c[8];
+    var go = 1;
+    while (go == 1) {
+        if (syscall(SYS_READ, 0, &c, 1) <= 0) { go = 0; }         # EOF -> stop (fin stays 0)
+        else {
+            var t = load8(&c);
+            if ((t == 77) || (t == 109)) { fin = t; go = 0; }     # 'M' press / 'm' release -> terminator
+            elif (t == 59) { field = field + 1; }                 # ';' -> next field
+            elif ((t >= 48) && (t <= 57)) {                       # a digit
+                var d = t - 48;
+                if (field == 0) { cb = cb * 10 + d; }
+                elif (field == 1) { cx = cx * 10 + d; }
+                elif (field == 2) { cy = cy * 10 + d; }
+            }
+            # else: ignore stray bytes (never emitted by a well-formed SGR report)
+        }
+    }
+    var k = _tui_mouse_decode(cb, fin);
+    if (k == KEY_MOUSE) { _mouse_row = cy; _mouse_col = cx; }
+    return k;
+}
+
 # tui_read_key: read + decode one keypress in raw mode (ASCII + CSI arrows/home/end/
 # page + the kitty CSI-u keys). KEY_CHAR sets _tui_key_ch. stdin EOF -> KEY_EOF. Ctrl-X /
 # Ctrl-C close; Ctrl-D is NOT bound (a stray Ctrl-D is ignored). Alt+Enter (ESC CR) and
 # Shift+Enter (kitty CSI 13;2u) decode to KEY_NEWLINE (0.11.9). A bracketed-paste begin
-# marker (ESC[200~) slurps the paste body into _paste_buf and returns KEY_PASTE (0.17.0).
+# marker (ESC[200~) slurps the paste body into _paste_buf and returns KEY_PASTE (0.17.0);
+# an SGR mouse intro (ESC[<) reads the event and returns a wheel/scroll or KEY_MOUSE (0.17.2).
 fn tui_read_key() {
     var c[8];
     if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_EOF; }
@@ -570,6 +625,7 @@ fn tui_read_key() {
         var semi = 0;
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
         var t = load8(&c);
+        if (t == 60) { return _tui_read_mouse(); }            # ESC[< -> SGR mouse event (0.17.2)
         var go = 1;
         while (go == 1) {
             if ((t >= 64) && (t <= 126)) { go = 0; }              # final byte -> done (t holds it)
@@ -1355,6 +1411,53 @@ fn tui_kitty_disable() { emit_raw("\x1b[<u"); return 0; }
 fn tui_bpaste_enable() { emit_raw("\x1b[?2004h"); return 0; }
 fn tui_bpaste_disable() { emit_raw("\x1b[?2004l"); return 0; }
 
+# tui_mouse_enable / tui_mouse_disable: turn SGR mouse reporting on/off — ?1000h (button press/
+# release + wheel) + ?1006h (SGR extended coordinates), so a click/wheel arrives as ESC[<Cb;Cx;Cy(M|m)
+# (0.17.2). Same enter/exit lifecycle as the kitty/bpaste push/pop; DISABLING on exit is essential so
+# the terminal isn't left reporting mouse events after thoth quits. A terminal that ignores the mode
+# never sends events (degrades to no mouse). Trade-off: while on, the terminal routes clicks to thoth,
+# so native click-drag text selection is intercepted in the feed — Shift+drag bypasses it in most
+# terminals (standard TUI behavior).
+fn tui_mouse_enable() { emit_raw("\x1b[?1000h\x1b[?1006h"); return 0; }
+fn tui_mouse_disable() { emit_raw("\x1b[?1006l\x1b[?1000l"); return 0; }
+
+# _tui_mouse_click: act on a left-click at (_mouse_row, _mouse_col) (1-based). A click inside the
+# file-tree pane (shown, within cols [1,tw] and the feed band rows) selects that node — a dir toggles
+# expand/collapse, a file just selects — and focuses the tree; a click anywhere else focuses the
+# composer. Uses the SAME geometry the painter uses (tui_draw_tree / _ftree_scroll_first) so the
+# clicked screen row maps to the painted node. I/O — live-tty verified.
+fn _tui_mouse_click() {
+    var r = _mouse_row;
+    var col = _mouse_col;
+    if (_tui_show_tree == 1) {
+        var tw = tui_tree_w(_tui_cols, 1);
+        var top = tui_feed_top(_tui_show_status);
+        var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
+        if ((col <= tw) && (r >= top) && (r <= bot)) {           # a click in the tree pane
+            var total = ftree_count();
+            var rows = bot - top + 1;
+            var first = _ftree_scroll_first(total, rows);
+            var li = first + (r - top);
+            _tui_focus = FOCUS_TREE;
+            if ((li >= 0) && (li < total)) {
+                ftree_set_sel(li);                               # clamped absolute select
+                if (ftree_isdir(li) == 1) {                      # dir -> toggle expand/collapse
+                    if (ftree_exp(li) == 1) { ftree_collapse(); } else { ftree_expand(); }
+                    tui_relayout();                              # the visible row count changed
+                } else {
+                    tui_draw_tree(); tui_draw_hint(); tui_park_cursor();   # file -> selection moved
+                }
+            } else {
+                tui_draw_hint(); tui_park_cursor();              # empty tree area -> just focus tree
+            }
+            return 0;
+        }
+    }
+    _tui_focus = FOCUS_COMPOSER;                                 # anywhere else -> focus the composer
+    tui_draw_hint(); tui_park_cursor();
+    return 0;
+}
+
 # tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / self-managed
 # feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
 # is interactive terminal control — verify on a live TTY (`--tier=rich`), not piped.
@@ -1373,6 +1476,7 @@ fn tui_loop() {
     tty_alt_enter();
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tui_bpaste_enable();                          # 0.17.0: bracketed paste (multi-line paste -> composer)
+    tui_mouse_enable();                           # 0.17.2: SGR mouse (wheel scroll, click focus/tree)
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
@@ -1459,6 +1563,7 @@ fn tui_loop() {
             } elif (key == KEY_SCROLL_DOWN) { _tui_feed_scroll_by(0 - 3);
             } elif (key == KEY_PGUP) { _tui_feed_scroll_by(_tui_feed_rows() - 1);
             } elif (key == KEY_PGDN) { _tui_feed_scroll_by(0 - (_tui_feed_rows() - 1));
+            } elif (key == KEY_MOUSE) { _tui_mouse_click();   # 0.17.2: left-click -> focus composer/tree (before FOCUS_TREE so it works in any focus)
             } elif (_tui_focus == FOCUS_TREE) {
                 _tui_tree_key(key);    # tree navigation (↑↓→← Enter; a char hands focus back)
             } elif ((key == KEY_UP) || (key == KEY_DOWN)) {
@@ -1510,6 +1615,7 @@ fn tui_loop() {
         }
     }
     # teardown — restore the terminal on every exit path.
+    tui_mouse_disable();            # 0.17.2: stop SGR mouse reporting (don't leave the terminal in it)
     tui_bpaste_disable();           # 0.17.0: pop bracketed-paste mode
     tui_kitty_disable();            # 0.11.9: pop the kitty keyboard protocol (restore legacy keys)
     tty_cursor_show();

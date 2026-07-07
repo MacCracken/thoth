@@ -7,6 +7,31 @@
 
 ## Version
 
+**0.17.2** — **SGR mouse** (wheel scrolls the feed, click focuses composer/tree, tree-row click
+selects/expands), 2026-07-07. Continues the 0.17.x input-completeness line. The T2 TUI enables SGR mouse
+reporting (`CSI ?1000h` + `CSI ?1006h`) on enter (disabled on every exit, paired with the kitty/bracketed-
+paste push/pop — critical so the terminal isn't left reporting mouse after thoth quits) and decodes
+`ESC[<Cb;Cx;Cy(M|m)`. **Decode** (`src/tui.cyr`): `tui_read_key` branches on the `ESC[<` private prefix to
+`_tui_read_mouse` (reads `Cb;Cx;Cy`+final `M`/`m` until the terminator/EOF — no artificial cap, so an
+over-long report can't desync stdin), which calls the PURE unit-tested `_tui_mouse_decode(cb, final)`: a
+wheel (bit 64) → `KEY_SCROLL_UP`/`_DOWN` via buttons 0/1 (reusing the existing feed-scroll arm, so the wheel
+scrolls the feed in ANY focus) with horizontal wheel (66/67) ignored; a LEFT PRESS (`cb&3==0`, not motion,
+final `M`) → `KEY_MOUSE` (coords stashed in `_mouse_row`/`_mouse_col`); release (`m`)/middle/right/motion
+ignored. The normal CSI path (arrows/`~`/kitty-u/paste) is untouched (`ESC[<` occurs for no other key).
+**Click** (`_tui_mouse_click`): a click in the tree pane (shown; cols `[1,tw]` and the feed-band rows) maps
+the screen row to the node via the SAME `_ftree_scroll_first` geometry the painter uses
+(`li = first + (row - feed_top)`), `ftree_set_sel`s it, and toggles expand/collapse for a dir (`tui_relayout`)
+/ moves the selection for a file; a click elsewhere focuses the composer. Dispatched as a `tui_loop` arm
+BEFORE the `FOCUS_TREE` branch so a click sets focus regardless of current focus (and wheel scrolls in any
+focus). **TUI-ONLY → floor byte-identical** by construction (every new symbol confined to `src/tui.cyr`;
+verified). Trade-off documented: mouse mode intercepts native click-drag selection in the feed — Shift+drag
+bypasses it in most terminals (a config toggle is a possible follow-up, out of scope). **Two-pass adversarial
+review** (Workflow): a DESIGN pass (3 lenses) folded two decode nits (read-to-terminator not a byte-cap;
+strict vertical-wheel gate); a DIFF pass (3 lenses, each finding independently verified) returned **ZERO
+findings**. **Live mouse behavior verifies on a real tty (`--tier=rich`), not the harness.** 872 assertions
+(+11, `test_tui`). Pin unchanged (**6.4.16**; the local cycc wrapper has since drifted to 6.4.17 — a future
+maintenance pin bump, not bundled here). 0.17.x remaining: `0.17.3` OSC 52 clipboard copy, `0.17.4` turn interrupt.
+
 **0.17.1** — **word-wise composer editing** (readline-basics parity), 2026-07-07. Continues the 0.17.x
 input-completeness line. The T2 raw-mode composer gains **word motion** (Ctrl/Alt-Left/Right + Alt-b/Alt-f),
 **Ctrl-W** (delete the word before the cursor), and **Ctrl-K** (kill from the cursor to end of the current
