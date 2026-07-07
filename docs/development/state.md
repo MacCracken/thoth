@@ -7,6 +7,41 @@
 
 ## Version
 
+**0.17.0** — **bracketed paste** (multi-line paste lands in the composer, never submits at the first
+newline), 2026-07-07. Opens the **0.17.x input-completeness line**. The T2 raw-mode composer mapped BOTH
+LF (10) and CR (13) to `KEY_ENTER`, so pasting a stack trace / code block fired a turn on line 1 and
+stranded the rest. thoth now enables the terminal's bracketed-paste mode (`CSI ?2004h`) on TUI enter
+(disabled on every exit, paired with the kitty push/pop — the two early `return repl_loop()` paths run
+BEFORE alt-screen enter, so paste mode is never set on them), decodes the `ESC[200~` … `ESC[201~`
+brackets, and inserts the whole paste into the composer as literal text. **Three pieces** in `src/tui.cyr`:
+(1) **decode** — `_tui_csi_final` returns the new `KEY_PASTE` for `ESC[200~` (already reduced to
+`(126, 200, -1)` by the existing unified CSI parser, previously ignored; `ESC[201~` and the legacy
+`5~`/`6~` page keys untouched); `tui_read_key` runs the slurp exactly when the CSI final yields KEY_PASTE.
+(2) **`_tui_paste_slurp`** (I/O, live-tty verified) reads stdin a byte at a time into a lazily-alloc'd
+`_paste_buf` until the `ESC[201~` end marker (or EOF); a byte-wise marker matcher flushes a broken partial
+match back as literal content and re-anchors on `ESC` (the marker's only self-restart — END has an empty
+self-border), the end marker consumed but NOT buffered; bounded through a SINGLE capped writer
+(`_paste_commit`, `PASTE_CAP` = 4096 == COMPOSER_CAP) so over-cap content is dropped while the stream is
+still consumed to the marker (no input desync). (3) **`led_paste`** (PURE, unit-tested) inserts the buffer
+at the cursor by reusing the tested `led_feed` path one byte at a time; FILTER: LF/CR (and CRLF) collapse
+to a single `\n`, a tab becomes one space, printable ASCII + high/UTF-8 bytes (≥128) kept, **ESC + every
+other C0 control + DEL (127) DROPPED** — a paste can NEVER inject a terminal escape into the composer
+render and no control byte enters the buffer (composer stays byte==column). Never submits (only
+`KEY_NEWLINE`/`KEY_CHAR`, both `ACT_NONE`); a pasted leading `/` does NOT dispatch (`tui_palette_active` is
+a buffer derivation, not a flag). The `KEY_PASTE` loop arm inserts + reflows (a >8-line paste clamps to
+`COMPOSER_MAX_ROWS`, scrolls internally); composer-focus action (a paste while the tree is focused no-ops —
+body already consumed, no desync). **TUI-ONLY → floor byte-identical** by construction (the composer /
+CSI decode / enable-escapes only run inside `tui_loop`, gated on `tui_active()` = PT_RICH + isatty(0/1));
+empirically verified: `--help` + piped `--version` emit ZERO `?2004`/ESC bytes, and every paste symbol
+lives only in `src/tui.cyr`. **Two-pass adversarial review** (Workflow): a DESIGN pass (4 lenses, pre-code)
+found no blockers and folded two should-fixes (flush routes through the capped writer or a near-miss at the
+cap could write 4 bytes past `_paste_buf`; tab→space keeps the composer strictly printable so the
+"no control byte enters" invariant is literally true); a DIFF pass (4 lenses, each finding independently
+verified) returned **ZERO findings**. Documented cosmetic caveat: a tab-heavy paste renders tabs as single
+spaces and wide/CJK bytes count as one column (same width class as soft-wrap 0.11.3); it does not affect
+the bytes submitted. **Live paste verifies on a real tty (`--tier=rich`), not the harness.** 825 assertions
+(+19, `test_tui`). Pin unchanged (**6.4.16**). Next in the line: `0.17.1` word-wise composer editing.
+
 **0.16.1** — toolchain refresh to Cyrius **6.4.16**, 2026-07-07. Maintenance pin move `6.4.11 → 6.4.16`
 (`cyrius.cyml` + `cyrius lib sync` — 70 floor modules; two changed content, the other 68 byte-identical).
 **No thoth source change**; **806 assertions pass unchanged**; x86_64 Linux builds + ships as before, and

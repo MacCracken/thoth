@@ -10,11 +10,13 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.16.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.17.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
-> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)) — most recently the `0.16.1`
-> toolchain refresh to Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a
-> TOML array-value getter + aarch64 trig polyfills): the 0.10.x data producers
+> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` toolchain refresh to
+> Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a TOML array-value getter +
+> aarch64 trig polyfills) then opened the **0.17.x input-completeness line** with `0.17.0`
+> **bracketed paste** (multi-line paste lands in the composer, never submits at the first
+> newline): the 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -222,12 +224,13 @@ selection stays content-blind.
 > earns its own design pass. Paste ships first because it is the sharpest everyday
 > friction.
 
-- **`0.17.0` — bracketed paste.** Today there is no `ESC[200~` decode and the legacy
-  bytes 10/13 both map to `KEY_ENTER` — so pasting multi-line text (a stack trace, a
-  code block) SUBMITS a turn at the first newline. Set `ESC[?2004h` on TUI enter
-  (reset on every exit path, like the kitty push/pop), decode the `200~`/`201~`
-  brackets, and route pasted newlines to `KEY_NEWLINE` so the whole paste lands in
-  the composer.
+- **`0.17.0` — bracketed paste. DONE (2026-07-07).** `CSI ?2004h` on TUI enter (disabled on
+  every exit, paired with the kitty push/pop), `ESC[200~`…`ESC[201~` decoded, and the whole
+  paste inserted into the composer as literal text — no longer submitting at the first newline.
+  `KEY_PASTE` + `_tui_paste_slurp` (bounded, single capped writer, marker matcher) + the pure
+  `led_paste` filter (LF/CRLF→one `\n`, tab→space, ESC/C0/DEL dropped = no escape injection).
+  TUI-only → floor byte-identical (verified). Two-pass adversarial review: design pass folded 2
+  should-fixes, diff pass zero findings. 825 assertions. See CHANGELOG/state.md.
 - **`0.17.1` — word-wise composer editing.** Ctrl/Alt-arrow word motion, Ctrl-W
   delete-word, Ctrl-K kill-to-end — readline-basics parity for the raw-mode composer.
 - **`0.17.2` — mouse.** SGR mouse mode (1006): wheel scrolls the feed, click focuses

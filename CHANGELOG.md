@@ -2,6 +2,58 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.0] - 2026-07-07
+
+**Bracketed paste — a multi-line paste lands in the composer instead of submitting at the first newline.**
+Opens the 0.17.x input-completeness line. In the T2 TUI the raw-mode composer mapped both LF and CR to
+`KEY_ENTER`, so pasting a stack trace or a code block fired a turn on line 1 and stranded the rest. thoth
+now enables the terminal's bracketed-paste mode (`CSI ?2004h`) on TUI enter (disabled on every exit,
+paired with the kitty push/pop), decodes the `ESC[200~` … `ESC[201~` brackets, and inserts the whole
+paste into the composer as literal text. TUI-only — the line REPL / piped / one-shot / CI floor is
+**byte-identical** (verified: `--help`/piped paths emit zero `?2004`/ESC bytes; every paste symbol lives
+only in `src/tui.cyr`). 825 assertions (+19). Pin **6.4.16**.
+
+### Added
+- **`KEY_PASTE` + `_tui_csi_final` decode** (`src/tui.cyr`): the existing unified CSI parser already
+  reduced `ESC[200~` to `_tui_csi_final(126, 200, -1)` (previously ignored); it now returns the new
+  `KEY_PASTE`. The end marker `ESC[201~` and the legacy `5~`/`6~` page keys are untouched.
+- **`_tui_paste_slurp` — the paste-body reader** (`src/tui.cyr`, I/O, live-tty verified): once `KEY_PASTE`
+  is decoded (the fd sits at the first content byte), reads stdin a byte at a time into a lazily-alloc'd
+  `_paste_buf` until the `ESC[201~` end marker (or EOF). A byte-wise marker matcher flushes a broken
+  partial match back as literal content and re-anchors on `ESC` (the marker's only self-restart), and the
+  end marker is consumed but not buffered. Bounded through a single capped writer (`_paste_commit`,
+  `PASTE_CAP` = 4096 == `COMPOSER_CAP`): over-cap content is dropped but the stream is still consumed to
+  the marker, so a large paste never desyncs the input.
+- **`led_paste(src, len)` — the paste filter + insert** (`src/tui.cyr`, PURE, unit-tested): inserts the
+  slurped buffer at the cursor by reusing the tested `led_feed` path one byte at a time. Filter: LF/CR
+  (and CRLF) collapse to a single `\n`; a tab becomes one space; printable ASCII plus high/UTF-8 bytes
+  (≥ 128) are kept; **ESC, every other C0 control, and DEL (127) are dropped** — so a paste can never
+  inject a terminal escape sequence into the composer render and no control byte ever enters the buffer
+  (the composer stays byte == column). It never submits (only `KEY_NEWLINE`/`KEY_CHAR`, both `ACT_NONE`);
+  a pasted leading `/` does not dispatch (`tui_palette_active` is a derivation of the buffer, not a flag,
+  and any pasted space/newline makes it inactive).
+- **`tui_bpaste_enable`/`tui_bpaste_disable`** (`src/tui.cyr`): `CSI ?2004h`/`CSI ?2004l`, wired into the
+  `tui_loop` enter/teardown next to the kitty enable/disable, balanced on every exit path (the two early
+  `return repl_loop()` paths run before alt-screen enter, so paste mode is never set on them). A terminal
+  that ignores the mode never sends the brackets, so paste degrades to the legacy Enter-per-newline
+  behavior. The `KEY_PASTE` loop arm inserts the buffer and reflows the composer (a > 8-line paste clamps
+  to `COMPOSER_MAX_ROWS` and scrolls internally); it is a composer-focus action (a paste while the tree is
+  focused is a no-op — the body was already consumed, so no desync).
+- **19 assertions** (`tests/thoth.tcyr`, `test_tui`): the `ESC[200~`→`KEY_PASTE` / `ESC[201~`→`KEY_NONE`
+  decode (legacy `5~` unshadowed) and the pure `led_paste` filter — LF/CRLF/lone-CR/trailing-CR newline
+  collapse, ESC+BEL dropped while `[31m` survives as literal text (no escape injection), DEL dropped,
+  tab→space, insert-at-cursor, and an over-`COMPOSER_CAP` paste bounded at `COMPOSER_CAP-1` (no OOB).
+
+### Process
+- **Two-pass adversarial review** (the standing discipline). A **design pass** (4 perspective-diverse
+  lenses — bounds, protocol, floor/security, Cyrius-integration — before any code) returned no blockers
+  and folded two should-fixes: the partial-marker flush must route through the capped writer (else a
+  near-miss at the cap boundary could write up to 4 bytes past the buffer), and tab is converted to a
+  space rather than kept literal (keeps the composer strictly printable + byte == column, making the
+  "no control byte enters the composer" invariant literally true). A **diff pass** (4 lenses, each finding
+  independently adversarially verified) returned **zero findings**. **The live TUI paste behavior verifies
+  on a real tty (`--tier=rich`), not the harness** — the unit tests + review cover the pure logic + decode.
+
 ## [0.16.1] - 2026-07-07
 
 **Toolchain refresh to Cyrius 6.4.16 (bayan TOML array getter + aarch64 trig polyfills).**

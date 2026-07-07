@@ -48,6 +48,7 @@ var KEY_PGUP = 18;            # PageUp (CSI 5~) — page the feed back
 var KEY_PGDN = 19;            # PageDown (CSI 6~) — page the feed forward
 var KEY_TOGGLE_THEME = 20;    # Ctrl-T — toggle dark/light theme (0.10.0)
 var KEY_NEWLINE = 21;         # Shift-Enter (kitty CSI-u) / Alt-Enter (ESC CR) — insert a newline (0.11.9)
+var KEY_PASTE = 22;           # bracketed paste: ESC[200~ … ESC[201~ — insert the whole paste (0.17.0)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -256,6 +257,35 @@ fn led_feed(key, ch) {
     return ACT_NONE;
 }
 
+# led_paste: insert a slurped bracketed-paste buffer `src` (`len` bytes) into the composer
+# at the cursor, reusing the tested led_feed insert path one byte at a time (0.17.0). FILTER:
+# LF/CR (and CRLF) collapse to a single '\n'; a tab becomes one space; printable ASCII plus
+# high/UTF-8 bytes (>= 128) are kept; ESC, every other C0 control, and DEL (127) are DROPPED —
+# so a paste can NEVER inject a terminal escape sequence into the composer render, and no
+# control byte ever enters the buffer (the composer stays byte == column). Insertion stops at
+# COMPOSER_CAP via led_feed's own guard (excess dropped). PURE (mutates the composer) — the
+# correctness-critical half, unit-tested. It never submits (only KEY_NEWLINE/KEY_CHAR, both
+# ACT_NONE); a leading '/' does not dispatch — the palette is a derivation of the buffer, not a
+# flag, and any pasted space/newline makes tui_palette_active() false.
+fn led_paste(src, len) {
+    var i = 0;
+    while (i < len) {
+        var b = load8(src + i) & 255;
+        if ((b == 10) || (b == 13)) {
+            led_feed(KEY_NEWLINE, 0);
+            # CRLF -> one newline: after a CR, swallow a following LF (guard the source boundary).
+            if ((b == 13) && ((i + 1) < len) && ((load8(src + i + 1) & 255) == 10)) { i = i + 1; }
+        } elif (b == 9) {
+            led_feed(KEY_CHAR, 32);                       # tab -> a single space (composer stays printable)
+        } elif ((b >= 32) && (b != 127)) {
+            led_feed(KEY_CHAR, b);                        # printable ASCII + high/UTF-8 bytes
+        }
+        # else: ESC (27), other C0 controls, DEL (127) -> dropped (no escape-injection surface)
+        i = i + 1;
+    }
+    return 0;
+}
+
 # --- pure: layout geometry (0.11.9: faint rules + dynamic multi-line composer) ---
 # Bands top-to-bottom (status shown): row 1 status · row 2 TOP RULE · feed ·
 # BOTTOM RULE · the composer block (1..MAX rows, grows upward with line count) ·
@@ -363,16 +393,77 @@ fn _tui_csi_final(final, p1, p2) {
     if (final == 126) {                                                             # '~' (p1 is the parsed int)
         if (p1 == 5) { return KEY_PGUP; }                                           # CSI 5~ PageUp
         if (p1 == 6) { return KEY_PGDN; }                                           # CSI 6~ PageDown
-        return KEY_NONE;
+        if (p1 == 200) { return KEY_PASTE; }                                        # CSI 200~ bracketed-paste BEGIN (0.17.0)
+        return KEY_NONE;                                                            # CSI 201~ (paste END) also lands here -> ignored
     }
     if (final == 117) { return _tui_kitty_u(p1, p2); }                              # 'u' kitty CSI-u
     return KEY_NONE;
 }
 
+# --- bracketed paste (0.17.0): slurp ESC[200~ … ESC[201~ into a bounded buffer ---------
+var PASTE_CAP = 4096;         # content buffer cap (== COMPOSER_CAP; a paste can't outgrow the composer)
+var _paste_buf = 0;           # lazily-alloc'd slurp buffer
+var _paste_len = 0;           # content bytes buffered by the last slurp
+
+# _paste_end: the i-th byte of the bracketed-paste END marker "ESC [ 2 0 1 ~" (i in 0..5).
+fn _paste_end(i) {
+    if (i == 0) { return 27; }    # ESC
+    if (i == 1) { return 91; }    # [
+    if (i == 2) { return 50; }    # 2
+    if (i == 3) { return 48; }    # 0
+    if (i == 4) { return 49; }    # 1
+    return 126;                    # ~
+}
+
+# _paste_commit: the SINGLE writer into _paste_buf — append `b` iff there is room, silently
+# dropping past PASTE_CAP (the excess can't fit the composer anyway, and the slurp keeps
+# consuming to the END marker regardless, so the input stream never desyncs). The partial-
+# marker flush routes through here too (never a raw store), so a near-miss at the cap boundary
+# can never write past the buffer (design-review fold, 0.17.0).
+fn _paste_commit(b) {
+    if (_paste_len < PASTE_CAP) { store8(_paste_buf + _paste_len, b); _paste_len = _paste_len + 1; }
+    return 0;
+}
+
+# _tui_paste_slurp: called once ESC[200~ is decoded (the fd sits at the first content byte).
+# Read stdin a byte at a time into _paste_buf until the ESC[201~ END marker (or EOF). `m` is
+# how many END bytes match so far; a mismatch FLUSHES the provisionally-matched bytes as real
+# content and re-anchors on the breaking byte — ESC (== END[0]) is the ONLY byte that restarts
+# a match, so the single `b == 27` case is the complete restart rule for this marker (END has
+# an empty self-border). The END marker itself is consumed but NOT buffered. I/O — verified on
+# a live tty, not the harness (same blocking-read idiom as tui_read_key's CSI parse).
+fn _tui_paste_slurp() {
+    if (_paste_buf == 0) { _paste_buf = alloc(PASTE_CAP); }
+    _paste_len = 0;
+    var m = 0;
+    var c[8];
+    var go = 1;
+    while (go == 1) {
+        if (syscall(SYS_READ, 0, &c, 1) <= 0) {
+            var j = 0;
+            while (j < m) { _paste_commit(_paste_end(j)); j = j + 1; }   # EOF mid-marker: keep the partial as content
+            go = 0;
+        } else {
+            var b = load8(&c);
+            if (b == _paste_end(m)) {
+                m = m + 1;
+                if (m == 6) { go = 0; }                                  # full ESC[201~ consumed (not buffered) -> done
+            } else {
+                var k = 0;
+                while (k < m) { _paste_commit(_paste_end(k)); k = k + 1; }   # flush the near-miss as content
+                m = 0;
+                if (b == 27) { m = 1; } else { _paste_commit(b); }       # ESC re-anchors; else b is content
+            }
+        }
+    }
+    return 0;
+}
+
 # tui_read_key: read + decode one keypress in raw mode (ASCII + CSI arrows/home/end/
 # page + the kitty CSI-u keys). KEY_CHAR sets _tui_key_ch. stdin EOF -> KEY_EOF. Ctrl-X /
 # Ctrl-C close; Ctrl-D is NOT bound (a stray Ctrl-D is ignored). Alt+Enter (ESC CR) and
-# Shift+Enter (kitty CSI 13;2u) decode to KEY_NEWLINE (0.11.9).
+# Shift+Enter (kitty CSI 13;2u) decode to KEY_NEWLINE (0.11.9). A bracketed-paste begin
+# marker (ESC[200~) slurps the paste body into _paste_buf and returns KEY_PASTE (0.17.0).
 fn tui_read_key() {
     var c[8];
     if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_EOF; }
@@ -417,7 +508,9 @@ fn tui_read_key() {
                 t = load8(&c);
             }
         }
-        return _tui_csi_final(t, p1, p2);
+        var k = _tui_csi_final(t, p1, p2);
+        if (k == KEY_PASTE) { _tui_paste_slurp(); }   # 0.17.0: read the paste body up to ESC[201~ into _paste_buf
+        return k;
     }
     if ((b >= 32) && (b < 127)) { _tui_key_ch = b; return KEY_CHAR; }
     return KEY_NONE;
@@ -1179,6 +1272,15 @@ fn tui_events_teardown() {
 fn tui_kitty_enable() { emit_raw("\x1b[>1u"); return 0; }
 fn tui_kitty_disable() { emit_raw("\x1b[<u"); return 0; }
 
+# tui_bpaste_enable / tui_bpaste_disable: turn the terminal's bracketed-paste mode on/off
+# (CSI ?2004h / CSI ?2004l). With it on, a paste is bracketed by ESC[200~ … ESC[201~, so thoth
+# slurps the WHOLE paste into the composer instead of the first newline submitting a turn
+# (0.17.0). Same shape/lifecycle as the kitty push/pop: enabled after alt-screen enter, disabled
+# before alt-screen leave on every exit. A terminal that doesn't understand the mode ignores it
+# and never sends the brackets, so paste degrades to the legacy Enter-per-newline behavior.
+fn tui_bpaste_enable() { emit_raw("\x1b[?2004h"); return 0; }
+fn tui_bpaste_disable() { emit_raw("\x1b[?2004l"); return 0; }
+
 # tui_loop: the T2 front-end. Alt-screen + raw mode + the pinned-status / self-managed
 # feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
 # is interactive terminal control — verify on a live TTY (`--tier=rich`), not piped.
@@ -1196,6 +1298,7 @@ fn tui_loop() {
     _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize; 0 on agnos)
     tty_alt_enter();
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
+    tui_bpaste_enable();                          # 0.17.0: bracketed paste (multi-line paste -> composer)
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
@@ -1296,6 +1399,14 @@ fn tui_loop() {
                 if (key == KEY_UP) { moved = led_up(); } else { moved = led_down(); }
                 if (moved == 1) { tui_draw_composer(); }   # cursor moved a line; height unchanged
                 elif ((inhist_nav_at_draft() == 0) || (tui_palette_active() == 0)) { _tui_recall_key(key); }
+            } elif (key == KEY_PASTE) {
+                # 0.17.0: a bracketed paste — insert the whole slurped body into the composer.
+                # Multi-line lands as text; it NEVER auto-submits (submission stays a deliberate
+                # Enter). A composer-focus action; a paste while the tree is focused is caught by
+                # the FOCUS_TREE branch above and no-ops (the body was already consumed -> no desync).
+                var before_hp = tui_composer_height(_tui_rows, led_lines(), _tui_show_status);
+                led_paste(_paste_buf, _paste_len);
+                tui_after_edit(before_hp);   # reflow if the paste grew the composer; else a cheap redraw
             } else {
                 var before_h = tui_composer_height(_tui_rows, led_lines(), _tui_show_status);
                 var act = led_feed(key, _tui_key_ch);
@@ -1325,6 +1436,7 @@ fn tui_loop() {
         }
     }
     # teardown — restore the terminal on every exit path.
+    tui_bpaste_disable();           # 0.17.0: pop bracketed-paste mode
     tui_kitty_disable();            # 0.11.9: pop the kitty keyboard protocol (restore legacy keys)
     tty_cursor_show();
     tty_cooked();
