@@ -10,19 +10,18 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.11.8):** **M0–M7 are done and shipping** (0.1.0 → 0.11.8; the log
-> lives in [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)). The 0.10.x data-producer
-> line (tokens, cost) is complete, and the **0.11.x terminal-citizen line is complete** —
-> the whole vetted SecureYeoman-TUI-review backlog shipped (`0.11.0` one-shot/argv
-> front-door, `0.11.1`–`0.11.2` input-history recall + persistence, `0.11.3` feed soft-wrap,
-> `0.11.4` `[alias]` macros, `0.11.5` `/dry`, `0.11.6` `--json` output, `0.11.7` `-o`/`--out`
-> tee, `0.11.8` shell completion). Every item was a substrate/floor port or a thin seam
-> binding, never a spine fork — that TUI is being reskinned onto thoth's, so thoth's
-> front-end is the shared canonical surface. **What's left is no longer thoth feature work:**
-> the remaining 0.11.x riders are deferred (live spine-health) or AGNOS-impossible (clipboard);
-> the **0.12.x memory seam** (a thoth-drivable mneme fallback — [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md))
-> is the next active line; the **0.13.x git producer** is externally gated on **sit**; and the
-> **four v1.0 gates** below are dominated by AGNOS lighting up.
+> **Where we are (0.16.0):** **M0–M7 are done and shipping**, and every feature line
+> through 0.16.x has landed (the log lives in
+> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)): the 0.10.x data producers
+> (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
+> the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
+> agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
+> and the 0.16.0 model `shell` tool. The **four v1.0 gates below are unchanged**
+> (AGNOS-dominated). The next active feature work is the planned **0.17.x–0.22.x UX
+> lines** below — input completeness → the re-renderable feed → session visibility →
+> shell/agent hardening → composer intelligence → the active persona — every item a
+> floor/TUI port or a thin spine-consuming seam, none gating; smaller ideas gather in
+> the **polish backlog** until enough accumulate to earn a sweep minor.
 
 ## Framing (read first)
 
@@ -134,11 +133,15 @@ macros, `/dry` request-body preview, `--json` envelope output, `-o`/`--out` file
 completion. Every item was a substrate/floor port or a thin seam binding, never a spine fork.
 The only 0.11.x items left are deferred:
 
-- **live spine-health** _(deferred — not yet wanted)_ — traffic-outcome reachability + Ctrl-R
+- **live spine-health** — traffic-outcome reachability + Ctrl-R
   refresh; defer the timerfd tick + active probe until idle-drop detection is actually wanted.
+  **Scheduled: `0.19.3`.**
 - **clipboard sink** — effort L; needs an upstream cyrius `process` stdin-feed
   primitive (Linux/macOS/Windows). **Architecturally impossible on AGNOS** (frozen
   0-33 ABI: no fork/exec/dup2) → degrades closed there, by ABI, announced.
+  **The COPY direction no longer waits on this:** `0.17.3` schedules OSC 52 copy — a
+  terminal escape WRITE, no process spawn — which works on AGNOS and over SSH; only an
+  external-command paste/sink still needs the process primitive.
 
 ### 0.12.x — memory seam (omit-until-mneme; the mneme fallback)
 
@@ -184,7 +187,7 @@ selection stays content-blind.
   remain (sit's fns vs thoth's libro/bote — inherent). No behavior change. See CHANGELOG/state.md.
 - **`0.13.2` (deferred follow-up)** — per-file `sit_diff_path` diff rendering in `/git`. The aarch64
   best-effort lane stays size-gapped until the binary's static data (sigil-dominated) shrinks or the
-  cyrius output cap rises — unrelated to sankoch's version.
+  cyrius output cap rises — unrelated to sankoch's version. **The diff half is scheduled: `0.19.2`.**
 
 ### 0.16.x — the model's `shell` tool (SHIPPED)
 
@@ -197,7 +200,8 @@ selection stays content-blind.
   of every command. `[shell]` config; a `/state` row (omit-when-off). Degrades closed on AGNOS/Windows
   (no capturing `/bin/sh` — announced, not advertised). Byte-identical floor when off. Also bundled the
   toolchain refresh to Cyrius **6.4.11**. [ADR-0014](../adr/0014-model-shell-tool-local-posix-gated.md).
-- **Deferred `shell` follow-ups** (none blocking; each degrades honestly today):
+- **Deferred `shell` follow-ups** (none blocking; each degrades honestly today —
+  **now scheduled as the `0.20.x` line below**):
   - **`agent_enabled()` relax** — let `[shell].enabled` enter the agentic loop even without daimon, so
     the shell tool is usable standalone. A core-routing change (touches `cmd_task` + the request
     builder + the iter paths); today the tool follows the `memory_write` precedent (advertised only
@@ -206,6 +210,183 @@ selection stays content-blind.
     drain, once verified on the Windows host; today Windows is treated like AGNOS (unadvertised, announced).
   - **process-group kill on timeout** — `setpgid` the child + `kill(-pgid)` so a backgrounded grandchild
     is also killed; today the SIGKILL reaps the `/bin/sh`, not its descendants (documented, matches `/run`).
+
+### 0.17.x — input completeness (PLANNED)
+
+> The one live input defect plus four terminal-I/O items. `0.17.0`–`0.17.3` are
+> TUI-side decode/paint work riding the existing unified CSI parser — no spine
+> surface, floor byte-identical by construction (none of this code is reachable off
+> PT_RICH). `0.17.4` is the line's one exception: it reaches into the turn loop and
+> earns its own design pass. Paste ships first because it is the sharpest everyday
+> friction.
+
+- **`0.17.0` — bracketed paste.** Today there is no `ESC[200~` decode and the legacy
+  bytes 10/13 both map to `KEY_ENTER` — so pasting multi-line text (a stack trace, a
+  code block) SUBMITS a turn at the first newline. Set `ESC[?2004h` on TUI enter
+  (reset on every exit path, like the kitty push/pop), decode the `200~`/`201~`
+  brackets, and route pasted newlines to `KEY_NEWLINE` so the whole paste lands in
+  the composer.
+- **`0.17.1` — word-wise composer editing.** Ctrl/Alt-arrow word motion, Ctrl-W
+  delete-word, Ctrl-K kill-to-end — readline-basics parity for the raw-mode composer.
+- **`0.17.2` — mouse.** SGR mouse mode (1006): wheel scrolls the feed, click focuses
+  composer/tree, click on a tree row selects/expands. Pure CSI decode + the existing
+  focus/scroll seams; enable on TUI enter, disable on every exit.
+- **`0.17.3` — OSC 52 clipboard copy.** `/copy` writes the last reply to the system
+  clipboard via OSC 52 — a terminal escape WRITE (no fork/exec/dup2), so it sidesteps
+  the process-primitive gate on the deferred clipboard sink and works on AGNOS and
+  over SSH. Best-effort by nature (a terminal may ignore it or cap the payload) —
+  announced, never asserted.
+- **`0.17.4` — turn interrupt.** Esc aborts a streaming/agentic turn WITHOUT exiting
+  the session — today Ctrl-C tears down the whole session and input is only read
+  between turns, so a runaway agentic loop costs you the session and its context.
+  Needs a non-blocking key poll inside the SSE callback + the agent iteration loop;
+  on abort, land any partial output honestly in the feed (announced `— interrupted`,
+  never presented as a complete answer), keep the conversation history consistent,
+  and return to the composer. The one item in this line that touches the turn paths
+  (hoosh/agent) rather than decode/paint — its own design pass + adversarial review
+  before cut.
+
+### 0.18.x — the re-renderable feed (PLANNED)
+
+> The architectural keystone of the line: the feed ring stores PAINTED bytes (baked
+> SGR), which is why `/theme` cannot recolor scrollback (0.10.0 known limit) and why
+> the 0.15.1 fenced-code card was deferred. Store logical lines + role metadata and
+> apply SGR at paint time; everything after `0.18.0` is unlocked by it.
+
+- **`0.18.0` — the refactor.** Logical-line + role-metadata storage, SGR applied at
+  repaint. Proven byte-identical rendered output before/after on the existing surface
+  (the same strip/coverage property-test discipline as 0.15.1).
+- **`0.18.1` — live-upgrading fenced-code card.** The 0.15.1 deferred "Option C":
+  streamed code renders live line-by-line, then upgrades in place to the highlighted
+  block at fence close — removes the withhold-until-close gap.
+- **`0.18.2` — `/theme` recolors scrollback.** Closes the 0.10.0 limitation; a theme
+  switch repaints the whole window, no `/clear` needed.
+- **`0.18.3` — feed search.** Ctrl-F / `/find` over the ring: match highlight + n/N
+  jump (highlighting needs re-render — hence this line, not 0.17.x).
+- **`0.18.4` — glyph-width table.** East-Asian-Width ranges so CJK/emoji count 2
+  columns in soft-wrap and scrollback math (closes the 0.11.3 declared undercount).
+- **`0.18.5` — inline markdown rendering.** Extend reply rendering beyond fenced
+  code: headings/bold/lists styled in the feed (mdhl grows an inline pass, styled at
+  paint time over the logical store so `/theme` recolor + search highlighting
+  compose). Raw bytes stay untouched off PT_RICH and in `_hoosh_acc`/history/
+  `--json` — the same strip-coverage property discipline as 0.15.1.
+
+### 0.19.x — session visibility (PLANNED)
+
+> Surfacing data thoth already has (or already probes) — no new producers, no spine
+> surface. Items are independent slices; omit-until-present per ADR-0010 where a
+> producer can be absent.
+
+- **`0.19.0` — context-budget meter.** History bytes vs the ~32 KiB evict boundary in
+  the status bar + `/state` — thoth-owned data; today the evict happens silently and
+  the user cannot see context pressure coming.
+- **`0.19.1` — live agentic-turn telemetry.** The existing `tool-call:` feed lines
+  gain verdict/elapsed/byte counts from the roundlog thoth already records; the
+  spinner labels the currently-running tool.
+- **`0.19.2` — `/git` per-file diff.** The 0.13.x deferred follow-up: `sit_diff_path`
+  rendered through the existing colored diff renderer (`src/diff.cyr`).
+- **`0.19.3` — live spine-health.** Traffic-outcome reachability (a transport failure
+  during a turn marks hoosh unreachable in the status bar) + Ctrl-R re-probe — the
+  deferred 0.11.x rider; no timerfd tick / active idle probe.
+
+### 0.20.x — shell/agent hardening (PLANNED)
+
+The 0.16.0 deferred follow-ups, promoted to a line:
+
+- **`0.20.0` — `agent_enabled()` relax.** `[shell].enabled` enters the agentic loop
+  without daimon wired, so the shell tool is usable standalone. The one core-routing
+  change in the 0.17–0.20 plan (touches `cmd_task` + the request builder + the iter
+  paths) — earns its own design + adversarial review.
+- **`0.20.1` — process-group kill on timeout.** `setpgid` the child + `kill(-pgid)`
+  so a backgrounded grandchild dies with the `/bin/sh`.
+- **`0.20.2` — Windows timed capture.** `WaitForSingleObject` + `TerminateProcess` +
+  drain, once verified on a Windows host (the lane overall stays IOCP-gated).
+
+### 0.21.x — composer intelligence (PLANNED)
+
+- **`0.21.0` — `@file` mentions.** `@path` in the composer injects the named file
+  into the prompt as explicit, delimited context (tree-fed Tab completion; multiple
+  mentions compose; visible in `/dry`), riding the existing `/read` machinery + its
+  posture — no new read path, no new security surface. Line opener; further slices
+  (e.g. the model-picker palette from the polish backlog) may promote into this
+  line once vetted.
+
+### 0.22.x — the active persona (PLANNED)
+
+> The signature move's twin: thoth switches the backing MODEL mid-session (hoosh);
+> this line switches the ACTIVE PERSONALITY mid-session (avatara). Pure consumption —
+> the vendored avatara already ships hundreds of validated archetype profiles across
+> ~25 traditions with a full registry (`all_profiles`/`lookup`/`find_and_validate`/
+> `by_tradition`/`all_traditions`), trait queries, weighted composition (`compose`),
+> affinity/conflict scoring, and shadow derivation — and thoth today consumes exactly
+> ONE of them (`egyptian_thoth()`, cached once per process, `src/session.cyr`). The
+> bright line (same shape as the memory seam): avatara owns the personality CONTENT
+> and every personality VERB (validation, composition, affinity, shadow); thoth owns
+> selection + injection + surfacing, content-blind — never a line of thoth-authored
+> persona prose.
+>
+> The naming's own logic (2026-07-07): the deity Thoth carries MANY roles; the
+> application draws on ONE — the **keeper of symbols and language** (code being
+> both). Other archetypes lean into their own personas, which is the point — a
+> dynamic chat mechanism. The selection principle throughout the line: **default
+> to what benefits the user's task**; expressiveness is opt-in, never imposed.
+
+- **`0.22.0` — `/persona <name>` mid-session switch.** Resolve through avatara's
+  `find_and_validate` (unknown name → honest refusal + a hint at `/personas`), swap
+  the cached profile and rebuild the persona system prompt — the once-per-process
+  `_persona_profile` / prompt caches become invalidatable (the `memory_invalidate`
+  shape) — effective next turn, exactly `/model`'s semantics. Startup default via a
+  `[persona]` config key (absent → `egyptian_thoth`, today's behavior — byte-identical
+  floor when unset). Active persona surfaced in the status bar + `/state`.
+  **Identity split (decided 2026-07-07):** the **THOTH backronym is the
+  application's naming** — a fixed purpose statement of the tool itself ("Thinks,
+  Handles, Orchestrates, Transforms, Heals" reads as what the program *does*),
+  never assigned to or presented as the active archetype's attribute. The **role
+  follows the switch** — "the Librarian" remains thoth's own framing for the
+  default Thoth archetype only; a switched persona's role is sourced from the
+  profile's OWN avatara fields (desc / domain / tradition — exact sourcing settled
+  in the design pass), never thoth-authored role prose per archetype (that would
+  be authoring personality content, avatara's domain).
+- **`0.22.1` — `/personas` discovery.** List traditions (`all_traditions`), browse
+  one (`by_tradition`), and show the active profile's card (name / tradition / desc
+  + a soul/spirit excerpt). Discovery + display only — no new personality logic.
+- **`0.22.2` — blends + shadow (stretch).** Weighted multi-archetype blends via
+  avatara's `compose(weighted)` and the `shadow(p)` derivation — `/persona blend …` /
+  `/persona shadow` — avatara-native verbs, still pure consumption. Earns its own
+  design pass (a composed profile's prompt budget + honest naming/surfacing of a
+  blend need care).
+- **`0.22.3` — role modality (long-term).** The second axis: an archetype is
+  multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator),
+  so long-term the user can switch WHICH ASPECT of the *active* archetype is leaned
+  into — distinct from switching archetypes. Honest gating: aspect modeling is
+  avatara's domain — its native modality verbs today are `shadow(p)` (the shadow
+  aspect) and `compose()` (weighted emphasis); a first-class per-archetype
+  role/aspect registry is an **avatara feature to request** when this slice becomes
+  real. thoth never hand-authors aspect tables (the same bright line as 0.22.0's
+  role sourcing).
+
+### Polish backlog (gathers until it earns a sweep minor)
+
+> Small, independent UX items are parked here as they surface. **Convention:** none
+> is scheduled individually; when enough have gathered (or a natural gap opens
+> between lines), a **polish minor** sweeps a vetted batch. Each item still gets the
+> normal design/review/test discipline at promotion time, and is re-sized at vet
+> time — an item that turns out line-sized gets its own line instead of riding the
+> sweep.
+
+- **Conversation resume** — opt-in `[session].file` persisting conversation history
+  across restarts (distinct from `[history].file` keystrokes and the memory seam's
+  durable facts). Likely the largest item here — may earn its own line at vet time
+  (persistence + a secrets-on-disk surface, same class as 0.11.2).
+- **Model picker palette** — an interactive fuzzy picker over hoosh's model list
+  (the signature mid-session switch, made discoverable) instead of typing
+  `/model <id>` verbatim. Natural rider on the 0.21.x line.
+- **File-tree git badges** — `M`/`A`/`D` markers on tree rows from the
+  already-probed sit status (content-blind surfacing, no new probe).
+- **Transcript export** — `/save <file>` writes the session as markdown.
+- **Terminal niceties** — OSC 0 window title (`thoth — <model>`), BEL on turn
+  completion, a faint per-turn elapsed line after each reply.
+- **`/reload`** — re-read `thoth.cyml` mid-session.
 
 ### Deferred / known limitations (captured so they're not lost)
 
