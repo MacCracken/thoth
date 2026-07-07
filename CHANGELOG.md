@@ -2,6 +2,29 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.16.1] - 2026-07-07
+
+**Toolchain refresh to Cyrius 6.4.16 (bayan TOML array getter + aarch64 trig polyfills).**
+Maintenance: pin `6.4.11 → 6.4.16` (`cyrius.cyml` + `cyrius lib sync` — 70 floor modules; two changed
+content, the rest byte-identical). No thoth source-logic change; **806 assertions pass unchanged**; all
+lanes behave (linux ships, AGNOS builds git natively, aarch64 size-gapped at 17.06/16 MiB, windows IOCP
+gap). Clears the pin-drift warning (the wrapper cycc had already advanced to 6.4.16). Pin **6.4.16**.
+
+### Changed
+- **Pin `6.4.11 → 6.4.16`.** `cyrius lib sync` re-vendored the 70-module declared floor subset; only two
+  modules changed content, both **additive** — no existing thoth path is affected:
+  - **`lib/bayan.cyr` 1.0.4 → 1.1.0** — bayan gains a **TOML array-VALUE getter**: `key = [a, b, c]` is
+    captured verbatim and decomposed on demand via `bayan_toml_array_parse` / `bayan_toml_get_array`
+    (the scalar-array counterpart to `[[section]]` arrays-of-tables), plus a multi-line-array parse fix
+    (literal `'` quotes and `#` comments inside a bracketed value no longer truncate it). This **lifts
+    the constraint the 0.16.0 `shell` tool worked around** — the `[shell.deny]`/`[shell.allow]` glob
+    lists are modelled as `label = "glob"` sections *because* "bayan had no TOML-array getter." That
+    workaround is now removable; it is left as a scheduled cleanup (a config-surface change earns its own
+    slice + review), not folded into this source-change-free refresh.
+  - **`lib/math.cyr`** — new **aarch64 `f64_sin` / `f64_cos` polyfills** (Taylor range-reduction; x86
+    keeps native `fsin`/`fcos`). Purely additive; thoth invokes no trig, and x86/AGNOS codegen is
+    unchanged. Does **not** shrink the aarch64 binary, so that lane stays size-gapped (unrelated cap).
+
 ## [0.16.0] - 2026-07-06
 
 **The model-invokable `shell` tool, with protections — plus a toolchain refresh to Cyrius 6.4.11.**

@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.16.1** — toolchain refresh to Cyrius **6.4.16**, 2026-07-07. Maintenance pin move `6.4.11 → 6.4.16`
+(`cyrius.cyml` + `cyrius lib sync` — 70 floor modules; two changed content, the other 68 byte-identical).
+**No thoth source change**; **806 assertions pass unchanged**; x86_64 Linux builds + ships as before, and
+`build.sh all` behaves exactly as at 0.16.0 (linux ships, AGNOS builds git natively, aarch64 size-gapped
+at 17.06/16 MiB, windows on the IOCP `SYS_EPOLL_CREATE1` gap, macOS native-runner skip). Clears the
+pin-drift warning (the wrapper cycc had drifted to 6.4.16). The two content changes are both **additive**,
+so no existing thoth path moves: (1) **bayan `1.0.4 → 1.1.0`** adds a **TOML array-VALUE getter**
+(`bayan_toml_array_parse` / `bayan_toml_get_array` decompose a verbatim-captured `key = [a, b, c]` into
+top-level element Strs — the scalar-array counterpart to `[[section]]` arrays-of-tables) plus a
+multi-line-array parse fix (a literal `'`-quote or a `#` comment inside a bracketed value no longer
+truncates it). This **lifts the exact constraint the 0.16.0 `shell` tool worked around** — the
+`[shell.deny]`/`[shell.allow]` glob lists are `label = "glob"` sections *because* bayan had no
+array-value getter; that workaround is now removable and is logged as a **scheduled config-surface
+cleanup** (its own slice + review — deliberately NOT folded into this source-change-free refresh). (2)
+**math** gains **aarch64 `f64_sin`/`f64_cos` polyfills** (Taylor range-reduction; x86 keeps native
+`fsin`/`fcos`) — purely additive, thoth invokes no trig, x86/AGNOS codegen unchanged; it does not shrink
+the aarch64 binary, so that lane stays size-gapped (an unrelated static-data cap). 806 assertions
+(unchanged). Pin **6.4.16**.
+
 **0.16.0** — **the model-invokable `shell` tool + protections**, and a toolchain refresh to Cyrius
 **6.4.11**, 2026-07-06. The backing model can now propose a shell command during an agentic turn:
 thoth runs it locally under a wall-clock timeout, captures merged stdout+stderr, and feeds a bounded

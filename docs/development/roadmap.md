@@ -10,9 +10,11 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.16.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.16.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
-> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)): the 0.10.x data producers
+> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)) — most recently the `0.16.1`
+> toolchain refresh to Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a
+> TOML array-value getter + aarch64 trig polyfills): the 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -301,6 +303,13 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   so a backgrounded grandchild dies with the `/bin/sh`.
 - **`0.20.2` — Windows timed capture.** `WaitForSingleObject` + `TerminateProcess` +
   drain, once verified on a Windows host (the lane overall stays IOCP-gated).
+- **`0.20.3` — array-value shell deny/allow config (newly unblocked, 0.16.1).** The
+  `[shell.deny]`/`[shell.allow]` glob lists are modelled as `label = "glob"` sections
+  *because* bayan (≤ 1.0.4) had no TOML array-VALUE getter. bayan **1.1.0** (vendored at
+  the 0.16.1 refresh) ships `bayan_toml_get_array`, so the lists can move to the natural
+  `deny = ["…", "…"]` array form. A user-facing config-surface change (keep the section
+  form as a documented back-compat alias, or migrate with a deprecation note) — earns its
+  own slice + review; deliberately NOT folded into the source-change-free refresh.
 
 ### 0.21.x — composer intelligence (PLANNED)
 
