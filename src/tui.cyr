@@ -49,6 +49,10 @@ var KEY_PGDN = 19;            # PageDown (CSI 6~) — page the feed forward
 var KEY_TOGGLE_THEME = 20;    # Ctrl-T — toggle dark/light theme (0.10.0)
 var KEY_NEWLINE = 21;         # Shift-Enter (kitty CSI-u) / Alt-Enter (ESC CR) — insert a newline (0.11.9)
 var KEY_PASTE = 22;           # bracketed paste: ESC[200~ … ESC[201~ — insert the whole paste (0.17.0)
+var KEY_WORD_LEFT = 23;       # Ctrl/Alt-Left, Alt-b — move the cursor one word left (0.17.1)
+var KEY_WORD_RIGHT = 24;      # Ctrl/Alt-Right, Alt-f — move the cursor one word right (0.17.1)
+var KEY_DELWORD = 25;         # Ctrl-W — delete the word before the cursor (0.17.1)
+var KEY_KILL_EOL = 26;        # Ctrl-K — kill from the cursor to the end of the line (0.17.1)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -216,6 +220,62 @@ fn _tui_recall_key(key) {
     return 0;
 }
 
+# --- word-wise editing helpers (0.17.1; PURE, unit-tested) ------------------
+# A word separator is a space or a newline (the multi-line composer's whitespace); every other
+# byte (punctuation included) is a word char — the WERASE/bash convention, used consistently by
+# word motion AND Ctrl-W so they agree on boundaries.
+fn _led_is_wsep(ch) { if ((ch == 32) || (ch == 10)) { return 1; } return 0; }
+
+# _led_word_left / _led_word_right: the word-boundary index left/right of the cursor over the flat
+# buffer (crossing embedded newlines, which count as separators). The `i > 0` term is FIRST in each
+# leftward loop so && short-circuits BEFORE the load8(_composer + i - 1) — no OOB read at column 0
+# / on an empty buffer (the discipline the KEY_LEFT outer guard uses).
+fn _led_word_left() {
+    var i = _comp_cur;
+    while ((i > 0) && (_led_is_wsep(load8(_composer + i - 1)) == 1)) { i = i - 1; }     # skip separators
+    while ((i > 0) && (_led_is_wsep(load8(_composer + i - 1)) == 0)) { i = i - 1; }     # skip the word
+    return i;
+}
+fn _led_word_right() {
+    var i = _comp_cur;
+    while ((i < _comp_len) && (_led_is_wsep(load8(_composer + i)) == 1)) { i = i + 1; }  # skip separators
+    while ((i < _comp_len) && (_led_is_wsep(load8(_composer + i)) == 0)) { i = i + 1; }  # skip the word
+    return i;
+}
+
+# _led_delword: delete [word-start, cursor) — Ctrl-W (unix-word-rubout). Shifts the tail down by
+# the same bounded `i + gap < _comp_len` idiom as backspace; re-NUL at the new length; the cursor
+# lands at the word start. No-op when there is nothing to the left.
+fn _led_delword() {
+    var s = _led_word_left();
+    if (s >= _comp_cur) { return 0; }
+    var gap = _comp_cur - s;
+    var i = s;
+    while ((i + gap) < _comp_len) { store8(_composer + i, load8(_composer + i + gap)); i = i + 1; }
+    _comp_len = _comp_len - gap;
+    _comp_cur = s;
+    store8(_composer + _comp_len, 0);
+    return 0;
+}
+
+# _led_kill_eol: kill from the cursor to the end of the current logical line — Ctrl-K. If the cursor
+# is already at end-of-line (sitting on a newline) delete that newline instead (join the next line,
+# the emacs/readline semantics); at the very end of the buffer it is a no-op. The cursor stays put.
+fn _led_kill_eol() {
+    var e = _comp_cur;
+    while ((e < _comp_len) && (load8(_composer + e) != 10)) { e = e + 1; }
+    if (e == _comp_cur) {
+        if (e < _comp_len) { e = e + 1; }   # at eol on a newline -> delete it (join the next line)
+        else { return 0; }                   # at the buffer end -> nothing to kill
+    }
+    var gap = e - _comp_cur;
+    var i = _comp_cur;
+    while ((i + gap) < _comp_len) { store8(_composer + i, load8(_composer + i + gap)); i = i + 1; }
+    _comp_len = _comp_len - gap;
+    store8(_composer + _comp_len, 0);
+    return 0;
+}
+
 # led_feed: fold one decoded key into the editor; return ACT_NONE / ACT_SUBMIT (the
 # line is ready in led_buf) / ACT_EOF (empty-buffer Ctrl-D). Pure (mutates the buf).
 fn led_feed(key, ch) {
@@ -250,6 +310,10 @@ fn led_feed(key, ch) {
     if (key == KEY_RIGHT) { if (_comp_cur < _comp_len) { _comp_cur = _comp_cur + 1; } return ACT_NONE; }
     if (key == KEY_HOME) { _comp_cur = 0; return ACT_NONE; }
     if (key == KEY_END) { _comp_cur = _comp_len; return ACT_NONE; }
+    if (key == KEY_WORD_LEFT) { _comp_cur = _led_word_left(); return ACT_NONE; }    # Ctrl/Alt-Left, Alt-b
+    if (key == KEY_WORD_RIGHT) { _comp_cur = _led_word_right(); return ACT_NONE; }  # Ctrl/Alt-Right, Alt-f
+    if (key == KEY_DELWORD) { _led_delword(); return ACT_NONE; }                    # Ctrl-W
+    if (key == KEY_KILL_EOL) { _led_kill_eol(); return ACT_NONE; }                  # Ctrl-K
     if (key == KEY_KILL) { _comp_len = 0; _comp_cur = 0; store8(_composer, 0); return ACT_NONE; }
     if (key == KEY_CTRLC) { return ACT_EOF; }   # Ctrl-C exits unconditionally (interrupt), with teardown
     if (key == KEY_ENTER) { return ACT_SUBMIT; }
@@ -374,6 +438,12 @@ fn _tui_kitty_u(cp, modk) {
         if (cp == 103) { return KEY_TOGGLE_STATUS; }# Ctrl-G
         if (cp == 98) { return KEY_TOGGLE_TREE; }   # Ctrl-B
         if (cp == 116) { return KEY_TOGGLE_THEME; } # Ctrl-T
+        if (cp == 119) { return KEY_DELWORD; }      # Ctrl-W (delete word) (0.17.1)
+        if (cp == 107) { return KEY_KILL_EOL; }     # Ctrl-K (kill to EOL) (0.17.1)
+    }
+    if (modk == 3) {                         # Alt (1 + 0b010) (0.17.1)
+        if (cp == 98) { return KEY_WORD_LEFT; }     # Alt-b -> word left
+        if (cp == 102) { return KEY_WORD_RIGHT; }   # Alt-f -> word right
     }
     return KEY_NONE;                          # Esc (27) + unmapped combos -> ignore
 }
@@ -386,8 +456,8 @@ fn _tui_kitty_u(cp, modk) {
 fn _tui_csi_final(final, p1, p2) {
     if (final == 65) { if (p2 == 2) { return KEY_SCROLL_UP; } return KEY_UP; }     # 'A' Up / Shift+Up (mod 2)
     if (final == 66) { if (p2 == 2) { return KEY_SCROLL_DOWN; } return KEY_DOWN; } # 'B' Down / Shift+Down (mod 2)
-    if (final == 67) { return KEY_RIGHT; }                                          # 'C'
-    if (final == 68) { return KEY_LEFT; }                                           # 'D'
+    if (final == 67) { if (p2 >= 3) { return KEY_WORD_RIGHT; } return KEY_RIGHT; }  # 'C' Right / Ctrl|Alt+Right (mod>=3) -> word (0.17.1)
+    if (final == 68) { if (p2 >= 3) { return KEY_WORD_LEFT; } return KEY_LEFT; }    # 'D' Left / Ctrl|Alt+Left -> word (0.17.1)
     if (final == 72) { return KEY_HOME; }                                           # 'H'
     if (final == 70) { return KEY_END; }                                            # 'F'
     if (final == 126) {                                                             # '~' (p1 is the parsed int)
@@ -480,11 +550,15 @@ fn tui_read_key() {
     if (b == 7) { return KEY_TOGGLE_STATUS; }   # Ctrl-G
     if (b == 2) { return KEY_TOGGLE_TREE; }     # Ctrl-B — toggle the file-tree pane
     if (b == 20) { return KEY_TOGGLE_THEME; }   # Ctrl-T — toggle dark/light theme
+    if (b == 23) { return KEY_DELWORD; }        # Ctrl-W — delete the word before the cursor (0.17.1)
+    if (b == 11) { return KEY_KILL_EOL; }       # Ctrl-K — kill from the cursor to end of line (0.17.1)
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
         var a = load8(&c);
         if ((a == 13) || (a == 10)) { return KEY_NEWLINE; }   # Alt+Enter (legacy ESC CR/LF) -> newline
+        if (a == 98) { return KEY_WORD_LEFT; }                 # Alt-b -> word left (7-bit meta / ESC-prefix; 8-bit meta unhandled) (0.17.1)
+        if (a == 102) { return KEY_WORD_RIGHT; }               # Alt-f -> word right (0.17.1)
         if (a != 91) { return KEY_NONE; }                      # not CSI '[' (incl. a lone Esc) -> ignore
         # General CSI parse: drain the parameter/intermediate bytes (0x30-0x3F: digits, ';',
         # ':' …) accumulating p1 and an optional p2 (after the first ';'), and stop at the

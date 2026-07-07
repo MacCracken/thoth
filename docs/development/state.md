@@ -7,6 +7,32 @@
 
 ## Version
 
+**0.17.1** — **word-wise composer editing** (readline-basics parity), 2026-07-07. Continues the 0.17.x
+input-completeness line. The T2 raw-mode composer gains **word motion** (Ctrl/Alt-Left/Right + Alt-b/Alt-f),
+**Ctrl-W** (delete the word before the cursor), and **Ctrl-K** (kill from the cursor to end of the current
+logical line; a second Ctrl-K at end-of-line deletes the newline → joins the next line, emacs/readline
+semantics). All new logic is PURE + unit-tested in `src/tui.cyr`: `_led_is_wsep` (separator = space or
+newline; punctuation is a word char — the WERASE/bash convention shared by motion AND Ctrl-W so they agree
+on boundaries), `_led_word_left`/`_led_word_right` (word-boundary index over the flat multi-line buffer,
+crossing embedded newlines; **`i > 0` FIRST in every leftward loop so `&&` short-circuits before the
+`load8(_composer + i - 1)`** — no OOB read at column 0 / on empty), `_led_delword` + `_led_kill_eol` (the
+same bounded `i + gap < _comp_len` shift idiom as backspace, re-NUL at the new length), wired into `led_feed`
+alongside the existing motion keys (all `ACT_NONE` — word ops never submit). **Decode**: `KEY_WORD_LEFT`/
+`_RIGHT`/`KEY_DELWORD`/`KEY_KILL_EOL`; `_tui_csi_final` routes a modified Left/Right (`CSI 1;<mod>C/D`,
+`mod >= 3` = any Ctrl/Alt combo) to word motion while plain (`-1`) + Shift (`2`) stay ordinary arrows (no
+regression); `tui_read_key` maps control bytes Ctrl-W (23) / Ctrl-K (11) + the ESC-prefix Alt-b/Alt-f; and
+`_tui_kitty_u` decodes the kitty CSI-u forms (`119;5`/`107;5`/`98;3`/`102;3`) so the bindings hold under the
+kitty keyboard protocol too. **No tui_loop change** — keys 23-26 fall through the elif chain to the final
+`else` → `led_feed` → `tui_after_edit`, so a delete that removes a newline reflows the composer and word
+motion re-windows/parks the cursor. **TUI-ONLY → floor byte-identical** by construction (every new symbol
+lives only in `src/tui.cyr`; verified: word-edit symbols confined to that file). **Two-pass adversarial
+review** (Workflow): a DESIGN pass (3 lenses) folded two should-fixes (`i > 0`-first short-circuit; add the
+two reflow/join test cases) and prompted the `p2 >= 3` modifier broadening; a DIFF pass (3 lenses, each
+finding independently verified) returned **ZERO findings**. **Live behavior verifies on a real tty
+(`--tier=rich`), not the harness.** 861 assertions (+36, `test_tui`). Pin unchanged (**6.4.16**). Next in the
+line: `0.17.2` mouse (SGR 1006). *(Note: the local cycc wrapper has since drifted to 6.4.17 — a future
+maintenance pin bump, not bundled into this feature cut.)*
+
 **0.17.0** — **bracketed paste** (multi-line paste lands in the composer, never submits at the first
 newline), 2026-07-07. Opens the **0.17.x input-completeness line**. The T2 raw-mode composer mapped BOTH
 LF (10) and CR (13) to `KEY_ENTER`, so pasting a stack trace / code block fired a turn on line 1 and

@@ -10,13 +10,14 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.17.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.17.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` toolchain refresh to
 > Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a TOML array-value getter +
-> aarch64 trig polyfills) then opened the **0.17.x input-completeness line** with `0.17.0`
+> aarch64 trig polyfills) then opened the **0.17.x input-completeness line** — `0.17.0`
 > **bracketed paste** (multi-line paste lands in the composer, never submits at the first
-> newline): the 0.10.x data producers
+> newline) and `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow word motion, Ctrl-W,
+> Ctrl-K — readline parity): the 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -231,8 +232,12 @@ selection stays content-blind.
   `led_paste` filter (LF/CRLF→one `\n`, tab→space, ESC/C0/DEL dropped = no escape injection).
   TUI-only → floor byte-identical (verified). Two-pass adversarial review: design pass folded 2
   should-fixes, diff pass zero findings. 825 assertions. See CHANGELOG/state.md.
-- **`0.17.1` — word-wise composer editing.** Ctrl/Alt-arrow word motion, Ctrl-W
-  delete-word, Ctrl-K kill-to-end — readline-basics parity for the raw-mode composer.
+- **`0.17.1` — word-wise composer editing. DONE (2026-07-07).** Ctrl/Alt-arrow word motion
+  (+ Alt-b/Alt-f), Ctrl-W delete-word, and Ctrl-K kill-to-end (join-on-second-K) — readline
+  parity for the raw-mode composer. Pure `_led_word_left`/`_led_word_right`/`_led_delword`/
+  `_led_kill_eol` (WERASE word model, `i > 0`-first bounds), decoded across legacy CSI/control
+  bytes + the kitty CSI-u forms. TUI-only → floor byte-identical. Two-pass adversarial review:
+  design pass folded 2 should-fixes, diff pass zero findings. 861 assertions. See CHANGELOG/state.md.
 - **`0.17.2` — mouse.** SGR mouse mode (1006): wheel scrolls the feed, click focuses
   composer/tree, click on a tree row selects/expands. Pure CSI decode + the existing
   focus/scroll seams; enable on TUI enter, disable on every exit.

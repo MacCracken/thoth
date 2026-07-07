@@ -2,6 +2,47 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.1] - 2026-07-07
+
+**Word-wise composer editing — readline-basics parity in the raw-mode composer.**
+Continues the 0.17.x input-completeness line. The T2 composer gains **word motion** (Ctrl/Alt-Left/Right,
+plus Alt-b/Alt-f), **Ctrl-W** (delete the word before the cursor), and **Ctrl-K** (kill from the cursor to
+end of line). All the new logic is pure and unit-tested; TUI-only, so the line REPL / piped / one-shot / CI
+floor is **byte-identical** by construction (every new symbol lives only in `src/tui.cyr`). 861 assertions
+(+36). Pin **6.4.16**.
+
+### Added
+- **Pure word ops** (`src/tui.cyr`, before `led_feed`): `_led_is_wsep` (a word separator is space or
+  newline — punctuation is a word char, the WERASE/bash convention shared by motion and Ctrl-W);
+  `_led_word_left`/`_led_word_right` (the word-boundary index either side of the cursor over the flat
+  buffer, crossing embedded newlines; the `i > 0` term is FIRST in every leftward loop so `&&`
+  short-circuits before the `load8` — no OOB read at column 0); `_led_delword` (Ctrl-W: delete
+  `[word-start, cursor)` via the same bounded shift idiom as backspace); `_led_kill_eol` (Ctrl-K: kill to
+  end of the current logical line, or, when already at end-of-line, delete the newline to join the next
+  line — the emacs/readline semantics; a no-op at the buffer end). Wired into `led_feed` alongside the
+  existing motion/delete keys (all `ACT_NONE`, so word ops never submit).
+- **Decode** (`src/tui.cyr`): four new keys `KEY_WORD_LEFT`/`KEY_WORD_RIGHT`/`KEY_DELWORD`/`KEY_KILL_EOL`.
+  `_tui_csi_final` routes a modified Left/Right arrow (`CSI 1;<mod>C/D` with `mod >= 3`, i.e. any Ctrl or
+  Alt combo) to word motion while plain (`-1`) and Shift (`2`) stay ordinary arrows (no regression);
+  `tui_read_key` maps the control bytes Ctrl-W (23) and Ctrl-K (11), and the ESC-prefix Alt-b/Alt-f
+  (`ESC b`/`ESC f`) to word motion; `_tui_kitty_u` decodes the kitty CSI-u forms (Ctrl-W `119;5`,
+  Ctrl-K `107;5`, Alt-b `98;3`, Alt-f `102;3`) so the bindings work under the kitty keyboard protocol too.
+- **36 assertions** (`tests/thoth.tcyr`, `test_tui`): the CSI/kitty decode (including the no-regression
+  plain/Shift-arrow cases and that Ctrl-B `98;5` is not shadowed by Alt-b), word motion over
+  `"foo bar baz"` (including the column-0 no-op and multi-space runs, punctuation-as-word-char), Ctrl-W
+  mid-buffer and **across a newline** (asserting `led_lines()` drops 2→1 — the reflow path), Ctrl-K
+  kill-to-eol / buffer-end no-op / **end-of-line join** (2→1), and every word op as a bounds-safe no-op on
+  an empty buffer.
+
+### Process
+- **Two-pass adversarial review** (Workflow). A **design pass** (3 lenses — editor/bounds, decode, integration)
+  folded two should-fixes before code: the leftward word scan must place `i > 0` first so `&&` short-circuits
+  before the backward `load8` (else an OOB read on word-left from column 0), and the test plan must cover the
+  two height-changing (reflow) cases (delete/kill removing a newline). It also prompted broadening the arrow
+  modifier gate to `p2 >= 3` (any Ctrl/Alt combo) rather than exact `5`/`3`. A **diff pass** (3 lenses, each
+  finding independently adversarially verified) returned **zero findings**. **Live behavior verifies on a real
+  tty (`--tier=rich`), not the harness** — the unit tests + review cover the pure logic + decode.
+
 ## [0.17.0] - 2026-07-07
 
 **Bracketed paste — a multi-line paste lands in the composer instead of submitting at the first newline.**

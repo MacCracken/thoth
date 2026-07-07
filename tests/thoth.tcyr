@@ -1760,6 +1760,90 @@ fn test_tui() {
     led_paste(big, COMPOSER_CAP + 8);
     assert_eq(led_len(), COMPOSER_CAP - 1, "over-cap paste stops at COMPOSER_CAP-1 (bounded)");
     led_reset();
+
+    # word-wise editing (0.17.1): decode + the pure editor ops. Decode gets the PARSED ints (the
+    # 0.11.9 lesson — feed the decoder what the parser emits, not the wire bytes).
+    test_group("word-wise editing (tui.cyr)");
+    # decode: Ctrl/Alt-arrow word motion (mod param 1+bitmask: Ctrl=5, Alt=3), Ctrl-W, Ctrl-K
+    assert_eq(_tui_csi_final(68, 1, 5), KEY_WORD_LEFT, "CSI 1;5D (Ctrl-Left) -> word left");
+    assert_eq(_tui_csi_final(67, 1, 5), KEY_WORD_RIGHT, "CSI 1;5C (Ctrl-Right) -> word right");
+    assert_eq(_tui_csi_final(68, 1, 3), KEY_WORD_LEFT, "CSI 1;3D (Alt-Left) -> word left");
+    assert_eq(_tui_csi_final(67, 1, 3), KEY_WORD_RIGHT, "CSI 1;3C (Alt-Right) -> word right");
+    assert_eq(_tui_csi_final(68, 1, 2), KEY_LEFT, "CSI 1;2D (Shift-Left) stays plain Left (no regression)");
+    assert_eq(_tui_csi_final(68, 0, 0 - 1), KEY_LEFT, "CSI D (plain Left) stays plain");
+    assert_eq(_tui_csi_final(67, 0, 0 - 1), KEY_RIGHT, "CSI C (plain Right) stays plain");
+    assert_eq(_tui_kitty_u(119, 5), KEY_DELWORD, "kitty Ctrl-W (119;5) -> delete word");
+    assert_eq(_tui_kitty_u(107, 5), KEY_KILL_EOL, "kitty Ctrl-K (107;5) -> kill to EOL");
+    assert_eq(_tui_kitty_u(98, 3), KEY_WORD_LEFT, "kitty Alt-b (98;3) -> word left");
+    assert_eq(_tui_kitty_u(102, 3), KEY_WORD_RIGHT, "kitty Alt-f (102;3) -> word right");
+    assert_eq(_tui_kitty_u(98, 5), KEY_TOGGLE_TREE, "kitty Ctrl-B (98;5) still toggles tree (Alt-b didn't shadow it)");
+    # word motion over "foo bar baz" (11 bytes)
+    led_reset();
+    led_paste("foo bar baz", 11);                        # cursor at end (11)
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 8, "word-left -> start of 'baz'");
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 4, "word-left -> start of 'bar'");
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 0, "word-left -> start of 'foo'");
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 0, "word-left at column 0 is a no-op (no OOB read)");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 3, "word-right -> end of 'foo'");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 7, "word-right -> end of 'bar'");
+    # punctuation is a word char; word-right skips a multi-space run
+    led_reset();
+    led_paste("a.b   cd", 8);                            # "a.b" + 3 spaces + "cd"
+    led_feed(KEY_HOME, 0);
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 3, "'a.b' is one word (punctuation is a word char)");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 8, "word-right skips the 3-space run to end of 'cd'");
+    # Ctrl-W (delete word before cursor)
+    led_reset();
+    led_paste("foo bar", 7);
+    led_feed(KEY_DELWORD, 0);
+    assert(streq(led_buf(), "foo "), "Ctrl-W deletes the trailing word 'bar'");
+    assert_eq(led_cur(), 4, "cursor at the word start after Ctrl-W");
+    led_feed(KEY_DELWORD, 0);
+    assert(streq(led_buf(), ""), "Ctrl-W again clears 'foo '");
+    # Ctrl-W across a newline -> deletes the word + the newline, joining (reflow case: led_lines drops)
+    led_reset();
+    led_paste("foo\nbar", 7);
+    assert_eq(led_lines(), 2, "'foo\\nbar' is two logical lines");
+    led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0);   # cursor to index 4 (start of 'bar')
+    assert_eq(led_cur(), 4, "cursor at the start of 'bar'");
+    led_feed(KEY_DELWORD, 0);
+    assert(streq(led_buf(), "bar"), "Ctrl-W across the newline deletes 'foo' + the newline");
+    assert_eq(led_lines(), 1, "Ctrl-W across the newline joins to one line");
+    # Ctrl-K (kill to end of line) + the buffer-end no-op
+    led_reset();
+    led_paste("abcd", 4);
+    led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0);        # cursor to index 2
+    led_feed(KEY_KILL_EOL, 0);
+    assert(streq(led_buf(), "ab"), "Ctrl-K kills from the cursor to end of line");
+    led_feed(KEY_KILL_EOL, 0);
+    assert(streq(led_buf(), "ab"), "Ctrl-K at the buffer end is a no-op");
+    # Ctrl-K at end-of-line deletes the newline (join; reflow case)
+    led_reset();
+    led_paste("ab\ncd", 5);
+    led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0);   # cursor to index 2 (on the newline)
+    assert_eq(led_cur(), 2, "cursor sits on the newline (end of line 0)");
+    led_feed(KEY_KILL_EOL, 0);
+    assert(streq(led_buf(), "abcd"), "Ctrl-K at end-of-line deletes the newline (join)");
+    assert_eq(led_lines(), 1, "the join collapses to one logical line");
+    # empty buffer: every word op is a bounds-safe no-op
+    led_reset();
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 0, "word-left on an empty buffer -> no-op");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 0, "word-right on an empty buffer -> no-op");
+    led_feed(KEY_DELWORD, 0);
+    assert_eq(led_len(), 0, "Ctrl-W on an empty buffer -> no-op");
+    led_feed(KEY_KILL_EOL, 0);
+    assert_eq(led_len(), 0, "Ctrl-K on an empty buffer -> no-op");
+    led_reset();
     return 0;
 }
 
