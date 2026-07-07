@@ -7,6 +7,31 @@
 
 ## Version
 
+**0.17.3** — **OSC 52 clipboard copy** (`/copy` writes the last reply to the system clipboard),
+2026-07-07. Continues the 0.17.x input-completeness line. `/copy` (`cmd_copy`, `src/commands.cyr`)
+base64-encodes `hoosh_last_reply()` (the accumulator, bounded by `HOOSH_ACC_CAP` = 64 KiB → no truncation
+needed) via `bayan_base64_encode` and writes an OSC 52 set-clipboard escape (`ESC ] 52 ; c ; <base64> BEL`,
+BEL not ST) straight to the terminal — a byte write, **no fork/exec/dup2**, so it **works on AGNOS and over
+SSH** (the AGNOS lane builds it, confirmed). The escape goes to fd1 via `emit_raw` + a raw `SYS_WRITE`
+**write-all loop** (a single tty write can short-write the ~87 KB payload) which **bypasses the `OUT_RING`
+feed sink** (an escape is terminal control, not feed text — the same path the kitty/mouse enable escapes
+use); the ANNOUNCEMENT uses the normal sink so it lands in the feed / stdout. **Best-effort + honest**: OSC
+52 is fire-and-forget (a terminal may ignore it / a tmux-screen wrapper may swallow it, and we can't read
+back success) so the message never asserts it landed. Guards: empty reply → "nothing to copy yet"; non-tty
+stdout (`ui_isatty(1)`) → "needs a terminal"; failed write → honest note. **REPL + TUI** (`CMD_COPY` wired
+via `classify_input`/`_dispatch_d`, `/help`, + the TUI slash palette — `SLASH_N` 16→17 + the `/copy`
+branch); one-shot doesn't route through `classify_input`, and the `ui_isatty(1)` gate means **piped/CI/
+one-shot output is never polluted** with the escape (existing inputs unchanged). **NOT t-ron-gated** — it
+only SETS the clipboard (never emits an OSC 52 query to READ it) with content the user already sees, the
+same ungated display class as `/read`; no file/exec/network surface, no clipboard-exfil. **Two-pass
+adversarial review** (Workflow): a DESIGN pass (2 lenses) folded a should-fix (both palette edits + the
+`/c` count) and a nit (`ui_isatty(1)` not `tty_isatty` — they can disagree on AGNOS); a DIFF pass (2
+lenses, each finding independently verified) returned **ZERO findings**. **Live clipboard behavior verifies
+on a real tty (`--tier=rich` or the line REPL), not the harness.** 875 assertions (+3: `/copy` classify +
+palette counts; the emit is live-tty verified). Pin unchanged (**6.4.16**; the local cycc wrapper has since
+drifted to 6.4.17 — a future maintenance pin bump, not bundled here). 0.17.x remaining: `0.17.4` turn
+interrupt (the line's one item that touches the turn/agent loop — its own design pass).
+
 **0.17.2** — **SGR mouse** (wheel scrolls the feed, click focuses composer/tree, tree-row click
 selects/expands), 2026-07-07. Continues the 0.17.x input-completeness line. The T2 TUI enables SGR mouse
 reporting (`CSI ?1000h` + `CSI ?1006h`) on enter (disabled on every exit, paired with the kitty/bracketed-

@@ -10,15 +10,16 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.17.2):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.17.3):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` toolchain refresh to
 > Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a TOML array-value getter +
 > aarch64 trig polyfills) then opened the **0.17.x input-completeness line** — `0.17.0`
 > **bracketed paste** (multi-line paste lands in the composer, never submits at the first
 > newline), `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow word motion, Ctrl-W,
-> Ctrl-K — readline parity), and `0.17.2` **SGR mouse** (wheel scrolls the feed, click
-> focuses composer/tree, tree-row click selects/expands): the 0.10.x data producers
+> Ctrl-K — readline parity), `0.17.2` **SGR mouse** (wheel scrolls the feed, click focuses
+> composer/tree, tree-row click selects/expands), and `0.17.3` **OSC 52 clipboard copy**
+> (`/copy` — works on AGNOS + over SSH): the 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -246,11 +247,13 @@ selection stays content-blind.
   `_ftree_scroll_first` geometry); enabled on TUI enter, disabled on every exit (no mouse-mode leak).
   TUI-only → floor byte-identical. Two-pass adversarial review: design pass folded 2 decode nits, diff
   pass zero findings. 872 assertions. See CHANGELOG/state.md.
-- **`0.17.3` — OSC 52 clipboard copy.** `/copy` writes the last reply to the system
-  clipboard via OSC 52 — a terminal escape WRITE (no fork/exec/dup2), so it sidesteps
-  the process-primitive gate on the deferred clipboard sink and works on AGNOS and
-  over SSH. Best-effort by nature (a terminal may ignore it or cap the payload) —
-  announced, never asserted.
+- **`0.17.3` — OSC 52 clipboard copy. DONE (2026-07-07).** `/copy` base64-encodes the last reply
+  and writes an OSC 52 set-clipboard escape (`ESC ] 52 ; c ; <base64> BEL`) straight to fd1 — a byte
+  write, no fork/exec/dup2, so it works on AGNOS (the lane builds it) and over SSH. The escape bypasses
+  the `OUT_RING` feed sink (write-all loop for the ~87 KB payload); gated on `ui_isatty(1)` so piped/CI
+  output is never polluted; best-effort (never asserts success); not t-ron-gated (SET only, no query —
+  same class as `/read`). Two-pass adversarial review: design pass folded a should-fix + a nit, diff pass
+  zero findings. 875 assertions. See CHANGELOG/state.md.
 - **`0.17.4` — turn interrupt.** Esc aborts a streaming/agentic turn WITHOUT exiting
   the session — today Ctrl-C tears down the whole session and input is only read
   between turns, so a runaway agentic loop costs you the session and its context.

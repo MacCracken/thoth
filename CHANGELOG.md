@@ -2,6 +2,41 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.3] - 2026-07-07
+
+**OSC 52 clipboard copy — `/copy` writes the last model reply to the system clipboard.**
+Continues the 0.17.x input-completeness line. `/copy` base64-encodes the last reply and writes an OSC 52
+set-clipboard escape (`ESC ] 52 ; c ; <base64> BEL`) straight to the terminal — a byte write, no
+fork/exec/dup2, so it **works on AGNOS and over SSH** (the AGNOS lane builds it). Best-effort by nature
+(OSC 52 is fire-and-forget — a terminal may ignore it or a tmux/screen wrapper may swallow it, and we can't
+read back success), so the announcement never asserts it landed. REPL + TUI; gated on a real terminal
+(`ui_isatty(1)`) so piped/CI/one-shot output is never polluted with the escape. 875 assertions (+3). Pin
+**6.4.16**.
+
+### Added
+- **`/copy` command** (`src/commands.cyr`, `cmd_copy`): reads `hoosh_last_reply()` (the accumulator,
+  bounded by `HOOSH_ACC_CAP` = 64 KiB, so no truncation is needed), base64-encodes it with
+  `bayan_base64_encode`, and writes `ESC ] 52 ; c ; <base64> BEL`. The escape goes to fd1 via `emit_raw` +
+  a raw `SYS_WRITE` **write-all loop** (a single tty write can short-write an ~87 KB payload), which bypass
+  the `OUT_RING` feed sink (an escape is terminal control, not feed text — the same path the kitty/mouse
+  enable escapes use); the announcement uses the normal sink so it lands in the feed / stdout. Guards: an
+  empty reply → "nothing to copy yet"; a non-tty stdout → "clipboard copy needs a terminal"; a failed
+  write → an honest failure note. `CMD_COPY` wired through `classify_input` / `_dispatch_d`, a `/help` line,
+  and the TUI slash palette (`/copy`). BEL (not ST) terminates the OSC — the more widely accepted form.
+- **Not t-ron-gated** — `/copy` only SETS the clipboard (never emits an OSC 52 query to READ it) with
+  content the user can already see, the same ungated display class as `/read`; no file/exec/network surface.
+- **3 assertions** (`tests/thoth.tcyr`): `/copy` → `CMD_COPY` in `test_classify`; the slash-palette counts
+  (`/c` → 3 = /call+/clear+/copy, `/co` → 1, `/copy` → 1). The OSC 52 emit + clipboard are live-tty verified.
+
+### Process
+- **Two-pass adversarial review** (Workflow): a **design pass** (2 lenses — correctness/routing, integration/
+  security/tests) returned no blockers and confirmed the escape correctly bypasses `OUT_RING` to fd1, the
+  base64 length formula and write-all loop, and the no-t-ron/security posture; it folded a should-fix (do
+  BOTH palette edits — `SLASH_N`→17 and the `_slash_name` branch — and update the `/c` count) and a nit
+  (gate on `ui_isatty(1)`, matching the tier probe, rather than `tty_isatty` — they can disagree on AGNOS).
+  A **diff pass** (2 lenses, each finding independently adversarially verified) returned **zero findings**.
+  **The live clipboard behavior verifies on a real tty (`--tier=rich` or the line REPL), not the harness.**
+
 ## [0.17.2] - 2026-07-07
 
 **SGR mouse — wheel scrolls the feed, click focuses the composer/tree, a tree-row click selects/expands.**

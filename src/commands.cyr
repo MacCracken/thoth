@@ -26,6 +26,7 @@ enum Cmd {
     CMD_DRY = 18;
     CMD_REMEMBER = 19;
     CMD_GIT = 20;
+    CMD_COPY = 21;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -126,6 +127,7 @@ fn classify_input(line) {
     if (token_is(line, "/dry") == 1) { return CMD_DRY; }
     if (token_is(line, "/remember") == 1) { return CMD_REMEMBER; }
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
+    if (token_is(line, "/copy") == 1) { return CMD_COPY; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -149,6 +151,7 @@ fn cmd_help() {
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
     _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
+    _help_line("  /copy", "              copy the last reply to the clipboard (OSC 52, best-effort)");
     _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
@@ -599,6 +602,37 @@ fn cmd_clear() {
     return 0;
 }
 
+# cmd_copy: copy the last model reply to the system clipboard via OSC 52 — a terminal escape WRITE
+# (ESC ] 52 ; c ; <base64> BEL), no fork/exec/dup2, so it works on AGNOS and over SSH (0.17.3). The
+# reply is bayan-base64'd and the escape is written DIRECTLY to fd1 with emit_raw / raw SYS_WRITE, which
+# bypass the OUT_RING feed sink (an escape is terminal control, not feed text — the same path the kitty/
+# mouse enable escapes use); the ANNOUNCEMENT uses the normal sink so it lands in the feed / stdout.
+# BEST-EFFORT and honest: OSC 52 is fire-and-forget (a terminal may ignore it or a tmux/screen wrapper
+# may swallow it, and we cannot read back success), so the message never asserts it landed. Needs a real
+# terminal (the escape is meaningless on redirected stdout) — gated on ui_isatty(1), matching the tier
+# probe. NOT t-ron-gated: it only SETS the clipboard (never queries/reads it) with content the user can
+# already see — the same ungated display class as /read. The reply is bounded to HOOSH_ACC_CAP (64 KiB),
+# so no truncation is needed; a large payload is written with a write-all loop (a single tty write() can
+# be short). BEL (not ST) terminates the OSC — the more widely accepted form.
+fn cmd_copy() {
+    var n = hoosh_last_reply_len();
+    if (n <= 0) { oprintln("nothing to copy yet — no model reply this session"); return 0; }
+    if (ui_isatty(1) == 0) { oprintln("clipboard copy needs a terminal (stdout is not a tty)"); return 0; }
+    var b64 = bayan_base64_encode(hoosh_last_reply(), n);
+    var enc = ((n + 2) / 3) * 4;                          # base64 length (standard, '=' padded)
+    emit_raw("\x1b]52;c;");                                # OSC 52 set-clipboard, selection 'c'
+    var sent = 0;
+    var ok = 1;
+    while (sent < enc) {                                   # write-all: a single tty write() can short-write
+        var w = syscall(SYS_WRITE, 1, b64 + sent, enc - sent);
+        if (w <= 0) { ok = 0; sent = enc; } else { sent = sent + w; }
+    }
+    emit_raw("\x07");                                      # BEL terminator
+    if (ok == 0) { oprintln("clipboard copy: terminal write failed"); return 0; }
+    emit("copied "); ofmt_int(n); oprintln(" bytes to the clipboard (best-effort — your terminal may ignore OSC 52)");
+    return 0;
+}
+
 # cmd_theme: switch the color theme. Bare /theme shows the active theme + the choices;
 # `/theme dark|light` switches (rebuilds the cached SGR table — chrome + new output
 # re-color; existing feed lines keep their baked colors, a transcript). rainbow is
@@ -708,6 +742,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_DRY) { cmd_dry(line); return 1; }
     if (c == CMD_REMEMBER) { cmd_remember(line); return 1; }
     if (c == CMD_GIT) { cmd_git(); return 1; }
+    if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_UNKNOWN_SLASH) {
         # Guard FIRST: refuse at the depth bound BEFORE writing a slot, so a cycle can never
         # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).
