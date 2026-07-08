@@ -6,7 +6,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 **Tree-fed Tab completion for `@file` mentions.** In the TUI composer, pressing `Tab` on a `@<prefix>`
 completes the path from the file tree; when the cursor isn't on a `@`-token, `Tab` keeps its existing
-composer↔tree focus-toggle behavior. Builds on the 0.21.0 expansion core. 1060 assertions (+23). A 3-lens
+composer↔tree focus-toggle behavior. Builds on the 0.21.0 expansion core. 1062 assertions (+25). A 3-lens
 adversarial review caught (and this cut fixes) a mid-token completion bug before ship.
 
 ### Added

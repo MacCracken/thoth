@@ -22,7 +22,7 @@ through to the toggle otherwise. **A 3-lens adversarial review caught a real mid
 `mention_prefix_at` scanned only backward, so a cursor mid-token (`@VERbar`, cursor after `VER`) would splice
 the completion into the middle (`@VERSIONbar`); now it requires the cursor at the END of the token (the char
 AT the cursor must be a non-path-char), else Tab falls through — regression-tested. The other two lenses
-(completion bounds, KEY_TAB floor-identity) were clean. **Verified**: 1060 assertions (+23, `test_tab_complete`
+(completion bounds, KEY_TAB floor-identity) were clean. **Verified**: 1062 assertions (+25, `test_tab_complete`
 — `mention_prefix_at` boundary/email/empty/start/mid-token/end + `ftree_complete` unique-file/unique-dir-
 `/`/subdir/ambiguous-LCP/no-match + `led_insert_cstr`) + LIVE in the real rich TUI by driving it through a
 PTY (`@VER` + `Tab` → `@VERSION`; happy path intact after the guard). TUI-only — line/one-shot/PLAIN floor

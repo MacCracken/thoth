@@ -2903,8 +2903,19 @@ fn test_tab_complete() {
     assert(streq(out, "/") == 1, "a unique directory completes with a trailing '/'");
     assert_eq(ftree_complete("src/men", out, 256), 1, "src/men -> unique (src/mention.cyr)");
     assert(streq(out, "tion.cyr") == 1, "src/men completes to tion.cyr (dir listed live, no expand)");
-    assert(ftree_complete("thoth.", out, 256) >= 2, "thoth. -> ambiguous (thoth.cyml + thoth.cyml.example)");
-    assert(streq(out, "cyml") == 1, "ambiguous completes to the longest common prefix suffix ('cyml')");
+    # ambiguous: use git-TRACKED root files (thoth.cyml is a local/gitignored config, absent in CI)
+    assert(ftree_complete("C", out, 256) >= 2, "C -> ambiguous (CHANGELOG.md, CLAUDE.md, ... — tracked)");
+    assert_eq(load8(out), 0, "ambiguous, nothing common beyond 'C' -> empty suffix (no over-completion)");
+    # the LCP-progress logic tested PURELY (FS-independent): the common-prefix shrink of two candidate names
+    var acc = alloc(64);
+    var seed = "mention.cyr";
+    var q = 0;
+    while (load8(seed + q) != 0) { store8(acc + q, load8(seed + q)); q = q + 1; }
+    store8(acc + q, 0);
+    _ftc_lcp_shrink(acc, "memory.cyr");
+    assert(streq(acc, "me") == 1, "_ftc_lcp_shrink: mention.cyr ^ memory.cyr -> me");
+    _ftc_lcp_shrink(acc, "xyz");
+    assert_eq(load8(acc), 0, "_ftc_lcp_shrink: no common prefix -> empty");
     assert_eq(ftree_complete("zzz_no_such_prefix", out, 256), 0, "no match -> count 0");
     assert_eq(load8(out), 0, "no match -> empty suffix");
 

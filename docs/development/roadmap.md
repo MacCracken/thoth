@@ -459,8 +459,8 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   tree's own `dir_list` (works at any depth without expanding the pane; unique → full completion +
   `/` for a dir, multiple → longest common prefix); `mention_prefix_at` reuses the 0.21.0 token
   rules; `_tui_at_complete` + `led_insert_cstr` do the insert. A 3-lens adversarial review caught a
-  mid-token splice bug (fixed pre-cut: the cursor must be at the END of the token). 1060 assertions
-  (+23); live-verified by driving the real rich TUI through a PTY.
+  mid-token splice bug (fixed pre-cut: the cursor must be at the END of the token). 1062 assertions
+  (+25); live-verified by driving the real rich TUI through a PTY.
 - Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 
