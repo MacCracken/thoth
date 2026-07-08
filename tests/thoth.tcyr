@@ -2496,20 +2496,20 @@ fn test_fsearch() {
     # --- render: injects reverse video; visible text preserved (feeds the unchanged feed_clip_seg) ---
     var rb[128];
     fsearch_set_query("foo", 3);
-    var rn = fsearch_render(&rb, 128, "a foo b", 7, 0);
+    var rn = fsearch_render(&rb, 128, "a foo b", 7, 0 - 1);   # cur_off -1 => no current occurrence on this line
     assert_eq(_t_has_esc(&rb, rn), 1, "render injects an escape (reverse video)");
     var sb[64];
     _t_strip_sgr(&sb, &rb, rn);
     assert(streq(&sb, "a foo b"), "render strips back to the source visible text");
     assert_eq(_t_count_sub(&rb, rn, "\x1b[7m", 4), 1, "one reverse-ON around the single match");
-    # current match uses a DISTINCT sgr (reverse+underline)
+    # the CURRENT occurrence (the match starting at offset 2, "foo") uses a DISTINCT sgr (reverse+underline)
     var rc[128];
-    var rcn = fsearch_render(&rc, 128, "a foo b", 7, 1);
-    assert_eq(_t_count_sub(&rc, rcn, "\x1b[7;4m", 6), 1, "current match uses reverse+underline");
+    var rcn = fsearch_render(&rc, 128, "a foo b", 7, 2);
+    assert_eq(_t_count_sub(&rc, rcn, "\x1b[7;4m", 6), 1, "current occurrence (offset 2) uses reverse+underline");
     # --- RESET RE-ASSERT: an interior reset inside the match must not kill reverse ---
     fsearch_set_query("error", 5);
     var hb[128];
-    var hn = fsearch_render(&hb, 128, &mline, mn, 0);
+    var hn = fsearch_render(&hb, 128, &mline, mn, 0 - 1);
     assert_eq(_t_count_sub(&hb, hn, "\x1b[7m", 4), 2, "reverse re-asserted after the interior reset (two ESC[7m)");
     # --- WRAP-STRADDLE: the render output through feed_clip_seg — reverse RESUMES at a later segment ---
     # line = "aaaa" + "e r <reset> r o r" (match "error" at visible cols 4..8); width 6 -> the interior reset
@@ -2525,7 +2525,7 @@ fn test_fsearch() {
     store8(&wl + wn, 111); wn = wn + 1;                                     # 'o' (col 7)
     store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 8)
     var wr[192];
-    var wrn = fsearch_render(&wr, 192, &wl, wn, 0);
+    var wrn = fsearch_render(&wr, 192, &wl, wn, 0 - 1);
     var seg1[128];
     # skip=7: the interior reset AND its re-assert both fall in this segment's SKIP region (cols<7), so the
     # ONLY source of reverse in the painted window is the boundary carry re-flush — proving the re-assert
@@ -2543,7 +2543,7 @@ fn test_fsearch() {
     var en = 0;
     while (en < 40) { store8(&el + en, 101); en = en + 1; }                 # 40 e's
     var er[512];
-    var ern = fsearch_render(&er, 512, &el, en, 0);
+    var ern = fsearch_render(&er, 512, &el, en, 0 - 1);
     var eseg[128];
     var es = feed_clip_seg(&eseg, 128, &er, ern, 30, 6);                    # far segment: cols [30,36)
     var esv[64];
@@ -2554,7 +2554,7 @@ fn test_fsearch() {
     ui_force(PT_PLAIN, CD_NONE);
     fsearch_set_query("foo", 3);
     var pb[64];
-    var pn = fsearch_render(&pb, 64, "a foo b", 7, 0);
+    var pn = fsearch_render(&pb, 64, "a foo b", 7, 0 - 1);
     assert_eq(pn, 7, "PT_PLAIN render is byte-length-identical to src (floor)");
     var pv[64];
     _t_strip_sgr(&pv, &pb, pn);
@@ -2578,6 +2578,15 @@ fn test_fsearch() {
     fsearch_set_query("", 0);
     assert_eq(fsearch_rescan(), 0, "empty query -> no matches");
     assert_eq(fsearch_cur_line(), 0 - 1, "no current match line when empty");
+    # --- OCCURRENCE-granular: two hits on ONE line count as 2, and n/N steps between them (0.18.5) ---
+    feed_init();
+    feed_write("echo and bote_echo here\n", 24);       # "echo" at offset 0 and inside bote_echo at offset 14
+    fsearch_set_query("echo", 4);
+    assert_eq(fsearch_rescan(), 2, "two occurrences on one line counted as 2 (not 1 line)");
+    assert_eq(fsearch_cur_line(), 0, "both occurrences are on line 0");
+    assert_eq(fsearch_cur_off(), 14, "seeded to the NEWEST occurrence (offset 14, inside bote_echo)");
+    assert_eq(fsearch_next(), 0, "next stays on line 0 (the other occurrence)");
+    assert_eq(fsearch_cur_off(), 0, "current occurrence stepped to offset 0 (the first 'echo')");
     ui_force(PT_PLAIN, CD_NONE);
     return 0;
 }

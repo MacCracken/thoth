@@ -7,6 +7,32 @@
 
 ## Version
 
+**0.18.6** — **confirm-prompt return** (live-test follow-up), 2026-07-08. When a t-ron gate confirm fires
+during an agentic turn, `confirm` (src/gate.cyr) brackets to the live screen via `tui_confirm_begin`/`_end`
+(so the `[y/N]` prompt + cooked echo are visible, not buried in the feed ring). But `tui_confirm_end` only
+resumed capture + the spinner — it never repainted the composer, so the `…authorize …? [y/N] y` line stayed
+stuck on the composer row until the whole response finished. Fix: `tui_confirm_end` now calls
+`tui_repaint_body()` as its FIRST step — while out_mode is still OUT_FD1 (from `tui_confirm_begin`), so the
+chrome paints to the SCREEN, not the ring — clearing the confirm prompt + echo and restoring the `{(o>`
+composer immediately; then it resumes OUT_RING + the spinner. An independent code-trace verified the
+out_mode balance (guaranteed OUT_FD1 at entry → no ring corruption), that `tui_repaint_body` is read-only
+from the ring (safe mid-dispatch), that the confirm text is never sealed into the feed, and that search
+(`_fsearch_active`) is guaranteed 0 during a turn. TUI-only; the REPL/piped confirm path never calls these
+hooks (byte-identical floor). 941 assertions (unchanged — the confirm/TUI path is live-verified, not
+unit-tested). Pin **6.4.20**.
+
+**0.18.5** — **feed search: occurrence-granular** (live-test follow-up to 0.18.4), 2026-07-08. A search
+that matched twice on one line reported `2/2` (two *lines*) while three spans highlighted — the count and
+n/N were LINE-granular. Now match state is per-OCCURRENCE: `_fsearch_mline[k]`/`_fsearch_moff[k]` hold the
+line **and** start offset of every non-overlapping hit, so the `i/n` count and n/N step every hit and the
+render marks the **current** occurrence (by `cur_off`, its byte offset) reverse+underline while the rest stay
+reverse (`fsearch_render` now takes `cur_off`, not a whole-line flag; `feed_repaint` passes `coff =
+(li==fsearch_cur_line()) ? fsearch_cur_off() : -1`). `_fsearch_add_line` walks a line identically to the
+render, so recorded offsets coincide with render match-starts (one occurrence current, never mis-marked).
+The per-occurrence cap (`FSEARCH_MATCH_CAP` = 8192) is **announced** — a broad query over a full ring shows
+`i/n+` via `fsearch_saturated`, never a faked total (diff-review catch, per the "announce, never fake"
+principle). Feed-search-only; floor unchanged. 941 assertions (+5). Pin **6.4.20**.
+
 **0.18.4** — **feed search** (Ctrl-F / `/find` over the scrollback), 2026-07-08. A new PURE engine
 (`src/fsearch.cyr`) matches the query against the VISIBLE text of every feed-ring line — case-insensitive
 ASCII, transparent to the 0.18.0 role markers + any interleaved escapes, glyph-aligned (a multi-byte UTF-8

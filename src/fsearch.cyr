@@ -18,22 +18,29 @@
 # still matches "error". Match spans align to glyph boundaries (never severs a UTF-8 glyph).
 
 var FSEARCH_Q_CAP = 256;              # query buffer cap (+1 for the NUL)
-var FSEARCH_HITS_CAP = 256;           # max highlighted matches rendered per line (silent cap; pathological)
+var FSEARCH_MATCH_CAP = 8192;         # max total OCCURRENCES tracked across the whole ring (silent cap)
 
 var _fsearch_query = 0;               # alloc(FSEARCH_Q_CAP): the active query (NUL-terminated)
 var _fsearch_qlen = 0;                # query byte length
-var _fsearch_matches = 0;             # alloc(FEED_ROWS*8): logical line indices that contain a match
-var _fsearch_count = 0;               # live match count
-var _fsearch_cur = 0 - 1;             # current match index into _fsearch_matches (-1 = none)
+# Matches are per-OCCURRENCE (not per-line): occurrence k lives on logical line _fsearch_mline[k] at src
+# byte offset _fsearch_moff[k]. A line with two hits contributes two occurrences — so the i/n count and n/N
+# navigation step every hit, and the render marks the CURRENT occurrence (by its offset) distinctly.
+var _fsearch_mline = 0;               # alloc(FSEARCH_MATCH_CAP*8): logical line index of occurrence k
+var _fsearch_moff = 0;                # alloc(FSEARCH_MATCH_CAP*8): src byte offset where occurrence k starts
+var _fsearch_count = 0;               # total occurrence count
+var _fsearch_cur = 0 - 1;             # current occurrence index (-1 = none)
+var _fsearch_saturated = 0;           # 1 if a rescan hit FSEARCH_MATCH_CAP (count is a floor -> hint shows i/n+)
 
 # fsearch_init: lazy-alloc the buffers and reset to empty (idempotent). Called at TUI startup and by each
 # unit test for a clean slate.
 fn fsearch_init() {
     if (_fsearch_query == 0) { _fsearch_query = alloc(FSEARCH_Q_CAP); }
-    if (_fsearch_matches == 0) { _fsearch_matches = alloc(FEED_ROWS * 8); }
+    if (_fsearch_mline == 0) { _fsearch_mline = alloc(FSEARCH_MATCH_CAP * 8); }
+    if (_fsearch_moff == 0) { _fsearch_moff = alloc(FSEARCH_MATCH_CAP * 8); }
     _fsearch_qlen = 0;
     _fsearch_count = 0;
     _fsearch_cur = 0 - 1;
+    _fsearch_saturated = 0;
     store8(_fsearch_query, 0);
     return 0;
 }
@@ -43,6 +50,7 @@ fn fsearch_reset() {
     _fsearch_qlen = 0;
     _fsearch_count = 0;
     _fsearch_cur = 0 - 1;
+    _fsearch_saturated = 0;
     if (_fsearch_query != 0) { store8(_fsearch_query, 0); }
     return 0;
 }
@@ -145,7 +153,10 @@ fn _fsearch_emit2(dst, cap, w, b0, b1) {
     return w + 2;
 }
 
-fn fsearch_render(dst, cap, src, len, cur) {
+# fsearch_render(dst, cap, src, len, cur_off): highlight every occurrence in src; the occurrence STARTING
+# at src byte offset cur_off (the current match, when this line holds it — else pass -1) is drawn with the
+# current style (reverse+underline), the rest reverse.
+fn fsearch_render(dst, cap, src, len, cur_off) {
     if (ui_tier() == PT_PLAIN) {                      # floor: no highlight at all — copy src verbatim
         var v = 0;
         while ((v < len) && (v < cap)) { store8(dst + v, load8(src + v)); v = v + 1; }
@@ -169,7 +180,9 @@ fn fsearch_render(dst, cap, src, len, cur) {
             var me = 0 - 1;
             if (qlen > 0) { me = _fsearch_match_at(src, len, o, q, qlen); }
             if (me >= 0) {
-                w = _fsearch_emit(dst, cap, w, ui_match_on(cur));       # reverse ON
+                var isc = 0;
+                if (o == cur_off) { isc = 1; }                         # this occurrence is the current match
+                w = _fsearch_emit(dst, cap, w, ui_match_on(isc));      # reverse ON
                 var j = o;
                 while (j < me) {
                     var jb = load8(src + j);
@@ -181,7 +194,7 @@ fn fsearch_render(dst, cap, src, len, cur) {
                         elif ((jsl == 2) && (jb1 == FEED_MARK_RESET)) { active_role = 0 - 1; wasreset = 1; }
                         elif (_feed_is_reset(src, j, jsl) == 1) { wasreset = 1; }
                         w = _fsearch_copy(dst, cap, w, src, j, jsl);
-                        if (wasreset == 1) { w = _fsearch_emit(dst, cap, w, ui_match_on(cur)); }   # re-assert reverse
+                        if (wasreset == 1) { w = _fsearch_emit(dst, cap, w, ui_match_on(isc)); }   # re-assert reverse
                         j = j + jsl;
                     } else {
                         var jgl = _feed_glyph_len(src, j, len);
@@ -202,61 +215,81 @@ fn fsearch_render(dst, cap, src, len, cur) {
     return w;
 }
 
-# --- the match-list state machine -------------------------------------------
+# --- the match-list state machine (per OCCURRENCE) --------------------------
+# _fsearch_add_line: record every occurrence of the query in src[0..len) as (li, start-offset), advancing
+# past each match (non-overlapping) — the SAME glyph walk fsearch_render uses, so offsets align exactly.
+fn _fsearch_add_line(li, src, len) {
+    var o = 0;
+    while (o < len) {
+        var b = load8(src + o);
+        if (b == 27) { o = o + _feed_esc_len(src, o, len); }
+        else {
+            var me = _fsearch_match_at(src, len, o, _fsearch_query, _fsearch_qlen);
+            if (me >= 0) {
+                if (_fsearch_count < FSEARCH_MATCH_CAP) {
+                    store64(_fsearch_mline + _fsearch_count * 8, li);
+                    store64(_fsearch_moff + _fsearch_count * 8, o);
+                    _fsearch_count = _fsearch_count + 1;
+                } else { _fsearch_saturated = 1; }    # cap hit -> announce (never silently truncate)
+                o = me;                              # non-overlapping: continue after the match
+            } else {
+                o = o + _feed_glyph_len(src, o, len);
+            }
+        }
+    }
+    return 0;
+}
+
 # fsearch_rescan: walk the ring [0, feed_count()) + the pending line (virtual line index feed_count()),
-# record every logical line that contains a match, and (re-)seed the current match to the NEWEST one (the
-# nearest to the default bottom view). Called on every query edit. Returns the match count.
+# recording EVERY occurrence, and (re-)seed the current occurrence to the NEWEST one (nearest the default
+# bottom view). Called on every query edit. Returns the total occurrence count.
 fn fsearch_rescan() {
     _fsearch_count = 0;
+    _fsearch_saturated = 0;
     if (_fsearch_qlen == 0) { _fsearch_cur = 0 - 1; return 0; }
     var n = feed_count();
     var li = 0;
     while (li < n) {
-        if (fsearch_line_has(feed_line_ptr(li), feed_line_len(li)) == 1) {
-            if (_fsearch_count < FEED_ROWS) {
-                store64(_fsearch_matches + _fsearch_count * 8, li);
-                _fsearch_count = _fsearch_count + 1;
-            }
-        }
+        _fsearch_add_line(li, feed_line_ptr(li), feed_line_len(li));
         li = li + 1;
     }
-    if (feed_pending_len() > 0) {
-        if (fsearch_line_has(feed_pending_ptr(), feed_pending_len()) == 1) {
-            if (_fsearch_count < FEED_ROWS) {
-                store64(_fsearch_matches + _fsearch_count * 8, n);
-                _fsearch_count = _fsearch_count + 1;
-            }
-        }
-    }
-    # rescan runs on every query edit -> (re-)seed the current match to the NEWEST one (nearest the default
-    # bottom view). Navigation (fsearch_next/prev) moves it from there; it is never reseeded by a nav.
+    if (feed_pending_len() > 0) { _fsearch_add_line(n, feed_pending_ptr(), feed_pending_len()); }
+    # rescan runs on every query edit -> (re-)seed the current occurrence to the NEWEST one (nearest the
+    # default bottom view). Navigation (fsearch_next/prev) moves it from there; it is never reseeded by a nav.
     if (_fsearch_count == 0) { _fsearch_cur = 0 - 1; }
     else { _fsearch_cur = _fsearch_count - 1; }
     return _fsearch_count;
 }
 
 fn fsearch_count() { return _fsearch_count; }
-fn fsearch_cur() { return _fsearch_cur; }             # 0-based match index; -1 = none
+fn fsearch_cur() { return _fsearch_cur; }             # 0-based occurrence index; -1 = none
+fn fsearch_saturated() { return _fsearch_saturated; } # 1 if the count hit the cap (hint shows i/n+)
 
-# fsearch_cur_line: the logical feed-line index of the current match, or -1.
+# fsearch_cur_line / fsearch_cur_off: the logical feed-line index and src byte offset of the CURRENT
+# occurrence, or -1. The painter passes cur_off to fsearch_render so only that occurrence is drawn current.
 fn fsearch_cur_line() {
     if (_fsearch_cur < 0) { return 0 - 1; }
     if (_fsearch_cur >= _fsearch_count) { return 0 - 1; }
-    return load64(_fsearch_matches + _fsearch_cur * 8);
+    return load64(_fsearch_mline + _fsearch_cur * 8);
+}
+fn fsearch_cur_off() {
+    if (_fsearch_cur < 0) { return 0 - 1; }
+    if (_fsearch_cur >= _fsearch_count) { return 0 - 1; }
+    return load64(_fsearch_moff + _fsearch_cur * 8);
 }
 
-# fsearch_line_is_match: 1 if logical line li is in the match set (the painter's per-row gate).
+# fsearch_line_is_match: 1 if logical line li holds any occurrence (the painter's per-row gate).
 fn fsearch_line_is_match(li) {
     var i = 0;
     while (i < _fsearch_count) {
-        if (load64(_fsearch_matches + i * 8) == li) { return 1; }
+        if (load64(_fsearch_mline + i * 8) == li) { return 1; }
         i = i + 1;
     }
     return 0;
 }
 
-# fsearch_next / fsearch_prev: advance the current match (wrapping); return the target logical line, or -1.
-# "next" = toward newer (down); "prev" = toward older (up). Match indices are oldest->newest.
+# fsearch_next / fsearch_prev: advance the current OCCURRENCE (wrapping); return its logical line, or -1.
+# "next" = toward newer (down); "prev" = toward older (up). Occurrences are ordered oldest->newest.
 fn fsearch_next() {
     if (_fsearch_count == 0) { _fsearch_cur = 0 - 1; return 0 - 1; }
     if (_fsearch_cur < 0) { _fsearch_cur = 0; }

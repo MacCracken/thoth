@@ -821,7 +821,9 @@ fn _tui_draw_search_hint() {
     if (fsearch_qlen() == 0) { ui_emit(ROLE_FAINT, "(type to search)"); }
     elif (fsearch_count() == 0) { ui_emit(ROLE_RED, "no matches"); }
     else {
-        emit(ui_sgr(ROLE_GREEN)); fmt_int(fsearch_cur() + 1); emit("/"); fmt_int(fsearch_count()); emit(ui_reset());
+        emit(ui_sgr(ROLE_GREEN)); fmt_int(fsearch_cur() + 1); emit("/"); fmt_int(fsearch_count());
+        if (fsearch_saturated() == 1) { emit("+"); }   # count hit the cap — a floor, not the total (announced, never faked)
+        emit(ui_reset());
     }
     ui_emit(ROLE_FAINT, "  ↑/N older · ↓/n newer · ⌃C close");
     return 0;
@@ -1139,9 +1141,9 @@ fn feed_repaint() {
             var slen = len;
             if ((_fsearch_active == 1) && (fsearch_line_is_match(li) == 1)) {
                 if (_hl_buf == 0) { _hl_buf = alloc(HL_CAP); }
-                var isc = 0;
-                if (li == fsearch_cur_line()) { isc = 1; }
-                slen = fsearch_render(_hl_buf, HL_CAP, ptr, len, isc);
+                var coff = 0 - 1;
+                if (li == fsearch_cur_line()) { coff = fsearch_cur_off(); }   # only the current occurrence's line marks its offset current
+                slen = fsearch_render(_hl_buf, HL_CAP, ptr, len, coff);
                 sptr = _hl_buf;
             }
             var w = feed_clip_seg(_paint_buf, PAINT_CAP, sptr, slen, sg * fwidth, fwidth);
@@ -1237,7 +1239,11 @@ fn tui_confirm_begin() {
     return 0;
 }
 fn tui_confirm_end() {
-    out_mode_set(OUT_RING);
+    tui_repaint_body();                 # 0.18.6: still OUT_FD1 here -> repaint to the SCREEN, clearing the
+                                        # confirm prompt + its cooked y/n echo and restoring the {(o> composer
+                                        # IMMEDIATELY (was: the confirm line lingered on the composer row until
+                                        # the whole turn finished, so the prompt looked stuck after approval).
+    out_mode_set(OUT_RING);             # resume capturing the rest of dispatch into the feed
     _spin_active = _spin_suspended;     # resume the spinner if a turn is still in flight
     spin_paint();
     return 0;

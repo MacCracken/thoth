@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.18.4):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.18.6):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -25,7 +25,10 @@
 > Cyrius **6.4.20** to realign the family. Then `0.18.3` landed the **live-upgrading fenced-code card** (the
 > 0.15.1 deferred "Option C" — streamed code renders live, then snaps to highlighted at fence close), and
 > `0.18.4` the **feed search** (Ctrl-F / `/find` over the scrollback — match highlight + n/N jump, injected
-> into the unchanged soft-wrap clip). The rest of the **0.18.x line** (glyph-width, inline markdown) is next. The 0.10.x data producers
+> into the unchanged soft-wrap clip), refined by `0.18.5` to be **occurrence-granular** (count + n/N step
+> every hit, not every line), and `0.18.6` fixed the **confirm-prompt return** (the composer refreshes
+> immediately after a gate approval). The rest of the **0.18.x line** (glyph-width, inline markdown) is next.
+> The 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -288,7 +291,8 @@ selection stays content-blind.
 > wraps the `libro_*` results), both on cyrius 6.4.20, + thoth's stack policy — and verified end to
 > end. thoth needed NO src change (it was already a correct, strict MCP client). `0.18.2` was the
 > maintenance realign (re-sync vendored bote-core → 3.0.1 + toolchain → 6.4.20). The feature line then
-> resumed at `0.18.3` (live card, DONE) then `0.18.4` (feed search, DONE); items continue at `0.18.5`+ below.
+> resumed at `0.18.3` (live card) → `0.18.4` (feed search) → `0.18.5` (occurrence-granular) → `0.18.6`
+> (confirm-prompt return), all DONE; items continue at `0.18.7`+ below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -327,9 +331,20 @@ selection stays content-blind.
   to a nav phase where n/N jump. Design review caught + folded an EOF hang, a carry overflow
   (reset-collapse match-off), and cursor-park on repaints; diff review clean. 936 assertions.
   See CHANGELOG/state.md.
-- **`0.18.5` — glyph-width table.** East-Asian-Width ranges so CJK/emoji count 2
+- **`0.18.5` — feed search: occurrence-granular. DONE (2026-07-08).** Live-test follow-up
+  to 0.18.4: the `i/n` count + n/N now step every HIT (a line with two matches is two
+  occurrences), and a line's CURRENT occurrence is drawn reverse+underline (by byte offset)
+  vs reverse for the rest. Per-occurrence `(line, offset)` state; the match cap is announced
+  (`i/n+`) not silently truncated. 941 assertions. See CHANGELOG/state.md.
+- **`0.18.6` — confirm-prompt return. DONE (2026-07-08).** Live-test follow-up: after a
+  t-ron gate confirm during an agentic turn, the composer prompt now refreshes immediately
+  (was: the confirm line stayed stuck on the composer row until the whole response finished)
+  — `tui_confirm_end` repaints the frame while still on OUT_FD1 (chrome to the screen, not the
+  ring), then resumes capture. Independent code-trace verified (out_mode balance, ring
+  read-only mid-dispatch). 941 assertions. See CHANGELOG/state.md.
+- **`0.18.7` — glyph-width table.** East-Asian-Width ranges so CJK/emoji count 2
   columns in soft-wrap and scrollback math (closes the 0.11.3 declared undercount).
-- **`0.18.6` — inline markdown rendering.** Extend reply rendering beyond fenced
+- **`0.18.8` — inline markdown rendering.** Extend reply rendering beyond fenced
   code: headings/bold/lists styled in the feed (mdhl grows an inline pass, styled at
   paint time over the logical store so `/theme` recolor + search highlighting
   compose). Raw bytes stay untouched off PT_RICH and in `_hoosh_acc`/history/

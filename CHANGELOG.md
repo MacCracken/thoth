@@ -2,6 +2,49 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.6] - 2026-07-08
+
+**The composer prompt returns immediately after a gate approval, instead of staying stuck until the turn
+ends.** Live-testing surfaced it: when a t-ron gate confirm fires mid-turn, `confirm` (src/gate.cyr) brackets
+to the live screen via `tui_confirm_begin`/`tui_confirm_end` so the `[y/N]` prompt and its cooked echo are
+visible; but `tui_confirm_end` only resumed feed capture + the spinner — it never repainted the composer, so
+the `…authorize …? [y/N] y` line lingered on the composer row until the whole response finished. Now
+`tui_confirm_end` repaints the frame the instant the user answers (while still on OUT_FD1, so the chrome goes
+to the screen, not the feed ring) — the `{(o>` prompt is restored and the spinner shows the turn continuing.
+TUI-only; the REPL/piped confirm path never calls these hooks, so it stays byte-identical. 941 assertions
+(unchanged). Pin **6.4.20**.
+
+### Fixed
+- **`tui_confirm_end` repaints the composer** (`src/tui.cyr`): `tui_repaint_body()` runs as its first step —
+  before `out_mode_set(OUT_RING)` resumes capture — clearing the confirm prompt + echo and restoring the
+  composer/frame immediately. An independent code-trace verified the out_mode balance (guaranteed OUT_FD1 at
+  entry, so no ring corruption), that `tui_repaint_body` is read-only from the ring (safe mid-dispatch), and
+  that the confirm text is never sealed into the feed. No behavior change off the TUI.
+
+## [0.18.5] - 2026-07-08
+
+**Feed search counts and jumps by OCCURRENCE, not by line.** Live-testing 0.18.4 surfaced it: a search for
+`echo` over a reply where one line reads `bote_echo … empty echo` showed `2/2` (two matching *lines*) while
+three `echo` spans were highlighted. Now the `i/n` count and n/N step **every hit**, and a line with several
+matches highlights the **current** occurrence (by its byte offset) reverse+underline while the others stay
+reverse. Match state is now per-occurrence — `(line, start-offset)` per hit — so navigation lands on the
+exact occurrence. Feed-search-only; the floor is unchanged. 941 assertions (+5). Pin **6.4.20**.
+
+### Changed
+- **Occurrence-granular match model** (`src/fsearch.cyr`): `_fsearch_mline[k]` / `_fsearch_moff[k]` record
+  the line **and** start offset of every non-overlapping hit (`_fsearch_add_line` walks a line exactly as
+  `fsearch_render` does, so the recorded offsets coincide with the render's match-starts); `fsearch_rescan`
+  records all occurrences (over the ring **and** the pending line), `fsearch_next` / `fsearch_prev` step
+  occurrences, and `fsearch_render` now takes the current occurrence's `cur_off` (or -1) instead of a
+  whole-line current flag — so exactly one occurrence is drawn current. `feed_repaint` passes
+  `coff = (li == fsearch_cur_line()) ? fsearch_cur_off() : -1`.
+- **Cap is announced, not silent** (design principle): the per-occurrence match cap (`FSEARCH_MATCH_CAP`,
+  8192) can be reached by a very broad query over a full ring; when it is, the hint shows `i/n+` (the count
+  is a floor, never a faked total) via a new `fsearch_saturated`. Caught by the pre-cut diff review.
+- **5 assertions** (`tests/thoth.tcyr`, `test_fsearch`): a single line with two `echo` hits counts as 2 and
+  n/N steps between the two offsets (the exact screenshot case); the render tests now pass an occurrence
+  offset for the current-match styling.
+
 ## [0.18.4] - 2026-07-08
 
 **Feed search — Ctrl-F / `/find` over the scrollback: highlight matches inline, jump between them with
