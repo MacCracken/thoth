@@ -7,6 +7,38 @@
 
 ## Version
 
+**0.17.4** — **turn interrupt** (Esc aborts a streaming turn without exiting the session), 2026-07-07.
+**Closes the 0.17.x input-completeness line.** Esc during a streaming turn (plain or agentic) stops it
+cleanly: the partial output stays in the feed with an honest `— interrupted` marker (never presented as
+complete), history stays consistent, and control returns to the composer — before, only Ctrl-C (whole-
+session teardown) could stop a runaway turn. NEW **`intr_*` module** (`src/tui.cyr`): a turn runs in COOKED
+mode (`tui_run_line` drops to canonical so the t-ron `read_line` confirm works), which line-buffers input,
+so each streaming read is bracketed by a non-canonical **`VMIN=0/VTIME=0` poll termios** — `intr_arm`
+installs it (saving the cooked termios into a PRIVATE buffer, NOT via darshana's `tty_raw`/`tty_cooked`, so
+their raw bookkeeping + the post-turn `tty_raw(0)` stay intact), `intr_poll` drains stdin per SSE frame
+(any Esc → `_intr_flag`), `intr_disarm` restores cooked (for the following confirm), `intr_note` lands the
+feed-only marker. **GATED on `out_mode()==OUT_RING`** (TUI capture path) + the ioctls are **`#ifdef
+CYRIUS_TARGET_LINUX`** (darshana's `TCGETS`/`TCSETS` are Linux-only), so off Linux and off the TUI it
+no-ops → **floor byte-identical** (verified: AGNOS/win/macos still build; win skips on the pre-existing
+epoll gap, not the ioctls). **Abort wiring**: both SSE callbacks (`_hoosh_sse_cb`, `_agent_sse_cb`)
+`intr_poll()` and `return 0` on Esc (sandhi stops the stream cleanly — but `[DONE]` also returns 0 and
+`sandhi_stream_stopped` is 1 for BOTH, so a thoth-side flag is the ONLY discriminator). The stream wrappers
+bracket `intr_arm`/`intr_disarm` and land the partial: `hoosh_send`'s existing "append if non-empty else
+pop the user turn" branch already yields a consistent pair; `agent_turn` gains **kind 4 = interrupted**
+(append the partial or pop; end the loop; KEEP the partial, unlike max-iters which clears it). **DESIGN-PASS
+BLOCKER folded before code**: `agent_turn`'s dispatch was three bare `if`s; a non-returning `kind==4` arm
+would fall through into `k==1`/`else` → double-append / double-pop history — fixed to a single
+`if/elif/elif/elif/else` chain. **Documented limits** (honest): streaming-only (a blocking turn is one
+synchronous POST, non-interruptible); per-frame granularity (a stalled stream is interruptible only at the
+next frame or sandhi's read timeout; an Esc during tool-exec lands at the next frame); an aborted turn's
+token/cost may be incomplete (omit-until-seen). **Two-pass adversarial review** (Workflow: understand →
+design → diff): design pass caught the blocker + the stalled-stream limit; diff pass **ZERO findings**.
+**Live interrupt behavior verifies on a real tty (`--tier=rich`), not the harness.** 875 assertions
+(unchanged — terminal I/O + turn-loop integration, no meaningful new pure seam). Pin unchanged (**6.4.16**;
+the local cycc wrapper has since drifted to 6.4.18 — a future maintenance pin bump, not bundled here).
+**The 0.17.x input-completeness line is COMPLETE** (bracketed paste, word-wise editing, mouse, OSC 52 copy,
+turn interrupt); next active line is `0.18.x` the re-renderable feed.
+
 **0.17.3** — **OSC 52 clipboard copy** (`/copy` writes the last reply to the system clipboard),
 2026-07-07. Continues the 0.17.x input-completeness line. `/copy` (`cmd_copy`, `src/commands.cyr`)
 base64-encodes `hoosh_last_reply()` (the accumulator, bounded by `HOOSH_ACC_CAP` = 64 KiB → no truncation

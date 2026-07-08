@@ -791,6 +791,7 @@ fn _agent_set_tools(raw, val, n) {
 # _agent_sse_cb: the streaming callback. Content deltas print live and accumulate
 # in _hoosh_acc; tool_call deltas fold into the per-index slots. [DONE] ends it.
 fn _agent_sse_cb(ctx, ev) {
+    if (intr_poll() == 1) { return 0; }   # 0.17.4: Esc -> stop the stream cleanly (partial kept)
     var data = sandhi_sse_event_data(ev);
     if (data == 0) { return 1; }
     if (streq(data, "[DONE]") == 1) { return 0; }
@@ -868,9 +869,12 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     if (_agent_cell == 0) { _agent_cell = alloc(8); }
     store64(_agent_cell, 0);
     mdhl_reset();    # 0.15.1: bracket the fenced-code highlighter around this iteration's stream
+    intr_arm();      # 0.17.4: enter Esc-poll mode around the stream (TUI-only; no-op off OUT_RING)
     var sr = sandhi_http_stream(_hoosh_endpoint_url(), "POST", h, _agent_req, len, &_agent_sse_cb, _agent_cell);
+    intr_disarm();   # 0.17.4: restore cooked (the following t-ron confirm reads a line in cooked mode)
     mdhl_finish();   # drain the filter (residual line + open block) before the finishing newline / status branching
     if (_hoosh_acc_len > 0) { oprintln(""); }   # finish the streamed line
+    if (intr_pending() == 1) { _agent_round_kind = 4; return 0; }   # 0.17.4: Esc aborted — kind 4, before tool-parse
     if (sandhi_stream_err(sr) != SANDHI_OK) {
         var en = sandhi_err_kind_name(sandhi_stream_err(sr));
         emit("  hoosh stream error: "); oprintln(en);
@@ -927,6 +931,7 @@ fn agent_turn(prompt) {
     var want_stream = config_hoosh_stream();
     session_history_append("user", prompt, strlen(prompt));
     _agent_work_reset();
+    intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
 
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", agentic");
     if (want_stream == 1) { ui_emit(ROLE_FAINT, ", stream"); }
@@ -939,18 +944,29 @@ fn agent_turn(prompt) {
         _hoosh_acc_reset();
         if (want_stream == 1) { _agent_iter_stream(model, sys, mem, _agent_tools_buf, tools_len); }
         else { _agent_iter_block(model, sys, mem, _agent_tools_buf, tools_len); }
+        # 0.17.4: a SINGLE if/elif chain — exactly one arm runs. (Was three bare `if`s; k==2/k==3
+        # returned so they never fell through, but the new non-returning k==4 arm MUST NOT fall into
+        # the k==1/else block below, or it would double-append / double-pop history.)
         var k = _agent_round_kind;
         if (k == 2) {
             session_history_pop_last();
             log_begin("agent_turn"); log_kv_str("result", "transport_error"); log_commit(SK_WARN);
             return 0 - 1;
-        }
-        if (k == 3) {
+        } elif (k == 3) {
             session_history_pop_last();
             log_begin("agent_turn"); log_kv_str("result", "http_error"); log_kv_int("status", _agent_round_status); log_commit(SK_WARN);
             return _agent_round_status;
-        }
-        if (k == 1) {
+        } elif (k == 4) {
+            # Esc interrupted the stream. KEEP the partial (append it, completing the user+assistant
+            # pair) or, if nothing streamed, pop the unanswered user turn; mark it in the feed; end the
+            # loop. Deliberately UNLIKE max-iters (below), which clears _hoosh_acc — the user asked to
+            # stop and see what came so far, and interrupt is TUI-only so one-shot's exit code is moot.
+            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); }
+            else { session_history_pop_last(); }
+            intr_note();
+            done = 1;
+            log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "interrupted"); log_commit(SK_WARN);
+        } elif (k == 1) {
             var raw = _agent_round_raw;
             if (raw == 0) { raw = "[]"; }
             _agent_add_assistant(raw);

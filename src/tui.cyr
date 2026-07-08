@@ -1422,6 +1422,72 @@ fn tui_bpaste_disable() { emit_raw("\x1b[?2004l"); return 0; }
 fn tui_mouse_enable() { emit_raw("\x1b[?1000h\x1b[?1006h"); return 0; }
 fn tui_mouse_disable() { emit_raw("\x1b[?1006l\x1b[?1000l"); return 0; }
 
+# --- turn interrupt (0.17.4): Esc aborts a streaming turn without exiting the session -------------
+# A turn runs in COOKED mode (tui_run_line drops to canonical so the t-ron read_line confirm works),
+# which line-buffers input — a lone Esc is not readable by an ordinary read. So each streaming read is
+# bracketed by a non-canonical, non-blocking (VMIN=0/VTIME=0) poll mode: the SSE callback drains stdin
+# per frame and, on Esc, sets _intr_flag and returns 0 (sandhi stops the stream cleanly). GATED on
+# out_mode()==OUT_RING (the TUI capture path) so the REPL/piped/one-shot floor never touches the
+# terminal and stays byte-identical. The ioctls are Linux-only (darshana's TCGETS/TCSETS are
+# #ifdef CYRIUS_TARGET_LINUX); off Linux this degrades to a no-op (no interrupt), like the base termios.
+var _intr_saved = 0;          # cooked termios saved by intr_arm (lazy 60B alloc)
+var _intr_active = 0;         # 1 while the poll-mode termios is installed
+var _intr_flag = 0;           # 1 once Esc was seen THIS turn
+
+fn intr_reset() { _intr_flag = 0; return 0; }     # call ONCE at turn start (hoosh_send / agent_turn)
+fn intr_pending() { return _intr_flag; }
+
+# intr_arm: install the non-canonical VMIN=0/VTIME=0 poll termios around one streaming read. Saves the
+# current (cooked) termios into a PRIVATE buffer so intr_disarm can restore it — it does NOT use
+# darshana's tty_raw/tty_cooked (which would clobber their single saved-termios / _tty_in_raw state and
+# strand the post-turn tty_raw at tui_run_line). Does NOT touch _intr_flag (that spans the whole turn).
+fn intr_arm() {
+    _intr_active = 0;
+    if (out_mode() != OUT_RING) { return 0; }        # TUI-only -> floor byte-identical
+    #ifdef CYRIUS_TARGET_LINUX
+    if (_intr_saved == 0) { _intr_saved = alloc(60); }
+    if (syscall(SYS_IOCTL, 0, TCGETS, _intr_saved) < 0) { return 0; }   # not a tty -> stay disarmed
+    var work[60];
+    var i = 0;
+    while (i < 60) { store8(&work + i, load8(_intr_saved + i)); i = i + 1; }
+    _tty_apply_raw_flags(&work);                      # ICANON/ECHO/ISIG off (darshana; sets VMIN=1)
+    store8(&work + TIO_CC_BASE + TIO_VMIN, 0);         # override to VMIN=0 + VTIME=0: read returns at once
+    store8(&work + TIO_CC_BASE + TIO_VTIME, 0);
+    if (syscall(SYS_IOCTL, 0, TCSETS, &work) < 0) { return 0; }
+    _intr_active = 1;
+    #endif
+    return 0;
+}
+
+# intr_poll: while armed, non-blockingly DRAIN pending stdin; set _intr_flag if any byte is Esc (27).
+# All pending bytes are consumed so mid-turn keystrokes don't leak into the next composer read. Any Esc
+# — including the lead byte of an arrow/mouse/paste sequence typed mid-turn — counts as interrupt (a
+# documented, mild edge). Called per SSE frame; between frames thoth blocks in the socket recv, so a
+# STALLED stream (no frame arriving) is only interruptible when the next frame lands or sandhi's read
+# timeout fires — a documented granularity limit. Safe off Linux: _intr_active is never set there.
+fn intr_poll() {
+    if (_intr_active == 0) { return _intr_flag; }
+    var c[8];
+    var n = syscall(SYS_READ, 0, &c, 1);
+    while (n > 0) {
+        if (load8(&c) == 27) { _intr_flag = 1; }
+        n = syscall(SYS_READ, 0, &c, 1);
+    }
+    return _intr_flag;
+}
+
+# intr_disarm: restore the saved cooked termios (for a following read_line confirm / the next turn).
+fn intr_disarm() {
+    #ifdef CYRIUS_TARGET_LINUX
+    if (_intr_active == 1) { syscall(SYS_IOCTL, 0, TCSETS, _intr_saved); _intr_active = 0; }
+    #endif
+    return 0;
+}
+
+# intr_note: land the honest "— interrupted" marker as its own feed line (NEVER appended to the reply
+# text that enters history — history holds the clean partial; this is a UI annotation only).
+fn intr_note() { ui_emit(ROLE_MUTED, "  — interrupted"); oprintln(""); return 0; }
+
 # _tui_mouse_click: act on a left-click at (_mouse_row, _mouse_col) (1-based). A click inside the
 # file-tree pane (shown, within cols [1,tw] and the feed band rows) selects that node — a dir toggles
 # expand/collapse, a file just selects — and focuses the tree; a click anywhere else focuses the

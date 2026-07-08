@@ -764,6 +764,7 @@ fn _hoosh_print_reply(s) {
 # (0.5.1) — printing happens before accumulation, so a saved reply may be
 # truncated to HOOSH_ACC_CAP while the on-screen output is never clipped.
 fn _hoosh_sse_cb(ctx, ev) {
+    if (intr_poll() == 1) { return 0; }   # 0.17.4: Esc -> stop the stream cleanly (partial kept)
     var data = sandhi_sse_event_data(ev);
     if (data == 0) { return 1; }
     if (streq(data, "[DONE]") == 1) { return 0; }
@@ -804,10 +805,17 @@ fn _hoosh_stream_turn(url, h, len, model) {
     store64(cell, 0);
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", stream) "); oprintln(url);
     mdhl_reset();    # 0.15.1: bracket the fenced-code highlighter around the stream
+    intr_arm();      # 0.17.4: enter Esc-poll mode around the stream (TUI-only; no-op off OUT_RING)
     var sr = sandhi_http_stream(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell);
+    intr_disarm();   # 0.17.4: restore cooked (for a following confirm / the next turn)
     mdhl_finish();   # flush the filter (residual line + any open block) BEFORE status branching, so every exit path drains
     var serr = sandhi_stream_err(sr);
     var emitted = load64(cell);
+    if (intr_pending() == 1) {                        # 0.17.4: Esc aborted the stream — land the partial honestly
+        if (emitted > 0) { oprintln(""); }            # end the streamed line
+        intr_note();                                  # the "— interrupted" marker (feed-only)
+        return 0;                                     # rc==0 -> hoosh_send appends the partial (consistent pair)
+    }
     if (serr != SANDHI_OK) {
         if (emitted > 0) { oprintln(""); }
         var ename = sandhi_err_kind_name(serr);
@@ -890,6 +898,7 @@ fn hoosh_send(prompt) {
     var want_stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     _hoosh_acc_reset();
+    intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
 
     var len = 0;
     if (multi == 1) {

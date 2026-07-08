@@ -10,16 +10,16 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.17.3):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.17.4):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` toolchain refresh to
 > Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a TOML array-value getter +
-> aarch64 trig polyfills) then opened the **0.17.x input-completeness line** — `0.17.0`
-> **bracketed paste** (multi-line paste lands in the composer, never submits at the first
-> newline), `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow word motion, Ctrl-W,
-> Ctrl-K — readline parity), `0.17.2` **SGR mouse** (wheel scrolls the feed, click focuses
-> composer/tree, tree-row click selects/expands), and `0.17.3` **OSC 52 clipboard copy**
-> (`/copy` — works on AGNOS + over SSH): the 0.10.x data producers
+> aarch64 trig polyfills) then drove the **0.17.x input-completeness line to COMPLETION** —
+> `0.17.0` **bracketed paste**, `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow, Ctrl-W,
+> Ctrl-K), `0.17.2` **SGR mouse** (wheel scroll, click focus, tree-row select/expand), `0.17.3`
+> **OSC 52 clipboard copy** (`/copy` — works on AGNOS + over SSH), and `0.17.4` **turn interrupt**
+> (Esc aborts a streaming turn without killing the session). The next active line is **`0.18.x`
+> the re-renderable feed**. The 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -254,15 +254,18 @@ selection stays content-blind.
   output is never polluted; best-effort (never asserts success); not t-ron-gated (SET only, no query —
   same class as `/read`). Two-pass adversarial review: design pass folded a should-fix + a nit, diff pass
   zero findings. 875 assertions. See CHANGELOG/state.md.
-- **`0.17.4` — turn interrupt.** Esc aborts a streaming/agentic turn WITHOUT exiting
-  the session — today Ctrl-C tears down the whole session and input is only read
-  between turns, so a runaway agentic loop costs you the session and its context.
-  Needs a non-blocking key poll inside the SSE callback + the agent iteration loop;
-  on abort, land any partial output honestly in the feed (announced `— interrupted`,
-  never presented as a complete answer), keep the conversation history consistent,
-  and return to the composer. The one item in this line that touches the turn paths
-  (hoosh/agent) rather than decode/paint — its own design pass + adversarial review
-  before cut.
+- **`0.17.4` — turn interrupt. DONE (2026-07-07).** Esc aborts a streaming turn (plain or
+  agentic) without exiting the session: partial output stays in the feed with an honest
+  `— interrupted` marker, history stays consistent, control returns to the composer. NEW
+  `intr_*` module (a `VMIN=0/VTIME=0` poll termios bracketed around each streaming read, since a
+  turn runs cooked for the confirm); both SSE callbacks `intr_poll()`→`return 0` on Esc; a
+  thoth-side flag discriminates abort from `[DONE]`; `agent_turn` gains an interrupted outcome
+  (kind 4) that keeps the partial. TUI-only + `#ifdef CYRIUS_TARGET_LINUX` → floor byte-identical
+  (agnos/win/macos still build). Documented limits: streaming-only (a blocking turn is one POST);
+  per-frame granularity (a stalled stream / an Esc during tool-exec lands at the next frame).
+  Two-pass adversarial review: design pass caught + folded a history-dispatch BLOCKER (kind==4
+  fall-through) + the stalled-stream limit, diff pass zero findings. 875 assertions. See
+  CHANGELOG/state.md. **The 0.17.x input-completeness line is COMPLETE.**
 
 ### 0.18.x — the re-renderable feed (PLANNED)
 

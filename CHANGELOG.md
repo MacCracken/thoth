@@ -2,6 +2,50 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.17.4] - 2026-07-07
+
+**Turn interrupt — Esc aborts a streaming turn without exiting the session. Closes the 0.17.x line.**
+Pressing **Esc** during a streaming turn (plain or agentic) now stops it cleanly: the partial output stays
+in the feed with an honest `— interrupted` marker (never presented as a complete answer), the conversation
+history stays consistent, and control returns to the composer — where before, only Ctrl-C (which tears down
+the whole session) could stop a runaway turn. TUI-only and Linux-gated (the poll uses termios ioctls that
+are `#ifdef CYRIUS_TARGET_LINUX`); the REPL/piped/one-shot floor is **byte-identical** by construction.
+875 assertions (unchanged — the cut is terminal I/O + turn-loop integration with no meaningful new pure
+seam; verified by the two-pass review + live tty). Pin **6.4.16**.
+
+### Added
+- **`intr_*` interrupt module** (`src/tui.cyr`): `intr_reset` (per-turn), `intr_arm`/`intr_disarm`
+  (per-stream — install/restore a non-canonical, non-blocking `VMIN=0/VTIME=0` termios so a lone Esc is
+  readable while a turn runs in cooked mode; **gated on `out_mode()==OUT_RING`** so only the TUI capture
+  path ever touches the terminal), `intr_poll` (drain pending stdin per SSE frame; any Esc → set the flag),
+  `intr_pending`, and `intr_note` (the feed-only marker). arm/disarm use a PRIVATE saved-termios buffer
+  and never touch darshana's raw-mode bookkeeping, so `tui_run_line`'s post-dispatch `tty_raw(0)` still
+  re-enters the TUI cleanly. The ioctls are `#ifdef CYRIUS_TARGET_LINUX`; off Linux the whole thing
+  no-ops (no interrupt), matching darshana's own termios gating.
+- **Streaming abort wiring**: both SSE callbacks (`_hoosh_sse_cb`, `_agent_sse_cb`) call `intr_poll()` and
+  `return 0` on Esc (sandhi stops the stream cleanly). The stream wrappers (`_hoosh_stream_turn`,
+  `_agent_iter_stream`) bracket the stream with `intr_arm`/`intr_disarm` and, on `intr_pending()`, land the
+  partial: `hoosh_send`'s existing "append the accumulated reply if non-empty, else roll back the user
+  turn" branch already keeps a consistent user+assistant pair; `agent_turn` gains a new **interrupted
+  outcome (kind 4)** that appends the partial (or pops the user turn) and ends the loop — deliberately
+  *keeping* the partial (unlike the max-iters branch, which clears it).
+
+### Fixed / Process
+- **Blocker caught in the design pass** (folded before code): `agent_turn`'s round dispatch was three bare
+  `if`s; a non-returning `kind==4` arm would have fallen through into the `k==1`/`else` block and
+  double-appended (or, with no content, double-popped) history. The dispatch is now a single
+  `if/elif/elif/elif/else` chain so exactly one arm runs.
+- **Documented limitations** (honest, by design): interrupt is **streaming-only** — a blocking turn
+  (`[hoosh].stream=false`) is one synchronous POST and is not interruptible mid-flight. The Esc poll runs
+  per SSE frame, so a **stalled** stream (gateway connected but sending nothing) is only interruptible
+  when the next frame arrives or sandhi's read timeout fires. An Esc pressed during tool execution (cooked
+  mode) lands at the next streaming frame. An aborted turn's token/cost may be incomplete (the trailing
+  usage frame is skipped — omit-until-seen). All announced, never faked.
+- **Two-pass adversarial review** (Workflow): an understand phase mapped the streaming/agent/terminal/
+  history mechanics; a **design pass** (3 lenses) caught the dispatch blocker + the stalled-stream limit;
+  a **diff pass** (3 lenses, each finding independently adversarially verified) returned **zero findings**.
+  **The live interrupt behavior verifies on a real tty (`--tier=rich`), not the harness.**
+
 ## [0.17.3] - 2026-07-07
 
 **OSC 52 clipboard copy — `/copy` writes the last model reply to the system clipboard.**
