@@ -926,12 +926,13 @@ fn spin_end() { _spin_active = 0; return 0; }   # caller redraws the hint row af
 # each frame. This is what makes the file-tree pane (0.9.3, a narrower feed
 # column) and instant SIGWINCH (0.9.2, a pure recompute+repaint) possible.
 var _paint_buf = 0;
-# PAINT_CAP stays sufficient under soft-wrap (0.11.3): a sealed slot is capped at
-# FEED_LINE_CAP (2048) and pending at 2047 by the feed store, and feed_clip_seg's
-# leading carry is a COPY of skip-region bytes — so carry + the paint window draw
-# from DISJOINT byte budgets of the same <=2048-byte src. Max output is
-# ~min(64,src) + (rest of src) + one ui_reset() < 2052, comfortably under 2112.
-var PAINT_CAP = 2112;        # FEED_LINE_CAP (2048) + headroom for the carry + defensive reset
+# PAINT_CAP must fit the EXPANDED output of one paint call (0.18.0). A sealed slot is <= FEED_LINE_CAP
+# (2048) bytes, but those bytes may be role MARKERS (2 B each) that feed_clip_seg EXPANDS to the current
+# theme's concrete SGR (<= ~19 B truecolor). Worst case a slot is ~1024 markers -> ~19.5 KB expanded;
+# add the paint window's text + the leading carry (also expanded) + a defensive ui_reset(). 24 KiB
+# clears that with headroom (one-time alloc; the ring itself is already ~4 MiB). Pre-0.18.0 this was
+# 2112 (slots stored concrete SGR, so a slot's paint output was <= the 2048 stored bytes).
+var PAINT_CAP = 24576;       # expanded worst case of a marker-packed slot + carry + reset
 
 # feed_repaint: paint the newest feed lines into rows [feed_top..feed_bot], each
 # clipped to the terminal width (the 0.9.3 pane will narrow this). Uses emit_raw

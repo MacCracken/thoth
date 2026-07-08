@@ -395,6 +395,40 @@ fn ui_reset() {
     return _ui_reset_ptr;
 }
 
+# UI_SGR_RESET: the sentinel ui_role_of_sgr returns for the reset cstr (distinct from a role 0..7).
+var UI_SGR_RESET = 100;
+
+# _ui_cstr_eq_n: 1 iff the NUL-terminated cstr `a` is EXACTLY `n` bytes long and equals b[0..n).
+fn _ui_cstr_eq_n(a, b, n) {
+    var j = 0;
+    while (j < n) { if (load8(a + j) != load8(b + j)) { return 0; } j = j + 1; }
+    if (load8(a + n) != 0) { return 0; }              # `a` must end exactly at n (no longer)
+    return 1;
+}
+
+# ui_role_of_sgr: reverse-map an SGR escape at src[i..i+sl) to the semantic ROLE that produced it — a
+# role 0..7, UI_SGR_RESET for the reset cstr, or -1 for anything else. EXACT whole-string byte match
+# against the cached per-role SGR prefixes + the reset (so ui_reset_fg `ESC[39m`, ui_bg `ESC[48;..m` and
+# ui_eol `ESC[K` are NEVER matched — they stay verbatim, keeping diff-row output byte-identical). Backs
+# the feed's seal-time reverse-map (0.18.0): the ring stores a compact role MARKER instead of the
+# theme-concrete SGR, so a later `/theme` switch can re-resolve it. Requires a real `ESC [ ... m` CSI.
+fn ui_role_of_sgr(src, i, sl) {
+    if (sl < 3) { return 0 - 1; }                     # need at least ESC [ m
+    if (load8(src + i + 1) != 91) { return 0 - 1; }   # not a CSI ('[')
+    if (load8(src + i + sl - 1) != 109) { return 0 - 1; }   # does not end in 'm' (SGR)
+    if (_ui_reset_ptr != 0) {
+        if (_ui_cstr_eq_n(_ui_reset_ptr, src + i, sl) == 1) { return UI_SGR_RESET; }
+    }
+    if (_ui_role_ptr == 0) { return 0 - 1; }
+    var r = 0;
+    while (r < UI_ROLE_COUNT) {
+        var p = load64(_ui_role_ptr + r * 8);
+        if (p != 0) { if (_ui_cstr_eq_n(p, src + i, sl) == 1) { return r; } }
+        r = r + 1;
+    }
+    return 0 - 1;
+}
+
 # ui_bg: the background-tint escape for a diff row (which 0=add, 1=del), or "" at the
 # plain tier / below 256-color (row tints aren't drawn there). Stable for the session.
 fn ui_bg(which) {

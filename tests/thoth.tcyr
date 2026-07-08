@@ -2124,6 +2124,82 @@ fn _t_strip_sgr(dst, src, len) {
     store8(dst + w, 0);
     return w;
 }
+# re-renderable feed (0.18.0): the ring stores role MARKERS (reverse-mapped at seal); the painter
+# EXPANDS them to the current theme's concrete SGR — byte-identical output now, recolorable later.
+fn test_feed_markers() {
+    test_group("re-renderable feed: role markers (feed.cyr, 0.18.0)");
+    ui_force(PT_ANSI, CD_TRUE);
+    # reverse-map exactness: a role SGR -> its role; reset -> UI_SGR_RESET; ui_reset_fg (ESC[39m) -> -1
+    var g = ui_sgr(ROLE_GREEN);
+    assert_eq(ui_role_of_sgr(g, 0, strlen(g)), ROLE_GREEN, "role SGR reverse-maps to its role");
+    var rs = ui_reset();
+    assert_eq(ui_role_of_sgr(rs, 0, strlen(rs)), UI_SGR_RESET, "reset SGR -> UI_SGR_RESET");
+    var rf = ui_reset_fg();
+    assert_eq(ui_role_of_sgr(rf, 0, strlen(rf)), 0 - 1, "ui_reset_fg (ESC[39m) is NOT role/reset -> verbatim");
+    # packing: a ui_emit line stores a 2-byte MARKER, not the concrete SGR; visible-cols unchanged
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "ok");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 1, "one line sealed");
+    assert_eq(feed_vis(0), 2, "visible cols = 2 (markers are zero-width)");
+    var sp = feed_line_ptr(0);
+    assert_eq(load8(sp), 27, "slot starts with ESC (a marker)");
+    assert_eq(load8(sp + 1), FEED_MARK_ROLE0 + ROLE_GREEN, "green role stored as its 2-byte marker");
+    # BYTE-IDENTICAL: painting the marker slot reproduces the concrete SGR output exactly
+    var pd[512];
+    var pw = feed_clip(&pd, 512, sp, feed_line_len(0), 40);
+    store8(&pd + pw, 0);
+    var gold[512];
+    var go = 0;
+    go = _ftree_append_cstr(&gold, go, 512, ui_sgr(ROLE_GREEN));
+    go = _ftree_append_cstr(&gold, go, 512, "ok");
+    go = _ftree_append_cstr(&gold, go, 512, ui_reset());
+    store8(&gold + go, 0);
+    assert(streq(&pd, &gold), "painted markers == concrete SGR golden (BYTE-IDENTICAL)");
+    # BYTE-IDENTICAL via feed_clip_seg — the REAL paint path (feed_repaint paints only through _seg);
+    # skip 0 over a fitting line must equal the same concrete golden.
+    var ps[512];
+    var psw = feed_clip_seg(&ps, 512, sp, feed_line_len(0), 0, 40);
+    store8(&ps + psw, 0);
+    assert(streq(&ps, &gold), "feed_clip_seg (the real paint path) markers == concrete golden (BYTE-IDENTICAL)");
+    # sanitizer: a raw ESC + marker-range byte in captured content is neutralized (no forged marker)
+    feed_init();
+    out_mode_set(OUT_RING);
+    var raw[8];
+    store8(&raw + 0, 27); store8(&raw + 1, FEED_MARK_ROLE0); store8(&raw + 2, 120);   # ESC 0xB0 'x'
+    feed_write(&raw, 3);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert(load8(feed_line_ptr(0)) != 27, "sanitizer dropped the raw ESC before a marker-range byte");
+    # a non-role escape (ESC[1m bold) passes through verbatim (stored + painted as-is)
+    feed_init();
+    out_mode_set(OUT_RING);
+    var bold[8];
+    store8(&bold + 0, 27); store8(&bold + 1, 91); store8(&bold + 2, 49); store8(&bold + 3, 109); store8(&bold + 4, 120);   # ESC [ 1 m x
+    feed_write(&bold, 5);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(load8(feed_line_ptr(0)), 27, "non-role ESC[1m stored verbatim (ESC kept)");
+    assert_eq(load8(feed_line_ptr(0) + 2), 49, "ESC[1m intact ('1')");
+    # soft-wrap: color continues across a segment boundary via the carry (markers)
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "aaaaaa");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var seg[512];
+    var sw = feed_clip_seg(&seg, 512, feed_line_ptr(0), feed_line_len(0), 3, 3);   # cols [3,6)
+    var strip[64];
+    _t_strip_sgr(&strip, &seg, sw);
+    assert(streq(&strip, "aaa"), "soft-wrap segment 1 has the 3 wrapped glyphs");
+    assert_eq(load8(&seg), 27, "segment 1 starts with the carried color (an SGR)");
+    assert_eq(_t_has_esc(&seg, sw), 1, "segment 1 carries the color across the wrap");
+    ui_force(PT_PLAIN, CD_NONE);   # restore the floor tier for subsequent tests
+    return 0;
+}
+
 # _t_mdhl_line: populate the mdhl line buffer for the pure fence-scan tests.
 fn _t_mdhl_line(s) {
     _mdhl_ensure();
@@ -2478,6 +2554,7 @@ fn main() {
     test_feed();
     test_feed_ring();
     test_softwrap();
+    test_feed_markers();
     test_capture();
     test_mdhl_tag_map();
     test_mdhl_fence();

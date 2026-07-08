@@ -2,6 +2,53 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.0] - 2026-07-07
+
+**The re-renderable feed — the ring stores role metadata, SGR is applied at paint. Plus a Cyrius 6.4.18 refresh.**
+Opens the 0.18.x line. The feed ring used to store PAINTED bytes (the current theme's concrete SGR baked
+into each slot), which is why `/theme` could not recolor scrollback (0.10.0 limit) and why the 0.15.1 live
+fenced-code card was deferred. The ring now stores logical text + compact **role MARKERS**, and the painter
+**expands a marker to the current theme's SGR at paint time** — with **byte-identical rendered output** for
+the current theme (a golden test proves it on both paint paths). This is the architectural keystone; the
+payoff (theme-recolor scrollback, the live card, feed search, glyph-width) is the later 0.18.x items.
+Bundles the **toolchain refresh to Cyrius 6.4.18** (pin-only: `cyrius lib sync` re-vendored the declared
+floor subset with **zero content change** — the 6.4.17/6.4.18 changes were elsewhere; drift cleared). 890
+assertions (+15). Pin **6.4.18**.
+
+### Added / Changed
+- **Role markers** (`src/feed.cyr`): a marker is `ESC` + a private byte — `0xB0..0xB7` (role 0..7) or
+  `0xBF` (reset). To the existing escape scanner a marker is a 2-byte escape, so it is zero visible width,
+  copied whole, and never severed — **no scanner change**. `feed_visible_cols` / soft-wrap row math are
+  unchanged (a marker is zero-width, exactly like the SGR it replaces).
+- **`ui_role_of_sgr`** (`src/ui.cyr`): reverse-maps an SGR escape to its semantic role by an **exact
+  whole-string byte match** against the 8 cached role SGR prefixes + the reset (so `ui_reset_fg` `ESC[39m`,
+  `ui_bg`, `ui_eol` are never matched — diff-row output stays verbatim + byte-identical). `ui_sgr` itself
+  is **unchanged** (the many `emit_raw(ui_sgr(role))` paint-path sites — spinner/tree/rule — that run while
+  `OUT_RING` is set must keep getting concrete SGR; the capture happens at store time, not in the emit
+  layer).
+- **`_feed_pack`** (`src/feed.cyr`): the seal-time reverse-map — rewrites each recognized role/reset SGR to
+  its 2-byte marker, preserves `_feed_safe_copy`'s contracts (whole-unit truncation at `FEED_LINE_CAP`,
+  drop a severed trailing escape), and **sanitizes** a raw `ESC` + `0xB0..0xBF` in untrusted captured
+  output (drops that ESC) so the marker space is **unforgeable** by content.
+- **Paint-time expansion** (`feed_clip` + `feed_clip_seg`, both the PAINT phase and the soft-wrap SKIP/carry
+  phase): a role marker expands to `ui_sgr(role)`, a reset marker to `ui_reset()`, using the **expanded
+  length** in the capacity check; the soft-wrap carry stores the expanded SGR so color continues correctly
+  across a wrap. `PAINT_CAP` raised `2112 → 24576` to fit a marker-dense slot's expanded worst case (a
+  one-time alloc; the ring is already ~4 MiB).
+- **15 assertions** (`tests/thoth.tcyr`, `test_feed_markers`): reverse-map exactness (`ui_reset_fg` stays
+  verbatim), packing (a `ui_emit` line stores a 2-byte marker; visible-cols unchanged), the **byte-identical
+  golden** on BOTH `feed_clip` and the real paint path `feed_clip_seg`, the collision sanitizer, a non-role
+  escape passing through verbatim, and color continuing across a soft-wrap segment boundary.
+
+### Process
+- **Two-pass adversarial review** (Workflow): an understand phase confirmed a mode-aware `ui_sgr` would be
+  unsafe (paint-path `emit_raw(ui_sgr)` sites) → reverse-map at store; a **design pass** (3 lenses) caught a
+  load-bearing blocker (the marker-expand branch is required in feed_clip + both feed_clip_seg phases), the
+  `PAINT_CAP` expansion-sizing, the exact-match requirement, and folded a collision sanitizer; a **diff pass**
+  (3 lenses, each finding independently adversarially verified) surfaced one should-fix (add a
+  `feed_clip_seg` byte-identical golden — the real paint path) and otherwise **zero defects**. **The live
+  render verifies on a real tty (`--tier=rich`); the byte-identical property is harness-proven.**
+
 ## [0.17.4] - 2026-07-07
 
 **Turn interrupt — Esc aborts a streaming turn without exiting the session. Closes the 0.17.x line.**

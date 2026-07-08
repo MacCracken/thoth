@@ -35,6 +35,18 @@
 var FEED_ROWS = 2048;
 var FEED_LINE_CAP = 2048;
 
+# Role MARKERS (0.18.0 re-renderable feed): instead of baking a theme's concrete SGR into a stored slot
+# (which is why /theme couldn't recolor scrollback), the seal-time packer (_feed_pack) rewrites each
+# recognized role/reset SGR to a compact 2-byte MARKER — `ESC` (27) + a private byte — and the painter
+# (feed_clip/_seg) EXPANDS a marker back to the CURRENT theme's SGR. A marker is a 2-byte escape to the
+# scanner (_feed_esc_len returns 2 for ESC + non-'['), so it is zero visible width, copied whole, and
+# never severed — no scanner change. role marker = ESC + (FEED_MARK_ROLE0 + role) for role 0..7
+# (0xB0..0xB7); reset marker = ESC + FEED_MARK_RESET (0xBF). 0xB8..0xBE are reserved (never produced).
+# The packer SANITIZES any raw `ESC` + 0xB0..0xBF in untrusted captured output (it drops that ESC), so
+# no stored content can be mis-read back as a marker — the marker space is unforgeable.
+var FEED_MARK_ROLE0 = 176;   # 0xB0
+var FEED_MARK_RESET = 191;   # 0xBF
+
 var _feed_base = 0;        # alloc(FEED_ROWS*FEED_LINE_CAP), lazy — the slot bytes
 var _feed_len = 0;         # alloc(FEED_ROWS*8): stored byte length per slot
 var _feed_vis = 0;         # alloc(FEED_ROWS*8): cached visible cols per slot
@@ -154,11 +166,24 @@ fn feed_clip(dst, dst_cap, src, src_len, max_cols) {
         if (b == 27) {
             var sl = _feed_esc_len(src, i, src_len);
             var lastb = load8(src + i + sl - 1);
-            # Suppress only a real CSI erase-line (ESC[...K, sl>=3 implies the '['
-            # was found by _feed_esc_len). A 2-byte ESC-K (sl==2) — which untrusted
-            # model/tool output captured into the feed could contain — is NOT a
-            # CSI and is copied verbatim, not dropped.
-            if ((sl >= 3) && (lastb == 75)) {
+            var b1m = 0; if (sl >= 2) { b1m = load8(src + i + 1); }
+            # 0.18.0: a role/reset MARKER (ESC + 0xB0..0xB7 / 0xBF) expands to the CURRENT theme's
+            # concrete SGR — the capacity check uses the EXPANDED length, and only the expanded bytes are
+            # copied (never the 2 marker bytes). Then: suppress a real CSI erase-line (ESC[...K, sl>=3
+            # implies the '[' was found by _feed_esc_len; a 2-byte ESC-K in untrusted output is not a
+            # CSI and is copied verbatim); else copy the escape verbatim.
+            if ((sl == 2) && (((b1m >= FEED_MARK_ROLE0) && (b1m <= (FEED_MARK_ROLE0 + 7))) || (b1m == FEED_MARK_RESET))) {
+                var em = ui_reset();
+                if (b1m != FEED_MARK_RESET) { em = ui_sgr(b1m - FEED_MARK_ROLE0); }
+                var eml = strlen(em);
+                if ((wrote + eml) <= dst_cap) {
+                    var km = 0;
+                    while (km < eml) { store8(dst + wrote + km, load8(em + km)); km = km + 1; }
+                    wrote = wrote + eml;
+                    if (b1m == FEED_MARK_RESET) { sgr_open = 0; } else { sgr_open = 1; }
+                }
+                i = i + sl;
+            } elif ((sl >= 3) && (lastb == 75)) {
                 i = i + sl;                           # ESC[...K -> suppress
             } else {
                 if ((wrote + sl) <= dst_cap) {
@@ -272,18 +297,35 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
             if (b == 27) {
                 var sl = _feed_esc_len(src, i, src_len);
                 var lastb = load8(src + i + sl - 1);
+                var b1m = 0; if (sl >= 2) { b1m = load8(src + i + 1); }
+                var ismark = 0;                                  # 0.18.0: a role/reset MARKER?
+                if ((sl == 2) && (((b1m >= FEED_MARK_ROLE0) && (b1m <= (FEED_MARK_ROLE0 + 7))) || (b1m == FEED_MARK_RESET))) { ismark = 1; }
                 var isk = 0;
                 if ((sl >= 3) && (lastb == 75)) { isk = 1; }     # a real CSI ESC[...K
                 if (emitted == 0) {                              # SKIP: track SGR into carry, drop the escape
-                    if (isk == 0) {
-                        if (lastb == 109) {                      # an SGR (ends 'm')
+                    if (ismark == 1) {                           # 0.18.0: carry the marker's EXPANDED SGR
+                        if (b1m == FEED_MARK_RESET) { _feed_carry_len = 0; }
+                        else { var es = ui_sgr(b1m - FEED_MARK_ROLE0); _feed_carry_append(es, 0, strlen(es)); }
+                    } elif (isk == 0) {
+                        if (lastb == 109) {                      # a verbatim SGR (ends 'm')
                             if (_feed_is_reset(src, i, sl) == 1) { _feed_carry_len = 0; }
                             else { _feed_carry_append(src, i, sl); }
                         }
                     }
                     i = i + sl;
                 } else {                                         # PAINT: pass through (suppress ESC[...K)
-                    if (isk == 1) {
+                    if (ismark == 1) {                           # 0.18.0: expand the marker to concrete SGR
+                        var em = ui_reset();
+                        if (b1m != FEED_MARK_RESET) { em = ui_sgr(b1m - FEED_MARK_ROLE0); }
+                        var eml = strlen(em);
+                        if ((wrote + eml) <= dst_cap) {
+                            var km = 0;
+                            while (km < eml) { store8(dst + wrote + km, load8(em + km)); km = km + 1; }
+                            wrote = wrote + eml;
+                            if (b1m == FEED_MARK_RESET) { sgr_open = 0; } else { sgr_open = 1; }
+                        }
+                        i = i + sl;
+                    } elif (isk == 1) {
                         i = i + sl;
                     } else {
                         if ((wrote + sl) <= dst_cap) {
@@ -401,6 +443,51 @@ fn _feed_safe_copy(dst, dst_cap, src, src_len) {
     return wrote;
 }
 
+# _feed_pack: the seal-time reverse-map (0.18.0). Copies src[0..src_len) into the slot one WHOLE unit at
+# a time (like _feed_safe_copy: bounded by dst_cap, stopping before a unit that would overflow or a
+# severed trailing escape), BUT rewrites each recognized role/reset SGR to its 2-byte MARKER (via
+# ui_role_of_sgr), and SANITIZES a raw ESC + 0xB0..0xBF (drops that ESC) so captured content can never
+# forge a marker. Non-role escapes (diff bg/eol/reset-fg, ESC[K, 2-byte forms) and text pass verbatim —
+# so painted output is byte-identical for the current theme, and visible-cols is unchanged (a marker is
+# zero-width, exactly like the SGR it replaces). Returns bytes written.
+fn _feed_pack(dst, dst_cap, src, src_len) {
+    var i = 0;
+    var wrote = 0;
+    var stop = 0;
+    while (i < src_len) {
+        if (stop == 0) {
+            var b = load8(src + i);
+            if (b == 27) {
+                if (_feed_esc_terminated(src, i, src_len) == 0) { stop = 1; }
+                else {
+                    var sl = _feed_esc_len(src, i, src_len);
+                    var role = ui_role_of_sgr(src, i, sl);
+                    if ((role >= 0) && (role < UI_ROLE_COUNT)) {          # a role SGR -> role marker
+                        if ((wrote + 2) > dst_cap) { stop = 1; }
+                        else { store8(dst + wrote, 27); store8(dst + wrote + 1, FEED_MARK_ROLE0 + role); wrote = wrote + 2; i = i + sl; }
+                    } elif (role == UI_SGR_RESET) {                       # the reset SGR -> reset marker
+                        if ((wrote + 2) > dst_cap) { stop = 1; }
+                        else { store8(dst + wrote, 27); store8(dst + wrote + 1, FEED_MARK_RESET); wrote = wrote + 2; i = i + sl; }
+                    } else {
+                        var b1 = load8(src + i + 1);
+                        if ((sl == 2) && (b1 >= FEED_MARK_ROLE0) && (b1 <= FEED_MARK_RESET)) {
+                            i = i + 1;                                     # SANITIZE: drop a raw ESC + marker-range byte
+                        } else {                                         # a real non-role escape -> verbatim
+                            if ((wrote + sl) > dst_cap) { stop = 1; }
+                            else { var k = 0; while (k < sl) { store8(dst + wrote + k, load8(src + i + k)); k = k + 1; } wrote = wrote + sl; i = i + sl; }
+                        }
+                    }
+                }
+            } else {
+                var gl = _feed_glyph_len(src, i, src_len);
+                if ((wrote + gl) > dst_cap) { stop = 1; }
+                else { var k2 = 0; while (k2 < gl) { store8(dst + wrote + k2, load8(src + i + k2)); k2 = k2 + 1; } wrote = wrote + gl; i = i + gl; }
+            }
+        } else { i = src_len; }
+    }
+    return wrote;
+}
+
 # --- the sink: accumulate dispatch output, seal a slot per newline ------------
 
 # _feed_seal_pending: copy the pending bytes into the next ring slot (escape-
@@ -411,7 +498,7 @@ fn _feed_seal_pending() {
     feed_init_ensure();
     var slot = (_feed_head + _feed_count) % FEED_ROWS;   # == _feed_head when full
     var dst = _feed_base + slot * FEED_LINE_CAP;
-    var copied = _feed_safe_copy(dst, FEED_LINE_CAP, &_feed_pending, _feed_pending_len);
+    var copied = _feed_pack(dst, FEED_LINE_CAP, &_feed_pending, _feed_pending_len);   # 0.18.0: role SGR -> markers
     store64(_feed_len + slot * 8, copied);
     store64(_feed_vis + slot * 8, feed_visible_cols(dst, copied));
     if (_feed_count < FEED_ROWS) { _feed_count = _feed_count + 1; }

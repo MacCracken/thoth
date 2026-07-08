@@ -7,6 +7,37 @@
 
 ## Version
 
+**0.18.0** — **the re-renderable feed** (role metadata in the ring, SGR applied at paint) + a Cyrius
+**6.4.18** refresh, 2026-07-07. Opens the 0.18.x line. The feed ring stored PAINTED bytes (the theme's
+concrete SGR baked into each slot) — the reason `/theme` couldn't recolor scrollback (0.10.0) and the
+0.15.1 live fenced-code card was deferred. Now the ring stores logical text + compact **role MARKERS** and
+the painter **expands a marker to the CURRENT theme's SGR at paint** — **byte-identical rendered output**
+for the current theme (golden-tested on both paint paths). Architectural keystone; the payoff
+(theme-recolor, live card, search, glyph-width) is the later 0.18.x items. **Design constraint that fixed
+the approach**: many PAINT-PATH sites call `emit_raw(ui_sgr(role))` (spinner/tree/rule) while `OUT_RING`
+is set, so `ui_sgr` MUST stay concrete — capture happens at **store time (reverse-map), not the emit
+layer**. **Marker** = `ESC` + `0xB0..0xB7` (role) / `0xBF` (reset); to the escape scanner it is a 2-byte
+escape → zero-width, whole-copied, never severed (**no scanner change**; `feed_visible_cols`/soft-wrap math
+unchanged). NEW `ui_role_of_sgr` (`src/ui.cyr`): EXACT whole-string match of an SGR escape vs the 8 cached
+role prefixes + reset (so `ui_reset_fg`/`ui_bg`/`ui_eol` stay verbatim → diff rows byte-identical);
+`ui_sgr` unchanged. NEW `_feed_pack` (`src/feed.cyr`, seal-time): role/reset SGR → 2-byte marker, keeps
+`_feed_safe_copy`'s truncation + severed-tail contracts, and **SANITIZES** a raw `ESC`+`0xB0..0xBF` in
+untrusted output (drops the ESC) → the marker space is **unforgeable**. `feed_clip` + `feed_clip_seg`
+(PAINT + soft-wrap SKIP/carry) EXPAND a marker to concrete SGR using the **expanded length** in the
+capacity guard (carry stores the expanded SGR so color continues across a wrap). `PAINT_CAP` `2112 →
+24576` (fits a marker-dense slot's expanded worst case; one-time alloc). **TUI-only → floor byte-identical**
+(`_feed_pack` runs only at seal under OUT_RING/PT_RICH; markers never reach fd1; paint is TUI-only;
+AGNOS/win/macos still build). The **6.4.18 refresh** is pin-only — `cyrius lib sync` re-vendored the
+declared floor subset with ZERO content change (6.4.17/6.4.18 changed elsewhere; drift cleared).
+**Two-pass adversarial review** (Workflow: understand → design → diff): the design pass caught a
+load-bearing blocker (marker-expand branch required in feed_clip + BOTH feed_clip_seg phases), the
+PAINT_CAP expansion-sizing, the exact-match requirement, and folded a collision sanitizer; the diff pass
+folded one should-fix (add a `feed_clip_seg` byte-identical golden — the real paint path) and otherwise
+**zero defects**. **Live render verifies on a real tty (`--tier=rich`); byte-identical is harness-proven.**
+890 assertions (+15, `test_feed_markers`). Pin **6.4.18** (the local cycc wrapper has since drifted to
+6.4.19 — a future maintenance bump). Next in the line: `0.18.1` live-upgrading fenced-code card, `0.18.2`
+`/theme` recolors scrollback (now trivially enabled by the marker store), etc.
+
 **0.17.4** — **turn interrupt** (Esc aborts a streaming turn without exiting the session), 2026-07-07.
 **Closes the 0.17.x input-completeness line.** Esc during a streaming turn (plain or agentic) stops it
 cleanly: the partial output stays in the feed with an honest `— interrupted` marker (never presented as

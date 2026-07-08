@@ -10,16 +10,17 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.17.4):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.18.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
-> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` toolchain refresh to
-> Cyrius **6.4.16** (source-change-free; bayan `1.1.0` now ships a TOML array-value getter +
-> aarch64 trig polyfills) then drove the **0.17.x input-completeness line to COMPLETION** —
-> `0.17.0` **bracketed paste**, `0.17.1` **word-wise composer editing** (Ctrl/Alt-arrow, Ctrl-W,
-> Ctrl-K), `0.17.2` **SGR mouse** (wheel scroll, click focus, tree-row select/expand), `0.17.3`
-> **OSC 52 clipboard copy** (`/copy` — works on AGNOS + over SSH), and `0.17.4` **turn interrupt**
-> (Esc aborts a streaming turn without killing the session). The next active line is **`0.18.x`
-> the re-renderable feed**. The 0.10.x data producers
+> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
+> then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
+> **word-wise composer editing** (Ctrl/Alt-arrow, Ctrl-W, Ctrl-K), `0.17.2` **SGR mouse** (wheel
+> scroll, click focus, tree-row select/expand), `0.17.3` **OSC 52 clipboard copy** (`/copy` — works
+> on AGNOS + over SSH), `0.17.4` **turn interrupt** (Esc aborts a streaming turn without killing the
+> session); and now `0.18.0` **the re-renderable feed** — the keystone refactor to role-metadata
+> storage + paint-time SGR (byte-identical output), bundled with a Cyrius **6.4.18** refresh. The rest
+> of the **0.18.x line** (theme-recolor scrollback, live card, feed search, glyph-width) is next. The
+> 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -274,9 +275,15 @@ selection stays content-blind.
 > the 0.15.1 fenced-code card was deferred. Store logical lines + role metadata and
 > apply SGR at paint time; everything after `0.18.0` is unlocked by it.
 
-- **`0.18.0` — the refactor.** Logical-line + role-metadata storage, SGR applied at
-  repaint. Proven byte-identical rendered output before/after on the existing surface
-  (the same strip/coverage property-test discipline as 0.15.1).
+- **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
+  markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
+  the painter (`feed_clip`/`_seg`) **expands a marker to the current theme's SGR at paint** — byte-identical
+  rendered output for the current theme, golden-tested on both paint paths. `ui_sgr` unchanged (paint-path
+  `emit_raw(ui_sgr)` sites forced the reverse-map-at-store approach); markers are unforgeable (a raw
+  `ESC`+marker-byte in untrusted output is sanitized). `PAINT_CAP` raised for expansion. **Bundled the
+  Cyrius 6.4.18 refresh** (pin-only, zero floor content change). TUI-only → floor byte-identical; all lanes
+  build. Two-pass adversarial review: design pass caught a blocker + folded a collision sanitizer, diff
+  pass folded one test-coverage should-fix. 890 assertions. See CHANGELOG/state.md.
 - **`0.18.1` — live-upgrading fenced-code card.** The 0.15.1 deferred "Option C":
   streamed code renders live line-by-line, then upgrades in place to the highlighted
   block at fence close — removes the withhold-until-close gap.
