@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.20.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.20.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -301,7 +301,8 @@ selection stays content-blind.
 > meter, DONE, + the Cyrius 6.4.21 refresh) → `0.19.1` (live turn telemetry, DONE) → `0.19.2` (`/git`
 > per-file diff, DONE) → `0.19.3` (live spine-health, DONE) — **the 0.19.x session-visibility line is
 > COMPLETE**. The `0.20.x` shell/agent-hardening line then opened with `0.20.0` (`agent_enabled()` relax —
-> shell standalone, DONE); it continues at `0.20.1` (process-group kill on timeout) below.
+> shell standalone, DONE) → `0.20.1` (process-group kill on timeout + Cyrius 6.4.23, DONE); it continues at
+> `0.20.2` (Windows timed capture) below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -396,7 +397,7 @@ selection stays content-blind.
   Esc-interrupt is neutral. Verified (code-trace clean). 998 assertions. **Closes the 0.19.x
   session-visibility line.** See CHANGELOG/state.md.
 
-### 0.20.x — shell/agent hardening (0.20.0 DONE; rest PLANNED)
+### 0.20.x — shell/agent hardening (0.20.0–0.20.1 DONE; rest PLANNED)
 
 The 0.16.0 deferred follow-ups, promoted to a line:
 
@@ -407,8 +408,12 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   serial + refuse a non-local tool — the parallel/serial daimon call `strlen`s a null URL);
   `/state`+`/tools` reworded; security unchanged (shell stays t-ron-gated, local-only). Floor
   byte-identical for daimon-wired/shell-off. 1008 assertions. See CHANGELOG/state.md.
-- **`0.20.1` — process-group kill on timeout.** `setpgid` the child + `kill(-pgid)`
-  so a backgrounded grandchild dies with the `/bin/sh`.
+- **`0.20.1` — process-group kill on timeout. DONE (2026-07-08).** The shell child
+  `setpgid(0,0)`s into its own group and a timeout `kill(-pgid, SIGKILL)`s the whole group
+  (+ a direct child kill so the reap never hangs), so a backgrounded grandchild dies with
+  the `/bin/sh`. Code-trace confirmed `kill(-pid)` can never hit thoth's group; x86_64-only
+  (declared, aarch64 gapped). Proven by a marker-based grandchild-death test. Bundled the
+  Cyrius **6.4.23** refresh. 1010 assertions. See CHANGELOG/state.md.
 - **`0.20.2` — Windows timed capture.** `WaitForSingleObject` + `TerminateProcess` +
   drain, once verified on a Windows host (the lane overall stays IOCP-gated).
 - **`0.20.3` — array-value shell deny/allow config (newly unblocked, 0.16.1).** The

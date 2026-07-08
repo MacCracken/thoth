@@ -111,6 +111,16 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
         store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
     }
     if (pid == 0) {
+        # 0.20.1: put the shell in its OWN process group (leader pgid == child pid) BEFORE execve, so a
+        # timeout can SIGKILL the whole group — the shell AND any backgrounded grandchild (`cmd &`) — via
+        # kill(-pgid). Essential for the group-kill to be correct: without it the shell stays in thoth's
+        # group and kill(-child_pid) would target a non-existent group (harmless) while a grandchild leaks.
+        # setpgid(0,0) — Linux x86_64 syscall #109. DECLARED x86_64-ONLY: this whole POSIX path already uses
+        # a raw x86_64 poll(#7) below, and the aarch64 lane ships size-gapped, so it never runs there. If the
+        # aarch64 lane is ever un-gapped, BOTH numbers must become arch-conditional (aarch64 setpgid is #154,
+        # #109 there is rseq; aarch64 has no poll(#7), only ppoll) — else the group-kill silently degrades to
+        # the single-child kill and a backgrounded grandchild leaks.
+        syscall(109, 0, 0);
         sys_dup2(out_fd, 1);            # stdout -> temp file
         sys_dup2(out_fd, 2);            # stderr -> same file (merged, as a terminal shows it)
         sys_close(out_fd);
@@ -127,6 +137,8 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
         sys_exit(127);
     }
     sys_close(out_fd);                  # parent's write copy; the child holds its own duped fds
+    syscall(109, pid, pid);             # 0.20.1: parent-side setpgid(pid,pid) — closes the fork/setpgid race
+                                        # (benign EACCES if the child already exec'd, since it self-set the group)
 
     var stbuf[1];
     var elapsed = 0;
@@ -147,7 +159,12 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     }
     var timed = 0;
     if (reaped == 0) {
-        sys_kill(pid, 9);                             # SIGKILL the shell
+        # 0.20.1: SIGKILL the whole PROCESS GROUP (negative pid), so a backgrounded grandchild dies with the
+        # shell — then the shell DIRECTLY as a belt-and-suspenders (harmless ESRCH if the group kill already
+        # reaped it, and it guarantees the shell dies even in the unlikely case setpgid did not take, so the
+        # blocking reap below never hangs). The direct child is reaped here; grandchildren reparent to init.
+        sys_kill(0 - pid, 9);                         # SIGKILL the process group (shell + grandchildren)
+        sys_kill(pid, 9);                             # + the shell directly (defensive)
         sys_waitpid(pid, &stbuf, 0);                  # BLOCKING reap — no zombie
         timed = 1;
         code = 0 - 2;

@@ -2,6 +2,34 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.1] - 2026-07-08
+
+**A shell command that backgrounds a grandchild now has that grandchild killed too when the command times
+out — not just the `/bin/sh`.** Plus a Cyrius toolchain refresh to 6.4.23. Until now a timeout `SIGKILL`ed
+only the direct shell child, so `some-daemon &` (or any backgrounded process) survived and leaked. Now the
+child runs in its OWN process group and the timeout kills the whole group. 1010 assertions (+2). Pin
+**6.4.23**.
+
+### Fixed
+- **Process-group kill on timeout** (`src/exec.cyr`, the Linux `exec_shell_capture`): the child calls
+  `setpgid(0,0)` before `execve` (becoming a group leader; the parent also sets it to close the fork race),
+  and on timeout the reaper `kill(-pgid, SIGKILL)`s the whole group — the shell AND any backgrounded
+  grandchild — then `kill(pid, SIGKILL)`s the child directly (belt-and-suspenders: guarantees the child
+  dies so the blocking reap never hangs, even if `setpgid` didn't take). **Safe**: an independent code-trace
+  confirmed `kill(-pid)` can never signal thoth's own group (a pgid always equals its leader's pid, so a
+  child-pid group is either the child's isolated group or non-existent → ESRCH, never thoth). Grandchildren
+  reparent to init; thoth reaps only its direct child (no zombie leak). Declared x86_64-only (matching the
+  path's pre-existing raw `poll(#7)`; the aarch64 lane ships size-gapped — the comment documents the exact
+  arch-conditional fix if it is ever un-gapped).
+- **2 assertions** (`tests/thoth.tcyr`, `test_shell`): a backgrounded grandchild that would touch a marker
+  after 1s is confirmed **absent** after a 300ms-timeout kill + a wait past 1s (the group-kill reached it),
+  and the backgrounding parent still times out promptly (no hang).
+
+### Toolchain
+- **Pin `6.4.21 → 6.4.23`** (`cyrius.cyml` + `cyrius lib sync`, 70 floor modules; only
+  `lib/syscalls_x86_64_agnos.cyr` changed — a new `SYS_READLINK` for AGNOS, unused here). Clears the drift
+  warning; all lanes behave; 1010 assertions pass.
+
 ## [0.20.0] - 2026-07-08
 
 **The `shell` tool now works standalone — the agentic loop runs on `[shell].enabled` alone, no daimon

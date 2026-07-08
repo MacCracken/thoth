@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.20.1** — **process-group kill on shell timeout** + a Cyrius **6.4.23** refresh, 2026-07-08. A timed-out
+shell command `SIGKILL`ed only the direct `/bin/sh`, so a backgrounded grandchild (`daemon &`) survived and
+leaked. Fix (`src/exec.cyr`, the Linux `exec_shell_capture`): the child `setpgid(0,0)`s into its OWN process
+group before `execve` (the parent also `setpgid(pid,pid)`s to close the fork race), and on timeout the
+reaper `kill(-pgid, SIGKILL)`s the whole group — the shell AND any backgrounded grandchild — then
+`kill(pid, SIGKILL)`s the child directly (belt-and-suspenders so the blocking reap never hangs even if
+`setpgid` didn't take). **Safe**: an independent code-trace confirmed `kill(-pid)` can NEVER signal thoth's
+own group (a pgid always equals its leader's pid; a child-pid group is the child's isolated group or
+non-existent → ESRCH — never thoth); grandchildren reparent to init, thoth reaps only its direct child (no
+zombie leak). Declared **x86_64-only** — `syscall(109)` is setpgid on x86_64 but rseq on aarch64, matching
+the path's pre-existing raw `poll(#7)`; the aarch64 lane ships size-gapped, and the comment documents the
+exact arch-conditional fix (setpgid #154 + ppoll) if it is ever un-gapped. Proven end-to-end: a marker-based
+test confirms a backgrounded grandchild that would `touch` a marker after 1s is ABSENT after a 300ms-timeout
+kill + a wait past 1s (the group-kill reached it), and the backgrounding parent still times out promptly (no
+hang). Toolchain: pin `6.4.21 → 6.4.23` (`cyrius lib sync`, only `lib/syscalls_x86_64_agnos.cyr` moved — a
+new `SYS_READLINK` for AGNOS, unused here; drift cleared). All lanes behave. 1010 assertions (+2,
+`test_shell` grandchild-kill). Pin **6.4.23**. Next: `0.20.2` Windows timed capture.
+
 **0.20.0** — **`agent_enabled()` relax — the shell tool works standalone** (opens the 0.20.x
 shell/agent-hardening line), 2026-07-08. The agentic tool-calling loop needed daimon (an MCP host) wired, so
 the thoth-NATIVE `shell` tool (which needs no daimon) was unusable without one. `agent_enabled()`

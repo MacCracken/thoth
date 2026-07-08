@@ -631,6 +631,17 @@ fn test_shell() {
     store8(buf + n5, 0);
     assert(streq(buf, "pre"), "partial output preserved before the SIGKILL");
     assert_eq(load64(&st + 8), 1, "still timed out (partial case)");
+    # 0.20.1 process-group kill: a BACKGROUNDED grandchild dies with the shell. The grandchild would touch a
+    # marker after 1s; the parent times out at 300ms, and the group SIGKILL (kill(-pgid)) should reach the
+    # grandchild before it writes. Wait past 1s, then confirm the marker is ABSENT (it would exist if the
+    # old single-child kill had let the grandchild survive). Also proves the group-kill + reap never hangs.
+    exec_shell_capture("rm -f /tmp/thoth_gc_20_1", buf, cap, 5000, &st);
+    exec_shell_capture("(sleep 1; : > /tmp/thoth_gc_20_1) & sleep 5", buf, cap, 300, &st);
+    assert_eq(load64(&st + 8), 1, "a backgrounding parent still times out (no hang)");
+    var ngc = exec_shell_capture("sleep 1; test -e /tmp/thoth_gc_20_1 && echo LIVE || echo DEAD", buf, cap, 5000, &st);
+    store8(buf + ngc, 0);
+    assert(streq(buf, "DEAD\n"), "the backgrounded grandchild was killed with the shell (process-group kill)");
+    exec_shell_capture("rm -f /tmp/thoth_gc_20_1", buf, cap, 5000, &st);
     var n6 = exec_shell_capture("head -c 9000 /dev/zero", buf, cap, 5000, &st);
     assert(n6 <= cap, "capture never exceeds buflen (over-cap truncation, no overrun)");
     # exact-fit: reading a K-byte output with buflen = K+1 returns exactly K (not K+1) — the signal
