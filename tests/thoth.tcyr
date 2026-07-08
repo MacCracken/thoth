@@ -2196,6 +2196,32 @@ fn test_feed_markers() {
     assert(streq(&strip, "aaa"), "soft-wrap segment 1 has the 3 wrapped glyphs");
     assert_eq(load8(&seg), 27, "segment 1 starts with the carried color (an SGR)");
     assert_eq(_t_has_esc(&seg, sw), 1, "segment 1 carries the color across the wrap");
+    # theme-recolor (0.18.1): the SAME stored marker slot repaints with a DIFFERENT theme's SGR — so
+    # /theme (and ⌃T) recolor scrollback; the 0.10.0 baked-color limitation is gone. Store once; paint
+    # under dark, then light, from the identical slot.
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "hi");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var spr = feed_line_ptr(0);
+    var lenr = feed_line_len(0);
+    ui_set_theme(THEME_DARK);
+    var da[256];
+    var daw = feed_clip(&da, 256, spr, lenr, 40); store8(&da + daw, 0);
+    ui_set_theme(THEME_LIGHT);
+    var li[256];
+    var liw = feed_clip(&li, 256, spr, lenr, 40); store8(&li + liw, 0);
+    ui_set_theme(THEME_DARK);   # restore the default theme for subsequent tests
+    assert_eq(streq(&da, &li), 0, "the same slot paints DIFFERENT SGR under dark vs light (scrollback recolors)");
+    var sda[64];
+    var sli[64];
+    _t_strip_sgr(&sda, &da, daw);
+    _t_strip_sgr(&sli, &li, liw);
+    assert(streq(&sda, "hi"), "dark paint text is 'hi'");
+    assert(streq(&sli, "hi"), "light paint text is 'hi' (only the SGR changed, not the text)");
+    assert_eq(_t_has_esc(&da, daw), 1, "dark paint is colored");
+    assert_eq(_t_has_esc(&li, liw), 1, "light paint is colored");
     ui_force(PT_PLAIN, CD_NONE);   # restore the floor tier for subsequent tests
     return 0;
 }

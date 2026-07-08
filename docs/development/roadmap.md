@@ -10,17 +10,18 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.18.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.18.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
 > **word-wise composer editing** (Ctrl/Alt-arrow, Ctrl-W, Ctrl-K), `0.17.2` **SGR mouse** (wheel
 > scroll, click focus, tree-row select/expand), `0.17.3` **OSC 52 clipboard copy** (`/copy` — works
 > on AGNOS + over SSH), `0.17.4` **turn interrupt** (Esc aborts a streaming turn without killing the
-> session); and now `0.18.0` **the re-renderable feed** — the keystone refactor to role-metadata
-> storage + paint-time SGR (byte-identical output), bundled with a Cyrius **6.4.18** refresh. The rest
-> of the **0.18.x line** (theme-recolor scrollback, live card, feed search, glyph-width) is next. The
-> 0.10.x data producers
+> session); then the **0.18.x re-renderable-feed line** opened with `0.18.0` **the keystone refactor**
+> (role-metadata storage + paint-time SGR, byte-identical output; bundled Cyrius **6.4.18**) and `0.18.1`
+> **`/theme` recolors scrollback** (the keystone's first payoff — closes the 0.10.0 baked-color limitation;
+> bundled Cyrius **6.4.19**). The rest of the **0.18.x line** (live card, feed search, glyph-width, inline
+> markdown) is next. The 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -284,11 +285,17 @@ selection stays content-blind.
   Cyrius 6.4.18 refresh** (pin-only, zero floor content change). TUI-only → floor byte-identical; all lanes
   build. Two-pass adversarial review: design pass caught a blocker + folded a collision sanitizer, diff
   pass folded one test-coverage should-fix. 890 assertions. See CHANGELOG/state.md.
-- **`0.18.1` — live-upgrading fenced-code card.** The 0.15.1 deferred "Option C":
+- **`0.18.1` — `/theme` recolors scrollback. DONE (2026-07-07).** The 0.18.0 keystone's first payoff:
+  because the ring stores role markers, a theme switch (`/theme` or ⌃T) rebuilds the SGR table and the
+  post-dispatch `feed_repaint` re-expands every stored marker with the new theme — closing the 0.10.0
+  "existing lines keep baked colors" limitation for all role-colored text + syntax highlighting, with no
+  production code change beyond validation + a doc fix. Residual (documented): diff-row background tints
+  are verbatim, so they don't recolor. Bundled the Cyrius **6.4.19** refresh (pin-only, zero floor change).
+  895 assertions. See CHANGELOG/state.md. *(Reordered ahead of the live card — it was near-free once the
+  keystone landed and directly validates it.)*
+- **`0.18.2` — live-upgrading fenced-code card.** The 0.15.1 deferred "Option C":
   streamed code renders live line-by-line, then upgrades in place to the highlighted
   block at fence close — removes the withhold-until-close gap.
-- **`0.18.2` — `/theme` recolors scrollback.** Closes the 0.10.0 limitation; a theme
-  switch repaints the whole window, no `/clear` needed.
 - **`0.18.3` — feed search.** Ctrl-F / `/find` over the ring: match highlight + n/N
   jump (highlighting needs re-render — hence this line, not 0.17.x).
 - **`0.18.4` — glyph-width table.** East-Asian-Width ranges so CJK/emoji count 2

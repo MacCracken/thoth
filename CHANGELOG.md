@@ -2,6 +2,31 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.1] - 2026-07-07
+
+**`/theme` recolors scrollback — the 0.18.0 keystone's first payoff. Plus a Cyrius 6.4.19 refresh.**
+Because the feed ring now stores role MARKERS (0.18.0) rather than baked SGR, a theme switch already
+recolors the whole window: `ui_set_theme` rebuilds the SGR table and the post-dispatch `feed_repaint`
+(for `/theme`) / `tui_relayout` (for ⌃T) RE-EXPANDS every stored marker with the new theme. This closes
+the **0.10.0 limitation** ("existing feed lines keep their baked colors; `/clear` for a clean window") for
+all role-colored text and syntax highlighting — no code change beyond validating it and correcting the
+docs. Bundles the **toolchain refresh to Cyrius 6.4.19** (pin-only: `cyrius lib sync` re-vendored the
+declared floor subset with **zero content change**; drift cleared). 895 assertions (+5). Pin **6.4.19**.
+
+### Changed
+- **`cmd_theme` doc corrected** (`src/commands.cyr`): the switch now recolors existing scrollback (via the
+  0.18.0 marker store + the post-dispatch repaint), not just chrome + new output. **Residual, documented:**
+  diff-row background TINTS (`ui_bg`) are stored verbatim (not markers), so they do not recolor on a switch
+  — a bounded follow-up (the fg text + syntax colors, the bulk of the feed, recolor fully).
+- **5 assertions** (`tests/thoth.tcyr`, `test_feed_markers`): paint one stored marker slot under dark then
+  light and assert the painted SGR **differs** while the stripped text is identical (`"hi"`) and both are
+  colored — proving the same scrollback slot recolors across a theme switch.
+
+### Toolchain
+- **Pin `6.4.18 → 6.4.19`** — source-change-free; zero floor-content delta (the 6.4.19 changes were
+  elsewhere in the toolchain); clears the drift warning. All build lanes behave (linux ships, AGNOS builds,
+  aarch64 size-gapped, windows IOCP gap, macOS native-runner skip).
+
 ## [0.18.0] - 2026-07-07
 
 **The re-renderable feed — the ring stores role metadata, SGR is applied at paint. Plus a Cyrius 6.4.18 refresh.**

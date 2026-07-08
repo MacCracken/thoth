@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.18.1** — **`/theme` recolors scrollback** (the 0.18.0 keystone's first payoff) + a Cyrius **6.4.19**
+refresh, 2026-07-07. Because the feed ring stores role MARKERS (0.18.0) not baked SGR, a theme switch
+already recolors the whole window: `ui_set_theme` rebuilds the SGR table and the post-dispatch
+`feed_repaint` (`/theme`) / `tui_relayout` (⌃T) RE-EXPANDS every stored marker with the NEW theme. This
+closes the **0.10.0 limitation** ("existing feed lines keep baked colors; `/clear` for a clean window")
+for all role-colored text + syntax highlighting — **no production code change beyond validating it + a doc
+correction** (the recolor is a direct consequence of the keystone). **Residual (documented)**: diff-row
+background TINTS (`ui_bg`) are stored verbatim, so they don't recolor on a switch — a bounded follow-up.
+`cmd_theme`'s comment corrected. **6.4.19 refresh** is pin-only (`cyrius lib sync`, zero floor-content
+change; drift cleared; all lanes behave). This cut has **no new production logic** — the recolor is
+already-verified (0.18.0's diff review verified marker expansion) and now **test-proven**: a new assertion
+paints one stored marker slot under dark then light and asserts the SGR **differs** while the stripped
+text is identical, i.e. the same scrollback slot recolors. 895 assertions (+5, `test_feed_markers`). Pin
+**6.4.19**. **Live-verify on a real tty (`--tier=rich`): run a colored turn, `/theme light`, watch
+scrollback recolor.** Next in the 0.18.x line: `0.18.2` live-upgrading fenced-code card, `0.18.3` feed
+search, `0.18.4` glyph-width, `0.18.5` inline markdown.
+
 **0.18.0** — **the re-renderable feed** (role metadata in the ring, SGR applied at paint) + a Cyrius
 **6.4.18** refresh, 2026-07-07. Opens the 0.18.x line. The feed ring stored PAINTED bytes (the theme's
 concrete SGR baked into each slot) — the reason `/theme` couldn't recolor scrollback (0.10.0) and the

@@ -634,9 +634,11 @@ fn cmd_copy() {
 }
 
 # cmd_theme: switch the color theme. Bare /theme shows the active theme + the choices;
-# `/theme dark|light` switches (rebuilds the cached SGR table — chrome + new output
-# re-color; existing feed lines keep their baked colors, a transcript). rainbow is
-# announced as not-yet-available (it needs the anuenue lib vendored), never faked.
+# `/theme dark|light` switches (rebuilds the cached SGR table — chrome + new output re-color, and since
+# 0.18.0 the feed ring stores role MARKERS not baked SGR, so the post-dispatch feed_repaint RE-EXPANDS
+# existing scrollback with the new theme too — the 0.10.0 "existing lines keep baked colors" limitation
+# is gone (0.18.1). Residual: diff-row background TINTS are stored verbatim, so they don't recolor — a
+# documented follow-up). rainbow is announced as not-yet-available (needs the anuenue lib), never faked.
 fn cmd_theme(line) {
     var arg = arg_after(line);
     if (arg == 0) {
