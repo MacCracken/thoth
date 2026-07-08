@@ -1234,6 +1234,35 @@ fn test_agent() {
     test_group("agentic tool-calling");
     assert_eq(agent_enabled(), 0, "agentic off when daimon absent (no config)");
 
+    # 0.20.0 agent_enabled() truth table: [hoosh].tools is the master switch; the tool SOURCE is daimon OR
+    # the standalone shell tool. Poke the config globals directly, RESTORE the defaults at the end (else a
+    # leaked _cfg_daimon_url fails a later test). shell_supported()==1 on this POSIX test build.
+    assert_eq(shell_supported(), 1, "POSIX test build supports the shell tool");
+    _cfg_hoosh_tools = 1; _cfg_daimon_url = "http://x"; _cfg_shell_enabled = 0;
+    assert_eq(agent_enabled(), 1, "daimon wired + tools -> agentic on (unchanged floor)");
+    _cfg_daimon_url = 0; _cfg_shell_enabled = 1;
+    assert_eq(agent_enabled(), 1, "daimon ABSENT + shell enabled -> agentic on (0.20.0 standalone)");
+    _cfg_shell_enabled = 0;
+    assert_eq(agent_enabled(), 0, "daimon absent + shell off -> plain turns");
+    _cfg_hoosh_tools = 0; _cfg_shell_enabled = 1;
+    assert_eq(agent_enabled(), 0, "[hoosh].tools off -> plain turns regardless of shell");
+    _cfg_hoosh_tools = 1; _cfg_daimon_url = 0; _cfg_shell_enabled = 0;   # restore defaults
+
+    # advertise-degrade: with a 0 daimon value (no registry fetched) the tools array is built from the local
+    # tools alone; enabling shell yields a VALID array carrying a "shell" tool — the network-free proof that
+    # the agentic loop needs no daimon.
+    var stb[2048];
+    assert_eq(agent_tools_add_shell(&stb, 0), 0, "shell off -> add_shell is a no-op (advertise floor)");
+    _cfg_shell_enabled = 1;
+    var stl = agent_tools_add_shell(&stb, 0);
+    assert(stl > 0, "shell on -> add_shell builds a tools array from the empty (daimon-absent) base");
+    var sav = bayan_json_v_parse_str(&stb, stl);
+    assert(sav != 0, "the shell-only tools array parses");
+    assert_eq(bayan_json_v_arr_len(sav), 1, "exactly one tool advertised standalone");
+    var stf = bayan_json_v_obj_get(bayan_json_v_arr_get(sav, 0), "function");
+    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get(stf, "name"))), "shell"), "the advertised tool is named 'shell'");
+    _cfg_shell_enabled = 0;   # restore
+
     # tool advertisement: daimon {name,description} -> OpenAI function tools
     var ta = "[{\"name\":\"echo\",\"description\":\"echo back\"},{\"name\":\"clk\",\"description\":\"time\"}]";
     var tav = bayan_json_v_parse_str(ta, strlen(ta));

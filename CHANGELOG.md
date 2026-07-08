@@ -2,6 +2,43 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.0] - 2026-07-08
+
+**The `shell` tool now works standalone — the agentic loop runs on `[shell].enabled` alone, no daimon
+required.** Opens the 0.20.x shell/agent-hardening line (the 0.16.0 deferred follow-ups). Until now the
+agentic tool-calling loop needed an MCP host (daimon) wired, so the thoth-NATIVE `shell` tool — which needs
+no daimon — was unusable without one. `agent_enabled()` is relaxed: `[hoosh].tools` stays the master switch,
+but the tool SOURCE is now daimon OR the POSIX shell tool. 1008 assertions (+10). Pin **6.4.21**.
+
+### Changed
+- **`agent_enabled()`** (`src/agent.cyr`): `[hoosh].tools` required, then daimon-wired → on (unchanged), OR
+  `[shell].enabled && shell_supported()` → on (new). Daimon-present and shell-off sessions are byte-identical.
+- **Tool advertisement**: only fetches daimon's registry when the seam is present; standalone builds the
+  tools array from just the local tools (`agent_format_tools(buf, 0)` → `add_memory` → `add_shell`), a valid
+  `[…"shell"…]` array with no network call.
+- **`_agent_run_calls` forces serial when daimon is absent, and the serial path refuses a non-local tool
+  honestly** — both are **null-deref crash guards** (design-review catch): the parallel executor and
+  `daimon_invoke` both `strlen()` the daimon URL via `_daimon_call_endpoint`, which is NULL when daimon is
+  absent — so a round of hallucinated non-local tools (default `[hoosh].parallel=on`) would segfault. Now
+  the standalone loop never touches daimon; a hallucinated non-local tool returns "(tool not available: no
+  daimon wired)".
+- **`/state` + `/tools`** reworded for standalone: the agent row shows "shell tool, standalone", the shell
+  row's gate note points at `[hoosh].tools`, and `/tools` lists the native `shell`/`memory_write` tools when
+  daimon is absent but the loop is on (instead of "no host").
+
+### Security & scope
+- shell stays t-ron-gated (`thoth_shell`) + `[shell.deny]`/`[shell.allow]` glob-filtered + local-only,
+  never forwarded to daimon — unchanged; this cut only decides WHETHER the loop runs. No new tool is
+  advertised and none becomes ungated; security degrades **closed**.
+- Scope: keyed only on shell. `memory_write` is also local + daimon-free, but a memory-only standalone
+  session intentionally stays `agent_enabled==0` — 0.20.0 targets the POSIX shell tool.
+
+### Tests
+- **10 assertions** (`tests/thoth.tcyr`, `test_agent`): the full `agent_enabled()` truth table (daimon
+  wired → on; daimon absent + shell → on; shell off / `[hoosh].tools` off → off) by poking the config
+  globals (restored after), plus a network-free advertise round-trip proving the standalone tools array
+  parses and carries a "shell" tool.
+
 ## [0.19.3] - 2026-07-08
 
 **Live spine-health — the status bar shows whether hoosh is reachable, and a transport failure during a

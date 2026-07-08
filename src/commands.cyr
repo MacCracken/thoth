@@ -262,18 +262,21 @@ fn cmd_state() {
             emit(" — timeout "); ofmt_int(config_shell_timeout_ms()); emit("ms, cap "); ofmt_int(config_shell_output_cap()); emit("B, thoth_shell-gated");
             if (config_shell_deny_count() > 0) { emit(", "); ofmt_int(config_shell_deny_count()); emit(" deny"); }
             if (config_shell_allow_count() > 0) { emit(", "); ofmt_int(config_shell_allow_count()); emit(" allow"); }
-            if (agent_enabled() == 0) { ui_emit(ROLE_MUTED, " (gated on daimon — agentic turns only)"); }
+            if (agent_enabled() == 0) { ui_emit(ROLE_MUTED, " (agentic loop off — set [hoosh].tools = true)"); }   # 0.20.0: shell no longer needs daimon; the loop needs [hoosh].tools
+            elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_MUTED, " (standalone — no daimon)"); }
             oprintln("");
         }
     }
     ui_label("  agent   : ");
     if (agent_enabled() == 1) {
-        emit("agentic tool-calling on (daimon tools, t-ron gated, ");
+        emit("agentic tool-calling on (");
+        if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { emit("daimon tools"); } else { emit("shell tool, standalone"); }   # 0.20.0
+        emit(", t-ron gated, ");
         if (config_hoosh_parallel() == 1) { ui_emit(ROLE_GREEN, "parallel"); } else { emit("serial"); }
         oprintln(" calls)");
     }
-    elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_MUTED, "plain turns (no daimon seam; /tools needs [daimon].url)"); oprintln(""); }
-    else { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); oprintln(""); }
+    elif (config_hoosh_tools() == 0) { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); oprintln(""); }
+    else { ui_emit(ROLE_MUTED, "plain turns (no daimon seam and no shell tool; set [daimon].url or [shell].enabled)"); oprintln(""); }
     ui_label("  daimon  : ");
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in thoth.cyml)"); oprintln(""); }
     else { oprintln(config_daimon_url()); }
@@ -529,9 +532,18 @@ fn cmd_run(line) {
     return 0;
 }
 
-# cmd_tools: list the MCP tools daimon hosts. The daimon seam must be bound.
+# cmd_tools: list the MCP tools daimon hosts. When daimon is absent the model has no MCP registry — but
+# since 0.20.0 the agentic loop can still run on the thoth-native `shell` tool alone, so surface THAT
+# honestly rather than claiming no tools exist (which would contradict what a shell-standalone turn sends).
 fn cmd_tools() {
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
+        if (agent_enabled() == 1) {
+            oprintln("daimon seam absent - no MCP host; the agentic loop runs on thoth-native tools only:");
+            ui_emit(ROLE_ACCENT, "  shell"); ui_emit(ROLE_MUTED, " - run a local command (t-ron thoth_shell gated, [shell.deny]/[allow] filtered)"); oprintln("");
+            if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { ui_emit(ROLE_ACCENT, "  memory_write"); ui_emit(ROLE_MUTED, " - save a durable fact to .thoth/memory (t-ron thoth_remember gated)"); oprintln(""); }
+            oprintln("  (set [daimon].url for an MCP tool host.)");
+            return 0;
+        }
         oprintln("daimon seam absent - no MCP tool host is wired.");
         oprintln("tool listing/execution is daimon's domain (the MCP host registry).");
         oprintln("set [daimon].url in thoth.cyml. degraded honestly, never faked.");

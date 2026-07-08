@@ -7,6 +7,31 @@
 
 ## Version
 
+**0.20.0** — **`agent_enabled()` relax — the shell tool works standalone** (opens the 0.20.x
+shell/agent-hardening line), 2026-07-08. The agentic tool-calling loop needed daimon (an MCP host) wired, so
+the thoth-NATIVE `shell` tool (which needs no daimon) was unusable without one. `agent_enabled()`
+(`src/agent.cyr`) now: `[hoosh].tools` required (master switch), then daimon-wired → on (unchanged), OR
+`[shell].enabled && shell_supported()` → on (NEW). Tool source = daimon OR shell. The **advertisement** only
+fetches daimon's registry when the seam is present; standalone builds the tools array from just the local
+tools (`agent_format_tools(buf, 0)` → `add_memory` → `add_shell` = a valid `[…shell…]` array, no network).
+Two **null-deref CRASH GUARDS** (design + diff review catch): `_agent_run_calls` returns serial FIRST when
+daimon is absent, and the serial path has an `elif SEAM_DAIMON==ABSENT` refusing a non-local tool BEFORE the
+`daimon_invoke` branch — because the parallel executor and `daimon_invoke` both `strlen()` the daimon URL via
+`_daimon_call_endpoint`, which is NULL when daimon is absent, so a round of hallucinated non-local tools
+(default `[hoosh].parallel=on`) would segfault. `/state` (shell + agent rows) + `/tools` reworded — the agent
+row shows "shell tool, standalone", `/tools` lists the native shell/memory tools when daimon is absent but
+the loop is on. **Security unchanged**: shell stays t-ron-gated (`thoth_shell`) + deny/allow glob-filtered +
+local-only, never forwarded; no new tool advertised, none ungated; degrades closed. **Scope**: keyed only on
+shell — memory-only standalone intentionally stays off (0.20.0 targets the POSIX shell). **Floor**: a
+daimon-wired or shell-off session is byte-identical (every change is gated on daimon-absent or adds a clause
+that leaves the daimon path unchanged); verified live (this machine has daimon wired → `/state`/`/tools`
+unchanged). Design review found the crash-guard framing + 3 display/test nits (all folded); diff review
+raised zero. 1008 assertions (+10, `test_agent` — the full truth table by poking `_cfg_*` globals + a
+network-free advertise round-trip). Pin **6.4.21** (local `cycc` has since advanced to 6.4.23 — residual
+drift, a future refresh clears it). Live-verify: `[hoosh].tools=true` + `[shell].enabled=true` + NO
+`[daimon].url` → a task needing a command runs the shell tool agentically. Next: `0.20.1` process-group kill
+on timeout.
+
 **0.19.3** — **live spine-health** (closes the 0.19.x line), 2026-07-08. A cached hoosh reachability driven
 by TRAFFIC OUTCOMES (no background timer / idle probe), shown as a dot in the status bar. `src/hoosh.cyr`:
 `_hoosh_health` tri-state (UNKNOWN/UP/DOWN) + `hoosh_health`/`_mark_up`/`_mark_down`/`hoosh_health_note(rc)`

@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.19.3):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.20.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -300,7 +300,8 @@ selection stays content-blind.
 > 0.18.x line is COMPLETE**. The `0.19.x` session-visibility line then opened with `0.19.0` (context-budget
 > meter, DONE, + the Cyrius 6.4.21 refresh) → `0.19.1` (live turn telemetry, DONE) → `0.19.2` (`/git`
 > per-file diff, DONE) → `0.19.3` (live spine-health, DONE) — **the 0.19.x session-visibility line is
-> COMPLETE**; the next line is `0.20.x` (shell/agent hardening, PLANNED — below).
+> COMPLETE**. The `0.20.x` shell/agent-hardening line then opened with `0.20.0` (`agent_enabled()` relax —
+> shell standalone, DONE); it continues at `0.20.1` (process-group kill on timeout) below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -395,14 +396,17 @@ selection stays content-blind.
   Esc-interrupt is neutral. Verified (code-trace clean). 998 assertions. **Closes the 0.19.x
   session-visibility line.** See CHANGELOG/state.md.
 
-### 0.20.x — shell/agent hardening (PLANNED)
+### 0.20.x — shell/agent hardening (0.20.0 DONE; rest PLANNED)
 
 The 0.16.0 deferred follow-ups, promoted to a line:
 
-- **`0.20.0` — `agent_enabled()` relax.** `[shell].enabled` enters the agentic loop
-  without daimon wired, so the shell tool is usable standalone. The one core-routing
-  change in the 0.17–0.20 plan (touches `cmd_task` + the request builder + the iter
-  paths) — earns its own design + adversarial review.
+- **`0.20.0` — `agent_enabled()` relax. DONE (2026-07-08).** `[shell].enabled` (POSIX)
+  enters the agentic loop without daimon, so the shell tool is usable standalone.
+  `[hoosh].tools` stays the master switch; tool source = daimon OR shell. The design +
+  diff reviews caught that the daimon-absent path needed **null-deref crash guards** (force
+  serial + refuse a non-local tool — the parallel/serial daimon call `strlen`s a null URL);
+  `/state`+`/tools` reworded; security unchanged (shell stays t-ron-gated, local-only). Floor
+  byte-identical for daimon-wired/shell-off. 1008 assertions. See CHANGELOG/state.md.
 - **`0.20.1` — process-group kill on timeout.** `setpgid` the child + `kill(-pgid)`
   so a backgrounded grandchild dies with the `/bin/sh`.
 - **`0.20.2` — Windows timed capture.** `WaitForSingleObject` + `TerminateProcess` +
