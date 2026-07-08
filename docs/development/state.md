@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.18.7** — **glyph-width table** (closes the 0.11.3 undercount), 2026-07-08. Every glyph was counted as
+ONE terminal column, so a CJK/emoji line was reckoned half its true width and overflowed the feed column.
+New `feed_glyph_cols(src, i, gl)` (`src/feed.cyr`) decodes the UTF-8 codepoint and returns its display
+width — **0** for combining/zero-width marks (combining ranges, ZW joiners/space, variation selectors, BOM),
+**2** for East-Asian Wide/Fullwidth glyphs + emoji (Hangul, CJK Unified + Ext A/B–F, Kana, Yi, fullwidth
+forms, 0x2600–0x27BF dingbats/symbols, 0x1F000–0x1FAFF planes), else **1**. All three feed col-counters —
+`feed_visible_cols` (cached `_feed_vis` at seal), `feed_clip` (tree column), `feed_clip_seg` (feed painter)
+— now add the glyph's width, so `feed_rows_for = ceil(display-cols / width)` stays consistent and a wide
+line wraps into the right number of rows. `feed_clip` refuses a straddling wide glyph (no bleed into the
+feed pane to its right) and latches strict left-to-right truncation on the first refusal (diff-review fold).
+**Declared residuals** (honest limits): a wide glyph straddling a *soft-wrap* boundary clips 1 col at the
+(rightmost) feed edge — the terminal clips it, no pane corruption, **no glyph lost or duplicated** (the
+soft-wrap exactly-once invariant holds, verified); EAW-Ambiguous 0x2600–0x27BF treated wide; ZWJ emoji
+sequences overcount; a few scattered BMP emoji (e.g. U+2B50 ⭐) still count 1. ASCII output is
+**byte-identical** (width 1) — the floor is untouched. 955 assertions (+14, `test_glyph_width`). Pin
+**6.4.20**. Live-verify on a real tty (`--tier=rich`): paste a CJK or emoji-heavy reply and confirm it wraps
+at the right column instead of spilling. Next in the 0.18.x line: `0.18.8` inline markdown.
+
 **0.18.6** — **confirm-prompt return** (live-test follow-up), 2026-07-08. When a t-ron gate confirm fires
 during an agentic turn, `confirm` (src/gate.cyr) brackets to the live screen via `tui_confirm_begin`/`_end`
 (so the `[y/N]` prompt + cooked echo are visible, not buried in the feed ring). But `tui_confirm_end` only

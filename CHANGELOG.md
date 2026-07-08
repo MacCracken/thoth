@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.7] - 2026-07-08
+
+**A glyph-width table — CJK/emoji lines now count 2 columns in the soft-wrap and scrollback math, instead
+of overflowing.** Closes the 0.11.3 declared undercount: every glyph was counted as one terminal column, so
+a line of CJK or emoji was reckoned half its true width and would spill past the feed column. A new
+`feed_glyph_cols` decodes each glyph's codepoint and returns its display width (0 for combining/zero-width
+marks, 2 for East-Asian Wide/Fullwidth glyphs + emoji, else 1), and all three feed column-counters use it —
+so `feed_rows_for = ceil(display-columns / width)` stays consistent and a wide line wraps into the right
+number of rows. ASCII output is byte-identical (width 1). 955 assertions (+14). Pin **6.4.20**.
+
+### Changed
+- **`feed_glyph_cols(src, i, gl)`** (`src/feed.cyr`): decodes the UTF-8 codepoint and classifies width via
+  the common Unicode blocks — zero-width (combining 0x300–0x36F/0x1DC0–/0x20D0–, ZW joiners/space, variation
+  selectors, BOM), wide (Hangul, CJK Unified + Ext A/B–F, Kana, Yi, fullwidth forms, and the emoji blocks
+  0x2600–0x27BF + 0x1F000–0x1FAFF), else 1. `feed_visible_cols` (cached as `_feed_vis` at seal),
+  `feed_clip`, and `feed_clip_seg` now add the glyph's width, not 1.
+- **`feed_clip` (tree column) refuses a straddling wide glyph** rather than bleeding it into the feed pane to
+  its right (`(cols + gw) <= max_cols`), and latches strict left-to-right truncation on the first refusal (a
+  later narrow glyph can't slip into the freed column ahead of it — the diff-review catch).
+- **Declared residuals** (honest limits, in the module comment): a wide glyph that straddles a *soft-wrap*
+  boundary clips 1 column at the feed's right edge (the feed is the rightmost pane, so the terminal clips it
+  — no pane corruption, and no glyph is lost or duplicated); EAW-Ambiguous symbols in 0x2600–0x27BF are
+  treated wide (matches emoji rendering, may over-widen a few text symbols); a ZWJ emoji *sequence*
+  overcounts; and a few scattered BMP emoji outside the listed blocks (e.g. U+2B50 ⭐) still count 1.
+- **14 assertions** (`tests/thoth.tcyr`, `test_glyph_width`): `feed_glyph_cols` for ASCII / Hiragana / CJK /
+  fullwidth / dingbat-emoji (U+2705) / plane-1 emoji (U+1F600) / combining / variation-selector; a wide line
+  wrapping to 2 rows at width 3; `feed_clip` refusing a straddler + the strict-truncation swap guard;
+  `feed_clip_seg` segmenting a wide line across a wrap.
+
 ## [0.18.6] - 2026-07-08
 
 **The composer prompt returns immediately after a gate approval, instead of staying stuck until the turn

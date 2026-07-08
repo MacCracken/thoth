@@ -137,6 +137,46 @@ fn _feed_glyph_len(src, i, src_len) {
     return j - i;
 }
 
+# feed_glyph_cols: the DISPLAY WIDTH (terminal columns) of the glyph at src[i] of byte length gl (from
+# _feed_glyph_len) — 0 for a combining / zero-width mark, 2 for an East-Asian Wide/Fullwidth glyph or a
+# common emoji, else 1. Closes the 0.11.3 undercount (every glyph counted as 1 column, so a CJK/emoji line
+# overflowed its width). ASCII (gl<=1) is always 1 col. DECLARED LIMITS: EAW-Ambiguous symbols in
+# 0x2600–0x27BF are treated WIDE (matches how terminals render emoji there; may over-widen a few
+# text-presentation symbols); a ZWJ emoji SEQUENCE overcounts (each joined emoji counts 2); the table
+# covers the common blocks, not the full Unicode EAW database (a few scattered BMP emoji, e.g. U+2B50 ⭐,
+# are not yet listed -> counted 1). Pure over its bytes.
+fn feed_glyph_cols(src, i, gl) {
+    if (gl <= 1) { return 1; }                        # ASCII / stray byte -> 1 col (no decode)
+    var b0 = load8(src + i);
+    var cp = 0;
+    if (gl == 2) { cp = ((b0 - 192) * 64) + (load8(src + i + 1) - 128); }
+    elif (gl == 3) { cp = ((b0 - 224) * 4096) + ((load8(src + i + 1) - 128) * 64) + (load8(src + i + 2) - 128); }
+    else { cp = ((b0 - 240) * 262144) + ((load8(src + i + 1) - 128) * 4096) + ((load8(src + i + 2) - 128) * 64) + (load8(src + i + 3) - 128); }
+    # zero-width: combining marks, ZW joiners/space, variation selectors, BOM
+    if ((cp >= 0x300) && (cp <= 0x36F)) { return 0; }
+    if ((cp >= 0x1DC0) && (cp <= 0x1DFF)) { return 0; }
+    if ((cp >= 0x20D0) && (cp <= 0x20FF)) { return 0; }
+    if ((cp >= 0x200B) && (cp <= 0x200F)) { return 0; }
+    if ((cp >= 0xFE00) && (cp <= 0xFE0F)) { return 0; }
+    if (cp == 0xFEFF) { return 0; }
+    # wide: East-Asian Wide/Fullwidth + emoji
+    if ((cp >= 0x1100) && (cp <= 0x115F)) { return 2; }    # Hangul Jamo
+    if ((cp >= 0x2600) && (cp <= 0x27BF)) { return 2; }    # Misc Symbols + Dingbats (emoji)
+    if ((cp >= 0x2E80) && (cp <= 0x303E)) { return 2; }    # CJK radicals .. Kangxi .. CJK symbols
+    if ((cp >= 0x3041) && (cp <= 0x33FF)) { return 2; }    # Kana .. CJK compat / enclosed
+    if ((cp >= 0x3400) && (cp <= 0x4DBF)) { return 2; }    # CJK Ext A
+    if ((cp >= 0x4E00) && (cp <= 0x9FFF)) { return 2; }    # CJK Unified
+    if ((cp >= 0xA000) && (cp <= 0xA4CF)) { return 2; }    # Yi
+    if ((cp >= 0xAC00) && (cp <= 0xD7A3)) { return 2; }    # Hangul syllables
+    if ((cp >= 0xF900) && (cp <= 0xFAFF)) { return 2; }    # CJK compat ideographs
+    if ((cp >= 0xFE30) && (cp <= 0xFE4F)) { return 2; }    # CJK compat forms
+    if ((cp >= 0xFF00) && (cp <= 0xFF60)) { return 2; }    # Fullwidth forms
+    if ((cp >= 0xFFE0) && (cp <= 0xFFE6)) { return 2; }    # Fullwidth signs
+    if ((cp >= 0x1F000) && (cp <= 0x1FAFF)) { return 2; }  # emoji planes (mahjong .. symbols & pictographs ext)
+    if ((cp >= 0x20000) && (cp <= 0x3FFFD)) { return 2; }  # CJK Ext B-F / compat supplement
+    return 1;
+}
+
 # _feed_is_reset: 1 if the SGR sequence at src[i] of length sl is a FULL reset
 # (ESC[m or ESC[0m). Anything else that ends in 'm' is treated as opening color.
 fn _feed_is_reset(src, i, sl) {
@@ -161,6 +201,7 @@ fn feed_clip(dst, dst_cap, src, src_len, max_cols) {
     var i = 0;
     var wrote = 0;
     var sgr_open = 0;
+    var full = 0;                                     # 0.18.7: latched once a glyph won't fit (strict L-to-R truncation)
     while (i < src_len) {
         var b = load8(src + i);
         if (b == 27) {
@@ -198,16 +239,21 @@ fn feed_clip(dst, dst_cap, src, src_len, max_cols) {
             }
         } else {
             var gl = _feed_glyph_len(src, i, src_len);
-            if (cols < max_cols) {
+            var gw = feed_glyph_cols(src, i, gl);         # 0.18.7: display width (1 / 2 / 0)
+            # A glyph that would STRADDLE max_cols is refused whole (not bled): feed_clip drives the TREE
+            # column, which has the feed pane immediately to its right — a 1-col bleed would scribble it. The
+            # first refusal LATCHES `full` so truncation stays strictly left-to-right (a later narrow glyph
+            # can't slip into the freed column ahead of the refused wide one).
+            if ((full == 0) && ((cols + gw) <= max_cols)) {
                 if ((wrote + gl) <= dst_cap) {
                     var k2 = 0;
                     while (k2 < gl) { store8(dst + wrote + k2, load8(src + i + k2)); k2 = k2 + 1; }
                     wrote = wrote + gl;
-                    cols = cols + 1;
+                    cols = cols + gw;
                 }
-            }
-            # at/over max_cols: stop copying glyphs but keep scanning to drain
-            # trailing color resets (so the row closes cleanly).
+            } else { full = 1; }
+            # past the fit point: stop copying glyphs but keep scanning to drain trailing color resets
+            # (so the row closes cleanly).
             i = i + gl;
         }
     }
@@ -348,7 +394,7 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
                         wrote = wrote + gl;
                     }
                 }
-                cols = cols + 1;                                 # count the glyph in BOTH phases
+                cols = cols + feed_glyph_cols(src, i, gl);       # 0.18.7: count the glyph's WIDTH (1/2/0) in BOTH phases
                 i = i + gl;
             }
         }
@@ -400,7 +446,11 @@ fn feed_visible_cols(src, src_len) {
     var i = 0;
     while (i < src_len) {
         if (load8(src + i) == 27) { i = i + _feed_esc_len(src, i, src_len); }
-        else { i = i + _feed_glyph_len(src, i, src_len); cols = cols + 1; }
+        else {
+            var gl = _feed_glyph_len(src, i, src_len);
+            cols = cols + feed_glyph_cols(src, i, gl);      # 0.18.7: wide glyphs count 2 cols
+            i = i + gl;
+        }
     }
     return cols;
 }

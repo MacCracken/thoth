@@ -2069,6 +2069,68 @@ fn test_softwrap() {
     return 0;
 }
 
+# glyph-width table (0.18.7): East-Asian Wide/Fullwidth + emoji count 2 display columns, combining/ZW
+# marks count 0 — so soft-wrap + scrollback math no longer undercount a CJK/emoji line (0.11.3 residual).
+# All feed col-counters (feed_visible_cols / feed_clip / feed_clip_seg) share feed_glyph_cols so
+# feed_rows_for = ceil(display-cols / width) stays consistent. ASCII is byte-identical (width 1).
+fn test_glyph_width() {
+    test_group("glyph width table (feed.cyr, 0.18.7)");
+    var buf[32];
+    store8(&buf, 97);
+    assert_eq(feed_glyph_cols(&buf, 0, 1), 1, "ASCII is 1 col");
+    store8(&buf, 227); store8(&buf + 1, 129); store8(&buf + 2, 130);          # あ U+3042
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "Hiragana あ is 2 cols");
+    store8(&buf, 228); store8(&buf + 1, 184); store8(&buf + 2, 128);          # 一 U+4E00
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "CJK 一 is 2 cols");
+    store8(&buf, 239); store8(&buf + 1, 188); store8(&buf + 2, 161);          # Ａ U+FF21 fullwidth
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "fullwidth Ａ is 2 cols");
+    store8(&buf, 226); store8(&buf + 1, 156); store8(&buf + 2, 133);          # ✅ U+2705 (dingbat emoji)
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "emoji ✅ (U+2705) is 2 cols");
+    store8(&buf, 240); store8(&buf + 1, 159); store8(&buf + 2, 152); store8(&buf + 3, 128);   # 😀 U+1F600
+    assert_eq(feed_glyph_cols(&buf, 0, 4), 2, "emoji 😀 (plane 1) is 2 cols");
+    store8(&buf, 204); store8(&buf + 1, 129);                                 # combining acute U+0301
+    assert_eq(feed_glyph_cols(&buf, 0, 2), 0, "combining mark is 0 cols");
+    store8(&buf, 239); store8(&buf + 1, 184); store8(&buf + 2, 143);          # variation selector U+FE0F
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 0, "variation selector is 0 cols");
+
+    # feed_visible_cols sums widths: "a" + あ + "b" = 1 + 2 + 1 = 4
+    var line[16];
+    store8(&line, 97);
+    store8(&line + 1, 227); store8(&line + 2, 129); store8(&line + 3, 130);
+    store8(&line + 4, 98);
+    assert_eq(feed_visible_cols(&line, 5), 4, "visible cols counts あ as 2 (a+あ+b = 4)");
+    assert_eq(feed_rows_for(feed_visible_cols(&line, 5), 3), 2, "the wide line wraps to 2 rows at width 3 (was 1 pre-0.18.7)");
+
+    # feed_clip (tree column) refuses a straddling wide glyph rather than bleeding into the feed pane:
+    # "ああ" (2 cols each) at max_cols 3 keeps one あ; the second would need cols 2-3 (>3) so it's dropped.
+    var two[16];
+    store8(&two, 227); store8(&two + 1, 129); store8(&two + 2, 130);
+    store8(&two + 3, 227); store8(&two + 4, 129); store8(&two + 5, 130);
+    var cd[64];
+    var cw = feed_clip(&cd, 64, &two, 6, 3);
+    assert_eq(feed_visible_cols(&cd, cw), 2, "feed_clip at width 3 keeps one あ (2 cols), refuses the straddler");
+    # strict left-to-right: a refused wide LEADER truncates the rest — a later narrow glyph must NOT slip
+    # into the freed column ahead of it. "あa" at max_cols 1 -> empty (was: would paint "a" out of order).
+    var mix[8];
+    store8(&mix, 227); store8(&mix + 1, 129); store8(&mix + 2, 130);
+    store8(&mix + 3, 97);
+    var md[32];
+    var mwn = feed_clip(&md, 32, &mix, 4, 1);
+    assert_eq(feed_visible_cols(&md, mwn), 0, "feed_clip: a refused wide leader truncates strictly (no later 'a' swap-in)");
+
+    # feed_clip_seg (feed): "ああa" (2+2+1 = 5 cols) at width 4 -> seg0 = cols[0,4) = ああ, seg1 = cols[4,8) = a
+    var wl[16];
+    store8(&wl, 227); store8(&wl + 1, 129); store8(&wl + 2, 130);
+    store8(&wl + 3, 227); store8(&wl + 4, 129); store8(&wl + 5, 130);
+    store8(&wl + 6, 97);
+    var s0[64]; var s0n = feed_clip_seg(&s0, 64, &wl, 7, 0, 4);
+    assert_eq(feed_visible_cols(&s0, s0n), 4, "segment 0 holds both あ (4 cols)");
+    var s1[64]; var s1n = feed_clip_seg(&s1, 64, &wl, 7, 4, 4);
+    var s1v[32]; _t_strip_sgr(&s1v, &s1, s1n);
+    assert(streq(&s1v, "a"), "segment 1 holds the trailing 'a'");
+    return 0;
+}
+
 # Output capture (0.9.1): with OUT_RING armed, emit/emit_n/oprintln/ofmt_int route
 # into the feed ring (not fd 1); a logical line assembled across mixed calls lands
 # as ONE row, and ofmt_int captures the same digits fmt_int would print. NOTE:
@@ -2786,6 +2848,7 @@ fn main() {
     test_feed();
     test_feed_ring();
     test_softwrap();
+    test_glyph_width();
     test_feed_markers();
     test_capture();
     test_mdhl_tag_map();
