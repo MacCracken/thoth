@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.21.1** — **tree-fed `@` Tab completion**, 2026-07-08. The TUI-input layer on the 0.21.0 expansion core:
+pressing `Tab` on a `@<prefix>` in the composer completes the path from the file tree; with the cursor NOT
+on a `@`-token, `Tab` keeps its prior composer↔tree focus-toggle. New `ftree_complete` (`src/ftree.cyr`)
+splits the prefix at the last `/` and lists that directory via the tree's own `dir_list` — so completion
+works at ANY depth without the dir being expanded in the pane, riding the tree's existing ungated read
+posture (relative listing = the process CWD, matching `@mention`'s relative resolution). Unique match →
+full completion (+ trailing `/` for a dir, so the next `Tab` descends); multiple → longest common prefix.
+`mention_prefix_at` (`src/mention.cyr`) finds the `@`-token at the cursor, SHARING the 0.21.0 `@`/boundary/
+path-char rules so Tab completes exactly what a submitted `@mention` expands. `led_insert_cstr` + the
+`_tui_at_complete` glue insert the suffix via the tested `led_feed` path; the `KEY_TAB` handler tries
+completion first (FOCUS_COMPOSER, `@`-token present → consume Tab + repaint via `tui_after_edit`) and falls
+through to the toggle otherwise. **A 3-lens adversarial review caught a real mid-token bug** (fixed pre-cut):
+`mention_prefix_at` scanned only backward, so a cursor mid-token (`@VERbar`, cursor after `VER`) would splice
+the completion into the middle (`@VERSIONbar`); now it requires the cursor at the END of the token (the char
+AT the cursor must be a non-path-char), else Tab falls through — regression-tested. The other two lenses
+(completion bounds, KEY_TAB floor-identity) were clean. **Verified**: 1060 assertions (+23, `test_tab_complete`
+— `mention_prefix_at` boundary/email/empty/start/mid-token/end + `ftree_complete` unique-file/unique-dir-
+`/`/subdir/ambiguous-LCP/no-match + `led_insert_cstr`) + LIVE in the real rich TUI by driving it through a
+PTY (`@VER` + `Tab` → `@VERSION`; happy path intact after the guard). TUI-only — line/one-shot/PLAIN floor
+untouched. Pin **6.4.26**. NEXT: the `0.22.x` active-persona line (mid-session avatara switch), or further
+`0.21.x` composer slices (e.g. the model-picker palette). See CHANGELOG/roadmap.
+
 **0.21.0** — **`@file` mentions**, 2026-07-08. Opens the `0.21.x` composer-intelligence line: typing
 `@path` in a message injects that file's content into the prompt as explicit, delimited context. New pure
 module `src/mention.cyr` (`mention_expand`/`mention_count`, unit-tested) rides the `/read` machinery

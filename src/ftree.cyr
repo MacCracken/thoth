@@ -282,6 +282,85 @@ fn ftree_expand() {
     return 0;
 }
 
+# --- @file Tab completion (0.21.1) -----------------------------------------
+# ftree_complete: given a relative path `prefix` (the text a user typed after `@`), compute the
+# file-tree completion SUFFIX (the bytes to insert after the cursor) into `out` (NUL-terminated,
+# <= outcap). Splits `prefix` at the LAST '/': the directory part is listed with dir_list — the SAME
+# machinery the tree uses to expand a node, so completion works at any depth WITHOUT the node being
+# expanded in the pane, and rides the tree's existing (ungated) read posture. Entries whose name
+# starts with the name part are candidates: a UNIQUE candidate completes fully (+ '/' if it is a
+# directory, so the next Tab descends into it); MULTIPLE complete to the longest common prefix (an
+# empty suffix when there is no further common char). Returns the candidate count (0 = no match).
+# Relative listing matches mention_expand's relative resolution (both use the process CWD).
+var _ftc_dirbuf = 0;      # reused: the directory to list (relative to CWD; "." for the root)
+var _ftc_lcp = 0;         # reused: the completed name — the full entry (unique) or the LCP (multiple)
+
+# _ftc_lcp_shrink: trim the NUL-terminated `acc` to its longest common prefix with cstr `e`.
+fn _ftc_lcp_shrink(acc, e) {
+    var i = 0;
+    while ((load8(acc + i) != 0) && (load8(e + i) != 0) && (load8(acc + i) == load8(e + i))) { i = i + 1; }
+    store8(acc + i, 0);
+    return 0;
+}
+
+fn ftree_complete(prefix, out, outcap) {
+    store8(out, 0);
+    if (_ftc_dirbuf == 0) { _ftc_dirbuf = alloc(4096); }
+    if (_ftc_lcp == 0) { _ftc_lcp = alloc(4096); }
+    var plen = strlen(prefix);
+    if (plen >= 4000) { return 0; }
+    # split at the last '/': [0..slash) = dir part, (slash+1..] = name part
+    var slash = 0 - 1;
+    var i = 0;
+    while (i < plen) { if (load8(prefix + i) == 47) { slash = i; } i = i + 1; }
+    var nameoff = 0;
+    if (slash < 0) {
+        store8(_ftc_dirbuf, 46); store8(_ftc_dirbuf + 1, 0);          # no '/' -> list "." (CWD)
+        nameoff = 0;
+    } elif (slash == 0) {
+        store8(_ftc_dirbuf, 47); store8(_ftc_dirbuf + 1, 0);          # "@/x" -> list "/"
+        nameoff = 1;
+    } else {
+        var d = 0;
+        while (d < slash) { store8(_ftc_dirbuf + d, load8(prefix + d)); d = d + 1; }
+        store8(_ftc_dirbuf + slash, 0);                              # dir part (relative)
+        nameoff = slash + 1;
+    }
+    var name = prefix + nameoff;              # NUL-terminated (tail of the NUL-terminated prefix)
+    var nlen = plen - nameoff;
+    var dirstr = str_from(_ftc_dirbuf);
+    var v = dir_list(dirstr);
+    var n = vec_len(v);
+    if (n <= 0) { return 0; }
+    var count = 0;
+    var uniq_isdir = 0;
+    var j = 0;
+    while (j < n) {
+        var e = str_data(vec_get(v, j));
+        if (cstr_starts_with(e, name) == 1) {
+            count = count + 1;
+            if (count == 1) {
+                var c = 0;
+                while ((load8(e + c) != 0) && (c < 4095)) { store8(_ftc_lcp + c, load8(e + c)); c = c + 1; }
+                store8(_ftc_lcp + c, 0);
+                uniq_isdir = is_dir(path_join(dirstr, vec_get(v, j)));
+            } else {
+                _ftc_lcp_shrink(_ftc_lcp, e);
+            }
+        }
+        j = j + 1;
+    }
+    if (count == 0) { return 0; }
+    # suffix = the completed name beyond the name part the user already typed
+    var clen = strlen(_ftc_lcp);
+    var so = 0;
+    var s = nlen;
+    while ((s < clen) && (so < (outcap - 2))) { store8(out + so, load8(_ftc_lcp + s)); so = so + 1; s = s + 1; }
+    if ((count == 1) && (uniq_isdir == 1) && (so < (outcap - 2))) { store8(out + so, 47); so = so + 1; }   # '/'
+    store8(out + so, 0);
+    return count;
+}
+
 # ftree_collapse: collapse the selected dir (remove its subtree). No-op otherwise.
 fn ftree_collapse() {
     var sel = _tree_sel;

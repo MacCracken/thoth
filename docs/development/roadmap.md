@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.21.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.21.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -307,7 +307,8 @@ selection stays content-blind.
 > the model's `shell` tool now works on Windows, verified end-to-end on `cass`; bundled the 6.4.26 refresh) —
 > **the 0.20.x shell/agent-hardening line is COMPLETE**. The `0.21.x` composer-intelligence line then opened
 > with `0.21.0` (**`@file` mention expansion, DONE** — `@path` injects a file as delimited prompt context via
-> the new pure `src/mention.cyr`, riding the `/read` posture; tree-fed Tab completion is sliced to `0.21.1`).
+> the new pure `src/mention.cyr`, riding the `/read` posture) → `0.21.1` (**tree-fed `@` Tab completion,
+> DONE** — `Tab` completes a `@<prefix>` from the file tree in the composer; live-verified in the rich TUI).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -441,7 +442,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   form stays a documented back-compat alias used only when the array key is absent. 1021
   assertions (+11). See CHANGELOG/state.md.
 
-### 0.21.x — composer intelligence (0.21.0 DONE)
+### 0.21.x — composer intelligence (0.21.0–0.21.1 DONE)
 
 - **`0.21.0` — `@file` mention expansion. DONE (2026-07-08).** A `@path` in a submitted
   message injects the named file into the prompt as explicit, delimited context — the
@@ -452,9 +453,14 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   `/read` machinery + posture (no new read path, no new security surface). Bounded (16 KiB/file,
   32 KiB total == `HOOSH_REQ_CAP/8`, 16 files; reused buffers); byte-identical passthrough when
   nothing resolves. 3-lens adversarial review clean; 1037 assertions (+16); live-verified.
-- **`0.21.1` — tree-fed Tab completion.** `Tab` on a `@<prefix>` in the composer completes the
-  path from the file-tree (ftree) — a TUI-input layer on the 0.21.0 expansion core. Context-
-  sensitive vs the existing `Tab` tree-focus toggle. (Sliced out of the 0.21.0 bullet.)
+- **`0.21.1` — tree-fed Tab completion. DONE (2026-07-08).** `Tab` on a `@<prefix>` in the
+  composer completes the path from the file tree; with the cursor NOT on a `@`-token, `Tab` keeps
+  its prior composer↔tree focus-toggle. `ftree_complete` lists the prefix's directory live via the
+  tree's own `dir_list` (works at any depth without expanding the pane; unique → full completion +
+  `/` for a dir, multiple → longest common prefix); `mention_prefix_at` reuses the 0.21.0 token
+  rules; `_tui_at_complete` + `led_insert_cstr` do the insert. A 3-lens adversarial review caught a
+  mid-token splice bug (fixed pre-cut: the cursor must be at the END of the token). 1060 assertions
+  (+23); live-verified by driving the real rich TUI through a PTY.
 - Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 

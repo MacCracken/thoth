@@ -334,6 +334,39 @@ fn led_feed(key, ch) {
     return ACT_NONE;
 }
 
+# led_insert_cstr: insert NUL-terminated `s` at the cursor via the tested led_feed KEY_CHAR path
+# (byte-by-byte; excess dropped at COMPOSER_CAP by led_feed's own guard). Returns bytes inserted.
+# Used by @file Tab completion (0.21.1). PURE (mutates the composer).
+fn led_insert_cstr(s) {
+    var before = _comp_len;
+    var i = 0;
+    while (load8(s + i) != 0) { led_feed(KEY_CHAR, load8(s + i)); i = i + 1; }
+    return _comp_len - before;
+}
+
+# @file Tab completion (0.21.1): if the composer cursor sits at the end of a `@<prefix>` token, complete
+# the path from the file tree and insert the suffix at the cursor. Returns 1 if a `@`-token was present
+# (Tab is CONSUMED as completion — even when nothing further matches, so Tab never yanks focus to the
+# tree mid-path), 0 otherwise (the caller falls through to the composer<->tree focus toggle). The scan
+# rule (mention_prefix_at) is shared with the 0.21.0 injection, so what Tab completes is exactly what a
+# submitted @mention expands. Completion is via ftree_complete (dir_list of the prefix's directory).
+var _tui_atc_pfx = 0;         # reused: the @-token prefix (text after '@', NUL-terminated)
+var _tui_atc_out = 0;         # reused: the completion suffix to insert
+fn _tui_at_complete() {
+    if (_composer == 0) { return 0; }
+    var start = mention_prefix_at(_composer, _comp_cur);   # offset after '@', or -1
+    if (start < 0) { return 0; }
+    if (_tui_atc_pfx == 0) { _tui_atc_pfx = alloc(COMPOSER_CAP); }
+    if (_tui_atc_out == 0) { _tui_atc_out = alloc(COMPOSER_CAP); }
+    var plen = _comp_cur - start;
+    var i = 0;
+    while (i < plen) { store8(_tui_atc_pfx + i, load8(_composer + start + i)); i = i + 1; }
+    store8(_tui_atc_pfx + plen, 0);
+    ftree_complete(_tui_atc_pfx, _tui_atc_out, COMPOSER_CAP);
+    if (load8(_tui_atc_out) != 0) { led_insert_cstr(_tui_atc_out); }   # non-empty suffix -> insert at cursor
+    return 1;
+}
+
 # led_paste: insert a slurped bracketed-paste buffer `src` (`len` bytes) into the composer
 # at the cursor, reusing the tested led_feed insert path one byte at a time (0.17.0). FILTER:
 # LF/CR (and CRLF) collapse to a single '\n'; a tab becomes one space; printable ASCII plus
@@ -1837,9 +1870,19 @@ fn tui_loop() {
                 out_mode_set(OUT_FD1);
                 tui_relayout();
             } elif (key == KEY_TAB) {
-                if (_tui_show_tree == 1) {
-                    if (_tui_focus == FOCUS_TREE) { _tui_focus = FOCUS_COMPOSER; } else { _tui_focus = FOCUS_TREE; }
-                    tui_draw_hint(); tui_park_cursor();
+                # 0.21.1: in the composer, Tab on a `@<prefix>` completes the path from the file tree
+                # (consuming the Tab); otherwise Tab toggles composer<->tree focus (the prior behavior).
+                var atc = 0;
+                if (_tui_focus == FOCUS_COMPOSER) {
+                    var atc_before_h = tui_cur_composer_height();
+                    atc = _tui_at_complete();
+                    if (atc == 1) { tui_after_edit(atc_before_h); }
+                }
+                if (atc == 0) {
+                    if (_tui_show_tree == 1) {
+                        if (_tui_focus == FOCUS_TREE) { _tui_focus = FOCUS_COMPOSER; } else { _tui_focus = FOCUS_TREE; }
+                        tui_draw_hint(); tui_park_cursor();
+                    }
                 }
             } elif (key == KEY_SCROLL_UP) { _tui_feed_scroll_by(3);
             } elif (key == KEY_SCROLL_DOWN) { _tui_feed_scroll_by(0 - 3);

@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.1] - 2026-07-08
+
+**Tree-fed Tab completion for `@file` mentions.** In the TUI composer, pressing `Tab` on a `@<prefix>`
+completes the path from the file tree; when the cursor isn't on a `@`-token, `Tab` keeps its existing
+composer↔tree focus-toggle behavior. Builds on the 0.21.0 expansion core. 1060 assertions (+23). A 3-lens
+adversarial review caught (and this cut fixes) a mid-token completion bug before ship.
+
+### Added
+- **`@` Tab completion** (`src/ftree.cyr` `ftree_complete`, `src/mention.cyr` `mention_prefix_at`,
+  `src/tui.cyr` `led_insert_cstr` + `_tui_at_complete` + the `KEY_TAB` handler): the completer splits the
+  prefix at the last `/` and lists that directory via the tree's own `dir_list` — so it works at any depth
+  WITHOUT the directory being expanded in the pane, and rides the tree's existing (ungated) read posture. A
+  unique match completes fully (with a trailing `/` for a directory, so the next `Tab` descends); multiple
+  matches complete to the longest common prefix. The token scan (`mention_prefix_at`) shares the 0.21.0
+  `@`/boundary/path-char rules, so what `Tab` completes is exactly what a submitted `@mention` expands.
+  Completion is inserted at the cursor via the tested `led_feed` path.
+
+### Fixed
+- **Mid-token completion corruption** (caught by the pre-cut adversarial review): `mention_prefix_at` scanned
+  only backward from the cursor, so with the cursor in the middle of a token (e.g. `@VERbar`, cursor after
+  `VER`) `Tab` would splice the completion into the middle (`@VERSIONbar`). Now it requires the cursor to be
+  at the END of the token (the char at the cursor must be a non-path-char), else `Tab` falls through to the
+  focus toggle. Regression-tested.
+
+### Notes
+- Completion is TUI-only (composer input); the line REPL / one-shot / plain floor is untouched. It lists the
+  directory live (relative to the CWD), matching `@mention`'s relative resolution. Live-verified by driving
+  the real rich TUI through a PTY (`@VER` + `Tab` → `@VERSION`).
+
 ## [0.21.0] - 2026-07-08
 
 **`@file` mentions** — type `@path` in a message and that file's content is injected into the prompt as
