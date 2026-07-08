@@ -616,7 +616,15 @@ fn cmd_audit() {
 
 fn cmd_task(line) {
     session_bump_turn();
-    emit("task: "); oprintln(line);
+    emit("task: "); oprintln(line);              # echo the ORIGINAL line (with @mentions), not the expansion
+    # @file mentions (0.21.0): a `@path` that resolves to a readable file gets that file's content
+    # appended to the prompt as delimited context. Non-resolving @tokens stay literal, so ordinary
+    # prose is untouched and `prompt == line` (byte-identical) when nothing resolves.
+    var prompt = mention_expand(line);
+    if (mention_count() > 0) {
+        ui_emit(ROLE_FAINT, "  (+"); emit(ui_sgr(ROLE_FAINT)); ofmt_int(mention_count());
+        emit(ui_reset()); ui_emit(ROLE_FAINT, " file(s) attached as context)"); oprintln("");
+    }
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         oprintln("  hoosh seam absent - no model backend is wired.");
         oprintln("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
@@ -625,8 +633,8 @@ fn cmd_task(line) {
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop
     # (the model can call MCP tools, gated by t-ron); else a plain hoosh turn.
-    if (agent_enabled() == 1) { return agent_turn(line); }
-    return hoosh_send(line);
+    if (agent_enabled() == 1) { return agent_turn(prompt); }
+    return hoosh_send(prompt);
 }
 
 # cmd_clear: clear the content window. In the T2 TUI (output captured, OUT_RING) it
@@ -729,6 +737,10 @@ fn cmd_dry(line) {
         oprintln("usage: /dry <task>   — preview the hoosh request body, without sending it");
         return 0;
     }
+    # @file mentions (0.21.0): expand the SAME way the live turn does, so the preview shows the
+    # exact injected context. mention_expand only READS files (no session/token/cost mutation), so
+    # /dry stays side-effect-free + network-free.
+    task = mention_expand(task);
     var model = hoosh_model_cur();
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }

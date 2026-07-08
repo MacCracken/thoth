@@ -18,6 +18,7 @@ include "src/feed.cyr"
 include "src/ftree.cyr"
 include "src/inhist.cyr"
 include "src/fsearch.cyr"
+include "src/mention.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -2808,6 +2809,67 @@ fn test_fsearch() {
     return 0;
 }
 
+# @file mentions (0.21.0): the PURE expand core. `@path` that resolves to a readable file appends its
+# content as a delimited block; a non-resolving @token stays literal (prose untouched, byte-identical
+# passthrough — same pointer back); multiple compose; duplicates inject once; trailing punct trimmed;
+# email/handle boundaries not mangled. Uses real repo files (VERSION, src/mention.cyr) as fixtures.
+fn test_mention() {
+    test_group("@file mentions (mention.cyr, 0.21.0)");
+
+    # --- no mention -> byte-identical passthrough (SAME pointer), count 0 ---
+    var a = "hello world, nothing here";
+    var ra = mention_expand(a);
+    assert(ra == a, "no mention -> original pointer unchanged");
+    assert_eq(mention_count(), 0, "no mention -> count 0");
+
+    # --- email/handle boundary: @ not preceded by whitespace is NOT a mention ---
+    var e = "mail foo@bar.com now";
+    var re = mention_expand(e);
+    assert(re == e, "foo@bar not a mention (no whitespace boundary) -> passthrough");
+    assert_eq(mention_count(), 0, "email -> count 0");
+
+    # --- single mention: prose preserved, a block appended right after it ---
+    var s = "see @VERSION please";
+    var rs = mention_expand(s);
+    assert_eq(mention_count(), 1, "one resolvable mention -> count 1");
+    assert(rs != s, "expanded (not the original pointer)");
+    assert(cstr_starts_with(rs, "see @VERSION please") == 1, "prose preserved verbatim at the front");
+    assert_eq(load8(rs + strlen("see @VERSION please")), 10, "a block (\\n) begins right after the prose");
+
+    # --- mention at start-of-text boundary ---
+    var b = "@VERSION";
+    var rb = mention_expand(b);
+    assert_eq(mention_count(), 1, "@ at start-of-text is a boundary -> count 1");
+
+    # --- multiple mentions compose ---
+    var m = "compare @VERSION and @src/mention.cyr";
+    mention_expand(m);
+    assert_eq(mention_count(), 2, "two distinct resolvable mentions -> count 2");
+
+    # --- duplicate injects once ---
+    var d = "@VERSION then @VERSION again";
+    mention_expand(d);
+    assert_eq(mention_count(), 1, "duplicate path -> injected once");
+
+    # --- non-existent path stays literal (passthrough) ---
+    var n = "@nope_zzz_not_a_file here";
+    var rn = mention_expand(n);
+    assert(rn == n, "unresolvable @token -> literal passthrough (original pointer)");
+    assert_eq(mention_count(), 0, "non-existent -> count 0");
+
+    # --- trailing punctuation trimmed to resolve ---
+    var t = "read @VERSION.";
+    mention_expand(t);
+    assert_eq(mention_count(), 1, "trailing '.' trimmed -> VERSION resolves, count 1");
+
+    # --- a directory resolves file_exists but is unreadable -> stays literal ---
+    var dir = "look in @src here";
+    var rdir = mention_expand(dir);
+    assert(rdir == dir, "@src (a directory) -> unreadable, literal passthrough");
+    assert_eq(mention_count(), 0, "directory -> count 0");
+    return 0;
+}
+
 # inline markdown (0.18.8): prose lines get headings/bold/inline-code/list markers styled in the feed,
 # preserving strip-coverage (strip_sgr(output) == raw line). Route via mdhl_reply under OUT_RING and read
 # the sealed row. Colors are role markers (recolor on /theme); bold is a raw ESC[1m.
@@ -3093,6 +3155,7 @@ fn main() {
     test_mdhl_stream();
     test_mdhl_livecard();
     test_fsearch();
+    test_mention();
     test_mdhl_inline();
     test_spinner();
     test_stream_throttle();

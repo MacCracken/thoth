@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.0] - 2026-07-08
+
+**`@file` mentions** — type `@path` in a message and that file's content is injected into the prompt as
+explicit, delimited context. Opens the `0.21.x` composer-intelligence line. Rides the existing `/read`
+machinery and its posture (`file_exists` + `file_read_all` into a bounded reused buffer) — NO new read path,
+NO new security surface: the content comes from a path the user typed in their own message. Multiple mentions
+compose; a `@token` that does not resolve to a readable file is left LITERAL, so ordinary prose (an email
+`foo@bar`, a handle `@someone`) is never mangled. Works in the REPL, the TUI, and one-shot (all route through
+`cmd_task`), and is visible in `/dry`. 1037 assertions (+16). A 3-lens adversarial review (buffer-safety,
+scan-correctness, floor-identity) returned clean.
+
+### Added
+- **`@file` mention expansion** (new `src/mention.cyr`, pure `mention_expand`/`mention_count`): a `@path` at
+  start-of-text or after whitespace whose path resolves to a readable file appends a delimited block
+  (`\n\n--- @<path> ---\n<content>`) after the user's prose; the `@mention` stays in the prose. Path charset
+  `[A-Za-z0-9/._-~]`; a trailing punctuation char (`.,;:)]}`) is trimmed when the full token doesn't resolve
+  (so "see @file.cyr." works). Multiple mentions compose; duplicates inject once; directories / empty /
+  unreadable paths stay literal. Bounds: 16 KiB per file (truncated with a marker), 32 KiB total injected
+  (== `HOOSH_REQ_CAP/8`, hoosh's per-turn content budget), 16 files max; all buffers are reused module
+  globals (no per-call heap on the turn hot path). When nothing resolves, `mention_expand` returns the
+  original pointer byte-identically, so ordinary prompts are unchanged.
+- Wired into `cmd_task` (echoes the original line, sends the expanded prompt, prints a faint
+  `(+N file(s) attached as context)` note) and `cmd_dry` (same expansion in the preview; stays
+  side-effect-free + network-free — `mention_expand` only reads files).
+
+### Notes
+- Tree-fed **Tab completion** for `@` in the composer is sliced to **`0.21.1`** (a TUI-input enhancement on
+  top of this expansion core).
+- Residual (documented): the path charset is ASCII, so a filename with non-ASCII bytes isn't matched (the
+  token ends at the first non-`[A-Za-z0-9/._-~]` byte) — a first-cut limitation, not a fold.
+
 ## [0.20.4] - 2026-07-08
 
 **The model's `shell` tool now works on Windows** — real timed capture with a wall-clock deadline — plus the

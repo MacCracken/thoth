@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.21.0** — **`@file` mentions**, 2026-07-08. Opens the `0.21.x` composer-intelligence line: typing
+`@path` in a message injects that file's content into the prompt as explicit, delimited context. New pure
+module `src/mention.cyr` (`mention_expand`/`mention_count`, unit-tested) rides the `/read` machinery
+(`file_exists` + `file_read_all` into a bounded reused buffer) — NO new read path, NO new security surface
+(the content comes from a path the USER typed in their own message; the same trust class as pasting it). A
+`@` is a mention only at start-of-text or after whitespace (so `foo@bar` emails / `@handle` prose are never
+mangled); path charset `[A-Za-z0-9/._-~]`; a trailing punctuation char is trimmed when the full token
+doesn't resolve; a `@token` that doesn't resolve to a readable file stays LITERAL. Multiple mentions
+compose, duplicates inject once, directories/empty/unreadable stay literal (`file_read_all` returns <=0 — a
+dir opens O_RDONLY then reads EISDIR→0). Format: prose unchanged, then `\n\n--- @<path> ---\n<content>`
+blocks appended. Bounds: 16 KiB/file (truncated + marker), 32 KiB total (== `HOOSH_REQ_CAP/8`, hoosh's
+per-turn content budget so the context isn't evicted), 16 files; reused module-global buffers (no per-call
+heap on the turn hot path). Byte-identical passthrough (returns the ORIGINAL pointer) when nothing resolves,
+so ordinary prompts are unchanged. Wired into `cmd_task` (echo the original line, send the expanded prompt,
+faint `(+N file(s) attached)` note) and `cmd_dry` (same expansion in the preview; side-effect-free +
+network-free); one-shot rides `cmd_task`. **Verified**: 1037 assertions (+16, `test_mention` — passthrough/
+email-boundary/single/multi/dedup/nonexistent/trailing-punct/directory) + LIVE in the real binary (`/dry
+summarize @VERSION` → body carries `summarize @VERSION\n\n--- @VERSION ---\n0.20.4\n`; `cmd_task` prints the
+`(+1)` note counting only the resolved mention). A 3-lens adversarial review (buffer-safety / scan-
+correctness / floor-identity, genuine engagement — 19/11/28 tool calls) returned ZERO findings. Residual
+(documented): the ASCII path charset means a non-ASCII filename isn't matched (a first-cut limit). NEXT in
+the line: `0.21.1` tree-fed **Tab completion** for `@` in the composer (TUI-input layer on this core). Pin
+**6.4.26** (unchanged). See CHANGELOG/roadmap.
+
 **0.20.4** — **the model's `shell` tool works on Windows** + the Cyrius **6.4.26** refresh that unblocked
 it, 2026-07-08. This is the deferred `0.20.2` (Windows timed capture) item, landing OUT OF ORDER after
 `0.20.3`: 6.4.26 shipped `TerminateProcess` (syscall `0xF01D`) — the kill primitive the earlier Windows PE

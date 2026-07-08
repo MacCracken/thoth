@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.20.4):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.21.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -304,7 +304,10 @@ selection stays content-blind.
 > shell standalone, DONE) → `0.20.1` (process-group kill on timeout + Cyrius 6.4.23, DONE) → `0.20.3`
 > (array-value shell deny/allow config via bayan 1.1.0, DONE) → `0.20.4` (**Windows timed capture — the
 > deferred `0.20.2` item, DONE**: Cyrius 6.4.26 shipped the `TerminateProcess` primitive thoth filed for, so
-> the model's `shell` tool now works on Windows, verified end-to-end on `cass`; bundled the 6.4.26 refresh).
+> the model's `shell` tool now works on Windows, verified end-to-end on `cass`; bundled the 6.4.26 refresh) —
+> **the 0.20.x shell/agent-hardening line is COMPLETE**. The `0.21.x` composer-intelligence line then opened
+> with `0.21.0` (**`@file` mention expansion, DONE** — `@path` injects a file as delimited prompt context via
+> the new pure `src/mention.cyr`, riding the `/read` posture; tree-fed Tab completion is sliced to `0.21.1`).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -438,13 +441,21 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   form stays a documented back-compat alias used only when the array key is absent. 1021
   assertions (+11). See CHANGELOG/state.md.
 
-### 0.21.x — composer intelligence (PLANNED)
+### 0.21.x — composer intelligence (0.21.0 DONE)
 
-- **`0.21.0` — `@file` mentions.** `@path` in the composer injects the named file
-  into the prompt as explicit, delimited context (tree-fed Tab completion; multiple
-  mentions compose; visible in `/dry`), riding the existing `/read` machinery + its
-  posture — no new read path, no new security surface. Line opener; further slices
-  (e.g. the model-picker palette from the polish backlog) may promote into this
+- **`0.21.0` — `@file` mention expansion. DONE (2026-07-08).** A `@path` in a submitted
+  message injects the named file into the prompt as explicit, delimited context — the
+  expansion CORE (new pure `src/mention.cyr` `mention_expand`/`mention_count`, unit-tested),
+  wired into `cmd_task` + `cmd_dry` so it works in the REPL, TUI, and one-shot and is visible
+  in `/dry`. Multiple mentions compose; a non-resolving `@token` stays LITERAL (prose like
+  `foo@bar` / `@handle` never mangled — `@` counts only at start/after-whitespace); rides the
+  `/read` machinery + posture (no new read path, no new security surface). Bounded (16 KiB/file,
+  32 KiB total == `HOOSH_REQ_CAP/8`, 16 files; reused buffers); byte-identical passthrough when
+  nothing resolves. 3-lens adversarial review clean; 1037 assertions (+16); live-verified.
+- **`0.21.1` — tree-fed Tab completion.** `Tab` on a `@<prefix>` in the composer completes the
+  path from the file-tree (ftree) — a TUI-input layer on the 0.21.0 expansion core. Context-
+  sensitive vs the existing `Tab` tree-focus toggle. (Sliced out of the 0.21.0 bullet.)
+- Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 
 ### 0.22.x — the active persona (PLANNED)

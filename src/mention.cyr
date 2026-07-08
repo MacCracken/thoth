@@ -1,0 +1,191 @@
+# thoth — @file mentions (0.21.0): expand `@path` tokens in a submitted line into explicit,
+# delimited file context appended to the prompt. Rides the /read machinery (file_exists +
+# file_read_all into a bounded reused buffer) — NO new read path, NO new security surface: the
+# content originates from a path the USER typed in their OWN message (the same trust class as the
+# user pasting the file). A @token that does NOT resolve to a readable file is left LITERAL, so
+# ordinary prose — an email `foo@bar`, a handle `@someone` — is never mangled. Multiple mentions
+# compose; duplicates inject once; directories / unreadable paths stay literal.
+#
+# This is the PURE, unit-tested core (`mention_expand` + `mention_count`); the glue — the cmd_task
+# echo note and the cmd_dry preview — lives in src/commands.cyr. Included before commands.cyr; needs
+# only lib (io/string), so it carries no ui/feed dependency.
+#
+# BOUNDS (documented, not faked): each file is capped at MENTION_FILE_CAP (larger -> truncated with a
+# marker); the TOTAL injected content across one message is capped at MENTION_TOTAL_CAP; at most
+# MENTION_MAX files inject (further mentions stay literal). MENTION_TOTAL_CAP sits at hoosh's per-turn
+# content budget (HOOSH_REQ_CAP/8 = 32 KiB) so the injected context actually reaches the model rather
+# than being evicted by the history framer.
+#
+# FLOOR-SAFE: a line with NO resolvable @mention returns the ORIGINAL pointer unchanged (byte-
+# identical), so REPL / TUI / one-shot behave exactly as before for ordinary prompts.
+
+var MENTION_FILE_CAP = 16384;    # per-file injected byte cap (larger -> truncated + marker)
+var MENTION_TOTAL_CAP = 32768;   # total injected file bytes across one message (== HOOSH_REQ_CAP/8)
+var MENTION_MAX = 16;            # max files injected per message
+var MENTION_BUF_CAP = 65536;     # reused expansion output buffer
+var MENTION_PATH_CAP = 512;      # per-candidate path scratch (NUL-terminated)
+
+var _mention_buf = 0;            # MENTION_BUF_CAP expansion output
+var _mention_read = 0;           # MENTION_FILE_CAP+2 per-file read scratch (cap+1 read for trunc detect)
+var _mention_path = 0;           # MENTION_PATH_CAP candidate path scratch
+var _mention_seen = 0;           # MENTION_MAX * MENTION_PATH_CAP seen-path store (dedup)
+var _mention_seen_n = 0;
+var _mention_count = 0;          # files injected by the last mention_expand
+var _mention_last_added = 0;     # content bytes injected by the last _mention_inject (for the total cap)
+
+# mention_count: how many files the last mention_expand injected (glue uses it for the echo note).
+fn mention_count() { return _mention_count; }
+
+fn _mention_is_path_char(c) {
+    if ((c >= 48) && (c <= 57)) { return 1; }    # 0-9
+    if ((c >= 65) && (c <= 90)) { return 1; }    # A-Z
+    if ((c >= 97) && (c <= 122)) { return 1; }   # a-z
+    if (c == 47) { return 1; }    # /
+    if (c == 46) { return 1; }    # .
+    if (c == 45) { return 1; }    # -
+    if (c == 95) { return 1; }    # _
+    if (c == 126) { return 1; }   # ~
+    return 0;
+}
+fn _mention_is_ws(c) {
+    if (c == 32) { return 1; }    # space
+    if (c == 9) { return 1; }     # tab
+    if (c == 10) { return 1; }    # LF
+    if (c == 13) { return 1; }    # CR
+    return 0;
+}
+fn _mention_is_trailpunct(c) {
+    if (c == 46) { return 1; }    # .
+    if (c == 44) { return 1; }    # ,
+    if (c == 59) { return 1; }    # ;
+    if (c == 58) { return 1; }    # :
+    if (c == 41) { return 1; }    # )
+    if (c == 93) { return 1; }    # ]
+    if (c == 125) { return 1; }   # }
+    return 0;
+}
+
+# _mention_apc: append cstr `s` to _mention_buf at byte offset `o`; return the new offset. The
+# caller has already reserved room (see the _mention_inject room guard).
+fn _mention_apc(o, s) {
+    var i = 0;
+    while (load8(s + i) != 0) { store8(_mention_buf + o, load8(s + i)); o = o + 1; i = i + 1; }
+    return o;
+}
+
+# _mention_resolve: trim trailing punctuation off _mention_path until it names an existing path
+# (or empties). Returns 1 if _mention_path (possibly trimmed) exists, else 0. file_exists opens
+# O_RDONLY so a directory also returns 1 — the read in _mention_inject rejects it (leaves literal).
+fn _mention_resolve() {
+    var tries = 0;
+    while (tries < 4) {
+        if (file_exists(_mention_path) == 1) { return 1; }
+        var n = strlen(_mention_path);
+        if (n == 0) { return 0; }
+        var last = load8(_mention_path + n - 1);
+        if (_mention_is_trailpunct(last) == 0) { return 0; }
+        store8(_mention_path + n - 1, 0);          # trim one trailing-punct char and retry
+        tries = tries + 1;
+    }
+    return 0;
+}
+
+fn _mention_seen_has() {
+    var i = 0;
+    while (i < _mention_seen_n) {
+        if (streq(_mention_seen + i * MENTION_PATH_CAP, _mention_path) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _mention_seen_add() {
+    if (_mention_seen_n >= MENTION_MAX) { return 0; }
+    var dst = _mention_seen + _mention_seen_n * MENTION_PATH_CAP;
+    var plen = strlen(_mention_path);
+    if (plen >= MENTION_PATH_CAP) { return 0; }
+    memcpy(dst, _mention_path, plen); store8(dst + plen, 0);
+    _mention_seen_n = _mention_seen_n + 1;
+    return 0;
+}
+
+# _mention_inject: read the file named by _mention_path (already resolved) and append its delimited
+# block to _mention_buf at offset `o`, bounded by `budget` (remaining total-injection bytes). Returns
+# the new offset (== `o` unchanged if the file is unreadable — e.g. a directory — or there is no room,
+# so the mention stays literal). Sets _mention_last_added to the content bytes appended (for the cap).
+fn _mention_inject(o, budget) {
+    _mention_last_added = 0;
+    var n = file_read_all(_mention_path, _mention_read, MENTION_FILE_CAP + 1);
+    # n <= 0 -> nothing to inject, leave literal. A DIRECTORY reads as 0 (file_open succeeds O_RDONLY,
+    # the first read hits EISDIR<0 which file_read_all treats as EOF -> total 0); a genuinely empty file
+    # is also 0. Both stay literal (portable — avoids a per-target is-dir stat; xstat is a Windows stub).
+    if (n <= 0) { return o; }
+    var trunc = 0;
+    if (n > MENTION_FILE_CAP) { n = MENTION_FILE_CAP; trunc = 1; }   # per-file cap
+    if (n > budget) { n = budget; trunc = 1; }                        # total-injection cap
+    var plen = strlen(_mention_path);
+    # room guard: header ("\n\n--- @" = 7) + path + " ---\n" (5) + content + trunc marker (24) + NUL
+    if ((((o + 7 + plen) + 5 + n) + 40) >= MENTION_BUF_CAP) { return o; }
+    o = _mention_apc(o, "\n\n--- @");
+    o = _mention_apc(o, _mention_path);
+    o = _mention_apc(o, " ---\n");
+    memcpy(_mention_buf + o, _mention_read, n); o = o + n;
+    if (trunc == 1) { o = _mention_apc(o, "\n[... truncated]"); }
+    _mention_last_added = n;
+    return o;
+}
+
+# mention_expand: return `text` with any resolvable @path mentions' file contents appended as
+# delimited blocks. Returns the ORIGINAL `text` pointer unchanged when nothing resolves. Reads files
+# via the /read machinery; PURE apart from the file reads (no session/token/cost mutation), so /dry
+# can call it side-effect-free.
+fn mention_expand(text) {
+    if (_mention_buf == 0) { _mention_buf = alloc(MENTION_BUF_CAP); }
+    if (_mention_read == 0) { _mention_read = alloc(MENTION_FILE_CAP + 2); }
+    if (_mention_path == 0) { _mention_path = alloc(MENTION_PATH_CAP); }
+    if (_mention_seen == 0) { _mention_seen = alloc(MENTION_MAX * MENTION_PATH_CAP); }
+    _mention_count = 0;
+    _mention_seen_n = 0;
+    var total = 0;
+
+    var tlen = strlen(text);
+    if (tlen >= MENTION_BUF_CAP) { return text; }   # pathological (the input line is ~4 KiB); passthrough
+    memcpy(_mention_buf, text, tlen);               # prose verbatim; @mentions stay literal in it
+    var o = tlen;
+
+    var i = 0;
+    while (load8(text + i) != 0) {
+        var c = load8(text + i);
+        var boundary = 0;
+        if (i == 0) { boundary = 1; }
+        elif (_mention_is_ws(load8(text + i - 1)) == 1) { boundary = 1; }
+        if ((c == 64) && (boundary == 1)) {         # '@' at start / after whitespace
+            var j = i + 1;
+            while (_mention_is_path_char(load8(text + j)) == 1) { j = j + 1; }
+            var plen = j - (i + 1);
+            if ((plen > 0) && (plen < MENTION_PATH_CAP)) {
+                var k = 0;
+                while (k < plen) { store8(_mention_path + k, load8(text + i + 1 + k)); k = k + 1; }
+                store8(_mention_path + plen, 0);
+                if ((_mention_count < MENTION_MAX) && (total < MENTION_TOTAL_CAP)) {
+                    if (_mention_resolve() == 1) {
+                        if (_mention_seen_has() == 0) {
+                            var newo = _mention_inject(o, MENTION_TOTAL_CAP - total);
+                            if (newo != o) {         # a block was written -> injected
+                                _mention_seen_add();
+                                total = total + _mention_last_added;
+                                _mention_count = _mention_count + 1;
+                                o = newo;
+                            }
+                        }
+                    }
+                }
+            }
+            i = j;
+        } else {
+            i = i + 1;
+        }
+    }
+    if (_mention_count == 0) { return text; }        # byte-identical passthrough (no mention resolved)
+    store8(_mention_buf + o, 0);
+    return _mention_buf;
+}

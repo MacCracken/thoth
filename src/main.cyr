@@ -49,6 +49,7 @@ include "src/feed.cyr"     # self-managed feed buffer (M7 / 0.9.1); after ui (fe
 include "src/ftree.cyr"    # file-tree pane geometry + model (M7 / 0.9.3)
 include "src/inhist.cyr"   # composer input-history recall ring (0.11.1); pure, TUI-only glue
 include "src/fsearch.cyr"   # feed search engine (0.18.4) — pure matcher/render over the feed ring; after ui+feed
+include "src/mention.cyr"   # @file mention expansion (0.21.0) — pure; rides /read machinery; before commands
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
