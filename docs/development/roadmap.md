@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.18.8):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.19.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -297,7 +297,8 @@ selection stays content-blind.
 > maintenance realign (re-sync vendored bote-core → 3.0.1 + toolchain → 6.4.20). The feature line then
 > resumed at `0.18.3` (live card) → `0.18.4` (feed search) → `0.18.5` (occurrence-granular) → `0.18.6`
 > (confirm-prompt return) → `0.18.7` (glyph-width table) → `0.18.8` (inline markdown), all DONE — **the
-> 0.18.x line is COMPLETE**; the next line is `0.19.x` (session visibility, PLANNED — below).
+> 0.18.x line is COMPLETE**. The `0.19.x` session-visibility line then opened with `0.19.0` (context-budget
+> meter, DONE, + the Cyrius 6.4.21 refresh); it continues at `0.19.1` (turn telemetry) below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -363,15 +364,18 @@ selection stays content-blind.
   review folded the search-inside-bold gap + the O(n²) latch; diff review clean. 974
   assertions. **This closes the 0.18.x re-renderable-feed line.** See CHANGELOG/state.md.
 
-### 0.19.x — session visibility (PLANNED)
+### 0.19.x — session visibility (0.19.0 DONE; rest PLANNED)
 
 > Surfacing data thoth already has (or already probes) — no new producers, no spine
 > surface. Items are independent slices; omit-until-present per ADR-0010 where a
 > producer can be absent.
 
-- **`0.19.0` — context-budget meter.** History bytes vs the ~32 KiB evict boundary in
-  the status bar + `/state` — thoth-owned data; today the evict happens silently and
-  the user cannot see context pressure coming.
+- **`0.19.0` — context-budget meter. DONE (2026-07-08).** Framed history bytes vs the
+  exact 32 KiB (`HOOSH_REQ_CAP/8`) evict boundary in the status bar (`ctx <n>K/32K`, red on
+  eviction) + `/state` (bytes + `N oldest evicted`). Pure `hoosh_ctx_bytes`/`_budget`/
+  `_evicted` mirror `_hoosh_history_start` line-for-line, so the meter IS the eviction
+  decision. Omit-until-present (single-turn/empty). Bundled the Cyrius **6.4.21** refresh.
+  984 assertions. See CHANGELOG/state.md.
 - **`0.19.1` — live agentic-turn telemetry.** The existing `tool-call:` feed lines
   gain verdict/elapsed/byte counts from the roundlog thoth already records; the
   spinner labels the currently-running tool.

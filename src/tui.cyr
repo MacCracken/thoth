@@ -688,6 +688,14 @@ fn tui_draw_status() {
     ui_emit(ROLE_ACCENT, _hoosh_model());
     ui_emit(ROLE_FAINT, "  turns ");
     emit(ui_sgr(ROLE_FG)); fmt_int(session_turns()); emit(ui_reset());
+    # ctx: framed history bytes vs the ~32 KiB evict boundary (0.19.0). Omitted when single-turn / empty
+    # (ADR-0010); the number turns RED once oldest turns start being evicted from the request.
+    if ((config_hoosh_history() == 1) && (session_history_len() > 0)) {
+        ui_emit(ROLE_FAINT, "  ctx ");
+        if (hoosh_ctx_evicted() > 0) { emit(ui_sgr(ROLE_RED)); } else { emit(ui_sgr(ROLE_FG)); }
+        fmt_int((hoosh_ctx_bytes() + 512) / 1024); emit("K"); emit(ui_reset());
+        emit(ui_sgr(ROLE_FAINT)); emit("/"); fmt_int(hoosh_ctx_budget() / 1024); emit("K"); emit(ui_reset());
+    }
     # tok: omitted until hoosh reports usage (0.10.2, ADR-0010 — never a placeholder).
     if (session_tokens_seen() == 1) {
         ui_emit(ROLE_FAINT, "  tok ");

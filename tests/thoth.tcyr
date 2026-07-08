@@ -160,6 +160,35 @@ fn test_session() {
     return 0;
 }
 
+# context-budget meter (0.19.0): surface framed history bytes vs the ~32 KiB evict boundary that
+# _hoosh_history_start uses, so context pressure is visible before it silently drops old turns.
+fn test_ctx_meter() {
+    test_group("context-budget meter (hoosh.cyr, 0.19.0)");
+    assert_eq(hoosh_ctx_budget(), 32768, "budget is HOOSH_REQ_CAP/8 = 32 KiB");
+    session_history_clear();
+    assert_eq(hoosh_ctx_bytes(), 0, "empty history is 0 bytes");
+    assert_eq(hoosh_ctx_evicted(), 0, "empty history evicts nothing");
+    session_history_append("user", "hello", 5);
+    assert_eq(hoosh_ctx_bytes(), 21, "one 'hello' = 5 content + 16 framing");
+    assert_eq(hoosh_ctx_evicted(), 0, "small history evicts nothing");
+    session_history_append("assistant", "world!", 6);
+    assert_eq(hoosh_ctx_bytes(), 43, "two messages = 21 + (6+16)");
+    # eviction: two ~20 KiB messages exceed the 32 KiB budget -> the oldest is dropped from the request
+    session_history_clear();
+    var big = alloc(20001);
+    var i = 0;
+    while (i < 20000) { store8(big + i, 120); i = i + 1; }   # 'x' * 20000
+    store8(big + 20000, 0);
+    session_history_append("user", big, 20000);
+    assert_eq(hoosh_ctx_bytes(), 20016, "one 20K message = 20016 framed bytes");
+    assert_eq(hoosh_ctx_evicted(), 0, "one 20K message fits under budget (nothing evicted)");
+    session_history_append("assistant", big, 20000);
+    assert_eq(hoosh_ctx_bytes(), 40032, "two 20K messages = 40032 framed bytes (> 32K budget)");
+    assert_eq(hoosh_ctx_evicted(), 1, "the oldest of two over-budget turns is evicted");
+    session_history_clear();
+    return 0;
+}
+
 # The avatara persona overlay (M5): identity SOURCED from the vendored archetype
 # bundle (egyptian_thoth via the prof_* accessors), not a hardcoded stub. soul +
 # spirit are the prose that feeds the hoosh system prompt.
@@ -2891,6 +2920,7 @@ fn main() {
     test_seams();
     test_capability_ladder();
     test_session();
+    test_ctx_meter();
     test_persona();
     test_config();
     test_hoosh();

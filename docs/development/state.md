@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.19.0** — **context-budget meter** (opens the 0.19.x session-visibility line) + a Cyrius **6.4.21**
+refresh, 2026-07-08. hoosh keeps only the newest tail of the conversation whose framed bytes fit
+`HOOSH_REQ_CAP/8` (**exactly 32768 = 32 KiB**); older turns are silently evicted from each request
+(`_hoosh_history_start`). Now that pressure is VISIBLE: the status bar shows `ctx <n>K/32K` after `turns`
+(the number RED once eviction begins), and `/state`'s `context :` row shows `<n>K / 32K budget` + `N oldest
+evicted`. Pure producers in `src/hoosh.cyr` — `hoosh_ctx_budget()` (= `HOOSH_REQ_CAP/8`), `hoosh_ctx_bytes()`
+(Σ `strlen(content)+16` over all messages), `hoosh_ctx_evicted()` (= `_hoosh_history_start`) — use the
+**identical** sizing to `_hoosh_history_start`, so the meter IS the eviction decision, not an estimate
+(history content is a C string, the same invariant the eviction + request serialization already assume).
+Omit-until-present (ADR-0010): the segment/row is dropped when single-turn (`[hoosh].history=false`) or
+empty. No new producer, no spine surface. Bundled the toolchain refresh (`cyrius.cyml` `6.4.20 → 6.4.21` +
+`cyrius lib sync` — only `lib/tls_native_hs13.cyr` moved, a TLS-1.3 handshake update). All lanes behave. 984
+assertions (+10, `test_ctx_meter` — the budget, byte accounting, and the eviction boundary via two ~20 KiB
+messages). Pin **6.4.21** (the local `cycc` wrapper has since advanced to **6.4.22** — a residual drift, a
+future refresh clears it). Live-verify (`--tier=rich`): hold a long conversation and watch `ctx` climb
+toward `32K`, then go red as old turns evict. Next: `0.19.1` live agentic-turn telemetry.
+
 **0.18.8** — **inline markdown in the reply feed** (closes the 0.18.x line), 2026-07-08. Beyond the fenced
 code that 0.15.1 highlights, prose lines now get **headings / bold / inline-code / list markers** styled. A
 new inline pass in `mdhl` (the prose branch of `_mdhl_line_done` now calls `_mdhl_inline_line`, was

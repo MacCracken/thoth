@@ -2,6 +2,33 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.0] - 2026-07-08
+
+**Context-budget meter — you can now see context pressure before hoosh silently drops old turns.** Opens the
+0.19.x session-visibility line. hoosh keeps only the newest tail of the conversation whose framed bytes fit
+`HOOSH_REQ_CAP/8` (**exactly 32 KiB**); older turns are evicted from each request. That eviction was
+invisible — now the status bar and `/state` show the framed history bytes vs the 32 KiB boundary and how
+many turns are being dropped. No new producer — just thoth-owned data it already computes each turn. Bundles
+a **Cyrius toolchain refresh to 6.4.21** (`cyrius lib sync`). 984 assertions (+10). Pin **6.4.21**.
+
+### Added
+- **Context meter** (`src/hoosh.cyr`): pure `hoosh_ctx_budget()` (= `HOOSH_REQ_CAP/8` = 32768),
+  `hoosh_ctx_bytes()` (Σ `strlen(content)+16` over all messages — the *identical* unit
+  `_hoosh_history_start` budgets against, so bytes-vs-budget IS the eviction decision, not an estimate), and
+  `hoosh_ctx_evicted()` (= `_hoosh_history_start`, the count of oldest turns currently dropped).
+- **Status bar** (`src/tui.cyr`, `tui_draw_status`): a `ctx <n>K/32K` segment after `turns`, the number
+  RED once eviction begins. Omitted when single-turn (`[hoosh].history=false`) or empty (ADR-0010).
+- **`/state`** (`src/commands.cyr`): the `context :` row now shows `<n>K / 32K budget` and `N oldest evicted`
+  when over budget; a new `empty` branch for a fresh multi-turn session.
+- **10 assertions** (`tests/thoth.tcyr`, `test_ctx_meter`): the budget constant; byte accounting for
+  0/1/2 messages; and the eviction boundary (two ~20 KiB messages exceed 32 KiB → the oldest is evicted).
+
+### Toolchain
+- **Pin `6.4.20 → 6.4.21`** (`cyrius.cyml` + `cyrius lib sync`, 70 floor modules; only
+  `lib/tls_native_hs13.cyr` changed — a small TLS-1.3 handshake update). All lanes behave; 984 assertions
+  pass. NOTE: the local `cycc` wrapper has since advanced to **6.4.22**, so a residual drift warning remains
+  — a future refresh clears it.
+
 ## [0.18.8] - 2026-07-08
 
 **Inline markdown in the reply feed — headings, bold, inline code, and list markers are now styled, not

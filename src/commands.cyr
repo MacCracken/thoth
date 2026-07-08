@@ -201,7 +201,16 @@ fn cmd_state() {
     }
     ui_label("  context : ");
     if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); oprintln(""); }
-    else { emit("multi-turn, "); ofmt_int(session_history_len()); ui_emit(ROLE_MUTED, " messages (/reset clears)"); oprintln(""); }
+    elif (session_history_len() == 0) { emit("multi-turn, "); ui_emit(ROLE_MUTED, "empty (no turns yet; /reset clears)"); oprintln(""); }
+    else {
+        emit("multi-turn, "); ofmt_int(session_history_len()); emit(" messages");
+        # 0.19.0: framed history bytes vs the ~32 KiB evict boundary — surface context pressure.
+        ui_emit(ROLE_MUTED, " · ");
+        ofmt_int((hoosh_ctx_bytes() + 512) / 1024); emit("K / "); ofmt_int(hoosh_ctx_budget() / 1024); ui_emit(ROLE_MUTED, "K budget");
+        var ev = hoosh_ctx_evicted();
+        if (ev > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(ev); emit(" oldest evicted"); emit(ui_reset()); }
+        ui_emit(ROLE_MUTED, " (/reset clears)"); oprintln("");
+    }
     ui_label("  memory  : ");
     if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall)"); oprintln(""); }
     elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }

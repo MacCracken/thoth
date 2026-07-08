@@ -357,6 +357,31 @@ fn _hoosh_history_start(cap) {
     return start;
 }
 
+# --- context-budget meter (0.19.0) ----------------------------------------
+# hoosh keeps only the NEWEST tail of the conversation whose framed content bytes fit HOOSH_REQ_CAP/8
+# (~32 KiB); older turns are silently EVICTED from each request (_hoosh_history_start). These PURE accessors
+# surface that so /state + the status bar can show context pressure before it bites — no new producer, just
+# thoth-owned data it already computes each turn.
+fn hoosh_ctx_budget() { return HOOSH_REQ_CAP / 8; }        # the eviction boundary in framed bytes
+
+# hoosh_ctx_bytes: total FRAMED history bytes — sum of content length + per-message framing over ALL
+# messages. Uses `strlen(content) + 16` to MATCH _hoosh_history_start EXACTLY (line-for-line), so the meter
+# predicts the real eviction boundary rather than an independent estimate: bytes-vs-budget IS the eviction
+# decision. History content is a C string (no interior NUL) — the same invariant the eviction budget and the
+# request serialization already rely on; an interior NUL would move the eviction boundary itself and the
+# meter would still mirror it.
+fn hoosh_ctx_bytes() {
+    var n = session_history_len();
+    var used = 0;
+    var i = 0;
+    while (i < n) { used = used + strlen(session_history_content(i)) + 16; i = i + 1; }
+    return used;
+}
+
+# hoosh_ctx_evicted: how many OLDEST turns are currently dropped from a request (0 = the whole history
+# fits). == _hoosh_history_start (messages [0, start) are excluded from the request tail).
+fn hoosh_ctx_evicted() { return _hoosh_history_start(HOOSH_REQ_CAP); }
+
 # hoosh_build_messages: write a chat-completions request carrying the full
 # conversation (system persona + the budgeted tail of session history) into dst,
 # NUL-terminated; return the byte length. The newest user turn must already be in
