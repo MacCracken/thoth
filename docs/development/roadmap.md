@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.19.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.19.2):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -298,8 +298,8 @@ selection stays content-blind.
 > resumed at `0.18.3` (live card) → `0.18.4` (feed search) → `0.18.5` (occurrence-granular) → `0.18.6`
 > (confirm-prompt return) → `0.18.7` (glyph-width table) → `0.18.8` (inline markdown), all DONE — **the
 > 0.18.x line is COMPLETE**. The `0.19.x` session-visibility line then opened with `0.19.0` (context-budget
-> meter, DONE, + the Cyrius 6.4.21 refresh) → `0.19.1` (live turn telemetry, DONE); it continues at
-> `0.19.2` (`/git` per-file diff) below.
+> meter, DONE, + the Cyrius 6.4.21 refresh) → `0.19.1` (live turn telemetry, DONE) → `0.19.2` (`/git`
+> per-file diff, DONE); it continues at `0.19.3` (live spine-health) below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -365,7 +365,7 @@ selection stays content-blind.
   review folded the search-inside-bold gap + the O(n²) latch; diff review clean. 974
   assertions. **This closes the 0.18.x re-renderable-feed line.** See CHANGELOG/state.md.
 
-### 0.19.x — session visibility (0.19.0–0.19.1 DONE; rest PLANNED)
+### 0.19.x — session visibility (0.19.0–0.19.2 DONE; rest PLANNED)
 
 > Surfacing data thoth already has (or already probes) — no new producers, no spine
 > surface. Items are independent slices; omit-until-present per ADR-0010 where a
@@ -382,8 +382,11 @@ selection stays content-blind.
   (so `/audit` shows them); the spinner reads `running <tool>…` (or `N tools` for a parallel
   batch). Serial path times gate+invoke; parallel path times each call in its worker slot
   (PAR_CTX_SZ 48→56). Diff review clean. 986 assertions. See CHANGELOG/state.md.
-- **`0.19.2` — `/git` per-file diff.** The 0.13.x deferred follow-up: `sit_diff_path`
-  rendered through the existing colored diff renderer (`src/diff.cyr`).
+- **`0.19.2` — `/git` per-file diff. DONE (2026-07-08).** `/git <path>` renders a file's
+  diff (HEAD vs worktree) via `sit_diff_path` through the colored diff renderer — new
+  `diff_render_ann` colors sit's annotated line-ops by reusing `_diff_emit_line` (the same
+  gutter + syntax highlight `/read` uses); `sit_diff_path`==0 → honest "no changes". Verified
+  live + code-trace clean. 993 assertions. See CHANGELOG/state.md.
 - **`0.19.3` — live spine-health.** Traffic-outcome reachability (a transport failure
   during a turn marks hoosh unreachable in the status bar) + Ctrl-R re-probe — the
   deferred 0.11.x rider; no timerfd tick / active idle probe.

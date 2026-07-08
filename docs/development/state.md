@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.19.2** — **`/git <path>` per-file diff**, 2026-07-08. The 0.13.x deferred follow-up: `/git` showed
+branch + changed files; now `/git <path>` renders that file's diff (HEAD blob vs working tree), colored +
+syntax-highlighted. sit computes the diff (`sit_diff_path` → a vec of annotated line-ops `{kind, line-tuple,
+old_no, new_no}`); thoth colors it. New `diff_render_ann(path, ops)` (`src/diff.cyr`) prints a blue path
+header + a `+A -B` count line, then reuses `_diff_emit_line` (line-number gutter + colored +/-/space gutter +
+`detect_language` body highlight — the SAME renderer `/read` + write diffs use) over each op (del→red/`-`/
+`ann_old`, add→green/`+`/`_sit_ann_new`, keep→faint/` `). Full annotated file (changes in context), matching
+thoth's other diff views. `cmd_git(line)` now takes an arg: a path → the diff; `sit_diff_path`==0 (unchanged
+/ untracked-and-absent / LCS-too-large) → honest "no changes vs HEAD", never a blank or fake diff; bare
+`/git` is the unchanged branch + status. Reads only the documented sit surface + line-tuple accessors; no
+free (arena model, like `sit_repo_status`); PT_PLAIN degrades to verbatim. Verified LIVE (`/git
+src/commands.cyr` → `+17 -3` with a rendered body) + an adversarial code-trace (offsets, count/render
+consistency, ops==0/empty/all-add/all-del, non-NUL blob safety, floor — all clean). 993 assertions (+7,
+`test_git_diff` — a hand-built ann-ops vec renders header/count/body). Pin **6.4.21**. Next: `0.19.3` live
+spine-health.
+
 **0.19.1** — **live agentic-turn telemetry**, 2026-07-08. The `tool-call:`/`result:` feed lines now show
 **verdict · elapsed · result-bytes** in a faint sub-line (`    · ok · 142ms · 87B`; just the verdict for a
 denied / no-name call), and the spinner reads `running <tool>…` while a call blocks (`running 3 tools…` for

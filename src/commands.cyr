@@ -142,7 +142,7 @@ fn cmd_help() {
     _help_line("  /help", "              this help");
     _help_line("  /seams", "             capability ladder (spine seam status)");
     _help_line("  /state", "             session state");
-    _help_line("  /git", "               working repo: branch + changed files (via sit; when at a repo)");
+    _help_line("  /git [path]", "        working repo: branch + changed files, or a file's diff (via sit)");
     _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh)");
     _help_line("  /models [provider]", " list providers; with one, its switchable models");
     _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
@@ -297,12 +297,26 @@ fn cmd_state() {
 # domain. Own open->read->close for the detailed listing, then git_probe() to sync
 # the cached producer (branch + count) so the status bar agrees. Honest absent line
 # off a repo (sit reads at cwd; no ancestor walk).
-fn cmd_git() {
+fn cmd_git(line) {
+    var arg = arg_after(line);
     var repo = sit_repo_open(".");
     if (repo == 0) {
         ui_emit(ROLE_FAINT, "git: no git/.sit repo at the working directory"); oprintln("");
         ui_emit(ROLE_MUTED, "  (sit reads at the cwd; it does not walk up to an ancestor repo)"); oprintln("");
         git_probe();
+        return 0;
+    }
+    # 0.19.2: `/git <path>` renders that file's diff (HEAD blob vs working tree) via sit_diff_path through
+    # the colored diff renderer. sit_diff_path returns 0 when the file is unchanged / untracked-and-absent /
+    # too large to diff — reported honestly, never a blank or a fake diff.
+    if (arg != 0) {
+        var ops = sit_diff_path(repo, arg);
+        if (ops == 0) {
+            emit("  "); ui_emit(ROLE_BLUE, arg); ui_emit(ROLE_MUTED, " — no changes vs HEAD (unchanged, untracked-and-absent, or too large)"); oprintln("");
+        } else {
+            diff_render_ann(arg, ops);
+        }
+        sit_repo_close(repo);
         return 0;
     }
     ui_label("  branch : ");
@@ -771,7 +785,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_THEME) { cmd_theme(line); return 1; }
     if (c == CMD_DRY) { cmd_dry(line); return 1; }
     if (c == CMD_REMEMBER) { cmd_remember(line); return 1; }
-    if (c == CMD_GIT) { cmd_git(); return 1; }
+    if (c == CMD_GIT) { cmd_git(line); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_FIND) { cmd_find(line); return 1; }
     if (c == CMD_UNKNOWN_SLASH) {

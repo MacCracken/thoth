@@ -1576,6 +1576,36 @@ fn test_diff() {
     return 0;
 }
 
+# /git per-file diff renderer (0.19.2): diff_render_ann colors sit's annotated line-ops (kind/line/old/new)
+# through _diff_emit_line — the same renderer /read + write diffs use. Build a tiny ops vec by hand
+# (sit_diff_path's 32-byte {kind, line-tuple, old_no, new_no} shape) and render it into the feed ring.
+fn _t_ann(kind, text, tlen, oldn, newn) {
+    var t = alloc(16); store64(t, text); store64(t + 8, tlen);              # the {ptr,len} line tuple
+    var o = alloc(32); store64(o, kind); store64(o + 8, t); store64(o + 16, oldn); store64(o + 24, newn);
+    return o;
+}
+fn test_git_diff() {
+    test_group("/git per-file diff (diff.cyr diff_render_ann, 0.19.2)");
+    ui_force(PT_PLAIN, CD_NONE);                                            # plain -> verbatim body (easy strip)
+    var ops = vec_new();
+    vec_push(ops, _t_ann(0, "ctx", 3, 1, 1));                               # keep (context)
+    vec_push(ops, _t_ann(1, "removed", 7, 2, 0));                           # del
+    vec_push(ops, _t_ann(2, "added", 5, 0, 2));                             # add
+    feed_init();
+    out_mode_set(OUT_RING);
+    diff_render_ann("f.txt", ops);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 5, "5 rows: path header, +/- count, 3 body lines");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "f.txt", 5), 1, "row 0 is the path header");
+    assert_eq(_t_count_sub(feed_line_ptr(1), feed_line_len(1), "+1", 2), 1, "count line shows +1 add");
+    assert_eq(_t_count_sub(feed_line_ptr(1), feed_line_len(1), "-1", 2), 1, "count line shows -1 del");
+    assert_eq(_t_count_sub(feed_line_ptr(2), feed_line_len(2), "ctx", 3), 1, "context line body preserved");
+    assert_eq(_t_count_sub(feed_line_ptr(3), feed_line_len(3), "removed", 7), 1, "del line body preserved");
+    assert_eq(_t_count_sub(feed_line_ptr(4), feed_line_len(4), "added", 5), 1, "add line body preserved");
+    return 0;
+}
+
 # Syntax highlighting (0.8.4): the vyakarana integration — language detection,
 # tokenization, and the token-kind -> color-role mapping for /read.
 fn test_highlight() {
@@ -2953,6 +2983,7 @@ fn main() {
     test_bounds_hardening();
     test_ui();
     test_diff();
+    test_git_diff();
     test_highlight();
     test_tui();
     test_feed();

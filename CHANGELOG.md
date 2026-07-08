@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.2] - 2026-07-08
+
+**`/git <path>` renders that file's diff** — HEAD blob vs working tree, colored and syntax-highlighted. The
+0.13.x deferred follow-up: `/git` already showed branch + changed files; now `/git <path>` shows the actual
+diff of one file, computed by sit (`sit_diff_path`) and rendered through the same colored diff renderer
+`/read` and write diffs already use. 993 assertions (+7). Pin **6.4.21**.
+
+### Added
+- **`diff_render_ann(path, ops)`** (`src/diff.cyr`): colors sit's annotated line-ops (the vec `sit_diff_path`
+  returns — one `{kind, line-tuple, old_no, new_no}` record per line) by reusing `_diff_emit_line`
+  (line-number gutter + a colored +/-/space gutter + a `detect_language`-highlighted body). A blue path
+  header + a `+A -B` count line, then the full annotated file (changes in context) — matching thoth's other
+  diff views. sit computes the LCS; thoth colors it.
+- **`/git <path>`** (`src/commands.cyr`, `cmd_git(line)` now takes an arg): with a path, opens the repo and
+  renders `sit_diff_path(repo, path)`; `sit_diff_path` returns 0 for an unchanged / untracked-and-absent /
+  too-large file, reported honestly as "no changes vs HEAD" (never a blank or a fake diff). Bare `/git` is
+  the unchanged branch + status listing. Help updated to `/git [path]`.
+- **7 assertions** (`tests/thoth.tcyr`, `test_git_diff`): a hand-built ann-ops vec (keep/del/add, in sit's
+  32-byte layout) renders to the path header, a `+1 -1` count, and three body lines whose text is preserved.
+
 ## [0.19.1] - 2026-07-08
 
 **Live agentic-turn telemetry — the `tool-call:` feed lines now show verdict, elapsed, and result size, and
