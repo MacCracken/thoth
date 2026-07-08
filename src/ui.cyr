@@ -469,6 +469,17 @@ fn ui_emit_n(role, ptr, n) {
     return 0;
 }
 
+# ui_match_on: the feed-search match highlight SGR — reverse video for a match, reverse+underline for the
+# CURRENT match (cur==1), or "" at the plain tier (floor: a highlight adds zero bytes). Theme- and
+# depth-independent (reverse/underline render at CD_16+ and even monochrome), so these are static literals,
+# not cached theme SGR. The matching OFF is emitted by fsearch_render as a reset marker + role restore (it
+# collapses feed_clip_seg's wrap carry and clears reverse+underline in one shot), so there is no ui_match_off.
+fn ui_match_on(cur) {
+    if (_ui_tier == PT_PLAIN) { return ""; }
+    if (cur == 1) { return "\x1b[7;4m"; }      # current match: reverse + underline
+    return "\x1b[7m";                            # other matches: reverse video
+}
+
 # Introspection (announced in /state; future /seams presentation row).
 fn ui_tier() { return _ui_tier; }
 fn ui_color_depth() { return _ui_depth; }

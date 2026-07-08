@@ -7,6 +7,29 @@
 
 ## Version
 
+**0.18.4** — **feed search** (Ctrl-F / `/find` over the scrollback), 2026-07-08. A new PURE engine
+(`src/fsearch.cyr`) matches the query against the VISIBLE text of every feed-ring line — case-insensitive
+ASCII, transparent to the 0.18.0 role markers + any interleaved escapes, glyph-aligned (a multi-byte UTF-8
+query compares byte-exact, a declared limitation) — and a TUI MODAL highlights the matches inline and
+scrolls the current one into view. **Net-floor-safe by construction**: the highlighter (`fsearch_render`)
+injects reverse-video SGR into a per-line temp buffer that is handed to the **UNCHANGED** `feed_clip_seg`
+(the injected escapes are just more zero-width escapes it already carries across a soft-wrap) — so the
+delicate 0.11.3 soft-wrap primitive is untouched. Two-phase modal: **Ctrl-F** opens incremental search
+(type → highlight + jump to the newest match), **Enter** commits to a nav phase where **n / N** (and ↓/↑,
+Enter) jump newer/older; **Ctrl-C** closes. `/find <text>` jumps straight into nav; outside the TUI it
+announces honestly (no re-renderable feed) and does nothing. The current match draws reverse+underline,
+others reverse (via `ui_match_on`); scroll-to-match uses the new `feed_phys_before` (soft-wrap physical-row
+distance). Match-OFF is a **reset marker + active-role restore** (design review: a bare `ESC[27m` off would
+overflow `feed_clip_seg`'s 64B wrap carry on a many-match wide line; the reset collapses it to O(1) and is
+theme-correct), and an interior reset inside a match re-asserts the reverse. The pre-cut **design review**
+caught + folded an EOF busy-spin hang (`_tui_search_key` tears the loop down on `KEY_EOF`), the carry
+overflow, and cursor mis-parking on full repaints (`tui_park_cursor` gates on the modal → covers SIGWINCH /
+`/theme` / `/find`-entry); the as-built **diff review** raised zero findings. 936 assertions (+26,
+`test_fsearch` — incl. an interior-reset re-assert, a wrap-straddle carry re-flush, a bounded-carry
+many-match case, and the PT_PLAIN floor). Pin **6.4.20**. Live-verify on a real tty (`--tier=rich`): Ctrl-F,
+type, watch matches highlight, n/N to jump. Next in the 0.18.x line: `0.18.5` glyph-width, `0.18.6` inline
+markdown.
+
 **0.18.3** — **live-upgrading fenced-code card** (the 0.15.1 deferred "Option C"), 2026-07-07. A streamed
 ```` ```lang ```` block is no longer withheld until its closing fence: the interior lines now emit **live**
 (unhighlighted) as they arrive, then at the closing fence — or on an interrupt / truncated completion — the

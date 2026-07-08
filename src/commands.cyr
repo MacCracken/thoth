@@ -27,6 +27,7 @@ enum Cmd {
     CMD_REMEMBER = 19;
     CMD_GIT = 20;
     CMD_COPY = 21;
+    CMD_FIND = 22;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -128,6 +129,7 @@ fn classify_input(line) {
     if (token_is(line, "/remember") == 1) { return CMD_REMEMBER; }
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
     if (token_is(line, "/copy") == 1) { return CMD_COPY; }
+    if (token_is(line, "/find") == 1) { return CMD_FIND; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -152,6 +154,7 @@ fn cmd_help() {
     _help_line("  /reset", "             clear the conversation context (start fresh)");
     _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
     _help_line("  /copy", "              copy the last reply to the clipboard (OSC 52, best-effort)");
+    _help_line("  /find [text]", "       search the feed scrollback (TUI: ⌃F; n/N jump between matches)");
     _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
@@ -633,6 +636,22 @@ fn cmd_copy() {
     return 0;
 }
 
+# cmd_find: /find [text] — search the feed scrollback (0.18.4). TUI-only: it drives the same modal that
+# Ctrl-F opens (highlights + n/N jump). Bare /find opens the search input (type the query); /find <text>
+# jumps straight to the newest match in nav mode. Outside the TUI (piped/REPL/one-shot, out_mode != OUT_RING)
+# there is no re-renderable feed to highlight, so it announces honestly and does nothing (floor-safe).
+fn cmd_find(line) {
+    var q = arg_after(line);
+    if (out_mode() != OUT_RING) {
+        oprintln("find: search runs in the rich TUI — start thoth in a terminal, then Ctrl-F (or /find <text>)");
+        return 0;
+    }
+    var ql = 0;
+    if (q != 0) { ql = strlen(q); }
+    tui_search_from_cmd(q, ql);
+    return 0;
+}
+
 # cmd_theme: switch the color theme. Bare /theme shows the active theme + the choices;
 # `/theme dark|light` switches (rebuilds the cached SGR table — chrome + new output re-color, and since
 # 0.18.0 the feed ring stores role MARKERS not baked SGR, so the post-dispatch feed_repaint RE-EXPANDS
@@ -745,6 +764,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_REMEMBER) { cmd_remember(line); return 1; }
     if (c == CMD_GIT) { cmd_git(); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
+    if (c == CMD_FIND) { cmd_find(line); return 1; }
     if (c == CMD_UNKNOWN_SLASH) {
         # Guard FIRST: refuse at the depth bound BEFORE writing a slot, so a cycle can never
         # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).

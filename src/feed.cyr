@@ -569,3 +569,16 @@ fn feed_vis(row) { return load64(_feed_vis + _feed_row_slot(row) * 8); }
 # since 0.11.3 — the painter and _tui_feed_scroll_by both reckon in physical rows.
 fn feed_scroll() { return _feed_scroll; }
 fn feed_scroll_set(off) { if (off < 0) { off = 0; } _feed_scroll = off; return 0; }
+
+# feed_phys_before: PHYSICAL (soft-wrapped) rows occupied by logical lines [0, li) at column `width` — the
+# distance from the top of the document to line li's first physical row. Used by feed search to scroll a
+# match into view (0.18.4). li may be feed_count() (the pending line sits after all sealed rows). Pure.
+fn feed_phys_before(li, width) {
+    var t = 0;
+    var i = 0;
+    while ((i < li) && (i < _feed_count)) {
+        t = t + feed_rows_for(feed_vis(i), width);
+        i = i + 1;
+    }
+    return t;
+}

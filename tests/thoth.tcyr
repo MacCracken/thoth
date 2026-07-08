@@ -17,6 +17,7 @@ include "src/ui.cyr"
 include "src/feed.cyr"
 include "src/ftree.cyr"
 include "src/inhist.cyr"
+include "src/fsearch.cyr"
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -2124,6 +2125,20 @@ fn _t_strip_sgr(dst, src, len) {
     store8(dst + w, 0);
     return w;
 }
+# _t_count_sub: number of (possibly overlapping) occurrences of needle[0..m) in hay[0..n).
+fn _t_count_sub(hay, n, needle, m) {
+    if (m <= 0) { return 0; }
+    var i = 0;
+    var c = 0;
+    while ((i + m) <= n) {
+        var k = 0;
+        var eq = 1;
+        while ((k < m) && (eq == 1)) { if (load8(hay + i + k) != load8(needle + k)) { eq = 0; } k = k + 1; }
+        if (eq == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
 # re-renderable feed (0.18.0): the ring stores role MARKERS (reverse-mapped at seal); the painter
 # EXPANDS them to the current theme's concrete SGR — byte-identical output now, recolorable later.
 fn test_feed_markers() {
@@ -2452,6 +2467,121 @@ fn test_mdhl_livecard() {
     return 0;
 }
 
+# feed search (0.18.4): the PURE matcher (case-insensitive, escape-transparent), the highlighted-line
+# render (reverse-video injected, interior-reset re-assert, bounded-carry OFF), and the match-list state
+# machine (rescan over the ring + pending, n/N wrap). The render feeds the UNCHANGED feed_clip_seg.
+fn test_fsearch() {
+    test_group("feed search (fsearch.cyr, 0.18.4)");
+    fsearch_init();
+    ui_force(PT_ANSI, CD_TRUE);
+    # --- matcher: case-insensitive ASCII, no-match, empty query ---
+    fsearch_set_query("err", 3);
+    assert_eq(fsearch_line_has("an error here", 13), 1, "match mid-line (err in error)");
+    assert_eq(fsearch_line_has("ERROR up", 8), 1, "case-insensitive (ERR matches err)");
+    assert_eq(fsearch_line_has("all fine", 8), 0, "no match");
+    fsearch_set_query("", 0);
+    assert_eq(fsearch_line_has("error", 5), 0, "empty query never matches");
+    # escape-transparent: "e" + RESET marker + "rror" still contains "error"
+    var mline[32];
+    var mn = 0;
+    store8(&mline + mn, 101); mn = mn + 1;             # 'e'
+    store8(&mline + mn, 27);  mn = mn + 1;             # ESC
+    store8(&mline + mn, FEED_MARK_RESET); mn = mn + 1; # reset marker (0xBF)
+    store8(&mline + mn, 114); mn = mn + 1;             # 'r'
+    store8(&mline + mn, 114); mn = mn + 1;             # 'r'
+    store8(&mline + mn, 111); mn = mn + 1;             # 'o'
+    store8(&mline + mn, 114); mn = mn + 1;             # 'r'
+    fsearch_set_query("error", 5);
+    assert_eq(fsearch_line_has(&mline, mn), 1, "match spans an interior marker (e<reset>rror)");
+    # --- render: injects reverse video; visible text preserved (feeds the unchanged feed_clip_seg) ---
+    var rb[128];
+    fsearch_set_query("foo", 3);
+    var rn = fsearch_render(&rb, 128, "a foo b", 7, 0);
+    assert_eq(_t_has_esc(&rb, rn), 1, "render injects an escape (reverse video)");
+    var sb[64];
+    _t_strip_sgr(&sb, &rb, rn);
+    assert(streq(&sb, "a foo b"), "render strips back to the source visible text");
+    assert_eq(_t_count_sub(&rb, rn, "\x1b[7m", 4), 1, "one reverse-ON around the single match");
+    # current match uses a DISTINCT sgr (reverse+underline)
+    var rc[128];
+    var rcn = fsearch_render(&rc, 128, "a foo b", 7, 1);
+    assert_eq(_t_count_sub(&rc, rcn, "\x1b[7;4m", 6), 1, "current match uses reverse+underline");
+    # --- RESET RE-ASSERT: an interior reset inside the match must not kill reverse ---
+    fsearch_set_query("error", 5);
+    var hb[128];
+    var hn = fsearch_render(&hb, 128, &mline, mn, 0);
+    assert_eq(_t_count_sub(&hb, hn, "\x1b[7m", 4), 2, "reverse re-asserted after the interior reset (two ESC[7m)");
+    # --- WRAP-STRADDLE: the render output through feed_clip_seg — reverse RESUMES at a later segment ---
+    # line = "aaaa" + "e r <reset> r o r" (match "error" at visible cols 4..8); width 6 -> the interior reset
+    # lands in segment 1's SKIP region; the boundary carry must re-flush ESC[7m so "ror" paints reversed.
+    var wl[48];
+    var wn = 0;
+    store8(&wl + wn, 97); wn = wn + 1; store8(&wl + wn, 97); wn = wn + 1;
+    store8(&wl + wn, 97); wn = wn + 1; store8(&wl + wn, 97); wn = wn + 1;   # "aaaa"
+    store8(&wl + wn, 101); wn = wn + 1;                                     # 'e' (col 4)
+    store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 5)
+    store8(&wl + wn, 27); wn = wn + 1; store8(&wl + wn, FEED_MARK_RESET); wn = wn + 1;  # reset marker
+    store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 6)
+    store8(&wl + wn, 111); wn = wn + 1;                                     # 'o' (col 7)
+    store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 8)
+    var wr[192];
+    var wrn = fsearch_render(&wr, 192, &wl, wn, 0);
+    var seg1[128];
+    # skip=7: the interior reset AND its re-assert both fall in this segment's SKIP region (cols<7), so the
+    # ONLY source of reverse in the painted window is the boundary carry re-flush — proving the re-assert
+    # refilled the carry after feed_clip_seg cleared it on the reset (feed.cyr:307). Without the re-assert
+    # the carry would be empty and "or" would paint UNreversed.
+    var s1 = feed_clip_seg(&seg1, 128, &wr, wrn, 7, 6);                     # segment: visible cols [7,13)
+    assert_eq(_t_count_sub(&seg1, s1, "\x1b[7m", 4), 1, "reverse resumes at the wrap boundary (carry re-flush after a skip-region reset)");
+    var s1v[64];
+    _t_strip_sgr(&s1v, &seg1, s1);
+    assert(streq(&s1v, "or"), "segment visible text is 'or' (still reversed across the wrap)");
+    # --- BOUNDED CARRY: many single-char matches on a wide line — the reset-collapse OFF keeps the carry
+    # tiny, so a non-first segment still reverses correctly (regression for the 64B carry overflow). ---
+    fsearch_set_query("e", 1);
+    var el[64];
+    var en = 0;
+    while (en < 40) { store8(&el + en, 101); en = en + 1; }                 # 40 e's
+    var er[512];
+    var ern = fsearch_render(&er, 512, &el, en, 0);
+    var eseg[128];
+    var es = feed_clip_seg(&eseg, 128, &er, ern, 30, 6);                    # far segment: cols [30,36)
+    var esv[64];
+    _t_strip_sgr(&esv, &eseg, es);
+    assert(streq(&esv, "eeeeee"), "far segment paints its 6 e's (carry stayed bounded, no overflow drop)");
+    assert_eq(_t_has_esc(&eseg, es), 1, "far segment is still highlighted");
+    # --- PT_PLAIN floor: render is byte-identical to src ---
+    ui_force(PT_PLAIN, CD_NONE);
+    fsearch_set_query("foo", 3);
+    var pb[64];
+    var pn = fsearch_render(&pb, 64, "a foo b", 7, 0);
+    assert_eq(pn, 7, "PT_PLAIN render is byte-length-identical to src (floor)");
+    var pv[64];
+    _t_strip_sgr(&pv, &pb, pn);
+    assert(streq(&pv, "a foo b"), "PT_PLAIN render == src verbatim (floor)");
+    ui_force(PT_ANSI, CD_TRUE);
+    # --- rescan + next/prev over the ring (+ pending) ---
+    feed_init();
+    feed_write("alpha error one\n", 16);
+    feed_write("nothing here\n", 13);
+    feed_write("beta error two\n", 15);
+    fsearch_set_query("error", 5);
+    assert_eq(fsearch_rescan(), 2, "rescan finds 2 matching lines");
+    assert_eq(fsearch_cur_line(), 2, "seeded to the NEWEST match (line 2)");
+    assert_eq(fsearch_line_is_match(0), 1, "line 0 is a match");
+    assert_eq(fsearch_line_is_match(1), 0, "line 1 is not a match");
+    assert_eq(fsearch_next(), 0, "next wraps newest -> oldest (line 0)");
+    assert_eq(fsearch_prev(), 2, "prev wraps back to the newest (line 2)");
+    feed_write("gamma error three", 17);              # no newline -> the pending line
+    assert_eq(fsearch_rescan(), 3, "rescan includes the pending line");
+    assert_eq(fsearch_cur_line(), 3, "newest match is the pending virtual line (index feed_count())");
+    fsearch_set_query("", 0);
+    assert_eq(fsearch_rescan(), 0, "empty query -> no matches");
+    assert_eq(fsearch_cur_line(), 0 - 1, "no current match line when empty");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
+
 # Working spinner (0.9.2): the frame cycle is PURE (the animated indicator + its
 # hint-row paint are I/O, live-verified). spin_glyph cycles mod SPIN_FRAMES;
 # spin_advance steps the frame.
@@ -2654,6 +2784,7 @@ fn main() {
     test_mdhl_render();
     test_mdhl_stream();
     test_mdhl_livecard();
+    test_fsearch();
     test_spinner();
     test_stream_throttle();
     test_ftree();

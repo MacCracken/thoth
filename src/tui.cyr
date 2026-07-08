@@ -54,10 +54,21 @@ var KEY_WORD_RIGHT = 24;      # Ctrl/Alt-Right, Alt-f — move the cursor one wo
 var KEY_DELWORD = 25;         # Ctrl-W — delete the word before the cursor (0.17.1)
 var KEY_KILL_EOL = 26;        # Ctrl-K — kill from the cursor to the end of the line (0.17.1)
 var KEY_MOUSE = 27;           # SGR mouse left-click (coords in _mouse_row/_mouse_col) (0.17.2)
+var KEY_FIND = 28;            # Ctrl-F — enter feed search (0.18.4)
+var KEY_ESC = 29;             # a lone Esc (best-effort) — closes search; a no-op elsewhere (0.18.4)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
 var FOCUS_TREE = 1;
+
+# --- feed search modal state (0.18.4) -------------------------------------
+# A MODAL over the feed: while _fsearch_active, every key routes to _tui_search_key (the composer is inert;
+# no turn runs). _fsearch_edit==1 = typing the query (incremental highlight + jump-to-newest), ==0 = nav
+# (bare n/N jump). Armed only inside the PT_RICH TUI dispatch window — the piped/REPL floor never sees it.
+var _fsearch_active = 0;
+var _fsearch_edit = 0;
+var HL_CAP = 24576;           # == PAINT_CAP: the per-line highlighted-render scratch (fsearch_render dst)
+var _hl_buf = 0;              # alloc(HL_CAP), lazy
 
 # Editor outcomes.
 var ACT_NONE = 0;
@@ -441,6 +452,7 @@ fn _tui_kitty_u(cp, modk) {
         if (cp == 116) { return KEY_TOGGLE_THEME; } # Ctrl-T
         if (cp == 119) { return KEY_DELWORD; }      # Ctrl-W (delete word) (0.17.1)
         if (cp == 107) { return KEY_KILL_EOL; }     # Ctrl-K (kill to EOL) (0.17.1)
+        if (cp == 102) { return KEY_FIND; }         # Ctrl-F (feed search) (0.18.4)
     }
     if (modk == 3) {                         # Alt (1 + 0b010) (0.17.1)
         if (cp == 98) { return KEY_WORD_LEFT; }     # Alt-b -> word left
@@ -607,6 +619,7 @@ fn tui_read_key() {
     if (b == 20) { return KEY_TOGGLE_THEME; }   # Ctrl-T — toggle dark/light theme
     if (b == 23) { return KEY_DELWORD; }        # Ctrl-W — delete the word before the cursor (0.17.1)
     if (b == 11) { return KEY_KILL_EOL; }       # Ctrl-K — kill from the cursor to end of line (0.17.1)
+    if (b == 6) { return KEY_FIND; }            # Ctrl-F — enter feed search (0.18.4)
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
@@ -614,7 +627,7 @@ fn tui_read_key() {
         if ((a == 13) || (a == 10)) { return KEY_NEWLINE; }   # Alt+Enter (legacy ESC CR/LF) -> newline
         if (a == 98) { return KEY_WORD_LEFT; }                 # Alt-b -> word left (7-bit meta / ESC-prefix; 8-bit meta unhandled) (0.17.1)
         if (a == 102) { return KEY_WORD_RIGHT; }               # Alt-f -> word right (0.17.1)
-        if (a != 91) { return KEY_NONE; }                      # not CSI '[' (incl. a lone Esc) -> ignore
+        if (a != 91) { return KEY_ESC; }                       # not CSI '[' (incl. a lone Esc) -> KEY_ESC (0.18.4: closes search; a no-op elsewhere, byte-identical to the old KEY_NONE — the trailing byte was already consumed here)
         # General CSI parse: drain the parameter/intermediate bytes (0x30-0x3F: digits, ';',
         # ':' …) accumulating p1 and an optional p2 (after the first ';'), and stop at the
         # final byte (0x40-0x7E). ONE parser for every CSI form — arrows, Home/End, PageUp/Dn,
@@ -711,7 +724,7 @@ fn tui_draw_status() {
 # becomes a filtered list of matching commands. The matchers are pure + unit-tested;
 # the render is I/O. (A multi-row dropdown above the composer is a later refinement —
 # it needs the feed-buffer redraw model.)
-var SLASH_N = 17;
+var SLASH_N = 18;
 fn _slash_name(i) {
     if (i == 0) { return "/help"; }
     if (i == 1) { return "/seams"; }
@@ -729,7 +742,8 @@ fn _slash_name(i) {
     if (i == 13) { return "/theme"; }
     if (i == 14) { return "/dry"; }
     if (i == 15) { return "/copy"; }
-    if (i == 16) { return "/quit"; }
+    if (i == 16) { return "/find"; }
+    if (i == 17) { return "/quit"; }
     return "";
 }
 # _buf_has_space: 1 if buf[0..n) holds a space OR a newline — either terminates the
@@ -777,6 +791,7 @@ fn tui_draw_palette() {
 fn tui_draw_hint() {
     tty_move(tui_hint_row(_tui_rows), 1);
     tty_clear_to_eol();
+    if (_fsearch_active == 1) { _tui_draw_search_hint(); return 0; }   # 0.18.4: the search strip owns the hint row
     if ((_tui_show_tree == 1) && (_tui_focus == FOCUS_TREE)) {
         ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
     } elif (tui_palette_active() == 1) { tui_draw_palette(); }
@@ -788,6 +803,131 @@ fn tui_draw_hint() {
         ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Ctrl-B files · ");
         if (inhist_count() > 0) { ui_emit(ROLE_FAINT, "↑↓ history · "); }
         ui_emit(ROLE_FAINT, "Enter send");
+    }
+    return 0;
+}
+
+# --- feed search modal (0.18.4) -------------------------------------------
+# The search UI is chrome (emit to the terminal) + a scroll-to-match + the modal key handler. All of it
+# runs only inside tui_loop (PT_RICH). fsearch.cyr owns the pure matching/render/state; this is the glue.
+
+# _tui_draw_search_hint: the search strip in the hint row (the caller moved there + cleared). Shows the
+# query, the i/n match position (or "no matches" / "type to search"), and the nav keys. ⌃C is the reliable
+# close (Esc is best-effort — a lone Esc may not register until the next key).
+fn _tui_draw_search_hint() {
+    ui_emit(ROLE_ACCENT, "find: ");
+    emit(ui_sgr(ROLE_FG)); emit_n(fsearch_query_ptr(), fsearch_qlen()); emit(ui_reset());
+    ui_emit(ROLE_FAINT, "  ");
+    if (fsearch_qlen() == 0) { ui_emit(ROLE_FAINT, "(type to search)"); }
+    elif (fsearch_count() == 0) { ui_emit(ROLE_RED, "no matches"); }
+    else {
+        emit(ui_sgr(ROLE_GREEN)); fmt_int(fsearch_cur() + 1); emit("/"); fmt_int(fsearch_count()); emit(ui_reset());
+    }
+    ui_emit(ROLE_FAINT, "  ↑/N older · ↓/n newer · ⌃C close");
+    return 0;
+}
+
+# _tui_park_search: park the cursor at the query caret in the hint row (after "find: " + the query).
+fn _tui_park_search() {
+    var col = 7 + fsearch_qlen();                 # "find: " is 6 visible cols; query starts at col 7
+    if (col > _tui_cols) { col = _tui_cols; }
+    tty_move(tui_hint_row(_tui_rows), col);
+    return 0;
+}
+
+# _tui_search_scroll_to: set feed_scroll so logical line `li` is visible near the top of the feed band (a
+# 2-row context margin), clamped. feed_scroll is PHYSICAL rows back from the newest (0 = pinned bottom).
+fn _tui_search_scroll_to(li) {
+    if (li < 0) { return 0; }
+    var fwidth = tui_feed_width(_tui_cols, _tui_show_tree);
+    var rows = _tui_feed_rows();
+    var tphys = _feed_total_phys(fwidth);
+    var before = feed_phys_before(li, fwidth);
+    var target = tphys - rows - before + 2;       # top of band = before-2 -> 2 rows of context above the match
+    var maxs = _tui_feed_maxscroll();
+    if (target < 0) { target = 0; }
+    if (target > maxs) { target = maxs; }
+    feed_scroll_set(target);
+    return 0;
+}
+
+# _tui_search_after_query: rescan (query changed), jump to the newest match, repaint (highlights + strip +
+# park at the caret). tui_repaint_body parks via the _fsearch_active gate in tui_park_cursor.
+fn _tui_search_after_query() {
+    fsearch_rescan();
+    _tui_search_scroll_to(fsearch_cur_line());
+    tui_repaint_body();
+    return 0;
+}
+# _tui_search_go: after a next/prev jump to logical line `li` — scroll it into view + repaint.
+fn _tui_search_go(li) {
+    _tui_search_scroll_to(li);
+    tui_repaint_body();
+    return 0;
+}
+
+# _tui_search_enter: open search (empty query, typing phase). Called from the Ctrl-F key path (TUI-only).
+fn _tui_search_enter() {
+    fsearch_init();
+    fsearch_reset();
+    _fsearch_active = 1;
+    _fsearch_edit = 1;
+    tui_repaint_body();
+    return 0;
+}
+# _tui_search_exit: close search — drop the query/matches, repaint WITHOUT highlights (keeps the current
+# scroll so you stay where the last match was), re-park at the composer (the _fsearch_active gate is off now).
+fn _tui_search_exit() {
+    _fsearch_active = 0;
+    _fsearch_edit = 0;
+    fsearch_reset();
+    tui_repaint_body();
+    return 0;
+}
+
+# tui_search_from_cmd: enter search from the /find command (runs inside tui_run_line's OUT_RING dispatch,
+# so it MUST NOT paint — emit would go to the ring; it only sets state + scroll, and the post-dispatch
+# tui_relayout repaints with highlights). qlen 0 -> the typing phase (empty query); else nav phase seeded
+# to the newest match.
+fn tui_search_from_cmd(q, qlen) {
+    fsearch_init();
+    _fsearch_active = 1;
+    if (qlen > 0) {
+        fsearch_set_query(q, qlen);
+        fsearch_rescan();
+        _fsearch_edit = 0;
+        _tui_search_scroll_to(fsearch_cur_line());
+    } else {
+        fsearch_reset();
+        _fsearch_edit = 1;
+    }
+    return 0;
+}
+
+# _tui_search_key: the modal key handler — every key while _fsearch_active routes here. edit==1 types the
+# query (incremental); edit==0 navigates (bare n/N). KEY_EOF must tear the loop down (else the modal
+# shadows the normal EOF exit -> busy-spin). Esc/Ctrl-C close. Enter commits (edit) or jumps (nav).
+fn _tui_search_key(key) {
+    if (key == KEY_EOF) { _tui_search_exit(); _tui_running = 0; return 0; }
+    if ((key == KEY_CTRLC) || (key == KEY_ESC)) { _tui_search_exit(); return 0; }
+    if (_fsearch_edit == 1) {
+        if (key == KEY_CHAR) { fsearch_query_push(_tui_key_ch); _tui_search_after_query(); }
+        elif (key == KEY_BACKSPACE) { fsearch_query_pop(); _tui_search_after_query(); }
+        elif (key == KEY_ENTER) {
+            if (fsearch_qlen() > 0) { _fsearch_edit = 0; tui_draw_hint(); _tui_park_search(); }
+            else { _tui_search_exit(); }
+        }
+        elif (key == KEY_DOWN) { _tui_search_go(fsearch_next()); }
+        elif (key == KEY_UP) { _tui_search_go(fsearch_prev()); }
+    } else {
+        if (key == KEY_CHAR) {
+            if (_tui_key_ch == 110) { _tui_search_go(fsearch_next()); }         # 'n' -> newer
+            elif (_tui_key_ch == 78) { _tui_search_go(fsearch_prev()); }        # 'N' -> older
+            else { fsearch_query_push(_tui_key_ch); _fsearch_edit = 1; _tui_search_after_query(); }   # any other char resumes typing
+        }
+        elif ((key == KEY_DOWN) || (key == KEY_ENTER)) { _tui_search_go(fsearch_next()); }
+        elif (key == KEY_UP) { _tui_search_go(fsearch_prev()); }
+        elif (key == KEY_BACKSPACE) { _fsearch_edit = 1; tui_draw_hint(); _tui_park_search(); }
     }
     return 0;
 }
@@ -822,6 +962,7 @@ fn _comp_row_hstart(li) {
 # mirrors tui_draw_composer's per-line horizontal-scroll window. Called after any paint
 # that left the cursor elsewhere (the feed, the spinner) so it returns to where you type.
 fn tui_park_cursor() {
+    if (_fsearch_active == 1) { _tui_park_search(); return 0; }   # 0.18.4: while searching, the cursor lives at the query caret (covers WINCH / /theme / /find full-repaints)
     var lines = led_lines();
     var H = tui_composer_height(_tui_rows, lines, _tui_show_status);
     var top = tui_composer_top(_tui_rows, lines, _tui_show_status);
@@ -992,7 +1133,18 @@ fn feed_repaint() {
             var lvis2 = 0;
             if (li < total) { ptr = feed_line_ptr(li); len = feed_line_len(li); lvis2 = feed_vis(li); }
             else { ptr = feed_pending_ptr(); len = pend; lvis2 = feed_visible_cols(ptr, len); }
-            var w = feed_clip_seg(_paint_buf, PAINT_CAP, ptr, len, sg * fwidth, fwidth);
+            # 0.18.4: when searching, render a match line through fsearch_render (reverse-video SGR injected
+            # into _hl_buf) and clip THAT — feed_clip_seg is unchanged; the injected escapes are zero-width.
+            var sptr = ptr;
+            var slen = len;
+            if ((_fsearch_active == 1) && (fsearch_line_is_match(li) == 1)) {
+                if (_hl_buf == 0) { _hl_buf = alloc(HL_CAP); }
+                var isc = 0;
+                if (li == fsearch_cur_line()) { isc = 1; }
+                slen = fsearch_render(_hl_buf, HL_CAP, ptr, len, isc);
+                sptr = _hl_buf;
+            }
+            var w = feed_clip_seg(_paint_buf, PAINT_CAP, sptr, slen, sg * fwidth, fwidth);
             if (w > 0) { emit_raw_n(_paint_buf, w); }
             sg = sg + 1;
             if (sg >= feed_rows_for(lvis2, fwidth)) { li = li + 1; sg = 0; }
@@ -1605,7 +1757,9 @@ fn tui_loop() {
             tui_relayout();
         } else {
             var key = tui_read_key();
-            if (key == KEY_TOGGLE_STATUS) {
+            if (_fsearch_active == 1) { _tui_search_key(key); }   # 0.18.4: the search modal owns every key while active
+            elif (key == KEY_FIND) { _tui_search_enter(); }        # Ctrl-F -> open feed search
+            elif (key == KEY_TOGGLE_STATUS) {
                 if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
                 tty_clear();           # the feed band moves; full repaint
                 tui_relayout();

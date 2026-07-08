@@ -2,6 +2,48 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.4] - 2026-07-08
+
+**Feed search — Ctrl-F / `/find` over the scrollback: highlight matches inline, jump between them with
+n/N.** The next payoff of the 0.18.0 re-renderable feed. A new pure engine (`src/fsearch.cyr`) matches the
+query against the *visible* text of every ring line (case-insensitive ASCII, transparent to the stored role
+markers and any interleaved escapes), and a modal in the TUI highlights the matches and scrolls the current
+one into view. **Net-floor-safe by construction**: the highlighter injects reverse-video SGR into a per-line
+temp buffer that is handed to the **unchanged** `feed_clip_seg` — the injected escapes are just more
+zero-width escapes it already carries across a soft-wrap. TUI-only; the piped/REPL/one-shot floor is
+byte-identical. 936 assertions (+26). Pin **6.4.20**.
+
+### Added
+- **`src/fsearch.cyr` — the pure search engine** (unit-tested, no TTY): `fsearch_line_has` /
+  `_fsearch_match_at` (glyph-aligned, escape-transparent, case-insensitive ASCII matching — a multi-byte
+  UTF-8 query compares byte-exact, a declared limitation); `fsearch_render` (the highlighted-line render);
+  `fsearch_rescan` / `fsearch_next` / `fsearch_prev` (the match-list state machine over the ring **and** the
+  pending line); incremental query edit.
+- **Ctrl-F / `/find [text]` modal** (`src/tui.cyr`, `src/commands.cyr`): Ctrl-F opens an incremental search
+  (type the query, the feed highlights + jumps to the newest match as you go); **Enter** commits to a nav
+  phase where **n / N** (and ↓/↑, Enter) jump newer/older between matches; **Ctrl-C** closes (Esc is
+  best-effort). `/find <text>` jumps straight into nav; bare `/find` opens the input. Outside the TUI it
+  announces honestly and does nothing (no re-renderable feed to highlight). The current match is drawn
+  reverse+underline, others reverse; the hint row shows `find: <q>  (i/n)  ↑/N older · ↓/n newer · ⌃C close`.
+- **`ui_match_on(cur)`** (`src/ui.cyr`): the match SGR (reverse, or reverse+underline for the current
+  match), `""` at PT_PLAIN. **`feed_phys_before(li, width)`** (`src/feed.cyr`): soft-wrap physical-row
+  distance to line `li`, for scroll-to-match. `feed_clip_seg` itself is **unchanged**.
+- **26 assertions** (`tests/thoth.tcyr`, `test_fsearch`): the matcher (case-insensitive, escape-transparent,
+  empty-query); the render (reverse injected, visible text preserved, current-vs-other SGR); the
+  **interior-reset re-assert** and a **wrap-straddle** case (render piped through `feed_clip_seg` with a
+  skip window so the reset lands in the SKIP region — proves reverse resumes at the wrap via the carry
+  re-flush); a **bounded-carry** many-match wide-line case; the PT_PLAIN floor (render == src verbatim); and
+  rescan/next/prev over the ring + the pending line.
+
+### Design/review notes
+- The pre-cut **design review** caught three issues, all folded before implementation: an **EOF busy-spin
+  hang** (the modal shadowed the normal EOF teardown → `_tui_search_key` now tears the loop down on
+  `KEY_EOF`); a **64-byte carry overflow** (many bare `ESC[27m` match-offs on a wrapped line's off-screen
+  prefix would overflow `feed_clip_seg`'s carry → match-off is now a **reset marker + active-role restore**
+  that collapses the carry to O(1) and is theme-correct); and **cursor mis-parking** on full repaints
+  (`tui_park_cursor` now gates on the search modal → covers SIGWINCH / `/theme` / `/find`-entry). The
+  as-built **diff review** raised zero findings.
+
 ## [0.18.3] - 2026-07-07
 
 **Live-upgrading fenced-code card — the streamed code appears line-by-line, then snaps to highlighted at

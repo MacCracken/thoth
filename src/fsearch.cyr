@@ -1,0 +1,271 @@
+# thoth — feed search (0.18.4): the PURE search engine over the self-managed feed ring.
+#
+# Ctrl-F / /find searches the scrollback (the ring of logical lines in src/feed.cyr), highlights the
+# matches inline, and n/N jumps between them. This module is the PURE, unit-tested core (matching + the
+# highlighted-line render + the match-list state machine); the TUI glue (the modal key handler, the hint
+# strip, scroll-to-match) lives in src/tui.cyr, and the /find command in src/commands.cyr.
+#
+# WHY IT IS FLOOR-SAFE — the render INJECTS reverse-video SGR into a per-line temp buffer that is then
+# handed to the UNCHANGED feed_clip_seg (src/feed.cyr): the injected escapes are just more zero-width
+# escapes the soft-wrap clip already carries across a wrap boundary. The whole feature is armed only inside
+# the PT_RICH TUI (out_mode()==OUT_RING); ui_match_on returns "" at PT_PLAIN, so the piped/REPL/one-shot
+# floor is byte-identical. This module is included AFTER src/ui.cyr + src/feed.cyr (it calls ui_match_on,
+# _feed_esc_len/_feed_glyph_len/_feed_is_reset and the feed accessors + the FEED_MARK_* marker bytes).
+#
+# MATCH SEMANTICS: case-insensitive over ASCII (A-Z folds to a-z); other bytes compare byte-exact, so a
+# multi-byte UTF-8 query matches verbatim (a declared limitation, not a fold). Matching is over the VISIBLE
+# text — the 0.18.0 role MARKERS and any escapes interleaved in a stored line are skipped, so "e<marker>rror"
+# still matches "error". Match spans align to glyph boundaries (never severs a UTF-8 glyph).
+
+var FSEARCH_Q_CAP = 256;              # query buffer cap (+1 for the NUL)
+var FSEARCH_HITS_CAP = 256;           # max highlighted matches rendered per line (silent cap; pathological)
+
+var _fsearch_query = 0;               # alloc(FSEARCH_Q_CAP): the active query (NUL-terminated)
+var _fsearch_qlen = 0;                # query byte length
+var _fsearch_matches = 0;             # alloc(FEED_ROWS*8): logical line indices that contain a match
+var _fsearch_count = 0;               # live match count
+var _fsearch_cur = 0 - 1;             # current match index into _fsearch_matches (-1 = none)
+
+# fsearch_init: lazy-alloc the buffers and reset to empty (idempotent). Called at TUI startup and by each
+# unit test for a clean slate.
+fn fsearch_init() {
+    if (_fsearch_query == 0) { _fsearch_query = alloc(FSEARCH_Q_CAP); }
+    if (_fsearch_matches == 0) { _fsearch_matches = alloc(FEED_ROWS * 8); }
+    _fsearch_qlen = 0;
+    _fsearch_count = 0;
+    _fsearch_cur = 0 - 1;
+    store8(_fsearch_query, 0);
+    return 0;
+}
+
+# fsearch_reset: clear the query + matches (exit search). Keeps the buffers.
+fn fsearch_reset() {
+    _fsearch_qlen = 0;
+    _fsearch_count = 0;
+    _fsearch_cur = 0 - 1;
+    if (_fsearch_query != 0) { store8(_fsearch_query, 0); }
+    return 0;
+}
+
+# fsearch_set_query: copy ptr[0..len) into the query buffer (cap-bounded, NUL-terminated).
+fn fsearch_set_query(ptr, len) {
+    if (_fsearch_query == 0) { fsearch_init(); }
+    if (len < 0) { len = 0; }
+    if (len > (FSEARCH_Q_CAP - 1)) { len = FSEARCH_Q_CAP - 1; }
+    var i = 0;
+    while (i < len) { store8(_fsearch_query + i, load8(ptr + i)); i = i + 1; }
+    store8(_fsearch_query + len, 0);
+    _fsearch_qlen = len;
+    return 0;
+}
+fn fsearch_qlen() { return _fsearch_qlen; }
+fn fsearch_query_ptr() { if (_fsearch_query == 0) { return ""; } return _fsearch_query; }
+
+# fsearch_query_push / fsearch_query_pop: incremental query edit (the TUI's typing path). push appends a
+# byte (cap-bounded, returns 1 if stored); pop drops the last byte (returns 1 if one was removed).
+fn fsearch_query_push(b) {
+    if (_fsearch_query == 0) { fsearch_init(); }
+    if (_fsearch_qlen >= (FSEARCH_Q_CAP - 1)) { return 0; }
+    store8(_fsearch_query + _fsearch_qlen, b);
+    _fsearch_qlen = _fsearch_qlen + 1;
+    store8(_fsearch_query + _fsearch_qlen, 0);
+    return 1;
+}
+fn fsearch_query_pop() {
+    if (_fsearch_qlen <= 0) { return 0; }
+    _fsearch_qlen = _fsearch_qlen - 1;
+    store8(_fsearch_query + _fsearch_qlen, 0);
+    return 1;
+}
+
+# _fsearch_lc: fold an ASCII upper-case byte to lower; anything else unchanged.
+fn _fsearch_lc(b) { if ((b >= 65) && (b <= 90)) { return b + 32; } return b; }
+
+# _fsearch_match_at: does the VISIBLE text of src starting at glyph offset o equal the active query
+# (case-insensitive ASCII), skipping any interleaved escapes/markers? Returns the src offset just AFTER the
+# match (snapped to a glyph boundary), or -1. `o` MUST be a glyph position (a non-ESC byte). q/qlen passed
+# so the helper is pure over its inputs (the callers pass _fsearch_query / _fsearch_qlen).
+fn _fsearch_match_at(src, len, o, q, qlen) {
+    if (qlen <= 0) { return 0 - 1; }
+    var i = o;
+    var qi = 0;
+    while (qi < qlen) {
+        while ((i < len) && (load8(src + i) == 27)) { i = i + _feed_esc_len(src, i, len); }   # skip escapes
+        if (i >= len) { return 0 - 1; }
+        if (_fsearch_lc(load8(src + i)) != _fsearch_lc(load8(q + qi))) { return 0 - 1; }
+        i = i + 1;
+        qi = qi + 1;
+    }
+    while ((i < len) && (load8(src + i) >= 128) && (load8(src + i) < 192)) { i = i + 1; }   # snap past UTF-8 tail
+    return i;
+}
+
+# fsearch_line_has: 1 iff the active query occurs in src's visible text.
+fn fsearch_line_has(src, len) {
+    if (_fsearch_qlen == 0) { return 0; }
+    var o = 0;
+    while (o < len) {
+        var b = load8(src + o);
+        if (b == 27) { o = o + _feed_esc_len(src, o, len); }
+        else {
+            if (_fsearch_match_at(src, len, o, _fsearch_query, _fsearch_qlen) >= 0) { return 1; }
+            o = o + _feed_glyph_len(src, o, len);
+        }
+    }
+    return 0;
+}
+
+# --- the highlighted-line render (PURE) -------------------------------------
+# fsearch_render(dst, cap, src, len, cur) -> bytes written. Copy src, wrapping each match in reverse-video:
+#   ON  = ui_match_on(cur)                         (ESC[7m, or ESC[7;4m for the CURRENT match)
+#   OFF = a RESET MARKER (ESC+FEED_MARK_RESET) + a restore of the active role marker (if any)
+# The reset-marker OFF is deliberate (design review): a bare ESC[27m does NOT collapse feed_clip_seg's 64B
+# SKIP carry, so many matches on a wrapped line's off-screen prefix would overflow it (whole-drop -> wrong
+# reverse at the wrap). The reset marker collapses the carry to O(1) AND clears reverse+underline in one
+# shot; re-emitting the active role marker restores the fg color. An interior reset INSIDE a match kills the
+# reverse, so we re-assert ui_match_on after any reset that lands within a span. Every copy is whole-or-stop
+# (never severs a marker/CSI/glyph, never writes past cap); the output is re-clipped by feed_clip_seg.
+fn _fsearch_copy(dst, cap, w, src, off, n) {
+    if ((w + n) > cap) { return w; }
+    var k = 0;
+    while (k < n) { store8(dst + w + k, load8(src + off + k)); k = k + 1; }
+    return w + n;
+}
+fn _fsearch_emit(dst, cap, w, s) {
+    var n = strlen(s);
+    if ((w + n) > cap) { return w; }
+    var k = 0;
+    while (k < n) { store8(dst + w + k, load8(s + k)); k = k + 1; }
+    return w + n;
+}
+fn _fsearch_emit2(dst, cap, w, b0, b1) {
+    if ((w + 2) > cap) { return w; }
+    store8(dst + w, b0);
+    store8(dst + w + 1, b1);
+    return w + 2;
+}
+
+fn fsearch_render(dst, cap, src, len, cur) {
+    if (ui_tier() == PT_PLAIN) {                      # floor: no highlight at all — copy src verbatim
+        var v = 0;
+        while ((v < len) && (v < cap)) { store8(dst + v, load8(src + v)); v = v + 1; }
+        return v;
+    }
+    var q = _fsearch_query;
+    var qlen = _fsearch_qlen;
+    var o = 0;
+    var w = 0;
+    var active_role = 0 - 1;                          # last role marker seen (-1 = none / after a reset)
+    while ((o < len) && (w < cap)) {
+        var b = load8(src + o);
+        if (b == 27) {
+            var sl = _feed_esc_len(src, o, len);
+            var b1 = 0; if (sl >= 2) { b1 = load8(src + o + 1); }
+            if ((sl == 2) && (b1 >= FEED_MARK_ROLE0) && (b1 <= (FEED_MARK_ROLE0 + 7))) { active_role = b1 - FEED_MARK_ROLE0; }
+            elif ((sl == 2) && (b1 == FEED_MARK_RESET)) { active_role = 0 - 1; }
+            w = _fsearch_copy(dst, cap, w, src, o, sl);
+            o = o + sl;
+        } else {
+            var me = 0 - 1;
+            if (qlen > 0) { me = _fsearch_match_at(src, len, o, q, qlen); }
+            if (me >= 0) {
+                w = _fsearch_emit(dst, cap, w, ui_match_on(cur));       # reverse ON
+                var j = o;
+                while (j < me) {
+                    var jb = load8(src + j);
+                    if (jb == 27) {
+                        var jsl = _feed_esc_len(src, j, len);
+                        var jb1 = 0; if (jsl >= 2) { jb1 = load8(src + j + 1); }
+                        var wasreset = 0;
+                        if ((jsl == 2) && (jb1 >= FEED_MARK_ROLE0) && (jb1 <= (FEED_MARK_ROLE0 + 7))) { active_role = jb1 - FEED_MARK_ROLE0; }
+                        elif ((jsl == 2) && (jb1 == FEED_MARK_RESET)) { active_role = 0 - 1; wasreset = 1; }
+                        elif (_feed_is_reset(src, j, jsl) == 1) { wasreset = 1; }
+                        w = _fsearch_copy(dst, cap, w, src, j, jsl);
+                        if (wasreset == 1) { w = _fsearch_emit(dst, cap, w, ui_match_on(cur)); }   # re-assert reverse
+                        j = j + jsl;
+                    } else {
+                        var jgl = _feed_glyph_len(src, j, len);
+                        w = _fsearch_copy(dst, cap, w, src, j, jgl);
+                        j = j + jgl;
+                    }
+                }
+                w = _fsearch_emit2(dst, cap, w, 27, FEED_MARK_RESET);   # reverse OFF: collapse the carry
+                if (active_role >= 0) { w = _fsearch_emit2(dst, cap, w, 27, FEED_MARK_ROLE0 + active_role); }   # restore fg
+                o = me;
+            } else {
+                var gl = _feed_glyph_len(src, o, len);
+                w = _fsearch_copy(dst, cap, w, src, o, gl);
+                o = o + gl;
+            }
+        }
+    }
+    return w;
+}
+
+# --- the match-list state machine -------------------------------------------
+# fsearch_rescan: walk the ring [0, feed_count()) + the pending line (virtual line index feed_count()),
+# record every logical line that contains a match, and (re-)seed the current match to the NEWEST one (the
+# nearest to the default bottom view). Called on every query edit. Returns the match count.
+fn fsearch_rescan() {
+    _fsearch_count = 0;
+    if (_fsearch_qlen == 0) { _fsearch_cur = 0 - 1; return 0; }
+    var n = feed_count();
+    var li = 0;
+    while (li < n) {
+        if (fsearch_line_has(feed_line_ptr(li), feed_line_len(li)) == 1) {
+            if (_fsearch_count < FEED_ROWS) {
+                store64(_fsearch_matches + _fsearch_count * 8, li);
+                _fsearch_count = _fsearch_count + 1;
+            }
+        }
+        li = li + 1;
+    }
+    if (feed_pending_len() > 0) {
+        if (fsearch_line_has(feed_pending_ptr(), feed_pending_len()) == 1) {
+            if (_fsearch_count < FEED_ROWS) {
+                store64(_fsearch_matches + _fsearch_count * 8, n);
+                _fsearch_count = _fsearch_count + 1;
+            }
+        }
+    }
+    # rescan runs on every query edit -> (re-)seed the current match to the NEWEST one (nearest the default
+    # bottom view). Navigation (fsearch_next/prev) moves it from there; it is never reseeded by a nav.
+    if (_fsearch_count == 0) { _fsearch_cur = 0 - 1; }
+    else { _fsearch_cur = _fsearch_count - 1; }
+    return _fsearch_count;
+}
+
+fn fsearch_count() { return _fsearch_count; }
+fn fsearch_cur() { return _fsearch_cur; }             # 0-based match index; -1 = none
+
+# fsearch_cur_line: the logical feed-line index of the current match, or -1.
+fn fsearch_cur_line() {
+    if (_fsearch_cur < 0) { return 0 - 1; }
+    if (_fsearch_cur >= _fsearch_count) { return 0 - 1; }
+    return load64(_fsearch_matches + _fsearch_cur * 8);
+}
+
+# fsearch_line_is_match: 1 if logical line li is in the match set (the painter's per-row gate).
+fn fsearch_line_is_match(li) {
+    var i = 0;
+    while (i < _fsearch_count) {
+        if (load64(_fsearch_matches + i * 8) == li) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# fsearch_next / fsearch_prev: advance the current match (wrapping); return the target logical line, or -1.
+# "next" = toward newer (down); "prev" = toward older (up). Match indices are oldest->newest.
+fn fsearch_next() {
+    if (_fsearch_count == 0) { _fsearch_cur = 0 - 1; return 0 - 1; }
+    if (_fsearch_cur < 0) { _fsearch_cur = 0; }
+    else { _fsearch_cur = (_fsearch_cur + 1) % _fsearch_count; }
+    return fsearch_cur_line();
+}
+fn fsearch_prev() {
+    if (_fsearch_count == 0) { _fsearch_cur = 0 - 1; return 0 - 1; }
+    if (_fsearch_cur < 0) { _fsearch_cur = _fsearch_count - 1; }
+    else { _fsearch_cur = (_fsearch_cur - 1 + _fsearch_count) % _fsearch_count; }
+    return fsearch_cur_line();
+}
