@@ -29,6 +29,7 @@ enum Cmd {
     CMD_COPY = 21;
     CMD_FIND = 22;
     CMD_PERSONA = 23;
+    CMD_PERSONAS = 24;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -116,6 +117,7 @@ fn classify_input(line) {
     if (token_is(line, "/seams") == 1) { return CMD_SEAMS; }
     if (token_is(line, "/state") == 1) { return CMD_STATE; }
     if (token_is(line, "/models") == 1) { return CMD_MODELS; }
+    if (token_is(line, "/personas") == 1) { return CMD_PERSONAS; }
     if (token_is(line, "/persona") == 1) { return CMD_PERSONA; }
     if (token_is(line, "/model") == 1) { return CMD_MODEL; }
     if (token_is(line, "/read") == 1) { return CMD_READ; }
@@ -146,6 +148,7 @@ fn cmd_help() {
     _help_line("  /state", "             session state");
     _help_line("  /git [path]", "        working repo: branch + changed files, or a file's diff (via sit)");
     _help_line("  /persona [name]", "    show the active archetype, or switch it mid-session (avatara)");
+    _help_line("  /personas [trad]", "   list archetype traditions, or browse one; show the active card");
     _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh)");
     _help_line("  /models [provider]", " list providers; with one, its switchable models");
     _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
@@ -358,6 +361,75 @@ fn cmd_git(line) {
     return 0;
 }
 
+# _persona_excerpt: emit up to ~90 bytes of the cstr `s`, backing up to the last space so a word is never
+# severed (this also protects a multi-byte glyph, since the cut lands on an ASCII space), then "…" if more
+# remains. For the persona card's soul/spirit preview. (If a soul had NO space in its first 90 bytes the raw
+# cut could sever a glyph — a dead path: all current avatara souls are spaced prose.) Returns bytes emitted.
+fn _persona_excerpt(s) {
+    var i = 0;
+    while ((load8(s + i) != 0) && (i < 90)) { i = i + 1; }
+    if (load8(s + i) != 0) {                     # truncated -> back up to a word boundary
+        var b = i;
+        while ((b > 0) && (load8(s + b - 1) != 32)) { b = b - 1; }
+        if (b > 0) { i = b - 1; }                # drop the trailing space before the ellipsis
+        emit_n(s, i); emit("…");
+        return i;                                # bytes emitted before the ellipsis (testable)
+    }
+    emit_n(s, i);                                # whole string fit
+    return i;
+}
+
+# cmd_personas (0.22.1): DISCOVERY + display only (no new personality logic). No arg shows the active
+# persona card + the list of avatara traditions (with archetype counts); an arg browses one tradition,
+# listing its archetypes (the active one marked). All data is read from avatara (all_traditions /
+# by_tradition / the prof_* accessors) — thoth only surfaces it.
+fn cmd_personas(line) {
+    var arg = arg_after(line);
+    if (arg == 0) {
+        ui_emit(ROLE_ACCENT, "active persona"); oprintln("");
+        emit("  "); ui_emit(ROLE_ACCENT, persona_name());
+        ui_emit(ROLE_FAINT, " · "); emit(ui_sgr(ROLE_FAINT)); emit(persona_tradition()); emit(ui_reset()); oprintln("");
+        emit("  "); ui_emit(ROLE_FAINT, persona_desc()); oprintln("");
+        emit("  "); emit(ui_sgr(ROLE_MUTED)); emit("\""); _persona_excerpt(persona_soul()); emit("\""); emit(ui_reset()); oprintln("");
+        oprintln("");
+        ui_emit(ROLE_ACCENT, "traditions"); ui_emit(ROLE_FAINT, " (archetype count)"); oprintln("");
+        var v = all_traditions();
+        var n = vec_len(v);
+        var i = 0;
+        while (i < n) {
+            var t = vec_get(v, i);
+            emit("  "); ui_emit(ROLE_BLUE, t);
+            ui_emit(ROLE_FAINT, " ("); emit(ui_sgr(ROLE_FAINT)); ofmt_int(vec_len(by_tradition(t))); emit(")"); emit(ui_reset());
+            oprintln("");
+            i = i + 1;
+        }
+        oprintln("");
+        ui_emit(ROLE_FAINT, "  /personas <tradition> to browse · /persona <name> to switch"); oprintln("");
+        return 0;
+    }
+    var bv = by_tradition(arg);
+    var bn = vec_len(bv);
+    if (bn == 0) {
+        emit("unknown tradition: '"); emit(arg); oprintln("'");
+        oprintln("  /personas lists the available traditions (case-sensitive).");
+        return 0;
+    }
+    ui_emit(ROLE_ACCENT, arg); ui_emit(ROLE_FAINT, " archetypes"); oprintln("");
+    var j = 0;
+    while (j < bn) {
+        var p = vec_get(bv, j);
+        emit("  ");
+        if (streq(prof_name(p), persona_name()) == 1) { ui_emit(ROLE_GREEN, "● "); } else { emit("  "); }
+        ui_emit(ROLE_ACCENT, prof_name(p));
+        ui_emit(ROLE_FAINT, " — "); emit(ui_sgr(ROLE_FAINT)); emit(prof_desc(p)); emit(ui_reset());
+        oprintln("");
+        j = j + 1;
+    }
+    oprintln("");
+    ui_emit(ROLE_FAINT, "  /persona <name> to switch (● = active)"); oprintln("");
+    return 0;
+}
+
 # cmd_persona (0.22.0): mid-session ACTIVE-PERSONA switch — the twin of /model's mid-session MODEL switch.
 # No arg shows the active archetype; an arg resolves through avatara's find_and_validate (unknown -> honest
 # refusal). The switch invalidates the cached persona system prompt, so it takes effect NEXT turn (exactly
@@ -372,7 +444,7 @@ fn cmd_persona(line) {
     }
     if (persona_switch(arg) == 0) {
         emit("unknown persona: '"); emit(arg); oprintln("'");
-        oprintln("  names are case-sensitive avatara archetypes (e.g. Thoth, Athena, Odin).");
+        oprintln("  see /personas for the available archetypes (names are case-sensitive).");
         return 0;
     }
     emit("persona -> "); emit(persona_name());
@@ -827,6 +899,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_HELP) { cmd_help(); return 1; }
     if (c == CMD_SEAMS) { cmd_seams(); return 1; }
     if (c == CMD_STATE) { cmd_state(); return 1; }
+    if (c == CMD_PERSONAS) { cmd_personas(line); return 1; }
     if (c == CMD_PERSONA) { cmd_persona(line); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
     if (c == CMD_MODELS) { cmd_models(line); return 1; }

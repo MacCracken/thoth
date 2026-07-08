@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.22.1** — **`/personas` discovery**, 2026-07-08. The browse/display companion to 0.22.0's `/persona`
+switch — DISCOVERY + display only, no new personality logic, READ-ONLY. `cmd_personas` (`src/commands.cyr`):
+no arg prints the ACTIVE persona card (name · tradition · desc + a word-bounded soul excerpt via new
+`_persona_excerpt`) then lists the avatara traditions with per-tradition archetype counts
+(`vec_len(by_tradition(t))`); an arg browses that tradition (`by_tradition`), listing its archetypes with
+their desc and marking the active one `●` (`streq(prof_name(p), persona_name())`); unknown tradition → honest
+refusal. All data read from avatara (`all_traditions`/`by_tradition`/`prof_*`) — thoth only surfaces it. The
+`/persona` unknown-name refusal now hints `/personas`; `/help` line added. `_persona_excerpt` caps at ~90
+bytes and backs up to a word boundary (protects multi-byte glyphs since the cut lands on an ASCII space; the
+no-space path is dead — all 374 avatara souls are spaced prose, confirmed by the review). **Verified**: 1078
+assertions (+2, `_persona_excerpt`: no-space 100-char → 90, short → its length) + LIVE in the real binary
+(`/personas` card + traditions with counts; `/personas Egyptian` lists Thoth ●/Isis/Anubis/…; unknown
+tradition + `/persona` bad name → honest refusals). A 3-lens adversarial review returned CLEAN (two nits —
+the dead no-space UTF-8 path + a null-soul deref already trusted by the per-turn `persona_system_prompt` path
+— both VERIFIED as refuted; the excerpt comment was tightened for honesty). Pin **6.4.29**. NEXT: `0.22.2`
+blends + shadow (`compose`/`shadow`, stretch), then `0.22.3` role modality (long-term). See CHANGELOG/roadmap.
+
 **0.22.0** — **the active persona: mid-session `/persona` switch** + the Cyrius **6.4.29** refresh,
 2026-07-08. The signature move's twin — thoth switches the backing MODEL mid-session (`/model`); now it
 switches the active PERSONALITY mid-session via avatara. Opens the `0.22.x` line. `/persona [name]`

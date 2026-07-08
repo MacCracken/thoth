@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.22.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.22.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -311,7 +311,8 @@ selection stays content-blind.
 > DONE** — `Tab` completes a `@<prefix>` from the file tree in the composer; live-verified in the rich TUI).
 > The `0.22.x` active-persona line then opened with `0.22.0` (**mid-session `/persona` switch, DONE** — the
 > signature move's twin, swapping the active avatara archetype mid-session like `/model` swaps the model;
-> bundled the Cyrius 6.4.29 refresh).
+> bundled the Cyrius 6.4.29 refresh) → `0.22.1` (**`/personas` discovery, DONE** — browse the traditions +
+> archetypes and the active card, read-only over avatara).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -467,7 +468,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 
-### 0.22.x — the active persona (0.22.0 DONE)
+### 0.22.x — the active persona (0.22.0–0.22.1 DONE)
 
 > The signature move's twin: thoth switches the backing MODEL mid-session (hoosh);
 > this line switches the ACTIVE PERSONALITY mid-session (avatara). Pure consumption —
@@ -506,9 +507,12 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   profile's OWN avatara fields (desc / domain / tradition — exact sourcing settled
   in the design pass), never thoth-authored role prose per archetype (that would
   be authoring personality content, avatara's domain).
-- **`0.22.1` — `/personas` discovery.** List traditions (`all_traditions`), browse
-  one (`by_tradition`), and show the active profile's card (name / tradition / desc
-  + a soul/spirit excerpt). Discovery + display only — no new personality logic.
+- **`0.22.1` — `/personas` discovery. DONE (2026-07-08).** Lists traditions
+  (`all_traditions`, with per-tradition archetype counts), browses one (`by_tradition`,
+  marking the active archetype `●`), and shows the active profile's card (name / tradition /
+  desc + a word-bounded soul excerpt via `_persona_excerpt`). Discovery + display only —
+  read-only, no new personality logic; the `/persona` refusal now hints `/personas`. 1078
+  assertions (+2); 3-lens review clean (2 nits refuted); live-verified.
 - **`0.22.2` — blends + shadow (stretch).** Weighted multi-archetype blends via
   avatara's `compose(weighted)` and the `shadow(p)` derivation — `/persona blend …` /
   `/persona shadow` — avatara-native verbs, still pure consumption. Earns its own

@@ -258,6 +258,16 @@ fn test_persona_switch() {
     assert(streq(persona_tagline(), "Thinks, Handles, Orchestrates, Transforms, Heals") == 1,
         "tagline is the fixed app backronym, constant across switches (identity split)");
 
+    # 0.22.1 /personas card excerpt helper (returns the emitted byte count; discard the emit itself)
+    out_mode_set(OUT_NULL);
+    var big = alloc(128);
+    var k = 0;
+    while (k < 100) { store8(big + k, 97); k = k + 1; }     # 100 'a', no spaces
+    store8(big + 100, 0);
+    assert_eq(_persona_excerpt(big), 90, "excerpt hard-caps a no-space string at 90 bytes");
+    assert_eq(_persona_excerpt("short one"), 9, "excerpt emits a short string whole (returns its length)");
+    out_mode_set(OUT_FD1);
+
     persona_set(egyptian_thoth());                          # restore default for downstream tests
     assert(streq(persona_name(), "Thoth") == 1, "restored to the default Thoth");
     return 0;

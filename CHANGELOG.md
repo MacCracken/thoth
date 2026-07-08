@@ -2,6 +2,27 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.1] - 2026-07-08
+
+**`/personas` discovery.** Browse the avatara archetypes you can switch to with `/persona`. Discovery +
+display only — no new personality logic, read-only. 1078 assertions (+2). A 3-lens adversarial review
+returned clean (two nits verified as refuted).
+
+### Added
+- **`/personas [tradition]`** (`src/commands.cyr` `cmd_personas`): no arg prints the ACTIVE persona card
+  (name · tradition · desc + a word-bounded soul excerpt) then lists the avatara traditions with per-tradition
+  archetype counts; an arg browses that tradition, listing its archetypes (each with its desc, the active one
+  marked `●`). Unknown tradition → honest refusal. All data is read from avatara (`all_traditions` /
+  `by_tradition` / the `prof_*` accessors) — thoth only surfaces it. New `_persona_excerpt` (bounded
+  soul/spirit preview: ~90 bytes, backs up to a word boundary + `…`). `/help` line added.
+
+### Changed
+- The `/persona` unknown-name refusal now hints `/personas` (which lists the available archetypes).
+
+### Notes
+- Live-verified in the real binary: `/personas` shows the card + traditions (Egyptian 16, Greek 15, Norse 13,
+  …); `/personas Egyptian` lists Thoth (● active), Isis, Anubis, …; unknown tradition/name → honest refusal.
+
 ## [0.22.0] - 2026-07-08
 
 **The active persona — mid-session `/persona` switch.** The signature move's twin: thoth already switches the
