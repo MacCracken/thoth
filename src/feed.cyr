@@ -538,6 +538,22 @@ fn feed_flush_pending() {
     return 0;
 }
 
+# feed_drop_last: remove the most-recent `n` sealed rows (0.18.3 live fenced-code card: the streamed
+# interior rows are dropped, then re-emitted highlighted). Clamped to the live count; the ring slots are
+# reused by the next seals. Does NOT touch the pending line (see feed_drop_pending).
+fn feed_drop_last(n) {
+    if (n < 0) { n = 0; }
+    if (n > _feed_count) { n = _feed_count; }
+    _feed_count = _feed_count - n;
+    return 0;
+}
+
+# feed_drop_pending: discard the un-sealed in-progress line WITHOUT sealing it. The live fenced-code
+# upgrade (0.18.3) uses this at fence close / stream finish: if the streamed interior's last line had no
+# trailing newline (a truncated / interrupted block), it sits un-sealed in the pending; discarding it
+# lets the highlighted re-emit be the sole source of that row (no doubled bottom line).
+fn feed_drop_pending() { _feed_pending_len = 0; return 0; }
+
 # feed_pending_len: bytes in the un-sealed line (the painter renders it as the
 # in-progress bottom row so a no-newline prompt is visible before its read).
 fn feed_pending_len() { return _feed_pending_len; }

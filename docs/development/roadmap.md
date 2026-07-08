@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.18.2):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.18.3):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -22,8 +22,9 @@
 > **`/theme` recolors scrollback** (the keystone's first payoff — closes the 0.10.0 baked-color limitation;
 > bundled Cyrius **6.4.19**); then a full-stack MCP-tool investigation fixed two upstream conformance bugs
 > (bote 3.0.1 + daimon 1.3.5), and `0.18.2` re-synced the vendored bote-core to 3.0.1 + refreshed the pin to
-> Cyrius **6.4.20** to realign the family. The rest of the **0.18.x line** (live card `0.18.3`, feed search,
-> glyph-width, inline markdown) is next. The 0.10.x data producers
+> Cyrius **6.4.20** to realign the family. Then `0.18.3` landed the **live-upgrading fenced-code card** (the
+> 0.15.1 deferred "Option C" — streamed code renders live, then snaps to highlighted at fence close). The
+> rest of the **0.18.x line** (feed search, glyph-width, inline markdown) is next. The 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
 > agentic vertical, 0.15.x streaming polish (paint throttle + fenced-code highlighting),
@@ -285,8 +286,8 @@ selection stays content-blind.
 > the spine — **bote 3.0.1** (`bote_echo` → content block) and **daimon 1.3.5** (`_mcp_wrap_builtin`
 > wraps the `libro_*` results), both on cyrius 6.4.20, + thoth's stack policy — and verified end to
 > end. thoth needed NO src change (it was already a correct, strict MCP client). `0.18.2` was the
-> maintenance realign (re-sync vendored bote-core → 3.0.1 + toolchain → 6.4.20). The feature items
-> resume at `0.18.3`+ below.
+> maintenance realign (re-sync vendored bote-core → 3.0.1 + toolchain → 6.4.20). The feature line then
+> resumed at `0.18.3` (live card, DONE); items continue at `0.18.4`+ below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -310,9 +311,13 @@ selection stays content-blind.
   `bote-core` to 3.0.1 (only the embedded version string moved — the `[lib.core]` dispatcher is
   byte-identical, since bote's fix was server-side) and refreshed the pin `6.4.19 → 6.4.20` to realign
   with bote 3.0.1 / daimon 1.3.5. No thoth src change. 895 assertions. See CHANGELOG/state.md.
-- **`0.18.3` — live-upgrading fenced-code card.** The 0.15.1 deferred "Option C":
-  streamed code renders live line-by-line, then upgrades in place to the highlighted
-  block at fence close — removes the withhold-until-close gap.
+- **`0.18.3` — live-upgrading fenced-code card. DONE (2026-07-07).** The 0.15.1
+  deferred "Option C": streamed code renders live line-by-line, then upgrades in place
+  to the highlighted block at fence close (or on interrupt/truncation) — removes the
+  withhold-until-close gap. TUI-only (needs the re-renderable feed); net-result-preserving
+  so the floor is byte-identical. New `feed_drop_last`/`feed_drop_pending` primitives +
+  `_mdhl_block_close`; an over-clamp guard (skip the upgrade for a block larger than the
+  ring) caught by the pre-cut diff-review. 910 assertions. See CHANGELOG/state.md.
 - **`0.18.4` — feed search.** Ctrl-F / `/find` over the ring: match highlight + n/N
   jump (highlighting needs re-render — hence this line, not 0.17.x).
 - **`0.18.5` — glyph-width table.** East-Asian-Width ranges so CJK/emoji count 2

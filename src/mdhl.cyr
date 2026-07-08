@@ -45,6 +45,7 @@ var _mdhl_grammar = 0;            # resolved vyakarana grammar name cstr (0 = no
 var _mdhl_block = 0;              # alloc(MDHL_BLOCK_CAP): accumulated code-block bytes (interior)
 var _mdhl_block_len = 0;
 var _mdhl_block_over = 0;         # 1 once the block overflowed the cap -> interior streamed verbatim
+var _mdhl_block_rows = 0;         # 0.18.3: sealed feed rows emitted LIVE for the current block (TUI)
 var _mdhl_tag = 0;               # alloc(MDHL_TAG_CAP): lowercased first info-word scratch
 
 # _mdhl_ensure: lazily allocate the three buffers (idempotent). Each is allocated
@@ -194,28 +195,43 @@ fn _mdhl_put_line(has_nl) {
     return 0;
 }
 
-# _mdhl_block_put: append the assembled interior line (+ optional '\n') to the code-block
-# buffer. On overflow (past MDHL_BLOCK_CAP) or a missing buffer, emit the buffered prefix
-# + this line verbatim and latch _mdhl_block_over so the rest of the block streams
-# verbatim (uncoloured) — bounded memory, no byte lost.
-fn _mdhl_block_put(has_nl) {
-    if ((_mdhl_block == 0) || (_mdhl_block_over == 1)) {
-        _mdhl_put_line(has_nl);
-        _mdhl_block_over = 1;
-        return 0;
-    }
+# _mdhl_live: 1 when the streamed reply is CAPTURED into the TUI feed ring (OUT_RING) — the only mode
+# where the live fenced-code upgrade (0.18.3) applies. The line REPL (OUT_FD1) and the plain floor can't
+# rewind already-emitted output, so they keep the withhold-until-close behaviour.
+fn _mdhl_live() { if (out_mode() == OUT_RING) { return 1; } return 0; }
+
+# _mdhl_block_append: append the assembled interior line (+ optional '\n') to the code-block buffer.
+# Returns 1 if it fit, 0 if it would overflow MDHL_BLOCK_CAP (or the buffer is missing). Pure (no emit).
+fn _mdhl_block_append(has_nl) {
+    if (_mdhl_block == 0) { return 0; }
     var need = _mdhl_line_len;
     if (has_nl == 1) { need = need + 1; }
-    if ((_mdhl_block_len + need) > MDHL_BLOCK_CAP) {
-        if (_mdhl_block_len > 0) { emit_n(_mdhl_block, _mdhl_block_len); _mdhl_block_len = 0; }
-        _mdhl_put_line(has_nl);
-        _mdhl_block_over = 1;
-        return 0;
-    }
+    if ((_mdhl_block_len + need) > MDHL_BLOCK_CAP) { return 0; }
     var k = 0;
     while (k < _mdhl_line_len) { store8(_mdhl_block + _mdhl_block_len + k, load8(_mdhl_line + k)); k = k + 1; }
     _mdhl_block_len = _mdhl_block_len + _mdhl_line_len;
     if (has_nl == 1) { store8(_mdhl_block + _mdhl_block_len, 10); _mdhl_block_len = _mdhl_block_len + 1; }
+    return 1;
+}
+
+# _mdhl_block_put: handle one interior line. LIVE (TUI feed, 0.18.3): emit the line live (unhighlighted)
+# + count the sealed row + buffer it for the at-close highlight — latch over if it won't fit, but do NOT
+# flush the buffer (the line is already live; flushing would double it). NON-live (line REPL / plain): the
+# withhold-until-close path — buffer, and on overflow flush the buffered prefix + emit this line verbatim
+# + latch over (bounded memory, no byte lost).
+fn _mdhl_block_put(has_nl) {
+    if (_mdhl_live() == 1) {
+        _mdhl_put_line(has_nl);
+        if (has_nl == 1) { _mdhl_block_rows = _mdhl_block_rows + 1; }   # one logical line -> one sealed row
+        if (_mdhl_block_over == 0) { if (_mdhl_block_append(has_nl) == 0) { _mdhl_block_over = 1; } }
+        return 0;
+    }
+    if ((_mdhl_block == 0) || (_mdhl_block_over == 1)) { _mdhl_put_line(has_nl); _mdhl_block_over = 1; return 0; }
+    if (_mdhl_block_append(has_nl) == 0) {
+        if (_mdhl_block_len > 0) { emit_n(_mdhl_block, _mdhl_block_len); _mdhl_block_len = 0; }
+        _mdhl_put_line(has_nl);
+        _mdhl_block_over = 1;
+    }
     return 0;
 }
 
@@ -230,6 +246,29 @@ fn _mdhl_block_flush() {
     } else {
         emit_n(_mdhl_block, _mdhl_block_len);
     }
+    return 0;
+}
+
+# _mdhl_block_close: finalize a fenced block. LIVE (0.18.3, TUI feed): if the interior fully buffered and
+# a grammar resolved, DROP the live (unhighlighted) interior rows AND the un-sealed live partial (a
+# truncated / interrupted block leaves its last newline-less line in the pending, which feed_drop_last
+# can't reach) and re-emit the whole block highlighted — the in-place upgrade. Otherwise (over / no
+# grammar) the live verbatim rows already stand, so do nothing. NON-live (line REPL / plain): flush the
+# buffer (highlighted or verbatim) — the withhold-until-close path, unchanged.
+fn _mdhl_block_close() {
+    if (_mdhl_live() == 1) {
+        # Upgrade only when the drop is EXACT: the interior is the last _mdhl_block_rows sealed rows AND
+        # they're all still present (_mdhl_block_rows <= feed_count()). A huge block (> FEED_ROWS interior
+        # lines but under MDHL_BLOCK_CAP) evicts the opener/prior rows while streaming; feed_drop_last would
+        # then over-clamp and wipe unrelated ring content — so fall back to leaving the live verbatim rows.
+        if ((_mdhl_block_over == 0) && (_mdhl_grammar != 0) && (ui_tier() != PT_PLAIN) && (_mdhl_block_rows <= feed_count())) {
+            feed_drop_last(_mdhl_block_rows);      # drop the sealed live interior rows
+            feed_drop_pending();                    # discard an un-sealed live partial (truncated block)
+            _mdhl_block_flush();                     # re-emit the whole interior, highlighted
+        }
+        return 0;
+    }
+    _mdhl_block_flush();
     return 0;
 }
 
@@ -249,17 +288,19 @@ fn _mdhl_line_done(has_nl) {
             _mdhl_in_fence = 1;
             _mdhl_block_len = 0;
             _mdhl_block_over = 0;
+            _mdhl_block_rows = 0;                    # 0.18.3: start counting live interior rows
         } else {
             _mdhl_put_line(has_nl);
         }
     } else {
         if (_mdhl_scan_fence_close() == 1) {
-            _mdhl_block_flush();
+            _mdhl_block_close();                     # 0.18.3: upgrade the live block in place (TUI) / flush
             _mdhl_put_line(has_nl);
             _mdhl_in_fence = 0;
             _mdhl_grammar = 0;
             _mdhl_block_len = 0;
             _mdhl_block_over = 0;
+            _mdhl_block_rows = 0;
         } else {
             _mdhl_block_put(has_nl);
         }
@@ -302,6 +343,7 @@ fn _mdhl_clear() {
     _mdhl_grammar = 0;
     _mdhl_block_len = 0;
     _mdhl_block_over = 0;
+    _mdhl_block_rows = 0;
     return 0;
 }
 
@@ -335,7 +377,7 @@ fn mdhl_finish() {
         _mdhl_line_done(0);
     }
     if (_mdhl_in_fence == 1) {
-        _mdhl_block_flush();
+        _mdhl_block_close();       # 0.18.3: upgrade a live unterminated block in place (TUI) / flush
         _mdhl_in_fence = 0;
     }
     _mdhl_clear();

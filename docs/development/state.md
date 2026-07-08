@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.18.3** — **live-upgrading fenced-code card** (the 0.15.1 deferred "Option C"), 2026-07-07. A streamed
+```` ```lang ```` block is no longer withheld until its closing fence: the interior lines now emit **live**
+(unhighlighted) as they arrive, then at the closing fence — or on an interrupt / truncated completion — the
+live rows are **dropped and re-emitted syntax-highlighted**, an in-place upgrade. Unlocked by 0.18.0's
+re-renderable feed. TUI-only (`out_mode()==OUT_RING`, via `_mdhl_live()`); the **line REPL** (OUT_FD1) keeps
+withhold-until-close (a terminal it can't rewind) and **PT_PLAIN** stays verbatim, so the floor is
+**net-result-preserving / byte-identical**. New `src/feed.cyr` primitives: `feed_drop_last(n)` (remove the
+last `n` sealed rows, clamped, slots reused) + `feed_drop_pending()` (discard an un-sealed partial), both
+counter-only + dead off OUT_RING. New `src/mdhl.cyr` `_mdhl_block_close()` (drop live rows + re-emit
+highlighted), wired into `_mdhl_line_done`'s fence-close branch and `mdhl_finish`; `_mdhl_block_rows` tracks
+sealed interior rows. **Over-clamp guard** (caught by the pre-cut diff-review): a block whose live interior
+exceeds the ring (`> FEED_ROWS`, under `MDHL_BLOCK_CAP`) evicts the opener while streaming, so the upgrade
+runs only when the drop is exact (`_mdhl_block_rows <= feed_count()`) — a bigger-than-ring block falls back
+to its live verbatim rows. 910 assertions (+15, `test_mdhl_livecard`, incl. a no-trailing-newline
+double-emit regression guard). Pin **6.4.20**. Live-verify on a real tty (`--tier=rich`): a streamed code
+reply shows the code appear line-by-line, then snap to highlighted. Next in the 0.18.x line: `0.18.4` feed
+search, `0.18.5` glyph-width, `0.18.6` inline markdown.
+
 **0.18.2** — maintenance: re-sync vendored **bote-core → 3.0.1** + toolchain refresh to Cyrius **6.4.20**,
 2026-07-07. Follows a full-stack MCP-tool investigation (a live-stack test found a handful of tools
 returning no usable result). Root causes were **upstream, not in thoth**: bote's `bote_echo` and daimon's

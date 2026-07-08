@@ -2,6 +2,43 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.3] - 2026-07-07
+
+**Live-upgrading fenced-code card — the streamed code appears line-by-line, then snaps to highlighted at
+the closing fence.** The long-deferred 0.15.1 "Option C", finally unlocked by 0.18.0's re-renderable feed.
+Until now a streamed ```` ```lang ```` block was *withheld*: `mdhl` buffered every interior line and emitted
+the whole highlighted block only at the closing fence, so the code was invisible mid-stream (the spinner
+covered the gap). Now the interior lines emit **live** (unhighlighted) as they arrive, and at the closing
+fence — or on an interrupt / truncated completion — the live rows are **dropped and re-emitted
+syntax-highlighted**, an in-place upgrade. TUI-only and **net-result-preserving**: the final feed state is
+the identical highlighted block, so the floor is untouched. 910 assertions (+15). Pin **6.4.20**.
+
+### Added
+- **Live fenced-code card** (`src/mdhl.cyr`): `_mdhl_block_put` now emits interior lines live when
+  `out_mode() == OUT_RING` (`_mdhl_live()`), counting sealed rows in `_mdhl_block_rows` while still buffering
+  the interior for the at-close highlight. New `_mdhl_block_close()` performs the upgrade — `feed_drop_last`
+  the live rows + `feed_drop_pending` any un-sealed partial, then `_mdhl_block_flush` re-emits highlighted —
+  and is wired into both the fence-close branch of `_mdhl_line_done` and `mdhl_finish` (so an interrupted or
+  unterminated block upgrades honestly). The **line REPL** (OUT_FD1) keeps the withhold-until-close behavior
+  (a terminal it can't rewind); **PT_PLAIN** stays verbatim.
+- **Feed drop primitives** (`src/feed.cyr`): `feed_drop_last(n)` removes the most-recent `n` sealed rows
+  (clamped to `_feed_count`; slots reused by the next seals); `feed_drop_pending()` discards an un-sealed
+  partial line. Both are counter-only — no ring corruption, no OOB — and are dead no-ops off OUT_RING.
+- **15 assertions** (`tests/thoth.tcyr`, `test_mdhl_livecard`): the drop primitives (drop-last clamps to 0,
+  drop-pending clears the partial); a well-formed block streamed in chunks that split every token/delimiter
+  upgrades to exactly `[opener verbatim, interior highlighted, closer verbatim]` with **no leftover live
+  rows**; a **regression guard** for an unterminated block whose last interior line has no trailing newline
+  (an interrupt) — the live partial must not double with the highlighted re-emit; and a ```` ```text ````
+  no-grammar block stays verbatim.
+
+### Fixed
+- **Over-clamp guard** (`src/mdhl.cyr`, `_mdhl_block_close`): a single fenced block whose live interior
+  exceeds the feed ring (`> FEED_ROWS` logical lines, but under `MDHL_BLOCK_CAP`) evicts the opener/prior
+  rows while streaming; `feed_drop_last(_mdhl_block_rows)` would then over-clamp and wipe unrelated ring
+  content. The upgrade now runs only when the drop is exact (`_mdhl_block_rows <= feed_count()`); a block
+  larger than the ring falls back to leaving its live verbatim rows (unhighlighted). Caught by the pre-cut
+  adversarial diff-review.
+
 ## [0.18.2] - 2026-07-07
 
 **Maintenance: re-sync the vendored bote-core to 3.0.1 + a toolchain refresh to Cyrius 6.4.20.**
