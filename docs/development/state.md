@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.18.2** — maintenance: re-sync vendored **bote-core → 3.0.1** + toolchain refresh to Cyrius **6.4.20**,
+2026-07-07. Follows a full-stack MCP-tool investigation (a live-stack test found a handful of tools
+returning no usable result). Root causes were **upstream, not in thoth**: bote's `bote_echo` and daimon's
+built-in `libro_*` tools returned bare JSON, not the MCP `{"content":[{"type":"text","text":..}]}`
+envelope, so thoth (a correct, STRICT MCP client) honestly reported "no text content could be parsed";
+plus `scripts/stack.sh`'s generated t-ron policy didn't allow the `libro_*` tools (→ denied). Fixed
+across the spine: **bote 3.0.1** (`bote_echo` → `content_text_response`), **daimon 1.3.5** (a new
+`_mcp_wrap_builtin` wraps `libro_*` results at the `/v1/mcp/call` dispatch site, `isError` from the `ok`
+field), and thoth's `scripts/stack.sh` policy now allows `libro_*` — all three verified end-to-end (the
+previously-failing tools now render through thoth's `/call`). thoth needed **NO src change** (the user
+chose to keep the client strict + fix conformance upstream). This cut realigns thoth with the released
+spine: `src/vendor/bote-core.cyr` re-synced to 3.0.1 (only the embedded `_bote_server_version` 3.0.0→3.0.1
+changed — the `[lib.core]` dispatcher is byte-identical, since bote's fix was server-side), and the pin
+`6.4.19 → 6.4.20` (`cyrius lib sync`, zero floor-content change; drift cleared; realigns with bote 3.0.1
+/ daimon 1.3.5, both on 6.4.20). All lanes behave. 895 assertions (unchanged — no source logic change).
+Pin **6.4.20**. The remaining 0.18.x feature line (live card, search, glyph-width, inline markdown) stays
+pushed back (see roadmap).
+
 **0.18.1** — **`/theme` recolors scrollback** (the 0.18.0 keystone's first payoff) + a Cyrius **6.4.19**
 refresh, 2026-07-07. Because the feed ring stores role MARKERS (0.18.0) not baked SGR, a theme switch
 already recolors the whole window: `ui_set_theme` rebuilds the SGR table and the post-dispatch

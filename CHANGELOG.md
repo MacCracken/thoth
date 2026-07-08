@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.2] - 2026-07-07
+
+**Maintenance: re-sync the vendored bote-core to 3.0.1 + a toolchain refresh to Cyrius 6.4.20.**
+Follows a full-stack MCP-tool investigation that fixed two upstream conformance bugs (bote 3.0.1 wraps
+`bote_echo`, daimon 1.3.5 wraps its `libro_*` built-ins, both in MCP content blocks — see those repos'
+changelogs). thoth itself needed **no source change** for the tools to work (it was already a correct,
+strict MCP client — it honestly reported "no text content" for the non-conformant results); with the spine
+fixed, `/call bote_echo`, `/call libro_query`, and the agentic tool loop now render tool output. This cut
+just realigns thoth with the released spine + toolchain. 895 assertions unchanged. Pin **6.4.20**.
+
+### Changed
+- **Re-synced `src/vendor/bote-core.cyr` to bote 3.0.1** (`scripts/sync-bote.sh`). The vendored bundle is
+  bote's `[lib.core]` MCP dispatcher (referenced by the vendored t-ron); bote's `bote_echo` fix was
+  server-side (`main_common.cyr`, not in `[lib.core]`), so the only content delta is the embedded
+  `_bote_server_version()` string (3.0.0 → 3.0.1) — the dispatcher code is byte-identical. No behavior change.
+- **Toolchain pin `6.4.19 → 6.4.20`** (`cyrius.cyml` + `cyrius lib sync`, 70 floor modules, zero content
+  change). Clears the drift warning (the wrapper had advanced to 6.4.20) and realigns thoth with the
+  bote 3.0.1 / daimon 1.3.5 patches (both now on 6.4.20). All build lanes behave (linux ships, AGNOS
+  builds, aarch64 size-gapped, windows IOCP gap, macOS native-runner skip); 895 assertions pass unchanged.
+
 ## [0.18.1] - 2026-07-07
 
 **`/theme` recolors scrollback — the 0.18.0 keystone's first payoff. Plus a Cyrius 6.4.19 refresh.**
