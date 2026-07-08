@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.19.1** — **live agentic-turn telemetry**, 2026-07-08. The `tool-call:`/`result:` feed lines now show
+**verdict · elapsed · result-bytes** in a faint sub-line (`    · ok · 142ms · 87B`; just the verdict for a
+denied / no-name call), and the spinner reads `running <tool>…` while a call blocks (`running 3 tools…` for
+a parallel batch) instead of the generic `working…`. The **roundlog** (thoth's per-round tool ledger) now
+records `ms` (wall-time) + `bytes` (result size) per call — `_rl_call_sz` 16→32, `roundlog_add_call(name,
+kind, ok, ms, bytes)`, new `roundlog_call_ms`/`_bytes` — so `/audit` (`roundlog_report`) shows them too.
+`src/agent.cyr`: the **serial** path times gate+invoke (`clock_now_ms`) and labels the spinner per tool; the
+**parallel** path times each call inside its worker (a new `elapsed` field at ctx+48, `PAR_CTX_SZ` 48→56 —
+each worker owns its slot, writes before join, read serially in phase 3) and labels the batch. `_agent_call_telem`
+emits the sub-line through the same sink as the tool-call lines (feed at OUT_RING, terminal at OUT_FD1;
+floor-verbatim at PT_PLAIN; NOT routed through the reply's inline-markdown pass, so no styling collision).
+`src/tui.cyr`: `_spin_label` + `spin_label_set`/`_clear`; `spin_paint` shows `running <label>…`; `spin_begin`
+resets the label per turn so it never leaks into hoosh-streaming ticks; no-op off the TUI. No new producer,
+no spine surface. Diff review raised zero. 986 assertions (+2, `test_roundlog` ms/bytes round-trip). Pin
+**6.4.21**. Live-verify (`--tier=rich`): a task that calls tools shows the telemetry sub-lines + the spinner
+naming each tool. Next: `0.19.2` `/git` per-file diff.
+
 **0.19.0** — **context-budget meter** (opens the 0.19.x session-visibility line) + a Cyrius **6.4.21**
 refresh, 2026-07-08. hoosh keeps only the newest tail of the conversation whose framed bytes fit
 `HOOSH_REQ_CAP/8` (**exactly 32768 = 32 KiB**); older turns are silently evicted from each request

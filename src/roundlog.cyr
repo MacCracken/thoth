@@ -28,7 +28,7 @@ var _roundlog_total = 0;     # rounds opened this session (global index)
 var _roundlog_cur = 0;       # slot ptr of the round being filled (0 = none open)
 
 # per-call entry  = RL_NAME_CAP name bytes + kind (8) + ok (8)
-fn _rl_call_sz() { return RL_NAME_CAP + 16; }
+fn _rl_call_sz() { return RL_NAME_CAP + 32; }   # name + kind(8) + ok(8) + ms(8) + bytes(8)  (0.19.1)
 # per-round slot  = turn (8) + round (8) + n_calls (8) + RL_MAX_CALLS call entries
 fn _rl_slot_sz() { return 24 + RL_MAX_CALLS * _rl_call_sz(); }
 
@@ -77,8 +77,9 @@ fn _rl_copy_name(dst, name) {
 
 # roundlog_add_call: record one tool call in the current round. kind is
 # RL_ALLOWED / RL_DENIED / RL_NONAME; ok is 1 when an allowed call returned a
-# result. Calls past RL_MAX_CALLS in one round are dropped (the loop caps at 8).
-fn roundlog_add_call(name, kind, ok) {
+# result; ms is the invoke wall-time; bytes is the result byte count (0.19.1 telemetry — 0 for a
+# call that was never invoked, i.e. denied / noname). Calls past RL_MAX_CALLS in one round are dropped.
+fn roundlog_add_call(name, kind, ok, ms, bytes) {
     if (_roundlog_cur == 0) { return 0; }
     var n = load64(_roundlog_cur + 16);
     if (n >= RL_MAX_CALLS) { return 0; }
@@ -86,6 +87,8 @@ fn roundlog_add_call(name, kind, ok) {
     _rl_copy_name(e, name);
     store64(e + RL_NAME_CAP, kind);
     store64(e + RL_NAME_CAP + 8, ok);
+    store64(e + RL_NAME_CAP + 16, ms);
+    store64(e + RL_NAME_CAP + 24, bytes);
     store64(_roundlog_cur + 16, n + 1);
     return 0;
 }
@@ -113,6 +116,8 @@ fn roundlog_round_ncalls(i) { return load64(_roundlog_kept_slot(i) + 16); }
 fn roundlog_call_name(i, ci) { return _roundlog_kept_slot(i) + 24 + ci * _rl_call_sz(); }
 fn roundlog_call_kind(i, ci) { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP); }
 fn roundlog_call_ok(i, ci)   { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 8); }
+fn roundlog_call_ms(i, ci)   { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 16); }   # 0.19.1
+fn roundlog_call_bytes(i, ci){ return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 24); }   # 0.19.1
 
 fn roundlog_kind_str(k) {
     if (k == RL_ALLOWED) { return "allow"; }
@@ -150,6 +155,8 @@ fn roundlog_report() {
             if (k == RL_ALLOWED) {
                 if (roundlog_call_ok(i, ci) == 1) { emit(" ok"); }
                 else { emit(" err"); }
+                # 0.19.1 telemetry: invoke wall-time + result byte count
+                emit(" "); ofmt_int(roundlog_call_ms(i, ci)); emit("ms/"); ofmt_int(roundlog_call_bytes(i, ci)); emit("B");
             }
             ci = ci + 1;
         }

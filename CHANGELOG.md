@@ -2,6 +2,34 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.1] - 2026-07-08
+
+**Live agentic-turn telemetry — the `tool-call:` feed lines now show verdict, elapsed, and result size, and
+the spinner names the running tool.** Second slice of the session-visibility line. Each tool call gets a
+faint sub-line under its result — `· ok · 142ms · 87B` — and the spinner reads ` running <tool>…` while that
+call blocks (` running 3 tools…` for a parallel batch), instead of a generic `working…`. The roundlog thoth
+already keeps now records the wall-time + byte count per call, so `/audit` shows them too. 986 assertions
+(+2). Pin **6.4.21**.
+
+### Added
+- **Per-call telemetry** (`src/roundlog.cyr`): the round-call record gains `ms` (invoke wall-time) + `bytes`
+  (result size) fields (`_rl_call_sz` 16→32); `roundlog_add_call(name, kind, ok, ms, bytes)`; new
+  `roundlog_call_ms`/`roundlog_call_bytes`; `roundlog_report` (`/audit`) prints `<ms>ms/<bytes>B` per
+  allowed call.
+- **Live sub-line** (`src/agent.cyr`, `_agent_call_telem`): a faint `    · <verdict> · <ms>ms · <bytes>B`
+  under each `result:` (just the verdict for a denied/no-name call). The **serial** path times the
+  gate+invoke via `clock_now_ms`; the **parallel** path times each call in its worker (a new
+  `elapsed`-ms field in the per-slot ctx, `PAR_CTX_SZ` 48→56, written by the worker and read serially after
+  join — each worker owns its slot, no shared write). Emitted through the same sink as the tool-call lines
+  (feed at OUT_RING, terminal at OUT_FD1); floor-verbatim at PT_PLAIN; not routed through the reply's
+  inline-markdown pass.
+- **Spinner label** (`src/tui.cyr`): `_spin_label` + `spin_label_set`/`spin_label_clear`; `spin_paint` shows
+  ` running <tool>…`. `agent.cyr` labels the running tool (serial) or `N tools` (parallel batch) and clears
+  it after; `spin_begin` resets the label per turn so it never leaks into hoosh-streaming ticks. No-op off
+  the TUI.
+- **2 assertions** (`tests/thoth.tcyr`, `test_roundlog`): the new `ms`/`bytes` fields round-trip; the
+  existing `roundlog_add_call` callers updated to the 5-arg form.
+
 ## [0.19.0] - 2026-07-08
 
 **Context-budget meter — you can now see context pressure before hoosh silently drops old turns.** Opens the

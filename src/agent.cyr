@@ -500,7 +500,7 @@ var AGENT_ARGS_MAX = 16383;
 var PAR_ID_CAP = 128;
 var PAR_OUT_CAP = 131072;    # per-call result text, copied out of the arena
 var PAR_ARENA_CAP = 524288;  # per-call arena: headers + url + conn buffers + response body
-var PAR_CTX_SZ = 48;         # worker ctx: arena, req, name, args, out, result_len
+var PAR_CTX_SZ = 56;         # worker ctx: arena, req, name, args, out, result_len, elapsed_ms(+48, 0.19.1)
 
 var _par_ready = 0;          # 1 once the slot storage is allocated
 var _par_arena = 0;          # PAR_MAX allocator handles (i64 each)
@@ -571,8 +571,10 @@ fn _agent_call_worker(ctx) {
     var name = load64(ctx + 16);
     var args = load64(ctx + 24);
     var out = load64(ctx + 32);
+    var t0 = clock_now_ms();                        # 0.19.1: this call's wall-time (each worker owns its slot)
     var rl = daimon_fetch_into(a, req, name, args, out, PAR_OUT_CAP);
     store64(ctx + 40, rl);
+    store64(ctx + 48, clock_now_ms() - t0);         # elapsed ms at ctx+48 (read serially in phase 3)
     return 0;
 }
 
@@ -615,6 +617,7 @@ fn _agent_run_calls_par(tcs, nc) {
             k = k + 1;
         }
         # Phase 2 — fan out the allowed calls; each worker owns its slot's arena.
+        _agent_spin_ntools(batch);          # 0.19.1: label the spinner for the concurrent batch
         var s = 0;
         while (s < batch) {
             store64(_par_thread + s * 8, 0);
@@ -638,14 +641,17 @@ fn _agent_run_calls_par(tcs, nc) {
             if (th != 0) { thread_join(th); }
             s = s + 1;
         }
+        spin_label_clear();                 # 0.19.1: batch joined -> back to the generic indicator
         # Phase 3 — print + record + append results in deterministic call order.
         k = 0;
         while (k < batch) {
             var kind2 = load64(_par_kind + k * 8);
             var rl_ok = 0;
             var res = 0;
+            var ms = 0;                                          # 0.19.1: this call's wall-time (0 if not invoked)
             if (kind2 == RL_NONAME) { res = "(no tool name)"; }
             elif (load8(_par_allowed + k) == 1) {
+                ms = load64(_par_ctx_ptr(k) + 48);               # 0.19.1: worker-measured elapsed
                 var rlen = load64(_par_ctx_ptr(k) + 40);
                 if (rlen < 0) {
                     # worker's daimon_fetch_into returned -1 (transport failure) — kept
@@ -664,7 +670,9 @@ fn _agent_run_calls_par(tcs, nc) {
             }
             var nmout = 0;
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
-            roundlog_add_call(nmout, kind2, rl_ok);
+            var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1
+            _agent_call_telem(kind2, rl_ok, ms, bytes);            # 0.19.1: telemetry sub-line
+            roundlog_add_call(nmout, kind2, rl_ok, ms, bytes);
             _agent_add_result(_par_id + k * PAR_ID_CAP, res);
             k = k + 1;
         }
@@ -698,6 +706,33 @@ fn _agent_round_has_local(tcs, nc) {
     return 0;
 }
 
+# _agent_call_telem: a faint per-call telemetry sub-line under the result (0.19.1) — the verdict, and for an
+# invoked call its wall-time (ms) + result byte count. Mirrors the roundlog fields so the live feed and
+# /audit agree. Routes through the SAME sink as the tool-call/result lines (feed at OUT_RING, terminal at
+# OUT_FD1); floor-safe (ui_emit/ofmt_int are verbatim at PT_PLAIN).
+fn _agent_call_telem(kind, ok, ms, bytes) {
+    ui_emit(ROLE_FAINT, "    · ");
+    if (kind == RL_ALLOWED) {
+        if (ok == 1) { ui_emit(ROLE_GREEN, "ok"); } else { ui_emit(ROLE_RED, "err"); }
+        ui_emit(ROLE_FAINT, " · "); ofmt_int(ms); ui_emit(ROLE_FAINT, "ms · "); ofmt_int(bytes); ui_emit(ROLE_FAINT, "B");
+    } elif (kind == RL_NONAME) { ui_emit(ROLE_MUTED, "no tool name"); }
+    else { ui_emit(ROLE_RED, "denied"); }
+    oprintln("");
+    return 0;
+}
+
+# _agent_spin_ntools: label the spinner "N tools" for a parallel batch (0.19.1). No-op off the TUI.
+fn _agent_spin_ntools(n) {
+    var b[32];
+    var o = _append_int(&b, 0, n);
+    var t = " tools";
+    var ti = 0;
+    while ((load8(t + ti) != 0) && (o < 30)) { store8(&b + o, load8(t + ti)); o = o + 1; ti = ti + 1; }
+    store8(&b + o, 0);
+    spin_label_set(&b);
+    return 0;
+}
+
 fn _agent_run_calls(tcs, nc) {
     if ((config_hoosh_parallel() == 1) && (nc > 1) && (_agent_round_has_local(tcs, nc) == 0) && (_par_alloc() == 1)) { return _agent_run_calls_par(tcs, nc); }
     return _agent_run_calls_serial(tcs, nc);
@@ -718,6 +753,8 @@ fn _agent_run_calls_serial(tcs, nc) {
         var res = 0;
         var rl_kind = RL_DENIED;
         var rl_ok = 0;
+        spin_label_set(nm);                     # 0.19.1: name the running tool on the spinner (no-op off TUI)
+        var t0 = clock_now_ms();                # 0.19.1: time the gate+invoke
         if (nm == 0) { res = "(no tool name)"; rl_kind = RL_NONAME; }
         elif (strlen(gp) > AGENT_ARGS_MAX) { res = "(tool arguments too large; call refused — split into smaller calls)"; rl_kind = RL_DENIED; }
         elif (streq(nm, "memory_write") == 1) {
@@ -758,7 +795,11 @@ fn _agent_run_calls_serial(tcs, nc) {
         } else {
             res = "denied by authorization policy";
         }
-        roundlog_add_call(nm, rl_kind, rl_ok);
+        var ms = clock_now_ms() - t0;           # 0.19.1: invoke wall-time
+        spin_label_clear();
+        var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1: result byte count
+        _agent_call_telem(rl_kind, rl_ok, ms, bytes);           # 0.19.1: faint telemetry sub-line
+        roundlog_add_call(nm, rl_kind, rl_ok, ms, bytes);
         _agent_add_result(id, res);
         ci = ci + 1;
     }

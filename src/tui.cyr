@@ -1056,6 +1056,25 @@ fn spin_advance() { _spin_frame = _spin_frame + 1; return 0; }
 fn spin_frame() { return _spin_frame; }
 fn spin_active() { return _spin_active; }
 
+# --- spinner label (0.19.1): name the currently-running tool ---------------
+# During an agentic turn the spinner shows " working…" while hoosh streams; while a tool INVOKES (a blocking
+# daimon/shell/memory call), agent.cyr labels the spinner with the tool name so the user sees WHAT is
+# running. TUI-only (spin_paint is a no-op off the TUI); the label buffer is a bounded copy.
+var SPIN_LABEL_CAP = 80;
+var _spin_label_buf = 0;         # alloc(SPIN_LABEL_CAP), lazy
+var _spin_label = 0;             # 1 while a tool label is active (else generic " working…")
+fn spin_label_set(name) {
+    if (name == 0) { return spin_label_clear(); }
+    if (_spin_label_buf == 0) { _spin_label_buf = alloc(SPIN_LABEL_CAP); }
+    var i = 0;
+    while ((i < (SPIN_LABEL_CAP - 1)) && (load8(name + i) != 0)) { store8(_spin_label_buf + i, load8(name + i)); i = i + 1; }
+    store8(_spin_label_buf + i, 0);
+    _spin_label = 1;
+    spin_paint();
+    return 0;
+}
+fn spin_label_clear() { _spin_label = 0; spin_paint(); return 0; }
+
 # spin_paint: draw the working indicator on the hint row (chrome — emit_raw, never
 # captured). No-op when inactive. The caller restores the hint row via tui_draw_hint
 # once the dispatch ends.
@@ -1064,11 +1083,14 @@ fn spin_paint() {
     tty_move(tui_hint_row(_tui_rows), 1);
     tty_clear_to_eol();
     emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw(spin_glyph(_spin_frame)); emit_raw(ui_reset());
-    emit_raw(ui_sgr(ROLE_FAINT)); emit_raw(" working…"); emit_raw(ui_reset());
+    emit_raw(ui_sgr(ROLE_FAINT));
+    if (_spin_label == 1) { emit_raw(" running "); emit_raw(_spin_label_buf); emit_raw("…"); }
+    else { emit_raw(" working…"); }
+    emit_raw(ui_reset());
     tui_park_cursor();          # return the cursor to the prompt line, not the spinner row
     return 0;
 }
-fn spin_begin() { _spin_frame = 0; _spin_active = 1; _stream_last_paint_ms = 0; spin_paint(); return 0; }   # start each turn at frame 0; _stream_last=0 so the first streamed chunk paints instantly
+fn spin_begin() { _spin_frame = 0; _spin_active = 1; _spin_label = 0; _stream_last_paint_ms = 0; spin_paint(); return 0; }   # start each turn at frame 0, unlabeled; _stream_last=0 so the first streamed chunk paints instantly
 fn spin_end() { _spin_active = 0; return 0; }   # caller redraws the hint row after
 
 # --- the self-managed feed painter (0.9.1) --------------------------------

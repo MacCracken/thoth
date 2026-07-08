@@ -1398,9 +1398,9 @@ fn test_roundlog() {
 
     # one round (turn 5, round 1) with three calls: allow+ok, deny, noname
     roundlog_open(5, 1);
-    roundlog_add_call("read_file", RL_ALLOWED, 1);
-    roundlog_add_call("write_file", RL_DENIED, 0);
-    roundlog_add_call(0, RL_NONAME, 0);
+    roundlog_add_call("read_file", RL_ALLOWED, 1, 142, 87);   # 0.19.1: + ms, bytes
+    roundlog_add_call("write_file", RL_DENIED, 0, 0, 0);
+    roundlog_add_call(0, RL_NONAME, 0, 0, 0);
     assert_eq(roundlog_total(), 1, "one round opened");
     assert_eq(roundlog_count(), 1, "one round retained");
     assert_eq(roundlog_round_turn(0), 5, "round turn = 5");
@@ -1409,6 +1409,8 @@ fn test_roundlog() {
     assert(streq(roundlog_call_name(0, 0), "read_file"), "call0 name copied");
     assert_eq(roundlog_call_kind(0, 0), RL_ALLOWED, "call0 allowed");
     assert_eq(roundlog_call_ok(0, 0), 1, "call0 ok");
+    assert_eq(roundlog_call_ms(0, 0), 142, "call0 elapsed ms recorded (0.19.1)");
+    assert_eq(roundlog_call_bytes(0, 0), 87, "call0 result bytes recorded (0.19.1)");
     assert(streq(roundlog_call_name(0, 1), "write_file"), "call1 name copied");
     assert_eq(roundlog_call_kind(0, 1), RL_DENIED, "call1 denied");
     assert_eq(roundlog_call_kind(0, 2), RL_NONAME, "call2 noname");
@@ -1423,7 +1425,7 @@ fn test_roundlog() {
     roundlog_reset();
     roundlog_open(1, 1);
     var c = 0;
-    while (c < (RL_MAX_CALLS + 3)) { roundlog_add_call("t", RL_ALLOWED, 1); c = c + 1; }
+    while (c < (RL_MAX_CALLS + 3)) { roundlog_add_call("t", RL_ALLOWED, 1, 0, 0); c = c + 1; }
     assert_eq(roundlog_round_ncalls(0), RL_MAX_CALLS, "round caps at RL_MAX_CALLS calls");
 
     # ring eviction: open CAP+2 rounds (round_no = global index); oldest two drop off
@@ -1431,7 +1433,7 @@ fn test_roundlog() {
     var g = 1;
     while (g <= (ROUNDLOG_CAP + 2)) {
         roundlog_open(1, g);
-        roundlog_add_call("x", RL_ALLOWED, 1);
+        roundlog_add_call("x", RL_ALLOWED, 1, 0, 0);
         g = g + 1;
     }
     assert_eq(roundlog_total(), ROUNDLOG_CAP + 2, "total counts every round opened");
