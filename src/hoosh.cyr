@@ -620,6 +620,34 @@ fn hoosh_reachable() {
     return 0;
 }
 
+# --- live spine-health (0.19.3) --------------------------------------------
+# A cached hoosh reachability state driven by TRAFFIC OUTCOMES — no background timer / idle probe. It is
+# seeded by the startup greeting's probe, updated by each turn's transport result (a connection failure ->
+# DOWN; any answered request, even a non-2xx, -> UP), and re-probed on demand (Ctrl-R). The status bar shows
+# it as a dot so the user sees the spine go down mid-session instead of discovering it on the next turn.
+var HOOSH_HEALTH_UNKNOWN = 0;
+var HOOSH_HEALTH_UP = 1;
+var HOOSH_HEALTH_DOWN = 2;
+var _hoosh_health = 0;
+
+fn hoosh_health() { return _hoosh_health; }
+fn hoosh_health_mark_up() { _hoosh_health = HOOSH_HEALTH_UP; return 0; }
+fn hoosh_health_mark_down() { _hoosh_health = HOOSH_HEALTH_DOWN; return 0; }
+
+# hoosh_health_note: record a turn's transport result — rc < 0 is a connection failure (the gateway did not
+# answer -> DOWN); rc >= 0 means it answered (200 or a non-2xx status -> reachable, UP).
+fn hoosh_health_note(rc) {
+    if (rc < 0) { _hoosh_health = HOOSH_HEALTH_DOWN; } else { _hoosh_health = HOOSH_HEALTH_UP; }
+    return 0;
+}
+
+# hoosh_health_probe: an on-demand silent reachability probe (startup + Ctrl-R) — updates + returns the
+# cached state. Blocking (the same GET a turn's connect uses); no idle polling.
+fn hoosh_health_probe() {
+    if (hoosh_reachable() == 1) { _hoosh_health = HOOSH_HEALTH_UP; } else { _hoosh_health = HOOSH_HEALTH_DOWN; }
+    return _hoosh_health;
+}
+
 # hoosh_list_models: GET the gateway's model catalog and print each model id,
 # marking the one this session would route to (session override, else config
 # default). Returns 0 on success, negative on transport failure, the HTTP status
@@ -957,5 +985,6 @@ fn hoosh_send(prompt) {
     if (rc == 0) { log_kv_str("result", "ok"); log_commit(SK_INFO); }
     elif (rc < 0) { log_kv_str("result", "transport_error"); log_commit(SK_WARN); }
     else { log_kv_str("result", "http_error"); log_kv_int("status", rc); log_commit(SK_WARN); }
+    hoosh_health_note(rc);                        # 0.19.3: this turn's transport outcome drives the health dot
     return rc;
 }

@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.19.3** — **live spine-health** (closes the 0.19.x line), 2026-07-08. A cached hoosh reachability driven
+by TRAFFIC OUTCOMES (no background timer / idle probe), shown as a dot in the status bar. `src/hoosh.cyr`:
+`_hoosh_health` tri-state (UNKNOWN/UP/DOWN) + `hoosh_health`/`_mark_up`/`_mark_down`/`hoosh_health_note(rc)`
+(`rc<0` connection failure → DOWN; any answered request, even a non-2xx → UP) + `hoosh_health_probe()` (a
+silent `hoosh_reachable` GET → UP/DOWN). Two chokepoints: `hoosh_send` calls `hoosh_health_note(rc)`;
+`agent_turn` marks each round by kind (2 transport → down, 4 Esc-interrupt → neutral, everything answered →
+up — so a multi-round loop ends on the last round's true outcome). The **status bar** (`tui_draw_status`)
+shows a **green ● up / red ● down / faint ○ unknown** dot next to the model, only when a gateway is
+configured; the startup greeting seeds the cache via the same probe (READY/unreachable/absent unchanged).
+**Ctrl-R** (`KEY_REPROBE`) re-runs the silent probe (while OUT_FD1 — it emits nothing), notes `hoosh:
+reachable / unreachable / absent` to the feed, and refreshes the dot — no idle poll. TUI-only display; the
+health STATE is set in the REPL too but only shown in the TUI (no REPL floor change). Verified by an
+adversarial code-trace: turn-outcome coverage (both chokepoints, non-2xx=UP, Esc=neutral, non-turn commands
+don't mark), the Ctrl-R out_mode balance, the width-1 dot glyphs, and no UNKNOWN leak post-startup — all
+clean. 998 assertions (+5, `test_hoosh_health` state machine). Pin **6.4.21**. Live-verify (`--tier=rich`):
+stop the gateway, run a task → the dot goes red; Ctrl-R re-probes. **This completes the 0.19.x
+session-visibility line** (context meter → turn telemetry → `/git` diff → spine-health); next is `0.20.x`
+(shell/agent hardening).
+
 **0.19.2** — **`/git <path>` per-file diff**, 2026-07-08. The 0.13.x deferred follow-up: `/git` showed
 branch + changed files; now `/git <path>` renders that file's diff (HEAD blob vs working tree), colored +
 syntax-highlighted. sit computes the diff (`sit_diff_path` → a vec of annotated line-ops `{kind, line-tuple,

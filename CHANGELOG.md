@@ -2,6 +2,30 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.19.3] - 2026-07-08
+
+**Live spine-health — the status bar shows whether hoosh is reachable, and a transport failure during a
+turn marks it down immediately.** Closes the 0.19.x session-visibility line. A cached reachability state
+driven by TRAFFIC OUTCOMES (no background timer / idle probe): seeded by the startup greeting's probe,
+updated by each turn's transport result, and re-probed on demand with **Ctrl-R**. So the spine going down
+mid-session shows up as a red dot next to the model — you don't discover it on the next turn. 998
+assertions (+5). Pin **6.4.21**.
+
+### Added
+- **Cached health** (`src/hoosh.cyr`): `_hoosh_health` tri-state (UNKNOWN/UP/DOWN) + `hoosh_health()`,
+  `hoosh_health_mark_up`/`_down`, `hoosh_health_note(rc)` (a turn's `rc < 0` connection failure → DOWN; any
+  answered request, even a non-2xx, → UP), and `hoosh_health_probe()` (a silent `hoosh_reachable` GET →
+  UP/DOWN). Driven at two chokepoints: `hoosh_send` notes its `rc`; `agent_turn` marks each round (kind 2
+  transport → down, an Esc-interrupt is neutral, everything answered → up).
+- **Status-bar dot** (`src/tui.cyr`, `tui_draw_status`): green ● up / red ● down / faint ○ unknown next to
+  the model, shown only when a gateway is configured. The startup greeting now seeds the cache via the same
+  probe.
+- **Ctrl-R re-probe** (`src/tui.cyr`, `KEY_REPROBE`): re-runs the silent reachability probe and notes the
+  outcome (`hoosh: reachable / unreachable / absent`) in the feed + refreshes the dot. Legacy byte 18 +
+  kitty. No idle poll — health only moves on a turn or an explicit Ctrl-R.
+- **5 assertions** (`tests/thoth.tcyr`, `test_hoosh_health`): the mark/note state machine (rc<0 → DOWN,
+  rc>=0 incl. a non-2xx → UP, and the mark helpers).
+
 ## [0.19.2] - 2026-07-08
 
 **`/git <path>` renders that file's diff** — HEAD blob vs working tree, colored and syntax-highlighted. The

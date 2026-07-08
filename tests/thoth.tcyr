@@ -189,6 +189,24 @@ fn test_ctx_meter() {
     return 0;
 }
 
+# live spine-health (0.19.3): the cached hoosh reachability driven by traffic outcomes — a turn's transport
+# result (rc<0 = connection failure = DOWN; rc>=0 = the gateway answered = UP), the mark helpers, and the
+# tri-state. (hoosh_health_probe needs a live gateway, so it is not unit-tested here.)
+fn test_hoosh_health() {
+    test_group("live spine-health (hoosh.cyr, 0.19.3)");
+    hoosh_health_mark_up();
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "mark_up -> UP");
+    hoosh_health_note(0 - 1);
+    assert_eq(hoosh_health(), HOOSH_HEALTH_DOWN, "a transport failure (rc<0) -> DOWN");
+    hoosh_health_note(0);
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "an answered turn (rc 0) -> UP");
+    hoosh_health_note(500);
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "a non-2xx (rc>0, gateway answered) is still UP");
+    hoosh_health_mark_down();
+    assert_eq(hoosh_health(), HOOSH_HEALTH_DOWN, "mark_down -> DOWN");
+    return 0;
+}
+
 # The avatara persona overlay (M5): identity SOURCED from the vendored archetype
 # bundle (egyptian_thoth via the prof_* accessors), not a hardcoded stub. soul +
 # spirit are the prose that feeds the hoosh system prompt.
@@ -2953,6 +2971,7 @@ fn main() {
     test_capability_ladder();
     test_session();
     test_ctx_meter();
+    test_hoosh_health();
     test_persona();
     test_config();
     test_hoosh();

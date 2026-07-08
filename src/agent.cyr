@@ -989,6 +989,8 @@ fn agent_turn(prompt) {
         # returned so they never fell through, but the new non-returning k==4 arm MUST NOT fall into
         # the k==1/else block below, or it would double-append / double-pop history.)
         var k = _agent_round_kind;
+        if (k == 2) { hoosh_health_mark_down(); }     # 0.19.3: a round's transport failure -> spine DOWN
+        elif (k != 4) { hoosh_health_mark_up(); }     # any answered round (tool/http/final) -> UP; k==4 (Esc) neutral
         if (k == 2) {
             session_history_pop_last();
             log_begin("agent_turn"); log_kv_str("result", "transport_error"); log_commit(SK_WARN);

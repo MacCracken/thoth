@@ -56,6 +56,7 @@ var KEY_KILL_EOL = 26;        # Ctrl-K — kill from the cursor to the end of th
 var KEY_MOUSE = 27;           # SGR mouse left-click (coords in _mouse_row/_mouse_col) (0.17.2)
 var KEY_FIND = 28;            # Ctrl-F — enter feed search (0.18.4)
 var KEY_ESC = 29;             # a lone Esc (best-effort) — closes search; a no-op elsewhere (0.18.4)
+var KEY_REPROBE = 30;         # Ctrl-R — re-probe hoosh reachability (0.19.3)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -453,6 +454,7 @@ fn _tui_kitty_u(cp, modk) {
         if (cp == 119) { return KEY_DELWORD; }      # Ctrl-W (delete word) (0.17.1)
         if (cp == 107) { return KEY_KILL_EOL; }     # Ctrl-K (kill to EOL) (0.17.1)
         if (cp == 102) { return KEY_FIND; }         # Ctrl-F (feed search) (0.18.4)
+        if (cp == 114) { return KEY_REPROBE; }      # Ctrl-R (re-probe hoosh) (0.19.3)
     }
     if (modk == 3) {                         # Alt (1 + 0b010) (0.17.1)
         if (cp == 98) { return KEY_WORD_LEFT; }     # Alt-b -> word left
@@ -620,6 +622,7 @@ fn tui_read_key() {
     if (b == 23) { return KEY_DELWORD; }        # Ctrl-W — delete the word before the cursor (0.17.1)
     if (b == 11) { return KEY_KILL_EOL; }       # Ctrl-K — kill from the cursor to end of line (0.17.1)
     if (b == 6) { return KEY_FIND; }            # Ctrl-F — enter feed search (0.18.4)
+    if (b == 18) { return KEY_REPROBE; }        # Ctrl-R — re-probe hoosh reachability (0.19.3)
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
@@ -686,6 +689,15 @@ fn tui_draw_status() {
     emit(thoth_version()); emit(")"); emit(ui_reset());
     ui_emit(ROLE_FAINT, "  model ");
     ui_emit(ROLE_ACCENT, _hoosh_model());
+    # hoosh spine-health dot (0.19.3): green ● up / red ● down / faint ○ unknown — driven by the last turn's
+    # transport outcome or a Ctrl-R re-probe (no idle poll). Shown only when a gateway is configured.
+    if (config_hoosh_configured() == 1) {
+        emit(" ");
+        var hh = hoosh_health();
+        if (hh == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "●"); }
+        elif (hh == HOOSH_HEALTH_DOWN) { ui_emit(ROLE_RED, "●"); }
+        else { ui_emit(ROLE_FAINT, "○"); }
+    }
     ui_emit(ROLE_FAINT, "  turns ");
     emit(ui_sgr(ROLE_FG)); fmt_int(session_turns()); emit(ui_reset());
     # ctx: framed history bytes vs the ~32 KiB evict boundary (0.19.0). Omitted when single-turn / empty
@@ -1749,7 +1761,7 @@ fn tui_loop() {
     # READY when the gateway actually answers; otherwise it says so (unreachable when a URL is
     # set, absent when none is) — honest, never faked. The "type a task" guidance is below.
     ui_emit(ROLE_FAINT, "Status: ");
-    if (hoosh_reachable() == 1) {
+    if (hoosh_health_probe() == HOOSH_HEALTH_UP) {   # 0.19.3: probe + SEED the cached health for the status-bar dot
         ui_emit(ROLE_GREEN, "READY");
     } elif (config_hoosh_configured() == 1) {
         ui_emit(ROLE_RED, "hoosh unreachable");
@@ -1811,6 +1823,18 @@ fn tui_loop() {
             } elif (key == KEY_TOGGLE_THEME) {
                 ui_set_theme(1 - ui_theme());   # dark <-> light; rebuilds the SGR table
                 tty_clear();           # re-color the whole frame
+                tui_relayout();
+            } elif (key == KEY_REPROBE) {
+                # 0.19.3: Ctrl-R re-probes hoosh reachability (a silent GET; no idle timer). Probe while
+                # OUT_FD1 (it emits nothing), then note the outcome to the feed + repaint the status dot.
+                var _reach = HOOSH_HEALTH_DOWN;
+                if (config_hoosh_configured() == 1) { _reach = hoosh_health_probe(); }
+                out_mode_set(OUT_RING);
+                if (config_hoosh_configured() == 0) { ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in thoth.cyml"); }
+                elif (_reach == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "hoosh: reachable"); }
+                else { ui_emit(ROLE_RED, "hoosh: unreachable"); ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); }
+                feed_flush_pending();
+                out_mode_set(OUT_FD1);
                 tui_relayout();
             } elif (key == KEY_TAB) {
                 if (_tui_show_tree == 1) {
