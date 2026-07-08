@@ -7,6 +7,45 @@
 
 ## Version
 
+**0.20.4** — **the model's `shell` tool works on Windows** + the Cyrius **6.4.26** refresh that unblocked
+it, 2026-07-08. This is the deferred `0.20.2` (Windows timed capture) item, landing OUT OF ORDER after
+`0.20.3`: 6.4.26 shipped `TerminateProcess` (syscall `0xF01D`) — the kill primitive the earlier Windows PE
+surface lacked, added upstream in direct response to thoth's filed issue
+`2026-07-08-windows-pe-surface-no-terminateprocess` (now RESOLVED). Windows `exec_shell_capture`
+(`src/exec.cyr`, the `#ifdef CYRIUS_TARGET_WIN` block) replaces the announce-but-unsupported stub and
+`shell_supported()`→1. It mirrors the POSIX **temp-file** design (a FILE, never a pipe): a design workflow +
+empirical cass testing PROVED the pipe path deadlocks — a >~4 KiB command fills the anonymous-pipe buffer,
+blocks (the PE surface has no `PeekNamedPipe`/overlapped-I/O/threads to drain concurrently), and gets
+mis-killed as a FALSE timeout; a file has no writer backpressure so the child always runs to genuine
+completion (clean over-cap truncation) or a genuine hang. Opens a CWD-relative `thoth_sh_<pid>_<n>.tmp`
+(`CreateFileW`), `SetHandleInformation`-inheritable, stdout+stderr→file via vendored `_win_create_process`,
+deadline+`TerminateProcess`+reap via vendored `_win_wait_timeout`, reads back via `file_read_all`,
+best-effort `DeleteFileW`. Runs `cmd /s /c "<cmdline>"` with the env INHERITED (PATH reaches cmd.exe);
+status maps killed→`-2`/timed=1, else the true unsigned 32-bit exit code (`ec & 0xFFFFFFFF`), fail-closed
+`{-1,0}` on open/sethandle/spawn failure. **Verified end-to-end on `cass` (Windows 11 x86_64)** with
+byte-identical code: echo capture, merged stdout+stderr (`out\r\nerr\r\n`), over-cap clean-truncate
+(code=0, NOT a false timeout — the pipe path fails this), timeout→code=-2/timed=1, partial-output-on-kill
+(`start` preserved), exit-code passthrough (3), empty output — all correct. **Residuals (documented, never
+faked):** no process-group kill (Job Objects not wired) → a timeout that spawns a surviving grandchild lets
+it outlive the shell AND hold the inherited temp-file handle so `DeleteFileW` fails and that one temp file
+lingers in the CWD until the grandchild exits (parallels pre-0.20.1 POSIX single-child; confirmed on cass:
+exactly the 2 grandchild-`ping` timeout cases leaked, all others cleaned up); temp in CWD not /tmp (no
+`GetTempPathW`; read-only CWD → fail-closed); no `O_EXCL`/`O_NOFOLLOW`; unsigned-32-bit exit code shape;
+stdin not NUL-redirected (a stdin reader blocks to an honest `-2`). A pre-cut adversarial-review workflow
+(3 lenses → verify) caught TWO real defects, both fixed + re-verified on cass: (1) MUST-FIX — an uncapped
+`_w_append_cstr(cmdline)` into the fixed 16 KiB wbuf would OVERRUN the bump heap on a model command >8179
+bytes (the JSON blob cap is 16384, so the command value alone can reach it); now length-checked and REJECTED
+fail-closed (`{-1,0}`, no spawn), verified by a 9000-byte over-long case returning `code=-1 n=0` with no
+crash; (2) the wbuf was `alloc`'d fresh every call → a 16 KiB per-call leak on the no-free bump heap; now a
+reused module global `_shell_wbuf` (mirrors `_shell_tmp_buf`), verified by a post-guard re-capture. The full
+thoth `--win` binary stays
+IOCP-gated on `lib/async.cyr` (async/epoll→IOCP, a separate cyrius item); this shell capture is verified via
+a minimal exec-only `--win` harness and ships with the Windows binary the moment that gate lifts.
+Toolchain: pin `6.4.23 → 6.4.26`, active toolchain switched to 6.4.26 (`.27` is in flight); `cyrius lib
+sync` moved only `lib/process_win.cyr` (+`_win_terminate`/`_win_wait_timeout`), `lib/math.cyr`, `lib/io.cyr`.
+Linux lanes green, 1021 assertions (Windows path `#ifdef`-gated, not host-testable). Pin **6.4.26**. Next:
+the `0.21.x` composer line (`@file` mentions), or the full `--win` lane when the IOCP transport lands.
+
 **0.20.3** — **array-value shell deny/allow config**, 2026-07-08. The `[shell]` deny/allow glob lists —
 modelled as `[shell.deny]`/`[shell.allow]` SECTIONS of `label = "glob"` pairs only because bayan (≤ 1.0.4)
 had no TOML array-VALUE getter — now accept the natural array form `[shell] deny = ["…"] / allow = ["…"]`,

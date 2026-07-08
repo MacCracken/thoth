@@ -2,6 +2,49 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.4] - 2026-07-08
+
+**The model's `shell` tool now works on Windows** — real timed capture with a wall-clock deadline — plus the
+Cyrius toolchain refresh to **6.4.26** that unblocked it. This is the deferred `0.20.2` (Windows timed
+capture) item, landing out-of-order after `0.20.3` now that 6.4.26 shipped the `TerminateProcess` primitive
+(syscall `0xF01D`) that the earlier PE surface lacked — added upstream in response to thoth's filed issue
+`2026-07-08-windows-pe-surface-no-terminateprocess`. **Verified end-to-end on a real Windows 11 x86_64 host
+(`cass`)** with byte-identical code: capture, merged stdout+stderr, exit-code passthrough, clean over-cap
+truncation, deadline kill, and partial-output-on-kill. Pin **6.4.26**. 1021 assertions (Linux unchanged —
+the Windows path is `#ifdef`-gated and proven via a minimal `--win` harness, not the host test suite).
+
+### Added
+- **Windows `exec_shell_capture`** (`src/exec.cyr`, the `#ifdef CYRIUS_TARGET_WIN` block): replaces the
+  0.16.0 announce-but-unsupported stub; `shell_supported()` now returns 1 on Windows. Uses the SAME
+  **temp-file** design as the POSIX path (a file, never a pipe — a file has no writer backpressure, so a
+  large-output command runs to genuine completion instead of deadlocking on the ~4 KiB anonymous-pipe buffer
+  the PE surface can't drain concurrently: no `PeekNamedPipe`/overlapped-I/O/threads). Opens a CWD-relative
+  `thoth_sh_<pid>_<n>.tmp` (`CreateFileW`), marks it inheritable (`SetHandleInformation`), redirects the
+  child's stdout+stderr to it via the vendored `_win_create_process`, enforces the deadline +
+  `TerminateProcess` + reap via the vendored `_win_wait_timeout`, reads the file back, and best-effort
+  `DeleteFileW`s it. Runs `cmd /s /c "<cmdline>"` with the environment inherited (PATH reaches cmd.exe).
+  The model-supplied command is length-checked against the 16 KiB UTF-16LE buffer and REJECTED fail-closed
+  (`{-1,0}`, no spawn) beyond ~8179 bytes; the buffer is a reused module global (no per-call heap leak). A
+  pre-cut adversarial review caught both — an uncapped copy would have overrun the buffer, and a fresh
+  per-call `alloc` would have leaked on the no-free bump heap; both fixed and re-verified on `cass`.
+
+### Changed
+- **Cyrius toolchain 6.4.23 → 6.4.26** (`cyrius.cyml` pin + `cyrius lib sync`): only `lib/process_win.cyr`
+  (the new `_win_terminate` / `_win_wait_timeout` primitives), `lib/math.cyr`, and `lib/io.cyr` changed
+  content in the vendored floor.
+
+### Notes
+- **Windows residuals (documented, never faked):** no process-group kill on this surface, so a timeout that
+  leaves a surviving detached grandchild can (a) let it outlive the shell and (b) hold the temp-file handle
+  open so its `DeleteFileW` fails and that one temp file lingers in the CWD until the grandchild exits
+  (parallels the pre-0.20.1 POSIX single-child behavior); temp file lives in the CWD, not a system temp dir
+  (no `GetTempPathW`; a read-only CWD fails closed); no `O_EXCL`/`O_NOFOLLOW` (name-uniqueness + best-effort
+  pre-delete; a lower-risk-than-/tmp TOCTOU residual); the exit code is the true unsigned 32-bit Win32 code,
+  not the POSIX 0..127/128+sig shape; stdin is not redirected to NUL (a stdin-reading command blocks until an
+  honest `-2` timeout).
+- The full thoth **`--win` binary remains gated** on the async/epoll→IOCP transport (`lib/async.cyr`); this
+  shell capture is verified in isolation and ships with the Windows binary once that separate gate lifts.
+
 ## [0.20.3] - 2026-07-08
 
 **Shell `deny`/`allow` glob lists can now be written as natural TOML arrays** — `deny = ["…", "…"]` /

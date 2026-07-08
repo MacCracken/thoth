@@ -39,6 +39,8 @@ fn run_shell(cmdline) {
 
 var _shell_tmp_ctr = 0;    # per-process monotonic counter — pid alone collides in a long-lived TUI
 var _shell_tmp_buf = 0;    # lazily-allocated scratch for the temp path
+var _shell_wbuf = 0;       # Windows-only: lazily-allocated 16 KiB UTF-16LE cmdline scratch, reused per call
+                           # (a fresh alloc() per call would leak — alloc is a no-free bump heap; POSIX uses none)
 
 # _exec_append_cstr: raw-copy NUL-terminated s into dst at off; return new off. Pure.
 fn _exec_append_cstr(dst, off, s) {
@@ -74,12 +76,101 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
 fn shell_supported() { return 0; }
 #endif
 #ifdef CYRIUS_TARGET_WIN
-# Windows: no fork/exec and no SIGKILL-by-deadline in the frozen surface — the timeout protection
-# can't be honored the same way, so treat it like AGNOS for 0.16.0 (unadvertised; announced).
-fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
-    store64(status_out, 0 - 3); store64(status_out + 8, 0); return 0;
+# Windows (0.20.2): no fork/exec, but Cyrius 6.4.26 wired the timeout-kill primitive (TerminateProcess,
+# syscall 0xF01D) behind lib/process_win.cyr's _win_create_process + _win_wait_timeout, so the model's
+# `shell` tool now works on Windows via the SAME temp-file design as the POSIX path below — a FILE, never a
+# pipe. A file has no writer backpressure, so the child runs to GENUINE completion (clean over-cap
+# truncation) or a GENUINE hang (real deadline kill); the pipe path would deadlock/false-timeout any command
+# whose output exceeds the ~4 KiB CreatePipe buffer, since the PE surface has no PeekNamedPipe / overlapped
+# I/O / threads for concurrent draining (empirically confirmed on a real Windows host). Verified end-to-end
+# on cass (2026-07-08): capture, merged stdout+stderr, exit codes, clean over-cap truncation, deadline
+# TerminateProcess with the -2 sentinel, and partial-output-on-kill all correct.
+#
+# Divergences from POSIX + residuals (documented, never faked):
+#   - Runs `cmd /s /c "<cmdline>"` with the environment INHERITED (wenv=0) so PATH reaches cmd.exe — unlike
+#     the POSIX empty-envp, matching lib/process_win.cyr's exec_cmd convention; the UTF-16LE cmdline buffer
+#     is a fixed 16 KiB, so a command exceeding ~8179 bytes is REJECTED fail-closed ({-1,0}, no spawn) rather
+#     than overrunning the buffer (NOT silently truncated — _w_append_cstr has no cap).
+#   - The temp file lives in the CURRENT WORKING DIRECTORY (the PE surface has no GetTempPathW), not /tmp; a
+#     read-only CWD fails the create and degrades fail-CLOSED to {-1,0} (never a faked success). The open is
+#     OPEN_ALWAYS without O_TRUNC (the reroute ignores it), so the best-effort pre-delete is the only stale-
+#     content guard: in the extremely narrow case where a lingering file (below) is reconstructed by a later
+#     run (pid reuse + the counter reset to 0) whose pre-delete ALSO fails on the still-live grandchild
+#     handle, a shorter new capture could read new-front + stale-tail. Not reachable without that exact combo.
+#   - No O_EXCL/O_NOFOLLOW (the CreateFileW reroute ignores them): collision resistance is getpid()+counter
+#     name-uniqueness plus a best-effort pre-delete; a pre-planted name is a TOCTOU residual (lower risk than
+#     /tmp — the CWD is the user's own project dir).
+#   - No process-group kill (Win32 has no POSIX pgid on this surface; a Job Object is not wired): a timeout
+#     TerminateProcess-es only the cmd.exe, so a detached grandchild (`start foo`, a backgrounded process)
+#     can survive AND — holding the inherited temp-file handle — makes the post-kill DeleteFileW fail
+#     (Windows can't delete a file with a live handle, unlike POSIX unlink), so that ONE temp file may linger
+#     in the CWD until the grandchild exits. Best-effort cleanup; parallels the pre-0.20.1 POSIX single-child
+#     behavior (the 0.20.1 kill(-pgid) group-kill has no Win32 equivalent on this surface).
+#   - The reported exit code is the child's true UNSIGNED 32-bit Win32 exit code (masked to 32 bits), not the
+#     POSIX 0..127 / 128+signal shape; -1 (spawn/open) and -2 (timeout) remain thoth's own sentinels.
+#   - stdin is not redirected to a NUL device (_win_create_process wires only stdout+stderr): a command that
+#     reads stdin may block until the deadline and be reported as an HONEST -2 timeout (never a wrong answer).
+#
+# The full thoth --win binary is still gated on the async/epoll->IOCP transport (lib/async.cyr); this
+# capturing shell is proven via a minimal exec-only --win harness on cass and ships with the Windows binary
+# the moment that gate lifts.
+
+# _shell_tmp_path_win: a CWD-relative thoth_sh_<pid>_<counter>.tmp (no /tmp, no GetTempPathW). getpid() is
+# lib/process_win.cyr's Windows self-pid (syscall 0xF01C) — NOT sys_getpid (POSIX-only). Reuses the shared
+# _shell_tmp_buf/_shell_tmp_ctr + _exec_append_cstr/_append_int defined above the target #ifdefs.
+fn _shell_tmp_path_win() {
+    if (_shell_tmp_buf == 0) { _shell_tmp_buf = alloc(64); }
+    var off = 0;
+    off = _exec_append_cstr(_shell_tmp_buf, off, "thoth_sh_");
+    off = _append_int(_shell_tmp_buf, off, getpid());
+    store8(_shell_tmp_buf + off, 95); off = off + 1;              # '_'
+    off = _append_int(_shell_tmp_buf, off, _shell_tmp_ctr);
+    _shell_tmp_ctr = _shell_tmp_ctr + 1;
+    off = _exec_append_cstr(_shell_tmp_buf, off, ".tmp");
+    store8(_shell_tmp_buf + off, 0);
+    return _shell_tmp_buf;
 }
-fn shell_supported() { return 0; }
+
+fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
+    store64(status_out, 0 - 1); store64(status_out + 8, 0);       # fail-closed default {-1, 0}
+    var path = _shell_tmp_path_win();
+    sys_unlink(path);                                            # best-effort pre-delete (reroute has no O_TRUNC)
+    var out_fd = sys_open(path, 65, 0);                          # O_WRONLY|O_CREAT (1|64) -> CreateFileW OPEN_ALWAYS
+    if (out_fd < 0) { return 0; }                               # status stays {-1, 0}
+    var sh = syscall(0xF003, out_fd, 1, 1);                      # SetHandleInformation(h, HANDLE_FLAG_INHERIT, 1)
+    if (sh == 0) { sys_close(out_fd); sys_unlink(path); return 0; }   # non-inheritable -> empty capture; fail closed
+    # Bound the copy to the 16 KiB wbuf before writing: _w_append_cstr writes 2 bytes/char with NO cap, and the
+    # `command` is model-supplied and only blob-bounded upstream. Static framing is 26 bytes (`cmd /s /c "` 22 +
+    # `"` 2 + wide-NUL 2), so reject fail-closed ({-1,0}, no spawn) at >8179 cmdline bytes rather than OVERRUN
+    # the buffer (heap corruption on the bump allocator). Caught by the 0.20.4 pre-cut adversarial review.
+    if (((strlen(cmdline) * 2) + 26) > 16384) { sys_close(out_fd); sys_unlink(path); return 0; }
+    if (_shell_wbuf == 0) { _shell_wbuf = alloc(16384); }        # reused per call (see the global; no per-call leak)
+    var wbuf = _shell_wbuf;                                      # writable UTF-16LE `cmd /s /c "<cmdline>"`
+    var wo = 0;
+    wo = _w_append_cstr(wbuf, wo, "cmd /s /c \"");
+    wo = _w_append_cstr(wbuf, wo, cmdline);
+    wo = _w_append_cstr(wbuf, wo, "\"");
+    _w_terminate(wbuf, wo);
+    var pi[24];
+    var ok = _win_create_process(wbuf, out_fd, 0, &pi);          # hStdOut=out_fd -> stdout+stderr; wenv=0 inherits env
+    sys_close(out_fd);                                           # drop the parent copy AFTER CreateProcessW duped it
+    if (ok == 0) { sys_unlink(path); return 0; }               # spawn fail -> {-1, 0}, remove the created file
+    var killed[8];
+    store64(&killed, 0);
+    var ec = _win_wait_timeout(&pi, timeout_ms, &killed);        # deadline + TerminateProcess + reap + close handles
+    if (load64(&killed) == 1) {
+        store64(status_out, 0 - 2);                             # timeout-kill sentinel (matches POSIX -2)
+        store64(status_out + 8, 1);
+    } else {
+        store64(status_out, ec & 0xFFFFFFFF);                   # true unsigned 32-bit Win32 exit code
+        store64(status_out + 8, 0);
+    }
+    var total = file_read_all(path, buf, buflen);               # fresh O_RDONLY reopen; child exited & flushed
+    sys_unlink(path);                                            # DeleteFileW (best-effort: fails if a grandchild holds it)
+    if (total < 0) { total = 0; }
+    return total;
+}
+fn shell_supported() { return 1; }
 #endif
 
 #ifndef CYRIUS_TARGET_AGNOS
