@@ -2,6 +2,41 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.0] - 2026-07-08
+
+**The active persona — mid-session `/persona` switch.** The signature move's twin: thoth already switches the
+backing MODEL mid-session (`/model`); now it switches the active PERSONALITY mid-session via avatara. Opens
+the `0.22.x` line. Plus a Cyrius toolchain refresh to **6.4.29**. 1076 assertions (+14). A 3-lens adversarial
+review found no code defects (persona machinery sound).
+
+### Added
+- **`/persona [name]`** (`src/session.cyr` `persona_set`/`persona_switch`, `src/commands.cyr` `cmd_persona`):
+  no arg shows the active archetype (name / role / tradition); an arg resolves through avatara's
+  `find_and_validate` (unknown → honest refusal) and swaps the persona, effective NEXT turn — exactly
+  `/model`'s semantics. Pure consumption: avatara owns lookup + validation + content; thoth only selects,
+  injects, and surfaces. The cached persona system prompt is invalidated (dirty-flag) and rebuilt IN PLACE
+  from the new archetype's soul + spirit + thoth's fixed operating clause (no per-switch heap leak;
+  `PERSONA_SYS_CAP` raised 1 KiB → 2 KiB for arbitrary archetypes, still clamp-bounded).
+- **`[persona].name` startup default** (`src/config.cyr` `config_persona`): picks the launch archetype;
+  absent → `egyptian_thoth` (byte-identical floor). An unknown configured name falls back to the default
+  (the active persona is always surfaced honestly, never faked).
+- Active persona surfaced in the **status bar** (after the version) and **`/state`** (name · role · tradition),
+  plus a `/help` line; `thoth.cyml.example` documents `[persona]`.
+
+### Changed
+- **Cyrius toolchain 6.4.26 → 6.4.29** (`cyrius.cyml` pin + `cyrius lib sync`): only `lib/sakshi.cyr` and
+  `lib/sigil.cyr` changed content in the vendored floor.
+- **Identity split (decided 2026-07-07, now enforced):** the THOTH backronym ("Thinks, Handles, Orchestrates,
+  Transforms, Heals") is the APPLICATION's naming and stays fixed across switches; "the Librarian" is thoth's
+  role framing for the DEFAULT Thoth archetype ONLY — a switched persona's role is sourced from its OWN
+  avatara `desc`, never thoth-authored per-archetype prose (`persona_role` is name-conditional).
+
+### Notes
+- Live-verified in the real binary: `/persona Athena` switches (role from Athena's avatara desc), `/state`
+  shows the persona row, and `/dry` after the switch shows the request's system message rebuilt to the new
+  archetype's voice (soul + spirit) with thoth's operating clause preserved; an unknown name is refused.
+- Next in the line: `0.22.1` `/personas` discovery (list traditions, browse, show the active card).
+
 ## [0.21.1] - 2026-07-08
 
 **Tree-fed Tab completion for `@file` mentions.** In the TUI composer, pressing `Tab` on a `@<prefix>`

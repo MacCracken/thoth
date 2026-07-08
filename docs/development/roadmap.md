@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.21.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.22.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -309,6 +309,9 @@ selection stays content-blind.
 > with `0.21.0` (**`@file` mention expansion, DONE** — `@path` injects a file as delimited prompt context via
 > the new pure `src/mention.cyr`, riding the `/read` posture) → `0.21.1` (**tree-fed `@` Tab completion,
 > DONE** — `Tab` completes a `@<prefix>` from the file tree in the composer; live-verified in the rich TUI).
+> The `0.22.x` active-persona line then opened with `0.22.0` (**mid-session `/persona` switch, DONE** — the
+> signature move's twin, swapping the active avatara archetype mid-session like `/model` swaps the model;
+> bundled the Cyrius 6.4.29 refresh).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -464,7 +467,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 
-### 0.22.x — the active persona (PLANNED)
+### 0.22.x — the active persona (0.22.0 DONE)
 
 > The signature move's twin: thoth switches the backing MODEL mid-session (hoosh);
 > this line switches the ACTIVE PERSONALITY mid-session (avatara). Pure consumption —
@@ -484,13 +487,16 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 > dynamic chat mechanism. The selection principle throughout the line: **default
 > to what benefits the user's task**; expressiveness is opt-in, never imposed.
 
-- **`0.22.0` — `/persona <name>` mid-session switch.** Resolve through avatara's
-  `find_and_validate` (unknown name → honest refusal + a hint at `/personas`), swap
-  the cached profile and rebuild the persona system prompt — the once-per-process
-  `_persona_profile` / prompt caches become invalidatable (the `memory_invalidate`
-  shape) — effective next turn, exactly `/model`'s semantics. Startup default via a
-  `[persona]` config key (absent → `egyptian_thoth`, today's behavior — byte-identical
-  floor when unset). Active persona surfaced in the status bar + `/state`.
+- **`0.22.0` — `/persona <name>` mid-session switch. DONE (2026-07-08; bundled the
+  Cyrius 6.4.29 refresh).** Resolves through avatara's `find_and_validate` (unknown name →
+  honest refusal — the `/personas` hint lands with 0.22.1), swaps the cached profile and
+  rebuilds the persona system prompt — `_persona_sys` becomes dirty-flag-invalidatable and
+  rebuilds IN PLACE (no per-switch leak) — effective next turn, exactly `/model`'s semantics.
+  Startup default via `[persona].name` (absent → `egyptian_thoth`, byte-identical floor; unknown
+  → falls back to default, surfaced honestly). Active persona in the status bar + `/state` +
+  `/help`. `persona_role` name-conditional (default → "the Librarian", switched → avatara `desc`);
+  the THOTH backronym stays the app's fixed naming. 1076 assertions (+14); 3-lens review found no
+  code defects; live-verified (`/dry` shows the rebuilt archetype system prompt).
   **Identity split (decided 2026-07-07):** the **THOTH backronym is the
   application's naming** — a fixed purpose statement of the tool itself ("Thinks,
   Handles, Orchestrates, Transforms, Heals" reads as what the program *does*),

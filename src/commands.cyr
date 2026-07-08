@@ -28,6 +28,7 @@ enum Cmd {
     CMD_GIT = 20;
     CMD_COPY = 21;
     CMD_FIND = 22;
+    CMD_PERSONA = 23;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -115,6 +116,7 @@ fn classify_input(line) {
     if (token_is(line, "/seams") == 1) { return CMD_SEAMS; }
     if (token_is(line, "/state") == 1) { return CMD_STATE; }
     if (token_is(line, "/models") == 1) { return CMD_MODELS; }
+    if (token_is(line, "/persona") == 1) { return CMD_PERSONA; }
     if (token_is(line, "/model") == 1) { return CMD_MODEL; }
     if (token_is(line, "/read") == 1) { return CMD_READ; }
     if (token_is(line, "/write") == 1) { return CMD_WRITE; }
@@ -143,6 +145,7 @@ fn cmd_help() {
     _help_line("  /seams", "             capability ladder (spine seam status)");
     _help_line("  /state", "             session state");
     _help_line("  /git [path]", "        working repo: branch + changed files, or a file's diff (via sit)");
+    _help_line("  /persona [name]", "    show the active archetype, or switch it mid-session (avatara)");
     _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh)");
     _help_line("  /models [provider]", " list providers; with one, its switchable models");
     _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
@@ -187,6 +190,10 @@ fn _params_one(key, val) {
 fn cmd_state() {
     ui_emit(ROLE_ACCENT, "session:"); oprintln("");
     ui_label("  turns   : "); ofmt_int(session_turns()); oprintln("");
+    ui_label("  persona : "); ui_emit(ROLE_ACCENT, persona_name());
+    ui_emit(ROLE_FAINT, " ("); emit(ui_sgr(ROLE_FAINT)); emit(persona_role()); emit(ui_reset());
+    ui_emit(ROLE_FAINT, " · "); emit(ui_sgr(ROLE_FAINT)); emit(persona_tradition()); emit(ui_reset());
+    ui_emit(ROLE_FAINT, ")"); oprintln("");
     ui_label("  model   : ");
     var m = session_model();
     if (m == 0) { m = config_hoosh_model(); }
@@ -348,6 +355,30 @@ fn cmd_git(line) {
     }
     sit_repo_close(repo);
     git_probe();     # sync the cached producer so the status bar matches what /git showed
+    return 0;
+}
+
+# cmd_persona (0.22.0): mid-session ACTIVE-PERSONA switch — the twin of /model's mid-session MODEL switch.
+# No arg shows the active archetype; an arg resolves through avatara's find_and_validate (unknown -> honest
+# refusal). The switch invalidates the cached persona system prompt, so it takes effect NEXT turn (exactly
+# /model's semantics). Pure consumption: avatara owns lookup/validation/content; thoth only selects + surfaces.
+fn cmd_persona(line) {
+    var arg = arg_after(line);
+    if (arg == 0) {
+        emit("persona: "); emit(persona_name());
+        emit(" ("); emit(persona_role()); oprintln(")");
+        emit("  tradition: "); oprintln(persona_tradition());
+        return 0;
+    }
+    if (persona_switch(arg) == 0) {
+        emit("unknown persona: '"); emit(arg); oprintln("'");
+        oprintln("  names are case-sensitive avatara archetypes (e.g. Thoth, Athena, Odin).");
+        return 0;
+    }
+    emit("persona -> "); emit(persona_name());
+    emit(" ("); emit(persona_role()); oprintln(")");
+    oprintln("  effective next turn — the system prompt is rebuilt for the new archetype (mid-session switch).");
+    log_begin("persona_switch"); log_kv_str("persona", persona_name()); log_commit(SK_INFO);
     return 0;
 }
 
@@ -796,6 +827,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_HELP) { cmd_help(); return 1; }
     if (c == CMD_SEAMS) { cmd_seams(); return 1; }
     if (c == CMD_STATE) { cmd_state(); return 1; }
+    if (c == CMD_PERSONA) { cmd_persona(line); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
     if (c == CMD_MODELS) { cmd_models(line); return 1; }
     if (c == CMD_READ) { cmd_read(line); return 1; }

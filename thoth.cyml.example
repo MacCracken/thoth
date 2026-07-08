@@ -188,6 +188,18 @@ model = "claude-haiku-4-5-20251001"
 # [memory]
 # enabled = true
 
+# The [persona] table sets the STARTUP archetype (0.22.0). thoth wears an avatara persona (the backing
+# model is steered by the archetype's soul + spirit prose); `name` picks which one, resolved through
+# avatara's registry. Absent -> "Thoth" (the default Librarian archetype — byte-identical to prior
+# behavior). An unknown name falls back to the default (the active persona is always surfaced honestly in
+# the banner / status bar / /state, never faked). Switch mid-session with `/persona <name>` (the twin of
+# `/model`'s mid-session switch); names are case-sensitive avatara archetypes (e.g. Thoth, Athena, Odin).
+# The THOTH backronym ("Thinks, Handles, Orchestrates, Transforms, Heals") names the TOOL and is fixed;
+# only the active persona changes.
+
+# [persona]
+# name = "Thoth"
+
 # The [shell] table arms the model-invokable `shell` tool (0.16.0; ADR-0014). When enabled AND the
 # [daimon] seam is wired (agentic turns only), thoth advertises a `shell` tool to the backing model:
 # the model can propose a shell command, thoth runs it under a timeout, captures the combined

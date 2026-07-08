@@ -720,6 +720,7 @@ fn tui_draw_status() {
     if (_tui_show_status == 0) { return 0; }
     emit(ui_sgr(ROLE_ACCENT)); emit("{(o> thoth (");  # the owl prompt doubles as the brand glyph
     emit(thoth_version()); emit(")"); emit(ui_reset());
+    ui_emit(ROLE_FAINT, " · "); ui_emit(ROLE_ACCENT_DIM, persona_name());   # active avatara persona (0.22.0)
     ui_emit(ROLE_FAINT, "  model ");
     ui_emit(ROLE_ACCENT, _hoosh_model());
     # hoosh spine-health dot (0.19.3): green ● up / red ● down / faint ○ unknown — driven by the last turn's

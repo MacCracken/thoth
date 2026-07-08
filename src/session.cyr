@@ -177,22 +177,61 @@ fn session_set_model_copy(m) {
 # query after alloc_init() constructs it. This is the M5 seam binding — the
 # persona is READ from avatara, never reimplemented (ADR-0003).
 var _persona_profile = 0;
+var _persona_sys_dirty = 0;    # 1 after a persona_set -> persona_system_prompt rebuilds in place (0.22.0)
 fn persona_profile() {
-    if (_persona_profile == 0) { _persona_profile = egyptian_thoth(); }
+    if (_persona_profile == 0) {
+        # Startup default (0.22.0): [persona].name in thoth.cyml resolves through avatara's
+        # find_and_validate; absent OR unknown -> egyptian_thoth (today's behavior, byte-identical
+        # floor when unset). An unknown configured name falls back to the default and is surfaced by
+        # the active-persona display (banner/status/state) rather than faked.
+        var pn = config_persona();
+        if (pn != 0) {
+            var r = find_and_validate(pn);
+            if (is_err_result(r) == 0) { _persona_profile = result_unwrap(r); return _persona_profile; }
+        }
+        _persona_profile = egyptian_thoth();
+    }
     return _persona_profile;
+}
+
+# persona_set: swap the active avatara profile and mark the cached system prompt DIRTY so the next turn
+# rebuilds the persona from the new archetype (the memory_invalidate shape). Marks dirty rather than
+# zeroing the pointer, so persona_system_prompt rebuilds IN PLACE (no per-switch heap leak on the
+# never-freeing bump allocator). 0.22.0.
+fn persona_set(p) {
+    _persona_profile = p;
+    _persona_sys_dirty = 1;
+    return 0;
+}
+
+# persona_switch: resolve `name` through avatara's find_and_validate and make it the active persona.
+# Returns 1 on success, 0 if the name is not a known/valid archetype (caller gives an honest refusal).
+# Pure consumption — avatara owns lookup + validation; thoth only selects. 0.22.0.
+fn persona_switch(name) {
+    var r = find_and_validate(name);
+    if (is_err_result(r) == 1) { return 0; }
+    persona_set(result_unwrap(r));
+    return 1;
 }
 
 # Identity sourced from the avatara archetype.
 fn persona_name() { return prof_name(persona_profile()); }
+fn persona_tradition() { return prof_tradition(persona_profile()); }
 # soul + spirit are avatara's emitted persona prose — they feed the hoosh system
 # prompt so the archetype actually steers the turn (see hoosh.cyr, M5 step 2).
 fn persona_soul() { return prof_soul(persona_profile()); }
 fn persona_spirit() { return prof_spirit(persona_profile()); }
 fn persona_desc() { return prof_desc(persona_profile()); }
 
-# thoth's own overlay framing over avatara's Thoth archetype: the "Librarian"
-# role and the THOTH backronym are thoth's, not avatara domain logic.
-fn persona_role() { return "the Librarian"; }
+# persona_role: thoth's own overlay framing. Identity split (0.22.0): "the Librarian" is thoth's role
+# framing for the DEFAULT Thoth archetype ONLY; a switched persona's role is sourced from the profile's
+# OWN avatara field (its desc) — never thoth-authored per-archetype role prose (that is avatara's domain).
+fn persona_role() {
+    if (streq(persona_name(), "Thoth") == 1) { return "the Librarian"; }
+    return persona_desc();
+}
+# The THOTH backronym is the APPLICATION's naming — a fixed statement of what the tool does — never the
+# active archetype's attribute. It stays constant across persona switches (identity split, 0.22.0).
 fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"; }
 
 # persona_system_prompt: the hoosh system message that makes the backing model
@@ -202,13 +241,16 @@ fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"
 # Cached in the never-freeing bump heap. This is what stops the persona being
 # banner-only: it actually steers the turn (see hoosh_send).
 var _persona_sys = 0;
-var PERSONA_SYS_CAP = 1024;
+var PERSONA_SYS_CAP = 2048;    # 0.22.0: raised from 1 KB — arbitrary switched archetypes' soul+spirit prose
+                               # can exceed 1 KB; _append_cstr_cap still clamps (never overruns) if a profile
+                               # is longer still. The buffer is allocated ONCE and rebuilt in place per switch.
 # Built from avatara's emitted soul + spirit prose, which is fixed-but-not-length-
 # bounded — if the archetype's prose ever grows past PERSONA_SYS_CAP the writes must
-# clamp, not overrun the 1 KB buffer. Reuses the shared bounded helper (hoosh.cyr).
+# clamp, not overrun the buffer. Reuses the shared bounded helper (hoosh.cyr).
 fn persona_system_prompt() {
-    if (_persona_sys != 0) { return _persona_sys; }
-    _persona_sys = alloc(PERSONA_SYS_CAP);
+    if ((_persona_sys != 0) && (_persona_sys_dirty == 0)) { return _persona_sys; }
+    if (_persona_sys == 0) { _persona_sys = alloc(PERSONA_SYS_CAP); }
+    _persona_sys_dirty = 0;
     var cap = PERSONA_SYS_CAP;
     var off = 0;
     off = _append_cstr_cap(_persona_sys, off, cap, persona_soul());

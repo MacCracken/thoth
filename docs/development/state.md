@@ -7,6 +7,32 @@
 
 ## Version
 
+**0.22.0** — **the active persona: mid-session `/persona` switch** + the Cyrius **6.4.29** refresh,
+2026-07-08. The signature move's twin — thoth switches the backing MODEL mid-session (`/model`); now it
+switches the active PERSONALITY mid-session via avatara. Opens the `0.22.x` line. `/persona [name]`
+(`cmd_persona`, `src/commands.cyr`, mirrors `cmd_model`): no arg shows the active archetype (name / role /
+tradition); an arg resolves through avatara's `find_and_validate` (Result — unknown → honest refusal, active
+unchanged) and swaps it, effective NEXT turn. `src/session.cyr`: `persona_set(p)` swaps `_persona_profile` +
+marks `_persona_sys_dirty`; `persona_system_prompt` rebuilds IN PLACE when dirty (buffer alloc'd once — NO
+per-switch leak; `PERSONA_SYS_CAP` 1 KiB → 2 KiB for arbitrary archetypes, `_append_cstr_cap`-clamped);
+`persona_switch(name)` is `is_err_result`-guarded before `result_unwrap`. **Identity split enforced:**
+`persona_role()` is name-conditional — default Thoth → "the Librarian" (thoth's framing), a switched persona
+→ its avatara `desc` (never thoth-authored per-archetype prose); `persona_tagline()` (the THOTH backronym) is
+the APP's fixed naming, constant across switches. **Startup default** `[persona].name` (`config_persona`,
+`src/config.cyr`): absent → `egyptian_thoth` (byte-identical floor); unknown → falls back to default, always
+surfaced honestly (never faked). Surfaced in the **status bar** (after the version) + **`/state`** (name ·
+role · tradition) + `/help`; `thoth.cyml.example` documents `[persona]`. **Bright line held**: avatara owns
+personality content + every verb (lookup/validate/compose); thoth only selects + injects + surfaces.
+**Verified**: 1076 assertions (+14, `test_persona_switch` — default Thoth/Librarian/Egyptian; switch to
+Athena: name, role≠Librarian, role==desc, system prompt rebuilt (snapshot differs, no longer the Thoth
+voice); unknown → refusal + unchanged; tagline constant; restore) + the M5 `test_persona` (default) still
+passes + LIVE in the real binary (`/persona` show/switch, `/state` row, `/dry` shows the rebuilt Athena
+system prompt with thoth's operating clause, unknown → honest refusal). A 3-lens adversarial review found no
+code defects. Toolchain: pin `6.4.26 → 6.4.29`, active switched to 6.4.29 (env had drifted to 6.4.30 —
+repointed to match the pin); `cyrius lib sync` moved only `lib/sakshi.cyr` + `lib/sigil.cyr`. Pin **6.4.29**.
+NEXT: `0.22.1` `/personas` discovery (list traditions / browse / active card), then `0.22.2` blends+shadow.
+See CHANGELOG/roadmap.
+
 **0.21.1** — **tree-fed `@` Tab completion**, 2026-07-08. The TUI-input layer on the 0.21.0 expansion core:
 pressing `Tab` on a `@<prefix>` in the composer completes the path from the file tree; with the cursor NOT
 on a `@`-token, `Tab` keeps its prior composer↔tree focus-toggle. New `ftree_complete` (`src/ftree.cyr`)

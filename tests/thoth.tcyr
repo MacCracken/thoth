@@ -228,6 +228,41 @@ fn test_persona() {
     return 0;
 }
 
+# persona SWITCH (0.22.0): mid-session /persona — resolve via avatara find_and_validate, swap + invalidate
+# the cached system prompt, role sourced per the identity split. Restores the default at the end so the M5
+# test (and any later test) sees pristine Thoth.
+fn test_persona_switch() {
+    test_group("persona switch (session.cyr, 0.22.0)");
+    persona_set(egyptian_thoth());                           # pristine default
+    assert(streq(persona_name(), "Thoth") == 1, "default persona is Thoth");
+    assert(streq(persona_role(), "the Librarian") == 1, "default role is 'the Librarian'");
+    assert(streq(persona_tradition(), "Egyptian") == 1, "default tradition Egyptian");
+    # SNAPSHOT the default prompt before switching — it is rebuilt IN PLACE, so a held pointer changes.
+    var sys_default = persona_system_prompt();
+    var snap = alloc(2048);
+    var q = 0;
+    while (load8(sys_default + q) != 0) { store8(snap + q, load8(sys_default + q)); q = q + 1; }
+    store8(snap + q, 0);
+    assert(cstr_starts_with(snap, "You are Thoth") == 1, "captured default prompt is the Thoth voice");
+
+    assert_eq(persona_switch("Athena"), 1, "switch to a valid archetype (Athena) succeeds");
+    assert(streq(persona_name(), "Athena") == 1, "active persona is now Athena");
+    assert(streq(persona_role(), "the Librarian") == 0, "switched role is NOT 'the Librarian'");
+    assert(streq(persona_role(), persona_desc()) == 1, "switched role is sourced from the avatara desc");
+    var sys_athena = persona_system_prompt();
+    assert(streq(sys_athena, snap) == 0, "system prompt rebuilt for the new persona (differs from the default)");
+    assert(cstr_starts_with(sys_athena, "You are Thoth") == 0, "the rebuilt prompt is no longer the Thoth voice");
+
+    assert_eq(persona_switch("NotARealArchetype_zzz"), 0, "unknown name -> refusal (0)");
+    assert(streq(persona_name(), "Athena") == 1, "a failed switch leaves the active persona unchanged");
+    assert(streq(persona_tagline(), "Thinks, Handles, Orchestrates, Transforms, Heals") == 1,
+        "tagline is the fixed app backronym, constant across switches (identity split)");
+
+    persona_set(egyptian_thoth());                          # restore default for downstream tests
+    assert(streq(persona_name(), "Thoth") == 1, "restored to the default Thoth");
+    return 0;
+}
+
 # Config defaults when no thoth.cyml is loaded (the test process loads none).
 fn test_config() {
     test_group("hoosh config (unconfigured)");
@@ -3171,6 +3206,7 @@ fn main() {
     test_ctx_meter();
     test_hoosh_health();
     test_persona();
+    test_persona_switch();
     test_config();
     test_hoosh();
     test_provider_catalog();

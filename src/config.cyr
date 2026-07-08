@@ -36,6 +36,7 @@ var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, o
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
 var _cfg_shell_timeout_ms = 0 - 1;  # per-command wall-clock timeout (ms); -1 = unset -> default (clamped in the getter)
 var _cfg_shell_output_cap = 0 - 1;  # captured-output byte cap; -1 = unset -> default (clamped in the getter)
+var _cfg_persona = 0;        # [persona].name — startup default archetype (0.22.0); 0 = unset -> egyptian_thoth
 
 var CONFIG_PATH = "thoth.cyml";
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
@@ -359,6 +360,8 @@ fn config_load() {
     _cfg_history_file = _cfg_str(history, "file");
     var memory = _cfg_section_pairs(sections, "memory");
     _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
+    var persona = _cfg_section_pairs(sections, "persona");
+    _cfg_persona = _cfg_str(persona, "name");               # startup default archetype (0.22.0); absent -> egyptian_thoth
     var shell = _cfg_section_pairs(sections, "shell");
     _cfg_shell_enabled = _cfg_bool(shell, "enabled", 0);    # opt-in; default off (0.16.0 shell tool; the model can propose local commands)
     _cfg_shell_timeout_ms = _cfg_int(shell, "timeout_ms");  # -1 when absent -> default in the getter
@@ -425,6 +428,10 @@ fn config_memory_enabled() { return _cfg_memory_enabled; }
 # during an agentic turn — a trust decision equivalent to running that project's code — so it is
 # opt-in and gated by t-ron (thoth_shell) + the [shell.deny]/[shell.allow] globs. See ADR-0014.
 fn config_shell_enabled() { return _cfg_shell_enabled; }
+
+# config_persona: the [persona].name startup-default archetype, or 0 when unset (0.22.0). Resolved
+# through avatara's find_and_validate at first persona use; an unknown name falls back to the default.
+fn config_persona() { return _cfg_persona; }
 
 # config_shell_timeout_ms: the per-command wall-clock timeout (ms). Absent / <= 0 -> the 30s default;
 # clamped to SHELL_TIMEOUT_MAX_MS. A command exceeding it is SIGKILLed (partial output preserved).
