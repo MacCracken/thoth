@@ -7,6 +7,29 @@
 
 ## Version
 
+**0.18.8** — **inline markdown in the reply feed** (closes the 0.18.x line), 2026-07-08. Beyond the fenced
+code that 0.15.1 highlights, prose lines now get **headings / bold / inline-code / list markers** styled. A
+new inline pass in `mdhl` (the prose branch of `_mdhl_line_done` now calls `_mdhl_inline_line`, was
+`_mdhl_put_line`) styles each COMPLETE prose line: ATX heading (`#`..`######`+space) → whole line
+`ROLE_ACCENT`; blockquote (`>`) → `ROLE_MUTED`; list marker (`-`/`*`/`+`+space or `N.`/`N)`+space) → the
+bullet `ROLE_ACCENT`; inline code `` `…` `` → `ROLE_BLUE` (highest precedence, interior not re-scanned);
+bold `**…**` → raw `\x1b[1m`. Each span WRAPS its bytes (open + verbatim + `ui_reset()`) — never drops or
+reorders a byte, so **`strip_sgr(output) == the raw line`** (0.15.1 discipline, property-tested). Colors are
+role MARKERS at OUT_RING (via `_feed_pack`), so **`/theme` recolors** inline markdown, and the reset-marker
+close keeps `feed_clip_seg`'s 64B soft-wrap carry BOUNDED (inline spans can't overflow it). The scanner is
+**linear** (a failed forward close-scan latches that delimiter off). **Display-only**: the raw reply in
+`_hoosh_acc` → history/`--json`/`-o` is untouched; PT_PLAIN + ASCII are byte-identical. **Composes with
+search**: `fsearch_render` gained a `bold_open` flag (set on a stored `\x1b[1m`, cleared by a reset,
+re-asserted after a match-OFF) so a search match inside a `**bold**` span no longer un-bolds the tail —
+headings/inline-code already composed via the role-marker `active_role` restore (the search-inside-bold gap
++ an O(n²) scan were pre-cut design-review catches; the diff review raised zero). Not yet styled (declared):
+single-`*`/`_` italic, links, strikethrough, nesting, and inline constructs inside a heading / on a
+>2048-byte continuation line. 974 assertions (+19, `test_mdhl_inline`). Pin **6.4.20**. Live-verify
+(`--tier=rich`): a reply with a heading + bold + list + inline code renders styled; `/theme` recolors it;
+Ctrl-F highlights a word inside a heading. **This completes the 0.18.x re-renderable-feed line** (keystone →
+theme recolor → live card → search → occurrence-granular → confirm-prompt → glyph-width → inline markdown);
+next is `0.19.x` (session visibility).
+
 **0.18.7** — **glyph-width table** (closes the 0.11.3 undercount), 2026-07-08. Every glyph was counted as
 ONE terminal column, so a CJK/emoji line was reckoned half its true width and overflowed the feed column.
 New `feed_glyph_cols(src, i, gl)` (`src/feed.cyr`) decodes the UTF-8 codepoint and returns its display

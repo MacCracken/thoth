@@ -195,6 +195,140 @@ fn _mdhl_put_line(has_nl) {
     return 0;
 }
 
+# --- inline markdown styling (0.18.8) --------------------------------------
+# Style a PROSE line's headings / bold / inline-code / list markers. Each construct only WRAPS its bytes in
+# SGR (open + verbatim bytes + ui_reset()), never dropping or reordering a byte -> strip_sgr(output) == the
+# raw line (the 0.15.1 discipline, property-tested). Colors go through ui_sgr(role): at OUT_RING (TUI)
+# _feed_pack rewrites them to role MARKERS (so /theme recolors) and ui_reset() to a RESET marker (which
+# CLEARS feed_clip_seg's 64B soft-wrap carry, so inline spans never overflow it); bold is a raw ESC[1m
+# (theme-independent, kept verbatim by _feed_pack, turned off by the closing reset). Spans DO NOT nest.
+# FLOOR: only reached at PT_ANSI/PT_RICH (mdhl_feed/reply early-return emit_n at PT_PLAIN); and if a gate is
+# somehow hit at PT_PLAIN, ui_sgr/ui_reset return "" so _mdhl_span is still byte-identical.
+
+# _mdhl_span: emit ptr[0..n) wrapped in a style (bold=1 -> ESC[1m, else the role color), closed by ui_reset.
+fn _mdhl_span(bold, role, ptr, n) {
+    if (n <= 0) { return 0; }
+    if (bold == 1) { emit("\x1b[1m"); } else { emit(ui_sgr(role)); }
+    emit_n(ptr, n);
+    emit(ui_reset());
+    return 0;
+}
+
+# _mdhl_heading: 1 if the line is an ATX heading — up to 3 leading spaces, then 1..6 '#', then a space or
+# EOL (CommonMark-ish). The whole line is styled ROLE_ACCENT (the #s kept). "###x" (no space) is NOT one.
+fn _mdhl_heading() {
+    var i = 0;
+    var sp = 0;
+    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 32) && (sp < 3)) { i = i + 1; sp = sp + 1; }
+    var h = 0;
+    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 35) && (h < 6)) { i = i + 1; h = h + 1; }
+    if (h == 0) { return 0; }
+    if (i >= _mdhl_line_len) { return 1; }                # "###" alone
+    if (load8(_mdhl_line + i) == 32) { return 1; }        # "### text"
+    return 0;
+}
+
+# _mdhl_blockquote: 1 if the line is a blockquote — up to 3 leading spaces then '>'.
+fn _mdhl_blockquote() {
+    var i = 0;
+    var sp = 0;
+    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 32) && (sp < 3)) { i = i + 1; sp = sp + 1; }
+    if (i >= _mdhl_line_len) { return 0; }
+    if (load8(_mdhl_line + i) == 62) { return 1; }        # '>'
+    return 0;
+}
+
+# _mdhl_list_emit: if the line starts a list item (up to 3 spaces, then '-'/'*'/'+' + space, OR digits +
+# '.'/')' + space), EMIT the leading indent verbatim + the marker styled ROLE_ACCENT, and return the offset
+# after the marker (where inline scanning continues). Returns 0 when the line is NOT a list item (nothing
+# emitted). The marker excludes the following space (the inline scan emits it as plain).
+fn _mdhl_list_emit() {
+    var i = 0;
+    var sp = 0;
+    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 32) && (sp < 3)) { i = i + 1; sp = sp + 1; }
+    if (i >= _mdhl_line_len) { return 0; }
+    var ms = i;
+    var b = load8(_mdhl_line + i);
+    var me = 0;
+    if ((b == 45) || (b == 42) || (b == 43)) {            # '-' '*' '+'
+        if (((i + 1) < _mdhl_line_len) && (load8(_mdhl_line + i + 1) == 32)) { me = i + 1; }
+    } elif ((b >= 48) && (b <= 57)) {                     # digit -> ordered "N." / "N)"
+        var j = i;
+        while ((j < _mdhl_line_len) && (load8(_mdhl_line + j) >= 48) && (load8(_mdhl_line + j) <= 57)) { j = j + 1; }
+        if ((j < _mdhl_line_len) && ((load8(_mdhl_line + j) == 46) || (load8(_mdhl_line + j) == 41))) {
+            if (((j + 1) < _mdhl_line_len) && (load8(_mdhl_line + j + 1) == 32)) { me = j + 1; }
+        }
+    }
+    if (me == 0) { return 0; }
+    if (ms > 0) { emit_n(_mdhl_line, ms); }               # leading indent, plain
+    _mdhl_span(0, ROLE_ACCENT, _mdhl_line + ms, me - ms); # the marker, styled
+    return me;
+}
+
+# _mdhl_find_byte / _mdhl_find_bold: next position of byte `b` / of a '**' pair at >= from, or -1.
+fn _mdhl_find_byte(from, b) {
+    var i = from;
+    while (i < _mdhl_line_len) { if (load8(_mdhl_line + i) == b) { return i; } i = i + 1; }
+    return 0 - 1;
+}
+fn _mdhl_find_bold(from) {
+    var i = from;
+    while ((i + 1) < _mdhl_line_len) {
+        if ((load8(_mdhl_line + i) == 42) && (load8(_mdhl_line + i + 1) == 42)) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# _mdhl_inline_scan: scan _mdhl_line[start.._mdhl_line_len) left-to-right, styling inline-code (`...`,
+# ROLE_BLUE) and bold (**...**, ESC[1m) spans and emitting the rest verbatim. Inline code has precedence and
+# its interior is NOT re-scanned for bold. An UNMATCHED delimiter is emitted plain. Once a forward
+# close-scan fails, that delimiter kind is LATCHED off (no closer can exist further right) — so the scan is
+# LINEAR, not O(n^2), bounded anyway by MDHL_LINE_CAP.
+fn _mdhl_inline_scan(start) {
+    var i = start;
+    var run = start;
+    var no_code = 0;
+    var no_bold = 0;
+    while (i < _mdhl_line_len) {
+        var b = load8(_mdhl_line + i);
+        var handled = 0;
+        if ((b == 96) && (no_code == 0)) {                # '`' inline code
+            var j = _mdhl_find_byte(i + 1, 96);
+            if (j >= 0) {
+                if (i > run) { emit_n(_mdhl_line + run, i - run); }
+                _mdhl_span(0, ROLE_BLUE, _mdhl_line + i, (j + 1) - i);
+                i = j + 1; run = i; handled = 1;
+            } else { no_code = 1; }
+        }
+        if ((handled == 0) && (no_bold == 0) && (b == 42) && ((i + 1) < _mdhl_line_len) && (load8(_mdhl_line + i + 1) == 42)) {   # '**' bold
+            var j2 = _mdhl_find_bold(i + 2);
+            if (j2 >= 0) {
+                if (i > run) { emit_n(_mdhl_line + run, i - run); }
+                _mdhl_span(1, 0, _mdhl_line + i, (j2 + 2) - i);
+                i = j2 + 2; run = i; handled = 1;
+            } else { no_bold = 1; }
+        }
+        if (handled == 0) { i = i + 1; }                  # plain byte -> extend the run
+    }
+    if (i > run) { emit_n(_mdhl_line + run, i - run); }    # flush the trailing plain run
+    return 0;
+}
+
+# _mdhl_inline_line: the prose-line entry (replaces _mdhl_put_line for a non-fence, non-continuation line).
+# Heading / blockquote style the whole line one color; else a list marker (if any) is styled and the
+# remainder inline-scanned. Preserves the optional trailing '\n'.
+fn _mdhl_inline_line(has_nl) {
+    if ((ui_tier() == PT_PLAIN) || (_mdhl_line == 0)) { _mdhl_put_line(has_nl); return 0; }
+    if (_mdhl_line_len == 0) { if (has_nl == 1) { emit("\n"); } return 0; }
+    if (_mdhl_heading() == 1) { _mdhl_span(0, ROLE_ACCENT, _mdhl_line, _mdhl_line_len); if (has_nl == 1) { emit("\n"); } return 0; }
+    if (_mdhl_blockquote() == 1) { _mdhl_span(0, ROLE_MUTED, _mdhl_line, _mdhl_line_len); if (has_nl == 1) { emit("\n"); } return 0; }
+    var start = _mdhl_list_emit();
+    _mdhl_inline_scan(start);
+    if (has_nl == 1) { emit("\n"); }
+    return 0;
+}
+
 # _mdhl_live: 1 when the streamed reply is CAPTURED into the TUI feed ring (OUT_RING) — the only mode
 # where the live fenced-code upgrade (0.18.3) applies. The line REPL (OUT_FD1) and the plain floor can't
 # rewind already-emitted output, so they keep the withhold-until-close behaviour.
@@ -290,7 +424,7 @@ fn _mdhl_line_done(has_nl) {
             _mdhl_block_over = 0;
             _mdhl_block_rows = 0;                    # 0.18.3: start counting live interior rows
         } else {
-            _mdhl_put_line(has_nl);
+            _mdhl_inline_line(has_nl);               # 0.18.8: prose line -> inline markdown styling (was _mdhl_put_line)
         }
     } else {
         if (_mdhl_scan_fence_close() == 1) {

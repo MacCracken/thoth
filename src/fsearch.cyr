@@ -167,13 +167,16 @@ fn fsearch_render(dst, cap, src, len, cur_off) {
     var o = 0;
     var w = 0;
     var active_role = 0 - 1;                          # last role marker seen (-1 = none / after a reset)
+    var bold_open = 0;                                # 0.18.8: raw ESC[1m (inline-markdown bold) open? — the
+                                                      # match-OFF reset clears it, so it must be re-asserted
     while ((o < len) && (w < cap)) {
         var b = load8(src + o);
         if (b == 27) {
             var sl = _feed_esc_len(src, o, len);
             var b1 = 0; if (sl >= 2) { b1 = load8(src + o + 1); }
             if ((sl == 2) && (b1 >= FEED_MARK_ROLE0) && (b1 <= (FEED_MARK_ROLE0 + 7))) { active_role = b1 - FEED_MARK_ROLE0; }
-            elif ((sl == 2) && (b1 == FEED_MARK_RESET)) { active_role = 0 - 1; }
+            elif ((sl == 2) && (b1 == FEED_MARK_RESET)) { active_role = 0 - 1; bold_open = 0; }
+            elif ((sl == 4) && (b1 == 91) && (load8(src + o + 2) == 49) && (load8(src + o + 3) == 109)) { bold_open = 1; }   # ESC[1m
             w = _fsearch_copy(dst, cap, w, src, o, sl);
             o = o + sl;
         } else {
@@ -193,8 +196,10 @@ fn fsearch_render(dst, cap, src, len, cur_off) {
                         if ((jsl == 2) && (jb1 >= FEED_MARK_ROLE0) && (jb1 <= (FEED_MARK_ROLE0 + 7))) { active_role = jb1 - FEED_MARK_ROLE0; }
                         elif ((jsl == 2) && (jb1 == FEED_MARK_RESET)) { active_role = 0 - 1; wasreset = 1; }
                         elif (_feed_is_reset(src, j, jsl) == 1) { wasreset = 1; }
+                        elif ((jsl == 4) && (jb1 == 91) && (load8(src + j + 2) == 49) && (load8(src + j + 3) == 109)) { bold_open = 1; }   # ESC[1m
+                        if (wasreset == 1) { bold_open = 0; }        # an interior reset genuinely turned bold off
                         w = _fsearch_copy(dst, cap, w, src, j, jsl);
-                        if (wasreset == 1) { w = _fsearch_emit(dst, cap, w, ui_match_on(isc)); }   # re-assert reverse
+                        if (wasreset == 1) { w = _fsearch_emit(dst, cap, w, ui_match_on(isc)); }   # re-assert reverse (NOT bold)
                         j = j + jsl;
                     } else {
                         var jgl = _feed_glyph_len(src, j, len);
@@ -204,6 +209,7 @@ fn fsearch_render(dst, cap, src, len, cur_off) {
                 }
                 w = _fsearch_emit2(dst, cap, w, 27, FEED_MARK_RESET);   # reverse OFF: collapse the carry
                 if (active_role >= 0) { w = _fsearch_emit2(dst, cap, w, 27, FEED_MARK_ROLE0 + active_role); }   # restore fg
+                if (bold_open == 1) { w = _fsearch_emit(dst, cap, w, "\x1b[1m"); }   # 0.18.8: restore inline-markdown bold (the reset cleared it)
                 o = me;
             } else {
                 var gl = _feed_glyph_len(src, o, len);

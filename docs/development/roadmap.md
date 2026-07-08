@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.18.7):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.18.8):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -28,7 +28,10 @@
 > into the unchanged soft-wrap clip), refined by `0.18.5` to be **occurrence-granular** (count + n/N step
 > every hit, not every line), and `0.18.6` fixed the **confirm-prompt return** (the composer refreshes
 > immediately after a gate approval), and `0.18.7` added the **glyph-width table** (CJK/emoji count 2
-> columns in the soft-wrap + scrollback math). The rest of the **0.18.x line** (inline markdown) is next.
+> columns in the soft-wrap + scrollback math), and `0.18.8` the **inline markdown** (headings/bold/code/list
+> markers styled in the feed, composing with `/theme` + search). **The 0.18.x re-renderable-feed line is now
+> COMPLETE** (0.18.0 keystone → theme recolor → live card → feed search → occurrence-granular →
+> confirm-prompt → glyph-width → inline markdown).
 > The 0.10.x data producers
 > (tokens, cost), the 0.11.x terminal-citizen backlog in full, the 0.12.x memory seam,
 > the 0.13.x git producer (sit), the 0.14.x bote-3.0.0 refresh + the proven end-to-end
@@ -293,7 +296,8 @@ selection stays content-blind.
 > end. thoth needed NO src change (it was already a correct, strict MCP client). `0.18.2` was the
 > maintenance realign (re-sync vendored bote-core → 3.0.1 + toolchain → 6.4.20). The feature line then
 > resumed at `0.18.3` (live card) → `0.18.4` (feed search) → `0.18.5` (occurrence-granular) → `0.18.6`
-> (confirm-prompt return) → `0.18.7` (glyph-width table), all DONE; items continue at `0.18.8`+ below.
+> (confirm-prompt return) → `0.18.7` (glyph-width table) → `0.18.8` (inline markdown), all DONE — **the
+> 0.18.x line is COMPLETE**; the next line is `0.19.x` (session visibility, PLANNED — below).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -350,11 +354,14 @@ selection stays content-blind.
   wide glyph clips 1 col at the (rightmost) feed edge (no loss/dupe); ambiguous 0x2600–0x27BF
   treated wide; ZWJ sequences overcount. Diff-review folded a tree-column truncation nit. 955
   assertions. See CHANGELOG/state.md.
-- **`0.18.8` — inline markdown rendering.** Extend reply rendering beyond fenced
-  code: headings/bold/lists styled in the feed (mdhl grows an inline pass, styled at
-  paint time over the logical store so `/theme` recolor + search highlighting
-  compose). Raw bytes stay untouched off PT_RICH and in `_hoosh_acc`/history/
-  `--json` — the same strip-coverage property discipline as 0.15.1.
+- **`0.18.8` — inline markdown rendering. DONE (2026-07-08).** Extends reply rendering
+  beyond fenced code: headings/bold/inline-code/list-markers styled in the feed (mdhl's
+  prose branch grows an inline pass). Colors go through role markers so `/theme` recolor +
+  search highlighting compose (fsearch_render gained bold-tracking so a match inside bold
+  keeps it); raw bytes untouched off PT_RICH + in `_hoosh_acc`/history/`--json`;
+  `strip_sgr(output)==raw` (0.15.1 discipline, property-tested). Linear scanner. Design
+  review folded the search-inside-bold gap + the O(n²) latch; diff review clean. 974
+  assertions. **This closes the 0.18.x re-renderable-feed line.** See CHANGELOG/state.md.
 
 ### 0.19.x — session visibility (PLANNED)
 

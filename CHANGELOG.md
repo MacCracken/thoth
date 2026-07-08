@@ -2,6 +2,39 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.18.8] - 2026-07-08
+
+**Inline markdown in the reply feed — headings, bold, inline code, and list markers are now styled, not
+just fenced code.** Closes the 0.18.x re-renderable-feed line. A new inline pass in `mdhl` styles each PROSE
+line as it streams; the styling is display-only (the raw reply in `_hoosh_acc` → history/`--json`/`-o` is
+untouched) and composes with everything the feed already does: colors go through role MARKERS so **`/theme`
+recolors** inline markdown, and a **feed search** match highlights correctly inside a styled heading or bold
+span. Every construct only *wraps* its bytes in SGR — `strip_sgr(output) == the raw line` (the 0.15.1
+discipline, property-tested). ASCII and PT_PLAIN are byte-identical. 974 assertions (+19). Pin **6.4.20**.
+
+### Added
+- **Inline markdown styling** (`src/mdhl.cyr`): the prose branch of `_mdhl_line_done` now calls
+  `_mdhl_inline_line` (was `_mdhl_put_line`). Per complete prose line: an **ATX heading** (`#`..`######` +
+  space) → whole line `ROLE_ACCENT`; a **blockquote** (`>`) → `ROLE_MUTED`; a **list marker**
+  (`-`/`*`/`+` + space, or `N.`/`N)` + space) → the bullet `ROLE_ACCENT`; **inline code** `` `…` `` →
+  `ROLE_BLUE` (highest precedence, its interior not re-scanned); **bold** `**…**` → `\x1b[1m`. Each span is
+  closed by `ui_reset()` → a RESET marker, which clears `feed_clip_seg`'s soft-wrap carry (so inline spans
+  never overflow it) and keeps `/theme` recolorable; spans do not nest. The inline scanner is **linear** (a
+  failed forward close-scan latches that delimiter off — no closer can exist further right). Fenced code,
+  continuation lines (>2048 B), and PT_PLAIN keep the verbatim path.
+- **Search composes with bold** (`src/fsearch.cyr`): `fsearch_render` now tracks a `bold_open` flag (set on
+  a stored `\x1b[1m`, cleared by a reset) and re-asserts `\x1b[1m` after a match-OFF — so highlighting a word
+  inside a `**bold**` span no longer un-bolds the rest of it (headings/inline-code already composed via the
+  role-marker `active_role` restore; bold was the one gap, caught by the pre-cut design review).
+- **19 assertions** (`tests/thoth.tcyr`, `test_mdhl_inline`): heading / bold / inline-code / ordered +
+  unordered list styling, each strip-covering back to the raw line; code precedence (`` `**x**` `` not
+  bolded); an unmatched `**` left verbatim; the PT_PLAIN floor; and two compose cases — a search match inside
+  a heading, and the bold re-assert after a match inside `**hello world**`.
+
+### Notes
+- Not yet styled (declared): single-`*`/`_` italic (ambiguous with lists/math), links, strikethrough,
+  nesting, and any inline construct inside a heading or on a >2048-byte continuation line.
+
 ## [0.18.7] - 2026-07-08
 
 **A glyph-width table — CJK/emoji lines now count 2 columns in the soft-wrap and scrollback math, instead
