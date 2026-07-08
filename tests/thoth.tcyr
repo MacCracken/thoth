@@ -576,10 +576,10 @@ fn test_shell() {
     _cfg_shell_output_cap = 4096;
     assert_eq(config_shell_output_cap(), 4096, "configured cap passes through");
 
-    # --- [shell.deny]/[shell.allow] as sections of `label = pattern` pairs (value is the glob) ---
+    # --- legacy [shell.deny]/[shell.allow] SECTIONS of `label = pattern` pairs (value is the glob) ---
     var toml = "[shell.deny]\nd1 = \"*rm -rf*\"\nd2 = \"* | sh\"\nblank = \"\"\n[shell.allow]\na1 = \"git *\"\na2 = \"ls*\"\n";
     var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
-    _shell_globs_load(sections);
+    _shell_globs_load(0, sections);                # no [shell] table -> section (back-compat) path
     assert_eq(config_shell_deny_count(), 2, "two deny globs (blank value skipped)");
     assert_eq(config_shell_allow_count(), 2, "two allow globs");
     assert(streq(config_shell_deny_at(0), "*rm -rf*"), "deny[0] is the VALUE, not the label");
@@ -650,6 +650,42 @@ fn test_shell() {
     assert_eq(n7, 100, "K-byte output read with buflen K+1 returns K (exact-fit is not overflow)");
     var n8 = exec_shell_capture("head -c 150 /dev/zero", buf, 101, 5000, &st);
     assert_eq(n8, 101, "over-buflen output fills buflen (K+1) -> the >cap overflow signal");
+
+    # --- 0.20.3: canonical array form `[shell] deny = [...] / allow = [...]` (bayan 1.1.0) ---
+    var atoml = "[shell]\ndeny = [\"*rm -rf*\", \"* | sh\", \"\"]\nallow = [\"git *\", \"ls*\"]\n";
+    var asec = bayan_toml_parse(str_new(atoml, strlen(atoml)));
+    _shell_globs_load(_cfg_section_pairs(asec, "shell"), asec);
+    assert_eq(config_shell_deny_count(), 2, "array deny: two globs (blank element skipped)");
+    assert_eq(config_shell_allow_count(), 2, "array allow: two globs");
+    assert(streq(config_shell_deny_at(1), "* | sh"), "array deny[1] pattern quote-stripped");
+    assert(streq(config_shell_allow_at(0), "git *"), "array allow[0] pattern quote-stripped");
+
+    # array form WINS when present: a [shell] deny array + a legacy [shell.deny] section -> array only
+    var btoml = "[shell]\ndeny = [\"only-array*\"]\n[shell.deny]\nlegacy = \"legacy*\"\n";
+    var bsec = bayan_toml_parse(str_new(btoml, strlen(btoml)));
+    _shell_globs_load(_cfg_section_pairs(bsec, "shell"), bsec);
+    assert_eq(config_shell_deny_count(), 1, "array form wins over legacy section when both present");
+    assert(streq(config_shell_deny_at(0), "only-array*"), "the array pattern, not the legacy section");
+
+    # explicit empty array `deny = []` means zero deny patterns -> does NOT fall back to a section
+    var etoml = "[shell]\ndeny = []\n[shell.deny]\nlegacy = \"legacy*\"\n";
+    var esec = bayan_toml_parse(str_new(etoml, strlen(etoml)));
+    _shell_globs_load(_cfg_section_pairs(esec, "shell"), esec);
+    assert_eq(config_shell_deny_count(), 0, "explicit empty deny array -> 0, no section fallback");
+
+    # key ABSENT from [shell] -> legacy section fallback still loads (back-compat)
+    var ftoml = "[shell]\nenabled = true\n[shell.allow]\na1 = \"git *\"\n";
+    var fsec = bayan_toml_parse(str_new(ftoml, strlen(ftoml)));
+    _shell_globs_load(_cfg_section_pairs(fsec, "shell"), fsec);
+    assert_eq(config_shell_allow_count(), 1, "absent array key -> legacy [shell.allow] section still loads");
+    assert(streq(config_shell_allow_at(0), "git *"), "section-form allow pattern via fallback");
+
+    # bare scalar string (brackets forgotten) is accepted leniently as ONE glob (never a silent zero)
+    var gtoml = "[shell]\ndeny = \"*rm -rf*\"\n";
+    var gsec = bayan_toml_parse(str_new(gtoml, strlen(gtoml)));
+    _shell_globs_load(_cfg_section_pairs(gsec, "shell"), gsec);
+    assert_eq(config_shell_deny_count(), 1, "bare scalar deny string -> one glob (lenient, not zero)");
+    assert(streq(config_shell_deny_at(0), "*rm -rf*"), "scalar deny pattern quote-stripped");
 
     # --- advertise floor: disabled -> agent_tools_add_shell returns tl unchanged, writes nothing ---
     # tb is a heap buffer (>= the ~550-byte tool JSON); add_shell caps at AGENT_TOOLS_CAP, not tb's size.

@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.20.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.20.3):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -301,8 +301,10 @@ selection stays content-blind.
 > meter, DONE, + the Cyrius 6.4.21 refresh) → `0.19.1` (live turn telemetry, DONE) → `0.19.2` (`/git`
 > per-file diff, DONE) → `0.19.3` (live spine-health, DONE) — **the 0.19.x session-visibility line is
 > COMPLETE**. The `0.20.x` shell/agent-hardening line then opened with `0.20.0` (`agent_enabled()` relax —
-> shell standalone, DONE) → `0.20.1` (process-group kill on timeout + Cyrius 6.4.23, DONE); it continues at
-> `0.20.2` (Windows timed capture) below.
+> shell standalone, DONE) → `0.20.1` (process-group kill on timeout + Cyrius 6.4.23, DONE) → `0.20.3`
+> (array-value shell deny/allow config via bayan 1.1.0, DONE). `0.20.2` (Windows timed capture) is
+> **deferred out-of-order**: it needs a `TerminateProcess` primitive the Cyrius Windows PE surface does not
+> expose (filed as cyrius issue `2026-07-08-windows-pe-surface-no-terminateprocess`) — see below.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -397,7 +399,7 @@ selection stays content-blind.
   Esc-interrupt is neutral. Verified (code-trace clean). 998 assertions. **Closes the 0.19.x
   session-visibility line.** See CHANGELOG/state.md.
 
-### 0.20.x — shell/agent hardening (0.20.0–0.20.1 DONE; rest PLANNED)
+### 0.20.x — shell/agent hardening (0.20.0–0.20.1, 0.20.3 DONE; 0.20.2 deferred on a cyrius gap)
 
 The 0.16.0 deferred follow-ups, promoted to a line:
 
@@ -414,15 +416,25 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   the `/bin/sh`. Code-trace confirmed `kill(-pid)` can never hit thoth's group; x86_64-only
   (declared, aarch64 gapped). Proven by a marker-based grandchild-death test. Bundled the
   Cyrius **6.4.23** refresh. 1010 assertions. See CHANGELOG/state.md.
-- **`0.20.2` — Windows timed capture.** `WaitForSingleObject` + `TerminateProcess` +
-  drain, once verified on a Windows host (the lane overall stays IOCP-gated).
-- **`0.20.3` — array-value shell deny/allow config (newly unblocked, 0.16.1).** The
-  `[shell.deny]`/`[shell.allow]` glob lists are modelled as `label = "glob"` sections
-  *because* bayan (≤ 1.0.4) had no TOML array-VALUE getter. bayan **1.1.0** (vendored at
-  the 0.16.1 refresh) ships `bayan_toml_get_array`, so the lists can move to the natural
-  `deny = ["…", "…"]` array form. A user-facing config-surface change (keep the section
-  form as a documented back-compat alias, or migrate with a deprecation note) — earns its
-  own slice + review; deliberately NOT folded into the source-change-free refresh.
+- **`0.20.2` — Windows timed capture. DEFERRED — blocked on a Cyrius gap.**
+  `WaitForSingleObject` (has a finite-timeout arg) + `TerminateProcess` + drain. The Cyrius
+  Windows PE syscall surface exposes spawn/wait/exit-code/pipe (`CreateProcessW` 0xF005,
+  `WaitForSingleObject` 0xF001, `GetExitCodeProcess` 0xF002, `CreatePipe` 0xF004,
+  `SetHandleInformation` 0xF003) but **no `TerminateProcess`** — so a timed-out child can be
+  *detected* but not *killed*, and shipping it would leak (the safety regression 0.20.1 fixed on
+  Linux). Filed upstream as cyrius issue `2026-07-08-windows-pe-surface-no-terminateprocess`;
+  lands out-of-order once that reroute ships. The minimal-`--win`-build → scp → run-on-`cass`
+  (Windows 11 x86_64) test pipeline is already proven, so verification is ready. (The full thoth
+  `--win` build stays IOCP-gated on the async/epoll transport; 0.20.2 uses a minimal exec-only
+  `--win` harness to sidestep that.)
+- **`0.20.3` — array-value shell deny/allow config. DONE (2026-07-08).** The
+  `[shell.deny]`/`[shell.allow]` glob lists modelled as `label = "glob"` sections *because* bayan
+  (≤ 1.0.4) had no TOML array-VALUE getter now move to the natural `deny = ["…"] / allow = ["…"]`
+  array form under `[shell]`, read via `bayan_toml_get_array` (bayan **1.1.0**). The array form is
+  canonical and wins when present (an explicit `[]` means zero, no fallback); a bare scalar string
+  is accepted leniently as one glob (never a silent-zero deny-list); the `label = "glob"` section
+  form stays a documented back-compat alias used only when the array key is absent. 1021
+  assertions (+11). See CHANGELOG/state.md.
 
 ### 0.21.x — composer intelligence (PLANNED)
 

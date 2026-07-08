@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.20.3** — **array-value shell deny/allow config**, 2026-07-08. The `[shell]` deny/allow glob lists —
+modelled as `[shell.deny]`/`[shell.allow]` SECTIONS of `label = "glob"` pairs only because bayan (≤ 1.0.4)
+had no TOML array-VALUE getter — now accept the natural array form `[shell] deny = ["…"] / allow = ["…"]`,
+read via `bayan_toml_get_array` (bayan **1.1.0**, already vendored). New `_shell_glob_array_load` (iterates
+the element-Str vec) + `_shell_glob_key_load` (the present/absent decision). **Precedence**: the array key
+WINS when present — an explicit empty `deny = []` means zero patterns and does NOT fall through; the
+`label = "glob"` section form is a documented back-compat alias, loaded only when the array key is absent.
+**Footgun closed** (self-caught in review): a bare scalar string (`deny = "*rm -rf*"`, brackets forgotten)
+would have array-parsed to an empty vec → a silently-empty deny-list; instead a scalar is accepted leniently
+as ONE glob (`bayan_toml_is_array` distinguishes absent/array/scalar). `thoth.cyml.example` updated (array
+canonical, section back-compat) + its stale "timeout kills the /bin/sh not a backgrounded child" note
+corrected (0.20.1's process-group kill fixed that). Every edge test-covered (array, empty-array, scalar,
+both-present-array-wins, absent-fallback). 1021 assertions (+11, `test_shell`). Pin **6.4.23** (local cycc
+has drifted to 6.4.24; build/tests clean — a pin bump earns its own refresh slice, not folded here).
+
+> **`0.20.2` (Windows timed capture) is deferred out-of-order — blocked on a Cyrius gap.** It needs a
+> `TerminateProcess` primitive to kill a timed-out child, but the Cyrius Windows PE syscall surface exposes
+> spawn/wait/exit-code/pipe (`CreateProcessW`/`WaitForSingleObject`/`GetExitCodeProcess`/`CreatePipe`/
+> `SetHandleInformation`, 0xF001–0xF005) and NO terminate — so a hung child can be detected but not killed,
+> and shipping it would leak (the safety regression 0.20.1 fixed on Linux). Filed upstream as cyrius issue
+> `2026-07-08-windows-pe-surface-no-terminateprocess`. The minimal-`--win`-build → scp → run-on-`cass`
+> (Windows 11 x86_64) test pipeline is proven (a `winhello.exe` cross-built here ran on cass), so 0.20.2
+> lands + verifies the moment that reroute ships. Next: `0.20.2` when unblocked, else the 0.21.x composer line.
+
 **0.20.1** — **process-group kill on shell timeout** + a Cyrius **6.4.23** refresh, 2026-07-08. A timed-out
 shell command `SIGKILL`ed only the direct `/bin/sh`, so a backgrounded grandchild (`daemon &`) survived and
 leaked. Fix (`src/exec.cyr`, the Linux `exec_shell_capture`): the child `setpgid(0,0)`s into its OWN process

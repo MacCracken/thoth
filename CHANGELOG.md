@@ -2,6 +2,34 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.3] - 2026-07-08
+
+**Shell `deny`/`allow` glob lists can now be written as natural TOML arrays** — `deny = ["…", "…"]` /
+`allow = ["…", "…"]` under `[shell]` — instead of the `label = "glob"` section form that existed only
+because bayan (≤ 1.0.4) had no array-value getter. bayan **1.1.0** ships `bayan_toml_get_array`, so the
+lists move to the idiomatic form. The legacy `[shell.deny]`/`[shell.allow]` sections still work (documented
+back-compat), used only when the array key is absent. 1021 assertions (+11). Pin **6.4.23**.
+
+> `0.20.2` (Windows timed capture) is **deferred**: it needs a `TerminateProcess` primitive the Cyrius
+> Windows PE syscall surface does not expose (spawn/wait/capture exist, but nothing can *kill* a timed-out
+> child — shipping it would leak). Filed upstream as cyrius issue
+> `2026-07-08-windows-pe-surface-no-terminateprocess`; it lands out-of-order once that reroute ships (the
+> minimal-`--win`-build → run-on-Windows test pipeline is already proven, so verification is ready).
+
+### Added
+- **Array-value shell deny/allow config** (`src/config.cyr`): `[shell] deny = ["glob", …]` / `allow = […]`,
+  read via `bayan_toml_get_array` (bayan 1.1.0). The array form is canonical and WINS when its key is
+  present — an explicit empty array `deny = []` means "no patterns" and does NOT fall through to a section.
+  A bare scalar string (`deny = "*rm -rf*"`, brackets forgotten) is accepted leniently as a SINGLE glob, so
+  a deny-list never silently drops to zero patterns. Elements are quote-stripped, blank elements skipped;
+  the table still caps at `SHELL_GLOB_MAX` (64). New `_shell_glob_array_load` / `_shell_glob_key_load`.
+
+### Changed
+- The legacy `[shell.deny]`/`[shell.allow]` `label = "glob"` SECTION form is now a documented back-compat
+  alias, loaded only when the corresponding array key is absent (`thoth.cyml.example` shows the array form
+  as canonical). Also corrected the example's stale timeout note — a timed-out command is killed by PROCESS
+  GROUP since 0.20.1, so a backgrounded child dies with the shell.
+
 ## [0.20.1] - 2026-07-08
 
 **A shell command that backgrounds a grandchild now has that grandchild killed too when the command times

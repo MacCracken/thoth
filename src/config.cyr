@@ -64,9 +64,11 @@ var _alias_vals = 0;     # ALIAS_MAX cstr ptrs (the expansion text, verbatim)
 var _alias_n = 0;
 
 # Shell tool guardrails (0.16.0): defaults + upper clamps for the [shell] scalars, and the
-# [shell.deny]/[shell.allow] glob tables. bayan has NO TOML-array getter, so allow/deny lists
-# are modeled as SECTIONS of `label = "glob-pattern"` pairs (the key is a free label; the VALUE
-# is the glob), iterated like _alias_load. Patterns are stable cstrings (str_cstr into the bump
+# deny/allow glob tables. Canonical form (0.20.3) is the natural TOML array under [shell] —
+# `deny = ["glob", ...]` / `allow = ["glob", ...]` — read via bayan_toml_get_array (bayan 1.1.0).
+# The legacy `[shell.deny]`/`[shell.allow]` SECTIONS of `label = "glob"` pairs (the key is a free
+# label; the VALUE is the glob, iterated like _alias_load) remain a documented back-compat alias,
+# used only when the array key is absent. Patterns are stable cstrings (str_cstr into the bump
 # heap). These are a COARSE pre-filter matched with glob_match BEFORE the t-ron thoth_shell gate —
 # a convenience speed-bump against obvious footguns, NOT a sandbox (a shell can cd / chain / decode).
 var SHELL_TIMEOUT_DEFAULT_MS = 30000;    # 30s: lets a real build/test finish without hanging the loop
@@ -263,13 +265,64 @@ fn _shell_glob_table_load(pairs, tbl) {
     return c;
 }
 
-# _shell_globs_load: cache the [shell.deny] and [shell.allow] glob tables. Called once from
-# config_load. With neither section present both counts are 0 (no local glob filter).
-fn _shell_globs_load(sections) {
+# _shell_glob_array_load: fill `tbl` (SHELL_GLOB_MAX cstr slots) from an array-VALUE vec — the
+# canonical `deny = ["glob", ...]` / `allow = [...]` form (0.20.3). Each element Str is already
+# quote-stripped by bayan_toml_get_array; blank elements are skipped and the table caps at
+# SHELL_GLOB_MAX. Returns the count. Patterns are stable str_cstr copies (bump heap). Mirrors
+# _shell_glob_table_load but iterates array elements (Strs) instead of section pairs.
+fn _shell_glob_array_load(arr, tbl) {
+    if (arr == 0) { return 0; }
+    var n = vec_len(arr);
+    var i = 0;
+    var c = 0;
+    while (i < n) {
+        if (c < SHELL_GLOB_MAX) {
+            var v = vec_get(arr, i);
+            if (str_len(v) > 0) {
+                store64(tbl + c * 8, str_cstr(v));
+                c = c + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return c;
+}
+
+# _shell_glob_key_load: load the deny/allow globs for `key` from the [shell] pairs into `tbl`.
+# Returns the pattern count when `key` is PRESENT, or -1 when ABSENT (caller then falls back to
+# the legacy section form). An array value is the canonical form; a bare scalar string is accepted
+# leniently as a SINGLE pattern (so `deny = "*rm -rf*"` — brackets forgotten — never silently
+# drops to zero patterns, which on a deny-list would be a footgun); an explicit empty array `[]`
+# or empty string is present-with-zero (and does NOT fall through to a section).
+fn _shell_glob_key_load(shell, key, tbl) {
+    if (shell == 0) { return 0 - 1; }
+    var v = bayan_toml_get(shell, key);
+    if (v == 0) { return 0 - 1; }                 # key absent -> fall back to the section form
+    if (bayan_toml_is_array(v) == 1) {
+        return _shell_glob_array_load(bayan_toml_array_parse(v), tbl);
+    }
+    if (str_len(v) > 0) {                          # bare scalar string -> one glob
+        store64(tbl, str_cstr(v));
+        return 1;
+    }
+    return 0;                                       # present but empty scalar -> zero patterns
+}
+
+# _shell_globs_load: cache the deny/allow glob tables. The canonical array form
+# (`[shell] deny = ["…"] / allow = ["…"]`) wins when its key is PRESENT — even an explicit empty
+# array `deny = []` means "no deny patterns" and does NOT fall through. When the array key is
+# ABSENT, falls back to the legacy `[shell.deny]`/`[shell.allow]` `label = "glob"` sections (a
+# documented back-compat alias). `shell` = the [shell] pairs (for the array form; may be 0);
+# `sections` = the full parse (for the section fallback). With neither present both counts are 0.
+fn _shell_globs_load(shell, sections) {
     if (_shell_deny == 0) { _shell_deny = alloc(SHELL_GLOB_MAX * 8); }
     if (_shell_allow == 0) { _shell_allow = alloc(SHELL_GLOB_MAX * 8); }
-    _shell_deny_n = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.deny"), _shell_deny);
-    _shell_allow_n = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.allow"), _shell_allow);
+    var dn = _shell_glob_key_load(shell, "deny", _shell_deny);
+    if (dn < 0) { dn = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.deny"), _shell_deny); }
+    _shell_deny_n = dn;
+    var an = _shell_glob_key_load(shell, "allow", _shell_allow);
+    if (an < 0) { an = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.allow"), _shell_allow); }
+    _shell_allow_n = an;
     return 0;
 }
 
@@ -310,7 +363,7 @@ fn config_load() {
     _cfg_shell_enabled = _cfg_bool(shell, "enabled", 0);    # opt-in; default off (0.16.0 shell tool; the model can propose local commands)
     _cfg_shell_timeout_ms = _cfg_int(shell, "timeout_ms");  # -1 when absent -> default in the getter
     _cfg_shell_output_cap = _cfg_int(shell, "max_output");  # -1 when absent -> default in the getter
-    _shell_globs_load(sections);
+    _shell_globs_load(shell, sections);
     if (_cfg_hoosh_url == 0) { return 0; }
     return 1;
 }
