@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.24.2):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.24.3):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -324,9 +324,10 @@ selection stays content-blind.
 > escape). The `0.24.x` arc then opened with `0.24.0` (**model-picker palette, DONE** — an interactive Ctrl-P
 > TUI modal over hoosh's catalog, switching through the existing `/model` seam) → `0.24.1` (**`/save`
 > transcript export, DONE** — the feed scrollback to an ANSI-stripped markdown file) → `0.24.2`
-> (**conversation resume, DONE** — opt-in `[session].file` restores the conversation across restarts). **Role
-> modality is deferred** within 0.24.x (avatara-blocked — a per-archetype aspect registry is avatara's to
-> provide, not thoth code).
+> (**conversation resume, DONE** — opt-in `[session].file` restores the conversation across restarts) →
+> `0.24.3` (**turn niceties, DONE** — opt-in `[ui]` BEL + faint elapsed on turn completion). Only `/reload`
+> remains in the arc. **Role modality is deferred** within 0.24.x (avatara-blocked — a per-archetype aspect
+> registry is avatara's to provide, not thoth code).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -617,10 +618,11 @@ The remaining polish-backlog items ride this arc (each its own slice, normal dis
   `resume` row. Same secrets posture as 0.11.2 (OFF by default, best-effort 0600, degrade-closed, honest
   residuals; plaintext conversation on disk). Interactive-only. Loader hardened vs a hostile `clen`. 1186
   assertions; live-verified across a real restart (learned a codeword → a fresh process resumed + recalled it).
-- **Terminal niceties (remainder)** — BEL on turn completion + a faint per-turn
-  elapsed line after each reply (both touch the turn path — interactive-only gating
-  via the REPL/TUI loops, not `cmd_task`, so one-shot stays clean). OSC-0 title shipped
-  in 0.22.3.
+- **Terminal niceties (remainder) — `[ui]` bell + elapsed. DONE (`0.24.3`, 2026-07-09).** Opt-in
+  `[ui].bell` (a terminal BEL on turn completion) + `[ui].elapsed` (a faint `(N.Ns)` line after each
+  reply). Gated inside `cmd_task` on `one_shot_active()` — so the turn path is timed once and one-shot /
+  piped / `--json` output stays byte-identical; both default off. Completes the terminal-citizen line
+  (OSC-0 title shipped 0.22.3). 1198 assertions; live-verified (a REPL turn emitted `0x07` + `(2.0s)`).
 - **`/reload`** — re-read `thoth.cyml` mid-session; needs a design pass on which fields
   hot-reload (aliases / shell config / hoosh flags read per-turn) vs bind-once state
   (seams, t-ron policy, log file, persona default) — honest about what a reload does.

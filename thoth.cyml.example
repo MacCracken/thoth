@@ -159,6 +159,14 @@ model = "claude-haiku-4-5-20251001"
 # [session]
 # file = ".thoth_session"             # project-local; or an absolute "/home/you/.thoth_session"
 
+# The [ui] table holds interactive turn-completion niceties (0.24.3). Both are opt-in (default off) and
+# INTERACTIVE-ONLY — one-shot (`thoth 'task'`) output stays clean. Enable them for a nicer REPL/TUI.
+#   bell    — ring the terminal BEL when a model turn finishes, so you can tab away and get pinged.
+#   elapsed — print a faint "(N.Ns)" line after each reply, showing how long the turn took.
+# [ui]
+# bell = true
+# elapsed = true
+
 # The [alias] table defines slash macros (0.11.4). Each `name = "expansion"` lets you type
 # /<name> as a shortcut: when /<name> is NOT a built-in command, thoth expands it to the
 # expansion text (with any trailing args appended) and re-runs the result. The expansion can

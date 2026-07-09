@@ -232,6 +232,13 @@ fn cmd_state() {
         ui_emit(ROLE_GREEN, "on"); emit(" — "); emit(config_session_file());
         ui_emit(ROLE_MUTED, " ([session].file; conversation persisted across restarts)"); oprintln("");
     }
+    if ((config_ui_bell() == 1) || (config_ui_elapsed() == 1)) {   # 0.24.3: omit when both off (byte-identical floor)
+        ui_label("  ui      : ");
+        var first = 1;
+        if (config_ui_bell() == 1) { ui_emit(ROLE_GREEN, "bell"); first = 0; }
+        if (config_ui_elapsed() == 1) { if (first == 0) { emit(" + "); } ui_emit(ROLE_GREEN, "elapsed"); }
+        ui_emit(ROLE_MUTED, " on turn completion ([ui], interactive-only)"); oprintln("");
+    }
     ui_label("  memory  : ");
     if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall)"); oprintln(""); }
     elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }
@@ -955,6 +962,36 @@ fn cmd_audit() {
     return 0;
 }
 
+# --- turn-completion niceties (0.24.3) ------------------------------------
+var _ui_bell_buf = 0;          # lazy [0x07, 0] — the BEL byte for emit_raw_n
+
+# _ui_emit_bell: write a terminal BEL (0x07) DIRECTLY to fd1 (emit_raw_n bypasses the OUT_RING feed sink —
+# a bell is terminal control, not feed text, like the OSC-52 / kitty escapes).
+fn _ui_emit_bell() {
+    if (_ui_bell_buf == 0) { _ui_bell_buf = alloc(2); store8(_ui_bell_buf, 7); store8(_ui_bell_buf + 1, 0); }
+    emit_raw_n(_ui_bell_buf, 1);
+    return 0;
+}
+
+# _task_emit_secs: emit `ms` milliseconds as "N.Ns" (one decimal), sink-aware. PURE format over the sink.
+fn _task_emit_secs(ms) {
+    if (ms < 0) { ms = 0; }
+    ofmt_int(ms / 1000); emit("."); ofmt_int((ms % 1000) / 100); emit("s");
+    return 0;
+}
+
+# _task_turn_feedback: after a model turn (interactive only — one-shot stays clean), optionally ring the
+# terminal BEL ([ui].bell) and print a faint "(N.Ns)" elapsed line ([ui].elapsed). `t0` is the pre-turn
+# clock_now_ms(). Both opt-in (default off) so the floor is byte-identical.
+fn _task_turn_feedback(t0) {
+    if (one_shot_active() == 1) { return 0; }        # interactive-only; one-shot output stays clean
+    if (config_ui_bell() == 1) { _ui_emit_bell(); }
+    if (config_ui_elapsed() == 1) {
+        emit(ui_sgr(ROLE_FAINT)); emit("("); _task_emit_secs(clock_now_ms() - t0); emit(")"); emit(ui_reset()); oprintln("");
+    }
+    return 0;
+}
+
 fn cmd_task(line) {
     session_bump_turn();
     emit("task: "); oprintln(line);              # echo the ORIGINAL line (with @mentions), not the expansion
@@ -974,8 +1011,12 @@ fn cmd_task(line) {
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop
     # (the model can call MCP tools, gated by t-ron); else a plain hoosh turn.
-    if (agent_enabled() == 1) { return agent_turn(prompt); }
-    return hoosh_send(prompt);
+    var t0 = clock_now_ms();                          # 0.24.3: time the turn for [ui].elapsed
+    var rc = 0;
+    if (agent_enabled() == 1) { rc = agent_turn(prompt); }
+    else { rc = hoosh_send(prompt); }
+    _task_turn_feedback(t0);                          # interactive BEL + faint elapsed line (opt-in)
+    return rc;
 }
 
 # cmd_clear: clear the content window. In the T2 TUI (output captured, OUT_RING) it

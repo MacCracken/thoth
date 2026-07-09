@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.24.3** — **turn-completion niceties ([ui] bell + elapsed)**, 2026-07-09. Two opt-in, INTERACTIVE-ONLY
+touches that close the terminal-citizen line (OSC-0 title was 0.22.3). `[ui].bell` → a terminal BEL (0x07) on
+turn completion, written to fd1 via `_ui_emit_bell` (emit_raw_n of a [0x07,0] buffer — bypasses the OUT_RING
+feed sink, like the OSC-52/kitty escapes, so it works over SSH + never corrupts the TUI frame). `[ui].elapsed`
+→ a faint `(N.Ns)` line after each reply (`_task_emit_secs`: ms/1000 . (ms%1000)/100, clamped at 0). Wiring:
+`cmd_task` now times the turn (`t0 = clock_now_ms()` before `agent_turn`/`hoosh_send`, captures rc, calls
+`_task_turn_feedback(t0)`, returns rc unchanged) — `_task_turn_feedback` gates on `one_shot_active()==0` so
+one-shot/`--json`/piped output is byte-identical, then rings bell + prints elapsed per the toggles. Config:
+`[ui]` section → `_cfg_ui_bell`/`_cfg_ui_elapsed` (via `_cfg_bool`, default 0) + `config_ui_bell/_elapsed`. A
+`/state` `ui` row when either is on (omitted when both off → floor byte-identical). Both DEFAULT OFF (consistent
+with the shell/memory/history/session opt-in discipline). **Verified**: 1198 assertions (+9 `test_ui_niceties`:
+`_task_emit_secs` boundaries incl. sub-second/negative/large, one-shot suppression, interactive emission,
+both-off floor) + LIVE (a REPL turn with `[ui]` on emitted the `0x07` BEL + `(2.0s)`). Pin **6.4.29**. NEXT:
+`/reload` — the last 0.24.x polish item (needs a hot-reload-vs-bind-once design pass). See CHANGELOG/roadmap.
+
 **0.24.2** — **conversation resume ([session].file)**, 2026-07-09. Opt-in persistence of the conversation
 history (role + content per message) across restarts — relaunch and pick up where you left off. DISTINCT from
 `[history].file` (composer keystrokes) and the mneme seam (durable facts). INTERACTIVE-ONLY (main.cyr binds it
@@ -32,8 +47,8 @@ PLATYPUS-7 → process 2 announced "resumed 2 messages" and recalled PLATYPUS-7;
 clen-overflow OOB (the proactive `clen < 0 || clen > total` guard holds) + caught & FIXED two low findings —
 (1) the greeting overstated the resume count (counted parsed records, not the post-eviction `session_history_len()`);
 (2) the format doc's "raw bytes" claim was imprecise (content is a NUL-terminated cstring — an interior NUL
-terminates it, as it must since a raw 0x00 can't be re-sent in a JSON string). Pin **6.4.29**. NEXT:
-remaining 0.24.x polish — terminal niceties (BEL + per-turn elapsed), `/reload`. See CHANGELOG/roadmap.
+terminates it, as it must since a raw 0x00 can't be re-sent in a JSON string). Pin **6.4.29**. Followed by
+0.24.3 (turn-completion niceties, above).
 
 **0.24.1** — **`/save <file>` transcript export**, 2026-07-09. Writes the TUI feed scrollback to a file as a
 plain-text/markdown transcript. NEW `feed_strip_ansi_into` (`src/feed.cyr`): pure ANSI stripper — drops

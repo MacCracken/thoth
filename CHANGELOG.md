@@ -2,6 +2,24 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.3] - 2026-07-09
+
+**Turn-completion niceties** (`[ui]`). Two small opt-in, interactive-only touches that finish the
+terminal-citizen line (the OSC-0 title shipped in 0.22.3): a terminal **BEL** when a model turn finishes (tab
+away, get pinged) and a faint **`(N.Ns)` elapsed** line after each reply. Both default off; one-shot output
+stays byte-identical. 1198 assertions; live-verified (a REPL turn emitted the `0x07` bell + `(2.0s)`).
+
+### Added
+- **`[ui].bell`** — emit a terminal BEL (`0x07`) on turn completion, written directly to fd1 (bypasses the
+  feed sink, like the OSC-52 / kitty escapes), so it works over SSH and never corrupts the TUI frame.
+- **`[ui].elapsed`** — a faint `(N.Ns)` line after each reply (`clock_now_ms` around the turn; clamped at 0),
+  sink-aware so it lands in the feed (TUI) or stdout (REPL). A `/state` `ui` row when either is on.
+
+### Notes
+- Both are **interactive-only** (`cmd_task` gates on `one_shot_active()`), so `thoth 'task'` / piped / `--json`
+  output is unchanged; and **default off**, so a config without `[ui]` is byte-identical to before. Documented
+  in `thoth.cyml.example`.
+
 ## [0.24.2] - 2026-07-09
 
 **Conversation resume.** Opt-in `[session].file` persists the conversation history (your prompts + the

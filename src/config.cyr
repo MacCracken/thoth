@@ -33,6 +33,8 @@ var _cfg_log_file = 0;       # cstring path for structured driver logs, or 0
 var _cfg_log_level = 0;      # cstring level (off/error/warn/info/debug/trace), or 0
 var _cfg_history_file = 0;   # cstring path for the persistent INPUT-history file (0.11.2), or 0
 var _cfg_session_file = 0;   # cstring path for the persistent CONVERSATION-history file (0.24.2), or 0
+var _cfg_ui_bell = 0;        # [ui].bell — emit a BEL on turn completion (0.24.3); opt-in, default off
+var _cfg_ui_elapsed = 0;     # [ui].elapsed — a faint per-turn elapsed line after each reply (0.24.3); opt-in, default off
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
 var _cfg_shell_timeout_ms = 0 - 1;  # per-command wall-clock timeout (ms); -1 = unset -> default (clamped in the getter)
@@ -388,6 +390,9 @@ fn config_load() {
     _cfg_history_file = _cfg_str(history, "file");
     var session = _cfg_section_pairs(sections, "session");
     _cfg_session_file = _cfg_str(session, "file");         # [session].file — persistent conversation history (0.24.2)
+    var ui = _cfg_section_pairs(sections, "ui");
+    _cfg_ui_bell = _cfg_bool(ui, "bell", 0);               # [ui].bell — BEL on turn completion (0.24.3), opt-in
+    _cfg_ui_elapsed = _cfg_bool(ui, "elapsed", 0);         # [ui].elapsed — faint per-turn elapsed line (0.24.3), opt-in
     var memory = _cfg_section_pairs(sections, "memory");
     _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
     var persona = _cfg_section_pairs(sections, "persona");
@@ -532,3 +537,8 @@ fn config_history_file() { return _cfg_history_file; }
 # config_session_file: path to the persistent CONVERSATION-history file (0.24.2), or 0 (none configured ->
 # resume OFF). Distinct from config_history_file (composer keystrokes) and the memory seam (durable facts).
 fn config_session_file() { return _cfg_session_file; }
+
+# config_ui_bell / config_ui_elapsed: interactive turn-completion niceties (0.24.3), both opt-in (default 0).
+# bell = emit a terminal BEL when a model turn finishes; elapsed = a faint "(N.Ns)" line after each reply.
+fn config_ui_bell() { return _cfg_ui_bell; }
+fn config_ui_elapsed() { return _cfg_ui_elapsed; }

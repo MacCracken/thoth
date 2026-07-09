@@ -3496,6 +3496,41 @@ fn test_session_persist() {
     return 0;
 }
 
+fn _t_secs_line(ms, expect) {   # emit _task_emit_secs(ms) to the feed ring; 1 if row 0 contains `expect`
+    feed_init();
+    out_mode_set(OUT_RING);
+    _task_emit_secs(ms);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return _t_count_sub(feed_line_ptr(0), feed_line_len(0), expect, strlen(expect));
+}
+
+fn test_ui_niceties() {
+    test_group("turn niceties ([ui] bell/elapsed, 0.24.3)");
+    # --- _task_emit_secs: milliseconds -> "N.Ns" (one decimal), clamped at 0 ---
+    assert_eq(_t_secs_line(3200, "3.2s"), 1, "3200ms -> 3.2s");
+    assert_eq(_t_secs_line(800, "0.8s"), 1, "800ms -> 0.8s");
+    assert_eq(_t_secs_line(0, "0.0s"), 1, "0ms -> 0.0s");
+    assert_eq(_t_secs_line(0 - 5, "0.0s"), 1, "negative -> 0.0s (clamped)");
+    assert_eq(_t_secs_line(65900, "65.9s"), 1, "65900ms -> 65.9s");
+
+    # --- _task_turn_feedback: interactive-only, and only when [ui].elapsed is on ---
+    _cfg_ui_bell = 0; _cfg_ui_elapsed = 1;
+    one_shot_set(1);                              # one-shot -> suppressed (clean output)
+    feed_init(); out_mode_set(OUT_RING); _task_turn_feedback(clock_now_ms()); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 0, "one-shot: no turn feedback emitted");
+    one_shot_set(0);                             # interactive -> the elapsed line prints
+    feed_init(); out_mode_set(OUT_RING); _task_turn_feedback(clock_now_ms()); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(feed_count() >= 1, "interactive + [ui].elapsed: an elapsed line is emitted");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "s)", 2), 1, "the elapsed line is a (…s) form");
+
+    # both off -> nothing, even interactive (byte-identical floor)
+    _cfg_ui_bell = 0; _cfg_ui_elapsed = 0;
+    feed_init(); out_mode_set(OUT_RING); _task_turn_feedback(clock_now_ms()); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 0, "both off: no feedback (floor unchanged)");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3564,6 +3599,7 @@ fn main() {
     test_mpick();
     test_save();
     test_session_persist();
+    test_ui_niceties();
     test_model_switch();
     return assert_summary();
 }
