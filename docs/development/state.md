@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.22.4** — **file-tree git badges** (polish sweep), 2026-07-08. The file-tree pane surfaces changed files
+with `M`/`A`/`D` markers from the ALREADY-probed sit status — content-blind, no new worktree walk.
+`src/git.cyr`: `git_probe` now copies `sit_repo_status`'s per-file {path, kind} (before `sit_repo_close`, since
+sit's paths are arena-owned) into REUSED buffers (`_git_status_buf`/`_ptr`/`_kind`/`_n`, rewritten each probe →
+no accretion, bounded GIT_STATUS_MAX=512); `git_status_of(relpath)` linear-scans it (1=modified, 2=new,
+3=deleted, 0 = unchanged/no-repo). `src/tui.cyr`: `_tui_tree_row_gitkind(li)` derives the node's repo-relative
+path (strip `ftree_cwd()`+`/` off the absolute `ftree_path`) → `git_status_of`; `_tui_paint_tree_row` reserves
+a 2-col gutter on EVERY row IN A REPO (colored M/A/D or blank; the name clips to `tw-2`; alignment holds),
+badges files only, colors M=ROLE_ACCENT/A=ROLE_GREEN/D=ROLE_RED, and outside a repo emits NO gutter (floor
+byte-identical). Review-nit fix: badges off when `tw<3` (no sub-6-col gutter overflow). **Verified**: 1092
+assertions (+5, `git_status_of` white-box kinds + gate) + LIVE via PTY (changed `src/tui.cyr`/`src/git.cyr`
+render an amber `M`; committed/unchanged + dirs render a blank gutter; matches sit's 13 changed). A 3-lens
+review returned one nit (fixed). Toolchain: pin **6.4.29** (env kept auto-drifting the active cycc to
+6.4.30/6.4.31; re-pinned the active toolchain to 6.4.29 each time to match). NEXT (new PRIORITY line, per the
+user): **project awareness** — model-invokable `read_file`/`list_dir` so the agent can SEE the codebase it was
+launched in (today it's blind: only `@file` mentions + the opt-in `shell` hammer), default-ON with the agent
+loop, default project-JAILED with a user-grant to widen (review another repo, read **vidya** for Cyrius
+features) — a permission model like the other restrictions. See roadmap 0.23.x.
+
 **0.22.3** — **terminal window title** (first polish sweep), 2026-07-08. With the active-persona core done
 (0.22.0–0.22.2), the `0.22.x` line now draws vetted **polish-backlog** items (role modality moved to the new
 `0.23.x` line). On a real terminal thoth sets the window/tab title to `thoth - <model>` via OSC-0

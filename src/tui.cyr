@@ -1371,20 +1371,46 @@ fn _tui_tree_row_build(li) {
 
 # _tui_paint_tree_row: paint node li into tree cols [1, tw] on row r — dir blue / file
 # muted, the selected row a reverse-video bar, padded to the full tree width.
+# _tui_tree_row_gitkind (0.22.4): the git status kind for tree node `li` — 1=modified, 2=new, 3=deleted,
+# or 0 (dir / unchanged / no repo). Derives the node's repo-relative path (ftree_path is absolute cwd+chain;
+# strip the cwd + its '/') and looks it up in the already-probed status cache (git_status_of). Files only.
+var _tui_tree_pathbuf = 0;
+fn _tui_tree_row_gitkind(li) {
+    if (ftree_isdir(li) == 1) { return 0; }
+    if (_tui_tree_pathbuf == 0) { _tui_tree_pathbuf = alloc(4096); }
+    ftree_path(li, _tui_tree_pathbuf, 4096);
+    var skip = strlen(ftree_cwd());
+    if (load8(_tui_tree_pathbuf + skip) == 47) { skip = skip + 1; }   # past the '/' after cwd
+    return git_status_of(_tui_tree_pathbuf + skip);
+}
+
 fn _tui_paint_tree_row(li, tw, r) {
+    # 0.22.4: in a repo, reserve a 2-col badge gutter on EVERY row (so alignment holds) — a colored M/A/D
+    # for a changed file, else two blanks. Outside a repo, no gutter (the floor tree render is unchanged).
+    var badges = git_present();
+    if (tw < 3) { badges = 0; }                     # too narrow for a 2-col gutter + a name col -> no badges (floor render)
+    var namew = tw;
+    if (badges == 1) { namew = tw - 2; if (namew < 0) { namew = 0; } }
     var n = _tui_tree_row_build(li);
     if (_tree_paint == 0) { _tree_paint = alloc(TREE_ROW_CAP); }
-    var w = feed_clip(_tree_paint, TREE_ROW_CAP, _tree_rowbuf, n, tw);
+    var w = feed_clip(_tree_paint, TREE_ROW_CAP, _tree_rowbuf, n, namew);
     var vis = feed_visible_cols(_tree_rowbuf, n);
-    if (vis > tw) { vis = tw; }
+    if (vis > namew) { vis = namew; }
     var role = ROLE_MUTED;
     if (ftree_isdir(li) == 1) { role = ROLE_BLUE; }
     tty_move(r, 1);
     if (li == ftree_sel()) { emit_raw("\x1b[7m"); }     # reverse-video highlight bar
-    emit_raw(ui_sgr(role));
+    if (badges == 1) {
+        var kind = _tui_tree_row_gitkind(li);
+        if (kind == 1) { emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw("M "); }    # modified — amber
+        elif (kind == 2) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw("A "); }   # new — green
+        elif (kind == 3) { emit_raw(ui_sgr(ROLE_RED)); emit_raw("D "); }     # deleted — red
+        else { emit_raw("  "); }                                             # unchanged / dir — blank gutter
+    }
+    emit_raw(ui_sgr(role));                             # name (overrides the badge fg; reverse persists if selected)
     emit_raw_n(_tree_paint, w);
     emit_raw(ui_sgr(ROLE_FG));
-    _tui_pad_cols(tw - vis);                            # fill to the full tree width
+    _tui_pad_cols(namew - vis);                         # fill to the full tree width
     emit_raw(ui_reset());                               # closes color + reverse
     return 0;
 }

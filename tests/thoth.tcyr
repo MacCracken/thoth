@@ -3232,6 +3232,22 @@ fn test_git() {
     # ensure_probed is idempotent — same result, no re-crash
     git_ensure_probed();
     assert_eq(git_present(), p, "ensure_probed keeps the probe result stable");
+
+    # 0.22.4 file-tree git badges: git_status_of over the per-file status cache (white-box: inject entries,
+    # then re-probe to restore the real state). kinds 1=modified, 2=new, 3=deleted; 0 = unchanged / no repo.
+    if (_git_status_ptr == 0) { _git_status_ptr = alloc(GIT_STATUS_MAX * 8); _git_status_kind = alloc(GIT_STATUS_MAX); _git_status_buf = alloc(GIT_STATUS_BUF); }
+    _git_present = 1;
+    store64(_git_status_ptr + 0, "src/main.cyr");  store8(_git_status_kind + 0, 1);
+    store64(_git_status_ptr + 8, "docs/x.md");      store8(_git_status_kind + 1, 2);
+    store64(_git_status_ptr + 16, "gone.txt");      store8(_git_status_kind + 2, 3);
+    _git_status_n = 3;
+    assert_eq(git_status_of("src/main.cyr"), 1, "modified -> kind 1");
+    assert_eq(git_status_of("docs/x.md"), 2, "new -> kind 2");
+    assert_eq(git_status_of("gone.txt"), 3, "deleted -> kind 3");
+    assert_eq(git_status_of("untouched.cyr"), 0, "unchanged path -> 0");
+    _git_present = 0;
+    assert_eq(git_status_of("src/main.cyr"), 0, "no repo -> 0 regardless of the cache");
+    git_probe();   # restore the real probe state for any later reader
     return 0;
 }
 

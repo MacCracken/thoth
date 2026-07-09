@@ -2,6 +2,29 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.4] - 2026-07-08
+
+**File-tree git badges** — the file-tree pane marks changed files with `M`/`A`/`D` from the already-probed
+sit status. Content-blind surfacing, no new probe. 1092 assertions (+5). A 3-lens adversarial review found
+one nit (a sub-6-column-width overflow), fixed.
+
+### Added
+- **Git status badges** (`src/git.cyr` `git_status_of`, `src/tui.cyr` `_tui_tree_row_gitkind` + the tree
+  painter): `git_probe` now caches the per-file status (`sit_repo_status` {path, kind}) into reused buffers
+  (copied before the repo closes; no accretion). In a repo, every tree row reserves a 2-col gutter — a
+  colored `M` (modified, amber), `A` (new, green), or `D` (deleted, red) for a changed file, else blank; the
+  active pane keeps its alignment. Files only; the node's repo-relative path is matched against the cache.
+  Outside a repo the tree render is byte-identical (no gutter). TUI-only.
+
+### Fixed
+- Width guard (review nit): at a tree width < 3 columns the 2-col gutter is skipped (badges off), so it never
+  overflows the pane into the separator column. (Cosmetic — only at <6-column terminals, already unusable.)
+
+### Notes
+- Live-verified via PTY: changed files (`src/tui.cyr`, `src/git.cyr`) render an amber `M`; committed/unchanged
+  files and directories render a blank gutter; the data path matches sit's changed-file set. Badges refresh
+  on the existing probe triggers (boot / after a write / `/state` / `/git`).
+
 ## [0.22.3] - 2026-07-08
 
 **Terminal window title** — the first polish sweep of the `0.22.x` line. On a real terminal, thoth sets the

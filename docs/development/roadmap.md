@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.22.3):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.22.4):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -314,8 +314,11 @@ selection stays content-blind.
 > bundled the Cyrius 6.4.29 refresh) → `0.22.1` (**`/personas` discovery, DONE** — browse the traditions +
 > archetypes and the active card, read-only over avatara) → `0.22.2` (**blends + shadow, DONE** — `/persona
 > blend` weighted-composes archetypes and `/persona shadow` wears the inverted aspect, avatara-native verbs).
-> The active-persona core done, `0.22.x` turned to **polish sweeps** (role modality → `0.23.x`): `0.22.3`
-> (**terminal window title, DONE** — OSC-0 `thoth - <model>`, real-terminal-gated, escape-safe).
+> The active-persona core done, `0.22.x` turned to **polish sweeps**: `0.22.3` (**terminal window title,
+> DONE** — OSC-0 `thoth - <model>`, real-terminal-gated, escape-safe) → `0.22.4` (**file-tree git badges,
+> DONE** — M/A/D on tree rows from the probed sit status). Then **project awareness** was raised as a
+> priority and took the next line (`0.23.x` — the agent reads/explores the codebase, jailed + user-granted);
+> role modality + remaining polish moved to `0.24.x`.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -533,10 +536,46 @@ The 0.16.0 deferred follow-ups, promoted to a line:
     terminal (no-op at PT_PLAIN, floor byte-identical), model name control-byte-filtered
     (no escape injection). 1087 assertions; single-agent review caught + fixed the inject
     surface; live-verified via PTY.
+  - **`0.22.4` — file-tree git badges. DONE (2026-07-08).** `M`/`A`/`D` markers on tree rows
+    from the already-probed sit status (`sit_repo_status` {path, kind}: 1=modified, 2=new,
+    3=deleted) — content-blind, NO new probe. git.cyr caches the per-file status (reused
+    buffer, copied before close) + `git_status_of(relpath)`; the tree painter renders a 2-col
+    colored gutter (M=amber/A=green/D=red, else blank; name clipped; alignment held), no gutter
+    outside a repo (floor byte-identical). 1092 assertions; review nit (sub-3-col width) fixed;
+    live-verified via PTY.
+  - **`0.22.5` — model-picker palette (DEFERRED behind 0.23.x project awareness).** An
+    interactive fuzzy picker over hoosh's model list, selecting through the `/model` seam.
+    Reprioritized below project awareness (the user's call); folds into the `0.24.x` batch.
 
-### 0.23.x — role modality (PLANNED)
+### 0.23.x — project awareness (PRIORITY — the agent sees the codebase)
 
-- **`0.23.0` — role modality (long-term).** The second axis: an archetype is
+> The gap (2026-07-08): the agentic loop's context is the prompt + persona + project-memory
+> FACTS + tool results, and its tools are daimon MCP + `memory_write` + the opt-in `shell`.
+> There is **no model-invokable way to read or explore the project files** — the agent sees
+> code only via the user's `@file` mentions (0.21.0) or the heavy, opt-in `shell` hammer. A
+> *coding* agent is effectively blind to the codebase it was launched in ("confined to local
+> memory space"). This line closes that. Own the read SUBSTRATE (like `/read`, `@file`, the
+> file tree, the `shell` tool) — no spine fork; daimon MCP tools remain additional, not required.
+
+- **`0.23.0` — project read/explore tools.** thoth-native, model-invokable `read_file(path)`
+  and `list_dir(path)` (the agent enumerates + reads the project), riding the EXISTING read
+  substrate (`file_read_all`, the file-tree's `dir_list`) — no new read path. **Default-ON**
+  when `[hoosh].tools` is on (the coding-tool expectation; the agent is useful out-of-the-box).
+  **Safety = a project JAIL by default**: paths resolve against the launch cwd; absolute paths
+  and `..`-escapes outside it are rejected (can't reach `~/.ssh`, `/etc`). Bounded output +
+  file caps (as `/read`). Earns a **design pass + an ADR** (the jail + default-on posture).
+- **`0.23.1` — user-granted read roots (permission model).** The jail is the default, but the
+  user can GRANT additional readable roots — review another repo, or read **vidya** (to learn
+  latest Cyrius features and return to the project) — a permission model like every other
+  restriction (config allowlist and/or a `/allow <path>` grant; **vidya** a first-class
+  grantable root). Never silent: the active roots are surfaced; a read outside them is refused
+  honestly. (Could co-design with 0.23.0's jail; sliced for review.)
+- Possible later slices: a `grep`/glob search tool; a lightweight project-map hint in the
+  system prompt so the model knows to explore.
+
+### 0.24.x — role modality + remaining polish (PLANNED)
+
+- **`0.24.0` — role modality (long-term).** The second axis: an archetype is
   multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator),
   so the user can switch WHICH ASPECT of the *active* archetype is leaned into —
   distinct from switching archetypes. Honest gating: aspect modeling is avatara's
@@ -546,29 +585,32 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   hand-authors aspect tables (the same bright line as 0.22.0's role sourcing).
   Likely opens with a design pass + an upstream avatara request rather than code.
 
+The remaining polish-backlog items ride this arc (each its own slice, normal discipline):
+
+- **Model-picker palette** — the deferred `0.22.5`: an interactive fuzzy picker over hoosh's
+  model list, selecting through the existing `/model` switch seam.
+- **Conversation resume** — opt-in `[session].file` persisting conversation history
+  across restarts (distinct from `[history].file` keystrokes and the memory seam's
+  durable facts). The largest item — likely earns its own line (persistence + a
+  secrets-on-disk surface, same class as 0.11.2).
+- **Transcript export** — `/save <file>` writes the session as markdown (the feed
+  scrollback; TUI-only, ring-bounded — document the limits).
+- **Terminal niceties (remainder)** — BEL on turn completion + a faint per-turn
+  elapsed line after each reply (both touch the turn path — interactive-only gating
+  via the REPL/TUI loops, not `cmd_task`, so one-shot stays clean). OSC-0 title shipped
+  in 0.22.3.
+- **`/reload`** — re-read `thoth.cyml` mid-session; needs a design pass on which fields
+  hot-reload (aliases / shell config / hoosh flags read per-turn) vs bind-once state
+  (seams, t-ron policy, log file, persona default) — honest about what a reload does.
+
 ### Polish backlog (gathers until it earns a sweep minor)
 
 > Small, independent UX items are parked here as they surface. **Convention:** none
 > is scheduled individually; when enough have gathered (or a natural gap opens
-> between lines), a **polish minor** sweeps a vetted batch. Each item still gets the
-> normal design/review/test discipline at promotion time, and is re-sized at vet
-> time — an item that turns out line-sized gets its own line instead of riding the
-> sweep.
-
-- **Conversation resume** — opt-in `[session].file` persisting conversation history
-  across restarts (distinct from `[history].file` keystrokes and the memory seam's
-  durable facts). Likely the largest item here — may earn its own line at vet time
-  (persistence + a secrets-on-disk surface, same class as 0.11.2).
-- **Model picker palette** — an interactive fuzzy picker over hoosh's model list
-  (the signature mid-session switch, made discoverable) instead of typing
-  `/model <id>` verbatim. Natural rider on the 0.21.x line.
-- **File-tree git badges** — `M`/`A`/`D` markers on tree rows from the
-  already-probed sit status (content-blind surfacing, no new probe).
-- **Transcript export** — `/save <file>` writes the session as markdown.
-- **Terminal niceties** — ~~OSC 0 window title (`thoth - <model>`)~~ DONE in 0.22.3;
-  still parked: BEL on turn completion, a faint per-turn elapsed line after each reply
-  (both touch the turn path — interactive-only gating via the REPL/TUI loops).
-- **`/reload`** — re-read `thoth.cyml` mid-session.
+> between lines), a **polish minor** sweeps a vetted batch. (The 2026-07-08 batch was
+> scheduled: OSC title → 0.22.3; git badges → 0.22.4. Then **project awareness** was raised
+> as a priority and took the next line (0.23.x); model picker + the rest → the 0.24.x arc
+> above. This section now re-gathers from empty.)
 
 ### Deferred / known limitations (captured so they're not lost)
 
