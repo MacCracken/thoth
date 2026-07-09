@@ -23,6 +23,15 @@ var AGENT_TOOLS_CAP = 32768;
 var _agent_tools_len = 0;     # cached serialized-tools byte length (session-stable)
 var _agent_tools_ready = 0;   # 1 once the registry was fetched + formatted at least once
 
+# agent_tools_cache_reset: drop the cached tool advertisement so the next turn re-fetches + re-serializes it.
+# Used by /reload (0.24.4) so a mid-session config change to [shell].enabled / [hoosh].tools (or a now-reachable
+# daimon) re-advertises the right tools; otherwise the session-stable cache would keep the startup set.
+fn agent_tools_cache_reset() {
+    _agent_tools_ready = 0;
+    _agent_tools_len = 0;
+    return 0;
+}
+
 # The working buffer holds THIS turn's tool-round messages (assistant-with-
 # tool_calls + tool results) as raw comma-joined JSON objects. The persisted
 # conversation (session history) supplies the user turn and prior exchanges; the

@@ -2,6 +2,67 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.25.0] - 2026-07-09
+
+**Role modality — the third persona axis.** A persona already switches archetype (`/persona`) and can take
+its shadow/blend; now you can also lean into a **role** — a facet of the archetype's personality — and
+override it to anything you like. The role is *derived from a personality aspect*: avatara maps each
+archetype's trait vector to a set of aspects (the Seeker, the Maker, the Measurer, the Mediator…), the
+strongest is the default role, and `/role` selects among them or sets a custom label. This is the long-planned
+persona axis, built end to end across avatara **2.8.0** (the new aspect API) and thoth. avatara: 82 assertions;
+thoth: 1216. Live-verified (Thoth's dominant aspect resolves to "the Measurer"; `/role Keeper of Symbols` sets
+a custom role).
+
+### Added
+- **`/role`** (`cmd_role` in `src/commands.cyr`): no arg lists the active archetype's aspects (each an
+  avatara-derived role), marking the live one and the dominant default. `/role <aspect>` leans into that
+  aspect (its role follows). `/role <any label>` sets a **custom** role — make anyone "the Librarian",
+  "Deep Thinker", "Personal Scribe", "Keeper of Symbols". `/role reset` returns to the default.
+- **`persona_role` now derives from an aspect** (`src/session.cyr`): precedence is user override → selected
+  aspect's role → the archetype default (still "the Librarian" for the signature Thoth; the dominant
+  trait-derived aspect for any switched archetype — sourced from avatara, never thoth-authored per-archetype
+  prose). New `persona_role_select_aspect` / `persona_role_override_set` / `persona_role_reset` / `persona_aspect`.
+- **The active role is woven into the system prompt** ("In this session you take the role of …"), so switching
+  a role actually steers the turn — not just a relabel. Rebuilt in place on any role change.
+- **avatara 2.8.0 `src/aspect.cyr`** (consumed via the refreshed `src/vendor/avatara.cyr`): trait-derived role
+  aspects — `aspect_count/name/role/trait_offset/index_by_name`, `profile_aspect_weight`,
+  `profile_dominant_aspect`. Universal across all 374 archetypes, no per-archetype authoring.
+
+### Notes
+- The aspect set is a deliberately small, universal base (derived from the personality vector); it can grow
+  or gain per-archetype overrides later without breaking the index-stable avatara API. Role modality is no
+  longer deferred — it was wrongly parked as "avatara-blocked"; avatara supports it cleanly.
+- Reviewed adversarially (avatara aspects / thoth persona / cmd+reload lenses). One low display-honesty
+  blemish fixed: the `/role` listing marked an aspect `*` as "live" for the default Thoth even though the
+  active role was the special-cased "the Librarian"; the marker now flags the aspect whose role is actually
+  active (or none), so it can never contradict the `active:` line.
+
+## [0.24.4] - 2026-07-09
+
+**`/reload` — re-read `thoth.cyml` mid-session.** Applies config changes without a restart, and is honest
+about the split: fields the runtime reads per-use apply immediately; fields bound once at startup are left
+alone (a restart changes those). Closes the `0.24.x` arc. 1201 assertions; live-verified (a `[alias]` added
+to the file mid-session became usable right after `/reload`).
+
+### Added
+- **`/reload`** (`cmd_reload` in `src/commands.cyr`): re-parses `thoth.cyml` (`config_load`) and drops the
+  agent tool-advertisement cache (`agent_tools_cache_reset`) so a changed `[shell].enabled` / `[hoosh].tools`
+  (or a now-reachable daimon) re-advertises next turn. Prints an honest summary:
+  - **Now active** (read per-use): `[alias]`, `[shell]` rules, `[ui]`, `[pricing]`, `[hoosh]` flags
+    (model default / stream / history / tools / parallel), `[memory].enabled`.
+  - **Additive**: `[project]` `read_roots` (new roots granted; existing grants can't be revoked mid-session).
+  - **Restart to change** (bound once at startup): `[hoosh].url` / `[daimon].url` (the seams + first-use-cached
+    endpoints), `[tron].policy`, `[log]`, `[persona].name`, `[history].file`, `[session].file`.
+- An absent `thoth.cyml` reports "nothing to reload" and leaves state untouched (no partial reset).
+
+### Fixed
+- `/reload` no longer fakes success on an unreadable/unparseable file: `config_load` now exposes
+  `config_parse_ok()`, and `cmd_reload` reports "reload failed — config unchanged" (and notes an unset
+  `[hoosh].url`) instead of a green "reloaded" + hot-fields report. Review-caught (honesty lens).
+- `/reload` now drops the cached `Bearer` auth header (`hoosh_auth_cache_reset`), so a rotated `[hoosh].token`
+  actually takes effect next request instead of silently sending the stale token (401s behind a success
+  message). The report lists `[hoosh]` `token`/`model` as hot accordingly. Review-caught.
+
 ## [0.24.3] - 2026-07-09
 
 **Turn-completion niceties** (`[ui]`). Two small opt-in, interactive-only touches that finish the

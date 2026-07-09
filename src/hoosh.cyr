@@ -819,6 +819,11 @@ fn _hoosh_auth_header() {
     return _hoosh_auth;
 }
 
+# hoosh_auth_cache_reset: drop the cached "Bearer <token>" header so the next request rebuilds it from the
+# current [hoosh].token. Used by /reload (0.24.4) — a rotated token would otherwise keep sending the stale
+# header (silent 401s). The prior header leaks (bump heap) — acceptable for an infrequent command.
+fn hoosh_auth_cache_reset() { _hoosh_auth = 0; return 0; }
+
 # _hoosh_print_str: write a Str (ptr+len) to stdout with a trailing newline if
 # it doesn't already end in one. I/O.
 fn _hoosh_print_str(s) {

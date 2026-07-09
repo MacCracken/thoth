@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.24.3):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.25.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -325,9 +325,11 @@ selection stays content-blind.
 > TUI modal over hoosh's catalog, switching through the existing `/model` seam) → `0.24.1` (**`/save`
 > transcript export, DONE** — the feed scrollback to an ANSI-stripped markdown file) → `0.24.2`
 > (**conversation resume, DONE** — opt-in `[session].file` restores the conversation across restarts) →
-> `0.24.3` (**turn niceties, DONE** — opt-in `[ui]` BEL + faint elapsed on turn completion). Only `/reload`
-> remains in the arc. **Role modality is deferred** within 0.24.x (avatara-blocked — a per-archetype aspect
-> registry is avatara's to provide, not thoth code).
+> `0.24.3` (**turn niceties, DONE** — opt-in `[ui]` BEL + faint elapsed on turn completion) → `0.24.4`
+> (**`/reload`, DONE** — re-read `thoth.cyml` mid-session, honest about hot vs bind-once). The 0.24.x polish
+> arc complete, **`0.25.0` delivered role modality** (the third persona axis — `/role` derives the role from a
+> personality aspect, via avatara `2.8.0`'s new aspect API; it was wrongly deferred as "avatara-blocked" and
+> is now built end-to-end).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -588,7 +590,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - Possible later slices: a `grep`/glob search tool; a lightweight project-map hint in the
   system prompt so the model knows to explore.
 
-### 0.24.x — model picker + remaining polish (0.24.0 DONE)
+### 0.24.x — model picker + remaining polish (COMPLETE) · 0.25.0 role modality (DONE)
 
 - **`0.24.0` — model-picker palette. DONE (2026-07-09).** An interactive **Ctrl-P** TUI modal over hoosh's
   model catalog: type to case-insensitive-substring filter, `↑/↓` to move, `Enter` to switch, `Esc`/`⌃C` to
@@ -597,14 +599,15 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   Switches through the EXISTING `/model` seam (`session_set_model_copy` + title + audit) — no new machinery.
   TUI-only → line-mode/one-shot floor byte-identical. Degrades honestly (hoosh absent/unreachable/empty → a
   feed note, no modal). 1152 assertions; live-verified over a PTY. Took the `0.24.0` slot from role modality.
-- **Role modality (long-term) — DEFERRED (avatara-blocked).** The second axis: an archetype is
-  multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator), so the user could switch
-  WHICH ASPECT of the *active* archetype is leaned into — distinct from switching archetypes. Honest gating:
-  aspect modeling is avatara's domain — its native modality verbs today are `shadow(p)` and `compose()`
-  (weighted emphasis); thoth exposes only `persona_role()` (one role of the active persona), no per-archetype
-  aspect registry. A first-class role/aspect registry is an **avatara feature to request**; thoth never
-  hand-authors aspect tables (the same bright line as 0.22.0's role sourcing). Re-confirmed blocked at 0.24.0
-  (only `persona_role()` present). Opens with a design pass + an upstream avatara request, not thoth code.
+- **Role modality (the third persona axis) — DONE (`0.25.0`, 2026-07-09; avatara `2.8.0`).** The role is
+  derived from a personality ASPECT: avatara `2.8.0` `src/aspect.cyr` maps each archetype's trait vector to a
+  universal aspect set (the Seeker / Maker / Measurer / Mediator / Critic / Teacher / Champion / Sovereign);
+  the dominant is the default role, and thoth's **`/role`** selects among them or sets a custom label (make
+  anyone "the Librarian" / "Keeper of Symbols"). `persona_role()` derives from the active aspect + steers the
+  turn via the system prompt. **CORRECTION**: this was WRONGLY parked as "avatara-blocked" across 0.22–0.24
+  — avatara (362 archetypes, aspects/shadow/compose already first-class) supports it cleanly; the "blocked"
+  label was adjacent-easy work standing in for the hard ask. Built as a proper avatara patch + thoth consume,
+  per the identity-split decision ("role sourced from avatara fields, follows the switch").
 
 The remaining polish-backlog items ride this arc (each its own slice, normal discipline):
 - **Transcript export — `/save <file>`. DONE (`0.24.1`, 2026-07-09).** Writes the feed
@@ -623,9 +626,16 @@ The remaining polish-backlog items ride this arc (each its own slice, normal dis
   reply). Gated inside `cmd_task` on `one_shot_active()` — so the turn path is timed once and one-shot /
   piped / `--json` output stays byte-identical; both default off. Completes the terminal-citizen line
   (OSC-0 title shipped 0.22.3). 1198 assertions; live-verified (a REPL turn emitted `0x07` + `(2.0s)`).
-- **`/reload`** — re-read `thoth.cyml` mid-session; needs a design pass on which fields
-  hot-reload (aliases / shell config / hoosh flags read per-turn) vs bind-once state
-  (seams, t-ron policy, log file, persona default) — honest about what a reload does.
+- **`/reload` — re-read `thoth.cyml` mid-session. DONE (`0.24.4`, 2026-07-09).** `config_load()` re-parse +
+  `agent_tools_cache_reset()`, with an HONEST report grounded in the data flow: **hot** (read per-use, apply
+  now) = `[alias]`, `[shell]` rules, `[ui]`, `[pricing]`, `[hoosh]` flags, `[memory]`; **additive** =
+  `[project]` read_roots (never revoked); **bind-once / restart** = `[hoosh]`/`[daimon]` url (seams +
+  first-use-cached endpoints), `[tron]`, `[log]`, `[persona]`, `[history]`/`[session]` files. Absent file →
+  "nothing to reload". 1201 assertions; live-verified (a mid-session `[alias]` became usable after `/reload`).
+
+**The 0.24.x polish arc is COMPLETE** — model picker · `/save` · conversation resume · turn niceties ·
+`/reload` all shipped — and **`0.25.0` delivered role modality** (the third persona axis; avatara `2.8.0` +
+thoth `/role`). Next is the v1.0 gate work (AGNOS-dominated) or a new user-directed line.
 
 ### Polish backlog (gathers until it earns a sweep minor)
 

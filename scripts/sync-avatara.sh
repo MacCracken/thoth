@@ -16,10 +16,10 @@
 # guard over stdlib alloc — defined nowhere else). No fn/type collisions with
 # the other bundles, the stdlib, or thoth's own source.
 #
-# Usage: ./scripts/sync-avatara.sh [tag]   (default: 2.7.1)
+# Usage: ./scripts/sync-avatara.sh [tag]   (default: 2.8.0)
 set -euo pipefail
 
-TAG="${1:-2.7.1}"
+TAG="${1:-2.8.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/avatara.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/avatara/${TAG}/dist/avatara.cyr"

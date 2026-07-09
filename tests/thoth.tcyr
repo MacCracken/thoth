@@ -250,7 +250,9 @@ fn test_persona_switch() {
     assert_eq(persona_switch("Athena"), 1, "switch to a valid archetype (Athena) succeeds");
     assert(streq(persona_name(), "Athena") == 1, "active persona is now Athena");
     assert(streq(persona_role(), "the Librarian") == 0, "switched role is NOT 'the Librarian'");
-    assert(streq(persona_role(), persona_desc()) == 1, "switched role is sourced from the avatara desc");
+    # 0.24.5 role modality: a switched persona's default role now derives from its DOMINANT trait aspect
+    # (avatara's profile_dominant_aspect -> aspect_role), not the profile desc.
+    assert(streq(persona_role(), aspect_role(profile_dominant_aspect(persona_profile()))) == 1, "switched role = dominant aspect (avatara-sourced)");
     var sys_athena = persona_system_prompt();
     assert(streq(sys_athena, snap) == 0, "system prompt rebuilt for the new persona (differs from the default)");
     assert(cstr_starts_with(sys_athena, "You are Thoth") == 0, "the rebuilt prompt is no longer the Thoth voice");
@@ -3531,6 +3533,61 @@ fn test_ui_niceties() {
     return 0;
 }
 
+fn test_reload() {
+    test_group("/reload config (agent tool-cache reset, 0.24.4)");
+    # agent_tools_cache_reset drops the session-stable tool cache so the next turn re-advertises — the
+    # mechanism /reload relies on to pick up a changed [shell].enabled / [hoosh].tools. (cmd_reload itself
+    # re-reads thoth.cyml, which is gitignored/absent in CI, so it is live-verified, not unit-tested here.)
+    _agent_tools_ready = 1; _agent_tools_len = 42;
+    agent_tools_cache_reset();
+    assert_eq(_agent_tools_ready, 0, "reset clears the tool-ready flag (re-advertise next turn)");
+    assert_eq(_agent_tools_len, 0, "reset clears the cached tool length");
+    # config_load re-run must be safe (the reload re-parses in place). It degrades gracefully on an
+    # absent/unreadable file (keeps prior state); reaching the next assertion proves it did not crash.
+    config_load();
+    assert_eq(_agent_tools_ready, 0, "config_load re-run did not spuriously rebuild the tool cache");
+    return 0;
+}
+
+fn test_role() {
+    test_group("role modality (persona aspects + /role, 0.24.5)");
+    persona_set(egyptian_thoth());              # pristine default (persona_set resets aspect+override)
+    assert(streq(persona_role(), "the Librarian") == 1, "default Thoth role = the Librarian");
+    # select an aspect -> the role follows (avatara-sourced, not thoth-authored)
+    var mi = aspect_index_by_name("measurer");
+    assert(mi >= 0, "measurer aspect exists in avatara");
+    persona_role_select_aspect(mi);
+    assert(streq(persona_role(), "the Measurer") == 1, "select measurer -> role 'the Measurer'");
+    assert_eq(persona_role_is_override(), 0, "an aspect selection is not a custom override");
+    assert_eq(persona_aspect(), mi, "active aspect = measurer");
+    # a custom user label trumps the aspect (make anyone anything)
+    persona_role_override_set("Keeper of Symbols");
+    assert(streq(persona_role(), "Keeper of Symbols") == 1, "custom override role wins");
+    assert_eq(persona_role_is_override(), 1, "override flag set");
+    assert(_ui_contains(persona_system_prompt(), "Keeper of Symbols") == 1, "system prompt carries the active role (steers the model)");
+    # reset -> back to the archetype default
+    persona_role_reset();
+    assert(streq(persona_role(), "the Librarian") == 1, "reset -> default role");
+    assert_eq(persona_role_is_override(), 0, "reset clears the override");
+    # a persona switch resets the role state to the new archetype's dominant aspect
+    persona_role_override_set("Temp");
+    persona_set(egyptian_thoth());
+    assert_eq(persona_role_is_override(), 0, "persona switch clears a custom override");
+    assert_eq(persona_aspect(), profile_dominant_aspect(persona_profile()), "switch -> dominant aspect is the active default");
+    # a NON-Thoth archetype's default role derives from its dominant aspect (0.24.5 change; was desc)
+    var od = find_and_validate("Odin");
+    if (is_err_result(od) == 0) {
+        persona_set(result_unwrap(od));
+        assert(streq(persona_role(), aspect_role(profile_dominant_aspect(persona_profile()))) == 1, "switched persona default role = its dominant aspect");
+    }
+    # out-of-range aspect select is a safe no-op
+    persona_set(egyptian_thoth());
+    assert_eq(persona_role_select_aspect(999), 0, "OOB aspect select refused");
+    assert_eq(persona_role_select_aspect(0 - 1), 0, "negative aspect select refused");
+    persona_role_reset();                       # leave a clean default for later tests
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3543,6 +3600,7 @@ fn main() {
     test_hoosh_health();
     test_persona();
     test_persona_switch();
+    test_role();
     test_config();
     test_hoosh();
     test_provider_catalog();
@@ -3600,6 +3658,7 @@ fn main() {
     test_save();
     test_session_persist();
     test_ui_niceties();
+    test_reload();
     test_model_switch();
     return assert_summary();
 }

@@ -385,6 +385,12 @@ fn session_set_model_copy(m) {
 # persona is READ from avatara, never reimplemented (ADR-0003).
 var _persona_profile = 0;
 var _persona_sys_dirty = 0;    # 1 after a persona_set -> persona_system_prompt rebuilds in place (0.22.0)
+# Role modality (0.24.5): the active persona's ROLE is a facet (aspect) of its personality — sourced from
+# avatara's trait-derived aspects (aspect_role/profile_dominant_aspect). _persona_aspect selects one (-1 =
+# the archetype's dominant aspect, its default role); _persona_role_override is a USER label (/role <text>)
+# that trumps the aspect — thoth's own overlay, not archetype semantics. Both reset on a persona switch.
+var _persona_aspect = 0 - 1;   # selected aspect index into avatara's set, or -1 = dominant/default
+var _persona_role_override = 0; # user custom role cstr (/role <text>), or 0 = none
 fn persona_profile() {
     if (_persona_profile == 0) {
         # Startup default (0.22.0): [persona].name in thoth.cyml resolves through avatara's
@@ -408,6 +414,8 @@ fn persona_profile() {
 fn persona_set(p) {
     _persona_profile = p;
     _persona_sys_dirty = 1;
+    _persona_aspect = 0 - 1;       # 0.24.5: a new archetype resets to its own dominant aspect (default role)
+    _persona_role_override = 0;    # and drops any prior user role override
     return 0;
 }
 
@@ -452,12 +460,57 @@ fn persona_soul() { return prof_soul(persona_profile()); }
 fn persona_spirit() { return prof_spirit(persona_profile()); }
 fn persona_desc() { return prof_desc(persona_profile()); }
 
-# persona_role: thoth's own overlay framing. Identity split (0.22.0): "the Librarian" is thoth's role
-# framing for the DEFAULT Thoth archetype ONLY; a switched persona's role is sourced from the profile's
-# OWN avatara field (its desc) — never thoth-authored per-archetype role prose (that is avatara's domain).
+# persona_role: the active role — a FACET (aspect) of the personality. Precedence (0.24.5 role modality):
+#   1. a USER override (/role <text>) — thoth's own overlay, wins outright;
+#   2. the SELECTED aspect's role (/role <aspect>) — sourced from avatara;
+#   3. the archetype's DEFAULT — "the Librarian" for the signature Thoth (0.22.0 identity split), else the
+#      DOMINANT trait-derived aspect (avatara's profile_dominant_aspect → aspect_role) — never thoth-authored
+#      per-archetype role prose (that stays avatara's domain).
 fn persona_role() {
+    if (_persona_role_override != 0) { return _persona_role_override; }
+    if (_persona_aspect >= 0) { return aspect_role(_persona_aspect); }
     if (streq(persona_name(), "Thoth") == 1) { return "the Librarian"; }
-    return persona_desc();
+    return aspect_role(profile_dominant_aspect(persona_profile()));
+}
+
+# --- role modality mutators + accessors (0.24.5) ---------------------------
+# persona_aspect: the ACTIVE aspect index — the selection, or the archetype's dominant aspect when none is
+# selected. For the /role display (which aspect is live).
+fn persona_aspect() {
+    if (_persona_aspect >= 0) { return _persona_aspect; }
+    return profile_dominant_aspect(persona_profile());
+}
+# persona_role_is_override: 1 if a user custom role label is active (so /role can show it honestly).
+fn persona_role_is_override() { if (_persona_role_override != 0) { return 1; } return 0; }
+
+# persona_role_select_aspect: lean the active persona into aspect `i` (its role follows). Clears any user
+# override. Marks the system prompt dirty so the model adopts the new role next turn. Returns 1, 0 if OOB.
+fn persona_role_select_aspect(i) {
+    if (i < 0) { return 0; }
+    if (i >= aspect_count()) { return 0; }
+    _persona_aspect = i;
+    _persona_role_override = 0;
+    _persona_sys_dirty = 1;
+    return 1;
+}
+# persona_role_override_set: set a USER role label `s` (any text), copied to stable storage; it trumps the
+# aspect. Marks the system prompt dirty. Returns 1, 0 for a null arg.
+fn persona_role_override_set(s) {
+    if (s == 0) { return 0; }
+    var n = strlen(s);
+    var c = alloc(n + 1);
+    if (n > 0) { memcpy(c, s, n); }
+    store8(c + n, 0);
+    _persona_role_override = c;
+    _persona_sys_dirty = 1;
+    return 1;
+}
+# persona_role_reset: back to the archetype's default role (dominant aspect / "the Librarian"). Marks dirty.
+fn persona_role_reset() {
+    _persona_aspect = 0 - 1;
+    _persona_role_override = 0;
+    _persona_sys_dirty = 1;
+    return 0;
 }
 # The THOTH backronym is the APPLICATION's naming — a fixed statement of what the tool does — never the
 # active archetype's attribute. It stays constant across persona switches (identity split, 0.22.0).
@@ -486,6 +539,11 @@ fn persona_system_prompt() {
     off = _append_cstr_cap(_persona_sys, off, cap, " ");
     off = _append_cstr_cap(_persona_sys, off, cap, persona_spirit());
     off = _append_cstr_cap(_persona_sys, off, cap, " You are thoth, a sovereign agentic coding scribe: weigh each change, measure twice, edit precisely, and record your reasoning.");
+    # 0.24.5 role modality: state the active role (an aspect of this persona, or the user's /role label) so
+    # the model leans into it — this is what makes switching a role actually steer the turn, not just relabel.
+    off = _append_cstr_cap(_persona_sys, off, cap, " In this session you take the role of ");
+    off = _append_cstr_cap(_persona_sys, off, cap, persona_role());
+    off = _append_cstr_cap(_persona_sys, off, cap, ".");
     store8(_persona_sys + off, 0);
     return _persona_sys;
 }

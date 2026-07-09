@@ -32,6 +32,8 @@ enum Cmd {
     CMD_PERSONAS = 24;
     CMD_ALLOW = 25;
     CMD_SAVE = 26;
+    CMD_RELOAD = 27;
+    CMD_ROLE = 28;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -122,6 +124,8 @@ fn classify_input(line) {
     if (token_is(line, "/personas") == 1) { return CMD_PERSONAS; }
     if (token_is(line, "/allow") == 1) { return CMD_ALLOW; }
     if (token_is(line, "/save") == 1) { return CMD_SAVE; }
+    if (token_is(line, "/reload") == 1) { return CMD_RELOAD; }
+    if (token_is(line, "/role") == 1) { return CMD_ROLE; }
     if (token_is(line, "/persona") == 1) { return CMD_PERSONA; }
     if (token_is(line, "/model") == 1) { return CMD_MODEL; }
     if (token_is(line, "/read") == 1) { return CMD_READ; }
@@ -153,6 +157,7 @@ fn cmd_help() {
     _help_line("  /git [path]", "        working repo: branch + changed files, or a file's diff (via sit)");
     _help_line("  /persona [name]", "    show/switch the archetype; /persona shadow | blend <a> <b> (avatara)");
     _help_line("  /personas [trad]", "   list archetype traditions, or browse one; show the active card");
+    _help_line("  /role [aspect|label]", " lean into an aspect of the persona, or set a custom role; /role reset");
     _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh); Ctrl-P picks in the TUI");
     _help_line("  /models [provider]", " list providers; with one, its switchable models");
     _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
@@ -160,6 +165,7 @@ fn cmd_help() {
     _help_line("  /run <cmd>", "         run a shell command (t-ron-gated local escape)");
     _help_line("  /allow [path]", "      grant the agent read access to a root; /allow vidya; no arg lists them");
     _help_line("  /save <file>", "       write the TUI transcript (feed scrollback) to a file as markdown");
+    _help_line("  /reload", "            re-read thoth.cyml (hot fields apply; seams/persona need restart)");
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
@@ -502,6 +508,72 @@ fn cmd_save(line) {
     file_close(fd);
     if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(n); emit(" lines to "); emit(path); oprintln(""); }
     else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+    return 0;
+}
+
+# --- /role: role modality (0.24.5) ----------------------------------------
+var ROLE_ARG_CAP = 128;
+var _role_lc = 0;
+
+# _role_lc_of: an ASCII-lowercased copy of `s` (bounded) for case-insensitive aspect matching. The raw arg
+# is used verbatim for a custom override (so "Keeper of Symbols" keeps its case). Reused scratch.
+fn _role_lc_of(s) {
+    if (_role_lc == 0) { _role_lc = alloc(ROLE_ARG_CAP); }
+    var i = 0;
+    while ((load8(s + i) != 0) && (i < (ROLE_ARG_CAP - 1))) {
+        var b = load8(s + i);
+        if ((b >= 65) && (b <= 90)) { b = b + 32; }
+        store8(_role_lc + i, b); i = i + 1;
+    }
+    store8(_role_lc + i, 0);
+    return _role_lc;
+}
+
+# cmd_role (0.24.5): the persona's ROLE is a facet (aspect) of its personality. No arg lists the active
+# archetype's aspects (each an avatara trait-derived role), marking the live one + the dominant default.
+# `/role <aspect>` leans into that aspect (its role follows + steers the turn via the system prompt);
+# `/role <any label>` sets a CUSTOM role (make anyone "the Librarian" / "Keeper of Symbols"); `/role reset`
+# returns to the default. Consumes avatara's aspect API (aspect_*/profile_dominant_aspect); the override is
+# thoth's own session overlay.
+fn cmd_role(line) {
+    var arg = arg_after(line);
+    if (arg == 0) {
+        ui_emit(ROLE_ACCENT, "role"); oprintln("");
+        emit("  active: "); ui_emit(ROLE_ACCENT, persona_role());
+        if (persona_role_is_override() == 1) { ui_emit(ROLE_FAINT, " (custom)"); }
+        oprintln("");
+        emit("  "); ui_emit(ROLE_FAINT, "aspects of "); emit(ui_sgr(ROLE_FAINT)); emit(persona_name()); emit(ui_reset());
+        ui_emit(ROLE_FAINT, " (facets of its personality):"); oprintln("");
+        var dom = profile_dominant_aspect(persona_profile());
+        var i = 0;
+        while (i < aspect_count()) {
+            emit("  ");
+            # star the aspect whose role IS the active one — so the marker never contradicts the 'active:'
+            # line. None is starred when the role is a custom override, or the signature Thoth's "the
+            # Librarian" default (which is not one of the aspects); "(dominant)" still shows the fallback.
+            if ((persona_role_is_override() == 0) && (streq(persona_role(), aspect_role(i)) == 1)) { ui_emit(ROLE_GREEN, "* "); } else { emit("  "); }
+            ui_emit(ROLE_ACCENT, aspect_name(i)); ui_emit(ROLE_FAINT, " — "); emit(aspect_role(i));
+            if (i == dom) { ui_emit(ROLE_FAINT, " (dominant)"); }
+            oprintln("");
+            i = i + 1;
+        }
+        oprintln("");
+        ui_emit(ROLE_FAINT, "  /role <aspect> to lean in · /role <your label> for a custom role · /role reset"); oprintln("");
+        return 0;
+    }
+    if ((streq(arg, "reset") == 1) || (streq(arg, "default") == 1) || (streq(arg, "clear") == 1)) {
+        persona_role_reset();
+        emit("role -> "); ui_emit(ROLE_ACCENT, persona_role()); ui_emit(ROLE_FAINT, " (default)"); oprintln("");
+        return 0;
+    }
+    var idx = aspect_index_by_name(_role_lc_of(arg));
+    if (idx >= 0) {
+        persona_role_select_aspect(idx);
+        emit("role -> "); ui_emit(ROLE_ACCENT, persona_role()); oprintln("");
+        return 0;
+    }
+    persona_role_override_set(arg);            # not an aspect name -> a custom role label (verbatim)
+    emit("role -> "); ui_emit(ROLE_ACCENT, persona_role()); ui_emit(ROLE_FAINT, " (custom)"); oprintln("");
     return 0;
 }
 
@@ -946,6 +1018,32 @@ fn cmd_reset() {
     return 0;
 }
 
+# cmd_reload (0.24.4): re-read thoth.cyml mid-session. Re-parsing rebuilds the config globals; the agent tool
+# cache is dropped so a changed [shell].enabled / [hoosh].tools (or a now-reachable daimon) re-advertises next
+# turn. HONEST about the split: HOT fields take effect immediately because the runtime reads them per-use;
+# BIND-ONCE fields were consumed at startup and are NOT re-bound (their runtime state — seams, cached hoosh
+# endpoints, the t-ron/log seams, the persona default, the persisted-file bindings — would need a restart). We
+# never claim a reload changed something it didn't.
+fn cmd_reload() {
+    if (file_exists(CONFIG_PATH) == 0) {
+        ui_emit(ROLE_RED, "no "); emit(CONFIG_PATH); ui_emit(ROLE_FAINT, " found — nothing to reload"); oprintln("");
+        return 0;
+    }
+    config_load();                            # re-parse: rebuilds [alias]/[shell]/[pricing]/read_roots + all _cfg_* globals
+    if (config_parse_ok() == 0) {             # readable? the file could not be read/parsed -> degrade honestly, don't fake success
+        ui_emit(ROLE_RED, "reload failed"); ui_emit(ROLE_FAINT, " — could not read/parse "); emit(CONFIG_PATH); ui_emit(ROLE_FAINT, " (config unchanged)"); oprintln("");
+        return 0;
+    }
+    agent_tools_cache_reset();                # re-advertise tools next turn (picks up [shell].enabled / [hoosh].tools / daimon)
+    hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
+    ui_emit(ROLE_GREEN, "reloaded "); emit(CONFIG_PATH); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory]"); oprintln("");
+    ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
+    ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
+    if (config_hoosh_url() == 0) { ui_emit(ROLE_RED, "  note: [hoosh].url is not set — model turns are unavailable"); oprintln(""); }
+    return 0;
+}
+
 # cmd_audit: surface t-ron's audit chain. With the seam absent there is no
 # chain — the fail-closed confirm gate keeps no cryptographic log; said plainly,
 # degraded honestly. With it bound, gate.cyr renders t-ron's query API.
@@ -1182,6 +1280,8 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_PERSONA) { cmd_persona(line); return 1; }
     if (c == CMD_ALLOW) { cmd_allow(line); return 1; }
     if (c == CMD_SAVE) { cmd_save(line); return 1; }
+    if (c == CMD_RELOAD) { cmd_reload(); return 1; }
+    if (c == CMD_ROLE) { cmd_role(line); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
     if (c == CMD_MODELS) { cmd_models(line); return 1; }
     if (c == CMD_READ) { cmd_read(line); return 1; }

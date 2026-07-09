@@ -7,6 +7,48 @@
 
 ## Version
 
+**0.25.0** — **role modality: the third persona axis** (avatara 2.8.0 + thoth), 2026-07-09. The long-planned
+role axis, built end-to-end — NOT "avatara-blocked" (that earlier conclusion was WRONG; it was adjacent-easy
+work done to defer the hard ask). An archetype is a personality vector (15 traits + 14 emphases + soul/spirit +
+one domain) with no role field; a ROLE is **derived from a personality aspect**. **avatara 2.8.0** adds
+`src/aspect.cyr` (trait-derived aspects — `aspect_count`=8/`_name`/`_role`/`_trait_offset`/`_index_by_name`,
+`profile_aspect_weight`, `profile_dominant_aspect` [f64 argmax, ties→lowest, null-safe]; universal over all 374
+archetypes, no per-archetype authoring; released via `version-bump.sh 2.8.0` → `dist/avatara.cyr`, vendored to
+`src/vendor/avatara.cyr` [local copy; the GitHub-tag `sync-avatara.sh 2.8.0` runs on push]). **thoth**:
+`persona_role()` precedence = user override → selected aspect's role → default (still "the Librarian" for the
+signature Thoth; else the DOMINANT trait aspect — avatara-sourced, never thoth-authored per-archetype prose;
+replaces the old `desc` default); `_persona_aspect`/`_persona_role_override` (both reset by `persona_set` on a
+switch); `persona_role_select_aspect`/`_override_set` [COPIES the label]/`_reset`/`persona_aspect`. The active
+role is woven into `persona_system_prompt` ("In this session you take the role of …") so it STEERS the turn,
+rebuilt in place on change. NEW **`/role`** (`cmd_role`, `CMD_ROLE=28`): no-arg lists the archetype's aspects
+(marks active `*` + dominant); `/role <aspect>` leans in; `/role <any label>` sets a custom role (Librarian /
+Deep Thinker / Personal Scribe / Keeper of Symbols); `/role reset`. **Verified**: avatara 82 assertions
+(+11 aspect), thoth 1216 (+`test_role`; updated the persona-switch default-role assertion to the aspect) + LIVE
+(`/role` lists Thoth's aspects with "the Measurer" dominant; `/role measurer` → the Measurer; `/role Keeper of
+Symbols` → custom; `/role reset` → the Librarian). Pin **6.4.29**; avatara built under 6.4.29 (its 6.2.11 pin is
+a benign drift warning). Design: trait-derived base, user-overridable, evolve later (avatara's index-stable API
+can grow per-archetype overrides). Bundled in this working set with the 0.24.4 `/reload` review-fixes (below).
+
+**0.24.4** — **`/reload` (re-read thoth.cyml mid-session)**, 2026-07-09. Closes the `0.24.x` arc + review-fixes
+(config_parse_ok → honest degrade on an unreadable file; hoosh_auth_cache_reset → a rotated token applies). `cmd_reload`
+(`src/commands.cyr`, `CMD_RELOAD=27`): `file_exists(CONFIG_PATH)` guard (absent → "nothing to reload", no
+state touched) → `config_load()` (re-parse rebuilds `[alias]`/`[shell]`/`[pricing]`/read_roots + all `_cfg_*`)
+→ `agent_tools_cache_reset()` (NEW in `src/agent.cyr` — drops `_agent_tools_ready`/`_agent_tools_len` so a
+changed `[shell].enabled`/`[hoosh].tools` or a now-reachable daimon re-advertises next turn) → an HONEST report.
+The hot/bind-once split is grounded in the actual data flow: **hot** (runtime reads per-use) = `[alias]`
+(dispatch), `[shell]` rules/caps (per call), `[ui]` (per turn), `[pricing]` (at accumulate), `[hoosh]` flags
+model/stream/history/tools/parallel (per turn), `[memory].enabled` (per turn); **additive** = `[project]`
+read_roots (`project_grant_root` dedups, never revokes); **bind-once / restart** = `[hoosh]`/`[daimon]` url
+(the SEAMS + first-use-cached `_hoosh_endpoint`/`_models_ep`/`_catalog_ep`), `[tron].policy`, `[log]`,
+`[persona].name`, `[history]`/`[session]` file (all bound at startup). Never claims a reload changed something
+it didn't. **Verified**: 1201 assertions (+3 `test_reload`: `agent_tools_cache_reset` clears the flag+len,
+`config_load` re-run is safe/no spurious rebuild — `cmd_reload` itself reads the gitignored thoth.cyml so it is
+LIVE-verified not unit-tested, per the CI-fixture rule) + LIVE (added a `[alias]` to thoth.cyml mid-session →
+pre-reload `/zzz` unknown → after `/reload`, `/zzz` expanded to its target; "reloaded" confirmed). Pin
+**6.4.29**. **The 0.24.x polish arc is COMPLETE** (model picker · `/save` · resume · niceties · `/reload`);
+only role modality remains, deferred (avatara-blocked). NEXT: the v1.0 gate items (AGNOS-dominated; see
+[[thoth-next-items-gate-map]]) or a new user-directed line.
+
 **0.24.3** — **turn-completion niceties ([ui] bell + elapsed)**, 2026-07-09. Two opt-in, INTERACTIVE-ONLY
 touches that close the terminal-citizen line (OSC-0 title was 0.22.3). `[ui].bell` → a terminal BEL (0x07) on
 turn completion, written to fd1 via `_ui_emit_bell` (emit_raw_n of a [0x07,0] buffer — bypasses the OUT_RING
@@ -19,8 +61,8 @@ one-shot/`--json`/piped output is byte-identical, then rings bell + prints elaps
 `/state` `ui` row when either is on (omitted when both off → floor byte-identical). Both DEFAULT OFF (consistent
 with the shell/memory/history/session opt-in discipline). **Verified**: 1198 assertions (+9 `test_ui_niceties`:
 `_task_emit_secs` boundaries incl. sub-second/negative/large, one-shot suppression, interactive emission,
-both-off floor) + LIVE (a REPL turn with `[ui]` on emitted the `0x07` BEL + `(2.0s)`). Pin **6.4.29**. NEXT:
-`/reload` — the last 0.24.x polish item (needs a hot-reload-vs-bind-once design pass). See CHANGELOG/roadmap.
+both-off floor) + LIVE (a REPL turn with `[ui]` on emitted the `0x07` BEL + `(2.0s)`). Pin **6.4.29**.
+Followed by 0.24.4 (`/reload`, above).
 
 **0.24.2** — **conversation resume ([session].file)**, 2026-07-09. Opt-in persistence of the conversation
 history (role + content per message) across restarts — relaunch and pick up where you left off. DISTINCT from
