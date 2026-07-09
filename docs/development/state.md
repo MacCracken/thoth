@@ -7,6 +7,27 @@
 
 ## Version
 
+**0.23.1** — **user-granted read roots: the user widens the jail** (ADR-0015), 2026-07-08. The 0.23.0 read
+tools were confined to the launch cwd; now the *user* (never the model) can grant read access to additional
+ABSOLUTE roots — review another repo, or read the **vidya** Cyrius knowledge base and bring the latest
+language features back to the project. A permission model like every other restriction. **Read boundary
+widened** (`src/project.cyr` `_project_read_ok`): allow a jailed in-project relative path OR an absolute path
+— no `..` component — under a granted root; `_project_under_root` prefix-matches on a `/` boundary (`/a/b`
+under `/a`, `/ab` not); `project_grant_root` requires absolute + longer than `/`, strips trailing slashes,
+dedups (bounded READ_ROOTS_MAX=16, owned copies); `_project_no_dotdot` extracted from `_project_jail_ok` and
+reused. **Grant sources**: config `[project].read_roots` (persistent, `_cfg_read_roots_load` — array or
+lenient bare-scalar) + `[project].vidya` (`config_vidya`, the `/allow vidya` target); and the new **`/allow`
+command** (`cmd_allow`, CMD_ALLOW=25 — no-arg lists read access, `<abs-path>` grants, `vidya` grants the
+configured root; the MODEL can't call a slash command → the human authorizes, like `/run`). `/state` gains a
+`reads` row (agent-on only → floor byte-identical). `read_file`/`list_dir` tool descriptions updated so a
+user-supplied external path is attempted, not pre-refused. **Ordering**: `project.cyr` include moved before
+`config.cyr` (config_load grants configured roots). **Verified**: 1135 assertions (+22: grant accept/reject,
+dedup/trailing-slash, `_project_read_ok` boundary matrix, end-to-end `/etc` grant flips a refused path) +
+LIVE end-to-end (config-granted vidya → model read `/home/.../vidya/VERSION` = "2.8.0"; **negative control**:
+grant removed → model got the exact "refused - outside the project and any user-granted read root" string).
+Residual carries over: symlink inside a granted root is followed. Pin **6.4.29**. NEXT: **`0.24.x`** — role
+modality (deferred from 0.23), model-picker palette, `/reload`, `/save`. See CHANGELOG/roadmap/ADR-0015.
+
 **0.23.0** — **project awareness: the agent can see the codebase** (ADR-0015), 2026-07-08. Opens the
 `0.23.x` line, closing the gap that a *coding* agent was blind to the project it was launched in (its context
 was prompt + persona + memory FACTS + tool results; code reached it only via `@file` mentions or the opt-in
@@ -28,8 +49,7 @@ symlink-inside-project escape (no O_NOFOLLOW); Windows backslash/drive paths (de
 ship). **Verified**: 1113 assertions (+21 net: `test_project` +22, agent truth-table -1; jail accept/refuse,
 read_file/list_dir real + refusals + errors) + LIVE (the model autonomously called `read_file{path:VERSION}`,
 jailed-read it, answered "0.23.0"). Pin **6.4.29** (env kept drifting the active cycc to 6.4.30/31; re-pinned
-to 6.4.29). NEXT: **`0.23.1`** — user-granted read roots (widen the jail to another repo / **vidya**, a
-permission model). See CHANGELOG/roadmap/ADR-0015.
+to 6.4.29). Followed by 0.23.1 (user-granted read roots, above).
 
 **0.22.4** — **file-tree git badges** (polish sweep), 2026-07-08. The file-tree pane surfaces changed files
 with `M`/`A`/`D` markers from the ALREADY-probed sit status — content-blind, no new worktree walk.

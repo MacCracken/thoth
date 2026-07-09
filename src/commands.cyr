@@ -30,6 +30,7 @@ enum Cmd {
     CMD_FIND = 22;
     CMD_PERSONA = 23;
     CMD_PERSONAS = 24;
+    CMD_ALLOW = 25;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -118,6 +119,7 @@ fn classify_input(line) {
     if (token_is(line, "/state") == 1) { return CMD_STATE; }
     if (token_is(line, "/models") == 1) { return CMD_MODELS; }
     if (token_is(line, "/personas") == 1) { return CMD_PERSONAS; }
+    if (token_is(line, "/allow") == 1) { return CMD_ALLOW; }
     if (token_is(line, "/persona") == 1) { return CMD_PERSONA; }
     if (token_is(line, "/model") == 1) { return CMD_MODEL; }
     if (token_is(line, "/read") == 1) { return CMD_READ; }
@@ -154,6 +156,7 @@ fn cmd_help() {
     _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
     _help_line("  /write <f> <text>", "  write text to a file (t-ron-gated)");
     _help_line("  /run <cmd>", "         run a shell command (t-ron-gated local escape)");
+    _help_line("  /allow [path]", "      grant the agent read access to a root; /allow vidya; no arg lists them");
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
@@ -277,6 +280,16 @@ fn cmd_state() {
             oprintln("");
         }
     }
+    if (agent_enabled() == 1) {            # 0.23.x: the always-on project read tools + any user-granted roots
+        ui_label("  reads   : ");
+        emit("project (jailed)");
+        var rrn = project_read_roots_count();
+        if (rrn > 0) {
+            emit(" + "); ofmt_int(rrn); emit(" granted root");
+            if (rrn > 1) { emit("s"); }
+            ui_emit(ROLE_MUTED, " (/allow)"); oprintln("");
+        } else { ui_emit(ROLE_MUTED, " — /allow to grant more"); oprintln(""); }
+    }
     ui_label("  agent   : ");
     if (agent_enabled() == 1) {
         emit("agentic tool-calling on (");
@@ -377,6 +390,63 @@ fn _persona_excerpt(s) {
     }
     emit_n(s, i);                                # whole string fit
     return i;
+}
+
+# cmd_allow (0.23.1): the USER-driven read-root grant — the permission model for widening the project jail.
+# No arg lists read access (the always-jailed project + any granted roots, plus a hint). `/allow vidya` grants
+# the configured [project].vidya knowledge base so the agent can read the latest Cyrius reference. `/allow
+# <abs-path>` grants any absolute root (e.g. another repo to review). The MODEL cannot call this — it is a
+# slash command, the human's own authorization, mirroring /run's t-ron model. Grants are additive within a
+# session (restart to reset); config [project].read_roots persists them across sessions.
+fn cmd_allow(line) {
+    var arg = arg_after(line);
+    if (arg == 0) {
+        ui_emit(ROLE_ACCENT, "read access"); oprintln("");
+        emit("  "); ui_emit(ROLE_FG, "project"); ui_emit(ROLE_FAINT, "  the launch directory (always readable, jailed)"); oprintln("");
+        var n = project_read_roots_count();
+        if (n == 0) {
+            emit("  "); ui_emit(ROLE_FAINT, "granted roots: none"); oprintln("");
+        } else {
+            var i = 0;
+            while (i < n) {
+                emit("  "); ui_emit(ROLE_GREEN, "granted"); emit("  "); emit(project_read_root_at(i)); oprintln("");
+                i = i + 1;
+            }
+        }
+        oprintln("");
+        if (config_vidya() != 0) { ui_emit(ROLE_FAINT, "  /allow vidya to grant the vidya knowledge base · /allow <abs-path> for another root"); }
+        else { ui_emit(ROLE_FAINT, "  /allow <abs-path> to grant read access to another root (absolute paths only)"); }
+        oprintln("");
+        return 0;
+    }
+    if (streq(arg, "vidya") == 1) {
+        var vp = config_vidya();
+        if (vp == 0) {
+            ui_emit(ROLE_RED, "vidya path not set"); oprintln("");
+            ui_emit(ROLE_FAINT, "  add a [project] vidya = \"/abs/path/to/vidya\" line to thoth.cyml"); oprintln("");
+            return 0;
+        }
+        if (project_grant_root(vp) == 1) {
+            ui_emit(ROLE_GREEN, "granted"); emit(" read access to vidya: "); emit(vp); oprintln("");
+        } else {
+            ui_emit(ROLE_RED, "could not grant"); emit(" "); emit(vp); oprintln("");
+            _allow_root_hint();
+        }
+        return 0;
+    }
+    if (project_grant_root(arg) == 1) {
+        ui_emit(ROLE_GREEN, "granted"); emit(" read access to "); emit(arg); oprintln("");
+    } else {
+        ui_emit(ROLE_RED, "could not grant"); emit(" "); emit(arg); oprintln("");
+        _allow_root_hint();
+    }
+    return 0;
+}
+
+# _allow_root_hint: the constraint reminder printed when a grant is rejected. A root must be an absolute
+# path (not "/"), and the table caps at READ_ROOTS_MAX.
+fn _allow_root_hint() {
+    ui_emit(ROLE_FAINT, "  a root must be an absolute path (e.g. /home/you/repo), not \"/\", up to "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(READ_ROOTS_MAX); emit(" roots"); emit(ui_reset()); oprintln("");
 }
 
 # cmd_personas (0.22.1): DISCOVERY + display only (no new personality logic). No arg shows the active
@@ -1019,6 +1089,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_STATE) { cmd_state(); return 1; }
     if (c == CMD_PERSONAS) { cmd_personas(line); return 1; }
     if (c == CMD_PERSONA) { cmd_persona(line); return 1; }
+    if (c == CMD_ALLOW) { cmd_allow(line); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
     if (c == CMD_MODELS) { cmd_models(line); return 1; }
     if (c == CMD_READ) { cmd_read(line); return 1; }

@@ -19,6 +19,7 @@ include "src/ftree.cyr"
 include "src/inhist.cyr"
 include "src/fsearch.cyr"
 include "src/mention.cyr"
+include "src/project.cyr"  # model-invokable read_file/list_dir project tools (0.23.0/0.23.1); before config (config_load grants configured roots)
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -30,7 +31,6 @@ include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/memory.cyr"
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014)
-include "src/project.cyr"  # model-invokable read_file/list_dir project tools (0.23.0, ADR-0015)
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
@@ -3254,7 +3254,7 @@ fn test_git() {
 # is the security boundary — absolute paths, '~', and '..' components are refused; in-project relative paths
 # pass. read_file/list_dir hit the filesystem (present-on-disk, not git status), so real files/dirs work.
 fn test_project() {
-    test_group("project read/explore tools (project.cyr, 0.23.0)");
+    test_group("project read/explore tools (project.cyr, 0.23.0/0.23.1)");
     # --- jail (pure): accept in-project relative, refuse escapes ---
     assert_eq(_project_jail_ok("src/main.cyr"), 1, "relative in-project path ok");
     assert_eq(_project_jail_ok("."), 1, "'.' (project root) ok");
@@ -3281,8 +3281,37 @@ fn test_project() {
     assert(_ui_contains(list_dir_tool("{\"path\":\"src\"}"), "main.cyr") == 1, "list src -> contains main.cyr");
     assert(_ui_contains(list_dir_tool("{\"path\":\"src\"}"), "vendor/") == 1, "subdirectories suffixed with '/'");
     assert(_ui_contains(list_dir_tool("{}"), "VERSION") == 1, "default path (root) -> contains VERSION");
-    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 1, "absolute dir -> refused");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 1, "absolute dir -> refused (before any grant)");
     assert(_ui_contains(list_dir_tool("{\"path\":\"no_such_dir_zzz\"}"), "no such directory") == 1, "missing dir -> error");
+
+    # --- granted read roots (0.23.1): the USER-widened jail ---
+    assert_eq(project_grant_root("relative/path"), 0, "grant rejects a relative root");
+    assert_eq(project_grant_root("/"), 0, "grant rejects '/' (would defeat the jail)");
+    assert_eq(project_grant_root(""), 0, "grant rejects an empty root");
+    assert_eq(project_grant_root("~/repo"), 0, "grant rejects a '~' root (not absolute)");
+    var before = project_read_roots_count();
+    assert_eq(project_grant_root("/opt/demo/repo"), 1, "grant accepts an absolute root");
+    assert_eq(project_read_roots_count(), before + 1, "root count grew by one");
+    assert_eq(project_grant_root("/opt/demo/repo"), 1, "re-granting the same root is idempotent (1)");
+    assert_eq(project_read_roots_count(), before + 1, "dedup: exact duplicate does not grow the count");
+    assert_eq(project_grant_root("/opt/demo/repo/"), 1, "trailing-slash form accepted");
+    assert_eq(project_read_roots_count(), before + 1, "dedup: trailing-slash normalizes to the same root");
+
+    # --- _project_read_ok: in-project relative OR absolute-under-a-granted-root, never '..' ---
+    assert_eq(_project_read_ok("src/main.cyr"), 1, "in-project relative allowed");
+    assert_eq(_project_read_ok("/opt/demo/repo/x.txt"), 1, "absolute file under a granted root allowed");
+    assert_eq(_project_read_ok("/opt/demo/repo"), 1, "the granted root itself allowed");
+    assert_eq(_project_read_ok("/opt/demo/repository/x"), 0, "shared-prefix sibling is NOT under the root ('/'-boundary)");
+    assert_eq(_project_read_ok("/opt/demo"), 0, "a parent of the root is not under it");
+    assert_eq(_project_read_ok("/opt/demo/other/x"), 0, "absolute path outside every granted root refused");
+    assert_eq(_project_read_ok("/opt/demo/repo/../secret"), 0, "'..' under a granted root refused (no traversal)");
+    assert_eq(_project_read_ok("~/opt/demo/repo"), 0, "a '~' path is never a granted root");
+
+    # --- end-to-end: a grant flips a previously-refused absolute path (via /etc on the Linux test host) ---
+    assert_eq(project_grant_root("/etc"), 1, "grant /etc for the end-to-end check");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "/etc:") == 1, "granted absolute dir now lists (not refused)");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 0, "granted absolute dir is no longer refused");
+    assert(_ui_contains(read_file_tool("{\"path\":\"/etc/no_such_zzz\"}"), "no such file") == 1, "granted root: gate passes, missing file -> honest error (not refused)");
     return 0;
 }
 

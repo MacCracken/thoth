@@ -200,6 +200,21 @@ model = "claude-haiku-4-5-20251001"
 # [persona]
 # name = "Thoth"
 
+# The [project] table controls the agent's READ reach (0.23.x). thoth advertises jailed `read_file` /
+# `list_dir` tools whenever the agentic loop runs ([hoosh].tools = true) so the model can SEE the codebase
+# you launched it in. By default those reads are confined to the launch directory (absolute paths, `~`, and
+# any `..` component are refused — a prompt-injection can't make the model read ~/.ssh/id_rsa). You (never
+# the model) can WIDEN that jail to additional ABSOLUTE roots — to review another repo, or to read the
+# `vidya` Cyrius knowledge base and return to this project. Two ways to grant:
+#   * persistently, here — read_roots is a list of absolute roots granted at every startup;
+#   * per-session — `/allow <abs-path>` (and `/allow vidya` for the configured knowledge base below).
+# `/allow` with no argument lists the active grants; /state shows a "reads" row. A root must be absolute and
+# more than just "/". Reads under a granted root still refuse any `..` (no traversal). See ADR-0015.
+
+# [project]
+# vidya = "/home/you/Repos/vidya"                 # the Cyrius knowledge base; grant it with `/allow vidya`
+# read_roots = ["/home/you/Repos/otherrepo"]      # absolute roots readable from every startup
+
 # The [shell] table arms the model-invokable `shell` tool (0.16.0; ADR-0014). When enabled AND the
 # [daimon] seam is wired (agentic turns only), thoth advertises a `shell` tool to the backing model:
 # the model can propose a shell command, thoth runs it under a timeout, captures the combined

@@ -178,16 +178,17 @@ fn agent_tools_add_shell(dst, tl) {
 # agent_tools_add_project: append the thoth-native read_file + list_dir tools to the array in dst (0.23.0,
 # ADR-0015). Advertised whenever the agentic loop runs (the call site is reached only when agent_enabled) —
 # DEFAULT-ON, so the agent can see the codebase it was launched in. Executed LOCALLY + jailed to the launch
-# cwd (no t-ron gate — the project jail is the safety boundary) in _agent_run_calls_serial. Same shape as
-# agent_tools_add_shell; adds TWO tools.
+# cwd, plus any user-granted read roots (0.23.1: /allow, [project].read_roots — no t-ron gate, the jail +
+# the user's explicit grant are the boundary) in _agent_run_calls_serial. Same shape as agent_tools_add_shell;
+# adds TWO tools.
 fn agent_tools_add_project(dst, tl) {
     var cap = AGENT_TOOLS_CAP;
     var off = tl;
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
     else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }   # back over the trailing "]"
-    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"Read a text file from THIS project and return its contents. The path is relative to the project root; reads are confined to the project (absolute paths and '..' are refused). Use to inspect the codebase you are working in.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"file path relative to the project root\"}},\"required\":[\"path\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"Read a text file and return its contents. Give a path relative to THIS project's root, or an absolute path inside a directory the user has granted read access to. Reads outside those (and any '..') are refused. Use to inspect the code you are working in.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root, or an absolute path under a user-granted root\"}},\"required\":[\"path\"]}}}");
     off = _append_cstr_cap(dst, off, cap, ",");
-    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"description\":\"List a directory in THIS project (files, and subdirectories suffixed with '/'). The path is relative to the project root and defaults to the root; confined to the project. Use to explore the codebase structure.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"directory path relative to the project root (optional; defaults to the root)\"}}}}}");
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"description\":\"List a directory (files, and subdirectories suffixed with '/'). Give a path relative to THIS project's root (defaults to the root), or an absolute path inside a user-granted root. Use to explore the code structure.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root, or an absolute path under a user-granted root (optional; defaults to the root)\"}}}}}");
     off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
     return off;

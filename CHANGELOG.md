@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.23.1] - 2026-07-08
+
+**Granted read roots — the user widens the jail.** The 0.23.0 read tools were confined to the launch
+directory. Now the *user* (never the model) can grant read access to additional absolute roots — to review
+another repo, or to read the **vidya** Cyrius knowledge base and bring the latest language features back to
+this project. A permission model like every other restriction: grants come from config
+(`[project].read_roots`, `[project].vidya`) and from a new `/allow` command; reads under a granted root are
+permitted (still no `..`), everything else is refused honestly. Live-verified end-to-end (the model read a
+file under a granted root; without the grant the same read was refused). 1135 assertions.
+
+### Added
+- **`/allow` command**: `/allow` lists read access (the always-jailed project + any granted roots);
+  `/allow <abs-path>` grants read access to an absolute root (e.g. another repo); `/allow vidya` grants the
+  configured `[project].vidya` knowledge base. The MODEL cannot call it — it is a slash command, the human's
+  own authorization (mirroring `/run`'s trust model). Grants are additive within a session; config
+  `read_roots` persists them across sessions.
+- **`[project]` config table**: `read_roots = ["/abs/a", …]` (absolute roots granted at every startup, a
+  persistent user grant) and `vidya = "/abs/path"` (the knowledge base, grantable via `/allow vidya`).
+  Documented in `thoth.cyml.example`.
+- **`/state` `reads` row** (shown when the agentic loop is on): `project (jailed)` plus a granted-root count.
+
+### Changed
+- **The read boundary widens** (`_project_read_ok`): a read is allowed if it is a jailed in-project relative
+  path **or** an absolute path — with no `..` component — under a user-granted root (prefix match on a `/`
+  boundary, so `/a/b` is under `/a` but `/ab` is not). A granted root must be absolute and more than `/`
+  (granting `/` would defeat the jail); trailing slashes are stripped and duplicates ignored. `read_file` /
+  `list_dir` now refuse with "outside the project and any user-granted read root". The symlink-inside-a-root
+  residual carries over from the jail (documented, not faked).
+- `read_file` / `list_dir` tool descriptions tell the model it may also read absolute paths inside a
+  user-granted root, so a user-supplied external path is attempted rather than pre-refused.
+
 ## [0.23.0] - 2026-07-08
 
 **The agent can see the project.** New model-invokable `read_file` and `list_dir` tools let the backing

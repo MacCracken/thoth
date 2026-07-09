@@ -15,22 +15,30 @@
 # portable O_NOFOLLOW — same class as the /tmp-symlink residuals); the user's own repo, lower risk than the
 # ..-escape the jail blocks. (2) The jail's separator/escape check is POSIX/AGNOS-correct ('/' + '..' + '~');
 # Windows backslash + drive-letter (`C:\`) paths would need extra handling when the `--win` lane ships (it is
-# IOCP-gated and does not build today). Widening the jail to other roots (another repo, vidya) is the 0.23.1
-# user-grant model.
+# IOCP-gated and does not build today).
+#
+# GRANTED READ ROOTS (0.23.1). The jail is the DEFAULT; the *user* (never the model) can widen it to additional
+# absolute roots — a permission model like every other restriction. Grants come from config ([project].read_roots,
+# and [project].vidya as a first-class grantable root so the agent can learn the latest Cyrius from vidya and
+# return to the project) and from the `/allow <abs-path>` / `/allow vidya` command. A granted root MUST be an
+# absolute path (leading '/', not just "/") — reads under it use absolute paths, so there is no relative-vs-cwd
+# ambiguity. The read check (_project_read_ok) then accepts either a jailed in-project relative path OR an
+# absolute path with no '..' component that sits under a granted root (prefix + '/'-boundary match). The model
+# can only ever read where the *user* pointed it; it cannot grant itself a root (/allow is a slash command, not
+# a tool). Same residual as the jail: a symlink inside a granted root that points elsewhere is followed.
 
 var PROJECT_READ_CAP = 65536;    # max file bytes returned to the model (bounded, like the shell cap)
 var PROJECT_LIST_CAP = 16384;    # max list_dir output bytes
 var _project_read_buf = 0;
 var _project_out_buf = 0;
 
-# _project_jail_ok: 1 if `path` is safe to read within the project — a RELATIVE path with no `..` component
-# and no leading `/` or `~`; else 0. PURE (the security boundary for read_file / list_dir).
-fn _project_jail_ok(path) {
-    if (path == 0) { return 0; }
-    var c0 = load8(path);
-    if (c0 == 0) { return 0; }            # empty
-    if (c0 == 47) { return 0; }           # absolute "/..."
-    if (c0 == 126) { return 0; }          # "~..." (home)
+var READ_ROOTS_MAX = 16;         # max user-granted read roots (0.23.1)
+var _read_roots = 0;             # alloc(READ_ROOTS_MAX*8): array of owned cstr ptrs (absolute, trailing-'/'-stripped)
+var _read_roots_n = 0;
+
+# _project_no_dotdot: 1 if `path` has no `..` path component (start, or after a '/', followed by '/' or end);
+# else 0. PURE. Reading past the NUL is safe — the byte after a NUL is 0, which ends the `..` test cleanly.
+fn _project_no_dotdot(path) {
     var i = 0;
     var atstart = 1;                      # at a path-component boundary (start, or just after '/')
     while (load8(path + i) != 0) {
@@ -44,6 +52,89 @@ fn _project_jail_ok(path) {
         i = i + 1;
     }
     return 1;
+}
+
+# _project_jail_ok: 1 if `path` is safe to read within the project — a RELATIVE path with no `..` component
+# and no leading `/` or `~`; else 0. PURE (the in-project half of the read boundary).
+fn _project_jail_ok(path) {
+    if (path == 0) { return 0; }
+    var c0 = load8(path);
+    if (c0 == 0) { return 0; }            # empty
+    if (c0 == 47) { return 0; }           # absolute "/..."
+    if (c0 == 126) { return 0; }          # "~..." (home)
+    return _project_no_dotdot(path);
+}
+
+# project_grant_root: grant read access to an absolute root `path` (from config or `/allow`). Returns 1 on
+# grant, 0 if rejected — a root MUST be absolute (leading '/') and more than just "/" (granting "/" would
+# defeat the jail entirely), and the table is bounded to READ_ROOTS_MAX. Trailing '/'-s are stripped; exact
+# duplicates are ignored (counted as already-granted -> 1). The stored copy is owned (bump-alloc'd).
+fn project_grant_root(path) {
+    if (path == 0) { return 0; }
+    if (load8(path) != 47) { return 0; }          # must be absolute
+    var len = strlen(path);
+    while ((len > 1) && (load8(path + len - 1) == 47)) { len = len - 1; }   # strip trailing '/'
+    if (len < 2) { return 0; }                    # reject "" and "/" (too broad)
+    if (_read_roots == 0) { _read_roots = alloc(READ_ROOTS_MAX * 8); }
+    var i = 0;                                     # dedup: same stripped prefix already granted?
+    while (i < _read_roots_n) {
+        var r = load64(_read_roots + i * 8);
+        if ((strlen(r) == len) && (_project_prefix_eq(r, path, len) == 1)) { return 1; }
+        i = i + 1;
+    }
+    if (_read_roots_n >= READ_ROOTS_MAX) { return 0; }
+    var buf = alloc(len + 1);
+    var k = 0;
+    while (k < len) { store8(buf + k, load8(path + k)); k = k + 1; }
+    store8(buf + len, 0);
+    store64(_read_roots + _read_roots_n * 8, buf);
+    _read_roots_n = _read_roots_n + 1;
+    return 1;
+}
+
+# _project_prefix_eq: 1 if the first `n` bytes of `a` and `b` are equal; else 0. PURE.
+fn _project_prefix_eq(a, b, n) {
+    var k = 0;
+    while (k < n) {
+        if (load8(a + k) != load8(b + k)) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# _project_under_root: 1 if absolute `path` sits under a granted root — path == root, or path begins with
+# root followed by a '/' boundary (so "/a/b" is under "/a" but "/ab" is not). PURE.
+fn _project_under_root(path) {
+    var i = 0;
+    while (i < _read_roots_n) {
+        var r = load64(_read_roots + i * 8);
+        var rl = strlen(r);
+        if (_project_prefix_eq(path, r, rl) == 1) {
+            var b = load8(path + rl);
+            if ((b == 0) || (b == 47)) { return 1; }     # exact match, or a '/'-boundary below the root
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _project_read_ok: the read boundary for read_file / list_dir. 1 if `path` is either a jailed in-project
+# relative path, OR an absolute path with no `..` component that sits under a user-granted root; else 0. PURE.
+fn _project_read_ok(path) {
+    if (path == 0) { return 0; }
+    if (load8(path) == 0) { return 0; }
+    if (_project_jail_ok(path) == 1) { return 1; }       # in-project relative (no /, ~, ..)
+    if (load8(path) != 47) { return 0; }                 # not absolute (e.g. "~...") -> never a granted root
+    if (_project_no_dotdot(path) == 0) { return 0; }     # no traversal, even under a granted root
+    return _project_under_root(path);
+}
+
+# project_read_roots_count / project_read_root_at: surface the granted roots (for /allow, /state). PURE.
+fn project_read_roots_count() { return _read_roots_n; }
+fn project_read_root_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _read_roots_n) { return 0; }
+    return load64(_read_roots + i * 8);
 }
 
 # _proj_apc: append NUL-terminated cstr `s` into _project_out_buf at off, bounded. Returns the new off.
@@ -66,9 +157,9 @@ fn read_file_tool(args_cstr) {
     var ps = bayan_json_v_str(pv);
     if (ps == 0) { return "(read_file: 'path' must be a string)"; }
     var path = str_cstr(ps);
-    if (_project_jail_ok(path) == 0) { return "(read_file: refused - path must be inside the project: no absolute paths, no '..')"; }
+    if (_project_read_ok(path) == 0) { return "(read_file: refused - path is outside the project and any user-granted read root; no '..' allowed)"; }
     if (is_dir(str_from(path)) == 1) { return "(read_file: that path is a directory - use list_dir)"; }
-    if (file_exists(path) == 0) { return "(read_file: no such file in the project)"; }
+    if (file_exists(path) == 0) { return "(read_file: no such file)"; }
     if (_project_read_buf == 0) { _project_read_buf = alloc(PROJECT_READ_CAP + 1); }
     var n = file_read_all(path, _project_read_buf, PROJECT_READ_CAP);
     if (n < 0) { return "(read_file: could not read the file)"; }
@@ -94,9 +185,9 @@ fn list_dir_tool(args_cstr) {
             }
         }
     }
-    if (_project_jail_ok(path) == 0) { return "(list_dir: refused - path must be inside the project: no absolute paths, no '..')"; }
+    if (_project_read_ok(path) == 0) { return "(list_dir: refused - path is outside the project and any user-granted read root; no '..' allowed)"; }
     var dirstr = str_from(path);
-    if (is_dir(dirstr) == 0) { return "(list_dir: no such directory in the project)"; }
+    if (is_dir(dirstr) == 0) { return "(list_dir: no such directory)"; }
     if (_project_out_buf == 0) { _project_out_buf = alloc(PROJECT_LIST_CAP); }
     var vv = dir_list(dirstr);
     var n = vec_len(vv);

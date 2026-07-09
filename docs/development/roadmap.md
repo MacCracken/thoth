@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.23.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.23.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -319,8 +319,9 @@ selection stays content-blind.
 > DONE** — M/A/D on tree rows from the probed sit status). Then **project awareness** was raised as a
 > priority and took the next line: `0.23.0` (**project read/explore tools, DONE** — model-invokable
 > `read_file`/`list_dir`, jailed to the launch cwd, default-on, so the agent finally sees the codebase it was
-> launched in; ADR-0015). `0.23.1` (user-granted read roots — widen to vidya / another repo) is next; role
-> modality + remaining polish moved to `0.24.x`.
+> launched in; ADR-0015) → `0.23.1` (**user-granted read roots, DONE** — the user widens the jail to vidya /
+> another repo via `[project].read_roots` / `[project].vidya` / the `/allow` command; the model still can't
+> escape). Role modality + remaining polish moved to `0.24.x`.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -549,7 +550,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
     interactive fuzzy picker over hoosh's model list, selecting through the `/model` seam.
     Reprioritized below project awareness (the user's call); folds into the `0.24.x` batch.
 
-### 0.23.x — project awareness (0.23.0 DONE — the agent sees the codebase)
+### 0.23.x — project awareness (0.23.0 + 0.23.1 DONE — the agent sees the project, the user widens its reach)
 
 > The gap (2026-07-08): the agentic loop's context is the prompt + persona + project-memory
 > FACTS + tool results, and its tools are daimon MCP + `memory_write` + the opt-in `shell`.
@@ -568,12 +569,16 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   bounded output. 3-lens security review — jail airtight, caught + fixed a tool-cache-latch
   regression. 1113 assertions; live-verified (the model autonomously read VERSION and answered).
   Residuals documented (symlink-in-project; Windows paths deferred).
-- **`0.23.1` — user-granted read roots (permission model).** The jail is the default, but the
-  user can GRANT additional readable roots — review another repo, or read **vidya** (to learn
-  latest Cyrius features and return to the project) — a permission model like every other
-  restriction (config allowlist and/or a `/allow <path>` grant; **vidya** a first-class
-  grantable root). Never silent: the active roots are surfaced; a read outside them is refused
-  honestly. (Could co-design with 0.23.0's jail; sliced for review.)
+- **`0.23.1` — user-granted read roots (permission model). DONE (2026-07-08; ADR-0015).** The jail
+  is the default; the user (never the model) GRANTS additional absolute roots — review another repo,
+  or read **vidya** to learn the latest Cyrius features and return to the project. `_project_read_ok`
+  allows a jailed in-project relative path OR a no-`..` absolute path under a granted root
+  (`_project_under_root` prefix-matches on a `/` boundary); `project_grant_root` requires absolute +
+  more than `/`, strips trailing slashes, dedups (READ_ROOTS_MAX=16). Grants: config
+  `[project].read_roots` + `[project].vidya`, and the **`/allow`** command (`/allow`, `/allow
+  <abs-path>`, `/allow vidya` — a slash command, so the human authorizes, not the model). `/state`
+  `reads` row surfaces the grants; out-of-scope reads refused honestly. 1135 assertions; 3-lens
+  adversarial review; live-verified end-to-end (granted vidya read; negative control refused).
 - Possible later slices: a `grep`/glob search tool; a lightweight project-map hint in the
   system prompt so the model knows to explore.
 

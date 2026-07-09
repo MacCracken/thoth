@@ -64,6 +64,28 @@ permission, like every other restriction.
   as a first-class root) and possible later tools (a `grep`/glob search, a project-map hint in the
   system prompt).
 
+## 0.23.1 update — user-granted read roots
+
+The jail stays the default; the **user** (never the model) can widen it to additional absolute roots — to
+review another repo, or to read the **vidya** Cyrius knowledge base and bring the latest language features
+back to the project. This is a permission model like every other restriction, and it preserves the core
+property: *the model can only read where the human pointed it.*
+
+- **The boundary widens** (`_project_read_ok`): a read is allowed if it is a jailed in-project relative path
+  **or** an absolute path with no `..` component that sits under a granted root. `_project_under_root`
+  prefix-matches on a `/` boundary (`/a/b` is under `/a`; `/ab` is not). A granted root must be absolute and
+  longer than `/` (granting `/` would defeat the jail); trailing slashes are stripped and duplicates ignored.
+- **Grants are the human's, not the model's.** Sources: config `[project].read_roots` (persistent) +
+  `[project].vidya`, and the `/allow` command (`/allow`, `/allow <abs-path>`, `/allow vidya`). `/allow` is a
+  slash command — the model cannot invoke it, exactly as it cannot invoke `/run`. So the widening is always a
+  human authorization; the model just gets a bigger (still bounded, still `..`-free) read surface.
+- **Honest, surfaced, degrades closed.** `/allow` and `/state` (a `reads` row) list the active roots; a read
+  outside the project and every granted root is refused with an honest string. The symlink-inside-a-root
+  residual carries over from the jail (a granted root the user trusts, same risk class as the project).
+- **Alternatives folded in here** (same reasoning as below): requiring absolute roots (no cwd/`..`
+  normalization ambiguity), rejecting `/` (would negate the jail), and keeping grants human-only (a
+  model-invokable "grant myself a root" tool would reopen the exfil vector the jail closes).
+
 ## Alternatives considered
 
 - **Opt-in like the `shell` tool** — rejected as the default: it leaves the agent blind out of the box,
