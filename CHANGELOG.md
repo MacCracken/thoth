@@ -2,6 +2,23 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.25.1] - 2026-07-09
+
+**Composer soft-wrap.** A long prompt now word-wraps at the screen edge and the input area grows to fit,
+instead of scrolling a single long line horizontally. 1230 assertions; live-verified (an 80-char line in a
+40-column terminal wrapped across 3 rows).
+
+### Changed
+- The composer is now **physical-row aware** (`src/tui.cyr`): a logical line of L bytes wraps across
+  `L/avail + 1` rows (`avail` = content width). New pure helpers `_comp_avail` / `_comp_total_rows` /
+  `_comp_cursor_prow` / `_comp_prow_to_offset`; the composer height, vertical scroll, draw, and cursor
+  parking all work in physical (wrapped) rows, and the feed band / rules are fed `_comp_total_rows()` so they
+  track the grown composer. Replaces the old one-row-per-logical-line + `_comp_row_hstart` horizontal scroll.
+- **`↑`/`↓` now move by visual (wrapped) row** within the composer, falling through to input-history recall
+  only at the true top/bottom physical edge (was per-logical-line).
+- Limit (documented, unchanged from before): wrapping is byte-based, so a multibyte glyph straddling a wrap
+  boundary may render as a replacement char — same class as the feed's glyph-width-1 limit.
+
 ## [0.25.0] - 2026-07-09
 
 **Role modality — the third persona axis.** A persona already switches archetype (`/persona`) and can take

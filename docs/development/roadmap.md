@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.25.0):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.25.1):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -329,7 +329,8 @@ selection stays content-blind.
 > (**`/reload`, DONE** — re-read `thoth.cyml` mid-session, honest about hot vs bind-once). The 0.24.x polish
 > arc complete, **`0.25.0` delivered role modality** (the third persona axis — `/role` derives the role from a
 > personality aspect, via avatara `2.8.0`'s new aspect API; it was wrongly deferred as "avatara-blocked" and
-> is now built end-to-end).
+> is now built end-to-end) → **`0.25.1`** (**composer soft-wrap** — a long prompt now word-wraps + grows the
+> input area instead of horizontal-scrolling; user-reported).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);

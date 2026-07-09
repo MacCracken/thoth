@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.25.1** — **composer soft-wrap**, 2026-07-09. The prompt input now word-wraps at the screen edge + grows
+the input area, instead of horizontal-scrolling one long line (user-reported). `src/tui.cyr` composer is now
+PHYSICAL-row aware (mirrors the 0.11.3 FEED soft-wrap): a logical line of L bytes wraps across `L/avail + 1`
+rows (`avail = cols - 6`; the +1 hosts the end cursor). NEW pure helpers `_comp_avail`/`_comp_total_rows`
+(height oracle, replaces `led_lines()` at every geometry call site: `tui_composer_height/top`,
+`tui_sep_bottom_row`, `tui_feed_bot` — so the feed band + rules track the grown composer)/`_comp_cursor_prow`/
+`_comp_prow_to_offset`. `tui_park_cursor` = `top + (cursor_prow - vscroll)`, col `6 + cursor_col%avail`;
+`tui_draw_composer` walks logical lines → their `avail`-wide byte segments, painting the vscroll window
+`[vf, vf+H)` (prompt on the first visible row, 5-col indent on the rest). `led_up`/`led_down` now move by
+VISUAL (wrapped) row (`_comp_prow_to_offset`), edge→history only at the true top/bottom physical row. Removed
+`_comp_row_hstart` (h-scroll gone). Limit (documented): byte-based wrap — a multibyte glyph straddling a wrap
+boundary may render as a replacement char (same class as the feed's glyph-width-1 limit; no regression from
+the old clamp). **Verified**: 1230 assertions (+14 soft-wrap: `_comp_avail`/`_comp_total_rows`/`_comp_cursor_prow`/
+`_comp_prow_to_offset` at a narrow width, visual up/down across wrapped rows + edges, a wrapped line + hard
+newline summing rows) + LIVE over a PTY (40-col terminal, an 80-char line wrapped to 3 rows). Pin **6.4.29**.
+
 **0.25.0** — **role modality: the third persona axis** (avatara 2.8.0 + thoth), 2026-07-09. The long-planned
 role axis, built end-to-end — NOT "avatara-blocked" (that earlier conclusion was WRONG; it was adjacent-easy
 work done to defer the hard ask). An archetype is a personality vector (15 traits + 14 emphases + soul/spirit +

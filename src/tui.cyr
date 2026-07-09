@@ -93,12 +93,13 @@ fn led_buf() { if (_composer == 0) { led_reset(); } return _composer; }
 fn led_len() { return _comp_len; }
 fn led_cur() { return _comp_cur; }
 
-# --- multi-line composer geometry (0.11.9) --------------------------------
-# The composer buffer may hold embedded '\n' bytes (Shift/Alt-Enter). These PURE
-# helpers split it into logical lines for the multi-row render + cursor parking. ONE
-# logical line == ONE physical composer row (no in-composer soft-wrap), so led_lines()
-# is the composer's height oracle. All are bounded by _comp_len / _comp_cur (both 0
-# before led_reset alloc's the buffer), so they are safe even when _composer == 0.
+# --- multi-line composer geometry (0.11.9; soft-wrap 0.25.1) ---------------
+# The composer buffer may hold embedded '\n' bytes (Shift/Alt-Enter). These PURE helpers split it into
+# LOGICAL lines. Since 0.25.1 a long logical line SOFT-WRAPS across several PHYSICAL rows instead of
+# horizontal-scrolling: a line of L bytes occupies `L/avail + 1` physical rows (avail = the content width;
+# the +1 hosts the end-of-line cursor / an exactly-full line). So the composer's height oracle is
+# _comp_total_rows() (PHYSICAL), not led_lines() (LOGICAL); led_* below stay the logical model. All are
+# bounded by _comp_len / _comp_cur (both 0 before led_reset alloc's the buffer), safe even when _composer == 0.
 
 # led_lines: number of logical lines = count of '\n' + 1 (>= 1, even when empty).
 fn led_lines() {
@@ -145,26 +146,71 @@ fn led_line_len(li) {
     while ((e < _comp_len) && (load8(_composer + e) != 10)) { e = e + 1; }
     return e - s;
 }
-# led_up / led_down: move the cursor to the same column on the adjacent logical line
-# (clamped to that line's length). Return 1 if it moved between lines, 0 at the top/
-# bottom edge — so the TUI loop falls through to input-history recall at the edges.
+# led_up / led_down: move the cursor up/down one VISUAL (physical, soft-wrapped) row, keeping the same visual
+# column where possible. Return 1 if it moved, 0 at the top/bottom PHYSICAL edge — so the TUI loop falls
+# through to input-history recall only at the true top/bottom of the wrapped composer (0.25.1; was per-logical-
+# line before soft-wrap).
 fn led_up() {
-    var cl = led_cursor_line();
-    if (cl == 0) { return 0; }                   # first line -> edge
-    var col = led_cursor_col();
-    var pl = led_line_len(cl - 1);
-    if (col > pl) { col = pl; }
-    _comp_cur = led_line_start(cl - 1) + col;
+    var pr = _comp_cursor_prow();
+    if (pr == 0) { return 0; }                            # top physical row -> edge (history recall)
+    _comp_cur = _comp_prow_to_offset(pr - 1, led_cursor_col() % _comp_avail());
     return 1;
 }
 fn led_down() {
-    var cl = led_cursor_line();
-    if (cl >= (led_lines() - 1)) { return 0; }   # last line -> edge
-    var col = led_cursor_col();
-    var nl = led_line_len(cl + 1);
-    if (col > nl) { col = nl; }
-    _comp_cur = led_line_start(cl + 1) + col;
+    var pr = _comp_cursor_prow();
+    if (pr >= (_comp_total_rows() - 1)) { return 0; }     # bottom physical row -> edge
+    _comp_cur = _comp_prow_to_offset(pr + 1, led_cursor_col() % _comp_avail());
     return 1;
+}
+
+# --- composer soft-wrap: the PHYSICAL-row model (0.25.1) -------------------
+# A logical line of L bytes wraps across _comp_line_rows = L/avail + 1 physical rows. avail = cols - 6 (cols
+# 1..5 are the "{(o> " prompt / continuation indent, plus one trailing safety column so a full row never
+# auto-wraps at the terminal edge). Wrapping is byte-based (matches the pre-0.25.1 byte cursor model and the
+# feed's glyph-width-1 limit) — a multibyte glyph straddling a wrap boundary may render as a replacement
+# char; acceptable, documented, no regression from the old horizontal-scroll clamp which severed the same way.
+fn _comp_avail() {
+    var a = _tui_cols - 6;
+    if (a < 1) { a = 1; }
+    return a;
+}
+# _comp_total_rows: the composer's height in PHYSICAL rows = sum of each logical line's wrapped-row count.
+fn _comp_total_rows() {
+    var a = _comp_avail();
+    var n = led_lines();
+    var total = 0;
+    var li = 0;
+    while (li < n) { total = total + ((led_line_len(li) / a) + 1); li = li + 1; }
+    return total;
+}
+# _comp_cursor_prow: the cursor's absolute physical row (0-based) within the whole composer.
+fn _comp_cursor_prow() {
+    var a = _comp_avail();
+    var cl = led_cursor_line();
+    var before = 0;
+    var j = 0;
+    while (j < cl) { before = before + ((led_line_len(j) / a) + 1); j = j + 1; }
+    return before + (led_cursor_col() / a);
+}
+# _comp_prow_to_offset: the buffer offset for absolute physical row `prow` at visual column `vcol` (clamped to
+# that row's logical-line length). Used by led_up/led_down for visual-row navigation. Past the end -> _comp_len.
+fn _comp_prow_to_offset(prow, vcol) {
+    var a = _comp_avail();
+    var n = led_lines();
+    var acc = 0;
+    var li = 0;
+    while (li < n) {
+        var h = (led_line_len(li) / a) + 1;
+        if ((acc + h) > prow) {
+            var col = (prow - acc) * a + vcol;
+            var ll = led_line_len(li);
+            if (col > ll) { col = ll; }
+            return led_line_start(li) + col;
+        }
+        acc = acc + h;
+        li = li + 1;
+    }
+    return _comp_len;
 }
 
 # _tui_copy_line: snapshot the composer into _tui_line (a stable cstr) so a submitted
@@ -1033,7 +1079,7 @@ fn _tui_pick_paint_row(id, sel, active, fwidth) {
 # their last frame (unchanged while picking); only the feed region and the hint row are the picker's.
 fn _tui_pick_paint() {
     var top = tui_feed_top(_tui_show_status);
-    var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
+    var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
     var fleft = tui_feed_left(_tui_cols, _tui_show_tree);
@@ -1171,61 +1217,59 @@ fn tui_draw_rule(row, cols) {
     return 0;
 }
 
-# _comp_row_hstart: horizontal-scroll start (in bytes) for composer logical line `li`.
-# The CURSOR's line scrolls to keep the cursor visible (a window ending at the cursor);
-# every other line anchors at column 0. Shared by draw + park so they cannot drift.
-fn _comp_row_hstart(li) {
-    if (li != led_cursor_line()) { return 0; }
-    var avail = _tui_cols - 6;
-    if (avail < 1) { avail = 1; }
-    var cc = led_cursor_col();
-    if (cc > avail) { return cc - avail; }
-    return 0;
-}
-
-# tui_park_cursor: move the cursor to the composer's edit position. Multi-line (0.11.9):
-# the row is the cursor's logical line within the visible vertical window; the column
-# mirrors tui_draw_composer's per-line horizontal-scroll window. Called after any paint
-# that left the cursor elsewhere (the feed, the spinner) so it returns to where you type.
+# tui_park_cursor: move the cursor to the composer's edit position. Soft-wrapped (0.25.1): the row is the
+# cursor's PHYSICAL row within the visible vertical window; the column is the cursor's offset within its wrap
+# segment. Called after any paint that left the cursor elsewhere (the feed, the spinner) so it returns to
+# where you type.
 fn tui_park_cursor() {
     if (_mpick_active == 1) { _tui_park_pick(); return 0; }       # 0.24.0: while picking, the cursor lives at the query caret
     if (_fsearch_active == 1) { _tui_park_search(); return 0; }   # 0.18.4: while searching, the cursor lives at the query caret (covers WINCH / /theme / /find full-repaints)
-    var lines = led_lines();
-    var H = tui_composer_height(_tui_rows, lines, _tui_show_status);
-    var top = tui_composer_top(_tui_rows, lines, _tui_show_status);
-    var cl = led_cursor_line();
-    var vf = _comp_vscroll_first(cl, lines, H);
-    var start = _comp_row_hstart(cl);
-    var col = 6 + (led_cursor_col() - start);
+    var total = _comp_total_rows();
+    var H = tui_composer_height(_tui_rows, total, _tui_show_status);
+    var top = tui_composer_top(_tui_rows, total, _tui_show_status);
+    var pr = _comp_cursor_prow();
+    var vf = _comp_vscroll_first(pr, total, H);
+    var col = 6 + (led_cursor_col() % _comp_avail());
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(top + (cl - vf), col);
+    tty_move(top + (pr - vf), col);
     return 0;
 }
 
-# tui_draw_composer: redraw the composer block (one physical row per logical line, over a
-# cursor-anchored vertical window) and park the cursor. The {(o> prompt is on the first
-# row; continuation rows align content under it. Each line clamps to the width with a
-# horizontal-scroll window so a long line never wraps onto the rule/hint rows.
+# tui_draw_composer: redraw the composer block over a cursor-anchored PHYSICAL-row window, SOFT-WRAPPING each
+# logical line across as many rows as its length needs (0.25.1). The {(o> prompt is on the first VISIBLE row;
+# every other row (wrap continuation or a later logical line) gets a 5-col indent so content stays aligned
+# under the prompt. Each row paints one `avail`-wide byte segment of its logical line, so a long line grows
+# the composer + word-wraps instead of horizontal-scrolling.
 fn tui_draw_composer() {
-    var lines = led_lines();
-    var H = tui_composer_height(_tui_rows, lines, _tui_show_status);
-    var top = tui_composer_top(_tui_rows, lines, _tui_show_status);
-    var vf = _comp_vscroll_first(led_cursor_line(), lines, H);
-    var avail = _tui_cols - 6;
-    if (avail < 1) { avail = 1; }
-    var p = 0;
-    while (p < H) {
-        var li = vf + p;
-        tty_move(top + p, 1);
-        tty_clear_to_eol();
-        if (p == 0) { ui_emit(ROLE_ACCENT, "{(o> "); } else { emit("     "); }   # prompt / continuation indent
-        if (li < lines) {
-            var start = _comp_row_hstart(li);
-            var shown = led_line_len(li) - start;
-            if (shown > avail) { shown = avail; }
-            if (shown > 0) { emit_n(led_buf() + led_line_start(li) + start, shown); }
+    var a = _comp_avail();
+    var total = _comp_total_rows();
+    var H = tui_composer_height(_tui_rows, total, _tui_show_status);
+    var top = tui_composer_top(_tui_rows, total, _tui_show_status);
+    var vf = _comp_vscroll_first(_comp_cursor_prow(), total, H);
+    var n = led_lines();
+    var pr = 0;                  # absolute physical row being walked
+    var p = 0;                   # drawn (visible) row index, 0..H
+    var li = 0;
+    while ((li < n) && (p < H)) {
+        var ls = led_line_start(li);
+        var ll = led_line_len(li);
+        var segs = (ll / a) + 1;
+        var sg = 0;
+        while ((sg < segs) && (p < H)) {
+            if (pr >= vf) {
+                tty_move(top + p, 1);
+                tty_clear_to_eol();
+                if (p == 0) { ui_emit(ROLE_ACCENT, "{(o> "); } else { emit("     "); }   # prompt / continuation indent
+                var segstart = sg * a;
+                var shown = ll - segstart;
+                if (shown > a) { shown = a; }
+                if (shown > 0) { emit_n(led_buf() + ls + segstart, shown); }
+                p = p + 1;
+            }
+            pr = pr + 1;
+            sg = sg + 1;
         }
-        p = p + 1;
+        li = li + 1;
     }
     tui_park_cursor();
     return 0;
@@ -1334,7 +1378,7 @@ var PAINT_CAP = 24576;       # expanded worst case of a marker-packed slot + car
 fn feed_repaint() {
     if (_paint_buf == 0) { _paint_buf = alloc(PAINT_CAP); }
     var top = tui_feed_top(_tui_show_status);
-    var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
+    var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
     # 0.9.3: when the tree pane is shown, the feed lives in the RIGHT column
@@ -1411,7 +1455,7 @@ fn feed_repaint() {
 # rows, not logical lines — a wide line spans several); a new turn resets it to 0
 # (tui_run_line) so fresh output is always visible.
 fn _tui_feed_rows() {
-    var r = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status) - tui_feed_top(_tui_show_status) + 1;
+    var r = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status) - tui_feed_top(_tui_show_status) + 1;
     if (r < 1) { r = 1; }
     return r;
 }
@@ -1592,7 +1636,7 @@ fn tui_draw_tree() {
     if (_tui_show_tree == 0) { return 0; }
     var tw = tui_tree_w(_tui_cols, 1);
     var top = tui_feed_top(_tui_show_status);
-    var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
+    var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
     var total = ftree_count();
@@ -1660,7 +1704,7 @@ fn _tui_tree_key(key) {
 # change (a newline grew/shrank the composer, resizing the feed band). The composer is
 # drawn LAST so the cursor parks at the edit position.
 fn tui_repaint_body() {
-    var lines = led_lines();
+    var lines = _comp_total_rows();    # 0.25.1: composer geometry is PHYSICAL (soft-wrapped) rows, not logical lines
     # 0.11.3: a width OR composer-height change re-flows the document / resizes the band,
     # so the stored PHYSICAL-row scroll offset can exceed the new height — clamp it before
     # painting (the painter also floors start at 0, but clamping keeps feed_scroll() honest
@@ -1694,7 +1738,7 @@ fn tui_relayout() {
 # tui_cur_composer_height: the composer's current height at the live geometry — the
 # before/after probe for the redraw gate (wraps the pure tui_composer_height over the
 # _tui_rows/_tui_show_status globals, so callers above those declarations can use it).
-fn tui_cur_composer_height() { return tui_composer_height(_tui_rows, led_lines(), _tui_show_status); }
+fn tui_cur_composer_height() { return tui_composer_height(_tui_rows, _comp_total_rows(), _tui_show_status); }
 
 # tui_after_edit: redraw after a composer edit, given the composer height BEFORE the edit.
 # If a newline was inserted/removed (height changed), the feed band resized -> reflow the
@@ -1931,7 +1975,7 @@ fn _tui_mouse_click() {
     if (_tui_show_tree == 1) {
         var tw = tui_tree_w(_tui_cols, 1);
         var top = tui_feed_top(_tui_show_status);
-        var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
+        var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
         if ((col <= tw) && (r >= top) && (r <= bot)) {           # a click in the tree pane
             var total = ftree_count();
             var rows = bot - top + 1;
@@ -2111,11 +2155,11 @@ fn tui_loop() {
                 # Multi-line lands as text; it NEVER auto-submits (submission stays a deliberate
                 # Enter). A composer-focus action; a paste while the tree is focused is caught by
                 # the FOCUS_TREE branch above and no-ops (the body was already consumed -> no desync).
-                var before_hp = tui_composer_height(_tui_rows, led_lines(), _tui_show_status);
+                var before_hp = tui_composer_height(_tui_rows, _comp_total_rows(), _tui_show_status);
                 led_paste(_paste_buf, _paste_len);
                 tui_after_edit(before_hp);   # reflow if the paste grew the composer; else a cheap redraw
             } else {
-                var before_h = tui_composer_height(_tui_rows, led_lines(), _tui_show_status);
+                var before_h = tui_composer_height(_tui_rows, _comp_total_rows(), _tui_show_status);
                 var act = led_feed(key, _tui_key_ch);
                 if (act == ACT_SUBMIT) {
                     var stored = inhist_push(led_buf(), led_len());   # record (ignoredups, skip-empty)
