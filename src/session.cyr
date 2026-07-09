@@ -214,6 +214,28 @@ fn persona_switch(name) {
     return 1;
 }
 
+# persona_shadow (0.22.2): make the SHADOW of `base` (or the active persona when base==0) the active
+# persona — avatara's shadow() inverts the traits and emits its own shadow prose (name/desc/soul/spirit),
+# so it is a full, usable persona. Pure consumption. Returns 1, or 0 if shadow() rejects a null base.
+fn persona_shadow(base) {
+    if (base == 0) { base = persona_profile(); }
+    var sh = shadow(base);
+    if (sh == 0) { return 0; }
+    persona_set(sh);
+    return 1;
+}
+
+# persona_blend (0.22.2): make a weighted multi-archetype BLEND the active persona. `wv` is a vec of
+# avatara weighted_new(profile, weight) entries (built + validated by the caller). avatara's compose()
+# blends the traits and carries the DOMINANT (highest-weight) archetype's name/soul/spirit prose + a
+# "A + B" composite name, so the result is a usable persona. Returns 1, or 0 if compose rejects the inputs.
+fn persona_blend(wv) {
+    var r = compose(wv);
+    if (is_err_result(r) == 1) { return 0; }
+    persona_set(result_unwrap(r));
+    return 1;
+}
+
 # Identity sourced from the avatara archetype.
 fn persona_name() { return prof_name(persona_profile()); }
 fn persona_tradition() { return prof_tradition(persona_profile()); }

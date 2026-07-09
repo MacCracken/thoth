@@ -2,6 +2,33 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.2] - 2026-07-08
+
+**Persona blends + shadow.** `/persona blend <a> <b> …` composes a weighted multi-archetype persona and
+`/persona shadow` wears the inverted aspect — both avatara-native verbs, still pure consumption. Completes
+the `0.22.x` active-persona core. 1085 assertions (+7). A 3-lens adversarial review returned clean.
+
+### Added
+- **`/persona shadow [name]`** (`src/session.cyr` `persona_shadow`, `src/commands.cyr` `_cmd_persona_shadow`):
+  makes the SHADOW of the active persona (or a named archetype) active — avatara's `shadow()` inverts the
+  traits and emits its own name/desc/soul/spirit ("Shadow of X" / "Shadow aspect …"), so it is a usable
+  persona. Effective next turn.
+- **`/persona blend <name>[:weight] <name>[:weight] …`** (`persona_blend`, `_cmd_persona_blend`): a weighted
+  multi-archetype blend via avatara's `compose()`. Weights are optional integers (default 1, clamped 1..99;
+  built as f64 by repeated add since there is no int→f64 builtin); the DOMINANT (highest-weight, first on
+  ties) archetype leads the voice, and the result carries a `"A + B"` composite name + merged tradition.
+  Needs ≥ 2 archetypes; any unknown name aborts with an honest refusal.
+- Both are pure consumption (composition + shadow are avatara verbs; thoth authors NO persona prose — a
+  blend uses the dominant's prose, a shadow uses avatara's shadow text — it only parses, builds the weighted
+  vec, and surfaces the result). `/help` + `/persona` refusal updated.
+
+### Notes
+- Live-verified in the real binary: `/persona shadow` → "Shadow of Thoth (Shadow aspect …)"; `/persona blend
+  Athena:2 Odin` → "Athena + Odin (Composite archetype)", tradition "Greek + Norse", and `/dry` shows the
+  request's system prompt in Athena's voice (the dominant); unknown name and single-archetype cases refused.
+- The vendored avatara `compose` (2.7.1) already emits the dominant's prose + composite name, so no dep bump
+  was needed. Next in the line: `0.22.3` role modality (long-term).
+
 ## [0.22.1] - 2026-07-08
 
 **`/personas` discovery.** Browse the avatara archetypes you can switch to with `/persona`. Discovery +

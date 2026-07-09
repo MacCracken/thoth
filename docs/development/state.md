@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.22.2** — **persona blends + shadow**, 2026-07-08. Completes the `0.22.x` active-persona core with two
+avatara-native synthesized-persona verbs, still pure consumption. `/persona shadow [name]`
+(`persona_shadow`, `src/session.cyr`; `_cmd_persona_shadow`, `src/commands.cyr`): avatara's `shadow()`
+inverts the traits + emits its own name/desc/soul/spirit ("Shadow of X" / "Shadow aspect …") → a usable
+persona, `persona_set` next turn. `/persona blend <name>[:weight] …` (`persona_blend`; `_cmd_persona_blend`):
+a weighted blend via avatara `compose()` — the parser copies each space-delimited token into a reused
+256-byte scratch, splits on `:` into name + optional integer weight (`atoi`, clamped 1..99, made f64 by
+repeated `f64_add` since there is no int→f64 builtin), `find_and_validate`s each (unknown aborts with an
+honest refusal), `weighted_new`s into a vec, needs ≥2, `compose` (Result). compose sets soul/spirit/name from
+the DOMINANT (highest-weight, first on ties) component + a `"A + B"` composite name + merged tradition, so a
+blend is a usable persona whose voice is the dominant's — surfaced honestly ("the dominant leads the voice").
+**Bright line held**: composition + shadow are avatara verbs; thoth authors NO persona prose (blend = the
+dominant's, shadow = avatara's shadow text), only parses + builds the weighted vec + surfaces. `persona_role`
+name-conditional still applies (blend → "Composite archetype", shadow → "Shadow aspect …"). No dep bump
+needed — the vendored avatara `compose` (2.7.1, byte-identical to the 2.7.2 dist) already emits the prose
+(an earlier grep miss suggested otherwise; verified in-file). **Verified**: 1085 assertions (+7,
+`test_persona_switch` — `persona_shadow(0)`: "Shadow of" name + soul present + role≠Librarian;
+`persona_blend` Athena:2+Odin: soul present + composite name leads with Athena) + LIVE in the real binary
+(`/persona shadow` → Shadow of Thoth; `/persona blend Athena:2 Odin` → "Athena + Odin", tradition "Greek +
+Norse", `/dry` shows Athena's voice; unknown name + single-archetype → honest refusals). A 3-lens adversarial
+review returned CLEAN (blend parser bounds, shadow/blend semantics + bright line, dispatch/floor — all clean).
+Pin **6.4.29**. NEXT: `0.22.3` role modality (long-term; aspect-registry is an avatara feature to request),
+or a polish-backlog sweep. See CHANGELOG/roadmap.
+
 **0.22.1** — **`/personas` discovery**, 2026-07-08. The browse/display companion to 0.22.0's `/persona`
 switch — DISCOVERY + display only, no new personality logic, READ-ONLY. `cmd_personas` (`src/commands.cyr`):
 no arg prints the ACTIVE persona card (name · tradition · desc + a word-bounded soul excerpt via new

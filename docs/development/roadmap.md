@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.22.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.22.2):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -312,7 +312,8 @@ selection stays content-blind.
 > The `0.22.x` active-persona line then opened with `0.22.0` (**mid-session `/persona` switch, DONE** — the
 > signature move's twin, swapping the active avatara archetype mid-session like `/model` swaps the model;
 > bundled the Cyrius 6.4.29 refresh) → `0.22.1` (**`/personas` discovery, DONE** — browse the traditions +
-> archetypes and the active card, read-only over avatara).
+> archetypes and the active card, read-only over avatara) → `0.22.2` (**blends + shadow, DONE** — `/persona
+> blend` weighted-composes archetypes and `/persona shadow` wears the inverted aspect, avatara-native verbs).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -468,7 +469,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 
-### 0.22.x — the active persona (0.22.0–0.22.1 DONE)
+### 0.22.x — the active persona (0.22.0–0.22.2 DONE)
 
 > The signature move's twin: thoth switches the backing MODEL mid-session (hoosh);
 > this line switches the ACTIVE PERSONALITY mid-session (avatara). Pure consumption —
@@ -513,11 +514,14 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   desc + a word-bounded soul excerpt via `_persona_excerpt`). Discovery + display only —
   read-only, no new personality logic; the `/persona` refusal now hints `/personas`. 1078
   assertions (+2); 3-lens review clean (2 nits refuted); live-verified.
-- **`0.22.2` — blends + shadow (stretch).** Weighted multi-archetype blends via
-  avatara's `compose(weighted)` and the `shadow(p)` derivation — `/persona blend …` /
-  `/persona shadow` — avatara-native verbs, still pure consumption. Earns its own
-  design pass (a composed profile's prompt budget + honest naming/surfacing of a
-  blend need care).
+- **`0.22.2` — blends + shadow. DONE (2026-07-08).** `/persona blend <name>[:weight] …`
+  (weighted multi-archetype blend via avatara's `compose`; optional integer weights, the
+  dominant leads the voice, `"A + B"` composite name + merged tradition) and `/persona shadow
+  [name]` (avatara's `shadow()` — inverted traits + its own shadow prose). Avatara-native verbs,
+  pure consumption — thoth authors no persona prose (blend = the dominant's, shadow = avatara's).
+  The composed profile is usable (compose carries the dominant's soul/spirit + name), so no
+  prompt-budget issue and no dep bump. 1085 assertions (+7); 3-lens review clean; live-verified
+  (`/dry` shows a blend in the dominant's voice).
 - **`0.22.3` — role modality (long-term).** The second axis: an archetype is
   multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator),
   so long-term the user can switch WHICH ASPECT of the *active* archetype is leaned

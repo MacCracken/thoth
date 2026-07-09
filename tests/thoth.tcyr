@@ -268,6 +268,24 @@ fn test_persona_switch() {
     assert_eq(_persona_excerpt("short one"), 9, "excerpt emits a short string whole (returns its length)");
     out_mode_set(OUT_FD1);
 
+    # 0.22.2 shadow: shadow of the active persona -> a usable persona (inverted prose from avatara)
+    persona_set(egyptian_thoth());
+    assert_eq(persona_shadow(0), 1, "shadow of the active persona succeeds");
+    assert(cstr_starts_with(persona_name(), "Shadow of ") == 1, "shadow name is 'Shadow of <base>'");
+    assert(persona_soul() != 0, "shadow persona has soul prose (usable)");
+    assert(streq(persona_role(), "the Librarian") == 0, "shadow role is not the Librarian");
+
+    # 0.22.2 blend: weighted compose (Athena:2 + Odin) -> composite persona, dominant leads the voice
+    persona_set(egyptian_thoth());
+    var wv = vec_new();
+    var ra = find_and_validate("Athena");
+    var ro = find_and_validate("Odin");
+    vec_push(wv, weighted_new(result_unwrap(ra), 2.0));
+    vec_push(wv, weighted_new(result_unwrap(ro), 1.0));
+    assert_eq(persona_blend(wv), 1, "weighted blend (Athena:2 + Odin) succeeds");
+    assert(persona_soul() != 0, "blend persona has soul prose (from the dominant, usable)");
+    assert(cstr_starts_with(persona_name(), "Athena") == 1, "composite name leads with the dominant (Athena)");
+
     persona_set(egyptian_thoth());                          # restore default for downstream tests
     assert(streq(persona_name(), "Thoth") == 1, "restored to the default Thoth");
     return 0;
