@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.23.1):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.24.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -321,7 +321,9 @@ selection stays content-blind.
 > `read_file`/`list_dir`, jailed to the launch cwd, default-on, so the agent finally sees the codebase it was
 > launched in; ADR-0015) → `0.23.1` (**user-granted read roots, DONE** — the user widens the jail to vidya /
 > another repo via `[project].read_roots` / `[project].vidya` / the `/allow` command; the model still can't
-> escape). Role modality + remaining polish moved to `0.24.x`.
+> escape). The `0.24.x` arc then opened with `0.24.0` (**model-picker palette, DONE** — an interactive Ctrl-P
+> TUI modal over hoosh's catalog, switching through the existing `/model` seam); **role modality is deferred**
+> within 0.24.x (avatara-blocked — a per-archetype aspect registry is avatara's to provide, not thoth code).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -582,22 +584,25 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - Possible later slices: a `grep`/glob search tool; a lightweight project-map hint in the
   system prompt so the model knows to explore.
 
-### 0.24.x — role modality + remaining polish (PLANNED)
+### 0.24.x — model picker + remaining polish (0.24.0 DONE)
 
-- **`0.24.0` — role modality (long-term).** The second axis: an archetype is
-  multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator),
-  so the user can switch WHICH ASPECT of the *active* archetype is leaned into —
-  distinct from switching archetypes. Honest gating: aspect modeling is avatara's
-  domain — its native modality verbs today are `shadow(p)` (the shadow aspect) and
-  `compose()` (weighted emphasis); a first-class per-archetype role/aspect registry
-  is an **avatara feature to request** when this slice becomes real. thoth never
-  hand-authors aspect tables (the same bright line as 0.22.0's role sourcing).
-  Likely opens with a design pass + an upstream avatara request rather than code.
+- **`0.24.0` — model-picker palette. DONE (2026-07-09).** An interactive **Ctrl-P** TUI modal over hoosh's
+  model catalog: type to case-insensitive-substring filter, `↑/↓` to move, `Enter` to switch, `Esc`/`⌃C` to
+  cancel. NEW `src/mpick.cyr` (pure state/filter/nav) + `hoosh_catalog_fetch` (GET `/v1/models/catalog`,
+  404-fallback to `/v1/models`) + the modal wiring in `src/tui.cyr` (modeled on the Ctrl-F feed-search modal).
+  Switches through the EXISTING `/model` seam (`session_set_model_copy` + title + audit) — no new machinery.
+  TUI-only → line-mode/one-shot floor byte-identical. Degrades honestly (hoosh absent/unreachable/empty → a
+  feed note, no modal). 1152 assertions; live-verified over a PTY. Took the `0.24.0` slot from role modality.
+- **Role modality (long-term) — DEFERRED (avatara-blocked).** The second axis: an archetype is
+  multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator), so the user could switch
+  WHICH ASPECT of the *active* archetype is leaned into — distinct from switching archetypes. Honest gating:
+  aspect modeling is avatara's domain — its native modality verbs today are `shadow(p)` and `compose()`
+  (weighted emphasis); thoth exposes only `persona_role()` (one role of the active persona), no per-archetype
+  aspect registry. A first-class role/aspect registry is an **avatara feature to request**; thoth never
+  hand-authors aspect tables (the same bright line as 0.22.0's role sourcing). Re-confirmed blocked at 0.24.0
+  (only `persona_role()` present). Opens with a design pass + an upstream avatara request, not thoth code.
 
 The remaining polish-backlog items ride this arc (each its own slice, normal discipline):
-
-- **Model-picker palette** — the deferred `0.22.5`: an interactive fuzzy picker over hoosh's
-  model list, selecting through the existing `/model` switch seam.
 - **Conversation resume** — opt-in `[session].file` persisting conversation history
   across restarts (distinct from `[history].file` keystrokes and the memory seam's
   durable facts). The largest item — likely earns its own line (persistence + a

@@ -151,7 +151,7 @@ fn cmd_help() {
     _help_line("  /git [path]", "        working repo: branch + changed files, or a file's diff (via sit)");
     _help_line("  /persona [name]", "    show/switch the archetype; /persona shadow | blend <a> <b> (avatara)");
     _help_line("  /personas [trad]", "   list archetype traditions, or browse one; show the active card");
-    _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh)");
+    _help_line("  /model [id]", "        show model, or attempt a mid-session switch (hoosh); Ctrl-P picks in the TUI");
     _help_line("  /models [provider]", " list providers; with one, its switchable models");
     _help_line("  /read <file>", "       print a file (safe, read-only built-in)");
     _help_line("  /write <f> <text>", "  write text to a file (t-ron-gated)");

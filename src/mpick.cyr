@@ -1,0 +1,189 @@
+# thoth — model-picker palette (0.24.0): the pure state + filter + navigation behind the interactive Ctrl-P
+# model picker, an ergonomic front-end to the EXISTING /model mid-session switch (session_set_model_copy).
+# The catalog FETCH is hoosh's domain (hoosh_catalog_fetch); the modal WIRING — key routing, render, the
+# switch — lives in src/tui.cyr. Everything here is pure + unit-tested (except mpick_load, which calls the
+# hoosh fetch). TUI-ONLY by construction: the line-mode REPL never decodes Ctrl-P and one-shot never runs the
+# loop, so the non-TUI floor is byte-identical. Modeled on the feed-search modal (fsearch.cyr + Ctrl-F).
+
+var MPICK_MAX = 256;          # max model ids held in the picker
+var MPICK_STORE = 16384;      # packed NUL-terminated id bytes
+var MPICK_QCAP = 128;         # filter-query byte cap
+
+var MPICK_OK = 0;             # mpick_load outcomes (mirror hoosh_catalog_last_err + an empty case)
+var MPICK_ERR_TRANSPORT = 1;
+var MPICK_ERR_HTTP = 2;
+var MPICK_ERR_EMPTY = 3;
+
+var _mp_ids = 0;              # alloc(MPICK_MAX*8): cstr ptrs into _mp_store, in catalog order
+var _mp_n = 0;               # total ids loaded
+var _mp_store = 0;           # packed NUL-terminated id bytes
+var _mp_store_off = 0;
+var _mp_filt = 0;            # alloc(MPICK_MAX*8): i64 indices into _mp_ids — the current filtered view
+var _mp_fn = 0;              # filtered count
+var _mp_cur = 0;             # selection index into the FILTERED view, [0, _mp_fn)
+var _mp_first = 0;           # first visible filtered index (the render's scroll window origin)
+var _mp_query = 0;           # alloc(MPICK_QCAP): filter-query bytes (length is _mp_qlen, not NUL-terminated)
+var _mp_qlen = 0;
+var _mp_err = 0;             # last mpick_load outcome (MPICK_*)
+
+# mpick_init: one-time allocation of the picker's buffers. Idempotent.
+fn mpick_init() {
+    if (_mp_ids == 0) { _mp_ids = alloc(MPICK_MAX * 8); }
+    if (_mp_store == 0) { _mp_store = alloc(MPICK_STORE); }
+    if (_mp_filt == 0) { _mp_filt = alloc(MPICK_MAX * 8); }
+    if (_mp_query == 0) { _mp_query = alloc(MPICK_QCAP); }
+    return 0;
+}
+
+# _mp_add: copy NUL-terminated id `s` into _mp_store and record its ptr in _mp_ids. Bounded by MPICK_MAX
+# (slots) and MPICK_STORE (bytes). Returns 1 if added, 0 if rejected (empty / did not fit). The copy is
+# owned + stable. An EMPTY id is refused here — the single choke point — so a malformed catalog entry
+# ({"id":""}, a non-null zero-length Str from bayan) can never become a blank row that switches to an empty
+# model (session_set_model_copy("") — a silent, dishonest switch). Every caller (mpick_load) is thus covered.
+fn _mp_add(s) {
+    if (_mp_n >= MPICK_MAX) { return 0; }
+    var len = strlen(s);
+    if (len == 0) { return 0; }                   # refuse an empty id (defensive: malformed catalog entry)
+    if ((_mp_store_off + len + 1) > MPICK_STORE) { return 0; }
+    var dst = _mp_store + _mp_store_off;
+    var k = 0;
+    while (k < len) { store8(dst + k, load8(s + k)); k = k + 1; }
+    store8(dst + len, 0);
+    store64(_mp_ids + _mp_n * 8, dst);
+    _mp_store_off = _mp_store_off + len + 1;
+    _mp_n = _mp_n + 1;
+    return 1;
+}
+
+# mpick_load: fetch hoosh's model catalog and copy the ids into storage; rebuild the (unfiltered) view.
+# Returns MPICK_OK when >= 1 model loaded, else an MPICK_ERR_* kind (transport / http / empty) for honest
+# messaging. Resets all prior picker state first. I/O (hoosh_catalog_fetch); no printing.
+fn mpick_load() {
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_first = 0; _mp_qlen = 0;
+    var data = hoosh_catalog_fetch();
+    if (data == 0) {
+        if (hoosh_catalog_last_err() == HOOSH_CAT_TRANSPORT) { _mp_err = MPICK_ERR_TRANSPORT; }
+        else { _mp_err = MPICK_ERR_HTTP; }
+        return _mp_err;
+    }
+    var n = bayan_json_v_arr_len(data);
+    var i = 0;
+    while (i < n) {
+        var m = bayan_json_v_arr_get(data, i);
+        var id = bayan_json_v_obj_get(m, "id");
+        if (id != 0) {
+            var ids = bayan_json_v_str(id);
+            if (ids != 0) { _mp_add(str_cstr(ids)); }
+        }
+        i = i + 1;
+    }
+    if (_mp_n == 0) { _mp_err = MPICK_ERR_EMPTY; return _mp_err; }
+    _mp_err = MPICK_OK;
+    mpick_refilter();
+    return MPICK_OK;
+}
+
+# _mp_lc: ASCII-lowercase a byte (A-Z -> a-z). PURE.
+fn _mp_lc(b) {
+    if ((b >= 65) && (b <= 90)) { return b + 32; }
+    return b;
+}
+
+# _mp_match: 1 if model id `s` matches the current query as a case-insensitive SUBSTRING; an empty query
+# matches everything. PURE.
+fn _mp_match(s) {
+    if (_mp_qlen == 0) { return 1; }
+    var slen = strlen(s);
+    if (_mp_qlen > slen) { return 0; }
+    var last = slen - _mp_qlen;
+    var i = 0;
+    while (i <= last) {
+        var j = 0;
+        var ok = 1;
+        while ((j < _mp_qlen) && (ok == 1)) {
+            if (_mp_lc(load8(s + i + j)) != _mp_lc(load8(_mp_query + j))) { ok = 0; }
+            j = j + 1;
+        }
+        if (ok == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# mpick_refilter: rebuild the filtered view (_mp_filt / _mp_fn) from the query, then clamp the selection +
+# scroll so they stay valid. PURE (over the loaded ids + query).
+fn mpick_refilter() {
+    _mp_fn = 0;
+    var i = 0;
+    while (i < _mp_n) {
+        if (_mp_match(load64(_mp_ids + i * 8)) == 1) {
+            store64(_mp_filt + _mp_fn * 8, i);
+            _mp_fn = _mp_fn + 1;
+        }
+        i = i + 1;
+    }
+    if (_mp_cur >= _mp_fn) { _mp_cur = _mp_fn - 1; }
+    if (_mp_cur < 0) { _mp_cur = 0; }
+    if (_mp_first > _mp_cur) { _mp_first = _mp_cur; }
+    return 0;
+}
+
+# mpick_query_push / mpick_query_pop: edit the filter query. Both reset the selection to the top match and
+# refilter, so the highlight tracks the narrowing list. PURE.
+fn mpick_query_push(b) {
+    if (_mp_qlen >= MPICK_QCAP) { return 0; }
+    store8(_mp_query + _mp_qlen, b);
+    _mp_qlen = _mp_qlen + 1;
+    _mp_cur = 0; _mp_first = 0;
+    mpick_refilter();
+    return 0;
+}
+fn mpick_query_pop() {
+    if (_mp_qlen == 0) { return 0; }
+    _mp_qlen = _mp_qlen - 1;
+    _mp_cur = 0; _mp_first = 0;
+    mpick_refilter();
+    return 0;
+}
+
+# mpick_move: move the selection by `delta` within the filtered view, clamped to [0, _mp_fn). PURE.
+fn mpick_move(delta) {
+    if (_mp_fn == 0) { return 0; }
+    _mp_cur = _mp_cur + delta;
+    if (_mp_cur < 0) { _mp_cur = 0; }
+    if (_mp_cur >= _mp_fn) { _mp_cur = _mp_fn - 1; }
+    return 0;
+}
+
+# mpick_select_id: if NUL-terminated `want` is in the filtered view, select it (used to pre-highlight the
+# active model when the picker opens). Exact match. PURE. No-op if not found or `want` is 0.
+fn mpick_select_id(want) {
+    if (want == 0) { return 0; }
+    var fi = 0;
+    while (fi < _mp_fn) {
+        if (streq(mpick_id_at(fi), want) == 1) { _mp_cur = fi; return 0; }
+        fi = fi + 1;
+    }
+    return 0;
+}
+
+# --- accessors (for the TUI render) — all PURE -----------------------------
+fn mpick_total() { return _mp_n; }        # total loaded (unfiltered)
+fn mpick_count() { return _mp_fn; }       # filtered count
+fn mpick_cur() { return _mp_cur; }        # selection index in the filtered view
+fn mpick_err() { return _mp_err; }
+fn mpick_first() { return _mp_first; }
+fn mpick_set_first(v) { _mp_first = v; return 0; }
+fn mpick_qlen() { return _mp_qlen; }
+fn mpick_query_ptr() { if (_mp_query == 0) { return ""; } return _mp_query; }
+
+# mpick_id_at: the id cstr at FILTERED index fi, or 0 if out of range.
+fn mpick_id_at(fi) {
+    if (fi < 0) { return 0; }
+    if (fi >= _mp_fn) { return 0; }
+    return load64(_mp_ids + load64(_mp_filt + fi * 8) * 8);
+}
+
+# mpick_selected_id: the currently selected model id cstr, or 0 when the filtered view is empty.
+fn mpick_selected_id() { return mpick_id_at(_mp_cur); }

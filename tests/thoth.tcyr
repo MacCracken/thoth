@@ -29,6 +29,7 @@ include "src/session.cyr"
 include "src/roundlog.cyr"
 include "src/exec.cyr"
 include "src/hoosh.cyr"
+include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0)
 include "src/memory.cyr"
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014)
 include "src/daimon.cyr"
@@ -3315,6 +3316,70 @@ fn test_project() {
     return 0;
 }
 
+# _mp_push_str: helper — feed each byte of NUL-terminated `s` through mpick_query_push (mirrors typing).
+fn _mp_push_str(s) {
+    var i = 0;
+    while (load8(s + i) != 0) { mpick_query_push(load8(s + i)); i = i + 1; }
+    return 0;
+}
+
+fn test_mpick() {
+    test_group("model picker (mpick.cyr, 0.24.0)");
+    mpick_init();
+    # populate directly (mpick_load does network I/O; the pure state is what we unit-test)
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0;
+    _mp_add("claude-opus-4-8");
+    _mp_add("claude-sonnet-5");
+    _mp_add("qwen3-coder:30b");
+    _mp_add("claude-haiku-4-5");
+    assert_eq(mpick_total(), 4, "loaded 4 model ids");
+    # a malformed catalog entry {"id":""} yields a non-null zero-length id; _mp_add must refuse it (else a
+    # blank row would switch to an empty model — review 0.24.0). The count must not grow.
+    assert_eq(_mp_add(""), 0, "_mp_add refuses an empty id");
+    assert_eq(mpick_total(), 4, "an empty id did not add a row");
+    mpick_refilter();
+    assert_eq(mpick_count(), 4, "empty query matches all");
+
+    # filter "opus" -> 1 match, selected
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("opus");
+    assert_eq(mpick_count(), 1, "'opus' filters to one model");
+    assert(streq(mpick_selected_id(), "claude-opus-4-8") == 1, "the opus model is selected");
+
+    # case-insensitive substring: "CLAUDE" -> 3 claude models
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("CLAUDE");
+    assert_eq(mpick_count(), 3, "'CLAUDE' (uppercase) matches 3 models (case-insensitive)");
+
+    # mid-string substring: "coder" -> the qwen model
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("coder");
+    assert_eq(mpick_count(), 1, "'coder' (mid-id substring) matches one");
+    assert(streq(mpick_selected_id(), "qwen3-coder:30b") == 1, "the qwen coder is selected");
+
+    # no match -> empty, no selection; backspace restores
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("zzz");
+    assert_eq(mpick_count(), 0, "'zzz' matches nothing");
+    assert(mpick_selected_id() == 0, "no selection when the view is empty");
+    mpick_query_pop(); mpick_query_pop(); mpick_query_pop();
+    assert_eq(mpick_count(), 4, "popping the whole query restores all");
+
+    # navigation clamps within [0, count)
+    _mp_qlen = 0; mpick_refilter(); _mp_cur = 0;
+    mpick_move(0 - 1); assert_eq(mpick_cur(), 0, "move up at the top clamps to 0");
+    mpick_move(100); assert_eq(mpick_cur(), 3, "move down past the end clamps to the last");
+    mpick_move(0 - 1); assert_eq(mpick_cur(), 2, "move up steps back one");
+
+    # pre-select the active model by id
+    mpick_select_id("claude-sonnet-5");
+    assert(streq(mpick_selected_id(), "claude-sonnet-5") == 1, "mpick_select_id highlights the named model");
+    mpick_select_id("not-a-model");
+    assert(streq(mpick_selected_id(), "claude-sonnet-5") == 1, "select_id on an absent id is a no-op");
+
+    # filtering clamps a stale selection back into range
+    _mp_cur = 3; _mp_qlen = 0; mpick_refilter(); _mp_push_str("sonnet");
+    assert_eq(mpick_count(), 1, "'sonnet' -> one");
+    assert_eq(mpick_cur(), 0, "the selection clamps to the shrunken view");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3380,6 +3445,7 @@ fn main() {
     test_theme();
     test_git();
     test_project();
+    test_mpick();
     test_model_switch();
     return assert_summary();
 }

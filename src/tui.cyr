@@ -57,6 +57,7 @@ var KEY_MOUSE = 27;           # SGR mouse left-click (coords in _mouse_row/_mous
 var KEY_FIND = 28;            # Ctrl-F — enter feed search (0.18.4)
 var KEY_ESC = 29;             # a lone Esc (best-effort) — closes search; a no-op elsewhere (0.18.4)
 var KEY_REPROBE = 30;         # Ctrl-R — re-probe hoosh reachability (0.19.3)
+var KEY_PICK = 31;            # Ctrl-P — open the model-picker palette (0.24.0)
 
 # Focus targets (which surface the nav keys drive when the tree is shown).
 var FOCUS_COMPOSER = 0;
@@ -68,6 +69,11 @@ var FOCUS_TREE = 1;
 # (bare n/N jump). Armed only inside the PT_RICH TUI dispatch window — the piped/REPL floor never sees it.
 var _fsearch_active = 0;
 var _fsearch_edit = 0;
+# --- model-picker modal state (0.24.0) ------------------------------------
+# A MODAL over the feed band: while _mpick_active, every key routes to _tui_pick_key and the feed region is
+# overwritten with the filtered model list (mpick.cyr owns the pure state; this file the render + switch).
+# Armed only inside the PT_RICH TUI dispatch window; the piped/REPL floor never decodes Ctrl-P, so byte-identical.
+var _mpick_active = 0;
 var HL_CAP = 24576;           # == PAINT_CAP: the per-line highlighted-render scratch (fsearch_render dst)
 var _hl_buf = 0;              # alloc(HL_CAP), lazy
 
@@ -488,6 +494,7 @@ fn _tui_kitty_u(cp, modk) {
         if (cp == 107) { return KEY_KILL_EOL; }     # Ctrl-K (kill to EOL) (0.17.1)
         if (cp == 102) { return KEY_FIND; }         # Ctrl-F (feed search) (0.18.4)
         if (cp == 114) { return KEY_REPROBE; }      # Ctrl-R (re-probe hoosh) (0.19.3)
+        if (cp == 112) { return KEY_PICK; }         # Ctrl-P (model picker) (0.24.0)
     }
     if (modk == 3) {                         # Alt (1 + 0b010) (0.17.1)
         if (cp == 98) { return KEY_WORD_LEFT; }     # Alt-b -> word left
@@ -656,6 +663,7 @@ fn tui_read_key() {
     if (b == 11) { return KEY_KILL_EOL; }       # Ctrl-K — kill from the cursor to end of line (0.17.1)
     if (b == 6) { return KEY_FIND; }            # Ctrl-F — enter feed search (0.18.4)
     if (b == 18) { return KEY_REPROBE; }        # Ctrl-R — re-probe hoosh reachability (0.19.3)
+    if (b == 16) { return KEY_PICK; }           # Ctrl-P — open the model-picker palette (0.24.0)
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
         if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
@@ -845,6 +853,7 @@ fn tui_draw_palette() {
 fn tui_draw_hint() {
     tty_move(tui_hint_row(_tui_rows), 1);
     tty_clear_to_eol();
+    if (_mpick_active == 1) { _tui_draw_pick_hint(); return 0; }       # 0.24.0: the picker strip owns the hint row
     if (_fsearch_active == 1) { _tui_draw_search_hint(); return 0; }   # 0.18.4: the search strip owns the hint row
     if ((_tui_show_tree == 1) && (_tui_focus == FOCUS_TREE)) {
         ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
@@ -855,6 +864,7 @@ fn tui_draw_hint() {
         ui_emit(ROLE_FAINT, "Enter send");
     } else {
         ui_emit(ROLE_FAINT, "Ctrl-X exit · Ctrl-G status · Ctrl-B files · ");
+        if (config_hoosh_configured() == 1) { ui_emit(ROLE_FAINT, "Ctrl-P model · "); }
         if (inhist_count() > 0) { ui_emit(ROLE_FAINT, "↑↓ history · "); }
         ui_emit(ROLE_FAINT, "Enter send");
     }
@@ -988,6 +998,166 @@ fn _tui_search_key(key) {
     return 0;
 }
 
+# --- model-picker modal (0.24.0) ------------------------------------------
+# An interactive Ctrl-P picker over hoosh's model catalog, switching through the EXISTING /model seam
+# (session_set_model_copy). Runs only inside tui_loop (PT_RICH). mpick.cyr owns the pure state/filter/nav;
+# this is the render (the feed band becomes the list), the key handler, and the switch. Models Ctrl-F search.
+
+# _tui_pick_emit_clip: emit at most `max` bytes of NUL-terminated `id` to the terminal (band chrome -> fd1).
+fn _tui_pick_emit_clip(id, max) {
+    var n = strlen(id);
+    if (n > max) { n = max; }
+    if (n < 0) { n = 0; }
+    emit_raw_n(id, n);
+    return n;
+}
+
+# _tui_pick_paint_row: paint one model row — a 2-col gutter ("> " selected, else "  "), the id (clipped to
+# the band width), and a green " *" when it is the active routing target. Selected row in accent, else FG.
+fn _tui_pick_paint_row(id, sel, active, fwidth) {
+    var is_active = 0;
+    if ((active != 0) && (streq(id, active) == 1)) { is_active = 1; }
+    if (sel == 1) { emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw("> "); }
+    else { emit_raw(ui_sgr(ROLE_FG)); emit_raw("  "); }
+    var budget = fwidth - 2;
+    if (is_active == 1) { budget = budget - 2; }
+    if (budget < 0) { budget = 0; }
+    _tui_pick_emit_clip(id, budget);
+    if (is_active == 1) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw(" *"); }
+    emit_raw(ui_reset());
+    return 0;
+}
+
+# _tui_pick_paint: overwrite the feed band with the filtered model list (scrolled so the selection shows),
+# then draw the query strip in the hint row and park at the caret. The status bar, tree and composer keep
+# their last frame (unchanged while picking); only the feed region and the hint row are the picker's.
+fn _tui_pick_paint() {
+    var top = tui_feed_top(_tui_show_status);
+    var bot = tui_feed_bot(_tui_rows, led_lines(), _tui_show_status);
+    if (bot < top) { return 0; }
+    var rows = bot - top + 1;
+    var fleft = tui_feed_left(_tui_cols, _tui_show_tree);
+    var fwidth = tui_feed_width(_tui_cols, _tui_show_tree);
+    var cur = mpick_cur();
+    var first = mpick_first();                    # keep the selection inside [first, first+rows)
+    if (cur < first) { first = cur; }
+    if (cur >= (first + rows)) { first = cur - rows + 1; }
+    if (first < 0) { first = 0; }
+    mpick_set_first(first);
+    var active = session_model();
+    if (active == 0) { active = config_hoosh_model(); }
+    var cnt = mpick_count();
+    var r = 0;
+    while (r < rows) {
+        tty_move(top + r, fleft);
+        tty_clear_to_eol();
+        var fi = first + r;
+        if (fi < cnt) {
+            var sel = 0;
+            if (fi == cur) { sel = 1; }
+            _tui_pick_paint_row(mpick_id_at(fi), sel, active, fwidth);
+        }
+        r = r + 1;
+    }
+    tui_draw_hint();                              # the _mpick_active gate makes this paint the pick strip
+    _tui_park_pick();
+    return 0;
+}
+
+# _tui_draw_pick_hint: the picker strip in the hint row (the caller moved there + cleared) — the query, the
+# i/n position (or "no matches" / "no models"), and the nav keys. ⌃C is the reliable close (Esc best-effort).
+fn _tui_draw_pick_hint() {
+    ui_emit(ROLE_ACCENT, "pick: ");
+    emit(ui_sgr(ROLE_FG)); emit_n(mpick_query_ptr(), mpick_qlen()); emit(ui_reset());
+    ui_emit(ROLE_FAINT, "  ");
+    if (mpick_count() == 0) {
+        if (mpick_total() == 0) { ui_emit(ROLE_RED, "no models"); }
+        else { ui_emit(ROLE_RED, "no matches"); }
+    } else {
+        emit(ui_sgr(ROLE_GREEN)); fmt_int(mpick_cur() + 1); emit("/"); fmt_int(mpick_count()); emit(ui_reset());
+    }
+    ui_emit(ROLE_FAINT, "  ↑↓ move · Enter switch · ⌃C close");
+    return 0;
+}
+
+# _tui_park_pick: park the cursor at the query caret in the hint row (after "pick: " + the query).
+fn _tui_park_pick() {
+    var col = 7 + mpick_qlen();                   # "pick: " is 6 visible cols; query starts at col 7
+    if (col > _tui_cols) { col = _tui_cols; }
+    tty_move(tui_hint_row(_tui_rows), col);
+    return 0;
+}
+
+# _tui_pick_apply: commit a switch to model `id` through the same seam as /model (copy + title + audit),
+# and log a confirmation line to the feed. Called from Enter; the caller then exits + repaints.
+fn _tui_pick_apply(id) {
+    session_set_model_copy(id);
+    term_title_set();                             # reflect the new model in the terminal title (0.22.3)
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "model -> "); emit(id);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    log_begin("model_switch"); log_kv_str("model", id); log_commit(SK_INFO);
+    return 0;
+}
+
+# _tui_pick_enter: open the picker — fetch the catalog (blocking, silent), pre-highlight the active model,
+# and paint. Degrades honestly: no hoosh seam / unreachable / no models -> a one-line feed note, no modal.
+fn _tui_pick_enter() {
+    if (config_hoosh_configured() == 0) {
+        out_mode_set(OUT_RING);
+        ui_emit(ROLE_RED, "model picker: "); ui_emit(ROLE_FAINT, "hoosh absent — set [hoosh].url in thoth.cyml");
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        tui_relayout();
+        return 0;
+    }
+    var rc = mpick_load();
+    if (rc != MPICK_OK) {
+        out_mode_set(OUT_RING);
+        ui_emit(ROLE_RED, "model picker: ");
+        if (rc == MPICK_ERR_TRANSPORT) { ui_emit(ROLE_FAINT, "hoosh unreachable — "); emit(config_hoosh_url()); }
+        elif (rc == MPICK_ERR_HTTP) { ui_emit(ROLE_FAINT, "hoosh returned an error fetching the model catalog"); }
+        else { ui_emit(ROLE_FAINT, "hoosh advertises no models to pick from"); }
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        tui_relayout();
+        return 0;
+    }
+    var active = session_model();
+    if (active == 0) { active = config_hoosh_model(); }
+    mpick_select_id(active);                       # start on the current model if it is in the list
+    _mpick_active = 1;
+    _tui_pick_paint();
+    return 0;
+}
+
+# _tui_pick_exit: close the picker and full-repaint (restores the real feed + composer; the status bar now
+# reflects any switch just applied).
+fn _tui_pick_exit() {
+    _mpick_active = 0;
+    tty_clear();
+    tui_relayout();
+    return 0;
+}
+
+# _tui_pick_key: the modal key handler — every key while _mpick_active routes here. KEY_EOF tears the loop
+# down (else the modal shadows the normal EOF exit). Esc/Ctrl-C cancel; Enter switches; ↑↓ move; typing
+# filters. A char/backspace edits the query (mpick refilters + resets the selection to the top match).
+fn _tui_pick_key(key) {
+    if (key == KEY_EOF) { _tui_pick_exit(); _tui_running = 0; return 0; }
+    if ((key == KEY_CTRLC) || (key == KEY_ESC)) { _tui_pick_exit(); return 0; }
+    if (key == KEY_ENTER) {
+        var id = mpick_selected_id();
+        if (id != 0) { _tui_pick_apply(id); }
+        _tui_pick_exit();
+        return 0;
+    }
+    if (key == KEY_UP) { mpick_move(0 - 1); _tui_pick_paint(); return 0; }
+    if (key == KEY_DOWN) { mpick_move(1); _tui_pick_paint(); return 0; }
+    if (key == KEY_CHAR) { mpick_query_push(_tui_key_ch); _tui_pick_paint(); return 0; }
+    if (key == KEY_BACKSPACE) { mpick_query_pop(); _tui_pick_paint(); return 0; }
+    return 0;
+}
+
 # tui_draw_rule: paint a faint full-width horizontal rule (─) on `row` (0.11.9). Chrome
 # (emit_raw); the per-column glyph is the 3-byte U+2500, each one visible column wide, so
 # `cols` of them fill the width. Painted under the status bar + above the composer.
@@ -1018,6 +1188,7 @@ fn _comp_row_hstart(li) {
 # mirrors tui_draw_composer's per-line horizontal-scroll window. Called after any paint
 # that left the cursor elsewhere (the feed, the spinner) so it returns to where you type.
 fn tui_park_cursor() {
+    if (_mpick_active == 1) { _tui_park_pick(); return 0; }       # 0.24.0: while picking, the cursor lives at the query caret
     if (_fsearch_active == 1) { _tui_park_search(); return 0; }   # 0.18.4: while searching, the cursor lives at the query caret (covers WINCH / /theme / /find full-repaints)
     var lines = led_lines();
     var H = tui_composer_height(_tui_rows, lines, _tui_show_status);
@@ -1863,10 +2034,13 @@ fn tui_loop() {
             tui_drain_winch();
             tty_clear();                 # geometry changed; full repaint at the new size
             tui_relayout();
+            if (_mpick_active == 1) { _tui_pick_paint(); }         # 0.24.0: the picker owns the feed band while open
         } else {
             var key = tui_read_key();
-            if (_fsearch_active == 1) { _tui_search_key(key); }   # 0.18.4: the search modal owns every key while active
+            if (_mpick_active == 1) { _tui_pick_key(key); }         # 0.24.0: the model picker owns every key while active
+            elif (_fsearch_active == 1) { _tui_search_key(key); }   # 0.18.4: the search modal owns every key while active
             elif (key == KEY_FIND) { _tui_search_enter(); }        # Ctrl-F -> open feed search
+            elif (key == KEY_PICK) { _tui_pick_enter(); }          # Ctrl-P -> open the model picker (0.24.0)
             elif (key == KEY_TOGGLE_STATUS) {
                 if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
                 tty_clear();           # the feed band moves; full repaint

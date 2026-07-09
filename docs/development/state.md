@@ -7,6 +7,33 @@
 
 ## Version
 
+**0.24.0** — **model-picker palette** (Ctrl-P), 2026-07-09. Opens the `0.24.x` arc. An interactive TUI modal
+over hoosh's model catalog that switches the active model through the EXISTING `/model` seam — no new switch
+machinery. NEW `src/mpick.cyr` = pure state/filter/nav: `_mp_add` (bounded copy into packed storage),
+`_mp_match` (case-insensitive substring), `mpick_refilter` (rebuild view + clamp cur/scroll), `mpick_query_push/pop`,
+`mpick_move` (clamped), `mpick_select_id` (pre-highlight the active model), `mpick_id_at`/`mpick_selected_id`,
+`mpick_load` (I/O). Data via NEW `hoosh_catalog_fetch` (GET `/v1/models/catalog`, 404-fallback to `/v1/models`,
+returns the parsed model array or 0 + `hoosh_catalog_last_err`; `/v1/models` alone lists PROVIDERS not concrete
+models, so the catalog is required). Modal wiring in `src/tui.cyr` (modeled on the Ctrl-F feed-search modal):
+`KEY_PICK`=31 (**Ctrl-P** = raw byte 16 + kitty cp 112, both confirmed free), `_mpick_active`,
+`_tui_pick_enter` (blocking silent fetch → pre-select active → paint; degrades to a one-line feed note when
+hoosh absent/unreachable/empty, no modal), `_tui_pick_paint` (overwrites the feed band with the filtered list,
+selected row accent + active target `*`, scroll window keeps cur visible), `_tui_draw_pick_hint` (the `pick:`
+strip: query + i/n + keys), `_tui_park_pick`, `_tui_pick_key` (Esc/⌃C cancel, Enter switch, ↑↓ move, type to
+filter), `_tui_pick_apply` (the SAME seam as `/model`: `session_set_model_copy` + `term_title_set` + audit),
+`_tui_pick_exit` (full repaint). Gated everywhere: loop routing (mpick before fsearch), WINCH repaint,
+`tui_draw_hint` + `tui_park_cursor` gates, idle-hint `Ctrl-P model`, `/model` help. TUI-ONLY → line-mode/one-shot
+floor byte-identical. **Role modality** (the originally-planned 0.24.0) **deferred** — an archetype aspect
+registry is avatara's to provide (thoth exposes only `persona_role()`, one role of the active persona); it stays
+a design + upstream-request, not code. **Verified**: 1154 assertions (+19 `test_mpick`: filter CI-substring +
+mid-string, nav clamp, query pop restore, select_id, refilter clamps a stale selection, empty-id refusal) +
+LIVE over a PTY (`--tier=rich`: Ctrl-P → catalog list [claude-opus-4/gpt-4o/o3-mini] → filter `opus` [gpt-4o
+drops] → Enter → `model ->` switch in the feed → Ctrl-X clean exit). **4-lens adversarial review** (memory /
+logic / TUI-floor / honesty): modal sound; caught + FIXED one defensive gap — `_mp_add` now refuses an empty
+model id (a malformed `{"id":""}` catalog entry is a non-null zero-length Str that would otherwise become a
+blank row switching to an empty model). Pin **6.4.29**. NEXT: remaining 0.24.x polish — conversation
+resume, `/save` transcript export, terminal niceties (BEL + per-turn elapsed), `/reload`. See CHANGELOG/roadmap.
+
 **0.23.1** — **user-granted read roots: the user widens the jail** (ADR-0015), 2026-07-08. The 0.23.0 read
 tools were confined to the launch cwd; now the *user* (never the model) can grant read access to additional
 ABSOLUTE roots — review another repo, or read the **vidya** Cyrius knowledge base and bring the latest

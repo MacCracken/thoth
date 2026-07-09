@@ -698,6 +698,40 @@ fn hoosh_list_models() {
     return 0;
 }
 
+# --- model catalog for the picker (0.24.0) ---------------------------------
+var HOOSH_CAT_OK = 0;
+var HOOSH_CAT_TRANSPORT = 1;   # the gateway did not answer (connection failed)
+var HOOSH_CAT_HTTP = 2;        # the gateway answered non-2xx (even after the /v1/models fallback)
+var _hoosh_cat_err = 0;
+
+# hoosh_catalog_fetch: the DATA-returning sibling of hoosh_list_models for the model-picker palette (0.24.0).
+# GETs the concrete per-provider catalog (/v1/models/catalog, hoosh >= 2.4.9) and, on 404, falls back to the
+# plain /v1/models list (both share the {object:list, data:[{id, owned_by}]} shape). Returns the parsed JSON
+# `data` array VALUE, or 0 on any failure; hoosh_catalog_last_err() then reports the kind for honest caller
+# messaging. Prints NOTHING (the picker owns the UI). I/O — the catalog is hoosh's domain (provider routing);
+# thoth only asks. The returned value points into the bump-heap response body (not freed); copy ids promptly.
+fn hoosh_catalog_fetch() {
+    _hoosh_cat_err = HOOSH_CAT_OK;
+    var auth = _hoosh_auth_header();
+    var h = sandhi_headers_new();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    var r = sandhi_http_get(_hoosh_catalog_url(), h);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
+    var status = sandhi_http_status(r);
+    if (status == 404) {                          # older gateway: fall back to the plain models list
+        var h2 = sandhi_headers_new();
+        if (auth != 0) { sandhi_headers_set(h2, "Authorization", auth); }
+        r = sandhi_http_get(_hoosh_models_url(), h2);
+        if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
+        status = sandhi_http_status(r);
+    }
+    if ((status < 200) || (status >= 300)) { _hoosh_cat_err = HOOSH_CAT_HTTP; return 0; }
+    return hoosh_extract_models(sandhi_http_body(r), sandhi_http_body_len(r));
+}
+
+# hoosh_catalog_last_err: the outcome of the last hoosh_catalog_fetch (HOOSH_CAT_*). PURE.
+fn hoosh_catalog_last_err() { return _hoosh_cat_err; }
+
 # hoosh_list_provider_models: list the concrete, switchable models a given provider
 # offers (GET /v1/models/catalog, filtered by owned_by), marking the active routing
 # target. The catalog is hoosh's domain (hoosh >= 2.4.9 enumerates the routable

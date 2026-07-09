@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.0] - 2026-07-09
+
+**Model-picker palette.** A new interactive **Ctrl-P** picker in the TUI: it fetches hoosh's model catalog,
+fuzzy-filters it as you type, and switches the active model on Enter — a discoverable front-end to the
+existing `/model` mid-session switch, no new switch machinery. Opens the `0.24.x` arc. Role modality (the
+originally-planned `0.24.0`) is **deferred**: switching which aspect of an archetype is leaned into needs a
+per-archetype role registry that is avatara's to provide — thoth never hand-authors aspect tables — so it
+stays a design + upstream-request, not shippable thoth code. 1154 assertions; live-verified over a PTY
+(Ctrl-P → list → filter `opus` → Enter → `model ->` switch). A 4-lens adversarial review (memory / logic /
+TUI-floor / honesty) confirmed the modal sound and caught one defensive gap (fixed): an empty catalog id.
+
+### Added
+- **Ctrl-P model picker** (new `src/mpick.cyr` + wiring in `src/tui.cyr`): a modal over the feed band listing
+  the switchable models (the selected row highlighted, the active routing target marked `*`). Type to
+  case-insensitive-substring filter, `↑/↓` to move, `Enter` to switch, `Esc`/`Ctrl-C` to cancel. TUI-only
+  (the modal needs cursor addressing); the line-mode REPL and one-shot never decode Ctrl-P, so their floor is
+  byte-identical. Discoverable via the idle hint + the `/model` help line.
+- **`hoosh_catalog_fetch`** (`src/hoosh.cyr`): the data-returning sibling of `hoosh_list_models` — GETs the
+  concrete per-provider catalog (`/v1/models/catalog`), falling back to `/v1/models` on 404, and returns the
+  parsed model array (or 0 with an error kind). The catalog is hoosh's domain; thoth only asks.
+
+### Changed
+- The switch reuses the exact `/model` seam (`session_set_model_copy` + terminal-title refresh + audit log),
+  so a picked model routes identically to a typed `/model <id>`. Degrades honestly: no hoosh seam /
+  unreachable gateway / empty catalog → a one-line feed note, never an empty or faked modal.
+
+### Fixed
+- `_mp_add` refuses an empty model id (a malformed catalog entry `{"id":""}` yields a non-null zero-length
+  string that `bayan_json_v_str` accepts) — otherwise it would become a blank pickable row whose selection
+  silently switched to an empty model. Review-caught (honesty lens); the id-skip is the single choke point.
+
 ## [0.23.1] - 2026-07-08
 
 **Granted read roots — the user widens the jail.** The 0.23.0 read tools were confined to the launch
