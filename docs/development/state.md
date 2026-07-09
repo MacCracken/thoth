@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.23.0** — **project awareness: the agent can see the codebase** (ADR-0015), 2026-07-08. Opens the
+`0.23.x` line, closing the gap that a *coding* agent was blind to the project it was launched in (its context
+was prompt + persona + memory FACTS + tool results; code reached it only via `@file` mentions or the opt-in
+`shell` hammer). New `src/project.cyr`: model-invokable **`read_file(path)`** + **`list_dir(path)`** riding
+the `/read` + file-tree substrate (no new read path, no spine fork; daimon MCP stays additive), dispatched
+LOCALLY in agent.cyr (never to daimon), advertised **default-ON**. Security = the **project JAIL**
+(`_project_jail_ok`): absolute paths, leading `~`, and any `..` component refused → reads confined to the
+launch cwd + below (no `~/.ssh`, `/etc`); the jail is the boundary so reads are NOT t-ron-gated (read-only,
+confined); output bounded (64 KiB/file, 16 KiB/listing). **`agent_enabled()` now = `[hoosh].tools` alone**
+(was "tools AND (daimon OR shell)") — read/list are always-available local tools, so the loop runs whenever
+tools are on; the agent sees the project even hoosh-only. Wiring: `agent_tools_add_project` (always adds both;
+call site only reached when agent_enabled), `_agent_round_has_local` (forces serial), the serial dispatch
+elifs (`read_file_tool`/`list_dir_tool`, RL_ALLOWED, echo "result: N bytes" not the content). **Security
+review (3-lens, jail-bypass/bounds/dispatch): the jail is airtight (no POSIX bypass)** + caught one
+regression (fixed): the default-on tools made `tl>0` unconditional, so the tool-cache latch fired even on a
+FAILED daimon fetch → a transient daimon-down permanently cached an empty registry; now the latch gates on
+the daimon fetch (`SEAM_DAIMON absent || dtv != 0`), restoring the self-heal. **Residuals** (documented):
+symlink-inside-project escape (no O_NOFOLLOW); Windows backslash/drive paths (deferred — `--win` doesn't
+ship). **Verified**: 1113 assertions (+21 net: `test_project` +22, agent truth-table -1; jail accept/refuse,
+read_file/list_dir real + refusals + errors) + LIVE (the model autonomously called `read_file{path:VERSION}`,
+jailed-read it, answered "0.23.0"). Pin **6.4.29** (env kept drifting the active cycc to 6.4.30/31; re-pinned
+to 6.4.29). NEXT: **`0.23.1`** — user-granted read roots (widen the jail to another repo / **vidya**, a
+permission model). See CHANGELOG/roadmap/ADR-0015.
+
 **0.22.4** — **file-tree git badges** (polish sweep), 2026-07-08. The file-tree pane surfaces changed files
 with `M`/`A`/`D` markers from the ALREADY-probed sit status — content-blind, no new worktree walk.
 `src/git.cyr`: `git_probe` now copies `sit_repo_status`'s per-file {path, kind} (before `sit_repo_close`, since

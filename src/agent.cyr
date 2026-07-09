@@ -175,6 +175,24 @@ fn agent_tools_add_shell(dst, tl) {
     return off;
 }
 
+# agent_tools_add_project: append the thoth-native read_file + list_dir tools to the array in dst (0.23.0,
+# ADR-0015). Advertised whenever the agentic loop runs (the call site is reached only when agent_enabled) —
+# DEFAULT-ON, so the agent can see the codebase it was launched in. Executed LOCALLY + jailed to the launch
+# cwd (no t-ron gate — the project jail is the safety boundary) in _agent_run_calls_serial. Same shape as
+# agent_tools_add_shell; adds TWO tools.
+fn agent_tools_add_project(dst, tl) {
+    var cap = AGENT_TOOLS_CAP;
+    var off = tl;
+    if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
+    else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }   # back over the trailing "]"
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"Read a text file from THIS project and return its contents. The path is relative to the project root; reads are confined to the project (absolute paths and '..' are refused). Use to inspect the codebase you are working in.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"file path relative to the project root\"}},\"required\":[\"path\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, ",");
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"description\":\"List a directory in THIS project (files, and subdirectories suffixed with '/'). The path is relative to the project root and defaults to the root; confined to the project. Use to explore the codebase structure.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"directory path relative to the project root (optional; defaults to the root)\"}}}}}");
+    off = _append_cstr_cap(dst, off, cap, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
 # _agent_copy: raw-copy n bytes of src into dst at off, bounded by cap. Pure.
 fn _agent_copy(dst, off, src, n, cap) {
     var i = 0;
@@ -452,9 +470,9 @@ fn _ag_build_array(dst) {
 # Else the caller uses the plain hoosh_send path.
 fn agent_enabled() {
     if (config_hoosh_tools() == 0) { return 0; }                          # master agentic switch
-    if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { return 1; }            # daimon provides the tool registry
-    if ((config_shell_enabled() == 1) && (shell_supported() == 1)) { return 1; }   # 0.20.0: shell standalone
-    return 0;
+    return 1;   # 0.23.0: read_file/list_dir are ALWAYS-available local tools (default-on, jailed), so the
+                # agentic loop always has a tool source — the agent can see the project even with no daimon
+                # and no shell. daimon (its MCP registry) and shell just ADD more tools when present.
 }
 
 # --- parallel tool execution (0.7.0) ---
@@ -699,6 +717,8 @@ fn _agent_round_has_local(tcs, nc) {
         var nm = agent_tc_name(tcs, i);
         if (nm != 0) {
             if (streq(nm, "memory_write") == 1) { return 1; }
+            if (streq(nm, "read_file") == 1) { return 1; }    # 0.23.0 local project tools -> serial dispatch
+            if (streq(nm, "list_dir") == 1) { return 1; }
             # "shell" is matched UNCONDITIONALLY (not gated on config): a call named "shell" must
             # always take the serial path so the local dispatch elif below decides its fate — even
             # when disabled, where that elif returns an honest not-enabled string rather than letting
@@ -778,6 +798,21 @@ fn _agent_run_calls_serial(tcs, nc) {
             } else {
                 res = "denied by authorization policy";
             }
+        }
+        elif (streq(nm, "read_file") == 1) {
+            # thoth-native project tool (0.23.0, ADR-0015): read a file, JAILED to the launch cwd.
+            # No t-ron gate — the jail (no absolute / no '..') is the safety boundary. LOCAL, not daimon.
+            rl_kind = RL_ALLOWED;
+            res = read_file_tool(gp);
+            rl_ok = 1;
+            ui_emit(ROLE_FAINT, "  result: "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(strlen(res)); emit(ui_reset()); ui_emit(ROLE_FAINT, " bytes"); oprintln("");
+        }
+        elif (streq(nm, "list_dir") == 1) {
+            # thoth-native project tool (0.23.0, ADR-0015): list a directory, JAILED to the launch cwd.
+            rl_kind = RL_ALLOWED;
+            res = list_dir_tool(gp);
+            rl_ok = 1;
+            ui_emit(ROLE_FAINT, "  result: "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(strlen(res)); emit(ui_reset()); ui_emit(ROLE_FAINT, " bytes"); oprintln("");
         }
         elif ((streq(nm, "shell") == 1) && (config_shell_enabled() == 1) && (shell_supported() == 1)) {
             # thoth-native shell tool (0.16.0, ADR-0014): the model proposes a local command.
@@ -984,8 +1019,13 @@ fn agent_turn(prompt) {
         var tl = agent_format_tools(_agent_tools_buf, dtv);
         tl = agent_tools_add_memory(_agent_tools_buf, tl);   # 0.12.2: + memory_write when [memory].enabled
         tl = agent_tools_add_shell(_agent_tools_buf, tl);    # 0.16.0: + shell when [shell].enabled AND POSIX-capable
+        tl = agent_tools_add_project(_agent_tools_buf, tl);  # 0.23.0: + read_file/list_dir (default-on, jailed)
         _agent_tools_len = tl;
-        if (tl > 0) { _agent_tools_ready = 1; }
+        # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
+        # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient
+        # daimon-down would latch an empty registry forever. Gate on the daimon fetch (dtv) so a daimon-down
+        # first turn leaves _agent_tools_ready=0 and a later turn retries (the documented self-heal above).
+        if ((seam_status(SEAM_DAIMON) == SEAM_ABSENT) || (dtv != 0)) { _agent_tools_ready = 1; }
     }
     var tools_len = _agent_tools_len;
     var want_stream = config_hoosh_stream();

@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.22.4):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.23.0):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -317,8 +317,10 @@ selection stays content-blind.
 > The active-persona core done, `0.22.x` turned to **polish sweeps**: `0.22.3` (**terminal window title,
 > DONE** — OSC-0 `thoth - <model>`, real-terminal-gated, escape-safe) → `0.22.4` (**file-tree git badges,
 > DONE** — M/A/D on tree rows from the probed sit status). Then **project awareness** was raised as a
-> priority and took the next line (`0.23.x` — the agent reads/explores the codebase, jailed + user-granted);
-> role modality + remaining polish moved to `0.24.x`.
+> priority and took the next line: `0.23.0` (**project read/explore tools, DONE** — model-invokable
+> `read_file`/`list_dir`, jailed to the launch cwd, default-on, so the agent finally sees the codebase it was
+> launched in; ADR-0015). `0.23.1` (user-granted read roots — widen to vidya / another repo) is next; role
+> modality + remaining polish moved to `0.24.x`.
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -547,7 +549,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
     interactive fuzzy picker over hoosh's model list, selecting through the `/model` seam.
     Reprioritized below project awareness (the user's call); folds into the `0.24.x` batch.
 
-### 0.23.x — project awareness (PRIORITY — the agent sees the codebase)
+### 0.23.x — project awareness (0.23.0 DONE — the agent sees the codebase)
 
 > The gap (2026-07-08): the agentic loop's context is the prompt + persona + project-memory
 > FACTS + tool results, and its tools are daimon MCP + `memory_write` + the opt-in `shell`.
@@ -557,13 +559,15 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 > memory space"). This line closes that. Own the read SUBSTRATE (like `/read`, `@file`, the
 > file tree, the `shell` tool) — no spine fork; daimon MCP tools remain additional, not required.
 
-- **`0.23.0` — project read/explore tools.** thoth-native, model-invokable `read_file(path)`
-  and `list_dir(path)` (the agent enumerates + reads the project), riding the EXISTING read
-  substrate (`file_read_all`, the file-tree's `dir_list`) — no new read path. **Default-ON**
-  when `[hoosh].tools` is on (the coding-tool expectation; the agent is useful out-of-the-box).
-  **Safety = a project JAIL by default**: paths resolve against the launch cwd; absolute paths
-  and `..`-escapes outside it are rejected (can't reach `~/.ssh`, `/etc`). Bounded output +
-  file caps (as `/read`). Earns a **design pass + an ADR** (the jail + default-on posture).
+- **`0.23.0` — project read/explore tools. DONE (2026-07-08; ADR-0015).** thoth-native,
+  model-invokable `read_file(path)` + `list_dir(path)` (`src/project.cyr`) riding the `/read` +
+  file-tree substrate — no new read path, dispatched locally (never to daimon). **Default-ON**
+  (`agent_enabled()` now = `[hoosh].tools` alone, since read/list are always-available local
+  tools — the agent sees the project even hoosh-only). **Project JAIL** (`_project_jail_ok`:
+  absolute / `~` / `..` refused → confined to the launch cwd), so reads are not t-ron-gated;
+  bounded output. 3-lens security review — jail airtight, caught + fixed a tool-cache-latch
+  regression. 1113 assertions; live-verified (the model autonomously read VERSION and answered).
+  Residuals documented (symlink-in-project; Windows paths deferred).
 - **`0.23.1` — user-granted read roots (permission model).** The jail is the default, but the
   user can GRANT additional readable roots — review another repo, or read **vidya** (to learn
   latest Cyrius features and return to the project) — a permission model like every other

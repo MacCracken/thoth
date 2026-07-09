@@ -1,0 +1,116 @@
+# thoth — project read/explore tools (0.23.0): model-invokable read_file + list_dir so the agent can SEE
+# the codebase it was launched in (before this, its context was the prompt + persona + memory FACTS + tool
+# results, and it could read code only via the user's @file mentions or the opt-in `shell` hammer).
+#
+# thoth-native SUBSTRATE (like /read, @file, the file tree, the shell tool) — NOT a spine fork; daimon MCP
+# tools remain additional, never required. Advertised whenever the agentic loop is on ([hoosh].tools) and
+# executed LOCALLY in src/agent.cyr's serial dispatch — never forwarded to daimon.
+#
+# SECURITY — the PROJECT JAIL. A *model*-invokable read is a new surface (a prompt-injection could tell the
+# model to read ~/.ssh/id_rsa and leak it), unlike /read / @file where the *human* chose the path. So every
+# path is jailed to the launch directory: absolute paths, a leading `~`, and any `..` path component are
+# REFUSED. Reads then resolve relative to the process cwd (the project the user launched thoth in), confined
+# to it + below. This is both the feature ("see THIS project") and the boundary ("can't escape to secrets").
+# RESIDUALS (documented, not faked): (1) a symlink INSIDE the project that points outside is followed (no
+# portable O_NOFOLLOW — same class as the /tmp-symlink residuals); the user's own repo, lower risk than the
+# ..-escape the jail blocks. (2) The jail's separator/escape check is POSIX/AGNOS-correct ('/' + '..' + '~');
+# Windows backslash + drive-letter (`C:\`) paths would need extra handling when the `--win` lane ships (it is
+# IOCP-gated and does not build today). Widening the jail to other roots (another repo, vidya) is the 0.23.1
+# user-grant model.
+
+var PROJECT_READ_CAP = 65536;    # max file bytes returned to the model (bounded, like the shell cap)
+var PROJECT_LIST_CAP = 16384;    # max list_dir output bytes
+var _project_read_buf = 0;
+var _project_out_buf = 0;
+
+# _project_jail_ok: 1 if `path` is safe to read within the project — a RELATIVE path with no `..` component
+# and no leading `/` or `~`; else 0. PURE (the security boundary for read_file / list_dir).
+fn _project_jail_ok(path) {
+    if (path == 0) { return 0; }
+    var c0 = load8(path);
+    if (c0 == 0) { return 0; }            # empty
+    if (c0 == 47) { return 0; }           # absolute "/..."
+    if (c0 == 126) { return 0; }          # "~..." (home)
+    var i = 0;
+    var atstart = 1;                      # at a path-component boundary (start, or just after '/')
+    while (load8(path + i) != 0) {
+        if (atstart == 1) {
+            if ((load8(path + i) == 46) && (load8(path + i + 1) == 46)) {   # ".."
+                var after = load8(path + i + 2);
+                if ((after == 0) || (after == 47)) { return 0; }            # a ".." component -> escape, refuse
+            }
+        }
+        if (load8(path + i) == 47) { atstart = 1; } else { atstart = 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# _proj_apc: append NUL-terminated cstr `s` into _project_out_buf at off, bounded. Returns the new off.
+fn _proj_apc(off, s) {
+    var i = 0;
+    while ((load8(s + i) != 0) && (off < (PROJECT_LIST_CAP - 1))) { store8(_project_out_buf + off, load8(s + i)); off = off + 1; i = i + 1; }
+    return off;
+}
+
+# read_file_tool: the agentic-loop tool (0.23.0). Extracts "path" from {"path":"..."}, jail-checks it,
+# and returns the file's contents (bounded to PROJECT_READ_CAP) as a plain string for the model — or an
+# honest error/refusal string. Rides /read's substrate (file_exists + file_read_all). No t-ron gate: the
+# jail is the safety boundary (read-only, project-confined). Dispatched LOCALLY in src/agent.cyr.
+fn read_file_tool(args_cstr) {
+    if (args_cstr == 0) { return "(read_file: missing arguments)"; }
+    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    if (v == 0) { return "(read_file: arguments are not valid JSON)"; }
+    var pv = bayan_json_v_obj_get(v, "path");
+    if (pv == 0) { return "(read_file: missing required 'path' argument)"; }
+    var ps = bayan_json_v_str(pv);
+    if (ps == 0) { return "(read_file: 'path' must be a string)"; }
+    var path = str_cstr(ps);
+    if (_project_jail_ok(path) == 0) { return "(read_file: refused - path must be inside the project: no absolute paths, no '..')"; }
+    if (is_dir(str_from(path)) == 1) { return "(read_file: that path is a directory - use list_dir)"; }
+    if (file_exists(path) == 0) { return "(read_file: no such file in the project)"; }
+    if (_project_read_buf == 0) { _project_read_buf = alloc(PROJECT_READ_CAP + 1); }
+    var n = file_read_all(path, _project_read_buf, PROJECT_READ_CAP);
+    if (n < 0) { return "(read_file: could not read the file)"; }
+    store8(_project_read_buf + n, 0);
+    return _project_read_buf;
+}
+
+# list_dir_tool: the agentic-loop tool (0.23.0). Extracts an optional "path" (default the project root),
+# jail-checks it, and returns the directory's entries (one per line, "/"-suffixed for subdirectories),
+# bounded to PROJECT_LIST_CAP. Rides the file tree's dir_list. No t-ron gate (jailed, read-only). LOCAL.
+fn list_dir_tool(args_cstr) {
+    var path = ".";
+    if (args_cstr != 0) {
+        var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+        if (v != 0) {
+            var pv = bayan_json_v_obj_get(v, "path");
+            if (pv != 0) {
+                var ps = bayan_json_v_str(pv);
+                if (ps != 0) {
+                    var pc = str_cstr(ps);
+                    if (load8(pc) != 0) { path = pc; }    # non-empty override; else keep "."
+                }
+            }
+        }
+    }
+    if (_project_jail_ok(path) == 0) { return "(list_dir: refused - path must be inside the project: no absolute paths, no '..')"; }
+    var dirstr = str_from(path);
+    if (is_dir(dirstr) == 0) { return "(list_dir: no such directory in the project)"; }
+    if (_project_out_buf == 0) { _project_out_buf = alloc(PROJECT_LIST_CAP); }
+    var vv = dir_list(dirstr);
+    var n = vec_len(vv);
+    var off = 0;
+    off = _proj_apc(off, path); off = _proj_apc(off, ":\n");
+    var i = 0;
+    while ((i < n) && (off < (PROJECT_LIST_CAP - 320))) {
+        var e = vec_get(vv, i);
+        off = _proj_apc(off, str_data(e));
+        if (is_dir(path_join(dirstr, e)) == 1) { off = _proj_apc(off, "/"); }
+        off = _proj_apc(off, "\n");
+        i = i + 1;
+    }
+    if (i < n) { off = _proj_apc(off, "... (truncated)\n"); }
+    store8(_project_out_buf + off, 0);
+    return _project_out_buf;
+}

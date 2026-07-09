@@ -30,6 +30,7 @@ include "src/exec.cyr"
 include "src/hoosh.cyr"
 include "src/memory.cyr"
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014)
+include "src/project.cyr"  # model-invokable read_file/list_dir project tools (0.23.0, ADR-0015)
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
@@ -1343,20 +1344,18 @@ fn test_logging() {
 # tool_calls parsing, raw extraction, and request shaping. The loop itself is I/O.
 fn test_agent() {
     test_group("agentic tool-calling");
-    assert_eq(agent_enabled(), 0, "agentic off when daimon absent (no config)");
-
-    # 0.20.0 agent_enabled() truth table: [hoosh].tools is the master switch; the tool SOURCE is daimon OR
-    # the standalone shell tool. Poke the config globals directly, RESTORE the defaults at the end (else a
-    # leaked _cfg_daimon_url fails a later test). shell_supported()==1 on this POSIX test build.
+    # 0.23.0 agent_enabled() = the master [hoosh].tools switch ALONE: read_file/list_dir are always-available
+    # local tools, so the agentic loop runs whenever tools are on — daimon + shell just ADD more tools.
+    # (Was 0.20.0's "tools AND (daimon OR shell)".) Poke the config globals directly, RESTORE at the end.
     assert_eq(shell_supported(), 1, "POSIX test build supports the shell tool");
-    _cfg_hoosh_tools = 1; _cfg_daimon_url = "http://x"; _cfg_shell_enabled = 0;
-    assert_eq(agent_enabled(), 1, "daimon wired + tools -> agentic on (unchanged floor)");
+    _cfg_hoosh_tools = 1; _cfg_daimon_url = 0; _cfg_shell_enabled = 0;
+    assert_eq(agent_enabled(), 1, "tools on, no daimon, no shell -> agentic on (read_file/list_dir always available, 0.23.0)");
+    _cfg_daimon_url = "http://x";
+    assert_eq(agent_enabled(), 1, "daimon wired + tools -> agentic on");
     _cfg_daimon_url = 0; _cfg_shell_enabled = 1;
-    assert_eq(agent_enabled(), 1, "daimon ABSENT + shell enabled -> agentic on (0.20.0 standalone)");
-    _cfg_shell_enabled = 0;
-    assert_eq(agent_enabled(), 0, "daimon absent + shell off -> plain turns");
-    _cfg_hoosh_tools = 0; _cfg_shell_enabled = 1;
-    assert_eq(agent_enabled(), 0, "[hoosh].tools off -> plain turns regardless of shell");
+    assert_eq(agent_enabled(), 1, "shell enabled + tools -> agentic on");
+    _cfg_hoosh_tools = 0;
+    assert_eq(agent_enabled(), 0, "[hoosh].tools off -> plain turns (the master off switch)");
     _cfg_hoosh_tools = 1; _cfg_daimon_url = 0; _cfg_shell_enabled = 0;   # restore defaults
 
     # advertise-degrade: with a 0 daimon value (no registry fetched) the tools array is built from the local
@@ -3251,6 +3250,42 @@ fn test_git() {
     return 0;
 }
 
+# project read/explore tools (0.23.0): the jail (pure) + read_file/list_dir over real repo files. The jail
+# is the security boundary — absolute paths, '~', and '..' components are refused; in-project relative paths
+# pass. read_file/list_dir hit the filesystem (present-on-disk, not git status), so real files/dirs work.
+fn test_project() {
+    test_group("project read/explore tools (project.cyr, 0.23.0)");
+    # --- jail (pure): accept in-project relative, refuse escapes ---
+    assert_eq(_project_jail_ok("src/main.cyr"), 1, "relative in-project path ok");
+    assert_eq(_project_jail_ok("."), 1, "'.' (project root) ok");
+    assert_eq(_project_jail_ok("./src"), 1, "'./src' ok");
+    assert_eq(_project_jail_ok("a.b-c_d.cyr"), 1, "dotted/dashed filename ok (not a '..' component)");
+    assert_eq(_project_jail_ok("/etc/passwd"), 0, "absolute path refused");
+    assert_eq(_project_jail_ok("~/.ssh/id_rsa"), 0, "home '~' path refused");
+    assert_eq(_project_jail_ok(".."), 0, "bare '..' refused");
+    assert_eq(_project_jail_ok("../secret"), 0, "'../' escape refused");
+    assert_eq(_project_jail_ok("src/../../etc"), 0, "mid-path '..' escape refused");
+    assert_eq(_project_jail_ok("src/foo/.."), 0, "trailing '..' refused");
+
+    # --- read_file_tool: real read + jailed refusals + honest errors ---
+    var r = read_file_tool("{\"path\":\"VERSION\"}");
+    assert(load8(r) != 40, "read VERSION -> file content, not an error string (no leading '(')");
+    assert(strlen(r) > 0, "VERSION content is non-empty");
+    assert(_ui_contains(read_file_tool("{\"path\":\"/etc/passwd\"}"), "refused") == 1, "absolute path -> refused");
+    assert(_ui_contains(read_file_tool("{\"path\":\"../x\"}"), "refused") == 1, "'..' escape -> refused");
+    assert(_ui_contains(read_file_tool("{\"path\":\"src\"}"), "directory") == 1, "a directory -> 'use list_dir'");
+    assert(_ui_contains(read_file_tool("{\"path\":\"no_such_zzz.txt\"}"), "no such file") == 1, "missing file -> honest error");
+    assert(_ui_contains(read_file_tool("{}"), "missing required") == 1, "missing 'path' arg -> error");
+
+    # --- list_dir_tool: real listing + '/'-suffixed subdirs + jailed refusals ---
+    assert(_ui_contains(list_dir_tool("{\"path\":\"src\"}"), "main.cyr") == 1, "list src -> contains main.cyr");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"src\"}"), "vendor/") == 1, "subdirectories suffixed with '/'");
+    assert(_ui_contains(list_dir_tool("{}"), "VERSION") == 1, "default path (root) -> contains VERSION");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 1, "absolute dir -> refused");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"no_such_dir_zzz\"}"), "no such directory") == 1, "missing dir -> error");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3315,6 +3350,7 @@ fn main() {
     test_ftree();
     test_theme();
     test_git();
+    test_project();
     test_model_switch();
     return assert_summary();
 }

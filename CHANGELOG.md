@@ -2,6 +2,41 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.23.0] - 2026-07-08
+
+**The agent can see the project.** New model-invokable `read_file` and `list_dir` tools let the backing
+model read and explore the codebase thoth was launched in — previously it was blind out of the box (it saw
+code only via the user's `@file` mentions or the opt-in `shell` hammer). Opens the `0.23.x` project-awareness
+line. 1113 assertions. A 3-lens security review (jail-bypass / bounds / dispatch) confirmed the jail is
+airtight and caught one caching regression (fixed). See [ADR-0015](docs/adr/0015-project-read-tools-jailed-default-on.md).
+
+### Added
+- **`read_file(path)` + `list_dir(path)`** (new `src/project.cyr`): thoth-native, model-invokable tools that
+  read a project file / list a project directory, riding the existing `/read` + file-tree substrate (no new
+  read path; no spine fork — daimon MCP tools stay additive). Advertised **default-ON** whenever the agentic
+  loop runs, dispatched LOCALLY in `agent.cyr` (never forwarded to daimon).
+- **Project jail** (`_project_jail_ok`): every path is confined to the launch directory — absolute paths, a
+  leading `~`, and any `..` component are refused, so the agent can read anything *in* the project and
+  nothing outside it (no `~/.ssh`, `/etc`). This is the security boundary, so reads are **not** t-ron-gated
+  (read-only, project-confined). Output is bounded (64 KiB/file, 16 KiB/listing).
+
+### Changed
+- **`agent_enabled()` = `[hoosh].tools` alone** (was "tools AND (daimon OR shell)"): read_file/list_dir are
+  always-available local tools, so the agentic loop runs whenever tools are on — the agent sees the project
+  even with no daimon and no shell. daimon (its MCP registry) and shell just add more tools.
+- The tool-advertisement cache latches ready only on a good daimon fetch (or no daimon), not on total tool
+  count — the default-on project tools would otherwise permanently cache an empty daimon registry if daimon
+  was transiently down on the first turn (review-caught; the documented self-heal is restored).
+
+### Notes
+- **Residuals** (documented, not faked): a symlink *inside* the project pointing outside is followed (no
+  portable `O_NOFOLLOW`); the jail's separator/escape rules are POSIX/AGNOS-correct — Windows backslash /
+  drive-letter paths need extra handling when the `--win` lane ships (it's IOCP-gated, doesn't build today).
+- **Live-verified**: given "what version is this project? read the VERSION file", the model autonomously
+  called `read_file {"path":"VERSION"}`, read it through the jail, and answered "0.23.0" correctly.
+- Next: **`0.23.1`** — user-granted read roots (widen the jail to another repo or **vidya**, a permission
+  model like every other restriction).
+
 ## [0.22.4] - 2026-07-08
 
 **File-tree git badges** — the file-tree pane marks changed files with `M`/`A`/`D` from the already-probed
