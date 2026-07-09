@@ -1064,7 +1064,7 @@ fn agent_turn(prompt) {
             # pair) or, if nothing streamed, pop the unanswered user turn; mark it in the feed; end the
             # loop. Deliberately UNLIKE max-iters (below), which clears _hoosh_acc — the user asked to
             # stop and see what came so far, and interrupt is TUI-only so one-shot's exit code is moot.
-            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); }
+            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); sess_persist_save(); }
             else { session_history_pop_last(); }
             intr_note();
             done = 1;
@@ -1077,7 +1077,7 @@ fn agent_turn(prompt) {
             roundlog_open(session_turns(), round_no);
             _agent_run_calls(_agent_round_val, _agent_round_n);
         } else {
-            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); }
+            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); sess_persist_save(); }
             else { oprintln("  hoosh: response had neither tool calls nor content."); session_history_pop_last(); }
             done = 1;
             log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "ok"); log_commit(SK_INFO);

@@ -3427,6 +3427,75 @@ fn test_save() {
     return 0;
 }
 
+fn test_session_persist() {
+    test_group("conversation resume ([session].file, session.cyr, 0.24.2)");
+    # --- _sess_uint_into (decimal formatter) ---
+    var b = alloc(16);
+    var e = _sess_uint_into(b, 0, 0); store8(b + e, 0); assert(streq(b, "0") == 1, "uint 0");
+    e = _sess_uint_into(b, 0, 12345); store8(b + e, 0); assert(streq(b, "12345") == 1, "uint 12345");
+    # --- _sess_role_literal maps to STABLE literals (append stores the ptr uncopied) ---
+    assert(streq(_sess_role_literal("assistant", 9), "assistant") == 1, "role literal: assistant");
+    assert(streq(_sess_role_literal("user", 4), "user") == 1, "role literal: user");
+    assert(streq(_sess_role_literal("weird", 5), "user") == 1, "unknown role -> user");
+
+    # --- save -> clear -> load round-trip, incl. multi-line content (length-prefixed, no escaping) ---
+    session_history_clear();
+    session_history_append("user", "hello there", 11);
+    session_history_append("assistant", "hi! line1\nline2", 15);   # embedded newline
+    session_history_append("user", "bye", 3);
+    assert_eq(session_history_len(), 3, "3 messages in memory");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_test"), 0, "write file ok");
+    session_history_clear();
+    assert_eq(session_history_len(), 0, "cleared in memory");
+    assert_eq(_sess_load_file("/tmp/thoth_sess_test"), 3, "loaded 3 records");
+    assert_eq(session_history_len(), 3, "3 messages restored");
+    assert(streq(session_history_role(0), "user") == 1, "msg0 role user");
+    assert(streq(session_history_content(0), "hello there") == 1, "msg0 content round-trips");
+    assert(streq(session_history_role(1), "assistant") == 1, "msg1 role assistant");
+    assert(streq(session_history_content(1), "hi! line1\nline2") == 1, "msg1 MULTI-LINE content survives (length-prefixed)");
+    assert(streq(session_history_content(2), "bye") == 1, "msg2 content round-trips");
+
+    # --- a foreign / corrupt first line -> load skipped (0), nothing corrupted ---
+    var fd = file_open("/tmp/thoth_sess_bad", O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    file_write(fd, "NOT-A-SESSION\nuser\t3\nabc\n", 25);
+    file_close(fd);
+    session_history_clear();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_bad"), 0, "foreign magic -> load skipped");
+    assert_eq(session_history_len(), 0, "nothing loaded from a foreign file");
+    assert_eq(_sess_load_file("/tmp/thoth_no_such_sess_zzz"), 0, "absent file -> 0 (no crash)");
+
+    # --- sess_persist_init end-to-end: load + activate; a later save rewrites the window ---
+    session_history_clear();
+    session_history_append("user", "q1", 2);
+    session_history_append("assistant", "a1", 2);
+    _sess_write_file("/tmp/thoth_sess_init");
+    session_history_clear();
+    assert_eq(sess_persist_init("/tmp/thoth_sess_init"), 2, "init resumed 2 messages");
+    assert_eq(sess_persist_active(), 1, "init activated persistence");
+    assert_eq(sess_persist_resumed(), 2, "resumed count = 2");
+    session_history_append("user", "q2", 2);
+    session_history_append("assistant", "a2", 2);   # would trigger sess_persist_save() live; call it explicitly
+    sess_persist_save();
+    session_history_clear();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_init"), 4, "the save persisted all 4 messages");
+
+    # --- the reported resume count is capped at what survives SESS_HIST_MAX=40 (review-caught fix) ---
+    var fd2 = file_open("/tmp/thoth_sess_big", O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    file_write(fd2, "THOTH-SESSION-1\n", 16);
+    var rec = 0;
+    while (rec < 42) { file_write(fd2, "user\t1\nx\n", 9); rec = rec + 1; }   # 42 one-byte records
+    file_close(fd2);
+    session_history_clear();
+    var big = sess_persist_init("/tmp/thoth_sess_big");
+    assert_eq(session_history_len(), 40, "history capped at SESS_HIST_MAX=40");
+    assert_eq(big, 40, "reported resumed count capped at 40 (not the 42 parsed)");
+    assert_eq(sess_persist_resumed(), 40, "sess_persist_resumed() == 40");
+
+    _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
+    session_history_clear();       # leave a clean history for subsequent tests
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3494,6 +3563,7 @@ fn main() {
     test_project();
     test_mpick();
     test_save();
+    test_session_persist();
     test_model_switch();
     return assert_summary();
 }

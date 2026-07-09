@@ -149,6 +149,213 @@ fn session_history_clear() {
     return 0;
 }
 
+# --- conversation resume: persist the message history to [session].file (0.24.2) -----------------------
+# Opt-in persistence of the CONVERSATION history (role + content per message) so a restart resumes where you
+# left off. DISTINCT from [history].file (composer keystrokes, 0.11.2) and the memory seam (durable facts).
+# INTERACTIVE-ONLY (main.cyr binds it after the one-shot dispatch returns; one-shot never persists). Mirrors
+# 0.11.2's secrets posture: OFF by default, best-effort 0600 on fresh create, degrade-closed (a failure is
+# announced once, never faked). Uses the PORTABLE lib/io.cyr wrappers (the AGNOS open bridge — never raw
+# sys_open).
+#
+# SECURITY — this writes the CONVERSATION CONTENT (your prompts + the model's replies) in PLAINTEXT on disk,
+# more sensitive than input-history keystrokes. Opt-in only. RESIDUALS (documented, not faked, same class as
+# 0.11.2): a fresh file is created 0600 on POSIX, but (1) a PRE-EXISTING looser file is left as-is (O_TRUNC
+# keeps its perms; no portable chmod to tighten — sys_chmod is absent on Windows + a no-op on AGNOS), (2)
+# AGNOS's frozen-ABI open drops the create mode, (3) no O_NOFOLLOW (a symlink at the path is followed). We
+# never assert a mode we cannot enforce.
+#
+# FORMAT (framed, length-prefixed so multi-line content needs no escaping):
+#   line 1:  THOTH-SESSION-1\n           version marker; a foreign/corrupt first line -> load skipped
+#   record:  <role>\t<clen>\n            role = "user"|"assistant"; clen = decimal content byte length
+#            <clen content bytes>\n      the content, verbatim; the trailing \n is a separator / sanity check
+# Content is the message text as the session subsystem holds it — a NUL-TERMINATED cstring (see
+# session_history_* above). We persist strlen(content) bytes, so an interior NUL byte terminates content, as
+# it already does everywhere else in the history path (and as it MUST: a raw NUL cannot be re-sent to hoosh —
+# a 0x00 inside a JSON string is invalid). Newlines, tabs, and all other bytes round-trip exactly.
+var SESS_FILE_MAGIC = "THOTH-SESSION-1";
+var SESS_MODE = 0x180;         # 0600 rw------- — best-effort CREATE mode (see the header note on perms)
+var SESS_READ_CAP = 3145728;   # 3 MiB load buffer (>= SESS_HIST_MAX * HOOSH_ACC_CAP); a larger file loads its leading records only
+var _sess_path = 0;            # bound file path (0 = persistence OFF)
+var _sess_broke = 0;           # 1 if a save FAILED mid-session (persistence auto-disabled; announce once)
+var _sess_init_failed = 0;     # 1 if [session].file was set but unwritable at startup (announce once)
+var _sess_resumed = 0;         # count of messages loaded at startup (for the greeting)
+var _sess_read_buf = 0;        # alloc(SESS_READ_CAP), lazy — whole-file load buffer
+var _sess_hdr_buf = 0;         # alloc(64), lazy — the "<role>\t<clen>\n" record header scratch on save
+
+# _sess_eqn: 1 if the first `n` bytes of `a` and `b` are equal; else 0. PURE.
+fn _sess_eqn(a, b, n) {
+    var k = 0;
+    while (k < n) { if (load8(a + k) != load8(b + k)) { return 0; } k = k + 1; }
+    return 1;
+}
+
+# _sess_role_literal: map a parsed role name to a STABLE literal. session_history_append stores the role
+# POINTER without copying (see its body), so it MUST outlive the call — never a temp/parse buffer. Unknown
+# roles default to "user" (a benign, honest fallback).
+fn _sess_role_literal(s, slen) {
+    if ((slen == 9) && (_sess_eqn(s, "assistant", 9) == 1)) { return "assistant"; }
+    if ((slen == 4) && (_sess_eqn(s, "user", 4) == 1)) { return "user"; }
+    return "user";
+}
+
+# _sess_uint_into: write the decimal digits of n (>= 0) into buf at off; returns the new off. PURE.
+fn _sess_uint_into(buf, off, n) {
+    if (n == 0) { store8(buf + off, 48); return off + 1; }
+    var d = 1;
+    var t = n;
+    while (t >= 10) { d = d * 10; t = t / 10; }
+    while (d > 0) {
+        store8(buf + off, 48 + ((n / d) % 10)); off = off + 1;
+        d = d / 10;
+    }
+    return off;
+}
+
+# _sess_write_file: truncate + rewrite `path` from the in-memory history (oldest->newest), framed. Returns 0
+# on success, -1 if the file cannot be opened OR any write short-writes (so the caller degrades closed rather
+# than leave a truncated file). Created 0600 if absent (best-effort — see the header note on perms).
+fn _sess_write_file(path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, SESS_MODE);
+    if (fd < 0) { return 0 - 1; }
+    if (_sess_hdr_buf == 0) { _sess_hdr_buf = alloc(64); }
+    var ok = 0;
+    var ml = strlen(SESS_FILE_MAGIC);
+    if (file_write(fd, SESS_FILE_MAGIC, ml) != ml) { ok = 0 - 1; }
+    if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+    var n = session_history_len();
+    var i = 0;
+    while (i < n) {
+        var role = session_history_role(i);
+        var content = session_history_content(i);
+        var clen = strlen(content);
+        var ho = 0;                                       # build "<role>\t<clen>\n" in the scratch
+        var rl = strlen(role);
+        var k = 0;
+        while (k < rl) { store8(_sess_hdr_buf + ho, load8(role + k)); ho = ho + 1; k = k + 1; }
+        store8(_sess_hdr_buf + ho, 9); ho = ho + 1;       # '\t'
+        ho = _sess_uint_into(_sess_hdr_buf, ho, clen);
+        store8(_sess_hdr_buf + ho, 10); ho = ho + 1;      # '\n'
+        if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
+        if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0 - 1; } }
+        if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+        i = i + 1;
+    }
+    file_close(fd);
+    return ok;
+}
+
+# _sess_load_file: read `path`, verify the magic line, and replay each record through session_history_append
+# (which applies the SESS_HIST_MAX cap, keeping the most-recent). Returns the count loaded. A missing file,
+# a foreign/corrupt first line, or a malformed/truncated record is handled gracefully (load what parsed, then
+# stop) — never a crash. Reads up to SESS_READ_CAP; a larger file loads its leading complete records only.
+fn _sess_load_file(path) {
+    var fd = file_open(path, 0, 0);                       # O_RDONLY; <0 -> absent, nothing to resume
+    if (fd < 0) { return 0; }
+    if (_sess_read_buf == 0) { _sess_read_buf = alloc(SESS_READ_CAP); }
+    var total = 0;
+    var go = 1;
+    while (go == 1) {
+        var got = file_read(fd, _sess_read_buf + total, SESS_READ_CAP - total);
+        if (got <= 0) { go = 0; }
+        else { total = total + got; if (total >= SESS_READ_CAP) { go = 0; } }
+    }
+    file_close(fd);
+    var ml = strlen(SESS_FILE_MAGIC);
+    if (total < (ml + 1)) { return 0; }                  # too short to hold the magic line
+    if (_sess_eqn(_sess_read_buf, SESS_FILE_MAGIC, ml) == 0) { return 0; }   # not our file -> skip
+    if (load8(_sess_read_buf + ml) != 10) { return 0; }  # magic must be its own line
+    var p = ml + 1;
+    var loaded = 0;
+    var parsing = 1;
+    while (parsing == 1) {
+        if (p >= total) { parsing = 0; }
+        else {
+            var rstart = p;                              # role token: up to '\t'
+            while ((p < total) && (load8(_sess_read_buf + p) != 9) && (load8(_sess_read_buf + p) != 10)) { p = p + 1; }
+            if ((p >= total) || (load8(_sess_read_buf + p) != 9)) { parsing = 0; }
+            else {
+                var rlen = p - rstart;
+                p = p + 1;                               # skip '\t'
+                var clen = 0;                            # decimal content length
+                var digits = 0;
+                while ((p < total) && (load8(_sess_read_buf + p) >= 48) && (load8(_sess_read_buf + p) <= 57)) {
+                    clen = clen * 10 + (load8(_sess_read_buf + p) - 48);
+                    p = p + 1; digits = digits + 1;
+                }
+                # clen bounds: reject a non-numeric/absent length, an i64-overflowed (negative) length, or
+                # one larger than the whole buffer (a hostile/corrupt file) — BEFORE any pointer arithmetic,
+                # so a giant clen can never wrap (p + clen) negative and slip past the fit check into an OOB copy.
+                if ((digits == 0) || (clen < 0) || (clen > total) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { parsing = 0; }
+                else {
+                    p = p + 1;                           # skip '\n' after clen
+                    if (clen > (total - p)) { parsing = 0; }   # content doesn't fit (truncated) -> stop
+                    else {
+                        session_history_append(_sess_role_literal(_sess_read_buf + rstart, rlen), _sess_read_buf + p, clen);
+                        loaded = loaded + 1;
+                        p = p + clen;
+                        if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip the record separator
+                    }
+                }
+            }
+        }
+    }
+    return loaded;
+}
+
+# _sess_probe_writable: NON-DESTRUCTIVE writability check — create at 0600 if absent (O_CREAT, NO O_TRUNC)
+# or open an existing file without touching it, then close. Returns 0 if writable, -1 otherwise (so binding
+# never trims the user's file on mere startup).
+fn _sess_probe_writable(path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT, SESS_MODE);   # no O_TRUNC -> content preserved
+    if (fd < 0) { return 0 - 1; }
+    file_close(fd);
+    return 0;
+}
+
+# sess_persist_init: bind conversation persistence to `path` (0 -> OFF). Loads any existing conversation into
+# the history, then NON-DESTRUCTIVELY probes writability. Returns the number of messages resumed (>=0), or -1
+# if the path is set but unwritable (resume stays OFF; the session still works in-memory). Interactive-only.
+fn sess_persist_init(path) {
+    _sess_path = 0;
+    _sess_broke = 0;
+    _sess_init_failed = 0;
+    _sess_resumed = 0;
+    if (path == 0) { return 0; }                         # not configured -> OFF
+    _sess_load_file(path);
+    _sess_resumed = session_history_len();               # the ACTUAL resumed count (post SESS_HIST_MAX eviction) — a >40-record file parses more than it keeps; report what's really in context, never the raw parse count
+    if (_sess_probe_writable(path) < 0) { _sess_init_failed = 1; return 0 - 1; }   # unwritable -> announce + OFF
+    _sess_path = path;                                   # ACTIVE
+    return _sess_resumed;
+}
+
+# sess_persist_save: rewrite the session file from the in-memory history, if active (else a no-op — so it is
+# safe to call from every turn path, including one-shot where persistence was never bound). On a write
+# FAILURE it degrades closed: disables persistence + raises the broke flag (announced once), never faked.
+fn sess_persist_save() {
+    if (_sess_path == 0) { return 0; }
+    if (_sess_write_file(_sess_path) < 0) { _sess_path = 0; _sess_broke = 1; }
+    return 0;
+}
+
+fn sess_persist_active() { if (_sess_path != 0) { return 1; } return 0; }
+fn sess_persist_broke() { return _sess_broke; }
+fn sess_persist_broke_ack() { _sess_broke = 0; return 0; }
+fn sess_persist_resumed() { return _sess_resumed; }
+
+# sess_persist_greeting: emit the one-line resume note for the interactive greeting (REPL banner + TUI feed).
+# Sink-aware (emit/oprintln). Honest: resumed N when messages were loaded, an unwritable note when the file
+# was set but could not be bound, nothing otherwise.
+fn sess_persist_greeting() {
+    if (_sess_init_failed == 1) {
+        emit("  "); ui_emit(ROLE_RED, "session file not writable"); ui_emit(ROLE_FAINT, " — resume disabled"); oprintln("");
+        return 0;
+    }
+    if ((_sess_path != 0) && (_sess_resumed > 0)) {
+        emit("  "); emit(ui_sgr(ROLE_FAINT)); emit("resumed "); ofmt_int(_sess_resumed); emit(" messages from "); emit(_sess_path); emit(ui_reset()); oprintln("");
+    }
+    return 0;
+}
+
 fn session_turns() { return _sess_turns; }
 fn session_bump_turn() { _sess_turns = _sess_turns + 1; return _sess_turns; }
 fn session_model() { return _sess_model; }
@@ -291,6 +498,7 @@ fn print_banner() {
     emit(" - "); emit(ui_sgr(ROLE_ACCENT)); emit("thoth "); emit(thoth_version()); emit(ui_reset()); oprintln("");
     emit("  "); ui_emit(ROLE_MUTED, persona_tagline()); oprintln("");
     emit("  "); ui_emit(ROLE_FAINT, "a sovereign agentic coding TUI (fermenting). /help for commands."); oprintln("");
+    sess_persist_greeting();      # 0.24.2: "  resumed N messages …" when [session].file restored a conversation (self-indents; silent otherwise)
     oprintln("");
     return 0;
 }

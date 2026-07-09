@@ -2023,6 +2023,8 @@ fn tui_loop() {
         }
         feed_flush_pending();
     }
+    sess_persist_greeting();   # 0.24.2: "resumed N messages …" (bound in main.cyr before the loop); silent if not resuming
+    feed_flush_pending();
     out_mode_set(OUT_FD1);
     _tui_running = 1;
     tui_relayout();
@@ -2127,6 +2129,13 @@ fn tui_loop() {
                         inhist_persist_broke_ack();
                         out_mode_set(OUT_RING);
                         ui_emit(ROLE_FAINT, "input history: write failed — persistence disabled for this session");
+                        feed_flush_pending();
+                        out_mode_set(OUT_FD1);
+                    }
+                    if (sess_persist_broke() == 1) {     # 0.24.2: a conversation-file save failed mid-session -> announce ONCE
+                        sess_persist_broke_ack();
+                        out_mode_set(OUT_RING);
+                        ui_emit(ROLE_FAINT, "session file: write failed — resume disabled for this session");
                         feed_flush_pending();
                         out_mode_set(OUT_FD1);
                     }

@@ -140,6 +140,25 @@ model = "claude-haiku-4-5-20251001"
 # [history]
 # file = ".thoth_history"             # project-local; or an absolute "/home/you/.thoth_history"
 
+# The [session] table (0.24.2) persists the CONVERSATION HISTORY (the multi-turn messages —
+# your prompts AND the model's replies) to a file, so a restart RESUMES where you left off.
+# DISTINCT from [history].file (composer keystrokes) and from the mneme memory seam (durable
+# facts). Interactive-only (one-shot never persists). Off by default.
+#
+# SECURITY — this writes the whole conversation in PLAINTEXT, so it is MORE sensitive than the
+# input history. A FRESH file is created mode 0600 (owner-only) on POSIX (best-effort, same
+# residuals as [history].file: a PRE-EXISTING looser file is NOT re-tightened, AGNOS's
+# frozen-ABI open drops the create mode, and the path is opened following symlinks). Keep it in
+# a directory only YOU can write; an unwritable path is announced and the session stays
+# in-memory (degrade-closed). /reset clears it; delete the file to wipe the saved conversation.
+#
+#   file — path to the persistent conversation file. Omit for no resume (the default). Used
+#          VERBATIM (no `~` expansion) — a relative path (from where thoth is launched) or a
+#          full absolute path.
+
+# [session]
+# file = ".thoth_session"             # project-local; or an absolute "/home/you/.thoth_session"
+
 # The [alias] table defines slash macros (0.11.4). Each `name = "expansion"` lets you type
 # /<name> as a shortcut: when /<name> is NOT a built-in command, thoth expands it to the
 # expansion text (with any trailing args appended) and re-runs the result. The expansion can

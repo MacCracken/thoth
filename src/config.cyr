@@ -32,6 +32,7 @@ var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
 var _cfg_log_file = 0;       # cstring path for structured driver logs, or 0
 var _cfg_log_level = 0;      # cstring level (off/error/warn/info/debug/trace), or 0
 var _cfg_history_file = 0;   # cstring path for the persistent INPUT-history file (0.11.2), or 0
+var _cfg_session_file = 0;   # cstring path for the persistent CONVERSATION-history file (0.24.2), or 0
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
 var _cfg_shell_timeout_ms = 0 - 1;  # per-command wall-clock timeout (ms); -1 = unset -> default (clamped in the getter)
@@ -385,6 +386,8 @@ fn config_load() {
     _cfg_log_level = _cfg_str(log, "level");
     var history = _cfg_section_pairs(sections, "history");
     _cfg_history_file = _cfg_str(history, "file");
+    var session = _cfg_section_pairs(sections, "session");
+    _cfg_session_file = _cfg_str(session, "file");         # [session].file — persistent conversation history (0.24.2)
     var memory = _cfg_section_pairs(sections, "memory");
     _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
     var persona = _cfg_section_pairs(sections, "persona");
@@ -525,3 +528,7 @@ fn config_log_level() { return _cfg_log_level; }
 # with Up/Down) — DISTINCT from [hoosh].history (multi-turn conversation memory). Off by
 # default; when set, thoth persists/loads it at 0600 (it may hold typed secrets).
 fn config_history_file() { return _cfg_history_file; }
+
+# config_session_file: path to the persistent CONVERSATION-history file (0.24.2), or 0 (none configured ->
+# resume OFF). Distinct from config_history_file (composer keystrokes) and the memory seam (durable facts).
+fn config_session_file() { return _cfg_session_file; }

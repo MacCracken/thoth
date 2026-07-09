@@ -7,6 +7,34 @@
 
 ## Version
 
+**0.24.2** — **conversation resume ([session].file)**, 2026-07-09. Opt-in persistence of the conversation
+history (role + content per message) across restarts — relaunch and pick up where you left off. DISTINCT from
+`[history].file` (composer keystrokes) and the mneme seam (durable facts). INTERACTIVE-ONLY (main.cyr binds it
+after the one-shot dispatch returns; one-shot never persists). All logic in a new `src/session.cyr` section.
+**Format** (framed, length-prefixed so multi-line content needs NO escaping): `THOTH-SESSION-1\n` then
+`<role>\t<clen>\n<clen content bytes>\n` records. `_sess_write_file` (rewrite the window each save, checks
+every `file_write`), `_sess_load_file` (read ≤3 MiB, verify magic, parse → `session_history_append`;
+HARDENED — rejects a non-numeric / i64-overflowed / oversized `clen` before any pointer math, so a hostile
+file can't OOB), `_sess_role_literal` (maps parsed roles to STABLE literals — `session_history_append` stores
+the role POINTER uncopied; content IS copied), `_sess_probe_writable` (non-destructive 0600 create),
+`sess_persist_init/_save/_active/_broke/_resumed/_greeting`. **Save hooks**: the 3 assistant-append sites
+(agent.cyr ×2, hoosh.cyr ×1) save ONLY on success (a popped/failed turn leaves the last-good file); `cmd_reset`
+rewrites it empty (so `/reset` isn't undone by resume). **Wiring**: `config_session_file` (`[session].file`),
+init in main.cyr (interactive-only), greeting in `print_banner` + the TUI greeting, broke-note in both loops,
+a `resume` row in `/state` (shown only when active → floor byte-identical). **Secrets** (mirrors 0.11.2): OFF
+by default, best-effort `0600` on fresh create, degrade-closed, honest residuals documented (pre-existing
+looser file not re-tightened, AGNOS drops the mode, symlink-follow); writes the conversation in PLAINTEXT —
+never asserts a mode it can't enforce. **Verified**: 1189 assertions (+25 `test_session_persist`: uint fmt,
+role-literal mapping, save→clear→load round-trip incl. MULTI-LINE content, foreign-magic skip, absent-file,
+init+activate+resave, >40-record count-cap) + LIVE across a real restart (process 1 learned codeword
+PLATYPUS-7 → process 2 announced "resumed 2 messages" and recalled PLATYPUS-7; file mode `0600` confirmed).
+**4-lens adversarial review** (parser / role-pointer / hooks / secrets): persistence sound; REFUTED the
+clen-overflow OOB (the proactive `clen < 0 || clen > total` guard holds) + caught & FIXED two low findings —
+(1) the greeting overstated the resume count (counted parsed records, not the post-eviction `session_history_len()`);
+(2) the format doc's "raw bytes" claim was imprecise (content is a NUL-terminated cstring — an interior NUL
+terminates it, as it must since a raw 0x00 can't be re-sent in a JSON string). Pin **6.4.29**. NEXT:
+remaining 0.24.x polish — terminal niceties (BEL + per-turn elapsed), `/reload`. See CHANGELOG/roadmap.
+
 **0.24.1** — **`/save <file>` transcript export**, 2026-07-09. Writes the TUI feed scrollback to a file as a
 plain-text/markdown transcript. NEW `feed_strip_ansi_into` (`src/feed.cyr`): pure ANSI stripper — drops
 thoth's 2-byte role/reset markers (`ESC`+`0xB0..0xB7`/`0xBF`), CSI runs (`ESC '[' … 0x40..0x7E`), and other
@@ -21,8 +49,7 @@ saved). **Verified**: 1164 assertions (+10 `test_save`: stripper over markers/CS
 a real round-trip — populate the ring, save, read the file back, assert header + content + ZERO escape bytes)
 + LIVE over a PTY (`--tier=rich`: `/help` → `/save /tmp/…` → a clean marker-free markdown file). Pin **6.4.29**
 (re-pinned — the env drifted the active cycc to 6.4.32; repointed `~/.cyrius` symlinks + `current` to 6.4.29).
-NEXT: remaining 0.24.x polish — conversation resume (largest, secrets surface), terminal niceties (BEL +
-per-turn elapsed), `/reload`. See CHANGELOG/roadmap.
+Followed by 0.24.2 (conversation resume, above).
 
 **0.24.0** — **model-picker palette** (Ctrl-P), 2026-07-09. Opens the `0.24.x` arc. An interactive TUI modal
 over hoosh's model catalog that switches the active model through the EXISTING `/model` seam — no new switch

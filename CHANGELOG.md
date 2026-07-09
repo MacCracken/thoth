@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.2] - 2026-07-09
+
+**Conversation resume.** Opt-in `[session].file` persists the conversation history (your prompts + the
+model's replies) across restarts — relaunch thoth and it picks up where you left off. Distinct from
+`[history].file` (composer keystrokes) and the mneme memory seam (durable facts). Interactive-only (one-shot
+never persists). 1189 assertions; live-verified across a real restart (process 1 learned a codeword → process
+2 resumed and recalled it), with the file created `0600`. A 4-lens adversarial review (parser / role-pointer /
+hooks / secrets) confirmed the persistence sound and caught two low findings (both fixed).
+
+### Added
+- **`[session].file`** (`sess_persist_*` in `src/session.cyr`): loads any prior conversation into the history
+  at startup (the greeting announces "resumed N messages …") and rewrites the file after each completed
+  exchange. Framed, **length-prefixed** format (`THOTH-SESSION-1` + `<role>\t<clen>\n<content>` records) so
+  arbitrary multi-line content needs no escaping. A `resume` row in `/state` when active.
+- **`/reset` clears the file too**, so a reset conversation isn't undone by the next restart's resume.
+
+### Security
+- Same opt-in, degrade-closed posture as `[history].file` (0.11.2): OFF by default; a fresh file is created
+  `0600`; a set-but-unwritable path is announced and the session stays in-memory; a mid-session write failure
+  disables persistence and is announced once — never faked. **This writes the conversation in plaintext** (more
+  sensitive than keystrokes); the residuals (a pre-existing looser file is not re-tightened, AGNOS drops the
+  create mode, no `O_NOFOLLOW`) are documented in `thoth.cyml.example` + the module, never a mode we can't enforce.
+- The loader is hardened against a hostile/corrupt file: the magic line is verified, and a `clen` that is
+  non-numeric, i64-overflowed, or larger than the buffer is rejected before any pointer arithmetic (no OOB).
+
+### Fixed
+- The greeting's resume count is capped at the messages actually kept (`session_history_len()` after the
+  `SESS_HIST_MAX` eviction), so a >40-record file reports "resumed 40", not the raw parse count (review-caught).
+- The format doc is precise that content is a NUL-terminated cstring (an interior NUL terminates it, as it must
+  — a raw `0x00` can't be re-sent inside a JSON string); newlines/tabs/all other bytes round-trip exactly.
+
 ## [0.24.1] - 2026-07-09
 
 **`/save <file>` — transcript export.** Writes the TUI feed scrollback to a file as a plain-text/markdown

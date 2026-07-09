@@ -227,6 +227,11 @@ fn cmd_state() {
         if (ev > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(ev); emit(" oldest evicted"); emit(ui_reset()); }
         ui_emit(ROLE_MUTED, " (/reset clears)"); oprintln("");
     }
+    if (sess_persist_active() == 1) {     # 0.24.2: omit the row entirely when off (byte-identical floor)
+        ui_label("  resume  : ");
+        ui_emit(ROLE_GREEN, "on"); emit(" — "); emit(config_session_file());
+        ui_emit(ROLE_MUTED, " ([session].file; conversation persisted across restarts)"); oprintln("");
+    }
     ui_label("  memory  : ");
     if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall)"); oprintln(""); }
     elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }
@@ -927,6 +932,7 @@ fn cmd_call(line) {
 fn cmd_reset() {
     var n = session_history_len();
     session_history_clear();
+    sess_persist_save();       # 0.24.2: mirror the cleared history to [session].file so /reset isn't undone by a resume
     roundlog_reset();
     if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }

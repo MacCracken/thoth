@@ -104,6 +104,9 @@ fn main() {
         one_shot_set(0);
         return rc;
     }
+    # 0.24.2: bind conversation resume ([session].file) — INTERACTIVE-ONLY (one-shot returned above, so it
+    # never loads/persists). Loads any prior conversation into the history; the greeting announces the resume.
+    sess_persist_init(config_session_file());
     # Warm the git producer once so the first status-bar paint / /state reflects the
     # working repo (0.13.0). Interactive-only — one-shot never shows git, so it skips
     # the worktree walk. Absent repo -> the seam reports absent honestly.
