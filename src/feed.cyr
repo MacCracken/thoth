@@ -615,6 +615,40 @@ fn _feed_row_slot(row) { return (_feed_head + row) % FEED_ROWS; }
 fn feed_line_ptr(row) { return _feed_base + _feed_row_slot(row) * FEED_LINE_CAP; }
 fn feed_line_len(row) { return load64(_feed_len + _feed_row_slot(row) * 8); }
 fn feed_vis(row) { return load64(_feed_vis + _feed_row_slot(row) * 8); }
+
+# feed_strip_ansi_into: copy src[0..len) into dst (cap-bounded), DROPPING every escape sequence so the
+# result is plain readable text — thoth's own 2-byte role/reset markers (ESC + 0xB0..0xB7 / 0xBF), CSI
+# sequences (ESC '[' … final 0x40..0x7E), and any other 2-byte ESC form. Used by /save (0.24.1) to export
+# the feed scrollback as markdown. Returns the stripped byte length. PURE; text bytes (incl. UTF-8) pass
+# verbatim — only ESC-introduced runs are removed, so no multi-byte glyph is ever severed.
+fn feed_strip_ansi_into(dst, cap, src, len) {
+    var i = 0;
+    var o = 0;
+    while ((i < len) && (o < cap)) {
+        var b = load8(src + i);
+        if (b == 27) {                                # ESC — drop the whole escape sequence
+            var nx = 0;
+            if ((i + 1) < len) { nx = load8(src + i + 1); }
+            if (nx == 91) {                           # CSI: ESC '[' … up to a final byte 0x40..0x7E
+                i = i + 2;
+                var done = 0;
+                while ((i < len) && (done == 0)) {
+                    var f = load8(src + i);
+                    i = i + 1;
+                    if ((f >= 64) && (f <= 126)) { done = 1; }
+                }
+            } else {                                  # role/reset marker or any other 2-byte ESC form
+                i = i + 2;
+            }
+        } else {
+            store8(dst + o, b);
+            o = o + 1;
+            i = i + 1;
+        }
+    }
+    return o;
+}
+
 # feed_scroll: rows paged back from the newest, in PHYSICAL (soft-wrapped) rows
 # since 0.11.3 — the painter and _tui_feed_scroll_by both reckon in physical rows.
 fn feed_scroll() { return _feed_scroll; }

@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.24.1] - 2026-07-09
+
+**`/save <file>` — transcript export.** Writes the TUI feed scrollback to a file as a plain-text/markdown
+transcript, ANSI-stripped to readable text. Rides the feed ring + the same portable `lib/io.cyr` file I/O
+(create + truncate `0644`) as the one-shot `-o` tee. 1164 assertions; live-verified over a PTY (`/help` →
+`/save` → a clean marker-free markdown file).
+
+### Added
+- **`/save <file>`** (`cmd_save` in `src/commands.cyr`): dump the feed scrollback to `<file>` (a `# thoth
+  transcript` header + each line). The user's OWN export to a path they name — **not** t-ron-gated (like `-o`;
+  the model can never invoke a slash command). Degrades honestly: no arg → usage; empty ring (line mode never
+  captures the feed) → a note; unopenable path / short write → an announced failure, never faked.
+- **`feed_strip_ansi_into`** (`src/feed.cyr`): a pure ANSI stripper — drops thoth's 2-byte role/reset markers
+  (`ESC` + `0xB0..0xB7`/`0xBF`), CSI sequences, and other 2-byte `ESC` forms, so the export is clean text.
+  Never severs a UTF-8 glyph (only `ESC`-introduced runs are removed).
+
+### Honest limits
+- The feed ring is **TUI-only** (line-mode/one-shot never capture it) and **bounded** (`FEED_ROWS` lines) —
+  older scrollback is evicted, not saved. Documented in the `cmd_save` header + surfaced by the empty-ring note.
+
 ## [0.24.0] - 2026-07-09
 
 **Model-picker palette.** A new interactive **Ctrl-P** picker in the TUI: it fetches hoosh's model catalog,

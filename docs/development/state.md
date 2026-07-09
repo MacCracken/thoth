@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.24.1** — **`/save <file>` transcript export**, 2026-07-09. Writes the TUI feed scrollback to a file as a
+plain-text/markdown transcript. NEW `feed_strip_ansi_into` (`src/feed.cyr`): pure ANSI stripper — drops
+thoth's 2-byte role/reset markers (`ESC`+`0xB0..0xB7`/`0xBF`), CSI runs (`ESC '[' … 0x40..0x7E`), and other
+2-byte `ESC` forms; text (incl. UTF-8) passes verbatim (only `ESC`-introduced runs removed). NEW `cmd_save`
+(`src/commands.cyr`, `CMD_SAVE=26`): open `O_WRONLY|O_CREAT|O_TRUNC` `0644` via the portable `lib/io.cyr`
+wrappers (same as the `-o` tee), write a `# thoth transcript` header + each `feed_line_ptr/_len` line stripped
+into `_save_buf` (`SAVE_BUF=2048==FEED_LINE_CAP`) + `\n`, checking every write. NOT t-ron-gated (the user's own
+export to a named path, like `-o`; the model can't invoke a slash command). Degrades honestly: no arg → usage;
+empty ring (line mode never captures the feed) → note; open-fail / short write → announced, never faked. HONEST
+LIMITS (documented): the feed ring is TUI-only + bounded (`FEED_ROWS=2048` — older scrollback evicted, not
+saved). **Verified**: 1164 assertions (+10 `test_save`: stripper over markers/CSI/lone-trailing-ESC/plain +
+a real round-trip — populate the ring, save, read the file back, assert header + content + ZERO escape bytes)
++ LIVE over a PTY (`--tier=rich`: `/help` → `/save /tmp/…` → a clean marker-free markdown file). Pin **6.4.29**
+(re-pinned — the env drifted the active cycc to 6.4.32; repointed `~/.cyrius` symlinks + `current` to 6.4.29).
+NEXT: remaining 0.24.x polish — conversation resume (largest, secrets surface), terminal niceties (BEL +
+per-turn elapsed), `/reload`. See CHANGELOG/roadmap.
+
 **0.24.0** — **model-picker palette** (Ctrl-P), 2026-07-09. Opens the `0.24.x` arc. An interactive TUI modal
 over hoosh's model catalog that switches the active model through the EXISTING `/model` seam — no new switch
 machinery. NEW `src/mpick.cyr` = pure state/filter/nav: `_mp_add` (bounded copy into packed storage),
@@ -31,8 +48,7 @@ LIVE over a PTY (`--tier=rich`: Ctrl-P → catalog list [claude-opus-4/gpt-4o/o3
 drops] → Enter → `model ->` switch in the feed → Ctrl-X clean exit). **4-lens adversarial review** (memory /
 logic / TUI-floor / honesty): modal sound; caught + FIXED one defensive gap — `_mp_add` now refuses an empty
 model id (a malformed `{"id":""}` catalog entry is a non-null zero-length Str that would otherwise become a
-blank row switching to an empty model). Pin **6.4.29**. NEXT: remaining 0.24.x polish — conversation
-resume, `/save` transcript export, terminal niceties (BEL + per-turn elapsed), `/reload`. See CHANGELOG/roadmap.
+blank row switching to an empty model). Pin **6.4.29**. Followed by 0.24.1 (`/save` transcript export, above).
 
 **0.23.1** — **user-granted read roots: the user widens the jail** (ADR-0015), 2026-07-08. The 0.23.0 read
 tools were confined to the launch cwd; now the *user* (never the model) can grant read access to additional

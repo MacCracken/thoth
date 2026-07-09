@@ -3380,6 +3380,53 @@ fn test_mpick() {
     return 0;
 }
 
+fn test_save() {
+    test_group("/save transcript export (feed_strip_ansi_into + cmd_save, 0.24.1)");
+    # --- feed_strip_ansi_into: drop role/reset markers + CSI, keep text ---
+    var src = alloc(64);
+    var o = 0;
+    store8(src + o, 65); o = o + 1; store8(src + o, 66); o = o + 1;    # "AB"
+    store8(src + o, 27); o = o + 1; store8(src + o, 176); o = o + 1;   # role marker  ESC + 0xB0
+    store8(src + o, 67); o = o + 1; store8(src + o, 68); o = o + 1;    # "CD"
+    store8(src + o, 27); o = o + 1; store8(src + o, 91); o = o + 1;    # CSI intro    ESC + '['
+    store8(src + o, 51); o = o + 1; store8(src + o, 49); o = o + 1; store8(src + o, 109); o = o + 1;  # "31m"
+    store8(src + o, 69); o = o + 1; store8(src + o, 70); o = o + 1;    # "EF"
+    store8(src + o, 27); o = o + 1; store8(src + o, 191); o = o + 1;   # reset marker ESC + 0xBF
+    store8(src + o, 71); o = o + 1; store8(src + o, 72); o = o + 1;    # "GH"
+    var dst = alloc(64);
+    var n = feed_strip_ansi_into(dst, 64, src, o);
+    store8(dst + n, 0);
+    assert_eq(n, 8, "stripped length is 8 (ABCDEFGH)");
+    assert(streq(dst, "ABCDEFGH") == 1, "role markers + CSI stripped; text preserved");
+    var s2 = alloc(4); store8(s2, 88); store8(s2 + 1, 27);            # "X" + a trailing lone ESC
+    var n2 = feed_strip_ansi_into(dst, 64, s2, 2);
+    store8(dst + n2, 0);
+    assert(streq(dst, "X") == 1, "trailing lone ESC dropped; X preserved");
+    var n3 = feed_strip_ansi_into(dst, 64, "plain", 5);
+    store8(dst + n3, 0);
+    assert(streq(dst, "plain") == 1, "plain text passes verbatim");
+
+    # --- cmd_save round-trip: populate the ring, save, read the file back ---
+    feed_init();
+    out_mode_set(OUT_RING);
+    oprintln("first line");
+    ui_emit(ROLE_ACCENT, "second"); emit(" line"); feed_flush_pending();   # a line carrying a role marker
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "ring holds 2 lines");
+    cmd_save("/save /tmp/thoth_save_test.md");
+    var rb = alloc(4096);
+    var rn = file_read_all("/tmp/thoth_save_test.md", rb, 4095);
+    store8(rb + rn, 0);
+    assert(rn > 0, "saved file is non-empty");
+    assert(_ui_contains(rb, "# thoth transcript") == 1, "file has the markdown header");
+    assert(_ui_contains(rb, "first line") == 1, "file contains the first feed line");
+    assert(_ui_contains(rb, "second line") == 1, "file contains the second line, ANSI-stripped");
+    var has_esc = 0; var k = 0;
+    while (k < rn) { if (load8(rb + k) == 27) { has_esc = 1; } k = k + 1; }
+    assert_eq(has_esc, 0, "saved file has no escape bytes (markers fully stripped)");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3446,6 +3493,7 @@ fn main() {
     test_git();
     test_project();
     test_mpick();
+    test_save();
     test_model_switch();
     return assert_summary();
 }

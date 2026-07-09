@@ -31,6 +31,7 @@ enum Cmd {
     CMD_PERSONA = 23;
     CMD_PERSONAS = 24;
     CMD_ALLOW = 25;
+    CMD_SAVE = 26;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -120,6 +121,7 @@ fn classify_input(line) {
     if (token_is(line, "/models") == 1) { return CMD_MODELS; }
     if (token_is(line, "/personas") == 1) { return CMD_PERSONAS; }
     if (token_is(line, "/allow") == 1) { return CMD_ALLOW; }
+    if (token_is(line, "/save") == 1) { return CMD_SAVE; }
     if (token_is(line, "/persona") == 1) { return CMD_PERSONA; }
     if (token_is(line, "/model") == 1) { return CMD_MODEL; }
     if (token_is(line, "/read") == 1) { return CMD_READ; }
@@ -157,6 +159,7 @@ fn cmd_help() {
     _help_line("  /write <f> <text>", "  write text to a file (t-ron-gated)");
     _help_line("  /run <cmd>", "         run a shell command (t-ron-gated local escape)");
     _help_line("  /allow [path]", "      grant the agent read access to a root; /allow vidya; no arg lists them");
+    _help_line("  /save <file>", "       write the TUI transcript (feed scrollback) to a file as markdown");
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
@@ -447,6 +450,47 @@ fn cmd_allow(line) {
 # path (not "/"), and the table caps at READ_ROOTS_MAX.
 fn _allow_root_hint() {
     ui_emit(ROLE_FAINT, "  a root must be an absolute path (e.g. /home/you/repo), not \"/\", up to "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(READ_ROOTS_MAX); emit(" roots"); emit(ui_reset()); oprintln("");
+}
+
+# --- /save transcript export (0.24.1) -------------------------------------
+var SAVE_BUF = 2048;         # == FEED_LINE_CAP; a stripped line is never longer than the raw feed line
+var _save_buf = 0;
+
+# _save_write_str: file_write a NUL-terminated string; 1 on a full write, 0 on short/error.
+fn _save_write_str(fd, s) {
+    var n = strlen(s);
+    if (file_write(fd, s, n) != n) { return 0; }
+    return 1;
+}
+
+# cmd_save (0.24.1): write the TUI feed scrollback to <file> as a plain-text/markdown transcript. Rides the
+# feed ring (feed_count / feed_line_ptr / feed_line_len) + the PORTABLE lib/io.cyr wrappers (same create +
+# truncate 0644 as the one-shot `-o` tee). Each line is ANSI-stripped (feed_strip_ansi_into) to readable
+# text. NOT t-ron-gated: this is the user's OWN export to a path they named (like `-o`), and the model can
+# never invoke a slash command. HONEST LIMITS: the feed ring is TUI-only (line mode never captures it -> an
+# empty-ring note) and bounded to FEED_ROWS lines (older lines are evicted, not saved). Degrades closed: an
+# unopenable path / a short write is announced, never faked.
+fn cmd_save(line) {
+    var path = arg_after(line);
+    if (path == 0) { ui_emit(ROLE_RED, "usage: "); emit("/save <file>"); oprintln(""); return 0; }
+    var n = feed_count();
+    if (n == 0) { ui_emit(ROLE_FAINT, "nothing to save — the transcript is captured in the TUI feed, not line mode"); oprintln(""); return 0; }
+    if (_save_buf == 0) { _save_buf = alloc(SAVE_BUF); }
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0644, like the -o tee
+    if (fd < 0) { ui_emit(ROLE_RED, "could not open "); emit(path); ui_emit(ROLE_FAINT, " for writing"); oprintln(""); return 0; }
+    var ok = 1;
+    if (_save_write_str(fd, "# thoth transcript\n\n") == 0) { ok = 0; }
+    var i = 0;
+    while (i < n) {
+        var slen = feed_strip_ansi_into(_save_buf, SAVE_BUF, feed_line_ptr(i), feed_line_len(i));
+        if (slen > 0) { if (file_write(fd, _save_buf, slen) != slen) { ok = 0; } }
+        if (file_write(fd, "\n", 1) != 1) { ok = 0; }
+        i = i + 1;
+    }
+    file_close(fd);
+    if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(n); emit(" lines to "); emit(path); oprintln(""); }
+    else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+    return 0;
 }
 
 # cmd_personas (0.22.1): DISCOVERY + display only (no new personality logic). No arg shows the active
@@ -1090,6 +1134,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_PERSONAS) { cmd_personas(line); return 1; }
     if (c == CMD_PERSONA) { cmd_persona(line); return 1; }
     if (c == CMD_ALLOW) { cmd_allow(line); return 1; }
+    if (c == CMD_SAVE) { cmd_save(line); return 1; }
     if (c == CMD_MODEL) { cmd_model(line); return 1; }
     if (c == CMD_MODELS) { cmd_models(line); return 1; }
     if (c == CMD_READ) { cmd_read(line); return 1; }
