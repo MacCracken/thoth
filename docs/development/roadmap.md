@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.22.2):** **M0–M7 are done and shipping**, and every feature line
+> **Where we are (0.22.3):** **M0–M7 are done and shipping**, and every feature line
 > through 0.16.x has landed (the log lives in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md)); the `0.16.1` refresh (Cyrius **6.4.16**)
 > then the **0.17.x input-completeness line to COMPLETION** — `0.17.0` **bracketed paste**, `0.17.1`
@@ -314,6 +314,8 @@ selection stays content-blind.
 > bundled the Cyrius 6.4.29 refresh) → `0.22.1` (**`/personas` discovery, DONE** — browse the traditions +
 > archetypes and the active card, read-only over avatara) → `0.22.2` (**blends + shadow, DONE** — `/persona
 > blend` weighted-composes archetypes and `/persona shadow` wears the inverted aspect, avatara-native verbs).
+> The active-persona core done, `0.22.x` turned to **polish sweeps** (role modality → `0.23.x`): `0.22.3`
+> (**terminal window title, DONE** — OSC-0 `thoth - <model>`, real-terminal-gated, escape-safe).
 
 - **`0.18.0` — the refactor. DONE (2026-07-07).** The ring stores logical text + compact **role
   markers** (`ESC` + `0xB0..0xB7`/`0xBF`, reverse-mapped at seal by `_feed_pack` via `ui_role_of_sgr`);
@@ -469,7 +471,7 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - Further slices (e.g. the model-picker palette from the polish backlog) may promote into this
   line once vetted.
 
-### 0.22.x — the active persona (0.22.0–0.22.2 DONE)
+### 0.22.x — the active persona (0.22.0–0.22.2 DONE) + polish sweeps
 
 > The signature move's twin: thoth switches the backing MODEL mid-session (hoosh);
 > this line switches the ACTIVE PERSONALITY mid-session (avatara). Pure consumption —
@@ -522,15 +524,27 @@ The 0.16.0 deferred follow-ups, promoted to a line:
   The composed profile is usable (compose carries the dominant's soul/spirit + name), so no
   prompt-budget issue and no dep bump. 1085 assertions (+7); 3-lens review clean; live-verified
   (`/dry` shows a blend in the dominant's voice).
-- **`0.22.3` — role modality (long-term).** The second axis: an archetype is
+- **`0.22.3`+ — polish sweeps.** With the active-persona core complete (0.22.0–0.22.2),
+  the rest of the `0.22.x` line draws vetted items from the **polish backlog** below
+  (one focused sweep per cut, each with the normal design/review/test discipline).
+  Role modality moved to `0.23.x`.
+  - **`0.22.3` — terminal window title. DONE (2026-07-08).** OSC-0 sets the window/tab
+    title to `thoth - <model>` at interactive startup + on `/model`; gated to a real
+    terminal (no-op at PT_PLAIN, floor byte-identical), model name control-byte-filtered
+    (no escape injection). 1087 assertions; single-agent review caught + fixed the inject
+    surface; live-verified via PTY.
+
+### 0.23.x — role modality (PLANNED)
+
+- **`0.23.0` — role modality (long-term).** The second axis: an archetype is
   multi-faceted (Thoth alone is scribe / keeper of symbols / measurer / mediator),
-  so long-term the user can switch WHICH ASPECT of the *active* archetype is leaned
-  into — distinct from switching archetypes. Honest gating: aspect modeling is
-  avatara's domain — its native modality verbs today are `shadow(p)` (the shadow
-  aspect) and `compose()` (weighted emphasis); a first-class per-archetype
-  role/aspect registry is an **avatara feature to request** when this slice becomes
-  real. thoth never hand-authors aspect tables (the same bright line as 0.22.0's
-  role sourcing).
+  so the user can switch WHICH ASPECT of the *active* archetype is leaned into —
+  distinct from switching archetypes. Honest gating: aspect modeling is avatara's
+  domain — its native modality verbs today are `shadow(p)` (the shadow aspect) and
+  `compose()` (weighted emphasis); a first-class per-archetype role/aspect registry
+  is an **avatara feature to request** when this slice becomes real. thoth never
+  hand-authors aspect tables (the same bright line as 0.22.0's role sourcing).
+  Likely opens with a design pass + an upstream avatara request rather than code.
 
 ### Polish backlog (gathers until it earns a sweep minor)
 
@@ -551,8 +565,9 @@ The 0.16.0 deferred follow-ups, promoted to a line:
 - **File-tree git badges** — `M`/`A`/`D` markers on tree rows from the
   already-probed sit status (content-blind surfacing, no new probe).
 - **Transcript export** — `/save <file>` writes the session as markdown.
-- **Terminal niceties** — OSC 0 window title (`thoth — <model>`), BEL on turn
-  completion, a faint per-turn elapsed line after each reply.
+- **Terminal niceties** — ~~OSC 0 window title (`thoth - <model>`)~~ DONE in 0.22.3;
+  still parked: BEL on turn completion, a faint per-turn elapsed line after each reply
+  (both touch the turn path — interactive-only gating via the REPL/TUI loops).
 - **`/reload`** — re-read `thoth.cyml` mid-session.
 
 ### Deferred / known limitations (captured so they're not lost)

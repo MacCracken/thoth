@@ -1542,6 +1542,18 @@ fn test_model_switch() {
     session_set_model_copy(&scratch);
     store8(&scratch + 0, 88);                                  # clobber to "Xpt"
     assert(streq(session_model(), "gpt"), "model is a stable copy, not an alias");
+    # 0.22.3 terminal window-title builder (pure): the active model appears in the title
+    var tb = alloc(256);
+    session_set_model_copy("opus-x");
+    _term_title_build(tb, 256);
+    assert(streq(tb, "thoth - opus-x") == 1, "title reflects the active model (session_model wins)");
+    # control bytes (BEL 0x07 / ESC 0x1b / DEL 0x7f) in the model are stripped -> no OSC escape injection
+    var mbuf[16];
+    store8(&mbuf + 0, 97); store8(&mbuf + 1, 7); store8(&mbuf + 2, 98);   # 'a' BEL 'b'
+    store8(&mbuf + 3, 27); store8(&mbuf + 4, 99); store8(&mbuf + 5, 127); store8(&mbuf + 6, 0);  # ESC 'c' DEL
+    session_set_model_copy(&mbuf);
+    _term_title_build(tb, 256);
+    assert(streq(tb, "thoth - abc") == 1, "control bytes stripped from the title (no escape injection)");
     session_reset();
     return 0;
 }

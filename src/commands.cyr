@@ -533,6 +533,44 @@ fn cmd_persona(line) {
     return 0;
 }
 
+# _term_title_build (0.22.3): compose the terminal window-title text into dst (cap-bounded, NUL-terminated):
+# "thoth - <model>" (the switchable model), or just "thoth" when no model is set. Pure/testable.
+fn _term_title_build(dst, cap) {
+    var off = 0;
+    off = _append_cstr_cap(dst, off, cap, "thoth");
+    var m = session_model();
+    if (m == 0) { m = config_hoosh_model(); }
+    if (m != 0) {
+        off = _append_cstr_cap(dst, off, cap, " - ");
+        # Append the model with control bytes (C0 < 0x20 incl. ESC/BEL, and DEL 0x7f) STRIPPED, so a
+        # crafted /model arg or [hoosh].model value can never inject a terminal escape into the OSC-0
+        # title. (The /copy OSC-52 path is injection-safe because it base64-encodes; this path filters.)
+        var i = 0;
+        while ((load8(m + i) != 0) && (off < (cap - 1))) {
+            var c = load8(m + i);
+            if ((c >= 32) && (c != 127)) { store8(dst + off, c); off = off + 1; }
+            i = i + 1;
+        }
+    }
+    store8(dst + off, 0);
+    return off;
+}
+
+var _term_title = 0;
+var TERM_TITLE_CAP = 256;
+# term_title_set (0.22.3): set the terminal window/tab title via OSC 0 (ESC ] 0 ; <text> BEL) — a
+# fire-and-forget terminal escape (like /copy's OSC 52), written raw to fd1. Only on a real terminal (a
+# color-capable tier); a NO-OP at PT_PLAIN (piped / dumb / CI) so the floor + one-shot output stay clean.
+fn term_title_set() {
+    if (ui_tier() == PT_PLAIN) { return 0; }
+    if (_term_title == 0) { _term_title = alloc(TERM_TITLE_CAP); }
+    var n = _term_title_build(_term_title, TERM_TITLE_CAP);
+    emit_raw("\x1b]0;");
+    emit_raw_n(_term_title, n);
+    emit_raw("\x07");
+    return 0;
+}
+
 fn cmd_model(line) {
     var arg = arg_after(line);
     if (arg == 0) {
@@ -552,6 +590,7 @@ fn cmd_model(line) {
         return 0;
     }
     session_set_model_copy(arg);
+    term_title_set();                        # 0.22.3: reflect the new model in the terminal title
     emit("model -> "); oprintln(arg);
     emit("  next turn routes to hoosh as '"); emit(arg); oprintln("' (mid-session switch).");
     log_begin("model_switch"); log_kv_str("model", arg); log_commit(SK_INFO);

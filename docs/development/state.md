@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.22.3** — **terminal window title** (first polish sweep), 2026-07-08. With the active-persona core done
+(0.22.0–0.22.2), the `0.22.x` line now draws vetted **polish-backlog** items (role modality moved to the new
+`0.23.x` line). On a real terminal thoth sets the window/tab title to `thoth - <model>` via OSC-0
+(`ESC ] 0 ; … BEL`, `emit_raw` to fd1 like `/copy`'s OSC-52), at interactive startup (`main.cyr`, after the
+one-shot short-circuit) and on a `/model` switch (`cmd_model`). New `_term_title_build` (pure) /
+`term_title_set` (`src/commands.cyr`); gated `ui_tier() == PT_PLAIN → no-op`, so piped/one-shot/CI stays
+byte-identical (verified zero escapes on the plain floor). **Security**: the model name is filtered to
+printable bytes (C0 `< 0x20` incl. ESC/BEL + DEL `0x7f` stripped) so a crafted `/model` arg or
+`[hoosh].model` value can't inject a terminal escape into the title — a pre-cut single-agent review CAUGHT
+that the verbatim append lacked the encoding safety `/copy` gets from base64 (fixed + tested before the cut).
+**Verified**: 1087 assertions (+2, `_term_title_build`: model in the title + control-byte stripping) + LIVE
+in the real rich TUI via a PTY (title = `thoth - claude-opus-4-8`) and a piped run emitting NO OSC escape.
+Pin **6.4.29**. NEXT polish candidates: file-tree git badges (fiddly tree-row render), `/reload` (config
+hot-reload semantics), transcript export `/save`, model-picker palette, BEL/elapsed turn feedback. See
+CHANGELOG/roadmap.
+
 **0.22.2** — **persona blends + shadow**, 2026-07-08. Completes the `0.22.x` active-persona core with two
 avatara-native synthesized-persona verbs, still pure consumption. `/persona shadow [name]`
 (`persona_shadow`, `src/session.cyr`; `_cmd_persona_shadow`, `src/commands.cyr`): avatara's `shadow()`

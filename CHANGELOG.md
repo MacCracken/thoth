@@ -2,6 +2,25 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.22.3] - 2026-07-08
+
+**Terminal window title** — the first polish sweep of the `0.22.x` line. On a real terminal, thoth sets the
+window/tab title to `thoth - <model>`, updated on a `/model` switch. 1087 assertions (+2). Role modality was
+moved to the `0.23.x` line; `0.22.x` now carries polish sweeps from the backlog.
+
+### Added
+- **OSC-0 window title** (`src/commands.cyr` `_term_title_build` / `term_title_set`): set at interactive
+  startup and on `/model`, via the OSC-0 escape (`ESC ] 0 ; thoth - <model> BEL`) written raw to fd1 (like
+  `/copy`'s OSC-52). Gated to a color-capable tier — a NO-OP at `PT_PLAIN`, so piped / one-shot / CI output
+  stays byte-identical (verified: zero escapes on the plain floor). The model name is filtered to printable
+  bytes (C0 controls + DEL stripped) so a crafted `/model` arg or `[hoosh].model` value can never inject a
+  terminal escape into the title — a pre-cut review caught that the verbatim append lacked `/copy`'s
+  encoding safety.
+
+### Notes
+- Live-verified by driving the real rich TUI through a PTY (title set to `thoth - claude-opus-4-8`) and
+  confirming a piped run emits no OSC escape.
+
 ## [0.22.2] - 2026-07-08
 
 **Persona blends + shadow.** `/persona blend <a> <b> …` composes a weighted multi-archetype persona and

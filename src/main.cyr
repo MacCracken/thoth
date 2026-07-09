@@ -106,6 +106,7 @@ fn main() {
     # working repo (0.13.0). Interactive-only — one-shot never shows git, so it skips
     # the worktree walk. Absent repo -> the seam reports absent honestly.
     git_ensure_probed();
+    term_title_set();          # 0.22.3: set the terminal title (thoth - <model>); no-op at PT_PLAIN. Interactive-only (one-shot returned above).
     # T2 rich-TUI when the tier resolves to PT_RICH on a real tty; otherwise the
     # line-mode REPL (the guaranteed fallback — pipes / CI / T0-T1 / no raw mode).
     if (tui_active() == 1) {
