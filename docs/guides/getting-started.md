@@ -9,8 +9,13 @@ the model answers. A seam that isn't configured degrades honestly; nothing is
 faked (`/seams` shows the live ladder).
 
 The two things that bind only when you point them at a service: `[hoosh].url`
-(model backend) and `[daimon].url` (MCP tool host) in `thoth.cyml`. Without them,
-the loop still runs and says so honestly.
+(model backend) and `[daimon].url` (MCP tool host) in `.thoth/config.cyml`. Config
+lives in a discoverable `.thoth/` home directory (like `.git/`), found by walking
+**up** from the current dir for the nearest `.thoth/`, then `~/.thoth/`; a legacy
+`./thoth.cyml` in the working dir is still read as a fallback. Copy the committed
+`.thoth/config.cyml.example` to `.thoth/config.cyml` to start. Without a
+`[hoosh].url` the loop still runs and says so honestly (the greeting states the
+config source and whether the gateway actually answers — never a faked READY).
 
 ## Build, run, test
 
@@ -18,7 +23,7 @@ the loop still runs and says so honestly.
 cyrius deps                              # resolve stdlib deps
 cyrius build src/main.cyr build/thoth    # compile the binary
 cyrius test                              # run the unit suite (tests/thoth.tcyr)
-./build/thoth                            # start the REPL
+./build/thoth                            # start thoth (rich TUI on a capable terminal; line REPL otherwise)
 ```
 
 The toolchain pin lives in `cyrius.cyml [package].cyrius`; CI reads it — don't
@@ -27,9 +32,10 @@ hardcode it elsewhere.
 ## Using thoth — interactive and one-shot
 
 Launching `./build/thoth` on a real terminal opens the **T2 rich-TUI** (alt-screen status
-bar, scrolling feed, file-tree pane, slash-command palette); piped / CI / lower tiers fall
-back to the **line REPL** automatically (the prompt is `{(o> `). Both drive the same dispatch
-loop. The prompt below is shown as `{(o> `:
+bar, scrolling feed, file-tree pane, slash-command palette) — it is the **default** on a
+capable terminal; piped / CI / lower tiers fall back to the **line REPL** automatically (the
+prompt is `{(o> `). `--tier=simple|rich|auto` forces the mode (the old `THOTH_TIER` env var was
+removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> `:
 
 ```
 {(o> /help               show commands
@@ -47,6 +53,15 @@ loop. The prompt below is shown as `{(o> `:
 {(o> /reset              clear the multi-turn conversation context
 {(o> /clear              clear the content window (Shift-↑/↓ scrolls history)
 {(o> /theme [dark|light] switch the color theme (⌃T toggles in the TUI)
+{(o> /persona [name]     show the active persona, or switch it mid-session (from avatara)
+{(o> /personas           list the available personas
+{(o> /role [name]        show or set the persona's role (the trait-derived third axis)
+{(o> /git [path]         the working repo — branch/status, or a per-file diff (consumes sit)
+{(o> /remember <fact>    save a durable fact to project memory (.thoth/memory/) — t-ron-gated
+{(o> /allow <path>       grant the agent a read root beyond the launch dir
+{(o> /save <file>        export the conversation transcript
+{(o> /reload             re-read .thoth/config.cyml mid-session (hot fields apply)
+{(o> @file.cyr           mention a file in a message → its contents are appended as context
 {(o> write me a quicksort   free text → a coding task → the model (agentic loop if daimon is wired)
 {(o> /quit               exit (or Ctrl-D / Ctrl-X)
 ```
@@ -62,8 +77,11 @@ source <(thoth --completion bash)        # tab-complete thoth's flags (bash or z
 thoth --help                             # the full one-shot reference
 ```
 
-Define `[alias]` macros in `thoth.cyml` (`ship = "/run git status"`) to add your own slash
-commands; an unknown `/<name>` expands and re-dispatches.
+Define `[alias]` macros in `.thoth/config.cyml` (`ship = "/run git status"`) to add your own
+slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI, **Ctrl-P**
+opens the model picker. thoth also **sees the project** it was launched in: the agent has
+default-on jailed `read_file` / `list_dir` tools (reads confined to the launch directory, plus
+any `/allow`-granted roots), so it can explore the codebase without the heavier `shell` tool.
 
 `/run`, `/write`, and `/call` route through **one t-ron authorization choke
 point**. When `[tron].policy` is configured, t-ron's verdict is final — a policy
@@ -79,7 +97,8 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (the pure
   `classify_input` / `token_is` / `arg_after` helpers are unit-tested).
-- `src/config.cyr` — `thoth.cyml` runtime config (seam URLs, toggles).
+- `src/config.cyr` — runtime config from `.thoth/config.cyml` (seam URLs, toggles); resolves
+  the `.thoth/` home (walk up from CWD, then `~/.thoth`; legacy `./thoth.cyml` fallback).
 - `src/seams.cyr` — the capability-seam registry (the five spine seams + status).
 - `src/session.cyr` — session state, multi-turn history, the avatara persona overlay.
 - `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`).
@@ -89,13 +108,21 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/log.cyr` — structured driver-event logging (`[log]`, off by default).
 - `src/exec.cyr` — the local shell escape for `/run` (portable `process.cyr`).
 - `src/roundlog.cyr` — the session-local agentic tool-round trace `/audit` surfaces (0.7.0).
-- `src/diff.cyr` — the bounded LCS line-diff + the shared syntax highlighter for `/write`/`/read`.
+- `src/diff.cyr` — the bounded LCS line-diff for `/write` / `/read`.
+- `src/mdhl.cyr` — the markdown + fenced-code syntax highlighter for the reply feed and `/read`.
 - `src/ui.cyr` — the presentation surface: tier detection + the semantic color-role API (M7).
 - `src/feed.cyr` — the self-managed T2 feed ring + the escape-aware clip / soft-wrap (M7).
 - `src/ftree.cyr` — the togglable file-tree pane: geometry + flattened-tree model (M7).
 - `src/tui.cyr` — the T2 alt-screen front-end: status bar, composer, palette, painter (M7).
 - `src/inhist.cyr` — the composer input-history recall ring + opt-in persistence (0.11.x).
-- `src/oneshot.cyr` — the one-shot / argv front-door (`thoth 'task'`, `--json`, `-o`, `--completion`).
+- `src/oneshot.cyr` — the one-shot / argv front-door (`thoth 'task'`, `--json`, `-o`, `--completion`, `--tier`).
+- `src/memory.cyr` — the opt-in project-memory seam: reads `.thoth/memory/` and injects it (`/remember`).
+- `src/mention.cyr` — `@file` mention expansion (appends a file's contents to the message).
+- `src/project.cyr` — the default-on jailed `read_file` / `list_dir` tools the agent uses to see the project.
+- `src/git.cyr` — the git producer (`/state` row, `/git`, status-bar branch) — consumes sit.
+- `src/shell.cyr` — the opt-in, t-ron-gated model-invokable `shell` tool (off by default).
+- `src/mpick.cyr` — the Ctrl-P model-picker palette.
+- `src/fsearch.cyr` — in-feed search.
 - `src/util.cyr` — the output-capture sink (`OUT_FD1`/`OUT_RING`/`OUT_NULL`) + `read_line` / `emit` / helpers.
 - `src/version.cyr` — the single runtime version string (generated from `VERSION`).
 - `src/vendor/` — committed spine dist bundles (bote-core, libro, t-ron, avatara) plus the

@@ -13,7 +13,7 @@ dimensions**, and the second cannot be inferred from the first:
 
 1. **Binding mode** — *how* the seam is reached: `native` (vendored in-process,
    the AGNOS-canonical shape), `remote-client` (reached over a portable transport
-   when `thoth.cyml` declares an endpoint), or `absent` (no binding).
+   when `.thoth/config.cyml` declares an endpoint), or `absent` (no binding).
 2. **Capability effect** — *what the user actually gets*: `full`, `degraded`
    (a reduced, fail-closed fallback stands in), or `absent` (the capability is
    gone — announced, never faked).
@@ -35,11 +35,16 @@ this table is the prose mirror, not a second source of truth.
 | **bote** | native | always (vendored) | **full** — MCP protocol framing, in-process | — (never absent) |
 | **t-ron** | native | `[tron].policy` loads | **full** — per-tool authz on `/run`/`/write`/`/call`; deny is final | **degraded** — built-in fail-closed confirm gate (deny/prompt); **never** a silent allow |
 | **avatara** | native | always (vendored) | **full** — the Thoth/Librarian archetype steers every turn | — (never absent) |
+| **mneme** | native | `[memory].enabled` + `.thoth/memory/` present | **degraded** — the local `.thoth/memory` flat-file reader injects facts (full semantic recall awaits mneme's Cyrius port) | **absent** — no memory injected |
+| **sit** | native | a git repo at the working dir | **full** — branch/status + per-file diff (`/git`, the `/state` row, the status-bar branch) | **absent** — no repo; the git surface reports absent |
 
-The one row that makes the two-dimension model necessary is **t-ron**: its
-binding mode goes `native → absent`, but its capability effect goes
-`full → degraded`, never to `absent`. There is no reachable state in which an
-action is silently allowed. Security degrades **closed**.
+The rows that make the two-dimension model necessary are **t-ron** and **mneme** —
+in both, the capability effect can't be read off the binding mode. t-ron's binding
+goes `native → absent` while its effect goes `full → degraded` (never `absent`):
+there is no reachable state in which an action is silently allowed — security
+degrades **closed**. mneme *binds* `native` yet its effect is only `degraded` (the
+local reader stands in for mneme's not-yet-ported engine). Neither the "safe" nor
+the "reduced" state can be inferred from whether the seam is bound.
 
 ## What it affects
 

@@ -26,6 +26,13 @@ The capability spine lives entirely in sibling first-party crates:
 - **avatara** — the personality layer; thoth's own "Thoth / Librarian" persona
   is an archetype overlay *pulled from* avatara, not a string table baked into
   thoth.
+- **mneme** — the memory / semantic-recall engine. thoth reads a local
+  `.thoth/memory/` flat-file store and injects it into a turn (opt-in), but the
+  recall engine is mneme's domain, consumed when it binds (see
+  [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)).
+- **sit** — version control (git). The git producer thoth surfaces (`/git`, the
+  `/state` row, the status-bar branch) reads through sit; thoth holds no git
+  object model of its own.
 
 This is the AGNOS "own the stack" principle in force: when AGNOS owns a domain,
 thoth depends on it and never reimplements it. The mid-session model switch, the
@@ -44,6 +51,8 @@ consume it":
 - A protocol-level change to how tools are spoken to → **bote**.
 - An authorization rule for what a tool may do → **t-ron**.
 - A change to the scribe persona, tone, or archetype behaviour → **avatara**.
+- Memory storage or semantic recall → **mneme** (thoth only reads + injects the local store).
+- Git object-model, history, or status computation → **sit**.
 
 Reaching for any of those *inside* thoth — even "just a little" to smooth over a
 fallback, an offline mode, or a host that's inconvenient to reach — forks a
