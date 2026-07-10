@@ -12,6 +12,10 @@
 *.pem
 *.key
 
-# Runtime config — may carry a hoosh bearer token. Commit thoth.cyml.example
-# (no secrets); keep the real thoth.cyml local.
+# Runtime config — may carry a hoosh bearer token. Commit the *.example files
+# (no secrets); keep the real config local. 0.26.0: config lives at
+# .thoth/config.cyml (discovered by walking up from CWD, then ~/.thoth);
+# ./thoth.cyml is still read as a legacy fallback. .thoth/config.cyml.example
+# and .thoth/memory/ stay tracked; only the real .thoth/config.cyml is ignored.
+/.thoth/config.cyml
 /thoth.cyml

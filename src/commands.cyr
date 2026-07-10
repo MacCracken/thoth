@@ -917,18 +917,18 @@ fn cmd_remember(line) {
     var text = arg_after(line);
     if (text == 0) { oprintln("usage: /remember <fact>"); return 0; }
     var rparams = _params_one("text", text);
-    if (gate_authorize("thoth_remember", rparams, "remember to", MEMORY_INDEX_PATH) == 0) {
+    if (gate_authorize("thoth_remember", rparams, "remember to", memory_index_path()) == 0) {
         ui_emit(ROLE_RED, "  denied. nothing remembered."); oprintln("");
         return 0;
     }
     var rc = memory_append(text);
     if (rc == (0 - 2)) {
-        emit("  "); ui_emit(ROLE_RED, ".thoth/memory/ not found");
-        ui_emit(ROLE_MUTED, " — create it first (mkdir -p .thoth/memory), then /remember."); oprintln("");
+        emit("  "); ui_emit(ROLE_RED, memory_dir()); ui_emit(ROLE_RED, " not found");
+        ui_emit(ROLE_MUTED, " — create it first (mkdir -p "); emit(memory_dir()); ui_emit(ROLE_MUTED, "), then /remember."); oprintln("");
         return 0;
     }
     if (rc < 0) { emit("  "); ui_emit(ROLE_RED, "write failed - memory not saved"); oprintln(""); return 0; }
-    emit("remembered -> "); ui_emit(ROLE_BLUE, MEMORY_INDEX_PATH); oprintln("");
+    emit("remembered -> "); ui_emit(ROLE_BLUE, memory_index_path()); oprintln("");
     if (config_memory_enabled() == 0) {
         emit("  "); ui_emit(ROLE_FAINT, "note: [memory].enabled is off - the fact is saved but not injected until you enable it."); oprintln("");
     }
@@ -1025,18 +1025,18 @@ fn cmd_reset() {
 # endpoints, the t-ron/log seams, the persona default, the persisted-file bindings — would need a restart). We
 # never claim a reload changed something it didn't.
 fn cmd_reload() {
-    if (file_exists(CONFIG_PATH) == 0) {
-        ui_emit(ROLE_RED, "no "); emit(CONFIG_PATH); ui_emit(ROLE_FAINT, " found — nothing to reload"); oprintln("");
+    if (file_exists(config_path()) == 0) {
+        ui_emit(ROLE_RED, "no "); emit(config_path()); ui_emit(ROLE_FAINT, " found — nothing to reload"); oprintln("");
         return 0;
     }
     config_load();                            # re-parse: rebuilds [alias]/[shell]/[pricing]/read_roots + all _cfg_* globals
     if (config_parse_ok() == 0) {             # readable? the file could not be read/parsed -> degrade honestly, don't fake success
-        ui_emit(ROLE_RED, "reload failed"); ui_emit(ROLE_FAINT, " — could not read/parse "); emit(CONFIG_PATH); ui_emit(ROLE_FAINT, " (config unchanged)"); oprintln("");
+        ui_emit(ROLE_RED, "reload failed"); ui_emit(ROLE_FAINT, " — could not read/parse "); emit(config_path()); ui_emit(ROLE_FAINT, " (config unchanged)"); oprintln("");
         return 0;
     }
     agent_tools_cache_reset();                # re-advertise tools next turn (picks up [shell].enabled / [hoosh].tools / daimon)
     hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
-    ui_emit(ROLE_GREEN, "reloaded "); emit(CONFIG_PATH); oprintln("");
+    ui_emit(ROLE_GREEN, "reloaded "); emit(config_path()); oprintln("");
     ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory]"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");

@@ -1,4 +1,11 @@
-# thoth runtime config — copy to `thoth.cyml` and edit.
+# thoth runtime config — copy to `.thoth/config.cyml` and edit.
+#
+# Discovery (0.26.0): thoth finds this file by walking UP from the current dir
+# for a `.thoth/` home directory (like `.git/`), then falling back to
+# `~/.thoth/config.cyml` (a global user default). So `<repo>/.thoth/config.cyml`
+# is found from ANY subdirectory of the repo. A legacy `./thoth.cyml` in the
+# working dir is still read when no `.thoth/` home exists. Project memory lives
+# alongside it at `.thoth/memory/` (same discovered home).
 #
 # This is NOT the build manifest (that is cyrius.cyml). It is thoth's own
 # runtime config, read once at startup. It is a CYML file: TOML above an

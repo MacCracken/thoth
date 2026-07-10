@@ -800,7 +800,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         elif (streq(nm, "memory_write") == 1) {
             # thoth-native tool (0.12.2): the model saves a durable fact to project
             # memory. Gated under thoth_remember — executed LOCALLY, NOT via daimon.
-            if (gate_authorize("thoth_remember", gp, "remember to", MEMORY_INDEX_PATH) == 1) {
+            if (gate_authorize("thoth_remember", gp, "remember to", memory_index_path()) == 1) {
                 rl_kind = RL_ALLOWED;
                 res = memory_write_tool(gp);
                 rl_ok = 1;

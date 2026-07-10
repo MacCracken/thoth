@@ -7,6 +7,16 @@
 
 ## Version
 
+**0.26.0** — **`.thoth/` home discovery + honest readiness**, 2026-07-09. Config + project memory now live
+under a discoverable `.thoth/` home (like `.git/`): `.thoth/config.cyml` + `.thoth/memory/`, found by walking
+UP from the CWD then `~/.thoth/` (legacy `./thoth.cyml` still read). The rich-TUI greeting no longer claims
+READY off the silent localhost default when no config was discovered — it states the config source honestly.
+Fixes "launched in another repo, couldn't find hoosh, yet said READY." `src/config.cyr` (`_thoth_root_resolve`
+/ `config_path` / `config_source` / `config_root`), `src/memory.cyr` (`memory_dir` / `memory_index_path` off
+the same root), `src/tui.cyr` greeting; ADR-0016; 1231 assertions; live-verified (upward/legacy/absent config,
+rich-TUI greeting, upward memory). Toolchain: bote 3.1.1 + daimon 1.4.1 re-pinned to cyrius 6.4.34 (the native
+TLS record-layer fix), the libssl web-tools workaround dropped.
+
 **0.25.1** — **composer soft-wrap**, 2026-07-09. The prompt input now word-wraps at the screen edge + grows
 the input area, instead of horizontal-scrolling one long line (user-reported). `src/tui.cyr` composer is now
 PHYSICAL-row aware (mirrors the 0.11.3 FEED soft-wrap): a logical line of L bytes wraps across `L/avail + 1`

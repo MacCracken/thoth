@@ -22,8 +22,26 @@
 # Cached ONCE per process (like persona_system_prompt), so a mid-session edit is
 # not re-read until memory_invalidate() (the 0.12.1 /remember path) or restart.
 
-var MEMORY_DIR = ".thoth/memory";
-var MEMORY_INDEX_PATH = ".thoth/memory/MEMORY.md";
+# memory_dir / memory_index_path (0.26.0): the project memory store, derived from
+# the SAME `.thoth/` home config.cyr resolved (walk-up from CWD, then ~/.thoth), so
+# config + memory stay consistent regardless of launch directory. Legacy CWD
+# `.thoth/memory` when no `.thoth/` home is found. Cached (the root is resolved once).
+var _mem_dir_c = 0;
+var _mem_idx_c = 0;
+fn memory_dir() {
+    if (_mem_dir_c != 0) { return _mem_dir_c; }
+    var root = _thoth_root_resolve();
+    if (root != 0) { _mem_dir_c = _cfg_join2(root, "memory"); }
+    if (root == 0) { _mem_dir_c = ".thoth/memory"; }
+    return _mem_dir_c;
+}
+fn memory_index_path() {
+    if (_mem_idx_c != 0) { return _mem_idx_c; }
+    var root = _thoth_root_resolve();
+    if (root != 0) { _mem_idx_c = _cfg_join2(root, "memory/MEMORY.md"); }
+    if (root == 0) { _mem_idx_c = ".thoth/memory/MEMORY.md"; }
+    return _mem_idx_c;
+}
 var MEMORY_SYS_CAP = 4096;      # max bytes of memory injected per turn (4x persona)
 var MEM_READ_CAP = 65536;       # scratch read buffer for one file
 
@@ -89,9 +107,9 @@ fn memory_system_prompt() {
     #    Directory order (not recency): there is no portable mtime probe, and the
     #    MEMORY.md index is the author-curated priority anyway; fact bodies are
     #    supplementary. Recency ordering can arrive when a portable stat lands.
-    var dirstr = str_from(MEMORY_DIR);
+    var dirstr = str_from(memory_dir());
     if (is_dir(dirstr) == 1) {
-        off = _mem_append_file(buf, off, cap, MEMORY_INDEX_PATH, 0);
+        off = _mem_append_file(buf, off, cap, memory_index_path(), 0);
         var v = dir_list(dirstr);
         var n = vec_len(v);
         var i = 0;
@@ -128,7 +146,7 @@ fn memory_context() {
 # MEMORY.md), for the honest /state line. 0 when disabled/absent. I/O.
 fn memory_fact_count() {
     if (config_memory_enabled() == 0) { return 0; }
-    var dirstr = str_from(MEMORY_DIR);
+    var dirstr = str_from(memory_dir());
     if (is_dir(dirstr) == 0) { return 0; }
     var v = dir_list(dirstr);
     var n = vec_len(v);
@@ -159,7 +177,7 @@ var REMEMBER_CAP = 4096;
 # failure. Invalidates the reader cache on success so the fact is live next turn.
 # VERBATIM only — no summarize / tag / dedupe / link (that is mneme's engine).
 fn memory_append(text) {
-    if (is_dir(str_from(MEMORY_DIR)) == 0) { return 0 - 2; }
+    if (is_dir(str_from(memory_dir())) == 0) { return 0 - 2; }
     if (_remember_buf == 0) { _remember_buf = alloc(REMEMBER_CAP); }
     var tl = strlen(text);
     if (tl > (REMEMBER_CAP - 4)) { tl = REMEMBER_CAP - 4; }
@@ -167,7 +185,7 @@ fn memory_append(text) {
     store8(_remember_buf + 1, 32);          # ' '
     memcpy(_remember_buf + 2, text, tl);
     store8(_remember_buf + 2 + tl, 10);     # '\n'
-    var rc = file_append_locked(MEMORY_INDEX_PATH, _remember_buf, tl + 3);
+    var rc = file_append_locked(memory_index_path(), _remember_buf, tl + 3);
     if (rc < 0) { return 0 - 1; }
     memory_invalidate();
     return rc;

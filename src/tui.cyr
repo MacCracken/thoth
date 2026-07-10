@@ -2036,14 +2036,27 @@ fn tui_loop() {
     # READY when the gateway actually answers; otherwise it says so (unreachable when a URL is
     # set, absent when none is) — honest, never faked. The "type a task" guidance is below.
     ui_emit(ROLE_FAINT, "Status: ");
-    if (hoosh_health_probe() == HOOSH_HEALTH_UP) {   # 0.19.3: probe + SEED the cached health for the status-bar dot
-        ui_emit(ROLE_GREEN, "READY");
-    } elif (config_hoosh_configured() == 1) {
-        ui_emit(ROLE_RED, "hoosh unreachable");
-        ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); ui_emit(ROLE_FAINT, " (is the gateway up?)");
-    } else {
+    # 0.26.0: READY only when a CONFIGURED gateway actually answers. Never claim
+    # READY off the silent localhost default when no config was found — the old bug
+    # was: launched in another repo -> no config discovered -> probed the default
+    # 127.0.0.1:8088 -> a stray local hoosh answered -> "READY", masking that the
+    # user's config was never loaded. Now the config source is stated honestly.
+    var _up = 0;
+    if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _up = 1; }   # probe + SEED the status-bar dot
+    if (config_hoosh_configured() == 1) {
+        if (_up == 1) { ui_emit(ROLE_GREEN, "READY"); }
+        else {
+            ui_emit(ROLE_RED, "hoosh unreachable");
+            ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); ui_emit(ROLE_FAINT, " (is the gateway up?)");
+        }
+    } elif (config_parse_ok() == 1) {
         ui_emit(ROLE_RED, "hoosh absent");
-        ui_emit(ROLE_FAINT, " — no model turns; set [hoosh].url");
+        ui_emit(ROLE_FAINT, " — no [hoosh].url in "); emit(config_path());
+        if (_up == 1) { ui_emit(ROLE_MUTED, "  [default "); emit(config_hoosh_url()); ui_emit(ROLE_MUTED, " is reachable]"); }
+    } else {
+        ui_emit(ROLE_RED, "no config");
+        ui_emit(ROLE_FAINT, " — no "); emit(config_path()); ui_emit(ROLE_FAINT, " found (add one, or ~/.thoth/config.cyml)");
+        if (_up == 1) { ui_emit(ROLE_MUTED, "  [default "); emit(config_hoosh_url()); ui_emit(ROLE_MUTED, " is reachable]"); }
     }
     feed_flush_pending();
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");

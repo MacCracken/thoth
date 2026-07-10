@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.26.0] - 2026-07-09
+
+**`.thoth/` home directory + honest readiness.** Config + project memory now live under a discoverable
+`.thoth/` home (like `.git/`): `.thoth/config.cyml` (the config) and `.thoth/memory/`. thoth finds it by
+walking UP from the CWD, then `~/.thoth/`, so launching in a subdirectory — or a different repo — finds the
+right config instead of silently falling back to the localhost default. And the TUI greeting no longer claims
+READY off that default when no config was found. Fixes the reported bug: "launched thoth in a different repo,
+couldn't find the hoosh server, yet it pronounced itself READY." 1231 assertions; live-verified across
+upward / legacy / absent config, the rich-TUI greeting, and upward memory.
+
+### Added
+- **Config + memory home discovery** (`src/config.cyr`): `_thoth_root_resolve` walks up from the CWD for the
+  nearest ancestor `.thoth/` (up to 40 levels), then `~/.thoth/`. `config_path()` reads `<root>/config.cyml`,
+  falling back to a legacy `./thoth.cyml` when no `.thoth/` home exists. `config_source()` / `config_root()`
+  expose the resolution. Memory (`src/memory.cyr`) derives `memory_dir()` / `memory_index_path()` from the
+  SAME root, so config + memory stay consistent regardless of launch directory. See ADR-0016.
+
+### Changed
+- **Config lives at `.thoth/config.cyml`** (was `./thoth.cyml`, still read as a fallback). The example moved
+  to `.thoth/config.cyml.example`; `.gitignore` ignores the real `.thoth/config.cyml` and keeps the example +
+  `.thoth/memory/` tracked.
+- **Honest readiness** (`src/tui.cyr`): the greeting says **READY** only when a *configured* `[hoosh].url`
+  actually answers. No config found → "no config — no <path> found (add one, or ~/.thoth/config.cyml)"; a
+  config with no url → "hoosh absent"; a dead configured url → "hoosh unreachable — <url>". If the
+  unconfigured default happens to answer it is noted "[default … is reachable]", never as READY.
+
+### Fixed
+- Launching thoth outside its own directory no longer silently probes the localhost default and reports READY
+  as if configured — the config is discovered (or its absence is stated plainly), so READY reflects the real
+  gateway.
+
 ## [0.25.1] - 2026-07-09
 
 **Composer soft-wrap.** A long prompt now word-wraps at the screen edge and the input area grows to fit,

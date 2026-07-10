@@ -43,8 +43,97 @@ var _cfg_shell_output_cap = 0 - 1;  # captured-output byte cap; -1 = unset -> de
 var _cfg_persona = 0;        # [persona].name — startup default archetype (0.22.0); 0 = unset -> egyptian_thoth
 var _cfg_vidya = 0;          # [project].vidya — path to the vidya knowledge base, a first-class `/allow vidya` root (0.23.1); 0 = unset
 
-var CONFIG_PATH = "thoth.cyml";
+var CONFIG_PATH = "thoth.cyml";   # legacy CWD config name — still read as a fallback (see config_path)
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
+
+# --- config + memory home discovery (0.26.0) -------------------------------
+# thoth's config + project memory live under a `.thoth/` HOME directory (like
+# `.git/`): `.thoth/config.cyml` (this config) and `.thoth/memory/`. Discovery
+# walks UP from the CWD for the nearest ancestor `.thoth/`, then falls back to
+# `~/.thoth/` (a global user home); with no `.thoth/` anywhere, the legacy
+# `./thoth.cyml` is still honored. Resolving the root ONCE and hanging BOTH config
+# + memory off it keeps them consistent regardless of launch directory — the fix
+# for "launched in another repo, couldn't find the gateway yet claimed READY".
+var _thoth_root = 0;          # resolved `.thoth/` dir (cstr), or 0 if none
+var _thoth_root_done = 0;
+var _cfg_path_c = 0;          # cached resolved config-file path (cstr); set only once a file is FOUND
+var _cfg_source = 0;          # 0 none · 1 <root>/config.cyml · 3 legacy ./thoth.cyml
+
+# _cfg_join2: fresh cstr "a/b".
+fn _cfg_join2(a, b) {
+    var la = strlen(a);
+    var lb = strlen(b);
+    var out = alloc(la + lb + 2);
+    memcpy(out, a, la);
+    store8(out + la, 47);                 # '/'
+    memcpy(out + la + 1, b, lb);
+    store8(out + la + 1 + lb, 0);
+    return out;
+}
+
+# _cfg_updir: fresh cstr "../" repeated `lvl` times followed by `name`.
+fn _cfg_updir(lvl, name) {
+    var ln = strlen(name);
+    var out = alloc(lvl * 3 + ln + 1);
+    var off = 0;
+    var i = 0;
+    while (i < lvl) {
+        store8(out + off, 46);            # '.'
+        store8(out + off + 1, 46);        # '.'
+        store8(out + off + 2, 47);        # '/'
+        off = off + 3;
+        i = i + 1;
+    }
+    memcpy(out + off, name, ln);
+    store8(out + off + ln, 0);
+    return out;
+}
+
+# _thoth_root_resolve: the `.thoth/` home dir (cstr) or 0. Walk up from CWD (up to
+# 40 levels — deeper than any real tree), then ~/.thoth. Resolved once.
+fn _thoth_root_resolve() {
+    if (_thoth_root_done == 1) { return _thoth_root; }
+    _thoth_root_done = 1;
+    _thoth_root = 0;
+    var lvl = 0;
+    while (lvl < 40) {
+        var cand = _cfg_updir(lvl, ".thoth");
+        if (is_dir(str_from(cand)) == 1) {
+            _thoth_root = cand;
+            return _thoth_root;
+        }
+        lvl = lvl + 1;
+    }
+    var home = getenv("HOME");
+    if (home != 0) {
+        var hc = _cfg_join2(home, ".thoth");
+        if (is_dir(str_from(hc)) == 1) { _thoth_root = hc; }
+    }
+    return _thoth_root;
+}
+
+# config_path: the config file thoth reads. Precedence: <root>/config.cyml (if a
+# `.thoth/` home holds one) → legacy ./thoth.cyml → else the PREFERRED path (for
+# messages) with config_source()==0. Caches only a found path, so a config created
+# mid-session is picked up by /reload.
+fn config_path() {
+    if (_cfg_path_c != 0) { return _cfg_path_c; }
+    var root = _thoth_root_resolve();
+    if (root != 0) {
+        var cp = _cfg_join2(root, "config.cyml");
+        if (file_exists(cp) == 1) { _cfg_path_c = cp; _cfg_source = 1; return cp; }
+    }
+    if (file_exists("thoth.cyml") == 1) { _cfg_path_c = "thoth.cyml"; _cfg_source = 3; return _cfg_path_c; }
+    _cfg_source = 0;
+    if (root != 0) { return _cfg_join2(root, "config.cyml"); }
+    return "thoth.cyml";
+}
+
+# config_source: 0 = no config file found · 1 = .thoth/config.cyml · 3 = legacy ./thoth.cyml.
+fn config_source() { config_path(); return _cfg_source; }
+
+# config_root: the resolved `.thoth/` home dir (cstr) or 0 (none) — for /state.
+fn config_root() { return _thoth_root_resolve(); }
 var TRON_AGENT_DEFAULT = "thoth";
 
 # Pricing table (0.10.3): each [pricing.<model>] section's input/output rate, cached
@@ -364,7 +453,7 @@ fn _shell_globs_load(shell, sections) {
 fn config_load() {
     _cfg_loaded = 1;
     _cfg_parse_ok = 0;                            # 0.24.4: cleared until the file is actually read + parsed
-    var r = bayan_cyml_parse_file_r(CONFIG_PATH);
+    var r = bayan_cyml_parse_file_r(config_path());
     if (is_err_result(r) == 1) { return 0; }     # absent / unreadable -> not configured (parse_ok stays 0)
     var doc = load64(r + 8);
     var hp = bayan_cyml_doc_header(doc);
