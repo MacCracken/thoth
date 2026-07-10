@@ -55,7 +55,7 @@ fn arg_after(line) {
 }
 
 # --- [alias] prompt macros (0.11.4) ---------------------------------------
-# An alias lets the user define a slash macro in thoth.cyml ([alias] name = "expansion").
+# An alias lets the user define a slash macro in .thoth/config.cyml ([alias] name = "expansion").
 # It resolves ONLY in the CMD_UNKNOWN_SLASH gap (so a built-in command always wins and an
 # alias can never shadow one), expands to its text with any trailing args appended, and
 # RE-DISPATCHES the result (so an alias can map to a built-in, a free-text task, even
@@ -165,7 +165,7 @@ fn cmd_help() {
     _help_line("  /run <cmd>", "         run a shell command (t-ron-gated local escape)");
     _help_line("  /allow [path]", "      grant the agent read access to a root; /allow vidya; no arg lists them");
     _help_line("  /save <file>", "       write the TUI transcript (feed scrollback) to a file as markdown");
-    _help_line("  /reload", "            re-read thoth.cyml (hot fields apply; seams/persona need restart)");
+    _help_line("  /reload", "            re-read .thoth/config.cyml (hot fields apply; seams/persona need restart)");
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
@@ -215,7 +215,7 @@ fn cmd_state() {
     if (m == 0) { ui_emit(ROLE_FAINT, "(none set)"); oprintln(""); }
     else { ui_emit(ROLE_ACCENT, m); oprintln(""); }
     ui_label("  hoosh   : ");
-    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [hoosh].url in thoth.cyml)"); oprintln(""); }
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [hoosh].url in .thoth/config.cyml)"); oprintln(""); }
     else {
         emit(config_hoosh_url());
         if (config_hoosh_stream() == 1) { ui_emit(ROLE_MUTED, " (streaming)"); oprintln(""); }
@@ -248,14 +248,14 @@ fn cmd_state() {
     ui_label("  memory  : ");
     if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall)"); oprintln(""); }
     elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }
-    else { ui_emit(ROLE_FAINT, "off (set [memory].enabled in thoth.cyml)"); oprintln(""); }
+    else { ui_emit(ROLE_FAINT, "off (set [memory].enabled in .thoth/config.cyml)"); oprintln(""); }
     ui_label("  tokens  : ");
     if (session_tokens_seen() == 0) { ui_emit(ROLE_FAINT, "(none reported yet — shows once hoosh returns usage)"); oprintln(""); }
     else { ofmt_int(session_tokens()); ui_emit(ROLE_MUTED, " total (hoosh usage, this session)"); oprintln(""); }
     ui_label("  cost    : ");
     if (session_cost_seen() == 0) {
-        if (session_cost_unpriced_count() > 0) { ui_emit(ROLE_FAINT, "(unpriced — add [pricing.<model>] for the active model in thoth.cyml)"); }
-        else { ui_emit(ROLE_FAINT, "(none yet — add [pricing.<model>] in thoth.cyml to price usage)"); }
+        if (session_cost_unpriced_count() > 0) { ui_emit(ROLE_FAINT, "(unpriced — add [pricing.<model>] for the active model in .thoth/config.cyml)"); }
+        else { ui_emit(ROLE_FAINT, "(none yet — add [pricing.<model>] in .thoth/config.cyml to price usage)"); }
         oprintln("");
     } else {
         var _cbuf[24];
@@ -277,14 +277,14 @@ fn cmd_state() {
         oprintln("");
     }
     ui_label("  log     : ");
-    if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in thoth.cyml)"); oprintln(""); }
+    if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in .thoth/config.cyml)"); oprintln(""); }
     else {
         if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
         ui_emit(ROLE_MUTED, " (structured driver events)"); oprintln("");
     }
     if (config_alias_count() > 0) {        # omit the row entirely when none are defined
         ui_label("  aliases : "); ofmt_int(config_alias_count());
-        ui_emit(ROLE_MUTED, " defined ([alias] in thoth.cyml; /<name> expands)"); oprintln("");
+        ui_emit(ROLE_MUTED, " defined ([alias] in .thoth/config.cyml; /<name> expands)"); oprintln("");
     }
     if (config_shell_enabled() == 1) {     # omit the row entirely when off (byte-identical floor)
         ui_label("  shell   : ");
@@ -322,10 +322,10 @@ fn cmd_state() {
     elif (config_hoosh_tools() == 0) { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); oprintln(""); }
     else { ui_emit(ROLE_MUTED, "plain turns (no daimon seam and no shell tool; set [daimon].url or [shell].enabled)"); oprintln(""); }
     ui_label("  daimon  : ");
-    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in thoth.cyml)"); oprintln(""); }
+    if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in .thoth/config.cyml)"); oprintln(""); }
     else { oprintln(config_daimon_url()); }
     ui_label("  t-ron   : ");
-    if (gate_active() == 0) { ui_emit(ROLE_FAINT, "absent (fail-closed confirm gate; set [tron].policy in thoth.cyml)"); oprintln(""); }
+    if (gate_active() == 0) { ui_emit(ROLE_FAINT, "absent (fail-closed confirm gate; set [tron].policy in .thoth/config.cyml)"); oprintln(""); }
     else { oprintln(config_tron_policy()); }
     ui_label("  spine   : ");
     if (seam_any_wired() == 0) { ui_emit(ROLE_FAINT, "all seams absent (fermenting)"); oprintln(""); }
@@ -444,7 +444,7 @@ fn cmd_allow(line) {
         var vp = config_vidya();
         if (vp == 0) {
             ui_emit(ROLE_RED, "vidya path not set"); oprintln("");
-            ui_emit(ROLE_FAINT, "  add a [project] vidya = \"/abs/path/to/vidya\" line to thoth.cyml"); oprintln("");
+            ui_emit(ROLE_FAINT, "  add a [project] vidya = \"/abs/path/to/vidya\" line to .thoth/config.cyml"); oprintln("");
             return 0;
         }
         if (project_grant_root(vp) == 1) {
@@ -778,13 +778,13 @@ fn cmd_model(line) {
         if (m == 0) { oprintln("(none set - hoosh routes by its own provider config)"); }
         else { oprintln(m); }
         if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-            oprintln("hoosh seam absent - set [hoosh].url in thoth.cyml to enable switching.");
+            oprintln("hoosh seam absent - set [hoosh].url in .thoth/config.cyml to enable switching.");
         }
         return 0;
     }
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         emit("cannot switch to '"); emit(arg); oprintln("': hoosh seam is absent.");
-        oprintln("set [hoosh].url in thoth.cyml; mid-session switching routes through hoosh. see /seams.");
+        oprintln("set [hoosh].url in .thoth/config.cyml; mid-session switching routes through hoosh. see /seams.");
         return 0;
     }
     session_set_model_copy(arg);
@@ -803,7 +803,7 @@ fn cmd_models(line) {
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         oprintln("hoosh seam absent - no model gateway is wired.");
         oprintln("the model catalog is hoosh's domain (multi-provider routing).");
-        oprintln("set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("set [hoosh].url in .thoth/config.cyml. degraded honestly, never faked.");
         return 0;
     }
     # Bare /models lists the providers hoosh routes to; /models <provider> drills
@@ -965,7 +965,7 @@ fn cmd_tools() {
         }
         oprintln("daimon seam absent - no MCP tool host is wired.");
         oprintln("tool listing/execution is daimon's domain (the MCP host registry).");
-        oprintln("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("set [daimon].url in .thoth/config.cyml. degraded honestly, never faked.");
         return 0;
     }
     return daimon_list_tools();
@@ -981,7 +981,7 @@ fn cmd_call(line) {
     if (rest == 0) { oprintln("usage: /call <tool> [json-arguments]"); return 0; }
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
         oprintln("daimon seam absent - no MCP tool host is wired.");
-        oprintln("set [daimon].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("set [daimon].url in .thoth/config.cyml. degraded honestly, never faked.");
         return 0;
     }
     if (_call_name == 0) { _call_name = alloc(CALL_NAME_CAP); }
@@ -1018,7 +1018,7 @@ fn cmd_reset() {
     return 0;
 }
 
-# cmd_reload (0.24.4): re-read thoth.cyml mid-session. Re-parsing rebuilds the config globals; the agent tool
+# cmd_reload (0.24.4): re-read .thoth/config.cyml mid-session. Re-parsing rebuilds the config globals; the agent tool
 # cache is dropped so a changed [shell].enabled / [hoosh].tools (or a now-reachable daimon) re-advertises next
 # turn. HONEST about the split: HOT fields take effect immediately because the runtime reads them per-use;
 # BIND-ONCE fields were consumed at startup and are NOT re-bound (their runtime state — seams, cached hoosh
@@ -1051,7 +1051,7 @@ fn cmd_audit() {
     if (gate_active() == 0) {
         oprintln("t-ron seam absent - no audit chain.");
         oprintln("the fail-closed confirm gate keeps no cryptographic log; the libro");
-        oprintln("audit chain is t-ron's domain. set [tron].policy in thoth.cyml.");
+        oprintln("audit chain is t-ron's domain. set [tron].policy in .thoth/config.cyml.");
         roundlog_report();
         return 0;
     }
@@ -1104,7 +1104,7 @@ fn cmd_task(line) {
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         oprintln("  hoosh seam absent - no model backend is wired.");
         oprintln("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
-        oprintln("  elsewhere). set [hoosh].url in thoth.cyml. degraded honestly, never faked.");
+        oprintln("  elsewhere). set [hoosh].url in .thoth/config.cyml. degraded honestly, never faked.");
         return 0;
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop

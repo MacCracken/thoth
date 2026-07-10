@@ -140,7 +140,7 @@ fn inhist_nav_down() {
 #     substrate gap), so the file lands at the kernel default there.
 #   - The path is opened FOLLOWING symlinks (no portable O_NOFOLLOW), so a hostile
 #     directory could redirect it — put it somewhere only you can write.
-# These residuals are DOCUMENTED here + in thoth.cyml.example rather than asserted away.
+# These residuals are DOCUMENTED here + in .thoth/config.cyml.example rather than asserted away.
 #
 # Model: rewrite-the-ring (not append). On load we stream the file in and push each
 # line through `inhist_push` (ring keeps the most-recent INHIST_CAP, deduped). Init is

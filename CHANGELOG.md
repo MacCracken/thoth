@@ -22,7 +22,8 @@ upward / legacy / absent config, the rich-TUI greeting, and upward memory.
 ### Changed
 - **Config lives at `.thoth/config.cyml`** (was `./thoth.cyml`, still read as a fallback). The example moved
   to `.thoth/config.cyml.example`; `.gitignore` ignores the real `.thoth/config.cyml` and keeps the example +
-  `.thoth/memory/` tracked.
+  `.thoth/memory/` tracked. All user-facing config hints (`/state`, model picker, one-shot, status bar) now
+  name `.thoth/config.cyml`.
 - **Honest readiness** (`src/tui.cyr`): the greeting says **READY** only when a *configured* `[hoosh].url`
   actually answers. No config found → "no config — no <path> found (add one, or ~/.thoth/config.cyml)"; a
   config with no url → "hoosh absent"; a dead configured url → "hoosh unreachable — <url>". If the

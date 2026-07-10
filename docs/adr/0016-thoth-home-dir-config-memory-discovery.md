@@ -46,6 +46,6 @@ unreachable — `<url>`". A reachable unconfigured default is noted "[default �
   `.thoth/config.cyml.example`. `.gitignore` ignores the real `.thoth/config.cyml` and keeps the example +
   `.thoth/memory/` tracked.
 - The `.thoth` *file* vs `.thoth/` *directory* collision is avoided by making it unambiguously a directory.
-- Residual: the numerous "set [X] in thoth.cyml" hint strings in `/state` still name the legacy file (they
-  remain accurate — `thoth.cyml` is a valid fallback — and the code buffer is near its cap); the canonical
-  location is taught by the greeting, the example, and this ADR.
+- All user-facing config hints (`/state`, the model picker, one-shot, the status bar) name
+  `.thoth/config.cyml`; the legacy `./thoth.cyml` fallback *logic* and internal code comments still use the
+  bare name (still accurate — `thoth.cyml` remains a valid fallback).

@@ -1152,7 +1152,7 @@ fn _tui_pick_apply(id) {
 fn _tui_pick_enter() {
     if (config_hoosh_configured() == 0) {
         out_mode_set(OUT_RING);
-        ui_emit(ROLE_RED, "model picker: "); ui_emit(ROLE_FAINT, "hoosh absent — set [hoosh].url in thoth.cyml");
+        ui_emit(ROLE_RED, "model picker: "); ui_emit(ROLE_FAINT, "hoosh absent — set [hoosh].url in .thoth/config.cyml");
         feed_flush_pending(); out_mode_set(OUT_FD1);
         tui_relayout();
         return 0;
@@ -2123,7 +2123,7 @@ fn tui_loop() {
                 var _reach = HOOSH_HEALTH_DOWN;
                 if (config_hoosh_configured() == 1) { _reach = hoosh_health_probe(); }
                 out_mode_set(OUT_RING);
-                if (config_hoosh_configured() == 0) { ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in thoth.cyml"); }
+                if (config_hoosh_configured() == 0) { ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in .thoth/config.cyml"); }
                 elif (_reach == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "hoosh: reachable"); }
                 else { ui_emit(ROLE_RED, "hoosh: unreachable"); ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); }
                 feed_flush_pending();

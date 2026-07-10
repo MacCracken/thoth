@@ -228,7 +228,7 @@ fn oneshot_print_help() {
     emit_raw("  thoth --tier <mode>       presentation tier: auto (default) | rich (TUI) | simple (line)\n\n");
     emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
     emit_raw("cleanly); progress is suppressed and an action needing authorization is denied\n");
-    emit_raw("(configure [tron].policy or run interactively). Config: thoth.cyml.\n\n");
+    emit_raw("(configure [tron].policy or run interactively). Config: .thoth/config.cyml.\n\n");
     emit_raw("--json (or -j) prints {response, model, turns, tokens?, cost?, elapsed_ms} per\n");
     emit_raw("turn instead of the plain answer; tokens/cost appear only once reported. On any\n");
     emit_raw("failure nothing goes to stdout (diagnostic on stderr, nonzero exit).\n\n");
@@ -319,7 +319,7 @@ fn _completion_zsh() {
 # body went to the discarded sink; run interactively or with [hoosh].stream=false for it).
 fn _oneshot_report_error(rc) {
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        emit_err("thoth: no model backend wired — set [hoosh].url in thoth.cyml (degraded, not faked)\n");
+        emit_err("thoth: no model backend wired — set [hoosh].url in .thoth/config.cyml (degraded, not faked)\n");
         return 0;
     }
     if (rc < 0) { emit_err("thoth: hoosh gateway unreachable (transport error) — is it up?\n"); return 0; }
