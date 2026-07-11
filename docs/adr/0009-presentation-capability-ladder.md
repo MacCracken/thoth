@@ -46,11 +46,12 @@ alt-screen panes, status bar) is a deliberate, separable, **gated** milestone.
 | syntax-colored diffs | **vyakarana** (vendor) |
 | GPU-tier gate + status-bar sysinfo | **mihi** |
 | fancy banner / rainbow | **bnrmr** + **anuenue** (pipe) |
-| desktop/GPU host (T3) | **puka** — thoth is its named v3 command-center consumer |
+| desktop/GPU host (T3) | thoth's OWN sovereign Wayland client — draw-IR + **kashi** raster + a **puka**-forked present shell (**revised** from "thoth-in-puka"; see the 0.30.0 addendum below) |
 | git branch / diff | **sit** when `.sit/`; existing `.git/` repos **gated on sit's `.git/` read-mode** roadmap item |
 
-**Out of scope:** a webview/GUI inside the sovereign core (T3 is thoth-in-puka; the
-HTML is a *reference*, never a bundled dep); a cost/pricing table (hoosh's domain —
+**Out of scope:** a webview/GUI inside the sovereign core (the `Thoth.dc.html` mockup
+is a *reference/spec*, never a bundled dep; T3 is thoth's OWN sovereign Wayland client —
+no webview — **revised** from "thoth-in-puka", see the 0.30.0 addendum below); a cost/pricing table (hoosh's domain —
 cost shows only from an opt-in `thoth.cyml [pricing]` block, else omitted); faking
 any datum the mockup shows that thoth lacks (token/ctx%, cost, branch, real diff)
 — those fields **omit** until a producer lands.

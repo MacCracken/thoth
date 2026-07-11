@@ -24,8 +24,10 @@
 > renderers — line / TUI / GUI). **0.30.0** made it RUNNABLE: a sovereign Wayland present shell
 > (`src/gui/gwindow.cyr`, vendored+renamed from jalwa's puka-forked client) + a present loop
 > (`src/gui/gpresent.cyr`) + a **`thoth gui`** subcommand, now in the SHIPPING binary (cyrius 6.4.49 gave the
-> headroom). Degrades honestly with no compositor. Still ahead: verify `thoth gui` on a live compositor;
-> more view-builders (feed / tool-card / composer from `Thoth.dc.html`) + input→action wiring. thoth as its
+> headroom). Degrades honestly with no compositor; LIVE-CONFIRMED on a real one. **0.30.1** added the
+> conversation feed (word-wrapped) and **0.30.2** made it interactive (evdev keymap + composer → type, Enter
+> runs a turn, the reply renders). Still ahead (0.30.x patches): a turn spinner, tool-call cards + colored
+> diffs in the feed, the file-tree pane, feed scrollback. thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
 > "thoth-in-puka" stance). Per-version detail is in
@@ -134,7 +136,7 @@ above, deferred to a later ADR.
 > field surfaces only when its producer has real data, and announces absence in `/state` —
 > never faked.
 
-The post-M7 feature arc (0.11.x → 0.26.0) has **shipped in full** — see
+The post-M7 feature arc (0.11.x → 0.30.2, including the T3 desktop GUI) has **shipped in full** — see
 [`../../CHANGELOG.md`](../../CHANGELOG.md) for per-version detail and [`state.md`](state.md)
 for the current surface. What remains here is non-gating and unscheduled:
 
@@ -192,9 +194,13 @@ for the current surface. What remains here is non-gating and unscheduled:
 
 ## Off the v1.0 path
 
-- **T3 desktop — ceiling, off the v1.0 path.** thoth-in-**puka** (puka's
-  own v3 command center names thoth as its consumer). No webview in the
-  sovereign core.
+- **T3 desktop GUI — SHIPPED (0.29.0 → 0.30.2); off the v1.0 GATE, not future.** thoth
+  now runs as its OWN sovereign Cyrius Wayland app (`thoth gui`): a draw-command IR +
+  kashi CPU rasterizer + view-builders over the Stage-B view-models + a puka-forked
+  Wayland present shell — NOT thoth-in-puka (see the ADR-0009 addendum). It has a status
+  strip, a conversation feed, and an interactive composer, and it's in the shipping
+  binary. It is off the v1.0 GATE path only because v1.0 is an AGNOS-runtime gate, not a
+  presentation-tier gate. No webview in the sovereign core.
 
 ## Out of scope (for v1.0)
 

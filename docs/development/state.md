@@ -1842,7 +1842,7 @@ host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
 native** (the vendored authorization engine gates `/run`, `/write`, and
 `/call` through one choke point — deny is final, no policy means the
 fail-closed confirm prompt). M5 adds **avatara native**: the vendored archetype
-bundle (avatara 2.7.1) supplies the Thoth/Librarian persona in-process — sourced
+bundle (avatara 2.8.0) supplies the Thoth/Librarian persona in-process — sourced
 from `egyptian_thoth()` via the `prof_*` accessors and threaded into the hoosh
 `{role:system}` message so the precision-0.95 scribe archetype steers the turn,
 not just the banner. Unconfigured capabilities (no hoosh/daimon url, no t-ron
@@ -1889,9 +1889,11 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.2.43` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc`. **0.10.1** took 6.2.40 → 6.2.43 (`cyrius lib sync`, 67 floor
-  modules; no thoth source change). The 0.7.0 line had run on 6.2.40. Earlier:
+- **Cyrius pin**: `6.4.49` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc`. The pin advanced steadily across the 0.11.x–0.30.x arc via
+  `cyrius lib sync` floor refreshes (no thoth source change) — most recently
+  6.4.29 → 6.4.46 → **6.4.49** (0.27.0 and the 0.30.x GUI work). Earlier history:
+  **0.10.1** took 6.2.40 → 6.2.43. The 0.7.0 line had run on 6.2.40. Earlier:
   **0.6.6** took 6.2.15 → 6.2.37 — a toolchain refresh:
   `cyrius lib sync` re-synced 98 floor modules (two new snapshot modules,
   `protobuf` and `yantra`); floor-only churn, no thoth source change, 199
@@ -2184,19 +2186,24 @@ The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
   asserted in the UI. **0.11.9** adds newline escaping to the persist I/O (`_inhist_escape_into`
   + the unescaping load loop) so a multi-line entry (from the multi-line composer) round-trips
   the line-oriented file instead of shattering; backward-compatible (a stray `\X` is preserved).
-- `src/vendor/` — committed spine dist bundles. **M4**: `bote-core.cyr`
-  (bote 2.7.3, the MCP protocol), `t-ron.cyr` (t-ron 2.1.5, authorization),
-  `libro.cyr` (libro 2.7.2, t-ron's audit chain). **M5**: `avatara.cyr`
-  (avatara 2.7.1, the Thoth/Librarian archetype). Re-sync via
-  `scripts/sync-{bote,tron,libro,avatara}.sh`; never hand-edit.
+- `src/vendor/` — committed dist bundles. **Spine**: `bote-core.cyr`
+  (bote 3.1.1, the MCP protocol), `t-ron.cyr` (t-ron 2.1.7, authorization),
+  `libro.cyr` (libro 2.7.10, t-ron's audit chain), `avatara.cyr` (avatara 2.8.0,
+  the Thoth/Librarian archetype). **Substrate (floor)**: `sit-read.cyr` (sit
+  1.3.4, git read profile) + `sankoch.cyr` (sankoch 2.5.1, zlib), `darshana.cyr`
+  (darshana 0.9.0, TTY/raw-mode), `vyakarana.cyr` (vyakarana 2.2.3, syntax
+  tokenizer), `kashi.cyr` (kashi 1.0.2, the T3 GUI VGA 8×16 font). Re-sync via
+  `scripts/sync-{bote,tron,libro,avatara,sit}.sh` (darshana/kashi copied from
+  their dist by hand — no sync script yet); never hand-edit.
 
-Binary: ~2.6 MB (`build/thoth`, x86_64-linux) — the sandhi/TLS transport
-surface plus the four vendored spine bundles dominate (most of the avatara
-bundle is DCE-unreachable).
+Binary: ~16.6 MB (`build/thoth`, x86_64-linux) — the sandhi/TLS transport plus
+the vendored spine + substrate bundles (sigil/sankoch static tables, the T3 GUI,
+kashi font) dominate the static data. Grew ~6× from the pre-GUI ~2.6 MB.
 
 ## Tests
 
-- `tests/thoth.tcyr` — **675 assertions** over the pure logic: M2's
+- `tests/thoth.tcyr` — **1298 assertions** over the pure logic (incl. the status
+  view-model `test_surface`, the T3 GUI `test_gui`, and every post-0.11 group): M2's
   `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
   `cstr_starts_with`; M3's JSON escaping, chat-request building,
   response/error extraction, config defaults, and the copy-on-set model
@@ -2320,27 +2327,27 @@ last-definition-wins the client resolved it to 16, colliding with its own
 went to fd 0 and the gateway saw nothing. **Fixed in sandhi 1.6.13** (server offsets
 namespaced to `SANDHI_SRVCONN_OFF_*`) and folded into the toolchain at **cyrius
 6.2.40**; thoth has stayed on the **stdlib `"sandhi"`** entry (pristine `lib/`) the
-whole time — no `[deps.sandhi]` pin was ever needed. thoth is now on **6.2.43**
+whole time — no `[deps.sandhi]` pin was ever needed. thoth is now on **6.4.49**
 (0.10.1), so this is closed; recorded as the canary for the dep-style-vs-stdlib-style
 ordering hazard (a `[deps.sandhi]` block perturbs thoth's hand-ordered stdlib set and
 breaks `patra`'s `SK_WARN` resolve — keep sandhi as a plain stdlib entry).
 
 **Vendored (committed dist bundles in `src/vendor/`, not `[deps]` blocks):**
-bote-core **2.7.3**, t-ron **2.1.5**, libro **2.7.2** (t-ron's audit chain;
-keep in lockstep with t-ron's own `[deps.libro]` pin), avatara **2.7.1** (the
-Thoth/Librarian archetype; needs the `math` stdlib dep, carries a benign
-`ERR_NONE = 0` matching libro's and a self-contained `xalloc`). bote's and
-t-ron's manifests declare git sub-deps that `cyrius deps` resolves
-transitively into colliding compile sets, so the self-contained bundles are
-consumed directly — the pattern hoosh established (avatara likewise ships a
-`cyrius distlib` bundle, not a server). Re-sync via
-`scripts/sync-{bote,tron,libro,avatara}.sh <tag>`.
+spine — bote-core **3.1.1**, t-ron **2.1.7**, libro **2.7.10** (t-ron's audit
+chain; keep in lockstep with t-ron's own `[deps.libro]` pin), avatara **2.8.0**
+(the Thoth/Librarian archetype; needs the `math` stdlib dep). Substrate/floor —
+sit-read **1.3.4** + sankoch **2.5.1** (git read-mode, 0.13.x), darshana **0.9.0**
+(rich-TUI raw-mode), vyakarana **2.2.3** (syntax tokenizer), kashi **1.0.2** (the
+T3 GUI VGA 8×16 font, 0.29.0). bote's and t-ron's manifests declare git sub-deps
+that `cyrius deps` resolves transitively into colliding compile sets, so the
+self-contained bundles are consumed directly — the pattern hoosh established. Re-sync
+via `scripts/sync-{bote,tron,libro,avatara,sit}.sh <tag>` (darshana/kashi by hand).
 
 **Spine seams.**
 
 - **hoosh** — LLM inference gateway: **wired (remote-client over HTTP via
   sandhi)**. Consumed as a running gateway, not a linked crate (hoosh ships no
-  distlib — it is a server). Re-verified at hoosh **2.4.5**; its 2.2.3–2.4.5
+  distlib — it is a server). Re-verified at hoosh **2.4.12**; its 2.2.3–2.4.12
   growth (tool calling, batch, `/v1/tools/*` MCP endpoints, DLP, observability,
   17 providers, configurable routing strategy) is server-side or M4+ seam
   material — the chat contract thoth consumes is unchanged. See
@@ -2348,22 +2355,21 @@ consumed directly — the pattern hoosh established (avatara likewise ships a
 - **daimon** — agent orchestration + MCP tool execution + host registry:
   **wired (remote-client over HTTP via sandhi)** when `[daimon].url` is
   declared. `/tools` lists the registry, `/call` invokes. **Re-verified
-  wire-compatible against daimon 1.2.6** (2026-06-11), which ships the fix for
-  the registry-aliases-request-buffer bug thoth filed. 1.2.6's `GET
+  wire-compatible against daimon 1.4.1**, which ships the fix for
+  the registry-aliases-request-buffer bug thoth filed. 1.4.1's `GET
   /v1/mcp/tools` returns the manifest `{"tools":[{name,description}],"count":N}`
   (thoth parses, ignores `count`) and `POST /v1/mcp/call` passes the upstream MCP
   `result` through (`content[0].text` + `isError`); both match thoth's seam — no
-  code change needed. Round-trip confirmed against a 1.2.6-faithful mock (real
+  code change needed. Round-trip confirmed against a 1.4.1-faithful mock (real
   daimon's server binary won't run inside thoth's build sandbox — signal 16 — so
   full-stack live e2e is a host-side step).
-- **bote** — the MCP protocol: **wired (native — vendored bote-core 2.7.3,
+- **bote** — the MCP protocol: **wired (native — vendored bote-core 3.1.1,
   in-process)**.
-- **t-ron** — MCP per-tool authorization: **wired (native — vendored t-ron
-  2.1.5 + libro 2.7.2, in-process)** when `[tron].policy` loads; otherwise
+- **t-ron** — MCP per-tool authorization: **wired (native — vendored t-ron 2.1.7 + libro 2.7.10, in-process)** when `[tron].policy` loads; otherwise
   absent with the fail-closed confirm gate standing in, announced. Deny is
   final; unknown agents/tools deny by default.
 - **avatara** — personality / archetype overlay; the Thoth / Librarian persona:
-  **wired (native — vendored avatara 2.7.1, in-process)**. The persona is sourced
+  **wired (native — vendored avatara 2.8.0, in-process)**. The persona is sourced
   from `egyptian_thoth()` (the `prof_*` accessors) and threaded into the hoosh
   system prompt; native by construction (always available from the bundle). See
   [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
@@ -2374,9 +2380,10 @@ deferred to a later ADR.
 ## Known limitations
 
 - All five seams are wired; no seam is absent by milestone. The avatara persona
-  is a fixed archetype (`egyptian_thoth`), not runtime-switchable, and reached
-  only as the vendored bundle — the live/co-resident avatara binding is the same
-  deferred reach-transport question as the other native seams.
+  is now **runtime-switchable** (`/persona` mid-session switch + blends/shadow,
+  0.22.x; `/role` modality, 0.25.0) — the old "fixed archetype" limit is lifted.
+  It is still reached only as the vendored bundle; the live/co-resident avatara
+  binding is the same deferred reach-transport question as the other native seams.
 - t-ron's bundle carries a benign `ERR_NONE = 0` shared with libro's identical
   constant (same value; last definition wins) — re-check on bundle bumps.
 - **daimon registry bug — RESOLVED in daimon 1.2.6** (was 1.2.4): the MCP host
@@ -2430,23 +2437,15 @@ lighting up). A tracked blocker, not a gap to fill in-tree.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 are done and shipping** (0.1.0 →
-0.11.8): the driver core, the hoosh seam (inference + mid-session model switch), the M4 tool
-spine (daimon/bote/t-ron), the M5 avatara overlay, the model-driven agentic loop with
-**parallel tool execution** + `/audit` tool-rounds (0.7.0), the M6 multi-target build ladder +
-the live capability ladder (0.6.5), the M7 presentation ladder (T1 amber/colored diffs 0.8.x →
-the T2 rich-TUI 0.9.x → `/theme` 0.10.0), the **0.10.x data producers** (tokens 0.10.2 + cost
-0.10.3, honest-omit per [ADR-0010](../adr/0010-data-producer-honest-omit.md)), and the **0.11.x
-terminal-citizen line in full** — the one-shot/argv front-door (0.11.0), input-history recall +
-opt-in persistence (0.11.1–0.11.2), feed soft-wrap (0.11.3), `[alias]` prompt macros (0.11.4),
-`/dry` (0.11.5), `--json` envelope output (0.11.6), `-o`/`--out` file tee (0.11.7), and shell
-completion (0.11.8).
-
-**Remaining work is no longer thoth feature work.** The leftover 0.11.x riders are deferred
-(live spine-health — not yet wanted) or AGNOS-impossible (clipboard — needs an upstream cyrius
-`process` stdin-feed primitive); the rainbow theme is deferred (needs **anuenue** vendored); and
-the **0.12.x git producer** is externally gated on **sit** shipping `.git/` read-mode (thoth
-never hand-rolls a `.git/` parser — ADR-0010).
+See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 are done and shipping**, and the
+ENTIRE post-M7 feature arc has since landed (0.11.x → 0.30.2): the terminal-citizen front door,
+the memory + git producers (0.12.x–0.13.x), the model `shell` tool (0.16.x), the re-renderable feed +
+session visibility (0.18.x–0.19.x), shell/agent hardening (0.20.x), composer intelligence (0.21.x),
+the active persona + role modality (0.22.x / 0.25.0), project awareness (0.23.x), the model picker +
+`/reload` / `/save` / conversation resume (0.24.x), the `.thoth/` config home (0.26.0), the simple↔rich
+tier-consistency line (parity fixes 0.27.0 + the status view-model 0.28.0), and the **T3 desktop GUI** —
+a runnable `thoth gui` sovereign Wayland window with a status strip, conversation feed, and interactive
+composer (0.29.0 → 0.30.2). Per-version detail is in the log above + [CHANGELOG](../../CHANGELOG.md).
 
 **The path to v1.0 is dominated by AGNOS lighting up, not by feature work in
 thoth.** Four gates (see [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS

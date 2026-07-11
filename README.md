@@ -8,9 +8,9 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.26.0 — the full spine wired, agentic tool-calling live, a rich TUI by
-> default, and a non-interactive shell citizen (pre-1.0).** The interactive TUI/REPL loop
-> is real and usable, and the full AGNOS spine is wired. A free-text turn drives a
+> **Status: 0.30.2 — the full spine wired, agentic tool-calling live, a rich TUI by
+> default, a non-interactive shell citizen, and a native desktop GUI (`thoth gui`) (pre-1.0).**
+> The interactive TUI/REPL loop is real and usable, and the full AGNOS spine is wired. A free-text turn drives a
 > **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to **hoosh**, the
 > backing model calls them, thoth executes each through daimon (speaking **bote**, the
 > vendored MCP protocol) under **t-ron** authorization (deny is final; no policy means a
@@ -23,7 +23,10 @@ or provider when that serves the work.
 > diffs + fenced code, a soft-wrapping self-managed feed, a growing word-wrapping composer, a
 > file-tree pane (Ctrl-B), theme toggle (`/theme`), conversation resume, `/save` export, and a
 > live spine-health + token/cost + git-branch status bar — degrading **closed** to a
-> byte-identical line-mode floor when piped/CI. thoth also **sees the project** it is launched
+> byte-identical line-mode floor when piped/CI. A **native desktop GUI** (`thoth gui`, tier T3) renders the same
+> status strip, word-wrapped conversation feed, and interactive composer as thoth's OWN sovereign Cyrius
+> Wayland window (draw-command IR → kashi CPU rasterizer → wl_shm buffer → a puka-forked present shell —
+> live-confirmed on a real compositor). thoth also **sees the project** it is launched
 > in: default-on jailed `read_file`/`list_dir` tools + `@file` mentions (`/allow` widens the
 > jail), an opt-in project-memory seam (`/remember` → `.thoth/memory/`), a git producer
 > (`/git`), and `web_fetch`/`web_search` via daimon+bote. As a **shell citizen**: a one-shot
@@ -74,10 +77,10 @@ When AGNOS owns a domain, thoth consumes it and never reimplements it. The
 "Thoth" archetype pulled from avatara is the personality overlay for
 thoth-the-tool — name, archetype, and function aligned on purpose.
 
-**All five seams are wired.** hoosh (0.2.0) and daimon (0.3.0) are consumed as
+**All five seams are wired.** hoosh and daimon are consumed as
 running HTTP services — they ship no linkable crate — reached over the stdlib
 `sandhi` transport and configured via `.thoth/config.cyml` (`[hoosh].url`,
-`[daimon].url`). bote and t-ron (0.3.0) and avatara (0.4.0) bind **in-process**
+`[daimon].url`). bote, t-ron, and avatara bind **in-process**
 as vendored dist bundles (`src/vendor/`): bote is the MCP protocol, t-ron
 authorizes every gated action (binding when `[tron].policy` loads, else a
 fail-closed confirm), and avatara supplies the persona. Any seam left
