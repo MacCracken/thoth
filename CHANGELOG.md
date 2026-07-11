@@ -2,6 +2,40 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.5] - 2026-07-11
+
+**T3 GUI — the file-tree pane.** The desktop window gains the mockup's (Thoth.dc.html) left column: a file-tree
+pane over ftree.cyr's flattened tree model — the SAME model the TUI pane reads. NEW **`src/gui/gtree.cyr`**, a
+view-builder like `gstatus`/`gfeed`: it reads producers (`ftree_*` + `git_status_of`) and lowers the tree into
+draw-commands — a project-name header, then one row per visible node with a depth indent, a `v`/`>` expand
+marker, the name (directory = `ROLE_BLUE`, file = `ROLE_MUTED`, exactly as `tui_draw_tree` paints them), and a
+git badge (`M`/`A`/`D`, files only, via the 0.22.4 `ftree_path` → strip-cwd → `git_status_of` path). The pane is
+**responsive**: `gframe_build` reserves a 230px left column and shrinks the feed when the window is wide enough
+(`gtree_w`), and hides the tree entirely on a narrow window (< 640px), giving the feed the whole body exactly as
+before — so the status strip and composer still span full width. `gui_run` calls `ftree_load()` + `git_probe()`
+at startup so the pane is populated and its badges (and the status strip's git field) have data. STATIC render
+this cut (keyboard nav — focus / ↑↓ / expand-collapse — is the follow-up, mirroring feed render 0.30.1 → feed
+interactive 0.30.2). 1331 assertions (+8). Reviewed via a 3-lens find→verify workflow.
+
+### Added
+- **`src/gui/gtree.cyr`** — `gtree_build` (the pane), `gtree_w` (responsive width), `_gtree_row`,
+  `_gtree_gitkind` (mirrors `_tui_tree_row_gitkind`), `_gtree_basename`, `_gtree_scroll_first`, `_gtree_bg`.
+- **`test_gui`** +8 — `gtree_w` thresholds, `_gtree_basename`, `_gtree_scroll_first` clamp, a synthetic-tree
+  render, and a directory row's `ROLE_BLUE` color. The frame golden PPMs now include the populated tree pane
+  (with a live `M` badge on the modified `main.cyr`).
+
+### Changed
+- `gframe_build` (`src/gui/gfeed.cyr`) lays out the body as `[tree pane | feed]` (tree hidden on a narrow
+  window; the feed is byte-identical to before when the tree is hidden).
+- `gui_run` (`src/gui/gpresent.cyr`) loads the file tree + probes git at startup.
+- Include order: `src/gui/gtree.cyr` before `gfeed.cyr` (`gframe_build` calls `gtree_build`).
+
+### Notes
+- The test binary is at the **16 MiB output cap** (the same cap that keeps `gwindow`/`gpresent` main-only), so
+  the gtree test is kept lean; `gtree_build`'s full render is also exercised in the frame golden PPMs. A
+  dedicated GUI test binary (a separate lean `.tcyr` with only the GUI's transitive deps) is the next infra step
+  before further GUI tests.
+
 ## [0.30.4] - 2026-07-11
 
 **T3 GUI — turn feedback: a working indicator, and an honest notice when a turn doesn't complete.** The GUI ran

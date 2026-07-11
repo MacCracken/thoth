@@ -44,6 +44,7 @@ include "src/gui/gdraw.cyr"
 include "src/gui/graster.cyr"
 include "src/gui/gstatus.cyr"
 include "src/gui/ginput.cyr"
+include "src/gui/gtree.cyr"
 include "src/gui/gfeed.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
@@ -3746,6 +3747,12 @@ fn test_gui() {
     }
     assert(vec_len(_lz) > 0, "leading-space wrap still emits its wrapped lines");
     assert_eq(_lzu, 0, "leading-space wrap emits NO uncapped slice (empty first segment skipped)");
+    # populate a synthetic file tree (0.30.5) so the window-frame PPMs below show the tree pane alongside the feed
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/home/macro/Repos/thoth");
+    _ftree_append("src", 1, 0); _ftree_append("docs", 1, 0);
+    _ftree_append("CHANGELOG.md", 0, 0); _ftree_append("VERSION", 0, 0);
+    _ftree_insert_at(1, "gui", 1, 1); _ftree_insert_at(2, "main.cyr", 0, 1); _ftree_insert_at(3, "gfeed.cyr", 0, 1);
+    ftree_set_exp(0, 1);
     # --- feed bottom-anchoring (0.30.3): the feed follows the conversation ---
     session_history_clear();
     var _bu = "add a token-bucket rate limiter";
@@ -3902,6 +3909,28 @@ fn test_gui() {
     assert_eq(gturn_failed(), 0, "a new submit (gturn_begin) clears the failure notice");
     gturn_end();
     session_history_clear();
+    # --- file-tree pane (gtree.cyr, 0.30.5) — pure helpers + a render/color check (kept lean: the test
+    #     binary is at the 16 MiB output cap; gtree_build's full render is also exercised in the frame PPMs) ---
+    assert_eq(gtree_w(500), 0, "narrow window (<640) hides the tree");
+    assert_eq(gtree_w(960), GTREE_PANE_W, "wide window shows the pane");
+    assert(streq(_gtree_basename("/a/b/thoth"), "thoth") == 1, "basename = last path component");
+    assert(streq(_gtree_basename("/"), "/") == 1, "basename of root '/' is '/', not an empty header");
+    assert_eq(_gtree_scroll_first(5, 10, 0), 0, "a tree that fits starts at row 0");
+    assert_eq(_gtree_scroll_first(100, 10, 99), 90, "overflow, selection at bottom -> clamped to total-rows");
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0); _ftree_append("VERSION", 0, 0);
+    assert_eq(_gtree_gitkind(0), 0, "_gtree_gitkind returns 0 for a directory (files-only gate)");
+    var _tl = gd_list_new();
+    gtree_build(_tl, 0, 40, 230, 400);
+    assert(vec_len(_tl) > 4, "gtree_build emits bg + clip + header + rows + unclip");
+    var _tsrc = 0; var _gti = 0;
+    while (_gti < vec_len(_tl)) {
+        var _gtc = vec_get(_tl, _gti);
+        if ((gd_kind(_gtc) == GD_TEXT) && (streq(gd_text(_gtc), "src") == 1) && (gd_color(_gtc) == _ui_rgb(ROLE_BLUE))) { _tsrc = 1; }
+        _gti = _gti + 1;
+    }
+    assert_eq(_tsrc, 1, "a directory row renders in ROLE_BLUE (== tui_draw_tree)");
+    ftree_reset();
     session_set_model(0);
     return 0;
 }

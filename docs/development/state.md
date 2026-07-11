@@ -7,6 +7,32 @@
 
 ## Version
 
+**0.30.5** — **T3 GUI: the file-tree pane**, 2026-07-11. The desktop window gains the mockup's (Thoth.dc.html)
+LEFT column. NEW **`src/gui/gtree.cyr`** — a view-builder like `gstatus`/`gfeed` over ftree.cyr's flattened
+tree model (the SAME model the TUI pane reads): `gtree_build` emits a project-name header + one row per visible
+node — a depth indent, a `v`/`>` expand marker, the name (**dir = `ROLE_BLUE`, file = `ROLE_MUTED`**, exactly as
+`tui_draw_tree`), and a git badge (`M`/`A`/`D`, files only, via the 0.22.4 `ftree_path` → strip-cwd →
+`git_status_of` path in `_gtree_gitkind`, mirroring `_tui_tree_row_gitkind`); a selection bar marks
+`ftree_sel()`; rows scroll to keep the selection in view (`_gtree_scroll_first`). **Responsive** (`gtree_w`):
+`gframe_build` reserves a 230px left column + a vertical rule and shrinks the feed when the window is ≥ 640px
+wide, and hides the tree on a narrower window — the feed is BYTE-IDENTICAL to before when the tree is hidden
+(status strip + composer still span full width). `gui_run` calls `ftree_load()` + `git_probe()` at startup so
+the pane is populated and its badges (+ the status strip's git field) have data. STATIC render this cut
+(keyboard nav — focus / ↑↓ / expand-collapse — is the follow-up, mirroring feed render 0.30.1 → interactive
+0.30.2). **Verified**: 1332 assertions (+9 `test_gui`: `gtree_w` thresholds, `_gtree_basename` incl. the root
+edge, `_gtree_scroll_first` clamp, a synthetic-tree render, a dir row's `ROLE_BLUE`) + the frame **golden PPMs
+now show the populated tree pane** with a live `M` badge on the modified `main.cyr` — visually confirmed + main
+builds. **Reviewed** via a 3-lens find→verify **workflow** (safety / layout / correctness): 2 lenses clean (no
+OOB, no layout overlap, feed unaffected when hidden), 1 CONFIRMED cosmetic nit (an empty pane header when
+`cwd == "/"` — `_gtree_basename` returned the trailing NUL; FIXED — a trailing `/` is no longer a separator, so
+root → `/`, with a test). **Test-binary cap**: the test binary is at the **16 MiB output cap** (the same cap
+that keeps `gwindow`/`gpresent` main-only) — the gtree test is kept LEAN (a verbose version overflowed by ~4KB);
+`gtree_build`'s full render is also exercised in the frame PPMs. A **dedicated GUI test binary** (a separate
+lean `.tcyr` with only the GUI's transitive deps) is the next INFRA step before further GUI tests can grow. Pin
+**6.4.49** (wrapper drifted to 6.4.50; benign). **NEXT**: file-tree keyboard nav (focus / ↑↓ move / →← or
+Enter expand-collapse, wiring into `gpresent` keys — after the test-binary split); tool-call cards + colored
+diffs (needs a tool-round producer); feed scrollback; composer history.
+
 **0.30.4** — **T3 GUI: turn feedback — a working indicator + an honest "didn't complete" notice**, 2026-07-11.
 The GUI ran a turn SYNCHRONOUSLY (`cmd_task` under `OUT_NULL`) with the window frozen on the old frame for the
 turn's duration. Now the present loop paints ONE "working" frame BEFORE the blocking turn: the just-submitted

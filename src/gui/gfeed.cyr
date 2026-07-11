@@ -154,11 +154,20 @@ fn gframe_build(w, h) {
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
     gstatus_build(cmds, 0, 0, w, GFRAME_STRIP_H);                            # status strip (the view-model)
     gd_push_rect(cmds, 0, GFRAME_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));        # rule under the strip
-    var feed_top = GFRAME_STRIP_H + 1;                                       # feed region (conversation / greeting)
-    var feed_h = h - feed_top - GFRAME_COMPOSER_H;
-    if (feed_h < 0) { feed_h = 0; }
-    gfeed_build(cmds, 0, feed_top, w, feed_h);
+    # body band: an optional file-tree pane (left) + the conversation feed (right); status strip + composer span
+    # the full width. The tree hides on a narrow window (gtree_w -> 0), giving the feed the whole body as before.
+    var body_top = GFRAME_STRIP_H + 1;
     var comp_top = h - GFRAME_COMPOSER_H;                                    # composer line (bottom)
+    var body_h = comp_top - body_top;
+    if (body_h < 0) { body_h = 0; }
+    var tw = gtree_w(w);
+    var feed_x = 0;
+    if (tw > 0) {
+        gtree_build(cmds, 0, body_top, tw, body_h);
+        gd_push_rect(cmds, tw, body_top, 1, body_h, _ui_rgb(ROLE_FAINT));    # vertical rule between tree + feed
+        feed_x = tw + 1;
+    }
+    gfeed_build(cmds, feed_x, body_top, w - feed_x, body_h);
     gd_push_rect(cmds, 0, comp_top, w, 1, _ui_rgb(ROLE_FAINT));
     var cty = comp_top + (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2;
     gd_push_text(cmds, 14, cty, _ui_rgb(ROLE_ACCENT), ">", 0);

@@ -1,0 +1,117 @@
+# src/gui/gtree.cyr — the GUI file-tree pane view-builder (T3, 0.30.5).
+#
+# The desktop-tier renderer of ftree.cyr's flattened tree model — the SAME model the TUI file-tree pane reads —
+# lowered into draw-commands for a LEFT column, the mockup's (Thoth.dc.html) file-tree pane. A view-builder like
+# gstatus/gfeed: it READS producers (ftree_* + git_status_of) and owns no state, emitting byte-free draw
+# commands. STATIC render this cut (the loaded tree + git badges); keyboard nav (focus / ↑↓ / expand-collapse)
+# is a follow-up, mirroring feed render (0.30.1) → feed interactive (0.30.2).
+#
+# Colors come from ui.cyr's _ui_rgb(role) (dir = ROLE_BLUE, file = ROLE_MUTED — as tui_draw_tree paints them),
+# so the pane shares the TUI palette + /theme for free. Git badges (M/A/D) reuse the 0.22.4 producer path
+# (ftree_path -> strip the cwd -> git_status_of), files only, exactly like the TUI's _tui_tree_row_gitkind. The
+# ▾/▸ markers the TUI draws are non-CP437, so the raster would fold them to boxes — here they are ASCII v/>.
+#
+# PURE: builds a command list, never touches a display. The per-build scratch (_gtree_pathbuf, the command
+# cells) is bump-heap with no free — bounded per interaction under the EVENT-DRIVEN present loop, like gstatus.
+
+var GTREE_PAD     = 12;   # left inset
+var GTREE_ROW_H   = 18;   # px per tree row
+var GTREE_INDENT  = 12;   # px per depth level
+var GTREE_MIN_WIN = 640;  # below this WINDOW width the tree is hidden (the feed gets the whole body)
+var GTREE_PANE_W  = 230;  # the pane width when shown (the mockup's 230px)
+
+# gtree_w: the tree-pane width for a window `win_w` px wide — 0 (hidden) below GTREE_MIN_WIN, else GTREE_PANE_W
+# clamped to at most half the window. Responsive: a narrow window gives the feed the whole body (honest degrade).
+fn gtree_w(win_w) {
+    if (win_w < GTREE_MIN_WIN) { return 0; }
+    var tw = GTREE_PANE_W;
+    if (tw > win_w / 2) { tw = win_w / 2; }
+    return tw;
+}
+
+# theme-aware pane background (the mockup's --bg2, == the status strip's chrome).
+fn _gtree_bg() { if (ui_theme() == THEME_LIGHT) { return 0xefe8d9; } return 0x1b1812; }
+
+# _gtree_basename: a pointer to the last '/'-separated component of a path cstr (the project name, for the
+# header). A '/' is a separator only when a non-NUL follows, so a TRAILING slash is ignored — the root "/" (or
+# any path ending in '/') returns "/" rather than an empty header. An empty cstr returns itself ("").
+fn _gtree_basename(path) {
+    var last = path;
+    var i = 0;
+    while (load8(path + i) != 0) {
+        if ((load8(path + i) == 47) && (load8(path + i + 1) != 0)) { last = path + i + 1; }
+        i = i + 1;
+    }
+    return last;
+}
+
+# _gtree_gitkind: the git status kind for tree node li — 1=modified, 2=new, 3=deleted, 0=dir/unchanged/no-repo.
+# Mirrors tui.cyr's _tui_tree_row_gitkind: files only; ftree_path is absolute (cwd + chain), so strip the cwd +
+# its '/' to get the repo-relative path git_status_of expects.
+var _gtree_pathbuf = 0;
+fn _gtree_gitkind(li) {
+    if (ftree_isdir(li) == 1) { return 0; }
+    if (_gtree_pathbuf == 0) { _gtree_pathbuf = alloc(4096); }
+    ftree_path(li, _gtree_pathbuf, 4096);
+    var skip = strlen(ftree_cwd());
+    if (load8(_gtree_pathbuf + skip) == 47) { skip = skip + 1; }   # past the '/' after the cwd
+    return git_status_of(_gtree_pathbuf + skip);
+}
+
+# _gtree_scroll_first: the first visible row so the selection stays in view (centered when the tree overflows).
+fn _gtree_scroll_first(total, rows, sel) {
+    if (total <= rows) { return 0; }
+    var first = sel - rows / 2;
+    if (first < 0) { first = 0; }
+    if (first > (total - rows)) { first = total - rows; }
+    return first;
+}
+
+# _gtree_row: draw node li at (x, rowy) in a w-wide pane. badges == 1 reserves a 2-glyph git gutter (in a repo).
+# Layout: [selection bar] [git badge] [depth indent] [dir marker] [name]. File names align under dir names (the
+# marker cell is always reserved). dir = ROLE_BLUE, file = ROLE_MUTED (== tui_draw_tree).
+fn _gtree_row(cmds, li, x, rowy, w, badges) {
+    if (li == ftree_sel()) { gd_push_rect(cmds, x, rowy - 1, 3, GTREE_ROW_H, _ui_rgb(ROLE_ACCENT)); }   # selection bar
+    var px = x + GTREE_PAD;
+    if (badges == 1) {
+        var kind = _gtree_gitkind(li);
+        if (kind == 1) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_ACCENT), "M", 0); }        # modified — amber
+        elif (kind == 2) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_GREEN), "A", 0); }        # new — green
+        elif (kind == 3) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_RED), "D", 0); }          # deleted — red
+        px = px + 2 * GR_GLYPH_W;                                                              # gutter (blank for dir/unchanged)
+    }
+    px = px + ftree_depth(li) * GTREE_INDENT;
+    var role = _ui_rgb(ROLE_MUTED);
+    if (ftree_isdir(li) == 1) {
+        role = _ui_rgb(ROLE_BLUE);
+        if (ftree_exp(li) == 1) { gd_push_text(cmds, px, rowy, role, "v", 0); }                # expanded dir
+        else { gd_push_text(cmds, px, rowy, role, ">", 0); }                                   # collapsed dir
+    }
+    px = px + GR_GLYPH_W + 4;                                                                  # marker cell + gap (files align too)
+    gd_push_text(cmds, px, rowy, role, ftree_name(li), 0);
+    return 0;
+}
+
+# gtree_build: render the file-tree pane into [x, x+w) x [y, y+h). Pane bg + a header (the project name) + the
+# visible tree rows (scrolled to keep the selection in view), clipped to the pane. An empty/unloaded tree shows
+# just the header (honest — no faked entries). Returns 0.
+fn gtree_build(cmds, x, y, w, h) {
+    gd_push_rect(cmds, x, y, w, h, _gtree_bg());
+    gd_push_clip(cmds, x, y, w, h);
+    var hy = y + GTREE_PAD;
+    gd_push_text(cmds, x + GTREE_PAD, hy, _ui_rgb(ROLE_FAINT), _gtree_basename(ftree_cwd()), 0);   # project-name header
+    var top = hy + GTREE_ROW_H + 6;
+    var rows = (y + h - top) / GTREE_ROW_H;
+    if (rows < 0) { rows = 0; }
+    var total = ftree_count();
+    var badges = git_present();
+    var first = _gtree_scroll_first(total, rows, ftree_sel());
+    var i = 0;
+    while (i < rows) {
+        var li = first + i;
+        if (li < total) { _gtree_row(cmds, li, x, top + i * GTREE_ROW_H, w, badges); }
+        i = i + 1;
+    }
+    gd_push_unclip(cmds);
+    return 0;
+}

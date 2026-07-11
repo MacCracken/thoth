@@ -66,6 +66,8 @@ fn gui_run() {
         return 0 - 1;
     }
     var win = 1;
+    ftree_load();                                        # populate the file-tree pane (0.30.5)
+    git_probe();                                         # so the tree's git badges + the status git field have data
     var pfd[8];
     _gpresent_frame(win);                                # first paint
     var running = 1;
