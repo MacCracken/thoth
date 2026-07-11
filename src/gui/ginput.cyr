@@ -1,0 +1,74 @@
+# src/gui/ginput.cyr — GUI keyboard input: evdev keycode → ASCII + a composer text buffer (T3, 0.30.2).
+#
+# The window's keyboard path (gwl_win_next_key delivers raw evdev {keycode, value, mods}). This maps a
+# keycode + shift to a printable ASCII char (ported from jalwa's input.cyr / puka, US QWERTY), and holds the
+# composer's typed text. PURE + headless-testable — the present loop (gpresent.cyr) feeds it real key records
+# and reads `gcomp_cstr()` to render + submit. No display, no producer of its own.
+
+# _ginput_letter: evdev keycode -> lowercase ASCII letter, or 0.
+fn _ginput_letter(code) {
+    if (code == 30) { return 0x61; } if (code == 48) { return 0x62; } if (code == 46) { return 0x63; }
+    if (code == 32) { return 0x64; } if (code == 18) { return 0x65; } if (code == 33) { return 0x66; }
+    if (code == 34) { return 0x67; } if (code == 35) { return 0x68; } if (code == 23) { return 0x69; }
+    if (code == 36) { return 0x6A; } if (code == 37) { return 0x6B; } if (code == 38) { return 0x6C; }
+    if (code == 50) { return 0x6D; } if (code == 49) { return 0x6E; } if (code == 24) { return 0x6F; }
+    if (code == 25) { return 0x70; } if (code == 16) { return 0x71; } if (code == 19) { return 0x72; }
+    if (code == 31) { return 0x73; } if (code == 20) { return 0x74; } if (code == 22) { return 0x75; }
+    if (code == 47) { return 0x76; } if (code == 17) { return 0x77; } if (code == 45) { return 0x78; }
+    if (code == 21) { return 0x79; } if (code == 44) { return 0x7A; }
+    return 0;
+}
+
+# ginput_ascii: evdev keycode + shift -> a printable ASCII char (shift picks the upper glyph), or 0 for a
+# non-printable / unmapped key. Ported from jalwa's evdev_ascii (US QWERTY).
+fn ginput_ascii(code, shift) {
+    var lo = _ginput_letter(code);
+    if (lo != 0) { if (shift != 0) { return lo - 32; } return lo; }   # letters (shift -> upper)
+    if (code == 2)  { if (shift != 0) { return 0x21; } return 0x31; }   # 1 !
+    if (code == 3)  { if (shift != 0) { return 0x40; } return 0x32; }   # 2 @
+    if (code == 4)  { if (shift != 0) { return 0x23; } return 0x33; }   # 3 #
+    if (code == 5)  { if (shift != 0) { return 0x24; } return 0x34; }   # 4 $
+    if (code == 6)  { if (shift != 0) { return 0x25; } return 0x35; }   # 5 %
+    if (code == 7)  { if (shift != 0) { return 0x5E; } return 0x36; }   # 6 ^
+    if (code == 8)  { if (shift != 0) { return 0x26; } return 0x37; }   # 7 &
+    if (code == 9)  { if (shift != 0) { return 0x2A; } return 0x38; }   # 8 *
+    if (code == 10) { if (shift != 0) { return 0x28; } return 0x39; }   # 9 (
+    if (code == 11) { if (shift != 0) { return 0x29; } return 0x30; }   # 0 )
+    if (code == 12) { if (shift != 0) { return 0x5F; } return 0x2D; }   # - _
+    if (code == 13) { if (shift != 0) { return 0x2B; } return 0x3D; }   # = +
+    if (code == 26) { if (shift != 0) { return 0x7B; } return 0x5B; }   # [ {
+    if (code == 27) { if (shift != 0) { return 0x7D; } return 0x5D; }   # ] }
+    if (code == 39) { if (shift != 0) { return 0x3A; } return 0x3B; }   # ; :
+    if (code == 40) { if (shift != 0) { return 0x22; } return 0x27; }   # ' "
+    if (code == 41) { if (shift != 0) { return 0x7E; } return 0x60; }   # ` ~
+    if (code == 43) { if (shift != 0) { return 0x7C; } return 0x5C; }   # \ |
+    if (code == 51) { if (shift != 0) { return 0x3C; } return 0x2C; }   # , <
+    if (code == 52) { if (shift != 0) { return 0x3E; } return 0x2E; }   # . >
+    if (code == 53) { if (shift != 0) { return 0x3F; } return 0x2F; }   # / ?
+    if (code == 57) { return 0x20; }                                   # space
+    return 0;
+}
+
+# --- the composer text buffer (what the user is typing) ---
+var GCOMP_CAP = 4096;
+var _gcomp_buf = 0;
+var _gcomp_len = 0;
+
+fn _gcomp_ensure() { if (_gcomp_buf == 0) { _gcomp_buf = alloc(GCOMP_CAP); } return 0; }
+fn gcomp_reset() { _gcomp_len = 0; return 0; }
+fn gcomp_append(ch) { _gcomp_ensure(); if (_gcomp_len < GCOMP_CAP - 1) { store8(_gcomp_buf + _gcomp_len, ch); _gcomp_len = _gcomp_len + 1; } return 0; }
+fn gcomp_backspace() { if (_gcomp_len > 0) { _gcomp_len = _gcomp_len - 1; } return 0; }
+fn gcomp_len() { return _gcomp_len; }
+# gcomp_cstr: NUL-terminate the buffer and return it (stable until the next edit). Empty -> "".
+fn gcomp_cstr() { _gcomp_ensure(); store8(_gcomp_buf + _gcomp_len, 0); return _gcomp_buf; }
+
+# gcomp_key: feed one evdev key record into the composer. Returns 0 = handled/typed, 1 = Esc (quit), 2 = Enter
+# (submit). Backspace + printables mutate the buffer; the caller repaints and, on submit, runs the turn.
+fn gcomp_key(code, shift) {
+    if (code == 1) { return 1; }                          # Esc -> quit
+    if ((code == 28) || (code == 96)) { return 2; }       # Enter / keypad Enter -> submit
+    if (code == 14) { gcomp_backspace(); return 0; }      # Backspace
+    var ch = ginput_ascii(code, shift);
+    if (ch != 0) { gcomp_append(ch); }
+    return 0;
+}

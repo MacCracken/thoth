@@ -43,6 +43,8 @@ include "src/vendor/kashi.cyr"
 include "src/gui/gdraw.cyr"
 include "src/gui/graster.cyr"
 include "src/gui/gstatus.cyr"
+include "src/gui/ginput.cyr"
+include "src/gui/gfeed.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
 include "src/oneshot.cyr"
@@ -3725,6 +3727,61 @@ fn test_gui() {
     gr_raster(scmds, sb, SW, SH);
     assert(load32(sb + (5 * SW + 5) * 4) != 0x000000, "status strip background painted over the clear");
     _gui_ppm_dump(sb, SW, SH, "/tmp/thoth_gui_status.ppm");
+    # --- feed word-wrap: a long paragraph wraps to multiple lines ---
+    var wcmds = gd_list_new();
+    var yend = _gfeed_para(wcmds, 0, 0, 160, 0xFFFFFF, "the quick brown fox jumps over the lazy dog again and again yet more");
+    assert(yend >= 3 * GFEED_LH, "long paragraph wrapped to >= 3 lines at 160px");
+    assert(vec_len(wcmds) >= 3, "wrap emitted >= 3 text slices");
+    var scmds2 = gd_list_new();
+    assert_eq(_gfeed_para(scmds2, 0, 0, 800, 0xFFFFFF, "short"), GFEED_LH, "a short line is exactly one line high");
+    assert_eq(_gfeed_para(gd_list_new(), 0, 0, 800, 0xFFFFFF, 0), 0, "null text advances nothing");
+    # --- a full window frame with a 2-message conversation -> raster + PPM ---
+    session_history_clear();
+    var _m1 = "add a token-bucket rate limiter as its own module, thread-safe";
+    session_history_append("user", _m1, strlen(_m1));
+    var _m2 = "Plan: scaffold a ratelimit module, implement TokenBucket behind a Mutex, expose try_acquire(n), then add tests. Starting now.";
+    session_history_append("assistant", _m2, strlen(_m2));
+    var FW = 900; var FH = 400;
+    var fbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(fbuf, FW, FH, 0);
+    var frame = gframe_build(FW, FH);
+    assert(vec_len(frame) > 8, "frame emitted status + feed + composer commands");
+    gr_raster(frame, fbuf, FW, FH);
+    _gui_ppm_dump(fbuf, FW, FH, "/tmp/thoth_gui_frame.ppm");
+    # a frame with a conversation + a half-typed composer (interactive state) -> PPM
+    gcomp_reset();
+    var _tu = "add async support to the rate limiter";
+    session_history_clear();
+    session_history_append("user", _tu, strlen(_tu));
+    var _ta = "On it - I'll add an AsyncTokenBucket holding a Notify, so acquire(n) awaits a permit instead of returning false. Keeping the sync API behind a feature flag.";
+    session_history_append("assistant", _ta, strlen(_ta));
+    var _typed = "and criterion benches";
+    var _ti = 0;
+    while (load8(_typed + _ti) != 0) { gcomp_append(load8(_typed + _ti)); _ti = _ti + 1; }
+    var tbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(tbuf, FW, FH, 0);
+    gr_raster(gframe_build(FW, FH), tbuf, FW, FH);
+    _gui_ppm_dump(tbuf, FW, FH, "/tmp/thoth_gui_typed.ppm");
+    gcomp_reset();
+    session_history_clear();
+    # --- input: evdev keymap + composer buffer (0.32.0) ---
+    assert_eq(ginput_ascii(30, 0), 0x61, "evdev 30 -> 'a'");
+    assert_eq(ginput_ascii(30, 1), 0x41, "shift 30 -> 'A'");
+    assert_eq(ginput_ascii(2, 1), 0x21, "shift 2 -> '!'");
+    assert_eq(ginput_ascii(57, 0), 0x20, "evdev 57 -> space");
+    assert_eq(ginput_ascii(103, 0), 0, "arrow key (103) -> not printable");
+    gcomp_reset();
+    assert_eq(gcomp_len(), 0, "composer starts empty");
+    gcomp_append(0x68); gcomp_append(0x69);
+    assert(streq(gcomp_cstr(), "hi") == 1, "composer cstr == 'hi'");
+    gcomp_backspace();
+    assert(streq(gcomp_cstr(), "h") == 1, "backspace -> 'h'");
+    assert_eq(gcomp_key(28, 0), 2, "Enter -> submit (2)");
+    assert_eq(gcomp_key(1, 0), 1, "Esc -> quit (1)");
+    assert_eq(gcomp_key(31, 0), 0, "'s' key -> typed (0)");
+    assert(streq(gcomp_cstr(), "hs") == 1, "gcomp_key typed 's' -> 'hs'");
+    gcomp_reset();
+    session_history_clear();
     session_set_model(0);
     return 0;
 }

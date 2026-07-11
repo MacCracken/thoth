@@ -1,0 +1,126 @@
+# src/gui/gfeed.cyr — the GUI conversation-feed view-builder (T3, 0.30.1).
+#
+# Renders the conversation (session_history_*) as word-wrapped messages in the window body — the mockup's
+# (Thoth.dc.html) main region. A user message gets a `>` accent marker + its text; an agent message is plain
+# body text; each wraps to the available pixel width. When there is no conversation yet, an honest greeting
+# empty-state (the app's opening screen, never a faked exchange). PURE: builds draw-commands over the tested
+# pipeline (gdraw + graster's codepoint-accurate text); no display, no producer of its own — it reads the
+# SAME session_history the TUI feed + `/save` read. Headless-testable (build → raster → assert / PPM).
+
+var GFEED_LH   = 20;   # line height (px) for wrapped body text
+var GFEED_GAP  = 12;   # px between messages
+var GFEED_PAD  = 14;   # left inset
+
+# _gfeed_para: draw `text` word-wrapped into an `avail_px`-wide column at (x,y), line height GFEED_LH.
+# Breaks at spaces (hard-breaks a word longer than the column). Draws each wrapped line as a (start,cols)
+# slice via gd_push_text's max_cp cap — NO per-line copy. Codepoint-accurate (uses the graster decoder), so
+# the wrap column matches the rendered width for non-ASCII too. Returns the y AFTER the last line.
+fn _gfeed_para(cmds, x, y, avail_px, color, text) {
+    if (text == 0) { return y; }
+    var maxcols = avail_px / GR_GLYPH_W;
+    if (maxcols < 1) { maxcols = 1; }
+    var i = 0;                  # byte scan offset
+    var line_start = 0;         # byte offset where the current line begins
+    var cols = 0;               # codepoints on the current line (incl. the last-processed one)
+    var last_sp_byte = 0 - 1;   # byte offset of the last space seen on this line
+    var last_sp_cols = 0;       # codepoints before that space
+    var cy = y;
+    var done = 0;
+    while (done == 0) {
+        if (load8(text + i) == 0) { done = 1; }
+        else {
+            var packed = gr__utf8_at(text, i);
+            var cp = packed / 8;
+            var nb = packed % 8;
+            if (cp == 32) { last_sp_byte = i; last_sp_cols = cols; }   # cols = count BEFORE this space
+            cols = cols + 1;
+            i = i + nb;
+            if (cols > maxcols) {
+                if (last_sp_byte >= line_start) {
+                    gd_push_text(cmds, x, cy, color, text + line_start, last_sp_cols);   # words before the space
+                    cy = cy + GFEED_LH;
+                    line_start = last_sp_byte + 1;                # new line begins after the space (1 byte)
+                    cols = cols - last_sp_cols - 1;               # codepoints carried to the new line
+                    last_sp_byte = 0 - 1;
+                } else {
+                    gd_push_text(cmds, x, cy, color, text + line_start, cols - 1);   # hard-break a long word
+                    cy = cy + GFEED_LH;
+                    line_start = i - nb;                          # new line begins at the current cp
+                    cols = 1;
+                    last_sp_byte = 0 - 1;
+                }
+            }
+        }
+    }
+    if (cols > 0) { gd_push_text(cmds, x, cy, color, text + line_start, cols); cy = cy + GFEED_LH; }
+    return cy;
+}
+
+# _gfeed_greeting: the empty-state opening screen (no conversation yet). Honest — the app's greeting, not a
+# faked message. Returns the next y.
+fn _gfeed_greeting(cmds, x, y, avail_px) {
+    var cy = y;
+    gd_push_text(cmds, x, cy, _ui_rgb(ROLE_ACCENT), persona_name(), 0);
+    cy = _gfeed_para(cmds, x + strlen(persona_name()) * GR_GLYPH_W + 8, cy, avail_px, _ui_rgb(ROLE_ACCENT_DIM), persona_role());
+    cy = cy + GFEED_GAP;
+    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_MUTED), "a sovereign agentic coding TUI — now with a desktop window.");
+    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin. (input wiring lands next.)");
+    return cy;
+}
+
+# gfeed_build: render the conversation into [x, x+w) x [y, y+h). Emits a CLIP so long feeds don't bleed past
+# the region. Reads session_history_* (role + content per message). Empty -> the greeting.
+fn gfeed_build(cmds, x, y, w, h) {
+    var avail = w - GFEED_PAD - GFEED_PAD;
+    gd_push_clip(cmds, x, y, w, h);
+    var cy = y + GFEED_GAP;
+    var n = session_history_len();
+    if (n == 0) {
+        _gfeed_greeting(cmds, x + GFEED_PAD, cy, avail);
+    } else {
+        var i = 0;
+        while (i < n) {
+            var role = session_history_role(i);
+            var content = session_history_content(i);
+            if (streq(role, "user") == 1) {
+                gd_push_text(cmds, x + GFEED_PAD, cy, _ui_rgb(ROLE_ACCENT), ">", 0);
+                cy = _gfeed_para(cmds, x + GFEED_PAD + 16, cy, avail - 16, _ui_rgb(ROLE_FG), content);
+            } else {
+                cy = _gfeed_para(cmds, x + GFEED_PAD, cy, avail, _ui_rgb(ROLE_MUTED), content);
+            }
+            cy = cy + GFEED_GAP;
+            i = i + 1;
+        }
+    }
+    gd_push_unclip(cmds);
+    return cy;
+}
+
+# --- the whole window frame (status strip + feed + composer line) ------------------------------------------
+# The three-region mockup layout. PURE — assembles a cmd list over the tested pipeline; the present loop
+# (gpresent.cyr) rasters it into the wl_shm buffer. Lives here (a view-builder) so it is headless-testable.
+var GFRAME_STRIP_H = 34;
+var GFRAME_COMPOSER_H = 40;
+fn _gframe_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
+
+fn gframe_build(w, h) {
+    var cmds = gd_list_new();
+    gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
+    gstatus_build(cmds, 0, 0, w, GFRAME_STRIP_H);                            # status strip (the view-model)
+    gd_push_rect(cmds, 0, GFRAME_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));        # rule under the strip
+    var feed_top = GFRAME_STRIP_H + 1;                                       # feed region (conversation / greeting)
+    var feed_h = h - feed_top - GFRAME_COMPOSER_H;
+    if (feed_h < 0) { feed_h = 0; }
+    gfeed_build(cmds, 0, feed_top, w, feed_h);
+    var comp_top = h - GFRAME_COMPOSER_H;                                    # composer line (bottom)
+    gd_push_rect(cmds, 0, comp_top, w, 1, _ui_rgb(ROLE_FAINT));
+    var cty = comp_top + (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2;
+    gd_push_text(cmds, 14, cty, _ui_rgb(ROLE_ACCENT), ">", 0);
+    if (gcomp_len() == 0) {
+        gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FAINT), "type a message, Enter sends  (Esc closes)", 0);
+    } else {
+        gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FG), gcomp_cstr(), 0);
+        gd_push_rect(cmds, 34 + gcomp_len() * GR_GLYPH_W + 1, cty, 2, GR_GLYPH_H, _ui_rgb(ROLE_ACCENT));   # caret
+    }
+    return cmds;
+}

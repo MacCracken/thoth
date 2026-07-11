@@ -7,6 +7,43 @@
 
 ## Version
 
+**0.30.2** — **T3 GUI: interactive — type in the window, Enter runs a turn**, 2026-07-11. The GUI becomes
+USABLE. NEW **`src/gui/ginput.cyr`**: `ginput_ascii(code,shift)` (evdev keycode + shift → printable ASCII, US
+QWERTY, ported from jalwa/puka) + a **composer text buffer** (`gcomp_append`/`_backspace`/`_reset`/`_len`/
+`_cstr`) + `gcomp_key(code,shift)` (Esc→quit / Enter→submit / Backspace / printable→append). `gpresent.cyr`'s
+key handler feeds each window key through `gcomp_key`; `gframe_build`'s composer line renders the typed text +
+a caret (hint when empty); on **Enter** `gui_run` runs the turn (`cmd_task(gcomp_cstr())` wrapped in `OUT_NULL`
+so the turn's progress chrome doesn't leak to the launch terminal — the user msg + reply append to
+`session_history`, then the feed repaints with them) + clears the composer; **Esc** quits. The
+`gpresent.cyr` include MOVED after `commands.cyr` so `gui_run` resolves `cmd_task` (Cyrius callee-first). So the
+full loop works: **type → Enter → turn → reply in the feed**. **Verified**: 1298 assertions (+12 `test_gui`:
+the keymap [letters/shift/digits/symbols/space/arrow-non-printable] + the composer buffer
+[append/backspace/cstr/key-dispatch]) + a golden PPM of the interactive state (a conversation + a half-typed
+composer "> and criterion benches|" with a caret — visually confirmed) + main builds. The keymap + composer
+are PURE + unit-tested; the actual TURN is network- + compositor-gated (unverifiable in the sandbox — verify on
+the user's machine). A repaint BLOCKS for the turn's duration (no spinner yet; matches the TUI). identifier
+buffer ~86% (soft). Pin **6.4.49**. **NEXT**: a turn spinner (non-blocking feel); tool-call cards + colored
+diffs in the feed (map `Thoth.dc.html`); the file-tree pane; feed scrollback; composer history (Up/Down).
+
+**0.30.1** — **T3 GUI: the conversation feed + composer layout**, 2026-07-11. The window becomes an app — the
+body renders the CONVERSATION (the mockup's main region), not placeholder text. NEW **`src/gui/gfeed.cyr`**:
+`gfeed_build(cmds,x,y,w,h)` reads the SAME `session_history_*` the TUI feed + `/save` read and lowers each
+message to draw-commands (user → a `>` accent marker + text; agent → plain body), each **word-wrapped** to the
+pixel width via `_gfeed_para` — codepoint-accurate (uses the graster UTF-8 decoder), breaks at spaces,
+hard-breaks an over-long word, and draws each wrapped line as a `(start,cols)` SLICE through `gd_push_text`'s
+`max_cp` cap (NO per-line copy). Empty conversation → an honest `_gfeed_greeting` empty-state (the app's
+opening screen, never a faked exchange). `gframe_build(w,h)` (MOVED here from `gpresent.cyr` so it is
+headless-testable) assembles the three-region layout: status strip (top, the 0.28.0 view-model) · feed
+(middle, clipped) · composer line (bottom, a `>` prompt + hint). So the GUI now shows a real conversation:
+the status view-model drives the strip, and the feed reads the history producer. `gpresent.cyr` shrinks to
+just the raster+present loop. **Verified**: 1286 assertions (+5 `test_gui`: word-wrap multi-line / single-line
+/ null-safe + a full 2-message frame render) + a golden PPM (a user+agent exchange wraps + lays out correctly
+— visually confirmed) + main builds + `thoth gui` degrade path unchanged. Live `thoth gui` shows the greeting
+empty-state until input is wired (NEXT cut). identifier buffer ~86% (soft). Pin **6.4.49**. **NEXT**:
+input→action — capture evdev keys (already flowing via `gwl_win_next_key`) into a composer buffer, submit on
+Enter → run a turn → append to history → repaint (makes it interactive); then tool-call cards / diffs in the
+feed, and the file-tree pane.
+
 **0.30.0** — **T3 GUI, Phase 2: a runnable `thoth gui` Wayland window** + the cyrius **6.4.49** refresh,
 2026-07-11. The desktop tier becomes REAL: the GUI is now in the SHIPPING binary with a sovereign Wayland
 present shell + a `thoth gui` subcommand. **Toolchain**: cyrius **6.4.46 → 6.4.49** (latest; `cyrius lib sync`,
@@ -27,9 +64,9 @@ nonzero exit, never a hang or fake window. **Verified**: main builds (15.86 MB, 
 `thoth gui` prints the honest degrade + exits 255 in this headless sandbox; `--version`/`/seams`/piped floor
 unchanged) + 1281 assertions (the headless draw pipeline stays unit-tested; the present shell is main-only —
 the test binary would exceed the 16 MiB output cap, and the shell is compositor-gated / smoke-only anyway).
-**UNVERIFIABLE headless** — the actual window needs a live compositor (Hyprland/wlroots, or aethersafha on
-AGNOS); the Wayland client is a byte-faithful rename of jalwa's proven one, so it's exercised on the user's
-machine. **Per-frame**: repaints are EVENT-DRIVEN so the bump-heap command leak is bounded (thoth's `alloc` has
+**LIVE-CONFIRMED** (2026-07-11): the user ran `thoth gui` on a real Wayland compositor — the window opens with
+the status strip + body preview text rendering correctly. (The headless sandbox only exercises the honest
+degrade path; the live window needs a compositor — Hyprland/wlroots, or aethersafha on AGNOS.) **Per-frame**: repaints are EVENT-DRIVEN so the bump-heap command leak is bounded (thoth's `alloc` has
 no mark/rewind → `alloc_reset` is not a per-frame arena; a reused command pool is the future opt). **Identifier
 buffer** now ~86% (the vendored client adds 357 `gwl_wl_*` symbols) — a soft warning, headroom remains.
 **REVISES ADR-0009** (T3 = thoth-as-its-own-sovereign-Wayland-app, NOT thoth-in-puka — see the ADR addendum).

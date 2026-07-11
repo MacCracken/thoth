@@ -14,23 +14,8 @@
 # alloc_reset() (a FULL-heap rewind) is NOT usable per frame — a reused command-buffer pool is the future
 # optimization if a continuous loop is ever added.
 
-var GPRESENT_STRIP_H = 34;
-
-fn _gpresent_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
-
-# gframe_build: assemble the whole window frame's draw commands for a (w,h) surface. PURE — returns a cmd list
-# over the tested draw pipeline. Phase 2: the status strip on top (the shared view-model), a rule, and a body
-# greeting. Later cuts add the feed / composer via more view-builders.
-fn gframe_build(w, h) {
-    var cmds = gd_list_new();
-    gd_push_rect(cmds, 0, 0, w, h, _gpresent_bg());                          # body background
-    gstatus_build(cmds, 0, 0, w, GPRESENT_STRIP_H);                          # the status strip (view-model)
-    gd_push_rect(cmds, 0, GPRESENT_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));      # a faint rule under the strip
-    gd_push_text(cmds, 14, GPRESENT_STRIP_H + 26, _ui_rgb(ROLE_MUTED),
-                 "thoth - sovereign agentic coding TUI  (GUI preview, T3 Phase 2)", 0);
-    gd_push_text(cmds, 14, GPRESENT_STRIP_H + 50, _ui_rgb(ROLE_FAINT), "press q or Esc to close", 0);
-    return cmds;
-}
+# The frame assembly (gframe_build + _gframe_bg + GFRAME_* constants) lives in gfeed.cyr — a view-builder,
+# kept there so it is headless-testable (this file is main-only). This loop just rasters + presents it.
 
 # _gpresent_poll_fd: block until the Wayland fd is readable (or timeout_ms). poll(2) = syscall 7. pfd is an
 # 8-byte struct [fd:i32, events:u16, revents:u16].
@@ -49,25 +34,28 @@ fn _gpresent_frame(win) {
     gwl_win_size_px(win, &sz);
     var w = load64(&sz);
     var h = load64(&sz + 8);
-    gr_fb_clear(buf, w, h, _gpresent_bg());
+    gr_fb_clear(buf, w, h, _gframe_bg());
     var cmds = gframe_build(w, h);
     gr_raster(cmds, buf, w, h);
     gwl_win_present_commit(win, 0, 0, w, h);
     return 0;
 }
 
-# drain queued keys; return 1 if a quit key (q / Esc) was pressed. evdev: 1 = Esc, 16 = 'q'.
+# drain queued keys into the composer (gcomp_key). Returns 1 if Esc (quit), 2 if Enter (submit), else 0.
 fn _gpresent_drain_keys(win) {
     var rec[24];
-    var quit = 0;
+    var action = 0;
     while (gwl_win_next_key(win, &rec) == 1) {
         var value = load64(&rec + 8);
         if ((value == 1) || (value == 2)) {              # press / autorepeat
             var code = load64(&rec);
-            if ((code == 1) || (code == 16)) { quit = 1; }
+            var shift = 0;
+            if ((load64(&rec + 16) & 1) != 0) { shift = 1; }
+            var a = gcomp_key(code, shift);
+            if (a != 0) { action = a; }
         }
     }
-    return quit;
+    return action;
 }
 
 # gui_run: open a window and run the event loop until close. 0 on clean exit, -1 if no compositor.
@@ -90,8 +78,19 @@ fn gui_run() {
                 var dirty = 0;
                 if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); dirty = 1; }
                 if ((ev & GWL_WIN_EV_KEY) != 0) {
-                    if (_gpresent_drain_keys(win) == 1) { running = 0; }
-                    else { dirty = 1; }
+                    var act = _gpresent_drain_keys(win);
+                    if (act == 1) { running = 0; }                    # Esc -> quit
+                    else {
+                        if (act == 2) {                               # Enter -> submit the composer as a turn
+                            if (gcomp_len() > 0) {
+                                out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
+                                cmd_task(gcomp_cstr());               # runs the turn: appends user + reply to session_history
+                                out_mode_set(OUT_FD1);
+                                gcomp_reset();
+                            }
+                        }
+                        dirty = 1;
+                    }
                 }
                 if ((running == 1) && (dirty == 1)) { _gpresent_frame(win); }
             }

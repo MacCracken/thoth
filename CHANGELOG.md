@@ -2,6 +2,58 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.2] - 2026-07-11
+
+**T3 GUI — interactive: type in the window, Enter runs a turn.** The GUI becomes usable, not just a view. NEW
+**`src/gui/ginput.cyr`**: `ginput_ascii(code,shift)` maps an evdev keycode + shift to a printable ASCII char
+(US QWERTY, ported from jalwa's/puka's keymap), plus a **composer text buffer** (`gcomp_append`/`_backspace`/
+`_reset`/`_len`/`_cstr`) and `gcomp_key(code,shift)` (Esc→quit / Enter→submit / Backspace / printable→append).
+The present loop (`gpresent.cyr`) now feeds each window key through `gcomp_key`; the composer line renders the
+typed text + a caret; on **Enter** it runs the turn (`cmd_task(gcomp_cstr())` under `OUT_NULL` so the turn's
+progress doesn't leak to the launch terminal — the user + reply append to `session_history`, and the feed
+repaints with them), then clears the composer; **Esc** quits. `gpresent.cyr` moved after `commands.cyr` in the
+include order so `gui_run` can call `cmd_task`. So the loop is: type → Enter → turn → the reply renders in the
+feed. The keymap + composer buffer are PURE + unit-tested; the actual turn is network- + compositor-gated
+(verified on the user's machine). 1298 assertions (+12). A repaint blocks for the turn's duration (no spinner
+yet) — acceptable, matches the TUI.
+
+### Added
+- **`src/gui/ginput.cyr`** — `ginput_ascii` (evdev→ASCII, US QWERTY) + the composer buffer (`gcomp_*`) +
+  `gcomp_key` (the key→action dispatch). Pure; in `main.cyr` + the test binary.
+- The composer line in `gframe_build` renders the live `gcomp_cstr()` + a caret (or a hint when empty).
+- **`test_gui`** +12 — the keymap (letters/shift/digits/symbols/space/non-printable) + the composer buffer
+  (append/backspace/cstr/key dispatch); a golden PPM of the interactive state (a conversation + a typed
+  composer).
+
+### Changed
+- `gpresent.cyr` include moved after `commands.cyr` (so `gui_run` resolves `cmd_task`); its key handler now
+  dispatches through `gcomp_key` and submits a turn on Enter.
+
+## [0.30.1] - 2026-07-11
+
+**T3 GUI — the conversation feed + composer layout.** The window becomes an *app*: the body now renders the
+conversation (the mockup's main region) instead of placeholder text. NEW **`src/gui/gfeed.cyr`**: `gfeed_build`
+reads the SAME `session_history_*` the TUI feed + `/save` read and lowers each message to draw-commands — a
+user message gets a `>` accent marker + its text, an agent message is plain body text, each **word-wrapped**
+to the available pixel width (`_gfeed_para` — codepoint-accurate, breaks at spaces, hard-breaks an over-long
+word, draws each wrapped line as a `(start,cols)` slice via `gd_push_text`'s cap, no per-line copy). Empty
+conversation → an honest greeting empty-state (never a faked exchange). Also `gframe_build` (moved here from
+`gpresent.cyr` so it is headless-testable): the three-region layout — status strip (top) · feed (middle,
+clipped) · composer line (bottom, a `>` prompt + hint). The status view-model now drives the strip AND the
+feed reads the history producer — the GUI shows a real conversation. Rendered to a golden PPM (a 2-message
+exchange wraps + lays out correctly). 1286 assertions (+5: word-wrap multi-line / single-line / null + a
+full-frame render). Live `thoth gui` shows the greeting until input is wired (next cut).
+
+### Added
+- **`src/gui/gfeed.cyr`** — `gfeed_build(cmds,x,y,w,h)` (the conversation feed, clipped to its region) +
+  `_gfeed_para` (codepoint-accurate word-wrap) + `_gfeed_greeting` (empty-state) + `gframe_build(w,h)` (the
+  status/feed/composer window layout). In `main.cyr` and the test binary.
+- **`test_gui`** +5 — word-wrap (multi-line / one-line / null) + a full 2-message frame render → PPM.
+
+### Changed
+- `gpresent.cyr`'s frame builder moved into `gfeed.cyr` (a view-builder, now headless-testable); the present
+  loop just rasters `gframe_build` + presents it.
+
 ## [0.30.0] - 2026-07-11
 
 **T3 GUI — Phase 2: a runnable `thoth gui` Wayland window.** The desktop tier becomes real: the GUI is now in
@@ -14,10 +66,11 @@ wire, no libwayland), ported verbatim from jalwa's `wayland.cyr` (itself a puka 
 aethersafha). **`src/gui/gpresent.cyr`** — the present loop: open a window → build+raster a frame (the 0.28.0
 status strip + a body, via the tested draw pipeline) → present → repaint on events (resize/key/close). A
 `thoth gui` subcommand (`ONESHOT_GUI`) routes to it; it **degrades honestly** with no compositor (a stderr
-note + nonzero exit, never a hang or fake window). UNVERIFIABLE headless (needs a live compositor —
-Hyprland/wlroots, or aethersafha on AGNOS); verified here via the clean degrade path + a byte-faithful client
-rename + the tested frame pipeline. Revises ADR-0009 (**T3 = thoth-as-its-own-Wayland-app**, not
-thoth-in-puka). 1281 assertions (GUI present shell is main-only, not unit-tested).
+note + nonzero exit, never a hang or fake window). **LIVE-CONFIRMED** on a real Wayland compositor (the
+window opens with the status strip + body preview rendering); the headless sandbox exercises only the honest
+degrade path + a byte-faithful client rename + the tested frame pipeline. Revises ADR-0009 (**T3 =
+thoth-as-its-own-Wayland-app**, not thoth-in-puka). 1281 assertions (GUI present shell is main-only, not
+unit-tested).
 
 ### Added
 - **`src/gui/gwindow.cyr`** — sovereign Wayland window seam (`gwl_win_open`/`_present_begin`/`_present_commit`/

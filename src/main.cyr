@@ -74,9 +74,11 @@ include "src/vendor/kashi.cyr"
 include "src/gui/gdraw.cyr"
 include "src/gui/graster.cyr"
 include "src/gui/gstatus.cyr"
+include "src/gui/ginput.cyr"      # evdev keymap + composer text buffer (0.30.2); before gfeed (gframe renders the composer)
+include "src/gui/gfeed.cyr"       # conversation-feed view-builder (0.30.1); reads session_history; headless-testable
 include "src/gui/gwindow.cyr"    # sovereign Wayland window seam (present shell); main-only (compositor-gated, not unit-tested)
-include "src/gui/gpresent.cyr"   # T3 GUI present loop + `thoth gui` frame assembly; after gwindow + gstatus/graster
 include "src/commands.cyr"
+include "src/gui/gpresent.cyr"   # T3 GUI present loop (gui_run); AFTER commands (calls cmd_task on submit); main-only
 include "src/repl.cyr"
 include "src/oneshot.cyr"   # one-shot / argv front-door (0.11.0); after commands (uses cmd_task)
 include "src/tui.cyr"       # T2 rich-TUI front-end (alt-screen); active only at PT_RICH
