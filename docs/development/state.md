@@ -7,6 +7,34 @@
 
 ## Version
 
+**0.28.0** — **the status view-model (Stage B opens)**, 2026-07-10. Realizes ADR-0009's declared-but-unbuilt
+**semantic surface** for the status fields. NEW **`src/surface.cyr`**: `status_snapshot()` reads the ~10
+status producers ONCE into a packed i64 cell array (SF_* fields × SFC_* cells) and NORMALIZES them into FACTS
+(enums + ints + cstr ptrs — never bytes/color/layout); accessors `status_present`/`status_state`/`status_ival`/
+`status_ival2`/`status_sval` (each guards `_sf_rows==0` → crash-safe before the first snapshot). The rich-TUI
+status bar (`tui_draw_status`) AND the `/state` report (`cmd_state`) now render their overlapping fields from
+this ONE model instead of each re-reading producers + re-implementing the omit gates. The ctx KiB formula is
+single-sourced into the PRODUCER (`hoosh_ctx_kib`/`hoosh_ctx_budget_kib`, `src/hoosh.cyr`). `cmd_state`
+`git_probe()`s before the snapshot (moved up; behavior-preserving); the ~13 `/state`-only config rows are
+untouched. **A PURE REFACTOR** — byte-identical at every tier: a piped `/state` byte-diff (before vs after)
+was IDENTICAL modulo the volatile git dirty count, a PTY status-bar capture IDENTICAL likewise, and the edge
+branches (null model → `(none set)`/`default`, health-absent, git-absent, T0 surface) separately verified.
+**Value delivered** (honestly NOT a LOC win — the content layer was already tier-neutral via the ui.cyr/emit
+choke points): **drift-safety** (the presence gates + model fallback that had silently diverged between the
+bar and `/state` are now single-sourced + tested once) and **GUI-readiness** — because the model holds facts
+not bytes, a future **T3 Wayland status widget** is a third leaf-writer over the SAME accessors (no draw-IR
+committed now; its shape is learned when the GUI is built, per jalwa). **Process**: designed + reviewed with
+multi-agent **workflows** — a survey + 3 competing designs judged adversarially (Design A "facts-not-bytes
+snapshot" won; the honest verdict: the keystone earns its keep on GUI-readiness + drift-safety, not dedup),
+then a 3-lens find→verify review of the result (all 3 lenses converged on ONE nit — the value accessors
+lacked the `_sf_rows==0` guard `status_present` had — CONFIRMED unreachable-today but a latent trap for the
+future T3 consumer; fixed before the cut; no byte-identity or correctness defect found). **Verified**: 1258
+assertions (+18 `test_surface`) + LIVE byte-diffs at both tiers + edge-branch checks. Pin **6.4.46** (wrapper
+auto-drifted to 6.4.49; benign). **NEXT (Stage B continues)**: adopt the surface for the feed/tool-card/diff
+(the bigger GUI prize per the architecture judge), then the **T3 Wayland GUI** (thoth as its own sovereign
+Cyrius Wayland app — jalwa-style draw-IR → kashi raster → wl_shm → puka-forked shell; `Thoth.dc.html` spec;
+revises ADR-0009's "thoth-in-puka"). See CHANGELOG/roadmap.
+
 **0.27.0** — **toolchain refresh + tier-consistency parity fixes**, 2026-07-10. Opens the **simple↔rich
 consistency line** (rich = the rich TUI experience; simple = line-mode back-and-forth; anything that is *not*
 a rich-TUI blocker works at BOTH). **Toolchain**: cyrius **6.4.29 → 6.4.46** (`cyrius lib sync`, 71 stdlib

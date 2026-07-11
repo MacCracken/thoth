@@ -243,17 +243,17 @@ fn _params_one(key, val) {
 }
 
 fn cmd_state() {
+    git_probe();          # 0.28.0: refresh the git cache BEFORE the snapshot so the git row is current (moved up from the git row)
+    status_snapshot();    # 0.28.0: read the status producers ONCE into the shared view-model (Stage B, src/surface.cyr)
     ui_emit(ROLE_ACCENT, "session:"); oprintln("");
-    ui_label("  turns   : "); ofmt_int(session_turns()); oprintln("");
-    ui_label("  persona : "); ui_emit(ROLE_ACCENT, persona_name());
+    ui_label("  turns   : "); ofmt_int(status_ival(SF_TURNS)); oprintln("");
+    ui_label("  persona : "); ui_emit(ROLE_ACCENT, status_sval(SF_PERSONA));
     ui_emit(ROLE_FAINT, " ("); emit(ui_sgr(ROLE_FAINT)); emit(persona_role()); emit(ui_reset());
     ui_emit(ROLE_FAINT, " · "); emit(ui_sgr(ROLE_FAINT)); emit(persona_tradition()); emit(ui_reset());
     ui_emit(ROLE_FAINT, ")"); oprintln("");
     ui_label("  model   : ");
-    var m = session_model();
-    if (m == 0) { m = config_hoosh_model(); }
-    if (m == 0) { ui_emit(ROLE_FAINT, "(none set)"); oprintln(""); }
-    else { ui_emit(ROLE_ACCENT, m); oprintln(""); }
+    if (status_state(SF_MODEL) == 1) { ui_emit(ROLE_FAINT, "(none set)"); oprintln(""); }
+    else { ui_emit(ROLE_ACCENT, status_sval(SF_MODEL)); oprintln(""); }
     ui_label("  hoosh   : ");
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [hoosh].url in .thoth/config.cyml)"); oprintln(""); }
     else {
@@ -261,9 +261,9 @@ fn cmd_state() {
         if (config_hoosh_stream() == 1) { ui_emit(ROLE_MUTED, " (streaming)"); oprintln(""); }
         else { ui_emit(ROLE_MUTED, " (blocking)"); oprintln(""); }
     }
-    if (config_hoosh_configured() == 1) {   # 0.27.0: cached live reachability (/reprobe re-checks; ⌃R in the TUI)
+    if (status_present(SF_HEALTH) == 1) {   # 0.27.0: cached live reachability (/reprobe re-checks; ⌃R in the TUI)
         ui_label("  health  : ");
-        var _hh = hoosh_health();
+        var _hh = status_state(SF_HEALTH);
         if (_hh == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "reachable"); ui_emit(ROLE_MUTED, " (last transport ok)"); }
         elif (_hh == HOOSH_HEALTH_DOWN) { ui_emit(ROLE_RED, "unreachable"); ui_emit(ROLE_MUTED, " (last transport failed — /reprobe)"); }
         else { ui_emit(ROLE_FAINT, "unknown"); ui_emit(ROLE_MUTED, " (no probe yet — /reprobe)"); }
@@ -276,8 +276,8 @@ fn cmd_state() {
         emit("multi-turn, "); ofmt_int(session_history_len()); emit(" messages");
         # 0.19.0: framed history bytes vs the ~32 KiB evict boundary — surface context pressure.
         ui_emit(ROLE_MUTED, " · ");
-        ofmt_int((hoosh_ctx_bytes() + 512) / 1024); emit("K / "); ofmt_int(hoosh_ctx_budget() / 1024); ui_emit(ROLE_MUTED, "K budget");
-        var ev = hoosh_ctx_evicted();
+        ofmt_int(status_ival(SF_CTX)); emit("K / "); ofmt_int(status_ival2(SF_CTX)); ui_emit(ROLE_MUTED, "K budget");
+        var ev = status_state(SF_CTX);
         if (ev > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(ev); emit(" oldest evicted"); emit(ui_reset()); }
         ui_emit(ROLE_MUTED, " (/reset clears)"); oprintln("");
     }
@@ -298,30 +298,29 @@ fn cmd_state() {
     elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }
     else { ui_emit(ROLE_FAINT, "off (set [memory].enabled in .thoth/config.cyml)"); oprintln(""); }
     ui_label("  tokens  : ");
-    if (session_tokens_seen() == 0) { ui_emit(ROLE_FAINT, "(none reported yet — shows once hoosh returns usage)"); oprintln(""); }
-    else { ofmt_int(session_tokens()); ui_emit(ROLE_MUTED, " total (hoosh usage, this session)"); oprintln(""); }
+    if (status_present(SF_TOKENS) == 0) { ui_emit(ROLE_FAINT, "(none reported yet — shows once hoosh returns usage)"); oprintln(""); }
+    else { ofmt_int(status_ival(SF_TOKENS)); ui_emit(ROLE_MUTED, " total (hoosh usage, this session)"); oprintln(""); }
     ui_label("  cost    : ");
-    if (session_cost_seen() == 0) {
-        if (session_cost_unpriced_count() > 0) { ui_emit(ROLE_FAINT, "(unpriced — add [pricing.<model>] for the active model in .thoth/config.cyml)"); }
+    if (status_present(SF_COST) == 0) {
+        if (status_ival2(SF_COST) > 0) { ui_emit(ROLE_FAINT, "(unpriced — add [pricing.<model>] for the active model in .thoth/config.cyml)"); }
         else { ui_emit(ROLE_FAINT, "(none yet — add [pricing.<model>] in .thoth/config.cyml to price usage)"); }
         oprintln("");
     } else {
         var _cbuf[24];
-        cost_fmt(&_cbuf, session_cost_micro());
+        cost_fmt(&_cbuf, status_ival(SF_COST));
         emit(&_cbuf); ui_emit(ROLE_MUTED, " total ([pricing], this session)");
-        if (session_cost_unpriced_count() > 0) {
-            ui_emit(ROLE_FAINT, " — "); ofmt_int(session_cost_unpriced_count()); ui_emit(ROLE_FAINT, " unpriced response(s) omitted");
+        if (status_ival2(SF_COST) > 0) {
+            ui_emit(ROLE_FAINT, " — "); ofmt_int(status_ival2(SF_COST)); ui_emit(ROLE_FAINT, " unpriced response(s) omitted");
         }
         oprintln("");
     }
     ui_label("  git     : ");
-    git_probe();      # refresh so /state reflects the current worktree (not a stale snapshot)
-    if (git_present() == 0) { ui_emit(ROLE_FAINT, "absent (no git/.sit repo at the working directory)"); oprintln(""); }
+    if (status_present(SF_GIT) == 0) { ui_emit(ROLE_FAINT, "absent (no git/.sit repo at the working directory)"); oprintln(""); }
     else {
-        if (git_detached() == 1) { ui_emit(ROLE_ACCENT, "(detached HEAD)"); }
-        else { ui_emit(ROLE_ACCENT, git_branch()); }
-        if (git_dirty() == 0) { ui_emit(ROLE_MUTED, " - clean"); }
-        else { emit(" - "); ofmt_int(git_dirty()); ui_emit(ROLE_MUTED, " changed (HEAD vs worktree, via sit)"); }
+        if (status_state(SF_GIT) == SF_GIT_DETACHED) { ui_emit(ROLE_ACCENT, "(detached HEAD)"); }
+        else { ui_emit(ROLE_ACCENT, status_sval(SF_GIT)); }
+        if (status_ival(SF_GIT) == 0) { ui_emit(ROLE_MUTED, " - clean"); }
+        else { emit(" - "); ofmt_int(status_ival(SF_GIT)); ui_emit(ROLE_MUTED, " changed (HEAD vs worktree, via sit)"); }
         oprintln("");
     }
     ui_label("  log     : ");
@@ -379,10 +378,10 @@ fn cmd_state() {
     if (seam_any_wired() == 0) { ui_emit(ROLE_FAINT, "all seams absent (fermenting)"); oprintln(""); }
     else { ui_emit(ROLE_MUTED, "see /seams"); oprintln(""); }
     ui_label("  surface : ");
-    ui_emit(ROLE_GREEN, ui_tier_name());
-    if (ui_tier() != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
+    ui_emit(ROLE_GREEN, status_sval(SF_SURFACE));
+    if (status_ival(SF_SURFACE) != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
     oprintln("");
-    ui_label("  theme   : "); ui_emit(ROLE_ACCENT, ui_theme_name()); oprintln("");
+    ui_label("  theme   : "); ui_emit(ROLE_ACCENT, status_sval(SF_THEME)); oprintln("");
     ui_label("  build   : "); emit(ui_sgr(ROLE_ACCENT)); emit("thoth "); emit(thoth_version()); emit(ui_reset()); oprintln("");
     return 0;
 }

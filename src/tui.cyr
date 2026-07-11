@@ -772,58 +772,61 @@ fn tui_draw_status() {
     tty_move(1, 1);
     tty_clear_to_eol();
     if (_tui_show_status == 0) { return 0; }
+    status_snapshot();    # 0.28.0: the shared status view-model (Stage B). Reads the git CACHE (no probe) — matches the prior bar behavior exactly.
     emit(ui_sgr(ROLE_ACCENT)); emit("{(o> thoth (");  # the owl prompt doubles as the brand glyph
     emit(thoth_version()); emit(")"); emit(ui_reset());
-    ui_emit(ROLE_FAINT, " · "); ui_emit(ROLE_ACCENT_DIM, persona_name());   # active avatara persona (0.22.0)
+    ui_emit(ROLE_FAINT, " · "); ui_emit(ROLE_ACCENT_DIM, status_sval(SF_PERSONA));   # active avatara persona (0.22.0)
     ui_emit(ROLE_FAINT, "  model ");
-    ui_emit(ROLE_ACCENT, _hoosh_model());
+    var _mm = status_sval(SF_MODEL);
+    if (_mm == 0) { _mm = "default"; }        # the bar's null placeholder (== the old _hoosh_model() fallback)
+    ui_emit(ROLE_ACCENT, _mm);
     # hoosh spine-health dot (0.19.3): green ● up / red ● down / faint ○ unknown — driven by the last turn's
     # transport outcome or a Ctrl-R re-probe (no idle poll). Shown only when a gateway is configured.
-    if (config_hoosh_configured() == 1) {
+    if (status_present(SF_HEALTH) == 1) {
         emit(" ");
-        var hh = hoosh_health();
+        var hh = status_state(SF_HEALTH);
         if (hh == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "●"); }
         elif (hh == HOOSH_HEALTH_DOWN) { ui_emit(ROLE_RED, "●"); }
         else { ui_emit(ROLE_FAINT, "○"); }
     }
     ui_emit(ROLE_FAINT, "  turns ");
-    emit(ui_sgr(ROLE_FG)); fmt_int(session_turns()); emit(ui_reset());
+    emit(ui_sgr(ROLE_FG)); fmt_int(status_ival(SF_TURNS)); emit(ui_reset());
     # ctx: framed history bytes vs the ~32 KiB evict boundary (0.19.0). Omitted when single-turn / empty
     # (ADR-0010); the number turns RED once oldest turns start being evicted from the request.
-    if ((config_hoosh_history() == 1) && (session_history_len() > 0)) {
+    if (status_present(SF_CTX) == 1) {
         ui_emit(ROLE_FAINT, "  ctx ");
-        if (hoosh_ctx_evicted() > 0) { emit(ui_sgr(ROLE_RED)); } else { emit(ui_sgr(ROLE_FG)); }
-        fmt_int((hoosh_ctx_bytes() + 512) / 1024); emit("K"); emit(ui_reset());
-        emit(ui_sgr(ROLE_FAINT)); emit("/"); fmt_int(hoosh_ctx_budget() / 1024); emit("K"); emit(ui_reset());
+        if (status_state(SF_CTX) > 0) { emit(ui_sgr(ROLE_RED)); } else { emit(ui_sgr(ROLE_FG)); }
+        fmt_int(status_ival(SF_CTX)); emit("K"); emit(ui_reset());
+        emit(ui_sgr(ROLE_FAINT)); emit("/"); fmt_int(status_ival2(SF_CTX)); emit("K"); emit(ui_reset());
     }
     # tok: omitted until hoosh reports usage (0.10.2, ADR-0010 — never a placeholder).
-    if (session_tokens_seen() == 1) {
+    if (status_present(SF_TOKENS) == 1) {
         ui_emit(ROLE_FAINT, "  tok ");
-        emit(ui_sgr(ROLE_FG)); fmt_int(session_tokens()); emit(ui_reset());
+        emit(ui_sgr(ROLE_FG)); fmt_int(status_ival(SF_TOKENS)); emit(ui_reset());
     }
     # cost: omitted until a priced response accumulates (0.10.3, ADR-0010).
-    if (session_cost_seen() == 1) {
+    if (status_present(SF_COST) == 1) {
         var _cbuf[24];
-        cost_fmt(&_cbuf, session_cost_micro());
+        cost_fmt(&_cbuf, status_ival(SF_COST));
         ui_emit(ROLE_FAINT, "  ");
         emit(ui_sgr(ROLE_GREEN)); emit(&_cbuf); emit(ui_reset());
     }
     # git: branch (+dirty count), omitted when there is no repo at cwd (0.13.0,
     # ADR-0010 — never a faked branch). Reads the cache (probed at startup + after
     # each turn + on /state|/git); the status paint never walks the worktree itself.
-    if (git_present() == 1) {
+    if (status_present(SF_GIT) == 1) {
         ui_emit(ROLE_FAINT, "  ");
         emit(ui_sgr(ROLE_ACCENT));
-        if (git_detached() == 1) { emit("(detached)"); } else { emit(git_branch()); }
+        if (status_state(SF_GIT) == SF_GIT_DETACHED) { emit("(detached)"); } else { emit(status_sval(SF_GIT)); }
         emit(ui_reset());
-        if (git_dirty() > 0) {
-            ui_emit(ROLE_FAINT, " +"); emit(ui_sgr(ROLE_FG)); fmt_int(git_dirty()); emit(ui_reset());
+        if (status_ival(SF_GIT) > 0) {
+            ui_emit(ROLE_FAINT, " +"); emit(ui_sgr(ROLE_FG)); fmt_int(status_ival(SF_GIT)); emit(ui_reset());
         }
     }
     ui_emit(ROLE_FAINT, "  surface ");
-    ui_emit(ROLE_GREEN, ui_tier_name());
+    ui_emit(ROLE_GREEN, status_sval(SF_SURFACE));
     ui_emit(ROLE_FAINT, "  theme ");
-    ui_emit(ROLE_ACCENT, ui_theme_name());
+    ui_emit(ROLE_ACCENT, status_sval(SF_THEME));
     return 0;
 }
 

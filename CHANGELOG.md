@@ -2,6 +2,38 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.28.0] - 2026-07-10
+
+**The status view-model (Stage B opens).** Introduces `src/surface.cyr` — a tier-agnostic view-model that
+reads the ~10 status producers ONCE, applies the omit/presence gates in one place, and normalizes them into
+FACTS (enums + ints + cstr pointers, never bytes/color/layout). Both the rich-TUI status bar
+(`tui_draw_status`) and the `/state` report (`cmd_state`) now render from this ONE model instead of each
+re-reading the producers and re-implementing the gates — the enabling abstraction ADR-0009 declared but never
+built. A PURE REFACTOR: every tier's output is byte-identical (proven by a piped `/state` byte-diff + a PTY
+status-bar capture, both identical modulo the volatile git dirty count; edge branches — null model,
+health-absent, git-absent, T0 surface — separately verified). The payoff is drift-safety (the presence gates
+that had silently diverged between the bar and `/state` are single-sourced + tested once) and GUI-readiness:
+because the model holds facts not bytes, a future T3 Wayland status widget is a third renderer over the same
+accessors — no draw-IR committed now (its shape is learned when the GUI is built, per jalwa). Designed +
+adversarially reviewed via multi-agent workflows (3 competing designs judged; a 3-lens review returned one
+nit — an accessor guard asymmetry — fixed before the cut). 1258 assertions; live + byte-verified.
+
+### Added
+- **`src/surface.cyr`** — the status view-model. `status_snapshot()` reads the producers into a packed i64
+  cell array (SF_* fields × SFC_* cells); accessors `status_present`/`status_state`/`status_ival`/
+  `status_ival2`/`status_sval` return the normalized facts (each guards `_sf_rows==0` → crash-safe before the
+  first snapshot). Fields: brand, persona, model, health, turns, ctx, tokens, cost, git, surface, theme.
+- **`hoosh_ctx_kib()` / `hoosh_ctx_budget_kib()`** (`src/hoosh.cyr`) — the context KiB rounding formula,
+  previously re-implemented inline in both the bar and `/state`, now single-sourced with its byte producers.
+- **`test_surface`** (18 assertions) — the snapshot mirrors the producers, single-sources the omit gates, and
+  locks the ctx KiB formula.
+
+### Changed
+- **`tui_draw_status`** (`src/tui.cyr`) and **`cmd_state`** (`src/commands.cyr`) render their overlapping
+  status fields from `status_snapshot()` instead of reading the producers directly. `cmd_state` now
+  `git_probe()`s before the snapshot (moved up from the git row; behavior-preserving). Output byte-identical
+  at every tier; the ~13 `/state`-only config rows are untouched.
+
 ## [0.27.0] - 2026-07-10
 
 **Toolchain refresh + tier-consistency parity fixes.** Updates the Cyrius toolchain (6.4.29 → 6.4.46, +71

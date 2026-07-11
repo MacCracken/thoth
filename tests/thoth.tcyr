@@ -36,6 +36,7 @@ include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
+include "src/surface.cyr"  # status view-model (0.28.0, Stage B); after its producers (session/hoosh/git/ui), before commands+tui
 include "src/commands.cyr"
 include "src/repl.cyr"
 include "src/oneshot.cyr"
@@ -3633,6 +3634,56 @@ fn test_role() {
     return 0;
 }
 
+fn test_surface() {
+    test_group("status view-model (surface.cyr, 0.28.0)");
+    # snapshot mirrors the producers + single-sources the omit gates (drift-safety)
+    session_set_model("gpt-5");
+    status_snapshot();
+    assert_eq(status_state(SF_MODEL), 0, "session model set -> STATE 0 (resolved)");
+    assert(streq(status_sval(SF_MODEL), "gpt-5") == 1, "model SPTR == the session id");
+    session_set_model(0);
+    status_snapshot();
+    # with no session model, resolution falls back to config; STATE=1 iff BOTH are null
+    if (config_hoosh_model() == 0) {
+        assert_eq(status_state(SF_MODEL), 1, "no model anywhere -> STATE 1");
+        assert_eq(status_sval(SF_MODEL), 0, "no model -> SPTR 0");
+    }
+    assert_eq(status_ival(SF_TURNS), session_turns(), "turns ival == session_turns()");
+    assert_eq(status_present(SF_TOKENS), session_tokens_seen(), "tokens present == session_tokens_seen() (one gate)");
+    assert_eq(status_ival(SF_TOKENS), session_tokens(), "tokens ival == session_tokens()");
+    assert_eq(status_present(SF_COST), session_cost_seen(), "cost present == session_cost_seen() (one gate)");
+    assert_eq(status_ival(SF_COST), session_cost_micro(), "cost ival == session_cost_micro()");
+    assert_eq(status_ival2(SF_COST), session_cost_unpriced_count(), "cost ival2 == unpriced count");
+    # ctx: the KiB rounding formula, now single-sourced in the producer
+    session_history_clear();
+    session_history_append("user", "hello there world", 17);
+    status_snapshot();
+    assert_eq(status_ival(SF_CTX), hoosh_ctx_kib(), "ctx ival == hoosh_ctx_kib() (single-sourced)");
+    assert_eq(status_ival(SF_CTX), (hoosh_ctx_bytes() + 512) / 1024, "ctx ival == the KiB rounding formula");
+    assert_eq(status_ival2(SF_CTX), hoosh_ctx_budget_kib(), "ctx budget ival2 == hoosh_ctx_budget_kib()");
+    assert_eq(status_state(SF_CTX), hoosh_ctx_evicted(), "ctx STATE == evicted count");
+    # health enum tracks hoosh_health()
+    hoosh_health_mark_down();
+    status_snapshot();
+    assert_eq(status_state(SF_HEALTH), HOOSH_HEALTH_DOWN, "health STATE == DOWN after mark_down");
+    hoosh_health_mark_up();
+    status_snapshot();
+    assert_eq(status_state(SF_HEALTH), HOOSH_HEALTH_UP, "health STATE == UP after mark_up");
+    # git mirrors the producer cache
+    git_probe();
+    status_snapshot();
+    assert_eq(status_present(SF_GIT), git_present(), "git present == git_present()");
+    assert_eq(status_ival(SF_GIT), git_dirty(), "git ival == git_dirty()");
+    # surface / theme name pointers
+    status_snapshot();
+    assert(streq(status_sval(SF_SURFACE), ui_tier_name()) == 1, "surface sval == ui_tier_name()");
+    assert(streq(status_sval(SF_THEME), ui_theme_name()) == 1, "theme sval == ui_theme_name()");
+    # restore shared globals for any later test
+    session_set_model(0);
+    session_history_clear();
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_classify();
@@ -3705,6 +3756,7 @@ fn main() {
     test_ui_niceties();
     test_reload();
     test_model_switch();
+    test_surface();
     return assert_summary();
 }
 

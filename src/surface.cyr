@@ -1,0 +1,123 @@
+# src/surface.cyr — the STATUS view-model (Stage B, ADR-0009 realization; 0.28.0).
+#
+# The single place that READS the status producers, applies the omit/presence gates ONCE, and NORMALIZES
+# their values into FACTS (enums + ints + cstr pointers) — never bytes, never color, never layout. Three
+# renderers consume this ONE model, each owning its own leaf layout:
+#   * tui_draw_status (src/tui.cyr)  — a compact pinned strip (raw-mode);
+#   * cmd_state       (src/commands.cyr) — labeled rows (works in both tiers);
+#   * a future T3 GUI status widget  — draw-commands (a third leaf-writer over the SAME accessors).
+#
+# This is the view-model layer ADR-0009 declared but never built. It deliberately stops SHORT of a draw-IR:
+# there is one raw consumer today (the TUI), so the IR's shape is learned when the GUI is built (per jalwa).
+# The only forward-looking constraint is "hold FACTS, not bytes" — which is exactly the GUI-ready posture.
+#
+# NOT a color/sink layer: surface.cyr NEVER emits. Renderers still go through ui.cyr roles + the
+# emit/oprintln choke point, so the T0/piped floor stays BYTE-IDENTICAL (this cut is a pure refactor —
+# same producers, same predicates, same formula, so every tier's output is unchanged).
+#
+# What it does NOT model: the ~13 /state-only config rows (hoosh url, resume, ui, memory, log, aliases,
+# shell, reads, agent, daimon, t-ron, spine, build). Those are single-view prose and stay in cmd_state.
+
+# --- field ids (bar draw order) --------------------------------------------
+var SF_BRAND   = 0;   # thoth_version()
+var SF_PERSONA = 1;   # persona_name()
+var SF_MODEL   = 2;   # session_model() ?? config_hoosh_model()  (leaf picks the null placeholder)
+var SF_HEALTH  = 3;   # hoosh reachability (present only when a gateway is configured)
+var SF_TURNS   = 4;
+var SF_CTX     = 5;   # framed-history KiB vs budget (present only when history on AND non-empty)
+var SF_TOKENS  = 6;   # omit-until-seen (ADR-0010)
+var SF_COST    = 7;   # omit-until-seen (ADR-0010)
+var SF_GIT     = 8;   # branch/detached + dirty count (present only in a repo)
+var SF_SURFACE = 9;   # ui_tier_name()
+var SF_THEME   = 10;  # ui_theme_name()
+var SF_COUNT   = 11;
+
+# --- per-field cells (one i64 each; a packed array, the feed.cyr idiom — Cyrius has no structs) ----------
+var SFC_PRESENT = 0;  # 0/1 — passed the omit/config gate for this field
+var SFC_STATE   = 1;  # field-specific sub-state enum (see below)
+var SFC_IVAL    = 2;  # primary int  (turns, ctx used-KiB, tokens, cost micro-USD, git dirty)
+var SFC_IVAL2   = 3;  # secondary int (ctx budget-KiB, cost unpriced-count)
+var SFC_SPTR    = 4;  # primary cstr ptr, or 0 (model id, persona, branch, version, tier/theme names)
+var SF_CELLS    = 5;
+
+# STATE enums (reuse existing producer constants where they exist):
+#   SF_HEALTH : HOOSH_HEALTH_UP / _DOWN / _UNKNOWN  (verbatim from hoosh.cyr)
+#   SF_CTX    : the evicted-turn count (0 == fits; >0 == pressure — renderers color it red)
+#   SF_GIT    : SF_GIT_BRANCH=0 / SF_GIT_DETACHED=1
+#   SF_MODEL  : 0 == resolved id in SPTR ; 1 == unset (SPTR==0; leaf picks its placeholder)
+var SF_GIT_BRANCH   = 0;
+var SF_GIT_DETACHED = 1;
+
+var _sf_rows = 0;   # alloc(SF_COUNT * SF_CELLS * 8), lazy
+
+fn _sf_addr(field, cell) { return _sf_rows + (field * SF_CELLS + cell) * 8; }
+fn _sf_set(field, cell, v) { store64(_sf_addr(field, cell), v); return 0; }
+fn _sf_get(field, cell) { return load64(_sf_addr(field, cell)); }
+
+# status_snapshot: (re)read all producers into the model. Cheap (~10 getters + the ctx producer). The bar may
+# call it every paint frame. Does NOT call git_probe — probe policy stays with the CALLER (the bar reads the
+# git cache; /state probes first, exactly as today), so behavior is unchanged. SPTR aliases session-stable
+# producer cstrs (model id, persona_name, git_branch cache, static version/tier/theme names) — the snapshot
+# is EPHEMERAL: snapshot-then-render immediately, never hold it across a turn.
+fn status_snapshot() {
+    if (_sf_rows == 0) { _sf_rows = alloc(SF_COUNT * SF_CELLS * 8); }
+
+    _sf_set(SF_BRAND, SFC_PRESENT, 1);
+    _sf_set(SF_BRAND, SFC_SPTR, thoth_version());
+
+    _sf_set(SF_PERSONA, SFC_PRESENT, 1);
+    _sf_set(SF_PERSONA, SFC_SPTR, persona_name());
+
+    # model — carry the RAW nullable resolution + a null flag; leaves pick "default" (bar) vs "(none set)".
+    var m = session_model();
+    if (m == 0) { m = config_hoosh_model(); }
+    _sf_set(SF_MODEL, SFC_PRESENT, 1);
+    _sf_set(SF_MODEL, SFC_SPTR, m);
+    if (m == 0) { _sf_set(SF_MODEL, SFC_STATE, 1); } else { _sf_set(SF_MODEL, SFC_STATE, 0); }
+
+    # health — present only when a gateway is configured; STATE = the 3-way HOOSH_HEALTH_* enum.
+    if (config_hoosh_configured() == 1) { _sf_set(SF_HEALTH, SFC_PRESENT, 1); } else { _sf_set(SF_HEALTH, SFC_PRESENT, 0); }
+    _sf_set(SF_HEALTH, SFC_STATE, hoosh_health());
+
+    _sf_set(SF_TURNS, SFC_PRESENT, 1);
+    _sf_set(SF_TURNS, SFC_IVAL, session_turns());
+
+    # ctx — present when history on AND non-empty; KiB via the single-sourced producer; evicted in STATE.
+    if ((config_hoosh_history() == 1) && (session_history_len() > 0)) { _sf_set(SF_CTX, SFC_PRESENT, 1); }
+    else { _sf_set(SF_CTX, SFC_PRESENT, 0); }
+    _sf_set(SF_CTX, SFC_IVAL,  hoosh_ctx_kib());
+    _sf_set(SF_CTX, SFC_IVAL2, hoosh_ctx_budget_kib());
+    _sf_set(SF_CTX, SFC_STATE, hoosh_ctx_evicted());
+
+    # tokens / cost — omit-until-seen (ADR-0010).
+    if (session_tokens_seen() == 1) { _sf_set(SF_TOKENS, SFC_PRESENT, 1); } else { _sf_set(SF_TOKENS, SFC_PRESENT, 0); }
+    _sf_set(SF_TOKENS, SFC_IVAL, session_tokens());
+    if (session_cost_seen() == 1) { _sf_set(SF_COST, SFC_PRESENT, 1); } else { _sf_set(SF_COST, SFC_PRESENT, 0); }
+    _sf_set(SF_COST, SFC_IVAL,  session_cost_micro());
+    _sf_set(SF_COST, SFC_IVAL2, session_cost_unpriced_count());
+
+    # git — CACHE read (caller probes for fresh); detached in STATE, dirty count in IVAL, branch in SPTR.
+    if (git_present() == 1) { _sf_set(SF_GIT, SFC_PRESENT, 1); } else { _sf_set(SF_GIT, SFC_PRESENT, 0); }
+    if (git_detached() == 1) { _sf_set(SF_GIT, SFC_STATE, SF_GIT_DETACHED); } else { _sf_set(SF_GIT, SFC_STATE, SF_GIT_BRANCH); }
+    _sf_set(SF_GIT, SFC_IVAL, git_dirty());
+    _sf_set(SF_GIT, SFC_SPTR, git_branch());
+
+    # surface / theme — IVAL carries ui_tier() so a leaf can gate the depth-name paren (/state does).
+    _sf_set(SF_SURFACE, SFC_PRESENT, 1);
+    _sf_set(SF_SURFACE, SFC_SPTR, ui_tier_name());
+    _sf_set(SF_SURFACE, SFC_IVAL, ui_tier());
+    _sf_set(SF_THEME, SFC_PRESENT, 1);
+    _sf_set(SF_THEME, SFC_SPTR, ui_theme_name());
+    return 0;
+}
+
+# --- typed accessors (the public read surface) -----------------------------
+# Every accessor guards _sf_rows==0 so a read BEFORE the first status_snapshot() degrades to 0/null instead
+# of dereferencing a near-null address (0 + field*SF_CELLS*8 + cell*8). The contract is still snapshot-first
+# (all current callers honor it), but the guard makes the accessors crash-safe for any future consumer — e.g.
+# the T3 GUI status widget named in the header — that might read out of order.
+fn status_present(field) { if (_sf_rows == 0) { return 0; } return _sf_get(field, SFC_PRESENT); }
+fn status_state(field)   { if (_sf_rows == 0) { return 0; } return _sf_get(field, SFC_STATE); }
+fn status_ival(field)    { if (_sf_rows == 0) { return 0; } return _sf_get(field, SFC_IVAL); }
+fn status_ival2(field)   { if (_sf_rows == 0) { return 0; } return _sf_get(field, SFC_IVAL2); }
+fn status_sval(field)    { if (_sf_rows == 0) { return 0; } return _sf_get(field, SFC_SPTR); }   # cstr ptr or 0

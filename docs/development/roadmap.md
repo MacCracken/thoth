@@ -10,15 +10,17 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.27.0):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.28.0):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
 > picker, and the `.thoth/` config home. **0.27.0** refreshes the toolchain (cyrius 6.4.46 + vendored
 > dists) and opens the **simple↔rich consistency line** — parity fixes so features that are *not* rich-TUI
-> blockers (`/reprobe`, `/save`, `[history].file`) work at BOTH tiers. Still ahead on that line: the
-> tier-agnostic **view surface** (`src/surface.cyr`, realizing ADR-0009's semantic intents so simple/rich
-> render one model), then a **T3 Wayland GUI** — thoth as its own sovereign Cyrius Wayland app (jalwa-style
+> blockers (`/reprobe`, `/save`, `[history].file`) work at BOTH tiers. **0.28.0** opened Stage B — the
+> tier-agnostic **view surface** (`src/surface.cyr`): a facts-not-bytes status view-model that the TUI status
+> bar + `/state` now both render from (ADR-0009's semantic layer, realized for the status fields; GUI-ready by
+> construction). Still ahead on that line: adopt the surface for the feed/tool-card/diff, then a **T3 Wayland
+> GUI** — thoth as its own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
 > "thoth-in-puka" stance). Per-version detail is in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md). The **four v1.0 gates below are
