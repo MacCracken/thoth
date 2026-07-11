@@ -2,6 +2,76 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.4] - 2026-07-11
+
+**T3 GUI — turn feedback: a working indicator, and an honest notice when a turn doesn't complete.** The GUI ran
+a turn SYNCHRONOUSLY (`cmd_task` under `OUT_NULL`) with no on-screen feedback — the window froze on the old
+frame for the turn's duration, then the reply appeared. Now, on Enter, the present loop paints ONE "working"
+frame BEFORE the blocking turn: the just-submitted message is echoed as a provisional bubble and a "thoth is
+working…" indicator shows, both folded into the bottom-anchored feed so they stay visible. It is NOT an
+animated spinner — the turn blocks the event loop and this substrate has no threads, so it is a single honest
+pending frame, not a promise of animation. AND — because the window renders only `session_history` and a failed
+turn pops the user message (unreachable hoosh, transport/HTTP error, empty completion), the message would
+otherwise vanish silently; so a turn that appends no assistant reply now raises a transient RED "the turn did
+not complete — is hoosh reachable? try /reprobe" notice in the feed instead of swallowing the message. The
+notice is a transient flag, NOT a `session_history` entry, so it never pollutes the model's context; a new
+submit clears it. 1323 assertions (+13). Reviewed via a 3-lens find→verify workflow — which is what surfaced
+the silent-failure gap (CONFIRMED); addressed here.
+
+### Added
+- **`gturn_*` pending-turn state** (`src/gui/ginput.cyr`): `gturn_begin(text)` (COPIES the submission — the
+  composer is reset before the turn runs), `gturn_end`, `gturn_active`, `gturn_text`, plus `gturn_fail` /
+  `gturn_failed` for the transient failure notice.
+- **Working state in the feed** (`src/gui/gfeed.cyr` `_gfeed_flow`): when a turn is active, a provisional user
+  bubble (the echoed submission) + a "thoth is working…" indicator, measured into the bottom-anchored flow so
+  they stay visible; when the last turn failed, a red "didn't complete" notice.
+- **`test_gui`** +13 — the pending state (active/text/copy), measure-draw parity WITH the pending block,
+  greeting-vs-working routing, the failure flag + notice render + its parity + a new-submit clear, and working /
+  failed golden PPMs.
+
+### Changed
+- `src/gui/gpresent.cyr` Enter handler: `gturn_begin` + `gcomp_reset` + a pre-turn working-frame paint, then
+  the turn, then a net-history check (`len <= n0` or last role ≠ assistant → `gturn_fail`) and `gturn_end`.
+- `gfeed_build` shows the greeting only when idle (no history AND no active turn AND no failure notice).
+
+## [0.30.3] - 2026-07-11
+
+**T3 GUI — the feed follows the conversation (bottom-anchored auto-scroll).** The GUI feed drew top-down from
+the region top and clipped anything past the bottom, so after ~3–4 turns the NEWEST reply scrolled off-screen
+and was invisible. Now the feed measures its total height and, when it overflows the region, anchors the flow
+to the BOTTOM — the newest message sits flush above the composer and older messages clip off the top (the
+mockup's auto-scroll-to-bottom behavior). A short conversation still top-anchors (natural reading order).
+`gfeed_build` runs a MEASURE-only pass (`_gfeed_flow` with `cmds == 0`) using the exact same wrap/layout code
+as the draw pass, so the measured height is byte-for-byte the drawn height and the anchor is precise; the
+existing CLIP hides the older messages that scroll above the region top. 1310 assertions (+12), incl. a
+rastered golden PPM of an overflowing feed (newest exchange flush to the bottom, oldest clipped mid-line) —
+visually confirmed. Adversarially reviewed (3-lens find→verify workflow): no parity break, no OOB (a negative
+bottom-anchored `y` is clamped by the rasterizer), floor byte-identical (GUI-only). The review caught one
+genuine pre-existing render nit in the wrap path — fixed below.
+
+### Added
+- **`_gfeed_flow(cmds, xbase, cy0, avail, n)`** (`src/gui/gfeed.cyr`) — lays out all n conversation messages
+  down a column; `cmds == 0` measures without drawing (shared wrap code → exact measure/draw parity).
+- **`gfeed_anchor_y(total, y, h)`** — the flow start-y: top-anchor when it fits, bottom-anchor (`y + h - total`,
+  may be above the region top so the clip hides older messages) when it overflows.
+- **`test_gui`** +12 — measure/draw height parity, the anchor decision (fit vs overflow), a command-scan
+  proving the newest line is visible while the oldest clips above the top, a leading-space wrap guard, and an
+  overflowing-feed golden PPM.
+
+### Changed
+- `gfeed_build` now measures the flow then draws it bottom-anchored (was: a single top-down draw pass).
+
+### Fixed
+- **Wrap path (pre-existing):** a message whose content STARTS with a space and wraps hit the space-break
+  branch with `last_sp_cols == 0`, passing `max_cp = 0` to `gr_fb_text` — which means UNCAPPED, so the whole
+  string was drawn on the first line (garbled overdraw). The empty leading-space segment is now skipped
+  (`_gfeed_para`), with a regression test asserting the wrap path never emits an uncapped slice.
+
+### Notes
+- Documented negligible edge (left as-is): for a measured total within ~4px of the region height, the flow
+  bottom-anchors and shaves ≤4px off the OLDEST (scrolling-away) line rather than top-anchoring — cosmetic,
+  and consistent with flush-bottom auto-scroll.
+
 ## [0.30.2] - 2026-07-11
 
 **T3 GUI — interactive: type in the window, Enter runs a turn.** The GUI becomes usable, not just a view. NEW

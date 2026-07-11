@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.2):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.4):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -26,8 +26,13 @@
 > (`src/gui/gpresent.cyr`) + a **`thoth gui`** subcommand, now in the SHIPPING binary (cyrius 6.4.49 gave the
 > headroom). Degrades honestly with no compositor; LIVE-CONFIRMED on a real one. **0.30.1** added the
 > conversation feed (word-wrapped) and **0.30.2** made it interactive (evdev keymap + composer → type, Enter
-> runs a turn, the reply renders). Still ahead (0.30.x patches): a turn spinner, tool-call cards + colored
-> diffs in the feed, the file-tree pane, feed scrollback. thoth as its
+> runs a turn, the reply renders). **0.30.3** made the feed follow the conversation — a bottom-anchored
+> auto-scroll so the newest reply is always visible (older messages clip off the top). **0.30.4** added turn
+> feedback — a "thoth is working…" indicator on send (echoing the pending message) plus an honest transient
+> notice when a turn doesn't complete (a failed turn pops the user message, and the window renders only
+> history, so it would otherwise vanish silently). Still ahead (0.30.x patches): tool-call cards + colored
+> diffs in the feed (needs a tool-round producer), the file-tree pane, feed scrollback, composer history. thoth
+> as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
 > "thoth-in-puka" stance). Per-version detail is in

@@ -15,6 +15,8 @@ var GFEED_PAD  = 14;   # left inset
 # Breaks at spaces (hard-breaks a word longer than the column). Draws each wrapped line as a (start,cols)
 # slice via gd_push_text's max_cp cap — NO per-line copy. Codepoint-accurate (uses the graster decoder), so
 # the wrap column matches the rendered width for non-ASCII too. Returns the y AFTER the last line.
+# cmds == 0 => MEASURE ONLY: the wrap math runs identically but nothing is emitted, so the returned height is
+# byte-for-byte the height the draw pass produces (the bottom-anchor pre-measure relies on this parity).
 fn _gfeed_para(cmds, x, y, avail_px, color, text) {
     if (text == 0) { return y; }
     var maxcols = avail_px / GR_GLYPH_W;
@@ -37,13 +39,15 @@ fn _gfeed_para(cmds, x, y, avail_px, color, text) {
             i = i + nb;
             if (cols > maxcols) {
                 if (last_sp_byte >= line_start) {
-                    gd_push_text(cmds, x, cy, color, text + line_start, last_sp_cols);   # words before the space
+                    # skip an empty leading-space segment: last_sp_cols == 0 would pass max_cp 0 == UNCAPPED to
+                    # gr_fb_text and draw the whole string on this line. Nothing to draw before the space anyway.
+                    if ((cmds != 0) && (last_sp_cols > 0)) { gd_push_text(cmds, x, cy, color, text + line_start, last_sp_cols); }   # words before the space
                     cy = cy + GFEED_LH;
                     line_start = last_sp_byte + 1;                # new line begins after the space (1 byte)
                     cols = cols - last_sp_cols - 1;               # codepoints carried to the new line
                     last_sp_byte = 0 - 1;
                 } else {
-                    gd_push_text(cmds, x, cy, color, text + line_start, cols - 1);   # hard-break a long word
+                    if (cmds != 0) { gd_push_text(cmds, x, cy, color, text + line_start, cols - 1); }   # hard-break a long word
                     cy = cy + GFEED_LH;
                     line_start = i - nb;                          # new line begins at the current cp
                     cols = 1;
@@ -52,7 +56,7 @@ fn _gfeed_para(cmds, x, y, avail_px, color, text) {
             }
         }
     }
-    if (cols > 0) { gd_push_text(cmds, x, cy, color, text + line_start, cols); cy = cy + GFEED_LH; }
+    if (cols > 0) { if (cmds != 0) { gd_push_text(cmds, x, cy, color, text + line_start, cols); } cy = cy + GFEED_LH; }
     return cy;
 }
 
@@ -68,32 +72,74 @@ fn _gfeed_greeting(cmds, x, y, avail_px) {
     return cy;
 }
 
-# gfeed_build: render the conversation into [x, x+w) x [y, y+h). Emits a CLIP so long feeds don't bleed past
-# the region. Reads session_history_* (role + content per message). Empty -> the greeting.
+# _gfeed_flow: lay out all n conversation messages from (xbase, cy0) down an avail-wide column; return the y
+# after the last message (incl. its trailing GFEED_GAP). A user message gets a `>` accent marker + FG text; an
+# agent message is plain MUTED body. cmds == 0 => MEASURE ONLY (no draw), the SAME wrap/layout code as the draw
+# pass — so the measured total height is exactly the drawn height (the bottom-anchor relies on this).
+fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
+    var cy = cy0;
+    var i = 0;
+    while (i < n) {
+        var role = session_history_role(i);
+        var content = session_history_content(i);
+        if (streq(role, "user") == 1) {
+            if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), ">", 0); }
+            cy = _gfeed_para(cmds, xbase + 16, cy, avail - 16, _ui_rgb(ROLE_FG), content);
+        } else {
+            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), content);
+        }
+        cy = cy + GFEED_GAP;
+        i = i + 1;
+    }
+    # a turn in flight (0.30.4): echo the just-submitted message as a provisional bubble + a working indicator,
+    # BELOW the last real message. Part of the measured flow so the bottom-anchor keeps it visible. The pending
+    # text is NOT in session_history yet (the turn appends it when it runs) — this is a transient render.
+    if (gturn_active() == 1) {
+        if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), ">", 0); }
+        cy = _gfeed_para(cmds, xbase + 16, cy, avail - 16, _ui_rgb(ROLE_FG), gturn_text());
+        cy = cy + GFEED_GAP;
+        if (cmds != 0) {
+            gd_push_rect(cmds, xbase, cy + 4, 8, 8, _ui_rgb(ROLE_ACCENT));                   # a working mark (static; the turn blocks the loop)
+            gd_push_text(cmds, xbase + 16, cy, _ui_rgb(ROLE_MUTED), "thoth is working...", 0);
+        }
+        cy = cy + GFEED_LH + GFEED_GAP;
+    }
+    # a turn that appended no assistant reply (0.30.4): an honest transient notice — the window renders only
+    # session_history, so a failed turn (unreachable hoosh, transport/http error) would otherwise vanish silently.
+    if (gturn_failed() == 1) {
+        cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "the turn did not complete - is hoosh reachable? try /reprobe");
+        cy = cy + GFEED_GAP;
+    }
+    return cy;
+}
+
+# gfeed_anchor_y: the y the conversation flow starts at, given its measured `total` height and the region
+# [y, y+h). Fits (total <= h - GFEED_GAP) -> anchor at the TOP (natural reading order). Overflows -> anchor the
+# BOTTOM (newest message flush to the region bottom); the returned y is above the region top so the CLIP hides
+# the older messages that scroll off — i.e., the feed follows the conversation, like the mockup's auto-scroll.
+fn gfeed_anchor_y(total, y, h) {
+    if (total > h - GFEED_GAP) { return y + h - total; }
+    return y + GFEED_GAP;
+}
+
+# gfeed_build: render the conversation into [x, x+w) x [y, y+h). Emits a CLIP so a long feed doesn't bleed past
+# the region and so a bottom-anchored flow's older messages are clipped above the top. Reads session_history_*
+# (role + content per message). Empty -> the greeting (always top-anchored). Otherwise measures the flow, then
+# draws it anchored so the NEWEST message is always visible.
 fn gfeed_build(cmds, x, y, w, h) {
     var avail = w - GFEED_PAD - GFEED_PAD;
+    var xbase = x + GFEED_PAD;
     gd_push_clip(cmds, x, y, w, h);
-    var cy = y + GFEED_GAP;
     var n = session_history_len();
-    if (n == 0) {
-        _gfeed_greeting(cmds, x + GFEED_PAD, cy, avail);
+    var endy = 0;
+    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0)) {
+        endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail);
     } else {
-        var i = 0;
-        while (i < n) {
-            var role = session_history_role(i);
-            var content = session_history_content(i);
-            if (streq(role, "user") == 1) {
-                gd_push_text(cmds, x + GFEED_PAD, cy, _ui_rgb(ROLE_ACCENT), ">", 0);
-                cy = _gfeed_para(cmds, x + GFEED_PAD + 16, cy, avail - 16, _ui_rgb(ROLE_FG), content);
-            } else {
-                cy = _gfeed_para(cmds, x + GFEED_PAD, cy, avail, _ui_rgb(ROLE_MUTED), content);
-            }
-            cy = cy + GFEED_GAP;
-            i = i + 1;
-        }
+        var total = _gfeed_flow(0, xbase, 0, avail, n);          # measure-only pass (incl. a pending turn) -> total height
+        endy = _gfeed_flow(cmds, xbase, gfeed_anchor_y(total, y, h), avail, n);   # draw, bottom-anchored
     }
     gd_push_unclip(cmds);
-    return cy;
+    return endy;
 }
 
 # --- the whole window frame (status strip + feed + composer line) ------------------------------------------

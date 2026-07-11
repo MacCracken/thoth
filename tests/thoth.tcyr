@@ -3735,6 +3735,64 @@ fn test_gui() {
     var scmds2 = gd_list_new();
     assert_eq(_gfeed_para(scmds2, 0, 0, 800, 0xFFFFFF, "short"), GFEED_LH, "a short line is exactly one line high");
     assert_eq(_gfeed_para(gd_list_new(), 0, 0, 800, 0xFFFFFF, 0), 0, "null text advances nothing");
+    # a wrapping message that STARTS with a space must never emit an uncapped (max_cp 0) slice — otherwise the
+    # space-break branch (last_sp_cols == 0) would draw the whole string on line 1 (gr_fb_text: 0 == uncapped).
+    var _lz = gd_list_new();
+    _gfeed_para(_lz, 0, 0, 80, 0xFFFFFF, " aaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbb");
+    var _lzu = 0; var _lzi = 0;
+    while (_lzi < vec_len(_lz)) {
+        if (gd_aux(vec_get(_lz, _lzi)) == 0) { _lzu = _lzu + 1; }
+        _lzi = _lzi + 1;
+    }
+    assert(vec_len(_lz) > 0, "leading-space wrap still emits its wrapped lines");
+    assert_eq(_lzu, 0, "leading-space wrap emits NO uncapped slice (empty first segment skipped)");
+    # --- feed bottom-anchoring (0.30.3): the feed follows the conversation ---
+    session_history_clear();
+    var _bu = "add a token-bucket rate limiter";
+    var _ba = "Plan: scaffold a ratelimit module, implement TokenBucket behind a Mutex, expose try_acquire(n), then add unit tests covering exhaustion, refill-over-time, and an 8-thread contention check. Starting now.";
+    var _bi = 0;
+    while (_bi < 6) {
+        session_history_append("user", _bu, strlen(_bu));
+        session_history_append("assistant", _ba, strlen(_ba));
+        _bi = _bi + 1;
+    }
+    var _bn = session_history_len();
+    assert_eq(_bn, 12, "seeded a 12-message conversation");
+    # measure pass (cmds == 0) emits nothing but covers the identical height a draw pass does
+    var _mh = _gfeed_flow(0, 14, 0, 300, _bn);
+    var _dl = gd_list_new();
+    var _dh = _gfeed_flow(_dl, 14, 0, 300, _bn);
+    assert_eq(_mh, _dh, "feed measure height == draw height (wrap parity — the anchor relies on it)");
+    assert(vec_len(_dl) > _bn, "the draw pass emitted commands (markers + wrapped slices)");
+    assert(_mh > 300, "the 12-message flow overflows a 300px region (exercises the anchor path)");
+    # anchor decision: a flow that fits anchors at the top; an overflowing flow anchors to the bottom
+    assert_eq(gfeed_anchor_y(50, 0, 400), GFEED_GAP, "a flow that fits anchors at the top");
+    assert_eq(gfeed_anchor_y(1000, 0, 400), 400 - 1000, "an overflowing flow anchors bottom (y + h - total)");
+    assert(gfeed_anchor_y(1000, 0, 400) < 0, "an overflowing flow starts above the region top (older msgs clip off)");
+    # build the feed into a small region and confirm: newest line visible, oldest line clipped above the top
+    var _fr = gd_list_new();
+    var _fy = 40; var _fh = 200;
+    gfeed_build(_fr, 0, _fy, 900, _fh);
+    var _minY = 1000000; var _maxY = 0 - 1000000; var _ci = 0;
+    while (_ci < vec_len(_fr)) {
+        var _cc = vec_get(_fr, _ci);
+        if (gd_kind(_cc) == GD_TEXT) {
+            var _ty = gd_y(_cc);
+            if (_ty < _minY) { _minY = _ty; }
+            if (_ty > _maxY) { _maxY = _ty; }
+        }
+        _ci = _ci + 1;
+    }
+    assert(_minY < _fy, "oldest feed line is above the region top (clipped by the auto-scroll anchor)");
+    assert(_maxY >= _fy, "newest feed line is at/below the region top (on screen)");
+    assert(_maxY < _fy + _fh, "newest feed line is within the region bottom (visible)");
+    # a rastered overflowing feed frame (visual confirmation the newest exchange sits at the bottom)
+    var _abw = 900; var _abh = 300;
+    var _abuf = gr_fb_new(_abw, _abh);
+    gr_fb_clear(_abuf, _abw, _abh, _gframe_bg());
+    gr_raster(gframe_build(_abw, _abh), _abuf, _abw, _abh);
+    _gui_ppm_dump(_abuf, _abw, _abh, "/tmp/thoth_gui_anchor.ppm");
+    session_history_clear();
     # --- a full window frame with a 2-message conversation -> raster + PPM ---
     session_history_clear();
     var _m1 = "add a token-bucket rate limiter as its own module, thread-safe";
@@ -3781,6 +3839,68 @@ fn test_gui() {
     assert_eq(gcomp_key(31, 0), 0, "'s' key -> typed (0)");
     assert(streq(gcomp_cstr(), "hs") == 1, "gcomp_key typed 's' -> 'hs'");
     gcomp_reset();
+    # --- turn working-state (0.30.4): pending message echo + working indicator on send ---
+    gturn_begin("add async support to the rate limiter");
+    assert_eq(gturn_active(), 1, "gturn active after begin");
+    assert(streq(gturn_text(), "add async support to the rate limiter") == 1, "gturn_text == the copied submission");
+    session_history_clear();
+    # with EMPTY history + an active turn, the flow renders (NOT the greeting): a pending bubble + working line
+    var _wl = gd_list_new();
+    var _wdraw = _gfeed_flow(_wl, 14, 0, 800, 0);
+    assert(_wdraw > 0, "working-state flow advances past 0 with empty history (pending + working line)");
+    assert(vec_len(_wl) >= 3, "working-state emits >= 3 commands (marker + pending text + working indicator)");
+    var _wmeasure = _gfeed_flow(0, 14, 0, 800, 0);
+    assert_eq(_wmeasure, _wdraw, "working-state measure height == draw height (parity holds with the pending state)");
+    # gfeed_build must NOT show the greeting while a turn is active on an empty history
+    var _wfr = gd_list_new();
+    gfeed_build(_wfr, 0, 0, 900, 300);
+    assert(vec_len(_wfr) >= 3, "gfeed_build renders the working flow (not the greeting) during a turn");
+    # a full working frame with prior history -> PPM (history + the just-sent message + 'thoth is working')
+    session_history_clear();
+    var _whu = "add streaming to the client";
+    session_history_append("user", _whu, strlen(_whu));
+    var _wha = "Sure - I'll wire an SSE reader into the transport and surface partial deltas as they arrive.";
+    session_history_append("assistant", _wha, strlen(_wha));
+    var _wbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(_wbuf, FW, FH, _gframe_bg());
+    gr_raster(gframe_build(FW, FH), _wbuf, FW, FH);
+    _gui_ppm_dump(_wbuf, FW, FH, "/tmp/thoth_gui_working.ppm");
+    gturn_end();
+    assert_eq(gturn_active(), 0, "gturn cleared after end");
+    # --- failed-turn transient notice (0.30.4): no assistant reply -> an honest notice, never silent vanishing ---
+    gturn_begin("do a thing"); gturn_end(); gturn_fail();
+    assert_eq(gturn_failed(), 1, "gturn_failed set after gturn_fail");
+    session_history_clear();
+    var _ffl = gd_list_new();
+    var _ffh = _gfeed_flow(_ffl, 14, 0, 800, 0);          # empty history + failed -> the notice renders
+    assert(_ffh > 0, "failed-turn flow advances (renders the notice) on empty history");
+    assert(vec_len(_ffl) >= 1, "failed-turn emits the notice line");
+    assert_eq(_gfeed_flow(0, 14, 0, 800, 0), _ffh, "failed-notice measure height == draw height (parity)");
+    var _ffr = gd_list_new();
+    gfeed_build(_ffr, 0, 0, 900, 300);                    # empty history + failed => the notice, NOT the greeting
+    var _ffound = 0; var _ffi = 0;
+    while (_ffi < vec_len(_ffr)) {
+        var _ffc = vec_get(_ffr, _ffi);
+        if ((gd_kind(_ffc) == GD_TEXT) && (gd_text(_ffc) != 0)) {
+            if (streq(gd_text(_ffc), "the turn did not complete - is hoosh reachable? try /reprobe") == 1) { _ffound = 1; }
+        }
+        _ffi = _ffi + 1;
+    }
+    assert_eq(_ffound, 1, "gfeed_build renders the failure notice (not the greeting) on empty history");
+    # a full failed-turn frame with prior history -> PPM (the user msg was popped on failure; the notice explains)
+    session_history_clear();
+    var _fpu = "connect to the gateway";
+    session_history_append("user", _fpu, strlen(_fpu));
+    var _fpa = "Connected. What would you like me to build?";
+    session_history_append("assistant", _fpa, strlen(_fpa));
+    var _fbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(_fbuf, FW, FH, _gframe_bg());
+    gr_raster(gframe_build(FW, FH), _fbuf, FW, FH);
+    _gui_ppm_dump(_fbuf, FW, FH, "/tmp/thoth_gui_failed.ppm");
+    session_history_clear();
+    gturn_begin("retry");
+    assert_eq(gturn_failed(), 0, "a new submit (gturn_begin) clears the failure notice");
+    gturn_end();
     session_history_clear();
     session_set_model(0);
     return 0;

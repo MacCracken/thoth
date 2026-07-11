@@ -7,6 +7,55 @@
 
 ## Version
 
+**0.30.4** — **T3 GUI: turn feedback — a working indicator + an honest "didn't complete" notice**, 2026-07-11.
+The GUI ran a turn SYNCHRONOUSLY (`cmd_task` under `OUT_NULL`) with the window frozen on the old frame for the
+turn's duration. Now the present loop paints ONE "working" frame BEFORE the blocking turn: the just-submitted
+message is echoed as a provisional bubble + a "thoth is working…" indicator, both folded into the
+bottom-anchored feed so they stay visible; on completion the feed repaints with the reply. NOT an animated
+spinner — the turn blocks the event loop and this substrate has no threads, so it is a single honest pending
+frame. NEW **`gturn_*`** state (`src/gui/ginput.cyr`): `gturn_begin` COPIES the submission (the composer is
+reset before the turn), `gturn_end`/`gturn_active`/`gturn_text`. The present loop (`gpresent.cyr`) does
+`gturn_begin` → `gcomp_reset` → pre-turn paint → turn → `gturn_end`; `_gfeed_flow` renders the pending bubble +
+working line when active (measured into the flow, parity-safe). **Failure honesty**: the window renders ONLY
+`session_history`, and a failed turn POPS the user message (unreachable hoosh / transport / HTTP / empty
+completion → history net-unchanged), so the message would vanish silently — the **3-lens find→verify review
+CONFIRMED this**. So a turn that appends no assistant reply now raises a transient RED "the turn did not
+complete — is hoosh reachable? try /reprobe" notice (`gturn_fail`/`gturn_failed`, detected by `len <= n0` or
+last role ≠ `assistant`) — a transient flag, NOT a `session_history` entry (never pollutes the model context);
+a new submit clears it. **Verified**: 1323 assertions (+13 `test_gui`: pending active/text/copy, measure/draw
+parity WITH the pending block, greeting-vs-working routing, the failure flag + exact-notice render + its parity
++ a new-submit clear) + working / failed **golden PPMs** (the pending bubble + "thoth is working…", and the red
+notice below a conversation — visually confirmed) + main builds. The turn itself is network- + compositor-gated
+(verify live). Pin **6.4.49** (the wrapper auto-drifted to 6.4.50; benign). **NEXT**: tool-call cards + colored
+diffs in the feed (needs a tool-round producer — `session_history` is user/assistant only, tool rounds are
+ephemeral); the file-tree pane (a view-builder over `ftree_*`, git badges free via `git_status_of`); feed
+scrollback (Up/Down / wheel to page older on the bottom-anchor); composer history (Up/Down over the inhist
+ring); optionally restore the failed submission to the composer for one-key retry.
+
+**0.30.3** — **T3 GUI: the feed follows the conversation (bottom-anchored auto-scroll)**, 2026-07-11. The GUI
+feed drew top-down from the region top and clipped anything past the bottom, so after ~3–4 turns the NEWEST
+reply scrolled off-screen and was invisible. Now `gfeed_build` MEASURES the flow height (a new `_gfeed_flow`
+called with `cmds == 0` — the SAME wrap/layout code as the draw pass, no emit, so measured height == drawn
+height byte-for-byte) and, when it overflows the region, anchors the flow to the BOTTOM via new
+`gfeed_anchor_y(total, y, h)` (`total > h - GFEED_GAP` → `y + h - total`, which is above the region top so the
+existing CLIP hides the older messages that scroll off; else top-anchor at `y + GFEED_GAP`). So the newest
+message sits flush above the composer and older messages clip off the top — the mockup's auto-scroll-to-bottom
+behavior; a short conversation still top-anchors (natural reading order). **Verified**: 1310 assertions (+12
+`test_gui`: measure/draw height parity, the fit-vs-overflow anchor decision, a command-scan proving the newest
+line is on-screen while the oldest clips above the top, a leading-space wrap guard, + a rastered **golden PPM**
+of an overflowing feed — newest exchange flush to the bottom, oldest clipped mid-line, visually confirmed) +
+main builds. **Reviewed** via a 3-lens find→verify **workflow** (parity / anchor-math+clip / regression):
+1 CONFIRMED nit (a PRE-EXISTING wrap bug the cut surfaced — a message whose content STARTS with a space and
+wraps hit the space-break push with `last_sp_cols == 0`, and `max_cp == 0` means UNCAPPED in `gr_fb_text`, so
+the whole string drew on line 1; FIXED — the empty leading-space segment is skipped, with a regression test),
+and 1 refuted-negligible nit (a ≤4px shave off the OLDEST line when `total` is within ~4px of the region
+height — documented, arguably the intended flush-bottom behavior). No parity break, no OOB (a negative
+bottom-anchored `y` is clamped by the rasterizer's `gr_fb_plot`), floor byte-identical (GUI-only). Pin
+**6.4.49**. **NEXT**: the turn working-state ("thoth is working…" — echo the pending message + a working
+indicator on send, folded into the bottom-anchored flow so it's visible before the blocking turn); then
+tool-call cards + colored diffs (needs a tool-round producer — session_history is user/assistant only);
+the file-tree pane; feed scrollback (Up/Down / wheel to page older, on this anchor).
+
 **0.30.2** — **T3 GUI: interactive — type in the window, Enter runs a turn**, 2026-07-11. The GUI becomes
 USABLE. NEW **`src/gui/ginput.cyr`**: `ginput_ascii(code,shift)` (evdev keycode + shift → printable ASCII, US
 QWERTY, ported from jalwa/puka) + a **composer text buffer** (`gcomp_append`/`_backspace`/`_reset`/`_len`/

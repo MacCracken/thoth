@@ -72,3 +72,31 @@ fn gcomp_key(code, shift) {
     if (ch != 0) { gcomp_append(ch); }
     return 0;
 }
+
+# --- the pending-turn state (0.30.4): the just-submitted message, shown while the (blocking) turn runs ---
+# The GUI runs a turn SYNCHRONOUSLY (cmd_task under OUT_NULL); the event loop can't animate during it (no
+# threads on this substrate). So on submit the present loop paints ONE "working" frame BEFORE the blocking
+# call — the just-sent message echoed as a provisional bubble + a "thoth is working" indicator, folded into the
+# bottom-anchored feed so it stays visible. Honest: an immediate pending state, NOT an animated spinner.
+# gturn_begin COPIES the text (the composer is reset before the turn runs, so gcomp_cstr() is no longer it).
+var GTURN_CAP = 4096;
+var _gturn_buf = 0;
+var _gturn_active = 0;
+var _gturn_failed = 0;    # the last turn appended no assistant reply -> surface an honest notice (transient)
+fn gturn_active() { return _gturn_active; }
+fn gturn_failed() { return _gturn_failed; }
+fn gturn_text() { if (_gturn_buf == 0) { return ""; } return _gturn_buf; }
+fn gturn_begin(text) {
+    if (_gturn_buf == 0) { _gturn_buf = alloc(GTURN_CAP); }
+    var i = 0;
+    while ((load8(text + i) != 0) && (i < GTURN_CAP - 1)) { store8(_gturn_buf + i, load8(text + i)); i = i + 1; }
+    store8(_gturn_buf + i, 0);
+    _gturn_active = 1;
+    _gturn_failed = 0;    # a new submit clears any prior failure notice
+    return 0;
+}
+fn gturn_end() { _gturn_active = 0; return 0; }
+# gturn_fail: the just-run turn produced no assistant reply (unreachable hoosh, transport/http error, empty
+# completion). The window renders only session_history, so error chrome never reaches it — this transient flag
+# lets the feed show an honest "didn't complete" notice instead of silently swallowing the message.
+fn gturn_fail() { _gturn_failed = 1; return 0; }

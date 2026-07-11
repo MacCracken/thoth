@@ -83,10 +83,18 @@ fn gui_run() {
                     else {
                         if (act == 2) {                               # Enter -> submit the composer as a turn
                             if (gcomp_len() > 0) {
+                                gturn_begin(gcomp_cstr());            # COPY the pending text (the composer is reset next)
+                                gcomp_reset();                        # clear the composer
+                                _gpresent_frame(win);                 # paint the working state NOW (echo msg + "working"), before the blocking turn
+                                var _n0 = session_history_len();
                                 out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
-                                cmd_task(gcomp_cstr());               # runs the turn: appends user + reply to session_history
+                                cmd_task(gturn_text());               # runs the turn: appends user + reply (both popped on failure)
                                 out_mode_set(OUT_FD1);
-                                gcomp_reset();
+                                # honest outcome: a turn that appended no assistant reply (unreachable hoosh, transport/http
+                                # error, empty completion) leaves history net-unchanged (the user turn is popped) -> the
+                                # window renders only history, so raise a transient "didn't complete" notice instead of silence.
+                                if ((session_history_len() <= _n0) || (streq(session_history_role(session_history_len() - 1), "assistant") == 0)) { gturn_fail(); }
+                                gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
                             }
                         }
                         dirty = 1;
