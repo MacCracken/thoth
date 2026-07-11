@@ -7,6 +7,26 @@
 
 ## Version
 
+**0.30.6** — **toolchain refresh (cyrius 6.4.49 → 6.4.51) + the full file-tree tests the output cap had forced
+lean**, 2026-07-11. cyrius **6.4.51** resolves thoth's filed output-cap issue: the emitted-binary `output_buf`
+grew from a FIXED **16 MiB to 1 GiB on Linux** (macOS/Windows follow in .52 via a large-alloc path). Background:
+the test program `tests/thoth.tcyr` is ONE translation unit that includes the whole driver + every vendored
+spine dep + the full suite, so at 0.30.5 it hit the 16 MiB cap (over by ~3,832 bytes) when the file-tree pane +
+tests landed — forcing the `gtree` test lean. Now RESTORED to full fidelity: the dir/file/header color scan
+(dir→`ROLE_BLUE`, file→`ROLE_MUTED`, header→project name), the empty/bare/root `_gtree_basename` cases, the full
+`_gtree_scroll_first` clamp (top/bottom), a **golden PPM** of the standalone pane, and a **real-repo render
+smoke** exercising the git-badge path (`_gtree_gitkind`: `ftree_path`→strip-cwd→`git_status_of`) on live files.
+**A PURE refresh + test restoration — NO product-code change** (`src/gui/gtree.cyr` is byte-for-byte its 0.30.5
+reviewed self). **Toolchain**: `cyrius lib sync` moved 7 stdlib files (`alloc*` variants, `sakshi`, `sandhi`,
+`syscalls`); vendored dists unchanged (already current — avatara 2.8.0 / sit 1.3.4 / sankoch 2.5.1 / libro
+2.7.10 / bote 3.1.1 / t-ron 2.1.7 / vyakarana 2.2.3 / darshana 0.9.0). **Verified**: 1341 assertions (+9,
+`test_gui` gtree restored) — the exact test that overflowed at 16 MiB now compiles with 1 GiB headroom + main
+builds + LIVE floor byte-identical on 6.4.51 (`--version` = `thoth 0.30.6`, piped one-shot exits clean, `/seams`
+ladder). Pin **6.4.51** (matches the wrapper — drift gone). **The 16 MiB test-binary constraint is CLEARED on
+Linux** — a separate lean GUI test binary is no longer needed; GUI tests grow in the shared binary again.
+**NEXT (GUI, 0.30.x)**: file-tree keyboard nav (focus / ↑↓ move / →← or Enter expand-collapse into `gpresent`
+keys); tool-call cards + colored diffs (needs a tool-round producer); feed scrollback; composer history.
+
 **0.30.5** — **T3 GUI: the file-tree pane**, 2026-07-11. The desktop window gains the mockup's (Thoth.dc.html)
 LEFT column. NEW **`src/gui/gtree.cyr`** — a view-builder like `gstatus`/`gfeed` over ftree.cyr's flattened
 tree model (the SAME model the TUI pane reads): `gtree_build` emits a project-name header + one row per visible

@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.5):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.6):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -31,9 +31,11 @@
 > feedback — a "thoth is working…" indicator on send (echoing the pending message) plus an honest transient
 > notice when a turn doesn't complete (a failed turn pops the user message, and the window renders only
 > history, so it would otherwise vanish silently). **0.30.5** added the file-tree pane (`src/gui/gtree.cyr`, a
-> view-builder over `ftree_*` + git badges, responsive left column). Still ahead (0.30.x patches): a dedicated
-> GUI test binary (the shared test binary is at the 16 MiB cap), file-tree keyboard nav, tool-call cards +
-> colored diffs in the feed (needs a tool-round producer), feed scrollback, composer history. thoth as its
+> view-builder over `ftree_*` + git badges, responsive left column). **0.30.6** refreshed the toolchain
+> (cyrius 6.4.49 → 6.4.51, which raised the emitted-binary output cap 16 MiB → 1 GiB on Linux — resolving
+> thoth's filed issue) and restored the full file-tree tests the cap had forced lean. Still ahead (0.30.x
+> patches): file-tree keyboard nav, tool-call cards + colored diffs in the feed (needs a tool-round producer),
+> feed scrollback, composer history. thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
 > "thoth-in-puka" stance). Per-version detail is in

@@ -2,6 +2,34 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.6] - 2026-07-11
+
+**Toolchain refresh (cyrius 6.4.49 → 6.4.51) + the full file-tree tests the output cap had forced lean.**
+cyrius **6.4.51** resolves thoth's filed output-cap issue: the emitted-binary `output_buf` grew from a fixed
+**16 MiB to 1 GiB on Linux** (macOS/Windows follow in .52). thoth's test program `tests/thoth.tcyr` is one
+translation unit that includes the whole driver + every vendored spine dep + the full assertion suite, so it
+had hit the 16 MiB cap at 0.30.5 (overflowing by ~3,832 bytes when the file-tree pane + tests landed) — which
+forced the `gtree` test to be kept lean. With the cap raised, this cut **restores the full coverage**: the
+directory/file/header color scan, the empty/bare/root `_gtree_basename` cases, the full `_gtree_scroll_first`
+clamp, a golden PPM of the tree pane, and a real-repo render smoke exercising the git-badge path
+(`_gtree_gitkind`) on live files. No product-code change — `src/gui/gtree.cyr` is unchanged from its 0.30.5
+review. 1341 assertions (+9). Floor verified byte-identical on the new toolchain (piped one-shot, `/seams`,
+`--version`).
+
+### Changed
+- **Toolchain: cyrius 6.4.49 → 6.4.51** (`cyrius lib sync` moved 7 stdlib files — the `alloc*` variants,
+  `sakshi`, `sandhi`, `syscalls`). Vendored dists unchanged (already current: avatara 2.8.0 / sit 1.3.4 /
+  sankoch 2.5.1 / libro 2.7.10 / bote 3.1.1 / t-ron 2.1.7 / vyakarana 2.2.3 / darshana 0.9.0).
+- `test_gui` — the `gtree` tests restored to full fidelity (the command-scan color checks + the golden PPM +
+  a real-repo render smoke), reversing the 0.30.5 lean stopgap.
+
+### Notes
+- The 16 MiB → 1 GiB raise is **Linux-only** in 6.4.51 (thoth's build/test target); macOS/Windows keep the
+  fixed 16 MiB region until cyrius 6.4.52's large-alloc path. Resolves
+  `~/Repos/cyrius/docs/development/issues/2026-07-11-output-buf-16mib-cap-blocks-large-test-binaries.md`.
+- With the cap no longer binding, a separate lean GUI test binary is **no longer needed** — the GUI test
+  suite can grow in the shared binary again.
+
 ## [0.30.5] - 2026-07-11
 
 **T3 GUI — the file-tree pane.** The desktop window gains the mockup's (Thoth.dc.html) left column: a file-tree

@@ -3909,27 +3909,56 @@ fn test_gui() {
     assert_eq(gturn_failed(), 0, "a new submit (gturn_begin) clears the failure notice");
     gturn_end();
     session_history_clear();
-    # --- file-tree pane (gtree.cyr, 0.30.5) — pure helpers + a render/color check (kept lean: the test
-    #     binary is at the 16 MiB output cap; gtree_build's full render is also exercised in the frame PPMs) ---
+    # --- file-tree pane (gtree.cyr, 0.30.5; full coverage restored at 0.30.6 once cyrius 6.4.51 raised the
+    #     output cap 16 MiB -> 1 GiB on Linux, so the command-scan + golden PPM no longer overflow) ---
+    # responsive width: hidden on a narrow window, the fixed pane otherwise
     assert_eq(gtree_w(500), 0, "narrow window (<640) hides the tree");
-    assert_eq(gtree_w(960), GTREE_PANE_W, "wide window shows the pane");
-    assert(streq(_gtree_basename("/a/b/thoth"), "thoth") == 1, "basename = last path component");
+    assert_eq(gtree_w(400), 0, "very narrow window hides the tree");
+    assert_eq(gtree_w(960), GTREE_PANE_W, "wide window shows the 230px pane");
+    assert_eq(gtree_w(700), GTREE_PANE_W, "700px window shows the full pane");
+    # basename (the pane header = the project name)
+    assert(streq(_gtree_basename("/home/macro/Repos/thoth"), "thoth") == 1, "basename of an absolute path");
+    assert(streq(_gtree_basename("thoth"), "thoth") == 1, "basename of a bare name");
+    assert(streq(_gtree_basename(""), "") == 1, "basename of empty is empty");
     assert(streq(_gtree_basename("/"), "/") == 1, "basename of root '/' is '/', not an empty header");
+    # scroll-to-selection
     assert_eq(_gtree_scroll_first(5, 10, 0), 0, "a tree that fits starts at row 0");
+    assert_eq(_gtree_scroll_first(100, 10, 0), 0, "overflow, selection at top -> row 0");
     assert_eq(_gtree_scroll_first(100, 10, 99), 90, "overflow, selection at bottom -> clamped to total-rows");
+    # render a synthetic tree: src (dir, expanded) + main.cyr child + VERSION file
     ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
     _ftree_append("src", 1, 0); _ftree_append("VERSION", 0, 0);
+    ftree_set_exp(0, 1); _ftree_insert_at(1, "main.cyr", 0, 1);
     assert_eq(_gtree_gitkind(0), 0, "_gtree_gitkind returns 0 for a directory (files-only gate)");
     var _tl = gd_list_new();
     gtree_build(_tl, 0, 40, 230, 400);
     assert(vec_len(_tl) > 4, "gtree_build emits bg + clip + header + rows + unclip");
-    var _tsrc = 0; var _gti = 0;
+    # dir name -> ROLE_BLUE, file name -> ROLE_MUTED, header -> the project name (== tui_draw_tree palette)
+    var _tdir = 0; var _tfile = 0; var _thdr = 0; var _gti = 0;
     while (_gti < vec_len(_tl)) {
         var _gtc = vec_get(_tl, _gti);
-        if ((gd_kind(_gtc) == GD_TEXT) && (streq(gd_text(_gtc), "src") == 1) && (gd_color(_gtc) == _ui_rgb(ROLE_BLUE))) { _tsrc = 1; }
+        if ((gd_kind(_gtc) == GD_TEXT) && (gd_text(_gtc) != 0)) {
+            if ((streq(gd_text(_gtc), "src") == 1) && (gd_color(_gtc) == _ui_rgb(ROLE_BLUE))) { _tdir = 1; }
+            if ((streq(gd_text(_gtc), "VERSION") == 1) && (gd_color(_gtc) == _ui_rgb(ROLE_MUTED))) { _tfile = 1; }
+            if (streq(gd_text(_gtc), "repo") == 1) { _thdr = 1; }
+        }
         _gti = _gti + 1;
     }
-    assert_eq(_tsrc, 1, "a directory row renders in ROLE_BLUE (== tui_draw_tree)");
+    assert_eq(_tdir, 1, "a directory row renders in ROLE_BLUE");
+    assert_eq(_tfile, 1, "a file row renders in ROLE_MUTED");
+    assert_eq(_thdr, 1, "the pane header shows the project name (cwd basename)");
+    var _tbuf = gr_fb_new(230, 400);
+    gr_fb_clear(_tbuf, 230, 400, _gtree_bg());
+    gr_raster(_tl, _tbuf, 230, 400);
+    _gui_ppm_dump(_tbuf, 230, 400, "/tmp/thoth_gui_tree.ppm");
+    # real-repo smoke: load the actual tree + probe git, then build the pane over it — exercises the git-badge
+    # path (_gtree_gitkind: ftree_path -> strip cwd -> git_status_of) on real files, deterministically non-crashing
+    git_probe();
+    ftree_load();
+    assert(ftree_count() > 0, "ftree_load listed the repo root");
+    var _rl = gd_list_new();
+    gtree_build(_rl, 0, 40, 230, 400);
+    assert(vec_len(_rl) > 4, "gtree_build over the real repo tree emits the pane (git-badge path exercised)");
     ftree_reset();
     session_set_model(0);
     return 0;
