@@ -82,3 +82,20 @@ any datum the mockup shows that thoth lacks (token/ctx%, cost, branch, real diff
 - **Hand-roll the terminal substrate (termios, ANSI, syntax highlight).** Rejected:
   darshana/vyakarana/mihi are shipped, tested first-party libs; reinventing them
   forks the floor — the exact thing the doctrine forbids.
+
+## Addendum (0.30.0) — T3 revised: thoth as its own sovereign Wayland app
+
+The original decision framed **T3 as thoth-in-puka** (puka hosts thoth as a terminal
+in its window). Revised: **T3 is thoth as its own sovereign Cyrius Wayland app**,
+following jalwa (which forked puka's Wayland client to become a native GUI, not a
+terminal-in-puka). This is NOT a webview and NOT a non-AGNOS dependency — it stays
+fully sovereign (zero external code): a **draw-command IR** (`src/gui/gdraw.cyr`) →
+**CPU rasterizer** (`src/gui/graster.cyr`, kashi VGA font → XRGB8888) →
+**view-builders** (`src/gui/gstatus.cyr`, lowering the Stage-B facts-not-bytes
+view-models) → a **puka-forked Wayland present shell** (`src/gui/gwindow.cyr`,
+vendored+renamed from jalwa's client; the window substrate is FLOOR, destined to
+extract to **aethersafha**). The T0–T2 tiers, the semantic-role color layer, and the
+degrade-closed / port-the-floor doctrine are unchanged; T3 simply gains a *fourth
+renderer* over the same view-models rather than delegating the whole front-end to
+puka. The design mockup `Thoth.dc.html` is the T3 pixel spec (its palette == ui.cyr's
+roles). Landed 0.29.0 (headless pipeline) → 0.30.0 (runnable `thoth gui`).

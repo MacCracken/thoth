@@ -1,0 +1,117 @@
+# src/gui/gstatus.cyr — the GUI status-strip VIEW-BUILDER (T3, Phase 1).
+#
+# The desktop-tier renderer of the 0.28.0 STATUS VIEW-MODEL: it reads the SAME status_snapshot() facts the
+# TUI bar (tui_draw_status) and /state (cmd_state) read, and lowers them into draw-commands (src/gui/gdraw.cyr)
+# for a pinned status strip — the mockup's (Thoth.dc.html) top bar. This is the whole Stage-B payoff made
+# concrete: three renderers (line rows, TUI strip, GUI strip) over ONE facts-not-bytes model, no new producer.
+#
+# Colors come straight from ui.cyr's _ui_rgb(role) (== the packed XRGB the rasterizer wants), so the GUI
+# shares the TUI's amber/light palette AND /theme. The health "dot" the TUI draws as a ● glyph the GUI draws
+# as a filled colored rect — the same FACT (status_state(SF_HEALTH)), a richer mark.
+#
+# PURE: builds a command list, never touches a display. Dynamic values (ints, cost) format into bump-heap
+# buffers that live until the caller rasters (build-then-raster-then-discard). The command cells + these
+# scratch buffers are per-build bump-heap allocations with no free — HARMLESS for a one-shot build and for the
+# EVENT-DRIVEN present loop (repaints only on resize/key/close, not continuously), so the leak is bounded per
+# interaction. thoth's alloc has no mark/rewind, so alloc_reset() (a FULL-heap rewind) is NOT a per-frame
+# arena; a reused command-buffer pool is the future optimization if a continuous animation loop is added.
+
+var GSTATUS_PAD = 10;   # left inset + strip vertical padding
+var GSTATUS_GAP = 14;   # px between segments
+var GSTATUS_DOT = 8;    # health-dot square size
+
+# theme-aware strip background (the mockup's --bg2). _ui_rgb handles the FG theme; the bg is strip chrome.
+fn _gstatus_bg() { if (ui_theme() == THEME_LIGHT) { return 0xefe8d9; } return 0x1b1812; }
+
+# draw a stable/literal cstr at the pen; advance the pen by its RENDERED width (CODEPOINTS, via gr_text_cols —
+# matching gr_fb_text). strlen() BYTES would over-advance on a non-ASCII git branch / persona name and drift
+# every following field right. Null-safe: a null field draws + advances nothing (shouldn't happen for a
+# present field, but SF_PERSONA/SF_GIT are raw producer strings).
+fn _gstatus_txt(cmds, pen, ty, color, s) {
+    if (s == 0) { return pen; }
+    gd_push_text(cmds, pen, ty, color, s, 0);
+    return pen + gr_text_cols(s, 0) * GR_GLYPH_W;
+}
+
+# format an int into a fresh bump-heap buffer (persists until raster) and draw it; return the advanced pen.
+fn _gstatus_int(cmds, pen, ty, color, n) {
+    var b = alloc(24);
+    var len = fmt_int_buf(n, b);
+    store8(b + len, 0);
+    gd_push_text(cmds, pen, ty, color, b, 0);
+    return pen + len * GR_GLYPH_W;
+}
+
+# gstatus_build: emit the status strip into `cmds` at (x,y) size (w,h). Reads the shared view-model. Mirrors
+# tui_draw_status's fields + omit gates, so the GUI strip and the TUI strip show the SAME facts.
+fn gstatus_build(cmds, x, y, w, h) {
+    status_snapshot();
+    gd_push_rect(cmds, x, y, w, h, _gstatus_bg());       # strip background
+    gd_push_clip(cmds, x, y, w, h);                       # keep field text inside the strip (no bleed past w)
+    var ty = y + (h - GR_GLYPH_H) / 2;                    # vertically center the 16px glyph row
+    var pen = x + GSTATUS_PAD;
+
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), "thoth") + GSTATUS_GAP;
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), thoth_version()) + GSTATUS_GAP;
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT_DIM), status_sval(SF_PERSONA)) + GSTATUS_GAP;
+
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "model") + 8;
+    var m = status_sval(SF_MODEL);
+    if (m == 0) { m = "default"; }
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), m) + 8;
+
+    # health dot: a filled square, green up / red down / faint unknown (the ●-fact as a rect).
+    if (status_present(SF_HEALTH) == 1) {
+        var hc = _ui_rgb(ROLE_FAINT);
+        if (status_state(SF_HEALTH) == HOOSH_HEALTH_UP) { hc = _ui_rgb(ROLE_GREEN); }
+        elif (status_state(SF_HEALTH) == HOOSH_HEALTH_DOWN) { hc = _ui_rgb(ROLE_RED); }
+        gd_push_rect(cmds, pen, y + (h - GSTATUS_DOT) / 2, GSTATUS_DOT, GSTATUS_DOT, hc);
+        pen = pen + GSTATUS_DOT;
+    }
+    pen = pen + GSTATUS_GAP;
+
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "turns") + 8;
+    pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_TURNS)) + GSTATUS_GAP;
+
+    # ctx meter (omit-until-history): "ctx <used>K/<budget>K", red when evicting.
+    if (status_present(SF_CTX) == 1) {
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "ctx") + 8;
+        var cc = _ui_rgb(ROLE_FG);
+        if (status_state(SF_CTX) > 0) { cc = _ui_rgb(ROLE_RED); }
+        pen = _gstatus_int(cmds, pen, ty, cc, status_ival(SF_CTX));
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "K/");
+        pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FAINT), status_ival2(SF_CTX));
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "K") + GSTATUS_GAP;
+    }
+
+    # tokens (omit-until-seen)
+    if (status_present(SF_TOKENS) == 1) {
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "tok") + 8;
+        pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_TOKENS)) + GSTATUS_GAP;
+    }
+    # cost (omit-until-priced)
+    if (status_present(SF_COST) == 1) {
+        var cb = alloc(24);
+        cost_fmt(cb, status_ival(SF_COST));
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_GREEN), cb) + GSTATUS_GAP;
+    }
+
+    # git branch (+dirty), omit off a repo
+    if (status_present(SF_GIT) == 1) {
+        var br = status_sval(SF_GIT);
+        if (status_state(SF_GIT) == SF_GIT_DETACHED) { br = "(detached)"; }
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), br);
+        if (status_ival(SF_GIT) > 0) {
+            pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), " +");
+            pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_GIT));
+        }
+        pen = pen + GSTATUS_GAP;
+    }
+
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "surface") + 8;
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_GREEN), status_sval(SF_SURFACE)) + GSTATUS_GAP;
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "theme") + 8;
+    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), status_sval(SF_THEME)) + GSTATUS_GAP;
+    gd_push_unclip(cmds);                                 # restore the full-frame clip
+    return pen;
+}

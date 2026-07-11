@@ -37,6 +37,12 @@ include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
 include "src/surface.cyr"  # status view-model (0.28.0, Stage B); after its producers (session/hoosh/git/ui), before commands+tui
+# T3 GUI draw pipeline (0.29.0, Phase 1) — headless-testable; NOT in main.cyr yet (wired with the present
+# shell in a later cut, after the code-buffer lift). kashi (font) before graster; graster before gstatus.
+include "src/vendor/kashi.cyr"
+include "src/gui/gdraw.cyr"
+include "src/gui/graster.cyr"
+include "src/gui/gstatus.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
 include "src/oneshot.cyr"
@@ -3634,6 +3640,95 @@ fn test_role() {
     return 0;
 }
 
+# _gui_ppm_dump: write an XRGB8888 buffer to a P6 PPM for visual inspection (test artifact).
+fn _gui_ppm_dump(buf, w, h, path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fd < 0) { return 0; }
+    var hdr = alloc(64);
+    var o = 0;
+    store8(hdr + o, 80); o = o + 1; store8(hdr + o, 54); o = o + 1; store8(hdr + o, 10); o = o + 1;   # "P6\n"
+    o = o + fmt_int_buf(w, hdr + o);
+    store8(hdr + o, 32); o = o + 1;
+    o = o + fmt_int_buf(h, hdr + o);
+    store8(hdr + o, 10); o = o + 1;
+    store8(hdr + o, 50); o = o + 1; store8(hdr + o, 53); o = o + 1; store8(hdr + o, 53); o = o + 1; store8(hdr + o, 10); o = o + 1;   # "255\n"
+    file_write(fd, hdr, o);
+    var n = w * h;
+    var rgb = alloc(n * 3);
+    var i = 0;
+    while (i < n) {
+        var px = load32(buf + i * 4);
+        store8(rgb + i * 3, (px / 65536) & 255);
+        store8(rgb + i * 3 + 1, (px / 256) & 255);
+        store8(rgb + i * 3 + 2, px & 255);
+        i = i + 1;
+    }
+    file_write(fd, rgb, n * 3);
+    file_close(fd);
+    return 1;
+}
+
+fn test_gui() {
+    test_group("GUI draw pipeline (gdraw/graster/gstatus, 0.29.0)");
+    # --- draw-command builders ---
+    var cmds = gd_list_new();
+    gd_push_rect(cmds, 1, 2, 3, 4, 0x112233);
+    assert_eq(vec_len(cmds), 1, "one command pushed");
+    var c = vec_get(cmds, 0);
+    assert_eq(gd_kind(c), GD_RECT, "kind RECT");
+    assert_eq(gd_x(c), 1, "x"); assert_eq(gd_y(c), 2, "y");
+    assert_eq(gd_w(c), 3, "w"); assert_eq(gd_h(c), 4, "h");
+    assert_eq(gd_color(c), 0x112233, "color stored");
+    # --- rasterize fill_rect into a 20x10 fb ---
+    var W = 20; var H = 10;
+    var fb = gr_fb_new(W, H);
+    gr_fb_clear(fb, W, H, 0x000000);
+    gr_clip_reset();
+    gr_fb_fill_rect(fb, W, H, 2, 3, 4, 4, 0xFF0000);
+    assert_eq(load32(fb + (3 * W + 2) * 4), 0xFF0000, "fill_rect top-left pixel red");
+    assert_eq(load32(fb + (6 * W + 5) * 4), 0xFF0000, "fill_rect bottom-right pixel red");
+    assert_eq(load32(fb + (3 * W + 6) * 4), 0x000000, "just past the rect stays bg");
+    assert_eq(load32(fb + 0), 0x000000, "untouched corner stays bg");
+    # --- border: a 1px outline leaves the interior bg ---
+    gr_fb_clear(fb, W, H, 0x000000);
+    gr_fb_border(fb, W, H, 1, 1, 6, 6, 0x00FF00);
+    assert_eq(load32(fb + (1 * W + 1) * 4), 0x00FF00, "border top-left corner set");
+    assert_eq(load32(fb + (3 * W + 3) * 4), 0x000000, "border interior stays bg");
+    # --- glyph: rasterize 'A' (65) and confirm it lit AND cleared some pixels ---
+    var W2 = 8; var H2 = 16;
+    var gb = gr_fb_new(W2, H2);
+    gr_fb_clear(gb, W2, H2, 0x000000);
+    gr_ensure_font();
+    gr_fb_glyph(gb, W2, H2, 0, 0, 65, 0xFFFFFF);
+    var lit = 0; var clear = 0; var k = 0;
+    while (k < W2 * H2) {
+        if (load32(gb + k * 4) == 0xFFFFFF) { lit = lit + 1; } else { clear = clear + 1; }
+        k = k + 1;
+    }
+    assert(lit > 0, "glyph 'A' set at least one pixel");
+    assert(clear > 0, "glyph 'A' left some pixels clear (not a solid block)");
+    # --- codepoint width (the layout pen must match the raster pen for non-ASCII) ---
+    assert_eq(gr_text_cols("main", 0), 4, "gr_text_cols ASCII == byte count");
+    assert_eq(gr_text_cols("caf\xc3\xa9", 0), 4, "gr_text_cols 'cafe-acute' = 4 codepoints (5 bytes)");
+    assert_eq(strlen("caf\xc3\xa9"), 5, "the UTF-8 string is 5 bytes (the drift source strlen would use)");
+    assert_eq(gr_text_cols("main", 2), 2, "gr_text_cols honors max_cp");
+    assert_eq(gr_text_cols(0, 0), 0, "gr_text_cols null-safe");
+    # --- the status strip: build from the view-model + rasterize + PPM dump ---
+    session_set_model("claude-opus-4");
+    var SW = 960; var SH = 34;
+    var sb = gr_fb_new(SW, SH);
+    var scmds = gd_list_new();
+    var endx = gstatus_build(scmds, 0, 0, SW, SH);
+    assert(endx > 0, "status strip advanced the pen");
+    assert(vec_len(scmds) > 5, "status strip emitted several commands");
+    gr_fb_clear(sb, SW, SH, 0x000000);
+    gr_raster(scmds, sb, SW, SH);
+    assert(load32(sb + (5 * SW + 5) * 4) != 0x000000, "status strip background painted over the clear");
+    _gui_ppm_dump(sb, SW, SH, "/tmp/thoth_gui_status.ppm");
+    session_set_model(0);
+    return 0;
+}
+
 fn test_surface() {
     test_group("status view-model (surface.cyr, 0.28.0)");
     # snapshot mirrors the producers + single-sources the omit gates (drift-safety)
@@ -3757,6 +3852,7 @@ fn main() {
     test_reload();
     test_model_switch();
     test_surface();
+    test_gui();
     return assert_summary();
 }
 

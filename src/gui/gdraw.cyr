@@ -1,0 +1,53 @@
+# src/gui/gdraw.cyr — the T3 GUI draw-command IR (Phase 1).
+#
+# A tier-agnostic list of semantic-free 2-D primitives (RECT / TEXT / BORDER / CLIP) that a VIEW-BUILDER
+# emits from thoth's state and the CPU rasterizer (src/gui/graster.cyr) executes into an XRGB8888 pixel
+# buffer — the same layout a Wayland present shell maps via wl_shm. PURE + headless-testable: no display, no
+# window; every command and every rastered pixel is assertable.
+#
+# This is the LOWERING TARGET for the Stage-B view surface: a renderer for the desktop tier turns the
+# facts-not-bytes view-models (0.28.0 status_snapshot, later tool-card/diff) into these commands, exactly as
+# the line/rich renderers turn them into text. Modeled on jalwa's `JlwDrawCmd` + puka's fb rasterizer (the
+# proven AGNOS-family pattern); thoth OWNS its copy (port the floor — the GUI substrate is FLOOR, not spine).
+#
+# A command is a packed 8-slot i64 cell (the feed.cyr / surface.cyr idiom — thoth avoids structs for
+# consistency): [kind, x, y, w, h, color, text, aux]. `color` is a packed 0x00RRGGBB word — IDENTICAL to
+# ui.cyr's `_ui_rgb(role)`, so the GUI shares the TUI's amber/light palette + `/theme` for free. A "cmd list"
+# is a stdlib `vec` of these cell pointers.
+
+var GD_RECT      = 0;   # filled rectangle (color)
+var GD_TEXT      = 1;   # UTF-8 cstr at (x,y), color; aux = max codepoints (0 = uncapped)
+var GD_BORDER    = 2;   # 1px rectangle outline (color)
+var GD_CLIP_PUSH = 3;   # push a clip rect (x,y,w,h) for scroll viewports / panels
+var GD_CLIP_POP  = 4;   # restore the full-frame clip
+
+# cell byte offsets (8 i64 slots)
+var GDC_KIND = 0; var GDC_X = 8; var GDC_Y = 16; var GDC_W = 24;
+var GDC_H = 32; var GDC_COLOR = 40; var GDC_TEXT = 48; var GDC_AUX = 56;
+var GD_CELL = 64;
+
+# --- accessors (the raster executor reads these) ---
+fn gd_kind(c)  { return load64(c + GDC_KIND); }
+fn gd_x(c)     { return load64(c + GDC_X); }
+fn gd_y(c)     { return load64(c + GDC_Y); }
+fn gd_w(c)     { return load64(c + GDC_W); }
+fn gd_h(c)     { return load64(c + GDC_H); }
+fn gd_color(c) { return load64(c + GDC_COLOR); }
+fn gd_text(c)  { return load64(c + GDC_TEXT); }
+fn gd_aux(c)   { return load64(c + GDC_AUX); }
+
+fn _gd_new(kind, x, y, w, h, color, text, aux) {
+    var c = alloc(GD_CELL);
+    store64(c + GDC_KIND, kind); store64(c + GDC_X, x); store64(c + GDC_Y, y);
+    store64(c + GDC_W, w); store64(c + GDC_H, h); store64(c + GDC_COLOR, color);
+    store64(c + GDC_TEXT, text); store64(c + GDC_AUX, aux);
+    return c;
+}
+
+# --- command-list builders (push onto a stdlib vec) ---
+fn gd_list_new() { return vec_new(); }
+fn gd_push_rect(cmds, x, y, w, h, color)   { vec_push(cmds, _gd_new(GD_RECT, x, y, w, h, color, 0, 0)); return 0; }
+fn gd_push_border(cmds, x, y, w, h, color) { vec_push(cmds, _gd_new(GD_BORDER, x, y, w, h, color, 0, 0)); return 0; }
+fn gd_push_text(cmds, x, y, color, text, max_cp) { vec_push(cmds, _gd_new(GD_TEXT, x, y, 0, 0, color, text, max_cp)); return 0; }
+fn gd_push_clip(cmds, x, y, w, h) { vec_push(cmds, _gd_new(GD_CLIP_PUSH, x, y, w, h, 0, 0, 0)); return 0; }
+fn gd_push_unclip(cmds) { vec_push(cmds, _gd_new(GD_CLIP_POP, 0, 0, 0, 0, 0, 0, 0)); return 0; }

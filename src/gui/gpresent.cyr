@@ -1,0 +1,102 @@
+# src/gui/gpresent.cyr — the T3 GUI present loop (0.30.0, Phase 2).
+#
+# Drives gwindow.cyr's sovereign Wayland seam: open a window, build+raster a frame (status strip + body) into
+# the wl_shm buffer, present, and repaint on events (resize / key / close). Degrades HONESTLY when there is no
+# compositor (the common headless case) — a stderr note + a nonzero exit, never a hang or a fake window.
+#
+# UNVERIFIABLE headless: the present/poll loop needs a live compositor (aethersafha on AGNOS, or Hyprland /
+# wlroots on Linux). The frame ASSEMBLY (gframe_build) is pure draw-commands over the tested pipeline
+# (gstatus + graster). main-only (references gwl_win_*, which is main-only).
+#
+# Per-repaint note: gframe_build allocs the command list on the bump heap each repaint. Repaints are
+# EVENT-DRIVEN (poll blocks until the compositor sends something — resize/key/close), NOT a continuous
+# animation loop, so the per-interaction leak is bounded (matches jalwa). thoth's alloc has no mark/rewind, so
+# alloc_reset() (a FULL-heap rewind) is NOT usable per frame — a reused command-buffer pool is the future
+# optimization if a continuous loop is ever added.
+
+var GPRESENT_STRIP_H = 34;
+
+fn _gpresent_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
+
+# gframe_build: assemble the whole window frame's draw commands for a (w,h) surface. PURE — returns a cmd list
+# over the tested draw pipeline. Phase 2: the status strip on top (the shared view-model), a rule, and a body
+# greeting. Later cuts add the feed / composer via more view-builders.
+fn gframe_build(w, h) {
+    var cmds = gd_list_new();
+    gd_push_rect(cmds, 0, 0, w, h, _gpresent_bg());                          # body background
+    gstatus_build(cmds, 0, 0, w, GPRESENT_STRIP_H);                          # the status strip (view-model)
+    gd_push_rect(cmds, 0, GPRESENT_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));      # a faint rule under the strip
+    gd_push_text(cmds, 14, GPRESENT_STRIP_H + 26, _ui_rgb(ROLE_MUTED),
+                 "thoth - sovereign agentic coding TUI  (GUI preview, T3 Phase 2)", 0);
+    gd_push_text(cmds, 14, GPRESENT_STRIP_H + 50, _ui_rgb(ROLE_FAINT), "press q or Esc to close", 0);
+    return cmds;
+}
+
+# _gpresent_poll_fd: block until the Wayland fd is readable (or timeout_ms). poll(2) = syscall 7. pfd is an
+# 8-byte struct [fd:i32, events:u16, revents:u16].
+fn _gpresent_poll_fd(pfd, fd, timeout_ms) {
+    store32(pfd, fd);
+    store16(pfd + 4, 1);          # events = POLLIN
+    store16(pfd + 6, 0);          # revents
+    return syscall(7, pfd, 1, timeout_ms);
+}
+
+# render one frame into the present buffer + commit.
+fn _gpresent_frame(win) {
+    var buf = gwl_win_present_begin(win);
+    if (buf == 0) { return 0; }
+    var sz[16];
+    gwl_win_size_px(win, &sz);
+    var w = load64(&sz);
+    var h = load64(&sz + 8);
+    gr_fb_clear(buf, w, h, _gpresent_bg());
+    var cmds = gframe_build(w, h);
+    gr_raster(cmds, buf, w, h);
+    gwl_win_present_commit(win, 0, 0, w, h);
+    return 0;
+}
+
+# drain queued keys; return 1 if a quit key (q / Esc) was pressed. evdev: 1 = Esc, 16 = 'q'.
+fn _gpresent_drain_keys(win) {
+    var rec[24];
+    var quit = 0;
+    while (gwl_win_next_key(win, &rec) == 1) {
+        var value = load64(&rec + 8);
+        if ((value == 1) || (value == 2)) {              # press / autorepeat
+            var code = load64(&rec);
+            if ((code == 1) || (code == 16)) { quit = 1; }
+        }
+    }
+    return quit;
+}
+
+# gui_run: open a window and run the event loop until close. 0 on clean exit, -1 if no compositor.
+fn gui_run() {
+    if (gwl_win_open("thoth", 960, 600) == 0) {
+        emit_err("thoth gui: no Wayland compositor available.\n");
+        emit_err("  set WAYLAND_DISPLAY and run under a live display (Hyprland/wlroots, or aethersafha on AGNOS).\n");
+        return 0 - 1;
+    }
+    var win = 1;
+    var pfd[8];
+    _gpresent_frame(win);                                # first paint
+    var running = 1;
+    while (running == 1) {
+        if (_gpresent_poll_fd(&pfd, gwl_win_fd(win), 0 - 1) < 0) { running = 0; }
+        else {
+            var ev = gwl_win_poll_events(win);
+            if ((ev & GWL_WIN_EV_CLOSE) != 0) { running = 0; }
+            else {
+                var dirty = 0;
+                if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); dirty = 1; }
+                if ((ev & GWL_WIN_EV_KEY) != 0) {
+                    if (_gpresent_drain_keys(win) == 1) { running = 0; }
+                    else { dirty = 1; }
+                }
+                if ((running == 1) && (dirty == 1)) { _gpresent_frame(win); }
+            }
+        }
+    }
+    gwl_win_close(win);
+    return 0;
+}

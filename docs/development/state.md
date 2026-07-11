@@ -7,6 +7,65 @@
 
 ## Version
 
+**0.30.0** — **T3 GUI, Phase 2: a runnable `thoth gui` Wayland window** + the cyrius **6.4.49** refresh,
+2026-07-11. The desktop tier becomes REAL: the GUI is now in the SHIPPING binary with a sovereign Wayland
+present shell + a `thoth gui` subcommand. **Toolchain**: cyrius **6.4.46 → 6.4.49** (latest; `cyrius lib sync`,
+71 files; the pin now matches the wrapper — drift warning gone). The newer toolchain's larger code-buffer
+headroom (it starts at 8 MB and grows to 64 MB — the earlier "91%" was a soft first-line warning, never a wall)
+is what lets the GUI draw pipeline (`gdraw`/`graster`/`gstatus` + vendored kashi) move from the test binary
+into **`main.cyr`**. NEW **`src/gui/gwindow.cyr`** — a self-contained Wayland client (wl_registry/compositor/
+shm + xdg-shell + memfd/mmap XRGB8888 wl_shm + evdev keyboard, raw wire, no libwayland), PORTED VERBATIM from
+jalwa's `wayland.cyr` (a puka fork) with a `jlw_→gwl_` / `JLW_→GWL_` rename + app-id "thoth"; thoth owns its
+copy (port the FLOOR — the window substrate, destined to extract to aethersafha). Seam: `gwl_win_open`/
+`_present_begin`/`_present_commit`/`_poll_events`/`_next_key`/`_resize_apply`/`_close`. NEW
+**`src/gui/gpresent.cyr`** — `gui_run()` (the event loop: poll the wl fd → `gwl_win_poll_events` → resize/key/
+close → repaint) + `gframe_build(w,h)` (the window frame = the 0.28.0 status strip + a rule + a body greeting,
+over the TESTED draw pipeline) + `_gpresent_frame`/`_drain_keys`/`_poll_fd`. **`thoth gui`** subcommand
+(`ONESHOT_GUI`, `src/oneshot.cyr` requires `gui` as the sole arg; `src/main.cyr` routes to `gui_run`). **Degrades
+HONESTLY** with no compositor: a stderr note ("no Wayland compositor available — set WAYLAND_DISPLAY …") + a
+nonzero exit, never a hang or fake window. **Verified**: main builds (15.86 MB, under the 16 MiB output cap;
+`thoth gui` prints the honest degrade + exits 255 in this headless sandbox; `--version`/`/seams`/piped floor
+unchanged) + 1281 assertions (the headless draw pipeline stays unit-tested; the present shell is main-only —
+the test binary would exceed the 16 MiB output cap, and the shell is compositor-gated / smoke-only anyway).
+**UNVERIFIABLE headless** — the actual window needs a live compositor (Hyprland/wlroots, or aethersafha on
+AGNOS); the Wayland client is a byte-faithful rename of jalwa's proven one, so it's exercised on the user's
+machine. **Per-frame**: repaints are EVENT-DRIVEN so the bump-heap command leak is bounded (thoth's `alloc` has
+no mark/rewind → `alloc_reset` is not a per-frame arena; a reused command pool is the future opt). **Identifier
+buffer** now ~86% (the vendored client adds 357 `gwl_wl_*` symbols) — a soft warning, headroom remains.
+**REVISES ADR-0009** (T3 = thoth-as-its-own-sovereign-Wayland-app, NOT thoth-in-puka — see the ADR addendum).
+Pin **6.4.49**. **NEXT**: verify `thoth gui` on a real compositor; then more view-builders (feed / tool-card /
+composer from `Thoth.dc.html`) + input→action wiring (evdev keys already flow through `gwl_win_next_key`).
+
+**0.29.0** — **T3 GUI, Phase 1: the headless draw pipeline**, 2026-07-11. Starts the DESKTOP tier — the
+payoff the Stage-B view surface was setting up — following jalwa's proven, phased, headless-testable pattern
+(draw-IR → CPU raster → view-builder; the Wayland present shell is a later cut). Three NEW pure modules under
+**`src/gui/`**: **`gdraw.cyr`** (the draw-command IR — RECT/TEXT/BORDER/CLIP as packed 8-slot cells
+`[kind,x,y,w,h,color,text,aux]` on a `vec`; `gd_push_*` builders + `gd_*` accessors), **`graster.cyr`** (a CPU
+rasterizer executing the command list into an XRGB8888 `wl_shm`-layout buffer — `gr_fb_fill_rect`/`_border`/
+`_glyph`/`_text` + a one-level clip + `gr_raster`; UTF-8→CP437-folded text over the **kashi** VGA 8×16 font;
+ported from jalwa's raster + puka's fb, thoth owns its copy — port the floor), and **`gstatus.cyr`**
+(`gstatus_build` — the status STRIP view-builder that lowers the 0.28.0 `status_snapshot()` FACTS into
+draw-commands, mirroring `tui_draw_status`'s fields + omit gates). **The status view-model now has THREE
+renderers** — line rows (`/state`), the TUI strip, and the GUI strip — over ONE facts model, no new producer.
+Colors are `ui.cyr`'s `_ui_rgb(role)` verbatim (already packed XRGB), so the GUI shares the TUI's amber/light
+palette + `/theme` for FREE; the health dot the TUI draws as `●` the GUI draws as a filled rect
+(facts→richer-mark). Vendored **kashi 1.0.2** (`src/vendor/kashi.cyr`, freestanding, zero-stdlib). **Verified**:
+1281 assertions (+23 `test_gui`: draw builders, `fill_rect`/`border`/glyph pixel checks, `gr_text_cols`
+codepoint width, a full strip render) + a **golden PPM** rastered headless (rendered "thoth 0.28.0 Thoth model
+claude-opus-4 [green dot] turns 0 main +14 surface T0 plain theme dark" in the amber palette — validated
+visually). **Process**: designed via a workflow (survey + 3 competing designs → the facts-not-bytes view-model
+approach), reviewed via a 3-lens find→verify workflow — 2 CONFIRMED (same real bug: `_gstatus_txt` advanced
+the layout pen by `strlen` BYTES while the rasterizer advances by CODEPOINT, drifting a non-ASCII git
+branch / persona name; FIXED with `gr_text_cols`), plus a null-guard, a strip clip, and a documented frame-arena
+requirement; no reachable OOB/crash. **HONEST SCOPE**: the GUI modules compile + test in the TEST binary ONLY,
+NOT in `main.cyr` — no `gui` subcommand or present shell yet, so the SHIPPING binary is unchanged. They wire
+into `main` at the present-shell cut, after the code-buffer lift (main is ~91% of the 3.14MB code cap; the user
+is handling that separately). A repaint loop MUST bracket each frame with `alloc_reset()` (frame arena). Pin
+**6.4.46** (wrapper auto-drifted to 6.4.49; benign). **NEXT**: the present shell (a puka-forked sovereign
+Wayland client → a runnable `thoth gui`, needs the code-buffer lift + a compositor to verify), and/or more
+view-builders (feed / tool-card, mapping `Thoth.dc.html`). Revises ADR-0009 (T3 = thoth-as-Wayland, not
+thoth-in-puka) — an ADR update is due at the present-shell cut.
+
 **0.28.0** — **the status view-model (Stage B opens)**, 2026-07-10. Realizes ADR-0009's declared-but-unbuilt
 **semantic surface** for the status fields. NEW **`src/surface.cyr`**: `status_snapshot()` reads the ~10
 status producers ONCE into a packed i64 cell array (SF_* fields × SFC_* cells) and NORMALIZES them into FACTS

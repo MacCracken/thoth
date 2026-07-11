@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.28.0):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.0):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -19,8 +19,14 @@
 > blockers (`/reprobe`, `/save`, `[history].file`) work at BOTH tiers. **0.28.0** opened Stage B — the
 > tier-agnostic **view surface** (`src/surface.cyr`): a facts-not-bytes status view-model that the TUI status
 > bar + `/state` now both render from (ADR-0009's semantic layer, realized for the status fields; GUI-ready by
-> construction). Still ahead on that line: adopt the surface for the feed/tool-card/diff, then a **T3 Wayland
-> GUI** — thoth as its own sovereign Cyrius Wayland app (jalwa-style
+> construction). **0.29.0** started the **T3 GUI** (Phase 1, headless): a draw-command IR + kashi CPU
+> rasterizer + a status-strip view-builder over the 0.28.0 view-model (the view-model now drives THREE
+> renderers — line / TUI / GUI). **0.30.0** made it RUNNABLE: a sovereign Wayland present shell
+> (`src/gui/gwindow.cyr`, vendored+renamed from jalwa's puka-forked client) + a present loop
+> (`src/gui/gpresent.cyr`) + a **`thoth gui`** subcommand, now in the SHIPPING binary (cyrius 6.4.49 gave the
+> headroom). Degrades honestly with no compositor. Still ahead: verify `thoth gui` on a live compositor;
+> more view-builders (feed / tool-card / composer from `Thoth.dc.html`) + input→action wiring. thoth as its
+> own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
 > "thoth-in-puka" stance). Per-version detail is in
 > [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md). The **four v1.0 gates below are

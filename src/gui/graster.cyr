@@ -1,0 +1,205 @@
+# src/gui/graster.cyr — CPU rasterizer for the GUI draw-command IR (T3, Phase 1).
+#
+# Executes a gd_* command list (src/gui/gdraw.cyr) into a linear XRGB8888 pixel buffer (4 bytes/px,
+# little-endian) — the wl_shm WL_SHM_FORMAT_XRGB8888 layout, so the same buffer feeds a Wayland present
+# shell unchanged. PURE CPU, no display: every pixel is headless-assertable via load32. Colors are already
+# packed 0x00RRGGBB words (from ui.cyr's _ui_rgb(role)); store32 writes them LE as [BB,GG,RR,00] = XRGB8888.
+#
+# Text uses kashi's freestanding VGA 8x16 font (kashi_glyph_row, bit7 = leftmost column), CP437-folded.
+# Ported from jalwa's raster + puka's fb (the AGNOS-family pattern); thoth owns its copy. `y` in a TEXT
+# command is the glyph-box TOP (no baseline adjustment — the view-builder centers within its strip).
+
+var GR_GLYPH_W = 8;
+var GR_GLYPH_H = 16;
+
+# ---- framebuffer ----
+# Allocate a w*h XRGB8888 buffer (4 bytes/px). The bump allocator does not zero — clear before rastering.
+fn gr_fb_new(w, h) { return alloc(w * h * 4); }
+
+fn gr_fb_clear(buf, w, h, xrgb) {
+    var n = w * h;
+    var p = buf;
+    var i = 0;
+    while (i < n) { store32(p, xrgb); p = p + 4; i = i + 1; }
+    return 0;
+}
+
+# ---- clip rect (one level: a panel/viewport pushes a rect, POP restores full) ----
+var GR_CLIP_X0 = 0;
+var GR_CLIP_Y0 = 0;
+var GR_CLIP_X1 = 1000000;
+var GR_CLIP_Y1 = 1000000;
+fn gr_clip_reset() { GR_CLIP_X0 = 0; GR_CLIP_Y0 = 0; GR_CLIP_X1 = 1000000; GR_CLIP_Y1 = 1000000; return 0; }
+fn gr_clip_set(x, y, w, h) { GR_CLIP_X0 = x; GR_CLIP_Y0 = y; GR_CLIP_X1 = x + w; GR_CLIP_Y1 = y + h; return 0; }
+
+# plot one pixel, clamped to the fb bounds AND the active clip rect.
+fn gr_fb_plot(buf, fbw, fbh, x, y, xrgb) {
+    if (x < 0) { return 0; }
+    if (y < 0) { return 0; }
+    if (x >= fbw) { return 0; }
+    if (y >= fbh) { return 0; }
+    if (x < GR_CLIP_X0) { return 0; }
+    if (y < GR_CLIP_Y0) { return 0; }
+    if (x >= GR_CLIP_X1) { return 0; }
+    if (y >= GR_CLIP_Y1) { return 0; }
+    store32(buf + (y * fbw + x) * 4, xrgb);
+    return 0;
+}
+
+# filled rectangle, clamped to fb bounds AND the clip rect.
+fn gr_fb_fill_rect(buf, fbw, fbh, x, y, w, h, xrgb) {
+    if ((w <= 0) || (h <= 0)) { return 0; }
+    var x0 = x; var y0 = y; var x1 = x + w; var y1 = y + h;
+    if (x0 < 0) { x0 = 0; }
+    if (y0 < 0) { y0 = 0; }
+    if (x1 > fbw) { x1 = fbw; }
+    if (y1 > fbh) { y1 = fbh; }
+    if (x0 < GR_CLIP_X0) { x0 = GR_CLIP_X0; }
+    if (y0 < GR_CLIP_Y0) { y0 = GR_CLIP_Y0; }
+    if (x1 > GR_CLIP_X1) { x1 = GR_CLIP_X1; }
+    if (y1 > GR_CLIP_Y1) { y1 = GR_CLIP_Y1; }
+    var yy = y0;
+    while (yy < y1) {
+        var p = buf + (yy * fbw + x0) * 4;
+        var xx = x0;
+        while (xx < x1) { store32(p, xrgb); p = p + 4; xx = xx + 1; }
+        yy = yy + 1;
+    }
+    return 0;
+}
+
+# 1px rectangle outline (top/bottom/left/right).
+fn gr_fb_border(buf, fbw, fbh, x, y, w, h, xrgb) {
+    if ((w <= 0) || (h <= 0)) { return 0; }
+    gr_fb_fill_rect(buf, fbw, fbh, x, y, w, 1, xrgb);              # top
+    gr_fb_fill_rect(buf, fbw, fbh, x, y + h - 1, w, 1, xrgb);      # bottom
+    gr_fb_fill_rect(buf, fbw, fbh, x, y, 1, h, xrgb);             # left
+    gr_fb_fill_rect(buf, fbw, fbh, x + w - 1, y, 1, h, xrgb);      # right
+    return 0;
+}
+
+# ---- text (kashi VGA 8x16, CP437) ----
+# kashi glyph tables fill lazily & idempotently; any raster entry point is safe cold.
+fn gr_ensure_font() { if (kashi_font_is_ready() == 0) { kashi_font_init(); } return 0; }
+
+# blit one CP437 glyph with its top-left at (x,y). bit7 of each row byte = leftmost column (kashi contract).
+fn gr_fb_glyph(buf, fbw, fbh, x, y, ch, xrgb) {
+    var row = 0;
+    while (row < GR_GLYPH_H) {
+        var bits = kashi_glyph_row(KASHI_FONT_VGA_8X16, ch, row);
+        if (bits != 0) {
+            var col = 0;
+            while (col < GR_GLYPH_W) {
+                if ((bits & (128 >> col)) != 0) { gr_fb_plot(buf, fbw, fbh, x + col, y + row, xrgb); }
+                col = col + 1;
+            }
+        }
+        row = row + 1;
+    }
+    return 0;
+}
+
+# decode one UTF-8 codepoint at cstr+i -> (cp*8 + nbytes), nbytes 1..4. Malformed -> single raw byte, so
+# decoding never runs past the NUL. (Ported verbatim from jalwa; validated continuation bytes.)
+fn gr__utf8_at(cstr, i) {
+    var b0 = load8(cstr + i);
+    if (b0 < 128) { return b0 * 8 + 1; }
+    if ((b0 & 224) == 192) {
+        var n1 = load8(cstr + i + 1);
+        if ((n1 & 192) != 128) { return b0 * 8 + 1; }
+        return ((b0 & 31) * 64 + (n1 & 63)) * 8 + 2;
+    }
+    if ((b0 & 240) == 224) {
+        var m1 = load8(cstr + i + 1);
+        if ((m1 & 192) != 128) { return b0 * 8 + 1; }
+        var m2 = load8(cstr + i + 2);
+        if ((m2 & 192) != 128) { return b0 * 8 + 1; }
+        return ((b0 & 15) * 4096 + (m1 & 63) * 64 + (m2 & 63)) * 8 + 3;
+    }
+    if ((b0 & 248) == 240) {
+        var k1 = load8(cstr + i + 1);
+        if ((k1 & 192) != 128) { return b0 * 8 + 1; }
+        var k2 = load8(cstr + i + 2);
+        if ((k2 & 192) != 128) { return b0 * 8 + 1; }
+        var k3 = load8(cstr + i + 3);
+        if ((k3 & 192) != 128) { return b0 * 8 + 1; }
+        return ((b0 & 7) * 262144 + (k1 & 63) * 4096 + (k2 & 63) * 64 + (k3 & 63)) * 8 + 4;
+    }
+    return b0 * 8 + 1;
+}
+
+# fold a Unicode codepoint to a CP437 glyph index. ASCII 1:1; the punctuation the UI emits maps to its CP437
+# twin; everything else -> a filled box so it reads as "a glyph" and advances one cell.
+fn gr__cp_to_glyph(cp) {
+    if (cp < 128) { return cp; }
+    if ((cp == 0x2013) || (cp == 0x2014)) { return 45; }   # en/em-dash -> '-'
+    if ((cp == 0x2018) || (cp == 0x2019)) { return 39; }   # curly quote -> '\''
+    if ((cp == 0x201C) || (cp == 0x201D)) { return 34; }   # curly dquote -> '"'
+    if (cp == 0x2026) { return 46; }                       # ellipsis -> '.'
+    if ((cp == 0x2022) || (cp == 0x00B7)) { return 250; }  # bullet / middot -> CP437 0xFA
+    if (cp == 0x00A0) { return 32; }                       # nbsp -> space
+    return 254;                                            # unknown -> CP437 0xFE box
+}
+
+# draw a NUL-terminated UTF-8 cstr left-to-right, 8px advance per CODEPOINT. max_cp caps the count (0 =
+# uncapped). Control codepoints (< 32) advance without drawing. Returns the pen x after the last glyph.
+fn gr_fb_text(buf, fbw, fbh, x, y, cstr, xrgb, max_cp) {
+    if (cstr == 0) { return x; }
+    var i = 0;
+    var drawn = 0;
+    var px = x;
+    var stop = 0;
+    while (stop == 0) {
+        if (load8(cstr + i) == 0) { stop = 1; }
+        elif ((max_cp > 0) && (drawn >= max_cp)) { stop = 1; }
+        else {
+            var packed = gr__utf8_at(cstr, i);
+            var cp = packed / 8;
+            i = i + (packed % 8);                       # nbytes
+            var g = gr__cp_to_glyph(cp);
+            if (g >= 32) { gr_fb_glyph(buf, fbw, fbh, px, y, g, xrgb); }
+            px = px + GR_GLYPH_W;
+            drawn = drawn + 1;
+        }
+    }
+    return px;
+}
+
+# gr_text_cols: the RENDERED width of a cstr in glyph CELLS (codepoints), honoring max_cp (0 = uncapped).
+# Mirrors gr_fb_text's stepping EXACTLY (1 cell per decoded codepoint), so a view-builder's LAYOUT pen matches
+# the raster pen for non-ASCII text — advancing by strlen() BYTES would over-count on any multibyte glyph.
+fn gr_text_cols(cstr, max_cp) {
+    if (cstr == 0) { return 0; }
+    var i = 0;
+    var cols = 0;
+    var stop = 0;
+    while (stop == 0) {
+        if (load8(cstr + i) == 0) { stop = 1; }
+        elif ((max_cp > 0) && (cols >= max_cp)) { stop = 1; }
+        else {
+            var packed = gr__utf8_at(cstr, i);
+            i = i + (packed % 8);
+            cols = cols + 1;
+        }
+    }
+    return cols;
+}
+
+# ---- executor: draw-command list -> pixels ----
+fn gr_raster(cmds, buf, fbw, fbh) {
+    gr_ensure_font();
+    gr_clip_reset();
+    var n = vec_len(cmds);
+    var i = 0;
+    while (i < n) {
+        var c = vec_get(cmds, i);
+        var k = gd_kind(c);
+        if (k == GD_RECT)   { gr_fb_fill_rect(buf, fbw, fbh, gd_x(c), gd_y(c), gd_w(c), gd_h(c), gd_color(c)); }
+        elif (k == GD_BORDER) { gr_fb_border(buf, fbw, fbh, gd_x(c), gd_y(c), gd_w(c), gd_h(c), gd_color(c)); }
+        elif (k == GD_TEXT) { gr_fb_text(buf, fbw, fbh, gd_x(c), gd_y(c), gd_text(c), gd_color(c), gd_aux(c)); }
+        elif (k == GD_CLIP_PUSH) { gr_clip_set(gd_x(c), gd_y(c), gd_w(c), gd_h(c)); }
+        elif (k == GD_CLIP_POP) { gr_clip_reset(); }
+        i = i + 1;
+    }
+    return 0;
+}

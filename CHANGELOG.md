@@ -2,6 +2,78 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.0] - 2026-07-11
+
+**T3 GUI — Phase 2: a runnable `thoth gui` Wayland window.** The desktop tier becomes real: the GUI is now in
+the SHIPPING binary, with a sovereign Wayland present shell and a `thoth gui` subcommand. Also refreshes the
+toolchain **cyrius 6.4.46 → 6.4.49** (the latest; +71 stdlib files), which lifts the code-buffer headroom so
+the GUI wires into `main.cyr` cleanly. New: **`src/gui/gwindow.cyr`** — a self-contained Wayland client
+(wl_registry/compositor/shm + xdg-shell + a memfd/mmap XRGB8888 wl_shm buffer + evdev keyboard, over the raw
+wire, no libwayland), ported verbatim from jalwa's `wayland.cyr` (itself a puka fork), renamed to thoth's
+`gwl_*` namespace; thoth owns its copy (port the floor — the window substrate is FLOOR, destined to extract to
+aethersafha). **`src/gui/gpresent.cyr`** — the present loop: open a window → build+raster a frame (the 0.28.0
+status strip + a body, via the tested draw pipeline) → present → repaint on events (resize/key/close). A
+`thoth gui` subcommand (`ONESHOT_GUI`) routes to it; it **degrades honestly** with no compositor (a stderr
+note + nonzero exit, never a hang or fake window). UNVERIFIABLE headless (needs a live compositor —
+Hyprland/wlroots, or aethersafha on AGNOS); verified here via the clean degrade path + a byte-faithful client
+rename + the tested frame pipeline. Revises ADR-0009 (**T3 = thoth-as-its-own-Wayland-app**, not
+thoth-in-puka). 1281 assertions (GUI present shell is main-only, not unit-tested).
+
+### Added
+- **`src/gui/gwindow.cyr`** — sovereign Wayland window seam (`gwl_win_open`/`_present_begin`/`_present_commit`/
+  `_poll_events`/`_next_key`/`_resize_apply`/`_close`), vendored+renamed from jalwa's `wayland.cyr`.
+- **`src/gui/gpresent.cyr`** — `gui_run()` (the event loop) + `gframe_build(w,h)` (the window frame: status
+  strip + rule + body greeting over the draw pipeline) + `_gpresent_frame`/`_drain_keys`/`_poll_fd`.
+- **`thoth gui`** subcommand (`ONESHOT_GUI`, `src/oneshot.cyr` + `src/main.cyr`) — opens the T3 window.
+- The GUI draw pipeline (`gdraw`/`graster`/`gstatus` + vendored kashi) is now in `main.cyr` (the shipping
+  binary), not just the test binary.
+
+### Changed
+- **Toolchain: cyrius 6.4.46 → 6.4.49** (`cyrius lib sync`, +71 stdlib files); the pin now matches the wrapper
+  (drift warning gone). The code-buffer headroom this brings is what lets the GUI live in `main`.
+
+### Notes
+- The Wayland present shell (`gwindow`/`gpresent`) is compiled into `main` only, NOT the test binary (the test
+  binary would exceed the 16 MiB output cap, and the present shell is compositor-gated / smoke-only anyway).
+  The headless draw pipeline stays unit-tested. Repaints are event-driven, so the per-frame command leak is
+  bounded (documented in `gstatus.cyr`); thoth's `alloc` has no mark/rewind for a true per-frame arena.
+
+## [0.29.0] - 2026-07-11
+
+**T3 GUI — Phase 1: the headless draw pipeline.** Starts the desktop tier (the payoff the Stage-B view
+surface was setting up), following jalwa's proven, phased, headless-testable pattern. Three NEW pure modules
+under `src/gui/`: a **draw-command IR** (`gdraw.cyr` — RECT/TEXT/BORDER/CLIP as packed cells on a vec), a
+**CPU rasterizer** (`graster.cyr` — executes the command list into an XRGB8888 wl_shm-layout buffer via the
+kashi VGA 8×16 font; ported from jalwa's raster + puka's fb), and a **status-strip view-builder**
+(`gstatus.cyr`) that lowers the 0.28.0 `status_snapshot()` FACTS into draw-commands. The status view-model now
+has THREE renderers — line rows (`/state`), the TUI strip (`tui_draw_status`), and this GUI strip — over ONE
+facts model, no new producer. Colors come straight from `ui.cyr`'s `_ui_rgb(role)` (already the packed XRGB
+the rasterizer wants), so the GUI shares the TUI's amber/light palette + `/theme` for free; the health dot the
+TUI draws as a `●` glyph the GUI draws as a filled rect (the facts→richer-mark payoff). ENTIRELY headless +
+unit-tested (a golden-pixel test rasters the strip and dumps a PPM); no compositor, no window — the present
+shell (a puka-forked Wayland client) is a later cut. Designed + reviewed with multi-agent workflows (a survey
++ 3 competing designs chose the view-model; a 3-lens review of this pipeline caught + fixed a
+byte-vs-codepoint pen-advance drift on non-ASCII branch/persona names, plus a null-guard, a strip clip, and a
+documented frame-arena requirement). 1281 assertions.
+
+### Added
+- **`src/gui/gdraw.cyr`** — the draw-command IR: `gd_push_rect`/`_border`/`_text`/`_clip`/`_unclip` build a
+  `vec` of packed 8-slot cells `[kind,x,y,w,h,color,text,aux]`; accessors `gd_kind`/`_x`/…/`_aux`.
+- **`src/gui/graster.cyr`** — the CPU rasterizer: `gr_fb_new`/`_clear`/`_fill_rect`/`_border`/`_glyph`/`_text`
+  + a one-level clip + the `gr_raster` executor, into an XRGB8888 buffer. UTF-8→CP437-folded text over kashi;
+  `gr_text_cols` gives the codepoint-accurate rendered width so a view-builder's layout pen matches.
+- **`src/gui/gstatus.cyr`** — `gstatus_build(cmds,x,y,w,h)`: the status strip, mirroring `tui_draw_status`'s
+  fields + omit gates, colored via `_ui_rgb(role)`, with the health dot as a filled rect.
+- **`test_gui`** (23 assertions) — draw builders, `fill_rect`/`border`/glyph pixel checks, codepoint width,
+  and a full status-strip render (+ a `/tmp` PPM dump).
+- Vendored **kashi 1.0.2** (`src/vendor/kashi.cyr` — a freestanding VGA 8×16 font core).
+
+### Notes
+- The GUI modules are compiled + tested in the TEST binary only; they are NOT yet in `main.cyr` (no `gui`
+  subcommand / present shell yet), so the SHIPPING binary is unchanged. They wire into `main` with the
+  present-shell cut, after the code-buffer lift. A repaint loop must bracket each frame with `alloc_reset()`
+  (a frame arena) — documented in `gstatus.cyr`.
+
 ## [0.28.0] - 2026-07-10
 
 **The status view-model (Stage B opens).** Introduces `src/surface.cyr` — a tier-agnostic view-model that
