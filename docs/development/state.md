@@ -7,6 +7,30 @@
 
 ## Version
 
+**0.27.0** — **toolchain refresh + tier-consistency parity fixes**, 2026-07-10. Opens the **simple↔rich
+consistency line** (rich = the rich TUI experience; simple = line-mode back-and-forth; anything that is *not*
+a rich-TUI blocker works at BOTH). **Toolchain**: cyrius **6.4.29 → 6.4.46** (`cyrius lib sync`, 71 stdlib
+files); vendored dists re-synced — bote-core **3.1.1**, darshana **0.9.0**, libro **2.7.10**, sankoch-zlib
+**2.5.1**, sit-read **1.3.4** (avatara 2.8.0 / t-ron 2.1.7 / vyakarana 2.2.3 unchanged; darshana is manually
+vendored — no `sync-darshana.sh` yet). **Three parity fixes**, each closing a rich-only-but-pure-data gap:
+(1) **`/reprobe`** (alias **`/ping`**, `cmd_reprobe`) re-checks hoosh reachability from ANY tier — the
+shared/line-mode equivalent of the TUI's Ctrl-R, wrapping the existing `hoosh_health_probe()` — plus a
+**`health` row in `/state`** for the cached reachability that was previously only the TUI status-bar dot;
+(2) **`/save` in line mode** sources the tier-neutral conversation history (`session_history_*`) as a markdown
+transcript when there is no feed ring (`cmd_save`/`_save_history`), closing the 0.24.1 line-mode gap;
+(3) **`[history].file` persistence in line mode** — the REPL now records each submit into the inhist ring +
+mirrors it to the file when configured (`src/main.cyr` shared init + load announce, `src/repl.cyr`
+record/persist/broke-note; inhist was previously inited only inside `tui_loop`), plus **`/history`** to list
+the ring in both tiers (Up/Down recall stays a rich-only raw-mode affordance). The plain/piped/one-shot
+**FLOOR stays byte-identical** (persistence OFF by default; the new records are silent memory ops).
+**Verified**: 1240 assertions (+10: `/reprobe`+`/ping`+`/history` classify, the `/save` history-path
+round-trip) + LIVE in line mode — `/reprobe` reports honest unreachable, the `/state` health row, `/save`
+writes a history transcript, and a real two-process **cross-session round-trip** where session 2 recalled
+session 1's inputs from `[history].file`. Pin **6.4.46** (the wrapper auto-drifted to 6.4.48; a benign 2-patch
+drift). **NEXT: Stage B** — the tier-agnostic **view surface** (`src/surface.cyr`; ADR-0009's semantic
+intents) so simple/rich render ONE model and the future **T3 GUI** (jalwa-style sovereign Wayland,
+`Thoth.dc.html` as the spec) becomes a fourth renderer rather than a front-end fork.
+
 **0.26.0** — **`.thoth/` home discovery + honest readiness**, 2026-07-09. Config + project memory now live
 under a discoverable `.thoth/` home (like `.git/`): `.thoth/config.cyml` + `.thoth/memory/`, found by walking
 UP from the CWD then `~/.thoth/` (legacy `./thoth.cyml` still read). The rich-TUI greeting no longer claims

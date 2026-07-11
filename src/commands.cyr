@@ -34,6 +34,8 @@ enum Cmd {
     CMD_SAVE = 26;
     CMD_RELOAD = 27;
     CMD_ROLE = 28;
+    CMD_REPROBE = 29;
+    CMD_HISTORY = 30;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -142,6 +144,9 @@ fn classify_input(line) {
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
     if (token_is(line, "/copy") == 1) { return CMD_COPY; }
     if (token_is(line, "/find") == 1) { return CMD_FIND; }
+    if (token_is(line, "/reprobe") == 1) { return CMD_REPROBE; }
+    if (token_is(line, "/ping") == 1) { return CMD_REPROBE; }
+    if (token_is(line, "/history") == 1) { return CMD_HISTORY; }
     return CMD_UNKNOWN_SLASH;
 }
 
@@ -154,6 +159,7 @@ fn cmd_help() {
     _help_line("  /help", "              this help");
     _help_line("  /seams", "             capability ladder (spine seam status)");
     _help_line("  /state", "             session state");
+    _help_line("  /reprobe", "           re-check hoosh reachability (⌃R in the TUI; /ping alias)");
     _help_line("  /git [path]", "        working repo: branch + changed files, or a file's diff (via sit)");
     _help_line("  /persona [name]", "    show/switch the archetype; /persona shadow | blend <a> <b> (avatara)");
     _help_line("  /personas [trad]", "   list archetype traditions, or browse one; show the active card");
@@ -173,11 +179,45 @@ fn cmd_help() {
     _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
     _help_line("  /copy", "              copy the last reply to the clipboard (OSC 52, best-effort)");
     _help_line("  /find [text]", "       search the feed scrollback (TUI: ⌃F; n/N jump between matches)");
+    _help_line("  /history", "           list submitted inputs (TUI: Up/Down recalls; [history].file persists)");
     _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
     _help_line("  /quit", "              exit (or Ctrl-D)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
+    return 0;
+}
+
+# cmd_reprobe (0.27.0): re-check hoosh reachability on demand — the line-mode + shared
+# equivalent of the TUI's Ctrl-R. A silent GET (hoosh_health_probe) updates the cached
+# health state, then the outcome is reported. Works identically in the REPL and TUI
+# (dispatch is shared); the probe emits nothing, so it is safe under the TUI's OUT_RING.
+fn cmd_reprobe() {
+    if (config_hoosh_configured() == 0) {
+        ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in .thoth/config.cyml"); oprintln("");
+        return 0;
+    }
+    var reach = hoosh_health_probe();
+    if (reach == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "hoosh: reachable"); oprintln(""); }
+    else { ui_emit(ROLE_RED, "hoosh: unreachable"); ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); oprintln(""); }
+    return 0;
+}
+
+# cmd_history (0.27.0): list the input-history ring — the lines the user has submitted this session (and any
+# recalled from [history].file). Works in BOTH the REPL and the TUI (reads the shared inhist ring). Read-only
+# listing; the TUI additionally recalls entries with Up/Down (a raw-mode-only affordance, correctly rich-tier).
+fn cmd_history() {
+    var n = inhist_count();
+    if (n == 0) { ui_emit(ROLE_FAINT, "input history is empty"); oprintln(""); return 0; }
+    ui_emit(ROLE_ACCENT, "input history "); emit(ui_sgr(ROLE_FAINT)); emit("("); ofmt_int(n); emit(")"); emit(ui_reset()); oprintln("");
+    var i = 0;
+    while (i < n) {
+        emit(ui_sgr(ROLE_FAINT)); emit("  "); ofmt_int(i + 1); emit("  "); emit(ui_reset());
+        emit_n(inhist_entry_ptr(i), inhist_entry_len(i));
+        oprintln("");
+        i = i + 1;
+    }
+    if (inhist_persist_active() == 1) { ui_emit(ROLE_MUTED, "  persisted -> "); emit(config_history_file()); oprintln(""); }
     return 0;
 }
 
@@ -220,6 +260,14 @@ fn cmd_state() {
         emit(config_hoosh_url());
         if (config_hoosh_stream() == 1) { ui_emit(ROLE_MUTED, " (streaming)"); oprintln(""); }
         else { ui_emit(ROLE_MUTED, " (blocking)"); oprintln(""); }
+    }
+    if (config_hoosh_configured() == 1) {   # 0.27.0: cached live reachability (/reprobe re-checks; ⌃R in the TUI)
+        ui_label("  health  : ");
+        var _hh = hoosh_health();
+        if (_hh == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "reachable"); ui_emit(ROLE_MUTED, " (last transport ok)"); }
+        elif (_hh == HOOSH_HEALTH_DOWN) { ui_emit(ROLE_RED, "unreachable"); ui_emit(ROLE_MUTED, " (last transport failed — /reprobe)"); }
+        else { ui_emit(ROLE_FAINT, "unknown"); ui_emit(ROLE_MUTED, " (no probe yet — /reprobe)"); }
+        oprintln("");
     }
     ui_label("  context : ");
     if (config_hoosh_history() == 0) { ui_emit(ROLE_MUTED, "stateless (single-turn; [hoosh].history = false)"); oprintln(""); }
@@ -481,33 +529,69 @@ fn _save_write_str(fd, s) {
     return 1;
 }
 
-# cmd_save (0.24.1): write the TUI feed scrollback to <file> as a plain-text/markdown transcript. Rides the
-# feed ring (feed_count / feed_line_ptr / feed_line_len) + the PORTABLE lib/io.cyr wrappers (same create +
-# truncate 0644 as the one-shot `-o` tee). Each line is ANSI-stripped (feed_strip_ansi_into) to readable
-# text. NOT t-ron-gated: this is the user's OWN export to a path they named (like `-o`), and the model can
-# never invoke a slash command. HONEST LIMITS: the feed ring is TUI-only (line mode never captures it -> an
-# empty-ring note) and bounded to FEED_ROWS lines (older lines are evicted, not saved). Degrades closed: an
-# unopenable path / a short write is announced, never faked.
+# _save_history (0.27.0): write the tier-neutral CONVERSATION history (session_history_*) as a markdown
+# transcript — the LINE-MODE source for /save (the feed ring is TUI-only). Each turn becomes a "## <role>"
+# header + its raw content (history content is plain text — no ANSI to strip). 1 on a full write, else 0.
+fn _save_history(fd) {
+    var ok = 1;
+    var n = session_history_len();
+    var i = 0;
+    while (i < n) {
+        if (_save_write_str(fd, "## ") == 0) { ok = 0; }
+        if (_save_write_str(fd, session_history_role(i)) == 0) { ok = 0; }
+        if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
+        var content = session_history_content(i);
+        var clen = strlen(content);
+        if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0; } }
+        if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
+        i = i + 1;
+    }
+    return ok;
+}
+
+# cmd_save (0.24.1; line-mode source added 0.27.0): write a plain-text/markdown transcript to <file>. In
+# the rich TUI it saves the FEED scrollback (tool cards, diffs, chrome), ANSI-stripped
+# (feed_strip_ansi_into); in LINE MODE (no feed ring) it saves the tier-neutral CONVERSATION history
+# (user/assistant turns) — so /save works in BOTH, closing the 0.24.1 line-mode gap. Rides the PORTABLE
+# lib/io.cyr wrappers (create + truncate 0644, like the one-shot `-o` tee). NOT t-ron-gated: the user's
+# OWN export to a path they named (the model can never invoke a slash command). Degrades closed: an
+# unopenable path / a short write is announced, never faked. HONEST LIMIT: the feed ring is bounded to
+# FEED_ROWS lines (older evicted); the history path is bounded to the retained conversation window.
 fn cmd_save(line) {
     var path = arg_after(line);
     if (path == 0) { ui_emit(ROLE_RED, "usage: "); emit("/save <file>"); oprintln(""); return 0; }
-    var n = feed_count();
-    if (n == 0) { ui_emit(ROLE_FAINT, "nothing to save — the transcript is captured in the TUI feed, not line mode"); oprintln(""); return 0; }
+    var nfeed = feed_count();
+    var nhist = session_history_len();
+    if ((nfeed == 0) && (nhist == 0)) {
+        ui_emit(ROLE_FAINT, "nothing to save — no feed scrollback and no conversation yet"); oprintln(""); return 0;
+    }
     if (_save_buf == 0) { _save_buf = alloc(SAVE_BUF); }
     var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0644, like the -o tee
     if (fd < 0) { ui_emit(ROLE_RED, "could not open "); emit(path); ui_emit(ROLE_FAINT, " for writing"); oprintln(""); return 0; }
     var ok = 1;
     if (_save_write_str(fd, "# thoth transcript\n\n") == 0) { ok = 0; }
-    var i = 0;
-    while (i < n) {
-        var slen = feed_strip_ansi_into(_save_buf, SAVE_BUF, feed_line_ptr(i), feed_line_len(i));
-        if (slen > 0) { if (file_write(fd, _save_buf, slen) != slen) { ok = 0; } }
-        if (file_write(fd, "\n", 1) != 1) { ok = 0; }
-        i = i + 1;
+    var nsaved = 0;
+    if (nfeed > 0) {
+        # rich TUI: the rendered feed scrollback, each line ANSI-stripped to readable text
+        var i = 0;
+        while (i < nfeed) {
+            var slen = feed_strip_ansi_into(_save_buf, SAVE_BUF, feed_line_ptr(i), feed_line_len(i));
+            if (slen > 0) { if (file_write(fd, _save_buf, slen) != slen) { ok = 0; } }
+            if (file_write(fd, "\n", 1) != 1) { ok = 0; }
+            i = i + 1;
+        }
+        nsaved = nfeed;
+    } else {
+        # line mode: no feed ring -> the tier-neutral conversation history
+        if (_save_history(fd) == 0) { ok = 0; }
+        nsaved = nhist;
     }
     file_close(fd);
-    if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(n); emit(" lines to "); emit(path); oprintln(""); }
-    else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+    if (ok == 1) {
+        ui_emit(ROLE_GREEN, "saved "); ofmt_int(nsaved);
+        if (nfeed > 0) { emit(" lines to "); } else { emit(" messages to "); }
+        emit(path); oprintln("");
+    } else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
     return 0;
 }
 
@@ -1298,6 +1382,8 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_GIT) { cmd_git(line); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_FIND) { cmd_find(line); return 1; }
+    if (c == CMD_REPROBE) { cmd_reprobe(); return 1; }
+    if (c == CMD_HISTORY) { cmd_history(); return 1; }
     if (c == CMD_UNKNOWN_SLASH) {
         # Guard FIRST: refuse at the depth bound BEFORE writing a slot, so a cycle can never
         # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).

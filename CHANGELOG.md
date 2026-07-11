@@ -2,6 +2,40 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.27.0] - 2026-07-10
+
+**Toolchain refresh + tier-consistency parity fixes.** Updates the Cyrius toolchain (6.4.29 → 6.4.46, +71
+stdlib files) and the vendored dist bundles (bote 3.0.1 → 3.1.1, darshana 0.8.2 → 0.9.0, libro 2.7.9 →
+2.7.10, sankoch 2.4.9 → 2.5.1, sit 1.3.1 → 1.3.4), then closes three cases where a feature lived only in the
+rich TUI despite being pure data/logic — the first slice of the simple↔rich consistency line (rich = the
+rich TUI experience; simple = line-mode back-and-forth; everything that is *not* a rich-TUI blocker should
+work at both). 1240 assertions; live-verified in line mode across a real cross-session round-trip.
+
+### Added
+- **`/reprobe` (alias `/ping`)** — re-check hoosh reachability on demand from any tier: the line-mode +
+  shared equivalent of the TUI's Ctrl-R. A silent GET updates the cached health state, then the outcome is
+  reported honestly (reachable / unreachable — `<url>` / absent). `src/commands.cyr` (`cmd_reprobe`), wrapping
+  the existing `hoosh_health_probe()`.
+- **`hoosh health` row in `/state`** — surfaces the cached reachability (reachable / unreachable / unknown)
+  that was previously visible only as the TUI status-bar dot; shown when a gateway is configured.
+- **`/history`** — list the input-history ring (submitted lines) in both the REPL and the TUI. Read-only
+  listing; the TUI additionally recalls entries with Up/Down (a raw-mode affordance that stays rich-only).
+
+### Changed
+- **`/save` works in line mode** — with no TUI feed ring, `/save <file>` now writes the tier-neutral
+  conversation history (user/assistant turns) as a markdown transcript instead of the old "captured in the
+  TUI feed, not line mode" note. Closes the 0.24.1 line-mode gap. `src/commands.cyr` (`cmd_save` +
+  `_save_history`).
+- **`[history].file` persistence works in line mode** — the REPL now records each submitted input into the
+  inhist ring and mirrors it to `[history].file` when configured (previously the ring was inited only inside
+  `tui_loop`, so line-mode inputs never persisted). `src/main.cyr` (shared init + load announce),
+  `src/repl.cyr` (record + persist + a one-time write-failure note). Persistence stays OFF by default, so the
+  plain floor is byte-identical.
+- **Toolchain / dependencies**: `cyrius.cyml` pin 6.4.29 → 6.4.46 (`cyrius lib sync`, 71 stdlib files).
+  Vendored dist bundles re-synced — bote-core 3.1.1, darshana 0.9.0, libro 2.7.10, sankoch-zlib 2.5.1,
+  sit-read 1.3.4 (avatara 2.8.0 / t-ron 2.1.7 / vyakarana 2.2.3 unchanged). Re-synced via
+  `scripts/sync-{bote,libro,sit}.sh`; darshana is manually vendored (a `sync-darshana.sh` is a follow-up).
+
 ## [0.26.0] - 2026-07-09
 
 **`.thoth/` home directory + honest readiness.** Config + project memory now live under a discoverable

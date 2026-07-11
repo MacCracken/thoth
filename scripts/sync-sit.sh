@@ -46,11 +46,11 @@
 # dist files — the zlib profile / 1.3.1 read bundle may not be tagged yet):
 #   SIT_LOCAL=/path/to/sit SANKOCH_LOCAL=/path/to/sankoch ./scripts/sync-sit.sh
 #
-# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.3.1 2.4.9)
+# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.3.4 2.5.1)
 set -euo pipefail
 
-SIT_TAG="${1:-1.3.1}"
-SK_TAG="${2:-2.4.9}"
+SIT_TAG="${1:-1.3.4}"
+SK_TAG="${2:-2.5.1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIT_DEST="$REPO_ROOT/src/vendor/sit-read.cyr"
 SK_DEST="$REPO_ROOT/src/vendor/sankoch.cyr"

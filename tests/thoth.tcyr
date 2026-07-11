@@ -61,6 +61,9 @@ fn test_classify() {
     assert_eq(classify_input("/reset"), CMD_RESET, "/reset");
     assert_eq(classify_input("/clear"), CMD_CLEAR, "/clear");
     assert_eq(classify_input("/copy"), CMD_COPY, "/copy classifies to CMD_COPY");
+    assert_eq(classify_input("/reprobe"), CMD_REPROBE, "/reprobe");
+    assert_eq(classify_input("/ping"), CMD_REPROBE, "/ping aliases reprobe");
+    assert_eq(classify_input("/history"), CMD_HISTORY, "/history");
     assert_eq(classify_input("/theme light"), CMD_THEME, "/theme with arg");
     assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
     assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
@@ -3450,6 +3453,24 @@ fn test_save() {
     var has_esc = 0; var k = 0;
     while (k < rn) { if (load8(rb + k) == 27) { has_esc = 1; } k = k + 1; }
     assert_eq(has_esc, 0, "saved file has no escape bytes (markers fully stripped)");
+
+    # --- cmd_save LINE-MODE path (0.27.0): empty feed ring -> save the conversation history ---
+    feed_init();                       # clears the ring -> line-mode /save path
+    assert_eq(feed_count(), 0, "ring empty for the line-mode /save path");
+    session_history_clear();
+    session_history_append("user", "hello there", 11);
+    session_history_append("assistant", "hi! reply", 9);
+    cmd_save("/save /tmp/thoth_save_hist.md");
+    var hb = alloc(4096);
+    var hn = file_read_all("/tmp/thoth_save_hist.md", hb, 4095);
+    store8(hb + hn, 0);
+    assert(hn > 0, "history-mode saved file is non-empty");
+    assert(_ui_contains(hb, "# thoth transcript") == 1, "history file has the markdown header");
+    assert(_ui_contains(hb, "## user") == 1, "history file has a user turn header");
+    assert(_ui_contains(hb, "hello there") == 1, "history file has the user content");
+    assert(_ui_contains(hb, "## assistant") == 1, "history file has an assistant turn header");
+    assert(_ui_contains(hb, "hi! reply") == 1, "history file has the assistant content");
+    session_history_clear();
     return 0;
 }
 

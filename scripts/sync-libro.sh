@@ -8,10 +8,10 @@
 # Keep the tag in lockstep with what the t-ron release pins ([deps.libro] in
 # t-ron's cyrius.cyml).
 #
-# Usage: ./scripts/sync-libro.sh [tag]   (default: 2.7.2)
+# Usage: ./scripts/sync-libro.sh [tag]   (default: 2.7.10)
 set -euo pipefail
 
-TAG="${1:-2.7.2}"
+TAG="${1:-2.7.10}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/libro.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/libro/${TAG}/dist/libro.cyr"

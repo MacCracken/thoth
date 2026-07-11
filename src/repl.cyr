@@ -14,10 +14,16 @@ fn repl_loop() {
             println("");
         } else {
             if (n > 0) {
+                var stored = inhist_push(&line, n);          # 0.27.0: record the submitted input (line-mode history parity)
+                if (stored == 1) { inhist_persist_save(); }  # mirror to [history].file when persistence is active (no-op off)
                 if (dispatch(&line) == 0) { running = 0; }
                 if (sess_persist_broke() == 1) {   # 0.24.2: a conversation-file save failed mid-session -> announce ONCE
                     sess_persist_broke_ack();
                     ui_emit(ROLE_FAINT, "session file: write failed — resume disabled for this session"); println("");
+                }
+                if (inhist_persist_broke() == 1) {   # 0.27.0: a history-file save failed mid-session -> announce ONCE
+                    inhist_persist_broke_ack();
+                    ui_emit(ROLE_FAINT, "history file: write failed — recording disabled for this session"); println("");
                 }
             }
         }

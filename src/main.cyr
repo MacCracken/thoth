@@ -25,17 +25,17 @@ include "src/vendor/avatara.cyr"
 # vyakarana (2.2.3) — source-code tokenizer for syntax highlighting (/read, diffs).
 # Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
 include "src/vendor/vyakarana.cyr"
-# darshana (0.8.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
+# darshana (0.9.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
 # (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
 include "src/vendor/darshana.cyr"
-# sit (1.3.1 read profile) — .git/ read-mode: branch/status/diff on real git +
+# sit (1.3.4 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
-# sit_repo_* API only (its command layer is dead here). sankoch (2.4.9 zlib
+# sit_repo_* API only (its command layer is dead here). sankoch (2.5.1 zlib
 # PROFILE, `dist/sankoch-zlib.cyr` — 53 globals, tracks current sankoch) supplies
 # the git-object inflate the bundle references bare. Only sit's entry_hash/ann_new
 # are renamed on sync (vs libro/bote); the old sankoch-2.2.5 pin, the _stream_grow
-# rename, and the SYS_CHDIR sed are all gone (sankoch 2.4.9 zlib profile + sit
-# 1.3.1's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
+# rename, and the SYS_CHDIR sed are all gone (sankoch 2.5.1 zlib profile + sit
+# 1.3.4's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
 # BOTH before commands.cyr so thoth's cmd_reset wins the benign last-def-wins.
 include "src/vendor/sankoch.cyr"
 include "src/vendor/sit-read.cyr"
@@ -118,6 +118,16 @@ fn main() {
         tui_loop();
     } else {
         print_banner();
+        # 0.27.0: line-mode input history — record submits + persist to [history].file, PARITY with the TUI
+        # (inhist was previously inited only inside tui_loop, so line-mode inputs never persisted). inhist_init
+        # is a silent memory op; persistence stays OFF (byte-identical floor) unless [history].file is set.
+        inhist_init();
+        var hpath = config_history_file();
+        if (hpath != 0) {
+            var hn = inhist_persist_init(hpath);
+            if (hn >= 0) { ui_emit(ROLE_FAINT, "input history: "); emit(hpath); ui_emit(ROLE_FAINT, " ("); ofmt_int(hn); ui_emit(ROLE_FAINT, " recalled)"); oprintln(""); }
+            else { ui_emit(ROLE_FAINT, "input history: cannot write "); emit(hpath); ui_emit(ROLE_FAINT, " — not persisted (in-memory only)"); oprintln(""); }
+        }
         repl_loop();
         println("scribe out.");
     }
