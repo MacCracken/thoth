@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # stack.sh — dev convenience: bring up the AGNOS backend stack
-# (hoosh + daimon + bote) and wire it so thoth can be started against a
+# (hoosh + daimon + bote + mneme) and wire it so thoth can be started against a
 # live spine with one command.
 #
-# INTERIM helper. It launches the capability spine as separate processes
-# and registers the bote filesystem tools with daimon — until thoth grows
-# first-class one-stack startup. Everything that must persist (runtime
-# config, logs, pidfiles, and the workspace the AI writes projects into)
-# lives under $STACK_HOME (default ~/.agnos-stack), OUTSIDE the repos.
+# INTERIM helper. It launches the capability spine as separate processes,
+# registers the bote filesystem tools with daimon, and starts mneme's MCP
+# endpoint (which self-registers its memory tools with daimon) — until thoth
+# grows first-class one-stack startup. Everything that must persist (runtime
+# config, logs, pidfiles, the workspace the AI writes projects into, and mneme's
+# vault) lives under $STACK_HOME (default ~/.agnos-stack), OUTSIDE the repos.
+# mneme is OPTIONAL: if its binary is missing the stack still comes up and the
+# memory seam degrades to thoth's local .thoth/memory fallback.
 #
 # Usage:
-#   scripts/stack.sh up        start hoosh + daimon + bote, register fs tools
+#   scripts/stack.sh up        start hoosh + daimon + bote + mneme, register tools
 #   scripts/stack.sh run       up, then launch the thoth TUI against it
 #   scripts/stack.sh status    show what's listening + how to start thoth
-#   scripts/stack.sh down      stop the three services
+#   scripts/stack.sh down      stop the services
 #   scripts/stack.sh logs      show the tail of each service log
 #
-# Override via env: AGNOS_STACK_HOME, HOOSH_DIR, DAIMON_DIR, BOTE_DIR,
-# THOTH_DIR, AGNOS_KEY_FILE, HOOSH_PORT, DAIMON_PORT, BOTE_PORT, THOTH_MODEL.
+# Override via env: AGNOS_STACK_HOME, HOOSH_DIR, DAIMON_DIR, BOTE_DIR, MNEME_DIR,
+# THOTH_DIR, AGNOS_KEY_FILE, HOOSH_PORT, DAIMON_PORT, BOTE_PORT, MNEME_PORT, THOTH_MODEL.
 
 set -u
 
@@ -25,16 +28,19 @@ STACK_HOME="${AGNOS_STACK_HOME:-$HOME/.agnos-stack}"
 HOOSH_DIR="${HOOSH_DIR:-$HOME/Repos/hoosh}"
 DAIMON_DIR="${DAIMON_DIR:-$HOME/Repos/daimon}"
 BOTE_DIR="${BOTE_DIR:-$HOME/Repos/bote}"
+MNEME_DIR="${MNEME_DIR:-$HOME/Repos/mneme}"
 THOTH_DIR="${THOTH_DIR:-$HOME/Repos/thoth}"
 KEY_FILE="${AGNOS_KEY_FILE:-$HOME/.ssh/.api_keys}"
 HOOSH_PORT="${HOOSH_PORT:-8088}"
 DAIMON_PORT="${DAIMON_PORT:-8090}"
 BOTE_PORT="${BOTE_PORT:-9000}"
+MNEME_PORT="${MNEME_PORT:-8100}"
 MODEL="${THOTH_MODEL:-claude-opus-4-8}"
 
 RUN_DIR="$STACK_HOME/run"
 LOG_DIR="$STACK_HOME/logs"
 WORKSPACE="$STACK_HOME/workspace"
+MNEME_VAULT_DIR="$STACK_HOME/mneme-vault"   # mneme's persistent knowledge vault (outside the repos)
 
 c_g=$'\033[32m'; c_r=$'\033[31m'; c_y=$'\033[33m'; c_d=$'\033[2m'; c_0=$'\033[0m'
 say()  { printf '%s\n' "$*"; }
@@ -118,6 +124,13 @@ stream = false
 [daimon]
 url = "http://127.0.0.1:$DAIMON_PORT"
 
+[memory]
+# Consume mneme (the AGNOS memory/RAG domain) via daimon when it's hosted — the
+# seam binds when daimon advertises mneme_* (mneme self-registers on serve). When
+# mneme is absent this reads the local .thoth/memory fallback. /remember writes a
+# note; /state shows the binding (mneme vs local).
+enabled = true
+
 [tron]
 policy = "tron-policy.toml"
 agent  = "thoth"
@@ -134,9 +147,12 @@ EOF
 # {"content":[{"type":"text","text":...}]} envelope, so thoth (strict MCP client)
 # renders "no text content could be parsed" for them until daimon/bote wrap their
 # results in content blocks — a conformance fix filed upstream. The fs_* tools are
-# conformant and work end to end.
+# conformant and work end to end. The mneme_* entries are mneme's memory tools
+# (create_note/search/get_note/... — a glob), which mneme self-registers with
+# daimon; thoth_remember authorizes the /remember write path (routed to
+# mneme_create_note when the seam is bound, else the local .thoth/memory file).
 [agent."thoth"]
-allow = ["fs_write", "fs_read", "fs_mkdir", "bote_echo", "libro_query", "libro_retention", "libro_export", "libro_verify", "libro_proof", "thoth_run", "thoth_write"]
+allow = ["fs_write", "fs_read", "fs_mkdir", "bote_echo", "libro_query", "libro_retention", "libro_export", "libro_verify", "libro_proof", "mneme_*", "thoth_run", "thoth_write", "thoth_remember"]
 
 [agent."thoth".rate_limit]
 calls_per_minute = 120
@@ -181,6 +197,7 @@ cmd_status() {
   svc_status hoosh  "$HOOSH_PORT"
   svc_status daimon "$DAIMON_PORT"
   svc_status bote   "$BOTE_PORT"
+  if [ -x "$MNEME_DIR/build/mneme" ]; then svc_status mneme "$MNEME_PORT"; else warn "mneme  :$MNEME_PORT  not built (memory seam → local fallback)"; fi
   local tj; tj=$(curl -s --max-time 3 "http://127.0.0.1:$DAIMON_PORT/v1/mcp/tools" 2>/dev/null || true)
   if [ -n "$tj" ]; then
     say "  ${c_d}daimon tools:${c_0} $(printf '%s' "$tj" | grep -oE '"name":"[^"]+"' | cut -d'"' -f4 | paste -sd, - )"
@@ -196,12 +213,13 @@ cmd_status() {
 }
 
 cmd_up() {
-  mkdir -p "$RUN_DIR" "$LOG_DIR" "$WORKSPACE"
+  mkdir -p "$RUN_DIR" "$LOG_DIR" "$WORKSPACE" "$MNEME_VAULT_DIR"
   write_configs
   load_key
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then ok "ANTHROPIC_API_KEY loaded (${ANTHROPIC_API_KEY:0:7}…)"
   else warn "ANTHROPIC_API_KEY not set — hoosh can't reach Anthropic. Export it, or point $STACK_HOME/thoth.cyml at a local model."; fi
   local hb="$HOOSH_DIR/build/hoosh" db="$DAIMON_DIR/build/daimon" bb="$BOTE_DIR/build/bote"
+  local mb="$MNEME_DIR/build/mneme"   # mneme is OPTIONAL — not in the required set
   local m=0
   for pair in "hoosh:$hb" "daimon:$db" "bote:$bb"; do
     [ -x "${pair#*:}" ] || { err "missing binary: ${pair#*:} — build ${pair%%:*} first"; m=1; }
@@ -212,12 +230,23 @@ cmd_up() {
   start_svc daimon "$DAIMON_DIR" "$LOG_DIR/daimon.log" "$RUN_DIR/daimon.pid" "$DAIMON_PORT" "$db" serve "$DAIMON_PORT"
   export BOTE_FS_ROOT="$WORKSPACE"
   start_svc bote   "$BOTE_DIR"   "$LOG_DIR/bote.log"   "$RUN_DIR/bote.pid"   "$BOTE_PORT"   "$bb" http "$BOTE_PORT"
+  # mneme (optional): `serve` self-registers its memory tools with daimon (MNEME_DAIMON_URL), so it must start
+  # AFTER daimon. Its vault persists under $STACK_HOME. Missing binary → the memory seam degrades to local.
+  if [ -x "$mb" ]; then
+    export MNEME_VAULT="$MNEME_VAULT_DIR"
+    export MNEME_DAIMON_URL="http://127.0.0.1:$DAIMON_PORT"
+    export MNEME_MCP_CALLBACK="http://127.0.0.1:$MNEME_PORT"
+    start_svc mneme "$MNEME_DIR" "$LOG_DIR/mneme.log" "$RUN_DIR/mneme.pid" "$MNEME_PORT" "$mb" serve "$MNEME_PORT"
+  else
+    warn "mneme not built ($mb) — memory seam degrades to thoth's local .thoth/memory (build mneme to enable it)"
+  fi
   register_tools
   say ""
   cmd_status
 }
 
 cmd_down() {
+  stop_svc mneme  "$MNEME_PORT"  "$RUN_DIR/mneme.pid"
   stop_svc bote   "$BOTE_PORT"   "$RUN_DIR/bote.pid"
   stop_svc daimon "$DAIMON_PORT" "$RUN_DIR/daimon.pid"
   stop_svc hoosh  "$HOOSH_PORT"  "$RUN_DIR/hoosh.pid"
@@ -231,7 +260,7 @@ cmd_run() {
 }
 
 cmd_logs() {
-  for s in hoosh daimon bote; do
+  for s in hoosh daimon bote mneme; do
     say "${c_d}== $s ==${c_0}"
     tail -n 20 "$LOG_DIR/$s.log" 2>/dev/null || say "  (no log yet)"
   done
