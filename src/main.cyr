@@ -59,6 +59,7 @@ include "src/seams.cyr"
 include "src/session.cyr"
 include "src/roundlog.cyr"
 include "src/exec.cyr"
+include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from tui (0.30.8); before hoosh/agent poll it
 include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0); after hoosh (uses hoosh_catalog_fetch), before tui (wires the modal)
 include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallback (0.12.0, ADR-0012)
@@ -87,6 +88,9 @@ include "src/tui.cyr"       # T2 rich-TUI front-end (alt-screen); active only at
 fn main() {
     alloc_init();
     args_init();            # snapshot the command line (one-shot/argv front-door, 0.11.0)
+    out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); only the TUI arms OUT_RING
+    confirm_hooks_set(&tui_confirm_begin, &tui_confirm_end);   # wire the gate confirm's live-screen bracket (TUI-decoupling)
+    reply_sink_set(&mdhl_reply, &mdhl_reset, &mdhl_feed, &mdhl_finish, &feed_stream_tick);   # wire hoosh's reply render to mdhl + the TUI paint (all tiers; TUI-decoupling)
     # Classify the one-shot mode from argv FIRST (it needs no config). For any one-shot
     # mode, discard the seam-init chrome that follows: gate_init / log_init print to fd 1
     # when [tron].policy / [log].file are configured, and that would leak onto the clean

@@ -2,6 +2,49 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.8] - 2026-07-11
+
+**Decouple the lower layers from the TUI (dependency inversion).** thoth grew out of one file and had never
+been layered; three lower modules reached UP into presentation, which coupled *every* GUI/TUI test to the whole
+codebase (cyrius refuses to emit with reachable-undefined). This refactor breaks all four couplings so
+`util`/`gate`/`hoosh` no longer name the TUI:
+
+- **`intr_*` extracted to `src/intr.cyr`** (substrate). The turn-interrupt handling (Esc aborts a stream) is
+  signal/termios substrate, not presentation — MOVED verbatim out of `tui.cyr`, included after `ui`, before
+  `hoosh`/`agent`/`tui`. `hoosh`/`agent` now poll it *downward*; no call-site changes.
+- **`util → feed` becomes a registered ring sink.** `util`'s `OUT_RING` branch routed straight into
+  `feed_write`; now it calls `_ring_emit` → a `_ring_sink` fnptr the renderer registers with `&feed_write` once
+  at startup. `util` (substrate) no longer names the feed.
+- **`gate → tui_confirm` becomes confirm-bracket hooks.** The auth confirm's live-screen bracket is pure
+  presentation; `gate` calls registered `_confirm_begin_fn/_end_fn` (the TUI registers `&tui_confirm_begin/end`),
+  unregistered → skipped.
+- **`hoosh → mdhl/feed_stream` becomes a reply-render sink.** The streaming/blocking reply render routed through
+  `mdhl_*` + `feed_stream_tick` directly; now through a `reply_sink_*` the driver registers for all tiers
+  (`&mdhl_reply/_reset/_feed/_finish` + `&feed_stream_tick`), with a **raw-emit fallback** so a turn's reply is
+  never dropped if unregistered.
+
+Cyrius fnptrs (`&fn` + `fncall0/fncall2`; `fnptr` was already in `[deps].stdlib`). **Verified**: 1341 unit
+assertions (unchanged); build green; **live** — a real hoosh turn renders correctly for `stream=false` and
+`stream=true` (plain + fenced), the rich-TUI feed renders a reply, and the gate confirm prompt renders live in
+the rich TUI with the tool running on `y`; **floor byte-identical** (piped one-shot unchanged). Reviewed via a
+4-lens find→verify workflow — **0 findings**. **Payoff proven**: a curated lean GUI test (`surface → hoosh →
+gate → t-ron` + `intr` + the GUI modules, *no* `tui`/`mdhl`/`feed`/`commands`/`vyakarana`/…) now compiles +
+passes (103 assertions) — the coupling that forced the one-binary test split (0.30.7) is gone.
+
+### Added
+- **`src/intr.cyr`** — turn-interrupt substrate (extracted from `tui.cyr`).
+- Registered sinks: `out_ring_sink_set` (`util`), `confirm_hooks_set` (`gate`), `reply_sink_set` (`hoosh`);
+  wired once in `main()` (and `out_ring_sink_set` in the test driver).
+
+### Changed
+- `src/util.cyr` (`emit`/`emit_n`/`oprintln`/`ofmt_int` route `OUT_RING` through `_ring_emit`), `src/gate.cyr`
+  (confirm bracket via hooks), `src/hoosh.cyr` (reply render/stream via the sink), `src/tui.cyr` (intr block
+  removed; `tui_confirm_*` still defined + now registered), `src/main.cyr` (3 registrations).
+
+### Notes
+- The one-binary test structure (0.30.7) is retained for now — this refactor merely makes curated per-domain
+  test files *possible*. Pin **6.4.51** (wrapper auto-drifted to 6.4.52; benign).
+
 ## [0.30.7] - 2026-07-11
 
 **Test suite split into topical case files.** `tests/thoth.tcyr` had grown to ~4,095 lines in one file. It is

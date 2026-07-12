@@ -19,7 +19,8 @@ var _rl_pos = 0;
 # dispatch() window:
 #   OUT_FD1  (default) — write straight to stdout: the REPL / piped / CI floor,
 #            byte-identical to the pre-0.9.1 binary (capture is NEVER armed here);
-#   OUT_RING — route writes into feed_write (inside the PT_RICH dispatch window).
+#   OUT_RING — route writes through the registered ring sink (&feed_write, wired at
+#            startup) inside the PT_RICH dispatch window — util never names the feed.
 # Three writer classes reach fd 1: emit/emit_n here (ui_emit funnels through
 # them); the stdlib bypass println/fmt_int (shadowed as oprintln/ofmt_int below);
 # and the renderer's OWN chrome — which must NEVER be captured, so it writes
@@ -36,6 +37,14 @@ var _out_mode = 0;          # OUT_FD1 until the TUI arms capture / one-shot arms
 
 fn out_mode() { return _out_mode; }
 fn out_mode_set(m) { _out_mode = m; return 0; }
+
+# The OUT_RING sink (TUI-decoupling refactor): under OUT_RING, emit/emit_n/oprintln/ofmt_int route their bytes
+# through this registered function pointer instead of calling feed_write directly — so util (substrate) no
+# longer references the TUI feed. The renderer registers &feed_write once at startup; a build that never wires
+# a feed (a curated test that omits feed.cyr) leaves it 0 and never arms OUT_RING, so writes just no-op.
+var _ring_sink = 0;
+fn out_ring_sink_set(fp) { _ring_sink = fp; return 0; }
+fn _ring_emit(ptr, n) { if (_ring_sink != 0) { fncall2(_ring_sink, ptr, n); } return 0; }
 
 # emit_err / emit_err_n: ALWAYS write to stderr (fd 2), ignoring _out_mode. One-shot
 # diagnostics (a transport/HTTP error, a denied authorization, an empty reply) go
@@ -61,7 +70,7 @@ fn emit_raw_n(ptr, n) { syscall(SYS_WRITE, 1, ptr, n); return 0; }
 # emit: write a NUL-terminated string to stdout (or the feed ring when capture is
 # armed), no trailing newline.
 fn emit(s) {
-    if (_out_mode == OUT_RING) { feed_write(s, strlen(s)); return 0; }
+    if (_out_mode == OUT_RING) { _ring_emit(s, strlen(s)); return 0; }
     if (_out_mode == OUT_NULL) { return 0; }
     syscall(SYS_WRITE, 1, s, strlen(s));
     return 0;
@@ -69,7 +78,7 @@ fn emit(s) {
 
 # emit_n: write n bytes from ptr to stdout (or the feed ring when capture is armed).
 fn emit_n(ptr, n) {
-    if (_out_mode == OUT_RING) { feed_write(ptr, n); return 0; }
+    if (_out_mode == OUT_RING) { _ring_emit(ptr, n); return 0; }
     if (_out_mode == OUT_NULL) { return 0; }
     syscall(SYS_WRITE, 1, ptr, n);
     return 0;
@@ -79,10 +88,10 @@ fn emit_n(ptr, n) {
 # fd 1 DIRECTLY (bypassing emit). The dispatch tree calls these instead of the
 # stdlib twins so its output is captured under OUT_RING; under OUT_FD1 each is
 # byte-identical to its twin (oprintln -> println, ofmt_int -> fmt_int), so the
-# piped/CI floor is unchanged. feed_write is a forward reference (feed.cyr is
-# included later); Cyrius resolves it whole-unit.
+# piped/CI floor is unchanged. Under OUT_RING they route through _ring_emit (the
+# registered sink), so util holds no reference to feed.cyr.
 fn oprintln(s) {
-    if (_out_mode == OUT_RING) { feed_write(s, strlen(s)); feed_write("\n", 1); return 0; }
+    if (_out_mode == OUT_RING) { _ring_emit(s, strlen(s)); _ring_emit("\n", 1); return 0; }
     if (_out_mode == OUT_NULL) { return 0; }
     return println(s);
 }
@@ -90,7 +99,7 @@ fn ofmt_int(n) {
     if (_out_mode == OUT_RING) {
         var b[24];
         var len = fmt_int_buf(n, &b);
-        feed_write(&b, len);
+        _ring_emit(&b, len);
         return 0;
     }
     if (_out_mode == OUT_NULL) { return 0; }

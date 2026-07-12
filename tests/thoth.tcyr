@@ -30,6 +30,7 @@ include "src/seams.cyr"
 include "src/session.cyr"
 include "src/roundlog.cyr"
 include "src/exec.cyr"
+include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from tui (0.30.8); before hoosh/agent poll it
 include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0)
 include "src/memory.cyr"
@@ -64,6 +65,7 @@ include "tests/cases/gui.cyr"
 
 fn main() {
     alloc_init();
+    out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); tests arm OUT_RING in many cases
     test_classify();
     test_tokens();
     test_cstr();

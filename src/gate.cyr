@@ -27,6 +27,15 @@ fn gate_active() {
     return 1;
 }
 
+# The confirm-bracket hooks (TUI-decoupling refactor): the interactive confirm below runs INSIDE the captured
+# T2 dispatch window (OUT_RING), so the rich TUI must drop to the live screen around the prompt (seal + repaint
+# the feed, move the cursor to the composer, resume capture after). That bracket is pure PRESENTATION — gate no
+# longer calls tui.cyr for it; the renderer registers its begin/end here at startup. Unregistered (REPL/piped,
+# and the test binary) -> skipped, and this path is byte-identical to before (capturing==1 only in the TUI).
+var _confirm_begin_fn = 0;
+var _confirm_end_fn = 0;
+fn confirm_hooks_set(bf, ef) { _confirm_begin_fn = bf; _confirm_end_fn = ef; return 0; }
+
 # confirm: fail-closed interactive authorization — the stand-in when the
 # t-ron seam is absent, and the resolution for a t-ron FLAG verdict. Names
 # the exact object being authorized (verb + obj) so the answer is informed.
@@ -47,14 +56,14 @@ fn confirm(verb, obj) {
     # VISIBLE rather than buried in the ring. Off the TUI (REPL/piped, OUT_FD1)
     # both hooks are skipped and this path is byte-identical to before.
     var capturing = (out_mode() == OUT_RING);
-    if (capturing == 1) { tui_confirm_begin(); }
+    if ((capturing == 1) && (_confirm_begin_fn != 0)) { fncall0(_confirm_begin_fn); }
     if (gate_active() == 0) { ui_emit(ROLE_ACCENT, "  [t-ron absent: fail-closed] authorize "); }
     else { ui_emit(ROLE_ACCENT, "  [t-ron flag: confirm] authorize "); }
     emit(verb); emit(" "); emit(obj);
     emit("? [y/N] ");
     var ans[64];
     var n = read_line(&ans, 64);
-    if (capturing == 1) { tui_confirm_end(); }
+    if ((capturing == 1) && (_confirm_end_fn != 0)) { fncall0(_confirm_end_fn); }
     if (n <= 0) { return 0; }
     if (streq(&ans, "y") == 1) { return 1; }
     if (streq(&ans, "Y") == 1) { return 1; }

@@ -840,15 +840,37 @@ fn _hoosh_print_str(s) {
     return 0;
 }
 
-# _hoosh_print_reply: like _hoosh_print_str but routes the assistant REPLY through the
-# markdown fenced-code highlighter (0.15.1). ONLY reply content uses this — error bodies
-# keep _hoosh_print_str (never highlighted). The trailing-newline courtesy reads the RAW
-# str, unchanged, so a plain (fence-free) reply is byte-identical and the floor holds
-# (mdhl_reply is a verbatim pass-through at PT_PLAIN).
+# The reply-render sink (TUI-decoupling refactor): hoosh (the network client) emits the assistant reply — full
+# or per-stream-chunk — through these registered hooks instead of naming the markdown highlighter (mdhl.cyr) and
+# the TUI paint (feed_stream_tick, tui.cyr) directly, so a producer no longer reaches UP into presentation. The
+# driver registers &mdhl_reply/_reset/_feed/_finish + &feed_stream_tick for EVERY tier at startup (mdhl is a
+# verbatim pass-through at PT_PLAIN, so the piped/CI floor is unchanged; feed_stream_tick self-no-ops off the
+# TUI). UNREGISTERED (a curated test that omits mdhl/tui, or any misconfiguration) falls back to a RAW emit of
+# the content, so a turn's reply is never silently dropped — only its highlighting/paint is.
+var _reply_render_fn = 0;   # full reply     (mdhl_reply)
+var _reply_begin_fn = 0;    # stream begin   (mdhl_reset)
+var _reply_chunk_fn = 0;    # stream chunk   (mdhl_feed)
+var _reply_end_fn = 0;      # stream end     (mdhl_finish)
+var _reply_tick_fn = 0;     # per-frame paint (feed_stream_tick)
+fn reply_sink_set(rf, bf, cf, ef, tf) {
+    _reply_render_fn = rf; _reply_begin_fn = bf; _reply_chunk_fn = cf; _reply_end_fn = ef; _reply_tick_fn = tf;
+    return 0;
+}
+fn _reply_render(ptr, n) { if (_reply_render_fn != 0) { fncall2(_reply_render_fn, ptr, n); } else { emit_n(ptr, n); } return 0; }
+fn _reply_chunk(ptr, n)  { if (_reply_chunk_fn != 0)  { fncall2(_reply_chunk_fn, ptr, n);  } else { emit_n(ptr, n); } return 0; }
+fn _reply_begin() { if (_reply_begin_fn != 0) { fncall0(_reply_begin_fn); } return 0; }
+fn _reply_end()   { if (_reply_end_fn != 0)   { fncall0(_reply_end_fn);   } return 0; }
+fn _reply_tick()  { if (_reply_tick_fn != 0)  { fncall0(_reply_tick_fn);  } return 0; }
+
+# _hoosh_print_reply: like _hoosh_print_str but routes the assistant REPLY through the reply-render sink (the
+# markdown fenced-code highlighter, 0.15.1, when registered). ONLY reply content uses this — error bodies keep
+# _hoosh_print_str (never highlighted). The trailing-newline courtesy reads the RAW str, unchanged, so a plain
+# (fence-free) reply is byte-identical and the floor holds (the registered mdhl_reply is a verbatim pass-through
+# at PT_PLAIN; the unregistered fallback is a raw emit).
 fn _hoosh_print_reply(s) {
     var d = str_data(s);
     var n = str_len(s);
-    mdhl_reply(d, n);
+    _reply_render(d, n);
     if (n > 0) { if (load8(d + n - 1) != 10) { oprintln(""); } }
     return 0;
 }
@@ -884,10 +906,10 @@ fn _hoosh_sse_cb(ctx, ev) {
     if (s == 0) { return 1; }
     var n = str_len(s);
     if (n > 0) {
-        mdhl_feed(str_data(s), n);   # 0.15.1: fenced-code highlighter (verbatim pass-through at PT_PLAIN)
+        _reply_chunk(str_data(s), n);   # 0.15.1: reply-render sink (mdhl highlighter, verbatim at PT_PLAIN)
         store64(ctx, load64(ctx) + n);
         _hoosh_acc_append(str_data(s), n);
-        feed_stream_tick();   # 0.9.2: TUI incremental paint + spinner (no-op off the TUI)
+        _reply_tick();   # 0.9.2: TUI incremental paint + spinner (no-op off the TUI)
     }
     return 1;
 }
@@ -902,11 +924,11 @@ fn _hoosh_stream_turn(url, h, len, model) {
     var cell = alloc(8);
     store64(cell, 0);
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", stream) "); oprintln(url);
-    mdhl_reset();    # 0.15.1: bracket the fenced-code highlighter around the stream
+    _reply_begin();  # 0.15.1: bracket the reply-render sink (mdhl highlighter) around the stream
     intr_arm();      # 0.17.4: enter Esc-poll mode around the stream (TUI-only; no-op off OUT_RING)
     var sr = sandhi_http_stream(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell);
     intr_disarm();   # 0.17.4: restore cooked (for a following confirm / the next turn)
-    mdhl_finish();   # flush the filter (residual line + any open block) BEFORE status branching, so every exit path drains
+    _reply_end();    # flush the reply-render sink (residual line + any open block) BEFORE status branching, so every exit path drains
     var serr = sandhi_stream_err(sr);
     var emitted = load64(cell);
     if (intr_pending() == 1) {                        # 0.17.4: Esc aborted the stream — land the partial honestly

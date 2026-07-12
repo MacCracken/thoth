@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.30.8** — **decouple the lower layers from the TUI (dependency inversion)**, 2026-07-11. thoth grew out of
+one file and had never been layered; three lower modules reached UP into presentation, coupling every GUI/TUI
+test to the whole codebase (cyrius refuses reachable-undefined — the wall the 0.30.7 split hit). This refactor
+breaks all four couplings via extraction + registered fnptr sinks: (1) **`intr_*` → NEW `src/intr.cyr`**
+(turn-interrupt is signal/termios SUBSTRATE, not TUI — moved verbatim, included after `ui`/before
+`hoosh`/`agent`/`tui`; callers now poll it downward). (2) **`util → feed`**: `OUT_RING` routes through
+`_ring_emit` → a `_ring_sink` fnptr the renderer sets to `&feed_write` at startup. (3) **`gate → tui_confirm`**:
+the confirm's live-screen bracket via `confirm_hooks_set(&tui_confirm_begin,&tui_confirm_end)` (unregistered →
+skipped). (4) **`hoosh → mdhl/feed_stream`**: reply render/stream via `reply_sink_set(&mdhl_reply,&mdhl_reset,
+&mdhl_feed,&mdhl_finish,&feed_stream_tick)` (registered for ALL tiers; **raw-emit fallback** so a reply is never
+dropped). Cyrius fnptr idiom: `&fn` + `fncall0/fncall2` (explicit-arity as a statement; `callptr` is
+expression-only). **Verified**: 1341 assertions (unchanged) + build green + **LIVE** against a real hoosh
+gateway — `stream=false`/`stream=true` replies render (plain + fenced), the rich-TUI feed renders a turn, and
+the gate confirm prompt renders live with the tool running on `y` (PTY-driven); **floor byte-identical** (piped
+one-shot). **Reviewed** via a 4-lens find→verify **workflow — 0 findings** (registration timing / reply sink /
+ring+confirm / intr+floor all clean). **PAYOFF PROVEN**: a curated lean GUI test (`surface→hoosh→gate→t-ron` +
+`intr` + the GUI modules; NO `tui`/`mdhl`/`feed`/`commands`/`vyakarana`) now compiles + passes (103 asserts) —
+the coupling that forced the one-binary split is gone. The one-binary test structure (0.30.7) is RETAINED for
+now (this only makes curated per-domain files *possible*). Pin **6.4.51** (wrapper drifted to 6.4.52; benign).
+**NEXT**: optionally convert the test suite to curated per-domain `.tcyr` (now unblocked); GUI file-tree
+keyboard nav; tool-call cards + colored diffs (needs a tool-round producer); feed scrollback.
+
 **0.30.7** — **test suite split into topical case files**, 2026-07-11. `tests/thoth.tcyr` (~4,095 lines in one
 file) is now a thin DRIVER — the src-module include block + `include "tests/cases/*.cyr"` + a verbatim `main()`
 — with the ~72 test fns moved into **`tests/cases/`**: `core.cyr` (1,403), `tui.cyr` (1,184), `agent.cyr`
