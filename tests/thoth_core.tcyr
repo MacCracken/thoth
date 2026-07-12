@@ -31,6 +31,7 @@ include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0)
 include "src/memory.cyr"
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014)
+include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0016)
 include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
@@ -89,6 +90,7 @@ fn main() {
     test_agent();
     test_config_m4();
     test_daimon();
+    test_edit();
     test_tron();
     test_audit();
     test_roundlog();

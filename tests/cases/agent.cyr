@@ -536,3 +536,86 @@ fn test_project() {
     assert(_ui_contains(read_file_tool("{\"path\":\"/etc/no_such_zzz\"}"), "no such file") == 1, "granted root: gate passes, missing file -> honest error (not refused)");
     return 0;
 }
+
+# The `edit` tool (0.31.0, ADR-0017): the pure surgical-replace core (_edit_apply), the apply-to-disk half
+# (_edit_do, exercised on a real file under gitignored build/), and edit_tool's parse + jail refusals (which
+# return BEFORE the t-ron gate, so they need no policy). The gate itself is covered by the t-ron tests; the
+# full gated path is live-verified.
+fn _edit_streq_out(out, s) {
+    var i = 0;
+    while (load8(s + i) != 0) { if (load8(out + i) != load8(s + i)) { return 0; } i = i + 1; }
+    if (load8(out + i) != 0) { return 0; }   # out must also end here
+    return 1;
+}
+fn test_edit() {
+    test_group("edit tool: pure surgical-replace core (_edit_apply)");
+    var out = alloc(256);
+    # basic unique replace
+    var n = _edit_apply("hello world", 11, "world", 5, "there", 5, out, 256);
+    assert_eq(n, 11, "replace 'world'->'there' keeps length 11");
+    store8(out + n, 0);
+    assert(_edit_streq_out(out, "hello there") == 1, "content is 'hello there'");
+    # replacement grows / shrinks
+    n = _edit_apply("a=1;", 4, "1", 1, "42", 2, out, 256); store8(out + n, 0);
+    assert(_edit_streq_out(out, "a=42;") == 1, "grow: 'a=1;'->'a=42;'");
+    # delete (empty new_string)
+    n = _edit_apply("foo bar baz", 11, " bar", 4, "", 0, out, 256); store8(out + n, 0);
+    assert(_edit_streq_out(out, "foo baz") == 1, "delete: removes ' bar'");
+    # replace at start and end
+    n = _edit_apply("XYZ end", 7, "XYZ", 3, "abc", 3, out, 256); store8(out + n, 0);
+    assert(_edit_streq_out(out, "abc end") == 1, "replace at start");
+    n = _edit_apply("start XYZ", 9, "XYZ", 3, "abc", 3, out, 256); store8(out + n, 0);
+    assert(_edit_streq_out(out, "start abc") == 1, "replace at end");
+    # refusals (never apply)
+    assert_eq(_edit_apply("abc", 3, "zzz", 3, "q", 1, out, 256), 0 - 1, "not found -> -1");
+    assert_eq(_edit_apply("a x a x", 7, "a", 1, "q", 1, out, 256), 0 - 2, "not unique (2 matches) -> -2");
+    assert_eq(_edit_apply("abc", 3, "", 0, "q", 1, out, 256), 0 - 4, "empty old_string -> -4");
+    assert_eq(_edit_apply("abcdef", 6, "abc", 3, "wxyz", 4, out, 5), 0 - 3, "result exceeds outcap -> -3");
+    # oldstr longer than the file -> not found (no OOB read)
+    assert_eq(_edit_apply("hi", 2, "hello", 5, "q", 1, out, 256), 0 - 1, "oldstr longer than file -> -1 (no OOB)");
+
+    test_group("edit tool: apply-to-disk (_edit_do) on a real file");
+    var fpath = "build/edit_selftest.txt";
+    var seed = "line one\nTARGET\nline three\n";
+    assert(file_write_all(fpath, seed, strlen(seed)) > 0, "seeded the fixture file");
+    var r = _edit_do(fpath, "TARGET", 6, "REPLACED", 8);
+    assert_eq(edit_last_ok(), 1, "edit applied + wrote (edit_last_ok)");
+    var vbuf = alloc(256);
+    var vn = file_read_all(fpath, vbuf, 255); store8(vbuf + vn, 0);
+    assert(_edit_streq_out(vbuf, "line one\nREPLACED\nline three\n") == 1, "the file on disk now has REPLACED");
+    # a non-unique old_string on disk is refused, file untouched
+    assert(file_write_all(fpath, "a\na\n", 4) > 0, "reseed with two 'a' lines");
+    var r2 = _edit_do(fpath, "a", 1, "b", 1);
+    assert_eq(edit_last_ok(), 0, "non-unique on disk -> not applied");
+    vn = file_read_all(fpath, vbuf, 255); store8(vbuf + vn, 0);
+    assert(_edit_streq_out(vbuf, "a\na\n") == 1, "file unchanged after a refused non-unique edit");
+    # nonexistent file
+    xunlink(fpath);
+    var r3 = _edit_do(fpath, "x", 1, "y", 1);
+    assert_eq(edit_last_ok(), 0, "edit of a nonexistent file -> not ok");
+
+    test_group("edit tool: parse + jail refusals (pre-gate)");
+    assert(streq(edit_tool(0), "(edit: missing arguments)") == 1, "null args refused");
+    assert(streq(edit_tool("not json"), "(edit: arguments are not valid JSON)") == 1, "bad JSON refused");
+    assert(streq(edit_tool("{\"old_string\":\"a\",\"new_string\":\"b\"}"), "(edit: missing required string 'path')") == 1, "missing path refused");
+    assert(streq(edit_tool("{\"path\":\"x\",\"new_string\":\"b\"}"), "(edit: missing required string 'old_string')") == 1, "missing old_string refused");
+    assert(streq(edit_tool("{\"path\":\"x\",\"old_string\":\"\",\"new_string\":\"b\"}"), "(edit: 'old_string' must not be empty)") == 1, "empty old_string refused");
+    # jail: absolute / '..' / '~' all refused BEFORE the gate, and edit_last_allowed stays 0
+    assert(streq(edit_tool("{\"path\":\"/etc/passwd\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "(edit: refused - path is outside the project (no absolute, no '~', no '..'))") == 1, "absolute path refused (jail)");
+    assert_eq(edit_last_allowed(), 0, "a jailed-out path never reaches the gate");
+    assert(streq(edit_tool("{\"path\":\"../secret\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "(edit: refused - path is outside the project (no absolute, no '~', no '..'))") == 1, "'..' escape refused (jail)");
+
+    test_group("edit tool: summary buffer stays bounded on a long path (OOB regression)");
+    # _edit_puti used to hand fmt_int_buf a mid-buffer dest with only 12B headroom, but fmt_int_buf writes a fixed
+    # 24B scratch window -> a ~1000B path drove the offset near EDIT_RES_CAP and overflowed _edit_res. Build a long
+    # path and confirm the summary is NUL-terminated within the cap (with the stack-scratch fix it always is).
+    var lp = alloc(1200);
+    var li = 0;
+    while (li < 1000) { store8(lp + li, 0x61); li = li + 1; }   # 1000 'a'
+    store8(lp + 1000, 0);
+    var sm = _edit_summary(lp, "old", 3, "new", 3, 3);
+    var smlen = strlen(sm);
+    assert(smlen < EDIT_RES_CAP, "the summary is bounded within EDIT_RES_CAP even for a ~1000B path (no OOB)");
+    assert_eq(load8(sm + smlen), 0, "the summary is NUL-terminated");
+    return 0;
+}

@@ -203,6 +203,21 @@ fn agent_tools_add_project(dst, tl) {
     return off;
 }
 
+# agent_tools_add_edit: append the model-invokable `edit` tool (0.31.0, ADR-0017) — OPT-IN, advertised only when
+# [edit].enabled, so an unconfigured session never even offers it (advertise-gate ⇔ dispatch-gate lockstep).
+# Surgical semantics: it replaces the UNIQUE occurrence of old_string; a non-unique/absent match is refused.
+fn agent_tools_add_edit(dst, tl) {
+    if (config_edit_enabled() == 0) { return tl; }         # off by default; keep in lockstep with the dispatch guard
+    var cap = AGENT_TOOLS_CAP;
+    var off = tl;
+    if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
+    else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }   # back over the trailing "]"
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"edit\",\"description\":\"Edit an EXISTING text file in THIS project by replacing an exact snippet. Give 'path' relative to the project root (absolute paths, '~' and '..' are refused; writes stay inside the project). 'old_string' must appear EXACTLY ONCE in the file - include enough surrounding lines to make it unique, or the edit is refused. 'new_string' replaces it (use an empty string to delete). Preserve exact indentation/whitespace. This applies the change to disk.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root\"},\"old_string\":{\"type\":\"string\",\"description\":\"the exact text to replace; must be unique in the file\"},\"new_string\":{\"type\":\"string\",\"description\":\"the replacement text (empty to delete the old text)\"}},\"required\":[\"path\",\"old_string\",\"new_string\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
 # _agent_copy: raw-copy n bytes of src into dst at off, bounded by cap. Pure.
 fn _agent_copy(dst, off, src, n, cap) {
     var i = 0;
@@ -748,6 +763,7 @@ fn _agent_round_has_local(tcs, nc) {
             # when disabled, where that elif returns an honest not-enabled string rather than letting
             # a hallucinated/un-advertised "shell" fall through to daimon_invoke. 0.16.0.
             if (streq(nm, "shell") == 1) { return 1; }
+            if (streq(nm, "edit") == 1) { return 1; }         # 0.31.0 local edit tool -> serial dispatch (same rationale as shell)
         }
         i = i + 1;
     }
@@ -853,6 +869,20 @@ fn _agent_run_calls_serial(tcs, nc) {
             # return an honest not-enabled string. Do NOT run it and do NOT fall through to
             # daimon_invoke — never execute or forward a tool the model was not offered. rl stays DENIED.
             res = "(shell tool is not enabled in this session)";
+            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+        }
+        elif (streq(nm, "edit") == 1) {
+            # thoth-native edit tool (0.31.0, ADR-0017): the model rewrites a project file. edit_tool self-gates
+            # (jail + t-ron thoth_edit) and applies the diff internally, exposing the outcome via edit_last_*;
+            # LOCAL, NOT via daimon. When [edit].enabled is off it was never advertised — return an honest
+            # not-enabled string (rl stays DENIED) rather than letting a hallucinated "edit" reach daimon.
+            if (config_edit_enabled() == 1) {
+                res = edit_tool(gp);
+                if (edit_last_allowed() == 1) { rl_kind = RL_ALLOWED; }
+                rl_ok = edit_last_ok();
+            } else {
+                res = "(edit tool is not enabled in this session)";
+            }
             ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
         }
         elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
@@ -1045,6 +1075,7 @@ fn agent_turn(prompt) {
         tl = agent_tools_add_memory(_agent_tools_buf, tl);   # 0.12.2: + memory_write when [memory].enabled
         tl = agent_tools_add_shell(_agent_tools_buf, tl);    # 0.16.0: + shell when [shell].enabled AND POSIX-capable
         tl = agent_tools_add_project(_agent_tools_buf, tl);  # 0.23.0: + read_file/list_dir (default-on, jailed)
+        tl = agent_tools_add_edit(_agent_tools_buf, tl);     # 0.31.0: + edit when [edit].enabled (opt-in, jailed+gated)
         _agent_tools_len = tl;
         # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
         # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient

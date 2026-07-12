@@ -38,6 +38,7 @@ var _cfg_ui_bell = 0;        # [ui].bell — emit a BEL on turn completion (0.24
 var _cfg_ui_elapsed = 0;     # [ui].elapsed — a faint per-turn elapsed line after each reply (0.24.3); opt-in, default off
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
+var _cfg_edit_enabled = 0;   # 1 = advertise the model-invokable `edit` tool (0.31.0, opt-in); off by default (writing is consequential)
 var _cfg_shell_timeout_ms = 0 - 1;  # per-command wall-clock timeout (ms); -1 = unset -> default (clamped in the getter)
 var _cfg_shell_output_cap = 0 - 1;  # captured-output byte cap; -1 = unset -> default (clamped in the getter)
 var _cfg_persona = 0;        # [persona].name — startup default archetype (0.22.0); 0 = unset -> egyptian_thoth
@@ -496,6 +497,8 @@ fn config_load() {
     _cfg_shell_timeout_ms = _cfg_int(shell, "timeout_ms");  # -1 when absent -> default in the getter
     _cfg_shell_output_cap = _cfg_int(shell, "max_output");  # -1 when absent -> default in the getter
     _shell_globs_load(shell, sections);
+    var edit = _cfg_section_pairs(sections, "edit");
+    _cfg_edit_enabled = _cfg_bool(edit, "enabled", 0);      # opt-in; default off (0.31.0 edit tool; the model can rewrite project files)
     _cfg_parse_ok = 1;                            # 0.24.4: the file was read + parsed (a url may or may not be set)
     if (_cfg_hoosh_url == 0) { return 0; }
     return 1;
@@ -562,6 +565,10 @@ fn config_memory_enabled() { return _cfg_memory_enabled; }
 # during an agentic turn — a trust decision equivalent to running that project's code — so it is
 # opt-in and gated by t-ron (thoth_shell) + the [shell.deny]/[shell.allow] globs. See ADR-0014.
 fn config_shell_enabled() { return _cfg_shell_enabled; }
+
+# config_edit_enabled: 1 if the model-invokable `edit` tool is enabled (0.31.0; opt-in, off by default —
+# a model rewriting project files is consequential, so it must be turned on explicitly, like [shell].enabled).
+fn config_edit_enabled() { return _cfg_edit_enabled; }
 
 # config_persona: the [persona].name startup-default archetype, or 0 when unset (0.22.0). Resolved
 # through avatara's find_and_validate at first persona use; an unknown name falls back to the default.

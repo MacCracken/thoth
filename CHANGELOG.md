@@ -2,6 +2,53 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.0] - 2026-07-12
+
+**thoth can now WRITE code — a first-class model-invokable `edit` tool ([ADR-0017](docs/adr/0017-model-edit-tool-jailed-gated-opt-in.md)).**
+The symmetric completion of the read tools (ADR-0015): the model could read the project but only change it by
+shelling out to `sed`/`cat` (clumsy, unobservable). Now **`edit(path, old_string, new_string)`** does a surgical
+replacement of the **unique** occurrence of `old_string` and applies it to disk. It is the foundation of the
+"colored diffs in the feed" arc (0.31.1 records the diff; 0.31.2 renders it).
+
+Safety — it degrades **closed** at every layer (writing model-controlled input is consequential):
+- **Surgical + unique-match**: 0 matches → not-found, >1 → not-unique — **refused, never applied** (the model
+  must give enough context to name one site; it cannot blind-clobber). Empty `old_string` refused; empty
+  `new_string` = a deletion. Pure core `_edit_apply`, exhaustively unit-tested.
+- **Opt-in** `[edit].enabled` (default **off**, like `[shell].enabled`) — advertised only when enabled;
+  advertise-gate ⇔ dispatch-gate in lockstep (a hallucinated `edit` while off returns an honest not-enabled
+  string, never forwarded to daimon).
+- **Jailed** cwd-only via `_project_jail_ok` (relative only; no absolute/`~`/`..`) — deliberately **not**
+  `_project_read_ok`, so a write can never follow the user's read-only `/allow` grants.
+- **Gated** under a **distinct `thoth_edit`** t-ron verb (kept separate from `/write`'s `thoth_write` so a
+  policy can allow the operator's `/write` yet deny model edits); an absent policy falls to the fail-closed
+  confirm. Local + forced-serial (never the parallel/daimon path).
+
+### Added
+- `src/edit.cyr` — `edit_tool` + the pure `_edit_apply` core + `_edit_do` (apply-to-disk) + `edit_last_allowed`/
+  `edit_last_ok`. `[edit].enabled` config (`config_edit_enabled`). `thoth_edit` reserved gate verb.
+  [ADR-0017](docs/adr/0017-model-edit-tool-jailed-gated-opt-in.md).
+
+### Verified
+- 1450 assertions (`test_edit` +28: surgical match/unique/not-found/delete/bounds/no-OOB, real-file
+  read-modify-write via `_edit_do`, parse + jail refusals, and a long-path summary-buffer regression). **Live**
+  end-to-end: drove the full gated path against a real t-ron allow-policy — parse → jail → t-ron VK_ALLOW →
+  surgical apply → `file_write_all` → file changed on disk (`+1 -1 lines`). Adversarially reviewed
+  (safety/core/wiring → SHIP after two fixes, below). Pin **6.4.51** (wrapper 6.4.55).
+
+### Fixed (from the review, before first ship)
+- `_edit_puti` handed `fmt_int_buf` a mid-buffer destination with only 12 B of headroom, but `fmt_int_buf` writes
+  a **fixed 24 B scratch window** — a ~1000 B relative path could overflow the summary buffer by up to 11 B. Now
+  formats into a dedicated stack scratch, appended with the per-byte-bounded copy.
+- The disk write now requires the **full** byte count (`wr != newlen` → honest failure, roundlog `err`) instead
+  of only rejecting `wr < 0`, so a short write (disk-full) is never reported as a successful edit.
+
+### Notes
+- Edits **existing** files only (create is a deliberate follow-up). Residuals (honest, ADR-0017): the write is
+  **non-atomic** — `O_TRUNC` empties the file before writing, so a short write leaves it truncated (a crash-safe
+  temp-file+`rename` needs a portable `xrename` the stdlib lacks; a follow-up that would also harden `/write`); a
+  symlink *inside* the project pointing outside is followed (no portable `O_NOFOLLOW`). The jail is a boundary,
+  not a sandbox.
+
 ## [0.30.19] - 2026-07-12
 
 **Tool-call cards now render PER-TURN — an earlier turn keeps its cards when you ask a follow-up.** 0.30.16–.18

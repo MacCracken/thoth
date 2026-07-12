@@ -1,0 +1,173 @@
+# src/edit.cyr — the model-invokable `edit` tool (0.31.0, ADR-0017): a first-class, jailed, t-ron-gated LOCAL
+# file editor. The symmetric completion of the read_file/list_dir project tools (ADR-0015): thoth can now WRITE
+# code, not only read it. Surgical semantics — edit(path, old_string, new_string) replaces the UNIQUE occurrence
+# of old_string with new_string. If old_string is absent or matches more than once the edit is REFUSED (never
+# applied): the model must give enough surrounding context to name exactly one site, so it can't blind-clobber.
+#
+# Safety (writing is consequential, so it degrades CLOSED at every layer):
+#  - opt-in: advertised only when [edit].enabled (config_edit_enabled) — off by default, like [shell].enabled.
+#  - jailed: _project_jail_ok confines writes to the launch cwd (RELATIVE, no '/', '~', '..'). Deliberately NOT
+#    _project_read_ok — a write must never follow the user's read-only /allow grants (that would let the model
+#    write into vidya or another repo opened only for reading; a write-roots grant would need its own key).
+#  - gated: gate_authorize("thoth_edit", ...) — a DISTINCT reserved verb from thoth_write (/write) so a policy
+#    can allow the operator's /write yet deny model edits (the thoth_run/thoth_shell split precedent). An absent
+#    t-ron seam falls to the fail-closed confirm.
+#  RESIDUAL (documented honestly, ADR-0017): a symlink INSIDE the project pointing outside is followed (no
+#  portable O_NOFOLLOW) — more dangerous for a write than a read. The jail is a boundary, not a sandbox.
+#
+# PURE core (_edit_apply) unit-tested; the tool wrapper does the parse/jail/gate/read/apply/write. Local +
+# forced-serial in the agent loop (never forwarded to daimon). Cyrius forward-refs diff_stats/_params_one
+# (defined in later-included files) — resolved whole-unit, exactly as shell.cyr forward-refs _params_one.
+
+var EDIT_BUF_CAP = 262144;    # 256 KB per side (old snapshot + new content); over-cap -> honest refusal, never a truncated write
+var EDIT_RES_CAP = 1024;      # the summary string returned to the model
+var _edit_old = 0;
+var _edit_new = 0;
+var _edit_res = 0;
+var _edit_last_allowed = 0;   # 1 if the last edit_tool call passed jail+gate (read by the dispatch for roundlog)
+var _edit_last_ok = 0;        # 1 if the last edit_tool call actually applied + wrote
+fn edit_last_allowed() { return _edit_last_allowed; }
+fn edit_last_ok() { return _edit_last_ok; }
+
+# _edit_mem_eq: 1 if the n bytes at a and b are equal. Pure.
+fn _edit_mem_eq(a, b, n) {
+    var i = 0;
+    while (i < n) {
+        if (load8(a + i) != load8(b + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# _edit_apply: surgical single-occurrence replacement. Writes old[0..oldlen) with the UNIQUE occurrence of oldstr
+# replaced by newstr into out (bounded by outcap). Returns the new length (>= 0), or a negative code:
+#   -1 not found, -2 not unique (ambiguous), -3 result exceeds outcap, -4 oldstr empty (refused).
+# Pure — no I/O. The uniqueness rule is the safety contract: the model must name exactly one site.
+fn _edit_apply(old, oldlen, oldstr, oldstrlen, newstr, newstrlen, out, outcap) {
+    if (oldstrlen <= 0) { return 0 - 4; }
+    var first = 0 - 1;
+    var count = 0;
+    var i = 0;
+    while (i <= (oldlen - oldstrlen)) {
+        if (_edit_mem_eq(old + i, oldstr, oldstrlen) == 1) {
+            if (first < 0) { first = i; }
+            count = count + 1;
+            i = i + oldstrlen;                 # non-overlapping scan
+        } else {
+            i = i + 1;
+        }
+    }
+    if (count == 0) { return 0 - 1; }
+    if (count > 1) { return 0 - 2; }
+    var tail = first + oldstrlen;
+    var newlen = first + newstrlen + (oldlen - tail);
+    if (newlen > outcap) { return 0 - 3; }
+    var o = 0;
+    var k = 0;
+    while (k < first) { store8(out + o, load8(old + k)); o = o + 1; k = k + 1; }        # prefix
+    k = 0;
+    while (k < newstrlen) { store8(out + o, load8(newstr + k)); o = o + 1; k = k + 1; } # replacement
+    k = tail;
+    while (k < oldlen) { store8(out + o, load8(old + k)); o = o + 1; k = k + 1; }        # suffix
+    return newlen;
+}
+
+# _edit_puts / _edit_puti: bounded append into the result buffer at offset o; return the new offset.
+fn _edit_puts(o, s) {
+    var i = 0;
+    while ((load8(s + i) != 0) && (o < (EDIT_RES_CAP - 1))) { store8(_edit_res + o, load8(s + i)); o = o + 1; i = i + 1; }
+    return o;
+}
+fn _edit_puti(o, n) {
+    var tmp[32];                            # fmt_int_buf uses a FIXED 24-byte scratch window (writes buf[0..23]
+    var len = fmt_int_buf(n, &tmp);         # regardless of magnitude) — format into a dedicated stack buffer, never
+    store8(&tmp + len, 0);                  # mid-_edit_res (a long path could otherwise drive o near the cap and OOB).
+    return _edit_puts(o, &tmp);             # then append the digits with the per-byte bounded copy.
+}
+
+# _edit_summary: build "(edit: <path> - +A -D lines, N bytes written)" into _edit_res (diff_stats gives the
+# add/del counts; -1 over the diff line cap -> counts omitted honestly). Returns the buffer.
+fn _edit_summary(path, ob, ol, nb, nl, wr) {
+    var packed = diff_stats(ob, ol, nb, nl);
+    var o = 0;
+    o = _edit_puts(o, "(edit: ");
+    o = _edit_puts(o, path);
+    if (packed >= 0) {
+        o = _edit_puts(o, " - +");
+        o = _edit_puti(o, packed / 1000000);
+        o = _edit_puts(o, " -");
+        o = _edit_puti(o, packed - (packed / 1000000) * 1000000);
+        o = _edit_puts(o, " lines,");
+    }
+    o = _edit_puts(o, " ");
+    o = _edit_puti(o, wr);
+    o = _edit_puts(o, " bytes written)");
+    store8(_edit_res + o, 0);
+    return _edit_res;
+}
+
+# _edit_do: the post-gate apply-to-disk half (0.31.0). Reads `path`, applies the surgical replacement, writes it
+# back, sets _edit_last_ok, and returns the summary — OR an honest "(edit: ...)" refusal (no write) on any
+# failure. The caller has ALREADY jailed + gated. Split out so the disk path is unit-testable without the gate
+# (which denies in a non-interactive test). Sets only _edit_last_ok; the caller owns _edit_last_allowed.
+fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
+    _edit_last_ok = 0;
+    if (_edit_old == 0) { _edit_old = alloc(EDIT_BUF_CAP); }
+    if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
+    if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
+    if (file_exists(path) == 0) { return "(edit: file does not exist - this tool edits existing files; creating new files is not yet supported)"; }
+    var oldlen = file_read_all(path, _edit_old, EDIT_BUF_CAP - 1);
+    if (oldlen < 0) { return "(edit: could not read the file)"; }
+    if (oldlen >= (EDIT_BUF_CAP - 1)) { return "(edit: file too large (> 256KB) - refused rather than edit a truncated read)"; }
+    var newlen = _edit_apply(_edit_old, oldlen, oldstr, oldstrlen, newstr, newstrlen, _edit_new, EDIT_BUF_CAP);
+    if (newlen == (0 - 1)) { return "(edit: old_string not found in the file)"; }
+    if (newlen == (0 - 2)) { return "(edit: old_string is not unique - it matches more than once; add surrounding context so it names exactly one location)"; }
+    if (newlen == (0 - 3)) { return "(edit: the edited result would exceed the 256KB buffer)"; }
+    if (newlen < 0) { return "(edit: could not apply the edit)"; }
+    var wr = file_write_all(path, _edit_new, newlen);
+    # Require the FULL byte count. file_write_all is a single non-looping O_TRUNC write (lib/io.cyr), so a short
+    # write (disk-full/quota) or an error must NOT be reported as a successful edit. NON-ATOMIC residual (ADR-0017):
+    # O_TRUNC has already emptied the file at open, so a short write leaves it truncated — a crash-safe write needs
+    # a portable temp-file+rename (a stdlib follow-up: no portable xrename wrapper exists, and sys_rename's arity
+    # differs per target). Until then this at least never CLAIMS success on a partial write.
+    if (wr != newlen) { return "(edit: the write to disk was incomplete (disk full?) - the file may be truncated)"; }
+    _edit_last_ok = 1;
+    return _edit_summary(path, _edit_old, oldlen, _edit_new, newlen, wr);
+}
+
+# edit_tool: the agentic-loop entry. Parses {path, old_string, new_string}, jails, gates, then applies via
+# _edit_do. Returns an honest "(edit: ...)" refusal string (with rl left DENIED / not-ok via the last_* flags)
+# on any failure — never a partial write.
+fn edit_tool(args_cstr) {
+    _edit_last_allowed = 0;
+    _edit_last_ok = 0;
+    if (_edit_old == 0) { _edit_old = alloc(EDIT_BUF_CAP); }
+    if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
+    if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
+    if (args_cstr == 0) { return "(edit: missing arguments)"; }
+    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    if (v == 0) { return "(edit: arguments are not valid JSON)"; }
+    var pv = bayan_json_v_obj_get(v, "path");
+    if (pv == 0) { return "(edit: missing required string 'path')"; }
+    var pvs = bayan_json_v_str(pv);
+    if (pvs == 0) { return "(edit: 'path' must be a string)"; }
+    var path = str_cstr(pvs);
+    var ov = bayan_json_v_obj_get(v, "old_string");
+    if (ov == 0) { return "(edit: missing required string 'old_string')"; }
+    var ovs = bayan_json_v_str(ov);
+    if (ovs == 0) { return "(edit: 'old_string' must be a string)"; }
+    var oldstr = str_cstr(ovs);
+    var oldstrlen = str_len(ovs);
+    var nv = bayan_json_v_obj_get(v, "new_string");
+    if (nv == 0) { return "(edit: missing required string 'new_string')"; }
+    var nvs = bayan_json_v_str(nv);
+    if (nvs == 0) { return "(edit: 'new_string' must be a string)"; }
+    var newstr = str_cstr(nvs);
+    var newstrlen = str_len(nvs);
+    if (oldstrlen == 0) { return "(edit: 'old_string' must not be empty)"; }
+    # jail FIRST (cheap deterministic boundary), then t-ron (the authority) — mirrors shell's filter-before-gate.
+    if (_project_jail_ok(path) == 0) { return "(edit: refused - path is outside the project (no absolute, no '~', no '..'))"; }
+    if (gate_authorize("thoth_edit", _params_one("path", path), "edit", path) == 0) { return "denied by authorization policy"; }
+    _edit_last_allowed = 1;
+    return _edit_do(path, oldstr, oldstrlen, newstr, newstrlen);
+}

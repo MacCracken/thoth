@@ -15,8 +15,11 @@
 # unknown agents and unknown tools — fail closed end to end.
 #
 # Built-in actions are authorized under reserved tool names so a policy can
-# target them: thoth_run (the /run shell escape), thoth_write (/write). MCP
-# tool calls are authorized under their real tool name BEFORE any request
+# target them: thoth_run (the /run shell escape), thoth_write (/write),
+# thoth_remember (/remember + the model memory_write), thoth_shell (the model
+# shell tool), thoth_edit (the model `edit` tool — 0.31.0; kept distinct from
+# thoth_write so a policy can allow the operator's /write yet deny model edits).
+# MCP tool calls are authorized under their real tool name BEFORE any request
 # leaves thoth.
 
 var _gate_tron = 0;          # TRon instance, or 0 -> seam absent

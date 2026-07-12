@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.31.0** — **Model `edit` tool: thoth can now WRITE code** (ADR-0017), 2026-07-12. New capability arc (minor
+bump). The symmetric completion of the ADR-0015 read tools: `edit(path, old_string, new_string)` (`src/edit.cyr`)
+does a **surgical** replacement of the UNIQUE occurrence of old_string and applies it to disk — 0 matches →
+not-found, >1 → not-unique, both **refused, never applied** (no blind-clobber). Degrades **closed** everywhere:
+**opt-in** `[edit].enabled` (default off, like shell); **jailed** cwd-only via `_project_jail_ok` (NOT
+`_project_read_ok`, so writes can't follow read `/allow` grants); **gated** under a **distinct `thoth_edit`** verb
+(separate from `/write`'s `thoth_write`); local + forced-serial. Foundation for the colored-diffs arc (0.31.1
+record → 0.31.2 GUI diff card, both via `compute_file_diff`'s escape-free ann-ops). **Verified**: 1450 assertions
+(`test_edit` +28: pure core + real-file `_edit_do` + parse/jail refusals) + **LIVE** end-to-end against a real
+t-ron allow-policy (parse → jail → VK_ALLOW → surgical apply → `file_write_all` → file changed, `+1 -1`) +
+adversarial review (safety/core/wiring). Pin **6.4.51** (wrapper drifted to 6.4.55; benign). **NEXT (colored-diffs
+arc)**: 0.31.1 = `editlog` producer (snapshot old/new keyed by turn/round; recompute the diff on demand) → 0.31.2
+= GUI colored diff card (draw-IR walk of the `compute_file_diff` ann-vec, grown into `_gtool_card`). Also open:
+create-new-file support; the `daimon_invoke` HTTP-status hardening (from 0.30.18).
+
 **0.30.19** — **Tool-call cards render PER-TURN**, 2026-07-12. 0.30.16–.18 carded only the current turn, so a
 turn's cards vanished when you sent the next message; now each turn's cards sit above ITS OWN reply throughout
 the scrollback. Each `session_history` message is turn-tagged (`session_turns()` at append; struct 16→24 B,

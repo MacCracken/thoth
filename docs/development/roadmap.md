@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.19):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.31.0):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -55,10 +55,13 @@
 > valid text was carded green `ok`; now the recorded success flag honors `isError` (verified live against a real
 > daimon). **0.30.19** made the cards render PER-TURN — each message is turn-tagged (`session_history_turn`) so a
 > turn's cards stay above its own reply throughout the scrollback (was current-turn-only, vanishing on the next
-> message); in-memory tag, no session-file change. Still ahead (0.30.x patches): colored **diffs** — which have
-> no first-class source today (thoth exposes no file-edit tool, and `roundlog` keeps no result text), so that one
-> needs its own producer/source decision. (A separate hardening item: `daimon_invoke` doesn't check HTTP status,
-> unlike `daimon_call`.)
+> message); in-memory tag, no session-file change. **0.31.0** started a NEW capability arc — the model `edit`
+> tool ([ADR-0017](adr/0017-model-edit-tool-jailed-gated-opt-in.md)): thoth can now WRITE code, not only read it.
+> Surgical `edit(path, old_string, new_string)` (unique-match-or-refuse), opt-in `[edit].enabled`, jailed cwd-only,
+> `thoth_edit`-gated, degrade-closed — the first-class source the colored-diffs arc needed. Still ahead (0.31.x):
+> the colored **diff card** — 0.31.1 records the edit's diff (an `editlog` producer keyed by turn/round), 0.31.2
+> renders it in the GUI feed (draw-IR walk of `compute_file_diff`'s escape-free ann-ops); then create-new-file
+> support. (A separate hardening item: `daimon_invoke` doesn't check HTTP status, unlike `daimon_call`.)
 > thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
