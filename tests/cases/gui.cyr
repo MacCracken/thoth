@@ -383,43 +383,43 @@ fn test_gui_nav() {
     _ftree_append("src", 1, 0); _ftree_append("VERSION", 0, 0);
     # Tab toggles composer <-> tree (tree is populated)
     gfocus_set(GFOCUS_COMPOSER);
-    assert_eq(gkey(15, 0), 0, "Tab is handled");
+    assert_eq(gkey(15, 0, 0), 0, "Tab is handled");
     assert_eq(gfocus(), GFOCUS_TREE, "Tab -> tree focus");
-    assert_eq(gkey(15, 0), 0, "Tab again handled");
+    assert_eq(gkey(15, 0, 0), 0, "Tab again handled");
     assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab -> back to the composer");
     # arrows move the selection (clamped)
     gfocus_set(GFOCUS_TREE); ftree_set_sel(0);
-    gkey(108, 0); assert_eq(ftree_sel(), 1, "down -> row 1 (VERSION)");
-    gkey(108, 0); assert_eq(ftree_sel(), 1, "down clamps at the last row");
-    gkey(103, 0); assert_eq(ftree_sel(), 0, "up -> row 0 (src)");
+    gkey(108, 0, 0); assert_eq(ftree_sel(), 1, "down -> row 1 (VERSION)");
+    gkey(108, 0, 0); assert_eq(ftree_sel(), 1, "down clamps at the last row");
+    gkey(103, 0, 0); assert_eq(ftree_sel(), 0, "up -> row 0 (src)");
     # Enter toggles a dir; left collapses; right expands
     ftree_set_sel(0);
     assert_eq(ftree_exp(0), 0, "src starts collapsed");
-    gkey(28, 0); assert_eq(ftree_exp(0), 1, "Enter on a collapsed dir -> expanded");
-    gkey(105, 0); assert_eq(ftree_exp(0), 0, "left -> collapsed");
-    gkey(106, 0); assert_eq(ftree_exp(0), 1, "right -> expanded");
-    gkey(105, 0);
+    gkey(28, 0, 0); assert_eq(ftree_exp(0), 1, "Enter on a collapsed dir -> expanded");
+    gkey(105, 0, 0); assert_eq(ftree_exp(0), 0, "left -> collapsed");
+    gkey(106, 0, 0); assert_eq(ftree_exp(0), 1, "right -> expanded");
+    gkey(105, 0, 0);
     # a printable key while tree-focused returns to the composer + types it
     gfocus_set(GFOCUS_TREE); gcomp_reset();
-    assert_eq(gkey(30, 0), 0, "'a' while tree-focused is handled");
+    assert_eq(gkey(30, 0, 0), 0, "'a' while tree-focused is handled");
     assert_eq(gfocus(), GFOCUS_COMPOSER, "printable key returns focus to the composer");
     assert(streq(gcomp_cstr(), "a") == 1, "the key was typed into the composer");
     # Esc quits from any focus; Enter on the composer submits
-    assert_eq(gkey(1, 0), 1, "Esc -> quit");
+    assert_eq(gkey(1, 0, 0), 1, "Esc -> quit");
     gcomp_reset(); gcomp_append(0x68); gfocus_set(GFOCUS_COMPOSER);
-    assert_eq(gkey(28, 0), 2, "Enter on the composer -> submit");
+    assert_eq(gkey(28, 0, 0), 2, "Enter on the composer -> submit");
     # Tab with an EMPTY tree stays on the composer
     ftree_reset(); gfocus_set(GFOCUS_COMPOSER);
-    gkey(15, 0); assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab with an empty tree stays on the composer");
+    gkey(15, 0, 0); assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab with an empty tree stays on the composer");
     # Enter on a FILE inserts @<repo-relative path> into the composer + focuses it (0.30.13); a DIR still toggles
     ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
     _ftree_append("src", 1, 0); ftree_set_exp(0, 1); _ftree_insert_at(1, "main.cyr", 0, 1);   # src(exp) > main.cyr
     gcomp_reset(); gfocus_set(GFOCUS_TREE); ftree_set_sel(1);
-    gkey(28, 0);
+    gkey(28, 0, 0);
     assert(streq(gcomp_cstr(), "@src/main.cyr ") == 1, "Enter on a file inserts @<relpath> + a space");
     assert_eq(gfocus(), GFOCUS_COMPOSER, "Enter on a file hands focus to the composer");
     gcomp_reset(); gfocus_set(GFOCUS_TREE); ftree_set_sel(0);
-    gkey(28, 0);
+    gkey(28, 0, 0);
     assert_eq(ftree_exp(0), 0, "Enter on an expanded dir still collapses (no mention)");
     assert_eq(gcomp_len(), 0, "Enter on a dir inserts nothing into the composer");
     # a tree-FOCUSED frame -> golden PPM (bright selection highlight on the tree, dimmed composer prompt/caret)
@@ -434,6 +434,46 @@ fn test_gui_nav() {
     _gui_ppm_dump(_nvbuf, 900, 400, "/tmp/thoth_gui_treefocus.ppm");
     session_history_clear();
     gcomp_reset(); gfocus_set(GFOCUS_COMPOSER); ftree_reset();
+    return 0;
+}
+
+# GUI pane-visibility toggles (0.32.x): Ctrl+B hides/shows the file-tree pane, Ctrl+S the status strip. PURE over
+# the ginput visibility state (gframe_build reads it for layout; that path is main-only). Keys: b=48, s=31, a=30.
+fn test_gui_pane_toggles() {
+    test_group("GUI pane toggles — hide files / status (0.32.x)");
+    # both panes visible by default
+    _gtree_hidden = 0; _gstatus_hidden = 0;
+    assert_eq(gtree_hidden(), 0, "file-tree visible by default");
+    assert_eq(gstatus_hidden(), 0, "status strip visible by default");
+    # Ctrl+B toggles the tree; Ctrl+S the status strip (ctrl arg = 1)
+    assert_eq(gkey(48, 0, 1), 0, "Ctrl+B handled");
+    assert_eq(gtree_hidden(), 1, "Ctrl+B hides the file-tree pane");
+    assert_eq(gkey(48, 0, 1), 0, "Ctrl+B again handled");
+    assert_eq(gtree_hidden(), 0, "Ctrl+B again shows the file-tree pane");
+    assert_eq(gkey(31, 0, 1), 0, "Ctrl+S handled");
+    assert_eq(gstatus_hidden(), 1, "Ctrl+S hides the status strip");
+    gkey(31, 0, 1); assert_eq(gstatus_hidden(), 0, "Ctrl+S again shows it");
+    # a control chord must NOT type its letter into the composer
+    gcomp_reset();
+    gkey(48, 0, 1); gkey(31, 0, 1);
+    assert_eq(gcomp_len(), 0, "Ctrl+B / Ctrl+S do not type into the composer");
+    # an UNBOUND Ctrl+<letter> is swallowed (no text injected), but plain (no-ctrl) still types
+    gcomp_reset(); _gtree_hidden = 0; _gstatus_hidden = 0;
+    gkey(30, 0, 1);                                   # Ctrl+A -> swallowed
+    assert_eq(gcomp_len(), 0, "unbound Ctrl+A injects no text");
+    gkey(30, 0, 0);                                   # plain 'a' -> types
+    assert(streq(gcomp_cstr(), "a") == 1, "plain 'a' still types");
+    # hiding the tree while it is focused hands focus back to the composer (never stuck on a hidden pane)
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/repo"); _ftree_append("src", 1, 0);
+    _gtree_hidden = 0; gfocus_set(GFOCUS_TREE);
+    gkey(48, 0, 1);
+    assert_eq(gtree_hidden(), 1, "Ctrl+B hid the tree");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "focus left the hidden tree -> composer");
+    # Tab does NOT focus a hidden (populated) tree
+    gfocus_set(GFOCUS_COMPOSER); gkey(15, 0, 0);
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab does not focus a hidden tree");
+    # restore visible state for later tests
+    _gtree_hidden = 0; _gstatus_hidden = 0; gcomp_reset(); gfocus_set(GFOCUS_COMPOSER); ftree_reset();
     return 0;
 }
 
@@ -486,11 +526,11 @@ fn test_gui_scroll() {
     assert_eq(_m1, _m2, "scroll clamps at the top (no runaway)");
     assert(_m1 > 0, "there is scrollable overflow");
     # gkey wiring: PgUp scrolls, End jumps to latest
-    gscroll_reset(); gkey(104, 0); assert(gscroll() > 0, "PgUp (104) scrolls the feed");
-    gkey(107, 0); assert_eq(gscroll(), 0, "End (107) jumps to the latest");
+    gscroll_reset(); gkey(104, 0, 0); assert(gscroll() > 0, "PgUp (104) scrolls the feed");
+    gkey(107, 0, 0); assert_eq(gscroll(), 0, "End (107) jumps to the latest");
     # a submitted turn resets the scroll so the reply is visible
     gscroll_by(100); gcomp_reset(); gcomp_append(0x68); gfocus_set(GFOCUS_COMPOSER);
-    assert_eq(gkey(28, 0), 2, "Enter submits");
+    assert_eq(gkey(28, 0, 0), 2, "Enter submits");
     assert_eq(gscroll(), 0, "a submitted turn snaps the feed back to the latest");
     # a scrolled-up frame -> golden PPM (older messages in view + the "-- more below --" hint)
     gscroll_reset(); gscroll_by(90);
@@ -507,25 +547,25 @@ fn test_gui_history() {
     test_group("GUI composer history recall (0.30.15)");
     inhist_init(); gfocus_set(GFOCUS_COMPOSER);
     gcomp_reset(); gcomp_append(0x66); gcomp_append(0x6f); gcomp_append(0x6f);   # "foo"
-    assert_eq(gkey(28, 0), 2, "Enter submits");
+    assert_eq(gkey(28, 0, 0), 2, "Enter submits");
     assert_eq(inhist_count(), 1, "the submission is recorded in the ring");
     gcomp_reset();                                                                # (gpresent clears the composer after submit)
     gcomp_append(0x62); gcomp_append(0x61); gcomp_append(0x72);                   # "bar"
-    gkey(28, 0); gcomp_reset();
+    gkey(28, 0, 0); gcomp_reset();
     assert_eq(inhist_count(), 2, "two submissions recorded");
     # Up recalls newest -> older
-    gkey(103, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Up recalls the most recent submission");
-    gkey(103, 0); assert(streq(gcomp_cstr(), "foo") == 1, "Up again recalls the older submission");
+    gkey(103, 0, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Up recalls the most recent submission");
+    gkey(103, 0, 0); assert(streq(gcomp_cstr(), "foo") == 1, "Up again recalls the older submission");
     # Down walks newer, then restores the (empty) draft past the newest
-    gkey(108, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Down walks back toward newer");
-    gkey(108, 0); assert_eq(gcomp_len(), 0, "Down past the newest restores the (empty) draft");
+    gkey(108, 0, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Down walks back toward newer");
+    gkey(108, 0, 0); assert_eq(gcomp_len(), 0, "Down past the newest restores the (empty) draft");
     # a typed draft is stashed on the first Up and restored on Down past newest
     gcomp_reset(); gcomp_append(0x7a);                                            # "z" draft
-    gkey(103, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Up from a draft recalls the newest");
-    gkey(108, 0); assert(streq(gcomp_cstr(), "z") == 1, "Down restores the stashed draft");
+    gkey(103, 0, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Up from a draft recalls the newest");
+    gkey(108, 0, 0); assert(streq(gcomp_cstr(), "z") == 1, "Down restores the stashed draft");
     # a tree-focused Up still navigates the tree (not history)
     ftree_init(); ftree_reset(); _ftree_set_cwd("/r"); _ftree_append("a", 0, 0); _ftree_append("b", 0, 0);
-    gfocus_set(GFOCUS_TREE); ftree_set_sel(1); gkey(103, 0);
+    gfocus_set(GFOCUS_TREE); ftree_set_sel(1); gkey(103, 0, 0);
     assert_eq(ftree_sel(), 0, "tree-focused Up moves the tree selection, not history");
     gcomp_reset(); ftree_reset(); inhist_nav_reset(); gfocus_set(GFOCUS_COMPOSER);
     return 0;

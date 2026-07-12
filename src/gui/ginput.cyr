@@ -136,6 +136,23 @@ var _gfocus = 0;
 fn gfocus() { return _gfocus; }
 fn gfocus_set(f) { _gfocus = f; return 0; }
 
+# --- pane visibility toggles (0.32.x) — hide/show the file-tree pane + the status strip -----------------------
+# Two control chords toggle the two chrome panes, giving the conversation feed the whole window when wanted.
+# Keybindings are PROVISIONAL — Ctrl+B (files) / Ctrl+S (status) mirror the TUI's Ctrl-B, but the cross-platform
+# modifier chord may change (macOS/Windows conventions differ), so the mapping lives in ONE place (gkey below).
+# State here (before gfeed.cyr in the include order) so gkey toggles it and gframe_build reads it for layout.
+# PURE + headless-testable. Default: both visible (the pre-0.32 layout, byte-identical).
+var _gtree_hidden = 0;
+var _gstatus_hidden = 0;
+fn gtree_hidden() { return _gtree_hidden; }
+fn gstatus_hidden() { return _gstatus_hidden; }
+fn gtree_toggle_hidden() {
+    if (_gtree_hidden == 1) { _gtree_hidden = 0; }
+    else { _gtree_hidden = 1; if (_gfocus == GFOCUS_TREE) { _gfocus = GFOCUS_COMPOSER; } }   # never leave focus on a hidden pane
+    return 0;
+}
+fn gstatus_toggle_hidden() { if (_gstatus_hidden == 1) { _gstatus_hidden = 0; } else { _gstatus_hidden = 1; } return 0; }
+
 # --- conversation-feed scrollback (0.30.14) -----------------------------------------------------------------
 # The feed bottom-anchors to the newest message (0.30.3); after a long chat, older messages clip off the top.
 # PgUp/PgDn page through them (End jumps back to the latest). State lives here (before gfeed.cyr in the include
@@ -226,14 +243,23 @@ fn gtree_key(code, shift) {
 # 0 = handled/repaint, 1 = Esc (quit), 2 = Enter (submit the composer turn). Tab toggles focus (only to the tree
 # when it has rows); Esc quits from any focus. Tree-focused: a printable key returns to the composer + types it,
 # else it navigates the tree. Composer-focused: delegate to gcomp_key.
-fn gkey(code, shift) {
+fn gkey(code, shift, ctrl) {
     if (code == 1) { return 1; }                              # Esc -> quit (any focus)
+    # control chords (0.32.x) — PROVISIONAL bindings; see the visibility-toggle note above. Handled BEFORE the
+    # composer/tree dispatch so the chord never types its letter. Ctrl+B/S toggle the panes; any OTHER Ctrl+<char>
+    # is swallowed (an unbound chord must not inject text), while Ctrl+<non-printable> (arrows/PageUp/Tab) falls
+    # through to normal handling.
+    if (ctrl == 1) {
+        if (code == 48) { gtree_toggle_hidden(); return 0; }     # Ctrl+B -> toggle the file-tree pane
+        if (code == 31) { gstatus_toggle_hidden(); return 0; }   # Ctrl+S -> toggle the status strip
+        if (ginput_ascii(code, shift) != 0) { return 0; }        # swallow other Ctrl+<printable>
+    }
     if (code == 104) { gscroll_page(1); return 0; }           # PageUp   -> scroll the feed to OLDER messages
     if (code == 109) { gscroll_page(0 - 1); return 0; }       # PageDown -> scroll toward newer
     if (code == 107) { gscroll_reset(); return 0; }           # End      -> jump back to the latest
     if (code == 15) {                                         # Tab -> toggle composer <-> tree
         if (_gfocus == GFOCUS_TREE) { _gfocus = GFOCUS_COMPOSER; }
-        elif (ftree_count() > 0) { _gfocus = GFOCUS_TREE; }   # only focus a populated tree
+        elif ((ftree_count() > 0) && (gtree_hidden() == 0)) { _gfocus = GFOCUS_TREE; }   # only a populated, VISIBLE tree
         return 0;
     }
     if (_gfocus == GFOCUS_TREE) {

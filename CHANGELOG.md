@@ -2,6 +2,22 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.32.1] - 2026-07-12
+
+**GUI pane toggles — hide the file-tree and status chrome so the conversation feed can take the whole window.**
+
+### Added
+- **GUI pane toggles.** Two control chords hide/show the desktop GUI's chrome: **Ctrl+B** toggles the file-tree
+  pane, **Ctrl+S** the status strip. The conversation feed reclaims the freed space (`gframe_build` reads the
+  visibility state for layout); focus never sticks on a hidden pane (hiding the focused tree returns focus to the
+  composer, and Tab won't select a hidden tree); an unbound `Ctrl+<letter>` is swallowed, never typed into the
+  composer. Keybindings are **provisional** — the cross-platform modifier chord may change — so the mapping lives
+  in one place (`gkey`, `src/gui/ginput.cyr`). Headless-tested (state machine + focus handling + chord routing).
+
+### Changed
+- **Toolchain pin `6.4.57` → `6.4.58`** (latest; the 6.4.58 batch also finished out the Windows atomic-write
+  path). Vendored `lib/` refreshed via `cyrius lib sync`.
+
 ## [0.32.0] - 2026-07-12
 
 **The mneme memory seam — thoth consumes mneme (the AGNOS memory/RAG domain, now Cyrius-ported) through

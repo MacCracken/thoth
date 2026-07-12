@@ -59,9 +59,12 @@ fn _gpresent_drain_keys(win) {
         var value = load64(&rec + 8);
         if ((value == 1) || (value == 2)) {              # press / autorepeat
             var code = load64(&rec);
+            var mods = load64(&rec + 16);
             var shift = 0;
-            if ((load64(&rec + 16) & 1) != 0) { shift = 1; }
-            var a = gkey(code, shift);                       # focus-aware dispatch (composer / tree nav; 0.30.10)
+            if ((mods & 1) != 0) { shift = 1; }              # MOD_SHIFT (gwl_wl__derive_mods)
+            var ctrl = 0;
+            if ((mods & 4) != 0) { ctrl = 1; }               # MOD_CTRL -> the pane-toggle chords (0.32.x)
+            var a = gkey(code, shift, ctrl);                 # focus-aware dispatch (composer / tree nav / pane toggles)
             if (a != 0) { action = a; }
         }
     }

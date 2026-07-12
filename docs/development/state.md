@@ -7,6 +7,11 @@
 
 ## Version
 
+**0.32.1** — **GUI pane toggles** (2026-07-12). Two control chords hide/show the desktop GUI's chrome so the
+conversation feed can take the whole window: **Ctrl+B** the file-tree pane, **Ctrl+S** the status strip (the feed
+reclaims the space; focus never sticks on a hidden pane; unbound `Ctrl+<letter>` is swallowed). Provisional
+keybindings (cross-platform chord may change), mapped in one place (`gkey`). Toolchain pin `6.4.57` → `6.4.58`.
+
 **0.32.0** — **The mneme memory seam** (2026-07-12). thoth consumes **mneme** (the AGNOS memory/RAG domain, now
 Cyrius-ported) through daimon's MCP registry: a cached `mneme_*` probe binds `SEAM_MEMORY` → REMOTE, and
 `/remember` + the `memory_write` tool route to `mneme_create_note` when bound, degrading to the local

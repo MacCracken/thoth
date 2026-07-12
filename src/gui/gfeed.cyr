@@ -201,15 +201,21 @@ fn geye_color_now() { return geye_color(_geye_phase); }
 fn gframe_build(w, h) {
     var cmds = gd_list_new();
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
-    gstatus_build(cmds, 0, 0, w, GFRAME_STRIP_H);                            # status strip (the view-model)
-    gd_push_rect(cmds, 0, GFRAME_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));        # rule under the strip
+    # status strip (0.32.x: hidden via Ctrl+S -> the feed reclaims its height). When shown it spans the full width.
+    var body_top = 0;
+    if (gstatus_hidden() == 0) {
+        gstatus_build(cmds, 0, 0, w, GFRAME_STRIP_H);                        # status strip (the view-model)
+        gd_push_rect(cmds, 0, GFRAME_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));    # rule under the strip
+        body_top = GFRAME_STRIP_H + 1;
+    }
     # body band: an optional file-tree pane (left) + the conversation feed (right); status strip + composer span
-    # the full width. The tree hides on a narrow window (gtree_w -> 0), giving the feed the whole body as before.
-    var body_top = GFRAME_STRIP_H + 1;
+    # the full width. The tree hides on a narrow window (gtree_w -> 0) OR via Ctrl+B (0.32.x), giving the feed the
+    # whole body as before.
     var comp_top = h - GFRAME_COMPOSER_H;                                    # composer line (bottom)
     var body_h = comp_top - body_top;
     if (body_h < 0) { body_h = 0; }
-    var tw = gtree_w(w);
+    var tw = 0;
+    if (gtree_hidden() == 0) { tw = gtree_w(w); }
     var feed_x = 0;
     if (tw > 0) {
         gtree_build(cmds, 0, body_top, tw, body_h);
