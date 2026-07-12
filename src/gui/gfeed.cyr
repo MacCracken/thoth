@@ -170,12 +170,18 @@ fn gframe_build(w, h) {
     gfeed_build(cmds, feed_x, body_top, w - feed_x, body_h);
     gd_push_rect(cmds, 0, comp_top, w, 1, _ui_rgb(ROLE_FAINT));
     var cty = comp_top + (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2;
-    gd_push_text(cmds, 14, cty, _ui_rgb(ROLE_ACCENT), ">", 0);
+    # the `>` prompt dims when focus is on the tree (so the active pane is obvious), bright on the composer.
+    var promptc = _ui_rgb(ROLE_ACCENT_DIM);
+    if (gfocus() == GFOCUS_COMPOSER) { promptc = _ui_rgb(ROLE_ACCENT); }
+    gd_push_text(cmds, 14, cty, promptc, ">", 0);
+    var ccx = 34;
     if (gcomp_len() == 0) {
-        gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FAINT), "type a message, Enter sends  (Esc closes)", 0);
+        gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FAINT), "type a message  -  Tab: files  -  Enter: send  -  Esc: close", 0);
     } else {
         gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FG), gcomp_cstr(), 0);
-        gd_push_rect(cmds, 34 + gcomp_len() * GR_GLYPH_W + 1, cty, 2, GR_GLYPH_H, _ui_rgb(ROLE_ACCENT));   # caret
+        ccx = 34 + gcomp_len() * GR_GLYPH_W + 1;
     }
+    # the caret shows ONLY when the composer is focused (0.30.10) — a clear active-pane cue.
+    if (gfocus() == GFOCUS_COMPOSER) { gd_push_rect(cmds, ccx, cty, 2, GR_GLYPH_H, _ui_rgb(ROLE_ACCENT)); }
     return cmds;
 }

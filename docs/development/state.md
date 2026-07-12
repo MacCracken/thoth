@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.30.10** — **T3 GUI: file-tree keyboard navigation**, 2026-07-11. The file-tree pane (0.30.5, static)
+becomes interactive with TUI-style focus. NEW in `src/gui/ginput.cyr`: `gfocus`/`gfocus_set` (COMPOSER/TREE),
+`gtree_key` (evdev ↑103/↓108 move · →106 expand · ←105 collapse · Enter toggles the selected dir, over
+`ftree_*`), and `gkey` — the focus-aware dispatch that replaces `gcomp_key` as the present loop's entry: **Tab**
+toggles composer↔tree (only to a populated tree), **Esc** quits, a printable key while tree-focused returns to
+the composer + types it, else composer keys route to `gcomp_key`. `gpresent.cyr` feeds keys through `gkey`.
+Focus is VISIBLE: the tree's selected row shows a bright full-row highlight + accent bar when focused (dim bar
+otherwise; `_gtree_selbg`), and the composer's `>` prompt + caret are bright only when composer-focused.
+**Verified**: 1360 assertions (+17 `test_gui_nav` in the LEAN `thoth_gui.tcyr` — Tab toggle, arrow move/clamp,
+Enter/→/← expand-collapse, printable→composer, Esc/submit, empty-tree guard) + a **golden PPM** of the
+tree-focused frame (bright selection on `docs`, dimmed composer — visually confirmed) + main builds. The nav
+logic is PURE + unit-tested; the present-loop wiring is main-only (compositor-gated — verify live on Wayland).
+First cut to exercise the 0.30.9 lean gui binary for iteration. Pin **6.4.51** (wrapper drifted to 6.4.53;
+benign). **NEXT (GUI arc)**: Enter-on-a-file → `@path` into the composer; tool-call cards + colored diffs
+(needs a tool-round producer); feed scrollback; composer history.
+
 **0.30.9** — **curated per-domain test binaries** (the payoff of the 0.30.8 decoupling), 2026-07-11. The single
 `tests/thoth.tcyr` (one binary of the whole codebase) is replaced by independent, curated `tests/*.tcyr`, each
 including ONLY its domain's transitive `src` deps so it runs fast in isolation: **`thoth_gui.tcyr`** LEAN (103 —

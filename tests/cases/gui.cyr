@@ -374,3 +374,54 @@ fn test_surface() {
     session_history_clear();
     return 0;
 }
+
+# GUI focus + file-tree keyboard nav (0.30.10): Tab toggles composer<->tree, arrows navigate, a printable key
+# returns to the composer. PURE (drives the ftree model + gfocus/gkey); the present-loop wiring is main-only.
+fn test_gui_nav() {
+    test_group("GUI focus + file-tree keyboard nav (0.30.10)");
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0); _ftree_append("VERSION", 0, 0);
+    # Tab toggles composer <-> tree (tree is populated)
+    gfocus_set(GFOCUS_COMPOSER);
+    assert_eq(gkey(15, 0), 0, "Tab is handled");
+    assert_eq(gfocus(), GFOCUS_TREE, "Tab -> tree focus");
+    assert_eq(gkey(15, 0), 0, "Tab again handled");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab -> back to the composer");
+    # arrows move the selection (clamped)
+    gfocus_set(GFOCUS_TREE); ftree_set_sel(0);
+    gkey(108, 0); assert_eq(ftree_sel(), 1, "down -> row 1 (VERSION)");
+    gkey(108, 0); assert_eq(ftree_sel(), 1, "down clamps at the last row");
+    gkey(103, 0); assert_eq(ftree_sel(), 0, "up -> row 0 (src)");
+    # Enter toggles a dir; left collapses; right expands
+    ftree_set_sel(0);
+    assert_eq(ftree_exp(0), 0, "src starts collapsed");
+    gkey(28, 0); assert_eq(ftree_exp(0), 1, "Enter on a collapsed dir -> expanded");
+    gkey(105, 0); assert_eq(ftree_exp(0), 0, "left -> collapsed");
+    gkey(106, 0); assert_eq(ftree_exp(0), 1, "right -> expanded");
+    gkey(105, 0);
+    # a printable key while tree-focused returns to the composer + types it
+    gfocus_set(GFOCUS_TREE); gcomp_reset();
+    assert_eq(gkey(30, 0), 0, "'a' while tree-focused is handled");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "printable key returns focus to the composer");
+    assert(streq(gcomp_cstr(), "a") == 1, "the key was typed into the composer");
+    # Esc quits from any focus; Enter on the composer submits
+    assert_eq(gkey(1, 0), 1, "Esc -> quit");
+    gcomp_reset(); gcomp_append(0x68); gfocus_set(GFOCUS_COMPOSER);
+    assert_eq(gkey(28, 0), 2, "Enter on the composer -> submit");
+    # Tab with an EMPTY tree stays on the composer
+    ftree_reset(); gfocus_set(GFOCUS_COMPOSER);
+    gkey(15, 0); assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab with an empty tree stays on the composer");
+    # a tree-FOCUSED frame -> golden PPM (bright selection highlight on the tree, dimmed composer prompt/caret)
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/home/macro/Repos/thoth");
+    _ftree_append("src", 1, 0); _ftree_append("docs", 1, 0); _ftree_append("VERSION", 0, 0);
+    ftree_set_sel(1); gfocus_set(GFOCUS_TREE);
+    session_history_clear();
+    var _nvu = "explore the codebase"; session_history_append("user", _nvu, strlen(_nvu));
+    var _nvbuf = gr_fb_new(900, 400);
+    gr_fb_clear(_nvbuf, 900, 400, _gframe_bg());
+    gr_raster(gframe_build(900, 400), _nvbuf, 900, 400);
+    _gui_ppm_dump(_nvbuf, 900, 400, "/tmp/thoth_gui_treefocus.ppm");
+    session_history_clear();
+    gcomp_reset(); gfocus_set(GFOCUS_COMPOSER); ftree_reset();
+    return 0;
+}

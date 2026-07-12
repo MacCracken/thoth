@@ -31,6 +31,8 @@ fn gtree_w(win_w) {
 
 # theme-aware pane background (the mockup's --bg2, == the status strip's chrome).
 fn _gtree_bg() { if (ui_theme() == THEME_LIGHT) { return 0xefe8d9; } return 0x1b1812; }
+# theme-aware selected-row highlight (used only when the tree pane is FOCUSED — 0.30.10 keyboard nav).
+fn _gtree_selbg() { if (ui_theme() == THEME_LIGHT) { return 0xe0d7c0; } return 0x2a241a; }
 
 # _gtree_basename: a pointer to the last '/'-separated component of a path cstr (the project name, for the
 # header). A '/' is a separator only when a non-NUL follows, so a TRAILING slash is ignored — the root "/" (or
@@ -71,7 +73,14 @@ fn _gtree_scroll_first(total, rows, sel) {
 # Layout: [selection bar] [git badge] [depth indent] [dir marker] [name]. File names align under dir names (the
 # marker cell is always reserved). dir = ROLE_BLUE, file = ROLE_MUTED (== tui_draw_tree).
 fn _gtree_row(cmds, li, x, rowy, w, badges) {
-    if (li == ftree_sel()) { gd_push_rect(cmds, x, rowy - 1, 3, GTREE_ROW_H, _ui_rgb(ROLE_ACCENT)); }   # selection bar
+    if (li == ftree_sel()) {
+        if (gfocus() == GFOCUS_TREE) {                                                # focused: full-row highlight + bright bar
+            gd_push_rect(cmds, x, rowy - 1, w, GTREE_ROW_H, _gtree_selbg());
+            gd_push_rect(cmds, x, rowy - 1, 3, GTREE_ROW_H, _ui_rgb(ROLE_ACCENT));
+        } else {
+            gd_push_rect(cmds, x, rowy - 1, 3, GTREE_ROW_H, _ui_rgb(ROLE_ACCENT_DIM)); # unfocused: dim bar only
+        }
+    }
     var px = x + GTREE_PAD;
     if (badges == 1) {
         var kind = _gtree_gitkind(li);

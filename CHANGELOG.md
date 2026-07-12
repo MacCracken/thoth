@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.10] - 2026-07-11
+
+**T3 GUI — file-tree keyboard navigation.** The GUI's file-tree pane (0.30.5) was a static view; now it's
+interactive, with focus like the TUI. NEW in `src/gui/ginput.cyr`: a focus state (`gfocus`/`gfocus_set`,
+COMPOSER/TREE), `gtree_key` (evdev ↑103/↓108 move · →106 expand · ←105 collapse · Enter toggles the selected
+dir, over the `ftree_*` model), and `gkey` — the focus-aware top-level key dispatch that replaces `gcomp_key`
+as the present loop's entry: **Tab** toggles composer↔tree (only to a populated tree), **Esc** quits from any
+focus, a printable key while tree-focused returns to the composer and types it, else composer keys go to
+`gcomp_key`. `gpresent.cyr` feeds keys through `gkey`. Focus is visible: the tree's selected row gets a bright
+full-row highlight + accent bar when the tree is focused (dim bar otherwise), and the composer's `>` prompt +
+caret show bright only when the composer is focused. 1360 assertions (+17 `test_gui_nav` in the LEAN
+`thoth_gui.tcyr`: Tab toggle, arrow move/clamp, Enter/→/← expand-collapse, printable→composer, Esc quit,
+Enter→submit, empty-tree guard) + a golden PPM of the tree-focused frame (bright selection, dimmed composer) —
+visually confirmed. The nav logic is PURE + unit-tested; the present-loop wiring is main-only (compositor-gated,
+verify live on a Wayland compositor).
+
+### Added
+- `src/gui/ginput.cyr` — `gfocus`/`gfocus_set` + `gtree_key` + `gkey` (focus-aware dispatch).
+- Focus-aware rendering: `src/gui/gtree.cyr` (`_gtree_selbg` + focused selection highlight), `src/gui/gfeed.cyr`
+  (`gframe_build` shows the composer caret/bright prompt only when composer-focused; hint mentions Tab).
+- `test_gui_nav` (+17) in `tests/cases/gui.cyr`, wired into `tests/thoth_gui.tcyr`.
+
+### Changed
+- `src/gui/gpresent.cyr` `_gpresent_drain_keys` dispatches through `gkey` (was `gcomp_key`).
+
+### Notes
+- Enter on a FILE is a no-op this cut (dirs toggle); a file → `@path`-into-composer is a natural follow-up. Pin
+  **6.4.51**.
+
 ## [0.30.9] - 2026-07-11
 
 **Curated per-domain test binaries** (enabled by the 0.30.8 decoupling). The single `tests/thoth.tcyr` (one

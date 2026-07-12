@@ -51,7 +51,7 @@ fn _gpresent_drain_keys(win) {
             var code = load64(&rec);
             var shift = 0;
             if ((load64(&rec + 16) & 1) != 0) { shift = 1; }
-            var a = gcomp_key(code, shift);
+            var a = gkey(code, shift);                       # focus-aware dispatch (composer / tree nav; 0.30.10)
             if (a != 0) { action = a; }
         }
     }
