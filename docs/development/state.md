@@ -7,6 +7,18 @@
 
 ## Version
 
+**0.31.5** — **Non-2xx daimon HTTP response recorded as a failed tool call** (the 0.30.18 loose end), 2026-07-12.
+The agentic loop's tool executors read the result but ignored the HTTP status — a non-2xx response (server error /
+unknown tool / bad request) whose body carried MCP text without an `isError` field was recorded as a SUCCESSFUL
+tool result (green `ok`). Now both executors treat non-2xx as failure (`rl_ok=0`) and surface daimon's error text
+or a synthetic `(tool call failed: daimon returned HTTP <status>)`. `daimon_invoke` (serial) checks
+`sandhi_http_status` → `_daimon_last_is_error=1`; `daimon_fetch_into` (parallel) gained a `status`-out param
+(worker `ctx+56`, `PAR_CTX_SZ` 56→64) that phase-3 reads and handles identically. Matches `daimon_call`/`/call`.
+**Verified**: 1502 assertions (`test_daimon` +2) + **LIVE** (unknown tool → HTTP 400 → `is_error=1` + the HTTP-400
+message → `rl_ok=0`) + adversarial review. Pin **6.4.51** (wrapper 6.4.56). **This clears the last edit/daimon
+follow-up** — the write/diffs arc + its hardening are complete; the remaining open item is upstream (the filed
+cyrius `file_rename`/`file_write_atomic` + AGNOS `O_EXCL` for crash-safe atomic writes).
+
 **0.31.4** — **Cleaner edit/create arg on the diff card**, 2026-07-12. Now that the colored diff renders below an
 `edit`/`create_file` call, the raw JSON args line above it was noise. `_gtool_card` (`src/gui/gtool.cyr`) now shows
 just the **clean path** (in `ROLE_BLUE`) for any call with an `editlog` entry — `edit ok 12ms/40B src/x.cyr`, not

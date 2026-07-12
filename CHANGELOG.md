@@ -2,6 +2,29 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.5] - 2026-07-12
+
+**A non-2xx daimon HTTP response is now recorded as a failed tool call** (the 0.30.18 loose end). The agentic
+loop's tool executors read the tool result but **ignored the HTTP status** — so a non-2xx response (server error,
+unknown tool, bad request) whose body happened to carry MCP text without an `isError` field was recorded as a
+*successful* tool result (green `ok` on the card). Now both executors treat a non-2xx as a failure: `rl_ok=0`,
+and the model sees daimon's error text if present, else a synthetic `(tool call failed: daimon returned HTTP
+<status>)`. Hardened **symmetrically** across the serial (`daimon_invoke`) and parallel (`daimon_fetch_into` →
+phase-3) paths.
+
+### Fixed
+- `daimon_invoke` (`src/daimon.cyr`) now checks `sandhi_http_status`; non-2xx → `_daimon_last_is_error=1` +
+  daimon's error text or `_daimon_http_err(status)`. `daimon_fetch_into` gained a `status`-out param (stashed at
+  the worker `ctx+56`, `PAR_CTX_SZ` 56→64); the parallel phase-3 reads it and mirrors the serial handling. Matches
+  what `daimon_call` (`/call`) already did. Review residuals folded in: the synthetic-message buffer is `alloc(80)`
+  (was a zero-headroom 64), and an *empty* error-body text falls through to the synthetic HTTP message.
+
+### Verified
+- 1502 assertions (`test_daimon` +2: `_daimon_http_err` formats the status). **Live** end-to-end: an unknown tool
+  returns HTTP 400 → `daimon_invoke` now yields `is_error=1` + `(tool call failed: daimon returned HTTP 400)` →
+  the loop records `rl_ok=0` (was a vague "no result" with an ambiguous status). Adversarially reviewed. Pin
+  **6.4.51** (wrapper 6.4.56).
+
 ## [0.31.4] - 2026-07-12
 
 **Cleaner `edit`/`create_file` arg on the diff card.** Now that the colored diff renders below an `edit`/

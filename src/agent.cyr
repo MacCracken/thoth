@@ -549,7 +549,7 @@ var AGENT_ARGS_MAX = 16383;
 var PAR_ID_CAP = 128;
 var PAR_OUT_CAP = 131072;    # per-call result text, copied out of the arena
 var PAR_ARENA_CAP = 524288;  # per-call arena: headers + url + conn buffers + response body
-var PAR_CTX_SZ = 56;         # worker ctx: arena, req, name, args, out, result_len, elapsed_ms(+48, 0.19.1)
+var PAR_CTX_SZ = 64;         # worker ctx: arena, req, name, args, out, result_len, elapsed_ms(+48, 0.19.1), http_status(+56, 0.31.5)
 
 var _par_ready = 0;          # 1 once the slot storage is allocated
 var _par_arena = 0;          # PAR_MAX allocator handles (i64 each)
@@ -621,7 +621,7 @@ fn _agent_call_worker(ctx) {
     var args = load64(ctx + 24);
     var out = load64(ctx + 32);
     var t0 = clock_now_ms();                        # 0.19.1: this call's wall-time (each worker owns its slot)
-    var rl = daimon_fetch_into(a, req, name, args, out, PAR_OUT_CAP);
+    var rl = daimon_fetch_into(a, req, name, args, out, PAR_OUT_CAP, ctx + 56);   # 0.31.5: status -> ctx+56
     store64(ctx + 40, rl);
     store64(ctx + 48, clock_now_ms() - t0);         # elapsed ms at ctx+48 (read serially in phase 3)
     return 0;
@@ -719,9 +719,14 @@ fn _agent_run_calls_par(tcs, nc) {
                     res = "(tool call failed: transport error)";
                 } else {
                     res = "(tool returned no result)";
+                    var st = load64(_par_ctx_ptr(k) + 56);           # 0.31.5: the worker-stashed HTTP status
                     # SERIAL bayan parse of the raw body the worker fetched (parses are main-thread only).
                     var text = daimon_extract_text(_par_out + k * PAR_OUT_CAP, rlen);
-                    if (text != 0) {
+                    if ((st < 200) || (st >= 300)) {                 # 0.31.5: non-2xx -> failed call (rl_ok stays 0), mirror daimon_invoke
+                        if ((text != 0) && (str_len(text) > 0)) { res = str_cstr(text); }   # non-empty error text
+                        else { res = _daimon_http_err(st); }         # else a synthetic HTTP-status message
+                    }
+                    elif (text != 0) {
                         res = str_cstr(text);
                         rl_ok = _agent_tool_ok(1, daimon_extract_is_error(_par_out + k * PAR_OUT_CAP, rlen));   # 0.30.18: honor isError
                     }

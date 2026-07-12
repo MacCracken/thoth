@@ -205,6 +205,22 @@ fn daimon_call(name, args_json) {
 var _daimon_last_is_error = 0 - 1;
 fn daimon_invoke_is_error() { return _daimon_last_is_error; }
 
+# _daimon_http_err: a synthetic "(tool call failed: daimon returned HTTP <status>)" cstr in a static buffer
+# (0.31.5), for a non-2xx response whose body carries no MCP text — so the model sees a concrete failure reason.
+var _daimon_httperr_buf = 0;
+fn _daimon_http_err(status) {
+    # 80 B: the ~40-byte prefix + fmt_int_buf's fixed 24-byte scratch would exactly fill 64 (zero headroom — a
+    # longer prefix would OOB, the _edit_puti class of bug); 80 keeps a safe margin.
+    if (_daimon_httperr_buf == 0) { _daimon_httperr_buf = alloc(80); }
+    var pfx = "(tool call failed: daimon returned HTTP ";
+    var o = 0;
+    while (load8(pfx + o) != 0) { store8(_daimon_httperr_buf + o, load8(pfx + o)); o = o + 1; }
+    o = o + fmt_int_buf(status, _daimon_httperr_buf + o);
+    store8(_daimon_httperr_buf + o, 41);            # ')'
+    store8(_daimon_httperr_buf + o + 1, 0);
+    return _daimon_httperr_buf;
+}
+
 # daimon_invoke: invoke a tool and RETURN its MCP result text as a Str (or 0 on
 # any failure), without the chatty /call printing — for the agentic tool loop.
 # The caller has ALREADY passed the t-ron gate. On a non-2xx, daimon's error text
@@ -218,8 +234,19 @@ fn daimon_invoke(name, args_json) {
     sandhi_headers_set(h, "Content-Type", "application/json");
     var r = sandhi_http_post(url, h, _daimon_req, len);
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
+    var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
+    # 0.31.5: a non-2xx HTTP response is a FAILED call (server error, unknown tool, bad request) — record it as an
+    # error (rl_ok=0 via the isError flag) even if a body parsed, and surface daimon's error text (or a synthetic
+    # HTTP-status message) so the model sees the reason. Previously the status was ignored, so a non-2xx body that
+    # happened to carry MCP text without an isError field was wrongly recorded as a successful tool result.
+    if ((status < 200) || (status >= 300)) {
+        _daimon_last_is_error = 1;
+        var em = daimon_extract_text(body, blen);
+        if ((em != 0) && (str_len(em) > 0)) { return str_cstr(em); }   # non-empty error text; else the synthetic message
+        return _daimon_http_err(status);
+    }
     _daimon_last_is_error = daimon_extract_is_error(body, blen);   # 0.30.18: capture the isError verdict before returning text
     var text = daimon_extract_text(body, blen);   # a Str
     if (text == 0) { return 0; }
@@ -242,13 +269,16 @@ fn daimon_invoke(name, args_json) {
 # resets `a`. The endpoint URL must be pre-warmed on the calling thread (see
 # _daimon_call_endpoint); the caller has ALREADY passed the t-ron gate. I/O —
 # reentrant. See the parallel design in src/agent.cyr.
-fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap) {
+# st_out (0.31.5): an i64 slot the caller reads in the serial phase — the HTTP status of the response (or -1 on
+# transport failure), so phase 3 can treat a non-2xx as a failed call symmetrically with daimon_invoke.
+fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap, st_out) {
     var url = _daimon_call_endpoint();
     var len = daimon_build_call(req_buf, name, args_json);
     var h = sandhi_headers_new_a(a);
     sandhi_headers_set_a(a, h, "Content-Type", "application/json");
     var r = sandhi_http_post_a(a, url, h, req_buf, len);
-    if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0 - 1; }
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { store64(st_out, 0 - 1); return 0 - 1; }
+    store64(st_out, sandhi_http_status(r));         # 0.31.5: stash the status for the serial phase
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
     var n = blen;

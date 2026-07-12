@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.31.4):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.31.5):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -64,7 +64,8 @@
 > **0.31.3** added **`create_file(path, content)`** — the model can now make NEW files (create-only, refuses an
 > existing path; same jailed/gated/opt-in envelope; new files show as all-green additions on their card).
 > **0.31.4** cleaned up the edit/create arg on the diff card (shows just the blue path, not the raw JSON, reusing
-> the editlog lookup). Remaining edit-tool follow-up: the `daimon_invoke` HTTP-status hardening. Atomic writes are
+> the editlog lookup). **0.31.5** hardened the loop to record a non-2xx daimon HTTP response as a failed tool call (both the
+> serial + parallel executors; matches `/call`), clearing the last edit/daimon follow-up. Atomic writes are
 > now a filed cyrius issue (portable `file_rename`/`file_write_atomic` + AGNOS `O_EXCL`, requested next release). (A separate hardening item: `daimon_invoke` doesn't check HTTP status, unlike `daimon_call`.)
 > thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style

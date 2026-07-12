@@ -285,6 +285,9 @@ fn test_daimon() {
     assert_eq(_agent_tool_ok(1, 0 - 1), 1, "text present, isError absent -> success");
     assert_eq(_agent_tool_ok(0, 0), 0, "no parseable text -> failure regardless of isError");
     assert_eq(_agent_tool_ok(0, 1), 0, "no text + isError:true -> failure");
+    # 0.31.5: the synthetic HTTP-error message for a non-2xx response with no MCP text
+    assert(streq(_daimon_http_err(500), "(tool call failed: daimon returned HTTP 500)") == 1, "http-err formats the status (500)");
+    assert(streq(_daimon_http_err(404), "(tool call failed: daimon returned HTTP 404)") == 1, "http-err formats the status (404)");
     return 0;
 }
 
