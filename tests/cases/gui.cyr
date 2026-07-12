@@ -425,3 +425,24 @@ fn test_gui_nav() {
     gcomp_reset(); gfocus_set(GFOCUS_COMPOSER); ftree_reset();
     return 0;
 }
+
+# GUI throbbing owl-eye status indicator (0.30.11): the `o` in {(o> pulses colour; its base reflects hoosh
+# health. PURE colour math + the eye-cell recording gframe_build does; the throb LOOP is main-only.
+fn test_gui_eye() {
+    test_group("GUI throbbing owl-eye indicator (0.30.11)");
+    assert(geye_color(0) != geye_color(4), "eye colour differs phase 0 (dim) vs 4 (bright) — it throbs");
+    assert_eq(geye_color(2), geye_color(6), "the pulse is a symmetric triangle wave");
+    session_history_clear();
+    gframe_build(900, 400);
+    assert(geye_cell() != 0, "gframe_build recorded the owl-eye cell");
+    assert_eq(gd_kind(geye_cell()), GD_TEXT, "the eye cell is a TEXT command");
+    assert(streq(gd_text(geye_cell()), "o") == 1, "the eye cell draws the 'o'");
+    store64(geye_cell() + GDC_COLOR, 0x123456);
+    assert_eq(gd_color(geye_cell()), 0x123456, "the eye cell colour is mutable in place (the throb path)");
+    hoosh_health_mark_down();
+    assert_eq(_geye_base(), _ui_rgb(ROLE_RED), "hoosh DOWN -> red eye base (health indicator)");
+    hoosh_health_mark_up();
+    assert(_geye_base() == _ui_rgb(ROLE_ACCENT), "hoosh UP -> accent eye base");
+    session_history_clear();
+    return 0;
+}

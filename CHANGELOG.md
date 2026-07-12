@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.11] - 2026-07-11
+
+**T3 GUI — the signature `{(o>` owl prompt + a throbbing owl-eye status indicator.** Two GUI-composer touches:
+
+- **Restored the `{(o>` owl prompt** (`src/gui/gfeed.cyr`): the composer prompt and every user turn in the feed
+  now use `{(o>` — the brand glyph the TUI + REPL use — replacing the plain `>` the GUI had carried since
+  0.30.1. Text offsets widened to clear the 4-glyph prompt.
+- **The owl's eye (`o`) throbs as a live status indicator** ("the head as indicator"): its BASE colour reflects
+  hoosh health (red when the gateway is DOWN via `hoosh_health()`, else the amber accent), and it pulses (a
+  triangle brightness wave) so the window feels alive at rest. The eye is drawn as its OWN draw-command
+  (`_geye_cell`, recorded by `gframe_build`); the present loop now polls with a ~300ms throb tick, advances a
+  colour phase, and rewrites **only** that one cell's colour before re-rasterising. **Leak-free animation**: the
+  frame command list is CACHED (`_gui_cmds`, rebuilt only when the view changes — keystroke/resize/turn), so the
+  idle throb costs zero per-frame allocation (only real interactions rebuild, exactly as before). `poll(2)`
+  services compositor events only when the wl fd is readable; on the timeout it just throbs.
+
+1368 assertions (+8 `test_gui_eye` in the LEAN `thoth_gui.tcyr`: the pulse is distinct across phase + symmetric,
+`gframe_build` records the eye cell as a mutable `o` TEXT command, and the base colour tracks hoosh up/down) +
+the frame golden PPMs render the split `{(o>` unchanged. The throb colour math + eye-cell recording are PURE +
+unit-tested; the timed present loop is main-only (compositor-gated — verify the animation live on Wayland).
+
+### Added
+- `src/gui/gfeed.cyr` — the throb: `geye_color`/`geye_color_now`/`geye_phase_advance`/`geye_cell` + `_geye_blend`
+  (packed-XRGB channel blend) + `_geye_base` (hoosh-health colour). The composer prompt splits `{(o>` into
+  `{(` + `o`(eye) + `>` so the eye has its own recolourable cell.
+- `test_gui_eye` (+8) in `tests/cases/gui.cyr`.
+
+### Changed
+- `src/gui/gpresent.cyr` — the present loop caches the frame command list (`_gui_cmds` + `_gui_dirty`) and polls
+  with a 300ms throb tick, recolouring the eye each frame; events set `_gui_dirty`. Pin **6.4.51**.
+
 ## [0.30.10] - 2026-07-11
 
 **T3 GUI — file-tree keyboard navigation.** The GUI's file-tree pane (0.30.5) was a static view; now it's

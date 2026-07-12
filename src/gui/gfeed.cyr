@@ -83,8 +83,8 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         var role = session_history_role(i);
         var content = session_history_content(i);
         if (streq(role, "user") == 1) {
-            if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), ">", 0); }
-            cy = _gfeed_para(cmds, xbase + 16, cy, avail - 16, _ui_rgb(ROLE_FG), content);
+            if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
+            cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), content);
         } else {
             cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), content);
         }
@@ -95,8 +95,8 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     # BELOW the last real message. Part of the measured flow so the bottom-anchor keeps it visible. The pending
     # text is NOT in session_history yet (the turn appends it when it runs) — this is a transient render.
     if (gturn_active() == 1) {
-        if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), ">", 0); }
-        cy = _gfeed_para(cmds, xbase + 16, cy, avail - 16, _ui_rgb(ROLE_FG), gturn_text());
+        if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
+        cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), gturn_text());
         cy = cy + GFEED_GAP;
         if (cmds != 0) {
             gd_push_rect(cmds, xbase, cy + 4, 8, 8, _ui_rgb(ROLE_ACCENT));                   # a working mark (static; the turn blocks the loop)
@@ -149,6 +149,36 @@ var GFRAME_STRIP_H = 34;
 var GFRAME_COMPOSER_H = 40;
 fn _gframe_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
 
+# --- the throbbing owl eye (0.30.11): the `o` in the {(o> composer prompt pulses colour as a LIVE status
+# indicator — "the head as indicator". Its BASE colour reflects hoosh health (red when the gateway is DOWN,
+# else the amber accent), and it THROBS (a triangle brightness pulse) so the window feels alive at rest. The
+# eye is drawn as its OWN draw-command; gframe_build records that cell in _geye_cell, and the present loop
+# advances the phase + rewrites JUST that cell's colour each tick — so the animation costs no per-frame
+# allocation (the frame command list is cached; only one colour word changes). PURE colour math (testable).
+var GEYE_STEPS = 8;
+var _geye_phase = 0;
+var _geye_cell = 0;
+fn geye_phase_advance() { _geye_phase = (_geye_phase + 1) % GEYE_STEPS; return 0; }
+fn geye_cell() { return _geye_cell; }
+# _geye_blend: packed-XRGB linear blend c0 -> c1 by num/den, per channel.
+fn _geye_blend(c0, c1, num, den) {
+    var r = ((c0 / 65536) & 255) + (((c1 / 65536) & 255) - ((c0 / 65536) & 255)) * num / den;
+    var g = ((c0 / 256) & 255)   + (((c1 / 256) & 255)   - ((c0 / 256) & 255))   * num / den;
+    var b = (c0 & 255)           + ((c1 & 255)           - (c0 & 255))           * num / den;
+    return r * 65536 + g * 256 + b;
+}
+# _geye_base: the eye's status colour — red if hoosh is DOWN (health indicator), else the accent.
+fn _geye_base() { if (hoosh_health() == HOOSH_HEALTH_DOWN) { return _ui_rgb(ROLE_RED); } return _ui_rgb(ROLE_ACCENT); }
+# geye_color: the eye colour for phase p — a triangle pulse between a dim tint (toward the bg) and the base.
+fn geye_color(p) {
+    var base = _geye_base();
+    var dim = _geye_blend(_gframe_bg(), base, 2, 5);
+    var half = GEYE_STEPS / 2;
+    var t = p; if (t > half) { t = GEYE_STEPS - t; }
+    return _geye_blend(dim, base, t, half);
+}
+fn geye_color_now() { return geye_color(_geye_phase); }
+
 fn gframe_build(w, h) {
     var cmds = gd_list_new();
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
@@ -173,13 +203,18 @@ fn gframe_build(w, h) {
     # the `>` prompt dims when focus is on the tree (so the active pane is obvious), bright on the composer.
     var promptc = _ui_rgb(ROLE_ACCENT_DIM);
     if (gfocus() == GFOCUS_COMPOSER) { promptc = _ui_rgb(ROLE_ACCENT); }
-    gd_push_text(cmds, 14, cty, promptc, ">", 0);
-    var ccx = 34;
+    # the signature owl prompt {(o> — the `o` (eye) is its OWN command so the present loop can throb its colour
+    # as a live status indicator (0.30.11); `{(` + `>` follow composer focus (dim when the tree is focused).
+    gd_push_text(cmds, 14, cty, promptc, "{(", 0);                     # owl head
+    gd_push_text(cmds, 30, cty, geye_color_now(), "o", 0);            # the EYE (throbs; recoloured by the loop)
+    _geye_cell = vec_get(cmds, vec_len(cmds) - 1);
+    gd_push_text(cmds, 38, cty, promptc, ">", 0);                     # owl beak
+    var ccx = 54;                                                      # past "{(o> " (5 cols)
     if (gcomp_len() == 0) {
-        gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FAINT), "type a message  -  Tab: files  -  Enter: send  -  Esc: close", 0);
+        gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FAINT), "type a message  -  Tab: files  -  Enter: send  -  Esc: close", 0);
     } else {
-        gd_push_text(cmds, 34, cty, _ui_rgb(ROLE_FG), gcomp_cstr(), 0);
-        ccx = 34 + gcomp_len() * GR_GLYPH_W + 1;
+        gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FG), gcomp_cstr(), 0);
+        ccx = 54 + gcomp_len() * GR_GLYPH_W + 1;
     }
     # the caret shows ONLY when the composer is focused (0.30.10) — a clear active-pane cue.
     if (gfocus() == GFOCUS_COMPOSER) { gd_push_rect(cmds, ccx, cty, 2, GR_GLYPH_H, _ui_rgb(ROLE_ACCENT)); }

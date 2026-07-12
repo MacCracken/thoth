@@ -26,7 +26,15 @@ fn _gpresent_poll_fd(pfd, fd, timeout_ms) {
     return syscall(7, pfd, 1, timeout_ms);
 }
 
-# render one frame into the present buffer + commit.
+# The frame command list is CACHED and rebuilt only when the view CHANGES (_gui_dirty) — a keystroke, resize,
+# or turn. The throb (0.30.11) does NOT rebuild: it advances a colour phase and rewrites just the owl-eye cell,
+# then re-rasters the cached list. So the idle animation costs ZERO per-frame allocation (only rebuilds leak a
+# list, exactly as before — bounded by real interactions, not by the throb).
+var _gui_cmds = 0;
+var _gui_dirty = 1;
+
+# render one frame into the present buffer + commit. Rebuilds the cached command list only when dirty; always
+# recolours the live owl eye to the current throb phase before rasterising.
 fn _gpresent_frame(win) {
     var buf = gwl_win_present_begin(win);
     if (buf == 0) { return 0; }
@@ -34,9 +42,10 @@ fn _gpresent_frame(win) {
     gwl_win_size_px(win, &sz);
     var w = load64(&sz);
     var h = load64(&sz + 8);
+    if ((_gui_dirty == 1) || (_gui_cmds == 0)) { _gui_cmds = gframe_build(w, h); _gui_dirty = 0; }
+    if (geye_cell() != 0) { store64(geye_cell() + GDC_COLOR, geye_color_now()); }   # live owl-eye recolour
     gr_fb_clear(buf, w, h, _gframe_bg());
-    var cmds = gframe_build(w, h);
-    gr_raster(cmds, buf, w, h);
+    gr_raster(_gui_cmds, buf, w, h);
     gwl_win_present_commit(win, 0, 0, w, h);
     return 0;
 }
@@ -72,38 +81,43 @@ fn gui_run() {
     _gpresent_frame(win);                                # first paint
     var running = 1;
     while (running == 1) {
-        if (_gpresent_poll_fd(&pfd, gwl_win_fd(win), 0 - 1) < 0) { running = 0; }
+        # poll with a THROB tick (0.30.11): wake every ~300ms even when idle so the owl eye can pulse. poll(2)
+        # returns >0 when the wl fd has data (service events then), 0 on the timeout (just throb), <0 on error.
+        var pr = _gpresent_poll_fd(&pfd, gwl_win_fd(win), 300);
+        if (pr < 0) { running = 0; }
         else {
-            var ev = gwl_win_poll_events(win);
-            if ((ev & GWL_WIN_EV_CLOSE) != 0) { running = 0; }
-            else {
-                var dirty = 0;
-                if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); dirty = 1; }
-                if ((ev & GWL_WIN_EV_KEY) != 0) {
-                    var act = _gpresent_drain_keys(win);
-                    if (act == 1) { running = 0; }                    # Esc -> quit
-                    else {
-                        if (act == 2) {                               # Enter -> submit the composer as a turn
-                            if (gcomp_len() > 0) {
-                                gturn_begin(gcomp_cstr());            # COPY the pending text (the composer is reset next)
-                                gcomp_reset();                        # clear the composer
-                                _gpresent_frame(win);                 # paint the working state NOW (echo msg + "working"), before the blocking turn
-                                var _n0 = session_history_len();
-                                out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
-                                cmd_task(gturn_text());               # runs the turn: appends user + reply (both popped on failure)
-                                out_mode_set(OUT_FD1);
-                                # honest outcome: a turn that appended no assistant reply (unreachable hoosh, transport/http
-                                # error, empty completion) leaves history net-unchanged (the user turn is popped) -> the
-                                # window renders only history, so raise a transient "didn't complete" notice instead of silence.
-                                if ((session_history_len() <= _n0) || (streq(session_history_role(session_history_len() - 1), "assistant") == 0)) { gturn_fail(); }
-                                gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
+            if (pr > 0) {                                     # the wl fd is readable -> service compositor events
+                var ev = gwl_win_poll_events(win);
+                if ((ev & GWL_WIN_EV_CLOSE) != 0) { running = 0; }
+                else {
+                    if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); _gui_dirty = 1; }
+                    if ((ev & GWL_WIN_EV_KEY) != 0) {
+                        var act = _gpresent_drain_keys(win);
+                        if (act == 1) { running = 0; }                    # Esc -> quit
+                        else {
+                            if (act == 2) {                               # Enter -> submit the composer as a turn
+                                if (gcomp_len() > 0) {
+                                    gturn_begin(gcomp_cstr());            # COPY the pending text (the composer is reset next)
+                                    gcomp_reset();                        # clear the composer
+                                    _gui_dirty = 1; _gpresent_frame(win); # rebuild + paint the working state before the blocking turn
+                                    var _n0 = session_history_len();
+                                    out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
+                                    cmd_task(gturn_text());               # runs the turn: appends user + reply (both popped on failure)
+                                    out_mode_set(OUT_FD1);
+                                    # honest outcome: a turn that appended no assistant reply (unreachable hoosh, transport/http
+                                    # error, empty completion) leaves history net-unchanged (the user turn is popped) -> the
+                                    # window renders only history, so raise a transient "didn't complete" notice instead of silence.
+                                    if ((session_history_len() <= _n0) || (streq(session_history_role(session_history_len() - 1), "assistant") == 0)) { gturn_fail(); }
+                                    gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
+                                }
                             }
+                            _gui_dirty = 1;                                # any key redraws the view
                         }
-                        dirty = 1;
                     }
                 }
-                if ((running == 1) && (dirty == 1)) { _gpresent_frame(win); }
             }
+            # advance the throb + repaint every tick (cheap when not dirty: only the eye colour changes, no rebuild)
+            if (running == 1) { geye_phase_advance(); _gpresent_frame(win); }
         }
     }
     gwl_win_close(win);

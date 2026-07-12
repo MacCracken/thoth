@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.30.11** — **T3 GUI: the `{(o>` owl prompt + a throbbing owl-eye status indicator**, 2026-07-11. Two GUI
+touches: (1) **restored the signature `{(o>` owl prompt** (`src/gui/gfeed.cyr`) — the composer prompt AND every
+user turn in the feed now use `{(o>` (the brand glyph the TUI/REPL use), replacing the plain `>` the GUI had
+carried since 0.30.1 (text offsets widened for the 4-glyph prompt). (2) **the owl's eye `o` THROBS as a live
+status indicator** ("the head as indicator"): base colour = hoosh health (red when DOWN via `hoosh_health()`,
+else amber accent), pulsing a triangle brightness wave so the window feels alive at rest. The eye is its own
+draw-command (`_geye_cell`, recorded by `gframe_build`); the present loop polls with a ~300ms throb tick,
+advances a phase, and rewrites ONLY that cell's colour before re-rasterising. **Leak-free**: the frame command
+list is CACHED (`_gui_cmds`/`_gui_dirty`, rebuilt only on keystroke/resize/turn), so the idle throb costs zero
+per-frame allocation; `poll(2)` services events only when the wl fd is readable, else it just throbs.
+**Verified**: 1368 assertions (+8 `test_gui_eye` in the LEAN `thoth_gui.tcyr` — distinct+symmetric pulse, the
+`o` cell is a mutable TEXT command, base tracks hoosh up/down) + frame PPMs render the split `{(o>` unchanged +
+main builds. Throb math + eye-cell recording are PURE/unit-tested; the timed present loop is main-only
+(compositor-gated — verify the animation live on Wayland). Pin **6.4.51** (wrapper drifted to 6.4.53; benign).
+**NEXT (GUI arc)**: Enter-on-a-file → `@path` into the composer; tool-call cards + colored diffs (needs a
+tool-round producer); feed scrollback; composer history.
+
 **0.30.10** — **T3 GUI: file-tree keyboard navigation**, 2026-07-11. The file-tree pane (0.30.5, static)
 becomes interactive with TUI-style focus. NEW in `src/gui/ginput.cyr`: `gfocus`/`gfocus_set` (COMPOSER/TREE),
 `gtree_key` (evdev ↑103/↓108 move · →106 expand · ←105 collapse · Enter toggles the selected dir, over
@@ -14,7 +31,7 @@ becomes interactive with TUI-style focus. NEW in `src/gui/ginput.cyr`: `gfocus`/
 toggles composer↔tree (only to a populated tree), **Esc** quits, a printable key while tree-focused returns to
 the composer + types it, else composer keys route to `gcomp_key`. `gpresent.cyr` feeds keys through `gkey`.
 Focus is VISIBLE: the tree's selected row shows a bright full-row highlight + accent bar when focused (dim bar
-otherwise; `_gtree_selbg`), and the composer's `>` prompt + caret are bright only when composer-focused.
+otherwise; `_gtree_selbg`), and the composer's prompt + caret are bright only when composer-focused.
 **Verified**: 1360 assertions (+17 `test_gui_nav` in the LEAN `thoth_gui.tcyr` — Tab toggle, arrow move/clamp,
 Enter/→/← expand-collapse, printable→composer, Esc/submit, empty-tree guard) + a **golden PPM** of the
 tree-focused frame (bright selection on `docs`, dimmed composer — visually confirmed) + main builds. The nav
