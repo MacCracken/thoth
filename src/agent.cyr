@@ -610,6 +610,17 @@ fn _agent_call_worker(ctx) {
     return 0;
 }
 
+# _agent_tool_ok: the recorded success flag for a daimon tool result (0.30.18). A call succeeds only when its
+# body parsed to text AND the MCP `isError` flag is not set — `daimon_invoke`/`daimon_fetch_into` used to drop
+# `isError`, so a tool that returned isError:true with valid text was wrongly recorded (and now shown on the
+# card) as `ok`. text_ok is 1 when result text parsed; is_error is daimon_extract_is_error's verdict (1 error,
+# 0 success, -1 absent — only 1 flips a text-bearing result to failure). Pure — unit-tested.
+fn _agent_tool_ok(text_ok, is_error) {
+    if (text_ok == 0) { return 0; }        # no parseable text -> failure
+    if (is_error == 1) { return 0; }       # isError:true -> failure even with text present
+    return 1;
+}
+
 # _agent_run_calls_par: the phased parallel executor (see the block comment above).
 # I/O — the network invokes run concurrently; gating + result append stay serial.
 fn _agent_run_calls_par(tcs, nc) {
@@ -691,9 +702,12 @@ fn _agent_run_calls_par(tcs, nc) {
                     res = "(tool call failed: transport error)";
                 } else {
                     res = "(tool returned no result)";
-                    # SERIAL bayan parse of the raw body the worker fetched.
+                    # SERIAL bayan parse of the raw body the worker fetched (parses are main-thread only).
                     var text = daimon_extract_text(_par_out + k * PAR_OUT_CAP, rlen);
-                    if (text != 0) { res = str_cstr(text); rl_ok = 1; }
+                    if (text != 0) {
+                        res = str_cstr(text);
+                        rl_ok = _agent_tool_ok(1, daimon_extract_is_error(_par_out + k * PAR_OUT_CAP, rlen));   # 0.30.18: honor isError
+                    }
                 }
                 ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
             } else {
@@ -851,8 +865,9 @@ fn _agent_run_calls_serial(tcs, nc) {
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
             res = daimon_invoke(nm, ar);
-            if (res == 0) { res = "(tool returned no result)"; rl_ok = 0; }
-            else { rl_ok = 1; }
+            var text_ok = 0; if (res != 0) { text_ok = 1; }         # parsed a result?  (before the placeholder reassign)
+            if (res == 0) { res = "(tool returned no result)"; }
+            rl_ok = _agent_tool_ok(text_ok, daimon_invoke_is_error());   # 0.30.18: text parsed AND not an MCP isError
             ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
         } else {
             res = "denied by authorization policy";

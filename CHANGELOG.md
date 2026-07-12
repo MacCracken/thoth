@@ -2,6 +2,34 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.18] - 2026-07-12
+
+**Tool-call status now honors the MCP `isError` flag — a failed tool no longer shows `ok`.** `daimon_invoke`
+extracted a tool result's text but **discarded** its `isError` flag, so `roundlog`'s `ok` (→ the GUI card colour +
+the `/audit`/telemetry lines) meant only "did the body parse," not "did the tool succeed." A tool that returned
+`isError:true` **with** valid text (e.g. `web_search` with no backend, or a bad-args tool) was carded green `ok`.
+Now: `daimon_invoke` captures `daimon_extract_is_error(body)` into a last-call slot (`daimon_invoke_is_error()`),
+and the parallel executor reads `isError` off the raw body it already re-parses in phase 3 (main-thread — bayan
+stays off the workers); a new pure `_agent_tool_ok(text_ok, is_error)` records success only when text parsed AND
+`isError` is not set. `isError:false`/absent is unchanged (no regression for daimons that omit it). The error
+text still reaches the model — only the recorded success FLAG changed. Thoth-side consumption fix, **no spine
+change** (`daimon_extract_is_error` already existed; it just wasn't consulted on the invoke path).
+
+### Fixed
+- `daimon_invoke` now surfaces `isError` (was dropped); serial + parallel loop paths record the true tool-success
+  verdict via `_agent_tool_ok`. `daimon_invoke_is_error()` last-call getter (serial-only → race-free).
+
+### Verified
+- 1412 assertions (`test_daimon` +5: the `_agent_tool_ok` truth table incl. the fixed `isError:true` + valid-text
+  case) + main builds. **Live**: drove the real `daimon_invoke` against a running daimon — `web_search` (no
+  SearXNG) and `libro_retention` (bad args) both return `isError:true` with text; `daimon_invoke_is_error()==1`
+  and the recorded ok flips to `0` (err). Adversarially reviewed (wiring/concurrency/semantics → SHIP). Pin
+  **6.4.51** (wrapper drifted to 6.4.55; benign).
+
+### Notes
+- Pre-existing + orthogonal (not changed here): `daimon_invoke` does not check HTTP status (unlike `daimon_call`),
+  so a non-2xx body lacking `isError` can still record `ok` — a separate hardening item.
+
 ## [0.30.17] - 2026-07-12
 
 **Tool-call cards + `/audit` now show each call's ARGUMENTS.** A bare `shell` on the card became `shell {"command":"git status"}` — you can see WHAT each tool did, not just that it ran. The `roundlog` producer

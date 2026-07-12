@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.30.18** — **Tool-call status honors the MCP `isError` flag**, 2026-07-12. `daimon_invoke` discarded a tool
+result's `isError`, so `roundlog.ok` (→ the GUI card colour + `/audit`/telemetry) meant only "did the body
+parse," not "did the tool succeed" — a tool returning `isError:true` WITH valid text was carded green `ok`. Fix:
+`daimon_invoke` captures `daimon_extract_is_error(body)` into a last-call slot (`daimon_invoke_is_error()`, serial
+→ race-free); the parallel executor reads `isError` off the raw body it already re-parses in phase 3 (main-thread,
+bayan off the workers); a pure `_agent_tool_ok(text_ok, is_error)` records success only when text parsed AND
+`isError` isn't set. `isError:false`/absent unchanged (no regression). Error text still reaches the model — only
+the recorded FLAG changed. Thoth-side consumption fix, **no spine change**. **Verified**: 1412 assertions
+(`test_daimon` +5 truth table incl. the fixed case) + main builds + **LIVE** against a running daimon (`web_search`
+no-SearXNG and `libro_retention` bad-args both return `isError:true`+text → `daimon_invoke_is_error()==1` →
+recorded ok flips to 0) + adversarial review (wiring/concurrency/semantics → SHIP). Pin **6.4.51** (wrapper
+drifted to 6.4.55; benign). **NEXT (GUI arc)**: per-turn card interleave (cards are current-turn-only; needs a
+per-message turn tag) and colored **diffs** (no first-class source — thoth exposes no file-edit tool and
+`roundlog` keeps no result text; needs its own producer/source decision). Separate hardening item surfaced by the
+review: `daimon_invoke` doesn't check HTTP status (unlike `daimon_call`), so a non-2xx body lacking `isError` can
+still record `ok`.
+
 **0.30.17** — **Tool-call cards + `/audit` show each call's ARGUMENTS**, 2026-07-12. A bare `shell` on the card
 became `shell {"command":"git status"}`. The `roundlog` producer now snapshots a per-call arg summary
 (`RL_ARG_CAP`=128 B, **sanitized**: control bytes → space so a multi-line JSON arg can't break a one-line

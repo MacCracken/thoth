@@ -198,11 +198,19 @@ fn daimon_call(name, args_json) {
     return 0;
 }
 
+# The MCP isError flag of the MOST RECENT daimon_invoke (0.30.18): 1 error, 0 success, -1 unknown/absent. Read
+# by the agentic loop right after daimon_invoke to record the true tool-success verdict (the loop is SERIAL —
+# daimon_invoke is never called off the main thread, so this single-slot last-call state is race-free; the
+# parallel executor uses daimon_fetch_into + daimon_extract_is_error on its own raw body instead).
+var _daimon_last_is_error = 0 - 1;
+fn daimon_invoke_is_error() { return _daimon_last_is_error; }
+
 # daimon_invoke: invoke a tool and RETURN its MCP result text as a Str (or 0 on
 # any failure), without the chatty /call printing — for the agentic tool loop.
 # The caller has ALREADY passed the t-ron gate. On a non-2xx, daimon's error text
 # is returned if present (so the model can see what went wrong). I/O.
 fn daimon_invoke(name, args_json) {
+    _daimon_last_is_error = 0 - 1;                   # 0.30.18: reset per call (a transport failure stays "unknown", not stale)
     var url = _daimon_call_endpoint();
     if (_daimon_req == 0) { _daimon_req = alloc(DAIMON_REQ_CAP); }
     var len = daimon_build_call(_daimon_req, name, args_json);
@@ -212,6 +220,7 @@ fn daimon_invoke(name, args_json) {
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
+    _daimon_last_is_error = daimon_extract_is_error(body, blen);   # 0.30.18: capture the isError verdict before returning text
     var text = daimon_extract_text(body, blen);   # a Str
     if (text == 0) { return 0; }
     return str_cstr(text);                          # cstr for the agent loop

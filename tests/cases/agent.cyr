@@ -278,6 +278,13 @@ fn test_daimon() {
     assert_eq(daimon_extract_is_error(none, strlen(none)), 0 - 1, "no isError -> -1");
     var nojson = "nope";
     assert_eq(daimon_extract_text(nojson, strlen(nojson)), 0, "unparseable -> 0");
+    # 0.30.18: the recorded-success decision — text must parse AND the MCP isError flag must not be set.
+    test_group("daimon tool-success verdict (isError fidelity)");
+    assert_eq(_agent_tool_ok(1, 1), 0, "text present but isError:true -> failure (the bug this fixes)");
+    assert_eq(_agent_tool_ok(1, 0), 1, "text present, isError:false -> success");
+    assert_eq(_agent_tool_ok(1, 0 - 1), 1, "text present, isError absent -> success");
+    assert_eq(_agent_tool_ok(0, 0), 0, "no parseable text -> failure regardless of isError");
+    assert_eq(_agent_tool_ok(0, 1), 0, "no text + isError:true -> failure");
     return 0;
 }
 
