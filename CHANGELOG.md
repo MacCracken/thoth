@@ -2,6 +2,25 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.14] - 2026-07-11
+
+**T3 GUI — conversation-feed scrollback.** The feed bottom-anchors to the newest message (0.30.3), so after a
+long chat older messages clip off the top. Now **PgUp/PgDn** page through them and **End** jumps back to the
+latest. NEW `gscroll_*` state (`src/gui/ginput.cyr`, before `gfeed.cyr` in the include order so `gkey` drives it
+and `gfeed_build` reads it): `_gscroll` = px scrolled UP from the bottom (0 = newest visible); `gscroll_page`
+pages by ~the feed height; `gfeed_build` sets the view height + clamps the offset to the overflow each frame and
+shifts the flow up by it. `gkey` maps PageUp(104)/PageDown(109)/End(107); a submitted turn **resets** the scroll
+so the reply is always seen, and the empty greeting resets it too. When scrolled off the bottom, a faint
+`-- more below (End) --` hint renders at the feed's bottom edge. 1381 assertions (+8 `test_gui_scroll` in the
+LEAN `thoth_gui.tcyr`: scrolling up shifts the flow down, the offset clamps at the top, PgUp/End wiring, and the
+submit-resets-scroll behaviour) + a golden PPM of the scrolled state — visually confirmed. PURE + unit-tested;
+the present-loop dirty-repaint on a scroll key is main-only.
+
+### Added
+- `gscroll`/`gscroll_reset`/`gscroll_by`/`gscroll_page`/`gscroll_view_h_set`/`gscroll_clamp`
+  (`src/gui/ginput.cyr`); `gkey` handles PageUp/PageDown/End and resets on submit; `gfeed_build` applies the
+  offset + draws the "more below" hint. `test_gui_scroll` (+8). Pin **6.4.51**.
+
 ## [0.30.13] - 2026-07-11
 
 **T3 GUI — tree Enter on a file drops an `@mention` into the composer.** Completes the file-tree keyboard nav

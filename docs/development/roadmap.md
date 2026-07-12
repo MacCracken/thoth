@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.13):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.14):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -42,7 +42,8 @@
 > file-tree pane interactive — Tab focus + arrow nav + expand/collapse (`gkey`/`gtree_key`/`gfocus`). **0.30.11**
 > gave the GUI its signature `{(o>` owl prompt and a throbbing owl-eye status indicator (health-coloured,
 > leak-free via a cached frame; **0.30.12** fixed its present-loop scanout race). **0.30.13** made
-> tree Enter on a file drop an `@mention` into the composer. Still ahead (0.30.x patches): Enter-on-a-file → `@path` into the composer,
+> tree Enter on a file drop an `@mention` into the composer; **0.30.14** added feed scrollback
+> (PgUp/PgDn/End). Still ahead (0.30.x patches): Enter-on-a-file → `@path` into the composer,
 > tool-call cards + colored diffs in the feed (needs a tool-round producer), feed scrollback, composer history.
 > thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style

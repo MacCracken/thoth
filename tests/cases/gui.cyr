@@ -458,3 +458,46 @@ fn test_gui_eye() {
     session_history_clear();
     return 0;
 }
+
+# GUI feed scrollback (0.30.14): PgUp/PgDn/End page the bottom-anchored feed; a submit snaps back to newest.
+# PURE (drives gscroll_* + gfeed_build over session_history); the present-loop dirty-repaint is main-only.
+fn test_gui_scroll() {
+    test_group("GUI feed scrollback (0.30.14)");
+    session_history_clear();
+    var _su = "question";
+    var _sa = "a fairly long answer that spans a couple of wrapped lines to build height in the feed region here";
+    var _si = 0;
+    while (_si < 8) { session_history_append("user", _su, strlen(_su)); session_history_append("assistant", _sa, strlen(_sa)); _si = _si + 1; }
+    # scroll 0 = bottom-anchored (newest visible); record the top-most text y
+    gscroll_reset();
+    var _f0 = gd_list_new(); gfeed_build(_f0, 0, 40, 900, 200);
+    var _min0 = 1000000; var _si2 = 0;
+    while (_si2 < vec_len(_f0)) { var _c0 = vec_get(_f0, _si2); if (gd_kind(_c0) == GD_TEXT) { if (gd_y(_c0) < _min0) { _min0 = gd_y(_c0); } } _si2 = _si2 + 1; }
+    # scroll up -> the flow shifts DOWN (older content into view; top-most y increases)
+    gscroll_by(60);
+    var _f1 = gd_list_new(); gfeed_build(_f1, 0, 40, 900, 200);
+    var _min1 = 1000000; _si2 = 0;
+    while (_si2 < vec_len(_f1)) { var _c1 = vec_get(_f1, _si2); if (gd_kind(_c1) == GD_TEXT) { if (gd_y(_c1) < _min1) { _min1 = gd_y(_c1); } } _si2 = _si2 + 1; }
+    assert(_min1 > _min0, "PgUp shifts the flow down (older messages scroll into view)");
+    assert(gscroll() > 0, "scroll offset > 0 after scrolling up");
+    # scroll is CLAMPED at the top (two huge scrolls settle at the same offset, > 0 given overflow)
+    gscroll_by(100000); gfeed_build(gd_list_new(), 0, 40, 900, 200); var _m1 = gscroll();
+    gscroll_by(100000); gfeed_build(gd_list_new(), 0, 40, 900, 200); var _m2 = gscroll();
+    assert_eq(_m1, _m2, "scroll clamps at the top (no runaway)");
+    assert(_m1 > 0, "there is scrollable overflow");
+    # gkey wiring: PgUp scrolls, End jumps to latest
+    gscroll_reset(); gkey(104, 0); assert(gscroll() > 0, "PgUp (104) scrolls the feed");
+    gkey(107, 0); assert_eq(gscroll(), 0, "End (107) jumps to the latest");
+    # a submitted turn resets the scroll so the reply is visible
+    gscroll_by(100); gcomp_reset(); gcomp_append(0x68); gfocus_set(GFOCUS_COMPOSER);
+    assert_eq(gkey(28, 0), 2, "Enter submits");
+    assert_eq(gscroll(), 0, "a submitted turn snaps the feed back to the latest");
+    # a scrolled-up frame -> golden PPM (older messages in view + the "-- more below --" hint)
+    gscroll_reset(); gscroll_by(90);
+    var _scbuf = gr_fb_new(900, 400);
+    gr_fb_clear(_scbuf, 900, 400, _gframe_bg());
+    gr_raster(gframe_build(900, 400), _scbuf, 900, 400);
+    _gui_ppm_dump(_scbuf, 900, 400, "/tmp/thoth_gui_scroll.ppm");
+    session_history_clear(); gscroll_reset(); gcomp_reset();
+    return 0;
+}

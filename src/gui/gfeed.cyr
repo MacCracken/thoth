@@ -133,10 +133,21 @@ fn gfeed_build(cmds, x, y, w, h) {
     var n = session_history_len();
     var endy = 0;
     if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0)) {
+        gscroll_reset();                                         # nothing to scroll on the empty greeting
         endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail);
     } else {
         var total = _gfeed_flow(0, xbase, 0, avail, n);          # measure-only pass (incl. a pending turn) -> total height
-        endy = _gfeed_flow(cmds, xbase, gfeed_anchor_y(total, y, h), avail, n);   # draw, bottom-anchored
+        var base = gfeed_anchor_y(total, y, h);                  # bottom-anchored start (scroll == 0)
+        gscroll_view_h_set(h);                                   # PgUp/PgDn page by ~the feed height
+        var maxsc = (y + GFEED_GAP) - base;                      # room to scroll up (0 when the flow fits)
+        if (maxsc < 0) { maxsc = 0; }
+        gscroll_clamp(maxsc);                                    # keep the scroll offset within the overflow
+        endy = _gfeed_flow(cmds, xbase, base + gscroll(), avail, n);   # draw, bottom-anchored + scrolled up
+        if (gscroll() > 0) {                                     # scrolled off the bottom -> an honest "more below" hint
+            var hy = y + h - GFEED_LH;
+            gd_push_rect(cmds, x, hy - 2, w, GFEED_LH + 2, _gframe_bg());
+            gd_push_text(cmds, xbase, hy, _ui_rgb(ROLE_FAINT), "-- more below (End) --", 0);
+        }
     }
     gd_push_unclip(cmds);
     return endy;

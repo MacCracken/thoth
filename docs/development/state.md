@@ -7,6 +7,19 @@
 
 ## Version
 
+**0.30.14** — **T3 GUI: conversation-feed scrollback**, 2026-07-11. The feed bottom-anchors to the newest
+message (0.30.3); after a long chat older messages clip off the top. Now **PgUp/PgDn** page through them, **End**
+jumps to the latest. NEW `gscroll_*` state (`src/gui/ginput.cyr`, before gfeed in the include order so `gkey`
+drives it + `gfeed_build` reads it): `_gscroll` = px scrolled UP from the bottom (0 = newest); `gfeed_build` sets
+the feed height + clamps the offset to the overflow each frame and shifts the flow up by it. `gkey` maps
+PageUp(104)/PageDown(109)/End(107); a submitted turn (and the empty greeting) RESETS the scroll so the reply is
+seen. A faint `-- more below (End) --` hint renders when scrolled off the bottom. **Verified**: 1381 assertions
+(+8 `test_gui_scroll` in the LEAN `thoth_gui.tcyr` — scroll-up shifts the flow down, clamps at the top, PgUp/End
+wiring, submit-resets) + a golden PPM of the scrolled state (older messages + the hint) + main builds. PURE +
+unit-tested; the present-loop repaint on a scroll key is main-only (verify live). Pin **6.4.51** (wrapper
+drifted to 6.4.53; benign). **NEXT (GUI arc)**: composer history (Up/Down over the inhist ring); then tool-call
+cards + colored diffs (needs a tool-round producer — its own mini-arc).
+
 **0.30.13** — **T3 GUI: tree Enter on a file → `@mention` in the composer**, 2026-07-11. Completes the file-tree
 keyboard nav (0.30.10): Enter on a file in the focused tree inserts `@<repo-relative-path> ` into the composer +
 hands focus back, riding the 0.21.0 `@mention` machinery (`cmd_task` expands `@path` → the file's content). NEW

@@ -113,6 +113,22 @@ var _gfocus = 0;
 fn gfocus() { return _gfocus; }
 fn gfocus_set(f) { _gfocus = f; return 0; }
 
+# --- conversation-feed scrollback (0.30.14) -----------------------------------------------------------------
+# The feed bottom-anchors to the newest message (0.30.3); after a long chat, older messages clip off the top.
+# PgUp/PgDn page through them (End jumps back to the latest). State lives here (before gfeed.cyr in the include
+# order, so gkey can drive it and gfeed_build can read it). `_gscroll` = px scrolled UP from the bottom (0 =
+# newest visible); gfeed_build sets `_gscroll_view_h` (the feed height) + clamps `_gscroll` to the overflow each
+# frame. A submitted turn resets to the bottom so the reply is seen.
+var _gscroll = 0;
+var _gscroll_view_h = 0;
+fn gscroll() { return _gscroll; }
+fn gscroll_reset() { _gscroll = 0; return 0; }
+fn gscroll_by(d) { _gscroll = _gscroll + d; if (_gscroll < 0) { _gscroll = 0; } return 0; }
+fn gscroll_view_h_set(hh) { _gscroll_view_h = hh; return 0; }
+fn gscroll_clamp(maxv) { if (_gscroll > maxv) { _gscroll = maxv; } if (_gscroll < 0) { _gscroll = 0; } return 0; }
+# a page = the feed height less one line of overlap (fallback when not yet rendered). dir +1 = older, -1 = newer.
+fn gscroll_page(dir) { var p = _gscroll_view_h - 20; if (p < 60) { p = 60; } gscroll_by(dir * p); return 0; }
+
 # gtree_mention: append `@<repo-relative path> ` for tree node li into the composer — rides the 0.21.0 @mention
 # machinery (cmd_task expands `@path` to that file's content). The path is the absolute ftree_path minus the cwd
 # prefix, exactly the derivation the git-badge lookup uses. Reused scratch buffer (no per-call heap).
@@ -155,6 +171,9 @@ fn gtree_key(code, shift) {
 # else it navigates the tree. Composer-focused: delegate to gcomp_key.
 fn gkey(code, shift) {
     if (code == 1) { return 1; }                              # Esc -> quit (any focus)
+    if (code == 104) { gscroll_page(1); return 0; }           # PageUp   -> scroll the feed to OLDER messages
+    if (code == 109) { gscroll_page(0 - 1); return 0; }       # PageDown -> scroll toward newer
+    if (code == 107) { gscroll_reset(); return 0; }           # End      -> jump back to the latest
     if (code == 15) {                                         # Tab -> toggle composer <-> tree
         if (_gfocus == GFOCUS_TREE) { _gfocus = GFOCUS_COMPOSER; }
         elif (ftree_count() > 0) { _gfocus = GFOCUS_TREE; }   # only focus a populated tree
@@ -164,5 +183,7 @@ fn gkey(code, shift) {
         if (ginput_ascii(code, shift) != 0) { _gfocus = GFOCUS_COMPOSER; return gcomp_key(code, shift); }
         return gtree_key(code, shift);
     }
-    return gcomp_key(code, shift);
+    var a = gcomp_key(code, shift);
+    if (a == 2) { gscroll_reset(); }                          # a submitted turn -> snap to the latest so the reply shows
+    return a;
 }
