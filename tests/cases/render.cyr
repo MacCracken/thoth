@@ -7,6 +7,38 @@
 # adds*1000000 + dels (or -1 if a side exceeds the line cap). Identity is
 # NEWLINE-AWARE (a terminated line differs from an unterminated one) so the card
 # can never under-report the bytes written.
+fn _t_ann(kind, text, tlen, oldn, newn) {
+    var t = alloc(16); store64(t, text); store64(t + 8, tlen);              # the {ptr,len} line tuple
+    var o = alloc(32); store64(o, kind); store64(o + 8, t); store64(o + 16, oldn); store64(o + 24, newn);
+    return o;
+}
+
+
+# _t_mdhl_line: populate the mdhl line buffer for the pure fence-scan tests.
+fn _t_mdhl_line(s) {
+    _mdhl_ensure();
+    var n = strlen(s);
+    var i = 0;
+    while (i < n) { store8(_mdhl_line + i, load8(s + i)); i = i + 1; }
+    _mdhl_line_len = n;
+    return 0;
+}
+
+
+# inline markdown (0.18.8): prose lines get headings/bold/inline-code/list markers styled in the feed,
+# preserving strip-coverage (strip_sgr(output) == raw line). Route via mdhl_reply under OUT_RING and read
+# the sealed row. Colors are role markers (recolor on /theme); bold is a raw ESC[1m.
+fn _t_md_row(raw, n) {
+    # run one raw line through mdhl_reply into the feed ring; return the sealed row 0's byte length via
+    # the globals (caller reads feed_line_ptr(0)/feed_line_len(0)). Assumes a single logical line.
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(raw, n);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return feed_line_len(0);
+}
+
 fn test_diff() {
     test_group("diff producer (0.8.3)");
     var a = "a\nb\nc\n";

@@ -1,0 +1,34 @@
+# thoth GUI tests — T3 draw pipeline + view-builders (gdraw/graster/gstatus/ginput/gtree/gfeed) + surface.
+# CURATED translation unit (0.30.9): only the GUI's transitive deps — NO tui/mdhl/feed/commands/vyakarana.
+# Fast: `cyrius test tests/thoth_gui.tcyr`. Enabled by the 0.30.8 TUI-decoupling.
+include "src/vendor/bote-core.cyr"
+include "src/vendor/libro.cyr"
+include "src/vendor/t-ron.cyr"
+include "src/vendor/avatara.cyr"
+include "src/vendor/darshana.cyr"
+include "src/vendor/sankoch.cyr"
+include "src/vendor/sit-read.cyr"
+include "src/util.cyr"
+include "src/version.cyr"
+include "src/ui.cyr"
+include "src/intr.cyr"
+include "src/ftree.cyr"
+include "src/project.cyr"
+include "src/config.cyr"
+include "src/gate.cyr"
+include "src/git.cyr"
+include "src/seams.cyr"
+include "src/session.cyr"
+include "src/hoosh.cyr"
+include "src/surface.cyr"
+include "src/vendor/kashi.cyr"
+include "src/gui/gdraw.cyr"
+include "src/gui/graster.cyr"
+include "src/gui/gstatus.cyr"
+include "src/gui/ginput.cyr"
+include "src/gui/gtree.cyr"
+include "src/gui/gfeed.cyr"
+include "tests/cases/gui.cyr"
+fn main() { alloc_init(); test_gui(); test_surface(); return assert_summary(); }
+var _e = main();
+syscall(60, _e);

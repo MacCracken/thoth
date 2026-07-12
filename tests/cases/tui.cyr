@@ -5,6 +5,14 @@
 
 # Presentation surface (M7 / ADR-0009): the T0 floor must emit NO escapes (so
 # piped/CI output is byte-identical), and T1 must produce the design's exact amber.
+
+# _mp_push_str: helper — feed each byte of NUL-terminated `s` through mpick_query_push (mirrors typing).
+fn _mp_push_str(s) {
+    var i = 0;
+    while (load8(s + i) != 0) { mpick_query_push(load8(s + i)); i = i + 1; }
+    return 0;
+}
+
 fn test_ui() {
     test_group("presentation surface (M7 ui.cyr)");
     # substrate helpers

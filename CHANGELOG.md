@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.9] - 2026-07-11
+
+**Curated per-domain test binaries** (enabled by the 0.30.8 decoupling). The single `tests/thoth.tcyr` (one
+binary of the whole codebase) is replaced by independent, curated `tests/*.tcyr`, each including ONLY its
+domain's transitive `src` deps — so a domain can be run fast in isolation (`cyrius test tests/thoth_gui.tcyr`):
+
+- **`tests/thoth_gui.tcyr`** — LEAN (103): the T3 draw pipeline + view-builders + surface. Includes
+  `surface → hoosh → gate → t-ron` + `intr` + the GUI modules; **NO `tui`/`mdhl`/`feed`/`commands`/`vyakarana`**.
+- **`tests/thoth_render.tcyr`** — LEAN (107): diff/highlight/mdhl. Includes `vyakarana` + `diff`/`mdhl` +
+  `feed`/`fsearch`/`git`; no `tui`/`commands`/`agent`/`gui`.
+- **`tests/thoth_core.tcyr`** — FULL (1133): the commands/tui-coupled integration tests (core + agent + tui).
+  These stay full-include because the hub (`tui → dispatch`, `agent → spin_label`, `shell → _params_one`)
+  couples them to the whole codebase.
+
+Test helpers were sorted to match: shared byte-buffer utilities → NEW `tests/cases/testutil.cyr` (dep-free);
+domain-specific helpers moved into their case file; `test_memory` (uses `classify_input`) moved to `core`.
+**1343 assertions** across the 3 binaries (was 1341 in one; +2 = `test_surface`'s config-conditional asserts
+now run in isolation — more coverage, not a regression). `cyrius test` runs all three.
+
+### Changed
+- `tests/thoth.tcyr` (driver) + `tests/cases/helpers.cyr` removed; replaced by `tests/thoth_{gui,render,core}.tcyr`
+  + `tests/cases/testutil.cyr`. `src/test.cyr` header updated to point new tests at the right binary.
+
+### Notes
+- Only `gui` and `render` are cleanly lean; `agent` is *nearly* lean but for two residual layering violations
+  the decoupling didn't cover (`agent → spin_label_*` in tui, `shell → _params_one` in commands) — decoupling
+  those (and the `commands`/`tui` hub) would let the integration bucket split further; a future arc. No `src`
+  change this cut. Pin **6.4.51**.
+
 ## [0.30.8] - 2026-07-11
 
 **Decouple the lower layers from the TUI (dependency inversion).** thoth grew out of one file and had never

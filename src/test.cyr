@@ -1,7 +1,9 @@
 # thoth — top-level test entry (referenced by cyrius.cyml [build].test).
-# For unit tests, add cases to the topical files under tests/cases/ (core/render/tui/agent/gui.cyr; shared
-# helpers in helpers.cyr) and wire the new test_* fn into tests/thoth.tcyr's main(). tests/thoth.tcyr is the
-# thin driver that includes the src modules + those case files (ONE binary). Run via `cyrius test`.
+# For unit tests, add the case to the right topical file under tests/cases/ (gui/render/tui/agent/core.cyr;
+# shared byte-buffer helpers in testutil.cyr) and wire the new test_* call into the matching CURATED test binary
+# in tests/ (0.30.9): tests/thoth_gui.tcyr (LEAN — no tui/mdhl/feed/commands), tests/thoth_render.tcyr (LEAN —
+# diff/mdhl/vyakarana), tests/thoth_core.tcyr (FULL — the commands/tui-coupled integration tests: core + agent +
+# tui). Each .tcyr curates only its transitive src includes. `cyrius test` runs all tests/*.tcyr.
 
 include "lib/syscalls.cyr"
 

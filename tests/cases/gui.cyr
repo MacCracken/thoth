@@ -3,6 +3,35 @@
 # (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
 
 
+
+# _gui_ppm_dump: write an XRGB8888 buffer to a P6 PPM for visual inspection (test artifact).
+fn _gui_ppm_dump(buf, w, h, path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fd < 0) { return 0; }
+    var hdr = alloc(64);
+    var o = 0;
+    store8(hdr + o, 80); o = o + 1; store8(hdr + o, 54); o = o + 1; store8(hdr + o, 10); o = o + 1;   # "P6\n"
+    o = o + fmt_int_buf(w, hdr + o);
+    store8(hdr + o, 32); o = o + 1;
+    o = o + fmt_int_buf(h, hdr + o);
+    store8(hdr + o, 10); o = o + 1;
+    store8(hdr + o, 50); o = o + 1; store8(hdr + o, 53); o = o + 1; store8(hdr + o, 53); o = o + 1; store8(hdr + o, 10); o = o + 1;   # "255\n"
+    file_write(fd, hdr, o);
+    var n = w * h;
+    var rgb = alloc(n * 3);
+    var i = 0;
+    while (i < n) {
+        var px = load32(buf + i * 4);
+        store8(rgb + i * 3, (px / 65536) & 255);
+        store8(rgb + i * 3 + 1, (px / 256) & 255);
+        store8(rgb + i * 3 + 2, px & 255);
+        i = i + 1;
+    }
+    file_write(fd, rgb, n * 3);
+    file_close(fd);
+    return 1;
+}
+
 fn test_gui() {
     test_group("GUI draw pipeline (gdraw/graster/gstatus, 0.29.0)");
     # --- draw-command builders ---

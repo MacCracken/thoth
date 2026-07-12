@@ -2,6 +2,16 @@
 # Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
 # (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
 
+
+fn _t_secs_line(ms, expect) {   # emit _task_emit_secs(ms) to the feed ring; 1 if row 0 contains `expect`
+    feed_init();
+    out_mode_set(OUT_RING);
+    _task_emit_secs(ms);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return _t_count_sub(feed_line_ptr(0), feed_line_len(0), expect, strlen(expect));
+}
+
 fn test_classify() {
     test_group("classify_input");
     assert_eq(classify_input(""), CMD_EMPTY, "empty -> CMD_EMPTY");
@@ -1399,5 +1409,61 @@ fn test_role() {
     assert_eq(persona_role_select_aspect(999), 0, "OOB aspect select refused");
     assert_eq(persona_role_select_aspect(0 - 1), 0, "negative aspect select refused");
     persona_role_reset();                       # leave a clean default for later tests
+    return 0;
+}
+
+
+# Project-memory injection (0.12.0, ADR-0012). The mem system message rides the
+# same builders as the persona — a second {role:system} block AFTER the persona,
+# BEFORE the user turn/history. mem == 0 (disabled/absent) -> byte-identical floor.
+fn test_memory() {
+    test_group("project memory injection (0.12.0)");
+    assert_eq(classify_input("/remember a durable fact"), CMD_REMEMBER, "/remember classifies to CMD_REMEMBER");
+    session_reset();
+    var dst[4096];
+
+    # persona + memory + user, in order (both system messages present).
+    var l1 = hoosh_build_dry(&dst, "m", "SYS", "MEM", "hi", 0);
+    store8(&dst + l1, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"system\",\"content\":\"MEM\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "memory: persona + memory + user, in order");
+
+    # mem == 0 -> NO memory message (byte-identical floor).
+    var l2 = hoosh_build_dry(&dst, "m", "SYS", 0, "hi", 0);
+    store8(&dst + l2, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "memory off: byte-identical (no memory message)");
+
+    # single-turn builder threads mem the same way (persona 0, memory present).
+    var l3 = hoosh_build_request(&dst, "m", 0, "MEM", "hi", 0);
+    store8(&dst + l3, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"MEM\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "single-turn: memory system message");
+
+    # reader is OFF by default -> content-blind gate returns 0, no I/O, no faked line.
+    assert_eq(config_memory_enabled(), 0, "memory off by default");
+    assert_eq(memory_context(), 0, "memory_context() 0 when disabled");
+    assert_eq(memory_system_prompt(), 0, "memory_system_prompt() 0 when disabled");
+    assert_eq(memory_fact_count(), 0, "memory_fact_count() 0 when disabled");
+
+    # 0.12.2: memory_write agentic tool — advertised only when the seam is active.
+    var tb[8192];
+    var pre = "[{\"x\":1}]";
+    var pl = strlen(pre);
+    memcpy(&tb, pre, pl); store8(&tb + pl, 0);
+    assert_eq(agent_tools_add_memory(&tb, pl), pl, "memory_write NOT advertised when memory disabled");
+    _cfg_memory_enabled = 1;
+    memcpy(&tb, pre, pl); store8(&tb + pl, 0);
+    var a2 = agent_tools_add_memory(&tb, pl);
+    store8(&tb + a2, 0);
+    assert(strstr(&tb, "\"x\":1},{\"type\":\"function\"") != 0, "memory_write spliced after comma into non-empty array");
+    assert_eq(load8(&tb + a2 - 1), 93, "tools array still closes with ']'");
+    var a3 = agent_tools_add_memory(&tb, 0);
+    store8(&tb + a3, 0);
+    assert_eq(load8(&tb), 91, "empty-registry tools array opens with '['");
+    assert(strstr(&tb, "memory_write") != 0, "memory_write advertised (empty registry)");
+    _cfg_memory_enabled = 0;
+    # memory_write_tool argument validation (no I/O on the error paths).
+    assert_eq(cstr_starts_with(memory_write_tool(0), "memory_write:"), 1, "memory_write_tool null args -> error");
+    assert_eq(cstr_starts_with(memory_write_tool("{}"), "memory_write:"), 1, "memory_write_tool missing text -> error");
+
+    session_reset();
     return 0;
 }

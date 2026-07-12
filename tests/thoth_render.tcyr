@@ -1,0 +1,25 @@
+# thoth rendering tests — diff annotation, syntax highlight (vyakarana), markdown highlighter (mdhl).
+# CURATED (0.30.9): the render stack + producers it reads; NO tui/commands/agent/gui.
+include "src/vendor/vyakarana.cyr"
+include "src/vendor/sankoch.cyr"
+include "src/vendor/sit-read.cyr"
+include "src/util.cyr"
+include "src/version.cyr"
+include "src/ui.cyr"
+include "src/feed.cyr"
+include "src/fsearch.cyr"
+include "src/git.cyr"
+include "src/diff.cyr"
+include "src/mdhl.cyr"
+include "tests/cases/testutil.cyr"
+include "tests/cases/render.cyr"
+fn main() {
+    alloc_init();
+    out_ring_sink_set(&feed_write);
+    test_diff(); test_git_diff(); test_highlight();
+    test_mdhl_tag_map(); test_mdhl_fence(); test_mdhl_render(); test_mdhl_stream();
+    test_mdhl_livecard(); test_mdhl_inline();
+    return assert_summary();
+}
+var _e = main();
+syscall(60, _e);

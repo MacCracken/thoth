@@ -1,10 +1,6 @@
-# thoth test suite — the DRIVER (0.30.7). One compiled binary: the driver includes the src modules directly
-# (NOT src/main.cyr or src/repl.cyr, which carry top-level execution / pure I/O), then the topical test-case
-# files under tests/cases/ (helpers.cyr first, then core/render/tui/agent/gui.cyr), then main() calls every
-# test_* below. To add a test: put its body in the right tests/cases/*.cyr and wire the call into main() here.
-# The cases stay in ONE binary because hoosh/gate reach into the TUI (surface->hoosh->gate->tui), so a per-file
-# split can't drop those modules; splitting the SOURCE keeps files readable without fighting that coupling.
-# Stdlib + process deps auto-resolve from cyrius.cyml. Run via `cyrius test`.
+# thoth INTEGRATION tests — everything that needs the commands/tui hub: CLI/session/config/hoosh/
+# persona/cost/history/oneshot (core) + the agent spine + the rich TUI. FULL includes (the hub couples
+# these to the whole codebase — agent->spin_label, shell->_params_one, tui->dispatch). 0.30.9.
 include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
@@ -40,8 +36,6 @@ include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
 include "src/surface.cyr"  # status view-model (0.28.0, Stage B); after its producers (session/hoosh/git/ui), before commands+tui
-# T3 GUI draw pipeline (0.29.0, Phase 1) — headless-testable; NOT in main.cyr yet (wired with the present
-# shell in a later cut, after the code-buffer lift). kashi (font) before graster; graster before gstatus.
 include "src/vendor/kashi.cyr"
 include "src/gui/gdraw.cyr"
 include "src/gui/graster.cyr"
@@ -54,18 +48,14 @@ include "src/repl.cyr"
 include "src/oneshot.cyr"
 include "src/tui.cyr"
 
-# --- test cases: split into topical files under tests/cases/ (0.30.7). helpers.cyr FIRST so any
-#     group can use any helper; the rest define the test_* fns main() calls below. ONE binary.
-include "tests/cases/helpers.cyr"
+include "tests/cases/testutil.cyr"
 include "tests/cases/core.cyr"
-include "tests/cases/render.cyr"
 include "tests/cases/tui.cyr"
 include "tests/cases/agent.cyr"
-include "tests/cases/gui.cyr"
 
 fn main() {
     alloc_init();
-    out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); tests arm OUT_RING in many cases
+    out_ring_sink_set(&feed_write);
     test_classify();
     test_tokens();
     test_cstr();
@@ -105,9 +95,6 @@ fn main() {
     test_parallel();
     test_bounds_hardening();
     test_ui();
-    test_diff();
-    test_git_diff();
-    test_highlight();
     test_tui();
     test_feed();
     test_feed_ring();
@@ -115,15 +102,9 @@ fn main() {
     test_glyph_width();
     test_feed_markers();
     test_capture();
-    test_mdhl_tag_map();
-    test_mdhl_fence();
-    test_mdhl_render();
-    test_mdhl_stream();
-    test_mdhl_livecard();
     test_fsearch();
     test_mention();
     test_tab_complete();
-    test_mdhl_inline();
     test_spinner();
     test_stream_throttle();
     test_ftree();
@@ -136,10 +117,7 @@ fn main() {
     test_ui_niceties();
     test_reload();
     test_model_switch();
-    test_surface();
-    test_gui();
     return assert_summary();
 }
-
-var exit_code = main();
-syscall(60, exit_code);
+var _e = main();
+syscall(60, _e);

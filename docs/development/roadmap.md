@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.8):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.9):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -37,9 +37,10 @@
 > 4,095-line `tests/thoth.tcyr` into a thin driver + topical `tests/cases/*.cyr` files (one binary,
 > behavior-identical). **0.30.8** decoupled the lower layers from the TUI (dependency inversion: `intr_*`
 > extracted to `src/intr.cyr`; `util → feed`, `gate → confirm`, `hoosh → mdhl/feed_stream` behind registered
-> sinks), which unblocks curated per-domain test files. Still ahead (0.30.x patches): file-tree keyboard nav,
-> tool-call cards + colored diffs in the feed (needs a tool-round producer), feed scrollback, composer history.
-> thoth as its
+> sinks). **0.30.9** cashed that in: the one-binary test suite became curated per-domain `tests/*.tcyr`
+> (`thoth_gui`/`thoth_render` lean, `thoth_core` the full integration bucket). Still ahead (0.30.x patches):
+> file-tree keyboard nav (next), tool-call cards + colored diffs in the feed (needs a tool-round producer), feed
+> scrollback, composer history. thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
 > "thoth-in-puka" stance). Per-version detail is in

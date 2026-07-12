@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.30.9** — **curated per-domain test binaries** (the payoff of the 0.30.8 decoupling), 2026-07-11. The single
+`tests/thoth.tcyr` (one binary of the whole codebase) is replaced by independent, curated `tests/*.tcyr`, each
+including ONLY its domain's transitive `src` deps so it runs fast in isolation: **`thoth_gui.tcyr`** LEAN (103 —
+draw pipeline + view-builders + surface; `surface→hoosh→gate→t-ron` + `intr` + GUI modules, NO
+`tui`/`mdhl`/`feed`/`commands`/`vyakarana`), **`thoth_render.tcyr`** LEAN (107 — diff/highlight/mdhl +
+`vyakarana`/`feed`/`fsearch`/`git`), **`thoth_core.tcyr`** FULL (1133 — the commands/tui-coupled integration
+tests: core + agent + tui, full-include because the hub couples them to the whole codebase). Helpers sorted:
+shared byte-buffer utils → NEW `tests/cases/testutil.cyr` (dep-free); domain helpers → their case file;
+`test_memory` (uses `classify_input`) → `core`. **1343 assertions** across the 3 binaries (was 1341 in one; +2 =
+`test_surface`'s config-conditional asserts now run in isolation — more coverage, not a regression). `cyrius
+test` runs all three. **HONEST scope**: only `gui`/`render` are cleanly LEAN; `agent` is *nearly* lean but for
+two residual layering violations the 0.30.8 pass didn't cover (`agent → spin_label_*` [tui], `shell →
+_params_one` [commands]), and `tui`/`core` are inherently full (the `commands`/`tui` dispatch hub) — decoupling
+those is a future arc. **No `src` change this cut** (tests-only; the shipping binary is unaffected). Pin
+**6.4.51** (wrapper drifted to 6.4.53; benign). **NEXT**: the GUI arc at 0.30.10 — file-tree keyboard nav.
+
 **0.30.8** — **decouple the lower layers from the TUI (dependency inversion)**, 2026-07-11. thoth grew out of
 one file and had never been layered; three lower modules reached UP into presentation, coupling every GUI/TUI
 test to the whole codebase (cyrius refuses reachable-undefined — the wall the 0.30.7 split hit). This refactor
