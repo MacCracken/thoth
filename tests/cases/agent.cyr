@@ -617,6 +617,48 @@ fn test_edit() {
     var smlen = strlen(sm);
     assert(smlen < EDIT_RES_CAP, "the summary is bounded within EDIT_RES_CAP even for a ~1000B path (no OOB)");
     assert_eq(load8(sm + smlen), 0, "the summary is NUL-terminated");
+
+    test_group("create_file tool: create-to-disk (_write_do) on a real file (0.31.3)");
+    var cpath = "build/create_selftest.txt";
+    xunlink(cpath);                                        # ensure it does not exist
+    var cbody = "new file line 1\nnew file line 2\n";
+    var cr = _write_do(cpath, cbody, strlen(cbody));
+    assert_eq(edit_last_ok(), 1, "create wrote a new file (edit_last_ok)");
+    assert_eq(edit_last_old_len(), 0, "the new file's 'old' length is 0 (all-add diff)");
+    var cbuf = alloc(256); var cn = file_read_all(cpath, cbuf, 255); store8(cbuf + cn, 0);
+    assert(_edit_streq_out(cbuf, "new file line 1\nnew file line 2\n") == 1, "the new file has the content on disk");
+    # create-only: a second create on the same path is refused, file untouched
+    var cr2 = _write_do(cpath, "different", 9);
+    assert_eq(edit_last_ok(), 0, "creating over an existing file is refused (no clobber)");
+    cn = file_read_all(cpath, cbuf, 255); store8(cbuf + cn, 0);
+    assert(_edit_streq_out(cbuf, "new file line 1\nnew file line 2\n") == 1, "the existing file is untouched after a refused create");
+    # empty content -> an empty file
+    xunlink(cpath);
+    var cr3 = _write_do(cpath, "", 0);
+    assert_eq(edit_last_ok(), 1, "empty content creates an empty file");
+    assert_eq(file_read_all(cpath, cbuf, 255), 0, "the created file is 0 bytes");
+    xunlink(cpath);
+    # no-clobber regression: file_exists is an O_RDONLY probe, so a WRITE-ONLY existing file would read as absent;
+    # the O_CREAT|O_EXCL guard must still refuse it and leave it UNTOUCHED (the review-found clobber).
+    var wpath = "build/create_wonly.txt";
+    xunlink(wpath);
+    file_write_all(wpath, "ORIGINAL", 8);
+    sys_chmod(wpath, 0x80);                                # 0200 write-only: on Linux, file_exists (O_RDONLY) can't read it
+    var wclob = _write_do(wpath, "CLOBBERED!!", 11);
+    assert_eq(edit_last_ok(), 0, "a write-only existing file is refused (O_EXCL, not the readability probe)");
+    sys_chmod(wpath, 0x1A4);                               # 0644 back so we can verify it
+    var wchk = alloc(64); var wcn = file_read_all(wpath, wchk, 63); store8(wchk + wcn, 0);
+    assert(_edit_streq_out(wchk, "ORIGINAL") == 1, "the write-only file was NOT clobbered");
+    xunlink(wpath);
+
+    test_group("create_file tool: parse + jail refusals (pre-gate)");
+    assert(streq(create_file_tool(0), "(create_file: missing arguments)") == 1, "null args refused");
+    assert(streq(create_file_tool("nope"), "(create_file: arguments are not valid JSON)") == 1, "bad JSON refused");
+    assert(streq(create_file_tool("{\"content\":\"x\"}"), "(create_file: missing required string 'path')") == 1, "missing path refused");
+    assert(streq(create_file_tool("{\"path\":\"a\"}"), "(create_file: missing required string 'content')") == 1, "missing content refused");
+    assert(streq(create_file_tool("{\"path\":\"/etc/evil\",\"content\":\"x\"}"), "(create_file: refused - path is outside the project (no absolute, no '~', no '..'))") == 1, "absolute path refused (jail)");
+    assert_eq(edit_last_allowed(), 0, "a jailed-out create never reaches the gate");
+    assert(streq(create_file_tool("{\"path\":\"../x\",\"content\":\"y\"}"), "(create_file: refused - path is outside the project (no absolute, no '~', no '..'))") == 1, "'..' escape refused (jail)");
     return 0;
 }
 

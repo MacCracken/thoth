@@ -119,6 +119,16 @@ fn _edit_summary(path, ob, ol, nb, nl, wr) {
     return _edit_res;
 }
 
+# _edit_stash_path: copy `path` into the stable _edit_last_path buffer, so the dispatch can hand it to
+# editlog_record after a successful edit/create (0.31.1). Bounded to EDIT_LPATH_CAP.
+fn _edit_stash_path(path) {
+    if (_edit_last_path == 0) { _edit_last_path = alloc(EDIT_LPATH_CAP); }
+    var pi = 0;
+    while ((load8(path + pi) != 0) && (pi < (EDIT_LPATH_CAP - 1))) { store8(_edit_last_path + pi, load8(path + pi)); pi = pi + 1; }
+    store8(_edit_last_path + pi, 0);
+    return 0;
+}
+
 # _edit_do: the post-gate apply-to-disk half (0.31.0). Reads `path`, applies the surgical replacement, writes it
 # back, sets _edit_last_ok, and returns the summary — OR an honest "(edit: ...)" refusal (no write) on any
 # failure. The caller has ALREADY jailed + gated. Split out so the disk path is unit-testable without the gate
@@ -128,7 +138,7 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     if (_edit_old == 0) { _edit_old = alloc(EDIT_BUF_CAP); }
     if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
     if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
-    if (file_exists(path) == 0) { return "(edit: file does not exist - this tool edits existing files; creating new files is not yet supported)"; }
+    if (file_exists(path) == 0) { return "(edit: file does not exist - use create_file to make a new file, or check the path)"; }
     var oldlen = file_read_all(path, _edit_old, EDIT_BUF_CAP - 1);
     if (oldlen < 0) { return "(edit: could not read the file)"; }
     if (oldlen >= (EDIT_BUF_CAP - 1)) { return "(edit: file too large (> 256KB) - refused rather than edit a truncated read)"; }
@@ -145,12 +155,9 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     # differs per target). Until then this at least never CLAIMS success on a partial write.
     if (wr != newlen) { return "(edit: the write to disk was incomplete (disk full?) - the file may be truncated)"; }
     _edit_last_ok = 1;
-    # 0.31.1: stash this edit's path + old/new for editlog_record (the dispatch calls it right after, before the
-    # next edit reuses _edit_old/_edit_new). _edit_old/_edit_new already hold the pre/post content.
-    if (_edit_last_path == 0) { _edit_last_path = alloc(EDIT_LPATH_CAP); }
-    var pi = 0;
-    while ((load8(path + pi) != 0) && (pi < (EDIT_LPATH_CAP - 1))) { store8(_edit_last_path + pi, load8(path + pi)); pi = pi + 1; }
-    store8(_edit_last_path + pi, 0);
+    # 0.31.1: stash this edit's path + old/new lengths for editlog_record (the dispatch calls it right after,
+    # before the next edit reuses _edit_old/_edit_new). _edit_old/_edit_new already hold the pre/post content.
+    _edit_stash_path(path);
     _edit_last_oldlen = oldlen;
     _edit_last_newlen = newlen;
     return _edit_summary(path, _edit_old, oldlen, _edit_new, newlen, wr);
@@ -191,4 +198,77 @@ fn edit_tool(args_cstr) {
     if (gate_authorize("thoth_edit", _params_one("path", path), "edit", path) == 0) { return "denied by authorization policy"; }
     _edit_last_allowed = 1;
     return _edit_do(path, oldstr, oldstrlen, newstr, newstrlen);
+}
+
+# --- create_file: make a NEW file (0.31.3) -----------------------------------------------------------------
+# The create half of the write capability. CREATE-ONLY: it REFUSES if the file already exists, so it can never
+# blind-clobber — modifying an existing file stays edit's surgical, diff-producing job. Same envelope as edit:
+# opt-in [edit].enabled, jailed cwd-only, gated under the SAME thoth_edit verb (creating and editing are the same
+# trust class — the model writing project files). Feeds editlog with old="" so the new file shows as all-GREEN
+# additions on its card.
+
+# _write_summary: "(create_file: <path> - created, N bytes)" into _edit_res.
+fn _write_summary(path, clen) {
+    var o = 0;
+    o = _edit_puts(o, "(create_file: ");
+    o = _edit_puts(o, path);
+    o = _edit_puts(o, " - created, ");
+    o = _edit_puti(o, clen);
+    o = _edit_puts(o, " bytes)");
+    store8(_edit_res + o, 0);
+    return _edit_res;
+}
+
+# _write_do: the post-gate create-to-disk half. REFUSES an existing file (no clobber). Writes `content` (clen
+# bytes) into a brand-new file, sets _edit_last_ok, and stashes {path, old="" (oldlen 0), new=content} for
+# editlog_record (so the card diffs "" -> content = all adds). Caller has ALREADY jailed + gated. Unit-testable
+# without the gate. content may be empty (creates an empty file).
+fn _write_do(path, content, clen) {
+    _edit_last_ok = 0;
+    if (_edit_old == 0) { _edit_old = alloc(EDIT_BUF_CAP); }   # edit_last_old() must be a valid buffer (read for 0 bytes)
+    if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
+    if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
+    if (clen > (EDIT_BUF_CAP - 1)) { return "(create_file: content too large (> 256KB))"; }
+    # file_exists is only an O_RDONLY *readability* probe — it gives a friendly "already exists" for the common
+    # case, but a writable-but-UNREADABLE existing file (mode 0200) would read as absent. So the REAL no-clobber
+    # guard is O_CREAT|O_EXCL: the kernel refuses if the path exists regardless of read permission (and refuses to
+    # follow a trailing symlink). AGNOS has no exclusive-create bit (O_EXCL degrades to a plain create,
+    # lib/io.cyr:47-52) — there the file_exists pre-check is the guard (an AGNOS write-only-file residual).
+    if (file_exists(path) == 1) { return "(create_file: that file already exists - use edit to modify it)"; }
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_EXCL, 0x1A4);
+    if (fd < 0) { return "(create_file: could not create the file (it may already exist, or the path is unwritable))"; }
+    var wr = clen;
+    if (clen > 0) { memcpy(_edit_new, content, clen); wr = file_write(fd, _edit_new, clen); }
+    file_close(fd);
+    if (wr != clen) { return "(create_file: the write to disk was incomplete (disk full?))"; }
+    _edit_last_ok = 1;
+    _edit_stash_path(path);
+    _edit_last_oldlen = 0;                                      # new file -> empty "old" -> editlog shows all adds
+    _edit_last_newlen = clen;
+    return _write_summary(path, clen);
+}
+
+# create_file_tool: the agentic-loop entry. Parses {path, content}, jails, gates (thoth_edit), then creates via
+# _write_do. Honest "(create_file: ...)" refusal on any failure.
+fn create_file_tool(args_cstr) {
+    _edit_last_allowed = 0;
+    _edit_last_ok = 0;
+    if (args_cstr == 0) { return "(create_file: missing arguments)"; }
+    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    if (v == 0) { return "(create_file: arguments are not valid JSON)"; }
+    var pv = bayan_json_v_obj_get(v, "path");
+    if (pv == 0) { return "(create_file: missing required string 'path')"; }
+    var pvs = bayan_json_v_str(pv);
+    if (pvs == 0) { return "(create_file: 'path' must be a string)"; }
+    var path = str_cstr(pvs);
+    var cv = bayan_json_v_obj_get(v, "content");
+    if (cv == 0) { return "(create_file: missing required string 'content')"; }
+    var cvs = bayan_json_v_str(cv);
+    if (cvs == 0) { return "(create_file: 'content' must be a string)"; }
+    var content = str_cstr(cvs);
+    var clen = str_len(cvs);
+    if (_project_jail_ok(path) == 0) { return "(create_file: refused - path is outside the project (no absolute, no '~', no '..'))"; }
+    if (gate_authorize("thoth_edit", _params_one("path", path), "create", path) == 0) { return "denied by authorization policy"; }
+    _edit_last_allowed = 1;
+    return _write_do(path, content, clen);
 }

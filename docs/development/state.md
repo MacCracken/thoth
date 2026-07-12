@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.31.3** — **`create_file`: the model can make NEW files** (ADR-0017), 2026-07-12. The create half of the
+write capability. `create_file(path, content)` (`src/edit.cyr`) writes a brand-new file — **CREATE-ONLY**, it
+REFUSES if the file exists (no blind-clobber; modifying stays `edit`'s surgical job). Same envelope as edit:
+opt-in `[edit].enabled`, jailed cwd-only, `thoth_edit`-gated, local+serial. Shares the `_edit_*` buffers + editlog
+recording; feeds editlog with `old=""` so a new file shows as all-GREEN additions on its card. **Verified**: 1496
+assertions (`test_edit` +16: `_write_do` create / refuse-if-exists / empty-file / parse+jail refusals) + **LIVE**
+(gated create → `+2 -0` all-add editlog → file on disk → second create refused). Adversarially reviewed. Pin
+**6.4.51** (wrapper 6.4.55). **NEXT (remaining follow-ups)**: cleaner edit-arg display on the card (the JSON args
+line is noisy under the diff); the `daimon_invoke` HTTP-status hardening (from 0.30.18); atomic edit/create writes
+(needs a portable stdlib `xrename`).
+
 **0.31.2** — **Colored diff cards in the GUI feed** (the arc payoff), 2026-07-12. When the model `edit`s a file,
 its tool-call card now shows the change: the stored `editlog` diff renders below the `edit` call line — deleted
 lines RED (`- …`), added lines GREEN (`+ …`) — sourced from thoth's own edits. `_gtool_card` (`src/gui/gtool.cyr`)

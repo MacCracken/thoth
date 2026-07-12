@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.31.2):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.31.3):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -61,7 +61,9 @@
 > `thoth_edit`-gated, degrade-closed — the first-class source the colored-diffs arc needed. **0.31.1** landed the producer half — `editlog` (`src/editlog.cyr`), a session ring keyed by `(turn,round,call)` that records each edit's changed lines (computed once via `compute_file_diff`, stored — never recomputed per repaint). **0.31.2** SHIPPED the colored **diff card** —
 > `_gtool_card` looks up `editlog_find(turn,round,call)` per `edit` call and draws the stored del/add lines
 > RED/GREEN below it (measure/draw parity via `_gtool_call_diff_rows`), COMPLETING the colored-diffs arc.
-> Remaining edit-tool follow-ups: create-new-file support; a cleaner edit-arg display on the call line. (A separate hardening item: `daimon_invoke` doesn't check HTTP status, unlike `daimon_call`.)
+> **0.31.3** added **`create_file(path, content)`** — the model can now make NEW files (create-only, refuses an
+> existing path; same jailed/gated/opt-in envelope; new files show as all-green additions on their card).
+> Remaining edit-tool follow-ups: a cleaner edit-arg display on the card; atomic writes (needs a stdlib `xrename`). (A separate hardening item: `daimon_invoke` doesn't check HTTP status, unlike `daimon_call`.)
 > thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's

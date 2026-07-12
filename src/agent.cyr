@@ -213,6 +213,8 @@ fn agent_tools_add_edit(dst, tl) {
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
     else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }   # back over the trailing "]"
     off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"edit\",\"description\":\"Edit an EXISTING text file in THIS project by replacing an exact snippet. Give 'path' relative to the project root (absolute paths, '~' and '..' are refused; writes stay inside the project). 'old_string' must appear EXACTLY ONCE in the file - include enough surrounding lines to make it unique, or the edit is refused. 'new_string' replaces it (use an empty string to delete). Preserve exact indentation/whitespace. This applies the change to disk.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root\"},\"old_string\":{\"type\":\"string\",\"description\":\"the exact text to replace; must be unique in the file\"},\"new_string\":{\"type\":\"string\",\"description\":\"the replacement text (empty to delete the old text)\"}},\"required\":[\"path\",\"old_string\",\"new_string\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, ",");
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"create_file\",\"description\":\"Create a NEW text file in THIS project with the given content. Give 'path' relative to the project root (absolute paths, '~' and '..' are refused). REFUSES if the file already exists - use edit to modify an existing file. Writes the content verbatim to disk.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root; must not already exist\"},\"content\":{\"type\":\"string\",\"description\":\"the full text content of the new file\"}},\"required\":[\"path\",\"content\"]}}}");
     off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
     return off;
@@ -764,6 +766,7 @@ fn _agent_round_has_local(tcs, nc) {
             # a hallucinated/un-advertised "shell" fall through to daimon_invoke. 0.16.0.
             if (streq(nm, "shell") == 1) { return 1; }
             if (streq(nm, "edit") == 1) { return 1; }         # 0.31.0 local edit tool -> serial dispatch (same rationale as shell)
+            if (streq(nm, "create_file") == 1) { return 1; }  # 0.31.3 local create tool -> serial dispatch
         }
         i = i + 1;
     }
@@ -885,6 +888,22 @@ fn _agent_run_calls_serial(tcs, nc) {
                 }
             } else {
                 res = "(edit tool is not enabled in this session)";
+            }
+            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+        }
+        elif (streq(nm, "create_file") == 1) {
+            # thoth-native create tool (0.31.3, ADR-0017): the model makes a NEW project file. create_file_tool
+            # self-gates (jail + thoth_edit) and refuses an existing file; LOCAL, NOT via daimon. Records the same
+            # editlog entry (old="" -> all-add diff card) via the shared edit_last_* state.
+            if (config_edit_enabled() == 1) {
+                res = create_file_tool(gp);
+                if (edit_last_allowed() == 1) { rl_kind = RL_ALLOWED; }
+                rl_ok = edit_last_ok();
+                if (edit_last_ok() == 1) {
+                    editlog_record(session_turns(), roundlog_cur_round(), ci, edit_last_path(), edit_last_old(), edit_last_old_len(), edit_last_new(), edit_last_new_len());
+                }
+            } else {
+                res = "(create_file tool is not enabled in this session)";
             }
             ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
         }

@@ -2,6 +2,41 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.3] - 2026-07-12
+
+**`create_file` — the model can make NEW files.** The create half of the write capability, completing the edit
+tool: **`create_file(path, content)`** ([ADR-0017](docs/adr/0017-model-edit-tool-jailed-gated-opt-in.md)) writes a
+brand-new file. **CREATE-ONLY** — it **refuses if the file already exists** (no blind-clobber; modifying an
+existing file stays `edit`'s surgical, diff-producing job). Same envelope as `edit`: opt-in `[edit].enabled`,
+jailed cwd-only (`_project_jail_ok`), gated under the same `thoth_edit` verb, local + forced-serial. It feeds
+`editlog` with `old=""`, so a new file renders on its tool-card as **all-green additions** for free.
+
+### Added
+- `src/edit.cyr` — `create_file_tool` + `_write_do` (create-to-disk) + `_write_summary`, sharing the `_edit_*`
+  buffers/state + `editlog` recording with `edit`. `agent.cyr` advertises `create_file` (opt-in), forces it
+  serial, and dispatches it. `edit`'s file-not-found message now points at `create_file`.
+
+### Fixed (from the review, before first ship)
+- The no-clobber guard used `file_exists` — but that's an `O_RDONLY` *readability* probe, so a
+  writable-but-**unreadable** existing file (mode `0200`, e.g. a secret key) read as absent and would have been
+  truncated by `file_write_all`'s `O_TRUNC`, violating the create-only contract. The create now opens with
+  `O_WRONLY|O_CREAT|O_EXCL` — the kernel refuses if the path exists regardless of read permission (and refuses to
+  follow a trailing symlink). The `file_exists` pre-check is kept for the friendly message and as the AGNOS guard
+  (AGNOS has no exclusive-create bit, so `O_EXCL` degrades there).
+
+### Verified
+- 1498 assertions (`test_edit` +16: create-to-disk via `_write_do`, refuse-if-exists no-clobber, empty-file,
+  parse + jail refusals, and a **write-only-file no-clobber regression** — `sys_chmod 0200` then confirm the file
+  is refused + untouched). **Live** end-to-end: gated `create_file` → `+2 -0` all-add editlog → file on disk →
+  a second create on the same path refused. Adversarially reviewed (safety/wiring → SHIP after the fix). Pin
+  **6.4.51** (wrapper 6.4.55).
+
+### Notes
+- Create-only by design (no wholesale overwrite of existing files — that would be a clobber surface). Shares
+  `edit`'s residuals (non-atomic write; symlink-inside-project followed for an *existing* external target).
+  Remaining follow-ups: cleaner edit-arg display on the card; the `daimon_invoke` HTTP-status hardening; atomic
+  writes (needs a stdlib `xrename`).
+
 ## [0.31.2] - 2026-07-12
 
 **Colored diff cards in the GUI feed — the payoff of the whole tool-card + edit-tool arc.** When the model

@@ -80,4 +80,12 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
     write than a read; the jail is a boundary, not a sandbox.
   - Separator/escape checks are POSIX/AGNOS-only (`/`, `..`, `~`); Windows `\`/`C:\` needs handling when
     `--win` ships.
-  - Creating *new* files is not yet supported (edits existing files only) — a deliberate follow-up.
+  - ~~Creating *new* files is not yet supported~~ — added in 0.31.3 as a distinct **`create_file(path, content)`**
+    tool (same module + envelope: opt-in, jailed, `thoth_edit`-gated, local+serial). It is **create-only** —
+    it refuses an existing path, so it can never blind-clobber; wholesale overwrite of an existing file is
+    deliberately *not* offered (that would be a clobber surface — modifying stays `edit`'s surgical job). It feeds
+    `editlog` with an empty "old", so a new file renders as all-green additions on its card. Create uses
+    `O_CREAT|O_EXCL` (a true kernel existence check, independent of read permission — `file_exists` alone is only
+    an `O_RDONLY` readability probe and would miss a writable-but-unreadable file) which also refuses a trailing
+    symlink; on AGNOS `O_EXCL` degrades to a plain create (no `AO_*` bit), so the `file_exists` pre-check is the
+    guard there — an AGNOS write-only-existing-file residual. It shares the non-atomic-write residual above.
