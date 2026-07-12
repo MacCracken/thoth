@@ -108,7 +108,52 @@ above, deferred to a later ADR.
 > field surfaces only when its producer has real data, and announces absence in `/state` —
 > never faked.
 
-What remains here is non-gating and unscheduled:
+The **chat-surface inheritance** below is a *sequenced* near-term line of feature minors (still non-gating — the
+four AGNOS gates keep priority); the rest of this section re-gathers unscheduled.
+
+### Chat-surface inheritance — 0.32.x → 0.3x.x (sequenced)
+
+> **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is being handed to
+> thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding front-end. The rule is the same
+> as the rest of the spine — **CONSUME already-built AGNOS domains (mneme, bhava, an audio/voice domain), never
+> reinvent them.** thoth already *leads* SY on the coding surface (colored diff cards, the `edit`/`create_file`
+> write tools, tool-call cards, mid-session model+persona+role switching, the sovereign line→TUI→GUI ladder); these
+> arcs close the *chat-management* and *memory* gaps. Each arc is ONE minor; cuts within it are patches. SY's
+> enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the web-dashboard
+> admin stay **out of scope** (see below).
+
+- **0.32.x — Memory + RAG: consume mneme (the highest-leverage gap; mneme is now Cyrius-ported).** Replace the
+  verbatim `.thoth/memory` append+inject with real **semantic recall** by binding **mneme** as a seam (native, or
+  via daimon MCP) — CONSUME its tools (note create/search/get/update, `query_graph`, feedback, vaults), never fork
+  ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)). Cuts, rough: **.0** the mneme seam (`/state` memory row
+  → *full*; `/remember` writes to mneme; recall injects semantic hits); **.1** citations — capture recalled sources
+  as `[N]` refs + a sources footer across line/TUI/GUI; **.2** a grounding indicator (green/yellow/red) per grounded
+  reply; **.3** notebook/knowledge mode if mneme exposes a corpus. *First read mneme's current Cyrius surface to
+  scope the seam.*
+- **0.33.x — Multi-conversation store (the structural foundation).** Move from one-conversation-per-process to
+  **named, persisted, switchable** conversations. Cuts: **.0** extend `[session].file` from a single linear thread
+  to a keyed store (id, title, timestamps, message list) with a richer message schema (role/content/turn +
+  optional tool_calls/citations/model, so a row can carry mneme citations + tool-card data); **.1** `/conversations`
+  (list), `/new`, `/switch`, `/rename`, `/delete`, auto-title from the first message; **.2** a GUI **conversation
+  sidebar** (a left pane like the file tree); **.3** cross-conversation `/search` (the full-text gap SY also lacks).
+- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** Cuts: **.0** **edit-last** + **regenerate-
+  last** (rewind history to a turn, re-run); **.1** finish **stop/interrupt** — wire `src/intr.cyr` (the Esc-abort
+  substrate) fully through the *agentic* loop (cancel mid-round, not just streaming) + a GUI stop affordance;
+  **.2** per-message **remember** (bookmark a reply into mneme) + **feedback** (thumbs → mneme's feedback tool).
+- **0.35.x — GUI + agentic streaming (architectural).** The GUI shows only a "working" frame then the final reply,
+  and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. Cuts: **.0**
+  restructure the GUI present loop to **paint mid-turn** (the turn currently blocks the loop — needs a yield/pump);
+  **.1** **live tool-call cards** during the round (currently post-turn only); **.2** a **thinking/reasoning** fold
+  rendering `thinking_delta` when hoosh emits it.
+- **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
+  inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
+  hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions
+  keep fidelity; **.2** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh exposes it.
+
+> **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will grow **voice
+> input** (mic → speech-to-text) and **read-back** (text-to-speech) as a first-class thoth capability — but by
+> **consuming an AGNOS audio/voice domain**, exactly like mneme/bhava, *never* by hand-rolling STT/TTS. Gated on
+> that domain's Cyrius port + a portable audio-capture substrate. Recorded so it isn't lost; not on a numbered arc yet.
 
 ### Later / speculative (not scheduled)
 
@@ -116,9 +161,7 @@ What remains here is non-gating and unscheduled:
   `list_dir` (project awareness, [ADR-0015](../adr/0015-project-read-tools-jailed-default-on.md)).
 - A lightweight **project-map hint** in the system prompt, so the agent gets a cheap directory
   overview without a `list_dir` round-trip.
-- **Full mneme binding.** When mneme is Cyrius-ported, the memory seam upgrades from the local
-  `.thoth/memory` reader (degraded) to semantic recall (full) — omit-until-mneme,
-  [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md).
+  (Full mneme binding moved to the **scheduled 0.32.x arc** above — mneme is now Cyrius-ported.)
 
 ### Polish backlog (gathers until it earns a sweep minor)
 
@@ -136,6 +179,11 @@ What remains here is non-gating and unscheduled:
 
 - **`rainbow` theme** — a per-grapheme HSV render mode (a render mode, not a role table);
   needs the **anuenue** lib vendored. Announced not-yet-available, never faked.
+
+- **bhava — the sentiment→mood loop (a backlogged seam, gated on bhava's Cyrius port).** SecureYeoman feeds a
+  turn's response sentiment back into the active persona's mood; that loop is **bhava**'s domain. Already a
+  backlogged thoth integration — **consume bhava** (the same pattern mneme just cleared) once it is Cyrius-ported;
+  never reimplement sentiment/mood analysis in thoth. Not on a numbered arc until bhava lands.
 
 - **Input-history file hardening (0.11.2 follow-ups).** The opt-in `[history].file` is
   best-effort-secured today (a fresh file is created `0600` on POSIX; degrade-closed —
