@@ -122,14 +122,15 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 > enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the web-dashboard
 > admin stay **out of scope** (see below).
 
-- **0.32.x — Memory + RAG: consume mneme (the highest-leverage gap; mneme is now Cyrius-ported).** Replace the
-  verbatim `.thoth/memory` append+inject with real **semantic recall** by binding **mneme** as a seam (native, or
-  via daimon MCP) — CONSUME its tools (note create/search/get/update, `query_graph`, feedback, vaults), never fork
-  ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)). Cuts, rough: **.0** the mneme seam (`/state` memory row
-  → *full*; `/remember` writes to mneme; recall injects semantic hits); **.1** citations — capture recalled sources
-  as `[N]` refs + a sources footer across line/TUI/GUI; **.2** a grounding indicator (green/yellow/red) per grounded
-  reply; **.3** notebook/knowledge mode if mneme exposes a corpus. *First read mneme's current Cyrius surface to
-  scope the seam.*
+- **0.32.x — Memory + RAG: consume mneme (the highest-leverage gap).** The **seam + write binding shipped in
+  0.32.0** (probe daimon's registry → `SEAM_MEMORY` REMOTE; `/remember` → `mneme_create_note`; local fallback).
+  Remaining, CONSUMING mneme's tools, never forking ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)):
+  **.1** **semantic recall** — inject query-keyed `mneme_search` hits into the turn (thread the user query through
+  the 3 recall sites; keep `/dry` network-free) + **citations** (recalled sources as `[N]` refs + a sources footer
+  across line/TUI/GUI); **.2** a grounding indicator (green/yellow/red) per grounded reply; **.3** notebook/knowledge
+  mode if mneme exposes a corpus. **Prerequisite for a REAL binding: daimon must HOST mneme's tools** (in-process
+  builtin like `mcp_web_init`, or external registration) — mneme has no served endpoint of its own; that daimon
+  (+mneme) wiring is what flips the seam from the local fallback to a live mneme.
 - **0.33.x — Multi-conversation store (the structural foundation).** Move from one-conversation-per-process to
   **named, persisted, switchable** conversations. Cuts: **.0** extend `[session].file` from a single linear thread
   to a keyed store (id, title, timestamps, message list) with a richer message schema (role/content/turn +

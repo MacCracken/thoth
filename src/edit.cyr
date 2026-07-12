@@ -147,20 +147,19 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     if (newlen == (0 - 2)) { return "(edit: old_string is not unique - it matches more than once; add surrounding context so it names exactly one location)"; }
     if (newlen == (0 - 3)) { return "(edit: the edited result would exceed the 256KB buffer)"; }
     if (newlen < 0) { return "(edit: could not apply the edit)"; }
-    var wr = file_write_all(path, _edit_new, newlen);
-    # Require the FULL byte count. file_write_all is a single non-looping O_TRUNC write (lib/io.cyr), so a short
-    # write (disk-full/quota) or an error must NOT be reported as a successful edit. NON-ATOMIC residual (ADR-0017):
-    # O_TRUNC has already emptied the file at open, so a short write leaves it truncated — a crash-safe write needs
-    # a portable temp-file+rename (a stdlib follow-up: no portable xrename wrapper exists, and sys_rename's arity
-    # differs per target). Until then this at least never CLAIMS success on a partial write.
-    if (wr != newlen) { return "(edit: the write to disk was incomplete (disk full?) - the file may be truncated)"; }
+    # 0.31.6: crash-safe atomic write (cyrius 6.4.57 file_write_atomic) — writes a unique sibling temp, loops
+    # until every byte lands (partial-write-safe), fsyncs, then atomically renames over `path`. Returns 0 on
+    # success, negative errno on any failure with the ORIGINAL file left intact (no more O_TRUNC-then-short-write
+    # truncation — the NON-ATOMIC residual filed as the portable-atomic-write cyrius issue, now closed). ADR-0017.
+    var rc = file_write_atomic(path, _edit_new, newlen);
+    if (rc != 0) { return "(edit: the write to disk failed (disk full?) - the file is unchanged)"; }
     _edit_last_ok = 1;
     # 0.31.1: stash this edit's path + old/new lengths for editlog_record (the dispatch calls it right after,
     # before the next edit reuses _edit_old/_edit_new). _edit_old/_edit_new already hold the pre/post content.
     _edit_stash_path(path);
     _edit_last_oldlen = oldlen;
     _edit_last_newlen = newlen;
-    return _edit_summary(path, _edit_old, oldlen, _edit_new, newlen, wr);
+    return _edit_summary(path, _edit_old, oldlen, _edit_new, newlen, newlen);
 }
 
 # edit_tool: the agentic-loop entry. Parses {path, old_string, new_string}, jails, gates, then applies via
@@ -229,14 +228,15 @@ fn _write_do(path, content, clen) {
     if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
     if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
     if (clen > (EDIT_BUF_CAP - 1)) { return "(create_file: content too large (> 256KB))"; }
-    # file_exists is only an O_RDONLY *readability* probe — it gives a friendly "already exists" for the common
-    # case, but a writable-but-UNREADABLE existing file (mode 0200) would read as absent. So the REAL no-clobber
-    # guard is O_CREAT|O_EXCL: the kernel refuses if the path exists regardless of read permission (and refuses to
-    # follow a trailing symlink). AGNOS has no exclusive-create bit (O_EXCL degrades to a plain create,
-    # lib/io.cyr:47-52) — there the file_exists pre-check is the guard (an AGNOS write-only-file residual).
-    if (file_exists(path) == 1) { return "(create_file: that file already exists - use edit to modify it)"; }
-    var fd = file_open(path, O_WRONLY | O_CREAT | O_EXCL, 0x1A4);
-    if (fd < 0) { return "(create_file: could not create the file (it may already exist, or the path is unwritable))"; }
+    # 0.31.6: portable no-clobber create (cyrius 6.4.57 file_create_exclusive). Returns -EEXIST (-17) if the path
+    # exists, else the new write fd. On POSIX this is O_CREAT|O_EXCL — the kernel refuses if the path exists
+    # regardless of read permission (so it also covers the writable-but-UNREADABLE mode-0200 file that a plain
+    # file_exists O_RDONLY probe would miss) and refuses to follow a trailing symlink. AGNOS (no exclusive-create
+    # bit) and Windows (O_EXCL not yet mapped to CREATE_NEW) degrade to a file_exists pre-check + create — that
+    # per-target handling now lives in the stdlib, not here.
+    var fd = file_create_exclusive(path, 0x1A4);
+    if (fd == (0 - 17)) { return "(create_file: that file already exists - use edit to modify it)"; }
+    if (fd < 0) { return "(create_file: could not create the file (the path may be unwritable))"; }
     var wr = clen;
     if (clen > 0) { memcpy(_edit_new, content, clen); wr = file_write(fd, _edit_new, clen); }
     file_close(fd);

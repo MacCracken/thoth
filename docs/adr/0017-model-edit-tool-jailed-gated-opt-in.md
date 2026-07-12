@@ -70,12 +70,13 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
   path** was live-driven end-to-end against a real t-ron allow-policy (parse → jail → t-ron VK_ALLOW →
   surgical apply → `file_write_all` → file changed on disk).
 - **Residuals (honest, not fully fixed here)**:
-  - **Non-atomic write.** `file_write_all` opens `O_TRUNC` then does a single write, so a short write
-    (disk-full/quota) or an error leaves the file truncated. The tool now treats `wr != newlen` as a
-    failure (it never *reports* success on a partial write, and the roundlog records `err`), but it
-    cannot yet *prevent* the truncation — a crash-safe replace needs a portable temp-file+`rename`, and
-    there is no portable `xrename` in the stdlib (`sys_rename`'s arity differs per target). A portable
-    atomic `file_write_all` is a stdlib follow-up that would also harden `/write`.
+  - ~~**Non-atomic write.**~~ **RESOLVED in 0.31.6** (cyrius **6.4.57** `file_write_atomic`). The original
+    `file_write_all` opened `O_TRUNC` then did a single write, so a short write (disk-full/quota) or an error
+    left the file truncated — a known residual because a crash-safe replace needs a portable temp-file+`rename`
+    and no portable `xrename` existed (`sys_rename`'s arity differs per target). The stdlib follow-up was
+    [filed and shipped](../development/issues/): `file_write_atomic` writes a unique sibling temp, loops until
+    every byte lands (partial-write-safe), fsyncs, then atomically renames over the target, leaving the original
+    intact on ANY failure. `_edit_do` now calls it, so an edit can no longer truncate the file.
   - **Symlink-inside-project is followed on write** (no portable `O_NOFOLLOW`) — more dangerous for a
     write than a read; the jail is a boundary, not a sandbox.
   - Separator/escape checks are POSIX/AGNOS-only (`/`, `..`, `~`); Windows `\`/`C:\` needs handling when
@@ -84,8 +85,9 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
     tool (same module + envelope: opt-in, jailed, `thoth_edit`-gated, local+serial). It is **create-only** —
     it refuses an existing path, so it can never blind-clobber; wholesale overwrite of an existing file is
     deliberately *not* offered (that would be a clobber surface — modifying stays `edit`'s surgical job). It feeds
-    `editlog` with an empty "old", so a new file renders as all-green additions on its card. Create uses
-    `O_CREAT|O_EXCL` (a true kernel existence check, independent of read permission — `file_exists` alone is only
-    an `O_RDONLY` readability probe and would miss a writable-but-unreadable file) which also refuses a trailing
-    symlink; on AGNOS `O_EXCL` degrades to a plain create (no `AO_*` bit), so the `file_exists` pre-check is the
-    guard there — an AGNOS write-only-existing-file residual. It shares the non-atomic-write residual above.
+    `editlog` with an empty "old", so a new file renders as all-green additions on its card. Create uses the
+    stdlib `file_create_exclusive` (**0.31.6**, cyrius 6.4.57) — a true kernel existence check, independent of
+    read permission (`file_exists` alone is only an `O_RDONLY` readability probe and would miss a
+    writable-but-unreadable file) that also refuses a trailing symlink. POSIX enforces it atomically via
+    `O_CREAT|O_EXCL`; AGNOS (no `AO_*` exclusive bit) and Windows (`O_EXCL`→`CREATE_NEW` not yet mapped) degrade
+    to a `file_exists`+create — that per-target handling now lives in the stdlib, not thoth's tool.

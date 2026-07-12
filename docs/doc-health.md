@@ -6,8 +6,12 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-07-12 (**0.31.5 — full doc-staleness sweep + this ledger created**). Multi-agent audit
-> of README / guides / architecture / ADRs against the live 0.31.5 state, then apply. Fixes: **README** status
+> **Last refresh**: 2026-07-12 (**0.32.0 — mneme memory seam + crash-safe atomic writes cut**). Bumped the README
+> status stamp `0.31.5`→`0.32.0` + the mneme memory-seam line; **CHANGELOG**/**state.md** `[0.32.0]` entries;
+> **roadmap.md** 0.32.x reframed forward-only (seam+write shipped → CHANGELOG; remaining = recall/citations/grounding
+> + the daimon→mneme host prerequisite); **adr/0017** non-atomic-write residual marked RESOLVED (cyrius 6.4.57
+> `file_write_atomic`/`file_create_exclusive`). **Prior**: 2026-07-12 (0.31.5 — full doc-staleness sweep + this
+> ledger created). Multi-agent audit of README / guides / architecture / ADRs against the live state, then apply. Fixes: **README** status
 > stamp `0.30.2` → `0.31.5` and the shipped **write tools** (`edit`/`create_file`) + GUI **tool-call + colored
 > diff cards** folded into the feature narrative; **getting-started.md** dead `tests/thoth.tcyr` refs (×3) →
 > the split `tests/thoth_{core,gui,render}.tcyr` + `tests/cases/*.cyr` suites, the `thoth gui` subcommand added,

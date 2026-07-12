@@ -2,6 +2,30 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.32.0] - 2026-07-12
+
+**The mneme memory seam — thoth consumes mneme (the AGNOS memory/RAG domain, now Cyrius-ported) through
+daimon's MCP registry, never forking retrieval (ADR-0012) — plus crash-safe atomic file writes.**
+
+### Added
+- **mneme memory seam.** `SEAM_MEMORY` now binds **REMOTE** when daimon's registry advertises mneme's tools
+  (a cached `mneme_*` probe, `src/daimon.cyr`: `daimon_mem_bound`/`daimon_mem_scan`/`daimon_mem_probe` — a PURE
+  cache read for `seam_status`, primed for free off the existing agent tool-fetch, so `/dry` stays network-free).
+  `/remember` and the `memory_write` tool route the fact to **`mneme_create_note`** via `daimon_invoke` when bound,
+  and fall back to the local `.thoth/memory` flat file when not — a producer swap behind the existing
+  `memory_append` choke point. `/state`'s memory row reflects the binding (`mneme` vs `local … (mneme not hosted by
+  daimon)`). Live-verified both ways against a real daimon (degrade + bound via daimon's external tool registration).
+  Recall-via-mneme (query-keyed semantic injection) is the next cut; recall stays the local reader here.
+
+### Changed
+- **Crash-safe atomic edit/create writes** (closes the ADR-0017 non-atomic residual, via **cyrius 6.4.57**).
+  `edit`'s `_edit_do` swaps `file_write_all` → **`file_write_atomic`** (unique temp → loop-write → fsync → atomic
+  rename; the original file is left intact on ANY failure — no more O_TRUNC truncation on a short write).
+  `create_file`'s `_write_do` swaps the `file_exists`+`O_EXCL` open → **`file_create_exclusive`** (portable
+  no-clobber; the per-target handling now lives in the stdlib).
+- **Toolchain pin `6.4.51` → `6.4.57`**; vendored `lib/` refreshed via `cyrius lib sync` (pulls the stdlib
+  atomic-write primitives + the 6.4.52–57 f32/allocator fixes).
+
 ## [0.31.5] - 2026-07-12
 
 **A non-2xx daimon HTTP response is now recorded as a failed tool call** (the 0.30.18 loose end). The agentic

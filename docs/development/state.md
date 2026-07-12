@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.32.0** — **The mneme memory seam** (2026-07-12). thoth consumes **mneme** (the AGNOS memory/RAG domain, now
+Cyrius-ported) through daimon's MCP registry: a cached `mneme_*` probe binds `SEAM_MEMORY` → REMOTE, and
+`/remember` + the `memory_write` tool route to `mneme_create_note` when bound, degrading to the local
+`.thoth/memory` flat file otherwise (a producer swap behind `memory_append`; `/state`'s memory row reflects it).
+Live-verified both ways against a real daimon. Also: **crash-safe atomic edit/create writes** — `_edit_do` →
+`file_write_atomic`, `_write_do` → `file_create_exclusive` (cyrius **6.4.57**, closing the ADR-0017 non-atomic
+residual), and the toolchain pin `6.4.51` → `6.4.57` with `lib/` refreshed via `cyrius lib sync`. Recall-via-mneme
+(query-keyed semantic injection) is the next cut. See [`CHANGELOG.md`](../../CHANGELOG.md).
+
 **0.31.5** — **Non-2xx daimon HTTP response recorded as a failed tool call** (the 0.30.18 loose end), 2026-07-12.
 The agentic loop's tool executors read the result but ignored the HTTP status — a non-2xx response (server error /
 unknown tool / bad request) whose body carried MCP text without an `isError` field was recorded as a SUCCESSFUL
