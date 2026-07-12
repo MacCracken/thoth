@@ -60,9 +60,9 @@ any datum the mockup shows that thoth lacks (token/ctx%, cost, branch, real diff
 
 - **Positive** — the mockup's *look* (amber palette, colored diffs, status line)
   lands at T1 with no substrate risk and `{(o> `/piped output unchanged. T2 reuses
-  darshana instead of a from-scratch raw-mode editor (weeks, not months). T3 is
-  free — puka already plans to host thoth. Sovereignty and degrade-closed hold at
-  every tier.
+  darshana instead of a from-scratch raw-mode editor (weeks, not months). T3 is thoth's
+  OWN sovereign Wayland app (**revised — see the 0.30.0 addendum; it was originally scoped
+  as puka-hosted**), shipped 0.29–0.30.x. Sovereignty and degrade-closed hold at every tier.
 - **Negative** — every existing `emit`/`println` call site is rerouted through the
   surface (a mechanical but broad refactor). thoth takes on a render-tier model and
   its detection. New vendored deps (darshana, vyakarana, mihi) to track.
@@ -76,7 +76,7 @@ any datum the mockup shows that thoth lacks (token/ctx%, cost, branch, real diff
 
 - **Webview/desktop GUI first (most faithful to the HTML).** Rejected: pulls a
   heavy non-AGNOS dependency into a sovereign binary, forks the front-end, and
-  inverts effort-for-value. T3 belongs to puka as an optional ceiling, not the core.
+  inverts effort-for-value. (**Revised — see the 0.30.0 addendum:** T3 was originally scoped as puka's optional ceiling; it shipped instead as thoth's OWN sovereign Wayland app, `thoth gui`, with no webview.)
 - **Jump straight to T2 so it "looks like the mockup" in one step.** Rejected: the
   raw-mode composer is the single largest substrate change (XL); T1 delivers most
   of the visible polish at a fraction of the risk.

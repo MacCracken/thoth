@@ -99,4 +99,5 @@ Project was scaffolded with `cyrius init`. **Do not manually create project stru
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos
 - [`docs/examples/`](docs/examples/) — Runnable examples
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
-- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0
+- [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0 (forward-facing only)
+- [`docs/doc-health.md`](docs/doc-health.md) — Doc-currency ledger (fresh/durable/stale, refreshed on doc sweeps)

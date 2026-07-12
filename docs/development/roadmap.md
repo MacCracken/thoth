@@ -10,70 +10,13 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.31.5):** M0–M7 are done and shipping, and the entire post-M7 feature arc
-> has landed — the terminal-citizen front door, memory + git producers, the model `shell`
-> tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
-> composer intelligence, the active persona + role modality, project awareness, the model
-> picker, and the `.thoth/` config home. **0.27.0** refreshes the toolchain (cyrius 6.4.46 + vendored
-> dists) and opens the **simple↔rich consistency line** — parity fixes so features that are *not* rich-TUI
-> blockers (`/reprobe`, `/save`, `[history].file`) work at BOTH tiers. **0.28.0** opened Stage B — the
-> tier-agnostic **view surface** (`src/surface.cyr`): a facts-not-bytes status view-model that the TUI status
-> bar + `/state` now both render from (ADR-0009's semantic layer, realized for the status fields; GUI-ready by
-> construction). **0.29.0** started the **T3 GUI** (Phase 1, headless): a draw-command IR + kashi CPU
-> rasterizer + a status-strip view-builder over the 0.28.0 view-model (the view-model now drives THREE
-> renderers — line / TUI / GUI). **0.30.0** made it RUNNABLE: a sovereign Wayland present shell
-> (`src/gui/gwindow.cyr`, vendored+renamed from jalwa's puka-forked client) + a present loop
-> (`src/gui/gpresent.cyr`) + a **`thoth gui`** subcommand, now in the SHIPPING binary (cyrius 6.4.49 gave the
-> headroom). Degrades honestly with no compositor; LIVE-CONFIRMED on a real one. **0.30.1** added the
-> conversation feed (word-wrapped) and **0.30.2** made it interactive (evdev keymap + composer → type, Enter
-> runs a turn, the reply renders). **0.30.3** made the feed follow the conversation — a bottom-anchored
-> auto-scroll so the newest reply is always visible (older messages clip off the top). **0.30.4** added turn
-> feedback — a "thoth is working…" indicator on send (echoing the pending message) plus an honest transient
-> notice when a turn doesn't complete (a failed turn pops the user message, and the window renders only
-> history, so it would otherwise vanish silently). **0.30.5** added the file-tree pane (`src/gui/gtree.cyr`, a
-> view-builder over `ftree_*` + git badges, responsive left column). **0.30.6** refreshed the toolchain
-> (cyrius 6.4.49 → 6.4.51, which raised the emitted-binary output cap 16 MiB → 1 GiB on Linux — resolving
-> thoth's filed issue) and restored the full file-tree tests the cap had forced lean. **0.30.7** split the
-> 4,095-line `tests/thoth.tcyr` into a thin driver + topical `tests/cases/*.cyr` files (one binary,
-> behavior-identical). **0.30.8** decoupled the lower layers from the TUI (dependency inversion: `intr_*`
-> extracted to `src/intr.cyr`; `util → feed`, `gate → confirm`, `hoosh → mdhl/feed_stream` behind registered
-> sinks). **0.30.9** cashed that in: the one-binary test suite became curated per-domain `tests/*.tcyr`
-> (`thoth_gui`/`thoth_render` lean, `thoth_core` the full integration bucket). **0.30.10** made the GUI
-> file-tree pane interactive — Tab focus + arrow nav + expand/collapse (`gkey`/`gtree_key`/`gfocus`). **0.30.11**
-> gave the GUI its signature `{(o>` owl prompt and a throbbing owl-eye status indicator (health-coloured,
-> leak-free via a cached frame; **0.30.12** fixed its present-loop scanout race). **0.30.13** made
-> tree Enter on a file drop an `@mention` into the composer; **0.30.14** added feed scrollback
-> (PgUp/PgDn/End); **0.30.15** gave the composer history recall (Up/Down over the shared `inhist`
-> ring, with a stashed live draft — mirrors the TUI's `_tui_recall_key`); **0.30.16** added tool-call cards
-> to the feed (`src/gui/gtool.cyr` — bordered per-round cards over the EXISTING `roundlog` producer, name +
-> ok/err/deny status colours + ms/bytes, interleaved above the current turn's reply). Tool activity was
-> invisible on the desktop before (the present loop suppresses turn output); a pure rendering cut, no producer
-> change. **0.30.17** put each call's **arguments** on the cards + in `/audit` (`shell {"command":"git status"}`,
-> not bare `shell`) — `roundlog` now snapshots a sanitized, truncated arg summary at both loop record sites, drawn
-> clipped-to-width so card height (and the feed parity) is unchanged. **0.30.18** fixed tool-call status
-> fidelity — `daimon_invoke` was dropping the MCP `isError` flag, so a tool that returned `isError:true` with
-> valid text was carded green `ok`; now the recorded success flag honors `isError` (verified live against a real
-> daimon). **0.30.19** made the cards render PER-TURN — each message is turn-tagged (`session_history_turn`) so a
-> turn's cards stay above its own reply throughout the scrollback (was current-turn-only, vanishing on the next
-> message); in-memory tag, no session-file change. **0.31.0** started a NEW capability arc — the model `edit`
-> tool ([ADR-0017](adr/0017-model-edit-tool-jailed-gated-opt-in.md)): thoth can now WRITE code, not only read it.
-> Surgical `edit(path, old_string, new_string)` (unique-match-or-refuse), opt-in `[edit].enabled`, jailed cwd-only,
-> `thoth_edit`-gated, degrade-closed — the first-class source the colored-diffs arc needed. **0.31.1** landed the producer half — `editlog` (`src/editlog.cyr`), a session ring keyed by `(turn,round,call)` that records each edit's changed lines (computed once via `compute_file_diff`, stored — never recomputed per repaint). **0.31.2** SHIPPED the colored **diff card** —
-> `_gtool_card` looks up `editlog_find(turn,round,call)` per `edit` call and draws the stored del/add lines
-> RED/GREEN below it (measure/draw parity via `_gtool_call_diff_rows`), COMPLETING the colored-diffs arc.
-> **0.31.3** added **`create_file(path, content)`** — the model can now make NEW files (create-only, refuses an
-> existing path; same jailed/gated/opt-in envelope; new files show as all-green additions on their card).
-> **0.31.4** cleaned up the edit/create arg on the diff card (shows just the blue path, not the raw JSON, reusing
-> the editlog lookup). **0.31.5** hardened the loop to record a non-2xx daimon HTTP response as a failed tool call (both the
-> serial + parallel executors; matches `/call`), clearing the last edit/daimon follow-up. Atomic writes are
-> now a filed cyrius issue (portable `file_rename`/`file_write_atomic` + AGNOS `O_EXCL`, requested next release). (A separate hardening item: `daimon_invoke` doesn't check HTTP status, unlike `daimon_call`.)
-> thoth as its
-> own sovereign Cyrius Wayland app (jalwa-style
-> draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
-> "thoth-in-puka" stance). Per-version detail is in
-> [CHANGELOG](../../CHANGELOG.md)/[state.md](state.md). The **four v1.0 gates below are
-> unchanged** (AGNOS-dominated); the remaining non-gating work is small — see the
-> later/speculative note and the polish backlog.
+> **Where we are (0.31.5):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`) with tool-call cards + colored diff
+> cards, the model **`shell`** / **`edit`** / **`create_file`** tools (thoth now reads *and writes* code), the
+> memory / git / surface producers, the model picker, the persona + role modality, and the `.thoth/` config home.
+> Per-version detail is in [CHANGELOG](../../CHANGELOG.md) / [state.md](state.md) — **this file is the road AHEAD
+> only**. The **four v1.0 gates below are the remaining blocking work** (AGNOS-dominated); everything else here is
+> non-gating.
 
 ## Framing (read first)
 
@@ -117,16 +60,10 @@ two process gates — **not** by presentation or data-producer polish.
 Four gates remain, in rough dependency order (gate 1's **build** half cleared at
 0.12.3):
 
-1. **AGNOS lane lights up — BUILD half CLEARED (0.12.3).** The last build blocker —
-   the agnos peer omitting the signal-number constants (`SIGHUP`; the signal infra
-   `sigprocmask`#17 / `signalfd`#18 was already DONE) — is resolved: the **Cyrius
-   6.3.38** agnos peer defines the signal enum, so the `--agnos` lane now compiles a
-   valid statically-linked x86_64-AGNOS ELF with **zero undefined symbols**, with
-   **zero thoth source change** (exactly as forecast). Filed issue
-   `agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md` →
-   resolved. What remains is the **runtime** half, which is gate 2 (the ELF targets
-   the AGNOS syscall ABI and cannot be exercised on a Linux host — it needs a real
-   AGNOS runner). **Status: build ✓ (done, 0.12.3) · runtime → gate 2.**
+1. **AGNOS lane — BUILD cleared, runtime is gate 2.** The `--agnos` lane compiles a valid
+   statically-linked x86_64-AGNOS ELF with zero undefined symbols and zero thoth source change (the last
+   build blocker was resolved upstream). The **runtime** half — the ELF targets the AGNOS syscall ABI and
+   can't be exercised on a Linux host — is gate 2, below. **Status: build ✓ · runtime → gate 2.**
 
 2. **At least one downstream consumer green on AGNOS (external
    verification gate).** Now the nearest advanceable v1.0 gate: gate 1's build
@@ -147,13 +84,8 @@ Four gates remain, in rough dependency order (gate 1's **build** half cleared at
 
 ### v1.0 criteria checklist
 
-**Satisfied on Linux (shipped — see CHANGELOG/state.md):** the core driver loop, the
-mid-session model switch through hoosh (M3), MCP tool execution via daimon + bote gated by
-t-ron (M4), off-AGNOS security that fails closed, the avatara overlay (M5), the honest
-capability ladder (M6), and a complete CHANGELOG. These are now AGNOS-**buildable** (gate 1
-build cleared, 0.12.3 → `build/thoth_agnos`); AGNOS-green pends the gate-2 runtime verification.
-
-**Open:**
+**Satisfied on Linux** (M0–M7 + the full post-M7 arc — see CHANGELOG/state.md) and **AGNOS-buildable**
+(gate 1); AGNOS-green pends the gate-2 runtime verification. **Open:**
 
 - [ ] **At least one downstream consumer green on AGNOS** — gate 2 (external)
 - [ ] **Security review pass** — gate 3 (not scheduled)
@@ -176,9 +108,7 @@ above, deferred to a later ADR.
 > field surfaces only when its producer has real data, and announces absence in `/state` —
 > never faked.
 
-The post-M7 feature arc (0.11.x → 0.30.2, including the T3 desktop GUI) has **shipped in full** — see
-[`../../CHANGELOG.md`](../../CHANGELOG.md) for per-version detail and [`state.md`](state.md)
-for the current surface. What remains here is non-gating and unscheduled:
+What remains here is non-gating and unscheduled:
 
 ### Later / speculative (not scheduled)
 
@@ -231,16 +161,6 @@ for the current surface. What remains here is non-gating and unscheduled:
   not `0600`. A documented floor gap (same class as the SIGHUP one); a **candidate to file
   against the agnos peer** if/when the ABI gains a mode channel. thoth already degrades
   honestly (never asserts a mode it can't enforce). **Not a v1.0 blocker.**
-
-## Off the v1.0 path
-
-- **T3 desktop GUI — SHIPPED (0.29.0 → 0.30.2); off the v1.0 GATE, not future.** thoth
-  now runs as its OWN sovereign Cyrius Wayland app (`thoth gui`): a draw-command IR +
-  kashi CPU rasterizer + view-builders over the Stage-B view-models + a puka-forked
-  Wayland present shell — NOT thoth-in-puka (see the ADR-0009 addendum). It has a status
-  strip, a conversation feed, and an interactive composer, and it's in the shipping
-  binary. It is off the v1.0 GATE path only because v1.0 is an AGNOS-runtime gate, not a
-  presentation-tier gate. No webview in the sovereign core.
 
 ## Out of scope (for v1.0)
 

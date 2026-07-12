@@ -22,8 +22,9 @@ config source and whether the gateway actually answers — never a faked READY).
 ```sh
 cyrius deps                              # resolve stdlib deps
 cyrius build src/main.cyr build/thoth    # compile the binary
-cyrius test                              # run the unit suite (tests/thoth.tcyr)
+cyrius test                              # run the curated suites (tests/thoth_{core,gui,render}.tcyr + tests/cases/*.cyr)
 ./build/thoth                            # start thoth (rich TUI on a capable terminal; line REPL otherwise)
+./build/thoth gui                        # open the sovereign Wayland desktop GUI (tier T3, needs a compositor)
 ```
 
 The toolchain pin lives in `cyrius.cyml [package].cyrius`; CI reads it — don't
@@ -74,14 +75,18 @@ git diff | thoth 'review this'           # piped stdin is appended to the task
 thoth --json 'summarize' | jq .response  # one JSON object per turn (for jq/CI)
 thoth -o out.md 'draft a README'         # tee the answer to a file as well as stdout
 source <(thoth --completion bash)        # tab-complete thoth's flags (bash or zsh)
+thoth gui                                # open the desktop GUI instead of the TUI
 thoth --help                             # the full one-shot reference
 ```
 
 Define `[alias]` macros in `.thoth/config.cyml` (`ship = "/run git status"`) to add your own
 slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI, **Ctrl-P**
-opens the model picker. thoth also **sees the project** it was launched in: the agent has
-default-on jailed `read_file` / `list_dir` tools (reads confined to the launch directory, plus
-any `/allow`-granted roots), so it can explore the codebase without the heavier `shell` tool.
+opens the model picker. thoth also **reads *and edits*** the project it was launched in: the agent has
+default-on jailed `read_file` / `list_dir` tools (reads confined to the launch directory, plus any
+`/allow`-granted roots), and — opt-in via `[edit].enabled` (off by default) — jailed **`edit`** (surgical
+unique-match replace) and **`create_file`** (create-only) write tools plus an opt-in `shell` tool, each t-ron-gated
+under its own verb, so the model can change code, not just explore it. Every model edit/create shows as a colored
+diff card in the GUI feed.
 
 `/run`, `/write`, and `/call` route through **one t-ron authorization choke
 point**. When `[tron].policy` is configured, t-ron's verdict is final — a policy
@@ -111,30 +116,40 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/diff.cyr` — the bounded LCS line-diff for `/write` / `/read`.
 - `src/mdhl.cyr` — the markdown + fenced-code syntax highlighter for the reply feed and `/read`.
 - `src/ui.cyr` — the presentation surface: tier detection + the semantic color-role API (M7).
+- `src/surface.cyr` — the tier-agnostic status **view-model** (facts-not-bytes) the line/TUI/GUI renderers share.
 - `src/feed.cyr` — the self-managed T2 feed ring + the escape-aware clip / soft-wrap (M7).
 - `src/ftree.cyr` — the togglable file-tree pane: geometry + flattened-tree model (M7).
+- `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI.
 - `src/tui.cyr` — the T2 alt-screen front-end: status bar, composer, palette, painter (M7).
+- `src/gui/` — the sovereign T3 desktop GUI (`thoth gui`): the draw-command IR (`gdraw`) + kashi CPU rasterizer
+  (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`) + the Wayland window seam (`gwindow`) + present
+  loop (`gpresent`) + evdev input (`ginput`). Renders the same view-models as the line/TUI tiers, plus tool-call
+  cards + colored diff cards.
 - `src/inhist.cyr` — the composer input-history recall ring + opt-in persistence (0.11.x).
 - `src/oneshot.cyr` — the one-shot / argv front-door (`thoth 'task'`, `--json`, `-o`, `--completion`, `--tier`).
 - `src/memory.cyr` — the opt-in project-memory seam: reads `.thoth/memory/` and injects it (`/remember`).
 - `src/mention.cyr` — `@file` mention expansion (appends a file's contents to the message).
 - `src/project.cyr` — the default-on jailed `read_file` / `list_dir` tools the agent uses to see the project.
+- `src/edit.cyr` — the opt-in, jailed, `thoth_edit`-gated model `edit` / `create_file` write tools (ADR-0017).
+- `src/editlog.cyr` — the session ring of each edit's diff (keyed by turn/round/call), for the GUI diff cards.
 - `src/git.cyr` — the git producer (`/state` row, `/git`, status-bar branch) — consumes sit.
 - `src/shell.cyr` — the opt-in, t-ron-gated model-invokable `shell` tool (off by default).
 - `src/mpick.cyr` — the Ctrl-P model-picker palette.
 - `src/fsearch.cyr` — in-feed search.
 - `src/util.cyr` — the output-capture sink (`OUT_FD1`/`OUT_RING`/`OUT_NULL`) + `read_line` / `emit` / helpers.
 - `src/version.cyr` — the single runtime version string (generated from `VERSION`).
-- `src/vendor/` — committed spine dist bundles (bote-core, libro, t-ron, avatara) plus the
-  vendored vyakarana tokenizer (syntax highlighting) and darshana TTY substrate (the T2 TUI).
-- `tests/thoth.tcyr` — the unit suite (`cyrius test`).
+- `src/vendor/` — committed spine dist bundles (bote-core, libro, t-ron, avatara) plus the vendored vyakarana
+  tokenizer (syntax highlighting), darshana TTY substrate (the T2 TUI), kashi font rasterizer (the T3 GUI), and
+  sankoch (zlib) + sit-read (git read profile) behind the git producer.
+- `tests/` — the curated suites `tests/thoth_{core,gui,render}.tcyr` (thin drivers) over the topical bodies in
+  `tests/cases/*.cyr`; `src/test.cyr` is the `cyrius test` driver. (The old single `tests/thoth.tcyr` was split in 0.30.9.)
 
 ## Adding a command
 
 1. Add a `CMD_*` to the `enum Cmd` in `src/commands.cyr`.
 2. Recognize it in `classify_input` (add a `token_is` line).
 3. Write a `cmd_*` handler and wire it into `dispatch`.
-4. Add assertions to `tests/thoth.tcyr` (cover `classify_input` + any pure helper).
+4. Add assertions to `tests/cases/core.cyr` (cover `classify_input` + any pure helper), wired via `tests/thoth_core.tcyr`.
 5. `cyrius test`, then `cyrius build`.
 
 A capability that belongs to a spine domain (inference, MCP, authorization,

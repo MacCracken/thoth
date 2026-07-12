@@ -8,8 +8,8 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.30.2 — the full spine wired, agentic tool-calling live, a rich TUI by
-> default, a non-interactive shell citizen, and a native desktop GUI (`thoth gui`) (pre-1.0).**
+> **Status: 0.31.5 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code, a rich TUI
+> by default, a non-interactive shell citizen, and a native desktop GUI (`thoth gui`) with colored diff cards (pre-1.0).**
 > The interactive TUI/REPL loop is real and usable, and the full AGNOS spine is wired. A free-text turn drives a
 > **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to **hoosh**, the
 > backing model calls them, thoth executes each through daimon (speaking **bote**, the
@@ -24,12 +24,13 @@ or provider when that serves the work.
 > file-tree pane (Ctrl-B), theme toggle (`/theme`), conversation resume, `/save` export, and a
 > live spine-health + token/cost + git-branch status bar — degrading **closed** to a
 > byte-identical line-mode floor when piped/CI. A **native desktop GUI** (`thoth gui`, tier T3) renders the same
-> status strip, word-wrapped conversation feed, and interactive composer as thoth's OWN sovereign Cyrius
-> Wayland window (draw-command IR → kashi CPU rasterizer → wl_shm buffer → a puka-forked present shell —
-> live-confirmed on a real compositor). thoth also **sees the project** it is launched
-> in: default-on jailed `read_file`/`list_dir` tools + `@file` mentions (`/allow` widens the
-> jail), an opt-in project-memory seam (`/remember` → `.thoth/memory/`), a git producer
-> (`/git`), and `web_fetch`/`web_search` via daimon+bote. As a **shell citizen**: a one-shot
+> status strip, interactive composer, and a word-wrapped conversation feed with **per-turn tool-call cards + colored
+> (red/green) diff cards** — as thoth's OWN sovereign Cyrius Wayland window (draw-command IR → kashi CPU rasterizer
+> → wl_shm buffer → a puka-forked present shell — live-confirmed on a real compositor). thoth also **reads *and
+> writes*** the project it is launched in: default-on jailed `read_file`/`list_dir` tools + `@file` mentions
+> (`/allow` widens the jail); **opt-in jailed `edit`/`create_file` write tools** and a `shell` tool (each
+> t-ron-gated, off by default) so the model can change code, not just read it; an opt-in project-memory seam
+> (`/remember` → `.thoth/memory/`), a git producer (`/git`), and `web_fetch`/`web_search` via daimon+bote. As a **shell citizen**: a one-shot
 > / argv front-door (`thoth 'task'`, `git diff | thoth 'review'`), `--json` envelope output
 > for jq/CI, `-o`/`--out` file tee, shell completion (`--completion bash|zsh`), `[alias]`
 > prompt macros, and `/dry` request-body preview. Config lives in a discoverable `.thoth/`

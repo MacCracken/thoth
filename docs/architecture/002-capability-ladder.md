@@ -33,7 +33,7 @@ this table is the prose mirror, not a second source of truth.
 | **hoosh** | remote-client | `[hoosh].url` set | **full** — turns route to a backing model; mid-session `/model` switch | **absent** — no model turns; local REPL commands only (announced) |
 | **daimon** | remote-client | `[daimon].url` set | **full** — `/tools` registry, `/call` execution, the agentic loop | **absent** — no tools; `/tools`/`/call`/loop report absent |
 | **bote** | native | always (vendored) | **full** — MCP protocol framing, in-process | — (never absent) |
-| **t-ron** | native | `[tron].policy` loads | **full** — per-tool authz on `/run`/`/write`/`/call`; deny is final | **degraded** — built-in fail-closed confirm gate (deny/prompt); **never** a silent allow |
+| **t-ron** | native | `[tron].policy` loads | **full** — per-tool authz on the operator `/run`/`/write`/`/call` **and** the model tools (`thoth_shell`, `thoth_remember`, and `thoth_edit` for `edit`/`create_file`); deny is final | **degraded** — built-in fail-closed confirm gate (deny/prompt); **never** a silent allow |
 | **avatara** | native | always (vendored) | **full** — the Thoth/Librarian archetype steers every turn | — (never absent) |
 | **mneme** | native | `[memory].enabled` + `.thoth/memory/` present | **degraded** — the local `.thoth/memory` flat-file reader injects facts (full semantic recall awaits mneme's Cyrius port) | **absent** — no memory injected |
 | **sit** | native | a git repo at the working dir | **full** — branch/status + per-file diff (`/git`, the `/state` row, the status-bar branch) | **absent** — no repo; the git surface reports absent |
@@ -55,7 +55,7 @@ the "reduced" state can be inferred from whether the seam is bound.
   explain the model; `src/seams.cyr` decides it.
 - **Adding a seam or a fallback** means extending `seam_cap_state` /
   `seam_cap_full` / `seam_cap_fallback` together, with a unit test asserting the
-  effect (see `test_capability_ladder` in [`../../tests/thoth.tcyr`](../../tests/thoth.tcyr)).
+  effect (see `test_capability_ladder` in [`../../tests/cases/core.cyr`](../../tests/cases/core.cyr), wired via `tests/thoth_core.tcyr`).
   A new degraded fallback in particular must be fail-closed and announced — the
   t-ron pattern, never a silent stand-in.
 - **Never collapse the two dimensions.** "absent binding" is not "absent
