@@ -304,3 +304,67 @@ fn daimon_tools_value() {
     if (v == 0) { return 0; }
     return bayan_json_v_obj_get(v, "tools");
 }
+
+# --- mneme memory-seam probe (0.32.0) ------------------------------------------
+# Whether daimon's MCP registry advertises mneme's memory tools (mneme_search /
+# mneme_create_note / ...), so SEAM_MEMORY binds REMOTE and thoth routes memory
+# recall + /remember to mneme instead of the local .thoth/memory flat file. mneme
+# is the AGNOS memory domain (semantic search / RAG / knowledge graph); thoth is a
+# CONSUMER — it reaches mneme's tools through daimon exactly like bote's web tools,
+# never forking retrieval (ADR-0012). Whether daimon HOSTS mneme (as an in-process
+# builtin like mcp_web_init, or an external POST /v1/mcp/tools registration) is
+# daimon's concern; thoth only discovers the tool in the registry.
+#
+# Tri-state cache: -1 unprobed, 0 absent, 1 present. Session-stable (the registry
+# does not change mid-session — the same rationale as the agent tool-advert cache).
+# daimon_mem_bound() is a PURE cache read (no I/O), so seam_status stays cheap and
+# /dry stays network-free. daimon_mem_probe() does the one-time GET+scan; it is
+# called only from safe points (the agent tool fetch, /state, the write path).
+var _daimon_mem_probed = 0 - 1;
+
+# daimon_mem_bound: the cached verdict, no network. 1 = mneme_* is hosted.
+fn daimon_mem_bound() { if (_daimon_mem_probed == 1) { return 1; } return 0; }
+
+# _daimon_name_is_mneme: 1 if the Str tool name begins with "mneme_".
+fn _daimon_name_is_mneme(ns) {
+    if (str_len(ns) < 6) { return 0; }
+    var d = str_data(ns);
+    if (load8(d) != 109) { return 0; }       # 'm'
+    if (load8(d + 1) != 110) { return 0; }    # 'n'
+    if (load8(d + 2) != 101) { return 0; }    # 'e'
+    if (load8(d + 3) != 109) { return 0; }    # 'm'
+    if (load8(d + 4) != 101) { return 0; }    # 'e'
+    if (load8(d + 5) != 95) { return 0; }     # '_'
+    return 1;
+}
+
+# daimon_mem_scan: scan an already-parsed "tools" array value for a mneme_* tool
+# and set the cache; returns the verdict. The agent loop passes the array it has
+# already fetched (no redundant GET); daimon_mem_probe passes its own fetch.
+fn daimon_mem_scan(tools_v) {
+    _daimon_mem_probed = 0;
+    if (tools_v == 0) { return 0; }
+    var n = bayan_json_v_arr_len(tools_v);
+    var i = 0;
+    while (i < n) {
+        var t = bayan_json_v_arr_get(tools_v, i);
+        if (t != 0) {
+            var nv = bayan_json_v_obj_get(t, "name");
+            if (nv != 0) {
+                var ns = bayan_json_v_str(nv);
+                if (ns != 0) { if (_daimon_name_is_mneme(ns) == 1) { _daimon_mem_probed = 1; } }
+            }
+        }
+        i = i + 1;
+    }
+    return _daimon_mem_probed;
+}
+
+# daimon_mem_probe: the one-time network probe. No-op if already probed (session-
+# stable). Safe to call only from user/turn paths — never from seam_status, which
+# must stay network-free. Returns the cached verdict.
+fn daimon_mem_probe() {
+    if (_daimon_mem_probed != (0 - 1)) { return _daimon_mem_probed; }
+    if (config_daimon_configured() == 0) { _daimon_mem_probed = 0; return 0; }
+    return daimon_mem_scan(daimon_tools_value());
+}

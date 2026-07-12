@@ -1098,6 +1098,7 @@ fn agent_turn(prompt) {
     if (_agent_tools_ready == 0) {
         var dtv = 0;                                          # 0.20.0: only fetch daimon's registry when the seam
         if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { dtv = daimon_tools_value(); }   # is present (shell-standalone: no GET)
+        daimon_mem_scan(dtv);                                # 0.32.0: prime the mneme memory-seam cache off this same registry fetch (no extra GET)
         var tl = agent_format_tools(_agent_tools_buf, dtv);
         tl = agent_tools_add_memory(_agent_tools_buf, tl);   # 0.12.2: + memory_write when [memory].enabled
         tl = agent_tools_add_shell(_agent_tools_buf, tl);    # 0.16.0: + shell when [shell].enabled AND POSIX-capable

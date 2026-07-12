@@ -81,10 +81,15 @@ fn seam_status(id) {
     if (id == SEAM_TRON) {
         if (gate_active() == 1) { return SEAM_NATIVE; }
     }
-    # memory (0.12.0): mneme is not yet Cyrius-ported, so it is never reachable
-    # today -> ABSENT at the binding layer. When its port registers with daimon,
-    # discover mneme_* in the registry and return SEAM_REMOTE here; until then the
-    # local .thoth/memory reader is the DEGRADED fallback (seam_cap_state; ADR-0012).
+    # memory (0.32.0): mneme (the AGNOS memory domain, now Cyrius-ported) binds
+    # REMOTE when daimon's MCP registry advertises its mneme_* tools — thoth reaches
+    # them through daimon like any hosted tool (never forking retrieval, ADR-0012).
+    # daimon_mem_bound() is a PURE cache read primed at safe points (the agent tool
+    # fetch / /state / the write path), so this stays network-free. Until mneme is
+    # hosted, the local .thoth/memory reader is the DEGRADED fallback (seam_cap_state).
+    if (id == SEAM_MEMORY) {
+        if (daimon_mem_bound() == 1) { return SEAM_REMOTE; }
+    }
     return SEAM_ABSENT;
 }
 

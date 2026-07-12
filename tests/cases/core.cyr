@@ -76,7 +76,11 @@ fn test_seams() {
     assert(streq(seam_name(SEAM_AVATARA), "avatara"), "avatara name");
     assert(streq(seam_name(SEAM_MEMORY), "mneme"), "mneme name (memory domain owner)");
     assert(streq(seam_name(SEAM_GIT), "sit"), "sit name (git/VCS domain owner)");
-    assert_eq(seam_status(SEAM_MEMORY), SEAM_ABSENT, "memory absent (mneme not yet Cyrius-ported)");
+    _daimon_mem_probed = 0 - 1;                      # 0.32.0: unprobed -> local fallback
+    assert_eq(seam_status(SEAM_MEMORY), SEAM_ABSENT, "memory absent when mneme unbound");
+    _daimon_mem_probed = 1;                          # simulate daimon advertising mneme_*
+    assert_eq(seam_status(SEAM_MEMORY), SEAM_REMOTE, "memory REMOTE when mneme bound (daimon hosts mneme_*)");
+    _daimon_mem_probed = 0 - 1;                      # reset (do not leak a bound cache into later tests)
     assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
     assert_eq(seam_status(SEAM_DAIMON), SEAM_ABSENT, "daimon absent when unconfigured");
     assert_eq(seam_status(SEAM_TRON), SEAM_ABSENT, "t-ron absent without a policy");
@@ -117,6 +121,10 @@ fn test_capability_ladder() {
     _cfg_memory_enabled = 1;
     assert_eq(seam_cap_state(SEAM_MEMORY), CAP_DEGRADED, "memory degraded when enabled (local reader)");
     assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_MEMORY), "degraded:"), 1, "memory-on fallback is degraded");
+    # 0.32.0: mneme bound (daimon hosts mneme_*) -> FULL, regardless of the local flag.
+    _daimon_mem_probed = 1;
+    assert_eq(seam_cap_state(SEAM_MEMORY), CAP_FULL, "memory FULL when mneme bound");
+    _daimon_mem_probed = 0 - 1;
     _cfg_memory_enabled = 0;
     return 0;
 }
@@ -1465,5 +1473,37 @@ fn test_memory() {
     assert_eq(cstr_starts_with(memory_write_tool("{}"), "memory_write:"), 1, "memory_write_tool missing text -> error");
 
     session_reset();
+    return 0;
+}
+
+# test_mem_seam (0.32.0): the mneme memory-seam probe — the PURE parts (name match,
+# registry scan + cache, title derivation). The actual mneme_create_note marshalling
+# is network I/O (daimon_invoke) and is exercised live, not here.
+fn test_mem_seam() {
+    test_group("mneme memory seam (0.32.0)");
+    # tool-name prefix match
+    assert_eq(_daimon_name_is_mneme(str_from("mneme_search")), 1, "mneme_search matches");
+    assert_eq(_daimon_name_is_mneme(str_from("mneme_create_note")), 1, "mneme_create_note matches");
+    assert_eq(_daimon_name_is_mneme(str_from("web_search")), 0, "web_search does not match");
+    assert_eq(_daimon_name_is_mneme(str_from("mneme")), 0, "bare 'mneme' (no underscore) does not match");
+    assert_eq(_daimon_name_is_mneme(str_from("mnem")), 0, "short name does not match");
+
+    # scan a parsed registry "tools" array -> verdict + cache read
+    _daimon_mem_probed = 0 - 1;
+    var s1 = "[{\"name\":\"web_fetch\"},{\"name\":\"mneme_search\"}]";
+    var t1 = bayan_json_v_parse_str(s1, strlen(s1));
+    assert_eq(daimon_mem_scan(t1), 1, "scan finds mneme_* -> bound");
+    assert_eq(daimon_mem_bound(), 1, "cache reads bound after scan");
+    var s2 = "[{\"name\":\"web_fetch\"},{\"name\":\"web_search\"}]";
+    var t2 = bayan_json_v_parse_str(s2, strlen(s2));
+    assert_eq(daimon_mem_scan(t2), 0, "scan without mneme_* -> unbound");
+    assert_eq(daimon_mem_bound(), 0, "cache reads unbound after scan");
+    assert_eq(daimon_mem_scan(0), 0, "scan of null array -> unbound (no crash)");
+
+    # title derivation for mneme_create_note: first line, verbatim
+    assert(streq(_mem_derive_title("hello world"), "hello world"), "title = full short fact");
+    assert(streq(_mem_derive_title("line one\nline two"), "line one"), "title stops at the first newline");
+
+    _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
 }

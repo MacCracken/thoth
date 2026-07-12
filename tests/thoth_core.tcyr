@@ -78,6 +78,7 @@ fn main() {
     test_alias();
     test_dry();
     test_memory();
+    test_mem_seam();
     test_shell();
     test_oneshot();
     test_json_envelope();

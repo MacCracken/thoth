@@ -293,9 +293,10 @@ fn cmd_state() {
         if (config_ui_elapsed() == 1) { if (first == 0) { emit(" + "); } ui_emit(ROLE_GREEN, "elapsed"); }
         ui_emit(ROLE_MUTED, " on turn completion ([ui], interactive-only)"); oprintln("");
     }
+    daimon_mem_probe();   # 0.32.0: refresh the mneme binding so the row is accurate (a status command may hit the network)
     ui_label("  memory  : ");
-    if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall)"); oprintln(""); }
-    elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not yet Cyrius-ported)"); oprintln(""); }
+    if (seam_cap_state(SEAM_MEMORY) == CAP_FULL) { ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic recall + /remember via daimon)"); oprintln(""); }
+    elif (seam_cap_state(SEAM_MEMORY) == CAP_DEGRADED) { emit("local .thoth/memory, "); ofmt_int(memory_fact_count()); ui_emit(ROLE_MUTED, " fact(s) — verbatim inject (mneme not hosted by daimon)"); oprintln(""); }
     else { ui_emit(ROLE_FAINT, "off (set [memory].enabled in .thoth/config.cyml)"); oprintln(""); }
     ui_label("  tokens  : ");
     if (status_present(SF_TOKENS) == 0) { ui_emit(ROLE_FAINT, "(none reported yet — shows once hoosh returns usage)"); oprintln(""); }
@@ -1011,6 +1012,10 @@ fn cmd_remember(line) {
         return 0;
     }
     if (rc < 0) { emit("  "); ui_emit(ROLE_RED, "write failed - memory not saved"); oprintln(""); return 0; }
+    if (mem_last_target() == 1) {                    # 0.32.0: routed to mneme (semantic memory), not the local file
+        emit("remembered -> "); ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic memory via daimon)"); oprintln("");
+        return 0;
+    }
     emit("remembered -> "); ui_emit(ROLE_BLUE, memory_index_path()); oprintln("");
     if (config_memory_enabled() == 0) {
         emit("  "); ui_emit(ROLE_FAINT, "note: [memory].enabled is off - the fact is saved but not injected until you enable it."); oprintln("");

@@ -169,6 +169,62 @@ fn memory_fact_count() {
 var _remember_buf = 0;
 var REMEMBER_CAP = 4096;
 
+# --- the mneme write path (0.32.0) --------------------------------------------
+# When the memory seam binds REMOTE (daimon hosts mneme_*), /remember and the
+# memory_write tool route the fact to mneme_create_note instead of the local
+# flat file — thoth consuming the memory domain, never forking it (ADR-0012).
+# _mem_last_target records where the last write landed (0 local, 1 mneme) so the
+# callers can word the confirmation honestly.
+var _mem_last_target = 0;
+fn mem_last_target() { return _mem_last_target; }
+
+var _mem_remote_buf = 0;
+var MEM_REMOTE_CAP = 65536;      # title(~79*6) + content(MEM_CONTENT_MAX*6) + JSON syntax, worst-case escaped
+var MEM_CONTENT_MAX = 8192;      # raw fact bytes routed to mneme (bounded like the local REMEMBER_CAP path)
+var _mem_title_buf = 0;
+var MEM_TITLE_CAP = 80;
+
+# _mem_derive_title: the note title mneme_create_note requires — the fact's first
+# line, capped to MEM_TITLE_CAP-1 bytes (the full fact still goes in `content`).
+# Returns a reusable buffer cstr; empty only if `text` is empty (callers guard).
+fn _mem_derive_title(text) {
+    if (_mem_title_buf == 0) { _mem_title_buf = alloc(MEM_TITLE_CAP); }
+    var cap = MEM_TITLE_CAP - 1;
+    var i = 0;
+    var done = 0;
+    while ((done == 0) && (i < cap)) {
+        var c = load8(text + i);
+        if (c == 0) { done = 1; }
+        elif (c == 10) { done = 1; }             # first newline ends the title
+        else { store8(_mem_title_buf + i, c); i = i + 1; }
+    }
+    store8(_mem_title_buf + i, 0);
+    return _mem_title_buf;
+}
+
+# _mem_remote_write: marshal <text> to a mneme_create_note MCP call through daimon
+# and return >0 on success, -1 on failure. VERBATIM content (mneme owns tagging /
+# linking / summarizing). The caller has ALREADY passed the thoth_remember gate;
+# daimon applies its own per-tool policy on mneme_create_note.
+fn _mem_remote_write(text) {
+    if (_mem_remote_buf == 0) { _mem_remote_buf = alloc(MEM_REMOTE_CAP); }
+    var title = _mem_derive_title(text);
+    var tlen = strlen(text);
+    if (tlen > MEM_CONTENT_MAX) { tlen = MEM_CONTENT_MAX; }
+    var cap = MEM_REMOTE_CAP;
+    var off = 0;
+    off = _append_cstr_cap(_mem_remote_buf, off, cap, "{\"title\":\"");
+    off = _json_escape_into_cap(_mem_remote_buf, off, cap, title);
+    off = _append_cstr_cap(_mem_remote_buf, off, cap, "\",\"content\":\"");
+    off = _json_escape_n_into_cap(_mem_remote_buf, off, cap, text, tlen);
+    off = _append_cstr_cap(_mem_remote_buf, off, cap, "\"}");
+    store8(_mem_remote_buf + off, 0);
+    var res = daimon_invoke("mneme_create_note", _mem_remote_buf);
+    if (res == 0) { return 0 - 1; }                       # transport failure / no result
+    if (daimon_invoke_is_error() == 1) { return 0 - 1; }  # mneme reported an error (missing arg, etc.)
+    return 1;                                             # success (>0, like the local byte count)
+}
+
 # memory_append: append <text> VERBATIM as a bullet ("- <text>\n") to
 # .thoth/memory/MEMORY.md — the single writer shared by /remember (the command)
 # and memory_write (the agentic tool). Returns bytes written (>0) on success,
@@ -177,6 +233,17 @@ var REMEMBER_CAP = 4096;
 # failure. Invalidates the reader cache on success so the fact is live next turn.
 # VERBATIM only — no summarize / tag / dedupe / link (that is mneme's engine).
 fn memory_append(text) {
+    # 0.32.0: route to mneme when the seam binds (daimon hosts mneme_*). Probe once
+    # here — the write path is user-initiated, so the one-time GET is fine; the local
+    # branch below stands in when mneme is unreachable. Writing is allowed regardless
+    # of [memory].enabled (which only gates the LOCAL reader injection), matching the
+    # pre-0.32 behaviour where /remember saves even when injection is off.
+    daimon_mem_probe();
+    if (daimon_mem_bound() == 1) {
+        _mem_last_target = 1;
+        return _mem_remote_write(text);
+    }
+    _mem_last_target = 0;
     if (is_dir(str_from(memory_dir())) == 0) { return 0 - 2; }
     if (_remember_buf == 0) { _remember_buf = alloc(REMEMBER_CAP); }
     var tl = strlen(text);
@@ -209,5 +276,6 @@ fn memory_write_tool(args_cstr) {
     var rc = memory_append(text);
     if (rc == (0 - 2)) { return "memory_write: .thoth/memory/ does not exist — create it first"; }
     if (rc < 0) { return "memory_write: write failed"; }
+    if (mem_last_target() == 1) { return "saved to mneme (semantic memory)"; }
     return "saved to project memory (.thoth/memory/MEMORY.md)";
 }
