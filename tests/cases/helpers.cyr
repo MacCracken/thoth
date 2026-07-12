@@ -1,0 +1,119 @@
+# tests/cases/helpers.cyr — shared test helpers (annotation/escape-strip/mdhl-line/mpick-push/secs-line/PPM-dump).
+# Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
+# (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
+
+
+# /git per-file diff renderer (0.19.2): diff_render_ann colors sit's annotated line-ops (kind/line/old/new)
+# through _diff_emit_line — the same renderer /read + write diffs use. Build a tiny ops vec by hand
+# (sit_diff_path's 32-byte {kind, line-tuple, old_no, new_no} shape) and render it into the feed ring.
+fn _t_ann(kind, text, tlen, oldn, newn) {
+    var t = alloc(16); store64(t, text); store64(t + 8, tlen);              # the {ptr,len} line tuple
+    var o = alloc(32); store64(o, kind); store64(o + 8, t); store64(o + 16, oldn); store64(o + 24, newn);
+    return o;
+}
+
+# --- mdhl (0.15.1) test helpers -------------------------------------------
+# _t_has_esc: 1 if src[0..len) contains an ESC (0x1b) byte.
+fn _t_has_esc(ptr, len) {
+    var i = 0;
+    while (i < len) {
+        if (load8(ptr + i) == 27) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+# _t_strip_sgr: copy src[0..len) into dst, dropping whole ESC sequences (reusing the
+# feed's escape-length scanner); nul-terminate. Recovers the visible text so a coverage
+# check (strip_sgr(output) == input) proves _hl_span never dropped/reordered a byte.
+fn _t_strip_sgr(dst, src, len) {
+    var i = 0;
+    var w = 0;
+    while (i < len) {
+        if (load8(src + i) == 27) { i = i + _feed_esc_len(src, i, len); }
+        else { store8(dst + w, load8(src + i)); w = w + 1; i = i + 1; }
+    }
+    store8(dst + w, 0);
+    return w;
+}
+# _t_count_sub: number of (possibly overlapping) occurrences of needle[0..m) in hay[0..n).
+fn _t_count_sub(hay, n, needle, m) {
+    if (m <= 0) { return 0; }
+    var i = 0;
+    var c = 0;
+    while ((i + m) <= n) {
+        var k = 0;
+        var eq = 1;
+        while ((k < m) && (eq == 1)) { if (load8(hay + i + k) != load8(needle + k)) { eq = 0; } k = k + 1; }
+        if (eq == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+# _t_mdhl_line: populate the mdhl line buffer for the pure fence-scan tests.
+fn _t_mdhl_line(s) {
+    _mdhl_ensure();
+    var n = strlen(s);
+    var i = 0;
+    while (i < n) { store8(_mdhl_line + i, load8(s + i)); i = i + 1; }
+    _mdhl_line_len = n;
+    return 0;
+}
+
+# inline markdown (0.18.8): prose lines get headings/bold/inline-code/list markers styled in the feed,
+# preserving strip-coverage (strip_sgr(output) == raw line). Route via mdhl_reply under OUT_RING and read
+# the sealed row. Colors are role markers (recolor on /theme); bold is a raw ESC[1m.
+fn _t_md_row(raw, n) {
+    # run one raw line through mdhl_reply into the feed ring; return the sealed row 0's byte length via
+    # the globals (caller reads feed_line_ptr(0)/feed_line_len(0)). Assumes a single logical line.
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(raw, n);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return feed_line_len(0);
+}
+
+# _mp_push_str: helper — feed each byte of NUL-terminated `s` through mpick_query_push (mirrors typing).
+fn _mp_push_str(s) {
+    var i = 0;
+    while (load8(s + i) != 0) { mpick_query_push(load8(s + i)); i = i + 1; }
+    return 0;
+}
+
+fn _t_secs_line(ms, expect) {   # emit _task_emit_secs(ms) to the feed ring; 1 if row 0 contains `expect`
+    feed_init();
+    out_mode_set(OUT_RING);
+    _task_emit_secs(ms);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return _t_count_sub(feed_line_ptr(0), feed_line_len(0), expect, strlen(expect));
+}
+
+# _gui_ppm_dump: write an XRGB8888 buffer to a P6 PPM for visual inspection (test artifact).
+fn _gui_ppm_dump(buf, w, h, path) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fd < 0) { return 0; }
+    var hdr = alloc(64);
+    var o = 0;
+    store8(hdr + o, 80); o = o + 1; store8(hdr + o, 54); o = o + 1; store8(hdr + o, 10); o = o + 1;   # "P6\n"
+    o = o + fmt_int_buf(w, hdr + o);
+    store8(hdr + o, 32); o = o + 1;
+    o = o + fmt_int_buf(h, hdr + o);
+    store8(hdr + o, 10); o = o + 1;
+    store8(hdr + o, 50); o = o + 1; store8(hdr + o, 53); o = o + 1; store8(hdr + o, 53); o = o + 1; store8(hdr + o, 10); o = o + 1;   # "255\n"
+    file_write(fd, hdr, o);
+    var n = w * h;
+    var rgb = alloc(n * 3);
+    var i = 0;
+    while (i < n) {
+        var px = load32(buf + i * 4);
+        store8(rgb + i * 3, (px / 65536) & 255);
+        store8(rgb + i * 3 + 1, (px / 256) & 255);
+        store8(rgb + i * 3 + 2, px & 255);
+        i = i + 1;
+    }
+    file_write(fd, rgb, n * 3);
+    file_close(fd);
+    return 1;
+}

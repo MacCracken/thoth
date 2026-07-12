@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.30.7** — **test suite split into topical case files**, 2026-07-11. `tests/thoth.tcyr` (~4,095 lines in one
+file) is now a thin DRIVER — the src-module include block + `include "tests/cases/*.cyr"` + a verbatim `main()`
+— with the ~72 test fns moved into **`tests/cases/`**: `core.cyr` (1,403), `tui.cyr` (1,184), `agent.cyr`
+(572), `render.cyr` (361), `gui.cyr` (347), `helpers.cyr` (the 9 shared helpers, included first). **A PURE
+mechanical refactor** — `main()` is byte-for-byte the same 72 calls, every definition stays present via the
+includes, so it remains ONE compiled binary and is behavior-identical: **1341 assertions, 0 failed** (unchanged).
+**Kept as one binary DELIBERATELY** (not independent per-domain `.tcyr`): cyrius refuses to emit with
+reachable-undefined functions, and thoth's modules are coupled — `surface → hoosh → gate → tui_confirm_*` and
+`hoosh → intr_*` (tui) / `mdhl_*` / `memory_context` / `log_*`, `util → feed_write` — so a *curated lean*
+per-domain split (the first-picked approach) is blocked: every GUI/TUI test transitively needs `tui → commands →`
+the whole codebase. A truly lean split would need a product refactor (extract `intr_*`/`tui_confirm_*` out of
+`tui.cyr`; decouple hoosh's display calls behind a sink) — its own future arc, out of scope here. So splitting
+the SOURCE (readable files, one compile) was chosen over independent binaries (isolated runs, N× compile). **To
+add a test**: body → the right `tests/cases/*.cyr`, wire the call into `tests/thoth.tcyr`'s `main()`. Pin
+**6.4.51** (wrapper auto-drifted to 6.4.52; benign). **NEXT (GUI, 0.30.x)**: file-tree keyboard nav; tool-call
+cards + colored diffs (needs a tool-round producer); feed scrollback; composer history.
+
 **0.30.6** — **toolchain refresh (cyrius 6.4.49 → 6.4.51) + the full file-tree tests the output cap had forced
 lean**, 2026-07-11. cyrius **6.4.51** resolves thoth's filed output-cap issue: the emitted-binary `output_buf`
 grew from a FIXED **16 MiB to 1 GiB on Linux** (macOS/Windows follow in .52 via a large-alloc path). Background:

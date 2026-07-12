@@ -1,0 +1,572 @@
+# tests/cases/agent.cyr — the agentic tool spine: agent loop, daimon/bote MCP, t-ron auth, roundlog, shell, project read tools.
+# Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
+# (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
+
+
+# The model-invokable `shell` tool (0.16.0, ADR-0014): config surface + clamps, the LOCAL glob
+# filter (deny-wins, allow-list default-deny), shell_run_tool's PRE-GATE returns (parse/blank/deny —
+# the paths that never reach the confirm gate, so the test can't hang on stdin), the real timed
+# capture (exit code / merged stderr / timeout+partial / over-cap), and the advertise-off floor.
+fn test_shell() {
+    test_group("shell tool (config.cyr / exec.cyr / shell.cyr, 0.16.0)");
+
+    # --- config scalars + clamps (white-box the raw fields; the getters clamp) ---
+    _cfg_shell_enabled = 1;
+    assert(config_shell_enabled() == 1, "shell enabled reads through");
+    _cfg_shell_timeout_ms = 0 - 1;
+    assert_eq(config_shell_timeout_ms(), SHELL_TIMEOUT_DEFAULT_MS, "absent timeout -> default");
+    _cfg_shell_timeout_ms = 5000;
+    assert_eq(config_shell_timeout_ms(), 5000, "configured timeout passes through");
+    _cfg_shell_timeout_ms = SHELL_TIMEOUT_MAX_MS + 1;
+    assert_eq(config_shell_timeout_ms(), SHELL_TIMEOUT_MAX_MS, "over-max timeout clamped");
+    _cfg_shell_output_cap = 0 - 1;
+    assert_eq(config_shell_output_cap(), SHELL_OUT_DEFAULT, "absent cap -> default");
+    _cfg_shell_output_cap = 4096;
+    assert_eq(config_shell_output_cap(), 4096, "configured cap passes through");
+
+    # --- legacy [shell.deny]/[shell.allow] SECTIONS of `label = pattern` pairs (value is the glob) ---
+    var toml = "[shell.deny]\nd1 = \"*rm -rf*\"\nd2 = \"* | sh\"\nblank = \"\"\n[shell.allow]\na1 = \"git *\"\na2 = \"ls*\"\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    _shell_globs_load(0, sections);                # no [shell] table -> section (back-compat) path
+    assert_eq(config_shell_deny_count(), 2, "two deny globs (blank value skipped)");
+    assert_eq(config_shell_allow_count(), 2, "two allow globs");
+    assert(streq(config_shell_deny_at(0), "*rm -rf*"), "deny[0] is the VALUE, not the label");
+    assert(streq(config_shell_allow_at(0), "git *"), "allow[0] pattern");
+    assert_eq(config_shell_deny_at(9), 0, "deny_at out of range -> 0");
+
+    # --- glob verdict: 0 pass / 1 deny-match / 2 allow-list-miss; deny wins; empty allow allows ---
+    assert_eq(_shell_glob_verdict("rm -rf /tmp/x"), 1, "deny glob matches -> 1");
+    assert_eq(_shell_glob_verdict("git status"), 0, "allow match, no deny -> pass");
+    assert_eq(_shell_glob_verdict("cat /etc/passwd"), 2, "non-empty allow-list, no match -> 2");
+    assert_eq(_shell_glob_verdict("ls -la"), 0, "allow ls* matches -> pass");
+    store64(_shell_deny + _shell_deny_n * 8, "git *");   # white-box: add an overlapping deny
+    _shell_deny_n = _shell_deny_n + 1;
+    assert_eq(_shell_glob_verdict("git status"), 1, "deny wins over allow on overlap");
+    _shell_deny_n = _shell_deny_n - 1;                   # restore
+    _shell_allow_n = 0;
+    assert_eq(_shell_glob_verdict("cat /etc/passwd"), 0, "empty allow-list -> allow-through");
+
+    # --- shell_run_tool PRE-GATE returns (never reach the confirm gate, so no stdin hang) ---
+    assert(streq(shell_run_tool("{}"), "(shell: missing required 'command' argument)"), "missing command arg");
+    assert(streq(shell_run_tool("{\"command\":\"\"}"), "(shell: 'command' is empty)"), "empty command");
+    assert(streq(shell_run_tool("{\"command\":\"   \"}"), "(shell: 'command' is empty)"), "whitespace-only command");
+    assert(streq(shell_run_tool("not json"), "(shell: arguments are not valid JSON)"), "invalid JSON args");
+    var dres = shell_run_tool("{\"command\":\"rm -rf /\"}");   # matches *rm -rf* -> deny before t-ron
+    assert(dres != 0, "deny-glob command returns a refusal (before the gate)");
+    assert_eq(shell_last_allowed(), 0, "deny-glob -> not allowed (roundlog DENIED)");
+
+    # --- shell_supported() on this POSIX build ---
+    assert_eq(shell_supported(), 1, "shell supported on this POSIX target");
+
+    # --- exec_shell_capture: real exec, capture, exit code, merged stderr, timeout, over-cap ---
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];                                # two i64 slots: [0]=exit, [1]=timed-out
+    var n1 = exec_shell_capture("printf hello", buf, cap, 5000, &st);
+    store8(buf + n1, 0);
+    assert(streq(buf, "hello"), "capture: printf hello");
+    assert_eq(load64(&st), 0, "printf exits 0");
+    assert_eq(load64(&st + 8), 0, "not timed out");
+    exec_shell_capture("exit 3", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 3, "exit 3 reported");
+    var n3 = exec_shell_capture("echo oops 1>&2", buf, cap, 5000, &st);
+    store8(buf + n3, 0);
+    assert(streq(buf, "oops\n"), "stderr is captured (merged into the same stream)");
+    exec_shell_capture("sleep 5", buf, cap, 300, &st);
+    assert_eq(load64(&st + 8), 1, "sleep beyond timeout -> timed-out flag set");
+    assert_eq(load64(&st), 0 - 2, "timeout exit sentinel -2");
+    var n5 = exec_shell_capture("printf pre; sleep 5", buf, cap, 400, &st);
+    store8(buf + n5, 0);
+    assert(streq(buf, "pre"), "partial output preserved before the SIGKILL");
+    assert_eq(load64(&st + 8), 1, "still timed out (partial case)");
+    # 0.20.1 process-group kill: a BACKGROUNDED grandchild dies with the shell. The grandchild would touch a
+    # marker after 1s; the parent times out at 300ms, and the group SIGKILL (kill(-pgid)) should reach the
+    # grandchild before it writes. Wait past 1s, then confirm the marker is ABSENT (it would exist if the
+    # old single-child kill had let the grandchild survive). Also proves the group-kill + reap never hangs.
+    exec_shell_capture("rm -f /tmp/thoth_gc_20_1", buf, cap, 5000, &st);
+    exec_shell_capture("(sleep 1; : > /tmp/thoth_gc_20_1) & sleep 5", buf, cap, 300, &st);
+    assert_eq(load64(&st + 8), 1, "a backgrounding parent still times out (no hang)");
+    var ngc = exec_shell_capture("sleep 1; test -e /tmp/thoth_gc_20_1 && echo LIVE || echo DEAD", buf, cap, 5000, &st);
+    store8(buf + ngc, 0);
+    assert(streq(buf, "DEAD\n"), "the backgrounded grandchild was killed with the shell (process-group kill)");
+    exec_shell_capture("rm -f /tmp/thoth_gc_20_1", buf, cap, 5000, &st);
+    var n6 = exec_shell_capture("head -c 9000 /dev/zero", buf, cap, 5000, &st);
+    assert(n6 <= cap, "capture never exceeds buflen (over-cap truncation, no overrun)");
+    # exact-fit: reading a K-byte output with buflen = K+1 returns exactly K (not K+1) — the signal
+    # shell_run_tool uses so an output of exactly max_output bytes is NOT mislabeled "truncated".
+    var n7 = exec_shell_capture("head -c 100 /dev/zero", buf, 101, 5000, &st);
+    assert_eq(n7, 100, "K-byte output read with buflen K+1 returns K (exact-fit is not overflow)");
+    var n8 = exec_shell_capture("head -c 150 /dev/zero", buf, 101, 5000, &st);
+    assert_eq(n8, 101, "over-buflen output fills buflen (K+1) -> the >cap overflow signal");
+
+    # --- 0.20.3: canonical array form `[shell] deny = [...] / allow = [...]` (bayan 1.1.0) ---
+    var atoml = "[shell]\ndeny = [\"*rm -rf*\", \"* | sh\", \"\"]\nallow = [\"git *\", \"ls*\"]\n";
+    var asec = bayan_toml_parse(str_new(atoml, strlen(atoml)));
+    _shell_globs_load(_cfg_section_pairs(asec, "shell"), asec);
+    assert_eq(config_shell_deny_count(), 2, "array deny: two globs (blank element skipped)");
+    assert_eq(config_shell_allow_count(), 2, "array allow: two globs");
+    assert(streq(config_shell_deny_at(1), "* | sh"), "array deny[1] pattern quote-stripped");
+    assert(streq(config_shell_allow_at(0), "git *"), "array allow[0] pattern quote-stripped");
+
+    # array form WINS when present: a [shell] deny array + a legacy [shell.deny] section -> array only
+    var btoml = "[shell]\ndeny = [\"only-array*\"]\n[shell.deny]\nlegacy = \"legacy*\"\n";
+    var bsec = bayan_toml_parse(str_new(btoml, strlen(btoml)));
+    _shell_globs_load(_cfg_section_pairs(bsec, "shell"), bsec);
+    assert_eq(config_shell_deny_count(), 1, "array form wins over legacy section when both present");
+    assert(streq(config_shell_deny_at(0), "only-array*"), "the array pattern, not the legacy section");
+
+    # explicit empty array `deny = []` means zero deny patterns -> does NOT fall back to a section
+    var etoml = "[shell]\ndeny = []\n[shell.deny]\nlegacy = \"legacy*\"\n";
+    var esec = bayan_toml_parse(str_new(etoml, strlen(etoml)));
+    _shell_globs_load(_cfg_section_pairs(esec, "shell"), esec);
+    assert_eq(config_shell_deny_count(), 0, "explicit empty deny array -> 0, no section fallback");
+
+    # key ABSENT from [shell] -> legacy section fallback still loads (back-compat)
+    var ftoml = "[shell]\nenabled = true\n[shell.allow]\na1 = \"git *\"\n";
+    var fsec = bayan_toml_parse(str_new(ftoml, strlen(ftoml)));
+    _shell_globs_load(_cfg_section_pairs(fsec, "shell"), fsec);
+    assert_eq(config_shell_allow_count(), 1, "absent array key -> legacy [shell.allow] section still loads");
+    assert(streq(config_shell_allow_at(0), "git *"), "section-form allow pattern via fallback");
+
+    # bare scalar string (brackets forgotten) is accepted leniently as ONE glob (never a silent zero)
+    var gtoml = "[shell]\ndeny = \"*rm -rf*\"\n";
+    var gsec = bayan_toml_parse(str_new(gtoml, strlen(gtoml)));
+    _shell_globs_load(_cfg_section_pairs(gsec, "shell"), gsec);
+    assert_eq(config_shell_deny_count(), 1, "bare scalar deny string -> one glob (lenient, not zero)");
+    assert(streq(config_shell_deny_at(0), "*rm -rf*"), "scalar deny pattern quote-stripped");
+
+    # --- advertise floor: disabled -> agent_tools_add_shell returns tl unchanged, writes nothing ---
+    # tb is a heap buffer (>= the ~550-byte tool JSON); add_shell caps at AGENT_TOOLS_CAP, not tb's size.
+    var tb = alloc(2048);
+    _cfg_shell_enabled = 0;
+    store8(tb, 0);
+    assert_eq(agent_tools_add_shell(tb, 0), 0, "disabled -> add_shell returns tl unchanged (0)");
+    assert_eq(load8(tb), 0, "disabled -> add_shell wrote no bytes (floor)");
+    _cfg_shell_enabled = 1;
+    var tl_on = agent_tools_add_shell(tb, 0);
+    assert(tl_on > 0, "enabled -> add_shell appends the tool");
+    assert_eq(load8(tb), 91, "advertised tools array starts with '['");
+
+    # restore defaults so later tests / a fresh config see clean state
+    _cfg_shell_enabled = 0;
+    _cfg_shell_timeout_ms = 0 - 1;
+    _cfg_shell_output_cap = 0 - 1;
+    _shell_deny_n = 0;
+    _shell_allow_n = 0;
+    return 0;
+}
+
+# Project-memory injection (0.12.0, ADR-0012). The mem system message rides the
+# same builders as the persona — a second {role:system} block AFTER the persona,
+# BEFORE the user turn/history. mem == 0 (disabled/absent) -> byte-identical floor.
+fn test_memory() {
+    test_group("project memory injection (0.12.0)");
+    assert_eq(classify_input("/remember a durable fact"), CMD_REMEMBER, "/remember classifies to CMD_REMEMBER");
+    session_reset();
+    var dst[4096];
+
+    # persona + memory + user, in order (both system messages present).
+    var l1 = hoosh_build_dry(&dst, "m", "SYS", "MEM", "hi", 0);
+    store8(&dst + l1, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"system\",\"content\":\"MEM\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "memory: persona + memory + user, in order");
+
+    # mem == 0 -> NO memory message (byte-identical floor).
+    var l2 = hoosh_build_dry(&dst, "m", "SYS", 0, "hi", 0);
+    store8(&dst + l2, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "memory off: byte-identical (no memory message)");
+
+    # single-turn builder threads mem the same way (persona 0, memory present).
+    var l3 = hoosh_build_request(&dst, "m", 0, "MEM", "hi", 0);
+    store8(&dst + l3, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"MEM\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "single-turn: memory system message");
+
+    # reader is OFF by default -> content-blind gate returns 0, no I/O, no faked line.
+    assert_eq(config_memory_enabled(), 0, "memory off by default");
+    assert_eq(memory_context(), 0, "memory_context() 0 when disabled");
+    assert_eq(memory_system_prompt(), 0, "memory_system_prompt() 0 when disabled");
+    assert_eq(memory_fact_count(), 0, "memory_fact_count() 0 when disabled");
+
+    # 0.12.2: memory_write agentic tool — advertised only when the seam is active.
+    var tb[8192];
+    var pre = "[{\"x\":1}]";
+    var pl = strlen(pre);
+    memcpy(&tb, pre, pl); store8(&tb + pl, 0);
+    assert_eq(agent_tools_add_memory(&tb, pl), pl, "memory_write NOT advertised when memory disabled");
+    _cfg_memory_enabled = 1;
+    memcpy(&tb, pre, pl); store8(&tb + pl, 0);
+    var a2 = agent_tools_add_memory(&tb, pl);
+    store8(&tb + a2, 0);
+    assert(strstr(&tb, "\"x\":1},{\"type\":\"function\"") != 0, "memory_write spliced after comma into non-empty array");
+    assert_eq(load8(&tb + a2 - 1), 93, "tools array still closes with ']'");
+    var a3 = agent_tools_add_memory(&tb, 0);
+    store8(&tb + a3, 0);
+    assert_eq(load8(&tb), 91, "empty-registry tools array opens with '['");
+    assert(strstr(&tb, "memory_write") != 0, "memory_write advertised (empty registry)");
+    _cfg_memory_enabled = 0;
+    # memory_write_tool argument validation (no I/O on the error paths).
+    assert_eq(cstr_starts_with(memory_write_tool(0), "memory_write:"), 1, "memory_write_tool null args -> error");
+    assert_eq(cstr_starts_with(memory_write_tool("{}"), "memory_write:"), 1, "memory_write_tool missing text -> error");
+
+    session_reset();
+    return 0;
+}
+
+# Agentic tool-calling loop (0.6.0): the pure pieces — tool advertisement,
+# tool_calls parsing, raw extraction, and request shaping. The loop itself is I/O.
+fn test_agent() {
+    test_group("agentic tool-calling");
+    # 0.23.0 agent_enabled() = the master [hoosh].tools switch ALONE: read_file/list_dir are always-available
+    # local tools, so the agentic loop runs whenever tools are on — daimon + shell just ADD more tools.
+    # (Was 0.20.0's "tools AND (daimon OR shell)".) Poke the config globals directly, RESTORE at the end.
+    assert_eq(shell_supported(), 1, "POSIX test build supports the shell tool");
+    _cfg_hoosh_tools = 1; _cfg_daimon_url = 0; _cfg_shell_enabled = 0;
+    assert_eq(agent_enabled(), 1, "tools on, no daimon, no shell -> agentic on (read_file/list_dir always available, 0.23.0)");
+    _cfg_daimon_url = "http://x";
+    assert_eq(agent_enabled(), 1, "daimon wired + tools -> agentic on");
+    _cfg_daimon_url = 0; _cfg_shell_enabled = 1;
+    assert_eq(agent_enabled(), 1, "shell enabled + tools -> agentic on");
+    _cfg_hoosh_tools = 0;
+    assert_eq(agent_enabled(), 0, "[hoosh].tools off -> plain turns (the master off switch)");
+    _cfg_hoosh_tools = 1; _cfg_daimon_url = 0; _cfg_shell_enabled = 0;   # restore defaults
+
+    # advertise-degrade: with a 0 daimon value (no registry fetched) the tools array is built from the local
+    # tools alone; enabling shell yields a VALID array carrying a "shell" tool — the network-free proof that
+    # the agentic loop needs no daimon.
+    var stb[2048];
+    assert_eq(agent_tools_add_shell(&stb, 0), 0, "shell off -> add_shell is a no-op (advertise floor)");
+    _cfg_shell_enabled = 1;
+    var stl = agent_tools_add_shell(&stb, 0);
+    assert(stl > 0, "shell on -> add_shell builds a tools array from the empty (daimon-absent) base");
+    var sav = bayan_json_v_parse_str(&stb, stl);
+    assert(sav != 0, "the shell-only tools array parses");
+    assert_eq(bayan_json_v_arr_len(sav), 1, "exactly one tool advertised standalone");
+    var stf = bayan_json_v_obj_get(bayan_json_v_arr_get(sav, 0), "function");
+    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get(stf, "name"))), "shell"), "the advertised tool is named 'shell'");
+    _cfg_shell_enabled = 0;   # restore
+
+    # tool advertisement: daimon {name,description} -> OpenAI function tools
+    var ta = "[{\"name\":\"echo\",\"description\":\"echo back\"},{\"name\":\"clk\",\"description\":\"time\"}]";
+    var tav = bayan_json_v_parse_str(ta, strlen(ta));
+    var tb[1024];
+    agent_format_tools(&tb, tav);
+    assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"echo\",\"description\":\"echo back\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "tools formatted as OpenAI functions");
+    assert_eq(agent_format_tools(&tb, 0), 0, "no tools value -> 0 length");
+
+    # daimon 1.2.7: per-tool inputSchema passes through verbatim as `parameters`;
+    # a tool without one falls back to the permissive object schema.
+    var ts = "[{\"name\":\"rd\",\"description\":\"read\",\"inputSchema\":{\"type\":\"string\"}},{\"name\":\"clk\",\"description\":\"time\"}]";
+    var tsv = bayan_json_v_parse_str(ts, strlen(ts));
+    agent_format_tools(&tb, tsv);
+    assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"rd\",\"description\":\"read\",\"parameters\":{\"type\":\"string\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "inputSchema passed through; absent -> object fallback");
+
+    # tool_calls parsing from an OpenAI-shaped response
+    var resp = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
+    var tcs = agent_tool_calls(resp, strlen(resp));
+    assert(tcs != 0, "tool_calls present");
+    assert_eq(agent_tc_count(tcs), 1, "one tool call");
+    assert(streq(agent_tc_id(tcs, 0), "call_1"), "tool_call id");
+    assert(streq(agent_tc_name(tcs, 0), "echo"), "tool_call name");
+    assert(streq(agent_tc_args(tcs, 0), "{}"), "tool_call arguments");
+
+    var plain = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}";
+    assert_eq(agent_tc_count(agent_tool_calls(plain, strlen(plain))), 0, "no tool_calls -> count 0");
+
+    # raw tool_calls substring (echoed back verbatim as the assistant message)
+    var raw = _agent_raw_tool_calls(resp, strlen(resp));
+    assert(raw != 0, "raw tool_calls extracted");
+    assert_eq(cstr_starts_with(raw, "[{\"id\":\"call_1\""), 1, "raw is the array text");
+
+    # request shaping: history + tools
+    session_reset();
+    session_history_append("user", "hi", 2);
+    var rb[512];
+    agent_build_request(&rb, "m", 0, 0, 0, 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "agent request: history, no tools");
+    var toolsb = "[{\"type\":\"function\"}]";
+    agent_build_request(&rb, "m", 0, 0, toolsb, strlen(toolsb), 1);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "agent request: with tools, streaming + usage opt");
+    session_reset();
+
+    # streamed tool_call assembly: deltas arrive fragmented (id+name first, then
+    # arguments in pieces), reconstructed into the same array text the block path
+    # produces. Mirrors OpenAI streaming tool_calls.
+    _ag_reset();
+    var d1 = "{\"index\":0,\"id\":\"call_9\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"t\\\":\"}}";
+    _agent_accum_delta(bayan_json_v_parse_str(d1, strlen(d1)));
+    var d2 = "{\"index\":0,\"function\":{\"arguments\":\"42}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_str(d2, strlen(d2)));
+    var ab[1024];
+    _ag_build_array(&ab);
+    assert(streq(&ab, "[{\"id\":\"call_9\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"t\\\":42}\"}}]"), "streamed deltas reassemble into the tool_calls array");
+    # and the reassembled array parses back through the same accessors
+    var av = bayan_json_v_parse_str(&ab, strlen(&ab));
+    assert_eq(agent_tc_count(av), 1, "reassembled: one call");
+    assert(streq(agent_tc_name(av, 0), "echo"), "reassembled: name");
+    assert(streq(agent_tc_args(av, 0), "{\"t\":42}"), "reassembled: args decoded");
+    return 0;
+}
+
+# The daimon client's pure pieces: call-body building and tool-result
+# extraction against canned bodies (no network).
+fn test_daimon() {
+    test_group("daimon call building");
+    var cb[256];
+    daimon_build_call(&cb, "echo", "{\"x\":1}");
+    assert(streq(&cb, "{\"name\":\"echo\",\"arguments\":{\"x\":1}}"), "call body with args");
+    daimon_build_call(&cb, "scan", 0);
+    assert(streq(&cb, "{\"name\":\"scan\",\"arguments\":{}}"), "call body, no args -> {}");
+    daimon_build_call(&cb, "we\"ird", 0);
+    assert(streq(&cb, "{\"name\":\"we\\\"ird\",\"arguments\":{}}"), "tool name is escaped");
+
+    test_group("daimon result extraction");
+    var ok = "{\"content\":[{\"type\":\"text\",\"text\":\"tool says hi\"}],\"isError\":false}";
+    var s = daimon_extract_text(ok, strlen(ok));
+    assert(s != 0, "text present");
+    assert(str_eq_cstr(s, "tool says hi"), "text matches");
+    assert_eq(daimon_extract_is_error(ok, strlen(ok)), 0, "isError false -> 0");
+    var bad = "{\"content\":[{\"type\":\"text\",\"text\":\"boom\"}],\"isError\":true}";
+    assert_eq(daimon_extract_is_error(bad, strlen(bad)), 1, "isError true -> 1");
+    var none = "{\"ok\":true}";
+    assert_eq(daimon_extract_text(none, strlen(none)), 0, "no content -> 0");
+    assert_eq(daimon_extract_is_error(none, strlen(none)), 0 - 1, "no isError -> -1");
+    var nojson = "nope";
+    assert_eq(daimon_extract_text(nojson, strlen(nojson)), 0, "unparseable -> 0");
+    return 0;
+}
+
+# The vendored t-ron engine end-to-end in-process: policy allow/deny globs,
+# deny-by-default for unknown agents, and the audit path (libro chain_append —
+# the sigil/thread_local ordering canary).
+fn test_tron() {
+    test_group("t-ron verdicts (vendored engine)");
+    var t = tron_new(tron_config_default());
+    var pol = "[agent.\"thoth\"]\nallow = [\"echo_*\", \"thoth_run\"]\ndeny = [\"danger_*\"]\n";
+    assert_eq(tron_load_policy(t, pol), TRON_ERR_NONE, "policy parses");
+
+    var c1 = tool_call_new("thoth", "echo_hello", "{}", 1000);
+    assert_eq(verdict_kind(tron_check(t, c1)), VK_ALLOW, "allow-listed tool -> allow");
+    var c2 = tool_call_new("thoth", "danger_rm", "{}", 2000);
+    assert_eq(verdict_kind(tron_check(t, c2)), VK_DENY, "deny-listed tool -> deny");
+    var c3 = tool_call_new("thoth", "unlisted_tool", "{}", 3000);
+    assert_eq(verdict_kind(tron_check(t, c3)), VK_DENY, "unlisted tool -> deny (fail closed)");
+    var c4 = tool_call_new("mallory", "echo_hello", "{}", 4000);
+    assert_eq(verdict_kind(tron_check(t, c4)), VK_DENY, "unknown agent -> deny (fail closed)");
+    var c5 = tool_call_new("thoth", "thoth_run", "{\"cmd\":\"echo hi\"}", 5000);
+    assert_eq(verdict_kind(tron_check(t, c5)), VK_ALLOW, "thoth_run allowed by policy");
+    return 0;
+}
+
+# The audit chain: every tron_check logs to t-ron's AuditLogger (operational
+# ring + libro cryptographic chain). thoth's /audit surfaces it; this drives
+# the real vendored engine and asserts the counts, integrity, and the pure
+# kind-label glue thoth authors over it.
+fn test_audit() {
+    test_group("t-ron audit chain (vendored engine)");
+    # pure glue first — independent of any engine state.
+    assert(streq(audit_kind_str(VK_ALLOW), "allow"), "VK_ALLOW -> allow");
+    assert(streq(audit_kind_str(VK_DENY), "deny"), "VK_DENY -> deny");
+    assert(streq(audit_kind_str(VK_FLAG), "flag"), "VK_FLAG -> flag");
+    assert(streq(audit_kind_str(99), "?"), "unknown kind -> ?");
+
+    var t = tron_new(tron_config_default());
+    var pol = "[agent.\"thoth\"]\nallow = [\"echo_*\"]\ndeny = [\"danger_*\"]\n";
+    assert_eq(tron_load_policy(t, pol), TRON_ERR_NONE, "policy parses");
+    var a = tron_audit(t);
+    assert_eq(query_total_events(a), 0, "empty chain before any check");
+
+    tron_check(t, tool_call_new("thoth", "echo_hi", "{}", 1000));    # allow
+    tron_check(t, tool_call_new("thoth", "danger_rm", "{}", 2000));  # deny
+    tron_check(t, tool_call_new("thoth", "unlisted", "{}", 3000));   # deny (fail closed)
+
+    assert_eq(query_total_events(a), 3, "three gated actions logged");
+    assert_eq(query_total_denials(a), 2, "two denials counted");
+    assert_eq(audit_chain_len(a), 3, "libro chain has three entries");
+    assert_eq(audit_verify_chain(a), 0, "chain integrity intact (no tamper)");
+    # newest-first: the most recent event is the unlisted deny.
+    var recent = audit_recent(a, 10);
+    assert_eq(vec_len(recent), 3, "recent returns all three");
+    assert_eq(security_event_kind(vec_get(recent, 0)), VK_DENY, "newest is a deny");
+    assert(streq(security_event_tool_name(vec_get(recent, 0)), "unlisted"), "newest tool is 'unlisted'");
+    return 0;
+}
+
+# Agentic tool-round trace (roundlog): the session-local ring /audit surfaces.
+# Pure data-structure ops — no I/O — so the recording + ring eviction is testable.
+fn test_roundlog() {
+    test_group("agentic tool rounds (roundlog)");
+    roundlog_reset();
+    assert_eq(roundlog_total(), 0, "empty total");
+    assert_eq(roundlog_count(), 0, "empty count");
+
+    # one round (turn 5, round 1) with three calls: allow+ok, deny, noname
+    roundlog_open(5, 1);
+    roundlog_add_call("read_file", RL_ALLOWED, 1, 142, 87);   # 0.19.1: + ms, bytes
+    roundlog_add_call("write_file", RL_DENIED, 0, 0, 0);
+    roundlog_add_call(0, RL_NONAME, 0, 0, 0);
+    assert_eq(roundlog_total(), 1, "one round opened");
+    assert_eq(roundlog_count(), 1, "one round retained");
+    assert_eq(roundlog_round_turn(0), 5, "round turn = 5");
+    assert_eq(roundlog_round_no(0), 1, "round no = 1");
+    assert_eq(roundlog_round_ncalls(0), 3, "three calls recorded");
+    assert(streq(roundlog_call_name(0, 0), "read_file"), "call0 name copied");
+    assert_eq(roundlog_call_kind(0, 0), RL_ALLOWED, "call0 allowed");
+    assert_eq(roundlog_call_ok(0, 0), 1, "call0 ok");
+    assert_eq(roundlog_call_ms(0, 0), 142, "call0 elapsed ms recorded (0.19.1)");
+    assert_eq(roundlog_call_bytes(0, 0), 87, "call0 result bytes recorded (0.19.1)");
+    assert(streq(roundlog_call_name(0, 1), "write_file"), "call1 name copied");
+    assert_eq(roundlog_call_kind(0, 1), RL_DENIED, "call1 denied");
+    assert_eq(roundlog_call_kind(0, 2), RL_NONAME, "call2 noname");
+    assert(streq(roundlog_call_name(0, 2), ""), "call2 empty name (null in)");
+
+    # verdict labels
+    assert(streq(roundlog_kind_str(RL_ALLOWED), "allow"), "kind str allow");
+    assert(streq(roundlog_kind_str(RL_DENIED), "deny"), "kind str deny");
+    assert(streq(roundlog_kind_str(RL_NONAME), "noname"), "kind str noname");
+
+    # a round caps at RL_MAX_CALLS calls; extra calls are dropped (announced via report)
+    roundlog_reset();
+    roundlog_open(1, 1);
+    var c = 0;
+    while (c < (RL_MAX_CALLS + 3)) { roundlog_add_call("t", RL_ALLOWED, 1, 0, 0); c = c + 1; }
+    assert_eq(roundlog_round_ncalls(0), RL_MAX_CALLS, "round caps at RL_MAX_CALLS calls");
+
+    # ring eviction: open CAP+2 rounds (round_no = global index); oldest two drop off
+    roundlog_reset();
+    var g = 1;
+    while (g <= (ROUNDLOG_CAP + 2)) {
+        roundlog_open(1, g);
+        roundlog_add_call("x", RL_ALLOWED, 1, 0, 0);
+        g = g + 1;
+    }
+    assert_eq(roundlog_total(), ROUNDLOG_CAP + 2, "total counts every round opened");
+    assert_eq(roundlog_count(), ROUNDLOG_CAP, "ring retains only CAP rounds");
+    assert_eq(roundlog_round_no(0), 3, "oldest retained is global round 3 (1,2 evicted)");
+    assert_eq(roundlog_round_no(roundlog_count() - 1), ROUNDLOG_CAP + 2, "newest retained is last opened");
+    roundlog_reset();
+    return 0;
+}
+
+# The parallel executor's pure piece: the bounded snapshot copy that lifts each
+# call's name/args/id out of the (soon-overwritten) parser value into a stable
+# per-slot buffer before fan-out. The phasing + threads themselves are I/O and
+# exercised live against daimon; this guards the copy's bounds + NUL-termination.
+fn test_parallel() {
+    test_group("parallel tool-call snapshot copy");
+    var b[16];
+    var n = _par_cstr_copy(&b, 16, "read_file");
+    assert_eq(n, 9, "copies full length");
+    assert(streq(&b, "read_file"), "exact copy NUL-terminated");
+    # truncation: cap 4 keeps 3 bytes + NUL
+    var t = _par_cstr_copy(&b, 4, "abcdef");
+    assert_eq(t, 3, "truncates to cap-1 bytes");
+    assert(streq(&b, "abc"), "truncated copy NUL-terminated");
+    # null src -> empty string, length 0
+    var z = _par_cstr_copy(&b, 16, 0);
+    assert_eq(z, 0, "null src copies nothing");
+    assert(streq(&b, ""), "null src yields empty string");
+    return 0;
+}
+
+# Bounded request-assembly helpers: the defensive primitives every model/MCP-fed
+# builder now writes through, so an oversized untrusted string truncates in-buffer
+# instead of overflowing a fixed destination. Each check plants a canary one byte
+# past the cap and asserts it survives.
+fn test_bounds_hardening() {
+    test_group("bounded request assembly (untrusted-input clamp)");
+    # _append_cstr_cap stops at cap-1 (reserving the last byte for the caller's NUL);
+    # the byte at index cap is never touched.
+    var ab[64];
+    store8(&ab + 16, 123);                                     # canary at the cap
+    var n = _append_cstr_cap(&ab, 0, 16, "0123456789abcdefghij");   # 20 chars into cap 16
+    assert_eq(n, 15, "append_cstr_cap stops at cap-1");
+    assert_eq(load8(&ab + 16), 123, "append_cstr_cap leaves the byte at cap untouched");
+
+    # _json_escape_into_cap stops before a worst-case 6-byte escape can reach the
+    # cap, truncating on a character boundary (never a split escape).
+    var eb[64];
+    store8(&eb + 20, 77);                                      # canary
+    var nl = "\n\n\n\n\n\n\n\n\n\n\n\n";                        # 12 LF bytes, each -> "\n" (2 bytes)
+    var m = _json_escape_into_cap(&eb, 0, 20, nl);
+    assert(m <= 19, "json_escape_into_cap stays within cap-1");
+    assert_eq(load8(&eb + 20), 77, "json_escape_into_cap leaves the byte at cap untouched");
+    assert_eq(m - (m / 2) * 2, 0, "escape truncates on a character boundary (whole escapes only)");
+
+    # end-to-end: an oversized model `arguments` string cannot overflow the fixed
+    # 32 KB daimon request buffer — daimon_build_call clamps to DAIMON_REQ_CAP and a
+    # canary one byte past the buffer survives.
+    var big = alloc(DAIMON_REQ_CAP + 16);
+    store8(big + DAIMON_REQ_CAP, 200);                         # canary just past the cap
+    var hug = alloc(DAIMON_REQ_CAP + 1024);
+    var k = 0;
+    while (k < (DAIMON_REQ_CAP + 1023)) { store8(hug + k, 97); k = k + 1; }   # 'a' * (cap+1023)
+    store8(hug + (DAIMON_REQ_CAP + 1023), 0);
+    var bo = daimon_build_call(big, "x", hug);
+    assert(bo <= (DAIMON_REQ_CAP - 1), "daimon_build_call clamps oversized args to cap-1");
+    assert_eq(load8(big + DAIMON_REQ_CAP), 200, "oversized args do not overflow _daimon_req (canary intact)");
+    return 0;
+}
+
+# project read/explore tools (0.23.0): the jail (pure) + read_file/list_dir over real repo files. The jail
+# is the security boundary — absolute paths, '~', and '..' components are refused; in-project relative paths
+# pass. read_file/list_dir hit the filesystem (present-on-disk, not git status), so real files/dirs work.
+fn test_project() {
+    test_group("project read/explore tools (project.cyr, 0.23.0/0.23.1)");
+    # --- jail (pure): accept in-project relative, refuse escapes ---
+    assert_eq(_project_jail_ok("src/main.cyr"), 1, "relative in-project path ok");
+    assert_eq(_project_jail_ok("."), 1, "'.' (project root) ok");
+    assert_eq(_project_jail_ok("./src"), 1, "'./src' ok");
+    assert_eq(_project_jail_ok("a.b-c_d.cyr"), 1, "dotted/dashed filename ok (not a '..' component)");
+    assert_eq(_project_jail_ok("/etc/passwd"), 0, "absolute path refused");
+    assert_eq(_project_jail_ok("~/.ssh/id_rsa"), 0, "home '~' path refused");
+    assert_eq(_project_jail_ok(".."), 0, "bare '..' refused");
+    assert_eq(_project_jail_ok("../secret"), 0, "'../' escape refused");
+    assert_eq(_project_jail_ok("src/../../etc"), 0, "mid-path '..' escape refused");
+    assert_eq(_project_jail_ok("src/foo/.."), 0, "trailing '..' refused");
+
+    # --- read_file_tool: real read + jailed refusals + honest errors ---
+    var r = read_file_tool("{\"path\":\"VERSION\"}");
+    assert(load8(r) != 40, "read VERSION -> file content, not an error string (no leading '(')");
+    assert(strlen(r) > 0, "VERSION content is non-empty");
+    assert(_ui_contains(read_file_tool("{\"path\":\"/etc/passwd\"}"), "refused") == 1, "absolute path -> refused");
+    assert(_ui_contains(read_file_tool("{\"path\":\"../x\"}"), "refused") == 1, "'..' escape -> refused");
+    assert(_ui_contains(read_file_tool("{\"path\":\"src\"}"), "directory") == 1, "a directory -> 'use list_dir'");
+    assert(_ui_contains(read_file_tool("{\"path\":\"no_such_zzz.txt\"}"), "no such file") == 1, "missing file -> honest error");
+    assert(_ui_contains(read_file_tool("{}"), "missing required") == 1, "missing 'path' arg -> error");
+
+    # --- list_dir_tool: real listing + '/'-suffixed subdirs + jailed refusals ---
+    assert(_ui_contains(list_dir_tool("{\"path\":\"src\"}"), "main.cyr") == 1, "list src -> contains main.cyr");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"src\"}"), "vendor/") == 1, "subdirectories suffixed with '/'");
+    assert(_ui_contains(list_dir_tool("{}"), "VERSION") == 1, "default path (root) -> contains VERSION");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 1, "absolute dir -> refused (before any grant)");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"no_such_dir_zzz\"}"), "no such directory") == 1, "missing dir -> error");
+
+    # --- granted read roots (0.23.1): the USER-widened jail ---
+    assert_eq(project_grant_root("relative/path"), 0, "grant rejects a relative root");
+    assert_eq(project_grant_root("/"), 0, "grant rejects '/' (would defeat the jail)");
+    assert_eq(project_grant_root(""), 0, "grant rejects an empty root");
+    assert_eq(project_grant_root("~/repo"), 0, "grant rejects a '~' root (not absolute)");
+    var before = project_read_roots_count();
+    assert_eq(project_grant_root("/opt/demo/repo"), 1, "grant accepts an absolute root");
+    assert_eq(project_read_roots_count(), before + 1, "root count grew by one");
+    assert_eq(project_grant_root("/opt/demo/repo"), 1, "re-granting the same root is idempotent (1)");
+    assert_eq(project_read_roots_count(), before + 1, "dedup: exact duplicate does not grow the count");
+    assert_eq(project_grant_root("/opt/demo/repo/"), 1, "trailing-slash form accepted");
+    assert_eq(project_read_roots_count(), before + 1, "dedup: trailing-slash normalizes to the same root");
+
+    # --- _project_read_ok: in-project relative OR absolute-under-a-granted-root, never '..' ---
+    assert_eq(_project_read_ok("src/main.cyr"), 1, "in-project relative allowed");
+    assert_eq(_project_read_ok("/opt/demo/repo/x.txt"), 1, "absolute file under a granted root allowed");
+    assert_eq(_project_read_ok("/opt/demo/repo"), 1, "the granted root itself allowed");
+    assert_eq(_project_read_ok("/opt/demo/repository/x"), 0, "shared-prefix sibling is NOT under the root ('/'-boundary)");
+    assert_eq(_project_read_ok("/opt/demo"), 0, "a parent of the root is not under it");
+    assert_eq(_project_read_ok("/opt/demo/other/x"), 0, "absolute path outside every granted root refused");
+    assert_eq(_project_read_ok("/opt/demo/repo/../secret"), 0, "'..' under a granted root refused (no traversal)");
+    assert_eq(_project_read_ok("~/opt/demo/repo"), 0, "a '~' path is never a granted root");
+
+    # --- end-to-end: a grant flips a previously-refused absolute path (via /etc on the Linux test host) ---
+    assert_eq(project_grant_root("/etc"), 1, "grant /etc for the end-to-end check");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "/etc:") == 1, "granted absolute dir now lists (not refused)");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 0, "granted absolute dir is no longer refused");
+    assert(_ui_contains(read_file_tool("{\"path\":\"/etc/no_such_zzz\"}"), "no such file") == 1, "granted root: gate passes, missing file -> honest error (not refused)");
+    return 0;
+}

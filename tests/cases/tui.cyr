@@ -1,0 +1,1184 @@
+# tests/cases/tui.cyr — the rich TUI: composer/feed/soft-wrap/search/tab-complete/spinner/tree/mention/model-picker + theme.
+# Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
+# (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
+
+
+# Presentation surface (M7 / ADR-0009): the T0 floor must emit NO escapes (so
+# piped/CI output is byte-identical), and T1 must produce the design's exact amber.
+fn test_ui() {
+    test_group("presentation surface (M7 ui.cyr)");
+    # substrate helpers
+    assert_eq(_ui_contains("xterm-256color", "256color"), 1, "_ui_contains finds substring");
+    assert_eq(_ui_contains("xterm", "256color"), 0, "_ui_contains misses absent substring");
+    var db[8];
+    var dn = _ui_dec(&db, 0, 230); store8(&db + dn, 0);
+    assert(streq(&db, "230"), "_ui_dec writes decimal");
+
+    # T0 floor: every role + reset resolves to the empty string
+    ui_force(PT_PLAIN, CD_NONE);
+    assert_eq(ui_tier(), PT_PLAIN, "forced T0 plain");
+    assert_eq(streq(ui_sgr(ROLE_ACCENT), ""), 1, "T0 accent role -> empty (no escapes)");
+    assert_eq(streq(ui_sgr(ROLE_GREEN), ""), 1, "T0 green role -> empty");
+    assert_eq(streq(ui_reset(), ""), 1, "T0 reset -> empty");
+
+    # T1 truecolor: exact #e6ab5c amber + well-formed SGR envelope
+    ui_force(PT_ANSI, CD_TRUE);
+    var acc = ui_sgr(ROLE_ACCENT);
+    assert_eq(load8(acc), 27, "T1 SGR starts with ESC");
+    assert_eq(load8(acc + 1), 91, "T1 SGR second byte is '['");
+    assert_eq(_ui_contains(acc, "38;2;230;171;92"), 1, "T1 accent is the #e6ab5c truecolor SGR");
+    var rexp[8];
+    store8(&rexp, 27); store8(&rexp + 1, 91); store8(&rexp + 2, 48); store8(&rexp + 3, 109); store8(&rexp + 4, 0);
+    assert_eq(streq(ui_reset(), &rexp), 1, "T1 reset is ESC[0m");
+
+    # 256-color fallback maps the accent to its cube index
+    ui_force(PT_ANSI, CD_256);
+    assert_eq(_ui_contains(ui_sgr(ROLE_ACCENT), "38;5;179"), 1, "256-color accent -> index 179");
+
+    # --tier preference (0.11.10): the pure name->pref mapping (the tty-dependent detection —
+    # auto/rich -> PT_RICH on a real terminal — is verified live, not here, since the suite may
+    # run on a tty or piped).
+    assert_eq(ui_tier_pref_from_name("auto"), TIER_AUTO, "tier name 'auto' -> TIER_AUTO");
+    assert_eq(ui_tier_pref_from_name("rich"), TIER_RICH, "tier name 'rich' -> TIER_RICH");
+    assert_eq(ui_tier_pref_from_name("simple"), TIER_SIMPLE, "tier name 'simple' -> TIER_SIMPLE");
+    assert_eq(ui_tier_pref_from_name("bogus"), 0 - 1, "unknown tier name -> -1");
+
+    # restore detection (the suite runs piped -> resolves back to T0)
+    ui_set_tier_pref(TIER_AUTO);
+    ui_detect_tier();
+    return 0;
+}
+
+# T2 rich-TUI (0.9.0): the PURE pieces — the composer line-editor state machine and
+# the layout geometry. The raw-mode I/O loop is verified on a live tty, not here.
+fn test_tui() {
+    test_group("T2 composer + layout (tui.cyr)");
+    led_reset();
+    led_feed(KEY_CHAR, 104); led_feed(KEY_CHAR, 105);            # h i
+    assert_eq(led_len(), 2, "two chars typed");
+    assert(streq(led_buf(), "hi"), "buffer is 'hi'");
+    led_feed(KEY_LEFT, 0);
+    led_feed(KEY_CHAR, 88);                                      # X before 'i'
+    assert(streq(led_buf(), "hXi"), "insert at cursor");
+    assert_eq(led_cur(), 2, "cursor sits after the inserted char");
+    led_feed(KEY_BACKSPACE, 0);
+    assert(streq(led_buf(), "hi"), "backspace removes the inserted char");
+    led_feed(KEY_END, 0); led_feed(KEY_CHAR, 33);                # End, '!'
+    assert(streq(led_buf(), "hi!"), "End + append");
+    assert_eq(led_feed(KEY_ENTER, 0), ACT_SUBMIT, "Enter submits");
+    led_feed(KEY_KILL, 0);
+    assert_eq(led_len(), 0, "Ctrl-U clears the line");
+    assert_eq(led_feed(KEY_EOF, 0), ACT_EOF, "real stdin EOF -> exit");
+    led_feed(KEY_CHAR, 122);                                    # 'z' (non-empty line)
+    assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
+    # geometry (0.11.9: faint rules + dynamic multi-line composer; pure (rows,lines,show))
+    assert_eq(tui_status_row(), 1, "status bar at row 1");
+    assert_eq(tui_hint_row(24), 24, "keybinding hint at the last row");
+    assert_eq(tui_sep_top_row(), 2, "top rule under the status bar");
+    assert_eq(tui_composer_bot(24), 23, "composer block bottom just above the hint");
+    assert_eq(tui_composer_top(24, 1, 1), 23, "1-line composer top == bottom (one row)");
+    assert_eq(tui_composer_top(24, 2, 1), 22, "a 2-line composer grows up one row");
+    assert_eq(tui_sep_bottom_row(24, 1, 1), 22, "bottom rule above a 1-line composer");
+    assert_eq(tui_feed_top(1), 3, "feed starts below the status bar + its rule");
+    assert_eq(tui_feed_top(0), 1, "feed reclaims rows 1-2 when status hidden");
+    assert_eq(tui_feed_bot(24, 1, 1), 21, "feed bottom above the bottom rule + 1-line composer");
+    assert_eq(tui_feed_bot(24, 2, 1), 20, "a 2-line composer pushes the feed bottom up one");
+    assert_eq(tui_composer_height(24, 1, 1), 1, "one logical line -> one composer row");
+    assert_eq(tui_composer_height(24, 20, 1), 8, "composer height clamps to COMPOSER_MAX_ROWS");
+    assert(tui_composer_max(8, 0) > tui_composer_max(8, 1), "hidden status frees more composer rows (below the clamp)");
+    # slash-command palette matchers
+    assert_eq(_buf_has_space("/seams x", 8), 1, "space detected -> command token complete");
+    assert_eq(_buf_has_space("/se", 3), 0, "no space -> still typing the token");
+    assert_eq(tui_palette_count("/s"), 2, "'/s' matches /seams + /state");
+    assert_eq(tui_palette_count("/se"), 1, "'/se' matches /seams only");
+    assert_eq(tui_palette_count("/m"), 2, "'/m' matches /model + /models");
+    assert_eq(tui_palette_count("/c"), 3, "'/c' matches /call + /clear + /copy");
+    assert_eq(tui_palette_count("/co"), 1, "'/co' matches /copy only");
+    assert_eq(tui_palette_count("/copy"), 1, "'/copy' matches /copy");
+    assert_eq(tui_palette_count("/t"), 2, "'/t' matches /tools + /theme");
+    assert_eq(tui_palette_count("/zz"), 0, "no command matches '/zz'");
+    led_reset();
+    led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 115);            # "/s"
+    assert_eq(tui_palette_active(), 1, "palette active while typing '/s'");
+    led_feed(KEY_CHAR, 32);                                     # "/s "
+    assert_eq(tui_palette_active(), 0, "palette closes once a space is typed");
+    led_reset();
+    led_feed(KEY_CHAR, 104);                                    # "h"
+    assert_eq(tui_palette_active(), 0, "palette inactive for non-slash input");
+    # multi-line composer (0.11.9): KEY_NEWLINE inserts '\n'; logical-line + cursor geometry.
+    led_reset();
+    assert_eq(led_lines(), 1, "empty buffer is one logical line");
+    led_feed(KEY_CHAR, 97);                                     # "a"
+    led_feed(KEY_NEWLINE, 0);                                   # newline
+    led_feed(KEY_CHAR, 98); led_feed(KEY_CHAR, 99);            # "bc" -> "a\nbc"
+    assert_eq(led_len(), 4, "a + newline + bc = 4 bytes");
+    assert_eq(led_lines(), 2, "one newline -> two logical lines");
+    assert_eq(led_cursor_line(), 1, "cursor on the second logical line");
+    assert_eq(led_cursor_col(), 2, "cursor at column 2 of 'bc'");
+    assert_eq(led_line_len(0), 1, "line 0 'a' has length 1");
+    assert_eq(led_line_len(1), 2, "line 1 'bc' has length 2");
+    assert_eq(led_line_start(1), 2, "line 1 starts after 'a' + newline");
+    # Up/Down move between lines (1) and report the top/bottom edge (0) so recall takes over.
+    assert_eq(led_up(), 1, "Up moves to the first line");
+    assert_eq(led_cursor_line(), 0, "now on line 0");
+    assert_eq(led_cursor_col(), 1, "column clamps to line 0's length (1)");
+    assert_eq(led_up(), 0, "Up on the first line is an edge");
+    assert_eq(led_down(), 1, "Down moves back down a line");
+    assert_eq(led_down(), 0, "Down on the last line is an edge");
+    led_feed(KEY_KILL, 0);
+    assert_eq(led_lines(), 1, "Ctrl-U clears a multi-line buffer to one line");
+    # backspace over a newline joins the two logical lines
+    led_reset();
+    led_feed(KEY_CHAR, 97); led_feed(KEY_NEWLINE, 0); led_feed(KEY_CHAR, 98);   # "a\nb"
+    assert_eq(led_lines(), 2, "'a' newline 'b' is two lines");
+    led_feed(KEY_LEFT, 0);                                      # cursor between the newline and 'b'
+    led_feed(KEY_BACKSPACE, 0);                                 # remove the newline
+    assert_eq(led_lines(), 1, "backspace over the newline joins the lines");
+    assert(streq(led_buf(), "ab"), "joined buffer is 'ab'");
+    # --- composer SOFT-WRAP (0.25.1): a long logical line wraps across physical rows + grows the composer ---
+    _tui_cols = 16;                             # avail = cols(16) - 6 = 10 content cols per physical row
+    led_reset();
+    var wi = 0; while (wi < 25) { led_feed(KEY_CHAR, 120); wi = wi + 1; }   # 25 'x' on ONE logical line
+    assert_eq(led_lines(), 1, "soft-wrap: still one LOGICAL line");
+    assert_eq(_comp_avail(), 10, "avail = cols(16) - 6");
+    assert_eq(_comp_total_rows(), 3, "25 bytes / 10 + 1 = 3 physical rows (the composer grows, no h-scroll)");
+    assert_eq(_comp_cursor_prow(), 2, "cursor at col 25 -> physical row 2");
+    assert_eq(_comp_prow_to_offset(1, 3), 13, "phys row 1, vcol 3 -> byte offset 13");
+    assert_eq(led_up(), 1, "Up moves up one WRAPPED row (not straight to history)");
+    assert_eq(led_cur(), 15, "cursor now at offset 15 (row 1, vcol 5)");
+    assert_eq(led_up(), 1, "Up again to the top wrapped row");
+    assert_eq(led_cur(), 5, "cursor at offset 5 (row 0, vcol 5)");
+    assert_eq(led_up(), 0, "Up on the top physical row is an edge (history recall)");
+    assert_eq(led_down(), 1, "Down moves back down a wrapped row");
+    assert_eq(led_cur(), 15, "cursor back at offset 15");
+    led_reset();                                # a wrapped line + a hard newline: rows sum across logical lines
+    var wj = 0; while (wj < 15) { led_feed(KEY_CHAR, 97); wj = wj + 1; }    # 15 'a' -> 2 rows
+    led_feed(KEY_NEWLINE, 0);
+    led_feed(KEY_CHAR, 98);                                                 # 'b' -> 1 row
+    assert_eq(led_lines(), 2, "two logical lines");
+    assert_eq(_comp_total_rows(), 3, "15-char line (2 rows) + 'b' (1 row) = 3 physical rows");
+    _tui_cols = 80;                             # restore width for later tests
+    led_reset();
+    # a newline in the buffer closes the slash palette (multi-line is never a /command)
+    led_reset();
+    led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 115);           # "/s"
+    assert_eq(tui_palette_active(), 1, "palette active for '/s'");
+    led_feed(KEY_NEWLINE, 0);                                  # "/s" + newline
+    assert_eq(tui_palette_active(), 0, "a newline closes the palette");
+    led_reset();
+
+    # key decode (0.11.9): the pure CSI dispatch. Legacy forms keep their meaning; the kitty
+    # CSI-u 'u' final maps Shift+Enter -> newline and the Ctrl-combos back to their keys.
+    test_group("key decode: CSI + kitty CSI-u (tui.cyr)");
+    assert_eq(_tui_csi_final(65, 0, 0 - 1), KEY_UP, "CSI A -> Up");
+    assert_eq(_tui_csi_final(66, 0, 0 - 1), KEY_DOWN, "CSI B -> Down");
+    assert_eq(_tui_csi_final(67, 0, 0 - 1), KEY_RIGHT, "CSI C -> Right");
+    assert_eq(_tui_csi_final(68, 0, 0 - 1), KEY_LEFT, "CSI D -> Left");
+    assert_eq(_tui_csi_final(72, 0, 0 - 1), KEY_HOME, "CSI H -> Home");
+    assert_eq(_tui_csi_final(70, 0, 0 - 1), KEY_END, "CSI F -> End");
+    assert_eq(_tui_csi_final(65, 1, 2), KEY_SCROLL_UP, "CSI 1;2A (Shift+Up, parsed mod 2) -> feed scroll up");
+    assert_eq(_tui_csi_final(66, 1, 2), KEY_SCROLL_DOWN, "CSI 1;2B (Shift+Down, parsed mod 2) -> feed scroll down");
+    assert_eq(_tui_csi_final(65, 1, 0 - 1), KEY_UP, "CSI A (no modifier) -> plain Up, not scroll");
+    assert_eq(_tui_csi_final(126, 5, 0 - 1), KEY_PGUP, "CSI 5~ -> PageUp");
+    assert_eq(_tui_csi_final(126, 6, 2), KEY_PGDN, "CSI 6;2~ (parsed mod 2) -> PageDown (modifier ignored)");
+    assert_eq(_tui_csi_final(117, 13, 2), KEY_NEWLINE, "CSI 13;2u (Shift+Enter) -> newline");
+    assert_eq(_tui_csi_final(117, 13, 0 - 1), KEY_ENTER, "CSI 13u (bare Enter) -> submit");
+    assert_eq(_tui_kitty_u(13, 3), KEY_NEWLINE, "kitty Alt+Enter (13;3) -> newline");
+    assert_eq(_tui_kitty_u(120, 5), KEY_CTRLC, "kitty Ctrl-X (120;5) -> exit");
+    assert_eq(_tui_kitty_u(99, 5), KEY_CTRLC, "kitty Ctrl-C (99;5) -> exit");
+    assert_eq(_tui_kitty_u(117, 5), KEY_KILL, "kitty Ctrl-U (117;5) -> kill line");
+    assert_eq(_tui_kitty_u(103, 5), KEY_TOGGLE_STATUS, "kitty Ctrl-G (103;5) -> toggle status");
+    assert_eq(_tui_kitty_u(98, 5), KEY_TOGGLE_TREE, "kitty Ctrl-B (98;5) -> toggle tree");
+    assert_eq(_tui_kitty_u(116, 5), KEY_TOGGLE_THEME, "kitty Ctrl-T (116;5) -> toggle theme");
+    assert_eq(_tui_kitty_u(97, 5), KEY_HOME, "kitty Ctrl-A (97;5) -> Home");
+    assert_eq(_tui_kitty_u(101, 5), KEY_END, "kitty Ctrl-E (101;5) -> End");
+    assert_eq(_tui_kitty_u(27, 0 - 1), KEY_NONE, "kitty Esc (27) -> ignored");
+    # bracketed paste (0.17.0): the begin marker ESC[200~ decodes to KEY_PASTE; the end marker
+    # ESC[201~ (and any other ~-final) stays KEY_NONE; the legacy 5~/6~ page keys are untouched.
+    assert_eq(_tui_csi_final(126, 200, 0 - 1), KEY_PASTE, "CSI 200~ -> paste begin");
+    assert_eq(_tui_csi_final(126, 201, 0 - 1), KEY_NONE, "CSI 201~ (paste end) -> ignored");
+    assert_eq(_tui_csi_final(126, 5, 0 - 1), KEY_PGUP, "CSI 5~ still PageUp (paste decode didn't shadow it)");
+
+    # led_paste (0.17.0): the PURE paste filter+insert. Newlines collapse to '\n'; a tab becomes
+    # one space; ESC and other control bytes are DROPPED (no escape injection); printable text is
+    # inserted at the cursor. Build inputs byte-exactly so control bytes are unambiguous.
+    test_group("bracketed paste filter (tui.cyr)");
+    var pb[16];
+    # 1. plain LF multi-line
+    led_reset();
+    led_paste("a\nb", 3);
+    assert(streq(led_buf(), "a\nb"), "LF paste keeps the newline");
+    assert_eq(led_len(), 3, "LF paste is 3 bytes");
+    assert_eq(led_lines(), 2, "LF paste is two logical lines (does NOT submit)");
+    # 2. CRLF collapses to ONE newline
+    led_reset();
+    store8(&pb + 0, 97); store8(&pb + 1, 13); store8(&pb + 2, 10); store8(&pb + 3, 98);   # a CR LF b
+    led_paste(&pb, 4);
+    assert(streq(led_buf(), "a\nb"), "CRLF collapses to one newline");
+    assert_eq(led_len(), 3, "CRLF paste is 3 bytes, not 4");
+    assert_eq(led_lines(), 2, "CRLF paste is two logical lines");
+    # 3. lone CR -> newline
+    led_reset();
+    store8(&pb + 0, 97); store8(&pb + 1, 13); store8(&pb + 2, 98);                          # a CR b
+    led_paste(&pb, 3);
+    assert(streq(led_buf(), "a\nb"), "lone CR becomes a newline");
+    # 4. CR as the FINAL byte (locks the i+1<len source-boundary guard; nit fold)
+    led_reset();
+    store8(&pb + 0, 97); store8(&pb + 1, 13);                                                # a CR
+    led_paste(&pb, 2);
+    assert(streq(led_buf(), "a\n"), "trailing lone CR -> a single newline");
+    assert_eq(led_lines(), 2, "trailing CR yields two logical lines");
+    # 5. control filtering: ESC + BEL dropped; the bytes AFTER an ESC ('[31m') survive as LITERAL
+    #    text (proves a paste can't inject a color/escape sequence into the render)
+    led_reset();
+    store8(&pb + 0, 97); store8(&pb + 1, 27); store8(&pb + 2, 91); store8(&pb + 3, 51);
+    store8(&pb + 4, 49); store8(&pb + 5, 109); store8(&pb + 6, 98); store8(&pb + 7, 7);
+    store8(&pb + 8, 99);                                                                     # a ESC [ 3 1 m b BEL c
+    led_paste(&pb, 9);
+    assert(streq(led_buf(), "a[31mbc"), "ESC + BEL dropped; '[31m' survives as literal text");
+    assert_eq(led_len(), 7, "9 pasted bytes - 2 controls = 7 kept");
+    # 6. DEL (127) dropped
+    led_reset();
+    store8(&pb + 0, 97); store8(&pb + 1, 127); store8(&pb + 2, 98);                          # a DEL b
+    led_paste(&pb, 3);
+    assert(streq(led_buf(), "ab"), "DEL (127) dropped");
+    # 7. tab -> a single space (composer stays printable)
+    led_reset();
+    store8(&pb + 0, 9); store8(&pb + 1, 120);                                                # TAB x
+    led_paste(&pb, 2);
+    assert(streq(led_buf(), " x"), "tab becomes one space");
+    assert_eq(load8(led_buf()), 32, "first byte is a space, not a raw tab");
+    # 8. paste inserts AT THE CURSOR (not appended)
+    led_reset();
+    led_feed(KEY_CHAR, 120); led_feed(KEY_CHAR, 121);                                        # "xy"
+    led_feed(KEY_LEFT, 0);                                                                    # cursor between x and y
+    led_paste("AB", 2);
+    assert(streq(led_buf(), "xABy"), "paste inserts at the cursor");
+    # 9. a paste larger than the composer cap stops at COMPOSER_CAP-1 (no OOB; excess dropped)
+    led_reset();
+    var big = alloc(COMPOSER_CAP + 8);
+    var bi = 0;
+    while (bi < (COMPOSER_CAP + 8)) { store8(big + bi, 97); bi = bi + 1; }                    # all 'a'
+    led_paste(big, COMPOSER_CAP + 8);
+    assert_eq(led_len(), COMPOSER_CAP - 1, "over-cap paste stops at COMPOSER_CAP-1 (bounded)");
+    led_reset();
+
+    # word-wise editing (0.17.1): decode + the pure editor ops. Decode gets the PARSED ints (the
+    # 0.11.9 lesson — feed the decoder what the parser emits, not the wire bytes).
+    test_group("word-wise editing (tui.cyr)");
+    # decode: Ctrl/Alt-arrow word motion (mod param 1+bitmask: Ctrl=5, Alt=3), Ctrl-W, Ctrl-K
+    assert_eq(_tui_csi_final(68, 1, 5), KEY_WORD_LEFT, "CSI 1;5D (Ctrl-Left) -> word left");
+    assert_eq(_tui_csi_final(67, 1, 5), KEY_WORD_RIGHT, "CSI 1;5C (Ctrl-Right) -> word right");
+    assert_eq(_tui_csi_final(68, 1, 3), KEY_WORD_LEFT, "CSI 1;3D (Alt-Left) -> word left");
+    assert_eq(_tui_csi_final(67, 1, 3), KEY_WORD_RIGHT, "CSI 1;3C (Alt-Right) -> word right");
+    assert_eq(_tui_csi_final(68, 1, 2), KEY_LEFT, "CSI 1;2D (Shift-Left) stays plain Left (no regression)");
+    assert_eq(_tui_csi_final(68, 0, 0 - 1), KEY_LEFT, "CSI D (plain Left) stays plain");
+    assert_eq(_tui_csi_final(67, 0, 0 - 1), KEY_RIGHT, "CSI C (plain Right) stays plain");
+    assert_eq(_tui_kitty_u(119, 5), KEY_DELWORD, "kitty Ctrl-W (119;5) -> delete word");
+    assert_eq(_tui_kitty_u(107, 5), KEY_KILL_EOL, "kitty Ctrl-K (107;5) -> kill to EOL");
+    assert_eq(_tui_kitty_u(98, 3), KEY_WORD_LEFT, "kitty Alt-b (98;3) -> word left");
+    assert_eq(_tui_kitty_u(102, 3), KEY_WORD_RIGHT, "kitty Alt-f (102;3) -> word right");
+    assert_eq(_tui_kitty_u(98, 5), KEY_TOGGLE_TREE, "kitty Ctrl-B (98;5) still toggles tree (Alt-b didn't shadow it)");
+    # word motion over "foo bar baz" (11 bytes)
+    led_reset();
+    led_paste("foo bar baz", 11);                        # cursor at end (11)
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 8, "word-left -> start of 'baz'");
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 4, "word-left -> start of 'bar'");
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 0, "word-left -> start of 'foo'");
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 0, "word-left at column 0 is a no-op (no OOB read)");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 3, "word-right -> end of 'foo'");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 7, "word-right -> end of 'bar'");
+    # punctuation is a word char; word-right skips a multi-space run
+    led_reset();
+    led_paste("a.b   cd", 8);                            # "a.b" + 3 spaces + "cd"
+    led_feed(KEY_HOME, 0);
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 3, "'a.b' is one word (punctuation is a word char)");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 8, "word-right skips the 3-space run to end of 'cd'");
+    # Ctrl-W (delete word before cursor)
+    led_reset();
+    led_paste("foo bar", 7);
+    led_feed(KEY_DELWORD, 0);
+    assert(streq(led_buf(), "foo "), "Ctrl-W deletes the trailing word 'bar'");
+    assert_eq(led_cur(), 4, "cursor at the word start after Ctrl-W");
+    led_feed(KEY_DELWORD, 0);
+    assert(streq(led_buf(), ""), "Ctrl-W again clears 'foo '");
+    # Ctrl-W across a newline -> deletes the word + the newline, joining (reflow case: led_lines drops)
+    led_reset();
+    led_paste("foo\nbar", 7);
+    assert_eq(led_lines(), 2, "'foo\\nbar' is two logical lines");
+    led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0);   # cursor to index 4 (start of 'bar')
+    assert_eq(led_cur(), 4, "cursor at the start of 'bar'");
+    led_feed(KEY_DELWORD, 0);
+    assert(streq(led_buf(), "bar"), "Ctrl-W across the newline deletes 'foo' + the newline");
+    assert_eq(led_lines(), 1, "Ctrl-W across the newline joins to one line");
+    # Ctrl-K (kill to end of line) + the buffer-end no-op
+    led_reset();
+    led_paste("abcd", 4);
+    led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0);        # cursor to index 2
+    led_feed(KEY_KILL_EOL, 0);
+    assert(streq(led_buf(), "ab"), "Ctrl-K kills from the cursor to end of line");
+    led_feed(KEY_KILL_EOL, 0);
+    assert(streq(led_buf(), "ab"), "Ctrl-K at the buffer end is a no-op");
+    # Ctrl-K at end-of-line deletes the newline (join; reflow case)
+    led_reset();
+    led_paste("ab\ncd", 5);
+    led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0); led_feed(KEY_LEFT, 0);   # cursor to index 2 (on the newline)
+    assert_eq(led_cur(), 2, "cursor sits on the newline (end of line 0)");
+    led_feed(KEY_KILL_EOL, 0);
+    assert(streq(led_buf(), "abcd"), "Ctrl-K at end-of-line deletes the newline (join)");
+    assert_eq(led_lines(), 1, "the join collapses to one logical line");
+    # empty buffer: every word op is a bounds-safe no-op
+    led_reset();
+    led_feed(KEY_WORD_LEFT, 0);
+    assert_eq(led_cur(), 0, "word-left on an empty buffer -> no-op");
+    led_feed(KEY_WORD_RIGHT, 0);
+    assert_eq(led_cur(), 0, "word-right on an empty buffer -> no-op");
+    led_feed(KEY_DELWORD, 0);
+    assert_eq(led_len(), 0, "Ctrl-W on an empty buffer -> no-op");
+    led_feed(KEY_KILL_EOL, 0);
+    assert_eq(led_len(), 0, "Ctrl-K on an empty buffer -> no-op");
+    led_reset();
+
+    # SGR mouse (0.17.2): the pure button-code decode. cb = xterm SGR button (low 2 bits = button,
+    # bit 5 = motion, bit 6 = wheel); final = 'M'(77) press / 'm'(109) release / 0 = no terminator.
+    test_group("SGR mouse decode (tui.cyr)");
+    assert_eq(_tui_mouse_decode(64, 77), KEY_SCROLL_UP, "wheel up (cb 64) -> scroll feed back");
+    assert_eq(_tui_mouse_decode(65, 77), KEY_SCROLL_DOWN, "wheel down (cb 65) -> scroll feed forward");
+    assert_eq(_tui_mouse_decode(68, 77), KEY_SCROLL_UP, "Shift+wheel-up (cb 64+4) still scrolls (modifier ignored)");
+    assert_eq(_tui_mouse_decode(66, 77), KEY_NONE, "horizontal wheel-left (cb 66) is ignored (not vertical scroll)");
+    assert_eq(_tui_mouse_decode(67, 77), KEY_NONE, "horizontal wheel-right (cb 67) is ignored");
+    assert_eq(_tui_mouse_decode(0, 77), KEY_MOUSE, "left-button PRESS -> click");
+    assert_eq(_tui_mouse_decode(0, 109), KEY_NONE, "left-button RELEASE ('m') is ignored (click fires once, on press)");
+    assert_eq(_tui_mouse_decode(1, 77), KEY_NONE, "middle-button press is ignored");
+    assert_eq(_tui_mouse_decode(2, 77), KEY_NONE, "right-button press is ignored");
+    assert_eq(_tui_mouse_decode(32, 77), KEY_NONE, "motion (bit 5) is ignored (we don't track drag)");
+    assert_eq(_tui_mouse_decode(0, 0), KEY_NONE, "no terminator (EOF/malformed) -> KEY_NONE");
+    return 0;
+}
+
+# Feed escape-aware clip (0.9.1): paint a stored line into a width-W column
+# without severing a CSI / UTF-8 glyph, suppressing ESC[K, never overrunning
+# dst_cap, and counting color escapes as zero width. Pure — the load-bearing
+# primitive for the self-managed feed (and the 0.9.3 left-column pane).
+fn test_feed() {
+    test_group("feed escape-aware clip (feed.cyr)");
+    feed_init();
+    var dst[512];
+    var w = feed_clip(&dst, 512, "hello", 5, 3);
+    store8(&dst + w, 0);
+    assert(streq(&dst, "hel"), "clip 'hello' to 3 cols -> 'hel'");
+    assert_eq(w, 3, "wrote 3 bytes for 3 ASCII cols");
+    var w0 = feed_clip(&dst, 512, "hi", 2, 80);
+    store8(&dst + w0, 0);
+    assert(streq(&dst, "hi"), "short line copied whole under a wide column");
+    # visible width counts glyphs, never the escapes
+    assert_eq(feed_visible_cols("\x1b[33mAB\x1b[0m", 11), 2, "visible cols counts glyphs not escapes");
+    assert_eq(feed_visible_cols("plain", 5), 5, "visible cols of plain text");
+    # a clipped color span keeps its opening escape + the glyph + a closing reset
+    var w1 = feed_clip(&dst, 512, "\x1b[33mAB\x1b[0m", 11, 1);
+    assert_eq(w1, 10, "color clip: open escape (5) + 'A' (1) + reset (4)");
+    assert_eq(load8(&dst), 27, "clipped row begins with ESC (color preserved)");
+    assert_eq(load8(&dst + 5), 65, "the single visible glyph is 'A'");
+    assert_eq(load8(&dst + 6), 27, "trailing reset escape follows the glyph");
+    # dst_cap is a hard ceiling even with a huge max_cols (no heap overrun)
+    var w2 = feed_clip(&dst, 4, "hello", 5, 100);
+    assert_eq(w2, 4, "dst_cap=4 clamps output to 4 bytes");
+    # ESC[K is dropped (it would erase to the physical eol, scribbling a neighbour)
+    var w3 = feed_clip(&dst, 512, "A\x1b[KB", 5, 80);
+    store8(&dst + w3, 0);
+    assert(streq(&dst, "AB"), "ESC[K dropped from the painted row");
+    assert_eq(w3, 2, "ESC[K contributes zero bytes");
+    # only a real CSI ESC[...K is suppressed; a 2-byte ESC-K (which untrusted model
+    # output could contain) is preserved verbatim, not dropped
+    var w3b = feed_clip(&dst, 512, "A\x1bKB", 4, 80);
+    assert_eq(w3b, 4, "2-byte ESC-K preserved (only CSI ESC[...K is suppressed)");
+    # a color escape after the clip point is copied WHOLE, never severed mid-CSI
+    var w4 = feed_clip(&dst, 512, "X\x1b[31mY", 7, 1);
+    assert_eq(load8(&dst), 88, "first visible glyph 'X'");
+    assert_eq(w4, 6, "'X' + the whole ESC[31m (zero-width), 'Y' clipped");
+    # a UTF-8 glyph is one column and is copied as a unit (never half a codepoint)
+    var w5 = feed_clip(&dst, 512, "\xc3\xa9z", 3, 1);   # 'e-acute' (2 bytes) + 'z'
+    assert_eq(w5, 2, "one UTF-8 glyph = one col, copied whole; 'z' clipped");
+    assert_eq(load8(&dst), 195, "UTF-8 lead byte copied");
+    assert_eq(load8(&dst + 1), 169, "UTF-8 continuation copied (glyph not severed)");
+    return 0;
+}
+
+# Feed ring (0.9.1): feed_write accumulates a logical line across calls, seals a
+# slot per newline (the '\n' itself not stored), seals a bare newline as a blank
+# row, flushes an un-newlined tail, and evicts the oldest line in O(1) when the
+# ring fills. Row 0 = the oldest LIVE line.
+fn test_feed_ring() {
+    test_group("feed ring buffer (feed.cyr)");
+    feed_init();
+    assert_eq(feed_count(), 0, "empty ring");
+    feed_write("a", 1);
+    feed_write("b", 1);
+    assert_eq(feed_count(), 0, "no newline yet -> nothing sealed");
+    feed_write("\n", 1);
+    assert_eq(feed_count(), 1, "newline seals one slot");
+    assert_eq(feed_line_len(0), 2, "sealed slot holds 2 bytes");
+    var p = feed_line_ptr(0);
+    assert_eq(load8(p), 97, "first byte 'a'");
+    assert_eq(load8(p + 1), 98, "second byte 'b' (multi-call line reconstructed)");
+    assert_eq(feed_vis(0), 2, "cached visible cols = 2");
+    feed_write("\n", 1);
+    assert_eq(feed_count(), 2, "bare newline yields a blank row");
+    assert_eq(feed_line_len(1), 0, "blank row has zero length");
+    feed_write("tail", 4);
+    feed_flush_pending();
+    assert_eq(feed_count(), 3, "flush seals the un-newlined tail");
+    assert_eq(feed_line_len(2), 4, "tail row holds 4 bytes");
+    # eviction: write FEED_ROWS+3 distinct lines; count caps, the oldest 3 drop.
+    feed_init();
+    var ch[2];
+    store8(&ch + 1, 10);                       # trailing newline (constant)
+    var i = 0;
+    while (i < (FEED_ROWS + 3)) {
+        store8(&ch, 65 + (i % 26));            # 'A'..'Z' cycling
+        feed_write(&ch, 2);
+        i = i + 1;
+    }
+    assert_eq(feed_count(), FEED_ROWS, "ring caps at FEED_ROWS lines");
+    # the 4th line written (index 3) is the oldest survivor: 'A' + (3%26) = 'D'.
+    assert_eq(load8(feed_line_ptr(0)), 68, "oldest surviving line is the 4th written (O(1) head-advance eviction)");
+    # feed_clear empties the ring (the /clear command + per-session reset)
+    feed_scroll_set(5);
+    feed_clear();
+    assert_eq(feed_count(), 0, "feed_clear empties the ring");
+    assert_eq(feed_scroll(), 0, "feed_clear resets the scroll offset");
+    return 0;
+}
+
+# Soft-wrap (0.11.3): feed_rows_for (physical rows a logical line occupies at a
+# column width), feed_clip_seg (paint a visible-column WINDOW of a line, carrying
+# SGR color across the wrap boundary), and _feed_total_phys (the document's
+# soft-wrapped physical height — the painter's scroll oracle). All PURE; the painter
+# itself (feed_repaint) is TUI-only and verifies on a real tty.
+fn test_softwrap() {
+    test_group("soft-wrap (feed.cyr): rows_for / clip_seg / total_phys");
+    # feed_rows_for: ceil(vis/width), blank = 1 row, width clamped >= 1.
+    assert_eq(feed_rows_for(0, 80), 1, "blank line (vis 0) is one row");
+    assert_eq(feed_rows_for(5, 80), 1, "narrow line is one row");
+    assert_eq(feed_rows_for(80, 80), 1, "exactly-full line is one row");
+    assert_eq(feed_rows_for(81, 80), 2, "one col over wraps to two rows");
+    assert_eq(feed_rows_for(160, 80), 2, "exactly two rows");
+    assert_eq(feed_rows_for(161, 80), 3, "one over two rows -> three");
+    assert_eq(feed_rows_for(10, 1), 10, "width 1: one row per glyph");
+    assert_eq(feed_rows_for(7, 0), 7, "width < 1 clamps to 1 (no div-by-zero)");
+
+    var dst[512];
+    # the window: skip_cols glyphs, then up to max_cols.
+    var w = feed_clip_seg(&dst, 512, "abcdef", 6, 0, 3);
+    store8(&dst + w, 0);
+    assert(streq(&dst, "abc"), "seg [0,3) of 'abcdef' -> 'abc'");
+    assert_eq(w, 3, "first segment wrote 3 bytes");
+    var w2 = feed_clip_seg(&dst, 512, "abcdef", 6, 3, 3);
+    store8(&dst + w2, 0);
+    assert(streq(&dst, "def"), "seg [3,6) of 'abcdef' -> 'def'");
+    var w3 = feed_clip_seg(&dst, 512, "abcdef", 6, 3, 10);
+    store8(&dst + w3, 0);
+    assert(streq(&dst, "def"), "last segment: only the remaining glyphs");
+    assert_eq(w3, 3, "remaining-glyph segment wrote 3 bytes");
+    # a segment whose skip is at/past the line's glyphs paints nothing.
+    assert_eq(feed_clip_seg(&dst, 512, "abc", 3, 3, 3), 0, "skip past end -> empty segment");
+
+    # SGR continuity: an amber span split across a wrap. (The harness default tier is
+    # PT_PLAIN, so the DEFENSIVE close ui_reset() is the empty string here — exactly as
+    # the existing test_feed assumes; the forced-PT_ANSI block below proves the real
+    # close. The CARRY re-emission uses the SOURCE's real escape bytes, so it is present
+    # at every tier and is the soft-wrap-specific behaviour under test.)
+    var ws0 = feed_clip_seg(&dst, 512, "\x1b[33mabcdef\x1b[0m", 15, 0, 3);
+    assert_eq(load8(&dst), 27, "seg0 starts with the color escape");
+    assert_eq(load8(&dst + 5), 97, "seg0 glyph 'a' after ESC[33m");
+    assert_eq(ws0, 8, "seg0 = ESC[33m(5)+abc(3); defensive reset is empty at PT_PLAIN");
+    var ws1 = feed_clip_seg(&dst, 512, "\x1b[33mabcdef\x1b[0m", 15, 3, 3);
+    assert_eq(load8(&dst), 27, "seg1 RE-EMITS the carried color before its first glyph");
+    assert_eq(load8(&dst + 5), 100, "seg1 paints 'd' under the carried color");
+    assert_eq(ws1, 8, "seg1 = carried ESC[33m(5)+def(3)");
+
+    # a reset DURING the skip region clears the carry -> the segment is uncolored.
+    var wr = feed_clip_seg(&dst, 512, "\x1b[33mab\x1b[0mcdef", 15, 3, 3);
+    assert_eq(load8(&dst), 100, "carry cleared by a skipped reset -> seg starts at 'd' uncolored");
+    assert_eq(wr, 3, "uncolored segment is just its 3 glyphs");
+
+    # cumulative SGR (bold THEN color) is carried WHOLE across the wrap.
+    var wc = feed_clip_seg(&dst, 512, "\x1b[1m\x1b[33mabcd", 13, 2, 2);
+    assert_eq(load8(&dst), 27, "cumulative carry begins with ESC");
+    assert_eq(load8(&dst + 9), 99, "both carried SGRs (ESC[1m + ESC[33m = 9 bytes) precede 'c'");
+    assert_eq(wc, 11, "wc = carry(9) + 'cd'(2); defensive reset empty at PT_PLAIN");
+
+    # forced PT_ANSI: prove the defensive close emits the REAL reset bytes (the
+    # production path — the TUI runs at PT_RICH). Restore PT_PLAIN for later tests.
+    ui_force(PT_ANSI, CD_TRUE);
+    var rl = strlen(ui_reset());
+    var wa = feed_clip_seg(&dst, 512, "\x1b[33mabcdef", 11, 0, 3);   # leaves a span open at the clip
+    assert(rl > 0, "PT_ANSI: ui_reset() is non-empty");
+    assert_eq(wa, 8 + rl, "PT_ANSI: open span closed with ui_reset()");
+    assert_eq(load8(&dst + 8), 27, "PT_ANSI: the defensive reset is a real ESC sequence");
+    ui_force(PT_PLAIN, CD_NONE);
+
+    # ESC[...K is suppressed in a painted segment (would scribble a neighbour column),
+    # both when it lands in the window and when it lands in the skip region. The
+    # source "ab\x1b[Kcd" is 7 bytes (a,b,ESC,[,K,c,d).
+    var wk = feed_clip_seg(&dst, 512, "ab\x1b[Kcd", 7, 0, 4);
+    store8(&dst + wk, 0);
+    assert(streq(&dst, "abcd"), "ESC[K dropped within the window");
+    var wk2 = feed_clip_seg(&dst, 512, "ab\x1b[Kcd", 7, 2, 2);
+    store8(&dst + wk2, 0);
+    assert(streq(&dst, "cd"), "ESC[K dropped across the skip boundary too");
+
+    # dst_cap is a hard ceiling even with a huge max_cols.
+    assert_eq(feed_clip_seg(&dst, 4, "abcdef", 6, 0, 100), 4, "dst_cap clamps the segment");
+    # an empty window (max_cols 0) paints NOTHING — not even the boundary glyph.
+    assert_eq(feed_clip_seg(&dst, 512, "abcdef", 6, 2, 0), 0, "empty window (max_cols 0) writes 0 bytes");
+    # the carry flushes WHOLE-or-drop: a dst_cap too small for the 5-byte ESC[33m
+    # carry drops it ENTIRE (never a severed CSI) and paints the glyphs uncolored.
+    var wd = feed_clip_seg(&dst, 3, "\x1b[33mabcdef", 11, 2, 2);
+    assert_eq(wd, 2, "carry dropped whole -> just the 2 window glyphs fit");
+    assert_eq(load8(&dst), 99, "no partial escape: row starts at the glyph 'c', not ESC");
+
+    # a UTF-8 glyph is one column and is never split by the skip boundary.
+    var wu = feed_clip_seg(&dst, 512, "\xc3\xa9z", 3, 0, 1);   # 'e-acute'(2 bytes) + 'z'
+    assert_eq(wu, 2, "skip 0: one UTF-8 glyph (2 bytes) = one column");
+    assert_eq(load8(&dst), 195, "UTF-8 lead byte painted whole");
+    var wu2 = feed_clip_seg(&dst, 512, "\xc3\xa9z", 3, 1, 1);
+    store8(&dst + wu2, 0);
+    assert(streq(&dst, "z"), "skip 1 skips the whole multibyte glyph, paints 'z'");
+
+    # _feed_total_phys: the soft-wrapped height of the whole document at a width.
+    feed_init();
+    feed_write("abcdefgh\n", 9);                  # 8 visible cols
+    assert_eq(_feed_total_phys(3), 3, "8-col line is 3 rows at width 3");
+    assert_eq(_feed_total_phys(80), 1, "8-col line is 1 row at width 80");
+    feed_write("\n", 1);                          # a blank row
+    assert_eq(_feed_total_phys(3), 4, "blank line adds one physical row");
+    feed_write("xyz", 3);                         # an un-newlined pending line (3 cols)
+    assert_eq(_feed_total_phys(3), 5, "pending 'xyz' adds 1 row at width 3");
+    assert_eq(_feed_total_phys(2), 7, "at width 2: 4 + 1 (blank) + 2 (pending) physical rows");
+    return 0;
+}
+
+# glyph-width table (0.18.7): East-Asian Wide/Fullwidth + emoji count 2 display columns, combining/ZW
+# marks count 0 — so soft-wrap + scrollback math no longer undercount a CJK/emoji line (0.11.3 residual).
+# All feed col-counters (feed_visible_cols / feed_clip / feed_clip_seg) share feed_glyph_cols so
+# feed_rows_for = ceil(display-cols / width) stays consistent. ASCII is byte-identical (width 1).
+fn test_glyph_width() {
+    test_group("glyph width table (feed.cyr, 0.18.7)");
+    var buf[32];
+    store8(&buf, 97);
+    assert_eq(feed_glyph_cols(&buf, 0, 1), 1, "ASCII is 1 col");
+    store8(&buf, 227); store8(&buf + 1, 129); store8(&buf + 2, 130);          # あ U+3042
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "Hiragana あ is 2 cols");
+    store8(&buf, 228); store8(&buf + 1, 184); store8(&buf + 2, 128);          # 一 U+4E00
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "CJK 一 is 2 cols");
+    store8(&buf, 239); store8(&buf + 1, 188); store8(&buf + 2, 161);          # Ａ U+FF21 fullwidth
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "fullwidth Ａ is 2 cols");
+    store8(&buf, 226); store8(&buf + 1, 156); store8(&buf + 2, 133);          # ✅ U+2705 (dingbat emoji)
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 2, "emoji ✅ (U+2705) is 2 cols");
+    store8(&buf, 240); store8(&buf + 1, 159); store8(&buf + 2, 152); store8(&buf + 3, 128);   # 😀 U+1F600
+    assert_eq(feed_glyph_cols(&buf, 0, 4), 2, "emoji 😀 (plane 1) is 2 cols");
+    store8(&buf, 204); store8(&buf + 1, 129);                                 # combining acute U+0301
+    assert_eq(feed_glyph_cols(&buf, 0, 2), 0, "combining mark is 0 cols");
+    store8(&buf, 239); store8(&buf + 1, 184); store8(&buf + 2, 143);          # variation selector U+FE0F
+    assert_eq(feed_glyph_cols(&buf, 0, 3), 0, "variation selector is 0 cols");
+
+    # feed_visible_cols sums widths: "a" + あ + "b" = 1 + 2 + 1 = 4
+    var line[16];
+    store8(&line, 97);
+    store8(&line + 1, 227); store8(&line + 2, 129); store8(&line + 3, 130);
+    store8(&line + 4, 98);
+    assert_eq(feed_visible_cols(&line, 5), 4, "visible cols counts あ as 2 (a+あ+b = 4)");
+    assert_eq(feed_rows_for(feed_visible_cols(&line, 5), 3), 2, "the wide line wraps to 2 rows at width 3 (was 1 pre-0.18.7)");
+
+    # feed_clip (tree column) refuses a straddling wide glyph rather than bleeding into the feed pane:
+    # "ああ" (2 cols each) at max_cols 3 keeps one あ; the second would need cols 2-3 (>3) so it's dropped.
+    var two[16];
+    store8(&two, 227); store8(&two + 1, 129); store8(&two + 2, 130);
+    store8(&two + 3, 227); store8(&two + 4, 129); store8(&two + 5, 130);
+    var cd[64];
+    var cw = feed_clip(&cd, 64, &two, 6, 3);
+    assert_eq(feed_visible_cols(&cd, cw), 2, "feed_clip at width 3 keeps one あ (2 cols), refuses the straddler");
+    # strict left-to-right: a refused wide LEADER truncates the rest — a later narrow glyph must NOT slip
+    # into the freed column ahead of it. "あa" at max_cols 1 -> empty (was: would paint "a" out of order).
+    var mix[8];
+    store8(&mix, 227); store8(&mix + 1, 129); store8(&mix + 2, 130);
+    store8(&mix + 3, 97);
+    var md[32];
+    var mwn = feed_clip(&md, 32, &mix, 4, 1);
+    assert_eq(feed_visible_cols(&md, mwn), 0, "feed_clip: a refused wide leader truncates strictly (no later 'a' swap-in)");
+
+    # feed_clip_seg (feed): "ああa" (2+2+1 = 5 cols) at width 4 -> seg0 = cols[0,4) = ああ, seg1 = cols[4,8) = a
+    var wl[16];
+    store8(&wl, 227); store8(&wl + 1, 129); store8(&wl + 2, 130);
+    store8(&wl + 3, 227); store8(&wl + 4, 129); store8(&wl + 5, 130);
+    store8(&wl + 6, 97);
+    var s0[64]; var s0n = feed_clip_seg(&s0, 64, &wl, 7, 0, 4);
+    assert_eq(feed_visible_cols(&s0, s0n), 4, "segment 0 holds both あ (4 cols)");
+    var s1[64]; var s1n = feed_clip_seg(&s1, 64, &wl, 7, 4, 4);
+    var s1v[32]; _t_strip_sgr(&s1v, &s1, s1n);
+    assert(streq(&s1v, "a"), "segment 1 holds the trailing 'a'");
+    return 0;
+}
+
+# Output capture (0.9.1): with OUT_RING armed, emit/emit_n/oprintln/ofmt_int route
+# into the feed ring (not fd 1); a logical line assembled across mixed calls lands
+# as ONE row, and ofmt_int captures the same digits fmt_int would print. NOTE:
+# always restore OUT_FD1 before asserting — an assert under OUT_RING would be
+# captured into the ring instead of printed.
+fn test_capture() {
+    test_group("output capture sink (util.cyr / feed.cyr)");
+    feed_init();
+    assert_eq(out_mode(), OUT_FD1, "default mode is OUT_FD1 (the floor)");
+    out_mode_set(OUT_RING);
+    emit("a"); emit_n("bc", 2); oprintln("d");     # one logical line across 3 calls
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 1, "emit + emit_n + oprintln reconstruct one captured line");
+    assert_eq(feed_line_len(0), 4, "captured line is 'abcd' (4 bytes)");
+    var p = feed_line_ptr(0);
+    assert_eq(load8(p), 97, "byte 0 'a' (emit)");
+    assert_eq(load8(p + 1), 98, "byte 1 'b' (emit_n)");
+    assert_eq(load8(p + 3), 100, "byte 3 'd' (oprintln, before its newline seal)");
+    # ofmt_int captures the same bytes fmt_int prints (incl. zero + negatives)
+    feed_init();
+    out_mode_set(OUT_RING);
+    ofmt_int(0); oprintln("");                      # "0" then a newline seals the row
+    ofmt_int(0 - 42);                               # "-42" left pending
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "two captured rows");
+    assert_eq(feed_line_len(0), 1, "ofmt_int(0) captured as '0'");
+    assert_eq(load8(feed_line_ptr(0)), 48, "the digit '0'");
+    assert_eq(feed_line_len(1), 3, "ofmt_int(-42) captured as '-42'");
+    assert_eq(load8(feed_line_ptr(1)), 45, "leading '-' preserved");
+    return 0;
+}
+# re-renderable feed (0.18.0): the ring stores role MARKERS (reverse-mapped at seal); the painter
+# EXPANDS them to the current theme's concrete SGR — byte-identical output now, recolorable later.
+fn test_feed_markers() {
+    test_group("re-renderable feed: role markers (feed.cyr, 0.18.0)");
+    ui_force(PT_ANSI, CD_TRUE);
+    # reverse-map exactness: a role SGR -> its role; reset -> UI_SGR_RESET; ui_reset_fg (ESC[39m) -> -1
+    var g = ui_sgr(ROLE_GREEN);
+    assert_eq(ui_role_of_sgr(g, 0, strlen(g)), ROLE_GREEN, "role SGR reverse-maps to its role");
+    var rs = ui_reset();
+    assert_eq(ui_role_of_sgr(rs, 0, strlen(rs)), UI_SGR_RESET, "reset SGR -> UI_SGR_RESET");
+    var rf = ui_reset_fg();
+    assert_eq(ui_role_of_sgr(rf, 0, strlen(rf)), 0 - 1, "ui_reset_fg (ESC[39m) is NOT role/reset -> verbatim");
+    # packing: a ui_emit line stores a 2-byte MARKER, not the concrete SGR; visible-cols unchanged
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "ok");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 1, "one line sealed");
+    assert_eq(feed_vis(0), 2, "visible cols = 2 (markers are zero-width)");
+    var sp = feed_line_ptr(0);
+    assert_eq(load8(sp), 27, "slot starts with ESC (a marker)");
+    assert_eq(load8(sp + 1), FEED_MARK_ROLE0 + ROLE_GREEN, "green role stored as its 2-byte marker");
+    # BYTE-IDENTICAL: painting the marker slot reproduces the concrete SGR output exactly
+    var pd[512];
+    var pw = feed_clip(&pd, 512, sp, feed_line_len(0), 40);
+    store8(&pd + pw, 0);
+    var gold[512];
+    var go = 0;
+    go = _ftree_append_cstr(&gold, go, 512, ui_sgr(ROLE_GREEN));
+    go = _ftree_append_cstr(&gold, go, 512, "ok");
+    go = _ftree_append_cstr(&gold, go, 512, ui_reset());
+    store8(&gold + go, 0);
+    assert(streq(&pd, &gold), "painted markers == concrete SGR golden (BYTE-IDENTICAL)");
+    # BYTE-IDENTICAL via feed_clip_seg — the REAL paint path (feed_repaint paints only through _seg);
+    # skip 0 over a fitting line must equal the same concrete golden.
+    var ps[512];
+    var psw = feed_clip_seg(&ps, 512, sp, feed_line_len(0), 0, 40);
+    store8(&ps + psw, 0);
+    assert(streq(&ps, &gold), "feed_clip_seg (the real paint path) markers == concrete golden (BYTE-IDENTICAL)");
+    # sanitizer: a raw ESC + marker-range byte in captured content is neutralized (no forged marker)
+    feed_init();
+    out_mode_set(OUT_RING);
+    var raw[8];
+    store8(&raw + 0, 27); store8(&raw + 1, FEED_MARK_ROLE0); store8(&raw + 2, 120);   # ESC 0xB0 'x'
+    feed_write(&raw, 3);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert(load8(feed_line_ptr(0)) != 27, "sanitizer dropped the raw ESC before a marker-range byte");
+    # a non-role escape (ESC[1m bold) passes through verbatim (stored + painted as-is)
+    feed_init();
+    out_mode_set(OUT_RING);
+    var bold[8];
+    store8(&bold + 0, 27); store8(&bold + 1, 91); store8(&bold + 2, 49); store8(&bold + 3, 109); store8(&bold + 4, 120);   # ESC [ 1 m x
+    feed_write(&bold, 5);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(load8(feed_line_ptr(0)), 27, "non-role ESC[1m stored verbatim (ESC kept)");
+    assert_eq(load8(feed_line_ptr(0) + 2), 49, "ESC[1m intact ('1')");
+    # soft-wrap: color continues across a segment boundary via the carry (markers)
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "aaaaaa");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var seg[512];
+    var sw = feed_clip_seg(&seg, 512, feed_line_ptr(0), feed_line_len(0), 3, 3);   # cols [3,6)
+    var strip[64];
+    _t_strip_sgr(&strip, &seg, sw);
+    assert(streq(&strip, "aaa"), "soft-wrap segment 1 has the 3 wrapped glyphs");
+    assert_eq(load8(&seg), 27, "segment 1 starts with the carried color (an SGR)");
+    assert_eq(_t_has_esc(&seg, sw), 1, "segment 1 carries the color across the wrap");
+    # theme-recolor (0.18.1): the SAME stored marker slot repaints with a DIFFERENT theme's SGR — so
+    # /theme (and ⌃T) recolor scrollback; the 0.10.0 baked-color limitation is gone. Store once; paint
+    # under dark, then light, from the identical slot.
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "hi");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var spr = feed_line_ptr(0);
+    var lenr = feed_line_len(0);
+    ui_set_theme(THEME_DARK);
+    var da[256];
+    var daw = feed_clip(&da, 256, spr, lenr, 40); store8(&da + daw, 0);
+    ui_set_theme(THEME_LIGHT);
+    var li[256];
+    var liw = feed_clip(&li, 256, spr, lenr, 40); store8(&li + liw, 0);
+    ui_set_theme(THEME_DARK);   # restore the default theme for subsequent tests
+    assert_eq(streq(&da, &li), 0, "the same slot paints DIFFERENT SGR under dark vs light (scrollback recolors)");
+    var sda[64];
+    var sli[64];
+    _t_strip_sgr(&sda, &da, daw);
+    _t_strip_sgr(&sli, &li, liw);
+    assert(streq(&sda, "hi"), "dark paint text is 'hi'");
+    assert(streq(&sli, "hi"), "light paint text is 'hi' (only the SGR changed, not the text)");
+    assert_eq(_t_has_esc(&da, daw), 1, "dark paint is colored");
+    assert_eq(_t_has_esc(&li, liw), 1, "light paint is colored");
+    ui_force(PT_PLAIN, CD_NONE);   # restore the floor tier for subsequent tests
+    return 0;
+}
+
+# feed search (0.18.4): the PURE matcher (case-insensitive, escape-transparent), the highlighted-line
+# render (reverse-video injected, interior-reset re-assert, bounded-carry OFF), and the match-list state
+# machine (rescan over the ring + pending, n/N wrap). The render feeds the UNCHANGED feed_clip_seg.
+fn test_fsearch() {
+    test_group("feed search (fsearch.cyr, 0.18.4)");
+    fsearch_init();
+    ui_force(PT_ANSI, CD_TRUE);
+    # --- matcher: case-insensitive ASCII, no-match, empty query ---
+    fsearch_set_query("err", 3);
+    assert_eq(fsearch_line_has("an error here", 13), 1, "match mid-line (err in error)");
+    assert_eq(fsearch_line_has("ERROR up", 8), 1, "case-insensitive (ERR matches err)");
+    assert_eq(fsearch_line_has("all fine", 8), 0, "no match");
+    fsearch_set_query("", 0);
+    assert_eq(fsearch_line_has("error", 5), 0, "empty query never matches");
+    # escape-transparent: "e" + RESET marker + "rror" still contains "error"
+    var mline[32];
+    var mn = 0;
+    store8(&mline + mn, 101); mn = mn + 1;             # 'e'
+    store8(&mline + mn, 27);  mn = mn + 1;             # ESC
+    store8(&mline + mn, FEED_MARK_RESET); mn = mn + 1; # reset marker (0xBF)
+    store8(&mline + mn, 114); mn = mn + 1;             # 'r'
+    store8(&mline + mn, 114); mn = mn + 1;             # 'r'
+    store8(&mline + mn, 111); mn = mn + 1;             # 'o'
+    store8(&mline + mn, 114); mn = mn + 1;             # 'r'
+    fsearch_set_query("error", 5);
+    assert_eq(fsearch_line_has(&mline, mn), 1, "match spans an interior marker (e<reset>rror)");
+    # --- render: injects reverse video; visible text preserved (feeds the unchanged feed_clip_seg) ---
+    var rb[128];
+    fsearch_set_query("foo", 3);
+    var rn = fsearch_render(&rb, 128, "a foo b", 7, 0 - 1);   # cur_off -1 => no current occurrence on this line
+    assert_eq(_t_has_esc(&rb, rn), 1, "render injects an escape (reverse video)");
+    var sb[64];
+    _t_strip_sgr(&sb, &rb, rn);
+    assert(streq(&sb, "a foo b"), "render strips back to the source visible text");
+    assert_eq(_t_count_sub(&rb, rn, "\x1b[7m", 4), 1, "one reverse-ON around the single match");
+    # the CURRENT occurrence (the match starting at offset 2, "foo") uses a DISTINCT sgr (reverse+underline)
+    var rc[128];
+    var rcn = fsearch_render(&rc, 128, "a foo b", 7, 2);
+    assert_eq(_t_count_sub(&rc, rcn, "\x1b[7;4m", 6), 1, "current occurrence (offset 2) uses reverse+underline");
+    # --- RESET RE-ASSERT: an interior reset inside the match must not kill reverse ---
+    fsearch_set_query("error", 5);
+    var hb[128];
+    var hn = fsearch_render(&hb, 128, &mline, mn, 0 - 1);
+    assert_eq(_t_count_sub(&hb, hn, "\x1b[7m", 4), 2, "reverse re-asserted after the interior reset (two ESC[7m)");
+    # --- WRAP-STRADDLE: the render output through feed_clip_seg — reverse RESUMES at a later segment ---
+    # line = "aaaa" + "e r <reset> r o r" (match "error" at visible cols 4..8); width 6 -> the interior reset
+    # lands in segment 1's SKIP region; the boundary carry must re-flush ESC[7m so "ror" paints reversed.
+    var wl[48];
+    var wn = 0;
+    store8(&wl + wn, 97); wn = wn + 1; store8(&wl + wn, 97); wn = wn + 1;
+    store8(&wl + wn, 97); wn = wn + 1; store8(&wl + wn, 97); wn = wn + 1;   # "aaaa"
+    store8(&wl + wn, 101); wn = wn + 1;                                     # 'e' (col 4)
+    store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 5)
+    store8(&wl + wn, 27); wn = wn + 1; store8(&wl + wn, FEED_MARK_RESET); wn = wn + 1;  # reset marker
+    store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 6)
+    store8(&wl + wn, 111); wn = wn + 1;                                     # 'o' (col 7)
+    store8(&wl + wn, 114); wn = wn + 1;                                     # 'r' (col 8)
+    var wr[192];
+    var wrn = fsearch_render(&wr, 192, &wl, wn, 0 - 1);
+    var seg1[128];
+    # skip=7: the interior reset AND its re-assert both fall in this segment's SKIP region (cols<7), so the
+    # ONLY source of reverse in the painted window is the boundary carry re-flush — proving the re-assert
+    # refilled the carry after feed_clip_seg cleared it on the reset (feed.cyr:307). Without the re-assert
+    # the carry would be empty and "or" would paint UNreversed.
+    var s1 = feed_clip_seg(&seg1, 128, &wr, wrn, 7, 6);                     # segment: visible cols [7,13)
+    assert_eq(_t_count_sub(&seg1, s1, "\x1b[7m", 4), 1, "reverse resumes at the wrap boundary (carry re-flush after a skip-region reset)");
+    var s1v[64];
+    _t_strip_sgr(&s1v, &seg1, s1);
+    assert(streq(&s1v, "or"), "segment visible text is 'or' (still reversed across the wrap)");
+    # --- BOUNDED CARRY: many single-char matches on a wide line — the reset-collapse OFF keeps the carry
+    # tiny, so a non-first segment still reverses correctly (regression for the 64B carry overflow). ---
+    fsearch_set_query("e", 1);
+    var el[64];
+    var en = 0;
+    while (en < 40) { store8(&el + en, 101); en = en + 1; }                 # 40 e's
+    var er[512];
+    var ern = fsearch_render(&er, 512, &el, en, 0 - 1);
+    var eseg[128];
+    var es = feed_clip_seg(&eseg, 128, &er, ern, 30, 6);                    # far segment: cols [30,36)
+    var esv[64];
+    _t_strip_sgr(&esv, &eseg, es);
+    assert(streq(&esv, "eeeeee"), "far segment paints its 6 e's (carry stayed bounded, no overflow drop)");
+    assert_eq(_t_has_esc(&eseg, es), 1, "far segment is still highlighted");
+    # --- PT_PLAIN floor: render is byte-identical to src ---
+    ui_force(PT_PLAIN, CD_NONE);
+    fsearch_set_query("foo", 3);
+    var pb[64];
+    var pn = fsearch_render(&pb, 64, "a foo b", 7, 0 - 1);
+    assert_eq(pn, 7, "PT_PLAIN render is byte-length-identical to src (floor)");
+    var pv[64];
+    _t_strip_sgr(&pv, &pb, pn);
+    assert(streq(&pv, "a foo b"), "PT_PLAIN render == src verbatim (floor)");
+    ui_force(PT_ANSI, CD_TRUE);
+    # --- rescan + next/prev over the ring (+ pending) ---
+    feed_init();
+    feed_write("alpha error one\n", 16);
+    feed_write("nothing here\n", 13);
+    feed_write("beta error two\n", 15);
+    fsearch_set_query("error", 5);
+    assert_eq(fsearch_rescan(), 2, "rescan finds 2 matching lines");
+    assert_eq(fsearch_cur_line(), 2, "seeded to the NEWEST match (line 2)");
+    assert_eq(fsearch_line_is_match(0), 1, "line 0 is a match");
+    assert_eq(fsearch_line_is_match(1), 0, "line 1 is not a match");
+    assert_eq(fsearch_next(), 0, "next wraps newest -> oldest (line 0)");
+    assert_eq(fsearch_prev(), 2, "prev wraps back to the newest (line 2)");
+    feed_write("gamma error three", 17);              # no newline -> the pending line
+    assert_eq(fsearch_rescan(), 3, "rescan includes the pending line");
+    assert_eq(fsearch_cur_line(), 3, "newest match is the pending virtual line (index feed_count())");
+    fsearch_set_query("", 0);
+    assert_eq(fsearch_rescan(), 0, "empty query -> no matches");
+    assert_eq(fsearch_cur_line(), 0 - 1, "no current match line when empty");
+    # --- OCCURRENCE-granular: two hits on ONE line count as 2, and n/N steps between them (0.18.5) ---
+    feed_init();
+    feed_write("echo and bote_echo here\n", 24);       # "echo" at offset 0 and inside bote_echo at offset 14
+    fsearch_set_query("echo", 4);
+    assert_eq(fsearch_rescan(), 2, "two occurrences on one line counted as 2 (not 1 line)");
+    assert_eq(fsearch_cur_line(), 0, "both occurrences are on line 0");
+    assert_eq(fsearch_cur_off(), 14, "seeded to the NEWEST occurrence (offset 14, inside bote_echo)");
+    assert_eq(fsearch_next(), 0, "next stays on line 0 (the other occurrence)");
+    assert_eq(fsearch_cur_off(), 0, "current occurrence stepped to offset 0 (the first 'echo')");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
+
+# @file mentions (0.21.0): the PURE expand core. `@path` that resolves to a readable file appends its
+# content as a delimited block; a non-resolving @token stays literal (prose untouched, byte-identical
+# passthrough — same pointer back); multiple compose; duplicates inject once; trailing punct trimmed;
+# email/handle boundaries not mangled. Uses real repo files (VERSION, src/mention.cyr) as fixtures.
+fn test_mention() {
+    test_group("@file mentions (mention.cyr, 0.21.0)");
+
+    # --- no mention -> byte-identical passthrough (SAME pointer), count 0 ---
+    var a = "hello world, nothing here";
+    var ra = mention_expand(a);
+    assert(ra == a, "no mention -> original pointer unchanged");
+    assert_eq(mention_count(), 0, "no mention -> count 0");
+
+    # --- email/handle boundary: @ not preceded by whitespace is NOT a mention ---
+    var e = "mail foo@bar.com now";
+    var re = mention_expand(e);
+    assert(re == e, "foo@bar not a mention (no whitespace boundary) -> passthrough");
+    assert_eq(mention_count(), 0, "email -> count 0");
+
+    # --- single mention: prose preserved, a block appended right after it ---
+    var s = "see @VERSION please";
+    var rs = mention_expand(s);
+    assert_eq(mention_count(), 1, "one resolvable mention -> count 1");
+    assert(rs != s, "expanded (not the original pointer)");
+    assert(cstr_starts_with(rs, "see @VERSION please") == 1, "prose preserved verbatim at the front");
+    assert_eq(load8(rs + strlen("see @VERSION please")), 10, "a block (\\n) begins right after the prose");
+
+    # --- mention at start-of-text boundary ---
+    var b = "@VERSION";
+    var rb = mention_expand(b);
+    assert_eq(mention_count(), 1, "@ at start-of-text is a boundary -> count 1");
+
+    # --- multiple mentions compose ---
+    var m = "compare @VERSION and @src/mention.cyr";
+    mention_expand(m);
+    assert_eq(mention_count(), 2, "two distinct resolvable mentions -> count 2");
+
+    # --- duplicate injects once ---
+    var d = "@VERSION then @VERSION again";
+    mention_expand(d);
+    assert_eq(mention_count(), 1, "duplicate path -> injected once");
+
+    # --- non-existent path stays literal (passthrough) ---
+    var n = "@nope_zzz_not_a_file here";
+    var rn = mention_expand(n);
+    assert(rn == n, "unresolvable @token -> literal passthrough (original pointer)");
+    assert_eq(mention_count(), 0, "non-existent -> count 0");
+
+    # --- trailing punctuation trimmed to resolve ---
+    var t = "read @VERSION.";
+    mention_expand(t);
+    assert_eq(mention_count(), 1, "trailing '.' trimmed -> VERSION resolves, count 1");
+
+    # --- a directory resolves file_exists but is unreadable -> stays literal ---
+    var dir = "look in @src here";
+    var rdir = mention_expand(dir);
+    assert(rdir == dir, "@src (a directory) -> unreadable, literal passthrough");
+    assert_eq(mention_count(), 0, "directory -> count 0");
+    return 0;
+}
+
+# @file Tab completion (0.21.1): the shared token scan (mention_prefix_at) + the file-tree completer
+# (ftree_complete, dir_list-backed) + the composer multi-char insert (led_insert_cstr). Uses real repo
+# files (VERSION, src/, src/mention.cyr, cyrius.cyml/.lock) as fixtures, like test_mention.
+fn test_tab_complete() {
+    test_group("@file Tab completion (mention.cyr/ftree.cyr/tui.cyr, 0.21.1)");
+
+    # --- mention_prefix_at: where a @<prefix> token ends at the cursor ---
+    var s1 = "see @VER";
+    assert_eq(mention_prefix_at(s1, 8), 5, "prefix starts just after '@' (offset 5)");
+    assert_eq(mention_prefix_at(s1, 4), 0 - 1, "cursor before the '@' -> not in a token");
+    var s2 = "foo@bar";
+    assert_eq(mention_prefix_at(s2, 7), 0 - 1, "email foo@bar -> '@' mid-word, not a mention");
+    var s3 = "@VER";
+    assert_eq(mention_prefix_at(s3, 4), 1, "'@' at start-of-text -> boundary, prefix offset 1");
+    var s4 = "@";
+    assert_eq(mention_prefix_at(s4, 1), 1, "'@' then cursor -> empty prefix at offset 1");
+    var s5 = "a @b";
+    assert_eq(mention_prefix_at(s5, 4), 3, "'@' after a space -> boundary");
+    # cursor must be at the END of the token: mid-token -> -1 (else completion would splice into the middle)
+    var s6 = "@VERbar";
+    assert_eq(mention_prefix_at(s6, 4), 0 - 1, "cursor mid-token (before 'bar') -> not the end, -1");
+    assert_eq(mention_prefix_at(s6, 7), 1, "cursor at the end of the whole token -> valid, offset 1");
+    var s7 = "@VER foo";
+    assert_eq(mention_prefix_at(s7, 4), 1, "cursor at end of '@VER' before a space -> valid (token ends)");
+
+    # --- ftree_complete: unique file, unique dir (+ '/'), subdir, ambiguous LCP, no-match ---
+    var out = alloc(256);
+    assert_eq(ftree_complete("VER", out, 256), 1, "VER -> unique (VERSION)");
+    assert(streq(out, "SION") == 1, "VER completes to the suffix SION");
+    assert_eq(ftree_complete("src", out, 256), 1, "src -> unique dir");
+    assert(streq(out, "/") == 1, "a unique directory completes with a trailing '/'");
+    assert_eq(ftree_complete("src/men", out, 256), 1, "src/men -> unique (src/mention.cyr)");
+    assert(streq(out, "tion.cyr") == 1, "src/men completes to tion.cyr (dir listed live, no expand)");
+    # ambiguous: use git-TRACKED root files (thoth.cyml is a local/gitignored config, absent in CI)
+    assert(ftree_complete("C", out, 256) >= 2, "C -> ambiguous (CHANGELOG.md, CLAUDE.md, ... — tracked)");
+    assert_eq(load8(out), 0, "ambiguous, nothing common beyond 'C' -> empty suffix (no over-completion)");
+    # the LCP-progress logic tested PURELY (FS-independent): the common-prefix shrink of two candidate names
+    var acc = alloc(64);
+    var seed = "mention.cyr";
+    var q = 0;
+    while (load8(seed + q) != 0) { store8(acc + q, load8(seed + q)); q = q + 1; }
+    store8(acc + q, 0);
+    _ftc_lcp_shrink(acc, "memory.cyr");
+    assert(streq(acc, "me") == 1, "_ftc_lcp_shrink: mention.cyr ^ memory.cyr -> me");
+    _ftc_lcp_shrink(acc, "xyz");
+    assert_eq(load8(acc), 0, "_ftc_lcp_shrink: no common prefix -> empty");
+    assert_eq(ftree_complete("zzz_no_such_prefix", out, 256), 0, "no match -> count 0");
+    assert_eq(load8(out), 0, "no match -> empty suffix");
+
+    # --- led_insert_cstr: multi-char insert at the cursor via the tested led_feed path ---
+    led_reset();
+    led_feed(KEY_CHAR, 64); led_feed(KEY_CHAR, 86); led_feed(KEY_CHAR, 69); led_feed(KEY_CHAR, 82);  # "@VER"
+    assert_eq(led_insert_cstr("SION"), 4, "inserted 4 bytes");
+    assert(streq(led_buf(), "@VERSION") == 1, "completion inserted at the cursor -> @VERSION");
+    assert_eq(led_len(), 8, "composer length after insert");
+    assert_eq(led_cur(), 8, "cursor advanced to the end of the insert");
+    led_reset();
+    return 0;
+}
+
+# Working spinner (0.9.2): the frame cycle is PURE (the animated indicator + its
+# hint-row paint are I/O, live-verified). spin_glyph cycles mod SPIN_FRAMES;
+# spin_advance steps the frame.
+fn test_spinner() {
+    test_group("working spinner (tui.cyr)");
+    assert(streq(spin_glyph(0), spin_glyph(SPIN_FRAMES)), "spinner glyph cycles mod the frame count");
+    assert_eq(streq(spin_glyph(0), spin_glyph(1)), 0, "adjacent spinner frames differ");
+    assert(streq(spin_glyph(0), "\xe2\xa0\x8b"), "frame 0 is the braille glyph ⠋");
+    var f0 = spin_frame();
+    spin_advance(); spin_advance();
+    assert_eq(spin_frame() - f0, 2, "spin_advance steps the frame");
+    return 0;
+}
+
+# Streamed-frame paint throttle (0.15.0): feed_stream_tick coalesces per-chunk
+# repaints onto a STREAM_FRAME_MS budget so 80–150 tok/s streaming doesn't thrash.
+# The PAINT is I/O (live-verified on a tty); the throttle DECISION is the pure
+# _stream_should_paint(now, last) — unit-tested here for the frame boundary and
+# the fail-open backward-clock step.
+fn test_stream_throttle() {
+    test_group("streamed-frame paint throttle (tui.cyr)");
+    assert_eq(STREAM_FRAME_MS, 33, "frame budget is ~30fps (33ms)");
+    assert_eq(_stream_should_paint(1000, 1000), 0, "dt=0 -> coalesce (no paint)");
+    assert_eq(_stream_should_paint(1032, 1000), 0, "dt=32 < budget -> coalesce");
+    assert_eq(_stream_should_paint(1033, 1000), 1, "dt=33 == budget -> paint");
+    assert_eq(_stream_should_paint(5000, 1000), 1, "dt >> budget -> paint");
+    assert_eq(_stream_should_paint(999, 1000), 1, "backward clock step -> paint (fail-open, never stall)");
+    assert_eq(_stream_should_paint(90000, 0), 1, "first tick of a turn (last=0) -> paint instantly");
+    return 0;
+}
+
+# File-tree pane (0.9.3): the layout geometry (tree/feed split) and the flattened-tree
+# model (append, splice children on expand, collapse a subtree, ancestor-walk path
+# reconstruction) are PURE; the directory listing + paint are I/O (live-verified).
+fn test_ftree() {
+    test_group("file-tree model + geometry (ftree.cyr)");
+    # geometry: hidden tree -> full-width feed (the 0.9.1/0.9.2 case)
+    assert_eq(tui_tree_w(80, 0), 0, "tree width 0 when hidden");
+    assert_eq(tui_feed_left(80, 0), 1, "feed starts at col 1 when hidden");
+    assert_eq(tui_feed_width(80, 0), 80, "feed full width when hidden");
+    # geometry: shown -> tree + separator + feed
+    assert_eq(tui_tree_w(120, 1), 28, "tree width caps at 28 (120/3=40 -> 28)");
+    assert_eq(tui_tree_w(30, 1), 10, "tree width = cols/3 below the cap");
+    assert_eq(tui_feed_left(120, 1), 30, "feed starts past tree(28)+separator -> col 30");
+    assert_eq(tui_feed_width(120, 1), 91, "feed width = 120 - 30 + 1");
+    # model: two root entries
+    ftree_init();
+    ftree_reset();
+    _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0);
+    _ftree_append("VERSION", 0, 0);
+    assert_eq(ftree_count(), 2, "two root entries");
+    assert_eq(ftree_isdir(0), 1, "src is a dir");
+    var pb[256];
+    ftree_path(1, &pb, 256);
+    assert(streq(&pb, "/repo/VERSION"), "root file path = cwd/name");
+    # expand src: splice two children in at depth 1
+    _ftree_insert_at(1, "main.cyr", 0, 1);
+    _ftree_insert_at(2, "tui.cyr", 0, 1);
+    ftree_set_exp(0, 1);
+    assert_eq(ftree_count(), 4, "two children spliced in -> 4 nodes");
+    assert_eq(ftree_depth(2), 1, "child at depth 1");
+    ftree_path(2, &pb, 256);
+    assert(streq(&pb, "/repo/src/tui.cyr"), "nested path walks ancestors");
+    # selection clamps
+    ftree_set_sel(0); ftree_move(10);
+    assert_eq(ftree_sel(), 3, "move clamps to the last node");
+    ftree_move(0 - 100);
+    assert_eq(ftree_sel(), 0, "move clamps to the first node");
+    # collapse src removes its subtree
+    assert_eq(ftree_collapse_at(0), 2, "collapse removes the 2 children");
+    assert_eq(ftree_count(), 2, "back to 2 nodes");
+    assert_eq(ftree_exp(0), 0, "src marked collapsed");
+    assert(streq(ftree_name(1), "VERSION"), "VERSION shifted back to index 1");
+    # I/O smoke: list the repo's src/ — exercises the Str plumbing + dirs-first on a
+    # real directory (src/ has the vendor/ subdir + many .cyr files). Run from the
+    # project root by `cyrius test`.
+    ftree_init();
+    ftree_reset();
+    _ftree_list_into("src", 0, 0);
+    assert(ftree_count() > 5, "listed src/ — the dir_list/is_dir/Str plumbing works");
+    assert_eq(ftree_isdir(0), 1, "dirs-first: a directory (vendor/) sorts before the files");
+    return 0;
+}
+
+# Theme axis (0.10.0): a theme sits in front of the role color dispatchers. PURE:
+# dark is the pre-0.10.0 values verbatim (byte-identical anchor), light is distinct,
+# a /theme switch rebuilds the cached SGR table, and PT_PLAIN stays empty (floor
+# byte-identical) under any theme.
+fn test_theme() {
+    test_group("theme axis (ui.cyr)");
+    assert_eq(ui_theme(), THEME_DARK, "default theme is dark");
+    assert(streq(ui_theme_name(), "dark"), "default theme name 'dark'");
+    assert_eq(ui_theme_from_name("light"), THEME_LIGHT, "'light' -> THEME_LIGHT");
+    assert_eq(ui_theme_from_name("dark"), THEME_DARK, "'dark' -> THEME_DARK");
+    assert_eq(ui_theme_from_name("rainbow"), 0 - 1, "'rainbow' deferred -> -1 (never faked)");
+    ui_set_theme(THEME_DARK);
+    assert_eq(_ui_rgb(ROLE_ACCENT), 230 * 65536 + 171 * 256 + 92, "dark accent RGB unchanged (byte-identical anchor)");
+    ui_set_theme(THEME_LIGHT);
+    assert_eq(_ui_rgb(ROLE_ACCENT), 176 * 65536 + 122 * 256 + 37, "light accent RGB = warm-light");
+    assert(streq(ui_theme_name(), "light"), "theme name reflects light");
+    assert_eq(_ui_code16(ROLE_ACCENT), _ui_code16_dark(ROLE_ACCENT), "light shares dark 16-color codes");
+    # T1: a theme switch rebuilds the cached SGR table
+    ui_force(PT_ANSI, CD_TRUE);
+    ui_set_theme(THEME_DARK);
+    assert_eq(_ui_contains(ui_sgr(ROLE_ACCENT), "38;2;230;171;92"), 1, "dark T1 accent SGR = amber");
+    ui_set_theme(THEME_LIGHT);
+    assert_eq(_ui_contains(ui_sgr(ROLE_ACCENT), "38;2;176;122;37"), 1, "light T1 accent SGR = warm-light (rebuilt)");
+    # PT_PLAIN floor stays byte-identical (empty) under ANY theme
+    ui_force(PT_PLAIN, CD_NONE);
+    ui_set_theme(THEME_LIGHT);
+    assert_eq(streq(ui_sgr(ROLE_ACCENT), ""), 1, "PT_PLAIN accent empty under light (floor unchanged)");
+    # restore defaults for later tests
+    ui_set_theme(THEME_DARK);
+    ui_detect_tier();
+    return 0;
+}
+
+fn test_mpick() {
+    test_group("model picker (mpick.cyr, 0.24.0)");
+    mpick_init();
+    # populate directly (mpick_load does network I/O; the pure state is what we unit-test)
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0;
+    _mp_add("claude-opus-4-8");
+    _mp_add("claude-sonnet-5");
+    _mp_add("qwen3-coder:30b");
+    _mp_add("claude-haiku-4-5");
+    assert_eq(mpick_total(), 4, "loaded 4 model ids");
+    # a malformed catalog entry {"id":""} yields a non-null zero-length id; _mp_add must refuse it (else a
+    # blank row would switch to an empty model — review 0.24.0). The count must not grow.
+    assert_eq(_mp_add(""), 0, "_mp_add refuses an empty id");
+    assert_eq(mpick_total(), 4, "an empty id did not add a row");
+    mpick_refilter();
+    assert_eq(mpick_count(), 4, "empty query matches all");
+
+    # filter "opus" -> 1 match, selected
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("opus");
+    assert_eq(mpick_count(), 1, "'opus' filters to one model");
+    assert(streq(mpick_selected_id(), "claude-opus-4-8") == 1, "the opus model is selected");
+
+    # case-insensitive substring: "CLAUDE" -> 3 claude models
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("CLAUDE");
+    assert_eq(mpick_count(), 3, "'CLAUDE' (uppercase) matches 3 models (case-insensitive)");
+
+    # mid-string substring: "coder" -> the qwen model
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("coder");
+    assert_eq(mpick_count(), 1, "'coder' (mid-id substring) matches one");
+    assert(streq(mpick_selected_id(), "qwen3-coder:30b") == 1, "the qwen coder is selected");
+
+    # no match -> empty, no selection; backspace restores
+    _mp_qlen = 0; mpick_refilter(); _mp_push_str("zzz");
+    assert_eq(mpick_count(), 0, "'zzz' matches nothing");
+    assert(mpick_selected_id() == 0, "no selection when the view is empty");
+    mpick_query_pop(); mpick_query_pop(); mpick_query_pop();
+    assert_eq(mpick_count(), 4, "popping the whole query restores all");
+
+    # navigation clamps within [0, count)
+    _mp_qlen = 0; mpick_refilter(); _mp_cur = 0;
+    mpick_move(0 - 1); assert_eq(mpick_cur(), 0, "move up at the top clamps to 0");
+    mpick_move(100); assert_eq(mpick_cur(), 3, "move down past the end clamps to the last");
+    mpick_move(0 - 1); assert_eq(mpick_cur(), 2, "move up steps back one");
+
+    # pre-select the active model by id
+    mpick_select_id("claude-sonnet-5");
+    assert(streq(mpick_selected_id(), "claude-sonnet-5") == 1, "mpick_select_id highlights the named model");
+    mpick_select_id("not-a-model");
+    assert(streq(mpick_selected_id(), "claude-sonnet-5") == 1, "select_id on an absent id is a no-op");
+
+    # filtering clamps a stale selection back into range
+    _mp_cur = 3; _mp_qlen = 0; mpick_refilter(); _mp_push_str("sonnet");
+    assert_eq(mpick_count(), 1, "'sonnet' -> one");
+    assert_eq(mpick_cur(), 0, "the selection clamps to the shrunken view");
+    return 0;
+}

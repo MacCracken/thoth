@@ -2,6 +2,32 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.7] - 2026-07-11
+
+**Test suite split into topical case files.** `tests/thoth.tcyr` had grown to ~4,095 lines in one file. It is
+now a thin DRIVER (the src-module include block + `include "tests/cases/*.cyr"` + `main()`), with the ~72 test
+functions moved into topical files under **`tests/cases/`**: `core.cyr` (1,403 — session/config/hoosh/persona/
+cost/history/oneshot/logging), `tui.cyr` (1,184 — composer/feed/soft-wrap/search/tab-complete/spinner/tree/
+picker/theme), `agent.cyr` (572 — the agentic tool spine), `render.cyr` (361 — diff/highlight/mdhl), `gui.cyr`
+(347 — the T3 draw pipeline + surface), and `helpers.cyr` (the 9 shared test helpers, included first). **A PURE
+MECHANICAL refactor** — `main()` is verbatim (same 72 calls in the same order), every definition is still
+present via the includes, so it stays ONE compiled binary and is behavior-identical: **1341 assertions, 0
+failed** (unchanged). Kept as one binary (not independent per-domain `.tcyr`) deliberately: `hoosh`/`gate`
+reach into the TUI (`surface → hoosh → gate → tui`), so a per-file split can't drop those modules — splitting
+the SOURCE gives readable files without fighting that coupling.
+
+### Changed
+- **`tests/thoth.tcyr`** is now the driver (~141 lines); test bodies live in `tests/cases/{helpers,core,render,
+  tui,agent,gui}.cyr`. Largest file is 1,403 lines (was 4,095).
+- `src/test.cyr` header updated to point new tests at `tests/cases/*.cyr` + `main()`.
+
+### Notes
+- Curated *lean* per-domain test binaries were investigated and rejected: cyrius refuses to emit with
+  reachable-undefined functions, and `surface → hoosh → gate → tui_confirm_*` / `hoosh → intr_*/mdhl_*/
+  memory_context` couple every GUI/TUI test to the whole codebase. A lean split would need a product refactor
+  (extract `intr_*`/`tui_confirm_*` from `tui.cyr`; decouple hoosh's display calls) — its own future arc.
+- Pin **6.4.51** (wrapper auto-drifted to 6.4.52; benign).
+
 ## [0.30.6] - 2026-07-11
 
 **Toolchain refresh (cyrius 6.4.49 → 6.4.51) + the full file-tree tests the output cap had forced lean.**

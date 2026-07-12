@@ -1,0 +1,361 @@
+# tests/cases/render.cyr — rendering: diff annotation, syntax highlight (vyakarana), and the markdown highlighter (mdhl).
+# Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
+# (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
+
+
+# Diff producer (0.8.3): the pure LCS line-diff core. diff_stats returns
+# adds*1000000 + dels (or -1 if a side exceeds the line cap). Identity is
+# NEWLINE-AWARE (a terminated line differs from an unterminated one) so the card
+# can never under-report the bytes written.
+fn test_diff() {
+    test_group("diff producer (0.8.3)");
+    var a = "a\nb\nc\n";
+    assert_eq(diff_stats(a, strlen(a), a, strlen(a)), 0, "identical -> 0 adds 0 dels");
+    var e = "";
+    var x = "x\n";
+    assert_eq(diff_stats(e, 0, x, strlen(x)), 1000000, "empty old -> one add");
+    assert_eq(diff_stats(x, strlen(x), e, 0), 1, "empty new -> one del");
+    var c2 = "a\nB\nc\n";
+    assert_eq(diff_stats(a, strlen(a), c2, strlen(c2)), 1000001, "one line changed -> 1 add 1 del");
+    var ins1 = "a\nc\n";
+    assert_eq(diff_stats(ins1, strlen(ins1), a, strlen(a)), 1000000, "insert middle (b) -> 1 add");
+    # newline-aware: an unterminated final line vs a terminated one is a REAL change
+    var nl1 = "hello";
+    var nl2 = "hello\n";
+    assert_eq(diff_stats(nl1, strlen(nl1), nl2, strlen(nl2)), 1000001, "newline-only change is visible (1 add 1 del)");
+    var r1 = "one\ntwo\n";
+    var r2 = "uno\ndos\n";
+    assert_eq(diff_stats(r1, strlen(r1), r2, strlen(r2)), 2000002, "full replace -> 2 add 2 del");
+    return 0;
+}
+fn test_git_diff() {
+    test_group("/git per-file diff (diff.cyr diff_render_ann, 0.19.2)");
+    ui_force(PT_PLAIN, CD_NONE);                                            # plain -> verbatim body (easy strip)
+    var ops = vec_new();
+    vec_push(ops, _t_ann(0, "ctx", 3, 1, 1));                               # keep (context)
+    vec_push(ops, _t_ann(1, "removed", 7, 2, 0));                           # del
+    vec_push(ops, _t_ann(2, "added", 5, 0, 2));                             # add
+    feed_init();
+    out_mode_set(OUT_RING);
+    diff_render_ann("f.txt", ops);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 5, "5 rows: path header, +/- count, 3 body lines");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "f.txt", 5), 1, "row 0 is the path header");
+    assert_eq(_t_count_sub(feed_line_ptr(1), feed_line_len(1), "+1", 2), 1, "count line shows +1 add");
+    assert_eq(_t_count_sub(feed_line_ptr(1), feed_line_len(1), "-1", 2), 1, "count line shows -1 del");
+    assert_eq(_t_count_sub(feed_line_ptr(2), feed_line_len(2), "ctx", 3), 1, "context line body preserved");
+    assert_eq(_t_count_sub(feed_line_ptr(3), feed_line_len(3), "removed", 7), 1, "del line body preserved");
+    assert_eq(_t_count_sub(feed_line_ptr(4), feed_line_len(4), "added", 5), 1, "add line body preserved");
+    return 0;
+}
+
+# Syntax highlighting (0.8.4): the vyakarana integration — language detection,
+# tokenization, and the token-kind -> color-role mapping for /read.
+fn test_highlight() {
+    test_group("syntax highlighting (vyakarana, 0.8.4)");
+    var lang = detect_language("foo.cyr");
+    assert(lang != 0, "detect_language finds a grammar for .cyr");
+    var s = tokenize_stream_new(lang);
+    assert(s != 0, "stream opens for the detected language");
+    var src = "var x = 1;";
+    tokenize_stream_feed(s, src, strlen(src));
+    var tb = tokenbuf_new();
+    tokenize_stream_drain(s, tb);
+    tokenize_stream_finish(s, tb);
+    var count = tokenbuf_count(tb);
+    assert(count > 0, "produced tokens");
+    var i = 0;
+    var found_kw = 0;
+    while (i < count) {
+        if (tokenbuf_kind(tb, i) == TK_KEYWORD) { found_kw = 1; }
+        i = i + 1;
+    }
+    assert_eq(found_kw, 1, "'var' tokenized as a keyword");
+    tokenize_stream_free(s);
+    # the kind -> role map
+    assert_eq(_tok_role(TK_KEYWORD), ROLE_ACCENT, "keyword -> accent");
+    assert_eq(_tok_role(TK_STRING), ROLE_GREEN, "string -> green");
+    assert(_tok_role(TK_IDENT) < 0, "ident -> uncolored (-1)");
+    return 0;
+}
+
+# mdhl (0.15.1): the fence-tag -> grammar mapping is PURE.
+fn test_mdhl_tag_map() {
+    test_group("markdown fence tag -> grammar (mdhl.cyr)");
+    assert(streq(_mdhl_tag_grammar("bash"), "shell"), "bash -> shell");
+    assert(streq(_mdhl_tag_grammar("sh"), "shell"), "sh -> shell");
+    assert(streq(_mdhl_tag_grammar("py"), "python"), "py -> python");
+    assert(streq(_mdhl_tag_grammar("js"), "javascript"), "js -> javascript");
+    assert(streq(_mdhl_tag_grammar("ts"), "typescript"), "ts -> typescript");
+    assert(streq(_mdhl_tag_grammar("rs"), "rust"), "rs -> rust");
+    assert(streq(_mdhl_tag_grammar("c++"), "cpp"), "c++ -> cpp");
+    assert(streq(_mdhl_tag_grammar("yml"), "yaml"), "yml -> yaml");
+    assert(streq(_mdhl_tag_grammar("python"), "python"), "canonical name falls through");
+    assert(streq(_mdhl_tag_grammar("wibble"), "wibble"), "unknown tag falls through to itself (_hl_span self-heals)");
+    assert_eq(_mdhl_tag_grammar("text"), 0, "text -> 0 (deliberate no-highlight)");
+    assert_eq(_mdhl_tag_grammar("plain"), 0, "plain -> 0");
+    assert_eq(_mdhl_tag_grammar("diff"), 0, "diff -> 0 (never a grammar)");
+    return 0;
+}
+
+# mdhl (0.15.1): the fence open/close scanners + info-string resolution are PURE over
+# the assembled line buffer.
+fn test_mdhl_fence() {
+    test_group("markdown fence scan + info string (mdhl.cyr)");
+    _mdhl_ensure();
+    _t_mdhl_line("```python");
+    assert_eq(_mdhl_scan_fence_open(), 1, "```python opens");
+    assert_eq(_mdhl_fence_ch, 96, "opening fence char is backtick");
+    assert_eq(_mdhl_fence_len, 3, "run length 3");
+    _t_mdhl_line("~~~c");
+    assert_eq(_mdhl_scan_fence_open(), 1, "~~~c opens");
+    assert_eq(_mdhl_fence_ch, 126, "opening fence char is tilde");
+    _t_mdhl_line("``x");
+    assert_eq(_mdhl_scan_fence_open(), 0, "two backticks (run<3) is not a fence");
+    _t_mdhl_line("    ```py");
+    assert_eq(_mdhl_scan_fence_open(), 0, "4-space indent is indented-code, not a fence");
+    _t_mdhl_line("   ```py");
+    assert_eq(_mdhl_scan_fence_open(), 1, "3-space indent still opens");
+    _t_mdhl_line("```foo`bar");
+    assert_eq(_mdhl_scan_fence_open(), 0, "backtick in info string rejects the open (inline-code guard)");
+    # info-string resolution
+    _t_mdhl_line("```python {.line-numbers}");
+    _mdhl_scan_fence_open(); _mdhl_resolve_grammar();
+    assert(streq(_mdhl_grammar, "python"), "first info word is the tag; the rest is ignored");
+    _t_mdhl_line("```BASH");
+    _mdhl_scan_fence_open(); _mdhl_resolve_grammar();
+    assert(streq(_mdhl_grammar, "shell"), "tag is ASCII-lowercased before mapping");
+    _t_mdhl_line("```");
+    _mdhl_scan_fence_open(); _mdhl_resolve_grammar();
+    assert_eq(_mdhl_grammar, 0, "blank info -> no grammar (verbatim)");
+    # closes (against a backtick/3 opener)
+    _mdhl_fence_ch = 96; _mdhl_fence_len = 3;
+    _t_mdhl_line("```");
+    assert_eq(_mdhl_scan_fence_close(), 1, "``` closes a ``` block");
+    _t_mdhl_line("````");
+    assert_eq(_mdhl_scan_fence_close(), 1, "a longer run also closes");
+    _t_mdhl_line("``");
+    assert_eq(_mdhl_scan_fence_close(), 0, "a shorter run is interior");
+    _t_mdhl_line("```bogus");
+    assert_eq(_mdhl_scan_fence_close(), 0, "a close carries no info string");
+    _t_mdhl_line("~~~");
+    assert_eq(_mdhl_scan_fence_close(), 0, "a tilde line does not close a backtick block");
+    _t_mdhl_line("```  ");
+    assert_eq(_mdhl_scan_fence_close(), 1, "trailing spaces still close");
+    _t_mdhl_line("```\r");
+    assert_eq(_mdhl_scan_fence_close(), 1, "a CRLF closing fence (```\\r) closes (CR is blank)");
+    return 0;
+}
+
+# mdhl (0.15.1): the end-to-end render, captured via OUT_RING. Proves the FLOOR
+# (PT_PLAIN -> byte-identical, zero escapes), that a fenced block is highlighted while
+# delimiters stay verbatim, and that stripping SGR recovers the code exactly (coverage).
+fn test_mdhl_render() {
+    test_group("markdown fenced-code render (mdhl.cyr)");
+    var sb[256];
+    var src = "```python\nimport os\n```\n";
+    # FLOOR: PT_PLAIN -> verbatim, no escapes anywhere
+    ui_force(PT_PLAIN, CD_NONE);
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(src, strlen(src));
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "PT_PLAIN: 3 lines (opener/code/closer)");
+    assert_eq(_t_has_esc(feed_line_ptr(0), feed_line_len(0)), 0, "PT_PLAIN opener: 0 escapes");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 0, "PT_PLAIN code line: 0 escapes (floor)");
+    assert_eq(_t_has_esc(feed_line_ptr(2), feed_line_len(2)), 0, "PT_PLAIN closer: 0 escapes");
+    _t_strip_sgr(&sb, feed_line_ptr(1), feed_line_len(1));
+    assert(streq(&sb, "import os"), "PT_PLAIN code line is verbatim 'import os'");
+    # HIGHLIGHT: PT_ANSI -> code colored, delimiters verbatim, coverage holds
+    ui_force(PT_ANSI, CD_TRUE);
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(src, strlen(src));
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "PT_ANSI: still 3 lines");
+    assert_eq(_t_has_esc(feed_line_ptr(0), feed_line_len(0)), 0, "opener ```python stays verbatim");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 1, "code line IS highlighted (has SGR)");
+    assert_eq(_t_has_esc(feed_line_ptr(2), feed_line_len(2)), 0, "closer ``` stays verbatim");
+    _t_strip_sgr(&sb, feed_line_ptr(1), feed_line_len(1));
+    assert(streq(&sb, "import os"), "stripping SGR recovers the code exactly (never drops a byte)");
+    # unknown language -> self-heal to verbatim, no escapes, no byte lost
+    var srcu = "```wibble\nzz\n```\n";
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(srcu, strlen(srcu));
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "unknown lang: 3 lines");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 0, "unknown grammar -> code verbatim (uncolored)");
+    _t_strip_sgr(&sb, feed_line_ptr(1), feed_line_len(1));
+    assert(streq(&sb, "zz"), "unknown-lang code preserved");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
+
+# mdhl (0.15.1): streaming — a byte-at-a-time feed produces the same result as one-shot
+# (chunk boundaries dissolved), and an unterminated fence flushes at finish with no
+# phantom closer.
+fn test_mdhl_stream() {
+    test_group("markdown fenced-code streaming (mdhl.cyr)");
+    var sb[256];
+    ui_force(PT_ANSI, CD_TRUE);
+    var src = "```python\nimport os\n```\n";
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reset();
+    var i = 0;
+    var ln = strlen(src);
+    while (i < ln) { mdhl_feed(src + i, 1); i = i + 1; }   # one byte per chunk
+    mdhl_finish();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "byte-split stream: still 3 lines (chunk boundaries dissolved)");
+    assert_eq(_t_has_esc(feed_line_ptr(0), feed_line_len(0)), 0, "split: opener verbatim");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 1, "split: code line highlighted");
+    _t_strip_sgr(&sb, feed_line_ptr(1), feed_line_len(1));
+    assert(streq(&sb, "import os"), "split: code recovered exactly");
+    # unterminated fence -> flush at finish, no phantom closer
+    var srcu = "```python\nimport os\n";
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reset();
+    mdhl_feed(srcu, strlen(srcu));
+    mdhl_finish();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "unterminated: opener + highlighted interior, NO phantom closer");
+    assert_eq(_t_has_esc(feed_line_ptr(0), feed_line_len(0)), 0, "unterminated: opener verbatim");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 1, "unterminated: interior highlighted at finish");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
+
+# live fenced-code card (0.18.3): stream interior lines LIVE, then DROP + re-emit highlighted at fence
+# close (TUI / OUT_RING only). Net final feed state == the highlighted block (live rows are transient).
+fn test_mdhl_livecard() {
+    test_group("live fenced-code card (mdhl.cyr / feed.cyr, 0.18.3)");
+    # feed_drop_last / feed_drop_pending primitives
+    feed_init();
+    feed_write("a\nb\nc\n", 6);
+    assert_eq(feed_count(), 3, "three rows sealed");
+    feed_drop_last(2);
+    assert_eq(feed_count(), 1, "feed_drop_last(2) -> 1 row");
+    feed_drop_last(9);
+    assert_eq(feed_count(), 0, "feed_drop_last over-count clamps to 0");
+    feed_init();
+    feed_write("partial", 7);
+    assert(feed_pending_len() > 0, "an un-newlined line is pending");
+    feed_drop_pending();
+    assert_eq(feed_pending_len(), 0, "feed_drop_pending discards the un-sealed line");
+
+    ui_force(PT_ANSI, CD_TRUE);
+    # (1) well-formed block, streamed in chunks that split every token/delimiter: the final feed rows are
+    # [opener verbatim, interior HIGHLIGHTED, closer verbatim] with EXACTLY 3 rows (no leftover live rows).
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reset();
+    mdhl_feed("```py", 5); mdhl_feed("thon\nim", 7); mdhl_feed("port os\n``", 10); mdhl_feed("`\n", 2);
+    mdhl_finish();
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "live upgrade: exactly 3 rows — no leftover live interior row");
+    assert_eq(_t_has_esc(feed_line_ptr(0), feed_line_len(0)), 0, "opener verbatim");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 1, "interior upgraded to highlighted");
+    assert_eq(_t_has_esc(feed_line_ptr(2), feed_line_len(2)), 0, "closer verbatim");
+    var sb1[128];
+    _t_strip_sgr(&sb1, feed_line_ptr(1), feed_line_len(1));
+    assert(streq(&sb1, "import os"), "interior strips to the code exactly (no doubling)");
+    # (2) BLOCKER regression: an unterminated block whose last interior line has NO trailing newline
+    # (an interrupt / truncated completion) must NOT double the live partial with the highlighted re-emit.
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reset();
+    var un = "```python\nimport os\nx=1";
+    mdhl_feed(un, strlen(un));
+    mdhl_finish();
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "unterminated: opener + 2 highlighted rows, no leftover");
+    var sb2[128];
+    _t_strip_sgr(&sb2, feed_line_ptr(2), feed_line_len(2));
+    assert(streq(&sb2, "x=1"), "the newline-less last line is NOT doubled (strips to 'x=1')");
+    # (3) no-grammar block (```text): interior stays verbatim (uncoloured), correct count, no drop glitch
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reset();
+    var tx = "```text\nhello\n```\n";
+    mdhl_feed(tx, strlen(tx));
+    mdhl_finish();
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 3, "no-grammar: 3 rows");
+    assert_eq(_t_has_esc(feed_line_ptr(1), feed_line_len(1)), 0, "no-grammar interior stays verbatim");
+    var sb3[128];
+    _t_strip_sgr(&sb3, feed_line_ptr(1), feed_line_len(1));
+    assert(streq(&sb3, "hello"), "no-grammar interior text preserved");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
+fn test_mdhl_inline() {
+    test_group("inline markdown (mdhl.cyr, 0.18.8)");
+    ui_force(PT_ANSI, CD_TRUE);
+    var sv[128];
+    # heading -> whole line colored, strips to the raw text
+    var hl = _t_md_row("## Title\n", 9);
+    assert_eq(_t_has_esc(feed_line_ptr(0), hl), 1, "heading row is styled");
+    _t_strip_sgr(&sv, feed_line_ptr(0), hl);
+    assert(streq(&sv, "## Title"), "heading strips back to '## Title' (strip-coverage)");
+    assert_eq(_t_count_sub(feed_line_ptr(0), hl, "\x1b[1m", 4), 0, "heading is color, not bold");
+    # bold -> the **b** span carries ESC[1m, strips to the raw text
+    var bl = _t_md_row("a **b** c\n", 10);
+    assert_eq(_t_count_sub(feed_line_ptr(0), bl, "\x1b[1m", 4), 1, "bold span emits one ESC[1m");
+    _t_strip_sgr(&sv, feed_line_ptr(0), bl);
+    assert(streq(&sv, "a **b** c"), "bold strips back to 'a **b** c'");
+    # inline code -> colored (not bold), strips to the raw text
+    var cl = _t_md_row("a `x` b\n", 8);
+    assert_eq(_t_has_esc(feed_line_ptr(0), cl), 1, "inline code is styled");
+    assert_eq(_t_count_sub(feed_line_ptr(0), cl, "\x1b[1m", 4), 0, "inline code is color, not bold");
+    _t_strip_sgr(&sv, feed_line_ptr(0), cl);
+    assert(streq(&sv, "a `x` b"), "inline code strips back to 'a `x` b'");
+    # code precedence: the ** inside a code span stays literal (no bold)
+    var pl = _t_md_row("`**x**`\n", 8);
+    assert_eq(_t_count_sub(feed_line_ptr(0), pl, "\x1b[1m", 4), 0, "** inside inline code is not bolded (code precedence)");
+    _t_strip_sgr(&sv, feed_line_ptr(0), pl);
+    assert(streq(&sv, "`**x**`"), "code-with-stars strips back verbatim");
+    # list marker -> the bullet styled; unordered + ordered
+    var ll = _t_md_row("- item\n", 7);
+    assert_eq(_t_has_esc(feed_line_ptr(0), ll), 1, "list bullet is styled");
+    _t_strip_sgr(&sv, feed_line_ptr(0), ll);
+    assert(streq(&sv, "- item"), "list line strips back to '- item'");
+    var ol = _t_md_row("1. item\n", 8);
+    _t_strip_sgr(&sv, feed_line_ptr(0), ol);
+    assert(streq(&sv, "1. item"), "ordered list line strips back to '1. item'");
+    # unmatched delimiters -> emitted verbatim, no styling added
+    var ul = _t_md_row("a ** b\n", 7);
+    assert_eq(_t_has_esc(feed_line_ptr(0), ul), 0, "an unmatched ** adds no styling");
+    _t_strip_sgr(&sv, feed_line_ptr(0), ul);
+    assert(streq(&sv, "a ** b"), "unmatched ** strips back verbatim");
+    # FLOOR: at PT_PLAIN the row is byte-identical (no markers)
+    ui_force(PT_PLAIN, CD_NONE);
+    var fl = _t_md_row("## Title\n", 9);
+    assert_eq(_t_has_esc(feed_line_ptr(0), fl), 0, "PT_PLAIN: no styling (floor byte-identical)");
+    ui_force(PT_ANSI, CD_TRUE);
+    # COMPOSE with search: a match inside a heading highlights + strips to raw; a match inside bold
+    # RE-ASSERTS ESC[1m after the match (the 0.18.4 fsearch bold-tracking fold)
+    fsearch_init();
+    var gl2 = _t_md_row("## Title\n", 9);
+    fsearch_set_query("Title", 5);
+    fsearch_rescan();
+    var hb[256];
+    var hn = fsearch_render(&hb, 256, feed_line_ptr(0), gl2, fsearch_cur_off());
+    assert_eq(_t_has_esc(&hb, hn), 1, "search match renders in the colored heading");
+    _t_strip_sgr(&sv, &hb, hn);
+    assert(streq(&sv, "## Title"), "heading + search strips to '## Title'");
+    var bl2 = _t_md_row("**hello world**\n", 16);
+    fsearch_set_query("hello", 5);
+    fsearch_rescan();
+    var bb[256];
+    var bn = fsearch_render(&bb, 256, feed_line_ptr(0), bl2, fsearch_cur_off());
+    assert(_t_count_sub(&bb, bn, "\x1b[1m", 4) >= 2, "bold re-asserted after a search match inside it (original + re-assert)");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}

@@ -1,0 +1,1403 @@
+# tests/cases/core.cyr — the core driver: classify, session, config, hoosh client, cost/usage, persona, oneshot, history, logging.
+# Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
+# (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
+
+fn test_classify() {
+    test_group("classify_input");
+    assert_eq(classify_input(""), CMD_EMPTY, "empty -> CMD_EMPTY");
+    assert_eq(classify_input("/help"), CMD_HELP, "/help");
+    assert_eq(classify_input("/?"), CMD_HELP, "/? alias");
+    assert_eq(classify_input("/quit"), CMD_QUIT, "/quit");
+    assert_eq(classify_input("/exit"), CMD_QUIT, "/exit alias");
+    assert_eq(classify_input("/seams"), CMD_SEAMS, "/seams");
+    assert_eq(classify_input("/state"), CMD_STATE, "/state");
+    assert_eq(classify_input("/model"), CMD_MODEL, "/model bare");
+    assert_eq(classify_input("/model gpt-5"), CMD_MODEL, "/model with arg");
+    assert_eq(classify_input("/read foo.txt"), CMD_READ, "/read with arg");
+    assert_eq(classify_input("/write a b"), CMD_WRITE, "/write");
+    assert_eq(classify_input("/run echo hi"), CMD_RUN, "/run");
+    assert_eq(classify_input("/tools"), CMD_TOOLS, "/tools");
+    assert_eq(classify_input("/call echo {}"), CMD_CALL, "/call with args");
+    assert_eq(classify_input("/audit"), CMD_AUDIT, "/audit");
+    assert_eq(classify_input("/reset"), CMD_RESET, "/reset");
+    assert_eq(classify_input("/clear"), CMD_CLEAR, "/clear");
+    assert_eq(classify_input("/copy"), CMD_COPY, "/copy classifies to CMD_COPY");
+    assert_eq(classify_input("/reprobe"), CMD_REPROBE, "/reprobe");
+    assert_eq(classify_input("/ping"), CMD_REPROBE, "/ping aliases reprobe");
+    assert_eq(classify_input("/history"), CMD_HISTORY, "/history");
+    assert_eq(classify_input("/theme light"), CMD_THEME, "/theme with arg");
+    assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
+    assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
+    assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
+    assert_eq(classify_input("hello"), CMD_TASK, "plain word -> task");
+    return 0;
+}
+
+fn test_tokens() {
+    test_group("token_is + arg_after");
+    assert_eq(token_is("/help", "/help"), 1, "exact token");
+    assert_eq(token_is("/model gpt", "/model"), 1, "token + space");
+    assert_eq(token_is("/models", "/model"), 0, "prefix is not a token");
+    assert_eq(token_is("/modelx", "/model"), 0, "no word boundary");
+    assert_eq(arg_after("/help"), 0, "no arg -> 0");
+    assert(streq(arg_after("/read foo.txt"), "foo.txt"), "arg extracted");
+    assert(streq(arg_after("/model   gpt-5"), "gpt-5"), "skips extra spaces");
+    assert(streq(arg_after("/write a.txt hi there"), "a.txt hi there"), "rest after first token");
+    return 0;
+}
+
+fn test_cstr() {
+    test_group("cstr_starts_with");
+    assert_eq(cstr_starts_with("hello", "he"), 1, "prefix");
+    assert_eq(cstr_starts_with("hello", "hello"), 1, "equal");
+    assert_eq(cstr_starts_with("he", "hello"), 0, "shorter than prefix");
+    assert_eq(cstr_starts_with("abc", "x"), 0, "mismatch");
+    assert_eq(cstr_starts_with("", ""), 1, "empty prefix of empty");
+    return 0;
+}
+
+fn test_seams() {
+    test_group("seam registry");
+    assert_eq(SEAM_COUNT, 7, "seven seams (git added 0.13.0)");
+    assert(streq(seam_name(SEAM_HOOSH), "hoosh"), "hoosh name");
+    assert(streq(seam_name(SEAM_DAIMON), "daimon"), "daimon name");
+    assert(streq(seam_name(SEAM_BOTE), "bote"), "bote name");
+    assert(streq(seam_name(SEAM_TRON), "t-ron"), "t-ron name");
+    assert(streq(seam_name(SEAM_AVATARA), "avatara"), "avatara name");
+    assert(streq(seam_name(SEAM_MEMORY), "mneme"), "mneme name (memory domain owner)");
+    assert(streq(seam_name(SEAM_GIT), "sit"), "sit name (git/VCS domain owner)");
+    assert_eq(seam_status(SEAM_MEMORY), SEAM_ABSENT, "memory absent (mneme not yet Cyrius-ported)");
+    assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
+    assert_eq(seam_status(SEAM_DAIMON), SEAM_ABSENT, "daimon absent when unconfigured");
+    assert_eq(seam_status(SEAM_TRON), SEAM_ABSENT, "t-ron absent without a policy");
+    assert_eq(seam_status(SEAM_BOTE), SEAM_NATIVE, "bote native (vendored core, M4)");
+    assert_eq(seam_status(SEAM_AVATARA), SEAM_NATIVE, "avatara native (vendored archetype, M5)");
+    assert_eq(seam_any_wired(), 1, "bote wired by construction");
+    assert(streq(seam_status_label(SEAM_ABSENT), "absent"), "absent label");
+    assert(streq(seam_status_label(SEAM_REMOTE), "remote-client"), "remote label");
+    assert(streq(seam_status_label(SEAM_NATIVE), "native"), "native label");
+    return 0;
+}
+
+fn test_capability_ladder() {
+    test_group("capability ladder (full/degraded/absent)");
+    # effect labels
+    assert(streq(cap_state_label(CAP_FULL), "full"), "full label");
+    assert(streq(cap_state_label(CAP_DEGRADED), "degraded"), "degraded label");
+    assert(streq(cap_state_label(CAP_ABSENT), "absent"), "absent label");
+    # always-native vendored seams are FULL regardless of config
+    assert_eq(seam_cap_state(SEAM_BOTE), CAP_FULL, "bote full (vendored)");
+    assert_eq(seam_cap_state(SEAM_AVATARA), CAP_FULL, "avatara full (vendored)");
+    # unconfigured: hoosh/daimon have no fallback -> ABSENT (never faked)
+    assert_eq(seam_cap_state(SEAM_HOOSH), CAP_ABSENT, "hoosh absent when unconfigured");
+    assert_eq(seam_cap_state(SEAM_DAIMON), CAP_ABSENT, "daimon absent when unconfigured");
+    # the honesty case: absent t-ron is DEGRADED (confirm gate), never ABSENT,
+    # never silently allowing — security degrades CLOSED.
+    assert_eq(seam_cap_state(SEAM_TRON), CAP_DEGRADED, "t-ron degrades closed, not absent");
+    # full + fallback prose carry the honest semantics
+    assert(streq(seam_cap_full(SEAM_TRON), "per-tool authorization on /run, /write, /call; deny is final"), "t-ron full prose");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_HOOSH), "absent:"), 1, "hoosh fallback is absent");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_DAIMON), "absent:"), 1, "daimon fallback is absent");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_TRON), "degraded:"), 1, "t-ron fallback is degraded");
+    # memory (0.12.0): OFF by default -> ABSENT (byte-identical floor); when
+    # [memory].enabled, the local .thoth/memory reader stands in -> DEGRADED
+    # (never faked). mneme's semantic engine would be FULL (not reachable today).
+    assert_eq(seam_cap_state(SEAM_MEMORY), CAP_ABSENT, "memory absent when disabled (default)");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_MEMORY), "absent:"), 1, "memory-off fallback is absent");
+    _cfg_memory_enabled = 1;
+    assert_eq(seam_cap_state(SEAM_MEMORY), CAP_DEGRADED, "memory degraded when enabled (local reader)");
+    assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_MEMORY), "degraded:"), 1, "memory-on fallback is degraded");
+    _cfg_memory_enabled = 0;
+    return 0;
+}
+
+fn test_session() {
+    test_group("session state");
+    session_reset();
+    assert_eq(session_turns(), 0, "turns start 0");
+    assert_eq(session_model(), 0, "model starts none");
+    session_bump_turn();
+    session_bump_turn();
+    assert_eq(session_turns(), 2, "two turns counted");
+    session_set_model("gpt-5");
+    assert(streq(session_model(), "gpt-5"), "model set");
+    session_reset();
+    assert_eq(session_turns(), 0, "reset clears turns");
+    assert_eq(session_model(), 0, "reset clears model");
+    return 0;
+}
+
+# context-budget meter (0.19.0): surface framed history bytes vs the ~32 KiB evict boundary that
+# _hoosh_history_start uses, so context pressure is visible before it silently drops old turns.
+fn test_ctx_meter() {
+    test_group("context-budget meter (hoosh.cyr, 0.19.0)");
+    assert_eq(hoosh_ctx_budget(), 32768, "budget is HOOSH_REQ_CAP/8 = 32 KiB");
+    session_history_clear();
+    assert_eq(hoosh_ctx_bytes(), 0, "empty history is 0 bytes");
+    assert_eq(hoosh_ctx_evicted(), 0, "empty history evicts nothing");
+    session_history_append("user", "hello", 5);
+    assert_eq(hoosh_ctx_bytes(), 21, "one 'hello' = 5 content + 16 framing");
+    assert_eq(hoosh_ctx_evicted(), 0, "small history evicts nothing");
+    session_history_append("assistant", "world!", 6);
+    assert_eq(hoosh_ctx_bytes(), 43, "two messages = 21 + (6+16)");
+    # eviction: two ~20 KiB messages exceed the 32 KiB budget -> the oldest is dropped from the request
+    session_history_clear();
+    var big = alloc(20001);
+    var i = 0;
+    while (i < 20000) { store8(big + i, 120); i = i + 1; }   # 'x' * 20000
+    store8(big + 20000, 0);
+    session_history_append("user", big, 20000);
+    assert_eq(hoosh_ctx_bytes(), 20016, "one 20K message = 20016 framed bytes");
+    assert_eq(hoosh_ctx_evicted(), 0, "one 20K message fits under budget (nothing evicted)");
+    session_history_append("assistant", big, 20000);
+    assert_eq(hoosh_ctx_bytes(), 40032, "two 20K messages = 40032 framed bytes (> 32K budget)");
+    assert_eq(hoosh_ctx_evicted(), 1, "the oldest of two over-budget turns is evicted");
+    session_history_clear();
+    return 0;
+}
+
+# live spine-health (0.19.3): the cached hoosh reachability driven by traffic outcomes — a turn's transport
+# result (rc<0 = connection failure = DOWN; rc>=0 = the gateway answered = UP), the mark helpers, and the
+# tri-state. (hoosh_health_probe needs a live gateway, so it is not unit-tested here.)
+fn test_hoosh_health() {
+    test_group("live spine-health (hoosh.cyr, 0.19.3)");
+    hoosh_health_mark_up();
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "mark_up -> UP");
+    hoosh_health_note(0 - 1);
+    assert_eq(hoosh_health(), HOOSH_HEALTH_DOWN, "a transport failure (rc<0) -> DOWN");
+    hoosh_health_note(0);
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "an answered turn (rc 0) -> UP");
+    hoosh_health_note(500);
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "a non-2xx (rc>0, gateway answered) is still UP");
+    hoosh_health_mark_down();
+    assert_eq(hoosh_health(), HOOSH_HEALTH_DOWN, "mark_down -> DOWN");
+    return 0;
+}
+
+# The avatara persona overlay (M5): identity SOURCED from the vendored archetype
+# bundle (egyptian_thoth via the prof_* accessors), not a hardcoded stub. soul +
+# spirit are the prose that feeds the hoosh system prompt.
+fn test_persona() {
+    test_group("avatara persona (M5)");
+    assert(streq(persona_name(), "Thoth"), "name from avatara archetype");
+    assert(streq(persona_role(), "the Librarian"), "role is thoth's overlay framing");
+    assert(persona_soul() != 0, "soul present from avatara");
+    assert_eq(cstr_starts_with(persona_soul(), "You are Thoth"), 1, "soul is the Thoth archetype voice");
+    assert(persona_spirit() != 0, "spirit present from avatara");
+    assert_eq(cstr_starts_with(persona_spirit(), "Your nature is precision"), 1, "spirit is precision");
+    assert(persona_desc() != 0, "desc present from avatara");
+    # the hoosh system prompt (M5 step 2): soul + spirit + thoth's operating clause
+    var sysp = persona_system_prompt();
+    assert(sysp != 0, "system prompt built");
+    assert_eq(cstr_starts_with(sysp, "You are Thoth"), 1, "system prompt opens with the archetype soul");
+    assert(strlen(sysp) > strlen(persona_soul()), "system prompt appends spirit + operating clause");
+    return 0;
+}
+
+# persona SWITCH (0.22.0): mid-session /persona — resolve via avatara find_and_validate, swap + invalidate
+# the cached system prompt, role sourced per the identity split. Restores the default at the end so the M5
+# test (and any later test) sees pristine Thoth.
+fn test_persona_switch() {
+    test_group("persona switch (session.cyr, 0.22.0)");
+    persona_set(egyptian_thoth());                           # pristine default
+    assert(streq(persona_name(), "Thoth") == 1, "default persona is Thoth");
+    assert(streq(persona_role(), "the Librarian") == 1, "default role is 'the Librarian'");
+    assert(streq(persona_tradition(), "Egyptian") == 1, "default tradition Egyptian");
+    # SNAPSHOT the default prompt before switching — it is rebuilt IN PLACE, so a held pointer changes.
+    var sys_default = persona_system_prompt();
+    var snap = alloc(2048);
+    var q = 0;
+    while (load8(sys_default + q) != 0) { store8(snap + q, load8(sys_default + q)); q = q + 1; }
+    store8(snap + q, 0);
+    assert(cstr_starts_with(snap, "You are Thoth") == 1, "captured default prompt is the Thoth voice");
+
+    assert_eq(persona_switch("Athena"), 1, "switch to a valid archetype (Athena) succeeds");
+    assert(streq(persona_name(), "Athena") == 1, "active persona is now Athena");
+    assert(streq(persona_role(), "the Librarian") == 0, "switched role is NOT 'the Librarian'");
+    # 0.24.5 role modality: a switched persona's default role now derives from its DOMINANT trait aspect
+    # (avatara's profile_dominant_aspect -> aspect_role), not the profile desc.
+    assert(streq(persona_role(), aspect_role(profile_dominant_aspect(persona_profile()))) == 1, "switched role = dominant aspect (avatara-sourced)");
+    var sys_athena = persona_system_prompt();
+    assert(streq(sys_athena, snap) == 0, "system prompt rebuilt for the new persona (differs from the default)");
+    assert(cstr_starts_with(sys_athena, "You are Thoth") == 0, "the rebuilt prompt is no longer the Thoth voice");
+
+    assert_eq(persona_switch("NotARealArchetype_zzz"), 0, "unknown name -> refusal (0)");
+    assert(streq(persona_name(), "Athena") == 1, "a failed switch leaves the active persona unchanged");
+    assert(streq(persona_tagline(), "Thinks, Handles, Orchestrates, Transforms, Heals") == 1,
+        "tagline is the fixed app backronym, constant across switches (identity split)");
+
+    # 0.22.1 /personas card excerpt helper (returns the emitted byte count; discard the emit itself)
+    out_mode_set(OUT_NULL);
+    var big = alloc(128);
+    var k = 0;
+    while (k < 100) { store8(big + k, 97); k = k + 1; }     # 100 'a', no spaces
+    store8(big + 100, 0);
+    assert_eq(_persona_excerpt(big), 90, "excerpt hard-caps a no-space string at 90 bytes");
+    assert_eq(_persona_excerpt("short one"), 9, "excerpt emits a short string whole (returns its length)");
+    out_mode_set(OUT_FD1);
+
+    # 0.22.2 shadow: shadow of the active persona -> a usable persona (inverted prose from avatara)
+    persona_set(egyptian_thoth());
+    assert_eq(persona_shadow(0), 1, "shadow of the active persona succeeds");
+    assert(cstr_starts_with(persona_name(), "Shadow of ") == 1, "shadow name is 'Shadow of <base>'");
+    assert(persona_soul() != 0, "shadow persona has soul prose (usable)");
+    assert(streq(persona_role(), "the Librarian") == 0, "shadow role is not the Librarian");
+
+    # 0.22.2 blend: weighted compose (Athena:2 + Odin) -> composite persona, dominant leads the voice
+    persona_set(egyptian_thoth());
+    var wv = vec_new();
+    var ra = find_and_validate("Athena");
+    var ro = find_and_validate("Odin");
+    vec_push(wv, weighted_new(result_unwrap(ra), 2.0));
+    vec_push(wv, weighted_new(result_unwrap(ro), 1.0));
+    assert_eq(persona_blend(wv), 1, "weighted blend (Athena:2 + Odin) succeeds");
+    assert(persona_soul() != 0, "blend persona has soul prose (from the dominant, usable)");
+    assert(cstr_starts_with(persona_name(), "Athena") == 1, "composite name leads with the dominant (Athena)");
+
+    persona_set(egyptian_thoth());                          # restore default for downstream tests
+    assert(streq(persona_name(), "Thoth") == 1, "restored to the default Thoth");
+    return 0;
+}
+
+# Config defaults when no thoth.cyml is loaded (the test process loads none).
+fn test_config() {
+    test_group("hoosh config (unconfigured)");
+    assert_eq(config_hoosh_configured(), 0, "not configured by default");
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088"), "localhost default url");
+    assert_eq(config_hoosh_token(), 0, "no token by default");
+    assert_eq(config_hoosh_model(), 0, "no model by default");
+    assert_eq(config_hoosh_parallel(), 1, "parallel tool calls on by default");
+    # unconfigured -> hoosh seam stays absent (honest degradation)
+    assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
+    return 0;
+}
+
+# The hoosh client's pure pieces: escape, int-append, request building, and
+# response/error extraction (no network).
+fn test_hoosh() {
+    test_group("hoosh request building");
+    var eb[64];
+    var n = _json_escape_into(&eb, 0, "a\"b");      # a " b
+    store8(&eb + n, 0);
+    assert(streq(&eb, "a\\\"b"), "escape double-quote");
+    var n2 = _json_escape_into(&eb, 0, "x\ny");     # x <LF> y
+    store8(&eb + n2, 0);
+    assert(streq(&eb, "x\\ny"), "escape newline");
+    var n3 = _json_escape_into(&eb, 0, "c\\d");     # c \ d
+    store8(&eb + n3, 0);
+    assert(streq(&eb, "c\\\\d"), "escape backslash");
+
+    var ib[32];
+    var inn = _append_int(&ib, 0, 4096);
+    store8(&ib + inn, 0);
+    assert(streq(&ib, "4096"), "append_int 4096");
+    var iz = _append_int(&ib, 0, 0);
+    store8(&ib + iz, 0);
+    assert(streq(&ib, "0"), "append_int 0");
+
+    var rb[256];
+    hoosh_build_request(&rb, "m", 0, 0, "hi", 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "request shape, no system (0)");
+    hoosh_build_request(&rb, "m", "", 0, "hi", 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "empty system omitted");
+    hoosh_build_request(&rb, "m", "be precise", 0, "hi", 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"be precise\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "system message prepended");
+    hoosh_build_request(&rb, "m", 0, 0, "hi", 1);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "stream=1 sets stream:true + usage opt");
+
+    test_group("hoosh response extraction");
+    var body = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hello world\"}}]}";
+    var s = hoosh_extract_content(body, strlen(body));
+    assert(s != 0, "content present");
+    assert(str_eq_cstr(s, "hello world"), "content matches");
+
+    var empty = "{\"choices\":[]}";
+    assert_eq(hoosh_extract_content(empty, strlen(empty)), 0, "empty choices -> 0");
+    var nojson = "not json";
+    assert_eq(hoosh_extract_content(nojson, strlen(nojson)), 0, "unparseable -> 0");
+
+    var ebody = "{\"error\":{\"message\":\"no provider for model\"}}";
+    var em = hoosh_extract_error(ebody, strlen(ebody));
+    assert(em != 0, "error present");
+    assert(str_eq_cstr(em, "no provider for model"), "error message matches");
+    assert_eq(hoosh_extract_error(body, strlen(body)), 0, "no error field -> 0");
+
+    test_group("hoosh model catalog extraction");
+    var mbody = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4-6\"},{\"id\":\"gpt-4o\"}]}";
+    var data = hoosh_extract_models(mbody, strlen(mbody));
+    assert(data != 0, "model list present");
+    assert_eq(bayan_json_v_arr_len(data), 2, "two models in data array");
+    var m0 = bayan_json_v_obj_get(bayan_json_v_arr_get(data, 0), "id");
+    assert(str_eq_cstr(bayan_json_v_str(m0), "claude-sonnet-4-6"), "first model id matches");
+    var mempty = "{\"object\":\"list\",\"data\":[]}";
+    assert_eq(bayan_json_v_arr_len(hoosh_extract_models(mempty, strlen(mempty))), 0, "empty catalog -> 0-length array");
+    assert_eq(hoosh_extract_models(body, strlen(body)), 0, "no data field -> 0");
+    assert_eq(hoosh_extract_models(nojson, strlen(nojson)), 0, "unparseable -> 0");
+
+    test_group("hoosh SSE delta extraction");
+    var d1 = "{\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}";
+    var ds = hoosh_extract_delta(d1, strlen(d1));
+    assert(ds != 0, "delta content present");
+    assert(str_eq_cstr(ds, "Hel"), "delta content matches");
+    var drole = "{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}";
+    assert_eq(hoosh_extract_delta(drole, strlen(drole)), 0, "role-only delta -> 0");
+    var dfin = "{\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}";
+    assert_eq(hoosh_extract_delta(dfin, strlen(dfin)), 0, "finish frame -> 0");
+    var dnojson = "[DONE]";
+    assert_eq(hoosh_extract_delta(dnojson, strlen(dnojson)), 0, "[DONE] sentinel -> 0");
+    return 0;
+}
+
+# /models <provider> (0.7.1): hoosh's concrete per-provider catalog shares the
+# /v1/models {object:list, data:[{id, owned_by}]} shape; the drill-down reuses
+# hoosh_extract_models and filters owned_by with the case-insensitive _ci_eq.
+fn test_provider_catalog() {
+    test_group("provider model catalog (/models <provider>)");
+    var cat = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"claude-opus-4\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"gpt-4o\",\"object\":\"model\",\"owned_by\":\"openai\"}]}";
+    var d = hoosh_extract_models(cat, strlen(cat));
+    assert(d != 0, "catalog data array present");
+    assert_eq(bayan_json_v_arr_len(d), 3, "three catalog entries");
+    var e0 = bayan_json_v_arr_get(d, 0);
+    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get(e0, "owned_by")), "anthropic"), "entry owned_by parsed");
+    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get(e0, "id")), "claude-sonnet-4"), "entry id parsed");
+    # case-insensitive provider match (user may type 'Anthropic'; hoosh emits 'anthropic')
+    assert_eq(_ci_eq("anthropic", "anthropic"), 1, "exact provider matches");
+    assert_eq(_ci_eq("Anthropic", "anthropic"), 1, "provider match ignores case");
+    assert_eq(_ci_eq("openai", "anthropic"), 0, "different providers do not match");
+    assert_eq(_ci_eq("anthropic", "anthropi"), 0, "prefix is not a full match");
+    # filter the catalog by provider (mirrors hoosh_list_provider_models)
+    var matches = 0;
+    var i = 0;
+    while (i < bayan_json_v_arr_len(d)) {
+        var m = bayan_json_v_arr_get(d, i);
+        var ob = bayan_json_v_str(bayan_json_v_obj_get(m, "owned_by"));
+        if (_ci_eq(str_cstr(ob), "anthropic") == 1) { matches = matches + 1; }
+        i = i + 1;
+    }
+    assert_eq(matches, 2, "two anthropic models filtered from the catalog");
+    return 0;
+}
+
+# [hoosh].stream config toggle: default on; the _cfg_bool reader maps the TOML
+# literal true/false (parsed as text) and falls back on absent/garbage.
+fn test_stream_config() {
+    test_group("hoosh stream config");
+    assert_eq(config_hoosh_stream(), 1, "streaming on by default (no config loaded)");
+    assert_eq(_cfg_bool(0, "x", 1), 1, "null pairs -> default 1");
+    assert_eq(_cfg_bool(0, "x", 0), 0, "null pairs -> default 0");
+    var toml = "[hoosh]\nstream = false\non = true\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    var secs = bayan_toml_get_sections(sections, "hoosh");
+    var pairs = bayan_toml_section_pairs(vec_get(secs, 0));
+    assert_eq(_cfg_bool(pairs, "stream", 1), 0, "explicit false read as 0");
+    assert_eq(_cfg_bool(pairs, "on", 0), 1, "explicit true read as 1");
+    assert_eq(_cfg_bool(pairs, "missing", 1), 1, "absent key -> default");
+    return 0;
+}
+
+# Token usage accounting (0.10.2): hoosh_extract_usage reads usage.total_tokens
+# from a blocking completion body and from a streaming usage frame (choices:[] +
+# usage), -1 when absent; the session accumulator sums only real figures and the
+# seen-flag drives the honest-omit surface (ADR-0010).
+fn test_usage() {
+    test_group("token usage (0.10.2)");
+    # blocking-completion body carrying usage
+    var full = "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":5,\"total_tokens\":17}}";
+    assert_eq(hoosh_extract_usage(full, strlen(full)), 17, "blocking usage total_tokens parsed");
+    # the streaming usage frame: choices empty, usage present (include_usage)
+    var uframe = "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}";
+    assert_eq(hoosh_extract_usage(uframe, strlen(uframe)), 7, "streaming usage frame total parsed");
+    # a normal delta frame has no usage -> -1 (absent, never 0)
+    var delta = "{\"choices\":[{\"delta\":{\"content\":\"x\"}}]}";
+    assert_eq(hoosh_extract_usage(delta, strlen(delta)), 0 - 1, "delta frame -> -1 (no usage)");
+    # usage object without total_tokens -> -1
+    var notot = "{\"usage\":{\"prompt_tokens\":1}}";
+    assert_eq(hoosh_extract_usage(notot, strlen(notot)), 0 - 1, "usage without total_tokens -> -1");
+    var nojson = "not json";
+    assert_eq(hoosh_extract_usage(nojson, strlen(nojson)), 0 - 1, "unparseable body -> -1");
+
+    # the session accumulator + seen-flag (the honest-omit gate)
+    session_reset();
+    assert_eq(session_tokens_seen(), 0, "no usage seen after reset");
+    assert_eq(session_tokens(), 0, "zero tokens after reset");
+    session_add_tokens(0 - 1);   # an absent (-1) report is ignored, never flips seen
+    assert_eq(session_tokens_seen(), 0, "negative report ignored, still unseen");
+    session_add_tokens(17);
+    assert_eq(session_tokens_seen(), 1, "seen flips on first real report");
+    assert_eq(session_tokens(), 17, "first report summed");
+    session_add_tokens(7);
+    assert_eq(session_tokens(), 24, "second report accumulates");
+    session_reset();
+    assert_eq(session_tokens(), 0, "reset clears the tally");
+    assert_eq(session_tokens_seen(), 0, "reset clears the seen-flag");
+    return 0;
+}
+
+# Cost accounting (0.10.3): the pure micro-USD pricing math, the $d.cc formatter, the
+# [pricing.<model>] table (verbatim section-name match, including dashed ids), and the
+# session cost accumulator + honest-omit seen/unpriced flags.
+fn test_cost() {
+    test_group("cost (0.10.3)");
+    # pricing math: rates are micro-USD per 1000 tokens (= USD-per-1M x 1000).
+    # 1000 prompt tokens at $3.00/1M (in_rate 3000) = $0.003 = 3000 micro-USD.
+    assert_eq(hoosh_cost_micro(1000, 0, 3000, 15000), 3000, "prompt-only cost");
+    # 1000 completion tokens at $15.00/1M (out_rate 15000) = $0.015 = 15000 micro-USD.
+    assert_eq(hoosh_cost_micro(0, 1000, 3000, 15000), 15000, "completion-only cost");
+    # 2000 in at $0.25/1M (250) + 500 out at $1.25/1M (1250) = 500 + 625 = 1125 micro-USD.
+    assert_eq(hoosh_cost_micro(2000, 500, 250, 1250), 1125, "mixed cheap-model cost");
+    assert_eq(hoosh_cost_micro(0, 0, 3000, 15000), 0, "zero tokens -> zero cost");
+
+    # $d.cc formatter (truncates to whole cents; 1 cent = 10000 micro-USD).
+    var cb[24];
+    cost_fmt(&cb, 3000);     assert(streq(&cb, "$0.00"), "3000 micro-USD -> $0.00 (sub-cent floors)");
+    cost_fmt(&cb, 50000);    assert(streq(&cb, "$0.05"), "50000 micro-USD -> $0.05");
+    cost_fmt(&cb, 1234567);  assert(streq(&cb, "$1.23"), "1234567 micro-USD -> $1.23 (floors)");
+    cost_fmt(&cb, 12000000); assert(streq(&cb, "$12.00"), "12000000 micro-USD -> $12.00");
+
+    # the [pricing.<model>] table via a parsed TOML (verbatim dashed section name).
+    var toml = "[pricing.claude-x]\ninput = 3000\noutput = 15000\n[pricing.cheap]\ninput = 250\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    _price_load(sections);
+    assert_eq(config_price_input("claude-x"), 3000, "input rate for dashed model id");
+    assert_eq(config_price_output("claude-x"), 15000, "output rate parsed");
+    assert_eq(config_price_input("cheap"), 250, "second pricing section parsed");
+    assert_eq(config_price_output("cheap"), 0 - 1, "missing output key -> -1");
+    assert_eq(config_price_input("unknown"), 0 - 1, "unpriced model -> -1");
+
+    # session cost accumulator + honest-omit flags.
+    session_reset();
+    assert_eq(session_cost_seen(), 0, "no cost seen after reset");
+    assert_eq(session_cost_micro(), 0, "zero cost after reset");
+    assert_eq(session_cost_unpriced_count(), 0, "no unpriced after reset");
+    session_add_cost(0 - 5);                       # negative ignored
+    assert_eq(session_cost_seen(), 0, "negative cost ignored, still unseen");
+    session_add_cost(1125);
+    assert_eq(session_cost_seen(), 1, "seen flips on first priced response");
+    assert_eq(session_cost_micro(), 1125, "first cost summed");
+    session_add_cost(15000);
+    assert_eq(session_cost_micro(), 16125, "second cost accumulates");
+    session_note_unpriced();
+    assert_eq(session_cost_unpriced_count(), 1, "unpriced response counted");
+    session_reset();
+    assert_eq(session_cost_micro(), 0, "reset clears cost");
+    assert_eq(session_cost_unpriced_count(), 0, "reset clears unpriced count");
+
+    # end-to-end: _hoosh_account_usage wires the ACTIVE model -> [pricing] -> session
+    # cost (the price-at-accumulate path the build sandbox can't exercise live). A body
+    # with 1000+1000 tokens at claude-x (in 3000, out 15000) = (3e6 + 15e6)/1000 = 18000.
+    _price_load(sections);                  # claude-x: in 3000, out 15000 (idempotent)
+    session_reset();
+    session_set_model("claude-x");
+    var ubody = "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000}}";
+    _hoosh_account_usage(bayan_json_v_parse_str(ubody, strlen(ubody)));
+    assert_eq(session_tokens(), 2000, "account_usage adds total_tokens");
+    assert_eq(session_cost_micro(), 18000, "account_usage prices at the active model's rate");
+    assert_eq(session_cost_seen(), 1, "priced response flips cost seen");
+    # an unpriced active model: usage still counts tokens, but cost is noted not faked.
+    session_reset();
+    session_set_model("no-price-model");
+    _hoosh_account_usage(bayan_json_v_parse_str(ubody, strlen(ubody)));
+    assert_eq(session_tokens(), 2000, "tokens still counted for unpriced model");
+    assert_eq(session_cost_seen(), 0, "unpriced model -> cost stays unseen");
+    assert_eq(session_cost_unpriced_count(), 1, "unpriced model -> noted once");
+    # a HALF-declared [pricing.cheap] (input only, output omitted) must degrade to
+    # unpriced+noted — NOT silently bill the missing side at $0 (ADR-0010 honest-omit).
+    session_reset();
+    session_set_model("cheap");
+    _hoosh_account_usage(bayan_json_v_parse_str(ubody, strlen(ubody)));
+    assert_eq(session_tokens(), 2000, "tokens counted for half-declared model");
+    assert_eq(session_cost_seen(), 0, "half-declared pricing -> cost stays unseen");
+    assert_eq(session_cost_unpriced_count(), 1, "half-declared pricing -> noted unpriced");
+    session_set_model(0);   # don't leak the test model into later tests
+    session_reset();
+    return 0;
+}
+
+# [alias] macros (0.11.4): the config table load + name extraction + the expand step of
+# expand-then-redispatch. The dispatch recursion itself runs through dispatch() (verified
+# live); here we pin the PURE pieces — table lookup/dedup, _alias_name_of, alias_expand
+# (value verbatim + arg append + bounding), and the floor-identical-when-absent property.
+fn test_alias() {
+    test_group("[alias] macros (config.cyr / commands.cyr)");
+
+    # _alias_name_of: the bare token after '/', up to a space or nul, cap-bounded.
+    var nb[256];
+    _alias_name_of("/ship", &nb, 256);     assert(streq(&nb, "ship"), "name of /ship");
+    _alias_name_of("/ship arg", &nb, 256); assert(streq(&nb, "ship"), "name stops at the first space");
+    _alias_name_of("/", &nb, 256);         assert(streq(&nb, ""), "bare / -> empty name");
+    _alias_name_of("/  x", &nb, 256);      assert(streq(&nb, ""), "/<spaces> -> empty name");
+    _alias_name_of("/abcdef", &nb, 4);     assert(streq(&nb, "abc"), "name truncates to cap-1, nul-terminated");
+
+    # _alias_load from parsed TOML: a blank value is skipped; a duplicate key keeps the first.
+    var toml = "[alias]\nship = \"/run git status\"\nexplain = \"explain this:\"\nblank = \"\"\nship = \"/second\"\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    _alias_load(sections);
+    assert_eq(config_alias_count(), 2, "two valid aliases loaded (blank skipped, dup deduped)");
+    assert(streq(config_alias_lookup("ship"), "/run git status"), "duplicate key -> first definition wins");
+    assert(streq(config_alias_lookup("explain"), "explain this:"), "lookup explain");
+    assert_eq(config_alias_lookup("blank"), 0, "blank-value alias not stored");
+    assert_eq(config_alias_lookup("nope"), 0, "undeclared alias -> 0");
+
+    # alias_expand: the value verbatim, with any trailing args appended after one space.
+    assert(streq(alias_expand("/ship", 0), "/run git status"), "expand /ship");
+    assert(streq(alias_expand("/explain foo bar", 0), "explain this: foo bar"), "expand appends trailing args");
+    assert_eq(alias_expand("/nope", 0), 0, "no alias -> 0 (falls through to unknown-command)");
+
+    # per-depth buffers are disjoint: a depth-1 expansion must not clobber a depth-0 one.
+    var d0 = alias_expand("/ship", 0);
+    var d1 = alias_expand("/explain z", 1);
+    assert(d0 != d1, "different depths use different buffer slots");
+    assert(streq(d0, "/run git status"), "depth-0 line intact after a depth-1 expansion");
+
+    # bounding: a value longer than ALIAS_LINE_CAP truncates and stays nul-terminated
+    # (white-box: install an oversized value directly, past the parsed table).
+    var bigval[2100];
+    var bi = 0;
+    while (bi < 2048) { store8(&bigval + bi, 65); bi = bi + 1; }   # 2048 'A'
+    store8(&bigval + 2048, 0);
+    store64(_alias_names + config_alias_count() * 8, "big");
+    store64(_alias_vals + config_alias_count() * 8, &bigval);
+    _alias_n = _alias_n + 1;
+    var big = alias_expand("/big", 0);
+    assert(big != 0, "oversized-value alias still resolves");
+    assert_eq(strlen(big), ALIAS_LINE_CAP - 1, "expansion truncated to ALIAS_LINE_CAP-1");
+    assert_eq(load8(big + ALIAS_LINE_CAP - 1), 0, "truncated expansion stays nul-terminated");
+
+    # an alias name >= 256 chars is SKIPPED at load (it could never match a typed token,
+    # which the TUI caps at 255) — so it is not a dead, count-inflating entry. Build
+    # "[alias]\n<256 'a'> = \"x\"\n" and confirm the table stays empty.
+    var lt[400];
+    var lp = 0;
+    var hdr = "[alias]\n";
+    var hi = 0;
+    while (load8(hdr + hi) != 0) { store8(&lt + lp, load8(hdr + hi)); lp = lp + 1; hi = hi + 1; }
+    var ai = 0;
+    while (ai < 256) { store8(&lt + lp, 97); lp = lp + 1; ai = ai + 1; }   # a 256-char name
+    var tl = " = \"x\"\n";
+    var ti = 0;
+    while (load8(tl + ti) != 0) { store8(&lt + lp, load8(tl + ti)); lp = lp + 1; ti = ti + 1; }
+    var oversec = bayan_toml_parse(str_new(&lt, lp));
+    _alias_load(oversec);
+    assert_eq(config_alias_count(), 0, "256-char alias name skipped at load (no dead unmatchable entry)");
+
+    # floor: with no aliases loaded, expansion is always 0 -> the unknown-command path is
+    # byte-identical to a build without alias support.
+    _alias_n = 0;
+    assert_eq(alias_expand("/ship", 0), 0, "no aliases -> no expansion (byte-identical floor)");
+    return 0;
+}
+
+# /dry request-body preview (0.11.5): hoosh_build_dry composes the EXACT request body
+# thoth would send for a task WITHOUT mutating session history (so /dry is side-effect-free).
+# The bodies are deterministic, so we pin them with exact string equality; the no-mutation
+# invariant is the load-bearing guarantee.
+fn test_dry() {
+    test_group("/dry request preview (hoosh.cyr / commands.cyr)");
+    session_set_model(0);
+    session_reset();
+    var dst[4096];
+
+    # /dry classifies + the model accessor mirrors hoosh_send's precedence.
+    assert_eq(classify_input("/dry write a fn"), CMD_DRY, "/dry classifies to CMD_DRY");
+    assert(streq(hoosh_model_cur(), "default"), "no model set -> 'default' (hoosh routes)");
+    session_set_model("claude-x");
+    assert(streq(hoosh_model_cur(), "claude-x"), "session model wins");
+    session_set_model(0);
+
+    # bare body: empty history, no system, blocking -> a single user message.
+    var l1 = hoosh_build_dry(&dst, "m", 0, 0, "hi", 0);
+    store8(&dst + l1, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: bare user turn");
+
+    # with a system (persona) message prepended.
+    var l2 = hoosh_build_dry(&dst, "m", "SYS", 0, "hi", 0);
+    store8(&dst + l2, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"SYS\"},{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: system + user");
+
+    # streaming adds stream + stream_options (matching the real request shape).
+    var l3 = hoosh_build_dry(&dst, "m", 0, 0, "hi", 1);
+    store8(&dst + l3, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "dry body: streaming flags");
+
+    # with conversation history: the tail is serialized, then the PENDING user turn,
+    # and history is NOT mutated by the preview.
+    session_history_append("user", "Q", 1);
+    session_history_append("assistant", "A", 1);
+    var before = session_history_len();
+    var l4 = hoosh_build_dry(&dst, "m", 0, 0, "now", 0);
+    store8(&dst + l4, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"Q\"},{\"role\":\"assistant\",\"content\":\"A\"},{\"role\":\"user\",\"content\":\"now\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: history tail + pending user");
+    assert_eq(session_history_len(), before, "hoosh_build_dry does NOT mutate history (side-effect-free)");
+
+    # the prompt is JSON-escaped like the real builders (a quote can't break the body).
+    session_reset();                       # clear the history appended above
+    var l5 = hoosh_build_dry(&dst, "m", 0, 0, "a\"b", 0);
+    store8(&dst + l5, 0);
+    assert(streq(&dst, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\\\"b\"}],\"max_tokens\":4096,\"stream\":false}"), "dry body: prompt is JSON-escaped");
+
+    session_set_model(0);
+    session_reset();
+    return 0;
+}
+
+# One-shot / argv front-door (0.11.0): the pure argv classifier + task assembly.
+# _oneshot_parse takes a hand-built argv snapshot (cstr-ptr array) so the mode
+# selection and positional-joining are testable without the real /proc/self/cmdline.
+fn test_oneshot() {
+    test_group("one-shot / argv (0.11.0)");
+    var av[64];   # 8 cstr pointers x 8 bytes (buffers are BYTES, not entries)
+    store64(&av + 0, "thoth");
+    assert_eq(_oneshot_parse(&av, 1), ONESHOT_NONE, "no argv task -> NONE (TUI/REPL)");
+    store64(&av + 8, "review");
+    store64(&av + 16, "this");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "positionals -> RUN");
+    assert(streq(_oneshot_task, "review this"), "positionals joined by a space");
+    store64(&av + 8, "--version");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_VERSION, "--version -> VERSION");
+    store64(&av + 8, "-v");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_VERSION, "-v -> VERSION");
+    store64(&av + 8, "--help");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_HELP, "--help -> HELP");
+    store64(&av + 8, "-h");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_HELP, "-h -> HELP");
+    store64(&av + 8, "-p");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "-p forces RUN (task from stdin)");
+    store64(&av + 8, "-p");
+    store64(&av + 16, "summarize");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "-p + positional -> RUN");
+    assert(streq(_oneshot_task, "summarize"), "the -p flag is not part of the task");
+    # --tier (0.11.10): a global modifier — parsed, mapped to a pref, does NOT force a run.
+    store64(&av + 8, "--tier=rich");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "--tier alone -> NONE (no run forced)");
+    assert_eq(oneshot_tier(), TIER_RICH, "--tier=rich -> TIER_RICH");
+    assert_eq(oneshot_tier_bad(), 0, "valid tier -> not bad");
+    store64(&av + 8, "--tier"); store64(&av + 16, "simple");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_NONE, "--tier simple (space form) -> NONE");
+    assert_eq(oneshot_tier(), TIER_SIMPLE, "--tier simple -> TIER_SIMPLE");
+    store64(&av + 8, "--tier"); store64(&av + 16, "auto");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_NONE, "--tier auto -> NONE");
+    assert_eq(oneshot_tier(), TIER_AUTO, "--tier auto -> TIER_AUTO");
+    store64(&av + 8, "--tier=bogus");
+    _oneshot_parse(&av, 2);
+    assert_eq(oneshot_tier_bad(), 1, "--tier=bogus -> bad flag");
+    assert_eq(oneshot_tier(), TIER_AUTO, "a bad tier value falls back to AUTO");
+    # the space form must NOT swallow a following flag: --tier --version still yields VERSION
+    store64(&av + 8, "--tier"); store64(&av + 16, "--version");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_VERSION, "--tier --version -> VERSION (flag not eaten)");
+    # a real value still leaves a following positional as the task -> RUN
+    store64(&av + 8, "--tier"); store64(&av + 16, "rich"); store64(&av + 24, "do"); store64(&av + 32, "x");
+    assert_eq(_oneshot_parse(&av, 5), ONESHOT_RUN, "--tier rich + positional -> RUN");
+    assert_eq(oneshot_tier(), TIER_RICH, "--tier rich applied alongside a task");
+    assert(streq(_oneshot_task, "do x"), "the task excludes '--tier rich'");
+    # task buffer: reset + bounded append
+    _oneshot_task_reset();
+    assert_eq(_oneshot_task_len, 0, "task reset clears the length");
+    assert_eq(_oneshot_task_append_cstr("abc"), 3, "append returns bytes written");
+    assert(streq(_oneshot_task, "abc"), "append assembles the task");
+    return 0;
+}
+
+# JSON-envelope output (0.11.6): the --json/-j one-shot flag (a modifier, not a mode) and the
+# pure envelope serializer. tokens/cost follow ADR-0010 omit-until-present; the reply escapes
+# BY LENGTH (an embedded NUL survives). elapsed_ms is a param so the builder is deterministic.
+fn test_json_envelope() {
+    test_group("JSON-envelope output (oneshot.cyr / hoosh.cyr)");
+    var av[64];
+    store64(&av + 0, "thoth");
+    # --json / -j set the flag without forcing a run or joining the task.
+    store64(&av + 8, "--json");
+    store64(&av + 16, "task");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "--json + task -> RUN");
+    assert_eq(_oneshot_json, 1, "--json sets the json flag");
+    assert(streq(_oneshot_task, "task"), "--json is not part of the task");
+    store64(&av + 8, "-j");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_RUN, "-j + task -> RUN");
+    assert_eq(_oneshot_json, 1, "-j sets the json flag");
+    # --json alone records the flag but is no run intent -> NONE (falls through to the TUI).
+    store64(&av + 8, "--json");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "--json alone -> NONE (no task)");
+    # a plain task leaves the flag clear; the n<=1 early return RESETS it (no stale flag).
+    store64(&av + 8, "plain");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "plain task -> RUN");
+    assert_eq(_oneshot_json, 0, "no --json -> flag stays 0");
+    store64(&av + 8, "--json");
+    _oneshot_parse(&av, 2);
+    assert_eq(_oneshot_json, 1, "flag set before the reset check");
+    assert_eq(_oneshot_parse(&av, 1), ONESHOT_NONE, "n<=1 -> NONE");
+    assert_eq(_oneshot_json, 0, "the n<=1 early return resets the json flag (no stale)");
+    # the --json elif must not break -p (its else branch still runs the positional path).
+    store64(&av + 8, "-p");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "-p still forces RUN after the --json elif");
+    assert_eq(_oneshot_json, 0, "-p does not set json");
+
+    # the envelope serializer (deterministic — elapsed is a param).
+    session_set_model(0);
+    session_reset();
+    session_bump_turn();              # turns -> 1
+    session_set_model("m");
+    var jb[2048];
+    var e1 = oneshot_json_envelope(&jb, 2048, "hi", 2, 42);
+    store8(&jb + e1, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\",\"turns\":1,\"elapsed_ms\":42}"), "envelope: response+model+turns+elapsed (no tokens/cost yet)");
+    session_add_tokens(100);
+    var e2 = oneshot_json_envelope(&jb, 2048, "hi", 2, 42);
+    store8(&jb + e2, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\",\"turns\":1,\"tokens\":100,\"elapsed_ms\":42}"), "envelope: +tokens once seen");
+    session_add_cost(18000);          # 18000 micro-USD = $0.018 -> $0.01 (floors)
+    var e3 = oneshot_json_envelope(&jb, 2048, "hi", 2, 42);
+    store8(&jb + e3, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\",\"turns\":1,\"tokens\":100,\"cost\":\"$0.01\",\"elapsed_ms\":42}"), "envelope: +cost once priced");
+
+    # the reply is escaped BY LENGTH — an embedded NUL becomes \u0000, not a truncation.
+    session_reset();
+    session_bump_turn();
+    session_set_model("m");
+    var rbuf[8];
+    store8(&rbuf + 0, 97);            # 'a'
+    store8(&rbuf + 1, 0);             # NUL
+    store8(&rbuf + 2, 98);            # 'b'
+    var e4 = oneshot_json_envelope(&jb, 2048, &rbuf, 3, 7);
+    store8(&jb + e4, 0);
+    assert(streq(&jb, "{\"response\":\"a\\u0000b\",\"model\":\"m\",\"turns\":1,\"elapsed_ms\":7}"), "envelope: embedded NUL escaped by length");
+    # a model id with a quote is JSON-escaped (can't break the object).
+    session_set_model("m\"x");
+    var e5 = oneshot_json_envelope(&jb, 2048, "hi", 2, 0);
+    store8(&jb + e5, 0);
+    assert(streq(&jb, "{\"response\":\"hi\",\"model\":\"m\\\"x\",\"turns\":1,\"elapsed_ms\":0}"), "envelope: model id JSON-escaped");
+    session_set_model(0);
+    session_reset();
+    return 0;
+}
+
+# -o / --out file tee (0.11.7): the flag parse (consumes the next token as the path, not a
+# positional; dangling -o; reset across calls) and the file writer (tees bytes + a trailing
+# newline, matching stdout; degrades closed on an unwritable path). The writer is unit-testable
+# because file I/O works in the harness (a scratch file under build/), unlike a live TCP turn.
+fn test_oneshot_out() {
+    test_group("-o / --out file tee (oneshot.cyr)");
+    var av[64];
+    store64(&av + 0, "thoth");
+    # -o consumes the NEXT token as the path; the path is NOT joined into the task.
+    store64(&av + 8, "-o");
+    store64(&av + 16, "out.txt");
+    store64(&av + 24, "task");
+    assert_eq(_oneshot_parse(&av, 4), ONESHOT_RUN, "-o <file> <task> -> RUN");
+    assert(streq(_oneshot_out_path, "out.txt"), "-o records the output path");
+    assert(streq(_oneshot_task, "task"), "the -o path is not part of the task");
+    # --out alias + -o is a modifier (path but no task -> NONE, like --json alone).
+    store64(&av + 8, "--out");
+    store64(&av + 16, "f2");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_NONE, "--out <file> alone -> NONE (no task)");
+    assert(streq(_oneshot_out_path, "f2"), "--out still records the path");
+    # a dangling -o (no following token) leaves no path and no crash.
+    store64(&av + 8, "-o");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "dangling -o -> NONE");
+    assert_eq(_oneshot_out_path, 0, "dangling -o leaves no path");
+    # reset across calls: a plain task clears the out path.
+    store64(&av + 8, "plain");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "plain task -> RUN");
+    assert_eq(_oneshot_out_path, 0, "no -o -> out path reset to 0");
+    # -o composes with --json and a positional task.
+    store64(&av + 8, "-o");
+    store64(&av + 16, "o.json");
+    store64(&av + 24, "--json");
+    store64(&av + 32, "do it");
+    assert_eq(_oneshot_parse(&av, 5), ONESHOT_RUN, "-o + --json + task -> RUN");
+    assert(streq(_oneshot_out_path, "o.json"), "-o path set with --json present");
+    assert_eq(_oneshot_json, 1, "--json flag set alongside -o");
+
+    # the writer: a reply with no trailing newline gets one (matching stdout).
+    var path = "build/.thoth_out_test.tmp";
+    var rbuf[64];
+    assert_eq(_oneshot_write_out(path, "hello", 5), 0, "write_out succeeds");
+    var n1 = file_read_all(path, &rbuf, 63);
+    assert_eq(n1, 6, "file = 'hello' + a trailing newline");
+    store8(&rbuf + n1, 0);
+    assert(streq(&rbuf, "hello\n"), "file content is the bytes + a newline");
+    # a reply ALREADY ending in a newline is not doubled.
+    assert_eq(_oneshot_write_out(path, "bye\n", 4), 0, "write_out (already-newline) succeeds");
+    var n2 = file_read_all(path, &rbuf, 63);
+    assert_eq(n2, 4, "already-newline reply is not doubled");
+    store8(&rbuf + n2, 0);
+    assert(streq(&rbuf, "bye\n"), "no extra newline appended");
+    # an unwritable path degrades closed (-1), not a crash or a silent success.
+    assert_eq(_oneshot_write_out("/no_such_dir_thoth_xyz/f", "x", 1), 0 - 1, "unwritable path -> -1 (degrade closed)");
+    return 0;
+}
+
+# shell completion (0.11.8): the --completion / --completions parse — the COMPLETION mode and
+# the captured shell name (default, reset, position-independent short-circuit). The emitted
+# bash/zsh SCRIPTS are validated by a host smoke (`thoth --completion bash | bash -n`, `zsh -n`,
+# and a functional COMPREPLY check) — shell tools the in-process unit harness lacks.
+fn test_completion() {
+    test_group("shell completion parse (oneshot.cyr)");
+    var av[64];
+    store64(&av + 0, "thoth");
+    # --completion <shell> -> COMPLETION mode + the captured shell name.
+    store64(&av + 8, "--completion");
+    store64(&av + 16, "bash");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_COMPLETION, "--completion <shell> -> COMPLETION");
+    assert(streq(_oneshot_compl_shell, "bash"), "--completion captures the shell name");
+    store64(&av + 16, "zsh");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_COMPLETION, "--completion zsh -> COMPLETION");
+    assert(streq(_oneshot_compl_shell, "zsh"), "shell = zsh");
+    # the --completions alias.
+    store64(&av + 8, "--completions");
+    store64(&av + 16, "bash");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_COMPLETION, "--completions alias -> COMPLETION");
+    # no shell given -> COMPLETION, shell stays 0 (the printer defaults to bash).
+    store64(&av + 8, "--completion");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_COMPLETION, "--completion (no shell) -> COMPLETION");
+    assert_eq(_oneshot_compl_shell, 0, "no shell -> 0 (printer defaults to bash)");
+    # position-independent short-circuit (like --version): a task before --completion still wins.
+    store64(&av + 8, "task");
+    store64(&av + 16, "--completion");
+    store64(&av + 24, "zsh");
+    assert_eq(_oneshot_parse(&av, 4), ONESHOT_COMPLETION, "--completion after a task still short-circuits");
+    assert(streq(_oneshot_compl_shell, "zsh"), "shell captured after a positional");
+    # reset across calls: a plain task clears the captured shell.
+    store64(&av + 8, "hello");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_RUN, "plain task -> RUN");
+    assert_eq(_oneshot_compl_shell, 0, "no --completion -> shell reset to 0");
+    return 0;
+}
+
+# Multi-turn conversation history (0.5.1): append/accessors, stable copy,
+# pop/clear, and the drop-oldest cap.
+fn test_history() {
+    test_group("multi-turn history");
+    session_reset();
+    assert_eq(session_history_len(), 0, "history empty after reset");
+    assert_eq(config_hoosh_history(), 1, "history on by default");
+
+    session_history_append("user", "hello", 5);
+    session_history_append("assistant", "hi there", 8);
+    assert_eq(session_history_len(), 2, "two messages recorded");
+    assert(streq(session_history_role(0), "user"), "msg 0 role user");
+    assert(streq(session_history_content(0), "hello"), "msg 0 content");
+    assert(streq(session_history_role(1), "assistant"), "msg 1 role assistant");
+    assert(streq(session_history_content(1), "hi there"), "msg 1 content");
+
+    # content is a STABLE COPY, not an alias of the caller's buffer.
+    var buf[8];
+    store8(&buf + 0, 104); store8(&buf + 1, 105); store8(&buf + 2, 0);   # "hi"
+    session_history_append("user", &buf, 2);
+    store8(&buf + 0, 88);                                                # clobber -> "Xi"
+    assert(streq(session_history_content(2), "hi"), "content copied, not aliased");
+
+    session_history_pop_last();
+    assert_eq(session_history_len(), 2, "pop_last drops the newest turn");
+    session_history_clear();
+    assert_eq(session_history_len(), 0, "clear empties history");
+
+    var i = 0;
+    while (i < SESS_HIST_MAX + 5) { session_history_append("user", "x", 1); i = i + 1; }
+    assert_eq(session_history_len(), SESS_HIST_MAX, "capped at SESS_HIST_MAX (oldest dropped)");
+    session_reset();
+    return 0;
+}
+
+# The multi-turn request builder + the byte-budget that bounds it.
+fn test_history_request() {
+    test_group("multi-turn request building");
+    session_reset();
+    assert_eq(_hoosh_history_start(262144), 0, "empty history -> start 0");
+    session_history_append("user", "a", 1);
+    session_history_append("assistant", "b", 1);
+    session_history_append("user", "c", 1);
+    assert_eq(_hoosh_history_start(262144), 0, "ample budget includes all");
+    assert_eq(_hoosh_history_start(8), 2, "tiny budget keeps only the newest");
+
+    var rb[512];
+    hoosh_build_messages(&rb, "m", 0, 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":false}"), "multi-turn shape, no system");
+    hoosh_build_messages(&rb, "m", "sys", 0, 1);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"system\",\"content\":\"sys\"},{\"role\":\"user\",\"content\":\"a\"},{\"role\":\"assistant\",\"content\":\"b\"},{\"role\":\"user\",\"content\":\"c\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "multi-turn shape, system + stream + usage opt");
+    session_reset();
+    return 0;
+}
+
+# Composer input-history recall (0.11.1): the in-memory ring + nav cursor
+# (src/inhist.cyr) and the TUI load/stash glue (src/tui.cyr _tui_recall_*). DISTINCT
+# from the multi-turn CONVERSATION history above — this is the user's own keystrokes,
+# navigated with Up/Down in the raw-mode composer (TUI-only; the REPL floor is
+# untouched).
+fn test_inhist() {
+    test_group("input-history recall");
+    inhist_init();
+    assert_eq(inhist_count(), 0, "empty after init");
+    assert_eq(inhist_nav_at_draft(), 1, "cursor starts at the draft");
+    assert_eq(inhist_nav_up(), 0 - 1, "Up with no history -> -1 (nothing)");
+
+    # push records lines; ignoredups + skip-empty.
+    assert_eq(inhist_push("first", 5), 1, "push 'first' stored");
+    assert_eq(inhist_push("second", 6), 1, "push 'second' stored");
+    assert_eq(inhist_push("", 0), 0, "empty line skipped");
+    assert_eq(inhist_push("second", 6), 0, "consecutive duplicate skipped (ignoredups)");
+    assert_eq(inhist_count(), 2, "two distinct lines stored");
+    assert(streq(inhist_entry_ptr(0), "first"), "entry 0 = oldest = 'first'");
+    assert(streq(inhist_entry_ptr(1), "second"), "entry 1 = newest = 'second'");
+    assert_eq(inhist_entry_len(1), 6, "newest length");
+
+    # nav: reset to draft, then Up walks newest->oldest, Down walks back to the draft.
+    inhist_nav_reset();
+    assert_eq(inhist_nav_at_draft(), 1, "reset -> draft");
+    assert_eq(inhist_nav_up(), 1, "Up #1 -> newest (idx 1)");
+    assert_eq(inhist_nav_at_draft(), 0, "now navigating");
+    assert_eq(inhist_nav_up(), 0, "Up #2 -> older (idx 0)");
+    assert_eq(inhist_nav_up(), 0, "Up at the oldest clamps (idx 0)");
+    assert_eq(inhist_nav_down(), 1, "Down -> newer (idx 1)");
+    assert_eq(inhist_nav_down(), 0 - 1, "Down past the newest -> draft (-1)");
+    assert_eq(inhist_nav_at_draft(), 1, "back at the draft");
+
+    # the TUI glue: stash a half-typed draft, load recalled entries, restore the draft.
+    led_reset();
+    led_feed(KEY_CHAR, 97); led_feed(KEY_CHAR, 98);   # type "ab"
+    assert_eq(led_len(), 2, "draft 'ab' in the composer");
+    _tui_recall_stash_draft();
+    _tui_recall_load(1);                              # load newest 'second'
+    assert(streq(led_buf(), "second"), "composer loaded with 'second'");
+    assert_eq(led_len(), 6, "composer len = 6 after recall");
+    assert_eq(led_cur(), 6, "cursor at end after recall");
+    _tui_recall_load(0);                              # load oldest 'first'
+    assert(streq(led_buf(), "first"), "composer loaded with 'first'");
+    _tui_recall_restore_draft();                     # back to the stashed draft
+    assert(streq(led_buf(), "ab"), "draft 'ab' restored");
+    assert_eq(led_len(), 2, "draft len restored");
+
+    # ring eviction: fill past INHIST_CAP — the oldest drops, count caps, order holds.
+    inhist_init();
+    var b[16];
+    var i = 0;
+    while (i < INHIST_CAP + 3) {
+        var o = 1;
+        store8(&b, 76);                              # 'L'
+        o = _append_int(&b, o, i);                   # distinct lines "L0".."L130"
+        store8(&b + o, 0);
+        inhist_push(&b, o);
+        i = i + 1;
+    }
+    assert_eq(inhist_count(), INHIST_CAP, "count caps at INHIST_CAP (oldest evicted)");
+    assert(streq(inhist_entry_ptr(0), "L3"), "oldest is 'L3' after evicting L0,L1,L2");
+    assert(streq(inhist_entry_ptr(INHIST_CAP - 1), "L130"), "newest is 'L130'");
+    inhist_init();
+    led_reset();
+    return 0;
+}
+
+# Input-history PERSISTENCE (0.11.2): the opt-in on-disk file. Uses real file I/O under
+# build/ (gitignored). Verifies load->ring, save->reload round-trip, ignoredups across
+# persistence, and the degrade-closed unwritable-path path. The 0600 create-mode is
+# asserted empirically by the shell (stat) after the suite creates the mode-check file.
+fn test_inhist_persist() {
+    test_group("input-history persistence (0.11.2)");
+    var lpath = "build/.thoth_hist_load.tmp";
+    var seed = "alpha\nalpha\nbeta\n";          # a consecutive dup -> proves init is non-destructive
+    file_write_all(lpath, seed, strlen(seed));
+    inhist_init();
+    var n = inhist_persist_init(lpath);
+    assert_eq(n, 2, "two recalled (the consecutive dup collapses in the ring)");
+    assert_eq(inhist_count(), 2, "ring holds two");
+    assert(streq(inhist_entry_ptr(0), "alpha"), "oldest = alpha");
+    assert(streq(inhist_entry_ptr(1), "beta"), "newest = beta");
+    assert_eq(inhist_nav_at_draft(), 1, "cursor at the draft after load");
+    assert_eq(inhist_persist_active(), 1, "persistence active (file writable)");
+    assert_eq(inhist_persist_broke(), 0, "not broken after a clean init");
+
+    # init is NON-DESTRUCTIVE: the file is untouched (still holds the raw dup, not rewritten).
+    var rbuf[64];
+    var r1 = file_read_all(lpath, &rbuf, 63);
+    store8(&rbuf + r1, 0);
+    assert(streq(&rbuf, "alpha\nalpha\nbeta\n"), "init did not rewrite the file");
+
+    # a stored submit rewrites the file FROM the ring (deduped/normalized); a reload sees it.
+    inhist_push("gamma", 5);
+    inhist_persist_save();
+    var r2 = file_read_all(lpath, &rbuf, 63);
+    store8(&rbuf + r2, 0);
+    assert(streq(&rbuf, "alpha\nbeta\ngamma\n"), "save rewrote the file from the ring");
+    inhist_init();
+    _inhist_load_file(lpath);
+    assert_eq(inhist_count(), 3, "gamma persisted -> three on reload");
+    assert(streq(inhist_entry_ptr(2), "gamma"), "newest reloaded = gamma");
+
+    # multi-line + backslash round-trip (0.11.9): embedded newlines (from the multi-line
+    # composer) and literal backslashes survive save->reload — escaped on write, decoded on
+    # read — instead of shattering the line-oriented file into bogus entries.
+    inhist_init();
+    var mpath = "build/.thoth_hist_ml.tmp";
+    file_write_all(mpath, "", 0);                # start empty (isolate from a prior run's file)
+    inhist_persist_init(mpath);                  # bind (empty -> ring empty)
+    inhist_push("a\nb", 3);                      # an embedded newline (a multi-line entry)
+    inhist_push("c\\d", 3);                      # a literal backslash
+    inhist_persist_save();
+    inhist_init();
+    _inhist_load_file(mpath);
+    assert_eq(inhist_count(), 2, "two entries round-trip (no shatter on embedded newline)");
+    assert_eq(inhist_entry_len(0), 3, "multi-line entry length intact (a<nl>b)");
+    assert(streq(inhist_entry_ptr(0), "a\nb"), "embedded newline preserved");
+    assert(streq(inhist_entry_ptr(1), "c\\d"), "literal backslash preserved");
+
+    # _inhist_escape_into (pure): '\' -> '\\', newline -> '\' 'n', plain bytes pass through.
+    var ebuf[32];
+    var en = _inhist_escape_into(&ebuf, 32, "a\nb", 3);
+    store8(&ebuf + en, 0);
+    assert_eq(en, 4, "3-byte 'a<nl>b' escapes to 4 bytes");
+    assert(streq(&ebuf, "a\\nb"), "newline encodes as backslash-n");
+    var en2 = _inhist_escape_into(&ebuf, 32, "c\\d", 3);
+    store8(&ebuf + en2, 0);
+    assert_eq(en2, 4, "3-byte 'c\\d' escapes to 4 bytes");
+    assert(streq(&ebuf, "c\\\\d"), "backslash encodes as double backslash");
+
+    # degrade-closed: an unwritable path -> persistence stays OFF (-1); the caller announces.
+    inhist_init();
+    var bad = inhist_persist_init("build/.no_such_dir_xyz/hist.tmp");
+    assert_eq(bad, 0 - 1, "unwritable path -> -1");
+    assert_eq(inhist_persist_active(), 0, "persistence OFF after a write failure");
+
+    # create the 0600 mode-check file (fresh path); the shell asserts the perms post-suite.
+    inhist_init();
+    inhist_persist_init("build/.thoth_hist_mode.tmp");
+
+    inhist_persist_init(0);          # unbind persistence -> clean slate for later tests
+    inhist_init();
+    led_reset();
+    return 0;
+}
+
+# Structured driver-event logging (0.5.2): the pure message builder + level
+# parse + config defaults. The sakshi emit path is I/O and not unit-tested here.
+fn test_logging() {
+    test_group("structured logging");
+    # off by default (no config, no init)
+    assert_eq(config_log_file(), 0, "no log file by default");
+    assert_eq(config_log_level(), 0, "no log level by default");
+    assert_eq(log_active(), 0, "logging off without init");
+
+    # level parse
+    assert_eq(_log_parse_level("off"), 0 - 1, "off -> disabled");
+    assert_eq(_log_parse_level("fatal"), SK_FATAL, "fatal");
+    assert_eq(_log_parse_level("error"), SK_ERROR, "error");
+    assert_eq(_log_parse_level("warn"), SK_WARN, "warn");
+    assert_eq(_log_parse_level("info"), SK_INFO, "info");
+    assert_eq(_log_parse_level("debug"), SK_DEBUG, "debug");
+    assert_eq(_log_parse_level("trace"), SK_TRACE, "trace");
+    assert_eq(_log_parse_level(0), SK_INFO, "unset -> default info");
+    assert_eq(_log_parse_level("bogus"), SK_INFO, "unknown -> default info");
+
+    # structured message builder
+    log_begin("hoosh_turn");
+    log_kv_str("model", "gpt-5");
+    log_kv_int("status", 200);
+    assert(streq(log_message(), "event=hoosh_turn model=gpt-5 status=200"), "structured message shape");
+    log_begin("authz");
+    log_kv_str("tool", 0);
+    assert(streq(log_message(), "event=authz tool=-"), "null value renders as -");
+    log_begin("x");
+    log_kv_int("d", 0 - 5);
+    assert(streq(log_message(), "event=x d=-5"), "negative int field");
+    return 0;
+}
+
+# M4 config defaults when no thoth.cyml is loaded.
+fn test_config_m4() {
+    test_group("daimon/tron config (unconfigured)");
+    assert_eq(config_daimon_configured(), 0, "daimon not configured by default");
+    assert_eq(config_daimon_url(), 0, "no daimon url by default");
+    assert_eq(config_tron_policy(), 0, "no t-ron policy by default");
+    assert(streq(config_tron_agent(), "thoth"), "default agent id");
+    assert_eq(gate_active(), 0, "gate inactive without a policy");
+    return 0;
+}
+
+# Mid-session model switch stores a COPY (the arg aliases a reused line buffer).
+fn test_model_switch() {
+    test_group("mid-session model switch");
+    session_reset();
+    assert_eq(session_model(), 0, "no model after reset");
+    var scratch[16];
+    store8(&scratch + 0, 103); store8(&scratch + 1, 112); store8(&scratch + 2, 116);
+    store8(&scratch + 3, 0);                                   # "gpt"
+    session_set_model_copy(&scratch);
+    store8(&scratch + 0, 88);                                  # clobber to "Xpt"
+    assert(streq(session_model(), "gpt"), "model is a stable copy, not an alias");
+    # 0.22.3 terminal window-title builder (pure): the active model appears in the title
+    var tb = alloc(256);
+    session_set_model_copy("opus-x");
+    _term_title_build(tb, 256);
+    assert(streq(tb, "thoth - opus-x") == 1, "title reflects the active model (session_model wins)");
+    # control bytes (BEL 0x07 / ESC 0x1b / DEL 0x7f) in the model are stripped -> no OSC escape injection
+    var mbuf[16];
+    store8(&mbuf + 0, 97); store8(&mbuf + 1, 7); store8(&mbuf + 2, 98);   # 'a' BEL 'b'
+    store8(&mbuf + 3, 27); store8(&mbuf + 4, 99); store8(&mbuf + 5, 127); store8(&mbuf + 6, 0);  # ESC 'c' DEL
+    session_set_model_copy(&mbuf);
+    _term_title_build(tb, 256);
+    assert(streq(tb, "thoth - abc") == 1, "control bytes stripped from the title (no escape injection)");
+    session_reset();
+    return 0;
+}
+
+fn test_git() {
+    test_group("git producer (git.cyr / SEAM_GIT, 0.13.0)");
+    # seam registration on the capability ladder
+    assert_eq(SEAM_COUNT, 7, "SEAM_COUNT includes git (7)");
+    assert(streq(seam_name(SEAM_GIT), "sit"), "SEAM_GIT owner is sit");
+    assert_eq(seam_status(SEAM_GIT), SEAM_NATIVE, "sit binds native by construction (vendored bundle)");
+    assert_eq(_ui_contains(seam_domain(SEAM_GIT), "version control"), 1, "domain names version control");
+    # probe is callable; git_present() matches the probe result and is a clean 0/1
+    var p = git_probe();
+    assert(((p == 0) || (p == 1)), "git_probe returns 0/1");
+    assert_eq(git_present(), p, "git_present matches the probe result");
+    # capability-effect <-> presence invariant (holds whether or not there's a repo)
+    if (git_present() == 1) {
+        # cyrius test runs at the thoth repo root -> a real read through sit's .git backend
+        assert_eq(seam_cap_state(SEAM_GIT), CAP_FULL, "repo present -> capability FULL");
+        # A present repo may be on a NAMED branch or a DETACHED HEAD — CI checkouts are
+        # commonly detached (GitHub Actions checks out a bare SHA), so don't assume a branch.
+        # Attached -> git_branch() is a real name; detached -> the '?' sentinel (the UI renders
+        # "(detached)" off git_detached(), never the sentinel). Assert whichever case holds.
+        if (git_detached() == 0) {
+            assert_eq(streq(git_branch(), "?"), 0, "attached -> a real branch, not the '?' sentinel");
+        } else {
+            assert_eq(streq(git_branch(), "?"), 1, "detached -> git_branch() is the '?' sentinel (UI shows (detached))");
+        }
+        assert(git_dirty() >= 0, "dirty count is a non-negative snapshot");
+    } else {
+        assert_eq(seam_cap_state(SEAM_GIT), CAP_ABSENT, "no repo at cwd -> capability ABSENT (honest, never faked)");
+    }
+    # ensure_probed is idempotent — same result, no re-crash
+    git_ensure_probed();
+    assert_eq(git_present(), p, "ensure_probed keeps the probe result stable");
+
+    # 0.22.4 file-tree git badges: git_status_of over the per-file status cache (white-box: inject entries,
+    # then re-probe to restore the real state). kinds 1=modified, 2=new, 3=deleted; 0 = unchanged / no repo.
+    if (_git_status_ptr == 0) { _git_status_ptr = alloc(GIT_STATUS_MAX * 8); _git_status_kind = alloc(GIT_STATUS_MAX); _git_status_buf = alloc(GIT_STATUS_BUF); }
+    _git_present = 1;
+    store64(_git_status_ptr + 0, "src/main.cyr");  store8(_git_status_kind + 0, 1);
+    store64(_git_status_ptr + 8, "docs/x.md");      store8(_git_status_kind + 1, 2);
+    store64(_git_status_ptr + 16, "gone.txt");      store8(_git_status_kind + 2, 3);
+    _git_status_n = 3;
+    assert_eq(git_status_of("src/main.cyr"), 1, "modified -> kind 1");
+    assert_eq(git_status_of("docs/x.md"), 2, "new -> kind 2");
+    assert_eq(git_status_of("gone.txt"), 3, "deleted -> kind 3");
+    assert_eq(git_status_of("untouched.cyr"), 0, "unchanged path -> 0");
+    _git_present = 0;
+    assert_eq(git_status_of("src/main.cyr"), 0, "no repo -> 0 regardless of the cache");
+    git_probe();   # restore the real probe state for any later reader
+    return 0;
+}
+
+fn test_save() {
+    test_group("/save transcript export (feed_strip_ansi_into + cmd_save, 0.24.1)");
+    # --- feed_strip_ansi_into: drop role/reset markers + CSI, keep text ---
+    var src = alloc(64);
+    var o = 0;
+    store8(src + o, 65); o = o + 1; store8(src + o, 66); o = o + 1;    # "AB"
+    store8(src + o, 27); o = o + 1; store8(src + o, 176); o = o + 1;   # role marker  ESC + 0xB0
+    store8(src + o, 67); o = o + 1; store8(src + o, 68); o = o + 1;    # "CD"
+    store8(src + o, 27); o = o + 1; store8(src + o, 91); o = o + 1;    # CSI intro    ESC + '['
+    store8(src + o, 51); o = o + 1; store8(src + o, 49); o = o + 1; store8(src + o, 109); o = o + 1;  # "31m"
+    store8(src + o, 69); o = o + 1; store8(src + o, 70); o = o + 1;    # "EF"
+    store8(src + o, 27); o = o + 1; store8(src + o, 191); o = o + 1;   # reset marker ESC + 0xBF
+    store8(src + o, 71); o = o + 1; store8(src + o, 72); o = o + 1;    # "GH"
+    var dst = alloc(64);
+    var n = feed_strip_ansi_into(dst, 64, src, o);
+    store8(dst + n, 0);
+    assert_eq(n, 8, "stripped length is 8 (ABCDEFGH)");
+    assert(streq(dst, "ABCDEFGH") == 1, "role markers + CSI stripped; text preserved");
+    var s2 = alloc(4); store8(s2, 88); store8(s2 + 1, 27);            # "X" + a trailing lone ESC
+    var n2 = feed_strip_ansi_into(dst, 64, s2, 2);
+    store8(dst + n2, 0);
+    assert(streq(dst, "X") == 1, "trailing lone ESC dropped; X preserved");
+    var n3 = feed_strip_ansi_into(dst, 64, "plain", 5);
+    store8(dst + n3, 0);
+    assert(streq(dst, "plain") == 1, "plain text passes verbatim");
+
+    # --- cmd_save round-trip: populate the ring, save, read the file back ---
+    feed_init();
+    out_mode_set(OUT_RING);
+    oprintln("first line");
+    ui_emit(ROLE_ACCENT, "second"); emit(" line"); feed_flush_pending();   # a line carrying a role marker
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "ring holds 2 lines");
+    cmd_save("/save /tmp/thoth_save_test.md");
+    var rb = alloc(4096);
+    var rn = file_read_all("/tmp/thoth_save_test.md", rb, 4095);
+    store8(rb + rn, 0);
+    assert(rn > 0, "saved file is non-empty");
+    assert(_ui_contains(rb, "# thoth transcript") == 1, "file has the markdown header");
+    assert(_ui_contains(rb, "first line") == 1, "file contains the first feed line");
+    assert(_ui_contains(rb, "second line") == 1, "file contains the second line, ANSI-stripped");
+    var has_esc = 0; var k = 0;
+    while (k < rn) { if (load8(rb + k) == 27) { has_esc = 1; } k = k + 1; }
+    assert_eq(has_esc, 0, "saved file has no escape bytes (markers fully stripped)");
+
+    # --- cmd_save LINE-MODE path (0.27.0): empty feed ring -> save the conversation history ---
+    feed_init();                       # clears the ring -> line-mode /save path
+    assert_eq(feed_count(), 0, "ring empty for the line-mode /save path");
+    session_history_clear();
+    session_history_append("user", "hello there", 11);
+    session_history_append("assistant", "hi! reply", 9);
+    cmd_save("/save /tmp/thoth_save_hist.md");
+    var hb = alloc(4096);
+    var hn = file_read_all("/tmp/thoth_save_hist.md", hb, 4095);
+    store8(hb + hn, 0);
+    assert(hn > 0, "history-mode saved file is non-empty");
+    assert(_ui_contains(hb, "# thoth transcript") == 1, "history file has the markdown header");
+    assert(_ui_contains(hb, "## user") == 1, "history file has a user turn header");
+    assert(_ui_contains(hb, "hello there") == 1, "history file has the user content");
+    assert(_ui_contains(hb, "## assistant") == 1, "history file has an assistant turn header");
+    assert(_ui_contains(hb, "hi! reply") == 1, "history file has the assistant content");
+    session_history_clear();
+    return 0;
+}
+
+fn test_session_persist() {
+    test_group("conversation resume ([session].file, session.cyr, 0.24.2)");
+    # --- _sess_uint_into (decimal formatter) ---
+    var b = alloc(16);
+    var e = _sess_uint_into(b, 0, 0); store8(b + e, 0); assert(streq(b, "0") == 1, "uint 0");
+    e = _sess_uint_into(b, 0, 12345); store8(b + e, 0); assert(streq(b, "12345") == 1, "uint 12345");
+    # --- _sess_role_literal maps to STABLE literals (append stores the ptr uncopied) ---
+    assert(streq(_sess_role_literal("assistant", 9), "assistant") == 1, "role literal: assistant");
+    assert(streq(_sess_role_literal("user", 4), "user") == 1, "role literal: user");
+    assert(streq(_sess_role_literal("weird", 5), "user") == 1, "unknown role -> user");
+
+    # --- save -> clear -> load round-trip, incl. multi-line content (length-prefixed, no escaping) ---
+    session_history_clear();
+    session_history_append("user", "hello there", 11);
+    session_history_append("assistant", "hi! line1\nline2", 15);   # embedded newline
+    session_history_append("user", "bye", 3);
+    assert_eq(session_history_len(), 3, "3 messages in memory");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_test"), 0, "write file ok");
+    session_history_clear();
+    assert_eq(session_history_len(), 0, "cleared in memory");
+    assert_eq(_sess_load_file("/tmp/thoth_sess_test"), 3, "loaded 3 records");
+    assert_eq(session_history_len(), 3, "3 messages restored");
+    assert(streq(session_history_role(0), "user") == 1, "msg0 role user");
+    assert(streq(session_history_content(0), "hello there") == 1, "msg0 content round-trips");
+    assert(streq(session_history_role(1), "assistant") == 1, "msg1 role assistant");
+    assert(streq(session_history_content(1), "hi! line1\nline2") == 1, "msg1 MULTI-LINE content survives (length-prefixed)");
+    assert(streq(session_history_content(2), "bye") == 1, "msg2 content round-trips");
+
+    # --- a foreign / corrupt first line -> load skipped (0), nothing corrupted ---
+    var fd = file_open("/tmp/thoth_sess_bad", O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    file_write(fd, "NOT-A-SESSION\nuser\t3\nabc\n", 25);
+    file_close(fd);
+    session_history_clear();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_bad"), 0, "foreign magic -> load skipped");
+    assert_eq(session_history_len(), 0, "nothing loaded from a foreign file");
+    assert_eq(_sess_load_file("/tmp/thoth_no_such_sess_zzz"), 0, "absent file -> 0 (no crash)");
+
+    # --- sess_persist_init end-to-end: load + activate; a later save rewrites the window ---
+    session_history_clear();
+    session_history_append("user", "q1", 2);
+    session_history_append("assistant", "a1", 2);
+    _sess_write_file("/tmp/thoth_sess_init");
+    session_history_clear();
+    assert_eq(sess_persist_init("/tmp/thoth_sess_init"), 2, "init resumed 2 messages");
+    assert_eq(sess_persist_active(), 1, "init activated persistence");
+    assert_eq(sess_persist_resumed(), 2, "resumed count = 2");
+    session_history_append("user", "q2", 2);
+    session_history_append("assistant", "a2", 2);   # would trigger sess_persist_save() live; call it explicitly
+    sess_persist_save();
+    session_history_clear();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_init"), 4, "the save persisted all 4 messages");
+
+    # --- the reported resume count is capped at what survives SESS_HIST_MAX=40 (review-caught fix) ---
+    var fd2 = file_open("/tmp/thoth_sess_big", O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    file_write(fd2, "THOTH-SESSION-1\n", 16);
+    var rec = 0;
+    while (rec < 42) { file_write(fd2, "user\t1\nx\n", 9); rec = rec + 1; }   # 42 one-byte records
+    file_close(fd2);
+    session_history_clear();
+    var big = sess_persist_init("/tmp/thoth_sess_big");
+    assert_eq(session_history_len(), 40, "history capped at SESS_HIST_MAX=40");
+    assert_eq(big, 40, "reported resumed count capped at 40 (not the 42 parsed)");
+    assert_eq(sess_persist_resumed(), 40, "sess_persist_resumed() == 40");
+
+    _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
+    session_history_clear();       # leave a clean history for subsequent tests
+    return 0;
+}
+
+fn test_ui_niceties() {
+    test_group("turn niceties ([ui] bell/elapsed, 0.24.3)");
+    # --- _task_emit_secs: milliseconds -> "N.Ns" (one decimal), clamped at 0 ---
+    assert_eq(_t_secs_line(3200, "3.2s"), 1, "3200ms -> 3.2s");
+    assert_eq(_t_secs_line(800, "0.8s"), 1, "800ms -> 0.8s");
+    assert_eq(_t_secs_line(0, "0.0s"), 1, "0ms -> 0.0s");
+    assert_eq(_t_secs_line(0 - 5, "0.0s"), 1, "negative -> 0.0s (clamped)");
+    assert_eq(_t_secs_line(65900, "65.9s"), 1, "65900ms -> 65.9s");
+
+    # --- _task_turn_feedback: interactive-only, and only when [ui].elapsed is on ---
+    _cfg_ui_bell = 0; _cfg_ui_elapsed = 1;
+    one_shot_set(1);                              # one-shot -> suppressed (clean output)
+    feed_init(); out_mode_set(OUT_RING); _task_turn_feedback(clock_now_ms()); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 0, "one-shot: no turn feedback emitted");
+    one_shot_set(0);                             # interactive -> the elapsed line prints
+    feed_init(); out_mode_set(OUT_RING); _task_turn_feedback(clock_now_ms()); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(feed_count() >= 1, "interactive + [ui].elapsed: an elapsed line is emitted");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "s)", 2), 1, "the elapsed line is a (…s) form");
+
+    # both off -> nothing, even interactive (byte-identical floor)
+    _cfg_ui_bell = 0; _cfg_ui_elapsed = 0;
+    feed_init(); out_mode_set(OUT_RING); _task_turn_feedback(clock_now_ms()); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 0, "both off: no feedback (floor unchanged)");
+    return 0;
+}
+
+fn test_reload() {
+    test_group("/reload config (agent tool-cache reset, 0.24.4)");
+    # agent_tools_cache_reset drops the session-stable tool cache so the next turn re-advertises — the
+    # mechanism /reload relies on to pick up a changed [shell].enabled / [hoosh].tools. (cmd_reload itself
+    # re-reads thoth.cyml, which is gitignored/absent in CI, so it is live-verified, not unit-tested here.)
+    _agent_tools_ready = 1; _agent_tools_len = 42;
+    agent_tools_cache_reset();
+    assert_eq(_agent_tools_ready, 0, "reset clears the tool-ready flag (re-advertise next turn)");
+    assert_eq(_agent_tools_len, 0, "reset clears the cached tool length");
+    # config_load re-run must be safe (the reload re-parses in place). It degrades gracefully on an
+    # absent/unreadable file (keeps prior state); reaching the next assertion proves it did not crash.
+    config_load();
+    assert_eq(_agent_tools_ready, 0, "config_load re-run did not spuriously rebuild the tool cache");
+    return 0;
+}
+
+fn test_role() {
+    test_group("role modality (persona aspects + /role, 0.24.5)");
+    persona_set(egyptian_thoth());              # pristine default (persona_set resets aspect+override)
+    assert(streq(persona_role(), "the Librarian") == 1, "default Thoth role = the Librarian");
+    # select an aspect -> the role follows (avatara-sourced, not thoth-authored)
+    var mi = aspect_index_by_name("measurer");
+    assert(mi >= 0, "measurer aspect exists in avatara");
+    persona_role_select_aspect(mi);
+    assert(streq(persona_role(), "the Measurer") == 1, "select measurer -> role 'the Measurer'");
+    assert_eq(persona_role_is_override(), 0, "an aspect selection is not a custom override");
+    assert_eq(persona_aspect(), mi, "active aspect = measurer");
+    # a custom user label trumps the aspect (make anyone anything)
+    persona_role_override_set("Keeper of Symbols");
+    assert(streq(persona_role(), "Keeper of Symbols") == 1, "custom override role wins");
+    assert_eq(persona_role_is_override(), 1, "override flag set");
+    assert(_ui_contains(persona_system_prompt(), "Keeper of Symbols") == 1, "system prompt carries the active role (steers the model)");
+    # reset -> back to the archetype default
+    persona_role_reset();
+    assert(streq(persona_role(), "the Librarian") == 1, "reset -> default role");
+    assert_eq(persona_role_is_override(), 0, "reset clears the override");
+    # a persona switch resets the role state to the new archetype's dominant aspect
+    persona_role_override_set("Temp");
+    persona_set(egyptian_thoth());
+    assert_eq(persona_role_is_override(), 0, "persona switch clears a custom override");
+    assert_eq(persona_aspect(), profile_dominant_aspect(persona_profile()), "switch -> dominant aspect is the active default");
+    # a NON-Thoth archetype's default role derives from its dominant aspect (0.24.5 change; was desc)
+    var od = find_and_validate("Odin");
+    if (is_err_result(od) == 0) {
+        persona_set(result_unwrap(od));
+        assert(streq(persona_role(), aspect_role(profile_dominant_aspect(persona_profile()))) == 1, "switched persona default role = its dominant aspect");
+    }
+    # out-of-range aspect select is a safe no-op
+    persona_set(egyptian_thoth());
+    assert_eq(persona_role_select_aspect(999), 0, "OOB aspect select refused");
+    assert_eq(persona_role_select_aspect(0 - 1), 0, "negative aspect select refused");
+    persona_role_reset();                       # leave a clean default for later tests
+    return 0;
+}

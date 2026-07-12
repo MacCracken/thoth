@@ -1,0 +1,347 @@
+# tests/cases/gui.cyr — GUI: the T3 draw pipeline + view-builders (gdraw/graster/gstatus/ginput/gtree/gfeed) + the status view-model (surface).
+# Split out of tests/thoth.tcyr (0.30.7). Included by the thoth.tcyr driver AFTER the src modules
+# (and after helpers.cyr); the driver's main() calls these. Harness auto-resolves from lib/assert.cyr.
+
+
+fn test_gui() {
+    test_group("GUI draw pipeline (gdraw/graster/gstatus, 0.29.0)");
+    # --- draw-command builders ---
+    var cmds = gd_list_new();
+    gd_push_rect(cmds, 1, 2, 3, 4, 0x112233);
+    assert_eq(vec_len(cmds), 1, "one command pushed");
+    var c = vec_get(cmds, 0);
+    assert_eq(gd_kind(c), GD_RECT, "kind RECT");
+    assert_eq(gd_x(c), 1, "x"); assert_eq(gd_y(c), 2, "y");
+    assert_eq(gd_w(c), 3, "w"); assert_eq(gd_h(c), 4, "h");
+    assert_eq(gd_color(c), 0x112233, "color stored");
+    # --- rasterize fill_rect into a 20x10 fb ---
+    var W = 20; var H = 10;
+    var fb = gr_fb_new(W, H);
+    gr_fb_clear(fb, W, H, 0x000000);
+    gr_clip_reset();
+    gr_fb_fill_rect(fb, W, H, 2, 3, 4, 4, 0xFF0000);
+    assert_eq(load32(fb + (3 * W + 2) * 4), 0xFF0000, "fill_rect top-left pixel red");
+    assert_eq(load32(fb + (6 * W + 5) * 4), 0xFF0000, "fill_rect bottom-right pixel red");
+    assert_eq(load32(fb + (3 * W + 6) * 4), 0x000000, "just past the rect stays bg");
+    assert_eq(load32(fb + 0), 0x000000, "untouched corner stays bg");
+    # --- border: a 1px outline leaves the interior bg ---
+    gr_fb_clear(fb, W, H, 0x000000);
+    gr_fb_border(fb, W, H, 1, 1, 6, 6, 0x00FF00);
+    assert_eq(load32(fb + (1 * W + 1) * 4), 0x00FF00, "border top-left corner set");
+    assert_eq(load32(fb + (3 * W + 3) * 4), 0x000000, "border interior stays bg");
+    # --- glyph: rasterize 'A' (65) and confirm it lit AND cleared some pixels ---
+    var W2 = 8; var H2 = 16;
+    var gb = gr_fb_new(W2, H2);
+    gr_fb_clear(gb, W2, H2, 0x000000);
+    gr_ensure_font();
+    gr_fb_glyph(gb, W2, H2, 0, 0, 65, 0xFFFFFF);
+    var lit = 0; var clear = 0; var k = 0;
+    while (k < W2 * H2) {
+        if (load32(gb + k * 4) == 0xFFFFFF) { lit = lit + 1; } else { clear = clear + 1; }
+        k = k + 1;
+    }
+    assert(lit > 0, "glyph 'A' set at least one pixel");
+    assert(clear > 0, "glyph 'A' left some pixels clear (not a solid block)");
+    # --- codepoint width (the layout pen must match the raster pen for non-ASCII) ---
+    assert_eq(gr_text_cols("main", 0), 4, "gr_text_cols ASCII == byte count");
+    assert_eq(gr_text_cols("caf\xc3\xa9", 0), 4, "gr_text_cols 'cafe-acute' = 4 codepoints (5 bytes)");
+    assert_eq(strlen("caf\xc3\xa9"), 5, "the UTF-8 string is 5 bytes (the drift source strlen would use)");
+    assert_eq(gr_text_cols("main", 2), 2, "gr_text_cols honors max_cp");
+    assert_eq(gr_text_cols(0, 0), 0, "gr_text_cols null-safe");
+    # --- the status strip: build from the view-model + rasterize + PPM dump ---
+    session_set_model("claude-opus-4");
+    var SW = 960; var SH = 34;
+    var sb = gr_fb_new(SW, SH);
+    var scmds = gd_list_new();
+    var endx = gstatus_build(scmds, 0, 0, SW, SH);
+    assert(endx > 0, "status strip advanced the pen");
+    assert(vec_len(scmds) > 5, "status strip emitted several commands");
+    gr_fb_clear(sb, SW, SH, 0x000000);
+    gr_raster(scmds, sb, SW, SH);
+    assert(load32(sb + (5 * SW + 5) * 4) != 0x000000, "status strip background painted over the clear");
+    _gui_ppm_dump(sb, SW, SH, "/tmp/thoth_gui_status.ppm");
+    # --- feed word-wrap: a long paragraph wraps to multiple lines ---
+    var wcmds = gd_list_new();
+    var yend = _gfeed_para(wcmds, 0, 0, 160, 0xFFFFFF, "the quick brown fox jumps over the lazy dog again and again yet more");
+    assert(yend >= 3 * GFEED_LH, "long paragraph wrapped to >= 3 lines at 160px");
+    assert(vec_len(wcmds) >= 3, "wrap emitted >= 3 text slices");
+    var scmds2 = gd_list_new();
+    assert_eq(_gfeed_para(scmds2, 0, 0, 800, 0xFFFFFF, "short"), GFEED_LH, "a short line is exactly one line high");
+    assert_eq(_gfeed_para(gd_list_new(), 0, 0, 800, 0xFFFFFF, 0), 0, "null text advances nothing");
+    # a wrapping message that STARTS with a space must never emit an uncapped (max_cp 0) slice — otherwise the
+    # space-break branch (last_sp_cols == 0) would draw the whole string on line 1 (gr_fb_text: 0 == uncapped).
+    var _lz = gd_list_new();
+    _gfeed_para(_lz, 0, 0, 80, 0xFFFFFF, " aaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbb");
+    var _lzu = 0; var _lzi = 0;
+    while (_lzi < vec_len(_lz)) {
+        if (gd_aux(vec_get(_lz, _lzi)) == 0) { _lzu = _lzu + 1; }
+        _lzi = _lzi + 1;
+    }
+    assert(vec_len(_lz) > 0, "leading-space wrap still emits its wrapped lines");
+    assert_eq(_lzu, 0, "leading-space wrap emits NO uncapped slice (empty first segment skipped)");
+    # populate a synthetic file tree (0.30.5) so the window-frame PPMs below show the tree pane alongside the feed
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/home/macro/Repos/thoth");
+    _ftree_append("src", 1, 0); _ftree_append("docs", 1, 0);
+    _ftree_append("CHANGELOG.md", 0, 0); _ftree_append("VERSION", 0, 0);
+    _ftree_insert_at(1, "gui", 1, 1); _ftree_insert_at(2, "main.cyr", 0, 1); _ftree_insert_at(3, "gfeed.cyr", 0, 1);
+    ftree_set_exp(0, 1);
+    # --- feed bottom-anchoring (0.30.3): the feed follows the conversation ---
+    session_history_clear();
+    var _bu = "add a token-bucket rate limiter";
+    var _ba = "Plan: scaffold a ratelimit module, implement TokenBucket behind a Mutex, expose try_acquire(n), then add unit tests covering exhaustion, refill-over-time, and an 8-thread contention check. Starting now.";
+    var _bi = 0;
+    while (_bi < 6) {
+        session_history_append("user", _bu, strlen(_bu));
+        session_history_append("assistant", _ba, strlen(_ba));
+        _bi = _bi + 1;
+    }
+    var _bn = session_history_len();
+    assert_eq(_bn, 12, "seeded a 12-message conversation");
+    # measure pass (cmds == 0) emits nothing but covers the identical height a draw pass does
+    var _mh = _gfeed_flow(0, 14, 0, 300, _bn);
+    var _dl = gd_list_new();
+    var _dh = _gfeed_flow(_dl, 14, 0, 300, _bn);
+    assert_eq(_mh, _dh, "feed measure height == draw height (wrap parity — the anchor relies on it)");
+    assert(vec_len(_dl) > _bn, "the draw pass emitted commands (markers + wrapped slices)");
+    assert(_mh > 300, "the 12-message flow overflows a 300px region (exercises the anchor path)");
+    # anchor decision: a flow that fits anchors at the top; an overflowing flow anchors to the bottom
+    assert_eq(gfeed_anchor_y(50, 0, 400), GFEED_GAP, "a flow that fits anchors at the top");
+    assert_eq(gfeed_anchor_y(1000, 0, 400), 400 - 1000, "an overflowing flow anchors bottom (y + h - total)");
+    assert(gfeed_anchor_y(1000, 0, 400) < 0, "an overflowing flow starts above the region top (older msgs clip off)");
+    # build the feed into a small region and confirm: newest line visible, oldest line clipped above the top
+    var _fr = gd_list_new();
+    var _fy = 40; var _fh = 200;
+    gfeed_build(_fr, 0, _fy, 900, _fh);
+    var _minY = 1000000; var _maxY = 0 - 1000000; var _ci = 0;
+    while (_ci < vec_len(_fr)) {
+        var _cc = vec_get(_fr, _ci);
+        if (gd_kind(_cc) == GD_TEXT) {
+            var _ty = gd_y(_cc);
+            if (_ty < _minY) { _minY = _ty; }
+            if (_ty > _maxY) { _maxY = _ty; }
+        }
+        _ci = _ci + 1;
+    }
+    assert(_minY < _fy, "oldest feed line is above the region top (clipped by the auto-scroll anchor)");
+    assert(_maxY >= _fy, "newest feed line is at/below the region top (on screen)");
+    assert(_maxY < _fy + _fh, "newest feed line is within the region bottom (visible)");
+    # a rastered overflowing feed frame (visual confirmation the newest exchange sits at the bottom)
+    var _abw = 900; var _abh = 300;
+    var _abuf = gr_fb_new(_abw, _abh);
+    gr_fb_clear(_abuf, _abw, _abh, _gframe_bg());
+    gr_raster(gframe_build(_abw, _abh), _abuf, _abw, _abh);
+    _gui_ppm_dump(_abuf, _abw, _abh, "/tmp/thoth_gui_anchor.ppm");
+    session_history_clear();
+    # --- a full window frame with a 2-message conversation -> raster + PPM ---
+    session_history_clear();
+    var _m1 = "add a token-bucket rate limiter as its own module, thread-safe";
+    session_history_append("user", _m1, strlen(_m1));
+    var _m2 = "Plan: scaffold a ratelimit module, implement TokenBucket behind a Mutex, expose try_acquire(n), then add tests. Starting now.";
+    session_history_append("assistant", _m2, strlen(_m2));
+    var FW = 900; var FH = 400;
+    var fbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(fbuf, FW, FH, 0);
+    var frame = gframe_build(FW, FH);
+    assert(vec_len(frame) > 8, "frame emitted status + feed + composer commands");
+    gr_raster(frame, fbuf, FW, FH);
+    _gui_ppm_dump(fbuf, FW, FH, "/tmp/thoth_gui_frame.ppm");
+    # a frame with a conversation + a half-typed composer (interactive state) -> PPM
+    gcomp_reset();
+    var _tu = "add async support to the rate limiter";
+    session_history_clear();
+    session_history_append("user", _tu, strlen(_tu));
+    var _ta = "On it - I'll add an AsyncTokenBucket holding a Notify, so acquire(n) awaits a permit instead of returning false. Keeping the sync API behind a feature flag.";
+    session_history_append("assistant", _ta, strlen(_ta));
+    var _typed = "and criterion benches";
+    var _ti = 0;
+    while (load8(_typed + _ti) != 0) { gcomp_append(load8(_typed + _ti)); _ti = _ti + 1; }
+    var tbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(tbuf, FW, FH, 0);
+    gr_raster(gframe_build(FW, FH), tbuf, FW, FH);
+    _gui_ppm_dump(tbuf, FW, FH, "/tmp/thoth_gui_typed.ppm");
+    gcomp_reset();
+    session_history_clear();
+    # --- input: evdev keymap + composer buffer (0.32.0) ---
+    assert_eq(ginput_ascii(30, 0), 0x61, "evdev 30 -> 'a'");
+    assert_eq(ginput_ascii(30, 1), 0x41, "shift 30 -> 'A'");
+    assert_eq(ginput_ascii(2, 1), 0x21, "shift 2 -> '!'");
+    assert_eq(ginput_ascii(57, 0), 0x20, "evdev 57 -> space");
+    assert_eq(ginput_ascii(103, 0), 0, "arrow key (103) -> not printable");
+    gcomp_reset();
+    assert_eq(gcomp_len(), 0, "composer starts empty");
+    gcomp_append(0x68); gcomp_append(0x69);
+    assert(streq(gcomp_cstr(), "hi") == 1, "composer cstr == 'hi'");
+    gcomp_backspace();
+    assert(streq(gcomp_cstr(), "h") == 1, "backspace -> 'h'");
+    assert_eq(gcomp_key(28, 0), 2, "Enter -> submit (2)");
+    assert_eq(gcomp_key(1, 0), 1, "Esc -> quit (1)");
+    assert_eq(gcomp_key(31, 0), 0, "'s' key -> typed (0)");
+    assert(streq(gcomp_cstr(), "hs") == 1, "gcomp_key typed 's' -> 'hs'");
+    gcomp_reset();
+    # --- turn working-state (0.30.4): pending message echo + working indicator on send ---
+    gturn_begin("add async support to the rate limiter");
+    assert_eq(gturn_active(), 1, "gturn active after begin");
+    assert(streq(gturn_text(), "add async support to the rate limiter") == 1, "gturn_text == the copied submission");
+    session_history_clear();
+    # with EMPTY history + an active turn, the flow renders (NOT the greeting): a pending bubble + working line
+    var _wl = gd_list_new();
+    var _wdraw = _gfeed_flow(_wl, 14, 0, 800, 0);
+    assert(_wdraw > 0, "working-state flow advances past 0 with empty history (pending + working line)");
+    assert(vec_len(_wl) >= 3, "working-state emits >= 3 commands (marker + pending text + working indicator)");
+    var _wmeasure = _gfeed_flow(0, 14, 0, 800, 0);
+    assert_eq(_wmeasure, _wdraw, "working-state measure height == draw height (parity holds with the pending state)");
+    # gfeed_build must NOT show the greeting while a turn is active on an empty history
+    var _wfr = gd_list_new();
+    gfeed_build(_wfr, 0, 0, 900, 300);
+    assert(vec_len(_wfr) >= 3, "gfeed_build renders the working flow (not the greeting) during a turn");
+    # a full working frame with prior history -> PPM (history + the just-sent message + 'thoth is working')
+    session_history_clear();
+    var _whu = "add streaming to the client";
+    session_history_append("user", _whu, strlen(_whu));
+    var _wha = "Sure - I'll wire an SSE reader into the transport and surface partial deltas as they arrive.";
+    session_history_append("assistant", _wha, strlen(_wha));
+    var _wbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(_wbuf, FW, FH, _gframe_bg());
+    gr_raster(gframe_build(FW, FH), _wbuf, FW, FH);
+    _gui_ppm_dump(_wbuf, FW, FH, "/tmp/thoth_gui_working.ppm");
+    gturn_end();
+    assert_eq(gturn_active(), 0, "gturn cleared after end");
+    # --- failed-turn transient notice (0.30.4): no assistant reply -> an honest notice, never silent vanishing ---
+    gturn_begin("do a thing"); gturn_end(); gturn_fail();
+    assert_eq(gturn_failed(), 1, "gturn_failed set after gturn_fail");
+    session_history_clear();
+    var _ffl = gd_list_new();
+    var _ffh = _gfeed_flow(_ffl, 14, 0, 800, 0);          # empty history + failed -> the notice renders
+    assert(_ffh > 0, "failed-turn flow advances (renders the notice) on empty history");
+    assert(vec_len(_ffl) >= 1, "failed-turn emits the notice line");
+    assert_eq(_gfeed_flow(0, 14, 0, 800, 0), _ffh, "failed-notice measure height == draw height (parity)");
+    var _ffr = gd_list_new();
+    gfeed_build(_ffr, 0, 0, 900, 300);                    # empty history + failed => the notice, NOT the greeting
+    var _ffound = 0; var _ffi = 0;
+    while (_ffi < vec_len(_ffr)) {
+        var _ffc = vec_get(_ffr, _ffi);
+        if ((gd_kind(_ffc) == GD_TEXT) && (gd_text(_ffc) != 0)) {
+            if (streq(gd_text(_ffc), "the turn did not complete - is hoosh reachable? try /reprobe") == 1) { _ffound = 1; }
+        }
+        _ffi = _ffi + 1;
+    }
+    assert_eq(_ffound, 1, "gfeed_build renders the failure notice (not the greeting) on empty history");
+    # a full failed-turn frame with prior history -> PPM (the user msg was popped on failure; the notice explains)
+    session_history_clear();
+    var _fpu = "connect to the gateway";
+    session_history_append("user", _fpu, strlen(_fpu));
+    var _fpa = "Connected. What would you like me to build?";
+    session_history_append("assistant", _fpa, strlen(_fpa));
+    var _fbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(_fbuf, FW, FH, _gframe_bg());
+    gr_raster(gframe_build(FW, FH), _fbuf, FW, FH);
+    _gui_ppm_dump(_fbuf, FW, FH, "/tmp/thoth_gui_failed.ppm");
+    session_history_clear();
+    gturn_begin("retry");
+    assert_eq(gturn_failed(), 0, "a new submit (gturn_begin) clears the failure notice");
+    gturn_end();
+    session_history_clear();
+    # --- file-tree pane (gtree.cyr, 0.30.5; full coverage restored at 0.30.6 once cyrius 6.4.51 raised the
+    #     output cap 16 MiB -> 1 GiB on Linux, so the command-scan + golden PPM no longer overflow) ---
+    # responsive width: hidden on a narrow window, the fixed pane otherwise
+    assert_eq(gtree_w(500), 0, "narrow window (<640) hides the tree");
+    assert_eq(gtree_w(400), 0, "very narrow window hides the tree");
+    assert_eq(gtree_w(960), GTREE_PANE_W, "wide window shows the 230px pane");
+    assert_eq(gtree_w(700), GTREE_PANE_W, "700px window shows the full pane");
+    # basename (the pane header = the project name)
+    assert(streq(_gtree_basename("/home/macro/Repos/thoth"), "thoth") == 1, "basename of an absolute path");
+    assert(streq(_gtree_basename("thoth"), "thoth") == 1, "basename of a bare name");
+    assert(streq(_gtree_basename(""), "") == 1, "basename of empty is empty");
+    assert(streq(_gtree_basename("/"), "/") == 1, "basename of root '/' is '/', not an empty header");
+    # scroll-to-selection
+    assert_eq(_gtree_scroll_first(5, 10, 0), 0, "a tree that fits starts at row 0");
+    assert_eq(_gtree_scroll_first(100, 10, 0), 0, "overflow, selection at top -> row 0");
+    assert_eq(_gtree_scroll_first(100, 10, 99), 90, "overflow, selection at bottom -> clamped to total-rows");
+    # render a synthetic tree: src (dir, expanded) + main.cyr child + VERSION file
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0); _ftree_append("VERSION", 0, 0);
+    ftree_set_exp(0, 1); _ftree_insert_at(1, "main.cyr", 0, 1);
+    assert_eq(_gtree_gitkind(0), 0, "_gtree_gitkind returns 0 for a directory (files-only gate)");
+    var _tl = gd_list_new();
+    gtree_build(_tl, 0, 40, 230, 400);
+    assert(vec_len(_tl) > 4, "gtree_build emits bg + clip + header + rows + unclip");
+    # dir name -> ROLE_BLUE, file name -> ROLE_MUTED, header -> the project name (== tui_draw_tree palette)
+    var _tdir = 0; var _tfile = 0; var _thdr = 0; var _gti = 0;
+    while (_gti < vec_len(_tl)) {
+        var _gtc = vec_get(_tl, _gti);
+        if ((gd_kind(_gtc) == GD_TEXT) && (gd_text(_gtc) != 0)) {
+            if ((streq(gd_text(_gtc), "src") == 1) && (gd_color(_gtc) == _ui_rgb(ROLE_BLUE))) { _tdir = 1; }
+            if ((streq(gd_text(_gtc), "VERSION") == 1) && (gd_color(_gtc) == _ui_rgb(ROLE_MUTED))) { _tfile = 1; }
+            if (streq(gd_text(_gtc), "repo") == 1) { _thdr = 1; }
+        }
+        _gti = _gti + 1;
+    }
+    assert_eq(_tdir, 1, "a directory row renders in ROLE_BLUE");
+    assert_eq(_tfile, 1, "a file row renders in ROLE_MUTED");
+    assert_eq(_thdr, 1, "the pane header shows the project name (cwd basename)");
+    var _tbuf = gr_fb_new(230, 400);
+    gr_fb_clear(_tbuf, 230, 400, _gtree_bg());
+    gr_raster(_tl, _tbuf, 230, 400);
+    _gui_ppm_dump(_tbuf, 230, 400, "/tmp/thoth_gui_tree.ppm");
+    # real-repo smoke: load the actual tree + probe git, then build the pane over it — exercises the git-badge
+    # path (_gtree_gitkind: ftree_path -> strip cwd -> git_status_of) on real files, deterministically non-crashing
+    git_probe();
+    ftree_load();
+    assert(ftree_count() > 0, "ftree_load listed the repo root");
+    var _rl = gd_list_new();
+    gtree_build(_rl, 0, 40, 230, 400);
+    assert(vec_len(_rl) > 4, "gtree_build over the real repo tree emits the pane (git-badge path exercised)");
+    ftree_reset();
+    session_set_model(0);
+    return 0;
+}
+
+fn test_surface() {
+    test_group("status view-model (surface.cyr, 0.28.0)");
+    # snapshot mirrors the producers + single-sources the omit gates (drift-safety)
+    session_set_model("gpt-5");
+    status_snapshot();
+    assert_eq(status_state(SF_MODEL), 0, "session model set -> STATE 0 (resolved)");
+    assert(streq(status_sval(SF_MODEL), "gpt-5") == 1, "model SPTR == the session id");
+    session_set_model(0);
+    status_snapshot();
+    # with no session model, resolution falls back to config; STATE=1 iff BOTH are null
+    if (config_hoosh_model() == 0) {
+        assert_eq(status_state(SF_MODEL), 1, "no model anywhere -> STATE 1");
+        assert_eq(status_sval(SF_MODEL), 0, "no model -> SPTR 0");
+    }
+    assert_eq(status_ival(SF_TURNS), session_turns(), "turns ival == session_turns()");
+    assert_eq(status_present(SF_TOKENS), session_tokens_seen(), "tokens present == session_tokens_seen() (one gate)");
+    assert_eq(status_ival(SF_TOKENS), session_tokens(), "tokens ival == session_tokens()");
+    assert_eq(status_present(SF_COST), session_cost_seen(), "cost present == session_cost_seen() (one gate)");
+    assert_eq(status_ival(SF_COST), session_cost_micro(), "cost ival == session_cost_micro()");
+    assert_eq(status_ival2(SF_COST), session_cost_unpriced_count(), "cost ival2 == unpriced count");
+    # ctx: the KiB rounding formula, now single-sourced in the producer
+    session_history_clear();
+    session_history_append("user", "hello there world", 17);
+    status_snapshot();
+    assert_eq(status_ival(SF_CTX), hoosh_ctx_kib(), "ctx ival == hoosh_ctx_kib() (single-sourced)");
+    assert_eq(status_ival(SF_CTX), (hoosh_ctx_bytes() + 512) / 1024, "ctx ival == the KiB rounding formula");
+    assert_eq(status_ival2(SF_CTX), hoosh_ctx_budget_kib(), "ctx budget ival2 == hoosh_ctx_budget_kib()");
+    assert_eq(status_state(SF_CTX), hoosh_ctx_evicted(), "ctx STATE == evicted count");
+    # health enum tracks hoosh_health()
+    hoosh_health_mark_down();
+    status_snapshot();
+    assert_eq(status_state(SF_HEALTH), HOOSH_HEALTH_DOWN, "health STATE == DOWN after mark_down");
+    hoosh_health_mark_up();
+    status_snapshot();
+    assert_eq(status_state(SF_HEALTH), HOOSH_HEALTH_UP, "health STATE == UP after mark_up");
+    # git mirrors the producer cache
+    git_probe();
+    status_snapshot();
+    assert_eq(status_present(SF_GIT), git_present(), "git present == git_present()");
+    assert_eq(status_ival(SF_GIT), git_dirty(), "git ival == git_dirty()");
+    # surface / theme name pointers
+    status_snapshot();
+    assert(streq(status_sval(SF_SURFACE), ui_tier_name()) == 1, "surface sval == ui_tier_name()");
+    assert(streq(status_sval(SF_THEME), ui_theme_name()) == 1, "theme sval == ui_theme_name()");
+    # restore shared globals for any later test
+    session_set_model(0);
+    session_history_clear();
+    return 0;
+}
