@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.31.1** — **`editlog`: record each edit's diff for the colored diff card**, 2026-07-12. The producer half of
+the colored-diffs arc (patch within the 0.31 arc). `src/editlog.cyr` = a session ring of the model `edit` tool's
+recent changes keyed by `(turn,round,call)` (aligns with `roundlog`). On each applied edit it computes the line
+diff **once** (sit's escape-free `compute_file_diff`) and stores the **changed lines** (del/add) — so the GUI
+card (0.31.2) renders by walking stored lines, **never recomputing the LCS per repaint** (bump-heap-per-frame is
+the trap that forced this design). Bounded: 16 edits, ≤48 lines each (≤200 B, control→space, trailing-\n
+stripped), all adds/dels counted past the cap; over-LCS-cap edit stores path+counts only. Recording site:
+`agent.cyr` edit dispatch calls `editlog_record(session_turns(), roundlog_cur_round(), ci, edit_last_*)` right
+after a successful edit (before the next edit reuses `_edit_old`/`_edit_new`); `editlog_reset` wired to `/reset`.
+**Verified**: 1477 assertions (`test_editlog` +27) + **LIVE** integration (real gated edit → `editlog_find` returns
+`+1 -1` with the exact `-`/`+` lines, indentation preserved) + adversarial review. Pin **6.4.51** (wrapper 6.4.55).
+**NEXT**: 0.31.2 = the GUI colored diff card — `_gtool_card` looks up `editlog_find(turn,round,call)` for each
+`edit` call and draws the stored del/add lines in ROLE_RED/ROLE_GREEN (draw-IR; grows the card height). Then
+create-new-file support; the `daimon_invoke` HTTP-status hardening.
+
 **0.31.0** — **Model `edit` tool: thoth can now WRITE code** (ADR-0017), 2026-07-12. New capability arc (minor
 bump). The symmetric completion of the ADR-0015 read tools: `edit(path, old_string, new_string)` (`src/edit.cyr`)
 does a **surgical** replacement of the UNIQUE occurrence of old_string and applies it to disk — 0 matches →

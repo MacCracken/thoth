@@ -1096,6 +1096,7 @@ fn cmd_reset() {
     session_history_clear();
     sess_persist_save();       # 0.24.2: mirror the cleared history to [session].file so /reset isn't undone by a resume
     roundlog_reset();
+    editlog_reset();           # 0.31.1: drop the recorded edit diffs too
     if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }
     return 0;

@@ -880,6 +880,9 @@ fn _agent_run_calls_serial(tcs, nc) {
                 res = edit_tool(gp);
                 if (edit_last_allowed() == 1) { rl_kind = RL_ALLOWED; }
                 rl_ok = edit_last_ok();
+                if (edit_last_ok() == 1) {                            # 0.31.1: record the edit's diff for the feed card
+                    editlog_record(session_turns(), roundlog_cur_round(), ci, edit_last_path(), edit_last_old(), edit_last_old_len(), edit_last_new(), edit_last_new_len());
+                }
             } else {
                 res = "(edit tool is not enabled in this session)";
             }

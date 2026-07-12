@@ -119,6 +119,10 @@ fn roundlog_add_call(name, kind, ok, ms, bytes, args) {
 
 # --- read side: accessors (pure, unit-tested) + render (I/O) ---
 
+# roundlog_cur_round: the round_no of the currently-open round (0 if none). Lets the edit dispatch key its
+# editlog entry to the SAME (turn, round) roundlog just opened, without threading round_no through the executor.
+fn roundlog_cur_round() { if (_roundlog_cur == 0) { return 0; } return load64(_roundlog_cur + 8); }
+
 # Total rounds opened this session (may exceed what the ring retains).
 fn roundlog_total() { return _roundlog_total; }
 

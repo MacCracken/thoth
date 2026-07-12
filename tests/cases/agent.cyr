@@ -619,3 +619,72 @@ fn test_edit() {
     assert_eq(load8(sm + smlen), 0, "the summary is NUL-terminated");
     return 0;
 }
+
+# The editlog producer (0.31.1): records the model edit tool's changes (del/add lines) keyed by (turn,round,call),
+# computed once via compute_file_diff, for the GUI diff card (0.31.2). PURE (no I/O — records over byte buffers).
+fn _el_has_line(i, kind, text) {
+    var n = editlog_nlines(i); var li = 0;
+    while (li < n) {
+        if ((editlog_line_kind(i, li) == kind) && (streq(editlog_line_text(i, li), text) == 1)) { return 1; }
+        li = li + 1;
+    }
+    return 0;
+}
+fn test_editlog() {
+    test_group("editlog: single-line change (0.31.1)");
+    editlog_reset();
+    assert_eq(editlog_total(), 0, "empty");
+    var o1 = "line one\nOLD\nthree\n";
+    var n1 = "line one\nNEW\nthree\n";
+    editlog_record(5, 2, 0, "src/x.cyr", o1, strlen(o1), n1, strlen(n1));
+    assert_eq(editlog_total(), 1, "one edit recorded");
+    assert_eq(editlog_find(5, 2, 0), 0, "found by its (turn,round,call) key");
+    assert_eq(editlog_find(9, 9, 9), 0 - 1, "a non-matching key -> -1");
+    assert(streq(editlog_path(0), "src/x.cyr") == 1, "path stored");
+    assert_eq(editlog_adds(0), 1, "one add");
+    assert_eq(editlog_dels(0), 1, "one del");
+    assert_eq(editlog_nlines(0), 2, "two changed lines stored (del + add)");
+    assert_eq(editlog_truncated(0), 0, "not truncated");
+    assert_eq(_el_has_line(0, 1, "OLD"), 1, "the deleted line 'OLD' (kind 1, newline stripped)");
+    assert_eq(_el_has_line(0, 2, "NEW"), 1, "the added line 'NEW' (kind 2)");
+
+    test_group("editlog: pure delete + no-op");
+    var o2 = "a\nGONE\nb\n"; var n2 = "a\nb\n";
+    editlog_record(6, 1, 0, "d.txt", o2, strlen(o2), n2, strlen(n2));
+    assert_eq(editlog_dels(1), 1, "delete: one del");
+    assert_eq(editlog_adds(1), 0, "delete: no add");
+    assert_eq(_el_has_line(1, 1, "GONE"), 1, "the deleted line stored");
+    var same = "x\ny\n";
+    editlog_record(7, 1, 0, "same.txt", same, strlen(same), same, strlen(same));
+    assert_eq(editlog_adds(2), 0, "no-op edit: 0 adds");
+    assert_eq(editlog_dels(2), 0, "no-op edit: 0 dels");
+    assert_eq(editlog_nlines(2), 0, "no-op edit: no lines stored");
+
+    test_group("editlog: truncation past EL_LINES_MAX + ring eviction");
+    var bo = alloc(4096); var bn = alloc(4096); var oo = 0; var k = 0;
+    while (k < 50) { store8(bo + oo, 0x78); store8(bn + oo, 0x79); oo = oo + 1; store8(bo + oo, 10); store8(bn + oo, 10); oo = oo + 1; k = k + 1; }
+    store8(bo + oo, 0); store8(bn + oo, 0);                    # "x\n"*50  vs  "y\n"*50 -> 50 del + 50 add
+    editlog_record(8, 1, 0, "big", bo, oo, bn, oo);
+    assert_eq(editlog_adds(3), 50, "all 50 adds counted even past the store cap");
+    assert_eq(editlog_dels(3), 50, "all 50 dels counted");
+    assert_eq(editlog_nlines(3), EL_LINES_MAX, "stored lines capped at EL_LINES_MAX");
+    assert_eq(editlog_truncated(3), 1, "truncated flag set");
+    # ops==0 (diff over sit's LCS cap): flagged truncated (diff unavailable), distinct from a no-op
+    editlog_reset();
+    var hu = alloc(20000); var hv = alloc(20000); var ho = 0; var hk = 0;
+    while (hk < 9000) { store8(hu + ho, 0x61); store8(hv + ho, 0x62); ho = ho + 1; store8(hu + ho, 10); store8(hv + ho, 10); ho = ho + 1; hk = hk + 1; }
+    store8(hu + ho, 0); store8(hv + ho, 0);      # 9000 'a' lines vs 9000 'b' lines -> exceeds the LCS cap -> ops==0
+    editlog_record(1, 1, 0, "huge", hu, ho, hv, ho);
+    assert_eq(editlog_nlines(0), 0, "over-LCS-cap edit stores no lines");
+    assert_eq(editlog_truncated(0), 1, "over-LCS-cap edit is flagged truncated (distinct from a no-op)");
+    # ring: fill past EDITLOG_CAP; oldest drop, count caps
+    editlog_reset();
+    var g = 0;
+    while (g < (EDITLOG_CAP + 3)) { editlog_record(g, 0, 0, "p", o1, strlen(o1), n1, strlen(n1)); g = g + 1; }
+    assert_eq(editlog_total(), EDITLOG_CAP + 3, "total counts every edit");
+    assert_eq(editlog_count(), EDITLOG_CAP, "ring retains only EDITLOG_CAP");
+    assert_eq(editlog_find(0, 0, 0), 0 - 1, "the oldest edit (turn 0) was evicted");
+    assert_eq(editlog_find(EDITLOG_CAP + 2, 0, 0) >= 0, 1, "the newest edit is retained");
+    editlog_reset();
+    return 0;
+}

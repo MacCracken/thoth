@@ -1,0 +1,135 @@
+# src/editlog.cyr — session-local ring of the model `edit` tool's recent changes (0.31.1), keyed by
+# (turn, round, call) to align with roundlog. Records the CHANGED lines (del/add) of each applied edit, computed
+# ONCE at record time via sit's escape-free `compute_file_diff` — so the GUI feed (0.31.2) can render a colored
+# diff card by WALKING stored lines, never recomputing the LCS on every repaint (which would grow the bump heap
+# per frame). Display-only, session-scoped; owns no policy and never touches t-ron's chain (like roundlog).
+#
+# Bounded: the last EDITLOG_CAP edits; per edit up to EL_LINES_MAX changed lines, each truncated to EL_LINE_CAP
+# bytes (control bytes -> space, so a diff line can't break a one-line card). An edit whose diff exceeds sit's LCS
+# cap (only a near-EDIT_BUF_CAP, heavily-rewritten file) records path with nlines=0, adds=dels=0 and the TRUNCATED
+# flag set — distinguishing "diff unavailable, too large" from a genuine no-op (nlines=0, truncated=0), so the
+# card can say so honestly rather than showing a misleading +0/-0.
+
+var EDITLOG_CAP = 16;         # ring: the most recent 16 edits
+var EL_LINES_MAX = 48;        # changed (del/add) lines stored per edit; beyond this -> truncated flag set
+var EL_LINE_CAP = 200;        # bytes stored per changed line (NUL-terminated), truncated
+var EL_PATH_CAP = 256;        # bytes of the edited path (NUL-terminated), truncated
+
+# per-line entry = kind(8: 1=del, 2=add) + EL_LINE_CAP bytes
+fn _el_line_sz() { return 8 + EL_LINE_CAP; }
+# per-edit slot = turn(8)+round(8)+call(8)+adds(8)+dels(8)+nlines(8)+trunc(8) + EL_PATH_CAP path + lines
+fn _el_slot_sz() { return 56 + EL_PATH_CAP + EL_LINES_MAX * _el_line_sz(); }
+
+var _editlog = 0;             # ring base, lazily alloc'd
+var _editlog_total = 0;       # edits recorded this session (global index)
+
+fn _editlog_init() { if (_editlog == 0) { _editlog = alloc(EDITLOG_CAP * _el_slot_sz()); } return 0; }
+fn _editlog_slot(g) { return _editlog + (g % EDITLOG_CAP) * _el_slot_sz(); }
+
+# editlog_reset: clear the session edit trace (called by /reset).
+fn editlog_reset() { _editlog_total = 0; return 0; }
+
+# _el_copy_path: bounded NUL-terminated copy of a cstr path into dst (EL_PATH_CAP).
+fn _el_copy_path(dst, src) {
+    var i = 0;
+    if (src != 0) {
+        while ((load8(src + i) != 0) && (i < (EL_PATH_CAP - 1))) { store8(dst + i, load8(src + i)); i = i + 1; }
+    }
+    store8(dst + i, 0);
+    return 0;
+}
+
+# _el_copy_line: copy a diff line (len bytes, INCLUDING its trailing newline) into dst, dropping the trailing
+# '\n' and mapping any control byte (< 0x20) to a space, NUL-terminated, bounded to EL_LINE_CAP-1.
+fn _el_copy_line(dst, src, len) {
+    var n = len;
+    if ((n > 0) && (load8(src + n - 1) == 10)) { n = n - 1; }     # drop the trailing newline
+    if (n > (EL_LINE_CAP - 1)) { n = EL_LINE_CAP - 1; }
+    var i = 0;
+    while (i < n) {
+        var c = load8(src + i);
+        if (c < 32) { c = 32; }
+        store8(dst + i, c);
+        i = i + 1;
+    }
+    store8(dst + i, 0);
+    return 0;
+}
+
+# editlog_record: record one applied edit. Computes the line diff ONCE (compute_file_diff) and stores the del/add
+# lines (kind 1/2) up to EL_LINES_MAX; counts every add/del even past the store cap (so the summary is exact).
+# turn/round/call are the same key roundlog uses. old/new are the pre/post byte buffers (the caller's; copied out
+# here). No-op storage bloat: only the changed lines are kept, not the whole file.
+fn editlog_record(turn, round, call, path, old, oldlen, new, newlen) {
+    _editlog_init();
+    var s = _editlog_slot(_editlog_total);
+    store64(s + 0, turn);
+    store64(s + 8, round);
+    store64(s + 16, call);
+    _el_copy_path(s + 56, path);
+    var adds = 0;
+    var dels = 0;
+    var nlines = 0;
+    var trunc = 0;
+    var ops = compute_file_diff(old, oldlen, new, newlen);
+    if (ops == 0) { trunc = 1; }               # diff uncomputable (over sit's LCS cap) -> flag it, distinct from a no-op
+    if (ops != 0) {
+        var n = vec_len(ops);
+        var i = 0;
+        while (i < n) {
+            var op = vec_get(ops, i);
+            var kind = ann_kind(op);
+            if ((kind == 1) || (kind == 2)) {
+                if (kind == 1) { dels = dels + 1; } else { adds = adds + 1; }
+                if (nlines < EL_LINES_MAX) {
+                    var e = s + 56 + EL_PATH_CAP + nlines * _el_line_sz();
+                    store64(e, kind);
+                    var line = ann_line(op);
+                    _el_copy_line(e + 8, line_ptr(line), line_len(line));
+                    nlines = nlines + 1;
+                } else {
+                    trunc = 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    store64(s + 24, adds);
+    store64(s + 32, dels);
+    store64(s + 40, nlines);
+    store64(s + 48, trunc);
+    _editlog_total = _editlog_total + 1;
+    return 0;
+}
+
+# --- read side: accessors (pure, unit-tested) ---
+fn editlog_total() { return _editlog_total; }
+fn editlog_count() {
+    if (_editlog_total < EDITLOG_CAP) { return _editlog_total; }
+    return EDITLOG_CAP;
+}
+fn _editlog_kept_slot(i) {
+    var first = _editlog_total - editlog_count();
+    return _editlog_slot(first + i);
+}
+
+# editlog_find: the kept-index of the edit matching (turn, round, call), or -1. The GUI card looks up its call by
+# the SAME key roundlog carries, so a tool-call card can show the edit's diff.
+fn editlog_find(turn, round, call) {
+    var c = editlog_count();
+    var i = 0;
+    while (i < c) {
+        var s = _editlog_kept_slot(i);
+        if ((load64(s) == turn) && (load64(s + 8) == round) && (load64(s + 16) == call)) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn editlog_path(i)      { return _editlog_kept_slot(i) + 56; }
+fn editlog_adds(i)      { return load64(_editlog_kept_slot(i) + 24); }
+fn editlog_dels(i)      { return load64(_editlog_kept_slot(i) + 32); }
+fn editlog_nlines(i)    { return load64(_editlog_kept_slot(i) + 40); }
+fn editlog_truncated(i) { return load64(_editlog_kept_slot(i) + 48); }
+fn editlog_line_kind(i, li) { return load64(_editlog_kept_slot(i) + 56 + EL_PATH_CAP + li * _el_line_sz()); }
+fn editlog_line_text(i, li) { return _editlog_kept_slot(i) + 56 + EL_PATH_CAP + li * _el_line_sz() + 8; }

@@ -58,6 +58,7 @@ include "src/git.cyr"      # git producer (0.13.0) — consumes sit's read-only 
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/roundlog.cyr"
+include "src/editlog.cyr"  # model `edit` diff ring (0.31.1) — records edit changes keyed by (turn,round,call); after sit-read (compute_file_diff), before agent (fed there) + gui (read there)
 include "src/exec.cyr"
 include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from tui (0.30.8); before hoosh/agent poll it
 include "src/hoosh.cyr"

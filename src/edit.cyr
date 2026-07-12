@@ -29,6 +29,19 @@ var _edit_last_ok = 0;        # 1 if the last edit_tool call actually applied + 
 fn edit_last_allowed() { return _edit_last_allowed; }
 fn edit_last_ok() { return _edit_last_ok; }
 
+# The last APPLIED edit's path + the old/new byte buffers + lengths (0.31.1), so the dispatch can hand them to
+# editlog_record immediately after a successful edit (before the next edit reuses _edit_old/_edit_new). Valid
+# only when edit_last_ok()==1.
+var EDIT_LPATH_CAP = 512;
+var _edit_last_path = 0;
+var _edit_last_oldlen = 0;
+var _edit_last_newlen = 0;
+fn edit_last_path()    { if (_edit_last_path == 0) { return ""; } return _edit_last_path; }
+fn edit_last_old()     { return _edit_old; }
+fn edit_last_old_len() { return _edit_last_oldlen; }
+fn edit_last_new()     { return _edit_new; }
+fn edit_last_new_len() { return _edit_last_newlen; }
+
 # _edit_mem_eq: 1 if the n bytes at a and b are equal. Pure.
 fn _edit_mem_eq(a, b, n) {
     var i = 0;
@@ -132,6 +145,14 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     # differs per target). Until then this at least never CLAIMS success on a partial write.
     if (wr != newlen) { return "(edit: the write to disk was incomplete (disk full?) - the file may be truncated)"; }
     _edit_last_ok = 1;
+    # 0.31.1: stash this edit's path + old/new for editlog_record (the dispatch calls it right after, before the
+    # next edit reuses _edit_old/_edit_new). _edit_old/_edit_new already hold the pre/post content.
+    if (_edit_last_path == 0) { _edit_last_path = alloc(EDIT_LPATH_CAP); }
+    var pi = 0;
+    while ((load8(path + pi) != 0) && (pi < (EDIT_LPATH_CAP - 1))) { store8(_edit_last_path + pi, load8(path + pi)); pi = pi + 1; }
+    store8(_edit_last_path + pi, 0);
+    _edit_last_oldlen = oldlen;
+    _edit_last_newlen = newlen;
     return _edit_summary(path, _edit_old, oldlen, _edit_new, newlen, wr);
 }
 

@@ -2,6 +2,28 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.1] - 2026-07-12
+
+**`editlog` — record each `edit`'s diff, for the colored diff card (0.31.2).** The producer half of the
+colored-diffs arc: `src/editlog.cyr` is a session ring of the model `edit` tool's recent changes, keyed by
+`(turn, round, call)` to align with `roundlog`. On each applied edit it computes the line diff **once** (sit's
+escape-free `compute_file_diff`) and stores the **changed lines** (del/add) — so the GUI card (0.31.2) can render
+by walking stored lines and **never recompute the LCS on a repaint** (which would grow the bump heap every
+frame). Bounded: last 16 edits, ≤48 changed lines each (≤200 B/line, control→space, trailing newline stripped),
+all adds/dels counted even past the store cap; an edit over the LCS cap records path + counts with no hunk.
+
+### Added
+- `src/editlog.cyr` — `editlog_record` + `editlog_find`/`_path`/`_adds`/`_dels`/`_nlines`/`_truncated`/`_line_kind`/
+  `_line_text` + `editlog_reset` (wired into `/reset`). `roundlog_cur_round()` (so the edit dispatch keys its
+  entry without threading `round_no`). `edit.cyr` stashes the last edit's path + old/new (`edit_last_path`/`_old`/
+  `_old_len`/`_new`/`_new_len`) for the dispatch to hand to `editlog_record` right after a successful edit.
+
+### Verified
+- 1477 assertions (`test_editlog` +27: single-line change / pure-delete / no-op / truncation-past-cap /
+  ring-eviction / find-by-key, del+add kinds + newline-stripped text). **Live** integration: ran a real gated
+  `edit` then recorded it — `editlog_find` returns the entry with `+1 -1` and the exact `-` / `+` lines
+  (indentation preserved). Adversarially reviewed. Pin **6.4.51** (wrapper 6.4.55).
+
 ## [0.31.0] - 2026-07-12
 
 **thoth can now WRITE code — a first-class model-invokable `edit` tool ([ADR-0017](docs/adr/0017-model-edit-tool-jailed-gated-opt-in.md)).**

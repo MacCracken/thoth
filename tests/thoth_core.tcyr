@@ -25,6 +25,7 @@ include "src/git.cyr"      # git producer (0.13.0); before seams (SEAM_GIT reads
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/roundlog.cyr"
+include "src/editlog.cyr"  # model edit diff ring (0.31.1)
 include "src/exec.cyr"
 include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from tui (0.30.8); before hoosh/agent poll it
 include "src/hoosh.cyr"
@@ -91,6 +92,7 @@ fn main() {
     test_config_m4();
     test_daimon();
     test_edit();
+    test_editlog();
     test_tron();
     test_audit();
     test_roundlog();
