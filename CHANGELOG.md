@@ -2,6 +2,29 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.4] - 2026-07-12
+
+**Cleaner `edit`/`create_file` arg on the diff card.** Now that the colored diff renders below an `edit`/
+`create_file` call, the raw JSON args line (`{"path":"…","old_string":"…","new_string":"…"}`) above it was
+redundant noise. The card now shows just the **clean path** in the blue "paths" colour for any call that has an
+`editlog` entry (i.e. an edit/create) — `edit ok 12ms/40B src/x.cyr`, not the JSON. Other tools (`shell`, MCP)
+keep their raw args (faint). Reuses the `editlog_find` lookup the diff already does (`editlog_path`), so no JSON
+parsing at paint. Draw-only — the card height (and the feed measure/draw parity) is unchanged.
+
+### Changed
+- `src/gui/gtool.cyr` — `_gtool_card` hoists the per-call `editlog_find`; when matched it draws `editlog_path` in
+  `ROLE_BLUE` instead of `roundlog_call_args`. `test_gui_toolcards_diff` +2 (the clean path is drawn blue; the raw
+  JSON args are not).
+
+### Verified
+- 1500 assertions + main builds + PPM eyeballed (`edit ok 12ms/40B src/x.cyr` over `- OLD`/`+ NEW`). Pin
+  **6.4.51** (wrapper 6.4.55).
+
+### Notes
+- Filed the atomic-write need as a cyrius issue (`docs/development/issues/2026-07-12-thoth-portable-atomic-file-write.md`
+  in the cyrius repo): a portable `file_rename`/`file_write_atomic` + AGNOS `O_EXCL`, so `edit`/`create_file` (and
+  `/write`) can be crash-safe. Remaining thoth follow-up: the `daimon_invoke` HTTP-status hardening (from 0.30.18).
+
 ## [0.31.3] - 2026-07-12
 
 **`create_file` — the model can make NEW files.** The create half of the write capability, completing the edit

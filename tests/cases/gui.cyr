@@ -671,18 +671,23 @@ fn test_gui_toolcards_diff() {
     var cmds = gd_list_new();
     var dh = gtool_build_turn(cmds, 0, 0, 600, t);
     assert_eq(mh, dh, "diff card measure height == draw height (parity)");
-    # del line RED with text 'OLD', add line GREEN with text 'NEW'
-    var reds = 0; var greens = 0; var delseen = 0; var addseen = 0; var _ci = 0;
+    # del line RED with text 'OLD', add line GREEN with text 'NEW'; the edit call shows its clean PATH (blue,
+    # 0.31.4) instead of the raw JSON args
+    var reds = 0; var greens = 0; var delseen = 0; var addseen = 0; var pathseen = 0; var argjson = 0; var _ci = 0;
     while (_ci < vec_len(cmds)) {
         var c = vec_get(cmds, _ci);
         if (gd_kind(c) == GD_TEXT) {
             if (gd_color(c) == _ui_rgb(ROLE_RED)) { reds = reds + 1; if (streq(gd_text(c), "OLD") == 1) { delseen = 1; } }
             if (gd_color(c) == _ui_rgb(ROLE_GREEN)) { greens = greens + 1; if (streq(gd_text(c), "NEW") == 1) { addseen = 1; } }
+            if ((gd_color(c) == _ui_rgb(ROLE_BLUE)) && (streq(gd_text(c), "src/x.cyr") == 1)) { pathseen = 1; }
+            if (streq(gd_text(c), "{\"path\":\"src/x.cyr\"}") == 1) { argjson = 1; }
         }
         _ci = _ci + 1;
     }
     assert_eq(delseen, 1, "the deleted line 'OLD' is drawn RED");
     assert_eq(addseen, 1, "the added line 'NEW' is drawn GREEN");
+    assert_eq(pathseen, 1, "the edit call shows its clean path 'src/x.cyr' in blue (0.31.4)");
+    assert_eq(argjson, 0, "the noisy raw JSON args are NOT drawn for an edit call");
     # PPM artifact: a feed with the diff card
     session_history_append("user", "rename OLD to NEW", strlen("rename OLD to NEW"));
     session_history_append("assistant", "done.", strlen("done."));

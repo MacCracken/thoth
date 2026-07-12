@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.31.4** — **Cleaner edit/create arg on the diff card**, 2026-07-12. Now that the colored diff renders below an
+`edit`/`create_file` call, the raw JSON args line above it was noise. `_gtool_card` (`src/gui/gtool.cyr`) now shows
+just the **clean path** (in `ROLE_BLUE`) for any call with an `editlog` entry — `edit ok 12ms/40B src/x.cyr`, not
+the JSON — reusing the `editlog_find`/`editlog_path` the diff already looks up (no JSON parse at paint). Other tools
+keep raw args (faint). Draw-only, so the card height + feed measure/draw parity are unchanged. **Verified**: 1500
+assertions (`test_gui_toolcards_diff` +2) + main builds + PPM eyeballed. Pin **6.4.51** (wrapper 6.4.55). Also
+**filed a cyrius issue** (`docs/development/issues/2026-07-12-thoth-portable-atomic-file-write.md` in ~/Repos/cyrius):
+a portable `file_rename`/`file_write_atomic` + AGNOS `O_EXCL` so edit/create/`/write` can be crash-safe (atomic
+temp+rename) — the fix for the non-atomic-write residual, requested for the next cyrius release. **NEXT (remaining
+thoth follow-up)**: the `daimon_invoke` HTTP-status hardening (from 0.30.18).
+
 **0.31.3** — **`create_file`: the model can make NEW files** (ADR-0017), 2026-07-12. The create half of the
 write capability. `create_file(path, content)` (`src/edit.cyr`) writes a brand-new file — **CREATE-ONLY**, it
 REFUSES if the file exists (no blind-clobber; modifying stays `edit`'s surgical job). Same envelope as edit:

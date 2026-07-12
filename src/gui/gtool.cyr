@@ -115,6 +115,7 @@ fn _gtool_card(cmds, x, y, w, i) {
             var cx = x + GTOOL_PAD + GTOOL_IND;
             var kind = roundlog_call_kind(i, ci);
             var ok = roundlog_call_ok(i, ci);
+            var eidx = editlog_find(turn, round, ci);                  # 0.31.2/.4: an edit's diff + its clean path
             var p2 = _gtool_txt(cmds, cx, ly, _ui_rgb(ROLE_ACCENT), roundlog_call_name(i, ci));
             p2 = _gtool_txt(cmds, p2 + GR_GLYPH_W, ly, _gtool_status_color(kind, ok), _gtool_status_word(kind, ok));
             if (kind == RL_ALLOWED) {                                  # telemetry only for invoked calls (0.19.1)
@@ -123,17 +124,20 @@ fn _gtool_card(cmds, x, y, w, i) {
                 p2 = _gtool_int(cmds, p2, ly, _ui_rgb(ROLE_FAINT), roundlog_call_bytes(i, ci));
                 p2 = _gtool_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), "B");
             }
-            # 0.30.17: the call's arguments, faint, after a gap — CLIPPED (max_cp) to the card's remaining width so
-            # a long arg never bleeds past the border. Draw-only; the card height is fixed at one line per call.
-            var aq = roundlog_call_args(i, ci);
-            if (load8(aq) != 0) {
-                var ax = p2 + GR_GLYPH_W;
-                var maxc = ((x + w - GTOOL_PAD) - ax) / GR_GLYPH_W;    # codepoints that fit before the right border
-                if (maxc >= 1) { gd_push_text(cmds, ax, ly, _ui_rgb(ROLE_FAINT), aq, maxc); }
+            # the arg display, CLIPPED (max_cp) to the card's remaining width. 0.31.4: an edit/create call (it has
+            # an editlog entry) shows just its clean PATH in the blue "paths" colour — the raw JSON args
+            # (old/new strings) are noise now that the diff is drawn below. Other tools keep their raw args (faint,
+            # 0.30.17). Draw-only; the card height is fixed at one line per call either way.
+            var ax = p2 + GR_GLYPH_W;
+            var maxc = ((x + w - GTOOL_PAD) - ax) / GR_GLYPH_W;        # codepoints that fit before the right border
+            if (eidx >= 0) {
+                if (maxc >= 1) { gd_push_text(cmds, ax, ly, _ui_rgb(ROLE_BLUE), editlog_path(eidx), maxc); }
+            } else {
+                var aq = roundlog_call_args(i, ci);
+                if ((load8(aq) != 0) && (maxc >= 1)) { gd_push_text(cmds, ax, ly, _ui_rgb(ROLE_FAINT), aq, maxc); }
             }
             ly = ly + GTOOL_LH;
-            var eidx = editlog_find(turn, round, ci);                  # 0.31.2: an edit's colored diff below its line
-            if (eidx >= 0) { ly = _gtool_draw_diff(cmds, x, ly, w, eidx); }
+            if (eidx >= 0) { ly = _gtool_draw_diff(cmds, x, ly, w, eidx); }   # 0.31.2: the edit's colored diff below
             ci = ci + 1;
         }
         if (nc == 0) { _gtool_txt(cmds, x + GTOOL_PAD + GTOOL_IND, ly, _ui_rgb(ROLE_FAINT), "(no calls)"); }
