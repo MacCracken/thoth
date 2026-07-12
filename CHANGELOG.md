@@ -2,6 +2,33 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.16] - 2026-07-11
+
+**T3 GUI — tool-call cards in the feed.** The GUI now SHOWS which tools thoth ran to produce an answer, as
+bordered cards in the conversation feed. In the GUI the live `tool-call:`/`result:` lines the TUI prints are
+suppressed (the present loop wraps the turn in `OUT_NULL`), so tool activity was previously invisible on the
+desktop; these cards fill that gap. NEW `src/gui/gtool.cyr` — a PURE, headless-testable view-builder that reads
+the EXISTING `roundlog` producer (`src/roundlog.cyr`, the session ring `/audit` already renders) and emits
+draw-IR cards: per round a bordered box with a left accent bar, a `tool round N` header, and one line per call
+— the tool **name** (accent) + a status word (**ok** green / **err**·**deny**·**noname** red, via the shared
+`_ui_rgb` palette) + `<ms>ms/<bytes>B` telemetry (faint). `gfeed`'s `_gfeed_flow` interleaves the block just
+above the CURRENT turn's assistant reply (and above the failure notice for a failed turn). Like the feed,
+`gtool_build` runs measure-only under `cmds==0` and returns the exact drawn height, so the bottom-anchor
+pre-measure stays correct. This is a RENDERING cut over data thoth already holds — **no producer, session, or
+spine change**.
+
+### Added
+- `src/gui/gtool.cyr` — `gtool_build`/`gtool_has_current` + `_gtool_card`/`_gtool_status_word`/`_gtool_status_color`.
+- `roundlog.cyr` + `gtool.cyr` added to the LEAN `thoth_gui.tcyr`. `test_gui_toolcards` (+9): parity, per-round
+  borders, status colors, current-turn filtering, feed interleave; a `/tmp/thoth_gui_cards.ppm` visual artifact.
+
+### Notes
+- **Scope**: current-turn cards only (rounds where `turn_no == session_turns()`), so placement needs no
+  per-message turn tag; older turns show no cards (roundlog itself retains only the last 16 rounds). Per-turn
+  interleave, tool **args** on the card, and colored **diffs** are follow-ups — the latter two need data
+  `roundlog` does not keep (args/result text are in-process at the record site but unpersisted), and thoth
+  exposes no file-edit tool, so a diff has no first-class source today. Pin **6.4.51**.
+
 ## [0.30.15] - 2026-07-11
 
 **T3 GUI — composer history recall (Up/Down).** The GUI composer now recalls previous submissions with the

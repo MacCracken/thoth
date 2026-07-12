@@ -1,0 +1,120 @@
+# src/gui/gtool.cyr — the GUI tool-call CARD view-builder (T3, 0.30.16).
+#
+# Renders the agentic loop's tool ROUNDS as bordered cards in the conversation feed, so a GUI user can SEE
+# which tools thoth ran to produce an answer — the same structured record `/audit` prints (src/roundlog.cyr),
+# but drawn. In the GUI the live `tool-call:`/`result:` lines the TUI prints are suppressed (gpresent wraps the
+# turn in OUT_NULL), so without these cards the desktop window shows tool activity NOWHERE; this fills that gap.
+#
+# SCOPE (0.30.16): cards for the CURRENT turn only — the rounds whose turn_no == session_turns(), placed just
+# above that turn's assistant reply (see gfeed's _gfeed_flow). That is always the newest block, so placement is
+# chronologically correct without a per-message turn tag; older turns show no cards (honest — roundlog itself
+# retains only the last ROUNDLOG_CAP rounds and elides the rest, announced by /audit, never faked). Richer
+# content (tool args, colored diffs) and per-turn interleave are follow-ups; both need more than roundlog keeps.
+#
+# PURE + headless-testable: builds draw-commands over the tested pipeline (gdraw + graster), reads only the
+# roundlog producer + session_turns + the shared _ui_rgb palette; no display, no producer of its own. Like the
+# feed, gtool_build runs measure-only when cmds == 0 and returns the SAME advanced y a draw pass produces — the
+# bottom-anchor pre-measure in gfeed_build relies on that parity.
+
+var GTOOL_PAD = 8;    # inner padding (left + top/bottom) inside a card
+var GTOOL_LH  = 18;   # line height (px) inside a card (tighter than the feed's 20)
+var GTOOL_GAP = 8;    # px between stacked cards
+var GTOOL_IND = 16;   # call-line indent from the card's inner-left
+
+# draw a cstr at (pen,ty) in color; return the advanced pen. Null-safe. (mirrors gstatus's pen idiom.)
+fn _gtool_txt(cmds, pen, ty, color, s) {
+    if (s == 0) { return pen; }
+    gd_push_text(cmds, pen, ty, color, s, 0);
+    return pen + gr_text_cols(s, 0) * GR_GLYPH_W;
+}
+
+# format an int into a fresh bump-heap buffer (persists until raster), draw it, return the advanced pen.
+fn _gtool_int(cmds, pen, ty, color, n) {
+    var b = alloc(24);
+    var len = fmt_int_buf(n, b);
+    store8(b + len, 0);
+    gd_push_text(cmds, pen, ty, color, b, 0);
+    return pen + len * GR_GLYPH_W;
+}
+
+# the status colour for a recorded call: allowed+ok -> green, allowed+err / denied / noname -> red.
+fn _gtool_status_color(kind, ok) {
+    if ((kind == RL_ALLOWED) && (ok == 1)) { return _ui_rgb(ROLE_GREEN); }
+    return _ui_rgb(ROLE_RED);
+}
+# the status WORD for a recorded call. Distinguishes allowed-ok from allowed-err (roundlog_kind_str cannot).
+fn _gtool_status_word(kind, ok) {
+    if (kind == RL_ALLOWED) { if (ok == 1) { return "ok"; } return "err"; }
+    if (kind == RL_DENIED) { return "deny"; }
+    return "noname";
+}
+
+# _gtool_card: render kept-round `i` as one bordered card at (x,y) width w. cmds == 0 => measure only (the row
+# count — and thus the height — depends only on the stable roundlog data, so the measured height is exact).
+# Returns the y AFTER the card.
+fn _gtool_card(cmds, x, y, w, i) {
+    var nc = roundlog_round_ncalls(i);
+    var rows = 1 + nc;                 # header + one line per call
+    if (nc == 0) { rows = 2; }         # header + a "(no calls)" line
+    var h = GTOOL_PAD * 2 + rows * GTOOL_LH;
+    if (cmds != 0) {
+        gd_push_border(cmds, x, y, w, h, _ui_rgb(ROLE_FAINT));        # card outline
+        gd_push_rect(cmds, x, y, 3, h, _ui_rgb(ROLE_ACCENT_DIM));     # a left accent bar (the "tool" marker)
+        var hy = y + GTOOL_PAD;
+        var pen = _gtool_txt(cmds, x + GTOOL_PAD, hy, _ui_rgb(ROLE_MUTED), "tool round ");
+        _gtool_int(cmds, pen, hy, _ui_rgb(ROLE_MUTED), roundlog_round_no(i));
+        var ci = 0;
+        var ly = hy + GTOOL_LH;
+        while (ci < nc) {
+            var cx = x + GTOOL_PAD + GTOOL_IND;
+            var kind = roundlog_call_kind(i, ci);
+            var ok = roundlog_call_ok(i, ci);
+            var p2 = _gtool_txt(cmds, cx, ly, _ui_rgb(ROLE_ACCENT), roundlog_call_name(i, ci));
+            p2 = _gtool_txt(cmds, p2 + GR_GLYPH_W, ly, _gtool_status_color(kind, ok), _gtool_status_word(kind, ok));
+            if (kind == RL_ALLOWED) {                                  # telemetry only for invoked calls (0.19.1)
+                p2 = _gtool_int(cmds, p2 + GR_GLYPH_W, ly, _ui_rgb(ROLE_FAINT), roundlog_call_ms(i, ci));
+                p2 = _gtool_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), "ms/");
+                p2 = _gtool_int(cmds, p2, ly, _ui_rgb(ROLE_FAINT), roundlog_call_bytes(i, ci));
+                _gtool_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), "B");
+            }
+            ly = ly + GTOOL_LH;
+            ci = ci + 1;
+        }
+        if (nc == 0) { _gtool_txt(cmds, x + GTOOL_PAD + GTOOL_IND, ly, _ui_rgb(ROLE_FAINT), "(no calls)"); }
+    }
+    return y + h;
+}
+
+# gtool_has_current: 1 if the roundlog holds any round for the CURRENT turn (session_turns()) — i.e. the last
+# answer used tools. Lets a caller decide whether to reserve space / a separator. Pure.
+fn gtool_has_current() {
+    var turn = session_turns();
+    if (turn <= 0) { return 0; }
+    var cnt = roundlog_count();
+    var i = 0;
+    while (i < cnt) {
+        if (roundlog_round_turn(i) == turn) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# gtool_build: render the current turn's tool-round cards as a stacked block at (x,y) width w. cmds == 0 =>
+# measure only. Returns the y AFTER the block (== y when the current turn ran no tools — the common case, so
+# the feed is unchanged for a plain Q&A turn).
+fn gtool_build(cmds, x, y, w) {
+    var turn = session_turns();
+    var cnt = roundlog_count();
+    var cy = y;
+    var any = 0;
+    var i = 0;
+    while (i < cnt) {
+        if (roundlog_round_turn(i) == turn) {
+            if (any == 1) { cy = cy + GTOOL_GAP; }     # gap between stacked cards (not before the first)
+            cy = _gtool_card(cmds, x, cy, w, i);
+            any = 1;
+        }
+        i = i + 1;
+    }
+    return cy;
+}

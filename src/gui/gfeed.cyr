@@ -86,6 +86,13 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
             cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), content);
         } else {
+            # tool-call cards (0.30.16): above the CURRENT turn's answer, show the rounds it ran. This is the last
+            # assistant message (the newest turn's reply); a failed turn has no reply, so its cards render below
+            # (with the failure notice). gtool_build returns cy unchanged when the turn used no tools (common case).
+            if ((i == n - 1) && (gturn_failed() == 0)) {
+                var tcy = gtool_build(cmds, xbase, cy, avail);
+                if (tcy > cy) { cy = tcy + GFEED_GAP; }
+            }
             cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), content);
         }
         cy = cy + GFEED_GAP;
@@ -107,6 +114,8 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     # a turn that appended no assistant reply (0.30.4): an honest transient notice — the window renders only
     # session_history, so a failed turn (unreachable hoosh, transport/http error) would otherwise vanish silently.
     if (gturn_failed() == 1) {
+        var fcy = gtool_build(cmds, xbase, cy, avail);            # 0.30.16: what the failed turn attempted (if it ran tools)
+        if (fcy > cy) { cy = fcy + GFEED_GAP; }
         cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "the turn did not complete - is hoosh reachable? try /reprobe");
         cy = cy + GFEED_GAP;
     }

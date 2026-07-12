@@ -7,6 +7,27 @@
 
 ## Version
 
+**0.30.16** — **T3 GUI: tool-call cards in the feed**, 2026-07-11. The GUI now SHOWS which tools thoth ran to
+produce an answer, as bordered cards in the conversation feed (tool activity was previously invisible on the
+desktop — the present loop suppresses the turn's output with `OUT_NULL`). NEW `src/gui/gtool.cyr`: a PURE,
+headless-testable view-builder that reads the EXISTING `roundlog` producer (`src/roundlog.cyr`, the session ring
+`/audit` renders) and emits draw-IR cards — per round a bordered box + left accent bar, a `tool round N` header,
+one line per call = name (accent) + status word (**ok** green / **err**·**deny**·**noname** red) + `ms/bytes`
+(faint). `gfeed._gfeed_flow` interleaves the block above the CURRENT turn's assistant reply (and above the
+failure notice); `gtool_build` honours the `cmds==0` measure/draw parity the bottom-anchor needs. **Data-side
+finding that shaped the scope**: the tool-round PRODUCER already existed (`roundlog`), so this is a RENDERING
+cut — **no producer/session/spine change**. The record site holds the tool **args** (16 KB) + **result text**
+(128 KB) in-process but `roundlog` persists only name/kind/ok/ms/bytes; and thoth exposes NO file-edit tool
+(only `memory_write`/`shell`/`read_file`/`list_dir`), so a colored **diff** has no first-class source today.
+**Verified**: 1400 assertions (+9 `test_gui_toolcards`: measure==draw parity, per-round borders, ok=green /
+err+deny=red, current-turn filtering, feed interleave) + main builds + a rasterized `/tmp/thoth_gui_cards.ppm`
+eyeballed (card renders correctly between the user turn and its reply). Pin **6.4.51** (wrapper drifted to
+6.4.54; benign). **NEXT (GUI arc, decisions pending — see below)**: (a) tool **args** on cards — small
+`roundlog` extension to snapshot a truncated arg summary (`shell: git status`, not bare `shell`); (b) an
+`isError` fidelity fix — `daimon_invoke` discards the MCP `isError` flag so `roundlog.ok` reflects only "did
+text parse" (thoth-side, `daimon_extract_is_error` exists); (c) per-turn card interleave (needs a per-message
+turn tag); (d) colored **diffs** — no clean source without an edit tool or a diff-shaped result parser.
+
 **0.30.15** — **T3 GUI: composer history recall (Up/Down)**, 2026-07-11. The GUI composer recalls previous
 submissions with the arrows, over the SAME `inhist` ring the TUI/REPL use (`src/inhist.cyr`, added to the LEAN
 `thoth_gui.tcyr`). Mirrors `_tui_recall_key`: **Up** stashes the live draft on the first step then walks OLDER,
