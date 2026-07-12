@@ -2,6 +2,22 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.13] - 2026-07-11
+
+**T3 GUI — tree Enter on a file drops an `@mention` into the composer.** Completes the file-tree keyboard nav
+(0.30.10): pressing **Enter** on a file in the focused tree now inserts `@<repo-relative-path> ` into the
+composer and hands focus back — so you navigate to a file and reference it in your message, riding the 0.21.0
+`@mention` machinery (`cmd_task` expands `@path` to that file's content). NEW `gtree_mention(li)`
+(`src/gui/ginput.cyr`): builds the path exactly as the git-badge lookup does (absolute `ftree_path` minus the
+`ftree_cwd()` prefix) and appends `@` + relpath + a space through the composer buffer. Enter on a DIRECTORY still
+toggles expand/collapse (unchanged). 1373 assertions (+4 `test_gui_nav` in the LEAN `thoth_gui.tcyr`: a file's
+Enter yields `@src/main.cyr ` + composer focus; a dir's Enter still collapses and inserts nothing). PURE +
+unit-tested; the mention expansion itself is already covered (`test_mention`) and live-verified.
+
+### Added
+- `gtree_mention(li)` (`src/gui/ginput.cyr`); `gtree_key`'s Enter branch handles files (mention) vs dirs
+  (toggle). Pin **6.4.51**.
+
 ## [0.30.12] - 2026-07-11
 
 **T3 GUI — fix the 0.30.11 owl-eye throb (glitchy surface + invisible pulse).** Live testing surfaced two bugs

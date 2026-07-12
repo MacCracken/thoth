@@ -411,6 +411,17 @@ fn test_gui_nav() {
     # Tab with an EMPTY tree stays on the composer
     ftree_reset(); gfocus_set(GFOCUS_COMPOSER);
     gkey(15, 0); assert_eq(gfocus(), GFOCUS_COMPOSER, "Tab with an empty tree stays on the composer");
+    # Enter on a FILE inserts @<repo-relative path> into the composer + focuses it (0.30.13); a DIR still toggles
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0); ftree_set_exp(0, 1); _ftree_insert_at(1, "main.cyr", 0, 1);   # src(exp) > main.cyr
+    gcomp_reset(); gfocus_set(GFOCUS_TREE); ftree_set_sel(1);
+    gkey(28, 0);
+    assert(streq(gcomp_cstr(), "@src/main.cyr ") == 1, "Enter on a file inserts @<relpath> + a space");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "Enter on a file hands focus to the composer");
+    gcomp_reset(); gfocus_set(GFOCUS_TREE); ftree_set_sel(0);
+    gkey(28, 0);
+    assert_eq(ftree_exp(0), 0, "Enter on an expanded dir still collapses (no mention)");
+    assert_eq(gcomp_len(), 0, "Enter on a dir inserts nothing into the composer");
     # a tree-FOCUSED frame -> golden PPM (bright selection highlight on the tree, dimmed composer prompt/caret)
     ftree_init(); ftree_reset(); _ftree_set_cwd("/home/macro/Repos/thoth");
     _ftree_append("src", 1, 0); _ftree_append("docs", 1, 0); _ftree_append("VERSION", 0, 0);

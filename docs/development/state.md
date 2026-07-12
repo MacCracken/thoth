@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.30.13** — **T3 GUI: tree Enter on a file → `@mention` in the composer**, 2026-07-11. Completes the file-tree
+keyboard nav (0.30.10): Enter on a file in the focused tree inserts `@<repo-relative-path> ` into the composer +
+hands focus back, riding the 0.21.0 `@mention` machinery (`cmd_task` expands `@path` → the file's content). NEW
+`gtree_mention(li)` (`src/gui/ginput.cyr`) builds the path as the git-badge lookup does (absolute `ftree_path`
+minus the `ftree_cwd()` prefix) + appends `@`+relpath+space via the composer buffer; Enter on a DIR still
+toggles. **Verified**: 1373 assertions (+4 in the LEAN `thoth_gui.tcyr`: file Enter → `@src/main.cyr ` + composer
+focus; dir Enter still collapses, inserts nothing) + main builds. PURE/unit-tested; the mention expansion is
+already covered + live-verified. Pin **6.4.51** (wrapper drifted to 6.4.53; benign). **NEXT (GUI arc)**: feed
+scrollback (page older messages on the bottom-anchor); composer history (Up/Down over the inhist ring);
+tool-call cards + colored diffs (needs a tool-round producer).
+
 **0.30.12** — **T3 GUI: fix the 0.30.11 owl-eye throb (glitchy surface + invisible pulse)**, 2026-07-11. Live
 testing found two bugs. (1) **Surface glitch** — the top of the window flickered with bg-coloured overdraw
 because the throb loop presented EVERY tick into the SINGLE `wl_shm` buffer while the compositor was still
