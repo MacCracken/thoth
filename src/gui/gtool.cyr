@@ -52,10 +52,56 @@ fn _gtool_status_word(kind, ok) {
 # _gtool_card: render kept-round `i` as one bordered card at (x,y) width w. cmds == 0 => measure only (the row
 # count — and thus the height — depends only on the stable roundlog data, so the measured height is exact).
 # Returns the y AFTER the card.
+# _gtool_call_diff_rows: the extra rows an edit call contributes below its line (0.31.2) — the stored del/add
+# lines plus one note row when truncated (diff clipped or too large). 0 for a non-edit call (editlog_find gives
+# -1 for any (turn,round,call) with no recorded edit). Single source of truth for BOTH the measure and draw
+# passes, so the card height (below) matches what _gtool_draw_diff draws.
+fn _gtool_call_diff_rows(turn, round, ci) {
+    var eidx = editlog_find(turn, round, ci);
+    if (eidx < 0) { return 0; }
+    var r = editlog_nlines(eidx);
+    if (editlog_truncated(eidx) == 1) { r = r + 1; }
+    return r;
+}
+
+# _gtool_draw_diff: draw an edit's stored diff below its call line, indented — del lines RED, add lines GREEN,
+# each clipped to the card width; a faint note when truncated. Returns the advanced y. Draw-only (cmds != 0).
+fn _gtool_draw_diff(cmds, x, ly, w, eidx) {
+    var dx = x + GTOOL_PAD + GTOOL_IND + GTOOL_IND;               # nested under the call line
+    var n = editlog_nlines(eidx);
+    var li = 0;
+    while (li < n) {
+        var col = _ui_rgb(ROLE_GREEN);
+        var pfx = "+ ";
+        if (editlog_line_kind(eidx, li) == 1) { col = _ui_rgb(ROLE_RED); pfx = "- "; }
+        var p = _gtool_txt(cmds, dx, ly, col, pfx);
+        var maxc = ((x + w - GTOOL_PAD) - p) / GR_GLYPH_W;        # clip the line text to the card's remaining width
+        if (maxc >= 1) { gd_push_text(cmds, p, ly, col, editlog_line_text(eidx, li), maxc); }
+        ly = ly + GTOOL_LH;
+        li = li + 1;
+    }
+    if (editlog_truncated(eidx) == 1) {
+        var msg = "... more changed lines";
+        if (n == 0) { msg = "(diff too large to show)"; }        # over sit's LCS cap -> no hunk, honest note
+        _gtool_txt(cmds, dx, ly, _ui_rgb(ROLE_FAINT), msg);
+        ly = ly + GTOOL_LH;
+    }
+    return ly;
+}
+
 fn _gtool_card(cmds, x, y, w, i) {
     var nc = roundlog_round_ncalls(i);
-    var rows = 1 + nc;                 # header + one line per call
+    var turn = roundlog_round_turn(i);
+    var round = roundlog_round_no(i);
+    var rows = 1;                      # header
     if (nc == 0) { rows = 2; }         # header + a "(no calls)" line
+    else {
+        var rc = 0;
+        while (rc < nc) {              # header + per call: 1 line + its edit-diff rows (0.31.2)
+            rows = rows + 1 + _gtool_call_diff_rows(turn, round, rc);
+            rc = rc + 1;
+        }
+    }
     var h = GTOOL_PAD * 2 + rows * GTOOL_LH;
     if (cmds != 0) {
         gd_push_border(cmds, x, y, w, h, _ui_rgb(ROLE_FAINT));        # card outline
@@ -86,6 +132,8 @@ fn _gtool_card(cmds, x, y, w, i) {
                 if (maxc >= 1) { gd_push_text(cmds, ax, ly, _ui_rgb(ROLE_FAINT), aq, maxc); }
             }
             ly = ly + GTOOL_LH;
+            var eidx = editlog_find(turn, round, ci);                  # 0.31.2: an edit's colored diff below its line
+            if (eidx >= 0) { ly = _gtool_draw_diff(cmds, x, ly, w, eidx); }
             ci = ci + 1;
         }
         if (nc == 0) { _gtool_txt(cmds, x + GTOOL_PAD + GTOOL_IND, ly, _ui_rgb(ROLE_FAINT), "(no calls)"); }

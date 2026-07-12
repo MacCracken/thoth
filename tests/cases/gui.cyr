@@ -654,3 +654,46 @@ fn test_gturn_reply_landed() {
     session_reset(); session_history_clear();
     return 0;
 }
+
+# GUI colored diff card (0.31.2): an `edit` call's stored editlog diff renders below its line in the card —
+# del lines RED, add lines GREEN — growing the card height with measure/draw parity preserved.
+fn test_gui_toolcards_diff() {
+    test_group("GUI colored diff card (0.31.2)");
+    roundlog_reset(); editlog_reset(); session_reset(); session_history_clear();
+    var t = session_bump_turn();
+    roundlog_open(t, 1);
+    roundlog_add_call("edit", RL_ALLOWED, 1, 12, 40, "{\"path\":\"src/x.cyr\"}");
+    var oo = "a\nOLD\nc\n"; var nn = "a\nNEW\nc\n";
+    editlog_record(t, roundlog_cur_round(), 0, "src/x.cyr", oo, strlen(oo), nn, strlen(nn));
+    assert(editlog_find(t, 1, 0) >= 0, "the edit diff is recorded for (turn,1,0)");
+    # measure/draw parity with the taller (diff-bearing) card
+    var mh = gtool_build_turn(0, 0, 0, 600, t);
+    var cmds = gd_list_new();
+    var dh = gtool_build_turn(cmds, 0, 0, 600, t);
+    assert_eq(mh, dh, "diff card measure height == draw height (parity)");
+    # del line RED with text 'OLD', add line GREEN with text 'NEW'
+    var reds = 0; var greens = 0; var delseen = 0; var addseen = 0; var _ci = 0;
+    while (_ci < vec_len(cmds)) {
+        var c = vec_get(cmds, _ci);
+        if (gd_kind(c) == GD_TEXT) {
+            if (gd_color(c) == _ui_rgb(ROLE_RED)) { reds = reds + 1; if (streq(gd_text(c), "OLD") == 1) { delseen = 1; } }
+            if (gd_color(c) == _ui_rgb(ROLE_GREEN)) { greens = greens + 1; if (streq(gd_text(c), "NEW") == 1) { addseen = 1; } }
+        }
+        _ci = _ci + 1;
+    }
+    assert_eq(delseen, 1, "the deleted line 'OLD' is drawn RED");
+    assert_eq(addseen, 1, "the added line 'NEW' is drawn GREEN");
+    # PPM artifact: a feed with the diff card
+    session_history_append("user", "rename OLD to NEW", strlen("rename OLD to NEW"));
+    session_history_append("assistant", "done.", strlen("done."));
+    var FW = 620; var FH = 260;
+    var fbc = gr_fb_new(FW, FH); gr_fb_clear(fbc, FW, FH, _gframe_bg()); gr_ensure_font();
+    var fcmds = gd_list_new(); gfeed_build(fcmds, 0, 0, FW, FH); gr_raster(fcmds, fbc, FW, FH);
+    _gui_ppm_dump(fbc, FW, FH, "/tmp/thoth_gui_diffcard.ppm");
+    # the diff grows the card vs no editlog match
+    editlog_reset();
+    var nodiff_h = gtool_build_turn(0, 0, 0, 600, t);
+    assert(dh > nodiff_h, "the edit diff grows the card height (vs no editlog entry)");
+    roundlog_reset(); editlog_reset(); session_reset(); session_history_clear();
+    return 0;
+}

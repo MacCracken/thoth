@@ -2,6 +2,31 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.31.2] - 2026-07-12
+
+**Colored diff cards in the GUI feed — the payoff of the whole tool-card + edit-tool arc.** When the model
+`edit`s a file, its tool-call card now shows the change: the stored `editlog` diff renders below the `edit`
+call's line — **deleted lines RED (`- …`), added lines GREEN (`+ …`)** — sourced from thoth's own edits. The
+render half: `_gtool_card` (`src/gui/gtool.cyr`) looks up `editlog_find(turn, round, call)` for each call and, on
+a match, draws the stored del/add lines (clipped to the card width; a faint `… more changed lines` /
+`(diff too large to show)` note when truncated). Read-only over `editlog`'s accessors — no LCS recompute at paint.
+The diff rows are folded into the card-height computation through a single `_gtool_call_diff_rows` helper used by
+BOTH the measure and draw passes, so the feed's measure/draw parity (and its bottom-anchor) is preserved.
+
+### Added
+- `src/gui/gtool.cyr` — `_gtool_call_diff_rows` + `_gtool_draw_diff`; `_gtool_card` grows per-edit. `editlog.cyr`
+  added to the LEAN `thoth_gui.tcyr`. `test_gui_toolcards_diff` (+5): measure/draw parity with the taller card,
+  del=red / add=green line rendering, the diff grows the card height. A `/tmp/thoth_gui_diffcard.ppm` artifact.
+
+### Verified
+- 1482 assertions + main builds + PPM eyeballed (`edit ok … {"path":"src/x.cyr"}` with `- OLD` red / `+ NEW`
+  green below it). Adversarially reviewed (parity/attribution). Pin **6.4.51** (wrapper 6.4.55).
+
+### Notes
+- Completes the colored-diffs arc (0.30.16 cards → 0.30.17 args → 0.30.18 isError → 0.30.19 per-turn → 0.31.0
+  edit tool → 0.31.1 editlog → **0.31.2 diff card**). Remaining edit-tool follow-ups: create-new-file support; a
+  cleaner edit-arg display on the call line; the `daimon_invoke` HTTP-status hardening.
+
 ## [0.31.1] - 2026-07-12
 
 **`editlog` — record each `edit`'s diff, for the colored diff card (0.31.2).** The producer half of the

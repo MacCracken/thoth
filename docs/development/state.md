@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.31.2** — **Colored diff cards in the GUI feed** (the arc payoff), 2026-07-12. When the model `edit`s a file,
+its tool-call card now shows the change: the stored `editlog` diff renders below the `edit` call line — deleted
+lines RED (`- …`), added lines GREEN (`+ …`) — sourced from thoth's own edits. `_gtool_card` (`src/gui/gtool.cyr`)
+looks up `editlog_find(turn,round,call)` per call and draws the stored del/add lines (clipped to width; faint
+`… more` / `(diff too large to show)` when truncated). READ-ONLY over editlog — no LCS recompute at paint. Diff
+rows fold into the card height via one `_gtool_call_diff_rows` helper used by BOTH measure + draw passes, so the
+feed's measure/draw parity (bottom-anchor) is preserved. `editlog.cyr` added to the LEAN `thoth_gui.tcyr`.
+**Verified**: 1482 assertions (`test_gui_toolcards_diff` +5: parity, del=red/add=green, height growth) + main
+builds + PPM eyeballed (`edit ok … {"path":"src/x.cyr"}` with `- OLD` red / `+ NEW` green) + adversarial review.
+Pin **6.4.51** (wrapper 6.4.55). **COMPLETES the colored-diffs arc** (0.30.16 cards → .17 args → .18 isError →
+.19 per-turn → 0.31.0 edit tool → .1 editlog → .2 diff card). **NEXT (edit-tool follow-ups)**: create-new-file
+support; a cleaner edit-arg display on the call line (the JSON is noisy); the `daimon_invoke` HTTP-status
+hardening (from 0.30.18).
+
 **0.31.1** — **`editlog`: record each edit's diff for the colored diff card**, 2026-07-12. The producer half of
 the colored-diffs arc (patch within the 0.31 arc). `src/editlog.cyr` = a session ring of the model `edit` tool's
 recent changes keyed by `(turn,round,call)` (aligns with `roundlog`). On each applied edit it computes the line
