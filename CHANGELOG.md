@@ -2,6 +2,27 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.15] - 2026-07-11
+
+**T3 GUI — composer history recall (Up/Down).** The GUI composer now recalls previous submissions with the
+arrow keys, over the SAME `inhist` ring the TUI/REPL use (`src/inhist.cyr`) — so it shares the ring (and its
+optional `[history].file`). Mirrors `_tui_recall_key`: **Up** stashes the live draft on the first step then
+walks OLDER, **Down** walks NEWER and restores the draft past the newest. NEW in `src/gui/ginput.cyr`:
+`gcomp_set(ptr,len)` (replace the composer content) + `ghist_up`/`ghist_down`/`ghist_record` + a draft stash;
+`gkey` maps composer-focused Up(103)/Down(108) to recall (tree-focused Up/Down still navigate the tree) and
+`ghist_record`s each submission (`inhist_push` + `inhist_nav_reset`). `gui_run` calls `inhist_init()`. Added
+`src/inhist.cyr` to the LEAN `thoth_gui.tcyr`. 1391 assertions (+10 `test_gui_history`: submit records, Up/Down
+walk newest↔oldest, Down past newest restores the (empty) draft, a typed draft is stashed + restored around
+recall, and a tree-focused Up still moves the tree). PURE + unit-tested; the present loop is main-only.
+
+### Added
+- `gcomp_set` + `ghist_up`/`ghist_down`/`ghist_record` (+ draft stash) in `src/gui/ginput.cyr`; `gui_run`
+  `inhist_init()`. `test_gui_history` (+10).
+
+### Notes
+- In-session recall only this cut; wiring the GUI's `inhist` to `[history].file` (cross-session persistence,
+  like the REPL/TUI) is a small follow-up. Pin **6.4.51**.
+
 ## [0.30.14] - 2026-07-11
 
 **T3 GUI — conversation-feed scrollback.** The feed bottom-anchors to the newest message (0.30.3), so after a

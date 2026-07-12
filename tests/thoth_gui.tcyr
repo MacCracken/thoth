@@ -13,6 +13,7 @@ include "src/version.cyr"
 include "src/ui.cyr"
 include "src/intr.cyr"
 include "src/ftree.cyr"
+include "src/inhist.cyr"
 include "src/project.cyr"
 include "src/config.cyr"
 include "src/gate.cyr"
@@ -29,6 +30,6 @@ include "src/gui/ginput.cyr"
 include "src/gui/gtree.cyr"
 include "src/gui/gfeed.cyr"
 include "tests/cases/gui.cyr"
-fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_eye(); test_gui_scroll(); return assert_summary(); }
+fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_eye(); test_gui_scroll(); test_gui_history(); return assert_summary(); }
 var _e = main();
 syscall(60, _e);

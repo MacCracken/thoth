@@ -78,6 +78,7 @@ fn gui_run() {
     var win = 1;
     ftree_load();                                        # populate the file-tree pane (0.30.5)
     git_probe();                                         # so the tree's git badges + the status git field have data
+    inhist_init();                                       # composer history recall ring (0.30.15)
     var pfd[8];
     _gpresent_frame(win);                                # first paint
     var running = 1;

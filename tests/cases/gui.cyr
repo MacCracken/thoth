@@ -501,3 +501,32 @@ fn test_gui_scroll() {
     session_history_clear(); gscroll_reset(); gcomp_reset();
     return 0;
 }
+
+# GUI composer history recall (0.30.15): Up/Down over the inhist ring; a submit records; the draft is stashed.
+fn test_gui_history() {
+    test_group("GUI composer history recall (0.30.15)");
+    inhist_init(); gfocus_set(GFOCUS_COMPOSER);
+    gcomp_reset(); gcomp_append(0x66); gcomp_append(0x6f); gcomp_append(0x6f);   # "foo"
+    assert_eq(gkey(28, 0), 2, "Enter submits");
+    assert_eq(inhist_count(), 1, "the submission is recorded in the ring");
+    gcomp_reset();                                                                # (gpresent clears the composer after submit)
+    gcomp_append(0x62); gcomp_append(0x61); gcomp_append(0x72);                   # "bar"
+    gkey(28, 0); gcomp_reset();
+    assert_eq(inhist_count(), 2, "two submissions recorded");
+    # Up recalls newest -> older
+    gkey(103, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Up recalls the most recent submission");
+    gkey(103, 0); assert(streq(gcomp_cstr(), "foo") == 1, "Up again recalls the older submission");
+    # Down walks newer, then restores the (empty) draft past the newest
+    gkey(108, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Down walks back toward newer");
+    gkey(108, 0); assert_eq(gcomp_len(), 0, "Down past the newest restores the (empty) draft");
+    # a typed draft is stashed on the first Up and restored on Down past newest
+    gcomp_reset(); gcomp_append(0x7a);                                            # "z" draft
+    gkey(103, 0); assert(streq(gcomp_cstr(), "bar") == 1, "Up from a draft recalls the newest");
+    gkey(108, 0); assert(streq(gcomp_cstr(), "z") == 1, "Down restores the stashed draft");
+    # a tree-focused Up still navigates the tree (not history)
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/r"); _ftree_append("a", 0, 0); _ftree_append("b", 0, 0);
+    gfocus_set(GFOCUS_TREE); ftree_set_sel(1); gkey(103, 0);
+    assert_eq(ftree_sel(), 0, "tree-focused Up moves the tree selection, not history");
+    gcomp_reset(); ftree_reset(); inhist_nav_reset(); gfocus_set(GFOCUS_COMPOSER);
+    return 0;
+}

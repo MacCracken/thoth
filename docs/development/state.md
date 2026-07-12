@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.30.15** — **T3 GUI: composer history recall (Up/Down)**, 2026-07-11. The GUI composer recalls previous
+submissions with the arrows, over the SAME `inhist` ring the TUI/REPL use (`src/inhist.cyr`, added to the LEAN
+`thoth_gui.tcyr`). Mirrors `_tui_recall_key`: **Up** stashes the live draft on the first step then walks OLDER,
+**Down** walks NEWER and restores the draft past the newest. NEW `gcomp_set(ptr,len)` + `ghist_up`/`ghist_down`/
+`ghist_record` (+ draft stash) in `src/gui/ginput.cyr`; `gkey` routes composer-focused Up(103)/Down(108) to
+recall (tree-focused Up/Down still navigate the tree) and records each submission (`inhist_push` +
+`inhist_nav_reset`); `gui_run` calls `inhist_init()`. **Verified**: 1391 assertions (+10 `test_gui_history`:
+submit records, Up/Down walk newest↔oldest, Down-past-newest restores the draft, a typed draft is stashed +
+restored around recall, a tree-focused Up still moves the tree) + main builds. PURE + unit-tested; the present
+loop is main-only. In-session only (wiring to `[history].file` is a small follow-up). Pin **6.4.51** (wrapper
+drifted to 6.4.54; benign). **NEXT (GUI arc)**: tool-call cards + colored diffs — the big visual one; needs a
+tool-round PRODUCER first (`session_history` keeps only user/assistant; tool rounds are ephemeral) — its own
+mini-arc (a recorder + live mid-turn paint).
+
 **0.30.14** — **T3 GUI: conversation-feed scrollback**, 2026-07-11. The feed bottom-anchors to the newest
 message (0.30.3); after a long chat older messages clip off the top. Now **PgUp/PgDn** page through them, **End**
 jumps to the latest. NEW `gscroll_*` state (`src/gui/ginput.cyr`, before gfeed in the include order so `gkey`

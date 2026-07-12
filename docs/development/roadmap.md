@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.14):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.15):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -43,8 +43,10 @@
 > gave the GUI its signature `{(o>` owl prompt and a throbbing owl-eye status indicator (health-coloured,
 > leak-free via a cached frame; **0.30.12** fixed its present-loop scanout race). **0.30.13** made
 > tree Enter on a file drop an `@mention` into the composer; **0.30.14** added feed scrollback
-> (PgUp/PgDn/End). Still ahead (0.30.x patches): Enter-on-a-file → `@path` into the composer,
-> tool-call cards + colored diffs in the feed (needs a tool-round producer), feed scrollback, composer history.
+> (PgUp/PgDn/End); **0.30.15** gave the composer history recall (Up/Down over the shared `inhist`
+> ring, with a stashed live draft — mirrors the TUI's `_tui_recall_key`). Still ahead (0.30.x patches):
+> tool-call cards + colored diffs in the feed (the big visual one — needs a tool-round producer first, since
+> `session_history` keeps only user/assistant turns and tool rounds are ephemeral).
 > thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's
