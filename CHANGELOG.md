@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.12] - 2026-07-11
+
+**T3 GUI — fix the 0.30.11 owl-eye throb (glitchy surface + invisible pulse).** Live testing surfaced two bugs
+in the throb, both fixed:
+
+- **Surface glitch (the serious one)** — the top of the window flickered with bg-coloured overdraw. Root cause:
+  the present shell uses a SINGLE `wl_shm` buffer with `buf_busy`/`frame_done` throttle flags, but the 0.30.11
+  throb loop presented **unconditionally every tick** — drawing into the buffer while the compositor was still
+  scanning out the previous frame (a buffer-reuse race). The sparse event-driven repaints rarely hit it;
+  continuous throb hit it constantly. FIX: NEW `gwl_win_ready()` (`src/gui/gwindow.cyr`) = `frame_done == 1 &&
+  buf_busy == 0`; the present loop (`src/gui/gpresent.cyr`) now gates EVERY present on it — a redraw is marked
+  `_gui_pending` and flushed only once the compositor has released the buffer + acked the frame callback (those
+  events arrive on the wl fd and are consumed by `gwl_win_poll_events`). `poll(2)` is only read when readable.
+- **Invisible pulse** — the eye read as a colourless blink, not a colour throb. Root cause: the pulse blended
+  toward the BACKGROUND, so the dim phase was ~invisible. FIX (`src/gui/gfeed.cyr` `geye_color`): the triangle
+  wave now glows the base colour toward WHITE (peak ~50%), so the eye stays visibly amber (or red, when hoosh is
+  down) at every phase — a throb, not a blink. Smoother 12-step wave (was 8); ~120 ms throb tick.
+
+1369 assertions (+1 `test_gui_eye`: the peak glow is never the background colour). The throb colour is
+PURE/unit-tested; the frame-throttled present loop is main-only (compositor-gated — verify live).
+
+### Added
+- `gwl_win_ready(win)` (`src/gui/gwindow.cyr`) — safe-to-present gate (buffer released + frame acked).
+
+### Changed
+- `src/gui/gpresent.cyr` — the present loop gates every redraw on `gwl_win_ready` (`_gui_pending` flag), fixing
+  the scanout race; the turn's working-frame present is likewise gated.
+- `src/gui/gfeed.cyr` — `geye_color` glows toward white (always visible); `GEYE_STEPS` 8 → 12. Pin **6.4.51**.
+
 ## [0.30.11] - 2026-07-11
 
 **T3 GUI — the signature `{(o>` owl prompt + a throbbing owl-eye status indicator.** Two GUI-composer touches:

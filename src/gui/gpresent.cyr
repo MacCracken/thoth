@@ -32,6 +32,7 @@ fn _gpresent_poll_fd(pfd, fd, timeout_ms) {
 # list, exactly as before — bounded by real interactions, not by the throb).
 var _gui_cmds = 0;
 var _gui_dirty = 1;
+var _gui_pending = 0;   # a redraw is wanted (dirty view or a throb step) but may await gwl_win_ready()
 
 # render one frame into the present buffer + commit. Rebuilds the cached command list only when dirty; always
 # recolours the live owl eye to the current throb phase before rasterising.
@@ -81,16 +82,17 @@ fn gui_run() {
     _gpresent_frame(win);                                # first paint
     var running = 1;
     while (running == 1) {
-        # poll with a THROB tick (0.30.11): wake every ~300ms even when idle so the owl eye can pulse. poll(2)
-        # returns >0 when the wl fd has data (service events then), 0 on the timeout (just throb), <0 on error.
-        var pr = _gpresent_poll_fd(&pfd, gwl_win_fd(win), 300);
+        # poll with a THROB tick (0.30.11): wake every ~120ms even when idle so the owl eye can pulse. poll(2)
+        # returns >0 when the wl fd has data (service events then), 0 on the timeout (advance the throb), <0 on
+        # error. gwl_win_poll_events MUST be called only when the fd is readable (it does one read).
+        var pr = _gpresent_poll_fd(&pfd, gwl_win_fd(win), 120);
         if (pr < 0) { running = 0; }
         else {
             if (pr > 0) {                                     # the wl fd is readable -> service compositor events
-                var ev = gwl_win_poll_events(win);
+                var ev = gwl_win_poll_events(win);            # also clears frame-callback / buffer-release (gwl_win_ready)
                 if ((ev & GWL_WIN_EV_CLOSE) != 0) { running = 0; }
                 else {
-                    if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); _gui_dirty = 1; }
+                    if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); _gui_dirty = 1; _gui_pending = 1; }
                     if ((ev & GWL_WIN_EV_KEY) != 0) {
                         var act = _gpresent_drain_keys(win);
                         if (act == 1) { running = 0; }                    # Esc -> quit
@@ -99,7 +101,8 @@ fn gui_run() {
                                 if (gcomp_len() > 0) {
                                     gturn_begin(gcomp_cstr());            # COPY the pending text (the composer is reset next)
                                     gcomp_reset();                        # clear the composer
-                                    _gui_dirty = 1; _gpresent_frame(win); # rebuild + paint the working state before the blocking turn
+                                    _gui_dirty = 1;
+                                    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }   # show the working state if the compositor is ready
                                     var _n0 = session_history_len();
                                     out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
                                     cmd_task(gturn_text());               # runs the turn: appends user + reply (both popped on failure)
@@ -111,13 +114,21 @@ fn gui_run() {
                                     gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
                                 }
                             }
-                            _gui_dirty = 1;                                # any key redraws the view
+                            _gui_dirty = 1; _gui_pending = 1;             # any key redraws the view
                         }
                     }
                 }
+            } else {                                          # timeout -> advance the throb phase
+                geye_phase_advance();
+                _gui_pending = 1;
             }
-            # advance the throb + repaint every tick (cheap when not dirty: only the eye colour changes, no rebuild)
-            if (running == 1) { geye_phase_advance(); _gpresent_frame(win); }
+            # present a pending redraw ONLY when the compositor has released the buffer + acked the last frame —
+            # else a continuous throb races the scanout and the surface glitches. The release/frame events that
+            # flip gwl_win_ready arrive on the fd and are consumed by gwl_win_poll_events above.
+            if ((running == 1) && (_gui_pending == 1) && (gwl_win_ready(win) == 1)) {
+                _gpresent_frame(win);
+                _gui_pending = 0;
+            }
         }
     }
     gwl_win_close(win);

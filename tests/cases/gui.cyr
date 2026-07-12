@@ -430,8 +430,9 @@ fn test_gui_nav() {
 # health. PURE colour math + the eye-cell recording gframe_build does; the throb LOOP is main-only.
 fn test_gui_eye() {
     test_group("GUI throbbing owl-eye indicator (0.30.11)");
-    assert(geye_color(0) != geye_color(4), "eye colour differs phase 0 (dim) vs 4 (bright) — it throbs");
-    assert_eq(geye_color(2), geye_color(6), "the pulse is a symmetric triangle wave");
+    assert(geye_color(0) != geye_color(6), "eye colour differs phase 0 (base) vs 6 (peak glow) — it throbs");
+    assert_eq(geye_color(3), geye_color(9), "the pulse is a symmetric triangle wave (phase 3 == 12-9)");
+    assert(geye_color(6) != _gframe_bg(), "the peak glow is never the background (visible, not a blink)");
     session_history_clear();
     gframe_build(900, 400);
     assert(geye_cell() != 0, "gframe_build recorded the owl-eye cell");

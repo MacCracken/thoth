@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.30.12** — **T3 GUI: fix the 0.30.11 owl-eye throb (glitchy surface + invisible pulse)**, 2026-07-11. Live
+testing found two bugs. (1) **Surface glitch** — the top of the window flickered with bg-coloured overdraw
+because the throb loop presented EVERY tick into the SINGLE `wl_shm` buffer while the compositor was still
+scanning out the prior frame (a buffer-reuse race; sparse event-driven repaints rarely hit it). FIX: NEW
+`gwl_win_ready()` (`gwindow.cyr`) = `frame_done && !buf_busy`; the present loop (`gpresent.cyr`) marks a redraw
+`_gui_pending` and flushes it ONLY when ready (the release/frame-callback events arrive on the wl fd and are
+consumed by `gwl_win_poll_events`). (2) **Invisible pulse** — the eye read as a colourless blink because the
+pulse blended toward the BACKGROUND (dim phase ~invisible). FIX (`geye_color`): the triangle wave now glows the
+base toward WHITE (peak ~50%), staying visibly amber/red at every phase; 12-step wave; ~120ms tick. **Verified**:
+1369 assertions (+1 — the peak glow is never the bg) + main builds. The throb colour is PURE/unit-tested; the
+frame-throttled present loop is main-only (compositor-gated — RE-VERIFY live: the eye should pulse smoothly
+amber, no header glitch). Pin **6.4.51** (wrapper drifted to 6.4.53; benign). **NEXT (GUI arc)**: Enter-on-a-file
+→ `@path` into the composer; tool-call cards + colored diffs (needs a tool-round producer); feed scrollback.
+
 **0.30.11** — **T3 GUI: the `{(o>` owl prompt + a throbbing owl-eye status indicator**, 2026-07-11. Two GUI
 touches: (1) **restored the signature `{(o>` owl prompt** (`src/gui/gfeed.cyr`) — the composer prompt AND every
 user turn in the feed now use `{(o>` (the brand glyph the TUI/REPL use), replacing the plain `>` the GUI had

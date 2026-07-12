@@ -600,6 +600,17 @@ fn gwl_win_present_commit(win, x, y, w, h): i64 {
     return 0;
 }
 
+# gwl_win_ready: 1 when it is SAFE to draw + present the next frame — the compositor has RELEASED the shm buffer
+# (buf_busy==0, so drawing won't corrupt a frame mid-scanout) AND acked the previous frame callback
+# (frame_done==1, pacing to the refresh). A CONTINUOUS animation loop (the 0.30.11 eye throb) MUST gate every
+# present on this, else it races the compositor's scanout and the surface glitches; sparse event-driven
+# repaints usually pass it by luck. The releasing events arrive on gwl_win_fd -> gwl_win_poll_events clears them.
+fn gwl_win_ready(win): i64 {
+    if (gwl_wl_frame_done == 0) { return 0; }
+    if (gwl_wl_buf_busy == 1) { return 0; }
+    return 1;
+}
+
 # Read + dispatch pending wayland events; return an OR-mask of GWL_WIN_EV_*.
 # Call only when gwl_win_fd is poll-readable (it does one read).
 fn gwl_win_poll_events(win): i64 {

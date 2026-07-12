@@ -155,7 +155,7 @@ fn _gframe_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x1
 # eye is drawn as its OWN draw-command; gframe_build records that cell in _geye_cell, and the present loop
 # advances the phase + rewrites JUST that cell's colour each tick — so the animation costs no per-frame
 # allocation (the frame command list is cached; only one colour word changes). PURE colour math (testable).
-var GEYE_STEPS = 8;
+var GEYE_STEPS = 12;
 var _geye_phase = 0;
 var _geye_cell = 0;
 fn geye_phase_advance() { _geye_phase = (_geye_phase + 1) % GEYE_STEPS; return 0; }
@@ -169,13 +169,13 @@ fn _geye_blend(c0, c1, num, den) {
 }
 # _geye_base: the eye's status colour — red if hoosh is DOWN (health indicator), else the accent.
 fn _geye_base() { if (hoosh_health() == HOOSH_HEALTH_DOWN) { return _ui_rgb(ROLE_RED); } return _ui_rgb(ROLE_ACCENT); }
-# geye_color: the eye colour for phase p — a triangle pulse between a dim tint (toward the bg) and the base.
+# geye_color: the eye colour for phase p — a triangle GLOW that pulses the base colour toward white (never
+# toward the bg, so the eye stays visibly coloured at every phase — a throb, not a blink). Peak = ~50% white.
 fn geye_color(p) {
     var base = _geye_base();
-    var dim = _geye_blend(_gframe_bg(), base, 2, 5);
     var half = GEYE_STEPS / 2;
-    var t = p; if (t > half) { t = GEYE_STEPS - t; }
-    return _geye_blend(dim, base, t, half);
+    var t = p; if (t > half) { t = GEYE_STEPS - t; }   # triangle 0..half..0
+    return _geye_blend(base, 0xffffff, t, GEYE_STEPS);
 }
 fn geye_color_now() { return geye_color(_geye_phase); }
 
