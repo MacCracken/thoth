@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.30.16):** M0–M7 are done and shipping, and the entire post-M7 feature arc
+> **Where we are (0.30.17):** M0–M7 are done and shipping, and the entire post-M7 feature arc
 > has landed — the terminal-citizen front door, memory + git producers, the model `shell`
 > tool, input completeness, the re-renderable feed, session visibility, shell/agent hardening,
 > composer intelligence, the active persona + role modality, project awareness, the model
@@ -48,10 +48,13 @@
 > to the feed (`src/gui/gtool.cyr` — bordered per-round cards over the EXISTING `roundlog` producer, name +
 > ok/err/deny status colours + ms/bytes, interleaved above the current turn's reply). Tool activity was
 > invisible on the desktop before (the present loop suppresses turn output); a pure rendering cut, no producer
-> change. Still ahead (0.30.x patches, decisions pending): tool **args** on cards (small `roundlog` extension),
-> an `isError` status-fidelity fix (`daimon_invoke` drops the MCP error flag), per-turn card interleave (needs a
-> per-message turn tag), and colored **diffs** — which have no first-class source today (thoth exposes no
-> file-edit tool, and `roundlog` keeps no result text), so that one needs its own producer/source decision.
+> change. **0.30.17** put each call's **arguments** on the cards + in `/audit` (`shell {"command":"git status"}`,
+> not bare `shell`) — `roundlog` now snapshots a sanitized, truncated arg summary at both loop record sites, drawn
+> clipped-to-width so card height (and the feed parity) is unchanged. Still ahead (0.30.x patches): an `isError`
+> status-fidelity fix (`daimon_invoke` drops the MCP error flag, so a card can show `ok` for a failed tool),
+> per-turn card interleave (needs a per-message turn tag), and colored **diffs** — which have no first-class
+> source today (thoth exposes no file-edit tool, and `roundlog` keeps no result text), so that one needs its own
+> producer/source decision.
 > thoth as its
 > own sovereign Cyrius Wayland app (jalwa-style
 > draw-IR → kashi raster → wl_shm → puka-forked present shell, `Thoth.dc.html` as the spec; revises 0009's

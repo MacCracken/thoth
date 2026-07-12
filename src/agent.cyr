@@ -704,7 +704,7 @@ fn _agent_run_calls_par(tcs, nc) {
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
             var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1
             _agent_call_telem(kind2, rl_ok, ms, bytes);            # 0.19.1: telemetry sub-line
-            roundlog_add_call(nmout, kind2, rl_ok, ms, bytes);
+            roundlog_add_call(nmout, kind2, rl_ok, ms, bytes, _par_args + k * PAR_ARGS_CAP);   # 0.30.17: + the snapshotted raw args
             _agent_add_result(_par_id + k * PAR_ID_CAP, res);
             k = k + 1;
         }
@@ -861,7 +861,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         spin_label_clear();
         var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1: result byte count
         _agent_call_telem(rl_kind, rl_ok, ms, bytes);           # 0.19.1: faint telemetry sub-line
-        roundlog_add_call(nm, rl_kind, rl_ok, ms, bytes);
+        roundlog_add_call(nm, rl_kind, rl_ok, ms, bytes, ar);   # 0.30.17: + the raw args for the card/audit summary
         _agent_add_result(id, res);
         ci = ci + 1;
     }

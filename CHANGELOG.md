@@ -2,6 +2,27 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.17] - 2026-07-12
+
+**Tool-call cards + `/audit` now show each call's ARGUMENTS.** A bare `shell` on the card became `shell {"command":"git status"}` — you can see WHAT each tool did, not just that it ran. The `roundlog` producer
+(`src/roundlog.cyr`) now snapshots a per-call arg summary alongside the name/verdict/telemetry it already kept:
+a new `RL_ARG_CAP`-bounded (128 B), **sanitized** (control bytes → space, so a multi-line JSON arg can't break a
+one-line card/row) copy of the raw `arguments`, captured at BOTH loop record sites (`agent.cyr` serial `ar` +
+parallel `_par_args` slot). New `roundlog_call_args` accessor. Consumers: the GUI card (`src/gui/gtool.cyr`)
+draws the args faint after the telemetry, **clipped** (`max_cp`) to the card's remaining width so a long arg
+never bleeds past the border (draw-only — card height stays one line per call, so the feed measure/draw parity
+is untouched); `roundlog_report()` (`/audit`) prints the args after the tool name. Thoth-side, **no spine
+change** — the args were already in-process at the record site, just unpersisted.
+
+### Changed
+- `roundlog_add_call` gains an `args` param (all call sites + tests updated); `_rl_call_sz` grows by `RL_ARG_CAP`
+  (name/kind/ok/ms/bytes offsets unchanged). `_rl_copy_args` sanitizes + truncates.
+
+### Added
+- `roundlog_call_args` accessor; args rendered on the GUI card + in `/audit`. Tests: `test_roundlog` +3 (args
+  copied / control-byte sanitized / null→empty), `test_gui_toolcards` +1 (args drawn on the card). Pin
+  **6.4.51** (wrapper drifted to 6.4.55; benign).
+
 ## [0.30.16] - 2026-07-11
 
 **T3 GUI — tool-call cards in the feed.** The GUI now SHOWS which tools thoth ran to produce an answer, as

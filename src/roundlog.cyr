@@ -17,6 +17,7 @@
 var ROUNDLOG_CAP = 16;       # ring: retain the most recent 16 rounds
 var RL_MAX_CALLS = 8;        # per round (matches AGENT_MAX_CALLS)
 var RL_NAME_CAP = 64;        # bytes copied of each tool name (NUL-terminated)
+var RL_ARG_CAP = 128;        # bytes copied of each call's arg summary (0.30.17; sanitized + NUL-terminated)
 
 # Verdict kinds recorded per call.
 var RL_DENIED = 0;           # gate denied (policy / absent-gate deny)
@@ -27,8 +28,9 @@ var _roundlog = 0;           # ring base (ROUNDLOG_CAP slots), lazily alloc'd
 var _roundlog_total = 0;     # rounds opened this session (global index)
 var _roundlog_cur = 0;       # slot ptr of the round being filled (0 = none open)
 
-# per-call entry  = RL_NAME_CAP name bytes + kind (8) + ok (8)
-fn _rl_call_sz() { return RL_NAME_CAP + 32; }   # name + kind(8) + ok(8) + ms(8) + bytes(8)  (0.19.1)
+# per-call entry = RL_NAME_CAP name bytes + kind(8) + ok(8) + ms(8) + bytes(8) + RL_ARG_CAP arg-summary bytes.
+# The name/kind/ok/ms/bytes offsets are UNCHANGED (0.19.1); the arg summary (0.30.17) is appended at +RL_NAME_CAP+32.
+fn _rl_call_sz() { return RL_NAME_CAP + 32 + RL_ARG_CAP; }
 # per-round slot  = turn (8) + round (8) + n_calls (8) + RL_MAX_CALLS call entries
 fn _rl_slot_sz() { return 24 + RL_MAX_CALLS * _rl_call_sz(); }
 
@@ -75,11 +77,32 @@ fn _rl_copy_name(dst, name) {
     return 0;
 }
 
+# Copy a (possibly null) arg string into dst, bounded to RL_ARG_CAP-1 bytes + NUL, SANITIZED: control bytes
+# (newline / tab / anything < 0x20) become a space so a multi-line JSON arg can never break a one-line card or
+# audit row. (No `break`; a done-flag drives the loop.) src == 0 yields an empty string.
+fn _rl_copy_args(dst, src) {
+    var i = 0;
+    var done = 0;
+    if (src == 0) { done = 1; }
+    while ((done == 0) && (i < (RL_ARG_CAP - 1))) {
+        var c = load8(src + i);
+        if (c == 0) { done = 1; }
+        else {
+            if (c < 32) { c = 32; }
+            store8(dst + i, c);
+            i = i + 1;
+        }
+    }
+    store8(dst + i, 0);
+    return 0;
+}
+
 # roundlog_add_call: record one tool call in the current round. kind is
 # RL_ALLOWED / RL_DENIED / RL_NONAME; ok is 1 when an allowed call returned a
 # result; ms is the invoke wall-time; bytes is the result byte count (0.19.1 telemetry — 0 for a
-# call that was never invoked, i.e. denied / noname). Calls past RL_MAX_CALLS in one round are dropped.
-fn roundlog_add_call(name, kind, ok, ms, bytes) {
+# call that was never invoked, i.e. denied / noname); args is the call's raw arguments (0.30.17, sanitized +
+# truncated for display — may be null). Calls past RL_MAX_CALLS in one round are dropped.
+fn roundlog_add_call(name, kind, ok, ms, bytes, args) {
     if (_roundlog_cur == 0) { return 0; }
     var n = load64(_roundlog_cur + 16);
     if (n >= RL_MAX_CALLS) { return 0; }
@@ -89,6 +112,7 @@ fn roundlog_add_call(name, kind, ok, ms, bytes) {
     store64(e + RL_NAME_CAP + 8, ok);
     store64(e + RL_NAME_CAP + 16, ms);
     store64(e + RL_NAME_CAP + 24, bytes);
+    _rl_copy_args(e + RL_NAME_CAP + 32, args);
     store64(_roundlog_cur + 16, n + 1);
     return 0;
 }
@@ -118,6 +142,7 @@ fn roundlog_call_kind(i, ci) { return load64(_roundlog_kept_slot(i) + 24 + ci * 
 fn roundlog_call_ok(i, ci)   { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 8); }
 fn roundlog_call_ms(i, ci)   { return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 16); }   # 0.19.1
 fn roundlog_call_bytes(i, ci){ return load64(_roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 24); }   # 0.19.1
+fn roundlog_call_args(i, ci) { return _roundlog_kept_slot(i) + 24 + ci * _rl_call_sz() + RL_NAME_CAP + 32; }           # 0.30.17 (cstr ptr)
 
 fn roundlog_kind_str(k) {
     if (k == RL_ALLOWED) { return "allow"; }
@@ -152,6 +177,8 @@ fn roundlog_report() {
             var k = roundlog_call_kind(i, ci);
             emit("["); emit(roundlog_kind_str(k)); emit("] ");
             emit(roundlog_call_name(i, ci));
+            var aq = roundlog_call_args(i, ci);              # 0.30.17: the call's (sanitized) arguments, if any
+            if (load8(aq) != 0) { emit(" "); emit(aq); }
             if (k == RL_ALLOWED) {
                 if (roundlog_call_ok(i, ci) == 1) { emit(" ok"); }
                 else { emit(" err"); }

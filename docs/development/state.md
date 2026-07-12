@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.30.17** — **Tool-call cards + `/audit` show each call's ARGUMENTS**, 2026-07-12. A bare `shell` on the card
+became `shell {"command":"git status"}`. The `roundlog` producer now snapshots a per-call arg summary
+(`RL_ARG_CAP`=128 B, **sanitized**: control bytes → space so a multi-line JSON arg can't break a one-line
+card/row) at BOTH loop record sites (`agent.cyr` serial `ar` + parallel `_par_args`); new `roundlog_call_args`
+accessor. The GUI card (`gtool.cyr`) draws args faint after the telemetry, **clipped** (`max_cp`) to the card's
+remaining width — draw-only, so card height stays one line/call and the feed measure/draw parity is untouched;
+`roundlog_report()` (`/audit`) prints args after the name. Thoth-side, **no spine change** (args were in-process
+at the record site, just unpersisted). **Verified**: 1407 assertions (`test_roundlog` +3: args copied /
+control-byte→space / null→empty; `test_gui_toolcards` +1: args drawn) + main builds + PPM eyeballed (`shell ok
+88ms/256B {"command":"cyrius test"}`). Pin **6.4.51** (wrapper drifted to 6.4.55; benign). **NEXT**: the
+`isError` fidelity fix (0.30.18) — `daimon_invoke` discards the MCP `isError` flag so `roundlog.ok` reflects
+only "did text parse," not tool success (`daimon_extract_is_error` exists; thoth-side). Then per-turn card
+interleave (needs a per-message turn tag) and colored diffs (no first-class source — needs its own decision).
+
 **0.30.16** — **T3 GUI: tool-call cards in the feed**, 2026-07-11. The GUI now SHOWS which tools thoth ran to
 produce an answer, as bordered cards in the conversation feed (tool activity was previously invisible on the
 desktop — the present loop suppresses the turn's output with `OUT_NULL`). NEW `src/gui/gtool.cyr`: a PURE,

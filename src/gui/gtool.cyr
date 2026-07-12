@@ -75,7 +75,15 @@ fn _gtool_card(cmds, x, y, w, i) {
                 p2 = _gtool_int(cmds, p2 + GR_GLYPH_W, ly, _ui_rgb(ROLE_FAINT), roundlog_call_ms(i, ci));
                 p2 = _gtool_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), "ms/");
                 p2 = _gtool_int(cmds, p2, ly, _ui_rgb(ROLE_FAINT), roundlog_call_bytes(i, ci));
-                _gtool_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), "B");
+                p2 = _gtool_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), "B");
+            }
+            # 0.30.17: the call's arguments, faint, after a gap — CLIPPED (max_cp) to the card's remaining width so
+            # a long arg never bleeds past the border. Draw-only; the card height is fixed at one line per call.
+            var aq = roundlog_call_args(i, ci);
+            if (load8(aq) != 0) {
+                var ax = p2 + GR_GLYPH_W;
+                var maxc = ((x + w - GTOOL_PAD) - ax) / GR_GLYPH_W;    # codepoints that fit before the right border
+                if (maxc >= 1) { gd_push_text(cmds, ax, ly, _ui_rgb(ROLE_FAINT), aq, maxc); }
             }
             ly = ly + GTOOL_LH;
             ci = ci + 1;

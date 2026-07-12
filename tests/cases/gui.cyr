@@ -539,10 +539,10 @@ fn test_gui_toolcards() {
     session_history_clear();
     var turn = session_bump_turn();                  # this is the "current" turn gtool_build filters on
     roundlog_open(turn, 1);
-    roundlog_add_call("shell", RL_ALLOWED, 1, 142, 512);       # ok   -> green
-    roundlog_add_call("memory_write", RL_ALLOWED, 0, 5, 0);    # err  -> red
+    roundlog_add_call("shell", RL_ALLOWED, 1, 142, 512, "{\"command\":\"git status\"}");   # ok   -> green
+    roundlog_add_call("memory_write", RL_ALLOWED, 0, 5, 0, "{\"text\":\"note\"}");          # err  -> red
     roundlog_open(turn, 2);
-    roundlog_add_call("read_file", RL_DENIED, 0, 0, 0);        # deny -> red
+    roundlog_add_call("read_file", RL_DENIED, 0, 0, 0, "{\"path\":\"/etc/shadow\"}");       # deny -> red
     assert_eq(gtool_has_current(), 1, "the current turn has recorded rounds");
     # measure (cmds==0) and draw (cmds!=0) must agree on height (the feed bottom-anchor relies on it)
     var mh = gtool_build(0, 0, 0, 600);
@@ -551,19 +551,21 @@ fn test_gui_toolcards() {
     var dh = gtool_build(cmds, 0, 0, 600);
     assert_eq(mh, dh, "gtool measure height == draw height (parity)");
     # two rounds -> two bordered cards; walk the command list to prove structure + colors
-    var borders = 0; var greens = 0; var reds = 0; var _ci = 0;
+    var borders = 0; var greens = 0; var reds = 0; var args = 0; var _ci = 0;
     while (_ci < vec_len(cmds)) {
         var c = vec_get(cmds, _ci);
         if (gd_kind(c) == GD_BORDER) { borders = borders + 1; }
         if (gd_kind(c) == GD_TEXT) {
             if (gd_color(c) == _ui_rgb(ROLE_GREEN)) { greens = greens + 1; }
             if (gd_color(c) == _ui_rgb(ROLE_RED)) { reds = reds + 1; }
+            if (streq(gd_text(c), "{\"command\":\"git status\"}") == 1) { args = args + 1; }   # 0.30.17: args on the card
         }
         _ci = _ci + 1;
     }
     assert_eq(borders, 2, "one bordered card per round (2 rounds)");
     assert_eq(greens, 1, "the ok call is drawn green");
     assert(reds >= 2, "the err + deny calls are drawn red");
+    assert_eq(args, 1, "the call's args are drawn on the card (0.30.17)");
     # filtered to the CURRENT turn: a new (later) turn with no rounds shows nothing
     session_bump_turn();
     assert_eq(gtool_has_current(), 0, "a later turn with no rounds has no cards");
@@ -576,7 +578,7 @@ fn test_gui_toolcards() {
     roundlog_reset();
     var without = _gfeed_flow(0, 14, 0, 560, session_history_len());
     roundlog_open(t2, 1);
-    roundlog_add_call("shell", RL_ALLOWED, 1, 88, 256);
+    roundlog_add_call("shell", RL_ALLOWED, 1, 88, 256, "{\"command\":\"cyrius test\"}");
     var with_cards = _gfeed_flow(0, 14, 0, 560, session_history_len());
     assert(with_cards > without, "the feed interleaves the current turn's cards above its reply");
     # visual artifact: raster the feed (with cards) to a PPM for eyeball inspection (the present loop is compositor-gated).
