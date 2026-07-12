@@ -34,10 +34,12 @@ var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
-# backing model sees prior turns. Each message is alloc(16): +0 role (a stable
+# backing model sees prior turns. Each message is alloc(24): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
-# so both must be copied). Capped at SESS_HIST_MAX messages (oldest dropped) to
+# so both must be copied), +16 turn (session_turns() at append time — 0.30.19, so the GUI feed can render each
+# turn's tool cards above ITS reply; in-memory only, NOT persisted — a resumed message gets turn 0 = no cards,
+# which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
 # window — hoosh owns the inference.
@@ -115,16 +117,20 @@ fn session_history_len() {
 }
 fn session_history_role(i)    { return load64(vec_get(_sess_hist, i)); }
 fn session_history_content(i) { return load64(vec_get(_sess_hist, i) + 8); }
+# session_history_turn(i): the session turn this message belongs to (0.30.19). Matches roundlog_round_turn so the
+# GUI feed renders a turn's tool cards above ITS reply. 0 for a resumed/pre-session message (no roundlog rounds).
+fn session_history_turn(i)    { return load64(vec_get(_sess_hist, i) + 16); }
 
 # session_history_append: record (role, content[0..clen)) as a turn, copying the
 # content to stable storage. Drops the oldest message past SESS_HIST_MAX.
 fn session_history_append(role, content, clen) {
-    var m = alloc(16);
+    var m = alloc(24);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
     store8(c + clen, 0);
     store64(m + 8, c);
+    store64(m + 16, session_turns());       # 0.30.19: tag the message with the current turn (for per-turn tool cards)
     var v = _sess_hist_vec();
     vec_push(v, m);
     while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }

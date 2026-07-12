@@ -104,14 +104,15 @@ fn gui_run() {
                                     gcomp_reset();                        # clear the composer
                                     _gui_dirty = 1;
                                     if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }   # show the working state if the compositor is ready
-                                    var _n0 = session_history_len();
                                     out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
                                     cmd_task(gturn_text());               # runs the turn: appends user + reply (both popped on failure)
                                     out_mode_set(OUT_FD1);
                                     # honest outcome: a turn that appended no assistant reply (unreachable hoosh, transport/http
-                                    # error, empty completion) leaves history net-unchanged (the user turn is popped) -> the
-                                    # window renders only history, so raise a transient "didn't complete" notice instead of silence.
-                                    if ((session_history_len() <= _n0) || (streq(session_history_role(session_history_len() - 1), "assistant") == 0)) { gturn_fail(); }
+                                    # error, empty completion) leaves no fresh assistant as the last row -> the window renders only
+                                    # history, so raise a transient "didn't complete" notice instead of silence. Detect via the
+                                    # turn tag (gturn_reply_landed), correct even at the SESS_HIST_MAX cap where a net-growth check
+                                    # false-fires on a successful turn (0.30.19).
+                                    if (gturn_reply_landed() == 0) { gturn_fail(); }
                                     gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
                                 }
                             }

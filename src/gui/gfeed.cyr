@@ -86,13 +86,12 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
             cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), content);
         } else {
-            # tool-call cards (0.30.16): above the CURRENT turn's answer, show the rounds it ran. This is the last
-            # assistant message (the newest turn's reply); a failed turn has no reply, so its cards render below
-            # (with the failure notice). gtool_build returns cy unchanged when the turn used no tools (common case).
-            if ((i == n - 1) && (gturn_failed() == 0)) {
-                var tcy = gtool_build(cmds, xbase, cy, avail);
-                if (tcy > cy) { cy = tcy + GFEED_GAP; }
-            }
+            # tool-call cards (0.30.16; per-turn since 0.30.19): above EACH turn's answer, show the rounds THAT
+            # turn ran — matched by the message's turn tag, so an earlier turn's cards stay put when later turns are
+            # added (a failed turn has no reply, so its cards render below with the failure notice). gtool_build_turn
+            # returns cy unchanged when the turn used no tools, or its rounds have aged out of the roundlog ring.
+            var tcy = gtool_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
+            if (tcy > cy) { cy = tcy + GFEED_GAP; }
             cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), content);
         }
         cy = cy + GFEED_GAP;

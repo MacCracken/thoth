@@ -2,6 +2,38 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.30.19] - 2026-07-12
+
+**Tool-call cards now render PER-TURN — an earlier turn keeps its cards when you ask a follow-up.** 0.30.16–.18
+carded only the CURRENT turn, so a turn's tool cards vanished the moment you sent the next message. Now each
+turn's cards sit above ITS OWN reply, throughout the scrollback. Mechanism: each `session_history` message is
+tagged with its turn (`session_turns()` at append time — the struct grew 16→24 B, `session_history_turn(i)`
+accessor); the feed (`gfeed._gfeed_flow`) renders `gtool_build_turn(..., session_history_turn(i))` above EVERY
+assistant message (was restricted to the last one). The turn tag is **in-memory only** — the `[session].file`
+format is byte-unchanged (`_sess_write_file` serializes via the accessors), and a resumed message gets turn 0 (no
+cards — honest, since its rounds belong to a prior session). Older turns whose rounds aged out of the 16-round
+roundlog ring show no cards (also honest). Measure/draw parity preserved (per-assistant card height is stable
+across both `_gfeed_flow` passes). No producer/spine change.
+
+### Changed
+- `session_history_append` tags each message with `session_turns()`; NEW `session_history_turn(i)`. `gtool.cyr`:
+  NEW `gtool_build_turn(cmds,x,y,w,turn)` (+ a `turn<=0` early-out for resumed rows); `gtool_build` delegates with
+  `session_turns()` (failed-turn notice). `gfeed._gfeed_flow` interleaves per assistant by turn tag.
+
+### Fixed
+- The GUI "didn't complete" detector (`gpresent`) used a net-history-growth check (`len <= _n0`) that FALSE-FIRED
+  at the `SESS_HIST_MAX` (40) cap — once history is full, eviction pins the length, so every *successful* turn read
+  as failed, surfacing a bogus red notice AND (with per-turn cards) a duplicate current-turn card. Replaced with
+  `gturn_reply_landed()` (in `ginput.cyr`): true iff the last row is an assistant tagged the current turn —
+  length-independent, so correct at the cap. Pre-existing (since 0.30.4) but amplified to a double-render by the
+  per-turn loop, so fixed here.
+
+### Added
+- `test_gui_toolcards_perturn` (+6) and `test_gturn_reply_landed` (+4): per-message turn tags, per-turn roundlog
+  filtering, an EARLIER turn's cards interleaved above its reply when a later (tool-less) turn is newest, and the
+  cap-safe turn-success detection. A `/tmp/thoth_gui_cards_perturn.ppm` visual artifact. Pin **6.4.51** (wrapper
+  drifted to 6.4.55; benign).
+
 ## [0.30.18] - 2026-07-12
 
 **Tool-call status now honors the MCP `isError` flag — a failed tool no longer shows `ok`.** `daimon_invoke`

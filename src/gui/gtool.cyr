@@ -107,11 +107,12 @@ fn gtool_has_current() {
     return 0;
 }
 
-# gtool_build: render the current turn's tool-round cards as a stacked block at (x,y) width w. cmds == 0 =>
-# measure only. Returns the y AFTER the block (== y when the current turn ran no tools — the common case, so
-# the feed is unchanged for a plain Q&A turn).
-fn gtool_build(cmds, x, y, w) {
-    var turn = session_turns();
+# gtool_build_turn: render TURN `turn`'s tool-round cards as a stacked block at (x,y) width w (0.30.19). cmds == 0
+# => measure only. Returns the y AFTER the block (== y when that turn ran no tools, or its rounds have aged out of
+# the roundlog ring — so the feed is unchanged for a plain Q&A turn or an old turn). The GUI feed calls this per
+# assistant message with that message's turn tag, so EACH turn's cards render above ITS reply.
+fn gtool_build_turn(cmds, x, y, w, turn) {
+    if (turn <= 0) { return y; }               # resumed/untagged rows carry turn 0; no round is ever turn 0 (skip the scan)
     var cnt = roundlog_count();
     var cy = y;
     var any = 0;
@@ -126,3 +127,7 @@ fn gtool_build(cmds, x, y, w) {
     }
     return cy;
 }
+
+# gtool_build: the CURRENT turn's cards — used for the failed-turn notice (its assistant was popped, so the
+# per-assistant feed path can't place its cards). Interactive success uses gtool_build_turn per message.
+fn gtool_build(cmds, x, y, w) { return gtool_build_turn(cmds, x, y, w, session_turns()); }

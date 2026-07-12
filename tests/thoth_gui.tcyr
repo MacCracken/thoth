@@ -32,6 +32,6 @@ include "src/roundlog.cyr"
 include "src/gui/gtool.cyr"
 include "src/gui/gfeed.cyr"
 include "tests/cases/gui.cyr"
-fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); return assert_summary(); }
+fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gturn_reply_landed(); return assert_summary(); }
 var _e = main();
 syscall(60, _e);

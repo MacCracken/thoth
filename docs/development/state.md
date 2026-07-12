@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.30.19** — **Tool-call cards render PER-TURN**, 2026-07-12. 0.30.16–.18 carded only the current turn, so a
+turn's cards vanished when you sent the next message; now each turn's cards sit above ITS OWN reply throughout
+the scrollback. Each `session_history` message is turn-tagged (`session_turns()` at append; struct 16→24 B,
+`session_history_turn(i)`); `gfeed._gfeed_flow` renders `gtool_build_turn(..., session_history_turn(i))` above
+EVERY assistant (was last-only). Turn tag is **in-memory only** — `[session].file` format byte-unchanged
+(`_sess_write_file` uses the accessors), resumed messages get turn 0 (no cards — honest), and turns aged out of
+the 16-round roundlog ring show none. Measure/draw parity preserved. No producer/spine change. Also FIXED (pre-existing, surfaced by the review and
+amplified by the per-turn loop): `gpresent`'s "didn't complete" detector used a net-growth check (`len <= _n0`)
+that false-fired at the `SESS_HIST_MAX`=40 cap (eviction pins the length) — every successful turn read as failed,
+showing a bogus notice + a duplicate current-turn card. Replaced with `gturn_reply_landed()` (last row is an
+assistant tagged the current turn — length-independent). **Verified**: 1422 assertions
+(`test_gui_toolcards_perturn` +6, `test_gturn_reply_landed` +4) + main builds + PPM eyeballed (turn 1's `shell`
+card stays above `a1` while turn 2 `a2` is card-less below) + adversarial review (struct/persistence, parity,
+attribution → SHIP; the cap bug it found is fixed here). Pin **6.4.51** (wrapper drifted to 6.4.55; benign). **NEXT (GUI arc)**: colored **diffs** — still no first-class
+source (thoth exposes no file-edit tool; `roundlog` keeps no result text), so it needs its own producer/source
+decision, likely the next real discussion. Loose hardening item from 0.30.18: `daimon_invoke` doesn't check HTTP
+status (unlike `daimon_call`).
+
 **0.30.18** — **Tool-call status honors the MCP `isError` flag**, 2026-07-12. `daimon_invoke` discarded a tool
 result's `isError`, so `roundlog.ok` (→ the GUI card colour + `/audit`/telemetry) meant only "did the body
 parse," not "did the tool succeed" — a tool returning `isError:true` WITH valid text was carded green `ok`. Fix:

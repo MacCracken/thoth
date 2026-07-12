@@ -593,3 +593,64 @@ fn test_gui_toolcards() {
     roundlog_reset(); session_history_clear();
     return 0;
 }
+
+# GUI per-turn tool cards (0.30.19): each history message is turn-tagged, and the feed renders EACH turn's cards
+# above ITS reply (not just the latest turn's). PURE (gtool_build_turn + session_history_turn over the feed).
+fn test_gui_toolcards_perturn() {
+    test_group("GUI per-turn tool cards (0.30.19)");
+    roundlog_reset(); session_reset(); session_history_clear();
+    # turn 1 used a tool; turn 2 did NOT
+    var t1 = session_bump_turn();
+    session_history_append("user", "q1", 2);
+    roundlog_open(t1, 1);
+    roundlog_add_call("shell", RL_ALLOWED, 1, 10, 20, "{\"command\":\"ls\"}");
+    session_history_append("assistant", "a1", 2);
+    var t2 = session_bump_turn();
+    session_history_append("user", "q2", 2);
+    session_history_append("assistant", "a2", 2);
+    # every message carries its turn tag
+    assert_eq(session_history_turn(0), t1, "user q1 tagged turn 1");
+    assert_eq(session_history_turn(1), t1, "assistant a1 tagged turn 1");
+    assert_eq(session_history_turn(3), t2, "assistant a2 tagged turn 2");
+    # per-turn filtering: turn 1 has cards, turn 2 (no tools) has none
+    assert(gtool_build_turn(0, 0, 0, 600, t1) > 0, "turn 1 (used a tool) has a card block");
+    assert_eq(gtool_build_turn(0, 0, 50, 600, t2), 50, "turn 2 (no tools) renders no cards (returns y)");
+    # the feed interleaves turn 1's cards above a1 even though a2 is the LATEST message — the regression the
+    # per-turn change fixes (0.30.16-.18 only carded the current turn, so turn 1's cards vanished after turn 2).
+    var with1 = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    # visual artifact: raster the 2-turn feed — turn 1's card must sit above a1, with a2 below and card-less.
+    var PW = 600; var PH = 320;
+    var pfb = gr_fb_new(PW, PH);
+    gr_fb_clear(pfb, PW, PH, _gframe_bg());
+    gr_ensure_font();
+    var pcmds = gd_list_new();
+    gfeed_build(pcmds, 0, 0, PW, PH);
+    gr_raster(pcmds, pfb, PW, PH);
+    _gui_ppm_dump(pfb, PW, PH, "/tmp/thoth_gui_cards_perturn.ppm");
+    roundlog_reset();
+    var without = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(with1 > without, "an EARLIER turn's cards interleave above its reply, not just the newest turn's");
+    roundlog_reset(); session_history_clear(); session_reset();
+    return 0;
+}
+
+# GUI turn-success detection (0.30.19): gpresent raises the "didn't complete" notice via gturn_reply_landed(),
+# which reads the last row's turn TAG (length-independent) — fixing the old net-growth check that false-fired at
+# the SESS_HIST_MAX cap (surfacing a bogus notice + a duplicate current-turn card on every successful turn).
+fn test_gturn_reply_landed() {
+    test_group("GUI turn-success detection (0.30.19)");
+    session_reset(); session_history_clear();
+    var t = session_bump_turn();
+    session_history_append("user", "q", 1);
+    assert_eq(gturn_reply_landed(), 0, "user-only (no reply yet) -> not landed");
+    session_history_append("assistant", "a", 1);
+    assert_eq(gturn_reply_landed(), 1, "assistant tagged the current turn -> landed (true even at the cap)");
+    # a later turn with no reply: the last assistant belongs to a PRIOR turn -> not landed. This is exactly what
+    # the old `len <= _n0` check got wrong at the 40-message cap, where a SUCCESSFUL turn's length is pinned.
+    session_bump_turn();
+    assert_eq(gturn_reply_landed(), 0, "last assistant belongs to a prior turn -> not landed (the cap fix)");
+    session_history_clear();
+    assert_eq(gturn_reply_landed(), 0, "empty history -> not landed");
+    session_reset(); session_history_clear();
+    return 0;
+}
