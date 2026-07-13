@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.33.6 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
+> **Status: 0.33.7 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
 > a memory seam that consumes mneme, a rich TUI by default, a non-interactive shell citizen, and a native desktop
 > GUI (`thoth gui`) with colored diff cards (pre-1.0).**
 > The interactive TUI/REPL loop is real and usable, and the full AGNOS spine is wired. A free-text turn drives a
@@ -22,7 +22,9 @@ or provider when that serves the work.
 > trait-derived **role** axis (`/role`). The **rich TUI is the default** on a capable
 > terminal (`--tier=simple|rich|auto` selects the mode): an amber palette, syntax-highlighted
 > diffs + fenced code, a soft-wrapping self-managed feed, a growing word-wrapping composer, a
-> file-tree pane (Ctrl-B), theme toggle (`/theme`), conversation resume, `/save` export, and a
+> file-tree pane (Ctrl-B), theme toggle (`/theme`), named **multi-conversation management** (`/new`,
+> `/switch`, `/rename`, `/delete`, `/search` across all conversations — persisted across restarts with each
+> reply's model, cited sources, and tool calls), `/save` export, and a
 > live spine-health + token/cost + git-branch status bar — degrading **closed** to a
 > byte-identical line-mode floor when piped/CI. A **native desktop GUI** (`thoth gui`, tier T3) renders the same
 > status strip, interactive composer, a word-wrapped conversation feed with **per-turn tool-call cards + colored

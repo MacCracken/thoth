@@ -2,6 +2,20 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.7] - 2026-07-13
+
+**Cross-conversation `/search` — find text across every conversation. Closes the 0.33.x chat-management arc.**
+
+### Added
+- **`/search <text>`** (`src/commands.cyr`) — a case-insensitive substring search over every message of every
+  conversation in the store, listing matches grouped by conversation (the `*` active marker + 1-based number +
+  title, then each matching message's role + a context snippet with the match highlighted), with a footer count and
+  a `/switch <n>` hint. Distinct from `/find` (the TUI in-buffer feed search) — `/search` spans the whole persisted
+  store and works in any mode. Snippets flatten control bytes and cap context, and the result list caps at 60
+  matches. Unit-tested (the case-insensitive finder + classification) and live-verified across a multi-conversation
+  store (found/case-insensitive/no-match). **This closes the 0.33.x arc**: multi-conversation store → commands →
+  persistence → richer message schema (model/citations/tool calls) → GUI sidebar → cross-conversation search.
+
 ## [0.33.6] - 2026-07-13
 
 **GUI conversation sidebar — a left pane to see and switch conversations in the desktop window.**

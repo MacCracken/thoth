@@ -186,6 +186,13 @@ fn test_conversations() {
     assert_eq(classify_input("/switch 2"), CMD_SWITCH, "/switch classifies");
     assert_eq(classify_input("/rename foo"), CMD_RENAME, "/rename classifies");
     assert_eq(classify_input("/delete 3"), CMD_DELETE, "/delete classifies");
+    assert_eq(classify_input("/search hello"), CMD_SEARCH, "/search classifies");
+    # 0.33.7: cross-conversation search — the case-insensitive substring finder
+    assert_eq(_search_find("Hello World", "world"), 6, "_search_find is case-insensitive (world @ 6)");
+    assert_eq(_search_find("Hello World", "HELLO"), 0, "_search_find matches upper needle at 0");
+    assert_eq(_search_find("Hello World", "xyz"), 0 - 1, "_search_find returns -1 when absent");
+    assert_eq(_search_find("hi", "hello"), 0 - 1, "_search_find: needle longer than haystack -> -1");
+    assert_eq(_search_find("abc", ""), 0, "_search_find: empty needle -> 0");
     session_reset();
     assert_eq(conv_count(), 0, "reset drops all conversations");
     return 0;

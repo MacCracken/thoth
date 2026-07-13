@@ -7,6 +7,13 @@
 
 ## Version
 
+**0.33.7** — **Cross-conversation `/search`** (2026-07-13). `/search <text>` (`src/commands.cyr`) case-insensitively
+scans every message of every conversation, listing matches grouped by conversation (`*` active marker + number +
+title, then each match's role + a highlighted context snippet) with a count footer + `/switch <n>` hint. Distinct
+from `/find` (the TUI in-buffer feed search); spans the whole store, any mode. Caps at 60 matches; snippets flatten
+control bytes + cap context. Unit-tested (the finder + classify) + live-verified. **Closes the 0.33.x chat-management
+arc** (store → commands → persistence → richer message schema → GUI sidebar → search).
+
 **0.33.6** — **GUI conversation sidebar** (2026-07-13). A left pane in the desktop GUI (`src/gui/gconv.cyr`) over
 the `conv_*` store — each conversation (title + "N msg"), the active one accent-marked. Keyboard-driven: **Ctrl+K**
 toggles it (hidden by default), **Tab** cycles composer → file-tree → conversations, **↑/↓** select, **Enter**
