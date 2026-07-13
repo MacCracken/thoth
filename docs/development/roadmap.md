@@ -131,10 +131,11 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   **multi-conversation persistence** (0.33.2 — the `THOTH-SESSION-2` store→file format, so every conversation
   survives a restart, not just the active one), and and the **richer persisted message schema**
   (0.33.3 — per-message **model** attribution; 0.33.4 — per-message **citations**; 0.33.5 — per-message **tool
-  calls**: a resumed reply keeps its model, cited sources, and tool cards) is **complete**. Remaining: a GUI
-  **conversation sidebar** (a left pane like the file tree, click-to-switch over the `conv_*` store); then
-  cross-conversation **`/search`** (the full-text gap SY also lacks). A follow-up can also re-render the resumed
-  tool/citation data as GUI feed cards (today it round-trips + surfaces in `/save`; the live feed cards are
+  calls**: a resumed reply keeps its model, cited sources, and tool cards) is **complete**, and the GUI
+  **conversation sidebar** (0.33.6 — a left pane over the `conv_*` store, Ctrl+K to toggle, Tab/↑/↓/Enter to switch)
+  has shipped. Remaining: cross-conversation **`/search`** (the full-text gap SY also lacks). Follow-ups: a mouse
+  click-to-switch on the sidebar (today keyboard-only — the GUI has no pointer plumbing yet), and re-rendering the
+  resumed tool/citation data as GUI feed cards (today it round-trips + surfaces in `/save`; live feed cards are
   session-local).
 - **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** Cuts: **.0** **edit-last** + **regenerate-
   last** (rewind history to a turn, re-run); **.1** finish **stop/interrupt** — wire `src/intr.cyr` (the Esc-abort

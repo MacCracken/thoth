@@ -132,6 +132,7 @@ fn gturn_reply_landed() {
 # loop (gpresent.cyr) feeds real key records through gkey and reads gfocus() to draw the active pane.
 var GFOCUS_COMPOSER = 0;
 var GFOCUS_TREE = 1;
+var GFOCUS_CONV = 2;                 # 0.33.6: the conversation sidebar
 var _gfocus = 0;
 fn gfocus() { return _gfocus; }
 fn gfocus_set(f) { _gfocus = f; return 0; }
@@ -152,6 +153,58 @@ fn gtree_toggle_hidden() {
     return 0;
 }
 fn gstatus_toggle_hidden() { if (_gstatus_hidden == 1) { _gstatus_hidden = 0; } else { _gstatus_hidden = 1; } return 0; }
+
+# --- conversation sidebar (0.33.6) — a left pane over the conv_* store, keyboard-driven ----------------------
+# Hidden by DEFAULT (the store is one conversation until /new; the pre-0.33.6 layout stays byte-identical). A Ctrl
+# chord reveals it; ↑/↓ move the selection, Enter switches (conv_switch + reset the feed scroll so the switched
+# conversation shows from its newest). Revealing preselects the active conversation. State here (before gconv.cyr /
+# gfeed.cyr in convention), PURE + headless-testable.
+var _gconv_hidden = 1;
+var _gconv_sel = 0;
+fn gconv_hidden() { return _gconv_hidden; }
+fn gconv_sel() { return _gconv_sel; }
+fn gconv_sel_clamp() {
+    if (_gconv_sel < 0) { _gconv_sel = 0; }
+    if (_gconv_sel >= conv_count()) { _gconv_sel = conv_count() - 1; }
+    if (_gconv_sel < 0) { _gconv_sel = 0; }              # empty-store floor
+    return 0;
+}
+fn gconv_sel_move(d) { _gconv_sel = _gconv_sel + d; gconv_sel_clamp(); return 0; }
+fn gconv_toggle_hidden() {
+    if (_gconv_hidden == 1) { _gconv_hidden = 0; _gconv_sel = conv_active(); gconv_sel_clamp(); }   # reveal -> preselect active
+    else { _gconv_hidden = 1; if (_gfocus == GFOCUS_CONV) { _gfocus = GFOCUS_COMPOSER; } }           # never leave focus on a hidden pane
+    return 0;
+}
+# gconv_key: handle one evdev key while the sidebar is focused. ↑/↓ move the selection; Enter switches to it and
+# hands focus back to the composer. Returns 0.
+fn gconv_key(code, shift) {
+    if (code == 103) { gconv_sel_move(0 - 1); return 0; }    # up
+    if (code == 108) { gconv_sel_move(1); return 0; }         # down
+    if ((code == 28) || (code == 96)) {                       # Enter -> switch to the selected conversation
+        gconv_sel_clamp();
+        conv_switch(gconv_sel());
+        gscroll_reset();                                      # show the switched conversation from its newest message
+        _gfocus = GFOCUS_COMPOSER;
+        return 0;
+    }
+    return 0;
+}
+# _gtree_focusable / _gconv_focusable: a pane can take focus only when it is VISIBLE and has content.
+fn _gtree_focusable() { if ((ftree_count() > 0) && (gtree_hidden() == 0)) { return 1; } return 0; }
+fn _gconv_focusable() { if ((conv_count() > 0) && (gconv_hidden() == 0)) { return 1; } return 0; }
+# _gfocus_next: Tab cycles COMPOSER -> TREE -> CONV -> COMPOSER, skipping any pane that is hidden or empty.
+fn _gfocus_next() {
+    if (_gfocus == GFOCUS_COMPOSER) {
+        if (_gtree_focusable() == 1) { return GFOCUS_TREE; }
+        if (_gconv_focusable() == 1) { return GFOCUS_CONV; }
+        return GFOCUS_COMPOSER;
+    }
+    if (_gfocus == GFOCUS_TREE) {
+        if (_gconv_focusable() == 1) { return GFOCUS_CONV; }
+        return GFOCUS_COMPOSER;
+    }
+    return GFOCUS_COMPOSER;                                   # from CONV -> back to the composer
+}
 
 # --- conversation-feed scrollback (0.30.14) -----------------------------------------------------------------
 # The feed bottom-anchors to the newest message (0.30.3); after a long chat, older messages clip off the top.
@@ -252,19 +305,23 @@ fn gkey(code, shift, ctrl) {
     if (ctrl == 1) {
         if (code == 48) { gtree_toggle_hidden(); return 0; }     # Ctrl+B -> toggle the file-tree pane
         if (code == 31) { gstatus_toggle_hidden(); return 0; }   # Ctrl+S -> toggle the status strip
+        if (code == 37) { gconv_toggle_hidden(); return 0; }     # Ctrl+K -> toggle the conversation sidebar (0.33.6)
         if (ginput_ascii(code, shift) != 0) { return 0; }        # swallow other Ctrl+<printable>
     }
     if (code == 104) { gscroll_page(1); return 0; }           # PageUp   -> scroll the feed to OLDER messages
     if (code == 109) { gscroll_page(0 - 1); return 0; }       # PageDown -> scroll toward newer
     if (code == 107) { gscroll_reset(); return 0; }           # End      -> jump back to the latest
-    if (code == 15) {                                         # Tab -> toggle composer <-> tree
-        if (_gfocus == GFOCUS_TREE) { _gfocus = GFOCUS_COMPOSER; }
-        elif ((ftree_count() > 0) && (gtree_hidden() == 0)) { _gfocus = GFOCUS_TREE; }   # only a populated, VISIBLE tree
+    if (code == 15) {                                         # Tab -> cycle composer -> tree -> conv (visible panes)
+        _gfocus = _gfocus_next();
         return 0;
     }
     if (_gfocus == GFOCUS_TREE) {
         if (ginput_ascii(code, shift) != 0) { _gfocus = GFOCUS_COMPOSER; return gcomp_key(code, shift); }
         return gtree_key(code, shift);
+    }
+    if (_gfocus == GFOCUS_CONV) {                             # 0.33.6: conversation sidebar nav
+        if (ginput_ascii(code, shift) != 0) { _gfocus = GFOCUS_COMPOSER; return gcomp_key(code, shift); }
+        return gconv_key(code, shift);
     }
     if (code == 103) { ghist_up(); return 0; }                # composer Up   -> recall an OLDER submission
     if (code == 108) { ghist_down(); return 0; }              # composer Down -> NEWER / back to the live draft

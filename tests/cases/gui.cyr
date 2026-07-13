@@ -321,6 +321,64 @@ fn test_gui() {
     gtree_build(_rl, 0, 40, 230, 400);
     assert(vec_len(_rl) > 4, "gtree_build over the real repo tree emits the pane (git-badge path exercised)");
     ftree_reset();
+
+    # --- conversation sidebar (gconv.cyr, 0.33.6) ---
+    # responsive width (hidden below 640, fixed pane otherwise) + scroll-to-selection (mirrors the tree)
+    assert_eq(gconv_w(500), 0, "narrow window (<640) hides the conversation sidebar");
+    assert_eq(gconv_w(960), GCONV_PANE_W, "wide window shows the conversation pane");
+    assert_eq(_gconv_scroll_first(3, 10, 0), 0, "a short list starts at row 0");
+    assert_eq(_gconv_scroll_first(100, 10, 99), 90, "overflow, selection at bottom -> clamped to total-rows");
+    # build a 2-conversation store, render the sidebar, confirm both titles + the active marker/accent appear
+    session_reset();
+    session_history_append("user", "first chat here", 15);   # conv 0 -> auto-titled "first chat here"
+    conv_new(); conv_set_title(conv_active(), "second chat");
+    session_history_append("user", "hi", 2);                  # conv 1 active now
+    assert_eq(conv_count(), 2, "two conversations in the store");
+    var _cl = gd_list_new();
+    gconv_build(_cl, 0, 40, GCONV_PANE_W, 400);
+    assert(vec_len(_cl) > 3, "gconv_build emits bg + clip + header + rows + unclip");
+    var _c0 = 0; var _c1 = 0; var _chdr = 0; var _cact = 0; var _cvi = 0;
+    while (_cvi < vec_len(_cl)) {
+        var _cc = vec_get(_cl, _cvi);
+        if ((gd_kind(_cc) == GD_TEXT) && (gd_text(_cc) != 0)) {
+            if (streq(gd_text(_cc), "first chat here") == 1) { _c0 = 1; }
+            if ((streq(gd_text(_cc), "second chat") == 1) && (gd_color(_cc) == _ui_rgb(ROLE_ACCENT))) { _c1 = 1; }   # active title in accent
+            if (streq(gd_text(_cc), "conversations") == 1) { _chdr = 1; }
+        }
+        if ((gd_kind(_cc) == GD_RECT) && (gd_w(_cc) == 3) && (gd_color(_cc) == _ui_rgb(ROLE_ACCENT))) { _cact = 1; }   # active marker bar
+        _cvi = _cvi + 1;
+    }
+    assert_eq(_chdr, 1, "the sidebar header 'conversations' renders");
+    assert_eq(_c0, 1, "conversation 0's title renders");
+    assert_eq(_c1, 1, "the ACTIVE conversation's title renders in accent");
+    assert_eq(_cact, 1, "the active conversation shows an accent marker bar");
+    # keyboard nav: reveal (preselect active) -> up -> Enter switches
+    gconv_toggle_hidden();                       # reveal -> _gconv_sel = conv_active() = 1
+    assert_eq(gconv_hidden(), 0, "Ctrl+K reveals the sidebar");
+    assert_eq(gconv_sel(), 1, "reveal preselects the active conversation");
+    gconv_sel_move(0 - 1);
+    assert_eq(gconv_sel(), 0, "up moves the selection");
+    gconv_key(28, 0);                            # Enter -> switch to conversation 0
+    assert_eq(conv_active(), 0, "Enter switches to the selected conversation");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "switching hands focus back to the composer");
+    # full-frame layout integration: with the sidebar shown, gframe_build places its pane bg at the far left (x=0,
+    # GCONV_PANE_W wide) ahead of the tree + feed; render the whole frame to a PPM artifact for visual inspection.
+    var _fl = gframe_build(960, 600);
+    var _fbg = 0; var _fli = 0;
+    while (_fli < vec_len(_fl)) {
+        var _flc = vec_get(_fl, _fli);
+        if ((gd_kind(_flc) == GD_RECT) && (gd_x(_flc) == 0) && (gd_w(_flc) == GCONV_PANE_W) && (gd_color(_flc) == _gconv_bg())) { _fbg = 1; }
+        _fli = _fli + 1;
+    }
+    assert_eq(_fbg, 1, "gframe_build places the sidebar pane (bg at x=0, GCONV_PANE_W wide) when shown");
+    var _ffb = gr_fb_new(960, 600);
+    gr_fb_clear(_ffb, 960, 600, _gframe_bg());
+    gr_raster(_fl, _ffb, 960, 600);
+    _gui_ppm_dump(_ffb, 960, 600, "/tmp/thoth_gui_convsidebar.ppm");
+    gconv_toggle_hidden();                       # re-hide -> restore the default layout for later tests
+    assert_eq(gconv_hidden(), 1, "re-hidden (default layout restored)");
+    session_reset();
+
     session_set_model(0);
     return 0;
 }

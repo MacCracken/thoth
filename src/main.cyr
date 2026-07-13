@@ -80,6 +80,7 @@ include "src/gui/graster.cyr"
 include "src/gui/gstatus.cyr"
 include "src/gui/ginput.cyr"      # evdev keymap + composer text buffer (0.30.2); before gfeed (gframe renders the composer)
 include "src/gui/gtree.cyr"       # file-tree pane view-builder (0.30.5); before gfeed (gframe lays out the tree); reads ftree_*/git
+include "src/gui/gconv.cyr"       # conversation sidebar view-builder (0.33.6); before gfeed (gframe lays out the pane); reads conv_*
 include "src/gui/gtool.cyr"       # tool-call CARD view-builder (0.30.16); before gfeed (feed interleaves cards); reads roundlog/session_turns
 include "src/gui/gmem.cyr"        # per-turn MEMORY strip (0.32.5): recalled sources + grounding verdict from memlog; before gfeed (interleaved there)
 include "src/gui/gfeed.cyr"       # conversation-feed view-builder (0.30.1); reads session_history; headless-testable

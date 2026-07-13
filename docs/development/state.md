@@ -7,6 +7,14 @@
 
 ## Version
 
+**0.33.6** — **GUI conversation sidebar** (2026-07-13). A left pane in the desktop GUI (`src/gui/gconv.cyr`) over
+the `conv_*` store — each conversation (title + "N msg"), the active one accent-marked. Keyboard-driven: **Ctrl+K**
+toggles it (hidden by default), **Tab** cycles composer → file-tree → conversations, **↑/↓** select, **Enter**
+switches (+ snaps the feed to that conversation). `gframe_build` now lays out an accumulating left band (conv pane →
+tree → feed); byte-identical when the sidebar is hidden. Mirrors the file-tree pane (palette/scroll/theme).
+Headless-tested (width/scroll/render/nav/full-frame layout) + confirmed by a rendered golden frame. Interactive
+compositor confirm is the user's (the render pipeline is the same one that feeds wl_shm).
+
 **0.33.5** — **Per-message tool calls** (2026-07-13). Each reply now keeps the tool calls it produced (name, arg
 summary, gate kind, ok/error), snapshotted from the roundlog and persisted in the `THOTH-SESSION-2` format as
 trailing `TOOL\t<len>\n<kind>\t<ok>\t<name>\t<args>\n` frames (same unified frame, dispatched by token, re-attached

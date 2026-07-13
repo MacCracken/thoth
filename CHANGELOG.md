@@ -2,6 +2,22 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.6] - 2026-07-13
+
+**GUI conversation sidebar — a left pane to see and switch conversations in the desktop window.**
+
+### Added
+- **A conversation sidebar in the desktop GUI** (`src/gui/gconv.cyr`) — a left pane over the `conv_*` store listing
+  each conversation (title + a "N msg" subline), the active one marked with an accent bar and accent title. It is
+  **keyboard-driven**: **Ctrl+K** toggles it (hidden by default, since the store is one conversation until `/new`);
+  **Tab** now cycles focus composer → file-tree → conversations (skipping any hidden/empty pane); when the sidebar is
+  focused, **↑/↓** move the selection and **Enter** switches to it (and snaps the feed to that conversation's newest
+  message). Revealing preselects the active conversation. Mirrors the file-tree pane's structure, palette, and
+  scroll math, so it inherits the amber theme and `/theme` toggle. The `gframe_build` body band now lays out an
+  accumulating left band (conversation pane, then file-tree pane, then feed); with the sidebar hidden the layout is
+  byte-identical to before. Headless-tested (width, scroll, render — titles + active marker, keyboard nav, full-frame
+  layout) and confirmed by a rendered golden frame.
+
 ## [0.33.5] - 2026-07-13
 
 **Per-message tool calls — a resumed conversation keeps its tool cards. Completes the richer persisted message schema.**

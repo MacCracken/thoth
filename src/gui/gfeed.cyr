@@ -218,13 +218,23 @@ fn gframe_build(w, h) {
     var comp_top = h - GFRAME_COMPOSER_H;                                    # composer line (bottom)
     var body_h = comp_top - body_top;
     if (body_h < 0) { body_h = 0; }
+    # left band, accumulating: an optional conversation sidebar (0.33.6), then an optional file-tree pane, then the
+    # feed takes the rest. Each left pane is followed by a 1px vertical rule. Both hide on a narrow window OR via
+    # their Ctrl chord (conv=Ctrl+K default-hidden, tree=Ctrl+B), giving the feed more/all of the body.
+    var feed_x = 0;
+    var cw = 0;
+    if (gconv_hidden() == 0) { cw = gconv_w(w); }
+    if (cw > 0) {
+        gconv_build(cmds, feed_x, body_top, cw, body_h);
+        gd_push_rect(cmds, feed_x + cw, body_top, 1, body_h, _ui_rgb(ROLE_FAINT));
+        feed_x = feed_x + cw + 1;
+    }
     var tw = 0;
     if (gtree_hidden() == 0) { tw = gtree_w(w); }
-    var feed_x = 0;
     if (tw > 0) {
-        gtree_build(cmds, 0, body_top, tw, body_h);
-        gd_push_rect(cmds, tw, body_top, 1, body_h, _ui_rgb(ROLE_FAINT));    # vertical rule between tree + feed
-        feed_x = tw + 1;
+        gtree_build(cmds, feed_x, body_top, tw, body_h);
+        gd_push_rect(cmds, feed_x + tw, body_top, 1, body_h, _ui_rgb(ROLE_FAINT));   # vertical rule between tree + feed
+        feed_x = feed_x + tw + 1;
     }
     gfeed_build(cmds, feed_x, body_top, w - feed_x, body_h);
     gd_push_rect(cmds, 0, comp_top, w, 1, _ui_rgb(ROLE_FAINT));
@@ -240,7 +250,7 @@ fn gframe_build(w, h) {
     gd_push_text(cmds, 38, cty, promptc, ">", 0);                     # owl beak
     var ccx = 54;                                                      # past "{(o> " (5 cols)
     if (gcomp_len() == 0) {
-        gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FAINT), "type a message  -  Tab: files  -  Enter: send  -  Esc: close", 0);
+        gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FAINT), "type a message  -  Tab: panes  -  Enter: send  -  Esc: close", 0);
     } else {
         gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FG), gcomp_cstr(), 0);
         ccx = 54 + gcomp_len() * GR_GLYPH_W + 1;

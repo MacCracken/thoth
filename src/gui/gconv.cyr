@@ -1,0 +1,83 @@
+# src/gui/gconv.cyr — the GUI conversation-sidebar view-builder (T3, 0.33.6).
+#
+# A LEFT pane listing the conversation store (conv_*, 0.33.0): each row = title + a "<n> msg" subline, the ACTIVE
+# conversation marked with an accent bar + accent title. Keyboard-driven (GFOCUS_CONV, ginput.cyr): ↑/↓ move the
+# selection, Enter switches (conv_switch + reset the feed scroll). DEFAULT HIDDEN — a Ctrl chord reveals it, since
+# the store is a single conversation until /new. Mirrors gtree.cyr's structure, palette, and scroll math, so it
+# shares the TUI palette + /theme for free. PURE: builds a command list, never touches a display; per-build scratch
+# is bump-heap, bounded per interaction under the EVENT-DRIVEN present loop (like gtree/gstatus).
+
+var GCONV_PAD     = 12;   # left inset
+var GCONV_ROW_H   = 30;   # px per conversation row (a title line + a count subline)
+var GCONV_MIN_WIN = 640;  # below this WINDOW width the sidebar is hidden (the feed gets the body)
+var GCONV_PANE_W  = 210;  # the pane width when shown
+
+# gconv_w: the sidebar width for a window `win_w` px wide — 0 (hidden) below GCONV_MIN_WIN, else GCONV_PANE_W. The
+# gframe layout also gates on gconv_hidden() (the Ctrl-chord toggle), so this is only the width when it IS shown.
+fn gconv_w(win_w) {
+    if (win_w < GCONV_MIN_WIN) { return 0; }
+    return GCONV_PANE_W;
+}
+
+# theme-aware pane background (== the file-tree pane / status-strip chrome) + focused-selection highlight.
+fn _gconv_bg() { if (ui_theme() == THEME_LIGHT) { return 0xefe8d9; } return 0x1b1812; }
+fn _gconv_selbg() { if (ui_theme() == THEME_LIGHT) { return 0xe0d7c0; } return 0x2a241a; }
+
+# _gconv_scroll_first: the first row to show so the selection stays in view (same math as _gtree_scroll_first).
+fn _gconv_scroll_first(total, rows, sel) {
+    if (total <= rows) { return 0; }
+    var first = sel - rows / 2;
+    if (first < 0) { first = 0; }
+    if (first > (total - rows)) { first = total - rows; }
+    return first;
+}
+
+# _gconv_row: draw conversation ci at (x, rowy) in a w-wide pane. The active conversation gets a left accent bar +
+# accent-coloured title; the selected row (only when the pane is FOCUSED) gets a highlight fill. Title is capped to
+# the pane width in codepoints so it never overflows; a "<n> msg" subline sits below it.
+var _gconv_num = 0;
+fn _gconv_row(cmds, ci, x, rowy, w, sel, focused) {
+    if ((focused == 1) && (ci == sel)) { gd_push_rect(cmds, x, rowy - 2, w, GCONV_ROW_H, _gconv_selbg()); }
+    if (ci == conv_active()) { gd_push_rect(cmds, x, rowy - 2, 3, GCONV_ROW_H, _ui_rgb(ROLE_ACCENT)); }   # active marker
+    var tx = x + GCONV_PAD;
+    var title = conv_title(ci);
+    if (title == 0) { title = "(untitled)"; }
+    var tc = _ui_rgb(ROLE_FG);
+    if (ci == conv_active()) { tc = _ui_rgb(ROLE_ACCENT); }
+    var maxcp = (w - GCONV_PAD - 6) / GR_GLYPH_W;                 # cap the title to the pane width (codepoints)
+    if (maxcp < 1) { maxcp = 1; }
+    gd_push_text(cmds, tx, rowy, tc, title, maxcp);
+    # "<n> msg" subline (faint)
+    if (_gconv_num == 0) { _gconv_num = alloc(32); }
+    var n = vec_len(conv_msgs(ci));
+    var ln = fmt_int_buf(n, _gconv_num);
+    store8(_gconv_num + ln, 32); store8(_gconv_num + ln + 1, 109); store8(_gconv_num + ln + 2, 115); store8(_gconv_num + ln + 3, 103); store8(_gconv_num + ln + 4, 0);   # " msg"
+    gd_push_text(cmds, tx, rowy + 14, _ui_rgb(ROLE_FAINT), _gconv_num, 0);
+    return 0;
+}
+
+# gconv_build: render the conversation sidebar into [x, x+w) x [y, y+h). Pane bg + a "conversations" header + the
+# visible rows (scrolled to keep the selection in view), clipped to the pane. Returns 0. An empty store shows just
+# the header (honest — _conv_ensure is NOT triggered here; a fresh session's lone conversation still lists once used).
+fn gconv_build(cmds, x, y, w, h) {
+    gd_push_rect(cmds, x, y, w, h, _gconv_bg());
+    gd_push_clip(cmds, x, y, w, h);
+    var hy = y + GCONV_PAD;
+    gd_push_text(cmds, x + GCONV_PAD, hy, _ui_rgb(ROLE_FAINT), "conversations", 0);
+    var top = hy + GCONV_ROW_H;
+    var rows = (y + h - top) / GCONV_ROW_H;
+    if (rows < 0) { rows = 0; }
+    var total = conv_count();
+    var focused = 0;
+    if (gfocus() == GFOCUS_CONV) { focused = 1; }
+    var sel = gconv_sel();
+    var first = _gconv_scroll_first(total, rows, sel);
+    var i = 0;
+    while (i < rows) {
+        var ci = first + i;
+        if (ci < total) { _gconv_row(cmds, ci, x, top + i * GCONV_ROW_H + 12, w, sel, focused); }
+        i = i + 1;
+    }
+    gd_push_unclip(cmds);
+    return 0;
+}
