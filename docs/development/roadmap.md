@@ -10,14 +10,14 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.34.0):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.34.4):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`) with tool-call cards + colored diff
 > cards + a conversation sidebar, the model **`shell`** / **`edit`** / **`create_file`** tools (thoth now reads
 > *and writes* code), the **memory arc** (consume mneme — `/remember`, semantic recall, citations, grounding,
 > `/notes`), the **chat-management arc** (named multi-conversation store, persisted across restarts with each
-> reply's model / cited sources / tool calls, `/search`), **message actions** (`/retry` regenerate + `/edit` your
-> last message, 0.34.0), the git / surface producers, the model picker, the persona + role modality, and the
-> `.thoth/` config home.
+> reply's model / cited sources / tool calls, `/search`), the **complete 0.34.x chat-UX arc** (message actions
+> `/retry`+`/edit`; stop/interrupt in the TUI + GUI; `/bookmark` a reply into mneme + `/thumbs` feedback), the git /
+> surface producers, the model picker, the persona + role modality, and the `.thoth/` config home.
 > Per-version detail is in [CHANGELOG](../../CHANGELOG.md) / [state.md](state.md) — **this file is the road AHEAD
 > only**. The **four v1.0 gates below are the remaining blocking work** (AGNOS-dominated); everything else here is
 > non-gating.
@@ -137,14 +137,14 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   polish items ride later work: a **mouse click-to-switch** on the GUI sidebar (today keyboard-only — the GUI has no
   pointer plumbing yet), and **re-rendering resumed tool/citation data as GUI feed cards** (today it round-trips +
   surfaces in `/save`, but the live feed cards are session-local).
-- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** **.0–.3 shipped** (`/retry`/`/edit` message
-  actions; **stop/interrupt** complete — `.1` wired it through the whole agentic loop in the TUI behind a
-  front-end-agnostic **interrupt seam**, `.3` added the **GUI stop affordance** (Esc aborts a GUI turn via a minimal
-  Wayland-fd stop-poll on the seam); `.2` a bug fix — an empty `inputSchema` on the `mneme_*` tools was emptying
-  every agentic turn against the full registry — see CHANGELOG). Remaining cut: **.4** per-message **remember**
-  (bookmark a reply into mneme) + **feedback** (thumbs → mneme's feedback tool). A follow-up carried from .0:
-  surface `/retry` + `/edit` as GUI affordances (the GUI composer runs `cmd_task` directly, bypassing `dispatch`, so
-  slash-commands are TUI/REPL-only today).
+- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps). ✅ COMPLETE (.0–.4 shipped).** `/retry`/`/edit`
+  message actions (`.0`); **stop/interrupt** — `.1` through the whole agentic loop in the TUI behind a
+  front-end-agnostic **interrupt seam**, `.3` the **GUI stop affordance** (Esc aborts a GUI turn via a Wayland-fd
+  stop-poll on the seam); `.2` a bug fix (an empty `inputSchema` on the `mneme_*` tools emptied every full-registry
+  agentic turn); `.4` per-message **`/bookmark`** (save a reply into mneme) + **`/thumbs`** feedback
+  (→ `mneme_search_feedback`). See CHANGELOG for per-cut detail. **Follow-up carried forward:** surface `/retry` +
+  `/edit` (and `/bookmark`/`/thumbs`) as GUI affordances — the GUI composer runs `cmd_task` directly, bypassing
+  `dispatch`, so slash-commands are TUI/REPL-only today (rides the 0.35.x GUI work).
   > **Ordering note (fixed):** an earlier draft listed the GUI stop under .1, ahead of any GUI event-loop pump — a
   > mis-ordered dependency (stdin `intr` doesn't reach the GUI, and the blocking turn can't handle a key mid-turn).
   > Corrected: .1 does the TUI/REPL interrupt + the seam; .2 adds the minimal GUI stop-poll pump the seam needs.

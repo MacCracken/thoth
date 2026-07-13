@@ -161,7 +161,14 @@ var _cite_buf = 0;
 # a lazily-alloc'd pointer table: slots [0..CITE_MAX) titles, [CITE_MAX..2*CITE_MAX) paths (cstr ptrs into _cite_buf)
 var _cite_ptrs = 0;
 fn _cite_ptrs_buf() { if (_cite_ptrs == 0) { _cite_ptrs = alloc(CITE_MAX * 2 * 8); } return _cite_ptrs; }
-fn citations_reset() { _cite_n = 0; _cite_off = 0; return 0; }
+# 0.34.4: the last recall's search_id (`s:<arm>`) + one recalled note id, for /thumbs up -> mneme_search_feedback.
+# Live state (not persisted) — feedback rates the MOST RECENT recall. Cleared here so a no-recall turn (memory_context
+# takes the reset branch) leaves no stale feedback target.
+var _cite_search_id = 0;
+var _cite_fb_note_id = 0;
+fn citations_search_id() { return _cite_search_id; }
+fn citations_feedback_note_id() { return _cite_fb_note_id; }
+fn citations_reset() { _cite_n = 0; _cite_off = 0; _cite_search_id = 0; _cite_fb_note_id = 0; return 0; }
 fn citations_count() { return _cite_n; }
 fn citations_title(i) { if (i < 0) { return 0; } if (i >= _cite_n) { return 0; } return load64(_cite_ptrs_buf() + i * 8); }
 fn citations_path(i) { if (i < 0) { return 0; } if (i >= _cite_n) { return 0; } return load64(_cite_ptrs_buf() + (CITE_MAX + i) * 8); }
@@ -189,6 +196,14 @@ fn _cite_copy(src, len) {
 # to get an absolute pointer, and "not found" is `< 0`.
 fn citations_capture(res) {
     citations_reset();
+    # 0.34.4: the search_id (`search_id: s:<arm>` line) — captured ONCE, for /thumbs -> mneme_search_feedback.
+    var si = strstr(res, "search_id: ");
+    if (si >= 0) {
+        var ss = res + si + 11;
+        var se = ss;
+        while ((load8(se) != 0) && (load8(se) != 10)) { se = se + 1; }
+        _cite_search_id = _cite_copy(ss, se - ss);
+    }
     var pos = res;
     var done = 0;
     while (done == 0) {
@@ -203,6 +218,16 @@ fn citations_capture(res) {
                 else {
                     var title = _cite_copy(t0, i1);        # the title is t0[0 .. i1)
                     var after = t0 + i1 + 2;               # past the closing "**"
+                    # 0.34.4: the FIRST hit's note id (`(ID: <uuid>, ...)`) — mneme_search_feedback needs any one.
+                    if (_cite_fb_note_id == 0) {
+                        var idi = strstr(after, "(ID: ");
+                        if (idi >= 0) {
+                            var idp = after + idi + 5;
+                            var ide = idp;
+                            while ((load8(ide) != 0) && (load8(ide) != 44) && (load8(ide) != 41)) { ide = ide + 1; }   # up to ',' or ')'
+                            _cite_fb_note_id = _cite_copy(idp, ide - idp);
+                        }
+                    }
                     var pi = strstr(after, "Path: ");      # its path line follows the title
                     var path = 0;
                     if (pi >= 0) {
@@ -481,6 +506,28 @@ fn _mem_remote_write(text) {
     if (res == 0) { return 0 - 1; }                       # transport failure / no result
     if (daimon_invoke_is_error() == 1) { return 0 - 1; }  # mneme reported an error (missing arg, etc.)
     return 1;                                             # success (>0, like the local byte count)
+}
+
+# memory_feedback (0.34.4): record POSITIVE feedback on the last recall via mneme_search_feedback (search_id +
+# note_id) through daimon — the /thumbs up path. mneme has no negative-feedback tool, so this is positive-only.
+# Both ids come from citations_capture's parse of the recall's mneme_search result. Returns 1 on success, -1 on
+# transport/tool failure or the seam being unbound. Reuses the _mem_remote_buf marshal buffer (never concurrent).
+fn memory_feedback(search_id, note_id) {
+    if (daimon_mem_bound() == 0) { return 0 - 1; }
+    if ((search_id == 0) || (note_id == 0)) { return 0 - 1; }
+    if (_mem_remote_buf == 0) { _mem_remote_buf = alloc(MEM_REMOTE_CAP); }
+    var cap = MEM_REMOTE_CAP;
+    var off = 0;
+    off = _append_cstr_cap(_mem_remote_buf, off, cap, "{\"search_id\":\"");
+    off = _json_escape_into_cap(_mem_remote_buf, off, cap, search_id);
+    off = _append_cstr_cap(_mem_remote_buf, off, cap, "\",\"note_id\":\"");
+    off = _json_escape_into_cap(_mem_remote_buf, off, cap, note_id);
+    off = _append_cstr_cap(_mem_remote_buf, off, cap, "\"}");
+    store8(_mem_remote_buf + off, 0);
+    var res = daimon_invoke("mneme_search_feedback", _mem_remote_buf);
+    if (res == 0) { return 0 - 1; }
+    if (daimon_invoke_is_error() == 1) { return 0 - 1; }
+    return 1;
 }
 
 # memory_append: append <text> VERBATIM as a bullet ("- <text>\n") to

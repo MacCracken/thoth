@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.34.4** — **Per-message remember + feedback** (2026-07-13; **closes the 0.34.x arc**). **`/bookmark`** saves the
+last assistant reply into mneme as a note (via the `/remember` `memory_append` path — `mneme_create_note` when bound,
+else local; `thoth_remember`-gated; new `session_last_assistant_content`). **`/thumbs up`/`down`** rate the last
+reply's recalled mneme notes: `up` records them useful via **`mneme_search_feedback`** (through daimon), `down` is
+honest that mneme has no negative tool. `citations_capture` (`src/memory.cyr`) now also parses the recall's
+**`search_id`** + first **note id** from mneme's search result into live state, consumed by a new
+`memory_feedback(search_id, note_id)`; it rates the MOST RECENT recall and clears on any no-recall turn (so `/thumbs
+up` honestly says "no recalled notes to rate" otherwise). Unit-tested (parse + no-stale guard + classify + last-reply
+helper) + **LIVE-verified** end to end (`/remember` → recall → `/bookmark` grew the vault → `/thumbs up` → mneme
+"Feedback recorded"; degrades honest) + **adversarially reviewed** — which caught + fixed a real heap overflow: the
+t-ron gate-params marshaller `_params_one` escaped unbounded into a 32 KiB buffer (safe for the input-line-bounded
+callers, but `/bookmark` feeds a whole 64 KiB-capable reply), now cap-bounded + regression-tested. Pin **6.4.62**.
+**The 0.34.x chat-UX arc is COMPLETE** — message actions
+(`.0`), stop/interrupt TUI+seam (`.1`) + GUI (`.3`), the empty-schema agentic fix (`.2`), remember/feedback (`.4`).
+**NEXT arc: 0.35.x** — GUI + agentic streaming (mid-turn pump, live tool cards, thinking fold).
+
 **0.34.3** — **GUI stop affordance: Esc aborts a turn in the desktop GUI** (2026-07-13). A GUI turn runs
 synchronously (`cmd_task` under `OUT_NULL`), blocking the present loop, so mid-turn keys queue unread. A new
 **`_gstop_poll`** hook (`src/gui/gpresent.cyr`) — registered as the **0.34.1 interrupt seam's** poll

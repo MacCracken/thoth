@@ -2,6 +2,39 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.4] - 2026-07-13
+
+**Per-message remember + feedback: `/bookmark` a reply into mneme, `/thumbs` on its recalled notes. Closes the 0.34.x arc.**
+
+### Added
+- **`/bookmark`** — save the **last assistant reply** into mneme as a note (the per-message "remember"). Routes
+  through the same `memory_append` path as `/remember` (`mneme_create_note` when the memory seam is bound, else the
+  local `.thoth/memory` file), under the same `thoth_remember` gate; the reply's first line becomes the note title.
+  New `session_last_assistant_content()` (`src/session.cyr`). Degrades honestly (nothing to bookmark / dir absent /
+  denied).
+- **`/thumbs up` / `/thumbs down`** — feedback on the **last reply's recalled mneme notes**. `up` records that the
+  recalled notes were useful via **`mneme_search_feedback`** (through daimon — improves mneme's future ranking);
+  `down` is honest that mneme has no negative-feedback tool. To do this, `citations_capture` (`src/memory.cyr`) now
+  also parses the recall's **`search_id`** and the first hit's **note id** from mneme's search result (alongside the
+  existing title/path), into live state consumed by a new `memory_feedback(search_id, note_id)` marshaller. It rates
+  the MOST RECENT recall (live, not per-message); the state is cleared on any no-recall turn, so `/thumbs up` says
+  "no recalled mneme notes to rate" when the last reply cited none. Not thoth-gated (a positive read-signal; daimon
+  applies its own per-tool policy).
+
+### Fixed
+- **`_params_one` (the t-ron gate-params marshaller) is now length-bounded** — an adversarial review of `/bookmark`
+  caught it: the built-in gate marshaller escaped its value with an **unbounded** escaper into a fixed 32 KiB
+  buffer, safe only because every prior caller passed an input-line-/path-bounded value. `/bookmark` was the first
+  to feed it a whole assistant reply (up to 64 KiB), so a long (or escape-dense — code) reply overran the buffer
+  → heap corruption, unconditionally before the gate ran. It now uses the cap-bounded escaper (reserving room for
+  the closing `"}`), truncating in-buffer instead of overflowing — protecting all callers. Regression-tested (a
+  40 KiB value stays under the cap and keeps a valid closer).
+- Unit-tested (`test_classify` + `test_rewind` last-reply helper + `test_memory` — the search_id/note-id parse, the
+  no-result no-stale guard) and **live-verified** end to end against the full stack: `/remember` a fact →
+  a turn recalls it (grounded, cited) → `/bookmark` the reply (mneme vault grew) → `/thumbs up` (mneme returned
+  "Feedback recorded"); plus the honest degrades. **This closes the 0.34.x arc** (message actions → stop/interrupt
+  TUI+GUI → the empty-schema fix → per-message remember/feedback).
+
 ## [0.34.3] - 2026-07-13
 
 **GUI stop affordance — Esc aborts an in-flight turn in the desktop GUI (completes the 0.34.x stop/interrupt work).**

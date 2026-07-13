@@ -428,6 +428,18 @@ fn session_history_pop_last() {
     return 0;
 }
 
+# session_last_assistant_content: the content cstr of the most recent "assistant" reply in the active conversation,
+# or 0 if there is none. Used by /bookmark (0.34.4) to save the last reply into mneme.
+fn session_last_assistant_content() {
+    var v = _sess_hist_vec();
+    var i = vec_len(v) - 1;
+    while (i >= 0) {
+        if (streq(load64(vec_get(v, i)), "assistant") == 1) { return load64(vec_get(v, i) + 8); }
+        i = i - 1;
+    }
+    return 0;
+}
+
 # session_last_user_index: the index (into the active conversation) of the most recent "user" message, or -1 if
 # there is none. Used by /retry (regenerate-last) and /edit (edit-last, 0.34.0) to locate the turn to rewind.
 fn session_last_user_index() {

@@ -39,6 +39,8 @@ fn test_classify() {
     assert_eq(classify_input("/retry"), CMD_RETRY, "/retry classifies");
     assert_eq(classify_input("/regenerate"), CMD_RETRY, "/regenerate aliases /retry");
     assert_eq(classify_input("/edit make it shorter"), CMD_EDIT, "/edit with arg classifies");
+    assert_eq(classify_input("/bookmark"), CMD_BOOKMARK, "/bookmark classifies");
+    assert_eq(classify_input("/thumbs up"), CMD_THUMBS, "/thumbs classifies");
     assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
     assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
     assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
@@ -56,6 +58,19 @@ fn test_tokens() {
     assert(streq(arg_after("/read foo.txt"), "foo.txt"), "arg extracted");
     assert(streq(arg_after("/model   gpt-5"), "gpt-5"), "skips extra spaces");
     assert(streq(arg_after("/write a.txt hi there"), "a.txt hi there"), "rest after first token");
+    # 0.34.4: _params_one must be BOUNDED — /bookmark feeds it a whole assistant reply (up to 64 KiB), which the
+    # old unbounded escaper wrote past the 32 KiB _gate_params buffer (heap overflow). A huge value now truncates
+    # in-buffer and keeps the closing `"}` envelope, never overrunning the cap.
+    var big = alloc(40001);
+    var bi = 0;
+    while (bi < 40000) { store8(big + bi, 65); bi = bi + 1; }   # 40000 'A' (> the 32 KiB cap)
+    store8(big + 40000, 0);
+    var pj = _params_one("text", big);
+    var pl = strlen(pj);
+    assert(pl < 32768, "params_one bounded to < GATE_PARAMS_CAP on a 40 KiB value (no overflow)");
+    assert(pl > 8, "params_one produced a result");
+    assert_eq(load8(pj + pl - 1), 125, "params_one result ends with '}' (closer never dropped)");
+    assert_eq(load8(pj + pl - 2), 34, "params_one result ends with '\"}' (string closed)");
     return 0;
 }
 
@@ -986,6 +1001,7 @@ fn test_rewind() {
     session_history_append("assistant", "second a", 8);
     assert_eq(session_history_len(), 4, "four messages recorded");
     assert_eq(session_last_user_index(), 2, "the last user message is index 2 (second q)");
+    assert(streq(session_last_assistant_content(), "second a"), "session_last_assistant_content -> the newest reply (0.34.4 /bookmark)");
     var c = session_rewind_to_last_user();
     assert(streq(c, "second q"), "rewind returns the LAST user message's content");
     assert_eq(session_history_len(), 2, "rewind dropped the last turn (user + its reply)");
@@ -1852,10 +1868,17 @@ fn test_mem_seam() {
     assert_eq(streq(citations_title(1), "Auth Flow"), 1, "citations[1] title");
     assert_eq(streq(citations_path(1), "docs/auth.md"), 1, "citations[1] path");
     assert_eq(citations_title(2), 0, "citations: out-of-range -> 0");
-    # defensive: an unparseable result (no **) captures nothing, no crash
+    # 0.34.4: the same parse also captures the search_id + the FIRST hit's note id, for /thumbs -> mneme_search_feedback
+    citations_capture(csample);
+    assert_eq(streq(citations_search_id(), "s:1"), 1, "citations: search_id captured from the header");
+    assert_eq(streq(citations_feedback_note_id(), "abc"), 1, "citations: first hit's note id captured for feedback");
+    # defensive: an unparseable result (no **) captures nothing, no crash, and no stale feedback target
     assert_eq(citations_capture("No notes found matching your query."), 0, "citations: no ** -> 0 sources");
+    assert_eq(citations_search_id(), 0, "citations: no result -> no stale search_id");
+    assert_eq(citations_feedback_note_id(), 0, "citations: no result -> no stale note id");
     citations_reset();
     assert_eq(citations_count(), 0, "citations_reset clears");
+    assert_eq(citations_search_id(), 0, "citations_reset clears the feedback search_id");
 
     # grounding (0.32.4): scan the reply for [N] refs vs the recalled source count.
     var gr_ok = "Per [1], the frobnicator code is ZEBRA.";

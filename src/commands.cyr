@@ -45,6 +45,8 @@ enum Cmd {
     CMD_SEARCH = 37;
     CMD_RETRY = 38;
     CMD_EDIT = 39;
+    CMD_BOOKMARK = 40;
+    CMD_THUMBS = 41;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -161,6 +163,8 @@ fn classify_input(line) {
     if (token_is(line, "/retry") == 1) { return CMD_RETRY; }
     if (token_is(line, "/regenerate") == 1) { return CMD_RETRY; }
     if (token_is(line, "/edit") == 1) { return CMD_EDIT; }
+    if (token_is(line, "/bookmark") == 1) { return CMD_BOOKMARK; }
+    if (token_is(line, "/thumbs") == 1) { return CMD_THUMBS; }
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
     if (token_is(line, "/copy") == 1) { return CMD_COPY; }
     if (token_is(line, "/find") == 1) { return CMD_FIND; }
@@ -205,6 +209,8 @@ fn cmd_help() {
     _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
+    _help_line("  /bookmark", "          save the last reply into mneme as a note (t-ron-gated)");
+    _help_line("  /thumbs up|down", "    rate the last reply's recalled notes (thumbs up -> mneme's feedback)");
     _help_line("  /notes <query>", "     search your mneme knowledge base (needs the memory seam bound)");
     _help_line("  /conversations", "     list conversations (also /convos)");
     _help_line("  /new [title]", "       start a new conversation");
@@ -253,20 +259,23 @@ fn cmd_history() {
 # (confirm — the fail-closed interactive prompt — lives in src/gate.cyr now,
 # alongside the t-ron seam binding it stands in for.)
 
-# _params_one: build {"<key>":"<escaped val>"} in a reused static buffer — the
-# t-ron ToolCall params for the built-in actions. Bounded: val is capped by
-# the 4096-byte input line; worst-case escaping (~6x) fits the cap.
+# _params_one: build {"<key>":"<escaped val>"} in a reused static buffer — the t-ron ToolCall params for the
+# built-in actions. FULLY BOUNDED (0.34.4): most callers pass an input-line-/path-bounded val (<= ~4 KiB, ~6x
+# escaping fits), but /bookmark feeds a whole assistant reply (up to HOOSH_ACC_CAP = 64 KiB) — so the value escape
+# uses the CAP-bounded escaper (reserving 3 bytes so the closing `"}` + NUL always fit). It truncates in-buffer
+# instead of overrunning `_gate_params` (the escaper is best-effort informational for the gate's policy/audit).
 var _gate_params = 0;
 var GATE_PARAMS_CAP = 32768;
 
 fn _params_one(key, val) {
     if (_gate_params == 0) { _gate_params = alloc(GATE_PARAMS_CAP); }
+    var cap = GATE_PARAMS_CAP;
     var off = 0;
-    off = _append_cstr(_gate_params, off, "{\"");
-    off = _append_cstr(_gate_params, off, key);
-    off = _append_cstr(_gate_params, off, "\":\"");
-    off = _json_escape_into(_gate_params, off, val);
-    off = _append_cstr(_gate_params, off, "\"}");
+    off = _append_cstr_cap(_gate_params, off, cap, "{\"");
+    off = _append_cstr_cap(_gate_params, off, cap, key);
+    off = _append_cstr_cap(_gate_params, off, cap, "\":\"");
+    off = _json_escape_into_cap(_gate_params, off, cap - 3, val);   # reserve 3 bytes for the closing "} + NUL
+    off = _append_cstr_cap(_gate_params, off, cap, "\"}");
     store8(_gate_params + off, 0);
     return _gate_params;
 }
@@ -1088,6 +1097,55 @@ fn cmd_remember(line) {
     return 0;
 }
 
+# cmd_bookmark (0.34.4): save the LAST assistant reply into mneme as a note — the per-message "remember". Routes
+# through memory_append exactly like /remember (mneme_create_note when the seam is bound, else the local
+# .thoth/memory file), under the SAME thoth_remember gate; the reply's first line becomes the note title.
+fn cmd_bookmark() {
+    var reply = session_last_assistant_content();
+    if (reply == 0) { oprintln("nothing to bookmark - no reply in this conversation yet."); return 0; }
+    var bp = _params_one("text", reply);
+    if (gate_authorize("thoth_remember", bp, "bookmark to", memory_index_path()) == 0) {
+        ui_emit(ROLE_RED, "  denied. nothing bookmarked."); oprintln(""); return 0;
+    }
+    var rc = memory_append(reply);
+    if (rc == (0 - 2)) {
+        emit("  "); ui_emit(ROLE_RED, memory_dir()); ui_emit(ROLE_RED, " not found");
+        ui_emit(ROLE_MUTED, " - create it first (mkdir -p "); emit(memory_dir()); ui_emit(ROLE_MUTED, ")."); oprintln(""); return 0;
+    }
+    if (rc < 0) { emit("  "); ui_emit(ROLE_RED, "write failed - reply not bookmarked"); oprintln(""); return 0; }
+    if (mem_last_target() == 1) {
+        emit("bookmarked the last reply -> "); ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic memory via daimon)"); oprintln(""); return 0;
+    }
+    emit("bookmarked the last reply -> "); ui_emit(ROLE_BLUE, memory_index_path()); oprintln("");
+    return 0;
+}
+
+# cmd_thumbs (0.34.4): feedback on the LAST reply's recalled mneme notes. `/thumbs up` records that the recalled
+# notes were useful (mneme_search_feedback via daimon — improves mneme's future ranking); `/thumbs down` is honest
+# that mneme has no negative-feedback tool. Uses the live citations state (the most recent recall); if the last
+# reply cited no mneme notes, it says so. daimon applies its own per-tool policy on mneme_search_feedback.
+fn cmd_thumbs(line) {
+    var arg = arg_after(line);
+    if (arg == 0) { oprintln("usage: /thumbs up   (mark the last reply's recalled notes useful)  |  /thumbs down"); return 0; }
+    if (token_is(arg, "down") == 1) {
+        ui_emit(ROLE_MUTED, "  mneme records positive feedback only - nothing sent. (/thumbs up marks the recalled notes useful.)"); oprintln("");
+        return 0;
+    }
+    if (token_is(arg, "up") == 0) { oprintln("usage: /thumbs up | /thumbs down"); return 0; }
+    var sid = citations_search_id();
+    var nid = citations_feedback_note_id();
+    if ((sid == 0) || (nid == 0)) {
+        emit("  "); ui_emit(ROLE_FAINT, "no recalled mneme notes to rate - the last reply cited none (needs the memory seam bound + a recall)."); oprintln("");
+        return 0;
+    }
+    if (memory_feedback(sid, nid) == 1) {
+        emit("thumbs up -> "); ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (recorded the recalled notes as useful)"); oprintln("");
+    } else {
+        emit("  "); ui_emit(ROLE_RED, "feedback failed"); ui_emit(ROLE_FAINT, " - mneme unreachable or refused"); oprintln("");
+    }
+    return 0;
+}
+
 # cmd_notes (0.32.6 — notebook): search the mneme knowledge base directly, the counterpart to per-turn recall. A
 # READ via daimon's mneme_search (no thoth gate — daimon applies its own per-tool policy); needs the memory seam
 # BOUND (daimon hosts mneme_*), else it degrades honestly. Displays mneme's formatted result VERBATIM — thoth
@@ -1715,6 +1773,8 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_SEARCH) { cmd_search(line); return 1; }
     if (c == CMD_RETRY) { cmd_regenerate(); return 1; }
     if (c == CMD_EDIT) { cmd_edit(line); return 1; }
+    if (c == CMD_BOOKMARK) { cmd_bookmark(); return 1; }
+    if (c == CMD_THUMBS) { cmd_thumbs(line); return 1; }
     if (c == CMD_GIT) { cmd_git(line); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_FIND) { cmd_find(line); return 1; }
