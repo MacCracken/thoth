@@ -2,7 +2,21 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.32.3] - 2026-07-12
+## [0.32.4] - 2026-07-12
+
+**Grounding indicator — after a recall, is the reply actually grounded in the sources?**
+
+### Added
+- **Grounding indicator** (`src/memory.cyr`). When a turn recalled memory, thoth scans its OWN reply for `[N]`
+  citations and compares them to the recalled source count — an honest, checkable signal (thoth parses its reply,
+  never mneme's domain). A colored line follows the reply (line/TUI; GUI rides the feed work): **green** `grounded
+  (X of M source(s) cited)` when valid citations are present; **amber** `unverified (M source(s) recalled, none
+  cited)` when sources were available but uncited; **red** `ungrounded (cited a source beyond the M recalled)` when
+  a citation points past the recalled sources (likely fabricated). Only a **tight `[N]` band** counts — `[1..M]`
+  valid, `[M+1..M+3]` a likely fabrication, everything else (e.g. `arr[15]` in code) ignored — to avoid false
+  alarms. Wired at both turn-completion sites (`hoosh_send` + `agent_turn`); silent when no recall happened. The
+  verdict logic is unit-tested (all four states + the code-index false-positive case); the rendered line was
+  verified against canned replies (green/amber/red all correct).
 
 **Citations — the sources behind a recall are captured, cited, and shown.**
 

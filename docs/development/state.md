@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.32.4** — **Grounding indicator** (2026-07-12). After a turn that recalled memory, thoth scans its own reply for
+`[N]` citations vs the recalled source count and shows a colored verdict line (line/TUI): **green** grounded (valid
+cites), **amber** unverified (recalled, none cited), **red** ungrounded (a cite beyond the recalled sources). A tight
+`[N]` band avoids code-index false positives. Honest + checkable (thoth parses its reply, not mneme's domain).
+Verdict logic unit-tested; rendered lines verified (green/amber/red). `grounding_verdict`/`grounding_emit`.
+
 **0.32.3** — **Citations** (2026-07-12). The recalled context is model-only, so citations surface the sources:
 the injection now tells the model to cite a used source inline as `[N]` (mneme numbers the hits), thoth captures
 each recalled note's title + path (a defensive parse of mneme's result, `citations_capture`), and shows a

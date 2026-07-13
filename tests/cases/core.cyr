@@ -1528,6 +1528,19 @@ fn test_mem_seam() {
     citations_reset();
     assert_eq(citations_count(), 0, "citations_reset clears");
 
+    # grounding (0.32.4): scan the reply for [N] refs vs the recalled source count.
+    var gr_ok = "Per [1], the frobnicator code is ZEBRA.";
+    assert_eq(grounding_verdict(gr_ok, strlen(gr_ok), 2), GROUND_OK, "grounding: a valid [1] cited -> OK");
+    var gr_both = "See [1] and also [2] for details.";
+    assert_eq(grounding_verdict(gr_both, strlen(gr_both), 2), GROUND_OK, "grounding: [1]+[2] cited -> OK");
+    var gr_none = "The code is ZEBRA, no attribution.";
+    assert_eq(grounding_verdict(gr_none, strlen(gr_none), 2), GROUND_UNVERIFIED, "grounding: recalled but none cited -> UNVERIFIED");
+    var gr_bad = "As shown in source [3] above.";
+    assert_eq(grounding_verdict(gr_bad, strlen(gr_bad), 2), GROUND_BAD, "grounding: [3] beyond 2 recalled -> BAD (likely fabricated)");
+    var gr_code = "The value is arr[15] in the buffer.";
+    assert_eq(grounding_verdict(gr_code, strlen(gr_code), 2), GROUND_UNVERIFIED, "grounding: large [15] ignored (code, not a citation)");
+    assert_eq(grounding_verdict(gr_ok, strlen(gr_ok), 0), GROUND_NONE, "grounding: 0 sources recalled -> NONE");
+
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
 }

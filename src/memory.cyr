@@ -241,6 +241,85 @@ fn citations_emit() {
     return 0;
 }
 
+# --- grounding indicator (0.32.4): is the reply grounded in the recalled sources? -
+# After a turn that recalled memory, thoth scans its OWN reply for [N] citations and
+# compares them to the recalled source count — an honest, checkable signal (thoth
+# parses ITS reply, never mneme's domain). To avoid false alarms from code array
+# indices, only a TIGHT band counts: [1..M] is a valid citation; [M+1..M+3] reads as
+# a likely-fabricated citation; anything else ([0], large indices) is ignored.
+enum GroundState { GROUND_NONE = 0; GROUND_OK = 1; GROUND_UNVERIFIED = 2; GROUND_BAD = 3; }
+var _g_cited = 0;
+var _g_bad = 0;
+
+# grounding_verdict: scan `reply` (rlen bytes) for [N] refs vs `sources` recalled.
+# Sets _g_cited / _g_bad. GROUND_OK = a valid citation, GROUND_BAD = a beyond-range
+# one (likely fabricated), GROUND_UNVERIFIED = sources recalled but none cited,
+# GROUND_NONE = nothing recalled. Pure — unit-tested.
+fn grounding_verdict(reply, rlen, sources) {
+    _g_cited = 0;
+    _g_bad = 0;
+    if (sources <= 0) { return GROUND_NONE; }
+    if (reply == 0) { return GROUND_UNVERIFIED; }
+    var i = 0;
+    while (i < rlen) {
+        if (load8(reply + i) == 91) {                      # '['
+            var j = i + 1;
+            var num = 0;
+            var got = 0;
+            var scan = 1;
+            while (scan == 1) {
+                if (j >= rlen) { scan = 0; }
+                else {
+                    var c = load8(reply + j);
+                    if ((c >= 48) && (c <= 57)) { num = (num * 10) + (c - 48); j = j + 1; got = 1; }
+                    else { scan = 0; }
+                }
+            }
+            if (got == 1) { if (j < rlen) { if (load8(reply + j) == 93) {   # a "[<digits>]" ref
+                if ((num >= 1) && (num <= sources)) { _g_cited = _g_cited + 1; }
+                elif ((num > sources) && (num <= (sources + 3))) { _g_bad = _g_bad + 1; }
+            } } }
+        }
+        i = i + 1;
+    }
+    if (_g_bad > 0) { return GROUND_BAD; }
+    if (_g_cited > 0) { return GROUND_OK; }
+    return GROUND_UNVERIFIED;
+}
+
+# grounding_emit: the colored grounding line after a reply, IF this turn recalled
+# memory (else silent). green = grounded (cited), amber = unverified (recalled but
+# uncited), red = ungrounded (a citation beyond the recalled sources). line/TUI;
+# suppressed under the GUI turn's OUT_NULL (GUI surfacing rides the feed work).
+fn grounding_emit() {
+    var sources = citations_count();
+    if (sources <= 0) { return 0; }
+    var v = grounding_verdict(hoosh_last_reply(), hoosh_last_reply_len(), sources);
+    ui_emit(ROLE_MUTED, "  grounding: ");
+    if (v == GROUND_OK) {
+        ui_emit(ROLE_GREEN, "grounded");
+        ui_emit(ROLE_MUTED, " (");
+        ofmt_int(_g_cited);
+        ui_emit(ROLE_MUTED, " of ");
+        ofmt_int(sources);
+        ui_emit(ROLE_MUTED, " source(s) cited)");
+    }
+    elif (v == GROUND_BAD) {
+        ui_emit(ROLE_RED, "ungrounded");
+        ui_emit(ROLE_MUTED, " (cited a source beyond the ");
+        ofmt_int(sources);
+        ui_emit(ROLE_MUTED, " recalled)");
+    }
+    else {
+        ui_emit(ROLE_ACCENT, "unverified");
+        ui_emit(ROLE_MUTED, " (");
+        ofmt_int(sources);
+        ui_emit(ROLE_MUTED, " source(s) recalled, none cited)");
+    }
+    oprintln("");
+    return 0;
+}
+
 # _mem_recall_mneme: mneme_search(query) via daimon, marshalled into the injectable
 # "a cstr, or 0" contract. On ANY failure (transport, tool error, empty result) it
 # degrades to the local reader — the seam is bound but this turn still gets memory.
