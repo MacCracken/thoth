@@ -2,6 +2,23 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.4] - 2026-07-13
+
+**Per-message citations — a resumed conversation keeps the sources each reply recalled.**
+
+### Added
+- **Each reply now carries the recalled-source titles it cited** (`src/session.cyr`), persisted so they survive a
+  restart. The message struct gains a lazily-alloc'd citation set; the live capture (`citations_attach_to_last`,
+  `src/memory.cyr`) snapshots the turn's recalled titles onto the just-appended reply — idempotent (clear + re-add),
+  so the multiple assistant-append paths can't double-count. Only the title is stored (the path is captured but
+  never surfaced). New accessors `session_history_citation_count(i)` / `session_history_citation_title(i, j)`.
+- **Persisted as trailing `CITE\t<title_len>\n<title>\n` frames** in the `THOTH-SESSION-2` format — the same unified
+  frame as `CONV`/records, dispatched by token, written right after the reply they belong to so they re-attach to
+  the correct message on load. Titles are flattened (tab/newline → space) so a frame is always unambiguous, and an
+  orphan `CITE` before any record is a safe no-op (never spawns a spurious conversation). `/save` now lists each
+  reply's `_recalled sources:_`. Unit-tested (round-trip beside the model field, idempotent re-attach, the
+  orphan-CITE guard) and live-verified both ways with the real binary.
+
 ## [0.33.3] - 2026-07-13
 
 **Per-message model attribution — a resumed conversation remembers which model wrote each reply.**

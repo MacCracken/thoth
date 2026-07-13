@@ -7,6 +7,14 @@
 
 ## Version
 
+**0.33.4** — **Per-message citations** (2026-07-13). Each reply now keeps the recalled-source TITLES it cited,
+persisted in the `THOTH-SESSION-2` format as trailing `CITE\t<len>\n<title>\n` frames (the same unified frame as
+`CONV`/records, dispatched by token, re-attached to the reply on load). Live capture funnels through
+`citations_attach_to_last` (`src/memory.cyr`, idempotent); the store carries no memory.cyr dependency. `/save` lists
+each reply's recalled sources. New `session_history_citation_count/_title`. Titles flattened (tab/newline → space);
+an orphan CITE is a safe no-op. Unit-tested (round-trip beside the model field + the orphan guard) + live-verified
+both ways. Second cut of the richer persisted message schema (after 0.33.3 model; tool_calls next).
+
 **0.33.3** — **Per-message model attribution** (2026-07-13). Each assistant reply now records the model that
 produced it (`src/session.cyr`) — a stable per-message copy (never an alias of the shared session model buffer a
 mid-session switch overwrites), persisted in the `THOTH-SESSION-2` format via an optional record field

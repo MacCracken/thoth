@@ -222,6 +222,19 @@ fn citations_capture(res) {
     return _cite_n;
 }
 
+# citations_attach_to_last (0.33.4): snapshot this turn's recalled-source titles onto the just-appended assistant
+# message, so they PERSIST with the conversation and a resumed reply keeps its cited sources. Idempotent — clears
+# the message's set then re-adds, so a double call (multiple append paths) can't duplicate. No-op if nothing was
+# recalled. This is the one seam where the citation state (memory.cyr) meets the message store (session.cyr); the
+# store itself carries no memory.cyr dependency (keeps the GUI/render test suites clean).
+fn citations_attach_to_last() {
+    if (_cite_n <= 0) { return 0; }
+    session_history_cite_last_clear();
+    var i = 0;
+    while (i < _cite_n) { session_history_cite_last_add(citations_title(i)); i = i + 1; }
+    return 0;
+}
+
 # citations_emit: the honest "recalled these notes" line (line/TUI; suppressed under
 # the GUI turn's OUT_NULL — GUI surfacing rides the feed work). No-op if none.
 fn citations_emit() {

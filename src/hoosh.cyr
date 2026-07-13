@@ -1041,6 +1041,7 @@ fn hoosh_send(prompt) {
     if (multi == 1) {
         if ((rc == 0) && (_hoosh_acc_len > 0)) {
             session_history_append("assistant", _hoosh_acc, _hoosh_acc_len);
+            citations_attach_to_last();   # 0.33.4: persist this reply's cited sources with the conversation
             sess_persist_save();          # 0.24.2: mirror to [session].file if resume is active
             grounding_emit();             # 0.32.4: is the reply grounded in the recalled sources? (silent if no recall)
         } else {

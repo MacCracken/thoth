@@ -41,7 +41,8 @@ var _sess_cost_unpriced = 0;
 # turn's tool cards above ITS reply; in-memory only, NOT persisted — a resumed message gets turn 0 = no cards,
 # +24 model (0.33.3 — a STABLE COPY of the model id that produced an assistant reply, or 0; persisted, so a resumed
 # conversation remembers which model said what — NOT the shared session._model_buf, which a mid-session switch would
-# overwrite retroactively),
+# overwrite retroactively), +32 citations (0.33.4 — a lazily-alloc'd citation set: the recalled-source TITLES a reply
+# cited, or 0; persisted as trailing CITE frames, so a resumed conversation keeps its cited sources),
 # which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
@@ -258,6 +259,68 @@ fn session_history_turn(i)    { return load64(vec_get(_sess_hist_vec(), i) + 16)
 # per-reply model attribution.
 fn session_history_model(i)   { return load64(vec_get(_sess_hist_vec(), i) + 24); }
 
+# --- per-message citations (0.33.4): the recalled-source TITLES a reply cited -------------------------------
+# The citation set is a lazily-alloc'd arena on the message at +32: count@0, then MSG_CITE_MAX title cstrs at
+# 8+j*8. Live capture (agent/hoosh, reading memory.cyr's citations_*) and the file loader BOTH funnel through
+# session_history_cite_last_add, so the stored / persisted / reloaded titles cap and sanitize identically. Only
+# the title is persisted — the path is captured but never surfaced (memlog/emit/grounding all use the title).
+var MSG_CITE_MAX = 5;
+# _msg_cite_title_dup: a stable capped copy of a title cstr, tabs/newlines flattened to spaces (single-line
+# display, and so a title can never break the CITE frame). Cap matches CONV_TITLE_STORE_MAX (ample for a note title).
+fn _msg_cite_title_dup(s) {
+    var n = strlen(s);
+    if (n > CONV_TITLE_STORE_MAX) { n = CONV_TITLE_STORE_MAX; }
+    var d = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        var b = load8(s + i);
+        if ((b == 9) || (b == 10)) { b = 32; }
+        store8(d + i, b); i = i + 1;
+    }
+    store8(d + n, 0);
+    return d;
+}
+fn _msg_cite_last() {                                    # the most-recently-appended message of the active conv, or 0
+    if (conv_count() == 0) { return 0; }                 # no conversation yet -> nothing to cite (and don't let
+                                                         # _sess_hist_vec's _conv_ensure spawn a spurious conv on a
+                                                         # corrupt CITE-before-any-record file)
+    var v = _sess_hist_vec();
+    var n = vec_len(v);
+    if (n == 0) { return 0; }
+    return vec_get(v, n - 1);
+}
+fn session_history_cite_last_clear() {                   # reset the last message's citation set (idempotent re-attach)
+    var m = _msg_cite_last();
+    if (m == 0) { return 0; }
+    var cs = load64(m + 32);
+    if (cs != 0) { store64(cs, 0); }
+    return 0;
+}
+fn session_history_cite_last_add(title) {                # attach one cited title to the last message (copied, capped)
+    var m = _msg_cite_last();
+    if (m == 0) { return 0; }
+    if (title == 0) { return 0; }
+    var cs = load64(m + 32);
+    if (cs == 0) { cs = alloc(8 + MSG_CITE_MAX * 8); store64(cs, 0); store64(m + 32, cs); }
+    var cn = load64(cs);
+    if (cn >= MSG_CITE_MAX) { return 0; }
+    store64(cs + 8 + cn * 8, _msg_cite_title_dup(title));
+    store64(cs, cn + 1);
+    return 0;
+}
+fn session_history_citation_count(i) {
+    var cs = load64(vec_get(_sess_hist_vec(), i) + 32);
+    if (cs == 0) { return 0; }
+    return load64(cs);
+}
+fn session_history_citation_title(i, j) {
+    if (j < 0) { return 0; }
+    var cs = load64(vec_get(_sess_hist_vec(), i) + 32);
+    if (cs == 0) { return 0; }
+    if (j >= load64(cs)) { return 0; }
+    return load64(cs + 8 + j * 8);
+}
+
 # session_history_append: record (role, content[0..clen)) as a turn, copying the content to stable storage. An
 # ASSISTANT reply is auto-tagged with the CURRENT session model (the one that produced it); user/system messages
 # carry no model. The loader calls _session_history_append_ex directly with the model parsed from the file (which
@@ -272,7 +335,7 @@ fn session_history_append(role, content, clen) {
 # never aliased, because session._model_buf (what session_model() returns) is one shared buffer a mid-session
 # switch overwrites; a raw alias would retroactively rewrite every earlier reply's model.
 fn _session_history_append_ex(role, content, clen, model) {
-    var m = alloc(32);
+    var m = alloc(40);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
@@ -282,6 +345,7 @@ fn _session_history_append_ex(role, content, clen, model) {
     var mv = 0;
     if (model != 0) { if (strlen(model) > 0) { mv = _sess_dup_bytes(model, strlen(model)); } }   # stable capped copy
     store64(m + 24, mv);                     # 0.33.3: per-message model id (or 0)
+    store64(m + 32, 0);                      # 0.33.4: citation set (lazily alloc'd when a cited title is attached)
     var v = _sess_hist_vec();
     vec_push(v, m);
     while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
@@ -403,6 +467,23 @@ fn _sess_write_rec(fd, role, content, model) {
     return ok;
 }
 
+# _sess_write_cite: a trailing "CITE\t<title_len>\n<title>\n" frame (0.33.4) — shares the unified frame with CONV
+# and message records, so the loader dispatches it by token. Emitted right after the assistant record it belongs
+# to, so on load it attaches to the just-appended message. The title is written directly to fd (may exceed 64).
+fn _sess_write_cite(fd, title) {
+    var tlen = strlen(title);
+    var h = 0;
+    store8(_sess_hdr_buf, 67); store8(_sess_hdr_buf + 1, 73); store8(_sess_hdr_buf + 2, 84); store8(_sess_hdr_buf + 3, 69); h = 4;   # "CITE"
+    store8(_sess_hdr_buf + h, 9); h = h + 1;               # '\t'
+    h = _sess_uint_into(_sess_hdr_buf, h, tlen);
+    store8(_sess_hdr_buf + h, 10); h = h + 1;              # '\n'
+    var ok = 0;
+    if (file_write(fd, _sess_hdr_buf, h) != h) { ok = 0 - 1; }
+    if (tlen > 0) { if (file_write(fd, title, tlen) != tlen) { ok = 0 - 1; } }
+    if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+    return ok;
+}
+
 # _sess_write_file: truncate + rewrite `path` in the v2 (all-conversations) format. Magic line carries the active
 # index; then per conversation a "CONV\t<title_len>\n<title>\n" header followed by that conversation's records.
 # Returns 0 on success, -1 on open/short-write failure (caller degrades closed).
@@ -438,6 +519,12 @@ fn _sess_write_file(path) {
         while (mi < mn) {
             var m = vec_get(msgs, mi);
             if (_sess_write_rec(fd, load64(m), load64(m + 8), load64(m + 24)) < 0) { ok = 0 - 1; }
+            var cs = load64(m + 32);                  # 0.33.4: trailing CITE frames for this reply's cited sources
+            if (cs != 0) {
+                var cn = load64(cs);
+                var cj = 0;
+                while (cj < cn) { if (_sess_write_cite(fd, load64(cs + 8 + cj * 8)) < 0) { ok = 0 - 1; } cj = cj + 1; }
+            }
             mi = mi + 1;
         }
         ci = ci + 1;
@@ -571,11 +658,14 @@ fn _sess_load_v2(mend, total) {
                                 var title = 0;
                                 if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); }
                                 conv_load_add(title);    # new conversation, becomes the append target
+                            } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CITE", 4) == 1)) {
+                                # 0.33.4: a cited-source title for the just-appended message
+                                if (num > 0) { session_history_cite_last_add(_sess_dup_bytes(_sess_read_buf + p, num)); }
                             } else {
                                 if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
                                 _session_history_append_ex(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num, model_ptr);
                                 loaded = loaded + 1;
-                            }
+                            } }
                             p = p + num;
                             if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip payload separator
                         }

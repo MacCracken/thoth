@@ -1438,6 +1438,42 @@ fn test_session_persist() {
     assert(streq(session_history_content(1), "hey") == 1, "0.33.3 round-trip: content intact alongside the model field");
     assert(streq(session_history_role(2), "assistant") == 1, "0.33.3 round-trip: role intact alongside the model field");
 
+    # --- 0.33.4: per-message citations persist (alongside the model field, on the same reply) ---
+    session_reset();
+    session_set_model_copy("claude-opus-4-8");
+    session_history_append("user", "q", 1);               # user -> no model, no citations
+    session_history_append("assistant", "a", 1);          # assistant -> model-tagged + cited
+    session_history_cite_last_add("Design Notes");
+    session_history_cite_last_add("API Reference");
+    assert_eq(session_history_citation_count(1), 2, "0.33.4: two citations on the reply");
+    assert(streq(session_history_citation_title(1, 0), "Design Notes") == 1, "0.33.4: citation 0 title");
+    assert(streq(session_history_citation_title(1, 1), "API Reference") == 1, "0.33.4: citation 1 title");
+    assert_eq(session_history_citation_count(0), 0, "0.33.4: user message carries no citations");
+    session_history_cite_last_clear();                    # the attach glue clears then re-adds -> must be idempotent
+    assert_eq(session_history_citation_count(1), 0, "0.33.4: clear resets the citation set");
+    session_history_cite_last_add("Design Notes");
+    session_history_cite_last_add("API Reference");
+    assert_eq(session_history_citation_count(1), 2, "0.33.4: re-add after clear restores both");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_v4"), 0, "0.33.4: v4 write ok");
+    session_reset();
+    _sess_load_file("/tmp/thoth_sess_v4");
+    assert_eq(session_history_citation_count(1), 2, "0.33.4 round-trip: 2 citations restored");
+    assert(streq(session_history_citation_title(1, 0), "Design Notes") == 1, "0.33.4 round-trip: citation 0 restored");
+    assert(streq(session_history_citation_title(1, 1), "API Reference") == 1, "0.33.4 round-trip: citation 1 restored");
+    assert_eq(session_history_citation_count(0), 0, "0.33.4 round-trip: user still uncited");
+    assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.33.4 round-trip: model field intact beside CITE frames");
+    assert(streq(session_history_content(1), "a") == 1, "0.33.4 round-trip: content intact");
+
+    # 0.33.4 hardening: an orphan CITE frame before any record must NOT spawn a spurious conversation (a corrupt file)
+    var fdc = file_open("/tmp/thoth_sess_citefirst", O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    file_write(fdc, "THOTH-SESSION-2\t0\nCITE\t3\nfoo\nuser\t1\nx\n", 38);
+    file_close(fdc);
+    session_reset();
+    _sess_load_file("/tmp/thoth_sess_citefirst");
+    assert_eq(conv_count(), 1, "0.33.4: a leading orphan CITE does not spawn a spurious conversation");
+    assert_eq(session_history_len(), 1, "0.33.4: the record after a leading CITE still loads");
+    assert_eq(session_history_citation_count(0), 0, "0.33.4: the orphan CITE attached to nothing");
+
     _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
     session_reset();              # leave a clean single-conversation store for subsequent tests
     session_history_clear();

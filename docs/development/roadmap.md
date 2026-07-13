@@ -129,11 +129,11 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 - **0.33.x — Multi-conversation store (the structural foundation).** The **keyed store** (0.33.0), the
   **commands** (0.33.1 — `/conversations`, `/new`, `/switch`, `/rename`, `/delete`, auto-title), and
   **multi-conversation persistence** (0.33.2 — the `THOTH-SESSION-2` store→file format, so every conversation
-  survives a restart, not just the active one), and the first cut of the **richer persisted message schema**
-  (0.33.3 — per-message **model** attribution: a resumed reply remembers which model wrote it) have shipped.
-  Remaining on the message schema: persist **citations** + **tool_calls** per message so a resumed conversation
-  keeps its cited sources and tool cards, not just role+text+model. Then a GUI **conversation sidebar** (a left
-  pane like the file tree); cross-conversation **`/search`** (the full-text gap SY also lacks).
+  survives a restart, not just the active one), and and the **richer persisted message schema**
+  (0.33.3 — per-message **model** attribution; 0.33.4 — per-message **citations**: a resumed reply keeps the
+  recalled sources it cited) have shipped. Remaining on the message schema: persist **tool_calls** per message so a
+  resumed conversation keeps its tool cards, not just role+text+model+citations. Then a GUI **conversation sidebar**
+  (a left pane like the file tree); cross-conversation **`/search`** (the full-text gap SY also lacks).
 - **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** Cuts: **.0** **edit-last** + **regenerate-
   last** (rewind history to a turn, re-run); **.1** finish **stop/interrupt** — wire `src/intr.cyr` (the Esc-abort
   substrate) fully through the *agentic* loop (cancel mid-round, not just streaming) + a GUI stop affordance;

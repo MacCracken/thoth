@@ -569,6 +569,18 @@ fn _save_history(fd) {
         var clen = strlen(content);
         if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0; } }
         if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
+        var cc = session_history_citation_count(i);   # 0.33.4: the reply's recalled sources
+        if (cc > 0) {
+            if (_save_write_str(fd, "_recalled sources:_\n") == 0) { ok = 0; }
+            var cj = 0;
+            while (cj < cc) {
+                if (_save_write_str(fd, "- ") == 0) { ok = 0; }
+                if (_save_write_str(fd, session_history_citation_title(i, cj)) == 0) { ok = 0; }
+                if (_save_write_str(fd, "\n") == 0) { ok = 0; }
+                cj = cj + 1;
+            }
+            if (_save_write_str(fd, "\n") == 0) { ok = 0; }
+        }
         i = i + 1;
     }
     return ok;
