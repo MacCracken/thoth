@@ -140,7 +140,7 @@ source <(thoth --completion bash)        # tab-complete thoth's flags (bash or z
 thoth --help                             # the full one-shot reference
 ```
 
-For multi-target builds use the driver — `./scripts/build.sh [linux|agnos|all]`
+For multi-target builds use the driver — `./scripts/build.sh [linux|macos|win|aarch64|agnos|all]`
 (Linux ships; other targets are staged, see
 [ADR-0008](docs/adr/0008-multi-target-builds.md)).
 

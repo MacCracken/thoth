@@ -10,10 +10,13 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.31.5):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.33.7):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`) with tool-call cards + colored diff
-> cards, the model **`shell`** / **`edit`** / **`create_file`** tools (thoth now reads *and writes* code), the
-> memory / git / surface producers, the model picker, the persona + role modality, and the `.thoth/` config home.
+> cards + a conversation sidebar, the model **`shell`** / **`edit`** / **`create_file`** tools (thoth now reads
+> *and writes* code), the **memory arc** (consume mneme — `/remember`, semantic recall, citations, grounding,
+> `/notes`), the **chat-management arc** (named multi-conversation store, persisted across restarts with each
+> reply's model / cited sources / tool calls, `/search`), the git / surface producers, the model picker, the
+> persona + role modality, and the `.thoth/` config home.
 > Per-version detail is in [CHANGELOG](../../CHANGELOG.md) / [state.md](state.md) — **this file is the road AHEAD
 > only**. The **four v1.0 gates below are the remaining blocking work** (AGNOS-dominated); everything else here is
 > non-gating.
@@ -111,11 +114,13 @@ above, deferred to a later ADR.
 The **chat-surface inheritance** below is a *sequenced* near-term line of feature minors (still non-gating — the
 four AGNOS gates keep priority); the rest of this section re-gathers unscheduled.
 
-### Chat-surface inheritance — 0.33.x → 0.3x.x (sequenced)
+### Chat-surface inheritance — 0.34.x → 0.3x.x (sequenced)
 
-> **0.32.x — Memory + RAG (consume mneme): SHIPPED.** The whole memory arc landed — seam + `/remember` binding,
-> the daimon→mneme host wiring (mneme 1.1.0's served endpoint), semantic recall, citations, the grounding indicator,
-> GUI memory surfacing, and `/notes` notebook search. See the CHANGELOG; the remaining arcs are below.
+> **Shipped so far (see CHANGELOG):** **0.32.x — Memory + RAG** (consume mneme: seam + `/remember`, the
+> daimon→mneme host wiring, semantic recall, citations, grounding, GUI surfacing, `/notes`) and **0.33.x —
+> Chat-management** (named multi-conversation store, commands, persistence, the richer persisted message schema —
+> model / citations / tool calls — the GUI conversation sidebar, and cross-conversation `/search`). The remaining
+> sequenced arcs are below.
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is being handed to
 > thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding front-end. The rule is the same
@@ -156,7 +161,7 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   `list_dir` (project awareness, [ADR-0015](../adr/0015-project-read-tools-jailed-default-on.md)).
 - A lightweight **project-map hint** in the system prompt, so the agent gets a cheap directory
   overview without a `list_dir` round-trip.
-  (Full mneme binding moved to the **scheduled 0.32.x arc** above — mneme is now Cyrius-ported.)
+  (Full mneme binding **shipped** in the 0.32.x memory arc — see CHANGELOG.)
 
 ### Polish backlog (gathers until it earns a sweep minor)
 

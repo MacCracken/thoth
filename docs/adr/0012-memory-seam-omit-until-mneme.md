@@ -3,6 +3,14 @@
 **Status**: Accepted
 **Date**: 2026-07-02
 
+> **Update (0.32.x — the native branch is now live).** mneme has since been **Cyrius-ported and is consumed** — the
+> 0.32.x memory arc wired the seam through daimon's MCP registry: `/remember` → `mneme_create_note`, per-turn
+> semantic recall via `mneme_search` (0.32.2), cited sources (0.32.3), the grounding indicator (0.32.4), and
+> `/notes` vault browse (0.32.6). The **producer swap this ADR anticipated has completed**: the local
+> `.thoth/memory/` reader is now the *degraded fallback* when daimon does not advertise the `mneme_*` tools, not the
+> only path. The decision below stands as recorded; the "not yet ported" framing in the Context/Consequences is
+> historical. See the CHANGELOG (0.32.x) and [architecture note 002](../architecture/002-capability-ladder.md).
+
 ## Context
 
 Users want thoth to carry **project-local memory** — read a project's context

@@ -58,7 +58,14 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /personas           list the available personas
 {(o> /role [name]        show or set the persona's role (the trait-derived third axis)
 {(o> /git [path]         the working repo — branch/status, or a per-file diff (consumes sit)
-{(o> /remember <fact>    save a durable fact to project memory (.thoth/memory/) — t-ron-gated
+{(o> /remember <fact>    save a durable fact to project memory (mneme when hosted, else .thoth/memory/) — t-ron-gated
+{(o> /notes <query>      browse the mneme knowledge base directly (needs the memory seam bound)
+{(o> /conversations      list conversations (also /convos) — active marked, with message counts
+{(o> /new [title]        start a new conversation
+{(o> /switch <n>         switch to conversation n (see /conversations)
+{(o> /rename <title>     rename the current conversation
+{(o> /delete <n>         delete conversation n
+{(o> /search <text>      search every conversation for text (jump with /switch)
 {(o> /allow <path>       grant the agent a read root beyond the launch dir
 {(o> /save <file>        export the conversation transcript
 {(o> /reload             re-read .thoth/config.cyml mid-session (hot fields apply)
@@ -105,7 +112,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/config.cyr` — runtime config from `.thoth/config.cyml` (seam URLs, toggles); resolves
   the `.thoth/` home (walk up from CWD, then `~/.thoth`; legacy `./thoth.cyml` fallback).
 - `src/seams.cyr` — the capability-seam registry (the five spine seams + status).
-- `src/session.cyr` — session state, multi-turn history, the avatara persona overlay.
+- `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls.
 - `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`).
 - `src/daimon.cyr` — the daimon seam client (MCP tool list + call).
 - `src/agent.cyr` — the model-driven agentic tool-calling loop.
@@ -122,12 +129,14 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI.
 - `src/tui.cyr` — the T2 alt-screen front-end: status bar, composer, palette, painter (M7).
 - `src/gui/` — the sovereign T3 desktop GUI (`thoth gui`): the draw-command IR (`gdraw`) + kashi CPU rasterizer
-  (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`) + the Wayland window seam (`gwindow`) + present
-  loop (`gpresent`) + evdev input (`ginput`). Renders the same view-models as the line/TUI tiers, plus tool-call
-  cards + colored diff cards.
+  (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`) + the Wayland window seam
+  (`gwindow`) + present loop (`gpresent`) + evdev input (`ginput`). Renders the same view-models as the line/TUI
+  tiers, plus tool-call cards + colored diff cards, a per-turn memory/grounding strip (`gmem`), and a Ctrl+K
+  conversation sidebar (`gconv`) over the `conv_*` store.
 - `src/inhist.cyr` — the composer input-history recall ring + opt-in persistence (0.11.x).
 - `src/oneshot.cyr` — the one-shot / argv front-door (`thoth 'task'`, `--json`, `-o`, `--completion`, `--tier`).
-- `src/memory.cyr` — the opt-in project-memory seam: reads `.thoth/memory/` and injects it (`/remember`).
+- `src/memory.cyr` — the memory seam: consumes **mneme** via daimon when hosted (`/remember`, semantic recall, citations, grounding, `/notes`), degrading to the local `.thoth/memory/` reader otherwise.
+- `src/memlog.cyr` — the per-turn ring of recalled-source titles + grounding verdict (feeds the GUI `gmem` strip, 0.32.5).
 - `src/mention.cyr` — `@file` mention expansion (appends a file's contents to the message).
 - `src/project.cyr` — the default-on jailed `read_file` / `list_dir` tools the agent uses to see the project.
 - `src/edit.cyr` — the opt-in, jailed, `thoth_edit`-gated model `edit` / `create_file` write tools (ADR-0017).

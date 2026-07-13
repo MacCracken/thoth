@@ -70,7 +70,7 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
   path** was live-driven end-to-end against a real t-ron allow-policy (parse → jail → t-ron VK_ALLOW →
   surgical apply → `file_write_all` → file changed on disk).
 - **Residuals (honest, not fully fixed here)**:
-  - ~~**Non-atomic write.**~~ **RESOLVED in 0.31.6** (cyrius **6.4.57** `file_write_atomic`). The original
+  - ~~**Non-atomic write.**~~ **RESOLVED in 0.32.0** (cyrius **6.4.57** `file_write_atomic`). The original
     `file_write_all` opened `O_TRUNC` then did a single write, so a short write (disk-full/quota) or an error
     left the file truncated — a known residual because a crash-safe replace needs a portable temp-file+`rename`
     and no portable `xrename` existed (`sys_rename`'s arity differs per target). The stdlib follow-up was
@@ -86,7 +86,7 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
     it refuses an existing path, so it can never blind-clobber; wholesale overwrite of an existing file is
     deliberately *not* offered (that would be a clobber surface — modifying stays `edit`'s surgical job). It feeds
     `editlog` with an empty "old", so a new file renders as all-green additions on its card. Create uses the
-    stdlib `file_create_exclusive` (**0.31.6**, cyrius 6.4.57) — a true kernel existence check, independent of
+    stdlib `file_create_exclusive` (**0.32.0**, cyrius 6.4.57) — a true kernel existence check, independent of
     read permission (`file_exists` alone is only an `O_RDONLY` readability probe and would miss a
     writable-but-unreadable file) that also refuses a trailing symlink. POSIX enforces it atomically via
     `O_CREAT|O_EXCL`; AGNOS (no `AO_*` exclusive bit) and Windows (`O_EXCL`→`CREATE_NEW` not yet mapped) degrade

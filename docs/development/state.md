@@ -2478,469 +2478,58 @@ not routed by the Mach-O ARM translation (ESYSXLAT/__got)" warnings: the
 The basic driver path is fine; patra's `lseek`/`futex` (t-ron's audit ledger) will
 fault at runtime once a `[tron].policy` is configured, until that cycc fix lands.
 
-## Source
+## Surface at a glance
 
-The driver core (M2), the hoosh seam (M3), and the tool spine (M4):
+> The per-file source map lives in the getting-started guide's [source layout](../guides/getting-started.md); what
+> shipped in each release is the **version log above** + [CHANGELOG](../../CHANGELOG.md). This is a current summary
+> by subsystem, not a per-module changelog — that per-module duplication had frozen at ~0.11.x and was removed in the
+> 0.33.7 doc sweep.
 
-- `src/main.cyr` — entry; includes the modules callee-first, runs
-  `config_load` + `gate_init` then the loop.
-- `src/repl.cyr` — the read → dispatch → iterate loop.
-- `src/commands.cyr` — input classification + command handlers (incl. M4's
-  `/tools` and `/call`; **0.5.0:** `/audit`, `/state` shows the stream mode;
-  **0.5.1:** `/reset`, `/state` shows the multi-turn context + count; **0.6.0:**
-  free-text turns route to the agentic loop when `agent_enabled`, `/state` shows
-  the agent mode; **0.6.2:** `/models` lists the hoosh gateway's catalog).
-  **0.11.4 ([alias] macros):** `dispatch(line)` is now a thin wrapper over
-  `_dispatch_d(line, depth)`; at `CMD_UNKNOWN_SLASH` it tries `alias_expand(line, depth)`
-  (`_alias_name_of` bare token + value/arg assembly into a per-depth, cap-bounded buffer)
-  and re-dispatches one level deeper, bounded by `ALIAS_MAX_DEPTH` (guard before the write,
-  so a cycle is refused, never an OOB). An `aliases` row in `/state` (only when > 0). An
-  alias to `/run`/`/write`/`/call` re-dispatches through the SAME t-ron gate; built-ins
-  always win (aliases only fill the unknown-slash gap). **0.11.5 (`/dry`):** `cmd_dry`
-  (`CMD_DRY`) previews the request `hoosh_send` would compose for a task (multi-turn →
-  `hoosh_build_dry`, else `hoosh_build_request`) and skips the POST — side-effect-free +
-  network-free; prints endpoint/flags/body, degrades honestly when the seam is absent, and
-  annotates (never fetches) the agentic `tools` array.
-- `src/seams.cyr` — the capability-seam registry; statuses fully dynamic. **0.6.5
-  (M6 ladder):** adds the **capability-effect** dimension (`CapState`
-  full/degraded/absent) on top of the binding mode — `seam_cap_state` derives it
-  from live status (t-ron degrades closed, never absent), `seam_cap_full` /
-  `seam_cap_fallback` carry the prose; `cmd_seams` renders both axes. See
-  [architecture note 002](../architecture/002-capability-ladder.md).
-- `src/session.cyr` — session state (incl. the copy-on-set model) + the avatara
-  persona overlay (**M5**: `persona_*` sourced from `egyptian_thoth()` via the
-  `prof_*` accessors; `persona_system_prompt()` builds the soul+spirit+operating
-  clause once). **0.5.1 (multi-turn):** the capped conversation history
-  (`session_history_*` — append/accessors/pop/clear; stable content copies).
-  **0.10.2 (tokens):** the session token tally (`session_tokens`/`session_tokens_seen`/
-  `session_add_tokens` — running sum + a seen-flag for omit-until-present; cleared by
-  `/reset`). **0.10.3 (cost):** the session cost tally (`session_cost_micro`/`_seen`/
-  `_unpriced_count` + `session_add_cost`/`session_note_unpriced`) and the pure `cost_fmt`
-  `$d.cc` formatter (truncates down); also cleared by `/reset`.
-- `src/roundlog.cyr` — **0.7.0**: the session-local agentic tool-**round** trace
-  `/audit` surfaces. A ring (last 16 rounds) of `{turn, round, calls[]}` with each
-  call's verdict (`allow`/`deny`/`noname`) + ok/err; recorded by the agentic loop
-  (`roundlog_open`/`roundlog_add_call`), rendered by `roundlog_report`, cleared by
-  `/reset`. Display-only loop-structure view, orthogonal to and independent of
-  t-ron's security chain — owns no security logic, never touches the libro chain.
-- `src/config.cyr` — `thoth.cyml` runtime config (`[hoosh]`, **M4:**
-  `[daimon]` url, `[tron]` policy/agent; **0.5.0:** `[hoosh].stream`
-  bool via a `_cfg_bool` reader; **0.5.1:** `[hoosh].history`; **0.5.2:**
-  `[log].file` / `[log].level`; **0.10.3:** the `[pricing.<model>]` table — `_price_load`
-  caches each model's `input`/`output` rate (micro-USD per 1K tokens) into a stable fixed
-  table at load, `config_price_input`/`_output` look it up verbatim by model id, `_cfg_int`
-  parses an integer rate (`-1` absent, `0` explicit-free); **0.11.4:** the `[alias]` table —
-  `_alias_load` caches each `name = "expansion"` pair into a stable fixed table (cap 64;
-  blank skipped, duplicate key keeps the first, a name ≥ 256 chars skipped as unmatchable),
-  `config_alias_lookup`/`config_alias_count`).
-- `src/log.cyr` — **0.5.2**: structured driver-event logging over the vendored
-  sakshi logger. `log_init` binds to `[log]` (off unless configured); the pure
-  `event=… key=value` builder (`log_begin`/`log_kv_str`/`log_kv_int`/`log_message`)
-  + `_log_parse_level` + the level-gated `log_commit`. Instruments `gate.cyr`
-  (authz verdicts), `hoosh.cyr` (turn results), `commands.cyr` (model switch).
-- `src/hoosh.cyr` — **M3**: the hoosh seam client (request build, sandhi POST,
-  response/error extraction). **M5**: `hoosh_build_request` takes a `system`
-  param; `hoosh_send` passes the avatara persona as a `{role:system}` message.
-  **0.5.0:** SSE streaming — `hoosh_build_request` gained a `stream` param;
-  `_hoosh_stream_turn` + `_hoosh_sse_cb` print `hoosh_extract_delta` deltas as
-  the frames arrive (default on, `[hoosh].stream=false` reverts to blocking).
-  **0.5.1 (multi-turn):** `hoosh_build_messages` + `_hoosh_history_start`
-  serialize the byte-budgeted conversation tail; `_hoosh_blocking_turn` extracted;
-  both turn paths leave the reply in `_hoosh_acc` for history; `HOOSH_REQ_CAP`
-  raised to 256 KiB. **0.6.2 (catalog):** `hoosh_list_models` GETs `/v1/models`
-  and prints the catalog (`_hoosh_models_url` builds the endpoint, pure
-  `hoosh_extract_models` returns the `data` array). **0.10.2 (tokens):** pure
-  `hoosh_extract_usage` (+ shared `_hoosh_usage_total`) reads `usage.total_tokens` from a
-  blocking body or a streaming usage frame (`-1` when absent); both turn paths feed it to
-  `session_add_tokens`; streaming requests send `stream_options:{include_usage:true}` and
-  `_hoosh_sse_cb` reads content + usage on one parse. **0.10.3 (cost):** generalized to
-  `_hoosh_usage_field(v,key)` (prompt/completion/total); pure `hoosh_cost_micro` +
-  `_hoosh_account_usage` price each response at the ACTIVE model's `[pricing]` rate (price-at-
-  accumulate) — a half-declared rate degrades to unpriced+noted, never billed at `$0`.
-  **0.11.5 (`/dry`):** `hoosh_build_dry` composes the request body NON-destructively (history
-  tail + the pending user turn, no append) so `/dry` is side-effect-free; `hoosh_model_cur`
-  exposes the exact model precedence; `hoosh_dry_buf` lazily allocates the shared request buffer.
-  **0.11.6 (JSON envelope):** `_json_escape_n_into_cap` is the length-bounded escape core (so
-  the one-shot reply, held by length, escapes faithfully incl. an embedded NUL);
-  `_json_escape_into_cap` now delegates to it at `strlen` (byte-identical for all callers).
-- `src/daimon.cyr` — **M4**: the daimon seam client (MCP host registry list,
-  tool call build/POST, MCP tool-result extraction). **0.6.0:** `daimon_invoke`
-  (invoke + return result as a cstr) and `daimon_tools_value` (fetch the tool
-  array) for the agentic loop.
-- `src/agent.cyr` — **0.6.0**: the model-driven agentic tool-calling loop.
-  Advertises daimon's tools to hoosh (`agent_format_tools`), parses `tool_calls`
-  (`agent_tool_calls`/`agent_tc_*`/`_agent_raw_tool_calls`), assembles each
-  request (system + budgeted history + ephemeral tool rounds + `tools`), and
-  drives the loop (`agent_turn`) — each tool call t-ron-gated, results fed back as
-  `{role:tool}`, capped at `AGENT_MAX_ITERS`. `agent_enabled` gates on
-  daimon-wired + `[hoosh].tools`. **0.6.1:** streams via SSE when `[hoosh].stream`
-  is on (content live; `tool_calls` assembled from fragmented deltas by index, via
-  `_agent_accum_delta`/`_ag_build_array`); per-iteration split into
-  `_agent_iter_stream`/`_agent_iter_block` with a shared outcome.
-- `src/gate.cyr` — **M4**: the t-ron authorization choke point (`gate_init` /
-  `gate_authorize`) + the fail-closed `confirm` fallback. **0.5.0:**
-  `gate_audit_report` surfaces t-ron's libro-backed audit chain (counts,
-  integrity, risk score, recent events) for the `/audit` command; the pure
-  `audit_kind_str` verdict-label is thoth's only glue over it.
-- `src/exec.cyr` — the portable local shell escape for `/run`.
-- `src/util.cyr` — buffered stdin `read_line`, `emit`/`emit_n`, small helpers.
-  **0.9.1:** the **output-capture sink** — `_out_mode` (OUT_FD1 default / OUT_RING),
-  `out_mode`/`out_mode_set`, `emit_raw`/`emit_raw_n` (always fd 1, blind to the mode —
-  the TUI chrome + painter use these), the OUT_RING branch in `emit`/`emit_n` (→
-  `feed_write`), and the mode-aware stdlib shadows `oprintln`/`ofmt_int` (byte-identical
-  to `println`/`fmt_int` under OUT_FD1; the 9 dispatch files call these so their output
-  is captured under OUT_RING). **0.11.0:** the **`OUT_NULL`** discard mode (one-shot arms
-  it around the turn so chrome is suppressed), `emit_err`/`emit_err_n` (always fd 2, for
-  one-shot diagnostics), and the `_one_shot` flag (`one_shot_active`/`one_shot_set` — the
-  t-ron confirm reads it to fail closed).
-- `src/oneshot.cyr` — **0.11.0**: the one-shot / argv front-door. PURE + unit-tested:
-  `_oneshot_parse` (the argv classifier → `ONESHOT_NONE`/`RUN`/`VERSION`/`HELP`, joining
-  positionals into a bounded heap task buffer) + `oneshot_mode` (snapshots `argc`/`argv`).
-  I/O: `_oneshot_append_stdin` (slurps stdin as the payload when fd 0 is not a tty) and
-  `one_shot_run` (runs the turn under `OUT_NULL`, then prints only `hoosh_last_reply` to
-  fd 1; stderr error + nonzero exit otherwise). Routes through the existing
-  `cmd_task → hoosh_send/agent_turn` seam — no new spine path. [ADR-0011]. **0.11.6 (JSON envelope):** the `--json`/`-j`
-  modifier flag (an `elif` on the `-p` chain — sets `_oneshot_json` without forcing a run;
-  reset before the `n<=1` early return) + the pure `oneshot_json_envelope`
-  (`{response, model, turns, tokens?, cost?, elapsed_ms}`; reply escaped by length,
-  tokens/cost omit-until-present, `elapsed_ms` via `clock_now_ms`); a sized buffer
-  guarantees valid JSON; failure emits nothing to stdout in either mode. **0.11.7 (`-o`
-  tee):** the `-o`/`--out <file>` modifier flag (consumes the next argv token as the path,
-  not a positional; does not force a run; reset before the early return) + `_oneshot_write_out`
-  (writes the answer + a trailing newline so the file matches stdout, create+truncate at 0644
-  via the portable `lib/io.cyr` wrappers; degrades closed). The user's OWN redirection — NOT
-  t-ron-gated (the path is argv-fixed before the turn; the model can't influence it). **0.11.8
-  (shell completion):** the `--completion`/`--completions <shell>` print-and-exit mode
-  (`ONESHOT_COMPLETION`, short-circuits like `--version`, captures the next token as the shell →
-  default bash, unsupported → stderr + nonzero) + `oneshot_print_completion` →
-  `_completion_bash`/`_completion_zsh` (EMIT static scripts; no spine path / security surface;
-  flag lists mirror `_oneshot_parse`). **0.11.10 (`--tier`):** the `--tier=<mode>` / `--tier <mode>`
-  global modifier (maps to a `TIER_*` pref via `ui_tier_pref_from_name` into `_oneshot_tier`/
-  `_oneshot_tier_bad`; not a mode, not a run-forcer; the space form won't swallow a following flag);
-  `--help` + both completion scripts gain it (`auto rich simple`). `main.cyr` applies it via
-  `ui_set_tier_pref` before `ui_detect_tier`, warning on a bad value. Replaces `THOTH_TIER`.
-- `src/feed.cyr` — **0.9.1**: the self-managed T2 feed. A ring (2048 lines × 2 KiB, one
-  4 MiB bump alloc) capturing dispatch output (`feed_write` seals a slot per newline,
-  evicts oldest O(1) when full; escape-boundary-aware store truncation), plus the PURE
-  load-bearing `feed_clip(dst, dst_cap, src, src_len, max_cols)` — paints a stored line
-  into a width-W column, color escapes verbatim (zero width), never severing a CSI /
-  UTF-8 glyph, suppressing `ESC[…K`, `dst_cap`-bounded. The painter (`feed_repaint`),
-  the dispatch-window capture (`tui_run_line`), and the confirm bracket
-  (`tui_confirm_begin`/`_end`, called from `gate.cyr`) live in `src/tui.cyr`. Replaces
-  0.9.0's DECSTBM scroll-region; the prerequisite for the file-tree pane + SIGWINCH.
-  **0.9.2:** `feed_repaint` also renders the unsealed pending line (incremental streaming
-  paint via `feed_stream_tick`, pinged from the SSE callbacks). **0.11.3 (soft-wrap):** the
-  PURE `feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols)` paints a visible-column
-  WINDOW of a stored line (carries SGR color across a wrap via a 64-byte whole-or-drop carry;
-  same CSI/UTF-8/`ESC[…K`/`dst_cap` guarantees as `feed_clip`, which is UNCHANGED), plus
-  `feed_rows_for` (`ceil(vis/width)`, blank = 1 row) and `_feed_total_phys` (the document's
-  soft-wrapped height); `feed_scroll()` is redefined to PHYSICAL rows. `feed_repaint`
-  (`src/tui.cyr`) now reflows each wide line across rows instead of truncating, and
-  `tui_relayout` clamps the scroll offset on a width change. **0.11.9 (rules + multi-line
-  composer):** two faint rules (`tui_draw_rule`); the layout geometry is pure over
-  `(rows, lines, show)` (`tui_feed_top`→3, `tui_feed_bot`/`tui_composer_top`/`_height`/
-  `tui_sep_bottom_row`); the composer renders multiple logical lines (`led_lines`/`led_cursor_*`/
-  `led_line_*`/`led_up`/`led_down`, `_comp_vscroll_first` + `_comp_row_hstart`) and grows upward;
-  a height-delta gate (`tui_after_edit`→`tui_repaint_body`) reflows the feed without flashing;
-  `KEY_NEWLINE` (Alt+Enter `ESC CR`, or the kitty `CSI 13;<mod>u` after a `CSI > 1 u` push)
-  inserts a `\n`; the unified CSI parser + `_tui_csi_final`/`_tui_kitty_u` keep every legacy key
-  byte-identical off-protocol and map the kitty Ctrl-combos back on-protocol; the greeting states
-  the live hoosh status via a reachability PROBE (`hoosh_reachable` — silent GET; `Status: READY`
-  only when the gateway answers, else `hoosh unreachable — <url>` / `hoosh absent`).
-- `src/ftree.cyr` — **0.9.3**: the file-tree pane. PURE + unit-tested: the tree/feed
-  layout geometry (`tui_tree_w`/`tui_feed_left`/`tui_feed_width`) and the flattened-tree
-  model (parallel fixed-slot arrays; `_ftree_insert_at` splices children on expand,
-  `ftree_collapse_at` removes a subtree, `ftree_path` reconstructs an absolute path by
-  walking ancestors). I/O (live): `ftree_load`/`ftree_expand` list directories via
-  `lib/fs.cyr` `dir_list`/`is_dir`, dirs-first, rooted at `$PWD` (portable — no
-  `SYS_GETCWD`). The paint (`tui_draw_tree`: tree cols `[1, tree_w]` + `│` separator, a
-  reverse-video selection bar) + the nav keys (Ctrl-B/Tab/↑↓→← + focus) live in
-  `src/tui.cyr`; `feed_repaint` paints the feed into `[tree_w+2, cols]` when shown.
-- `src/inhist.cyr` — **0.11.1**: the composer input-history recall ring. PURE +
-  unit-tested: a 128-slot ring of SUBMITTED lines (same shape as `src/feed.cyr` — head/
-  count/`% INHIST_CAP`, O(1) eviction) with `inhist_push` (ignoredups vs the newest +
-  skip-empty), `inhist_entry_ptr`/`_len`, and the nav cursor
-  `inhist_nav_up`/`_down`/`_reset`/`_at_draft`/`_pos` over `[0, count]` (count == "the live
-  draft"). DISTINCT from the multi-turn conversation history (`session_history_*`). The TUI
-  glue (`_tui_recall_*` — draft stash + load-into-composer) and the Up/Down `tui_loop`
-  binding (composer focus, palette-gated) live in `src/tui.cyr`; TUI-only, so the REPL/piped
-  floor is untouched. **0.11.2** adds the OPT-IN persistence I/O section (gated on
-  `[history].file`): `_inhist_load_file` (streaming load → ring), `_inhist_probe_writable`
-  (non-destructive create-if-absent at 0600, no truncate), `_inhist_write_file`
-  (rewrite-the-ring on save; checks write returns → -1 on short write), and
-  `inhist_persist_init`/`_save`/`_active`/`_broke`/`_broke_ack` — degrade-closed (unwritable
-  or mid-session write failure announced, never faked). Portable via lib/io.cyr
-  (`file_open`/`_read`/`_write`/`_close`); 0600 is the best-effort CREATE mode, never
-  asserted in the UI. **0.11.9** adds newline escaping to the persist I/O (`_inhist_escape_into`
-  + the unescaping load loop) so a multi-line entry (from the multi-line composer) round-trips
-  the line-oriented file instead of shattering; backward-compatible (a stray `\X` is preserved).
-- `src/vendor/` — committed dist bundles. **Spine**: `bote-core.cyr`
-  (bote 3.1.1, the MCP protocol), `t-ron.cyr` (t-ron 2.1.7, authorization),
-  `libro.cyr` (libro 2.7.10, t-ron's audit chain), `avatara.cyr` (avatara 2.8.0,
-  the Thoth/Librarian archetype). **Substrate (floor)**: `sit-read.cyr` (sit
-  1.3.4, git read profile) + `sankoch.cyr` (sankoch 2.5.1, zlib), `darshana.cyr`
-  (darshana 0.9.0, TTY/raw-mode), `vyakarana.cyr` (vyakarana 2.2.3, syntax
-  tokenizer), `kashi.cyr` (kashi 1.0.2, the T3 GUI VGA 8×16 font). Re-sync via
-  `scripts/sync-{bote,tron,libro,avatara,sit}.sh` (darshana/kashi copied from
-  their dist by hand — no sync script yet); never hand-edit.
-
-Binary: ~16.6 MB (`build/thoth`, x86_64-linux) — the sandhi/TLS transport plus
-the vendored spine + substrate bundles (sigil/sankoch static tables, the T3 GUI,
-kashi font) dominate the static data. Grew ~6× from the pre-GUI ~2.6 MB.
+- **Driver core** — `main` / `repl` / `commands` (the command hub: `/help`, `/state`, `/seams`, `/model(s)`,
+  `/read`/`/write`/`/run`, `/tools`/`/call`, `/audit`, `/dry`, `/theme`, `/persona(s)`/`/role`, `/git`,
+  `/remember`/`/notes`, the `/conversations`/`/new`/`/switch`/`/rename`/`/delete`/`/search` chat-management set,
+  `/save`, `/reload`, and `[alias]` macros) / `config` (the `.thoth/` home) / `seams` (the capability registry,
+  two-axis ladder) / `gate` (the t-ron choke point).
+- **Session + conversation** — `session` (session state, per-message model, and the **keyed multi-conversation
+  store** — the `conv_*` API + `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool
+  calls), `roundlog` / `editlog` / `memlog` (the tool-round / edit-diff / memory-grounding rings), `inhist`
+  (composer history recall).
+- **Spine clients** — `hoosh` (inference, streaming, `/models`), `daimon` (MCP list/call), `agent` (the model-driven
+  agentic loop), `memory` (consume **mneme** via daimon — recall/citations/grounding/`/notes` — degrading to the
+  local `.thoth/memory` reader).
+- **Model tools** — `project` (jailed `read_file`/`list_dir`, default-on), `edit` (jailed `edit`/`create_file`,
+  `thoth_edit`-gated), `shell` (`thoth_shell`-gated), `mention` (`@file` expansion), `git` (consumes sit).
+- **Presentation ladder** — `ui` + `surface` (the shared, tier-agnostic status **view-model**) drive three
+  renderers: line-mode, the **T2 TUI** (`tui` / `feed` / `ftree` / `mdhl` / `diff` / `intr`), and the sovereign
+  **T3 desktop GUI** (`src/gui/*`: the `gdraw` IR + `graster` rasterizer + the `gstatus`/`gtree`/`gtool`/`gfeed`/
+  `gmem`/`gconv` view-builders + `gwindow`/`gpresent`/`ginput`).
+- **Front doors** — the interactive REPL/TUI/GUI plus the one-shot `oneshot` argv path (`thoth 'task'`, `--json`,
+  `-o`, `--completion`, `--tier`).
 
 ## Tests
 
-- `tests/thoth.tcyr` — **1298 assertions** over the pure logic (incl. the status
-  view-model `test_surface`, the T3 GUI `test_gui`, and every post-0.11 group): M2's
-  `classify_input`, `token_is` / `arg_after`, the seam registry, session state,
-  `cstr_starts_with`; M3's JSON escaping, chat-request building,
-  response/error extraction, config defaults, and the copy-on-set model
-  switch; M4's daimon call building + MCP result extraction, t-ron verdicts
-  through the real vendored engine (allow/deny globs, deny-by-default unknown
-  agent/tool — doubling as the libro `chain_append` SIGILL canary), and the
-  `[daimon]`/`[tron]` config defaults; M5's persona group (identity sourced from
-  the avatara archetype, soul/spirit prose, the built system prompt) and the
-  hoosh request-shape cases (no system preserves the prior shape, empty system
-  omitted, non-empty system prepended as `{role:system}`); and **0.5.0's**
-  audit group — three real `tron_check` calls then asserting the logged
-  event/denial counts, the libro chain length + integrity, newest-first
-  ordering, and the pure `audit_kind_str` label; and **0.5.0's** streaming
-  group — the `stream:true` request shape, `hoosh_extract_delta` across
-  content/role-only/finish/`[DONE]` frames, and the `[hoosh].stream` toggle
-  through the real TOML parser; and **0.5.1's** multi-turn group — history
-  append/accessors + the stable-copy guarantee, pop/clear, the drop-oldest cap,
-  `_hoosh_history_start` budgeting, and the `hoosh_build_messages` shape; and
-  **0.5.2's** logging group — the structured `event=… key=value` builder (incl.
-  null-value `-` and negative ints), the `_log_parse_level` cases, and the
-  `[log]` config defaults / `log_active`-off; and **0.6.0's** agentic group —
-  tool advertisement formatting, `tool_calls` parsing (id/name/arguments + the
-  no-calls case), the raw tool_calls extractor, the agentic request shape,
-  `agent_enabled` gating, and (**0.6.1**) the streamed delta assembly (fragmented
-  `arguments` reassembled, re-parsed through the same accessors); and **0.6.5's**
-  capability-ladder group — the effect-state resolver (vendored seams full,
-  hoosh/daimon absent unconfigured, t-ron degrades closed not absent), the
-  `cap_state_label` cases, and the full/fallback prose semantics. The 0.7.0–0.9.1
-  groups extend it: **0.7.0** `test_roundlog` + `test_parallel` + `test_bounds_hardening`
-  (the agentic tool-round trace, the parallel snapshot copy, the untrusted-input clamp);
-  **0.8.x** `test_ui` + `test_diff` + `test_highlight` (the presentation surface, the
-  LCS diff core, the vyakarana highlighter); **0.9.0** `test_tui` (the composer line
-  editor + layout geometry + palette matchers); and **0.9.1** `test_feed` +
-  `test_feed_ring` + `test_capture` (the escape-aware clip — width/`dst_cap`/`ESC[K`/
-  UTF-8 — the ring seal/evict/flush machine, and the OUT_RING capture sink's
-  logical-line reconstruction + `oprintln`/`ofmt_int` byte-identity); and **0.9.2**
-  `test_spinner` (the pure braille frame cycle — `spin_glyph` mod `SPIN_FRAMES`,
-  `spin_advance`); and **0.9.3** `test_ftree` (the file-tree layout geometry +
-  flattened-tree model: append/insert/move-clamp/collapse-subtree, the ancestor-walk
-  `ftree_path`, and a real `src/` dir-listing smoke); and **0.9.4** the `/clear`
-  classification, `feed_clear` (ring + scroll reset), and the `/c` palette match; and
-  **0.10.0** `test_theme` (the theme axis — dark byte-identical anchor, the light palette,
-  the T1 SGR-table rebuild on a switch, and the PT_PLAIN floor staying empty under both
-  themes); and **0.10.2** `test_usage` (the token producer — `hoosh_extract_usage` across a
-  blocking body, a streaming usage frame, a plain delta, a `usage` without `total_tokens`,
-  and an unparseable body; the session accumulator's sum / seen-flag / absent-ignored /
-  `/reset`-clears semantics); and **0.10.3** `test_cost` (the pricing math, the `$d.cc`
-  formatter truncating down, the `[pricing.<model>]` table with verbatim dashed-id match +
-  missing-key→`-1`, the cost accumulator + honest-omit flags, an end-to-end price-at-accumulate
-  assertion through the active model, and the unpriced- + half-declared-model degrade paths);
-  and **0.11.0** `test_oneshot` (the pure argv classifier — `NONE`/`RUN`/`VERSION`/`HELP`,
-  the `-p` force, flag-vs-positional, positional joining — and the bounded task buffer,
-  driven by a hand-built argv snapshot); and **0.11.1** `test_inhist` (the input-history
-  ring — store/ignoredups/skip-empty/eviction/order — the full nav state machine
-  draft↔newest↔oldest with clamps + the draft boundary, and the composer load/stash/restore
-  glue); and **0.11.2** `test_inhist_persist` (the opt-in history file — load→ring, the
-  NON-DESTRUCTIVE-init guarantee (file bytes unchanged after binding), save→rewrite→reload
-  round-trip, the unwritable-path degrade; the 0600 create-mode asserted empirically by
-  `stat` after the suite); and **0.11.3** `test_softwrap` (`feed_rows_for`, the windowed
-  `feed_clip_seg` — skip/window, SGR continuity across a wrap + cumulative carry, `ESC[K`,
-  `dst_cap`, UTF-8, and a forced-PT_ANSI defensive-close proof — and `_feed_total_phys`); and
-  **0.11.4** `test_alias` (the `[alias]` table load — blank/dup-first-wins/over-256-name skip —
-  the bare-token name extraction, `alias_expand` value+args assembly, per-depth buffer
-  disjointness, and the no-alias byte-identical floor); and **0.11.5** `test_dry` (the exact
-  `hoosh_build_dry` body shapes — bare/system/streaming/history-tail — and the no-mutation
-  invariant); and **0.11.6** `test_json_envelope` (the `--json`/`-j` flag parse and the
-  envelope across field combos — incl. the embedded-NUL by-length escape and model-id escaping);
-  and **0.11.7** `test_oneshot_out` (the `-o`/`--out` parse — path-not-a-positional, dangling
-  `-o`, reset, `--json` composition — and the writer round-trip + trailing-newline + degrade);
-  and **0.11.8** `test_completion` (the `--completion`/`--completions` parse — COMPLETION mode,
-  the captured shell, default/reset/short-circuit; the emitted bash/zsh scripts are
-  host-validated by `bash -n`/`zsh -n` + a functional `COMPREPLY` check);
-  and **0.11.9** the multi-line composer + key decode (`test_tui` — the pure `(rows,lines,show)`
-  geometry incl. the two rules + composer-height clamp, `led_lines`/`led_cursor_line`/`_col`/
-  `led_up`/`led_down` + the backspace-over-newline join, the palette closing on a newline, and
-  `_tui_csi_final`/`_tui_kitty_u` decode of every CSI form incl. `CSI 13;<mod>u`→newline and the
-  Ctrl-combos) and the history newline-escape round-trip (`test_inhist_persist` — a multi-line +
-  backslash entry survives save→reload, plus `_inhist_escape_into` directly);
-  and **0.11.10** the `--tier` flag (`test_oneshot` — `--tier=rich`/`--tier simple`/`auto` parse to
-  the right pref without forcing a run, a bad value flags + falls back to auto, `--tier --version`
-  does NOT eat the following flag, and `--tier rich <task>` still RUNs with the task; `test_ui` —
-  the pure `ui_tier_pref_from_name` mapping).
-  Passes
-  on `cyrius test`.
-- `tests/thoth.bcyr` — benchmark stub (no-op).
-- `tests/thoth.fcyr` — fuzz stub.
-
-## Dependencies
-
-**Current (declared in `cyrius.cyml`, all stdlib).** Driver core: `string`,
-`fmt`, `alloc`, `io`, `vec`, `str`, `slice`, `syscalls`, `result`, `tagged`,
-`process`, `assert`, `bench` (`result` / `tagged` / `process` back the
-portable `/run` shell escape). Data formats: **`bayan`** — the Cyrius 6.1.25
-data-domain carve (json / toml / cyml / base64 / bigint / u128 / csv in one
-distlib fold); it carries both the `thoth.cyml` config surface (with `fs`)
-and the JSON wire format, and must precede `sigil` (u256) and the transport.
-Call sites use the canonical `bayan_*` names. M3 hoosh transport: **`sandhi`**
-(the HTTP/TLS client, folded into stdlib as `lib/sandhi.cyr`) plus its full
-transitive set — `net`, `http`, `tls`, `ws`, `sakshi`, `sigil`, `args`,
-`hashmap`, `thread`, `thread_local`, `fnptr`, `async`, `atomic`, `chrono`,
-`mmap`, `dynlib`, `fdlopen`, `freelist`, `ct`, `keccak`. (`sakshi` arrived as a
-sandhi transitive; **0.5.2** consumes it directly for thoth's structured driver
-log — `src/log.cyr`.) M4 vendored-bundle
-surfaces: `regex` (t-ron's policy `glob_match`), `random` (sigil's ML-DSA /
-AES-GCM refs), `patra` (libro's structured logging). M5 vendored-bundle surface:
-`math` (the avatara bundle's `f64_le`/`f64_ge`; the other f64 ops are builtins).
-**Ordering constraint
-(M4):** `atomic`/`thread`/`thread_local`/`ct`/`keccak`/`random` must precede
-`sigil`, or libro's `chain_append` SIGILLs (sigil's hash path self-installs a
-per-thread scratch bank) — t-ron 2.1.5's documented note, now thoth's too.
-Libs are opt-in and Cyrius does **not** resolve transitive deps, so the set
-is declared by hand and ordered low-level-floor-first (see the `[deps]`
-comment in `cyrius.cyml`).
-
-**sandhi conn-off-fd collision — RESOLVED (cyrius 6.2.40, 2026-06-24).** A prior
-toolchain-bundled sandhi (**1.6.12**, cyrius 6.2.39) carried a critical client bug:
-the server and client conn structs both defined `enum SandhiConnOff` with
-`SANDHI_CONN_OFF_FD` at different offsets (client 8 / server 16); under cyrius
-last-definition-wins the client resolved it to 16, colliding with its own
-`SANDHI_CONN_OFF_TLS_CTX` — `finalize` zeroed the socket fd, so every hoosh request
-went to fd 0 and the gateway saw nothing. **Fixed in sandhi 1.6.13** (server offsets
-namespaced to `SANDHI_SRVCONN_OFF_*`) and folded into the toolchain at **cyrius
-6.2.40**; thoth has stayed on the **stdlib `"sandhi"`** entry (pristine `lib/`) the
-whole time — no `[deps.sandhi]` pin was ever needed. thoth is now on **6.4.49**
-(0.10.1), so this is closed; recorded as the canary for the dep-style-vs-stdlib-style
-ordering hazard (a `[deps.sandhi]` block perturbs thoth's hand-ordered stdlib set and
-breaks `patra`'s `SK_WARN` resolve — keep sandhi as a plain stdlib entry).
-
-**Vendored (committed dist bundles in `src/vendor/`, not `[deps]` blocks):**
-spine — bote-core **3.1.1**, t-ron **2.1.7**, libro **2.7.10** (t-ron's audit
-chain; keep in lockstep with t-ron's own `[deps.libro]` pin), avatara **2.8.0**
-(the Thoth/Librarian archetype; needs the `math` stdlib dep). Substrate/floor —
-sit-read **1.3.4** + sankoch **2.5.1** (git read-mode, 0.13.x), darshana **0.9.0**
-(rich-TUI raw-mode), vyakarana **2.2.3** (syntax tokenizer), kashi **1.0.2** (the
-T3 GUI VGA 8×16 font, 0.29.0). bote's and t-ron's manifests declare git sub-deps
-that `cyrius deps` resolves transitively into colliding compile sets, so the
-self-contained bundles are consumed directly — the pattern hoosh established. Re-sync
-via `scripts/sync-{bote,tron,libro,avatara,sit}.sh <tag>` (darshana/kashi by hand).
-
-**Spine seams.**
-
-- **hoosh** — LLM inference gateway: **wired (remote-client over HTTP via
-  sandhi)**. Consumed as a running gateway, not a linked crate (hoosh ships no
-  distlib — it is a server). Re-verified at hoosh **2.4.12**; its 2.2.3–2.4.12
-  growth (tool calling, batch, `/v1/tools/*` MCP endpoints, DLP, observability,
-  17 providers, configurable routing strategy) is server-side or M4+ seam
-  material — the chat contract thoth consumes is unchanged. See
-  [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
-- **daimon** — agent orchestration + MCP tool execution + host registry:
-  **wired (remote-client over HTTP via sandhi)** when `[daimon].url` is
-  declared. `/tools` lists the registry, `/call` invokes. **Re-verified
-  wire-compatible against daimon 1.4.1**, which ships the fix for
-  the registry-aliases-request-buffer bug thoth filed. 1.4.1's `GET
-  /v1/mcp/tools` returns the manifest `{"tools":[{name,description}],"count":N}`
-  (thoth parses, ignores `count`) and `POST /v1/mcp/call` passes the upstream MCP
-  `result` through (`content[0].text` + `isError`); both match thoth's seam — no
-  code change needed. Round-trip confirmed against a 1.4.1-faithful mock (real
-  daimon's server binary won't run inside thoth's build sandbox — signal 16 — so
-  full-stack live e2e is a host-side step).
-- **bote** — the MCP protocol: **wired (native — vendored bote-core 3.1.1,
-  in-process)**.
-- **t-ron** — MCP per-tool authorization: **wired (native — vendored t-ron 2.1.7 + libro 2.7.10, in-process)** when `[tron].policy` loads; otherwise
-  absent with the fail-closed confirm gate standing in, announced. Deny is
-  final; unknown agents/tools deny by default.
-- **avatara** — personality / archetype overlay; the Thoth / Librarian persona:
-  **wired (native — vendored avatara 2.8.0, in-process)**. The persona is sourced
-  from `egyptian_thoth()` (the `prof_*` accessors) and threaded into the hoosh
-  system prompt; native by construction (always available from the bundle). See
-  [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
-
-The off-AGNOS reach transport vs. the AGNOS-native binding distinction is
-deferred to a later ADR.
-
-## Known limitations
-
-- All five seams are wired; no seam is absent by milestone. The avatara persona
-  is now **runtime-switchable** (`/persona` mid-session switch + blends/shadow,
-  0.22.x; `/role` modality, 0.25.0) — the old "fixed archetype" limit is lifted.
-  It is still reached only as the vendored bundle; the live/co-resident avatara
-  binding is the same deferred reach-transport question as the other native seams.
-- t-ron's bundle carries a benign `ERR_NONE = 0` shared with libro's identical
-  constant (same value; last definition wins) — re-check on bundle bumps.
-- **daimon registry bug — RESOLVED in daimon 1.2.6** (was 1.2.4): the MCP host
-  registry aliased the transient request buffer, corrupting registrations as
-  later requests arrived. Filed by thoth as
-  `daimon/docs/development/issues/2026-06-11-mcp-registry-aliases-request-buffer.md`;
-  fixed upstream (daimon commit `6af75a4`). thoth's seam is re-verified
-  wire-compatible with 1.2.6 (see the daimon seam note above). Full-stack live
-  e2e (thoth → t-ron → real daimon → bote MCP → back) is a host-side step —
-  daimon's server binary won't run inside thoth's build sandbox (signal 16).
-- thoth is **not** exposed to the cyrius address-taken-local-array static-overlap
-  bug daimon hit in 1.2.6 (its `docs/.../cyrius-addr-taken-local-array-static-overlap`):
-  that needs an 8-byte-slot `var a[N]` written at its last slot via `store64(&a…)`;
-  thoth's address-taken locals (`tmp[24]`, `line[4096]`, `ans[64]`) are byte
-  buffers written via `store8` within bounds. Re-check if a `store64(&local…)`
-  is ever introduced.
-- t-ron's bundle duplicates sigil's `chacha20_xor` (same signature and
-  semantics; last definition wins) — benign per t-ron's own 2.1.5 notes, but
-  worth re-checking on sigil bumps since sigil's TLS ChaCha20 path now runs
-  t-ron's copy.
-- t-ron authorization is per-tool name + payload scan; the model-driven turn
-  (`free text` → hoosh) is not a gated action (it executes nothing locally).
-- hoosh responses **stream by default** (**0.5.0**): SSE deltas print as
-  they arrive (`[hoosh].stream=false` reverts to the blocking round-trip). One
-  asymmetry: the streaming result exposes the HTTP status but not the body, so a
-  non-2xx *error message* is only surfaced in blocking mode — streaming announces
-  the status and points the user at `stream=false`.
-- The hoosh request carries the avatara persona as a `{role:system}` message
-  (M5) and (**0.5.1**) the multi-turn conversation tail (`[hoosh].history`,
-  default on; `/reset` clears it). Remaining fixed bits: `max_tokens` 4096 and no
-  other request tuning. Context is a byte-budgeted window (oldest turns drop) held
-  in-process only — not persisted across runs. `[hoosh].history=false` reverts to
-  the stateless single-turn shape.
-- t-ron audit events live in its in-process libro ring; **0.5.0's** `/audit`
-  surfaces them (counts, chain integrity, agent risk score, recent events). The
-  audit view is read-only and session-scoped (the ring is in-process, not
-  persisted across runs). **0.5.2** adds thoth's own **sakshi-structured driver
-  log** (`[log]`, off by default; `event=… key=value` for turns, authz verdicts,
-  model switches) — operational, distinct from t-ron's cryptographic chain. It
-  covers the driver event spine but not yet every command (`/read`, `/tools`,
-  `/call` results are not logged); broaden as needed.
-- `/read` is read-only but unrestricted; sandboxing posture stays with t-ron,
-  not an in-tree allowlist.
-- `/write` takes single-line content; multi-line editing is future work.
-
-## Consumers
-
-_None yet._ — "at least one downstream consumer green **on AGNOS**" is **v1.0 gate 2**
-(see [`roadmap.md`](roadmap.md) → *Path to v1.0*); it follows gate 1 (the AGNOS lane
-lighting up). A tracked blocker, not a gap to fill in-tree.
+`cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
+`tests/thoth_core.tcyr`, `tests/thoth_gui.tcyr`, `tests/thoth_render.tcyr`. **1675 assertions across the suites as of
+0.33.7 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
+`THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
+engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
+conversation `/search`, and the T3 GUI view-builders (draw-command inspection + golden-PPM render). Filesystem-reading
+fixtures use **git-tracked** files so CI matches local.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 are done and shipping**, and the
-ENTIRE post-M7 feature arc has since landed (0.11.x → 0.30.2): the terminal-citizen front door,
-the memory + git producers (0.12.x–0.13.x), the model `shell` tool (0.16.x), the re-renderable feed +
-session visibility (0.18.x–0.19.x), shell/agent hardening (0.20.x), composer intelligence (0.21.x),
-the active persona + role modality (0.22.x / 0.25.0), project awareness (0.23.x), the model picker +
-`/reload` / `/save` / conversation resume (0.24.x), the `.thoth/` config home (0.26.0), the simple↔rich
-tier-consistency line (parity fixes 0.27.0 + the status view-model 0.28.0), and the **T3 desktop GUI** —
-a runnable `thoth gui` sovereign Wayland window with a status strip, conversation feed, and interactive
-composer (0.29.0 → 0.30.2). Per-version detail is in the log above + [CHANGELOG](../../CHANGELOG.md).
+See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 and the entire post-M7 feature arc have shipped
+(0.11.x → 0.33.7):** the terminal-citizen front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`)
+with tool-call + colored diff cards and a conversation sidebar, the model **write tools** (`edit`/`create_file`/
+`shell` — thoth reads *and writes* code), the **memory arc** (consume mneme: `/remember`, semantic recall,
+citations, grounding, `/notes`), and the **chat-management arc** (named multi-conversation store, persistence, the
+richer message schema, `/search`). Per-version detail is in the log above + [CHANGELOG](../../CHANGELOG.md).
 
-**The path to v1.0 is dominated by AGNOS lighting up, not by feature work in
-thoth.** Four gates (see [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS
-lane clears once the agnos peer ships the `SIGHUP` signal-number constants (filed
-upstream; zero thoth change); (2) ≥1 downstream consumer green on AGNOS (external);
-(3) a security review (not scheduled); (4) the SemVer-vs-CalVer 1.0 decision
-(deferred ADR-0004). x86_64 Linux ships; aarch64 builds; macOS builds+runs (audit
-path gated upstream); Windows staged on architectural floor gaps. Full-stack live
-e2e against the real spine (hoosh/daimon) is a host-side step — the build sandbox
-blocks a compiled binary's TCP.
+**The path to v1.0 is dominated by AGNOS lighting up, not by feature work in thoth.** Four gates (see
+[`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓** (a valid static x86_64-AGNOS ELF,
+zero thoth change), **runtime** pends an AGNOS host (= gate 2); (2) ≥1 downstream consumer green on AGNOS
+(external); (3) a security review (not scheduled); (4) the SemVer-vs-CalVer 1.0 decision (deferred,
+[ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux ships; aarch64 builds; macOS builds+runs (audit path
+gated upstream); Windows staged on architectural floor gaps. Full-stack live e2e against the real spine
+(hoosh/daimon) is a host-side step — the build sandbox blocks a compiled binary's TCP.

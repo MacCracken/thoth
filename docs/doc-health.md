@@ -6,85 +6,77 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-07-13 (**0.33.7 — cross-conversation /search cut, CLOSES the 0.33.x arc**: README stamp `0.33.6`→`0.33.7` + the multi-conversation-management feature line, CHANGELOG + state.md `[0.33.7]` entries, roadmap **0.33.x shipped-narrative REMOVED (forward-only)** — only the two non-gating follow-ups (mouse click-to-switch, resumed tool/citation feed cards) remain forward-facing; 0.34.x is next). **Prior**: 2026-07-13 (**0.33.6 — GUI conversation sidebar cut**: README stamp `0.33.5`→`0.33.6` + the GUI sidebar (Ctrl+K) line, CHANGELOG + state.md `[0.33.6]` entries, roadmap 0.33.x trimmed (sidebar shipped -> remaining = cross-conv /search; follow-ups: mouse click-to-switch, resumed tool/citation feed cards)). **Prior**: 2026-07-13 (**0.33.5 — per-message tool calls cut**: README stamp `0.33.4`→`0.33.5`, CHANGELOG + state.md `[0.33.5]` entries, roadmap richer-message-schema line marked COMPLETE (model + citations + tool_calls all shipped -> remaining 0.33.x = GUI sidebar, then cross-conv search)). **Prior**: 2026-07-13 (**0.33.4 — per-message citations cut**: README stamp `0.33.3`→`0.33.4`, CHANGELOG + state.md `[0.33.4]` entries, roadmap richer-message-schema line updated (model + citations shipped -> remaining = tool_calls, then GUI sidebar / cross-conv search)). **Prior**: 2026-07-13 (**0.33.3 — per-message model attribution cut**: README stamp `0.33.2`→`0.33.3`, CHANGELOG + state.md `[0.33.3]` entries, roadmap richer-message-schema line updated (model shipped -> remaining = citations/tool_calls, then GUI sidebar / cross-conv search)). **Prior**: 2026-07-12 (**0.33.2 — multi-conversation persistence cut**: README stamp `0.33.1`→`0.33.2`, CHANGELOG + state.md `[0.33.2]` entries, roadmap 0.33.x trimmed (.0 store + .1 commands + .2 persistence shipped -> remaining = richer message schema / GUI sidebar / cross-conv search), toolchain pin `6.4.58`→`6.4.62` (state.md Toolchain lead + version-entry note)). **Prior**: 2026-07-12 (**0.33.1 — conversation commands cut**: README stamp `0.33.0`→`0.33.1`, CHANGELOG + state.md `[0.33.1]` entries, roadmap 0.33.x trimmed (.0 store + .1 commands shipped -> remaining = .2 persistence+sidebar / .3 search)). **Prior**: 2026-07-12 (**0.33.0 — multi-conversation store cut**: README stamp `0.32.6`→`0.33.0`, CHANGELOG + state.md `[0.33.0]` entries, roadmap 0.33.x trimmed (.0 store shipped → remaining = .1 commands+persistence / .2 GUI sidebar / .3 search)). **Prior**: 2026-07-12 (**0.32.6 — notebook mode cut**: README stamp `0.32.5`→`0.32.6` + the `/notes` note,
-> CHANGELOG + state.md `[0.32.6]` entries, roadmap **0.32.x memory arc REMOVED (fully shipped → CHANGELOG)**, the
-> chat-inheritance section now heads at 0.33.x). **Prior**: 2026-07-12 (**0.32.5 — GUI memory surfacing cut**:
-> README stamp `0.32.4`→`0.32.5`, CHANGELOG + state.md `[0.32.5]` entries, roadmap trimmed). **Prior**: 2026-07-12
-> (**0.32.4 — grounding indicator cut**: README stamp `0.32.3`→`0.32.4` + the grounding note,
-> CHANGELOG + state.md `[0.32.4]` entries, roadmap trimmed). **Prior**: 2026-07-12 (**0.32.3 — citations cut**:
-> README stamp `0.32.2`→`0.32.3` + the cited-sources note, CHANGELOG + state.md `[0.32.3]` entries). **Prior**:
-> 2026-07-12 (**0.32.2 — semantic recall via mneme cut**: README
-> stamp `0.32.1`→`0.32.2` + the recall line, CHANGELOG + state.md `[0.32.2]` entries, roadmap 0.32.x trimmed).
-> **Prior**: 2026-07-12 (**0.32.1 — GUI pane toggles cut**:
-> README stamp `0.32.0`→`0.32.1`, CHANGELOG + state.md `[0.32.1]` entries, toolchain pin `6.4.57`→`6.4.58`).
-> **Prior**: 2026-07-12 (**0.32.0 — mneme memory
-> seam + crash-safe atomic writes cut**). Bumped the README
-> status stamp `0.31.5`→`0.32.0` + the mneme memory-seam line; **CHANGELOG**/**state.md** `[0.32.0]` entries;
-> **roadmap.md** 0.32.x reframed forward-only (seam+write shipped → CHANGELOG; remaining = recall/citations/grounding
-> + the daimon→mneme host prerequisite); **adr/0017** non-atomic-write residual marked RESOLVED (cyrius 6.4.57
-> `file_write_atomic`/`file_create_exclusive`). **Prior**: 2026-07-12 (0.31.5 — full doc-staleness sweep + this
-> ledger created). Multi-agent audit of README / guides / architecture / ADRs against the live state, then apply. Fixes: **README** status
-> stamp `0.30.2` → `0.31.5` and the shipped **write tools** (`edit`/`create_file`) + GUI **tool-call + colored
-> diff cards** folded into the feature narrative; **getting-started.md** dead `tests/thoth.tcyr` refs (×3) →
-> the split `tests/thoth_{core,gui,render}.tcyr` + `tests/cases/*.cyr` suites, the `thoth gui` subcommand added,
-> and the source-layout inventory updated (`src/edit`/`editlog`/`surface`/`intr` + the whole `src/gui/` subtree +
-> the `kashi`/`sankoch`/`sit-read` vendors); **architecture/002** dead-test ref + t-ron row (added the model
-> `thoth_edit`/`thoth_shell` verbs); **adr/README** index (**+ADR-0017**, dropped the volatile avatara version,
-> corrected the AGNOS status from the resolved `SYS_LSEEK` gap); **ADR-0009**'s two lingering "thoth-in-puka"
-> claims marked *revised*. **roadmap.md** stripped of the completed 0.27→0.31.5 per-version narrative
-> (forward-facing only, per its own header). No stale item found in `docs/examples/`.
+> **Last refresh**: 2026-07-13 (**full doc sweep at 0.33.7**). A 5-reader parallel audit of README/CLAUDE.md,
+> guides+examples, architecture, ADRs, and `state.md`'s current-state block against the live 0.33.7 state, then
+> applied. Fixes: **roadmap** — "Where we are" re-anchored `0.31.5`→`0.33.7`; the shipped 0.32.x memory + 0.33.x
+> chat-management arcs collapsed to a one-line "shipped so far" pointer; the sequenced heading advanced to 0.34.x;
+> the stale "scheduled 0.32.x arc" phrasing fixed. **README** — the multi-conversation-management feature line +
+> the full `build.sh` target set. **getting-started.md** — the command table gained the memory + 0.33.x commands
+> (`/notes`, `/conversations`, `/new`, `/switch`, `/rename`, `/delete`, `/search`); the source layout gained
+> `src/memlog.cyr` + `src/gui/{gmem,gconv}` + the `session.cyr` conversation store + the mneme memory-seam reframe.
+> **architecture/002 + README** — the mneme ladder row/prose corrected: binds **remote-client via daimon** (full
+> when hosted), the local `.thoth/memory` reader is the *degraded fallback* (was wrongly "native/degraded, awaits
+> Cyrius port"). **adr/0017** — two `0.31.6`→`0.32.0` version-tag fixes. **adr/0012** — an "Update (0.32.x — native
+> branch now live)" addendum. **state.md** — the frozen ~465-line `## Source`/`## Tests`/`## Next` per-module block
+> (frozen at ~0.11.x, a drift-prone duplicate of the version log + CHANGELOG + the getting-started source map)
+> **replaced** with a concise current "Surface at a glance" + the live 1675-assertion test summary + a current
+> "Next"/v1.0-gate block. CLAUDE.md + `examples/` were already current. **Prior full sweep**: 2026-07-12 (0.31.5 —
+> this ledger created). Between the two sweeps the **0.32.x memory arc** and **0.33.x chat-management arc** shipped
+> via per-release refreshes (each cut: README stamp + CHANGELOG + state.md version-log entry + a roadmap trim — see
+> CHANGELOG for the per-version detail).
 
 ## At a glance
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh — touched this sweep** | ~9 | README, CHANGELOG, VERSION, state.md, roadmap.md, getting-started, architecture/002, adr/README, adr/0009 — current as of 0.31.5. |
-| 🔵 **Durable — decisions/invariants, re-read not rewrite** | ~18 | The 16 unchanged ADRs (0001–0008, 0010–0016) + template + architecture/001 + architecture/README — point-in-time decisions/invariants, correct as history; re-read on a principle change, not per release. |
+| ✅ **Fresh — touched this sweep** | ~11 | README, CHANGELOG, VERSION, state.md, roadmap.md, doc-health.md, getting-started, architecture/002 + README, adr/0012 + 0017 — current as of **0.33.7**. |
+| 🔵 **Durable — decisions/invariants, re-read not rewrite** | ~17 | The unchanged ADRs (0001–0011, 0013–0016) + template + architecture/001 — point-in-time decisions/invariants, correct as history; re-read on a principle change, not per release. |
 | 🟡 **Stale — refresh in place** | 0 | None outstanding after this sweep. |
-| 🟠 **Read-through / gap** | 1 | `docs/examples/` is a usage cheat-sheet (README) + a redundant `.gitkeep`, not a set of runnable example programs — CLAUDE.md bills it "Runnable examples". Either add real examples or reword the CLAUDE.md pointer. Non-blocking. |
+| 🟠 **Read-through / gap** | 1 | `docs/examples/` is a usage cheat-sheet (README) + a redundant `.gitkeep`, not runnable example programs — CLAUDE.md bills it "Runnable examples". Either add real examples or reword the CLAUDE.md pointer. Non-blocking. |
 | ❓ **Open question** | 0 | None. |
 
 ## Tier 1 — Structural / root
 
 | File | Status | Notes |
 |---|---|---|
-| `README.md` | ✅ Fresh | Refreshed to **0.31.5** this sweep: status stamp + the shipped write tools (`edit`/`create_file`, `thoth_edit`-gated, opt-in) + GUI tool-call/diff cards. The consumed-spine table, commands, and build/run block verified against `src/`. Update the status stamp every release. |
-| `CHANGELOG.md` | ✅ Fresh | Source of truth for what shipped. Through **0.31.5**. Refreshed every release. |
-| `CLAUDE.md` | ✅ Fresh | Durable preferences/process/procedures. Volatile state lives in `state.md`, not here. |
-| `VERSION` | ✅ Fresh | Single source of truth (`0.31.5`); `src/version.cyr` is generated from it via `scripts/gen-version.sh`. |
+| `README.md` | ✅ Fresh | **0.33.7** this sweep: the multi-conversation-management feature line (`/new`/`/switch`/`/search`, persisted with model/citations/tool calls) + the full `build.sh` target set. Status stamp, consumed-spine table, commands, build/run all verified vs `src/`. Bump the stamp every release. |
+| `CHANGELOG.md` | ✅ Fresh | Source of truth for what shipped. Through **0.33.7**. Refreshed every release. |
+| `CLAUDE.md` | ✅ Fresh | Durable preferences/process/procedures; carries no volatile state (that's `state.md`). Audited clean this sweep. |
+| `VERSION` | ✅ Fresh | Single source of truth (`0.33.7`); `src/version.cyr` is generated from it via `scripts/gen-version.sh`. |
 
 ## Tier 2 — Architecture (`docs/architecture/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `001-consumer-only-no-domain-logic.md` | 🔵 Durable | The consumer-only invariant; verified current (already reflects the shipped file-edit tools + all seven seams). |
-| `002-capability-ladder.md` | ✅ Fresh | This sweep: dead `tests/thoth.tcyr` → `tests/cases/core.cyr`; t-ron row now names the model verbs (`thoth_edit`/`thoth_shell`/`thoth_remember`). Seam table matches `src/seams.cyr`. |
-| `README.md` | 🔵 Durable | 001/002 summaries accurate; links resolve. |
+| `001-consumer-only-no-domain-logic.md` | 🔵 Durable | The consumer-only invariant; verified current (reflects the write tools + all seven seams). |
+| `002-capability-ladder.md` | ✅ Fresh | This sweep: the **mneme** row + prose corrected — binds remote-client via daimon (full when hosted), local reader is the degraded fallback. Seam table matches `src/seams.cyr`. |
+| `README.md` | ✅ Fresh | This sweep: the mneme summary corrected to match 002 (remote-client via daimon, not native). |
 
 ## Tier 3 — Development (`docs/development/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `state.md` | ✅ Fresh | The live version ledger + current-state block. Refreshed every release (each cut appends a version entry). |
-| `roadmap.md` | ✅ Fresh | **Forward-facing only** — this sweep stripped the completed 0.27→0.31.5 per-version narrative; keeps the four v1.0 gates, non-gating future, and out-of-scope. When a milestone completes, move it to CHANGELOG, do not narrate it here. |
-| `doc-health.md` | ✅ Fresh | This file. Opportunistic cadence (touched when other docs are). |
+| `state.md` | ✅ Fresh | The live version log + current-state block. This sweep **replaced** the frozen ~465-line per-module `## Source`/`## Tests`/`## Next` block with a concise current "Surface at a glance" + the 1675-assertion test summary. Refreshed every release (a version-log entry per cut). |
+| `roadmap.md` | ✅ Fresh | **Forward-facing only.** This sweep re-anchored "Where we are" to 0.33.7 + collapsed the shipped 0.32.x/0.33.x arcs to a one-line pointer. When a milestone completes, move it to CHANGELOG, don't narrate it here. |
+| `doc-health.md` | ✅ Fresh | This file. This sweep also trimmed the bloated per-cut "Last refresh" trail. Opportunistic cadence. |
 
 ## Tier 4 — ADRs (`docs/adr/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `README.md` (index) | ✅ Fresh | This sweep: **+0017**, dropped the volatile avatara version from the 0007 summary, corrected the 0008 AGNOS status (`SYS_LSEEK` resolved; build cleared, runtime pends a host). Add a row whenever an ADR lands. |
-| `0009-presentation-capability-ladder.md` | ✅ Fresh | This sweep: the two remaining "thoth-in-puka" claims (Consequences + Alternatives) marked *revised* per the 0.30.0 addendum — T3 shipped as thoth's own Wayland app. |
-| `0015` / `0017` | 🔵 Durable | Current (0015's 0.23.1 update + 0017's 0.31.3 `create_file` update are appended correctly). |
-| `0001`–`0008`, `0010`–`0014`, `0016` | 🔵 Durable | Point-in-time decisions; historical version stamps + assertion counts are correct as of each decision's date — do not "refresh" them. |
+| `README.md` (index) | ✅ Fresh | Index verified complete this sweep — all 17 ADRs (0001–0017) have a row. Add a row whenever an ADR lands. |
+| `0012-memory-seam-omit-until-mneme.md` | ✅ Fresh | This sweep: an "Update (0.32.x — native branch now live)" addendum (mneme Cyrius-ported + consumed via daimon; the producer swap completed). Historical decision unchanged. |
+| `0017-model-edit-tool-jailed-gated-opt-in.md` | ✅ Fresh | This sweep: two `0.31.6`→`0.32.0` version-tag fixes (the atomic edit/create-write residual shipped in 0.32.0 on cyrius 6.4.57). |
+| `0009` / `0015` | 🔵 Durable | Current (0009's 0.30.0 T3 addendum + 0015's appended update). |
+| `0001`–`0008`, `0010`–`0011`, `0013`–`0014`, `0016` | 🔵 Durable | Point-in-time decisions; historical version stamps + assertion counts are correct as of each decision's date — do not "refresh" them. |
 | `template.md` | 🔵 Durable | The ADR starting point. |
 
 ## Tier 5 — Guides + examples (`docs/guides/`, `docs/examples/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `guides/getting-started.md` | ✅ Fresh | This sweep: dead `tests/thoth.tcyr` (×3) → the split suites; `thoth gui` added; source layout updated (`src/edit`/`editlog`/`surface`/`intr` + `src/gui/` + `kashi`/`sankoch`/`sit-read`); write tools noted. |
-| `examples/README.md` | 🟠 Read-through | A usage cheat-sheet, verified accurate (`--json` envelope, flags, `.thoth/` discovery all match `src/`). Not a set of runnable programs — see the at-a-glance note. |
+| `guides/getting-started.md` | ✅ Fresh | This sweep: the command table gained the memory + 0.33.x chat-management commands; the source layout gained `src/memlog.cyr`, `src/gui/{gmem,gconv}`, the `session.cyr` conversation store, and the mneme memory-seam reframe. |
+| `examples/README.md` | 🟠 Read-through | A usage cheat-sheet, re-verified accurate this sweep (`--json` envelope, flags, `.thoth/` discovery match `src/`). Not runnable programs — see the at-a-glance note. |
 | `examples/.gitkeep` | 🔵 Durable | Redundant (the README already tracks the dir); harmless. |
 
 ## Refresh procedure
