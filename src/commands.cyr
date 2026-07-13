@@ -558,6 +558,12 @@ fn _save_history(fd) {
     while (i < n) {
         if (_save_write_str(fd, "## ") == 0) { ok = 0; }
         if (_save_write_str(fd, session_history_role(i)) == 0) { ok = 0; }
+        var mdl = session_history_model(i);       # 0.33.3: annotate a reply with its producing model
+        if (mdl != 0) {
+            if (_save_write_str(fd, " (") == 0) { ok = 0; }
+            if (_save_write_str(fd, mdl) == 0) { ok = 0; }
+            if (_save_write_str(fd, ")") == 0) { ok = 0; }
+        }
         if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
         var content = session_history_content(i);
         var clen = strlen(content);

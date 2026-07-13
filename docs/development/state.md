@@ -7,6 +7,14 @@
 
 ## Version
 
+**0.33.3** — **Per-message model attribution** (2026-07-13). Each assistant reply now records the model that
+produced it (`src/session.cyr`) — a stable per-message copy (never an alias of the shared session model buffer a
+mid-session switch overwrites), persisted in the `THOTH-SESSION-2` format via an optional record field
+(`<role>\t<len>\t<model>\n<content>\n`, backward-readable). A resumed conversation keeps its per-reply attribution;
+`/save` annotates each reply (`## assistant (claude-opus-4-8)`). New `session_history_model(i)`. Unit-tested +
+live-verified both ways. On-brand for thoth's mid-session model switching. First cut of the richer persisted message
+schema (citations/tool_calls to follow).
+
 **0.33.2** — **Multi-conversation persistence** (2026-07-12). `[session].file` now persists the whole store, not
 just the active conversation: a new **`THOTH-SESSION-2`** format frames each conversation (`CONV\t<len>\n<title>\n`
 header + that conversation's records) behind a magic line carrying the active index. Resume rebuilds titles,

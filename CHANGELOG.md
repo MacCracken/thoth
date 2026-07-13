@@ -2,6 +2,25 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.3] - 2026-07-13
+
+**Per-message model attribution — a resumed conversation remembers which model wrote each reply.**
+
+### Added
+- **Each assistant reply now carries the model that produced it** (`src/session.cyr`). The message struct grows a
+  per-message model field, auto-captured from the active session model when a reply is appended, and — crucially —
+  stored as its **own stable copy**, not an alias of the shared session model buffer (which a mid-session `/model`
+  switch overwrites, and would otherwise retroactively rewrite every earlier reply's attribution). New accessor
+  `session_history_model(i)`. On-brand for thoth's signature move: switch models mid-session and a resumed
+  conversation still shows who said what.
+- **The model is persisted** in the `THOTH-SESSION-2` format. A record extends cleanly to an optional field —
+  `<role>\t<len>\t<model>\n<content>\n` when a model is present, the previous `<role>\t<len>\n<content>\n` when not —
+  so it stays backward-readable (a modelless record parses exactly as before) and the model is written directly to
+  the file, never through the fixed 64-byte header buffer. `/save` now annotates each reply's header with its model
+  (`## assistant (claude-opus-4-8)`). Unit-tested (capture, stability across a switch, round-trip, the no-model case)
+  and live-verified both ways with the real binary (a model-tagged resume surfaces through `/save`; a live save
+  re-emits the model field).
+
 ## [0.33.2] - 2026-07-12
 
 **Multi-conversation persistence — every conversation survives a restart, not just the active one.**

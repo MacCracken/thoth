@@ -34,11 +34,14 @@ var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
-# backing model sees prior turns. Each message is alloc(24): +0 role (a stable
+# backing model sees prior turns. Each message is alloc(32): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
 # so both must be copied), +16 turn (session_turns() at append time — 0.30.19, so the GUI feed can render each
 # turn's tool cards above ITS reply; in-memory only, NOT persisted — a resumed message gets turn 0 = no cards,
+# +24 model (0.33.3 — a STABLE COPY of the model id that produced an assistant reply, or 0; persisted, so a resumed
+# conversation remembers which model said what — NOT the shared session._model_buf, which a mid-session switch would
+# overwrite retroactively),
 # which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
@@ -250,17 +253,35 @@ fn session_history_content(i) { return load64(vec_get(_sess_hist_vec(), i) + 8);
 # session_history_turn(i): the session turn this message belongs to (0.30.19). Matches roundlog_round_turn so the
 # GUI feed renders a turn's tool cards above ITS reply. 0 for a resumed/pre-session message (no roundlog rounds).
 fn session_history_turn(i)    { return load64(vec_get(_sess_hist_vec(), i) + 16); }
+# session_history_model(i): the model id that produced message i (0.33.3), a stable cstr, or 0 (user/system
+# messages, a pre-0.33.3 resumed message, or no model set). Persisted, so a resumed conversation keeps its
+# per-reply model attribution.
+fn session_history_model(i)   { return load64(vec_get(_sess_hist_vec(), i) + 24); }
 
-# session_history_append: record (role, content[0..clen)) as a turn, copying the
-# content to stable storage. Drops the oldest message past SESS_HIST_MAX.
+# session_history_append: record (role, content[0..clen)) as a turn, copying the content to stable storage. An
+# ASSISTANT reply is auto-tagged with the CURRENT session model (the one that produced it); user/system messages
+# carry no model. The loader calls _session_history_append_ex directly with the model parsed from the file (which
+# is the model at save time, not the live one). Drops the oldest message past SESS_HIST_MAX.
 fn session_history_append(role, content, clen) {
-    var m = alloc(24);
+    var model = 0;
+    if (streq(role, "assistant") == 1) { model = session_model(); }   # attribute the reply to its producing model
+    return _session_history_append_ex(role, content, clen, model);
+}
+
+# _session_history_append_ex: the append worker. `model` (a cstr, or 0) is COPIED to stable per-message storage —
+# never aliased, because session._model_buf (what session_model() returns) is one shared buffer a mid-session
+# switch overwrites; a raw alias would retroactively rewrite every earlier reply's model.
+fn _session_history_append_ex(role, content, clen, model) {
+    var m = alloc(32);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
     store8(c + clen, 0);
     store64(m + 8, c);
     store64(m + 16, session_turns());       # 0.30.19: tag the message with the current turn (for per-turn tool cards)
+    var mv = 0;
+    if (model != 0) { if (strlen(model) > 0) { mv = _sess_dup_bytes(model, strlen(model)); } }   # stable capped copy
+    store64(m + 24, mv);                     # 0.33.3: per-message model id (or 0)
     var v = _sess_hist_vec();
     vec_push(v, m);
     while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
@@ -355,7 +376,7 @@ fn _sess_uint_into(buf, off, n) {
 # on success, -1 if the file cannot be opened OR any write short-writes (so the caller degrades closed rather
 # than leave a truncated file). Created 0600 if absent (best-effort — see the header note on perms).
 # _sess_write_rec: write one "<role>\t<clen>\n<content>\n" record to fd through the scratch header. Returns 0 ok, -1 short-write.
-fn _sess_write_rec(fd, role, content) {
+fn _sess_write_rec(fd, role, content, model) {
     var clen = strlen(content);
     var ho = 0;
     var rl = strlen(role);
@@ -363,9 +384,20 @@ fn _sess_write_rec(fd, role, content) {
     while (k < rl) { store8(_sess_hdr_buf + ho, load8(role + k)); ho = ho + 1; k = k + 1; }
     store8(_sess_hdr_buf + ho, 9); ho = ho + 1;            # '\t'
     ho = _sess_uint_into(_sess_hdr_buf, ho, clen);
-    store8(_sess_hdr_buf + ho, 10); ho = ho + 1;          # '\n'
     var ok = 0;
-    if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
+    var mlen = 0;
+    if (model != 0) { mlen = strlen(model); }
+    # Frame: "<role>\t<len>\n<content>\n"  OR (with a model) "<role>\t<len>\t<model>\n<content>\n". The model is
+    # written DIRECTLY to fd, never through the 64-byte _sess_hdr_buf (a model id can be up to 128 bytes).
+    if (mlen > 0) {
+        store8(_sess_hdr_buf + ho, 9); ho = ho + 1;        # '\t' -> a model field follows the length
+        if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
+        if (file_write(fd, model, mlen) != mlen) { ok = 0 - 1; }
+        if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+    } else {
+        store8(_sess_hdr_buf + ho, 10); ho = ho + 1;       # '\n' -> no model field
+        if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
+    }
     if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0 - 1; } }
     if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
     return ok;
@@ -405,7 +437,7 @@ fn _sess_write_file(path) {
         var mi = 0;
         while (mi < mn) {
             var m = vec_get(msgs, mi);
-            if (_sess_write_rec(fd, load64(m), load64(m + 8)) < 0) { ok = 0 - 1; }
+            if (_sess_write_rec(fd, load64(m), load64(m + 8), load64(m + 24)) < 0) { ok = 0 - 1; }
             mi = mi + 1;
         }
         ci = ci + 1;
@@ -480,8 +512,9 @@ fn _sess_load_v1(p, total) {
     return loaded;
 }
 
-# _sess_dup_bytes: a NUL-terminated title copy of `len` bytes (capped) from a buffer slice (the parse buffer is
-# reused, so titles must be copied out).
+# _sess_dup_bytes: a NUL-terminated capped copy of `len` bytes from a buffer slice — the stable-storage helper for
+# both conversation titles and per-message model ids (the parse buffer is reused, and both are short, so the
+# CONV_TITLE_STORE_MAX cap covers both).
 fn _sess_dup_bytes(ptr, len) {
     if (len > CONV_TITLE_STORE_MAX) { len = CONV_TITLE_STORE_MAX; }
     var d = alloc(len + 1);
@@ -517,22 +550,35 @@ fn _sess_load_v2(mend, total) {
                 var num = 0;
                 var nd = 0;
                 while ((p < total) && (load8(_sess_read_buf + p) >= 48) && (load8(_sess_read_buf + p) <= 57)) { num = num * 10 + (load8(_sess_read_buf + p) - 48); p = p + 1; nd = nd + 1; }
-                if ((nd == 0) || (num < 0) || (num > total) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { parsing = 0; }
+                if ((nd == 0) || (num < 0) || (num > total) || (p >= total)) { parsing = 0; }
                 else {
-                    p = p + 1;                           # skip '\n' after the length
-                    if (num > (total - p)) { parsing = 0; }   # payload doesn't fit -> stop
-                    else {
-                        if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CONV", 4) == 1)) {
-                            var title = 0;
-                            if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); }
-                            conv_load_add(title);        # new conversation, becomes the append target
-                        } else {
-                            if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
-                            session_history_append(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num);
-                            loaded = loaded + 1;
+                    # After the length, the separator is '\t' (an optional model field, records only, precedes the
+                    # '\n') or '\n' (no model field). A model token on a CONV header, if any, is parsed and ignored.
+                    var model_ptr = 0;
+                    var sep = load8(_sess_read_buf + p);
+                    if (sep == 9) {
+                        p = p + 1;                       # skip '\t'
+                        var mstart = p;                  # model token up to '\n'
+                        while ((p < total) && (load8(_sess_read_buf + p) != 10) && (load8(_sess_read_buf + p) != 9)) { p = p + 1; }
+                        if ((p >= total) || (load8(_sess_read_buf + p) != 10)) { parsing = 0; }
+                        else { var mlen = p - mstart; if (mlen > 0) { model_ptr = _sess_dup_bytes(_sess_read_buf + mstart, mlen); } }
+                    } else { if (sep != 10) { parsing = 0; } }   # neither '\t' nor '\n' -> malformed
+                    if (parsing == 1) {
+                        p = p + 1;                       # skip '\n' before the payload
+                        if (num > (total - p)) { parsing = 0; }   # payload doesn't fit -> stop
+                        else {
+                            if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CONV", 4) == 1)) {
+                                var title = 0;
+                                if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); }
+                                conv_load_add(title);    # new conversation, becomes the append target
+                            } else {
+                                if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
+                                _session_history_append_ex(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num, model_ptr);
+                                loaded = loaded + 1;
+                            }
+                            p = p + num;
+                            if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip payload separator
                         }
-                        p = p + num;
-                        if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip payload separator
                     }
                 }
             }

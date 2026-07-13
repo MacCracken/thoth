@@ -1418,6 +1418,26 @@ fn test_session_persist() {
     _sess_load_file("/tmp/thoth_sess_v2b");
     assert(streq(conv_title(0), "second line here") == 1, "v2 round-trip: title exact after reload (not re-derived)");
 
+    # --- 0.33.3: per-message model attribution — captured, stable across a switch, persisted ---
+    session_reset();
+    session_set_model_copy("claude-opus-4-8");
+    session_history_append("user", "hi", 2);              # user -> no model tag
+    session_history_append("assistant", "hey", 3);        # assistant -> tagged with the active model
+    assert_eq(session_history_model(0), 0, "0.33.3: user message carries no model");
+    assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.33.3: assistant tagged with the session model");
+    session_set_model_copy("claude-sonnet-5");            # a mid-session switch (overwrites the shared _model_buf)
+    assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.33.3: earlier reply's model UNCHANGED by a switch (stable copy, not an alias)");
+    session_history_append("assistant", "yo", 2);         # tagged with the NEW model
+    assert(streq(session_history_model(2), "claude-sonnet-5") == 1, "0.33.3: later reply tagged with the switched model");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_v3"), 0, "0.33.3: v3 write ok");
+    session_reset();
+    _sess_load_file("/tmp/thoth_sess_v3");
+    assert_eq(session_history_model(0), 0, "0.33.3 round-trip: user still untagged");
+    assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.33.3 round-trip: msg1 model restored");
+    assert(streq(session_history_model(2), "claude-sonnet-5") == 1, "0.33.3 round-trip: msg2 (switched) model restored");
+    assert(streq(session_history_content(1), "hey") == 1, "0.33.3 round-trip: content intact alongside the model field");
+    assert(streq(session_history_role(2), "assistant") == 1, "0.33.3 round-trip: role intact alongside the model field");
+
     _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
     session_reset();              # leave a clean single-conversation store for subsequent tests
     session_history_clear();
