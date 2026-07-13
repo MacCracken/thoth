@@ -122,6 +122,13 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "the turn did not complete - is hoosh reachable? try /reprobe");
         cy = cy + GFEED_GAP;
     }
+    # 0.34.3: an Esc-INTERRUPTED turn that kept no partial — a neutral "stopped" notice, not the red failure one.
+    if (gturn_stopped() == 1) {
+        var scy = gtool_build(cmds, xbase, cy, avail);            # tools the stopped turn had run before Esc (if any)
+        if (scy > cy) { cy = scy + GFEED_GAP; }
+        cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), "- stopped -");
+        cy = cy + GFEED_GAP;
+    }
     return cy;
 }
 
@@ -144,7 +151,7 @@ fn gfeed_build(cmds, x, y, w, h) {
     gd_push_clip(cmds, x, y, w, h);
     var n = session_history_len();
     var endy = 0;
-    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0)) {
+    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0)) {
         gscroll_reset();                                         # nothing to scroll on the empty greeting
         endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail);
     } else {

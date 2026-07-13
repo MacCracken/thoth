@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.34.3** — **GUI stop affordance: Esc aborts a turn in the desktop GUI** (2026-07-13). A GUI turn runs
+synchronously (`cmd_task` under `OUT_NULL`), blocking the present loop, so mid-turn keys queue unread. A new
+**`_gstop_poll`** hook (`src/gui/gpresent.cyr`) — registered as the **0.34.1 interrupt seam's** poll
+(`intr_check_hook_set`) and called by `agent_turn`'s `intr_check()` at each stream frame / round / tool-call
+boundary — non-blockingly `poll(2)`s the Wayland fd and raises the interrupt flag on **Esc**, so the turn aborts.
+Minimal stop-poll subset of 0.35.0's full mid-turn pump (input only, no repaint). The two SSE per-frame interrupt
+polls now route through `intr_check()` so the hook fires during streaming — the **TUI is byte-identical** (no hook
+there → `intr_check` == `intr_poll`). An Esc-interrupted turn with no partial shows a neutral **"- stopped -"**
+notice (new `gturn_stop`/`gturn_stopped`), distinct from the red failure notice; the greeting guard excludes it.
+Unit-tested (`test_gui` stopped-notice + parity + greeting guard; seam via `test_interrupt`). Live Esc-in-window is
+compositor-gated (user-verified). **Needs hoosh ≥ 2.4.13** (an interrupted stream crashed the older gateway —
+SIGPIPE; fixed there). **Completes the 0.34.x stop/interrupt work** (`.1` TUI + seam, `.3` GUI). Pin **6.4.62**.
+**NEXT (0.34.x)**: `.4` per-message remember + feedback.
+
 **0.34.2** — **Fix: an empty tool `inputSchema` silently emptied every agentic turn** (2026-07-13). A tool that
 daimon advertises with an empty `inputSchema` — which the **`mneme_*`** tools all do (`{}`) — made `agent_format_tools`
 (`src/agent.cyr`) emit `parameters: {}`, an **Anthropic-invalid** schema (`input_schema` must be `{"type":"object",…}`).

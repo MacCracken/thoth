@@ -71,6 +71,31 @@ fn _gpresent_drain_keys(win) {
     return action;
 }
 
+# --- GUI stop affordance (0.34.3) — a stop key aborts a turn mid-flight -----------------------------------------
+# A GUI turn runs SYNCHRONOUSLY (cmd_task under OUT_NULL, gpresent below), so the present loop is blocked for the
+# turn's duration and keys pressed during it queue unread on the Wayland fd. This hook — registered as the
+# front-end-agnostic interrupt seam's poll (intr_check_hook_set, 0.34.1) and called by agent_turn's intr_check() at
+# each stream frame / round / tool-call boundary — NON-BLOCKINGLY drains the Wayland fd and raises the interrupt
+# flag on the STOP key (Esc, evdev 1), so Esc cancels the turn. This is the minimal stop-poll subset of 0.35.0's
+# full mid-turn pump: it services input only (no repaint), and any non-Esc keys pressed mid-turn are drained and
+# discarded, matching the TUI's "mid-turn keystrokes don't leak into the composer" rule.
+var _gstop_win = 0;
+fn gstop_set_win(w) { _gstop_win = w; return 0; }
+fn _gstop_poll() {
+    if (_gstop_win == 0) { return 0; }
+    var pfd[8];
+    if (_gpresent_poll_fd(&pfd, gwl_win_fd(_gstop_win), 0) <= 0) { return 0; }   # non-blocking peek; nothing queued
+    var ev = gwl_win_poll_events(_gstop_win);
+    if ((ev & GWL_WIN_EV_KEY) == 0) { return 0; }
+    var rec[24];
+    while (gwl_win_next_key(_gstop_win, &rec) == 1) {
+        if (load64(&rec + 8) == 1) {                  # value 1 = press (not autorepeat/release)
+            if (load64(&rec) == 1) { intr_signal(); } # evdev keycode 1 = Esc = STOP -> raise the interrupt flag
+        }
+    }
+    return 0;
+}
+
 # gui_run: open a window and run the event loop until close. 0 on clean exit, -1 if no compositor.
 fn gui_run() {
     if (gwl_win_open("thoth", 960, 600) == 0) {
@@ -82,6 +107,7 @@ fn gui_run() {
     ftree_load();                                        # populate the file-tree pane (0.30.5)
     git_probe();                                         # so the tree's git badges + the status git field have data
     inhist_init();                                       # composer history recall ring (0.30.15)
+    gstop_set_win(win); intr_check_hook_set(&_gstop_poll);   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
     var pfd[8];
     _gpresent_frame(win);                                # first paint
     var running = 1;
@@ -115,7 +141,12 @@ fn gui_run() {
                                     # history, so raise a transient "didn't complete" notice instead of silence. Detect via the
                                     # turn tag (gturn_reply_landed), correct even at the SESS_HIST_MAX cap where a net-growth check
                                     # false-fires on a successful turn (0.30.19).
-                                    if (gturn_reply_landed() == 0) { gturn_fail(); }
+                                    # 0.34.3: distinguish an Esc-INTERRUPT (intr flag set by the stop-poll) from a real
+                                    # failure — a stopped turn with no partial gets a neutral "stopped" notice, not the
+                                    # red "is hoosh reachable?" one.
+                                    if (gturn_reply_landed() == 0) {
+                                        if (intr_pending() == 1) { gturn_stop(); } else { gturn_fail(); }
+                                    }
                                     gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
                                 }
                             }
@@ -136,6 +167,7 @@ fn gui_run() {
             }
         }
     }
+    intr_check_hook_set(0); gstop_set_win(0);            # 0.34.3: unregister the GUI stop-poll before teardown
     gwl_win_close(win);
     return 0;
 }

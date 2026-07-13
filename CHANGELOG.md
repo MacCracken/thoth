@@ -2,6 +2,28 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.3] - 2026-07-13
+
+**GUI stop affordance — Esc aborts an in-flight turn in the desktop GUI (completes the 0.34.x stop/interrupt work).**
+
+### Added
+- **Pressing Esc in the sovereign Wayland GUI now cancels a running turn.** A GUI turn runs synchronously
+  (`cmd_task` under `OUT_NULL`), blocking the present loop, so keys pressed during it queue unread. A new stop-poll
+  hook (`_gstop_poll`, `src/gui/gpresent.cyr`) — registered as the **0.34.1 front-end-agnostic interrupt seam's**
+  poll (`intr_check_hook_set`) and called by `agent_turn`'s `intr_check()` at each stream frame / round / tool-call
+  boundary — **non-blockingly** `poll(2)`s the Wayland fd and raises the interrupt flag on the stop key (Esc), so the
+  turn aborts between rounds / mid-stream. This is the minimal stop-poll subset of the full mid-turn pump scheduled
+  for 0.35.0 (it services input only, no repaint). The two SSE per-frame interrupt polls
+  (`_agent_sse_cb`, `hoosh_send`) now route through `intr_check()` so the hook fires during streaming — **the TUI is
+  byte-identical** (no hook registered there, so `intr_check` falls to the built-in `intr_poll` stdin drain).
+- **An Esc-interrupted GUI turn shows a neutral "- stopped -" notice**, distinct from the red "the turn did not
+  complete — is hoosh reachable?" failure notice (a partial that streamed before Esc still becomes the reply, so no
+  notice). New `gturn_stop`/`gturn_stopped` state; the empty-history greeting guard excludes it.
+- Unit-tested (`test_gui`: the stopped-notice state + its gfeed render + measure/draw parity + the greeting guard;
+  the interrupt seam is covered by `test_interrupt`). The live Esc-in-a-window abort is compositor-gated (verify on
+  Wayland). **Needs hoosh ≥ 2.4.13** (an interrupted stream would otherwise crash the gateway — see hoosh's SIGPIPE
+  fix). **This completes the 0.34.x stop/interrupt work** (`.1` TUI + the seam, `.3` GUI).
+
 ## [0.34.2] - 2026-07-13
 
 **Fix: an empty tool `inputSchema` (mneme_*) silently emptied every agentic turn against the full registry.**

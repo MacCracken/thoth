@@ -92,8 +92,10 @@ var GTURN_CAP = 4096;
 var _gturn_buf = 0;
 var _gturn_active = 0;
 var _gturn_failed = 0;    # the last turn appended no assistant reply -> surface an honest notice (transient)
+var _gturn_stopped = 0;   # 0.34.3: the last turn was Esc-INTERRUPTED (not a failure) -> a neutral "stopped" notice
 fn gturn_active() { return _gturn_active; }
 fn gturn_failed() { return _gturn_failed; }
+fn gturn_stopped() { return _gturn_stopped; }
 fn gturn_text() { if (_gturn_buf == 0) { return ""; } return _gturn_buf; }
 fn gturn_begin(text) {
     if (_gturn_buf == 0) { _gturn_buf = alloc(GTURN_CAP); }
@@ -101,7 +103,10 @@ fn gturn_begin(text) {
     while ((load8(text + i) != 0) && (i < GTURN_CAP - 1)) { store8(_gturn_buf + i, load8(text + i)); i = i + 1; }
     store8(_gturn_buf + i, 0);
     _gturn_active = 1;
-    _gturn_failed = 0;    # a new submit clears any prior failure notice
+    _gturn_failed = 0;    # a new submit clears any prior failure/stopped notice
+    _gturn_stopped = 0;
+    intr_reset();         # 0.34.3: clean interrupt flag before the turn, so the post-turn stop-vs-fail decision
+                          # reads ONLY this turn's Esc (never a stale flag) even on a path that skips agent_turn's reset
     return 0;
 }
 fn gturn_end() { _gturn_active = 0; return 0; }
@@ -109,6 +114,9 @@ fn gturn_end() { _gturn_active = 0; return 0; }
 # completion). The window renders only session_history, so error chrome never reaches it — this transient flag
 # lets the feed show an honest "didn't complete" notice instead of silently swallowing the message.
 fn gturn_fail() { _gturn_failed = 1; return 0; }
+# gturn_stop (0.34.3): the just-run turn was Esc-INTERRUPTED with no partial reply kept — a neutral "stopped" notice
+# (not the alarming "is hoosh reachable?" failure one). If a partial WAS streamed it became the reply, so no notice.
+fn gturn_stop() { _gturn_stopped = 1; return 0; }
 
 # gturn_reply_landed: did the just-run turn leave a fresh assistant reply? True iff the LAST history row is an
 # assistant tagged with the CURRENT turn (0.30.19). This replaces gpresent's old net-growth check

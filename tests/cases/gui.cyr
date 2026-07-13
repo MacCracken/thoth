@@ -270,6 +270,31 @@ fn test_gui() {
     assert_eq(gturn_failed(), 0, "a new submit (gturn_begin) clears the failure notice");
     gturn_end();
     session_history_clear();
+    # --- stopped-turn transient notice (0.34.3): an Esc-interrupt with no partial -> a NEUTRAL "stopped" notice
+    #     (distinct from the red "didn't complete" failure notice) ---
+    gturn_begin("interrupt me"); gturn_end(); gturn_stop();
+    assert_eq(gturn_stopped(), 1, "gturn_stopped set after gturn_stop");
+    assert_eq(gturn_failed(), 0, "a stop is NOT a failure (no red notice)");
+    session_history_clear();
+    var _stl = gd_list_new();
+    var _sth = _gfeed_flow(_stl, 14, 0, 800, 0);          # empty history + stopped -> the notice renders
+    assert(_sth > 0, "stopped-turn flow advances (renders the notice)");
+    assert_eq(_gfeed_flow(0, 14, 0, 800, 0), _sth, "stopped-notice measure height == draw height (parity)");
+    var _str = gd_list_new();
+    gfeed_build(_str, 0, 0, 900, 300);
+    var _sfound = 0; var _sti = 0;
+    while (_sti < vec_len(_str)) {
+        var _stc = vec_get(_str, _sti);
+        if ((gd_kind(_stc) == GD_TEXT) && (gd_text(_stc) != 0)) {
+            if (streq(gd_text(_stc), "- stopped -") == 1) { _sfound = 1; }
+        }
+        _sti = _sti + 1;
+    }
+    assert_eq(_sfound, 1, "gfeed_build renders the '- stopped -' notice on an interrupted turn");
+    gturn_begin("next");
+    assert_eq(gturn_stopped(), 0, "a new submit clears the stopped notice");
+    gturn_end();
+    session_history_clear();
     # --- file-tree pane (gtree.cyr, 0.30.5; full coverage restored at 0.30.6 once cyrius 6.4.51 raised the
     #     output cap 16 MiB -> 1 GiB on Linux, so the command-scan + golden PPM no longer overflow) ---
     # responsive width: hidden on a narrow window, the fixed pane otherwise

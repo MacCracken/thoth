@@ -973,7 +973,7 @@ fn _agent_set_tools(raw, val, n) {
 # _agent_sse_cb: the streaming callback. Content deltas print live and accumulate
 # in _hoosh_acc; tool_call deltas fold into the per-index slots. [DONE] ends it.
 fn _agent_sse_cb(ctx, ev) {
-    if (intr_poll() == 1) { return 0; }   # 0.17.4: Esc -> stop the stream cleanly (partial kept)
+    if (intr_check() == 1) { return 0; }   # 0.17.4 Esc -> stop the stream cleanly (partial kept); 0.34.3: via the seam so the GUI stop-poll hook fires per frame too (TUI unchanged — no hook -> intr_poll)
     var data = sandhi_sse_event_data(ev);
     if (data == 0) { return 1; }
     if (streq(data, "[DONE]") == 1) { return 0; }
