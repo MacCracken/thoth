@@ -1082,10 +1082,11 @@ fn agent_turn(prompt) {
     var model = _hoosh_model();
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
-    # project memory (0.12.0): the second system message, acquired once per turn
-    # (local .thoth/memory reader, or mneme when it binds). ADR-0012.
+    # project memory (0.12.0): the second system message, acquired once per turn —
+    # the local .thoth/memory reader, or mneme SEMANTIC recall keyed on this turn's
+    # prompt when the seam is bound (0.32.2). ADR-0012.
     var mem = 0;
-    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(); }
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(prompt); }
     if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
     if (_agent_tools_buf == 0) { _agent_tools_buf = alloc(AGENT_TOOLS_CAP); }
     if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }

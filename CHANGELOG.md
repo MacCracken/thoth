@@ -2,7 +2,20 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.32.1] - 2026-07-12
+## [0.32.2] - 2026-07-12
+
+**Semantic recall via mneme — a turn's memory context is now a live `mneme_search` keyed on the turn, when the seam is bound.**
+
+### Added
+- **Recall via mneme.** `memory_context(query)` (`src/memory.cyr`): when `[memory].enabled` and the memory seam
+  is bound (daimon hosts `mneme_*`), recall is a per-turn `mneme_search(query, limit=5)` via `daimon_invoke`, whose
+  hits are injected verbatim as the memory system message — the semantic upgrade over the static local reader.
+  thoth stays a CONSUMER: it sends the turn's text as the query and injects mneme's result text opaquely (no
+  ranking/parsing). On any failure (transport, tool error, empty result) it falls back to the local
+  `.thoth/memory` reader. The turn query is threaded through the live sites (`agent_turn`/`hoosh_send` pass the
+  prompt); **`/dry` passes `0`** so it stays network-free (it previews the local memory; the live turn resolves
+  mneme recall at send). Live-verified end-to-end against a real mneme (a seeded note surfaced in the turn's
+  request body, keyed on a matching query).
 
 **GUI pane toggles — hide the file-tree and status chrome so the conversation feed can take the whole window.**
 

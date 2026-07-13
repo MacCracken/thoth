@@ -1313,9 +1313,11 @@ fn cmd_dry(line) {
     var model = hoosh_model_cur();
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
-    # project memory (0.12.0): show the exact second system message /dry would send.
+    # project memory (0.12.0): show the second system message /dry would send. Pass query=0 so /dry stays
+    # NETWORK-FREE (0.32.2) — it previews the LOCAL .thoth/memory; when the seam is bound the live turn instead
+    # injects mneme semantic recall keyed on the task (resolved at send, not in this preview).
     var mem = 0;
-    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(); }
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(0); }
     var stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     var buf = hoosh_dry_buf();

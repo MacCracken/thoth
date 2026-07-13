@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.32.2** — **Semantic recall via mneme** (2026-07-12). When `[memory].enabled` and the memory seam is bound
+(daimon hosts `mneme_*`), a turn's memory context is a live `mneme_search` keyed on the turn (`memory_context(query)`,
+`src/memory.cyr`) — the hits injected verbatim, degrading to the local `.thoth/memory` reader on any failure. The
+query is threaded through the live turn sites; `/dry` passes `0` to stay network-free. thoth stays a consumer
+(sends the query, injects mneme's text opaquely). Live-verified end-to-end against a real mneme.
+
 **0.32.1** — **GUI pane toggles** (2026-07-12). Two control chords hide/show the desktop GUI's chrome so the
 conversation feed can take the whole window: **Ctrl+B** the file-tree pane, **Ctrl+S** the status strip (the feed
 reclaims the space; focus never sticks on a hidden pane; unbound `Ctrl+<letter>` is swallowed). Provisional

@@ -1012,9 +1012,10 @@ fn hoosh_send(prompt) {
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
     # project memory (0.12.0): the second system message when the memory seam is
-    # not absent (local .thoth/memory reader, or mneme when it binds). ADR-0012.
+    # not absent — the local .thoth/memory reader, or mneme SEMANTIC recall keyed on
+    # this turn's prompt when the seam is bound (0.32.2). ADR-0012.
     var mem = 0;
-    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(); }
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(prompt); }
     var want_stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     _hoosh_acc_reset();

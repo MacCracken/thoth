@@ -1447,7 +1447,7 @@ fn test_memory() {
 
     # reader is OFF by default -> content-blind gate returns 0, no I/O, no faked line.
     assert_eq(config_memory_enabled(), 0, "memory off by default");
-    assert_eq(memory_context(), 0, "memory_context() 0 when disabled");
+    assert_eq(memory_context(0), 0, "memory_context(0) 0 when disabled");
     assert_eq(memory_system_prompt(), 0, "memory_system_prompt() 0 when disabled");
     assert_eq(memory_fact_count(), 0, "memory_fact_count() 0 when disabled");
 
@@ -1503,6 +1503,17 @@ fn test_mem_seam() {
     # title derivation for mneme_create_note: first line, verbatim
     assert(streq(_mem_derive_title("hello world"), "hello world"), "title = full short fact");
     assert(streq(_mem_derive_title("line one\nline two"), "line one"), "title stops at the first newline");
+
+    # recall gating (0.32.2): memory_context(query) is the injectable memory message. [memory].enabled is the
+    # master switch; a query with the seam UNBOUND takes the local reader (0 here — no .thoth/memory in the test
+    # cwd). daimon is unconfigured in the harness, so daimon_mem_probe() is a no-op (no network) and bound stays 0.
+    _daimon_mem_probed = 0 - 1;
+    assert_eq(config_memory_enabled(), 0, "memory off by default (guard)");
+    assert_eq(memory_context("find the auth handler"), 0, "recall: disabled -> 0 regardless of query");
+    _cfg_memory_enabled = 1;
+    assert_eq(memory_context("find the auth handler"), 0, "recall: enabled + unbound + no local mem -> 0 (local fallback)");
+    assert_eq(memory_context(0), 0, "recall: query=0 -> local path (network-free), 0 with no local mem");
+    _cfg_memory_enabled = 0;
 
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
