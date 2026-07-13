@@ -1380,8 +1380,47 @@ fn test_session_persist() {
     assert_eq(big, 40, "reported resumed count capped at 40 (not the 42 parsed)");
     assert_eq(sess_persist_resumed(), 40, "sess_persist_resumed() == 40");
 
+    # --- 0.33.2: multi-conversation persistence (THOTH-SESSION-2) round-trip ---
+    _sess_path = 0;                # no live auto-save during the build
+    session_reset();              # fresh store (default conv created on first append)
+    session_history_append("user", "in alpha", 8);        # conv 0 -> auto-titled "in alpha"
+    session_history_append("assistant", "reply a", 7);
+    conv_new();                                            # conv 1 (untitled)
+    conv_set_title(conv_active(), "beta chat");           # explicit title (not derived from a message)
+    session_history_append("user", "in beta", 7);
+    conv_switch(0);                                        # save with conv 0 active
+    assert_eq(conv_count(), 2, "v2: two conversations before save");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_v2"), 0, "v2 write ok");
+    session_reset();                                       # drop the whole store
+    assert_eq(conv_count(), 0, "v2: store dropped before load");
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v2"), 3, "v2 load: 3 total message records");
+    assert_eq(conv_count(), 2, "v2 load: 2 conversations restored");
+    assert_eq(conv_active(), 0, "v2 load: active conversation index restored");
+    assert(streq(conv_title(0), "in alpha") == 1, "v2 load: conv0 auto-title restored");
+    assert(streq(conv_title(1), "beta chat") == 1, "v2 load: conv1 explicit title restored");
+    conv_switch(0);
+    assert_eq(session_history_len(), 2, "v2 load: conv0 has 2 messages");
+    assert(streq(session_history_content(0), "in alpha") == 1, "v2 load: conv0 msg0 content");
+    assert(streq(session_history_role(1), "assistant") == 1, "v2 load: conv0 msg1 role");
+    conv_switch(1);
+    assert_eq(session_history_len(), 1, "v2 load: conv1 has 1 message (isolated)");
+    assert(streq(session_history_content(0), "in beta") == 1, "v2 load: conv1 msg0 content");
+
+    # --- 0.33.2 review fix: a newline-leading first message derives NO title (stays untitled, never a blank "")
+    # so it round-trips as untitled instead of re-deriving from a different surviving message ---
+    session_reset();
+    session_history_append("user", "\nfix the bug", 12);   # empty first line
+    assert_eq(conv_title(0), 0, "empty first line -> conversation stays untitled (no blank title)");
+    session_history_append("user", "second line here", 16);  # a later user message DOES title it
+    assert(streq(conv_title(0), "second line here") == 1, "a later non-empty user message auto-titles");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_v2b"), 0, "v2b write ok");
+    session_reset();
+    _sess_load_file("/tmp/thoth_sess_v2b");
+    assert(streq(conv_title(0), "second line here") == 1, "v2 round-trip: title exact after reload (not re-derived)");
+
     _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
-    session_history_clear();       # leave a clean history for subsequent tests
+    session_reset();              # leave a clean single-conversation store for subsequent tests
+    session_history_clear();
     return 0;
 }
 

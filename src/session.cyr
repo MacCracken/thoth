@@ -122,6 +122,10 @@ fn _conv_autotitle(content, clen) {
         if (ch == 10) { done = 1; }              # stop at the first newline
         else { store8(t + i, ch); i = i + 1; }
     }
+    # An empty first line (e.g. a newline-leading message) derives no title: return 0 (leave untitled, defer to a
+    # later user message) rather than a blank "" title. A "" title would persist as CONV tlen-0 — indistinguishable
+    # from untitled on reload, so it would re-derive from a different surviving message (0.33.2 round-trip fidelity).
+    if (i == 0) { return 0; }
     if (done == 0) { if (clen > CONV_TITLE_MAX) {   # truncated mid-content -> ellipsis
         store8(t + i, 46); store8(t + i + 1, 46); store8(t + i + 2, 46); i = i + 3;
     } }
@@ -140,6 +144,34 @@ fn conv_dup_title(s) {
     while (i < n) { store8(d + i, load8(s + i)); i = i + 1; }
     store8(d + n, 0);
     return d;
+}
+
+# --- multi-conversation persistence support (0.33.2) --------------------------------------------------------
+# conv_load_begin: start a CLEAN store for a load (no lazily-created default — the file's CONV records supply the
+# conversations). conv_load_add: append a conversation with a copied title, make it the current load target, and
+# return its index; created/updated are set to now (timestamps are not persisted this cut). session_total_messages:
+# the message count across ALL conversations, for the honest resume greeting.
+fn conv_load_begin() { _conv_store = vec_new(); _conv_active = 0; _conv_next_id = 1; return 0; }
+fn conv_load_add(title) {
+    if (_conv_store == 0) { _conv_store = vec_new(); }
+    var c = alloc(40);
+    store64(c, _conv_next_id); _conv_next_id = _conv_next_id + 1;
+    store64(c + 8, title);
+    var now = clock_epoch_secs();
+    store64(c + 16, now);
+    store64(c + 24, now);
+    store64(c + 32, vec_new());
+    vec_push(_conv_store, c);
+    _conv_active = vec_len(_conv_store) - 1;
+    return _conv_active;
+}
+fn session_total_messages() {
+    if (_conv_store == 0) { return 0; }
+    var n = vec_len(_conv_store);
+    var i = 0;
+    var t = 0;
+    while (i < n) { t = t + vec_len(conv_msgs(i)); i = i + 1; }
+    return t;
 }
 
 fn session_reset() {
@@ -279,7 +311,8 @@ fn session_history_clear() {
 # session_history_* above). We persist strlen(content) bytes, so an interior NUL byte terminates content, as
 # it already does everywhere else in the history path (and as it MUST: a raw NUL cannot be re-sent to hoosh —
 # a 0x00 inside a JSON string is invalid). Newlines, tabs, and all other bytes round-trip exactly.
-var SESS_FILE_MAGIC = "THOTH-SESSION-1";
+var SESS_FILE_MAGIC = "THOTH-SESSION-1";     # v1 (legacy, single linear thread) — still LOADED for back-compat
+var SESS_FILE_MAGIC_V2 = "THOTH-SESSION-2";  # v2 (0.33.2) — all conversations, framed with CONV headers
 var SESS_MODE = 0x180;         # 0600 rw------- — best-effort CREATE mode (see the header note on perms)
 var SESS_READ_CAP = 3145728;   # 3 MiB load buffer (>= SESS_HIST_MAX * HOOSH_ACC_CAP); a larger file loads its leading records only
 var _sess_path = 0;            # bound file path (0 = persistence OFF)
@@ -321,31 +354,61 @@ fn _sess_uint_into(buf, off, n) {
 # _sess_write_file: truncate + rewrite `path` from the in-memory history (oldest->newest), framed. Returns 0
 # on success, -1 if the file cannot be opened OR any write short-writes (so the caller degrades closed rather
 # than leave a truncated file). Created 0600 if absent (best-effort — see the header note on perms).
+# _sess_write_rec: write one "<role>\t<clen>\n<content>\n" record to fd through the scratch header. Returns 0 ok, -1 short-write.
+fn _sess_write_rec(fd, role, content) {
+    var clen = strlen(content);
+    var ho = 0;
+    var rl = strlen(role);
+    var k = 0;
+    while (k < rl) { store8(_sess_hdr_buf + ho, load8(role + k)); ho = ho + 1; k = k + 1; }
+    store8(_sess_hdr_buf + ho, 9); ho = ho + 1;            # '\t'
+    ho = _sess_uint_into(_sess_hdr_buf, ho, clen);
+    store8(_sess_hdr_buf + ho, 10); ho = ho + 1;          # '\n'
+    var ok = 0;
+    if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
+    if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0 - 1; } }
+    if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+    return ok;
+}
+
+# _sess_write_file: truncate + rewrite `path` in the v2 (all-conversations) format. Magic line carries the active
+# index; then per conversation a "CONV\t<title_len>\n<title>\n" header followed by that conversation's records.
+# Returns 0 on success, -1 on open/short-write failure (caller degrades closed).
 fn _sess_write_file(path) {
     var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, SESS_MODE);
     if (fd < 0) { return 0 - 1; }
     if (_sess_hdr_buf == 0) { _sess_hdr_buf = alloc(64); }
     var ok = 0;
-    var ml = strlen(SESS_FILE_MAGIC);
-    if (file_write(fd, SESS_FILE_MAGIC, ml) != ml) { ok = 0 - 1; }
-    if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
-    var n = session_history_len();
-    var i = 0;
-    while (i < n) {
-        var role = session_history_role(i);
-        var content = session_history_content(i);
-        var clen = strlen(content);
-        var ho = 0;                                       # build "<role>\t<clen>\n" in the scratch
-        var rl = strlen(role);
-        var k = 0;
-        while (k < rl) { store8(_sess_hdr_buf + ho, load8(role + k)); ho = ho + 1; k = k + 1; }
-        store8(_sess_hdr_buf + ho, 9); ho = ho + 1;       # '\t'
-        ho = _sess_uint_into(_sess_hdr_buf, ho, clen);
-        store8(_sess_hdr_buf + ho, 10); ho = ho + 1;      # '\n'
-        if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
-        if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0 - 1; } }
+    var ml = strlen(SESS_FILE_MAGIC_V2);
+    if (file_write(fd, SESS_FILE_MAGIC_V2, ml) != ml) { ok = 0 - 1; }
+    var ho = 0;                                           # "\t<active>\n"
+    store8(_sess_hdr_buf, 9); ho = 1;
+    ho = _sess_uint_into(_sess_hdr_buf, ho, conv_active());
+    store8(_sess_hdr_buf + ho, 10); ho = ho + 1;
+    if (file_write(fd, _sess_hdr_buf, ho) != ho) { ok = 0 - 1; }
+    var nc = conv_count();
+    var ci = 0;
+    while (ci < nc) {
+        var title = conv_title(ci);
+        var tlen = 0;
+        if (title != 0) { tlen = strlen(title); }
+        var h2 = 0;                                       # "CONV\t<tlen>\n"
+        store8(_sess_hdr_buf, 67); store8(_sess_hdr_buf + 1, 79); store8(_sess_hdr_buf + 2, 78); store8(_sess_hdr_buf + 3, 86); h2 = 4;   # "CONV"
+        store8(_sess_hdr_buf + h2, 9); h2 = h2 + 1;
+        h2 = _sess_uint_into(_sess_hdr_buf, h2, tlen);
+        store8(_sess_hdr_buf + h2, 10); h2 = h2 + 1;
+        if (file_write(fd, _sess_hdr_buf, h2) != h2) { ok = 0 - 1; }
+        if (tlen > 0) { if (file_write(fd, title, tlen) != tlen) { ok = 0 - 1; } }
         if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
-        i = i + 1;
+        var msgs = conv_msgs(ci);
+        var mn = vec_len(msgs);
+        var mi = 0;
+        while (mi < mn) {
+            var m = vec_get(msgs, mi);
+            if (_sess_write_rec(fd, load64(m), load64(m + 8)) < 0) { ok = 0 - 1; }
+            mi = mi + 1;
+        }
+        ci = ci + 1;
     }
     file_close(fd);
     return ok;
@@ -367,11 +430,22 @@ fn _sess_load_file(path) {
         else { total = total + got; if (total >= SESS_READ_CAP) { go = 0; } }
     }
     file_close(fd);
+    # v2 (0.33.2, all conversations): "THOTH-SESSION-2\t<active>\n" ...
+    var mlv2 = strlen(SESS_FILE_MAGIC_V2);
+    if (total >= (mlv2 + 1)) { if (_sess_eqn(_sess_read_buf, SESS_FILE_MAGIC_V2, mlv2) == 1) { if (load8(_sess_read_buf + mlv2) == 9) {
+        return _sess_load_v2(mlv2, total);
+    } } }
+    # v1 (legacy single thread): "THOTH-SESSION-1\n" ...
     var ml = strlen(SESS_FILE_MAGIC);
-    if (total < (ml + 1)) { return 0; }                  # too short to hold the magic line
-    if (_sess_eqn(_sess_read_buf, SESS_FILE_MAGIC, ml) == 0) { return 0; }   # not our file -> skip
-    if (load8(_sess_read_buf + ml) != 10) { return 0; }  # magic must be its own line
-    var p = ml + 1;
+    if (total >= (ml + 1)) { if (_sess_eqn(_sess_read_buf, SESS_FILE_MAGIC, ml) == 1) { if (load8(_sess_read_buf + ml) == 10) {
+        return _sess_load_v1(ml + 1, total);
+    } } }
+    return 0;                                             # not our file / too short -> skip
+}
+
+# _sess_load_v1: the legacy single-thread parser — replays each "<role>\t<clen>\n<content>\n" record through
+# session_history_append (into the default conversation). `p` starts past the magic line. Returns the count.
+fn _sess_load_v1(p, total) {
     var loaded = 0;
     var parsing = 1;
     while (parsing == 1) {
@@ -383,29 +457,88 @@ fn _sess_load_file(path) {
             else {
                 var rlen = p - rstart;
                 p = p + 1;                               # skip '\t'
-                var clen = 0;                            # decimal content length
+                var clen = 0;
                 var digits = 0;
                 while ((p < total) && (load8(_sess_read_buf + p) >= 48) && (load8(_sess_read_buf + p) <= 57)) {
                     clen = clen * 10 + (load8(_sess_read_buf + p) - 48);
                     p = p + 1; digits = digits + 1;
                 }
-                # clen bounds: reject a non-numeric/absent length, an i64-overflowed (negative) length, or
-                # one larger than the whole buffer (a hostile/corrupt file) — BEFORE any pointer arithmetic,
-                # so a giant clen can never wrap (p + clen) negative and slip past the fit check into an OOB copy.
                 if ((digits == 0) || (clen < 0) || (clen > total) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { parsing = 0; }
                 else {
                     p = p + 1;                           # skip '\n' after clen
-                    if (clen > (total - p)) { parsing = 0; }   # content doesn't fit (truncated) -> stop
+                    if (clen > (total - p)) { parsing = 0; }
                     else {
                         session_history_append(_sess_role_literal(_sess_read_buf + rstart, rlen), _sess_read_buf + p, clen);
                         loaded = loaded + 1;
                         p = p + clen;
-                        if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip the record separator
+                        if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }
                     }
                 }
             }
         }
     }
+    return loaded;
+}
+
+# _sess_dup_bytes: a NUL-terminated title copy of `len` bytes (capped) from a buffer slice (the parse buffer is
+# reused, so titles must be copied out).
+fn _sess_dup_bytes(ptr, len) {
+    if (len > CONV_TITLE_STORE_MAX) { len = CONV_TITLE_STORE_MAX; }
+    var d = alloc(len + 1);
+    var i = 0;
+    while (i < len) { store8(d + i, load8(ptr + i)); i = i + 1; }
+    store8(d + len, 0);
+    return d;
+}
+
+# _sess_load_v2: the multi-conversation parser. `mend` = the '\t' offset after the magic. Both a CONV header and a
+# message record share the "<token>\t<num>\n<payload>\n" frame (token=="CONV": num=title_len, payload=title; else
+# token=role: num=clen, payload=content), so one loop + one bounds check handles both. Rebuilds the store from
+# scratch, restores the active conversation, and never OOBs on a corrupt file. Returns the message records loaded.
+fn _sess_load_v2(mend, total) {
+    var p = mend + 1;                                    # past "...-2\t"
+    var active_idx = 0;
+    var ad = 0;
+    while ((p < total) && (load8(_sess_read_buf + p) >= 48) && (load8(_sess_read_buf + p) <= 57)) { active_idx = active_idx * 10 + (load8(_sess_read_buf + p) - 48); p = p + 1; ad = ad + 1; }
+    if ((ad == 0) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { return 0; }   # malformed magic line
+    p = p + 1;
+    conv_load_begin();
+    var loaded = 0;
+    var parsing = 1;
+    while (parsing == 1) {
+        if (p >= total) { parsing = 0; }
+        else {
+            var tstart = p;                              # token up to '\t'
+            while ((p < total) && (load8(_sess_read_buf + p) != 9) && (load8(_sess_read_buf + p) != 10)) { p = p + 1; }
+            if ((p >= total) || (load8(_sess_read_buf + p) != 9)) { parsing = 0; }
+            else {
+                var tlen = p - tstart;
+                p = p + 1;                               # skip '\t'
+                var num = 0;
+                var nd = 0;
+                while ((p < total) && (load8(_sess_read_buf + p) >= 48) && (load8(_sess_read_buf + p) <= 57)) { num = num * 10 + (load8(_sess_read_buf + p) - 48); p = p + 1; nd = nd + 1; }
+                if ((nd == 0) || (num < 0) || (num > total) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { parsing = 0; }
+                else {
+                    p = p + 1;                           # skip '\n' after the length
+                    if (num > (total - p)) { parsing = 0; }   # payload doesn't fit -> stop
+                    else {
+                        if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CONV", 4) == 1)) {
+                            var title = 0;
+                            if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); }
+                            conv_load_add(title);        # new conversation, becomes the append target
+                        } else {
+                            if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
+                            session_history_append(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num);
+                            loaded = loaded + 1;
+                        }
+                        p = p + num;
+                        if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip payload separator
+                    }
+                }
+            }
+        }
+    }
+    conv_switch(active_idx);                             # restore the active conversation (clamped)
     return loaded;
 }
 
@@ -429,7 +562,7 @@ fn sess_persist_init(path) {
     _sess_resumed = 0;
     if (path == 0) { return 0; }                         # not configured -> OFF
     _sess_load_file(path);
-    _sess_resumed = session_history_len();               # the ACTUAL resumed count (post SESS_HIST_MAX eviction) — a >40-record file parses more than it keeps; report what's really in context, never the raw parse count
+    _sess_resumed = session_total_messages();            # the ACTUAL resumed count across ALL conversations (post SESS_HIST_MAX per-conv eviction) — a >40-record conv parses more than it keeps; report what's really in context, never the raw parse count
     if (_sess_probe_writable(path) < 0) { _sess_init_failed = 1; return 0 - 1; }   # unwritable -> announce + OFF
     _sess_path = path;                                   # ACTIVE
     return _sess_resumed;

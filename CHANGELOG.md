@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.2] - 2026-07-12
+
+**Multi-conversation persistence — every conversation survives a restart, not just the active one.**
+
+### Changed
+- **`[session].file` now persists the whole store** (`src/session.cyr`). A new **`THOTH-SESSION-2`** on-disk format
+  frames every conversation: a magic line carrying the active index, then per conversation a `CONV\t<title_len>\n
+  <title>\n` header followed by that conversation's message records (the same `<role>\t<len>\n<content>\n` frame as
+  before). On resume, the full store — titles, per-conversation messages, and the active conversation — is rebuilt;
+  previously only the active conversation persisted (as `THOTH-SESSION-1`). **Old `THOTH-SESSION-1` files still load**
+  (into the default conversation) — the reader dispatches on the magic line, so an existing session resumes unchanged.
+- The parser is hardened against a corrupt/hostile file the same way the v1 reader is — every length is bounds-checked
+  before any pointer arithmetic (a non-numeric, negative-overflowed, or over-large length stops the parse; a payload
+  that does not fit is refused), so a bad file degrades to "load what parsed" and never an out-of-bounds read.
+  Titles are copied out of the reused parse buffer (capped at 128 bytes). The resumed-count greeting now reports the
+  total across all conversations.
+
+### Fixed
+- **Auto-title round-trip fidelity** (adversarial-review catch). A newline-leading first user message derived a blank
+  `""` title, which persisted as a zero-length `CONV` header — indistinguishable from *untitled* on reload, so the
+  conversation re-derived its title from a different surviving message. `_conv_autotitle` now returns *untitled*
+  (`0`) for an empty first line (deferring the title to a later message) instead of committing a blank label, so a
+  non-empty title always survives the round-trip exactly and a blank title never exists to be lost.
+
+### Added
+- Store helpers `conv_load_begin`/`conv_load_add` (rebuild the store from a file) and `session_total_messages`.
+  Unit-tested with a real multi-conversation file round-trip (two conversations, an explicit title, an auto-title,
+  message isolation, active-index restore, v1 back-compat) and live-verified end-to-end (resume restores both
+  conversations with the `*` on the saved-active one; a live save rewrites a valid v2 file that re-resumes exactly,
+  including an emptied conversation). Toolchain pin `6.4.58`→`6.4.62`.
+
 ## [0.33.1] - 2026-07-12
 
 **Conversation commands — list, create, switch, rename, delete named conversations.**

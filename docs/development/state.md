@@ -7,6 +7,14 @@
 
 ## Version
 
+**0.33.2** — **Multi-conversation persistence** (2026-07-12). `[session].file` now persists the whole store, not
+just the active conversation: a new **`THOTH-SESSION-2`** format frames each conversation (`CONV\t<len>\n<title>\n`
+header + that conversation's records) behind a magic line carrying the active index. Resume rebuilds titles,
+per-conversation messages, and the active conversation; old `THOTH-SESSION-1` files still load (into the default
+conversation — the reader dispatches on the magic). The parser is bounds-checked against a corrupt file (load what
+parsed, never an OOB read). New `conv_load_begin`/`conv_load_add`/`session_total_messages`. Unit-tested (real
+multi-conversation file round-trip + v1 back-compat) + live-verified both ways. Toolchain pin `6.4.58`→`6.4.62`.
+
 **0.33.1** — **Conversation commands** (2026-07-12). `/conversations` (`/convos`) lists conversations (active `*` +
 title + msg count); `/new [title]`, `/switch <n>`, `/rename <title>`, `/delete <n>` (never the last, active-index
 fixup). An untitled conversation auto-titles from its first user message. Over the 0.33.0 `conv_*` store (in-memory;
@@ -2329,10 +2337,11 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.49` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc`. The pin advanced steadily across the 0.11.x–0.30.x arc via
+- **Cyrius pin**: `6.4.62` (in `cyrius.cyml [package].cyrius`), matching the
+  installed `cycc`. The pin advanced steadily across the 0.11.x–0.33.x arc via
   `cyrius lib sync` floor refreshes (no thoth source change) — most recently
-  6.4.29 → 6.4.46 → **6.4.49** (0.27.0 and the 0.30.x GUI work). Earlier history:
+  6.4.29 → 6.4.46 → 6.4.49 (0.27.0 and the 0.30.x GUI work) → 6.4.57 (0.32.0
+  atomic writes) → 6.4.58 (0.32.1) → **6.4.62** (0.33.2). Earlier history:
   **0.10.1** took 6.2.40 → 6.2.43. The 0.7.0 line had run on 6.2.40. Earlier:
   **0.6.6** took 6.2.15 → 6.2.37 — a toolchain refresh:
   `cyrius lib sync` re-synced 98 floor modules (two new snapshot modules,
