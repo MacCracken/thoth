@@ -6,9 +6,11 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-07-12 (**0.32.2 — semantic recall via mneme cut**: README stamp `0.32.1`→`0.32.2` + the
-> recall line, CHANGELOG + state.md `[0.32.2]` entries, roadmap 0.32.x trimmed (recall + the daimon→mneme host
-> shipped → remaining = citations/grounding/notebook)). **Prior**: 2026-07-12 (**0.32.1 — GUI pane toggles cut**:
+> **Last refresh**: 2026-07-12 (**0.32.3 — citations cut**: README stamp `0.32.2`→`0.32.3` + the cited-sources note,
+> CHANGELOG + state.md `[0.32.3]` entries, roadmap 0.32.x trimmed (citations shipped → remaining = grounding
+> indicator / GUI citations / notebook)). **Prior**: 2026-07-12 (**0.32.2 — semantic recall via mneme cut**: README
+> stamp `0.32.1`→`0.32.2` + the recall line, CHANGELOG + state.md `[0.32.2]` entries, roadmap 0.32.x trimmed).
+> **Prior**: 2026-07-12 (**0.32.1 — GUI pane toggles cut**:
 > README stamp `0.32.0`→`0.32.1`, CHANGELOG + state.md `[0.32.1]` entries, toolchain pin `6.4.57`→`6.4.58`).
 > **Prior**: 2026-07-12 (**0.32.0 — mneme memory
 > seam + crash-safe atomic writes cut**). Bumped the README

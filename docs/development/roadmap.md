@@ -124,10 +124,10 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 
 - **0.32.x — Memory + RAG: consume mneme (the highest-leverage gap).** The **seam + write binding** (0.32.0),
   the **daimon→mneme host wiring** (mneme 1.1.0's served MCP endpoint + self-registration — the real transport),
-  and **semantic recall** (0.32.2) have shipped: a turn's memory context is now a live `mneme_search` when the seam
-  is bound. Remaining, CONSUMING mneme's tools, never forking ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)):
-  **citations** — capture recalled sources as `[N]` refs + a sources footer across line/TUI/GUI; a **grounding
-  indicator** (green/yellow/red) per grounded reply; **notebook/knowledge mode** if mneme exposes a corpus.
+  **semantic recall** (0.32.2), and **citations** (0.32.3 — cite-`[N]` + a recalled-sources line for line/TUI) have
+  shipped. Remaining, CONSUMING mneme's tools, never forking ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)):
+  a **grounding indicator** (green/yellow/red) per grounded reply; **GUI citations** (the sources line in the feed —
+  the GUI turn runs under `OUT_NULL`, so it needs a feed element); **notebook/knowledge mode** if mneme exposes a corpus.
 - **0.33.x — Multi-conversation store (the structural foundation).** Move from one-conversation-per-process to
   **named, persisted, switchable** conversations. Cuts: **.0** extend `[session].file` from a single linear thread
   to a keyed store (id, title, timestamps, message list) with a richer message schema (role/content/turn +

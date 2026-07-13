@@ -2,6 +2,25 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.32.3] - 2026-07-12
+
+**Citations — the sources behind a recall are captured, cited, and shown.**
+
+### Added
+- **Citations for mneme recall** (`src/memory.cyr`). The recalled context is injected into the MODEL's turn and
+  never shown to the user, so citations close the loop: (1) the injected recall now instructs the model to **cite a
+  used source inline as `[N]`** (mneme already numbers the hits); (2) thoth captures each recalled note's **title +
+  path** — a light, DEFENSIVE parse of mneme's numbered result (`citations_capture`; if the format doesn't match,
+  nothing is captured and recall still works); (3) a **"recalled N note(s) from mneme: [1] Title [2] Title"** line
+  is shown when recall fires (line/TUI). Presentation only — retrieval/ranking stays mneme's (ADR-0012). GUI
+  surfacing rides the feed work (the GUI turn runs under `OUT_NULL`). Live-verified end-to-end against a real mneme.
+
+### Fixed
+- A citations-parser crash caught during bring-up: thoth's `strstr` returns an **index** (`-1` when not found), not
+  a pointer/0 — the first draft treated the return as a pointer and SIGSEGV'd on a real result (and, being a crash,
+  slipped past the unit test as a non-`FAIL`). The parser now uses correct index arithmetic; the tests now exercise
+  it (they genuinely run rather than crashing).
+
 ## [0.32.2] - 2026-07-12
 
 **Semantic recall via mneme — a turn's memory context is now a live `mneme_search` keyed on the turn, when the seam is bound.**

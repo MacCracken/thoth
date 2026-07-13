@@ -7,6 +7,13 @@
 
 ## Version
 
+**0.32.3** — **Citations** (2026-07-12). The recalled context is model-only, so citations surface the sources:
+the injection now tells the model to cite a used source inline as `[N]` (mneme numbers the hits), thoth captures
+each recalled note's title + path (a defensive parse of mneme's result, `citations_capture`), and shows a
+"recalled N note(s) from mneme: [1] Title …" line when recall fires (line/TUI; GUI rides the feed work).
+Presentation only (ADR-0012); live-verified. (Bring-up caught a parser crash — thoth's `strstr` returns an index,
+not a pointer — now fixed + genuinely tested.)
+
 **0.32.2** — **Semantic recall via mneme** (2026-07-12). When `[memory].enabled` and the memory seam is bound
 (daimon hosts `mneme_*`), a turn's memory context is a live `mneme_search` keyed on the turn (`memory_context(query)`,
 `src/memory.cyr`) — the hits injected verbatim, degrading to the local `.thoth/memory` reader on any failure. The

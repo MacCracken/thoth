@@ -1515,6 +1515,19 @@ fn test_mem_seam() {
     assert_eq(memory_context(0), 0, "recall: query=0 -> local path (network-free), 0 with no local mem");
     _cfg_memory_enabled = 0;
 
+    # citations (0.32.3): the defensive parse of mneme's numbered result -> (title, path) per hit.
+    var csample = "search_id: s:1\n\nFound 2 result(s):\n\n1. **Frobnicator** (ID: abc, score: 0)\n   Path: frobnicator.md\n   the code is ZEBRA\n\n2. **Auth Flow** (ID: def, score: 0)\n   Path: docs/auth.md\n   login steps\n";
+    assert_eq(citations_capture(csample), 2, "citations: 2 sources from a 2-hit result");
+    assert_eq(streq(citations_title(0), "Frobnicator"), 1, "citations[0] title");
+    assert_eq(streq(citations_path(0), "frobnicator.md"), 1, "citations[0] path");
+    assert_eq(streq(citations_title(1), "Auth Flow"), 1, "citations[1] title");
+    assert_eq(streq(citations_path(1), "docs/auth.md"), 1, "citations[1] path");
+    assert_eq(citations_title(2), 0, "citations: out-of-range -> 0");
+    # defensive: an unparseable result (no **) captures nothing, no crash
+    assert_eq(citations_capture("No notes found matching your query."), 0, "citations: no ** -> 0 sources");
+    citations_reset();
+    assert_eq(citations_count(), 0, "citations_reset clears");
+
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
 }
