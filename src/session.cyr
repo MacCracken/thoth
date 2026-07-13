@@ -43,13 +43,66 @@ var _sess_cost_unpriced = 0;
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
 # window — hoosh owns the inference.
-var _sess_hist = 0;          # vec of message ptrs, lazily created
-var SESS_HIST_MAX = 40;
+# --- multi-conversation store (0.33.0) -----------------------------------------------------------------------
+# thoth holds a KEYED store of named conversations (id, title, timestamps, message list) rather than one linear
+# thread. There is always an ACTIVE conversation; the session_history_* ops below operate on it, so every consumer
+# (agent / hoosh / persistence / GUI) is unchanged. The switching COMMANDS + multi-conversation persistence land in
+# 0.33.1 — today one conversation is active and persists as before (the store is the foundation). A conversation
+# (40): [id@0, title@8 (cstr, 0 = untitled), created@16 (epoch s), updated@24 (epoch s), msgs@32 (vec of msg ptrs)].
+var _conv_store = 0;         # vec of conversation ptrs, lazily created
+var _conv_active = 0;        # index of the active conversation
+var _conv_next_id = 1;       # monotonic conversation id
+var SESS_HIST_MAX = 40;      # max messages kept per conversation (oldest dropped)
+
+fn _conv_alloc(title) {
+    var c = alloc(40);
+    store64(c, _conv_next_id); _conv_next_id = _conv_next_id + 1;
+    store64(c + 8, title);
+    var now = clock_epoch_secs();
+    store64(c + 16, now);
+    store64(c + 24, now);
+    store64(c + 32, vec_new());
+    return c;
+}
+# _conv_ensure: guarantee the default active conversation exists. Called by any op that needs a conversation.
+fn _conv_ensure() {
+    if (_conv_store == 0) { _conv_store = vec_new(); }
+    if (vec_len(_conv_store) == 0) { vec_push(_conv_store, _conv_alloc(0)); _conv_active = 0; }
+    return 0;
+}
+# _conv_at: the conversation struct at store index `i`, CLAMPED to a valid range so no accessor built on it can
+# ever hit vec_get's abort-on-OOB. After _conv_ensure the store has >= 1 entry, so the clamp always resolves. The
+# 0.33.1 commands still validate a user-supplied index for UX (an error, not a silent wrong pick) — this is the
+# crash-safe floor beneath them.
+fn _conv_at(i) {
+    _conv_ensure();
+    var n = vec_len(_conv_store);
+    if (i < 0) { i = 0; }
+    if (i >= n) { i = n - 1; }
+    return vec_get(_conv_store, i);
+}
+
+# conv_* : the store API (wired to /conversations, /new, /switch, /rename in 0.33.1). i is a store index.
+fn conv_count() { if (_conv_store == 0) { return 0; } return vec_len(_conv_store); }
+fn conv_active() { return _conv_active; }
+fn conv_id(i) { return load64(_conv_at(i)); }
+fn conv_title(i) { return load64(_conv_at(i) + 8); }          # a cstr, or 0 when untitled
+fn conv_created(i) { return load64(_conv_at(i) + 16); }
+fn conv_updated(i) { return load64(_conv_at(i) + 24); }
+fn conv_msgs(i) { return load64(_conv_at(i) + 32); }
+fn conv_set_title(i, title) { store64(_conv_at(i) + 8, title); return 0; }
+fn conv_touch(i) { store64(_conv_at(i) + 24, clock_epoch_secs()); return 0; }
+# conv_new: start a fresh conversation and make it active; returns its index.
+fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_active = vec_len(_conv_store) - 1; return _conv_active; }
+# conv_switch: make conversation `i` active (bounds-checked); returns the active index.
+fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; } } return _conv_active; }
 
 fn session_reset() {
     _sess_turns = 0;
     _sess_model = 0;
-    _sess_hist = 0;          # drop the conversation (a fresh vec on next append)
+    _conv_store = 0;         # drop ALL conversations (a fresh default one is created on next use)
+    _conv_active = 0;
+    _conv_next_id = 1;
     _sess_tokens = 0;
     _sess_tokens_seen = 0;
     _sess_cost_micro = 0;
@@ -104,22 +157,22 @@ fn cost_fmt(dst, micro) {
     return off;
 }
 
-fn _sess_hist_vec() {
-    if (_sess_hist == 0) { _sess_hist = vec_new(); }
-    return _sess_hist;
-}
+# _sess_hist_vec: the ACTIVE conversation's message vec (0.33.0) — the single point every history op goes through.
+fn _sess_hist_vec() { _conv_ensure(); return conv_msgs(_conv_active); }
 
-# session_history_len / _role / _content: read the conversation. role and content
-# are NUL-terminated cstrings (role a literal, content the stored copy).
+# session_history_len / _role / _content: read the active conversation. role and content are NUL-terminated
+# cstrings (role a literal, content the stored copy). len is side-effect-free (no conversation is created just to
+# report 0).
 fn session_history_len() {
-    if (_sess_hist == 0) { return 0; }
-    return vec_len(_sess_hist);
+    if (_conv_store == 0) { return 0; }
+    if (vec_len(_conv_store) == 0) { return 0; }
+    return vec_len(conv_msgs(_conv_active));
 }
-fn session_history_role(i)    { return load64(vec_get(_sess_hist, i)); }
-fn session_history_content(i) { return load64(vec_get(_sess_hist, i) + 8); }
+fn session_history_role(i)    { return load64(vec_get(_sess_hist_vec(), i)); }
+fn session_history_content(i) { return load64(vec_get(_sess_hist_vec(), i) + 8); }
 # session_history_turn(i): the session turn this message belongs to (0.30.19). Matches roundlog_round_turn so the
 # GUI feed renders a turn's tool cards above ITS reply. 0 for a resumed/pre-session message (no roundlog rounds).
-fn session_history_turn(i)    { return load64(vec_get(_sess_hist, i) + 16); }
+fn session_history_turn(i)    { return load64(vec_get(_sess_hist_vec(), i) + 16); }
 
 # session_history_append: record (role, content[0..clen)) as a turn, copying the
 # content to stable storage. Drops the oldest message past SESS_HIST_MAX.
@@ -134,6 +187,7 @@ fn session_history_append(role, content, clen) {
     var v = _sess_hist_vec();
     vec_push(v, m);
     while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
+    conv_touch(_conv_active);                # 0.33.0: bump the active conversation's updated-at
     return 0;
 }
 
@@ -141,17 +195,17 @@ fn session_history_append(role, content, clen) {
 # just-appended user turn when the gateway call fails, so history stays a clean
 # sequence of completed exchanges.
 fn session_history_pop_last() {
-    if (_sess_hist == 0) { return 0; }
-    var n = vec_len(_sess_hist);
-    if (n == 0) { return 0; }
-    vec_remove(_sess_hist, n - 1);
+    if (session_history_len() == 0) { return 0; }
+    var v = _sess_hist_vec();
+    vec_remove(v, vec_len(v) - 1);
     return 0;
 }
 
-# session_history_clear: start a fresh conversation (the /reset command). Keeps
-# the model and turn counter; only the context window is dropped.
+# session_history_clear: drop the ACTIVE conversation's context window (the /clear command). Keeps the model, the
+# turn counter, and the conversation itself (id/title); only its messages are dropped.
 fn session_history_clear() {
-    _sess_hist = 0;
+    _conv_ensure();
+    store64(_conv_at(_conv_active) + 32, vec_new());
     return 0;
 }
 

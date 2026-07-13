@@ -2,6 +2,24 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.0] - 2026-07-12
+
+**Multi-conversation store — the structural foundation for named, switchable conversations (opens the 0.33.x arc).**
+
+### Changed
+- **Conversation store** (`src/session.cyr`). The single linear message thread is now the ACTIVE conversation of a
+  keyed store: `_conv_store` holds conversation structs (id, title, created/updated timestamps, own message vec),
+  `_conv_active` indexes the active one. Every history op (`session_history_len`/`_role`/`_content`/`_turn`/
+  `_append`/`_pop_last`/`_clear`) routes through `_sess_hist_vec()` → the active conversation, so every consumer
+  (agent, hoosh, `[session].file` persistence, the GUI feed) is unchanged and one conversation persists exactly as
+  before. New `conv_*` API — `conv_count`/`conv_active`/`conv_new`/`conv_switch`/`conv_id`/`conv_title`/
+  `conv_created`/`conv_updated`/`conv_set_title`/`conv_touch` — ready for the switching commands. `_conv_at` clamps
+  its index so no accessor can hit `vec_get`'s abort-on-OOB (a crash-safe floor beneath the 0.33.1 commands). The
+  store is unit-tested (message isolation across conversations, switch round-trip, reset). Switching **commands**
+  (`/conversations`, `/new`, `/switch`, `/rename`, `/delete`, auto-title), a GUI **sidebar**, cross-conversation
+  **search**, and multi-conversation **persistence** land next in 0.33.x; a resumed conversation still loses its
+  ephemeral tool-card/citation rings (not yet persisted) — a richer persisted message schema rides that work.
+
 ## [0.32.6] - 2026-07-12
 
 **Notebook mode — search your mneme knowledge base directly (`/notes`) — closing the 0.32.x memory arc.**

@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-07-12 (**0.32.6 — notebook mode cut**: README stamp `0.32.5`→`0.32.6` + the `/notes` note,
+> **Last refresh**: 2026-07-12 (**0.33.0 — multi-conversation store cut**: README stamp `0.32.6`→`0.33.0`, CHANGELOG + state.md `[0.33.0]` entries, roadmap 0.33.x trimmed (.0 store shipped → remaining = .1 commands+persistence / .2 GUI sidebar / .3 search)). **Prior**: 2026-07-12 (**0.32.6 — notebook mode cut**: README stamp `0.32.5`→`0.32.6` + the `/notes` note,
 > CHANGELOG + state.md `[0.32.6]` entries, roadmap **0.32.x memory arc REMOVED (fully shipped → CHANGELOG)**, the
 > chat-inheritance section now heads at 0.33.x). **Prior**: 2026-07-12 (**0.32.5 — GUI memory surfacing cut**:
 > README stamp `0.32.4`→`0.32.5`, CHANGELOG + state.md `[0.32.5]` entries, roadmap trimmed). **Prior**: 2026-07-12

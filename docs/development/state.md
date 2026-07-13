@@ -7,6 +7,13 @@
 
 ## Version
 
+**0.33.0** — **Multi-conversation store** (2026-07-12; opens the 0.33.x chat-management arc). The single message
+thread is now the ACTIVE conversation of a keyed store (`_conv_store` of {id, title, created/updated, msgs}) in
+`src/session.cyr`; every history op routes through `_sess_hist_vec()` → the active conversation, so all consumers +
+`[session].file` persistence are unchanged (one conversation active + persisted today). New `conv_*` API + a clamped
+`_conv_at` (crash-safe floor). Unit-tested (isolation / switch / reset). Switching commands, GUI sidebar, cross-conv
+search, and multi-conversation persistence come next in 0.33.x.
+
 **0.32.6** — **Notebook mode** (2026-07-12). **`/notes <query>`** searches the mneme vault directly (a read via
 daimon's `mneme_search`, `memory_notebook_search`) — memory as a browsable destination, the counterpart to per-turn
 recall. Needs the seam bound, degrades honestly otherwise. Live-verified end-to-end (no model turn needed). This

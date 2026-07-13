@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.32.6 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
+> **Status: 0.33.0 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
 > a memory seam that consumes mneme, a rich TUI by default, a non-interactive shell citizen, and a native desktop
 > GUI (`thoth gui`) with colored diff cards (pre-1.0).**
 > The interactive TUI/REPL loop is real and usable, and the full AGNOS spine is wired. A free-text turn drives a

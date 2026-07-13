@@ -126,12 +126,13 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 > enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the web-dashboard
 > admin stay **out of scope** (see below).
 
-- **0.33.x — Multi-conversation store (the structural foundation).** Move from one-conversation-per-process to
-  **named, persisted, switchable** conversations. Cuts: **.0** extend `[session].file` from a single linear thread
-  to a keyed store (id, title, timestamps, message list) with a richer message schema (role/content/turn +
-  optional tool_calls/citations/model, so a row can carry mneme citations + tool-card data); **.1** `/conversations`
-  (list), `/new`, `/switch`, `/rename`, `/delete`, auto-title from the first message; **.2** a GUI **conversation
-  sidebar** (a left pane like the file tree); **.3** cross-conversation `/search` (the full-text gap SY also lacks).
+- **0.33.x — Multi-conversation store (the structural foundation).** The **keyed store** shipped in 0.33.0 — the
+  active thread is one conversation of an in-memory `_conv_store` (id/title/timestamps/messages) with a `conv_*` API;
+  all consumers + `[session].file` persistence unchanged. Remaining: **.1** the commands — `/conversations` (list),
+  `/new`, `/switch`, `/rename`, `/delete`, auto-title from the first message + **multi-conversation persistence**
+  (the store→file format, `THOTH-SESSION-2`) and a **richer persisted message schema** (carry tool_calls/citations/
+  model so a resumed conversation keeps its tool cards); **.2** a GUI **conversation sidebar** (a left pane like the
+  file tree); **.3** cross-conversation `/search` (the full-text gap SY also lacks).
 - **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** Cuts: **.0** **edit-last** + **regenerate-
   last** (rewind history to a turn, re-run); **.1** finish **stop/interrupt** — wire `src/intr.cyr` (the Esc-abort
   substrate) fully through the *agentic* loop (cancel mid-round, not just streaming) + a GUI stop affordance;

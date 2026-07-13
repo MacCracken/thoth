@@ -145,6 +145,37 @@ fn test_session() {
     return 0;
 }
 
+# conversation store (0.33.0): the keyed store of named conversations behind the single active thread.
+fn test_conversations() {
+    test_group("conversation store (0.33.0)");
+    session_reset();
+    assert_eq(conv_count(), 0, "no conversations until used");
+    session_history_append("user", "hi in conv 0", 12);
+    assert_eq(conv_count(), 1, "first append creates the default conversation");
+    assert_eq(conv_active(), 0, "conversation 0 is active");
+    assert_eq(session_history_len(), 1, "conv 0 has 1 message");
+    assert(conv_id(0) > 0, "conversation has a positive id");
+    assert_eq(conv_title(0), 0, "default conversation is untitled (0)");
+    # a new conversation is isolated + becomes active
+    assert_eq(conv_new(), 1, "conv_new -> index 1");
+    assert_eq(conv_count(), 2, "two conversations");
+    assert_eq(conv_active(), 1, "the new conversation is active");
+    assert_eq(session_history_len(), 0, "the new conversation has no messages");
+    session_history_append("user", "hi in conv 1", 12);
+    assert_eq(session_history_len(), 1, "conv 1 has its own message");
+    # switching restores each conversation's messages
+    conv_switch(0);
+    assert_eq(conv_active(), 0, "switched back to conv 0");
+    assert_eq(session_history_len(), 1, "conv 0's message is intact after the round trip");
+    assert(streq(session_history_content(0), "hi in conv 0"), "conv 0 content stayed isolated from conv 1");
+    assert_eq(conv_switch(9), 0, "out-of-range switch keeps the active index");
+    conv_set_title(0, "First chat");
+    assert(streq(conv_title(0), "First chat"), "title set + read back");
+    session_reset();
+    assert_eq(conv_count(), 0, "reset drops all conversations");
+    return 0;
+}
+
 # context-budget meter (0.19.0): surface framed history bytes vs the ~32 KiB evict boundary that
 # _hoosh_history_start uses, so context pressure is visible before it silently drops old turns.
 fn test_ctx_meter() {
