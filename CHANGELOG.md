@@ -2,7 +2,18 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.32.5] - 2026-07-12
+## [0.32.6] - 2026-07-12
+
+**Notebook mode — search your mneme knowledge base directly (`/notes`) — closing the 0.32.x memory arc.**
+
+### Added
+- **`/notes <query>`** — search the mneme vault on demand, the counterpart to per-turn recall (memory as a
+  browsable destination, not just injected into a turn). A read via daimon's `mneme_search`
+  (`memory_notebook_search`, `src/memory.cyr`, browse limit 10); needs the memory seam bound (daimon hosts
+  `mneme_*`), else it degrades with an honest note. Displays mneme's formatted result verbatim — thoth consumes the
+  domain, it does not re-rank (ADR-0012). Live-verified end-to-end (no model turn needed): a query surfaces the
+  matching notes; a different phrasing semantically matches a different note. This completes the memory arc — write
+  (`/remember`), recall-in-loop (semantic injection + citations + grounding + GUI strip), and now browse (`/notes`).
 
 **GUI memory surfacing — the recalled sources + grounding verdict now show in the desktop GUI feed.**
 

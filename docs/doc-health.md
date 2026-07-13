@@ -6,9 +6,11 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-07-12 (**0.32.5 — GUI memory surfacing cut**: README stamp `0.32.4`→`0.32.5`, CHANGELOG +
-> state.md `[0.32.5]` entries, roadmap 0.32.x trimmed (GUI surfacing shipped → remaining = notebook mode only)).
-> **Prior**: 2026-07-12 (**0.32.4 — grounding indicator cut**: README stamp `0.32.3`→`0.32.4` + the grounding note,
+> **Last refresh**: 2026-07-12 (**0.32.6 — notebook mode cut**: README stamp `0.32.5`→`0.32.6` + the `/notes` note,
+> CHANGELOG + state.md `[0.32.6]` entries, roadmap **0.32.x memory arc REMOVED (fully shipped → CHANGELOG)**, the
+> chat-inheritance section now heads at 0.33.x). **Prior**: 2026-07-12 (**0.32.5 — GUI memory surfacing cut**:
+> README stamp `0.32.4`→`0.32.5`, CHANGELOG + state.md `[0.32.5]` entries, roadmap trimmed). **Prior**: 2026-07-12
+> (**0.32.4 — grounding indicator cut**: README stamp `0.32.3`→`0.32.4` + the grounding note,
 > CHANGELOG + state.md `[0.32.4]` entries, roadmap trimmed). **Prior**: 2026-07-12 (**0.32.3 — citations cut**:
 > README stamp `0.32.2`→`0.32.3` + the cited-sources note, CHANGELOG + state.md `[0.32.3]` entries). **Prior**:
 > 2026-07-12 (**0.32.2 — semantic recall via mneme cut**: README

@@ -1427,6 +1427,7 @@ fn test_role() {
 fn test_memory() {
     test_group("project memory injection (0.12.0)");
     assert_eq(classify_input("/remember a durable fact"), CMD_REMEMBER, "/remember classifies to CMD_REMEMBER");
+    assert_eq(classify_input("/notes auth flow"), CMD_NOTES, "/notes classifies to CMD_NOTES (0.32.6)");
     session_reset();
     var dst[4096];
 

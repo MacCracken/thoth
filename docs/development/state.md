@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.32.6** — **Notebook mode** (2026-07-12). **`/notes <query>`** searches the mneme vault directly (a read via
+daimon's `mneme_search`, `memory_notebook_search`) — memory as a browsable destination, the counterpart to per-turn
+recall. Needs the seam bound, degrades honestly otherwise. Live-verified end-to-end (no model turn needed). This
+**closes the 0.32.x memory arc**: write (`/remember`) → recall-in-loop (injection + citations + grounding + GUI
+strip) → browse (`/notes`).
+
 **0.32.5** — **GUI memory surfacing** (2026-07-12). The recalled-sources + grounding lines are `ui_emit` (lost under
 the GUI turn's `OUT_NULL`), so a new **`memlog`** ring (`src/memlog.cyr`) persists each turn's recalled source titles
 + grounding verdict (written from `grounding_emit`), and a new **`gmem`** feed element (`src/gui/gmem.cyr`) draws a

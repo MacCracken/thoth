@@ -111,7 +111,11 @@ above, deferred to a later ADR.
 The **chat-surface inheritance** below is a *sequenced* near-term line of feature minors (still non-gating — the
 four AGNOS gates keep priority); the rest of this section re-gathers unscheduled.
 
-### Chat-surface inheritance — 0.32.x → 0.3x.x (sequenced)
+### Chat-surface inheritance — 0.33.x → 0.3x.x (sequenced)
+
+> **0.32.x — Memory + RAG (consume mneme): SHIPPED.** The whole memory arc landed — seam + `/remember` binding,
+> the daimon→mneme host wiring (mneme 1.1.0's served endpoint), semantic recall, citations, the grounding indicator,
+> GUI memory surfacing, and `/notes` notebook search. See the CHANGELOG; the remaining arcs are below.
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is being handed to
 > thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding front-end. The rule is the same
@@ -122,12 +126,6 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 > enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the web-dashboard
 > admin stay **out of scope** (see below).
 
-- **0.32.x — Memory + RAG: consume mneme (the highest-leverage gap).** The **seam + write binding** (0.32.0),
-  the **daimon→mneme host wiring** (mneme 1.1.0's served MCP endpoint + self-registration — the real transport),
-  **semantic recall** (0.32.2), **citations** (0.32.3), the **grounding indicator** (0.32.4), and **GUI memory
-  surfacing** (0.32.5 — recalled sources + grounding verdict as a feed strip) have shipped. Remaining, CONSUMING
-  mneme's tools, never forking ([ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md)): **notebook/knowledge
-  mode** — browse/search the vault as a corpus (`/notebook`?), if it earns its keep over `/remember` + recall.
 - **0.33.x — Multi-conversation store (the structural foundation).** Move from one-conversation-per-process to
   **named, persisted, switchable** conversations. Cuts: **.0** extend `[session].file` from a single linear thread
   to a keyed store (id, title, timestamps, message list) with a richer message schema (role/content/turn +

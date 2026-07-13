@@ -36,6 +36,7 @@ enum Cmd {
     CMD_ROLE = 28;
     CMD_REPROBE = 29;
     CMD_HISTORY = 30;
+    CMD_NOTES = 31;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -141,6 +142,7 @@ fn classify_input(line) {
     if (token_is(line, "/theme") == 1) { return CMD_THEME; }
     if (token_is(line, "/dry") == 1) { return CMD_DRY; }
     if (token_is(line, "/remember") == 1) { return CMD_REMEMBER; }
+    if (token_is(line, "/notes") == 1) { return CMD_NOTES; }
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
     if (token_is(line, "/copy") == 1) { return CMD_COPY; }
     if (token_is(line, "/find") == 1) { return CMD_FIND; }
@@ -183,6 +185,7 @@ fn cmd_help() {
     _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
+    _help_line("  /notes <query>", "     search your mneme knowledge base (needs the memory seam bound)");
     _help_line("  /quit", "              exit (or Ctrl-D)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
@@ -1023,6 +1026,25 @@ fn cmd_remember(line) {
     return 0;
 }
 
+# cmd_notes (0.32.6 — notebook): search the mneme knowledge base directly, the counterpart to per-turn recall. A
+# READ via daimon's mneme_search (no thoth gate — daimon applies its own per-tool policy); needs the memory seam
+# BOUND (daimon hosts mneme_*), else it degrades honestly. Displays mneme's formatted result VERBATIM — thoth
+# consumes the domain, it does not re-rank or reformat (ADR-0012).
+fn cmd_notes(line) {
+    var query = arg_after(line);
+    if (query == 0) { oprintln("usage: /notes <query>   - search your mneme knowledge base"); return 0; }
+    daimon_mem_probe();
+    if (daimon_mem_bound() == 0) {
+        emit("  "); ui_emit(ROLE_FAINT, "notebook needs mneme - the memory seam is not bound (is daimon hosting mneme?)"); oprintln("");
+        return 0;
+    }
+    var res = memory_notebook_search(query);
+    if (res == 0) { emit("  "); ui_emit(ROLE_RED, "notebook: search failed (mneme unreachable or errored)"); oprintln(""); return 0; }
+    ui_emit(ROLE_MUTED, "notebook (mneme):"); oprintln("");
+    emit(res); oprintln("");
+    return 0;
+}
+
 fn cmd_run(line) {
     var cmdline = arg_after(line);
     if (cmdline == 0) { oprintln("usage: /run <shell command>"); return 0; }
@@ -1387,6 +1409,7 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_THEME) { cmd_theme(line); return 1; }
     if (c == CMD_DRY) { cmd_dry(line); return 1; }
     if (c == CMD_REMEMBER) { cmd_remember(line); return 1; }
+    if (c == CMD_NOTES) { cmd_notes(line); return 1; }
     if (c == CMD_GIT) { cmd_git(line); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_FIND) { cmd_find(line); return 1; }
