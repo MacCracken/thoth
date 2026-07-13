@@ -87,6 +87,7 @@ fn main() {
     test_oneshot_out();
     test_completion();
     test_history();
+    test_rewind();
     test_history_request();
     test_inhist();
     test_inhist_persist();

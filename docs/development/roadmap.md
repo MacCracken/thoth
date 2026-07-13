@@ -10,13 +10,14 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.33.7):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.34.0):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`) with tool-call cards + colored diff
 > cards + a conversation sidebar, the model **`shell`** / **`edit`** / **`create_file`** tools (thoth now reads
 > *and writes* code), the **memory arc** (consume mneme — `/remember`, semantic recall, citations, grounding,
 > `/notes`), the **chat-management arc** (named multi-conversation store, persisted across restarts with each
-> reply's model / cited sources / tool calls, `/search`), the git / surface producers, the model picker, the
-> persona + role modality, and the `.thoth/` config home.
+> reply's model / cited sources / tool calls, `/search`), **message actions** (`/retry` regenerate + `/edit` your
+> last message, 0.34.0), the git / surface producers, the model picker, the persona + role modality, and the
+> `.thoth/` config home.
 > Per-version detail is in [CHANGELOG](../../CHANGELOG.md) / [state.md](state.md) — **this file is the road AHEAD
 > only**. The **four v1.0 gates below are the remaining blocking work** (AGNOS-dominated); everything else here is
 > non-gating.
@@ -136,10 +137,12 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   polish items ride later work: a **mouse click-to-switch** on the GUI sidebar (today keyboard-only — the GUI has no
   pointer plumbing yet), and **re-rendering resumed tool/citation data as GUI feed cards** (today it round-trips +
   surfaces in `/save`, but the live feed cards are session-local).
-- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** Cuts: **.0** **edit-last** + **regenerate-
-  last** (rewind history to a turn, re-run); **.1** finish **stop/interrupt** — wire `src/intr.cyr` (the Esc-abort
-  substrate) fully through the *agentic* loop (cancel mid-round, not just streaming) + a GUI stop affordance;
-  **.2** per-message **remember** (bookmark a reply into mneme) + **feedback** (thumbs → mneme's feedback tool).
+- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** **.0 shipped** (`/retry` regenerate-last +
+  `/edit` edit-last — rewind the last turn and re-run; see CHANGELOG). Remaining cuts: **.1** finish **stop/interrupt**
+  — wire `src/intr.cyr` (the Esc-abort substrate) fully through the *agentic* loop (cancel mid-round, not just
+  streaming) + a GUI stop affordance; **.2** per-message **remember** (bookmark a reply into mneme) + **feedback**
+  (thumbs → mneme's feedback tool). A follow-up carried from .0: surface `/retry` + `/edit` as GUI affordances (the
+  GUI composer runs `cmd_task` directly, bypassing `dispatch`, so slash-commands are TUI/REPL-only today).
 - **0.35.x — GUI + agentic streaming (architectural).** The GUI shows only a "working" frame then the final reply,
   and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. Cuts: **.0**
   restructure the GUI present loop to **paint mid-turn** (the turn currently blocks the loop — needs a yield/pump);

@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.34.0** — **Message actions: `/retry` + `/edit`** (2026-07-13; opens the 0.34.x chat-UX arc). Two of the
+most-felt chat gaps: **`/retry`** (alias **`/regenerate`**) re-runs your last message for a fresh reply, and
+**`/edit <new text>`** replaces your last message and re-runs. Both **rewind the last turn** (drop the prior reply +
+user echo) via new pure session helpers (`src/session.cyr`) — `session_last_user_index` + `session_rewind_to_last_user`
+(returns the dropped user message's **stable, never-freed** content) — then run a turn: `/retry` re-runs the **exact
+stored prompt VERBATIM** (already `@mention`-expanded; re-expanding would double-inject the file blocks, see
+`mention.cyr`), while `/edit` runs the new text through the normal `cmd_task` path so fresh `@mentions` expand.
+`cmd_task`'s turn core was factored into a shared **`_task_dispatch(prompt)`** (byte-identical to the old inline
+flow). **History-safe AND non-destructive on failure**: each refuses **without rewinding** on an empty conversation
+or an absent hoosh seam; and the rewind is **snapshotted** (removed messages + the conversation title) so
+`session_rewind_settle` **commits** only when a fresh reply actually landed (via a length-independent
+`session_history_last_is_reply_for`, correct at the `SESS_HIST_MAX` cap) and otherwise **restores** the prior
+exchange byte-for-byte — a `/retry` that hits a transport/HTTP error, an empty completion, or a stateless
+non-recording turn keeps the previous reply *and* the user's prompt. TUI/line-REPL commands (the GUI composer
+bypasses `dispatch` — a follow-up). Unit-tested (`test_rewind`: rewind/restore/commit + title-restore-on-rollback +
+classify asserts, **1389** core assertions) + **adversarially reviewed** (a multi-lens find→verify pass caught two
+real history-loss hazards — stateless-mode + transport-failure loss — fixed by the snapshot/restore design; re-review
+confirmed the mechanism sound) + **LIVE-verified** end-to-end against a real hoosh (turn → `/retry` reproduces →
+`/edit` replaces, conversation stays 2 messages — no doubling; and a `/retry` against a **killed hoosh** RESTORES
+the resumed exchange instead of losing it). Pin **6.4.62**. **NEXT (0.34.x)**: `.1` finish stop/interrupt through
+the agentic loop + a GUI stop affordance; `.2` per-message remember + feedback.
+
 **0.33.7** — **Cross-conversation `/search`** (2026-07-13). `/search <text>` (`src/commands.cyr`) case-insensitively
 scans every message of every conversation, listing matches grouped by conversation (`*` active marker + number +
 title, then each match's role + a highlighted context snippet) with a count footer + `/switch <n>` hint. Distinct

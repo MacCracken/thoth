@@ -2,6 +2,40 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.0] - 2026-07-13
+
+**Message actions — `/retry` (regenerate) + `/edit` (edit-last): rewind the last turn and re-run. Opens the 0.34.x arc.**
+
+### Added
+- **`/retry`** (alias **`/regenerate`**) — re-run your last message for a fresh reply. It rewinds the last turn
+  (drops the prior reply and its user echo) and re-runs the **exact stored prompt** — which is already
+  `@mention`-expanded, so it is deliberately **not** put through `mention_expand` again (that would double-inject
+  the attached file blocks). On-brand for thoth's mid-session model switching: `/model` then `/retry` re-answers the
+  same prompt with a different backing model.
+- **`/edit <new text>`** — replace your last message with new text and re-run the turn. It rewinds the last turn,
+  then runs the new text through the normal task path, so fresh `@mentions` in the edit expand as usual.
+- Both are **history-safe, and non-destructive on failure**. Each refuses (with an honest note) **without
+  rewinding** when there is nothing to act on (empty conversation) or when the hoosh seam is absent. And crucially,
+  the rewind is **snapshotted** (the removed messages *and* the conversation title): after the re-run,
+  `session_rewind_settle()` **commits** the rewind only if a fresh assistant reply actually landed for the turn;
+  otherwise — a transport/HTTP error, an empty completion, or a stateless non-recording turn — it **restores** the
+  prior exchange byte-for-byte, so a failed `/retry` never loses the previous reply *or* the user's prompt. New pure
+  session helpers back this (`src/session.cyr`): `session_last_user_index`, `session_rewind_to_last_user` (returns
+  the last user message's stable, never-freed content for the verbatim re-run), `session_history_last_is_reply_for`
+  (length-independent, so it stays correct at the `SESS_HIST_MAX` eviction cap), `session_rewind_restore`, and
+  `session_rewind_settle`. `cmd_task`'s turn core was factored into a shared `_task_dispatch(prompt)`
+  (byte-identical to the previous inline flow) so `/retry` can re-run the stored prompt without re-echoing or
+  re-expanding.
+- **Scope**: TUI / line-REPL commands (like `/new`, `/switch`, `/search`) — the GUI composer runs `cmd_task`
+  directly and does not route slash-commands through `dispatch` yet, so GUI affordances for these ride the 0.34.x
+  GUI work (a follow-up captured in the roadmap). Unit-tested (`test_rewind` — the rewind/restore/commit paths + a
+  title-restore-on-rollback case + the classification asserts; `cyrius test` green: 1389 core assertions), **adversarially
+  reviewed** (a multi-lens find→verify pass caught two real history-loss hazards — a stateless-mode loss and a
+  transport-failure loss — which the snapshot/restore design above fixes; the re-review confirmed the mechanism
+  sound), and **live-verified** end-to-end against a real hoosh: a turn → `/retry` reproduces the reply → `/edit`
+  replaces it, the conversation staying two messages throughout (no doubling); and a `/retry` against a **killed
+  hoosh** (transport failure) **restores** the resumed exchange instead of losing it.
+
 ## [0.33.7] - 2026-07-13
 
 **Cross-conversation `/search` — find text across every conversation. Closes the 0.33.x chat-management arc.**

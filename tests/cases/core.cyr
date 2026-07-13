@@ -36,6 +36,9 @@ fn test_classify() {
     assert_eq(classify_input("/ping"), CMD_REPROBE, "/ping aliases reprobe");
     assert_eq(classify_input("/history"), CMD_HISTORY, "/history");
     assert_eq(classify_input("/theme light"), CMD_THEME, "/theme with arg");
+    assert_eq(classify_input("/retry"), CMD_RETRY, "/retry classifies");
+    assert_eq(classify_input("/regenerate"), CMD_RETRY, "/regenerate aliases /retry");
+    assert_eq(classify_input("/edit make it shorter"), CMD_EDIT, "/edit with arg classifies");
     assert_eq(classify_input("/bogus"), CMD_UNKNOWN_SLASH, "unknown slash");
     assert_eq(classify_input("/"), CMD_UNKNOWN_SLASH, "lone slash");
     assert_eq(classify_input("write me a function"), CMD_TASK, "free text -> task");
@@ -964,6 +967,97 @@ fn test_history() {
     var i = 0;
     while (i < SESS_HIST_MAX + 5) { session_history_append("user", "x", 1); i = i + 1; }
     assert_eq(session_history_len(), SESS_HIST_MAX, "capped at SESS_HIST_MAX (oldest dropped)");
+    session_reset();
+    return 0;
+}
+
+# rewind for /retry (regenerate-last) + /edit (edit-last) — 0.34.0. Exercises the pure session helpers the two
+# commands share: locate the last user message, then drop it + its reply and return the exact stored prompt.
+fn test_rewind() {
+    test_group("rewind for /retry + /edit (0.34.0)");
+    session_reset();
+    assert_eq(session_last_user_index(), 0 - 1, "no user message in an empty conversation");
+    assert_eq(session_rewind_to_last_user(), 0, "rewind on empty returns 0 (nothing to rewind)");
+
+    # a completed two-turn conversation: rewind drops the LAST turn (user + reply) only
+    session_history_append("user", "first q", 7);
+    session_history_append("assistant", "first a", 7);
+    session_history_append("user", "second q", 8);
+    session_history_append("assistant", "second a", 8);
+    assert_eq(session_history_len(), 4, "four messages recorded");
+    assert_eq(session_last_user_index(), 2, "the last user message is index 2 (second q)");
+    var c = session_rewind_to_last_user();
+    assert(streq(c, "second q"), "rewind returns the LAST user message's content");
+    assert_eq(session_history_len(), 2, "rewind dropped the last turn (user + its reply)");
+    assert(streq(session_history_content(0), "first q"), "the earlier turn's user message is intact");
+    assert(streq(session_history_content(1), "first a"), "the earlier turn's reply is intact");
+    assert_eq(session_last_user_index(), 0, "now the earlier user message is the last user");
+
+    # a user message with no reply yet (an aborted / failed turn) still rewinds
+    session_reset();
+    session_history_append("user", "lonely q", 8);
+    assert_eq(session_last_user_index(), 0, "a lone user message is found");
+    var d = session_rewind_to_last_user();
+    assert(streq(d, "lonely q"), "rewind returns the lone user message's content");
+    assert_eq(session_history_len(), 0, "rewind emptied the conversation");
+
+    # the returned content is a STABLE copy — usable after the message is dropped AND after later appends
+    session_reset();
+    session_history_append("user", "keepme", 6);
+    session_history_append("assistant", "reply", 5);
+    var e = session_rewind_to_last_user();
+    session_history_append("user", "unrelated later message", 23);   # further mutation must not disturb e
+    assert(streq(e, "keepme"), "rewound content survives later appends (stable copy, never freed)");
+
+    # session_history_last_is_reply_for: a fresh assistant reply tagged with `turn` is detected length-independently
+    session_reset();
+    session_history_append("user", "q", 1);            # turn 0 (no bump)
+    session_history_append("assistant", "a", 1);       # turn 0
+    assert_eq(session_history_last_is_reply_for(0), 1, "last is an assistant reply for turn 0");
+    assert_eq(session_history_last_is_reply_for(7), 0, "not a reply for a different turn");
+    session_history_append("user", "q2", 2);           # now the last message is a user
+    assert_eq(session_history_last_is_reply_for(0), 0, "a trailing user message is not a reply");
+
+    # settle RESTORES when the re-run recorded no fresh reply (transport/empty/stateless failure)
+    session_reset();
+    session_history_append("user", "keep-q", 6);
+    session_history_append("assistant", "keep-a", 6);
+    session_rewind_to_last_user();                     # snapshot [keep-q, keep-a]; history now empty
+    assert_eq(session_history_len(), 0, "rewind emptied history before the re-run");
+    assert_eq(session_rewind_settle(session_turns()), 1, "settle restores when no fresh reply landed");
+    assert_eq(session_history_len(), 2, "the prior exchange is restored");
+    assert(streq(session_history_content(0), "keep-q"), "restored user prompt intact");
+    assert(streq(session_history_content(1), "keep-a"), "restored reply intact");
+    assert_eq(session_rewind_settle(session_turns()), 0, "settle is a no-op once the snapshot is consumed");
+
+    # settle COMMITS (drops the snapshot, no restore) when a fresh reply landed
+    session_reset();
+    session_history_append("user", "old-q", 5);
+    session_history_append("assistant", "old-a", 5);
+    session_rewind_to_last_user();                     # snapshot [old-q, old-a]; history empty
+    session_bump_turn();                               # simulate the re-run's new turn
+    var t = session_turns();
+    session_history_append("user", "new-q", 5);        # tagged turn t
+    session_history_append("assistant", "new-a", 5);   # tagged turn t -> a fresh reply landed
+    assert_eq(session_rewind_settle(t), 0, "settle commits (no restore) when a fresh reply landed");
+    assert_eq(session_history_len(), 2, "the re-run's exchange stands, the old one is not re-added");
+    assert(streq(session_history_content(0), "new-q"), "committed to the new prompt");
+
+    # rollback reverts the TITLE too: a failed re-run may auto-title a previously-untitled conversation; restore
+    # must undo that so no stale title survives (an untitled conv has an empty first line -> _conv_autotitle -> 0).
+    session_reset();
+    session_history_append("user", "\nleading-blank first line", 25);   # empty first line -> stays UNTITLED
+    assert_eq(conv_title(0), 0, "conversation is untitled (empty first line)");
+    session_history_append("assistant", "a reply", 7);
+    session_rewind_to_last_user();                     # snapshot the messages AND the (0) title
+    session_bump_turn();                               # the re-run's new turn
+    session_history_append("user", "titled edit", 11); # a re-run's user append auto-titles the untitled conv
+    assert(conv_title(0) != 0, "the re-run's append auto-titled the untitled conversation");
+    session_history_pop_last();                        # ...then the turn FAILS -> agent_turn rolls back the user append
+    assert_eq(session_rewind_settle(session_turns()), 1, "settle restores when no fresh reply landed");
+    assert_eq(session_history_len(), 2, "the old exchange is restored");
+    assert_eq(conv_title(0), 0, "restore reverted the title to untitled (no stale title survives)");
+    assert(streq(session_history_content(0), "\nleading-blank first line"), "the old first message is restored");
     session_reset();
     return 0;
 }

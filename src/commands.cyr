@@ -43,6 +43,8 @@ enum Cmd {
     CMD_RENAME = 35;
     CMD_DELETE = 36;
     CMD_SEARCH = 37;
+    CMD_RETRY = 38;
+    CMD_EDIT = 39;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -156,6 +158,9 @@ fn classify_input(line) {
     if (token_is(line, "/rename") == 1) { return CMD_RENAME; }
     if (token_is(line, "/delete") == 1) { return CMD_DELETE; }
     if (token_is(line, "/search") == 1) { return CMD_SEARCH; }
+    if (token_is(line, "/retry") == 1) { return CMD_RETRY; }
+    if (token_is(line, "/regenerate") == 1) { return CMD_RETRY; }
+    if (token_is(line, "/edit") == 1) { return CMD_EDIT; }
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
     if (token_is(line, "/copy") == 1) { return CMD_COPY; }
     if (token_is(line, "/find") == 1) { return CMD_FIND; }
@@ -190,6 +195,8 @@ fn cmd_help() {
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
+    _help_line("  /retry", "             re-run your last message for a fresh reply (/regenerate)");
+    _help_line("  /edit <text>", "       replace your last message with new text and re-run");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
     _help_line("  /clear", "             clear the content window (Shift-↑/↓ scrolls history)");
     _help_line("  /copy", "              copy the last reply to the clipboard (OSC 52, best-effort)");
@@ -1431,17 +1438,11 @@ fn _task_turn_feedback(t0) {
     return 0;
 }
 
-fn cmd_task(line) {
-    session_bump_turn();
-    emit("task: "); oprintln(line);              # echo the ORIGINAL line (with @mentions), not the expansion
-    # @file mentions (0.21.0): a `@path` that resolves to a readable file gets that file's content
-    # appended to the prompt as delimited context. Non-resolving @tokens stay literal, so ordinary
-    # prose is untouched and `prompt == line` (byte-identical) when nothing resolves.
-    var prompt = mention_expand(line);
-    if (mention_count() > 0) {
-        ui_emit(ROLE_FAINT, "  (+"); emit(ui_sgr(ROLE_FAINT)); ofmt_int(mention_count());
-        emit(ui_reset()); ui_emit(ROLE_FAINT, " file(s) attached as context)"); oprintln("");
-    }
+# _task_dispatch (0.34.0): run a FINAL (already @mention-expanded) prompt as one model turn — the shared core of
+# cmd_task and the /retry regenerate path. Handles the hoosh-absent degrade, the agentic-vs-plain split, and the
+# [ui] turn-timing feedback. It does NOT bump the turn counter or echo the prompt — its callers own that framing,
+# so /retry can print its own notice and pass the STORED (un-re-expanded) content. Returns the turn's rc.
+fn _task_dispatch(prompt) {
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
         oprintln("  hoosh seam absent - no model backend is wired.");
         oprintln("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
@@ -1455,6 +1456,73 @@ fn cmd_task(line) {
     if (agent_enabled() == 1) { rc = agent_turn(prompt); }
     else { rc = hoosh_send(prompt); }
     _task_turn_feedback(t0);                          # interactive BEL + faint elapsed line (opt-in)
+    return rc;
+}
+
+fn cmd_task(line) {
+    session_bump_turn();
+    emit("task: "); oprintln(line);              # echo the ORIGINAL line (with @mentions), not the expansion
+    # @file mentions (0.21.0): a `@path` that resolves to a readable file gets that file's content
+    # appended to the prompt as delimited context. Non-resolving @tokens stay literal, so ordinary
+    # prose is untouched and `prompt == line` (byte-identical) when nothing resolves.
+    var prompt = mention_expand(line);
+    if (mention_count() > 0) {
+        ui_emit(ROLE_FAINT, "  (+"); emit(ui_sgr(ROLE_FAINT)); ofmt_int(mention_count());
+        emit(ui_reset()); ui_emit(ROLE_FAINT, " file(s) attached as context)"); oprintln("");
+    }
+    return _task_dispatch(prompt);
+}
+
+# cmd_regenerate (/retry, /regenerate — 0.34.0): re-run the LAST user prompt for a fresh reply. Rewinds the last
+# turn (drops the prior reply + its user echo) and re-runs the EXACT stored prompt — already @mention-expanded, so
+# it is NOT put through mention_expand again (that would double-inject the file blocks, see mention.cyr). Guarded:
+# with hoosh absent it refuses WITHOUT rewinding (no point destroying the last exchange when no reply can be
+# produced). NON-DESTRUCTIVE on failure: the rewind is snapshotted, so if the re-run produces no fresh reply (a
+# transport/HTTP error, an empty completion, or a stateless non-recording turn), session_rewind_settle RESTORES the
+# prior exchange byte-for-byte — the previous reply AND the user's prompt survive.
+fn cmd_regenerate() {
+    if (session_last_user_index() < 0) {
+        oprintln("nothing to regenerate — no message in this conversation yet.");
+        return 0;
+    }
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+        oprintln("  hoosh seam absent - no model backend is wired; cannot regenerate.");
+        oprintln("  set [hoosh].url in .thoth/config.cyml. (the last reply is kept.)");
+        return 0;
+    }
+    var prompt = session_rewind_to_last_user();       # drop the old reply + user echo (snapshotted); keep the prompt
+    session_bump_turn();
+    ui_emit(ROLE_FAINT, "regenerating the last reply…"); oprintln("");
+    var rc = _task_dispatch(prompt);                   # re-run VERBATIM (no re-expansion)
+    session_rewind_settle(session_turns());            # commit if a fresh reply landed, else restore the old exchange
+    return rc;
+}
+
+# cmd_edit (/edit <new text> — 0.34.0): replace your LAST message with new text and re-run the turn. Rewinds the
+# last turn (drops the prior reply + user echo) then runs the new text through the normal task path, so fresh
+# @mentions in the edit expand as usual. Guarded like /retry: it refuses WITHOUT rewinding when hoosh is absent.
+# NON-DESTRUCTIVE on failure: the rewind snapshots the messages AND the title, so a re-run that records no
+# replacement restores the old exchange (and reverts any auto-title the failed append set). On a committed edit of
+# a first message, an UNTITLED conversation retitles from the new text via the normal append auto-title; a
+# already-titled conversation keeps its title (we never clobber an explicit /rename).
+fn cmd_edit(line) {
+    var newtext = arg_after(line);
+    if (newtext == 0) {
+        oprintln("usage: /edit <new text>   — replace your last message and re-run");
+        return 0;
+    }
+    if (session_last_user_index() < 0) {
+        oprintln("nothing to edit — no message in this conversation yet.");
+        return 0;
+    }
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
+        oprintln("  hoosh seam absent - no model backend is wired; cannot re-run an edit.");
+        oprintln("  set [hoosh].url in .thoth/config.cyml. (your last message is kept.)");
+        return 0;
+    }
+    session_rewind_to_last_user();                       # discard the old message + its reply (snapshotted)
+    var rc = cmd_task(newtext);                           # full path: bump turn, echo, expand mentions, dispatch
+    session_rewind_settle(session_turns());              # commit if a fresh reply landed, else restore the old exchange
     return rc;
 }
 
@@ -1645,6 +1713,8 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_RENAME) { cmd_rename(line); return 1; }
     if (c == CMD_DELETE) { cmd_delete(line); return 1; }
     if (c == CMD_SEARCH) { cmd_search(line); return 1; }
+    if (c == CMD_RETRY) { cmd_regenerate(); return 1; }
+    if (c == CMD_EDIT) { cmd_edit(line); return 1; }
     if (c == CMD_GIT) { cmd_git(line); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_FIND) { cmd_find(line); return 1; }

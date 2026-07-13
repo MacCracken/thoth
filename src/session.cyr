@@ -57,6 +57,8 @@ var _sess_cost_unpriced = 0;
 # (40): [id@0, title@8 (cstr, 0 = untitled), created@16 (epoch s), updated@24 (epoch s), msgs@32 (vec of msg ptrs)].
 var _conv_store = 0;         # vec of conversation ptrs, lazily created
 var _conv_active = 0;        # index of the active conversation
+var _sess_rewind_snap = 0;   # 0.34.0: /retry-/edit rewind snapshot (removed message ptrs) for a possible restore
+var _sess_rewind_title = 0;  # 0.34.0: the active conversation's title at rewind time, reverted on a restore
 var _conv_next_id = 1;       # monotonic conversation id
 var SESS_HIST_MAX = 40;      # max messages kept per conversation (oldest dropped)
 
@@ -186,6 +188,7 @@ fn session_reset() {
     _conv_store = 0;         # drop ALL conversations (a fresh default one is created on next use)
     _conv_active = 0;
     _conv_next_id = 1;
+    _sess_rewind_snap = 0;   # 0.34.0: drop any pending /retry-/edit rewind snapshot
     _sess_tokens = 0;
     _sess_tokens_seen = 0;
     _sess_cost_micro = 0;
@@ -423,6 +426,81 @@ fn session_history_pop_last() {
     var v = _sess_hist_vec();
     vec_remove(v, vec_len(v) - 1);
     return 0;
+}
+
+# session_last_user_index: the index (into the active conversation) of the most recent "user" message, or -1 if
+# there is none. Used by /retry (regenerate-last) and /edit (edit-last, 0.34.0) to locate the turn to rewind.
+fn session_last_user_index() {
+    var v = _sess_hist_vec();
+    var i = vec_len(v) - 1;
+    while (i >= 0) {
+        if (streq(load64(vec_get(v, i)), "user") == 1) { return i; }
+        i = i - 1;
+    }
+    return 0 - 1;
+}
+
+# session_rewind_to_last_user (0.34.0): drop the most recent "user" message and every message after it (its
+# assistant reply, if any) from the active conversation, so a completed turn can be RE-RUN cleanly — agent_turn /
+# hoosh_send re-append the user message themselves, so the caller must first clear it. Returns that user message's
+# CONTENT cstr — a STABLE, never-freed copy (the session bump-heap never frees, so the dropped message's content
+# pointer stays valid) — so /retry can re-run the EXACT prompt the model saw (already @mention-expanded;
+# re-expanding it would double-inject the file blocks, see mention.cyr). Returns 0 when there is no user message.
+#
+# NON-DESTRUCTIVE: the removed messages (exact struct ptrs) are SNAPSHOTTED into _sess_rewind_snap so a re-run that
+# produces no fresh reply — a transport/HTTP failure, an empty completion, or a stateless non-recording turn — can
+# be UNDONE with session_rewind_settle(), restoring the prior exchange byte-for-byte. So a rewind is only committed
+# when the new turn actually records a replacement (agent_turn / multi-turn hoosh_send); otherwise nothing is lost.
+# (_sess_rewind_snap is declared with the conversation-store globals above.)
+fn session_rewind_to_last_user() {
+    _sess_rewind_snap = 0;
+    var idx = session_last_user_index();
+    if (idx < 0) { return 0; }
+    var v = _sess_hist_vec();
+    var content = load64(vec_get(v, idx) + 8);
+    var snap = vec_new();
+    var j = idx;
+    while (j < vec_len(v)) { vec_push(snap, vec_get(v, j)); j = j + 1; }   # capture the removed structs in order
+    while (vec_len(v) > idx) { vec_remove(v, vec_len(v) - 1); }
+    _sess_rewind_snap = snap;
+    _sess_rewind_title = conv_title(_conv_active);   # snapshot the title too — a failed re-run's append could auto-title an untitled conv; restore reverts it
+    conv_touch(_conv_active);                # the active conversation mutated — bump its updated-at
+    return content;
+}
+
+# session_history_last_is_reply_for (0.34.0): 1 if the most recent message in the active conversation is an
+# "assistant" reply tagged with `turn` — i.e. a FRESH reply landed for that turn (length-independent, so it stays
+# correct at the SESS_HIST_MAX eviction cap where a net-growth check would false-fire). A resumed message carries
+# turn 0 and a bumped turn is >= 1, so a resumed reply never false-matches.
+fn session_history_last_is_reply_for(turn) {
+    var n = session_history_len();
+    if (n == 0) { return 0; }
+    var i = n - 1;
+    if (streq(session_history_role(i), "assistant") == 0) { return 0; }
+    if (session_history_turn(i) != turn) { return 0; }
+    return 1;
+}
+
+# session_rewind_restore (0.34.0): re-append the messages captured by the last session_rewind_to_last_user() (exact
+# struct ptrs, so role/content/turn/model/citations/tools are all preserved) and drop the snapshot. Returns 1 if it
+# restored anything, 0 if there was no snapshot.
+fn session_rewind_restore() {
+    if (_sess_rewind_snap == 0) { return 0; }
+    var v = _sess_hist_vec();
+    var i = 0;
+    while (i < vec_len(_sess_rewind_snap)) { vec_push(v, vec_get(_sess_rewind_snap, i)); i = i + 1; }
+    conv_set_title(_conv_active, _sess_rewind_title);   # revert any title the failed re-run's append may have set
+    _sess_rewind_snap = 0;
+    conv_touch(_conv_active);
+    return 1;
+}
+
+# session_rewind_settle (0.34.0): call after a rewound turn re-runs. If a fresh assistant reply landed for `turn`,
+# the re-run recorded a replacement exchange -> COMMIT the rewind (drop the snapshot). Otherwise RESTORE the
+# snapshotted prior exchange (messages AND title) so nothing is lost. Returns 1 if it restored.
+fn session_rewind_settle(turn) {
+    if (session_history_last_is_reply_for(turn) == 1) { _sess_rewind_snap = 0; return 0; }
+    return session_rewind_restore();
 }
 
 # session_history_clear: drop the ACTIVE conversation's context window (the /clear command). Keeps the model, the
