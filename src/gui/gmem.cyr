@@ -1,0 +1,57 @@
+# src/gui/gmem.cyr — the GUI feed's per-turn MEMORY strip (0.32.5).
+#
+# The line/TUI recalled-sources + grounding lines are ui_emit and thus lost under the GUI turn's OUT_NULL. This
+# renders the SAME info in the feed from the persisted memlog (src/memlog.cyr), matched per assistant message by
+# its turn tag — exactly how gtool renders a turn's tool cards. Two compact rows: the recalled sources ([N] Title …)
+# and the colored grounding verdict. cmds == 0 => measure only (height is fixed at 2 rows, so it is exact). Reuses
+# gtool's text helpers + GTOOL_LH and the shared _ui_rgb palette; no display state of its own.
+
+# the grounding verdict is stored as a plain int in memlog (memory.cyr's GroundState: 1=OK, 2=UNVERIFIED, 3=BAD).
+# gmem uses the literals so it stays decoupled from memory.cyr's enum — the GUI feed suite never pulls the memory stack.
+fn _gmem_verdict_word(v) {
+    if (v == 1) { return "grounded"; }          # GROUND_OK
+    if (v == 3) { return "ungrounded"; }        # GROUND_BAD
+    return "unverified";                         # GROUND_UNVERIFIED
+}
+fn _gmem_verdict_color(v) {
+    if (v == 1) { return _ui_rgb(ROLE_GREEN); }
+    if (v == 3) { return _ui_rgb(ROLE_RED); }
+    return _ui_rgb(ROLE_ACCENT);
+}
+
+# gmem_build_turn: render TURN `turn`'s memory strip at (x,y) width w, or return y unchanged when that turn
+# recalled nothing (or has aged out of the memlog ring). The GUI feed calls this per assistant message with the
+# message's turn tag, so each turn's memory renders above ITS reply. Two rows, fixed height.
+fn gmem_build_turn(cmds, x, y, w, turn) {
+    if (turn <= 0) { return y; }
+    var slot = memlog_find(turn);
+    if (slot == 0) { return y; }
+    var n = memlog_nsources(slot);
+    var h = 2 * GTOOL_LH;                        # row 1 = sources, row 2 = grounding verdict
+    if (cmds != 0) {
+        # row 1: the recalled sources — "recalled: [1] Title  [2] Title", stopping before the right edge.
+        var ly = y;
+        var pen = _gtool_txt(cmds, x, ly, _ui_rgb(ROLE_FAINT), "recalled: ");
+        var si = 0;
+        var stop = 0;
+        while ((si < n) && (stop == 0)) {
+            if (pen > ((x + w) - (GR_GLYPH_W * 8))) { stop = 1; }   # not enough width for another source
+            else {
+                pen = _gtool_txt(cmds, pen, ly, _ui_rgb(ROLE_ACCENT_DIM), "[");
+                pen = _gtool_int(cmds, pen, ly, _ui_rgb(ROLE_ACCENT_DIM), si + 1);
+                pen = _gtool_txt(cmds, pen, ly, _ui_rgb(ROLE_ACCENT_DIM), "] ");
+                var title = memlog_title(slot, si);
+                var maxc = ((x + w) - pen) / GR_GLYPH_W;            # clip the title to the remaining width
+                if (maxc >= 1) { gd_push_text(cmds, pen, ly, _ui_rgb(ROLE_MUTED), title, maxc); }
+                pen = pen + (gr_text_cols(title, 0) + 2) * GR_GLYPH_W;   # advance past the title + a gap
+                si = si + 1;
+            }
+        }
+        # row 2: the grounding verdict, colored.
+        ly = ly + GTOOL_LH;
+        var v = memlog_verdict(slot);
+        var p2 = _gtool_txt(cmds, x, ly, _ui_rgb(ROLE_MUTED), "grounding: ");
+        _gtool_txt(cmds, p2, ly, _gmem_verdict_color(v), _gmem_verdict_word(v));
+    }
+    return y + h;
+}

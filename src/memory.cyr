@@ -295,6 +295,7 @@ fn grounding_emit() {
     var sources = citations_count();
     if (sources <= 0) { return 0; }
     var v = grounding_verdict(hoosh_last_reply(), hoosh_last_reply_len(), sources);
+    memlog_record(session_turns(), v);   # 0.32.5: persist this turn's sources + verdict for the GUI feed (ui_emit below is OUT_NULL'd in the GUI)
     ui_emit(ROLE_MUTED, "  grounding: ");
     if (v == GROUND_OK) {
         ui_emit(ROLE_GREEN, "grounded");

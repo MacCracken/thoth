@@ -1,0 +1,66 @@
+# src/memlog.cyr — per-turn memory record for the GUI feed (0.32.5).
+#
+# The recalled-sources line + grounding verdict are emitted via ui_emit (memory.cyr) for line/TUI, but the GUI
+# turn runs under OUT_NULL so those never reach the window. The GUI feed repaints from PERSISTENT state
+# (session_history + roundlog + editlog), so it needs the memory info persisted per turn too — this ring. Recorded
+# once per answered turn (from grounding_emit, which runs in every turn path), read by gmem.cyr on repaint. Like
+# editlog: a bounded ring keyed by turn tag; older turns age out silently. PURE state — no display, no I/O.
+
+var MEMLOG_CAP = 16;          # last N turns kept
+var ML_MAX = 5;               # source titles stored per turn (matches memory.cyr CITE_MAX)
+var ML_TITLE_CAP = 80;        # bytes per stored title (NUL-terminated, truncated)
+
+# per-turn slot = turn(8) + verdict(8) + nsources(8) + ML_MAX title buffers
+fn _ml_slot_sz() { return 24 + ML_MAX * ML_TITLE_CAP; }
+var _memlog = 0;              # ring base, lazily alloc'd
+var _memlog_total = 0;        # turns recorded this session (global index)
+fn _memlog_init() { if (_memlog == 0) { _memlog = alloc(MEMLOG_CAP * _ml_slot_sz()); } return 0; }
+fn _memlog_slot(g) { return _memlog + (g % MEMLOG_CAP) * _ml_slot_sz(); }
+fn memlog_reset() { _memlog_total = 0; return 0; }
+
+# _ml_copy_title: bounded NUL-terminated copy of a cstr title into dst (ML_TITLE_CAP).
+fn _ml_copy_title(dst, src) {
+    if (src == 0) { store8(dst, 0); return 0; }
+    var i = 0;
+    while ((load8(src + i) != 0) && (i < (ML_TITLE_CAP - 1))) { store8(dst + i, load8(src + i)); i = i + 1; }
+    store8(dst + i, 0);
+    return 0;
+}
+
+# memlog_record: capture TURN `turn`'s recalled sources (from the live citations state) + its grounding `verdict`.
+# No-op when nothing was recalled (citations_count() <= 0) or the turn is untagged (<= 0).
+fn memlog_record(turn, verdict) {
+    if (turn <= 0) { return 0; }
+    var n = citations_count();
+    if (n <= 0) { return 0; }
+    if (n > ML_MAX) { n = ML_MAX; }
+    _memlog_init();
+    var slot = _memlog_slot(_memlog_total);
+    _memlog_total = _memlog_total + 1;
+    store64(slot, turn);
+    store64(slot + 8, verdict);
+    store64(slot + 16, n);
+    var i = 0;
+    while (i < n) { _ml_copy_title(slot + 24 + i * ML_TITLE_CAP, citations_title(i)); i = i + 1; }
+    return 0;
+}
+
+# memlog_find: the slot ADDRESS for `turn` (newest wins), or 0 if none. Scans only the live ring window.
+fn memlog_find(turn) {
+    if (_memlog == 0) { return 0; }
+    if (turn <= 0) { return 0; }
+    var start = 0;
+    if (_memlog_total > MEMLOG_CAP) { start = _memlog_total - MEMLOG_CAP; }
+    var g = _memlog_total - 1;
+    var found = 0;
+    while ((g >= start) && (found == 0)) {
+        var slot = _memlog_slot(g);
+        if (load64(slot) == turn) { found = slot; }
+        g = g - 1;
+    }
+    return found;
+}
+
+fn memlog_verdict(slot) { return load64(slot + 8); }
+fn memlog_nsources(slot) { return load64(slot + 16); }
+fn memlog_title(slot, i) { return slot + 24 + i * ML_TITLE_CAP; }

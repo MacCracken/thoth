@@ -1541,6 +1541,25 @@ fn test_mem_seam() {
     assert_eq(grounding_verdict(gr_code, strlen(gr_code), 2), GROUND_UNVERIFIED, "grounding: large [15] ignored (code, not a citation)");
     assert_eq(grounding_verdict(gr_ok, strlen(gr_ok), 0), GROUND_NONE, "grounding: 0 sources recalled -> NONE");
 
+    # memlog (0.32.5): the per-turn record the GUI feed reads (recorded from the live citations + a verdict).
+    memlog_reset();
+    citations_capture(csample);              # 2 sources: "Frobnicator", "Auth Flow"
+    memlog_record(7, GROUND_OK);
+    var mslot = memlog_find(7);
+    assert(mslot != 0, "memlog_find locates the recorded turn");
+    assert_eq(memlog_verdict(mslot), GROUND_OK, "memlog verdict = OK");
+    assert_eq(memlog_nsources(mslot), 2, "memlog captured 2 sources");
+    assert_eq(streq(memlog_title(mslot, 0), "Frobnicator"), 1, "memlog title[0] = Frobnicator");
+    assert_eq(streq(memlog_title(mslot, 1), "Auth Flow"), 1, "memlog title[1] = Auth Flow");
+    assert_eq(memlog_find(99), 0, "memlog_find miss -> 0");
+    memlog_record(0, GROUND_OK);             # untagged turn (<=0) -> not recorded
+    assert_eq(memlog_find(0), 0, "memlog: untagged turn not recorded");
+    citations_reset();
+    memlog_record(8, GROUND_OK);             # nothing recalled -> not recorded
+    assert_eq(memlog_find(8), 0, "memlog: no recall -> not recorded");
+    memlog_reset();
+    assert_eq(memlog_find(7), 0, "memlog_reset clears");
+
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
 }

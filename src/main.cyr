@@ -64,6 +64,7 @@ include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from
 include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0); after hoosh (uses hoosh_catalog_fetch), before tui (wires the modal)
 include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallback (0.12.0, ADR-0012)
+include "src/memlog.cyr"   # per-turn memory record (0.32.5): recalled sources + grounding verdict, for the GUI feed
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014); after exec/hoosh (uses exec_shell_capture, _append_int), before agent
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0017); jailed+gated local file editor; before agent (dispatched there); forward-refs diff_stats/_params_one (whole-unit)
 include "src/daimon.cyr"
@@ -80,6 +81,7 @@ include "src/gui/gstatus.cyr"
 include "src/gui/ginput.cyr"      # evdev keymap + composer text buffer (0.30.2); before gfeed (gframe renders the composer)
 include "src/gui/gtree.cyr"       # file-tree pane view-builder (0.30.5); before gfeed (gframe lays out the tree); reads ftree_*/git
 include "src/gui/gtool.cyr"       # tool-call CARD view-builder (0.30.16); before gfeed (feed interleaves cards); reads roundlog/session_turns
+include "src/gui/gmem.cyr"        # per-turn MEMORY strip (0.32.5): recalled sources + grounding verdict from memlog; before gfeed (interleaved there)
 include "src/gui/gfeed.cyr"       # conversation-feed view-builder (0.30.1); reads session_history; headless-testable
 include "src/gui/gwindow.cyr"    # sovereign Wayland window seam (present shell); main-only (compositor-gated, not unit-tested)
 include "src/commands.cyr"

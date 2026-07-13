@@ -2,7 +2,19 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.32.4] - 2026-07-12
+## [0.32.5] - 2026-07-12
+
+**GUI memory surfacing — the recalled sources + grounding verdict now show in the desktop GUI feed.**
+
+### Added
+- **GUI memory strip.** The line/TUI recalled-sources + grounding lines are `ui_emit` and thus lost under the GUI
+  turn's `OUT_NULL`, so this renders the same info in the feed from persisted state. A new **`memlog`** ring
+  (`src/memlog.cyr`) records each answered turn's recalled source titles + grounding verdict (written from
+  `grounding_emit`, which runs in every turn path); a new **`gmem`** feed element (`src/gui/gmem.cyr`) draws a
+  two-row strip above each turn's reply — the recalled sources (`recalled: [1] Title  [2] Title`) and the colored
+  grounding verdict (green/amber/red) — matched by the message's turn tag, exactly how the tool-call cards
+  interleave (`gtool`). Bounded ring (last 16 turns); cleared by `/reset`. The ring is unit-tested
+  (record/find/accessors/edge cases); `gmem` is a fixed-height element reusing the proven card helpers.
 
 **Grounding indicator — after a recall, is the reply actually grounded in the sources?**
 

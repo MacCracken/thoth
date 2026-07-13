@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.32.5** — **GUI memory surfacing** (2026-07-12). The recalled-sources + grounding lines are `ui_emit` (lost under
+the GUI turn's `OUT_NULL`), so a new **`memlog`** ring (`src/memlog.cyr`) persists each turn's recalled source titles
++ grounding verdict (written from `grounding_emit`), and a new **`gmem`** feed element (`src/gui/gmem.cyr`) draws a
+two-row strip (recalled sources + colored verdict) above each turn's reply — matched by turn tag, like the tool
+cards. Ring unit-tested; `gmem` fixed-height, reuses the card helpers.
+
 **0.32.4** — **Grounding indicator** (2026-07-12). After a turn that recalled memory, thoth scans its own reply for
 `[N]` citations vs the recalled source count and shows a colored verdict line (line/TUI): **green** grounded (valid
 cites), **amber** unverified (recalled, none cited), **red** ungrounded (a cite beyond the recalled sources). A tight

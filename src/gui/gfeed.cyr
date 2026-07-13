@@ -92,6 +92,10 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             # returns cy unchanged when the turn used no tools, or its rounds have aged out of the roundlog ring.
             var tcy = gtool_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
             if (tcy > cy) { cy = tcy + GFEED_GAP; }
+            # memory strip (0.32.5): this turn's recalled sources + grounding verdict, from the persisted memlog
+            # (the line/TUI ui_emit is lost under the GUI turn's OUT_NULL). y unchanged when the turn recalled nothing.
+            var mcy = gmem_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
+            if (mcy > cy) { cy = mcy + GFEED_GAP; }
             cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), content);
         }
         cy = cy + GFEED_GAP;
