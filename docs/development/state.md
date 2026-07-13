@@ -7,6 +7,40 @@
 
 ## Version
 
+**0.34.2** — **Fix: an empty tool `inputSchema` silently emptied every agentic turn** (2026-07-13). A tool that
+daimon advertises with an empty `inputSchema` — which the **`mneme_*`** tools all do (`{}`) — made `agent_format_tools`
+(`src/agent.cyr`) emit `parameters: {}`, an **Anthropic-invalid** schema (`input_schema` must be `{"type":"object",…}`).
+Forwarded by hoosh, Anthropic rejected the WHOLE request, surfacing as **"response had neither tool calls nor content"**
+under streaming and **HTTP 502** under `stream=false` — so one mis-advertised tool poisoned all 19 registry tools and
+the agentic loop was unusable against the standard local stack (the "large tools payload" symptom from the 0.34.x
+live tests was really this — NOT payload size). thoth now falls back to the permissive `{"type":"object"}` whenever a
+tool's `inputSchema` is absent, empty, or lacks a top-level `"type"` — it never emits an invalid schema regardless of
+what daimon advertises. **Live-verified** end-to-end against the full 22-tool registry (stream + block both return a
+clean reply; were empty / 502). Regression-tested (`test_agent`). Root fix upstream: **mneme 1.1.1** now sends each
+tool's real `inputSchema` in its daimon registration (it had omitted it → `{}`); thoth's tolerance stays as
+defense-in-depth. Pin **6.4.62**.
+
+**0.34.1** — **Stop/interrupt through the whole agentic loop** (2026-07-13). The Esc-abort substrate
+(`src/intr.cyr`) is now wired through the entire agentic tool-calling loop, so **Esc** in the rich TUI cancels a
+turn during **tool execution** and **between rounds** (the non-streaming block path too), not only mid-stream as
+before (0.17.4). `agent_turn` arms the Esc-poll around each round's tool phase; `_agent_run_calls_serial` polls
+`intr_check()` between tool calls (a multi-tool round stops before the rest); a final drain + `intr_pending()` check
+after the tools stops the loop before the next model request. The streaming abort (kind 4) and the new tool-phase
+abort share one honest landing — `_agent_finish_interrupted` (keep a streamed partial, else pop the unanswered user
+turn) — so a cancelled turn always leaves history a clean sequence. The t-ron confirm's cooked read is bracketed by
+`intr_suspend`/`intr_resume` in the TUI confirm hooks so it works while the poll is armed. NEW **front-end-agnostic
+interrupt seam** (`intr_check` / `intr_check_hook_set` / `intr_signal` / `intr_armed` / suspend+resume) so the SAME
+loop checkpoints serve the TUI (stdin drain) and, next, the **GUI stop key** (0.34.2, which plugs into `intr_signal`
+via `intr_check_hook_set`). **TUI-only, OUT_RING-gated** — the floor stays byte-identical. Unit-tested (the seam +
+the interrupt landing keep-partial/pop). The mid-turn Esc delivery reuses the exact `intr_arm`/`intr_poll`/`intr_disarm`
+of the shipped 0.17.4 streaming interrupt; end-to-end Esc needs a human on a real terminal (a headless pty can't
+inject a mid-turn keystroke — the same limit the shipped streaming interrupt has). **Adversarially reviewed — 0
+defects** (arm/disarm balance, confirm suspend/resume incl. the parallel executor, flag lifecycle, drain ordering,
+history integrity, floor); accepted edge: a *type-ahead* confirm answer during the armed tool phase is drained and
+must be retyped (safer — no blind pre-approval). Pin **6.4.62**. **NEXT (0.34.x)**:
+`.2` GUI stop affordance (a minimal between-rounds GUI input pump → the interrupt seam); `.3` per-message remember +
+feedback.
+
 **0.34.0** — **Message actions: `/retry` + `/edit`** (2026-07-13; opens the 0.34.x chat-UX arc). Two of the
 most-felt chat gaps: **`/retry`** (alias **`/regenerate`**) re-runs your last message for a fresh reply, and
 **`/edit <new text>`** replaces your last message and re-runs. Both **rewind the last turn** (drop the prior reply +

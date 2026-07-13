@@ -1062,6 +1062,58 @@ fn test_rewind() {
     return 0;
 }
 
+# a test front-end interrupt hook (the GUI's 0.34.2 mechanism): a registered poll that raises the flag.
+fn _test_intr_hook() { intr_signal(); return 0; }
+
+# the front-end-agnostic interrupt seam (0.34.1): intr_signal/check/pending + the hook + suspend/resume no-ops.
+fn test_interrupt() {
+    test_group("agentic-loop interrupt seam (0.34.1)");
+    intr_check_hook_set(0);                    # start from the built-in stdin poll
+    intr_reset();
+    assert_eq(intr_pending(), 0, "flag clear after reset");
+    assert_eq(intr_check(), 0, "check is clear with no hook + not armed (built-in stdin poll, no-op)");
+    intr_signal();
+    assert_eq(intr_pending(), 1, "signal raises the flag");
+    assert_eq(intr_check(), 1, "check reports the raised flag");
+    intr_reset();
+    assert_eq(intr_pending(), 0, "reset clears the flag");
+    # suspend/resume are no-ops off the TUI (intr is never armed there) — they must not disturb the flag
+    assert_eq(intr_armed(), 0, "not armed outside the TUI (OUT_RING-gated)");
+    intr_signal();
+    intr_suspend();
+    intr_resume();
+    assert_eq(intr_pending(), 1, "suspend/resume preserve the flag (no-ops when not armed)");
+    intr_reset();
+    # a registered front-end poll HOOK (the GUI plugs its input poll here) — intr_check invokes it
+    intr_check_hook_set(&_test_intr_hook);
+    assert_eq(intr_check(), 1, "check invokes the registered front-end hook, which signalled interrupt");
+    intr_check_hook_set(0);                    # unregister so later tests use the stdin poll
+    intr_reset();
+    assert_eq(intr_check(), 0, "after unregistering + reset, check is clear again");
+
+    # _agent_finish_interrupted (0.34.1): the interrupt LANDING — the new tool-phase abort shares it with the
+    # streaming (kind 4) abort, so a cancelled turn leaves history a clean sequence of completed exchanges.
+    # Case A: a streamed partial is KEPT — appended as the assistant reply, completing the user+assistant pair.
+    session_reset();
+    session_history_append("user", "do a thing", 10);
+    _hoosh_acc_reset();
+    _hoosh_acc_append("partial answer so far", 21);
+    _agent_finish_interrupted(0);
+    assert_eq(session_history_len(), 2, "interrupt with a partial: user + assistant recorded");
+    assert(streq(session_history_role(1), "assistant"), "the kept partial is an assistant reply");
+    assert(streq(session_history_content(1), "partial answer so far"), "the partial content is what was recorded");
+    # Case B: nothing streamed this round -> the unanswered user turn is POPPED (no dangling half-exchange).
+    session_reset();
+    session_history_append("user", "another thing", 13);
+    _hoosh_acc_reset();                        # no partial
+    assert_eq(session_history_len(), 1, "user recorded before the interrupt");
+    _agent_finish_interrupted(0);
+    assert_eq(session_history_len(), 0, "interrupt with no partial: the unanswered user turn is popped");
+    session_reset();
+    _hoosh_acc_reset();
+    return 0;
+}
+
 # The multi-turn request builder + the byte-budget that bounds it.
 fn test_history_request() {
     test_group("multi-turn request building");

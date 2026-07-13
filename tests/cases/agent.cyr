@@ -205,6 +205,15 @@ fn test_agent() {
     agent_format_tools(&tb, tsv);
     assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"rd\",\"description\":\"read\",\"parameters\":{\"type\":\"string\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "inputSchema passed through; absent -> object fallback");
 
+    # 0.34.2 regression: an EMPTY `{}` (or typeless) inputSchema — exactly what daimon advertises for the mneme_*
+    # tools — is NOT a valid Anthropic input_schema (it requires `type:object`) and, forwarded by hoosh, silently
+    # EMPTIES the whole completion (no content, no tool calls). thoth must fall back to the permissive object schema
+    # rather than emit a bare `{}` verbatim.
+    var te = "[{\"name\":\"mn\",\"description\":\"note\",\"inputSchema\":{}},{\"name\":\"pp\",\"description\":\"p\",\"inputSchema\":{\"properties\":{\"x\":{\"type\":\"string\"}}}}]";
+    var tev = bayan_json_v_parse_str(te, strlen(te));
+    agent_format_tools(&tb, tev);
+    assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"mn\",\"description\":\"note\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"pp\",\"description\":\"p\",\"parameters\":{\"type\":\"object\"}}}]"), "empty/typeless inputSchema -> permissive {type:object}, never a bare {}");
+
     # tool_calls parsing from an OpenAI-shaped response
     var resp = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
     var tcs = agent_tool_calls(resp, strlen(resp));

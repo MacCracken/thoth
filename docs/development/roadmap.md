@@ -137,17 +137,24 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   polish items ride later work: a **mouse click-to-switch** on the GUI sidebar (today keyboard-only — the GUI has no
   pointer plumbing yet), and **re-rendering resumed tool/citation data as GUI feed cards** (today it round-trips +
   surfaces in `/save`, but the live feed cards are session-local).
-- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** **.0 shipped** (`/retry` regenerate-last +
-  `/edit` edit-last — rewind the last turn and re-run; see CHANGELOG). Remaining cuts: **.1** finish **stop/interrupt**
-  — wire `src/intr.cyr` (the Esc-abort substrate) fully through the *agentic* loop (cancel mid-round, not just
-  streaming) + a GUI stop affordance; **.2** per-message **remember** (bookmark a reply into mneme) + **feedback**
-  (thumbs → mneme's feedback tool). A follow-up carried from .0: surface `/retry` + `/edit` as GUI affordances (the
-  GUI composer runs `cmd_task` directly, bypassing `dispatch`, so slash-commands are TUI/REPL-only today).
+- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps).** **.0–.2 shipped** (`/retry`/`/edit` message
+  actions; **stop/interrupt** wired through the whole agentic loop in the TUI behind a front-end-agnostic **interrupt
+  seam**; **.2** a bug fix — an empty `inputSchema` on the `mneme_*` tools was emptying every agentic turn against the
+  full registry — see CHANGELOG). Remaining cuts: **.3** **GUI stop affordance** — a minimal between-rounds GUI input
+  pump so a stop key reaches the .1 interrupt seam (`intr_signal` via `intr_check_hook_set`) mid-turn (the turn
+  currently blocks the GUI event loop; this is a scoped stop-poll at round boundaries — a subset of 0.35.0's full
+  paint-mid-turn pump, pulled forward so stop/interrupt is COMPLETE within this arc, not split across a minor);
+  **.4** per-message **remember** (bookmark a reply into mneme) + **feedback** (thumbs → mneme's feedback tool). A
+  follow-up carried from .0: surface `/retry` + `/edit` as GUI affordances (the GUI composer runs `cmd_task`
+  directly, bypassing `dispatch`, so slash-commands are TUI/REPL-only today).
+  > **Ordering note (fixed):** an earlier draft listed the GUI stop under .1, ahead of any GUI event-loop pump — a
+  > mis-ordered dependency (stdin `intr` doesn't reach the GUI, and the blocking turn can't handle a key mid-turn).
+  > Corrected: .1 does the TUI/REPL interrupt + the seam; .2 adds the minimal GUI stop-poll pump the seam needs.
 - **0.35.x — GUI + agentic streaming (architectural).** The GUI shows only a "working" frame then the final reply,
   and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. Cuts: **.0**
-  restructure the GUI present loop to **paint mid-turn** (the turn currently blocks the loop — needs a yield/pump);
-  **.1** **live tool-call cards** during the round (currently post-turn only); **.2** a **thinking/reasoning** fold
-  rendering `thinking_delta` when hoosh emits it.
+  restructure the GUI present loop to **paint mid-turn** (generalizes the 0.34.2 stop-poll into a full mid-turn
+  yield/pump — the turn currently blocks the loop); **.1** **live tool-call cards** during the round (currently
+  post-turn only); **.2** a **thinking/reasoning** fold rendering `thinking_delta` when hoosh emits it.
 - **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
   inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
   hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions

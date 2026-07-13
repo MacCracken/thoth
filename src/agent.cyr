@@ -126,17 +126,23 @@ fn agent_format_tools(dst, tools_arr) {
             off = _append_cstr_cap(dst, off, cap, "\",\"description\":\"");
             var ds = bayan_json_v_obj_get(t, "description");
             if (ds != 0) { var dss = bayan_json_v_str(ds); if (dss != 0) { off = _json_escape_into_cap(dst, off, cap, str_cstr(dss)); } }
-            # Pass daimon's per-tool inputSchema through verbatim as the OpenAI
-            # `parameters` (it is already a JSON object); fall back to a permissive
-            # object schema when a tool advertises none.
+            # Pass daimon's per-tool inputSchema through verbatim as the OpenAI `parameters` (it is already a JSON
+            # object); fall back to a permissive object schema when a tool advertises none — OR advertises one that
+            # lacks a top-level `"type"` (e.g. the EMPTY `{}` that mneme_* register with). Anthropic REQUIRES every
+            # tool's input_schema to be `{"type":"object",...}`; a bare `{}` is invalid and — because hoosh forwards
+            # it and Anthropic rejects the whole request — silently EMPTIES the completion (no content, no tool
+            # calls). So thoth must never emit a typeless schema, regardless of what daimon advertises. (Upstream:
+            # mneme should register a real inputSchema; filed. thoth stays a tolerant client.)
             off = _append_cstr_cap(dst, off, cap, "\",\"parameters\":");
             var sc = bayan_json_v_obj_get(t, "inputSchema");
-            if ((sc != 0) && (bayan_json_v_is_obj(sc) == 1)) {
+            var has_type = 0;
+            if (sc != 0) { if (bayan_json_v_is_obj(sc) == 1) { if (bayan_json_v_obj_get(sc, "type") != 0) { has_type = 1; } } }
+            if (has_type == 1) {
                 var scs = bayan_json_v_build(sc);
                 if (scs != 0) { off = _append_cstr_cap(dst, off, cap, str_cstr(scs)); }
                 else { off = _append_cstr_cap(dst, off, cap, "{\"type\":\"object\"}"); }
             } else {
-                off = _append_cstr_cap(dst, off, cap, "{\"type\":\"object\"}");
+                off = _append_cstr_cap(dst, off, cap, "{\"type\":\"object\"}");   # absent / empty / typeless -> permissive valid schema
             }
             off = _append_cstr_cap(dst, off, cap, "}}");
             i = i + 1;
@@ -822,6 +828,7 @@ fn _agent_run_calls(tcs, nc) {
 fn _agent_run_calls_serial(tcs, nc) {
     var ci = 0;
     while (ci < nc) {
+        if (intr_check() == 1) { return 0; }    # 0.34.1: Esc between tool calls -> stop this round's remaining calls (armed by agent_turn during the tool phase)
         var nm = agent_tc_name(tcs, ci);
         var ar = agent_tc_args(tcs, ci);
         var id = agent_tc_id(tcs, ci);
@@ -1071,13 +1078,26 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     return 0;
 }
 
+# _agent_finish_interrupted (0.34.1): land an Esc-interrupted turn honestly — KEEP a streamed partial (append it,
+# completing the user+assistant pair) or, if nothing streamed this round, POP the unanswered user turn — plus the
+# "— interrupted" feed marker and the log line. Shared by the streaming-abort (kind 4) and the new tool-phase abort
+# so both leave history a clean sequence of completed exchanges. `iter` is the 0-based iteration (logged as iter+1).
+fn _agent_finish_interrupted(iter) {
+    if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); sess_persist_save(); }
+    else { session_history_pop_last(); }
+    intr_note();
+    log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "interrupted"); log_commit(SK_WARN);
+    return 0;
+}
+
 # agent_turn: drive one free-text turn as an agentic tool-calling loop. Streams
 # the model's output (content live, tool_calls assembled from deltas) when
 # [hoosh].stream is on — so wiring daimon no longer disables streaming; falls back
 # to a blocking round-trip when stream=false. Each tool call is t-ron-gated;
 # results loop back until the model answers. Returns 0 on success, negative on
 # transport failure, the HTTP status on a non-2xx. Any failure rolls the user turn
-# back out of history (completed exchanges only). I/O — the orchestrator.
+# back out of history (completed exchanges only). 0.34.1: Esc cancels mid-round (during
+# tool execution / between rounds), not just streaming. I/O — the orchestrator.
 fn agent_turn(prompt) {
     var model = _hoosh_model();
     var sys = 0;
@@ -1144,22 +1164,27 @@ fn agent_turn(prompt) {
             log_begin("agent_turn"); log_kv_str("result", "http_error"); log_kv_int("status", _agent_round_status); log_commit(SK_WARN);
             return _agent_round_status;
         } elif (k == 4) {
-            # Esc interrupted the stream. KEEP the partial (append it, completing the user+assistant
-            # pair) or, if nothing streamed, pop the unanswered user turn; mark it in the feed; end the
-            # loop. Deliberately UNLIKE max-iters (below), which clears _hoosh_acc — the user asked to
-            # stop and see what came so far, and interrupt is TUI-only so one-shot's exit code is moot.
-            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); sess_persist_save(); }
-            else { session_history_pop_last(); }
-            intr_note();
+            # Esc interrupted the STREAM. KEEP the partial (append it, completing the user+assistant pair) or, if
+            # nothing streamed, pop the unanswered user turn; mark it; end the loop. Deliberately UNLIKE max-iters
+            # (below), which clears _hoosh_acc — the user asked to stop and see what came so far, and interrupt is
+            # TUI-only so one-shot's exit code is moot.
+            _agent_finish_interrupted(iter);
             done = 1;
-            log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "interrupted"); log_commit(SK_WARN);
         } elif (k == 1) {
             var raw = _agent_round_raw;
             if (raw == 0) { raw = "[]"; }
             _agent_add_assistant(raw);
             round_no = round_no + 1;
             roundlog_open(session_turns(), round_no);
+            # 0.34.1: cancel mid-round. Arm the Esc-poll around the (possibly long) tool phase so a keystroke during
+            # tool execution is caught between calls (_agent_run_calls_serial polls intr_check; the confirm's cooked
+            # read is bracketed by intr_suspend/resume in the TUI confirm hooks). TUI-only (intr_arm no-ops off
+            # OUT_RING), so the floor is byte-identical. After the tools, an Esc stops before the next model request.
+            intr_arm();
             _agent_run_calls(_agent_round_val, _agent_round_n);
+            intr_check();                     # 0.34.1: final drain BEFORE disarm — catch an Esc pressed during the LAST/only tool call (the serial poll runs before each call, not after the last)
+            intr_disarm();
+            if (intr_pending() == 1) { _agent_finish_interrupted(iter); done = 1; }
         } else {
             if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); sess_persist_save(); grounding_emit(); }   # 0.32.4: grounding line (silent if no recall); 0.33.4: persist cited sources; 0.33.5: persist tool calls
             else { oprintln("  hoosh: response had neither tool calls nor content."); session_history_pop_last(); }

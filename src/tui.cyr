@@ -1523,6 +1523,7 @@ fn feed_stream_tick() {
 # capture for the remainder of dispatch. The REPL path never calls these (capture
 # isn't armed there) — the confirm stays byte-identical off the TUI.
 fn tui_confirm_begin() {
+    intr_suspend();                                     # 0.34.1: leave Esc-poll mode so the cooked y/n read_line works (agentic tool-phase arming)
     feed_flush_pending();
     feed_repaint();
     _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt
@@ -1540,6 +1541,7 @@ fn tui_confirm_end() {
     out_mode_set(OUT_RING);             # resume capturing the rest of dispatch into the feed
     _spin_active = _spin_suspended;     # resume the spinner if a turn is still in flight
     spin_paint();
+    intr_resume();                      # 0.34.1: re-enter Esc-poll mode for the rest of the tool phase (if suspend armed it)
     return 0;
 }
 

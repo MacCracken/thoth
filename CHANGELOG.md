@@ -2,6 +2,63 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.34.2] - 2026-07-13
+
+**Fix: an empty tool `inputSchema` (mneme_*) silently emptied every agentic turn against the full registry.**
+
+### Fixed
+- **The agentic loop returned "response had neither tool calls nor content" (streaming) / HTTP 502 (block mode)
+  whenever daimon's registry included a tool with an empty `inputSchema`** — which the **`mneme_*`** tools all
+  advertise as `{}`. `agent_format_tools` (`src/agent.cyr`) passed that `{}` through verbatim as the OpenAI
+  `function.parameters`; Anthropic **requires** every tool's `input_schema` to be `{"type":"object",…}`, so a bare
+  `{}` is invalid and — forwarded by hoosh — makes Anthropic reject the **whole** request, which surfaced as an
+  empty completion under streaming and a 502 under `stream=false`. So a single mis-advertised tool poisoned the
+  entire turn (all 19 registry tools), making the agentic loop unusable against the standard local stack.
+  **thoth now falls back to the permissive `{"type":"object"}` whenever a tool's `inputSchema` is absent, empty, or
+  lacks a top-level `"type"`** — it never emits an Anthropic-invalid schema regardless of what daimon advertises
+  (defense-in-depth; thoth owns the OpenAI request format). Verified **live** end-to-end against the full 22-tool
+  registry: `stream=true` → a clean reply (was empty), `stream=false` → a clean reply (was 502). Regression-tested
+  (`test_agent`: an empty/typeless `inputSchema` now formats as `{"type":"object"}`, never a bare `{}`).
+- **Upstream (the root fix):** **mneme 1.1.1** — mneme's daimon self-registration omitted the tool `inputSchema`
+  entirely (sent only name/description/callback_url), so daimon stored `{}`. Fixed at the source: mneme now
+  serializes and sends each tool's schema (typed string args + `required`), so daimon advertises real `mneme_*`
+  schemas and the model gets typed args. thoth's tolerance above stays as defense-in-depth. (Also surfaced a daimon
+  registration-parser quirk — it 400s if `callback_url` follows a nested object; noted for daimon.)
+
+## [0.34.1] - 2026-07-13
+
+**Stop/interrupt through the whole agentic loop — Esc cancels mid-round (tool execution / between rounds), not just streaming.**
+
+### Changed
+- **The Esc-abort substrate (`src/intr.cyr`) is now wired through the entire agentic tool-calling loop**, so pressing
+  **Esc** in the rich TUI cancels a turn during **tool execution** and **between rounds** — including the
+  non-streaming (`stream=false`) block path — not only mid-stream as before (0.17.4). `agent_turn` now arms the
+  Esc-poll around each round's tool phase, `_agent_run_calls_serial` polls between tool calls (so a multi-tool round
+  stops before running the rest), and a final drain + `intr_pending()` check after the tools stops the loop before
+  the next model request. The streaming abort (kind 4) and the new tool-phase abort share one honest landing,
+  `_agent_finish_interrupted` — it keeps a streamed partial (appended as the reply) or pops the unanswered user turn,
+  so a cancelled turn always leaves history a clean sequence of completed exchanges.
+- The t-ron **confirm** reads a line in cooked mode; while the tool phase has the Esc-poll armed, the TUI confirm
+  hooks now `intr_suspend()`/`intr_resume()` around it so the y/N read still works (idempotent; a no-op when intr
+  wasn't armed, e.g. a `/write` confirm outside a turn).
+
+### Added
+- **A front-end-agnostic interrupt seam** so the same agentic-loop checkpoints serve both front-ends: `intr_check()`
+  (polls a registered hook or the built-in stdin drain), `intr_check_hook_set()`, `intr_signal()` (raise the flag
+  directly — the mechanism a **GUI stop key** plugs into next, 0.34.2), plus `intr_armed()` and the
+  `intr_suspend`/`intr_resume` pair. Unit-tested (the seam: signal/check/pending/hook/suspend-resume; and the
+  interrupt landing `_agent_finish_interrupted` — keep-partial vs pop) and **adversarially reviewed — 0 defects**
+  across arm/disarm balance, the confirm suspend/resume (serial *and* parallel executor), the once-per-turn flag
+  lifecycle, the final-drain ordering, history integrity, and the off-TUI floor. **TUI-only and OUT_RING-gated** —
+  the REPL/piped/one-shot floor never touches the terminal and stays byte-identical. The mid-turn Esc delivery
+  reuses the exact `intr_arm`/`intr_poll`/`intr_disarm` mechanism of the shipped 0.17.4 streaming interrupt (final
+  end-to-end confirmation is a human Esc on a real terminal — a headless pty cannot inject a mid-turn keystroke, the
+  same limitation the pre-existing streaming interrupt has).
+- **Note (accepted edge):** while the tool phase is armed, a *type-ahead* answer to a t-ron confirm (typed before
+  the prompt paints) is drained with the other mid-turn keystrokes and must be retyped at the prompt — consistent
+  with intr's "mid-turn keystrokes don't leak into the composer" rule, and arguably safer (no blind pre-approval of
+  a gated action). The normal wait-then-answer flow is unaffected.
+
 ## [0.34.0] - 2026-07-13
 
 **Message actions — `/retry` (regenerate) + `/edit` (edit-last): rewind the last turn and re-run. Opens the 0.34.x arc.**

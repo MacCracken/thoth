@@ -71,3 +71,35 @@ fn intr_disarm() {
 # intr_note: land the honest "— interrupted" marker as its own feed line (NEVER appended to the reply
 # text that enters history — history holds the clean partial; this is a UI annotation only).
 fn intr_note() { ui_emit(ROLE_MUTED, "  — interrupted"); oprintln(""); return 0; }
+
+# --- 0.34.1: full agentic-loop interrupt behind a front-end-agnostic seam --------------------------------------
+# The agentic loop (agent.cyr) now polls intr_check() BETWEEN rounds and BETWEEN tool calls, not only per stream
+# frame — so Esc cancels mid-round (during tool execution / the non-streaming block path), not just streaming.
+# intr_check is FRONT-END-AGNOSTIC: for the TUI it drains stdin (the built-in poll below); a GUI (0.34.2) registers
+# its own non-blocking input poll via intr_check_hook_set (which calls intr_signal on its stop key), so the SAME
+# loop checkpoints serve both front-ends without agent.cyr knowing which is active.
+var _intr_check_fn = 0;      # front-end interrupt-poll hook; 0 -> the built-in stdin poll (TUI/REPL)
+var _intr_suspended = 0;     # 1 while intr_suspend left poll-mode for a cooked read (a confirm), pending resume
+fn intr_check_hook_set(h) { _intr_check_fn = h; return 0; }
+fn intr_armed() { return _intr_active; }
+fn intr_signal() { _intr_flag = 1; return 0; }   # raise the interrupt flag directly (a GUI stop key, 0.34.2 — or a test)
+
+# intr_check: the front-end-agnostic interrupt checkpoint — refresh the flag from the registered front-end poll
+# (GUI) or the built-in stdin drain (TUI, no-op if not armed), and return it. Cheap + non-blocking; hot-loop safe.
+fn intr_check() {
+    if (_intr_check_fn != 0) { fncall0(_intr_check_fn); return _intr_flag; }
+    return intr_poll();
+}
+
+# intr_suspend / intr_resume: bracket a COOKED read (the t-ron confirm's read_line) that runs while the agentic
+# tool phase has poll-mode armed — leave poll-mode so the line read echoes/works, then re-enter it. Idempotent:
+# resume re-arms only if suspend actually left an armed poll. Driven from the TUI confirm hooks (OUT_RING only; off
+# the TUI intr is never armed, so both are no-ops and the floor is byte-identical).
+fn intr_suspend() {
+    if (_intr_active == 1) { intr_disarm(); _intr_suspended = 1; }
+    return 0;
+}
+fn intr_resume() {
+    if (_intr_suspended == 1) { intr_arm(); _intr_suspended = 0; }
+    return 0;
+}
