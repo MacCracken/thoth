@@ -155,14 +155,16 @@ fn test_conversations() {
     assert_eq(conv_active(), 0, "conversation 0 is active");
     assert_eq(session_history_len(), 1, "conv 0 has 1 message");
     assert(conv_id(0) > 0, "conversation has a positive id");
-    assert_eq(conv_title(0), 0, "default conversation is untitled (0)");
-    # a new conversation is isolated + becomes active
+    assert(streq(conv_title(0), "hi in conv 0"), "auto-titled from the first user message (0.33.1)");
+    # a new conversation is isolated + becomes active, untitled until its own first user message
     assert_eq(conv_new(), 1, "conv_new -> index 1");
     assert_eq(conv_count(), 2, "two conversations");
     assert_eq(conv_active(), 1, "the new conversation is active");
+    assert_eq(conv_title(1), 0, "the new conversation starts untitled");
     assert_eq(session_history_len(), 0, "the new conversation has no messages");
     session_history_append("user", "hi in conv 1", 12);
     assert_eq(session_history_len(), 1, "conv 1 has its own message");
+    assert(streq(conv_title(1), "hi in conv 1"), "conv 1 auto-titled from its first message");
     # switching restores each conversation's messages
     conv_switch(0);
     assert_eq(conv_active(), 0, "switched back to conv 0");
@@ -170,7 +172,20 @@ fn test_conversations() {
     assert(streq(session_history_content(0), "hi in conv 0"), "conv 0 content stayed isolated from conv 1");
     assert_eq(conv_switch(9), 0, "out-of-range switch keeps the active index");
     conv_set_title(0, "First chat");
-    assert(streq(conv_title(0), "First chat"), "title set + read back");
+    assert(streq(conv_title(0), "First chat"), "explicit title set + read back (rename)");
+    # conv_delete (0.33.1): removes a conversation, fixes up the active index, never deletes the last
+    assert_eq(conv_delete(1), 1, "delete conversation 1");
+    assert_eq(conv_count(), 1, "one conversation left");
+    assert_eq(conv_active(), 0, "active fixed up to the surviving conversation");
+    assert_eq(conv_delete(0), 0, "refuse to delete the last conversation");
+    assert_eq(conv_count(), 1, "still one conversation");
+    # command classification (0.33.1)
+    assert_eq(classify_input("/conversations"), CMD_CONVERSATIONS, "/conversations classifies");
+    assert_eq(classify_input("/convos"), CMD_CONVERSATIONS, "/convos alias classifies");
+    assert_eq(classify_input("/new my chat"), CMD_NEW, "/new classifies");
+    assert_eq(classify_input("/switch 2"), CMD_SWITCH, "/switch classifies");
+    assert_eq(classify_input("/rename foo"), CMD_RENAME, "/rename classifies");
+    assert_eq(classify_input("/delete 3"), CMD_DELETE, "/delete classifies");
     session_reset();
     assert_eq(conv_count(), 0, "reset drops all conversations");
     return 0;

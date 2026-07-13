@@ -7,6 +7,11 @@
 
 ## Version
 
+**0.33.1** — **Conversation commands** (2026-07-12). `/conversations` (`/convos`) lists conversations (active `*` +
+title + msg count); `/new [title]`, `/switch <n>`, `/rename <title>`, `/delete <n>` (never the last, active-index
+fixup). An untitled conversation auto-titles from its first user message. Over the 0.33.0 `conv_*` store (in-memory;
+multi-conversation persistence is 0.33.2). Unit-tested + live-verified (no model needed).
+
 **0.33.0** — **Multi-conversation store** (2026-07-12; opens the 0.33.x chat-management arc). The single message
 thread is now the ACTIVE conversation of a keyed store (`_conv_store` of {id, title, created/updated, msgs}) in
 `src/session.cyr`; every history op routes through `_sess_hist_vec()` → the active conversation, so all consumers +

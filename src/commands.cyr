@@ -37,6 +37,11 @@ enum Cmd {
     CMD_REPROBE = 29;
     CMD_HISTORY = 30;
     CMD_NOTES = 31;
+    CMD_CONVERSATIONS = 32;
+    CMD_NEW = 33;
+    CMD_SWITCH = 34;
+    CMD_RENAME = 35;
+    CMD_DELETE = 36;
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -143,6 +148,12 @@ fn classify_input(line) {
     if (token_is(line, "/dry") == 1) { return CMD_DRY; }
     if (token_is(line, "/remember") == 1) { return CMD_REMEMBER; }
     if (token_is(line, "/notes") == 1) { return CMD_NOTES; }
+    if (token_is(line, "/conversations") == 1) { return CMD_CONVERSATIONS; }
+    if (token_is(line, "/convos") == 1) { return CMD_CONVERSATIONS; }
+    if (token_is(line, "/new") == 1) { return CMD_NEW; }
+    if (token_is(line, "/switch") == 1) { return CMD_SWITCH; }
+    if (token_is(line, "/rename") == 1) { return CMD_RENAME; }
+    if (token_is(line, "/delete") == 1) { return CMD_DELETE; }
     if (token_is(line, "/git") == 1) { return CMD_GIT; }
     if (token_is(line, "/copy") == 1) { return CMD_COPY; }
     if (token_is(line, "/find") == 1) { return CMD_FIND; }
@@ -186,6 +197,11 @@ fn cmd_help() {
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
     _help_line("  /notes <query>", "     search your mneme knowledge base (needs the memory seam bound)");
+    _help_line("  /conversations", "     list conversations (also /convos)");
+    _help_line("  /new [title]", "       start a new conversation");
+    _help_line("  /switch <n>", "        switch to conversation n");
+    _help_line("  /rename <title>", "    rename the current conversation");
+    _help_line("  /delete <n>", "        delete conversation n");
     _help_line("  /quit", "              exit (or Ctrl-D)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
@@ -1045,6 +1061,67 @@ fn cmd_notes(line) {
     return 0;
 }
 
+# --- conversation commands (0.33.1) ------------------------------------------------------------------------
+# In-memory over the 0.33.0 conv_* store (multi-conversation persistence is 0.33.2). Numbers are 1-based (what
+# /conversations shows); the store is 0-based, so `n - 1`. conv_switch/conv_delete are bounds-checked, and
+# _conv_at clamps, so a bad index can never crash — the commands just report "no such conversation".
+fn cmd_conversations(line) {
+    var n = conv_count();
+    if (n == 0) { conv_new(); n = conv_count(); }        # nothing recorded yet -> show the default one
+    ui_emit(ROLE_MUTED, "conversations:"); oprintln("");
+    var i = 0;
+    while (i < n) {
+        emit("  ");
+        if (i == conv_active()) { ui_emit(ROLE_ACCENT, "* "); } else { emit("  "); }
+        ofmt_int(i + 1); emit(". ");
+        var t = conv_title(i);
+        if (t == 0) { ui_emit(ROLE_FAINT, "(untitled)"); } else { ui_emit(ROLE_FG, t); }
+        ui_emit(ROLE_FAINT, "  ("); ofmt_int(vec_len(conv_msgs(i))); ui_emit(ROLE_FAINT, " msg)"); oprintln("");
+        i = i + 1;
+    }
+    return 0;
+}
+fn cmd_new(line) {
+    var idx = conv_new();
+    var title = arg_after(line);
+    if (title != 0) { conv_set_title(idx, conv_dup_title(title)); }
+    emit("new conversation "); ofmt_int(idx + 1);
+    if (title != 0) { emit(": "); ui_emit(ROLE_FG, title); }
+    oprintln("");
+    return 0;
+}
+fn cmd_switch(line) {
+    var arg = arg_after(line);
+    if (arg == 0) { oprintln("usage: /switch <number>   (see /conversations)"); return 0; }
+    var num = atoi(arg);
+    if (num < 1) { emit("  "); ui_emit(ROLE_RED, "no such conversation"); oprintln(""); return 0; }
+    if (num > conv_count()) { emit("  "); ui_emit(ROLE_RED, "no such conversation"); oprintln(""); return 0; }
+    conv_switch(num - 1);
+    emit("switched to conversation "); ofmt_int(num);
+    var t = conv_title(num - 1);
+    if (t != 0) { emit(": "); ui_emit(ROLE_FG, t); }
+    oprintln("");
+    return 0;
+}
+fn cmd_rename(line) {
+    var title = arg_after(line);
+    if (title == 0) { oprintln("usage: /rename <title>"); return 0; }
+    conv_set_title(conv_active(), conv_dup_title(title));
+    emit("renamed to "); ui_emit(ROLE_FG, title); oprintln("");
+    return 0;
+}
+fn cmd_delete(line) {
+    var arg = arg_after(line);
+    if (arg == 0) { oprintln("usage: /delete <number>   (see /conversations)"); return 0; }
+    var num = atoi(arg);
+    if (num < 1) { emit("  "); ui_emit(ROLE_RED, "no such conversation"); oprintln(""); return 0; }
+    if (num > conv_count()) { emit("  "); ui_emit(ROLE_RED, "no such conversation"); oprintln(""); return 0; }
+    if (conv_delete(num - 1) == 0) { emit("  "); ui_emit(ROLE_FAINT, "can't delete the last conversation"); oprintln(""); return 0; }
+    emit("deleted conversation "); ofmt_int(num);
+    ui_emit(ROLE_MUTED, " (now on "); ofmt_int(conv_active() + 1); ui_emit(ROLE_MUTED, ")"); oprintln("");
+    return 0;
+}
+
 fn cmd_run(line) {
     var cmdline = arg_after(line);
     if (cmdline == 0) { oprintln("usage: /run <shell command>"); return 0; }
@@ -1410,6 +1487,11 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_DRY) { cmd_dry(line); return 1; }
     if (c == CMD_REMEMBER) { cmd_remember(line); return 1; }
     if (c == CMD_NOTES) { cmd_notes(line); return 1; }
+    if (c == CMD_CONVERSATIONS) { cmd_conversations(line); return 1; }
+    if (c == CMD_NEW) { cmd_new(line); return 1; }
+    if (c == CMD_SWITCH) { cmd_switch(line); return 1; }
+    if (c == CMD_RENAME) { cmd_rename(line); return 1; }
+    if (c == CMD_DELETE) { cmd_delete(line); return 1; }
     if (c == CMD_GIT) { cmd_git(line); return 1; }
     if (c == CMD_COPY) { cmd_copy(); return 1; }
     if (c == CMD_FIND) { cmd_find(line); return 1; }

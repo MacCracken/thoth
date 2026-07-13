@@ -96,6 +96,51 @@ fn conv_touch(i) { store64(_conv_at(i) + 24, clock_epoch_secs()); return 0; }
 fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_active = vec_len(_conv_store) - 1; return _conv_active; }
 # conv_switch: make conversation `i` active (bounds-checked); returns the active index.
 fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; } } return _conv_active; }
+# conv_delete: remove conversation `i` (never the last — always keep one). Fixes up _conv_active so it still
+# points at a valid, sensible conversation. Returns 1 if removed, 0 if refused (last one / out of range).
+fn conv_delete(i) {
+    if (conv_count() <= 1) { return 0; }
+    if (i < 0) { return 0; }
+    if (i >= conv_count()) { return 0; }
+    vec_remove(_conv_store, i);
+    if (_conv_active > i) { _conv_active = _conv_active - 1; }        # the active shifted left
+    if (_conv_active >= conv_count()) { _conv_active = conv_count() - 1; }   # was pointing past the end
+    return 1;
+}
+
+# _conv_autotitle: a title cstr from a message's first line (<= CONV_TITLE_MAX bytes, "..." if truncated). Used to
+# name a conversation from its first user message. Copies to stable storage.
+var CONV_TITLE_MAX = 48;
+fn _conv_autotitle(content, clen) {
+    var t = alloc(CONV_TITLE_MAX + 4);
+    var cap = clen;
+    if (cap > CONV_TITLE_MAX) { cap = CONV_TITLE_MAX; }
+    var i = 0;
+    var done = 0;
+    while ((done == 0) && (i < cap)) {
+        var ch = load8(content + i);
+        if (ch == 10) { done = 1; }              # stop at the first newline
+        else { store8(t + i, ch); i = i + 1; }
+    }
+    if (done == 0) { if (clen > CONV_TITLE_MAX) {   # truncated mid-content -> ellipsis
+        store8(t + i, 46); store8(t + i + 1, 46); store8(t + i + 2, 46); i = i + 3;
+    } }
+    store8(t + i, 0);
+    return t;
+}
+
+# conv_dup_title: a stable, length-capped copy of a title cstr — for /new + /rename, whose arg points into the
+# transient input line and must be copied before conv_set_title stores it. Caps at CONV_TITLE_STORE_MAX bytes.
+var CONV_TITLE_STORE_MAX = 128;
+fn conv_dup_title(s) {
+    var n = strlen(s);
+    if (n > CONV_TITLE_STORE_MAX) { n = CONV_TITLE_STORE_MAX; }
+    var d = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(d + i, load8(s + i)); i = i + 1; }
+    store8(d + n, 0);
+    return d;
+}
 
 fn session_reset() {
     _sess_turns = 0;
@@ -187,6 +232,8 @@ fn session_history_append(role, content, clen) {
     var v = _sess_hist_vec();
     vec_push(v, m);
     while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
+    # 0.33.1: auto-title an untitled conversation from its first USER message.
+    if (conv_title(_conv_active) == 0) { if (streq(role, "user") == 1) { conv_set_title(_conv_active, _conv_autotitle(content, clen)); } }
     conv_touch(_conv_active);                # 0.33.0: bump the active conversation's updated-at
     return 0;
 }

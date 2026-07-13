@@ -2,7 +2,20 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.33.0] - 2026-07-12
+## [0.33.1] - 2026-07-12
+
+**Conversation commands — list, create, switch, rename, delete named conversations.**
+
+### Added
+- **`/conversations`** (alias `/convos`) — list conversations with a `*` active marker, title, and message count.
+- **`/new [title]`** — start a new conversation (optionally titled) and make it active.
+- **`/switch <n>`** — switch to conversation `n` (1-based, as listed).
+- **`/rename <title>`** — rename the current conversation.
+- **`/delete <n>`** — delete conversation `n` (never the last; the active index is fixed up).
+- **Auto-title** — an untitled conversation takes its title from its first user message (first line, ≤48 chars).
+  All over the 0.33.0 `conv_*` store (in-memory; multi-conversation *persistence* is 0.33.2 — only the active
+  conversation persists today). New `conv_delete` (with active-index fixup) + `conv_dup_title`. Unit-tested
+  (auto-title, delete + fixup, refuse-last, command classification) and live-verified end-to-end (no model needed).
 
 **Multi-conversation store — the structural foundation for named, switchable conversations (opens the 0.33.x arc).**
 
