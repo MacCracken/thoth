@@ -581,6 +581,24 @@ fn _save_history(fd) {
             }
             if (_save_write_str(fd, "\n") == 0) { ok = 0; }
         }
+        var tc = session_history_tool_count(i);       # 0.33.5: the reply's tool calls
+        if (tc > 0) {
+            if (_save_write_str(fd, "_tools:_\n") == 0) { ok = 0; }
+            var tj = 0;
+            while (tj < tc) {
+                if (_save_write_str(fd, "- `") == 0) { ok = 0; }
+                if (_save_write_str(fd, session_history_tool_name(i, tj)) == 0) { ok = 0; }
+                if (_save_write_str(fd, "`") == 0) { ok = 0; }
+                var targs = session_history_tool_args(i, tj);
+                if (targs != 0) { if (strlen(targs) > 0) { if (_save_write_str(fd, " ") == 0) { ok = 0; } if (_save_write_str(fd, targs) == 0) { ok = 0; } } }
+                # status: kind 0 = gate-denied, kind 1 (allowed) with ok 0 = the call errored (else it succeeded)
+                if (session_history_tool_kind(i, tj) == 0) { if (_save_write_str(fd, " (denied)") == 0) { ok = 0; } }
+                else { if (session_history_tool_ok(i, tj) == 0) { if (_save_write_str(fd, " (error)") == 0) { ok = 0; } } }
+                if (_save_write_str(fd, "\n") == 0) { ok = 0; }
+                tj = tj + 1;
+            }
+            if (_save_write_str(fd, "\n") == 0) { ok = 0; }
+        }
         i = i + 1;
     }
     return ok;

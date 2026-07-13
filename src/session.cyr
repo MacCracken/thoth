@@ -42,7 +42,9 @@ var _sess_cost_unpriced = 0;
 # +24 model (0.33.3 — a STABLE COPY of the model id that produced an assistant reply, or 0; persisted, so a resumed
 # conversation remembers which model said what — NOT the shared session._model_buf, which a mid-session switch would
 # overwrite retroactively), +32 citations (0.33.4 — a lazily-alloc'd citation set: the recalled-source TITLES a reply
-# cited, or 0; persisted as trailing CITE frames, so a resumed conversation keeps its cited sources),
+# cited, or 0; persisted as trailing CITE frames, so a resumed conversation keeps its cited sources), +40 tool calls
+# (0.33.5 — a lazily-alloc'd set of {kind, ok, name, args} the reply produced, or 0; persisted as trailing TOOL
+# frames, so a resumed conversation keeps its tool cards),
 # which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
@@ -321,6 +323,63 @@ fn session_history_citation_title(i, j) {
     return load64(cs + 8 + j * 8);
 }
 
+# --- per-message tool calls (0.33.5): the tool-round trace a reply produced -------------------------------
+# The last piece of the richer persisted message schema: a reply's tool calls (name + arg summary + gate kind +
+# ok/error) are snapshotted from the roundlog onto the message at +40 (a lazily-alloc'd set), persisted as trailing
+# TOOL frames, so a resumed conversation keeps its tool cards. Live capture funnels through roundlog.cyr's
+# roundlog_attach_calls_to_last; the loader funnels through the same _add, so both cap + sanitize identically. The
+# store carries no roundlog.cyr dependency. Set: count@0, then MSG_TOOL_MAX entries {kind@0, ok@8, name@16, args@24}.
+var MSG_TOOL_MAX = 8;
+fn _msg_tool_last() {
+    if (conv_count() == 0) { return 0; }
+    var v = _sess_hist_vec();
+    var n = vec_len(v);
+    if (n == 0) { return 0; }
+    return vec_get(v, n - 1);
+}
+fn session_history_tool_last_clear() {                    # reset the last message's tool set (idempotent re-attach)
+    var m = _msg_tool_last();
+    if (m == 0) { return 0; }
+    var ts = load64(m + 40);
+    if (ts != 0) { store64(ts, 0); }
+    return 0;
+}
+fn session_history_tool_last_add(kind, ok, name, args) {  # attach one tool call to the last message (copied, capped)
+    var m = _msg_tool_last();
+    if (m == 0) { return 0; }
+    var ts = load64(m + 40);
+    if (ts == 0) { ts = alloc(8 + MSG_TOOL_MAX * 32); store64(ts, 0); store64(m + 40, ts); }
+    var tn = load64(ts);
+    if (tn >= MSG_TOOL_MAX) { return 0; }
+    var e = ts + 8 + tn * 32;
+    store64(e, kind);
+    store64(e + 8, ok);
+    var nm = 0;
+    if (name != 0) { nm = _msg_cite_title_dup(name); }   # sanitized (tab/newline flattened) + capped copy — so a
+    store64(e + 16, nm);                                 # name/args can never break the tab-delimited TOOL payload
+    var ag = 0;
+    if (args != 0) { ag = _msg_cite_title_dup(args); }
+    store64(e + 24, ag);
+    store64(ts, tn + 1);
+    return 0;
+}
+fn session_history_tool_count(i) {
+    var ts = load64(vec_get(_sess_hist_vec(), i) + 40);
+    if (ts == 0) { return 0; }
+    return load64(ts);
+}
+fn _sess_tool_entry(i, j) {
+    if (j < 0) { return 0; }
+    var ts = load64(vec_get(_sess_hist_vec(), i) + 40);
+    if (ts == 0) { return 0; }
+    if (j >= load64(ts)) { return 0; }
+    return ts + 8 + j * 32;
+}
+fn session_history_tool_kind(i, j) { var e = _sess_tool_entry(i, j); if (e == 0) { return 0; } return load64(e); }
+fn session_history_tool_ok(i, j)   { var e = _sess_tool_entry(i, j); if (e == 0) { return 0; } return load64(e + 8); }
+fn session_history_tool_name(i, j) { var e = _sess_tool_entry(i, j); if (e == 0) { return 0; } return load64(e + 16); }
+fn session_history_tool_args(i, j) { var e = _sess_tool_entry(i, j); if (e == 0) { return 0; } return load64(e + 24); }
+
 # session_history_append: record (role, content[0..clen)) as a turn, copying the content to stable storage. An
 # ASSISTANT reply is auto-tagged with the CURRENT session model (the one that produced it); user/system messages
 # carry no model. The loader calls _session_history_append_ex directly with the model parsed from the file (which
@@ -335,7 +394,7 @@ fn session_history_append(role, content, clen) {
 # never aliased, because session._model_buf (what session_model() returns) is one shared buffer a mid-session
 # switch overwrites; a raw alias would retroactively rewrite every earlier reply's model.
 fn _session_history_append_ex(role, content, clen, model) {
-    var m = alloc(40);
+    var m = alloc(48);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
@@ -346,6 +405,7 @@ fn _session_history_append_ex(role, content, clen, model) {
     if (model != 0) { if (strlen(model) > 0) { mv = _sess_dup_bytes(model, strlen(model)); } }   # stable capped copy
     store64(m + 24, mv);                     # 0.33.3: per-message model id (or 0)
     store64(m + 32, 0);                      # 0.33.4: citation set (lazily alloc'd when a cited title is attached)
+    store64(m + 40, 0);                      # 0.33.5: tool-call set (lazily alloc'd when a tool call is attached)
     var v = _sess_hist_vec();
     vec_push(v, m);
     while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
@@ -484,6 +544,42 @@ fn _sess_write_cite(fd, title) {
     return ok;
 }
 
+# _sess_copy_bounded: append cstr `src` into `dst` at offset `off`, stopping at `cap`; returns the new offset.
+fn _sess_copy_bounded(dst, off, src, cap) {
+    if (src == 0) { return off; }
+    var i = 0;
+    while ((load8(src + i) != 0) && (off < cap)) { store8(dst + off, load8(src + i)); i = i + 1; off = off + 1; }
+    return off;
+}
+
+# _sess_write_tool: a trailing "TOOL\t<len>\n<kind>\t<ok>\t<name>\t<args>\n" frame (0.33.5). The payload packs the
+# four fields tab-delimited (kind/ok are small ints; name/args are stored pre-sanitized of tabs/newlines, so the
+# split is unambiguous); it is built in a scratch buffer to compute the length, then written after the "TOOL\t<len>"
+# header. Shares the unified frame, dispatched by token, and attaches to the just-appended reply on load.
+var SESS_TOOL_BUF = 512;
+var _sess_tool_buf = 0;
+fn _sess_write_tool(fd, kind, ok, name, args) {
+    if (_sess_tool_buf == 0) { _sess_tool_buf = alloc(SESS_TOOL_BUF); }
+    var o = 0;
+    o = _sess_uint_into(_sess_tool_buf, o, kind);
+    store8(_sess_tool_buf + o, 9); o = o + 1;              # '\t'
+    o = _sess_uint_into(_sess_tool_buf, o, ok);
+    store8(_sess_tool_buf + o, 9); o = o + 1;              # '\t'
+    o = _sess_copy_bounded(_sess_tool_buf, o, name, SESS_TOOL_BUF - 2);   # room for a '\t' + at least the args start
+    store8(_sess_tool_buf + o, 9); o = o + 1;              # '\t'
+    o = _sess_copy_bounded(_sess_tool_buf, o, args, SESS_TOOL_BUF - 1);
+    var h = 0;
+    store8(_sess_hdr_buf, 84); store8(_sess_hdr_buf + 1, 79); store8(_sess_hdr_buf + 2, 79); store8(_sess_hdr_buf + 3, 76); h = 4;   # "TOOL"
+    store8(_sess_hdr_buf + h, 9); h = h + 1;               # '\t'
+    h = _sess_uint_into(_sess_hdr_buf, h, o);
+    store8(_sess_hdr_buf + h, 10); h = h + 1;              # '\n'
+    var okw = 0;
+    if (file_write(fd, _sess_hdr_buf, h) != h) { okw = 0 - 1; }
+    if (o > 0) { if (file_write(fd, _sess_tool_buf, o) != o) { okw = 0 - 1; } }
+    if (file_write(fd, "\n", 1) != 1) { okw = 0 - 1; }
+    return okw;
+}
+
 # _sess_write_file: truncate + rewrite `path` in the v2 (all-conversations) format. Magic line carries the active
 # index; then per conversation a "CONV\t<title_len>\n<title>\n" header followed by that conversation's records.
 # Returns 0 on success, -1 on open/short-write failure (caller degrades closed).
@@ -524,6 +620,16 @@ fn _sess_write_file(path) {
                 var cn = load64(cs);
                 var cj = 0;
                 while (cj < cn) { if (_sess_write_cite(fd, load64(cs + 8 + cj * 8)) < 0) { ok = 0 - 1; } cj = cj + 1; }
+            }
+            var ts = load64(m + 40);                  # 0.33.5: trailing TOOL frames for this reply's tool calls
+            if (ts != 0) {
+                var tn = load64(ts);
+                var tj = 0;
+                while (tj < tn) {
+                    var te = ts + 8 + tj * 32;
+                    if (_sess_write_tool(fd, load64(te), load64(te + 8), load64(te + 16), load64(te + 24)) < 0) { ok = 0 - 1; }
+                    tj = tj + 1;
+                }
             }
             mi = mi + 1;
         }
@@ -611,6 +717,33 @@ fn _sess_dup_bytes(ptr, len) {
     return d;
 }
 
+# _sess_load_tool: parse a TOOL frame's payload (_sess_read_buf[p .. p+num)) — "<kind>\t<ok>\t<name>\t<args>" —
+# and attach the tool call to the just-appended message. Every read is bounded by `end`; a malformed payload (a
+# missing delimiter) is a clean no-op. name/args were written pre-sanitized of tabs, so the first three tabs split
+# the fields unambiguously and the args field (the remainder) can be taken whole.
+fn _sess_load_tool(p, num) {
+    var end = p + num;
+    var q = p;
+    var kind = 0;
+    var kd = 0;
+    while ((q < end) && (load8(_sess_read_buf + q) >= 48) && (load8(_sess_read_buf + q) <= 57)) { kind = kind * 10 + (load8(_sess_read_buf + q) - 48); q = q + 1; kd = kd + 1; }
+    if ((kd == 0) || (q >= end) || (load8(_sess_read_buf + q) != 9)) { return 0; }
+    q = q + 1;
+    var okv = 0;
+    var od = 0;
+    while ((q < end) && (load8(_sess_read_buf + q) >= 48) && (load8(_sess_read_buf + q) <= 57)) { okv = okv * 10 + (load8(_sess_read_buf + q) - 48); q = q + 1; od = od + 1; }
+    if ((od == 0) || (q >= end) || (load8(_sess_read_buf + q) != 9)) { return 0; }
+    q = q + 1;
+    var nstart = q;                                      # name up to the third '\t'
+    while ((q < end) && (load8(_sess_read_buf + q) != 9)) { q = q + 1; }
+    if (q >= end) { return 0; }                          # no third '\t' -> malformed
+    var name = _sess_dup_bytes(_sess_read_buf + nstart, q - nstart);
+    q = q + 1;                                           # skip '\t'
+    var args = _sess_dup_bytes(_sess_read_buf + q, end - q);   # args = the remainder
+    session_history_tool_last_add(kind, okv, name, args);
+    return 0;
+}
+
 # _sess_load_v2: the multi-conversation parser. `mend` = the '\t' offset after the magic. Both a CONV header and a
 # message record share the "<token>\t<num>\n<payload>\n" frame (token=="CONV": num=title_len, payload=title; else
 # token=role: num=clen, payload=content), so one loop + one bounds check handles both. Rebuilds the store from
@@ -661,11 +794,14 @@ fn _sess_load_v2(mend, total) {
                             } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CITE", 4) == 1)) {
                                 # 0.33.4: a cited-source title for the just-appended message
                                 if (num > 0) { session_history_cite_last_add(_sess_dup_bytes(_sess_read_buf + p, num)); }
+                            } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "TOOL", 4) == 1)) {
+                                # 0.33.5: a tool call for the just-appended message
+                                if (num > 0) { _sess_load_tool(p, num); }
                             } else {
                                 if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
                                 _session_history_append_ex(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num, model_ptr);
                                 loaded = loaded + 1;
-                            } }
+                            } } }
                             p = p + num;
                             if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip payload separator
                         }

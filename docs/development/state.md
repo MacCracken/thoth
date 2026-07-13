@@ -7,6 +7,14 @@
 
 ## Version
 
+**0.33.5** — **Per-message tool calls** (2026-07-13). Each reply now keeps the tool calls it produced (name, arg
+summary, gate kind, ok/error), snapshotted from the roundlog and persisted in the `THOTH-SESSION-2` format as
+trailing `TOOL\t<len>\n<kind>\t<ok>\t<name>\t<args>\n` frames (same unified frame, dispatched by token, re-attached
+to the reply on load). Live capture funnels through `roundlog_attach_calls_to_last` (`src/roundlog.cyr`, idempotent);
+the store carries no roundlog dependency. `/save` lists each reply's `_tools:_`. New `session_history_tool_count/
+_name/_args/_kind/_ok`. Unit-tested (round-trip beside model + citations) + live-verified both ways. **Completes the
+richer persisted message schema** — a resumed conversation carries role + text + model + cited sources + tool cards.
+
 **0.33.4** — **Per-message citations** (2026-07-13). Each reply now keeps the recalled-source TITLES it cited,
 persisted in the `THOTH-SESSION-2` format as trailing `CITE\t<len>\n<title>\n` frames (the same unified frame as
 `CONV`/records, dispatched by token, re-attached to the reply on load). Live capture funnels through

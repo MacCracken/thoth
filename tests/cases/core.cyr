@@ -1474,6 +1474,40 @@ fn test_session_persist() {
     assert_eq(session_history_len(), 1, "0.33.4: the record after a leading CITE still loads");
     assert_eq(session_history_citation_count(0), 0, "0.33.4: the orphan CITE attached to nothing");
 
+    # --- 0.33.5: per-message tool calls persist (alongside the model field AND citations, on the same reply) ---
+    session_reset();
+    session_set_model_copy("claude-opus-4-8");
+    session_history_append("user", "q", 1);
+    session_history_append("assistant", "a", 1);          # model-tagged + cited + tool calls
+    session_history_cite_last_add("Design Notes");
+    session_history_tool_last_add(1, 1, "read_file", "path=foo.txt");   # kind=allow, ok
+    session_history_tool_last_add(0, 0, "shell", "rm -rf /");           # kind=deny, not ok
+    assert_eq(session_history_tool_count(1), 2, "0.33.5: two tool calls on the reply");
+    assert(streq(session_history_tool_name(1, 0), "read_file") == 1, "0.33.5: call 0 name");
+    assert(streq(session_history_tool_args(1, 0), "path=foo.txt") == 1, "0.33.5: call 0 args");
+    assert_eq(session_history_tool_kind(1, 0), 1, "0.33.5: call 0 kind=allow");
+    assert_eq(session_history_tool_ok(1, 0), 1, "0.33.5: call 0 ok");
+    assert_eq(session_history_tool_kind(1, 1), 0, "0.33.5: call 1 kind=deny");
+    assert_eq(session_history_tool_count(0), 0, "0.33.5: user message has no tool calls");
+    session_history_tool_last_clear();                    # idempotent clear + re-add (the attach glue clears first)
+    assert_eq(session_history_tool_count(1), 0, "0.33.5: clear resets the tool set");
+    session_history_tool_last_add(1, 1, "read_file", "path=foo.txt");
+    session_history_tool_last_add(0, 0, "shell", "rm -rf /");
+    assert_eq(_sess_write_file("/tmp/thoth_sess_v5"), 0, "0.33.5: v5 write ok");
+    session_reset();
+    _sess_load_file("/tmp/thoth_sess_v5");
+    assert_eq(session_history_tool_count(1), 2, "0.33.5 round-trip: 2 tool calls restored");
+    assert(streq(session_history_tool_name(1, 0), "read_file") == 1, "0.33.5 round-trip: call 0 name");
+    assert(streq(session_history_tool_args(1, 0), "path=foo.txt") == 1, "0.33.5 round-trip: call 0 args");
+    assert_eq(session_history_tool_kind(1, 0), 1, "0.33.5 round-trip: call 0 kind");
+    assert_eq(session_history_tool_ok(1, 0), 1, "0.33.5 round-trip: call 0 ok");
+    assert(streq(session_history_tool_name(1, 1), "shell") == 1, "0.33.5 round-trip: call 1 name");
+    assert(streq(session_history_tool_args(1, 1), "rm -rf /") == 1, "0.33.5 round-trip: call 1 args (spaces preserved)");
+    assert_eq(session_history_tool_kind(1, 1), 0, "0.33.5 round-trip: call 1 kind=deny");
+    assert_eq(session_history_tool_ok(1, 1), 0, "0.33.5 round-trip: call 1 ok=0");
+    assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.33.5 round-trip: model field intact beside CITE+TOOL frames");
+    assert_eq(session_history_citation_count(1), 1, "0.33.5 round-trip: citation intact beside TOOL frames");
+
     _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
     session_reset();              # leave a clean single-conversation store for subsequent tests
     session_history_clear();

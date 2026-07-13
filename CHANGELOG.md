@@ -2,6 +2,24 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.33.5] - 2026-07-13
+
+**Per-message tool calls — a resumed conversation keeps its tool cards. Completes the richer persisted message schema.**
+
+### Added
+- **Each reply now carries the tool calls it produced** (`src/session.cyr`) — name, arg summary, gate kind
+  (allow/deny), and ok/error — snapshotted from the roundlog onto the message and persisted so they survive a
+  restart. The live capture (`roundlog_attach_calls_to_last`, `src/roundlog.cyr`) matches the turn's rounds to the
+  just-appended reply; idempotent (clear + re-add), so the multiple assistant-append paths can't double-count. New
+  accessors `session_history_tool_count(i)` / `session_history_tool_{name,args,kind,ok}(i, j)`.
+- **Persisted as trailing `TOOL\t<len>\n<kind>\t<ok>\t<name>\t<args>\n` frames** in the `THOTH-SESSION-2` format —
+  the same unified frame as `CONV`/`CITE`/records, dispatched by token, written right after the reply (and its CITE
+  frames) so they re-attach to the correct message on load. name/args are stored pre-flattened of tabs/newlines, so
+  the tab-delimited payload always splits unambiguously; a malformed frame is a safe no-op. `/save` now lists each
+  reply's `_tools:_` (with `(denied)`/`(error)` markers). Unit-tested (round-trip beside the model + citations,
+  idempotent re-attach) and live-verified both ways with the real binary. **With this the richer persisted message
+  schema is complete: a resumed conversation carries role + text + model + cited sources + tool calls.**
+
 ## [0.33.4] - 2026-07-13
 
 **Per-message citations — a resumed conversation keeps the sources each reply recalled.**
