@@ -2,6 +2,37 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.0] - 2026-07-13
+
+**Structural markdown in the GUI — assistant replies render headings, bold, inline/fenced code, lists, and blockquotes (opens the 0.36.x rendering arc).**
+
+### Added
+- **The desktop GUI now renders assistant replies as structured markdown, not flat text.** The GUI runs a turn under
+  `OUT_NULL`, so `mdhl` (the line/TUI markdown engine) never reaches the window — replies were drawn as a single
+  flat, uniform-color word-wrapped paragraph (`_gfeed_para`). Now they render with structure: **ATX headings** in
+  `ROLE_ACCENT`, **`**bold**`** brighter (`ROLE_FG` — the GUI font is a fixed monospace cell, so emphasis is color,
+  not weight), **`` `inline code` ``** and **fenced code blocks** in `ROLE_BLUE` (code on a subtle background rect),
+  **list items** with an accent marker + hanging indent, and **blockquotes** indented and faint. Applies to both the
+  landed reply and the live streaming partial (which degrades gracefully on incomplete markdown — an unterminated
+  fence or unmatched `**`/`` ` `` stays readable).
+- **New shared structural-markdown model, `src/mdmodel.cyr`** — a pure, facts-not-bytes classifier (the reply-render
+  analogue of `src/surface.cyr`, the status view-model). `md_classify` reports a block kind (heading/list/quote/
+  blank/para) + result cells (level, content offset, list indent/ordered/marker span); `md_fence_open`/`_close`
+  handle fenced code; `md_inline_scan` yields contiguous `{byte-range, role}` inline runs (plain/bold/code) and
+  `md_role_at` looks up a byte's role. Its predicates mirror `mdhl`'s exactly, so a later cut can migrate the
+  line/TUI engine onto the same model. The GUI feed is the first leaf to lower it (`_gfeed_md` + a styled word-wrap
+  that switches color mid-line per inline run); `mdhl`'s line/TUI path is untouched this cut (no regression risk).
+- Tests: the model (`test_mdmodel` — heading levels + content offsets, list/quote/blank/para classification, the
+  ordered-marker span, fence open/close + language, inline-run coverage/precedence/latching, `MD_RUN_CAP` overflow)
+  and the GUI leaf (`test_gui_markdown` — measure/draw parity, per-line block structure, accent-heading / blue-code /
+  code-background command colors, plain + empty replies). Suite green (239 gui + 1451 core + 147 render + 3).
+  **Adversarially reviewed** across model correctness, styled-wrap parity/memory-safety, and integration regression —
+  all clean (byte-range vs codepoint-count alignment verified against `_gfeed_para`; measure==draw; graceful cap
+  overflow); one flagged cosmetic nit (a trailing all-spaces line) fixed.
+
+**NEXT (0.36.x)**: `.1` **tables** — pipe-table parsing + layout in the shared model, rendered in both the GUI (grid)
+and `mdhl` (line/TUI); `.2` migrate `mdhl` onto the model; `.3` summarize-on-overflow context handling.
+
 ## [0.35.4] - 2026-07-13
 
 **`/state` surfaces the reasoning-effort control + how many turns were folded this session.**

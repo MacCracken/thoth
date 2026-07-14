@@ -904,6 +904,49 @@ fn test_gui_reason_perturn() {
     return 0;
 }
 
+# GUI structural markdown (mdmodel + gfeed, 0.36.0): assistant replies render with structure — headings ACCENT,
+# **bold** brighter (FG), `inline code` + fenced code BLUE on a background rect, list markers ACCENT — via the
+# shared model. PURE (_gfeed_md builds a gdraw command list; parity + a command-color scan, no raster/PPM).
+fn test_gui_markdown() {
+    test_group("GUI structural markdown (mdmodel + gfeed, 0.36.0)");
+    var reply = "## Plan\nUse **foo** and `bar`.\n- step one\n```\ncode();\n```";
+    # measure == draw parity
+    var mh = _gfeed_md(0, 0, 0, 600, reply);
+    var cmds = gd_list_new();
+    var dh = _gfeed_md(cmds, 0, 0, 600, reply);
+    assert_eq(mh, dh, "markdown feed: measure height == draw height (parity)");
+    assert(dh > 0, "markdown feed advances y");
+    # per-line structure (not one flat wrapped paragraph): heading + para + list + a code line -> >= 4 rows
+    assert(dh >= 4 * GFEED_LH, "markdown produces per-line block structure");
+    # the command list carries the accent heading, a blue code color, and the code-block background rect
+    var accent = _ui_rgb(ROLE_ACCENT);
+    var blue = _ui_rgb(ROLE_BLUE);
+    var codebg = _md_code_bg();
+    var seen_accent = 0; var seen_blue = 0; var seen_bg = 0; var ci = 0;
+    while (ci < vec_len(cmds)) {
+        var c = vec_get(cmds, ci);
+        var k = gd_kind(c);
+        var col = gd_color(c);
+        if ((k == GD_TEXT) && (col == accent)) { seen_accent = 1; }
+        if ((k == GD_TEXT) && (col == blue)) { seen_blue = 1; }
+        if ((k == GD_RECT) && (col == codebg)) { seen_bg = 1; }
+        ci = ci + 1;
+    }
+    assert_eq(seen_accent, 1, "heading (and list marker) drawn in ROLE_ACCENT");
+    assert_eq(seen_blue, 1, "inline / fenced code drawn in ROLE_BLUE");
+    assert_eq(seen_bg, 1, "fenced code sits on a background rect");
+    # a plain reply (no markup) still renders as one paragraph, parity holds
+    var plain = "just a normal sentence with no markup at all here";
+    var pm = _gfeed_md(0, 0, 0, 600, plain);
+    var pcmds = gd_list_new();
+    var pd = _gfeed_md(pcmds, 0, 0, 600, plain);
+    assert_eq(pm, pd, "plain reply: measure == draw");
+    assert(pd > 0, "plain reply advances y");
+    # empty reply -> no rows, no crash
+    assert_eq(_gfeed_md(0, 0, 100, 600, ""), 100, "empty reply leaves y unchanged");
+    return 0;
+}
+
 # GUI colored diff card (0.31.2): an `edit` call's stored editlog diff renders below its line in the card —
 # del lines RED, add lines GREEN — growing the card height with measure/draw parity preserved.
 fn test_gui_toolcards_diff() {

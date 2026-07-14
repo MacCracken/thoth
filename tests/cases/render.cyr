@@ -391,3 +391,76 @@ fn test_mdhl_inline() {
     ui_force(PT_PLAIN, CD_NONE);
     return 0;
 }
+
+# structural markdown MODEL (mdmodel.cyr, 0.36.0): the pure facts-not-bytes classifier + inline span scanner the
+# GUI feed leaf lowers. PURE — asserts on return kinds + result cells + run list (no feed, no emit).
+fn test_mdmodel() {
+    test_group("structural markdown model (mdmodel.cyr, 0.36.0)");
+    # ATX headings: level + content offset (the #s are stripped from _md_content)
+    var h = "## Plan";
+    assert_eq(md_classify(h, strlen(h)), MDB_HEADING, "'## Plan' -> heading");
+    assert_eq(md_level(), 2, "heading level 2");
+    assert_eq(md_content(), 3, "heading content begins after '## '");
+    var hbare = "###";
+    assert_eq(md_classify(hbare, strlen(hbare)), MDB_HEADING, "'###' alone -> heading");
+    assert_eq(md_content(), 3, "bare heading content at EOL");
+    var nothead = "###x";
+    assert_eq(md_classify(nothead, strlen(nothead)), MDB_PARA, "'###x' (no space) -> para, not heading");
+    var toomany = "####### x";
+    assert_eq(md_classify(toomany, strlen(toomany)), MDB_PARA, "7 '#' -> not a heading");
+    # blockquote
+    var bq = "> quoted";
+    assert_eq(md_classify(bq, strlen(bq)), MDB_QUOTE, "'> quoted' -> quote");
+    assert_eq(md_content(), 2, "quote content after '> '");
+    # lists: unordered + ordered, indent, marker span, content offset
+    var ul = "- item";
+    assert_eq(md_classify(ul, strlen(ul)), MDB_LIST, "'- item' -> list");
+    assert_eq(md_ordered(), 0, "'-' is unordered");
+    assert_eq(md_marker_len(), 1, "marker '-' is 1 byte");
+    assert_eq(md_content(), 2, "list content after '- '");
+    var ol = "  12. thing";
+    assert_eq(md_classify(ol, strlen(ol)), MDB_LIST, "'  12. thing' -> list");
+    assert_eq(md_indent(), 2, "two-space indent");
+    assert_eq(md_ordered(), 1, "'12.' is ordered");
+    assert_eq(md_marker_len(), 3, "marker '12.' is 3 bytes");
+    assert_eq(md_content(), 6, "content after '  12. '");
+    var notlist = "-nospace";
+    assert_eq(md_classify(notlist, strlen(notlist)), MDB_PARA, "'-nospace' -> para, not a list");
+    # blank line (whitespace only)
+    var bl = "   ";
+    assert_eq(md_classify(bl, strlen(bl)), MDB_BLANK, "whitespace-only -> blank");
+    var pr = "just prose";
+    assert_eq(md_classify(pr, strlen(pr)), MDB_PARA, "plain line -> para");
+    # inline spans: plain / bold / code contiguous runs
+    var p = "a **b** c";
+    md_inline_scan(p, strlen(p));
+    assert_eq(md_run_count(), 3, "'a **b** c' -> 3 runs");
+    assert_eq(md_run_role(0), MDI_PLAIN, "run 0 plain");
+    assert_eq(md_run_role(1), MDI_BOLD, "run 1 bold");
+    assert_eq(md_run_role(2), MDI_PLAIN, "run 2 plain");
+    assert_eq(md_run_start(1), 2, "bold run starts at the '**'");
+    assert_eq(md_run_len(1), 5, "'**b**' spans 5 bytes");
+    assert_eq(md_role_at(0), MDI_PLAIN, "byte 0 -> plain");
+    assert_eq(md_role_at(3), MDI_BOLD, "byte 3 (inside bold) -> bold");
+    assert_eq(md_role_at(8), MDI_PLAIN, "byte 8 -> plain");
+    var c = "x `y` z";
+    md_inline_scan(c, strlen(c));
+    assert_eq(md_run_count(), 3, "inline code -> 3 runs");
+    assert_eq(md_run_role(1), MDI_CODE, "'`y`' is code");
+    var u = "just **text no close";
+    md_inline_scan(u, strlen(u));
+    assert_eq(md_role_at(5), MDI_PLAIN, "unmatched '**' stays plain");
+    # fenced code open / close
+    var fo = "```python";
+    assert_eq(md_fence_open(fo, strlen(fo)), 1, "'```python' opens a fence");
+    assert_eq(md_fence_ch(), 96, "fence char is backtick");
+    assert_eq(md_fence_len(), 3, "fence run is 3");
+    assert_eq(md_lang_len(), 6, "lang 'python' is 6 bytes");
+    var fc = "```";
+    assert_eq(md_fence_close(fc, strlen(fc), 96, 3), 1, "'```' closes a backtick-3 fence");
+    var notclose = "```js";
+    assert_eq(md_fence_close(notclose, strlen(notclose), 96, 3), 0, "'```js' (info string) does not close");
+    var tilde = "~~~";
+    assert_eq(md_fence_open(tilde, strlen(tilde)), 1, "'~~~' opens a tilde fence");
+    return 0;
+}

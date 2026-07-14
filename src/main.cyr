@@ -72,6 +72,7 @@ include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"      # markdown fenced-code-block highlighter for the reply feed (0.15.1); after diff (calls _hl_span)
+include "src/mdmodel.cyr"    # shared structural-markdown MODEL (0.36.0): pure facts-not-bytes classifier + inline spans; GUI feed leaf lowers it (later cut migrates mdhl onto it)
 include "src/surface.cyr"   # status view-model (0.28.0, Stage B; ADR-0009 realization); after its producers, before commands+tui
 # T3 GUI (0.29.0+): draw-command IR + kashi CPU rasterizer + view-builders. kashi (font) before graster;
 # gdraw before graster/gstatus. In the shipping binary as of 0.30.0 (fits under cyrius 6.4.49).

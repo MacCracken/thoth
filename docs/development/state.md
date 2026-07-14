@@ -7,6 +7,19 @@
 
 ## Version
 
+**0.36.0** — **Structural markdown in the GUI** (2026-07-13; opens the 0.36.x rendering arc). GUI assistant replies
+render with structure instead of flat text: ATX headings (`ROLE_ACCENT`), `**bold**` brighter (`ROLE_FG` — fixed
+monospace cell, so emphasis is color not weight), `` `inline` `` + fenced code (`ROLE_BLUE`, code on a background
+rect), list items (accent marker + hanging indent), blockquotes (indented, faint). Landed reply + live partial (which
+degrades on incomplete markdown). Backed by a **new shared model `src/mdmodel.cyr`** — a pure facts-not-bytes
+classifier (the reply-render analogue of `surface.cyr`): `md_classify` (block kind + cells), `md_fence_open/_close`,
+`md_inline_scan`/`md_role_at` (contiguous plain/bold/code runs). Predicates mirror `mdhl` so a later cut migrates the
+line/TUI engine onto it; the GUI feed (`_gfeed_md`, a styled word-wrap switching color per inline run) is the first
+leaf. `mdhl` line/TUI untouched (no regression). Unit-tested (`test_mdmodel` + `test_gui_markdown`: parity, structure,
+command colors). **Adversarially reviewed** (model / wrap-parity+safety / integration) — all clean; one cosmetic nit
+fixed. Suite green (239 + 1451 + 147 + 3). Pin **6.4.62**. **NEXT (0.36.x)**: `.1` tables (shared model + GUI grid +
+mdhl); `.2` migrate mdhl onto the model; `.3` summarize-on-overflow.
+
 **0.35.4** — **`/state` surfaces reasoning effort + folded count** (2026-07-13). A new `reason` row in `/state`:
 the `[hoosh].reasoning` effort (`off (set …)` or `<effort> effort`) plus the session's reasoning activity — the
 number of turns whose reasoning was captured, via the 0.35.3 `reasonlog` (new `reasonlog_total`). The folded count

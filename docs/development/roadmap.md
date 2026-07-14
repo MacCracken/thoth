@@ -164,10 +164,14 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   that keeps reasoning internal). The GUI + agentic-streaming arc's planned scope is DONE. Optional follow-up: persist
   reasoning into the conversation store so a landed fold survives resume (today it is session-scoped like the memory
   strip) — carry into a later resume-focused cut if wanted.
-- **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
-  inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
-  hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions
-  keep fidelity; **.2** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh exposes it.
+- **0.36.x — Rendering + context polish.** **.0 shipped** — **structural markdown in the GUI** (ATX headings, bold,
+  inline + fenced code, lists, blockquotes) via a new shared facts-not-bytes model (`src/mdmodel.cyr`, the reply-render
+  analogue of `surface.cyr`); the GUI feed is the first leaf that lowers it, and `mdhl` (line/TUI) is left untouched.
+  Remaining: **.1** **tables** — pipe-table parse + layout in the shared model, rendered as a GUI grid + in `mdhl`;
+  **.2** migrate `mdhl` onto the model so ONE markdown classifier drives every surface; **.3** **summarize-on-overflow**
+  — replace the hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so
+  long sessions keep fidelity; **.4** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh
+  exposes it.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will grow **voice
 > input** (mic → speech-to-text) and **read-back** (text-to-speech) as a first-class thoth capability — but by

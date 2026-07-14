@@ -60,6 +60,174 @@ fn _gfeed_para(cmds, x, y, avail_px, color, text) {
     return cy;
 }
 
+# --- 0.36.0: GUI structural-markdown leaf (lowers the src/mdmodel.cyr model) --------------------------------------
+# The GUI runs under OUT_NULL, so mdhl (the line/TUI markdown engine) never reaches the window — the feed re-renders
+# session_history/_hoosh_acc as PLAIN paragraphs (_gfeed_para). This leaf gives GUI assistant replies structure:
+# it walks the reply line-by-line, classifies each via the shared model, and draws blocks with color + layout.
+# Emphasis is COLOR not weight (the GUI font is a single fixed 8px monospace cell): bold -> ROLE_FG (brighter than
+# the MUTED body), inline-code -> ROLE_BLUE, headings -> ROLE_ACCENT, list markers -> ROLE_ACCENT, fenced code ->
+# a ROLE_BLUE monospace block on a subtle background. Deterministic + reads only the passed text -> measure==draw.
+
+# _md_role_color: map an inline role (from the model) to a packed RGB, given the block's base role for plain text.
+fn _md_role_color(role, base_role) {
+    if (role == MDI_BOLD) { return _ui_rgb(ROLE_FG); }     # no bold font -> brightness conveys emphasis
+    if (role == MDI_CODE) { return _ui_rgb(ROLE_BLUE); }
+    return _ui_rgb(base_role);
+}
+
+# _md_code_bg: a subtle theme-aware background for fenced-code lines (a touch off the frame bg, _gframe_bg).
+fn _md_code_bg() { if (ui_theme() == THEME_LIGHT) { return 0xe9e3d4; } return 0x211d15; }
+
+# _md_cp_count: codepoints in base[ls..le) (fixed-cell columns == codepoints). nb<1 guarded against a stuck loop.
+fn _md_cp_count(base, ls, le) {
+    var i = ls; var n = 0;
+    while (i < le) { var packed = gr__utf8_at(base, i); var nb = packed % 8; if (nb < 1) { nb = 1; } i = i + nb; n = n + 1; }
+    return n;
+}
+
+# _gfeed_md_draw: draw the physical wrapped line base[ls..le) at (x, cy) as colored segments — one gd_push_text per
+# contiguous same-role run (role from md_role_at over the last md_inline_scan). Only called when cmds != 0.
+fn _gfeed_md_draw(cmds, x, cy, base, ls, le, base_role) {
+    var i = ls; var col = 0;
+    var seg_start = ls; var seg_col = 0; var seg_cps = 0;
+    var seg_role = md_role_at(ls);
+    while (i < le) {
+        var r = md_role_at(i);
+        if (r != seg_role) {
+            if (seg_cps > 0) { gd_push_text(cmds, x + seg_col * GR_GLYPH_W, cy, _md_role_color(seg_role, base_role), base + seg_start, seg_cps); }
+            seg_start = i; seg_col = col; seg_cps = 0; seg_role = r;
+        }
+        var packed = gr__utf8_at(base, i); var nb = packed % 8; if (nb < 1) { nb = 1; }
+        i = i + nb; col = col + 1; seg_cps = seg_cps + 1;
+    }
+    if (seg_cps > 0) { gd_push_text(cmds, x + seg_col * GR_GLYPH_W, cy, _md_role_color(seg_role, base_role), base + seg_start, seg_cps); }
+    return 0;
+}
+
+# _gfeed_md_wrap: styled word-wrap of the content slice base[0..len) into an avail-wide column at (x, cy). Same
+# codepoint/space-break/hard-break math as _gfeed_para, but each physical line is drawn via _gfeed_md_draw so inline
+# bold/code spans switch color mid-line. Runs the inline scan once up front. Returns the y below (cy unchanged for
+# empty content; the block renderers floor that to one row). measure (cmds==0) == draw: the break math ignores cmds.
+fn _gfeed_md_wrap(cmds, x, cy, avail, base, len, base_role) {
+    md_inline_scan(base, len);
+    var maxcols = avail / GR_GLYPH_W;
+    if (maxcols < 1) { maxcols = 1; }
+    var i = 0;
+    var line_start = 0;
+    var cols = 0;
+    var last_sp_byte = 0 - 1;
+    var last_sp_cols = 0;
+    var done = 0;
+    while (done == 0) {
+        if (i >= len) { done = 1; }
+        else {
+            var packed = gr__utf8_at(base, i);
+            var cp = packed / 8;
+            var nb = packed % 8;
+            if (nb < 1) { nb = 1; }
+            if (cp == 32) { last_sp_byte = i; last_sp_cols = cols; }
+            cols = cols + 1;
+            i = i + nb;
+            if (cols > maxcols) {
+                if (last_sp_byte >= line_start) {
+                    if ((cmds != 0) && (last_sp_cols > 0)) { _gfeed_md_draw(cmds, x, cy, base, line_start, last_sp_byte, base_role); }
+                    cy = cy + GFEED_LH;
+                    line_start = last_sp_byte + 1;
+                    cols = cols - last_sp_cols - 1;
+                    last_sp_byte = 0 - 1;
+                } else {
+                    if (cmds != 0) { _gfeed_md_draw(cmds, x, cy, base, line_start, i - nb, base_role); }
+                    cy = cy + GFEED_LH;
+                    line_start = i - nb;
+                    cols = 1;
+                    last_sp_byte = 0 - 1;
+                }
+            }
+        }
+    }
+    if (cols > 0) { if (cmds != 0) { _gfeed_md_draw(cmds, x, cy, base, line_start, len, base_role); } cy = cy + GFEED_LH; }
+    return cy;
+}
+
+# _gfeed_md_code_line: one fenced-code interior line — a full-width subtle background + the code in ROLE_BLUE
+# monospace, slightly inset, un-wrapped (long lines clip to the feed region). No per-token highlight yet (0.36.x).
+fn _gfeed_md_code_line(cmds, x, cy, avail, base, len) {
+    if (cmds != 0) {
+        gd_push_rect(cmds, x, cy, avail, GFEED_LH, _md_code_bg());
+        var cps = _md_cp_count(base, 0, len);
+        if (cps > 0) { gd_push_text(cmds, x + GR_GLYPH_W, cy, _ui_rgb(ROLE_BLUE), base, cps); }
+    }
+    return cy + GFEED_LH;
+}
+
+# _gfeed_md_block: render one classified NON-fence block (base[0..len), kind from md_classify). Each block occupies
+# at least one row (an empty heading/list content is floored to GFEED_LH so a drawn marker isn't overwritten).
+fn _gfeed_md_block(cmds, x, cy, avail, base, len, kind) {
+    if (kind == MDB_BLANK) { return cy + GFEED_LH; }
+    if (kind == MDB_HEADING) {
+        var co = md_content();
+        var hcy = _gfeed_md_wrap(cmds, x, cy, avail, base + co, len - co, ROLE_ACCENT);
+        if (hcy == cy) { hcy = cy + GFEED_LH; }
+        return hcy;
+    }
+    if (kind == MDB_QUOTE) {
+        var qo = md_content();
+        var qi = 2 * GR_GLYPH_W;
+        var qcy = _gfeed_md_wrap(cmds, x + qi, cy, avail - qi, base + qo, len - qo, ROLE_FAINT);
+        if (qcy == cy) { qcy = cy + GFEED_LH; }
+        return qcy;
+    }
+    if (kind == MDB_LIST) {
+        var ind = md_indent() * GR_GLYPH_W;
+        var mcols = md_marker_len();          # ASCII marker -> columns == bytes
+        if (cmds != 0) { gd_push_text(cmds, x + ind, cy, _ui_rgb(ROLE_ACCENT), base + md_marker_start(), mcols); }
+        var cx = x + ind + (mcols + 1) * GR_GLYPH_W;
+        var cavail = avail - ind - (mcols + 1) * GR_GLYPH_W;
+        if (cavail < GR_GLYPH_W) { cavail = GR_GLYPH_W; }
+        var lo = md_content();
+        var lcy = _gfeed_md_wrap(cmds, cx, cy, cavail, base + lo, len - lo, ROLE_MUTED);
+        if (lcy == cy) { lcy = cy + GFEED_LH; }
+        return lcy;
+    }
+    var pcy = _gfeed_md_wrap(cmds, x, cy, avail, base, len, ROLE_MUTED);   # MDB_PARA
+    if (pcy == cy) { pcy = cy + GFEED_LH; }
+    return pcy;
+}
+
+# _gfeed_md: the GUI structural-markdown renderer — walk a NUL-terminated reply line-by-line, tracking fenced-code
+# state, and draw each block. Replaces _gfeed_para for ASSISTANT content (landed + the live partial). A lone
+# trailing blank line (reply ending in '\n') adds no spurious gap. Returns the y below the reply.
+fn _gfeed_md(cmds, x, cy, avail, text) {
+    if (text == 0) { return cy; }
+    if (load8(text) == 0) { return cy; }   # empty reply -> no rows (the partial is guarded by len>0 upstream)
+    var in_fence = 0;
+    var fch = 0;
+    var flen = 0;
+    var ls = 0;
+    var done = 0;
+    while (done == 0) {
+        var le = ls;
+        while ((load8(text + le) != 0) && (load8(text + le) != 10)) { le = le + 1; }
+        var llen = le - ls;
+        var last = 0;
+        if (load8(text + le) == 0) { last = 1; }
+        if (in_fence == 1) {
+            if (md_fence_close(text + ls, llen, fch, flen) == 1) { in_fence = 0; }        # exit; skip the closing ```
+            else { cy = _gfeed_md_code_line(cmds, x, cy, avail, text + ls, llen); }
+        } else {
+            if (md_fence_open(text + ls, llen) == 1) { in_fence = 1; fch = md_fence_ch(); flen = md_fence_len(); }   # enter; skip the ```
+            else {
+                var k = md_classify(text + ls, llen);
+                # skip a LONE trailing blank line (empty OR whitespace-only) so a reply ending in '\n' adds no gap
+                if ((k == MDB_BLANK) && (last == 1) && (ls > 0)) { }
+                else { cy = _gfeed_md_block(cmds, x, cy, avail, text + ls, llen, k); }
+            }
+        }
+        if (last == 1) { done = 1; } else { ls = le + 1; }
+    }
+    return cy;
+}
+
 # _gfeed_greeting: the empty-state opening screen (no conversation yet). Honest — the app's greeting, not a
 # faked message. Returns the next y.
 fn _gfeed_greeting(cmds, x, y, avail_px) {
@@ -142,7 +310,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             # (the line/TUI ui_emit is lost under the GUI turn's OUT_NULL). y unchanged when the turn recalled nothing.
             var mcy = gmem_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
             if (mcy > cy) { cy = mcy + GFEED_GAP; }
-            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), content);
+            cy = _gfeed_md(cmds, xbase, cy, avail, content);   # 0.36.0: structural markdown (was flat _gfeed_para)
         }
         cy = cy + GFEED_GAP;
         i = i + 1;
@@ -172,7 +340,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         # when _hoosh_acc is reset — fall back to the static "working" mark. Measure/draw read _hoosh_acc at the same
         # instant (no SSE frame lands between the two passes), so the bottom-anchor parity holds.
         if (hoosh_last_reply_len() > 0) {
-            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), hoosh_last_reply());
+            cy = _gfeed_md(cmds, xbase, cy, avail, hoosh_last_reply());   # 0.36.0: structural markdown, degrades on the incomplete partial
             cy = cy + GFEED_GAP;
         } else {
             if (cmds != 0) {

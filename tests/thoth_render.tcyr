@@ -11,6 +11,7 @@ include "src/fsearch.cyr"
 include "src/git.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"
+include "src/mdmodel.cyr"
 include "tests/cases/testutil.cyr"
 include "tests/cases/render.cyr"
 fn main() {
@@ -18,7 +19,7 @@ fn main() {
     out_ring_sink_set(&feed_write);
     test_diff(); test_git_diff(); test_highlight();
     test_mdhl_tag_map(); test_mdhl_fence(); test_mdhl_render(); test_mdhl_stream();
-    test_mdhl_livecard(); test_mdhl_inline();
+    test_mdhl_livecard(); test_mdhl_inline(); test_mdmodel();
     return assert_summary();
 }
 var _e = main();

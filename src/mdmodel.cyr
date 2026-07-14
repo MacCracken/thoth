@@ -1,0 +1,248 @@
+# src/mdmodel.cyr — the shared structural-markdown MODEL (0.36.0).
+#
+# A PURE, facts-not-bytes classifier for reply markdown — the render-surface analogue of src/surface.cyr (the
+# STATUS view-model). It reads a line's bytes and reports STRUCTURE (block kind + level/indent/marker/lang) and
+# INLINE SPANS (contiguous {byte-range, role} runs over the line) — never emitting, never coloring, never laying
+# out. Leaf renderers lower it: the GUI feed leaf (src/gui/gfeed.cyr, 0.36.0) draws it as color+layout; a later cut
+# can migrate the line/TUI mdhl engine onto the same classification. The predicates mirror src/mdhl.cyr's
+# _mdhl_heading / _mdhl_blockquote / _mdhl_list_emit / _mdhl_inline_scan / _mdhl_scan_fence_* exactly, so the two
+# stay in lockstep when mdhl is unified onto this model. Module-global result cells (the surface.cyr idiom):
+# classification is single-threaded and sequential — classify a line, read the cells immediately, never hold them.
+#
+# NOT handled here (parity with mdhl today): tables (0.36.1), italic, links, strikethrough, setext, HR, nested
+# inline. A `| a | b |` line classifies as MDB_PARA until 0.36.1 lands table support in this model.
+
+# --- block kinds -----------------------------------------------------------
+var MDB_PARA   = 0;   # ordinary prose line (inline-scanned)
+var MDB_HEADING = 1;  # ATX heading; _md_level = 1..6, _md_content = offset after the #s (+ one space)
+var MDB_LIST   = 2;   # list item; _md_indent, _md_ordered, _md_marker_start/_len, _md_content = after marker+space
+var MDB_QUOTE  = 3;   # blockquote; _md_content = offset after '>' (+ one space)
+var MDB_BLANK  = 4;   # empty / whitespace-only line
+
+# --- inline roles (per run) ------------------------------------------------
+var MDI_PLAIN = 0;
+var MDI_BOLD  = 1;    # **...** (delimiters included in the run, like mdhl)
+var MDI_CODE  = 2;    # `...`   (backticks included in the run, like mdhl)
+
+# --- classification result cells (read immediately after md_classify) ------
+var _md_level = 0;         # heading level 1..6
+var _md_content = 0;       # byte offset where the block's inline content begins (after #s / marker / '>')
+var _md_indent = 0;        # list: leading-space count (the hanging-indent columns)
+var _md_ordered = 0;       # list: 1 = ordered (N. / N)), 0 = bullet (- * +)
+var _md_marker_start = 0;  # list: byte offset of the marker text
+var _md_marker_len = 0;    # list: marker byte length (ASCII "-"/"1." — cols == bytes)
+var _md_fence_ch = 0;      # fence: the fence char (96 '`' or 126 '~')
+var _md_fence_len = 0;     # fence: the run length (>= 3)
+var _md_lang_start = 0;    # fence-open: byte offset of the info word (language)
+var _md_lang_len = 0;      # fence-open: info-word byte length (0 = none)
+
+fn md_level() { return _md_level; }
+fn md_content() { return _md_content; }
+fn md_indent() { return _md_indent; }
+fn md_ordered() { return _md_ordered; }
+fn md_marker_start() { return _md_marker_start; }
+fn md_marker_len() { return _md_marker_len; }
+fn md_fence_ch() { return _md_fence_ch; }
+fn md_fence_len() { return _md_fence_len; }
+fn md_lang_start() { return _md_lang_start; }
+fn md_lang_len() { return _md_lang_len; }
+
+# _md_lead_spaces: count 0..3 leading spaces (CommonMark's block-indent budget), return the offset past them.
+fn _md_lead_spaces(ptr, len) {
+    var i = 0;
+    while ((i < len) && (load8(ptr + i) == 32) && (i < 3)) { i = i + 1; }
+    return i;
+}
+
+# md_fence_open: 1 if the line OPENS a fenced code block (0..3 indent, run >= 3 of '`' or '~'; a backtick fence's
+# info string may not contain a backtick). Sets _md_fence_ch/_len and _md_lang_start/_len (the first info word).
+# Mirrors _mdhl_scan_fence_open + _mdhl_resolve_grammar's first-word rule. Pure.
+fn md_fence_open(ptr, len) {
+    var i = 0;
+    var indent = 0;
+    while ((i < len) && (load8(ptr + i) == 32)) { indent = indent + 1; i = i + 1; }
+    if (indent > 3) { return 0; }
+    if (i >= len) { return 0; }
+    var ch = load8(ptr + i);
+    if ((ch != 96) && (ch != 126)) { return 0; }
+    var run = 0;
+    while ((i < len) && (load8(ptr + i) == ch)) { run = run + 1; i = i + 1; }
+    if (run < 3) { return 0; }
+    if (ch == 96) {
+        var j = i;
+        while (j < len) { if (load8(ptr + j) == 96) { return 0; } j = j + 1; }
+    }
+    _md_fence_ch = ch;
+    _md_fence_len = run;
+    # info word = i .. first whitespace/CR (skip leading spaces first)
+    while ((i < len) && ((load8(ptr + i) == 32) || (load8(ptr + i) == 9))) { i = i + 1; }
+    _md_lang_start = i;
+    var e = i;
+    while ((e < len) && (load8(ptr + e) != 32) && (load8(ptr + e) != 9) && (load8(ptr + e) != 13)) { e = e + 1; }
+    _md_lang_len = e - i;
+    return 1;
+}
+
+# md_fence_close: 1 if the line CLOSES a fence opened with (ch, flen) — same char, run >= the opener's, blank info
+# (only space/tab/CR to EOL), 0..3 indent. Mirrors _mdhl_scan_fence_close, taking the opener state as params. Pure.
+fn md_fence_close(ptr, len, ch, flen) {
+    var i = 0;
+    var indent = 0;
+    while ((i < len) && (load8(ptr + i) == 32)) { indent = indent + 1; i = i + 1; }
+    if (indent > 3) { return 0; }
+    if (i >= len) { return 0; }
+    if (load8(ptr + i) != ch) { return 0; }
+    var run = 0;
+    while ((i < len) && (load8(ptr + i) == ch)) { run = run + 1; i = i + 1; }
+    if (run < flen) { return 0; }
+    while (i < len) {
+        var b = load8(ptr + i);
+        if ((b != 32) && (b != 9) && (b != 13)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# md_classify: classify a NON-fence line into a block kind and set the result cells. (Fences are detected
+# separately by the caller via md_fence_open/close, since a close depends on the opener state.) Mirrors mdhl's
+# per-line prose classification. Pure — no emit.
+fn md_classify(ptr, len) {
+    # blank = empty or only space/tab/CR
+    var b = 0;
+    var blank = 1;
+    while (b < len) {
+        var c = load8(ptr + b);
+        if ((c != 32) && (c != 9) && (c != 13)) { blank = 0; b = len; }
+        b = b + 1;
+    }
+    if (blank == 1) { return MDB_BLANK; }
+
+    # ATX heading: 0..3 spaces, 1..6 '#', then a space or EOL (the #s are stripped from _md_content).
+    var i = _md_lead_spaces(ptr, len);
+    var h = 0;
+    while ((i < len) && (load8(ptr + i) == 35) && (h < 6)) { i = i + 1; h = h + 1; }
+    if (h > 0) {
+        if (i >= len) { _md_level = h; _md_content = i; return MDB_HEADING; }              # "###" alone
+        if (load8(ptr + i) == 32) { _md_level = h; _md_content = i + 1; return MDB_HEADING; }  # "### text" (skip one space)
+        # "###x" with no space is NOT a heading -> fall through to prose
+    }
+
+    # blockquote: 0..3 spaces then '>' (content after the '>' + one optional space).
+    var q = _md_lead_spaces(ptr, len);
+    if ((q < len) && (load8(ptr + q) == 62)) {
+        var qc = q + 1;
+        if ((qc < len) && (load8(ptr + qc) == 32)) { qc = qc + 1; }
+        _md_content = qc;
+        return MDB_QUOTE;
+    }
+
+    # list item: 0..3 spaces, then '-'/'*'/'+' + space, OR digits + '.'/')' + space.
+    var s = _md_lead_spaces(ptr, len);
+    if (s < len) {
+        var ms = s;
+        var mb = load8(ptr + s);
+        var me = 0;
+        var ordered = 0;
+        if ((mb == 45) || (mb == 42) || (mb == 43)) {                                       # '-' '*' '+'
+            if (((s + 1) < len) && (load8(ptr + s + 1) == 32)) { me = s + 1; }
+        } elif ((mb >= 48) && (mb <= 57)) {                                                 # digit -> ordered
+            var j = s;
+            while ((j < len) && (load8(ptr + j) >= 48) && (load8(ptr + j) <= 57)) { j = j + 1; }
+            if ((j < len) && ((load8(ptr + j) == 46) || (load8(ptr + j) == 41))) {
+                if (((j + 1) < len) && (load8(ptr + j + 1) == 32)) { me = j + 1; ordered = 1; }
+            }
+        }
+        if (me > 0) {
+            _md_indent = s;
+            _md_ordered = ordered;
+            _md_marker_start = ms;
+            _md_marker_len = me - ms;
+            _md_content = me + 1;                                                            # after the marker + its space
+            return MDB_LIST;
+        }
+    }
+
+    _md_content = 0;
+    return MDB_PARA;
+}
+
+# --- inline span model -----------------------------------------------------
+# md_inline_scan fills _md_runs with CONTIGUOUS {start, len, role} runs covering [0, len): plain text between
+# styled spans, then the styled span (delimiters included), left to right. Mirrors _mdhl_inline_scan (inline code
+# has precedence over bold, its interior is not re-scanned; an unmatched delimiter latches that kind off so the
+# scan stays linear). Over MD_RUN_CAP spans the tail collapses into one plain run (graceful, never drops bytes).
+var MD_RUN_CAP = 512;      # runs per line (each 24 bytes: start, len, role)
+var _md_runs = 0;
+var _md_run_n = 0;
+fn _md_runs_init() { if (_md_runs == 0) { _md_runs = alloc(MD_RUN_CAP * 24); } return 0; }
+fn md_run_count() { return _md_run_n; }
+fn md_run_start(k) { return load64(_md_runs + k * 24); }
+fn md_run_len(k)   { return load64(_md_runs + k * 24 + 8); }
+fn md_run_role(k)  { return load64(_md_runs + k * 24 + 16); }
+fn _md_run_add(start, rlen, role) {
+    if (rlen <= 0) { return 0; }
+    if (_md_run_n >= MD_RUN_CAP) { return 0; }              # cap reached — tail bytes drawn plain by _md_role_at's fallback
+    var e = _md_runs + _md_run_n * 24;
+    store64(e, start); store64(e + 8, rlen); store64(e + 16, role);
+    _md_run_n = _md_run_n + 1;
+    return 0;
+}
+
+fn _md_find_byte(ptr, len, from, b) {
+    var i = from;
+    while (i < len) { if (load8(ptr + i) == b) { return i; } i = i + 1; }
+    return 0 - 1;
+}
+fn _md_find_bold(ptr, len, from) {
+    var i = from;
+    while ((i + 1) < len) {
+        if ((load8(ptr + i) == 42) && (load8(ptr + i + 1) == 42)) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn md_inline_scan(ptr, len) {
+    _md_runs_init();
+    _md_run_n = 0;
+    var i = 0;
+    var run = 0;
+    var no_code = 0;
+    var no_bold = 0;
+    while (i < len) {
+        var b = load8(ptr + i);
+        var handled = 0;
+        if ((b == 96) && (no_code == 0)) {                 # '`' inline code
+            var j = _md_find_byte(ptr, len, i + 1, 96);
+            if (j >= 0) {
+                if (i > run) { _md_run_add(run, i - run, MDI_PLAIN); }
+                _md_run_add(i, (j + 1) - i, MDI_CODE);
+                i = j + 1; run = i; handled = 1;
+            } else { no_code = 1; }
+        }
+        if ((handled == 0) && (no_bold == 0) && (b == 42) && ((i + 1) < len) && (load8(ptr + i + 1) == 42)) {   # '**' bold
+            var j2 = _md_find_bold(ptr, len, i + 2);
+            if (j2 >= 0) {
+                if (i > run) { _md_run_add(run, i - run, MDI_PLAIN); }
+                _md_run_add(i, (j2 + 2) - i, MDI_BOLD);
+                i = j2 + 2; run = i; handled = 1;
+            } else { no_bold = 1; }
+        }
+        if (handled == 0) { i = i + 1; }
+    }
+    if (i > run) { _md_run_add(run, i - run, MDI_PLAIN); }
+    return 0;
+}
+
+# md_role_at: the inline role of the byte at offset `boff` (scans the runs computed by the last md_inline_scan).
+# Bytes past the last recorded run (cap overflow) read as MDI_PLAIN. Used by a renderer to color each span.
+fn md_role_at(boff) {
+    var k = 0;
+    while (k < _md_run_n) {
+        var s = load64(_md_runs + k * 24);
+        var l = load64(_md_runs + k * 24 + 8);
+        if ((boff >= s) && (boff < (s + l))) { return load64(_md_runs + k * 24 + 16); }
+        k = k + 1;
+    }
+    return MDI_PLAIN;
+}

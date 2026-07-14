@@ -39,6 +39,7 @@ include "src/daimon.cyr"
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
+include "src/mdmodel.cyr"  # 0.36.0: structural-markdown model (gfeed leaf lowers it)
 include "src/surface.cyr"  # status view-model (0.28.0, Stage B); after its producers (session/hoosh/git/ui), before commands+tui
 include "src/vendor/kashi.cyr"
 include "src/gui/gdraw.cyr"
