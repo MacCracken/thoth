@@ -1975,3 +1975,64 @@ fn test_mem_seam() {
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
 }
+
+# destructive history cap (session.cyr, 0.36.4): SESS_HIST_MAX permanently FREES the oldest message (gone from the
+# feed, /save, everything) — distinct from the framer's byte-budget skip (hoosh_ctx_evicted), which holds them all.
+# It used to do this silently + unmetered; conv_dropped now counts the real losses so /state can be honest.
+fn test_history_dropped() {
+    test_group("destructive history cap is metered (session.cyr, 0.36.4)");
+    session_reset(); session_history_clear();
+    assert_eq(session_history_dropped(), 0, "a fresh conversation has dropped nothing");
+    var i = 0;
+    while (i < SESS_HIST_MAX) { session_history_append("user", "m", 1); i = i + 1; }
+    assert_eq(session_history_len(), SESS_HIST_MAX, "history fills to the cap");
+    assert_eq(session_history_dropped(), 0, "at the cap exactly, nothing has been dropped yet");
+    session_history_append("user", "over", 4);                 # the 41st message evicts the oldest, for good
+    assert_eq(session_history_len(), SESS_HIST_MAX, "length stays pinned at the cap");
+    assert_eq(session_history_dropped(), 1, "the destructive drop is COUNTED (was silent + unmetered)");
+    session_history_append("user", "over2", 5);
+    assert_eq(session_history_dropped(), 2, "each further append drops (and counts) one more");
+    # the byte-budget skip is a DIFFERENT thing and loses nothing — it must not be conflated with a real drop
+    session_reset(); session_history_clear();
+    session_history_append("user", "small", 5);
+    assert_eq(session_history_dropped(), 0, "a byte-budget skip is not a drop");
+    session_reset(); session_history_clear();
+    return 0;
+}
+
+# summarize-on-overflow plumbing (0.36.4): the recap cache + its injection into the framed request. The SIDE-CALL
+# itself needs a live gateway (verified separately); these cover everything around it — most importantly that the
+# request is byte-identical when no recap applies, and that a recap only rides when it covers EXACTLY the skip.
+fn test_recap() {
+    test_group("summarize-on-overflow plumbing (0.36.4)");
+    session_reset(); session_history_clear();
+    assert_eq(session_recap(), 0, "a fresh conversation has no recap");
+    assert_eq(session_recap_covers(), 0, "and covers nothing");
+    # the recap only rides when it covers EXACTLY the messages the framer skips
+    session_set_recap("earlier: agreed on X", 3);
+    assert_eq(session_recap_covers(), 3, "recap remembers its coverage");
+    assert_eq(_hoosh_has_recap(3), 1, "a recap covering exactly the skip is used");
+    assert_eq(_hoosh_has_recap(4), 0, "coverage mismatch -> NOT used (never a stale/partial recap)");
+    assert_eq(_hoosh_has_recap(0), 0, "nothing skipped -> no recap");
+    # a rewind un-says messages the recap may describe -> it must be dropped
+    session_history_append("user", "q", 1);
+    session_set_recap("stale", 1);
+    session_rewind_to_last_user();
+    assert_eq(session_recap(), 0, "a rewind clears the recap (it described un-said messages)");
+    # clearing history clears it too
+    session_set_recap("stale2", 1);
+    session_history_clear();
+    assert_eq(session_recap(), 0, "clearing history clears the recap");
+    # OFF by default: the framer is byte-identical to pre-0.36.4 when no recap applies
+    session_reset(); session_history_clear();
+    assert_eq(config_hoosh_summarize(), 0, "[hoosh].summarize defaults OFF (never spends tokens uninvited)");
+    session_history_append("user", "hi", 2);
+    var rb[1024];
+    hoosh_build_messages(&rb, "m", 0, 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "no recap -> request byte-identical to pre-0.36.4");
+    # ensure() is a no-op when disabled (must not call out, must not cache)
+    hoosh_recap_ensure(HOOSH_REQ_CAP);
+    assert_eq(session_recap(), 0, "recap_ensure is a no-op while [hoosh].summarize is off");
+    session_reset(); session_history_clear();
+    return 0;
+}

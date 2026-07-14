@@ -63,13 +63,16 @@ var _conv_next_id = 1;       # monotonic conversation id
 var SESS_HIST_MAX = 40;      # max messages kept per conversation (oldest dropped)
 
 fn _conv_alloc(title) {
-    var c = alloc(40);
+    var c = alloc(64);
     store64(c, _conv_next_id); _conv_next_id = _conv_next_id + 1;
     store64(c + 8, title);
     var now = clock_epoch_secs();
     store64(c + 16, now);
     store64(c + 24, now);
     store64(c + 32, vec_new());
+    store64(c + 40, 0);          # 0.36.4: messages DROPPED from this conversation by the SESS_HIST_MAX cap
+    store64(c + 48, 0);          # 0.36.4: overflow recap text (cstr, 0 = none yet)
+    store64(c + 56, 0);          # 0.36.4: how many oldest messages that recap covers ([0, k))
     return c;
 }
 # _conv_ensure: guarantee the default active conversation exists. Called by any op that needs a conversation.
@@ -100,6 +103,24 @@ fn conv_updated(i) { return load64(_conv_at(i) + 24); }
 fn conv_msgs(i) { return load64(_conv_at(i) + 32); }
 fn conv_set_title(i, title) { store64(_conv_at(i) + 8, title); return 0; }
 fn conv_touch(i) { store64(_conv_at(i) + 24, clock_epoch_secs()); return 0; }
+# 0.36.4: conv_dropped — messages this conversation LOST to the SESS_HIST_MAX cap (destructive, unrecoverable).
+# Distinct from the framer's byte-budget skip (hoosh_ctx_evicted), which loses nothing.
+fn conv_dropped(i) { return load64(_conv_at(i) + 40); }
+fn _conv_note_dropped(i) { store64(_conv_at(i) + 40, load64(_conv_at(i) + 40) + 1); return 0; }
+# session_history_dropped: the ACTIVE conversation's destructive-drop count (0 = the record is complete).
+fn session_history_dropped() { _conv_ensure(); return conv_dropped(_conv_active); }
+
+# 0.36.4: the per-conversation OVERFLOW RECAP — a short text standing in for the oldest messages the request framer
+# can no longer fit, and `covers` = how many of them it accounts for ([0, covers)). Derived state, never persisted:
+# a resumed conversation simply re-derives it on the next overflow. Cleared by /reset and by a rewind (the recap
+# would describe messages the rewind un-said).
+fn conv_recap(i) { return load64(_conv_at(i) + 48); }
+fn conv_recap_covers(i) { return load64(_conv_at(i) + 56); }
+fn conv_set_recap(i, text, covers) { store64(_conv_at(i) + 48, text); store64(_conv_at(i) + 56, covers); return 0; }
+fn session_recap() { _conv_ensure(); return conv_recap(_conv_active); }
+fn session_recap_covers() { _conv_ensure(); return conv_recap_covers(_conv_active); }
+fn session_set_recap(text, covers) { _conv_ensure(); return conv_set_recap(_conv_active, text, covers); }
+fn session_recap_clear() { _conv_ensure(); return conv_set_recap(_conv_active, 0, 0); }
 # conv_new: start a fresh conversation and make it active; returns its index.
 fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_active = vec_len(_conv_store) - 1; return _conv_active; }
 # conv_switch: make conversation `i` active (bounds-checked); returns the active index.
@@ -162,13 +183,16 @@ fn conv_dup_title(s) {
 fn conv_load_begin() { _conv_store = vec_new(); _conv_active = 0; _conv_next_id = 1; return 0; }
 fn conv_load_add(title) {
     if (_conv_store == 0) { _conv_store = vec_new(); }
-    var c = alloc(40);
+    var c = alloc(64);           # 0.36.4: MUST match _conv_alloc — a loaded conv is read by the same accessors
     store64(c, _conv_next_id); _conv_next_id = _conv_next_id + 1;
     store64(c + 8, title);
     var now = clock_epoch_secs();
     store64(c + 16, now);
     store64(c + 24, now);
     store64(c + 32, vec_new());
+    store64(c + 40, 0);          # 0.36.4: dropped-message count (a resumed conv starts with a clean record)
+    store64(c + 48, 0);          # 0.36.4: overflow recap (not persisted — re-derived on demand)
+    store64(c + 56, 0);
     vec_push(_conv_store, c);
     _conv_active = vec_len(_conv_store) - 1;
     return _conv_active;
@@ -411,7 +435,11 @@ fn _session_history_append_ex(role, content, clen, model) {
     store64(m + 40, 0);                      # 0.33.5: tool-call set (lazily alloc'd when a tool call is attached)
     var v = _sess_hist_vec();
     vec_push(v, m);
-    while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); }
+    # 0.36.4: the cap is DESTRUCTIVE — the oldest message is freed from the conversation for good (gone from the
+    # feed, /save, everything), unlike the request framer's byte budget which only SKIPS messages it still holds.
+    # It used to do this silently and unmetered, while the visible "N oldest evicted" meter reported the harmless
+    # one. Count the real losses so /state can say so honestly.
+    while (vec_len(v) > SESS_HIST_MAX) { vec_remove(v, 0); _conv_note_dropped(_conv_active); }
     # 0.33.1: auto-title an untitled conversation from its first USER message.
     if (conv_title(_conv_active) == 0) { if (streq(role, "user") == 1) { conv_set_title(_conv_active, _conv_autotitle(content, clen)); } }
     conv_touch(_conv_active);                # 0.33.0: bump the active conversation's updated-at
@@ -476,6 +504,7 @@ fn session_rewind_to_last_user() {
     while (vec_len(v) > idx) { vec_remove(v, vec_len(v) - 1); }
     _sess_rewind_snap = snap;
     _sess_rewind_title = conv_title(_conv_active);   # snapshot the title too — a failed re-run's append could auto-title an untitled conv; restore reverts it
+    session_recap_clear();                   # 0.36.4: the recap may describe messages this rewind just un-said
     conv_touch(_conv_active);                # the active conversation mutated — bump its updated-at
     return content;
 }
@@ -520,6 +549,7 @@ fn session_rewind_settle(turn) {
 fn session_history_clear() {
     _conv_ensure();
     store64(_conv_at(_conv_active) + 32, vec_new());
+    session_recap_clear();   # 0.36.4: the recap described messages that no longer exist
     return 0;
 }
 

@@ -333,8 +333,16 @@ fn cmd_state() {
         # 0.19.0: framed history bytes vs the ~32 KiB evict boundary — surface context pressure.
         ui_emit(ROLE_MUTED, " · ");
         ofmt_int(status_ival(SF_CTX)); emit("K / "); ofmt_int(status_ival2(SF_CTX)); ui_emit(ROLE_MUTED, "K budget");
+        # 0.36.4: name the two overflows HONESTLY. The byte-budget one only SKIPS messages for this request (they
+        # stay in the store, the feed, /save, and return if the tail shrinks) — it used to read "evicted", which
+        # implied loss. The SESS_HIST_MAX cap is the one that really destroys a message, and it used to say nothing.
         var ev = status_state(SF_CTX);
-        if (ev > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(ev); emit(" oldest evicted"); emit(ui_reset()); }
+        if (ev > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(ev); emit(" oldest not sent"); emit(ui_reset()); }
+        # 0.36.4: ...but if [hoosh].summarize recapped them, the model still has their gist — say so.
+        var rc = session_recap_covers();
+        if (rc > 0) { emit(" · "); emit(ui_sgr(ROLE_GREEN)); ofmt_int(rc); emit(" recapped"); emit(ui_reset()); }
+        var dr = session_history_dropped();
+        if (dr > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(dr); emit(" dropped from the record"); emit(ui_reset()); }
         ui_emit(ROLE_MUTED, " (/reset clears)"); oprintln("");
     }
     _state_reason_row();   # 0.35.4: [hoosh].reasoning effort + turns folded this session

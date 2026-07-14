@@ -258,6 +258,9 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
     # as the raw-content budget (leaving headroom for ~6x JSON escaping).
     var hist_cap = AGENT_REQ_CAP - AGENT_WORK_CAP - AGENT_TOOLS_CAP;
     var start = _hoosh_history_start(hist_cap);
+    # 0.36.4: the overflow recap for the messages below `start` this budget can no longer fit (see hoosh.cyr).
+    off = _hoosh_emit_recap(dst, off, cap, start, wrote);
+    if (_hoosh_has_recap(start) == 1) { wrote = 1; }
     var i = start;
     while (i < total) {
         if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
@@ -1141,6 +1144,10 @@ fn agent_turn(prompt) {
     var tools_len = _agent_tools_len;
     var want_stream = config_hoosh_stream();
     session_history_append("user", prompt, strlen(prompt));
+    # 0.36.4: recap the history this turn's builds will skip. AFTER the user append (the skip boundary must include
+    # this prompt, or `covers` would never match the framer's `start` and the recap would silently never inject) and
+    # ONCE per turn, before the loop — the rounds re-frame the same history, and this must never land mid-round.
+    hoosh_recap_ensure(AGENT_REQ_CAP - AGENT_WORK_CAP - AGENT_TOOLS_CAP);
     _agent_work_reset();
     intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
 

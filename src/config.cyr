@@ -28,6 +28,7 @@ var _cfg_hoosh_history = 1;  # 1 = multi-turn context (default), 0 = stateless
 var _cfg_hoosh_tools = 1;    # 1 = agentic tool-calling when daimon wired (default), 0 = off
 var _cfg_hoosh_parallel = 1; # 1 = run a round's tool calls concurrently (default), 0 = serial
 var _cfg_hoosh_reasoning = 0;  # 0.35.2: [hoosh].reasoning effort level (0 = off, 1 = low, 2 = medium, 3 = high) -> reasoning_effort
+var _cfg_hoosh_summarize = 0;  # 0.36.4: [hoosh].summarize — recap the byte-budget-skipped history (costs an extra small call)
 var _cfg_daimon_url = 0;     # cstring, or 0 if unset (daimon seam stays absent)
 var _cfg_tron_policy = 0;    # cstring path to a t-ron policy TOML, or 0
 var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
@@ -472,6 +473,7 @@ fn config_load() {
     _cfg_hoosh_tools = _cfg_bool(hoosh, "tools", 1);        # default on
     _cfg_hoosh_parallel = _cfg_bool(hoosh, "parallel", 1);  # default on
     _cfg_hoosh_reasoning = _reasoning_level_from(_cfg_str(hoosh, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
+    _cfg_hoosh_summarize = _cfg_bool(hoosh, "summarize", 0);   # 0.36.4: default OFF — it spends an extra call
     var daimon = _cfg_section_pairs(sections, "daimon");
     _cfg_daimon_url = _cfg_str(daimon, "url");
     var tron = _cfg_section_pairs(sections, "tron");
@@ -546,6 +548,11 @@ fn _reasoning_level_from(s) {
 # config_hoosh_reasoning: the requested reasoning effort level, 0-3
 # (0 = off, 1 = low, 2 = medium, 3 = high). 0.35.2.
 fn config_hoosh_reasoning() { return _cfg_hoosh_reasoning; }
+
+# config_hoosh_summarize: 1 when [hoosh].summarize = true — on history overflow, recap the messages the request
+# framer can no longer fit so the model keeps continuity instead of seeing a silent gap. Default OFF: it spends an
+# extra (small) completion whenever the skipped range grows, and thoth never spends the user's tokens uninvited.
+fn config_hoosh_summarize() { return _cfg_hoosh_summarize; }
 
 # config_hoosh_reasoning_effort: the effort cstring ("low"/"medium"/"high") the
 # request builders emit as reasoning_effort, or 0 when reasoning is off. 0.35.2.
