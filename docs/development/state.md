@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.35.1** — **Live tool-call cards during the round** (2026-07-13). The GUI's bordered tool-call cards (name ·
+ok/err/deny · ms/bytes · args) were drawn only post-turn; now `_gfeed_flow`'s `gturn_active` block renders
+`gtool_build` (the current turn's roundlog cards) above the streaming partial, so — since the roundlog records each
+call as it completes and the 0.35.0 pump repaints between calls — **a card grows a row as each tool returns**.
+`gtool_build == gtool_build_turn(session_turns())`, the same cards the per-message loop draws once the reply lands,
+so the mid-turn → post-turn handoff is seamless (mutually exclusive, no double-render). Zero producer change;
+measure/draw parity holds. Headless-tested (`test_gui_toolcards_live`); live animation compositor-gated. Pin
+**6.4.62**. **NEXT (0.35.x)**: `.2` a thinking/reasoning fold (`thinking_delta`).
+
 **0.35.0** — **GUI mid-turn pump: the desktop GUI streams the reply LIVE** (2026-07-13; opens the 0.35.x arc). A GUI
 turn runs synchronously (`cmd_task` under `OUT_NULL`), blocking the present loop — so the window froze on a static
 "working" frame for the whole turn. Now the model's output appears word-by-word as it streams. The 0.34.3 stop-poll

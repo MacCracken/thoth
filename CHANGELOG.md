@@ -2,6 +2,23 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.1] - 2026-07-13
+
+**Live tool-call cards — the GUI shows each tool call as it runs during the round, not only after the turn.**
+
+### Added
+- **The desktop GUI now renders the current turn's tool-call cards LIVE during the round.** The bordered cards (name
+  · ok/err/deny · ms/bytes · args) were previously drawn only post-turn, above the landed reply. Now, while a turn
+  is in flight, `_gfeed_flow`'s `gturn_active` block renders `gtool_build` (the current turn's roundlog cards) above
+  the streaming partial — and since each call is recorded in the roundlog as it completes and the 0.35.0 pump
+  repaints between calls, **a card grows a row as each tool returns**. `gtool_build == gtool_build_turn(session_turns())`
+  — the exact cards the per-message loop draws once the reply lands, so the mid-turn → post-turn handoff is seamless
+  (no double-render; the two are mutually exclusive). Zero producer change (the roundlog already recorded live);
+  measure/draw parity holds (`gtool_build` is parity-clean and the roundlog is unchanged between the two passes).
+  Headless-tested (`test_gui_toolcards_live`: the current turn's card renders during the active turn, and none when
+  the turn ran no tools, with parity). The live animation is compositor-gated (verify on Wayland). **NEXT (0.35.x)**:
+  `.2` a thinking/reasoning fold rendering `thinking_delta`.
+
 ## [0.35.0] - 2026-07-13
 
 **GUI mid-turn pump — the desktop GUI now paints the streaming reply LIVE as it arrives (opens the 0.35.x arc).**

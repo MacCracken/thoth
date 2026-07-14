@@ -108,6 +108,13 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
         cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), gturn_text());
         cy = cy + GFEED_GAP;
+        # 0.35.1: the CURRENT turn's tool-call cards, LIVE from the roundlog — each call is recorded as it completes
+        # (roundlog_add_call in the loop), and the pump repaints between calls, so a card grows a row as each tool
+        # returns during the round (was post-turn only). gtool_build == gtool_build_turn(session_turns()) — the SAME
+        # cards the per-message loop draws once the reply lands, so the mid-turn → post-turn handoff is seamless.
+        # Measure/draw parity: gtool_build is parity-clean and the roundlog is unchanged between the two passes.
+        var _tcy = gtool_build(cmds, xbase, cy, avail);
+        if (_tcy > cy) { cy = _tcy + GFEED_GAP; }
         # 0.35.0 mid-turn pump: render the LIVE streaming partial reply (the model's output so far, in _hoosh_acc —
         # populated on both SSE paths even under the GUI turn's OUT_NULL) as a provisional agent bubble that grows
         # each frame as the pump (gpresent's _gstop_poll) repaints. Same call shape as a landed assistant message

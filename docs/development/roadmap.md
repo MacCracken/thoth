@@ -151,9 +151,10 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 - **0.35.x — GUI + agentic streaming (architectural).** The GUI showed only a "working" frame then the final reply,
   and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. **.0 shipped** — the
   GUI present loop now **paints mid-turn** (the 0.34.3 stop-poll grew into the throttled, ready-gated pump; the feed
-  renders the growing `_hoosh_acc` partial live — see CHANGELOG). Remaining cuts: **.1** **live tool-call cards**
-  during the round (currently post-turn only — surface each tool call as the round runs, riding the same pump);
-  **.2** a **thinking/reasoning** fold rendering `thinking_delta` when hoosh emits it.
+  renders the growing `_hoosh_acc` partial live). **.1 shipped** — **live tool-call cards** during the round (the
+  `gturn_active` feed branch renders the current turn's roundlog cards above the partial; a card grows a row as each
+  tool returns, riding the pump). Remaining cut: **.2** a **thinking/reasoning** fold rendering `thinking_delta`
+  when hoosh emits it (an extended-thinking stream separate from the answer content).
 - **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
   inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
   hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions

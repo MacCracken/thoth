@@ -755,6 +755,53 @@ fn test_gui_toolcards() {
     return 0;
 }
 
+# GUI LIVE tool-call cards during a turn (0.35.1): while gturn_active, the feed renders the CURRENT turn's roundlog
+# cards (above the streaming partial), so a card appears as each tool completes — riding the 0.35.0 pump. PURE
+# (gtool_build over the roundlog + the gturn_active feed branch); the live repaint itself is compositor-gated.
+fn test_gui_toolcards_live() {
+    test_group("GUI live tool-call cards during a turn (0.35.1)");
+    roundlog_reset(); session_reset();
+    var turn = session_bump_turn();                   # the CURRENT turn gtool_build filters on
+    roundlog_open(turn, 1);
+    roundlog_add_call("shell", RL_ALLOWED, 1, 88, 256, "{\"command\":\"cyrius test\"}");
+    gturn_begin("run the tests");                     # a turn is in flight (no reply landed yet)
+    session_history_clear();
+    _hoosh_acc_reset();
+    # gfeed_build DURING the active turn must render the current turn's card (the tool name "shell")
+    var cmds = gd_list_new();
+    gfeed_build(cmds, 0, 0, 900, 400);
+    var found = 0; var i = 0;
+    while (i < vec_len(cmds)) {
+        var c = vec_get(cmds, i);
+        if ((gd_kind(c) == GD_TEXT) && (gd_text(c) != 0)) {
+            if (streq(gd_text(c), "shell") == 1) { found = 1; }
+        }
+        i = i + 1;
+    }
+    assert_eq(found, 1, "the current turn's tool-call card ('shell') renders LIVE during the turn");
+    # measure/draw parity holds with the live card in the active-turn flow
+    var mh = _gfeed_flow(0, 14, 0, 800, 0);
+    var dl = gd_list_new();
+    var dh = _gfeed_flow(dl, 14, 0, 800, 0);
+    assert_eq(mh, dh, "live-card measure height == draw height (bottom-anchor parity)");
+    # with NO roundlog for the current turn, no card renders (just the working/partial state)
+    roundlog_reset();
+    var cmds2 = gd_list_new();
+    gfeed_build(cmds2, 0, 0, 900, 400);
+    var found2 = 0; var j = 0;
+    while (j < vec_len(cmds2)) {
+        var c2 = vec_get(cmds2, j);
+        if ((gd_kind(c2) == GD_TEXT) && (gd_text(c2) != 0)) {
+            if (streq(gd_text(c2), "shell") == 1) { found2 = 1; }
+        }
+        j = j + 1;
+    }
+    assert_eq(found2, 0, "no tool cards when the current turn ran none");
+    gturn_end();
+    roundlog_reset(); session_reset();
+    return 0;
+}
+
 # GUI per-turn tool cards (0.30.19): each history message is turn-tagged, and the feed renders EACH turn's cards
 # above ITS reply (not just the latest turn's). PURE (gtool_build_turn + session_history_turn over the feed).
 fn test_gui_toolcards_perturn() {
