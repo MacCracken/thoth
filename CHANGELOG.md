@@ -2,6 +2,90 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.0] - 2026-07-14
+
+**`/theme rainbow` — the per-grapheme HSV render mode, over the newly-vendored anuenue hue.**
+
+### Added
+- **`/theme rainbow`** — the last deferred theme. Unlike `dark`/`light` it is a **render mode, not a role table**:
+  the foreground hue advances per **glyph** rather than mapping a semantic role to a color. The hue comes from
+  **anuenue** (`hsv_rainbow`); thoth authors only the phase→SGR glue and never reimplements the geometry.
+  `UI_RAINBOW_STEP` = 18 phase units per glyph (1530/18 ≈ 85 glyphs per full cycle — a whole spectrum across a
+  standard terminal width without the hue crawling fast enough to read as noise). Advancing per **glyph** and not
+  per byte means a 3-byte UTF-8 character takes one hue step, so the gradient tracks what the eye sees rather than
+  the encoding. Whitespace takes no escape (a tinted space paints nothing) but still occupies its column.
+  rainbow **carries the dark role table**, so chrome (status bar, file tree, labels) stays readable while prose cycles.
+- **Vendored anuenue 1.2.0** — `src/vendor/anuenue.cyr` + `scripts/sync-anuenue.sh` (the same vendored-dist pattern
+  as avatara/bote/t-ron/libro). anuenue grew a `[lib]` profile for this consumer, exporting **only** its pure HSV
+  geometry (`ANUENUE_PHASE_MOD` + `hsv_rainbow`): 101 lines, standalone over **zero** deps, so it adds no stdlib
+  module and cannot collide with thoth's own vendored darshana. Its filter/animate/CLI machinery stays app-only.
+
+### Fixed
+- **The ⌃T theme toggle now cycles the whole axis** (`dark → light → rainbow → dark`). It was
+  `ui_set_theme(1 - ui_theme())` — a flip that hardcoded "there are exactly two themes". With rainbow as theme 2
+  it computed `-1`, an invalid theme, and the next press turned `-1` straight back into rainbow — stranding the
+  toggle so it could never return to dark/light. Now `(ui_theme() + 1) % UI_THEME_COUNT`, which is what the
+  (previously unread) `UI_THEME_COUNT` was declared for; a test walks the full cycle so a fourth theme can't
+  silently re-break it.
+
+### Notes
+- **Two tint hooks, mutually exclusive by output sink** — this is forced by the feed's byte budget, not by taste.
+  A sealed feed slot is `FEED_LINE_CAP` (2048 B); baking a ~19-byte truecolor escape per glyph into it would
+  overflow the slot past roughly 100 columns and **drop text** — which is precisely why the feed stores 2-byte role
+  **markers** (0.18.0). So: the **line tier** tints at `ui_emit` (under `OUT_FD1` only, where there is no slot), and
+  the **TUI** tints at **paint** (`feed_clip_seg`, budget `PAINT_CAP` = 24 KB). Under `OUT_RING` `ui_emit` declines,
+  the compact marker reaches the slot intact, and the painter re-tints on expansion.
+- **A repaint is deterministic.** The painter hues each glyph by its **visible column**, not a running counter, so
+  `feed_repaint` redraws identical hues — `/theme rainbow` recolors existing scrollback instead of shimmering, and a
+  soft-wrapped segment continues its line's gradient.
+- **Color is best-effort; text is not.** The painter writes a glyph's escape only if the glyph itself still fits
+  after it; an exhausted `dst` emits the glyph **untinted** rather than dropping it. A row never loses content to
+  buy a color.
+- **Degrades honestly.** rainbow needs **truecolor** (1530 hues do not survive a 256/16 quantize): below `CD_TRUE`
+  `/theme rainbow` still switches (the reported theme stays truthful) but says *why* it is not cycling instead of
+  drawing a banded approximation. At `PT_PLAIN` the floor is byte-identical under any theme (verified: 0 escapes).
+- **The GUI tier is unchanged** — it runs under `OUT_NULL` with its own renderer leaf, so it never sees either hook
+  and stays on the role palette. Wiring the hue into `gfeed`'s glyph loop is the remaining tier (roadmap).
+- **Live-verified on a pty**, both tiers: the line tier cycles per glyph with the phase continuing across turns; the
+  rich TUI paints 92 distinct hues through the feed. Suite green (247 + 1522 + 180 + 3).
+
+## [0.37.0] - 2026-07-14
+
+**Hardening pass — a heap-overflow fix plus dead-code and bounds cleanup of the recurring buffer-footgun class. No new features.**
+
+### Fixed
+- **Heap overflow: the shell capture/result buffers now re-size when `[shell].max_output` changes.** `_shell_cap_buf`
+  (cap+1) and `_shell_res_buf` (cap+256) were lazily allocated **once** at the cap in force on first shell use, but
+  `config_shell_output_cap()` is re-parsed on every `/reload`. Raising `max_output`, `/reload`, then re-running a
+  command that emits more than the old cap wrote up to the **new** (larger) cap into the **old** (smaller) block
+  (`exec_shell_capture` → `file_read_all` fills to `buflen`) — a heap overflow on a natural operator action. A new
+  `_shell_bufs_ensure()` re-allocates both buffers whenever the config cap differs from the tracked `_shell_buf_cap`,
+  and replaced all three `if (== 0)` alloc sites. **Adversarially reviewed** (7 checks: every buffer use routed
+  through the ensure, buflen matches the allocation, the result buffer covers the worst-case footer, shrink handled)
+  — verdict complete. Regression test `test_shell_bufs_realloc` asserts the buffer pointer **changes** on cap growth
+  (fails if the fix is reverted); the happy-path capture was also confirmed live.
+- **Bounded the shell deny-message construction.** `_shell_deny_msg` copied the operator's `[shell.deny]` glob into
+  `_shell_res_buf` with no length check — with a tiny `max_output` (a 257-byte buffer) a long pattern could overrun.
+  Now every append is `_append_cstr_cap`-bounded. (Pre-existing; surfaced by the review of the fix above.)
+
+### Changed
+- **Removed the dead *unbounded* JSON escaper twins** `_json_escape_into` and `_hoosh_emit_msg` (`src/hoosh.cyr`).
+  Every live request build already funnels through the length-bounded `_json_escape_n_into_cap` / `_hoosh_emit_msg_cap`;
+  an unbounded escaper for untrusted model/MCP bytes sitting beside its bounded twin is the exact footgun that caused
+  the 0.34.4 escaper overflow. The escaping test was migrated onto the bounded core (byte-identical). Removal is
+  behavior-neutral and trims a little `fn_table` pressure.
+- Corrected the stale `alloc(32)` message-struct comment (`src/session.cyr`) to `alloc(48)` — the doc/code drift that
+  preceded the 0.36.4 conv-struct OOB. Suite green (247 gui + 1497 core + 180 render + 3).
+
+### Notes (audited, NOT fixed this cut — they need dependency releases)
+- **Capacity ceilings** (`fn_table` and the identifier buffer both ~89%, ~10.5% / ~21 releases of runway). Confirmed
+  `CYRIUS_DCE=1` does **not** help (it NOP-s bodies, leaving the table slots and identifier strings). The real levers
+  are dependency-side: tighten the **sit** `[lib.read]` vendor carve (it pulls a whole dead CLI command layer — the
+  source of the `cmd_reset` collision + the three `undefined function` warnings) and adopt a **bote** `[lib.jsonx]`
+  micro-profile (233 fns → 7, ~5 KB of identifier headroom). Both are `sync-*.sh` re-vendor + upstream-profile work.
+- The `large static data (13 MB)` warning is **vendored sigil** (crypto banks in `lib/`, off-limits) — thoth's own
+  static footprint is ~70 KB and it is demand-zeroed `.bss` (no RSS/startup cost). It cannot be cleared from thoth.
+
 ## [0.36.5] - 2026-07-13
 
 **`/save` gains JSON + plain exports.**

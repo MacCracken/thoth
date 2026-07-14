@@ -7,6 +7,7 @@ include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
 include "src/vendor/vyakarana.cyr"
 include "src/vendor/darshana.cyr"
+include "src/vendor/anuenue.cyr"    # HSV hue for /theme rainbow (0.38.0); before ui.cyr
 include "src/vendor/sankoch.cyr"    # git-object inflate (0.13.0); before sit-read
 include "src/vendor/sit-read.cyr"   # sit read-only VCS API (branch/status/diff)
 include "src/util.cyr"
@@ -83,7 +84,7 @@ fn main() {
     test_dry();
     test_memory();
     test_mem_seam();
-    test_shell();
+    test_shell(); test_shell_bufs_realloc();
     test_oneshot();
     test_json_envelope();
     test_oneshot_out();
@@ -121,6 +122,7 @@ fn main() {
     test_stream_throttle();
     test_ftree();
     test_theme();
+    test_rainbow();
     test_git();
     test_project();
     test_mpick();

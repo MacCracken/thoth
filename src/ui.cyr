@@ -37,11 +37,19 @@ var UI_ROLE_COUNT = 8;
 # Theme axis (0.10.0): a theme sits IN FRONT of the role axis — the three color
 # dispatchers (_ui_rgb/_ui_idx256/_ui_code16) branch on _ui_theme. dark is today's
 # amber (the byte-identical default); light is the mockup's warm-light palette. The
-# cached SGR table is rebuilt on a /theme switch (ui_set_theme). rainbow is DEFERRED
-# (a per-grapheme HSV render mode, not a role table — it needs anuenue vendored).
+# cached SGR table is rebuilt on a /theme switch (ui_set_theme).
+#
+# rainbow (0.38.0) is the exception the axis was shaped around: it is NOT a role table but a
+# per-grapheme HSV render mode over the vendored anuenue hue (hsv_rainbow). It still CARRIES a
+# role table — the dark one — because the chrome (status line, tree, labels) must stay readable
+# and ui_sgr/ui_role_of_sgr must keep answering for every theme; the rainbow simply OVERRIDES the
+# foreground per glyph wherever prose is drawn, so the role color underneath is invisible there.
+# It requires truecolor: 1530 hues do not survive a 256/16 quantize, so ui_rainbow_active() is
+# false below CD_TRUE and /theme announces that rather than faking a cycle.
 var THEME_DARK = 0;
 var THEME_LIGHT = 1;
-var UI_THEME_COUNT = 2;
+var THEME_RAINBOW = 2;
+var UI_THEME_COUNT = 3;
 var _ui_theme = 0;         # default dark -> byte-identical to pre-0.10.0
 
 var _ui_tier = 0;          # active tier (PT_*)
@@ -294,13 +302,119 @@ fn ui_set_theme(t) {
     return 0;
 }
 fn ui_theme() { return _ui_theme; }
-fn ui_theme_name() { if (_ui_theme == THEME_LIGHT) { return "light"; } return "dark"; }
-# ui_theme_from_name: theme id for a name, or -1 if unknown (rainbow is deferred, so
-# it resolves to -1 too — the /theme command announces it, never fakes a cycle).
+fn ui_theme_name() {
+    if (_ui_theme == THEME_LIGHT) { return "light"; }
+    if (_ui_theme == THEME_RAINBOW) { return "rainbow"; }
+    return "dark";
+}
+# ui_theme_from_name: theme id for a name, or -1 if unknown.
 fn ui_theme_from_name(s) {
     if (streq(s, "dark") == 1) { return THEME_DARK; }
     if (streq(s, "light") == 1) { return THEME_LIGHT; }
+    if (streq(s, "rainbow") == 1) { return THEME_RAINBOW; }
     return 0 - 1;
+}
+
+# --- rainbow: the per-grapheme HSV render mode (0.38.0) ------------------------
+# The hue comes from the vendored anuenue (hsv_rainbow); thoth authors only the phase->SGR
+# glue. Phase advances UI_RAINBOW_STEP per GLYPH (not per byte — a 3-byte UTF-8 glyph is one
+# hue step, so the gradient tracks what the eye sees, not the encoding). 1530/18 = 85 glyphs
+# per full cycle: a touch under a standard 80-100 col terminal, so a wide line shows the whole
+# spectrum without the hue crawling so fast it reads as noise.
+var UI_RAINBOW_STEP = 18;
+var _ui_rainbow_phase = 0;    # running; advances per glyph, wraps mod ANUENUE_PHASE_MOD
+var _ui_rainbow_ptr = 0;      # alloc(UI_RAINBOW_SGR_CAP): SHARED scratch for one escape
+var UI_RAINBOW_SGR_CAP = 32;  # "ESC[38;2;R;G;Bm" + NUL is <= 20; 32 is slack
+
+# ui_rainbow_active: 1 iff the per-grapheme tint should be drawn. Rainbow is a COLOR mode, so
+# it needs a color tier AND truecolor (1530 hues do not survive a 256/16 quantize — below
+# CD_TRUE the honest answer is "not available", not a banded approximation). At PT_PLAIN this
+# is false, which is what keeps the floor byte-identical under any theme.
+fn ui_rainbow_active() {
+    if (_ui_theme != THEME_RAINBOW) { return 0; }
+    if (_ui_tier == PT_PLAIN) { return 0; }
+    if (_ui_depth != CD_TRUE) { return 0; }
+    return 1;
+}
+
+# ui_rainbow_sgr: the truecolor SGR cstr for the hue at `phase` (any i64 — hsv_rainbow
+# normalizes), or "" when the rainbow can't be drawn. The returned pointer is SHARED scratch,
+# valid only until the NEXT call — every caller copies the bytes out immediately (the painter
+# does, before the glyph it belongs to). Never cached across calls.
+fn ui_rainbow_sgr(phase) {
+    if (ui_rainbow_active() == 0) { return ""; }
+    if (_ui_rainbow_ptr == 0) { _ui_rainbow_ptr = alloc(UI_RAINBOW_SGR_CAP); }
+    var rgb[24];                                     # 3 x i64 — hsv_rainbow's out contract
+    hsv_rainbow(phase, &rgb);
+    var buf = _ui_rainbow_ptr;
+    var off = 0;
+    store8(buf + off, 27); off = off + 1;            # ESC
+    store8(buf + off, 91); off = off + 1;            # [
+    off = _ui_dec(buf, off, 38);                     # 38 — set fg
+    store8(buf + off, 59); off = off + 1;            # ;
+    store8(buf + off, 50); off = off + 1;            # 2 — truecolor
+    store8(buf + off, 59); off = off + 1;            # ;
+    off = _ui_dec(buf, off, load64(&rgb + 0));       # r
+    store8(buf + off, 59); off = off + 1;
+    off = _ui_dec(buf, off, load64(&rgb + 8));       # g
+    store8(buf + off, 59); off = off + 1;
+    off = _ui_dec(buf, off, load64(&rgb + 16));      # b
+    store8(buf + off, 109); off = off + 1;           # m
+    store8(buf + off, 0);                            # NUL
+    return buf;
+}
+
+# ui_rainbow_phase / ui_rainbow_set_phase: the running phase. The painter drives it from a row's
+# visible COLUMN (so a repaint is deterministic — the same row always paints the same hues, which
+# is what lets feed_repaint recolor scrollback instead of shimmering); the line tier advances it
+# per emitted glyph. Tests set it to pin a hue.
+fn ui_rainbow_phase() { return _ui_rainbow_phase; }
+fn ui_rainbow_set_phase(p) { _ui_rainbow_phase = p; return 0; }
+
+# _ui_glyph_len: bytes in the UTF-8 glyph at s[i..len). ui.cyr is included BEFORE feed.cyr, so it
+# cannot call feed's _feed_glyph_len (single-pass callee-first resolution) — this is the same
+# lead-byte walk, kept private. A malformed/continuation lead byte advances 1 (never 0, so no
+# caller can spin).
+fn _ui_glyph_len(s, i, len) {
+    var b = load8(s + i);
+    var n = 1;
+    if (b >= 240) { n = 4; } elif (b >= 224) { n = 3; } elif (b >= 192) { n = 2; }
+    if ((i + n) > len) { n = 1; }                    # truncated tail — never read past `len`
+    return n;
+}
+
+# _ui_rainbow_emit: the LINE-tier tint. Writes ptr[0..n) one GLYPH at a time, each preceded by its
+# hue's SGR and followed by a single reset; returns 1 if it handled the span, else 0 (the caller
+# then takes its normal role path). Returns 1 for n == 0 only when it also emitted the reset, so a
+# caller can always trust 1 == "fully written".
+#
+# WHY the sink gate: this bakes ~19 bytes of escape per glyph. Under OUT_RING those bytes would be
+# packed into a FEED_LINE_CAP (2048 B) slot, so a line past ~100 columns would overflow the slot and
+# DROP TEXT — the whole reason the feed stores 2-byte role MARKERS. So under OUT_RING we decline and
+# let the compact marker reach the slot; the PAINTER re-tints per glyph at marker-expansion time
+# (feed_clip_seg), where the budget is PAINT_CAP (24 KB) and a repaint stays recolorable. OUT_NULL
+# discards anyway (the GUI's own renderer is a separate leaf — rainbow there is a follow-up).
+fn _ui_rainbow_emit(ptr, n) {
+    if (ui_rainbow_active() == 0) { return 0; }
+    if (out_mode() != OUT_FD1) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var gl = _ui_glyph_len(ptr, i, n);
+        var b = load8(ptr + i);
+        # Whitespace takes no escape (a tinted space paints nothing) but STILL advances the phase, so
+        # the gradient stays tied to column position rather than to word boundaries.
+        if ((b == 32) || (b == 9) || (b == 10) || (b == 13)) {
+            emit_n(ptr + i, gl);
+        } else {
+            emit(ui_rainbow_sgr(_ui_rainbow_phase));
+            emit_n(ptr + i, gl);
+        }
+        _ui_rainbow_phase = _ui_rainbow_phase + UI_RAINBOW_STEP;
+        if (_ui_rainbow_phase >= ANUENUE_PHASE_MOD) { _ui_rainbow_phase = _ui_rainbow_phase - ANUENUE_PHASE_MOD; }
+        i = i + gl;
+    }
+    emit(ui_reset());
+    return 1;
 }
 
 # _ui_detect_depth: truecolor (COLORTERM) -> 256 (TERM *-256color) -> 16.
@@ -453,6 +567,7 @@ fn ui_reset_fg() {
 # ui_emit: write s wrapped in the role's color (just s at T0 — byte-identical on
 # the floor). The common "one colored span" case over the ui_sgr/ui_reset pair.
 fn ui_emit(role, s) {
+    if (_ui_rainbow_emit(s, strlen(s)) == 1) { return 0; }
     emit(ui_sgr(role));
     emit(s);
     emit(ui_reset());
@@ -463,6 +578,7 @@ fn ui_label(s) { return ui_emit(ROLE_FAINT, s); }
 # ui_emit_n: like ui_emit but for (ptr,len) Str data that isn't a NUL-terminated
 # cstr (model ids, tool names). Just the bytes at T0.
 fn ui_emit_n(role, ptr, n) {
+    if (_ui_rainbow_emit(ptr, n) == 1) { return 0; }
     emit(ui_sgr(role));
     emit_n(ptr, n);
     emit(ui_reset());

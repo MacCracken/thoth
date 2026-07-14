@@ -28,6 +28,11 @@ include "src/vendor/vyakarana.cyr"
 # darshana (0.9.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
 # (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
 include "src/vendor/darshana.cyr"
+# anuenue (1.2.0 [lib] profile) — the HSV phase model behind `/theme rainbow` (0.38.0).
+# ONE constant + ONE fn (ANUENUE_PHASE_MOD / hsv_rainbow); standalone over zero deps —
+# no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
+# the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
+include "src/vendor/anuenue.cyr"
 # sit (1.3.4 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
 # sit_repo_* API only (its command layer is dead here). sankoch (2.5.1 zlib

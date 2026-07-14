@@ -395,13 +395,15 @@ fn test_config() {
 fn test_hoosh() {
     test_group("hoosh request building");
     var eb[64];
-    var n = _json_escape_into(&eb, 0, "a\"b");      # a " b
+    # 0.37.0: exercise the BOUNDED escaper core (the unbounded _json_escape_into twin was deleted — a footgun); the
+    # cap is generous so these tiny inputs never hit the (off+6)>=cap guard, so the escaping is byte-identical.
+    var n = _json_escape_n_into_cap(&eb, 0, 64, "a\"b", 3);      # a " b
     store8(&eb + n, 0);
     assert(streq(&eb, "a\\\"b"), "escape double-quote");
-    var n2 = _json_escape_into(&eb, 0, "x\ny");     # x <LF> y
+    var n2 = _json_escape_n_into_cap(&eb, 0, 64, "x\ny", 3);     # x <LF> y
     store8(&eb + n2, 0);
     assert(streq(&eb, "x\\ny"), "escape newline");
-    var n3 = _json_escape_into(&eb, 0, "c\\d");     # c \ d
+    var n3 = _json_escape_n_into_cap(&eb, 0, 64, "c\\d", 3);     # c \ d
     store8(&eb + n3, 0);
     assert(streq(&eb, "c\\\\d"), "escape backslash");
 
@@ -2099,5 +2101,30 @@ fn test_save_formats() {
     var mb = &mbuf;
     assert(_ui_contains(mb, "# thoth transcript") == 1, "markdown default unchanged");
     session_reset(); session_history_clear();
+    return 0;
+}
+
+# shell buffer re-sizing (shell.cyr, 0.37.0): the capture/result buffers were alloc'd ONCE from
+# config_shell_output_cap(), but /reload re-parses [shell].max_output — RAISING it then re-running a command wrote
+# up to the new (larger) cap into the old (smaller) block (file_read_all fills to buflen): a heap overflow on a
+# natural operator action. _shell_bufs_ensure re-allocs when the cap changes. This is the review-caught bug's guard.
+fn test_shell_bufs_realloc() {
+    test_group("shell buffers re-size when the cap grows (shell.cyr, 0.37.0)");
+    _cfg_shell_output_cap = 2048;                       # size at a small cap
+    var c1 = _shell_bufs_ensure();
+    assert_eq(c1, 2048, "buffers sized to the small cap");
+    assert_eq(_shell_buf_cap, 2048, "tracked cap = 2048");
+    var b1 = _shell_cap_buf;
+    assert(b1 != 0, "capture buffer allocated");
+    _cfg_shell_output_cap = 1048576;                    # a /reload raises max_output to the 1 MiB ceiling
+    var c2 = _shell_bufs_ensure();
+    assert_eq(c2, 1048576, "buffers re-sized to the raised cap (the overflow fix)");
+    assert_eq(_shell_buf_cap, 1048576, "tracked cap grew with the config");
+    assert(_shell_cap_buf != b1, "the capture buffer was RE-allocated (a fresh, larger block — no overflow)");
+    var b3 = _shell_cap_buf;
+    _shell_bufs_ensure();                               # same cap again -> stable, no churn
+    assert(_shell_cap_buf == b3, "unchanged cap -> no re-alloc (buffers stable)");
+    _cfg_shell_output_cap = 0 - 1;                      # restore the unset/default for later tests
+    _shell_bufs_ensure();
     return 0;
 }

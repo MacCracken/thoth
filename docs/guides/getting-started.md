@@ -53,7 +53,7 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /audit              show t-ron's audit chain (gated-action log)
 {(o> /reset              clear the multi-turn conversation context
 {(o> /clear              clear the content window (Shift-↑/↓ scrolls history)
-{(o> /theme [dark|light] switch the color theme (⌃T toggles in the TUI)
+{(o> /theme [dark|light|rainbow] switch the color theme (⌃T toggles in the TUI)
 {(o> /persona [name]     show the active persona, or switch it mid-session (from avatara)
 {(o> /personas           list the available personas
 {(o> /role [name]        show or set the persona's role (the trait-derived third axis)

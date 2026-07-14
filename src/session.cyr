@@ -34,7 +34,8 @@ var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
-# backing model sees prior turns. Each message is alloc(32): +0 role (a stable
+# backing model sees prior turns. Each message is alloc(48) (fields +0..+40 below — keep this in sync with the
+# alloc site; a doc/code drift here is exactly what preceded the 0.36.4 conv-struct OOB): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
 # so both must be copied), +16 turn (session_turns() at append time — 0.30.19, so the GUI feed can render each

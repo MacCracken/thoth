@@ -7,6 +7,36 @@
 
 ## Version
 
+**0.38.0** — **`/theme rainbow`** (2026-07-14). The last deferred theme lands, consuming the newly-vendored
+**anuenue 1.2.0** (`src/vendor/anuenue.cyr`, `scripts/sync-anuenue.sh`) — anuenue grew a `[lib]` profile for this
+consumer, exporting ONLY its pure HSV geometry (`ANUENUE_PHASE_MOD` + `hsv_rainbow`, standalone over zero deps).
+thoth authors only the phase→SGR glue; it never reimplements the hue (spine rule). rainbow is a **per-grapheme
+render mode, not a role table**: the hue advances `UI_RAINBOW_STEP` (18) per GLYPH (not per byte — a 3-byte UTF-8
+glyph is one step), 85 glyphs per cycle. It still CARRIES the dark role table, so chrome (status/tree/labels) stays
+readable while prose cycles. **Two hooks, mutually exclusive by sink** — because the sealed feed slot is
+`FEED_LINE_CAP` (2048 B) and a ~19-byte escape per glyph would overflow it past ~100 cols and DROP TEXT (which is
+exactly why the feed stores 2-byte role MARKERS): the LINE tier tints at `ui_emit` (OUT_FD1 only), and the TUI tints
+at PAINT (`feed_clip_seg`, budget `PAINT_CAP` = 24 KB), hued by VISIBLE COLUMN so a repaint is deterministic and
+`feed_repaint` recolors scrollback instead of shimmering. Invariant: **color is best-effort, text is not** — an
+exhausted `dst` emits the glyph UNTINTED rather than dropping it. Degrades honestly: needs **truecolor** (1530 hues
+don't survive a 256/16 quantize) — below it `/theme` switches but ANNOUNCES why it isn't cycling; PT_PLAIN stays
+byte-identical (verified: 0 escapes). **Live-verified on a pty** both tiers (line: per-glyph hues continuing across
+turns; rich TUI: 92 distinct hues painted). Also **fixed** the ⌃T toggle: `1 - ui_theme()` hardcoded a two-theme
+flip, so from rainbow it produced `-1` (an invalid theme) and the next press turned `-1` back into rainbow —
+stranded. Now cycles `% UI_THEME_COUNT` (dark → light → rainbow → dark), which is what that constant was for.
+Suite green (247 + 1525 + 180 + 3). Pin **6.4.62**. **NEXT**: the GUI tier (its own `OUT_NULL` renderer leaf never
+sees these hooks).
+
+**0.37.0** — **Hardening pass** (2026-07-14; no new features). Fixed a heap overflow: the shell capture/result
+buffers were alloc'd once at `[shell].max_output`, but `/reload` re-parses it — raising the cap then re-running a
+command overran the old smaller block; `_shell_bufs_ensure()` now re-allocs on any cap change (adversarially reviewed
+complete; `test_shell_bufs_realloc` locks it in; happy-path confirmed live). Bounded the deny-message glob copy
+(pre-existing, review-surfaced). Deleted the dead UNBOUNDED escaper twins (`_json_escape_into` / `_hoosh_emit_msg`) —
+every live build uses the bounded core; test migrated (byte-identical). Fixed the stale `alloc(32)`→`alloc(48)`
+message-struct comment. Suite green (247 + 1497 + 180 + 3). **Audited, deferred (need dep releases):** the ~89%
+`fn_table` / identifier ceilings (levers are the sit read-carve + a bote jsonx micro-profile; `CYRIUS_DCE` does NOT
+help); the 13 MB static-data warning is vendored-sigil and unfixable from thoth. Pin **6.4.62**.
+
 **0.36.5** — **`/save` JSON + plain exports** (2026-07-13). `/save --json <file>` writes one machine-readable
 object (`{"thoth", "messages":[{role,content,model?}]}`) for jq/CI; `/save --plain <file>` writes bare
 `role: content`; bare `/save` is unchanged (markdown, byte-identical). Both new formats are TIER-NEUTRAL (the

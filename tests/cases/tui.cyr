@@ -1111,7 +1111,8 @@ fn test_theme() {
     assert(streq(ui_theme_name(), "dark"), "default theme name 'dark'");
     assert_eq(ui_theme_from_name("light"), THEME_LIGHT, "'light' -> THEME_LIGHT");
     assert_eq(ui_theme_from_name("dark"), THEME_DARK, "'dark' -> THEME_DARK");
-    assert_eq(ui_theme_from_name("rainbow"), 0 - 1, "'rainbow' deferred -> -1 (never faked)");
+    assert_eq(ui_theme_from_name("rainbow"), THEME_RAINBOW, "'rainbow' -> THEME_RAINBOW (0.38.0: no longer deferred)");
+    assert_eq(ui_theme_from_name("mauve"), 0 - 1, "an unknown theme still -> -1 (never faked)");
     ui_set_theme(THEME_DARK);
     assert_eq(_ui_rgb(ROLE_ACCENT), 230 * 65536 + 171 * 256 + 92, "dark accent RGB unchanged (byte-identical anchor)");
     ui_set_theme(THEME_LIGHT);
@@ -1128,6 +1129,95 @@ fn test_theme() {
     ui_force(PT_PLAIN, CD_NONE);
     ui_set_theme(THEME_LIGHT);
     assert_eq(streq(ui_sgr(ROLE_ACCENT), ""), 1, "PT_PLAIN accent empty under light (floor unchanged)");
+    # restore defaults for later tests
+    ui_set_theme(THEME_DARK);
+    ui_detect_tier();
+    return 0;
+}
+
+# Rainbow theme (0.38.0): the per-grapheme HSV render mode over the VENDORED anuenue hue. Covers the
+# three things that can silently rot — the vendored contract, the capability gate (rainbow is truecolor-
+# only and must never fake a cycle), and the painter's "text is never dropped to buy color" rule.
+fn test_rainbow() {
+    test_group("rainbow theme (ui.cyr + feed.cyr, 0.38.0)");
+    # The vendored anuenue contract: the canonical hues at the sector boundaries. This asserts thoth
+    # CONSUMES the hue (never reimplements it) and that the bundle is actually wired in.
+    var rgb[24];                                       # 3 x i64 — hsv_rainbow's documented out shape
+    hsv_rainbow(0, &rgb);
+    assert_eq(load64(&rgb + 0), 255, "anuenue phase 0 -> r=255 (red)");
+    assert_eq(load64(&rgb + 8), 0, "anuenue phase 0 -> g=0");
+    assert_eq(load64(&rgb + 16), 0, "anuenue phase 0 -> b=0");
+    hsv_rainbow(510, &rgb);
+    assert_eq(load64(&rgb + 8), 255, "anuenue phase 510 -> g=255 (green)");
+    hsv_rainbow(0 - 1530, &rgb);
+    assert_eq(load64(&rgb + 0), 255, "anuenue normalizes a NEGATIVE phase (total for any i64)");
+
+    # The capability gate: rainbow is a truecolor mode; below CD_TRUE it is inactive (the /theme
+    # command announces WHY rather than drawing a banded approximation).
+    ui_set_theme(THEME_DARK);
+    ui_force(PT_ANSI, CD_TRUE);
+    assert_eq(ui_rainbow_active(), 0, "dark theme -> no rainbow");
+    ui_set_theme(THEME_RAINBOW);
+    assert(streq(ui_theme_name(), "rainbow"), "theme name reports 'rainbow' honestly");
+    assert_eq(ui_rainbow_active(), 1, "rainbow + T1 + truecolor -> active");
+    ui_force(PT_ANSI, CD_256);
+    assert_eq(ui_rainbow_active(), 0, "rainbow below truecolor -> inactive (never faked)");
+    ui_force(PT_PLAIN, CD_NONE);
+    assert_eq(ui_rainbow_active(), 0, "rainbow at PT_PLAIN -> inactive");
+    assert_eq(streq(ui_sgr(ROLE_ACCENT), ""), 1, "PT_PLAIN + rainbow: role SGR empty (floor byte-identical)");
+    assert_eq(streq(ui_rainbow_sgr(0), ""), 1, "PT_PLAIN + rainbow: no hue escape (floor byte-identical)");
+
+    # The hue escape itself.
+    ui_force(PT_ANSI, CD_TRUE);
+    ui_set_theme(THEME_RAINBOW);
+    assert_eq(_ui_contains(ui_rainbow_sgr(0), "38;2;255;0;0"), 1, "phase 0 -> truecolor red");
+    assert_eq(_ui_contains(ui_rainbow_sgr(510), "38;2;0;255;0"), 1, "phase 510 -> truecolor green");
+    # Chrome stays readable: rainbow carries the DARK role table (it overrides fg per glyph, it is not
+    # a role palette), so the status line / tree / labels keep their semantic colors.
+    assert_eq(_ui_rgb(ROLE_ACCENT), _ui_rgb_dark(ROLE_ACCENT), "rainbow carries the dark role table (chrome readable)");
+
+    # The painter tints per GLYPH, hued by VISIBLE COLUMN — which is what makes a repaint
+    # deterministic (feed_repaint recolors scrollback instead of shimmering).
+    var dst[512];
+    var w = feed_clip_seg(&dst, 500, "AB", 2, 0, 80);
+    store8(&dst + w, 0);
+    assert_eq(_ui_contains(&dst, "38;2;255;0;0"), 1, "painter tints glyph 0 red (phase = col 0)");
+    assert_eq(_ui_contains(&dst, "38;2;255;18;0"), 1, "glyph 1 advances one UI_RAINBOW_STEP (col 1 -> phase 18)");
+    var d2[512];
+    var w2 = feed_clip_seg(&d2, 500, "AB", 2, 0, 80);
+    assert_eq(w2, w, "repaint is DETERMINISTIC (identical width)");
+    var same = 1;
+    var ci = 0;
+    while (ci < w) { if (load8(&dst + ci) != load8(&d2 + ci)) { same = 0; } ci = ci + 1; }
+    assert_eq(same, 1, "repaint is DETERMINISTIC (identical bytes)");
+
+    # THE INVARIANT: color is best-effort, text is not. A dst with no room for a 19-byte escape must
+    # still land every GLYPH, untinted — never drop a byte of content to buy a color (the 0.36.3 lesson).
+    var tiny[32];
+    var wt = feed_clip_seg(&tiny, 3, "AB", 2, 0, 80);
+    assert_eq(wt, 2, "exhausted dst: both glyphs still land (text never dropped for color)");
+    assert_eq(load8(&tiny + 0), 65, "  ... 'A' intact");
+    assert_eq(load8(&tiny + 1), 66, "  ... 'B' intact");
+
+    # The plain floor is byte-identical under rainbow: same bytes as dark, no escapes.
+    ui_force(PT_PLAIN, CD_NONE);
+    ui_set_theme(THEME_RAINBOW);
+    var pf[64];
+    var wp = feed_clip_seg(&pf, 60, "AB", 2, 0, 80);
+    assert_eq(wp, 2, "PT_PLAIN + rainbow: 2 bytes, no escapes (floor byte-identical)");
+    assert_eq(load8(&pf + 0), 65, "  ... 'A' verbatim");
+
+    # The ⌃T cycle (tui.cyr) must walk the WHOLE axis and never synthesize a non-theme. The pre-0.38.0
+    # `1 - ui_theme()` flip assumed exactly two themes: from rainbow it yields -1, and the next press
+    # turns -1 back into rainbow — stranding the toggle. Modelled here as the cycle the key handler runs.
+    ui_set_theme(THEME_DARK);
+    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
+    assert_eq(ui_theme(), THEME_LIGHT, "toggle: dark -> light");
+    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
+    assert_eq(ui_theme(), THEME_RAINBOW, "toggle: light -> rainbow");
+    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
+    assert_eq(ui_theme(), THEME_DARK, "toggle: rainbow -> dark (cycles home, never -1)");
+
     # restore defaults for later tests
     ui_set_theme(THEME_DARK);
     ui_detect_tier();

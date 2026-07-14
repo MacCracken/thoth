@@ -10,17 +10,16 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.34.4):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
-> front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`) with tool-call cards + colored diff
-> cards + a conversation sidebar, the model **`shell`** / **`edit`** / **`create_file`** tools (thoth now reads
-> *and writes* code), the **memory arc** (consume mneme — `/remember`, semantic recall, citations, grounding,
-> `/notes`), the **chat-management arc** (named multi-conversation store, persisted across restarts with each
-> reply's model / cited sources / tool calls, `/search`), the **complete 0.34.x chat-UX arc** (message actions
-> `/retry`+`/edit`; stop/interrupt in the TUI + GUI; `/bookmark` a reply into mneme + `/thumbs` feedback), the git /
-> surface producers, the model picker, the persona + role modality, and the `.thoth/` config home.
-> Per-version detail is in [CHANGELOG](../../CHANGELOG.md) / [state.md](state.md) — **this file is the road AHEAD
-> only**. The **four v1.0 gates below are the remaining blocking work** (AGNOS-dominated); everything else here is
-> non-gating.
+> **Where we are (0.38.0):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`), the model **`shell`** / **`edit`** /
+> **`create_file`** tools (thoth reads *and writes* code), the **memory arc** (consume mneme), the
+> **chat-management arc** (named multi-conversation store), the **chat-UX arc** (message actions, stop/interrupt,
+> `/bookmark` + `/thumbs`), the **GUI + agentic-streaming arc** (mid-turn pump, live tool cards, the reasoning-effort
+> control + thinking fold), the **rendering + context arc** (structural markdown + tables on every surface,
+> summarize-on-overflow, `/save` JSON/plain exports), the git / surface producers, the model picker, the persona +
+> role modality, and the `.thoth/` config home. Per-version detail is in [CHANGELOG](../../CHANGELOG.md) /
+> [state.md](state.md) — **this file is the road AHEAD only**. The **four v1.0 gates below are the remaining
+> blocking work** (AGNOS-dominated); everything else here is non-gating.
 
 ## Framing (read first)
 
@@ -112,81 +111,40 @@ above, deferred to a later ADR.
 > field surfaces only when its producer has real data, and announces absence in `/state` —
 > never faked.
 
-The **chat-surface inheritance** below is a *sequenced* near-term line of feature minors (still non-gating — the
-four AGNOS gates keep priority); the rest of this section re-gathers unscheduled.
+### Chat-surface inheritance — carried-forward items only
 
-### Chat-surface inheritance — 0.34.x → 0.3x.x (sequenced)
-
-> **Shipped so far (see CHANGELOG):** **0.32.x — Memory + RAG** (consume mneme: seam + `/remember`, the
-> daimon→mneme host wiring, semantic recall, citations, grounding, GUI surfacing, `/notes`) and **0.33.x —
-> Chat-management** (named multi-conversation store, commands, persistence, the richer persisted message schema —
-> model / citations / tool calls — the GUI conversation sidebar, and cross-conversation `/search`). The remaining
-> sequenced arcs are below.
+> **The sequenced chat-surface arc has SHIPPED** (0.32.x memory → 0.33.x chat-management → 0.34.x chat-UX → 0.35.x
+> GUI + agentic streaming → 0.36.x rendering + context). Per-cut detail is in [CHANGELOG](../../CHANGELOG.md); this
+> file keeps only what has NOT yet shipped.
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is being handed to
 > thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding front-end. The rule is the same
 > as the rest of the spine — **CONSUME already-built AGNOS domains (mneme, bhava, an audio/voice domain), never
-> reinvent them.** thoth already *leads* SY on the coding surface (colored diff cards, the `edit`/`create_file`
-> write tools, tool-call cards, mid-session model+persona+role switching, the sovereign line→TUI→GUI ladder); these
-> arcs close the *chat-management* and *memory* gaps. Each arc is ONE minor; cuts within it are patches. SY's
-> enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the web-dashboard
-> admin stay **out of scope** (see below).
+> reinvent them.** SY's enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and
+> the web-dashboard admin stay **out of scope** (see below).
 
-- **0.33.x chat-management follow-ups (non-gating).** The 0.33.x arc shipped (multi-conversation store → commands →
-  persistence → richer message schema → GUI sidebar → cross-conversation `/search`; see CHANGELOG). Two deferred
-  polish items ride later work: a **mouse click-to-switch** on the GUI sidebar (today keyboard-only — the GUI has no
-  pointer plumbing yet), and **re-rendering resumed tool/citation data as GUI feed cards** (today it round-trips +
-  surfaces in `/save`, but the live feed cards are session-local).
-- **0.34.x — Message actions + interrupt (the most-felt chat-UX gaps). ✅ COMPLETE (.0–.4 shipped).** `/retry`/`/edit`
-  message actions (`.0`); **stop/interrupt** — `.1` through the whole agentic loop in the TUI behind a
-  front-end-agnostic **interrupt seam**, `.3` the **GUI stop affordance** (Esc aborts a GUI turn via a Wayland-fd
-  stop-poll on the seam); `.2` a bug fix (an empty `inputSchema` on the `mneme_*` tools emptied every full-registry
-  agentic turn); `.4` per-message **`/bookmark`** (save a reply into mneme) + **`/thumbs`** feedback
-  (→ `mneme_search_feedback`). See CHANGELOG for per-cut detail. **Follow-up carried forward:** surface `/retry` +
-  `/edit` (and `/bookmark`/`/thumbs`) as GUI affordances — the GUI composer runs `cmd_task` directly, bypassing
-  `dispatch`, so slash-commands are TUI/REPL-only today (rides the 0.35.x GUI work).
-  > **Ordering note (fixed):** an earlier draft listed the GUI stop under .1, ahead of any GUI event-loop pump — a
-  > mis-ordered dependency (stdin `intr` doesn't reach the GUI, and the blocking turn can't handle a key mid-turn).
-  > Corrected: .1 does the TUI/REPL interrupt + the seam; .2 adds the minimal GUI stop-poll pump the seam needs.
-- **0.35.x — GUI + agentic streaming (architectural).** The GUI showed only a "working" frame then the final reply,
-  and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. **.0 shipped** — the
-  GUI present loop now **paints mid-turn** (the 0.34.3 stop-poll grew into the throttled, ready-gated pump; the feed
-  renders the growing `_hoosh_acc` partial live). **.1 shipped** — **live tool-call cards** during the round (the
-  `gturn_active` feed branch renders the current turn's roundlog cards above the partial; a card grows a row as each
-  tool returns, riding the pump). **.2 shipped** — a **reasoning-effort control** (`[hoosh].reasoning`, mapped to the
-  provider's native effort by hoosh 2.5.0 — works today on Opus 4.8) **+ a live thinking fold** (both SSE paths parse
-  `reasoning_content` into `_reason_acc`; `_gfeed_flow` renders a collapsible muted "thinking" block above the cards,
-  Ctrl+R to toggle; inert on Opus 4.8, which keeps reasoning internal). **.3 shipped** — **persistent per-turn
-  reasoning**: a `reasonlog` ring (keyed by turn, like `roundlog`/`memlog`) records each turn's final-round
-  chain-of-thought at the reply-finalize sites, and `greason_build_turn` renders a LANDED turn's fold above its
-  cards — so the fold survives the reply landing (was live-only). **.4 shipped** — a `/state` **reason** row: the
-  `[hoosh].reasoning` effort + how many turns' reasoning were folded this session (`reasonlog_total`; 0 on a model
-  that keeps reasoning internal). The GUI + agentic-streaming arc's planned scope is DONE. Optional follow-up: persist
-  reasoning into the conversation store so a landed fold survives resume (today it is session-scoped like the memory
-  strip) — carry into a later resume-focused cut if wanted.
-- **0.36.x — Rendering + context polish.** **.0 shipped** — **structural markdown in the GUI** (ATX headings, bold,
-  inline + fenced code, lists, blockquotes) via a new shared facts-not-bytes model (`src/mdmodel.cyr`, the reply-render
-  analogue of `surface.cyr`); the GUI feed is the first leaf that lowers it, and `mdhl` (line/TUI) is left untouched.
-  **.1 shipped** — **pipe tables** in the GUI: the shared model parses rows/delimiter/alignment
-  (`md_row_split`/`md_is_delim_row`/`md_cell_align`, surface-agnostic), and the GUI feed leaf lays out an aligned grid
-  (`_gfeed_md_table`); line/TUI tables come with the `.2` migration (no bespoke `mdhl` table path). Remaining:
-  **.2 shipped** — **one markdown classifier**: `mdhl`'s prose + inline classification now drives from the shared
-  model (`md_classify` + `md_inline_scan`), removing the six duplicated predicates; byte-identical for line/TUI (the
-  fenced-code path stays bespoke for now). **.3 shipped** — line/TUI **table rendering**: `mdhl` emits an aligned monospace grid via the model's
-  parser, riding the 0.18.3 live-card trick (a delimiter under a matching header drops the header's sealed feed row
-  and re-emits the table as a grid) — so tables now render on EVERY surface, with the line/`PT_PLAIN` floor keeping
-  raw-pipe bytes. **.4 shipped** — **history overflow made honest + optionally summarized**: `/state` now distinguishes the
-  framer's harmless skip from the cap's REAL destruction (which was silent), and `[hoosh].summarize` (opt-in) recaps
-  the skipped range via a cached, incrementally-folded side-call so long sessions keep fidelity. (The roadmap's
-  premise was off: the byte budget bites first and is non-destructive; mneme was rejected — recall keys on the
-  prompt, which carries no signal for "keep going with that".) **.5 shipped** — **export formats**: `/save --json` (a jq/CI-ready object) + `/save --plain` (bare text),
-  both tier-neutral; bare `/save` markdown unchanged. The 0.36.x rendering + context arc is COMPLETE. Non-gating
-  leftover: model-picker health/pricing, if hoosh ever exposes it.
+Forward, non-gating (each ready when its prerequisite lands; none blocks v1.0):
+
+- **GUI slash-command affordances** — surface `/retry`, `/edit`, `/bookmark`, `/thumbs` in the GUI. The GUI composer
+  runs `cmd_task` directly, bypassing `dispatch`, so these are TUI/REPL-only today; needs the GUI to route
+  slash-commands.
+- **GUI pointer plumbing** — mouse click-to-switch on the conversation sidebar (keyboard-only today), and re-rendering
+  a resumed conversation's tool/citation data as live GUI feed cards (today it round-trips + shows in `/save`, but the
+  live cards are session-local). Both gated on GUI pointer/event plumbing.
+- **Reasoning across resume** — persist a turn's reasoning fold into the conversation store so it survives a restart
+  (today the `reasonlog` is session-scoped, like the memory strip).
+- **Model-picker health/pricing** — annotate the `Ctrl-P` picker with per-model reachability/pricing, *if* hoosh ever
+  exposes it (omit-until-present).
+- **Capacity relief (from the 0.37.0 hardening audit)** — tighten the **sit** `[lib.read]` vendor carve (drops a dead
+  CLI command layer — the `cmd_reset` collision + three `undefined function` warnings) and adopt a **bote**
+  `[lib.jsonx]` micro-profile (233 fns → 7). Both are upstream-profile + `sync-*.sh` re-vendor work; they buy back
+  `fn_table` / identifier-buffer headroom (both ~89%). `CYRIUS_DCE` does not help; the 13 MB static-data warning is
+  vendored sigil and unfixable from thoth.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will grow **voice
-> input** (mic → speech-to-text) and **read-back** (text-to-speech) as a first-class thoth capability — but by
-> **consuming an AGNOS audio/voice domain**, exactly like mneme/bhava, *never* by hand-rolling STT/TTS. Gated on
-> that domain's Cyrius port + a portable audio-capture substrate. Recorded so it isn't lost; not on a numbered arc yet.
+> input** (mic → speech-to-text) and **read-back** (text-to-speech) — but by **consuming an AGNOS audio/voice
+> domain**, exactly like mneme/bhava, *never* by hand-rolling STT/TTS. Gated on that domain's Cyrius port + a portable
+> audio-capture substrate. Recorded so it isn't lost; not on a numbered arc yet.
 
 ### Later / speculative (not scheduled)
 
@@ -210,8 +168,9 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 > low-priority hardening. **None is a correctness bug**; each degrades honestly today.
 > Recorded here so it isn't lost in code comments.
 
-- **`rainbow` theme** — a per-grapheme HSV render mode (a render mode, not a role table);
-  needs the **anuenue** lib vendored. Announced not-yet-available, never faked.
+- **`rainbow` in the GUI (T3).** The line + TUI tiers cycle per grapheme (0.38.0); the GUI runs under
+  `OUT_NULL` with its own renderer leaf, so it never sees `ui_emit`/`feed_clip_seg` and stays on the role
+  palette. Wiring the hue into `gfeed`'s glyph loop is the remaining tier. Degrades honestly today.
 
 - **bhava — the sentiment→mood loop (a backlogged seam, gated on bhava's Cyrius port).** SecureYeoman feeds a
   turn's response sentiment back into the active persona's mood; that loop is **bhava**'s domain. Already a

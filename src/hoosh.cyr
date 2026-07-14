@@ -233,9 +233,9 @@ fn _json_escape_n_into_cap(dst, off, cap, src, src_len) {
     return off;
 }
 
-# _json_escape_into_cap: the NUL-terminated wrapper (escape up to the first 0 byte). The
-# defensive sibling of _json_escape_into for untrusted (model/MCP) cstrings. Delegates to the
-# length-bounded core at strlen(src) — byte-identical to the prior NUL-loop. Pure.
+# _json_escape_into_cap: the NUL-terminated wrapper (escape up to the first 0 byte) for untrusted (model/MCP)
+# cstrings. Delegates to the length-bounded core `_json_escape_n_into_cap` at strlen(src). Pure. (0.37.0: this is
+# now the ONLY escaper — the unbounded twin was deleted; every request build funnels through the bounded core.)
 fn _json_escape_into_cap(dst, off, cap, src) {
     return _json_escape_n_into_cap(dst, off, cap, src, strlen(src));
 }
@@ -258,45 +258,11 @@ fn _append_int(dst, off, n) {
     return off;
 }
 
-# _json_escape_into: append src (cstring) into dst at off as the BODY of a JSON
-# string (no surrounding quotes); return new off. Escapes ", \, and control
-# bytes (\n \r \t, else \u00XX) so an arbitrary prompt is valid JSON. Pure —
-# unit-tested. Caller sizes dst for the ~6x worst case.
-fn _json_escape_into(dst, off, src) {
-    var i = 0;
-    while (load8(src + i) != 0) {
-        var c = load8(src + i);
-        if (c == 34) {                  # "
-            store8(dst + off, 92); off = off + 1;
-            store8(dst + off, 34); off = off + 1;
-        } elif (c == 92) {              # backslash
-            store8(dst + off, 92); off = off + 1;
-            store8(dst + off, 92); off = off + 1;
-        } elif (c == 10) {              # \n
-            store8(dst + off, 92); off = off + 1;
-            store8(dst + off, 110); off = off + 1;
-        } elif (c == 13) {              # \r
-            store8(dst + off, 92); off = off + 1;
-            store8(dst + off, 114); off = off + 1;
-        } elif (c == 9) {               # \t
-            store8(dst + off, 92); off = off + 1;
-            store8(dst + off, 116); off = off + 1;
-        } elif (c < 32) {               # other control -> \u00XX
-            var hi = c / 16;
-            var lo = c - hi * 16;
-            store8(dst + off, 92); off = off + 1;       # backslash
-            store8(dst + off, 117); off = off + 1;      # u
-            store8(dst + off, 48); off = off + 1;       # 0
-            store8(dst + off, 48); off = off + 1;       # 0
-            store8(dst + off, _hoosh_hex_digit(hi)); off = off + 1;
-            store8(dst + off, _hoosh_hex_digit(lo)); off = off + 1;
-        } else {
-            store8(dst + off, c); off = off + 1;
-        }
-        i = i + 1;
-    }
-    return off;
-}
+# NOTE (0.37.0): the UNBOUNDED escaper `_json_escape_into` (and its only user `_hoosh_emit_msg`, an unbounded
+# {"role","content"} emitter) were DELETED here. Both were dead — every live request build goes through the
+# length-bounded `_json_escape_n_into_cap` / `_hoosh_emit_msg_cap`. An unbounded escaper for untrusted model/MCP
+# bytes sitting beside its bounded twin is the exact footgun that produced the 0.34.4 escaper overflow; removing it
+# means a future caller cannot pick the wrong one. The escaping logic lives on, unit-tested, in the bounded core.
 
 # hoosh_build_request: write a chat-completions JSON request for
 # (model, system, prompt) into dst, NUL-terminated; return the byte length.
@@ -350,18 +316,7 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
     return off;
 }
 
-# _hoosh_emit_msg: append one {"role":"R","content":"<escaped C>"} at off; return
-# the new off. Pure. The multi-turn message serializer (0.5.1).
-fn _hoosh_emit_msg(dst, off, role, content) {
-    off = _append_cstr(dst, off, "{\"role\":\"");
-    off = _append_cstr(dst, off, role);
-    off = _append_cstr(dst, off, "\",\"content\":\"");
-    off = _json_escape_into(dst, off, content);
-    off = _append_cstr(dst, off, "\"}");
-    return off;
-}
-
-# _hoosh_emit_msg_cap: bounded _hoosh_emit_msg — every write is clamped to `cap`
+# _hoosh_emit_msg_cap: the bounded message serializer — every write is clamped to `cap`
 # so a long history `content` (e.g. a prior assistant reply up to HOOSH_ACC_CAP,
 # re-sent on the next turn) truncates in-buffer instead of overflowing the request
 # buffer. `role` is a trusted literal; `content` is the untrusted part. Pure.

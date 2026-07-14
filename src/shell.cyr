@@ -28,6 +28,21 @@
 
 var _shell_cap_buf = 0;      # capture buffer (config cap + 1 for the NUL terminator), lazy
 var _shell_res_buf = 0;      # result/deny-message buffer (config cap + 256), lazy
+var _shell_buf_cap = 0;      # 0.37.0: the [shell].max_output the two buffers were SIZED for
+
+# _shell_bufs_ensure: guarantee _shell_cap_buf (cap+1) and _shell_res_buf (cap+256) are sized for the CURRENT
+# [shell].max_output. The buffers were originally alloc'd once (`if == 0`), but config_shell_output_cap() is
+# re-parsed on every /reload — so RAISING max_output then re-running a command wrote up to the NEW (larger) cap
+# into the OLD (smaller) block (exec_shell_capture -> file_read_all fills up to buflen): a heap overflow on a
+# natural operator action. Re-alloc whenever the cap changed (alloc never frees; a cap change is rare). 0.37.0.
+fn _shell_bufs_ensure() {
+    var cap = config_shell_output_cap();
+    if ((_shell_buf_cap == cap) && (_shell_cap_buf != 0) && (_shell_res_buf != 0)) { return cap; }
+    _shell_cap_buf = alloc(cap + 1);
+    _shell_res_buf = alloc(cap + 256);
+    _shell_buf_cap = cap;
+    return cap;
+}
 var _shell_logcmd = 0;       # bounded command copy for the audit log, lazy
 var SHELL_LOGCMD_CAP = 208;  # audit-log command field is truncated to this (bounds the log line)
 var _shell_deny_pat = 0;     # the [shell.deny] pattern that matched (for the refusal message), or 0
@@ -112,11 +127,14 @@ fn _shell_audit_run(cmd, verdict, exitc, bytes, sev) {
 # _shell_deny_msg: the refusal string for a deny-glob match, naming the matched pattern so the model
 # can react ("that command is blocked; try another"). Built in _shell_res_buf (short; sized cap+256).
 fn _shell_deny_msg() {
-    if (_shell_res_buf == 0) { _shell_res_buf = alloc(config_shell_output_cap() + 256); }
+    var cap = _shell_bufs_ensure() + 256;   # 0.37.0: the alloc'd size of _shell_res_buf (== config cap + 256)
     var off = 0;
-    off = _exec_append_cstr(_shell_res_buf, off, "(shell: refused - command matches a [shell.deny] pattern: ");
-    if (_shell_deny_pat != 0) { off = _exec_append_cstr(_shell_res_buf, off, _shell_deny_pat); }
-    off = _exec_append_cstr(_shell_res_buf, off, ")");
+    # 0.37.0: bound EVERY append to the buffer — _shell_deny_pat is an operator [shell.deny] glob of any length,
+    # and with a tiny max_output (res_buf as small as 257 bytes) an unbounded copy overran it. _append_cstr_cap
+    # stops at cap-1, leaving room for the trailing NUL.
+    off = _append_cstr_cap(_shell_res_buf, off, cap, "(shell: refused - command matches a [shell.deny] pattern: ");
+    if (_shell_deny_pat != 0) { off = _append_cstr_cap(_shell_res_buf, off, cap, _shell_deny_pat); }
+    off = _append_cstr_cap(_shell_res_buf, off, cap, ")");
     store8(_shell_res_buf + off, 0);
     return _shell_res_buf;
 }
@@ -129,8 +147,7 @@ fn _shell_deny_msg() {
 # bytes is COMPLETE, not truncated. code >= 0 here (spawn-fail/unsupported handled earlier). Built
 # in _shell_res_buf (sized cap+256). Returns the NUL-terminated result.
 fn _shell_build_result(cap_total, code, timed, timeout_ms, truncated) {
-    var cap = config_shell_output_cap();
-    if (_shell_res_buf == 0) { _shell_res_buf = alloc(cap + 256); }
+    var cap = _shell_bufs_ensure();   # 0.37.0: (re)size both buffers to the live cap; returns it
     var off = 0;
     var i = 0;
     while (i < cap_total) {
@@ -207,8 +224,8 @@ fn shell_run_tool(args_cstr) {
     _shell_last_allowed = 1;
 
     # 3) run it (timed, captured).
-    var cap = config_shell_output_cap();
-    if (_shell_cap_buf == 0) { _shell_cap_buf = alloc(cap + 1); }
+    var cap = _shell_bufs_ensure();   # 0.37.0: _shell_cap_buf is now guaranteed sized to THIS cap (cap+1) — a
+                                      # /reload that raised max_output re-allocs here instead of overflowing the old block
     var status[16];                # two i64 slots: [0]=exit code, [1]=timed-out flag
     # Read up to cap+1 bytes into the cap+1 buffer: total > cap is the TRUE-overflow signal (output
     # exceeded the cap), so an output of exactly `cap` bytes is reported COMPLETE, not "truncated".

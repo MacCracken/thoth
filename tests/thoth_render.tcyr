@@ -3,6 +3,7 @@
 include "src/vendor/vyakarana.cyr"
 include "src/vendor/sankoch.cyr"
 include "src/vendor/sit-read.cyr"
+include "src/vendor/anuenue.cyr"    # HSV hue for /theme rainbow (0.38.0); before ui.cyr
 include "src/util.cyr"
 include "src/version.cyr"
 include "src/ui.cyr"

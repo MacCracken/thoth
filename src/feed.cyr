@@ -320,6 +320,7 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
     var i = 0;
     var wrote = 0;
     var sgr_open = 0;
+    var rainbow = ui_rainbow_active();                # 0.38.0: hoisted — constant for the whole row
     var emitted = 0;                                  # 0 = SKIP phase, 1 = past the boundary
     var winend = skip_cols + max_cols;
     while (i < src_len) {
@@ -388,6 +389,29 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
             } else {
                 var gl = _feed_glyph_len(src, i, src_len);
                 if (emitted == 1) {                              # PAINT: emit the glyph (always in-window here)
+                    # 0.38.0 rainbow: tint this glyph with the hue for its VISIBLE COLUMN. The phase is
+                    # derived from `cols` (not a running counter), which is what keeps a repaint
+                    # DETERMINISTIC — feed_repaint redraws the identical hues, so /theme rainbow
+                    # recolors scrollback instead of shimmering, and a soft-wrapped segment continues
+                    # the gradient (cols counts through the skip region). Whitespace takes no escape
+                    # (a tinted space paints nothing) but still occupies its column.
+                    #
+                    # COLOR IS BEST-EFFORT, TEXT IS NOT: the escape is written ONLY if the glyph still
+                    # fits after it. On an exhausted dst the glyph is emitted UNTINTED rather than
+                    # dropped — a row must never lose a byte of content to buy a color.
+                    if (rainbow == 1) {
+                        var b0 = load8(src + i);
+                        if ((b0 != 32) && (b0 != 9)) {
+                            var rs = ui_rainbow_sgr(cols * UI_RAINBOW_STEP);
+                            var rsl = strlen(rs);
+                            if ((wrote + rsl + gl) <= dst_cap) {
+                                var kr2 = 0;
+                                while (kr2 < rsl) { store8(dst + wrote + kr2, load8(rs + kr2)); kr2 = kr2 + 1; }
+                                wrote = wrote + rsl;
+                                sgr_open = 1;                    # the trailing ui_reset() closes it
+                            }
+                        }
+                    }
                     if ((wrote + gl) <= dst_cap) {
                         var k2 = 0;
                         while (k2 < gl) { store8(dst + wrote + k2, load8(src + i + k2)); k2 = k2 + 1; }

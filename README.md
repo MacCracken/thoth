@@ -8,44 +8,48 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.36.5 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
-> a memory seam that consumes mneme, a rich TUI by default, a non-interactive shell citizen, and a native desktop
-> GUI (`thoth gui`) with structural-markdown replies, colored diff cards, and a reasoning-effort control + persistent
-> per-turn thinking fold (pre-1.0).**
-> The interactive TUI/REPL loop is real and usable, and the full AGNOS spine is wired. A free-text turn drives a
-> **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to **hoosh**, the
-> backing model calls them, thoth executes each through daimon (speaking **bote**, the
-> vendored MCP protocol) under **t-ron** authorization (deny is final; no policy means a
-> fail-closed confirm), and loops results back until the model answers — streaming (SSE)
-> with parallel tool calls. The signature move: switch the backing model mid-session
-> through hoosh (`/model`, `/models`, or the Ctrl-P picker). The **persona** is sourced from
-> **avatara** and is itself switchable mid-session (`/persona`, `/personas`) with a
-> trait-derived **role** axis (`/role`). The **rich TUI is the default** on a capable
-> terminal (`--tier=simple|rich|auto` selects the mode): an amber palette, syntax-highlighted
-> diffs + fenced code, a soft-wrapping self-managed feed, a growing word-wrapping composer, a
-> file-tree pane (Ctrl-B), theme toggle (`/theme`), named **multi-conversation management** (`/new`,
-> `/switch`, `/rename`, `/delete`, `/search` across all conversations — persisted across restarts with each
-> reply's model, cited sources, and tool calls), `/save` export, and a
-> live spine-health + token/cost + git-branch status bar — degrading **closed** to a
-> byte-identical line-mode floor when piped/CI. A **native desktop GUI** (`thoth gui`, tier T3) renders the same
-> status strip, interactive composer, a word-wrapped conversation feed with **per-turn tool-call cards + colored
-> (red/green) diff cards**, and a **conversation sidebar** (`Ctrl+K` — switch between named conversations) — as thoth's OWN sovereign Cyrius Wayland window (draw-command IR → kashi CPU rasterizer
-> → wl_shm buffer → a puka-forked present shell — live-confirmed on a real compositor). thoth also **reads *and
-> writes*** the project it is launched in: default-on jailed `read_file`/`list_dir` tools + `@file` mentions
-> (`/allow` widens the jail); **opt-in jailed `edit`/`create_file` write tools** and a `shell` tool (each
-> t-ron-gated, off by default) so the model can change code, not just read it; a **memory seam** that consumes
-> **mneme** (the AGNOS memory/RAG domain) when daimon hosts it — `/remember` writes notes and each turn recalls
-> the relevant ones (semantic `mneme_search` injected into the turn, with the sources cited `[N]` and a
-> green/amber/red grounding indicator), and `/notes <query>` browses the vault directly — degrading to a local
-> `.thoth/memory/` flat file otherwise; a git producer (`/git`), and `web_fetch`/`web_search` via daimon+bote. As a **shell citizen**: a one-shot
-> / argv front-door (`thoth 'task'`, `git diff | thoth 'review'`), `--json` envelope output
-> for jq/CI, `-o`/`--out` file tee, shell completion (`--completion bash|zsh`), `[alias]`
-> prompt macros, and `/dry` request-body preview. Config lives in a discoverable `.thoth/`
-> home (`.thoth/config.cyml`; [ADR-0016](docs/adr/0016-thoth-home-dir-config-memory-discovery.md)).
-> Multi-target: Linux ships; aarch64 builds; macOS builds+runs; AGNOS/Windows staged on named
-> upstream floor gaps. SemVer `0.x` while the surface moves. See
-> [`docs/development/state.md`](docs/development/state.md) and
-> [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.
+> **Status: 0.38.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
+
+**The loop.** A free-text turn drives a **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to
+**hoosh**, the backing model calls them, thoth executes each through daimon (speaking **bote**, the vendored MCP
+protocol) under **t-ron** authorization — deny is final, and no policy means a fail-closed confirm — looping results
+back until the model answers. Streaming (SSE), with parallel tool calls.
+
+**The signature move.** Switch the backing model mid-session through hoosh (`/model`, `/models`, or the Ctrl-P
+picker). The **persona** is sourced from **avatara** and switches mid-session too (`/persona`), with a
+trait-derived **role** axis (`/role`).
+
+**Three surfaces, one view-model** — each degrading **closed**:
+
+- **Rich TUI** (the default on a capable terminal; `--tier=simple|rich|auto`) — amber palette, syntax-highlighted
+  diffs + fenced code, structural markdown incl. **tables**, a soft-wrapping feed, a word-wrapping composer, a
+  file-tree pane (Ctrl-B), feed search (Ctrl-F), themes (`/theme dark|light|rainbow`), a reasoning-effort control
+  + persistent per-turn thinking fold, and a live spine-health + token/cost + git-branch status bar.
+- **Native desktop GUI** (`thoth gui`) — thoth's OWN sovereign Cyrius Wayland window (draw-command IR → kashi CPU
+  rasterizer → wl_shm → a puka-forked present shell; live-confirmed on a real compositor): the same status strip,
+  structural-markdown replies, per-turn tool-call + colored diff cards, and a conversation sidebar (Ctrl+K).
+- **Shell citizen** — a one-shot/argv front door (`thoth 'task'`, `git diff | thoth 'review'`), `--json` for jq/CI,
+  `-o`/`--out` tee, completion (`--completion bash|zsh`), `[alias]` macros, `/dry` request preview — on a
+  byte-identical plain line-mode floor when piped/CI.
+
+**Reads and writes the project it's launched in.** Default-on jailed `read_file`/`list_dir` + `@file` mentions
+(`/allow` widens the jail); **opt-in** jailed `edit` / `create_file` / `shell` tools (each t-ron-gated, off by
+default) so the model can change code, not just read it; a git producer (`/git`); `web_fetch` / `web_search` via
+daimon + bote.
+
+**Keeps the thread.** Named **multi-conversation management** (`/new`, `/switch`, `/rename`, `/delete`, `/search`),
+persisted across restarts with each reply's model, cited sources, and tool calls; `/save` exports (markdown, JSON,
+plain); honest history-overflow accounting with optional summarize-on-overflow; and a **memory seam** consuming
+**mneme** (the AGNOS memory/RAG domain) when daimon hosts it — `/remember` writes notes, each turn recalls the
+relevant ones (semantic `mneme_search`, sources cited `[N]`, green/amber/red grounding), `/notes` browses the vault
+— degrading to a local `.thoth/memory/` file otherwise.
+
+Config lives in a discoverable `.thoth/` home (`.thoth/config.cyml`;
+[ADR-0016](docs/adr/0016-thoth-home-dir-config-memory-discovery.md)). Multi-target: Linux ships; aarch64 builds;
+macOS builds + runs; AGNOS/Windows staged on named upstream floor gaps. See
+[`docs/development/state.md`](docs/development/state.md) and
+[`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.
 
 ## What thoth is
 

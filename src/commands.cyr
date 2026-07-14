@@ -206,7 +206,7 @@ fn cmd_help() {
     _help_line("  /copy", "              copy the last reply to the clipboard (OSC 52, best-effort)");
     _help_line("  /find [text]", "       search the feed scrollback (TUI: ⌃F; n/N jump between matches)");
     _help_line("  /history", "           list submitted inputs (TUI: Up/Down recalls; [history].file persists)");
-    _help_line("  /theme [dark|light]", " switch the color theme (⌃T toggles in the TUI)");
+    _help_line("  /theme [dark|light|rainbow]", " switch the color theme (⌃T toggles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
     _help_line("  /bookmark", "          save the last reply into mneme as a note (t-ron-gated)");
@@ -1763,26 +1763,31 @@ fn cmd_find(line) {
 # 0.18.0 the feed ring stores role MARKERS not baked SGR, so the post-dispatch feed_repaint RE-EXPANDS
 # existing scrollback with the new theme too — the 0.10.0 "existing lines keep baked colors" limitation
 # is gone (0.18.1). Residual: diff-row background TINTS are stored verbatim, so they don't recolor — a
-# documented follow-up). rainbow is announced as not-yet-available (needs the anuenue lib), never faked.
+# documented follow-up). rainbow (0.38.0) is live over the vendored anuenue hue: a per-grapheme HSV
+# cycle rather than a role table, so it needs TRUECOLOR. When it can't draw we still switch (the
+# reported theme stays honest) and say WHY it isn't cycling — never a silent no-op that looks broken.
 fn cmd_theme(line) {
     var arg = arg_after(line);
     if (arg == 0) {
         emit("theme: "); ui_emit(ROLE_ACCENT, ui_theme_name()); oprintln("");
-        oprintln("  /theme dark · /theme light   (rainbow: not yet — needs the anuenue lib)");
+        oprintln("  /theme dark · /theme light · /theme rainbow   (rainbow: per-grapheme HSV; needs truecolor)");
         return 0;
     }
     var t = ui_theme_from_name(arg);
     if (t < 0) {
-        if (streq(arg, "rainbow") == 1) {
-            oprintln("theme 'rainbow' isn't available yet — it needs the anuenue lib vendored");
-            oprintln("(it's a per-grapheme HSV cycle, not a color table). dark + light are live.");
-            return 0;
-        }
-        emit("unknown theme '"); emit(arg); oprintln("' — try: dark, light");
+        emit("unknown theme '"); emit(arg); oprintln("' — try: dark, light, rainbow");
         return 0;
     }
     ui_set_theme(t);
     emit("theme -> "); ui_emit(ROLE_ACCENT, ui_theme_name()); oprintln("");
+    if (t == THEME_RAINBOW) {
+        if (ui_rainbow_active() == 0) {
+            if (ui_tier() != PT_PLAIN) {
+                oprintln("  (not cycling: rainbow needs a truecolor terminal — 1530 hues don't survive a 256/16");
+                oprintln("   quantize. Set COLORTERM=truecolor if your terminal supports it; chrome stays readable.)");
+            }
+        }
+    }
     return 0;
 }
 

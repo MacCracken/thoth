@@ -6,6 +6,7 @@ include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
 include "src/vendor/darshana.cyr"
+include "src/vendor/anuenue.cyr"    # HSV hue for /theme rainbow (0.38.0); before ui.cyr
 include "src/vendor/sankoch.cyr"
 include "src/vendor/sit-read.cyr"
 include "src/util.cyr"

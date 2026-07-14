@@ -2055,7 +2055,10 @@ fn tui_loop() {
                 tty_clear();           # the feed narrows/widens; full repaint
                 tui_relayout();
             } elif (key == KEY_TOGGLE_THEME) {
-                ui_set_theme(1 - ui_theme());   # dark <-> light; rebuilds the SGR table
+                # CYCLE the theme axis (0.38.0: three themes, so the old `1 - ui_theme()` flip is wrong —
+                # from rainbow it yields -1, an invalid theme the next press turns straight back into
+                # rainbow, stranding the toggle). Modulo UI_THEME_COUNT: dark -> light -> rainbow -> dark.
+                ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);   # rebuilds the SGR table
                 tty_clear();           # re-color the whole frame
                 tui_relayout();
             } elif (key == KEY_REPROBE) {
