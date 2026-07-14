@@ -2036,3 +2036,22 @@ fn test_recap() {
     session_reset(); session_history_clear();
     return 0;
 }
+
+# recap vs the destructive cap (0.36.4, live-caught): the cap drops from the FRONT, shifting every index down — so
+# the recap's index-based coverage must shrink with it, else it claims to cover messages it never summarized.
+fn test_recap_drop_shift() {
+    test_group("recap coverage shrinks with destructive drops (0.36.4)");
+    session_reset(); session_history_clear();
+    var i = 0;
+    while (i < SESS_HIST_MAX) { session_history_append("user", "m", 1); i = i + 1; }
+    session_set_recap("covers the four oldest", 4);
+    assert_eq(session_recap_covers(), 4, "recap covers the 4 oldest");
+    session_history_append("user", "over", 4);          # drops 1 from the front -> every index shifts down by 1
+    assert_eq(session_history_dropped(), 1, "one message was destroyed");
+    assert_eq(session_recap_covers(), 3, "coverage shrank with the shift (still a SUPERSET of the skipped range)");
+    session_history_append("user", "over2", 5);
+    assert_eq(session_recap_covers(), 2, "and again");
+    assert(session_recap() != 0, "the recap TEXT survives — it still describes what the cap destroyed");
+    session_reset(); session_history_clear();
+    return 0;
+}

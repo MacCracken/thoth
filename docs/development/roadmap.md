@@ -175,9 +175,11 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   fenced-code path stays bespoke for now). **.3 shipped** — line/TUI **table rendering**: `mdhl` emits an aligned monospace grid via the model's
   parser, riding the 0.18.3 live-card trick (a delimiter under a matching header drops the header's sealed feed row
   and re-emits the table as a grid) — so tables now render on EVERY surface, with the line/`PT_PLAIN` floor keeping
-  raw-pipe bytes. Remaining: **.4** **summarize-on-overflow**
-  — replace the hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so
-  long sessions keep fidelity; **.5** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh
+  raw-pipe bytes. **.4 shipped** — **history overflow made honest + optionally summarized**: `/state` now distinguishes the
+  framer's harmless skip from the cap's REAL destruction (which was silent), and `[hoosh].summarize` (opt-in) recaps
+  the skipped range via a cached, incrementally-folded side-call so long sessions keep fidelity. (The roadmap's
+  premise was off: the byte budget bites first and is non-destructive; mneme was rejected — recall keys on the
+  prompt, which carries no signal for "keep going with that".) Remaining: **.5** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh
   exposes it.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will grow **voice

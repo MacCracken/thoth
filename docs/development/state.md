@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.36.4** — **History overflow: honest, and optionally summarized** (2026-07-13). thoth had TWO overflows with
+opposite semantics and reported only the harmless one: the framer's byte budget merely SKIPS messages (still in the
+store/feed/`/save`) yet said "N oldest **evicted**"; `SESS_HIST_MAX` **permanently frees** message #41 and said
+nothing. Now `conv_dropped` counts real losses and `/state` splits all three: `N oldest not sent · N recapped ·
+N dropped from the record`. **`[hoosh].summarize`** (default off — it spends an extra call) adds a cheap, silent,
+isolated side-call that recaps the skipped range into a system message, cached per conversation and folded
+INCREMENTALLY (previous recap + only newly-skipped messages = one small bounded call per advance); wired into both
+framers; usage accounted; any failure degrades to an honest gap, never a faked recap. Also fixed a latent OOB
+(`conv_load_add`, the resume path, hadn't grown with the conv struct). **Live-verified** (26-turn overflow:
+`35K / 32K · 3 not sent · 3 recapped · 2 dropped`), which caught a real bug — the cap drops from the FRONT and
+shifts indices, so recap coverage went stale and failed its own guard; coverage now shrinks with drops, making the
+recap a SUPERSET that still describes what the cap destroyed. Suite green (247 + 1474 + 180 + 3). Pin **6.4.62**.
+**NEXT (0.36.x)**: `.5` export formats.
+
 **0.36.3** — **Tables in the terminal: mdhl renders an aligned grid** (2026-07-13). Completes the tables story (GUI
 got them in `.1`): header cells `ROLE_ACCENT` above a faint rule, body cells padded to each column's widest value +
 aligned per the delimiter; widths via `feed_visible_cols` (SGR/wide-glyph aware). Detection reuses the shared model

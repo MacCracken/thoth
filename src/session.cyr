@@ -106,7 +106,17 @@ fn conv_touch(i) { store64(_conv_at(i) + 24, clock_epoch_secs()); return 0; }
 # 0.36.4: conv_dropped — messages this conversation LOST to the SESS_HIST_MAX cap (destructive, unrecoverable).
 # Distinct from the framer's byte-budget skip (hoosh_ctx_evicted), which loses nothing.
 fn conv_dropped(i) { return load64(_conv_at(i) + 40); }
-fn _conv_note_dropped(i) { store64(_conv_at(i) + 40, load64(_conv_at(i) + 40) + 1); return 0; }
+# _conv_note_dropped: one message was destroyed by the cap. The recap counts messages by INDEX from the front, and
+# a drop SHIFTS every index down by one — so its coverage must shrink with them, or it would claim to cover messages
+# that are no longer the ones it summarized (live-caught: "4 recapped" against a 3-message skip, which then failed
+# the covers==start guard and re-derived, wasting the call). Shrinking keeps the recap a SUPERSET of the skipped
+# range — it still describes the messages the cap destroyed, which is exactly the fidelity we want.
+fn _conv_note_dropped(i) {
+    store64(_conv_at(i) + 40, load64(_conv_at(i) + 40) + 1);
+    var cov = load64(_conv_at(i) + 56);
+    if (cov > 0) { store64(_conv_at(i) + 56, cov - 1); }
+    return 0;
+}
 # session_history_dropped: the ACTIVE conversation's destructive-drop count (0 = the record is complete).
 fn session_history_dropped() { _conv_ensure(); return conv_dropped(_conv_active); }
 

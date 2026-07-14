@@ -2,6 +2,42 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.4] - 2026-07-13
+
+**History overflow made honest — and optionally summarized instead of silently forgotten.**
+
+### Added
+- **`[hoosh].summarize` (default off) — summarize-on-overflow.** When the request framer can no longer fit the
+  oldest messages, a **cheap, silent side-call** recaps them into a short system message so the model keeps
+  continuity instead of seeing a gap. The recap is cached per conversation and folded **incrementally** (the span is
+  the previous recap plus only the newly-skipped messages), so a long session costs one small bounded call per
+  advance — not a re-read of the whole history, and not a call per turn. Wired into **both** framers (the hoosh path
+  and the agentic loop, which budget against different caps). Default OFF: it spends an extra completion, and thoth
+  does not spend the user's tokens uninvited. Its usage **is** accounted — the user really paid for it.
+  The side-call is deliberately isolated: its **own** request buffer (`_hoosh_req` holds the turn's request), and it
+  never touches `_hoosh_acc`/`_reason_acc` (which would splice recap text into the reply), history, mdhl, or intr.
+  Any failure degrades to today's behaviour — an honest gap, never a faked recap.
+
+### Fixed
+- **The destructive history cap is no longer silent.** thoth has two overflows with opposite semantics, and only the
+  harmless one was reported. The framer's byte budget merely *skips* messages (they stay in the store, the feed,
+  `/save`, and return if the tail shrinks) — yet it was labelled "N oldest **evicted**", implying loss. Meanwhile
+  `SESS_HIST_MAX` **permanently frees** the oldest message at #41 — gone from the feed, `/save`, everything — and
+  said **nothing**. Now `conv_dropped` counts the real losses and `/state` distinguishes all three states:
+  `N oldest not sent · N recapped · N dropped from the record`.
+- Fixed a latent OOB: `conv_load_add` (the **resume** path) was a second conversation allocator that hadn't grown
+  with the struct, so a resumed conversation would have read the new fields past its allocation.
+
+### Notes
+- Live-verified against a real gateway with an overflowing 26-turn session:
+  `40 messages · 35K / 32K budget · 3 oldest not sent · 3 recapped · 2 dropped from the record`. That run **caught a
+  real bug**: the destructive cap drops from the FRONT, shifting every index down, so the recap's index-based
+  coverage went stale (`4 recapped` against a 3-message skip) and failed its own `covers == start` guard — wasting
+  the call. Coverage now shrinks with the drops, which also makes the recap a **superset** of the skipped range: it
+  still describes the messages the cap destroyed. Suite green (247 gui + 1474 core + 180 render + 3).
+
+**NEXT (0.36.x)**: `.5` export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh exposes it.
+
 ## [0.36.3] - 2026-07-13
 
 **Tables in the terminal — the TUI renders pipe tables as an aligned grid (tables now render on every surface).**
