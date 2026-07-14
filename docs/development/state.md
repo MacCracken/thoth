@@ -7,6 +7,18 @@
 
 ## Version
 
+**0.36.2** — **One markdown classifier: mdhl driven by the shared model** (2026-07-13). mdhl's prose + inline
+classification (`_mdhl_inline_line`/`_mdhl_emit_inline`) now drives from `src/mdmodel.cyr` (`md_classify` +
+`md_inline_scan` runs) instead of its own predicates — line/TUI and GUI share ONE classifier; the six duplicated
+functions (`_mdhl_heading`/`_blockquote`/`_list_emit`/`_find_byte`/`_find_bold`/`_inline_scan`) are gone.
+**Byte-identical** for line/TUI (verified by `test_mdhl_inline` strip-coverage + exact bold-`ESC[1m` count); the
+fenced-code path + the `PT_PLAIN` verbatim floor are untouched. **Adversarially reviewed** — caught + fixed a real
+byte-drop I introduced: the shared `md_inline_scan` caps runs at `MD_RUN_CAP=512` (the GUI is fine — it colors
+per-byte via `md_role_at`), but `_mdhl_emit_inline` iterated only recorded runs, dropping the tail on a >512-span
+line; now it emits any uncovered tail verbatim (`test_mdmodel_runcap` guards it). Suite green (247 + 1451 + 164 + 3).
+Pin **6.4.62**. **NEXT (0.36.x)**: `.3` line/TUI table rendering (mdhl buffers + emits an aligned grid via the model
+— the `.1`-deferred piece); `.4` summarize-on-overflow.
+
 **0.36.1** — **Pipe tables in the GUI** (2026-07-13). GitHub-style pipe tables (header + `|---|:--:|--:|` delimiter +
 body) render as an aligned monospace grid: header cells `ROLE_ACCENT` under a faint rule, body `ROLE_MUTED`, columns
 padded to the widest cell + aligned per the delimiter. The shared model (`src/mdmodel.cyr`) gained the parsing

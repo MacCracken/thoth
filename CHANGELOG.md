@@ -2,6 +2,32 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.2] - 2026-07-13
+
+**One markdown classifier — `mdhl` (line/TUI) now drives from the shared model, removing the duplicated predicates.**
+
+### Changed
+- **`mdhl`'s prose + inline markdown classification now drives from `src/mdmodel.cyr`** (the shared model), instead of
+  its own hand-rolled predicates. `_mdhl_inline_line` calls `md_classify` (heading/blockquote/list/para) and
+  `_mdhl_emit_inline` iterates `md_inline_scan`'s runs — so the line/TUI feed and the GUI feed share **one
+  classifier**, eliminating the six duplicated functions (`_mdhl_heading`, `_mdhl_blockquote`, `_mdhl_list_emit`,
+  `_mdhl_find_byte`, `_mdhl_find_bold`, `_mdhl_inline_scan`) that were kept in lock-step by hand. **Byte-identical**
+  for line/TUI (headings keep their `#`s in `ROLE_ACCENT`, blockquotes `ROLE_MUTED`, list markers `ROLE_ACCENT` +
+  inline-scanned bodies, `` `code` `` `ROLE_BLUE`, `**bold**` `ESC[1m`) — verified by the existing `test_mdhl_inline`
+  (visible-text strip coverage + exact bold-`ESC[1m`-count). The fenced-code path (fence scan + grammar + block
+  buffer + vyakarana highlight) is unchanged; the `PT_PLAIN` floor still passes bytes through verbatim.
+- **Adversarially reviewed for byte-equivalence — which caught + fixed a real byte-drop I introduced.** The shared
+  `md_inline_scan` caps its run list at `MD_RUN_CAP=512`; the GUI leaf is unaffected (it colors per-byte via
+  `md_role_at`, so it still draws every byte), but `_mdhl_emit_inline` iterated only the *recorded* runs — so a
+  pathological line with 512+ inline spans dropped the overflow tail (violating mdhl's never-drop-a-byte invariant /
+  ADR-0009). Fixed: `_mdhl_emit_inline` now emits any uncovered tail verbatim (styling of the overflow tail degrades
+  to plain; the visible text stays byte-complete). New `test_mdmodel_runcap` guards the triggering coverage gap.
+- Suite green (247 gui + 1451 core + 164 render + 3). Net code removed (six predicates → one shared model + a thin
+  emitter).
+
+**NEXT (0.36.x)**: `.3` line/TUI **table rendering** (`mdhl` buffers table rows + emits an aligned monospace grid via
+the model's parser — the piece `.1` deferred); `.4` summarize-on-overflow; `.5` export formats.
+
 ## [0.36.1] - 2026-07-13
 
 **Pipe tables in the GUI — markdown tables render as an aligned grid.**

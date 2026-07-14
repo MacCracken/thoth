@@ -214,117 +214,52 @@ fn _mdhl_span(bold, role, ptr, n) {
     return 0;
 }
 
-# _mdhl_heading: 1 if the line is an ATX heading — up to 3 leading spaces, then 1..6 '#', then a space or
-# EOL (CommonMark-ish). The whole line is styled ROLE_ACCENT (the #s kept). "###x" (no space) is NOT one.
-fn _mdhl_heading() {
-    var i = 0;
-    var sp = 0;
-    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 32) && (sp < 3)) { i = i + 1; sp = sp + 1; }
-    var h = 0;
-    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 35) && (h < 6)) { i = i + 1; h = h + 1; }
-    if (h == 0) { return 0; }
-    if (i >= _mdhl_line_len) { return 1; }                # "###" alone
-    if (load8(_mdhl_line + i) == 32) { return 1; }        # "### text"
+# _mdhl_emit_inline: style the inline spans of ptr[0..len) — driving from the SHARED model (0.36.2). md_inline_scan
+# yields contiguous {start,len,role} runs (code has precedence, its interior isn't re-scanned, unmatched delimiters
+# latch off — the same LINEAR contract the old _mdhl_inline_scan had); each run is emitted plain (verbatim), code
+# (ROLE_BLUE), or bold (ESC[1m). Byte-identical to the pre-0.36.2 hand-rolled scan (verified by the mdhl tests).
+fn _mdhl_emit_inline(ptr, len) {
+    md_inline_scan(ptr, len);
+    var n = md_run_count();
+    var k = 0;
+    var covered = 0;                                      # end of the last recorded run
+    while (k < n) {
+        var rs = md_run_start(k);
+        var rl = md_run_len(k);
+        var role = md_run_role(k);
+        if (role == MDI_CODE) { _mdhl_span(0, ROLE_BLUE, ptr + rs, rl); }
+        elif (role == MDI_BOLD) { _mdhl_span(1, 0, ptr + rs, rl); }
+        else { emit_n(ptr + rs, rl); }                    # MDI_PLAIN -> verbatim
+        covered = rs + rl;
+        k = k + 1;
+    }
+    # If md_inline_scan hit its MD_RUN_CAP (runs are recorded left-to-right, so the DROPPED runs are the tail),
+    # emit the uncovered tail verbatim — the highlighter must NEVER drop a byte (ADR-0009). Styling of the overflow
+    # tail degrades to plain (only on a pathological >512-span line); the visible text stays byte-complete.
+    if (covered < len) { emit_n(ptr + covered, len - covered); }
     return 0;
 }
 
-# _mdhl_blockquote: 1 if the line is a blockquote — up to 3 leading spaces then '>'.
-fn _mdhl_blockquote() {
-    var i = 0;
-    var sp = 0;
-    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 32) && (sp < 3)) { i = i + 1; sp = sp + 1; }
-    if (i >= _mdhl_line_len) { return 0; }
-    if (load8(_mdhl_line + i) == 62) { return 1; }        # '>'
-    return 0;
-}
-
-# _mdhl_list_emit: if the line starts a list item (up to 3 spaces, then '-'/'*'/'+' + space, OR digits +
-# '.'/')' + space), EMIT the leading indent verbatim + the marker styled ROLE_ACCENT, and return the offset
-# after the marker (where inline scanning continues). Returns 0 when the line is NOT a list item (nothing
-# emitted). The marker excludes the following space (the inline scan emits it as plain).
-fn _mdhl_list_emit() {
-    var i = 0;
-    var sp = 0;
-    while ((i < _mdhl_line_len) && (load8(_mdhl_line + i) == 32) && (sp < 3)) { i = i + 1; sp = sp + 1; }
-    if (i >= _mdhl_line_len) { return 0; }
-    var ms = i;
-    var b = load8(_mdhl_line + i);
-    var me = 0;
-    if ((b == 45) || (b == 42) || (b == 43)) {            # '-' '*' '+'
-        if (((i + 1) < _mdhl_line_len) && (load8(_mdhl_line + i + 1) == 32)) { me = i + 1; }
-    } elif ((b >= 48) && (b <= 57)) {                     # digit -> ordered "N." / "N)"
-        var j = i;
-        while ((j < _mdhl_line_len) && (load8(_mdhl_line + j) >= 48) && (load8(_mdhl_line + j) <= 57)) { j = j + 1; }
-        if ((j < _mdhl_line_len) && ((load8(_mdhl_line + j) == 46) || (load8(_mdhl_line + j) == 41))) {
-            if (((j + 1) < _mdhl_line_len) && (load8(_mdhl_line + j + 1) == 32)) { me = j + 1; }
-        }
-    }
-    if (me == 0) { return 0; }
-    if (ms > 0) { emit_n(_mdhl_line, ms); }               # leading indent, plain
-    _mdhl_span(0, ROLE_ACCENT, _mdhl_line + ms, me - ms); # the marker, styled
-    return me;
-}
-
-# _mdhl_find_byte / _mdhl_find_bold: next position of byte `b` / of a '**' pair at >= from, or -1.
-fn _mdhl_find_byte(from, b) {
-    var i = from;
-    while (i < _mdhl_line_len) { if (load8(_mdhl_line + i) == b) { return i; } i = i + 1; }
-    return 0 - 1;
-}
-fn _mdhl_find_bold(from) {
-    var i = from;
-    while ((i + 1) < _mdhl_line_len) {
-        if ((load8(_mdhl_line + i) == 42) && (load8(_mdhl_line + i + 1) == 42)) { return i; }
-        i = i + 1;
-    }
-    return 0 - 1;
-}
-
-# _mdhl_inline_scan: scan _mdhl_line[start.._mdhl_line_len) left-to-right, styling inline-code (`...`,
-# ROLE_BLUE) and bold (**...**, ESC[1m) spans and emitting the rest verbatim. Inline code has precedence and
-# its interior is NOT re-scanned for bold. An UNMATCHED delimiter is emitted plain. Once a forward
-# close-scan fails, that delimiter kind is LATCHED off (no closer can exist further right) — so the scan is
-# LINEAR, not O(n^2), bounded anyway by MDHL_LINE_CAP.
-fn _mdhl_inline_scan(start) {
-    var i = start;
-    var run = start;
-    var no_code = 0;
-    var no_bold = 0;
-    while (i < _mdhl_line_len) {
-        var b = load8(_mdhl_line + i);
-        var handled = 0;
-        if ((b == 96) && (no_code == 0)) {                # '`' inline code
-            var j = _mdhl_find_byte(i + 1, 96);
-            if (j >= 0) {
-                if (i > run) { emit_n(_mdhl_line + run, i - run); }
-                _mdhl_span(0, ROLE_BLUE, _mdhl_line + i, (j + 1) - i);
-                i = j + 1; run = i; handled = 1;
-            } else { no_code = 1; }
-        }
-        if ((handled == 0) && (no_bold == 0) && (b == 42) && ((i + 1) < _mdhl_line_len) && (load8(_mdhl_line + i + 1) == 42)) {   # '**' bold
-            var j2 = _mdhl_find_bold(i + 2);
-            if (j2 >= 0) {
-                if (i > run) { emit_n(_mdhl_line + run, i - run); }
-                _mdhl_span(1, 0, _mdhl_line + i, (j2 + 2) - i);
-                i = j2 + 2; run = i; handled = 1;
-            } else { no_bold = 1; }
-        }
-        if (handled == 0) { i = i + 1; }                  # plain byte -> extend the run
-    }
-    if (i > run) { emit_n(_mdhl_line + run, i - run); }    # flush the trailing plain run
-    return 0;
-}
-
-# _mdhl_inline_line: the prose-line entry (replaces _mdhl_put_line for a non-fence, non-continuation line).
-# Heading / blockquote style the whole line one color; else a list marker (if any) is styled and the
-# remainder inline-scanned. Preserves the optional trailing '\n'.
+# _mdhl_inline_line: the prose-line entry (replaces _mdhl_put_line for a non-fence, non-continuation line). Now
+# driven by the shared model's md_classify (0.36.2 — one classifier for line/TUI + GUI): heading / blockquote style
+# the whole line one color (the #s / '>' kept, as before); a list styles its indent plain + marker ROLE_ACCENT and
+# inline-scans the remainder from just after the marker; anything else (para / blank) is inline-scanned whole.
+# Preserves the optional trailing '\n'. Output is byte-identical to the pre-migration path.
 fn _mdhl_inline_line(has_nl) {
     if ((ui_tier() == PT_PLAIN) || (_mdhl_line == 0)) { _mdhl_put_line(has_nl); return 0; }
     if (_mdhl_line_len == 0) { if (has_nl == 1) { emit("\n"); } return 0; }
-    if (_mdhl_heading() == 1) { _mdhl_span(0, ROLE_ACCENT, _mdhl_line, _mdhl_line_len); if (has_nl == 1) { emit("\n"); } return 0; }
-    if (_mdhl_blockquote() == 1) { _mdhl_span(0, ROLE_MUTED, _mdhl_line, _mdhl_line_len); if (has_nl == 1) { emit("\n"); } return 0; }
-    var start = _mdhl_list_emit();
-    _mdhl_inline_scan(start);
+    var k = md_classify(_mdhl_line, _mdhl_line_len);
+    if (k == MDB_HEADING) { _mdhl_span(0, ROLE_ACCENT, _mdhl_line, _mdhl_line_len); if (has_nl == 1) { emit("\n"); } return 0; }
+    if (k == MDB_QUOTE) { _mdhl_span(0, ROLE_MUTED, _mdhl_line, _mdhl_line_len); if (has_nl == 1) { emit("\n"); } return 0; }
+    if (k == MDB_LIST) {
+        var ms = md_marker_start();
+        var me = ms + md_marker_len();                    # offset just after the marker (the following space is inline-scanned plain)
+        if (ms > 0) { emit_n(_mdhl_line, ms); }           # leading indent, plain
+        _mdhl_span(0, ROLE_ACCENT, _mdhl_line + ms, md_marker_len());   # the marker, styled
+        _mdhl_emit_inline(_mdhl_line + me, _mdhl_line_len - me);
+    } else {
+        _mdhl_emit_inline(_mdhl_line, _mdhl_line_len);    # MDB_PARA / MDB_BLANK -> inline-scan the whole line
+    }
     if (has_nl == 1) { emit("\n"); }
     return 0;
 }

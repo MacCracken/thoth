@@ -495,3 +495,20 @@ fn test_mdmodel_table() {
     assert_eq(md_cell_align(d, strlen(d), 2), 2, "col 2 '--:' -> right");
     return 0;
 }
+
+# inline run cap (mdmodel.cyr, 0.36.2): md_inline_scan caps at MD_RUN_CAP runs. Past the cap the tail is unrecorded
+# — the GUI still draws it (per-byte md_role_at fallback), and _mdhl_emit_inline must emit it verbatim (never drop a
+# byte, ADR-0009). This guards the triggering condition (a real coverage gap) that motivates that tail-emit.
+fn test_mdmodel_runcap() {
+    test_group("inline run cap (mdmodel.cyr, 0.36.2)");
+    var buf = alloc(2048);
+    var p = 0;
+    var s = 0;
+    while (s < 520) { store8(buf + p, 96); store8(buf + p + 1, 96); p = p + 2; s = s + 1; }   # 520 '``' code spans
+    md_inline_scan(buf, p);
+    assert_eq(md_run_count(), MD_RUN_CAP, "run list caps at MD_RUN_CAP (512)");
+    var last = md_run_start(MD_RUN_CAP - 1) + md_run_len(MD_RUN_CAP - 1);
+    assert(last < p, "capped run coverage falls short of the line -> an uncovered tail exists");
+    assert(md_role_at(p - 1) == MDI_PLAIN, "a byte past the last recorded run reads back PLAIN (the GUI fallback)");
+    return 0;
+}
