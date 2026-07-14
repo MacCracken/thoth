@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.35.0** — **GUI mid-turn pump: the desktop GUI streams the reply LIVE** (2026-07-13; opens the 0.35.x arc). A GUI
+turn runs synchronously (`cmd_task` under `OUT_NULL`), blocking the present loop — so the window froze on a static
+"working" frame for the whole turn. Now the model's output appears word-by-word as it streams. The 0.34.3 stop-poll
+hook (`_gstop_poll`, `src/gui/gpresent.cyr`), called on the interrupt seam at each SSE frame / round / tool-call
+boundary (both streaming paths), became the **pump**: (a) drains the Wayland fd for the stop key (Esc still aborts),
+then (b) **throttled** (~30fps via the TUI's tested `_stream_should_paint`) + **scanout-race-gated** (`gwl_win_ready`)
+repaints the window. `gfeed` renders the growing partial straight from `_hoosh_acc` (`hoosh_last_reply()`, populated
+on both SSE paths even under `OUT_NULL`) as a provisional agent bubble (same layout as a landed reply → seamless
+handoff; falls back to the "working" mark before content this round / between tool rounds). **Zero producer change**
+(rides the existing per-frame interrupt-seam checkpoint; `agent.cyr`/`hoosh.cyr` untouched). Headless-tested (live
+partial render + working-mark fallback + measure/draw parity). Live animation compositor-gated (user-verified).
+Residual: each repaint rebuilds the frame command list on the no-rewind bump heap (throttle-bounded per turn; a
+reused command-buffer pool is the future optimization). Pin **6.4.62**. **NEXT (0.35.x)**: `.1` live tool-call cards
+during the round; `.2` a thinking/reasoning fold (`thinking_delta`).
+
 **0.34.4** — **Per-message remember + feedback** (2026-07-13; **closes the 0.34.x arc**). **`/bookmark`** saves the
 last assistant reply into mneme as a note (via the `/remember` `memory_append` path — `mneme_create_note` when bound,
 else local; `thoth_remember`-gated; new `session_last_assistant_content`). **`/thumbs up`/`down`** rate the last

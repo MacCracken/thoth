@@ -71,27 +71,45 @@ fn _gpresent_drain_keys(win) {
     return action;
 }
 
-# --- GUI stop affordance (0.34.3) — a stop key aborts a turn mid-flight -----------------------------------------
-# A GUI turn runs SYNCHRONOUSLY (cmd_task under OUT_NULL, gpresent below), so the present loop is blocked for the
-# turn's duration and keys pressed during it queue unread on the Wayland fd. This hook — registered as the
-# front-end-agnostic interrupt seam's poll (intr_check_hook_set, 0.34.1) and called by agent_turn's intr_check() at
-# each stream frame / round / tool-call boundary — NON-BLOCKINGLY drains the Wayland fd and raises the interrupt
-# flag on the STOP key (Esc, evdev 1), so Esc cancels the turn. This is the minimal stop-poll subset of 0.35.0's
-# full mid-turn pump: it services input only (no repaint), and any non-Esc keys pressed mid-turn are drained and
-# discarded, matching the TUI's "mid-turn keystrokes don't leak into the composer" rule.
+# --- GUI mid-turn pump (0.35.0; grew out of the 0.34.3 stop-poll) -----------------------------------------------
+# A GUI turn runs SYNCHRONOUSLY (cmd_task under OUT_NULL, gpresent below), so the present loop is BLOCKED for the
+# turn's duration — the window would otherwise freeze on the static "working" frame while the reply streams. This
+# hook — registered as the front-end-agnostic interrupt seam's poll (intr_check_hook_set, 0.34.1) and called by
+# agent_turn's intr_check() at each stream frame / round / tool-call boundary (both SSE paths) — is the PUMP: on each
+# call it (a) non-blockingly drains the Wayland fd, raising the interrupt flag on the STOP key (Esc, evdev 1) so Esc
+# cancels the turn, then (b) THROTTLED (~30fps, reusing the TUI's tested _stream_should_paint) and READY-gated
+# (gwl_win_ready — the scanout race the idle loop also guards), repaints the window so the growing streaming partial
+# (gfeed reads _hoosh_acc directly) shows LIVE. Non-Esc keys are drained + discarded (the TUI "mid-turn keystrokes
+# don't leak" rule). Single-buffer + single-threaded: this runs on the SSE cb's own stack, never concurrent with the
+# gui_run loop. Residuals (cosmetic, accepted): each repaint rebuilds the frame's command list on the no-rewind bump
+# heap (bounded by the ~30fps throttle for a turn; a reused command-buffer pool is the future optimization for very
+# long streams); and because intr_check() fires at the TOP of the SSE cb (before that frame's delta is appended),
+# the live partial lags the stream by ~one delta — the final delta lands with the post-turn history paint.
 var _gstop_win = 0;
+var _gpump_last_ms = 0;    # the pump's own last-paint clock (feed_stream_tick's is dead under OUT_NULL)
 fn gstop_set_win(w) { _gstop_win = w; return 0; }
+fn gpump_reset() { _gpump_last_ms = 0; return 0; }   # reset before a turn so the first partial paints instantly
 fn _gstop_poll() {
     if (_gstop_win == 0) { return 0; }
+    # (a) stop-poll: drain input for the STOP key, and keep the wl fd serviced so gwl_win_ready stays current
     var pfd[8];
-    if (_gpresent_poll_fd(&pfd, gwl_win_fd(_gstop_win), 0) <= 0) { return 0; }   # non-blocking peek; nothing queued
-    var ev = gwl_win_poll_events(_gstop_win);
-    if ((ev & GWL_WIN_EV_KEY) == 0) { return 0; }
-    var rec[24];
-    while (gwl_win_next_key(_gstop_win, &rec) == 1) {
-        if (load64(&rec + 8) == 1) {                  # value 1 = press (not autorepeat/release)
-            if (load64(&rec) == 1) { intr_signal(); } # evdev keycode 1 = Esc = STOP -> raise the interrupt flag
+    if (_gpresent_poll_fd(&pfd, gwl_win_fd(_gstop_win), 0) > 0) {   # non-blocking peek; nothing queued -> skip
+        var ev = gwl_win_poll_events(_gstop_win);
+        if ((ev & GWL_WIN_EV_KEY) != 0) {
+            var rec[24];
+            while (gwl_win_next_key(_gstop_win, &rec) == 1) {
+                if (load64(&rec + 8) == 1) {                  # value 1 = press (not autorepeat/release)
+                    if (load64(&rec) == 1) { intr_signal(); } # evdev keycode 1 = Esc = STOP -> raise the interrupt flag
+                }
+            }
         }
+    }
+    # (b) mid-turn repaint: throttled + ready-gated, so the live partial reply grows on screen during the turn
+    var now = clock_now_ms();
+    if (_stream_should_paint(now, _gpump_last_ms) == 1) {
+        _gpump_last_ms = now;
+        _gui_dirty = 1;                                       # the partial grew -> rebuild the frame's command list
+        if (gwl_win_ready(_gstop_win) == 1) { _gpresent_frame(_gstop_win); }
     }
     return 0;
 }
@@ -133,8 +151,9 @@ fn gui_run() {
                                     gcomp_reset();                        # clear the composer
                                     _gui_dirty = 1;
                                     if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }   # show the working state if the compositor is ready
+                                    gpump_reset();                        # 0.35.0: first streaming partial paints instantly
                                     out_mode_set(OUT_NULL);               # suppress the turn's progress output (no leak to the launch tty)
-                                    cmd_task(gturn_text());               # runs the turn: appends user + reply (both popped on failure)
+                                    cmd_task(gturn_text());               # runs the turn: the pump (intr_check hook) paints the partial live; appends user + reply
                                     out_mode_set(OUT_FD1);
                                     # honest outcome: a turn that appended no assistant reply (unreachable hoosh, transport/http
                                     # error, empty completion) leaves no fresh assistant as the last row -> the window renders only

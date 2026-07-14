@@ -148,11 +148,12 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   > **Ordering note (fixed):** an earlier draft listed the GUI stop under .1, ahead of any GUI event-loop pump — a
   > mis-ordered dependency (stdin `intr` doesn't reach the GUI, and the blocking turn can't handle a key mid-turn).
   > Corrected: .1 does the TUI/REPL interrupt + the seam; .2 adds the minimal GUI stop-poll pump the seam needs.
-- **0.35.x — GUI + agentic streaming (architectural).** The GUI shows only a "working" frame then the final reply,
-  and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. Cuts: **.0**
-  restructure the GUI present loop to **paint mid-turn** (generalizes the 0.34.2 stop-poll into a full mid-turn
-  yield/pump — the turn currently blocks the loop); **.1** **live tool-call cards** during the round (currently
-  post-turn only); **.2** a **thinking/reasoning** fold rendering `thinking_delta` when hoosh emits it.
+- **0.35.x — GUI + agentic streaming (architectural).** The GUI showed only a "working" frame then the final reply,
+  and agentic turns are non-streaming; SY streams everything with live thinking + tool pills. **.0 shipped** — the
+  GUI present loop now **paints mid-turn** (the 0.34.3 stop-poll grew into the throttled, ready-gated pump; the feed
+  renders the growing `_hoosh_acc` partial live — see CHANGELOG). Remaining cuts: **.1** **live tool-call cards**
+  during the round (currently post-turn only — surface each tool call as the round runs, riding the same pump);
+  **.2** a **thinking/reasoning** fold rendering `thinking_delta` when hoosh emits it.
 - **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
   inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
   hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions

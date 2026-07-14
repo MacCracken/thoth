@@ -2,6 +2,30 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.0] - 2026-07-13
+
+**GUI mid-turn pump — the desktop GUI now paints the streaming reply LIVE as it arrives (opens the 0.35.x arc).**
+
+### Added
+- **The sovereign Wayland GUI streams the reply live.** A GUI turn runs synchronously (`cmd_task` under `OUT_NULL`),
+  blocking the present loop — so until now the window froze on a static "thoth is working…" frame for the whole
+  turn, then jumped to the finished reply. Now the model's output appears **word by word as it streams**. The
+  mechanism generalizes the 0.34.3 stop-poll: the `_gstop_poll` hook — called on the interrupt seam
+  (`intr_check_hook_set`) at each SSE frame / round / tool-call boundary (both streaming paths) — became the **pump**
+  (`src/gui/gpresent.cyr`): each call it (a) drains the Wayland fd for the stop key (Esc still aborts), then
+  (b) **throttled** (~30fps, reusing the TUI's tested `_stream_should_paint`) and **scanout-race-gated**
+  (`gwl_win_ready`) repaints the window. The feed (`src/gui/gfeed.cyr`) renders the growing partial — read straight
+  from `_hoosh_acc` (`hoosh_last_reply()`, populated on both SSE paths even under `OUT_NULL`) — as a provisional
+  agent bubble (same layout as a landed reply, so the partial→final handoff is seamless), falling back to the
+  "working" mark before any content this round (and between tool rounds, when the accumulator resets).
+- **Zero producer change**: the pump rides the existing per-frame interrupt-seam checkpoint, so `agent.cyr` /
+  `hoosh.cyr` are untouched; the partial render is a pure `gfeed` view over `_hoosh_acc`. Headless-tested
+  (`test_gui`: the live partial renders as the agent bubble / the working-mark fallback / measure-draw parity holds
+  with the growing partial). The live mid-turn animation is compositor-gated (verify on Wayland). Residual: each
+  throttled repaint rebuilds the frame's command list on the no-rewind bump heap (bounded by the throttle for a
+  turn; a reused command-buffer pool is the future optimization for very long streams). **Opens the 0.35.x GUI +
+  agentic-streaming arc**; next: `.1` live tool-call cards during the round, `.2` a thinking/reasoning fold.
+
 ## [0.34.4] - 2026-07-13
 
 **Per-message remember + feedback: `/bookmark` a reply into mneme, `/thumbs` on its recalled notes. Closes the 0.34.x arc.**

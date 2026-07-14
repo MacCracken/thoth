@@ -108,11 +108,22 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
         cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), gturn_text());
         cy = cy + GFEED_GAP;
-        if (cmds != 0) {
-            gd_push_rect(cmds, xbase, cy + 4, 8, 8, _ui_rgb(ROLE_ACCENT));                   # a working mark (static; the turn blocks the loop)
-            gd_push_text(cmds, xbase + 16, cy, _ui_rgb(ROLE_MUTED), "thoth is working...", 0);
+        # 0.35.0 mid-turn pump: render the LIVE streaming partial reply (the model's output so far, in _hoosh_acc —
+        # populated on both SSE paths even under the GUI turn's OUT_NULL) as a provisional agent bubble that grows
+        # each frame as the pump (gpresent's _gstop_poll) repaints. Same call shape as a landed assistant message
+        # above, so the partial→final handoff is seamless. Before any content this round — and between tool rounds,
+        # when _hoosh_acc is reset — fall back to the static "working" mark. Measure/draw read _hoosh_acc at the same
+        # instant (no SSE frame lands between the two passes), so the bottom-anchor parity holds.
+        if (hoosh_last_reply_len() > 0) {
+            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), hoosh_last_reply());
+            cy = cy + GFEED_GAP;
+        } else {
+            if (cmds != 0) {
+                gd_push_rect(cmds, xbase, cy + 4, 8, 8, _ui_rgb(ROLE_ACCENT));                   # a working mark (static)
+                gd_push_text(cmds, xbase + 16, cy, _ui_rgb(ROLE_MUTED), "thoth is working...", 0);
+            }
+            cy = cy + GFEED_LH + GFEED_GAP;
         }
-        cy = cy + GFEED_LH + GFEED_GAP;
     }
     # a turn that appended no assistant reply (0.30.4): an honest transient notice — the window renders only
     # session_history, so a failed turn (unreachable hoosh, transport/http error) would otherwise vanish silently.

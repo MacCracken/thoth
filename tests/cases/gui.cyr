@@ -235,6 +235,44 @@ fn test_gui() {
     _gui_ppm_dump(_wbuf, FW, FH, "/tmp/thoth_gui_working.ppm");
     gturn_end();
     assert_eq(gturn_active(), 0, "gturn cleared after end");
+    # --- 0.35.0 mid-turn pump: the LIVE streaming partial (_hoosh_acc) renders as the agent bubble during a turn ---
+    gturn_begin("stream me a reply");
+    session_history_clear();
+    _hoosh_acc_reset();                                   # no content yet -> the "working" fallback renders
+    var _p0 = gd_list_new();
+    gfeed_build(_p0, 0, 0, 900, 300);
+    var _pw0 = 0; var _pi0 = 0;
+    while (_pi0 < vec_len(_p0)) {
+        var _pc0 = vec_get(_p0, _pi0);
+        if ((gd_kind(_pc0) == GD_TEXT) && (gd_text(_pc0) != 0)) {
+            if (streq(gd_text(_pc0), "thoth is working...") == 1) { _pw0 = 1; }
+        }
+        _pi0 = _pi0 + 1;
+    }
+    assert_eq(_pw0, 1, "no partial yet -> the 'thoth is working...' mark renders");
+    # content streams in -> the partial renders as the live agent bubble, replacing the working mark
+    _hoosh_acc_append("Here is the partial streaming reply so far", 42);
+    assert(hoosh_last_reply_len() > 0, "partial content present in _hoosh_acc");
+    var _p1 = gd_list_new();
+    gfeed_build(_p1, 0, 0, 900, 300);
+    var _pfound = 0; var _pwork = 0; var _pi1 = 0;
+    while (_pi1 < vec_len(_p1)) {
+        var _pc1 = vec_get(_p1, _pi1);
+        if ((gd_kind(_pc1) == GD_TEXT) && (gd_text(_pc1) != 0)) {
+            if (streq(gd_text(_pc1), "Here is the partial streaming reply so far") == 1) { _pfound = 1; }
+            if (streq(gd_text(_pc1), "thoth is working...") == 1) { _pwork = 1; }
+        }
+        _pi1 = _pi1 + 1;
+    }
+    assert_eq(_pfound, 1, "the streaming partial renders as the live agent bubble");
+    assert_eq(_pwork, 0, "the static working mark is replaced once content streams");
+    var _pmd = _gfeed_flow(0, 14, 0, 800, 0);             # measure/draw parity holds WITH the live partial
+    var _pdl = gd_list_new();
+    var _pdd = _gfeed_flow(_pdl, 14, 0, 800, 0);
+    assert_eq(_pmd, _pdd, "live-partial measure height == draw height (bottom-anchor parity)");
+    gturn_end();
+    _hoosh_acc_reset();
+    session_history_clear();
     # --- failed-turn transient notice (0.30.4): no assistant reply -> an honest notice, never silent vanishing ---
     gturn_begin("do a thing"); gturn_end(); gturn_fail();
     assert_eq(gturn_failed(), 1, "gturn_failed set after gturn_fail");
