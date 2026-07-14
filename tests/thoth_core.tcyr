@@ -112,6 +112,7 @@ fn main() {
     test_glyph_width();
     test_feed_markers();
     test_capture();
+    test_state_reason_row();
     test_fsearch();
     test_mention();
     test_tab_complete();

@@ -7,6 +7,16 @@
 
 ## Version
 
+**0.35.4** — **`/state` surfaces reasoning effort + folded count** (2026-07-13). A new `reason` row in `/state`:
+the `[hoosh].reasoning` effort (`off (set …)` or `<effort> effort`) plus the session's reasoning activity — the
+number of turns whose reasoning was captured, via the 0.35.3 `reasonlog` (new `reasonlog_total`). The folded count
+is the concrete "is reasoning streaming?" signal: 0 on a model that keeps reasoning internal (Opus 4.8) even at high
+effort (`· none captured yet (this model may keep reasoning internal)`), else `N turn(s) folded this session`.
+Extracted as `_state_reason_row` (pure config + reasonlog, no probe) and unit-tested through the real emit path via
+the OUT_RING capture sink; a `/state`-only prose row (config rows stay in `cmd_state`, not the surface.cyr
+view-model), so the pinned TUI strip is unchanged. Live-verified both states. Suite green (1451 + 107 + 3). Pin
+**6.4.62**. **NEXT (0.35.x)**: maybe persist reasoning into the conversation store so a fold survives resume.
+
 **0.35.3** — **Persistent per-turn reasoning fold** (2026-07-13). The 0.35.2 thinking fold read the live
 `_reason_acc`, which `_hoosh_acc_reset` wipes each round — so it vanished when the reply landed. Now each answered
 turn's reasoning is persisted in a new **`reasonlog`** ring (`src/reasonlog.cyr`) keyed by the turn tag — the same

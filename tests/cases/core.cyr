@@ -12,6 +12,35 @@ fn _t_secs_line(ms, expect) {   # emit _task_emit_secs(ms) to the feed ring; 1 i
     return _t_count_sub(feed_line_ptr(0), feed_line_len(0), expect, strlen(expect));
 }
 
+fn _t_reason_line(expect) {   # emit the /state reason row to the feed ring; occurrences of `expect` in row 0
+    feed_init();
+    out_mode_set(OUT_RING);
+    _state_reason_row();
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return _t_count_sub(feed_line_ptr(0), feed_line_len(0), expect, strlen(expect));
+}
+
+# /state reason row (0.35.4): the [hoosh].reasoning effort + turns-folded surface. PURE (config + reasonlog only,
+# no network probe) — captured via the OUT_RING feed sink like the elapsed-secs row.
+fn test_state_reason_row() {
+    test_group("/state reason row (0.35.4)");
+    reasonlog_reset();
+    _cfg_hoosh_reasoning = 0;                  # off
+    assert(_t_reason_line("off") >= 1, "reason row: off shows 'off'");
+    assert(_t_reason_line("low|medium|high") >= 1, "reason row: off gives the enable hint");
+    _cfg_hoosh_reasoning = 2;                  # medium, nothing folded yet (the Opus 4.8 case)
+    assert(_t_reason_line("medium") >= 1, "reason row: shows the effort word");
+    assert(_t_reason_line("internal") >= 1, "reason row: on + 0 folds -> 'may keep reasoning internal'");
+    assert_eq(_t_reason_line("folded"), 0, "reason row: no folded-count when nothing captured");
+    reasonlog_record(1, "r", 1);               # two turns' reasoning captured
+    reasonlog_record(2, "r", 1);
+    assert(_t_reason_line("folded") >= 1, "reason row: shows the folded surface once captured");
+    assert(_t_reason_line("2") >= 1, "reason row: reports the 2 folded turns");
+    _cfg_hoosh_reasoning = 0; reasonlog_reset();   # restore defaults
+    return 0;
+}
+
 fn test_classify() {
     test_group("classify_input");
     assert_eq(classify_input(""), CMD_EMPTY, "empty -> CMD_EMPTY");

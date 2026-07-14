@@ -280,6 +280,24 @@ fn _params_one(key, val) {
     return _gate_params;
 }
 
+# _state_reason_row (0.35.4): the /state "reason" row — the [hoosh].reasoning effort control + how many turns'
+# reasoning were folded (captured) this session. Effort dials the model's reasoning; the folded count is 0 on a
+# model that keeps reasoning INTERNAL (Opus 4.8) even at high effort, so it's the concrete "is reasoning actually
+# streaming?" signal. Extracted from cmd_state for unit-testability (no network probe — pure config + reasonlog).
+fn _state_reason_row() {
+    ui_label("  reason  : ");
+    if (config_hoosh_reasoning() == 0) {
+        ui_emit(ROLE_FAINT, "off"); ui_emit(ROLE_MUTED, " (set [hoosh].reasoning = low|medium|high)"); oprintln("");
+        return 0;
+    }
+    ui_emit(ROLE_ACCENT, config_hoosh_reasoning_effort()); ui_emit(ROLE_MUTED, " effort");
+    var n = reasonlog_total();
+    if (n > 0) { ui_emit(ROLE_MUTED, " · "); ofmt_int(n); ui_emit(ROLE_MUTED, " turn(s) folded this session"); }
+    else { ui_emit(ROLE_FAINT, " · none captured yet (this model may keep reasoning internal)"); }
+    oprintln("");
+    return 0;
+}
+
 fn cmd_state() {
     git_probe();          # 0.28.0: refresh the git cache BEFORE the snapshot so the git row is current (moved up from the git row)
     status_snapshot();    # 0.28.0: read the status producers ONCE into the shared view-model (Stage B, src/surface.cyr)
@@ -319,6 +337,7 @@ fn cmd_state() {
         if (ev > 0) { emit(" · "); emit(ui_sgr(ROLE_RED)); ofmt_int(ev); emit(" oldest evicted"); emit(ui_reset()); }
         ui_emit(ROLE_MUTED, " (/reset clears)"); oprintln("");
     }
+    _state_reason_row();   # 0.35.4: [hoosh].reasoning effort + turns folded this session
     if (sess_persist_active() == 1) {     # 0.24.2: omit the row entirely when off (byte-identical floor)
         ui_label("  resume  : ");
         ui_emit(ROLE_GREEN, "on"); emit(" — "); emit(config_session_file());

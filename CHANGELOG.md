@@ -2,6 +2,24 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.4] - 2026-07-13
+
+**`/state` surfaces the reasoning-effort control + how many turns were folded this session.**
+
+### Added
+- **A `reason` row in `/state`.** Shows the `[hoosh].reasoning` effort — `off (set [hoosh].reasoning =
+  low|medium|high)` when disabled, or `<effort> effort` when set — plus the session's reasoning activity: the number
+  of turns whose reasoning was captured (folded), from the 0.35.3 `reasonlog` (new `reasonlog_total`). The folded
+  count is the concrete "is reasoning actually streaming?" signal: it stays 0 on a model that keeps reasoning
+  internal (Opus 4.8) even at high effort (`<effort> effort · none captured yet (this model may keep reasoning
+  internal)`), and reports `N turn(s) folded this session` once a reasoning-streaming model has run. Extracted as
+  `_state_reason_row` (pure — config + reasonlog, no network probe) and unit-tested through the real emit path via
+  the OUT_RING capture sink (off/on/none-captured/count). A `/state`-only prose row (config rows stay in `cmd_state`,
+  per the surface.cyr view-model boundary) — the always-pinned TUI strip is unchanged. Suite green (1451 + 107 + 3).
+
+**NEXT (0.35.x)**: optionally persist reasoning into the conversation store so a landed fold survives resume (today
+it is session-scoped like the memory strip).
+
 ## [0.35.3] - 2026-07-13
 
 **Persistent per-turn reasoning — a landed turn keeps its thinking fold, not just the in-flight one.**

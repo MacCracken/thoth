@@ -60,3 +60,7 @@ fn reasonlog_find(turn) {
 
 fn reasonlog_text(slot) { return slot + 16; }       # the NUL-terminated reasoning cstr
 fn reasonlog_len(slot) { return load64(slot + 8); }  # its byte length
+
+# reasonlog_total: how many turns' reasoning were recorded this session (monotonic; includes turns that have since
+# aged out of the ring window). 0 on a model that keeps reasoning internal (Opus 4.8) — the /state "folded" count.
+fn reasonlog_total() { return _reasonlog_total; }
