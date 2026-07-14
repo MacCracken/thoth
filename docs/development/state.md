@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.36.5** — **`/save` JSON + plain exports** (2026-07-13). `/save --json <file>` writes one machine-readable
+object (`{"thoth", "messages":[{role,content,model?}]}`) for jq/CI; `/save --plain <file>` writes bare
+`role: content`; bare `/save` is unchanged (markdown, byte-identical). Both new formats are TIER-NEUTRAL (the
+conversation, not the rendered scrollback). JSON builds one message at a time into a bounded buffer and flushes, so
+a long history can't outgrow it (a reply can be 64 KiB; escaping can sextuple it). Unit-tested (flag parse, escaping
+of quotes/newlines, no scaffolding leakage, markdown default intact) + live-verified (the export parses as valid
+JSON). Suite green (247 + 1490 + 180 + 3). Pin **6.4.62**. **NEXT**: model-picker health/pricing if hoosh exposes
+it; otherwise the 0.36.x arc is complete and the four v1.0 gates remain.
+
 **0.36.4** — **History overflow: honest, and optionally summarized** (2026-07-13). thoth had TWO overflows with
 opposite semantics and reported only the harmless one: the framer's byte budget merely SKIPS messages (still in the
 store/feed/`/save`) yet said "N oldest **evicted**"; `SESS_HIST_MAX` **permanently frees** message #41 and said

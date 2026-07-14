@@ -179,8 +179,9 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   framer's harmless skip from the cap's REAL destruction (which was silent), and `[hoosh].summarize` (opt-in) recaps
   the skipped range via a cached, incrementally-folded side-call so long sessions keep fidelity. (The roadmap's
   premise was off: the byte budget bites first and is non-destructive; mneme was rejected — recall keys on the
-  prompt, which carries no signal for "keep going with that".) Remaining: **.5** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh
-  exposes it.
+  prompt, which carries no signal for "keep going with that".) **.5 shipped** — **export formats**: `/save --json` (a jq/CI-ready object) + `/save --plain` (bare text),
+  both tier-neutral; bare `/save` markdown unchanged. The 0.36.x rendering + context arc is COMPLETE. Non-gating
+  leftover: model-picker health/pricing, if hoosh ever exposes it.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will grow **voice
 > input** (mic → speech-to-text) and **read-back** (text-to-speech) as a first-class thoth capability — but by

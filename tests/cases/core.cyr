@@ -2055,3 +2055,49 @@ fn test_recap_drop_shift() {
     session_reset(); session_history_clear();
     return 0;
 }
+
+# /save export formats (0.36.5): --json / --plain are TIER-NEUTRAL (the conversation, not the rendered scrollback),
+# so a machine/bare export does not depend on whether you were in the TUI. Markdown stays the untouched default.
+fn test_save_formats() {
+    test_group("/save export formats (0.36.5)");
+    # the flag parser peels the format off and leaves the path
+    assert_eq(_save_parse_fmt("out.md"), SAVE_FMT_MD, "no flag -> markdown (the unchanged default)");
+    assert(streq(_save_fmt_path, "out.md"), "path preserved when unflagged");
+    assert_eq(_save_parse_fmt("--json out.json"), SAVE_FMT_JSON, "--json -> JSON");
+    assert(streq(_save_fmt_path, "out.json"), "--json peeled off, path left");
+    assert_eq(_save_parse_fmt("--plain out.txt"), SAVE_FMT_PLAIN, "--plain -> plain");
+    assert(streq(_save_fmt_path, "out.txt"), "--plain peeled off, path left");
+    # round-trip a small conversation through each writer
+    session_reset(); session_history_clear();
+    session_history_append("user", "hi \"there\"", 10);      # a quote: JSON must escape it
+    session_history_append("assistant", "line1\nline2", 11); # a newline: JSON must escape it
+    feed_init();
+    cmd_save("/save --json /tmp/thoth_t_save.json");
+    var jbuf[4096];
+    var jn = file_read_all("/tmp/thoth_t_save.json", &jbuf, 4095);
+    store8(&jbuf + jn, 0);
+    var jb = &jbuf;
+    assert(jn > 0, "json export wrote a file");
+    assert(_ui_contains(jb, "\"messages\"") == 1, "json has a messages array");
+    assert(_ui_contains(jb, "\\\"there\\\"") == 1, "json ESCAPES an embedded quote");
+    assert(_ui_contains(jb, "line1\\nline2") == 1, "json ESCAPES an embedded newline");
+    assert_eq(_ui_contains(jb, "# thoth transcript"), 0, "json carries no markdown scaffolding");
+    cmd_save("/save --plain /tmp/thoth_t_save.txt");
+    var pbuf[4096];
+    var pn = file_read_all("/tmp/thoth_t_save.txt", &pbuf, 4095);
+    store8(&pbuf + pn, 0);
+    var pb = &pbuf;
+    assert(pn > 0, "plain export wrote a file");
+    assert(_ui_contains(pb, "user: hi") == 1, "plain is bare 'role: content'");
+    assert_eq(_ui_contains(pb, "# thoth transcript"), 0, "plain carries no markdown header");
+    assert_eq(_ui_contains(pb, "## user"), 0, "plain carries no markdown role headers");
+    # markdown default still produces the transcript it always did
+    cmd_save("/save /tmp/thoth_t_save.md");
+    var mbuf[4096];
+    var mn = file_read_all("/tmp/thoth_t_save.md", &mbuf, 4095);
+    store8(&mbuf + mn, 0);
+    var mb = &mbuf;
+    assert(_ui_contains(mb, "# thoth transcript") == 1, "markdown default unchanged");
+    session_reset(); session_history_clear();
+    return 0;
+}

@@ -658,9 +658,81 @@ fn _save_history(fd) {
 # OWN export to a path they named (the model can never invoke a slash command). Degrades closed: an
 # unopenable path / a short write is announced, never faked. HONEST LIMIT: the feed ring is bounded to
 # FEED_ROWS lines (older evicted); the history path is bounded to the retained conversation window.
+# --- 0.36.5: /save export formats ---------------------------------------------------------------------------------
+# `/save <file>` still writes the markdown transcript (unchanged default). `--json` writes a machine-readable
+# envelope for jq/CI (the tier-neutral conversation, like --json for one-shot); `--plain` writes the bare text with
+# no markdown scaffolding. JSON is built ONE MESSAGE AT A TIME into a bounded buffer and flushed, so a long history
+# can't outgrow it (a reply alone can be 64 KiB, and escaping can sextuple it).
+var SAVE_FMT_MD = 0;
+var SAVE_FMT_JSON = 1;
+var SAVE_FMT_PLAIN = 2;
+var SAVE_JBUF = 524288;
+var _save_jbuf = 0;
+var _save_fmt_path = 0;      # the path left after the format flag was consumed
+
+# _save_parse_fmt: read a leading --json/--plain off the /save argument; leave the path in _save_fmt_path.
+fn _save_parse_fmt(arg) {
+    _save_fmt_path = arg;
+    if (arg == 0) { return SAVE_FMT_MD; }
+    if (cstr_starts_with(arg, "--json") == 1) { _save_fmt_path = arg_after(arg); return SAVE_FMT_JSON; }
+    if (cstr_starts_with(arg, "--plain") == 1) { _save_fmt_path = arg_after(arg); return SAVE_FMT_PLAIN; }
+    return SAVE_FMT_MD;
+}
+
+# _save_json: the conversation as one JSON object. Per-message build+flush keeps the buffer bounded.
+fn _save_json(fd) {
+    if (_save_jbuf == 0) { _save_jbuf = alloc(SAVE_JBUF); }
+    var cap = SAVE_JBUF;
+    var ok = 1;
+    if (_save_write_str(fd, "{\"thoth\":\"") == 0) { ok = 0; }
+    if (_save_write_str(fd, thoth_version()) == 0) { ok = 0; }
+    if (_save_write_str(fd, "\",\"messages\":[") == 0) { ok = 0; }
+    var n = session_history_len();
+    var i = 0;
+    while (i < n) {
+        var off = 0;
+        if (i > 0) { off = _append_cstr_cap(_save_jbuf, off, cap, ","); }
+        off = _append_cstr_cap(_save_jbuf, off, cap, "{\"role\":\"");
+        off = _json_escape_into_cap(_save_jbuf, off, cap, session_history_role(i));
+        off = _append_cstr_cap(_save_jbuf, off, cap, "\",\"content\":\"");
+        off = _json_escape_into_cap(_save_jbuf, off, cap, session_history_content(i));
+        off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
+        var mdl = session_history_model(i);
+        if (mdl != 0) {
+            off = _append_cstr_cap(_save_jbuf, off, cap, ",\"model\":\"");
+            off = _json_escape_into_cap(_save_jbuf, off, cap, mdl);
+            off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
+        }
+        off = _append_cstr_cap(_save_jbuf, off, cap, "}");
+        if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
+        i = i + 1;
+    }
+    if (_save_write_str(fd, "]}\n") == 0) { ok = 0; }
+    return ok;
+}
+
+# _save_plain: the bare conversation — "role: content", no markdown headers, citations or tool lists.
+fn _save_plain(fd) {
+    var ok = 1;
+    var n = session_history_len();
+    var i = 0;
+    while (i < n) {
+        if (_save_write_str(fd, session_history_role(i)) == 0) { ok = 0; }
+        if (_save_write_str(fd, ": ") == 0) { ok = 0; }
+        var content = session_history_content(i);
+        var clen = strlen(content);
+        if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0; } }
+        if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
+        i = i + 1;
+    }
+    return ok;
+}
+
 fn cmd_save(line) {
-    var path = arg_after(line);
-    if (path == 0) { ui_emit(ROLE_RED, "usage: "); emit("/save <file>"); oprintln(""); return 0; }
+    var raw = arg_after(line);
+    var fmt = _save_parse_fmt(raw);
+    var path = _save_fmt_path;
+    if (path == 0) { ui_emit(ROLE_RED, "usage: "); emit("/save [--json|--plain] <file>"); oprintln(""); return 0; }
     var nfeed = feed_count();
     var nhist = session_history_len();
     if ((nfeed == 0) && (nhist == 0)) {
@@ -670,6 +742,22 @@ fn cmd_save(line) {
     var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0644, like the -o tee
     if (fd < 0) { ui_emit(ROLE_RED, "could not open "); emit(path); ui_emit(ROLE_FAINT, " for writing"); oprintln(""); return 0; }
     var ok = 1;
+    # 0.36.5: --json / --plain are tier-neutral (the conversation, not the rendered scrollback) — a machine or a
+    # bare-text export shouldn't depend on whether you happened to be in the TUI.
+    if (fmt == SAVE_FMT_JSON) {
+        if (_save_json(fd) == 0) { ok = 0; }
+        file_close(fd);
+        if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(nhist); emit(" messages (json) to "); emit(path); oprintln(""); }
+        else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+        return 0;
+    }
+    if (fmt == SAVE_FMT_PLAIN) {
+        if (_save_plain(fd) == 0) { ok = 0; }
+        file_close(fd);
+        if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(nhist); emit(" messages (plain) to "); emit(path); oprintln(""); }
+        else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+        return 0;
+    }
     if (_save_write_str(fd, "# thoth transcript\n\n") == 0) { ok = 0; }
     var nsaved = 0;
     if (nfeed > 0) {

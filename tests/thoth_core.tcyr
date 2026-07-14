@@ -124,7 +124,7 @@ fn main() {
     test_git();
     test_project();
     test_mpick();
-    test_save();
+    test_save(); test_save_formats();
     test_session_persist();
     test_ui_niceties();
     test_reload();

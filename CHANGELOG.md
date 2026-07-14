@@ -2,6 +2,26 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.5] - 2026-07-13
+
+**`/save` gains JSON + plain exports.**
+
+### Added
+- **`/save --json <file>`** writes the conversation as one machine-readable object (`{"thoth": "<version>",
+  "messages": [{"role", "content", "model"?}]}`) for jq/CI — the same posture as the one-shot `--json` envelope.
+  **`/save --plain <file>`** writes bare `role: content` text with no markdown scaffolding. Bare `/save <file>` is
+  unchanged (the markdown transcript, byte-identical).
+- Both new formats are **tier-neutral** — they export the conversation, not the rendered scrollback, so a machine or
+  bare-text export does not depend on whether you happened to be in the TUI (the markdown path still prefers the
+  feed when there is one). JSON is built **one message at a time** into a bounded buffer and flushed, so a long
+  history cannot outgrow it — a single reply can be 64 KiB and escaping can sextuple it.
+- Tests: the flag parser (peels `--json`/`--plain`, leaves the path), a round-trip through each writer asserting
+  JSON escapes embedded quotes + newlines and carries no markdown, plain carries no headers, and markdown stays the
+  untouched default. Live-verified: the exported JSON parses cleanly (valid for jq). Suite green (247 + 1490 + 180 + 3).
+
+**NEXT (0.36.x)**: model-picker health/pricing if hoosh exposes it — otherwise the 0.36.x rendering/context arc is
+complete and the remaining work is the four v1.0 gates (AGNOS-dominated).
+
 ## [0.36.4] - 2026-07-13
 
 **History overflow made honest — and optionally summarized instead of silently forgotten.**
