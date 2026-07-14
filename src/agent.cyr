@@ -1089,7 +1089,7 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
 # "— interrupted" feed marker and the log line. Shared by the streaming-abort (kind 4) and the new tool-phase abort
 # so both leave history a clean sequence of completed exchanges. `iter` is the 0-based iteration (logged as iter+1).
 fn _agent_finish_interrupted(iter) {
-    if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); sess_persist_save(); }
+    if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); reasonlog_record(session_turns(), hoosh_last_reason(), hoosh_last_reason_len()); sess_persist_save(); }   # 0.35.3: keep the interrupted turn's reasoning fold too
     else { session_history_pop_last(); }
     intr_note();
     log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "interrupted"); log_commit(SK_WARN);
@@ -1192,7 +1192,7 @@ fn agent_turn(prompt) {
             intr_disarm();
             if (intr_pending() == 1) { _agent_finish_interrupted(iter); done = 1; }
         } else {
-            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); sess_persist_save(); grounding_emit(); }   # 0.32.4: grounding line (silent if no recall); 0.33.4: persist cited sources; 0.33.5: persist tool calls
+            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); reasonlog_record(session_turns(), hoosh_last_reason(), hoosh_last_reason_len()); sess_persist_save(); grounding_emit(); }   # 0.32.4: grounding line (silent if no recall); 0.33.4: persist cited sources; 0.33.5: persist tool calls; 0.35.3: persist this turn's reasoning for the landed fold
             else { oprintln("  hoosh: response had neither tool calls nor content."); session_history_pop_last(); }
             done = 1;
             log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "ok"); log_commit(SK_INFO);

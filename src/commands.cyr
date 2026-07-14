@@ -1419,6 +1419,7 @@ fn cmd_reset() {
     roundlog_reset();
     editlog_reset();           # 0.31.1: drop the recorded edit diffs too
     memlog_reset();            # 0.32.5: drop the per-turn memory records too
+    reasonlog_reset();         # 0.35.3: drop the per-turn reasoning records too
     if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }
     return 0;

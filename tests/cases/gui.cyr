@@ -863,6 +863,47 @@ fn test_gturn_reply_landed() {
     return 0;
 }
 
+# GUI per-turn reasoning fold (0.35.3): a LANDED turn keeps its thinking fold — the reasoning is persisted in
+# reasonlog keyed by the turn tag and rendered above ITS reply, even after later turns land (the live 0.35.2 fold
+# showed only the in-flight turn). PURE (greason_build_turn + reasonlog + session_history_turn over the feed).
+fn test_gui_reason_perturn() {
+    test_group("GUI per-turn reasoning fold (0.35.3)");
+    reasonlog_reset(); roundlog_reset(); session_reset(); session_history_clear();
+    if (greason_collapsed() == 1) { greason_toggle(); }   # ensure expanded so a record yields visible height
+    # turn 1 reasoned; turn 2 did NOT
+    var t1 = session_bump_turn();
+    session_history_append("user", "q1", 2);
+    reasonlog_record(t1, "because X then Y", 16);
+    session_history_append("assistant", "a1", 2);
+    var t2 = session_bump_turn();
+    session_history_append("user", "q2", 2);
+    session_history_append("assistant", "a2", 2);
+    # per-turn filtering: turn 1 has a fold, turn 2 (no reasoning) renders nothing
+    assert(greason_build_turn(0, 0, 0, 600, t1) > 0, "turn 1 (reasoned) has a fold block");
+    assert_eq(greason_build_turn(0, 0, 50, 600, t2), 50, "turn 2 (no reasoning) renders no fold (returns y)");
+    # measure == draw (parity): the measure-only height equals the drawn height
+    var mh = greason_build_turn(0, 0, 0, 600, t1);
+    var cmds = gd_list_new();
+    var dh = greason_build_turn(cmds, 0, 0, 600, t1);
+    assert_eq(mh, dh, "reasoning fold: measure height == draw height (parity)");
+    # the fold SURVIVES the reply landing + a later turn — the whole point of 0.35.3: with the record the feed is
+    # taller than without it (turn 1's fold interleaves above a1 even though a2 is the latest message).
+    var with1 = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    reasonlog_reset();
+    var without = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(with1 > without, "a landed turn's reasoning fold persists above its reply after later turns land");
+    # collapse shrinks it: collapsed (header only) < expanded (header + body), same record
+    reasonlog_record(t1, "because X then Y", 16);
+    var exph = greason_build_turn(0, 0, 0, 600, t1);
+    greason_toggle();                                     # collapse
+    var colh = greason_build_turn(0, 0, 0, 600, t1);
+    greason_toggle();                                     # restore expanded (the default)
+    assert(colh > 0, "collapsed fold still renders a header row");
+    assert(exph > colh, "collapsing the fold shrinks it (header only vs header + body)");
+    reasonlog_reset(); roundlog_reset(); session_history_clear(); session_reset();
+    return 0;
+}
+
 # GUI colored diff card (0.31.2): an `edit` call's stored editlog diff renders below its line in the card —
 # del lines RED, add lines GREEN — growing the card height with measure/draw parity preserved.
 fn test_gui_toolcards_diff() {

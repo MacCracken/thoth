@@ -156,8 +156,12 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   tool returns, riding the pump). **.2 shipped** — a **reasoning-effort control** (`[hoosh].reasoning`, mapped to the
   provider's native effort by hoosh 2.5.0 — works today on Opus 4.8) **+ a live thinking fold** (both SSE paths parse
   `reasoning_content` into `_reason_acc`; `_gfeed_flow` renders a collapsible muted "thinking" block above the cards,
-  Ctrl+R to toggle; inert on Opus 4.8, which keeps reasoning internal). Remaining cut: **.3** **persist per-message
-  reasoning** so a landed turn keeps its fold (today the fold is live-only — the reasoning resets with each reply).
+  Ctrl+R to toggle; inert on Opus 4.8, which keeps reasoning internal). **.3 shipped** — **persistent per-turn
+  reasoning**: a `reasonlog` ring (keyed by turn, like `roundlog`/`memlog`) records each turn's final-round
+  chain-of-thought at the reply-finalize sites, and `greason_build_turn` renders a LANDED turn's fold above its
+  cards — so the fold survives the reply landing (was live-only). Remaining cut: **.4** surface reasoning
+  effort/length in `/state`; optionally persist reasoning into the conversation store so it survives resume (today
+  it is session-scoped like the memory strip).
 - **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
   inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
   hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions

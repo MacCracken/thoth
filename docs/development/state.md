@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.35.3** — **Persistent per-turn reasoning fold** (2026-07-13). The 0.35.2 thinking fold read the live
+`_reason_acc`, which `_hoosh_acc_reset` wipes each round — so it vanished when the reply landed. Now each answered
+turn's reasoning is persisted in a new **`reasonlog`** ring (`src/reasonlog.cyr`) keyed by the turn tag — the same
+per-turn-ring pattern as `roundlog`/`memlog`. `reasonlog_record(turn, text, len)` captures the final round's
+chain-of-thought at all three reply-finalize sites (normal / Esc-interrupted / non-agentic), beside
+`roundlog_attach_calls_to_last`; **`greason_build_turn`** renders a landed turn's fold above ITS tool cards, keyed by
+`session_history_turn(i)`, mirroring `gtool_build_turn`/`gmem_build_turn`. Live + landed folds share one renderer
+(`_gfeed_reason_at`) so the handoff is seamless + mutually exclusive; Ctrl+R still collapses all. Ring bounded
+(`REASONLOG_CAP = 8`, ages out) + lazily alloc'd only when a model streams reasoning (never on Opus 4.8: `len 0` → no
+record); `RSN_TEXT_CAP = 65536` matches the accumulator (no landing truncation). Session-scoped like `memlog` (a
+resumed message reloads turn 0 → no fold). Unit-tested (ring: record/find/newest-wins/aging/reset; GUI:
+`test_gui_reason_perturn` per-turn filter + measure/draw parity + persistence-after-later-turns + collapse). Suite
+green (1444 + 107 + 3). **Adversarially reviewed** (memory-safety / capture / render-parity) — all clean. Pin
+**6.4.62**. **NEXT (0.35.x)**: `.4` surface reasoning in `/state`; maybe persist reasoning into the conversation
+store so it survives resume.
+
 **0.35.2** — **Reasoning-effort control + a live thinking fold** (2026-07-13). A new **`[hoosh].reasoning = off |
 low | medium | high`** control: both request builders emit a top-level `"reasoning_effort":"<level>"` (after
 `max_tokens`, before `stream`) when set — off is byte-identical to before, so every request-shaping assertion holds.

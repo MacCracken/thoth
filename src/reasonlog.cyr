@@ -1,0 +1,62 @@
+# src/reasonlog.cyr — per-turn reasoning record for the GUI feed (0.35.3).
+#
+# The live "thinking" fold (0.35.2, `_reason_acc` in hoosh.cyr) shows the CURRENT round's reasoning and is wiped by
+# `_hoosh_acc_reset` at the top of every round / turn — so when the reply lands the fold vanishes. The GUI feed
+# repaints from PERSISTENT state (session_history + roundlog + editlog + memlog), so a landed turn needs its
+# reasoning persisted too — this ring. Recorded once per answered turn (from the reply-finalize sites, keyed by
+# `session_turns()` — the SAME tag on the assistant message), read by gfeed.cyr on repaint. Like memlog/editlog: a
+# bounded ring keyed by the turn tag; older turns age out silently. Never even alloc'd on Opus 4.8, which keeps
+# reasoning internal (len 0 -> no record). PURE state — no display, no I/O.
+
+var REASONLOG_CAP = 8;        # last N turns' reasoning kept — a SMALLER ring than the 16-slot roundlog/memlog family
+                              # because each slot is far heavier (a full reasoning buffer, below), not a title/handful of bytes
+var RSN_TEXT_CAP = 65536;     # bytes of reasoning stored per turn (NUL-terminated, truncated) — matches REASON_ACC_CAP
+                              # so a landed fold shows exactly what the live fold did (no truncation on landing)
+
+# per-turn slot = turn(8) + len(8) + RSN_TEXT_CAP text
+fn _rsn_slot_sz() { return 16 + RSN_TEXT_CAP; }
+var _reasonlog = 0;           # ring base, lazily alloc'd (only when a model actually streams reasoning)
+var _reasonlog_total = 0;     # turns recorded this session (global monotonic index; ring index = g % REASONLOG_CAP)
+fn _reasonlog_init() { if (_reasonlog == 0) { _reasonlog = alloc(REASONLOG_CAP * _rsn_slot_sz()); } return 0; }
+fn _reasonlog_slot(g) { return _reasonlog + (g % REASONLOG_CAP) * _rsn_slot_sz(); }
+fn reasonlog_reset() { _reasonlog_total = 0; return 0; }
+
+# reasonlog_record: capture TURN `turn`'s reasoning `text`/`len` (the final round's chain-of-thought, read from
+# `_reason_acc` via hoosh_last_reason at reply-finalize). No-op when the turn is untagged (<= 0) or there was no
+# reasoning (len <= 0 — the Opus 4.8 case, so the ring is never even alloc'd there). The text is copied into stable
+# ring storage, truncated to RSN_TEXT_CAP-1 + NUL-terminated (so a resumed message's stale ptr can never dangle).
+fn reasonlog_record(turn, text, len) {
+    if (turn <= 0) { return 0; }
+    if (len <= 0) { return 0; }
+    if (text == 0) { return 0; }
+    _reasonlog_init();
+    var slot = _reasonlog_slot(_reasonlog_total);
+    _reasonlog_total = _reasonlog_total + 1;
+    var n = len;
+    if (n > (RSN_TEXT_CAP - 1)) { n = RSN_TEXT_CAP - 1; }
+    store64(slot, turn);
+    store64(slot + 8, n);
+    memcpy(slot + 16, text, n);
+    store8(slot + 16 + n, 0);
+    return 0;
+}
+
+# reasonlog_find: the slot ADDRESS for `turn` (newest wins), or 0 if none. Scans only the live ring window, so a
+# turn whose reasoning has aged out of the ring reads as 0 (the fold simply doesn't render — like memlog).
+fn reasonlog_find(turn) {
+    if (_reasonlog == 0) { return 0; }
+    if (turn <= 0) { return 0; }
+    var start = 0;
+    if (_reasonlog_total > REASONLOG_CAP) { start = _reasonlog_total - REASONLOG_CAP; }
+    var g = _reasonlog_total - 1;
+    var found = 0;
+    while ((g >= start) && (found == 0)) {
+        var slot = _reasonlog_slot(g);
+        if (load64(slot) == turn) { found = slot; }
+        g = g - 1;
+    }
+    return found;
+}
+
+fn reasonlog_text(slot) { return slot + 16; }       # the NUL-terminated reasoning cstr
+fn reasonlog_len(slot) { return load64(slot + 8); }  # its byte length

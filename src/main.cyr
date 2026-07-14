@@ -65,6 +65,7 @@ include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0); after hoosh (uses hoosh_catalog_fetch), before tui (wires the modal)
 include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallback (0.12.0, ADR-0012)
 include "src/memlog.cyr"   # per-turn memory record (0.32.5): recalled sources + grounding verdict, for the GUI feed
+include "src/reasonlog.cyr" # per-turn reasoning record (0.35.3): the final round's chain-of-thought, so a landed turn keeps its thinking fold
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014); after exec/hoosh (uses exec_shell_capture, _append_int), before agent
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0017); jailed+gated local file editor; before agent (dispatched there); forward-refs diff_stats/_params_one (whole-unit)
 include "src/daimon.cyr"

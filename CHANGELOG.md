@@ -2,6 +2,38 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.3] - 2026-07-13
+
+**Persistent per-turn reasoning — a landed turn keeps its thinking fold, not just the in-flight one.**
+
+### Added
+- **The GUI reasoning fold (0.35.2) now survives the reply landing.** Before, the fold read the live `_reason_acc`,
+  which `_hoosh_acc_reset` wipes at the top of every round — so the thinking fold vanished the moment the answer
+  landed (and never appeared on already-scrolled-back turns). Now each answered turn's reasoning is persisted in a
+  new **`reasonlog`** ring (`src/reasonlog.cyr`) keyed by the turn tag — the same per-turn-ring pattern as `roundlog`
+  (tool cards) and `memlog` (memory strip). `reasonlog_record(turn, text, len)` captures the final round's
+  chain-of-thought at each of the three reply-finalize sites (normal, Esc-interrupted, non-agentic), right alongside
+  `roundlog_attach_calls_to_last`; `reasonlog_find(turn)` is the newest-wins ring lookup the feed reads on repaint.
+- **`greason_build_turn(cmds, x, cy, avail, turn)`** renders a landed turn's fold from `reasonlog`, above that turn's
+  tool cards (the model reasons first), keyed by `session_history_turn(i)` — mirroring `gtool_build_turn` /
+  `gmem_build_turn` exactly, so an earlier turn's fold stays put above ITS reply as later turns land. The live
+  mid-turn fold and the landed fold share one renderer (`_gfeed_reason_at`), so the in-flight → landed handoff is
+  seamless and mutually exclusive (no double-render), and **Ctrl+R** still collapses all folds together.
+- The ring is bounded (`REASONLOG_CAP = 8`; older turns age out silently) and lazily allocated **only when a model
+  actually streams reasoning** — never touched on Opus 4.8 (reasoning stays internal → `len 0` → no record, no
+  alloc). Per-slot cap matches the live accumulator (`RSN_TEXT_CAP = 65536`), so a landed fold shows exactly what the
+  live fold did — no truncation on landing. Session-scoped like `memlog`/`editlog` (a resumed conversation's messages
+  reload as turn 0 → no fold, consistent with tool cards).
+- Tests: the `reasonlog` ring (record/find, accessors, untagged/empty/null-text no-ops, newest-wins, aging-out at
+  `REASONLOG_CAP`, reset) and the GUI per-turn fold (`test_gui_reason_perturn`: per-turn filtering, measure/draw
+  parity, the fold persisting above its reply after later turns land, collapse shrinking it). Suite green
+  (1444 core + 107 gui + 3). **Adversarially reviewed** across memory-safety, capture-correctness, and render-parity
+  — all clean (worst-case write lands the NUL on the slot's last byte; gap refactor byte-identical to 0.35.2; no
+  double-render window).
+
+**NEXT (0.35.x)**: `.4` surface reasoning effort/length in `/state`; consider persisting reasoning into the
+conversation store so it survives resume (today it is session-scoped like the memory strip).
+
 ## [0.35.2] - 2026-07-13
 
 **Reasoning-effort control + a live thinking fold — thoth can dial the model's reasoning effort and render a model's chain-of-thought as a collapsible GUI fold.**

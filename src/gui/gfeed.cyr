@@ -80,19 +80,36 @@ var _greason_collapsed = 0;
 fn greason_collapsed() { return _greason_collapsed; }
 fn greason_toggle() { if (_greason_collapsed == 0) { _greason_collapsed = 1; } else { _greason_collapsed = 0; } return 0; }
 
-# _gfeed_reason: draw the reasoning fold at (xbase, cy) and return the y below it. Collapsed -> just the header
-# row; expanded -> the header + the wrapped reasoning text (FAINT header, MUTED body, indented). Empty reasoning
-# -> cy unchanged (nothing drawn). Measure/draw parity: reads _reason_acc at one instant like the partial reply.
-fn _gfeed_reason(cmds, xbase, cy, avail) {
-    if (hoosh_last_reason_len() <= 0) { return cy; }
+# _gfeed_reason_at: draw a reasoning fold for the given (text, len) at (xbase, cy) and return the y below it (WITHOUT
+# a trailing GFEED_GAP — callers add it via the gtool/gmem `if (rcy > cy)` pattern). Collapsed -> just the header
+# row; expanded -> the header + the wrapped reasoning text (FAINT header, MUTED body, indented). len <= 0 -> cy
+# unchanged (nothing drawn; the Opus 4.8 case). Shared by the LIVE fold (0.35.2, reads _reason_acc) and the LANDED
+# per-turn fold (0.35.3, reads reasonlog) so the two render identically. The height decision reads only the passed
+# text/len + the stable greason_collapsed() flag — both fixed for the duration of one gfeed_build, so measure==draw.
+fn _gfeed_reason_at(cmds, xbase, cy, avail, text, len) {
+    if (len <= 0) { return cy; }
     if (greason_collapsed() == 1) {
         if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_FAINT), "> thinking (Ctrl+R to expand)", 0); }
-        return cy + GFEED_LH + GFEED_GAP;
+        return cy + GFEED_LH;
     }
     if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_FAINT), "v thinking (Ctrl+R to collapse)", 0); }
     cy = cy + GFEED_LH;
-    cy = _gfeed_para(cmds, xbase + 24, cy, avail - 24, _ui_rgb(ROLE_MUTED), hoosh_last_reason());
-    return cy + GFEED_GAP;
+    return _gfeed_para(cmds, xbase + 24, cy, avail - 24, _ui_rgb(ROLE_MUTED), text);
+}
+
+# _gfeed_reason: the LIVE fold for the in-flight turn — the current round's reasoning straight from _reason_acc.
+fn _gfeed_reason(cmds, xbase, cy, avail) {
+    return _gfeed_reason_at(cmds, xbase, cy, avail, hoosh_last_reason(), hoosh_last_reason_len());
+}
+
+# greason_build_turn: the LANDED fold for turn `turn` — its reasoning persisted in reasonlog (0.35.3), so the fold
+# survives the reply landing. turn <= 0 or no record (never had reasoning / aged out of the ring) -> cy unchanged.
+# Mirrors gtool_build_turn / gmem_build_turn (same turn-tag key: session_history_turn(i) <-> reasonlog_find).
+fn greason_build_turn(cmds, x, cy, avail, turn) {
+    if (turn <= 0) { return cy; }
+    var slot = reasonlog_find(turn);
+    if (slot == 0) { return cy; }
+    return _gfeed_reason_at(cmds, x, cy, avail, reasonlog_text(slot), reasonlog_len(slot));
 }
 
 # _gfeed_flow: lay out all n conversation messages from (xbase, cy0) down an avail-wide column; return the y
@@ -109,6 +126,12 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
             cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), content);
         } else {
+            # 0.35.3: this turn's reasoning fold — persisted in reasonlog so it survives the reply landing (the live
+            # 0.35.2 fold showed only the in-flight turn). Renders ABOVE the tool cards (the model reasons FIRST),
+            # keyed by the message's turn tag. cy unchanged when the turn had no reasoning (Opus 4.8) or it aged out
+            # of the ring — mirrors gtool_build_turn's gating. Handoff from the live fold is seamless (same key).
+            var rcy = greason_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
+            if (rcy > cy) { cy = rcy + GFEED_GAP; }
             # tool-call cards (0.30.16; per-turn since 0.30.19): above EACH turn's answer, show the rounds THAT
             # turn ran — matched by the message's turn tag, so an earlier turn's cards stay put when later turns are
             # added (a failed turn has no reply, so its cards render below with the failure notice). gtool_build_turn
@@ -132,8 +155,9 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), gturn_text());
         cy = cy + GFEED_GAP;
         # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
-        # renders ABOVE the cards and partial answer. Empty on Opus 4.8 -> _gfeed_reason returns cy unchanged.
-        cy = _gfeed_reason(cmds, xbase, cy, avail);
+        # renders ABOVE the cards and partial answer. Empty on Opus 4.8 -> _gfeed_reason returns cy unchanged (no gap).
+        var _rcy = _gfeed_reason(cmds, xbase, cy, avail);
+        if (_rcy > cy) { cy = _rcy + GFEED_GAP; }
         # 0.35.1: the CURRENT turn's tool-call cards, LIVE from the roundlog — each call is recorded as it completes
         # (roundlog_add_call in the loop), and the pump repaints between calls, so a card grows a row as each tool
         # returns during the round (was post-turn only). gtool_build == gtool_build_turn(session_turns()) — the SAME

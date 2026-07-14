@@ -1912,6 +1912,37 @@ fn test_mem_seam() {
     memlog_reset();
     assert_eq(memlog_find(7), 0, "memlog_reset clears");
 
+    # reasonlog (0.35.3): the per-turn reasoning record the GUI feed reads so a LANDED thinking fold survives.
+    reasonlog_reset();
+    reasonlog_record(7, "step one then two", 17);
+    var rslot = reasonlog_find(7);
+    assert(rslot != 0, "reasonlog_find locates the recorded turn");
+    assert_eq(reasonlog_len(rslot), 17, "reasonlog len = 17");
+    assert_eq(streq(reasonlog_text(rslot), "step one then two"), 1, "reasonlog text round-trips (NUL-terminated)");
+    assert_eq(reasonlog_find(99), 0, "reasonlog_find miss -> 0");
+    reasonlog_record(0, "x", 1);             # untagged turn (<=0) -> not recorded
+    assert_eq(reasonlog_find(0), 0, "reasonlog: untagged turn not recorded");
+    reasonlog_record(8, "x", 0);             # no reasoning (len<=0) -> not recorded (the Opus 4.8 case)
+    assert_eq(reasonlog_find(8), 0, "reasonlog: no reasoning -> not recorded");
+    reasonlog_record(9, 0, 5);               # null text -> not recorded
+    assert_eq(reasonlog_find(9), 0, "reasonlog: null text -> not recorded");
+    # newest-wins: re-recording a turn returns the latest text
+    reasonlog_record(5, "old", 3);
+    reasonlog_record(5, "newer", 5);
+    var r5 = reasonlog_find(5);
+    assert_eq(reasonlog_len(r5), 5, "reasonlog newest-wins: latest len");
+    assert_eq(streq(reasonlog_text(r5), "newer"), 1, "reasonlog newest-wins: latest text");
+    # aging out: only the last REASONLOG_CAP turns stay in the ring window; older turns read as 0
+    reasonlog_reset();
+    var cap1 = REASONLOG_CAP + 1;
+    var ti = 1;
+    while (ti <= cap1) { reasonlog_record(ti, "r", 1); ti = ti + 1; }
+    assert_eq(reasonlog_find(1), 0, "reasonlog: oldest turn aged out of the ring");
+    assert(reasonlog_find(2) != 0, "reasonlog: turn within the ring window kept");
+    assert(reasonlog_find(cap1) != 0, "reasonlog: newest turn kept");
+    reasonlog_reset();
+    assert_eq(reasonlog_find(7), 0, "reasonlog_reset clears");
+
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
 }
