@@ -947,6 +947,45 @@ fn test_gui_markdown() {
     return 0;
 }
 
+# GUI pipe table (mdmodel + gfeed, 0.36.1): a pipe table renders as an aligned grid — header cells ACCENT under a
+# faint rule, body cells MUTED, delimiter row consumed. PURE (command-list scan + parity, no raster).
+fn test_gui_table() {
+    test_group("GUI pipe table (mdmodel + gfeed, 0.36.1)");
+    var reply = "| name | qty |\n| --- | --: |\n| apples | 3 |\n| pears | 12 |";
+    var mh = _gfeed_md(0, 0, 0, 600, reply);
+    var cmds = gd_list_new();
+    var dh = _gfeed_md(cmds, 0, 0, 600, reply);
+    assert_eq(mh, dh, "table: measure height == draw height (parity)");
+    # header + 2 body rows = 3 rows; the delimiter row is consumed, not rendered
+    assert_eq(dh, 3 * GFEED_LH, "table renders header + 2 body rows (delimiter consumed)");
+    var accent = _ui_rgb(ROLE_ACCENT); var muted = _ui_rgb(ROLE_MUTED); var faint = _ui_rgb(ROLE_FAINT);
+    var seen_accent = 0; var seen_muted = 0; var seen_rule = 0; var ci = 0;
+    while (ci < vec_len(cmds)) {
+        var c = vec_get(cmds, ci);
+        if ((gd_kind(c) == GD_TEXT) && (gd_color(c) == accent)) { seen_accent = 1; }
+        if ((gd_kind(c) == GD_TEXT) && (gd_color(c) == muted)) { seen_muted = 1; }
+        if ((gd_kind(c) == GD_RECT) && (gd_color(c) == faint)) { seen_rule = 1; }
+        ci = ci + 1;
+    }
+    assert_eq(seen_accent, 1, "header cells drawn in ROLE_ACCENT");
+    assert_eq(seen_muted, 1, "body cells drawn in ROLE_MUTED");
+    assert_eq(seen_rule, 1, "a faint rule sits under the header");
+    # a table followed by prose: the table ends at the blank line, the paragraph renders after it
+    var reply2 = "| a | b |\n|---|---|\n| 1 | 2 |\n\nafter the table";
+    var d2 = _gfeed_md(0, 0, 0, 600, reply2);
+    assert_eq(d2, 4 * GFEED_LH, "table ends at the blank line; the blank + prose row render after");
+    # a header + delimiter with NO body still renders one header row (no crash)
+    var reply3 = "| only | header |\n| --- | --- |";
+    var d3 = _gfeed_md(0, 0, 0, 600, reply3);
+    assert_eq(d3, 1 * GFEED_LH, "header-only table renders one row");
+    # NOT a table: a pipe-bearing prose line above a '---' (a 1-col delimiter) — the delimiter's column count (1)
+    # must match the header's (2), else it stays prose with the '---' visible (regression guard, review-caught).
+    var reply4 = "Inputs | Outputs\n---\nnext paragraph";
+    var d4 = _gfeed_md(0, 0, 0, 600, reply4);
+    assert_eq(d4, 3 * GFEED_LH, "pipe prose + '---' (col mismatch) is NOT a table -> 3 prose rows");
+    return 0;
+}
+
 # GUI colored diff card (0.31.2): an `edit` call's stored editlog diff renders below its line in the card —
 # del lines RED, add lines GREEN — growing the card height with measure/draw parity preserved.
 fn test_gui_toolcards_diff() {

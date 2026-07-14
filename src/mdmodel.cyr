@@ -246,3 +246,92 @@ fn md_role_at(boff) {
     }
     return MDI_PLAIN;
 }
+
+# --- pipe-table model (0.36.1) ---------------------------------------------
+# GitHub-flavored pipe tables: a header row, a delimiter row (|---|:--:|--:|), then body rows. This layer PARSES
+# rows into trimmed cells + reports the delimiter row's per-column alignment; the LAYOUT (column widths, grid) is a
+# renderer's job (the GUI leaf in gfeed.cyr; a later cut can lower the same facts for line/TUI when mdhl migrates).
+# Surface-agnostic + pure. Cells are recomputed per md_row_split (ephemeral, the surface.cyr idiom).
+var MD_CELL_CAP = 64;      # cells (columns) per row; extra columns dropped
+var _md_cells = 0;         # alloc(MD_CELL_CAP * 16): per cell (start:8, len:8), relative to the row ptr
+var _md_cell_n = 0;
+fn _md_cells_init() { if (_md_cells == 0) { _md_cells = alloc(MD_CELL_CAP * 16); } return 0; }
+fn md_cell_count() { return _md_cell_n; }
+fn md_cell_start(k) { return load64(_md_cells + k * 16); }
+fn md_cell_len(k) { return load64(_md_cells + k * 16 + 8); }
+
+# md_row_split: split a table row into TRIMMED cells (into _md_cells), returning the cell count. Leading/trailing
+# outer '|' and per-cell surrounding whitespace are stripped; interior empty cells (a||b) are kept. Not
+# escape-aware ('\|' is not special — parity with mdhl's current non-escaping inline pass). Pure.
+fn md_row_split(rptr, rlen) {
+    _md_cells_init();
+    _md_cell_n = 0;
+    var s = 0;
+    while ((s < rlen) && ((load8(rptr + s) == 32) || (load8(rptr + s) == 9))) { s = s + 1; }
+    var e = rlen;
+    while ((e > s) && ((load8(rptr + e - 1) == 32) || (load8(rptr + e - 1) == 9) || (load8(rptr + e - 1) == 13))) { e = e - 1; }
+    if ((s < e) && (load8(rptr + s) == 124)) { s = s + 1; }          # drop one leading '|'
+    if ((e > s) && (load8(rptr + e - 1) == 124)) { e = e - 1; }      # drop one trailing '|'
+    var cs = s;
+    var i = s;
+    var scanning = 1;
+    while (scanning == 1) {
+        if ((i >= e) || (load8(rptr + i) == 124)) {                  # cell [cs, i)
+            var ts = cs;
+            while ((ts < i) && ((load8(rptr + ts) == 32) || (load8(rptr + ts) == 9))) { ts = ts + 1; }
+            var te = i;
+            while ((te > ts) && ((load8(rptr + te - 1) == 32) || (load8(rptr + te - 1) == 9))) { te = te - 1; }
+            if (_md_cell_n < MD_CELL_CAP) {
+                store64(_md_cells + _md_cell_n * 16, ts);
+                store64(_md_cells + _md_cell_n * 16 + 8, te - ts);
+                _md_cell_n = _md_cell_n + 1;
+            }
+            if (i >= e) { scanning = 0; } else { cs = i + 1; }
+        }
+        i = i + 1;
+    }
+    return _md_cell_n;
+}
+
+# md_is_delim_row: 1 if the row is a table delimiter — every cell is only '-'/':' with at least one '-'
+# (e.g. '---', ':--:', '--:'). Splits internally (clobbers _md_cells). Used with a header-has-pipe check to
+# detect a table without false-firing on setext '---' underlines. Pure.
+fn md_is_delim_row(rptr, rlen) {
+    md_row_split(rptr, rlen);
+    if (_md_cell_n == 0) { return 0; }
+    var k = 0;
+    while (k < _md_cell_n) {
+        var cs = md_cell_start(k);
+        var cl = md_cell_len(k);
+        if (cl == 0) { return 0; }
+        var dashes = 0;
+        var j = 0;
+        while (j < cl) {
+            var b = load8(rptr + cs + j);
+            if (b == 45) { dashes = dashes + 1; }         # '-'
+            elif (b == 58) { }                            # ':' (alignment) ok
+            else { return 0; }
+            j = j + 1;
+        }
+        if (dashes == 0) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+# md_cell_align: the alignment of column `k` from a DELIMITER row — 0 = left/default, 1 = center (':--:'),
+# 2 = right ('--:'). Re-splits the delimiter row (clobbers _md_cells). Out-of-range -> left. Pure.
+fn md_cell_align(rptr, rlen, k) {
+    md_row_split(rptr, rlen);
+    if (k >= _md_cell_n) { return 0; }
+    var cs = md_cell_start(k);
+    var cl = md_cell_len(k);
+    if (cl == 0) { return 0; }
+    var left = 0;
+    var right = 0;
+    if (load8(rptr + cs) == 58) { left = 1; }             # leading ':'
+    if (load8(rptr + cs + cl - 1) == 58) { right = 1; }   # trailing ':'
+    if ((left == 1) && (right == 1)) { return 1; }         # center
+    if (right == 1) { return 2; }                          # right
+    return 0;
+}

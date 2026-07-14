@@ -2,6 +2,32 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.1] - 2026-07-13
+
+**Pipe tables in the GUI — markdown tables render as an aligned grid.**
+
+### Added
+- **The GUI markdown feed now renders GitHub-style pipe tables** (`| a | b |` + a `|---|:--:|--:|` delimiter row +
+  body rows) as an **aligned monospace grid**: header cells in `ROLE_ACCENT` under a faint rule, body cells in
+  `ROLE_MUTED`, each column padded to its widest cell and **aligned per the delimiter** (`:--:` center, `--:` right,
+  else left). Naturally at home in the GUI's whole-buffer render pass (a streaming line-at-a-time engine can't lay out
+  a grid). The table ends at the first blank or pipe-less line; prose after it renders normally.
+- **The shared model (`src/mdmodel.cyr`) gained pipe-table parsing** — `md_row_split` (row → trimmed cells, outer
+  pipes + per-cell whitespace stripped, interior empties kept), `md_is_delim_row`, `md_cell_align` — kept
+  surface-agnostic so the `0.36.2` `mdhl` migration can lower the same facts for line/TUI tables (no bespoke
+  throwaway path this cut). The GUI grid layout (`_gfeed_md_table`: two passes — column widths, then draw) lives in
+  the feed leaf. Detection requires the current line to have a `|` **and** the next line to be a delimiter row **with
+  a matching column count** — so a pipe-bearing prose/setext line above a `---` stays prose (not a spurious table).
+- Tests: `test_mdmodel_table` (row split boundaries, delimiter detection, per-column alignment) + `test_gui_table`
+  (grid parity, header + body row count with the delimiter consumed, header-only + table-then-prose + the
+  column-mismatch non-table regression guard). Suite green (247 gui + 1451 core + 161 render + 3). **Adversarially
+  reviewed** (model parse / grid parity+safety / walker integration) — which **caught + fixed a real false-positive**:
+  the table branch had matched *any* delimiter row, so a pipe-bearing prose line above a `---` mis-rendered as a
+  1-column table (swallowing the `---`); now gated on a header/delimiter column-count match, with a regression test.
+
+**NEXT (0.36.x)**: `.2` migrate `mdhl` (line/TUI) onto the shared model so ONE markdown classifier drives every
+surface (and line/TUI inherits tables); `.3` summarize-on-overflow; `.4` export formats.
+
 ## [0.36.0] - 2026-07-13
 
 **Structural markdown in the GUI — assistant replies render headings, bold, inline/fenced code, lists, and blockquotes (opens the 0.36.x rendering arc).**

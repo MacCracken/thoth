@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.36.1** — **Pipe tables in the GUI** (2026-07-13). GitHub-style pipe tables (header + `|---|:--:|--:|` delimiter +
+body) render as an aligned monospace grid: header cells `ROLE_ACCENT` under a faint rule, body `ROLE_MUTED`, columns
+padded to the widest cell + aligned per the delimiter. The shared model (`src/mdmodel.cyr`) gained the parsing
+(`md_row_split`/`md_is_delim_row`/`md_cell_align`, surface-agnostic so the `.2` mdhl migration reuses it); the GUI
+grid layout (`_gfeed_md_table`, two-pass widths→draw) is the feed leaf. Detection needs a `|` header + a delimiter row
+with a **matching column count** (so a pipe-prose line above a `---` stays prose). Unit-tested (`test_mdmodel_table` +
+`test_gui_table`: parity, row count, alignment, non-table regression guard). **Adversarially reviewed** — caught +
+fixed a real false-positive (any-delimiter match → spurious 1-col table), now column-count-gated + regression-tested.
+Suite green (247 + 1451 + 161 + 3). Pin **6.4.62**. **NEXT (0.36.x)**: `.2` migrate mdhl onto the model (line/TUI
+inherits tables); `.3` summarize-on-overflow.
+
 **0.36.0** — **Structural markdown in the GUI** (2026-07-13; opens the 0.36.x rendering arc). GUI assistant replies
 render with structure instead of flat text: ATX headings (`ROLE_ACCENT`), `**bold**` brighter (`ROLE_FG` — fixed
 monospace cell, so emphasis is color not weight), `` `inline` `` + fenced code (`ROLE_BLUE`, code on a background

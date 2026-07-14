@@ -194,6 +194,152 @@ fn _gfeed_md_block(cmds, x, cy, avail, base, len, kind) {
     return pcy;
 }
 
+# --- 0.36.1: GUI pipe-table grid (lowers the mdmodel table parser) ------------------------------------------------
+# A pipe table (header row + '|---|' delimiter + body rows) renders as an aligned monospace grid: header cells in
+# ROLE_ACCENT under a faint rule, body cells in ROLE_MUTED, each column padded to its widest cell and aligned per the
+# delimiter (:--:/--:). Cells are plain text (no inline styling / no wrap this cut) — an over-wide table clips to the
+# feed region. Deterministic (widths + row walk are cmds-independent), so measure == draw.
+var MD_TABLE_MAXCOL = 16;      # columns beyond this are dropped (a very wide table clips anyway)
+var MD_TABLE_GAP = 2;          # blank cells of gutter between columns
+var _gmd_colw = 0;             # per-column width in codepoints, alloc(MD_TABLE_MAXCOL * 8)
+var _gmd_align = 0;            # per-column alignment (0 left / 1 center / 2 right), alloc(MD_TABLE_MAXCOL * 8)
+var _gmd_table_end = 0;        # byte offset after the rendered table (the walker resumes here)
+fn _gmd_colw_init() { if (_gmd_colw == 0) { _gmd_colw = alloc(MD_TABLE_MAXCOL * 8); } return 0; }
+fn _gmd_align_init() { if (_gmd_align == 0) { _gmd_align = alloc(MD_TABLE_MAXCOL * 8); } return 0; }
+
+# _gmd_has_pipe / _gmd_blank: does the line contain a '|' / is it whitespace-only. Used for table detection + extent.
+fn _gmd_has_pipe(ptr, len) {
+    var i = 0;
+    while (i < len) { if (load8(ptr + i) == 124) { return 1; } i = i + 1; }
+    return 0;
+}
+fn _gmd_blank(ptr, len) {
+    var i = 0;
+    while (i < len) { var c = load8(ptr + i); if ((c != 32) && (c != 9) && (c != 13)) { return 0; } i = i + 1; }
+    return 1;
+}
+
+# _gmd_body_end: byte offset after the last table body row, scanning from `bs` — the table ends at the first blank
+# or pipe-less line, or EOF. (Body rows must contain a '|', mirroring the header-has-pipe detection.)
+fn _gmd_body_end(text, bs) {
+    var rs = bs;
+    var res = bs;
+    var done = 0;
+    while (done == 0) {
+        if (load8(text + rs) == 0) { res = rs; done = 1; }
+        else {
+            var re = rs;
+            while ((load8(text + re) != 0) && (load8(text + re) != 10)) { re = re + 1; }
+            var rlen = re - rs;
+            if ((_gmd_blank(text + rs, rlen) == 1) || (_gmd_has_pipe(text + rs, rlen) == 0)) { res = rs; done = 1; }
+            elif (load8(text + re) == 0) { res = re; done = 1; }
+            else { rs = re + 1; }
+        }
+    }
+    return res;
+}
+
+# _gmd_row_widths: grow _gmd_colw[k] to fit the k-th cell's codepoint width, for each column k < ncols.
+fn _gmd_row_widths(rptr, rlen, ncols) {
+    md_row_split(rptr, rlen);
+    var n = md_cell_count();
+    var k = 0;
+    while (k < ncols) {
+        var w = 0;
+        if (k < n) { w = _md_cp_count(rptr + md_cell_start(k), 0, md_cell_len(k)); }
+        if (w > load64(_gmd_colw + k * 8)) { store64(_gmd_colw + k * 8, w); }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# _gmd_draw_row: draw one table row's cells at (x, cy) in `color`, each padded to its column width + aligned per
+# _gmd_align. Splits the row (clobbers _md_cells — read immediately). Only draws when cmds != 0.
+fn _gmd_draw_row(cmds, x, cy, rptr, rlen, ncols, color) {
+    md_row_split(rptr, rlen);
+    var n = md_cell_count();
+    var k = 0;
+    var prefix = 0;                    # codepoint columns consumed by columns 0..k-1 (widths + gutters)
+    while (k < ncols) {
+        var w = load64(_gmd_colw + k * 8);
+        if (k < n) {
+            var cs = md_cell_start(k);
+            var cl = md_cell_len(k);
+            var cw = _md_cp_count(rptr + cs, 0, cl);
+            var pad = 0;
+            var al = load64(_gmd_align + k * 8);
+            if (al == 2) { pad = w - cw; }
+            elif (al == 1) { pad = (w - cw) / 2; }
+            if (pad < 0) { pad = 0; }
+            if ((cmds != 0) && (cw > 0)) { gd_push_text(cmds, x + (prefix + pad) * GR_GLYPH_W, cy, color, rptr + cs, cw); }
+        }
+        prefix = prefix + w + MD_TABLE_GAP;
+        k = k + 1;
+    }
+    return 0;
+}
+
+# _gfeed_md_table: render the pipe table whose header line starts at byte `hs` (the caller verified a delimiter row
+# follows). Two passes over the rows: compute column widths, then draw header + faint rule + body rows. Sets
+# _gmd_table_end to the byte offset the walker resumes at. Returns the y below the table.
+fn _gfeed_md_table(cmds, x, cy, avail, text, hs) {
+    var he = hs;
+    while ((load8(text + he) != 0) && (load8(text + he) != 10)) { he = he + 1; }
+    var ds = he + 1;                                   # delimiter line (there IS a next line)
+    var de = ds;
+    while ((load8(text + de) != 0) && (load8(text + de) != 10)) { de = de + 1; }
+    md_row_split(text + hs, he - hs);
+    var ncols = md_cell_count();
+    if (ncols < 1) { ncols = 1; }
+    if (ncols > MD_TABLE_MAXCOL) { ncols = MD_TABLE_MAXCOL; }
+    var bs = de;
+    if (load8(text + de) == 10) { bs = de + 1; }
+    var bend = _gmd_body_end(text, bs);
+    # pass 1: column widths over the header + every body row (delimiter excluded)
+    _gmd_colw_init();
+    var wi = 0;
+    while (wi < ncols) { store64(_gmd_colw + wi * 8, 0); wi = wi + 1; }
+    _gmd_row_widths(text + hs, he - hs, ncols);
+    var rs = bs;
+    var wdone = 0;
+    while (wdone == 0) {
+        if (rs >= bend) { wdone = 1; }
+        else {
+            var re = rs;
+            while ((load8(text + re) != 0) && (load8(text + re) != 10)) { re = re + 1; }
+            _gmd_row_widths(text + rs, re - rs, ncols);
+            if (load8(text + re) == 0) { wdone = 1; } else { rs = re + 1; }
+        }
+    }
+    # per-column alignment from the delimiter row
+    _gmd_align_init();
+    var ak = 0;
+    while (ak < ncols) { store64(_gmd_align + ak * 8, md_cell_align(text + ds, de - ds, ak)); ak = ak + 1; }
+    # total grid width (codepoints) for the header rule
+    var tw = 0;
+    var twi = 0;
+    while (twi < ncols) { tw = tw + load64(_gmd_colw + twi * 8); twi = twi + 1; }
+    tw = tw + (ncols - 1) * MD_TABLE_GAP;
+    # pass 2: header + rule + body
+    _gmd_draw_row(cmds, x, cy, text + hs, he - hs, ncols, _ui_rgb(ROLE_ACCENT));
+    if (cmds != 0) { gd_push_rect(cmds, x, cy + GFEED_LH - 3, tw * GR_GLYPH_W, 1, _ui_rgb(ROLE_FAINT)); }
+    cy = cy + GFEED_LH;
+    var brs = bs;
+    var bdone = 0;
+    while (bdone == 0) {
+        if (brs >= bend) { bdone = 1; }
+        else {
+            var bre = brs;
+            while ((load8(text + bre) != 0) && (load8(text + bre) != 10)) { bre = bre + 1; }
+            _gmd_draw_row(cmds, x, cy, text + brs, bre - brs, ncols, _ui_rgb(ROLE_MUTED));
+            cy = cy + GFEED_LH;
+            if (load8(text + bre) == 0) { bdone = 1; } else { brs = bre + 1; }
+        }
+    }
+    _gmd_table_end = bend;
+    return cy;
+}
+
 # _gfeed_md: the GUI structural-markdown renderer — walk a NUL-terminated reply line-by-line, tracking fenced-code
 # state, and draw each block. Replaces _gfeed_para for ASSISTANT content (landed + the live partial). A lone
 # trailing blank line (reply ending in '\n') adds no spurious gap. Returns the y below the reply.
@@ -211,11 +357,30 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
         var llen = le - ls;
         var last = 0;
         if (load8(text + le) == 0) { last = 1; }
+        var advanced = 0;                            # 1 when a branch already repositioned ls (the multi-line table)
         if (in_fence == 1) {
             if (md_fence_close(text + ls, llen, fch, flen) == 1) { in_fence = 0; }        # exit; skip the closing ```
             else { cy = _gfeed_md_code_line(cmds, x, cy, avail, text + ls, llen); }
         } else {
-            if (md_fence_open(text + ls, llen) == 1) { in_fence = 1; fch = md_fence_ch(); flen = md_fence_len(); }   # enter; skip the ```
+            # table: this line has a '|', the NEXT line is a delimiter row, AND the delimiter's column count matches
+            # the header's (GFM). The '|' + column-match checks stop a pipe-bearing prose/setext line above a '---'
+            # (a 1-cell delimiter) from mis-rendering as a table — it stays prose, with the '---' visible.
+            var is_table = 0;
+            if ((last == 0) && (_gmd_has_pipe(text + ls, llen) == 1)) {
+                var hcols = md_row_split(text + ls, llen);   # header cell count (captured before the delim clobbers _md_cells)
+                var ns = le + 1;
+                var ne = ns;
+                while ((load8(text + ne) != 0) && (load8(text + ne) != 10)) { ne = ne + 1; }
+                if (md_is_delim_row(text + ns, ne - ns) == 1) {
+                    if (md_cell_count() == hcols) { is_table = 1; }   # delimiter cols == header cols
+                }
+            }
+            if (is_table == 1) {
+                cy = _gfeed_md_table(cmds, x, cy, avail, text, ls);
+                ls = _gmd_table_end;
+                advanced = 1;
+                if (load8(text + ls) == 0) { done = 1; }
+            } elif (md_fence_open(text + ls, llen) == 1) { in_fence = 1; fch = md_fence_ch(); flen = md_fence_len(); }   # enter; skip the ```
             else {
                 var k = md_classify(text + ls, llen);
                 # skip a LONE trailing blank line (empty OR whitespace-only) so a reply ending in '\n' adds no gap
@@ -223,7 +388,9 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
                 else { cy = _gfeed_md_block(cmds, x, cy, avail, text + ls, llen, k); }
             }
         }
-        if (last == 1) { done = 1; } else { ls = le + 1; }
+        if (advanced == 0) {
+            if (last == 1) { done = 1; } else { ls = le + 1; }
+        }
     }
     return cy;
 }

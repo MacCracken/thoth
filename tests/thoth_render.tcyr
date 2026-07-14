@@ -19,7 +19,7 @@ fn main() {
     out_ring_sink_set(&feed_write);
     test_diff(); test_git_diff(); test_highlight();
     test_mdhl_tag_map(); test_mdhl_fence(); test_mdhl_render(); test_mdhl_stream();
-    test_mdhl_livecard(); test_mdhl_inline(); test_mdmodel();
+    test_mdhl_livecard(); test_mdhl_inline(); test_mdmodel(); test_mdmodel_table();
     return assert_summary();
 }
 var _e = main();

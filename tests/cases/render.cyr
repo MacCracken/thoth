@@ -464,3 +464,34 @@ fn test_mdmodel() {
     assert_eq(md_fence_open(tilde, strlen(tilde)), 1, "'~~~' opens a tilde fence");
     return 0;
 }
+
+# pipe-table model (mdmodel.cyr, 0.36.1): row split into trimmed cells, delimiter-row detection, column alignment.
+# PURE (no feed) — the GUI grid layout is tested separately in the gui suite.
+fn test_mdmodel_table() {
+    test_group("structural markdown tables (mdmodel.cyr, 0.36.1)");
+    # row split trims outer pipes + per-cell whitespace
+    var r = "| a | bb | ccc |";
+    assert_eq(md_row_split(r, strlen(r)), 3, "'| a | bb | ccc |' -> 3 cells");
+    assert_eq(md_cell_len(0), 1, "cell 0 'a'");
+    assert_eq(md_cell_len(1), 2, "cell 1 'bb'");
+    assert_eq(md_cell_len(2), 3, "cell 2 'ccc'");
+    var r2 = "x | y";
+    assert_eq(md_row_split(r2, strlen(r2)), 2, "'x | y' (no outer pipes) -> 2 cells");
+    var r3 = "|a||b|";
+    assert_eq(md_row_split(r3, strlen(r3)), 3, "'|a||b|' -> 3 cells (interior empty kept)");
+    assert_eq(md_cell_len(1), 0, "interior empty cell has len 0");
+    # delimiter-row detection
+    var d = "| --- | :--: | --: |";
+    assert_eq(md_is_delim_row(d, strlen(d)), 1, "'| --- | :--: | --: |' is a delimiter row");
+    var nd = "| a | b |";
+    assert_eq(md_is_delim_row(nd, strlen(nd)), 0, "a content row is NOT a delimiter");
+    var nd2 = "| --- | x |";
+    assert_eq(md_is_delim_row(nd2, strlen(nd2)), 0, "a cell with non -/: bytes is not a delimiter");
+    var nd3 = "| :: | -- |";
+    assert_eq(md_is_delim_row(nd3, strlen(nd3)), 0, "a cell with no dash is not a delimiter");
+    # column alignment from the delimiter row
+    assert_eq(md_cell_align(d, strlen(d), 0), 0, "col 0 '---' -> left/default");
+    assert_eq(md_cell_align(d, strlen(d), 1), 1, "col 1 ':--:' -> center");
+    assert_eq(md_cell_align(d, strlen(d), 2), 2, "col 2 '--:' -> right");
+    return 0;
+}

@@ -167,8 +167,11 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
 - **0.36.x — Rendering + context polish.** **.0 shipped** — **structural markdown in the GUI** (ATX headings, bold,
   inline + fenced code, lists, blockquotes) via a new shared facts-not-bytes model (`src/mdmodel.cyr`, the reply-render
   analogue of `surface.cyr`); the GUI feed is the first leaf that lowers it, and `mdhl` (line/TUI) is left untouched.
-  Remaining: **.1** **tables** — pipe-table parse + layout in the shared model, rendered as a GUI grid + in `mdhl`;
-  **.2** migrate `mdhl` onto the model so ONE markdown classifier drives every surface; **.3** **summarize-on-overflow**
+  **.1 shipped** — **pipe tables** in the GUI: the shared model parses rows/delimiter/alignment
+  (`md_row_split`/`md_is_delim_row`/`md_cell_align`, surface-agnostic), and the GUI feed leaf lays out an aligned grid
+  (`_gfeed_md_table`); line/TUI tables come with the `.2` migration (no bespoke `mdhl` table path). Remaining:
+  **.2** migrate `mdhl` onto the model so ONE markdown classifier drives every surface (line/TUI inherits tables);
+  **.3** **summarize-on-overflow**
   — replace the hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so
   long sessions keep fidelity; **.4** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh
   exposes it.
