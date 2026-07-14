@@ -27,6 +27,7 @@ var _cfg_hoosh_stream = 1;   # 1 = stream completions (default), 0 = blocking
 var _cfg_hoosh_history = 1;  # 1 = multi-turn context (default), 0 = stateless
 var _cfg_hoosh_tools = 1;    # 1 = agentic tool-calling when daimon wired (default), 0 = off
 var _cfg_hoosh_parallel = 1; # 1 = run a round's tool calls concurrently (default), 0 = serial
+var _cfg_hoosh_reasoning = 0;  # 0.35.2: [hoosh].reasoning effort level (0 = off, 1 = low, 2 = medium, 3 = high) -> reasoning_effort
 var _cfg_daimon_url = 0;     # cstring, or 0 if unset (daimon seam stays absent)
 var _cfg_tron_policy = 0;    # cstring path to a t-ron policy TOML, or 0
 var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
@@ -470,6 +471,7 @@ fn config_load() {
     _cfg_hoosh_history = _cfg_bool(hoosh, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg_bool(hoosh, "tools", 1);        # default on
     _cfg_hoosh_parallel = _cfg_bool(hoosh, "parallel", 1);  # default on
+    _cfg_hoosh_reasoning = _reasoning_level_from(_cfg_str(hoosh, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
     var daimon = _cfg_section_pairs(sections, "daimon");
     _cfg_daimon_url = _cfg_str(daimon, "url");
     var tron = _cfg_section_pairs(sections, "tron");
@@ -529,6 +531,30 @@ fn config_hoosh_model() { return _cfg_hoosh_model; }
 # config_hoosh_stream: 1 if turns should stream (SSE) the completion as it
 # arrives (the default), 0 if [hoosh].stream = false (blocking round-trip).
 fn config_hoosh_stream() { return _cfg_hoosh_stream; }
+
+# _reasoning_level_from: map a [hoosh].reasoning string to an effort level
+# (1 = low, 2 = medium, 3 = high). Anything else — 0/off/unknown — is 0 (off),
+# which suppresses the reasoning_effort field entirely (0.35.2).
+fn _reasoning_level_from(s) {
+    if (s == 0) { return 0; }
+    if (streq(s, "low") == 1) { return 1; }
+    if (streq(s, "medium") == 1) { return 2; }
+    if (streq(s, "high") == 1) { return 3; }
+    return 0;
+}
+
+# config_hoosh_reasoning: the requested reasoning effort level, 0-3
+# (0 = off, 1 = low, 2 = medium, 3 = high). 0.35.2.
+fn config_hoosh_reasoning() { return _cfg_hoosh_reasoning; }
+
+# config_hoosh_reasoning_effort: the effort cstring ("low"/"medium"/"high") the
+# request builders emit as reasoning_effort, or 0 when reasoning is off. 0.35.2.
+fn config_hoosh_reasoning_effort() {
+    if (_cfg_hoosh_reasoning == 1) { return "low"; }
+    if (_cfg_hoosh_reasoning == 2) { return "medium"; }
+    if (_cfg_hoosh_reasoning == 3) { return "high"; }
+    return 0;
+}
 
 # config_hoosh_history: 1 if turns carry multi-turn conversation context (the
 # default), 0 if [hoosh].history = false (each turn is independent/stateless).

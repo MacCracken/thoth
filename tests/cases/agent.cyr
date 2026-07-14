@@ -240,6 +240,35 @@ fn test_agent() {
     var toolsb = "[{\"type\":\"function\"}]";
     agent_build_request(&rb, "m", 0, 0, toolsb, strlen(toolsb), 1);
     assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"tools\":[{\"type\":\"function\"}],\"max_tokens\":4096,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"), "agent request: with tools, streaming + usage opt");
+
+    # 0.35.2 reasoning_effort control + reasoning-fold plumbing --------------------
+    # level mapping: only low/medium/high map; 0/off/garbage all fall to off (0)
+    assert_eq(_reasoning_level_from(0), 0, "reasoning: no config -> off");
+    assert_eq(_reasoning_level_from("low"), 1, "reasoning: low -> 1");
+    assert_eq(_reasoning_level_from("medium"), 2, "reasoning: medium -> 2");
+    assert_eq(_reasoning_level_from("high"), 3, "reasoning: high -> 3");
+    assert_eq(_reasoning_level_from("off"), 0, "reasoning: off -> 0");
+    assert_eq(_reasoning_level_from("wild"), 0, "reasoning: unknown -> off");
+    # the effort cstring the request builder emits, per level
+    _cfg_hoosh_reasoning = 0; assert_eq(config_hoosh_reasoning_effort(), 0, "reasoning off -> no effort string");
+    _cfg_hoosh_reasoning = 1; assert(streq(config_hoosh_reasoning_effort(), "low"), "level 1 -> low");
+    _cfg_hoosh_reasoning = 3; assert(streq(config_hoosh_reasoning_effort(), "high"), "level 3 -> high");
+    # request builder: reasoning_effort appears after max_tokens, before stream, only when set
+    _cfg_hoosh_reasoning = 2;
+    agent_build_request(&rb, "m", 0, 0, 0, 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"reasoning_effort\":\"medium\",\"stream\":false}"), "reasoning set: reasoning_effort emitted after max_tokens");
+    _cfg_hoosh_reasoning = 0;
+    agent_build_request(&rb, "m", 0, 0, 0, 0, 0);
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "reasoning off: no reasoning_effort field");
+    # reasoning accumulator (mirrors _hoosh_acc): append + reset + accessors
+    _reason_acc_reset();
+    assert_eq(hoosh_last_reason_len(), 0, "reason acc: empty after reset");
+    _reason_acc_append("abc", 3);
+    _reason_acc_append("de", 2);
+    assert_eq(hoosh_last_reason_len(), 5, "reason acc: two appends accumulate");
+    assert(streq(hoosh_last_reason(), "abcde"), "reason acc: bytes concatenated + null-terminated");
+    _hoosh_acc_reset();   # folds in _reason_acc_reset -> reasoning clears with the reply
+    assert_eq(hoosh_last_reason_len(), 0, "reason acc: cleared by _hoosh_acc_reset (per turn/round)");
     session_reset();
 
     # streamed tool_call assembly: deltas arrive fragmented (id+name first, then

@@ -153,8 +153,11 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   GUI present loop now **paints mid-turn** (the 0.34.3 stop-poll grew into the throttled, ready-gated pump; the feed
   renders the growing `_hoosh_acc` partial live). **.1 shipped** — **live tool-call cards** during the round (the
   `gturn_active` feed branch renders the current turn's roundlog cards above the partial; a card grows a row as each
-  tool returns, riding the pump). Remaining cut: **.2** a **thinking/reasoning** fold rendering `thinking_delta`
-  when hoosh emits it (an extended-thinking stream separate from the answer content).
+  tool returns, riding the pump). **.2 shipped** — a **reasoning-effort control** (`[hoosh].reasoning`, mapped to the
+  provider's native effort by hoosh 2.5.0 — works today on Opus 4.8) **+ a live thinking fold** (both SSE paths parse
+  `reasoning_content` into `_reason_acc`; `_gfeed_flow` renders a collapsible muted "thinking" block above the cards,
+  Ctrl+R to toggle; inert on Opus 4.8, which keeps reasoning internal). Remaining cut: **.3** **persist per-message
+  reasoning** so a landed turn keeps its fold (today the fold is live-only — the reasoning resets with each reply).
 - **0.36.x — Rendering + context polish.** Cuts: **.0** **structural markdown** — headings/bold/lists/tables/
   inline-code (not just fenced code), shared via the render surface; **.1** **summarize-on-overflow** — replace the
   hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so long sessions

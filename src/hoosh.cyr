@@ -39,7 +39,7 @@ var HOOSH_CATALOG_PATH = "/v1/models/catalog";
 var _hoosh_acc = 0;
 var _hoosh_acc_len = 0;
 var HOOSH_ACC_CAP = 65536;
-fn _hoosh_acc_reset() { _hoosh_acc_len = 0; return 0; }
+fn _hoosh_acc_reset() { _hoosh_acc_len = 0; _reason_acc_reset(); return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round)
 
 # hoosh_last_reply / _len (0.11.0): the most recent turn's full assistant text and
 # its byte length (the blocking path copies the parsed content here, streaming
@@ -55,6 +55,29 @@ fn _hoosh_acc_append(p, n) {
     memcpy(_hoosh_acc + _hoosh_acc_len, p, n);
     _hoosh_acc_len = _hoosh_acc_len + n;
     store8(_hoosh_acc + _hoosh_acc_len, 0);
+    return 0;
+}
+
+# Reasoning accumulator (0.35.2): when a model exposes its chain-of-thought,
+# hoosh translates the provider's native thinking stream into `reasoning_content`
+# SSE deltas; both turn paths collect them here so the GUI can render a
+# collapsible "thinking" fold above the answer. Inert on Opus 4.8, which keeps
+# reasoning internal (no thinking_delta -> this stays empty). Reset per round,
+# alongside _hoosh_acc. Mirrors the accumulator directly above.
+var _reason_acc = 0;
+var _reason_acc_len = 0;
+var REASON_ACC_CAP = 65536;
+fn _reason_acc_reset() { _reason_acc_len = 0; return 0; }
+fn hoosh_last_reason() { return _reason_acc; }
+fn hoosh_last_reason_len() { return _reason_acc_len; }
+fn _reason_acc_append(p, n) {
+    if (_reason_acc == 0) { _reason_acc = alloc(REASON_ACC_CAP); }
+    var room = REASON_ACC_CAP - 1 - _reason_acc_len;
+    if (n > room) { n = room; }
+    if (n <= 0) { return 0; }
+    memcpy(_reason_acc + _reason_acc_len, p, n);
+    _reason_acc_len = _reason_acc_len + n;
+    store8(_reason_acc + _reason_acc_len, 0);
     return 0;
 }
 
@@ -280,6 +303,20 @@ fn _json_escape_into(dst, off, src) {
 # Pure — unit-tested. A non-empty `system` (the avatara persona, M5 step 2) is
 # emitted as a leading {role:system} message; an empty/0 system is omitted (the
 # original single-user-message shape, preserved). `stream` (1/0) sets the
+# _append_reasoning_effort: emit the top-level "reasoning_effort" field when
+# [hoosh].reasoning is set (0.35.2). hoosh maps it to the provider's native
+# effort control (Anthropic adaptive thinking output_config.effort); providers
+# that don't expose reasoning ignore it. Off -> nothing appended. Shared by both
+# request builders (hoosh_build_request and agent_build_request).
+fn _append_reasoning_effort(dst, off, cap) {
+    var eff = config_hoosh_reasoning_effort();
+    if (eff == 0) { return off; }
+    off = _append_cstr_cap(dst, off, cap, ",\"reasoning_effort\":\"");
+    off = _append_cstr_cap(dst, off, cap, eff);
+    off = _append_cstr_cap(dst, off, cap, "\"");
+    return off;
+}
+
 # OpenAI `"stream"` field — true makes the gateway answer with SSE deltas. Shape:
 #   {"model":"M","messages":[{"role":"system","content":"S"},{"role":"user","content":"P"}],"max_tokens":N,"stream":true|false}
 fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
@@ -304,6 +341,7 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
     off = _json_escape_into_cap(dst, off, cap, prompt);
     off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     # stream_options:{include_usage} makes the gateway append a final usage frame to
     # the SSE stream (0.10.2) — without it a streamed turn carries no token count.
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
@@ -900,6 +938,15 @@ fn _hoosh_sse_cb(ctx, ev) {
     if (first == 0) { return 1; }            # usage frame / empty choices
     var delta = bayan_json_v_obj_get(first, "delta");
     if (delta == 0) { return 1; }
+    # 0.35.2: reasoning_content precedes content in a round and arrives in its own
+    # frames (no content), so capture it BEFORE the content early-return. The GUI
+    # stop-poll hook (0.35.0) fires per frame via the intr_check above, so the fold
+    # repaints as reasoning streams. Empty on Opus 4.8 (reasoning stays internal).
+    var rc = bayan_json_v_obj_get(delta, "reasoning_content");
+    if (rc != 0) {
+        var rs = bayan_json_v_str(rc);
+        if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
+    }
     var content = bayan_json_v_obj_get(delta, "content");
     if (content == 0) { return 1; }          # role-only / finish / non-content frame
     var s = bayan_json_v_str(content);

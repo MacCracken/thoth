@@ -72,6 +72,29 @@ fn _gfeed_greeting(cmds, x, y, avail_px) {
     return cy;
 }
 
+# 0.35.2 reasoning fold: the collapse preference for the live "thinking" block (the model's chain-of-thought,
+# reasoning_content -> _reason_acc in hoosh.cyr). Default expanded (0). Ctrl+R toggles it (gkey -> greason_toggle).
+# The preference persists across turns (fold it away once, it stays away); the reasoning text itself is transient,
+# reset per turn/round with the reply. Inert on Opus 4.8, which keeps reasoning internal -> _reason_acc stays empty.
+var _greason_collapsed = 0;
+fn greason_collapsed() { return _greason_collapsed; }
+fn greason_toggle() { if (_greason_collapsed == 0) { _greason_collapsed = 1; } else { _greason_collapsed = 0; } return 0; }
+
+# _gfeed_reason: draw the reasoning fold at (xbase, cy) and return the y below it. Collapsed -> just the header
+# row; expanded -> the header + the wrapped reasoning text (FAINT header, MUTED body, indented). Empty reasoning
+# -> cy unchanged (nothing drawn). Measure/draw parity: reads _reason_acc at one instant like the partial reply.
+fn _gfeed_reason(cmds, xbase, cy, avail) {
+    if (hoosh_last_reason_len() <= 0) { return cy; }
+    if (greason_collapsed() == 1) {
+        if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_FAINT), "> thinking (Ctrl+R to expand)", 0); }
+        return cy + GFEED_LH + GFEED_GAP;
+    }
+    if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_FAINT), "v thinking (Ctrl+R to collapse)", 0); }
+    cy = cy + GFEED_LH;
+    cy = _gfeed_para(cmds, xbase + 24, cy, avail - 24, _ui_rgb(ROLE_MUTED), hoosh_last_reason());
+    return cy + GFEED_GAP;
+}
+
 # _gfeed_flow: lay out all n conversation messages from (xbase, cy0) down an avail-wide column; return the y
 # after the last message (incl. its trailing GFEED_GAP). A user message gets a `>` accent marker + FG text; an
 # agent message is plain MUTED body. cmds == 0 => MEASURE ONLY (no draw), the SAME wrap/layout code as the draw
@@ -108,6 +131,9 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
         cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), gturn_text());
         cy = cy + GFEED_GAP;
+        # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
+        # renders ABOVE the cards and partial answer. Empty on Opus 4.8 -> _gfeed_reason returns cy unchanged.
+        cy = _gfeed_reason(cmds, xbase, cy, avail);
         # 0.35.1: the CURRENT turn's tool-call cards, LIVE from the roundlog — each call is recorded as it completes
         # (roundlog_add_call in the loop), and the pump repaints between calls, so a card grows a row as each tool
         # returns during the round (was post-turn only). gtool_build == gtool_build_turn(session_turns()) — the SAME

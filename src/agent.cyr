@@ -277,6 +277,7 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
     }
     off = _append_cstr_cap(dst, off, cap, ",\"max_tokens\":");
     off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
@@ -986,6 +987,11 @@ fn _agent_sse_cb(ctx, ev) {
     if (first == 0) { return 1; }
     var delta = bayan_json_v_obj_get(first, "delta");
     if (delta == 0) { return 1; }
+    var rc = bayan_json_v_obj_get(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty on Opus 4.8)
+    if (rc != 0) {
+        var rs = bayan_json_v_str(rc);
+        if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
+    }
     var content = bayan_json_v_obj_get(delta, "content");
     if (content != 0) {
         var s = bayan_json_v_str(content);

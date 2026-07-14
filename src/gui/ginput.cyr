@@ -314,6 +314,7 @@ fn gkey(code, shift, ctrl) {
         if (code == 48) { gtree_toggle_hidden(); return 0; }     # Ctrl+B -> toggle the file-tree pane
         if (code == 31) { gstatus_toggle_hidden(); return 0; }   # Ctrl+S -> toggle the status strip
         if (code == 37) { gconv_toggle_hidden(); return 0; }     # Ctrl+K -> toggle the conversation sidebar (0.33.6)
+        if (code == 19) { greason_toggle(); return 0; }          # Ctrl+R -> collapse/expand the live reasoning fold (0.35.2)
         if (ginput_ascii(code, shift) != 0) { return 0; }        # swallow other Ctrl+<printable>
     }
     if (code == 104) { gscroll_page(1); return 0; }           # PageUp   -> scroll the feed to OLDER messages

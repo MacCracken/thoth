@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.35.2] - 2026-07-13
+
+**Reasoning-effort control + a live thinking fold — thoth can dial the model's reasoning effort and render a model's chain-of-thought as a collapsible GUI fold.**
+
+### Added
+- **`[hoosh].reasoning = off | low | medium | high` — a per-config reasoning-effort control.** When set, both request
+  builders (`hoosh_build_request`, `agent_build_request`) emit a top-level `"reasoning_effort":"<level>"` field (after
+  `max_tokens`, before `stream`); hoosh 2.5.0 translates it to the provider's native effort control (for the
+  Anthropic backend, adaptive thinking + `output_config.effort`). Off (the default) emits nothing — the request shape
+  is byte-identical to pre-0.35.2, so every existing request-shaping assertion still holds. Parsed by
+  `_reasoning_level_from` (only `low`/`medium`/`high` map to 1/2/3; `off`/unknown/absent → 0); surfaced via
+  `config_hoosh_reasoning` (0-3) and `config_hoosh_reasoning_effort` (the effort cstring, or 0 when off). This is the
+  control that **works today on Opus 4.8**, which raises/lowers effort but keeps the reasoning itself internal.
+- **A live "thinking" reasoning fold in the desktop GUI.** When a model exposes its chain-of-thought, hoosh
+  translates the provider's native thinking stream into `reasoning_content` SSE deltas; both of thoth's SSE paths now
+  parse those (before the content early-return, since reasoning frames carry no content) into a new `_reason_acc`
+  accumulator (mirrors `_hoosh_acc`; `hoosh_last_reason`/`_len` accessors). `_gfeed_flow`'s mid-turn block renders it
+  as a distinct muted **thinking** block ABOVE the tool cards and partial answer (the model reasons first), growing
+  live as the 0.35.0 pump repaints. The fold is **collapsible** — **Ctrl+R** toggles it (`greason_toggle`; the
+  preference persists across turns). The reasoning text is transient — reset per turn/round with the reply
+  (`_reason_acc_reset` folded into `_hoosh_acc_reset`). **Inert on Opus 4.8**, which keeps reasoning internal
+  (`_reason_acc` stays empty → the fold never appears); it lights up automatically on a model that streams reasoning.
+- Tests: level mapping (off/low/medium/high/unknown), the effort cstring per level, the request builder emitting
+  `reasoning_effort` in the right position when set and omitting it when off, and the `_reason_acc` accumulator
+  (append/reset/accessors + reset-via-`_hoosh_acc_reset`). Full suite green (1431 assertions).
+
+**NEXT (0.35.x)**: `.3` persist per-message reasoning so a landed turn keeps its fold (today the fold is live-only);
+richer effort surfacing in `/state`.
+
 ## [0.35.1] - 2026-07-13
 
 **Live tool-call cards — the GUI shows each tool call as it runs during the round, not only after the turn.**

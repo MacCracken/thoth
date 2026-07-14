@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.35.2** — **Reasoning-effort control + a live thinking fold** (2026-07-13). A new **`[hoosh].reasoning = off |
+low | medium | high`** control: both request builders emit a top-level `"reasoning_effort":"<level>"` (after
+`max_tokens`, before `stream`) when set — off is byte-identical to before, so every request-shaping assertion holds.
+hoosh 2.5.0 maps it to the provider's native effort (Anthropic adaptive thinking + `output_config.effort`); this is
+the piece that **works today on Opus 4.8** (it raises/lowers effort but keeps reasoning internal). Parse:
+`_reasoning_level_from` (only low/medium/high → 1/2/3); accessors `config_hoosh_reasoning` (0-3) /
+`config_hoosh_reasoning_effort`. **The fold**: when a model exposes reasoning, hoosh streams `reasoning_content`
+deltas; both SSE paths now parse them (before the content early-return) into `_reason_acc` (mirrors `_hoosh_acc`;
+`hoosh_last_reason`/`_len`), and `_gfeed_flow`'s mid-turn block renders a distinct muted **thinking** block above the
+tool cards + partial answer, growing live on the 0.35.0 pump. **Collapsible via Ctrl+R** (`greason_toggle`,
+persists); reset per turn/round (`_reason_acc_reset` folded into `_hoosh_acc_reset`). **Inert on Opus 4.8**
+(`_reason_acc` stays empty → no fold); lights up on a reasoning-streaming model. Unit-tested (level map, effort
+string, request emission on/off, accumulator); suite green (1431). Pin **6.4.62**. **NEXT (0.35.x)**: `.3` persist
+per-message reasoning so a landed turn keeps its fold (today it is live-only).
+
 **0.35.1** — **Live tool-call cards during the round** (2026-07-13). The GUI's bordered tool-call cards (name ·
 ok/err/deny · ms/bytes · args) were drawn only post-turn; now `_gfeed_flow`'s `gturn_active` block renders
 `gtool_build` (the current turn's roundlog cards) above the streaming partial, so — since the roundlog records each
