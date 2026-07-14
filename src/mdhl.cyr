@@ -48,6 +48,27 @@ var _mdhl_block_over = 0;         # 1 once the block overflowed the cap -> inter
 var _mdhl_block_rows = 0;         # 0.18.3: sealed feed rows emitted LIVE for the current block (TUI)
 var _mdhl_tag = 0;               # alloc(MDHL_TAG_CAP): lowercased first info-word scratch
 
+# --- 0.36.3: pipe-table state (line/TUI aligned grid) -------------------------------------------------------------
+# A grid needs the WHOLE table (column widths span all rows), but mdhl streams line-at-a-time. Rather than holding
+# every '|'-bearing line (one line of latency for common prose), tables ride the 0.18.3 live-card trick: prose is
+# emitted immediately as always, and when a DELIMITER row lands right after a matching pipe-bearing header, the
+# already-sealed header row is DROPPED from the ring and the table buffered instead — re-emitted as an aligned grid
+# on close. Gated on _mdhl_live() (OUT_RING), the only mode that can rewind: the line REPL / PT_PLAIN floor keep
+# today's raw-pipe bytes, unchanged.
+var MDHL_TBL_CAP = 16384;         # accumulated table rows (header + body, '\n'-separated); over-cap -> verbatim
+var MDHL_TBL_DELIM_CAP = 1024;    # the delimiter row (kept for per-column alignment)
+var MDHL_TBL_MAXCOL = 16;         # columns laid out; extra columns fall back to verbatim
+var _mdhl_tbl = 0;                # alloc(MDHL_TBL_CAP): row 0 = header, then body rows
+var _mdhl_tbl_len = 0;
+var _mdhl_tbl_over = 0;           # 1 once the table overflowed a cap -> emit the buffered rows verbatim
+var _mdhl_in_tbl = 0;             # 1 while accumulating a table
+var _mdhl_tbl_delim = 0;          # alloc(MDHL_TBL_DELIM_CAP): the delimiter row text
+var _mdhl_tbl_delim_len = 0;
+var _mdhl_tbl_ncols = 0;
+var _mdhl_tbl_colw = 0;           # alloc(MDHL_TBL_MAXCOL * 8): per-column visible width
+var _mdhl_prev = 0;               # alloc(MDHL_LINE_CAP): the last SEALED prose line (a candidate table header)
+var _mdhl_prev_len = 0;
+
 # _mdhl_ensure: lazily allocate the three buffers (idempotent). Each is allocated
 # independently so a partial failure doesn't wedge the others.
 fn _mdhl_ensure() {
@@ -341,6 +362,211 @@ fn _mdhl_block_close() {
     return 0;
 }
 
+# --- 0.36.3: pipe-table accumulation + aligned-grid emit ----------------------------------------------------------
+var MDHL_TBL_GAP = 2;             # blank columns of gutter between table columns
+var MDHL_TBL_MAXW = 1024;         # widest grid laid out (visible columns); wider -> spill verbatim (see _mdhl_tbl_close)
+var _mdhl_tbl_align = 0;          # alloc(MDHL_TBL_MAXCOL * 8): per-column alignment (0 left / 1 center / 2 right)
+fn _mdhl_tbl_init() {
+    if (_mdhl_tbl == 0) { _mdhl_tbl = alloc(MDHL_TBL_CAP); }
+    if (_mdhl_tbl_delim == 0) { _mdhl_tbl_delim = alloc(MDHL_TBL_DELIM_CAP); }
+    if (_mdhl_tbl_colw == 0) { _mdhl_tbl_colw = alloc(MDHL_TBL_MAXCOL * 8); }
+    if (_mdhl_tbl_align == 0) { _mdhl_tbl_align = alloc(MDHL_TBL_MAXCOL * 8); }
+    if (_mdhl_prev == 0) { _mdhl_prev = alloc(MDHL_LINE_CAP); }
+    return 0;
+}
+
+fn _mdhl_has_pipe(ptr, len) {
+    var i = 0;
+    while (i < len) { if (load8(ptr + i) == 124) { return 1; } i = i + 1; }
+    return 0;
+}
+fn _mdhl_is_blank(ptr, len) {
+    var i = 0;
+    while (i < len) { var c = load8(ptr + i); if ((c != 32) && (c != 9) && (c != 13)) { return 0; } i = i + 1; }
+    return 1;
+}
+# _mdhl_tbl_is_row: a line continues the table while it is non-blank AND carries a '|' (mirrors the header rule).
+fn _mdhl_tbl_is_row(ptr, len) {
+    if (_mdhl_is_blank(ptr, len) == 1) { return 0; }
+    return _mdhl_has_pipe(ptr, len);
+}
+
+# _mdhl_tbl_spill: give up on the grid and emit the table's ORIGINAL bytes — the buffered header (row 0), the
+# delimiter (held aside by try_open and never emitted), then the remaining buffered rows. try_open dropped the live
+# header row from the ring, so this restores it: after a spill the table's bytes are complete and in order.
+fn _mdhl_tbl_spill() {
+    if (_mdhl_tbl_len == 0) { return 0; }
+    var re = 0;
+    while ((re < _mdhl_tbl_len) && (load8(_mdhl_tbl + re) != 10)) { re = re + 1; }
+    emit_n(_mdhl_tbl, re + 1);                                                       # header + its '\n'
+    if (_mdhl_tbl_delim_len > 0) { emit_n(_mdhl_tbl_delim, _mdhl_tbl_delim_len); emit("\n"); }
+    if ((re + 1) < _mdhl_tbl_len) { emit_n(_mdhl_tbl + re + 1, _mdhl_tbl_len - (re + 1)); }   # body rows
+    _mdhl_tbl_len = 0;
+    return 0;
+}
+
+# _mdhl_tbl_put: append a row (+ '\n') to the table buffer. On overflow, SPILL what's buffered verbatim and latch
+# over — every later row then streams verbatim. Unlike a fenced block (whose interior is emitted live and only
+# re-emitted on close), a table's rows are NOT emitted as they arrive, so this buffer is their only copy: dropping
+# on overflow would lose model output outright (mdhl must NEVER drop a byte). Mirrors _mdhl_block_put's contract.
+fn _mdhl_tbl_put(ptr, len) {
+    if (_mdhl_tbl_over == 1) { emit_n(ptr, len); emit("\n"); return 0; }             # already spilled -> stream on
+    if ((_mdhl_tbl_len + len + 1) > MDHL_TBL_CAP) {
+        _mdhl_tbl_spill();
+        _mdhl_tbl_over = 1;
+        emit_n(ptr, len); emit("\n");                                                 # the row that didn't fit
+        return 0;
+    }
+    memcpy(_mdhl_tbl + _mdhl_tbl_len, ptr, len);
+    _mdhl_tbl_len = _mdhl_tbl_len + len;
+    store8(_mdhl_tbl + _mdhl_tbl_len, 10);
+    _mdhl_tbl_len = _mdhl_tbl_len + 1;
+    return 0;
+}
+
+# _mdhl_prev_save: remember a SEALED prose line as a candidate table header. Only sealed lines (has_nl) qualify —
+# an unsealed force-flushed continuation is still in the feed's pending, which feed_drop_last cannot reach.
+fn _mdhl_prev_save(ptr, len) {
+    _mdhl_tbl_init();
+    if (len > (MDHL_LINE_CAP - 1)) { _mdhl_prev_len = 0; return 0; }
+    memcpy(_mdhl_prev, ptr, len);
+    _mdhl_prev_len = len;
+    return 0;
+}
+
+# _mdhl_tbl_try_open: the current line is a delimiter row directly under a pipe-bearing header with a MATCHING
+# column count -> a table. Drop the header's already-sealed feed row and start buffering. 1 if a table opened.
+# LIVE-only (OUT_RING): the line REPL / PT_PLAIN floor can't rewind, so they keep today's raw-pipe bytes.
+fn _mdhl_tbl_try_open() {
+    if (_mdhl_live() == 0) { return 0; }
+    if (ui_tier() == PT_PLAIN) { return 0; }
+    if (_mdhl_prev_len <= 0) { return 0; }
+    if (_mdhl_has_pipe(_mdhl_prev, _mdhl_prev_len) == 0) { return 0; }
+    if (md_is_delim_row(_mdhl_line, _mdhl_line_len) == 0) { return 0; }
+    var dcols = md_cell_count();                       # delimiter columns (md_is_delim_row split it)
+    var hcols = md_row_split(_mdhl_prev, _mdhl_prev_len);
+    if (dcols != hcols) { return 0; }                  # GFM: the delimiter must match the header's column count
+    if (hcols > MDHL_TBL_MAXCOL) { return 0; }
+    if (feed_count() < 1) { return 0; }                # the header row must still be in the ring to drop exactly
+    feed_drop_last(1);                                 # un-emit the live header row
+    _mdhl_tbl_init();
+    _mdhl_tbl_len = 0;
+    _mdhl_tbl_over = 0;
+    _mdhl_tbl_put(_mdhl_prev, _mdhl_prev_len);         # row 0 = the header
+    if (_mdhl_line_len > (MDHL_TBL_DELIM_CAP - 1)) { _mdhl_tbl_delim_len = 0; }
+    else { memcpy(_mdhl_tbl_delim, _mdhl_line, _mdhl_line_len); _mdhl_tbl_delim_len = _mdhl_line_len; }
+    _mdhl_tbl_ncols = hcols;
+    _mdhl_in_tbl = 1;
+    _mdhl_prev_len = 0;
+    return 1;
+}
+
+fn _mdhl_pad(n) {
+    var i = 0;
+    while (i < n) { emit(" "); i = i + 1; }
+    return 0;
+}
+
+# _mdhl_tbl_row_widths: grow _mdhl_tbl_colw[k] to the k-th cell's VISIBLE width (feed_visible_cols is SGR- and
+# wide-glyph-aware, so a CJK cell aligns correctly).
+fn _mdhl_tbl_row_widths(rptr, rlen, ncols) {
+    md_row_split(rptr, rlen);
+    var n = md_cell_count();
+    var k = 0;
+    while (k < ncols) {
+        var w = 0;
+        if (k < n) { w = feed_visible_cols(rptr + md_cell_start(k), md_cell_len(k)); }
+        if (w > load64(_mdhl_tbl_colw + k * 8)) { store64(_mdhl_tbl_colw + k * 8, w); }
+        k = k + 1;
+    }
+    return 0;
+}
+
+# _mdhl_tbl_emit_row: emit one row padded to the column widths + aligned. Header cells (ri == 0) are ROLE_ACCENT;
+# body cells are verbatim. Cells are plain text (no inline styling), matching the GUI grid.
+fn _mdhl_tbl_emit_row(rptr, rlen, ncols, ri) {
+    md_row_split(rptr, rlen);
+    var n = md_cell_count();
+    var k = 0;
+    while (k < ncols) {
+        var w = load64(_mdhl_tbl_colw + k * 8);
+        var cs = 0;
+        var cl = 0;
+        var cw = 0;
+        if (k < n) { cs = md_cell_start(k); cl = md_cell_len(k); cw = feed_visible_cols(rptr + cs, cl); }
+        var lead = 0;
+        var al = load64(_mdhl_tbl_align + k * 8);
+        if (al == 2) { lead = w - cw; }
+        elif (al == 1) { lead = (w - cw) / 2; }
+        if (lead < 0) { lead = 0; }
+        _mdhl_pad(lead);
+        if (cl > 0) {
+            if (ri == 0) { _mdhl_span(0, ROLE_ACCENT, rptr + cs, cl); } else { emit_n(rptr + cs, cl); }
+        }
+        var trail = w - cw - lead;
+        if (trail < 0) { trail = 0; }
+        if (k < (ncols - 1)) { _mdhl_pad(trail); _mdhl_pad(MDHL_TBL_GAP); }   # no trailing pad on the last column
+        k = k + 1;
+    }
+    emit("\n");
+    return 0;
+}
+
+# _mdhl_tbl_emit_rule: a faint '-' rule spanning the grid, under the header.
+fn _mdhl_tbl_emit_rule(ncols) {
+    var total = 0;
+    var k = 0;
+    while (k < ncols) { total = total + load64(_mdhl_tbl_colw + k * 8); k = k + 1; }
+    total = total + (ncols - 1) * MDHL_TBL_GAP;
+    emit(ui_sgr(ROLE_FAINT));
+    var i = 0;
+    while (i < total) { emit("-"); i = i + 1; }
+    emit(ui_reset());
+    emit("\n");
+    return 0;
+}
+
+# _mdhl_tbl_close: finalize the buffered table — two passes (column widths, then emit header + rule + body). An
+# overflowed table already spilled + streamed verbatim (nothing left to do); a mis-shaped or over-WIDE grid spills
+# verbatim. Never drops a byte.
+fn _mdhl_tbl_close() {
+    if (_mdhl_tbl_over == 1) { _mdhl_tbl_len = 0; return 0; }   # rows already emitted verbatim by the spill/stream
+    if (_mdhl_tbl_len == 0) { return 0; }
+    var ncols = _mdhl_tbl_ncols;
+    if ((ncols < 1) || (ncols > MDHL_TBL_MAXCOL)) { _mdhl_tbl_spill(); return 0; }
+    var k = 0;
+    while (k < ncols) { store64(_mdhl_tbl_colw + k * 8, 0); k = k + 1; }
+    var rs = 0;
+    while (rs < _mdhl_tbl_len) {
+        var re = rs;
+        while ((re < _mdhl_tbl_len) && (load8(_mdhl_tbl + re) != 10)) { re = re + 1; }
+        _mdhl_tbl_row_widths(_mdhl_tbl + rs, re - rs, ncols);
+        rs = re + 1;
+    }
+    # A padded grid is the one mdhl path whose VISIBLE width can far exceed its source line (cells pad to the
+    # widest row's cell), so a pathological table could out-grow a feed row and be truncated on write — losing cell
+    # text that rendered fine before this cut. Wider than MDHL_TBL_MAXW is unusable on any terminal anyway: spill
+    # verbatim, where the raw pipes soft-wrap instead.
+    var gw = 0;
+    var gk = 0;
+    while (gk < ncols) { gw = gw + load64(_mdhl_tbl_colw + gk * 8); gk = gk + 1; }
+    gw = gw + (ncols - 1) * MDHL_TBL_GAP;
+    if (gw > MDHL_TBL_MAXW) { _mdhl_tbl_spill(); return 0; }
+    var ak = 0;
+    while (ak < ncols) { store64(_mdhl_tbl_align + ak * 8, md_cell_align(_mdhl_tbl_delim, _mdhl_tbl_delim_len, ak)); ak = ak + 1; }
+    var ri = 0;
+    rs = 0;
+    while (rs < _mdhl_tbl_len) {
+        var re = rs;
+        while ((re < _mdhl_tbl_len) && (load8(_mdhl_tbl + re) != 10)) { re = re + 1; }
+        _mdhl_tbl_emit_row(_mdhl_tbl + rs, re - rs, ncols, ri);
+        if (ri == 0) { _mdhl_tbl_emit_rule(ncols); }
+        ri = ri + 1;
+        rs = re + 1;
+    }
+    return 0;
+}
+
 # _mdhl_line_done: classify + emit one assembled line, then clear the line buffer. A
 # continuation piece (overflowed logical line) is never a fence marker. Otherwise: out of
 # a fence, an opener starts a block (opener emitted verbatim, grammar resolved) else the
@@ -348,10 +574,22 @@ fn _mdhl_block_close() {
 # the closer verbatim, else the line is interior (buffered).
 fn _mdhl_line_done(has_nl) {
     if (_mdhl_line_cont == 1) {
+        _mdhl_prev_len = 0;                          # 0.36.3: an unsealed continuation is not a table-header candidate
         if (_mdhl_in_fence == 1) { _mdhl_block_put(has_nl); }
         else { _mdhl_put_line(has_nl); }
-    } elif (_mdhl_in_fence == 0) {
+        _mdhl_line_len = 0;
+        return 0;
+    }
+    # 0.36.3: an open table absorbs table rows; anything else closes it (emitting the grid) and falls through below.
+    if (_mdhl_in_tbl == 1) {
+        if (_mdhl_tbl_is_row(_mdhl_line, _mdhl_line_len) == 1) { _mdhl_tbl_put(_mdhl_line, _mdhl_line_len); _mdhl_line_len = 0; return 0; }
+        _mdhl_tbl_close();
+        _mdhl_in_tbl = 0;
+        _mdhl_tbl_len = 0;
+    }
+    if (_mdhl_in_fence == 0) {
         if (_mdhl_scan_fence_open() == 1) {
+            _mdhl_prev_len = 0;                      # 0.36.3: a fence opener is not a table header
             _mdhl_resolve_grammar();
             _mdhl_put_line(has_nl);
             _mdhl_in_fence = 1;
@@ -359,9 +597,14 @@ fn _mdhl_line_done(has_nl) {
             _mdhl_block_over = 0;
             _mdhl_block_rows = 0;                    # 0.18.3: start counting live interior rows
         } else {
+            # 0.36.3: a delimiter row under a matching pipe-bearing header opens a table (drops the live header row)
+            if (_mdhl_tbl_try_open() == 1) { _mdhl_line_len = 0; return 0; }
             _mdhl_inline_line(has_nl);               # 0.18.8: prose line -> inline markdown styling (was _mdhl_put_line)
+            if (has_nl == 1) { _mdhl_prev_save(_mdhl_line, _mdhl_line_len); }   # 0.36.3: candidate table header
+            else { _mdhl_prev_len = 0; }
         }
     } else {
+        _mdhl_prev_len = 0;                          # 0.36.3: fence lines/interior are never table headers
         if (_mdhl_scan_fence_close() == 1) {
             _mdhl_block_close();                     # 0.18.3: upgrade the live block in place (TUI) / flush
             _mdhl_put_line(has_nl);
@@ -413,6 +656,12 @@ fn _mdhl_clear() {
     _mdhl_block_len = 0;
     _mdhl_block_over = 0;
     _mdhl_block_rows = 0;
+    _mdhl_in_tbl = 0;             # 0.36.3: table state is turn/iteration-scoped too
+    _mdhl_tbl_len = 0;
+    _mdhl_tbl_over = 0;
+    _mdhl_tbl_delim_len = 0;
+    _mdhl_tbl_ncols = 0;
+    _mdhl_prev_len = 0;
     return 0;
 }
 
@@ -444,6 +693,10 @@ fn mdhl_finish() {
     if (_mdhl_line_len > 0) {
         _mdhl_line_cont = 0;
         _mdhl_line_done(0);
+    }
+    if (_mdhl_in_tbl == 1) {
+        _mdhl_tbl_close();         # 0.36.3: emit a table still open at end-of-reply
+        _mdhl_in_tbl = 0;
     }
     if (_mdhl_in_fence == 1) {
         _mdhl_block_close();       # 0.18.3: upgrade a live unterminated block in place (TUI) / flush

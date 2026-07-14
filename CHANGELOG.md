@@ -2,6 +2,39 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.36.3] - 2026-07-13
+
+**Tables in the terminal — the TUI renders pipe tables as an aligned grid (tables now render on every surface).**
+
+### Added
+- **`mdhl` (line/TUI) now renders pipe tables as an aligned monospace grid**, completing the tables story the GUI
+  started in `0.36.1`: header cells in `ROLE_ACCENT` above a faint rule, body cells padded to each column's widest
+  value and aligned per the delimiter (`:--:` center, `--:` right). Column widths use `feed_visible_cols`, so SGR and
+  wide (CJK) glyphs align correctly. Detection reuses the shared model (`md_is_delim_row` / `md_row_split` /
+  `md_cell_align`) and the same GFM rule as the GUI — a `|`-bearing header **plus** a delimiter row with a matching
+  column count — so a pipe-bearing prose line above a `---` stays prose.
+- **No streaming latency**: rather than holding every `|`-bearing line to peek at the next one, tables ride mdhl's
+  existing **live-card** trick (0.18.3) — prose streams immediately as always, and when a delimiter row lands under a
+  matching header, the header's already-sealed feed row is dropped (`feed_drop_last(1)`) and the table buffered, then
+  re-emitted as a grid on close. This is `_mdhl_live()`-gated (`OUT_RING`, the only mode that can rewind), so **the
+  line REPL and the `PT_PLAIN` floor keep today's raw-pipe bytes, byte-identical**.
+- **Adversarially reviewed** (feed rewind / state machine / grid + floor). The rewind was confirmed sound (`n=1` is
+  immune to the ring-eviction hazard that forced the stricter guard on fenced blocks), but all three dimensions
+  independently caught — and empirically reproduced — a **major byte loss I introduced**: unlike a fenced block
+  (whose interior streams live and is only *re-emitted* on close), a table's rows are never emitted as they arrive,
+  so the buffer is their **only** copy — and overflowing `MDHL_TBL_CAP` silently dropped the triggering row and every
+  row after it (a 600-row table lost 212 rows), while the "verbatim fallback" also dropped the delimiter. **Fixed**:
+  overflow now **spills** the buffered header + delimiter + rows verbatim and streams every later row, so the table's
+  original bytes are always complete and in order; a grid wider than `MDHL_TBL_MAXW` (unusable on any terminal) spills
+  verbatim too, rather than being truncated on write. `test_mdhl_table_overcap` asserts the **exact** row count (503)
+  reaches the feed.
+- Tests: `test_mdhl_table` (grid rows with the delimiter consumed, styled header, aligned right column, pipe-prose
+  without a delimiter staying prose, and the `PT_PLAIN` floor verbatim with pipes intact) + `test_mdhl_table_overcap`.
+  Suite green (247 gui + 1451 core + 180 render + 3).
+
+**NEXT (0.36.x)**: `.4` **summarize-on-overflow** — replace the hard 40-message eviction with a summarize strategy so
+long sessions keep fidelity; `.5` export formats.
+
 ## [0.36.2] - 2026-07-13
 
 **One markdown classifier — `mdhl` (line/TUI) now drives from the shared model, removing the duplicated predicates.**

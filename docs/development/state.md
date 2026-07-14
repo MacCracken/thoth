@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.36.3** — **Tables in the terminal: mdhl renders an aligned grid** (2026-07-13). Completes the tables story (GUI
+got them in `.1`): header cells `ROLE_ACCENT` above a faint rule, body cells padded to each column's widest value +
+aligned per the delimiter; widths via `feed_visible_cols` (SGR/wide-glyph aware). Detection reuses the shared model
+(`md_is_delim_row`/`md_row_split`/`md_cell_align`) with the same GFM rule as the GUI (pipe header + matching-column
+delimiter). **No streaming latency**: rides mdhl's 0.18.3 live-card trick — prose streams as always, and a delimiter
+under a matching header DROPS the header's sealed feed row (`feed_drop_last(1)`) and buffers, re-emitting the grid on
+close. `_mdhl_live()`-gated (OUT_RING), so the line REPL + `PT_PLAIN` floor keep raw-pipe bytes, byte-identical.
+**Adversarially reviewed** — rewind confirmed sound; all three dimensions caught + reproduced a **major byte loss**:
+a table's rows never stream (the buffer is their only copy), so an over-`MDHL_TBL_CAP` table silently dropped the
+tail (600 rows → 212 lost) and the fallback dropped the delimiter. Fixed: overflow **spills** header+delimiter+rows
+verbatim then streams the rest (bytes always complete); an over-`MDHL_TBL_MAXW` grid spills too. `test_mdhl_table` +
+`test_mdhl_table_overcap` (asserts the exact 503-row count). Suite green (247 + 1451 + 180 + 3). Pin **6.4.62**.
+**NEXT (0.36.x)**: `.4` summarize-on-overflow; `.5` export formats.
+
 **0.36.2** — **One markdown classifier: mdhl driven by the shared model** (2026-07-13). mdhl's prose + inline
 classification (`_mdhl_inline_line`/`_mdhl_emit_inline`) now drives from `src/mdmodel.cyr` (`md_classify` +
 `md_inline_scan` runs) instead of its own predicates — line/TUI and GUI share ONE classifier; the six duplicated

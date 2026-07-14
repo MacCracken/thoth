@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.36.2 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
+> **Status: 0.36.3 — the full spine wired, agentic tool-calling live, thoth reads *and writes* code (crash-safe),
 > a memory seam that consumes mneme, a rich TUI by default, a non-interactive shell citizen, and a native desktop
 > GUI (`thoth gui`) with structural-markdown replies, colored diff cards, and a reasoning-effort control + persistent
 > per-turn thinking fold (pre-1.0).**

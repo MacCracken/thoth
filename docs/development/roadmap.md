@@ -172,8 +172,10 @@ four AGNOS gates keep priority); the rest of this section re-gathers unscheduled
   (`_gfeed_md_table`); line/TUI tables come with the `.2` migration (no bespoke `mdhl` table path). Remaining:
   **.2 shipped** — **one markdown classifier**: `mdhl`'s prose + inline classification now drives from the shared
   model (`md_classify` + `md_inline_scan`), removing the six duplicated predicates; byte-identical for line/TUI (the
-  fenced-code path stays bespoke for now). Remaining: **.3** line/TUI **table rendering** — `mdhl` buffers table rows
-  and emits an aligned monospace grid via the model's parser (the piece `.1` deferred); **.4** **summarize-on-overflow**
+  fenced-code path stays bespoke for now). **.3 shipped** — line/TUI **table rendering**: `mdhl` emits an aligned monospace grid via the model's
+  parser, riding the 0.18.3 live-card trick (a delimiter under a matching header drops the header's sealed feed row
+  and re-emits the table as a grid) — so tables now render on EVERY surface, with the line/`PT_PLAIN` floor keeping
+  raw-pipe bytes. Remaining: **.4** **summarize-on-overflow**
   — replace the hard 40-message eviction with a summarize strategy (a cheap hoosh side-call, or fold into mneme) so
   long sessions keep fidelity; **.5** export formats (`/save` gains JSON/plain) + model-picker health/pricing if hoosh
   exposes it.

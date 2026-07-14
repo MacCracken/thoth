@@ -512,3 +512,94 @@ fn test_mdmodel_runcap() {
     assert(md_role_at(p - 1) == MDI_PLAIN, "a byte past the last recorded run reads back PLAIN (the GUI fallback)");
     return 0;
 }
+
+# markdown table grid (mdhl.cyr, 0.36.3): under the TUI feed (OUT_RING) a pipe table is detected when a delimiter
+# row lands under a matching pipe-bearing header — the live header row is DROPPED and the table re-emitted as an
+# aligned grid (header ACCENT + a faint rule + padded/aligned body rows). The PT_PLAIN floor stays verbatim.
+fn test_mdhl_table() {
+    test_group("markdown table grid (mdhl.cyr, 0.36.3)");
+    ui_force(PT_ANSI, CD_TRUE);
+    var src = "| name | qty |\n| --- | --: |\n| apples | 3 |\n| pears | 12 |\n";
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(src, strlen(src));
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    # header + rule + 2 body rows; the delimiter row is consumed and the raw header row was dropped + re-emitted
+    assert_eq(feed_count(), 4, "table -> header + rule + 2 body rows (delimiter consumed)");
+    assert(_t_has_esc(feed_line_ptr(0), feed_line_len(0)) == 1, "header row is styled (ROLE_ACCENT cells)");
+    var hb[256];
+    var hn = _t_strip_sgr(&hb, feed_line_ptr(0), feed_line_len(0));
+    assert_eq(_t_count_sub(&hb, hn, "name", 4), 1, "header cell 'name'");
+    assert_eq(_t_count_sub(&hb, hn, "qty", 3), 1, "header cell 'qty'");
+    assert_eq(_t_count_sub(&hb, hn, "|", 1), 0, "the grid replaces the raw pipes");
+    var rb[256];
+    var rn = _t_strip_sgr(&rb, feed_line_ptr(1), feed_line_len(1));
+    assert(_t_count_sub(&rb, rn, "---", 3) >= 1, "a rule row sits under the header");
+    var b1[256];
+    var b1n = _t_strip_sgr(&b1, feed_line_ptr(2), feed_line_len(2));
+    assert_eq(_t_count_sub(&b1, b1n, "apples", 6), 1, "body row cell 'apples'");
+    assert_eq(_t_count_sub(&b1, b1n, "|", 1), 0, "body rows lose the raw pipes too");
+    # right-aligned 'qty' column: '3' (row 2) and '12' (row 3) end at the same visible column
+    var b2[256];
+    var b2n = _t_strip_sgr(&b2, feed_line_ptr(3), feed_line_len(3));
+    assert_eq(b1n, b2n, "right-aligned column: body rows share one visible width (aligned grid)");
+    # a pipe-bearing line NOT followed by a delimiter stays ordinary prose (no table, pipes kept)
+    feed_init();
+    out_mode_set(OUT_RING);
+    var prose = "a | b\nnot a delimiter\n";
+    mdhl_reply(prose, strlen(prose));
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "pipe prose without a delimiter -> 2 plain rows");
+    var pb[256];
+    var pn = _t_strip_sgr(&pb, feed_line_ptr(0), feed_line_len(0));
+    assert_eq(_t_count_sub(&pb, pn, "|", 1), 1, "the pipe survives in ordinary prose");
+    # PT_PLAIN floor: verbatim, table untouched (no grid, pipes intact)
+    ui_force(PT_PLAIN, CD_NONE);
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(src, strlen(src));
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 4, "floor: the 4 raw lines pass through verbatim");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "|", 1), 3, "floor: raw pipes intact (no grid)");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
+
+fn _t_app(buf, p, s) { var n = strlen(s); memcpy(buf + p, s, n); return p + n; }
+
+# over-cap table (mdhl.cyr, 0.36.3): a table's rows are NOT emitted as they stream (unlike a fenced block's
+# interior), so the buffer is their ONLY copy — overflowing MDHL_TBL_CAP must SPILL verbatim, never drop. Guards
+# the review-caught byte loss: a 500-row table lost its tail rows AND its delimiter row outright.
+fn test_mdhl_table_overcap() {
+    test_group("over-cap table spills verbatim (mdhl.cyr, 0.36.3)");
+    ui_force(PT_ANSI, CD_TRUE);
+    var buf = alloc(65536);
+    var p = 0;
+    p = _t_app(buf, p, "| name | value |\n");
+    p = _t_app(buf, p, "| --- | --- |\n");
+    var r = 0;
+    while (r < 500) { p = _t_app(buf, p, "| aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb |\n"); r = r + 1; }
+    p = _t_app(buf, p, "| LASTROW | ZZEND |\n");                # ~34 KB >> MDHL_TBL_CAP (16 KB)
+    feed_init();
+    out_mode_set(OUT_RING);
+    mdhl_reply(buf, p);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var found = 0;
+    var dfound = 0;
+    var i = 0;
+    while (i < feed_count()) {
+        if (_t_count_sub(feed_line_ptr(i), feed_line_len(i), "ZZEND", 5) >= 1) { found = 1; }
+        if (_t_count_sub(feed_line_ptr(i), feed_line_len(i), "| --- | --- |", 13) >= 1) { dfound = 1; }
+        i = i + 1;
+    }
+    assert_eq(found, 1, "over-cap table: the LAST row survives (no silent drop)");
+    assert_eq(dfound, 1, "over-cap table: the delimiter row is emitted by the verbatim spill");
+    # byte-completeness: header + delimiter + 500 filler + LASTROW = 503 lines, every one emitted
+    assert_eq(feed_count(), 503, "over-cap table: EVERY source row reaches the feed (nothing dropped)");
+    ui_force(PT_PLAIN, CD_NONE);
+    return 0;
+}
