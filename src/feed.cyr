@@ -388,6 +388,7 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
                 }
             } else {
                 var gl = _feed_glyph_len(src, i, src_len);
+                var gw0 = feed_glyph_cols(src, i, gl);           # 0.38.1: width needed BEFORE the tint decision
                 if (emitted == 1) {                              # PAINT: emit the glyph (always in-window here)
                     # 0.38.0 rainbow: tint this glyph with the hue for its VISIBLE COLUMN. The phase is
                     # derived from `cols` (not a running counter), which is what keeps a repaint
@@ -399,7 +400,13 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
                     # COLOR IS BEST-EFFORT, TEXT IS NOT: the escape is written ONLY if the glyph still
                     # fits after it. On an exhausted dst the glyph is emitted UNTINTED rather than
                     # dropped — a row must never lose a byte of content to buy a color.
-                    if (rainbow == 1) {
+                    # A ZERO-WIDTH glyph (a combining mark) takes NO escape of its own: it composes onto the
+                    # base glyph and must inherit its hue — a separate hue for a mark is meaningless. This is
+                    # also what BOUNDS the tint: only column-advancing glyphs are tinted, so a row can carry at
+                    # most one escape per visible column. Without it, a run of combining marks never advances
+                    # `cols`, so it stays inside the window unbounded and each mark buys another ~19 B —
+                    # which is exactly how a review repro pushed a row past PAINT_CAP and dropped its tail.
+                    if ((rainbow == 1) && (gw0 > 0)) {
                         var b0 = load8(src + i);
                         if ((b0 != 32) && (b0 != 9)) {
                             var rs = ui_rainbow_sgr(cols * UI_RAINBOW_STEP);
@@ -418,7 +425,7 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
                         wrote = wrote + gl;
                     }
                 }
-                cols = cols + feed_glyph_cols(src, i, gl);       # 0.18.7: count the glyph's WIDTH (1/2/0) in BOTH phases
+                cols = cols + gw0;                               # 0.18.7: count the glyph's WIDTH (1/2/0) in BOTH phases
                 i = i + gl;
             }
         }

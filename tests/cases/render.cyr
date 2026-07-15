@@ -113,6 +113,32 @@ fn test_highlight() {
 }
 
 # mdhl (0.15.1): the fence-tag -> grammar mapping is PURE.
+# The LINE tier's rainbow prose tint (0.38.1). mdhl is the reply sink, so this is where the line tier tints —
+# NOT ui_emit, which is chrome (0.38.0 had those exactly backwards: chrome cycled, prose never did). mdhl's
+# ADR-0009 contract — strip_sgr(output) == the raw line — must survive the tint.
+fn test_mdhl_rainbow() {
+    test_group("line-tier rainbow prose (mdhl.cyr, 0.38.1)");
+    ui_force(PT_ANSI, CD_TRUE);
+    ui_set_theme(THEME_RAINBOW);
+    out_mode_set(OUT_RING);                  # a test cannot read fd 1; capture through the feed instead
+    feed_clear();
+    # Under OUT_RING the line hook MUST decline: a ~19 B/glyph escape baked into a 2048 B slot would overflow
+    # it past ~100 cols and drop text — the whole reason the feed stores 2-byte role markers and the PAINTER
+    # tints on expansion.
+    assert_eq(ui_rainbow_line(), 0, "OUT_RING: the line hook declines (the marker must reach the slot)");
+    mdhl_reply("hi there\n", 9);
+    feed_flush_pending();
+    var sb[256];
+    _t_strip_sgr(&sb, feed_line_ptr(0), feed_line_len(0));
+    assert_eq(streq(&sb, "hi there"), 1, "OUT_RING prose is byte-intact (strip_sgr == the raw line)");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "\x1b[38;2;", 7), 0,
+              "  ... and carries NO baked hue (the painter tints it later, compactly)");
+    out_mode_set(OUT_FD1);
+    ui_set_theme(THEME_DARK);
+    ui_detect_tier();
+    return 0;
+}
+
 fn test_mdhl_tag_map() {
     test_group("markdown fence tag -> grammar (mdhl.cyr)");
     assert(streq(_mdhl_tag_grammar("bash"), "shell"), "bash -> shell");

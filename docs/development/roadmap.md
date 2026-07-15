@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.38.0):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.38.1):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`), the model **`shell`** / **`edit`** /
 > **`create_file`** tools (thoth reads *and writes* code), the **memory arc** (consume mneme), the
 > **chat-management arc** (named multi-conversation store), the **chat-UX arc** (message actions, stop/interrupt,
@@ -168,9 +168,19 @@ Forward, non-gating (each ready when its prerequisite lands; none blocks v1.0):
 > low-priority hardening. **None is a correctness bug**; each degrades honestly today.
 > Recorded here so it isn't lost in code comments.
 
-- **`rainbow` in the GUI (T3).** The line + TUI tiers cycle per grapheme (0.38.0); the GUI runs under
-  `OUT_NULL` with its own renderer leaf, so it never sees `ui_emit`/`feed_clip_seg` and stays on the role
-  palette. Wiring the hue into `gfeed`'s glyph loop is the remaining tier. Degrades honestly today.
+- **`rainbow` polish.** All three tiers cycle per grapheme and are reachable (0.38.1: `/theme` + ⌃T on the TUI,
+  Ctrl+T in the GUI). Remaining, non-gating:
+  - **Semantic roles inside the feed.** The painter tints every glyph in the ring, so chrome routed *into* the
+    feed (the t-ron DENY line, the `/reprobe` health notice) cycles instead of staying red/green — once both are
+    role markers the painter cannot tell a notice from prose. Exempting semantic roles at marker-expansion would
+    fix it. Directly-painted chrome (status bar, tree, prompts) is already unaffected.
+  - **A persistent `[ui].theme` config key** — the theme is per-session only; there is no way to start in a
+    chosen theme, on any tier.
+  - **A diagonal / animated phase** — the hue is a pure function of COLUMN, so every row shares one gradient; a
+    per-row offset would give the classic lolcat diagonal, but must stay deterministic or `feed_repaint` shimmers.
+  - **The GUI's on-compositor re-confirm** — headless pixel tests cover the rasterizer.
+  - **Fenced code at the line tier** stays syntax-highlighted (the TUI painter tints it) — an asymmetry to
+    settle either way.
 
 - **bhava — the sentiment→mood loop (a backlogged seam, gated on bhava's Cyrius port).** SecureYeoman feeds a
   turn's response sentiment back into the active persona's mood; that loop is **bhava**'s domain. Already a

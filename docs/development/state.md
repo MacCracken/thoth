@@ -7,6 +7,39 @@
 
 ## Version
 
+**0.38.1** — **rainbow reaches the GUI + the 0.38.0 review fixes** (2026-07-14). A 9-dimension adversarial review
+(each finding through a 3-lens refute-by-default panel) found 0.38.0's line tier **inverted**: it hooked `ui_emit`
+on the premise that `out_mode() == OUT_FD1` meant "line tier", and BOTH premises were false. `ui_emit` is the
+**chrome** emitter — reply prose reaches the tty via **mdhl**'s raw `emit`/`emit_n`, so prose was NEVER tinted
+while chrome cycled; and the TUI paints its chrome under OUT_FD1 too, so the tint hijacked the status bar,
+including the hoosh health dot (`ROLE_GREEN` vs `ROLE_RED` "●" — a glyph whose ONLY signal is color), shimmering
+it every repaint. The 0.38.0 pty test "proved" the feature by watching the word *rainbow* cycle — that word is
+chrome. **The tint now lives in mdhl** (`_mdhl_text`, the one sink every prose byte crosses) behind
+`ui_rainbow_line()` = rainbow-drawable · **NOT PT_RICH** · OUT_FD1; `ui_emit` is deliberately rainbow-free (a role
+there is semantic). Also fixed: `PAINT_CAP` was never re-derived for a ~19 B escape per glyph and dropped a row's
+tail past ~1365 cols (zero-width glyphs now INHERIT the base hue — semantically right, and it bounds the tint at
+one escape per visible COLUMN, which is what a combining-mark repro rode past the cap for 42–214 dropped bytes;
+cap re-derived to 64 KiB); ⌃T stranded users on an inert rainbow silently (now `tui_theme_next()`, which cycles AND
+announces); `/help` column alignment. **GUI (T3) rainbow SHIPPED**: no escapes and no byte budget there, so the hue
+rides a SENTINEL (`GD_RAINBOW`, outside the 24-bit range) in the existing `GDC_COLOR` slot and `gr_fb_text`
+resolves it per glyph via new `ui_rainbow_rgb()` — proven **to the pixel**, headless. **`ui_force(PT_DESKTOP,
+CD_TRUE)` in `gui_run`**: the GUI never declared a tier, so it inherited the LAUNCHING TERMINAL's depth (dead from
+a desktop launcher) — honest since graster writes real XRGB8888; bonus, the status strip had been mislabelling its
+own surface and now reads **"T3 desktop"** (`PT_DESKTOP` had existed unapplied since 0.28). **A second review of
+0.38.1 then caught the T3 tier was UNREACHABLE DEAD CODE**: `ui_set_theme` has only two callers (`cmd_theme` via
+`dispatch`, and the TUI's ⌃T), but the GUI composer runs `cmd_task()` directly — bypassing `dispatch` — so
+`/theme rainbow` typed in the GUI goes to the MODEL as a task, and no config key exists. The pixel test passed
+because THE TEST called `ui_set_theme` itself: it proved the mechanism, not the reachability. Fixed by binding
+**Ctrl+T** in `ginput` (TUI parity); the test now drives `gkey()`. Also from that review: the line tier now
+shares the painter's zero-width rule (a combining mark inherits its base hue — 3 escapes for 3 glyphs, verified)
+and emits continuation bytes bare (an mdhl line-cap flush can land mid-codepoint; an escape between a glyph's
+bytes = replacement chars); `test_gui_rainbow` was asserting pixels without `gr_ensure_font()` (passing only
+because an earlier test warmed it). Six review-flagged tests that locked nothing were replaced (see CHANGELOG).
+Suite green (264 + 1532 + 183 + 3). Pin **6.4.62**. **KNOWN + documented**: chrome routed INTO the feed (t-ron
+DENY, health notices) is tinted by the painter — once it is a role marker the painter cannot tell a notice from
+prose; directly-painted chrome is unaffected. **NEXT**: exempt semantic roles at marker-expansion; a `[ui].theme`
+config key; GUI on-compositor re-confirm (this sandbox has no seat/DRM).
+
 **0.38.0** — **`/theme rainbow`** (2026-07-14). The last deferred theme lands, consuming the newly-vendored
 **anuenue 1.2.0** (`src/vendor/anuenue.cyr`, `scripts/sync-anuenue.sh`) — anuenue grew a `[lib]` profile for this
 consumer, exporting ONLY its pure HSV geometry (`ANUENUE_PHASE_MOD` + `hsv_rainbow`, standalone over zero deps).

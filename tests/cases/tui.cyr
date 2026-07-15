@@ -1172,9 +1172,33 @@ fn test_rainbow() {
     ui_set_theme(THEME_RAINBOW);
     assert_eq(_ui_contains(ui_rainbow_sgr(0), "38;2;255;0;0"), 1, "phase 0 -> truecolor red");
     assert_eq(_ui_contains(ui_rainbow_sgr(510), "38;2;0;255;0"), 1, "phase 510 -> truecolor green");
-    # Chrome stays readable: rainbow carries the DARK role table (it overrides fg per glyph, it is not
-    # a role palette), so the status line / tree / labels keep their semantic colors.
-    assert_eq(_ui_rgb(ROLE_ACCENT), _ui_rgb_dark(ROLE_ACCENT), "rainbow carries the dark role table (chrome readable)");
+    # CHROME STAYS READABLE — asserted on the path chrome ACTUALLY takes. 0.38.0 only checked the _ui_rgb
+    # role dispatcher, which the chrome paint path does not consult under rainbow; that assertion passed
+    # while ui_emit was in fact rainbow-tinting the status bar (incl. the hoosh health dot, whose only signal
+    # IS red-vs-green). So drive ui_emit itself, at PT_RICH + OUT_FD1 — precisely the state the TUI paints
+    # chrome in, and precisely where 0.38.0 was wrong.
+    assert_eq(_ui_rgb(ROLE_ACCENT), _ui_rgb_dark(ROLE_ACCENT), "rainbow carries the dark role table");
+
+    # THE GATE MATRIX — all three conditions of ui_rainbow_line(), because 0.38.0 shipped only the third and
+    # a review proved that wrong: `out_mode() == OUT_FD1` is NOT a proxy for "line tier". The TUI paints its
+    # CHROME under OUT_FD1, so a sink-only gate let the tint hijack the status bar — including the hoosh
+    # health dot, whose ONLY signal is red-vs-green — and re-hue it from a running phase every repaint.
+    ui_force(PT_ANSI, CD_TRUE);
+    ui_set_theme(THEME_RAINBOW);
+    out_mode_set(OUT_FD1);
+    assert_eq(ui_rainbow_line(), 1, "line tier + OUT_FD1 + truecolor -> prose tints here");
+    ui_force(PT_RICH, CD_TRUE);
+    assert_eq(ui_rainbow_line(), 0, "PT_RICH DECLINES even under OUT_FD1 (chrome keeps its roles; the painter tints)");
+    ui_force(PT_ANSI, CD_TRUE);
+    out_mode_set(OUT_RING);
+    assert_eq(ui_rainbow_line(), 0, "OUT_RING DECLINES (a 2-byte marker must reach the 2048B slot, not 19B/glyph)");
+    out_mode_set(OUT_FD1);
+    ui_force(PT_ANSI, CD_256);
+    assert_eq(ui_rainbow_line(), 0, "below truecolor DECLINES");
+    ui_force(PT_ANSI, CD_TRUE);
+    ui_set_theme(THEME_DARK);
+    assert_eq(ui_rainbow_line(), 0, "a non-rainbow theme DECLINES");
+    ui_set_theme(THEME_RAINBOW);
 
     # The painter tints per GLYPH, hued by VISIBLE COLUMN — which is what makes a repaint
     # deterministic (feed_repaint recolors scrollback instead of shimmering).
@@ -1193,11 +1217,31 @@ fn test_rainbow() {
 
     # THE INVARIANT: color is best-effort, text is not. A dst with no room for a 19-byte escape must
     # still land every GLYPH, untinted — never drop a byte of content to buy a color (the 0.36.3 lesson).
-    var tiny[32];
-    var wt = feed_clip_seg(&tiny, 3, "AB", 2, 0, 80);
-    assert_eq(wt, 2, "exhausted dst: both glyphs still land (text never dropped for color)");
-    assert_eq(load8(&tiny + 0), 65, "  ... 'A' intact");
-    assert_eq(load8(&tiny + 1), 66, "  ... 'B' intact");
+    # Proved the only way that DISCRIMINATES: strip the SGR back off and demand the original text, byte for
+    # byte. (0.38.0 asserted this with dst_cap=3 — too small for the `wrote + rsl + gl <= dst_cap` guard to
+    # distinguish anything, so it passed identically for an implementation that drops text to buy color and
+    # locked nothing.) dst_cap=28 is the discriminating width: room for all 5 glyphs + a reset + ONE ~15-byte
+    # escape, so the painter must tint glyph 0 then keep emitting glyphs 1..4 UNTINTED rather than drop them.
+    ui_force(PT_ANSI, CD_TRUE);
+    ui_set_theme(THEME_RAINBOW);
+    var tight[64];
+    var wt = feed_clip_seg(&tight, 28, "ABCDE", 5, 0, 80);
+    var stripped[64];
+    var sl2 = _t_strip_sgr(&stripped, &tight, wt);
+    assert_eq(sl2, 5, "exhausted dst: every glyph still lands (text never dropped for color)");
+    assert_eq(streq(&stripped, "ABCDE"), 1, "  ... in order, byte-identical to the source");
+    assert_eq(_t_count_sub(&tight, wt, "\x1b[38;2;", 7), 1, "  ... and the one escape that fit was still drawn");
+
+    # A ZERO-WIDTH glyph inherits its base glyph's hue instead of buying its own escape (0.38.1). This is what
+    # BOUNDS the tint at one escape per visible COLUMN: combining marks never advance `cols`, so they stay
+    # in-window unbounded — a review repro rode exactly that past PAINT_CAP and dropped 42-214 bytes of real
+    # text. U+0300 is 2 bytes (0xCC 0x80), width 0.
+    var comb[64];
+    var wc = feed_clip_seg(&comb, 60, "a\xcc\x80\xcc\x80", 5, 0, 80);
+    var cstrip[64];
+    var csl = _t_strip_sgr(&cstrip, &comb, wc);
+    assert_eq(csl, 5, "combining marks: every byte survives");
+    assert_eq(_t_count_sub(&comb, wc, "\x1b[38;2;", 7), 1, "  ... exactly ONE hue escape for the base glyph + its 2 marks");
 
     # The plain floor is byte-identical under rainbow: same bytes as dark, no escapes.
     ui_force(PT_PLAIN, CD_NONE);
@@ -1207,16 +1251,18 @@ fn test_rainbow() {
     assert_eq(wp, 2, "PT_PLAIN + rainbow: 2 bytes, no escapes (floor byte-identical)");
     assert_eq(load8(&pf + 0), 65, "  ... 'A' verbatim");
 
-    # The ⌃T cycle (tui.cyr) must walk the WHOLE axis and never synthesize a non-theme. The pre-0.38.0
-    # `1 - ui_theme()` flip assumed exactly two themes: from rainbow it yields -1, and the next press
-    # turns -1 back into rainbow — stranding the toggle. Modelled here as the cycle the key handler runs.
+    # The ⌃T cycle must walk the WHOLE axis and never synthesize a non-theme. The pre-0.38.0
+    # `1 - ui_theme()` flip assumed exactly two themes: from rainbow it yields -1, and the next press turns
+    # -1 back into rainbow — stranding the toggle so it never returns to dark.
+    #
+    # Drive tui_theme_next() — the ACTUAL fn the KEY_TOGGLE_THEME handler calls. 0.38.0's test re-typed the
+    # handler's arithmetic inline, so it asserted a property of the `%` operator and would have kept passing
+    # if the handler itself still said `1 - ui_theme()`. The handler is only testable because 0.38.1 lifted
+    # it out of the key switch into a fn.
     ui_set_theme(THEME_DARK);
-    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
-    assert_eq(ui_theme(), THEME_LIGHT, "toggle: dark -> light");
-    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
-    assert_eq(ui_theme(), THEME_RAINBOW, "toggle: light -> rainbow");
-    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
-    assert_eq(ui_theme(), THEME_DARK, "toggle: rainbow -> dark (cycles home, never -1)");
+    assert_eq(tui_theme_next(), THEME_LIGHT, "⌃T: dark -> light");
+    assert_eq(tui_theme_next(), THEME_RAINBOW, "⌃T: light -> rainbow");
+    assert_eq(tui_theme_next(), THEME_DARK, "⌃T: rainbow -> dark (cycles home, never -1)");
 
     # restore defaults for later tests
     ui_set_theme(THEME_DARK);

@@ -26,6 +26,13 @@ var GDC_KIND = 0; var GDC_X = 8; var GDC_Y = 16; var GDC_W = 24;
 var GDC_H = 32; var GDC_COLOR = 40; var GDC_TEXT = 48; var GDC_AUX = 56;
 var GD_CELL = 64;
 
+# GD_RAINBOW (0.38.1) — a SENTINEL color, not a color: it tells the rasterizer "resolve this per glyph from
+# the rainbow hue at the glyph's column" (`/theme rainbow` is a per-grapheme render mode, and the IR carries
+# one color per RUN). It sits outside the 24-bit 0x00RRGGBB range, so it can never collide with a real color
+# and needs no new cell slot or IR shape change. Only the rasterizer interprets it; only the feed's PROSE
+# sites emit it (chrome keeps its role colors, exactly as on the TUI).
+var GD_RAINBOW = 0x01000000;
+
 # --- accessors (the raster executor reads these) ---
 fn gd_kind(c)  { return load64(c + GDC_KIND); }
 fn gd_x(c)     { return load64(c + GDC_X); }

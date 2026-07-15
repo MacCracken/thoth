@@ -2,6 +2,89 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.1] - 2026-07-14
+
+**rainbow reaches the GUI — and an adversarial review of 0.38.0 found the line tier was tinting exactly the wrong half.**
+
+### Fixed
+- **rainbow tinted CHROME instead of PROSE at the line tier — the two halves were inverted.** 0.38.0 hooked
+  `ui_emit`, reasoning that `out_mode() == OUT_FD1` meant "line tier". Both premises were wrong:
+  - `ui_emit` is the **chrome** emitter (status bar, labels, prompts). Reply prose reaches the tty through
+    **mdhl**, which writes with raw `emit`/`emit_n` and never touches `ui_emit` — so prose was **never tinted**
+    while chrome cycled. The release's own claim ("chrome stays readable while prose cycles") was exactly backwards.
+  - `OUT_FD1` is **not** a proxy for the line tier: the **TUI paints its chrome under OUT_FD1** too. So in the
+    rich TUI the tint hijacked the status bar — including the hoosh health dot, `ui_emit(ROLE_GREEN,"●")` vs
+    `ui_emit(ROLE_RED,"●")`, a glyph whose **only** signal is its color, leaving "reachable" and "unreachable"
+    visually identical — and re-hued it from a free-running phase on every repaint, contradicting the
+    "a repaint is deterministic" guarantee.
+  The tint now lives in **mdhl** (`_mdhl_text`, the one sink every prose byte passes through) behind
+  `ui_rainbow_line()`, which gates on all three of: rainbow drawable · **not PT_RICH** · OUT_FD1. `ui_emit` is
+  deliberately rainbow-free: a role there is semantic, and a hue would destroy the signal rather than decorate it.
+- **The painter could drop text at wide terminals.** `PAINT_CAP` (24 KiB) was derived pre-rainbow for marker
+  expansion only and was never re-derived for a ~19 B escape on **every** glyph, so past ~1365 columns a row's
+  tail glyphs failed `wrote + gl <= dst_cap` and were silently dropped — text lost to buy color, the
+  0.36.2/0.36.3 bug class. Two fixes: zero-width glyphs (combining marks) now **inherit the base glyph's hue**
+  instead of buying their own escape — semantically right, and it bounds the tint at one escape per visible
+  **column** (a run of marks never advances `cols`, so it stayed in-window unbounded: a repro dropped 42–214
+  bytes) — and `PAINT_CAP` is re-derived to 64 KiB, covering ~2300 columns.
+- **⌃T could strand the user on an inert rainbow silently.** The key path degraded without a word (only `/theme`
+  explained), so the status bar read "rainbow" while nothing cycled — which looks broken rather than honest. The
+  handler is now `tui_theme_next()`, a real function that cycles the axis **and** announces an inert landing.
+- **`/help` column alignment** — `_help_line` does no padding, so the widened `[dark|light|rainbow]` label pushed
+  its description out of the column. Label shortened to `/theme [name]`, choices moved into the description.
+
+### Added
+- **`/theme rainbow` in the GUI (T3)** — the last tier. The GUI has no escapes and no byte budget (it draws
+  pixels), so the constraint that forced 0.38.0's two hooks simply doesn't exist here: the hue rides a
+  **sentinel** (`GD_RAINBOW = 0x01000000`, outside the 24-bit color range so it can never collide with a real
+  color) in the existing `GDC_COLOR` slot, and `gr_fb_text` — which already walked glyphs — resolves it per
+  glyph via the new `ui_rainbow_rgb(phase)`. No IR shape change, no new cell slot, no capacity risk: ink is an
+  i64 argument into the framebuffer, so a tint cannot cost text. Hued by column, matching the TUI's
+  deterministic-repaint contract, and continuous **across** run boundaries (no phase jump where a bold/code span
+  starts). Only the feed's prose emits the sentinel; chrome keeps its roles, same line the TUI draws.
+- **GUI `Ctrl+T` cycles the theme** — and without it the whole T3 tier above would have been **unreachable dead
+  code**. `ui_set_theme` has exactly two callers: `cmd_theme` (reached via `dispatch`) and the TUI's ⌃T. The GUI
+  composer runs `cmd_task()` **directly, bypassing `dispatch`**, so `/theme rainbow` typed into the GUI is sent
+  to the *model as a task*; there is no `[ui].theme` config key either. So a `thoth gui` process could never
+  select rainbow, `ui_rainbow_active()` was permanently 0 there, and the sentinel was never emitted — while the
+  pixel test passed, because *the test* called `ui_set_theme` itself. The test now drives `gkey()`, the real key
+  path. (A persistent `[ui].theme` config key is a follow-up.)
+- **The GUI declares its own surface: `ui_force(PT_DESKTOP, CD_TRUE)`.** Nothing in the GUI path ever set a
+  tier, so it silently inherited whatever was detected about the **launching terminal** — the wrong subject
+  entirely. From a desktop launcher (no tty, no TERM) that was `T0 plain`, from a 256-color terminal `CD_256`,
+  so the GUI rainbow would have been dead except by accident when launched from a truecolor terminal. Honest,
+  not faked: `graster` writes real 24-bit XRGB8888 into a wl_shm buffer, so the window **is** a truecolor
+  surface regardless of what spawned it. **Bonus:** the status strip (`SF_SURFACE` ← `ui_tier_name()`) had been
+  **mislabelling its own surface** as "T2 rich-tui"/"T0 plain"; it now reads **"T3 desktop"** — `PT_DESKTOP`
+  existed since 0.28 and had never been applied by anything.
+
+### Notes
+- **Tests that locked nothing, replaced.** The "exhausted dst" test used `dst_cap=3` — too small for the
+  `wrote + rsl + gl <= dst_cap` guard to discriminate, so it passed identically for an implementation that drops
+  text to buy color; it now strips the SGR back off and demands the original bytes at the one width that
+  distinguishes. The ⌃T test re-typed the handler's arithmetic inline (asserting a property of `%`, not the
+  handler) and now drives `tui_theme_next()` itself. The "chrome readable" test checked a dispatcher the chrome
+  path never consults under rainbow — it passed *while chrome was in fact being rainbowed*; it is now a full
+  gate matrix over `ui_rainbow_line()`. The GUI tier is proven **to the pixel**, headless (`graster` is pure
+  CPU): the sentinel never reaches a pixel, and two glyphs resolve to two different, exactly-predicted hues.
+- **Glyph rules the line tier now shares with the painter.** A **zero-width** glyph (a combining mark) takes no
+  escape and no phase step — it composes onto its base and must inherit that hue; 0.38.1 first applied this
+  only in the painter, which made the two tiers disagree. And a **continuation byte** is emitted bare: mdhl
+  force-flushes at `MDHL_LINE_CAP`, which can land mid-codepoint, and an escape inserted between a glyph's
+  bytes splits it into replacement characters (verbatim bytes reassemble across calls; escaped ones do not).
+- **Scope of "chrome stays readable", stated precisely.** Chrome that paints **directly** — the status bar,
+  hint strip, file tree, prompts, and every `ui_emit` span at the line tier — keeps its semantic role colors on
+  every tier. Chrome routed **into the feed** (the t-ron DENY line, the `/reprobe` health notice) becomes a
+  role marker in the ring like any other content, so the painter tints it too: under rainbow those notices
+  cycle with the conversation rather than staying red/green. The painter cannot tell a notice from prose once
+  both are markers. Called out rather than papered over; making the painter exempt semantic roles is a
+  follow-up (roadmap).
+- **Verified**: line-tier prose cycles per glyph through the real `mdhl_reply` sink (the call that emitted zero
+  escapes before this fix); chrome renders as a single role-colored span; a combining mark inherits its base
+  glyph's hue (3 escapes for 3 visible glyphs, not 4). Suite green (264 + 1532 + 183 + 3).
+- The GUI's on-compositor run is **not** re-confirmed here — this sandbox has no seat/DRM, so a headless
+  compositor cannot start (attempted on both the wlroots and Aquamarine backends).
+
 ## [0.38.0] - 2026-07-14
 
 **`/theme rainbow` — the per-grapheme HSV render mode, over the newly-vendored anuenue hue.**

@@ -157,7 +157,16 @@ fn gr_fb_text(buf, fbw, fbh, x, y, cstr, xrgb, max_cp) {
             var cp = packed / 8;
             i = i + (packed % 8);                       # nbytes
             var g = gr__cp_to_glyph(cp);
-            if (g >= 32) { gr_fb_glyph(buf, fbw, fbh, px, y, g, xrgb); }
+            # 0.38.1: GD_RAINBOW is a sentinel, not a color — resolve the real ink per GLYPH from the hue at
+            # this glyph's COLUMN, matching the TUI painter's column-hued (and therefore deterministic-on-
+            # repaint) contract. px advances by exactly GR_GLYPH_W per glyph, so px/GR_GLYPH_W steps by
+            # exactly 1 per glyph and the hue walks one UI_RAINBOW_STEP — continuous even ACROSS run
+            # boundaries, so a bold/code span starts no phase discontinuity. Unlike the terminal, there is
+            # no escape and no byte budget here: ink is an i64 argument into the framebuffer, so the tint
+            # cannot cost text. A space rasterizes to all-zero glyph rows, so a tinted space paints nothing.
+            var ink = xrgb;
+            if (ink == GD_RAINBOW) { ink = ui_rainbow_rgb((px / GR_GLYPH_W) * UI_RAINBOW_STEP); }
+            if (g >= 32) { gr_fb_glyph(buf, fbw, fbh, px, y, g, ink); }
             px = px + GR_GLYPH_W;
             drawn = drawn + 1;
         }

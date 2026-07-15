@@ -315,6 +315,12 @@ fn gkey(code, shift, ctrl) {
         if (code == 31) { gstatus_toggle_hidden(); return 0; }   # Ctrl+S -> toggle the status strip
         if (code == 37) { gconv_toggle_hidden(); return 0; }     # Ctrl+K -> toggle the conversation sidebar (0.33.6)
         if (code == 19) { greason_toggle(); return 0; }          # Ctrl+R -> collapse/expand the live reasoning fold (0.35.2)
+        # Ctrl+T -> cycle the theme (0.38.1), at PARITY with the TUI's ⌃T. This is what makes the theme axis
+        # REACHABLE in the GUI at all: the composer runs cmd_task() directly and never goes through dispatch(),
+        # so `/theme rainbow` typed here would be sent to the MODEL as a task, not run as a command — without
+        # this binding the whole T3 rainbow tier is unreachable dead code. No inert-announce branch is needed
+        # (unlike the TUI's): the GUI declares PT_DESKTOP + CD_TRUE, so rainbow always draws here.
+        if (code == 20) { ui_theme_next(); return 0; }            # Ctrl+T -> dark -> light -> rainbow -> dark
         if (ginput_ascii(code, shift) != 0) { return 0; }        # swallow other Ctrl+<printable>
     }
     if (code == 104) { gscroll_page(1); return 0; }           # PageUp   -> scroll the feed to OLDER messages

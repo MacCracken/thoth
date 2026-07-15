@@ -68,8 +68,20 @@ fn _gfeed_para(cmds, x, y, avail_px, color, text) {
 # the MUTED body), inline-code -> ROLE_BLUE, headings -> ROLE_ACCENT, list markers -> ROLE_ACCENT, fenced code ->
 # a ROLE_BLUE monospace block on a subtle background. Deterministic + reads only the passed text -> measure==draw.
 
+# _gfeed_ink (0.38.1): the ink for PROSE — the rainbow SENTINEL when the per-grapheme mode is live (the
+# rasterizer resolves a hue per glyph), else the role's color. Used ONLY by the feed's prose; chrome
+# (gstatus / gtree / gconv / gtool, the banner, the error + "stopped" notices) keeps calling _ui_rgb
+# directly, because a role there is SEMANTIC and a hue would destroy the signal rather than decorate it —
+# the same line the TUI draws, where only feed content is tinted.
+fn _gfeed_ink(role) {
+    if (ui_rainbow_active() == 1) { return GD_RAINBOW; }
+    return _ui_rgb(role);
+}
+
 # _md_role_color: map an inline role (from the model) to a packed RGB, given the block's base role for plain text.
 fn _md_role_color(role, base_role) {
+    if (ui_rainbow_active() == 1) { return GD_RAINBOW; }   # rainbow IS the fg: it overrides emphasis + code,
+                                                           # exactly as it overrides the role color on the TUI
     if (role == MDI_BOLD) { return _ui_rgb(ROLE_FG); }     # no bold font -> brightness conveys emphasis
     if (role == MDI_CODE) { return _ui_rgb(ROLE_BLUE); }
     return _ui_rgb(base_role);
@@ -459,7 +471,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         var content = session_history_content(i);
         if (streq(role, "user") == 1) {
             if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
-            cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), content);
+            cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), content);
         } else {
             # 0.35.3: this turn's reasoning fold — persisted in reasonlog so it survives the reply landing (the live
             # 0.35.2 fold showed only the in-flight turn). Renders ABOVE the tool cards (the model reasons FIRST),
@@ -487,7 +499,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     # text is NOT in session_history yet (the turn appends it when it runs) — this is a transient render.
     if (gturn_active() == 1) {
         if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
-        cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _ui_rgb(ROLE_FG), gturn_text());
+        cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), gturn_text());
         cy = cy + GFEED_GAP;
         # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
         # renders ABOVE the cards and partial answer. Empty on Opus 4.8 -> _gfeed_reason returns cy unchanged (no gap).

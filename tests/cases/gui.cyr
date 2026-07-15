@@ -1033,3 +1033,88 @@ fn test_gui_toolcards_diff() {
     roundlog_reset(); editlog_reset(); session_reset(); session_history_clear();
     return 0;
 }
+
+# GUI rainbow (0.38.1): the T3 tier of the per-grapheme HSV mode. The GUI has no escapes and no byte budget
+# — it draws pixels — so the hue rides a SENTINEL color in the existing draw-command slot and the rasterizer
+# resolves it per glyph. graster is pure CPU, so this is provable to the PIXEL, headless.
+fn test_gui_rainbow() {
+    test_group("GUI rainbow (graster/gfeed, 0.38.1)");
+    gr_ensure_font();   # this test asserts PIXELS: on a cold font every glyph rasterizes empty and the
+                        # assertions below pass vacuously. It only survived review because test_gui() happens
+                        # to warm the font earlier in main() — an ordering dependency, not a guarantee.
+
+    # REACHABILITY FIRST — the property that makes every other assertion here matter. ui_set_theme has only two
+    # callers: cmd_theme (via dispatch) and the TUI's ⌃T. The GUI composer runs cmd_task() DIRECTLY, bypassing
+    # dispatch, so `/theme rainbow` typed into the GUI goes to the MODEL as a task; there is no config key. So
+    # until 0.38.1 bound Ctrl+T here, a `thoth gui` process could NEVER select rainbow and this whole tier was
+    # unreachable dead code. Drive the KEY PATH (gkey), not ui_set_theme — asserting the mechanism while the
+    # user has no way to reach it is exactly how that shipped.
+    ui_force(PT_DESKTOP, CD_TRUE);
+    ui_set_theme(THEME_DARK);
+    gkey(20, 0, 1);                                        # Ctrl+T (evdev KEY_T)
+    assert_eq(ui_theme(), THEME_LIGHT, "GUI Ctrl+T: dark -> light (the theme axis is REACHABLE in the GUI)");
+    gkey(20, 0, 1);
+    assert_eq(ui_theme(), THEME_RAINBOW, "GUI Ctrl+T: light -> rainbow (the T3 tier is selectable at all)");
+    assert_eq(ui_rainbow_active(), 1, "  ... and it actually draws once selected");
+    gkey(20, 0, 1);
+    assert_eq(ui_theme(), THEME_DARK, "GUI Ctrl+T: rainbow -> dark (cycles home, never -1)");
+
+    ui_set_theme(THEME_DARK);
+    assert_eq(_gfeed_ink(ROLE_FG), _ui_rgb(ROLE_FG), "dark: prose ink is the role color");
+    assert_eq(_md_role_color(MDI_CODE, ROLE_FG), _ui_rgb(ROLE_BLUE), "dark: inline code keeps its blue");
+    ui_set_theme(THEME_RAINBOW);
+    assert_eq(ui_rainbow_active(), 1, "PT_DESKTOP + CD_TRUE: the wl_shm surface IS truecolor -> rainbow live");
+    assert_eq(_gfeed_ink(ROLE_FG), GD_RAINBOW, "rainbow: prose ink is the sentinel");
+    assert_eq(_md_role_color(MDI_BOLD, ROLE_FG), GD_RAINBOW, "rainbow overrides emphasis + code (it IS the fg)");
+    # Chrome never routes through _gfeed_ink, so its semantic roles survive — same line the TUI draws.
+    assert_eq(_ui_rgb(ROLE_RED), _ui_rgb_dark(ROLE_RED), "chrome keeps its semantic role color under rainbow");
+
+    # THE RASTERIZER: resolve per GLYPH, and never paint the sentinel itself.
+    var fbw = 32;
+    var fbh = 16;
+    var fb = alloc(fbw * fbh * 4);
+    gr_fb_clear(fb, fbw, fbh, 0);
+    gr_fb_text(fb, fbw, fbh, 0, 0, "AB", GD_RAINBOW, 0);
+    var inkA = 0;
+    var inkB = 0;
+    var leaked = 0;
+    var y = 0;
+    while (y < fbh) {
+        var x = 0;
+        while (x < fbw) {
+            var p = load32(fb + (y * fbw + x) * 4);
+            if (p != 0) {
+                if (p == GD_RAINBOW) { leaked = 1; }
+                if (x < GR_GLYPH_W) { inkA = p; } elif (x < (GR_GLYPH_W * 2)) { inkB = p; }
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    assert_eq(leaked, 0, "the SENTINEL never reaches a pixel (it is resolved, never painted)");
+    assert(inkA != 0, "glyph 0 painted");
+    assert(inkB != 0, "glyph 1 painted");
+    assert(inkA != inkB, "each glyph gets its OWN hue (per-glyph resolve, not the IR's per-run color)");
+    assert_eq(inkA, ui_rainbow_rgb(0), "glyph 0 = the hue at column 0 (red)");
+    assert_eq(inkB, ui_rainbow_rgb(UI_RAINBOW_STEP), "glyph 1 = the hue one UI_RAINBOW_STEP on");
+
+    # A real color still passes through untouched (the sentinel is out of the 24-bit range, so it can never
+    # collide with one).
+    gr_fb_clear(fb, fbw, fbh, 0);
+    gr_fb_text(fb, fbw, fbh, 0, 0, "A", 255 * 65536, 0);
+    var found = 0;
+    var y2 = 0;
+    while (y2 < fbh) {
+        var x2 = 0;
+        while (x2 < fbw) {
+            if (load32(fb + (y2 * fbw + x2) * 4) == (255 * 65536)) { found = 1; }
+            x2 = x2 + 1;
+        }
+        y2 = y2 + 1;
+    }
+    assert_eq(found, 1, "a non-sentinel color is passed through to the pixels verbatim");
+
+    ui_set_theme(THEME_DARK);
+    ui_detect_tier();
+    return 0;
+}

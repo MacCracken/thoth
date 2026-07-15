@@ -211,7 +211,7 @@ fn _mdhl_resolve_grammar() {
 # for prose lines and fence delimiter lines (delimiters are markdown punctuation — never
 # coloured, so the floor stays trivial and no SGR wraps a soft-wrap boundary).
 fn _mdhl_put_line(has_nl) {
-    if (_mdhl_line_len > 0) { emit_n(_mdhl_line, _mdhl_line_len); }
+    if (_mdhl_line_len > 0) { _mdhl_text(_mdhl_line, _mdhl_line_len); }
     if (has_nl == 1) { emit("\n"); }
     return 0;
 }
@@ -226,11 +226,61 @@ fn _mdhl_put_line(has_nl) {
 # FLOOR: only reached at PT_ANSI/PT_RICH (mdhl_feed/reply early-return emit_n at PT_PLAIN); and if a gate is
 # somehow hit at PT_PLAIN, ui_sgr/ui_reset return "" so _mdhl_span is still byte-identical.
 
+# _mdhl_text: the ONE sink every prose BYTE passes through (0.38.1). Verbatim, except under the line tier's
+# rainbow, where it tints per glyph (_mdhl_rainbow_text). Byte-identical to a bare emit_n whenever the rainbow
+# isn't drawable here — which includes the whole PT_PLAIN floor and the entire TUI (there the compact role
+# MARKER must reach the 2048 B feed slot and the PAINTER tints instead; see ui_rainbow_line).
+# _mdhl_rainbow_text: the LINE-tier prose tint — one hue per GLYPH, closed by a single reset. Returns 1 if it
+# handled the span, else 0. It lives HERE, not in ui.cyr, for one concrete reason: it needs feed_glyph_cols
+# (feed.cyr is included after ui.cyr, so ui.cyr cannot see it) to tell a zero-width mark from a real glyph.
+#
+# Three byte classes, and each rule is a bug this fixes:
+#   - CONTINUATION byte (0x80..0xBF) => we are INSIDE a codepoint that a caller-side flush severed (mdhl
+#     force-flushes at MDHL_LINE_CAP, which can land mid-glyph). Emit it bare: an escape inserted between a
+#     glyph's bytes splits the codepoint and the terminal renders replacement characters. Verbatim bytes
+#     reassemble across calls; escaped ones do not.
+#   - ZERO-WIDTH glyph (a combining mark) => no escape, no phase step: it composes onto the base glyph and must
+#     INHERIT its hue. A separate hue for a mark is meaningless, and 0.38.1 already applies this rule in the
+#     painter — applying it in only one tier is how the two surfaces disagreed.
+#   - whitespace => no escape (a tinted space paints nothing) but it STILL steps the phase, so the gradient
+#     tracks column position rather than word boundaries.
+fn _mdhl_rainbow_text(ptr, n) {
+    if (ui_rainbow_line() == 0) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var gl = _ui_glyph_len(ptr, i, n);
+        var b = load8(ptr + i);
+        if ((b >= 128) && (b < 192)) {                    # severed continuation — never escape mid-codepoint
+            emit_n(ptr + i, gl);
+        } elif (feed_glyph_cols(ptr, i, gl) == 0) {       # zero-width — inherit the base glyph's hue
+            emit_n(ptr + i, gl);
+        } elif ((b == 32) || (b == 9) || (b == 10) || (b == 13)) {
+            emit_n(ptr + i, gl);
+            ui_rainbow_step_phase();
+        } else {
+            emit(ui_rainbow_sgr(ui_rainbow_phase()));
+            emit_n(ptr + i, gl);
+            ui_rainbow_step_phase();
+        }
+        i = i + gl;
+    }
+    emit(ui_reset());
+    return 1;
+}
+
+fn _mdhl_text(ptr, n) {
+    if (_mdhl_rainbow_text(ptr, n) == 1) { return 0; }
+    emit_n(ptr, n);
+    return 0;
+}
+
 # _mdhl_span: emit ptr[0..n) wrapped in a style (bold=1 -> ESC[1m, else the role color), closed by ui_reset.
+# Under the line tier's rainbow the role COLOR is overridden per glyph, so its SGR is skipped (it would be
+# immediately overwritten) — but BOLD still opens: bold is weight, rainbow is color, and they compose.
 fn _mdhl_span(bold, role, ptr, n) {
     if (n <= 0) { return 0; }
-    if (bold == 1) { emit("\x1b[1m"); } else { emit(ui_sgr(role)); }
-    emit_n(ptr, n);
+    if (bold == 1) { emit("\x1b[1m"); } elif (ui_rainbow_line() == 0) { emit(ui_sgr(role)); }
+    _mdhl_text(ptr, n);
     emit(ui_reset());
     return 0;
 }
@@ -250,14 +300,14 @@ fn _mdhl_emit_inline(ptr, len) {
         var role = md_run_role(k);
         if (role == MDI_CODE) { _mdhl_span(0, ROLE_BLUE, ptr + rs, rl); }
         elif (role == MDI_BOLD) { _mdhl_span(1, 0, ptr + rs, rl); }
-        else { emit_n(ptr + rs, rl); }                    # MDI_PLAIN -> verbatim
+        else { _mdhl_text(ptr + rs, rl); }                # MDI_PLAIN -> verbatim (tinted under line-tier rainbow)
         covered = rs + rl;
         k = k + 1;
     }
     # If md_inline_scan hit its MD_RUN_CAP (runs are recorded left-to-right, so the DROPPED runs are the tail),
     # emit the uncovered tail verbatim — the highlighter must NEVER drop a byte (ADR-0009). Styling of the overflow
     # tail degrades to plain (only on a pathological >512-span line); the visible text stays byte-complete.
-    if (covered < len) { emit_n(ptr + covered, len - covered); }
+    if (covered < len) { _mdhl_text(ptr + covered, len - covered); }
     return 0;
 }
 
@@ -501,7 +551,7 @@ fn _mdhl_tbl_emit_row(rptr, rlen, ncols, ri) {
         if (lead < 0) { lead = 0; }
         _mdhl_pad(lead);
         if (cl > 0) {
-            if (ri == 0) { _mdhl_span(0, ROLE_ACCENT, rptr + cs, cl); } else { emit_n(rptr + cs, cl); }
+            if (ri == 0) { _mdhl_span(0, ROLE_ACCENT, rptr + cs, cl); } else { _mdhl_text(rptr + cs, cl); }
         }
         var trail = w - cw - lead;
         if (trail < 0) { trail = 0; }

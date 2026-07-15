@@ -121,6 +121,18 @@ fn gui_run() {
         emit_err("  set WAYLAND_DISPLAY and run under a live display (Hyprland/wlroots, or aethersafha on AGNOS).\n");
         return 0 - 1;
     }
+    # 0.38.1: the GUI DECLARES its own surface. Until now nothing in the GUI path ever called ui_force /
+    # ui_detect_tier, so it silently inherited whatever tier+depth was detected about the LAUNCHING TERMINAL
+    # — which is the wrong subject entirely: launched from a desktop launcher (no tty, no TERM) it landed on
+    # T0 plain / no-color, and from a 256-color terminal on 256-color. That left `/theme rainbow` dead in the
+    # GUI except by accident (when launched from a truecolor terminal), and made the status strip MISLABEL
+    # its own surface as "T2 rich-tui" / "T0 plain" (SF_SURFACE reads ui_tier_name()).
+    #
+    # PT_DESKTOP + CD_TRUE is honest, not a fake: graster writes real 24-bit XRGB8888 into a wl_shm buffer,
+    # so this window IS a truecolor surface no matter what tty spawned it. Safe on both counts: _ui_rgb never
+    # consults tier/depth (which is why the GUI renders correctly today even at T0), and gui_run writes no
+    # escape to fd 1 (its only stdout path is emit_err, and the turn runs under OUT_NULL).
+    ui_force(PT_DESKTOP, CD_TRUE);
     var win = 1;
     ftree_load();                                        # populate the file-tree pane (0.30.5)
     git_probe();                                         # so the tree's git badges + the status git field have data

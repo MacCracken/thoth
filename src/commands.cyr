@@ -206,7 +206,7 @@ fn cmd_help() {
     _help_line("  /copy", "              copy the last reply to the clipboard (OSC 52, best-effort)");
     _help_line("  /find [text]", "       search the feed scrollback (TUI: ⌃F; n/N jump between matches)");
     _help_line("  /history", "           list submitted inputs (TUI: Up/Down recalls; [history].file persists)");
-    _help_line("  /theme [dark|light|rainbow]", " switch the color theme (⌃T toggles in the TUI)");
+    _help_line("  /theme [name]", "      color theme: dark | light | rainbow (⌃T cycles in the TUI)");
     _help_line("  /dry <task>", "        preview the request thoth would send (no POST)");
     _help_line("  /remember <fact>", "   append a fact to .thoth/memory (t-ron-gated; [memory].enabled)");
     _help_line("  /bookmark", "          save the last reply into mneme as a note (t-ron-gated)");

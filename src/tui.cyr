@@ -74,7 +74,9 @@ var _fsearch_edit = 0;
 # overwritten with the filtered model list (mpick.cyr owns the pure state; this file the render + switch).
 # Armed only inside the PT_RICH TUI dispatch window; the piped/REPL floor never decodes Ctrl-P, so byte-identical.
 var _mpick_active = 0;
-var HL_CAP = 24576;           # == PAINT_CAP: the per-line highlighted-render scratch (fsearch_render dst)
+var HL_CAP = 24576;           # the per-line highlighted-render scratch (fsearch_render dst; becomes the
+                              # painter's SRC, so it is bounded by a slot + injected match escapes — NOT
+                              # by PAINT_CAP, which sizes the painter's own dst. The two moved apart at 0.38.1.)
 var _hl_buf = 0;              # alloc(HL_CAP), lazy
 
 # Editor outcomes.
@@ -1366,10 +1368,45 @@ var _paint_buf = 0;
 # PAINT_CAP must fit the EXPANDED output of one paint call (0.18.0). A sealed slot is <= FEED_LINE_CAP
 # (2048) bytes, but those bytes may be role MARKERS (2 B each) that feed_clip_seg EXPANDS to the current
 # theme's concrete SGR (<= ~19 B truecolor). Worst case a slot is ~1024 markers -> ~19.5 KB expanded;
-# add the paint window's text + the leading carry (also expanded) + a defensive ui_reset(). 24 KiB
-# clears that with headroom (one-time alloc; the ring itself is already ~4 MiB). Pre-0.18.0 this was
-# 2112 (slots stored concrete SGR, so a slot's paint output was <= the 2048 stored bytes).
-var PAINT_CAP = 24576;       # expanded worst case of a marker-packed slot + carry + reset
+# add the paint window's text + the leading carry (also expanded) + a defensive ui_reset(). Pre-0.18.0 this
+# was 2112 (slots stored concrete SGR, so a slot's paint output was <= the 2048 stored bytes).
+#
+# 0.38.1 re-derives it for the RAINBOW, which adds a ~19 B truecolor escape per tinted glyph ON TOP of the
+# marker expansion. 24 KiB was the pre-rainbow figure and a review proved it now truncates: at ~1365 columns
+# of plain text the row's tail glyphs failed `wrote + gl <= dst_cap` and were silently DROPPED — text lost to
+# buy color, the 0.36.2/0.36.3 bug class. The tint is bounded at one escape per VISIBLE COLUMN (feed.cyr skips
+# zero-width glyphs precisely so this bound holds), so the budget is:
+#     slot text (<= 2048) + marker expansion (~1024 * 19 = ~19.5 KB) + tint (max_cols * ~19) + carry + reset
+# 64 KiB covers a ~2300-column window — far past any real terminal (a 4K ultrawide at a tiny font is ~800) —
+# and stays a single lazy alloc against a ring that is already ~4 MiB. Sized for the worst case, not the
+# typical one: this buffer overflowing does not corrupt memory (every write is capacity-checked), it silently
+# eats the user's text, which is worse.
+var PAINT_CAP = 65536;       # marker-packed slot + per-column rainbow tint + carry + reset
+
+# tui_theme_next: the ⌃T handler's whole behavior, as a callable fn (0.38.1 — it was inline in the key
+# switch, so the test could only re-type its arithmetic and assert a property of `%`, never the handler).
+#
+# CYCLES the axis: `1 - ui_theme()` hardcoded two themes, and from rainbow (2) it produced -1 — an invalid
+# theme the next press turned straight back into rainbow, stranding the toggle so it could never reach dark.
+# Modulo UI_THEME_COUNT: dark -> light -> rainbow -> dark.
+#
+# ANNOUNCES an inert landing. rainbow needs truecolor; ⌃T can drop the user on it under a 256-color terminal
+# where it simply does not cycle. /theme explains that, but the KEY path used to degrade in silence — the
+# status bar would read "rainbow" while nothing changed, which looks broken rather than honest. Returns the
+# new theme so a caller/test can assert the cycle.
+fn tui_theme_next() {
+    ui_theme_next();                                  # the shared cycle (ui.cyr) — walked in exactly one place
+    if (ui_theme() == THEME_RAINBOW) {
+        if (ui_rainbow_active() == 0) {
+            out_mode_set(OUT_RING);
+            ui_emit(ROLE_ACCENT, "theme: rainbow");
+            ui_emit(ROLE_FAINT, " — not cycling: needs a truecolor terminal (COLORTERM=truecolor)");
+            feed_flush_pending();
+            out_mode_set(OUT_FD1);
+        }
+    }
+    return ui_theme();
+}
 
 # feed_repaint: paint the newest feed lines into rows [feed_top..feed_bot], each
 # clipped to the terminal width (the 0.9.3 pane will narrow this). Uses emit_raw
@@ -2055,10 +2092,8 @@ fn tui_loop() {
                 tty_clear();           # the feed narrows/widens; full repaint
                 tui_relayout();
             } elif (key == KEY_TOGGLE_THEME) {
-                # CYCLE the theme axis (0.38.0: three themes, so the old `1 - ui_theme()` flip is wrong —
-                # from rainbow it yields -1, an invalid theme the next press turns straight back into
-                # rainbow, stranding the toggle). Modulo UI_THEME_COUNT: dark -> light -> rainbow -> dark.
-                ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);   # rebuilds the SGR table
+                tui_theme_next();       # cycle the axis + rebuild the SGR table (0.38.1: a real fn, so a
+                                        # test can drive the KEY path itself rather than re-typing its math)
                 tty_clear();           # re-color the whole frame
                 tui_relayout();
             } elif (key == KEY_REPROBE) {

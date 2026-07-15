@@ -302,6 +302,14 @@ fn ui_set_theme(t) {
     return 0;
 }
 fn ui_theme() { return _ui_theme; }
+# ui_theme_next: advance to the next theme on the axis, returning it. THE cycle — every surface's theme key
+# calls this, so the axis is walked in exactly one place. Modulo UI_THEME_COUNT because a hardcoded flip
+# (`1 - ui_theme()`) silently breaks the moment an Nth theme lands: with rainbow at 2 it yields -1, an invalid
+# theme the next press turns straight back into rainbow, stranding the toggle.
+fn ui_theme_next() {
+    ui_set_theme((ui_theme() + 1) % UI_THEME_COUNT);
+    return _ui_theme;
+}
 fn ui_theme_name() {
     if (_ui_theme == THEME_LIGHT) { return "light"; }
     if (_ui_theme == THEME_RAINBOW) { return "rainbow"; }
@@ -364,6 +372,33 @@ fn ui_rainbow_sgr(phase) {
     return buf;
 }
 
+# ui_rainbow_line: 1 iff THIS emit path should tint prose itself, per glyph. Three conditions, and each one
+# is load-bearing (0.38.1 — the 0.38.0 gate had only the third, and an adversarial review proved that wrong):
+#   1. the rainbow must be drawable at all (theme + color tier + truecolor);
+#   2. NOT at PT_RICH. `out_mode() == OUT_FD1` is NOT a proxy for "line tier": the TUI deliberately paints its
+#      CHROME under OUT_FD1 (tui.cyr restores it before any chrome paints), so gating on the sink alone let the
+#      tint hijack the status bar — including the hoosh health dot, whose ONLY signal is red-vs-green — and
+#      re-hue it from a running phase on every repaint. At PT_RICH the feed PAINTER owns tinting;
+#   3. OUT_FD1 only. Under OUT_RING a ~19 B/glyph escape would be packed into a 2048 B (FEED_LINE_CAP) slot and
+#      overflow it past ~100 cols, DROPPING TEXT — which is why the feed stores 2-byte role markers instead.
+# The rainbow tints PROSE, never chrome: this is called from mdhl (the reply sink), NOT from ui_emit.
+fn ui_rainbow_line() {
+    if (ui_rainbow_active() == 0) { return 0; }
+    if (_ui_tier == PT_RICH) { return 0; }
+    if (out_mode() != OUT_FD1) { return 0; }
+    return 1;
+}
+
+# ui_rainbow_rgb: the hue at `phase` as a PACKED 0x00RRGGBB word — the same shape ui.cyr's `_ui_rgb(role)`
+# returns and the GUI's draw-command GDC_COLOR slot carries. Pure, by value, no shared scratch (unlike
+# ui_rainbow_sgr): the GUI rasterizer calls this per glyph, per frame. Returns any i64 phase's hue —
+# hsv_rainbow normalizes — so the caller never pre-wraps.
+fn ui_rainbow_rgb(phase) {
+    var rgb[24];                                     # 3 x i64 — hsv_rainbow's out contract
+    hsv_rainbow(phase, &rgb);
+    return load64(&rgb + 0) * 65536 + load64(&rgb + 8) * 256 + load64(&rgb + 16);
+}
+
 # ui_rainbow_phase / ui_rainbow_set_phase: the running phase. The painter drives it from a row's
 # visible COLUMN (so a repaint is deterministic — the same row always paints the same hues, which
 # is what lets feed_repaint recolor scrollback instead of shimmering); the line tier advances it
@@ -383,38 +418,18 @@ fn _ui_glyph_len(s, i, len) {
     return n;
 }
 
-# _ui_rainbow_emit: the LINE-tier tint. Writes ptr[0..n) one GLYPH at a time, each preceded by its
-# hue's SGR and followed by a single reset; returns 1 if it handled the span, else 0 (the caller
-# then takes its normal role path). Returns 1 for n == 0 only when it also emitted the reset, so a
-# caller can always trust 1 == "fully written".
+# ui_rainbow_step_phase: advance the LINE tier's running phase one step, wrapping. The line tier has no column
+# to hue by (it streams to a tty rather than painting a row), so its gradient rides this counter; the TUI/GUI
+# instead derive the hue from the glyph's COLUMN, which is what keeps their repaints deterministic.
 #
-# WHY the sink gate: this bakes ~19 bytes of escape per glyph. Under OUT_RING those bytes would be
-# packed into a FEED_LINE_CAP (2048 B) slot, so a line past ~100 columns would overflow the slot and
-# DROP TEXT — the whole reason the feed stores 2-byte role MARKERS. So under OUT_RING we decline and
-# let the compact marker reach the slot; the PAINTER re-tints per glyph at marker-expansion time
-# (feed_clip_seg), where the budget is PAINT_CAP (24 KB) and a repaint stays recolorable. OUT_NULL
-# discards anyway (the GUI's own renderer is a separate leaf — rainbow there is a follow-up).
-fn _ui_rainbow_emit(ptr, n) {
-    if (ui_rainbow_active() == 0) { return 0; }
-    if (out_mode() != OUT_FD1) { return 0; }
-    var i = 0;
-    while (i < n) {
-        var gl = _ui_glyph_len(ptr, i, n);
-        var b = load8(ptr + i);
-        # Whitespace takes no escape (a tinted space paints nothing) but STILL advances the phase, so
-        # the gradient stays tied to column position rather than to word boundaries.
-        if ((b == 32) || (b == 9) || (b == 10) || (b == 13)) {
-            emit_n(ptr + i, gl);
-        } else {
-            emit(ui_rainbow_sgr(_ui_rainbow_phase));
-            emit_n(ptr + i, gl);
-        }
-        _ui_rainbow_phase = _ui_rainbow_phase + UI_RAINBOW_STEP;
-        if (_ui_rainbow_phase >= ANUENUE_PHASE_MOD) { _ui_rainbow_phase = _ui_rainbow_phase - ANUENUE_PHASE_MOD; }
-        i = i + gl;
-    }
-    emit(ui_reset());
-    return 1;
+# The line tier's per-glyph walk itself lives in mdhl (_mdhl_rainbow_text) — the reply/prose sink — and NEVER
+# in ui_emit. 0.38.0 hooked ui_emit and had it exactly backwards: ui_emit is the CHROME emitter (status bar,
+# labels, prompts, the t-ron DENY line), while reply prose reaches the tty through mdhl's own emit/emit_n. So
+# the tint cycled the chrome that must stay readable and never touched the prose that should cycle.
+fn ui_rainbow_step_phase() {
+    _ui_rainbow_phase = _ui_rainbow_phase + UI_RAINBOW_STEP;
+    if (_ui_rainbow_phase >= ANUENUE_PHASE_MOD) { _ui_rainbow_phase = _ui_rainbow_phase - ANUENUE_PHASE_MOD; }
+    return _ui_rainbow_phase;
 }
 
 # _ui_detect_depth: truecolor (COLORTERM) -> 256 (TERM *-256color) -> 16.
@@ -566,8 +581,10 @@ fn ui_reset_fg() {
 
 # ui_emit: write s wrapped in the role's color (just s at T0 — byte-identical on
 # the floor). The common "one colored span" case over the ui_sgr/ui_reset pair.
+# NB: ui_emit/ui_emit_n are the CHROME emitters and are deliberately rainbow-FREE (0.38.1). A role here is
+# semantic — ROLE_RED on a t-ron DENY, ROLE_GREEN vs ROLE_RED on the hoosh health dot — and a hue that
+# overrode it would destroy the signal, not decorate it. rainbow tints prose (mdhl / the feed painter).
 fn ui_emit(role, s) {
-    if (_ui_rainbow_emit(s, strlen(s)) == 1) { return 0; }
     emit(ui_sgr(role));
     emit(s);
     emit(ui_reset());
@@ -578,7 +595,6 @@ fn ui_label(s) { return ui_emit(ROLE_FAINT, s); }
 # ui_emit_n: like ui_emit but for (ptr,len) Str data that isn't a NUL-terminated
 # cstr (model ids, tool names). Just the bytes at T0.
 fn ui_emit_n(role, ptr, n) {
-    if (_ui_rainbow_emit(ptr, n) == 1) { return 0; }
     emit(ui_sgr(role));
     emit_n(ptr, n);
     emit(ui_reset());
