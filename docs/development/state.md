@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.38.4** — **`[hoosh].reasoning` reaches every builder** (2026-07-25). Closes the gap 0.38.2 logged as KNOWN, NOT
+FIXED: `hoosh_build_messages` emitted **no** `reasoning_effort` and a flat `HOOSH_MAX_TOKENS = 4096`, the only one of
+thoth's builders to emit neither — `hoosh_build_request` and `agent_build_request` have carried the effort field since
+0.35.2 and the paired budget since 0.38.2. It now emits both via `_hoosh_max_tokens()` + `_append_reasoning_effort`;
+the two always move together (effort without the ceiling truncates a reasoned reply, the ceiling without effort buys
+nothing, since the gateway never turns thinking on). `hoosh_build_dry` mirrors it, so **`/dry` previews what the turn
+sends** — both fields come from config rather than the envelope, so they are identical across all three live builders
+and the preview is faithful on the agentic path too. **Real but narrow**: `agent_enabled()` gates on `[hoosh].tools`
+alone and tools default ON, so the default path was always `agent_build_request`; only a user who set
+`[hoosh].tools = false` was affected — and for them `[hoosh].reasoning` had been a parsed, `/state`-reported no-op for
+three minors. The 0.38.2 test that deliberately pinned the asymmetry is **updated, not deleted** (all four builders now
+pinned, on and off). Suite green (264 + 1540 + 183 + 3, +3 assertions), build warning-set unchanged, pin **6.4.78**.
+**Live-verified on the wire through the real user path**, not merely unit-pinned: a typed turn under
+`tools = false` / `reasoning = "high"` reaches a capturing endpoint as `"max_tokens":16384,"reasoning_effort":"high"`
+(thoth's own flag line reads `agent=off`, confirming the route), and the same turn with reasoning unset is back at a
+byte-identical `"max_tokens":4096`.
+
 **0.38.3** — **Declaration hygiene: thoth's own undersized `waitpid` status buffer** (2026-07-25). 0.38.2's `lib/`
 re-sync pulled in the hardened, widened array-local declarations everywhere in the stdlib (`lib/process.cyr`
 `var status_buf[4]`) — and left thoth's own copy of the pattern behind. `exec_shell_capture` (`src/exec.cyr`)
@@ -67,7 +84,8 @@ dists. **KNOWN, NOT FIXED** (pre-existing, out-of-scope): `hoosh_build_messages`
 **`[hoosh].tools` alone** — NO daimon check (local read_file/list_dir are always-available tools) — and tools
 defaults ON, so the DEFAULT path is `agent_build_request`, which emits effort and DOES get this release's budget
 fix; `hoosh_build_messages` is reached only with `[hoosh].tools = false`. A test now pins the asymmetry.
-**NEXT**: close that gap; `cyrius audit` is finally trustworthy for thoth (6.4.73/6.4.78 fixed its stdlib-include
+**[CLOSED in 0.38.4](#version)** — the multi-turn pair emits both fields, and that test pins the fix.
+**NEXT**: `cyrius audit` is finally trustworthy for thoth (6.4.73/6.4.78 fixed its stdlib-include
 and vendored-`lib/`-walking bugs).
 
 **0.38.1** — **rainbow reaches the GUI + the 0.38.0 review fixes** (2026-07-14). A 9-dimension adversarial review

@@ -284,9 +284,10 @@ fn _append_int(dst, off, n) {
 # _hoosh_max_tokens: the output budget to send with a request. Thinking tokens are drawn from the SAME
 # budget as the answer, so a turn that emits reasoning_effort asks for the larger ceiling; off -> the
 # historical 4096, byte-identical. Pair this with _append_reasoning_effort: the two belong together, and a
-# builder that starts emitting one must start emitting the other (hoosh_build_messages / hoosh_build_dry
-# send neither, so they stay flat at HOOSH_MAX_TOKENS — a bigger budget there would buy nothing, since
-# without the effort field the gateway never turns thinking on).
+# builder that starts emitting one must start emitting the other. As of 0.38.4 EVERY builder emits both —
+# hoosh_build_request (single-shot), hoosh_build_messages (multi-turn), agent_build_request (agentic) and
+# the hoosh_build_dry preview — so [hoosh].reasoning reaches whichever path a turn takes. Before 0.38.4 the
+# multi-turn pair sent neither, which made the setting silently inert under [hoosh].tools = false.
 fn _hoosh_max_tokens() {
     if (config_hoosh_reasoning_effort() != 0) { return HOOSH_MAX_TOKENS_REASONING; }
     return HOOSH_MAX_TOKENS;
@@ -563,7 +564,8 @@ fn hoosh_build_messages(dst, model, system, mem, stream) {
         i = i + 1;
     }
     off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
-    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.4: the reasoning ceiling when effort is on
+    off = _append_reasoning_effort(dst, off, cap);   # 0.38.4: reasoning_effort when [hoosh].reasoning set
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);
@@ -575,6 +577,11 @@ fn hoosh_build_messages(dst, model, system, mem, stream) {
 # side effects. Like hoosh_build_messages, but it serializes the current history tail and
 # then appends `prompt` as the final user message itself (the real path appends to history
 # first; here we read-only). NUL-terminates, returns the byte length. Pure.
+#
+# 0.38.4: the max_tokens/reasoning_effort pair is emitted here too. Those two fields are derived
+# from config, not from the message envelope, so they are IDENTICAL across all three live builders —
+# which makes the preview faithful on the agentic path as well, where /dry still shows the plain
+# envelope and merely annotates the `tools` array it does not compose.
 #
 # KNOWN second-order edge (acceptable for a preview): `_hoosh_history_start` budgets the
 # history tail over the CURRENT history (without `prompt`'s bytes), whereas the live turn
@@ -611,7 +618,8 @@ fn hoosh_build_dry(dst, model, system, mem, prompt, stream) {
     if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }   # the pending user turn
     off = _hoosh_emit_msg_cap(dst, off, cap, "user", prompt);
     off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
-    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.4: mirrors the live builders' budget/effort pair
+    off = _append_reasoning_effort(dst, off, cap);
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     store8(dst + off, 0);

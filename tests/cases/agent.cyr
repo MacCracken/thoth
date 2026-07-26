@@ -271,14 +271,24 @@ fn test_agent() {
     _cfg_hoosh_reasoning = 3;
     hoosh_build_request(&rrb, "m", 0, 0, "hi", 0);
     assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16384,\"reasoning_effort\":\"high\",\"stream\":false}"), "single-shot builder raises the budget with effort too");
-    # ...and the multi-turn builder, which emits NEITHER, stays flat: a larger budget there would buy
-    # nothing, since without the effort field the gateway never turns thinking on.
+    # ...and so does the MULTI-TURN builder, the one a free-text turn reaches under [hoosh].tools = false.
+    # 0.38.4: it emitted NEITHER field from 0.35.2 to 0.38.3, which made [hoosh].reasoning silently inert on
+    # that path — the only asymmetry between thoth's builders, and the reason this pins all four of them.
     session_reset();
     session_history_append("user", "hi", 2);
     hoosh_build_messages(&rrb, "m", 0, 0, 0);
-    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "multi-turn builder sends neither effort nor the raised budget");
-    session_reset();
+    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16384,\"reasoning_effort\":\"high\",\"stream\":false}"), "multi-turn builder emits effort + the raised budget (0.38.4)");
+    # the /dry preview mirrors it, so what the preview shows is what the turn sends. Both fields come from
+    # config, not the envelope, so this holds on the agentic path too (where /dry shows the plain envelope).
+    hoosh_build_dry(&rrb, "m", 0, 0, "hi2", 0);
+    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"},{\"role\":\"user\",\"content\":\"hi2\"}],\"max_tokens\":16384,\"reasoning_effort\":\"high\",\"stream\":false}"), "/dry preview carries the same budget + effort");
+    # reasoning off -> both builders fall back to the flat 4096 with no effort field (byte-identical floor)
     _cfg_hoosh_reasoning = 0;
+    hoosh_build_messages(&rrb, "m", 0, 0, 0);
+    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "reasoning off: multi-turn builder back to the 4096 floor");
+    hoosh_build_dry(&rrb, "m", 0, 0, "hi2", 0);
+    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"},{\"role\":\"user\",\"content\":\"hi2\"}],\"max_tokens\":4096,\"stream\":false}"), "reasoning off: /dry preview back to the 4096 floor");
+    session_reset();
     # reasoning accumulator (mirrors _hoosh_acc): append + reset + accessors
     _reason_acc_reset();
     assert_eq(hoosh_last_reason_len(), 0, "reason acc: empty after reset");

@@ -2,6 +2,44 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.4] - 2026-07-25
+
+**`[hoosh].reasoning` reaches every path — the multi-turn builder was silently dropping it, and had been since
+0.35.2.**
+
+### Fixed
+- **`hoosh_build_messages` now emits `reasoning_effort` and asks for `_hoosh_max_tokens()`** (`src/hoosh.cyr`),
+  was: neither field, with a flat `HOOSH_MAX_TOKENS = 4096`. It was the only one of thoth's request builders that
+  emitted neither — `hoosh_build_request` (single-shot) and `agent_build_request` (agentic) have both carried the
+  effort field since 0.35.2 and the paired budget since 0.38.2. The two must move together: thinking tokens are
+  drawn from the SAME output budget as the answer, so effort without the raised ceiling truncates a reasoned reply
+  (0.38.2), and the raised ceiling without effort buys nothing. **Scope precisely — this is real but narrow**:
+  `_task_dispatch` (`src/commands.cyr`) routes a free-text turn to `agent_turn` whenever `agent_enabled()` is true,
+  and that gates on **`[hoosh].tools` alone** (no daimon check — `read_file`/`list_dir` are always-available local
+  tools), which **defaults ON**. So the default path was never affected; `hoosh_build_messages` is reached only by a
+  user who has set `[hoosh].tools = false`. For that user, `[hoosh].reasoning = high` had been a no-op for three
+  minors — the setting parsed, `/state` reported it, and no request ever carried it.
+- **`hoosh_build_dry` mirrors it**, so `/dry` previews what the turn actually sends. Both fields derive from config
+  rather than from the message envelope, so they are identical across all three live builders — which makes the
+  preview faithful on the **agentic** path too, where `/dry` shows the plain envelope and annotates (never fetches)
+  the `tools` array.
+
+### Changed
+- **The test that pinned the asymmetry now pins the fix** (`tests/cases/agent.cyr`). 0.38.2 added an assertion
+  deliberately recording that "the multi-turn builder sends neither effort nor the raised budget"; it is updated,
+  not deleted — the intent comment now explains what the asymmetry was and why all four builders are pinned. Added
+  coverage: multi-turn and `/dry` with effort on (`16384` + `reasoning_effort`), and both back at the flat `4096`
+  with no effort field when reasoning is off (the byte-identical floor).
+
+### Verified
+- `cyrius build` clean (warning set unchanged from 0.38.3) and the full suite green — **264 + 1540 + 183 + 3**,
+  0 failed (+3 assertions).
+- **Live on the wire, through the real user path** — not just the unit pins. With `[hoosh].tools = false` and
+  `[hoosh].reasoning = "high"` in `thoth.cyml`, a typed free-text turn against a capturing endpoint sends
+  `…,"max_tokens":16384,"reasoning_effort":"high","stream":false}`, and `/dry` previews the same bytes; thoth's own
+  flag line confirms it took the intended route (`agent=off`). Dropping `reasoning` from the config puts the same
+  turn back at `"max_tokens":4096,"stream":false` — the floor is byte-identical.
+
 ## [0.38.3] - 2026-07-25
 
 **Declaration hygiene — thoth's own copy of the undersized `waitpid` status buffer, the one the 0.38.2 `lib/`
