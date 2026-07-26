@@ -25,6 +25,13 @@
 var _hoosh_req = 0;
 var HOOSH_REQ_CAP = 262144;
 var HOOSH_MAX_TOKENS = 4096;
+# 0.38.2: a reasoning turn needs its own ceiling. hoosh <= 2.5.0 IGNORED the client's max_tokens whenever
+# reasoning_effort was set and forced 16384, to leave room for thinking; hoosh 2.5.2 made the CLIENT's value
+# authoritative (it still defaults to 16384, but only when the field is absent). thoth always sends the field,
+# so its flat 4096 silently became a THINKING+ANSWER budget the moment the gateway moved — a reasoned reply
+# could truncate mid-answer. thoth now states the reasoning budget itself rather than inheriting a gateway
+# default that has already changed once.
+var HOOSH_MAX_TOKENS_REASONING = 16384;
 var _hoosh_auth = 0;        # cached "Bearer <token>" header value
 var _hoosh_endpoint = 0;    # cached base url + the OpenAI path
 var _hoosh_models_ep = 0;   # cached base url + the OpenAI /v1/models path
@@ -274,6 +281,17 @@ fn _append_int(dst, off, n) {
 # effort control (Anthropic adaptive thinking output_config.effort); providers
 # that don't expose reasoning ignore it. Off -> nothing appended. Shared by both
 # request builders (hoosh_build_request and agent_build_request).
+# _hoosh_max_tokens: the output budget to send with a request. Thinking tokens are drawn from the SAME
+# budget as the answer, so a turn that emits reasoning_effort asks for the larger ceiling; off -> the
+# historical 4096, byte-identical. Pair this with _append_reasoning_effort: the two belong together, and a
+# builder that starts emitting one must start emitting the other (hoosh_build_messages / hoosh_build_dry
+# send neither, so they stay flat at HOOSH_MAX_TOKENS — a bigger budget there would buy nothing, since
+# without the effort field the gateway never turns thinking on).
+fn _hoosh_max_tokens() {
+    if (config_hoosh_reasoning_effort() != 0) { return HOOSH_MAX_TOKENS_REASONING; }
+    return HOOSH_MAX_TOKENS;
+}
+
 fn _append_reasoning_effort(dst, off, cap) {
     var eff = config_hoosh_reasoning_effort();
     if (eff == 0) { return off; }
@@ -306,7 +324,7 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
     off = _append_cstr_cap(dst, off, cap, "{\"role\":\"user\",\"content\":\"");
     off = _json_escape_into_cap(dst, off, cap, prompt);
     off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
-    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
     off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     # stream_options:{include_usage} makes the gateway append a final usage frame to
     # the SSE stream (0.10.2) — without it a streamed turn carries no token count.

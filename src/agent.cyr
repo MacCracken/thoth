@@ -279,7 +279,7 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
         off = _agent_copy(dst, off, tools_buf, tools_len, AGENT_REQ_CAP);
     }
     off = _append_cstr_cap(dst, off, cap, ",\"max_tokens\":");
-    off = _append_int(dst, off, HOOSH_MAX_TOKENS);
+    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
     off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }

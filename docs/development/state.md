@@ -7,6 +7,51 @@
 
 ## Version
 
+**0.38.2** — **Toolchain + dependency refresh** (2026-07-25). cyrius **6.4.62 → 6.4.78** with `lib/` re-synced to
+the snapshot (`cyrius lib sync --full`, 99 modules) — the re-sync is the load-bearing half, since `lib/` **shadows**
+the pin and bumping `cyrius.cyml` alone would leave thoth compiling against the old floor; it also had to be atomic,
+because sigil 3.12.1 / patra 1.12.12 call the new `thread_local_alloc()` and sandhi 1.9.3 calls `sys_getpeername`,
+and cyrius non-strict mode patches a missing callee with placeholder bytes instead of erroring. **The sync also
+silently skipped 8 files**: `_dep_copy_file` returns early when src/dst byte sizes are EQUAL, and the shadow warning
+only names versioned bundles (it caught 2: yantra, niyama) — a full `cmp` sweep found 6 more (`process`, `tls`, `ws`,
+`pam`, `regression`, `shadow`), every one a pre-hardening copy carrying the declaration style cyrius's
+undersized-array-locals sweep replaced (`var status_buf[1]` where `sys_waitpid` writes 4 bytes; `var[N]` is N BYTES).
+They had NEVER been replaced (equal size since before 6.4.62). **Severity, measured not assumed: stale, NOT
+dangerous** — cyrius reserves a minimum 8-byte frame slot per array local (two adjacent `var[1]` locals sit 8 bytes
+apart and a `store64` into the first leaves the second intact), and every widened decl needed ≤ 8 B, so none wrote
+past its slot; the widened form states intent (cf. `lib/yukti.cyr:3290`) but this was hygiene, not a live bug. Of the
+11 widened `process.cyr` fns only `exec_vec` is reachable — via `/run`, NOT the model's `shell` tool, which uses
+thoth's OWN `exec_shell_capture` (written because `lib/process.cyr` has no timeout). Fixed by deleting and
+re-syncing; `lib/` now verified byte-identical to the snapshot across all 99 modules. **The shadow warning is
+not a completeness check — `cmp` every file.** Vendored dists
+re-synced: **avatara 2.8.0 → 2.14.0**, **bote-core 3.1.1 → 3.1.4**, **libro 2.7.10 → 2.8.2**, **sankoch-zlib
+2.5.1 → 2.7.5**, **t-ron 2.1.7 → 2.1.8** (sit-read 1.3.4 / anuenue 1.2.0 / darshana 0.9.0 / vyakarana 2.2.3 verified
+already-current against their upstream tag lists; kashi 1.0.3 is a pin-only release with an empty `src/` diff, so the
+vendored freestanding blob is already 1.0.3). **ORDER MATTERED**: the pin had to move BEFORE avatara, because cyrius
+≤ 6.4.74 grew `fn_table` past 8192 while six fn-indexed side tables stayed at 8192 and wrote into the neighbour
+**with no diagnostic** (6.4.75 P0), and thoth goes 7309 → 7654 fns across this release (avatara +204, the `lib/`
+floor re-sync +140, the other four dists net-neutral). **The "~89 % of caps"
+note from 0.37.0 is now OBSOLETE** — 6.4.75/6.4.76 raised the real ceilings, and this build measures `fn_table`
+7654/32768 (23 %) and identifiers 244185/524288 (47 %); the tightest is now `var_table` 4441/8192 (54 %). **Fixed a
+real regression the refresh surfaced**: hoosh ≤ 2.5.0 IGNORED the client's `max_tokens` when `reasoning_effort` was
+set and forced 16384 for thinking headroom, and hoosh 2.5.2 made the client's value authoritative — so thoth's flat
+`HOOSH_MAX_TOKENS = 4096` silently became a **thinking+answer** budget and a reasoned reply could truncate. thoth
+now states its own budget (`HOOSH_MAX_TOKENS_REASONING = 16384` via `_hoosh_max_tokens()`) at exactly the two
+builders that emit the effort field. Also removed (upstream, via these bumps) a latent flat-namespace enum clobber:
+bote's bare `ERR_JSON`/`ERR_IO` vs libro's, where libro won by include order and no warning fired because thoth is
+past cyrius's 1024-global dup-check fold. Suite green (264 + 1537 + 183 + 3). Pin **6.4.78**. **Live-verified on a
+pty**: `/personas` = 37 traditions / 504 archetypes (was 27 / 374), and `/persona The Hermit` → `/role` proves a
+Tarot archetype (new to THOTH with this jump; Tarot landed upstream in avatara 2.9.0) is reachable through the real
+user path. Warning-set delta vs 0.38.1 (same compiler): accepted warnings unchanged, but the `oversized array local`
+note goes 1 → 2, static data 13252432 → 13607296 B, plus a new `.bss` hint — all from the `lib/` re-sync, not the
+dists. **KNOWN, NOT FIXED** (pre-existing, out-of-scope): `hoosh_build_messages` never emits `reasoning_effort`, so
+`[hoosh].reasoning` is inert on the path that uses it (since 0.35.2). Scope precisely: `agent_enabled()` gates on
+**`[hoosh].tools` alone** — NO daimon check (local read_file/list_dir are always-available tools) — and tools
+defaults ON, so the DEFAULT path is `agent_build_request`, which emits effort and DOES get this release's budget
+fix; `hoosh_build_messages` is reached only with `[hoosh].tools = false`. A test now pins the asymmetry.
+**NEXT**: close that gap; `cyrius audit` is finally trustworthy for thoth (6.4.73/6.4.78 fixed its stdlib-include
+and vendored-`lib/`-walking bugs).
+
 **0.38.1** — **rainbow reaches the GUI + the 0.38.0 review fixes** (2026-07-14). A 9-dimension adversarial review
 (each finding through a 3-lens refute-by-default panel) found 0.38.0's line tier **inverted**: it hooked `ui_emit`
 on the premise that `out_mode() == OUT_FD1` meant "line tier", and BOTH premises were false. `ui_emit` is the
@@ -234,8 +279,8 @@ polls now route through `intr_check()` so the hook fires during streaming — th
 there → `intr_check` == `intr_poll`). An Esc-interrupted turn with no partial shows a neutral **"- stopped -"**
 notice (new `gturn_stop`/`gturn_stopped`), distinct from the red failure notice; the greeting guard excludes it.
 Unit-tested (`test_gui` stopped-notice + parity + greeting guard; seam via `test_interrupt`). Live Esc-in-window is
-compositor-gated (user-verified). **Needs hoosh ≥ 2.4.13** (an interrupted stream crashed the older gateway —
-SIGPIPE; fixed there). **Completes the 0.34.x stop/interrupt work** (`.1` TUI + seam, `.3` GUI). Pin **6.4.62**.
+compositor-gated (user-verified). **Needed hoosh ≥ 2.4.13** at the time (an interrupted stream crashed the older
+gateway — SIGPIPE; fixed there); 0.38.2 raises the documented spine floor — see the Spine floors bullet below. **Completes the 0.34.x stop/interrupt work** (`.1` TUI + seam, `.3` GUI). Pin **6.4.62**.
 **NEXT (0.34.x)**: `.4` per-message remember + feedback.
 
 **0.34.2** — **Fix: an empty tool `inputSchema` silently emptied every agentic turn** (2026-07-13). A tool that
@@ -2616,7 +2661,7 @@ host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
 native** (the vendored authorization engine gates `/run`, `/write`, and
 `/call` through one choke point — deny is final, no policy means the
 fail-closed confirm prompt). M5 adds **avatara native**: the vendored archetype
-bundle (avatara 2.8.0) supplies the Thoth/Librarian persona in-process — sourced
+bundle (avatara 2.14.0) supplies the Thoth/Librarian persona in-process — sourced
 from `egyptian_thoth()` via the `prof_*` accessors and threaded into the hoosh
 `{role:system}` message so the precision-0.95 scribe archetype steers the turn,
 not just the banner. Unconfigured capabilities (no hoosh/daimon url, no t-ron
@@ -2663,11 +2708,11 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.4.62` (in `cyrius.cyml [package].cyrius`), matching the
+- **Cyrius pin**: `6.4.78` (in `cyrius.cyml [package].cyrius`), matching the
   installed `cycc`. The pin advanced steadily across the 0.11.x–0.33.x arc via
   `cyrius lib sync` floor refreshes (no thoth source change) — most recently
   6.4.29 → 6.4.46 → 6.4.49 (0.27.0 and the 0.30.x GUI work) → 6.4.57 (0.32.0
-  atomic writes) → 6.4.58 (0.32.1) → **6.4.62** (0.33.2). Earlier history:
+  atomic writes) → 6.4.58 (0.32.1) → 6.4.62 (0.33.2) → **6.4.78** (0.38.2). Earlier history:
   **0.10.1** took 6.2.40 → 6.2.43. The 0.7.0 line had run on 6.2.40. Earlier:
   **0.6.6** took 6.2.15 → 6.2.37 — a toolchain refresh:
   `cyrius lib sync` re-synced 98 floor modules (two new snapshot modules,
@@ -2689,6 +2734,19 @@ floor; never fork the spine.**
   the **`math`** stdlib dep (the vendored avatara bundle's
   `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via `cyrius lib sync`
   (88 modules).
+- **Vendored dists** (committed under `src/vendor/`, refreshed by `scripts/sync-*.sh` — the script's default
+  `TAG` is thoth's vendor pin of record). At 0.38.2: **avatara 2.14.0** · **bote-core 3.1.4** · **libro 2.8.2** ·
+  **sankoch-zlib 2.7.5** · **t-ron 2.1.8** · **sit-read 1.3.4** · **anuenue 1.2.0** · **vyakarana 2.2.3** ·
+  **darshana 0.9.0** · **kashi 1.0.3**. Three have **no** sync script and are hand-vendored: `darshana`,
+  `vyakarana`, `kashi` — and `kashi.cyr` carries no `# Version:` header, so nothing self-checks it (its
+  freestanding core `src/font_data.cyr` has been byte-identical across the whole 1.0.x line, which is why the
+  1.0.2 → 1.0.3 bump is a no-op on the file).
+- **Spine floors** (runtime servers thoth talks to over HTTP; not compiled in): **hoosh ≥ 2.5.2**, **daimon ≥
+  1.4.0**, **mneme ≥ 1.1.1**. 0.38.2 was developed and verified against hoosh 2.5.11 / daimon 2.0.0 / mneme
+  1.1.1. The hoosh floor is 2.5.2 because that release made the client's `max_tokens` authoritative — thoth
+  sends its own reasoning budget (`HOOSH_MAX_TOKENS_REASONING`) on the strength of it. daimon **2.0.0** is a
+  major bump but a drop-in here: it extracted its scheduler to samay, and thoth uses only
+  `GET /v1/mcp/tools` + `POST /v1/mcp/call`, which are byte-identical since 1.4.0.
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,

@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.4.62"
+cyrius = "6.4.78"
 
 [build]
 entry = "src/main.cyr"

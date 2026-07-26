@@ -253,13 +253,32 @@ fn test_agent() {
     _cfg_hoosh_reasoning = 0; assert_eq(config_hoosh_reasoning_effort(), 0, "reasoning off -> no effort string");
     _cfg_hoosh_reasoning = 1; assert(streq(config_hoosh_reasoning_effort(), "low"), "level 1 -> low");
     _cfg_hoosh_reasoning = 3; assert(streq(config_hoosh_reasoning_effort(), "high"), "level 3 -> high");
-    # request builder: reasoning_effort appears after max_tokens, before stream, only when set
+    # request builder: reasoning_effort appears after max_tokens, before stream, only when set.
+    # 0.38.2: max_tokens moves WITH it — thinking tokens are drawn from the same output budget, and
+    # hoosh 2.5.2 made the client's value authoritative (<= 2.5.0 overrode it with 16384), so a flat
+    # 4096 would cap thinking+answer together and truncate a reasoned reply.
     _cfg_hoosh_reasoning = 2;
     agent_build_request(&rb, "m", 0, 0, 0, 0, 0);
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"reasoning_effort\":\"medium\",\"stream\":false}"), "reasoning set: reasoning_effort emitted after max_tokens");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16384,\"reasoning_effort\":\"medium\",\"stream\":false}"), "reasoning set: reasoning_effort emitted after the RAISED max_tokens");
     _cfg_hoosh_reasoning = 0;
     agent_build_request(&rb, "m", 0, 0, 0, 0, 0);
-    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "reasoning off: no reasoning_effort field");
+    assert(streq(&rb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "reasoning off: no reasoning_effort field, budget back to 4096");
+    # the budget helper is the single source for that pairing, on both builders that emit effort
+    _cfg_hoosh_reasoning = 0; assert_eq(_hoosh_max_tokens(), 4096, "budget: reasoning off -> 4096");
+    _cfg_hoosh_reasoning = 1; assert_eq(_hoosh_max_tokens(), 16384, "budget: reasoning low -> 16384");
+    _cfg_hoosh_reasoning = 3; assert_eq(_hoosh_max_tokens(), 16384, "budget: reasoning high -> 16384");
+    var rrb[256];
+    _cfg_hoosh_reasoning = 3;
+    hoosh_build_request(&rrb, "m", 0, 0, "hi", 0);
+    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16384,\"reasoning_effort\":\"high\",\"stream\":false}"), "single-shot builder raises the budget with effort too");
+    # ...and the multi-turn builder, which emits NEITHER, stays flat: a larger budget there would buy
+    # nothing, since without the effort field the gateway never turns thinking on.
+    session_reset();
+    session_history_append("user", "hi", 2);
+    hoosh_build_messages(&rrb, "m", 0, 0, 0);
+    assert(streq(&rrb, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":4096,\"stream\":false}"), "multi-turn builder sends neither effort nor the raised budget");
+    session_reset();
+    _cfg_hoosh_reasoning = 0;
     # reasoning accumulator (mirrors _hoosh_acc): append + reset + accessors
     _reason_acc_reset();
     assert_eq(hoosh_last_reason_len(), 0, "reason acc: empty after reset");

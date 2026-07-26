@@ -14,10 +14,10 @@
 # stdlib sigil's (same signature + semantics; last definition wins). Known
 # and accepted in t-ron's own 2.1.5 notes.
 #
-# Usage: ./scripts/sync-tron.sh [tag]   (default: 2.1.7)
+# Usage: ./scripts/sync-tron.sh [tag]   (default: 2.1.8)
 set -euo pipefail
 
-TAG="${1:-2.1.7}"
+TAG="${1:-2.1.8}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/t-ron.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/t-ron/${TAG}/dist/t-ron.cyr"

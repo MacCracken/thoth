@@ -2,6 +2,116 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.2] - 2026-07-25
+
+**Toolchain and dependency refresh — cyrius `6.4.62` → `6.4.78`, avatara `2.8.0` → `2.14.0`, bote-core
+`3.1.1` → `3.1.4`, libro `2.7.10` → `2.8.2`, sankoch-zlib `2.5.1` → `2.7.5`, t-ron `2.1.7` → `2.1.8` — plus
+the one real regression the refresh surfaced: thoth's reasoning turns had silently become 4096-token turns.**
+
+### Changed
+- **Cyrius pin `6.4.62` → `6.4.78`**, and `lib/` re-synced to that snapshot (`cyrius lib sync --full`, 99
+  modules). The re-sync is the load-bearing half: `lib/` **shadows** the pin, so bumping `cyrius.cyml` alone
+  would have left thoth compiling against the old floor. It also had to be atomic — sigil `3.12.1` and patra
+  `1.12.12` call `thread_local_alloc()` (new at 6.4.65) and sandhi `1.9.3` calls `sys_getpeername`, none of
+  which existed in thoth's committed `lib/`; under cyrius non-strict mode a missing callee is patched with
+  placeholder bytes rather than erroring, so a partial refresh fails silently rather than loudly.
+- **Vendored dists re-synced** — **avatara 2.14.0**, **bote-core 3.1.4**, **libro 2.8.2**, **sankoch-zlib
+  2.7.5**, **t-ron 2.1.8**; `scripts/sync-{avatara,bote,libro,sit,tron}.sh` default tags bumped to match (the
+  script default is thoth's vendor pin of record). Unchanged because they are already current: sit-read 1.3.4,
+  anuenue 1.2.0, darshana 0.9.0, vyakarana 2.2.3 — each verified against its upstream tag list, not assumed.
+  **kashi** is nominally 1.0.2 → 1.0.3, but 1.0.3 is a pin-only release whose `src/` diff is empty and whose
+  freestanding `font_data.cyr` blob is byte-identical across the entire 1.0.x line, so the vendored file is
+  already 1.0.3 and was left alone.
+- **`/personas` grew with avatara 2.14.0**: **504 archetypes across 37 traditions** (was 374 / 27). The
+  tradition delta is **+11 −1**: I Ching (64), Tarot (22), Lakota, Haudenosaunee, Anishinaabe, Comanche,
+  Northern Paiute, Inuit, and the three Aboriginal Australian successors below, against `Indigenous` retired.
+  Upstream also **retired and split** some tradition/archetype names: `Indigenous` is gone,
+  `Aboriginal Australian` split into `Kunwinjku`/`Kulin`/`Gunaikurnai`, `Deganawidah` → `The Peacemaker`,
+  `Tiddalik` → `Tidilick`. thoth hardcodes none of these, but a `thoth.cyml [persona].name` pinning a retired
+  name now falls back to the Egyptian Thoth — honest, and silent by design, but worth knowing.
+
+### Fixed
+- **A reasoning turn was being capped at 4096 output tokens, thinking included.** thoth sends `max_tokens`
+  on every request. hoosh **≤ 2.5.0** ignored that field whenever `reasoning_effort` was set and forced
+  `16384`, precisely to leave room for thinking; hoosh **2.5.2** made the client's value authoritative. thoth
+  never changed, so the moment the gateway moved, thoth's flat `HOOSH_MAX_TOKENS = 4096` quietly became a
+  **thinking + answer** budget and a reasoned reply could truncate mid-sentence. thoth now states the budget
+  itself (`HOOSH_MAX_TOKENS_REASONING = 16384` via `_hoosh_max_tokens()`) rather than inheriting a gateway
+  default that has already changed once. Applied at exactly the two builders that emit `reasoning_effort` —
+  `hoosh_build_request` and `agent_build_request`; `hoosh_build_messages`/`hoosh_build_dry` emit neither and
+  stay byte-identical at 4096, since without the effort field the gateway never turns thinking on.
+- **A latent cross-bundle enum clobber is gone** (fixed upstream, landed by these bumps). Vendored bote-core
+  defined bare `ERR_JSON = 10` / `ERR_IO = 11` and vendored libro defined `ERR_JSON = 4` / `ERR_IO = 3` in
+  cyrius's flat enum-constant namespace, and `src/main.cyr` includes bote **before** libro — so libro's values
+  won and bote's error mapping would have mis-mapped. It never fired (both consumers are dead code in thoth)
+  and it never even **warned**, because thoth is past cyrius's 1024-global duplicate-check fold. bote 3.1.3's
+  `BOTE_ERR_*` and libro 2.8.2's `LIBRO_ERR_*` namespacing remove the shared tokens outright.
+
+### Notes
+- **Order mattered, and not for a cosmetic reason.** The pin had to move **before** avatara was re-vendored.
+  cyrius ≤ 6.4.74 grew `fn_table` past 8192 while six fn-indexed side tables stayed fixed at 8192 slots, and
+  wrote into the neighbouring table **with no diagnostic** (the 6.4.75 P0). thoth goes 7309 → **7654** fns
+  across this release: avatara 2.14.0 contributes +204 (to 7513) and the `lib/` floor re-sync a further +140,
+  with the other four dist bumps net-neutral — so avatara alone would have crossed 8192's neighbourhood but
+  not the line, and the two together clear it comfortably only because the ceiling moved. Under the old
+  denominators this build would sit at ~93 % of both the fn and identifier caps; under 6.4.75/6.4.76's real
+  ceilings it measures **`fn_table` 7654/32768 (23 %)** and **identifiers 244185/524288 (47 %)**. The 0.37.0
+  audit's "~89 % of caps, dep-side levers required" note is therefore **obsolete** — it was measured against
+  denominators that no longer apply. The tightest ceiling is now `var_table` at 4441/8192 (54 %). The
+  roadmap's capacity item is rewritten accordingly: what remains is warning hygiene, not headroom.
+- **`cyrius lib sync` silently skips any module whose new version happens to be the same byte size — in thoth
+  that was hiding eight stale files.** `_dep_copy_file` (cyrius `cbt/deps.cyr:85`) returns early when source
+  and destination sizes are equal, on the assumption that equal size means already-resolved. The shadow
+  warning only names *versioned bundles*, so it caught just two (yantra 1.0.0 → 1.0.1, niyama 1.0.5 → 1.0.6 —
+  version-string bumps of identical length). A byte-compare of the whole snapshot found **six more, all
+  invisible to the warning**: `process.cyr`, `tls.cyr`, `ws.cyr`, `pam.cyr`, `regression.cyr`, `shadow.cyr`.
+  Each was a pre-hardening copy carrying the declaration style cyrius's undersized-array-locals sweep
+  replaced — `var status_buf[1]` where `sys_waitpid` writes a 4-byte int, `var written[1]` / `var rdb[1]`
+  against 8-byte writes, `var fds[2]` for a 2-int pipe. Because the sizes matched, `cyrius lib sync` had
+  **never once** replaced them; they predate the 6.4.62 pin entirely. Fixed by deleting the eight and
+  re-syncing; `lib/` is now byte-identical to the 6.4.78 snapshot across all 99 modules, verified file-by-file
+  with `cmp` rather than by trusting the warning.
+  **To be precise about severity — these were stale, not dangerous.** cyrius reserves a minimum **8-byte**
+  frame slot per array local, and every one of the widened declarations needed ≤ 8 bytes, so none of them
+  actually wrote past its own slot. Measured directly rather than assumed: two adjacent `var[1]` locals sit
+  8 bytes apart, and a `store64` into the first leaves the second intact. The widened decls are still the
+  right thing to carry — they state intent under the CLAUDE.md rule that `var buf[N]` is N **bytes**, not N
+  entries (the 6.4.78 snapshot says as much itself at `lib/yukti.cyr:3290`: *"was [1]; both round to 8B so
+  benign, but [4] states intent"*) — but this was a hygiene gap, not a live memory-safety bug, and an earlier
+  draft of this entry called it an out-of-bounds stack write. It wasn't.
+  **The lesson that does generalise: the shadow warning is not a completeness check.** It reports only
+  versioned bundles, so it can read clean while the floor is stale. Verify a floor refresh by comparing every
+  file, and file the skip-on-equal-size behaviour upstream.
+- **Known, unchanged, deliberately not touched**: the `duplicate fn 'chacha20_xor'` warning (vendored t-ron vs
+  stdlib sigil — pre-existing, same signature and semantics, unaffected by 2.1.8), `duplicate fn 'cmd_reset'`
+  (thoth wins by include order, documented at `src/main.cyr`), and the three `undefined function
+  'sign_commit_body' / 'verify_commit_body' / 'load_signing_seed'` (sit's write path, unreachable in the read
+  profile). The 13 MB static-data warning is vendored sigil and unfixable from thoth.
+- **Found but NOT fixed here** (pre-existing, and out of scope for a dep refresh): `hoosh_build_messages`
+  never emits `reasoning_effort` at all, so `[hoosh].reasoning` is inert on the path that uses it — and has
+  been since 0.35.2. Scope, precisely: `_task_dispatch` routes every free-text turn to `agent_turn` when
+  `agent_enabled()` is true, and `agent_enabled()` gates on **`[hoosh].tools` alone** — there is no daimon
+  check in it (local `read_file`/`list_dir` are always-available tools, so the loop always has a tool source).
+  `[hoosh].tools` defaults **on**, so the default path is `agent_build_request`, which emits the effort field
+  and **does** get this release's budget fix, daimon or not. `hoosh_build_messages` is reached only when a
+  user sets `[hoosh].tools = false`. That is the whole exposure — narrower than it first looks, but real.
+  A `test_agent` assertion now pins the asymmetry so it cannot drift further unnoticed.
+
+### Verified
+- Suite green: **264 + 1537 + 183 + 3** (+5 assertions — the reasoning-budget pairing, both builders, and the
+  multi-turn builder's deliberate flat budget). Build clean.
+- **Warning-set delta from 0.38.1** (built with the same compiler, so the comparison is fair): the accepted
+  set is unchanged — `duplicate fn 'chacha20_xor'`, `duplicate fn 'cmd_reset'`, the three `undefined function`
+  sit write-path symbols, and the large-static-data warning all persist with the same meaning. Three things
+  *did* move, all from the `lib/` floor re-sync rather than the dists: the `note: oversized array local kept
+  in shared global` count went **1 → 2**, the static-data figure 13252432 → 13607296 bytes, and the build now
+  emits an additional `hint:` line about `.bss` retained inside unreachable fns. Recorded because an earlier
+  draft of this entry claimed the warning set was byte-identical; it is not.
+- **Live-verified on a pty**, not just unit-tested: `/personas` lists 37 traditions summing to exactly 504
+  archetypes; `/persona The Hermit` switches into a **Tarot** archetype (new *to thoth* with this jump —
+  Tarot itself landed upstream in avatara 2.9.0) and `/role` derives its dominant aspect (the Sovereign) —
+  i.e. the new catalogue is reachable through the real user path, not merely present in the bundle.
+
 ## [0.38.1] - 2026-07-14
 
 **rainbow reaches the GUI — and an adversarial review of 0.38.0 found the line tier was tinting exactly the wrong half.**

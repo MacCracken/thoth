@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.38.1):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.38.2):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`), the model **`shell`** / **`edit`** /
 > **`create_file`** tools (thoth reads *and writes* code), the **memory arc** (consume mneme), the
 > **chat-management arc** (named multi-conversation store), the **chat-UX arc** (message actions, stop/interrupt,
@@ -135,11 +135,15 @@ Forward, non-gating (each ready when its prerequisite lands; none blocks v1.0):
   (today the `reasonlog` is session-scoped, like the memory strip).
 - **Model-picker health/pricing** — annotate the `Ctrl-P` picker with per-model reachability/pricing, *if* hoosh ever
   exposes it (omit-until-present).
-- **Capacity relief (from the 0.37.0 hardening audit)** — tighten the **sit** `[lib.read]` vendor carve (drops a dead
-  CLI command layer — the `cmd_reset` collision + three `undefined function` warnings) and adopt a **bote**
-  `[lib.jsonx]` micro-profile (233 fns → 7). Both are upstream-profile + `sync-*.sh` re-vendor work; they buy back
-  `fn_table` / identifier-buffer headroom (both ~89%). `CYRIUS_DCE` does not help; the 13 MB static-data warning is
-  vendored sigil and unfixable from thoth.
+- **Vendor-carve cleanup (was "capacity relief", from the 0.37.0 hardening audit)** — tighten the **sit**
+  `[lib.read]` vendor carve (drops a dead CLI command layer — the `cmd_reset` collision + three
+  `undefined function` warnings) and adopt a **bote** `[lib.jsonx]` micro-profile (233 fns → 7). Both are
+  upstream-profile + `sync-*.sh` re-vendor work, and neither exists upstream yet. **The capacity argument is
+  gone**: cyrius 6.4.75/6.4.76 raised the real ceilings to 32768 fns / 512 KiB identifiers, so the 0.37.0 "~89 %"
+  reading was against denominators that no longer apply — measured at 0.38.2 (with the *larger* avatara 2.14.0),
+  `fn_table` is 7654/32768 (23 %) and identifiers 244185/524288 (47 %). What remains is warning hygiene, not
+  headroom. `CYRIUS_DCE` does not help; the 13 MB static-data warning is vendored sigil and unfixable from thoth.
+  The tightest ceiling is now `var_table` at 4441/8192 (54 %).
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will grow **voice
 > input** (mic → speech-to-text) and **read-back** (text-to-speech) — but by **consuming an AGNOS audio/voice
