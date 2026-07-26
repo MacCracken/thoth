@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.38.2):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.38.3):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`), the model **`shell`** / **`edit`** /
 > **`create_file`** tools (thoth reads *and writes* code), the **memory arc** (consume mneme), the
 > **chat-management arc** (named multi-conversation store), the **chat-UX arc** (message actions, stop/interrupt,

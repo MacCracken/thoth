@@ -231,7 +231,9 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     syscall(109, pid, pid);             # 0.20.1: parent-side setpgid(pid,pid) — closes the fork/setpgid race
                                         # (benign EACCES if the child already exec'd, since it self-set the group)
 
-    var stbuf[1];
+    var stbuf[4];                       # N BYTES: waitpid's status out-param is one 4-byte int (was [1];
+                                        # both round to the 8B minimum frame slot so [1] was benign, but
+                                        # [4] states the intent — matches lib/process.cyr's status_buf[4])
     var elapsed = 0;
     var reaped = 0;
     var code = 0;

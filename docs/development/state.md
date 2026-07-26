@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.38.3** — **Declaration hygiene: thoth's own undersized `waitpid` status buffer** (2026-07-25). 0.38.2's `lib/`
+re-sync pulled in the hardened, widened array-local declarations everywhere in the stdlib (`lib/process.cyr`
+`var status_buf[4]`) — and left thoth's own copy of the pattern behind. `exec_shell_capture` (`src/exec.cyr`)
+declared `var stbuf[1]` for the `sys_waitpid` status out-param, which writes a 4-byte int; `var buf[N]` is N
+**BYTES**. Now `var stbuf[4]`, commented as the out-param it is. **Benign before, byte-identical after** — the
+minimum 8-byte frame slot per array local covers a 4-byte write (same measurement as 0.38.2: two adjacent `var[1]`
+locals sit 8 bytes apart, `store64` into the first leaves the second intact); the widened form states intent, per
+`lib/yukti.cyr:3290`. It earns a line because this is the **model's `shell` tool** path, not `/run` — `lib/process.cyr`
+has no timeout, so this timed capture is thoth's own code and no upstream sweep will ever reach it. **The rest of
+`src/` was swept for the same shape and is clean**: every array local passed by address is sized to its writer
+(`pi[24]` = `PROCESS_INFORMATION`, `mh[56]` = `msghdr`, `work[60]` = `termios`, `rec[24]`/`sz[16]` = the GUI
+key/size out-params, `rgb[24]` = `hsv_rainbow`'s 3×8, `tbuf[64]` = `TCGETS`, `pfd[8]` = `pollfd`, and the `[24]`
+scratch matching `fmt_int_buf`); the two sub-8-byte decls in the vendored dists (`bote-core` `var one[2]`,
+`sankoch` `var bridge_buf[4]`) write exactly their declared size and are upstream copies, left alone. Suite green
+(264 + 1537 + 183 + 3), build warning-set unchanged. The changed line is **executed** by the suite, not just
+compiled — `tests/cases/agent.cyr` forks real shells through `exec_shell_capture` including the timeout-kill path
+that reuses the buffer in a second, blocking `sys_waitpid`. Pin **6.4.78** (unchanged).
+
 **0.38.2** — **Toolchain + dependency refresh** (2026-07-25). cyrius **6.4.62 → 6.4.78** with `lib/` re-synced to
 the snapshot (`cyrius lib sync --full`, 99 modules) — the re-sync is the load-bearing half, since `lib/` **shadows**
 the pin and bumping `cyrius.cyml` alone would leave thoth compiling against the old floor; it also had to be atomic,

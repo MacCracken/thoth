@@ -2,6 +2,35 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.3] - 2026-07-25
+
+**Declaration hygiene — thoth's own copy of the undersized `waitpid` status buffer, the one the 0.38.2 `lib/`
+re-sync fixed everywhere except thoth's own source.**
+
+### Changed
+- **`exec_shell_capture` declares `var stbuf[4]`** (`src/exec.cyr`), was `var stbuf[1]`. `sys_waitpid`'s status
+  out-param is a 4-byte int, and in Cyrius `var buf[N]` is N **BYTES**, not N entries — so `[1]` was exactly the
+  declaration style cyrius's undersized-array-locals hardening sweep replaced across the stdlib. 0.38.2 pulled in
+  the widened copies (`lib/process.cyr` `var status_buf[4]`) and left thoth's own behind. **Benign before and
+  byte-identical after**: cyrius reserves a minimum 8-byte frame slot per array local (verified empirically — two
+  adjacent `var[1]` locals sit 8 bytes apart, and a `store64` into the first leaves the second intact), so a 4-byte
+  write never crossed the slot. The point is stated intent, per the snapshot's own note at `lib/yukti.cyr:3290`
+  ("was [1]; both round to 8B so benign, but [4] states intent"). It is worth stating here because this is the
+  model's **`shell` tool** path: `lib/process.cyr` has no timeout, so thoth owns this timed capture outright —
+  the widened `exec_vec` upstream serves `/run`, not this.
+- **Swept the rest of `src/` for the same shape; nothing else needed changing.** Every other array local passed by
+  address is sized to its writer — `pi[24]` (`PROCESS_INFORMATION` = 24 B), `mh[56]` (`msghdr`), `work[60]`
+  (`termios`), `rec[24]`/`sz[16]` (the GUI key/size out-params), `rgb[24]` (`hsv_rainbow` writes 3×8), `tbuf[64]`
+  (`TCGETS`), `pfd[8]` (`pollfd`), and the `[24]` scratch buffers matching `fmt_int_buf`'s contract. The two
+  sub-8-byte declarations left in the vendored dists (`bote-core.cyr` `var one[2]`, `sankoch.cyr`
+  `var bridge_buf[4]`) each write exactly their declared size and are upstream copies, so they stay untouched.
+
+### Verified
+- `cyrius build` clean (warning set unchanged from 0.38.2) and the full suite green — **264 + 1537 + 183 + 3**,
+  0 failed. The changed line is executed, not merely compiled: `tests/cases/agent.cyr` drives `exec_shell_capture`
+  through real forks — exit code, merged stderr, over-cap truncation, the timeout SIGKILL path (which takes the
+  second, **blocking** `sys_waitpid` into the same buffer), and the process-group kill of a backgrounded grandchild.
+
 ## [0.38.2] - 2026-07-25
 
 **Toolchain and dependency refresh — cyrius `6.4.62` → `6.4.78`, avatara `2.8.0` → `2.14.0`, bote-core
