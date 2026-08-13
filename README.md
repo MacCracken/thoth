@@ -8,6 +8,10 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
+**scribe additions with agnosai** 
+
+SCRIBE = Self-Correcting Reasoning Intelligence with Bounded Execution
+
 > **Status: 0.38.4 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
 
