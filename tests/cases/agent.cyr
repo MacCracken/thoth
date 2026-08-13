@@ -336,6 +336,19 @@ fn test_agent() {
     assert_eq(agent_tc_count(av), 1, "reassembled: one call");
     assert(streq(agent_tc_name(av, 0), "echo"), "reassembled: name");
     assert(streq(agent_tc_args(av, 0), "{\"t\":42}"), "reassembled: args decoded");
+
+    # A delta element with NO `index` — one whole call in a single frame, which is what a gateway
+    # emits when the backend did not fragment it (hoosh 2.6.1 converting an Ollama tool call).
+    # Every fixture above carries an explicit index; this pins the documented idx=0 default.
+    _ag_reset();
+    var d3 = "{\"id\":\"call_b3jfnnvb\",\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"arguments\":\"{\\\"path\\\":\\\"/\\\"}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_buf(d3, strlen(d3)));
+    var ab2[1024];
+    _ag_build_array(&ab2);
+    var av2 = bayan_json_v_parse_buf(&ab2, strlen(&ab2));
+    assert_eq(agent_tc_count(av2), 1, "index-less delta: one call folded into slot 0");
+    assert(streq(agent_tc_name(av2, 0), "list_dir"), "index-less delta: name");
+    assert(streq(agent_tc_args(av2, 0), "{\"path\":\"/\"}"), "index-less delta: args");
     return 0;
 }
 

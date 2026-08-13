@@ -16,11 +16,12 @@ Ollama-backed model was dropped**. Optional-arg `list_dir` still worked, which h
 non-string value is re-serialized compact and the string form passes through untouched. Toolchain **6.4.78 →
 6.5.20** with `lib/` re-synced (107 files, `cmp`-swept; static data 13.6 MB → 11.0 MB), which forced the bayan
 **1.3.0** rename `bayan_json_v_parse_str` → `_parse_buf` across 34 sites in 9 files. Dists: bote-core **3.3.1**,
-libro **2.8.5**, sit-read **1.3.5**, sankoch-zlib **2.7.7**, vyakarana **2.3.2**. **Still open, and it is hoosh's
-not thoth's**: hoosh ≤ 2.6.0 strips the `tools` array on the **local streaming** path (`retry_forward_stream` has no
-tools parameter; `provider_forward_stream` hardcodes `0, 0`), so with `[hoosh].stream` defaulting **on** an
-Ollama-backed model is never told it has tools at all. Remote providers are unaffected. **Set
-`[hoosh].stream = false`** until that lands. Suite 264 + 1546 + 183 + 3.
+libro **2.8.5**, sit-read **1.3.5**, sankoch-zlib **2.7.7**, vyakarana **2.3.2**. The other half of the bug was
+hoosh's and shipped alongside as **hoosh 2.6.1** (no thoth change): ≤ 2.6.0 stripped `tools` on the **local
+streaming** path, emitted no tool-call deltas there, and never converted the continuation request back to
+Ollama's shape. **thoth now needs hoosh ≥ 2.6.1 for tools on local models**; against an older gateway set
+`[hoosh].stream = false`. Verified end to end on a Jetson Orin — `qwen3.5:9b` and `llama3.1:8b` both call
+`list_dir` and answer from the real listing. Suite 264 + 1549 + 183 + 3.
 
 **0.38.4** — **`[hoosh].reasoning` reaches every builder** (2026-07-25). Closes the gap 0.38.2 logged as KNOWN, NOT
 FIXED: `hoosh_build_messages` emitted **no** `reasoning_effort` and a flat `HOOSH_MAX_TOKENS = 4096`, the only one of
@@ -2792,10 +2793,14 @@ floor; never fork the spine.**
   `vyakarana`, `kashi` — and `kashi.cyr` carries no `# Version:` header, so nothing self-checks it (its
   freestanding core `src/font_data.cyr` has been byte-identical across the whole 1.0.x line, re-verified by
   `diff` at 1.0.4, which is why every 1.0.x bump is a no-op on the file).
-- **Spine floors** (runtime servers thoth talks to over HTTP; not compiled in): **hoosh ≥ 2.5.2**, **daimon ≥
-  1.4.0**, **mneme ≥ 1.1.1**. 0.38.2 was developed and verified against hoosh 2.5.11 / daimon 2.0.0 / mneme
-  1.1.1. The hoosh floor is 2.5.2 because that release made the client's `max_tokens` authoritative — thoth
-  sends its own reasoning budget (`HOOSH_MAX_TOKENS_REASONING`) on the strength of it. daimon **2.0.0** is a
+- **Spine floors** (runtime servers thoth talks to over HTTP; not compiled in): **hoosh ≥ 2.5.2** (**≥ 2.6.1
+  for tools on locally-served models**), **daimon ≥ 1.4.0**, **mneme ≥ 1.1.1**. 0.38.5 was developed and
+  verified against hoosh 2.6.1 / daimon 2.0.0 / mneme 1.1.1. The hoosh floor is 2.5.2 because that release
+  made the client's `max_tokens` authoritative — thoth sends its own reasoning budget
+  (`HOOSH_MAX_TOKENS_REASONING`) on the strength of it. The **2.6.1** qualifier is narrower: cloud models
+  work on any supported hoosh, but an Ollama-backed model gets no tools at all on the streaming default
+  before 2.6.1 (and the agentic loop cannot close, since the continuation request was never converted back
+  to Ollama's shape). Against an older gateway, `[hoosh].stream = false` is the workaround. daimon **2.0.0** is a
   major bump but a drop-in here: it extracted its scheduler to samay, and thoth uses only
   `GET /v1/mcp/tools` + `POST /v1/mcp/call`, which are byte-identical since 1.4.0.
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one

@@ -53,17 +53,18 @@ dependency refresh that surfaced it.
   non-standard `"index"` field and all — and the string case pins that the new tolerance does not
   double-encode an already-encoded argument string.
 
-### Known issue — not fixed here (hoosh, not thoth)
-- **hoosh ≤ 2.6.0 strips the `tools` array entirely on the LOCAL streaming path**, so an Ollama-backed model
-  is never told it has tools and answers that it has none (or writes code describing the call). Remote
-  providers are unaffected — `_remote_stream_body` forwards `tools_raw/tools_len`, while the local branch
-  calls `retry_forward_stream(cfg, route, model, msg_raw, msg_len, gen)`, whose signature **has no tools
-  parameter**, and `provider_forward_stream` hardcodes `0, 0` into `_build_chat_body_raw_stream`. Since
-  `[hoosh].stream` defaults **on**, that is the default local experience. Proven by holding one request
-  constant and flipping only `stream`: blocking returned a clean `list_dir` tool call, streaming returned a
-  ```` ```json ```` code block. **Workaround: set `[hoosh].stream = false`** — the fix above then makes the
-  local agentic loop work end to end. A second gap sits behind it: the local streaming reader only extracts
-  `content` (`ollama_extract_text`), so it emits no tool-call deltas even if the tools were forwarded.
+### Requires — hoosh ≥ 2.6.1 for tools on local models
+- The argument fix above is thoth's half. The other half was **hoosh**, and it is now released as **2.6.1**
+  (no thoth change needed): hoosh ≤ 2.6.0 stripped the `tools` array entirely on the **local streaming**
+  path — `retry_forward_stream` had no tools parameter and `provider_forward_stream` hardcoded `0, 0` — so
+  with `[hoosh].stream` defaulting **on**, an Ollama-backed model was never told it had tools and answered
+  that it had none. Remote providers were unaffected, which is why it read as "only cloud models can use
+  tools". 2.6.1 also emits tool-call deltas on the local streaming reader (it only extracted `content`), and
+  converts the **continuation** request back to Ollama's shape — without that last one the loop still could
+  not close, because Ollama's `/api/chat` rejects the OpenAI `arguments` string with `Value looks like
+  object, but can't find closing '}' symbol`. **Against hoosh ≤ 2.6.0, set `[hoosh].stream = false`**;
+  against 2.6.1 the default streaming path works. Verified end to end on a Jetson Orin: `qwen3.5:9b` and
+  `llama3.1:8b` both call `list_dir` and answer from the real listing.
 
 ## [0.38.4] - 2026-07-25
 
