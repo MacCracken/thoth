@@ -78,7 +78,7 @@ fn daimon_build_call(dst, name, args_json) {
 # content[].text as a Str, or 0 if absent/wrong shape. Pure — unit-tested.
 # Shape consumed: {"content":[{"type":"text","text":"..."}],"isError":...}
 fn daimon_extract_text(body, body_len) {
-    var v = bayan_json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
     var content = bayan_json_v_obj_get(v, "content");
     if (content == 0) { return 0; }
@@ -92,7 +92,7 @@ fn daimon_extract_text(body, body_len) {
 # daimon_extract_is_error: the isError flag of a tool-result body. Returns 1
 # (error), 0 (success), or -1 when the field is absent/unparseable. Pure.
 fn daimon_extract_is_error(body, body_len) {
-    var v = bayan_json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0 - 1; }
     var ie = bayan_json_v_obj_get(v, "isError");
     if (ie == 0) { return 0 - 1; }
@@ -137,7 +137,7 @@ fn daimon_list_tools() {
     }
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
-    var v = bayan_json_v_parse_str(body, blen);
+    var v = bayan_json_v_parse_buf(body, blen);
     if (v == 0) { oprintln("  daimon: response received but not parseable."); return 0 - 1; }
     var tools = bayan_json_v_obj_get(v, "tools");
     if (tools == 0) { oprintln("  daimon: no tools array in response."); return 0 - 1; }
@@ -300,7 +300,7 @@ fn daimon_tools_value() {
     if ((status < 200) || (status >= 300)) { return 0; }
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
-    var v = bayan_json_v_parse_str(body, blen);
+    var v = bayan_json_v_parse_buf(body, blen);
     if (v == 0) { return 0; }
     return bayan_json_v_obj_get(v, "tools");
 }

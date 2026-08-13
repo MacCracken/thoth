@@ -183,7 +183,7 @@ fn test_agent() {
     _cfg_shell_enabled = 1;
     var stl = agent_tools_add_shell(&stb, 0);
     assert(stl > 0, "shell on -> add_shell builds a tools array from the empty (daimon-absent) base");
-    var sav = bayan_json_v_parse_str(&stb, stl);
+    var sav = bayan_json_v_parse_buf(&stb, stl);
     assert(sav != 0, "the shell-only tools array parses");
     assert_eq(bayan_json_v_arr_len(sav), 1, "exactly one tool advertised standalone");
     var stf = bayan_json_v_obj_get(bayan_json_v_arr_get(sav, 0), "function");
@@ -192,7 +192,7 @@ fn test_agent() {
 
     # tool advertisement: daimon {name,description} -> OpenAI function tools
     var ta = "[{\"name\":\"echo\",\"description\":\"echo back\"},{\"name\":\"clk\",\"description\":\"time\"}]";
-    var tav = bayan_json_v_parse_str(ta, strlen(ta));
+    var tav = bayan_json_v_parse_buf(ta, strlen(ta));
     var tb[1024];
     agent_format_tools(&tb, tav);
     assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"echo\",\"description\":\"echo back\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "tools formatted as OpenAI functions");
@@ -201,7 +201,7 @@ fn test_agent() {
     # daimon 1.2.7: per-tool inputSchema passes through verbatim as `parameters`;
     # a tool without one falls back to the permissive object schema.
     var ts = "[{\"name\":\"rd\",\"description\":\"read\",\"inputSchema\":{\"type\":\"string\"}},{\"name\":\"clk\",\"description\":\"time\"}]";
-    var tsv = bayan_json_v_parse_str(ts, strlen(ts));
+    var tsv = bayan_json_v_parse_buf(ts, strlen(ts));
     agent_format_tools(&tb, tsv);
     assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"rd\",\"description\":\"read\",\"parameters\":{\"type\":\"string\"}}},{\"type\":\"function\",\"function\":{\"name\":\"clk\",\"description\":\"time\",\"parameters\":{\"type\":\"object\"}}}]"), "inputSchema passed through; absent -> object fallback");
 
@@ -210,7 +210,7 @@ fn test_agent() {
     # EMPTIES the whole completion (no content, no tool calls). thoth must fall back to the permissive object schema
     # rather than emit a bare `{}` verbatim.
     var te = "[{\"name\":\"mn\",\"description\":\"note\",\"inputSchema\":{}},{\"name\":\"pp\",\"description\":\"p\",\"inputSchema\":{\"properties\":{\"x\":{\"type\":\"string\"}}}}]";
-    var tev = bayan_json_v_parse_str(te, strlen(te));
+    var tev = bayan_json_v_parse_buf(te, strlen(te));
     agent_format_tools(&tb, tev);
     assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"mn\",\"description\":\"note\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"pp\",\"description\":\"p\",\"parameters\":{\"type\":\"object\"}}}]"), "empty/typeless inputSchema -> permissive {type:object}, never a bare {}");
 
@@ -225,6 +225,26 @@ fn test_agent() {
 
     var plain = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}";
     assert_eq(agent_tc_count(agent_tool_calls(plain, strlen(plain))), 0, "no tool_calls -> count 0");
+
+    # 0.38.5 — OBJECT-shaped `arguments` (Ollama native /api/chat, forwarded verbatim by hoosh
+    # <= 2.6.0, which converts tool-call shape for Anthropic/Google only). OpenAI sends a JSON
+    # *string* here; Ollama sends a JSON *object*. Reading it as a string alone returned 0 and
+    # dropped EVERY argument, so a required-arg tool (read_file/edit/shell) failed each round
+    # while the optional-arg list_dir appeared to work. Byte-for-byte the wire payload captured
+    # from qwen3.5:9b via hoosh, `"index"` field and all.
+    var oll = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"id\":\"call_it284wqj\",\"function\":{\"index\":0,\"name\":\"read_file\",\"arguments\":{\"path\":\"VERSION\"}}}]},\"finish_reason\":\"tool_calls\"}]}";
+    var otc = agent_tool_calls(oll, strlen(oll));
+    assert(otc != 0, "ollama-shaped tool_calls present");
+    assert_eq(agent_tc_count(otc), 1, "ollama: one tool call");
+    assert(streq(agent_tc_id(otc, 0), "call_it284wqj"), "ollama: tool_call id");
+    assert(streq(agent_tc_name(otc, 0), "read_file"), "ollama: tool_call name");
+    assert(streq(agent_tc_args(otc, 0), "{\"path\":\"VERSION\"}"), "ollama: OBJECT arguments re-serialized, not dropped");
+
+    # The string form must be untouched by that tolerance — an already-encoded argument string
+    # passes through verbatim (no double-encoding, no re-quoting).
+    var strargs = "{\"choices\":[{\"message\":{\"tool_calls\":[{\"id\":\"c2\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"VERSION\\\"}\"}}]}}]}";
+    var stc = agent_tool_calls(strargs, strlen(strargs));
+    assert(streq(agent_tc_args(stc, 0), "{\"path\":\"VERSION\"}"), "string arguments pass through unchanged");
 
     # raw tool_calls substring (echoed back verbatim as the assistant message)
     var raw = _agent_raw_tool_calls(resp, strlen(resp));
@@ -305,14 +325,14 @@ fn test_agent() {
     # produces. Mirrors OpenAI streaming tool_calls.
     _ag_reset();
     var d1 = "{\"index\":0,\"id\":\"call_9\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"t\\\":\"}}";
-    _agent_accum_delta(bayan_json_v_parse_str(d1, strlen(d1)));
+    _agent_accum_delta(bayan_json_v_parse_buf(d1, strlen(d1)));
     var d2 = "{\"index\":0,\"function\":{\"arguments\":\"42}\"}}";
-    _agent_accum_delta(bayan_json_v_parse_str(d2, strlen(d2)));
+    _agent_accum_delta(bayan_json_v_parse_buf(d2, strlen(d2)));
     var ab[1024];
     _ag_build_array(&ab);
     assert(streq(&ab, "[{\"id\":\"call_9\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"t\\\":42}\"}}]"), "streamed deltas reassemble into the tool_calls array");
     # and the reassembled array parses back through the same accessors
-    var av = bayan_json_v_parse_str(&ab, strlen(&ab));
+    var av = bayan_json_v_parse_buf(&ab, strlen(&ab));
     assert_eq(agent_tc_count(av), 1, "reassembled: one call");
     assert(streq(agent_tc_name(av, 0), "echo"), "reassembled: name");
     assert(streq(agent_tc_args(av, 0), "{\"t\":42}"), "reassembled: args decoded");

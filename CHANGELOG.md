@@ -2,6 +2,69 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.5] - 2026-08-13
+
+**Local models can use tools again — their arguments were being silently dropped.** Plus the toolchain and
+dependency refresh that surfaced it.
+
+### Fixed
+- **`agent_tc_args` accepts an OBJECT-shaped `function.arguments`, not only a string** (`src/agent.cyr`).
+  OpenAI specifies `arguments` as a JSON-encoded *string* and the cloud providers send one; Ollama's native
+  `/api/chat` sends a JSON *object*, and hoosh (≤ 2.6.0) forwards the Ollama shape verbatim — it converts
+  tool-call shape for Anthropic and Google only. Reading it with `bayan_json_v_str` alone returned 0 for a
+  non-`JTAG_STR` tag, and the dispatch guard below substitutes `"{}"` for a null argument string, so **every
+  argument from an Ollama-backed model was dropped**. `list_dir` (whose `path` is optional, defaulting to the
+  project root) appeared to work, which is exactly what made this hard to see; `read_file`, `edit` and `shell`
+  lost their **required** args, failed on every round, and the loop ran to `AGENT_MAX_ITERS` and answered
+  nothing. Now the string form passes through untouched and any other JSON value is re-serialized compact.
+  thoth stays a tolerant client of whatever the gateway forwards — the stance `agent_format_tools` already
+  takes on typeless tool schemas. Verified live against `qwen3.5:9b`, `llama3.1:8b` and `nemotron-3-nano:4b`
+  on a local Ollama host: `thoth -p "Read the file VERSION…"` went from `no completion returned` to reading
+  the file.
+- **`bayan_json_v_parse_str` → `bayan_json_v_parse_buf`** across 34 call sites in 9 files (`src/agent.cyr`,
+  `hoosh`, `daimon`, `edit`, `project`, `shell`, `memory`, + 2 test cases). bayan **1.3.0** removed the old
+  name rather than aliasing it: `X_str` means "the `Str`-taking variant of `X`" in Cyrius, so a cstr+len form
+  occupying that name made the compiler rewrite every `bayan_json_v_parse(someStr)` into a 1-argument call to
+  a 2-argument function. Mechanical rename, same signature; the build refuses to emit rather than failing
+  silently.
+
+### Changed
+- **Toolchain `6.4.78` → `6.5.20`** (`cyrius.cyml`) and `lib/` re-synced from that snapshot — 107 files, then
+  `cmp`-swept file-by-file, because the shadow warning names only versioned bundles and is not a completeness
+  check. Static data fell **13,607,296 → 10,990,800 bytes**. The headline 6.5.0 feature (`public`/`private`
+  file-scoped visibility) is opt-in per file, so nothing in thoth changed on adoption.
+- **Vendored dists**: **bote-core 3.1.4 → 3.3.1**, **libro 2.8.2 → 2.8.5**, **sit-read 1.3.4 → 1.3.5**,
+  **sankoch-zlib 2.7.5 → 2.7.7**, **vyakarana 2.2.3 → 2.3.2** (which carries a real `compose_region_rules`
+  grammar feature — that landed in 2.3.1; the "dist is byte-identical" note in vyakarana's changelog belongs
+  to 2.3.0 and holds only there). Verified byte-identical to upstream rather than assumed current:
+  **avatara 2.14.0**, **t-ron 2.1.8**, **anuenue 1.2.0**, **darshana 0.9.0**, and **kashi** (its freestanding
+  `font_data.cyr` is still identical at 1.0.4). Sync-script `TAG` defaults bumped — they are the vendor pin of
+  record.
+- **sit must be re-synced through `scripts/sync-sit.sh`, never copied from `dist/`.** The script's `\b`-bounded
+  sed renames sit's `entry_hash` → `_sit_entry_hash` and `ann_new` → `_sit_ann_new`; a direct copy reinstates
+  two last-def-wins collisions — sit's identity `entry_hash(e)` displacing **libro**'s audit-chain hash getter
+  (13 call sites), and sit's 1-arg `ann_new(a)` displacing **bote-core**'s 0-arg `ann_new()` (called at bote
+  461/471, an arity mismatch feeding it a garbage pointer). Both were re-observed this cut and are the reason
+  the sed exists; the note now sits in the changelog as well as the script header.
+
+### Added
+- **Regression coverage for the two `arguments` shapes** (`tests/cases/agent.cyr`, +6 assertions,
+  1540 → 1546). The object case is the wire payload captured verbatim from `qwen3.5:9b` through hoosh —
+  non-standard `"index"` field and all — and the string case pins that the new tolerance does not
+  double-encode an already-encoded argument string.
+
+### Known issue — not fixed here (hoosh, not thoth)
+- **hoosh ≤ 2.6.0 strips the `tools` array entirely on the LOCAL streaming path**, so an Ollama-backed model
+  is never told it has tools and answers that it has none (or writes code describing the call). Remote
+  providers are unaffected — `_remote_stream_body` forwards `tools_raw/tools_len`, while the local branch
+  calls `retry_forward_stream(cfg, route, model, msg_raw, msg_len, gen)`, whose signature **has no tools
+  parameter**, and `provider_forward_stream` hardcodes `0, 0` into `_build_chat_body_raw_stream`. Since
+  `[hoosh].stream` defaults **on**, that is the default local experience. Proven by holding one request
+  constant and flipping only `stream`: blocking returned a clean `list_dir` tool call, streaming returned a
+  ```` ```json ```` code block. **Workaround: set `[hoosh].stream = false`** — the fix above then makes the
+  local agentic loop work end to end. A second gap sits behind it: the local streaming reader only extracts
+  `content` (`ollama_extract_text`), so it emits no tool-call deltas even if the tools were forwarded.
+
 ## [0.38.4] - 2026-07-25
 
 **`[hoosh].reasoning` reaches every path — the multi-turn builder was silently dropping it, and had been since

@@ -201,7 +201,7 @@ fn shell_run_tool(args_cstr) {
     _shell_last_allowed = 0;
     _shell_last_ok = 0;
     if (args_cstr == 0) { return "(shell: missing arguments)"; }
-    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(shell: arguments are not valid JSON)"; }
     var cv = bayan_json_v_obj_get(v, "command");
     if (cv == 0) { return "(shell: missing required 'command' argument)"; }

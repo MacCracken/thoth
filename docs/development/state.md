@@ -7,6 +7,21 @@
 
 ## Version
 
+**0.38.5** — **local models can use tools again** (2026-08-13), plus the toolchain/dependency refresh that surfaced
+it. `agent_tc_args` read `function.arguments` as a JSON *string* only; OpenAI sends one, but Ollama's native
+`/api/chat` sends an *object* and hoosh (≤ 2.6.0) forwards that verbatim (it converts tool-call shape for Anthropic
+and Google only), so `bayan_json_v_str` returned 0 and the dispatch substituted `"{}"` — **every argument from an
+Ollama-backed model was dropped**. Optional-arg `list_dir` still worked, which hid it; required-arg `read_file` /
+`edit` / `shell` failed every round until the loop exhausted `AGENT_MAX_ITERS` and answered nothing. Now any
+non-string value is re-serialized compact and the string form passes through untouched. Toolchain **6.4.78 →
+6.5.20** with `lib/` re-synced (107 files, `cmp`-swept; static data 13.6 MB → 11.0 MB), which forced the bayan
+**1.3.0** rename `bayan_json_v_parse_str` → `_parse_buf` across 34 sites in 9 files. Dists: bote-core **3.3.1**,
+libro **2.8.5**, sit-read **1.3.5**, sankoch-zlib **2.7.7**, vyakarana **2.3.2**. **Still open, and it is hoosh's
+not thoth's**: hoosh ≤ 2.6.0 strips the `tools` array on the **local streaming** path (`retry_forward_stream` has no
+tools parameter; `provider_forward_stream` hardcodes `0, 0`), so with `[hoosh].stream` defaulting **on** an
+Ollama-backed model is never told it has tools at all. Remote providers are unaffected. **Set
+`[hoosh].stream = false`** until that lands. Suite 264 + 1546 + 183 + 3.
+
 **0.38.4** — **`[hoosh].reasoning` reaches every builder** (2026-07-25). Closes the gap 0.38.2 logged as KNOWN, NOT
 FIXED: `hoosh_build_messages` emitted **no** `reasoning_effort` and a flat `HOOSH_MAX_TOKENS = 4096`, the only one of
 thoth's builders to emit neither — `hoosh_build_request` and `agent_build_request` have carried the effort field since
@@ -2771,12 +2786,12 @@ floor; never fork the spine.**
   `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via `cyrius lib sync`
   (88 modules).
 - **Vendored dists** (committed under `src/vendor/`, refreshed by `scripts/sync-*.sh` — the script's default
-  `TAG` is thoth's vendor pin of record). At 0.38.2: **avatara 2.14.0** · **bote-core 3.1.4** · **libro 2.8.2** ·
-  **sankoch-zlib 2.7.5** · **t-ron 2.1.8** · **sit-read 1.3.4** · **anuenue 1.2.0** · **vyakarana 2.2.3** ·
-  **darshana 0.9.0** · **kashi 1.0.3**. Three have **no** sync script and are hand-vendored: `darshana`,
+  `TAG` is thoth's vendor pin of record). At 0.38.5: **avatara 2.14.0** · **bote-core 3.3.1** · **libro 2.8.5** ·
+  **sankoch-zlib 2.7.7** · **t-ron 2.1.8** · **sit-read 1.3.5** · **anuenue 1.2.0** · **vyakarana 2.3.2** ·
+  **darshana 0.9.0** · **kashi 1.0.4**. Three have **no** sync script and are hand-vendored: `darshana`,
   `vyakarana`, `kashi` — and `kashi.cyr` carries no `# Version:` header, so nothing self-checks it (its
-  freestanding core `src/font_data.cyr` has been byte-identical across the whole 1.0.x line, which is why the
-  1.0.2 → 1.0.3 bump is a no-op on the file).
+  freestanding core `src/font_data.cyr` has been byte-identical across the whole 1.0.x line, re-verified by
+  `diff` at 1.0.4, which is why every 1.0.x bump is a no-op on the file).
 - **Spine floors** (runtime servers thoth talks to over HTTP; not compiled in): **hoosh ≥ 2.5.2**, **daimon ≥
   1.4.0**, **mneme ≥ 1.1.1**. 0.38.2 was developed and verified against hoosh 2.5.11 / daimon 2.0.0 / mneme
   1.1.1. The hoosh floor is 2.5.2 because that release made the client's `max_tokens` authoritative — thoth

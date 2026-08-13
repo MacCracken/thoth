@@ -150,7 +150,7 @@ fn _proj_apc(off, s) {
 # jail is the safety boundary (read-only, project-confined). Dispatched LOCALLY in src/agent.cyr.
 fn read_file_tool(args_cstr) {
     if (args_cstr == 0) { return "(read_file: missing arguments)"; }
-    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(read_file: arguments are not valid JSON)"; }
     var pv = bayan_json_v_obj_get(v, "path");
     if (pv == 0) { return "(read_file: missing required 'path' argument)"; }
@@ -173,7 +173,7 @@ fn read_file_tool(args_cstr) {
 fn list_dir_tool(args_cstr) {
     var path = ".";
     if (args_cstr != 0) {
-        var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+        var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
         if (v != 0) {
             var pv = bayan_json_v_obj_get(v, "path");
             if (pv != 0) {

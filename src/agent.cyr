@@ -289,7 +289,7 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
 
 # agent_tool_calls: the choices[0].message.tool_calls array value, or 0. Pure.
 fn agent_tool_calls(body, len) {
-    var v = bayan_json_v_parse_str(body, len);
+    var v = bayan_json_v_parse_buf(body, len);
     if (v == 0) { return 0; }
     var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { return 0; }
@@ -322,7 +322,35 @@ fn _agent_tc_fn_str(tcs, i, key) {
     return str_cstr(s);
 }
 fn agent_tc_name(tcs, i) { return _agent_tc_fn_str(tcs, i, "name"); }
-fn agent_tc_args(tcs, i) { return _agent_tc_fn_str(tcs, i, "arguments"); }
+
+# agent_tc_args: the call's `arguments` as a NUL-terminated JSON cstr, or 0.
+#
+# 0.38.5 — TOLERANT CLIENT. OpenAI specifies `function.arguments` as a JSON-encoded *string*
+# (`"{\"path\":\"VERSION\"}"`), and that is what the cloud providers send. Ollama's native
+# /api/chat instead returns a JSON *object* (`{"path":"VERSION"}`), and hoosh (≤ 2.6.0) forwards
+# the Ollama shape verbatim — it converts tool-call shape for Anthropic and Google only. Against
+# the plain `bayan_json_v_str` reading, a non-string tag returned 0 and EVERY argument was
+# silently dropped: the dispatch below substitutes "{}", so `list_dir` (whose path is optional)
+# appeared to work while `read_file`/`edit`/`shell` lost their required args and failed on every
+# round until the loop hit AGENT_MAX_ITERS and answered nothing. Measured against
+# qwen3.5:9b/nemotron/llama3.1 on a local Ollama box.
+#
+# So: take the string when it is one, and re-serialize any other JSON value back to compact text.
+# thoth stays a tolerant client of whatever the gateway forwards — the same stance
+# agent_format_tools takes on typeless tool schemas above.
+fn agent_tc_args(tcs, i) {
+    var e = bayan_json_v_arr_get(tcs, i);
+    if (e == 0) { return 0; }
+    var f = bayan_json_v_obj_get(e, "function");
+    if (f == 0) { return 0; }
+    var v = bayan_json_v_obj_get(f, "arguments");
+    if (v == 0) { return 0; }
+    var s = bayan_json_v_str(v);
+    if (s != 0) { return str_cstr(s); }          # OpenAI / Anthropic / Gemini: already a JSON string
+    var b = bayan_json_v_build(v);               # Ollama native: object (or any non-string) -> compact JSON
+    if (b == 0) { return 0; }
+    return str_cstr(b);
+}
 
 # _agent_match: 1 if the NUL-terminated literal `lit` matches bytes at p. Pure.
 fn _agent_match(p, lit) {
@@ -981,7 +1009,7 @@ fn _agent_sse_cb(ctx, ev) {
     var data = sandhi_sse_event_data(ev);
     if (data == 0) { return 1; }
     if (streq(data, "[DONE]") == 1) { return 0; }
-    var v = bayan_json_v_parse_str(data, strlen(data));
+    var v = bayan_json_v_parse_buf(data, strlen(data));
     if (v == 0) { return 1; }
     _hoosh_account_usage(v);   # 0.10.2/0.10.3: tokens + cost from the trailing usage frame
     var choices = bayan_json_v_obj_get(v, "choices");
@@ -1032,7 +1060,7 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
         if (em != 0) { emit("  "); _hoosh_print_str(em); }
         _agent_round_kind = 3; _agent_round_status = status; return 0;
     }
-    _hoosh_account_usage(bayan_json_v_parse_str(body, blen));
+    _hoosh_account_usage(bayan_json_v_parse_buf(body, blen));
     var tcs = agent_tool_calls(body, blen);
     var nc = agent_tc_count(tcs);
     if (nc == 0) {
@@ -1079,7 +1107,7 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     }
     if (_ag_max > 0) {
         var rl = _ag_build_array(_agent_arr_buf);
-        var val = bayan_json_v_parse_str(_agent_arr_buf, rl);
+        var val = bayan_json_v_parse_buf(_agent_arr_buf, rl);
         _agent_set_tools(_agent_arr_buf, val, agent_tc_count(val));
     } else {
         _agent_round_kind = 0;

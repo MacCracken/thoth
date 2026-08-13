@@ -609,14 +609,14 @@ fn test_cost() {
     session_reset();
     session_set_model("claude-x");
     var ubody = "{\"choices\":[{\"message\":{\"content\":\"hi\"}}],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000}}";
-    _hoosh_account_usage(bayan_json_v_parse_str(ubody, strlen(ubody)));
+    _hoosh_account_usage(bayan_json_v_parse_buf(ubody, strlen(ubody)));
     assert_eq(session_tokens(), 2000, "account_usage adds total_tokens");
     assert_eq(session_cost_micro(), 18000, "account_usage prices at the active model's rate");
     assert_eq(session_cost_seen(), 1, "priced response flips cost seen");
     # an unpriced active model: usage still counts tokens, but cost is noted not faked.
     session_reset();
     session_set_model("no-price-model");
-    _hoosh_account_usage(bayan_json_v_parse_str(ubody, strlen(ubody)));
+    _hoosh_account_usage(bayan_json_v_parse_buf(ubody, strlen(ubody)));
     assert_eq(session_tokens(), 2000, "tokens still counted for unpriced model");
     assert_eq(session_cost_seen(), 0, "unpriced model -> cost stays unseen");
     assert_eq(session_cost_unpriced_count(), 1, "unpriced model -> noted once");
@@ -624,7 +624,7 @@ fn test_cost() {
     # unpriced+noted — NOT silently bill the missing side at $0 (ADR-0010 honest-omit).
     session_reset();
     session_set_model("cheap");
-    _hoosh_account_usage(bayan_json_v_parse_str(ubody, strlen(ubody)));
+    _hoosh_account_usage(bayan_json_v_parse_buf(ubody, strlen(ubody)));
     assert_eq(session_tokens(), 2000, "tokens counted for half-declared model");
     assert_eq(session_cost_seen(), 0, "half-declared pricing -> cost stays unseen");
     assert_eq(session_cost_unpriced_count(), 1, "half-declared pricing -> noted unpriced");
@@ -1867,11 +1867,11 @@ fn test_mem_seam() {
     # scan a parsed registry "tools" array -> verdict + cache read
     _daimon_mem_probed = 0 - 1;
     var s1 = "[{\"name\":\"web_fetch\"},{\"name\":\"mneme_search\"}]";
-    var t1 = bayan_json_v_parse_str(s1, strlen(s1));
+    var t1 = bayan_json_v_parse_buf(s1, strlen(s1));
     assert_eq(daimon_mem_scan(t1), 1, "scan finds mneme_* -> bound");
     assert_eq(daimon_mem_bound(), 1, "cache reads bound after scan");
     var s2 = "[{\"name\":\"web_fetch\"},{\"name\":\"web_search\"}]";
-    var t2 = bayan_json_v_parse_str(s2, strlen(s2));
+    var t2 = bayan_json_v_parse_buf(s2, strlen(s2));
     assert_eq(daimon_mem_scan(t2), 0, "scan without mneme_* -> unbound");
     assert_eq(daimon_mem_bound(), 0, "cache reads unbound after scan");
     assert_eq(daimon_mem_scan(0), 0, "scan of null array -> unbound (no crash)");

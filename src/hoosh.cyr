@@ -456,7 +456,7 @@ fn hoosh_recap_call(span) {
     if ((status < 200) || (status >= 300)) { _hoosh_sum_err = HOOSH_SUM_HTTP; return 0; }
     var content = hoosh_extract_content(body, blen);
     if (content == 0) { _hoosh_sum_err = HOOSH_SUM_EMPTY; return 0; }
-    _hoosh_account_usage(bayan_json_v_parse_str(body, blen));   # honest: this call spent the user's tokens
+    _hoosh_account_usage(bayan_json_v_parse_buf(body, blen));   # honest: this call spent the user's tokens
     var n = str_len(content);
     if (n <= 0) { _hoosh_sum_err = HOOSH_SUM_EMPTY; return 0; }
     var out = alloc(n + 1);
@@ -643,7 +643,7 @@ fn hoosh_dry_buf() {
 # assistant text as a Str (choices[0].message.content), or 0 if absent/wrong
 # shape. Pure — unit-tested against canned bodies.
 fn hoosh_extract_content(body, body_len) {
-    var v = bayan_json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
     var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { return 0; }
@@ -662,7 +662,7 @@ fn hoosh_extract_content(body, body_len) {
 # This is the streaming sibling of hoosh_extract_content (which reads the
 # non-streaming message.content).
 fn hoosh_extract_delta(body, body_len) {
-    var v = bayan_json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
     var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { return 0; }
@@ -678,7 +678,7 @@ fn hoosh_extract_delta(body, body_len) {
 # hoosh_extract_error: pull error.message out of an error response body as a
 # Str, or 0 if not present. Pure — unit-tested.
 fn hoosh_extract_error(body, body_len) {
-    var v = bayan_json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
     var err = bayan_json_v_obj_get(v, "error");
     if (err == 0) { return 0; }
@@ -692,7 +692,7 @@ fn hoosh_extract_error(body, body_len) {
 # 0 if absent/wrong shape. The caller iterates it with bayan_json_v_arr_*. Pure —
 # unit-tested. Shape consumed: {"object":"list","data":[{"id":"M"},...]}
 fn hoosh_extract_models(body, body_len) {
-    var v = bayan_json_v_parse_str(body, body_len);
+    var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
     var data = bayan_json_v_obj_get(v, "data");
     if (data == 0) { return 0; }
@@ -755,7 +755,7 @@ fn _hoosh_account_usage(v) {
 # sent) as an int, or -1 when absent. Pure — unit-tested. hoosh owns the count;
 # thoth only reads what it's told (ADR-0010: omit-until-present, never faked).
 fn hoosh_extract_usage(body, body_len) {
-    return _hoosh_usage_total(bayan_json_v_parse_str(body, body_len));
+    return _hoosh_usage_total(bayan_json_v_parse_buf(body, body_len));
 }
 
 # hoosh_reachable: a SILENT reachability probe (0.11.9). GET the gateway's models endpoint
@@ -1041,7 +1041,7 @@ fn _hoosh_sse_cb(ctx, ev) {
     # Parse the frame once (was: hoosh_extract_delta re-parsing) so the trailing
     # usage frame (0.10.2 — choices:[] + a usage object, sent because the request
     # carried stream_options:{include_usage}) is captured on the same pass.
-    var v = bayan_json_v_parse_str(data, strlen(data));
+    var v = bayan_json_v_parse_buf(data, strlen(data));
     if (v == 0) { return 1; }
     _hoosh_account_usage(v);
     var choices = bayan_json_v_obj_get(v, "choices");
@@ -1148,7 +1148,7 @@ fn _hoosh_blocking_turn(url, h, len, model) {
         return 0 - 1;
     }
     _hoosh_acc_append(str_data(content), str_len(content));
-    _hoosh_account_usage(bayan_json_v_parse_str(body, blen));
+    _hoosh_account_usage(bayan_json_v_parse_buf(body, blen));
     _hoosh_print_reply(content);   # 0.15.1: fenced-code highlighting (raw acc already stored above)
     return 0;
 }

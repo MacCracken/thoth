@@ -22,7 +22,7 @@ include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
-# vyakarana (2.2.3) — source-code tokenizer for syntax highlighting (/read, diffs).
+# vyakarana (2.3.2) — source-code tokenizer for syntax highlighting (/read, diffs).
 # Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
 include "src/vendor/vyakarana.cyr"
 # darshana (0.9.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
@@ -33,14 +33,14 @@ include "src/vendor/darshana.cyr"
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
-# sit (1.3.4 read profile) — .git/ read-mode: branch/status/diff on real git +
+# sit (1.3.5 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
-# sit_repo_* API only (its command layer is dead here). sankoch (2.7.5 zlib
+# sit_repo_* API only (its command layer is dead here). sankoch (2.7.7 zlib
 # PROFILE, `dist/sankoch-zlib.cyr` — 53 globals, tracks current sankoch) supplies
 # the git-object inflate the bundle references bare. Only sit's entry_hash/ann_new
 # are renamed on sync (vs libro/bote); the old sankoch-2.2.5 pin, the _stream_grow
-# rename, and the SYS_CHDIR sed are all gone (sankoch 2.7.5 zlib profile + sit
-# 1.3.4's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
+# rename, and the SYS_CHDIR sed are all gone (sankoch 2.7.7 zlib profile + sit
+# 1.3.5's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
 # BOTH before commands.cyr so thoth's cmd_reset wins the benign last-def-wins.
 include "src/vendor/sankoch.cyr"
 include "src/vendor/sit-read.cyr"

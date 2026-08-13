@@ -570,7 +570,7 @@ fn memory_append(text) {
 # forwarded to daimon. thoth-native, spine-safe (ADR-0012).
 fn memory_write_tool(args_cstr) {
     if (args_cstr == 0) { return "memory_write: missing arguments"; }
-    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "memory_write: arguments are not valid JSON"; }
     var tv = bayan_json_v_obj_get(v, "text");
     if (tv == 0) { return "memory_write: missing required 'text' argument"; }

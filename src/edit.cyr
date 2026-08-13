@@ -172,7 +172,7 @@ fn edit_tool(args_cstr) {
     if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
     if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
     if (args_cstr == 0) { return "(edit: missing arguments)"; }
-    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(edit: arguments are not valid JSON)"; }
     var pv = bayan_json_v_obj_get(v, "path");
     if (pv == 0) { return "(edit: missing required string 'path')"; }
@@ -254,7 +254,7 @@ fn create_file_tool(args_cstr) {
     _edit_last_allowed = 0;
     _edit_last_ok = 0;
     if (args_cstr == 0) { return "(create_file: missing arguments)"; }
-    var v = bayan_json_v_parse_str(args_cstr, strlen(args_cstr));
+    var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(create_file: arguments are not valid JSON)"; }
     var pv = bayan_json_v_obj_get(v, "path");
     if (pv == 0) { return "(create_file: missing required string 'path')"; }
