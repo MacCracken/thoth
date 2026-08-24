@@ -1,0 +1,179 @@
+# thoth — file checkpoints and /rewind (0.40.0, T1-4): an undo for the model's writes.
+#
+# WHY. thoth got write access at 0.31.0 (`edit`) and 0.31.x (`create_file`) and never got the safety net
+# every peer harness pairs with write access. `src/editlog.cyr` is RECORD-ONLY — it feeds the colored diff
+# card and has record/find/read accessors and no restore. So a model that made a confident wrong edit left
+# the user reaching for git, and if the file was untracked or the change was mixed in with their own work,
+# reaching for nothing.
+#
+# WHAT THIS IS NOT. Not a VCS, and deliberately not built on one. thoth vendors **sit**, a first-party
+# Cyrius VCS, and the obvious design is a shadow repo the way Cline and Gemini CLI do it — but thoth
+# vendors sit's READ profile only, and widening that is a real scoping decision rather than a detail. This
+# is the simpler first cut the improvements review named as the alternative: a snapshot directory. It
+# restores FILES; it does not touch the conversation, and it has no branching.
+#
+# WHERE. `.thoth/checkpoints/NNNN.snap` — beside thoth's own state, not in the project tree, so a
+# checkpoint never shows up as an untracked file in the user's `git status` and never lands in a commit.
+# ⚠ That directory is inside `_project_sensitive`, so the MODEL cannot read or write it through any tool:
+# the thing that undoes the model's work is not itself reachable by the model. That is not incidental —
+# an undo the untrusted party can edit is not an undo.
+#
+# HONEST LIMITS, stated because a safety net that is trusted past its reach is worse than none:
+#  * Only `edit` and `create_file` are checkpointed — the two tools that write through thoth. A file
+#    changed by the `shell` tool (`rm`, `mv`, `sed -i`) is NOT captured, because thoth never sees the
+#    write. Peers hit the same wall and say so; Claude Code's docs carry the identical caveat.
+#  * Session-scoped INDEX. The snapshot files survive a crash, but the in-memory index does not survive
+#    exit, so /rewind reaches this session's writes. A durable index is a later cut.
+#  * Bounded to CKPT_MAX entries; the oldest is dropped, and its snapshot file is left on disk rather
+#    than deleted (cheap, and a stray snapshot is harmless — an over-eager unlink is not).
+#  * A file larger than CKPT_FILE_CAP is not snapshotted, and the edit is REFUSED rather than performed
+#    unprotected — see ckpt_capture's contract.
+
+var CKPT_MAX = 64;                # checkpoints retained per session
+var CKPT_FILE_CAP = 262144;       # matches EDIT_BUF_CAP: anything edit can write, this can snapshot
+var CKPT_PATH_CAP = 512;
+
+var _ckpt_n = 0;                  # entries recorded this session
+var _ckpt_seq = 0;               # monotonic snapshot-file counter (never reused, so a stale file cannot alias)
+var _ckpt_paths = 0;              # CKPT_MAX * CKPT_PATH_CAP — the project-relative path each entry restores
+var _ckpt_snap = 0;               # CKPT_MAX * 8 — the snapshot sequence number, or -1 for "did not exist"
+var _ckpt_turn = 0;               # CKPT_MAX * 8 — the session turn, so /rewind can group by turn
+var _ckpt_buf = 0;                # CKPT_FILE_CAP read/write scratch
+var _ckpt_pathbuf = 0;            # scratch for building `.thoth/checkpoints/NNNN.snap`
+var _ckpt_ready = 0;              # 1 once the directory exists (or we know it cannot)
+
+fn ckpt_count() { return _ckpt_n; }
+fn ckpt_path_at(i) { if (i < 0) { return ""; } if (i >= _ckpt_n) { return ""; } return _ckpt_paths + i * CKPT_PATH_CAP; }
+fn ckpt_snap_at(i) { if (i < 0) { return 0 - 1; } if (i >= _ckpt_n) { return 0 - 1; } return load64(_ckpt_snap + i * 8); }
+fn ckpt_turn_at(i) { if (i < 0) { return 0; } if (i >= _ckpt_n) { return 0; } return load64(_ckpt_turn + i * 8); }
+
+# ckpt_reset: drop the index. Called by /reset — the writes belong to the conversation being cleared.
+# The snapshot FILES are left alone: deleting them buys nothing and an unlink loop over paths built from
+# a just-cleared index is exactly where a bug would do real damage.
+fn ckpt_reset() { _ckpt_n = 0; return 0; }
+
+fn _ckpt_bufs() {
+    if (_ckpt_paths == 0) { _ckpt_paths = alloc(CKPT_MAX * CKPT_PATH_CAP); }
+    if (_ckpt_snap == 0) { _ckpt_snap = alloc(CKPT_MAX * 8); }
+    if (_ckpt_turn == 0) { _ckpt_turn = alloc(CKPT_MAX * 8); }
+    if (_ckpt_buf == 0) { _ckpt_buf = alloc(CKPT_FILE_CAP + 1); }
+    if (_ckpt_pathbuf == 0) { _ckpt_pathbuf = alloc(CKPT_PATH_CAP); }
+    if (_ckpt_paths == 0) { return 0; }
+    if (_ckpt_snap == 0) { return 0; }
+    if (_ckpt_turn == 0) { return 0; }
+    if (_ckpt_buf == 0) { return 0; }
+    if (_ckpt_pathbuf == 0) { return 0; }
+    return 1;
+}
+
+# _ckpt_dir_ensure: make `.thoth/checkpoints/` if it is not there. 1 on success.
+fn _ckpt_dir_ensure() {
+    if (_ckpt_ready == 1) { return 1; }
+    xmkdir(".thoth", 448);                      # 0700 — thoth's own state; may already exist, ignore the result
+    if (xmkdir(".thoth/checkpoints", 448) != 0) {
+        if (is_dir(str_from(".thoth/checkpoints")) == 0) { return 0; }
+    }
+    _ckpt_ready = 1;
+    return 1;
+}
+
+# _ckpt_snap_path: build `.thoth/checkpoints/<seq>.snap` into the scratch buffer, returning it.
+fn _ckpt_snap_path(seq) {
+    var o = 0;
+    var pre = ".thoth/checkpoints/";
+    while (load8(pre + o) != 0) { store8(_ckpt_pathbuf + o, load8(pre + o)); o = o + 1; }
+    var nb[24];
+    var nl = fmt_int_buf(seq, &nb);
+    var i = 0;
+    while (i < nl) { store8(_ckpt_pathbuf + o, load8(&nb + i)); o = o + 1; i = i + 1; }
+    var suf = ".snap";
+    var j = 0;
+    while (load8(suf + j) != 0) { store8(_ckpt_pathbuf + o, load8(suf + j)); o = o + 1; j = j + 1; }
+    store8(_ckpt_pathbuf + o, 0);
+    return _ckpt_pathbuf;
+}
+
+# ckpt_capture: snapshot `path` BEFORE it is written. Returns 1 when the caller may proceed with the
+# write, 0 when it must REFUSE.
+#
+# ⚠ The return value is a gate, not a status. Refusing an unprotected write is the whole point: if the
+# checkpoint cannot be taken, performing the edit anyway would hand the user a change they cannot undo
+# while `/rewind` sits in the help text implying they can. Fail closed, and let the caller say why.
+# The one case that is NOT a failure is a file that does not exist yet (create_file): there is nothing to
+# snapshot, and the undo is a delete, recorded as snapshot -1.
+fn ckpt_capture(path, turn) {
+    if (path == 0) { return 0; }
+    if (_ckpt_bufs() == 0) { return 0; }
+    if (strlen(path) >= CKPT_PATH_CAP) { return 0; }
+    if (_ckpt_dir_ensure() == 0) { return 0; }
+    var seq = 0 - 1;
+    if (file_exists(path) == 1) {
+        var n = file_read_all(path, _ckpt_buf, CKPT_FILE_CAP);
+        if (n < 0) { return 0; }
+        if (n >= CKPT_FILE_CAP) { return 0; }        # too large to snapshot -> refuse the write, do not risk it
+        _ckpt_seq = _ckpt_seq + 1;
+        seq = _ckpt_seq;
+        if (file_write_atomic(_ckpt_snap_path(seq), _ckpt_buf, n) != 0) { return 0; }
+    }
+    # ring: drop the oldest when full, keeping the newest CKPT_MAX
+    if (_ckpt_n >= CKPT_MAX) {
+        var s = 1;
+        while (s < CKPT_MAX) {
+            var dp = _ckpt_paths + (s - 1) * CKPT_PATH_CAP;
+            var sp = _ckpt_paths + s * CKPT_PATH_CAP;
+            var k = 0;
+            while (k < CKPT_PATH_CAP) { store8(dp + k, load8(sp + k)); k = k + 1; }
+            store64(_ckpt_snap + (s - 1) * 8, load64(_ckpt_snap + s * 8));
+            store64(_ckpt_turn + (s - 1) * 8, load64(_ckpt_turn + s * 8));
+            s = s + 1;
+        }
+        _ckpt_n = CKPT_MAX - 1;
+    }
+    var d = _ckpt_paths + _ckpt_n * CKPT_PATH_CAP;
+    var i = 0;
+    while (load8(path + i) != 0) { store8(d + i, load8(path + i)); i = i + 1; }
+    store8(d + i, 0);
+    store64(_ckpt_snap + _ckpt_n * 8, seq);
+    store64(_ckpt_turn + _ckpt_n * 8, turn);
+    _ckpt_n = _ckpt_n + 1;
+    return 1;
+}
+
+# ckpt_restore_one: put entry `i` back. Returns 1 on success, 0 on failure.
+# A snapshot of -1 means the file did not exist before the write, so the undo is to REMOVE it.
+fn ckpt_restore_one(i) {
+    if (i < 0) { return 0; }
+    if (i >= _ckpt_n) { return 0; }
+    if (_ckpt_bufs() == 0) { return 0; }
+    var path = _ckpt_paths + i * CKPT_PATH_CAP;
+    var seq = load64(_ckpt_snap + i * 8);
+    if (seq < 0) {
+        xunlink(path);                                # it did not exist before; undo = remove it
+        return 1;
+    }
+    var n = file_read_all(_ckpt_snap_path(seq), _ckpt_buf, CKPT_FILE_CAP);
+    if (n < 0) { return 0; }
+    if (file_write_atomic(path, _ckpt_buf, n) != 0) { return 0; }
+    return 1;
+}
+
+# ckpt_restore_turn: restore every checkpoint from `turn`, NEWEST FIRST so a file written twice in one
+# turn lands on its oldest snapshot — the state before the turn began, which is what "undo the turn"
+# means. Returns the number of files restored.
+fn ckpt_restore_turn(turn) {
+    var done = 0;
+    var i = _ckpt_n - 1;
+    while (i >= 0) {
+        if (load64(_ckpt_turn + i * 8) == turn) {
+            if (ckpt_restore_one(i) == 1) { done = done + 1; }
+        }
+        i = i - 1;
+    }
+    return done;
+}
+
+# ckpt_last_turn: the turn of the most recent checkpoint, or -1 when there are none.
+fn ckpt_last_turn() {
+    if (_ckpt_n == 0) { return 0 - 1; }
+    return load64(_ckpt_turn + (_ckpt_n - 1) * 8);
+}

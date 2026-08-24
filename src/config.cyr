@@ -26,6 +26,9 @@ var _cfg_hoosh_model = 0;    # cstring, or 0 if unset
 var _cfg_hoosh_stream = 1;   # 1 = stream completions (default), 0 = blocking
 var _cfg_hoosh_history = 1;  # 1 = multi-turn context (default), 0 = stateless
 var _cfg_hoosh_tools = 1;    # 1 = agentic tool-calling when daimon wired (default), 0 = off
+var _cfg_hoosh_max_iters = 0 - 1;   # agentic tool ROUNDS per turn; -1 = unset -> default (clamped in the getter)
+var _cfg_hoosh_compact_at = 0 - 1;  # 0.40.0 (T1-5): auto-compact once session tokens cross this; -1/absent = off
+var _cfg_redact_enabled = 1;        # 0.40.0 (T1-3): [redact].enabled — DEFAULT ON (see config_redact_enabled)
 var _cfg_hoosh_parallel = 1; # 1 = run a round's tool calls concurrently (default), 0 = serial
 var _cfg_hoosh_reasoning = 0;  # 0.35.2: [hoosh].reasoning effort level (0 = off, 1 = low, 2 = medium, 3 = high) -> reasoning_effort
 var _cfg_hoosh_summarize = 0;  # 0.36.4: [hoosh].summarize — recap the byte-budget-skipped history (costs an extra small call)
@@ -41,6 +44,8 @@ var _cfg_ui_elapsed = 0;     # [ui].elapsed — a faint per-turn elapsed line af
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
 var _cfg_edit_enabled = 0;   # 1 = advertise the model-invokable `edit` tool (0.31.0, opt-in); off by default (writing is consequential)
+var HOOSH_MAX_ITERS_DEFAULT = 8;    # unchanged from the old hardcoded AGENT_MAX_ITERS — raising it is opt-in
+var HOOSH_MAX_ITERS_CEILING = 200;  # each round is a full model call; a runaway loop spends the user's money
 var _cfg_shell_timeout_ms = 0 - 1;  # per-command wall-clock timeout (ms); -1 = unset -> default (clamped in the getter)
 var _cfg_shell_output_cap = 0 - 1;  # captured-output byte cap; -1 = unset -> default (clamped in the getter)
 var _cfg_persona = 0;        # [persona].name — startup default archetype (0.22.0); 0 = unset -> egyptian_thoth
@@ -471,6 +476,8 @@ fn config_load() {
     _cfg_hoosh_stream = _cfg_bool(hoosh, "stream", 1);    # default on
     _cfg_hoosh_history = _cfg_bool(hoosh, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg_bool(hoosh, "tools", 1);        # default on
+    _cfg_hoosh_max_iters = _cfg_int(hoosh, "max_iters");    # -1 when absent -> default in the getter
+    _cfg_hoosh_compact_at = _cfg_int(hoosh, "compact_at");  # -1/absent -> off (0 from the getter)
     _cfg_hoosh_parallel = _cfg_bool(hoosh, "parallel", 1);  # default on
     _cfg_hoosh_reasoning = _reasoning_level_from(_cfg_str(hoosh, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
     _cfg_hoosh_summarize = _cfg_bool(hoosh, "summarize", 0);   # 0.36.4: default OFF — it spends an extra call
@@ -496,6 +503,8 @@ fn config_load() {
     var project = _cfg_section_pairs(sections, "project");
     _cfg_vidya = _cfg_str(project, "vidya");                # [project].vidya — first-class `/allow vidya` root (0.23.1)
     _cfg_read_roots_load(project);                          # grant [project].read_roots (persistent user-granted read roots, 0.23.1)
+    var redact = _cfg_section_pairs(sections, "redact");
+    _cfg_redact_enabled = _cfg_bool(redact, "enabled", 1);   # 0.40.0 (T1-3): DEFAULT ON — see the getter
     var shell = _cfg_section_pairs(sections, "shell");
     _cfg_shell_enabled = _cfg_bool(shell, "enabled", 0);    # opt-in; default off (0.16.0 shell tool; the model can propose local commands)
     _cfg_shell_timeout_ms = _cfg_int(shell, "timeout_ms");  # -1 when absent -> default in the getter
@@ -554,6 +563,28 @@ fn config_hoosh_reasoning() { return _cfg_hoosh_reasoning; }
 # extra (small) completion whenever the skipped range grows, and thoth never spends the user's tokens uninvited.
 fn config_hoosh_summarize() { return _cfg_hoosh_summarize; }
 
+# config_redact_enabled: 1 when tool results are scanned for secret-shaped values before they enter the
+# conversation. 0.40.0 (T1-3).
+#
+# DEFAULT ON, deliberately unlike [shell].enabled / [edit].enabled / [hoosh].summarize. Those are off by
+# default because each ADDS capability, risk or cost. This removes risk and costs one in-memory scan, and
+# a protection that is off by default protects nobody — so the burden runs the other way:
+# `[redact].enabled = false` for the user whose legitimate work it interferes with.
+fn config_redact_enabled() { return _cfg_redact_enabled; }
+
+# config_hoosh_compact_at: auto-compact once the session's token total crosses this. 0 = off (the default).
+# 0.40.0 (T1-5).
+#
+# A TOKEN threshold, deliberately, even though thoth's framer evicts by BYTES. The byte budget is about
+# what fits in one request; this is about what the session has COST. They are different questions and a
+# user watching spend wants the second one. Off by default because it spends an extra (small) call, the
+# same posture [hoosh].summarize takes.
+fn config_hoosh_compact_at() {
+    var n = _cfg_hoosh_compact_at;
+    if (n <= 0) { return 0; }
+    return n;
+}
+
 # config_hoosh_reasoning_effort: the effort cstring ("low"/"medium"/"high") the
 # request builders emit as reasoning_effort, or 0 when reasoning is off. 0.35.2.
 fn config_hoosh_reasoning_effort() {
@@ -570,6 +601,25 @@ fn config_hoosh_history() { return _cfg_hoosh_history; }
 # config_hoosh_tools: 1 if free-text turns use the agentic tool-calling loop when
 # the daimon seam is wired (the default), 0 if [hoosh].tools = false (plain turns).
 fn config_hoosh_tools() { return _cfg_hoosh_tools; }
+
+# config_hoosh_max_iters: how many TOOL ROUNDS one agentic turn may take. Absent / <= 0 -> the default;
+# above the ceiling -> the ceiling. 0.40.0 (T1-2).
+#
+# This was `var AGENT_MAX_ITERS = 8;` — hardcoded, and invisible to the user. Eight rounds is roughly
+# "read three files and make one edit", which is under-powered for real agentic work; peers default far
+# higher (Goose ships GOOSE_MAX_TURNS = 1000). thoth has already been bitten by the cap rather than
+# merely limited by it: the 0.38.5 bug report describes required-arg tools failing every round *until the
+# loop exhausted the cap and answered nothing*, where a louder ceiling would have pointed at the real bug.
+# The DEFAULT stays 8 so an existing config behaves exactly as before; raising it is opt-in.
+# The ceiling is a real guard, not a formality — each round is a full model call, so a runaway loop is
+# billed to the user. thoth has token/cost ACCOUNTING but no enforcement (tracked as a Tier-2 borrow from
+# agnosai's budget tracker), and until that lands this cap is the only thing bounding a turn's spend.
+fn config_hoosh_max_iters() {
+    var n = _cfg_hoosh_max_iters;
+    if (n <= 0) { return HOOSH_MAX_ITERS_DEFAULT; }
+    if (n > HOOSH_MAX_ITERS_CEILING) { return HOOSH_MAX_ITERS_CEILING; }
+    return n;
+}
 
 # config_hoosh_parallel: 1 if a round's tool calls run concurrently (the default),
 # 0 if [hoosh].parallel = false (one call at a time). Gating stays serial either

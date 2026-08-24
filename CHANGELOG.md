@@ -2,6 +2,159 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.40.0] - 2026-08-24
+
+**All six Tier-1 items from the gap review, shipped.** 0.39.0's review ranked what the agentic-harness
+field does that thoth did not; this closes the top tier of it. Suite **264 + 1720 + 183 + 3** — up **76
+assertions** from 0.39.0 — and every feature was exercised against a live spine, not only unit-tested.
+
+### Added — the model can find things now (T1-1)
+
+- **`search`, a model-invokable project search** (`src/search.cyr`). Through 0.39.0 the model's surface was
+  `read_file` / `list_dir` / `shell` / `edit` / `create_file` / `memory_write` — so to locate a symbol it
+  walked directories one `list_dir` at a time, or reached for `shell`, which is **off by default**. On a
+  default install there was no way to find anything the user had not already named. Every surveyed peer
+  ships this; it was the single highest-leverage tool thoth lacked.
+
+  ONE tool, two behaviours, because the mental model is "search the project" narrowed by name and/or
+  content: `glob` alone finds files by name, `pattern` greps contents, both together narrows the grep.
+  Matching is **literal substring, not regex** — a regex tool has to answer "which dialect?", and a model
+  that guesses wrong gets silence rather than an error, the worst failure mode for a search tool.
+
+  ⚠ **It inherits the whole 0.39.0 jail, applied PER ENTRY as the walk descends** — `_project_read_ok`,
+  `_project_no_symlink`, `_project_sensitive`. A search is a *worse* leak than a read if it is careless,
+  because one call sweeps the tree instead of naming one file, and a symlink three levels down escapes as
+  thoroughly as one at the root. File content also goes through the same C0/DEL sanitiser 0.39.0 added for
+  filenames — a search result is untrusted bytes reaching the terminal by a second route.
+
+  Every bound (hits, files scanned, output bytes, depth, line length) is **reported when it bites**: a
+  search that silently returns less than it found teaches the model the code does not contain what it does.
+
+  **Live-verified**: the model called `search {"pattern":"ckpt_capture"}` unprompted and got the right
+  files — including a `.tcyr` that the obvious `grep --include="*.cyr"` cross-check missed.
+
+### Added — a safety net for the model's writes (T1-4)
+
+- **File checkpoints and `/rewind`** (`src/checkpoint.cyr`). thoth could write code from 0.31.0 and had no
+  undo: `editlog.cyr` is record-only, feeding the diff card with no restore path. Snapshots now land in
+  `.thoth/checkpoints/` before every `edit` and `create_file`; `/rewind` lists them, `/rewind last` undoes
+  the newest turn, `/rewind <n>` undoes one.
+
+  ⚠ **`ckpt_capture` is a GATE, not a status**: if the snapshot cannot be taken the write is **refused**.
+  Performing an unprotected edit while `/rewind` sits in the help text would promise an undo that does not
+  exist. `create_file` records its checkpoint only *after* the exclusive create proves the file was absent,
+  so the recorded undo ("remove it") is true — recording first would let a `/rewind` delete someone else's
+  file. A turn-scoped restore walks **newest-first**, so a file written twice in one turn lands on the
+  state before the turn began.
+
+  The store lives beside thoth's own state, inside `_project_sensitive` — **the thing that undoes the
+  model's work is not reachable by the model.** Not incidental: an undo the untrusted party can edit is
+  not an undo.
+
+  **Honest limits, stated in the help text and the source**: only `edit` and `create_file` are captured —
+  a file changed by the `shell` tool is not, because thoth never sees that write. The index is
+  session-scoped. Peers carry the identical caveat.
+
+  Deliberately **not** built on sit. thoth vendors a first-party VCS and a shadow repo is the obvious
+  design, but only sit's READ profile is vendored and widening that is a scoping decision, not a detail.
+  This is the snapshot-directory alternative the review named — and sit stays untouched.
+
+### Added — secrets stop at the door (T1-3)
+
+- **`[redact]` — tool results are scanned for secret-shaped values before they enter the conversation**
+  (`src/redact.cyr`). A model that echoed an API key from a `read_file` or `shell` result got it written
+  into `.thoth/` verbatim, sent back to the gateway every subsequent turn, and dropped into any `/save`
+  the user shared.
+
+  Placed at `_agent_add_result` — the single chokepoint where a tool result becomes a transcript message —
+  which is upstream of **every** sink at once: the feed, the store, exports, and the next request. A catch
+  here never leaves the machine. Redacting at each sink instead would mean four filters and four chances
+  to miss one.
+
+  **DEFAULT ON**, unlike `[shell].enabled` / `[edit].enabled` / `[hoosh].summarize`. The difference is
+  principled: those three are off because each *adds* capability, risk or cost. This removes risk and
+  costs one in-memory scan, and a protection that is off by default protects nobody — so the burden runs
+  the other way (`[redact].enabled = false`). Every redaction is **announced**, because a value silently
+  replaced by `[REDACTED]` is otherwise indistinguishable from a tool that returned nothing useful.
+
+  ⚠ **A mitigation, not a boundary** — pattern matching, framed exactly as `[shell.deny]` is. It will not
+  catch a secret shaped like an ordinary word.
+
+  **Live-verified**: a planted `sk-ant-…` key in a read file never reached the model, which correctly
+  reported it had been scrubbed before arrival.
+
+### Added — context under the user's hand (T1-5)
+
+- **`/context`** — what is filling the window right now: messages sent vs evicted, framed bytes against
+  the budget, recap coverage, the compact floor, and session tokens against `compact_at`. thoth already
+  *computed* all of it for the status bar; a user could only see one pressure indicator, not the breakdown.
+- **`/compact [keep]`** — summarize older turns now and stop sending them. The 0.36.4 recap is a
+  *reaction* to byte-budget overflow; this is the same machinery under the user's hand, before the
+  pressure bites. ⚠ The recap is fetched **before** the floor moves — the reverse would drop history whose
+  summary never arrived. On failure nothing is dropped.
+- **`[hoosh].compact_at`** — auto-compact once session tokens cross a threshold, announced when it acts.
+  A *token* threshold deliberately: the byte budget is about what fits in one request, this is about what
+  the session has cost.
+- The compact floor is cleared by `/reset` **and by a conversation switch** — it is an index into one
+  conversation's history, and carrying it across would evict an arbitrary prefix of the conversation you
+  switched to.
+
+  **Live-verified**: 10 messages → 8 compacted into a recap, 2 kept verbatim, floor enforced at 8.
+
+### Added — approvals that remember (T1-6)
+
+- **Answer `a` at an authorization prompt to allow that exact action for the session**, with `/grants` to
+  review and `/grants clear` to revoke. `confirm()` was stateless: the same command re-prompted on every
+  round, so an 8-round turn meant eight identical y/N prompts — which does not make a user safer, it
+  trains them to hammer `y` without reading.
+
+  ⚠ **The boundaries are the feature.** Session-scoped only, never written to disk — a durable grant is a
+  POLICY and belongs in `[tron].policy`, where t-ron can audit and rate-limit it; thoth must not grow a
+  shadow policy file t-ron cannot see. **Exact match** on (verb, obj), not a pattern: granting
+  `shell` + `cargo test` does not allow `cargo test; rm -rf /`. A grant can **never override a t-ron
+  DENY** — it lives inside `confirm`, which a DENY never reaches. And an un-storable grant (table full,
+  string too long) degrades to a plain one-shot yes, never to a truncated grant that would match actions
+  the user never approved.
+
+### Changed — the round budget is configurable and visible (T1-2)
+
+- **`[hoosh].max_iters`** replaces the hardcoded `AGENT_MAX_ITERS = 8` (default unchanged, ceiling 200).
+  Eight rounds is roughly "read three files and make one edit". thoth had already been *bitten* by the cap
+  rather than merely limited by it: the 0.38.5 tool-argument bug presented as "hit the iteration cap" every
+  time, with no hint that the ceiling was 8 or that it moved. The cap now appears in `/state` and the
+  hit-message names the value and how to raise it.
+
+### Changed — dependencies
+
+- **agnosai 2.0.6 → 2.0.7, vendored as the new `[lib.guard]` profile** (`src/vendor/agnosai-guard.cyr`,
+  560 lines, two modules). thoth takes **none** of the orchestration engine: agnosai's LLM layer names
+  thoth's own `src/hoosh.cyr` as its reference implementation, its tool registry competes with daimon's,
+  and its audit chain duplicates the vendored libro.
+
+  ⚠ **The profile was published upstream at thoth's request rather than the two files being hand-copied**,
+  which the 0.39.0 review named as the right mechanism — hand-extraction is a fork by another name: it
+  goes stale silently and the next upstream fix never arrives. `scripts/sync-agnosai.sh` enforces the
+  premise, failing loudly if the profile ever starts carrying engine surface.
+
+  ⭐ **The closure claim was wrong on the first pass, and the build caught it.** Inspection said both
+  helpers `output_filter.cyr` needs lived in agnosai's 38-line `units.cyr`; the vendored build then failed
+  with `undefined function '_agnosai_to_ascii_lower'`, which actually sat in **`src/llm/retry.cyr`** —
+  behind the very LLM layer the profile exists to exclude. Fixed upstream by moving that generic ASCII
+  helper to `units.cyr` beside its sibling (Cyrius has one flat namespace, so no caller changed). Recorded
+  because "verified by reading" and "verified by building" are not the same claim.
+- **`unicode` added to `[deps].stdlib`** — the guard profile's scanner decodes UTF-8 so a redaction cannot
+  split a multi-byte character.
+
+### Verified
+
+- Builds `OK` on **x86_64 Linux**, **`--aarch64`** and **`--agnos`**; no new warning classes.
+- Suite **264 + 1720 + 183 + 3** (+76), zero failures.
+- **Live against the real spine** (hoosh 2.6.3 / daimon 2.0.2 / bote 3.3.7 / mneme 1.1.3): the model chose
+  `search` on its own and found the right files; a planted API key was redacted before reaching it;
+  `/compact` folded 8 of 10 messages and enforced the floor.
+- `.thoth/checkpoints/` added to `.gitignore` — the suite writes real snapshots, and they are runtime
+  state, not source.
+
 ## [0.39.0] - 2026-08-24
 
 **A P(-1) hardening sweep, and it found real things.** Six parallel auditors over thoth's 19,500 authored

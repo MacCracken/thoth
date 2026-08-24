@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.40.0** — **all six Tier-1 gap-review items shipped** (2026-08-24). 0.39.0 ranked what the harness field
+does that thoth did not; this closes the top tier. **T1-1 `search`** (`src/search.cyr`) — the model could not
+find anything it had not been told the name of; one tool, `glob` for names and `pattern` for literal content,
+inheriting the full 0.39.0 jail applied PER ENTRY as the walk descends, with every bound reported when it
+bites. **T1-2 `[hoosh].max_iters`** replaces the hardcoded 8 (ceiling 200), now shown in `/state` and named in
+the hit-message — thoth had been *bitten* by that cap, not merely limited by it (0.38.5). **T1-3 `[redact]`**,
+DEFAULT ON — tool results are scanned for secret-shaped values at `_agent_add_result`, the one chokepoint
+upstream of the feed, the store, `/save` AND the next gateway request; scanning is agnosai's new `[lib.guard]`
+profile, thoth owns only the gate; announced every time, and framed as a mitigation not a boundary.
+**T1-4 checkpoints + `/rewind`** (`src/checkpoint.cyr`) — thoth could write code since 0.31.0 with no undo;
+`ckpt_capture` is a GATE (an unsnapshottable write is refused, not performed unprotected), the store sits
+inside `_project_sensitive` so the model cannot reach its own undo, and sit stays untouched — this is the
+snapshot-directory alternative, not a shadow repo. **T1-5 `/context` + `/compact` + `[hoosh].compact_at`** —
+the 0.36.4 recap reacted to overflow; these put it under the user's hand, with the recap fetched BEFORE the
+floor moves so a failed summary drops nothing. **T1-6 session grants** — `confirm()` was stateless and an
+8-round turn meant eight identical prompts; `a` grants EXACT (verb, obj) for the session only, never to disk,
+never overriding a t-ron DENY. Deps: **agnosai 2.0.6 → 2.0.7**, whose `[lib.guard]` profile was published
+upstream at thoth's request rather than hand-extracted; its closure claim was wrong on the first pass and the
+build caught it (`_agnosai_to_ascii_lower` sat behind the LLM layer — moved upstream). `unicode` added to
+`[deps].stdlib`. Suite **264 + 1720 + 183 + 3** (+76), all targets green, and every feature live-verified
+against the real spine rather than only unit-tested.
+
 **0.39.0** — **P(-1) hardening sweep: 11 real defects found and fixed** (2026-08-24). Six parallel auditors
 over the 19,500 authored lines, every finding handed to an independent skeptic briefed to REFUTE it — 26
 filed, **17 confirmed, 1 refuted**, two reproduced as live crashes. Full record in

@@ -35,6 +35,9 @@ stdlib = [
     # the vendored t-ron policy globs (M4); math carries f64_le/f64_ge for the
     # vendored avatara archetype f64 ops (M5 — the other f64 ops are builtins)
     "fnptr", "freelist", "hashmap", "chrono", "regex", "math",
+    # unicode: `_uc_decode_utf8`, needed by the vendored agnosai output-guard profile (0.40.0, T1-3) —
+    # its scanner decodes UTF-8 to avoid splitting a multi-byte character mid-redaction.
+    "unicode",
     # data formats (json/toml/cyml/base64/bigint) — before sigil + transport
     "bayan",
     # structured logging the vendored libro audit chain emits through (M4)

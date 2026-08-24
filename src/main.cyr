@@ -33,6 +33,12 @@ include "src/vendor/darshana.cyr"
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
+# agnosai (2.0.7 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
+# TWO modules, ~530 lines: agnosai's units + output_filter. NOT the orchestration engine — thoth consumes
+# hoosh for inference and daimon for tools, and agnosai's own llm/ layer names thoth's hoosh.cyr as its
+# reference implementation. The profile was published upstream at thoth's request rather than the two
+# files being hand-copied, so this stays one source of truth. See scripts/sync-agnosai.sh.
+include "src/vendor/agnosai-guard.cyr"
 # sit (1.6.2 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
 # sit_repo_* API only (its command layer is dead here). sankoch (2.7.9 zlib
@@ -59,6 +65,7 @@ include "src/inhist.cyr"   # composer input-history recall ring (0.11.1); pure, 
 include "src/fsearch.cyr"   # feed search engine (0.18.4) — pure matcher/render over the feed ring; after ui+feed
 include "src/mention.cyr"   # @file mention expansion (0.21.0) — pure; rides /read machinery; before commands
 include "src/project.cyr"  # model-invokable read_file/list_dir project tools (0.23.0, ADR-0015); jailed to the launch cwd + user-granted roots (0.23.1); before config (config_load grants configured roots)
+include "src/search.cyr"   # model-invokable `search` tool (0.40.0, T1-1); AFTER project.cyr — reuses its jail predicates
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -75,8 +82,10 @@ include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallba
 include "src/memlog.cyr"   # per-turn memory record (0.32.5): recalled sources + grounding verdict, for the GUI feed
 include "src/reasonlog.cyr" # per-turn reasoning record (0.35.3): the final round's chain-of-thought, so a landed turn keeps its thinking fold
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014); after exec/hoosh (uses exec_shell_capture, _append_int), before agent
+include "src/checkpoint.cyr" # file checkpoints + /rewind for model writes (0.40.0, T1-4); BEFORE edit.cyr, which gates its writes on ckpt_capture
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0017); jailed+gated local file editor; before agent (dispatched there); forward-refs diff_stats/_params_one (whole-unit)
 include "src/daimon.cyr"
+include "src/redact.cyr"    # secret redaction over tool results (0.40.0, T1-3); glue over the vendored agnosai guard; before agent.cyr
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"      # markdown fenced-code-block highlighter for the reply feed (0.15.1); after diff (calls _hl_span)

@@ -15,7 +15,8 @@
 # each `{id, function:{name, arguments}}`; results returned as
 # {role:tool, tool_call_id, content}.
 
-var AGENT_MAX_ITERS = 8;
+# AGENT_MAX_ITERS was a hardcoded 8 through 0.39.0. It is now [hoosh].max_iters via
+# config_hoosh_max_iters() (0.40.0, T1-2) — read at the loop, not cached, so /reload takes effect.
 var _agent_req = 0;
 var AGENT_REQ_CAP = 524288;
 var _agent_tools_buf = 0;
@@ -88,7 +89,10 @@ fn _agent_add_result(id, text) {
     _agent_work_puts("{\"role\":\"tool\",\"tool_call_id\":\"");
     if (id != 0) { _agent_work_puts_esc(id); }
     _agent_work_puts("\",\"content\":\"");
-    if (text != 0) { _agent_work_puts_esc(text); }
+    # 0.40.0 (T1-3): redact HERE, the single chokepoint where a tool result becomes a transcript message.
+    # Upstream of every sink at once — the feed, the conversation store, /save, and the next request to
+    # the gateway — so a secret caught here never leaves the machine at all. No-op when [redact] is off.
+    if (text != 0) { _agent_work_puts_esc(redact_tool_result(text)); }
     _agent_work_puts("\"}");
     return 0;
 }
@@ -204,6 +208,10 @@ fn agent_tools_add_project(dst, tl) {
     off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"Read a text file and return its contents. Give a path relative to THIS project's root, or an absolute path inside a directory the user has granted read access to. Reads outside those (and any '..') are refused. Use to inspect the code you are working in.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root, or an absolute path under a user-granted root\"}},\"required\":[\"path\"]}}}");
     off = _append_cstr_cap(dst, off, cap, ",");
     off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"description\":\"List a directory (files, and subdirectories suffixed with '/'). Give a path relative to THIS project's root (defaults to the root), or an absolute path inside a user-granted root. Use to explore the code structure.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"path relative to the project root, or an absolute path under a user-granted root (optional; defaults to the root)\"}}}}}");
+    off = _append_cstr_cap(dst, off, cap, ",");
+    # 0.40.0 (T1-1): SEARCH. The description leads with when to reach for it, because the failure this
+    # closes is a model that never thinks to look — it walked list_dir one level at a time instead.
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"search\",\"description\":\"Search THIS project. Use this FIRST to locate code - it is far cheaper than listing directories one at a time. Give 'pattern' to find a LITERAL substring inside files (returns 'path:line: text' for each match); give 'glob' to find files whose NAME matches a pattern like '*.cyr' or 'test_*'; give both to search only inside matching files. Matching is literal text, NOT a regular expression. Results are capped and say so when a limit is reached.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\",\"description\":\"literal text to find inside files (not a regex)\"},\"glob\":{\"type\":\"string\",\"description\":\"filename pattern, '*' and '?' only, e.g. '*.cyr'\"},\"path\":{\"type\":\"string\",\"description\":\"subdirectory to search under, relative to the project root (optional; defaults to the whole project)\"},\"ignore_case\":{\"type\":\"boolean\",\"description\":\"match 'pattern' case-insensitively (ASCII only)\"}}}}}");
     off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
     return off;
@@ -804,6 +812,9 @@ fn _agent_round_has_local(tcs, nc) {
             if (streq(nm, "memory_write") == 1) { return 1; }
             if (streq(nm, "read_file") == 1) { return 1; }    # 0.23.0 local project tools -> serial dispatch
             if (streq(nm, "list_dir") == 1) { return 1; }
+            if (streq(nm, "search") == 1) { return 1; }       # 0.40.0 (T1-1): LOCAL — must route serial, or the
+                                                              # parallel path would forward it to daimon, which
+                                                              # has no such tool (an honest-looking 400, wrong cause)
             # "shell" is matched UNCONDITIONALLY (not gated on config): a call named "shell" must
             # always take the serial path so the local dispatch elif below decides its fate — even
             # when disabled, where that elif returns an honest not-enabled string rather than letting
@@ -892,6 +903,15 @@ fn _agent_run_calls_serial(tcs, nc) {
             # No t-ron gate — the jail (no absolute / no '..') is the safety boundary. LOCAL, not daimon.
             rl_kind = RL_ALLOWED;
             res = read_file_tool(gp);
+            rl_ok = 1;
+            ui_emit(ROLE_FAINT, "  result: "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(strlen(res)); emit(ui_reset()); ui_emit(ROLE_FAINT, " bytes"); oprintln("");
+        }
+        elif (streq(nm, "search") == 1) {
+            # thoth-native project tool (0.40.0, T1-1): search the project, JAILED exactly as read_file is —
+            # _project_read_ok + _project_no_symlink + _project_sensitive, applied per entry as the walk
+            # descends. No t-ron gate, same reasoning as read_file/list_dir: read-only and jail-confined.
+            rl_kind = RL_ALLOWED;
+            res = search_tool(gp);
             rl_ok = 1;
             ui_emit(ROLE_FAINT, "  result: "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(strlen(res)); emit(ui_reset()); ui_emit(ROLE_FAINT, " bytes"); oprintln("");
         }
@@ -1187,7 +1207,8 @@ fn agent_turn(prompt) {
     var iter = 0;
     var done = 0;
     var round_no = 0;
-    while ((done == 0) && (iter < AGENT_MAX_ITERS)) {
+    var max_iters = config_hoosh_max_iters();      # 0.40.0 (T1-2): configurable, read per turn so /reload lands
+    while ((done == 0) && (iter < max_iters)) {
         _hoosh_acc_reset();
         if (want_stream == 1) { _agent_iter_stream(model, sys, mem, _agent_tools_buf, tools_len); }
         else { _agent_iter_block(model, sys, mem, _agent_tools_buf, tools_len); }
@@ -1236,7 +1257,15 @@ fn agent_turn(prompt) {
         iter = iter + 1;
     }
     if (done == 0) {
-        oprintln("  agentic loop hit the iteration cap (no final answer).");
+        # 0.40.0 (T1-2): name the cap and how to raise it. A bare "hit the iteration cap" tells the user
+        # nothing actionable — and thoth has been bitten by exactly that: the 0.38.5 tool-argument bug
+        # presented as this message every time, with no hint that the ceiling was 8 or that it moves.
+        ui_emit(ROLE_RED, "  agentic loop hit the iteration cap");
+        ui_emit(ROLE_FAINT, " ("); ofmt_int(max_iters); ui_emit(ROLE_FAINT, " rounds, no final answer)");
+        oprintln("");
+        ui_emit(ROLE_FAINT, "  raise it with [hoosh].max_iters (ceiling ");
+        ofmt_int(HOOSH_MAX_ITERS_CEILING); ui_emit(ROLE_FAINT, ") — each round is a full model call");
+        oprintln("");
         session_history_pop_last();
         # No FINAL answer was produced — clear the reply accumulator so a one-shot run
         # reports failure (exit nonzero) instead of printing the last capped round's

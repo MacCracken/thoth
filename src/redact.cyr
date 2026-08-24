@@ -1,0 +1,86 @@
+# thoth — secret redaction over tool results (0.40.0, T1-3).
+#
+# WHY, and where the harm actually is. thoth streams model output into the feed, `/save` writes it to
+# disk, and the conversation store persists it — so a model that echoes an API key it found in a
+# `read_file` or `shell` result gets that key written into `.thoth/` verbatim, sent back to the gateway on
+# every subsequent turn, and dropped into any export the user shares. The 0.39.0 audit closed the
+# confused-deputy hole for thoth's OWN credentials (`_project_sensitive`) and said plainly that a general
+# secret filter was a DIFFERENT capability. This is that capability.
+#
+# WHERE IT SITS, and why here. At `_agent_add_result` — the single chokepoint where a tool result becomes
+# a transcript message. That is upstream of every sink at once: redact here and the secret never enters
+# the conversation, so it never reaches the feed, the store, an export, OR the next request to the
+# gateway. Redacting at each sink instead would mean four filters, four chances to miss one, and the
+# secret still leaving the machine on the next turn.
+#
+# thoth OWNS NONE OF THE SCANNING. The patterns, the vendor-prefix table, the PII heuristics and the
+# UTF-8-safe replacement are agnosai's `[lib.guard]` profile (src/vendor/agnosai-guard.cyr). This file is
+# glue: a config gate, a Str/cstr shim, and an honest announcement. Consume, never fork.
+#
+# ⚠ WHAT THIS IS NOT. It is pattern matching, and therefore a MITIGATION, not a boundary — precisely the
+# framing `src/shell.cyr` already uses for its deny globs. It catches recognisable shapes (vendor key
+# prefixes, emails, SSNs); it will not catch a secret that looks like an ordinary word, and a determined
+# exfiltration path is not closed by it. Claiming otherwise would be the security theatre thoth's honest
+# degradation rule exists to prevent.
+#
+# DEFAULT ON, unlike [shell].enabled / [edit].enabled / [hoosh].summarize — and the difference is
+# principled, not inconsistent. Those three are off by default because each ADDS capability, risk, or
+# cost. Redaction removes risk and costs one in-memory scan. A protection that is off by default protects
+# nobody, so the burden is the other way round: `[redact].enabled = false` for the user whose legitimate
+# work it interferes with.
+#
+# ANNOUNCED, ALWAYS. When a result is redacted thoth says so, with the count and category, because a value
+# silently replaced by `[REDACTED]` is otherwise indistinguishable from a tool that returned nothing
+# useful — and the user would debug the wrong thing.
+
+var REDACT_CAP = 262144;      # bounded working copy; a result larger than this is passed through UNSCANNED (see below)
+var _redact_buf = 0;
+var _redact_n = 0;            # results redacted this session (for /state)
+
+fn redact_count() { return _redact_n; }
+fn redact_reset() { _redact_n = 0; return 0; }
+
+# redact_active: 1 when redaction is on. Split out so /state and the tests can ask without duplicating
+# the config default.
+fn redact_active() { return config_redact_enabled(); }
+
+# redact_tool_result: return `text` with recognisable secrets replaced, or `text` unchanged when
+# redaction is off, the text is clean, or the text is too large to buffer.
+#
+# ⚠ The over-cap case passes the text through UNSCANNED rather than truncating it. Truncating a tool
+# result to fit a scanner would corrupt the model's input to protect against a pattern that may not be
+# there — trading a certain harm for a possible one. The cap is 256 KB, which is above every bounded tool
+# result thoth produces (read_file caps at 64 KB, list_dir at 16 KB, search at 24 KB, shell at its
+# configured max), so this is a guard against a future unbounded producer, not a live path.
+fn redact_tool_result(text) {
+    if (text == 0) { return text; }
+    if (redact_active() == 0) { return text; }
+    var n = strlen(text);
+    if (n == 0) { return text; }
+    if (n >= REDACT_CAP) { return text; }              # too big to buffer -> pass through, never truncate
+    if (_redact_buf == 0) { _redact_buf = alloc(REDACT_CAP); }
+    if (_redact_buf == 0) { return text; }
+
+    # agnosai's redactor takes and returns a Str. It answers the ORIGINAL Str when nothing matched, so a
+    # pointer comparison is not a reliable "changed?" test — compare the bytes.
+    var out = agnosai_output_redact(str_new(text, n));
+    if (out == 0) { return text; }
+    var on = str_len(out);
+    var od = str_data(out);
+    if (on == n) {
+        var same = 1;
+        var i = 0;
+        while ((i < n) && (same == 1)) { if (load8(od + i) != load8(text + i)) { same = 0; } i = i + 1; }
+        if (same == 1) { return text; }                # clean — hand back the caller's own pointer
+    }
+    if (on >= REDACT_CAP) { return text; }             # redaction grew it past the buffer; leave it alone
+    var k = 0;
+    while (k < on) { store8(_redact_buf + k, load8(od + k)); k = k + 1; }
+    store8(_redact_buf + on, 0);
+    _redact_n = _redact_n + 1;
+    # Announced, never silent — the user must be able to tell "[REDACTED]" from "the tool found nothing".
+    ui_emit(ROLE_ACCENT, "  [redacted] ");
+    ui_emit(ROLE_FAINT, "a secret-shaped value in this tool result was replaced before it entered the conversation");
+    oprintln("");
+    return _redact_buf;
+}

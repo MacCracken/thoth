@@ -135,7 +135,10 @@ fn session_recap_clear() { _conv_ensure(); return conv_set_recap(_conv_active, 0
 # conv_new: start a fresh conversation and make it active; returns its index.
 fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_active = vec_len(_conv_store) - 1; return _conv_active; }
 # conv_switch: make conversation `i` active (bounds-checked); returns the active index.
-fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; } } return _conv_active; }
+# ⚠ conv_switch clears the compact floor: the floor is an INDEX into ONE conversation's message vector,
+# so carrying it across a switch would evict an arbitrary prefix of the conversation you switched TO —
+# silently, and by a number that means nothing there. 0.40.0 (T1-5).
+fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; hoosh_compact_floor_clear(); } } return _conv_active; }
 # conv_delete: remove conversation `i` (never the last — always keep one). Fixes up _conv_active so it still
 # points at a valid, sensible conversation. Returns 1 if removed, 0 if refused (last one / out of range).
 fn conv_delete(i) {

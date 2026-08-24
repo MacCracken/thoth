@@ -155,6 +155,12 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     # until every byte lands (partial-write-safe), fsyncs, then atomically renames over `path`. Returns 0 on
     # success, negative errno on any failure with the ORIGINAL file left intact (no more O_TRUNC-then-short-write
     # truncation — the NON-ATOMIC residual filed as the portable-atomic-write cyrius issue, now closed). ADR-0017.
+    # 0.40.0 (T1-4): snapshot BEFORE the write, and REFUSE if the snapshot cannot be taken. The gate
+    # direction is the point — performing an unprotected edit while /rewind sits in the help text would
+    # promise an undo that does not exist. A file too large to snapshot is refused for the same reason.
+    if (ckpt_capture(path, session_turns()) == 0) {
+        return "(edit: refused - could not checkpoint the file first, so the edit would not be undoable; is .thoth/ writable, or the file over 256KB?)";
+    }
     var rc = file_write_atomic(path, _edit_new, newlen);
     if (rc != 0) { return "(edit: the write to disk failed (disk full?) - the file is unchanged)"; }
     _edit_last_ok = 1;
@@ -243,6 +249,14 @@ fn _write_do(path, content, clen) {
     var fd = file_create_exclusive(path, 0x1A4);
     if (fd == (0 - 17)) { return "(create_file: that file already exists - use edit to modify it)"; }
     if (fd < 0) { return "(create_file: could not create the file (the path may be unwritable))"; }
+    # 0.40.0 (T1-4): record the checkpoint AFTER the exclusive create proves the file did not exist, so
+    # the recorded undo ("remove it") is true. Recording before would leave an entry claiming a file was
+    # created when the create then failed — a /rewind that deletes someone else's file.
+    if (ckpt_capture(path, session_turns()) == 0) {
+        file_close(fd);
+        xunlink(path);                                          # roll back the empty file we just created
+        return "(create_file: refused - could not checkpoint, so the new file would not be undoable; is .thoth/ writable?)";
+    }
     var wr = clen;
     if (clen > 0) { memcpy(_edit_new, content, clen); wr = file_write(fd, _edit_new, clen); }
     file_close(fd);

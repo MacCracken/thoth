@@ -471,6 +471,38 @@ fn test_hoosh() {
     assert(slen <= (HOOSH_REQ_CAP - 1), "sum_build: saturated length stays inside its (smaller) buffer");
     assert_eq(_canary_ok(rbuf + HOOSH_REQ_CAP, 16), 1, "sum_build: canary intact");
 
+    # --- context management: the compact floor (0.40.0, T1-5) ---
+    # The 0.36.4 recap only fires when the byte framer is ALREADY skipping — a reaction to overflow.
+    # /compact and [hoosh].compact_at act BEFORE the pressure bites, which needs a forced eviction point.
+    # These pin the property that makes the floor safe: it can only ever evict MORE than the byte budget
+    # would, never fewer (the other direction would re-admit history the framer decided cannot fit).
+    test_group("forced compaction floor (hoosh.cyr, 0.40.0)");
+    session_history_clear();
+    hoosh_compact_floor_clear();
+    assert_eq(hoosh_compact_floor(), 0, "floor starts clear");
+    var ci = 0;
+    while (ci < 10) { session_history_append("user", "hello there", 11); ci = ci + 1; }
+    assert_eq(session_history_len(), 10, "ten short messages fit well inside the byte budget");
+    assert_eq(_hoosh_history_start(HOOSH_REQ_CAP), 0, "with no floor the framer sends all ten");
+    hoosh_compact_floor_set(4);
+    assert_eq(_hoosh_history_start(HOOSH_REQ_CAP), 4, "the floor forces eviction the byte budget would not");
+    hoosh_compact_floor_set(0);
+    assert_eq(_hoosh_history_start(HOOSH_REQ_CAP), 0, "a zero floor is inert");
+    # the floor is a FLOOR: it never re-admits what the byte budget already evicted
+    hoosh_compact_floor_set(2);
+    var bstart = _hoosh_history_start(1024);           # a tiny cap so the byte budget evicts hard
+    assert(bstart >= 2, "a small floor never re-admits messages the byte budget dropped");
+    hoosh_compact_floor_set(999);
+    assert(_hoosh_history_start(HOOSH_REQ_CAP) <= session_history_len(), "a floor past the end clamps to the length");
+    hoosh_compact_floor_clear();
+    assert_eq(hoosh_compact_floor(), 0, "clear resets it");
+    # /reset and a conversation switch must both drop the floor — it is an INDEX into one history
+    hoosh_compact_floor_set(3);
+    session_history_clear();
+    conv_switch(conv_active());
+    assert_eq(hoosh_compact_floor(), 0, "switching conversations clears the floor (it indexes one history)");
+    session_history_clear();
+
     test_group("hoosh model catalog extraction");
     var mbody = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4-6\"},{\"id\":\"gpt-4o\"}]}";
     var data = hoosh_extract_models(mbody, strlen(mbody));

@@ -19,3 +19,6 @@
 # and .thoth/memory/ stay tracked; only the real .thoth/config.cyml is ignored.
 /.thoth/config.cyml
 /thoth.cyml
+# .thoth/checkpoints/ — the 0.40.0 file-snapshot store behind /rewind. Runtime state, per-machine and
+# per-session, and it is written by the test suite too. Never tracked.
+/.thoth/checkpoints/

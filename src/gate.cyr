@@ -39,6 +39,88 @@ var _confirm_begin_fn = 0;
 var _confirm_end_fn = 0;
 fn confirm_hooks_set(bf, ef) { _confirm_begin_fn = bf; _confirm_end_fn = ef; return 0; }
 
+# --- session grants (0.40.0, T1-6) -------------------------------------------------------------------
+#
+# WHY. `confirm` was STATELESS: the same action re-prompted on every round of the agentic loop. On an
+# 8-round turn with a gated tool that is eight identical y/N prompts for the same command — which does not
+# make the user safer, it trains them to hammer 'y' without reading. A prompt that is always answered the
+# same way has stopped being a decision. Every surveyed peer solved this the same way: an "allow for the
+# rest of this session" answer.
+#
+# ⚠ THE BOUNDARIES, because this is a security control and widening it quietly would be the whole risk:
+#
+#  * SESSION-SCOPED ONLY. Never written to disk, never survives exit. A durable grant is a POLICY, and
+#    policy is t-ron's domain ([tron].policy) — thoth must not grow a shadow policy file that t-ron cannot
+#    see, audit, or rate-limit.
+#  * EXACT MATCH on (verb, obj), not a pattern. Granting `shell` + `cargo test` allows re-running exactly
+#    that command; it does not allow `cargo test; rm -rf /`. Peers offer pattern grants (opencode's
+#    last-match-wins bash globs); thoth deliberately does not, because a glob over a shell command string
+#    is the same weak control `src/shell.cyr` already refuses to call a sandbox.
+#  * NEVER OVERRIDES A t-ron DENY. Grants live inside `confirm`, which a DENY verdict never reaches —
+#    `gate_authorize` returns 0 before it. A grant can only ever resolve a FLAG or the seam-absent
+#    fail-closed prompt, exactly what a human 'y' resolved before.
+#  * ANNOUNCED, NEVER SILENT. An auto-allowed action still prints a line naming the grant, so the user can
+#    see what their earlier answer is still doing. A silent auto-allow would be indistinguishable from no
+#    gate at all.
+var GRANT_MAX = 32;               # bounded; a session that needs more than 32 distinct grants wants a policy
+var GRANT_VERB_CAP = 64;
+var GRANT_OBJ_CAP = 512;          # a shell command can be long; longer than this is simply not grantable
+var _grant_n = 0;
+var _grant_verbs = 0;             # GRANT_MAX * GRANT_VERB_CAP
+var _grant_objs = 0;              # GRANT_MAX * GRANT_OBJ_CAP
+
+fn _grant_bufs() {
+    if (_grant_verbs == 0) { _grant_verbs = alloc(GRANT_MAX * GRANT_VERB_CAP); }
+    if (_grant_objs == 0) { _grant_objs = alloc(GRANT_MAX * GRANT_OBJ_CAP); }
+    if (_grant_verbs == 0) { return 0; }
+    if (_grant_objs == 0) { return 0; }
+    return 1;
+}
+
+# grant_count / grant_verb_at / grant_obj_at: the read surface (/grants renders through these).
+fn grant_count() { return _grant_n; }
+fn grant_verb_at(i) { if (i < 0) { return ""; } if (i >= _grant_n) { return ""; } return _grant_verbs + i * GRANT_VERB_CAP; }
+fn grant_obj_at(i) { if (i < 0) { return ""; } if (i >= _grant_n) { return ""; } return _grant_objs + i * GRANT_OBJ_CAP; }
+
+# grants_clear: drop every session grant. Bound to /grants clear, and called by /reset — a user resetting
+# the session state expects the answers they gave it to go too.
+fn grants_clear() { _grant_n = 0; return 0; }
+
+# _grant_has: 1 if (verb, obj) was granted this session. EXACT match on both.
+fn _grant_has(verb, obj) {
+    if (_grant_n == 0) { return 0; }
+    if (_grant_bufs() == 0) { return 0; }
+    var i = 0;
+    while (i < _grant_n) {
+        if (streq(_grant_verbs + i * GRANT_VERB_CAP, verb) == 1) {
+            if (streq(_grant_objs + i * GRANT_OBJ_CAP, obj) == 1) { return 1; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _grant_add: record (verb, obj). Refuses (returning 0) when the table is full or either string is too
+# long to store — and the caller then treats the answer as a plain one-shot 'yes'. Fail CLOSED on the
+# GRANT, never on the buffer: a truncated grant would match actions the user never approved.
+fn _grant_add(verb, obj) {
+    if (_grant_bufs() == 0) { return 0; }
+    if (_grant_n >= GRANT_MAX) { return 0; }
+    if (strlen(verb) >= GRANT_VERB_CAP) { return 0; }
+    if (strlen(obj) >= GRANT_OBJ_CAP) { return 0; }
+    if (_grant_has(verb, obj) == 1) { return 1; }
+    var vd = _grant_verbs + _grant_n * GRANT_VERB_CAP;
+    var od = _grant_objs + _grant_n * GRANT_OBJ_CAP;
+    var i = 0;
+    while (load8(verb + i) != 0) { store8(vd + i, load8(verb + i)); i = i + 1; }
+    store8(vd + i, 0);
+    var j = 0;
+    while (load8(obj + j) != 0) { store8(od + j, load8(obj + j)); j = j + 1; }
+    store8(od + j, 0);
+    _grant_n = _grant_n + 1;
+    return 1;
+}
+
 # confirm: fail-closed interactive authorization — the stand-in when the
 # t-ron seam is absent, and the resolution for a t-ron FLAG verdict. Names
 # the exact object being authorized (verb + obj) so the answer is informed.
@@ -49,6 +131,16 @@ fn confirm(verb, obj) {
     # on stderr so the refusal is never silent. (Piped stdin already EOFs to a deny
     # below; this also covers a tty one-shot, where read_line would otherwise block on
     # an invisible prompt.)
+    # 0.40.0 (T1-6): an existing session grant resolves this without asking again — but SAYS SO, every
+    # time. A silent auto-allow is indistinguishable from having no gate; the user must be able to see
+    # that an answer they gave earlier is still acting. Checked BEFORE the non-interactive branches so a
+    # grant made interactively still holds if the surface later changes.
+    if (_grant_has(verb, obj) == 1) {
+        ui_emit(ROLE_GREEN, "  [session grant] "); emit(verb); emit(" "); emit(obj);
+        ui_emit(ROLE_MUTED, "  (/grants to review or clear)"); oprintln("");
+        log_begin("authz"); log_kv_str("gate", "session_grant"); log_kv_str("verb", verb); log_kv_int("allow", 1); log_commit(SK_INFO);
+        return 1;
+    }
     if (one_shot_active() == 1) {
         emit_err("  [authorization required: "); emit_err(verb); emit_err(" "); emit_err(obj);
         emit_err(" — denied; one-shot is non-interactive. configure [tron].policy or run interactively]\n");
@@ -77,11 +169,22 @@ fn confirm(verb, obj) {
     if (gate_active() == 0) { ui_emit(ROLE_ACCENT, "  [t-ron absent: fail-closed] authorize "); }
     else { ui_emit(ROLE_ACCENT, "  [t-ron flag: confirm] authorize "); }
     emit(verb); emit(" "); emit(obj);
-    emit("? [y/N] ");
+    emit("? [y/N/a=allow all session] ");
     var ans[64];
     var n = read_line(&ans, 64);
     if ((capturing == 1) && (_confirm_end_fn != 0)) { fncall0(_confirm_end_fn); }
     if (n <= 0) { return 0; }
+    # 'a' = yes, AND remember this exact (verb, obj) for the rest of the session. If the grant cannot be
+    # stored (table full, or either string over its cap) the answer degrades to a plain one-shot yes —
+    # never to a truncated grant, which would match actions the user never approved.
+    if ((streq(&ans, "a") == 1) || (streq(&ans, "A") == 1)) {
+        if (_grant_add(verb, obj) == 1) {
+            ui_emit(ROLE_MUTED, "  [granted for this session — /grants to review or clear]"); oprintln("");
+        } else {
+            ui_emit(ROLE_MUTED, "  [allowed once; not grantable (grant table full or the command is too long)]"); oprintln("");
+        }
+        return 1;
+    }
     if (streq(&ans, "y") == 1) { return 1; }
     if (streq(&ans, "Y") == 1) { return 1; }
     if (streq(&ans, "yes") == 1) { return 1; }

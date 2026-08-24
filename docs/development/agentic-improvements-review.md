@@ -48,6 +48,12 @@ Several of these are unusual enough that a naive gap list would recommend rebuil
 
 ## Tier 1 — Close these. High value, aligned with what thoth already is.
 
+> ✅ **ALL SIX SHIPPED IN 0.40.0.** Kept here as the record of what was proposed and why — see the
+> [CHANGELOG](../../CHANGELOG.md) for what was actually built, including where the implementation departed
+> from the proposal (T1-4 took the snapshot-directory route rather than sit's write surface, and T1-3's
+> agnosai leaf was published as an upstream `[lib.guard]` profile rather than hand-extracted).
+> Tier 2 and Tier 3 below remain open.
+
 ### T1-1 · A `grep`/`glob` search tool for the model — **confirmed-missing**
 Every single surveyed harness gives the model a search primitive. thoth's model-facing tools are
 `read_file`, `list_dir`, `shell`, `edit`, `create_file`, `memory_write` — so to find a symbol it must walk

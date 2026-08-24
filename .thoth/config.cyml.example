@@ -52,6 +52,32 @@ model = "claude-haiku-4-5-20251001"
 # daimon is wired (tools are not advertised; the model just answers).
 # tools = true
 
+# max_iters — how many TOOL ROUNDS one agentic turn may take (0.40.0). Default 8,
+# ceiling 200. Eight rounds is roughly "read three files and make one edit", which
+# is under-powered for real work; peers default far higher. Each round is a full
+# model call, so this is also the only thing currently bounding what one turn can
+# spend — raise it deliberately.
+# max_iters = 24
+
+# compact_at — auto-compact once the session's token total crosses this (0.40.0).
+# Off by default. Summarizes the older turns into a recap and stops sending them,
+# announcing when it acts. A TOKEN threshold, deliberately: the byte budget below
+# is about what fits in one request, this is about what the session has COST.
+# compact_at = 150000
+
+# [redact] — scan tool results for secret-shaped values before they enter the
+# conversation (0.40.0). DEFAULT ON, unlike the other opt-in features here, because
+# it removes risk rather than adding capability, and a protection that is off by
+# default protects nobody. Catches vendor API-key prefixes, emails and SSNs, and
+# ANNOUNCES every redaction so "[REDACTED]" is never confused with "the tool found
+# nothing". Scanning is agnosai's [lib.guard] profile; thoth owns only the gate.
+#
+# ⚠ It is pattern matching, so it is a MITIGATION, not a boundary — the same framing
+# [shell.deny] gets. It will not catch a secret that looks like an ordinary word.
+# Turn it off if it interferes with legitimate work:
+# [redact]
+# enabled = false
+
 # The [pricing.<model>] tables price token usage so /state and the TUI status bar
 # can show a running session cost ($d.cc). Opt-in and honest: with no [pricing] for
 # the active model, the cost field is OMITTED (never a faked $0) and /state says so.

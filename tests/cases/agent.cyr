@@ -438,6 +438,45 @@ fn test_tron() {
     assert_eq(confirm("thoth_shell", "rm -rf /"), 0, "OUT_NULL (the GUI turn) denies instead of blocking");
     out_mode_set(prev_mode);
 
+    # --- session grants (0.40.0, T1-6) ---
+    # confirm() was STATELESS: the same action re-prompted every round of the loop. Eight identical y/N
+    # prompts on one turn does not make a user safer, it trains them to hammer 'y'. The boundaries are the
+    # security-relevant part and are what these pin: EXACT (verb, obj) match, bounded table, session-only,
+    # and no path by which a grant can override a t-ron DENY.
+    test_group("session authorization grants (gate.cyr, 0.40.0)");
+    grants_clear();
+    assert_eq(grant_count(), 0, "grants start empty");
+    assert_eq(_grant_has("thoth_shell", "cargo test"), 0, "an ungranted action is not granted");
+    assert_eq(_grant_add("thoth_shell", "cargo test"), 1, "a grant is recorded");
+    assert_eq(grant_count(), 1, "count reflects it");
+    assert_eq(_grant_has("thoth_shell", "cargo test"), 1, "the exact pair matches");
+    # EXACT match — the security property. A grant must not widen to a different command or a different verb.
+    assert_eq(_grant_has("thoth_shell", "cargo test; rm -rf /"), 0, "a SUPERSTRING command is NOT covered");
+    assert_eq(_grant_has("thoth_shell", "cargo tes"), 0, "a prefix of the command is NOT covered");
+    assert_eq(_grant_has("thoth_edit", "cargo test"), 0, "the same object under a DIFFERENT verb is not covered");
+    assert_eq(_grant_add("thoth_shell", "cargo test"), 1, "re-granting the same pair is idempotent");
+    assert_eq(grant_count(), 1, "...and does not grow the table");
+    # bounded, and un-storable grants are REFUSED rather than truncated (a truncated grant would match
+    # actions the user never approved)
+    var gbig = alloc(GRANT_OBJ_CAP + 64);
+    var gi = 0;
+    while (gi < (GRANT_OBJ_CAP + 8)) { store8(gbig + gi, 120); gi = gi + 1; }
+    store8(gbig + GRANT_OBJ_CAP + 8, 0);
+    assert_eq(_grant_add("thoth_shell", gbig), 0, "an over-long object is refused, never truncated into a grant");
+    assert_eq(_grant_has("thoth_shell", gbig), 0, "...and is therefore not granted");
+    var gf = 0;
+    while (gf < (GRANT_MAX + 8)) {                       # drive well past the table bound
+        var gb[32];
+        var go = fmt_int_buf(gf, &gb);
+        store8(&gb + go, 0);
+        _grant_add("thoth_fill", &gb);
+        gf = gf + 1;
+    }
+    assert(grant_count() <= GRANT_MAX, "the grant table never exceeds its bound");
+    grants_clear();
+    assert_eq(grant_count(), 0, "clear drops every grant");
+    assert_eq(_grant_has("thoth_shell", "cargo test"), 0, "...and a cleared grant no longer matches");
+
     test_group("t-ron verdicts (vendored engine)");
     var t = tron_new(tron_config_default());
     var pol = "[agent.\"thoth\"]\nallow = [\"echo_*\", \"thoth_run\"]\ndeny = [\"danger_*\"]\n";
@@ -673,6 +712,130 @@ fn test_project() {
     assert_eq(_project_read_ok("/opt/demo/other/x"), 0, "absolute path outside every granted root refused");
     assert_eq(_project_read_ok("/opt/demo/repo/../secret"), 0, "'..' under a granted root refused (no traversal)");
     assert_eq(_project_read_ok("~/opt/demo/repo"), 0, "a '~' path is never a granted root");
+
+    # --- secret redaction over tool results (0.40.0, T1-3) ---
+    # A model that echoes an API key it found in a read_file or shell result gets it written into .thoth/
+    # verbatim, sent back to the gateway every subsequent turn, and dropped into any /save the user
+    # shares. Redaction sits at _agent_add_result — the single chokepoint where a tool result becomes a
+    # transcript message — so a catch here never reaches ANY sink. Scanning is agnosai's [lib.guard]
+    # profile; thoth owns only the gate and the shim.
+    test_group("secret redaction over tool results (redact.cyr, 0.40.0)");
+    redact_reset();
+    assert_eq(redact_active(), 1, "redaction is ON by default (it removes risk and costs one scan)");
+    var rclean = "the build succeeded in 4.2s with no warnings";
+    assert(redact_tool_result(rclean) == rclean, "clean text is returned as the CALLER'S OWN pointer (no copy, no churn)");
+    assert_eq(redact_count(), 0, "...and is not counted as a redaction");
+    var rkey = "export ANTHROPIC_API_KEY=sk-ant-api03-ZZZZZZZZZZZZZZZZZZZZZZZZ and retry";
+    var rout = redact_tool_result(rkey);
+    assert(_ui_contains(rout, "sk-ant-api03-ZZZZZZZZZZZZZZZZZZZZZZZZ") == 0, "an API key does NOT survive into the transcript");
+    assert(_ui_contains(rout, "REDACTED") == 1, "...it is replaced by a visible marker");
+    assert(_ui_contains(rout, "and retry") == 1, "surrounding text is preserved — only the secret goes");
+    assert_eq(redact_count(), 1, "the redaction is counted");
+    var rmail = "contact: someone@example.com for access";
+    assert(_ui_contains(redact_tool_result(rmail), "someone@example.com") == 0, "an email address is redacted too");
+    # the opt-out really opts out
+    _cfg_redact_enabled = 0;
+    assert_eq(redact_active(), 0, "[redact].enabled = false turns it off");
+    assert(redact_tool_result(rkey) == rkey, "...and the text passes through untouched");
+    _cfg_redact_enabled = 1;
+    # degenerate inputs must not crash the transcript path
+    assert_eq(redact_tool_result(0), 0, "a null result stays null");
+    assert(redact_tool_result("") != 0, "an empty result is safe");
+    redact_reset();
+    assert_eq(redact_count(), 0, "reset clears the counter");
+
+    # --- file checkpoints + rewind (0.40.0, T1-4) ---
+    # thoth could WRITE code from 0.31.0 and had no undo: editlog is record-only. These exercise the real
+    # round trip on real files — capture, mutate, restore — because a safety net verified only in the
+    # abstract is exactly the kind that is missing when it is needed.
+    test_group("file checkpoints and rewind (checkpoint.cyr, 0.40.0)");
+    ckpt_reset();
+    assert_eq(ckpt_count(), 0, "checkpoints start empty");
+    assert_eq(ckpt_last_turn(), 0 - 1, "no last turn when empty");
+    var cpf = "_thoth_ckpt_test.txt";
+    xunlink(cpf);
+    var cwbuf = "original contents";
+    file_write_atomic(cpf, cwbuf, strlen(cwbuf));
+    assert_eq(file_exists(cpf), 1, "fixture file written");
+    # capture, then mutate, then restore
+    assert_eq(ckpt_capture(cpf, 7), 1, "capture of an existing file succeeds");
+    assert_eq(ckpt_count(), 1, "one checkpoint recorded");
+    assert_eq(ckpt_turn_at(0), 7, "the turn is recorded");
+    assert(streq(ckpt_path_at(0), cpf) == 1, "the path is recorded");
+    assert(ckpt_snap_at(0) >= 0, "an existing file gets a real snapshot id");
+    var cmut = "CLOBBERED";
+    file_write_atomic(cpf, cmut, strlen(cmut));
+    var crb = alloc(256);
+    var crn = file_read_all(cpf, crb, 255); store8(crb + crn, 0);
+    assert(streq(crb, "CLOBBERED") == 1, "the file really was changed");
+    assert_eq(ckpt_restore_one(0), 1, "restore reports success");
+    crn = file_read_all(cpf, crb, 255); store8(crb + crn, 0);
+    assert(streq(crb, "original contents") == 1, "the ORIGINAL bytes came back");
+    # a file that did not exist: the undo is a DELETE, not a restore
+    var cpnew = "_thoth_ckpt_new.txt";
+    xunlink(cpnew);
+    assert_eq(ckpt_capture(cpnew, 8), 1, "capture of a not-yet-existing file succeeds");
+    assert_eq(ckpt_snap_at(1), 0 - 1, "...and records snapshot -1 (did not exist)");
+    var cnb = "brand new";
+    file_write_atomic(cpnew, cnb, strlen(cnb));
+    assert_eq(file_exists(cpnew), 1, "the new file exists");
+    assert_eq(ckpt_restore_one(1), 1, "restore of a created file succeeds");
+    assert_eq(file_exists(cpnew), 0, "...and the undo REMOVED it, rather than restoring nothing");
+    # turn-scoped restore: two writes to one file in one turn must land on the OLDEST snapshot
+    ckpt_reset();
+    file_write_atomic(cpf, "v1", 2);
+    ckpt_capture(cpf, 9);
+    file_write_atomic(cpf, "v2", 2);
+    ckpt_capture(cpf, 9);
+    file_write_atomic(cpf, "v3", 2);
+    assert_eq(ckpt_last_turn(), 9, "last turn reported");
+    assert_eq(ckpt_restore_turn(9), 2, "both checkpoints from the turn are restored");
+    crn = file_read_all(cpf, crb, 255); store8(crb + crn, 0);
+    assert(streq(crb, "v1") == 1, "a twice-written file lands on the state BEFORE the turn, not mid-turn");
+    # bounded, and the bound keeps the NEWEST
+    ckpt_reset();
+    var cbi = 0;
+    while (cbi < (CKPT_MAX + 6)) { ckpt_capture(cpf, 100 + cbi); cbi = cbi + 1; }
+    assert_eq(ckpt_count(), CKPT_MAX, "the ring is bounded at CKPT_MAX");
+    assert_eq(ckpt_last_turn(), 100 + CKPT_MAX + 5, "the ring keeps the NEWEST entry");
+    ckpt_reset();
+    xunlink(cpf); xunlink(cpnew);
+    assert_eq(ckpt_count(), 0, "reset clears the index");
+
+    # --- search tool (0.40.0, T1-1): finds things, and inherits the whole jail ---
+    # The suite runs with CWD = repo root, so these search thoth's real tree.
+    test_group("search tool: content, names, and bounds (search.cyr, 0.40.0)");
+    assert(_ui_contains(search_tool("{\"pattern\":\"fn search_tool\"}"), "src/search.cyr") == 1, "literal content match finds the defining file");
+    assert(_ui_contains(search_tool("{\"pattern\":\"fn search_tool\"}"), ":") == 1, "content hits carry path:line");
+    assert(_ui_contains(search_tool("{\"glob\":\"search.cyr\"}"), "src/search.cyr") == 1, "glob-only finds files by name");
+    assert(_ui_contains(search_tool("{\"pattern\":\"fn search_tool\",\"glob\":\"*.md\"}"), "no matches") == 1, "glob narrows content search (no .md defines it)");
+    assert(_ui_contains(search_tool("{\"pattern\":\"zzq-not-present-anywhere-zzq\"}"), "no matches") == 1, "an absent pattern says so honestly");
+    assert(_ui_contains(search_tool("{}"), "give 'pattern'") == 1, "neither pattern nor glob -> a usable error, not a whole-tree dump");
+    assert(_ui_contains(search_tool("{\"pattern\":\"\"}"), "give 'pattern'") == 1, "an empty pattern is treated as absent");
+    assert(_ui_contains(search_tool("not json"), "not valid JSON") == 1, "malformed arguments -> honest error");
+    # case folding is opt-in and actually works
+    assert(_ui_contains(search_tool("{\"pattern\":\"FN SEARCH_TOOL\"}"), "no matches") == 1, "case-sensitive by default");
+    assert(_ui_contains(search_tool("{\"pattern\":\"FN SEARCH_TOOL\",\"ignore_case\":true}"), "src/search.cyr") == 1, "ignore_case:true folds ASCII");
+    # scoping to a subtree
+    assert(_ui_contains(search_tool("{\"pattern\":\"fn search_tool\",\"path\":\"tests\"}"), "no matches") == 1, "'path' really does scope the walk");
+    # ⚠ THE JAIL — a search sweeps the tree, so a careless one leaks far more than a careless read_file.
+    # These are the same three checks read_file makes, asserted on the search entry point.
+    test_group("search inherits the 0.39.0 jail (search.cyr, 0.40.0)");
+    assert(_ui_contains(search_tool("{\"glob\":\"*\",\"path\":\"/etc\"}"), "refused") == 1, "an absolute 'path' is refused");
+    assert(_ui_contains(search_tool("{\"glob\":\"*\",\"path\":\"../..\"}"), "refused") == 1, "a '..' escape in 'path' is refused");
+    assert(_ui_contains(search_tool("{\"glob\":\"*\",\"path\":\".thoth\"}"), "refused") == 1, "thoth's own state dir is refused as a root");
+    # thoth's own config must not appear in results even from a legitimate whole-tree sweep
+    assert(_ui_contains(search_tool("{\"glob\":\"config.cyml\"}"), ".thoth/config.cyml") == 0, "a whole-tree glob never surfaces thoth's own config");
+    # and a symlink is not followed out of the project
+    var slink2 = "_thoth_search_symlink";
+    xunlink(slink2);
+    if (xsymlink("/etc", slink2) == 0) {
+        assert(_ui_contains(search_tool("{\"glob\":\"*\",\"path\":\"_thoth_search_symlink\"}"), "refused") == 1, "a symlinked 'path' root is refused");
+        assert(_ui_contains(search_tool("{\"glob\":\"hostname\"}"), "_thoth_search_symlink") == 0, "the walk never descends through a symlink");
+        xunlink(slink2);
+    } else {
+        oprintln("  SKIP search-symlink: could not create a test symlink on this host");
+    }
 
     # --- CONFUSED DEPUTY: thoth's own config is not model-readable/writable (0.39.0, audit A-3) ---
     # thoth's config lives at `.thoth/config.cyml`, at the repo root the docs tell operators to use — so it

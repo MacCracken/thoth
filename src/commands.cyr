@@ -47,6 +47,10 @@ enum Cmd {
     CMD_EDIT = 39;
     CMD_BOOKMARK = 40;
     CMD_THUMBS = 41;
+    CMD_GRANTS = 42;      # 0.40.0 (T1-6): review/clear the session's authorization grants
+    CMD_COMPACT = 43;     # 0.40.0 (T1-5): force an overflow recap now
+    CMD_CONTEXT = 44;     # 0.40.0 (T1-5): what is consuming the context window
+    CMD_REWIND = 45;      # 0.40.0 (T1-4): undo the model's file writes
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -147,6 +151,10 @@ fn classify_input(line) {
     if (token_is(line, "/tools") == 1) { return CMD_TOOLS; }
     if (token_is(line, "/call") == 1) { return CMD_CALL; }
     if (token_is(line, "/audit") == 1) { return CMD_AUDIT; }
+    if (token_is(line, "/grants") == 1) { return CMD_GRANTS; }
+    if (token_is(line, "/compact") == 1) { return CMD_COMPACT; }
+    if (token_is(line, "/context") == 1) { return CMD_CONTEXT; }
+    if (token_is(line, "/rewind") == 1) { return CMD_REWIND; }
     if (token_is(line, "/reset") == 1) { return CMD_RESET; }
     if (token_is(line, "/clear") == 1) { return CMD_CLEAR; }
     if (token_is(line, "/theme") == 1) { return CMD_THEME; }
@@ -199,6 +207,10 @@ fn cmd_help() {
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
+    _help_line("  /grants [clear]", "   session authorization grants (answers of 'a' at a confirm)");
+    _help_line("  /context", "           what is filling the context window right now");
+    _help_line("  /compact [keep]", "    summarize older turns now and stop sending them (default keep 6)");
+    _help_line("  /rewind [n|last]", "   undo the model's file writes (bare: list them)");
     _help_line("  /retry", "             re-run your last message for a fresh reply (/regenerate)");
     _help_line("  /edit <text>", "       replace your last message with new text and re-run");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
@@ -430,7 +442,10 @@ fn cmd_state() {
         if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { emit("daimon tools"); } else { emit("shell tool, standalone"); }   # 0.20.0
         emit(", t-ron gated, ");
         if (config_hoosh_parallel() == 1) { ui_emit(ROLE_GREEN, "parallel"); } else { emit("serial"); }
-        oprintln(" calls)");
+        emit(" calls, max ");                                  # 0.40.0 (T1-2): the round ceiling is now visible
+        ofmt_int(config_hoosh_max_iters()); emit(" rounds");
+        if (config_hoosh_max_iters() == HOOSH_MAX_ITERS_DEFAULT) { ui_emit(ROLE_MUTED, " — [hoosh].max_iters to raise"); }
+        oprintln(")");
     }
     elif (config_hoosh_tools() == 0) { ui_emit(ROLE_MUTED, "plain turns ([hoosh].tools = false)"); oprintln(""); }
     else { ui_emit(ROLE_MUTED, "plain turns (no daimon seam and no shell tool; set [daimon].url or [shell].enabled)"); oprintln(""); }
@@ -1346,6 +1361,7 @@ fn cmd_delete(line) {
 # store for a case-insensitive substring, listing matches grouped by conversation (with the * active marker + the
 # 1-based number) so a past thread is findable and switchable (/switch <n>). Works in any mode; mirrors the
 # /conversations presentation. Snippets flatten control bytes to spaces and cap context around the match.
+var COMPACT_KEEP_DEFAULT = 6;  # 0.40.0 (T1-5): messages /compact keeps verbatim — enough for the live thread
 var SEARCH_MAX = 60;           # cap total match lines (a huge store must not flood the pane)
 var SEARCH_CTX = 24;           # snippet context chars on each side of the match
 var SEARCH_BUF = 512;
@@ -1527,6 +1543,161 @@ fn cmd_call(line) {
 # cmd_reset: clear the multi-turn conversation context — the next turn starts a
 # fresh exchange (the model id and turn counter are kept). Honest no-op message
 # when there was nothing to clear.
+# cmd_rewind: undo the model's file writes (0.40.0, T1-4).
+#
+#   /rewind          list what can be undone
+#   /rewind last     undo every write from the most recent turn that wrote
+#   /rewind <n>      undo checkpoint n (as numbered by the bare listing)
+#
+# Restores FILES only — the conversation is untouched, deliberately. Undoing an edit and silently
+# rewriting history would leave the model's transcript claiming a change that is no longer on disk;
+# keeping the transcript means the next turn can see it was reverted and say why.
+fn cmd_rewind(line) {
+    var n = ckpt_count();
+    var arg = arg_after(line);
+    if (arg == 0) {
+        if (n == 0) {
+            ui_emit(ROLE_MUTED, "nothing to rewind — the model has not written any files this session."); oprintln("");
+            ui_emit(ROLE_FAINT, "  (only `edit` and `create_file` are checkpointed; a file changed by the `shell` tool is not)"); oprintln("");
+            return 0;
+        }
+        ui_emit(ROLE_ACCENT, "file checkpoints ("); ofmt_int(n); ui_emit(ROLE_ACCENT, ", newest last):"); oprintln("");
+        var i = 0;
+        while (i < n) {
+            emit("  "); ofmt_int(i + 1); emit(". ");
+            ui_emit(ROLE_FAINT, "turn "); ofmt_int(ckpt_turn_at(i)); emit("  ");
+            emit(ckpt_path_at(i));
+            if (ckpt_snap_at(i) < 0) { ui_emit(ROLE_GREEN, "  (created — rewind removes it)"); }
+            oprintln("");
+            i = i + 1;
+        }
+        ui_emit(ROLE_FAINT, "  /rewind last  undo the newest turn's writes · /rewind <n>  undo one"); oprintln("");
+        return 0;
+    }
+    if (n == 0) { oprintln("nothing to rewind — no checkpoints this session."); return 0; }
+    if (streq(arg, "last") == 1) {
+        var t = ckpt_last_turn();
+        var done = ckpt_restore_turn(t);
+        if (done == 0) { ui_emit(ROLE_RED, "rewind failed"); ui_emit(ROLE_FAINT, " — no file could be restored (a snapshot may be gone)"); oprintln(""); return 0; }
+        emit("rewound "); ofmt_int(done); emit(" file(s) from turn "); ofmt_int(t); oprintln(".");
+        ui_emit(ROLE_FAINT, "  the conversation is unchanged — the model can still see what it tried."); oprintln("");
+        return 0;
+    }
+    if ((load8(arg) < 48) || (load8(arg) > 57)) {
+        oprintln("usage: /rewind        list · /rewind last   undo the newest turn · /rewind <n>   undo one");
+        return 0;
+    }
+    var k = atoi(arg);
+    if ((k < 1) || (k > n)) { emit("no checkpoint "); ofmt_int(k); emit(" — there are "); ofmt_int(n); oprintln("."); return 0; }
+    if (ckpt_restore_one(k - 1) == 0) { ui_emit(ROLE_RED, "rewind failed"); ui_emit(ROLE_FAINT, " — the snapshot could not be read back"); oprintln(""); return 0; }
+    emit("rewound "); oprintln(ckpt_path_at(k - 1));
+    return 0;
+}
+
+# cmd_context: what is filling the context window right now (0.40.0, T1-5).
+#
+# thoth already COMPUTED all of this — the 0.19.0 meters feed the status bar — but a user could only see a
+# single pressure indicator, not the breakdown. The question this answers is the one people actually ask
+# before a long turn: "how much room is left, and what is about to be dropped?"
+fn cmd_context() {
+    var n = session_history_len();
+    var bytes = hoosh_ctx_bytes();
+    var budget = hoosh_ctx_budget();
+    var evicted = hoosh_ctx_evicted();
+    ui_emit(ROLE_ACCENT, "context"); oprintln("");
+    ui_label("  messages: "); ofmt_int(n);
+    if (evicted > 0) {
+        ui_emit(ROLE_MUTED, " ("); ofmt_int(evicted); ui_emit(ROLE_MUTED, " oldest not sent, "); ofmt_int(n - evicted); ui_emit(ROLE_MUTED, " in the request)");
+    } else { ui_emit(ROLE_MUTED, " (all sent)"); }
+    oprintln("");
+    ui_label("  history : "); ofmt_int(hoosh_ctx_kib()); emit(" KiB of "); ofmt_int(hoosh_ctx_budget_kib()); emit(" KiB framed");
+    if (budget > 0) { emit(" ("); ofmt_int((bytes * 100) / budget); emit("%)"); }
+    if (bytes > budget) { ui_emit(ROLE_RED, "  OVER — oldest turns are being dropped"); }
+    oprintln("");
+    ui_label("  recap   : ");
+    var covers = session_recap_covers();
+    if (covers > 0) { emit("covers the oldest "); ofmt_int(covers); emit(" message(s)"); }
+    elif (config_hoosh_summarize() == 1) { ui_emit(ROLE_MUTED, "none yet (auto — [hoosh].summarize is on)"); }
+    else { ui_emit(ROLE_MUTED, "none — dropped turns are silently lost; /compact, or set [hoosh].summarize"); }
+    oprintln("");
+    if (hoosh_compact_floor() > 0) {
+        ui_label("  compact : "); emit("floor at "); ofmt_int(hoosh_compact_floor()); oprintln(" (forced by /compact or [hoosh].compact_at)");
+    }
+    ui_label("  tokens  : "); ofmt_int(session_tokens()); emit(" this session");
+    if (config_hoosh_compact_at() > 0) {
+        emit(" — auto-compact at "); ofmt_int(config_hoosh_compact_at());
+    } else { ui_emit(ROLE_MUTED, " — [hoosh].compact_at to auto-compact"); }
+    oprintln("");
+    return 0;
+}
+
+# cmd_compact: summarize the older turns NOW and stop sending them (0.40.0, T1-5).
+#
+# The 0.36.4 recap is a REACTION to byte-budget overflow. This is the same machinery under the user's
+# hand, before the pressure bites. `keep` is how many recent messages stay verbatim (default 6 — enough
+# that the current thread survives intact).
+fn cmd_compact(line) {
+    var keep = COMPACT_KEEP_DEFAULT;
+    var arg = arg_after(line);
+    if (arg != 0) {
+        # atoi answers 0 for a non-numeric string, which is indistinguishable from an explicit "0" — so
+        # check the FIRST BYTE is a digit rather than trusting the parse. "/compact all" must be a usage
+        # error, not a silent "keep 0" that drops the whole conversation.
+        if ((load8(arg) < 48) || (load8(arg) > 57)) {
+            oprintln("usage: /compact [keep]   — keep is how many recent messages stay verbatim");
+            return 0;
+        }
+        keep = atoi(arg);
+    }
+    var n = session_history_len();
+    if (n == 0) { oprintln("nothing to compact — the conversation is empty."); return 0; }
+    if (n <= keep) { emit("nothing to compact — only "); ofmt_int(n); emit(" message(s), keeping "); ofmt_int(keep); oprintln("."); return 0; }
+    ui_emit(ROLE_MUTED, "  compacting… (one small model call)"); oprintln("");
+    var done = hoosh_compact_now(keep);
+    if (done < 0) {
+        ui_emit(ROLE_RED, "compact failed"); ui_emit(ROLE_FAINT, " — "); oprintln(hoosh_recap_err());
+        ui_emit(ROLE_FAINT, "  nothing was dropped; the conversation is unchanged."); oprintln("");
+        return 0;
+    }
+    if (done == 0) { emit("already compacted to that point ("); ofmt_int(keep); oprintln(" recent messages kept)."); return 0; }
+    emit("compacted "); ofmt_int(done); emit(" message(s) into a recap; keeping the newest ");
+    ofmt_int(keep); oprintln(" verbatim.");
+    ui_emit(ROLE_FAINT, "  they stay in your transcript — they just stop being sent. /context to see the result."); oprintln("");
+    return 0;
+}
+
+# cmd_grants: list the session's authorization grants, or clear them (`/grants clear`). 0.40.0 (T1-6).
+#
+# The point of showing these is that a grant is an answer that keeps acting after the moment it was given.
+# `confirm` announces each use, but a user who has been working for an hour should be able to ask what
+# they have standing without waiting for the next prompt. Session-only by design — a durable grant is a
+# POLICY and belongs in [tron].policy, where t-ron can audit and rate-limit it.
+fn cmd_grants(line) {
+    var arg = arg_after(line);
+    if ((arg != 0) && (streq(arg, "clear") == 1)) {
+        var had = grant_count();
+        grants_clear();
+        if (had == 0) { oprintln("no session grants to clear."); }
+        else { emit("cleared "); ofmt_int(had); oprintln(" session grant(s). the next matching action will ask again."); }
+        return 0;
+    }
+    var n = grant_count();
+    if (n == 0) {
+        ui_emit(ROLE_MUTED, "no session grants."); oprintln("");
+        ui_emit(ROLE_FAINT, "  answer 'a' at an authorization prompt to allow that exact action for the rest of the session."); oprintln("");
+        return 0;
+    }
+    ui_emit(ROLE_ACCENT, "session grants ("); ofmt_int(n); ui_emit(ROLE_ACCENT, ", exact match, not persisted):"); oprintln("");
+    var i = 0;
+    while (i < n) {
+        emit("  "); ui_emit(ROLE_ACCENT, grant_verb_at(i)); emit(" ");
+        oprintln(grant_obj_at(i));
+        i = i + 1;
+    }
+    ui_emit(ROLE_FAINT, "  /grants clear to revoke. these never reach disk — for a durable rule use [tron].policy."); oprintln("");
+    return 0;
+}
+
 fn cmd_reset() {
     var n = session_history_len();
     session_history_clear();
@@ -1535,6 +1706,10 @@ fn cmd_reset() {
     editlog_reset();           # 0.31.1: drop the recorded edit diffs too
     memlog_reset();            # 0.32.5: drop the per-turn memory records too
     reasonlog_reset();         # 0.35.3: drop the per-turn reasoning records too
+    grants_clear();            # 0.40.0 (T1-6): the answers the user gave THIS session go with it — a
+                               # grant outliving the conversation it was given in would be a surprise
+    hoosh_compact_floor_clear();  # 0.40.0 (T1-5): an index into a history that no longer exists
+    ckpt_reset();              # 0.40.0 (T1-4): the writes belong to the conversation being cleared
     if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }
     return 0;
@@ -1630,6 +1805,10 @@ fn _task_dispatch(prompt) {
     if (agent_enabled() == 1) { rc = agent_turn(prompt); }
     else { rc = hoosh_send(prompt); }
     _task_turn_feedback(t0);                          # interactive BEL + faint elapsed line (opt-in)
+    # 0.40.0 (T1-5): the [hoosh].compact_at trigger, AFTER the turn — never mid-turn, where it would
+    # inject a side-call into the middle of the exchange the user is watching. Silent no-op when unset.
+    # Placed at this single dispatch chokepoint so /retry and one-shot get it too, not just /task.
+    hoosh_compact_auto();
     return rc;
 }
 
@@ -1880,6 +2059,10 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_TOOLS) { cmd_tools(); return 1; }
     if (c == CMD_CALL) { cmd_call(line); return 1; }
     if (c == CMD_AUDIT) { cmd_audit(); return 1; }
+    if (c == CMD_GRANTS) { cmd_grants(line); return 1; }
+    if (c == CMD_COMPACT) { cmd_compact(line); return 1; }
+    if (c == CMD_CONTEXT) { cmd_context(); return 1; }
+    if (c == CMD_REWIND) { cmd_rewind(line); return 1; }
     if (c == CMD_RESET) { cmd_reset(); return 1; }
     if (c == CMD_CLEAR) { cmd_clear(); return 1; }
     if (c == CMD_THEME) { cmd_theme(line); return 1; }

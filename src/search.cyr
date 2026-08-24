@@ -1,0 +1,309 @@
+# thoth — the model-invokable `search` tool (0.40.0, T1-1): find files by name and text inside them,
+# without shelling out.
+#
+# WHY. Through 0.39.0 thoth's model-facing surface was read_file / list_dir / shell / edit / create_file /
+# memory_write. To locate a symbol it had to walk directories one `list_dir` at a time, or reach for
+# `shell` — which is off by default and t-ron-gated, so on a default install there was NO way to find
+# anything the user had not already named. Every surveyed peer harness ships a search primitive; it is the
+# single highest-leverage tool thoth lacked, and it compounds with the round budget: a model that burns
+# four of its rounds locating a file has few left to do the work with.
+#
+# thoth-NATIVE substrate, exactly like read_file/list_dir (ADR-0015) — executed LOCALLY in src/agent.cyr's
+# dispatch, never forwarded to daimon. No t-ron gate, for the same reason those two have none: it is
+# read-only and confined by the jail, which is the boundary.
+#
+# ⚠ IT INHERITS THE FULL 0.39.0 JAIL, and must keep doing so. A search tool is a *worse* leak than
+# read_file if it is careless, because one call can sweep the whole tree instead of naming one file. So
+# every path it touches passes the same three checks read_file passes — `_project_read_ok` (no absolute,
+# no '~', no '..', or under a user-granted root), `_project_no_symlink` (no component is a link, which is
+# what stops a checked-in symlink walking the search out of the project), and `_project_sensitive` (never
+# thoth's own config or state). The walk applies them PER DIRECTORY as it descends, not once at the root,
+# because a link three levels down escapes just as thoroughly as one at the top.
+#
+# ONE tool, two behaviours, because the mental model is "search the project" narrowed by name and/or
+# content — and because each extra advertised tool costs bytes in every request and a decision in every
+# round:
+#   glob only              -> list the files whose NAME matches (the "find files" half)
+#   pattern (+ optional glob) -> list the matching LINES in files, optionally narrowed by name
+#
+# Matching is LITERAL substring, not regex. Deliberate: a regex tool has to answer "which dialect?", and a
+# model that guesses wrong gets silence rather than an error — the worst failure mode for a search tool.
+# `glob` is `*`/`?` only, via the stdlib's glob_match, matching the [shell.deny] convention already in the
+# codebase. `ignore_case` is offered because it is the one option whose absence reliably produces a
+# confusing empty result.
+
+var SEARCH_OUT_CAP    = 24576;   # max bytes returned to the model (bigger than list_dir's 16K: many short lines)
+var SEARCH_MAX_HITS   = 200;     # max reported matches — a bound on the ANSWER, reported when it bites
+var SEARCH_MAX_FILES  = 4000;    # max files opened — a bound on the WORK, so a huge tree cannot hang a turn
+var SEARCH_MAX_DEPTH  = 24;      # directory recursion limit
+var SEARCH_FILE_CAP   = 1048576; # per-file bytes examined; a bigger file is scanned to here and noted
+var SEARCH_LINE_CAP   = 400;     # per-line bytes reported (a minified bundle is one enormous line)
+
+var _search_out = 0;             # SEARCH_OUT_CAP output buffer
+var _search_file = 0;            # SEARCH_FILE_CAP file-read buffer
+var _search_path = 0;            # PROJECT_PATH_MAX path scratch for the walk
+var _search_hits = 0;            # matches reported this call
+var _search_files_seen = 0;      # files opened this call
+var _search_truncated = 0;       # 1 if a bound bit (hits/files/output) — reported, never silent
+var _search_off = 0;             # write offset into _search_out
+
+# _search_apc: append a NUL-terminated cstr to the output buffer, bounded. Sets the truncation flag rather
+# than silently dropping — a search that quietly returns less than it found is worse than one that says so.
+fn _search_apc(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (_search_off >= (SEARCH_OUT_CAP - 1)) { _search_truncated = 1; return 0; }
+        store8(_search_out + _search_off, load8(s + i));
+        _search_off = _search_off + 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _search_apn: append n raw bytes, bounded, with control bytes neutralised.
+#
+# ⚠ The bytes here are FILE CONTENT, and this string is rendered into the user's terminal as a tool
+# result. That is the same untrusted-bytes-to-terminal path the 0.39.0 audit closed for filenames
+# (A-7/A-8) — a file containing an ESC sequence would otherwise reach the terminal through the search
+# result even though the filename path is now sanitised. Same policy as `_tree_set_name` and `led_paste`:
+# C0 and DEL become '?', high bytes (UTF-8) pass through.
+fn _search_apn(src, n) {
+    var i = 0;
+    while (i < n) {
+        if (_search_off >= (SEARCH_OUT_CAP - 1)) { _search_truncated = 1; return 0; }
+        var b = load8(src + i) & 255;
+        if ((b < 32) || (b == 127)) { b = 63; }
+        store8(_search_out + _search_off, b);
+        _search_off = _search_off + 1;
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _search_apint(n) {
+    var tmp[24];
+    var o = fmt_int_buf(n, &tmp);          # (value, buf) — the arg order every other thoth call site uses
+    store8(&tmp + o, 0);
+    _search_apc(&tmp);
+    return 0;
+}
+
+# _search_lower: ASCII lowercase a byte. Only ASCII — case folding UTF-8 correctly needs a table thoth
+# does not carry, and pretending otherwise would fold some scripts and not others.
+fn _search_lower(b) {
+    if ((b >= 65) && (b <= 90)) { return b + 32; }
+    return b;
+}
+
+# _search_line_has: 1 if buf[from..to) contains `needle` (NUL-terminated), else 0. `ic` = ignore case.
+fn _search_line_has(buf, from, to, needle, ic) {
+    var nl = strlen(needle);
+    if (nl == 0) { return 0; }
+    if ((to - from) < nl) { return 0; }
+    var i = from;
+    var last = to - nl;
+    while (i <= last) {
+        var k = 0;
+        var eq = 1;
+        while ((k < nl) && (eq == 1)) {
+            var a = load8(buf + i + k) & 255;
+            var b = load8(needle + k) & 255;
+            if (ic == 1) { a = _search_lower(a); b = _search_lower(b); }
+            if (a != b) { eq = 0; }
+            k = k + 1;
+        }
+        if (eq == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _search_basename: index of the first byte of the last path component of `path`.
+fn _search_basename(path) {
+    var n = strlen(path);
+    var i = n;
+    while (i > 0) {
+        if (load8(path + i - 1) == 47) { return i; }
+        i = i - 1;
+    }
+    return 0;
+}
+
+# _search_scan_file: open `relpath`, scan it for `needle`, append `relpath:LINE: text` per match.
+# Returns 0 normally, 1 if a hard bound was reached and the walk should stop.
+fn _search_scan_file(relpath, needle, ic) {
+    if (_search_files_seen >= SEARCH_MAX_FILES) { _search_truncated = 1; return 1; }
+    _search_files_seen = _search_files_seen + 1;
+    if (_search_file == 0) { _search_file = alloc(SEARCH_FILE_CAP + 1); }
+    if (_search_file == 0) { return 1; }
+    var n = file_read_all(relpath, _search_file, SEARCH_FILE_CAP);
+    if (n <= 0) { return 0; }                       # unreadable or empty -> not an error, just no hits
+    store8(_search_file + n, 0);
+    var line = 1;
+    var start = 0;
+    var i = 0;
+    while (i <= n) {
+        var at_end = 0;
+        if (i == n) { at_end = 1; }
+        if ((at_end == 1) || (load8(_search_file + i) == 10)) {
+            if (i > start) {
+                if (_search_line_has(_search_file, start, i, needle, ic) == 1) {
+                    if (_search_hits >= SEARCH_MAX_HITS) { _search_truncated = 1; return 1; }
+                    _search_hits = _search_hits + 1;
+                    _search_apc(relpath); _search_apc(":");
+                    _search_apint(line); _search_apc(": ");
+                    var len = i - start;
+                    var over = 0;
+                    if (len > SEARCH_LINE_CAP) { len = SEARCH_LINE_CAP; over = 1; }
+                    _search_apn(_search_file + start, len);
+                    if (over == 1) { _search_apc(" …(line truncated)"); }
+                    _search_apc("\n");
+                }
+            }
+            line = line + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _search_walk: recurse `dir` (a repo-relative path, or "" for the root), applying the jail at EVERY level.
+# `needle` may be 0 (name-only search). Returns 1 when a bound says stop.
+fn _search_walk(dir, needle, ic, globpat, depth) {
+    if (depth > SEARCH_MAX_DEPTH) { _search_truncated = 1; return 0; }
+    var dirstr = str_from(".");
+    if (load8(dir) != 0) { dirstr = str_from(dir); }
+    var v = dir_list(dirstr);
+    if (v == 0) { return 0; }
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        var e = str_data(vec_get(v, i));
+        # build "<dir>/<entry>" (or just "<entry>" at the root) into the path scratch
+        var o = 0;
+        var dl = strlen(dir);
+        if (dl > 0) {
+            if ((dl + 1) >= PROJECT_PATH_MAX) { _search_truncated = 1; return 1; }
+            memcpy(_search_path, dir, dl); o = dl;
+            store8(_search_path + o, 47); o = o + 1;
+        }
+        var el = strlen(e);
+        if ((o + el + 1) >= PROJECT_PATH_MAX) { _search_truncated = 1; i = i + 1; }
+        else {
+            memcpy(_search_path + o, e, el); o = o + el;
+            store8(_search_path + o, 0);
+            # ⚠ the jail, applied HERE — per entry, at every depth. _project_no_symlink is the one that
+            # stops a checked-in link walking the search out of the project; _project_sensitive keeps
+            # thoth's own config and state out of results even though they are inside the tree.
+            if (_project_sensitive(_search_path) == 1) { i = i + 1; }
+            elif (_project_no_symlink(_search_path) == 0) { i = i + 1; }   # skip links; never follow one
+            elif (_search_skip_dir(e) == 1) { i = i + 1; }
+            else {
+                if (is_dir(str_from(_search_path)) == 1) {
+                    var sub = alloc(o + 1);
+                    if (sub != 0) {
+                        memcpy(sub, _search_path, o); store8(sub + o, 0);
+                        if (_search_walk(sub, needle, ic, globpat, depth + 1) == 1) { return 1; }
+                    }
+                } else {
+                    var namei = _search_basename(_search_path);
+                    var namematch = 1;
+                    if (load8(globpat) != 0) { namematch = glob_match(globpat, _search_path + namei); }
+                    if (namematch == 1) {
+                        if (needle == 0) {                       # name-only search: report the path
+                            if (_search_hits >= SEARCH_MAX_HITS) { _search_truncated = 1; return 1; }
+                            _search_hits = _search_hits + 1;
+                            _search_apc(_search_path); _search_apc("\n");
+                        } else {
+                            if (_search_scan_file(_search_path, needle, ic) == 1) { return 1; }
+                        }
+                    }
+                }
+                i = i + 1;
+            }
+        }
+    }
+    return 0;
+}
+
+# _search_skip_dir: 1 for directories that are never worth walking and would drown the result.
+# `.git` is the big one — thousands of objects, none of them the user's source. This is a PERFORMANCE
+# and signal-to-noise rule, NOT a security one; the security rules are _project_sensitive and
+# _project_no_symlink above, and neither is expressed here.
+fn _search_skip_dir(name) {
+    if (streq(name, ".git") == 1) { return 1; }
+    if (streq(name, "build") == 1) { return 1; }
+    if (streq(name, "node_modules") == 1) { return 1; }
+    if (streq(name, "rust-old") == 1) { return 1; }   # the AGNOS-family parity oracles: large, frozen, never the answer
+    return 0;
+}
+
+# search_tool: the agentic-loop entry. {"pattern"?, "glob"?, "path"?, "ignore_case"?}.
+# At least one of pattern/glob is required — an unconstrained walk would return the whole tree.
+fn search_tool(args_cstr) {
+    if (args_cstr == 0) { return "(search: missing arguments)"; }
+    var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
+    if (v == 0) { return "(search: arguments are not valid JSON)"; }
+
+    var needle = 0;
+    var pv = bayan_json_v_obj_get(v, "pattern");
+    if (pv != 0) {
+        var ps = bayan_json_v_str(pv);                       # 0.39.0 A-4: a non-string value answers 0
+        if (ps != 0) { var pc = str_cstr(ps); if (load8(pc) != 0) { needle = pc; } }
+    }
+    var globpat = "";
+    var gv = bayan_json_v_obj_get(v, "glob");
+    if (gv != 0) {
+        var gs = bayan_json_v_str(gv);
+        if (gs != 0) { globpat = str_cstr(gs); }
+    }
+    var root = "";
+    var rv = bayan_json_v_obj_get(v, "path");
+    if (rv != 0) {
+        var rs = bayan_json_v_str(rv);
+        if (rs != 0) {
+            var rc = str_cstr(rs);
+            if ((load8(rc) != 0) && (streq(rc, ".") == 0)) { root = rc; }
+        }
+    }
+    var ic = 0;
+    var iv = bayan_json_v_obj_get(v, "ignore_case");
+    if (iv != 0) { if (bayan_json_v_bool(iv) == 1) { ic = 1; } }   # 0 for a non-JTAG_BOOL, so a string "true" is simply ignored
+
+    if ((needle == 0) && (load8(globpat) == 0)) {
+        return "(search: give 'pattern' (text to find inside files) or 'glob' (a filename pattern like *.cyr), or both)";
+    }
+    # the jail, on the caller's root — the same three checks read_file makes, in the same order
+    if (load8(root) != 0) {
+        if (_project_read_ok(root) == 0) { return "(search: refused - 'path' is outside the project and any user-granted read root; no '..' allowed)"; }
+        if (_project_no_symlink(root) == 0) { return "(search: refused - a component of 'path' is a symlink; the jail does not follow links out of the project)"; }
+        if (_project_sensitive(root) == 1) { return "(search: refused - that is thoth's own config/state, not project source)"; }
+        if (is_dir(str_from(root)) == 0) { return "(search: 'path' is not a directory in this project)"; }
+    }
+
+    if (_search_out == 0) { _search_out = alloc(SEARCH_OUT_CAP); }
+    if (_search_path == 0) { _search_path = alloc(PROJECT_PATH_MAX + 1); }
+    if ((_search_out == 0) || (_search_path == 0)) { return "(search: out of memory)"; }
+    _search_off = 0; _search_hits = 0; _search_files_seen = 0; _search_truncated = 0;
+
+    _search_walk(root, needle, ic, globpat, 0);
+
+    if (_search_hits == 0) {
+        store8(_search_out + _search_off, 0);
+        if (_search_truncated == 1) { return "(search: no matches within the search limits - narrow it with 'path' or 'glob')"; }
+        return "(search: no matches)";
+    }
+    # A trailing summary, not a leading one: the model reads the hits first, and a count it can trust
+    # matters most when a bound bit. Truncation is always stated — a search that silently returns less
+    # than it found teaches the model the code does not contain what it does.
+    _search_apc("\n(");
+    _search_apint(_search_hits);
+    if (needle == 0) { _search_apc(" file"); } else { _search_apc(" match"); }
+    if (_search_hits != 1) { _search_apc("es"); }
+    _search_apc(" in "); _search_apint(_search_files_seen); _search_apc(" files scanned");
+    if (_search_truncated == 1) { _search_apc("; LIMIT REACHED - results are incomplete, narrow with 'path' or 'glob'"); }
+    _search_apc(")\n");
+    store8(_search_out + _search_off, 0);
+    return _search_out;
+}

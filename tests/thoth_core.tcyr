@@ -8,6 +8,12 @@ include "src/vendor/avatara.cyr"
 include "src/vendor/vyakarana.cyr"
 include "src/vendor/darshana.cyr"
 include "src/vendor/anuenue.cyr"    # HSV hue for /theme rainbow (0.38.0); before ui.cyr
+# agnosai (2.0.7 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
+# TWO modules, ~530 lines: agnosai's units + output_filter. NOT the orchestration engine — thoth consumes
+# hoosh for inference and daimon for tools, and agnosai's own llm/ layer names thoth's hoosh.cyr as its
+# reference implementation. The profile was published upstream at thoth's request rather than the two
+# files being hand-copied, so this stays one source of truth. See scripts/sync-agnosai.sh.
+include "src/vendor/agnosai-guard.cyr"
 include "src/vendor/sankoch.cyr"    # git-object inflate (0.13.0); before sit-read
 include "src/vendor/sit-read.cyr"   # sit read-only VCS API (branch/status/diff)
 include "src/util.cyr"
@@ -19,6 +25,7 @@ include "src/inhist.cyr"
 include "src/fsearch.cyr"
 include "src/mention.cyr"
 include "src/project.cyr"  # model-invokable read_file/list_dir project tools (0.23.0/0.23.1); before config (config_load grants configured roots)
+include "src/search.cyr"   # model-invokable `search` tool (0.40.0, T1-1); AFTER project.cyr — reuses its jail predicates
 include "src/config.cyr"
 include "src/log.cyr"
 include "src/gate.cyr"
@@ -35,8 +42,10 @@ include "src/memory.cyr"
 include "src/memlog.cyr"
 include "src/reasonlog.cyr"
 include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0014)
+include "src/checkpoint.cyr" # file checkpoints + /rewind for model writes (0.40.0, T1-4); BEFORE edit.cyr, which gates its writes on ckpt_capture
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0016)
 include "src/daimon.cyr"
+include "src/redact.cyr"    # secret redaction over tool results (0.40.0, T1-3); glue over the vendored agnosai guard; before agent.cyr
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
