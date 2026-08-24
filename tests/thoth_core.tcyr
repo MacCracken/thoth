@@ -45,7 +45,10 @@ include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0
 include "src/checkpoint.cyr" # file checkpoints + /rewind for model writes (0.40.0, T1-4); BEFORE edit.cyr, which gates its writes on ckpt_capture
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0016)
 include "src/daimon.cyr"
+include "src/guard.cyr"     # prompt-injection defense over untrusted PROSE (0.41.0, T2-3); glue over the vendored agnosai guard
 include "src/redact.cyr"    # secret redaction over tool results (0.40.0, T1-3); glue over the vendored agnosai guard; before agent.cyr
+include "src/hooks.cyr"     # lifecycle hooks, incl. a BLOCKING pre_tool (0.41.0, T2-4); after exec/shell, before agent.cyr calls them
+include "src/verify.cyr"    # the verification loop (0.41.0, T2-5); after exec/shell, before agent.cyr folds it into a tool result
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)

@@ -85,7 +85,10 @@ include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0
 include "src/checkpoint.cyr" # file checkpoints + /rewind for model writes (0.40.0, T1-4); BEFORE edit.cyr, which gates its writes on ckpt_capture
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0017); jailed+gated local file editor; before agent (dispatched there); forward-refs diff_stats/_params_one (whole-unit)
 include "src/daimon.cyr"
+include "src/guard.cyr"     # prompt-injection defense over untrusted PROSE (0.41.0, T2-3); glue over the vendored agnosai guard
 include "src/redact.cyr"    # secret redaction over tool results (0.40.0, T1-3); glue over the vendored agnosai guard; before agent.cyr
+include "src/hooks.cyr"     # lifecycle hooks, incl. a BLOCKING pre_tool (0.41.0, T2-4); after exec/shell, before agent.cyr calls them
+include "src/verify.cyr"    # the verification loop (0.41.0, T2-5); after exec/shell, before agent.cyr folds it into a tool result
 include "src/agent.cyr"
 include "src/diff.cyr"
 include "src/mdhl.cyr"      # markdown fenced-code-block highlighter for the reply feed (0.15.1); after diff (calls _hl_span)
@@ -160,8 +163,12 @@ fn main() {
     term_title_set();          # 0.22.3: set the terminal title (thoth - <model>); no-op at PT_PLAIN. Interactive-only (one-shot returned above).
     # T2 rich-TUI when the tier resolves to PT_RICH on a real tty; otherwise the
     # line-mode REPL (the guaranteed fallback — pipes / CI / T0-T1 / no raw mode).
+    # 0.41.0 (T2-4): the operator's session_start hook, fired once before either front end. After config,
+    # seams and the git probe, so a hook can see the resolved state; before any turn, so it can act on it.
+    hooks_session_start();
     if (tui_active() == 1) {
         tui_loop();
+        hooks_session_end();
     } else {
         print_banner();
         # 0.27.0: line-mode input history — record submits + persist to [history].file, PARITY with the TUI
@@ -175,6 +182,7 @@ fn main() {
             else { ui_emit(ROLE_FAINT, "input history: cannot write "); emit(hpath); ui_emit(ROLE_FAINT, " — not persisted (in-memory only)"); oprintln(""); }
         }
         repl_loop();
+        hooks_session_end();
         println("scribe out.");
     }
     return 0;

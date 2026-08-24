@@ -29,6 +29,21 @@ var _cfg_hoosh_tools = 1;    # 1 = agentic tool-calling when daimon wired (defau
 var _cfg_hoosh_max_iters = 0 - 1;   # agentic tool ROUNDS per turn; -1 = unset -> default (clamped in the getter)
 var _cfg_hoosh_compact_at = 0 - 1;  # 0.40.0 (T1-5): auto-compact once session tokens cross this; -1/absent = off
 var _cfg_redact_enabled = 1;        # 0.40.0 (T1-3): [redact].enabled — DEFAULT ON (see config_redact_enabled)
+var _cfg_guard_enabled = 1;         # 0.41.0 (T2-3): [guard].enabled — DEFAULT ON (see config_guard_enabled)
+# 0.41.0 (T2-4): [hooks] — operator-configured commands fired at agent events. All unset (0) by default:
+# a hook is arbitrary execution, so it exists only when the operator wrote one.
+var _cfg_hook_session_start = 0;
+var _cfg_hook_pre_tool = 0;
+var _cfg_hook_post_tool = 0;
+var _cfg_hook_session_end = 0;
+var _cfg_hook_timeout_ms = 0 - 1;
+var HOOK_CMD_CAP = 8192;            # composed "export K=..; <command>"; a hook longer than this is refused
+var HOOK_TIMEOUT_DEFAULT_MS = 15000;
+var HOOK_TIMEOUT_MAX_MS = 120000;
+var _cfg_verify_command = 0;        # 0.41.0 (T2-5): [verify].command — the project's own check; 0 = unset
+var _cfg_verify_timeout_ms = 0 - 1; # 0.41.0 (T2-5): [verify].timeout_ms; -1 = unset -> default
+var VERIFY_TIMEOUT_DEFAULT_MS = 120000;   # 2 min — a test suite is slower than a shell one-liner
+var VERIFY_TIMEOUT_MAX_MS = 600000;       # 10 min ceiling; past that the turn has stopped being interactive
 var _cfg_hoosh_parallel = 1; # 1 = run a round's tool calls concurrently (default), 0 = serial
 var _cfg_hoosh_reasoning = 0;  # 0.35.2: [hoosh].reasoning effort level (0 = off, 1 = low, 2 = medium, 3 = high) -> reasoning_effort
 var _cfg_hoosh_summarize = 0;  # 0.36.4: [hoosh].summarize — recap the byte-budget-skipped history (costs an extra small call)
@@ -198,7 +213,38 @@ fn _cfg_str(pairs, key) {
     var v = bayan_toml_get(pairs, key);
     if (v == 0) { return 0; }
     if (str_len(v) == 0) { return 0; }
-    return str_cstr(v);
+    return _cfg_unquote(str_cstr(v));
+}
+
+# _cfg_unquote: strip ONE matching pair of surrounding single quotes. 0.41.0.
+#
+# ⚠ TOML LITERAL STRINGS ('...') were reaching config consumers WITH THEIR QUOTES. Double-quoted basic
+# strings are unquoted upstream; single-quoted literal strings are not, so `model = 'claude-opus-4-8'`
+# produced a model id of `'claude-opus-4-8'` — quotes included — and the gateway 404'd on a name nobody
+# could see was wrong. Single quotes are the natural choice for any value containing double quotes, which
+# is exactly what a shell command in [hooks] or [verify] looks like, so the bug bites hardest on the keys
+# most likely to use it: a `[hooks].pre_tool` written that way became an unrunnable command, and since a
+# non-zero exit is how a pre_tool hook DENIES, it silently blocked every tool call in the session.
+#
+# Found by live-testing the 0.41.0 hooks against a real spine — the unit tests set the config vars
+# directly and so never went through the parser. Fixed HERE rather than in bayan: this is thoth's own
+# config surface, one function every string key already funnels through, and a parser change would need
+# to be right for every other bayan consumer too.
+#
+# Only a MATCHING pair is stripped, and only when there are at least two bytes — so a value that merely
+# starts or ends with a quote, or the single-character string "'", is left exactly as written.
+fn _cfg_unquote(s) {
+    if (s == 0) { return 0; }
+    var n = strlen(s);
+    if (n < 2) { return s; }
+    if (load8(s) != 39) { return s; }
+    if (load8(s + n - 1) != 39) { return s; }
+    var d = alloc(n - 1);
+    if (d == 0) { return s; }
+    var i = 0;
+    while (i < (n - 2)) { store8(d + i, load8(s + i + 1)); i = i + 1; }
+    store8(d + n - 2, 0);
+    return d;
 }
 
 # _cfg_bool: read a TOML bool key (the parser keeps `true`/`false` as literal
@@ -503,6 +549,17 @@ fn config_load() {
     var project = _cfg_section_pairs(sections, "project");
     _cfg_vidya = _cfg_str(project, "vidya");                # [project].vidya — first-class `/allow vidya` root (0.23.1)
     _cfg_read_roots_load(project);                          # grant [project].read_roots (persistent user-granted read roots, 0.23.1)
+    var hooks = _cfg_section_pairs(sections, "hooks");
+    _cfg_hook_session_start = _cfg_str(hooks, "session_start");
+    _cfg_hook_pre_tool      = _cfg_str(hooks, "pre_tool");
+    _cfg_hook_post_tool     = _cfg_str(hooks, "post_tool");
+    _cfg_hook_session_end   = _cfg_str(hooks, "session_end");
+    _cfg_hook_timeout_ms    = _cfg_int(hooks, "timeout_ms");
+    var guard = _cfg_section_pairs(sections, "guard");
+    _cfg_guard_enabled = _cfg_bool(guard, "enabled", 1);         # 0.41.0 (T2-3): DEFAULT ON — see the getter
+    var verify = _cfg_section_pairs(sections, "verify");
+    _cfg_verify_command = _cfg_str(verify, "command");           # 0.41.0 (T2-5): 0 when unset -> feature off
+    _cfg_verify_timeout_ms = _cfg_int(verify, "timeout_ms");
     var redact = _cfg_section_pairs(sections, "redact");
     _cfg_redact_enabled = _cfg_bool(redact, "enabled", 1);   # 0.40.0 (T1-3): DEFAULT ON — see the getter
     var shell = _cfg_section_pairs(sections, "shell");
@@ -571,6 +628,45 @@ fn config_hoosh_summarize() { return _cfg_hoosh_summarize; }
 # a protection that is off by default protects nobody — so the burden runs the other way:
 # `[redact].enabled = false` for the user whose legitimate work it interferes with.
 fn config_redact_enabled() { return _cfg_redact_enabled; }
+
+# config_guard_enabled: 1 when untrusted prose is scanned for injection attempts and wrapped when it trips
+# (0.41.0, T2-3). DEFAULT ON, on the same reasoning as [redact]: it removes risk rather than adding
+# capability, it never blocks (only marks), and a defense that is off by default defends nobody.
+fn config_guard_enabled() { return _cfg_guard_enabled; }
+
+
+# config_hook_*: the [hooks] commands (0.41.0, T2-4). 0 when unset, which is the default for every one of
+# them — a hook is arbitrary execution as the user, so it exists only when the operator wrote it.
+fn config_hook_session_start() { return _cfg_hook_session_start; }
+fn config_hook_pre_tool() { return _cfg_hook_pre_tool; }
+fn config_hook_post_tool() { return _cfg_hook_post_tool; }
+fn config_hook_session_end() { return _cfg_hook_session_end; }
+fn config_hooks_any() {
+    if (_cfg_hook_session_start != 0) { return 1; }
+    if (_cfg_hook_pre_tool != 0) { return 1; }
+    if (_cfg_hook_post_tool != 0) { return 1; }
+    if (_cfg_hook_session_end != 0) { return 1; }
+    return 0;
+}
+fn config_hook_timeout_ms() {
+    var t = _cfg_hook_timeout_ms;
+    if (t <= 0) { return HOOK_TIMEOUT_DEFAULT_MS; }
+    if (t > HOOK_TIMEOUT_MAX_MS) { return HOOK_TIMEOUT_MAX_MS; }
+    return t;
+}
+
+# config_verify_command: the project's own check, run after the model writes (0.41.0, T2-5). 0 when unset,
+# which turns the whole verification loop off — there is no default, because thoth cannot guess what
+# "correct" means for a project and a wrong guess would run something the operator never asked for.
+fn config_verify_command() { return _cfg_verify_command; }
+
+# config_verify_timeout_ms: wall-clock bound on that check. Absent/<=0 -> 2 minutes; clamped to 10.
+fn config_verify_timeout_ms() {
+    var t = _cfg_verify_timeout_ms;
+    if (t <= 0) { return VERIFY_TIMEOUT_DEFAULT_MS; }
+    if (t > VERIFY_TIMEOUT_MAX_MS) { return VERIFY_TIMEOUT_MAX_MS; }
+    return t;
+}
 
 # config_hoosh_compact_at: auto-compact once the session's token total crosses this. 0 = off (the default).
 # 0.40.0 (T1-5).

@@ -115,6 +115,13 @@ This is a small addition to `src/gate.cyr` and it makes the existing t-ron gate 
 
 ## Tier 2 — Strong candidates, larger or needing a design decision.
 
+> **0.41.0 shipped T2-3, T2-4, T2-5, T2-6.** **T2-1** (subagents) and **T2-7** (MCP resources/prompts) are
+> deferred to **0.42.0** by decision. **T2-2 (OS sandboxing) did NOT ship** — kavach 3.12.3 gained the
+> `[lib.confine]` profile this needed and it builds clean in thoth, but kavach's confinement is
+> container-shaped (it blocks host interpreters without a rootfs) and thoth's `shell` tool is a host-shell
+> invocation, so every call would be refused. Working around it means a security-policy change inside
+> kavach's threat model. See the CHANGELOG for the exact decision needed.
+
 ### T2-1 · Subagent delegation — **confirmed-missing**, near-universal among peers
 Claude Code, Codex, OpenHands, Cursor and Goose all landed on the same answer to the same two problems:
 a noisy sub-investigation (grep the tree, read ten files, report three lines) permanently costs the parent's

@@ -1,0 +1,117 @@
+# thoth — the verification loop (0.41.0, T2-5): after the model writes, run the project's own check and
+# hand the model the result.
+#
+# WHY. thoth had every ingredient and closed nothing with them: the `shell` tool can run a test command,
+# `src/exec.cyr` does timed capture, roundlog records outcomes — and yet a model that made an edit had no
+# way to learn it had broken the build unless the USER noticed and said so. Peers close this loop (Copilot's
+# coding agent runs tests and iterates before opening the PR; Devin's docs tell you to make the check
+# runnable). It is also the cheapest way to spend the round budget well: a failing test is a far better
+# next-round prompt than a guess.
+#
+# HOW IT ATTACHES, and why not as its own message. The verification result is appended to the TOOL RESULT
+# of the write that triggered it, not pushed as a separate history entry. The wire protocol expects
+# {role:tool, tool_call_id, content} paired to a specific call; inventing a message with no call to pair
+# to would either break the alternation or need a fake id. Folding it into the result the model is already
+# waiting for is protocol-safe, costs no extra round, and puts the failure exactly where the model looks.
+#
+# ⚠ THE COMMAND IS THE OPERATOR'S, NOT THE MODEL'S. It comes from `[verify].command` in the user's config
+# and nowhere else — the model cannot propose, alter or read it. That is what keeps this from being a new
+# injection surface: prompt-injected content can cause a WRITE (which the jail and t-ron already govern),
+# but it can never influence what gets run afterwards.
+#
+# ⚠ IT IS STILL COMMAND EXECUTION, unsandboxed, as the user. Same footing as `/run` and the `shell` tool
+# and stated with the same honesty: opt-in, off unless configured, and the configured string is echoed
+# when it runs so it is never a surprise. When the OS-sandbox seam lands this is one of the paths that
+# should move behind it.
+
+var VERIFY_OUT_CAP = 8192;         # bytes of verifier output fed back — enough for a failing test's tail
+var VERIFY_TAIL = 3000;            # when over cap, keep the TAIL: a compiler names the error at the END
+var _verify_buf = 0;
+var _verify_res = 0;
+var _verify_runs = 0;              # verifications run this session (for /state)
+var _verify_last_ok = 0 - 1;       # -1 never run · 0 last run failed · 1 last run passed
+
+fn verify_runs() { return _verify_runs; }
+fn verify_last_ok() { return _verify_last_ok; }
+fn verify_reset() { _verify_runs = 0; _verify_last_ok = 0 - 1; return 0; }
+
+# verify_configured: 1 when [verify].command is set AND this target can capture a command.
+fn verify_configured() {
+    var c = config_verify_command();
+    if (c == 0) { return 0; }
+    if (load8(c) == 0) { return 0; }
+    if (shell_supported() == 0) { return 0; }      # no /bin/sh -c here -> never claim to verify
+    return 1;
+}
+
+# verify_run: run the configured check and return a summary to fold into a tool result, or 0 when
+# verification is not configured (the caller then appends nothing).
+#
+# The summary always states the exit code, because "it printed nothing" and "it passed" are different
+# facts and a model that cannot tell them apart will guess. Output is capped to the TAIL rather than the
+# head: a build failure names the error at the end, and truncating from the front is how a verification
+# loop ends up feeding the model a screen of successful compilation units instead of the one error.
+fn verify_run() {
+    if (verify_configured() == 0) { return 0; }
+    var cmd = config_verify_command();
+    if (_verify_buf == 0) { _verify_buf = alloc(VERIFY_OUT_CAP + 1); }
+    if (_verify_res == 0) { _verify_res = alloc(VERIFY_OUT_CAP + 512); }
+    if ((_verify_buf == 0) || (_verify_res == 0)) { return 0; }
+
+    ui_emit(ROLE_FAINT, "  verify: "); emit(cmd); oprintln("");
+    var st[16];
+    store64(&st, 0 - 1); store64(&st + 8, 0);
+    var n = exec_shell_capture(cmd, _verify_buf, VERIFY_OUT_CAP, config_verify_timeout_ms(), &st);
+    if (n < 0) { n = 0; }
+    store8(_verify_buf + n, 0);
+    var code = load64(&st);
+    var timed_out = load64(&st + 8);
+    _verify_runs = _verify_runs + 1;
+    if (code == 0) { _verify_last_ok = 1; } else { _verify_last_ok = 0; }
+
+    var cap = VERIFY_OUT_CAP + 512;
+    var off = 0;
+    off = _append_cstr_cap(_verify_res, off, cap, "\n\n[verification] `");
+    off = _append_cstr_cap(_verify_res, off, cap, cmd);
+    off = _append_cstr_cap(_verify_res, off, cap, "` ");
+    if (timed_out == 1) {
+        off = _append_cstr_cap(_verify_res, off, cap, "TIMED OUT (no verdict — the check did not finish; treat the change as unverified)");
+        ui_emit(ROLE_RED, "  verify: timed out"); oprintln("");
+    } elif (code == (0 - 1)) {
+        off = _append_cstr_cap(_verify_res, off, cap, "could not be run (spawn failed) — the change is UNVERIFIED");
+        ui_emit(ROLE_RED, "  verify: could not run"); oprintln("");
+    } elif (code == 0) {
+        off = _append_cstr_cap(_verify_res, off, cap, "PASSED (exit 0).");
+        ui_emit(ROLE_GREEN, "  verify: passed"); oprintln("");
+    } else {
+        off = _append_cstr_cap(_verify_res, off, cap, "FAILED (exit ");
+        off = _append_int_cap(_verify_res, off, cap, code);
+        off = _append_cstr_cap(_verify_res, off, cap, "). Fix this before continuing.");
+        ui_emit(ROLE_RED, "  verify: FAILED"); ui_emit(ROLE_FAINT, " (exit "); ofmt_int(code); ui_emit(ROLE_FAINT, ")"); oprintln("");
+    }
+    if (n > 0) {
+        off = _append_cstr_cap(_verify_res, off, cap, "\nOutput");
+        var from = 0;
+        if (n > VERIFY_TAIL) {
+            from = n - VERIFY_TAIL;                       # keep the TAIL — the error is at the end
+            off = _append_cstr_cap(_verify_res, off, cap, " (last ");
+            off = _append_int_cap(_verify_res, off, cap, VERIFY_TAIL);
+            off = _append_cstr_cap(_verify_res, off, cap, " of ");
+            off = _append_int_cap(_verify_res, off, cap, n);
+            off = _append_cstr_cap(_verify_res, off, cap, " bytes)");
+        }
+        off = _append_cstr_cap(_verify_res, off, cap, ":\n");
+        var i = from;
+        while ((i < n) && (off < (cap - 1))) {
+            var b = load8(_verify_buf + i) & 255;
+            if ((b < 32) && (b != 10) && (b != 9)) { b = 63; }   # same C0 policy as every other untrusted-bytes path
+            if (b == 127) { b = 63; }
+            store8(_verify_res + off, b);
+            off = off + 1;
+            i = i + 1;
+        }
+    }
+    if (off > (cap - 1)) { off = cap - 1; }
+    store8(_verify_res + off, 0);
+    return _verify_res;
+}

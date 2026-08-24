@@ -1,0 +1,186 @@
+# thoth — lifecycle hooks (0.41.0, T2-4): user-configured commands fired at agent events, able to BLOCK.
+#
+# WHY. This is the most-copied extensibility primitive in the field (Claude Code ships ~30 events; Codex
+# shipped a near-identical set), and it is the one that fits thoth's posture best rather than fighting it:
+# a `pre_tool` hook that can deny is a **deterministic, code-enforced refusal that a prompt cannot argue
+# with**. Everything else thoth has in this area is either a policy file (t-ron) or a heuristic (the shell
+# globs, the injection guard). A hook is neither — it is the operator's own program, and its exit status
+# is the whole contract.
+#
+# It is also the honest home for rules thoth's maintainer will never anticipate: "run the linter after
+# every edit", "refuse any tool call while the release branch is checked out", "log every shell command to
+# our own audit sink". Without it each of those is a feature request; with it they are four lines of shell.
+#
+# THE EVENTS, and why only these four. Peers ship dozens; thoth ships the four that correspond to real
+# decision points it already has, because an event that fires where nothing can act on it is dead weight:
+#   session_start   once, before the first turn        — inject context, warm a cache, announce a policy
+#   pre_tool        before EVERY gated tool executes   — CAN BLOCK (the load-bearing one)
+#   post_tool       after a tool has run               — react: lint, log, notify
+#   session_end     once, at exit                      — flush, clean up, report
+#
+# THE CONTRACT. A hook is a shell command. thoth runs it with the event's facts in the ENVIRONMENT (never
+# on the command line — a tool name or a shell command is attacker-influenced text, and splicing it into a
+# command string would be exactly the injection this file exists to help prevent). It is bounded by a
+# wall-clock timeout and its stdout/stderr is captured and shown.
+#
+# ⚠ The composed prefix uses `export K='v'; ` and NOT the shorter `K='v' cmd` assignment-prefix form. The
+# short form does not do what it looks like: in `FOO=bar sh -c 'echo $FOO'` the expansion happens before
+# the assignment takes effect, so a hook reading `$THOTH_TOOL` on its own command line would silently see
+# an EMPTY string — a hook that always passes, which is the worst possible failure for a security control.
+# Caught by the test that reads the variable back rather than merely asserting the hook ran.
+#
+#   exit 0        -> proceed
+#   exit non-zero -> for `pre_tool`, BLOCK the call; for the others, the failure is reported and thoth
+#                    continues (a broken post_tool hook must not wedge a session)
+#
+# ⚠ SECURITY POSTURE, stated plainly because a hook system is an execution surface.
+#  * Hooks come from the OPERATOR'S CONFIG and nowhere else. The model cannot register, read, alter or
+#    invoke one — `.thoth/config.cyml` is inside `_project_sensitive`, so it is not even readable by the
+#    model's own tools (0.39.0, A-3).
+#  * Event facts go through the ENVIRONMENT, never interpolated into the command. This is the difference
+#    between a hook system and a remote-code-execution primitive.
+#  * A hook runs UNSANDBOXED, as the user, exactly like `/run`, the `shell` tool and `[verify].command`.
+#    That is not a new risk class, but it IS a new instance of one, and when the OS-sandbox seam lands
+#    this is one of the paths that should move behind it.
+#  * `pre_tool` can only ever DENY. It cannot approve something t-ron denied — it runs after the gate, so
+#    the strictest verdict wins and a hook cannot be used to widen authority.
+
+var HOOK_OUT_CAP = 4096;        # hook output shown/captured; a hook that talks more than this is misusing the seam
+# HOOK_TIMEOUT_* and HOOK_CMD_CAP live in src/config.cyr, beside the getter that clamps with them —
+# config.cyr is included by test drivers that do NOT include this file, so a constant the config reads
+# must be declared where the config is.
+
+var _hook_buf = 0;
+var _hook_env = 0;              # the env prefix scratch ("K=v K=v ")
+var _hook_cmd = 0;              # the composed "env... sh-command" string
+var _hook_fired = 0;            # hooks run this session (for /state)
+var _hook_blocked = 0;          # pre_tool denials this session
+
+fn hooks_fired() { return _hook_fired; }
+fn hooks_blocked() { return _hook_blocked; }
+fn hooks_reset() { _hook_fired = 0; _hook_blocked = 0; return 0; }
+
+# _hook_env_append: append `KEY='value'` with the value single-quoted and any embedded quote neutralised.
+#
+# ⚠ This is the security-critical function in the file. `value` is attacker-influenced (a tool name the
+# MODEL chose, a shell command it proposed). Single-quoting is what keeps it a string: inside '...' the
+# shell expands nothing. The only byte that can escape is `'` itself, and it is replaced rather than
+# escaped — a `'\''` dance is easy to get subtly wrong, and a hook does not need byte-exact fidelity of a
+# quote character, it needs to not be an injection vector.
+fn _hook_env_append(dst, off, cap, key, value) {
+    off = _append_cstr_cap(dst, off, cap, "export ");
+    off = _append_cstr_cap(dst, off, cap, key);
+    off = _append_cstr_cap(dst, off, cap, "='");
+    if (value != 0) {
+        var i = 0;
+        while (load8(value + i) != 0) {
+            if (off >= (cap - 1)) { return off; }
+            var b = load8(value + i) & 255;
+            if (b == 39) { b = 34; }                       # ' -> "  (cannot terminate the quoting)
+            if (b == 10) { b = 32; }                       # newline -> space (keeps it one env assignment)
+            if (b < 32) { b = 32; }
+            store8(dst + off, b);
+            off = off + 1;
+            i = i + 1;
+        }
+    }
+    off = _append_cstr_cap(dst, off, cap, "'; ");
+    return off;
+}
+
+# _hook_run: run `cmd` with THOTH_EVENT/THOTH_TOOL/THOTH_ARGS exported. Returns the exit code, or -1 when
+# the hook could not be run at all (which callers treat as "did not block" — a broken hook must not become
+# an accidental deny-everything, which would be indistinguishable from thoth being broken).
+fn _hook_run(cmd, event, tool, args) {
+    if (_hook_buf == 0) { _hook_buf = alloc(HOOK_OUT_CAP + 1); }
+    if (_hook_cmd == 0) { _hook_cmd = alloc(HOOK_CMD_CAP); }
+    if ((_hook_buf == 0) || (_hook_cmd == 0)) { return 0 - 1; }
+    var cap = HOOK_CMD_CAP;
+    var off = 0;
+    off = _hook_env_append(_hook_cmd, off, cap, "THOTH_EVENT", event);
+    off = _hook_env_append(_hook_cmd, off, cap, "THOTH_TOOL", tool);
+    off = _hook_env_append(_hook_cmd, off, cap, "THOTH_ARGS", args);
+    off = _append_cstr_cap(_hook_cmd, off, cap, cmd);
+    if (off > (cap - 1)) { off = cap - 1; }
+    store8(_hook_cmd + off, 0);
+
+    var st[16];
+    store64(&st, 0 - 1); store64(&st + 8, 0);
+    var n = exec_shell_capture(_hook_cmd, _hook_buf, HOOK_OUT_CAP, config_hook_timeout_ms(), &st);
+    if (n < 0) { n = 0; }
+    store8(_hook_buf + n, 0);
+    _hook_fired = _hook_fired + 1;
+    var code = load64(&st);
+    if (load64(&st + 8) == 1) {
+        ui_emit(ROLE_RED, "  [hook "); emit(event); ui_emit(ROLE_RED, "] timed out"); oprintln("");
+        return 0 - 1;                                       # a timeout is "could not run", not a deny
+    }
+    if (n > 0) {
+        ui_emit(ROLE_FAINT, "  [hook "); emit(event); ui_emit(ROLE_FAINT, "] ");
+        # hook output is a program's stdout — same C0 policy as every other untrusted-bytes-to-terminal path
+        var i = 0;
+        while (i < n) {
+            var b = load8(_hook_buf + i) & 255;
+            if ((b < 32) && (b != 10)) { b = 63; }
+            if (b == 127) { b = 63; }
+            store8(_hook_buf + i, b);
+            i = i + 1;
+        }
+        emit(_hook_buf);
+        oprintln("");
+    }
+    return code;
+}
+
+# hooks_session_start / hooks_session_end: fire-and-report. A non-zero exit is announced but never fatal —
+# a session must not be unstartable because a notification script is broken.
+fn hooks_session_start() {
+    var c = config_hook_session_start();
+    if (c == 0) { return 0; }
+    if (load8(c) == 0) { return 0; }
+    if (shell_supported() == 0) { return 0; }
+    var rc = _hook_run(c, "session_start", "", "");
+    if (rc > 0) { ui_emit(ROLE_FAINT, "  [hook session_start] exited "); ofmt_int(rc); ui_emit(ROLE_FAINT, " (continuing)"); oprintln(""); }
+    return 0;
+}
+
+fn hooks_session_end() {
+    var c = config_hook_session_end();
+    if (c == 0) { return 0; }
+    if (load8(c) == 0) { return 0; }
+    if (shell_supported() == 0) { return 0; }
+    _hook_run(c, "session_end", "", "");
+    return 0;
+}
+
+# hooks_pre_tool: 1 = proceed, 0 = BLOCKED by the hook. THE load-bearing event.
+#
+# Returns 1 (proceed) when no hook is configured, when the target cannot run one, AND when the hook could
+# not be run at all. That last case is deliberate: a hook that fails to spawn must not silently become a
+# deny-everything, which would present as thoth mysteriously refusing every tool. A hook denies by
+# EXITING NON-ZERO, which is a decision it actually made.
+fn hooks_pre_tool(tool, args) {
+    var c = config_hook_pre_tool();
+    if (c == 0) { return 1; }
+    if (load8(c) == 0) { return 1; }
+    if (shell_supported() == 0) { return 1; }
+    var rc = _hook_run(c, "pre_tool", tool, args);
+    if (rc <= 0) { return 1; }                              # 0 = allow; -1 = could not run -> do not fake a deny
+    _hook_blocked = _hook_blocked + 1;
+    ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); emit(tool);
+    ui_emit(ROLE_FAINT, " (exit "); ofmt_int(rc); ui_emit(ROLE_FAINT, ")"); oprintln("");
+    log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool);
+    log_kv_int("blocked", 1); log_commit(SK_WARN);
+    return 0;
+}
+
+# hooks_post_tool: fire-and-report after a tool has run. Cannot block — the work is already done, and a
+# hook that pretended otherwise would be lying about what it can undo.
+fn hooks_post_tool(tool, args) {
+    var c = config_hook_post_tool();
+    if (c == 0) { return 0; }
+    if (load8(c) == 0) { return 0; }
+    if (shell_supported() == 0) { return 0; }
+    _hook_run(c, "post_tool", tool, args);
+    return 0;
+}

@@ -2,6 +2,155 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.41.0] - 2026-08-24
+
+**Four of the five scheduled Tier-2 items. The fifth — OS sandboxing — is NOT here, and the reason is a
+design finding rather than a shortfall.** Suite **264 + 1778 + 183 + 3** (+58), all targets green.
+
+### Added — conversation forking (T2-6)
+
+- **`/fork [title]`** (aliased `/branch`) — take the transcript to a branch point and continue down a
+  different path with the ORIGINAL intact. The conversation store already did the hard part; this is one
+  more operation on it.
+
+  ⚠ **Message RECORDS are copied, not shared, and that is load-bearing.** A record's last two fields are
+  attached LAZILY after the message exists — `citations_attach_to_last` writes +32 and
+  `roundlog_attach_calls_to_last` writes +40, both on the newest message. Sharing records would make the
+  parent's next citation appear inside the fork, so the two would silently rewrite each other's history at
+  exactly the point they were meant to diverge. The strings they point at (content, model id) ARE shared,
+  because those are written once and never rewritten. Copy what mutates, share what cannot.
+
+### Added — the verification loop (T2-5)
+
+- **`[verify].command`** — after the model writes, run the project's own check and hand the model the
+  result. thoth had every ingredient (shell capture, timed exec, roundlog) and closed nothing with them: a
+  model that broke the build learned it only if the user said so.
+
+  The result is folded into the WRITE'S TOOL RESULT rather than pushed as its own message. The wire
+  protocol pairs `{role:tool, tool_call_id, content}` to a specific call; a message with no call to pair
+  to would need a fake id or break the alternation. Folding it in is protocol-safe, costs no extra round,
+  and puts the failure where the model already looks.
+
+  Over-cap output keeps the **TAIL**, not the head — a compiler names its error at the end, and truncating
+  from the front is how a verification loop feeds the model a screen of successful compilation units
+  instead of the one error. The summary always states the exit code, because "printed nothing" and
+  "passed" are different facts.
+
+  ⚠ The command is the OPERATOR'S, from config and nowhere else — the model cannot propose, alter or read
+  it. That is what keeps it from being a new injection surface. It is still unsandboxed execution, same
+  footing as `/run`.
+
+### Added — lifecycle hooks (T2-4)
+
+- **`[hooks]`** — `session_start`, `pre_tool`, `post_tool`, `session_end`. Four events, not the dozens
+  peers ship, because an event that fires where nothing can act on it is dead weight.
+
+  **`pre_tool` can BLOCK** on a non-zero exit, and that is the point: a deterministic, code-enforced
+  refusal that a prompt cannot argue with. It can only ever DENY — it runs alongside the t-ron gate, so
+  the strictest verdict wins and a hook can never widen authority.
+
+  ⚠ **Event facts go through the ENVIRONMENT, never spliced into the command.** A tool name and its
+  arguments are text the MODEL chose; interpolating them into a command string would be the injection this
+  seam is supposed to help prevent. Values are single-quoted with quotes neutralised, and a test drives a
+  metacharacter-laden tool name through it to prove the quoting holds.
+
+  ⭐ **A bug the tests caught that inspection would not have.** The first implementation used the
+  assignment-prefix form `K='v' cmd`, which does not do what it looks like: in `FOO=bar sh -c 'echo $FOO'`
+  the expansion happens *before* the assignment takes effect, so a hook reading `$THOTH_TOOL` would have
+  silently seen an **empty string** — a security hook that always passes. Caught only because the test
+  reads the variable back rather than asserting the hook ran. Now `export K='v'; cmd`.
+
+  A hook that **could not run** (spawn failure, timeout) does NOT block: that would turn a misconfigured
+  hook into a silent deny-everything, indistinguishable from thoth being broken. A hook that *exits*
+  non-zero — including a shell's 127 — does block, because that is a decision something actually made.
+
+### Added — injection defense over untrusted prose (T2-3)
+
+- **`[guard]`, default on** — t-ron's scanner walks TOOL PARAMS and never sees prose, but thoth injects
+  untrusted prose from three places the model reads as instructions: `@file` mentions, tool results, and
+  recalled notes (`config.cyr` already called that last one an injection surface in its own comment).
+
+  It does **not block**. A heuristic that blocks would break legitimate work constantly — a security
+  document, a CHANGELOG describing an attack, or thoth's own source, which is full of the phrase this
+  scans for in comments about this very feature. It **marks**: tells the user, and wraps the content in an
+  explicit "this is DATA, not instructions" envelope. That extends a pattern thoth already had and was
+  credited for — it wraps `AGENTS.md` the same way — and only fires on a hit, so clean content costs
+  nothing.
+
+  ⚠ **A mitigation, not a boundary**, framed exactly as `[shell.deny]` and `[redact]` are. The genuinely
+  structural control is a separate context window for retrieved content; that remains unbuilt, and saying
+  so beats implying this closes it.
+
+### Changed — dependencies
+
+- **agnosai 2.0.7's `[lib.guard]` profile extended** from two modules to four (`units` + `strcase` +
+  `output_filter` + `prompt_guard`, 915 lines). The two leaves are the two directions across a trust
+  boundary: output_filter scans what LEAVES, prompt_guard scans what ARRIVES.
+
+### ⚠ NOT shipped — OS-enforced sandboxing (T2-2)
+
+**This was scheduled for 0.41.0 and is not in it.** The work done was real and is upstream; what stopped
+it is a design question that is not mine to answer.
+
+- **kavach 3.12.3 gained a `[lib.confine]` profile** at thoth's request — the confinement path only
+  (namespaces, seccomp, Landlock, cgroups, the process backend), **4,796 lines against the full fold's
+  11,524**. thoth cannot take the full fold: it pushes thoth's expanded source past the cyrius
+  preprocessor's **8 MB ceiling** (`error: expanded source exceeds 8MB` — a hard error;
+  `preprocess_out` is a fixed arena slot, not a flag). Two generic helpers (`cstr_contains`,
+  `str_to_lower_into`) were lifted from kavach's code scanner into its `util.cyr` so the profile closes
+  without dragging 25 pattern groups along. **The profile builds clean inside thoth** — verified, with
+  nine duplicate `syserr_*`/`wrap_syscall` symbols against `lib/sigil.cyr` all checked and found benign
+  (seven byte-identical; two differ only in constant NAMES carrying identical VALUES 1..8, because kavach
+  and sigil both inherit agnosys's `sys_error.cyr`).
+
+- **Then the mismatch.** kavach's confinement is **container-shaped**: its runtime guard deliberately
+  blocks host interpreters (`sh`, `bash`, `python3`) when there is no rootfs, because on the host "the
+  name `sh` resolves to the host's `/bin/sh` and running it is an escape". thoth's `shell` tool **is** a
+  host-shell invocation (`/bin/sh -c '<command>'`). Routing it through kavach's process backend as-is
+  would have every call refused with exit 126.
+
+- **Why I stopped rather than working around it.** kavach's guard is already config-driven — it disables
+  the blocklist when a rootfs is present — so a "confinement is applied, so the interpreter blocklist is
+  not the control" mode is a small change. But that is a **security-policy judgment inside kavach's threat
+  model**, and the first-party standard this whole item rests on says applications never manage their own
+  security boundaries: *"kavach owns the sandbox, not the application"*, drawn from the VIM modeline CVE
+  where an editor's own features bypassed its own sandbox. Making that call unilaterally, in a TUI, would
+  be the exact failure the standard exists to prevent.
+
+  A `[sandbox]` key that could only ever refuse — or worse, one that announced "confined" while nothing
+  was confined — would be a promise thoth cannot keep. The seam was written, then **removed rather than
+  shipped**.
+
+  **The decision needed** (for kavach's owner): should `[lib.confine]` support a no-rootfs host mode where
+  namespaces + seccomp + Landlock are the control and the interpreter blocklist stands down? If yes, the
+  thoth side is small and already designed.
+
+### Fixed — TOML literal strings reached config consumers with their quotes
+
+- ⛔ **`model = 'x'` produced the model id `'x'`, quotes included** — and the gateway 404'd on a name
+  nobody could see was wrong. Every string config key was affected. `_cfg_unquote` now strips one matching
+  pair of surrounding single quotes.
+
+  ⭐ **Found by live-testing 0.41.0's hooks against a real spine, and it was worse than a cosmetic bug.**
+  Single quotes are the natural choice for a value containing double quotes — which is exactly what a
+  shell command in `[hooks]` or `[verify]` looks like. A `[hooks].pre_tool` written that way became an
+  unrunnable command; an unrunnable command exits non-zero; and **a non-zero exit is how `pre_tool`
+  DENIES**. So the documented form of the feature silently blocked every tool call in the session. The
+  unit tests never caught it because they set the config vars directly and never went through the parser —
+  the new test sits at that boundary instead.
+
+  ⚠ **Residual, documented rather than fixed**: a TOML literal string that CONTAINS a double quote is
+  still truncated at that quote, upstream in bayan's parser. The config example now uses the
+  double-quoted-with-escapes form, which is verified working end to end.
+
+### Verified
+
+- Builds `OK` on **x86_64 Linux**, **`--aarch64`** and **`--agnos`**; no new warning classes.
+- Suite **264 + 1787 + 183 + 3** (+67), zero failures.
+- **Live against the real spine** (hoosh 2.6.3 / daimon 2.0.2 / bote 3.3.7 / mneme 1.1.3): a `pre_tool`
+  hook fired on a real model tool call with `$THOTH_TOOL` carrying the real value; `search` located
+  `conv_fork` correctly; the fail-closed confirm correctly denied a one-shot `create_file`.
+
 ## [0.40.0] - 2026-08-24
 
 **All six Tier-1 items from the gap review, shipped.** 0.39.0's review ranked what the agentic-harness

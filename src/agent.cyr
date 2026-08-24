@@ -83,6 +83,29 @@ fn _agent_add_assistant(raw_tcs) {
     _agent_work_puts("}");
     return 0;
 }
+# _agent_verify_append: run the configured verification and fold its summary onto a write tool's result
+# (0.41.0, T2-5). Returns the ORIGINAL result unchanged when verification is not configured.
+#
+# ⚠ ONE VERIFICATION PER WRITE, and one buffer, so the result must be copied out before the next write
+# reuses it. The concatenation lands in _agent_verify_buf rather than mutating the tool's own result
+# buffer, which the caller may still hold.
+var AGENT_VERIFY_CAP = 24576;
+var _agent_verify_buf = 0;
+fn _agent_verify_append(res) {
+    if (verify_configured() == 0) { return res; }
+    var v = verify_run();
+    if (v == 0) { return res; }
+    if (_agent_verify_buf == 0) { _agent_verify_buf = alloc(AGENT_VERIFY_CAP); }
+    if (_agent_verify_buf == 0) { return res; }
+    var cap = AGENT_VERIFY_CAP;
+    var off = 0;
+    if (res != 0) { off = _append_cstr_cap(_agent_verify_buf, off, cap, res); }
+    off = _append_cstr_cap(_agent_verify_buf, off, cap, v);
+    if (off > (cap - 1)) { off = cap - 1; }
+    store8(_agent_verify_buf + off, 0);
+    return _agent_verify_buf;
+}
+
 # Append a tool-result message for a given tool_call id.
 fn _agent_add_result(id, text) {
     _agent_work_sep();
@@ -92,7 +115,10 @@ fn _agent_add_result(id, text) {
     # 0.40.0 (T1-3): redact HERE, the single chokepoint where a tool result becomes a transcript message.
     # Upstream of every sink at once — the feed, the conversation store, /save, and the next request to
     # the gateway — so a secret caught here never leaves the machine at all. No-op when [redact] is off.
-    if (text != 0) { _agent_work_puts_esc(redact_tool_result(text)); }
+    # 0.40.0 (T1-3) redaction and 0.41.0 (T2-3) injection-guarding, in that ORDER and both at this one
+    # chokepoint. Redact first: a secret must not survive into the wrapped copy the guard would build,
+    # and the guard's envelope text must not itself be scanned for secrets.
+    if (text != 0) { _agent_work_puts_esc(guard_wrap_untrusted(redact_tool_result(text), "a tool result")); }
     _agent_work_puts("\"}");
     return 0;
 }
@@ -886,6 +912,10 @@ fn _agent_run_calls_serial(tcs, nc) {
         var t0 = clock_now_ms();                # 0.19.1: time the gate+invoke
         if (nm == 0) { res = "(no tool name)"; rl_kind = RL_NONAME; }
         elif (strlen(gp) > AGENT_ARGS_MAX) { res = "(tool arguments too large; call refused — split into smaller calls)"; rl_kind = RL_DENIED; }
+        # 0.41.0 (T2-4): the operator's pre_tool hook. Placed HERE — before the per-tool arms, so it sees
+        # EVERY tool including the local ones — and it can only ever DENY. A hook cannot approve what
+        # t-ron denied, because each arm still runs its own gate below; the strictest verdict wins.
+        elif (hooks_pre_tool(nm, gp) == 0) { res = "(blocked by the pre_tool hook)"; rl_kind = RL_DENIED; }
         elif (streq(nm, "memory_write") == 1) {
             # thoth-native tool (0.12.2): the model saves a durable fact to project
             # memory. Gated under thoth_remember — executed LOCALLY, NOT via daimon.
@@ -950,6 +980,7 @@ fn _agent_run_calls_serial(tcs, nc) {
                 rl_ok = edit_last_ok();
                 if (edit_last_ok() == 1) {                            # 0.31.1: record the edit's diff for the feed card
                     editlog_record(session_turns(), roundlog_cur_round(), ci, edit_last_path(), edit_last_old(), edit_last_old_len(), edit_last_new(), edit_last_new_len());
+                    res = _agent_verify_append(res);                   # 0.41.0 (T2-5): run the project's check, fold it in
                 }
             } else {
                 res = "(edit tool is not enabled in this session)";
@@ -966,6 +997,7 @@ fn _agent_run_calls_serial(tcs, nc) {
                 rl_ok = edit_last_ok();
                 if (edit_last_ok() == 1) {
                     editlog_record(session_turns(), roundlog_cur_round(), ci, edit_last_path(), edit_last_old(), edit_last_old_len(), edit_last_new(), edit_last_new_len());
+                    res = _agent_verify_append(res);                   # 0.41.0 (T2-5): same loop for a new file
                 }
             } else {
                 res = "(create_file tool is not enabled in this session)";
@@ -992,6 +1024,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         var ms = clock_now_ms() - t0;           # 0.19.1: invoke wall-time
         spin_label_clear();
         var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1: result byte count
+        if (nm != 0) { hooks_post_tool(nm, gp); }                # 0.41.0 (T2-4): after the work; cannot block
         _agent_call_telem(rl_kind, rl_ok, ms, bytes);           # 0.19.1: faint telemetry sub-line
         roundlog_add_call(nm, rl_kind, rl_ok, ms, bytes, ar);   # 0.30.17: + the raw args for the card/audit summary
         _agent_add_result(id, res);

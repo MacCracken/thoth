@@ -7,6 +7,38 @@
 
 ## Version
 
+**0.41.0** — **four of five Tier-2 items; the fifth is a design finding, not a shortfall** (2026-08-24).
+**T2-6 `/fork`** — the conversation store already did the hard part; message RECORDS are copied (their last
+two fields are attached lazily AFTER creation, so sharing would let the parent's next citation appear inside
+the fork) while the immutable strings are shared. **T2-5 `[verify].command`** — after a model write, run the
+project's check and fold the result into that write's TOOL RESULT (protocol-safe; a separate message would
+need a fake tool_call_id); over-cap output keeps the TAIL, where a compiler names its error. **T2-4
+`[hooks]`** — four events, and `pre_tool` BLOCKS on a non-zero exit: a code-enforced deny a prompt cannot
+argue with, which can only ever narrow authority since the t-ron gate still runs. Event facts go through the
+ENVIRONMENT, never spliced into the command. ⭐ The first cut used `K='v' cmd`, where the expansion happens
+BEFORE the assignment — a security hook that would silently always pass; caught only because the test reads
+the variable back. **T2-3 `[guard]`**, default on — untrusted prose (@mentions, tool results, recalled notes)
+is scanned and, on a hit, MARKED with an untrusted-data envelope rather than blocked; blocking on a heuristic
+would break legitimate work, including reading thoth's own source. agnosai's `[lib.guard]` profile extended
+to four modules to supply it.
+⛔ **T2-2 (OS sandboxing) did NOT ship.** kavach **3.12.3** gained a `[lib.confine]` profile at thoth's
+request (4,796 lines vs the full fold's 11,524 — the full one exceeds cyrius's hard 8 MB preprocessor
+ceiling) and it builds clean inside thoth, with all nine `syserr_*` duplicates against sigil verified
+benign. But kavach's confinement is **container-shaped**: its runtime guard blocks host interpreters when
+there is no rootfs, and thoth's `shell` tool IS a host-shell invocation, so every call would be refused.
+Working around it means disabling kavach's interpreter blocklist — a security-policy judgment inside
+kavach's threat model, which the first-party standard ("kavach owns the sandbox, not the application")
+forbids thoth from making. The seam was written and then REMOVED rather than shipped as a promise thoth
+cannot keep. **Decision needed from kavach's owner**: should `[lib.confine]` support a no-rootfs host mode
+where namespaces + seccomp + Landlock are the control? The thoth side is small and already designed.
+Also **fixed a pre-existing config bug the live test exposed**: TOML literal strings reached consumers WITH
+their quotes (`model = 'x'` → the id `'x'`), which for `[hooks].pre_tool` meant an unrunnable command, a
+non-zero exit, and therefore a hook that silently blocked EVERY tool call — the documented form of the
+feature. The unit tests missed it because they set config vars directly and never crossed the parser.
+Residual: a literal string containing a double quote is still truncated upstream in bayan; the config
+example uses the verified double-quoted-with-escapes form.
+Suite **264 + 1787 + 183 + 3** (+67); all targets green; hooks and search live-verified against the spine.
+
 **0.40.0** — **all six Tier-1 gap-review items shipped** (2026-08-24). 0.39.0 ranked what the harness field
 does that thoth did not; this closes the top tier. **T1-1 `search`** (`src/search.cyr`) — the model could not
 find anything it had not been told the name of; one tool, `glob` for names and `pattern` for literal content,

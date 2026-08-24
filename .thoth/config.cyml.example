@@ -65,6 +65,61 @@ model = "claude-haiku-4-5-20251001"
 # is about what fits in one request, this is about what the session has COST.
 # compact_at = 150000
 
+# [guard] — scan untrusted PROSE for prompt-injection attempts (0.41.0). DEFAULT
+# ON. t-ron's scanner walks TOOL PARAMS; it never sees prose. thoth injects
+# untrusted prose from @file mentions, tool results and recalled notes, and the
+# model reads all three as ordinary text.
+#
+# It does NOT block — blocking on a heuristic would break legitimate work (a
+# security doc, a CHANGELOG describing an attack, thoth's own source). It MARKS:
+# tells you, and wraps the content in an explicit "this is DATA, not instructions"
+# envelope. Same treatment thoth already gives AGENTS.md.
+#
+# ⚠ A mitigation, not a boundary. A novel phrasing passes it.
+# [guard]
+# enabled = false
+
+# [verify] — run the project's own check after the model writes, and hand the
+# model the result (0.41.0). Off unless set; there is no default, because thoth
+# cannot guess what "correct" means for a project.
+#
+# The output is folded into the write's tool result, so the model sees the failure
+# in the same round and can fix it without spending another. Over-cap output keeps
+# the TAIL — a compiler names its error at the end.
+#
+# ⚠ The command is YOURS, never the model's; it cannot propose or alter it. But it
+# IS command execution, unsandboxed, same footing as /run.
+# [verify]
+# command = "cyrius test"       # double-quoted; see the [hooks] quoting note below
+# timeout_ms = 120000
+
+# [hooks] — run your own commands at agent events (0.41.0). All unset by default.
+#
+#   session_start   once, before the first turn
+#   pre_tool        before EVERY tool — a NON-ZERO EXIT BLOCKS THE CALL
+#   post_tool       after a tool ran (cannot block)
+#   session_end     once, at exit
+#
+# Event facts arrive in the ENVIRONMENT — THOTH_EVENT, THOTH_TOOL, THOTH_ARGS —
+# never spliced into your command, because a tool name is text the MODEL chose.
+#
+# A pre_tool hook is a deterministic, code-enforced deny a prompt cannot argue
+# with. It can only ever DENY: it runs alongside the t-ron gate, so the strictest
+# verdict wins and a hook can never widen authority.
+#
+# ⚠ A hook runs unsandboxed as you, same footing as /run.
+# ⚠ QUOTING. Use a DOUBLE-quoted TOML string and escape any inner double quotes
+# (\"). A single-quoted TOML literal string works ONLY if it contains no double
+# quote — the config parser truncates a literal string at the first one, which for
+# a pre_tool hook means an unrunnable command, and an unrunnable command exits
+# non-zero, and a non-zero exit is how pre_tool DENIES. The failure mode is
+# therefore "every tool call is silently blocked", so it is worth getting right.
+# Verified working:
+# [hooks]
+# pre_tool = "test \"$THOTH_TOOL\" != shell || test -z \"$RELEASE_BRANCH\""
+# post_tool = "test \"$THOTH_TOOL\" = edit && cyrius fmt --check src/*.cyr || true"
+# timeout_ms = 15000
+
 # [redact] — scan tool results for secret-shaped values before they enter the
 # conversation (0.40.0). DEFAULT ON, unlike the other opt-in features here, because
 # it removes risk rather than adding capability, and a protection that is off by

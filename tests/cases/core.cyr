@@ -476,6 +476,64 @@ fn test_hoosh() {
     # /compact and [hoosh].compact_at act BEFORE the pressure bites, which needs a forced eviction point.
     # These pin the property that makes the floor safe: it can only ever evict MORE than the byte budget
     # would, never fewer (the other direction would re-admit history the framer decided cannot fit).
+    # --- conversation forking (0.41.0, T2-6) ---
+    # The store already did the hard part; a fork is one more operation on it. The load-bearing property
+    # is that the two conversations DIVERGE: message RECORDS are copied because their last two fields are
+    # attached lazily after the message exists (citations at +32, tool calls at +40, both on the newest
+    # message), so sharing records would let the parent's next attach appear inside the fork.
+    # 0.41.0: TOML LITERAL STRINGS were reaching consumers WITH THEIR QUOTES. `model = 'x'` produced the
+    # model id `'x'`, quotes included, and the gateway 404'd on a name nobody could see was wrong. It bites
+    # hardest on the keys most likely to use single quotes — a shell command in [hooks] or [verify] — and
+    # for [hooks].pre_tool the result was catastrophic-but-silent: an unrunnable command exits non-zero,
+    # and a non-zero exit is how pre_tool DENIES, so every tool call in the session was blocked.
+    # Found by LIVE-testing against a real spine; the unit tests set config vars directly and so never went
+    # through the parser at all. That gap is why this test exists at the parser boundary.
+    test_group("config literal-string unquoting (config.cyr, 0.41.0)");
+    assert(streq(_cfg_unquote("'quoted'"), "quoted") == 1, "a matching single-quote pair is stripped");
+    assert(streq(_cfg_unquote("plain"), "plain") == 1, "an unquoted value is untouched");
+    assert(streq(_cfg_unquote("\"double\""), "\"double\"") == 1, "double quotes are NOT stripped here (handled upstream)");
+    assert(streq(_cfg_unquote("'unterminated"), "'unterminated") == 1, "a leading quote alone is not a pair");
+    assert(streq(_cfg_unquote("trailing'"), "trailing'") == 1, "a trailing quote alone is not a pair");
+    assert(streq(_cfg_unquote("'"), "'") == 1, "the single-character quote is left alone (needs two bytes)");
+    assert(streq(_cfg_unquote("''"), "") == 1, "an empty literal string unquotes to empty");
+    assert_eq(_cfg_unquote(0), 0, "a null value stays null");
+    assert(streq(_cfg_unquote("'has space and / slash'"), "has space and / slash") == 1, "content is preserved verbatim");
+
+    test_group("conversation forking (session.cyr, 0.41.0)");
+    session_history_clear();
+    var fbase = conv_active();
+    session_history_append("user", "first", 5);
+    session_history_append("assistant", "reply", 5);
+    assert_eq(session_history_len(), 2, "parent has two messages");
+    var fidx = conv_fork(fbase);
+    assert(fidx >= 0, "fork returns a new index");
+    assert(fidx != fbase, "...distinct from the source");
+    assert_eq(conv_active(), fidx, "fork switches to the branch");
+    assert_eq(session_history_len(), 2, "the fork carries the transcript");
+    assert(streq(session_history_content(0), "first") == 1, "content came across");
+    # DIVERGENCE: appending on the fork must not touch the parent
+    session_history_append("user", "only-on-fork", 12);
+    assert_eq(session_history_len(), 3, "fork grew to three");
+    conv_switch(fbase);
+    assert_eq(session_history_len(), 2, "the PARENT is untouched — still two");
+    assert(streq(session_history_content(1), "reply") == 1, "parent's last message is unchanged");
+    # and the reverse direction
+    session_history_append("user", "only-on-parent", 14);
+    assert_eq(session_history_len(), 3, "parent grew independently");
+    conv_switch(fidx);
+    assert_eq(session_history_len(), 3, "fork still has ITS three");
+    assert(streq(session_history_content(2), "only-on-fork") == 1, "...with its own third message, not the parent's");
+    # the record copy is what makes a lazily-attached field diverge too
+    conv_switch(fbase);
+    citations_reset();
+    session_history_clear();
+    conv_switch(fidx);
+    session_history_clear();
+    conv_switch(fbase);
+    assert_eq(conv_fork(0 - 1), 0 - 1, "an out-of-range source is refused");
+    assert_eq(conv_fork(9999), 0 - 1, "...in both directions");
+    session_history_clear();
+
     test_group("forced compaction floor (hoosh.cyr, 0.40.0)");
     session_history_clear();
     hoosh_compact_floor_clear();

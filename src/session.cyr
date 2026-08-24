@@ -139,6 +139,57 @@ fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_act
 # so carrying it across a switch would evict an arbitrary prefix of the conversation you switched TO —
 # silently, and by a number that means nothing there. 0.40.0 (T1-5).
 fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; hoosh_compact_floor_clear(); } } return _conv_active; }
+
+# conv_fork: copy conversation `i` into a NEW conversation, switch to it, and return its index (or -1).
+# 0.41.0 (T2-6). The store already did the hard part — keyed, named, persisted, switchable conversations —
+# so a fork is one more operation on the same structure: take the transcript to a branch point and explore
+# a different path with the original left intact. Peers all ship this (Claude Code `/branch`, `codex fork`,
+# Goose duplicate).
+#
+# ⚠ THE MESSAGE RECORDS ARE COPIED, NOT SHARED, and that is load-bearing rather than defensive. A message
+# record is 48 bytes and its last two fields are attached LAZILY AFTER the message exists —
+# `citations_attach_to_last` writes +32 and `roundlog_attach_calls_to_last` writes +40, both on the NEWEST
+# message. Sharing records would make the parent's next citation attach appear inside the fork (and vice
+# versa), so the two conversations would silently rewrite each other's history at exactly the point they
+# were supposed to diverge.
+#
+# The strings the records POINT AT are shared, deliberately: content (+8) and the per-message model id
+# (+24) are written once at append and never rewritten, so copying them would duplicate every byte of the
+# transcript for no benefit. That asymmetry is the whole design — copy what mutates, share what cannot.
+#
+# The recap TEXT is shared for the same reason (a recap cstr is replaced wholesale, never edited in place),
+# but `dropped` is NOT carried over: it counts messages this conversation destructively lost to the history
+# cap, and the fork has lost none of its own.
+fn conv_fork(i) {
+    _conv_ensure();
+    if (i < 0) { return 0 - 1; }
+    if (i >= conv_count()) { return 0 - 1; }
+    var src = _conv_at(i);
+    var t = conv_title(i);
+    var tcopy = 0;
+    if (t != 0) { tcopy = conv_dup_title(t); }        # an UNTITLED conversation has title 0; dup would deref it
+    var c = _conv_alloc(tcopy);
+    if (c == 0) { return 0 - 1; }
+    var sv = load64(src + 32);
+    var dv = load64(c + 32);
+    var n = vec_len(sv);
+    var k = 0;
+    while (k < n) {
+        var sm = vec_get(sv, k);
+        var dm = alloc(48);
+        if (dm == 0) { return 0 - 1; }
+        var b = 0;
+        while (b < 48) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included)
+        vec_push(dv, dm);
+        k = k + 1;
+    }
+    store64(c + 48, load64(src + 48));      # recap text — replaced wholesale, never edited, so sharing is safe
+    store64(c + 56, load64(src + 56));      # ...and the range it covers travels with it
+    vec_push(_conv_store, c);
+    _conv_active = vec_len(_conv_store) - 1;
+    hoosh_compact_floor_clear();            # the floor indexes a history that is now a different object
+    return _conv_active;
+}
 # conv_delete: remove conversation `i` (never the last — always keep one). Fixes up _conv_active so it still
 # points at a valid, sensible conversation. Returns 1 if removed, 0 if refused (last one / out of range).
 fn conv_delete(i) {
