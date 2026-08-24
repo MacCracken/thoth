@@ -1068,6 +1068,26 @@ fn test_ftree() {
     _ftree_append("src", 1, 0);
     _ftree_append("VERSION", 0, 0);
     assert_eq(ftree_count(), 2, "two root entries");
+    # 0.39.0 (audit A-7/A-8): a FILENAME is untrusted input — an attacker who can land a file in the tree
+    # (a cloned repo, a package, an archive) controls these bytes. Two sinks read them: the tree pane
+    # writes the name to the terminal via emit_raw_n, and feed_clip deliberately copies an unrecognised
+    # escape VERBATIM (it must, to carry thoth's own role markers), so an embedded ESC[2J could clear the
+    # user's screen or forge output; and @-Tab completion inserted the same raw bytes into the composer,
+    # bypassing the filter led_paste already applies. Sanitised at the single ingestion chokepoint.
+    ftree_reset();
+    _ftree_append("evil\x1b[2Jname", 0, 0);          # ESC + CSI erase-display embedded in a filename
+    var esc_name = ftree_name(0);
+    assert_eq(_t_has_esc(esc_name, strlen(esc_name)), 0, "no ESC byte survives into the tree model");
+    assert(streq(esc_name, "evil?[2Jname") == 1, "ESC is substituted by '?', preserving width");
+    ftree_reset();
+    _ftree_append("bel\x07tab\x09del\x7f", 0, 0);   # BEL, TAB, DEL — the rest of the C0/DEL class
+    assert(streq(ftree_name(0), "bel?tab?del?") == 1, "every C0 control and DEL is substituted");
+    ftree_reset();
+    _ftree_append("ünïcode-ok.cyr", 0, 0);            # high bytes (UTF-8) must pass through untouched
+    assert(streq(ftree_name(0), "ünïcode-ok.cyr") == 1, "UTF-8 bytes are NOT mangled (>= 128 passes)");
+    ftree_reset();
+    _ftree_append("src", 1, 0);
+    _ftree_append("VERSION", 0, 0);
     assert_eq(ftree_isdir(0), 1, "src is a dir");
     var pb[256];
     ftree_path(1, &pb, 256);

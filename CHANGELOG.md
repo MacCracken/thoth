@@ -2,6 +2,156 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.39.0] - 2026-08-24
+
+**A P(-1) hardening sweep, and it found real things.** Six parallel auditors over thoth's 19,500 authored
+lines, each finding handed to an independent skeptic briefed to **refute** it: 26 filed, **17 confirmed, 1
+refuted**. Two were reproduced by the verifiers as live crashes rather than argued on paper. **All 11
+distinct issues are fixed here**, each with a regression test. Full record:
+[`docs/audit/2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md).
+
+Also shipping: a review of what the agentic-harness field does that thoth does not, and what the newly
+Cyrius-ported **agnosai** can honestly supply —
+[`docs/development/agentic-improvements-review.md`](docs/development/agentic-improvements-review.md). It is
+a **proposal document; nothing in it is built or decided.**
+
+⭐ **The theme worth carrying forward: a documented residual is a claim with an expiry date.** The worst
+finding (A-1) was *already written down and accepted* in two files and an ADR, on the grounds that there
+was "no portable `O_NOFOLLOW`". That premise was true when written and false by the time it was relied on —
+`lib/fs.cyr` ships a portable `is_symlink`. Nothing was re-checking it. The second lesson is adjacent: a
+correct filter had been applied to one sink (`led_paste`) and never to its two siblings.
+
+### Fixed — the jail
+
+- ⛔ **A symlink in the project defeated the file jail — read AND write** (`src/project.cyr`,
+  `src/edit.cyr`). The jail was purely LEXICAL: it refused `/`, `~` and `..` and nothing else, so a path
+  that is lexically clean but resolves through a **symlink** left the project entirely. **Demonstrated, not
+  theorised**: with `_jailprobe -> /etc` in the tree, `read_file {"path":"_jailprobe/hostname"}` returned
+  the real contents of `/etc/hostname` with the jail reporting the path as safe. The write side was worse —
+  `edit`/`create_file` took the same check, so a link redirected a write anywhere the user can write. The
+  attacker needs **no shell**: only a symlink in a repo the user opens thoth in, which `git clone`
+  faithfully reproduces. Now `_project_no_symlink` tests **every** component (`link/sub/file` escapes
+  through `link`, not the last component) via the stdlib's portable `is_symlink`, at all four tool
+  boundaries; the pure lexical predicates stay pure and the I/O check sits where I/O already happens. Fails
+  closed on OOM and on an over-long path. **Residual now stated**: `is_symlink` is a no-op on Windows, so
+  the PE lane must not ship without revisiting it.
+
+- ⛔ **thoth handed the model its own bearer token** (`src/project.cyr`, `src/edit.cyr`). `.thoth/config.cyml`
+  lives at the repo root — where thoth is launched — so it sat inside the jail as an ordinary relative file,
+  and `read_file` carries no t-ron gate by design while `[hoosh].tools` defaults on. Demonstrated:
+  `read_file {"path":".thoth/config.cyml"}` returned `token = "…"`. A prompt-injected model can exfiltrate
+  that through `web_fetch` or `shell`. The write side was worse still: the same path passed the *write*
+  jail, so an `edit` could repoint `[hoosh].url` at an attacker host or flip `[shell].enabled`, and
+  `/reload` makes it live — **thoth's own security config, rewritable by the party it constrains**.
+  `_project_sensitive` now refuses `.thoth/` and the legacy `thoth.cyml` at any depth, matching
+  **whole components** (so `.thothrc` and `my.thoth.bak` are not false positives) and covering the absolute
+  form under a granted read root. The **human is unaffected** — `/read` and `@file` do not go through this
+  jail. ⚠ Deliberately **not** a general secret filter: a project's own `.env` or tokenised `.git/config`
+  stays readable, because that is the operator's project and seeing it is the jail's purpose. Redaction is a
+  different capability and is tracked as such in the review, not faked here.
+
+### Fixed — memory safety
+
+- ⛔ **Heap out-of-bounds write, and heap bytes sent to the gateway** (`src/hoosh.cyr` ×4, `src/agent.cyr`).
+  Every request builder funnels strings through bounded appenders — which stop with `off` at **exactly**
+  `cap - 1` on saturation. `_append_int` took no cap and wrote unconditionally, so the `"max_tokens":<n>`
+  append put four digits at `cap-1 … cap+2`. The returned length was likewise past the end and goes straight
+  to `sandhi_http_post(..., len)` as the body length — so the request **transmitted three bytes of adjacent
+  heap to the gateway**. One missing bound produced both an OOB write and an information disclosure. No
+  hostile gateway needed: a large enough prompt saturates the buffer (reproduced by piping ~50,000 `0x01`
+  bytes, each escaping to 6, into `thoth -p`). Added `_append_int_cap` with the identical guard
+  `_append_cstr_cap` uses, switched all five builders, and clamped every terminator so **the returned length
+  can never name a byte outside the allocation**. The test uses a 16-byte canary **at** the cap boundary —
+  the overflow is only 3–4 bytes wide, so a canary placed further out would have proved nothing — and was
+  **verified by reverting the fix** and confirming it fails.
+
+- ⛔ **Unbounded creeping write past the citations arena** (`src/memory.cyr`). `_cite_copy` clamped `avail`
+  to 0 but still wrote its NUL and still advanced `_cite_off`. Once the arena filled **exactly**, the
+  terminator landed one byte past the end — and because the offset kept advancing, the next call wrote at
+  +1, the next at +2: an **unbounded** NUL-write creeping through the bump heap, one byte per call.
+  Reachable from mneme search results, whose titles and paths the model itself authors via `/remember`. Now
+  a hard bound: no room for even the terminator means write nothing, advance nothing, return a stable empty
+  cstr.
+
+- **Unbounded environment copy smashed the Wayland connect frame** (`src/gui/gwindow.cyr`).
+  `gwl_wl__copy_cstr` took no cap; its sources are `WAYLAND_DISPLAY` and `XDG_RUNTIME_DIR` and its
+  destination is `var path[128]`. Reproduced on the shipping binary: `WAYLAND_DISPLAY=/<200 A's> thoth gui`
+  → **exit 139**, with the 118–199-byte band corrupting the frame *silently*. A second overflow followed in
+  the `addr[120]` sockaddr fill, which had no check and no awareness that `sun_path` is 108 bytes. Bounded
+  both, by the smaller of the buffer and `sun_path`'s real capacity, degrading through the existing "no
+  Wayland compositor" path. All three crashing invocations now exit 255; the control is unchanged.
+  ⚠ **Severity honestly downgraded**: the auditor rated this HIGH, the verifier corrected it to MEDIUM — the
+  only channel is thoth's own environment, the binary is not setuid, and no model, tool, MCP or network path
+  reaches the buffer. That correction is accepted rather than argued with.
+
+- **Null-deref on a non-string JSON value** (`src/hoosh.cyr` ×2, `src/daimon.cyr`). `if (id != 0)` proves
+  the KEY exists, not that its VALUE is a string; `bayan_json_v_str` answers 0 for a non-`JTAG_STR` tag and
+  the accessors then dereference 0. A verifier **reproduced the SIGSEGV** against
+  `{"object":"list","data":[{"id":123}]}` — wire data from a gateway relaying some provider's catalog. The
+  `daimon.cyr` instance is worse in kind: a **third-party MCP server** controls its own name/description. 29
+  of 32 call sites already checked correctly; these three were the outliers.
+
+### Fixed — untrusted input reaching the terminal and the wire
+
+- ⛔ **A filename could rewrite the user's terminal** (`src/ftree.cyr`). A filename is untrusted — an
+  attacker who lands a file in the tree controls those bytes — and two sinks took them raw: the tree pane
+  writes names through `emit_raw_n`, and `feed_clip` **copies an unrecognised escape verbatim** (it must, to
+  carry thoth's own role markers), suppressing only a CSI erase-line. So `ESC[2J` in a filename could clear
+  the screen and cursor moves could forge output. The second sink was `@`-Tab completion, inserting the same
+  raw bytes into the composer — **bypassing the filter `led_paste` already applied**, whose own comment says
+  a paste "can NEVER inject a terminal escape sequence". Fixed **at the source, not the sinks**:
+  `_tree_set_name` is the single chokepoint where filesystem bytes enter the tree model, so sanitising there
+  fixes both at once and leaves `feed_clip` free to keep passing thoth's own markers — escapes thoth
+  generates are trusted, bytes the filesystem hands us are not. C0/DEL become `?` (width-preserving, and
+  visibly odd rather than silently rewritten); UTF-8 passes untouched.
+
+- **JSON injection through model-controlled tool arguments** (`src/daimon.cyr`). `arguments` was spliced in
+  raw to preserve the gateway's shape — but raw splicing of untrusted text into JSON thoth itself authors is
+  an injection seam: `{}, "name":"other_tool"` closes the object and appends a **second** `name` key, and a
+  last-key-wins parser downstream would dispatch a tool t-ron never gated, because `name` is authorized
+  *before* this point. Now validated as exactly one well-formed JSON value, degrading to `{}` otherwise.
+
+### Fixed — liveness and permissions
+
+- ⛔ **The GUI hung forever on a confirm it cannot render** (`src/gate.cyr`). The T3 GUI runs its turn under
+  `OUT_NULL` because the window is its output surface — so the fail-closed confirm's prompt was **discarded**
+  and `read_line` then blocked on stdin nobody types into. With no `[tron].policy` — **the default** — any
+  gated tool call froze the window with no visible cause. `confirm` now denies on `OUT_NULL`, on exactly the
+  reasoning the one-shot branch above it already used. `OUT_RING` (the T2 TUI) is deliberately not caught:
+  it has hooks that bracket back to the live screen so the prompt IS visible there. ⚠ The test pins the
+  outcome, not the fix — on a stdin already at EOF the old code also denied; the hang only manifests against
+  a stdin that stays open. Said plainly in the test rather than left to imply more than it proves.
+
+- **The shell capture file is `0600`, not world-readable `0644`** (`src/exec.cyr`). It sits in
+  world-writable `/tmp` holding the full merged output of a command the model chose. `O_CREAT|O_EXCL` was
+  already correct and *does* defeat a pre-planted file or symlink — `O_NOFOLLOW` was never the load-bearing
+  flag, and the header now says so. Verified end to end on the real file: the child's stdout **is** that fd,
+  so it stats itself.
+
+### Verified clean (recorded because absence only means something if someone looked)
+
+- **The bearer token has exactly one use site** and never reaches a log, `/state`, `/dry`, an export or an
+  error path; its buffer is sized exactly right.
+- **The config-derived-buffer class is clean** — thoth's documented recurring bug (a buffer sized from
+  config not re-allocated on `/reload`) has only one instance, and it is the one fixed at 0.37.0.
+- **The shell deny/allow filter is honestly framed**, so its bypassability is documentation doing its job,
+  not security theatre. The missing sandbox is a capability gap, tracked in the review, not an audit finding.
+- `cyrius vet` 57 deps / 0 untrusted / 0 missing; `cyrius deny` 0 violations.
+
+### Deliberate deviation
+
+`cyrius fmt --check` flags 12 of 40 authored files. **Every complaint is the same thing**, checked file by
+file: an aligned continuation of a trailing comment. That alignment is a pervasive, deliberate convention
+here, `cyrius fmt` is advisory in thoth (no CI step, matching `cyrlint`), and rewriting 12 files to satisfy
+it would destroy a readability convention used on purpose. Not reformatted; recorded so the next sweep does
+not re-litigate it.
+
+### Verified
+
+- Builds `OK` on **x86_64 Linux**, **`--aarch64`** and **`--agnos`**; `--win` unchanged (pre-existing
+  IOCP/epoll gap).
+- Suite **264 + 1644 + 183 + 3** — **+53 assertions**, zero failures.
+
 ## [0.38.6] - 2026-08-23
 
 **Toolchain 6.5.20 → 6.5.35, every dependency to its latest release — and an aarch64 miscompile that had been

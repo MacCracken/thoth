@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.39.0** — **P(-1) hardening sweep: 11 real defects found and fixed** (2026-08-24). Six parallel auditors
+over the 19,500 authored lines, every finding handed to an independent skeptic briefed to REFUTE it — 26
+filed, **17 confirmed, 1 refuted**, two reproduced as live crashes. Full record in
+[`docs/audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md). Headline: **the file jail was defeated by a
+symlink**, read and write, and it was a *documented, accepted* residual whose premise ("no portable
+`O_NOFOLLOW`") had gone stale — `lib/fs.cyr` ships `is_symlink`. Demonstrated with a real link returning
+`/etc/hostname` to the model. Second: **thoth handed the model its own bearer token** — `.thoth/config.cyml`
+sits at the repo root, inside the jail, and `read_file` is ungated by design; the write side let an `edit`
+repoint `[hoosh].url` or flip `[shell].enabled` with `/reload` making it live. Third: `_append_int` was
+unbounded after saturating appends, giving a heap OOB write **and 3 bytes of adjacent heap transmitted to
+the gateway** in the POST body. Also: an unbounded creeping NUL-write past the citations arena; a
+reproduced SIGSEGV from a non-string JSON `id`; terminal-escape injection from a **filename** (fixed at the
+ingestion chokepoint, not the two sinks, so `feed_clip` keeps passing thoth's own markers); a JSON-injection
+seam in the daimon call body; an unbounded env copy that crashed `thoth gui`; the GUI hanging forever on a
+confirm it cannot render; and the shell capture file tightened `0644 → 0600`. Every fix has a regression
+test; the `_append_int` test was verified by reverting the fix, and where a test cannot distinguish the
+pre-fix behaviour (the GUI confirm) that is stated rather than glossed. Suite **264 + 1644 + 183 + 3**
+(+53). Builds OK on x86_64 / aarch64 / agnos. Shipped alongside:
+[`agentic-improvements-review.md`](agentic-improvements-review.md) — a survey of the harness field and of
+what the Cyrius-ported **agnosai 2.0.6** can honestly supply. **That document is a PROPOSAL: nothing in it
+is built or decided.**
+
 **0.38.6** — **toolchain 6.5.20 → 6.5.35, every dep to latest, and an aarch64 miscompile that had been live
 since 0.8.0** (2026-08-23). The vendored darshana bundle defined `var SYS_IOCTL = 16;` — the **x86_64** number;
 arm64 Linux uses **29**. thoth's own `src/intr.cyr` (Ctrl-C termios save/restore) and `src/ui.cyr` (the TTY probe)

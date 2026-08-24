@@ -24,7 +24,9 @@
 #
 # HONEST LIMITS: binary NULs in output are scrubbed to spaces (text-tool contract — the result is a
 # JSON string the model reads); the timeout kills the /bin/sh, not a backgrounded grandchild; the
-# temp capture file lives in world-writable /tmp with no O_NOFOLLOW (best-effort O_EXCL create).
+# temp capture file lives in world-writable /tmp (O_CREAT|O_EXCL, which DOES defeat a pre-planted
+# file or symlink — O_NOFOLLOW is not the load-bearing flag here — and since 0.39.0 mode 0600, not
+# the previous world-readable 0644).
 
 var _shell_cap_buf = 0;      # capture buffer (config cap + 1 for the NUL terminator), lazy
 var _shell_res_buf = 0;      # result/deny-message buffer (config cap + 256), lazy

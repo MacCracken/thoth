@@ -442,6 +442,35 @@ fn test_hoosh() {
     assert(str_eq_cstr(em, "no provider for model"), "error message matches");
     assert_eq(hoosh_extract_error(body, strlen(body)), 0, "no error field -> 0");
 
+    # 0.39.0 (audit A-6): a SATURATED request buffer must never be written past, and the returned
+    # length must never name a byte outside the allocation. The bounded appenders stop with `off` at
+    # exactly cap-1; `_append_int` then took no cap and wrote the `"max_tokens":<n>` digits at
+    # cap-1..cap+2 — a heap OOB WRITE — and returned that over-cap length, which goes straight to
+    # sandhi_http_post as the POST body length, TRANSMITTING adjacent heap bytes to the gateway.
+    # Drive every capped builder past saturation and pin the invariant they all now share.
+    test_group("request builders stay inside their buffer when saturated (hoosh.cyr/agent.cyr, 0.39.0)");
+    var bign = 60000;                            # each 0x01 escapes to a 6-byte \u0001 -> ~360 KB >> 256 KB cap
+    var bigp = alloc(bign + 1);
+    var bi = 0;
+    while (bi < bign) { store8(bigp + bi, 1); bi = bi + 1; }   # 0x01: worst-case 6x escape expansion
+    store8(bigp + bign, 0);
+    var rbuf = alloc(HOOSH_REQ_CAP + 64);        # slack AFTER the cap so an overflow is detectable, not fatal
+    # The canary must start at the FIRST byte past the cap. The observed overflow was only 3-4 bytes
+    # (cap .. cap+2 plus the terminator), so a canary placed further out would have sat there intact
+    # and the test would have proved nothing — checked by reverting the fix and confirming it trips.
+    var gi = 0;
+    while (gi < 16) { store8(rbuf + HOOSH_REQ_CAP + gi, 209); gi = gi + 1; }
+    var rlen = hoosh_build_request(rbuf, "m", "sys", 0, bigp, 0);
+    assert(rlen <= (HOOSH_REQ_CAP - 1), "build_request: saturated length stays inside the buffer");
+    assert_eq(_canary_ok(rbuf + HOOSH_REQ_CAP, 16), 1, "build_request: nothing was written past the cap (16-byte canary intact)");
+    assert_eq(load8(rbuf + rlen), 0, "build_request: the returned length points at the NUL terminator");
+    var dlen = hoosh_build_dry(rbuf, "m", "sys", 0, bigp, 0);
+    assert(dlen <= (HOOSH_REQ_CAP - 1), "build_dry: saturated length stays inside the buffer");
+    assert_eq(_canary_ok(rbuf + HOOSH_REQ_CAP, 16), 1, "build_dry: canary intact");
+    var slen = _hoosh_sum_build(rbuf, "m", "sys", bigp);
+    assert(slen <= (HOOSH_REQ_CAP - 1), "sum_build: saturated length stays inside its (smaller) buffer");
+    assert_eq(_canary_ok(rbuf + HOOSH_REQ_CAP, 16), 1, "sum_build: canary intact");
+
     test_group("hoosh model catalog extraction");
     var mbody = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4-6\"},{\"id\":\"gpt-4o\"}]}";
     var data = hoosh_extract_models(mbody, strlen(mbody));
@@ -453,6 +482,21 @@ fn test_hoosh() {
     assert_eq(bayan_json_v_arr_len(hoosh_extract_models(mempty, strlen(mempty))), 0, "empty catalog -> 0-length array");
     assert_eq(hoosh_extract_models(body, strlen(body)), 0, "no data field -> 0");
     assert_eq(hoosh_extract_models(nojson, strlen(nojson)), 0, "unparseable -> 0");
+    # 0.39.0 (audit A-4): a NON-STRING "id" used to SIGSEGV the /models renderer. The guard was
+    # `if (id != 0)`, which proves the KEY exists — but `bayan_json_v_str` answers 0 for any
+    # non-JTAG_STR tag, and str_data/str_len/str_eq_cstr then dereferenced 0. The body is wire data
+    # from a gateway relaying some provider's catalog, so a numeric id is a plausible upstream shape,
+    # not a hostile edge case. The audit reproduced the crash in a standalone program before the fix.
+    # Pinned at the extractor + accessor level, which is the layer the renderer's guard now mirrors.
+    var mbadid = "{\"object\":\"list\",\"data\":[{\"id\":123},{\"id\":\"ok-model\"}]}";
+    var dbad = hoosh_extract_models(mbadid, strlen(mbadid));
+    assert(dbad != 0, "catalog with a numeric id still parses");
+    assert_eq(bayan_json_v_arr_len(dbad), 2, "both entries present");
+    var badid = bayan_json_v_obj_get(bayan_json_v_arr_get(dbad, 0), "id");
+    assert(badid != 0, "the 'id' KEY exists (this is what the old guard checked)");
+    assert_eq(bayan_json_v_str(badid), 0, "but its VALUE is not a string -> 0 (the deref that crashed)");
+    var goodid = bayan_json_v_obj_get(bayan_json_v_arr_get(dbad, 1), "id");
+    assert(str_eq_cstr(bayan_json_v_str(goodid), "ok-model"), "the well-formed sibling still renders");
 
     test_group("hoosh SSE delta extraction");
     var d1 = "{\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}";
@@ -1905,6 +1949,28 @@ fn test_mem_seam() {
     assert_eq(streq(citations_feedback_note_id(), "abc"), 1, "citations: first hit's note id captured for feedback");
     # defensive: an unparseable result (no **) captures nothing, no crash, and no stale feedback target
     assert_eq(citations_capture("No notes found matching your query."), 0, "citations: no ** -> 0 sources");
+    # 0.39.0 (audit A-5): exhausting the citations arena must DEGRADE, not overflow. The old _cite_copy
+    # clamped `avail` to 0 but still wrote the NUL at `dst + len` and still advanced `_cite_off`, so once
+    # the arena filled exactly it wrote one byte past the end — and kept creeping one byte further on every
+    # subsequent call, scribbling NULs through whatever the bump heap had handed out next. Drive it well
+    # past the cap and pin the two invariants that make the write safe: _cite_off never exceeds the cap,
+    # and an exhausted arena returns a usable empty string rather than a pointer into someone else's memory.
+    citations_reset();
+    var cfill = 0;
+    var cbad = 0;                               # accumulate, then assert ONCE — a per-iteration assert would
+    var cnull = 0;                              # inflate the suite count by 400 for a single invariant
+    while (cfill < 200) {                       # 200 x ~64 B >> CITE_BUF_CAP (2048): guaranteed exhaustion
+        var cp = _cite_copy("0123456789012345678901234567890123456789012345678901234567890123", 64);
+        if (cp == 0) { cnull = cnull + 1; }
+        if (_cite_off > CITE_BUF_CAP) { cbad = cbad + 1; }
+        cfill = cfill + 1;
+    }
+    assert_eq(cnull, 0, "citations: a copy never returns a null pointer, even when exhausted");
+    assert_eq(cbad, 0, "citations: _cite_off never passes the arena cap across 200 copies (the overflow)");
+    assert_eq(_cite_off, CITE_BUF_CAP, "citations: arena settles exactly AT the cap, never beyond");
+    assert_eq(load8(_cite_copy("x", 1)), 0, "citations: an exhausted arena yields an empty cstr, not a wild write");
+    citations_reset();
+    assert_eq(_cite_off, 0, "citations: reset reclaims the arena");
     assert_eq(citations_search_id(), 0, "citations: no result -> no stale search_id");
     assert_eq(citations_feedback_note_id(), 0, "citations: no result -> no stale note id");
     citations_reset();

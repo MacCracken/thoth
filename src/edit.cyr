@@ -12,8 +12,12 @@
 #  - gated: gate_authorize("thoth_edit", ...) — a DISTINCT reserved verb from thoth_write (/write) so a policy
 #    can allow the operator's /write yet deny model edits (the thoth_run/thoth_shell split precedent). An absent
 #    t-ron seam falls to the fail-closed confirm.
-#  RESIDUAL (documented honestly, ADR-0017): a symlink INSIDE the project pointing outside is followed (no
-#  portable O_NOFOLLOW) — more dangerous for a write than a read. The jail is a boundary, not a sandbox.
+#  - link-safe (0.39.0): _project_no_symlink refuses a path ANY of whose components is a symlink. This was
+#    the standing RESIDUAL — "a symlink INSIDE the project pointing outside is followed (no portable
+#    O_NOFOLLOW) — more dangerous for a write than a read" — and the 0.39.0 audit CLOSED it. The premise had
+#    gone stale: `lib/fs.cyr` ships a portable `is_symlink` (readlink-based, linux/macos/agnos), so the
+#    boundary no longer has to be lexical-only. The jail is still a boundary, not a sandbox — but it no
+#    longer hands a malicious repo an arbitrary-file WRITE through a checked-in link.
 #
 # PURE core (_edit_apply) unit-tested; the tool wrapper does the parse/jail/gate/read/apply/write. Local +
 # forced-serial in the agent loop (never forwarded to daimon). Cyrius forward-refs diff_stats/_params_one
@@ -194,6 +198,8 @@ fn edit_tool(args_cstr) {
     if (oldstrlen == 0) { return "(edit: 'old_string' must not be empty)"; }
     # jail FIRST (cheap deterministic boundary), then t-ron (the authority) — mirrors shell's filter-before-gate.
     if (_project_jail_ok(path) == 0) { return "(edit: refused - path is outside the project (no absolute, no '~', no '..'))"; }
+    if (_project_no_symlink(path) == 0) { return "(edit: refused - a path component is a symlink; a write must not follow a link out of the project)"; }
+    if (_project_sensitive(path) == 1) { return "(edit: refused - thoth's own config/state is not model-writable)"; }
     if (gate_authorize("thoth_edit", _params_one("path", path), "edit", path) == 0) { return "denied by authorization policy"; }
     _edit_last_allowed = 1;
     return _edit_do(path, oldstr, oldstrlen, newstr, newstrlen);
@@ -268,6 +274,8 @@ fn create_file_tool(args_cstr) {
     var content = str_cstr(cvs);
     var clen = str_len(cvs);
     if (_project_jail_ok(path) == 0) { return "(create_file: refused - path is outside the project (no absolute, no '~', no '..'))"; }
+    if (_project_no_symlink(path) == 0) { return "(create_file: refused - a path component is a symlink; a write must not follow a link out of the project)"; }
+    if (_project_sensitive(path) == 1) { return "(create_file: refused - thoth's own config/state is not model-writable)"; }
     if (gate_authorize("thoth_edit", _params_one("path", path), "create", path) == 0) { return "denied by authorization policy"; }
     _edit_last_allowed = 1;
     return _write_do(path, content, clen);

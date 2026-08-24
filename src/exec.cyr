@@ -184,14 +184,21 @@ fn shell_supported() { return 1; }
 # stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
 # The caller owns NUL-termination of buf at the returned count (buf must be >= buflen+1).
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
-    # Open a fresh temp file with O_CREAT|O_EXCL|O_WRONLY (193), 0644 (420). O_EXCL fails on a
+    # Open a fresh temp file with O_CREAT|O_EXCL|O_WRONLY (193), 0600 (384). O_EXCL fails on a
     # pre-planted file/symlink; bump the counter and retry a few times before giving up closed.
+    #
+    # ⚠ 0.39.0 (audit A-2): the mode was 0644 (420) — WORLD-READABLE, in world-writable /tmp, for a file
+    # that holds the FULL merged stdout+stderr of a command the MODEL chose to run. On a multi-user host
+    # any local user could read whatever that command printed (`env`, `cat ~/.aws/credentials`, a token in
+    # a build log) for the lifetime of the capture. 0600 costs nothing here: thoth opens the fd itself and
+    # dup2s it into the child, so nothing outside this process ever needs to open the path by name — the
+    # extra bits bought no capability. Narrow (a local attacker, a shared box, a race) but free to close.
     var out_fd = 0 - 1;
     var path = 0;
     var tries = 0;
     while ((tries < 8) && (out_fd < 0)) {
         path = _shell_tmp_path();
-        out_fd = sys_open(path, 193, 420);
+        out_fd = sys_open(path, 193, 384);
         tries = tries + 1;
     }
     if (out_fd < 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; }

@@ -180,29 +180,62 @@ fn gwl_wl__streq(ptr, len, lit): i64 {
 }
 
 # ---- connection ----
-fn gwl_wl__copy_cstr(dst, off, src): i64 {
+# GWL_WL_SUN_PATH_MAX: the real capacity of sockaddr_un.sun_path. Not a thoth choice — the kernel's
+# struct is 108 bytes there, so a longer path cannot be connected to under any circumstances.
+var GWL_WL_SUN_PATH_MAX = 107;      # 108 minus the NUL
+
+# gwl_wl__copy_cstr: append `src` at `dst + off`, never writing at or past `cap`. Returns the new
+# offset, or -1 if the source would not fit (the caller must fail closed rather than truncate a path).
+#
+# ⚠ 0.39.0 (audit A-9). This copy took NO cap: `while (load8(src+i) != 0) { store8(dst+off+i, ...) }`.
+# Its two sources are `getenv("WAYLAND_DISPLAY")` and `getenv("XDG_RUNTIME_DIR")`, and its destination
+# is `gwl_wl_connect`'s `var path[128]` — so an over-long value smashed the stack frame, saved registers
+# and return address included, on the FIRST call of `gwl_win_open`. Reproduced on the shipping binary:
+# `WAYLAND_DISPLAY=/<200 A's> thoth gui` exits 139 (SIGSEGV), and the 118..199-byte band corrupts the
+# frame silently without crashing. A control with an unrelated 5000-byte env var exits cleanly, which
+# rules out the stdlib's getenv and pins the fault here.
+#
+# Severity is bounded by the input channel — the environment is thoth's own, the binary is not setuid,
+# and no model/tool/network path reaches it — so this is a robustness and crash bug rather than a
+# privilege boundary. It is still an unbounded write, and the bound costs one parameter.
+fn gwl_wl__copy_cstr(dst, off, cap, src): i64 {
     var i = 0;
-    while (load8(src + i) != 0) { store8(dst + off + i, load8(src + i)); i = i + 1; }
+    while (load8(src + i) != 0) {
+        if ((off + i) >= cap) { return 0 - 1; }        # would not fit -> caller fails closed
+        store8(dst + off + i, load8(src + i));
+        i = i + 1;
+    }
     return off + i;
 }
-fn gwl_wl__sock_path(buf): i64 {
+fn gwl_wl__sock_path(buf, cap): i64 {
+    # Bound by the SMALLER of the caller's buffer and sun_path's real capacity: a path that cannot fit
+    # in sockaddr_un is unusable even if it fits in `buf`, so rejecting it here keeps the addr fill below
+    # in range too (that fill previously had no check of its own — the second overflow in this pair).
+    var lim = cap - 1;
+    if (lim > GWL_WL_SUN_PATH_MAX) { lim = GWL_WL_SUN_PATH_MAX; }
     var wd = getenv("WAYLAND_DISPLAY");
     if (wd != 0) { if (load8(wd) == 0x2F) {
-        var n = gwl_wl__copy_cstr(buf, 0, wd); store8(buf + n, 0); return n;
+        var n = gwl_wl__copy_cstr(buf, 0, lim, wd);
+        if (n < 0) { return 0 - 1; }
+        store8(buf + n, 0); return n;
     } }
     var rt = getenv("XDG_RUNTIME_DIR");
     if (rt == 0) { return 0 - 1; }
-    var n = gwl_wl__copy_cstr(buf, 0, rt);
+    var n = gwl_wl__copy_cstr(buf, 0, lim, rt);
+    if (n < 0) { return 0 - 1; }
+    if (n >= lim) { return 0 - 1; }                    # no room for the separator
     store8(buf + n, 0x2F); n = n + 1;
-    if (wd != 0) { n = gwl_wl__copy_cstr(buf, n, wd); }
-    else { n = gwl_wl__copy_cstr(buf, n, "wayland-0"); }
+    if (wd != 0) { n = gwl_wl__copy_cstr(buf, n, lim, wd); }
+    else { n = gwl_wl__copy_cstr(buf, n, lim, "wayland-0"); }
+    if (n < 0) { return 0 - 1; }
     store8(buf + n, 0);
     return n;
 }
 fn gwl_wl_connect(): i64 {
     var path[128];
-    var plen = gwl_wl__sock_path(&path);
-    if (plen < 0) { return 0 - 1; }
+    var plen = gwl_wl__sock_path(&path, 128);
+    if (plen < 0) { return 0 - 1; }                    # over-long / absent env -> degrade honestly
+    if (plen > GWL_WL_SUN_PATH_MAX) { return 0 - 1; }  # belt-and-braces before the addr fill below
     var fd = gwl_wl_sys_socket(GWL_WL_AF_UNIX, GWL_WL_SOCK_STREAM, 0);
     if (fd < 0) { return 0 - 1; }
     var addr[120];

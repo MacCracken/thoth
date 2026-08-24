@@ -279,11 +279,12 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
         off = _agent_copy(dst, off, tools_buf, tools_len, AGENT_REQ_CAP);
     }
     off = _append_cstr_cap(dst, off, cap, ",\"max_tokens\":");
-    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
+    off = _append_int_cap(dst, off, cap, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
     off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
-    store8(dst + off, 0);
+    if (off > (cap - 1)) { off = cap - 1; }   # 0.39.0 (A-6): the returned length is a POST body
+    store8(dst + off, 0);                    # length — it must never name a byte outside the alloc
     return off;
 }
 

@@ -63,12 +63,37 @@ fn ftree_init() {
 }
 fn _tree_name_slot(i) { return _tree_name + i * TREE_NAME_CAP; }
 
-# _tree_set_name: copy a NUL-terminated name into slot i (bounded by TREE_NAME_CAP).
+# _tree_set_name: copy a NUL-terminated name into slot i (bounded by TREE_NAME_CAP), SANITIZED.
+#
+# ⚠ 0.39.0 (audit A-7/A-8). This is the single chokepoint where bytes from the FILESYSTEM enter thoth's
+# tree model, and a filename is untrusted input: an attacker who can land a file in the tree (a cloned
+# repo, an npm package, a downloaded archive) controls these bytes. Two sinks read the slot and neither
+# was safe: `_tui_paint_tree_row` writes the name through `emit_raw_n` to the terminal, and `feed_clip`
+# deliberately COPIES AN UNRECOGNISED ESCAPE VERBATIM (it must — it carries thoth's own role markers for
+# prose), suppressing only a CSI erase-line. So a file named with an embedded `ESC[2J` or an OSC string
+# could clear the user's screen, reposition the cursor to forge output, or set the window title. The
+# second sink is `@`-Tab completion, which inserted the same raw bytes straight into the composer —
+# where `led_paste` had ALREADY established the correct policy for exactly this ("ESC, every other C0
+# control, and DEL are DROPPED — so a paste can NEVER inject a terminal escape"). Completion simply
+# bypassed it.
+#
+# Sanitising HERE fixes both sinks at once and leaves `feed_clip` free to keep passing thoth's own
+# markers, which is the distinction that matters: escapes thoth generates are trusted, bytes the
+# filesystem hands us are not.
+#
+# Substitute rather than drop: '?' keeps the byte count and therefore every column/width calculation
+# identical, and it shows the user that the name is odd instead of silently rewriting it. High bytes
+# (>= 128, i.e. UTF-8) pass through untouched, matching led_paste's policy.
+# KNOWN, DELIBERATE: a file whose real name contains a control byte is displayed — and therefore opened
+# from the tree — under its sanitised spelling, so it is not reachable via the tree pane. That is the
+# intended trade; such a name is pathological, and `/read` with an explicit path still reaches it.
 fn _tree_set_name(i, nameptr) {
     var dst = _tree_name_slot(i);
     var j = 0;
     while ((load8(nameptr + j) != 0) && (j < (TREE_NAME_CAP - 1))) {
-        store8(dst + j, load8(nameptr + j));
+        var b = load8(nameptr + j) & 255;
+        if ((b < 32) || (b == 127)) { b = 63; }        # ESC / C0 / DEL -> '?' (width-preserving)
+        store8(dst + j, b);
         j = j + 1;
     }
     store8(dst + j, 0);

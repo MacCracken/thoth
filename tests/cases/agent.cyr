@@ -72,6 +72,19 @@ fn test_shell() {
     var n3 = exec_shell_capture("echo oops 1>&2", buf, cap, 5000, &st);
     store8(buf + n3, 0);
     assert(streq(buf, "oops\n"), "stderr is captured (merged into the same stream)");
+    # 0.39.0 (audit A-2): the capture temp file must be 0600, not the previous world-readable 0644.
+    # It sits in world-writable /tmp and holds the FULL merged output of a command the MODEL chose,
+    # so on a shared host 0644 exposed whatever that command printed. Asserted END TO END on the real
+    # file rather than by reading the flag back out of the source: the child's stdout IS that fd, so
+    # it can stat itself. Degrades honestly where `stat -c` is absent (non-GNU userland) rather than
+    # passing vacuously.
+    var nmode = exec_shell_capture("stat -L -c %a /proc/self/fd/1 2>/dev/null", buf, cap, 5000, &st);
+    store8(buf + nmode, 0);
+    if (nmode >= 3) {
+        assert(streq(buf, "600\n"), "capture temp file is mode 0600 (not world-readable 0644)");
+    } else {
+        oprintln("  SKIP capture-mode: no `stat -c` / /proc on this host — 0600 NOT verified here");
+    }
     exec_shell_capture("sleep 5", buf, cap, 300, &st);
     assert_eq(load64(&st + 8), 1, "sleep beyond timeout -> timed-out flag set");
     assert_eq(load64(&st), 0 - 2, "timeout exit sentinel -2");
@@ -364,6 +377,19 @@ fn test_daimon() {
     assert(streq(&cb, "{\"name\":\"scan\",\"arguments\":{}}"), "call body, no args -> {}");
     daimon_build_call(&cb, "we\"ird", 0);
     assert(streq(&cb, "{\"name\":\"we\\\"ird\",\"arguments\":{}}"), "tool name is escaped");
+    # 0.39.0 (audit A-10): `arguments` is the MODEL's text, spliced raw to preserve the gateway's shape.
+    # Raw splicing of untrusted text into JSON thoth authors is an injection seam — `{}, "name":"other"`
+    # closes the object and appends a SECOND name key, and a last-key-wins parser downstream would run a
+    # tool t-ron never gated (thoth authorizes `name` BEFORE this point). Anything that is not exactly one
+    # well-formed JSON value now degrades to `{}`.
+    daimon_build_call(&cb, "echo", "{}, \"name\": \"other_tool\"");
+    assert(streq(&cb, "{\"name\":\"echo\",\"arguments\":{}}"), "a second-key injection is rejected -> {}");
+    daimon_build_call(&cb, "echo", "not json at all");
+    assert(streq(&cb, "{\"name\":\"echo\",\"arguments\":{}}"), "non-JSON arguments degrade to {}");
+    daimon_build_call(&cb, "echo", "");
+    assert(streq(&cb, "{\"name\":\"echo\",\"arguments\":{}}"), "empty arguments degrade to {}");
+    daimon_build_call(&cb, "echo", "{\"a\":[1,2,{\"b\":null}]}");
+    assert(streq(&cb, "{\"name\":\"echo\",\"arguments\":{\"a\":[1,2,{\"b\":null}]}}"), "a well-formed nested value still passes through verbatim");
 
     test_group("daimon result extraction");
     var ok = "{\"content\":[{\"type\":\"text\",\"text\":\"tool says hi\"}],\"isError\":false}";
@@ -396,6 +422,22 @@ fn test_daimon() {
 # deny-by-default for unknown agents, and the audit path (libro chain_append —
 # the sigil/thread_local ordering canary).
 fn test_tron() {
+    # 0.39.0 (audit A-11): a surface that CANNOT show the prompt must DENY, not deadlock. The T3 GUI runs
+    # its turn under OUT_NULL (the window is the output surface, not the terminal), so the fail-closed
+    # confirm's prompt was discarded and read_line then blocked on stdin nobody types into — a frozen
+    # window, with no [tron].policy, which is the default. OUT_RING (the T2 TUI) is deliberately NOT
+    # caught: it has hooks that bracket back to the live screen so the prompt IS visible there.
+    # ⚠ HONEST LIMIT: this assertion pins the OUTCOME, not the fix. On a runner whose stdin is already at
+    # EOF (which is how the suite runs) the OLD code also returned 0, because read_line got 0 bytes and
+    # fell through to the same deny — so this would have passed before the change too. What it guards is
+    # a future regression that makes OUT_NULL return 1; the hang itself only manifests against a stdin
+    # that stays OPEN, which is exactly the GUI's situation and is not reproducible in-process here.
+    test_group("confirm denies on a surface that cannot prompt (gate.cyr, 0.39.0)");
+    var prev_mode = out_mode();
+    out_mode_set(OUT_NULL);
+    assert_eq(confirm("thoth_shell", "rm -rf /"), 0, "OUT_NULL (the GUI turn) denies instead of blocking");
+    out_mode_set(prev_mode);
+
     test_group("t-ron verdicts (vendored engine)");
     var t = tron_new(tron_config_default());
     var pol = "[agent.\"thoth\"]\nallow = [\"echo_*\", \"thoth_run\"]\ndeny = [\"danger_*\"]\n";
@@ -631,6 +673,66 @@ fn test_project() {
     assert_eq(_project_read_ok("/opt/demo/other/x"), 0, "absolute path outside every granted root refused");
     assert_eq(_project_read_ok("/opt/demo/repo/../secret"), 0, "'..' under a granted root refused (no traversal)");
     assert_eq(_project_read_ok("~/opt/demo/repo"), 0, "a '~' path is never a granted root");
+
+    # --- CONFUSED DEPUTY: thoth's own config is not model-readable/writable (0.39.0, audit A-3) ---
+    # thoth's config lives at `.thoth/config.cyml`, at the repo root the docs tell operators to use — so it
+    # sat INSIDE the jail as an ordinary relative file, and `read_file` has no t-ron gate by design. The
+    # audit demonstrated the leak: read_file returned `token = "…"`, thoth's own gateway bearer token, to
+    # the untrusted model. The write side let an `edit` repoint [hoosh].url or flip [shell].enabled, with
+    # /reload making it live. Component-wise at any depth, so the granted-root absolute form is covered too.
+    test_group("thoth's own config/state is out of the model's jail (project.cyr/edit.cyr, 0.39.0)");
+    assert_eq(_project_sensitive(".thoth/config.cyml"), 1, "the config file is sensitive");
+    assert_eq(_project_sensitive(".thoth"), 1, "the .thoth home itself is sensitive");
+    assert_eq(_project_sensitive("./.thoth/memory/x.md"), 1, "'./'-prefixed form is sensitive");
+    assert_eq(_project_sensitive(".thoth//config.cyml"), 1, "doubled separator does not evade");
+    assert_eq(_project_sensitive("/home/u/proj/.thoth/config.cyml"), 1, "absolute form (granted root) is sensitive");
+    assert_eq(_project_sensitive("thoth.cyml"), 1, "the legacy CWD config is sensitive");
+    assert_eq(_project_sensitive("sub/dir/thoth.cyml"), 1, "legacy config at depth is sensitive");
+    # whole-component matching: a near-miss name is ordinary project source, not a false positive
+    assert_eq(_project_sensitive(".thothrc"), 0, "'.thothrc' is NOT the .thoth dir (whole-component match)");
+    assert_eq(_project_sensitive("my.thoth.bak/x"), 0, "'my.thoth.bak' is NOT the .thoth dir");
+    assert_eq(_project_sensitive("thoth.cyml.example"), 0, "'thoth.cyml.example' is NOT the config");
+    assert_eq(_project_sensitive("src/main.cyr"), 0, "ordinary project source is not sensitive");
+    assert_eq(_project_sensitive("VERSION"), 0, "an ordinary root file is not sensitive");
+    # and the four tools refuse it end to end (a real .thoth/config.cyml exists in this repo during CI)
+    assert(_ui_contains(read_file_tool("{\"path\":\".thoth/config.cyml\"}"), "refused") == 1, "read_file refuses thoth's own config");
+    assert(_ui_contains(list_dir_tool("{\"path\":\".thoth\"}"), "refused") == 1, "list_dir refuses thoth's own state dir");
+    assert(_ui_contains(edit_tool("{\"path\":\".thoth/config.cyml\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "refused") == 1, "edit refuses thoth's own config");
+    assert(_ui_contains(create_file_tool("{\"path\":\".thoth/evil.cyml\",\"content\":\"x\"}"), "refused") == 1, "create_file refuses writing into .thoth/");
+
+    # --- SYMLINK JAIL ESCAPE, closed 0.39.0 (audit finding A-1) ---
+    # Through 0.38.6 the jail was purely LEXICAL. It refused '/', '~' and '..' — and both project.cyr and
+    # edit.cyr recorded "a symlink INSIDE the project pointing outside is followed" as an ACCEPTED residual,
+    # on the grounds that there was no portable O_NOFOLLOW. The audit measured that premise (stale:
+    # lib/fs.cyr ships a readlink-based `is_symlink`) and then demonstrated the escape rather than arguing
+    # it: with a `-> /etc` link in the project, read_file returned the real bytes of /etc/hostname.
+    #
+    # This test builds the link itself rather than assuming one, so it is self-contained and CI-safe: the
+    # suite runs with CWD = repo root, so the link is a legitimately in-project RELATIVE path — which is the
+    # whole point. A lexically-clean path that resolves outside must still be refused.
+    test_group("symlink jail escape is closed (project.cyr/edit.cyr, 0.39.0)");
+    var slink = "_thoth_symlink_test";
+    xunlink(slink);                                    # tolerate a leftover from an aborted run
+    if (xsymlink("/etc", slink) == 0) {
+        # the pure lexical predicate still ACCEPTS it — that is exactly why the link check is separate
+        assert_eq(_project_jail_ok("_thoth_symlink_test/hostname"), 1, "lexical jail alone accepts a symlinked path (unchanged, and why the link check exists)");
+        # the link check refuses the link itself AND any path THROUGH it (every component is tested)
+        assert_eq(_project_no_symlink(slink), 0, "the symlink itself is refused");
+        assert_eq(_project_no_symlink("_thoth_symlink_test/hostname"), 0, "a path THROUGH the symlink is refused");
+        assert_eq(_project_no_symlink("src/main.cyr"), 1, "an ordinary in-project path still passes");
+        assert_eq(_project_no_symlink("."), 1, "'.' still passes");
+        # and the four model-invokable tools all refuse, read and write alike
+        assert(_ui_contains(read_file_tool("{\"path\":\"_thoth_symlink_test/hostname\"}"), "symlink") == 1, "read_file refuses through the symlink");
+        assert(_ui_contains(list_dir_tool("{\"path\":\"_thoth_symlink_test\"}"), "symlink") == 1, "list_dir refuses the symlink");
+        assert(_ui_contains(edit_tool("{\"path\":\"_thoth_symlink_test/hostname\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "symlink") == 1, "edit refuses through the symlink");
+        assert(_ui_contains(create_file_tool("{\"path\":\"_thoth_symlink_test/zz\",\"content\":\"x\"}"), "symlink") == 1, "create_file refuses through the symlink");
+        xunlink(slink);
+        assert_eq(_project_no_symlink(slink), 1, "after unlink the path is no longer a symlink (cleanup verified)");
+    } else {
+        # Degrade honestly rather than passing silently: a runner without symlink support (or the PE lane,
+        # where is_symlink is a documented no-op) leaves this coverage UNRUN, and that must be visible.
+        oprintln("  SKIP symlink-jail: could not create a test symlink on this host");
+    }
 
     # --- end-to-end: a grant flips a previously-refused absolute path (via /etc on the Linux test host) ---
     assert_eq(project_grant_root("/etc"), 1, "grant /etc for the end-to-end check");

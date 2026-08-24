@@ -177,15 +177,24 @@ fn citations_path(i) { if (i < 0) { return 0; } if (i >= _cite_n) { return 0; } 
 # (bounded by CITE_BUF_CAP); returns the stable dest cstr.
 fn _cite_copy(src, len) {
     if (_cite_buf == 0) { _cite_buf = alloc(CITE_BUF_CAP); }
+    if (_cite_buf == 0) { return ""; }                    # OOM -> a stable empty cstr, never a null ptr
     if (len < 0) { len = 0; }
-    var avail = CITE_BUF_CAP - _cite_off - 1;
-    if (avail < 0) { avail = 0; }
+    # ⚠ 0.39.0 (audit A-5): this is a HARD bound, not a clamp. The previous form clamped `avail` at 0 and
+    # then unconditionally wrote `store8(dst + len, 0)` and advanced `_cite_off = _cite_off + len + 1`.
+    # Once the arena filled EXACTLY (_cite_off == CITE_BUF_CAP), avail went negative, len clamped to 0, and
+    # the NUL landed at index CITE_BUF_CAP — one past the end. Worse, `_cite_off` still advanced, so the
+    # next call wrote at +1, the next at +2: an UNBOUNDED creeping NUL-write into the bump heap, one byte
+    # per call, corrupting whatever was allocated after the citations arena. Reachable from mneme search
+    # results, whose titles/paths the model itself authors via /remember. Now: if there is no room for even
+    # the terminator, write NOTHING and do not advance.
+    if (_cite_off >= CITE_BUF_CAP) { return ""; }         # arena exhausted -> degrade, do not overflow
+    var avail = CITE_BUF_CAP - _cite_off - 1;             # >= 0 by the guard above
     if (len > avail) { len = avail; }
     var dst = _cite_buf + _cite_off;
     var i = 0;
     while (i < len) { store8(dst + i, load8(src + i)); i = i + 1; }
-    store8(dst + len, 0);
-    _cite_off = _cite_off + len + 1;
+    store8(dst + len, 0);                                 # max index = _cite_off + avail = CITE_BUF_CAP - 1
+    _cite_off = _cite_off + len + 1;                      # max = CITE_BUF_CAP; the guard catches the next call
     return dst;
 }
 

@@ -67,9 +67,24 @@ fn daimon_build_call(dst, name, args_json) {
     off = _append_cstr_cap(dst, off, cap, "{\"name\":\"");
     off = _json_escape_into_cap(dst, off, cap, name);
     off = _append_cstr_cap(dst, off, cap, "\",\"arguments\":");
-    if (args_json == 0) { off = _append_cstr_cap(dst, off, cap, "{}"); }
-    else { off = _append_cstr_cap(dst, off, cap, args_json); }
+    # ⚠ 0.39.0 (audit A-10): `args_json` is the MODEL's `function.arguments`, spliced in RAW to preserve
+    # whatever shape the gateway forwarded. Raw splicing of untrusted text into a JSON document thoth is
+    # itself authoring is a JSON-injection seam: a value like `{}, "name":"other_tool"` closes the
+    # arguments object and appends a SECOND `name` key, and a last-key-wins parser on the far side would
+    # dispatch a tool thoth never gated. thoth authorizes `name` through t-ron BEFORE this point, so the
+    # gate and the executed call could disagree — the same authorize-one-thing/do-another shape as the
+    # parallel-path truncation. Validate that the text is exactly ONE well-formed JSON value before it
+    # goes in; anything else degrades to `{}` (the same substitution a null already took), which the
+    # agent loop surfaces to the model as an ordinary tool error.
+    var ok = 0;
+    if (args_json != 0) {
+        var alen = strlen(args_json);
+        if (alen > 0) { if (bayan_json_v_parse_buf(args_json, alen) != 0) { ok = 1; } }
+    }
+    if (ok == 1) { off = _append_cstr_cap(dst, off, cap, args_json); }
+    else { off = _append_cstr_cap(dst, off, cap, "{}"); }
     off = _append_cstr_cap(dst, off, cap, "}");
+    if (off > (cap - 1)) { off = cap - 1; }
     store8(dst + off, 0);
     return off;
 }
@@ -150,12 +165,19 @@ fn daimon_list_tools() {
         var name = bayan_json_v_obj_get(t, "name");
         var desc = bayan_json_v_obj_get(t, "description");
         emit("  ");
-        if (name != 0) { var ns = bayan_json_v_str(name); ui_emit_n(ROLE_ACCENT, str_data(ns), str_len(ns)); }
+        # 0.39.0 (audit A-4): a THIRD-PARTY MCP server controls its own name/description, so a
+        # non-string value here is attacker-reachable, not merely malformed. `bayan_json_v_str`
+        # answers 0 for a non-JTAG_STR tag and the str_data/str_len below would deref 0.
+        var ns = 0;
+        if (name != 0) { ns = bayan_json_v_str(name); }
+        if (ns != 0) { ui_emit_n(ROLE_ACCENT, str_data(ns), str_len(ns)); }
         else { ui_emit(ROLE_FAINT, "(unnamed)"); }
         if (desc != 0) {
-            ui_emit(ROLE_FAINT, "  - ");
             var ds = bayan_json_v_str(desc);
-            ui_emit_n(ROLE_MUTED, str_data(ds), str_len(ds));
+            if (ds != 0) {
+                ui_emit(ROLE_FAINT, "  - ");
+                ui_emit_n(ROLE_MUTED, str_data(ds), str_len(ds));
+            }
         }
         oprintln("");
         i = i + 1;

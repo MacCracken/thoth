@@ -265,6 +265,38 @@ fn _append_int(dst, off, n) {
     return off;
 }
 
+# _append_int_cap: the BOUNDED twin of _append_int — write non-negative n as decimal into dst at off,
+# never past cap-1, and return the new off. Digits are formatted into the same 24-byte scratch and then
+# emitted through the identical `off < (cap - 1)` guard `_append_cstr_cap` uses, so a saturated buffer
+# simply truncates the number instead of writing outside the allocation.
+#
+# ⚠ 0.39.0 (audit A-6). Every request builder funnels its strings through bounded appenders
+# (_append_cstr_cap, _json_escape_n_into_cap) — and those stop with `off` at EXACTLY cap-1 when they
+# saturate. `_append_int` then took no cap and wrote unconditionally, so the `"max_tokens":<n>` append
+# that follows put 4 digits at cap-1 … cap+2: a heap out-of-bounds WRITE past the request buffer. The
+# returned length was likewise past the end, and it is handed straight to `sandhi_http_post(..., len)`
+# — so the POST body ALSO read and TRANSMITTED 3 bytes of adjacent heap to the gateway. That is an
+# out-of-bounds write and an information disclosure from one missing bound. Reachable without a hostile
+# gateway: a large enough user prompt saturates the buffer (the audit reproduced it by piping ~50 000
+# 0x01 bytes, each of which escapes to a 6-byte \u0001, into `thoth -p`).
+fn _append_int_cap(dst, off, cap, n) {
+    if (n < 0) { n = 0; }
+    var tmp[24];                                  # 20 digits is the i64 maximum; 24 matches fmt_int_buf
+    var ti = 0;
+    if (n == 0) { store8(&tmp, 48); ti = 1; }
+    while (n > 0) {
+        store8(&tmp + ti, 48 + (n - (n / 10) * 10));
+        ti = ti + 1;
+        n = n / 10;
+    }
+    while ((ti > 0) && (off < (cap - 1))) {        # same guard as _append_cstr_cap: truncate, never overflow
+        ti = ti - 1;
+        store8(dst + off, load8(&tmp + ti));
+        off = off + 1;
+    }
+    return off;
+}
+
 # NOTE (0.37.0): the UNBOUNDED escaper `_json_escape_into` (and its only user `_hoosh_emit_msg`, an unbounded
 # {"role","content"} emitter) were DELETED here. Both were dead — every live request build goes through the
 # length-bounded `_json_escape_n_into_cap` / `_hoosh_emit_msg_cap`. An unbounded escaper for untrusted model/MCP
@@ -325,13 +357,14 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
     off = _append_cstr_cap(dst, off, cap, "{\"role\":\"user\",\"content\":\"");
     off = _json_escape_into_cap(dst, off, cap, prompt);
     off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
-    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
+    off = _append_int_cap(dst, off, cap, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
     off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     # stream_options:{include_usage} makes the gateway append a final usage frame to
     # the SSE stream (0.10.2) — without it a streamed turn carries no token count.
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
-    store8(dst + off, 0);
+    if (off > (cap - 1)) { off = cap - 1; }   # 0.39.0 (A-6): the returned length is a POST body
+    store8(dst + off, 0);                    # length — it must never name a byte outside the alloc
     return off;
 }
 
@@ -429,9 +462,10 @@ fn _hoosh_sum_build(dst, model, sys, user) {
     off = _append_cstr_cap(dst, off, cap, "\"},{\"role\":\"user\",\"content\":\"");
     off = _json_escape_into_cap(dst, off, cap, user);
     off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
-    off = _append_int(dst, off, HOOSH_SUM_MAX_TOKENS);
+    off = _append_int_cap(dst, off, cap, HOOSH_SUM_MAX_TOKENS);
     off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}");
-    store8(dst + off, 0);
+    if (off > (cap - 1)) { off = cap - 1; }   # 0.39.0 (A-6): the returned length is a POST body
+    store8(dst + off, 0);                    # length — it must never name a byte outside the alloc
     return off;
 }
 
@@ -564,11 +598,12 @@ fn hoosh_build_messages(dst, model, system, mem, stream) {
         i = i + 1;
     }
     off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
-    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.4: the reasoning ceiling when effort is on
+    off = _append_int_cap(dst, off, cap, _hoosh_max_tokens());   # 0.38.4: the reasoning ceiling when effort is on
     off = _append_reasoning_effort(dst, off, cap);   # 0.38.4: reasoning_effort when [hoosh].reasoning set
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
-    store8(dst + off, 0);
+    if (off > (cap - 1)) { off = cap - 1; }   # 0.39.0 (A-6): the returned length is a POST body
+    store8(dst + off, 0);                    # length — it must never name a byte outside the alloc
     return off;
 }
 
@@ -618,11 +653,12 @@ fn hoosh_build_dry(dst, model, system, mem, prompt, stream) {
     if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }   # the pending user turn
     off = _hoosh_emit_msg_cap(dst, off, cap, "user", prompt);
     off = _append_cstr_cap(dst, off, cap, "],\"max_tokens\":");
-    off = _append_int(dst, off, _hoosh_max_tokens());   # 0.38.4: mirrors the live builders' budget/effort pair
+    off = _append_int_cap(dst, off, cap, _hoosh_max_tokens());   # 0.38.4: mirrors the live builders' budget/effort pair
     off = _append_reasoning_effort(dst, off, cap);
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
-    store8(dst + off, 0);
+    if (off > (cap - 1)) { off = cap - 1; }   # 0.39.0 (A-6): the returned length is a POST body
+    store8(dst + off, 0);                    # length — it must never name a byte outside the alloc
     return off;
 }
 
@@ -842,11 +878,17 @@ fn hoosh_list_models() {
     while (i < n) {
         var m = bayan_json_v_arr_get(data, i);
         var id = bayan_json_v_obj_get(m, "id");
+        # 0.39.0 (audit A-4): `id != 0` proves the KEY exists, not that its VALUE is a string.
+        # `bayan_json_v_str` answers 0 for any non-JTAG_STR tag, and str_data/str_len/str_eq_cstr
+        # then dereference 0 — a SIGSEGV on `{"data":[{"id":123}]}`, which is wire data from a
+        # gateway relaying some provider's model list. Skip the malformed entry, keep listing.
         if (id != 0) {
             var ids = bayan_json_v_str(id);
-            if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
-            else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
-            oprintln("");
+            if (ids != 0) {
+                if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
+                else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
+                oprintln("");
+            }
         }
         i = i + 1;
     }
@@ -934,11 +976,13 @@ fn hoosh_list_provider_models(provider) {
             if ((obs != 0) && (_ci_eq(str_cstr(obs), provider) == 1)) {
                 var id = bayan_json_v_obj_get(m, "id");
                 if (id != 0) {
-                    var ids = bayan_json_v_str(id);
-                    if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
-                    else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
-                    oprintln("");
-                    shown = shown + 1;
+                    var ids = bayan_json_v_str(id);       # 0.39.0 (audit A-4): non-string id -> 0, not a Str
+                    if (ids != 0) {
+                        if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
+                        else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
+                        oprintln("");
+                        shown = shown + 1;
+                    }
                 }
             }
         }

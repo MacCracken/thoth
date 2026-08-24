@@ -41,3 +41,12 @@ fn _t_count_sub(hay, n, needle, m) {
     }
     return c;
 }
+
+# _canary_ok: 1 if all `n` bytes at `p` are still the 209 sentinel; else 0. Used by the 0.39.0 A-6
+# buffer-saturation tests, where the overflow to catch is only a few bytes wide, so the canary has to
+# start at the FIRST byte past the cap rather than at some comfortable distance beyond it.
+fn _canary_ok(p, n) {
+    var i = 0;
+    while (i < n) { if (load8(p + i) != 209) { return 0; } i = i + 1; }
+    return 1;
+}

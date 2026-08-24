@@ -54,6 +54,20 @@ fn confirm(verb, obj) {
         emit_err(" — denied; one-shot is non-interactive. configure [tron].policy or run interactively]\n");
         return 0;
     }
+    # ⚠ 0.39.0 (audit A-11): the SAME reasoning as one-shot, for the surface that had been missed. The T3
+    # GUI wraps its turn in OUT_NULL (src/gui/gpresent.cyr) because the window, not the terminal, is the
+    # output surface — so every byte of the prompt below is DISCARDED, and then `read_line` blocks on
+    # stdin that nobody is typing into. The GUI has no modal to render this in and no path from evdev to
+    # `read_line`, so the turn hung FOREVER on any gated tool with no [tron].policy loaded, which is the
+    # default. It presented as a frozen window with no visible cause. Deny instead: there is no surface
+    # on which a human could answer, and an unanswerable prompt must fail closed rather than deadlock.
+    # (OUT_RING — the T2 TUI — is deliberately NOT caught here: it has confirm hooks that bracket back to
+    # the live screen precisely so the prompt IS visible, which is the case immediately below.)
+    if (out_mode() == OUT_NULL) {
+        emit_err("  [authorization required: "); emit_err(verb); emit_err(" "); emit_err(obj);
+        emit_err(" — denied; this surface cannot prompt. configure [tron].policy to authorize it]\n");
+        return 0;
+    }
     # In the T2 TUI, dispatch output is captured into the feed ring (OUT_RING);
     # bracket back to the live screen so this prompt and its cooked y/n echo are
     # VISIBLE rather than buried in the ring. Off the TUI (REPL/piped, OUT_FD1)

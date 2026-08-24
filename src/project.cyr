@@ -11,11 +11,16 @@
 # path is jailed to the launch directory: absolute paths, a leading `~`, and any `..` path component are
 # REFUSED. Reads then resolve relative to the process cwd (the project the user launched thoth in), confined
 # to it + below. This is both the feature ("see THIS project") and the boundary ("can't escape to secrets").
-# RESIDUALS (documented, not faked): (1) a symlink INSIDE the project that points outside is followed (no
-# portable O_NOFOLLOW — same class as the /tmp-symlink residuals); the user's own repo, lower risk than the
-# ..-escape the jail blocks. (2) The jail's separator/escape check is POSIX/AGNOS-correct ('/' + '..' + '~');
-# Windows backslash + drive-letter (`C:\`) paths would need extra handling when the `--win` lane ships (it is
-# IOCP-gated and does not build today).
+# The jail is LEXICAL **plus** a link check: as of 0.39.0 `_project_no_symlink` (below) refuses a path any of
+# whose components is a symlink. Through 0.38.6 it was lexical-only, and the symlink hole was recorded here as
+# an accepted residual on the grounds that there was "no portable O_NOFOLLOW". The 0.39.0 audit measured that
+# premise and found it stale — `lib/fs.cyr` ships a portable readlink-based `is_symlink` — and demonstrated
+# the escape rather than arguing about it (a `-> /etc` link in the project returned /etc/hostname to the
+# model). Closed on both the read and the write side.
+# REMAINING RESIDUAL (documented, not faked): the separator/escape check is POSIX/AGNOS-correct ('/' + '..' +
+# '~'); Windows backslash + drive-letter (`C:\`) paths would need extra handling when the `--win` lane ships
+# (it is IOCP-gated and does not build today), and `is_symlink` returns 0 on Windows, so the link check is a
+# no-op there — the PE lane must not be shipped without revisiting both.
 #
 # GRANTED READ ROOTS (0.23.1). The jail is the DEFAULT; the *user* (never the model) can widen it to additional
 # absolute roots — a permission model like every other restriction. Grants come from config ([project].read_roots,
@@ -25,7 +30,8 @@
 # ambiguity. The read check (_project_read_ok) then accepts either a jailed in-project relative path OR an
 # absolute path with no '..' component that sits under a granted root (prefix + '/'-boundary match). The model
 # can only ever read where the *user* pointed it; it cannot grant itself a root (/allow is a slash command, not
-# a tool). Same residual as the jail: a symlink inside a granted root that points elsewhere is followed.
+# a tool). The 0.39.0 link check applies to granted roots too — a symlink inside a granted root is refused on
+# the same footing as one inside the project.
 
 var PROJECT_READ_CAP = 65536;    # max file bytes returned to the model (bounded, like the shell cap)
 var PROJECT_LIST_CAP = 16384;    # max list_dir output bytes
@@ -52,6 +58,113 @@ fn _project_no_dotdot(path) {
         i = i + 1;
     }
     return 1;
+}
+
+# PROJECT_PATH_MAX: the longest path the symlink walk will consider. A path at or past this is REFUSED
+# rather than truncated — failing closed, since a truncated prefix would test the wrong file.
+var PROJECT_PATH_MAX = 4096;
+var _proj_sym_buf = 0;        # reusable NUL-terminated prefix scratch for the component walk
+var _proj_sym_str = 0;        # ONE reusable 16-byte Str header (data,len). `str_from` allocates a header per
+                              # call and alloc is a no-free bump heap, so building one per component would
+                              # leak 16 B × depth on every tool round; this is written in place instead.
+
+# _project_no_symlink: 1 if NO path component of `path` is a symlink; else 0. NOT pure — one readlink(2)
+# per component (via the stdlib's `is_symlink`, which is portable across linux/macos/agnos and returns 0
+# on Windows, where the PE lane has no readlink wrapper).
+#
+# ⚠ THIS CLOSES THE JAIL'S LOAD-BEARING RESIDUAL. Through 0.38.6 the jail was purely LEXICAL — it refused
+# `/`, `~` and `..`, and both this file and src/edit.cyr documented "a symlink INSIDE the project pointing
+# outside is followed (no portable O_NOFOLLOW)" as an accepted risk. That acceptance was **measured and is
+# no longer true**: `lib/fs.cyr` ships `is_symlink`, and the 0.39.0 audit demonstrated the escape rather
+# than theorising it — a `_jailprobe -> /etc` symlink in the project made `read_file {"path":
+# "_jailprobe/hostname"}` return the real contents of /etc/hostname, from outside the project, with the
+# jail reporting the path as safe. The reachability is not exotic: the attacker does not need shell, only
+# a symlink in a repository the user opens thoth in.
+#
+# Every component is tested, not just the last — `link/sub/file` escapes through `link` even though the
+# final component is an ordinary file. The prefix is tested WITHOUT its trailing '/', because readlink on
+# "link/" does not report the link itself.
+fn _project_no_symlink(path) {
+    if (path == 0) { return 0; }
+    var n = strlen(path);
+    if (n == 0) { return 1; }
+    if (n >= PROJECT_PATH_MAX) { return 0; }              # absurd path -> refuse, never truncate-and-test
+    if (_proj_sym_buf == 0) { _proj_sym_buf = alloc(PROJECT_PATH_MAX + 1); }
+    if (_proj_sym_str == 0) { _proj_sym_str = alloc(16); }
+    if ((_proj_sym_buf == 0) || (_proj_sym_str == 0)) { return 0; }   # OOM -> fail CLOSED, never open
+    var i = 0;
+    while (i < n) {
+        var c = load8(path + i);
+        store8(_proj_sym_buf + i, c);
+        if ((c == 47) || ((i + 1) == n)) {                # a component boundary, or the end of the path
+            var plen = i + 1;
+            if (c == 47) { plen = i; }                    # test "a/b", not "a/b/"
+            if (plen > 0) {                               # skip the empty prefix of a leading '/'
+                store8(_proj_sym_buf + plen, 0);
+                store64(_proj_sym_str, _proj_sym_buf);
+                store64(_proj_sym_str + 8, plen);
+                if (is_symlink(_proj_sym_str) == 1) { return 0; }
+            }
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# _proj_comp_eq: 1 if the path component starting at `path + at` and ending at the next '/' or NUL equals
+# the cstr `name`. PURE. Used by _project_sensitive to compare whole components, never substrings — a file
+# called `.thothrc` or a directory `my.thoth.bak` must NOT match `.thoth`.
+fn _proj_comp_eq(path, at, name) {
+    var i = 0;
+    while (load8(name + i) != 0) {
+        if (load8(path + at + i) != load8(name + i)) { return 0; }
+        i = i + 1;
+    }
+    var after = load8(path + at + i);                 # the component must END here
+    if ((after == 0) || (after == 47)) { return 1; }
+    return 0;
+}
+
+# _project_sensitive: 1 if `path` names thoth's OWN state — its config or its `.thoth/` home — else 0. PURE.
+#
+# ⚠ THE CONFUSED-DEPUTY FIX (0.39.0, audit A-3). thoth's config lives at `.thoth/config.cyml`, and
+# docs/examples tells the operator to put it at the REPO ROOT — which is exactly where thoth is launched,
+# so it sat *inside* the project jail as an ordinary relative file. `read_file` carries NO t-ron gate (the
+# jail is its only boundary, by design, since it is read-only and project-confined), and `[hoosh].tools`
+# defaults on, so the tool is advertised by default. Net effect, DEMONSTRATED in the audit rather than
+# argued: `read_file {"path":".thoth/config.cyml"}` returned `token = "…"` — thoth handing the model its
+# own gateway bearer token, which a prompt-injected model can then exfiltrate through web_fetch or shell.
+# The write side was worse: `.thoth/config.cyml` passed the *write* jail identically, so an `edit` could
+# repoint `[hoosh].url` at an attacker host or flip `[shell].enabled`, and `/reload` makes it live —
+# thoth's own security config, rewritable by the untrusted party it constrains.
+#
+# The rule is COMPONENT-WISE and applies at any depth, so it also covers the absolute-path form reachable
+# under a user-granted read root (`/home/u/proj/.thoth/config.cyml`), not just the relative one.
+#
+# ⚠ THIS IS NOT A GENERAL SECRET FILTER, and must not be mistaken for one. It closes the specific
+# confused-deputy hole where thoth leaks *its own* credentials. A project's other secrets (`.env`,
+# `.git/config` with a tokenised remote, a private key checked into the tree) are still readable by the
+# model — that is the operator's project and the jail's whole purpose is to let the agent see it.
+# Redacting those is a different capability (output filtering) and is tracked as such, not faked here.
+# The HUMAN is unaffected: `/read` and `@file` do not go through this jail, so the operator can still
+# open their own config.
+fn _project_sensitive(path) {
+    if (path == 0) { return 1; }                      # unknown -> treat as sensitive (fail closed)
+    var n = strlen(path);
+    var at = 0;                                       # start of the current component
+    var i = 0;
+    while (i <= n) {
+        var c = load8(path + i);
+        if ((c == 47) || (c == 0)) {                  # end of a component
+            if (i > at) {                             # skip empty components ("a//b", a leading '/')
+                if (_proj_comp_eq(path, at, ".thoth") == 1) { return 1; }
+                if (_proj_comp_eq(path, at, "thoth.cyml") == 1) { return 1; }
+            }
+            at = i + 1;
+        }
+        if (c == 0) { i = n + 1; } else { i = i + 1; }
+    }
+    return 0;
 }
 
 # _project_jail_ok: 1 if `path` is safe to read within the project — a RELATIVE path with no `..` component
@@ -158,6 +271,8 @@ fn read_file_tool(args_cstr) {
     if (ps == 0) { return "(read_file: 'path' must be a string)"; }
     var path = str_cstr(ps);
     if (_project_read_ok(path) == 0) { return "(read_file: refused - path is outside the project and any user-granted read root; no '..' allowed)"; }
+    if (_project_no_symlink(path) == 0) { return "(read_file: refused - a path component is a symlink; the jail does not follow links out of the project)"; }
+    if (_project_sensitive(path) == 1) { return "(read_file: refused - that is thoth's own config/state, not project source)"; }
     if (is_dir(str_from(path)) == 1) { return "(read_file: that path is a directory - use list_dir)"; }
     if (file_exists(path) == 0) { return "(read_file: no such file)"; }
     if (_project_read_buf == 0) { _project_read_buf = alloc(PROJECT_READ_CAP + 1); }
@@ -186,6 +301,8 @@ fn list_dir_tool(args_cstr) {
         }
     }
     if (_project_read_ok(path) == 0) { return "(list_dir: refused - path is outside the project and any user-granted read root; no '..' allowed)"; }
+    if (_project_no_symlink(path) == 0) { return "(list_dir: refused - a path component is a symlink; the jail does not follow links out of the project)"; }
+    if (_project_sensitive(path) == 1) { return "(list_dir: refused - that is thoth's own config/state, not project source)"; }
     var dirstr = str_from(path);
     if (is_dir(dirstr) == 0) { return "(list_dir: no such directory)"; }
     if (_project_out_buf == 0) { _project_out_buf = alloc(PROJECT_LIST_CAP); }
