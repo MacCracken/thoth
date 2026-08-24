@@ -46,11 +46,28 @@
 # dist files — the zlib profile / 1.3.1 read bundle may not be tagged yet):
 #   SIT_LOCAL=/path/to/sit SANKOCH_LOCAL=/path/to/sankoch ./scripts/sync-sit.sh
 #
-# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.3.5 2.7.7)
+# ⚠ AS OF thoth 0.38.6, USE THE LOCAL PATH FOR sit. The pin of record is **1.6.2**,
+# which is the fix thoth needed (sit 1.6.1's `sf_rename` named `SYS_RENAME`, which
+# arm64 Linux does not define, breaking `cyrius build --aarch64` outright). That fix
+# lives in sit's WORKING TREE and is not tagged/pushed yet — sit's own CLAUDE.md
+# leaves git to the user — so the plain curl path will 404 on `1.6.2` until it is.
+# `curl -sSf` under `set -e` makes that a loud abort rather than a silent stale file,
+# which is the right failure. Until the tag exists:
+#   SIT_LOCAL=/home/macro/Repos/sit SANKOCH_LOCAL=/home/macro/Repos/sankoch ./scripts/sync-sit.sh
+#
+# ⚠ AND KEEP THE DEFAULT ABOVE IN LOCKSTEP WITH THE PIN. Running this script with a
+# stale default is a **silent DOWNGRADE** of a committed file: it exits 0, prints its
+# usual success lines, and reintroduces whatever the older bundle was broken by. That
+# happened during 0.38.6's own development (the default said 1.6.1 while the pin had
+# moved to 1.6.2) and was caught only by `tests/cases/vendor.cyr`, which asserts the
+# bundle's `# Version:` header against the pin. That test is the real gate; this
+# comment is the reminder.
+#
+# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.6.2 2.7.9)
 set -euo pipefail
 
-SIT_TAG="${1:-1.3.5}"
-SK_TAG="${2:-2.7.7}"
+SIT_TAG="${1:-1.6.2}"
+SK_TAG="${2:-2.7.9}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIT_DEST="$REPO_ROOT/src/vendor/sit-read.cyr"
 SK_DEST="$REPO_ROOT/src/vendor/sankoch.cyr"

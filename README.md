@@ -12,7 +12,7 @@ or provider when that serves the work.
 
 SCRIBE = Self-Correcting Reasoning Intelligence with Bounded Execution
 
-> **Status: 0.38.5 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.38.6 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
 
 **The loop.** A free-text turn drives a **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to

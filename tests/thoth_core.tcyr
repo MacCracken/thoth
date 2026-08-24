@@ -58,6 +58,7 @@ include "tests/cases/testutil.cyr"
 include "tests/cases/core.cyr"
 include "tests/cases/tui.cyr"
 include "tests/cases/agent.cyr"
+include "tests/cases/vendor.cyr"   # vendor-pin integrity (0.38.6); no thoth deps — pure fs+str over src/vendor/
 
 fn main() {
     alloc_init();
@@ -131,6 +132,7 @@ fn main() {
     test_ui_niceties();
     test_reload();
     test_model_switch();
+    test_vendor_pins(); test_vendor_hazards();
     return assert_summary();
 }
 var _e = main();

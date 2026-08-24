@@ -22,10 +22,10 @@ include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
-# vyakarana (2.3.2) — source-code tokenizer for syntax highlighting (/read, diffs).
+# vyakarana (2.4.0) — source-code tokenizer for syntax highlighting (/read, diffs).
 # Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
 include "src/vendor/vyakarana.cyr"
-# darshana (0.9.x) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
+# darshana (1.0.0, API frozen at v1) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
 # (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
 include "src/vendor/darshana.cyr"
 # anuenue (1.2.0 [lib] profile) — the HSV phase model behind `/theme rainbow` (0.38.0).
@@ -33,14 +33,17 @@ include "src/vendor/darshana.cyr"
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
-# sit (1.3.5 read profile) — .git/ read-mode: branch/status/diff on real git +
+# sit (1.6.2 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
-# sit_repo_* API only (its command layer is dead here). sankoch (2.7.7 zlib
+# sit_repo_* API only (its command layer is dead here). sankoch (2.7.9 zlib
 # PROFILE, `dist/sankoch-zlib.cyr` — 53 globals, tracks current sankoch) supplies
 # the git-object inflate the bundle references bare. Only sit's entry_hash/ann_new
 # are renamed on sync (vs libro/bote); the old sankoch-2.2.5 pin, the _stream_grow
-# rename, and the SYS_CHDIR sed are all gone (sankoch 2.7.7 zlib profile + sit
-# 1.3.5's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
+# rename, and the SYS_CHDIR sed are all gone (sankoch 2.7.9 zlib profile + sit
+# 1.3.1's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
+# ⚠ 1.6.2 is a REQUIRED floor, not just "latest": sit 1.6.1's sf_rename named
+# SYS_RENAME directly, which arm64 Linux does not define at all, breaking thoth's
+# --aarch64 build outright. 1.6.2 routes it through the stdlib's portable sys_rename.
 # BOTH before commands.cyr so thoth's cmd_reset wins the benign last-def-wins.
 include "src/vendor/sankoch.cyr"
 include "src/vendor/sit-read.cyr"
@@ -80,6 +83,10 @@ include "src/mdhl.cyr"      # markdown fenced-code-block highlighter for the rep
 include "src/mdmodel.cyr"    # shared structural-markdown MODEL (0.36.0): pure facts-not-bytes classifier + inline spans; GUI feed leaf lowers it (later cut migrates mdhl onto it)
 include "src/surface.cyr"   # status view-model (0.28.0, Stage B; ADR-0009 realization); after its producers, before commands+tui
 # T3 GUI (0.29.0+): draw-command IR + kashi CPU rasterizer + view-builders. kashi (font) before graster;
+# kashi is vendored as its FREESTANDING CORE (kashi 1.0.6 `src/font_data.cyr`), NOT the generated
+# `dist/kashi.cyr` library face — the GUI wants 8x16 glyph rows, not the PSF/BDF/PCF loader surface,
+# and the core's no-stdlib/no-heap/no-syscall contract is what lets it sit under graster. It carries
+# no `# Version:` header for that reason; byte-identical across every 1.0.x tag. See scripts/sync-kashi.sh.
 # gdraw before graster/gstatus. In the shipping binary as of 0.30.0 (fits under cyrius 6.4.49).
 include "src/vendor/kashi.cyr"
 include "src/gui/gdraw.cyr"

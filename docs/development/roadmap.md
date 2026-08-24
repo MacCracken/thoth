@@ -10,7 +10,7 @@
 > milestone is marked done below, it is a one-line pointer — the detail
 > is in CHANGELOG/state.md, not repeated here.
 >
-> **Where we are (0.38.4):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
+> **Where we are (0.38.6):** M0–M7 and the **entire** post-M7 feature arc have shipped — the terminal-citizen
 > front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`), the model **`shell`** / **`edit`** /
 > **`create_file`** tools (thoth reads *and writes* code), the **memory arc** (consume mneme), the
 > **chat-management arc** (named multi-conversation store), the **chat-UX arc** (message actions, stop/interrupt,
@@ -169,8 +169,42 @@ Forward, non-gating (each ready when its prerequisite lands; none blocks v1.0):
 ### Deferred / known limitations (captured so they're not lost)
 
 > Not on an active line — each is gated on an external/substrate primitive or is
-> low-priority hardening. **None is a correctness bug**; each degrades honestly today.
-> Recorded here so it isn't lost in code comments.
+> low-priority hardening. Most degrade honestly today. **The first two items are the
+> exception and are labelled as such**: they are real defects, not honest degradations,
+> surfaced by the 0.38.6 refresh's cross-target and live-vertical passes. Recorded here
+> so they aren't lost in code comments.
+
+- ⛔ **The macOS build lane is BROKEN, and it is thoth's bug.** Not a degradation — the
+  compile fails. `src/tui.cyr:1853` / `:1906` reference `TTY_SIGMASK_WINCH` and the file
+  calls six `tty_*` functions (`tty_isatty`, `tty_winsize`, `tty_cooked`, `tty_raw`,
+  `tty_open_signalfd`, `tty_close_signalfd`) with **no macOS guard** — but darshana gates
+  its entire termios/winsize/signalfd half to `#ifdef CYRIUS_TARGET_LINUX`, because BSD
+  termios is a different struct and is explicitly out of scope for darshana v1.0. So the
+  T2 TUI cannot link off Linux. Re-tested at 0.38.6 on real Apple Silicon with cyrius
+  6.5.35: a pristine `HEAD` baseline fails identically, so this is long-standing (last
+  known-good lane was **0.6.4**), not a dep-refresh regression. **The fix is thoth-side
+  and does not need a dep bump**: gate the T2 TUI off non-Linux and fall back to the line
+  tier — the same degradation already coded for AGNOS in `tui_events_init`. darshana's
+  ANSI/cursor half is portable and unaffected, so the line tier should build fine. Sizing
+  it properly means checking whether the GUI tier has the same exposure.
+
+- ⛔ **sit's git read-mode status reports false positives** (upstream, sit — thoth is a
+  pure consumer). Every tracked mode-`100755` file and every tracked zero-byte file comes
+  back "modified" regardless of content: in this repo `/git` listed **63** files where
+  `git status` listed **58**, the five extras being four unmodified `scripts/*.sh` and
+  `docs/examples/.gitkeep`. Reproduced identically on sit **1.3.5** and **1.6.2**, so the
+  0.38.6 bump neither caused nor fixed it. `src/git.cyr`'s `git_probe` just copies sit's
+  `{path, kind}` vec and compares nothing, so the fix belongs in sit's comparator; it
+  inflates `/git`, `/state`'s changed-file count and the file-tree badges. Note sit's CLI
+  cannot reproduce it — `sit status` handles only `.sit/` repos; git read-mode is a
+  library-only surface.
+
+- **thoth asks hoosh for streaming token usage that hoosh never sends.** Every streaming
+  request carries `stream_options.include_usage`, but hoosh 2.6.3's source contains no
+  reference to either token and emits no trailing usage frame, so `_hoosh_account_usage`
+  waits for something that never arrives on the streaming path. Either hoosh grows the
+  frame or thoth stops claiming the field feeds its cost producer. Degrades quietly today
+  rather than honestly — the token/cost row simply is not fed on that path.
 
 - **`rainbow` polish.** All three tiers cycle per grapheme and are reachable (0.38.1: `/theme` + ⌃T on the TUI,
   Ctrl+T in the GUI). Remaining, non-gating:

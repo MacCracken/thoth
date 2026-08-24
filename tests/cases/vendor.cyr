@@ -1,0 +1,144 @@
+# thoth tests — VENDOR-PIN INTEGRITY (0.38.6)
+#
+# The bundles under `src/vendor/` are the one part of thoth's compile set that no
+# compiler check covers. A stale or half-applied sync still builds, still passes
+# every other test, and is only visible by reading the file — which is exactly how
+# 0.38.5 shipped with a `lib/` floor whose sync had silently skipped eight files.
+# `scripts/sync-*.sh` prints a WARN for each of these, but a WARN in a script the
+# developer ran by hand is not a gate. These are.
+#
+# Two groups:
+#   * test_vendor_pins       — every bundle reports the version thoth thinks it
+#                              vendored. Catches "I ran the script for one dep and
+#                              updated the CHANGELOG for all of them".
+#   * test_vendor_hazards    — the specific collisions and portability traps this
+#                              tree has actually been bitten by, each pinned so a
+#                              future sync that reintroduces one fails here rather
+#                              than on someone's aarch64 build.
+#
+# Every path read is git-tracked, so these behave identically in CI and locally
+# (a local-only fixture passes here and fails there — see the 0.30.x lesson).
+
+# avatara is the largest bundle at ~1.13 MB; one buffer is reused across reads.
+var _VD_CAP = 1500000;
+var _VD_BUF = 0;
+var _VD_LEN = 0;
+
+# Read a vendored bundle into the shared buffer. Returns bytes read (< 0 = open
+# failed). `_VD_LEN` carries the length for the _vd_has helpers below.
+fn _vd_read(path) {
+    if (_VD_BUF == 0) { _VD_BUF = alloc(_VD_CAP); }
+    _VD_LEN = file_read_all(path, _VD_BUF, _VD_CAP);
+    return _VD_LEN;
+}
+
+# Occurrences of `needle` in the bundle last read. Substring, not word-bounded and
+# blind to comments — a naive needle over a dist bundle finds the bundle's own PROSE
+# ABOUT the thing as readily as the thing. Every hazard needle below is therefore
+# either anchored to a line start (a definition can only appear there) or paired
+# against the count of the benign variants that legitimately contain it. Writing
+# these loosely the first time produced three false failures, each of which turned
+# out to be the upstream changelog comment describing the very fix being asserted.
+fn _vd_count(needle) {
+    return _t_count_sub(_VD_BUF, _VD_LEN, needle, strlen(needle));
+}
+
+# Assert one bundle carries exactly the `# Version:` line thoth pins it at.
+# EXACTLY one: a bundle is generated with a single header, so two would mean the
+# file was concatenated rather than replaced.
+fn _vd_pin(path, header, label) {
+    var n = _vd_read(path);
+    assert(n > 0, label);                    # readable at all (git-tracked)
+    assert(n < _VD_CAP, label);              # not truncated by the buffer cap
+    assert_eq(_vd_count(header), 1, label);
+    return 0;
+}
+
+fn test_vendor_pins() {
+    test_group("vendored dist bundles report their pinned version (src/vendor/, 0.38.6)");
+    _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.14.1", "avatara pinned at 2.14.1");
+    _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.3.7",  "bote-core pinned at 3.3.7");
+    _vd_pin("src/vendor/libro.cyr",     "# Version: 2.8.12", "libro pinned at 2.8.12");
+    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.1.9",  "t-ron pinned at 2.1.9");
+    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.6.2",  "sit-read pinned at 1.6.2");
+    _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.7.9",  "sankoch-zlib pinned at 2.7.9");
+    _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.4.0",  "vyakarana pinned at 2.4.0");
+    _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.0.0",  "darshana pinned at 1.0.0");
+    _vd_pin("src/vendor/anuenue.cyr",   "# Version: 1.2.0",  "anuenue pinned at 1.2.0");
+
+    # kashi is the exception and deliberately so: thoth vendors kashi's FREESTANDING
+    # CORE (its `src/font_data.cyr`), not the generated `dist/kashi.cyr` library face,
+    # because the GUI wants glyph rows and none of the PSF/BDF/PCF loader surface. A
+    # module source carries no distlib header, so there is nothing to version-check —
+    # pin the two properties that actually matter instead. See scripts/sync-kashi.sh.
+    var kn = _vd_read("src/vendor/kashi.cyr");
+    assert(kn > 0, "kashi core readable");
+    assert_eq(_vd_count("# Version:"), 0, "kashi core carries no distlib version header (it is a module source)");
+    assert(_vd_count("fn kashi_font_init") == 1, "kashi core defines kashi_font_init (right file)");
+    assert_eq(_vd_count("\ninclude "), 0, "kashi core stays freestanding — zero includes (kashi ADR-0001)");
+    return 0;
+}
+
+fn test_vendor_hazards() {
+    test_group("vendored bundles stay free of the collisions/traps this tree was bitten by (0.38.6)");
+
+    # ---- darshana: SYS_IOCTL must come from the stdlib, per-arch ----
+    # Through 0.9.0 darshana defined `var SYS_IOCTL = 16;` itself. thoth's own
+    # src/intr.cyr and src/ui.cyr call `syscall(SYS_IOCTL, ...)`, and 16 is the
+    # x86_64 number — on aarch64 Linux ioctl is **29**, so darshana's copy won the
+    # last-def and thoth issued the WRONG SYSCALL on every aarch64 build (the
+    # `--aarch64` compile said so out loud: "duplicate symbol 'SYS_IOCTL' redefined
+    # with conflicting value"). darshana 1.0.0 dropped it. If a future sync brings
+    # it back, that silent miscompile returns, so pin its absence.
+    _vd_read("src/vendor/darshana.cyr");
+    # Anchored to a line start: darshana 1.0.0's own header DISCUSSES the removed
+    # `var SYS_IOCTL = 16` in prose, so an unanchored needle matches the fix's
+    # documentation. `\nvar ` can only be a module-scope definition.
+    assert(_vd_count("\nvar ") > 0, "sanity: newline-anchored needles match (escape handling)");
+    assert_eq(_vd_count("\nvar SYS_IOCTL"), 0, "darshana defines no SYS_IOCTL (stdlib's per-arch value must win)");
+
+    _vd_read("src/vendor/sit-read.cyr");
+    # ---- sit: no raw legacy syscall constants on the portable path ----
+    # arm64 Linux has no `rename` syscall at all, so `lib/syscalls_aarch64_linux.cyr`
+    # defines only SYS_RENAMEAT and implements the 2-arg `sys_rename` over it. sit
+    # 1.6.1's `sf_rename` named SYS_RENAME directly on its non-AGNOS arm, which is a
+    # HARD build failure on --aarch64 (the check is static, so being reachable only
+    # from `sit mv` does not save it). Fixed upstream in sit 1.6.2.
+    assert_eq(_vd_count("syscall(SYS_RENAME, old, new)"), 0, "sit-read: no raw 2-arg SYS_RENAME (breaks --aarch64)");
+    assert(_vd_count("sys_rename(old, new)") == 1, "sit-read: portable stdlib sys_rename on the non-AGNOS arm");
+    # The AGNOS arm keeps its own 4-arg form — a genuinely different ABI, and the
+    # reason the two are split textually rather than branched at runtime.
+    assert(_vd_count("syscall(SYS_RENAME, old, strlen(old), new, strlen(new))") == 1, "sit-read: AGNOS 4-arg rename retained");
+
+    # ---- sit: the two integration renames scripts/sync-sit.sh applies ----
+    # sit cannot know thoth also vendors libro and bote-core. Unrenamed, sit's
+    # `entry_hash` (a tree accessor) wins the last-def over **libro**'s audit-chain
+    # hash getter and the chain reads a pointer as a hash string; sit's 1-arg
+    # `ann_new` collides with **bote-core**'s 0-arg one.
+    #
+    # The test is a partition, not a word-boundary regex: every occurrence of the
+    # substring "entry_hash" must be accounted for by a name that is ALLOWED to
+    # contain it — `_sit_entry_hash` (renamed, 11) or `tree_entry_hash` (a different
+    # symbol sit owns outright, 23, and no collision). Anything left over is a bare
+    # `entry_hash` the sed missed. Same shape for ann_new, which has no benign
+    # variant. This catches a partial sed, which a `grep -c '\bentry_hash\b'` does
+    # NOT: `_sit_entry_hash` has no word boundary before "entry_hash", so that grep
+    # reads 0 whether the rename applied to every site or only to some.
+    assert_eq(_vd_count("entry_hash"), _vd_count("_sit_entry_hash") + _vd_count("tree_entry_hash"), "sit-read: every bare entry_hash is renamed (vs libro's)");
+    assert(_vd_count("_sit_entry_hash") > 0, "sit-read: the entry_hash rename actually applied");
+    assert_eq(_vd_count("ann_new"), _vd_count("_sit_ann_new"), "sit-read: every ann_new is renamed (vs bote-core's)");
+    assert(_vd_count("_sit_ann_new") > 0, "sit-read: the ann_new rename actually applied");
+    # sit >= 1.3.1 made sit_repo_open chdir-free, which is what lets thoth build git
+    # natively on AGNOS. A returning SYS_CHDIR would silently undo that. The bundle
+    # keeps ONE mention — the changelog comment recording the removal, where the call
+    # sits inside backticks — so pin that every occurrence is that quoted one.
+    assert_eq(_vd_count("syscall(SYS_CHDIR"), _vd_count("`syscall(SYS_CHDIR"), "sit-read: chdir-free (sit >= 1.3.1) — the only mention is the quoted comment");
+
+    # ---- sankoch: the zlib profile must not drag stream.cyr back in ----
+    # The full sankoch bundle defines `_stream_grow`, which collides with
+    # vyakarana's. thoth vendors the lean `[lib.zlib]` profile precisely because it
+    # drops stream.cyr — which is why no sed is needed any more.
+    _vd_read("src/vendor/sankoch.cyr");
+    assert_eq(_vd_count("_stream_grow"), 0, "sankoch zlib profile drops stream.cyr (no _stream_grow vs vyakarana's)");
+    return 0;
+}

@@ -18,10 +18,10 @@
 # vendored libro; libro 2.8.2 renamed its bare ERR_* to LIBRO_ERR_*, so avatara's
 # is now the sole definition and the shared token is gone.)
 #
-# Usage: ./scripts/sync-avatara.sh [tag]   (default: 2.14.0)
+# Usage: ./scripts/sync-avatara.sh [tag]   (default: 2.14.1)
 set -euo pipefail
 
-TAG="${1:-2.14.0}"
+TAG="${1:-2.14.1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/avatara.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/avatara/${TAG}/dist/avatara.cyr"

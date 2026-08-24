@@ -1990,6 +1990,16 @@ fn tui_loop() {
     # SIGINT and, with no handler, kill us WITH the alt-screen up + scroll region set
     # (garbled terminal). Blocked, it's queued to the signalfd (unread) and discarded
     # at exit; the raw-mode composer's own Ctrl-C still exits cleanly (KEY_CTRLC).
+    # ⚠ The RESULT is load-bearing as of darshana 1.0.0 — it was not before. Through
+    # 0.9.0 a failing `signalfd(2)` returned a raw -errno and LEFT the SIG_BLOCK it had
+    # already applied in place, so a failure still delivered the paragraph above: SIGINT
+    # stayed blocked, just without an fd to queue onto. 1.0.0 rolls the SIG_BLOCK back on
+    # that path and returns exactly -1 — strictly better hygiene for darshana, but it
+    # means a failure here now leaves SIGINT *unblocked*, and a Ctrl-C in the cooked
+    # dispatch window would kill us with the alt-screen up and the scroll region set:
+    # precisely the garbling this block exists to prevent. Only reachable on EMFILE /
+    # ENOMEM, so it is narrow — but it is no longer harmless, and thoth announces a lost
+    # capability rather than faking it (see the notice below, after the feed is up).
     #ifndef CYRIUS_TARGET_AGNOS
     _sigint_fd = tty_open_signalfd(2);   # block SIGINT (mask bit for signal 2) for the session
     #endif
@@ -2039,6 +2049,20 @@ fn tui_loop() {
     feed_flush_pending();
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
+    # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`
+    # is what blocks SIGINT for the session; if it failed (EMFILE / ENOMEM) SIGINT is
+    # live, and a Ctrl-C at a cooked y/n prompt will kill the process with the
+    # alt-screen still up. The composer's own Ctrl-C (KEY_CTRLC, read in raw mode) is
+    # unaffected — it never reaches signal delivery — so the notice is specific about
+    # which Ctrl-C is unsafe. Not fatal, so the TUI continues; the user just gets told.
+    #ifndef CYRIUS_TARGET_AGNOS
+    if (_sigint_fd < 0) {
+        ui_emit(ROLE_RED, "SIGINT guard unavailable");
+        ui_emit(ROLE_FAINT, " — signalfd failed; Ctrl-C at a y/n prompt may exit without");
+        ui_emit(ROLE_FAINT, " restoring the terminal (the composer's Ctrl-C is fine)");
+        feed_flush_pending();
+    }
+    #endif
     # 0.11.2: bind opt-in input-history persistence ([history].file). Loads prior lines
     # into the recall ring and announces honestly into the feed — the active path + how
     # many were recalled, or a degrade-closed "cannot write" note (recall then stays

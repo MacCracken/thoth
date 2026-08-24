@@ -2,6 +2,174 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.38.6] - 2026-08-23
+
+**Toolchain 6.5.20 → 6.5.35, every dependency to its latest release — and an aarch64 miscompile that had been
+live the whole time.** A refresh with three real findings rather than ten version numbers: darshana's own
+`SYS_IOCTL` was overriding the stdlib's arch-correct value on aarch64, sit 1.6.1 broke the aarch64 build
+outright, and darshana 1.0.0 silently changed what a failed `signalfd` leaves behind.
+
+### Fixed
+
+- ⛔ **thoth issued the WRONG SYSCALL on every aarch64 build**, and had since **0.8.0** (commit `44a5d17`, the first `syscall(SYS_IOCTL, ...)` call site). The
+  vendored darshana bundle defined `var SYS_IOCTL = 16;` — the **x86_64** ioctl number. arm64 Linux uses
+  **29** (`lib/syscalls_aarch64_linux.cyr`). thoth's own `src/intr.cyr:33,40,66` (the Ctrl-C termios
+  save/restore) and `src/ui.cyr:81` (the TTY probe) call `syscall(SYS_IOCTL, ...)`, and darshana's copy won
+  the last-def, so on aarch64 all four issued syscall **16**, which is not `ioctl` on that ABI at all. The
+  compiler **said so out loud** the whole time and nobody was reading aarch64 output:
+  `warning:src/vendor/darshana.cyr:129:15: duplicate symbol 'SYS_IOCTL' redefined with conflicting value
+  (last definition wins)`. **darshana 1.0.0 removes its copy**, so the stdlib's per-arch value is now the
+  only one and the warning is gone. Verified by building `--aarch64` before and after: the diagnostic is
+  present at 0.38.5 and absent at 0.38.6. It is pinned so a future sync cannot bring it back
+  (`tests/cases/vendor.cyr`).
+
+  Side effect worth recording: the same removal also **dropped a `--win` error**, 14 → 13. darshana's
+  definition was inside `#ifdef CYRIUS_TARGET_LINUX`, so on Windows it was absent *and* shadowing —
+  `src/ui.cyr:81` now resolves `SYS_IOCTL` from `lib/syscalls_windows.cyr`. The remaining 13 are the
+  pre-existing IOCP/epoll gap, unchanged.
+
+- ⛔ **sit 1.6.1 broke thoth's aarch64 build, and the fix shipped upstream as sit 1.6.2.** `sf_rename`
+  (sit's `src/index.cyr`, in **both** dist profiles) called `syscall(SYS_RENAME, old, new)`. **arm64 Linux
+  has no `rename` syscall at all** — it was never given one, so
+  `lib/syscalls_aarch64_linux.cyr` defines only `SYS_RENAMEAT` and implements `sys_rename` over it. Result:
+  `error: undefined variable 'SYS_RENAME'`, a hard **FAIL**, on a build that was `OK` at sit 1.3.5. The
+  static check is not reachability-based, so it fired even though `sf_rename` is reachable only from
+  `sit mv`, which thoth's read-only consumption never calls — the bundle would not compile over dead code.
+  Not patched thoth-side (the spine is consumed, never forked): **sit 1.6.2** routes the non-AGNOS arm
+  through the stdlib's portable 2-arg `sys_rename`, keeping its 4-arg AGNOS arm, and the same one-line
+  class of bug was fixed alongside in sit's own `wire_ssh.cyr` (`SYS_ACCESS` → `sys_access`; arm64 has only
+  `faccessat`), which gave **sit its first working aarch64 build**. sit's suite stayed 383 + 1.
+
+- **A failed `signalfd` no longer leaves thoth pretending SIGINT is blocked** (`src/tui.cyr`). `tui_loop`
+  blocks SIGINT for the whole session so a Ctrl-C in the **cooked** dispatch window cannot kill the process
+  with the alt-screen up and the scroll region set. It never checked `tty_open_signalfd`'s return — which
+  was *accidentally* fine through darshana 0.9.0: a failure there returned a raw `-errno` and **left the
+  `SIG_BLOCK` it had already applied in place**, so SIGINT stayed blocked, just without an fd. darshana
+  1.0.0 rolls that block back and returns exactly `-1`. Better hygiene upstream, but it converts thoth's
+  unchecked assignment from harmless into the exact garbling the code exists to prevent. thoth now announces
+  the lost capability into the feed instead of faking it, and is specific about which Ctrl-C is unsafe (the
+  composer's own `KEY_CTRLC` is read in raw mode and never reaches signal delivery). Narrow — reachable only
+  on `EMFILE`/`ENOMEM` — but caused by this refresh, so fixed in it.
+
+### Changed
+
+- **Toolchain `6.5.20` → `6.5.35`** (`cyrius.cyml`), `lib/` re-synced from that snapshot and `cmp`-swept
+  file-by-file: **30 modules replaced, 1 added** (`lib/async_macos.cyr`), sweep clean. **No source migration
+  was required** — the 6.4.78 → 6.5.20 jump had forced the `bayan_json_v_parse_str` → `_parse_buf` rename
+  across 34 sites; this one forced nothing. Verified rather than assumed: of the 21 public stdlib symbols
+  removed between the two snapshots (the `err_*` constructor family, `str_starts_with_cstr`, and some
+  private helpers), thoth and its vendored bundles use **none**, and no stdlib symbol became `private` (the
+  6.5.0 visibility feature is still unused across the whole snapshot).
+
+  Two measurements moved sharply. **Static data fell 10,990,792 → 999,864 bytes** — a 91 % drop, and the end
+  of the "13 MB vendored-sigil" figure that 0.37.0 recorded as unfixable from thoth. **The build's warning
+  set strictly shrank**: 11 warnings gone (8 `assigning non-pointer to typed pointer` in libro, 3 in bayan),
+  zero new. Compiler tables re-measured **after** the last edit, per the standing rule: `fn_table 8292 /
+  32768`, `identifiers 261884 / 524288`, `var_table 4624 / 8192`, `fixup_table 35364 / 1048576`.
+
+- **Vendored dists, all to latest**: **avatara 2.14.0 → 2.14.1** · **bote-core 3.3.1 → 3.3.7** ·
+  **libro 2.8.5 → 2.8.12** · **t-ron 2.1.8 → 2.1.9** · **sit-read 1.3.5 → 1.6.2** ·
+  **sankoch-zlib 2.7.7 → 2.7.9** · **vyakarana 2.3.2 → 2.4.0** · **darshana 0.9.0 → 1.0.0**.
+  **anuenue 1.2.0** and **kashi 1.0.6** are unchanged *files*, confirmed by comparison rather than assumed:
+  anuenue's bundle is byte-identical to its 1.2.0 tag, and kashi's freestanding core is byte-identical
+  across every 1.0.x tag from 1.0.2 to 1.0.6 (so thoth was already current at 1.0.6, not the 1.0.4 the docs
+  claimed).
+
+  Notable inside those bumps, all confirmed inert for thoth rather than waved through:
+  **bote 3.3.5's** `cancel_token_*` → `bote_cancel_token_*` rename and **3.3.7's** `WsConfig` growth are in
+  `stream.cyr` / `transport_ws.cyr`, neither of which is in the `[lib.core]` profile thoth vendors (0 hits
+  in the bundle). **libro 2.8.11/2.8.12** changed the entry-hash preimage, the Merkle construction and the
+  tree-head signature — a **persisted-format break** — but thoth reads t-ron's audit chain **in-process
+  only** (`gate_audit_report`, `src/gate.cyr:184`), built fresh each session and verified by the same code
+  that wrote it, so no chain crosses versions. libro removed exactly one function, the private `_fsp_get`,
+  which thoth never called. **darshana 1.0.0** is a v1 API freeze: zero symbols added or removed, and its
+  four `AGNOS_*` constants privatised to `_AGNOS_*` have no thoth call site.
+
+- **libro now also defines `DER_TAG_INTEGER` / `DER_TAG_SEQUENCE`, which `lib/sigil.cyr` defines too.**
+  Benign — both are ASN.1 universal tag numbers fixed by the standard (`0x02` / `0x30`) and both copies
+  agree — but recorded because it is **silent**: the compiler warns on a duplicate `fn`, not a duplicate
+  `var`, so nothing in the build output points at it.
+
+### Added
+
+- **`scripts/sync-darshana.sh`, `scripts/sync-vyakarana.sh`, `scripts/sync-kashi.sh`** — the three
+  hand-vendored deps `docs/development/state.md` recorded as having no sync script now have one, so every
+  bundle under `src/vendor/` is refreshed by a script that states its provenance and checks its own work.
+  Each carries the hazard it exists to prevent: darshana's refuses a returning `SYS_IOCTL`, vyakarana's
+  documents the `_stream_*` collision watch, and kashi's is the odd one out — it pulls **`src/font_data.cyr`,
+  not `dist/kashi.cyr`**, because thoth wants the freestanding font core rather than the stdlib-using library
+  face, and kashi gitignores `/dist/` so no tagged `dist/` path resolves at all. It asserts the freestanding
+  contract (zero `include` lines) and reports whether the file actually changed.
+
+- **`tests/cases/vendor.cyr`** — 42 assertions gating the vendored floor, the one part of the compile set no
+  compiler check covers. `test_vendor_pins` asserts every bundle reports the version thoth thinks it
+  vendored; `test_vendor_hazards` pins each trap this tree has actually been bitten by: no `SYS_IOCTL` in
+  darshana, no raw 2-arg `SYS_RENAME` in sit-read (with the AGNOS 4-arg arm still present), both sync-time
+  collision renames fully applied, sit still chdir-free, and no `_stream_grow` in the sankoch zlib profile.
+
+  The rename check is a **partition, not a word-boundary regex**, and that distinction is the point:
+  `_sit_entry_hash` has no word boundary before `entry_hash`, so `grep -c '\bentry_hash\b'` reads 0 whether
+  the sed hit every site or only some. Counting the total against the sum of the names allowed to contain it
+  catches a partial sed, which the sync script's own check cannot.
+
+  ⭐ **It earned its keep during this release's own development.** `scripts/sync-sit.sh`'s default `SIT_TAG` was
+  left at `1.6.1` after the pin had moved to `1.6.2`, so a bare `./scripts/sync-sit.sh` **silently downgraded a
+  committed file** — exit 0, the usual success lines, and the aarch64-breaking `SYS_RENAME` quietly back in the
+  tree. Nothing else noticed: it still built on x86_64 and every other test still passed. `test_vendor_pins`
+  failed on the header and `test_vendor_hazards` failed on both `SYS_RENAME` assertions. A stale sync-script
+  default is a downgrade that reports success, which is precisely the failure mode the file was written for.
+
+### ⚠ Release note — sit 1.6.2 is not tagged yet
+
+thoth 0.38.6 vendors **sit 1.6.2**, whose two-line fix lives in sit's **working tree** (`~/Repos/sit`) and is
+uncommitted, because sit's own `CLAUDE.md` leaves all git operations to the user. Until that release is tagged
+and pushed, `./scripts/sync-sit.sh` cannot fetch it — the raw URL 404s, and `curl -sSf` under `set -e` makes
+that a loud abort rather than a stale file. Re-sync from the local checkout in the meantime:
+
+```sh
+SIT_LOCAL=/home/macro/Repos/sit SANKOCH_LOCAL=/home/macro/Repos/sankoch ./scripts/sync-sit.sh
+```
+
+The vendored bundle was verified to be a faithful render of `sit/dist/sit-read.cyr` plus only the two documented
+collision seds, so the spine is consumed, not forked. Its delta against the released 1.6.1 is exactly the version
+header, the one changed line, and that line's comment.
+
+### Verified
+
+- Suite green: **264 + 1591 + 183 + 3**, up 42 assertions, zero failures.
+- Builds `OK` on **x86_64 Linux**, **aarch64** (regained — `FAIL` at sit 1.6.1) and **`--agnos`**.
+- **macOS re-tested on real Apple Silicon hardware rather than assumed.** It still fails, and this refresh is
+  **not** why: cyrius 6.5.35 was cross-built for arm64 Mach-O, installed on the Mac, and *both* the refreshed
+  tree and a pristine `git archive HEAD` baseline built with the same compiler fail with the byte-identical
+  two errors (`undefined variable 'TTY_SIGMASK_WINCH'`, `src/tui.cyr:1853` and `:1906`) plus the same six
+  reachable-undefined fns (`tty_isatty`, `tty_winsize`, `tty_cooked`, `tty_raw`, `tty_open_signalfd`,
+  `tty_close_signalfd`). Cause is thoth's, not the deps': darshana gates its whole termios/signalfd half to
+  `CYRIUS_TARGET_LINUX` — BSD termios is explicitly out of scope for its v1.0 — and `src/tui.cyr` calls that
+  half with no macOS guard. Now a **characterised** gap with an exact symbol list rather than a vague one.
+- `--win` improved 14 → 13 errors (see the `SYS_IOCTL` note); the residue is the pre-existing IOCP/epoll gap.
+- **The vertical was run, not assumed.** hoosh **2.6.3** / daimon **2.0.2** / bote **3.3.7** / mneme **1.1.3**
+  rebuilt from source and brought up via `scripts/stack.sh up`; against that spine the refreshed binary
+  advertised daimon's 19-tool registry to the model, round-tripped its own `read_file` on a jailed path,
+  round-tripped a **daimon-hosted** tool (`bote_echo`) through the MCP hop, correctly refused an out-of-tree
+  read, and rendered `/git` branch + status through the newly-vendored sit 1.6.2. Spine floors are unchanged
+  (hoosh ≥ 2.5.2 / ≥ 2.6.1 for local-model tools, daimon ≥ 1.4.0, mneme ≥ 1.1.1); **daimon 2.0.x is a major
+  bump but a drop-in** — the two endpoints thoth speaks are byte-identical since 1.4.0.
+
+### Known, not fixed here
+
+Both re-confirmed at 0.38.6, both reproducing on 0.38.5, so neither is caused by this refresh:
+
+- **sit's git read-mode status has false positives.** Every tracked mode-`100755` file and every tracked
+  zero-byte file is reported modified regardless of content — `/git` listed 63 files where `git status` listed
+  58, the extras being the four unmodified `scripts/*.sh` and `docs/examples/.gitkeep`. Verified identical on sit
+  **1.3.5** and **1.6.2**, so the sit bump neither caused nor fixed it, and thoth is a pure consumer
+  (`git_probe` copies sit's `{path, kind}` vec and compares nothing), so the fix belongs in sit's comparator. It
+  inflates `/git`, `/state`'s changed count and the file-tree badges.
+- **thoth asks hoosh for streaming token usage that hoosh never sends.** Every streaming request carries
+  `stream_options.include_usage`, but hoosh 2.6.3 contains no reference to either token anywhere in its source
+  and emits no trailing usage frame, so `_hoosh_account_usage` waits for something that does not arrive on the
+  streaming path. Cost/token accounting on that path is therefore not fed by the gateway.
+
 ## [0.38.5] - 2026-08-13
 
 **Local models can use tools again — their arguments were being silently dropped.** Plus the toolchain and

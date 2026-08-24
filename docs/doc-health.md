@@ -25,6 +25,17 @@ type: state
 > via per-release refreshes (each cut: README stamp + CHANGELOG + state.md version-log entry + a roadmap trim — see
 > CHANGELOG for the per-version detail).
 
+> **Since that sweep** (per-release refreshes only, per the routine at the bottom of this file): the **0.34.x–0.38.x**
+> cuts each landed a README stamp + CHANGELOG + `state.md` version entry. **0.38.6** additionally corrected two
+> `state.md` blocks that had gone stale *without* being flagged here, both found by re-measuring rather than
+> re-reading: the **`## Toolchain`** pin still read `6.4.78` (two pins behind — 0.38.5 bumped to 6.5.20 and never
+> updated it), and the **`## Targets (build matrix)`** table was anchored at **0.6.4/0.6.6** across all five lanes.
+> The matrix is now re-verified at 0.38.6 on real hardware for each lane, including a macOS row that flipped from
+> "builds + runs" to **does not build** — a regression that had been invisible for ~30 releases because the row was
+> never re-tested, only re-read. **Lesson for the next sweep**: a doc that states a *measurement* (a pin, a build
+> status, a byte count) cannot be audited by reading it — the audit is re-running the measurement. Rows like these
+> belong in a "re-measure" bucket, not "fresh".
+
 ## At a glance
 
 | Bucket | Count | What it means |
