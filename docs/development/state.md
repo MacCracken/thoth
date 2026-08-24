@@ -21,6 +21,11 @@ which also gave sit its own first working aarch64 build. Third: darshana 1.0.0 n
 garbling it guards against — thoth now announces the lost guard instead of faking it. Dists: avatara **2.14.1**,
 bote-core **3.3.7**, libro **2.8.12**, t-ron **2.1.9**, sit-read **1.6.2**, sankoch-zlib **2.7.9**, vyakarana
 **2.4.0**, darshana **1.0.0**; anuenue **1.2.0** / kashi **1.0.6** confirmed byte-identical rather than assumed.
+**CI now installs the toolchain with the upstream installer** rather than hand-untarring the release asset into
+a flat `~/.cyrius/{bin,lib}` — that layout stopped resolving at cyrius **6.5.25** (bisected: fine at 6.5.24), so
+both workflows would have gone red on this release's 6.5.35 pin with `pins version X but it is not installed`.
+Both `ci.yml` and `release.yml` now pipe the pin to `cyrius/scripts/install.sh` (the darshana / darshini pattern)
+and assert `versions/$PIN/lib` in a **Verify toolchain layout** step, so a bad install fails at the install.
 ⚠ **sit 1.6.2 is not tagged yet** — its two-line fix is uncommitted in `~/Repos/sit` (sit leaves git to the user),
 so re-sync it with `SIT_LOCAL=/home/macro/Repos/sit SANKOCH_LOCAL=/home/macro/Repos/sankoch ./scripts/sync-sit.sh`
 until the tag exists; the vendored bundle was verified as a faithful render of upstream's dist plus only the two

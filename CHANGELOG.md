@@ -119,6 +119,34 @@ outright, and darshana 1.0.0 silently changed what a failed `signalfd` leaves be
   failed on the header and `test_vendor_hazards` failed on both `SYS_RENAME` assertions. A stale sync-script
   default is a downgrade that reports success, which is precisely the failure mode the file was written for.
 
+### Fixed — CI installs the toolchain with the real installer
+
+- ⛔ **CI would have gone red on this very release.** Both workflows hand-rolled the toolchain install:
+  untar the release asset, `cp` into `$HOME/.cyrius/{bin,lib}`, done. That produces the **pre-6.5.25 flat
+  layout**, and `cyrius deps` resolves its stdlib snapshot from `$HOME/.cyrius/versions/$PIN/lib` — so with
+  only the flattened dirs present it exits 1 on the first step after install:
+
+  ```
+  error: cyrius.cyml pins version 6.5.35 but it is not installed at ~/.cyrius/versions/6.5.35/lib
+  ```
+
+  **Bisected rather than assumed** — the flat layout resolves fine at **6.5.24** and fails at **6.5.25**, so
+  CI was still green on 0.38.5's `6.5.20` pin and this refresh's move to `6.5.35` is precisely what would have
+  broken it. Both `ci.yml` and `release.yml` now pipe the pin to the upstream installer
+  (`cyrius/scripts/install.sh`), matching **darshana** / **darshini** / patra / libro, and gain a
+  **Verify toolchain layout** step that asserts `versions/$PIN/lib` exists — so a bad install fails *at the
+  install*, not three steps later with an error that points at the manifest. The installer also does SHA256 +
+  Ed25519 signature verification the hand-rolled block skipped entirely.
+
+  `CYRIUS_HOME` is deliberately no longer exported: the installer defaults it to `$HOME/.cyrius`, and the
+  wrapper *appends* `versions/<pin>/lib` to whatever it is set to — so an over-specific value resolves to
+  `versions/<v>/versions/<v>/lib`. (That exact trap cost time on the macOS host this same release.)
+
+  **Verified end to end, not just edited**: the installer was run into an isolated `CYRIUS_HOME`, produced
+  `versions/6.5.35/lib` (101 modules) with `bin`/`lib` symlinked at it, and thoth's full CI sequence —
+  `cyrius deps` → `./scripts/build.sh linux` → `cyrius test` — ran green against it. The old layout was
+  reproduced from the same release tarball and fails exactly as quoted above.
+
 ### ⚠ Release note — sit 1.6.2 is not tagged yet
 
 thoth 0.38.6 vendors **sit 1.6.2**, whose two-line fix lives in sit's **working tree** (`~/Repos/sit`) and is
