@@ -1,0 +1,203 @@
+# thoth — streaming JSON events (0.42.0, T3): NDJSON on stdout so another program can WATCH a turn.
+#
+# WHY. thoth's one-shot front door is real — `-p`, piped stdin, `--json`, `-o`, `--completion` — but
+# `--json` emits ONE object at the END of the turn. For a plain answer that is fine. For an agentic turn
+# it is not: a turn that runs eight tool rounds over two minutes is completely opaque until it finishes,
+# so nothing can show progress, log tool use as it happens, or kill a turn that has gone wrong. Every peer
+# with an embedding story ships an event stream for exactly this (Claude Code's `--output-format
+# stream-json`, Codex's `codex exec` JSON output).
+#
+# THE FORMAT: newline-delimited JSON, one object per line, each with an `event` key. NDJSON rather than a
+# JSON array because an array cannot be consumed until its closing bracket arrives — which is the whole
+# problem being solved. A reader can `while read line; do jq ...; done` and act on each event as it lands.
+#
+# Events, in the order a turn produces them:
+#   {"event":"turn_start","turn":N,"model":"..."}
+#   {"event":"tool_call","turn":N,"name":"...","args":"..."}
+#   {"event":"tool_result","turn":N,"name":"...","ok":true|false,"bytes":N}
+#   {"event":"response","turn":N,"text":"..."}                     (on success — the model's answer)
+#   {"event":"error","turn":N,"message":"..."[,"http":N]}          (on failure — transport / HTTP / empty)
+#   {"event":"turn_end","turn":N,"ok":true|false,"tokens":N?,"elapsed_ms":N}
+#
+# ⚠ `turn_end` IS ALWAYS LAST, and exactly one of `response`/`error` precedes it. This ordering is a
+# CONTRACT, not an accident of where the calls happen to sit: a consumer that treats `turn_end` as
+# "the turn is over, stop reading" must not thereby lose the answer. An earlier cut emitted `response`
+# from the one-shot front door — i.e. AFTER `_task_dispatch` had already closed the turn — and a live run
+# showed the answer arriving after `turn_end`. Both are now emitted by `_task_dispatch` itself, inside the
+# bracket, which also means every surface (interactive included) produces a complete stream rather than
+# only the one-shot path. If you add a new terminal outcome, emit it BEFORE `events_turn_end`.
+#
+# ⚠ WRITTEN STRAIGHT TO FD 1, deliberately bypassing the `out_mode` sink. Events are a MACHINE channel and
+# must not land in the feed ring, be swallowed by OUT_NULL, or interleave with human narration. `--events`
+# implies the one-shot narration posture (OUT_NULL), so stdout carries the event stream and nothing else —
+# a consumer can parse every line without filtering.
+#
+# ⚠ EVERY STRING IS ESCAPED through the same bounded escaper the request builders use. Tool names and
+# arguments are MODEL-chosen text; a raw splice would let a crafted tool name emit a newline and forge an
+# event line, which for a consumer acting on events is an injection into their control flow, not just
+# cosmetic corruption.
+#
+# `tokens` follows the omit-until-present rule (ADR-0010): present only once hoosh has reported usage,
+# never a faked 0.
+
+var EV_CAP = 8192;              # one ordinary event line; a longer one is truncated at a field boundary
+var EV_ARGS_MAX = 2048;         # tool args are echoed for observability, not fidelity — bounded hard
+var _ev_on = 0;
+var _ev_buf = 0;
+var _ev_rbuf = 0;               # the `response` line, sized so a full-length reply never truncates
+var EV_RESP_CAP = 0;            # set on first use from HOOSH_ACC_CAP (worst-case escape expansion)
+var _ev_cur = 0;                # buffer the in-flight line is being built into
+var _ev_cur_cap = 0;            # its capacity — every helper bounds against THIS, not a fixed constant
+var _ev_n = 0;                  # events emitted this process (for tests)
+
+fn events_enabled() { return _ev_on; }
+fn events_enable() { _ev_on = 1; return 0; }
+fn events_count() { return _ev_n; }
+fn events_reset() { _ev_n = 0; return 0; }
+
+# _ev_begin_in / _ev_end: open and flush one NDJSON line into a caller-chosen buffer.
+fn _ev_begin_in(buf, cap, name, turn) {
+    if (buf == 0) { return 0 - 1; }
+    _ev_cur = buf;
+    _ev_cur_cap = cap;
+    var off = 0;
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "{\"event\":\"");
+    off = _json_escape_into_cap(_ev_cur, off, _ev_cur_cap, name);
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\",\"turn\":");
+    off = _append_int_cap(_ev_cur, off, _ev_cur_cap, turn);
+    return off;
+}
+
+fn _ev_begin(name, turn) {
+    if (_ev_buf == 0) { _ev_buf = alloc(EV_CAP); }
+    return _ev_begin_in(_ev_buf, EV_CAP, name, turn);
+}
+
+fn _ev_end(off) {
+    if (off < 0) { return 0; }
+    if (_ev_cur == 0) { return 0; }
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "}\n");
+    if (off > (_ev_cur_cap - 1)) { off = _ev_cur_cap - 1; }
+    store8(_ev_cur + off, 0);
+    # fd 1 directly — NOT emit()/ui_emit(), which route through out_mode and would be discarded under the
+    # OUT_NULL that --events implies.
+    syscall(SYS_WRITE, 1, _ev_cur, off);
+    _ev_n = _ev_n + 1;
+    return 0;
+}
+
+# _ev_str_field: append `,"key":"value"` with the value escaped and bounded.
+fn _ev_str_field(off, key, value, maxlen) {
+    if (off < 0) { return off; }
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, ",\"");
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, key);
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\":\"");
+    if (value != 0) {
+        var n = strlen(value);
+        if (n > maxlen) { n = maxlen; }
+        off = _json_escape_n_into_cap(_ev_cur, off, _ev_cur_cap, value, n);
+    }
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\"");
+    return off;
+}
+
+fn _ev_int_field(off, key, v) {
+    if (off < 0) { return off; }
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, ",\"");
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, key);
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\":");
+    off = _append_int_cap(_ev_cur, off, _ev_cur_cap, v);
+    return off;
+}
+
+fn _ev_bool_field(off, key, v) {
+    if (off < 0) { return off; }
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, ",\"");
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, key);
+    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\":");
+    if (v == 1) { off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "true"); }
+    else { off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "false"); }
+    return off;
+}
+
+fn events_turn_start(turn, model) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("turn_start", turn);
+    off = _ev_str_field(off, "model", model, 256);
+    return _ev_end(off);
+}
+
+fn events_tool_call(turn, name, args) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("tool_call", turn);
+    off = _ev_str_field(off, "name", name, 256);
+    off = _ev_str_field(off, "args", args, EV_ARGS_MAX);
+    return _ev_end(off);
+}
+
+fn events_tool_result(turn, name, ok, bytes) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("tool_result", turn);
+    off = _ev_str_field(off, "name", name, 256);
+    off = _ev_bool_field(off, "ok", ok);
+    off = _ev_int_field(off, "bytes", bytes);
+    return _ev_end(off);
+}
+
+# ev_fail_text: the rc -> cause mapping, as a bare cstr, shared by the event channel and the human stderr
+# diagnostic (`_oneshot_report_error`) so the two cannot drift into saying different things about one
+# failure. `seam_absent` is passed in rather than probed here to keep this file free of a seam dependency.
+fn ev_fail_text(rc, seam_absent) {
+    if (seam_absent == 1) { return "no model backend wired ([hoosh].url unset)"; }
+    if (rc < 0) { return "hoosh gateway unreachable (transport error)"; }
+    if (rc > 0) { return "hoosh returned an HTTP error"; }
+    return "no completion returned";
+}
+
+# events_error: the failure twin of `events_response`. `http` is present ONLY for a real status code
+# (rc > 0) — the same omit-until-present discipline `tokens` follows, since a faked 0 would read as a
+# status a consumer could branch on.
+fn events_error(turn, rc, seam_absent) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("error", turn);
+    off = _ev_str_field(off, "message", ev_fail_text(rc, seam_absent), 1024);
+    if (rc > 0) { off = _ev_int_field(off, "http", rc); }
+    return _ev_end(off);
+}
+
+# events_response: the model's final answer, as an event rather than raw text.
+#
+# ⚠ Under `--events` stdout must be PURE NDJSON, so the reply cannot go out as bare text — it would land
+# un-delimited in the middle of the stream and break every consumer parsing line-by-line.
+#
+# ⚠ SIZED NOT TO TRUNCATE. This is the one event whose payload is the point, so it does NOT share the 8 KB
+# line buffer the others use: a 64 KB reply through the ordinary path would have been silently clipped at
+# 8 KB, losing the answer while still emitting well-formed JSON — the worst kind of failure, because it
+# looks like it worked. The buffer is HOOSH_ACC_CAP with the worst-case JSON escape expansion (6 bytes per
+# input byte, `\u00XX`) plus the envelope, which is the same sizing rule `oneshot_json_envelope` uses.
+#
+# Held by LENGTH (not as a cstr) so an embedded NUL in the reply survives the escape.
+fn events_response(turn, reply, reply_len) {
+    if (_ev_on == 0) { return 0; }
+    if (_ev_rbuf == 0) {
+        EV_RESP_CAP = HOOSH_ACC_CAP * 6 + 256;
+        _ev_rbuf = alloc(EV_RESP_CAP);
+    }
+    if (_ev_rbuf == 0) { return 0; }
+    var off = _ev_begin_in(_ev_rbuf, EV_RESP_CAP, "response", turn);
+    if (off >= 0) {
+        off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, ",\"text\":\"");
+        off = _json_escape_n_into_cap(_ev_cur, off, _ev_cur_cap, reply, reply_len);
+        off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\"");
+    }
+    return _ev_end(off);
+}
+
+fn events_turn_end(turn, ok, elapsed_ms) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("turn_end", turn);
+    off = _ev_bool_field(off, "ok", ok);
+    if (session_tokens_seen() == 1) { off = _ev_int_field(off, "tokens", session_tokens()); }   # omit-until-present
+    off = _ev_int_field(off, "elapsed_ms", elapsed_ms);
+    return _ev_end(off);
+}

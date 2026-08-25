@@ -209,12 +209,13 @@ fn cmd_help() {
     _help_line("  /reload", "            re-read .thoth/config.cyml (hot fields apply; seams/persona need restart)");
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
-    _help_line("  /audit", "             show t-ron's audit chain (gated-action log)");
+    _help_line("  /audit [export F]", "  show t-ron's audit chain; export F writes it to a file");
     _help_line("  /grants [clear]", "   session authorization grants (answers of 'a' at a confirm)");
     _help_line("  /context", "           what is filling the context window right now");
     _help_line("  /compact [keep]", "    summarize older turns now and stop sending them (default keep 6)");
     _help_line("  /rewind [n|last]", "   undo the model's file writes (bare: list them)");
     _help_line("  /fork [title]", "      branch this conversation; the original is left intact (/branch)");
+    _help_line("  /tools [trust]", "     list MCP tools; 'trust' re-pins definitions that changed");
     _help_line("  /retry", "             re-run your last message for a fresh reply (/regenerate)");
     _help_line("  /edit <text>", "       replace your last message with new text and re-run");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
@@ -1521,6 +1522,28 @@ fn cmd_run(line) {
 # cmd_tools: list the MCP tools daimon hosts. When daimon is absent the model has no MCP registry — but
 # since 0.20.0 the agentic loop can still run on the thoth-native `shell` tool alone, so surface THAT
 # honestly rather than claiming no tools exist (which would contradict what a shell-standalone turn sends).
+# cmd_tools_dispatch: `/tools` lists, `/tools trust` accepts the current MCP registry as the new pin
+# baseline (0.42.0, T3). Split from cmd_tools so the listing keeps its exact prior behaviour.
+#
+# The trust path exists for the LEGITIMATE case the pin cannot distinguish from an attack: an MCP server
+# was upgraded and its descriptions genuinely changed. Only the operator can tell those apart, which is
+# why it is a command and not a heuristic.
+fn cmd_tools_dispatch(line) {
+    var arg = arg_after(line);
+    if ((arg != 0) && (streq(arg, "trust") == 1)) {
+        if (config_toolpin_enabled() == 0) {
+            oprintln("tool pinning is off ([toolpin].enabled = false) — nothing to trust.");
+            return 0;
+        }
+        var had = toolpin_trust_all();
+        agent_tools_cache_reset();                # force a re-probe so the new definitions are re-pinned
+        emit("dropped "); ofmt_int(had); oprintln(" tool pin(s); the next turn re-pins from the live registry.");
+        ui_emit(ROLE_FAINT, "  any definition that changed is now the accepted baseline. /tools to see the registry."); oprintln("");
+        return 0;
+    }
+    return cmd_tools();
+}
+
 fn cmd_tools() {
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
         if (agent_enabled() == 1) {
@@ -1795,10 +1818,97 @@ fn cmd_reload() {
     return 0;
 }
 
+# --- /audit export (0.42.0, T3): the chain leaves the process ---------------
+#
+# thoth is AHEAD of every surveyed harness on the hard half of audit — libro gives it a hash-linked,
+# tamper-evident record of every gated action, which `/audit` verifies in-process — and was behind on the
+# easy half: that record could be read on screen and nowhere else. It could not be archived, diffed
+# between sessions, or handed to anything that keeps records.
+#
+# ⚠ THE SERIALIZER IS T-RON'S, NOT THOTH'S. `audit_export_json` is t-ron's own exporter over its own
+# AuditLogger. thoth opens a file and writes the bytes it is handed, and owns nothing else here.
+# Re-deriving this JSON thoth-side to save a function call would be forking the spine, and would drift
+# from the chain that the same library verifies.
+#
+# ⚠ WRITTEN VERBATIM — DELIBERATELY NOT REDACTED. That is the opposite of the [redact] posture applied to
+# tool results, so the reason has to be stated: this is a TAMPER-EVIDENT record, and every entry is
+# covered by the chain hashes `audit_verify_chain` checks. Rewriting bytes on the way out would produce a
+# file that no longer corresponds to the chain certifying it — an export that reads as authoritative and
+# verifies as nothing. What it does contain is still sensitive — which tools ran, under which agent id, at
+# what time, and which were denied — so the file is created 0600 and the operator is told what they hold.
+#
+# What it does NOT contain, checked rather than assumed: no tool PARAMETERS. Every `reason` t-ron can emit
+# is a fixed label — a policy string built from the (already character-validated) tool/agent names, a
+# scanner label like "shell injection pattern", or "rate limit exceeded". No model-chosen text reaches the
+# field. An earlier draft of this comment warned that a reason "can quote the parameters that triggered
+# it"; reading t-ron's `_tron_format_injection` / `scanner_scan_text` shows it cannot, so the warning is
+# not made.
+#
+# ⚠ UPSTREAM FRAGILITY, recorded because thoth's file is what would break: `_audit_export_event` splices
+# `reason` into the JSON with NO escaping, and sizes the whole buffer at a flat 512 bytes/event against a
+# reason whose length it does not bound. Both are safe today only because every reason is one of those
+# short fixed labels. The day t-ron grows a reason carrying a quote, a backslash or a control byte, this
+# export silently becomes invalid JSON; a long one overruns the buffer. Neither is fixable from thoth
+# without re-deriving the serializer — i.e. forking the spine — so it belongs to t-ron.
+fn _audit_export(path) {
+    var a = gate_audit();
+    if (a == 0) {
+        ui_emit(ROLE_RED, "no audit chain to export"); ui_emit(ROLE_FAINT, " — the t-ron seam is absent."); oprintln("");
+        return 0;
+    }
+    var total = query_total_events(a);
+    if (total == 0) {
+        ui_emit(ROLE_FAINT, "nothing to export — no gated action has been recorded this session."); oprintln("");
+        return 0;
+    }
+    var json = audit_export_json(a);
+    if (json == 0) {
+        ui_emit(ROLE_RED, "export failed"); ui_emit(ROLE_FAINT, " — t-ron could not serialize the chain."); oprintln("");
+        return 0;
+    }
+    var n = strlen(json);
+    # 0600 on CREATE. An already-existing file keeps its own mode — thoth never silently re-tightens a
+    # path the operator chose, and never asserts a mode it did not set (the same rule [history].file follows).
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    if (fd < 0) {
+        ui_emit(ROLE_RED, "could not open "); emit(path); ui_emit(ROLE_FAINT, " for writing"); oprintln("");
+        return 0;
+    }
+    var w = file_write(fd, json, n);
+    file_close(fd);
+    if (w != n) {
+        ui_emit(ROLE_RED, "export incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln("");
+        return 0;
+    }
+    ui_emit(ROLE_GREEN, "exported "); ofmt_int(total); emit(" audit event(s) to "); emit(path); oprintln("");
+    emit("  chain: "); ofmt_int(audit_chain_len(a)); emit(" entries, ");
+    if (audit_verify_chain(a) == 0) { ui_emit(ROLE_GREEN, "integrity OK"); }
+    else { ui_emit(ROLE_RED, "INTEGRITY FAILED (tamper detected)"); }
+    oprintln("");
+    ui_emit(ROLE_FAINT, "  written verbatim so it still matches the chain that certifies it — NOT redacted."); oprintln("");
+    ui_emit(ROLE_FAINT, "  no tool parameters are recorded, but which tools ran and which were denied is. created 0600."); oprintln("");
+    return 0;
+}
+
 # cmd_audit: surface t-ron's audit chain. With the seam absent there is no
 # chain — the fail-closed confirm gate keeps no cryptographic log; said plainly,
 # degraded honestly. With it bound, gate.cyr renders t-ron's query API.
-fn cmd_audit() {
+# `/audit export <file>` writes the chain out (0.42.0, T3).
+fn cmd_audit(line) {
+    var arg = arg_after(line);
+    if ((arg != 0) && (load8(arg) != 0)) {
+        # "export <path>" — the only subcommand; anything else falls through to the report.
+        if (cstr_starts_with(arg, "export") == 1) {
+            var p = arg + 6;
+            while (load8(p) == 32) { p = p + 1; }
+            if (load8(p) == 0) { ui_emit(ROLE_RED, "usage: "); emit("/audit export <file>"); oprintln(""); return 0; }
+            if (gate_active() == 0) {
+                oprintln("t-ron seam absent - no audit chain to export.");
+                return 0;
+            }
+            return _audit_export(p);
+        }
+    }
     if (gate_active() == 0) {
         oprintln("t-ron seam absent - no audit chain.");
         oprintln("the fail-closed confirm gate keeps no cryptographic log; the libro");
@@ -1850,14 +1960,29 @@ fn _task_dispatch(prompt) {
         oprintln("  hoosh seam absent - no model backend is wired.");
         oprintln("  reasoning/codegen routes through hoosh (native on AGNOS, a client");
         oprintln("  elsewhere). set [hoosh].url in .thoth/config.cyml. degraded honestly, never faked.");
+        # No turn actually starts, so no turn_start/turn_end bracket — but an events consumer must still
+        # be TOLD why nothing happened rather than reading an empty stream and a bare exit code.
+        events_error(session_turns(), 0, 1);
         return 0;
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop
     # (the model can call MCP tools, gated by t-ron); else a plain hoosh turn.
     var t0 = clock_now_ms();                          # 0.24.3: time the turn for [ui].elapsed
+    events_turn_start(session_turns(), hoosh_model_cur());   # 0.42.0 (T3): bracket the turn for consumers
     var rc = 0;
     if (agent_enabled() == 1) { rc = agent_turn(prompt); }
     else { rc = hoosh_send(prompt); }
+    # 0.42.0 (T3): close the event bracket. `response`/`error` are emitted HERE, before `turn_end`, so the
+    # documented ordering holds and every surface produces a complete stream — not just the one-shot front
+    # door. The success test MIRRORS one_shot_run's (rc == 0 AND a non-empty reply): an rc of 0 with nothing
+    # returned is a failure there, and an events consumer must not be told `ok:true` for a turn the exit
+    # code calls a failure.
+    var ev_ok = 1;
+    if (rc != 0) { ev_ok = 0; }
+    elif (hoosh_last_reply_len() == 0) { ev_ok = 0; }
+    if (ev_ok == 1) { events_response(session_turns(), hoosh_last_reply(), hoosh_last_reply_len()); }
+    else { events_error(session_turns(), rc, 0); }
+    events_turn_end(session_turns(), ev_ok, clock_now_ms() - t0);
     _task_turn_feedback(t0);                          # interactive BEL + faint elapsed line (opt-in)
     # 0.40.0 (T1-5): the [hoosh].compact_at trigger, AFTER the turn — never mid-turn, where it would
     # inject a side-call into the middle of the exchange the user is watching. Silent no-op when unset.
@@ -2110,9 +2235,9 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_READ) { cmd_read(line); return 1; }
     if (c == CMD_WRITE) { cmd_write(line); return 1; }
     if (c == CMD_RUN) { cmd_run(line); return 1; }
-    if (c == CMD_TOOLS) { cmd_tools(); return 1; }
+    if (c == CMD_TOOLS) { cmd_tools_dispatch(line); return 1; }
     if (c == CMD_CALL) { cmd_call(line); return 1; }
-    if (c == CMD_AUDIT) { cmd_audit(); return 1; }
+    if (c == CMD_AUDIT) { cmd_audit(line); return 1; }
     if (c == CMD_GRANTS) { cmd_grants(line); return 1; }
     if (c == CMD_COMPACT) { cmd_compact(line); return 1; }
     if (c == CMD_CONTEXT) { cmd_context(); return 1; }

@@ -2,6 +2,108 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.42.0] - 2026-08-24
+
+**Three Tier-3 items, all live-verified against a running spine.** Two of them are security controls thoth
+had no answer to; the third finally lets the audit chain leave the process. Suite **264 + 1824 + 183 + 3**
+(+46), all targets green.
+
+The live verification is the story of this release as much as the features are. Every one of these built
+clean, passed its unit tests, and still had a defect that only a real turn against a real gateway could
+show — see *Fixed*.
+
+### Added — rug-pull defense for MCP tool definitions (T3)
+
+- **`[toolpin]`** (`src/toolpin.cyr`, **on by default**) — trust-on-first-use pinning of every advertised
+  MCP tool definition, and **`/tools trust`** to re-baseline after a legitimate server upgrade.
+
+  CVE-2025-54136 established that approving a tool definition does not survive later server-side changes.
+  thoth was fully exposed: `agent_format_tools` calls the registry fields "semi-trusted" in its own
+  comment, re-fetches them from daimon on every probe, and passes them to the model as authoritative
+  metadata about what a tool does. Nothing compared a definition against what it looked like when the
+  session started.
+
+  ⚠ **Scanning cannot fix this, which is why the control is a hash and not the injection guard.** A
+  rug-pull is a change in something already accepted, and the replacement text can be entirely innocuous.
+  Only IDENTITY works: SHA-256 over `name \0 description \0 inputSchema`, NUL-separated so
+  `{name:"ab",desc:"c"}` and `{name:"a",desc:"bc"}` cannot collide by construction. Cryptographic, not a
+  cheap hash — the attacker chooses the replacement text, so a hash they can find a collision for is no
+  control at all.
+
+  ⚠ **A changed definition is WITHHELD from the advertisement, not warned about.** A warning the operator
+  scrolls past leaves the swapped description in the model's context, which is the entire payload. The
+  model is never told the tool exists, so it cannot call it, so the text never reaches it. Same
+  fail-closed direction as an absent t-ron falling to a confirm.
+
+  Honest about its bounds: pins are **session-scoped** and die with the process, so this catches a swap
+  during a session or across a `/reprobe`, not one between two runs. A durable pin store would be a
+  security-relevant file thoth writes and must then defend; the session-scoped version already closes the
+  window the CVE describes. A registry over 128 tools advertises the remainder **unpinned and says so**.
+
+### Added — streaming NDJSON events (T3)
+
+- **`--events`** (`src/events.cyr`) — one JSON object per line on stdout, so another program can watch an
+  agentic turn as it happens: `turn_start` → `tool_call` / `tool_result` → `response` / `error` →
+  `turn_end`. `--json` emits one object at the END of a turn, which is fine for an answer and useless for
+  a turn that runs eight tool rounds over two minutes.
+
+  NDJSON rather than a JSON array because an array cannot be consumed until its closing bracket arrives —
+  which is the whole problem being solved.
+
+  ⚠ **`turn_end` is always last, and exactly one of `response`/`error` precedes it.** This is a contract,
+  not an accident of call placement; see *Fixed*.
+
+  ⚠ Written straight to fd 1, deliberately bypassing the `out_mode` sink — events are a machine channel and
+  must not land in the feed ring or be swallowed by the `OUT_NULL` that `--events` implies. Every string
+  goes through the bounded JSON escaper: tool names and arguments are MODEL-chosen, and a raw splice would
+  let a crafted name emit a newline and **forge an event line**, which for a consumer acting on events is
+  an injection into their control flow. `tokens` follows omit-until-present.
+
+### Added — the audit chain can leave the process (T3)
+
+- **`/audit export <file>`** — write t-ron's hash-linked, tamper-evident record of every gated action to
+  disk. thoth was ahead of every surveyed harness on the hard half of this (most have a log file; thoth
+  has a verified chain) and behind on the easy half: the record could be read on screen and nowhere else.
+
+  ⚠ **The serializer is t-ron's.** `audit_export_json` is t-ron's own exporter over its own AuditLogger;
+  thoth opens a file and writes the bytes it is handed. Re-deriving the JSON thoth-side to save a call
+  would be forking the spine, and would drift from the chain the same library verifies.
+
+  ⚠ **Verbatim, deliberately NOT redacted** — the opposite of the `[redact]` posture over tool results,
+  because this is a tamper-evident record whose entries are covered by the chain hashes. Rewriting bytes
+  on the way out yields a file that no longer corresponds to the chain certifying it: authoritative to
+  read, worthless to verify. Created `0600`. Checked rather than assumed: **no tool parameters are
+  recorded** — every reason t-ron emits is a fixed label, so no model-chosen text reaches the file.
+
+### Fixed — three defects the unit tests passed and a live turn caught
+
+- **`response` arrived AFTER `turn_end`.** It was emitted from the one-shot front door, i.e. after
+  `_task_dispatch` had already closed the turn, so a consumer treating `turn_end` as "stop reading" lost
+  the answer. Both terminal events now come from inside the turn bracket — which also means every surface
+  produces a complete stream, not just one-shot.
+
+- **`events_error` was never called.** Documented in the event sequence, defined, and dead: a failing turn
+  emitted `ok:false` with no reason on the stream at all. Now emitted at the dispatch chokepoint, carrying
+  `http` only for a real status code. Its `ok` test also now mirrors one-shot's success test (`rc == 0`
+  **and** a non-empty reply), so a turn the exit code calls a failure can no longer report `ok:true`.
+
+- **The `response` event could silently truncate the answer.** It built into the shared 8 KB line buffer
+  while a reply runs to `HOOSH_ACC_CAP` (64 KB), so a long answer would have been clipped mid-stream while
+  still emitting well-formed JSON — the worst failure shape, because it looks like it worked. It now uses
+  its own buffer sized by the same rule `oneshot_json_envelope` uses.
+
+- **A one-shot HTTP failure advised a fix that does nothing.** The stderr hint read "run interactively or
+  set `[hoosh].stream=false` to see the body"; one-shot runs the turn under `OUT_NULL`, so the body is
+  discarded by the sink regardless of streaming mode. Observed on a live 502 with `stream` already false.
+  The cause text is now shared with the `error` event's `message` so the two channels cannot drift.
+
+### Notes
+
+- **Upstream fragility recorded, not worked around** (t-ron): `_audit_export_event` splices `reason` into
+  JSON with no escaping and sizes the buffer at a flat 512 bytes/event against an unbounded reason. Both
+  are safe only because every reason today is a short fixed label. Not fixable from thoth without
+  re-deriving the serializer.
+
 ## [0.41.0] - 2026-08-24
 
 **Four of the five scheduled Tier-2 items. The fifth — OS sandboxing — is NOT here, and the reason is a
@@ -314,8 +416,9 @@ distinct issues are fixed here**, each with a regression test. Full record:
 
 Also shipping: a review of what the agentic-harness field does that thoth does not, and what the newly
 Cyrius-ported **agnosai** can honestly supply —
-[`docs/development/agentic-improvements-review.md`](docs/development/agentic-improvements-review.md). It is
-a **proposal document; nothing in it is built or decided.**
+`docs/development/agentic-improvements-review.md`. It was a **proposal document; nothing in it was built
+or decided.** Retired at 0.42.0 once its tiers were shipped or promoted — its surviving recommendations
+live in [`docs/development/gap-review.md`](docs/development/gap-review.md) and the roadmap.
 
 ⭐ **The theme worth carrying forward: a documented residual is a claim with an expiry date.** The worst
 finding (A-1) was *already written down and accepted* in two files and an ADR, on the grounds that there

@@ -30,6 +30,7 @@ var _cfg_hoosh_max_iters = 0 - 1;   # agentic tool ROUNDS per turn; -1 = unset -
 var _cfg_hoosh_compact_at = 0 - 1;  # 0.40.0 (T1-5): auto-compact once session tokens cross this; -1/absent = off
 var _cfg_redact_enabled = 1;        # 0.40.0 (T1-3): [redact].enabled — DEFAULT ON (see config_redact_enabled)
 var _cfg_guard_enabled = 1;         # 0.41.0 (T2-3): [guard].enabled — DEFAULT ON (see config_guard_enabled)
+var _cfg_toolpin_enabled = 1;       # 0.42.0 (T3): [toolpin].enabled — DEFAULT ON (see config_toolpin_enabled)
 # 0.41.0 (T2-4): [hooks] — operator-configured commands fired at agent events. All unset (0) by default:
 # a hook is arbitrary execution, so it exists only when the operator wrote one.
 var _cfg_hook_session_start = 0;
@@ -555,6 +556,8 @@ fn config_load() {
     _cfg_hook_post_tool     = _cfg_str(hooks, "post_tool");
     _cfg_hook_session_end   = _cfg_str(hooks, "session_end");
     _cfg_hook_timeout_ms    = _cfg_int(hooks, "timeout_ms");
+    var toolpin = _cfg_section_pairs(sections, "toolpin");
+    _cfg_toolpin_enabled = _cfg_bool(toolpin, "enabled", 1);     # 0.42.0 (T3): DEFAULT ON — see the getter
     var guard = _cfg_section_pairs(sections, "guard");
     _cfg_guard_enabled = _cfg_bool(guard, "enabled", 1);         # 0.41.0 (T2-3): DEFAULT ON — see the getter
     var verify = _cfg_section_pairs(sections, "verify");
@@ -633,6 +636,12 @@ fn config_redact_enabled() { return _cfg_redact_enabled; }
 # (0.41.0, T2-3). DEFAULT ON, on the same reasoning as [redact]: it removes risk rather than adding
 # capability, it never blocks (only marks), and a defense that is off by default defends nobody.
 fn config_guard_enabled() { return _cfg_guard_enabled; }
+
+# config_toolpin_enabled: 1 when MCP tool definitions are pinned on first use and withheld on change
+# (0.42.0, T3 — the CVE-2025-54136 rug-pull shape). DEFAULT ON, same reasoning as [redact]/[guard]: it
+# removes risk rather than adding capability. Unlike those two it CAN withhold a tool, so the opt-out
+# exists for an operator whose registry legitimately churns mid-session.
+fn config_toolpin_enabled() { return _cfg_toolpin_enabled; }
 
 
 # config_hook_*: the [hooks] commands (0.41.0, T2-4). 0 when unset, which is the default for every one of

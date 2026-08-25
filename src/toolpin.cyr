@@ -1,0 +1,157 @@
+# thoth — trust-on-first-use pinning of MCP tool definitions (0.42.0, T3): rug-pull defense.
+#
+# THE ATTACK. CVE-2025-54136 (CVSS 8.8) established that approving an MCP tool's definition does not
+# survive later server-side changes: a server can advertise a benign `name`/`description`/`inputSchema`,
+# be approved, and then silently swap the description for one carrying instructions to the model. The
+# description is not inert data — thoth hands it to the model as tool metadata, and the model reads it as
+# authoritative guidance about what the tool does and when to use it. That makes a changed description a
+# prompt-injection vector with an approval already granted.
+#
+# thoth was fully exposed: `agent_format_tools`'s own comment calls the registry fields "semi-trusted",
+# and thoth re-fetches them from daimon on every probe and passes them straight through. Nothing compared
+# a tool's definition against what it looked like when the session started.
+#
+# ⚠ SCANNING CANNOT FIX THIS, and it is worth being clear why, because the instinct is to reach for the
+# injection guard. A rug-pull is a change in something that was already accepted; the new description can
+# be entirely innocuous-looking prose. The only control that actually works is IDENTITY: hash the
+# definition, and notice when it stops matching. That is what this file does.
+#
+# THE POSTURE. Trust on first use, fail closed on change:
+#   * First sight of a tool -> pin SHA-256 over `name \0 description \0 inputSchema`. Silent; a first
+#     session has nothing to compare against and pretending otherwise would be theatre.
+#   * Unchanged -> nothing said. Silence is the common case and must stay quiet.
+#   * CHANGED -> the tool is WITHHELD from the advertisement and the change is announced. The model is
+#     never told the tool exists, so it cannot call it, so the swapped description never reaches the
+#     model's context at all — which is the actual thing being defended.
+#   * `/tools trust` accepts the new definitions and re-pins, for the legitimate case: a server upgrade.
+#
+# Withholding rather than warning-and-continuing is deliberate. A warning the operator scrolls past leaves
+# the swapped description in the model's context, which is the entire payload. This is the same
+# fail-closed direction as an absent t-ron falling to a confirm.
+#
+# ⚠ SESSION-SCOPED, and that bounds what it can claim. The pins live in memory and die with the process,
+# so this catches a swap DURING a session (or across a `/reprobe`), not one between two runs. A durable
+# pin store is the obvious extension and is deliberately not here: it would be a security-relevant file
+# thoth writes and must then defend, and the session-scoped version already closes the window the CVE
+# describes without that surface. Stated so nobody reads more into it than it does.
+#
+# Hashing is sigil's SHA-256 (already linked via the vendored bundle), NOT a cheap non-cryptographic hash.
+# The attacker CHOOSES the replacement text, so a hash they can find a collision for is no control at all.
+
+var TOOLPIN_MAX = 128;             # tools pinned per session; a registry larger than this is reported, never silently truncated
+var TOOLPIN_NAME_CAP = 128;
+var TOOLPIN_HASH_CAP = 72;         # 64 hex chars + NUL, rounded
+var TOOLPIN_BLOB_CAP = 32768;      # the definition being hashed; a larger one is refused, not truncated
+
+var _tp_n = 0;
+var _tp_names = 0;                 # TOOLPIN_MAX * TOOLPIN_NAME_CAP
+var _tp_hashes = 0;                # TOOLPIN_MAX * TOOLPIN_HASH_CAP
+var _tp_blob = 0;                  # scratch for the canonical definition bytes
+var _tp_changed = 0;               # tools withheld this probe because their definition moved
+var _tp_overflow = 0;              # 1 if the registry exceeded TOOLPIN_MAX
+
+fn toolpin_count() { return _tp_n; }
+fn toolpin_changed() { return _tp_changed; }
+fn toolpin_reset() { _tp_n = 0; _tp_changed = 0; _tp_overflow = 0; return 0; }
+
+fn _tp_bufs() {
+    if (_tp_names == 0) { _tp_names = alloc(TOOLPIN_MAX * TOOLPIN_NAME_CAP); }
+    if (_tp_hashes == 0) { _tp_hashes = alloc(TOOLPIN_MAX * TOOLPIN_HASH_CAP); }
+    if (_tp_blob == 0) { _tp_blob = alloc(TOOLPIN_BLOB_CAP); }
+    if (_tp_names == 0) { return 0; }
+    if (_tp_hashes == 0) { return 0; }
+    if (_tp_blob == 0) { return 0; }
+    return 1;
+}
+
+# _tp_find: index of `name` in the pin table, or -1.
+fn _tp_find(name) {
+    var i = 0;
+    while (i < _tp_n) {
+        if (streq(_tp_names + i * TOOLPIN_NAME_CAP, name) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# _tp_digest: SHA-256 hex over the tool's canonical definition, or 0 if it will not fit.
+#
+# NUL-separated rather than concatenated, so `{name:"ab", desc:"c"}` and `{name:"a", desc:"bc"}` cannot
+# collide by construction — a separator an attacker cannot place inside a cstr field.
+fn _tp_digest(name, desc, schema) {
+    if (_tp_bufs() == 0) { return 0; }
+    var off = 0;
+    off = _append_cstr_cap(_tp_blob, off, TOOLPIN_BLOB_CAP, name);
+    if (off >= (TOOLPIN_BLOB_CAP - 2)) { return 0; }
+    store8(_tp_blob + off, 0); off = off + 1;
+    if (desc != 0) { off = _append_cstr_cap(_tp_blob, off, TOOLPIN_BLOB_CAP, desc); }
+    if (off >= (TOOLPIN_BLOB_CAP - 2)) { return 0; }
+    store8(_tp_blob + off, 0); off = off + 1;
+    if (schema != 0) { off = _append_cstr_cap(_tp_blob, off, TOOLPIN_BLOB_CAP, schema); }
+    if (off >= (TOOLPIN_BLOB_CAP - 1)) { return 0; }
+    return sha256_hex(_tp_blob, off);
+}
+
+# toolpin_check: the gate `agent_format_tools` calls per tool.
+# Returns 1 to advertise the tool, 0 to WITHHOLD it.
+#
+# Order matters: a tool whose definition is too large to hash is advertised (returning 1), because
+# refusing to advertise on a sizing limit would turn a capacity issue into a silent capability loss. The
+# limit is 32 KB against a registry whose whole serialized form is capped at 32 KB, so it is a guard, not
+# a live path.
+fn toolpin_check(name, desc, schema) {
+    if (config_toolpin_enabled() == 0) { return 1; }
+    if (name == 0) { return 1; }
+    if (load8(name) == 0) { return 1; }
+    if (_tp_bufs() == 0) { return 1; }
+    if (strlen(name) >= TOOLPIN_NAME_CAP) { return 1; }
+    var h = _tp_digest(name, desc, schema);
+    if (h == 0) { return 1; }                                # too large to hash -> do not lose the tool over it
+    var idx = _tp_find(name);
+    if (idx < 0) {
+        # TRUST ON FIRST USE. Silent by design: a first sighting has nothing to compare against.
+        if (_tp_n >= TOOLPIN_MAX) {
+            if (_tp_overflow == 0) {
+                _tp_overflow = 1;
+                ui_emit(ROLE_FAINT, "  [toolpin] registry exceeds "); ofmt_int(TOOLPIN_MAX);
+                ui_emit(ROLE_FAINT, " tools — the remainder are advertised UNPINNED"); oprintln("");
+            }
+            return 1;                                        # honest: unpinned, and said so
+        }
+        var nd = _tp_names + _tp_n * TOOLPIN_NAME_CAP;
+        var hd = _tp_hashes + _tp_n * TOOLPIN_HASH_CAP;
+        var i = 0;
+        while (load8(name + i) != 0) { store8(nd + i, load8(name + i)); i = i + 1; }
+        store8(nd + i, 0);
+        var j = 0;
+        while ((load8(h + j) != 0) && (j < (TOOLPIN_HASH_CAP - 1))) { store8(hd + j, load8(h + j)); j = j + 1; }
+        store8(hd + j, 0);
+        _tp_n = _tp_n + 1;
+        return 1;
+    }
+    if (streq(_tp_hashes + idx * TOOLPIN_HASH_CAP, h) == 1) { return 1; }   # unchanged — stay quiet
+
+    # CHANGED. Withhold, and say so loudly: this is the CVE-2025-54136 shape.
+    _tp_changed = _tp_changed + 1;
+    ui_emit(ROLE_RED, "  [toolpin] WITHHELD ");
+    ui_emit(ROLE_ACCENT, name);
+    ui_emit(ROLE_FAINT, " — its MCP definition CHANGED since this session pinned it.");
+    oprintln("");
+    ui_emit(ROLE_FAINT, "  a tool description is read by the model as instructions, so a silent swap is an injection with");
+    oprintln("");
+    ui_emit(ROLE_FAINT, "  approval already granted. Not advertised this turn. `/tools trust` to accept and re-pin.");
+    oprintln("");
+    log_begin("toolpin"); log_kv_str("tool", name); log_kv_str("result", "withheld_definition_changed");
+    log_commit(SK_WARN);
+    return 0;
+}
+
+# toolpin_trust_all: accept the current registry as the new baseline (`/tools trust`). Drops every pin so
+# the next probe re-pins from scratch — the legitimate path after a server upgrade.
+fn toolpin_trust_all() {
+    var had = _tp_n;
+    _tp_n = 0;
+    _tp_changed = 0;
+    _tp_overflow = 0;
+    return had;
+}

@@ -1,4 +1,4 @@
-<title>thoth Gap Review</title>
+<title>thoth Open Gaps</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -195,21 +195,20 @@
     <div>
       <h2>Contents</h2>
       <ol>
-        <li><a href="#strengths">What already works</a></li>
-        <li><a href="#t1">Tier 1 — close these</a></li>
-        <li><a href="#t2">Tier 2 — strong candidates</a></li>
-        <li><a href="#t3">Tier 3 — lower priority</a></li>
+        <li><a href="#scope">What this is</a></li>
+        <li><a href="#strengths">What thoth gets right</a></li>
+        <li><a href="#gaps">The open gaps</a></li>
+        <li><a href="#declined">Declined</a></li>
         <li><a href="#agnosai">Taking from agnosai</a></li>
-        <li><a href="#order">Sequencing</a></li>
         <li><a href="#questions">Open questions</a></li>
       </ol>
     </div>
     <div>
-      <h2>Confidence</h2>
+      <h2>Legend</h2>
       <div class="legend">
         <div><span class="chip c-missing">missing</span><span>checked, not there</span></div>
         <div><span class="chip c-partial">partial</span><span>thoth has some of it</span></div>
-        <div><span class="chip c-conflict">conflict</span><span>the spine owns it</span></div>
+        <div><span class="chip c-conflict">spine</span><span>daimon / kavach owns it</span></div>
         <div><span class="chip c-ok">ahead</span><span>thoth leads the field</span></div>
       </div>
     </div>
@@ -217,186 +216,171 @@
 
   <main>
     <header class="mast">
-      <p class="kicker">Tier 1 shipped in 0.40.0 · Tiers 2–3 open for decision</p>
-      <h1>thoth Gap Review</h1>
-      <p class="standfirst">What the popular agentic coding harnesses do that thoth does not, which of those gaps are worth closing, and what the newly Cyrius-ported <strong>agnosai</strong> can honestly supply.</p>
+      <p class="kicker">Not the plan &middot; the roadmap supersedes this file</p>
+      <h1>Open gaps, and what thoth has not decided</h1>
+      <p class="standfirst">The candidate gaps between thoth and the current agentic-coding harness landscape that thoth has <strong>not committed to</strong>. Nothing here is scheduled and nothing here is a promise.</p>
       <div class="meta">
-        <span>2026-08-24</span><span>produced at 0.39.0 · Tier 1 shipped at 0.40.0</span><span>3 landscape researchers + 1 agnosai inventory</span>
+        <span>companion to roadmap.md</span>
+        <span>supersedes agentic-improvements-review.md</span>
+        <span>Tiers 1&ndash;3 shipped in 0.40.0 / 0.41.0 / 0.42.0</span>
       </div>
     </header>
 
-    <p class="lede">Every candidate gap was checked against thoth's own source <em>before</em> being called missing, and against current upstream docs rather than recalled ones. Where thoth is ahead of the field, that is said too — this is a gap review, not a case for rewriting things that work.</p>
+    <h2 id="scope"><span class="num">Read first</span>What this file is, and what it is not</h2>
+    <p class="lede">There is exactly one place to look for &ldquo;what is thoth going to do&rdquo; and exactly one for &ldquo;what has thoth not decided about&rdquo;. This is the second.</p>
+    <p><strong>The roadmap is the plan, and it supersedes this file.</strong> Anything scheduled, declared, or carried as a known limitation in <code>roadmap.md</code> has been removed from here &mdash; deliberately. Shipped work lives in the CHANGELOG and is not narrated here either.</p>
+    <div class="note">
+      The original tiered review has been retired. Its <strong>Tier&nbsp;1</strong> (six items) shipped in 0.40.0; four of five <strong>Tier&nbsp;2</strong> items shipped in 0.41.0; three <strong>Tier&nbsp;3</strong> items shipped in 0.42.0. The rest were either promoted to the roadmap with a version pin, or carried forward below.
+    </div>
+    <p>Every candidate gap was checked against thoth&rsquo;s own source <em>before</em> being called missing, and against current upstream docs rather than recalled ones. Where thoth is ahead of the field, that is said too &mdash; this is a gap review, not a case for rewriting things that work.</p>
 
-    <h2 id="strengths"><span class="num">Read first</span>What thoth already gets right</h2>
-    <p>Several of these are unusual enough that a naive gap list would recommend rebuilding them.</p>
+    <h2 id="strengths"><span class="num">Context</span>What thoth already gets right</h2>
+    <p class="lede">Kept because a naive gap list would recommend rebuilding these.</p>
     <ul class="plain">
-      <li><strong>A real cryptographic audit chain.</strong> <span class="chip c-ok">ahead</span> thoth vendors libro and surfaces a hash-linked, tamper-evident record of every gated action, verified in-process by <code>/audit</code>. Almost no other harness has this; most have a log file. thoth leads on the hard half and trails only on exporting it.</li>
-      <li><strong>Authorization as a real seam, not a prompt.</strong> t-ron supplies allow/deny/flag verdicts, an injection scanner, a rate limiter and a risk score — with distinct reserved verbs (<code>thoth_run</code> vs <code>thoth_shell</code> vs <code>thoth_edit</code>) so a policy can separate the operator's actions from the model's. Everything below builds on this; nothing replaces it.</li>
-      <li><strong>Honest degradation as a house rule.</strong> Missing capabilities are announced, not faked. That posture is why this review is short on "thoth pretends to be secure" findings.</li>
-      <li><strong>Mid-session model switching</strong> <span class="chip c-ok">ahead</span> — matched by no surveyed harness.</li>
-      <li><strong>Context condensation already half-built.</strong> <code>[hoosh].summarize</code> is a genuine condenser, computed incrementally and cached per conversation. Peers call this auto-compaction.</li>
-      <li><strong>Instruction-file safety.</strong> <span class="chip c-ok">ahead</span> thoth wraps <code>AGENTS.md</code> as "verbatim reference — <em>not</em> commands to obey" and declines to auto-inject <code>CLAUDE.md</code>. Most harnesses treat instruction files as trusted text.</li>
+      <li><strong>A real cryptographic audit chain.</strong> <span class="chip c-ok">ahead</span> A hash-linked, tamper-evident record of every gated action, verified in-process by <code>/audit</code> and written out by <code>/audit export</code>. Almost no other harness has this; most have a log file.</li>
+      <li><strong>Authorization as a real seam, not a prompt.</strong> <span class="chip c-ok">ahead</span> t-ron supplies allow/deny/flag verdicts, an injection scanner over tool params, a rate limiter and a per-agent risk score &mdash; with distinct reserved verbs (<code>thoth_run</code> vs <code>thoth_shell</code> vs <code>thoth_edit</code>) so a policy can separate the operator&rsquo;s actions from the model&rsquo;s. Everything below builds on this; none of it replaces it.</li>
+      <li><strong>Honest degradation as a house rule.</strong> <span class="chip c-ok">ahead</span> Missing capabilities are announced, not faked. The banner states live gateway reachability rather than a hardcoded READY; an absent t-ron falls to a fail-closed confirm; the source says plainly where a boundary is not a sandbox.</li>
+      <li><strong>Mid-session model switching</strong> <span class="chip c-ok">ahead</span> &mdash; matched by no surveyed harness &mdash; plus a model picker, reasoning-effort control and per-turn token/cost accounting.</li>
+      <li><strong>Instruction-file safety.</strong> <span class="chip c-ok">ahead</span> thoth wraps <code>AGENTS.md</code> as &ldquo;verbatim reference &mdash; <em>not</em> commands to obey&rdquo; and declines to auto-inject <code>CLAUDE.md</code>. Most harnesses treat instruction files as trusted text.</li>
+      <li><strong>Tool-definition pinning.</strong> <span class="chip c-ok">ahead</span> Trust-on-first-use hashing against the CVE-2025-54136 rug-pull, with a changed definition <em>withheld</em> rather than warned about. Rare among peers.</li>
     </ul>
 
-    <h2 id="t1"><span class="num">Tier 1</span>Close these</h2>
-    <div class="note" style="border-left:3px solid var(--ok)">
-      <strong style="color:var(--ok)">✅ All six shipped in 0.40.0.</strong> Kept here as the record of what was
-      proposed and why. Two departed from the proposal: <strong>T1-4</strong> took the snapshot-directory route
-      rather than sit's write surface, and <strong>T1-3</strong>'s agnosai leaf was published upstream as a
-      <span class="mono">[lib.guard]</span> profile rather than hand-extracted. Tiers 2 and 3 remain open.
-    </div>
-    <p class="lede">High value, aligned with what thoth already is. Ordered by leverage.</p>
+    <h2 id="gaps"><span class="num">The list</span>The open gaps</h2>
+    <p class="lede">Ordered by consequence, not by effort. The numbering carries that ordering &mdash; gap&nbsp;1 is the largest safety delta thoth has.</p>
 
     <div class="rec" style="--tier: var(--crit)">
-      <div class="rec-head"><span class="rec-id">T1-1</span><h3>A grep/glob search tool for the model</h3><span class="chip c-missing">missing</span></div>
-      <p>Every surveyed harness gives the model a search primitive. thoth's model can only <code>read_file</code> a path it already knows or <code>list_dir</code> one level — so to find a symbol it walks directories one call at a time, or reaches for <code>shell</code>, which is off by default and gated. The highest-leverage missing tool, and it compounds with T1-2. It is thoth-native substrate, so it does not touch the architecture rule — but it <strong>must inherit 0.39.0's jail</strong> or it reopens what was just closed.</p>
+      <div class="rec-head"><span class="rec-id">01</span><h3>OS-enforced sandboxing of <code>shell</code> / <code>edit</code></h3><span class="chip c-missing">missing</span></div>
+      <p>thoth&rsquo;s own source is blunt that it has none: the glob filter &ldquo;is a COARSE convenience pre-filter, NOT a sandbox&rdquo;; the jail is &ldquo;a boundary, not a sandbox&rdquo;. Peers enforce at the OS &mdash; Seatbelt on macOS, Landlock+seccomp on Linux, with read-only / workspace-write / full-access tiers.</p>
+      <p><strong>Do not take agnosai&rsquo;s sandbox for this.</strong> Its own README says the process tier has &ldquo;No seccomp, no Landlock, no cgroups&rdquo;. The right seam is <strong>kavach</strong>, which AGNOS already assigns kernel confinement to. &ldquo;kavach owns the sandbox, not the application&rdquo; is a first-party standard.</p>
+    </div>
+    <div class="warn">
+      <h3>Attempted, and deliberately not shipped</h3>
+      <p>kavach 3.12.3 added the <code>[lib.confine]</code> profile this needs, and it builds clean inside thoth &mdash; the mechanical half is done. The blocker is a design finding, not a shortfall: <strong>kavach&rsquo;s confinement is container-shaped.</strong> It blocks host interpreters without a rootfs, and thoth&rsquo;s <code>shell</code> tool is a host-shell invocation, so every call would be refused.</p>
+      <p>Making it work means changing a security policy <em>inside kavach&rsquo;s threat model</em> &mdash; kavach&rsquo;s owner&rsquo;s decision, not thoth&rsquo;s to make unilaterally. The seam was removed rather than shipped as a promise thoth could not keep.</p>
+      <p class="mono" style="background:none;padding:0">Open: does kavach&rsquo;s interpreter blocklist become conditional, or does <code>shell</code> grow a rootfs-shaped mode?</p>
     </div>
 
-    <div class="rec" style="--tier: var(--crit)">
-      <div class="rec-head"><span class="rec-id">T1-2</span><h3>Make the iteration cap configurable</h3><span class="chip c-missing">missing</span></div>
-      <p><code>AGENT_MAX_ITERS = 8</code> is hardcoded and invisible. Eight rounds is roughly "read three files and make one edit". Goose defaults to <strong>1000</strong>. thoth has already been bitten: the 0.38.5 bug report describes tools failing every round <em>until the loop exhausted the cap and answered nothing</em>. A config key plus a visible "round N of M".</p>
-    </div>
-
-    <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">T1-3</span><h3>Secret redaction on the way out</h3><span class="chip c-missing">missing</span></div>
-      <p>thoth streams model output into the feed, <code>/save</code> writes it to disk, and the conversation store persists it. A model that echoes an API key found in a <code>read_file</code> or <code>shell</code> result gets it written to <code>.thoth/</code> verbatim. The 0.39.0 audit deliberately scoped its config fix to thoth's <em>own</em> credentials and named this as the separate capability. <strong>agnosai ships the code.</strong></p>
-    </div>
-
-    <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">T1-4</span><h3>Checkpoint and undo for model edits</h3><span class="chip c-missing">missing</span></div>
-      <p>thoth got write access at 0.31.0 and never got the safety net every peer pairs with it. <code>editlog.cyr</code> is record-only — no restore. Cline and Gemini CLI both keep a <strong>shadow git repo</strong> separate from project history. thoth has an unusual advantage here: it already vendors <strong>sit</strong>, a first-party Cyrius VCS — though only the <em>read</em> profile, which makes the write surface a real scoping question.</p>
-    </div>
-
-    <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">T1-5</span><h3>Finish context management</h3><span class="chip c-partial">partial</span></div>
-      <p>thoth has the hard half. Missing: a user-invoked <code>/compact</code>, a <code>/context</code> view of what is consuming the window, and a <strong>token-threshold</strong> trigger rather than only the byte-framer boundary. Small work on an existing mechanism.</p>
-    </div>
-
-    <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">T1-6</span><h3>Per-call approvals with session memory</h3><span class="chip c-missing">missing</span></div>
-      <p><code>confirm()</code> is stateless: the same command re-prompts <em>every round</em>. On an 8-round turn that is eight identical y/N prompts, which trains the user to hammer <kbd>y</kbd> — actively worse than one considered decision. A small addition that makes the existing gate <em>more</em> effective.</p>
-    </div>
-
-    <h2 id="t2"><span class="num">Tier 2</span>Strong candidates</h2>
-    <p class="lede">Larger, or needing a design decision first.</p>
-
-    <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">T2-1</span><h3>Subagent delegation</h3><span class="chip c-missing">missing</span></div>
-      <p>Claude Code, Codex, OpenHands, Cursor and Goose all landed on the same answer to the same two problems: a noisy sub-investigation permanently costs the parent's context, and one context cannot be worked in parallel. <strong>This is the biggest architectural question in the list</strong> — it brushes the spine rule, since orchestration is daimon's declared domain. A defensible reading is that a scoped child of <em>one conversation</em> is context management, not orchestration — but that is the maintainer's call and belongs in an ADR before code.</p>
-    </div>
-
-    <div class="rec" style="--tier: var(--crit)">
-      <div class="rec-head"><span class="rec-id">T2-2</span><h3>OS-enforced sandboxing of shell and edit</h3><span class="chip c-missing">missing</span></div>
-      <p>The largest safety delta, and thoth's source is blunt that it has none: the glob filter "is a COARSE convenience pre-filter, NOT a sandbox". Peers enforce at the OS — Seatbelt on macOS, Landlock+seccomp on Linux. <strong>Do not take agnosai's sandbox for this</strong>: its own README says the process tier has "No seccomp, no Landlock, no cgroups". The seam is <strong>kavach</strong>, which AGNOS already assigns kernel confinement to, and which agnosai itself bridges to rather than reimplementing.</p>
+    <div class="rec" style="--tier: var(--ink-3)">
+      <div class="rec-head"><span class="rec-id">02</span><h3>Network egress control</h3><span class="chip c-conflict">spine</span></div>
+      <p>Exfiltration is the payoff step of most injection chains. <code>shell</code> can curl anywhere and <code>web_fetch</code> reaches any URL. Largely <strong>daimon&rsquo;s and kavach&rsquo;s</strong> seam rather than thoth&rsquo;s &mdash; which is why it is not on the roadmap &mdash; but it is the natural companion to gap&nbsp;1 and should be decided alongside it.</p>
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">T2-3</span><h3>Injection defense for untrusted prose</h3><span class="chip c-missing">missing</span></div>
-      <p>t-ron's scanner walks JSON leaves of <em>tool params</em>. It never sees prose — and thoth injects untrusted prose from three places the model reads as instructions: <code>@file</code> mentions, tool results, and recalled notes. Two caveats: pattern matching is a <strong>mitigation, not a boundary</strong> (frame it the way the shell filter is framed), and the strongest control is structural — Claude Code runs web-fetch results through a <em>separate context window</em>.</p>
+      <div class="rec-head"><span class="rec-id">03</span><h3>Durable tool-definition pins</h3><span class="chip c-partial">partial</span></div>
+      <p>A gap <em>created</em> by 0.42.0. <code>[toolpin]</code> pins are session-scoped by design: they die with the process, so a swap <em>during</em> a session (or across a <code>/reprobe</code>) is caught and one <em>between two runs</em> is not. That bound is stated honestly in the code and the CHANGELOG.</p>
+      <p>Closing it means a durable pin store &mdash; a <strong>security-relevant file thoth writes and must then defend</strong> (tamper, replace, symlink-redirect), so it is a real design decision rather than a small feature. There is also a legitimate argument that it belongs in <strong>daimon</strong>, which owns the registry and could pin once for every consumer.</p>
+    </div>
+
+    <div class="rec" style="--tier: var(--ochre)">
+      <div class="rec-head"><span class="rec-id">04</span><h3>Structural isolation of untrusted content</h3><span class="chip c-partial">partial</span></div>
+      <p><code>[guard]</code> marks untrusted prose with an envelope and does not block, which is the right posture for a pattern matcher &mdash; it is a <strong>mitigation, not a boundary</strong>, and thoth frames it that way.</p>
+      <p>The strongest control in the field is structural, not lexical: retrieved text runs through a <strong>separate context window</strong> so it cannot issue instructions into the main thread. thoth has three untrusted-prose inlets &mdash; <code>@file</code> mentions, <code>read_file</code>/<code>list_dir</code> results, recalled mneme notes &mdash; and all three land in the main context. Note the dependency: a separate context is most of the machinery a subagent needs, so this and the roadmap&rsquo;s subagent ADR should be thought about together.</p>
+    </div>
+
+    <div class="rec" style="--tier: var(--ochre)">
+      <div class="rec-head"><span class="rec-id">05</span><h3>Export the audit trail to a wire protocol</h3><span class="chip c-partial">partial</span></div>
+      <p><code>/audit export</code> (0.42.0) closed the file half. What is still missing is emission to a collector, where the <strong>OpenTelemetry GenAI semantic conventions</strong> are the standard worth adopting. Low priority for an interactive TUI; listed so the choice of convention is recorded before anyone invents one.</p>
     </div>
 
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">T2-4</span><h3>Lifecycle hooks</h3><span class="chip c-missing">missing</span></div>
-      <p>The most-copied extensibility primitive in the field. A <code>PreToolUse</code> hook that can <strong>block</strong> is a deterministic, code-enforced deny that a prompt cannot argue with — thoth's own posture, expressed as a user extension point. Also the natural home for T2-5 without hardcoding it.</p>
+      <div class="rec-head"><span class="rec-id">06</span><h3>Image / multimodal input</h3><span class="chip c-missing">missing</span></div>
+      <p>thoth has an unusual reason to care: it ships its own Wayland GUI, so it is one of the very few terminal agents that could <em>produce</em> a screenshot as well as consume one.</p>
     </div>
 
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">T2-5</span><h3>A verification loop</h3><span class="chip c-missing">missing</span></div>
-      <p>thoth has every ingredient — <code>shell</code> can run the tests, <code>exec.cyr</code> does timed capture, roundlog records outcomes — and nothing closes the loop. Cheapest form: a <code>[verify].command</code> after an edit round, output fed back as a tool result. Depends on T1-2.</p>
+      <div class="rec-head"><span class="rec-id">07</span><h3>Agent Client Protocol (ACP) server mode</h3><span class="chip c-partial">partial</span></div>
+      <p>ACP is doing for agents what LSP did for language servers (Zed, JetBrains, Neovim). A server mode would let thoth be driven from other editors without giving up its own TUI. Distribution value; no architectural conflict. 0.42.0&rsquo;s <code>--events</code> stream is a meaningful step toward being drivable by another program, though it is one-way.</p>
     </div>
 
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">T2-6</span><h3>Conversation forking</h3><span class="chip c-missing">missing</span></div>
-      <p>thoth's conversation store already does the hard part — keyed, named, persisted, switchable. Forking is one more operation on that structure: copy the message vector and title, push, switch.</p>
+      <div class="rec-head"><span class="rec-id">08</span><h3>Git write operations / worktrees</h3><span class="chip c-missing">missing</span></div>
+      <p>The git producer is deliberately read-only, which is right for the status bar, but the agent can inspect a diff and never land it. Worth pairing with a decision about whether thoth should drive sit&rsquo;s write surface at all.</p>
     </div>
 
-    <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">T2-7</span><h3>Consume MCP resources and prompts</h3><span class="chip c-partial">partial</span></div>
-      <p>The best effort-to-value ratio in the list: the protocol work is <em>already vendored and paid for</em>. <code>bote-core</code> carries full resources and prompts registries; thoth uses only <code>tools/</code>. Server-published prompts surface naturally as slash commands.</p>
+    <div class="rec" style="--tier: var(--ink-3)">
+      <div class="rec-head"><span class="rec-id">09</span><h3>MCP 2026-07-28 conformance</h3><span class="chip c-conflict">spine</span></div>
+      <p>Vendored bote 3.3.7 negotiates 2025-11-25, one revision behind across a structural break. Flagged here only so it is tracked somewhere; the work belongs upstream.</p>
     </div>
 
-    <h2 id="t3"><span class="num">Tier 3</span>Lower priority, or declined</h2>
+    <h2 id="declined"><span class="num">Recorded</span>Declined, with reasons</h2>
+    <p class="lede">Listed so each decision reads as deliberate rather than as an oversight.</p>
     <ul class="plain">
-      <li><strong>Export the audit trail (OTLP).</strong> <span class="chip c-partial">partial</span> Ahead on the hard half, behind on the easy one — the record never leaves the process.</li>
-      <li><strong>MCP tool-description pinning.</strong> <span class="chip c-missing">missing</span> CVE-2025-54136 established that approving a tool definition does not survive later server-side changes. thoth re-fetches descriptions every probe and treats them as trusted. <em>Arguably daimon's job</em>, since it owns the registry.</li>
-      <li><strong>Network egress control.</strong> <span class="chip c-missing">missing</span> Exfiltration is the payoff step of most injection chains. Largely daimon's and kavach's seam.</li>
-      <li><strong>MCP 2026-07-28 conformance.</strong> <span class="chip c-conflict">conflict</span> Vendored bote negotiates 2025-11-25, one revision behind across a structural break. <em>bote's problem</em>; flagged so it is tracked somewhere.</li>
-      <li><strong>Image input.</strong> <span class="chip c-missing">missing</span> thoth has an unusual reason to care — it ships its own Wayland GUI, so it could <em>produce</em> screenshots as well as consume them.</li>
-      <li><strong>Agent Client Protocol server mode.</strong> <span class="chip c-partial">partial</span> ACP is doing for agents what LSP did for language servers. Distribution value, no architectural conflict.</li>
-      <li><strong>Streaming JSON events</strong> <span class="chip c-partial">partial</span> · <strong>git write operations and worktrees</strong> <span class="chip c-missing">missing</span>.</li>
-      <li><strong>A2A</strong> — <strong>declined.</strong> No terminal coding harness implements it; its centre of gravity is enterprise orchestration. Listed so the decision is recorded as deliberate.</li>
+      <li><strong>A2A (Agent2Agent).</strong> No terminal coding harness implements it; its center of gravity is enterprise multi-agent orchestration.</li>
+      <li><strong>Prometheus metrics.</strong> Not applicable to an interactive TUI.</li>
     </ul>
 
-    <h2 id="agnosai"><span class="num">agnosai 2.0.6</span>What to take, and what to refuse</h2>
-    <p>A full orchestration <strong>engine</strong> — 111 modules, a 37,595-line dist. Namespace hygiene is excellent and CI-enforced.</p>
+    <h2 id="agnosai"><span class="num">Consumption</span>Taking from agnosai</h2>
+    <p class="lede">agnosai is a full orchestration <strong>engine</strong> &mdash; 111 modules, a <code>dist/agnosai.cyr</code> of 37,595 lines (1.6&nbsp;MB, 2,043 fns). Namespace hygiene is excellent and CI-enforced.</p>
 
     <div class="warn">
-      <h3>Neither published seam is clean for thoth as it stands</h3>
-      <p><strong>The bundle's dependency contract is incomplete.</strong> <code>dist/agnosai.deps</code> names 45 stdlib leaves and <em>omits the six git bundles the fold actually calls into</em> — <code>kavach_init</code> (62 refs), <code>ratelimit_*</code>, <code>sha256</code>, <code>dispatcher_*</code> and others are used in the dist and defined nowhere in it. The advertised three-line dep block <strong>will not link on its own</strong>, and CI never builds the bundle. At 1.6 MB it would also dwarf every other bundle thoth carries.</p>
-      <p><strong>The HTTP service overlaps daimon.</strong> agnosai's tool registry competes with daimon's, and its mneme builtin re-implements as direct HTTP the exact tools thoth already reaches through daimon — giving thoth two paths to mneme with different auth and different failure modes.</p>
+      <h3>Neither published seam is clean for thoth as a whole</h3>
+      <p><strong>1. The vendored bundle&rsquo;s dependency contract is incomplete.</strong> <code>dist/agnosai.deps</code> names only 45 stdlib leaves and omits the six <code>[deps.X]</code> git bundles the fold actually calls into &mdash; <code>kavach_init</code> (62 refs), <code>ratelimit_*</code> (11), <code>rng_uniform</code>, <code>sha256</code>, <code>dispatcher_*</code>, <code>accel_*</code> are all used in the dist and defined nowhere in it. The advertised three-line <code>[deps.agnosai]</code> block will not link on its own, and CI never builds the bundle standalone. At 1.6&nbsp;MB it would also dwarf every other bundle thoth carries, against a preprocessor ceiling thoth is already at ~96&nbsp;% of.</p>
+      <p><strong>2. The HTTP service overlaps daimon.</strong> agnosai&rsquo;s tool registry competes with daimon&rsquo;s host registry, and its <code>builtin/mneme.cyr</code> re-implements as direct HTTP the exact mneme tools thoth already reaches through <code>daimon /v1/mcp/call</code>. Adopting it gives thoth <strong>two paths to mneme with different auth and different failure modes</strong>.</p>
     </div>
 
-    <h3>Take: four small, pure leaves</h3>
+    <p><strong>The mechanism that does work</strong> &mdash; settled, not a proposal &mdash; is a lean <code>[lib.X]</code> profile published upstream, the way sit publishes <code>[lib.read]</code> and sankoch <code>[lib.zlib]</code>. agnosai published <code>[lib.guard]</code> on exactly this basis and thoth consumes it for <code>[redact]</code> and <code>[guard]</code>. Hand-extracting files instead would be a fork by another name.</p>
+
+    <h3 style="margin-top:2rem">Still open: one leaf worth taking</h3>
     <div class="tw">
       <table>
-        <thead><tr><th>Leaf</th><th>Fills</th><th>Verdict</th></tr></thead>
+        <thead><tr><th>Leaf</th><th>Fills</th><th>Mechanism</th></tr></thead>
         <tbody>
-          <tr><td><span class="mono">output_filter</span></td><td>secret/PII redaction before output is shown, saved or persisted</td><td class="verdict" style="color:var(--ok)">take → T1-3</td></tr>
-          <tr><td><span class="mono">prompt_guard</span></td><td>injection heuristics over prose + a system-prompt wrapper</td><td class="verdict" style="color:var(--ok)">take → T2-3</td></tr>
-          <tr><td><span class="mono">output_validation</span></td><td>validate a response against a schema; build a retry prompt</td><td class="verdict" style="color:var(--ok)">take</td></tr>
-          <tr><td><span class="mono">ssrf</span> + <span class="mono">guarded_fetch</span></td><td>URL safety incl. octal/hex IP literals, per-redirect re-check</td><td class="verdict" style="color:var(--ochre)">defer</td></tr>
+          <tr>
+            <td class="mono" style="background:none">src/orchestrator/<wbr>output_validation.cyr</td>
+            <td>Validate a model response against an output schema; build a retry prompt</td>
+            <td class="verdict">ask for a profile</td>
+          </tr>
+          <tr>
+            <td class="mono" style="background:none">src/server/ssrf.cyr<wbr> + guarded_fetch.cyr</td>
+            <td>URL safety, incl. octal/hex IP literals and per-redirect re-validation</td>
+            <td class="verdict">deferred</td>
+          </tr>
         </tbody>
       </table>
     </div>
-    <p><code>output_validation</code> has a use thoth has already been burned by: validating tool-call arguments before they reach daimon. 0.38.5 fixed one shape bug there and 0.39.0 fixed a JSON-injection seam at the same splice.</p>
-    <p><code>ssrf</code> would <strong>actively misfire</strong> today: thoth has no model-controlled outbound URL, and its only outbound URLs are operator-set — with the default being <code>127.0.0.1:8088</code>, which a private-IP guard would reject.</p>
+    <p><code>output_validation</code> has an immediate use thoth has already been burned by: <strong>validating tool-call <code>arguments</code> before they reach daimon.</strong> 0.38.5 fixed one shape bug there (<code>bayan_json_v_str</code> dropping Ollama&rsquo;s object-shaped arguments) and 0.39.0&rsquo;s A-10 fixed a JSON-injection seam at the same splice. A real validator belongs there &mdash; taken as a profile extension, not a copied file.</p>
+    <p><code>ssrf</code>/<code>guarded_fetch</code> are deferred because they would <strong>actively misfire</strong>: thoth has no model-controlled outbound URL (<code>web_fetch</code>/<code>web_search</code> are bote tools hosted by daimon, where the guard belongs and where SSRF rejections are already logged), and thoth&rsquo;s only outbound URLs are operator-set with a default of <code>http://127.0.0.1:8088</code> &mdash; which a private-IP guard would reject.</p>
 
-    <div class="note">
-      <strong>Open question on mechanism.</strong> Even for the four leaves, hand-extracting files is a fork by another name. A <code>[lib.guard]</code> profile published <em>by agnosai</em> — the way sit publishes <code>[lib.read]</code> and sankoch publishes <code>[lib.zlib]</code> — would be far better. That is a request to make of agnosai, not a change to make in thoth.
+    <h3 style="margin-top:2rem">Borrow the idea, not the code</h3>
+    <ul class="plain">
+      <li><strong><code>RiskLevel</code> (low/medium/high)</strong> on an action. thoth&rsquo;s gate is binary allow/deny/flag; a risk tier is the prerequisite for both a graduated permission posture and an approval queue.</li>
+      <li><strong>Budget <em>enforcement</em></strong> &mdash; check-before-call, <code>&gt;=</code> semantics, a typed exceeded-reason. thoth has token/cost <em>accounting</em> and no enforcement; nothing stops a runaway loop from spending. This pairs with the now-configurable iteration cap: a round limit bounds turns, not spend.</li>
+      <li><strong>Asynchronous approvals</strong> &mdash; a pending-decision queue that outlives the prompt, so an unattended run can <em>park</em> a risky edit instead of denying it. thoth&rsquo;s <code>confirm()</code> is otherwise strictly better (fail-closed, explicit y/yes only), and session-scoped grants already removed the re-prompt-every-round problem.</li>
+      <li><strong>The 18 agent presets</strong> as a ready-made answer to &ldquo;what specialists would a thoth crew contain&rdquo; &mdash; relevant to the roadmap&rsquo;s subagent ADR. Note agnosai&rsquo;s <code>AgentDefinition</code> has <em>no personality field</em>, because that axis belongs to avatara.</li>
+    </ul>
+
+    <h3 style="margin-top:2rem">Refuse, with reasons</h3>
+    <p>Kept verbatim: this list is what stops a future contributor forking the spine by accident.</p>
+    <ul class="plain">
+      <li><strong><code>src/llm/*</code> &mdash; the hoosh client.</strong> Its own header names <code>thoth/src/hoosh.cyr</code> as its reference implementation, so thoth would be importing a weaker copy of itself: no SSE streaming, <strong>no tool-calling at all</strong>, no reasoning effort, no mid-session switching.</li>
+      <li><strong><code>src/llm/router.cyr</code></strong> &mdash; model routing is hoosh&rsquo;s declared domain. Adopting it puts routing policy in two places.</li>
+      <li><strong><code>src/tools/registry.cyr</code></strong> &mdash; a second tool registry competing with daimon&rsquo;s.</li>
+      <li><strong><code>src/server/routes/mcp.cyr</code></strong> &mdash; thoth is an MCP <em>client</em>; if it ever wants to be a server, bote&rsquo;s dispatcher is already vendored.</li>
+      <li><strong><code>src/orchestrator/audit.cyr</code></strong> &mdash; thoth already vendors libro. Two chains in one process is worse than one.</li>
+      <li><strong><code>src/sandbox/</code></strong> &mdash; right gap, wrong seam. See gap&nbsp;1: kavach owns this.</li>
+    </ul>
+
+    <h2 id="questions"><span class="num">Decisions</span>Open questions for the maintainer</h2>
+    <p class="lede">Each of these blocks something above. None has a default answer.</p>
+    <div class="rec" style="--tier: var(--crit)">
+      <div class="rec-head"><span class="rec-id">Q1</span><h3>Does kavach&rsquo;s interpreter blocklist become conditional, or does <code>shell</code> grow a rootfs-shaped mode?</h3></div>
+      <p>Gap&nbsp;1 &mdash; the largest safety delta &mdash; waits on this, and it is a change inside kavach&rsquo;s threat model.</p>
     </div>
-
-    <h3>Borrow the idea, not the code</h3>
-    <ul class="plain">
-      <li><strong>A <span class="mono">RiskLevel</span> taxonomy.</strong> thoth's gate is binary; a risk tier is the prerequisite for both a graduated permission posture and an approval queue.</li>
-      <li><strong>Budget <em>enforcement</em>.</strong> thoth has token/cost accounting and no enforcement — nothing stops a runaway loop from spending. The shape (check-before-call, <code>&gt;=</code> semantics, a typed reason) is what is worth copying.</li>
-      <li><strong>Asynchronous approvals</strong> — a pending queue that outlives the prompt, so an unattended run can <em>park</em> a risky edit rather than deny it.</li>
-    </ul>
-
-    <h3>Refuse</h3>
-    <div class="tw">
-      <table>
-        <thead><tr><th>Module</th><th>Why</th></tr></thead>
-        <tbody>
-          <tr><td><span class="mono">llm/*</span></td><td>Its own header names thoth's <span class="mono">hoosh.cyr</span> as its reference implementation — thoth would import a weaker copy of itself: no streaming, <strong>no tool-calling at all</strong>, no mid-session switching.</td></tr>
-          <tr><td><span class="mono">llm/router</span></td><td>Model routing is hoosh's declared domain. Adopting it puts routing policy in two places.</td></tr>
-          <tr><td><span class="mono">tools/registry</span></td><td>A second tool registry competing with daimon's.</td></tr>
-          <tr><td><span class="mono">routes/mcp</span></td><td>thoth is an MCP <em>client</em>; if it ever serves, bote's dispatcher is already vendored.</td></tr>
-          <tr><td><span class="mono">orchestrator/audit</span></td><td>thoth already vendors libro. Two chains in one process is worse than one.</td></tr>
-          <tr><td><span class="mono">sandbox/</span></td><td>Right gap, wrong seam — kavach owns this.</td></tr>
-        </tbody>
-      </table>
+    <div class="rec" style="--tier: var(--ochre)">
+      <div class="rec-head"><span class="rec-id">Q2</span><h3>Where does durable rug-pull defense live?</h3></div>
+      <p>thoth persists tool-definition pins, or daimon pins once for every consumer. Gap&nbsp;3.</p>
     </div>
-
-    <h2 id="order"><span class="num">Sequencing</span>Value per unit of risk</h2>
-    <p>Nothing here is scheduled. This is the order that spends effort best.</p>
-    <ul class="plain">
-      <li><strong>T1-1 + T1-2 together</strong> — each throttles the other; the biggest improvement to what thoth can finish in one turn.</li>
-      <li><strong>T1-6 + T1-5</strong> — small, on existing mechanisms, felt every session.</li>
-      <li><strong>T1-3</strong> — pending the agnosai profile question.</li>
-      <li><strong>T1-4</strong> — needs a scoping decision on sit's write surface.</li>
-      <li><strong>T2-1</strong> — needs an ADR first; the one item that touches the spine rule.</li>
-    </ul>
-
-    <h2 id="questions"><span class="num">For the maintainer</span>Open questions</h2>
-    <ul class="plain">
-      <li><strong>Subagents vs the spine rule.</strong> Is a scoped child of one conversation thoth-side context management, or orchestration belonging to daimon/agnosai? Everything in T2-1 waits on this.</li>
-      <li><strong>Should agnosai publish a <code>[lib.guard]</code> profile?</strong> That is the difference between consuming the four leaves and forking them.</li>
-      <li><strong>Checkpointing via sit's write surface</strong> — in scope, or is a simpler snapshot directory the right first cut?</li>
-      <li><strong>Where does rug-pull defense live</strong> — thoth pins tool-description hashes, or daimon does it for every consumer?</li>
-    </ul>
+    <div class="rec" style="--tier: var(--ochre)">
+      <div class="rec-head"><span class="rec-id">Q3</span><h3>Is a separate context window for untrusted content worth building before subagents, or as part of them?</h3></div>
+      <p>Gap&nbsp;4 and the roadmap&rsquo;s subagent ADR share most of their machinery.</p>
+    </div>
+    <div class="rec" style="--tier: var(--lapis)">
+      <div class="rec-head"><span class="rec-id">Q4</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>
+      <p>Gap&nbsp;8 &mdash; or does the read-only git producer stay the boundary?</p>
+    </div>
 
     <footer>
-      Companion to <span class="mono">docs/audit/2026-08-24-audit.md</span>, the 0.39.0 hardening record. Source of this page: <span class="mono">docs/development/agentic-improvements-review.md</span>.
+      <p>Companion to <code>docs/development/roadmap.md</code>, which supersedes this file. Shipped work is in <code>CHANGELOG.md</code>; live state in <code>docs/development/state.md</code>. Supersedes <code>agentic-improvements-review.md</code> and the previous <code>gap-review.html</code>.</p>
     </footer>
   </main>
 </div>

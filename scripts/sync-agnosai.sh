@@ -14,7 +14,7 @@
 #  2. Even if it did, taking it would collide with seams thoth already consumes: agnosai's LLM layer is a
 #     second (weaker, non-streaming, tool-call-less) hoosh client whose own header names thoth's
 #     `src/hoosh.cyr` as its reference implementation; its tool registry competes with daimon's; its audit
-#     chain duplicates the vendored libro. See docs/development/agentic-improvements-review.md.
+#     chain duplicates the vendored libro. See docs/development/gap-review.md.
 #
 # ⚠ WHY NOT HAND-EXTRACT THE TWO FILES. Because that is a fork by another name — it goes stale silently
 # and the next upstream fix never reaches thoth. The `[lib.guard]` profile was added to agnosai 2.0.7 at

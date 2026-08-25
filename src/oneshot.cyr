@@ -140,6 +140,10 @@ fn _oneshot_parse(args, n) {
         }
         if ((streq(a, "-p") == 1) || (streq(a, "--print") == 1)) { force = 1; }
         elif ((streq(a, "--json") == 1) || (streq(a, "-j") == 1)) { _oneshot_json = 1; }
+        # 0.42.0 (T3): --events streams NDJSON to stdout DURING the turn. A modifier like --json, and it
+        # implies the same one-shot narration posture — human output is suppressed so stdout carries the
+        # event stream and nothing else, which is what makes it parseable line-by-line.
+        elif (streq(a, "--events") == 1) { events_enable(); }
         elif ((streq(a, "-o") == 1) || (streq(a, "--out") == 1)) {
             # consume the NEXT token as the output path (verbatim). A dangling -o at the end
             # has no path -> ignored (path stays 0). Like --json, -o does not force a run.
@@ -223,6 +227,7 @@ fn oneshot_print_help() {
     emit_raw("  cmd | thoth <task>...     append piped stdin to the task (e.g. git diff | thoth 'review')\n");
     emit_raw("  cmd | thoth -p            use piped stdin as the whole task\n");
     emit_raw("  thoth --json <task>...    emit one JSON object per turn (for jq/CI)\n");
+    emit_raw("  thoth --events <task>...  stream NDJSON events DURING the turn (watch a long agentic run)\n");
     emit_raw("  thoth -o <file> <task>... also write the answer to <file> (your redirect)\n");
     emit_raw("  thoth -v, --version       print the version\n");
     emit_raw("  thoth -h, --help          show this help\n");
@@ -231,6 +236,11 @@ fn oneshot_print_help() {
     emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
     emit_raw("cleanly); progress is suppressed and an action needing authorization is denied\n");
     emit_raw("(configure [tron].policy or run interactively). Config: .thoth/config.cyml.\n\n");
+    emit_raw("--events streams one JSON object per line AS THE TURN RUNS: turn_start, then\n");
+    emit_raw("tool_call/tool_result per tool, then response or error, then turn_end LAST.\n");
+    emit_raw("Unlike --json (one object at the END) it lets a caller show progress or act on tool\n");
+    emit_raw("use while an agentic turn is still going. stdout is PURE NDJSON: the answer arrives\n");
+    emit_raw("as the response event, not as bare text (-o still receives the plain reply).\n");
     emit_raw("--json (or -j) prints {response, model, turns, tokens?, cost?, elapsed_ms} per\n");
     emit_raw("turn instead of the plain answer; tokens/cost appear only once reported. On any\n");
     emit_raw("failure nothing goes to stdout (diagnostic on stderr, nonzero exit).\n\n");
@@ -284,7 +294,7 @@ fn _completion_bash() {
     emit_raw("            ;;\n");
     emit_raw("    esac\n");
     emit_raw("    if [[ \"$cur\" == -* ]]; then\n");
-    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j -o --out --tier -v --version -h --help --completion --completions' -- \"$cur\") )\n");
+    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j --events -o --out --tier -v --version -h --help --completion --completions' -- \"$cur\") )\n");
     emit_raw("    else\n");
     emit_raw("        COMPREPLY=( $(compgen -f -- \"$cur\") )\n");
     emit_raw("    fi\n");
@@ -305,6 +315,7 @@ fn _completion_zsh() {
     emit_raw("    _arguments -s \\\n");
     emit_raw("        '(-p --print)'{-p,--print}'[use piped stdin as the whole task]' \\\n");
     emit_raw("        '(--json -j)'{--json,-j}'[emit one JSON object per turn (jq/CI)]' \\\n");
+    emit_raw("        '--events[stream NDJSON events during the turn]' \\\n");
     emit_raw("        '(-o --out)'{-o,--out}'[tee the answer to a file]:output file:_files' \\\n");
     emit_raw("        '(-v --version)'{-v,--version}'[print the version]' \\\n");
     emit_raw("        '(-h --help)'{-h,--help}'[show this help]' \\\n");
@@ -316,21 +327,26 @@ fn _completion_zsh() {
     return 0;
 }
 
-# _oneshot_report_error: a concise stderr diagnostic when a one-shot turn produced no
-# answer. Derived from the seam status + the turn's return code (the verbose gateway
-# body went to the discarded sink; run interactively or with [hoosh].stream=false for it).
+# _oneshot_report_error: a concise stderr diagnostic when a one-shot turn produced no answer. The CAUSE
+# text comes from `ev_fail_text` — the same string the `error` event carries — so the human channel and
+# the machine channel can never disagree about one failure; only the actionable hint differs.
+#
+# ⚠ The hint used to read "run interactively or set [hoosh].stream=false to see the body". The
+# [hoosh].stream half was wrong: one-shot runs the turn under OUT_NULL, so the gateway body is discarded
+# by the SINK regardless of streaming mode. A live 502 with stream already false printed that advice and
+# following it changed nothing. Interactive is the only place the body actually surfaces.
 fn _oneshot_report_error(rc) {
-    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        emit_err("thoth: no model backend wired — set [hoosh].url in .thoth/config.cyml (degraded, not faked)\n");
-        return 0;
-    }
-    if (rc < 0) { emit_err("thoth: hoosh gateway unreachable (transport error) — is it up?\n"); return 0; }
+    var absent = 0;
+    if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { absent = 1; }
+    emit_err("thoth: "); emit_err(ev_fail_text(rc, absent));
+    if (absent == 1) { emit_err(" — set [hoosh].url in .thoth/config.cyml (degraded, not faked)\n"); return 0; }
+    if (rc < 0) { emit_err(" — is it up?\n"); return 0; }
     if (rc > 0) {
-        emit_err("thoth: hoosh returned HTTP "); emit_err_int(rc);
-        emit_err(" (run interactively or set [hoosh].stream=false to see the body)\n");
+        emit_err(" "); emit_err_int(rc);
+        emit_err(" (run interactively to see the gateway's response body)\n");
         return 0;
     }
-    emit_err("thoth: no completion returned\n");
+    emit_err("\n");
     return 0;
 }
 
@@ -410,6 +426,14 @@ fn one_shot_run() {
         # Compute the output bytes ONCE — the plain reply, or the JSON envelope.
         var obuf = hoosh_last_reply();
         var olen = hoosh_last_reply_len();
+        # 0.42.0 (T3): under --events, stdout is PURE NDJSON — the answer already went out as a `response`
+        # event from inside the turn bracket (_task_dispatch), so nothing is written as bare text here; it
+        # would land un-delimited in the middle of the stream. `-o` still receives the plain reply: that
+        # file is the user's own explicit redirection and is not the event channel.
+        if (events_enabled() == 1) {
+            if (_oneshot_out_path != 0) { _oneshot_write_out(_oneshot_out_path, obuf, olen); }
+            return 0;
+        }
         if (_oneshot_json == 1) {
             # one JSON object (clean for jq/CI); honest fields (tokens/cost omit-until-present),
             # the buffer sized so it never truncates.

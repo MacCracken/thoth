@@ -79,6 +79,29 @@ model = "claude-haiku-4-5-20251001"
 # [guard]
 # enabled = false
 
+# [toolpin] — pin every MCP tool DEFINITION on first sight (0.42.0). DEFAULT ON.
+# Defends CVE-2025-54136: approving a tool does not survive later server-side
+# changes. A server can advertise a benign description, be approved, then swap it
+# for one carrying instructions — and thoth hands descriptions to the model as
+# authoritative guidance about what a tool does, so a swap is a prompt injection
+# with approval already granted.
+#
+# Trust on first use, fail closed on change. First sight pins a SHA-256 over
+# name/description/inputSchema, silently (there is nothing to compare against yet).
+# Unchanged stays quiet. CHANGED is WITHHELD from the advertisement — not merely
+# warned about, because a warning you scroll past leaves the swapped description in
+# the model's context, which is the whole payload. `/tools trust` re-baselines after
+# a legitimate server upgrade.
+#
+# ⚠ Scanning cannot substitute for this: the replacement text can be entirely
+# innocuous. Only identity works.
+# ⚠ SESSION-SCOPED. Pins die with the process, so this catches a swap DURING a
+# session (or across /reprobe), not one between two runs. Said plainly so nobody
+# reads more into it. A registry over 128 tools advertises the rest unpinned, and
+# says so.
+# [toolpin]
+# enabled = false
+
 # [verify] — run the project's own check after the model writes, and hand the
 # model the result (0.41.0). Off unless set; there is no default, because thoth
 # cannot guess what "correct" means for a project.

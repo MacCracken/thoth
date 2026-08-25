@@ -7,6 +7,26 @@
 
 ## Version
 
+**0.42.0** — **three Tier-3 items, and the live verification that found three defects the unit tests
+passed** (2026-08-24). **`[toolpin]`**, on by default — trust-on-first-use SHA-256 over
+`name \0 description \0 inputSchema`, the CVE-2025-54136 rug-pull defense. A changed definition is
+**WITHHELD from the advertisement**, not warned about: a warning the operator scrolls past leaves the
+swapped description in the model's context, which is the entire payload. Scanning cannot fix this class —
+the replacement text can be innocuous, so only IDENTITY works. Session-scoped, and said so. **`--events`**
+— NDJSON on fd 1 so another program can watch an agentic turn (`turn_start` → `tool_call`/`tool_result` →
+`response`/`error` → `turn_end`); every string escaped, because a model-chosen tool name could otherwise
+emit a newline and **forge an event line**. **`/audit export <file>`** — t-ron's own `audit_export_json`
+written to disk 0600, verbatim and NOT redacted: rewriting bytes would produce a file that no longer
+matches the chain certifying it. ⭐ **The lesson is the live test.** All three built clean and passed their
+unit tests; a real turn against a running gateway then showed `response` arriving AFTER `turn_end` (a
+consumer stopping at `turn_end` loses the answer), `events_error` never called at all (documented, defined,
+dead — a failed turn streamed `ok:false` with no reason), and the `response` event building into the shared
+8 KB line buffer against a 64 KB reply (a long answer clipped while still emitting valid JSON — the failure
+shape that looks like success). Also corrected: a one-shot HTTP failure advised `[hoosh].stream=false`,
+which does nothing, because one-shot discards the body at the OUT_NULL sink regardless. Suite **264 + 1824
++ 183 + 3** (+46). Builds OK on x86_64 / aarch64 / agnos. Docs restructured: `roadmap.md` is now
+forward-facing only and [`gap-review.md`](gap-review.md) carries only what the roadmap has *not* claimed.
+
 **0.41.0** — **four of five Tier-2 items; the fifth is a design finding, not a shortfall** (2026-08-24).
 **T2-6 `/fork`** — the conversation store already did the hard part; message RECORDS are copied (their last
 two fields are attached lazily AFTER creation, so sharing would let the parent's next citation appear inside
@@ -79,9 +99,9 @@ confirm it cannot render; and the shell capture file tightened `0644 → 0600`. 
 test; the `_append_int` test was verified by reverting the fix, and where a test cannot distinguish the
 pre-fix behaviour (the GUI confirm) that is stated rather than glossed. Suite **264 + 1644 + 183 + 3**
 (+53). Builds OK on x86_64 / aarch64 / agnos. Shipped alongside:
-[`agentic-improvements-review.md`](agentic-improvements-review.md) — a survey of the harness field and of
-what the Cyrius-ported **agnosai 2.0.6** can honestly supply. **That document is a PROPOSAL: nothing in it
-is built or decided.**
+`agentic-improvements-review.md` — a survey of the harness field and of what the Cyrius-ported
+**agnosai 2.0.6** can honestly supply. **That document was a PROPOSAL: nothing in it was built or
+decided.** Retired at 0.42.0; its surviving recommendations are in [`gap-review.md`](gap-review.md).
 
 **0.38.6** — **toolchain 6.5.20 → 6.5.35, every dep to latest, and an aarch64 miscompile that had been live
 since 0.8.0** (2026-08-23). The vendored darshana bundle defined `var SYS_IOCTL = 16;` — the **x86_64** number;

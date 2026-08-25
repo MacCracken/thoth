@@ -36,6 +36,19 @@ type: state
 > status, a byte count) cannot be audited by reading it — the audit is re-running the measurement. Rows like these
 > belong in a "re-measure" bucket, not "fresh".
 
+> **0.39.0–0.42.0** each landed the routine refresh. **0.42.0** additionally **restructured the development
+> docs on the user's instruction**: `roadmap.md` was rewritten forward-facing only, a new `gap-review.md` +
+> `gap-review.html` pair now carries ONLY gaps the roadmap has *not* claimed, and
+> `agentic-improvements-review.md` was **retired** (its tiers had shipped or been promoted). The separation
+> rule is now explicit in both files: **the roadmap supersedes the gap review.** Applying the 0.38.6 lesson
+> above, every *measurement* in the roadmap was re-run rather than re-read — the `CYRIUS_STATS` table
+> (`fn_table` 8467/32768, identifiers 269459/524288, `var_table` 4856/8192, static data 1,001,720 B), the
+> `--agnos` lane's actual warning output (which does NOT print "zero undefined symbols" as the gate claimed —
+> three dead-path sit sign placeholders remain by design), and hoosh's real endpoint surface (the
+> model-picker item claimed "if hoosh ever exposes it"; hoosh 2.6.3 already serves
+> `/v1/health/providers`). Gate 3 was also re-pinned: it read "not scheduled" while the 0.39.0 audit had
+> already swept two of its three areas.
+
 ## At a glance
 
 | Bucket | Count | What it means |
@@ -68,7 +81,8 @@ type: state
 | File | Status | Notes |
 |---|---|---|
 | `state.md` | ✅ Fresh | The live version log + current-state block. This sweep **replaced** the frozen ~465-line per-module `## Source`/`## Tests`/`## Next` block with a concise current "Surface at a glance" + the 1675-assertion test summary. Refreshed every release (a version-log entry per cut). |
-| `roadmap.md` | ✅ Fresh | **Forward-facing only.** This sweep re-anchored "Where we are" to 0.33.7 + collapsed the shipped 0.32.x/0.33.x arcs to a one-line pointer. When a milestone completes, move it to CHANGELOG, don't narrate it here. |
+| `roadmap.md` | ✅ Fresh | **Forward-facing only**, rewritten at **0.42.0**: v1.0 gates + version-pinned scheduled work + non-gating work + known limitations. When a milestone completes, move it to CHANGELOG, don't narrate it here. **It supersedes `gap-review.*`.** Its measurements were re-run at 0.42.0, not re-read. |
+| `gap-review.md` / `.html` | ✅ Fresh | **New at 0.42.0**, replacing the retired `agentic-improvements-review.md`. Carries ONLY candidate gaps thoth has NOT committed to — anything on the roadmap is deliberately absent. The `.html` is the same content on the house design system (Artifact-shaped: starts at `<title>`, no doctype). |
 | `doc-health.md` | ✅ Fresh | This file. This sweep also trimmed the bloated per-cut "Last refresh" trail. Opportunistic cadence. |
 
 ## Tier 4 — ADRs (`docs/adr/`)
