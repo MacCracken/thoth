@@ -812,6 +812,43 @@ fn test_project() {
     assert(_ui_contains(ev_fail_text(502, 0), "HTTP") == 1, "a positive rc is an HTTP failure");
     assert(_ui_contains(ev_fail_text(0, 0), "no completion") == 1, "rc 0 with no reply is an empty completion");
 
+    # ⚠ 0.43.1: the blocking pre_tool hook is now enforced on BOTH executors. It lived only in the
+    # serial one, and [hoosh].parallel defaults to ON — so a round with two or more daimon tools and no
+    # local tool skipped the operator's hook entirely, in the DEFAULT configuration. These assertions
+    # pin the two properties that make the contract true: the hook is consulted for a parallel round,
+    # and a denial is reported as a HOOK denial rather than a policy one.
+    test_group("pre_tool hook covers the parallel executor (0.43.1)");
+    hooks_reset();
+    _cfg_hook_pre_tool = "exit 3";                     # a hook that always denies
+    var pj = "[{\"id\":\"a\",\"function\":{\"name\":\"fs_read\",\"arguments\":\"{}\"}},{\"id\":\"b\",\"function\":{\"name\":\"fs_write\",\"arguments\":\"{}\"}}]";
+    var pv = bayan_json_v_parse_buf(pj, strlen(pj));
+    assert(pv != 0, "two-call fixture parses");
+    assert_eq(agent_tc_count(pv), 2, "...as two calls");
+    # Neither name is a LOCAL tool, so _agent_round_has_local declines and this round is exactly the
+    # shape that used to bypass the hook.
+    assert_eq(_agent_round_has_local(pv, 2), 0, "a two-daimon-tool round is NOT forced serial");
+    assert_eq(config_hoosh_parallel(), 1, "...and parallel is the DEFAULT, so this is the common case");
+    # ⚠ _agent_run_calls forces SERIAL when the daimon seam is absent (a crash guard — the parallel
+    # workers dereference config_daimon_url()). A unit test has no daimon, so without this the round
+    # would take the serial path and the test would pass whether or not the fix is present. Setting the
+    # URL is what actually puts the round on the executor under test; the calls then fail at transport,
+    # which is fine — the hook runs in phase 1, before any fan-out.
+    var saved_daimon = _cfg_daimon_url;
+    _cfg_daimon_url = "http://127.0.0.1:9";        # reserved discard port: nothing listens
+    assert(seam_status(SEAM_DAIMON) != SEAM_ABSENT, "the daimon seam reads present, so the round can fan out");
+    # The executor writes results through _agent_work and needs the parallel slot bank; both are
+    # allocated lazily inside agent_turn, which a unit test never calls.
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    _agent_work_reset();
+    var fired_before = hooks_fired();
+    _agent_run_calls(pv, 2);
+    assert(hooks_fired() > fired_before, "the pre_tool hook RAN for a parallel round");
+    assert(hooks_blocked() > 0, "...and its denial was counted");
+    _cfg_daimon_url = saved_daimon;
+    _cfg_hook_pre_tool = 0;
+    hooks_reset();
+
     # --- subagent delegation (0.43.0, T2-1, ADR-0018) ---
     #
     # ⚠ THE FIRST GROUP IS THE CONTROL THE ADR NAMES. The whole isolation design rests on _sub_enter /

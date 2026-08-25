@@ -79,6 +79,44 @@ model = "claude-haiku-4-5-20251001"
 # [guard]
 # enabled = false
 
+# [edit] — let the model WRITE project files. DEFAULT OFF.
+# Gates BOTH model-invokable write tools: `edit` (surgical replace of a unique
+# occurrence) and `create_file` (create-only, refuses an existing path). Each is
+# jailed to the launch directory and gated under the reserved t-ron verb
+# `thoth_edit`, distinct from your own `/write` (`thoth_write`) so a policy can
+# allow one and deny the other. See docs/adr/0017.
+#
+# ⚠ Every model write is snapshotted first, and `ckpt_capture` is a GATE, not a
+# log: a write that cannot be snapshotted is REFUSED rather than performed, so
+# `/rewind` can always undo what it says it can.
+# [edit]
+# enabled = true
+
+# --- [hoosh] keys not shown in the block above -----------------------------
+#
+# parallel — run a round's tool calls concurrently. DEFAULT ON.
+#   Only fans out when the round has >1 call and none of them is a thoth-local
+#   tool (read_file/list_dir/search/shell/edit/create_file/memory_write/delegate
+#   force the whole round serial). Every call is still t-ron-gated and still runs
+#   the [hooks] pre_tool deny either way — that was NOT true before 0.43.1, where
+#   the hook ran only on the serial path; if you are on an older build and rely on
+#   pre_tool as a hard deny, set this to false.
+#   [hoosh]
+#   parallel = false
+#
+# reasoning — reasoning-effort control for models that expose one ("low" |
+#   "medium" | "high"). Unset means the gateway's own default. Some models keep
+#   reasoning internal, in which case the Ctrl+R thinking fold is empty BY DESIGN.
+#   [hoosh]
+#   reasoning = "medium"
+#
+# summarize — when the history no longer fits the request budget, spend a cheap
+#   silent side-call to recap the turns being dropped instead of losing them.
+#   Off by default. Pairs with [hoosh].compact_at (a TOKEN threshold) and the
+#   manual /compact.
+#   [hoosh]
+#   summarize = true
+
 # [subagent] — let the model DELEGATE a sub-task to a scoped child agent (0.43.0).
 # DEFAULT OFF. See docs/adr/0018-subagent-delegation-scoped-child-context.md.
 #

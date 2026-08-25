@@ -2,6 +2,71 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.1] - 2026-08-25
+
+**A security fix found by a documentation sweep, plus the doc sweep itself.** Suite
+**264 + 1894 + 183 + 3** (+7), all targets green.
+
+### Fixed
+
+- **The operator's blocking `pre_tool` hook did not run on the parallel executor — and parallel is the
+  DEFAULT.** `hooks_pre_tool` and the `tool_call` / `tool_result` events lived only in
+  `_agent_run_calls_serial`. A round is fanned out when `[hoosh].parallel` is on (**it is, by default**),
+  the round has more than one call, and none of them is a thoth-local tool — i.e. any two daimon-hosted
+  tool calls in one round. Those calls reached daimon having consulted t-ron but **never the hook**.
+
+  That made a documented contract false in the common case. `[hooks]` shipped at 0.41.0 described
+  `pre_tool` as "a deterministic, code-enforced deny that a prompt cannot argue with"; it was neither
+  deterministic nor enforced whenever the model happened to emit two remote calls at once, and nothing
+  told the operator. `--events` was quietly incomplete for the same rounds, so a consumer watching a turn
+  saw tool results appear for calls it was never told about.
+
+  The hook now runs in the parallel executor's gate phase — **before** t-ron, as in the serial path, so
+  the strictest verdict still wins and a hook can only ever narrow authority. That phase is already a
+  serial loop over the batch, so hooks still run one at a time and never race. A hook denial is now
+  reported as `(blocked by the pre_tool hook)` rather than being flattened into "denied by authorization
+  policy" — different controls, different facts, and the model's next move differs. `post_tool` and both
+  tool events are wired on the same path.
+
+  The regression test drives a genuinely parallel round and fails **two** assertions when the fix is
+  reverted. Getting it to fail took one correction worth recording: `_agent_run_calls` forces serial when
+  the daimon seam is absent, so a unit test with no daimon configured silently tested the *serial* path
+  and passed either way. The test now sets `[daimon].url` to a dead port so the round actually fans out.
+
+### Changed — documentation sweep at 0.43.0/0.43.1
+
+Six auditors over every doc cluster, cross-checked against re-run measurements rather than re-reading.
+
+- **README** — corrected the flatly wrong multi-target line (it claimed *"macOS builds + runs"*; macOS
+  does **not** build), corrected "all five seams" to seven (`SEAM_COUNT = 7`), added `mneme`, `sit` and
+  `agnosai` to the dependency table, and documented the capabilities shipped across 0.39.0–0.43.0 that it
+  never mentioned at all: `search`, `delegate`, `/rewind` checkpoints, `[redact]`, `[guard]`, `[hooks]`,
+  `[toolpin]`, `[verify]`, `/audit export`, `--events`, and MCP resources/prompts.
+- **macOS re-tested on real hardware** rather than re-read — Apple Silicon, pinned 6.5.35. Still broken,
+  same root cause, now stamped at 0.43.0 with the current line numbers (`src/tui.cyr:1865` / `:1918`) and
+  the exact failure (`refusing to emit binary with 6 reachable undefined function(s)`). The claim was five
+  releases stale.
+- **The sit git false-positive limitation re-reproduced**, and it is starker than the original report: on
+  a tree `git status` calls **clean (0 changed)**, `/git` reports **14 changed** — 13 mode-`100755`
+  scripts and one zero-byte file. Fourteen false positives, zero true ones.
+- **Roadmap measurements re-run**: `CYRIUS_STATS` at 0.43.0 is `fn_table` 8515/32768, identifiers
+  271303/524288, `var_table` 4924/8192 (the tightest), static data 1,002,280 bytes.
+- ⚠ **Corrected a figure this project published.** 0.43.0's notes said the preprocessor overflow was
+  *"8,393,978 bytes — over the limit by 5,370"*. That was a misread: the compiler reports the size at the
+  point expansion **aborted**, so a larger probe file yields a larger number for the same tree. Headroom
+  has to be measured by summing the include graph — ≈4.77 MB of project source for `src/main.cyr`, ≈4.90 MB
+  for `tests/thoth_core.tcyr`, plus ~3.4 MB of stdlib. The roadmap now says so; the 0.43.0 CHANGELOG entry
+  keeps the original wording as shipped history.
+- **Gate 3** (the security-review gate) gained the concrete argument this release handed it: the
+  parallel path is the one that gets read least and defaults on.
+
+### Notes
+
+- Both `roadmap.md` and `gap-review.md` audited clean for **completed work still narrated as open** —
+  all nine numbered gaps and every carried-forward roadmap item were re-verified open against source, and
+  the roadmap's Scheduled-work section correctly reads "nothing is currently version-pinned". The
+  separation rule (roadmap supersedes gap-review; no item in both) holds.
+
 ## [0.43.0] - 2026-08-24
 
 **The two deferred Tier-2 items, and the one that needed an ADR before a line of code.** Suite

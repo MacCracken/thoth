@@ -7,6 +7,28 @@
 
 ## Version
 
+**0.43.1** — **a security fix a doc sweep found, and the sweep** (2026-08-25). ⭐ **`hooks_pre_tool` ran only
+on the SERIAL executor, and `[hoosh].parallel` defaults to ON** — so any round of two-or-more daimon tools
+with no local tool fanned out having consulted t-ron but **never the operator's blocking hook**. `[hooks]`
+was sold at 0.41.0 as "a deterministic, code-enforced deny a prompt cannot argue with"; it was neither,
+in the common case, silently. `--events` was incomplete on the same rounds. Hook now runs in the parallel
+gate phase BEFORE t-ron (strictest verdict still wins; that phase is already a serial loop so hooks never
+race), a hook denial reports as `(blocked by the pre_tool hook)` rather than being flattened into a policy
+denial, and `post_tool` + both tool events are wired. ⚠ **The test almost lied:** `_agent_run_calls` forces
+serial when the daimon seam is absent, so a unit test with no daimon tested the SERIAL path and passed
+either way — it now points `[daimon].url` at a dead port so the round genuinely fans out, and fails two
+assertions when the fix is reverted. **Doc sweep**: README corrected (it claimed *"macOS builds + runs"* —
+it does not build; "five seams" → seven; mneme/sit/agnosai added to the dep table; 0.39–0.43's whole
+capability set was undocumented). **macOS RE-TESTED on real Apple Silicon** rather than re-read — still
+broken, same cause, re-stamped `src/tui.cyr:1865`/`:1918` + 6 reachable undefined fns. **sit's git false
+positives re-reproduced starker**: on a tree `git status` calls clean (0), `/git` says **14** — 13
+mode-100755 scripts + 1 zero-byte file, zero true positives. `CYRIUS_STATS` re-measured: fn_table
+8515/32768, identifiers 271303/524288, var_table 4924/8192, static 1,002,280 B. ⚠ **Corrected a published
+figure**: 0.43.0's "overflowed by 5,370 bytes" was a misread — the compiler reports the size where
+expansion ABORTED, so a bigger probe gives a bigger number for the same tree; measure headroom by summing
+the include graph (≈4.77 MB `src/main.cyr`, ≈4.90 MB `tests/thoth_core.tcyr`, + ~3.4 MB stdlib). roadmap
+and gap-review both audited clean of completed-work-still-open. Suite **264 + 1894 + 183 + 3**.
+
 **0.43.0** — **the two deferred Tier-2 items; the harder one needed an ADR before any code** (2026-08-24).
 **T2-1 subagent delegation** ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)) —
 `[subagent]`, off by default, gives the model `delegate(task)`: a scoped child context with the parent's

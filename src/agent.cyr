@@ -677,6 +677,7 @@ var _par_has_name = 0;       # PAR_MAX byte flags: 1 if the call had a name
 var _par_allowed = 0;        # PAR_MAX byte flags: 1 if the gate allowed it
 var _par_kind = 0;           # PAR_MAX i64 roundlog verdict kinds
 var _par_over = 0;           # PAR_MAX byte flags: 1 if args exceeded AGENT_ARGS_MAX (refused)
+var _par_hookblocked = 0;    # PAR_MAX byte flags: 1 if the operator's pre_tool hook denied it (0.43.1)
 
 fn _par_ctx_ptr(s) { return _par_ctx + s * PAR_CTX_SZ; }
 
@@ -696,6 +697,7 @@ fn _par_alloc() {
     _par_allowed = alloc(PAR_MAX);
     _par_kind = alloc(PAR_MAX * 8);
     _par_over = alloc(PAR_MAX);
+    _par_hookblocked = alloc(PAR_MAX);
     var i = 0;
     var ok = 1;
     while (i < PAR_MAX) {
@@ -775,15 +777,27 @@ fn _agent_run_calls_par(tcs, nc) {
             _par_cstr_copy(_par_id + k * PAR_ID_CAP, PAR_ID_CAP, id);
             ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
             if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } oprintln("");
+            events_tool_call(session_turns(), nm, ar);          # 0.43.1: the stream was silently incomplete here
             var allowed = 0;
             var kind = RL_DENIED;
             store8(_par_over + k, 0);
+            store8(_par_hookblocked + k, 0);
             # Refuse oversize args BEFORE gating, and gate on the FULL `ga` (an
             # accepted call's slot copy equals it, since strlen(ga) <= AGENT_ARGS_MAX
             # = PAR_ARGS_CAP-1) — so t-ron never scans a truncated payload and no
             # clipped/malformed body is ever POSTed.
+            #
+            # ⚠ 0.43.1: `hooks_pre_tool` MUST run here too. It lived only in the serial executor, and
+            # [hoosh].parallel defaults to ON — so in the DEFAULT configuration any round with two or more
+            # daimon tools and no local tool skipped the operator's blocking hook entirely. That made the
+            # documented contract ("a deterministic, code-enforced deny a prompt cannot argue with") false
+            # for the common case, silently, with no way for the operator to tell. Placed BEFORE the t-ron
+            # gate, as in the serial path, so the strictest verdict still wins and a hook can only ever
+            # narrow authority. Phase 1 is already a serial loop over the batch, so the hook keeps running
+            # one at a time and never races.
             if (nm == 0) { kind = RL_NONAME; }
             elif (strlen(ga) > AGENT_ARGS_MAX) { store8(_par_over + k, 1); kind = RL_DENIED; }
+            elif (hooks_pre_tool(nm, ga) == 0) { store8(_par_hookblocked + k, 1); kind = RL_DENIED; }
             elif (gate_authorize(nm, ga, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
             store8(_par_allowed + k, allowed);
             store64(_par_kind + k * 8, kind);
@@ -848,10 +862,15 @@ fn _agent_run_calls_par(tcs, nc) {
             } else {
                 res = "denied by authorization policy";
                 if (load8(_par_over + k) == 1) { res = "(tool arguments too large; call refused — split into smaller calls)"; }
+                # 0.43.1: say WHICH control refused. A hook denial and a policy denial are different facts,
+                # and the model's next move differs — the serial path has always distinguished them.
+                if (load8(_par_hookblocked + k) == 1) { res = "(blocked by the pre_tool hook)"; }
             }
             var nmout = 0;
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
             var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1
+            events_tool_result(session_turns(), nmout, rl_ok, bytes);   # 0.43.1
+            if (nmout != 0) { hooks_post_tool(nmout, _par_args + k * PAR_ARGS_CAP); }   # 0.43.1: cannot block
             _agent_call_telem(kind2, rl_ok, ms, bytes);            # 0.19.1: telemetry sub-line
             roundlog_add_call(nmout, kind2, rl_ok, ms, bytes, _par_args + k * PAR_ARGS_CAP);   # 0.30.17: + the snapshotted raw args
             _agent_add_result(_par_id + k * PAR_ID_CAP, res);

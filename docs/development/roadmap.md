@@ -87,6 +87,13 @@ Four gates remain, in rough dependency order.
    over the parallel executor was 0.7.0), plus whatever external sign-off "pass" is taken to
    mean. **Status: blocking · owner: TBD · scope narrowed, not yet scheduled.**
 
+   ⚠ The 0.43.0 doc sweep is a live argument for this gate. Reading the parallel executor closely
+   enough to document it surfaced that `hooks_pre_tool` and the tool events existed **only** in the
+   serial executor — so with `[hoosh].parallel` on by DEFAULT, any round of two or more daimon tools
+   silently skipped the operator's blocking deny. Fixed in 0.43.1, but it had been true since hooks
+   shipped, and it is exactly the class of thing a concurrency review is for: the parallel path is
+   the one that gets read least and defaults on.
+
 4. **1.0 versioning scheme decided (deferred ADR).** thoth stays SemVer `0.x` through pre-1.0
    by design ([ADR-0004](../adr/0004-semver-pre-release.md)). Whether 1.0 adopts CalVer (the
    binary standard) or stays SemVer is deferred to a later ADR. **Status: deferred · owner:
@@ -153,7 +160,7 @@ one is decided.
   pricing.
 
   ⚠ **Re-scoped: half of this is buildable today.** The old note said "*if* hoosh ever exposes
-  it", which is no longer true. hoosh 2.6.3 already serves `GET /v1/health/providers` (provider,
+  it", which is no longer true. hoosh 2.6.4 already serves `GET /v1/health/providers` (provider,
   base_url, status, enabled, healthy per route), carries a pricing table, and serves
   `/v1/cost/estimate` + `/v1/costs`. **Reachability can be annotated now** by joining the
   catalog's `owned_by` against `/v1/health/providers`. What is still missing is per-MODEL data on
@@ -216,13 +223,14 @@ one is decided.
 > two are defects, not degradations, and are labelled as such.**
 
 - ⛔ **The macOS build lane is BROKEN, and it is thoth's bug.** Not a degradation — the compile
-  fails. `src/tui.cyr:1853` / `:1906` reference `TTY_SIGMASK_WINCH` and the file calls six `tty_*`
+  fails. `src/tui.cyr:1865` / `:1918` reference `TTY_SIGMASK_WINCH` and the file calls six `tty_*`
   functions (`tty_isatty`, `tty_winsize`, `tty_cooked`, `tty_raw`, `tty_open_signalfd`,
   `tty_close_signalfd`) with **no macOS guard** — but darshana gates its entire termios/winsize/
   signalfd half to `#ifdef CYRIUS_TARGET_LINUX`, because BSD termios is a different struct and is
-  explicitly out of scope for darshana v1.0. So the T2 TUI cannot link off Linux. Re-tested at
-  0.38.6 on real Apple Silicon with cyrius 6.5.35: a pristine `HEAD` baseline fails identically,
-  so this is long-standing (last known-good lane was **0.6.4**), not a dep-refresh regression.
+  explicitly out of scope for darshana v1.0. So the T2 TUI cannot link off Linux. **Re-tested at
+  0.43.0** on real Apple Silicon with the pinned 6.5.35 toolchain: the two `TTY_SIGMASK_WINCH`
+  errors above, then `refusing to emit binary with 6 reachable undefined function(s)`. Long-standing
+  (last known-good lane was **0.6.4**), not a dep-refresh regression.
   **The fix is thoth-side and needs no dep bump**: gate the T2 TUI off non-Linux and fall back to
   the line tier — the same degradation already coded for AGNOS in `tui_events_init`. darshana's
   ANSI/cursor half is portable and unaffected. Sizing it properly means checking whether the GUI
@@ -230,16 +238,18 @@ one is decided.
 
 - ⛔ **sit's git read-mode status reports false positives** (upstream, sit — thoth is a pure
   consumer). Every tracked mode-`100755` file and every tracked zero-byte file comes back
-  "modified" regardless of content: in this repo `/git` listed **63** files where `git status`
-  listed **58**, the five extras being four unmodified `scripts/*.sh` and `docs/examples/.gitkeep`.
-  Reproduced identically on sit **1.3.5** and **1.6.2**, so the 0.38.6 bump neither caused nor
-  fixed it. `src/git.cyr`'s `git_probe` copies sit's `{path, kind}` vec and compares nothing, so
+  "modified" regardless of content. **Re-reproduced at 0.43.0, and starker than the original
+  report:** on a tree `git status` calls **completely clean (0 changed)**, `/git` reports **14
+  changed** — 13 mode-`100755` `scripts/*.sh` (as `A`) plus the zero-byte `docs/examples/.gitkeep`
+  (as `M`). Fourteen pure false positives isolating exactly the two predicted classes, with no true
+  positives to muddy the signal. Reproduced on sit **1.3.5** and **1.6.2**, so the 0.38.6 bump
+  neither caused nor fixed it. `src/git.cyr`'s `git_probe` copies sit's `{path, kind}` vec and compares nothing, so
   the fix belongs in sit's comparator; it inflates `/git`, `/state`'s changed-file count and the
   file-tree badges. Note sit's CLI cannot reproduce it — `sit status` handles only `.sit/` repos;
   git read-mode is a library-only surface.
 
 - **thoth asks hoosh for streaming token usage that hoosh never sends.** Every streaming request
-  carries `stream_options.include_usage`, but hoosh 2.6.3's source contains no reference to either
+  carries `stream_options.include_usage`, but hoosh **2.6.4**'s source contains no reference to either
   token and emits no trailing usage frame, so `_hoosh_account_usage` waits for something that never
   arrives on the streaming path. Either hoosh grows the frame or thoth stops claiming the field
   feeds its cost producer. Degrades quietly today rather than honestly — the token/cost row simply

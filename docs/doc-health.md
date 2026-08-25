@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-07-13 (**full doc sweep at 0.33.7**). A 5-reader parallel audit of README/CLAUDE.md,
+> **Last refresh**: 2026-08-25 (**full doc sweep at 0.43.0/0.43.1**). Six parallel auditors over README+CLAUDE.md, roadmap+gap-review, state.md, architecture+ADRs, guides+examples, and the root meta files — each cross-checking claims against **re-run measurements**, not against the previous reading.
 > guides+examples, architecture, ADRs, and `state.md`'s current-state block against the live 0.33.7 state, then
 > applied. Fixes: **roadmap** — "Where we are" re-anchored `0.31.5`→`0.33.7`; the shipped 0.32.x memory + 0.33.x
 > chat-management arcs collapsed to a one-line "shipped so far" pointer; the sequenced heading advanced to 0.34.x;
@@ -35,6 +35,25 @@ type: state
 > never re-tested, only re-read. **Lesson for the next sweep**: a doc that states a *measurement* (a pin, a build
 > status, a byte count) cannot be audited by reading it — the audit is re-running the measurement. Rows like these
 > belong in a "re-measure" bucket, not "fresh".
+
+> **0.43.0/0.43.1 sweep.** The 0.38.6 lesson above paid out twice. (1) The README claimed **"macOS builds
+> + runs"** while the roadmap said the lane was broken — the README had never been re-tested, only
+> re-read. Re-running it on real Apple Silicon confirmed BROKEN and let both files be re-stamped at
+> 0.43.0 with current line numbers, replacing a claim five releases stale. (2) A figure this project had
+> already **published** turned out to be a misread: 0.43.0's "preprocessor overflowed by 5,370 bytes" was
+> the size at which expansion *aborted*, not a total, so a bigger probe file yields a bigger number for
+> the same tree. Headroom is now measured by summing the include graph. **A number that came out of a
+> tool is not automatically a measurement of the thing you think it measures** — check what the tool is
+> reporting, not just that it reported something.
+>
+> The sweep also produced a **security fix**: documenting the parallel executor closely enough to describe
+> it surfaced that `hooks_pre_tool` and the tool events lived only in the serial one, while
+> `[hoosh].parallel` defaults ON. Shipped as 0.43.1. Worth recording as a reason to sweep docs at all —
+> the audit was not the point, but reading the code to describe it truthfully was.
+>
+> Audited clean and worth stating: **roadmap.md and gap-review.md carried no completed work still narrated
+> as open** — all nine numbered gaps and every carried-forward roadmap item re-verified open against
+> source. The separation rule (roadmap supersedes gap-review, no item in both) holds.
 
 > **0.39.0–0.42.0** each landed the routine refresh. **0.42.0** additionally **restructured the development
 > docs on the user's instruction**: `roadmap.md` was rewritten forward-facing only, a new `gap-review.md` +
