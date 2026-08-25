@@ -45,6 +45,7 @@ include "src/shell.cyr"    # model-invokable `shell` agentic tool (0.16.0, ADR-0
 include "src/checkpoint.cyr" # file checkpoints + /rewind for model writes (0.40.0, T1-4); BEFORE edit.cyr, which gates its writes on ckpt_capture
 include "src/edit.cyr"     # model-invokable `edit` agentic tool (0.31.0, ADR-0016)
 include "src/daimon.cyr"
+include "src/mcpres.cyr"   # MCP resources + prompts via daimon 2.1.0 (0.43.0, T2-7); after daimon (uses _daimon_url_join)
 include "src/guard.cyr"     # prompt-injection defense over untrusted PROSE (0.41.0, T2-3); glue over the vendored agnosai guard
 include "src/redact.cyr"    # secret redaction over tool results (0.40.0, T1-3); glue over the vendored agnosai guard; before agent.cyr
 include "src/hooks.cyr"     # lifecycle hooks, incl. a BLOCKING pre_tool (0.41.0, T2-4); after exec/shell, before agent.cyr calls them
@@ -52,17 +53,11 @@ include "src/verify.cyr"    # the verification loop (0.41.0, T2-5); after exec/s
 include "src/events.cyr"    # streaming NDJSON events for machine consumers (0.42.0, T3); after hoosh (uses _append_int_cap/_json_escape_*)
 include "src/toolpin.cyr"   # TOFU pinning of MCP tool definitions (0.42.0, T3); before agent.cyr, which gates advertisement on it
 include "src/agent.cyr"
+include "src/subagent.cyr"  # scoped child context, the `delegate` tool (0.43.0, T2-1, ADR-0018); AFTER agent.cyr (reuses its dispatch + builders)
 include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
 include "src/mdmodel.cyr"  # 0.36.0: structural-markdown model (gfeed leaf lowers it)
 include "src/surface.cyr"  # status view-model (0.28.0, Stage B); after its producers (session/hoosh/git/ui), before commands+tui
-include "src/vendor/kashi.cyr"
-include "src/gui/gdraw.cyr"
-include "src/gui/graster.cyr"
-include "src/gui/gstatus.cyr"
-include "src/gui/ginput.cyr"
-include "src/gui/gtree.cyr"
-include "src/gui/gfeed.cyr"
 include "src/commands.cyr"
 include "src/repl.cyr"
 include "src/oneshot.cyr"

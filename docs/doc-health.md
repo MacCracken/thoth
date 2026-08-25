@@ -49,6 +49,14 @@ type: state
 > `/v1/health/providers`). Gate 3 was also re-pinned: it read "not scheduled" while the 0.39.0 audit had
 > already swept two of its three areas.
 
+> **0.43.0** added **ADR-0018** (subagent delegation) — the first ADR in this repo written as a *fence*
+> rather than a decision record: half its content is an explicit non-goals list, because the feature sits
+> next to the spine rule and the risk is a future contributor stretching it into orchestration. It also
+> made `roadmap.md`'s Scheduled-work section empty again (both 0.43.0 pins shipped) and revised two
+> `gap-review.md` entries whose premises the release changed — structural isolation of untrusted content
+> (its prerequisite now exists) and budget enforcement (delegation made it more urgent). Both were edited
+> rather than left to drift, which is the discipline the separation rule exists to enforce.
+
 ## At a glance
 
 | Bucket | Count | What it means |

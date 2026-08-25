@@ -31,6 +31,18 @@ var _cfg_hoosh_compact_at = 0 - 1;  # 0.40.0 (T1-5): auto-compact once session t
 var _cfg_redact_enabled = 1;        # 0.40.0 (T1-3): [redact].enabled — DEFAULT ON (see config_redact_enabled)
 var _cfg_guard_enabled = 1;         # 0.41.0 (T2-3): [guard].enabled — DEFAULT ON (see config_guard_enabled)
 var _cfg_toolpin_enabled = 1;       # 0.42.0 (T3): [toolpin].enabled — DEFAULT ON (see config_toolpin_enabled)
+var _cfg_subagent_enabled = 0;      # 0.43.0 (T2-1): [subagent].enabled — DEFAULT OFF (see config_subagent_enabled)
+# 0.43.0 (T2-1): subagent depth — 0 = the parent's own turn, 1 = inside a delegation.
+# Declared in config.cyr because it is the EARLIEST included file that all three readers come after:
+# events.cyr stamps `depth` on a child's tool events, agent.cyr suppresses [verify] and withholds the
+# delegate tool from a child, and subagent.cyr owns the transitions. A cyrius `var` is one flat namespace
+# and a DUPLICATE declaration is silent, so it must live in exactly one place — here.
+var _sub_depth = 0;
+
+var SUB_MAX_ITERS_DEFAULT = 8;      # 0.43.0 (T2-1): rounds ONE child may spend; smaller than the parent's on purpose.
+                                    # Declared here, not in subagent.cyr, because config_subagent_max_iters (below) reads it
+                                    # and config.cyr is included first.
+var _cfg_subagent_max_iters = 0 - 1;  # 0.43.0 (T2-1): [subagent].max_iters — unset sentinel; default+clamp in the getter
 # 0.41.0 (T2-4): [hooks] — operator-configured commands fired at agent events. All unset (0) by default:
 # a hook is arbitrary execution, so it exists only when the operator wrote one.
 var _cfg_hook_session_start = 0;
@@ -558,6 +570,9 @@ fn config_load() {
     _cfg_hook_timeout_ms    = _cfg_int(hooks, "timeout_ms");
     var toolpin = _cfg_section_pairs(sections, "toolpin");
     _cfg_toolpin_enabled = _cfg_bool(toolpin, "enabled", 1);     # 0.42.0 (T3): DEFAULT ON — see the getter
+    var subagent = _cfg_section_pairs(sections, "subagent");
+    _cfg_subagent_enabled = _cfg_bool(subagent, "enabled", 0);    # 0.43.0 (T2-1): DEFAULT OFF — see the getter
+    _cfg_subagent_max_iters = _cfg_int(subagent, "max_iters");   # -1 when absent -> default in the getter
     var guard = _cfg_section_pairs(sections, "guard");
     _cfg_guard_enabled = _cfg_bool(guard, "enabled", 1);         # 0.41.0 (T2-3): DEFAULT ON — see the getter
     var verify = _cfg_section_pairs(sections, "verify");
@@ -642,6 +657,26 @@ fn config_guard_enabled() { return _cfg_guard_enabled; }
 # removes risk rather than adding capability. Unlike those two it CAN withhold a tool, so the opt-out
 # exists for an operator whose registry legitimately churns mid-session.
 fn config_toolpin_enabled() { return _cfg_toolpin_enabled; }
+
+# config_subagent_enabled: 1 when the model may call `delegate` to run a scoped child context
+# (0.43.0, T2-1; ADR-0018). DEFAULT OFF — and the reason is NOT that it grants new authority, because it
+# does not: a child can only call tools the parent was already offered, under the same policy and the same
+# gate. It is that delegation MULTIPLIES SPEND against a system with no budget enforcement. thoth's
+# convention is that a merely-useful capability is default-on (the read tools, `search`) and a
+# consequential one is opt-in (`shell`, `edit`, `[verify]`, `[hooks]`); multiplying token cost is
+# consequential. Revisit this default if budget enforcement ever lands.
+fn config_subagent_enabled() { return _cfg_subagent_enabled; }
+
+# config_subagent_max_iters: rounds ONE child may spend, separate from the parent's [hoosh].max_iters.
+# Deliberately smaller by default: a delegated sub-task that needs more than a handful of rounds is
+# usually the wrong shape, and the child's budget is also the practical bound on how many checkpoint
+# entries it can push out of the parent's undo window (ADR-0018 D6). Clamped to the same ceiling the
+# parent's cap uses, so a config typo cannot turn one delegation into an unbounded spend.
+fn config_subagent_max_iters() {
+    if (_cfg_subagent_max_iters <= 0) { return SUB_MAX_ITERS_DEFAULT; }
+    if (_cfg_subagent_max_iters > HOOSH_MAX_ITERS_CEILING) { return HOOSH_MAX_ITERS_CEILING; }
+    return _cfg_subagent_max_iters;
+}
 
 
 # config_hook_*: the [hooks] commands (0.41.0, T2-4). 0 when unset, which is the default for every one of

@@ -812,6 +812,169 @@ fn test_project() {
     assert(_ui_contains(ev_fail_text(502, 0), "HTTP") == 1, "a positive rc is an HTTP failure");
     assert(_ui_contains(ev_fail_text(0, 0), "no completion") == 1, "rc 0 with no reply is an empty completion");
 
+    # --- subagent delegation (0.43.0, T2-1, ADR-0018) ---
+    #
+    # ⚠ THE FIRST GROUP IS THE CONTROL THE ADR NAMES. The whole isolation design rests on _sub_enter /
+    # _sub_exit being EXACT INVERSES over a complete set of globals. That claim is "provable by
+    # enumeration" only if something actually checks the enumeration — otherwise the next module-level
+    # buffer someone adds silently breaks it. This test poisons every swapped global with a recognisable
+    # value, runs the swap, mutates the child's side, and asserts the parent's side is bit-for-bit intact.
+    test_group("subagent buffer isolation (subagent.cyr, 0.43.0)");
+    assert_eq(config_subagent_enabled(), 0, "delegation is OFF by default (it multiplies spend)");
+    assert_eq(subagent_active(), 0, "depth starts at 0");
+    assert_eq(_sub_alloc(), 1, "child storage allocates");
+
+    # ⚠ _agent_work / _hoosh_acc are allocated lazily INSIDE agent_turn, which a unit test never calls —
+    # they are null here, and writing through them segfaults. Allocate exactly as agent_turn does.
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    assert(_agent_work != 0, "parent work buffer allocated for the test");
+    assert(_hoosh_acc != 0, "parent reply accumulator allocated for the test");
+
+    # Poison the parent's state with values we can recognise afterwards.
+    _agent_work_reset();
+    _agent_work_puts("PARENT-WORK");
+    var p_work = _agent_work;
+    var p_work_len = _agent_work_len;
+    _hoosh_acc_reset();
+    _hoosh_acc_append("PARENT-ACC", 10);
+    var p_acc = _hoosh_acc;
+    var p_acc_len = _hoosh_acc_len;
+    _ag_alloc();
+    var p_ids = _ag_ids; var p_names = _ag_names; var p_args = _ag_args;
+    var p_arr = _agent_arr_buf;
+    _agent_tools_len = 4242; _agent_tools_ready = 1;
+    var p_tools = _agent_tools_buf;
+
+    _sub_enter();
+    assert_eq(subagent_active(), 1, "_sub_enter raises depth to 1");
+    assert(_agent_work != p_work, "the child writes a DIFFERENT work buffer");
+    assert(_hoosh_acc != p_acc, "...a different reply accumulator");
+    assert(_agent_tools_buf != p_tools, "...a different tools buffer");
+    assert(_agent_arr_buf != p_arr, "...a different tool_calls array buffer");
+    assert(_ag_ids != p_ids, "...different parsed-call id slots");
+    assert(_ag_names != p_names, "...different name slots");
+    assert(_ag_args != p_args, "...different args slots");
+    assert_eq(_agent_work_len, 0, "the child starts with an EMPTY message list — the whole point");
+    assert_eq(_agent_tools_ready, 0, "...and re-advertises its own (narrowed) tool set");
+
+    # Now do what a child does: write all over its own state.
+    _agent_work_puts("{\"role\":\"user\",\"content\":\"CHILD\"}");
+    store8(_agent_work + _agent_work_len, 0);
+    _hoosh_acc_append("CHILD-ANSWER", 12);
+    store8(_hoosh_acc + _hoosh_acc_len, 0);
+    _agent_tools_len = 99;
+    _agent_round_kind = 1; _agent_round_n = 7;
+
+    _sub_exit();
+    assert_eq(subagent_active(), 0, "_sub_exit returns depth to 0");
+    assert(_agent_work == p_work, "the parent's work buffer POINTER is restored");
+    assert_eq(_agent_work_len, p_work_len, "...and its length");
+    assert(_ui_contains(_agent_work, "PARENT-WORK") == 1, "...and its CONTENT is untouched by the child");
+    assert(_ui_contains(_agent_work, "CHILD") == 0, "...with no child bytes leaked into it");
+    assert(_hoosh_acc == p_acc, "the parent's reply accumulator is restored");
+    assert_eq(_hoosh_acc_len, p_acc_len, "...at its original length");
+    assert(_ui_contains(_hoosh_acc, "PARENT-ACC") == 1, "...still holding the parent's reply");
+    assert(_agent_tools_buf == p_tools, "the parent's tools buffer is restored");
+    assert_eq(_agent_tools_len, 4242, "...at its original length (a child re-advert must not shrink it)");
+    assert_eq(_agent_tools_ready, 1, "...and its cache flag survives");
+    assert(_ag_ids == p_ids, "parsed-call slots restored");
+    assert(_ag_names == p_names, "...names");
+    assert(_ag_args == p_args, "...args");
+    assert(_agent_arr_buf == p_arr, "...and the tool_calls array buffer");
+
+    # ⚠ THE SWAP SET'S SECOND HALF, added after an adversarial review found the first version INCOMPLETE.
+    # The original test checked only the byte buffers and passed while two real defects sat next to it:
+    # `_roundlog_cur` was not swapped, so a child's tool calls flat-appended into the PARENT's open round
+    # and — once past RL_MAX_CALLS — silently EVICTED the parent's own calls from the round card and the
+    # persisted turn. The right test is not "are the buffers restored" but "does a tool round WRITE it".
+    test_group("subagent round isolation (0.43.0)");
+    roundlog_reset();
+    roundlog_open(7, 1);
+    roundlog_add_call("parent_a", RL_ALLOWED, 1, 1, 10, "{}");
+    var parent_round = roundlog_cur_round();
+    assert_eq(parent_round, 1, "the parent has round 1 open");
+    _sub_enter();
+    assert_eq(_roundlog_cur, 0, "_sub_enter CLOSES the parent's round for the duration");
+    assert_eq(roundlog_cur_round(), 0, "...so roundlog_cur_round() answers 0, never a real parent round");
+    # a chatty child: more calls than RL_MAX_CALLS, which is what evicted the parent's entries before
+    var ci = 0;
+    while (ci < 12) { roundlog_add_call("child_tool", RL_ALLOWED, 1, 1, 5, "{}"); ci = ci + 1; }
+    _sub_exit();
+    assert(_roundlog_cur != 0, "the parent's open round is restored");
+    assert_eq(roundlog_cur_round(), 1, "...still round 1");
+    # ncalls lives at slot+16; the ring's newest kept entry IS the parent's open round.
+    assert_eq(roundlog_round_ncalls(roundlog_count() - 1), 1,
+              "...holding ONLY the parent's own call — 12 child calls never landed in it");
+    assert(_ui_contains(roundlog_call_name(roundlog_count() - 1, 0), "parent_a") == 1,
+           "...and the surviving call is the PARENT's, not a child's");
+    roundlog_reset();
+
+    # --- the delegate call's recorded VERDICT must match what happened ---
+    # The first cut recorded ALLOWED+ok whenever the feature was enabled, so a policy denial and a
+    # bad-arguments refusal both looked like successful tool calls in the round card, the telemetry and
+    # the `ok` field of the tool_result event.
+    test_group("subagent outcome reporting (0.43.0)");
+    _cfg_subagent_enabled = 0;
+    subagent_tool("{\"task\":\"x\"}");
+    assert_eq(subagent_last_allowed(), 0, "disabled -> NOT allowed");
+    assert_eq(subagent_last_ok(), 0, "disabled -> NOT ok");
+    _cfg_subagent_enabled = 1;
+    subagent_tool("{}");
+    assert_eq(subagent_last_allowed(), 0, "bad arguments -> NOT allowed (it never reached the gate)");
+    assert_eq(subagent_last_ok(), 0, "bad arguments -> NOT ok");
+    _sub_depth = 1;
+    subagent_tool("{\"task\":\"recurse\"}");
+    assert_eq(subagent_last_ok(), 0, "a depth refusal is NOT a successful call");
+    _sub_depth = 0;
+    _cfg_subagent_enabled = 0;
+    subagent_reset();
+
+    # --- the depth cap, which is a SECURITY bound (ADR-0018) ---
+    test_group("subagent depth cap (0.43.0)");
+    _cfg_subagent_enabled = 1;
+    _sub_depth = 1;                                  # simulate being inside a child
+    var deep = subagent_tool("{\"task\":\"recurse\"}");
+    assert(_ui_contains(deep, "may not delegate") == 1, "a subagent may NOT delegate (depth capped at 1)");
+    # The advertisement is the real enforcement — a child is never OFFERED the tool.
+    var tbuf2 = alloc(AGENT_TOOLS_CAP);
+    store8(tbuf2, 0);
+    var tl2 = agent_tools_add_delegate(tbuf2, 0);
+    assert_eq(tl2, 0, "a child's tool build never appends delegate");
+    _sub_depth = 0;
+    var tl3 = agent_tools_add_delegate(tbuf2, 0);
+    assert(tl3 > 0, "the parent's tool build DOES advertise it when enabled");
+    assert(_ui_contains(tbuf2, "delegate") == 1, "...by name");
+    assert(_ui_contains(tbuf2, "cannot delegate further") == 1, "...and the description says it cannot recurse");
+    var rp = bayan_json_v_parse_buf(tbuf2, tl3);
+    assert(rp != 0, "the delegate advertisement is valid JSON");
+    _cfg_subagent_enabled = 0;
+    assert_eq(agent_tools_add_delegate(tbuf2, 0), 0, "[subagent].enabled=false advertises nothing");
+    var off_res = subagent_tool("{\"task\":\"x\"}");
+    assert(_ui_contains(off_res, "not enabled") == 1, "...and a hallucinated call returns an honest string");
+    _cfg_subagent_enabled = 1;
+
+    # bad arguments degrade to a readable result, never a crash or a network call
+    assert(_ui_contains(subagent_tool("{}"), "needs a \"task\"") == 1, "missing task is reported");
+    assert(_ui_contains(subagent_tool("{\"task\":\"\"}"), "non-empty") == 1, "empty task is reported");
+    assert(_ui_contains(subagent_tool("not json"), "not valid JSON") == 1, "non-JSON arguments are reported");
+    assert(_ui_contains(subagent_tool("{\"task\":42}"), "needs a \"task\" string") == 1,
+           "a NON-STRING task answers honestly (bayan_json_v_str returns 0 — audit A-4)");
+    _cfg_subagent_enabled = 0;
+    subagent_reset();
+
+    # --- the iteration budget getter ---
+    test_group("subagent budget (0.43.0)");
+    _cfg_subagent_max_iters = 0 - 1;
+    assert_eq(config_subagent_max_iters(), SUB_MAX_ITERS_DEFAULT, "unset -> the default");
+    _cfg_subagent_max_iters = 0;
+    assert_eq(config_subagent_max_iters(), SUB_MAX_ITERS_DEFAULT, "0 -> the default (never an unbounded 0-round child)");
+    _cfg_subagent_max_iters = 3;
+    assert_eq(config_subagent_max_iters(), 3, "a set value is honoured");
+    _cfg_subagent_max_iters = 100000;
+    assert_eq(config_subagent_max_iters(), HOOSH_MAX_ITERS_CEILING, "an absurd value CLAMPS — a typo cannot buy unbounded spend");
+    _cfg_subagent_max_iters = 0 - 1;
+
     # --- lifecycle hooks (0.41.0, T2-4) ---
     # The extensibility seam that fits thoth's posture rather than fighting it: a pre_tool hook that can
     # deny is a deterministic, code-enforced refusal a prompt cannot argue with. The security-critical

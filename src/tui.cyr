@@ -837,7 +837,12 @@ fn tui_draw_status() {
 # becomes a filtered list of matching commands. The matchers are pure + unit-tested;
 # the render is I/O. (A multi-row dropdown above the composer is a later refinement —
 # it needs the feed-buffer redraw model.)
-var SLASH_N = 18;
+# ⚠ KEEP IN SYNC with classify_input in src/commands.cyr. This list has drifted before — it was still 18
+# entries after /fork, /grants, /compact, /context, /rewind and /conversations landed. It is a
+# COMPILE-TIME list and structurally cannot offer a runtime-sized set, so the server-published prompt
+# commands (0.43.0, T2-7) are deliberately absent: they are discoverable through /prompts instead. Adding
+# a built-in command means adding it here AND bumping SLASH_N.
+var SLASH_N = 25;
 fn _slash_name(i) {
     if (i == 0) { return "/help"; }
     if (i == 1) { return "/seams"; }
@@ -856,7 +861,14 @@ fn _slash_name(i) {
     if (i == 14) { return "/dry"; }
     if (i == 15) { return "/copy"; }
     if (i == 16) { return "/find"; }
-    if (i == 17) { return "/quit"; }
+    if (i == 17) { return "/grants"; }      # 0.40.0
+    if (i == 18) { return "/compact"; }     # 0.40.0
+    if (i == 19) { return "/context"; }     # 0.40.0
+    if (i == 20) { return "/rewind"; }      # 0.40.0
+    if (i == 21) { return "/fork"; }        # 0.41.0
+    if (i == 22) { return "/resources"; }   # 0.43.0
+    if (i == 23) { return "/prompts"; }     # 0.43.0
+    if (i == 24) { return "/quit"; }
     return "";
 }
 # _buf_has_space: 1 if buf[0..n) holds a space OR a newline — either terminates the

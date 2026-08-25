@@ -100,8 +100,16 @@ fn test_tui() {
     assert_eq(tui_palette_count("/s"), 2, "'/s' matches /seams + /state");
     assert_eq(tui_palette_count("/se"), 1, "'/se' matches /seams only");
     assert_eq(tui_palette_count("/m"), 2, "'/m' matches /model + /models");
-    assert_eq(tui_palette_count("/c"), 3, "'/c' matches /call + /clear + /copy");
-    assert_eq(tui_palette_count("/co"), 1, "'/co' matches /copy only");
+    # 0.43.0: refreshed with the slash list itself. These numbers encoded the STALE 18-entry list and
+    # only moved when the list was corrected — /compact and /context have started with "/c" since 0.40.0
+    # and were simply missing from the palette. Keep them in step with _slash_name in src/tui.cyr.
+    assert_eq(tui_palette_count("/c"), 5, "'/c' matches /call + /clear + /copy + /compact + /context");
+    assert_eq(tui_palette_count("/co"), 3, "'/co' matches /copy + /compact + /context");
+    assert_eq(tui_palette_count("/cop"), 1, "'/cop' narrows to /copy alone");
+    assert_eq(tui_palette_count("/re"), 4, "'/re' matches /read + /reset + /rewind + /resources");
+    assert_eq(tui_palette_count("/res"), 2, "'/res' still matches /reset AND /resources");
+    assert_eq(tui_palette_count("/reso"), 1, "'/reso' narrows to /resources");
+    assert_eq(tui_palette_count("/pr"), 1, "'/pr' matches the new /prompts");
     assert_eq(tui_palette_count("/copy"), 1, "'/copy' matches /copy");
     assert_eq(tui_palette_count("/t"), 2, "'/t' matches /tools + /theme");
     assert_eq(tui_palette_count("/zz"), 0, "no command matches '/zz'");

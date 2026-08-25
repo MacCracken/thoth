@@ -7,6 +7,41 @@
 
 ## Version
 
+**0.43.0** — **the two deferred Tier-2 items; the harder one needed an ADR before any code** (2026-08-24).
+**T2-1 subagent delegation** ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)) —
+`[subagent]`, off by default, gives the model `delegate(task)`: a scoped child context with the parent's
+model and tools over a FRESH EMPTY message list, returning one string. ⭐ **The spine question is settled by
+IDENTITY**: if it needs an identity, a persona, a registry entry or a peer it is orchestration and belongs to
+daimon/agnosai; if it is one conversation's context, windowed, it is thoth's — a subagent has none of the
+four and no lifetime beyond its tool call. The ADR is a FENCE (no crews, presets, DAGs, inter-agent
+messaging, depth > 1). ⭐ **The isolation decision is the engineering story**: an audit counted ~60
+process-globals across 21 files a naive re-entry would corrupt, and the tempting fix — a second dispatch
+function for the child — was REJECTED because the per-tool dispatch is where the t-ron gate, the blocking
+pre_tool hook, the jail, the checkpoint gate, redaction and the guard all live; two copies would be two
+authorization paths. Instead the child reuses `_agent_run_calls` VERBATIM (exactly ONE dispatch path in
+thoth) and `_sub_enter`/`_sub_exit` swap the buffers it writes through — O(1), and provable by enumeration,
+with a test that poisons every swapped global and asserts the parent's survives. `delegate` in
+`_agent_round_has_local` is a SECURITY line, not a correctness one: the parallel executor fires no pre_tool
+hook and no events. Depth capped at 1, enforced twice (the child is never OFFERED the tool, and a
+hallucinated call is refused). Off by default for SPEND, not authority. **T2-7 MCP resources + prompts** —
+`/resources`, `/resource <uri>`, `/prompts`, and server-published prompts as slash commands. bote had served
+all four methods for ages; **daimon had no route**, so nothing was reachable — hence daimon 2.1.0. Resource
+content enters through redact→guard like any tool result, never the system prompt; a server prompt cannot
+shadow a built-in or an operator alias (live-verified by publishing one named `help`). ⚠ **0.43.0 hit
+cyrius's hard 8 MB preprocessor ceiling** (8,393,978 bytes in `tests/thoth_core.tcyr`, over by 5,370) —
+exactly what the 0.42.0 issue filing predicted for the next spine feature. Fixed by dropping the GUI block
+that unit never tested (131 KB; the GUI has its own unit), not by shrinking the feature. Suite **264 + 1887
++ 183 + 3** (+63). ⭐ **An adversarial review before shipping filed 26 findings, 17 survived an independent
+skeptic, and all 17 are fixed** — including two reachable HIGHs, both mine: a malicious MCP server could
+make thoth read any local file via `mention_expand` (server prompt text went through `cmd_task`, whose
+@mention reader is UNJAILED and documented as safe only because the path was user-typed), and
+`/resources`/`/prompts`/`/resource` SIGSEGV'd on an unset `[daimon].url` (`strlen(0)`). ⭐ **The swap-set
+lesson:** `_roundlog_cur` was missing, and the symptom was not a crash but a LIE — a child's calls
+appended into the parent's open round and evicted the parent's own past RL_MAX_CALLS, so the round card
+and the persisted turn showed tools the parent never called. The test question is "does a tool round WRITE
+it", not "is it a buffer"; the original test checked byte buffers only and passed while the defect sat
+next to it. Builds OK on x86_64 / aarch64 / agnos.
+
 **0.42.0** — **three Tier-3 items, and the live verification that found three defects the unit tests
 passed** (2026-08-24). **`[toolpin]`**, on by default — trust-on-first-use SHA-256 over
 `name \0 description \0 inputSchema`, the CVE-2025-54136 rug-pull defense. A changed definition is

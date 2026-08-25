@@ -1,0 +1,266 @@
+# thoth — MCP resources and prompts, consumed through daimon (0.43.0, T2-7).
+#
+# WHY. The MCP protocol has three nouns: tools, resources and prompts. thoth used exactly one. The
+# protocol work was already vendored and paid for — `bote-core.cyr` carries full resources and prompts
+# registries — and the servers already serve them; the gap was that **daimon had no route for either**,
+# so nothing downstream could be reached no matter what a server published. daimon 2.1.0 closes that hop
+# and this file consumes it.
+#
+# What each noun is FOR, which is why they surface differently:
+#   * A RESOURCE is server-published context — a document, a config, a note — addressed by URI. It is
+#     data the model could be given. It surfaces as `/resources` (list) and `/resource <uri>` (read).
+#   * A PROMPT is a server-published, parameterised message template. It is naturally a **slash command**:
+#     the server publishes `bote_greeting(name)`, and the operator types `/bote_greeting Robert`.
+#
+# ⚠ EVERYTHING HERE IS THIRD-PARTY TEXT. A resource's name/description, a prompt's description, and above
+# all a resource's CONTENT come from whatever server the operator wired up. Two consequences, both
+# load-bearing:
+#   1. Content reaching the model goes through the SAME redact → guard chokepoint every tool result does.
+#      It is never spliced into the system prompt, which would bypass both.
+#   2. Every `bayan_json_v_str` here is null-checked before `str_data`/`str_len`, because a server controls
+#      the shape of what it sends and a missing/non-string field must degrade to "omitted", not deref 0.
+#      This is the same hardening the 0.39.0 audit applied to `daimon_list_tools` (finding A-4).
+#
+# ⚠ NOT PINNED, and the asymmetry is deliberate. `[toolpin]` hashes tool DEFINITIONS because a swapped
+# tool description is read by the model as instructions. A prompt's description has the same property and
+# would be a fair candidate; a resource's CONTENT explicitly does not — content legitimately changes, that
+# is what a resource IS, and pinning it would fire on every legitimate edit. This cut pins neither and
+# says so rather than implying a protection it does not offer; extending toolpin over prompt METADATA is
+# recorded in the gap review.
+
+var DAIMON_RESOURCES_PATH = "/v1/mcp/resources";
+var DAIMON_RES_READ_PATH  = "/v1/mcp/resources/read";
+var DAIMON_PROMPTS_PATH   = "/v1/mcp/prompts";
+var DAIMON_PROMPT_GET_PATH = "/v1/mcp/prompts/get";
+
+var _daimon_res_url = 0;
+var _daimon_res_read_url = 0;
+var _daimon_prompts_url = 0;
+var _daimon_prompt_get_url = 0;
+
+var MCPRES_REQ_CAP = 8192;       # the {"uri":…} / {"name":…,"arguments":…} body
+var _mcpres_req = 0;
+
+# ⚠ EVERY BUILDER RETURNS 0 WHEN [daimon].url IS UNSET, and every caller must handle it.
+# config_daimon_url() answers 0 when the key is absent, and _daimon_url_join's first act is
+# strlen(base) — which word-loads address 0 and takes the process down. Guarding at each of the
+# three call sites was the alternative and is exactly the kind of thing one forgets on the fourth;
+# guarding in the builder makes the null case unrepresentable downstream. (Live-caught: `/resources`,
+# `/prompts` and `/resource <uri>` each SIGSEGV'd in a directory with no config.)
+fn _daimon_res_endpoint() {
+    if (_daimon_res_url != 0) { return _daimon_res_url; }
+    if (config_daimon_url() == 0) { return 0; }
+    _daimon_res_url = _daimon_url_join(config_daimon_url(), DAIMON_RESOURCES_PATH);
+    return _daimon_res_url;
+}
+fn _daimon_res_read_endpoint() {
+    if (_daimon_res_read_url != 0) { return _daimon_res_read_url; }
+    if (config_daimon_url() == 0) { return 0; }
+    _daimon_res_read_url = _daimon_url_join(config_daimon_url(), DAIMON_RES_READ_PATH);
+    return _daimon_res_read_url;
+}
+fn _daimon_prompts_endpoint() {
+    if (_daimon_prompts_url != 0) { return _daimon_prompts_url; }
+    if (config_daimon_url() == 0) { return 0; }
+    _daimon_prompts_url = _daimon_url_join(config_daimon_url(), DAIMON_PROMPTS_PATH);
+    return _daimon_prompts_url;
+}
+fn _daimon_prompt_get_endpoint() {
+    if (_daimon_prompt_get_url != 0) { return _daimon_prompt_get_url; }
+    if (config_daimon_url() == 0) { return 0; }
+    _daimon_prompt_get_url = _daimon_url_join(config_daimon_url(), DAIMON_PROMPT_GET_PATH);
+    return _daimon_prompt_get_url;
+}
+
+# mcpres_endpoints_reset: drop the cached endpoint URLs so a `/reload` that changed
+# [daimon].url is not silently ignored. Mirrors agent_tools_cache_reset's role.
+fn mcpres_endpoints_reset() {
+    _daimon_res_url = 0;
+    _daimon_res_read_url = 0;
+    _daimon_prompts_url = 0;
+    _daimon_prompt_get_url = 0;
+    _mcpres_probed = 0 - 1;
+    return 0;
+}
+
+# _mcpres_get_array: GET `url` and return the parsed array under `key`, or 0.
+# Shared by the resources and prompts listers — identical shape, one implementation.
+fn _mcpres_get_array(url, key) {
+    if (url == 0) { return 0; }                 # [daimon].url unset — see the builders above
+    var h = sandhi_headers_new();
+    var r = sandhi_http_get(url, h);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
+    var status = sandhi_http_status(r);
+    if ((status < 200) || (status >= 300)) { return 0; }
+    var v = bayan_json_v_parse_buf(sandhi_http_body(r), sandhi_http_body_len(r));
+    if (v == 0) { return 0; }
+    return bayan_json_v_obj_get(v, key);
+}
+
+fn daimon_resources_value() { return _mcpres_get_array(_daimon_res_endpoint(), "resources"); }
+fn daimon_prompts_value()   { return _mcpres_get_array(_daimon_prompts_endpoint(), "prompts"); }
+
+# _mcpres_field: a NUL-terminated cstr for object field `key`, or 0 when the field
+# is absent or is not a string. THE NULL CHECK IS THE POINT — a third-party server
+# controls this shape (audit finding A-4).
+fn _mcpres_field(obj, key) {
+    if (obj == 0) { return 0; }
+    var v = bayan_json_v_obj_get(obj, key);
+    if (v == 0) { return 0; }
+    var s = bayan_json_v_str(v);
+    if (s == 0) { return 0; }
+    return str_cstr(s);
+}
+
+# --- the probe: does the wired daimon expose resources/prompts at all? ----------
+#
+# Tri-state, session-stable, exactly like daimon_mem_probed: -1 unprobed, 0 absent,
+# 1 present. A daimon older than 2.1.0 answers 404 and the seam degrades HONESTLY —
+# the commands say the hop is missing rather than pretending an empty registry.
+var _mcpres_probed = 0 - 1;
+var _mcpres_n_res = 0;
+var _mcpres_n_prompts = 0;
+
+fn mcpres_bound() { if (_mcpres_probed == 1) { return 1; } return 0; }
+fn mcpres_resource_count() { return _mcpres_n_res; }
+fn mcpres_prompt_count() { return _mcpres_n_prompts; }
+
+# mcpres_probe: the one-time network probe. Safe only from user/turn paths, never
+# from seam_status (which must stay network-free so /dry and the status bar are
+# cheap) — the same rule daimon_mem_probe follows.
+fn mcpres_probe() {
+    if (_mcpres_probed != (0 - 1)) { return _mcpres_probed; }
+    if (config_daimon_configured() == 0) { _mcpres_probed = 0; return 0; }
+    var rv = daimon_resources_value();
+    var pv = daimon_prompts_value();
+    if ((rv == 0) && (pv == 0)) { _mcpres_probed = 0; return 0; }
+    _mcpres_probed = 1;
+    if (rv != 0) { _mcpres_n_res = bayan_json_v_arr_len(rv); }
+    if (pv != 0) { _mcpres_n_prompts = bayan_json_v_arr_len(pv); }
+    return 1;
+}
+
+# --- reading one resource ------------------------------------------------------
+
+# _mcpres_build_uri_body: {"uri":"<escaped>"} into _mcpres_req; returns the length.
+# The URI is operator- or server-supplied and contains "://" — escaped, never spliced.
+fn _mcpres_build_uri_body(uri) {
+    if (_mcpres_req == 0) { _mcpres_req = alloc(MCPRES_REQ_CAP); }
+    if (_mcpres_req == 0) { return 0; }
+    var off = 0;
+    off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, "{\"uri\":\"");
+    off = _json_escape_into_cap(_mcpres_req, off, MCPRES_REQ_CAP, uri);
+    off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, "\"}");
+    store8(_mcpres_req + off, 0);
+    return off;
+}
+
+# mcpres_read: read one resource by URI. Returns the concatenated text of the
+# `contents` array as a fresh cstr, or 0 on any failure.
+#
+# MCP's resources/read answers {"contents":[{uri,mimeType,text}, …]} — an ARRAY,
+# because one URI may resolve to several parts. Every part with a `text` field is
+# concatenated; parts without one (a binary blob carries `blob`, not `text`) are
+# skipped rather than rendered as an empty string, so a binary resource reads as
+# "no text content" instead of silently looking empty.
+fn mcpres_read(uri) {
+    var ep = _daimon_res_read_endpoint();
+    if (ep == 0) { return 0; }                  # [daimon].url unset
+    var n = _mcpres_build_uri_body(uri);
+    if (n == 0) { return 0; }
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    var r = sandhi_http_post(ep, h, _mcpres_req, n);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
+    var status = sandhi_http_status(r);
+    if ((status < 200) || (status >= 300)) { return 0; }
+    var v = bayan_json_v_parse_buf(sandhi_http_body(r), sandhi_http_body_len(r));
+    if (v == 0) { return 0; }
+    var contents = bayan_json_v_obj_get(v, "contents");
+    if (contents == 0) { return 0; }
+    var cn = bayan_json_v_arr_len(contents);
+    var sb = str_builder_new();
+    var found = 0;
+    var i = 0;
+    while (i < cn) {
+        var part = bayan_json_v_arr_get(contents, i);
+        var t = _mcpres_field(part, "text");
+        if (t != 0) {
+            if (found == 1) { str_builder_add_cstr(sb, "\n"); }
+            str_builder_add_cstr(sb, t);
+            found = 1;
+        }
+        i = i + 1;
+    }
+    if (found == 0) { return 0; }
+    return str_cstr(str_builder_build(sb));
+}
+
+# --- getting one prompt --------------------------------------------------------
+
+# mcpres_prompt_get: render a server prompt. `args_json` is a JSON object of
+# arguments (or 0). Returns the concatenated message text, or 0 on failure.
+#
+# MCP's prompts/get answers {"description":…,"messages":[{role,content:{type,text}}]}.
+# The `content` is a nested OBJECT, not a bare string — the shape a flat scanner
+# gets wrong, so the typed accessors walk it explicitly.
+fn mcpres_prompt_get(name, args_json) {
+    var ep = _daimon_prompt_get_endpoint();
+    if (ep == 0) { return 0; }                  # [daimon].url unset
+    if (_mcpres_req == 0) { _mcpres_req = alloc(MCPRES_REQ_CAP); }
+    if (_mcpres_req == 0) { return 0; }
+    var off = 0;
+    off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, "{\"name\":\"");
+    off = _json_escape_into_cap(_mcpres_req, off, MCPRES_REQ_CAP, name);
+    off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, "\",\"arguments\":");
+    if (args_json != 0) { off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, args_json); }
+    else { off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, "{}"); }
+    off = _append_cstr_cap(_mcpres_req, off, MCPRES_REQ_CAP, "}");
+    store8(_mcpres_req + off, 0);
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    var r = sandhi_http_post(ep, h, _mcpres_req, off);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
+    var status = sandhi_http_status(r);
+    if ((status < 200) || (status >= 300)) { return 0; }
+    var v = bayan_json_v_parse_buf(sandhi_http_body(r), sandhi_http_body_len(r));
+    if (v == 0) { return 0; }
+    var msgs = bayan_json_v_obj_get(v, "messages");
+    if (msgs == 0) { return 0; }
+    var mn = bayan_json_v_arr_len(msgs);
+    var sb = str_builder_new();
+    var found = 0;
+    var i = 0;
+    while (i < mn) {
+        var m = bayan_json_v_arr_get(msgs, i);
+        if (m != 0) {
+            var content = bayan_json_v_obj_get(m, "content");
+            var t = _mcpres_field(content, "text");
+            if (t != 0) {
+                if (found == 1) { str_builder_add_cstr(sb, "\n"); }
+                str_builder_add_cstr(sb, t);
+                found = 1;
+            }
+        }
+        i = i + 1;
+    }
+    if (found == 0) { return 0; }
+    return str_cstr(str_builder_build(sb));
+}
+
+# mcpres_prompt_exists: 1 if the live registry publishes a prompt with this name.
+# Used by the slash-command gap, so a name that is not a prompt still reaches the
+# normal "unknown command" path rather than a confusing network error.
+fn mcpres_prompt_exists(name) {
+    var pv = daimon_prompts_value();
+    if (pv == 0) { return 0; }
+    var n = bayan_json_v_arr_len(pv);
+    var i = 0;
+    while (i < n) {
+        var p = bayan_json_v_arr_get(pv, i);
+        var nm = _mcpres_field(p, "name");
+        if (nm != 0) { if (streq(nm, name) == 1) { return 1; } }
+        i = i + 1;
+    }
+    return 0;
+}

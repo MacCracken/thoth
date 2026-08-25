@@ -1,0 +1,405 @@
+# thoth — subagent delegation (0.43.0, T2-1). See ADR-0018 for the decision and its fence.
+#
+# WHAT THIS IS. One model-invokable tool, `delegate(task)`, that runs a SCOPED CHILD CONTEXT: the parent's
+# model and the parent's tools, over a fresh empty message list, for a bounded number of rounds, returning
+# one string. The point is cost: locating something in a tree the model does not know is the most
+# expensive thing a coding agent does, and today every file it reads on the way stays in the parent's
+# window forever. A delegated search spends six rounds and returns one path.
+#
+# WHAT THIS IS NOT, and the line is load-bearing (ADR-0018): a subagent has **no identity, no persona, no
+# registry entry, no peer, and no lifetime beyond its tool call**. It is not an orchestrated agent — that
+# is daimon's and agnosai's domain, and thoth consumes those rather than growing its own. The test a
+# future contributor should apply: *if it needs an identity, a persona, a registry entry or a peer, it is
+# orchestration and belongs to the spine; if it is one conversation's context, windowed, it is thoth's.*
+# Do not grow crews, presets, DAGs, inter-agent messaging, or depth > 1 here.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# ⚠ THE RE-ENTRANCY PROBLEM, AND WHY THE ANSWER IS A POINTER SWAP RATHER THAN A SECOND DISPATCH PATH
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# `agent.cyr` keeps a turn's state in module-level buffers, not on a stack. A child running inside the
+# parent's live round would overwrite the parent's request body, its accumulated tool-round transcript,
+# its reply accumulator, and its parsed tool-call slots. An audit of the tree counted ~60 process-global
+# `var`s across 21 files that a naive re-entry would corrupt.
+#
+# The tempting fix is to give the child its own dispatch function. **That is the dangerous choice**, and
+# it is rejected here: the per-tool dispatch in `_agent_run_calls_serial` is where the t-ron gate, the
+# blocking `pre_tool` hook, the project jail, the checkpoint write-gate, redaction and the injection guard
+# all live. Two copies of that would be two authorization paths, and the second one would drift.
+#
+# So the child reuses `_agent_run_calls` VERBATIM — there is exactly ONE dispatch path in thoth — and the
+# isolation is achieved by SWAPPING the buffers those functions write through. Every one is a plain
+# pointer/length pair reached through a small funnel, so the swap is O(1) and, crucially, **provable by
+# enumeration**: the set below is the complete list, and `_sub_enter`/`_sub_exit` are exact inverses.
+#
+# ⚠ IF YOU ADD A MODULE-LEVEL BUFFER THAT A TOOL ROUND WRITES THROUGH, ADD IT TO THE SWAP SET. The test
+# `subagent parent state survives a child run` exists to catch a forgotten one.
+#
+# ⚠ DEPTH IS CAPPED AT 1 and that is a security bound, not a simplification. The child is advertised a
+# tool set with `delegate` REMOVED, so it cannot recurse; `_sub_depth` is checked as well, so a
+# hallucinated call is refused rather than obeyed. Unbounded recursion is unbounded spend, and thoth has
+# no budget enforcement — depth 1 makes the worst case arithmetic instead of exponential.
+#
+# ⚠ THE ROUND IS FORCED SERIAL. `delegate` is registered in `_agent_round_has_local`, so a round
+# containing it never reaches the parallel executor. That matters for MORE than buffers: the parallel path
+# fires **no `pre_tool` hook and no events**. Missing that registration would turn a state bug into an
+# authorization bug. It is one line and it is load-bearing.
+
+var SUB_TASK_CAP = 8192;         # the task string handed to the child
+var SUB_ANSWER_CAP = 16384;      # the child's returned summary, bounded on the way back to the parent
+
+var _sub_req = 0;                # the child's request body (never the parent's _agent_req)
+var _sub_work = 0;               # the child's message list (its ENTIRE context)
+var _sub_acc = 0;                # the child's reply accumulator
+var _sub_reason = 0;             # the child's reasoning accumulator
+var _sub_tools = 0;              # the child's narrowed tool advertisement
+var _sub_arr = 0;                # the child's reconstructed tool_calls array
+var _sub_ids = 0;
+var _sub_names = 0;
+var _sub_args = 0;
+var _sub_args_len = 0;
+var _sub_seen = 0;
+var _sub_answer = 0;             # the bounded copy handed back to the parent
+var _sub_ready = 0;
+var _sub_runs = 0;               # delegations this session (for /state)
+var _sub_rounds_last = 0;        # rounds the last child spent
+# Outcome of the LAST delegate call, read immediately by the dispatch arm — the same
+# read-straight-after convention shell_last_* / edit_last_* already use. Without these the round card,
+# the telemetry and the tool_result event all reported a denied or failed delegation as a success.
+var _sub_last_allowed = 0;       # 1 if the gate let it run
+var _sub_last_ok = 0;            # 1 if it returned a real answer
+
+fn subagent_active() { return _sub_depth; }
+fn subagent_last_allowed() { return _sub_last_allowed; }
+fn subagent_last_ok() { return _sub_last_ok; }
+fn subagent_runs() { return _sub_runs; }
+fn subagent_rounds_last() { return _sub_rounds_last; }
+fn subagent_reset() { _sub_runs = 0; _sub_rounds_last = 0; _sub_depth = 0; return 0; }
+
+fn _sub_alloc() {
+    if (_sub_ready == 1) { return 1; }
+    _sub_req = alloc(AGENT_REQ_CAP);
+    _sub_work = alloc(AGENT_WORK_CAP);
+    _sub_acc = alloc(HOOSH_ACC_CAP);
+    _sub_reason = alloc(HOOSH_ACC_CAP);
+    _sub_tools = alloc(AGENT_TOOLS_CAP);
+    _sub_arr = alloc(AGENT_ARR_CAP);
+    _sub_ids = alloc(AGENT_MAX_CALLS * AG_ID_CAP);
+    _sub_names = alloc(AGENT_MAX_CALLS * AG_NAME_CAP);
+    _sub_args = alloc(AGENT_MAX_CALLS * AG_ARGS_CAP);
+    _sub_args_len = alloc(AGENT_MAX_CALLS * 8);
+    _sub_seen = alloc(AGENT_MAX_CALLS);
+    _sub_answer = alloc(SUB_ANSWER_CAP);
+    if (_sub_req == 0) { return 0; }
+    if (_sub_work == 0) { return 0; }
+    if (_sub_acc == 0) { return 0; }
+    if (_sub_tools == 0) { return 0; }
+    if (_sub_arr == 0) { return 0; }
+    if (_sub_ids == 0) { return 0; }
+    if (_sub_answer == 0) { return 0; }
+    _sub_ready = 1;
+    return 1;
+}
+
+# --- the swap: saved parent state ---------------------------------------------
+# Plain globals rather than a struct, because depth is 1 by construction and a
+# struct would imply a stack that must never exist.
+var _sv_work = 0; var _sv_work_len = 0;
+var _sv_acc = 0; var _sv_acc_len = 0;
+var _sv_reason = 0; var _sv_reason_len = 0;
+var _sv_tools = 0; var _sv_tools_len = 0; var _sv_tools_ready = 0;
+var _sv_arr = 0;
+var _sv_ids = 0; var _sv_names = 0; var _sv_args = 0; var _sv_args_len = 0; var _sv_seen = 0; var _sv_max = 0;
+var _sv_round_kind = 0; var _sv_round_raw = 0; var _sv_round_val = 0; var _sv_round_n = 0; var _sv_round_status = 0;
+# ⚠ ADDED AFTER REVIEW, and the omission is instructive. `_roundlog_cur` and the editlog were NOT in
+# the first cut's swap set, and the consequence was not a crash — it was a LIE. roundlog_open is called
+# only by agent_turn, so during a child `_roundlog_cur` still pointed at the PARENT's open round; every
+# child tool call flat-appended there. RL_MAX_CALLS is 8 and a child's default budget is 8 rounds, so a
+# chatty child filled the parent's slot and the parent's OWN calls were then silently dropped by the
+# cap check — the round card and the persisted turn showed eight tools the parent never called and
+# omitted the ones it did. editlog_record keys on (turn, roundlog_cur_round(), ci) with the CHILD's ci,
+# so a child's diff card rendered under an unrelated parent tool call in the GUI.
+# The lesson for the swap set: "does a tool round WRITE it" is the test, not "is it a buffer".
+var _sv_roundlog_cur = 0; var _sv_roundlog_total = 0;
+
+# _sub_enter: point every round-scoped buffer at the child's storage.
+# EXACT INVERSE of _sub_exit — keep them in the same order so a diff shows a mismatch.
+fn _sub_enter() {
+    _sv_work = _agent_work;            _sv_work_len = _agent_work_len;
+    _sv_acc = _hoosh_acc;              _sv_acc_len = _hoosh_acc_len;
+    _sv_reason = _reason_acc;          _sv_reason_len = _reason_acc_len;
+    _sv_tools = _agent_tools_buf;      _sv_tools_len = _agent_tools_len;  _sv_tools_ready = _agent_tools_ready;
+    _sv_arr = _agent_arr_buf;
+    _sv_ids = _ag_ids; _sv_names = _ag_names; _sv_args = _ag_args;
+    _sv_args_len = _ag_args_len; _sv_seen = _ag_seen; _sv_max = _ag_max;
+    _sv_round_kind = _agent_round_kind; _sv_round_raw = _agent_round_raw; _sv_round_val = _agent_round_val;
+    _sv_round_n = _agent_round_n;       _sv_round_status = _agent_round_status;
+    _sv_roundlog_cur = _roundlog_cur;   _sv_roundlog_total = _roundlog_total;
+
+    _agent_work = _sub_work;           _agent_work_len = 0;
+    _hoosh_acc = _sub_acc;             _hoosh_acc_len = 0;
+    _reason_acc = _sub_reason;         _reason_acc_len = 0;
+    _agent_tools_buf = _sub_tools;     _agent_tools_len = 0;  _agent_tools_ready = 0;
+    _agent_arr_buf = _sub_arr;
+    _ag_ids = _sub_ids; _ag_names = _sub_names; _ag_args = _sub_args;
+    _ag_args_len = _sub_args_len; _ag_seen = _sub_seen; _ag_max = 0;
+    # CLOSE the parent's round for the duration. With no round open, roundlog_add_call is a no-op
+    # (its only guard is `_roundlog_cur != 0`), so the child's calls neither pollute nor evict the
+    # parent's. The child's tool activity is still fully visible — it goes to the t-ron/libro audit
+    # chain like any other call, and to the event stream stamped `"depth":1`.
+    _roundlog_cur = 0;
+    _sub_depth = 1;
+    return 0;
+}
+
+fn _sub_exit() {
+    _sub_depth = 0;
+    _agent_work = _sv_work;            _agent_work_len = _sv_work_len;
+    _hoosh_acc = _sv_acc;              _hoosh_acc_len = _sv_acc_len;
+    _reason_acc = _sv_reason;          _reason_acc_len = _sv_reason_len;
+    _agent_tools_buf = _sv_tools;      _agent_tools_len = _sv_tools_len;  _agent_tools_ready = _sv_tools_ready;
+    _agent_arr_buf = _sv_arr;
+    _ag_ids = _sv_ids; _ag_names = _sv_names; _ag_args = _sv_args;
+    _ag_args_len = _sv_args_len; _ag_seen = _sv_seen; _ag_max = _sv_max;
+    _agent_round_kind = _sv_round_kind; _agent_round_raw = _sv_round_raw; _agent_round_val = _sv_round_val;
+    _agent_round_n = _sv_round_n;       _agent_round_status = _sv_round_status;
+    _roundlog_cur = _sv_roundlog_cur;   _roundlog_total = _sv_roundlog_total;
+    # editlog needs no swap once the round above is closed: editlog_record keys on
+    # (turn, roundlog_cur_round(), ci), and with no round open roundlog_cur_round() answers 0 — which is
+    # never a real parent round, since agent_turn increments before opening and so starts at 1. A child
+    # edit therefore files under (turn, 0, ci) and the GUI, which looks up cards by the parent's actual
+    # round, cannot collide with it.
+    # ⚠ RESIDUAL, stated rather than papered over: EDITLOG_CAP is 16 and the ring is shared, so a very
+    # chatty child can still age a parent's diff CARDS out of the same turn. The writes themselves are
+    # untouched — the checkpoint store /rewind uses is separate — so this costs display, not undo.
+    return 0;
+}
+
+# _sub_build_request: the child's request. Identical to agent_build_request EXCEPT that it emits NO
+# session history — the child's entire message list is `_agent_work` (pointing at `_sub_work`), seeded
+# with the task. That omission IS the feature: the child cannot see the parent's transcript, so the
+# parent's window pays nothing for what the child reads. Stated as a limitation in ADR-0018: a task
+# needing conversational context must have it written into the task string.
+fn _sub_build_request(dst, model, system, mem, tools_buf, tools_len) {
+    var cap = AGENT_REQ_CAP;
+    var off = 0;
+    off = _append_cstr_cap(dst, off, cap, "{\"model\":\"");
+    off = _json_escape_into_cap(dst, off, cap, model);
+    off = _append_cstr_cap(dst, off, cap, "\",\"messages\":[");
+    var wrote = 0;
+    if ((system != 0) && (load8(system) != 0)) { off = _hoosh_emit_msg_cap(dst, off, cap, "system", system); wrote = 1; }
+    if ((mem != 0) && (load8(mem) != 0)) {
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
+        wrote = 1;
+    }
+    if (_agent_work_len > 0) {
+        if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+        off = _agent_copy(dst, off, _agent_work, _agent_work_len, AGENT_REQ_CAP);
+        wrote = 1;
+    }
+    off = _append_cstr_cap(dst, off, cap, "]");
+    if (tools_len > 0) {
+        off = _append_cstr_cap(dst, off, cap, ",\"tools\":");
+        off = _agent_copy(dst, off, tools_buf, tools_len, AGENT_REQ_CAP);
+    }
+    off = _append_cstr_cap(dst, off, cap, ",\"max_tokens\":");
+    off = _append_int_cap(dst, off, cap, _hoosh_max_tokens());
+    off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}");
+    if (off > (cap - 1)) { off = cap - 1; }
+    store8(dst + off, 0);
+    return off;
+}
+
+# _sub_iter: one child round — mirrors _agent_iter_block, but posts _sub_req built by _sub_build_request.
+# BLOCKING only: streaming would print the child's tokens into the parent's live reply, and the child's
+# output is not the user's answer.
+fn _sub_iter(model, sys, mem, tools_len) {
+    var len = _sub_build_request(_sub_req, model, sys, mem, _sub_tools, tools_len);
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    var auth = _hoosh_auth_header();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    var r = sandhi_http_post(_hoosh_endpoint_url(), h, _sub_req, len);
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { _agent_round_kind = 2; return 0; }
+    var status = sandhi_http_status(r);
+    var body = sandhi_http_body(r);
+    var blen = sandhi_http_body_len(r);
+    if ((status < 200) || (status >= 300)) { _agent_round_kind = 3; _agent_round_status = status; return 0; }
+    # The child's tokens are the SESSION's tokens — it spent them on the user's behalf, and hiding them
+    # would make the cost row lie about what the turn cost.
+    _hoosh_account_usage(bayan_json_v_parse_buf(body, blen));
+    var tcs = agent_tool_calls(body, blen);
+    var nc = agent_tc_count(tcs);
+    if (nc == 0) {
+        var content = hoosh_extract_content(body, blen);
+        if (content != 0) { _hoosh_acc_append(str_data(content), str_len(content)); }
+        _agent_round_kind = 0;
+    } else {
+        var raw = _agent_raw_tool_calls(body, blen);
+        if (raw == 0) { raw = "[]"; }
+        _agent_set_tools(raw, tcs, nc);
+    }
+    return 0;
+}
+
+# _sub_tools_build: the child's advertisement — the parent's tools MINUS `delegate`.
+# Removal is by construction (the delegate schema is simply not appended), which is what makes depth 1 a
+# property of the wire rather than a rule the model is asked to respect.
+fn _sub_tools_build() {
+    var dtv = 0;
+    if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { dtv = daimon_tools_value(); }
+    # ⚠ The child re-fetches the registry rather than reusing the parent's cached advertisement, because
+    # its tool set differs (no `delegate`). If that fetch fails the child would silently run with only
+    # the local tools — looking like a model that chose not to use daimon rather than a child that was
+    # never offered anything. Say it, once, rather than letting the delegation quietly under-perform.
+    if ((seam_status(SEAM_DAIMON) != SEAM_ABSENT) && (dtv == 0)) {
+        ui_emit(ROLE_FAINT, "  [delegate] daimon's registry did not answer — the child runs with local tools only");
+        oprintln("");
+    }
+    # Same sequence agent_turn uses, in the same order — each agent_tools_add_* self-gates on its own
+    # config key, so the child's tool set tracks the parent's exactly. The ONE difference is that
+    # agent_tools_add_delegate is not called: that omission is what caps depth at 1.
+    var tl = agent_format_tools(_sub_tools, dtv);
+    tl = agent_tools_add_memory(_sub_tools, tl);
+    tl = agent_tools_add_shell(_sub_tools, tl);
+    tl = agent_tools_add_project(_sub_tools, tl);
+    tl = agent_tools_add_edit(_sub_tools, tl);
+    return tl;
+}
+
+# _sub_seed: put the task in as the child's first (and only) user message.
+fn _sub_seed(task) {
+    _agent_work_len = 0;
+    _agent_work_puts("{\"role\":\"user\",\"content\":\"");
+    _agent_work_puts_esc(task);
+    _agent_work_puts("\"}");
+    return 0;
+}
+
+# subagent_run: the child loop. Returns its answer as a bounded cstr, or 0.
+# Caller MUST have called _sub_enter (subagent_tool does).
+fn subagent_run(task, max_iters) {
+    var model = _hoosh_model();
+    var sys = 0;
+    if (seam_status(SEAM_AVATARA) != SEAM_ABSENT) { sys = persona_system_prompt(); }
+    # The child gets the same project-memory preamble the parent does — ADR-0018 says it runs with the
+    # parent's system prompt and tools, and silently withholding memory would make a delegated task fail
+    # at things the parent could do.
+    var mem = 0;
+    if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(task); }
+    var tools_len = _sub_tools_build();
+    _sub_seed(task);
+    var iter = 0;
+    var done = 0;
+    var round_no = 0;
+    while ((done == 0) && (iter < max_iters)) {
+        # Esc cancels a CHILD too. Without this the user's cancel was swallowed for the whole
+        # delegation — up to max_iters further full model round-trips after they asked it to stop —
+        # because the parent only polls between ITS OWN calls. Checked before each child round and
+        # after its tools, so a cancel lands within one round at worst.
+        if (intr_pending() == 1) { _sub_rounds_last = round_no; return _sub_fail("it was interrupted"); }
+        _hoosh_acc_len = 0;                       # the child's acc (swapped), not the parent's
+        _sub_iter(model, sys, mem, tools_len);
+        var k = _agent_round_kind;
+        # _sub_rounds_last is set on EVERY exit, not just the happy one — otherwise subagent_end and the
+        # "returned after N rounds" line report the PREVIOUS delegation's count, which reads as a real
+        # measurement and is not one.
+        if (k == 2) { _sub_rounds_last = round_no; return _sub_fail("the gateway was unreachable"); }
+        elif (k == 3) { _sub_rounds_last = round_no; return _sub_fail("the gateway returned an HTTP error"); }
+        elif (k == 1) {
+            var raw = _agent_round_raw;
+            if (raw == 0) { raw = "[]"; }
+            _agent_add_assistant(raw);
+            round_no = round_no + 1;
+            # THE SAME dispatch the parent uses — one gate, one hook, one jail, one audit chain.
+            _agent_run_calls(_agent_round_val, _agent_round_n);
+        } else { done = 1; }
+        iter = iter + 1;
+    }
+    _sub_rounds_last = round_no;
+    if (_hoosh_acc_len == 0) {
+        # Nothing came back. Distinguish the two causes rather than blaming the budget for both: a loop
+        # that ran out of rounds is a different fact from a model that answered with empty content, and
+        # telling the parent "it used all its rounds" when it used one is a fabricated measurement.
+        if (done == 1) { return _sub_fail("it returned an empty answer"); }
+        return _sub_fail("it used all its rounds without reaching an answer");
+    }
+    return _sub_capture();
+}
+
+# _sub_capture: copy the child's reply out of the swapped accumulator into stable storage BEFORE
+# _sub_exit restores the parent's pointers. Bounded; truncation is announced, never silent.
+fn _sub_capture() {
+    _sub_last_ok = 1;
+    var n = _hoosh_acc_len;
+    var truncated = 0;
+    if (n > (SUB_ANSWER_CAP - 64)) { n = SUB_ANSWER_CAP - 64; truncated = 1; }
+    var i = 0;
+    while (i < n) { store8(_sub_answer + i, load8(_hoosh_acc + i)); i = i + 1; }
+    store8(_sub_answer + i, 0);
+    if (truncated == 1) {
+        var off = i;
+        off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, "\n[subagent answer truncated at ");
+        off = _append_int_cap(_sub_answer, off, SUB_ANSWER_CAP, SUB_ANSWER_CAP - 64);
+        off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, " bytes]");
+        store8(_sub_answer + off, 0);
+    }
+    return _sub_answer;
+}
+
+# _sub_fail: a failure the PARENT can act on, phrased as a result rather than an error, because the
+# parent is a model reading a tool result and needs to know what to do next.
+fn _sub_fail(why) {
+    _sub_last_ok = 0;
+    var off = 0;
+    off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, "(the delegated task did not complete: ");
+    off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, why);
+    off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, ". do it directly, or delegate a smaller task.)");
+    store8(_sub_answer + off, 0);
+    return _sub_answer;
+}
+
+# subagent_tool: the model-facing `delegate` tool. `args_json` is {"task":"…"}.
+#
+# ⚠ GATED under the reserved verb `thoth_delegate`, so a [tron].policy can refuse delegation outright.
+# Stated limitation (ADR-0018 D5): the child authorizes as the SAME agent id, so a policy can say
+# "no subagents" but cannot say "subagents, but no shell" — and the child shares the parent's rate-limit
+# bucket and risk score.
+fn subagent_tool(args_json) {
+    _sub_last_allowed = 0;
+    _sub_last_ok = 0;
+    if (config_subagent_enabled() == 0) {
+        return "(the delegate tool is not enabled in this session)";
+    }
+    if (_sub_depth > 0) {
+        # Depth 1. Reached only if a model hallucinates the name it was not advertised.
+        return "(a subagent may not delegate — depth is capped at 1)";
+    }
+    if (_sub_alloc() == 0) { return "(delegate unavailable: could not allocate the child context)"; }
+    if (args_json == 0) { return "(delegate: missing arguments)"; }
+    var av = bayan_json_v_parse_buf(args_json, strlen(args_json));
+    if (av == 0) { return "(delegate: arguments are not valid JSON)"; }
+    var tv2 = bayan_json_v_obj_get(av, "task");
+    if (tv2 == 0) { return "(delegate needs a \"task\" string)"; }
+    var ts = bayan_json_v_str(tv2);                     # 0.39.0 A-4: a non-string value answers 0
+    if (ts == 0) { return "(delegate needs a \"task\" string)"; }
+    var task = str_cstr(ts);
+    if (load8(task) == 0) { return "(delegate needs a non-empty \"task\")"; }
+    if (gate_authorize("thoth_delegate", args_json, "delegate to a subagent", task) == 0) {
+        return "denied by authorization policy";
+    }
+    _sub_last_allowed = 1;                       # past the gate
+    var iters = config_subagent_max_iters();
+    ui_emit(ROLE_FAINT, "  [delegate] "); ui_emit(ROLE_MUTED, task); oprintln("");
+    events_subagent_start(session_turns(), task);
+    _sub_runs = _sub_runs + 1;
+    _sub_enter();
+    var answer = subagent_run(task, iters);
+    # Copy out BEFORE the restore — _sub_capture already did, but re-state the invariant: nothing that
+    # points into a swapped buffer may outlive _sub_exit.
+    _sub_exit();
+    events_subagent_end(session_turns(), _sub_rounds_last);
+    ui_emit(ROLE_FAINT, "  [delegate] returned after "); ofmt_int(_sub_rounds_last);
+    ui_emit(ROLE_FAINT, " round(s)"); oprintln("");
+    return answer;
+}

@@ -17,7 +17,14 @@
 #   {"event":"tool_result","turn":N,"name":"...","ok":true|false,"bytes":N}
 #   {"event":"response","turn":N,"text":"..."}                     (on success — the model's answer)
 #   {"event":"error","turn":N,"message":"..."[,"http":N]}          (on failure — transport / HTTP / empty)
+#   {"event":"subagent_start","turn":N,"task":"..."}                (0.43.0 — a delegation opens)
+#   {"event":"subagent_end","turn":N,"rounds":N}                    (0.43.0 — and closes)
 #   {"event":"turn_end","turn":N,"ok":true|false,"tokens":N?,"elapsed_ms":N}
+#
+# A DELEGATION nests between subagent_start/subagent_end; the child's own tool events are ordinary
+# tool_call/tool_result carrying an extra `"depth":1`. `depth` is emitted only when non-zero, so a run
+# that never delegates streams byte-identically to 0.42.0. The turn bracket is deliberately NOT nested —
+# see events_subagent_start.
 #
 # ⚠ `turn_end` IS ALWAYS LAST, and exactly one of `response`/`error` precedes it. This ordering is a
 # CONTRACT, not an accident of where the calls happen to sit: a consumer that treats `turn_end` as
@@ -132,7 +139,15 @@ fn events_tool_call(turn, name, args) {
     var off = _ev_begin("tool_call", turn);
     off = _ev_str_field(off, "name", name, 256);
     off = _ev_str_field(off, "args", args, EV_ARGS_MAX);
+    off = _ev_depth_field(off);
     return _ev_end(off);
+}
+
+# _ev_depth_field: `,"depth":N`, emitted ONLY inside a delegation. Omit-until-present applied to a
+# structural field: a run that never delegates must produce the same bytes 0.42.0 did.
+fn _ev_depth_field(off) {
+    if (_sub_depth == 0) { return off; }
+    return _ev_int_field(off, "depth", _sub_depth);
 }
 
 fn events_tool_result(turn, name, ok, bytes) {
@@ -141,6 +156,7 @@ fn events_tool_result(turn, name, ok, bytes) {
     off = _ev_str_field(off, "name", name, 256);
     off = _ev_bool_field(off, "ok", ok);
     off = _ev_int_field(off, "bytes", bytes);
+    off = _ev_depth_field(off);
     return _ev_end(off);
 }
 
@@ -190,6 +206,30 @@ fn events_response(turn, reply, reply_len) {
         off = _json_escape_n_into_cap(_ev_cur, off, _ev_cur_cap, reply, reply_len);
         off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\"");
     }
+    return _ev_end(off);
+}
+
+# events_subagent_start / events_subagent_end (0.43.0, T2-1): a DELEGATION bracket.
+#
+# ⚠ DELIBERATELY NOT A NESTED TURN BRACKET. `turn_end` last with exactly one `response`/`error` before it
+# is the documented contract above, and nesting a second turn bracket inside a live one would reintroduce
+# the exact defect 0.42.0's live testing found — a consumer that stops at the first `turn_end` would lose
+# the parent's answer. A delegation gets its own event names instead, so a consumer can nest or ignore it
+# without the turn contract changing at all.
+#
+# The child's tool events are ordinary `tool_call`/`tool_result` carrying `"depth":1`. `depth` is emitted
+# only when NON-ZERO, so a session that never delegates produces a byte-identical stream to 0.42.0.
+fn events_subagent_start(turn, task) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("subagent_start", turn);
+    off = _ev_str_field(off, "task", task, 1024);
+    return _ev_end(off);
+}
+
+fn events_subagent_end(turn, rounds) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("subagent_end", turn);
+    off = _ev_int_field(off, "rounds", rounds);
     return _ev_end(off);
 }
 

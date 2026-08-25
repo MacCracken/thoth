@@ -114,29 +114,13 @@ unsure, patch.
 
 ## Scheduled work
 
-> The only items here are ones with a version pin and a decision behind them. Everything
-> else that has been *identified* but not committed lives in [`gap-review.md`](gap-review.md).
+> The only items here are ones with a version pin and a decision behind them. Everything else that has
+> been *identified* but not committed lives in [`gap-review.md`](gap-review.md).
 
-### 0.43.0 — the two deferred Tier-2 items
-
-Both were scheduled for 0.42.0 and **re-pinned to 0.43.0** when 0.42.0 took the Tier-3
-security items instead.
-
-- **Subagent delegation.** A noisy sub-investigation (grep the tree, read ten files, report
-  three lines) permanently costs the parent's context window, and one context cannot be worked
-  in parallel. Every major peer landed on the same answer.
-
-  ⚠ **Blocked on an ADR, deliberately.** This is the one item that brushes the spine rule:
-  orchestration is daimon's declared domain, and agnosai owns crews and task DAGs. The
-  defensible reading — that a *scoped child of one conversation* is thoth-side context
-  management rather than multi-agent orchestration — is the maintainer's call and must be
-  settled in an ADR **before** code. Nothing should be built until it is.
-
-- **Consume MCP resources and prompts.** The protocol work is already vendored and paid for:
-  `bote-core.cyr` carries full resources and prompts registries, and thoth uses only `tools/`.
-  Server-published resources are context thoth could offer the model; server-published prompts
-  surface naturally as slash commands. Low risk, no new dependency, best effort-to-value ratio
-  of anything on this page.
+*Nothing is currently version-pinned.* The two items that were pinned to 0.43.0 — subagent delegation and
+consuming MCP resources/prompts — **shipped in 0.43.0**; see the [CHANGELOG](../../CHANGELOG.md) and
+[ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md). The next pinned item lands here when
+one is decided.
 
 ## Remaining work (non-gating, no version pin)
 
@@ -187,13 +171,16 @@ security items instead.
   **4856/8192 (59 %)** — the tightest of the three. The static-data warning reads **1,001,720
   bytes (~1.0 MB)**; it is vendored sigil and unfixable from thoth. `CYRIUS_DCE` does not help.
 
-  ⚠ **The real ceiling is elsewhere and it is close.** The binding constraint is cyrius's fixed
-  **8 MB `preprocess_out`** arena slot, which thoth sits at roughly **96 %** of — under ~300 KB
-  of headroom, less than one more average vendored bundle. It is a hard error with no flag or
-  manifest key. Filed upstream as
-  `cyrius/docs/development/issues/2026-08-24-preprocess-out-8mb-ceiling.md`. Lean `[lib.X]`
-  profiles are the shipped workaround (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit
-  `[lib.read]`, sankoch `[lib.zlib]`) and they buy features, not trajectory.
+  ⚠ **The real ceiling is elsewhere, and at 0.43.0 it BIT.** The binding constraint is cyrius's fixed
+  **8 MB `preprocess_out`** arena slot. Adding 0.43.0's two features pushed `tests/thoth_core.tcyr` to
+  **8,393,978 bytes — over the limit by 5,370** — a hard error with no flag or manifest key, which is
+  precisely what the issue filed at 0.42.0 predicted would happen to "the next feature that needs a spine
+  capability". It was cleared by dropping the GUI block that unit never tested (131 KB), not by shrinking
+  the feature, so the headroom bought is one-off and the trajectory is unchanged. Filed upstream as
+  `cyrius/docs/development/issues/2026-08-24-preprocess-out-8mb-ceiling.md`. Lean `[lib.X]` profiles are
+  the shipped workaround (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit `[lib.read]`, sankoch
+  `[lib.zlib]`) and they buy features, not trajectory. **This is now the most likely thing to block the
+  next feature**, and the sit carve below is the largest single win available thoth-side.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will
 > grow **voice input** (mic → speech-to-text) and **read-back** (text-to-speech) — but by

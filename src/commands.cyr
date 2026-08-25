@@ -52,6 +52,9 @@ enum Cmd {
     CMD_CONTEXT = 44;     # 0.40.0 (T1-5): what is consuming the context window
     CMD_REWIND = 45;      # 0.40.0 (T1-4): undo the model's file writes
     CMD_FORK = 46;        # 0.41.0 (T2-6): branch the conversation
+    CMD_RESOURCES = 47;   # 0.43.0 (T2-7): list MCP resources published by daimon's hosts
+    CMD_RESOURCE = 48;    # 0.43.0 (T2-7): read one MCP resource by URI
+    CMD_PROMPTS = 49;     # 0.43.0 (T2-7): list MCP prompts (each is also a slash command)
 }
 
 # token_is: 1 if line's first whitespace-delimited token equals word exactly.
@@ -151,6 +154,9 @@ fn classify_input(line) {
     if (token_is(line, "/run") == 1) { return CMD_RUN; }
     if (token_is(line, "/tools") == 1) { return CMD_TOOLS; }
     if (token_is(line, "/call") == 1) { return CMD_CALL; }
+    if (token_is(line, "/resources") == 1) { return CMD_RESOURCES; }   # 0.43.0 (T2-7)
+    if (token_is(line, "/resource") == 1) { return CMD_RESOURCE; }     # longer name first — /resource is a prefix of /resources
+    if (token_is(line, "/prompts") == 1) { return CMD_PROMPTS; }
     if (token_is(line, "/audit") == 1) { return CMD_AUDIT; }
     if (token_is(line, "/grants") == 1) { return CMD_GRANTS; }
     if (token_is(line, "/compact") == 1) { return CMD_COMPACT; }
@@ -210,6 +216,9 @@ fn cmd_help() {
     _help_line("  /tools", "             list the MCP tools daimon hosts");
     _help_line("  /call <tool> [json]", "  invoke an MCP tool via daimon (t-ron-gated)");
     _help_line("  /audit [export F]", "  show t-ron's audit chain; export F writes it to a file");
+    _help_line("  /resources", "         list MCP resources published by daimon's hosts");
+    _help_line("  /resource <uri>", "    read one MCP resource into the conversation");
+    _help_line("  /prompts", "           list MCP prompts (each is usable as /<name> …)");
     _help_line("  /grants [clear]", "   session authorization grants (answers of 'a' at a confirm)");
     _help_line("  /context", "           what is filling the context window right now");
     _help_line("  /compact [keep]", "    summarize older turns now and stop sending them (default keep 6)");
@@ -245,6 +254,8 @@ fn cmd_help() {
 # health state, then the outcome is reported. Works identically in the REPL and TUI
 # (dispatch is shared); the probe emits nothing, so it is safe under the TUI's OUT_RING.
 fn cmd_reprobe() {
+    mcpres_endpoints_reset();   # 0.43.0 (T2-7): clear the resources/prompts latch too — _mcpres_unavailable
+                                # tells the user to "/reprobe after upgrading", and that advice was inert.
     if (config_hoosh_configured() == 0) {
         ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in .thoth/config.cyml"); oprintln("");
         return 0;
@@ -318,6 +329,8 @@ fn _state_reason_row() {
 fn cmd_state() {
     git_probe();          # 0.28.0: refresh the git cache BEFORE the snapshot so the git row is current (moved up from the git row)
     status_snapshot();    # 0.28.0: read the status producers ONCE into the shared view-model (Stage B, src/surface.cyr)
+    mcpres_probe();       # 0.43.0 (T2-7): one-time resources/prompts capability probe. A USER path, never
+                          # seam_status — which must stay network-free so /dry and the status bar are cheap.
     ui_emit(ROLE_ACCENT, "session:"); oprintln("");
     ui_label("  turns   : "); ofmt_int(status_ival(SF_TURNS)); oprintln("");
     ui_label("  persona : "); ui_emit(ROLE_ACCENT, status_sval(SF_PERSONA));
@@ -482,9 +495,27 @@ fn cmd_state() {
         if (hooks_blocked() > 0) { ui_emit(ROLE_RED, ", "); ofmt_int(hooks_blocked()); ui_emit(ROLE_RED, " blocked"); }
         oprintln("");
     }
+    if (config_subagent_enabled() == 1) {
+        ui_label("  delegate: ");
+        ui_emit(ROLE_GREEN, "on"); ui_emit(ROLE_FAINT, " — depth 1, ");
+        ofmt_int(config_subagent_max_iters()); ui_emit(ROLE_FAINT, " rounds/child");
+        if (subagent_runs() > 0) { emit(" · "); ofmt_int(subagent_runs()); emit(" delegated"); }
+        # 0.43.0: say the spend bound out loud. The iteration cap is the ONLY thing bounding a turn's
+        # cost, and delegation multiplies it — a user should not have to read an ADR to learn that.
+        ui_emit(ROLE_MUTED, "  (multiplies spend; no budget enforcement)"); oprintln("");
+    }
     ui_label("  daimon  : ");
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in .thoth/config.cyml)"); oprintln(""); }
-    else { oprintln(config_daimon_url()); }
+    else {
+        emit(config_daimon_url());
+        # 0.43.0 (T2-7): resources/prompts are a CAPABILITY of the daimon seam, not a seam of their own —
+        # reported only once probed, omit-until-present (ADR-0010). A daimon older than 2.1.0 has neither.
+        if (mcpres_bound() == 1) {
+            ui_emit(ROLE_FAINT, "  ("); ofmt_int(mcpres_resource_count()); ui_emit(ROLE_FAINT, " resources, ");
+            ofmt_int(mcpres_prompt_count()); ui_emit(ROLE_FAINT, " prompts)");
+        }
+        oprintln("");
+    }
     ui_label("  t-ron   : ");
     if (gate_active() == 0) { ui_emit(ROLE_FAINT, "absent (fail-closed confirm gate; set [tron].policy in .thoth/config.cyml)"); oprintln(""); }
     else { oprintln(config_tron_policy()); }
@@ -1787,6 +1818,7 @@ fn cmd_reset() {
                                # grant outliving the conversation it was given in would be a surprise
     hoosh_compact_floor_clear();  # 0.40.0 (T1-5): an index into a history that no longer exists
     ckpt_reset();              # 0.40.0 (T1-4): the writes belong to the conversation being cleared
+    subagent_reset();          # 0.43.0 (T2-1): the delegations belonged to the conversation being cleared
     if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }
     return 0;
@@ -1809,9 +1841,10 @@ fn cmd_reload() {
         return 0;
     }
     agent_tools_cache_reset();                # re-advertise tools next turn (picks up [shell].enabled / [hoosh].tools / daimon)
+    mcpres_endpoints_reset();                 # 0.43.0 (T2-7): drop the cached resources/prompts URLs + probe, else a changed [daimon].url is silently ignored
     hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
     ui_emit(ROLE_GREEN, "reloaded "); emit(config_path()); oprintln("");
-    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory]"); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent]"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
     if (config_hoosh_url() == 0) { ui_emit(ROLE_RED, "  note: [hoosh].url is not set — model turns are unavailable"); oprintln(""); }
@@ -1919,6 +1952,269 @@ fn cmd_audit(line) {
     gate_audit_report();
     roundlog_report();
     return 0;
+}
+
+# --- MCP resources + prompts (0.43.0, T2-7) --------------------------------
+#
+# thoth is an MCP CLIENT. bote implements the protocol, daimon hosts the registry, and these commands
+# render what daimon returns. thoth owns no registry of its own here and must not grow one.
+
+# _mcpres_unavailable: the shared honest-degrade message. Distinguishes the three real cases —
+# daimon not configured at all, configured but unreachable/too old, and reachable but empty — because
+# "no resources" and "this hop does not exist" are different facts and conflating them is exactly the
+# silent-degradation the house rules forbid.
+fn _mcpres_unavailable(noun) {
+    if (config_daimon_configured() == 0) {
+        ui_emit(ROLE_FAINT, "no daimon seam wired — MCP "); emit(noun);
+        ui_emit(ROLE_FAINT, " are hosted by daimon. set [daimon].url in .thoth/config.cyml."); oprintln("");
+        return 0;
+    }
+    ui_emit(ROLE_RED, "daimon did not answer for "); emit(noun); oprintln("");
+    ui_emit(ROLE_FAINT, "  MCP "); emit(noun);
+    ui_emit(ROLE_FAINT, " need daimon 2.1.0 or newer (older builds have no such route). /reprobe after upgrading.");
+    oprintln("");
+    return 0;
+}
+
+fn cmd_resources() {
+    var rv = daimon_resources_value();
+    if (rv == 0) { return _mcpres_unavailable("resources"); }
+    var n = bayan_json_v_arr_len(rv);
+    if (n == 0) {
+        ui_emit(ROLE_FAINT, "daimon hosts no MCP resources. register one with POST /v1/mcp/resources."); oprintln("");
+        return 0;
+    }
+    emit("MCP resources ("); ofmt_int(n); oprintln("):");
+    var i = 0;
+    while (i < n) {
+        var r = bayan_json_v_arr_get(rv, i);
+        var uri = _mcpres_field(r, "uri");
+        var nm = _mcpres_field(r, "name");
+        var de = _mcpres_field(r, "description");
+        var mt = _mcpres_field(r, "mimeType");
+        emit("  ");
+        if (uri != 0) { ui_emit(ROLE_ACCENT, uri); } else { ui_emit(ROLE_FAINT, "(no uri)"); }
+        if (nm != 0) { emit("  "); emit(nm); }
+        if (mt != 0) { ui_emit(ROLE_FAINT, "  ["); ui_emit(ROLE_FAINT, mt); ui_emit(ROLE_FAINT, "]"); }
+        oprintln("");
+        if (de != 0) { ui_emit(ROLE_FAINT, "      "); ui_emit(ROLE_FAINT, de); oprintln(""); }
+        i = i + 1;
+    }
+    ui_emit(ROLE_FAINT, "  /resource <uri> reads one into the conversation."); oprintln("");
+    return 0;
+}
+
+fn cmd_prompts() {
+    var pv = daimon_prompts_value();
+    if (pv == 0) { return _mcpres_unavailable("prompts"); }
+    var n = bayan_json_v_arr_len(pv);
+    if (n == 0) {
+        ui_emit(ROLE_FAINT, "daimon hosts no MCP prompts. register one with POST /v1/mcp/prompts."); oprintln("");
+        return 0;
+    }
+    emit("MCP prompts ("); ofmt_int(n); oprintln("), each usable as a slash command:");
+    var i = 0;
+    while (i < n) {
+        var p = bayan_json_v_arr_get(pv, i);
+        var nm = _mcpres_field(p, "name");
+        var de = _mcpres_field(p, "description");
+        emit("  /");
+        if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(no name)"); }
+        # Argument names come from the server; render them as the positional order the slash form takes.
+        var av = 0;
+        if (p != 0) { av = bayan_json_v_obj_get(p, "arguments"); }
+        if (av != 0) {
+            var an = bayan_json_v_arr_len(av);
+            var k = 0;
+            while (k < an) {
+                var a = bayan_json_v_arr_get(av, k);
+                var anm = _mcpres_field(a, "name");
+                if (anm != 0) { emit(" <"); ui_emit(ROLE_MUTED, anm); emit(">"); }
+                k = k + 1;
+            }
+        }
+        oprintln("");
+        if (de != 0) { ui_emit(ROLE_FAINT, "      "); ui_emit(ROLE_FAINT, de); oprintln(""); }
+        i = i + 1;
+    }
+    ui_emit(ROLE_FAINT, "  built-ins and your [alias] entries always win over a server prompt name."); oprintln("");
+    return 0;
+}
+
+# cmd_resource: read one resource and put it in the conversation as USER-visible
+# context.
+#
+# ⚠ THE CONTENT IS THIRD-PARTY AND IS TREATED AS SUCH. It goes through
+# guard_wrap_untrusted, the same envelope a tool result gets, because a resource is
+# exactly the "untrusted prose the model then reads as instructions" case [guard]
+# exists for. It is deliberately NOT spliced into the system prompt, which would
+# bypass both the guard and redaction.
+fn cmd_resource(line) {
+    var uri = arg_after(line);
+    if ((uri == 0) || (load8(uri) == 0)) {
+        ui_emit(ROLE_RED, "usage: "); emit("/resource <uri>");
+        ui_emit(ROLE_FAINT, "   (/resources to list)"); oprintln("");
+        return 0;
+    }
+    var text = mcpres_read(uri);
+    if (text == 0) {
+        ui_emit(ROLE_RED, "could not read "); emit(uri); oprintln("");
+        ui_emit(ROLE_FAINT, "  the resource may be unregistered, its host unreachable, or its content non-text."); oprintln("");
+        return 0;
+    }
+    var wrapped = guard_wrap_untrusted(redact_tool_result(text), "an MCP resource");
+    session_history_append("user", wrapped, strlen(wrapped));
+    sess_persist_save();
+    ui_emit(ROLE_GREEN, "read "); emit(uri); emit(" — "); ofmt_int(strlen(text));
+    ui_emit(ROLE_FAINT, " bytes added to the conversation"); oprintln("");
+    return 0;
+}
+
+# cmd_prompt_slash: the dynamic half — `/bote_greeting Robert` renders a server
+# prompt and runs it as the turn. Returns 1 if it handled the line, 0 to fall
+# through to "unknown command".
+#
+# ⚠ POSITIONAL ARGUMENTS, by design. MCP prompt arguments are NAMED, but a slash
+# command is a line of text; mapping the words after the command onto the server's
+# declared argument order is the only ergonomic option and matches how every other
+# thoth command reads its line. A prompt with no declared arguments simply gets none.
+# The whole remainder goes to the LAST declared argument so a trailing free-text
+# argument (the common case) keeps its spaces.
+var PSLASH_NAME_CAP = 128;
+var _pslash_name = 0;
+
+fn cmd_prompt_slash(line) {
+    if (config_daimon_configured() == 0) { return 0; }
+    # ⚠ Gate on the CACHED probe, not on a fresh fetch. Without this every typo — `/hlep` — issued a
+    # blocking GET to daimon before printing "unknown command", which on an unreachable host meant the
+    # REPL stalled on every slip. mcpres_probe is session-stable and network-free once resolved.
+    if (mcpres_probe() == 0) { return 0; }
+    # _alias_name_of(line, dst, cap) writes into a caller buffer — reuse the same shape
+    # the alias path uses rather than inventing a second one.
+    if (_pslash_name == 0) { _pslash_name = alloc(PSLASH_NAME_CAP); }
+    if (_pslash_name == 0) { return 0; }
+    var nm = _alias_name_of(line, _pslash_name, PSLASH_NAME_CAP);
+    if (nm == 0) { return 0; }
+    if (load8(nm) == 0) { return 0; }
+    var pv = daimon_prompts_value();
+    if (pv == 0) {
+        # The probe said prompts exist, so this is a live failure, not an absent capability. Reporting
+        # "unknown command" here would blame the user for a name that IS real.
+        ui_emit(ROLE_RED, "could not reach daimon's prompt registry");
+        ui_emit(ROLE_FAINT, " — /"); emit(nm); ui_emit(ROLE_FAINT, " may be a valid prompt. /prompts to retry.");
+        oprintln("");
+        return 1;
+    }
+    var n = bayan_json_v_arr_len(pv);
+    var found = 0;
+    var i = 0;
+    while (i < n) {
+        var p = bayan_json_v_arr_get(pv, i);
+        var pn = _mcpres_field(p, "name");
+        if (pn != 0) { if (streq(pn, nm) == 1) { found = p; } }
+        i = i + 1;
+    }
+    if (found == 0) { return 0; }
+    var args = _prompt_args_json(found, arg_after(line));
+    var text = mcpres_prompt_get(nm, args);
+    if (text == 0) {
+        ui_emit(ROLE_RED, "prompt "); emit(nm); ui_emit(ROLE_RED, " could not be rendered");
+        ui_emit(ROLE_FAINT, " — its host may be unreachable, or [daimon].url is unset."); oprintln("");
+        return 1;
+    }
+    ui_emit(ROLE_FAINT, "  [mcp prompt] "); emit(nm); oprintln("");
+    #
+    # ⚠⚠ THIS MUST NOT GO THROUGH cmd_task, AND THAT IS A SECURITY BOUNDARY, NOT A STYLE CHOICE.
+    #
+    # cmd_task's second act is `mention_expand(line)`, and `@file` expansion is an UNJAILED reader:
+    # src/mention.cyr resolves a bare `@path` with no project confinement, no `..` rejection and no
+    # absolute-path rejection. Its own header says that is safe *because the content originates from a
+    # path the USER typed in their OWN message*. A server-rendered prompt breaks that premise
+    # completely. A hostile or compromised MCP host could register a plausible prompt (`deploy`) whose
+    # rendered text contains `@.thoth/config.cyml` or `@~/.ssh/id_rsa`; typing `/deploy` would read
+    # those files and POST them to the gateway, with the operator shown only "(+2 file(s) attached as
+    # context)" and never the paths. `.thoth/config.cyml` holds `[hoosh].token`.
+    #
+    # So the text is treated as exactly what it is — untrusted third-party prose — and takes the same
+    # route `/resource` takes: redact, wrap in the untrusted-data envelope, append as the user turn, and
+    # dispatch WITHOUT re-expansion. `_task_dispatch` is the already-expanded core that `/retry` uses
+    # for the same reason (re-expanding stored text would double-inject).
+    var safe = guard_wrap_untrusted(redact_tool_result(text), "an MCP prompt");
+    session_bump_turn();
+    emit("task: "); oprintln(safe);
+    # No session_history_append here: agent_turn (agent.cyr) / hoosh_send both append the user turn
+    # themselves, exactly as they do for cmd_task. Appending here too would double the message.
+    _task_dispatch(safe);
+    return 1;
+}
+
+var PROMPT_ARGS_CAP = 4096;
+var _prompt_args_buf = 0;
+
+# _prompt_args_json: build {"argname":"word", …} from the server's declared argument
+# order and the words the user typed. Bounded and ESCAPED — the values are user text
+# and the names are SERVER text, and neither may be spliced raw into JSON.
+fn _prompt_args_json(p, rest) {
+    if (_prompt_args_buf == 0) { _prompt_args_buf = alloc(PROMPT_ARGS_CAP); }
+    if (_prompt_args_buf == 0) { return 0; }
+    var off = 0;
+    off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, "{");
+    var av = 0;
+    if (p != 0) { av = bayan_json_v_obj_get(p, "arguments"); }
+    var an = 0;
+    if (av != 0) { an = bayan_json_v_arr_len(av); }
+    var cur = rest;
+    var wrote = 0;
+    var k = 0;
+    while (k < an) {
+        var a = bayan_json_v_arr_get(av, k);
+        var anm = _mcpres_field(a, "name");
+        if (anm != 0) {
+            # last declared argument takes the whole remainder (keeps its spaces)
+            var val = 0;
+            if (k == (an - 1)) { val = cur; }
+            else { val = _prompt_word(cur); cur = _prompt_rest(cur); }
+            if ((val != 0) && (load8(val) != 0)) {
+                if (wrote > 0) { off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, ","); }
+                off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, "\"");
+                off = _json_escape_into_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, anm);
+                off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, "\":\"");
+                off = _json_escape_into_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, val);
+                off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, "\"");
+                wrote = wrote + 1;
+            }
+        }
+        k = k + 1;
+    }
+    off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, "}");
+    store8(_prompt_args_buf + off, 0);
+    return _prompt_args_buf;
+}
+
+var PROMPT_WORD_CAP = 256;
+var _prompt_word_buf = 0;
+
+# _prompt_word: the first space-delimited word of s (bounded, NUL-terminated), or 0.
+fn _prompt_word(s) {
+    if (s == 0) { return 0; }
+    if (_prompt_word_buf == 0) { _prompt_word_buf = alloc(PROMPT_WORD_CAP); }
+    if (_prompt_word_buf == 0) { return 0; }
+    var i = 0;
+    while ((load8(s + i) != 0) && (load8(s + i) != 32) && (i < (PROMPT_WORD_CAP - 1))) {
+        store8(_prompt_word_buf + i, load8(s + i));
+        i = i + 1;
+    }
+    store8(_prompt_word_buf + i, 0);
+    return _prompt_word_buf;
+}
+
+# _prompt_rest: s advanced past its first word and any following spaces.
+fn _prompt_rest(s) {
+    if (s == 0) { return 0; }
+    var i = 0;
+    while ((load8(s + i) != 0) && (load8(s + i) != 32)) { i = i + 1; }
+    while (load8(s + i) == 32) { i = i + 1; }
+    return s + i;
 }
 
 # --- turn-completion niceties (0.24.3) ------------------------------------
@@ -2264,12 +2560,25 @@ fn _dispatch_d(line, depth) {
     if (c == CMD_FIND) { cmd_find(line); return 1; }
     if (c == CMD_REPROBE) { cmd_reprobe(); return 1; }
     if (c == CMD_HISTORY) { cmd_history(); return 1; }
+    if (c == CMD_RESOURCES) { cmd_resources(); return 1; }
+    if (c == CMD_RESOURCE) { cmd_resource(line); return 1; }
+    if (c == CMD_PROMPTS) { cmd_prompts(); return 1; }
     if (c == CMD_UNKNOWN_SLASH) {
         # Guard FIRST: refuse at the depth bound BEFORE writing a slot, so a cycle can never
         # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).
         if (depth >= ALIAS_MAX_DEPTH) { oprintln("alias: expansion too deep (cycle?)"); return 1; }
         var ex = alias_expand(line, depth);
         if (ex != 0) { return _dispatch_d(ex, depth + 1); }
+        # 0.43.0 (T2-7): a server-published MCP PROMPT is usable as a slash command.
+        #
+        # ⚠ ORDER: built-ins win (they never reach this gap at all), then the operator's [alias]
+        # table, and only then a server's prompt. A remote server must never be able to shadow a
+        # built-in or an operator's own alias by publishing a prompt with that name.
+        #
+        # ⚠ THE FLOOR IS PRESERVED: this is reached only after alias_expand declines, and it makes
+        # NO network call unless the input actually looks like an unknown slash command AND daimon
+        # is configured — so a session with no daimon behaves byte-identically to 0.42.0.
+        if (cmd_prompt_slash(line) == 1) { return 1; }
         oprintln("unknown command (try /help)");
         return 1;
     }

@@ -92,6 +92,11 @@ fn _agent_add_assistant(raw_tcs) {
 var AGENT_VERIFY_CAP = 24576;
 var _agent_verify_buf = 0;
 fn _agent_verify_append(res) {
+    # 0.43.0 (T2-1, ADR-0018 D8): a child does NOT run the verification loop. Two reasons, both real:
+    # every child write would trigger a full project build, N x M times per turn; and _verify_last_ok /
+    # _verify_runs are single globals whose child values would overwrite what /state reports about the
+    # parent's last verification. The parent still verifies its own writes.
+    if (_sub_depth > 0) { return res; }
     if (verify_configured() == 0) { return res; }
     var v = verify_run();
     if (v == 0) { return res; }
@@ -257,6 +262,23 @@ fn agent_tools_add_project(dst, tl) {
     # closes is a model that never thinks to look — it walked list_dir one level at a time instead.
     off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"search\",\"description\":\"Search THIS project. Use this FIRST to locate code - it is far cheaper than listing directories one at a time. Give 'pattern' to find a LITERAL substring inside files (returns 'path:line: text' for each match); give 'glob' to find files whose NAME matches a pattern like '*.cyr' or 'test_*'; give both to search only inside matching files. Matching is literal text, NOT a regular expression. Results are capped and say so when a limit is reached.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\",\"description\":\"literal text to find inside files (not a regex)\"},\"glob\":{\"type\":\"string\",\"description\":\"filename pattern, '*' and '?' only, e.g. '*.cyr'\"},\"path\":{\"type\":\"string\",\"description\":\"subdirectory to search under, relative to the project root (optional; defaults to the whole project)\"},\"ignore_case\":{\"type\":\"boolean\",\"description\":\"match 'pattern' case-insensitively (ASCII only)\"}}}}}");
     off = _append_cstr_cap(dst, off, cap, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
+# agent_tools_add_delegate: append the model-invokable `delegate` tool (0.43.0, T2-1, ADR-0018) — OPT-IN,
+# advertised only when [subagent].enabled. NEVER called by the CHILD's tool build (src/subagent.cyr), which
+# is what caps depth at 1 by construction rather than by asking the model to behave.
+fn agent_tools_add_delegate(dst, tl) {
+    if (config_subagent_enabled() == 0) { return tl; }
+    if (_sub_depth > 0) { return tl; }        # belt and braces: a child never advertises it either
+    var off = tl;
+    if (off > 0) { off = off - 1; }           # step back over the closing ']'
+    if (off > 0) { store8(dst + off, 44); off = off + 1; }   # ',' between elements
+    else { store8(dst + off, 91); off = off + 1; }           # '[' for an otherwise-empty array
+    off = _append_cstr_cap(dst, off, AGENT_TOOLS_CAP,
+        "{\"type\":\"function\",\"function\":{\"name\":\"delegate\",\"description\":\"Delegate a self-contained sub-task to a scoped child agent that has the same tools but its OWN empty context, and get back only its short written answer. Use this for noisy investigations - locating a symbol, surveying a directory, checking which of several files matches - so the intermediate reads never enter this conversation. The child CANNOT see this conversation, so state everything it needs in the task. It cannot delegate further.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"the self-contained instruction for the child, including any context it needs\"}},\"required\":[\"task\"]}}}");
+    off = _append_cstr_cap(dst, off, AGENT_TOOLS_CAP, "]");
     store8(dst + off, 0);
     return off;
 }
@@ -866,6 +888,11 @@ fn _agent_round_has_local(tcs, nc) {
             if (streq(nm, "shell") == 1) { return 1; }
             if (streq(nm, "edit") == 1) { return 1; }         # 0.31.0 local edit tool -> serial dispatch (same rationale as shell)
             if (streq(nm, "create_file") == 1) { return 1; }  # 0.31.3 local create tool -> serial dispatch
+            # 0.43.0 (T2-1): `delegate` MUST be here. The parallel executor fires no pre_tool hook and no
+            # events, so a multi-call round containing an unregistered delegate would skip the operator's
+            # blocking security hook entirely — an authorization bug, not just a state one. It also runs a
+            # whole child turn, which must never happen concurrently with the parent's other calls.
+            if (streq(nm, "delegate") == 1) { return 1; }
         }
         i = i + 1;
     }
@@ -906,6 +933,13 @@ fn _agent_run_calls(tcs, nc) {
     # serially, and a hallucinated non-local tool is refused honestly in the serial path). Floor: when daimon
     # is wired the check is false and the parallel/serial decision is byte-identical.
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { return _agent_run_calls_serial(tcs, nc); }
+    # 0.43.0 (T2-1): a CHILD round ALWAYS runs serial. Registering `delegate` in _agent_round_has_local
+    # keeps the round that CONTAINS a delegation off the parallel path, but says nothing about the rounds
+    # the child itself runs — and a child round with two daimon tools would otherwise fan out through
+    # _agent_run_calls_par, which fires NO pre_tool hook and NO tool events. That would silently drop the
+    # operator's blocking security hook for exactly the calls they can see least. It also shares the one
+    # bank of _par_* slots with the parent, whose delegate call is live on the stack.
+    if (_sub_depth > 0) { return _agent_run_calls_serial(tcs, nc); }
     if ((config_hoosh_parallel() == 1) && (nc > 1) && (_agent_round_has_local(tcs, nc) == 0) && (_par_alloc() == 1)) { return _agent_run_calls_par(tcs, nc); }
     return _agent_run_calls_serial(tcs, nc);
 }
@@ -1022,6 +1056,20 @@ fn _agent_run_calls_serial(tcs, nc) {
                 res = "(create_file tool is not enabled in this session)";
             }
             ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+        }
+        elif (streq(nm, "delegate") == 1) {
+            # 0.43.0 (T2-1, ADR-0018): a scoped child context. subagent_tool self-gates ([subagent].enabled,
+            # depth, and the t-ron thoth_delegate verb) and returns a result string either way; LOCAL, never
+            # forwarded to daimon. When disabled it was never advertised, so a hallucinated `delegate`
+            # returns an honest not-enabled string rather than reaching the network.
+            res = subagent_tool(gp);
+            # The verdict must reflect what actually happened. The first cut set ALLOWED+ok on the mere
+            # fact that the feature was enabled, so a policy DENIAL, a bad-arguments refusal and a
+            # gateway failure all recorded as a successful tool call — in the round card, the telemetry
+            # and the `ok` field of the tool_result event. subagent_tool reports its own outcome instead.
+            if (subagent_last_allowed() == 1) { rl_kind = RL_ALLOWED; }
+            rl_ok = subagent_last_ok();
+            ui_emit(ROLE_FAINT, "  result: "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(strlen(res)); emit(ui_reset()); ui_emit(ROLE_FAINT, " bytes"); oprintln("");
         }
         elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) {
             # 0.20.0 CRASH GUARD: shell-standalone mode (agentic loop, no daimon). A non-local tool can't be
@@ -1236,6 +1284,7 @@ fn agent_turn(prompt) {
         tl = agent_tools_add_shell(_agent_tools_buf, tl);    # 0.16.0: + shell when [shell].enabled AND POSIX-capable
         tl = agent_tools_add_project(_agent_tools_buf, tl);  # 0.23.0: + read_file/list_dir (default-on, jailed)
         tl = agent_tools_add_edit(_agent_tools_buf, tl);     # 0.31.0: + edit when [edit].enabled (opt-in, jailed+gated)
+        tl = agent_tools_add_delegate(_agent_tools_buf, tl); # 0.43.0 (T2-1): + delegate when [subagent].enabled (opt-in, depth-1)
         _agent_tools_len = tl;
         # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
         # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient

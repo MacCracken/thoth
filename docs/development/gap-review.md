@@ -53,6 +53,10 @@ Kept because a naive gap list would recommend rebuilding these.
   instruction files as trusted text.
 - **Tool-definition pinning.** Trust-on-first-use hashing against the CVE-2025-54136 rug-pull,
   with a changed definition **withheld** rather than warned about. Rare among peers.
+- **Subagent delegation with exactly ONE dispatch path.** Peers ship subagents; thoth's runs the
+  child's tool calls through the *same* gate, hook, jail, checkpoint gate and audit chain as the
+  parent's rather than a parallel implementation — so a delegated action is exactly as authorized
+  and as observable as a direct one, and there is no second authorization path to drift.
 
 ---
 
@@ -106,10 +110,18 @@ a pattern matcher — it is a **mitigation, not a boundary**, and thoth frames i
 
 The strongest control in the field is structural, not lexical: Claude Code runs web-fetch results
 through a **separate context window** so retrieved text cannot issue instructions into the main
-thread. thoth has three untrusted-prose inlets (`@file` mentions, `read_file`/`list_dir` results,
-recalled mneme notes) and all three land in the main context. Note the dependency: a separate
-context is most of the machinery a subagent needs, so this and the roadmap's subagent ADR should be
-thought about together.
+thread. thoth has **four** untrusted-prose inlets now — `@file` mentions,
+`read_file`/`list_dir`/`search` results, recalled mneme notes, and (0.43.0) **MCP resource
+content** — and all four land in the main context.
+
+**The prerequisite has landed, which changes this gap's shape rather than closing it.** 0.43.0's
+subagent ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)) *is* a separate
+context window: a child reads whatever it reads into its own message list and returns one string,
+which reaches the parent through redact → guard like any tool result. The machinery now exists;
+what does not is thoth **routing untrusted reads through it automatically**. That would be a real
+design decision, not a wiring job — it makes every `@file` cost a model round, and a laundered
+summary is arguably a *more* persuasive injection vector than the raw text, since it arrives as
+fluent prose the parent has no reason to distrust. Worth deciding deliberately.
 
 ### 5 · Export the audit trail to a wire protocol (OTLP) — **partial**
 
@@ -203,8 +215,12 @@ private-IP guard would reject. Revisit only if thoth gains a direct fetch; if it
 - **Budget *enforcement*** (`orchestrator/budget.cyr`): check-before-call, `>=` semantics, a typed
   exceeded-reason. thoth has token/cost **accounting** and no enforcement — nothing stops a runaway
   loop from spending. The logic is trivial against thoth's existing counters; the *shape* is what is
-  worth copying. Note this pairs with the now-configurable iteration cap: a round limit bounds turns,
-  not spend.
+  worth copying.
+
+  ⚠ **This got more urgent at 0.43.0, and the release says so out loud.** Delegation multiplies a turn's
+  cost, and the only bounds available today are structural — depth 1, a separate per-child round budget,
+  and off-by-default. `[subagent].enabled` is off *because* of this gap, and ADR-0018 records that the
+  default should be revisited if real budget enforcement ever lands. A round limit bounds turns, not spend.
 - **Asynchronous approvals** (`orchestrator/approval.cyr`): a pending-decision queue that outlives
   the prompt, so an unattended run can *park* a risky edit instead of denying it. thoth's `confirm()`
   is otherwise strictly better (fail-closed, explicit y/yes only), and session-scoped grants already

@@ -2,6 +2,166 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.0] - 2026-08-24
+
+**The two deferred Tier-2 items, and the one that needed an ADR before a line of code.** Suite
+**264 + 1887 + 183 + 3** (+63), all targets green. Ships alongside **daimon 2.1.0**, which this release
+requires for the second feature.
+
+### Added — subagent delegation (T2-1), behind [ADR-0018](docs/adr/0018-subagent-delegation-scoped-child-context.md)
+
+- **`[subagent]`** (`src/subagent.cyr`, **off by default**) — a `delegate(task)` tool that runs a **scoped
+  child context**: the parent's model and the parent's tools, over a fresh empty message list, for a
+  bounded number of rounds, returning one string. Locating a symbol in a tree the model does not know is
+  the most expensive thing a coding agent does, and until now every file it read on the way stayed in the
+  conversation forever. A delegated search spends its rounds and returns one path.
+
+  **The spine question is settled in writing, because it is the reason this waited.** Orchestration is
+  daimon's declared domain and agnosai owns crews and task DAGs, so "multiple agents" reads as
+  not-thoth's. The line drawn in ADR-0018 is **identity**:
+
+  > If it needs an identity, a persona, a registry entry, or a peer, it is orchestration and belongs to
+  > the spine. If it is one conversation's context, windowed, it is thoth's.
+
+  A thoth subagent has none of those four and no lifetime beyond its tool call. It is `[hoosh].summarize`'s
+  sibling — that condenses what the window can no longer hold behind you; this bounds what an investigation
+  will cost ahead of you. The ADR is written as a **fence, not a permission slip**: named specialist
+  agents, crews, DAGs, inter-agent messaging and depth > 1 are listed as things thoth must not grow.
+
+  ⚠ **The isolation is a pointer swap, and the alternative was the dangerous one.** `agent.cyr` keeps a
+  turn's state in module-level buffers; an audit counted ~60 process-globals across 21 files a naive
+  re-entry would corrupt. The tempting fix — give the child its own dispatch function — was **rejected**:
+  the per-tool dispatch is where the t-ron gate, the blocking `pre_tool` hook, the project jail, the
+  checkpoint write-gate, redaction and the injection guard all live, and two copies of that would be two
+  authorization paths with the second one drifting. Instead the child reuses `_agent_run_calls` **verbatim**
+  — there is exactly **one** dispatch path in thoth — and `_sub_enter`/`_sub_exit` swap the buffers those
+  functions write through. Every one is a plain pointer/length pair behind a small funnel, so the swap is
+  O(1) and provable by enumeration. A test poisons every swapped global, runs the swap, mutates the child's
+  side and asserts the parent's is bit-for-bit intact; it exists so the next buffer someone adds cannot
+  silently break the claim.
+
+  ⚠ **`delegate` is registered in `_agent_round_has_local`, and that one line is a SECURITY requirement.**
+  The parallel executor fires no `pre_tool` hook and no events. A multi-call round containing an
+  unregistered `delegate` would route there and skip the operator's blocking security hook entirely —
+  turning a state bug into an authorization bug.
+
+  ⚠ **Depth is capped at 1, enforced twice.** The child's advertisement omits `delegate` entirely, so it
+  is never offered the tool; a runtime check refuses a hallucinated call as well. Unbounded recursion is
+  unbounded spend, and thoth has no budget enforcement — depth 1 makes the worst case arithmetic instead
+  of exponential.
+
+  ⚠ **Off by default for SPEND, not for authority.** A child grants the model nothing new: same tools,
+  same policy, same gate, same jail, same audit chain. What it multiplies is token cost. `[verify]` is
+  suppressed inside a child (otherwise every child write triggers a full project build, N×M times).
+
+  Honest limitations, all stated rather than discovered later: the child **cannot see the conversation**
+  (that is the feature *and* the limitation); it authorizes as the **same t-ron agent id**, so a policy can
+  say "no subagents" but not "subagents, but no `shell`", and it shares the parent's rate-limit bucket and
+  risk score; and because it runs inside the parent's turn, `/rewind` undoes parent and child together —
+  with the residual that a chatty child can age entries out of the 64-entry checkpoint ring through the
+  perfectly-authorized `create_file` path.
+
+### Added — consume MCP resources and prompts (T2-7)
+
+- **`/resources`**, **`/resource <uri>`**, **`/prompts`** (`src/mcpres.cyr`), and **server-published prompts
+  as slash commands**: a server that publishes `bote_greeting(name)` gives you `/bote_greeting Robert`.
+
+  The protocol work was already vendored and paid for — `bote-core.cyr` carries full resources and prompts
+  registries and bote has served all four methods for some time — but **daimon had no route for either**,
+  so nothing was reachable through the spine no matter what a server published. That hop is daimon 2.1.0;
+  thoth consumes it.
+
+  ⚠ **Resource content is third-party text and is treated as such.** `/resource` puts it in the
+  conversation through `redact_tool_result` then `guard_wrap_untrusted` — the same chokepoint a tool
+  result goes through — and deliberately **not** into the system prompt, which would bypass both.
+
+  ⚠ **A server cannot shadow a built-in or your `[alias]`.** Prompt names resolve only in the
+  unknown-command gap, *after* built-ins (which never reach it) and *after* the operator's alias table.
+  Verified live by publishing a prompt named `help` and confirming `/help` still ran the built-in.
+
+  Degradation distinguishes three cases rather than conflating them: daimon not configured, daimon present
+  but without the route (older than 2.1.0), and daimon present with an empty registry. "No resources" and
+  "this hop does not exist" are different facts.
+
+### Changed
+
+- `/state` gains a `delegate` row when enabled (depth, per-child budget, count, and the spend caveat said
+  out loud) and annotates the daimon row with resource/prompt counts once probed — omit-until-present.
+- `/reload` drops the cached resources/prompts endpoints; `/reset` clears the delegation counters.
+- **`tests/thoth_core.tcyr` no longer includes the GUI modules.** It ran no GUI tests — those live in
+  `tests/thoth_gui.tcyr` — and carrying `kashi` plus six `src/gui/*` files cost it 131 KB of preprocessed
+  source. That mattered: adding 0.43.0 pushed the unit **past cyrius's hard 8 MB `preprocess_out` ceiling**
+  (8,393,978 bytes, over by 5,370), which is exactly the failure the issue filed at 0.42.0 predicted for
+  "the next feature that needs a spine capability". Dropping the unused block bought 24× the headroom
+  needed. The ceiling itself is unchanged and still filed upstream.
+
+### Fixed — an adversarial review of this release, before it shipped
+
+A four-dimension review (re-entrancy, security, memory safety, correctness) filed 26 findings; each was
+handed to an independent skeptic told to refute it, and **17 survived**. All 17 are fixed here. The two
+that mattered most are worth stating plainly, because both were mine and both were reachable:
+
+- **A malicious MCP server could make thoth read any local file and ship it to the gateway.**
+  `cmd_prompt_slash` handed the server-rendered prompt text to `cmd_task` — whose second act is
+  `mention_expand`, an **unjailed** reader whose own header says it is safe *because the path was typed
+  by the user in their own message*. A server-rendered prompt breaks that premise entirely: a prompt
+  named `deploy` rendering `Check @.thoth/config.cyml before proceeding` would read the file holding
+  `[hoosh].token` and POST it, showing the operator only "(+1 file(s) attached as context)" and never
+  the path. Server prompt text now takes the same route `/resource` takes — redact, untrusted-data
+  envelope, and `_task_dispatch` **without** re-expansion. Verified live: `/bote_greeting @VERSION` now
+  passes `@VERSION` through literally instead of attaching the file.
+
+- **`/resources`, `/prompts` and `/resource` segfaulted when `[daimon].url` was unset.**
+  `_daimon_url_join`'s first act is `strlen(base)`, and `config_daimon_url()` answers 0 for an absent
+  key. The three commands had no configured-check, so each took the process down — and
+  `_mcpres_unavailable`'s own "no daimon seam wired" branch was unreachable dead code behind the crash.
+  Fixed at the source: all four endpoint builders return 0 for a null base and every caller handles it,
+  which makes the null case unrepresentable downstream rather than relying on three separate guards.
+
+The other 15, grouped:
+
+- **The subagent swap set was incomplete, and the symptom was a lie rather than a crash.**
+  `_roundlog_cur` was not swapped, so a child's tool calls flat-appended into the **parent's** open
+  round; past `RL_MAX_CALLS` (8) the parent's own calls were then silently dropped by the cap check. The
+  round card, the telemetry and the persisted turn showed eight tools the parent never called and
+  omitted the ones it did. `editlog_record` keys on `(turn, roundlog_cur_round(), ci)` with the *child's*
+  `ci`, so a child's diff card rendered under an unrelated parent tool call in the GUI. `_sub_enter` now
+  **closes** the parent's round for the duration, which fixes both. **The lesson, and the new test:** the
+  swap-set question is not "is it a buffer" but "does a tool round WRITE it" — the original test checked
+  byte buffers only and passed while both defects sat beside it. Reverting the fix now fails three
+  assertions.
+- **A child round with two daimon tools could still take the parallel path**, which fires no `pre_tool`
+  hook and no tool events. Registering `delegate` in `_agent_round_has_local` covered the round that
+  *contains* a delegation, not the rounds the child itself runs. A child now always runs serial.
+- **A denied or failed `delegate` recorded as allowed and ok** — the verdict keyed off "is the feature
+  enabled" rather than what happened. `subagent_last_allowed()` / `subagent_last_ok()` now report the
+  real outcome to the round card, the telemetry and the `ok` field of the `tool_result` event.
+- **Esc did not cancel a running child** — the parent only polls between its own calls, so a cancel was
+  swallowed for up to a full child budget of further model round-trips.
+- **`_sub_rounds_last` was stale on the failure returns**, so `subagent_end` reported the *previous*
+  delegation's round count as though it were a measurement. It is set on every exit now.
+- **An empty completion was reported to the parent as budget exhaustion** — two different facts.
+- **The child never received the project-memory preamble** ADR-0018 says it gets.
+- **A failed registry fetch left the child silently tool-less**, looking like a model that chose not to
+  use daimon rather than a child that was never offered anything. It now says so.
+- **Every mistyped slash issued a blocking GET** to daimon before printing "unknown command", and an
+  unreachable host made a *real* prompt name print "unknown command". The lookup is gated on the cached
+  probe, and a live registry failure now says so instead of blaming the user's spelling.
+- **`/reprobe` did not clear the resources/prompts latch**, though `_mcpres_unavailable` names it as the
+  remedy. That advice was inert; now it works.
+
+### Notes
+
+- Live-verified against a running spine, not just unit-tested: the daimon endpoints end to end against
+  bote (`resources/read` returning a body, `prompts/get` returning a rendered message), the three new
+  commands, the dynamic prompt slash command, the built-in shadowing defense, and a real delegation whose
+  event stream shows `subagent_start` → the child's `search` stamped `"depth":1` → `subagent_end` → the
+  child's answer folded back as the parent's tool result.
+- ⚠ **A denied delegation is what a correct fail-closed gate looks like.** The first live run refused the
+  delegation: one-shot is non-interactive and no `[tron].policy` was set, so `confirm` degraded to a deny.
+  The parent then did the work itself. Nothing was broken — this is the posture working, and it is worth
+  knowing before reading it as a bug.
+
 ## [0.42.0] - 2026-08-24
 
 **Three Tier-3 items, all live-verified against a running spine.** Two of them are security controls thoth

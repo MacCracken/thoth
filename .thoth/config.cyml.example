@@ -79,6 +79,32 @@ model = "claude-haiku-4-5-20251001"
 # [guard]
 # enabled = false
 
+# [subagent] — let the model DELEGATE a sub-task to a scoped child agent (0.43.0).
+# DEFAULT OFF. See docs/adr/0018-subagent-delegation-scoped-child-context.md.
+#
+# `delegate(task)` runs a child with the SAME tools and the SAME policy, but its
+# OWN empty context, for a bounded number of rounds, returning one short answer.
+# The point is cost: locating a symbol in a tree the model does not know is the
+# most expensive thing a coding agent does, and today every file it reads on the
+# way stays in your conversation forever. A delegated search spends its rounds
+# and returns one path.
+#
+# ⚠ OFF BY DEFAULT FOR SPEND, NOT FOR AUTHORITY. A child grants the model nothing
+# new — it can only call tools it was already offered, through the same t-ron
+# gate, the same jail, the same hooks and the same audit chain. What it does is
+# MULTIPLY token cost, and thoth has no budget enforcement yet.
+#
+# ⚠ The child CANNOT see your conversation. That is the feature (your window pays
+# nothing for what it reads) and the limitation (a task needing context must say
+# so in its own words). It also cannot delegate further — depth is capped at 1.
+#
+# ⚠ Gated by the reserved verb `thoth_delegate`, so a [tron].policy can refuse
+# delegation outright. It CANNOT express "subagents, but no shell": the child
+# authorizes as the same agent id, and shares its rate-limit bucket and risk score.
+# [subagent]
+# enabled = true
+# max_iters = 8       # rounds ONE child may spend (default 8)
+
 # [toolpin] — pin every MCP tool DEFINITION on first sight (0.42.0). DEFAULT ON.
 # Defends CVE-2025-54136: approving a tool does not survive later server-side
 # changes. A server can advertise a benign description, be approved, then swap it
