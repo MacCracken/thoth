@@ -774,6 +774,155 @@ fn _shell_globs_load(shell, sections) {
 # config_load: parse thoth.cyml if present and populate the hoosh fields.
 # Returns 1 if a [hoosh] url was found (seam can bind remote), else 0 (absent
 # file, no [hoosh] table, or no url -> seam stays absent). Call once at startup.
+# --- UNKNOWN-KEY DETECTION (0.43.5) -------------------------------------------
+#
+# ⚠ THE PARSER DROPS WHAT IT DOES NOT RECOGNISE, AND THAT SILENCE HAS COST REAL TIME TWICE IN TWO DAYS:
+# a `tier = "simple"` under [ui] did nothing before 0.43.2 made the key live, and `max-iter = 200`
+# (correct name: `max_iters`) left the agentic loop capped at 8 while the operator believed it was 200 —
+# presenting as "the agent gives up after 8 rounds" with nothing anywhere to suggest the config was at
+# fault. A typo in a config file must never be indistinguishable from not having written the line.
+#
+# So every key in a known table is checked against that table's inventory, and every unknown one is
+# COLLECTED and ANNOUNCED. This is a spell-checker, not a validator: it never refuses to load, never
+# changes a value, and an unknown key still behaves exactly as before. It only breaks the silence.
+var CFG_UNKNOWN_MAX = 16;
+var _cfg_unknown = 0;        # CFG_UNKNOWN_MAX cstr ptrs ("<section>.<key>")
+var _cfg_unknown_n = 0;
+fn config_unknown_count() { return _cfg_unknown_n; }
+fn config_unknown_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _cfg_unknown_n) { return 0; }
+    return load64(_cfg_unknown + i * 8);
+}
+
+# _cfg_known_key: 1 if `key` is a recognised key of table `sec`. Tables whose keys are user-chosen
+# ([alias], the legacy [shell.deny]/[shell.allow] label sections) answer 1 for anything.
+fn _cfg_known_key(sec, key) {
+    if (streq(sec, "alias") == 1) { return 1; }
+    if (streq(sec, "shell.deny") == 1) { return 1; }
+    if (streq(sec, "shell.allow") == 1) { return 1; }
+    if (cstr_starts_with(sec, "pricing.") == 1) {
+        if (streq(key, "input") == 1) { return 1; }
+        if (streq(key, "output") == 1) { return 1; }
+        return 0;
+    }
+    if (streq(sec, "hoosh") == 1) {
+        if (streq(key, "url") == 1) { return 1; }
+        if (streq(key, "token") == 1) { return 1; }
+        if (streq(key, "model") == 1) { return 1; }
+        if (streq(key, "stream") == 1) { return 1; }
+        if (streq(key, "history") == 1) { return 1; }
+        if (streq(key, "tools") == 1) { return 1; }
+        if (streq(key, "max_iters") == 1) { return 1; }
+        if (streq(key, "compact_at") == 1) { return 1; }
+        if (streq(key, "parallel") == 1) { return 1; }
+        if (streq(key, "reasoning") == 1) { return 1; }
+        if (streq(key, "summarize") == 1) { return 1; }
+        return 0;
+    }
+    if (streq(sec, "daimon") == 1) { return streq(key, "url"); }
+    if (streq(sec, "tron") == 1) {
+        if (streq(key, "policy") == 1) { return 1; }
+        return streq(key, "agent");
+    }
+    if (streq(sec, "log") == 1) {
+        if (streq(key, "file") == 1) { return 1; }
+        return streq(key, "level");
+    }
+    if (streq(sec, "history") == 1) { return streq(key, "file"); }
+    if (streq(sec, "session") == 1) { return streq(key, "file"); }
+    if (streq(sec, "ui") == 1) {
+        if (streq(key, "bell") == 1) { return 1; }
+        if (streq(key, "elapsed") == 1) { return 1; }
+        return streq(key, "tier");
+    }
+    if (streq(sec, "memory") == 1) { return streq(key, "enabled"); }
+    if (streq(sec, "persona") == 1) { return streq(key, "name"); }
+    if (streq(sec, "project") == 1) {
+        if (streq(key, "vidya") == 1) { return 1; }
+        return streq(key, "read_roots");
+    }
+    if (streq(sec, "hooks") == 1) {
+        if (streq(key, "session_start") == 1) { return 1; }
+        if (streq(key, "pre_tool") == 1) { return 1; }
+        if (streq(key, "post_tool") == 1) { return 1; }
+        if (streq(key, "session_end") == 1) { return 1; }
+        return streq(key, "timeout_ms");
+    }
+    if (streq(sec, "toolpin") == 1) { return streq(key, "enabled"); }
+    if (streq(sec, "subagent") == 1) {
+        if (streq(key, "enabled") == 1) { return 1; }
+        return streq(key, "max_iters");
+    }
+    if (streq(sec, "guard") == 1) { return streq(key, "enabled"); }
+    if (streq(sec, "verify") == 1) {
+        if (streq(key, "command") == 1) { return 1; }
+        return streq(key, "timeout_ms");
+    }
+    if (streq(sec, "redact") == 1) { return streq(key, "enabled"); }
+    if (streq(sec, "shell") == 1) {
+        if (streq(key, "enabled") == 1) { return 1; }
+        if (streq(key, "timeout_ms") == 1) { return 1; }
+        if (streq(key, "max_output") == 1) { return 1; }
+        if (streq(key, "deny") == 1) { return 1; }
+        return streq(key, "allow");
+    }
+    if (streq(sec, "edit") == 1) { return streq(key, "enabled"); }
+    return 0 - 1;                      # the SECTION itself is unrecognised
+}
+
+# _cfg_note_unknown: record "<what>" (already a stable cstr) once, up to the cap.
+fn _cfg_note_unknown(what) {
+    if (_cfg_unknown == 0) { _cfg_unknown = alloc(CFG_UNKNOWN_MAX * 8); }
+    if (_cfg_unknown == 0) { return 0; }
+    var i = 0;
+    while (i < _cfg_unknown_n) {
+        if (streq(load64(_cfg_unknown + i * 8), what) == 1) { return 0; }   # already noted (both layers)
+        i = i + 1;
+    }
+    if (_cfg_unknown_n >= CFG_UNKNOWN_MAX) { return 0; }
+    store64(_cfg_unknown + _cfg_unknown_n * 8, what);
+    _cfg_unknown_n = _cfg_unknown_n + 1;
+    return 0;
+}
+
+# _cfg_scan_unknown: walk every section/key of ONE parsed layer and note what is not recognised.
+fn _cfg_scan_unknown(sections) {
+    if (sections == 0) { return 0; }
+    var n = vec_len(sections);
+    var i = 0;
+    while (i < n) {
+        var sec = vec_get(sections, i);
+        var nm = str_cstr(bayan_toml_section_name(sec));
+        var pairs = bayan_toml_section_pairs(sec);
+        var pn = vec_len(pairs);
+        if (_cfg_known_key(nm, "") == (0 - 1)) {
+            _cfg_note_unknown(_cfg_join_dot(nm, "*"));       # whole table unrecognised
+        } else {
+            var j = 0;
+            while (j < pn) {
+                var k = str_cstr(bayan_toml_pair_key(vec_get(pairs, j)));
+                if (_cfg_known_key(nm, k) == 0) { _cfg_note_unknown(_cfg_join_dot(nm, k)); }
+                j = j + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _cfg_join_dot: fresh "a.b" cstr (the bump heap keeps it stable for the session).
+fn _cfg_join_dot(a, b) {
+    var la = strlen(a);
+    var lb = strlen(b);
+    var out = alloc(la + lb + 2);
+    memcpy(out, a, la);
+    store8(out + la, 46);
+    memcpy(out + la + 1, b, lb);
+    store8(out + la + 1 + lb, 0);
+    return out;
+}
+
 # _cfg_parse_sections: parse one config file into a TOML sections vec, or 0 when absent/unreadable.
 # Sets `_cfg_parse_any` when a file actually parsed, so config_parse_ok() still answers "a config was
 # read" for EITHER layer.
@@ -813,6 +962,9 @@ fn config_load() {
     var gl = _cfg_parse_sections(_cfg_global_path());   # the base layer
     var lo = _cfg_parse_sections(_cfg_local_path());    # layered on top, per key
     if (_cfg_parse_any == 0) { return 0; }        # neither layer readable -> not configured
+    _cfg_unknown_n = 0;                           # 0.43.5: re-scanned on every load (so /reload re-reports)
+    _cfg_scan_unknown(gl);
+    _cfg_scan_unknown(lo);
     _price_load2(lo, gl);
     _alias_load2(lo, gl);
     var hoosh_l = _cfg_section_pairs(lo, "hoosh");   var hoosh_g = _cfg_section_pairs(gl, "hoosh");

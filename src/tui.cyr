@@ -2074,6 +2074,13 @@ fn tui_loop() {
             feed_flush_pending();
         }
     }
+    # 0.43.5: a mistyped config key is otherwise indistinguishable from not having written the line.
+    if (config_unknown_count() > 0) {
+        ui_emit(ROLE_RED, "config: "); ofmt_int(config_unknown_count());
+        ui_emit(ROLE_RED, " unrecognised key(s)");
+        ui_emit(ROLE_FAINT, " — ignored. /state names them.");
+        feed_flush_pending();
+    }
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
     # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`

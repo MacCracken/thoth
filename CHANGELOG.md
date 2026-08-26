@@ -2,6 +2,40 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.5] - 2026-08-26
+
+**A mistyped config key is no longer indistinguishable from not writing the line.** Suite
+**264 + 2010 + 183 + 3** (+8), all targets green.
+
+### Added — unrecognised config keys are named, not swallowed
+
+The CYML/TOML parser drops what it does not recognise, and that silence has now cost real time twice in
+two days:
+
+- a `tier = "simple"` under `[ui]` did nothing at all until 0.43.2 made the key live, and
+- `max-iter = 200` (the real name is **`max_iters`**) left the agentic loop capped at the default 8
+  while the operator believed it was 200 — presenting as *"the agent gives up after 8 rounds"* with
+  nothing anywhere pointing at the config.
+
+Both layers are now scanned at load and every unknown key is collected and **announced**:
+
+```
+thoth: ignoring unrecognised config key(s): hoosh.max-iter, hoosh.bogus, nosuchtable.*
+```
+
+It reports in all four places a user might be looking: **stderr** at startup (so a one-shot/CI caller,
+who never sees the greeting or `/state`, still finds out), the **greeting**, **`/state`** (which names
+each one), and **`/reload`**.
+
+This is a spell-checker, not a validator. It never refuses to load, never changes a value, and an
+unknown key behaves exactly as it did before — it only breaks the silence. Tables whose keys the user
+chooses (`[alias]`, the legacy `[shell.deny]`/`[shell.allow]` label sections) are never flagged; an
+unknown *table* is reported once as `name.*` rather than once per key inside it; a typo inside a
+dynamic table still reports its full dotted path (`pricing.m.ouput`).
+
+A test asserts that **every documented key of every documented table passes the checker clean**, which
+is the guard against the checker drifting behind the config surface it describes.
+
 ## [0.43.4] - 2026-08-26
 
 **Streamed tool calls with no `index` were collapsed into one call with concatenated arguments.** Suite

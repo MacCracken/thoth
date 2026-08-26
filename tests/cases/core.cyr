@@ -2456,5 +2456,53 @@ fn test_config_layering() {
     _price_load2(lp, gp);
     assert_eq(config_price_input("m1"), 1, "a local [pricing.<model>] overrides the global rate");
     assert_eq(config_price_input("m2"), 30, "...while a global-only model keeps its rate");
+
+    # --- UNKNOWN KEYS ARE NAMED, NOT SWALLOWED (0.43.5) ---
+    # ⚠ The parser drops what it does not recognise, and that silence cost real time twice: a
+    # `tier = "simple"` that did nothing before 0.43.2 made the key live, and `max-iter = 200`
+    # (real name: `max_iters`) which left the agentic loop capped at 8 while the operator believed
+    # it was 200 — presenting as "the agent gives up after 8 rounds" with nothing pointing at the
+    # config. A typo must never look identical to not having written the line.
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[hoosh]\nurl = \"u\"\nmax-iter = 200\nmax_iters = 9\n"));
+    assert_eq(config_unknown_count(), 1, "the typo is reported and the good keys are not");
+    assert(streq(config_unknown_at(0), "hoosh.max-iter") == 1, "...named as <section>.<key>");
+    # an unrecognised TABLE is reported once, not once per key inside it
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[nosuch]\na = 1\nb = 2\n"));
+    assert_eq(config_unknown_count(), 1, "an unknown TABLE is reported once, not per key");
+    assert(streq(config_unknown_at(0), "nosuch.*") == 1, "...named with a * to show the table is unknown");
+    # tables whose keys the USER chooses must never be flagged
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[alias]\nwhatever = \"x\"\n[shell.deny]\nlabel = \"rm *\"\n[pricing.m]\ninput = 1\noutput = 2\n"));
+    assert_eq(config_unknown_count(), 0, "user-chosen keys ([alias], [shell.*] labels, pricing rates) are never flagged");
+    # ...but a wrong key inside a dynamic table still is
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[pricing.m]\ninput = 1\nouput = 2\n"));
+    assert_eq(config_unknown_count(), 1, "a typo'd pricing rate IS flagged");
+    assert(streq(config_unknown_at(0), "pricing.m.ouput") == 1, "...with the full dotted path");
+    # every real key of every real table must pass clean — this is the guard against the checker
+    # itself drifting behind the config surface it describes
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[hoosh]\nurl=\"u\"\ntoken=\"t\"\nmodel=\"m\"\nstream=true\nhistory=true\ntools=true\nmax_iters=1\ncompact_at=1\nparallel=true\nreasoning=\"low\"\nsummarize=true\n"));
+    _cfg_scan_unknown(_lay_parse("[daimon]\nurl=\"u\"\n"));
+    _cfg_scan_unknown(_lay_parse("[tron]\npolicy=\"p\"\nagent=\"a\"\n"));
+    _cfg_scan_unknown(_lay_parse("[log]\nfile=\"f\"\nlevel=\"info\"\n"));
+    _cfg_scan_unknown(_lay_parse("[history]\nfile=\"f\"\n"));
+    _cfg_scan_unknown(_lay_parse("[session]\nfile=\"f\"\n"));
+    _cfg_scan_unknown(_lay_parse("[ui]\nbell=true\nelapsed=true\ntier=\"rich\"\n"));
+    _cfg_scan_unknown(_lay_parse("[memory]\nenabled=true\n"));
+    _cfg_scan_unknown(_lay_parse("[persona]\nname=\"n\"\n"));
+    _cfg_scan_unknown(_lay_parse("[project]\nvidya=\"v\"\nread_roots=[\"/a\"]\n"));
+    _cfg_scan_unknown(_lay_parse("[hooks]\nsession_start=\"s\"\npre_tool=\"p\"\npost_tool=\"q\"\nsession_end=\"e\"\ntimeout_ms=1\n"));
+    _cfg_scan_unknown(_lay_parse("[toolpin]\nenabled=true\n"));
+    _cfg_scan_unknown(_lay_parse("[subagent]\nenabled=true\nmax_iters=1\n"));
+    _cfg_scan_unknown(_lay_parse("[guard]\nenabled=true\n"));
+    _cfg_scan_unknown(_lay_parse("[verify]\ncommand=\"c\"\ntimeout_ms=1\n"));
+    _cfg_scan_unknown(_lay_parse("[redact]\nenabled=true\n"));
+    _cfg_scan_unknown(_lay_parse("[shell]\nenabled=true\ntimeout_ms=1\nmax_output=1\ndeny=[\"a\"]\nallow=[\"b\"]\n"));
+    _cfg_scan_unknown(_lay_parse("[edit]\nenabled=true\n"));
+    assert_eq(config_unknown_count(), 0, "EVERY documented key of EVERY table passes the checker clean");
+    _cfg_unknown_n = 0;
     return 0;
 }

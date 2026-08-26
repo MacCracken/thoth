@@ -354,6 +354,17 @@ fn cmd_state() {
         } else { ui_emit(ROLE_FAINT, "no local .thoth/config.cyml — the global applies as-is"); }
         oprintln("");
     }
+    if (config_unknown_count() > 0) {
+        ui_label("          : ");
+        ui_emit(ROLE_RED, "unrecognised key(s), IGNORED: ");
+        var _uk = 0;
+        while (_uk < config_unknown_count()) {
+            if (_uk > 0) { ui_emit(ROLE_FAINT, ", "); }
+            ui_emit(ROLE_ACCENT, config_unknown_at(_uk));
+            _uk = _uk + 1;
+        }
+        oprintln("");
+    }
     ui_label("  turns   : "); ofmt_int(status_ival(SF_TURNS)); oprintln("");
     ui_label("  persona : "); ui_emit(ROLE_ACCENT, status_sval(SF_PERSONA));
     ui_emit(ROLE_FAINT, " ("); emit(ui_sgr(ROLE_FAINT)); emit(persona_role()); emit(ui_reset());
@@ -1895,6 +1906,17 @@ fn cmd_reload() {
     ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent]"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
+    if (config_unknown_count() > 0) {
+        ui_emit(ROLE_RED, "  note: "); ofmt_int(config_unknown_count());
+        ui_emit(ROLE_RED, " unrecognised key(s), ignored: ");
+        var _rk = 0;
+        while (_rk < config_unknown_count()) {
+            if (_rk > 0) { ui_emit(ROLE_FAINT, ", "); }
+            ui_emit(ROLE_ACCENT, config_unknown_at(_rk));
+            _rk = _rk + 1;
+        }
+        oprintln("");
+    }
     if (config_hoosh_url() == 0) { ui_emit(ROLE_RED, "  note: [hoosh].url is not set — model turns are unavailable"); oprintln(""); }
     return 0;
 }

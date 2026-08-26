@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.43.5** — **unrecognised config keys are named, not swallowed** (2026-08-26). The parser drops what it
+does not recognise, and that silence cost real time TWICE in two days: `[ui].tier` did nothing until
+0.43.2 made it live, and `max-iter = 200` (real name `max_iters`) left the agentic loop at the default 8
+while the operator believed it was 200 — presenting as "the agent gives up after 8 rounds" with nothing
+pointing at the config. Both layers are scanned at load; unknown keys are announced on **stderr** (so a
+one-shot/CI caller who never sees the greeting or /state still learns), in the **greeting**, in
+**/state** (named individually) and by **/reload**. A spell-checker, not a validator — never refuses to
+load, never changes a value. User-chosen tables ([alias], [shell.*] labels) are never flagged; an unknown
+TABLE reports once as `name.*`. ⭐ A test asserts EVERY documented key of EVERY table passes clean — the
+guard against the checker drifting behind the config surface. Suite **264 + 2010 + 183 + 3**.
+
 **0.43.4** — **streamed tool calls with no `index` collapsed into one** (2026-08-26). `_agent_accum_delta`
 defaulted a missing `index` to 0 (the OpenAI convention always stamps one and streams `arguments` in
 fragments), but hoosh's local Ollama path emits every call WHOLE, several per delta, with NO index — so

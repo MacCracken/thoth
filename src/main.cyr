@@ -154,6 +154,18 @@ fn main() {
             else { emit_err("thoth: unknown [ui].tier (use auto|rich|simple); using auto\n"); }
         } }
     }
+    # 0.43.5: unrecognised config keys go to STDERR too, so a one-shot/CI caller (whose stdout must stay
+    # clean, and who never sees the greeting or /state) still learns their config line did nothing.
+    if (config_unknown_count() > 0) {
+        emit_err("thoth: ignoring unrecognised config key(s): ");
+        var uk = 0;
+        while (uk < config_unknown_count()) {
+            if (uk > 0) { emit_err(", "); }
+            emit_err(config_unknown_at(uk));
+            uk = uk + 1;
+        }
+        emit_err("\n");
+    }
     ui_detect_tier();       # resolve the presentation tier (T0..T3) once; degrades closed to plain
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm

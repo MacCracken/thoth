@@ -11,6 +11,13 @@
 #
 # `/state` shows both paths and which one is which.
 #
+# ⚠ KEY NAMES ARE CHECKED (0.43.5). An unrecognised key is IGNORED — it always was — but thoth now says
+# so, on stderr at startup, in the greeting, in `/state` and on `/reload`:
+#     thoth: ignoring unrecognised config key(s): hoosh.max-iter
+# because a typo used to be indistinguishable from not writing the line at all. (`max-iter` is not a
+# key; `max_iters` is. That one cost an afternoon.) Keys you choose yourself — [alias] names, the
+# [shell.deny]/[shell.allow] labels — are never flagged.
+#
 # ⚠ THE LISTS THAT CONTROL WHAT THE MODEL MAY DO DO NOT SIMPLY MERGE — the rule is STRICTEST WINS:
 #     [shell].deny            UNIONS across both layers. A project may ADD denies and can never drop
 #                             the ones you set globally.
