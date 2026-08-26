@@ -760,6 +760,12 @@ fn _agent_run_calls_par(tcs, nc) {
     _daimon_call_endpoint();         # pre-warm the cached URL on the main thread
     var base = 0;
     while (base < nc) {
+        # 0.43.2: honour Esc BETWEEN batches, mirroring the serial executor's per-call poll. `nc` is the
+        # model's actual tool_calls length and is not capped at PAR_MAX, so a round of 20 daimon tools
+        # runs three full batches; without this the user's cancel was not read until the whole round
+        # finished, and `[hoosh].parallel` is ON by default, so that was the common path. Batch-granular
+        # rather than per-call: the calls inside a batch are already in flight on their own threads.
+        if (intr_check() == 1) { return 0; }
         var batch = nc - base;
         if (batch > PAR_MAX) { batch = PAR_MAX; }
         # Phase 1 — snapshot {id,name,args} into stable slots + serial t-ron gate.

@@ -810,6 +810,30 @@ fn test_project() {
     assert(_ui_contains(ev_fail_text(502, 1), "no model backend wired") == 1, "...even with an http code present");
     assert(_ui_contains(ev_fail_text(0 - 1, 0), "unreachable") == 1, "a negative rc is a transport failure");
     assert(_ui_contains(ev_fail_text(502, 0), "HTTP") == 1, "a positive rc is an HTTP failure");
+
+    # ⚠ 0.43.2 — NDJSON FRAMING IS UNCONDITIONAL. `_append_cstr_cap` writes nothing once `off` reaches
+    # `cap - 1`, so `_ev_end` used to emit a line with NO `}` and — the part that matters — NO `\n`,
+    # concatenating the next event onto the same line. A consumer parsing line-by-line then gets one
+    # malformed record and SILENTLY LOSES the following one. The terminator is now forced.
+    #
+    # ⚠ HONEST ABOUT REACH: this is not currently reachable through the public emitters. The value
+    # escaper stops SIX bytes short of the cap (`if ((off + 6) >= cap)`, src/hoosh.cyr:207), which
+    # happens to leave room for the closing quote and `}\n` — so today the invariant holds by a margin
+    # kept in a DIFFERENT module, for its own unrelated reason (a `\u00XX` escape is 6 bytes). That is a
+    # coincidence, not a contract, and it is exactly the kind of thing that breaks silently when the
+    # other module changes. The fix makes the invariant hold on its own; this drives `_ev_end` at the
+    # saturating precondition directly rather than pretending to reproduce a live bug it cannot reach.
+    var tinycap = 64;
+    var tiny = alloc(tinycap + 8);
+    var pi = 0;
+    while (pi < (tinycap + 8)) { store8(tiny + pi, 0x2E); pi = pi + 1; }   # poison, so a miss is visible
+    _ev_begin_in(tiny, tinycap, "tool_call", 1);
+    _ev_end(tinycap - 1);                                 # off already at cap-1: nothing more can append
+    # Assert at the clamped positions, not via strlen — forcing `off` leaves the middle of the buffer
+    # untouched, so strlen would stop at the poison, not at the terminator.
+    assert_eq(load8(tiny + tinycap - 3), 125, "a saturated line still closes its object with '}'");
+    assert_eq(load8(tiny + tinycap - 2), 10, "...and still ENDS IN A NEWLINE, so framing holds");
+    assert_eq(load8(tiny + tinycap - 1), 0, "...NUL-terminated inside the buffer");
     assert(_ui_contains(ev_fail_text(0, 0), "no completion") == 1, "rc 0 with no reply is an empty completion");
 
     # ⚠ 0.43.1: the blocking pre_tool hook is now enforced on BOTH executors. It lived only in the
@@ -845,6 +869,15 @@ fn test_project() {
     _agent_run_calls(pv, 2);
     assert(hooks_fired() > fired_before, "the pre_tool hook RAN for a parallel round");
     assert(hooks_blocked() > 0, "...and its denial was counted");
+    # 0.43.2: the SECOND property the comment above promises. Both counters are hook-side, so deleting
+    # the executor's attribution — `_par_hookblocked` at src/agent.cyr, and the branch that turns it
+    # into "(blocked by the pre_tool hook)" — left them both green. Read the transcript the executor
+    # actually built: the model must be told the HOOK refused, not the policy, or the operator cannot
+    # tell a t-ron decision from their own script's.
+    assert_eq(_ui_contains(_agent_work, "blocked by the pre_tool hook"), 1,
+              "...and the result reads as a HOOK denial, not a policy one");
+    assert_eq(_ui_contains(_agent_work, "denied by authorization policy"), 0,
+              "...a hook denial is never mislabelled as the t-ron policy's");
     _cfg_daimon_url = saved_daimon;
     _cfg_hook_pre_tool = 0;
     hooks_reset();
@@ -882,6 +915,18 @@ fn test_project() {
     var p_arr = _agent_arr_buf;
     _agent_tools_len = 4242; _agent_tools_ready = 1;
     var p_tools = _agent_tools_buf;
+    # ⚠ THE SWAP SET'S THIRD HALF, added at 0.43.2 — memory recall, found by applying the file's own
+    # "does a tool round WRITE it" test rather than by a crash. A child builds its request with
+    # memory_context(task) exactly as the parent did, and that calls citations_reset() UNCONDITIONALLY,
+    # repopulates the citation arena on a successful recall, and renders into the single shared
+    # _mem_recall_buf — into which the parent holds a RAW POINTER for the whole turn. So one delegation
+    # made every remaining parent round POST the CHILD's recalled notes as the parent's memory, and
+    # persisted the parent's reply with no cited sources. Silently wrong data, no crash.
+    if (_cite_buf == 0) { _cite_buf = alloc(CITE_BUF_CAP); }
+    if (_mem_recall_buf == 0) { _mem_recall_buf = alloc(MEM_RECALL_CAP); }
+    _cite_ptrs_buf();
+    _cite_n = 3; _cite_off = 41; _cite_search_id = "s:PARENT"; _cite_fb_note_id = "n:PARENT";
+    var p_cite_buf = _cite_buf; var p_cite_ptrs = _cite_ptrs; var p_recall = _mem_recall_buf;
 
     _sub_enter();
     assert_eq(subagent_active(), 1, "_sub_enter raises depth to 1");
@@ -894,6 +939,10 @@ fn test_project() {
     assert(_ag_args != p_args, "...different args slots");
     assert_eq(_agent_work_len, 0, "the child starts with an EMPTY message list — the whole point");
     assert_eq(_agent_tools_ready, 0, "...and re-advertises its own (narrowed) tool set");
+    assert(_cite_buf != p_cite_buf, "...a different citations arena");
+    assert(_cite_ptrs != p_cite_ptrs, "...a different citation pointer table");
+    assert(_mem_recall_buf != p_recall, "...and a different mneme recall buffer");
+    assert_eq(_cite_n, 0, "the child starts with no cited sources of its own");
 
     # Now do what a child does: write all over its own state.
     _agent_work_puts("{\"role\":\"user\",\"content\":\"CHILD\"}");
@@ -902,6 +951,8 @@ fn test_project() {
     store8(_hoosh_acc + _hoosh_acc_len, 0);
     _agent_tools_len = 99;
     _agent_round_kind = 1; _agent_round_n = 7;
+    citations_reset();                                    # exactly what memory_context() does at its top
+    _cite_n = 5; _cite_off = 999; _cite_search_id = "s:CHILD"; _cite_fb_note_id = "n:CHILD";
 
     _sub_exit();
     assert_eq(subagent_active(), 0, "_sub_exit returns depth to 0");
@@ -919,6 +970,30 @@ fn test_project() {
     assert(_ag_names == p_names, "...names");
     assert(_ag_args == p_args, "...args");
     assert(_agent_arr_buf == p_arr, "...and the tool_calls array buffer");
+    assert_eq(_cite_n, 3, "the parent's citation COUNT survives the child's citations_reset()");
+    assert_eq(_cite_off, 41, "...and its arena offset");
+    assert(streq(_cite_search_id, "s:PARENT") == 1, "...and the search id /useful would rate");
+    assert(streq(_cite_fb_note_id, "n:PARENT") == 1, "...and the feedback note id");
+    assert(_cite_buf == p_cite_buf, "...and the citations arena pointer");
+    assert(_cite_ptrs == p_cite_ptrs, "...and the citation pointer table");
+    assert(_mem_recall_buf == p_recall, "the parent's mneme recall buffer is restored — it holds a RAW POINTER into it all turn");
+    # 0.43.2: SUB_TASK_CAP had been declared, documented as "the task string handed to the child", and
+    # never referenced — the bound it advertised did not exist. It REFUSES rather than truncating: a
+    # silently clipped task would have the child work a different brief than the parent asked for.
+    var sv_sub_en = _cfg_subagent_enabled;
+    _cfg_subagent_enabled = 1;
+    var bigt = alloc(SUB_TASK_CAP + 4096);
+    var bt = 0;
+    while (bt < (SUB_TASK_CAP + 100)) { store8(bigt + bt, 0x78); bt = bt + 1; }
+    store8(bigt + bt, 0);
+    var bigargs = alloc(SUB_TASK_CAP + 4200);
+    var bo = 0;
+    bo = _append_cstr_cap(bigargs, bo, SUB_TASK_CAP + 4200, "{\"task\":\"");
+    bo = _append_cstr_cap(bigargs, bo, SUB_TASK_CAP + 4200, bigt);
+    bo = _append_cstr_cap(bigargs, bo, SUB_TASK_CAP + 4200, "\"}");
+    store8(bigargs + bo, 0);
+    assert(_ui_contains(subagent_tool(bigargs), "too long") == 1, "a task over SUB_TASK_CAP is REFUSED, not truncated");
+    _cfg_subagent_enabled = sv_sub_en;
 
     # ⚠ THE SWAP SET'S SECOND HALF, added after an adversarial review found the first version INCOMPLETE.
     # The original test checked only the byte buffers and passed while two real defects sat next to it:
@@ -1028,14 +1103,38 @@ fn test_project() {
     assert_eq(hooks_pre_tool("shell", "{}"), 0, "a NON-ZERO exit BLOCKS the call");
     assert_eq(hooks_blocked(), 1, "the block is counted");
     # A hook that EXITS non-zero blocks — including a shell's 127 for "command not found", which is a real
-    # verdict from a real process. What must NOT block is a hook thoth could not run at all (spawn failure
-    # or timeout, both surfaced as -1): that would turn a misconfigured hook into a silent
-    # deny-everything, indistinguishable from thoth being broken. The timeout path proves it.
+    # verdict from a real process.
     _cfg_hook_pre_tool = "/nonexistent/definitely-not-a-command-zzz";
     assert_eq(hooks_pre_tool("shell", "{}"), 0, "a hook that exits 127 IS a deny — the shell made a decision");
+    # ⚠ 0.43.2 REVERSED THE TIMEOUT VERDICT, deliberately. A timeout and a spawn failure used to share the
+    # -1 return and therefore shared a verdict (allow), which made "the security control did not finish"
+    # identical to "the security control approved" — and THOTH_ARGS is model-chosen text of up to
+    # AGENT_ARGS_MAX bytes handed to an operator script whose cost may scale with it. They are now
+    # distinct outcomes: a hook that could not SPAWN never weighed anything and must not wedge the session
+    # (still allow); a hook that STARTED and ran out of time was consulted and did not answer, so it
+    # degrades CLOSED like every other security seam in this tree. The timeout is announced either way.
+    # ⚠ 0.43.2 — A LARGE TOOL CALL MUST NOT MAKE A HOOK REPORT A DENIAL IT NEVER MADE. `_hook_run` used
+    # to compose the env prefix and the operator's command into one 8 KB buffer while THOTH_ARGS carries
+    # up to AGENT_ARGS_MAX (16383) bytes — so a big call consumed the whole buffer, left the command out
+    # of the string entirely, and terminated mid-quote. `sh -c` rejects that with exit 2, which
+    # hooks_pre_tool read as the operator's hook blocking the call. The operator could not tell a real
+    # policy decision from a buffer overflow. The command's bytes are now reserved first.
+    var big_args = alloc(AGENT_ARGS_MAX + 64);
+    var gi = 0;
+    while (gi < AGENT_ARGS_MAX) { store8(big_args + gi, 0x61); gi = gi + 1; }
+    store8(big_args + gi, 0);
+    _cfg_hook_pre_tool = "exit 0";                        # a hook that ALLOWS — it must still be reached
+    var fired_pre = hooks_fired();
+    assert_eq(hooks_pre_tool("edit", big_args), 1, "a huge THOTH_ARGS still reaches the hook, which ALLOWS");
+    assert(hooks_fired() > fired_pre, "...the hook genuinely ran (not skipped)");
+    _cfg_hook_pre_tool = "exit 4";                        # ...and a real denial is still a denial
+    assert_eq(hooks_pre_tool("edit", big_args), 0, "a huge THOTH_ARGS does not mask a real deny either");
+
+    var blocked_before = hooks_blocked();
     _cfg_hook_timeout_ms = 200;
     _cfg_hook_pre_tool = "sleep 5";
-    assert_eq(hooks_pre_tool("shell", "{}"), 1, "a hook that TIMED OUT does not fake a deny (thoth got no verdict)");
+    assert_eq(hooks_pre_tool("shell", "{}"), 0, "a hook that TIMED OUT degrades CLOSED — it was consulted and did not answer");
+    assert_eq(hooks_blocked(), blocked_before + 1, "...and the timeout denial is counted like any other block");
     _cfg_hook_timeout_ms = 0 - 1;
     # ⚠ THE SECURITY PROPERTY: event facts reach the hook through the ENVIRONMENT, never interpolated
     # into the command — the tool name and args are attacker-influenced (the MODEL chose them).
@@ -1259,11 +1358,47 @@ fn test_project() {
     assert_eq(_project_sensitive("thoth.cyml.example"), 0, "'thoth.cyml.example' is NOT the config");
     assert_eq(_project_sensitive("src/main.cyr"), 0, "ordinary project source is not sensitive");
     assert_eq(_project_sensitive("VERSION"), 0, "an ordinary root file is not sensitive");
-    # and the four tools refuse it end to end (a real .thoth/config.cyml exists in this repo during CI)
+    # And the four tools refuse it end to end. These do NOT depend on a real `.thoth/config.cyml` being
+    # present: `.gitignore` ignores it, so in CI only `.thoth/config.cyml.example` is checked out. The
+    # refusal is what is under test and it precedes any existence check on purpose — src/project.cyr
+    # runs the jail predicates BEFORE `is_dir`/`file_exists` so a refusal never discloses existence
+    # (audit A-3). `.thoth` itself IS a real directory in CI (the tracked .example lives in it).
     assert(_ui_contains(read_file_tool("{\"path\":\".thoth/config.cyml\"}"), "refused") == 1, "read_file refuses thoth's own config");
     assert(_ui_contains(list_dir_tool("{\"path\":\".thoth\"}"), "refused") == 1, "list_dir refuses thoth's own state dir");
     assert(_ui_contains(edit_tool("{\"path\":\".thoth/config.cyml\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "refused") == 1, "edit refuses thoth's own config");
     assert(_ui_contains(create_file_tool("{\"path\":\".thoth/evil.cyml\",\"content\":\"x\"}"), "refused") == 1, "create_file refuses writing into .thoth/");
+
+    # --- OPERATOR-CONFIGURED state files, closed 0.43.2 ---
+    # The two literals above are only half of thoth's own state. Four more files have paths the OPERATOR
+    # picks, and `.thoth/config.cyml.example` recommends project-relative values for every one of them —
+    # so they land inside the jail, and whole-component matching means `.thoth_session` never matched
+    # `.thoth`. The session store is the sharpest case: readable it leaks every other conversation,
+    # writable it injects turns that are replayed as real history at the next launch.
+    var _sv_pol = _cfg_tron_policy; var _sv_ses = _cfg_session_file;
+    var _sv_his = _cfg_history_file; var _sv_lg = _cfg_log_file;
+    _cfg_tron_policy = "tron-policy.toml";
+    _cfg_session_file = ".thoth_session";
+    _cfg_history_file = ".thoth_history";
+    _cfg_log_file = "thoth-driver.log";
+    assert_eq(_project_sensitive("tron-policy.toml"), 1, "the configured t-ron policy is sensitive");
+    assert_eq(_project_sensitive(".thoth_session"), 1, "the configured session store is sensitive");
+    assert_eq(_project_sensitive(".thoth_history"), 1, "the configured input history is sensitive");
+    assert_eq(_project_sensitive("thoth-driver.log"), 1, "the configured driver log is sensitive");
+    assert_eq(_project_sensitive("sub/dir/.thoth_session"), 1, "configured state at depth is sensitive");
+    assert_eq(_project_sensitive("/home/u/proj/.thoth_session"), 1, "absolute form (granted root) is sensitive");
+    assert_eq(_project_sensitive(".thoth_session.bak"), 0, "a near-miss name is still whole-component matched");
+    assert(_ui_contains(read_file_tool("{\"path\":\"tron-policy.toml\"}"), "refused") == 1, "read_file refuses the configured policy");
+    assert(_ui_contains(edit_tool("{\"path\":\".thoth_session\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "refused") == 1, "edit refuses the configured session store");
+    # an ABSOLUTE configured path is matched on its basename, since the model can reach the same file
+    # relatively from the launch cwd or absolutely under a granted read root
+    _cfg_session_file = "/home/u/.thoth_session";
+    assert_eq(_project_sensitive(".thoth_session"), 1, "an absolutely-configured store is matched by name");
+    # unset config must not turn every path sensitive (the empty-basename guard)
+    _cfg_tron_policy = 0; _cfg_session_file = 0; _cfg_history_file = 0; _cfg_log_file = 0;
+    assert_eq(_project_sensitive("src/main.cyr"), 0, "with no configured state, ordinary source stays readable");
+    assert_eq(_project_sensitive("VERSION"), 0, "with no configured state, an ordinary root file stays readable");
+    _cfg_tron_policy = _sv_pol; _cfg_session_file = _sv_ses;
+    _cfg_history_file = _sv_his; _cfg_log_file = _sv_lg;
 
     # --- SYMLINK JAIL ESCAPE, closed 0.39.0 (audit finding A-1) ---
     # Through 0.38.6 the jail was purely LEXICAL. It refused '/', '~' and '..' — and both project.cyr and
@@ -1498,5 +1633,59 @@ fn test_editlog() {
     assert_eq(editlog_find(0, 0, 0), 0 - 1, "the oldest edit (turn 0) was evicted");
     assert_eq(editlog_find(EDITLOG_CAP + 2, 0, 0) >= 0, 1, "the newest edit is retained");
     editlog_reset();
+    return 0;
+}
+
+# --- MCP resources / prompts (src/mcpres.cyr, 0.43.0 T2-7) --------------------
+#
+# Untested until 0.43.2: the module was compiled in and its three commands dispatched, but nothing
+# referenced any of its 17 functions. The two pure ones are worth pinning precisely because a
+# THIRD-PARTY SERVER controls their input — a hostile or merely sloppy MCP host chooses the JSON shape
+# `_mcpres_field` reads and the URI `_mcpres_build_uri_body` splices.
+fn test_mcpres() {
+    test_group("MCP resources/prompts: third-party shapes + URI escaping (mcpres.cyr, 0.43.0)");
+    # _mcpres_field: THE NULL CHECK IS THE POINT (audit A-4). A field that is absent, or present but not
+    # a string, must answer 0 — never a pointer the caller then walks.
+    assert_eq(_mcpres_field(0, "name"), 0, "a null object yields 0");
+    var ok = "{\"name\":\"greet\",\"uri\":\"file:///a\"}";
+    var okv = bayan_json_v_parse_buf(ok, strlen(ok));
+    assert(streq(_mcpres_field(okv, "name"), "greet") == 1, "a string field reads back");
+    assert_eq(_mcpres_field(okv, "missing"), 0, "an absent field yields 0");
+    # every non-string JSON type in the field a server controls
+    var bad = "{\"n\":7,\"o\":{\"a\":1},\"a\":[1,2],\"b\":true,\"z\":null}";
+    var badv = bayan_json_v_parse_buf(bad, strlen(bad));
+    assert_eq(_mcpres_field(badv, "n"), 0, "a NUMBER field is not a string -> 0");
+    assert_eq(_mcpres_field(badv, "o"), 0, "an OBJECT field is not a string -> 0");
+    assert_eq(_mcpres_field(badv, "a"), 0, "an ARRAY field is not a string -> 0");
+    assert_eq(_mcpres_field(badv, "b"), 0, "a BOOL field is not a string -> 0");
+    assert_eq(_mcpres_field(badv, "z"), 0, "a NULL field is not a string -> 0");
+
+    # _mcpres_build_uri_body: a server-supplied URI is ESCAPED into the request body, so a quote in it
+    # cannot break out and forge sibling JSON keys.
+    var n1 = _mcpres_build_uri_body("file:///plain.txt");
+    assert(n1 > 0, "a plain uri builds a body");
+    assert(_ui_contains(_mcpres_req, "{\"uri\":\"file:///plain.txt\"}") == 1, "plain uri round-trips");
+    var n2 = _mcpres_build_uri_body("a\"b\\c");
+    assert(n2 > 0, "a quoted/backslashed uri still builds a body");
+    assert(_ui_contains(_mcpres_req, "a\\\"b\\\\c") == 1, "quote and backslash are escaped, not spliced");
+    assert_eq(_ui_contains(_mcpres_req, "\"uri\":\"a\"b"), 0, "the quote does not terminate the value");
+    # bounded: a URI far larger than the body buffer must clamp, not overrun
+    var big = alloc(MCPRES_REQ_CAP * 2);
+    var bi = 0;
+    while (bi < (MCPRES_REQ_CAP * 2 - 1)) { store8(big + bi, 0x75); bi = bi + 1; }
+    store8(big + bi, 0);
+    var n3 = _mcpres_build_uri_body(big);
+    assert(n3 <= MCPRES_REQ_CAP, "an oversized uri clamps inside MCPRES_REQ_CAP");
+    assert_eq(load8(_mcpres_req + n3), 0, "the clamped body stays NUL-terminated");
+
+    # the seam degrades honestly when daimon is not wired: no probe, no counts, no prompt matches
+    var sv_du = _cfg_daimon_url;
+    _cfg_daimon_url = 0;
+    mcpres_endpoints_reset();
+    assert_eq(_daimon_res_endpoint(), 0, "no [daimon].url -> no resources endpoint");
+    assert_eq(mcpres_read("file:///x"), 0, "reading a resource with no daimon yields 0, not empty text");
+    assert_eq(mcpres_prompt_exists("greet"), 0, "no daimon -> no prompt matches");
+    _cfg_daimon_url = sv_du;
+    mcpres_endpoints_reset();
     return 0;
 }

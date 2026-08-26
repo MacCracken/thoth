@@ -7,14 +7,17 @@
 
 ## Supported versions
 
-thoth is **pre-release / fermenting** — no tagged release exists yet, so there
-is no supported-version matrix. Until the first CalVer release, only the tip of
-the default branch is in scope.
+thoth is **pre-1.0** and versions as SemVer `0.x`
+([ADR-0004](docs/adr/0004-semver-pre-release.md) — this supersedes the earlier
+"CalVer at first release" plan). Tagged `0.x` releases exist and ship, but the
+surface still moves, so support runs forward only: fixes land on the tip and
+are released as the next patch rather than backported.
 
 | Version | Supported |
 | ------- | --------- |
-| `main` (unreleased) | ✅ best-effort |
-| any tagged release  | — none yet |
+| `main` (tip of default branch) | ✅ best-effort |
+| the latest `0.x` tag | ✅ best-effort — fixed forward in the next patch |
+| any earlier `0.x` tag | ❌ upgrade to the latest |
 
 ## The AGNOS security model
 
@@ -41,8 +44,9 @@ issue for an unfixed flaw.
   disclosure is appreciated; please give a reasonable window before public
   disclosure.
 
-Fixes are tracked per the AGNOS first-party process; CVE-severity findings are
-recorded under `docs/audit/` once the security-audit pass exists.
+Fixes are tracked per the AGNOS first-party process; findings are recorded
+under [`docs/audit/`](docs/audit/) — see
+[`2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md) for the standing pass.
 
 ## Scope notes
 

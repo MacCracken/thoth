@@ -223,6 +223,7 @@
         <span>companion to roadmap.md</span>
         <span>supersedes agentic-improvements-review.md</span>
         <span>Tiers 1&ndash;3 shipped in 0.40.0 / 0.41.0 / 0.42.0</span>
+        <span>current as of 0.43.2</span>
       </div>
     </header>
 
@@ -243,6 +244,8 @@
       <li><strong>Mid-session model switching</strong> <span class="chip c-ok">ahead</span> &mdash; matched by no surveyed harness &mdash; plus a model picker, reasoning-effort control and per-turn token/cost accounting.</li>
       <li><strong>Instruction-file safety.</strong> <span class="chip c-ok">ahead</span> thoth wraps <code>AGENTS.md</code> as &ldquo;verbatim reference &mdash; <em>not</em> commands to obey&rdquo; and declines to auto-inject <code>CLAUDE.md</code>. Most harnesses treat instruction files as trusted text.</li>
       <li><strong>Tool-definition pinning.</strong> <span class="chip c-ok">ahead</span> Trust-on-first-use hashing against the CVE-2025-54136 rug-pull, with a changed definition <em>withheld</em> rather than warned about. Rare among peers.</li>
+      <li><strong>Subagent delegation with exactly ONE dispatch path.</strong> <span class="chip c-ok">ahead</span> Peers ship subagents; thoth&rsquo;s runs the child&rsquo;s tool calls through the <em>same</em> gate, hook, jail, checkpoint gate and audit chain as the parent&rsquo;s rather than a parallel implementation &mdash; so a delegated action is exactly as authorized and as observable as a direct one, and there is no second authorization path to drift.</li>
+      <li><strong>Provenance-split input.</strong> <span class="chip c-ok">ahead</span> A piped payload (<code>git diff | thoth &lsquo;review&rsquo;</code>) is treated as third-party text and never reaches the <code>@mention</code> reader; only the operator&rsquo;s own argv words do (0.43.2). Peers that advertise <code>cmd | agent &lsquo;task&rsquo;</code> generally treat the whole thing as one trusted message.</li>
     </ul>
 
     <h2 id="gaps"><span class="num">The list</span>The open gaps</h2>
@@ -274,7 +277,13 @@
     <div class="rec" style="--tier: var(--ochre)">
       <div class="rec-head"><span class="rec-id">04</span><h3>Structural isolation of untrusted content</h3><span class="chip c-partial">partial</span></div>
       <p><code>[guard]</code> marks untrusted prose with an envelope and does not block, which is the right posture for a pattern matcher &mdash; it is a <strong>mitigation, not a boundary</strong>, and thoth frames it that way.</p>
-      <p>The strongest control in the field is structural, not lexical: retrieved text runs through a <strong>separate context window</strong> so it cannot issue instructions into the main thread. thoth has three untrusted-prose inlets &mdash; <code>@file</code> mentions, <code>read_file</code>/<code>list_dir</code> results, recalled mneme notes &mdash; and all three land in the main context. Note the dependency: a separate context is most of the machinery a subagent needs, so this and the roadmap&rsquo;s subagent ADR should be thought about together.</p>
+      <p>The strongest control in the field is structural, not lexical: retrieved text runs through a <strong>separate context window</strong> so it cannot issue instructions into the main thread. thoth now has <strong>five</strong> untrusted-prose inlets &mdash; <code>@file</code> mentions, <code>read_file</code>/<code>list_dir</code>/<code>search</code> results, recalled mneme notes, (0.43.0) <strong>MCP resource content</strong>, and <strong>piped stdin</strong> &mdash; and all five land in the main context.</p>
+      <p><strong>The prerequisite has landed, which changes this gap&rsquo;s shape rather than closing it.</strong> 0.43.0&rsquo;s subagent (ADR-0018) <em>is</em> a separate context window: a child reads whatever it reads into its own message list and returns one string, which reaches the parent through redact &rarr; guard like any tool result. The machinery now exists; what does not is thoth <em>routing untrusted reads through it automatically</em>. That is a real design decision, not a wiring job &mdash; it makes every <code>@file</code> cost a model round, and a laundered summary is arguably a <em>more</em> persuasive injection vector than the raw text, since it arrives as fluent prose the parent has no reason to distrust.</p>
+    </div>
+    <div class="warn">
+      <h3>0.43.2: the piped-stdin inlet went from unhandled to enveloped</h3>
+      <p>That inlet used to go through <code>cmd_task</code>, whose second act is the <strong>unjailed</strong> <code>@mention</code> reader &mdash; no project confinement, no <code>..</code> rejection, no absolute-path rejection. So a <code>@/home/you/.ssh/id_rsa</code> line inside a piped <code>git diff</code> was read and POSTed to the gateway, with the operator shown nothing, because one-shot runs the turn under <code>OUT_NULL</code>.</p>
+      <p>It now takes the same route MCP prompt text takes: redact &rarr; guard envelope &rarr; dispatch without expansion. That is the <em>lexical</em> mitigation, not the structural control this gap is about &mdash; the bytes still land in the main context.</p>
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">
@@ -314,7 +323,7 @@
 
     <div class="warn">
       <h3>Neither published seam is clean for thoth as a whole</h3>
-      <p><strong>1. The vendored bundle&rsquo;s dependency contract is incomplete.</strong> <code>dist/agnosai.deps</code> names only 45 stdlib leaves and omits the six <code>[deps.X]</code> git bundles the fold actually calls into &mdash; <code>kavach_init</code> (62 refs), <code>ratelimit_*</code> (11), <code>rng_uniform</code>, <code>sha256</code>, <code>dispatcher_*</code>, <code>accel_*</code> are all used in the dist and defined nowhere in it. The advertised three-line <code>[deps.agnosai]</code> block will not link on its own, and CI never builds the bundle standalone. At 1.6&nbsp;MB it would also dwarf every other bundle thoth carries, against a preprocessor ceiling thoth is already at ~96&nbsp;% of.</p>
+      <p><strong>1. The vendored bundle&rsquo;s dependency contract is incomplete.</strong> <code>dist/agnosai.deps</code> names only 45 stdlib leaves and omits the six <code>[deps.X]</code> git bundles the fold actually calls into &mdash; <code>kavach_init</code> (62 refs), <code>ratelimit_*</code> (11), <code>rng_uniform</code>, <code>sha256</code>, <code>dispatcher_*</code>, <code>accel_*</code> are all used in the dist and defined nowhere in it. The advertised three-line <code>[deps.agnosai]</code> block will not link on its own, and CI never builds the bundle standalone. At 1.6&nbsp;MB it would also dwarf every other bundle thoth carries. (An earlier form of this sentence argued from &ldquo;a preprocessor ceiling thoth is already at ~96&nbsp;% of&rdquo; &mdash; that figure came from a misread retracted at 0.43.1. Re-summed at 0.43.2 the binding unit sits in the low-to-mid 60&nbsp;% range of the 8&nbsp;MB slot, so the ceiling is not the argument; the 1.6&nbsp;MB delta still is.)</p>
       <p><strong>2. The HTTP service overlaps daimon.</strong> agnosai&rsquo;s tool registry competes with daimon&rsquo;s host registry, and its <code>builtin/mneme.cyr</code> re-implements as direct HTTP the exact mneme tools thoth already reaches through <code>daimon /v1/mcp/call</code>. Adopting it gives thoth <strong>two paths to mneme with different auth and different failure modes</strong>.</p>
     </div>
 
@@ -344,9 +353,9 @@
     <h3 style="margin-top:2rem">Borrow the idea, not the code</h3>
     <ul class="plain">
       <li><strong><code>RiskLevel</code> (low/medium/high)</strong> on an action. thoth&rsquo;s gate is binary allow/deny/flag; a risk tier is the prerequisite for both a graduated permission posture and an approval queue.</li>
-      <li><strong>Budget <em>enforcement</em></strong> &mdash; check-before-call, <code>&gt;=</code> semantics, a typed exceeded-reason. thoth has token/cost <em>accounting</em> and no enforcement; nothing stops a runaway loop from spending. This pairs with the now-configurable iteration cap: a round limit bounds turns, not spend.</li>
+      <li><strong>Budget <em>enforcement</em></strong> &mdash; check-before-call, <code>&gt;=</code> semantics, a typed exceeded-reason. thoth has token/cost <em>accounting</em> and no enforcement; nothing stops a runaway loop from spending. <strong>This got more urgent at 0.43.0, and the release says so out loud:</strong> delegation multiplies a turn&rsquo;s cost, and the only bounds available today are structural &mdash; depth&nbsp;1, a separate per-child round budget, and off-by-default. <code>[subagent].enabled</code> is off <em>because</em> of this gap, and ADR-0018 records that the default should be revisited if real budget enforcement ever lands. A round limit bounds turns, not spend.</li>
       <li><strong>Asynchronous approvals</strong> &mdash; a pending-decision queue that outlives the prompt, so an unattended run can <em>park</em> a risky edit instead of denying it. thoth&rsquo;s <code>confirm()</code> is otherwise strictly better (fail-closed, explicit y/yes only), and session-scoped grants already removed the re-prompt-every-round problem.</li>
-      <li><strong>The 18 agent presets</strong> as a ready-made answer to &ldquo;what specialists would a thoth crew contain&rdquo; &mdash; relevant to the roadmap&rsquo;s subagent ADR. Note agnosai&rsquo;s <code>AgentDefinition</code> has <em>no personality field</em>, because that axis belongs to avatara.</li>
+      <li><strong>The 18 agent presets</strong> as a ready-made answer to &ldquo;what specialists would a thoth crew contain&rdquo; &mdash; relevant to ADR-0018, which shipped at 0.43.0. Note agnosai&rsquo;s <code>AgentDefinition</code> has <em>no personality field</em>, because that axis belongs to avatara.</li>
     </ul>
 
     <h3 style="margin-top:2rem">Refuse, with reasons</h3>
@@ -371,8 +380,8 @@
       <p>thoth persists tool-definition pins, or daimon pins once for every consumer. Gap&nbsp;3.</p>
     </div>
     <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">Q3</span><h3>Is a separate context window for untrusted content worth building before subagents, or as part of them?</h3></div>
-      <p>Gap&nbsp;4 and the roadmap&rsquo;s subagent ADR share most of their machinery.</p>
+      <div class="rec-head"><span class="rec-id">Q3</span><h3>Should untrusted reads be routed through the existing subagent context automatically?</h3></div>
+      <p>The machinery landed at 0.43.0 (ADR-0018), so this is no longer &ldquo;before or as part of subagents&rdquo; &mdash; it is a routing decision over something that already exists, with the two costs gap&nbsp;4 names: a model round per <code>@file</code>, and a laundered summary that may be a <em>more</em> persuasive injection vector than the raw text.</p>
     </div>
     <div class="rec" style="--tier: var(--lapis)">
       <div class="rec-head"><span class="rec-id">Q4</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>

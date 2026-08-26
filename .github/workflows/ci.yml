@@ -79,3 +79,26 @@ jobs:
         # stub didn't exist (Issue 1) and also wouldn't ever exercise
         # tests/${proj}.tcyr.
         run: cyrius test
+
+      - name: Cross lanes (aarch64 / agnos / win) — non-gating
+        # 0.43.2: until now CI built ONLY the linux lane, so a regression that
+        # broke --agnos, --aarch64 or --win was invisible until someone ran
+        # `build.sh all` by hand — while roadmap gate 1 carries "--agnos build
+        # ✓" as a standing claim that decays silently between manual checks.
+        # The precedent for why this matters is in tests/cases/vendor.cyr: a
+        # vendored `SYS_IOCTL = 16` silently miscompiled every aarch64 build
+        # and went unnoticed for ~30 releases.
+        #
+        # `continue-on-error` because these lanes are EXPECTED to gap on
+        # substrate primitives (win needs IOCP; agnos targets a syscall ABI
+        # this runner cannot execute). build.sh's own `_run_best_effort`
+        # already distinguishes a KNOWN_GAP from a real failure and returns
+        # non-zero only for the latter — so a red mark here is a real
+        # regression worth reading, and it never blocks a merge.
+        continue-on-error: true
+        run: |
+          for t in aarch64 agnos win; do
+            echo "::group::lane $t"
+            ./scripts/build.sh "$t" || echo "::warning::lane $t did not produce a binary"
+            echo "::endgroup::"
+          done

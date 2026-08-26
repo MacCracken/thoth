@@ -28,7 +28,7 @@ Make **`.thoth/` a home directory** (like `.git/`) that holds *both* config and 
 
 **Discovery** (`_thoth_root_resolve`, `src/config.cyr`): walk UP from the CWD for the nearest ancestor
 `.thoth/` directory (bounded at 40 levels), then fall back to `~/.thoth/` (a global user home). `config_path()`
-reads `<root>/config.cyml`; when no `.thoth/` home exists it falls back to the legacy `./thoth.cyml` so
+reads `<root>/config.cyml`; when that file is not found it falls back to the legacy `./thoth.cyml` so
 existing setups keep working. Memory (`memory_dir()` / `memory_index_path()`) derives from the **same** root,
 so config and memory stay consistent regardless of launch directory.
 
@@ -42,10 +42,30 @@ unreachable — `<url>`". A reachable unconfigured default is noted "[default �
 - Launching in a subdirectory or another repo finds the right config (or states its absence) — the driver is
   location-independent, and READY reflects the real gateway, not a coincidental localhost default.
 - One discoverable `.thoth/` home holds everything; a `~/.thoth/config.cyml` gives a global default.
-- Back-compat: `./thoth.cyml` is still honored when no `.thoth/` home exists; the example moved to
+- Back-compat: `./thoth.cyml` is still honored whenever no `<root>/config.cyml` is found; the example moved to
   `.thoth/config.cyml.example`. `.gitignore` ignores the real `.thoth/config.cyml` and keeps the example +
   `.thoth/memory/` tracked.
 - The `.thoth` *file* vs `.thoth/` *directory* collision is avoided by making it unambiguously a directory.
 - All user-facing config hints (`/state`, the model picker, one-shot, the status bar) name
   `.thoth/config.cyml`; the legacy `./thoth.cyml` fallback *logic* and internal code comments still use the
   bare name (still accurate — `thoth.cyml` remains a valid fallback).
+
+## Update (0.43.2) — the fallback is gated on the FILE, not on the home, and a legacy load is now announced
+
+This ADR twice said the legacy `./thoth.cyml` is read "when no `.thoth/` home exists". The code has
+never done that. `config_path()` falls back whenever `<root>/config.cyml` is **absent**, even with a
+`.thoth/` home sitting right there — so an operator reasoning "I have a `.thoth/` home, therefore the
+root file is inert, therefore deleting `.thoth/config.cyml` gives me a no-config session" instead got a
+*different* config loaded, silently. In a tree carrying both, that meant the authorization seam could
+quietly unbind with no message.
+
+Both sentences above are corrected to match the code. The behaviour is **kept** — it is this ADR's
+back-compat promise, and narrowing it would break trees that rely on it — but it is no longer silent:
+
+- The greeting names a legacy load (`config: legacy ./thoth.cyml`).
+- `/state` carries a `config` row with the live path, flagged `[legacy path]` when it is the fallback.
+- `/reload` re-runs discovery (it used to reuse the cached path, so a `.thoth/config.cyml` created in
+  response to that very advice was invisible until a restart) and reports it when the file changes.
+
+`config_source()` and `config_root()` had existed since 0.26.0 with **zero callers** — the honesty this
+update adds was already built, just never wired.

@@ -10,10 +10,15 @@
 > for "what is thoth going to do" and exactly one for "what has thoth not decided about".
 > Shipped work is in [`../../CHANGELOG.md`](../../CHANGELOG.md) and is not narrated here.
 
-**Superseded files:** this replaces `agentic-improvements-review.md` (the 0.39.0 tiered
-review) and the earlier `gap-review.html`. Their Tier-1, Tier-2 and Tier-3 recommendations
-were either shipped (0.40.0 / 0.41.0 / 0.42.0 — see the CHANGELOG), promoted to
-[`roadmap.md`](roadmap.md), or carried forward below.
+**Superseded file:** this replaces `agentic-improvements-review.md` (the 0.39.0 tiered review). Its
+Tier-1, Tier-2 and Tier-3 recommendations were either shipped (0.40.0 / 0.41.0 / 0.42.0 — see the
+CHANGELOG), promoted to [`roadmap.md`](roadmap.md), or carried forward below.
+
+**[`gap-review.html`](gap-review.html) is this file's rendered twin**, not an older draft — same
+content on the house design system, for handing to someone. It drifted a release behind at 0.43.0
+(it still claimed three untrusted-prose inlets and omitted the subagent strength) and was
+re-synced at 0.43.2. **Edit both, or neither**: two copies of one document is exactly how that
+drift happened.
 
 ## How this was produced, and how much to trust it
 
@@ -53,6 +58,9 @@ Kept because a naive gap list would recommend rebuilding these.
   instruction files as trusted text.
 - **Tool-definition pinning.** Trust-on-first-use hashing against the CVE-2025-54136 rug-pull,
   with a changed definition **withheld** rather than warned about. Rare among peers.
+- **Provenance-split input.** A piped payload (`git diff | thoth 'review'`) is treated as third-party
+  text and never reaches the `@mention` reader; only the operator's own argv words do (0.43.2). Peers
+  that advertise `cmd | agent 'task'` generally treat the whole thing as one trusted message.
 - **Subagent delegation with exactly ONE dispatch path.** Peers ship subagents; thoth's runs the
   child's tool calls through the *same* gate, hook, jail, checkpoint gate and audit chain as the
   parent's rather than a parallel implementation — so a delegated action is exactly as authorized
@@ -110,9 +118,16 @@ a pattern matcher — it is a **mitigation, not a boundary**, and thoth frames i
 
 The strongest control in the field is structural, not lexical: Claude Code runs web-fetch results
 through a **separate context window** so retrieved text cannot issue instructions into the main
-thread. thoth has **four** untrusted-prose inlets now — `@file` mentions,
-`read_file`/`list_dir`/`search` results, recalled mneme notes, and (0.43.0) **MCP resource
-content** — and all four land in the main context.
+thread. thoth has **five** untrusted-prose inlets now — `@file` mentions,
+`read_file`/`list_dir`/`search` results, recalled mneme notes, (0.43.0) **MCP resource content**,
+and **piped stdin** (`git diff | thoth 'review'`) — and all five land in the main context.
+
+⚠ **0.43.2 changed the piped-stdin inlet from unhandled to enveloped, and found a real defect doing
+it.** That inlet used to go through `cmd_task`, whose second act is the UNJAILED `@mention` reader —
+so a `@/home/you/.ssh/id_rsa` line inside a piped diff was read and POSTed to the gateway, with the
+operator shown nothing (one-shot runs under `OUT_NULL`). It now takes the same route MCP prompt text
+takes: redact → guard envelope → dispatch without expansion. That is the *lexical* mitigation, not
+the structural control this gap is about — the bytes still land in the main context.
 
 **The prerequisite has landed, which changes this gap's shape rather than closing it.** 0.43.0's
 subagent ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)) *is* a separate
@@ -176,8 +191,11 @@ symbol, verified — zero unprefixed).
    `kavach_init` (62 refs), `ratelimit_*` (11), `rng_uniform`, `sha256`, `dispatcher_*`, `accel_*`
    are all used in the dist and defined nowhere in it. The README's advertised three-line
    `[deps.agnosai]` block **will not link on its own**, and nothing proves the bundle compiles
-   standalone — CI never builds it. At 1.6 MB it would also dwarf every other bundle thoth carries,
-   against a preprocessor ceiling thoth is already at ~96 % of.
+   standalone — CI never builds it. At 1.6 MB it would also dwarf every other bundle thoth carries.
+   (The old form of this sentence argued from "a preprocessor ceiling thoth is already at ~96 % of" —
+   that figure came from the misread 0.43.0 retracted at 0.43.1. Re-summed at 0.43.2 the binding unit
+   sits in the low-to-mid 60 % range of the 8 MB slot, so the ceiling is not the argument; the 1.6 MB
+   delta against every other bundle still is.)
 2. **The HTTP service overlaps daimon.** thoth could talk to a running agnosai the way it talks to
    daimon — but agnosai's tool registry competes with daimon's host registry, and its
    `builtin/mneme.cyr` re-implements as direct HTTP the exact mneme tools thoth already reaches
@@ -226,7 +244,7 @@ private-IP guard would reject. Revisit only if thoth gains a direct fetch; if it
   is otherwise strictly better (fail-closed, explicit y/yes only), and session-scoped grants already
   removed the re-prompt-every-round problem.
 - **The 18 agent presets** as a ready-made answer to "what specialists would a thoth crew contain" —
-  relevant to the roadmap's subagent ADR. Note agnosai's `AgentDefinition` has **no personality
+  relevant to [ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md), which shipped at 0.43.0. Note agnosai's `AgentDefinition` has **no personality
   field**, because that axis belongs to avatara.
 
 ### Refuse, with reasons
@@ -258,7 +276,10 @@ Each of these blocks something above. None has a default answer.
    kavach's threat model.
 2. **Where does durable rug-pull defense live** — thoth persists tool-definition pins, or daimon pins
    once for every consumer? Gap 3.
-3. **Is a separate context window for untrusted content worth building before subagents, or as part
-   of them?** Gap 4 and the roadmap's subagent ADR share most of their machinery.
+3. **Should untrusted reads be routed through the existing subagent context automatically?** The
+   machinery landed at 0.43.0 ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)), so
+   this is no longer "before or as part of subagents" — it is a routing decision over something that
+   already exists, with the two costs gap 4 names: a model round per `@file`, and a laundered summary
+   that may be a *more* persuasive injection vector than the raw text.
 4. **Should thoth drive sit's write surface at all** (gap 8), or does the read-only git producer stay
    the boundary?

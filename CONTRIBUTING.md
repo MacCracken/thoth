@@ -7,12 +7,15 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: 0.26.0 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
-> default) / REPL plus a one-shot/argv front-door, the full AGNOS spine wired, mid-session
-> model / persona / role switching, default-on jailed project read tools + `@file` mentions, a
-> git producer, project memory, `web_fetch`/`web_search`, and a comprehensive unit suite;
-> x86_64 Linux ships (see `docs/development/state.md` for the full target status). The remaining
-> road to v1.0 is dominated by AGNOS lighting up, not feature work — see
+> **Status: 0.43.2 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
+> default) / REPL, a native Wayland GUI (`thoth gui`), and a one-shot/argv front-door with
+> `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
+> switching; jailed project read tools + `@file` mentions and the gated `edit` / `create_file` /
+> `shell` write tools with `/rewind` checkpoints; a git producer, project memory (mneme via
+> daimon), `web_fetch`/`web_search`, MCP resources/prompts, subagent delegation, and the
+> operator-side controls — `[hooks]`, `[toolpin]`, `[guard]`, `[redact]`, `[verify]` — plus a
+> comprehensive unit suite; x86_64 Linux ships (see `docs/development/state.md` for the full
+> target status). The remaining road to v1.0 is dominated by AGNOS lighting up, not feature work — see
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) and
 > [`docs/development/state.md`](docs/development/state.md). Contributions follow the one rule
 > below: drive the AGNOS spine, never fork it.

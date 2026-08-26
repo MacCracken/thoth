@@ -7,6 +7,56 @@
 
 ## Version
 
+**0.43.2** — **a security fix a read-only review could not have found, plus 47 findings** (2026-08-25).
+⭐ **Piped stdin reached the UNJAILED `@mention` reader.** `cmd | thoth 'task'` / `thoth -p` append the pipe
+to the task and hand it to `cmd_task`, whose second act is `mention_expand()` — no project confinement, no
+`..` rejection, no absolute-path rejection, safe (per mention.cyr's own header) only *because the path came
+from a message the USER typed*. `--help` advertises `git diff | thoth 'review'`, and a diff is whatever a
+contributor wrote: a `@/home/you/.ssh/id_rsa` line in one was read and POSTed to the gateway, with the
+operator shown NOTHING (one-shot runs under `OUT_NULL`, so even the "(+1 file attached)" notice is
+discarded). Same hazard `cmd_prompt_slash` was hardened against at 0.43.0 for MCP prompt text, where
+commands.cyr calls it out in capitals as "a security boundary, not a style choice" — the stdin inlet was
+missed. Fixed by splitting the task by **provenance**: argv expands as always, the piped half goes
+redact → guard → `_task_dispatch` without expansion. ⚠ **Proven against a capturing endpoint, not just in
+unit tests** — the finding came from RUNNING the binary; six read-only reviewers over the same source did
+not surface it. **Reviewing source is not exercising the program.**
+**Other real defects**: `_project_sensitive` matched two literals and missed the four OPERATOR-configured
+state paths (`[tron].policy`, `[session].file` — the whole conversation store in plaintext —
+`[history].file`, `[log].file`), all of which the committed example steers *inside* the model's jail; the
+subagent swap set missed memory recall + citations, so one delegation made every later parent round POST
+the CHILD's recalled notes and persisted the parent's reply with no sources (the `_roundlog_cur` lesson,
+a second time); `_hook_run` composed args-then-command in an 8 KB buffer so a large tool call truncated the
+operator's command away entirely — ⚠ and testing the fix by reverting it showed the failure is
+FAIL-OPEN, not the spurious-deny expected: a hook configured to DENY returned proceed, so any tool call
+with ~8 KB+ of arguments silently skipped the operator's blocking hook (the 0.43.1 bug's class, a
+different mechanism); a hook **timeout** shared a return code with a spawn failure and
+so was read as an approval (now degrades closed — deliberate behaviour change); `_ev_end` could emit an
+unterminated NDJSON line, merging two records (⚠ NOT reachable today — the escaper's unrelated 6-byte
+margin covers it, so this hardens an invariant that currently holds by coincidence in another module;
+the note says so rather than overstating); Esc went unread between parallel batches; `[ui].tier` was
+never parsed (this repo's own config had an inert one); `SUB_TASK_CAP` was declared and never enforced.
+**Legacy config**: the `./thoth.cyml` fallback is gated on the FILE not the home (three docs said
+otherwise) — kept as ADR-0016's promise but no longer silent (greeting + a `/state` `config` row +
+`/reload` re-runs discovery and reports a change). `config_source()`/`config_root()` had ZERO callers since
+0.26.0. The stale root `thoth.cyml` is removed; `stack.sh` writes the preferred path.
+**Scripts/CI**: `sync-sit.sh`'s `>` redirect could truncate the committed 415 KB bundle to 0 bytes (now
+staged+moved); `build.sh` resolved `gen-version.sh` after `cd`-ing away (stale version strings) and left
+stale binaries at lane paths `release.yml` publishes; `stack.sh`'s `wait_listen` budget was ~0.6 s not
+~10 s; the `.gitignore` checkpoint rule was root-anchored while the writer is CWD-relative; CI built only
+the linux lane. **Tests**: agnosai-guard was the one unpinned vendored bundle (and it is the redactor);
+`mcpres.cyr` had zero coverage; the 0.43.1 parallel-hook test asserted one of the two properties it named;
+five `/save` round-trips could pass on a stale file and stored out-of-bounds on failure.
+**Doc sweep**: `doc-health.md`'s tables were still the 0.33.7 sweep's under 0.43.0/0.43.1 prose — it
+asserted freshness it had not checked, which is how getting-started and CONTRIBUTING drifted; `state.md`
+contradicted itself five ways (incl. `## Next` still saying "macOS builds+runs"); the roadmap still argued
+from the figure 0.43.1 retracted — re-summed, the binding unit is ≈4.94 MB of the 8 MB slot (~60 %), not
+the ~96 % gap-review quoted, and the "most likely thing to block the next feature" claim is WITHDRAWN with
+it; `gap-review.html` had drifted a release behind its `.md` twin; CONTRIBUTING was stamped 0.26.0 and
+SECURITY claimed no tagged release existed against 158 tags, neither having a ledger row at all.
+`CYRIUS_STATS` re-run: fn_table 8522/32768, identifiers 271744/524288, var_table 4942/8192, static
+1,002,408 B. 0 broken relative links tree-wide; all 48 `src/*.cyr` modules documented.
+Suite **264 + 1971 + 183 + 3**.
+
 **0.43.1** — **a security fix a doc sweep found, and the sweep** (2026-08-25). ⭐ **`hooks_pre_tool` ran only
 on the SERIAL executor, and `[hoosh].parallel` defaults to ON** — so any round of two-or-more daimon tools
 with no local tool fanned out having consulted t-ron but **never the operator's blocking hook**. `[hooks]`
@@ -2886,7 +2936,7 @@ thoth uses **SemVer `0.x`** through its pre-1.0 phase
 
 ## Posture
 
-thoth wires **all five seams** (since 0.4.0), and a free-text turn drives the
+thoth wires **all seven seams** (since 0.4.0 for M3–M5; mneme joined at 0.32.0 per [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md) and sit at 0.13.0), and a free-text turn drives the
 **model-driven agentic tool-calling loop** (0.6.0) on top of them. hoosh (M3) is
 **remote-client**: turns route to a backing model and switch mid-session through
 the inference gateway over sandhi. M4 adds the tool spine: **daimon remote-client** (the MCP
@@ -2895,7 +2945,7 @@ host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
 native** (the vendored authorization engine gates `/run`, `/write`, and
 `/call` through one choke point — deny is final, no policy means the
 fail-closed confirm prompt). M5 adds **avatara native**: the vendored archetype
-bundle (avatara 2.14.0) supplies the Thoth/Librarian persona in-process — sourced
+bundle (avatara 2.14.1) supplies the Thoth/Librarian persona in-process — sourced
 from `egyptian_thoth()` via the `prof_*` accessors and threaded into the hoosh
 `{role:system}` message so the precision-0.95 scribe archetype steers the turn,
 not just the banner. Unconfigured capabilities (no hoosh/daimon url, no t-ron
@@ -2903,7 +2953,7 @@ policy) still degrade honestly; nothing is faked. See
 [ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md) and
 [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
 
-The hoosh seam binds only when `thoth.cyml` declares `[hoosh].url` — no endpoint
+The hoosh seam binds only when `.thoth/config.cyml` (legacy `./thoth.cyml` still read) declares `[hoosh].url` — no endpoint
 declared, no remote claim. Verified end-to-end against a live gateway (a turn
 routed to a real provider; a mid-session `/model` switch re-routed Anthropic →
 OpenAI in one session) — wired against hoosh 2.2.2, re-verified at **hoosh
@@ -3043,13 +3093,13 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **All five lanes re-verified at 0.38.6 (Cyrius 6.5.35)**, the macOS one on real
+source. **All five lanes re-verified at 0.43.0 (Cyrius 6.5.35)**, the macOS one on real
 Apple Silicon hardware rather than inferred — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (264 + 1591 + 183 + 3), released | `build/thoth` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (264 + 1894 + 183 + 3), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (re-verified 0.38.6 / Cyrius 6.5.35) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
 | macOS (arm64) | `macos` _(Mac host)_ | **does NOT build** — `TTY_SIGMASK_WINCH` + 6 `tty_*` fns undefined; darshana gates its whole termios/signalfd half to Linux and `src/tui.cyr` calls it unguarded. **thoth's own gap, not the deps'** — a pristine `HEAD` baseline fails identically. Last known-good was 0.6.4 | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **builds `OK`** — re-verified 0.38.6. The old `SYS_LSEEK` and `SIGHUP` blockers are both closed | `build/thoth_agnos` |
@@ -3091,15 +3141,15 @@ by-design Win32 differences with no raw-syscall equivalent. `scripts/build.sh` n
 separates these `ARCH_GAP`s from the transient `SYS_GETRANDOM`/`SIGHUP` lag.
 
 **macOS — does NOT build, and it is thoth's gap, not a dependency's (re-tested on
-real hardware at 0.38.6):** the lane was last known-good at **0.6.4** and has since
+real hardware, re-confirmed at 0.43.0):** the lane was last known-good at **0.6.4** and has since
 regressed. Re-tested properly rather than assumed: cyrius **6.5.35** was cross-built
 for arm64 Mach-O from this Linux host (`scripts/build-macos-arm64-tarball.sh`, the
 same script the release pipeline uses), installed and ad-hoc codesigned on an Apple
 Silicon Mac, and the tree built there natively. It fails with:
 
 ```
-error:src/tui.cyr:1853:52: undefined variable 'TTY_SIGMASK_WINCH'
-error:src/tui.cyr:1906:74: undefined variable 'TTY_SIGMASK_WINCH'
+error:src/tui.cyr:1865:52: undefined variable 'TTY_SIGMASK_WINCH'
+error:src/tui.cyr:1918:74: undefined variable 'TTY_SIGMASK_WINCH'
 error: refusing to emit binary with 6 reachable undefined function(s)
   tty_isatty · tty_winsize · tty_cooked · tty_raw · tty_open_signalfd · tty_close_signalfd
 ```
@@ -3152,8 +3202,8 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 ## Tests
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
-`tests/thoth_core.tcyr`, `tests/thoth_gui.tcyr`, `tests/thoth_render.tcyr`. **1675 assertions across the suites as of
-0.33.7 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_core.tcyr`, `tests/thoth_gui.tcyr`, `tests/thoth_render.tcyr`. **264 + 1894 + 183 + 3 assertions across the suites as of
+0.43.1 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3173,6 +3223,7 @@ richer message schema, `/search`). Per-version detail is in the log above + [CHA
 [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓** (a valid static x86_64-AGNOS ELF,
 zero thoth change), **runtime** pends an AGNOS host (= gate 2); (2) ≥1 downstream consumer green on AGNOS
 (external); (3) a security review (not scheduled); (4) the SemVer-vs-CalVer 1.0 decision (deferred,
-[ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux ships; aarch64 builds; macOS builds+runs (audit path
-gated upstream); Windows staged on architectural floor gaps. Full-stack live e2e against the real spine
+[ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux ships; aarch64 builds; macOS does **NOT** build (thoth's own gap —
+`src/tui.cyr` calls darshana's Linux-gated termios/signalfd half unguarded; see the Targets matrix);
+Windows staged on architectural floor gaps. Full-stack live e2e against the real spine
 (hoosh/daimon) is a host-side step — the build sandbox blocks a compiled binary's TCP.

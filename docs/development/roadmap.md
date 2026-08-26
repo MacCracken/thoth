@@ -173,21 +173,31 @@ one is decided.
   **bote** `[lib.jsonx]` micro-profile (233 fns → 7). Both are upstream-profile + `sync-*.sh`
   re-vendor work, and neither profile exists upstream yet.
 
-  **This is warning hygiene, not headroom.** Measured at **0.42.0** with `CYRIUS_STATS=1`:
-  `fn_table` **8467/32768 (26 %)**, identifiers **269459/524288 (51 %)**, `var_table`
-  **4856/8192 (59 %)** — the tightest of the three. The static-data warning reads **1,001,720
-  bytes (~1.0 MB)**; it is vendored sigil and unfixable from thoth. `CYRIUS_DCE` does not help.
+  **This is warning hygiene, not headroom.** Re-measured at **0.43.2** with `CYRIUS_STATS=1` (re-run,
+  not re-read — the house rule in [`../doc-health.md`](../doc-health.md)): `fn_table` **8522/32768
+  (26 %)**, identifiers **271744/524288 (52 %)**, `var_table` **4942/8192 (60 %)** — the tightest of the
+  three. The static-data warning reads **1,002,408 bytes (~1.0 MB)**; it is vendored sigil and unfixable
+  from thoth. `CYRIUS_DCE` does not help.
 
-  ⚠ **The real ceiling is elsewhere, and at 0.43.0 it BIT.** The binding constraint is cyrius's fixed
-  **8 MB `preprocess_out`** arena slot. Adding 0.43.0's two features pushed `tests/thoth_core.tcyr` to
-  **8,393,978 bytes — over the limit by 5,370** — a hard error with no flag or manifest key, which is
-  precisely what the issue filed at 0.42.0 predicted would happen to "the next feature that needs a spine
-  capability". It was cleared by dropping the GUI block that unit never tested (131 KB), not by shrinking
-  the feature, so the headroom bought is one-off and the trajectory is unchanged. Filed upstream as
-  `cyrius/docs/development/issues/2026-08-24-preprocess-out-8mb-ceiling.md`. Lean `[lib.X]` profiles are
-  the shipped workaround (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit `[lib.read]`, sankoch
-  `[lib.zlib]`) and they buy features, not trajectory. **This is now the most likely thing to block the
-  next feature**, and the sit carve below is the largest single win available thoth-side.
+  ⚠ **The real ceiling is elsewhere: cyrius's fixed 8 MB `preprocess_out` arena slot**, a hard error with
+  no flag and no manifest key. Filed upstream as
+  `cyrius/docs/development/issues/2026-08-24-preprocess-out-8mb-ceiling.md`.
+
+  **Read the number correctly.** 0.43.0 published "over the limit by 5,370 bytes" and that was a
+  **misread, retracted at 0.43.1**: the compiler reports the size at which expansion *aborted*, not a
+  total, so a larger probe file yields a larger number for the same tree. Headroom is measured by summing
+  the include graph. Re-summed at **0.43.2**: `src/main.cyr` **≈4.79 MB** and `tests/thoth_core.tcyr`
+  **≈4.94 MB** of project sources, against a `lib/` snapshot of ≈7.34 MB from which each unit pulls only
+  its declared subset. So the binding unit sits in the **low-to-mid 60 % range** of the 8 MB slot, not the
+  ~96 % the pre-retraction figure implied.
+
+  That is real headroom, and it changes the *urgency* without changing the *direction*: the slot is fixed,
+  the trajectory is one way, and 0.43.0 did hit it — cleared by dropping the GUI block that unit never
+  tested (131 KB), not by shrinking the feature. Lean `[lib.X]` profiles are the shipped workaround
+  (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit `[lib.read]`, sankoch `[lib.zlib]`) and they buy
+  features, not trajectory. The sit carve below remains the largest single win available thoth-side, but
+  it is **no longer the most likely thing to block the next feature** — that claim was derived from the
+  retracted number and is withdrawn with it.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will
 > grow **voice input** (mic → speech-to-text) and **read-back** (text-to-speech) — but by
@@ -235,6 +245,25 @@ one is decided.
   the line tier — the same degradation already coded for AGNOS in `tui_events_init`. darshana's
   ANSI/cursor half is portable and unaffected. Sizing it properly means checking whether the GUI
   tier has the same exposure.
+
+  ⚠ **0.43.2 — the WINDOWS lane fails for the same reason, which was not visible before.** The win
+  lane's best-effort classifier had two faults, both fixed in `scripts/build.sh`: its `ARCH_GAP`
+  pattern matched only the syscall NUMBER constants (`SYS_EPOLL_*`) while the toolchain now surfaces
+  the epoll FLAG constants (`EPOLL_CTL_ADD` / `EPOLLIN`) and the ws2_32-routed socket calls; and it
+  classified a lane as an expected gap if the log contained **any** known symbol, when its own header
+  promised **only**. So one architectural gap masked every other undefined symbol in the same build.
+  With both fixed, the win lane reports precisely:
+
+  ```
+  architectural gaps present: EPOLLIN, EPOLL_CTL_ADD, SYS_CONNECT, SYS_SOCKET
+  UNEXPECTED undefined symbols: SIGHUP, SIG_BLOCK, TTY_SIGMASK_WINCH
+  ```
+
+  The first line is the permanent IOCP/ws2_32 floor gap. The second is **this defect** — thoth's
+  un-guarded call into darshana's Linux-only TTY half. So the non-Linux TUI guard is not a
+  macOS-only fix: it clears thoth's own contribution to **two** lanes, leaving Windows blocked purely
+  on the architectural floor where it belongs. That raises this item's value above what its
+  macOS-only framing suggested.
 
 - ⛔ **sit's git read-mode status reports false positives** (upstream, sit — thoth is a pure
   consumer). Every tracked mode-`100755` file and every tracked zero-byte file comes back

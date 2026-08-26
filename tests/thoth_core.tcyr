@@ -96,6 +96,7 @@ fn main() {
     test_mem_seam();
     test_shell(); test_shell_bufs_realloc();
     test_oneshot();
+    test_oneshot_pipe_provenance();
     test_json_envelope();
     test_oneshot_out();
     test_completion();
@@ -111,6 +112,7 @@ fn main() {
     test_daimon();
     test_edit();
     test_editlog();
+    test_mcpres();
     test_tron();
     test_audit();
     test_roundlog();

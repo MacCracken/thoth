@@ -56,6 +56,12 @@ fn test_classify() {
     assert_eq(classify_input("/write a b"), CMD_WRITE, "/write");
     assert_eq(classify_input("/run echo hi"), CMD_RUN, "/run");
     assert_eq(classify_input("/tools"), CMD_TOOLS, "/tools");
+    # 0.43.0's three MCP resource/prompt commands. The ORDER of the two `/resource*` arms is
+    # load-bearing (`/resource` is a prefix of `/resources`), which is exactly the kind of thing a
+    # classify test exists to pin — and none of the three was asserted until 0.43.2.
+    assert_eq(classify_input("/resources"), CMD_RESOURCES, "/resources");
+    assert_eq(classify_input("/resource file:///x"), CMD_RESOURCE, "/resource with a uri");
+    assert_eq(classify_input("/prompts"), CMD_PROMPTS, "/prompts");
     assert_eq(classify_input("/call echo {}"), CMD_CALL, "/call with args");
     assert_eq(classify_input("/audit"), CMD_AUDIT, "/audit");
     assert_eq(classify_input("/reset"), CMD_RESET, "/reset");
@@ -387,6 +393,29 @@ fn test_config() {
     assert_eq(config_hoosh_parallel(), 1, "parallel tool calls on by default");
     # unconfigured -> hoosh seam stays absent (honest degradation)
     assert_eq(seam_status(SEAM_HOOSH), SEAM_ABSENT, "hoosh absent when unconfigured");
+
+    # [ui].tier (0.43.2). Until this release the tier was `--tier=` ONLY, and the config parser drops
+    # unknown keys with no diagnostic — so a `tier = "simple"` line under [ui] did nothing and said
+    # nothing (this repo's own config carried one). ARGV STILL WINS, which is the property scripts rely
+    # on, and `_oneshot_tier_seen` is what makes that decidable: the parsed default and an explicit
+    # `--tier=auto` are both TIER_AUTO (0), so without it the config would override a deliberate "auto".
+    var av2[64];
+    store64(&av2 + 0, "thoth");
+    assert_eq(_oneshot_parse(&av2, 1), ONESHOT_NONE, "bare argv parses");
+    assert_eq(oneshot_tier_seen(), 0, "no --tier on argv -> not seen (the config may apply)");
+    store64(&av2 + 8, "--tier=auto");
+    _oneshot_parse(&av2, 2);
+    assert_eq(oneshot_tier(), TIER_AUTO, "--tier=auto parses to TIER_AUTO");
+    assert_eq(oneshot_tier_seen(), 1, "...and is SEEN, so [ui].tier must not override it");
+    store64(&av2 + 8, "--tier=simple");
+    _oneshot_parse(&av2, 2);
+    assert_eq(oneshot_tier_seen(), 1, "an explicit tier is seen");
+    # the config value itself maps through the same pure name->pref function main uses
+    assert_eq(ui_tier_pref_from_name("simple"), TIER_SIMPLE, "[ui].tier = simple maps to TIER_SIMPLE");
+    assert_eq(ui_tier_pref_from_name("rich"), TIER_RICH, "[ui].tier = rich maps to TIER_RICH");
+    assert_eq(ui_tier_pref_from_name("auto"), TIER_AUTO, "[ui].tier = auto maps to TIER_AUTO");
+    assert_eq(ui_tier_pref_from_name("bogus"), 0 - 1, "an unknown [ui].tier is REJECTED (main announces it)");
+    assert_eq(config_ui_tier(), 0, "no [ui].tier configured in the test tree");
     return 0;
 }
 
@@ -948,6 +977,60 @@ fn test_oneshot() {
     assert_eq(_oneshot_task_len, 0, "task reset clears the length");
     assert_eq(_oneshot_task_append_cstr("abc"), 3, "append returns bytes written");
     assert(streq(_oneshot_task, "abc"), "append assembles the task");
+    return 0;
+}
+
+# 0.43.2 — piped stdin is UNTRUSTED and must not reach the @mention reader.
+#
+# `cmd | thoth <task>` appends the pipe to the task, and cmd_task's second act is mention_expand(),
+# an UNJAILED reader (no project confinement, no `..` rejection, no absolute-path rejection) whose
+# safety premise is "the path came from a message the USER typed". A piped `git diff` is whatever a
+# contributor wrote, so a `@/home/you/.ssh/id_rsa` line in it was read and POSTed to the gateway —
+# silently, because one-shot runs under OUT_NULL and even the "(+1 file(s) attached)" notice is
+# discarded. _oneshot_compose_prompt splits the task by PROVENANCE; this pins the split.
+#
+# `@VERSION` is the probe because VERSION is git-TRACKED — a local-only fixture would pass here and
+# fail in CI. The expansion marker is the delimiter mention.cyr writes, not the file's contents.
+fn test_oneshot_pipe_provenance() {
+    test_group("piped stdin is untrusted — no @mention expansion (oneshot.cyr, 0.43.2)");
+    # (a) argv only: the operator's OWN words — expansion is unchanged.
+    _oneshot_task_reset();
+    assert_eq(_oneshot_stdin_at, 0 - 1, "reset clears the piped-payload split");
+    _oneshot_task_append_cstr("check @VERSION");
+    var p1 = _oneshot_compose_prompt();
+    assert_eq(_ui_contains(p1, "--- @VERSION ---"), 1, "an argv @mention still expands");
+
+    # (b) argv + piped payload: the SAME mention must stay literal on the piped side.
+    _oneshot_task_reset();
+    _oneshot_task_append_cstr("review this");
+    _oneshot_argv_len = _oneshot_task_len;
+    _oneshot_task_append("\n\n", 2);
+    _oneshot_stdin_at = _oneshot_task_len;
+    _oneshot_task_append_cstr("+ consult @VERSION for the number");
+    var p2 = _oneshot_compose_prompt();
+    assert_eq(_ui_contains(p2, "review this"), 1, "the argv half survives the compose");
+    assert_eq(_ui_contains(p2, "@VERSION"), 1, "the piped @mention stays in the text, literally");
+    assert_eq(_ui_contains(p2, "--- @VERSION ---"), 0, "a piped @mention is NOT expanded");
+
+    # (c) -p: stdin is the WHOLE task (no argv half) — the payload survives intact, unexpanded.
+    _oneshot_task_reset();
+    _oneshot_argv_len = 0;
+    _oneshot_stdin_at = 0;
+    _oneshot_task_append_cstr("summarize @VERSION please");
+    var p3 = _oneshot_compose_prompt();
+    assert_eq(_ui_contains(p3, "summarize @VERSION please"), 1, "-p keeps the whole piped task");
+    assert_eq(_ui_contains(p3, "--- @VERSION ---"), 0, "-p does not expand a piped @mention");
+
+    # (d) a mixed task expands the argv half exactly ONCE — the piped copy adds no second block.
+    _oneshot_task_reset();
+    _oneshot_task_append_cstr("read @VERSION");
+    _oneshot_argv_len = _oneshot_task_len;
+    _oneshot_task_append("\n\n", 2);
+    _oneshot_stdin_at = _oneshot_task_len;
+    _oneshot_task_append_cstr("and also @VERSION from the pipe");
+    var p4 = _oneshot_compose_prompt();
+    assert_eq(_ui_contains(p4, "--- @VERSION ---"), 1, "the argv half of a mixed task expands");
+    assert_eq(mention_count(), 1, "exactly one file is attached — the piped copy adds none");
     return 0;
 }
 
@@ -1585,6 +1668,19 @@ fn test_git() {
     return 0;
 }
 
+# _save_read: read back a file a /save test just wrote, closing the two hazards the 0.43.2 review found.
+# (1) file_read_all returns NEGATIVE on failure, and the old `store8(buf + n, 0)` then wrote BEFORE the
+#     buffer — an out-of-bounds store in the failure path of every one of these five sites.
+# (2) The callers now xunlink() the fixed /tmp path first. Without that, a save that silently failed
+#     (cmd_save returns 0 on an open failure just as it does on success) read back a LEFTOVER file from
+#     an earlier run and satisfied every assertion — green over a save that never happened.
+fn _save_read(path, buf, cap) {
+    var n = file_read_all(path, buf, cap);
+    if (n < 0) { n = 0; }
+    store8(buf + n, 0);
+    return n;
+}
+
 fn test_save() {
     test_group("/save transcript export (feed_strip_ansi_into + cmd_save, 0.24.1)");
     # --- feed_strip_ansi_into: drop role/reset markers + CSI, keep text ---
@@ -1618,10 +1714,10 @@ fn test_save() {
     ui_emit(ROLE_ACCENT, "second"); emit(" line"); feed_flush_pending();   # a line carrying a role marker
     out_mode_set(OUT_FD1);
     assert_eq(feed_count(), 2, "ring holds 2 lines");
+    xunlink("/tmp/thoth_save_test.md");
     cmd_save("/save /tmp/thoth_save_test.md");
     var rb = alloc(4096);
-    var rn = file_read_all("/tmp/thoth_save_test.md", rb, 4095);
-    store8(rb + rn, 0);
+    var rn = _save_read("/tmp/thoth_save_test.md", rb, 4095);
     assert(rn > 0, "saved file is non-empty");
     assert(_ui_contains(rb, "# thoth transcript") == 1, "file has the markdown header");
     assert(_ui_contains(rb, "first line") == 1, "file contains the first feed line");
@@ -1636,10 +1732,10 @@ fn test_save() {
     session_history_clear();
     session_history_append("user", "hello there", 11);
     session_history_append("assistant", "hi! reply", 9);
+    xunlink("/tmp/thoth_save_hist.md");
     cmd_save("/save /tmp/thoth_save_hist.md");
     var hb = alloc(4096);
-    var hn = file_read_all("/tmp/thoth_save_hist.md", hb, 4095);
-    store8(hb + hn, 0);
+    var hn = _save_read("/tmp/thoth_save_hist.md", hb, 4095);
     assert(hn > 0, "history-mode saved file is non-empty");
     assert(_ui_contains(hb, "# thoth transcript") == 1, "history file has the markdown header");
     assert(_ui_contains(hb, "## user") == 1, "history file has a user turn header");
@@ -2230,31 +2326,32 @@ fn test_save_formats() {
     session_history_append("user", "hi \"there\"", 10);      # a quote: JSON must escape it
     session_history_append("assistant", "line1\nline2", 11); # a newline: JSON must escape it
     feed_init();
+    xunlink("/tmp/thoth_t_save.json");
     cmd_save("/save --json /tmp/thoth_t_save.json");
     var jbuf[4096];
-    var jn = file_read_all("/tmp/thoth_t_save.json", &jbuf, 4095);
-    store8(&jbuf + jn, 0);
+    var jn = _save_read("/tmp/thoth_t_save.json", &jbuf, 4095);
     var jb = &jbuf;
     assert(jn > 0, "json export wrote a file");
     assert(_ui_contains(jb, "\"messages\"") == 1, "json has a messages array");
     assert(_ui_contains(jb, "\\\"there\\\"") == 1, "json ESCAPES an embedded quote");
     assert(_ui_contains(jb, "line1\\nline2") == 1, "json ESCAPES an embedded newline");
     assert_eq(_ui_contains(jb, "# thoth transcript"), 0, "json carries no markdown scaffolding");
+    xunlink("/tmp/thoth_t_save.txt");
     cmd_save("/save --plain /tmp/thoth_t_save.txt");
     var pbuf[4096];
-    var pn = file_read_all("/tmp/thoth_t_save.txt", &pbuf, 4095);
-    store8(&pbuf + pn, 0);
+    var pn = _save_read("/tmp/thoth_t_save.txt", &pbuf, 4095);
     var pb = &pbuf;
     assert(pn > 0, "plain export wrote a file");
     assert(_ui_contains(pb, "user: hi") == 1, "plain is bare 'role: content'");
     assert_eq(_ui_contains(pb, "# thoth transcript"), 0, "plain carries no markdown header");
     assert_eq(_ui_contains(pb, "## user"), 0, "plain carries no markdown role headers");
     # markdown default still produces the transcript it always did
+    xunlink("/tmp/thoth_t_save.md");
     cmd_save("/save /tmp/thoth_t_save.md");
     var mbuf[4096];
-    var mn = file_read_all("/tmp/thoth_t_save.md", &mbuf, 4095);
-    store8(&mbuf + mn, 0);
+    var mn = _save_read("/tmp/thoth_t_save.md", &mbuf, 4095);
     var mb = &mbuf;
+    assert(mn > 0, "markdown export wrote a file");
     assert(_ui_contains(mb, "# thoth transcript") == 1, "markdown default unchanged");
     session_reset(); session_history_clear();
     return 0;

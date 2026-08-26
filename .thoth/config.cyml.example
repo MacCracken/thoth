@@ -3,9 +3,16 @@
 # Discovery (0.26.0): thoth finds this file by walking UP from the current dir
 # for a `.thoth/` home directory (like `.git/`), then falling back to
 # `~/.thoth/config.cyml` (a global user default). So `<repo>/.thoth/config.cyml`
-# is found from ANY subdirectory of the repo. A legacy `./thoth.cyml` in the
-# working dir is still read when no `.thoth/` home exists. Project memory lives
-# alongside it at `.thoth/memory/` (same discovered home).
+# is found from ANY subdirectory of the repo. Project memory lives alongside it
+# at `.thoth/memory/` (same discovered home).
+#
+# ⚠ The legacy `./thoth.cyml` fallback is gated on the FILE, not on the home. It
+# is read whenever no `<root>/config.cyml` is found — INCLUDING when a `.thoth/`
+# home exists right there. So "I have a .thoth/ home, therefore a stray root
+# thoth.cyml is inert" is false: delete `.thoth/config.cyml` and the root file
+# silently becomes your config. Since 0.43.2 a legacy load is ANNOUNCED — the
+# greeting says so, `/state` shows the live path, and `/reload` reports a change
+# of file — but the cleanest answer is not to keep one around.
 #
 # This is NOT the build manifest (that is cyrius.cyml). It is thoth's own
 # runtime config, read once at startup. It is a CYML file: TOML above an
@@ -24,7 +31,7 @@ url   = "http://127.0.0.1:8088"
 
 # Optional bearer token, if the gateway's [[auth]] requires one. Omit for an
 # unauthenticated local gateway. Keep real tokens out of version control —
-# thoth.cyml is gitignored; this .example is the committed template.
+# `.thoth/config.cyml` is gitignored; this .example is the committed template.
 # token = "your-secret-token"
 
 # Optional default model. Omit to let hoosh route by its own provider config.
@@ -274,6 +281,15 @@ model = "claude-haiku-4-5-20251001"
 # thoth_write (/write); MCP tools authorize under their real tool name.
 
 # [tron]
+
+# ⚠ THESE FOUR PATHS ARE THOTH'S OWN STATE, and since 0.43.2 the model's jail refuses them BY NAME.
+# `[tron].policy`, `[log].file`, `[history].file` and `[session].file` are whatever you name them, and
+# the project-relative values suggested below sit inside the directory the model can read (and, with
+# `[edit].enabled`, write). `_project_sensitive` therefore reads these four keys and refuses any path
+# whose final component matches one — relative or absolute, at any depth. Before that it matched only
+# the literals `.thoth` and `thoth.cyml`, so `.thoth_session` (the whole conversation store, in
+# plaintext) and `tron-policy.toml` (the allow/deny list constraining the model) were both fair game.
+# If you rename one of these files, the refusal follows the name automatically.
 # policy = "tron-policy.toml"
 # agent = "thoth"
 
@@ -338,9 +354,14 @@ model = "claude-haiku-4-5-20251001"
 # INTERACTIVE-ONLY — one-shot (`thoth 'task'`) output stays clean. Enable them for a nicer REPL/TUI.
 #   bell    — ring the terminal BEL when a model turn finishes, so you can tab away and get pinged.
 #   elapsed — print a faint "(N.Ns)" line after each reply, showing how long the turn took.
+#   tier    — the presentation tier to start in: auto (default) | rich (T2 TUI) | simple (line).
+#             NEW at 0.43.2: this key used to be unparsed, and unknown keys are dropped silently, so a
+#             `tier = "simple"` line here did nothing and said nothing. `--tier=` on argv still WINS,
+#             so scripts are unaffected; an unknown value is announced on stderr, not ignored.
 # [ui]
 # bell = true
 # elapsed = true
+# tier = "rich"
 
 # The [alias] table defines slash macros (0.11.4). Each `name = "expansion"` lets you type
 # /<name> as a shortcut: when /<name> is NOT a built-in command, thoth expands it to the
@@ -425,7 +446,7 @@ model = "claude-haiku-4-5-20251001"
 # [tron].policy can allow your /run while independently denying / flagging / rate-limiting the model.
 #
 # OFF BY DEFAULT, and for good reason: enabling it lets an UNTRUSTED model run commands on your
-# machine. A checked-in thoth.cyml with [shell].enabled = true is a trust decision equivalent to
+# machine. A checked-in `.thoth/config.cyml` with [shell].enabled = true is a trust decision equivalent to
 # running that project's code — enable it only for projects and models you trust, ideally alongside a
 # t-ron policy. For the tool to actually RUN a command you also need an [agent."thoth"] allow rule for
 # `thoth_shell` in your t-ron policy (with no policy, the fail-closed confirm prompt gates each call;

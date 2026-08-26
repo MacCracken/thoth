@@ -75,14 +75,24 @@ mkdir -p "$REPO_ROOT/src/vendor"
 
 # --- sit read bundle (with the entry_hash / ann_new collision renames) ---
 SIT_RENAME='s/\bentry_hash\b/_sit_entry_hash/g; s/\bann_new\b/_sit_ann_new/g'
+# ⚠ STAGE THEN MOVE. This is the only sync script that transforms its input, so it is the only one that
+# cannot use `curl -o` / `cp` — and writing the destination through `>` means the shell TRUNCATES it
+# before the producer runs. Any failure (a bad SIT_LOCAL, a 404, a dropped connection) therefore left
+# the committed 415 KB src/vendor/sit-read.cyr at ZERO BYTES and aborted under `set -e`; the next
+# `cyrius build` then failed on missing sit_repo_* symbols rather than on the sync. sync-sit.sh is also
+# the one script the docs tell you to run with SIT_LOCAL=…, i.e. the likeliest place for a path typo.
+SIT_TMP="$(mktemp)"
+trap 'rm -f "$SIT_TMP"' EXIT
 if [ -n "${SIT_LOCAL:-}" ]; then
     echo "Syncing sit-read $SIT_TAG from local $SIT_LOCAL/dist/sit-read.cyr (renaming entry_hash/ann_new)"
-    sed "$SIT_RENAME" "$SIT_LOCAL/dist/sit-read.cyr" > "$SIT_DEST"
+    sed "$SIT_RENAME" "$SIT_LOCAL/dist/sit-read.cyr" > "$SIT_TMP"
 else
     URL="https://raw.githubusercontent.com/MacCracken/sit/${SIT_TAG}/dist/sit-read.cyr"
     echo "Syncing sit-read $SIT_TAG from $URL (renaming entry_hash/ann_new)"
-    curl -sSf "$URL" | sed "$SIT_RENAME" > "$SIT_DEST"
+    curl -sSf "$URL" | sed "$SIT_RENAME" > "$SIT_TMP"
 fi
+[ -s "$SIT_TMP" ] || { echo "FAILED: sit-read fetch produced no bytes — $SIT_DEST left untouched" >&2; exit 1; }
+mv "$SIT_TMP" "$SIT_DEST"
 grep -q "^# Version: ${SIT_TAG}\$" "$SIT_DEST" || echo "WARN: $SIT_DEST header != Version: $SIT_TAG"
 [ "$(grep -cE '\b(entry_hash|ann_new)\b' "$SIT_DEST")" = "0" ] || echo "WARN: unrenamed entry_hash/ann_new remains in $SIT_DEST"
 # code ref only (a non-comment line); sit 1.3.1's api.cyr mentions the token in a doc comment.

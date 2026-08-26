@@ -59,8 +59,13 @@ var _oneshot_out_path = 0;   # cstr ptr into the argv snapshot, or 0
 # old THOTH_TIER env-var (dropped in 0.11.10). Accepts `--tier=<mode>` and `--tier <mode>`.
 var _oneshot_tier = 0;       # the parsed TIER_* preference (default TIER_AUTO == 0)
 var _oneshot_tier_bad = 0;   # 1 if --tier was given an unknown value (main warns; falls back to auto)
+# 0.43.2: whether --tier appeared on argv AT ALL. `_oneshot_tier` alone cannot answer that, because its
+# default and an explicit `--tier=auto` are both TIER_AUTO (0) — so [ui].tier could not tell "the user
+# did not ask" from "the user asked for auto", and would have overridden the second.
+var _oneshot_tier_seen = 0;
 fn oneshot_tier() { return _oneshot_tier; }
 fn oneshot_tier_bad() { return _oneshot_tier_bad; }
+fn oneshot_tier_seen() { return _oneshot_tier_seen; }
 
 # The JSON envelope buffer (lazy). Sized for a worst-case 6x-escaped max reply (HOOSH_ACC_CAP)
 # + a 6x-escaped model id (MODEL_BUF_CAP — a session /model id; a normal [hoosh].model id is
@@ -78,6 +83,17 @@ var ONESHOT_TASK_CAP = 65536;
 var _oneshot_task = 0;
 var _oneshot_task_len = 0;
 
+# 0.43.2: where the PIPED payload starts inside _oneshot_task, and how many bytes of
+# argv task precede it. The two halves have different provenance and must not be
+# treated alike — see _oneshot_compose_prompt. -1 = nothing was piped.
+var _oneshot_stdin_at = 0 - 1;
+var _oneshot_argv_len = 0;
+# The composed prompt (expanded argv + the untrusted-wrapped stdin payload). Sized for a
+# full-cap argv expansion (MENTION_BUF_CAP) plus a full-cap piped payload carrying the
+# guard envelope; the appender clamps, so it can never overrun.
+var ONESHOT_PROMPT_CAP = 262144;
+var _oneshot_prompt = 0;
+
 # A snapshot of argv (cstr ptrs) so the per-arg classifier is a PURE function the
 # test suite can drive with a hand-built array (argc/argv read /proc/self/cmdline).
 var ONESHOT_ARGV_MAX = 64;
@@ -87,6 +103,8 @@ fn _oneshot_task_reset() {
     if (_oneshot_task == 0) { _oneshot_task = alloc(ONESHOT_TASK_CAP); }
     _oneshot_task_len = 0;
     store8(_oneshot_task, 0);
+    _oneshot_stdin_at = 0 - 1;
+    _oneshot_argv_len = 0;
     return 0;
 }
 
@@ -112,6 +130,7 @@ fn _oneshot_task_append_cstr(s) { return _oneshot_task_append(s, strlen(s)); }
 # _oneshot_set_tier: map a --tier value to the TIER_* pref (src/ui.cyr) and record it, or flag an
 # unknown value. No I/O — main reports the bad flag (keeps the parser pure/testable).
 fn _oneshot_set_tier(v) {
+    _oneshot_tier_seen = 1;
     var p = ui_tier_pref_from_name(v);
     if (p >= 0) { _oneshot_tier = p; } else { _oneshot_tier_bad = 1; }
     return 0;
@@ -123,6 +142,7 @@ fn _oneshot_parse(args, n) {
     _oneshot_compl_shell = 0;
     _oneshot_tier = 0;                          # default TIER_AUTO
     _oneshot_tier_bad = 0;
+    _oneshot_tier_seen = 0;
     if (n <= 1) { return ONESHOT_NONE; }
     _oneshot_task_reset();
     var positional = 0;
@@ -196,7 +216,9 @@ fn _oneshot_append_stdin() {
         rd = syscall(SYS_READ, 0, &chunk, 4096);
         if (rd > 0) {
             if (first == 1) {
+                _oneshot_argv_len = _oneshot_task_len;              # the operator's OWN words end here
                 if (_oneshot_task_len > 0) { _oneshot_task_append("\n\n", 2); }
+                _oneshot_stdin_at = _oneshot_task_len;              # the piped payload starts here
                 first = 0;
             }
             _oneshot_task_append(&chunk, rd);
@@ -407,6 +429,63 @@ fn _oneshot_write_out(path, buf, len) {
 # stdout (and tee it to the `-o` file when requested). Returns the process exit code (0 = a
 # real answer + any -o write succeeded, 1 = any failure). Assumes oneshot_mode() filled
 # _oneshot_task. I/O — the orchestrator for one-shot.
+# _oneshot_compose_prompt: build the prompt one_shot_run dispatches, keeping the task's two halves
+# apart by PROVENANCE. Returns a cstr. Pure apart from the readers @mention expansion performs.
+#
+# ⚠⚠ THE PIPED HALF MUST NOT REACH cmd_task, AND THAT IS A SECURITY BOUNDARY, NOT A STYLE CHOICE.
+#
+# cmd_task's second act is `mention_expand(line)`, and `@file` expansion is an UNJAILED reader:
+# src/mention.cyr resolves a bare `@path` with no project confinement, no `..` rejection and no
+# absolute-path rejection. Its own header says that is safe *because the content originates from a
+# path the USER typed in their OWN message*. Piped stdin breaks that premise completely — `--help`
+# advertises `git diff | thoth 'review'`, and a diff is whatever some contributor wrote. A hostile
+# `+ see @/home/you/.ssh/id_rsa` line would be read and POSTed to the gateway, and because one-shot
+# runs the turn under OUT_NULL the operator never even sees cmd_task's "(+1 file(s) attached as
+# context)" notice. This is the same hazard `cmd_prompt_slash` (src/commands.cyr) was hardened
+# against at 0.43.0 for server-rendered prompts; the stdin inlet was missed.
+#
+# So each half is treated as what it is: the argv task is the operator's own message and is
+# @mention-expanded exactly as before, while the piped payload takes the route a third-party
+# string takes — redact, wrap in the untrusted-data envelope, and dispatch WITHOUT expansion.
+fn _oneshot_compose_prompt() {
+    if (_oneshot_stdin_at < 0) { return mention_expand(_oneshot_task); }   # argv only — unchanged
+    if (_oneshot_prompt == 0) { _oneshot_prompt = alloc(ONESHOT_PROMPT_CAP); }
+    if (_oneshot_prompt == 0) { return _oneshot_task; }   # OOM: degrade to the raw task, never a half-built prompt
+    # Take the piped pointer BEFORE terminating the argv half — under `-p` the two coincide at
+    # offset 0, and terminating first would truncate the payload to nothing.
+    var piped = _oneshot_task + _oneshot_stdin_at;
+    var head = "";
+    if (_oneshot_argv_len > 0) {
+        store8(_oneshot_task + _oneshot_argv_len, 0);     # argv half becomes its own cstr (this is the "\n\n" separator's first byte)
+        head = mention_expand(_oneshot_task);
+    }
+    # mention_expand answers _mention_buf; redact and guard each own a separate buffer, so both
+    # results stay live across the compose below.
+    var safe = guard_wrap_untrusted(redact_tool_result(piped), "piped stdin");
+    var off = 0;
+    off = _append_cstr_cap(_oneshot_prompt, off, ONESHOT_PROMPT_CAP, head);
+    if (_oneshot_argv_len > 0) { off = _append_cstr_cap(_oneshot_prompt, off, ONESHOT_PROMPT_CAP, "\n\n"); }
+    off = _append_cstr_cap(_oneshot_prompt, off, ONESHOT_PROMPT_CAP, safe);
+    if (off > (ONESHOT_PROMPT_CAP - 1)) { off = ONESHOT_PROMPT_CAP - 1; }
+    store8(_oneshot_prompt + off, 0);
+    return _oneshot_prompt;
+}
+
+# _oneshot_run_task: run the assembled task as one turn. With nothing piped this IS cmd_task (the
+# unchanged path). With a piped payload it mirrors cmd_prompt_slash: bump, echo, and hand the
+# already-composed prompt to _task_dispatch so it is never re-expanded.
+fn _oneshot_run_task() {
+    if (_oneshot_stdin_at < 0) { return cmd_task(_oneshot_task); }
+    var prompt = _oneshot_compose_prompt();
+    session_bump_turn();
+    emit("task: "); oprintln(prompt);
+    if (mention_count() > 0) {                            # only the argv half can contribute these
+        ui_emit(ROLE_FAINT, "  (+"); emit(ui_sgr(ROLE_FAINT)); ofmt_int(mention_count());
+        emit(ui_reset()); ui_emit(ROLE_FAINT, " file(s) attached as context)"); oprintln("");
+    }
+    return _task_dispatch(prompt);
+}
+
 fn one_shot_run() {
     # Append piped stdin as the payload (never read an interactive tty here).
     if (tty_isatty(0) == 0) { _oneshot_append_stdin(); }
@@ -418,7 +497,7 @@ fn one_shot_run() {
     # accumulated reply to fd 1 — so stdout is exactly the answer (clean for piping).
     var t0 = clock_now_ms();
     out_mode_set(OUT_NULL);
-    var rc = cmd_task(_oneshot_task);
+    var rc = _oneshot_run_task();
     out_mode_set(OUT_FD1);
     var elapsed = clock_now_ms() - t0;
     if (elapsed < 0) { elapsed = 0; }            # guard a non-monotonic clock step

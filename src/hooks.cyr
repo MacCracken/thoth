@@ -55,6 +55,7 @@ var _hook_env = 0;              # the env prefix scratch ("K=v K=v ")
 var _hook_cmd = 0;              # the composed "env... sh-command" string
 var _hook_fired = 0;            # hooks run this session (for /state)
 var _hook_blocked = 0;          # pre_tool denials this session
+var _hook_last_clamped = 0;     # 0.43.2: the last _hook_env_append could not fit its value in full
 
 fn hooks_fired() { return _hook_fired; }
 fn hooks_blocked() { return _hook_blocked; }
@@ -67,14 +68,21 @@ fn hooks_reset() { _hook_fired = 0; _hook_blocked = 0; return 0; }
 # shell expands nothing. The only byte that can escape is `'` itself, and it is replaced rather than
 # escaped — a `'\''` dance is easy to get subtly wrong, and a hook does not need byte-exact fidelity of a
 # quote character, it needs to not be an injection vector.
+#
+# ⚠ 0.43.2: the value loop stops FOUR bytes short of `cap`, not one. The previous form did
+# `if (off >= (cap - 1)) { return off; }` — an early return out of the MIDDLE of a quoted value, so a
+# saturating value left the assignment with an opening quote and no closing one. The composed line was
+# then not a shell command at all. Reserving room for the closing "'; " plus the NUL means the line is
+# always syntactically whole, however short the value gets.
 fn _hook_env_append(dst, off, cap, key, value) {
     off = _append_cstr_cap(dst, off, cap, "export ");
     off = _append_cstr_cap(dst, off, cap, key);
     off = _append_cstr_cap(dst, off, cap, "='");
+    _hook_last_clamped = 0;
     if (value != 0) {
+        var lim = cap - 4;                                 # "'; " + the NUL
         var i = 0;
-        while (load8(value + i) != 0) {
-            if (off >= (cap - 1)) { return off; }
+        while ((load8(value + i) != 0) && (off < lim)) {
             var b = load8(value + i) & 255;
             if (b == 39) { b = 34; }                       # ' -> "  (cannot terminate the quoting)
             if (b == 10) { b = 32; }                       # newline -> space (keeps it one env assignment)
@@ -83,6 +91,7 @@ fn _hook_env_append(dst, off, cap, key, value) {
             off = off + 1;
             i = i + 1;
         }
+        if (load8(value + i) != 0) { _hook_last_clamped = 1; }   # value did not fit in full
     }
     off = _append_cstr_cap(dst, off, cap, "'; ");
     return off;
@@ -99,7 +108,23 @@ fn _hook_run(cmd, event, tool, args) {
     var off = 0;
     off = _hook_env_append(_hook_cmd, off, cap, "THOTH_EVENT", event);
     off = _hook_env_append(_hook_cmd, off, cap, "THOTH_TOOL", tool);
-    off = _hook_env_append(_hook_cmd, off, cap, "THOTH_ARGS", args);
+    # ⚠ 0.43.2: THOTH_ARGS is the one attacker-sized field here — the executor accepts tool arguments up
+    # to AGENT_ARGS_MAX (16383 bytes) and only THEN calls the hook. Composed against the bare cap it
+    # could consume the whole buffer and leave NO ROOM FOR THE OPERATOR'S COMMAND, so the hook that was
+    # supposed to run simply was not in the string — and the resulting syntax error was reported to the
+    # operator as their own hook's verdict. Reserve the command's bytes first: the command is the
+    # security control and must always survive; the args are what get clamped.
+    var argcap = cap - strlen(cmd) - 2;
+    if (argcap < 64) { argcap = 64; }                       # a pathological command: still emit a whole assignment
+    off = _hook_env_append(_hook_cmd, off, argcap, "THOTH_ARGS", args);
+    # Never let a hook decide on silently shortened arguments and believe they were complete. The
+    # operator's script can test this and fail closed on its own terms; announcing is thoth's job.
+    if (_hook_last_clamped == 1) {
+        off = _append_cstr_cap(_hook_cmd, off, cap, "export THOTH_ARGS_TRUNCATED='1'; ");
+        ui_emit(ROLE_RED, "  [hook "); emit(event);
+        ui_emit(ROLE_RED, "] THOTH_ARGS was too large to pass in full");
+        ui_emit(ROLE_FAINT, " — THOTH_ARGS_TRUNCATED=1 is exported"); oprintln("");
+    }
     off = _append_cstr_cap(_hook_cmd, off, cap, cmd);
     if (off > (cap - 1)) { off = cap - 1; }
     store8(_hook_cmd + off, 0);
@@ -113,7 +138,10 @@ fn _hook_run(cmd, event, tool, args) {
     var code = load64(&st);
     if (load64(&st + 8) == 1) {
         ui_emit(ROLE_RED, "  [hook "); emit(event); ui_emit(ROLE_RED, "] timed out"); oprintln("");
-        return 0 - 1;                                       # a timeout is "could not run", not a deny
+        # ⚠ 0.43.2: a TIMEOUT is its own outcome (-2), distinct from "could not spawn" (-1). They used to
+        # share -1 and therefore shared a verdict, which made "the security control did not finish"
+        # identical to "the security control approved". hooks_pre_tool now denies on -2.
+        return 0 - 2;
     }
     if (n > 0) {
         ui_emit(ROLE_FAINT, "  [hook "); emit(event); ui_emit(ROLE_FAINT, "] ");
@@ -155,17 +183,30 @@ fn hooks_session_end() {
 
 # hooks_pre_tool: 1 = proceed, 0 = BLOCKED by the hook. THE load-bearing event.
 #
-# Returns 1 (proceed) when no hook is configured, when the target cannot run one, AND when the hook could
-# not be run at all. That last case is deliberate: a hook that fails to spawn must not silently become a
+# Returns 1 (proceed) when no hook is configured, when the target cannot run one, and when the hook could
+# not be SPAWNED. That last case is deliberate: a hook that fails to spawn must not silently become a
 # deny-everything, which would present as thoth mysteriously refusing every tool. A hook denies by
 # EXITING NON-ZERO, which is a decision it actually made.
+#
+# ⚠ 0.43.2 — A TIMEOUT IS NOT A SPAWN FAILURE, and the two now part company. A hook that could not START
+# never got to weigh anything, and treating that as a deny would break a session over a broken script. A
+# hook that STARTED and ran out of time is a security control that was consulted and did not answer — and
+# thoth's house rule is that security degrades CLOSED. The timeout is already announced by _hook_run.
 fn hooks_pre_tool(tool, args) {
     var c = config_hook_pre_tool();
     if (c == 0) { return 1; }
     if (load8(c) == 0) { return 1; }
     if (shell_supported() == 0) { return 1; }
     var rc = _hook_run(c, "pre_tool", tool, args);
-    if (rc <= 0) { return 1; }                              # 0 = allow; -1 = could not run -> do not fake a deny
+    if (rc == (0 - 2)) {                                    # timed out -> the control did not answer -> DENY
+        _hook_blocked = _hook_blocked + 1;
+        ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); emit(tool);
+        ui_emit(ROLE_FAINT, " (the hook timed out — degrading closed)"); oprintln("");
+        log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool);
+        log_kv_int("blocked", 1); log_kv_str("reason", "timeout"); log_commit(SK_WARN);
+        return 0;
+    }
+    if (rc <= 0) { return 1; }                              # 0 = allow; -1 = could not SPAWN -> do not fake a deny
     _hook_blocked = _hook_blocked + 1;
     ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); emit(tool);
     ui_emit(ROLE_FAINT, " (exit "); ofmt_int(rc); ui_emit(ROLE_FAINT, ")"); oprintln("");

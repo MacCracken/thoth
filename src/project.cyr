@@ -125,7 +125,46 @@ fn _proj_comp_eq(path, at, name) {
     return 0;
 }
 
-# _project_sensitive: 1 if `path` names thoth's OWN state — its config or its `.thoth/` home — else 0. PURE.
+# _proj_basename: pointer to the last component of cstr `s` (past the final '/'), or 0. PURE.
+fn _proj_basename(s) {
+    if (s == 0) { return 0; }
+    var last = s;
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (load8(s + i) == 47) { last = s + i + 1; }
+        i = i + 1;
+    }
+    return last;
+}
+
+# _proj_cfg_comp_eq: 1 if the component of `path` at `at` equals the BASENAME of the configured cstr
+# `cfg`. A configured path may be relative (`.thoth_session`) or absolute (`/home/u/.thoth_session`), and
+# the model can reach the same file by either form — a relative read from the launch cwd, or an absolute
+# one under a granted read root — so the comparison is on the name, at any depth, in both forms.
+fn _proj_cfg_comp_eq(path, at, cfg) {
+    var bn = _proj_basename(cfg);
+    if (bn == 0) { return 0; }
+    if (load8(bn) == 0) { return 0; }                 # unset / trailing-slash -> never matches
+    return _proj_comp_eq(path, at, bn);
+}
+
+# _project_sensitive: 1 if `path` names thoth's OWN state — its config, its `.thoth/` home, or a file the
+# OPERATOR configured as thoth state — else 0. No I/O and no mutation; it does read the loaded config.
+#
+# ⚠ 0.43.2: THE LITERAL LIST WAS NOT THE WHOLE ANSWER. Until this release the rule was two hardcoded
+# names, `.thoth` and `thoth.cyml`. But four of thoth's state files have OPERATOR-CHOSEN paths —
+# `[tron].policy`, `[session].file`, `[history].file` and `[log].file` — and the committed template
+# recommends project-relative values for all four (`tron-policy.toml`, `.thoth_session`,
+# `.thoth_history`, `thoth-driver.log`), which put them squarely inside the model's read/write jail.
+# Since `_proj_comp_eq` matches whole components by design, `.thoth_session` never matched `.thoth`.
+# That is the same confused-deputy shape A-3 closed, reopened through configuration:
+#   * `tron-policy.toml` — the model could read the exact allow/deny list constraining it, and with
+#     `[edit].enabled` rewrite it; the operator's next `/reload` or restart makes the rewrite live.
+#   * `.thoth_session` — the whole keyed conversation store in plaintext. Reading it leaks other
+#     conversations; editing it injects attacker-authored turns that are replayed as real history at the
+#     next launch (`sess_persist_init` in main.cyr), i.e. an injection that survives `/reset`.
+#   * `.thoth_history` — may hold secrets the operator typed.
+# So the refusal is now data-driven off the same config that names the files.
 #
 # ⚠ THE CONFUSED-DEPUTY FIX (0.39.0, audit A-3). thoth's config lives at `.thoth/config.cyml`, and
 # docs/examples tells the operator to put it at the REPO ROOT — which is exactly where thoth is launched,
@@ -159,6 +198,10 @@ fn _project_sensitive(path) {
             if (i > at) {                             # skip empty components ("a//b", a leading '/')
                 if (_proj_comp_eq(path, at, ".thoth") == 1) { return 1; }
                 if (_proj_comp_eq(path, at, "thoth.cyml") == 1) { return 1; }
+                if (_proj_cfg_comp_eq(path, at, config_tron_policy()) == 1) { return 1; }
+                if (_proj_cfg_comp_eq(path, at, config_session_file()) == 1) { return 1; }
+                if (_proj_cfg_comp_eq(path, at, config_history_file()) == 1) { return 1; }
+                if (_proj_cfg_comp_eq(path, at, config_log_file()) == 1) { return 1; }
             }
             at = i + 1;
         }

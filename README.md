@@ -8,11 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-**scribe additions with agnosai** 
-
-SCRIBE = Self-Correcting Reasoning Intelligence with Bounded Execution
-
-> **Status: 0.43.1 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.43.2 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
 
 **The loop.** A free-text turn drives a **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to
@@ -195,11 +191,16 @@ pin is the source of truth; don't hardcode it elsewhere.
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (*why X over Y?*)
 - [`docs/architecture/`](docs/architecture/) — non-obvious invariants about the code
 - [`docs/guides/`](docs/guides/) — task-oriented how-tos
-- [`docs/examples/`](docs/examples/) — runnable examples
+- [`docs/examples/`](docs/examples/) — usage cheat-sheet (configs + command recipes, not runnable programs)
 - [`docs/development/state.md`](docs/development/state.md) — live state snapshot
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) — milestones through v1.0 (forward-facing only)
 - [`docs/development/gap-review.md`](docs/development/gap-review.md) — candidate gaps thoth has *not* committed to
 - [`docs/doc-health.md`](docs/doc-health.md) — the doc-currency ledger
+
+**Design assets at the repo root**, named here so neither reads as scratch:
+[`Thoth.dc.html`](Thoth.dc.html) is the T3 GUI pixel spec (its palette is `src/ui.cyr`'s; cited by
+[ADR-0009](docs/adr/0009-presentation-capability-ladder.md) and the `src/gui/` headers), and
+`thoth_v1.tiff` is the project emblem — a line-art ibis with the lunar disc, papyrus and uraeus.
 
 ## License
 

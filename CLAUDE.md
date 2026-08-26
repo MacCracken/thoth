@@ -97,7 +97,7 @@ Project was scaffolded with `cyrius init`. **Do not manually create project stru
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (*why X over Y?*)
 - [`docs/architecture/`](docs/architecture/) — Non-obvious invariants (*what's true about the code?*)
 - [`docs/guides/`](docs/guides/) — Task-oriented how-tos
-- [`docs/examples/`](docs/examples/) — Runnable examples
+- [`docs/examples/`](docs/examples/) — Usage cheat-sheet (configs + command recipes, not runnable programs)
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0 (forward-facing only)
 - [`docs/doc-health.md`](docs/doc-health.md) — Doc-currency ledger (fresh/durable/stale, refreshed on doc sweeps)

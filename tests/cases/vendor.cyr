@@ -65,6 +65,13 @@ fn test_vendor_pins() {
     _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.4.0",  "vyakarana pinned at 2.4.0");
     _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.0.0",  "darshana pinned at 1.0.0");
     _vd_pin("src/vendor/anuenue.cyr",   "# Version: 1.2.0",  "anuenue pinned at 1.2.0");
+    # 0.43.2: agnosai-guard was the ONE bundle outside this gate — nine of ten pinned, and the tenth is
+    # the secret/PII redactor behind [redact] and the injection guard behind [guard], i.e. the one where
+    # a silently-wrong version is a security consequence rather than a cosmetic one. It is also the
+    # bundle whose sync script checks are ALL non-fatal (`echo "WARN: …"`, exit 0), so nothing else
+    # caught it: run sync-agnosai.sh with a stale tag, get a WARN among the normal success lines, commit,
+    # and the tree builds clean and passes every other test with a downgraded redactor.
+    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.0.7", "agnosai-guard pinned at 2.0.7");
 
     # kashi is the exception and deliberately so: thoth vendors kashi's FREESTANDING
     # CORE (its `src/font_data.cyr`), not the generated `dist/kashi.cyr` library face,

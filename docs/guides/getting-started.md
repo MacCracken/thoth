@@ -1,7 +1,8 @@
 # Getting started with thoth
 
 thoth is an interactive REPL/TUI that reads a line, dispatches it, and iterates.
-The full AGNOS capability spine (hoosh/daimon/bote/t-ron/avatara) is **wired**
+The full AGNOS capability spine (hoosh/daimon/bote/t-ron/avatara, plus mneme for memory and sit
+for git — seven seams) is **wired**
 through *seams*: a free-text turn routes to a backing model via **hoosh** and,
 when **daimon** is configured, drives a model-driven agentic loop — the model
 calls daimon's MCP tools, **t-ron** authorizes each, and results loop back until
@@ -69,6 +70,14 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /allow <path>       grant the agent a read root beyond the launch dir
 {(o> /save <file>        export the conversation transcript
 {(o> /reload             re-read .thoth/config.cyml mid-session (hot fields apply)
+{(o> /context            the context window — what this turn will carry, and what is being dropped
+{(o> /compact            summarize the conversation so far to reclaim context
+{(o> /rewind [n]         undo the model's file writes from a checkpoint (the write tools' undo)
+{(o> /fork               branch the current conversation into a new one from this point
+{(o> /grants             the read roots granted this session (see /allow)
+{(o> /resources          list the MCP resources daimon's hosts expose
+{(o> /resource <uri>     read one resource into the conversation (wrapped as untrusted data)
+{(o> /prompts            list the MCP prompts daimon's hosts expose (run one as /<name>)
 {(o> @file.cyr           mention a file in a message → its contents are appended as context
 {(o> write me a quicksort   free text → a coding task → the model (agentic loop if daimon is wired)
 {(o> /quit               exit (or Ctrl-D / Ctrl-X)
@@ -111,7 +120,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
   `classify_input` / `token_is` / `arg_after` helpers are unit-tested).
 - `src/config.cyr` — runtime config from `.thoth/config.cyml` (seam URLs, toggles); resolves
   the `.thoth/` home (walk up from CWD, then `~/.thoth`; legacy `./thoth.cyml` fallback).
-- `src/seams.cyr` — the capability-seam registry (the five spine seams + status).
+- `src/seams.cyr` — the capability-seam registry (the seven spine seams + status).
 - `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls.
 - `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`).
 - `src/daimon.cyr` — the daimon seam client (MCP tool list + call).
@@ -145,6 +154,18 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/shell.cyr` — the opt-in, t-ron-gated model-invokable `shell` tool (off by default).
 - `src/mpick.cyr` — the Ctrl-P model-picker palette.
 - `src/fsearch.cyr` — in-feed search.
+- `src/search.cyr` — the jailed `search` tool (glob + content grep across the project).
+- `src/checkpoint.cyr` — the file-snapshot store behind `/rewind` (a pre-edit copy per model write, 0.40.0).
+- `src/subagent.cyr` — `delegate(task)`: a scoped child *context*, off by default ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)).
+- `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.
+- `src/hooks.cyr` — operator lifecycle hooks (`[hooks]`); `pre_tool` can BLOCK a tool call.
+- `src/toolpin.cyr` — trust-on-first-use hashing of tool definitions (the rug-pull defence, `[toolpin]`).
+- `src/guard.cyr` — the injection-heuristic envelope over untrusted prose (`[guard]`).
+- `src/redact.cyr` — secret/PII redaction of tool results (`[redact]`, on by default).
+- `src/verify.cyr` — the post-edit `[verify].command` gate (run the build/tests after a model write).
+- `src/events.cyr` — the `--events` NDJSON stream (turn/tool brackets for a driving program).
+- `src/reasonlog.cyr` — the per-turn ring behind the Ctrl+R "thinking" fold (session-scoped).
+- `src/mdmodel.cyr` — the shared structural-markdown model (facts-not-bytes) the line/TUI/GUI renderers classify with.
 - `src/util.cyr` — the output-capture sink (`OUT_FD1`/`OUT_RING`/`OUT_NULL`) + `read_line` / `emit` / helpers.
 - `src/version.cyr` — the single runtime version string (generated from `VERSION`).
 - `src/vendor/` — committed spine dist bundles (bote-core, libro, t-ron, avatara) plus the vendored vyakarana

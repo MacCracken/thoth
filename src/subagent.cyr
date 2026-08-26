@@ -59,6 +59,11 @@ var _sub_args = 0;
 var _sub_args_len = 0;
 var _sub_seen = 0;
 var _sub_answer = 0;             # the bounded copy handed back to the parent
+# 0.43.2: the child's OWN memory-recall storage. A child calls the same memory_context(task) the
+# parent did, and that writes THREE pieces of shared state — see the swap set below.
+var _sub_cite_buf = 0;           # the child's citations arena (never the parent's _cite_buf)
+var _sub_cite_ptrs = 0;          # the child's citation pointer table
+var _sub_recall = 0;             # the child's mneme recall buffer
 var _sub_ready = 0;
 var _sub_runs = 0;               # delegations this session (for /state)
 var _sub_rounds_last = 0;        # rounds the last child spent
@@ -89,13 +94,28 @@ fn _sub_alloc() {
     _sub_args_len = alloc(AGENT_MAX_CALLS * 8);
     _sub_seen = alloc(AGENT_MAX_CALLS);
     _sub_answer = alloc(SUB_ANSWER_CAP);
+    _sub_cite_buf = alloc(CITE_BUF_CAP);
+    _sub_cite_ptrs = alloc(CITE_MAX * 2 * 8);
+    _sub_recall = alloc(MEM_RECALL_CAP);
+    # ⚠ EVERY allocation is checked, not most of them. The first cut checked 7 of 12, and the five it
+    # skipped were the ones _sub_enter installs into globals the round then writes through — so a
+    # partial OOM did not degrade to the honest "(delegate unavailable)" this function already knows
+    # how to return; it wrote through address 0 mid-turn. If you add an alloc above, add its check here.
     if (_sub_req == 0) { return 0; }
     if (_sub_work == 0) { return 0; }
     if (_sub_acc == 0) { return 0; }
+    if (_sub_reason == 0) { return 0; }
     if (_sub_tools == 0) { return 0; }
     if (_sub_arr == 0) { return 0; }
     if (_sub_ids == 0) { return 0; }
+    if (_sub_names == 0) { return 0; }
+    if (_sub_args == 0) { return 0; }
+    if (_sub_args_len == 0) { return 0; }
+    if (_sub_seen == 0) { return 0; }
     if (_sub_answer == 0) { return 0; }
+    if (_sub_cite_buf == 0) { return 0; }
+    if (_sub_cite_ptrs == 0) { return 0; }
+    if (_sub_recall == 0) { return 0; }
     _sub_ready = 1;
     return 1;
 }
@@ -120,6 +140,20 @@ var _sv_round_kind = 0; var _sv_round_raw = 0; var _sv_round_val = 0; var _sv_ro
 # so a child's diff card rendered under an unrelated parent tool call in the GUI.
 # The lesson for the swap set: "does a tool round WRITE it" is the test, not "is it a buffer".
 var _sv_roundlog_cur = 0; var _sv_roundlog_total = 0;
+# ⚠ ADDED AT 0.43.2, and it is the SAME omission a second time — memory recall, found by applying the
+# lesson above rather than by a crash. A child builds its request with `memory_context(task)` exactly as
+# the parent did (see _sub_seed), and that call writes three shared things: it calls citations_reset()
+# UNCONDITIONALLY at its top, it repopulates the citation arena on a successful mneme recall, and it
+# renders into the single shared `_mem_recall_buf`. The parent holds a RAW POINTER into that buffer
+# (agent.cyr's `mem`) and passes it to every subsequent round of its loop.
+# So without this half of the swap, one delegation meant: (1) every remaining parent round POSTed the
+# CHILD's recalled notes as the parent's project memory, and (2) the parent's assistant message was
+# persisted with no sources — citations_attach_to_last() and grounding_emit() saw _cite_n == 0 — even
+# for a turn that had recalled, with /useful then rating the child's search id. Silently wrong data on
+# both counts, no crash, exactly like the roundlog case.
+var _sv_cite_n = 0; var _sv_cite_off = 0; var _sv_cite_buf = 0; var _sv_cite_ptrs = 0;
+var _sv_cite_search_id = 0; var _sv_cite_fb_note_id = 0;
+var _sv_recall = 0;
 
 # _sub_enter: point every round-scoped buffer at the child's storage.
 # EXACT INVERSE of _sub_exit — keep them in the same order so a diff shows a mismatch.
@@ -134,6 +168,9 @@ fn _sub_enter() {
     _sv_round_kind = _agent_round_kind; _sv_round_raw = _agent_round_raw; _sv_round_val = _agent_round_val;
     _sv_round_n = _agent_round_n;       _sv_round_status = _agent_round_status;
     _sv_roundlog_cur = _roundlog_cur;   _sv_roundlog_total = _roundlog_total;
+    _sv_cite_n = _cite_n; _sv_cite_off = _cite_off; _sv_cite_buf = _cite_buf; _sv_cite_ptrs = _cite_ptrs;
+    _sv_cite_search_id = _cite_search_id; _sv_cite_fb_note_id = _cite_fb_note_id;
+    _sv_recall = _mem_recall_buf;
 
     _agent_work = _sub_work;           _agent_work_len = 0;
     _hoosh_acc = _sub_acc;             _hoosh_acc_len = 0;
@@ -147,6 +184,12 @@ fn _sub_enter() {
     # parent's. The child's tool activity is still fully visible — it goes to the t-ron/libro audit
     # chain like any other call, and to the event stream stamped `"depth":1`.
     _roundlog_cur = 0;
+    # Point recall at the CHILD's arenas. The parent's `mem` pointer keeps addressing the parent's
+    # buffer, so its remaining rounds carry the memory they were built with; the child's own
+    # citations_reset()/capture writes land in storage the parent does not read.
+    _cite_buf = _sub_cite_buf; _cite_ptrs = _sub_cite_ptrs;
+    _cite_n = 0; _cite_off = 0; _cite_search_id = 0; _cite_fb_note_id = 0;
+    _mem_recall_buf = _sub_recall;
     _sub_depth = 1;
     return 0;
 }
@@ -163,6 +206,9 @@ fn _sub_exit() {
     _agent_round_kind = _sv_round_kind; _agent_round_raw = _sv_round_raw; _agent_round_val = _sv_round_val;
     _agent_round_n = _sv_round_n;       _agent_round_status = _sv_round_status;
     _roundlog_cur = _sv_roundlog_cur;   _roundlog_total = _sv_roundlog_total;
+    _cite_n = _sv_cite_n; _cite_off = _sv_cite_off; _cite_buf = _sv_cite_buf; _cite_ptrs = _sv_cite_ptrs;
+    _cite_search_id = _sv_cite_search_id; _cite_fb_note_id = _sv_cite_fb_note_id;
+    _mem_recall_buf = _sv_recall;
     # editlog needs no swap once the round above is closed: editlog_record keys on
     # (turn, roundlog_cur_round(), ci), and with no round open roundlog_cur_round() answers 0 — which is
     # never a real parent round, since agent_turn increments before opening and so starts at 1. A child
@@ -385,6 +431,12 @@ fn subagent_tool(args_json) {
     if (ts == 0) { return "(delegate needs a \"task\" string)"; }
     var task = str_cstr(ts);
     if (load8(task) == 0) { return "(delegate needs a non-empty \"task\")"; }
+    # 0.43.2: enforce SUB_TASK_CAP. It was declared and documented as "the task string handed to the
+    # child" but never referenced, so the bound it advertised did not exist — the task flowed on to
+    # _sub_seed limited only by AGENT_WORK_CAP. REFUSE rather than truncate: a silently clipped task
+    # would have the child work a different brief than the parent asked for, and the delegate arm is
+    # already built to report a refusal honestly.
+    if (strlen(task) > SUB_TASK_CAP) { return "(delegate: the \"task\" is too long — cap is 8192 bytes)"; }
     if (gate_authorize("thoth_delegate", args_json, "delegate to a subagent", task) == 0) {
         return "denied by authorization policy";
     }

@@ -2,6 +2,207 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.2] - 2026-08-25
+
+**A security fix a read-only review could not have found, plus the 47 findings from a full-repo sweep.**
+Suite **264 + 1971 + 183 + 3** (+77), all targets green.
+
+### Fixed
+
+- **Piped stdin reached the UNJAILED `@mention` reader — arbitrary file read, exfiltrated to the gateway,
+  silently.** `cmd | thoth 'task'` and `thoth -p` append the pipe to the task and hand the whole thing to
+  `cmd_task`, whose second act is `mention_expand()`. That reader resolves a bare `@path` with **no
+  project confinement, no `..` rejection and no absolute-path rejection** — safe, as `src/mention.cyr`'s
+  own header says, *because the content originates from a path the USER typed in their OWN message*.
+  Piped stdin breaks that premise: `--help` advertises `git diff | thoth 'review'`, and a diff is whatever
+  a contributor wrote. A `+ see @/home/you/.ssh/id_rsa` line in one was read and POSTed to the gateway,
+  with the operator shown **nothing** — one-shot runs the turn under `OUT_NULL`, so even cmd_task's
+  "(+1 file(s) attached as context)" notice was discarded.
+
+  This is the same hazard `cmd_prompt_slash` was hardened against at 0.43.0 for server-rendered MCP prompt
+  text, where `src/commands.cyr` calls it out in capitals as "a security boundary, not a style choice".
+  The stdin inlet was missed.
+
+  **The fix splits the task by PROVENANCE** (`_oneshot_compose_prompt`). The argv half is the operator's
+  own message and is `@mention`-expanded exactly as before; the piped half is third-party text and takes
+  the route MCP prompt text takes — `redact_tool_result` → `guard_wrap_untrusted` → `_task_dispatch`,
+  dispatched **without** expansion. Verified end to end against a capturing endpoint, not just in unit
+  tests: with a canary file outside the project, the argv `@mention` still injects (once), and the piped
+  one stays literal in all three shapes (`cmd | thoth 'task'`, `thoth -p`, and a mixed task).
+
+- **`_project_sensitive` covered two hardcoded names and missed four configurable ones.** The jail refused
+  `.thoth` and `thoth.cyml` as literals — but `[tron].policy`, `[session].file`, `[history].file` and
+  `[log].file` are named by the OPERATOR, and `.thoth/config.cyml.example` recommends project-relative
+  values for all four, putting them inside the model's read (and, with `[edit].enabled`, write) jail.
+  Because matching is whole-component by design, `.thoth_session` never matched `.thoth`. Concretely the
+  model could read the exact allow/deny list constraining it and rewrite it (live on the next `/reload`),
+  and `.thoth_session` is the whole keyed conversation store in plaintext — readable it leaks other
+  conversations, writable it injects turns replayed as real history at the next launch, an injection that
+  survives `/reset`. The refusal is now data-driven off the same config that names the files, matching
+  basenames in relative and absolute form at any depth.
+
+- **The subagent swap set missed memory recall and citations — the same omission a second time.** A child
+  builds its request with `memory_context(task)` exactly as the parent did, and that writes three shared
+  things: it calls `citations_reset()` unconditionally, repopulates the citation arena on a successful
+  mneme recall, and renders into the single shared `_mem_recall_buf` — into which the parent holds a raw
+  pointer for the whole turn. So one delegation meant every remaining parent round POSTed the CHILD's
+  recalled notes as the parent's project memory, and the parent's reply was persisted with **no** cited
+  sources even for a turn that had recalled. Silently wrong data, no crash — exactly the `_roundlog_cur`
+  case ADR-0018 already records. The child now gets its own citation arena and recall buffer.
+  `_sub_alloc` also now null-checks all 12 allocations rather than 7; the five it skipped were precisely
+  the ones `_sub_enter` installs into globals the round then writes through.
+
+- **A large tool call BYPASSED the operator's blocking `pre_tool` hook — fail-open.** `_hook_run` composed
+  the env prefix and the operator's command into one 8 KB buffer while `THOTH_ARGS` can carry up to
+  `AGENT_ARGS_MAX` (16383) bytes — so a big call consumed the whole buffer, left the operator's command
+  out of the composed string entirely, and terminated mid-quote.
+
+  ⚠ **The direction matters, and it is worse than it first looked.** The expectation was that the
+  resulting syntax error would surface as a spurious *deny* (misattributed to the operator's hook).
+  Running the regression test against a reverted tree showed the opposite: with the command gone the
+  shell result was read as "could not run", which `hooks_pre_tool` correctly treats as *allow* — so a
+  hook configured to DENY returned **proceed**. Any tool call with roughly ≥8 KB of arguments silently
+  skipped the operator's blocking deny, in the same class as the 0.43.1 parallel-executor bug and by a
+  different mechanism. Found only because the fix was tested by breaking it again. `_hook_env_append` now reserves room for its own
+  closing quote so the line is always syntactically whole; `_hook_run` reserves the command's bytes before
+  appending the args; `HOOK_CMD_CAP` is 32768. If the args still cannot be passed in full, the hook is told
+  (`THOTH_ARGS_TRUNCATED=1`) and the operator is told — a security control never decides on silently
+  shortened input believing it complete.
+
+- **A hook TIMEOUT was read as a hook APPROVAL.** A timeout and a spawn failure shared the `-1` return and
+  therefore shared a verdict. They are now distinct: a hook that could not **spawn** never weighed anything
+  and must not wedge a session (still allow), while a hook that **started and ran out of time** was
+  consulted and did not answer, so it degrades **closed** like every other security seam here. Behaviour
+  change, deliberate — the existing test asserting the old verdict was rewritten with the reasoning.
+
+- **`_ev_end` could emit an unterminated NDJSON line.** `_append_cstr_cap` writes nothing once `off`
+  reaches `cap - 1`, so a saturating event would go out with no `}` and no `\n`, concatenating the next
+  event onto the same line — a consumer parsing line-by-line gets one malformed record and silently loses
+  the following one. The terminator is now forced.
+
+  ⚠ **Stated accurately, because the first draft of this note overstated it:** this is **not reachable
+  today** through the public emitters. The value escaper stops six bytes short of the cap
+  (`if ((off + 6) >= cap)`, `src/hoosh.cyr:207`) — for its own unrelated reason, since a `\u00XX` escape
+  is six bytes — and that margin happens to leave room for the closing quote and `}\n`. So the framing
+  invariant currently holds by a coincidence maintained in a *different module*. That is not a contract,
+  and it is the kind of thing that breaks silently when the other module changes. The fix makes the
+  invariant hold on its own; the regression test drives `_ev_end` at the saturating precondition rather
+  than pretending to reproduce a live bug, and says so.
+
+- **Esc was not honoured between batches of a parallel tool round.** `nc` is the model's actual
+  `tool_calls` length and is not capped at `PAR_MAX`, so a round of 20 tools ran three full batches with
+  the user's cancel unread. `[hoosh].parallel` is on by default, so this was the common path.
+
+- **`[ui].tier` was never parsed.** The tier was `--tier=` only, and the config parser drops unknown keys
+  without a word — so a `tier = "simple"` line under `[ui]` did nothing and said nothing (this repo's own
+  config had one). It is now a durable preference; **argv still wins**, and an unknown value is announced.
+
+- **`SUB_TASK_CAP` was declared, documented and never referenced** — the 8 KB bound it advertised did not
+  exist. Now enforced, and it **refuses** rather than truncating: a silently clipped task would have the
+  child work a different brief than the parent asked for.
+
+### Changed — the legacy `./thoth.cyml` fallback is now announced
+
+The fallback is gated on the **file**, not on the home: it fires whenever `<root>/config.cyml` is absent,
+even with a `.thoth/` home present. Three docs said otherwise, so "I have a `.thoth/` home, therefore a
+stray root `thoth.cyml` is inert" read as true when it is false — delete `.thoth/config.cyml` and the root
+file silently becomes your config, potentially unbinding the authorization seam with no message.
+
+The behaviour is **kept** (it is ADR-0016's back-compat promise) and the docs corrected to match the code.
+What changed is that a legacy load is no longer silent: the greeting names it, `/state` gained a `config`
+row showing the live path flagged `[legacy path]`, and `/reload` re-runs discovery — it used to reuse the
+cached path, so a `.thoth/config.cyml` created in response to that very advice stayed invisible until a
+restart — and reports it when the file changes. `config_source()` and `config_root()` had existed since
+0.26.0 with **zero callers**; the honesty was already built and never wired.
+
+The stale top-level `thoth.cyml` in this repo — an untracked, pre-0.26 copy of the old example that
+`.thoth/config.cyml` had been shadowing — is **removed**. `scripts/stack.sh` now writes the preferred
+`$STACK_HOME/.thoth/config.cyml` rather than the legacy name, which any `~/.thoth/config.cyml` would have
+silently shadowed.
+
+### Fixed — scripts, CI and repo hygiene
+
+- **`scripts/sync-sit.sh` could destroy the bundle it was syncing.** It is the only sync script that
+  transforms its input, so it writes through `>` — and the shell truncates the destination *before* the
+  producer runs. A bad `SIT_LOCAL`, a 404 or a dropped connection left the committed 415 KB
+  `src/vendor/sit-read.cyr` at **zero bytes**. Now staged through a temp file and moved on success.
+- **`scripts/build.sh` resolved `gen-version.sh` from `$0` after `cd`-ing away**, so for some invocation
+  paths it silently failed and the build shipped a stale `src/version.cyr`. The root is now resolved once,
+  before the `cd`, and the call is gated. Lanes also `rm -f` their output first — a gapped lane printed
+  "no binary this run" while a months-old binary sat at exactly the path it had just named, and
+  `release.yml` publishes `build/*`. The empty-array expansion under `set -u` is now guarded (an error on
+  the macOS build host's bash 3.2).
+- **`scripts/stack.sh`**: `wait_listen`'s budget was ~0.6 s, not the ~10 s `n=40` was chosen for — a
+  refused *local* connection returns immediately, so `curl --max-time 0.25` paced nothing and services
+  that took longer than that to bind were declared failed while coming up fine. It now sleeps. `usage()`
+  printed one line short, truncating the whole port/model override list.
+- **`.gitignore`**: the checkpoint rule was root-anchored while `src/checkpoint.cyr` builds a CWD-relative
+  path — so running thoth from a subdirectory produced untracked `.snap` files (verbatim pre-edit copies
+  of source) that the rule did not match, against a comment promising "never tracked". Now `**/`-prefixed.
+- **CI built only the `linux` lane**, so a regression in `--agnos` / `--aarch64` / `--win` was invisible
+  until someone ran `build.sh all` by hand — while roadmap gate 1 carries "`--agnos` build ✓" as a
+  standing claim. A non-gating cross-lane job now runs all three.
+- `temp.txt` ("hello - from Temp") was tracked; removed.
+
+### Fixed — test suite
+
+- **`src/vendor/agnosai-guard.cyr` was the one vendored bundle with no pin gate** — nine of ten pinned,
+  and the tenth is the secret/PII redactor behind `[redact]` and the injection guard behind `[guard]`,
+  i.e. the one where a wrong version is a security consequence. It is also the bundle whose sync-script
+  checks are all non-fatal, so nothing else caught it.
+- **`src/mcpres.cyr` had zero coverage** — compiled in since 0.43.0, and not one of its 17 functions
+  referenced by a test. Now covers `_mcpres_field`'s null-safety across every non-string JSON type (a
+  third-party server controls that shape), `_mcpres_build_uri_body`'s escaping and bounds, and the honest
+  degrade with no daimon. `/resources`, `/resource` and `/prompts` are now asserted in `test_classify` —
+  the ordering of the two `/resource*` arms is load-bearing (`/resource` is a prefix of `/resources`).
+- **The 0.43.1 parallel-hook test named two properties and asserted one.** Both existing assertions were
+  hook-side counters, so deleting the executor's *attribution* left them green. It now reads the
+  transcript and pins that the model is told the **hook** refused, not the policy.
+- **Five `/save` round-trips read back a file without unlinking it or checking the write** — a save that
+  silently failed read a leftover from an earlier run and satisfied every assertion. The failure path was
+  also an out-of-bounds store: `file_read_all` returns negative and `store8(buf + n, 0)` then wrote
+  *before* the buffer.
+- A test comment claimed "a real `.thoth/config.cyml` exists in this repo during CI". It does not —
+  `.gitignore` ignores it and only the `.example` is checked out. The assertions were sound; the stated
+  premise was not.
+
+### Changed — full documentation sweep at 0.43.2
+
+Six parallel reviewers, each finding handed to an independent skeptic; 47 confirmed. Every *measurement*
+re-run rather than re-read. Highlights, with the rest in [`docs/doc-health.md`](docs/doc-health.md):
+
+- **`doc-health.md` asserted freshness it had not checked.** Its prose described a 0.43.0/0.43.1 sweep
+  while every Tier row was still the **0.33.7** sweep's, each saying "this sweep:" about work ten releases
+  old, with a dangling sentence fragment at the seam where the new prose was prepended over the old. That
+  is how `getting-started.md` and `CONTRIBUTING.md` drifted unnoticed. Rewritten, and the lesson recorded:
+  **if a sweep does not re-stamp the tables, it did not happen.**
+- **`state.md` contradicted itself five ways**: `## Next` still said "macOS builds+runs" — the exact claim
+  the previous sweep records itself as having fixed in the README — 120 lines from its own matrix saying
+  the opposite; `## Posture` said "all five seams" (`SEAM_COUNT = 7`), pinned avatara at 2.14.0 (the
+  bundle says 2.14.1) and named the legacy `thoth.cyml` as the binding config; `## Tests` reported 1675
+  assertions "as of 0.33.7"; the Targets matrix was anchored at 0.38.6 with stale `src/tui.cyr` lines.
+- **The roadmap still argued from a retracted number.** 0.43.0's "over the limit by 5,370 bytes" was
+  retracted at 0.43.1 as a misread (the compiler reports where expansion *aborted*, not a total), but the
+  roadmap kept the figure and the conclusion drawn from it. Re-summed at 0.43.2 the binding unit is
+  **≈4.94 MB** of the 8 MB slot — low-to-mid 60 %, not the ~96 % `gap-review.md` was still quoting. The
+  "most likely thing to block the next feature" claim is **withdrawn** with the number it came from.
+  `CYRIUS_STATS` re-run: `fn_table` 8522/32768, identifiers 271744/524288, `var_table` 4942/8192.
+- **`gap-review.html` had drifted a release behind `gap-review.md`** — three untrusted-prose inlets
+  instead of five, no subagent strength, the pre-retraction ceiling figure, and an open question whose
+  premise 0.43.0 had removed. Re-synced, and both files now say plainly that they are twins: **edit both,
+  or neither.**
+- **`CONTRIBUTING.md` was stamped 0.26.0** — seventeen releases stale — and `SECURITY.md` told a reporter
+  no tagged release existed (against 158 tags) under a CalVer scheme ADR-0004 formally rejected. Neither
+  had a row in the doc ledger at all, so nothing would ever have flagged them. Both fixed, both now
+  tracked.
+- **`getting-started.md`** was marked Fresh while anchored at 0.33.7: "five spine seams", 12 missing
+  modules, and none of the commands added since. A scripted check now confirms all **48** `src/*.cyr`
+  modules have an entry. The doc set's only broken relative link (ADR-0017 → a directory in another repo)
+  is fixed; a whole-tree check reports **0 broken links**.
+- **A stray unfinished editing note** sat on the README front page — an orphaned "SCRIBE" backronym
+  competing with the project's own, plus an agnosai claim the gap review had declined. Removed. The two
+  root design assets are now named so neither reads as scratch.
+
 ## [0.43.1] - 2026-08-25
 
 **A security fix found by a documentation sweep, plus the doc sweep itself.** Suite

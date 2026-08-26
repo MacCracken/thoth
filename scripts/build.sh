@@ -49,7 +49,11 @@
 
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+# Resolve the repo root ONCE, before any cd. `$0`-relative lookups AFTER this cd are wrong for some
+# invocation paths (run as `./build.sh` from inside scripts/, `$(dirname "$0")` becomes the repo root
+# and `$ROOT/gen-version.sh` does not exist) — the sync-*.sh family already uses this form.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
 
 SRC="src/main.cyr"
 OUT="build"
@@ -62,7 +66,17 @@ mkdir -p "$OUT"
 # ARCH_GAP — ARCHITECTURAL: a primitive the target genuinely lacks with NO
 # raw-syscall equivalent. Win32 has no futex (uses WaitOnAddress) and no epoll
 # (uses IOCP). These are PERMANENT by design; the lane gates closed, announced.
-ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX'
+# 0.43.2: this pattern matched only the syscall NUMBER constants, but the toolchain now surfaces the
+# epoll FLAG constants (EPOLL_CTL_ADD / EPOLLIN) and the ws2_32-routed socket calls first — so the win
+# lane's genuinely architectural failure was being reported as "FAILED (not a known gap)". Same gap,
+# different symbol names; the classifier, not the lane, was stale.
+ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX|EPOLL_CTL_ADD|EPOLLIN|SYS_SOCKET|SYS_CONNECT'
+#
+# ⚠ TTY_SIGMASK_WINCH is deliberately NOT listed. It is thoth's OWN bug, not a floor gap: src/tui.cyr
+# calls darshana's termios/signalfd half with no non-Linux guard, and darshana gates that half to
+# `#ifdef CYRIUS_TARGET_LINUX`. It is the SAME root cause that breaks the macOS lane (see the roadmap's
+# known limitations), and the win lane surfaces it too. Listing it here would paper over a defect thoth
+# is supposed to fix; the lane stays red on it on purpose, and the fix clears both lanes at once.
 #
 # TRANSIENT_GAP — a FIXABLE upstream bug already fixed-or-filed; present ONLY
 # because thoth's vendored snapshot (lib/, synced from the cyrius toolchain) lags
@@ -94,6 +108,7 @@ is_macos_host() { [ "$(uname -s 2>/dev/null)" = "Darwin" ]; }
 _run() {
     local label="$1" out="$2"; shift 2
     echo "==> $label: cyrius build $* -> $out"
+    rm -f "$out"        # an absent binary must always mean "this lane produced nothing"
     if cyrius build "$@" "$SRC" "$out"; then
         echo "    ok -> $out"
         return 0
@@ -111,17 +126,36 @@ _run_best_effort() {
     while [ "${1:-}" != "--" ]; do env+=("$1"); shift; done
     shift  # drop --
     echo "==> $label (best-effort): ${env[*]:-} cyrius build $* -> $out"
-    local log; log="$(env "${env[@]}" cyrius build "$@" "$SRC" "$out" 2>&1)"
+    # rm first: without it a gapped lane prints "no binary this run" while a MONTHS-OLD binary still
+    # sits at exactly the path just named — and release.yml publishes `build/*`, so a stale 0.20.1
+    # thoth_agnos would ship as a release asset. `${env[@]+...}` guards the empty-array expansion under
+    # `set -u`, which is an error on bash < 4.4 — including the 3.2 on the macOS build host.
+    rm -f "$out"
+    local log; log="$(env ${env[@]+"${env[@]}"} cyrius build "$@" "$SRC" "$out" 2>&1)"
     local rc=$?
     if [ $rc -eq 0 ] && [ -f "$out" ]; then
         echo "    ok -> $out  (gap appears closed!)"
         return 0
     fi
-    if echo "$log" | grep -qE "undefined variable '($KNOWN_GAP)'"; then
-        local sym; sym="$(echo "$log" | grep -oE "($KNOWN_GAP)" | head -1)"
-        echo "    BEST-EFFORT SKIP: known stdlib gap ($sym not on this floor) — no binary this run."
-        echo "    Nothing removed; lane lights up when the floor/stdlib gates it. See ADR-0008."
-        return 0
+    # ⚠ 0.43.2: this implements the "failed ONLY on a KNOWN_GAP symbol" the header promises. It used to
+    # be a single `grep -q` for ANY known symbol, so one architectural gap in the log classified the whole
+    # lane as expected — masking every OTHER undefined symbol in the same build, including thoth's own
+    # bugs. The win lane was the live case: it reports the architectural epoll/ws2_32 gaps AND
+    # TTY_SIGMASK_WINCH, which is thoth's un-guarded call into darshana's Linux-only TTY half (the same
+    # root cause that breaks the macOS lane). Under the old test that defect was invisible.
+    local undef; undef="$(echo "$log" | grep -oE "undefined variable '[A-Za-z_][A-Za-z0-9_]*'" | sed -E "s/.*'(.*)'/\1/" | sort -u)"
+    if [ -n "$undef" ]; then
+        local unexpected; unexpected="$(echo "$undef" | grep -vE "^($KNOWN_GAP)$" || true)"
+        if [ -z "$unexpected" ]; then
+            echo "    BEST-EFFORT SKIP: known stdlib gap ($(echo "$undef" | paste -sd, -) not on this floor) — no binary this run."
+            echo "    Nothing removed; lane lights up when the floor/stdlib gates it. See ADR-0008."
+            return 0
+        fi
+        echo "    FAILED (not a known gap): $label" >&2
+        echo "      architectural gaps present: $(echo "$undef" | grep -E "^($KNOWN_GAP)$" | paste -sd, - || echo none)" >&2
+        echo "      UNEXPECTED undefined symbols: $(echo "$unexpected" | paste -sd, -)" >&2
+        echo "$log" | tail -20 >&2
+        return 1
     fi
     # SIZE_GAP — a target with a fixed cyrius output-size cap (the aarch64 lane caps at
     # 16 MiB) that thoth+the vendored sit read bundle tips over (0.13.0). NOT a capability
@@ -162,7 +196,7 @@ target="${1:-$(is_macos_host && echo macos || echo linux)}"
 
 # Regenerate src/version.cyr from VERSION (single source of truth) before any build,
 # so thoth_version() can never drift from the VERSION file. See scripts/gen-version.sh.
-"$(dirname "$0")/gen-version.sh"
+"$ROOT/scripts/gen-version.sh" || { echo "FAILED: gen-version.sh — refusing to build a stale src/version.cyr" >&2; exit 1; }
 
 case "$target" in
     linux)   build_linux ;;

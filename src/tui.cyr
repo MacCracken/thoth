@@ -2059,6 +2059,14 @@ fn tui_loop() {
         if (_up == 1) { ui_emit(ROLE_MUTED, "  [default "); emit(config_hoosh_url()); ui_emit(ROLE_MUTED, " is reachable]"); }
     }
     feed_flush_pending();
+    # 0.43.2: a session running off the LEGACY ./thoth.cyml says so. Only the two failure branches above
+    # ever named the config file, so a legacy load looked exactly like a preferred one — while every
+    # hint in /state and /reload pointed at `.thoth/config.cyml`, the file thoth was not reading.
+    if (config_source() == 3) {
+        ui_emit(ROLE_RED, "config: legacy ./thoth.cyml");
+        ui_emit(ROLE_FAINT, " — move it to .thoth/config.cyml (back-compat fallback)");
+        feed_flush_pending();
+    }
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
     # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`

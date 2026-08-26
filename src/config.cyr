@@ -50,7 +50,9 @@ var _cfg_hook_pre_tool = 0;
 var _cfg_hook_post_tool = 0;
 var _cfg_hook_session_end = 0;
 var _cfg_hook_timeout_ms = 0 - 1;
-var HOOK_CMD_CAP = 8192;            # composed "export K=..; <command>"; a hook longer than this is refused
+var HOOK_CMD_CAP = 32768;           # composed "export K=..; <command>"; a hook longer than this is refused.
+                                    # 0.43.2: 8192 was below the worst case it has to hold — THOTH_ARGS carries a tool
+                                    # call of up to AGENT_ARGS_MAX (16383) bytes, so the env prefix alone could exceed it.
 var HOOK_TIMEOUT_DEFAULT_MS = 15000;
 var HOOK_TIMEOUT_MAX_MS = 120000;
 var _cfg_verify_command = 0;        # 0.41.0 (T2-5): [verify].command — the project's own check; 0 = unset
@@ -69,6 +71,11 @@ var _cfg_history_file = 0;   # cstring path for the persistent INPUT-history fil
 var _cfg_session_file = 0;   # cstring path for the persistent CONVERSATION-history file (0.24.2), or 0
 var _cfg_ui_bell = 0;        # [ui].bell — emit a BEL on turn completion (0.24.3); opt-in, default off
 var _cfg_ui_elapsed = 0;     # [ui].elapsed — a faint per-turn elapsed line after each reply (0.24.3); opt-in, default off
+# [ui].tier (0.43.2) — a durable presentation-tier preference. Until this release the tier was
+# `--tier=` ONLY, and because the parser drops unknown keys without a word, a `tier = "simple"` line
+# under [ui] did nothing and said nothing. It is the natural place to look for the setting, `--tier`
+# already proves the concept, and argv still wins so scripts are unaffected.
+var _cfg_ui_tier = 0;
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
 var _cfg_edit_enabled = 0;   # 1 = advertise the model-invokable `edit` tool (0.31.0, opt-in); off by default (writing is consequential)
@@ -79,7 +86,11 @@ var _cfg_shell_output_cap = 0 - 1;  # captured-output byte cap; -1 = unset -> de
 var _cfg_persona = 0;        # [persona].name — startup default archetype (0.22.0); 0 = unset -> egyptian_thoth
 var _cfg_vidya = 0;          # [project].vidya — path to the vidya knowledge base, a first-class `/allow vidya` root (0.23.1); 0 = unset
 
-var CONFIG_PATH = "thoth.cyml";   # legacy CWD config name — still read as a fallback (see config_path)
+# The legacy CWD config name — still read as a fallback (see config_path). 0.43.2: config_path now
+# USES this rather than hardcoding the literal twice. It had been declared and never read, which in
+# Cyrius (one flat global namespace, duplicate `var` silent) is a live collision hazard as well as a
+# claim that the name was centrally defined when it was not.
+var CONFIG_PATH = "thoth.cyml";
 var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
 
 # --- config + memory home discovery (0.26.0) -------------------------------
@@ -152,6 +163,14 @@ fn _thoth_root_resolve() {
 # `.thoth/` home holds one) → legacy ./thoth.cyml → else the PREFERRED path (for
 # messages) with config_source()==0. Caches only a found path, so a config created
 # mid-session is picked up by /reload.
+#
+# ⚠ THE LEGACY FALLBACK IS GATED ON THE FILE, NOT ON THE HOME — and three docs used to say otherwise
+# ("read only when no `.thoth/` home exists"). It fires whenever `<root>/config.cyml` is ABSENT, even
+# with a `.thoth/` home sitting right there. So an operator who reasons "I have a .thoth/ home,
+# therefore the root thoth.cyml is inert, therefore deleting .thoth/config.cyml gives me a no-config
+# session" silently gets a DIFFERENT config loaded instead. Kept as-is (it is ADR-0016's back-compat
+# promise, and narrowing it would break trees that rely on it), but it is now ANNOUNCED: the greeting
+# and /state both name a legacy load, so it is never silent. The docs were corrected to match the code.
 fn config_path() {
     if (_cfg_path_c != 0) { return _cfg_path_c; }
     var root = _thoth_root_resolve();
@@ -159,11 +178,17 @@ fn config_path() {
         var cp = _cfg_join2(root, "config.cyml");
         if (file_exists(cp) == 1) { _cfg_path_c = cp; _cfg_source = 1; return cp; }
     }
-    if (file_exists("thoth.cyml") == 1) { _cfg_path_c = "thoth.cyml"; _cfg_source = 3; return _cfg_path_c; }
+    if (file_exists(CONFIG_PATH) == 1) { _cfg_path_c = CONFIG_PATH; _cfg_source = 3; return _cfg_path_c; }
     _cfg_source = 0;
     if (root != 0) { return _cfg_join2(root, "config.cyml"); }
-    return "thoth.cyml";
+    return CONFIG_PATH;
 }
+
+# config_path_recheck: drop the cached resolution so the NEXT config_path() re-runs discovery. For
+# /reload. Without it a session that started on the legacy ./thoth.cyml kept reading it even after the
+# operator created the .thoth/config.cyml that /state had just told them to create — the cache made the
+# advice unfollowable without a restart.
+fn config_path_recheck() { _cfg_path_c = 0; _cfg_source = 0; return 0; }
 
 # config_source: 0 = no config file found · 1 = .thoth/config.cyml · 3 = legacy ./thoth.cyml.
 fn config_source() { config_path(); return _cfg_source; }
@@ -555,6 +580,7 @@ fn config_load() {
     var ui = _cfg_section_pairs(sections, "ui");
     _cfg_ui_bell = _cfg_bool(ui, "bell", 0);               # [ui].bell — BEL on turn completion (0.24.3), opt-in
     _cfg_ui_elapsed = _cfg_bool(ui, "elapsed", 0);         # [ui].elapsed — faint per-turn elapsed line (0.24.3), opt-in
+    _cfg_ui_tier = _cfg_str(ui, "tier");                   # [ui].tier — durable presentation tier (0.43.2); --tier still wins
     var memory = _cfg_section_pairs(sections, "memory");
     _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
     var persona = _cfg_section_pairs(sections, "persona");
@@ -868,3 +894,4 @@ fn config_session_file() { return _cfg_session_file; }
 # bell = emit a terminal BEL when a model turn finishes; elapsed = a faint "(N.Ns)" line after each reply.
 fn config_ui_bell() { return _cfg_ui_bell; }
 fn config_ui_elapsed() { return _cfg_ui_elapsed; }
+fn config_ui_tier() { return _cfg_ui_tier; }

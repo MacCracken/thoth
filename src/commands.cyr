@@ -332,6 +332,20 @@ fn cmd_state() {
     mcpres_probe();       # 0.43.0 (T2-7): one-time resources/prompts capability probe. A USER path, never
                           # seam_status — which must stay network-free so /dry and the status bar are cheap.
     ui_emit(ROLE_ACCENT, "session:"); oprintln("");
+    # 0.43.2: name the config file that is ACTUALLY live. Every hint in this command says
+    # ".thoth/config.cyml", which is right for the preferred path and a lie on the legacy one — a
+    # session running off `./thoth.cyml` used to show a plain READY and then tell the operator to edit a
+    # file it was not reading. config_source()/config_root() existed for exactly this and had no callers.
+    ui_label("  config  : ");
+    if (config_source() == 0) { ui_emit(ROLE_FAINT, "(none found — add .thoth/config.cyml, or ~/.thoth/config.cyml)"); oprintln(""); }
+    else {
+        emit(config_path());
+        if (config_source() == 3) {
+            ui_emit(ROLE_RED, "  [legacy path]");
+            ui_emit(ROLE_FAINT, " — move it to .thoth/config.cyml (this fallback is back-compat only)");
+        }
+        oprintln("");
+    }
     ui_label("  turns   : "); ofmt_int(status_ival(SF_TURNS)); oprintln("");
     ui_label("  persona : "); ui_emit(ROLE_ACCENT, status_sval(SF_PERSONA));
     ui_emit(ROLE_FAINT, " ("); emit(ui_sgr(ROLE_FAINT)); emit(persona_role()); emit(ui_reset());
@@ -1831,6 +1845,13 @@ fn cmd_reset() {
 # endpoints, the t-ron/log seams, the persona default, the persisted-file bindings — would need a restart). We
 # never claim a reload changed something it didn't.
 fn cmd_reload() {
+    # 0.43.2: re-run discovery first. config_path() caches the file it found at startup, so a config
+    # CREATED since then was invisible until a restart — including the `.thoth/config.cyml` that a
+    # legacy-path session's own /state advice tells the operator to create. Any change of source is
+    # announced below rather than swapped silently.
+    var prev_src = config_source();
+    var prev_path = config_path();
+    config_path_recheck();
     if (file_exists(config_path()) == 0) {
         ui_emit(ROLE_RED, "no "); emit(config_path()); ui_emit(ROLE_FAINT, " found — nothing to reload"); oprintln("");
         return 0;
@@ -1844,6 +1865,14 @@ fn cmd_reload() {
     mcpres_endpoints_reset();                 # 0.43.0 (T2-7): drop the cached resources/prompts URLs + probe, else a changed [daimon].url is silently ignored
     hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
     ui_emit(ROLE_GREEN, "reloaded "); emit(config_path()); oprintln("");
+    if (config_source() != prev_src) {
+        ui_emit(ROLE_RED, "  note: the config FILE changed");
+        ui_emit(ROLE_FAINT, " — was "); emit(prev_path); ui_emit(ROLE_FAINT, ", now "); emit(config_path());
+        oprintln("");
+    }
+    if (config_source() == 3) {
+        ui_emit(ROLE_FAINT, "  (legacy path — move it to .thoth/config.cyml)"); oprintln("");
+    }
     ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent]"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");

@@ -74,7 +74,8 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
     `file_write_all` opened `O_TRUNC` then did a single write, so a short write (disk-full/quota) or an error
     left the file truncated — a known residual because a crash-safe replace needs a portable temp-file+`rename`
     and no portable `xrename` existed (`sys_rename`'s arity differs per target). The stdlib follow-up was
-    [filed and shipped](../development/issues/): `file_write_atomic` writes a unique sibling temp, loops until
+    filed and shipped upstream (`cyrius/docs/development/issues/2026-07-12-thoth-portable-atomic-file-write.md` —
+    a path in the cyrius repo, not this one): `file_write_atomic` writes a unique sibling temp, loops until
     every byte lands (partial-write-safe), fsyncs, then atomically renames over the target, leaving the original
     intact on ANY failure. `_edit_do` now calls it, so an edit can no longer truncate the file.
   - **Symlink-inside-project is followed on write** (no portable `O_NOFOLLOW`) — more dangerous for a

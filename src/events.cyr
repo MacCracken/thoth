@@ -83,8 +83,18 @@ fn _ev_begin(name, turn) {
 fn _ev_end(off) {
     if (off < 0) { return 0; }
     if (_ev_cur == 0) { return 0; }
-    off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "}\n");
-    if (off > (_ev_cur_cap - 1)) { off = _ev_cur_cap - 1; }
+    # ⚠ 0.43.2: the terminator is FORCED, not appended. `_append_cstr_cap` writes nothing once `off`
+    # reaches `cap - 1`, so a saturating line used to be emitted with no `}` and — the part that
+    # matters — no `\n`, concatenating the next event onto the same line. NDJSON framing is this
+    # stream's whole contract: a consumer parsing line-by-line then gets one malformed record and
+    # SILENTLY LOSES the following one. Escaping already stops a forged newline (see the header); this
+    # stops the same damage arriving by length instead. Reachable from model- or MCP-server-chosen text,
+    # because `_json_escape_n_into_cap` expands a control byte to six output bytes, so the declared
+    # per-field caps (name 256 + args EV_ARGS_MAX 2048) can outrun EV_CAP on their own.
+    if (off > (_ev_cur_cap - 3)) { off = _ev_cur_cap - 3; }
+    store8(_ev_cur + off, 125);                  # '}'
+    store8(_ev_cur + off + 1, 10);               # '\n'
+    off = off + 2;
     store8(_ev_cur + off, 0);
     # fd 1 directly — NOT emit()/ui_emit(), which route through out_mode and would be discarded under the
     # OUT_NULL that --events implies.
