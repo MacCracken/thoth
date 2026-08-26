@@ -293,6 +293,116 @@ fn project_read_root_at(i) {
     return load64(_read_roots + i * 8);
 }
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# WHERE AM I? — the launch directory, as a STRING FOR THE MODEL (0.44.1)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# Through 0.44.0 the agent was handed file tools rooted at the launch cwd and was never TOLD what that
+# directory was. That is not cosmetic. A session wired to a daimon that ALSO hosts a filesystem tool
+# (bote's fs_read/fs_write, rooted at its own BOTE_FS_ROOT) is offered TWO read tools whose descriptions
+# both say "the project root" and which resolve the SAME relative path in DIFFERENT trees. With nothing
+# in the system prompt naming the actual directory, the model picks by advertisement order — daimon's
+# registry is serialized first — and reads `src/tasks/health.js` out of the tool host's workspace rather
+# than out of the project the operator launched thoth in. That was observed live against the dev stack:
+# `fs_read {"path":"src/tasks/health.js"}` answered `cannot read
+# /home/macro/.agnos-stack/workspace/src/tasks/health.js` while the file sat in the launch directory the
+# whole time. thoth cannot re-root someone else's tool host, but it can say where IT is and which tools
+# reach here — so it does, in the system prompt (project_prompt_clause) and in its own refusals
+# (project_refuse_outside).
+#
+# ⚠ THIS IS DISPLAY STATE, NOT A JAIL INPUT. The value comes from $PWD, which the launching shell sets
+# and which nothing here verifies against the real cwd. Every authorization decision stays with
+# _project_jail_ok / _project_under_root, which are lexical relative-vs-absolute tests and never consult
+# this value. A wrong or absent $PWD therefore mislabels a sentence; it can NEVER widen the jail. Do not
+# "improve" this by feeding it into _project_read_ok — that would promote an environment variable the
+# jail deliberately does not trust into a security boundary.
+
+var _proj_root_disp = 0;         # cached cstr: the launch directory, or 0 when $PWD is unusable
+
+# project_root_display: the launch directory as an absolute cstr, or 0. DISPLAY/PROMPT ONLY (see above).
+fn project_root_display() {
+    if (_proj_root_disp != 0) { return _proj_root_disp; }
+    var p = getenv("PWD");
+    if (p == 0) { return 0; }
+    if (load8(p) != 47) { return 0; }        # not absolute -> not a usable label; say nothing rather than guess
+    _proj_root_disp = p;
+    return _proj_root_disp;
+}
+
+# _proj_is_project_abs: 1 when `path` is an ABSOLUTE path naming the launch directory or something below
+# it. Used ONLY to WORD a refusal — never to grant one. See the warning above.
+fn _proj_is_project_abs(path) {
+    if (path == 0) { return 0; }
+    if (load8(path) != 47) { return 0; }
+    var r = project_root_display();
+    if (r == 0) { return 0; }
+    var rl = strlen(r);
+    if (rl == 0) { return 0; }
+    if (_project_prefix_eq(path, r, rl) == 0) { return 0; }
+    var b = load8(path + rl);
+    if ((b == 0) || (b == 47)) { return 1; }
+    return 0;
+}
+
+var PROJ_MSG_CAP = 1024;
+var _proj_msg_buf = 0;
+
+# project_refuse_outside: the "outside the jail" refusal for read_file / list_dir / search, worded so the
+# model can FIX the call on its next round instead of repeating it. The old message said only "path is
+# outside the project", which is actively MISLEADING for the most common mistake — an absolute path
+# naming a file that is in this very project (the jail takes project paths relative and absolute ones
+# only under a /allow-granted root, so the correct absolute spelling of an in-project file is refused).
+# A model told "outside the project" about a file it can see in a listing has no move left; a model told
+# the relative path to retry with does. The suggestion is derived from the same lexical prefix test, and
+# grants nothing — the retried call is re-checked from scratch.
+fn project_refuse_outside(tool, path) {
+    if (_proj_msg_buf == 0) { _proj_msg_buf = alloc(PROJ_MSG_CAP); }
+    var cap = PROJ_MSG_CAP;
+    var off = 0;
+    off = _append_cstr_cap(_proj_msg_buf, off, cap, "(");
+    off = _append_cstr_cap(_proj_msg_buf, off, cap, tool);
+    off = _append_cstr_cap(_proj_msg_buf, off, cap, ": refused - ");
+    if (_proj_is_project_abs(path) == 1) {
+        var rest = path + strlen(project_root_display());
+        if (load8(rest) == 47) { rest = rest + 1; }
+        if (load8(rest) == 0) { rest = "."; }             # the root itself -> the relative spelling is "."
+        off = _append_cstr_cap(_proj_msg_buf, off, cap, "that path IS inside this project, but this tool takes a path RELATIVE to the project root. Retry with path=\"");
+        off = _append_cstr_cap(_proj_msg_buf, off, cap, rest);
+        off = _append_cstr_cap(_proj_msg_buf, off, cap, "\")");
+    } else {
+        off = _append_cstr_cap(_proj_msg_buf, off, cap, "path is outside the project and any user-granted read root. Give a path RELATIVE to the project root, with no leading '/', no '~' and no '..')");
+    }
+    store8(_proj_msg_buf + off, 0);
+    return _proj_msg_buf;
+}
+
+var PROJ_CLAUSE_CAP = 1024;
+var _proj_clause = 0;
+
+# project_prompt_clause: the WORKSPACE clause of the system prompt — where this session is rooted, which
+# tools reach it, and what shape their paths take. Folded into persona_system_prompt (session.cyr), the
+# one place thoth's operating clause is assembled, so the CHILD context (src/subagent.cyr, which reuses
+# that prompt verbatim) inherits it too rather than being the one agent that does not know where it is.
+#
+# The last sentence is the load-bearing one and it is deliberately hedged: thoth advertises whatever the
+# tool host registers, and it does NOT know where someone else's fs_* tool is rooted. It knows only that
+# such a tool is NOT the one jailed to this project, so the honest instruction is "prefer the tools that
+# are", not a claim about a directory thoth cannot see.
+fn project_prompt_clause() {
+    if (_proj_clause != 0) { return _proj_clause; }
+    _proj_clause = alloc(PROJ_CLAUSE_CAP);
+    var cap = PROJ_CLAUSE_CAP;
+    var off = 0;
+    off = _append_cstr_cap(_proj_clause, off, cap, " You are working in ONE project");
+    var r = project_root_display();
+    if (r != 0) {
+        off = _append_cstr_cap(_proj_clause, off, cap, ", rooted at ");
+        off = _append_cstr_cap(_proj_clause, off, cap, r);
+    }
+    off = _append_cstr_cap(_proj_clause, off, cap, ". Read its files with read_file, list its directories with list_dir, and locate code in it with search - reach for search FIRST, it is far cheaper than walking directories one level at a time. Their 'path' argument is always RELATIVE to that root (\"src/tasks/health.js\"), never absolute, never starting with '~' or '..'. If the tool host also offers generic file tools (fs_read, fs_write and the like), they are rooted somewhere else and will quietly read or write the WRONG tree - use read_file/list_dir/search for anything belonging to this project.");
+    store8(_proj_clause + off, 0);
+    return _proj_clause;
+}
+
 # _proj_apc: append NUL-terminated cstr `s` into _project_out_buf at off, bounded. Returns the new off.
 fn _proj_apc(off, s) {
     var i = 0;
@@ -313,7 +423,7 @@ fn read_file_tool(args_cstr) {
     var ps = bayan_json_v_str(pv);
     if (ps == 0) { return "(read_file: 'path' must be a string)"; }
     var path = str_cstr(ps);
-    if (_project_read_ok(path) == 0) { return "(read_file: refused - path is outside the project and any user-granted read root; no '..' allowed)"; }
+    if (_project_read_ok(path) == 0) { return project_refuse_outside("read_file", path); }
     if (_project_no_symlink(path) == 0) { return "(read_file: refused - a path component is a symlink; the jail does not follow links out of the project)"; }
     if (_project_sensitive(path) == 1) { return "(read_file: refused - that is thoth's own config/state, not project source)"; }
     if (is_dir(str_from(path)) == 1) { return "(read_file: that path is a directory - use list_dir)"; }
@@ -343,7 +453,7 @@ fn list_dir_tool(args_cstr) {
             }
         }
     }
-    if (_project_read_ok(path) == 0) { return "(list_dir: refused - path is outside the project and any user-granted read root; no '..' allowed)"; }
+    if (_project_read_ok(path) == 0) { return project_refuse_outside("list_dir", path); }
     if (_project_no_symlink(path) == 0) { return "(list_dir: refused - a path component is a symlink; the jail does not follow links out of the project)"; }
     if (_project_sensitive(path) == 1) { return "(list_dir: refused - that is thoth's own config/state, not project source)"; }
     var dirstr = str_from(path);

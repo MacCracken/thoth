@@ -1220,9 +1220,13 @@ fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"
 # Cached in the never-freeing bump heap. This is what stops the persona being
 # banner-only: it actually steers the turn (see hoosh_send).
 var _persona_sys = 0;
-var PERSONA_SYS_CAP = 2048;    # 0.22.0: raised from 1 KB — arbitrary switched archetypes' soul+spirit prose
+var PERSONA_SYS_CAP = 4096;    # 0.22.0: raised from 1 KB — arbitrary switched archetypes' soul+spirit prose
                                # can exceed 1 KB; _append_cstr_cap still clamps (never overruns) if a profile
                                # is longer still. The buffer is allocated ONCE and rebuilt in place per switch.
+                               # 0.44.1: raised again to 4 KB. The workspace clause (project_prompt_clause) is
+                               # ~500 B and lands LAST, so at 2 KB a long archetype prose would have clamped it
+                               # away silently — and the one sentence the model most needs is the one that says
+                               # where it is. Headroom, not decoration.
 # Built from avatara's emitted soul + spirit prose, which is fixed-but-not-length-
 # bounded — if the archetype's prose ever grows past PERSONA_SYS_CAP the writes must
 # clamp, not overrun the buffer. Reuses the shared bounded helper (hoosh.cyr).
@@ -1241,6 +1245,13 @@ fn persona_system_prompt() {
     off = _append_cstr_cap(_persona_sys, off, cap, " In this session you take the role of ");
     off = _append_cstr_cap(_persona_sys, off, cap, persona_role());
     off = _append_cstr_cap(_persona_sys, off, cap, ".");
+    # 0.44.1 WORKSPACE: say WHERE this session is rooted and which tools reach it. Until now the agent was
+    # handed file tools jailed to the launch cwd and never told what that directory was, so when the tool
+    # host ALSO advertised a filesystem tool rooted elsewhere (bote's fs_read under BOTE_FS_ROOT), the model
+    # had nothing to choose on and read the right relative path out of the wrong tree. See the long note at
+    # the top of src/project.cyr. This lands last and is part of thoth's operating clause, not avatara's
+    # prose — the archetype says who the agent is, this says where it is standing.
+    off = _append_cstr_cap(_persona_sys, off, cap, project_prompt_clause());
     store8(_persona_sys + off, 0);
     return _persona_sys;
 }

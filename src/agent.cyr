@@ -136,6 +136,78 @@ fn _agent_add_result(id, text) {
 # (issue 2026-06-11-mcp-manifest-omits-tool-input-schema) emits `inputSchema` per
 # tool in GET /v1/mcp/tools; earlier daimon omitted it. A tool with no/empty schema
 # (builtins) falls back to the permissive `{"type":"object"}`. Pure.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# WRONG-TREE CORRECTION (0.44.1) — when a HOST file tool misses a file this project actually has
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# A registry tool taking a `path` runs on the MCP HOST and resolves that path in the host's own tree,
+# which is not thoth's project jail and need not be anywhere near it. daimon's registry cannot say so —
+# bote registers fs_read as "Read a text file under the project root", and it means ITS root,
+# $BOTE_FS_ROOT — so the model sees two read tools whose descriptions agree and whose behaviour does not.
+# Live against the dev stack it chose fs_read for a project file and got back
+# `cannot read /home/macro/.agnos-stack/workspace/src/tasks/health.js`, with the file sitting in the
+# launch directory the whole time.
+#
+# ⚠ THE FIRST ATTEMPT AT THIS WAS PROSE AND IT DID NOT WORK. A note appended to every path-taking tool's
+# advertised description was measured against the live stack (3 runs x 40 rounds, annotated vs not) and
+# moved nothing: 12 stray fs_read calls with it, 2 without — noise, on a run-to-run variance far larger
+# than the effect. It was removed rather than kept as decoration. What replaces it is not steering at all:
+# a FACT, delivered at the moment the model is provably wrong. When a host tool reports an error and this
+# project really does contain the relative path it asked for, the tool result says so and names the exact
+# call that works. That is a file-existence test, not a hope, and it costs nothing when the call succeeds.
+
+var AGENT_XTREE_CAP = 1024;
+var _agent_xtree_buf = 0;        # scratch for the corrected result
+
+# _agent_xtree_path: the `path` argument of a tool call, as a cstr, or 0. PURE apart from the parse.
+fn _agent_xtree_path(args_json) {
+    if (args_json == 0) { return 0; }
+    var v = bayan_json_v_parse_buf(args_json, strlen(args_json));
+    if (v == 0) { return 0; }
+    var pv = bayan_json_v_obj_get(v, "path");
+    if (pv == 0) { return 0; }
+    var ps = bayan_json_v_str(pv);
+    if (ps == 0) { return 0; }
+    return str_cstr(ps);
+}
+
+# _agent_xtree_append: given a FAILED host tool result, return it with a correction appended when the
+# path it asked for exists in THIS project; otherwise return `res` untouched.
+#
+# Deliberately narrow, so it can never fire on a call that was fine:
+#   * only on a failure (the caller checks daimon_invoke_is_error first) — a host tool that succeeded is
+#     doing its job and is none of thoth's business;
+#   * only when the path passes the SAME jail the project tools use, so the suggestion is a call that
+#     will actually be authorized rather than one refused a round later;
+#   * only when the file is really there. "Did you mean read_file?" about a file this project does not
+#     have would be a fabricated measurement, and worse than silence.
+#
+# The scratch buffer is written and consumed inside one dispatch arm, like _agent_verify_buf, so it is
+# NOT part of subagent.cyr's swap set — no child round can run between the write and the read.
+fn _agent_xtree_append(res, args_json) {
+    var path = _agent_xtree_path(args_json);
+    if (path == 0) { return res; }
+    if (load8(path) == 0) { return res; }
+    if (_project_jail_ok(path) == 0) { return res; }          # not a project-relative path -> nothing to suggest
+    if (_project_no_symlink(path) == 0) { return res; }       # never point at something the jail would refuse
+    if (_project_sensitive(path) == 1) { return res; }        # never point at thoth's own config/state
+    var is_d = is_dir(str_from(path));
+    if ((is_d == 0) && (file_exists(path) == 0)) { return res; }
+    if (_agent_xtree_buf == 0) { _agent_xtree_buf = alloc(AGENT_XTREE_CAP); }
+    if (_agent_xtree_buf == 0) { return res; }
+    var cap = AGENT_XTREE_CAP;
+    var off = 0;
+    if (res != 0) { off = _append_cstr_cap(_agent_xtree_buf, off, cap, res); }
+    off = _append_cstr_cap(_agent_xtree_buf, off, cap, "\n(NOTE from thoth: that tool ran on the MCP host and looked in the HOST's directory, not in this project. This project DOES have ");
+    off = _append_cstr_cap(_agent_xtree_buf, off, cap, path);
+    if (is_d == 1) { off = _append_cstr_cap(_agent_xtree_buf, off, cap, " - list it with list_dir {\"path\":\""); }
+    else { off = _append_cstr_cap(_agent_xtree_buf, off, cap, " - read it with read_file {\"path\":\""); }
+    off = _append_cstr_cap(_agent_xtree_buf, off, cap, path);
+    off = _append_cstr_cap(_agent_xtree_buf, off, cap, "\"}. Use read_file / list_dir / search for this project's files.)");
+    if (off > (cap - 1)) { off = cap - 1; }
+    store8(_agent_xtree_buf + off, 0);
+    return _agent_xtree_buf;
+}
+
 fn agent_format_tools(dst, tools_arr) {
     if (tools_arr == 0) { return 0; }
     var n = bayan_json_v_arr_len(tools_arr);
@@ -277,7 +349,7 @@ fn agent_tools_add_delegate(dst, tl) {
     if (off > 0) { store8(dst + off, 44); off = off + 1; }   # ',' between elements
     else { store8(dst + off, 91); off = off + 1; }           # '[' for an otherwise-empty array
     off = _append_cstr_cap(dst, off, AGENT_TOOLS_CAP,
-        "{\"type\":\"function\",\"function\":{\"name\":\"delegate\",\"description\":\"Delegate a self-contained sub-task to a scoped child agent that has the same tools but its OWN empty context, and get back only its short written answer. Use this for noisy investigations - locating a symbol, surveying a directory, checking which of several files matches - so the intermediate reads never enter this conversation. The child CANNOT see this conversation, so state everything it needs in the task. It cannot delegate further.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"the self-contained instruction for the child, including any context it needs\"}},\"required\":[\"task\"]}}}");
+        "{\"type\":\"function\",\"function\":{\"name\":\"delegate\",\"description\":\"Delegate a NARROW, self-contained LOOKUP to a scoped child agent that has the same tools but its OWN empty context, and get back only its short written answer. Use it to keep a noisy search out of this conversation: which file defines a symbol, which of several candidates matches, what a value is set to. Do NOT hand it the job you were just asked to do - if you were asked to review, explain, summarize or change something, do that work yourself with search and read_file, and delegate at most one lookup inside it. Your delegation budget for a turn is SMALL (3) and delegating the same task twice is refused, so spend it on a lookup you truly cannot do inline. The child CANNOT see this conversation, so state everything it needs in the task, and it cannot delegate further.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"task\":{\"type\":\"string\",\"description\":\"the self-contained instruction for the child: one specific question, not a whole assignment\"}},\"required\":[\"task\"]}}}");
     off = _append_cstr_cap(dst, off, AGENT_TOOLS_CAP, "]");
     store8(dst + off, 0);
     return off;
@@ -1166,6 +1238,9 @@ fn _agent_run_calls_serial(tcs, nc) {
             var text_ok = 0; if (res != 0) { text_ok = 1; }         # parsed a result?  (before the placeholder reassign)
             if (res == 0) { res = "(tool returned no result)"; }
             rl_ok = _agent_tool_ok(text_ok, daimon_invoke_is_error());   # 0.30.18: text parsed AND not an MCP isError
+            # 0.44.1: a host file tool that MISSED a file this project has is the wrong-tree mistake; say so,
+            # and name the call that works. Only on a failure, so a working host tool is left alone.
+            if (daimon_invoke_is_error() == 1) { res = _agent_xtree_append(res, ar); }
             ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
         } else {
             res = "denied by authorization policy";
@@ -1385,6 +1460,8 @@ fn agent_turn(prompt) {
     _agent_work_reset();
     intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
     ask_turn_reset();  # 0.44.0 (T4-1): a fresh question budget per turn (session totals survive; /reset clears them)
+    subagent_turn_reset();  # 0.44.1: clear the same-task delegation guard — repeating a task in a LATER turn is a
+                            # new request, not a loop (see src/subagent.cyr)
 
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", agentic");
     if (want_stream == 1) { ui_emit(ROLE_FAINT, ", stream"); }

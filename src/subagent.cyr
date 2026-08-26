@@ -73,12 +73,95 @@ var _sub_rounds_last = 0;        # rounds the last child spent
 var _sub_last_allowed = 0;       # 1 if the gate let it run
 var _sub_last_ok = 0;            # 1 if it returned a real answer
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# THE SAME-TASK GUARD (0.44.1) — why depth 1 was not enough of a bound
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# Depth is capped at 1, so a child cannot recurse. That bounds NESTING. It does not bound REPETITION, and
+# repetition is the failure that was actually observed: asked to review a directory, the parent delegated
+# essentially that same review, read the answer, decided it still had not done the job, and delegated it
+# again — for as many rounds as [hoosh].max_iters allows (the operator's config said 200). Each pass is a
+# full child run, so the spend is linear in max_iters with nothing to show for it.
+#
+# Two things fed it. The tool's own description used to offer "surveying a directory" as a worked example,
+# which is a near-verbatim match for "review the current directory" — retuned in agent_tools_add_delegate.
+# And nothing noticed the repeat. This is the second half: a task already delegated THIS TURN is refused,
+# with a result string that tells the parent to do the work itself.
+#
+# ⚠ The comparison is EXACT and the window is ONE TURN, both deliberately. Prefix or fuzzy matching would
+# refuse legitimately different lookups that happen to share an opening, and refusing across turns would
+# break the ordinary case of asking the same question again after the tree changed. An identical task
+# inside a single turn is a loop, not a plan.
+# ⚠ THE EXACT-MATCH GUARD IS NOT ENOUGH ON ITS OWN, and measuring it is what proved that. Against a small
+# local model with [hoosh].max_iters = 200, one turn issued THIRTY delegate calls — the exact-repeat guard
+# caught none of them, because the model reworded the task each time ("review the src directory", "review
+# the source files in src", …). Wording is cheap; a bound is not. So delegation also carries a PER-TURN
+# BUDGET, exactly as `ask_user` does (ASK_MAX_PER_TURN, src/ask.cyr) and for the same reason: the refusal
+# has to be arithmetic the model cannot talk its way around. The two guards are complementary — the
+# budget caps total spend, the exact-match guard catches the tight loop early and says something more
+# useful than "budget used up".
+var SUB_MAX_PER_TURN = 3;        # delegations ONE turn may run before the tool refuses
+var _sub_turn_n = 0;             # delegations run in THIS turn (the budget)
+
+var SUB_RECENT_MAX = 4;          # distinct tasks remembered per turn — a loop repeats immediately
+# ⚠ SLOT = CAP + 1, not CAP. A task of exactly SUB_TASK_CAP bytes is ACCEPTED (the refusal above is
+# `> SUB_TASK_CAP`), so a CAP-sized slot would store it one byte short to make room for the NUL — and the
+# truncated copy would never compare equal to the full task, turning the guard silently off for exactly
+# the longest tasks. One extra byte per slot buys an exact comparison at every length.
+var SUB_RECENT_SLOT = 8193;      # SUB_TASK_CAP + 1 (a `var` initialiser must be a literal here)
+var _sub_recent = 0;             # alloc(SUB_RECENT_MAX * SUB_RECENT_SLOT): the turn's delegated tasks, NUL-terminated
+var _sub_recent_n = 0;           # how many slots are live this turn
+
+# subagent_turn_reset: drop the same-task guard's memory. Called once per parent turn from agent_turn.
+fn subagent_turn_reset() { _sub_recent_n = 0; _sub_turn_n = 0; return 0; }
+
+# subagent_turn_used: delegations spent in this turn (for /state and the tests).
+fn subagent_turn_used() { return _sub_turn_n; }
+
+# _sub_task_seen: 1 if `task` is byte-identical to one already delegated this turn.
+fn _sub_task_seen(task) {
+    if (_sub_recent == 0) { return 0; }
+    var i = 0;
+    while (i < _sub_recent_n) {
+        if (streq(_sub_recent + i * SUB_RECENT_SLOT, task) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# _sub_task_remember: record `task` as delegated this turn. The ring drops the OLDEST when full, which is
+# right for a loop detector — the repeat that matters is the recent one. Caller has already enforced
+# SUB_TASK_CAP, so the copy cannot overrun its slot; it is bounded again here anyway.
+fn _sub_task_remember(task) {
+    if (_sub_recent == 0) {
+        _sub_recent = alloc(SUB_RECENT_MAX * SUB_RECENT_SLOT);
+        if (_sub_recent == 0) { return 0; }        # OOM -> the guard degrades to off, never to a crash
+    }
+    if (_sub_recent_n >= SUB_RECENT_MAX) {
+        var k = 1;                                 # shift down one, keeping the most recent SUB_RECENT_MAX-1
+        while (k < SUB_RECENT_MAX) {
+            var j = 0;
+            var src = _sub_recent + k * SUB_RECENT_SLOT;
+            var dst = _sub_recent + (k - 1) * SUB_RECENT_SLOT;
+            while ((j < (SUB_RECENT_SLOT - 1)) && (load8(src + j) != 0)) { store8(dst + j, load8(src + j)); j = j + 1; }
+            store8(dst + j, 0);
+            k = k + 1;
+        }
+        _sub_recent_n = SUB_RECENT_MAX - 1;
+    }
+    var slot = _sub_recent + _sub_recent_n * SUB_RECENT_SLOT;
+    var i = 0;
+    while ((i < (SUB_RECENT_SLOT - 1)) && (load8(task + i) != 0)) { store8(slot + i, load8(task + i)); i = i + 1; }
+    store8(slot + i, 0);
+    _sub_recent_n = _sub_recent_n + 1;
+    return 0;
+}
+
 fn subagent_active() { return _sub_depth; }
 fn subagent_last_allowed() { return _sub_last_allowed; }
 fn subagent_last_ok() { return _sub_last_ok; }
 fn subagent_runs() { return _sub_runs; }
 fn subagent_rounds_last() { return _sub_rounds_last; }
-fn subagent_reset() { _sub_runs = 0; _sub_rounds_last = 0; _sub_depth = 0; return 0; }
+fn subagent_reset() { _sub_runs = 0; _sub_rounds_last = 0; _sub_depth = 0; _sub_recent_n = 0; _sub_turn_n = 0; return 0; }
 
 fn _sub_alloc() {
     if (_sub_ready == 1) { return 1; }
@@ -437,10 +520,22 @@ fn subagent_tool(args_json) {
     # would have the child work a different brief than the parent asked for, and the delegate arm is
     # already built to report a refusal honestly.
     if (strlen(task) > SUB_TASK_CAP) { return "(delegate: the \"task\" is too long — cap is 8192 bytes)"; }
+    # 0.44.1: the same-task guard (see the note above). BEFORE the gate, because a refused repeat must not
+    # spend a t-ron rate-limit slot or raise a confirm prompt for work that is about to be declined anyway.
+    if (_sub_task_seen(task) == 1) {
+        return "(delegate: this exact task was already delegated in this turn and its answer is already in the conversation above. Do not delegate it again - do the work yourself with search and read_file, or delegate a different, narrower question.)";
+    }
+    # The per-turn budget, checked after the exact-repeat guard so a tight loop gets the more specific
+    # message rather than "budget used up" — but before the gate, so a refusal costs no rate-limit slot.
+    if (_sub_turn_n >= SUB_MAX_PER_TURN) {
+        return "(delegate: this turn's delegation budget is used up. Finish this task yourself with search and read_file, and answer with what you have.)";
+    }
     if (gate_authorize("thoth_delegate", args_json, "delegate to a subagent", task) == 0) {
         return "denied by authorization policy";
     }
     _sub_last_allowed = 1;                       # past the gate
+    _sub_task_remember(task);                    # 0.44.1: recorded once ALLOWED, so a denial is not a repeat
+    _sub_turn_n = _sub_turn_n + 1;               # ...and it spends the turn's budget
     var iters = config_subagent_max_iters();
     ui_emit(ROLE_FAINT, "  [delegate] "); ui_emit(ROLE_MUTED, task); oprintln("");
     events_subagent_start(session_turns(), task);

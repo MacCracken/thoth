@@ -61,7 +61,7 @@ These are the reason the file is worth keeping. Each was paid for.
 | Bucket | Count | What it means |
 |---|---|---|
 | ✅ **Fresh — touched this sweep** | ~16 | README, CLAUDE.md, CHANGELOG, VERSION, CONTRIBUTING, SECURITY, state.md, roadmap.md, gap-review.md + .html, doc-health.md, getting-started, adr/0017, adr/README — current as of **0.43.2**. |
-| 🔵 **Durable — decisions/invariants, re-read not rewrite** | ~18 | ADRs 0001–0016 + 0018 + template, architecture/001 — point-in-time decisions, correct as history; re-read on a principle change, not per release. |
+| 🔵 **Durable — decisions/invariants, re-read not rewrite** | ~19 | ADRs 0001–0016 + 0018 + 0020 + template, architecture/001 — point-in-time decisions, correct as history; re-read on a principle change, not per release. |
 | 🟡 **Stale — refresh in place** | 0 | None outstanding after this sweep. |
 | 🟠 **Read-through / gap** | 1 | `docs/examples/` is a usage cheat-sheet, not runnable programs. **Closed by rewording** at 0.43.2 (README + CLAUDE.md now say "usage cheat-sheet"); the row stays until real examples exist or the dir is retired. |
 | ❓ **Open question** | 0 | None. |
@@ -84,7 +84,8 @@ These are the reason the file is worth keeping. Each was paid for.
 |---|---|---|
 | `001-consumer-only-no-domain-logic.md` | 🔵 Durable | The consumer-only invariant; verified current (reflects the write tools + all seven seams). |
 | `002-capability-ladder.md` | ✅ Fresh | Re-verified at 0.43.2: the seam table still matches `src/seams.cyr` on all seven seams. |
-| `README.md` | ✅ Fresh | Re-verified at 0.43.2; matches 002. |
+| `003-two-roots-project-jail-vs-mcp-host.md` | ✅ Fresh | **New at 0.44.1.** thoth's project jail (launch cwd) vs an MCP host's own root (`$BOTE_FS_ROOT`) — two roots, one description, and the registry advertised first. Written from a reproduced live failure, not from reading the code. Records what was tried and **removed** (a prose note on tool descriptions, measured as no-effect). |
+| `README.md` | ✅ Fresh | Re-verified at 0.44.1; indexes 001-003. |
 
 ## Tier 3 — Development (`docs/development/`)
 

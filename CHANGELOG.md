@@ -2,6 +2,61 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.1] - 2026-08-26
+
+**The agent knows where it is.** Suite **289 + 1628 + 475 + 183 + 4** (+58), all targets green.
+
+### Fixed — the agent read the right relative path out of the wrong tree
+
+Reported from a live 0.44.0 session and reproduced against the dev stack: asked to review the project it
+was launched in, the agent called `fs_read {"path":"src/tasks/health.js"}` and got back
+`cannot read /home/macro/.agnos-stack/workspace/src/tasks/health.js` — the correct relative path,
+resolved in somebody else's directory.
+
+Nothing was broken in the jail. The cause was that **thoth never told the model which directory it was
+standing in.** A daimon that also hosts a filesystem tool advertises `fs_read` as *"Read a text file under
+the project root"* — meaning ITS root, `$BOTE_FS_ROOT` — next to thoth's own `read_file`, whose root is
+the launch cwd. Two tools, the same claim, different trees, and nothing in the system prompt to separate
+them; daimon's registry is serialized first, so the host tool won the coin toss.
+
+- **The system prompt now names the project root** and routes file work to the tools that are jailed to
+  it (`project_prompt_clause`, folded into thoth's operating clause so the subagent inherits it too). In
+  live runs the model began declining `fs_read` on its own, in as many words: *"a generic tool rooted
+  elsewhere [that] would target the wrong tree"*.
+- **A failed host file tool is corrected with a fact, not a hint.** When a host tool errors and this
+  project really does hold the relative path it asked for, the tool result says the call ran on the MCP
+  host and names the exact call that works — `read_file {"path":"src/tasks/health.js"}`. It fires only on
+  a failure, only inside the jail, and only when the file is actually there.
+- **Refusals from `read_file` / `list_dir` / `search` are now actionable.** An absolute path naming a file
+  *inside* this project was refused as "outside the project", which is true of the jail and useless to the
+  model. It now spells out the relative path to retry with. The jail itself is unchanged.
+
+A prose note appended to every path-taking tool's advertised description was tried first and **removed**:
+measured against the live stack it moved nothing (12 stray `fs_read` calls with it, 2 without, on
+run-to-run variance far larger than either). Steering that cannot be measured is not a fix.
+
+### Fixed — one turn, thirty delegations of the same job
+
+The same session showed the parent delegating essentially the task it had just been given, reading the
+answer, deciding it still had not done the job, and delegating again — as far as `[hoosh].max_iters`
+allowed. Depth was capped at 1, which bounds *nesting*; nothing bounded *repetition*.
+
+- **A per-turn delegation budget** (`SUB_MAX_PER_TURN = 3`), the same shape `ask_user` already uses. This
+  is the guard that holds: the exact-match guard below caught none of those thirty calls, because the
+  model reworded the task every time. Wording is cheap; arithmetic is not.
+- **An exact-repeat guard** — a byte-identical task already delegated *this turn* is refused, and told to
+  do the work inline. Exact and turn-scoped on purpose: a prefix rule would refuse legitimately narrower
+  lookups, and a cross-turn rule would break asking the same question again after the tree changed.
+- **`delegate`'s description retuned.** It offered *"surveying a directory"* as a worked example — a
+  near-verbatim match for "review the current directory". It now says plainly not to hand over the job it
+  was just given, and states the budget.
+
+### Note
+
+`[hoosh].max_iters = 200` with a small local model is what let all of this run for ten minutes before
+anyone noticed; the turn ends `no completion returned` rather than with an answer. The bounds above make
+the failure cheap, but a lower `max_iters` is the lever that makes the turn converge.
+
 ## [0.44.0] - 2026-08-26
 
 **The agent can ask you a question.** Suite **289 + 1570 + 475 + 183 + 4** (+511), all targets green.

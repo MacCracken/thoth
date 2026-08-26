@@ -7,6 +7,26 @@
 
 ## Version
 
+**0.44.1** — **the agent knows where it is** (2026-08-26). Reported live and reproduced against the dev
+stack: asked to review its own project, the agent called `fs_read {"path":"src/tasks/health.js"}` and got
+`cannot read /home/macro/.agnos-stack/workspace/src/tasks/health.js` — the right relative path resolved in
+someone else's tree. The jail was fine; ⭐ **thoth had never told the model which directory it was standing
+in**, and a daimon hosting bote advertises `fs_read` as "under the project root" (meaning `$BOTE_FS_ROOT`)
+right beside thoth's `read_file` (meaning the launch cwd) — two tools, the same claim, and the registry is
+serialized first. Fixed in three places: the system prompt NAMES the root and routes file work to the
+jailed tools (`project_prompt_clause`, inside thoth's operating clause so the subagent inherits it — live,
+the model began declining `fs_read` unprompted as "a generic tool rooted elsewhere"); a FAILED host file
+tool whose path this project actually holds gets the working call named in its result (only on failure,
+only inside the jail, only when the file is there); and `read_file`/`list_dir`/`search` refusals now spell
+out the relative path to retry with instead of telling the model an in-project file is "outside the
+project". ⚠ **A prose note on every path-taking tool's advertised description was tried FIRST and REMOVED**
+— measured live it moved nothing (12 stray `fs_read` with it, 2 without, on far larger variance).
+Steering that cannot be measured is not a fix. Same session also delegated ~the same job **30 times in one
+turn**: depth 1 bounds nesting, nothing bounded repetition → a per-turn budget (`SUB_MAX_PER_TURN = 3`,
+the `ask_user` shape) plus an exact-repeat guard, and `delegate`'s description no longer offers "surveying
+a directory" as an example. ⚠ The exact-match guard alone caught NONE of the thirty — the model reworded
+each time; the arithmetic bound is the one that holds. Suite **289 + 1628 + 475 + 183 + 4**.
+
 **0.44.0** — **the agent can ask you a question** (2026-08-26,
 [ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)). `ask_user(question,
 options?)` BLOCKS the turn: question + the model's suggested answers + an ALWAYS-present free-text field;

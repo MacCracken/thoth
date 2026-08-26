@@ -227,6 +227,40 @@ fn test_agent() {
     agent_format_tools(&tb, tev);
     assert(streq(&tb, "[{\"type\":\"function\",\"function\":{\"name\":\"mn\",\"description\":\"note\",\"parameters\":{\"type\":\"object\"}}},{\"type\":\"function\",\"function\":{\"name\":\"pp\",\"description\":\"p\",\"parameters\":{\"type\":\"object\"}}}]"), "empty/typeless inputSchema -> permissive {type:object}, never a bare {}");
 
+    # 0.44.1: WHOSE directory does a HOST tool's `path` mean? A registry tool taking a `path` runs on the
+    # MCP host and resolves it in the host's own tree. daimon cannot say so — bote registers fs_read as
+    # "Read a text file under the project root", meaning ITS root ($BOTE_FS_ROOT) — and the model, seeing two
+    # read tools whose descriptions agree, picked fs_read for a project file and got back "cannot read
+    # /home/macro/.agnos-stack/workspace/src/tasks/health.js".
+    #
+    # ⚠ A prose note on the advertised description was tried FIRST and removed: measured against the live
+    # stack it moved nothing (12 stray fs_read calls with it, 2 without, on far larger run-to-run variance).
+    # What is tested here instead is a FACT delivered where the model is provably wrong — when the host tool
+    # FAILED and this project really does hold the path it asked for.
+    test_group("wrong-tree correction on a failed host tool (agent.cyr, 0.44.1)");
+    var hostfail = "fs_read: cannot read /elsewhere/workspace/VERSION";
+    var fixed = _agent_xtree_append(hostfail, "{\"path\":\"VERSION\"}");
+    assert(_ui_contains(fixed, "cannot read") == 1, "the host's own error is PRESERVED, not replaced");
+    assert(_ui_contains(fixed, "ran on the MCP host") == 1, "...and the wrong-tree cause is named");
+    assert(_ui_contains(fixed, "read_file {\"path\":\"VERSION\"}") == 1, "...with the exact call that works");
+    # a directory gets the directory tool, not read_file
+    var fdir = _agent_xtree_append("fs_read: cannot read /elsewhere/src", "{\"path\":\"src\"}");
+    assert(_ui_contains(fdir, "list_dir {\"path\":\"src\"}") == 1, "a directory is corrected to list_dir");
+    assert(_ui_contains(fdir, "read_file {") == 0, "...and not to read_file");
+
+    # NARROW BY CONSTRUCTION: every one of these must pass the result through untouched, because a
+    # "did you mean read_file?" about a file this project does not have is a fabricated measurement.
+    var untouched = "fs_read: cannot read /elsewhere/nope";
+    assert(streq(_agent_xtree_append(untouched, "{\"path\":\"no_such_file_zzz.txt\"}"), untouched), "a path this project does NOT have is left alone");
+    assert(streq(_agent_xtree_append(untouched, "{\"path\":\"../VERSION\"}"), untouched), "a '..' path is left alone (it would be refused anyway)");
+    assert(streq(_agent_xtree_append(untouched, "{\"path\":\"/etc/passwd\"}"), untouched), "an absolute path is left alone");
+    assert(streq(_agent_xtree_append(untouched, "{\"query\":\"x\"}"), untouched), "a call with no 'path' argument is left alone");
+    assert(streq(_agent_xtree_append(untouched, "{\"path\":\"\"}"), untouched), "an empty path is left alone");
+    assert(streq(_agent_xtree_append(untouched, "not json at all"), untouched), "unparseable arguments are left alone");
+    assert(streq(_agent_xtree_append(untouched, 0), untouched), "absent arguments are left alone (and do not fault)");
+    # thoth's own state is never advertised as a thing to go read
+    assert(streq(_agent_xtree_append(untouched, "{\"path\":\".thoth/config.cyml\"}"), untouched), "thoth's own config is never suggested");
+
     # tool_calls parsing from an OpenAI-shaped response
     var resp = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}";
     var tcs = agent_tool_calls(resp, strlen(resp));
@@ -751,6 +785,53 @@ fn test_project() {
     assert_eq(_project_read_ok("/opt/demo/repo/../secret"), 0, "'..' under a granted root refused (no traversal)");
     assert_eq(_project_read_ok("~/opt/demo/repo"), 0, "a '~' path is never a granted root");
 
+    # --- 0.44.1: the agent must KNOW where it is, and a refusal must be actionable ---
+    # The bug this closes was observed live, not theorised: with a daimon that also hosts a filesystem
+    # tool rooted elsewhere (bote under BOTE_FS_ROOT), the model was offered two read tools whose
+    # descriptions both said "the project root", was never told which directory it was actually in, and
+    # read `src/tasks/health.js` out of the tool host's workspace. The prompt clause is the fix; these
+    # assertions are on the SENTENCES, because the sentences are the whole mechanism.
+    #
+    # The root is INJECTED rather than read from the ambient $PWD, so the test measures the logic and not
+    # the harness's launch directory (CI need not even set PWD).
+    test_group("workspace clause + actionable refusals (project.cyr, 0.44.1)");
+    var sv_root = _proj_root_disp;
+    _proj_root_disp = "/opt/demo/repo";
+    _proj_clause = 0;                                   # drop the cache so the injected root lands
+    var pc = project_prompt_clause();
+    assert(_ui_contains(pc, "/opt/demo/repo") == 1, "the clause NAMES the project root");
+    assert(_ui_contains(pc, "read_file") == 1, "...and names read_file as the way to read this project");
+    assert(_ui_contains(pc, "list_dir") == 1, "...and list_dir");
+    assert(_ui_contains(pc, "search") == 1, "...and search");
+    assert(_ui_contains(pc, "RELATIVE") == 1, "...and says the path is relative to that root");
+    assert(_ui_contains(pc, "fs_read") == 1, "...and warns off the tool host's generic file tools by name");
+
+    # the lexical under-root test that WORDS a refusal (it never grants one)
+    assert_eq(_proj_is_project_abs("/opt/demo/repo/src/app.js"), 1, "an absolute path below the root is recognised");
+    assert_eq(_proj_is_project_abs("/opt/demo/repo"), 1, "the root itself is recognised");
+    assert_eq(_proj_is_project_abs("/opt/demo/repository/x"), 0, "a shared-prefix sibling is not ('/'-boundary)");
+    assert_eq(_proj_is_project_abs("/etc/passwd"), 0, "an unrelated absolute path is not");
+    assert_eq(_proj_is_project_abs("src/app.js"), 0, "a relative path is not (it was never refused for being absolute)");
+
+    # THE POINT: the old message told a model that a file it could see in a listing was "outside the
+    # project". That is a dead end — there is no next move it suggests. The new one names the retry.
+    var rf = project_refuse_outside("read_file", "/opt/demo/repo/src/tasks/health.js");
+    assert(_ui_contains(rf, "refused") == 1, "an in-project absolute path is still REFUSED (the jail is unchanged)");
+    assert(_ui_contains(rf, "src/tasks/health.js") == 1, "...but the refusal spells out the relative path to retry with");
+    assert(_ui_contains(rf, "read_file") == 1, "...and names the tool it came from");
+    var rr = project_refuse_outside("list_dir", "/opt/demo/repo");
+    assert(_ui_contains(rr, "\".\"") == 1, "the root itself suggests '.', never an empty path");
+    var ro = project_refuse_outside("search", "/etc");
+    assert(_ui_contains(ro, "outside the project") == 1, "a genuinely outside path keeps the honest message");
+    assert(_ui_contains(ro, "RELATIVE") == 1, "...and still says what shape a good path has");
+    assert(_ui_contains(ro, "Retry with") == 0, "...and does NOT suggest a relative form for a path that has none");
+
+    # end to end through the tools, with the REAL root: an absolute path is refused, actionably.
+    _proj_root_disp = sv_root;
+    assert(_ui_contains(read_file_tool("{\"path\":\"/etc/passwd\"}"), "RELATIVE") == 1, "read_file's refusal teaches the path shape");
+    assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "RELATIVE") == 1, "list_dir's refusal teaches the path shape");
+    _proj_clause = 0;                                   # leave no injected-root cache behind
+
     # --- MCP tool-definition pinning, TOFU (0.42.0, T3) ---
     # CVE-2025-54136: approving an MCP tool's definition does not survive later server-side changes. A
     # description is not inert data — thoth hands it to the model as authoritative guidance — so a silent
@@ -1079,6 +1160,77 @@ fn test_project() {
     _sub_depth = 0;
     _cfg_subagent_enabled = 0;
     subagent_reset();
+
+    # --- 0.44.1: the SAME-TASK guard. Depth 1 bounds NESTING; this bounds REPETITION. ---
+    # Observed live: asked to review a directory, the parent delegated that same review, read the answer,
+    # decided it still had not done the job, and delegated it again — for as many rounds as
+    # [hoosh].max_iters allows. Every assertion below runs WITHOUT a child ever starting, because the
+    # guard sits ahead of gate_authorize and subagent_run; that ordering is itself part of the contract.
+    test_group("same-task delegation guard (subagent.cyr, 0.44.1)");
+    subagent_turn_reset();
+    assert_eq(_sub_task_seen("review the current directory"), 0, "a fresh turn remembers nothing");
+    _sub_task_remember("review the current directory");
+    assert_eq(_sub_task_seen("review the current directory"), 1, "a delegated task is remembered");
+    # EXACT, deliberately: a prefix rule would refuse legitimately different narrower lookups.
+    assert_eq(_sub_task_seen("review the current"), 0, "a PREFIX of it is not a repeat");
+    assert_eq(_sub_task_seen("review the current directory again"), 0, "an EXTENSION of it is not a repeat");
+    assert_eq(_sub_task_seen("Review the current directory"), 0, "the match is byte-exact, not case-folded");
+
+    _cfg_subagent_enabled = 1;
+    var dup = subagent_tool("{\"task\":\"review the current directory\"}");
+    assert(_ui_contains(dup, "already delegated") == 1, "a repeat within the turn is REFUSED");
+    assert(_ui_contains(dup, "yourself") == 1, "...and told to do the work itself, so the refusal is a way forward");
+    assert_eq(subagent_last_allowed(), 0, "a refused repeat is NOT recorded as an allowed call");
+    assert_eq(subagent_last_ok(), 0, "...nor as a successful one");
+
+    # the ring drops the OLDEST — for a loop detector the recent repeat is the one that matters
+    subagent_turn_reset();
+    _sub_task_remember("t1"); _sub_task_remember("t2"); _sub_task_remember("t3"); _sub_task_remember("t4");
+    assert_eq(_sub_task_seen("t1"), 1, "four tasks fit");
+    _sub_task_remember("t5");
+    assert_eq(_sub_task_seen("t1"), 0, "the fifth evicts the oldest");
+    assert_eq(_sub_task_seen("t2"), 1, "...and keeps t2");
+    assert_eq(_sub_task_seen("t5"), 1, "...and the newest");
+
+    # ⚠ SLOT = SUB_TASK_CAP + 1. A task of EXACTLY SUB_TASK_CAP bytes is accepted (the length refusal is
+    # `>`), so a CAP-sized slot would have stored it one byte short and the guard would have gone silently
+    # dead for precisely the longest tasks.
+    var maxt = alloc(SUB_TASK_CAP + 8);
+    var mi = 0;
+    while (mi < SUB_TASK_CAP) { store8(maxt + mi, 0x79); mi = mi + 1; }
+    store8(maxt + mi, 0);
+    assert_eq(strlen(maxt), SUB_TASK_CAP, "the probe task is exactly SUB_TASK_CAP bytes");
+    subagent_turn_reset();
+    _sub_task_remember(maxt);
+    assert_eq(_sub_task_seen(maxt), 1, "a CAP-length task is stored WHOLE and compares equal");
+
+    # --- the PER-TURN BUDGET, which is the guard that actually holds ---
+    # Measured, not assumed: against a small local model with [hoosh].max_iters = 200, ONE turn issued 30
+    # delegate calls and the exact-match guard caught none of them, because the model reworded the task
+    # every time. Wording is cheap; arithmetic is not. Same shape as ASK_MAX_PER_TURN.
+    subagent_turn_reset();
+    assert_eq(subagent_turn_used(), 0, "a fresh turn has spent nothing");
+    _sub_turn_n = SUB_MAX_PER_TURN;                       # simulate a turn that has spent its budget
+    var overb = subagent_tool("{\"task\":\"a brand new task nobody has asked before\"}");
+    assert(_ui_contains(overb, "budget") == 1, "past the budget, a NOVEL task is refused too (rewording does not help)");
+    assert(_ui_contains(overb, "yourself") == 1, "...and is told to finish the work inline");
+    assert_eq(subagent_last_allowed(), 0, "a budget refusal is not an allowed call");
+    assert_eq(subagent_last_ok(), 0, "...nor a successful one");
+    # ordering: a tight loop must get the SPECIFIC message, not the generic budget one
+    subagent_turn_reset();
+    _sub_task_remember("looping task");
+    _sub_turn_n = SUB_MAX_PER_TURN;
+    assert(_ui_contains(subagent_tool("{\"task\":\"looping task\"}"), "already delegated") == 1,
+           "an exact repeat reports the REPEAT, even when the budget is also exhausted");
+
+    # the window is ONE TURN: asking the same question in a later turn is a new request, not a loop
+    subagent_turn_reset();
+    assert_eq(_sub_task_seen("t5"), 0, "the next turn starts clean");
+    assert_eq(subagent_turn_used(), 0, "...with a fresh budget");
+    _cfg_subagent_enabled = 0;
+    subagent_reset();
+    assert_eq(_sub_recent_n, 0, "subagent_reset (/reset) clears the guard too");
+    assert_eq(subagent_turn_used(), 0, "...and the budget");
 
     # --- the depth cap, which is a SECURITY bound (ADR-0018) ---
     test_group("subagent depth cap (0.43.0)");

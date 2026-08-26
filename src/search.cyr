@@ -276,7 +276,7 @@ fn search_tool(args_cstr) {
     }
     # the jail, on the caller's root — the same three checks read_file makes, in the same order
     if (load8(root) != 0) {
-        if (_project_read_ok(root) == 0) { return "(search: refused - 'path' is outside the project and any user-granted read root; no '..' allowed)"; }
+        if (_project_read_ok(root) == 0) { return project_refuse_outside("search", root); }
         if (_project_no_symlink(root) == 0) { return "(search: refused - a component of 'path' is a symlink; the jail does not follow links out of the project)"; }
         if (_project_sensitive(root) == 1) { return "(search: refused - that is thoth's own config/state, not project source)"; }
         if (is_dir(str_from(root)) == 0) { return "(search: 'path' is not a directory in this project)"; }
