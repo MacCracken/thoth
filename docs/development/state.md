@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.44.0** — **the agent can ask you a question** (2026-08-26,
+[ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)). `ask_user(question,
+options?)` BLOCKS the turn: question + the model's suggested answers + an ALWAYS-present free-text field;
+typing beats a highlighted suggestion, and one shared `ask_resolve` means "2" is the same everywhere.
+Front-end seam (`ask_hook_set`, like intr/confirm), each surface claiming it at its OWN startup: T2 uses
+the confirm bracket (loop-level modals are unusable mid-turn — the loop is blocked inside dispatch);
+⭐ **T3 gets the modal + evdev path audit A-11 said it did not have** — built on 0.35.0's mid-turn pump
+shape with a BLOCKING poll instead of a peek; the line REPL is a free third surface; one-shot degrades
+honestly instead of hanging. Rules: sanitised at ingest (C0/DEL→'?', newlines too — a `\n` is a free
+screen row the model controls); a fixed thoth-owned label always precedes the model's bytes; GUI threat
+is LAYOUT forgery not escape forgery (graster has no escape interpreter) → codepoint clips; NOT
+t-ron-gated (a question touches nothing; gating it = a prompt to authorize a prompt); bounded PER TURN
+because it spends ATTENTION, and an unasked question costs nothing. Never returns "". Verified end to
+end on all three surfaces + the degrade, not asserted. ⚠ **The 8 MB preprocess ceiling bit again** —
+one new module pushed thoth_core over, so the TUI bodies split into `tests/thoth_tui.tcyr` (same src
+chain, nothing dropped). Suite **289 + 1570 + 475 + 183 + 4**.
+
 **0.43.5** — **unrecognised config keys are named, not swallowed** (2026-08-26). The parser drops what it
 does not recognise, and that silence cost real time TWICE in two days: `[ui].tier` did nothing until
 0.43.2 made it live, and `max-iter = 200` (real name `max_iters`) left the agentic loop at the default 8

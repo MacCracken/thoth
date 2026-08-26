@@ -1,0 +1,177 @@
+# thoth — the T3 GUI question modal (0.44.0, T4-1). The front end for `ask_user` on the desktop window.
+#
+# WHY THIS FILE EXISTS AT ALL. Audit finding A-11 (0.39.0) recorded that the GUI "has no modal to render
+# this in and no path from evdev to read_line", which is why `confirm` DENIES on OUT_NULL rather than
+# prompting: a turn that tried hung forever on a stdin nobody was typing into, presenting as a frozen
+# window with no visible cause. `ask_user` closes exactly that gap for questions — this is the missing
+# modal and the missing evdev path.
+#
+# ⚠ IT CANNOT USE read_line, AND IT CANNOT BE A LOOP-LEVEL MODAL. A GUI turn runs SYNCHRONOUSLY inside
+# gui_run (cmd_task under OUT_NULL), so while a question is pending the present loop is blocked several
+# frames up the stack and cannot pump anything. The only thing keeping the window alive mid-turn is
+# `_gstop_poll` (gpresent.cyr), the interrupt seam's poll hook, which drains the Wayland fd and repaints
+# at ~30fps. This modal is built on the same three primitives that pump uses — _gpresent_poll_fd,
+# gwl_win_poll_events/gwl_win_next_key, _gpresent_frame — but BLOCKING rather than peeking, in its own
+# nested loop. Single-threaded and non-reentrant by construction: it runs on the tool round's stack and
+# nothing else can be pumping the window at the same time.
+#
+# The question and options arrive already SANITISED by src/ask.cyr (C0 + DEL substituted at ingest), so
+# this may draw them directly. The GUI has no escape interpreter — graster advances past control
+# codepoints without drawing — so the threat here is not escape forgery but LAYOUT forgery: a very long
+# question or a flood of options could push the modal's own chrome off screen. Hence the hard clip and
+# the option cap that ask.cyr already applies.
+
+var GASK_PAD = 14;              # inner padding of the modal card
+var GASK_ROW_H = 22;            # one option row
+var GASK_MAXW = 720;            # the card never spans the whole window — it must read as an overlay
+var _gask_active = 0;
+var _gask_sel = 0;              # highlighted option, or -1 when the free-text field has focus
+var GASK_BUF_CAP = 1024;
+var _gask_buf = 0;              # the operator's typed answer (NOT the composer — that holds their
+                                # in-progress message and must survive the question untouched)
+var _gask_len = 0;
+
+# ⚠ THIS FILE OWNS ITS OWN COPY of the question and options rather than reading src/ask.cyr directly.
+# That keeps it a pure view-builder over gdraw + ui — no config, no JSON, no seams — which is what lets
+# tests/thoth_gui.tcyr include it headlessly beside gstatus/gtree/gconv and drive it with fixture text.
+# gui_ask (gpresent.cyr, the runnable half) copies ask.cyr's already-sanitised strings in via gask_open.
+var GASK_Q_CAP = 1024;
+var GASK_OPT_MAX = 6;
+var GASK_OPT_CAP = 128;
+var _gask_q = 0;
+var _gask_opts = 0;
+var _gask_nopt = 0;
+fn _gask_vm() {
+    if (_gask_q == 0) { _gask_q = alloc(GASK_Q_CAP); store8(_gask_q, 0); }
+    if (_gask_opts == 0) { _gask_opts = alloc(GASK_OPT_MAX * GASK_OPT_CAP); }
+    return 0;
+}
+fn _gask_cp(dst, cap, src) {
+    var i = 0;
+    if (src != 0) { while ((load8(src + i) != 0) && (i < (cap - 1))) { store8(dst + i, load8(src + i)); i = i + 1; } }
+    store8(dst + i, 0);
+    return i;
+}
+# gask_open: install the question + options and raise the modal. Strings are already sanitised upstream.
+fn gask_open(q) { _gask_vm(); _gask_cp(_gask_q, GASK_Q_CAP, q); _gask_nopt = 0; _gask_len = 0; _gask_sel = 0 - 1; _gask_active = 1; return 0; }
+fn gask_add_option(t) {
+    _gask_vm();
+    if (_gask_nopt >= GASK_OPT_MAX) { return 0; }
+    _gask_cp(_gask_opts + _gask_nopt * GASK_OPT_CAP, GASK_OPT_CAP, t);
+    _gask_nopt = _gask_nopt + 1;
+    if (_gask_nopt == 1) { _gask_sel = 0; }
+    return 0;
+}
+fn gask_close() { _gask_active = 0; return 0; }
+fn gask_question() { _gask_vm(); return _gask_q; }
+fn gask_option_count() { return _gask_nopt; }
+fn gask_option_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _gask_nopt) { return 0; }
+    _gask_vm();
+    return _gask_opts + i * GASK_OPT_CAP;
+}
+
+fn gask_active() { return _gask_active; }
+fn gask_len() { return _gask_len; }
+fn gask_sel() { return _gask_sel; }
+fn gask_text() {
+    if (_gask_buf == 0) { _gask_buf = alloc(GASK_BUF_CAP); }
+    store8(_gask_buf + _gask_len, 0);
+    return _gask_buf;
+}
+fn _gask_append(ch) {
+    if (_gask_buf == 0) { _gask_buf = alloc(GASK_BUF_CAP); }
+    if (_gask_len < (GASK_BUF_CAP - 1)) { store8(_gask_buf + _gask_len, ch); _gask_len = _gask_len + 1; }
+    return 0;
+}
+fn _gask_backspace() { if (_gask_len > 0) { _gask_len = _gask_len - 1; } return 0; }
+
+# gask_build: composite the modal card over whatever is already drawn. Called LAST from gframe_build so
+# it lands on top of the status strip, panes, feed and composer alike — that overlap is what makes it
+# read as modal on a surface that otherwise only tiles regions side by side.
+fn gask_build(cmds, w, h) {
+    if (_gask_active == 0) { return 0; }
+    var nopt = gask_option_count();
+    var cw = w - 120;
+    if (cw > GASK_MAXW) { cw = GASK_MAXW; }
+    if (cw < 240) { cw = 240; }
+    var ch = GASK_PAD * 4 + GASK_ROW_H * (nopt + 3);
+    if (ch > (h - 40)) { ch = h - 40; }
+    var cx = (w - cw) / 2;
+    var cy = (h - ch) / 2;
+    if (cx < 0) { cx = 0; }
+    if (cy < 0) { cy = 0; }
+    # scrim: dim the whole window so the card is unmistakably in front and the frame behind is inert
+    gd_push_rect(cmds, 0, 0, w, h, _ui_rgb(ROLE_FAINT));
+    gd_push_rect(cmds, cx, cy, cw, ch, _gframe_bg());
+    gd_push_rect(cmds, cx, cy, cw, 2, _ui_rgb(ROLE_ACCENT));            # accent rule along the top edge
+    var ty = cy + GASK_PAD;
+    # max_cp is the LAYOUT-FORGERY bound. graster has no escape interpreter, so a crafted question cannot
+    # move the cursor or paint chrome — but an over-long one could push this card's own affordance line
+    # off the card. Everything model-authored is clipped to the card's interior width (8px cell).
+    var maxcp = (cw - GASK_PAD * 2) / 8;
+    if (maxcp < 8) { maxcp = 8; }
+    # ⚠ The label is a FIXED literal this file owns, drawn in thoth's accent role, and it always precedes
+    # the model's bytes. The operator must be able to tell thoth asking from a model that has written
+    # something shaped like a prompt; the model never gets to occupy this position.
+    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_ACCENT), "the agent is asking", 0);
+    ty = ty + GASK_ROW_H;
+    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FG), gask_question(), maxcp);
+    ty = ty + GASK_ROW_H + 4;
+    var i = 0;
+    while (i < nopt) {
+        var col = _ui_rgb(ROLE_MUTED);
+        if (i == _gask_sel) {
+            gd_push_rect(cmds, cx + GASK_PAD - 4, ty - 3, cw - GASK_PAD * 2 + 8, GASK_ROW_H, _ui_rgb(ROLE_FAINT));
+            col = _ui_rgb(ROLE_FG);
+        }
+        var nb[8];
+        store8(&nb + 0, 49 + i); store8(&nb + 1, 41); store8(&nb + 2, 32); store8(&nb + 3, 0);   # "N) "
+        gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_ACCENT), &nb, 0);
+        gd_push_text(cmds, cx + GASK_PAD + 24, ty, col, gask_option_at(i), maxcp - 3);
+        ty = ty + GASK_ROW_H;
+        i = i + 1;
+    }
+    ty = ty + 6;
+    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FAINT), "your answer:", 0);
+    gd_push_text(cmds, cx + GASK_PAD + 100, ty, _ui_rgb(ROLE_GREEN), gask_text(), maxcp - 13);
+    ty = ty + GASK_ROW_H;
+    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FAINT), "up/down pick  .  type your own  .  Enter accept  .  Esc decline", 0);
+    return 0;
+}
+
+# _gask_key: fold one evdev key into the modal. Returns 1 when the question is settled.
+#
+# Typing ALWAYS goes to the free-text field, and typing clears any highlighted option — the two are one
+# answer, not two modes, so there is never a state where the operator has typed something and Enter
+# submits a suggestion instead. A digit that names an option is handled by ask_resolve at the end, so
+# "2" means the same thing here as it does on the TUI and in the line REPL.
+# Returns 0 = still pending · 1 = accepted (read gask_text/gask_sel) · 2 = declined. The CALLER
+# (gui_ask) translates that into ask.cyr's answer, so this file needs no seam of its own.
+fn _gask_key(code, shift) {
+    if (code == 1) { return 2; }                                         # Esc -> decline
+    if ((code == 28) || (code == 96)) {                                  # Enter -> accept
+        if (_gask_len > 0) { return 1; }
+        if (_gask_sel >= 0) { return 1; }
+        return 2;
+    }
+    if (code == 14) { _gask_backspace(); return 0; }                     # Backspace
+    if (code == 103) {                                                   # Up
+        if (_gask_sel > 0) { _gask_sel = _gask_sel - 1; }
+        return 0;
+    }
+    if (code == 108) {                                                   # Down
+        if (_gask_sel < (gask_option_count() - 1)) { _gask_sel = _gask_sel + 1; }
+        return 0;
+    }
+    var c = ginput_ascii(code, shift);
+    if (c != 0) { _gask_append(c); _gask_sel = 0 - 1; }
+    return 0;
+}
+
+# ⚠ THE BLOCKING LOOP LIVES IN gpresent.cyr, NOT HERE, and that split is deliberate. Everything above is
+# a pure view-builder + key fold over module state: no Wayland, no compositor, unit-testable headless
+# exactly like gstatus/gtree/gconv, which is why tests/thoth_gui.tcyr can include this file at all. The
+# nested poll loop needs _gui_dirty, _gpresent_frame and the GWL_WIN_EV_* constants, which belong to the
+# runnable half; putting it here would drag the whole window seam into the headless test unit.

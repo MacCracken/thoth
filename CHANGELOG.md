@@ -2,6 +2,78 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.0] - 2026-08-26
+
+**The agent can ask you a question.** Suite **289 + 1570 + 475 + 183 + 4** (+511), all targets green.
+[ADR-0020](docs/adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md).
+
+### Added — `ask_user`, on every interactive surface
+
+`ask_user(question, options?)` BLOCKS the turn and puts the question in front of the operator: the
+question, a numbered list of the model's suggested answers, and — always — a free-text field. Whatever
+they say comes back as the tool result and the loop continues. Until now a turn that needed one fact
+from the human could only guess or announce an assumption.
+
+**Suggested answers are suggestions, never a menu.** The free-text field is there whether or not the
+model supplied options, and typing takes precedence over any highlighted suggestion — a tool that could
+only offer a closed choice would let the model frame the decision as well as ask it. One resolution rule
+is shared by all three surfaces (`ask_resolve`): a bare in-range number picks that option, anything else
+is your own words, empty declines. So `2` means the same thing everywhere.
+
+| surface | how it asks |
+|---|---|
+| **T2 rich TUI** | the confirm bracket — the one mechanism that already works from inside a tool round |
+| **T3 Wayland GUI** | a real modal card, composited over the frame, driven by a nested evdev poll loop |
+| **line REPL** | a plain cooked read |
+| one-shot / `--json` / `--events` | **degrades** — returns an honest "nobody could be asked" telling the model to state its assumption, and never blocks |
+
+**The T3 GUI half is new machinery, not new wiring.** Audit finding A-11 (0.39.0) recorded that the GUI
+*"has no modal to render this in and no path from evdev to `read_line`"* — which is why gated tools DENY
+there rather than hang. This release builds exactly that missing pair, on the shape 0.35.0's mid-turn
+pump already proved: drain the Wayland fd and repaint from inside a synchronous turn, with a blocking
+poll instead of a peek.
+
+Verified end to end against a gateway that calls the tool, not asserted:
+
+| surface | typed | the model received |
+|---|---|---|
+| line REPL | `2` | `SQLite` |
+| T2 TUI | `3` | `Leave it abstract` |
+| T2 TUI | `DuckDB, actually` | `DuckDB, actually` |
+| line REPL | *(empty)* | `(the operator declined to answer …)` |
+| one-shot | *(no human)* | `(nobody could be asked …)`, no hang |
+
+### The rules it obeys
+
+- **The question is model-authored text that gets displayed**, so it is sanitised once at ingest — C0
+  and DEL substituted with `?`, width-preserving. Newlines too, unlike hook output: a `\n` in a question
+  is a free extra screen row the model controls. Without this a raw ESC reaching the T2 feed is stored
+  and re-emitted verbatim, and a question could clear the screen or forge output.
+- **The model never occupies the trust position** — each surface prefixes it with a fixed literal that
+  surface owns (`[the agent is asking]`) in thoth's accent role.
+- **In the GUI the threat is layout forgery, not escape forgery** (graster has no escape interpreter), so
+  every model-authored string is drawn with a codepoint clip and the option list is capped.
+- **Not t-ron-gated**: a question touches no file, process or network — strictly less dangerous than
+  `read_file`, which is ungated too, and gating it would mean a confirm prompt to authorize a prompt.
+- **Bounded per TURN** (`ASK_MAX_PER_TURN` = 4), because the resource it spends is your *attention* and
+  no authorization policy expresses "stop bothering me". A question that could not be asked spends
+  nothing — the counter tracks interruptions, not attempts.
+- **Off by default** (`[ask].enabled`). It interrupts a human, which no other tool does.
+- **It never returns an empty string** — "said nothing", "declined" and "could not be reached" are three
+  different facts the model must act on differently.
+
+`/state` gains an `ask` row naming **which surface can answer**, since the tool is advertised wherever it
+is enabled but only answerable where a human is reachable.
+
+### Changed — the test suite split, because the 8 MB ceiling bit again
+
+Adding one module pushed `tests/thoth_core.tcyr` past cyrius's fixed `preprocess_out` arena slot — the
+constraint the roadmap predicted would block "the next feature that needs a spine capability", for the
+second release running. The TUI test bodies moved to a new **`tests/thoth_tui.tcyr`** with an identical
+src include chain; **nothing was dropped** and every assertion still runs. Splitting bodies is the only
+lever thoth owns today (~4.9 MB of the chain is vendored bundles the tests cannot drop: avatara 1.1 MB,
+bayan 641 KB, sit-read 416 KB, vyakarana 401 KB). The real fix remains upstream lean `[lib.X]` profiles.
+
 ## [0.43.5] - 2026-08-26
 
 **A mistyped config key is no longer indistinguishable from not writing the line.** Suite

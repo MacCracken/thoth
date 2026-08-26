@@ -160,6 +160,8 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/fsearch.cyr` — in-feed search.
 - `src/search.cyr` — the jailed `search` tool (glob + content grep across the project).
 - `src/checkpoint.cyr` — the file-snapshot store behind `/rewind` (a pre-edit copy per model write, 0.40.0).
+- `src/ask.cyr` — the `ask_user` tool ([ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)): the model asks YOU a question mid-turn and blocks for the answer. Off by default (`[ask].enabled`).
+- `src/gui/gask.cyr` — the T3 question modal (view-builder + key fold; the blocking poll loop is in `gpresent`).
 - `src/subagent.cyr` — `delegate(task)`: a scoped child *context*, off by default ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)).
 - `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.
 - `src/hooks.cyr` — operator lifecycle hooks (`[hooks]`); `pre_tool` can BLOCK a tool call.

@@ -1118,3 +1118,77 @@ fn test_gui_rainbow() {
     ui_detect_tier();
     return 0;
 }
+
+# --- the T3 question modal (src/gui/gask.cyr, 0.44.0, T4-1) --------------------------------------
+#
+# The view-builder half, headless. The blocking poll loop lives in gpresent.cyr and needs a live
+# compositor, but everything that decides what the operator SEES and what a keystroke MEANS is here.
+#
+# ⚠ This modal is why the T3 surface can answer a question at all. Audit A-11 recorded that the GUI had
+# "no modal to render this in and no path from evdev to read_line", so gated tools DENY there rather
+# than deadlock; ask_user closes that gap, and these assertions pin the two properties that make it
+# safe — the model never occupies the trust position, and its bytes are clipped, not free to reflow.
+fn _gask_find_text(cmds, needle) {
+    var i = 0;
+    while (i < vec_len(cmds)) {
+        var c = vec_get(cmds, i);
+        if (gd_kind(c) == GD_TEXT) {
+            if (gd_text(c) != 0) { if (_ui_contains(gd_text(c), needle) == 1) { return c; } }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn test_gask() {
+    test_group("T3 question modal (gui/gask.cyr, 0.44.0)");
+    # inert until opened: the ordinary frame must be byte-identical when no question is pending
+    gask_close();
+    var idle = gd_list_new();
+    gask_build(idle, 960, 600);
+    assert_eq(vec_len(idle), 0, "no pending question -> the modal emits ZERO draw commands");
+
+    gask_open("Which database should I use?");
+    gask_add_option("PostgreSQL");
+    gask_add_option("SQLite");
+    assert_eq(gask_active(), 1, "opening raises the modal");
+    assert_eq(gask_option_count(), 2, "options are held");
+    assert_eq(gask_sel(), 0, "the first option starts highlighted");
+
+    var cmds = gd_list_new();
+    gask_build(cmds, 960, 600);
+    assert(vec_len(cmds) > 0, "an open modal draws");
+    # ⚠ THE TRUST ANCHOR: a fixed label this file owns always precedes the model's bytes, so a question
+    # written to look like a prompt cannot pass itself off as thoth asking.
+    assert(_gask_find_text(cmds, "the agent is asking") != 0, "the modal's own label is drawn");
+    assert(_gask_find_text(cmds, "Which database") != 0, "...and the question after it");
+    assert(_gask_find_text(cmds, "PostgreSQL") != 0, "option 0 is drawn");
+    assert(_gask_find_text(cmds, "SQLite") != 0, "option 1 is drawn");
+    assert(_gask_find_text(cmds, "Esc decline") != 0, "the affordance line is drawn");
+    # ⚠ LAYOUT FORGERY is the GUI's threat, not escape forgery (graster has no escape interpreter): a
+    # long question must be CLIPPED to the card, never allowed to push the card's own chrome off it.
+    var qc = _gask_find_text(cmds, "Which database");
+    assert(gd_aux(qc) > 0, "the question is drawn with a codepoint clip, not unbounded");
+
+    # key folding: 0 = pending, 1 = accepted, 2 = declined
+    assert_eq(_gask_key(108, 0), 0, "Down is pending");
+    assert_eq(gask_sel(), 1, "...and moves the highlight");
+    assert_eq(_gask_key(108, 0), 0, "Down at the end is pending");
+    assert_eq(gask_sel(), 1, "...and does not run off the list");
+    assert_eq(_gask_key(103, 0), 0, "Up is pending");
+    assert_eq(gask_sel(), 0, "...and moves back");
+    assert_eq(_gask_key(1, 0), 2, "Esc DECLINES");
+    assert_eq(_gask_key(28, 0), 1, "Enter on a highlighted option ACCEPTS");
+
+    # typing goes to the free-text field and takes the selection with it — one answer, not two modes
+    gask_open("pick"); gask_add_option("a");
+    assert_eq(gask_sel(), 0, "an option is highlighted to begin with");
+    _gask_key(32, 0);                       # evdev 32 = 'd'
+    assert(gask_len() > 0, "typing lands in the free-text field");
+    assert_eq(gask_sel(), 0 - 1, "...and clears the highlight, so Enter cannot submit a suggestion instead");
+    assert_eq(_gask_key(14, 0), 0, "Backspace is pending");
+    assert_eq(gask_len(), 0, "...and deletes");
+    assert_eq(_gask_key(28, 0), 2, "Enter with no text AND no highlight declines rather than answering blank");
+    gask_close();
+    return 0;
+}

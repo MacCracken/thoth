@@ -92,6 +92,7 @@ include "src/hooks.cyr"     # lifecycle hooks, incl. a BLOCKING pre_tool (0.41.0
 include "src/verify.cyr"    # the verification loop (0.41.0, T2-5); after exec/shell, before agent.cyr folds it into a tool result
 include "src/events.cyr"    # streaming NDJSON events for machine consumers (0.42.0, T3); after hoosh (uses _append_int_cap/_json_escape_*)
 include "src/toolpin.cyr"   # TOFU pinning of MCP tool definitions (0.42.0, T3); before agent.cyr, which gates advertisement on it
+include "src/ask.cyr"      # the ask_user tool (0.44.0, T4-1, ADR-0020) — blocks on the operator; before agent (dispatched there)
 include "src/agent.cyr"
 include "src/subagent.cyr"  # scoped child context, the `delegate` tool (0.43.0, T2-1, ADR-0018); AFTER agent.cyr (reuses its dispatch + builders)
 include "src/diff.cyr"
@@ -113,6 +114,7 @@ include "src/gui/gtree.cyr"       # file-tree pane view-builder (0.30.5); before
 include "src/gui/gconv.cyr"       # conversation sidebar view-builder (0.33.6); before gfeed (gframe lays out the pane); reads conv_*
 include "src/gui/gtool.cyr"       # tool-call CARD view-builder (0.30.16); before gfeed (feed interleaves cards); reads roundlog/session_turns
 include "src/gui/gmem.cyr"        # per-turn MEMORY strip (0.32.5): recalled sources + grounding verdict from memlog; before gfeed (interleaved there)
+include "src/gui/gask.cyr"      # T3 question modal (0.44.0, T4-1) — the ask_user front end; before gfeed (composited by gframe_build)
 include "src/gui/gfeed.cyr"       # conversation-feed view-builder (0.30.1); reads session_history; headless-testable
 include "src/gui/gwindow.cyr"    # sovereign Wayland window seam (present shell); main-only (compositor-gated, not unit-tested)
 include "src/commands.cyr"

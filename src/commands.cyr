@@ -528,6 +528,17 @@ fn cmd_state() {
         if (hooks_blocked() > 0) { ui_emit(ROLE_RED, ", "); ofmt_int(hooks_blocked()); ui_emit(ROLE_RED, " blocked"); }
         oprintln("");
     }
+    if (config_ask_enabled() == 1) {
+        # 0.44.0 (T4-1): this row's real job is naming WHICH SURFACE can answer. The tool is advertised
+        # to the model wherever it is enabled, but a question is only answerable where a human can be
+        # reached — and a user must not discover that from a refusal mid-turn.
+        ui_label("  ask     : ");
+        ui_emit(ROLE_GREEN, "on"); ui_emit(ROLE_FAINT, " — the model may ask you a question");
+        ui_emit(ROLE_FAINT, " (max "); ofmt_int(ASK_MAX_PER_TURN); ui_emit(ROLE_FAINT, "/turn)");
+        if (ask_runs() > 0) { emit(" · "); ofmt_int(ask_runs()); emit(" asked"); }
+        if (one_shot_active() == 1) { ui_emit(ROLE_RED, "  [not answerable here: one-shot is non-interactive]"); }
+        oprintln("");
+    }
     if (config_subagent_enabled() == 1) {
         ui_label("  delegate: ");
         ui_emit(ROLE_GREEN, "on"); ui_emit(ROLE_FAINT, " — depth 1, ");
@@ -1863,6 +1874,7 @@ fn cmd_reset() {
     hoosh_compact_floor_clear();  # 0.40.0 (T1-5): an index into a history that no longer exists
     ckpt_reset();              # 0.40.0 (T1-4): the writes belong to the conversation being cleared
     subagent_reset();          # 0.43.0 (T2-1): the delegations belonged to the conversation being cleared
+    ask_reset();               # 0.44.0 (T4-1): the questions belonged to the conversation being cleared
     if (n == 0) { oprintln("conversation already empty — nothing to clear."); }
     else { emit("conversation cleared ("); ofmt_int(n); oprintln(" messages dropped). fresh context."); }
     return 0;

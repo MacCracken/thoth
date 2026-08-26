@@ -679,5 +679,9 @@ fn gframe_build(w, h) {
     }
     # the caret shows ONLY when the composer is focused (0.30.10) — a clear active-pane cue.
     if (gfocus() == GFOCUS_COMPOSER) { gd_push_rect(cmds, ccx, cty, 2, GR_GLYPH_H, _ui_rgb(ROLE_ACCENT)); }
+    # 0.44.0 (T4-1): the question modal composites LAST so it lands on top of every region — the overlap
+    # is what makes it read as modal on a surface that otherwise only tiles panes side by side. A no-op
+    # (and zero commands) whenever no question is pending, so the ordinary frame is byte-identical.
+    gask_build(cmds, w, h);
     return cmds;
 }

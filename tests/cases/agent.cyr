@@ -1727,3 +1727,125 @@ fn test_mcpres() {
     mcpres_endpoints_reset();
     return 0;
 }
+
+# --- ask_user: the tool that runs toward the USER (src/ask.cyr, 0.44.0, T4-1) ----------------------
+#
+# The pure half — parsing, sanitising, bounding, and the answer-resolution rule the three front ends
+# share. The blocking modals themselves are front-end code (tui_ask / gui_ask) and are exercised live.
+# A stub front end: answers instantly so the budget and seam can be exercised without blocking. This is
+# also the test of the SEAM itself — ask_user_tool must call whatever hook is registered and read the
+# outcome back through _ask_state, exactly as tui_ask and gui_ask do.
+fn _test_ask_hook() { ask_set_answer("stub-answer"); return 0; }
+fn _test_ask_hook_decline() { ask_cancel(); return 0; }
+
+fn test_ask_user() {
+    test_group("ask_user: question parsing, sanitising and bounds (ask.cyr, 0.44.0)");
+    var sv_en = _cfg_ask_enabled;
+    var sv_hook = _ask_hook;
+    _ask_hook = 0;
+    ask_reset();
+
+    # OFF by default — it interrupts a human, so it is opt-in like shell/edit/delegate.
+    _cfg_ask_enabled = 0;
+    assert(_ui_contains(ask_user_tool("{\"question\":\"x\"}"), "not enabled") == 1, "disabled -> an honest not-enabled string, never a prompt");
+    _cfg_ask_enabled = 1;
+
+    # shape refusals (0.39.0 A-4: a NON-STRING question must answer 0 from bayan_json_v_str, not a pointer)
+    assert(_ui_contains(ask_user_tool(0), "missing arguments") == 1, "no arguments");
+    assert(_ui_contains(ask_user_tool("not json"), "not valid JSON") == 1, "malformed arguments");
+    assert(_ui_contains(ask_user_tool("{\"q\":1}"), "needs a \"question\"") == 1, "missing question");
+    assert(_ui_contains(ask_user_tool("{\"question\":42}"), "needs a \"question\"") == 1, "a NUMBER question is not a string");
+    assert(_ui_contains(ask_user_tool("{\"question\":\"\"}"), "non-empty") == 1, "an empty question is refused");
+
+    # ⚠ THE SANITISER. The question is MODEL-authored text heading for a terminal; a raw ESC reaching the
+    # T2 feed is stored and re-emitted verbatim, so an un-sanitised question could clear the screen or
+    # reposition the cursor to forge output. C0 and DEL are SUBSTITUTED with '?' (width-preserving, the
+    # ftree.cyr rule) — including \n, which in a modal would be a free extra row the model controls.
+    _ask_hook = 0;
+    one_shot_set(1);                                   # force the degrade path so nothing blocks on a read
+    ask_user_tool("{\"question\":\"a\\u001b[2Jb\\nc\\u0007d\"}");
+    assert_eq(_ui_contains(ask_question(), "\x1b"), 0, "an ESC in the question never survives ingest");
+    assert(streq(ask_question(), "a?[2Jb?c?d") == 1, "C0 and DEL are substituted with '?', preserving byte count");
+    one_shot_set(0);
+
+    # options: parsed, sanitised, capped, and non-strings skipped rather than crashing
+    one_shot_set(1);
+    ask_user_tool("{\"question\":\"pick\",\"options\":[\"one\",\"t\\u001bwo\",7,\"\",\"three\"]}");
+    assert_eq(ask_option_count(), 3, "non-string and empty options are skipped, the rest kept");
+    assert(streq(ask_option_at(0), "one") == 1, "option 0");
+    assert(streq(ask_option_at(1), "t?wo") == 1, "option 1 is sanitised like the question");
+    assert(streq(ask_option_at(2), "three") == 1, "option 2");
+    assert_eq(ask_option_at(3), 0, "an out-of-range option index answers 0, never a stray pointer");
+    ask_user_tool("{\"question\":\"many\",\"options\":[\"1\",\"2\",\"3\",\"4\",\"5\",\"6\",\"7\",\"8\"]}");
+    assert_eq(ask_option_count(), ASK_OPT_MAX, "the option list is capped — a menu, not a dump");
+    one_shot_set(0);
+
+    # ⚠ DEGRADATION. There is no operator in one-shot, and an unanswerable prompt must FAIL, not hang —
+    # this is audit A-11's lesson (a GUI turn hung forever on a prompt nobody could see or answer).
+    one_shot_set(1);
+    var r = ask_user_tool("{\"question\":\"anyone there?\"}");
+    assert(_ui_contains(r, "nobody could be asked") == 1, "one-shot degrades honestly instead of blocking");
+    assert(_ui_contains(r, "STATE the assumption") == 1, "...and tells the model what to do instead");
+    one_shot_set(0);
+
+    # the answer-resolution rule the TUI, the GUI and the line REPL all share
+    _ask_nopt = 0;
+    _ask_copy_clean(_ask_opts + 0 * ASK_OPT_CAP, ASK_OPT_CAP, "alpha"); _ask_nopt = 1;
+    _ask_copy_clean(_ask_opts + 1 * ASK_OPT_CAP, ASK_OPT_CAP, "beta");  _ask_nopt = 2;
+    ask_resolve("2");
+    assert(streq(ask_answer_buf(), "beta") == 1, "a bare in-range number picks that option");
+    ask_resolve("1");
+    assert(streq(ask_answer_buf(), "alpha") == 1, "...1-based, not 0-based");
+    ask_resolve("9");
+    assert(streq(ask_answer_buf(), "9") == 1, "an OUT-OF-RANGE number is free text, not a silent mispick");
+    ask_resolve("2 please");
+    assert(streq(ask_answer_buf(), "2 please") == 1, "a number with anything else is free text");
+    ask_resolve("my own answer");
+    assert(streq(ask_answer_buf(), "my own answer") == 1, "free text is kept verbatim");
+    assert_eq(ask_state(), 1, "...and marks the question answered");
+    ask_resolve("");
+    assert_eq(ask_state(), 2, "an empty line CANCELS rather than answering with nothing");
+
+    # the SEAM: a registered front end is called, and its answer comes back as the tool result
+    _cfg_ask_enabled = 1;
+    one_shot_set(0);
+    ask_hook_set(&_test_ask_hook);
+    ask_turn_reset(); ask_reset();
+    assert(streq(ask_user_tool("{\"question\":\"ready?\"}"), "stub-answer") == 1, "the registered front end's answer IS the tool result");
+    assert_eq(ask_state(), 1, "...and the question reads as answered");
+    ask_hook_set(&_test_ask_hook_decline);
+    assert(_ui_contains(ask_user_tool("{\"question\":\"ready?\"}"), "declined") == 1, "a declined question returns an honest refusal, not an empty string");
+    assert_eq(ask_state(), 2, "...and reads as cancelled");
+    ask_hook_set(&_test_ask_hook);
+
+    # ⚠ THE BUDGET is per TURN, because the resource this tool spends is the operator's ATTENTION and no
+    # authorization policy expresses "stop bothering me". Session totals survive for /state; /reset clears.
+    #
+    # ⚠ Driven through the stub hook, NOT through the one-shot degrade path: a question that could not be
+    # asked must not consume budget, so the degrade path deliberately returns before the counter — which
+    # means testing the cap through it would measure nothing. (The first cut of this test did exactly
+    # that and asserted a count of 4 against an actual 0.)
+    ask_turn_reset(); ask_reset();
+    var k = 0;
+    while (k < ASK_MAX_PER_TURN) { ask_user_tool("{\"question\":\"q\"}"); k = k + 1; }
+    assert_eq(ask_turn_used(), ASK_MAX_PER_TURN, "each asked question spends one of the turn's budget");
+    assert(_ui_contains(ask_user_tool("{\"question\":\"one more\"}"), "budget is used up") == 1, "the per-turn question budget is enforced");
+    assert_eq(ask_turn_used(), ASK_MAX_PER_TURN, "...and a refused ask does not creep past the cap");
+    assert_eq(ask_runs(), ASK_MAX_PER_TURN, "the SESSION total counts what was actually asked");
+    ask_turn_reset();
+    assert_eq(ask_turn_used(), 0, "a new turn restores the budget");
+    assert_eq(ask_runs(), ASK_MAX_PER_TURN, "...while the session total survives the per-turn reset (for /state)");
+    ask_reset();
+    assert_eq(ask_runs(), 0, "/reset clears the session total");
+
+    # an UNASKABLE question spends nothing — the counter tracks interruptions, not attempts
+    one_shot_set(1);
+    ask_turn_reset();
+    ask_user_tool("{\"question\":\"nobody home\"}");
+    assert_eq(ask_turn_used(), 0, "a question that could not be asked costs no budget");
+    one_shot_set(0);
+
+    _cfg_ask_enabled = sv_en;
+    _ask_hook = sv_hook;
+    return 0;
+}

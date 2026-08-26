@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.43.5 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.44.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
 
 **The loop.** A free-text turn drives a **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to
@@ -190,6 +190,10 @@ The toolchain version is pinned in `cyrius.cyml` (`[package].cyrius`) — that
 pin is the source of truth; don't hardcode it elsewhere.
 
 ## Documentation
+
+**Ask-me-back.** With `[ask].enabled`, the model can stop mid-turn and ask you a question — suggested
+answers plus a free-text field — on the TUI, the desktop GUI or the line REPL; one-shot degrades
+honestly rather than blocking ([ADR-0020](docs/adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)).
 
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (*why X over Y?*)
 - [`docs/architecture/`](docs/architecture/) — non-obvious invariants about the code

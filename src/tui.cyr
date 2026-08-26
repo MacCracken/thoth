@@ -1594,6 +1594,50 @@ fn tui_confirm_end() {
     return 0;
 }
 
+# --- the T2 asker (0.44.0, T4-1) --------------------------------------------
+#
+# The blocking question modal for the rich TUI. Registered with ask_hook_set; called from deep inside
+# the tool phase (agent_turn -> _agent_run_calls_serial -> ask_user_tool), several frames below tui_loop.
+#
+# ⚠ IT CANNOT BE A LOOP-LEVEL MODAL, and that rules out the obvious approach. The Ctrl-P picker and the
+# feed search are entered from tui_loop's key branch and drained by the same `while (_tui_running)` loop
+# — but during a turn that loop is BLOCKED inside dispatch(). So `ask_user` reuses the one mechanism that
+# already works from inside a tool round: the confirm bracket. tui_confirm_begin/end drop to OUT_FD1 on
+# the live screen, suspend Esc-poll so a COOKED read_line echoes, and repaint the body afterwards to
+# erase the prompt — which is precisely what a question needs, and is machinery that has been carrying
+# the y/N gate since 0.18.6.
+#
+# The question and its options are already SANITISED by src/ask.cyr before they get here (C0 and DEL
+# substituted), so this may print them directly. The framing around them is thoth's own: the operator has
+# to be able to tell thoth asking from the model appearing to ask, so the label is a fixed literal this
+# file owns and the model's bytes never occupy the affordance position.
+fn tui_ask() {
+    tui_confirm_begin();
+    ui_emit(ROLE_ACCENT, "  [the agent is asking] "); emit(ask_question()); oprintln("");
+    var i = 0;
+    while (i < ask_option_count()) {
+        emit("    "); ofmt_int(i + 1); emit(") "); ui_emit(ROLE_MUTED, ask_option_at(i)); oprintln("");
+        i = i + 1;
+    }
+    if (ask_option_count() > 0) {
+        ui_emit(ROLE_FAINT, "    a number picks an option · anything else is your own answer · empty cancels"); oprintln("");
+    } else {
+        ui_emit(ROLE_FAINT, "    type your answer · empty cancels"); oprintln("");
+    }
+    emit("  > ");
+    var buf[2048];
+    var n = read_line(&buf, 2048);
+    if (n <= 0) { ask_cancel(); } else { ask_resolve(&buf); }
+    tui_confirm_end();
+    # Echo the outcome INTO THE FEED so the conversation records what was asked and answered — otherwise
+    # tui_confirm_end's repaint erases the whole exchange and the transcript shows a tool call with an
+    # answer that appears from nowhere.
+    ui_emit(ROLE_ACCENT, "  [asked] "); emit(ask_question()); oprintln("");
+    if (ask_state() == 1) { ui_emit(ROLE_GREEN, "  [answered] "); emit(ask_answer_buf()); oprintln(""); }
+    else { ui_emit(ROLE_RED, "  [declined]"); oprintln(""); }
+    return 0;
+}
+
 # --- the file-tree pane painter (0.9.3) -----------------------------------
 # Paints the tree into columns [1, tree_w] over the feed rows, with a vertical
 # separator at tree_w+1; the feed (feed_repaint) paints [tree_w+2, cols]. Chrome:
@@ -2015,6 +2059,13 @@ fn tui_loop() {
     #ifndef CYRIUS_TARGET_AGNOS
     _sigint_fd = tty_open_signalfd(2);   # block SIGINT (mask bit for signal 2) for the session
     #endif
+    # 0.44.0 (T4-1): claim the ask seam for THIS front end, here rather than in main's preamble — the
+    # hook must belong to the surface that is actually running. confirm_hooks_set can be unconditional
+    # because `confirm` only fires it when out_mode() == OUT_RING; the ask hook has no such guard (a
+    # registered hook IS the signal that a human is reachable), so registering tui_ask globally would
+    # have the line REPL and one-shot call TUI painters with no alt-screen up. gui_run claims it the
+    # same way for the T3 window.
+    ask_hook_set(&tui_ask);
     _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize; 0 on agnos)
     tty_alt_enter();
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol

@@ -88,6 +88,7 @@ fn _gpresent_drain_keys(win) {
 var _gstop_win = 0;
 var _gpump_last_ms = 0;    # the pump's own last-paint clock (feed_stream_tick's is dead under OUT_NULL)
 fn gstop_set_win(w) { _gstop_win = w; return 0; }
+fn gstop_win() { return _gstop_win; }   # 0.44.0: gask's blocking modal pumps the same window
 fn gpump_reset() { _gpump_last_ms = 0; return 0; }   # reset before a turn so the first partial paints instantly
 fn _gstop_poll() {
     if (_gstop_win == 0) { return 0; }
@@ -114,6 +115,56 @@ fn _gstop_poll() {
     return 0;
 }
 
+# gui_ask: the blocking asker registered with ask_hook_set from gui_run. Opens the modal, pumps the
+# Wayland fd until the operator settles the question, closes.
+#
+# ⚠ THE POLL IS BLOCKING (timeout 250ms), unlike _gstop_poll's non-blocking peek. A question has no
+# deadline and a busy-spin would burn a core while a human reads; the timeout exists only so the loop
+# still repaints on a resize and can never wedge if the compositor goes quiet. Every iteration marks the
+# frame dirty and repaints ready-gated, exactly as the mid-turn pump does.
+fn gui_ask() {
+    var win = gstop_win();
+    if (win == 0) { ask_cancel(); return 0; }                            # no window -> nobody to ask
+    # Copy ask.cyr's already-sanitised strings into the modal's own view state. gask.cyr deliberately
+    # holds no seam of its own so it stays a headless-testable view-builder; this is the bridge.
+    gask_open(ask_question());
+    var i = 0;
+    while (i < ask_option_count()) { gask_add_option(ask_option_at(i)); i = i + 1; }
+    _gui_dirty = 1;
+    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }
+    var done = 0;
+    while (done == 0) {
+        var pfd[8];
+        if (_gpresent_poll_fd(&pfd, gwl_win_fd(win), 250) > 0) {
+            var ev = gwl_win_poll_events(win);
+            if ((ev & GWL_WIN_EV_CLOSE) != 0) { ask_cancel(); done = 1; }
+            if ((ev & GWL_WIN_EV_KEY) != 0) {
+                var rec[24];
+                while ((gwl_win_next_key(win, &rec) == 1) && (done == 0)) {
+                    if (load64(&rec + 8) == 1) {                          # value 1 = press (not autorepeat/release)
+                        var mods = load64(&rec + 16);
+                        var r = _gask_key(load64(&rec), mods & 1);
+                        if (r == 2) { ask_cancel(); done = 1; }
+                        elif (r == 1) {
+                            # Typed text wins over a highlighted option — the two are one answer, and
+                            # ask_resolve gives "2" the same meaning here as on the TUI and in the REPL.
+                            if (gask_len() > 0) { ask_resolve(gask_text()); }
+                            else { ask_pick_option(gask_sel()); }
+                            done = 1;
+                        }
+                    }
+                }
+            }
+        }
+        _gui_dirty = 1;
+        if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }
+    }
+    gask_close();
+    _gui_dirty = 1;
+    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }
+    return 0;
+}
+
 # gui_run: open a window and run the event loop until close. 0 on clean exit, -1 if no compositor.
 fn gui_run() {
     if (gwl_win_open("thoth", 960, 600) == 0) {
@@ -137,7 +188,8 @@ fn gui_run() {
     ftree_load();                                        # populate the file-tree pane (0.30.5)
     git_probe();                                         # so the tree's git badges + the status git field have data
     inhist_init();                                       # composer history recall ring (0.30.15)
-    gstop_set_win(win); intr_check_hook_set(&_gstop_poll);   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
+    gstop_set_win(win); intr_check_hook_set(&_gstop_poll);
+    ask_hook_set(&gui_ask);                              # 0.44.0 (T4-1): claim the ask seam for THIS front end   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
     var pfd[8];
     _gpresent_frame(win);                                # first paint
     var running = 1;

@@ -283,6 +283,25 @@ fn agent_tools_add_delegate(dst, tl) {
     return off;
 }
 
+# agent_tools_add_ask: append the `ask_user` tool (0.44.0, T4-1) — OPT-IN, advertised only when
+# [ask].enabled, in lockstep with the dispatch guard so a hallucinated name never reaches daimon.
+#
+# ⚠ The description is doing real work here. This is the one tool whose cost is the OPERATOR'S ATTENTION,
+# and a model with a question tool will over-use it unless told plainly when not to. So it says what a
+# good question looks like (a decision only the human can make) and what a bad one looks like (anything
+# it could answer by reading a file), and it warns that the budget is small.
+fn agent_tools_add_ask(dst, tl) {
+    if (config_ask_enabled() == 0) { return tl; }
+    var cap = AGENT_TOOLS_CAP;
+    var off = tl;
+    if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
+    else { off = tl - 1; off = _append_cstr_cap(dst, off, cap, ","); }
+    off = _append_cstr_cap(dst, off, cap, "{\"type\":\"function\",\"function\":{\"name\":\"ask_user\",\"description\":\"Ask the human operator a question and WAIT for their answer. Use this ONLY for a decision you genuinely cannot make alone: an ambiguous requirement, a choice between approaches with real trade-offs, a missing fact that is not in the project, or confirmation before something hard to undo. Do NOT use it for anything you could answer by reading a file, running a search, or making a reasonable assumption and stating it - that wastes the person's attention. Ask ONE specific question at a time, and supply 'options' when there is a small set of sensible answers (the operator can always type something else instead). Your question budget for a turn is small, so spend it well.\",\"parameters\":{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"the question, phrased so a short answer settles it\"},\"options\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"optional suggested answers (at most 6); the operator may pick one or type their own\"}},\"required\":[\"question\"]}}}");
+    off = _append_cstr_cap(dst, off, cap, "]");
+    store8(dst + off, 0);
+    return off;
+}
+
 # agent_tools_add_edit: append the model-invokable `edit` tool (0.31.0, ADR-0017) — OPT-IN, advertised only when
 # [edit].enabled, so an unconfigured session never even offers it (advertise-gate ⇔ dispatch-gate lockstep).
 # Surgical semantics: it replaces the UNIQUE occurrence of old_string; a non-unique/absent match is refused.
@@ -935,6 +954,10 @@ fn _agent_round_has_local(tcs, nc) {
             # blocking security hook entirely — an authorization bug, not just a state one. It also runs a
             # whole child turn, which must never happen concurrently with the parent's other calls.
             if (streq(nm, "delegate") == 1) { return 1; }
+            # 0.44.0 (T4-1): `ask_user` BLOCKS on a human. It must take the serial path for the same
+            # reason delegate does — the parallel executor fires no pre_tool hook and no events — and
+            # additionally because two concurrent workers cannot both own the operator's screen.
+            if (streq(nm, "ask_user") == 1) { return 1; }
         }
         i = i + 1;
     }
@@ -1098,6 +1121,23 @@ fn _agent_run_calls_serial(tcs, nc) {
                 res = "(create_file tool is not enabled in this session)";
             }
             ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+        }
+        elif (streq(nm, "ask_user") == 1) {
+            # 0.44.0 (T4-1): the one tool that runs TOWARD the user. LOCAL and matched unconditionally
+            # (not gated on config) for the same reason `shell` is: a call by this name must always land
+            # here so the arm below decides its fate, rather than a hallucinated/un-advertised name
+            # falling through to daimon_invoke and coming back as a confusing 400.
+            #
+            # NOT t-ron-gated: a question touches no file, no process and no network — it is strictly
+            # less dangerous than `read_file`, which is ungated too, and gating it would mean a confirm
+            # prompt to authorize a prompt. ask_user_tool reports its own outcome (it can refuse on the
+            # budget, on a bad shape, or because no operator is reachable), so the round card and the
+            # tool_result event say what actually happened rather than "the feature is on".
+            res = ask_user_tool(gp);
+            rl_kind = RL_ALLOWED;
+            rl_ok = 1;
+            if (ask_state() != 1) { rl_ok = 0; }        # declined / unreachable / refused -> not a success
+            ui_emit(ROLE_FAINT, "  result: "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(strlen(res)); emit(ui_reset()); ui_emit(ROLE_FAINT, " bytes"); oprintln("");
         }
         elif (streq(nm, "delegate") == 1) {
             # 0.43.0 (T2-1, ADR-0018): a scoped child context. subagent_tool self-gates ([subagent].enabled,
@@ -1327,6 +1367,7 @@ fn agent_turn(prompt) {
         tl = agent_tools_add_project(_agent_tools_buf, tl);  # 0.23.0: + read_file/list_dir (default-on, jailed)
         tl = agent_tools_add_edit(_agent_tools_buf, tl);     # 0.31.0: + edit when [edit].enabled (opt-in, jailed+gated)
         tl = agent_tools_add_delegate(_agent_tools_buf, tl); # 0.43.0 (T2-1): + delegate when [subagent].enabled (opt-in, depth-1)
+        tl = agent_tools_add_ask(_agent_tools_buf, tl);      # 0.44.0 (T4-1): + ask_user when [ask].enabled (opt-in; blocks on a human)
         _agent_tools_len = tl;
         # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
         # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient
@@ -1343,6 +1384,7 @@ fn agent_turn(prompt) {
     hoosh_recap_ensure(AGENT_REQ_CAP - AGENT_WORK_CAP - AGENT_TOOLS_CAP);
     _agent_work_reset();
     intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
+    ask_turn_reset();  # 0.44.0 (T4-1): a fresh question budget per turn (session totals survive; /reset clears them)
 
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", agentic");
     if (want_stream == 1) { ui_emit(ROLE_FAINT, ", stream"); }

@@ -37,8 +37,9 @@ include "src/memlog.cyr"
 include "src/reasonlog.cyr"
 include "src/gui/gtool.cyr"
 include "src/gui/gmem.cyr"
+include "src/gui/gask.cyr"      # T3 question modal (0.44.0, T4-1) — the ask_user front end; before gfeed (composited by gframe_build)
 include "src/gui/gfeed.cyr"
 include "tests/cases/gui.cyr"
-fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_pane_toggles(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gui_toolcards_live(); test_gturn_reply_landed(); test_gui_toolcards_diff(); test_gui_reason_perturn(); test_gui_markdown(); test_gui_table(); test_gui_rainbow(); return assert_summary(); }
+fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_pane_toggles(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gui_toolcards_live(); test_gturn_reply_landed(); test_gui_toolcards_diff(); test_gui_reason_perturn(); test_gui_markdown(); test_gui_table(); test_gui_rainbow(); test_gask(); return assert_summary(); }
 var _e = main();
 syscall(60, _e);

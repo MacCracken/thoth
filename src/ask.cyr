@@ -1,0 +1,266 @@
+# thoth — the `ask_user` tool (0.44.0, T4-1). See ADR-0020.
+#
+# WHAT THIS IS. One model-invokable tool, `ask_user(question, options?)`, that BLOCKS the turn and puts a
+# question in front of the operator: the question text, a numbered list of suggested answers the model
+# supplied, and — always — a free-text field. The answer comes back as the tool result and the loop
+# continues. Until now the agent could only guess or announce an assumption; a turn that needed one fact
+# from the human had no way to get it.
+#
+# ⚠ THIS IS THE ONLY TOOL THAT RUNS TOWARD THE USER. Every other tool reads a file, runs a command or
+# calls a host; this one interrupts a person. Two consequences shape the whole module:
+#
+#   1. IT CAN ONLY WORK WHERE A HUMAN IS PRESENT AND CAN BE REACHED. That is a property of the SURFACE,
+#      not of the config, and thoth has four with different answers (see _ask_surface_ok below). Where
+#      there is nobody to ask, this must DEGRADE — return an honest "nobody could be asked" string that
+#      the model can act on — and never block. `confirm` (src/gate.cyr) learned this the hard way: audit
+#      finding A-11 was a T3 GUI turn hanging FOREVER on a prompt whose bytes went to a discarded sink
+#      while read_line waited on a stdin nobody was typing into. An unanswerable prompt must fail, not
+#      deadlock.
+#   2. THE QUESTION IS MODEL-AUTHORED TEXT THAT GETS DISPLAYED. It is untrusted bytes heading for a
+#      terminal, so it is sanitised at THIS chokepoint, once, into an owned bounded copy — the
+#      `_tree_set_name` (src/ftree.cyr) pattern — rather than at each renderer. See _ask_copy_clean.
+#
+# THE FRONT-END SEAM. Rendering a modal and reading a key is the front end's business, and thoth has
+# three live ones. So this module owns the STATE and the POLICY and knows nothing about drawing: a front
+# end registers a blocking asker with `ask_hook_set`, exactly as it registers `intr_check_hook_set`
+# (src/intr.cyr) and `confirm_hooks_set` (src/gate.cyr). With no hook registered the line REPL path is
+# used, which is a plain cooked read and correct there.
+#
+# ⚠ NOT GATED BY t-ron, deliberately. A question touches no file, spawns no process and reaches no
+# network — it is strictly less dangerous than `read_file`, which is also ungated. Gating it would mean
+# a confirm prompt to allow a prompt. What it IS bounded by is a per-turn budget (ASK_MAX_PER_TURN),
+# because the failure mode here is not privilege, it is pestering: a model that asks eight questions per
+# round has made the session unusable, and no authorization policy expresses "stop bothering me".
+
+var ASK_Q_CAP = 1024;         # sanitised question text
+var ASK_OPT_MAX = 6;          # suggested answers offered; more than this stops being a menu
+var ASK_OPT_CAP = 128;        # one suggested answer
+var ASK_ANS_CAP = 2048;       # the operator's reply, free text
+var ASK_MAX_PER_TURN = 4;     # questions ONE turn may ask before the tool refuses
+
+var _ask_q = 0;               # sanitised question (cstr)
+var _ask_opts = 0;            # ASK_OPT_MAX * ASK_OPT_CAP, sanitised
+var _ask_nopt = 0;
+var _ask_ans = 0;             # the answer buffer a front end fills
+var _ask_state = 0;           # 0 = pending · 1 = answered · 2 = cancelled
+var _ask_hook = 0;            # front-end blocking asker (fn() -> i64), or 0
+var _ask_turn_n = 0;          # questions asked in THIS turn (the budget)
+var _ask_runs = 0;            # questions asked this session (for /state)
+
+# --- front-end seam -----------------------------------------------------------
+# A front end registers a function that DISPLAYS the pending question and BLOCKS until the operator
+# answers or cancels, then calls ask_set_answer / ask_cancel. Its return value is ignored; the outcome
+# is read from _ask_state, so a hook that forgets to answer reads as a cancel rather than as garbage.
+fn ask_hook_set(f) { _ask_hook = f; return 0; }
+
+# Renderer accessors — a front end draws from these and never parses the tool's arguments itself.
+fn ask_question() { if (_ask_q == 0) { return ""; } return _ask_q; }
+fn ask_option_count() { return _ask_nopt; }
+fn ask_option_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _ask_nopt) { return 0; }
+    return _ask_opts + i * ASK_OPT_CAP;
+}
+fn ask_runs() { return _ask_runs; }
+fn ask_turn_used() { return _ask_turn_n; }
+
+# ask_turn_reset: clear the PER-TURN budget. Called by agent_turn beside _agent_work_reset/intr_reset.
+#
+# ⚠ Session totals (_ask_runs) are deliberately NOT cleared here — /state reports them for the session
+# and /reset clears them, matching subagent_runs / guard_count / hooks_fired.
+fn ask_turn_reset() { _ask_turn_n = 0; return 0; }
+fn ask_reset() { _ask_runs = 0; _ask_turn_n = 0; return 0; }
+
+fn _ask_alloc() {
+    if (_ask_q == 0) { _ask_q = alloc(ASK_Q_CAP); }
+    if (_ask_opts == 0) { _ask_opts = alloc(ASK_OPT_MAX * ASK_OPT_CAP); }
+    if (_ask_ans == 0) { _ask_ans = alloc(ASK_ANS_CAP); }
+    if (_ask_q == 0) { return 0; }
+    if (_ask_opts == 0) { return 0; }
+    if (_ask_ans == 0) { return 0; }
+    return 1;
+}
+
+# _ask_copy_clean: copy `src` into `dst` (bounded by `cap`, NUL-terminated), substituting every C0
+# control byte and DEL with '?'. Returns the bytes written.
+#
+# ⚠ THIS IS THE SANITISER, AND IT RUNS ONCE AT INGEST. The question and its options are bytes the MODEL
+# chose, and they are about to be drawn on a terminal. A raw ESC reaching the T2 feed is stored and
+# re-emitted verbatim (feed.cyr only strips its own private marker range), so an un-sanitised question
+# could clear the screen, reposition the cursor to forge output, or set the window title — the same hole
+# src/ftree.cyr closed for filenames. SUBSTITUTE rather than drop, for the same reason it gives: '?'
+# preserves the byte count, so every width and column calculation downstream stays correct.
+#
+# Newlines are substituted too, unlike the hook-output policy that keeps them. A '\n' inside a question
+# would be a free extra screen row the model controls — layout forgery in a modal whose shape is the
+# only thing telling the user this is thoth asking.
+fn _ask_copy_clean(dst, cap, src) {
+    if (dst == 0) { return 0; }
+    if (src == 0) { store8(dst, 0); return 0; }
+    var i = 0;
+    while ((load8(src + i) != 0) && (i < (cap - 1))) {
+        var b = load8(src + i) & 255;
+        if (b < 32) { b = 63; }
+        if (b == 127) { b = 63; }
+        store8(dst + i, b);
+        i = i + 1;
+    }
+    store8(dst + i, 0);
+    return i;
+}
+
+# --- answer plumbing (called by the front end) --------------------------------
+fn ask_answer_buf() { _ask_alloc(); return _ask_ans; }
+fn ask_answer_cap() { return ASK_ANS_CAP; }
+
+# ask_set_answer: record a free-text answer. The operator's own words — NOT sanitised for display (it is
+# never re-displayed as chrome), but bounded like everything else.
+fn ask_set_answer(s) {
+    if (_ask_alloc() == 0) { return 0; }
+    var n = 0;
+    if (s != 0) {
+        while ((load8(s + n) != 0) && (n < (ASK_ANS_CAP - 1))) { store8(_ask_ans + n, load8(s + n)); n = n + 1; }
+    }
+    store8(_ask_ans + n, 0);
+    _ask_state = 1;
+    return n;
+}
+
+# ask_pick_option: record the operator's choice of suggested answer `i` (0-based). Convenience for a
+# front end whose modal offers a numbered list; equivalent to ask_set_answer(option_text).
+fn ask_pick_option(i) {
+    var o = ask_option_at(i);
+    if (o == 0) { return 0; }
+    return ask_set_answer(o);
+}
+
+fn ask_cancel() { _ask_state = 2; return 0; }
+fn ask_state() { return _ask_state; }
+
+# _ask_surface_ok: 1 if there is a human who could actually answer on THIS surface, else 0.
+#
+# ⚠ THE SURFACE MATRIX, because getting it wrong is either a hang or a silent lie:
+#   one-shot / --json / --events  ->  NO. Non-interactive by construction: stdin is the piped payload or
+#                                     absent, fd1 is the machine's answer channel, and nobody is watching.
+#   T3 GUI (OUT_NULL, no hook)    ->  NO. A prompt's bytes go to the discard sink. This is A-11's hang.
+#   T3 GUI (OUT_NULL, hook set)   ->  YES — the GUI registers a modal that reads evdev directly, which is
+#                                     the whole point of the seam. OUT_NULL alone is not the test.
+#   T2 TUI (OUT_RING)             ->  YES, via the registered hook that brackets back to the live screen.
+#   line REPL (OUT_FD1)           ->  YES with no hook at all: a plain cooked read on a real terminal.
+fn _ask_surface_ok() {
+    if (one_shot_active() == 1) { return 0; }
+    if (_ask_hook != 0) { return 1; }
+    if (out_mode() == OUT_NULL) { return 0; }
+    return 1;
+}
+
+# _ask_prompt_line: the fallback asker for the line REPL — no hook, real terminal, cooked stdin.
+# Prints the question and options with a thoth-OWNED prefix and reads one line.
+fn _ask_prompt_line() {
+    ui_emit(ROLE_ACCENT, "  [the agent is asking] "); emit(ask_question()); oprintln("");
+    var i = 0;
+    while (i < _ask_nopt) {
+        emit("    "); ofmt_int(i + 1); emit(") "); ui_emit(ROLE_MUTED, ask_option_at(i)); oprintln("");
+        i = i + 1;
+    }
+    if (_ask_nopt > 0) { ui_emit(ROLE_FAINT, "    (a number picks an option; anything else is your own answer; empty cancels)"); oprintln(""); }
+    else { ui_emit(ROLE_FAINT, "    (type your answer; empty cancels)"); oprintln(""); }
+    emit("  > ");
+    var buf[2048];
+    var n = read_line(&buf, 2048);
+    if (n <= 0) { ask_cancel(); return 0; }
+    ask_resolve(&buf);
+    return 0;
+}
+
+# ask_resolve: turn one raw typed line into an answer. A bare number in range picks that option;
+# anything else is the operator's own words; empty cancels. Shared by every front end so the three
+# surfaces cannot drift on what "2" means.
+fn ask_resolve(line) {
+    if (line == 0) { ask_cancel(); return 0; }
+    if (load8(line) == 0) { ask_cancel(); return 0; }
+    # a bare 1..N selects that option
+    var all_digit = 1;
+    var v = 0;
+    var i = 0;
+    while (load8(line + i) != 0) {
+        var c = load8(line + i);
+        if ((c < 48) || (c > 57)) { all_digit = 0; }
+        else { v = v * 10 + (c - 48); }
+        i = i + 1;
+    }
+    if ((all_digit == 1) && (v >= 1) && (v <= _ask_nopt)) { return ask_pick_option(v - 1); }
+    return ask_set_answer(line);
+}
+
+# --- the tool -----------------------------------------------------------------
+#
+# Returns the operator's answer, or an honest string saying why there is none. It NEVER returns an empty
+# string: the model has to be able to tell "they said nothing" from "they could not be reached", and a
+# bare "" would read as the former on every surface.
+fn ask_user_tool(args_json) {
+    if (config_ask_enabled() == 0) {
+        return "(the ask_user tool is not enabled in this session)";
+    }
+    if (_ask_alloc() == 0) { return "(ask_user unavailable: could not allocate the question buffer)"; }
+    if (args_json == 0) { return "(ask_user: missing arguments)"; }
+    var av = bayan_json_v_parse_buf(args_json, strlen(args_json));
+    if (av == 0) { return "(ask_user: arguments are not valid JSON)"; }
+    var qv = bayan_json_v_obj_get(av, "question");
+    if (qv == 0) { return "(ask_user needs a \"question\" string)"; }
+    # 0.39.0 (A-4): a non-string value answers 0 here rather than a pointer to walk.
+    var qs = bayan_json_v_str(qv);
+    if (qs == 0) { return "(ask_user needs a \"question\" string)"; }
+    var qc = str_cstr(qs);
+    if (load8(qc) == 0) { return "(ask_user needs a non-empty \"question\")"; }
+
+    # The per-turn budget. Checked BEFORE the surface test so the refusal reason is the true one: a model
+    # that has already asked its allowance should be told that, not told the surface is wrong.
+    if (_ask_turn_n >= ASK_MAX_PER_TURN) {
+        return "(ask_user: this turn's question budget is used up — answer with what you have, or state your assumption)";
+    }
+
+    _ask_copy_clean(_ask_q, ASK_Q_CAP, qc);
+
+    # options[] — suggested answers. Absent, empty, or not an array is fine: a question with no options
+    # is a plain free-text prompt, which is the common case.
+    _ask_nopt = 0;
+    var ov = bayan_json_v_obj_get(av, "options");
+    if (ov != 0) {
+        if (bayan_json_v_arr_len(ov) > 0) {
+            var n = bayan_json_v_arr_len(ov);
+            var i = 0;
+            while ((i < n) && (_ask_nopt < ASK_OPT_MAX)) {
+                var es = bayan_json_v_str(bayan_json_v_arr_get(ov, i));
+                if (es != 0) {
+                    var ec = str_cstr(es);
+                    if (load8(ec) != 0) {
+                        _ask_copy_clean(_ask_opts + _ask_nopt * ASK_OPT_CAP, ASK_OPT_CAP, ec);
+                        _ask_nopt = _ask_nopt + 1;
+                    }
+                }
+                i = i + 1;
+            }
+        }
+    }
+
+    if (_ask_surface_ok() == 0) {
+        # Degrade HONESTLY and say which way, so the model can carry on instead of retrying forever.
+        emit_err("  [ask_user: no operator can be reached on this surface — the question was not asked]\n");
+        return "(nobody could be asked: this session is non-interactive. Proceed with your best judgement and STATE the assumption you made.)";
+    }
+
+    _ask_state = 0;
+    store8(_ask_ans, 0);
+    _ask_turn_n = _ask_turn_n + 1;
+    _ask_runs = _ask_runs + 1;
+
+    if (_ask_hook != 0) { fncall0(_ask_hook); }
+    else { _ask_prompt_line(); }
+
+    if (_ask_state == 1) {
+        if (load8(_ask_ans) == 0) { return "(the operator answered with nothing — treat this as no preference)"; }
+        return _ask_ans;
+    }
+    return "(the operator declined to answer — proceed with your best judgement and STATE the assumption you made.)";
+}

@@ -298,6 +298,20 @@ model = "claude-haiku-4-5-20251001"
 # The built-ins authorize under reserved names: thoth_run (/run) and
 # thoth_write (/write); MCP tools authorize under their real tool name.
 
+# The [ask] table (0.44.0) enables `ask_user` — the one tool that runs toward YOU. When on, the model
+# may stop mid-turn and ask a question, with suggested answers it supplies and a free-text field you can
+# always type into instead. It works on the rich TUI, the desktop GUI and the line REPL; in one-shot
+# (`thoth 'task'`, --json, --events) there is nobody to ask, so the tool degrades honestly and tells the
+# model to state its assumption instead of blocking.
+#
+# OFF BY DEFAULT because it interrupts a human, which no other tool does. A model that asks well is a
+# better collaborator; one that asks badly makes a session unusable. It is bounded to a few questions
+# per turn — the resource being spent is your attention, and no authorization policy expresses "stop
+# bothering me". Not t-ron-gated: a question touches no file, no process and no network.
+
+# [ask]
+# enabled = true
+
 # [tron]
 
 # ⚠ THESE FOUR PATHS ARE THOTH'S OWN STATE, and since 0.43.2 the model's jail refuses them BY NAME.
