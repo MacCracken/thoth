@@ -7,6 +7,31 @@
 
 ## Version
 
+**0.43.3** — **`~/.thoth/config.cyml` becomes a real global base** (2026-08-26,
+[ADR-0019](../adr/0019-layered-config-global-base-local-override.md)). Config is TWO LAYERS resolved PER
+KEY — global base, nearest `.thoth/config.cyml` overrides, else the built-in default. Memory layers the
+same way (both stores injected, each with its own budget slice so neither starves the other);
+`/remember` still writes the project store. ⭐ **The security rule is STRICTEST WINS and deliberately
+asymmetric**: `[shell].deny` UNIONS (a deny only removes authority, so merging can only tighten), while
+`[shell].allow` and `[project].read_roots` are REPLACED wholesale by the local layer — they GRANT
+authority, and a repo you cloned must not widen your global grants by appending one entry. **Authority
+does not accumulate from the less-trusted side.** An explicitly empty local list stays empty; an ABSENT
+one inherits (`_shell_glob_decl` returns -1 for "declared neither" so the two can never be conflated).
+Rules pinned by tests that FAIL when broken — making `allow` union turns three assertions red.
+**Two discovery bugs closed**, both measured with a fake `HOME` rather than reasoned about: a `.thoth/`
+dir with no `config.cyml` shadowed every config above it AND blocked `~/.thoth` (the walk matched the
+first `.thoth` DIRECTORY; it now looks for the FILE); and because `checkpoint.cyr` writes a CWD-relative
+`.thoth/checkpoints/`, running thoth ONCE from a subdirectory permanently hid that repo's config from it
+— the 0.43.2 checkpoint-gitignore bug's root cause with a worse symptom. In this repo `.thoth/` is
+git-tracked, so `~/.thoth/config.cyml` could never have applied here at all.
+The legacy `./thoth.cyml` is now the LOCAL layer (overrides the global per key), still announced.
+`/state` names BOTH layers and which is which. ⚠ **Stated limitation**: with CWD at `$HOME` the walk can
+return the global as the local layer too — harmless (layering a file over itself is a no-op) and left
+unfixed because the only fix is a `getcwd`/`realpath` primitive the stdlib lacks, and a raw
+`syscall(SYS_GETCWD, …)` is the portability claim aarch64 does not honour. ⚠ **Process note**: `cyrius
+test` builds the test units, NOT `build/thoth` — a fix was verified green and then behaviour-tested
+against a stale binary, producing a segfault already fixed in source. Suite **264 + 1994 + 183 + 3**.
+
 **0.43.2** — **a security fix a read-only review could not have found, plus 47 findings** (2026-08-25).
 ⭐ **Piped stdin reached the UNJAILED `@mention` reader.** `cmd | thoth 'task'` / `thoth -p` append the pipe
 to the task and hand it to `cmd_task`, whose second act is `mention_expand()` — no project confinement, no
@@ -34,7 +59,11 @@ so was read as an approval (now degrades closed — deliberate behaviour change)
 unterminated NDJSON line, merging two records (⚠ NOT reachable today — the escaper's unrelated 6-byte
 margin covers it, so this hardens an invariant that currently holds by coincidence in another module;
 the note says so rather than overstating); Esc went unread between parallel batches; `[ui].tier` was
-never parsed (this repo's own config had an inert one); `SUB_TASK_CAP` was declared and never enforced.
+never parsed — ⚠ and activating an INERT key changes behaviour: this machine's config carried
+`tier = "simple"` from an old experiment, so the next launch came up in the line tier and read as "the
+default was reverted to basic" when it was the operator's own config finally being honoured (default is
+still `auto`). `/state`'s surface row now names the tier's SOURCE (`[--tier]` / `[ui].tier = … in <path>`
+/ `[auto-detected]`), since those three were indistinguishable on screen; `SUB_TASK_CAP` was declared and never enforced.
 **Legacy config**: the `./thoth.cyml` fallback is gated on the FILE not the home (three docs said
 otherwise) — kept as ADR-0016's promise but no longer silent (greeting + a `/state` `config` row +
 `/reload` re-runs discovery and reports a change). `config_source()`/`config_root()` had ZERO callers since

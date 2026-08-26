@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.43.2 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.43.3 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
 
 **The loop.** A free-text turn drives a **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to
@@ -69,8 +69,11 @@ plain); honest history-overflow accounting with optional summarize-on-overflow; 
 relevant ones (semantic `mneme_search`, sources cited `[N]`, green/amber/red grounding), `/notes` browses the vault
 — degrading to a local `.thoth/memory/` file otherwise.
 
-Config lives in a discoverable `.thoth/` home (`.thoth/config.cyml`;
-[ADR-0016](docs/adr/0016-thoth-home-dir-config-memory-discovery.md)). Multi-target: x86_64 Linux ships;
+Config is **two layers** ([ADR-0019](docs/adr/0019-layered-config-global-base-local-override.md)):
+`~/.thoth/config.cyml` is the global base and the nearest `.thoth/config.cyml` overrides it **per key**.
+Memory layers the same way. Lists that grant the model authority (`[shell].allow`, `[project].read_roots`)
+are *replaced* by the local layer rather than merged, while `[shell].deny` unions — authority never
+accumulates from the less-trusted side. Multi-target: x86_64 Linux ships;
 aarch64 Linux and AGNOS build (all three re-measured at 0.43.0); Windows is staged on an architectural
 IOCP/epoll floor gap; **macOS does not currently build**, and that one is thoth's own bug rather than a
 dependency's — `src/tui.cyr` calls darshana's termios/signalfd half unguarded and darshana gates that half

@@ -2,6 +2,85 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.3] - 2026-08-26
+
+**`~/.thoth/config.cyml` becomes a real global base, and the project layers on top of it.** Suite
+**264 + 1994 + 183 + 3** (+23), all targets green. [ADR-0019](docs/adr/0019-layered-config-global-base-local-override.md).
+
+### Added — layered configuration
+
+Config is now **two layers, resolved per key**: `~/.thoth/config.cyml` is the global base, and the
+nearest `.thoth/config.cyml` walking up from CWD overrides it — **local, else global, else the built-in
+default**. Both are optional; either alone works. Set your gateway, model, persona and UI preferences
+once globally, and let a repo add only what is specific to it.
+
+Memory layers the same way: `~/.thoth/memory/` is read, then the project's `.thoth/memory/`, and **both**
+are injected. Each layer gets its own slice of the injection budget, because `_mem_append_file` is
+whole-or-skip and without a slice whichever store was read first could consume the whole cap and silently
+drop the other's facts. `/remember` still writes to the project store when there is one.
+
+**The security rule is STRICTEST WINS, and it is not symmetric.** Layering a list is not neutral when the
+list controls what the model may do:
+
+- `[shell].deny` **UNIONS** across both layers — a deny only ever *removes* authority, so merging can
+  only make the filter stricter. A project may add denies and can never drop the ones you set globally.
+- `[shell].allow` and `[project].read_roots` are **REPLACED** wholesale by the local layer when it
+  declares one, and inherited untouched when it does not. These *grant* authority, and a repo you cloned
+  must not be able to widen your global allow-list or read jail by appending one entry. **Authority does
+  not accumulate from the less-trusted side.**
+- An explicitly empty local list (`allow = []`) is a declaration and stays empty; an **absent** one falls
+  through to the global. `_shell_glob_decl` returns `-1` for "declared neither" so the two cannot be
+  confused — conflating them would read a local file that says nothing about `allow` as one that allows
+  nothing.
+
+The rules are pinned by tests that **fail when the rule is broken**: making `allow` union across layers
+turns three assertions red.
+
+### Fixed — two discovery bugs the old one-root model caused
+
+Both measured against the shipped binary with a fake `HOME`, not reasoned about:
+
+- **A `.thoth/` directory with no `config.cyml` in it shadowed every config above it AND blocked
+  `~/.thoth` entirely** — thoth reported "no config found" while `~/.thoth/config.cyml` sat there. The
+  walk matched the first `.thoth` **directory**; it now looks for the config **file**.
+- **Running thoth once from a subdirectory permanently hid that repo's config from it.**
+  `src/checkpoint.cyr` writes a CWD-relative `.thoth/checkpoints/`, so a `sub/.thoth/` appeared, and from
+  then on thoth launched in `sub/` found that directory first, saw no `config.cyml`, and gave up — never
+  consulting the repo's own config one level up, nor the global. Same root cause as the checkpoint
+  `.gitignore` bug fixed in 0.43.2, with a worse symptom.
+
+  In this repo specifically, `.thoth/` is git-tracked (it holds `config.cyml.example`), so on a fresh
+  clone `~/.thoth/config.cyml` could **never** apply here.
+
+### Changed
+
+- **The legacy `./thoth.cyml` is now the LOCAL layer** rather than a whole-config fallback, so it
+  overrides the global per key like any local file. Still announced as legacy.
+- **`/state` names both layers** and which is which — `… (global)` and `… (local — overrides the global
+  per key)`, or an explicit "no local .thoth/config.cyml — the global applies as-is". The greeting says
+  when both are in play. "Which file do I edit?" is the first question a wrong setting raises.
+- `config_source()` gains `2` = the global only. `config_global_path()` / `config_local_path()` expose
+  the two layers; `config_path_recheck()` (used by `/reload`) re-resolves **both**.
+- `_price_append` now skips a model it has already stored, which also fixes a pre-existing wart: two
+  `[pricing.<model>]` sections in ONE file used to store both.
+
+### Known limitation, stated rather than hidden
+
+When CWD is `$HOME` (or under it with no nearer config), the local walk can reach
+`~/.thoth/config.cyml` and return it as the local layer as well as the global. There is no portable
+path-resolution primitive to detect that — the stdlib has no `getcwd`/`realpath` wrapper, and a raw
+`syscall(SYS_GETCWD, …)` is exactly the portability claim aarch64 does not honour, so inventing one
+would fork the floor to fix a label. It is **harmless in behaviour** (layering a file over itself
+resolves every key to the same value); the only effect is that `/state` names the same path twice. The
+memory layer does not have this problem — `_thoth_root_resolve` records which branch matched, so it reads
+a single store once rather than injecting every fact twice.
+
+### Development note
+
+`cyrius test` builds the test units, **not** `build/thoth`. A config fix was verified with a passing
+suite and then behaviour-tested against a stale binary, which produced a segfault that had already been
+fixed in source. Rebuild the binary before driving it.
+
 ## [0.43.2] - 2026-08-25
 
 **A security fix a read-only review could not have found, plus the 47 findings from a full-repo sweep.**
@@ -94,8 +173,21 @@ Suite **264 + 1971 + 183 + 3** (+77), all targets green.
   the user's cancel unread. `[hoosh].parallel` is on by default, so this was the common path.
 
 - **`[ui].tier` was never parsed.** The tier was `--tier=` only, and the config parser drops unknown keys
-  without a word — so a `tier = "simple"` line under `[ui]` did nothing and said nothing (this repo's own
-  config had one). It is now a durable preference; **argv still wins**, and an unknown value is announced.
+  without a word — so a `tier = "simple"` line under `[ui]` did nothing and said nothing. It is now a
+  durable preference; **argv still wins**, and an unknown value is announced on stderr rather than dropped.
+
+  ⚠ **UPGRADE NOTE — this key was inert, so activating it CHANGES BEHAVIOUR for anyone who already set
+  it.** The default is unchanged (`auto`, which resolves to the T2 rich TUI on a capable terminal), but a
+  `[ui].tier` line that had been doing nothing now takes effect. This bit immediately on the development
+  machine, whose config carried `tier = "simple"` from an earlier experiment: the next launch came up in
+  the line tier and read as "the default was reverted to basic" when it was the operator's own config
+  finally being honoured. If a session comes up in an unexpected tier after this release, check
+  `[ui].tier` in `.thoth/config.cyml` first.
+
+  Because that confusion was the *observable* form of the bug, `/state`'s `surface` row now names the
+  tier's SOURCE as well as its value — `[--tier]`, `[ui].tier = rich in .thoth/config.cyml`, or
+  `[auto-detected]`. The three were indistinguishable on screen, so a tier set once by config looked
+  identical to one auto-detected from a dumb terminal. Verified through a real pty, not asserted.
 
 - **`SUB_TASK_CAP` was declared, documented and never referenced** — the 8 KB bound it advertised did not
   exist. Now enforced, and it **refuses** rather than truncating: a silently clipped task would have the

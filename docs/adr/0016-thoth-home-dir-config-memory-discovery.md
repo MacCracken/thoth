@@ -1,7 +1,15 @@
 # 0016 — `.thoth/` home directory: config + memory discovery, honest readiness
 
-**Status**: Accepted
+**Status**: Accepted · **discovery half SUPERSEDED by [ADR-0019](0019-layered-config-global-base-local-override.md)** (0.43.3)
 **Date**: 2026-07-09
+
+> ⚠ **What 0019 changed.** Config is now TWO layers — `~/.thoth/config.cyml` as a global base with the
+> nearest `.thoth/config.cyml` overriding it PER KEY — and the local walk looks for the config **file**
+> rather than the first `.thoth/` **directory**. That closes two bugs this ADR's one-root model caused: a
+> `.thoth/` holding only `checkpoints/` shadowed every config above it and blocked `~/.thoth` entirely,
+> and because checkpoints are written CWD-relative, running thoth once from a subdirectory permanently
+> hid that repo's own config from it. The `.thoth/` home itself — and the reasoning below for having
+> one — still stand.
 
 ## Context
 

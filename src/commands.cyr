@@ -336,14 +336,22 @@ fn cmd_state() {
     # ".thoth/config.cyml", which is right for the preferred path and a lie on the legacy one — a
     # session running off `./thoth.cyml` used to show a plain READY and then tell the operator to edit a
     # file it was not reading. config_source()/config_root() existed for exactly this and had no callers.
+    # 0.43.3: BOTH layers, because a value can now come from either and "which file do I edit?" is the
+    # first question a wrong setting raises. The global is the base; the local one overrides it per key.
     ui_label("  config  : ");
-    if (config_source() == 0) { ui_emit(ROLE_FAINT, "(none found — add .thoth/config.cyml, or ~/.thoth/config.cyml)"); oprintln(""); }
-    else {
-        emit(config_path());
-        if (config_source() == 3) {
-            ui_emit(ROLE_RED, "  [legacy path]");
-            ui_emit(ROLE_FAINT, " — move it to .thoth/config.cyml (this fallback is back-compat only)");
-        }
+    var _cg = config_global_path();
+    var _cl = config_local_path();
+    if ((_cg == 0) && (_cl == 0)) {
+        ui_emit(ROLE_FAINT, "(none found — add ~/.thoth/config.cyml, or .thoth/config.cyml here)"); oprintln("");
+    } else {
+        if (_cg != 0) { ui_emit(ROLE_ACCENT, _cg); ui_emit(ROLE_FAINT, " (global)"); }
+        else { ui_emit(ROLE_FAINT, "no ~/.thoth/config.cyml"); }
+        oprintln("");
+        ui_label("          : ");
+        if (_cl != 0) {
+            ui_emit(ROLE_ACCENT, _cl); ui_emit(ROLE_FAINT, " (local — overrides the global per key)");
+            if (config_source() == 3) { ui_emit(ROLE_RED, "  [legacy path]"); }
+        } else { ui_emit(ROLE_FAINT, "no local .thoth/config.cyml — the global applies as-is"); }
         oprintln("");
     }
     ui_label("  turns   : "); ofmt_int(status_ival(SF_TURNS)); oprintln("");
@@ -539,6 +547,17 @@ fn cmd_state() {
     ui_label("  surface : ");
     ui_emit(ROLE_GREEN, status_sval(SF_SURFACE));
     if (status_ival(SF_SURFACE) != PT_PLAIN) { emit(" ("); ui_emit(ROLE_MUTED, ui_color_depth_name()); emit(")"); }
+    # 0.43.2: name WHY this tier, not just which. The tier has three possible sources and they were
+    # indistinguishable on screen — so a session running the line tier because of a `[ui].tier` line
+    # someone set once looked exactly like one that auto-detected a dumb terminal. That is precisely
+    # how activating this key at 0.43.2 read as "the default changed" rather than "your config applied".
+    if (oneshot_tier_seen() == 1) { ui_emit(ROLE_FAINT, "  [--tier]"); }
+    elif (config_ui_tier() != 0) {
+        if (load8(config_ui_tier()) != 0) {
+            ui_emit(ROLE_FAINT, "  [ui].tier = "); ui_emit(ROLE_ACCENT, config_ui_tier());
+            ui_emit(ROLE_FAINT, " in "); emit(config_path());
+        }
+    } else { ui_emit(ROLE_FAINT, "  [auto-detected]"); }
     oprintln("");
     ui_label("  theme   : "); ui_emit(ROLE_ACCENT, status_sval(SF_THEME)); oprintln("");
     ui_label("  build   : "); emit(ui_sgr(ROLE_ACCENT)); emit("thoth "); emit(thoth_version()); emit(ui_reset()); oprintln("");

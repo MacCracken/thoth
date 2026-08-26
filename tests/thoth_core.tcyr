@@ -85,6 +85,7 @@ fn main() {
     test_persona_switch();
     test_role();
     test_config();
+    test_config_layering();
     test_hoosh();
     test_provider_catalog();
     test_stream_config();

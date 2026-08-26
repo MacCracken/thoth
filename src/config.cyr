@@ -103,6 +103,10 @@ var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
 # for "launched in another repo, couldn't find the gateway yet claimed READY".
 var _thoth_root = 0;          # resolved `.thoth/` dir (cstr), or 0 if none
 var _thoth_root_done = 0;
+# 1 when _thoth_root_resolve fell back to $HOME/.thoth rather than finding one by walking up. Lets the
+# memory layer know that "local" and "global" are the SAME directory, so it reads it once instead of
+# injecting every fact twice — the exact test the config layer has no portable primitive for.
+var _thoth_root_is_home = 0;
 var _cfg_path_c = 0;          # cached resolved config-file path (cstr); set only once a file is FOUND
 var _cfg_source = 0;          # 0 none · 1 <root>/config.cyml · 3 legacy ./thoth.cyml
 
@@ -138,10 +142,17 @@ fn _cfg_updir(lvl, name) {
 
 # _thoth_root_resolve: the `.thoth/` home dir (cstr) or 0. Walk up from CWD (up to
 # 40 levels — deeper than any real tree), then ~/.thoth. Resolved once.
+#
+# ⚠ This answers "which `.thoth/` dir is THIS project's", and it is deliberately the FIRST `.thoth`
+# DIRECTORY found — that is what checkpoints and the local memory store want. It is NOT how the config
+# file is located any more; see _cfg_local_path, which walks for the FILE. The distinction matters: a
+# `.thoth/` dir containing only `checkpoints/` (which is what running thoth from a subdirectory creates)
+# used to stop the config search dead, so thoth reported "no config" in a repo that had one.
 fn _thoth_root_resolve() {
     if (_thoth_root_done == 1) { return _thoth_root; }
     _thoth_root_done = 1;
     _thoth_root = 0;
+    _thoth_root_is_home = 0;
     var lvl = 0;
     while (lvl < 40) {
         var cand = _cfg_updir(lvl, ".thoth");
@@ -154,43 +165,103 @@ fn _thoth_root_resolve() {
     var home = getenv("HOME");
     if (home != 0) {
         var hc = _cfg_join2(home, ".thoth");
-        if (is_dir(str_from(hc)) == 1) { _thoth_root = hc; }
+        if (is_dir(str_from(hc)) == 1) { _thoth_root = hc; _thoth_root_is_home = 1; }
     }
     return _thoth_root;
 }
 
-# config_path: the config file thoth reads. Precedence: <root>/config.cyml (if a
-# `.thoth/` home holds one) → legacy ./thoth.cyml → else the PREFERRED path (for
-# messages) with config_source()==0. Caches only a found path, so a config created
-# mid-session is picked up by /reload.
+# thoth_root_is_home: 1 when the resolved `.thoth/` home IS $HOME/.thoth (no project one was found).
+fn thoth_root_is_home() { _thoth_root_resolve(); return _thoth_root_is_home; }
+
+# --- THE TWO CONFIG LAYERS (0.43.3) --------------------------------------------
 #
-# ⚠ THE LEGACY FALLBACK IS GATED ON THE FILE, NOT ON THE HOME — and three docs used to say otherwise
-# ("read only when no `.thoth/` home exists"). It fires whenever `<root>/config.cyml` is ABSENT, even
-# with a `.thoth/` home sitting right there. So an operator who reasons "I have a .thoth/ home,
-# therefore the root thoth.cyml is inert, therefore deleting .thoth/config.cyml gives me a no-config
-# session" silently gets a DIFFERENT config loaded instead. Kept as-is (it is ADR-0016's back-compat
-# promise, and narrowing it would break trees that rely on it), but it is now ANNOUNCED: the greeting
-# and /state both name a legacy load, so it is never silent. The docs were corrected to match the code.
+# `~/.thoth/config.cyml` is the GLOBAL base — the settings that follow the user between projects, the
+# way every other tool with a dotfile home works. The nearest `.thoth/config.cyml` walking up from CWD
+# is the LOCAL layer and wins PER KEY. Both are optional; either alone works.
+#
+# ⚠ WHY THE LOCAL SEARCH LOOKS FOR THE FILE, NOT THE DIRECTORY. Until 0.43.3 discovery found the first
+# `.thoth` DIR and stopped, so a directory holding only `checkpoints/` or `memory/` shadowed every
+# config above it AND blocked `~/.thoth` entirely. Since `src/checkpoint.cyr` writes a CWD-relative
+# `.thoth/checkpoints/`, running thoth once from a subdirectory permanently hid that repo's own config
+# from that subdirectory. Walking for `config.cyml` itself makes the search mean what it says.
+var _cfg_gpath_c = 0;    # resolved ~/.thoth/config.cyml, or 0 (none) — cached
+var _cfg_gpath_done = 0;
+var _cfg_lpath_c = 0;    # resolved local layer (walk-up, then legacy ./thoth.cyml), or 0 — cached
+var _cfg_lpath_done = 0;
+var _cfg_lsource = 0;    # 0 none · 1 <dir>/.thoth/config.cyml · 3 legacy ./thoth.cyml
+
+# _cfg_global_path: `$HOME/.thoth/config.cyml` if it exists, else 0.
+fn _cfg_global_path() {
+    if (_cfg_gpath_done == 1) { return _cfg_gpath_c; }
+    _cfg_gpath_done = 1;
+    _cfg_gpath_c = 0;
+    var home = getenv("HOME");
+    if (home != 0) {
+        var hp = _cfg_join2(_cfg_join2(home, ".thoth"), "config.cyml");
+        if (file_exists(hp) == 1) { _cfg_gpath_c = hp; }
+    }
+    return _cfg_gpath_c;
+}
+
+# _cfg_local_path: the nearest `.thoth/config.cyml` walking UP from CWD, else the legacy `./thoth.cyml`,
+# else 0.
+#
+# ⚠ STATED LIMITATION, not a hidden one: when CWD is $HOME (or under it with no nearer config), the walk
+# can reach `~/.thoth/config.cyml` and return it as the "local" layer as well as the global. There is no
+# portable path-resolution primitive to detect that — the stdlib has no `getcwd`/`realpath` wrapper, and
+# a raw `syscall(SYS_GETCWD, ...)` is exactly the portability claim aarch64 does not honour, so inventing
+# one here would fork the floor to fix a label. It is harmless in BEHAVIOUR: layering a file over itself
+# resolves every key to the same value, so the loaded config is identical either way. The only effect is
+# that `/state` names the same path on both rows, which is odd-looking but true.
+fn _cfg_local_path() {
+    if (_cfg_lpath_done == 1) { return _cfg_lpath_c; }
+    _cfg_lpath_done = 1;
+    _cfg_lpath_c = 0;
+    _cfg_lsource = 0;
+    var lvl = 0;
+    while (lvl < 40) {
+        var cand = _cfg_join2(_cfg_updir(lvl, ".thoth"), "config.cyml");
+        if (file_exists(cand) == 1) {
+            _cfg_lpath_c = cand; _cfg_lsource = 1;
+            return _cfg_lpath_c;
+        }
+        lvl = lvl + 1;
+    }
+    if (file_exists(CONFIG_PATH) == 1) { _cfg_lpath_c = CONFIG_PATH; _cfg_lsource = 3; }
+    return _cfg_lpath_c;
+}
+
+# config_path: the config file a message should NAME — the local layer when there is one, else the
+# global, else the preferred local path (for "not found" messages). Callers that need both layers use
+# config_global_path() / config_local_path().
 fn config_path() {
     if (_cfg_path_c != 0) { return _cfg_path_c; }
-    var root = _thoth_root_resolve();
-    if (root != 0) {
-        var cp = _cfg_join2(root, "config.cyml");
-        if (file_exists(cp) == 1) { _cfg_path_c = cp; _cfg_source = 1; return cp; }
-    }
-    if (file_exists(CONFIG_PATH) == 1) { _cfg_path_c = CONFIG_PATH; _cfg_source = 3; return _cfg_path_c; }
+    var lp = _cfg_local_path();
+    if (lp != 0) { _cfg_path_c = lp; _cfg_source = _cfg_lsource; return _cfg_path_c; }
+    var gp = _cfg_global_path();
+    if (gp != 0) { _cfg_path_c = gp; _cfg_source = 2; return _cfg_path_c; }
     _cfg_source = 0;
+    var root = _thoth_root_resolve();
     if (root != 0) { return _cfg_join2(root, "config.cyml"); }
     return CONFIG_PATH;
 }
+
+fn config_global_path() { return _cfg_global_path(); }
+fn config_local_path() { return _cfg_local_path(); }
 
 # config_path_recheck: drop the cached resolution so the NEXT config_path() re-runs discovery. For
 # /reload. Without it a session that started on the legacy ./thoth.cyml kept reading it even after the
 # operator created the .thoth/config.cyml that /state had just told them to create — the cache made the
 # advice unfollowable without a restart.
-fn config_path_recheck() { _cfg_path_c = 0; _cfg_source = 0; return 0; }
+fn config_path_recheck() {
+    _cfg_path_c = 0; _cfg_source = 0;
+    _cfg_gpath_done = 0; _cfg_gpath_c = 0;      # 0.43.3: BOTH layers re-resolve, or /reload sees a stale pair
+    _cfg_lpath_done = 0; _cfg_lpath_c = 0; _cfg_lsource = 0;
+    return 0;
+}
 
-# config_source: 0 = no config file found · 1 = .thoth/config.cyml · 3 = legacy ./thoth.cyml.
+# config_source: 0 = none · 1 = a local .thoth/config.cyml · 2 = the GLOBAL ~/.thoth/config.cyml only
+# · 3 = the legacy ./thoth.cyml. Describes the file config_path() names, not the whole layered set.
 fn config_source() { config_path(); return _cfg_source; }
 
 # config_root: the resolved `.thoth/` home dir (cstr) or 0 (none) — for /state.
@@ -240,6 +311,7 @@ var _shell_allow_n = 0;
 # _cfg_section_pairs: the pairs vec for table [name] in a parsed sections vec,
 # or 0 if the table is absent.
 fn _cfg_section_pairs(sections, name) {
+    if (sections == 0) { return 0; }      # 0.43.3: a layer that is absent/unreadable has no sections
     var secs = bayan_toml_get_sections(sections, name);
     if (vec_len(secs) == 0) { return 0; }
     return bayan_toml_section_pairs(vec_get(secs, 0));
@@ -296,6 +368,43 @@ fn _cfg_bool(pairs, key, dflt) {
     return dflt;
 }
 
+# --- LAYERED LOOKUP (0.43.3): local over global ---------------------------------
+#
+# Config is TWO files now: `~/.thoth/config.cyml` is the base and the nearest `.thoth/config.cyml`
+# walking up from CWD layers ON TOP of it, PER KEY. These are the merge primitives; every scalar in
+# config_load funnels through one of them, so the rule is stated in exactly one place:
+#
+#     a key set locally wins · else the global's value · else the built-in default
+#
+# ⚠ PRESENCE, NOT VALUE, IS THE TEST. `_cfg_bool` cannot distinguish "absent" from "explicitly set to
+# the default", so layering on its return would make a local `stream = true` indistinguishable from no
+# local `stream` at all — and the global's `stream = false` would then leak through a local file that
+# deliberately turned streaming back on. `_cfg_has` asks the parser whether the key is there.
+fn _cfg_has(pairs, key) {
+    if (pairs == 0) { return 0; }
+    if (bayan_toml_get(pairs, key) == 0) { return 0; }
+    return 1;
+}
+
+# _cfg2_str / _cfg2_bool / _cfg2_int: read `key` from the LOCAL pairs, falling back to the GLOBAL pairs.
+# `l`/`g` are the same section's pairs from each layer (either may be 0 when that layer has no such
+# table). Pure.
+fn _cfg2_str(l, g, key) {
+    var v = _cfg_str(l, key);
+    if (v != 0) { return v; }
+    return _cfg_str(g, key);
+}
+fn _cfg2_bool(l, g, key, dflt) {
+    if (_cfg_has(l, key) == 1) { return _cfg_bool(l, key, dflt); }
+    if (_cfg_has(g, key) == 1) { return _cfg_bool(g, key, dflt); }
+    return dflt;
+}
+fn _cfg2_int(l, g, key) {
+    if (_cfg_has(l, key) == 1) { return _cfg_int(l, key); }
+    if (_cfg_has(g, key) == 1) { return _cfg_int(g, key); }
+    return 0 - 1;
+}
+
 # _cfg_int: read key from pairs as a non-negative integer, or -1 when absent, empty,
 # or non-numeric (decimal digits only — pricing rates are whole micro-USD/1K). Pure.
 fn _cfg_int(pairs, key) {
@@ -327,17 +436,46 @@ fn _price_load(sections) {
         _price_out = alloc(PRICE_MAX * 8);
     }
     _price_n = 0;
+    return _price_append(sections);
+}
+
+# _price_load2 (0.43.3): both layers, LOCAL FIRST — a project [pricing.<model>] overrides the global rate
+# for that model while every other global rate still applies. The append core skips a model already
+# stored, which also fixes a pre-existing wart: two [pricing.x] sections in ONE file used to store both.
+fn _price_load2(lo, gl) {
+    if (_price_models == 0) {
+        _price_models = alloc(PRICE_MAX * 8);
+        _price_in = alloc(PRICE_MAX * 8);
+        _price_out = alloc(PRICE_MAX * 8);
+    }
+    _price_n = 0;
+    _price_append(lo);
+    _price_append(gl);
+    return 0;
+}
+
+fn _price_append(sections) {
+    if (sections == 0) { return 0; }
     var n = vec_len(sections);
     var i = 0;
     while (i < n) {
         var sec = vec_get(sections, i);
         var nm = str_cstr(bayan_toml_section_name(sec));   # stable copy (bump heap)
         if ((cstr_starts_with(nm, "pricing.") == 1) && (_price_n < PRICE_MAX)) {
-            var prs = bayan_toml_section_pairs(sec);
-            store64(_price_models + _price_n * 8, nm + 8);   # model id = past "pricing."
-            store64(_price_in + _price_n * 8, _cfg_int(prs, "input"));
-            store64(_price_out + _price_n * 8, _cfg_int(prs, "output"));
-            _price_n = _price_n + 1;
+            var mid = nm + 8;                                # model id = past "pricing."
+            var dup = 0;
+            var j = 0;
+            while (j < _price_n) {
+                if (streq(load64(_price_models + j * 8), mid) == 1) { dup = 1; }
+                j = j + 1;
+            }
+            if (dup == 0) {
+                var prs = bayan_toml_section_pairs(sec);
+                store64(_price_models + _price_n * 8, mid);
+                store64(_price_in + _price_n * 8, _cfg_int(prs, "input"));
+                store64(_price_out + _price_n * 8, _cfg_int(prs, "output"));
+                _price_n = _price_n + 1;
+            }
         }
         i = i + 1;
     }
@@ -379,6 +517,24 @@ fn _alias_load(sections) {
         _alias_vals = alloc(ALIAS_MAX * 8);
     }
     _alias_n = 0;
+    return _alias_append(sections);
+}
+
+# _alias_load2 (0.43.3): both layers, LOCAL FIRST. The append core already skips a name it has seen, so
+# appending the global afterwards means a project alias shadows a global one of the same name while every
+# other global alias still resolves — which is the whole point of layering.
+fn _alias_load2(lo, gl) {
+    if (_alias_names == 0) {
+        _alias_names = alloc(ALIAS_MAX * 8);
+        _alias_vals = alloc(ALIAS_MAX * 8);
+    }
+    _alias_n = 0;
+    _alias_append(lo);
+    _alias_append(gl);
+    return 0;
+}
+
+fn _alias_append(sections) {
     var pairs = _cfg_section_pairs(sections, "alias");
     if (pairs == 0) { return 0; }
     var n = vec_len(pairs);
@@ -500,6 +656,20 @@ fn _shell_glob_key_load(shell, key, tbl) {
 # handed to project_grant_root, which enforces the absolute-and-not-"/" rule (non-absolute or over-cap entries
 # are silently skipped there). Config roots are a PERSISTENT user grant (the user chose to put them in the
 # config), exactly like [shell].enabled. Returns the number of grant attempts made.
+# _cfg_read_roots_load2 (0.43.3): the read JAIL, and the one place layering must NOT be additive.
+#
+# ⚠ STRICTEST WINS. `read_roots` grants the model read access outside the launch directory. If the two
+# layers unioned, a repo you cloned could widen your global jail just by appending a path to its own
+# config — authority accumulating from the LESS-trusted side, which is the wrong direction. So the local
+# layer REPLACES the global's list when it declares one, and inherits it untouched when it does not.
+# Whichever file is in charge, the resulting jail is exactly the list one file states.
+fn _cfg_read_roots_load2(proj_l, proj_g) {
+    if (proj_l != 0) {
+        if (bayan_toml_get(proj_l, "read_roots") != 0) { return _cfg_read_roots_load(proj_l); }
+    }
+    return _cfg_read_roots_load(proj_g);
+}
+
 fn _cfg_read_roots_load(project) {
     if (project == 0) { return 0; }
     var v = bayan_toml_get(project, "read_roots");
@@ -527,6 +697,68 @@ fn _cfg_read_roots_load(project) {
 # ABSENT, falls back to the legacy `[shell.deny]`/`[shell.allow]` `label = "glob"` sections (a
 # documented back-compat alias). `shell` = the [shell] pairs (for the array form; may be 0);
 # `sections` = the full parse (for the section fallback). With neither present both counts are 0.
+var _shell_scratch = 0;   # SHELL_GLOB_MAX cstr ptrs — staging for the global layer's globs
+
+# _shell_globs_load2 (0.43.3): deny UNIONS across both layers, allow does NOT.
+#
+# ⚠ THE ASYMMETRY IS THE POINT, and it is the same rule as read_roots. A deny-list only ever REMOVES
+# authority, so merging both layers can only make the filter stricter — a project may add denies and can
+# never drop the ones the user set globally. An allow-list GRANTS authority, so unioning would let a
+# cloned repo widen what the user's global config permits by appending one glob. The local layer
+# therefore replaces `allow` wholesale when it declares one, and inherits the global's when it does not.
+#
+# (Both lists remain a COARSE pre-filter matched before the t-ron thoth_shell gate — not a sandbox. This
+# makes the pre-filter honest across two files; it does not make it a boundary.)
+fn _shell_globs_load2(sh_l, lo, sh_g, gl) {
+    if (_shell_deny == 0) { _shell_deny = alloc(SHELL_GLOB_MAX * 8); }
+    if (_shell_allow == 0) { _shell_allow = alloc(SHELL_GLOB_MAX * 8); }
+    if (_shell_scratch == 0) { _shell_scratch = alloc(SHELL_GLOB_MAX * 8); }
+
+    # deny := local denies, then every global deny not already present
+    var dn = _shell_glob_decl(sh_l, lo, "deny", _shell_deny);
+    if (dn < 0) { dn = 0; }
+    var gn = _shell_glob_decl(sh_g, gl, "deny", _shell_scratch);
+    if (gn < 0) { gn = 0; }
+    var i = 0;
+    while (i < gn) {
+        var g = load64(_shell_scratch + i * 8);
+        var dup = 0;
+        var j = 0;
+        while (j < dn) {
+            if (streq(load64(_shell_deny + j * 8), g) == 1) { dup = 1; }
+            j = j + 1;
+        }
+        if ((dup == 0) && (dn < SHELL_GLOB_MAX)) { store64(_shell_deny + dn * 8, g); dn = dn + 1; }
+        i = i + 1;
+    }
+    _shell_deny_n = dn;
+
+    # allow := the LOCAL list if the local layer DECLARES one, else the global's. Never both.
+    var an = _shell_glob_decl(sh_l, lo, "allow", _shell_allow);
+    if (an < 0) { an = _shell_glob_decl(sh_g, gl, "allow", _shell_allow); }
+    if (an < 0) { an = 0; }
+    _shell_allow_n = an;
+    return 0;
+}
+
+# _shell_glob_decl: read ONE layer's glob list for `key` into `tbl`, honouring both the canonical array
+# form under [shell] and the legacy [shell.<key>] label section. Returns the count, or -1 when that layer
+# DECLARES NEITHER.
+#
+# ⚠ -1 and 0 are different answers and the distinction is load-bearing. `_shell_glob_table_load` answers
+# 0 for an absent section, which reads identically to "declared, and empty" — so a chain built on it
+# would treat a local layer that says nothing about `allow` as a local layer that allows NOTHING, and
+# never consult the global. An explicitly empty list must stay empty; an absent one must fall through.
+fn _shell_glob_decl(sect, sections, key, tbl) {
+    var n = _shell_glob_key_load(sect, key, tbl);
+    if (n >= 0) { return n; }
+    var nm = "shell.deny";
+    if (streq(key, "allow") == 1) { nm = "shell.allow"; }
+    var legacy = _cfg_section_pairs(sections, nm);
+    if (legacy == 0) { return 0 - 1; }
+    return _shell_glob_table_load(legacy, tbl);
+}
+
 fn _shell_globs_load(shell, sections) {
     if (_shell_deny == 0) { _shell_deny = alloc(SHELL_GLOB_MAX * 8); }
     if (_shell_allow == 0) { _shell_allow = alloc(SHELL_GLOB_MAX * 8); }
@@ -542,78 +774,108 @@ fn _shell_globs_load(shell, sections) {
 # config_load: parse thoth.cyml if present and populate the hoosh fields.
 # Returns 1 if a [hoosh] url was found (seam can bind remote), else 0 (absent
 # file, no [hoosh] table, or no url -> seam stays absent). Call once at startup.
-fn config_load() {
-    _cfg_loaded = 1;
-    _cfg_parse_ok = 0;                            # 0.24.4: cleared until the file is actually read + parsed
-    var r = bayan_cyml_parse_file_r(config_path());
-    if (is_err_result(r) == 1) { return 0; }     # absent / unreadable -> not configured (parse_ok stays 0)
+# _cfg_parse_sections: parse one config file into a TOML sections vec, or 0 when absent/unreadable.
+# Sets `_cfg_parse_any` when a file actually parsed, so config_parse_ok() still answers "a config was
+# read" for EITHER layer.
+var _cfg_parse_any = 0;
+fn _cfg_parse_sections(path) {
+    if (path == 0) { return 0; }
+    var r = bayan_cyml_parse_file_r(path);
+    if (is_err_result(r) == 1) { return 0; }
     var doc = load64(r + 8);
     var hp = bayan_cyml_doc_header(doc);
     var hl = bayan_cyml_doc_header_len(doc);
-    var sections = bayan_toml_parse(str_new(hp, hl));
-    _price_load(sections);
-    _alias_load(sections);
-    var hoosh = _cfg_section_pairs(sections, "hoosh");
-    _cfg_hoosh_url = _cfg_str(hoosh, "url");
-    _cfg_hoosh_token = _cfg_str(hoosh, "token");
-    _cfg_hoosh_model = _cfg_str(hoosh, "model");
-    _cfg_hoosh_stream = _cfg_bool(hoosh, "stream", 1);    # default on
-    _cfg_hoosh_history = _cfg_bool(hoosh, "history", 1);   # default on
-    _cfg_hoosh_tools = _cfg_bool(hoosh, "tools", 1);        # default on
-    _cfg_hoosh_max_iters = _cfg_int(hoosh, "max_iters");    # -1 when absent -> default in the getter
-    _cfg_hoosh_compact_at = _cfg_int(hoosh, "compact_at");  # -1/absent -> off (0 from the getter)
-    _cfg_hoosh_parallel = _cfg_bool(hoosh, "parallel", 1);  # default on
-    _cfg_hoosh_reasoning = _reasoning_level_from(_cfg_str(hoosh, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
-    _cfg_hoosh_summarize = _cfg_bool(hoosh, "summarize", 0);   # 0.36.4: default OFF — it spends an extra call
-    var daimon = _cfg_section_pairs(sections, "daimon");
-    _cfg_daimon_url = _cfg_str(daimon, "url");
-    var tron = _cfg_section_pairs(sections, "tron");
-    _cfg_tron_policy = _cfg_str(tron, "policy");
-    _cfg_tron_agent = _cfg_str(tron, "agent");
-    var log = _cfg_section_pairs(sections, "log");
-    _cfg_log_file = _cfg_str(log, "file");
-    _cfg_log_level = _cfg_str(log, "level");
-    var history = _cfg_section_pairs(sections, "history");
-    _cfg_history_file = _cfg_str(history, "file");
-    var session = _cfg_section_pairs(sections, "session");
-    _cfg_session_file = _cfg_str(session, "file");         # [session].file — persistent conversation history (0.24.2)
-    var ui = _cfg_section_pairs(sections, "ui");
-    _cfg_ui_bell = _cfg_bool(ui, "bell", 0);               # [ui].bell — BEL on turn completion (0.24.3), opt-in
-    _cfg_ui_elapsed = _cfg_bool(ui, "elapsed", 0);         # [ui].elapsed — faint per-turn elapsed line (0.24.3), opt-in
-    _cfg_ui_tier = _cfg_str(ui, "tier");                   # [ui].tier — durable presentation tier (0.43.2); --tier still wins
-    var memory = _cfg_section_pairs(sections, "memory");
-    _cfg_memory_enabled = _cfg_bool(memory, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
-    var persona = _cfg_section_pairs(sections, "persona");
-    _cfg_persona = _cfg_str(persona, "name");               # startup default archetype (0.22.0); absent -> egyptian_thoth
-    var project = _cfg_section_pairs(sections, "project");
-    _cfg_vidya = _cfg_str(project, "vidya");                # [project].vidya — first-class `/allow vidya` root (0.23.1)
-    _cfg_read_roots_load(project);                          # grant [project].read_roots (persistent user-granted read roots, 0.23.1)
-    var hooks = _cfg_section_pairs(sections, "hooks");
-    _cfg_hook_session_start = _cfg_str(hooks, "session_start");
-    _cfg_hook_pre_tool      = _cfg_str(hooks, "pre_tool");
-    _cfg_hook_post_tool     = _cfg_str(hooks, "post_tool");
-    _cfg_hook_session_end   = _cfg_str(hooks, "session_end");
-    _cfg_hook_timeout_ms    = _cfg_int(hooks, "timeout_ms");
-    var toolpin = _cfg_section_pairs(sections, "toolpin");
-    _cfg_toolpin_enabled = _cfg_bool(toolpin, "enabled", 1);     # 0.42.0 (T3): DEFAULT ON — see the getter
-    var subagent = _cfg_section_pairs(sections, "subagent");
-    _cfg_subagent_enabled = _cfg_bool(subagent, "enabled", 0);    # 0.43.0 (T2-1): DEFAULT OFF — see the getter
-    _cfg_subagent_max_iters = _cfg_int(subagent, "max_iters");   # -1 when absent -> default in the getter
-    var guard = _cfg_section_pairs(sections, "guard");
-    _cfg_guard_enabled = _cfg_bool(guard, "enabled", 1);         # 0.41.0 (T2-3): DEFAULT ON — see the getter
-    var verify = _cfg_section_pairs(sections, "verify");
-    _cfg_verify_command = _cfg_str(verify, "command");           # 0.41.0 (T2-5): 0 when unset -> feature off
-    _cfg_verify_timeout_ms = _cfg_int(verify, "timeout_ms");
-    var redact = _cfg_section_pairs(sections, "redact");
-    _cfg_redact_enabled = _cfg_bool(redact, "enabled", 1);   # 0.40.0 (T1-3): DEFAULT ON — see the getter
-    var shell = _cfg_section_pairs(sections, "shell");
-    _cfg_shell_enabled = _cfg_bool(shell, "enabled", 0);    # opt-in; default off (0.16.0 shell tool; the model can propose local commands)
-    _cfg_shell_timeout_ms = _cfg_int(shell, "timeout_ms");  # -1 when absent -> default in the getter
-    _cfg_shell_output_cap = _cfg_int(shell, "max_output");  # -1 when absent -> default in the getter
-    _shell_globs_load(shell, sections);
-    var edit = _cfg_section_pairs(sections, "edit");
-    _cfg_edit_enabled = _cfg_bool(edit, "enabled", 0);      # opt-in; default off (0.31.0 edit tool; the model can rewrite project files)
-    _cfg_parse_ok = 1;                            # 0.24.4: the file was read + parsed (a url may or may not be set)
+    _cfg_parse_any = 1;
+    return bayan_toml_parse(str_new(hp, hl));
+}
+
+# config_load: read BOTH layers and resolve every key as `local, else global, else built-in default`.
+#
+# 0.43.3 — THE GLOBAL LAYER. `~/.thoth/config.cyml` is the base a user carries between projects, the
+# way every other tool with a dotfile home works; the nearest `.thoth/config.cyml` walking up from CWD
+# layers on top of it PER KEY. Before this a single file won outright, so a global config could not
+# exist alongside any project config at all.
+#
+# ⚠ EVERY SCALAR GOES THROUGH _cfg2_*, WHICH TESTS PRESENCE RATHER THAN VALUE. Reading the two files
+# with the old single-layer helpers would have looked like it worked and been wrong: `_cfg_bool` returns
+# the DEFAULT for an absent key, so a second pass over the local file would reset every key the local
+# file does not mention back to its default, silently erasing the global's value. See _cfg2_bool.
+#
+# ⚠ THE SECURITY-RELEVANT LISTS DO NOT SIMPLY MERGE — see _shell_globs_load2 and _cfg_read_roots_load2.
+# The rule is STRICTEST WINS: deny-lists UNION across both layers (a project can add denies, never drop
+# the user's), while `[shell].allow` and `[project].read_roots` are REPLACED wholesale by the local layer
+# when it sets them. A repo you cloned must not be able to widen the global allow-list or the read jail
+# by appending to it — that is authority, and authority does not accumulate from the less-trusted side.
+fn config_load() {
+    _cfg_loaded = 1;
+    _cfg_parse_ok = 0;                            # 0.24.4: cleared until a file is actually read + parsed
+    _cfg_parse_any = 0;
+    var gl = _cfg_parse_sections(_cfg_global_path());   # the base layer
+    var lo = _cfg_parse_sections(_cfg_local_path());    # layered on top, per key
+    if (_cfg_parse_any == 0) { return 0; }        # neither layer readable -> not configured
+    _price_load2(lo, gl);
+    _alias_load2(lo, gl);
+    var hoosh_l = _cfg_section_pairs(lo, "hoosh");   var hoosh_g = _cfg_section_pairs(gl, "hoosh");
+    _cfg_hoosh_url = _cfg2_str(hoosh_l, hoosh_g, "url");
+    _cfg_hoosh_token = _cfg2_str(hoosh_l, hoosh_g, "token");
+    _cfg_hoosh_model = _cfg2_str(hoosh_l, hoosh_g, "model");
+    _cfg_hoosh_stream = _cfg2_bool(hoosh_l, hoosh_g, "stream", 1);    # default on
+    _cfg_hoosh_history = _cfg2_bool(hoosh_l, hoosh_g, "history", 1);   # default on
+    _cfg_hoosh_tools = _cfg2_bool(hoosh_l, hoosh_g, "tools", 1);        # default on
+    _cfg_hoosh_max_iters = _cfg2_int(hoosh_l, hoosh_g, "max_iters");    # -1 when absent -> default in the getter
+    _cfg_hoosh_compact_at = _cfg2_int(hoosh_l, hoosh_g, "compact_at");  # -1/absent -> off (0 from the getter)
+    _cfg_hoosh_parallel = _cfg2_bool(hoosh_l, hoosh_g, "parallel", 1);  # default on
+    _cfg_hoosh_reasoning = _reasoning_level_from(_cfg2_str(hoosh_l, hoosh_g, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
+    _cfg_hoosh_summarize = _cfg2_bool(hoosh_l, hoosh_g, "summarize", 0);   # 0.36.4: default OFF — it spends an extra call
+    var daimon_l = _cfg_section_pairs(lo, "daimon");  var daimon_g = _cfg_section_pairs(gl, "daimon");
+    _cfg_daimon_url = _cfg2_str(daimon_l, daimon_g, "url");
+    var tron_l = _cfg_section_pairs(lo, "tron");      var tron_g = _cfg_section_pairs(gl, "tron");
+    _cfg_tron_policy = _cfg2_str(tron_l, tron_g, "policy");
+    _cfg_tron_agent = _cfg2_str(tron_l, tron_g, "agent");
+    var log_l = _cfg_section_pairs(lo, "log");        var log_g = _cfg_section_pairs(gl, "log");
+    _cfg_log_file = _cfg2_str(log_l, log_g, "file");
+    _cfg_log_level = _cfg2_str(log_l, log_g, "level");
+    var hist_l = _cfg_section_pairs(lo, "history");   var hist_g = _cfg_section_pairs(gl, "history");
+    _cfg_history_file = _cfg2_str(hist_l, hist_g, "file");
+    var sess_l = _cfg_section_pairs(lo, "session");   var sess_g = _cfg_section_pairs(gl, "session");
+    _cfg_session_file = _cfg2_str(sess_l, sess_g, "file");   # [session].file — persistent conversation history (0.24.2)
+    var ui_l = _cfg_section_pairs(lo, "ui");          var ui_g = _cfg_section_pairs(gl, "ui");
+    _cfg_ui_bell = _cfg2_bool(ui_l, ui_g, "bell", 0);         # [ui].bell — BEL on turn completion (0.24.3), opt-in
+    _cfg_ui_elapsed = _cfg2_bool(ui_l, ui_g, "elapsed", 0);   # [ui].elapsed — faint per-turn elapsed line (0.24.3), opt-in
+    _cfg_ui_tier = _cfg2_str(ui_l, ui_g, "tier");             # [ui].tier — durable presentation tier (0.43.2); --tier still wins
+    var mem_l = _cfg_section_pairs(lo, "memory");     var mem_g = _cfg_section_pairs(gl, "memory");
+    _cfg_memory_enabled = _cfg2_bool(mem_l, mem_g, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
+    var pers_l = _cfg_section_pairs(lo, "persona");   var pers_g = _cfg_section_pairs(gl, "persona");
+    _cfg_persona = _cfg2_str(pers_l, pers_g, "name");         # startup default archetype (0.22.0); absent -> egyptian_thoth
+    var proj_l = _cfg_section_pairs(lo, "project");   var proj_g = _cfg_section_pairs(gl, "project");
+    _cfg_vidya = _cfg2_str(proj_l, proj_g, "vidya");          # [project].vidya — first-class `/allow vidya` root (0.23.1)
+    _cfg_read_roots_load2(proj_l, proj_g);                    # jail-widening: local REPLACES, never unions (see below)
+    var hook_l = _cfg_section_pairs(lo, "hooks");     var hook_g = _cfg_section_pairs(gl, "hooks");
+    _cfg_hook_session_start = _cfg2_str(hook_l, hook_g, "session_start");
+    _cfg_hook_pre_tool      = _cfg2_str(hook_l, hook_g, "pre_tool");
+    _cfg_hook_post_tool     = _cfg2_str(hook_l, hook_g, "post_tool");
+    _cfg_hook_session_end   = _cfg2_str(hook_l, hook_g, "session_end");
+    _cfg_hook_timeout_ms    = _cfg2_int(hook_l, hook_g, "timeout_ms");
+    var tp_l = _cfg_section_pairs(lo, "toolpin");     var tp_g = _cfg_section_pairs(gl, "toolpin");
+    _cfg_toolpin_enabled = _cfg2_bool(tp_l, tp_g, "enabled", 1);     # 0.42.0 (T3): DEFAULT ON — see the getter
+    var sub_l = _cfg_section_pairs(lo, "subagent");   var sub_g = _cfg_section_pairs(gl, "subagent");
+    _cfg_subagent_enabled = _cfg2_bool(sub_l, sub_g, "enabled", 0);   # 0.43.0 (T2-1): DEFAULT OFF — see the getter
+    _cfg_subagent_max_iters = _cfg2_int(sub_l, sub_g, "max_iters");   # -1 when absent -> default in the getter
+    var gd_l = _cfg_section_pairs(lo, "guard");       var gd_g = _cfg_section_pairs(gl, "guard");
+    _cfg_guard_enabled = _cfg2_bool(gd_l, gd_g, "enabled", 1);        # 0.41.0 (T2-3): DEFAULT ON — see the getter
+    var vf_l = _cfg_section_pairs(lo, "verify");      var vf_g = _cfg_section_pairs(gl, "verify");
+    _cfg_verify_command = _cfg2_str(vf_l, vf_g, "command");           # 0.41.0 (T2-5): 0 when unset -> feature off
+    _cfg_verify_timeout_ms = _cfg2_int(vf_l, vf_g, "timeout_ms");
+    var rd_l = _cfg_section_pairs(lo, "redact");      var rd_g = _cfg_section_pairs(gl, "redact");
+    _cfg_redact_enabled = _cfg2_bool(rd_l, rd_g, "enabled", 1);   # 0.40.0 (T1-3): DEFAULT ON — see the getter
+    var sh_l = _cfg_section_pairs(lo, "shell");       var sh_g = _cfg_section_pairs(gl, "shell");
+    _cfg_shell_enabled = _cfg2_bool(sh_l, sh_g, "enabled", 0);    # opt-in; default off (0.16.0 shell tool)
+    _cfg_shell_timeout_ms = _cfg2_int(sh_l, sh_g, "timeout_ms");  # -1 when absent -> default in the getter
+    _cfg_shell_output_cap = _cfg2_int(sh_l, sh_g, "max_output");  # -1 when absent -> default in the getter
+    _shell_globs_load2(sh_l, lo, sh_g, gl);                       # deny UNIONS · allow local-replaces (see below)
+    var ed_l = _cfg_section_pairs(lo, "edit");        var ed_g = _cfg_section_pairs(gl, "edit");
+    _cfg_edit_enabled = _cfg2_bool(ed_l, ed_g, "enabled", 0);     # opt-in; default off (0.31.0 edit tool)
+    _cfg_parse_ok = 1;                            # 0.24.4: a layer was read + parsed (a url may or may not be set)
     if (_cfg_hoosh_url == 0) { return 0; }
     return 1;
 }

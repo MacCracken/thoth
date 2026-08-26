@@ -2381,3 +2381,80 @@ fn test_shell_bufs_realloc() {
     _shell_bufs_ensure();
     return 0;
 }
+
+# --- CONFIG LAYERING (0.43.3): ~/.thoth/config.cyml as the base, local on top ----------------------
+#
+# The scalars are the easy half and the collections are the half that can go quietly wrong, so both are
+# pinned here. The security rule under test is STRICTEST WINS: a deny-list UNIONS across layers (a
+# project may add denies and can never drop the user's), while `[shell].allow` and `[project].read_roots`
+# GRANT authority and are therefore REPLACED wholesale by the local layer rather than merged — a repo you
+# cloned must not be able to widen your global allow-list or read jail by appending one entry.
+fn _lay_parse(txt) { return bayan_toml_parse(str_new(txt, strlen(txt))); }
+fn _lay_deny_has(pat) {
+    var i = 0;
+    while (i < config_shell_deny_count()) { if (streq(config_shell_deny_at(i), pat) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+fn _lay_allow_has(pat) {
+    var i = 0;
+    while (i < config_shell_allow_count()) { if (streq(config_shell_allow_at(i), pat) == 1) { return 1; } i = i + 1; }
+    return 0;
+}
+
+fn test_config_layering() {
+    test_group("config layering: local over global (config.cyr, 0.43.3)");
+
+    # --- the presence-not-value rule the whole design rests on ---
+    var g1 = _lay_parse("[hoosh]\nurl = \"G-URL\"\nmodel = \"G-MODEL\"\nstream = false\nmax_iters = 9\n");
+    var l1 = _lay_parse("[hoosh]\nmodel = \"L-MODEL\"\nstream = true\n");
+    var hg = _cfg_section_pairs(g1, "hoosh");
+    var hl = _cfg_section_pairs(l1, "hoosh");
+    assert(streq(_cfg2_str(hl, hg, "url"), "G-URL") == 1, "a key only the GLOBAL sets is inherited");
+    assert(streq(_cfg2_str(hl, hg, "model"), "L-MODEL") == 1, "a key BOTH set resolves to the local one");
+    assert_eq(_cfg2_str(hl, hg, "token"), 0, "a key NEITHER sets stays absent");
+    # ⚠ the bug this prevents: _cfg_bool returns the DEFAULT for an absent key, so layering on its
+    # return would make a local `stream = true` indistinguishable from no local `stream` at all.
+    assert_eq(_cfg2_bool(hl, hg, "stream", 1), 1, "an explicit local bool WINS over the global's");
+    assert_eq(_cfg2_bool(0, hg, "stream", 1), 0, "...and with no local layer the global's bool applies");
+    assert_eq(_cfg2_bool(hl, hg, "history", 1), 1, "a bool neither layer sets falls to the default");
+    assert_eq(_cfg2_int(hl, hg, "max_iters"), 9, "an int only the global sets is inherited");
+    assert_eq(_cfg2_int(hl, hg, "compact_at"), 0 - 1, "an int neither sets stays -1 (absent)");
+    assert_eq(_cfg2_str(0, 0, "url"), 0, "two absent layers answer absent, not a crash");
+
+    # --- [shell] deny UNIONS · allow does NOT ---
+    var gs = _lay_parse("[shell]\ndeny = [\"rm *\", \"shared *\"]\nallow = [\"ls *\", \"cat *\"]\n");
+    var ls = _lay_parse("[shell]\ndeny = [\"curl *\", \"shared *\"]\n");
+    _shell_globs_load2(_cfg_section_pairs(ls, "shell"), ls, _cfg_section_pairs(gs, "shell"), gs);
+    assert_eq(config_shell_deny_count(), 3, "deny UNIONS both layers, de-duplicated (curl, shared, rm)");
+    assert_eq(_lay_deny_has("curl *"), 1, "...the local deny is kept");
+    assert_eq(_lay_deny_has("rm *"), 1, "...the GLOBAL deny survives a local [shell] block");
+    assert_eq(_lay_deny_has("shared *"), 1, "...a deny in both appears once");
+    # the local layer declared NO allow -> it inherits the global's rather than being empty
+    assert_eq(config_shell_allow_count(), 2, "allow is INHERITED when the local layer does not declare one");
+
+    # a local layer that DOES declare allow replaces the global's wholesale — never a union
+    var ls2 = _lay_parse("[shell]\nallow = [\"git *\"]\n");
+    _shell_globs_load2(_cfg_section_pairs(ls2, "shell"), ls2, _cfg_section_pairs(gs, "shell"), gs);
+    assert_eq(config_shell_allow_count(), 1, "a local allow REPLACES the global's — authority never accumulates");
+    assert_eq(_lay_allow_has("git *"), 1, "...with the local pattern");
+    assert_eq(_lay_allow_has("ls *"), 0, "...and the global's is NOT merged in");
+    # an EXPLICITLY EMPTY local allow must stay empty, not fall through to the global
+    var ls3 = _lay_parse("[shell]\nallow = []\n");
+    _shell_globs_load2(_cfg_section_pairs(ls3, "shell"), ls3, _cfg_section_pairs(gs, "shell"), gs);
+    assert_eq(config_shell_allow_count(), 0, "an explicitly EMPTY local allow stays empty (declared != absent)");
+
+    # --- [alias] and [pricing.*] merge by key, local winning ---
+    var ga = _lay_parse("[alias]\ng = \"from-global\"\nonlyglobal = \"kept\"\n");
+    var la = _lay_parse("[alias]\ng = \"from-local\"\n");
+    _alias_load2(la, ga);
+    assert_eq(config_alias_count(), 2, "aliases MERGE across layers");
+    assert(streq(config_alias_lookup("g"), "from-local") == 1, "a name in both resolves to the local one");
+    assert(streq(config_alias_lookup("onlyglobal"), "kept") == 1, "a global-only alias still resolves");
+
+    var gp = _lay_parse("[pricing.m1]\ninput = 10\noutput = 20\n[pricing.m2]\ninput = 30\noutput = 40\n");
+    var lp = _lay_parse("[pricing.m1]\ninput = 1\noutput = 2\n");
+    _price_load2(lp, gp);
+    assert_eq(config_price_input("m1"), 1, "a local [pricing.<model>] overrides the global rate");
+    assert_eq(config_price_input("m2"), 30, "...while a global-only model keeps its rate");
+    return 0;
+}

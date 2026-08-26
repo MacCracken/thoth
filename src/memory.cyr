@@ -35,6 +35,53 @@ fn memory_dir() {
     if (root == 0) { _mem_dir_c = ".thoth/memory"; }
     return _mem_dir_c;
 }
+# memory_global_dir / memory_global_index (0.43.3): the GLOBAL memory store at `~/.thoth/memory`, or 0.
+#
+# Memory layers exactly like config: `~/.thoth/memory/` holds the durable facts a user carries between
+# projects, and the project's `.thoth/memory/` adds the ones that only make sense here. BOTH are read.
+# `/remember` still writes to memory_dir() — the project store when there is one — so a fact learned in
+# a repo stays with that repo unless the user is working out of their home.
+var _mem_gdir_c = 0;
+var _mem_gdir_done = 0;
+# _mem_append_dir: append one memory store's MEMORY.md index and then its other .md fact files, in
+# directory order, whole-or-skip until `cap` fills. Returns the new offset.
+fn _mem_append_dir(buf, off, cap, dir, index_path) {
+    if (dir == 0) { return off; }
+    var dirstr = str_from(dir);
+    if (is_dir(dirstr) == 0) { return off; }
+    off = _mem_append_file(buf, off, cap, index_path, 0);
+    var v = dir_list(dirstr);
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        var name = vec_get(v, i);
+        var full = path_join(dirstr, name);
+        if (is_dir(full) == 0) {
+            if (_mem_is_md(str_data(name)) == 1) {
+                if (streq(str_data(name), "MEMORY.md") == 0) {
+                    off = _mem_append_file(buf, off, cap, str_data(full), 1);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return off;
+}
+
+fn memory_global_dir() {
+    if (_mem_gdir_done == 1) { return _mem_gdir_c; }
+    _mem_gdir_done = 1;
+    _mem_gdir_c = 0;
+    # When the resolved root IS $HOME/.thoth there is only one store; reporting a global layer as well
+    # would inject every fact twice and burn the budget on duplicates.
+    if (thoth_root_is_home() == 1) { return 0; }
+    var home = getenv("HOME");
+    if (home == 0) { return 0; }
+    var gd = _cfg_join2(_cfg_join2(home, ".thoth"), "memory");
+    if (is_dir(str_from(gd)) == 1) { _mem_gdir_c = gd; }
+    return _mem_gdir_c;
+}
+
 fn memory_index_path() {
     if (_mem_idx_c != 0) { return _mem_idx_c; }
     var root = _thoth_root_resolve();
@@ -107,25 +154,16 @@ fn memory_system_prompt() {
     #    Directory order (not recency): there is no portable mtime probe, and the
     #    MEMORY.md index is the author-curated priority anyway; fact bodies are
     #    supplementary. Recency ordering can arrive when a portable stat lands.
-    var dirstr = str_from(memory_dir());
-    if (is_dir(dirstr) == 1) {
-        off = _mem_append_file(buf, off, cap, memory_index_path(), 0);
-        var v = dir_list(dirstr);
-        var n = vec_len(v);
-        var i = 0;
-        while (i < n) {
-            var name = vec_get(v, i);
-            var full = path_join(dirstr, name);
-            if (is_dir(full) == 0) {
-                if (_mem_is_md(str_data(name)) == 1) {
-                    if (streq(str_data(name), "MEMORY.md") == 0) {
-                        off = _mem_append_file(buf, off, cap, str_data(full), 1);
-                    }
-                }
-            }
-            i = i + 1;
-        }
+    # 0.43.3: TWO stores, global first then local. Each gets its own budget slice so neither can starve
+    # the other — `_mem_append_file` is whole-or-skip, so without a slice whichever store is read first
+    # could consume the entire cap and silently drop the other's facts. The global half is capped; the
+    # local pass gets the full cap, so it inherits every byte the global did not use.
+    var gd = memory_global_dir();
+    if (gd != 0) {
+        off = _mem_append_dir(buf, off, pre_len + (cap - pre_len) / 2, gd,
+                              _cfg_join2(gd, "MEMORY.md"));
     }
+    off = _mem_append_dir(buf, off, cap, memory_dir(), memory_index_path());
     store8(buf + off, 0);
     if (off <= pre_len) { _memory_sys = 0; return 0; }     # nothing read (no AGENTS.md, no facts) -> omit
     _memory_sys = buf;

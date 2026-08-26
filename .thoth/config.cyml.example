@@ -1,18 +1,29 @@
-# thoth runtime config — copy to `.thoth/config.cyml` and edit.
+# thoth runtime config — TWO LAYERS (0.43.3, ADR-0019).
 #
-# Discovery (0.26.0): thoth finds this file by walking UP from the current dir
-# for a `.thoth/` home directory (like `.git/`), then falling back to
-# `~/.thoth/config.cyml` (a global user default). So `<repo>/.thoth/config.cyml`
-# is found from ANY subdirectory of the repo. Project memory lives alongside it
-# at `.thoth/memory/` (same discovered home).
+#   ~/.thoth/config.cyml     the GLOBAL base — settings that follow you between projects
+#   <project>/.thoth/config.cyml   the LOCAL layer — overrides the global PER KEY
 #
-# ⚠ The legacy `./thoth.cyml` fallback is gated on the FILE, not on the home. It
-# is read whenever no `<root>/config.cyml` is found — INCLUDING when a `.thoth/`
-# home exists right there. So "I have a .thoth/ home, therefore a stray root
-# thoth.cyml is inert" is false: delete `.thoth/config.cyml` and the root file
-# silently becomes your config. Since 0.43.2 a legacy load is ANNOUNCED — the
-# greeting says so, `/state` shows the live path, and `/reload` reports a change
-# of file — but the cleanest answer is not to keep one around.
+# Every key resolves as: local, else global, else the built-in default. Both are optional and either
+# alone works. So you can set your gateway, model and persona once in `~/.thoth/config.cyml`, and let a
+# repo add only what is specific to it — a different model, a project t-ron policy — without restating
+# everything. The local file is found by walking UP from the current dir, so `<repo>/.thoth/config.cyml`
+# applies from ANY subdirectory of the repo. Copy this file to either location to start.
+#
+# `/state` shows both paths and which one is which.
+#
+# ⚠ THE LISTS THAT CONTROL WHAT THE MODEL MAY DO DO NOT SIMPLY MERGE — the rule is STRICTEST WINS:
+#     [shell].deny            UNIONS across both layers. A project may ADD denies and can never drop
+#                             the ones you set globally.
+#     [shell].allow           the local file REPLACES the global's list when it declares one (and
+#     [project].read_roots    inherits it when it does not). These GRANT authority, and a repo you
+#                             cloned must not be able to widen your global grants by appending to them.
+# An explicitly empty local list (`allow = []`) means empty; an ABSENT one inherits the global's.
+#
+# Memory layers the same way: `~/.thoth/memory/` is read, then the project's `.thoth/memory/`, and both
+# are injected. `/remember` writes to the PROJECT store when there is one.
+#
+# ⚠ The legacy `./thoth.cyml` is still read, and is now the LOCAL layer (so it overrides the global per
+# key like any local file). A legacy load is ANNOUNCED — in the greeting, in `/state`, and by `/reload`.
 #
 # This is NOT the build manifest (that is cyrius.cyml). It is thoth's own
 # runtime config, read once at startup. It is a CYML file: TOML above an

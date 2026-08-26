@@ -10,11 +10,15 @@ the model answers. A seam that isn't configured degrades honestly; nothing is
 faked (`/seams` shows the live ladder).
 
 The two things that bind only when you point them at a service: `[hoosh].url`
-(model backend) and `[daimon].url` (MCP tool host) in `.thoth/config.cyml`. Config
-lives in a discoverable `.thoth/` home directory (like `.git/`), found by walking
-**up** from the current dir for the nearest `.thoth/`, then `~/.thoth/`; a legacy
-`./thoth.cyml` in the working dir is still read as a fallback. Copy the committed
-`.thoth/config.cyml.example` to `.thoth/config.cyml` to start. Without a
+(model backend) and `[daimon].url` (MCP tool host).
+
+Config is **two layers** ([ADR-0019](../adr/0019-layered-config-global-base-local-override.md)):
+`~/.thoth/config.cyml` is the **global base** — the settings that follow you between projects — and the
+nearest `.thoth/config.cyml`, found by walking **up** from the current dir, **overrides it per key**
+(local, else global, else the built-in default). Both are optional; either alone works. So set your
+gateway and model once globally, and let a repo add only what is specific to it. A legacy `./thoth.cyml`
+is still read and acts as the local layer. Copy the committed `.thoth/config.cyml.example` to either
+location to start; `/state` shows both paths and which is which. Without a
 `[hoosh].url` the loop still runs and says so honestly (the greeting states the
 config source and whether the gateway actually answers — never a faked READY).
 

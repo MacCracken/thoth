@@ -2067,6 +2067,13 @@ fn tui_loop() {
         ui_emit(ROLE_FAINT, " — move it to .thoth/config.cyml (back-compat fallback)");
         feed_flush_pending();
     }
+    # 0.43.3: say when BOTH layers are in play, so a value that came from the global is not a mystery.
+    if (config_global_path() != 0) {
+        if (config_local_path() != 0) {
+            ui_emit(ROLE_FAINT, "config: ~/.thoth/config.cyml + this project's — local wins per key (/state shows both)");
+            feed_flush_pending();
+        }
+    }
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");
     feed_flush_pending();
     # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`
