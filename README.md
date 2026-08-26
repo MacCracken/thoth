@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.43.3 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.43.4 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. Real and usable daily; SemVer `0.x` while the surface still moves.
 
 **The loop.** A free-text turn drives a **model-driven agentic loop**: thoth advertises **daimon**'s MCP tools to

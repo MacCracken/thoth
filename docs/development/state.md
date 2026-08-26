@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.43.4** — **streamed tool calls with no `index` collapsed into one** (2026-08-26). `_agent_accum_delta`
+defaulted a missing `index` to 0 (the OpenAI convention always stamps one and streams `arguments` in
+fragments), but hoosh's local Ollama path emits every call WHOLE, several per delta, with NO index — so
+four complete `read_file` calls landed in slot 0 with their arguments CONCATENATED into invalid JSON. The
+round ran one bogus call, the model got `(read_file: arguments are not valid JSON)`, and answered the next
+round with nothing: ⭐ surfacing as "response had neither tool calls nor content" AFTER the tools visibly
+ran. An index-less element is a WHOLE call → next free slot. The suite covered a SINGLE index-less delta
+(passes either way) and never a multi-call one; now pinned with the wire-captured shape.
+⚠ **A second, unrelated upstream cause presents identically** and is NOT thoth's: hoosh gives Ollama
+`num_ctx: 4096` regardless of the model's real window, so a large tool-result context leaves ~30 tokens,
+the model spends them on `thinking`, and `content` comes back empty (`done_reason: length`). Measured
+against Ollama directly: num_ctx 4096 → empty; 32768 → real answer. Raising thoth's `max_tokens` does not
+help — the cap is hoosh's. Suite **264 + 2002 + 183 + 3**.
+
 **0.43.3** — **`~/.thoth/config.cyml` becomes a real global base** (2026-08-26,
 [ADR-0019](../adr/0019-layered-config-global-base-local-override.md)). Config is TWO LAYERS resolved PER
 KEY — global base, nearest `.thoth/config.cyml` overrides, else the built-in default. Memory layers the

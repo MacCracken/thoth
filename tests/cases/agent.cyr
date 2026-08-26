@@ -351,8 +351,7 @@ fn test_agent() {
     assert(streq(agent_tc_args(av, 0), "{\"t\":42}"), "reassembled: args decoded");
 
     # A delta element with NO `index` — one whole call in a single frame, which is what a gateway
-    # emits when the backend did not fragment it (hoosh 2.6.1 converting an Ollama tool call).
-    # Every fixture above carries an explicit index; this pins the documented idx=0 default.
+    # emits when the backend did not fragment it (hoosh converting an Ollama tool call).
     _ag_reset();
     var d3 = "{\"id\":\"call_b3jfnnvb\",\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"arguments\":\"{\\\"path\\\":\\\"/\\\"}\"}}";
     _agent_accum_delta(bayan_json_v_parse_buf(d3, strlen(d3)));
@@ -362,6 +361,45 @@ fn test_agent() {
     assert_eq(agent_tc_count(av2), 1, "index-less delta: one call folded into slot 0");
     assert(streq(agent_tc_name(av2, 0), "list_dir"), "index-less delta: name");
     assert(streq(agent_tc_args(av2, 0), "{\"path\":\"/\"}"), "index-less delta: args");
+
+    # ⚠ 0.43.4 — SEVERAL WHOLE CALLS, NO `index`, IN ONE DELTA. This is what hoosh's local
+    # (Ollama-backed) streaming path actually emits, captured off the wire: a single
+    # `delta.tool_calls` array carrying four complete calls, none of them carrying an index.
+    #
+    # The old code defaulted a missing index to 0, so all four landed in slot 0 — id and name
+    # overwritten by the last, and the arguments APPENDED end to end:
+    #     {"path":"README.md"}{"path":"CLAUDE.md"}{"path":"plan.md"}{"path":"package.json"}
+    # The round then executed ONE call whose arguments were not valid JSON, fed the model
+    # `(read_file: arguments are not valid JSON)`, and the model replied to the next round with
+    # nothing — surfacing to the user as "response had neither tool calls nor content" AFTER the
+    # tools had visibly run. An index-less element is a WHOLE call and takes the next free slot.
+    _ag_reset();
+    var m1 = "{\"id\":\"P11\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}";
+    var m2 = "{\"id\":\"n27\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"CLAUDE.md\\\"}\"}}";
+    var m3 = "{\"id\":\"jR3\",\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"arguments\":\"{\\\"path\\\":\\\".\\\"}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_buf(m1, strlen(m1)));
+    _agent_accum_delta(bayan_json_v_parse_buf(m2, strlen(m2)));
+    _agent_accum_delta(bayan_json_v_parse_buf(m3, strlen(m3)));
+    var ab3[2048];
+    _ag_build_array(&ab3);
+    var av3 = bayan_json_v_parse_buf(&ab3, strlen(&ab3));
+    assert_eq(agent_tc_count(av3), 3, "three index-less calls occupy three SLOTS, not one");
+    assert(streq(agent_tc_name(av3, 0), "read_file"), "call 0 name");
+    assert(streq(agent_tc_args(av3, 0), "{\"path\":\"README.md\"}"), "call 0 args are VALID JSON, not concatenated");
+    assert(streq(agent_tc_args(av3, 1), "{\"path\":\"CLAUDE.md\"}"), "call 1 keeps its own arguments");
+    assert(streq(agent_tc_name(av3, 2), "list_dir"), "call 2 keeps its own NAME (not overwritten by the last)");
+    assert(streq(agent_tc_args(av3, 2), "{\"path\":\".\"}"), "call 2 keeps its own arguments");
+    # the indexed fragment path must be untouched by the fix
+    _ag_reset();
+    var f1 = "{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"a\\\":\"}}";
+    var f2 = "{\"index\":0,\"function\":{\"arguments\":\"1}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_buf(f1, strlen(f1)));
+    _agent_accum_delta(bayan_json_v_parse_buf(f2, strlen(f2)));
+    var ab4[1024];
+    _ag_build_array(&ab4);
+    var av4 = bayan_json_v_parse_buf(&ab4, strlen(&ab4));
+    assert_eq(agent_tc_count(av4), 1, "indexed fragments still merge into ONE call");
+    assert(streq(agent_tc_args(av4, 0), "{\"a\":1}"), "...with their arguments concatenated, as OpenAI streams them");
     return 0;
 }
 

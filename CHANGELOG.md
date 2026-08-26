@@ -2,6 +2,51 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.43.4] - 2026-08-26
+
+**Streamed tool calls with no `index` were collapsed into one call with concatenated arguments.** Suite
+**264 + 2002 + 183 + 3** (+8), all targets green.
+
+### Fixed
+
+- **`_agent_accum_delta` treated an absent `index` as index 0, so several whole tool calls in one SSE
+  delta all landed in the same slot.** The OpenAI streaming convention always stamps `index` and dribbles
+  `arguments` across frames, so a missing index defaulted to 0 and the arguments were APPENDED there.
+  hoosh's local (Ollama-backed) path does not follow that convention: it emits every tool call **whole**,
+  several per delta, with **no `index` field at all**. Captured off the wire — a single delta carrying
+  four complete `read_file` calls produced one call whose arguments were:
+
+  ```
+  {"path":"README.md"}{"path":"CLAUDE.md"}{"path":"plan.md"}{"path":"package.json"}
+  ```
+
+  Not valid JSON. The round executed one bogus call, fed the model `(read_file: arguments are not valid
+  JSON)`, and the model answered the next round with nothing — surfacing as **"hoosh: response had
+  neither tool calls nor content"** *after* the tools had visibly run, which reads like the agent dying
+  for no reason. An index-less element is a **complete call** and now takes the next free slot; the
+  indexed fragment path is untouched (correlating fragments without an index is impossible anyway, so
+  "whole call" is the only sound reading).
+
+  The suite already covered a *single* index-less delta — which passes either way — and never a
+  multi-call one. That is now pinned, and the fixture is the exact shape captured from the wire.
+
+### Not thoth's bug, recorded because it presents identically
+
+The same symptom has a second, unrelated cause upstream, found while tracing this one. With a large
+enough accumulated tool-result context, **hoosh gives Ollama `num_ctx: 4096`** regardless of the model's
+real context window, so the prompt consumes nearly the whole budget and the model is cut off mid-thought:
+
+| `num_ctx` | `done_reason` | tokens generated | content |
+|---|---|---|---|
+| 4096 | `length` | 30 | **empty** |
+| 32768 | `stop` | 156 | real answer |
+
+Measured against Ollama directly with the identical message list. The model spends its remaining budget
+on `thinking` and emits no `content`; hoosh returns `content: ""` with a non-zero `completion_tokens`,
+and thoth reports the empty completion honestly. Raising thoth's `max_tokens` does **not** help — the cap
+is `num_ctx`, set by hoosh. Fix belongs in hoosh's Ollama adapter (derive `num_ctx` from the model's
+`context_length`, which `/api/show` reports as 262144 for this model).
+
 ## [0.43.3] - 2026-08-26
 
 **`~/.thoth/config.cyml` becomes a real global base, and the project layers on top of it.** Suite
