@@ -50,6 +50,27 @@ fn _ring_emit(ptr, n) { if (_ring_sink != 0) { fncall2(_ring_sink, ptr, n); } re
 # diagnostics (a transport/HTTP error, a denied authorization, an empty reply) go
 # here so stdout stays the clean answer channel for piping/`thoth | thoth` chaining.
 fn emit_err(s) { syscall(SYS_WRITE, 2, s, strlen(s)); return 0; }
+
+# --- notices that must land on EVERY surface (0.44.2) --------------------------------------------------
+#
+# ⚠ `emit` / `oprintln` / `ui_emit` all return immediately under OUT_NULL — and OUT_NULL is what one-shot
+# and the T3 GUI run their turns under, because stdout there is the answer (or nothing at all). That is
+# right for narration and wrong for a SECURITY notice: a tool withheld because its MCP definition changed
+# under the session, a prompt-injection flag on a tool result, a redaction, a hook that blocked a call —
+# each of those was announced with exactly those calls, so on two of thoth's three surfaces they were
+# announced to nobody. The operator saw an agent that had quietly stopped using a tool.
+#
+# These route to STDERR when the normal channel is a discard. stderr is not swallowed in one-shot (it is
+# where every other honest diagnostic already goes) and in the GUI it reaches the launching terminal.
+fn note_emit(s) {
+    if (out_mode() == OUT_NULL) { return emit_err(s); }
+    return emit(s);
+}
+fn note_println(s) {
+    if (out_mode() == OUT_NULL) { emit_err(s); emit_err("\n"); return 0; }
+    emit(s);
+    return oprintln("");
+}
 fn emit_err_n(ptr, n) { syscall(SYS_WRITE, 2, ptr, n); return 0; }
 
 # _one_shot (0.11.0): set while a one-shot/argv turn runs. The t-ron confirm gate

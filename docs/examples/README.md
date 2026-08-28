@@ -66,6 +66,33 @@ source <(thoth --completion bash)                          # tab-complete thoth'
 The `--json` envelope is `{response, model, turns, tokens?, cost?, elapsed_ms}` — token/cost
 fields appear only once the gateway reports usage (omit-until-present), never faked.
 
+## 4b. Capturing a session that crashes, hangs, or is killed
+
+```sh
+thoth --logs session.log                       # interactive, with a full session log
+thoth --logs session.log --log-level trace     # more detail
+thoth --logs run.log 'review this project'     # one-shot; stdout stays the answer
+```
+
+`--logs` binds the log **before the config is read and before any seam is touched**, so a run that
+dies on a bad config, an unreachable gateway or a hang still leaves a record. It is a transcript,
+not just a trace — the task, one line per agentic round (with the working-set size), one line per
+tool call with its arguments, authorization verdict, wall-time and result size, and the reply:
+
+```
+event=turn_start turn=1 model=claude-opus-5 max_iters=25 tool_bytes=8439
+event=task part=1 of=1 text=review this project
+event=round turn=1 iter=1 work_bytes=0 mode=stream
+event=tool name=read_file verdict=allow ok=1 ms=0 bytes=3145 args={"path": "README.md"}
+event=agent_turn iters=4 result=ok
+event=reply part=1 of=2 text=...
+```
+
+Long values split across `part=i of=n` lines, so a file cut short by a crash loses one chunk rather
+than the session. It works in every mode — TUI, line REPL and one-shot — and overrides `[log].file`
+for that run. For a readable markdown transcript of a session that ended normally, use
+`/save <file>` (`--json` / `--plain` variants) from inside the session instead.
+
 ## 5. Make it your own
 
 - **Aliases** — add `[alias]` macros to `.thoth/config.cyml` (`ship = "/run git status"`); an

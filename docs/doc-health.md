@@ -6,7 +6,15 @@ type: state
 
 # Documentation Health — thoth
 
-> **Last refresh**: 2026-08-25 — **full doc sweep at 0.43.2**, run as six parallel reviewers (repo
+> **Touched at 0.44.2** (2026-08-27, not a full sweep): the release updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block, Tests counts, the Front-doors/Observability surface rows),
+> `docs/development/roadmap.md` (a new ⛔ carried limitation — hoosh dropping SSE frames and laundering
+> provider errors into an empty 200 stream), `README.md` (status stamp), `.thoth/config.cyml.example`
+> (`[hoosh].timeout_ms`, and `--logs` documented in the `[log]` block), `docs/examples/README.md` (a new
+> §4b on capturing a session that crashes or hangs) and `docs/guides/getting-started.md` (`--logs` in the
+> CLI list + a paragraph on it and `timeout_ms`). The rows below still carry their 0.43.2 sweep status.
+>
+> **Last full refresh**: 2026-08-25 — **full doc sweep at 0.43.2**, run as six parallel reviewers (repo
 > hygiene, cross-doc consistency, the config/legacy-path surface, recently-changed code, the scripts,
 > the test suite), each finding handed to an independent skeptic before it was acted on. Every claim was
 > checked against the file it describes, and every *measurement* was re-run rather than re-read.

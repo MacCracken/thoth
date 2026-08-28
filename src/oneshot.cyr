@@ -67,6 +67,15 @@ fn oneshot_tier() { return _oneshot_tier; }
 fn oneshot_tier_bad() { return _oneshot_tier_bad; }
 fn oneshot_tier_seen() { return _oneshot_tier_seen; }
 
+# --- --logs / --log-level (0.44.2) --------------------------------------------------------------------
+# The path and level captured from argv, as pointers INTO the argv snapshot (never copied — the snapshot
+# outlives the process). 0 when the flag was absent. Read by main, which binds the sink before anything
+# else runs; see log_argv_init for why argv wins over [log].file.
+var _oneshot_log_path = 0;
+var _oneshot_log_level = 0;
+fn oneshot_log_path() { return _oneshot_log_path; }
+fn oneshot_log_level() { return _oneshot_log_level; }
+
 # The JSON envelope buffer (lazy). Sized for a worst-case 6x-escaped max reply (HOOSH_ACC_CAP)
 # + a 6x-escaped model id (MODEL_BUF_CAP — a session /model id; a normal [hoosh].model id is
 # far shorter) + the fixed framing/ints, with headroom — so the escape core's cap-stop never
@@ -143,6 +152,8 @@ fn _oneshot_parse(args, n) {
     _oneshot_tier = 0;                          # default TIER_AUTO
     _oneshot_tier_bad = 0;
     _oneshot_tier_seen = 0;
+    _oneshot_log_path = 0;                      # 0.44.2: reset BEFORE the early return (no stale path)
+    _oneshot_log_level = 0;
     if (n <= 1) { return ONESHOT_NONE; }
     _oneshot_task_reset();
     var positional = 0;
@@ -168,6 +179,26 @@ fn _oneshot_parse(args, n) {
             # consume the NEXT token as the output path (verbatim). A dangling -o at the end
             # has no path -> ignored (path stays 0). Like --json, -o does not force a run.
             if ((i + 1) < n) { _oneshot_out_path = load64(args + (i + 1) * 8); i = i + 1; }
+        }
+        # 0.44.2: --logs FILE / --logs=FILE (and the singular --log spelling, which is what half of
+        # everyone types) binds a session log for THIS run. Like -o and --json it is a MODIFIER: it does
+        # not by itself force a one-shot, so `thoth --logs t.txt` still opens the TUI and logs it.
+        # `--logs --version` must not eat the next flag, so a following token starting with '-' is left
+        # alone (identical rule to --tier / -o's value handling).
+        elif (cstr_starts_with(a, "--logs=") == 1) { _oneshot_log_path = a + 7; }
+        elif (cstr_starts_with(a, "--log=") == 1) { _oneshot_log_path = a + 6; }
+        elif ((streq(a, "--logs") == 1) || (streq(a, "--log") == 1)) {
+            if ((i + 1) < n) {
+                var lnx = load64(args + (i + 1) * 8);
+                if (load8(lnx) != 45) { _oneshot_log_path = lnx; i = i + 1; }   # 45 == '-'
+            }
+        }
+        elif (cstr_starts_with(a, "--log-level=") == 1) { _oneshot_log_level = a + 12; }
+        elif (streq(a, "--log-level") == 1) {
+            if ((i + 1) < n) {
+                var vnx = load64(args + (i + 1) * 8);
+                if (load8(vnx) != 45) { _oneshot_log_level = vnx; i = i + 1; }
+            }
         }
         elif (cstr_starts_with(a, "--tier=") == 1) { _oneshot_set_tier(a + 7); }   # --tier=<mode>
         elif (streq(a, "--tier") == 1) {
@@ -254,7 +285,9 @@ fn oneshot_print_help() {
     emit_raw("  thoth -v, --version       print the version\n");
     emit_raw("  thoth -h, --help          show this help\n");
     emit_raw("  thoth --completion <sh>   print a bash|zsh completion script (source it)\n");
-    emit_raw("  thoth --tier <mode>       presentation tier: auto (default) | rich (TUI) | simple (line)\n\n");
+    emit_raw("  thoth --tier <mode>       presentation tier: auto (default) | rich (TUI) | simple (line)\n");
+    emit_raw("  thoth --logs <file>       append a session log (task, rounds, tools, reply, errors)\n");
+    emit_raw("  thoth --log-level <lvl>   log level: trace|debug (default with --logs)|info|warn|error\n\n");
     emit_raw("One-shot mode is non-interactive: only the answer goes to stdout (so it pipes\n");
     emit_raw("cleanly); progress is suppressed and an action needing authorization is denied\n");
     emit_raw("(configure [tron].policy or run interactively). Config: .thoth/config.cyml.\n\n");
@@ -266,6 +299,12 @@ fn oneshot_print_help() {
     emit_raw("--json (or -j) prints {response, model, turns, tokens?, cost?, elapsed_ms} per\n");
     emit_raw("turn instead of the plain answer; tokens/cost appear only once reported. On any\n");
     emit_raw("failure nothing goes to stdout (diagnostic on stderr, nonzero exit).\n\n");
+    emit_raw("--logs <file> APPENDS a session log for this run, bound before the config is even\n");
+    emit_raw("read, so a session that crashes, hangs or is killed still leaves a record: the task,\n");
+    emit_raw("each agentic round, every tool call with its authorization verdict and result size,\n");
+    emit_raw("and the reply (long text splits across part=i of=n lines). Works in every mode — TUI,\n");
+    emit_raw("line REPL and one-shot — and overrides [log].file for this run. For a readable\n");
+    emit_raw("transcript of a live session use /save <file> instead.\n\n");
     emit_raw("-o / --out <file> tees the answer to <file> as well as stdout (it is your own\n");
     emit_raw("redirection, like `>`, NOT security-gated). The file is created at `>`-like\n");
     emit_raw("default perms (umask-respecting; on AGNOS the mode is dropped) — keep secret-\n");
@@ -314,9 +353,17 @@ fn _completion_bash() {
     emit_raw("            COMPREPLY=( $(compgen -W 'auto rich simple' -- \"$cur\") )\n");
     emit_raw("            return 0\n");
     emit_raw("            ;;\n");
+    emit_raw("        --logs|--log)\n");
+    emit_raw("            COMPREPLY=( $(compgen -f -- \"$cur\") )\n");
+    emit_raw("            return 0\n");
+    emit_raw("            ;;\n");
+    emit_raw("        --log-level)\n");
+    emit_raw("            COMPREPLY=( $(compgen -W 'trace debug info warn error off' -- \"$cur\") )\n");
+    emit_raw("            return 0\n");
+    emit_raw("            ;;\n");
     emit_raw("    esac\n");
     emit_raw("    if [[ \"$cur\" == -* ]]; then\n");
-    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j --events -o --out --tier -v --version -h --help --completion --completions' -- \"$cur\") )\n");
+    emit_raw("        COMPREPLY=( $(compgen -W '-p --print --json -j --events -o --out --tier --logs --log-level -v --version -h --help --completion --completions' -- \"$cur\") )\n");
     emit_raw("    else\n");
     emit_raw("        COMPREPLY=( $(compgen -f -- \"$cur\") )\n");
     emit_raw("    fi\n");
@@ -343,6 +390,8 @@ fn _completion_zsh() {
     emit_raw("        '(-h --help)'{-h,--help}'[show this help]' \\\n");
     emit_raw("        '(--completion --completions)'{--completion,--completions}'[print a shell completion script]:shell:(bash zsh)' \\\n");
     emit_raw("        '--tier[presentation tier]:tier:(auto rich simple)' \\\n");
+    emit_raw("        '--logs[append a session log for this run]:log file:_files' \\\n");
+    emit_raw("        '--log-level[session log level]:level:(trace debug info warn error)' \\\n");
     emit_raw("        '*::task:_files'\n");
     emit_raw("}\n");
     emit_raw("compdef _thoth thoth\n");
@@ -386,10 +435,16 @@ fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
     off = _append_cstr_cap(dst, off, cap, "\",\"model\":\"");
     off = _json_escape_into_cap(dst, off, cap, hoosh_model_cur());
     off = _append_cstr_cap(dst, off, cap, "\",\"turns\":");
-    off = _append_int(dst, off, session_turns());
+    # ⚠ 0.44.2 — _append_int TAKES NO CAP. Every appender before it stops with `off` at cap-1, so once
+    # the model-id escape saturates (hoosh_model_cur() is a raw config string with no length bound, and
+    # only MODEL_BUF_CAP*6 is budgeted for it) these wrote digits at cap, cap+1, ... and then a NUL past
+    # the end — a heap OOB write, with the over-long returned length handed straight to emit_raw_n and
+    # the -o writer, so adjacent heap bytes were PRINTED. Exactly the 0.39.0 A-6 defect, in the one
+    # builder that never got the _cap treatment.
+    off = _append_int_cap(dst, off, cap, session_turns());
     if (session_tokens_seen() == 1) {
         off = _append_cstr_cap(dst, off, cap, ",\"tokens\":");
-        off = _append_int(dst, off, session_tokens());
+        off = _append_int_cap(dst, off, cap, session_tokens());
     }
     if (session_cost_seen() == 1) {
         var cb[24];
@@ -399,8 +454,9 @@ fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
         off = _append_cstr_cap(dst, off, cap, "\"");
     }
     off = _append_cstr_cap(dst, off, cap, ",\"elapsed_ms\":");
-    off = _append_int(dst, off, elapsed_ms);
+    off = _append_int_cap(dst, off, cap, elapsed_ms);
     off = _append_cstr_cap(dst, off, cap, "}");
+    if (off > (cap - 1)) { off = cap - 1; }   # the returned length is written out verbatim — never past the alloc
     store8(dst + off, 0);
     return off;
 }

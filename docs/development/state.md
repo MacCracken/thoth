@@ -7,6 +7,36 @@
 
 ## Version
 
+**0.44.2** — **capture what happened, and stop bricking the conversation** (2026-08-27). Four live
+reports, and the first one turned out to be THREE bugs wearing the same symptom. ⭐ **A single dropped SSE
+frame bricked the whole conversation**: hoosh's Anthropic translation intermittently drops a tool call's
+opening frame while forwarding its `arguments`, so the slot ended the round with arguments and nothing
+else — and thoth emitted `{"id":"","function":{"name":"", ...}}` into HISTORY, where the provider rejects
+a `tool_use` with an empty id and name. Every later round then came back empty; the turn looked stuck long
+after the tool that broke it had scrolled away. Headerless slots are dropped and announced, a missing id
+is locally minted, and an empty-string name is no longer a name. ⭐ **The per-turn working set truncated
+into malformed JSON**: results were cut (the model asked again — nine rounds re-reading the same two
+files) and then the body stopped being valid JSON. It now never emits a partial message; caps raised (req
+512K→1M, work 128K→384K). ⭐ **No socket timeout existed anywhere** — a gateway that accepted and went
+silent hung thoth in `recv` forever with Esc unpolled and Ctrl-C disabled by the TUI's own termios; `kill`
+was the only recovery, and the startup probe ran the same unbounded GET before the first paint. New
+`[hoosh].timeout_ms` (default 180 s, a per-READ stall detector) threaded through every call; probes get a
+fixed short deadline. ⭐ **`--logs <file>`** binds a session log from argv at the top of main — before the
+config, before any seam — and it is a TRANSCRIPT (task, per-round working-set size, per-tool args +
+verdict + ms + bytes, the reply, long values split `part=i of=n`). ⭐ **The spinner froze whenever thoth
+was actually working**; a short-lived worker thread now owns the glyph for one blocking call, sharing the
+terminal through a single atomic word (A/B on a stalled gateway: 0 frames before, all 10 after). ⭐
+**Mouse/keys**: the legacy X10 mouse encoding was undecoded (wheel dead AND junk in the composer), terminal
+modes were never re-asserted after a `/run` child (one `/run` silently killed the wheel), a lone Esc ate
+the next keystroke, and tmux's SS3 arrows typed letters. An empty HTTP 200 stream is now reported as a
+GATEWAY fault rather than a model failure. Plus a 19-finding bug sweep: a startup CRASH on `[log].file`
+with no level, an unbalanced tools array that latched for the session, an unbounded+uncancellable `search`
+walk, an `@mention` heap overflow, a GUI stack-pointer lifetime bug, an unbounded `_append_int` in the
+`--json` envelope, `/rewind` reporting a partial undo as complete, `/write` reporting a short write as
+full, a `pre_tool` hook degrading OPEN, and security notices discarded under `OUT_NULL`. ⚠ The 8 MB
+preprocess ceiling bit again — `tests/cases/agent.cyr` split into `tests/thoth_agent.tcyr` (same src
+chain, nothing dropped). Suite **289 + 956 + 747 + 499 + 183 + 5**.
+
 **0.44.1** — **the agent knows where it is** (2026-08-26). Reported live and reproduced against the dev
 stack: asked to review its own project, the agent called `fs_read {"path":"src/tasks/health.js"}` and got
 `cannot read /home/macro/.agnos-stack/workspace/src/tasks/health.js` — the right relative path resolved in
@@ -3288,13 +3318,17 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
   **T3 desktop GUI** (`src/gui/*`: the `gdraw` IR + `graster` rasterizer + the `gstatus`/`gtree`/`gtool`/`gfeed`/
   `gmem`/`gconv` view-builders + `gwindow`/`gpresent`/`ginput`).
 - **Front doors** — the interactive REPL/TUI/GUI plus the one-shot `oneshot` argv path (`thoth 'task'`, `--json`,
-  `-o`, `--completion`, `--tier`).
+  `-o`, `--completion`, `--tier`, `--logs`/`--log-level`).
+- **Observability** — `log` (the session log: driver events + the turn/round/tool/reply transcript, bound from
+  `[log]` or, for a post-mortem, from `--logs` before the config is read) and `events` (the `--events` NDJSON
+  stream for a driving program).
 
 ## Tests
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
-`tests/thoth_core.tcyr`, `tests/thoth_gui.tcyr`, `tests/thoth_render.tcyr`. **264 + 1894 + 183 + 3 assertions across the suites as of
-0.43.1 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
+`tests/thoth_render.tcyr`. **289 + 956 + 747 + 499 + 183 + 5 assertions across the suites as of
+0.44.2 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

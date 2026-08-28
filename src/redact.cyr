@@ -80,7 +80,6 @@ fn redact_tool_result(text) {
     _redact_n = _redact_n + 1;
     # Announced, never silent — the user must be able to tell "[REDACTED]" from "the tool found nothing".
     ui_emit(ROLE_ACCENT, "  [redacted] ");
-    ui_emit(ROLE_FAINT, "a secret-shaped value in this tool result was replaced before it entered the conversation");
-    oprintln("");
+    note_println("  a secret-shaped value in this tool result was replaced before it entered the conversation");   # 0.44.2: reaches one-shot/GUI too
     return _redact_buf;
 }

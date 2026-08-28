@@ -500,7 +500,7 @@ fn hoosh_recap_call(span) {
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_post(_hoosh_endpoint_url(), h, _hoosh_sum_req, len);
+    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _hoosh_sum_req, len, hoosh_probe_opts());   # 0.44.2: the recap is a SIDE call — never let it outlast the turn it is serving
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_sum_err = HOOSH_SUM_TRANSPORT; return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
@@ -895,7 +895,7 @@ fn hoosh_reachable() {
     var h = sandhi_headers_new();
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_get(url, h);
+    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: fail fast — this runs before the first paint
     if (sandhi_http_err_kind(r) == SANDHI_OK) { return 1; }
     return 0;
 }
@@ -939,7 +939,7 @@ fn hoosh_list_models() {
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     ui_emit(ROLE_FAINT, "  -> hoosh "); oprintln(url);
-    var r = sandhi_http_get(url, h);
+    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: fail fast — this runs before the first paint
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(ename);
@@ -1001,13 +1001,13 @@ fn hoosh_catalog_fetch() {
     var auth = _hoosh_auth_header();
     var h = sandhi_headers_new();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_get(_hoosh_catalog_url(), h);
+    var r = sandhi_http_get_opts(_hoosh_catalog_url(), h, hoosh_probe_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
     var status = sandhi_http_status(r);
     if (status == 404) {                          # older gateway: fall back to the plain models list
         var h2 = sandhi_headers_new();
         if (auth != 0) { sandhi_headers_set(h2, "Authorization", auth); }
-        r = sandhi_http_get(_hoosh_models_url(), h2);
+        r = sandhi_http_get_opts(_hoosh_models_url(), h2, hoosh_probe_opts());   # 0.44.2
         if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
         status = sandhi_http_status(r);
     }
@@ -1030,7 +1030,7 @@ fn hoosh_list_provider_models(provider) {
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     ui_emit(ROLE_FAINT, "  -> hoosh "); oprintln(url);
-    var r = sandhi_http_get(url, h);
+    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: fail fast — this runs before the first paint
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(ename);
@@ -1092,6 +1092,66 @@ fn _hoosh_model() {
     m = config_hoosh_model();
     if (m != 0) { return m; }
     return "default";
+}
+
+# --- socket deadlines (0.44.2) ------------------------------------------------------------------------
+#
+# Every gateway call in this tree used sandhi's plain verbs, which pass `opts == 0`, which means
+# read_ms/write_ms/connect_ms are all 0, which means SO_RCVTIMEO is never set and the connect is a plain
+# blocking connect. A peer that accepts and then goes silent held thoth in `recv` with no way out — see
+# config_hoosh_timeout_ms for why the keyboard could not rescue it either. These two option objects are
+# what every call site now passes instead.
+#
+# TWO profiles, because the two kinds of call have opposite requirements:
+#
+#   TURN   — a model call. Slow by nature (a reasoning model can think for minutes before its first
+#            token), so the deadline is the operator's [hoosh].timeout_ms, generous by default.
+#   PROBE  — reachability, the model catalog, the recap call. These run at STARTUP and inside the paint
+#            path, where the operator is waiting on a screen that has not been drawn yet. A black-hole
+#            gateway must not hold the TUI hostage before its first frame, so these fail fast and the
+#            seam reports "unreachable" — which is the honest answer and already a supported state.
+#
+# max_response_bytes is deliberately left at sandhi's default: the pre-0.44.2 no-options path used that
+# same default, so leaving it alone keeps response handling byte-identical and confines this change to
+# timing. The objects are cached (rebuilt only when the configured value changes, so /reload lands).
+var HOOSH_CONNECT_MS = 10000;    # TCP+TLS establishment; a gateway that will not accept is not "slow"
+var HOOSH_PROBE_MS = 6000;       # read deadline for probe/catalog calls — the operator is watching
+var HOOSH_PROBE_CONNECT_MS = 3000;
+var _hoosh_opts_turn = 0;
+var _hoosh_opts_turn_ms = 0 - 1;
+var _hoosh_opts_probe = 0;
+
+# hoosh_http_opts: the TURN profile. Returns 0 when [hoosh].timeout_ms is explicitly 0 — sandhi treats a
+# null opts as "no deadlines", so that spelling restores the exact pre-0.44.2 behaviour for anyone who
+# wants it, with no separate code path.
+fn hoosh_http_opts() {
+    var ms = config_hoosh_timeout_ms();
+    if (ms == 0) { return 0; }
+    if ((_hoosh_opts_turn == 0) || (_hoosh_opts_turn_ms != ms)) {
+        var o = sandhi_http_options_new();
+        if (o == 0) { return 0; }                    # allocation failed -> unbounded, as before (never a crash)
+        sandhi_http_options_read_ms(o, ms);
+        sandhi_http_options_write_ms(o, ms);
+        sandhi_http_options_connect_ms(o, HOOSH_CONNECT_MS);
+        _hoosh_opts_turn = o;
+        _hoosh_opts_turn_ms = ms;
+    }
+    return _hoosh_opts_turn;
+}
+
+# hoosh_probe_opts: the PROBE profile. Fixed, not configurable — its whole purpose is to be short, and a
+# user who raises [hoosh].timeout_ms for a slow model does not thereby want a six-second reachability
+# check to become a three-minute one.
+fn hoosh_probe_opts() {
+    if (_hoosh_opts_probe == 0) {
+        var o = sandhi_http_options_new();
+        if (o == 0) { return 0; }
+        sandhi_http_options_read_ms(o, HOOSH_PROBE_MS);
+        sandhi_http_options_write_ms(o, HOOSH_PROBE_MS);
+        sandhi_http_options_connect_ms(o, HOOSH_PROBE_CONNECT_MS);
+        _hoosh_opts_probe = o;
+    }
+    return _hoosh_opts_probe;
 }
 
 # _hoosh_auth_header: cache and return the "Bearer <token>" header value, or 0
@@ -1217,7 +1277,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", stream) "); oprintln(url);
     _reply_begin();  # 0.15.1: bracket the reply-render sink (mdhl highlighter) around the stream
     intr_arm();      # 0.17.4: enter Esc-poll mode around the stream (TUI-only; no-op off OUT_RING)
-    var sr = sandhi_http_stream(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell);
+    var sr = sandhi_http_stream_opts(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell, hoosh_http_opts());   # 0.44.2: per-read deadline
     intr_disarm();   # 0.17.4: restore cooked (for a following confirm / the next turn)
     _reply_end();    # flush the reply-render sink (residual line + any open block) BEFORE status branching, so every exit path drains
     var serr = sandhi_stream_err(sr);
@@ -1253,7 +1313,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
 # stream mode cannot). I/O.
 fn _hoosh_blocking_turn(url, h, len, model) {
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ") "); oprintln(url);
-    var r = sandhi_http_post(url, h, _hoosh_req, len);
+    var r = sandhi_http_post_opts(url, h, _hoosh_req, len, hoosh_http_opts());   # 0.44.2: per-read deadline
     var ek = sandhi_http_err_kind(r);
     if (ek != SANDHI_OK) {
         # NB: bind to a var before println — passing an explicitly `: i64`-typed

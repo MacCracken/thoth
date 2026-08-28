@@ -666,7 +666,7 @@ fn _tui_read_mouse() {
     var c[8];
     var go = 1;
     while (go == 1) {
-        if (syscall(SYS_READ, 0, &c, 1) <= 0) { go = 0; }         # EOF -> stop (fin stays 0)
+        if (_tui_getb(&c) == 0) { go = 0; }                       # EOF -> stop (fin stays 0)
         else {
             var t = load8(&c);
             if ((t == 77) || (t == 109)) { fin = t; go = 0; }     # 'M' press / 'm' release -> terminator
@@ -685,6 +685,92 @@ fn _tui_read_mouse() {
     return k;
 }
 
+# --- one-byte pushback + a timed follow-up read (0.44.2) ----------------------------------------------
+#
+# The ESC branch below has to answer an ambiguous question: is this a lone Esc, or the first byte of an
+# escape SEQUENCE? Until 0.44.2 it answered by doing a BLOCKING read of the next byte and then, if that
+# byte was not '[', returning KEY_ESC — with the byte already consumed and thrown away. Two bugs fell out
+# of that one line: pressing Esc BLOCKED the TUI until some other key was pressed, and that key was then
+# EATEN (Esc-then-x closed the search and lost the x). Fixed with the two primitives every terminal
+# reader eventually grows: a one-byte pushback, so a byte that turns out not to belong to this sequence
+# is returned to the stream, and a short timed read, so a lone Esc resolves on its own.
+var _tui_pushback = 0 - 1;      # a byte read but not consumed, or -1
+var TUI_ESC_SEQ_MS = 30;        # how long the byte after ESC has to arrive before it is a lone Esc
+
+# _tui_getb: blocking read of one byte, honouring the pushback. 1 = a byte is in `out`, 0 = EOF.
+fn _tui_getb(out) {
+    if (_tui_pushback >= 0) { store8(out, _tui_pushback); _tui_pushback = 0 - 1; return 1; }
+    if (syscall(SYS_READ, 0, out, 1) <= 0) { return 0; }
+    return 1;
+}
+
+# _tui_getb_timed: like _tui_getb, but gives up after `ms` with 0 instead of blocking. poll(2) is the
+# portable ms-granular wait already used across this tree (lib/chrono.cyr's sleep_ms is poll(NULL,0,ms),
+# and src/exec.cyr's reap loop is the same call). The pollfd is built byte-wise: fd 0 is four zero bytes,
+# then events = POLLIN (1) in the low byte of the next short, then a zeroed revents.
+#
+# On a target where poll is not a real poll (the Windows reroute maps it to Sleep), this must NOT
+# silently report "no byte" — that would turn every arrow key into a lone Esc. Those targets fall through
+# to the blocking read, which is exactly the pre-0.44.2 behaviour: no regression, just no improvement.
+fn _tui_getb_timed(out, ms) {
+    if (_tui_pushback >= 0) { store8(out, _tui_pushback); _tui_pushback = 0 - 1; return 1; }
+    #ifdef CYRIUS_TARGET_LINUX
+    var pfd[8];
+    var z = 0;
+    while (z < 8) { store8(&pfd + z, 0); z = z + 1; }
+    store8(&pfd + 4, 1);                       # events = POLLIN
+    if (syscall(7, &pfd, 1, ms) <= 0) { return 0; }
+    return _tui_getb(out);
+    #endif
+    #ifdef CYRIUS_TARGET_MACOS
+    var pfd2[8];
+    var z2 = 0;
+    while (z2 < 8) { store8(&pfd2 + z2, 0); z2 = z2 + 1; }
+    store8(&pfd2 + 4, 1);
+    if (syscall(7, &pfd2, 1, ms) <= 0) { return 0; }
+    return _tui_getb(out);
+    #endif
+    return _tui_getb(out);
+}
+
+# _tui_push: hand a byte back to the stream so the next tui_read_key sees it first.
+fn _tui_push(b) { _tui_pushback = b & 255; return 0; }
+
+# _tui_read_mouse_x10: the LEGACY mouse report — ESC[M followed by three raw bytes, each its value plus
+# 32. thoth asks for SGR (?1006h) alongside ?1000h, but 1006 is an xterm EXTENSION: a terminal that does
+# not implement it honours the ?1000h half and answers in this encoding instead. Undecoded, that was the
+# worst of both worlds — the wheel did not scroll the feed AND three junk bytes landed in the composer on
+# every scroll. Same decoder as the SGR path (X10 reports presses only, so the final is always 'M'), so
+# wheel-up/down and a left click behave identically on either encoding. Coordinates above 223 cannot be
+# expressed in this encoding at all; that is the protocol's limit, not a clip introduced here.
+fn _tui_read_mouse_x10() {
+    var c[8];
+    if (_tui_getb(&c) == 0) { return KEY_NONE; }
+    var cb = (load8(&c) & 255) - 32;
+    if (_tui_getb(&c) == 0) { return KEY_NONE; }
+    var cx = (load8(&c) & 255) - 32;
+    if (_tui_getb(&c) == 0) { return KEY_NONE; }
+    var cy = (load8(&c) & 255) - 32;
+    var k = _tui_mouse_decode(cb, 77);          # 77 = 'M': the legacy report is a PRESS report
+    if (k == KEY_MOUSE) { _mouse_row = cy; _mouse_col = cx; }
+    return k;
+}
+
+# _tui_ss3_final: map an SS3 key (ESC O <final>) to a KEY_*. Terminals in DECCKM "application cursor key"
+# mode — which tmux and screen turn on — send arrows and Home/End as ESC O A/B/C/D/H/F rather than
+# ESC [ A. thoth never sets DECCKM itself, but it does not control the multiplexer it runs under: inside
+# tmux the arrow keys were falling through as a lone Esc plus a bare letter, so pressing Up TYPED an 'A'
+# into the composer. F1-F4 (P/Q/R/S) are recognised and ignored rather than leaked. Pure.
+fn _tui_ss3_final(f) {
+    if (f == 65) { return KEY_UP; }
+    if (f == 66) { return KEY_DOWN; }
+    if (f == 67) { return KEY_RIGHT; }
+    if (f == 68) { return KEY_LEFT; }
+    if (f == 72) { return KEY_HOME; }
+    if (f == 70) { return KEY_END; }
+    return KEY_NONE;                            # F1-F4 and anything else: consumed, never leaked
+}
+
 # tui_read_key: read + decode one keypress in raw mode (ASCII + CSI arrows/home/end/
 # page + the kitty CSI-u keys). KEY_CHAR sets _tui_key_ch. stdin EOF -> KEY_EOF. Ctrl-X /
 # Ctrl-C close; Ctrl-D is NOT bound (a stray Ctrl-D is ignored). Alt+Enter (ESC CR) and
@@ -693,7 +779,7 @@ fn _tui_read_mouse() {
 # an SGR mouse intro (ESC[<) reads the event and returns a wheel/scroll or KEY_MOUSE (0.17.2).
 fn tui_read_key() {
     var c[8];
-    if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_EOF; }
+    if (_tui_getb(&c) == 0) { return KEY_EOF; }
     var b = load8(&c);
     if (b == 13) { return KEY_ENTER; }
     if (b == 10) { return KEY_ENTER; }
@@ -714,12 +800,20 @@ fn tui_read_key() {
     if (b == 16) { return KEY_PICK; }           # Ctrl-P — open the model-picker palette (0.24.0)
     if (b == 9) { return KEY_TAB; }             # Tab — cycle composer <-> tree focus
     if (b == 27) {
-        if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+        # 0.44.2: a TIMED follow-up read. Nothing within TUI_ESC_SEQ_MS means the operator pressed Esc and
+        # nothing else — return KEY_ESC without blocking and without swallowing whatever they type next.
+        if (_tui_getb_timed(&c, TUI_ESC_SEQ_MS) == 0) { return KEY_ESC; }
         var a = load8(&c);
         if ((a == 13) || (a == 10)) { return KEY_NEWLINE; }   # Alt+Enter (legacy ESC CR/LF) -> newline
         if (a == 98) { return KEY_WORD_LEFT; }                 # Alt-b -> word left (7-bit meta / ESC-prefix; 8-bit meta unhandled) (0.17.1)
         if (a == 102) { return KEY_WORD_RIGHT; }               # Alt-f -> word right (0.17.1)
-        if (a != 91) { return KEY_ESC; }                       # not CSI '[' (incl. a lone Esc) -> KEY_ESC (0.18.4: closes search; a no-op elsewhere, byte-identical to the old KEY_NONE — the trailing byte was already consumed here)
+        if (a == 79) {                                         # ESC O — SS3 (tmux/screen application cursor keys)
+            if (_tui_getb(&c) == 0) { return KEY_NONE; }
+            return _tui_ss3_final(load8(&c));
+        }
+        # 0.44.2: not a sequence we know. PUSH THE BYTE BACK instead of eating it — Esc-then-x now closes
+        # the modal AND types the x, which is what every other terminal application does.
+        if (a != 91) { _tui_push(a); return KEY_ESC; }
         # General CSI parse: drain the parameter/intermediate bytes (0x30-0x3F: digits, ';',
         # ':' …) accumulating p1 and an optional p2 (after the first ';'), and stop at the
         # final byte (0x40-0x7E). ONE parser for every CSI form — arrows, Home/End, PageUp/Dn,
@@ -728,9 +822,10 @@ fn tui_read_key() {
         var p1 = 0;
         var p2 = 0 - 1;
         var semi = 0;
-        if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+        if (_tui_getb(&c) == 0) { return KEY_NONE; }
         var t = load8(&c);
         if (t == 60) { return _tui_read_mouse(); }            # ESC[< -> SGR mouse event (0.17.2)
+        if (t == 77) { return _tui_read_mouse_x10(); }        # ESC[M  -> legacy X10 mouse event (0.44.2)
         var go = 1;
         while (go == 1) {
             if ((t >= 64) && (t <= 126)) { go = 0; }              # final byte -> done (t holds it)
@@ -739,7 +834,7 @@ fn tui_read_key() {
                     if (semi == 0) { p1 = p1 * 10 + (t - 48); }
                     elif (semi == 1) { if (p2 < 0) { p2 = 0; } p2 = p2 * 10 + (t - 48); }
                 } elif (t == 59) { semi = semi + 1; }             # ';' -> next parameter group
-                if (syscall(SYS_READ, 0, &c, 1) <= 0) { return KEY_NONE; }
+                if (_tui_getb(&c) == 0) { return KEY_NONE; }
                 t = load8(&c);
             }
         }
@@ -900,13 +995,23 @@ fn tui_draw_palette() {
     var prefix = led_buf();
     var any = 0;
     var i = 0;
+    # 0.44.2: stop on the terminal WIDTH rather than on SLASH_N. DECAWM is off so an overrun would clip
+    # rather than corrupt, but clipping mid-name reads as a command that does not exist — ending on a
+    # whole name plus a "+N" count tells the truth about what was left out.
+    var used = 0;
+    var budget = _tui_cols - 6;
+    if (budget < 8) { budget = 8; }
+    var left = 0;
     while (i < SLASH_N) {
         if (cstr_starts_with(_slash_name(i), prefix) == 1) {
-            emit(" "); ui_emit(ROLE_ACCENT, _slash_name(i));
+            var w = strlen(_slash_name(i)) + 1;
+            if ((used + w) > budget) { left = left + 1; }
+            else { emit(" "); ui_emit(ROLE_ACCENT, _slash_name(i)); used = used + w; }
             any = 1;
         }
         i = i + 1;
     }
+    if (left > 0) { ui_emit(ROLE_FAINT, " +"); ofmt_int(left); ui_emit(ROLE_FAINT, " more"); }
     if (any == 0) { ui_emit(ROLE_FAINT, "  (no command — Enter sends as a task)"); }
     return 0;
 }
@@ -1369,7 +1474,181 @@ fn spin_paint() {
     return 0;
 }
 fn spin_begin() { _spin_frame = 0; _spin_active = 1; _spin_label = 0; _stream_last_paint_ms = 0; spin_paint(); return 0; }   # start each turn at frame 0, unlabeled; _stream_last=0 so the first streamed chunk paints instantly
-fn spin_end() { _spin_active = 0; return 0; }   # caller redraws the hint row after
+fn spin_end() { spin_anim_disarm(); _spin_active = 0; return 0; }   # caller redraws the hint row after
+
+# --- the working-state ANIMATOR (0.44.2) ------------------------------------------------------------
+#
+# The block above documents a real limitation honestly: the main loop is inside dispatch, so the frame
+# could only advance where dispatch handed control back — per streamed SSE chunk. Everywhere else the
+# glyph HELD STILL: while waiting for a gateway's first byte (seconds, on a cold cloud round), while a
+# daimon tool ran, and for a whole non-streaming turn. To an operator that is not "honest stillness", it
+# is "the thing froze" — reported as exactly that. The fix is not to fake motion; it is to actually have
+# something running while the main thread is blocked in `recv`.
+#
+# A short-lived WORKER thread owns the glyph for the duration of one blocking call. It is armed
+# immediately before the call and disarmed (and JOINED) immediately after, so it never outlives the
+# window it was created for and cannot write once the main thread is painting again.
+#
+# ⚠ TWO WRITERS, ONE TERMINAL. The handshake is a single atomic word:
+#
+#     IDLE      the main thread owns the terminal (the worker must not write)
+#     ARMED     the worker may take the terminal for one frame
+#     PAINTING  the worker IS writing right now
+#
+# The worker only writes after CAS(ARMED -> PAINTING) succeeds, and drops straight back to ARMED. The main
+# thread takes control with spin_anim_claim(), which CASes ARMED -> IDLE and, if it finds PAINTING,
+# WAITS for that frame to finish — so a main-thread write can never interleave with a worker frame. The
+# frame itself is composed into a buffer and emitted as ONE write(2) of a self-contained sequence
+# (DECSC, move, paint, DECRC), which leaves the main thread's cursor exactly where it was.
+#
+# Degrades to the old behaviour with no special case: without threads (Windows/AGNOS) or on a
+# thread_create failure the arm is a no-op, the glyph holds still, and nothing else changes.
+var SPIN_ANIM_IDLE = 0;
+var SPIN_ANIM_ARMED = 1;
+var SPIN_ANIM_PAINTING = 2;
+var SPIN_ANIM_MS = 90;            # frame period — fast enough to read as motion, slow enough to be free
+var SPIN_ANIM_STEP_MS = 15;       # run-flag poll inside a frame, so disarm latency stays ~one step
+var SPIN_ANIM_BUF = 256;
+var _spin_anim_state = 0;         # alloc(8) — the atomic handshake word
+var _spin_anim_run = 0;           # alloc(8) — 1 while the worker should keep looping
+var _spin_anim_thread = 0;        # thread handle, 0 when not running
+var _spin_anim_buf = 0;           # alloc(SPIN_ANIM_BUF) — one frame, emitted as a single write
+
+fn _spin_anim_alloc() {
+    if (_spin_anim_state == 0) {
+        _spin_anim_state = alloc(8);
+        _spin_anim_run = alloc(8);
+        _spin_anim_buf = alloc(SPIN_ANIM_BUF);
+        if ((_spin_anim_state == 0) || (_spin_anim_run == 0) || (_spin_anim_buf == 0)) { return 0; }
+        atomic_store(_spin_anim_state, SPIN_ANIM_IDLE);
+        atomic_store(_spin_anim_run, 0);
+    }
+    return 1;
+}
+
+# _spin_anim_ap / _spin_anim_apc: bounded appends into the one-write frame buffer.
+fn _spin_anim_apc(off, c) {
+    if (off < (SPIN_ANIM_BUF - 1)) { store8(_spin_anim_buf + off, c); return off + 1; }
+    return off;
+}
+fn _spin_anim_ap(off, s) {
+    var i = 0;
+    while (load8(s + i) != 0) { off = _spin_anim_apc(off, load8(s + i)); i = i + 1; }
+    return off;
+}
+
+# _spin_anim_frame: compose the whole frame — save cursor, move to the hint row, clear it, draw the
+# glyph + label, restore cursor — and return its byte length. Uses DECSC/DECRC (ESC 7 / ESC 8) rather
+# than recomputing the composer position: the worker must not read the layout globals the main thread
+# owns, and "put it back exactly where it was" is the only cursor contract it needs.
+fn _spin_anim_frame(row) {
+    var off = 0;
+    off = _spin_anim_apc(off, 27); off = _spin_anim_apc(off, 55);          # ESC 7  — save cursor
+    off = _spin_anim_apc(off, 27); off = _spin_anim_apc(off, 91);          # CSI
+    var rb[24];
+    var rn = fmt_int_buf(row, &rb);
+    var ri = 0;
+    while (ri < rn) { off = _spin_anim_apc(off, load8(&rb + ri)); ri = ri + 1; }
+    off = _spin_anim_ap(off, ";1H");
+    off = _spin_anim_apc(off, 27); off = _spin_anim_apc(off, 91); off = _spin_anim_apc(off, 75);   # CSI K
+    off = _spin_anim_ap(off, ui_sgr(ROLE_ACCENT));
+    off = _spin_anim_ap(off, spin_glyph(_spin_frame));
+    off = _spin_anim_ap(off, ui_reset());
+    off = _spin_anim_ap(off, ui_sgr(ROLE_FAINT));
+    if (_spin_label == 1) { off = _spin_anim_ap(off, " running "); off = _spin_anim_ap(off, _spin_label_buf); off = _spin_anim_ap(off, "…"); }
+    else { off = _spin_anim_ap(off, " working…"); }
+    off = _spin_anim_ap(off, ui_reset());
+    off = _spin_anim_apc(off, 27); off = _spin_anim_apc(off, 56);          # ESC 8  — restore cursor
+    return off;
+}
+
+# _spin_anim_worker: the thread body. One frame per SPIN_ANIM_MS, polled in short steps so a disarm is
+# noticed promptly. Writes ONLY while it holds the PAINTING state.
+fn _spin_anim_worker(arg) {
+    var row = arg;
+    while (atomic_load(_spin_anim_run) == 1) {
+        var waited = 0;
+        while ((waited < SPIN_ANIM_MS) && (atomic_load(_spin_anim_run) == 1)) {
+            sleep_ms(SPIN_ANIM_STEP_MS);
+            waited = waited + SPIN_ANIM_STEP_MS;
+        }
+        if (atomic_load(_spin_anim_run) == 1) {
+            if (atomic_cas(_spin_anim_state, SPIN_ANIM_ARMED, SPIN_ANIM_PAINTING) == 1) {
+                spin_advance();
+                var n = _spin_anim_frame(row);
+                if (n > 0) { syscall(SYS_WRITE, 1, _spin_anim_buf, n); }
+                atomic_store(_spin_anim_state, SPIN_ANIM_ARMED);
+            }
+        }
+    }
+    return 0;
+}
+
+# spin_anim_arm: hand the glyph to a worker for the duration of ONE blocking call. TUI-only and
+# spinner-only: off the alt-screen (OUT_RING is the TUI's sink) or with no dispatch in flight there is
+# nothing to animate and this is a no-op, so the line REPL, one-shot and the GUI are untouched.
+fn spin_anim_arm() {
+    if (_spin_active == 0) { return 0; }
+    if (out_mode() != OUT_RING) { return 0; }
+    if (_spin_anim_thread != 0) { return 0; }          # already armed (nested call) — one worker only
+    if (_spin_anim_alloc() == 0) { return 0; }
+    atomic_store(_spin_anim_run, 1);
+    atomic_store(_spin_anim_state, SPIN_ANIM_ARMED);
+    var t = thread_create(&_spin_anim_worker, tui_hint_row(_tui_rows));
+    if (t == 0) {                                       # no threads on this target -> the 0.9.2 behaviour
+        atomic_store(_spin_anim_run, 0);
+        atomic_store(_spin_anim_state, SPIN_ANIM_IDLE);
+        return 0;
+    }
+    _spin_anim_thread = t;
+    return 1;
+}
+
+# spin_anim_claim: the main thread takes the terminal back for its own writes WITHOUT tearing down the
+# worker — used by the SSE callback, which paints between frames of the same blocking call. Waits out an
+# in-flight worker frame. Pairs with spin_anim_release.
+fn spin_anim_claim() {
+    if (_spin_anim_thread == 0) { return 0; }
+    var got = 0;
+    while (got == 0) {
+        if (atomic_cas(_spin_anim_state, SPIN_ANIM_ARMED, SPIN_ANIM_IDLE) == 1) { got = 1; }
+        elif (atomic_load(_spin_anim_state) == SPIN_ANIM_IDLE) { got = 1; }
+        else { sleep_ms(1); }                           # PAINTING — let that one frame finish
+    }
+    return 0;
+}
+fn spin_anim_release() {
+    if (_spin_anim_thread == 0) { return 0; }
+    if (atomic_load(_spin_anim_run) == 1) { atomic_cas(_spin_anim_state, SPIN_ANIM_IDLE, SPIN_ANIM_ARMED); }
+    return 0;
+}
+
+# spin_anim_disarm: stop and JOIN the worker. After this returns the main thread is the only writer
+# again — that guarantee is why the thread is joined rather than detached.
+fn spin_anim_disarm() {
+    if (_spin_anim_thread == 0) { return 0; }
+    atomic_store(_spin_anim_run, 0);
+    spin_anim_claim();                                  # wait out any frame already in flight
+    thread_join(_spin_anim_thread);
+    _spin_anim_thread = 0;
+    atomic_store(_spin_anim_state, SPIN_ANIM_IDLE);
+    return 0;
+}
+fn spin_anim_active() { if (_spin_anim_thread != 0) { return 1; } return 0; }
+
+# spin_tick: advance + repaint the glyph from a caller that ALREADY owns the main thread and is polling
+# anyway — the shell tool's waitpid loop (src/exec.cyr) ticks every 100 ms while a command runs. No thread
+# and no handshake needed there: the main thread is the only writer, so this is just the frame the SSE
+# callback would have given it. Suppressed when an animator worker is armed (it owns the glyph) and off
+# the TUI. Wired as a SEAM (exec_wait_tick_set) so exec.cyr keeps no dependency on the TUI.
+fn spin_tick() {
+    if (_spin_active == 0) { return 0; }
+    if (out_mode() != OUT_RING) { return 0; }
+    if (_spin_anim_thread != 0) { return 0; }
+    spin_advance();
+    spin_paint();
+    return 0;
+}
 
 # --- the self-managed feed painter (0.9.1) --------------------------------
 # 0.9.0 scrolled command output natively in a DECSTBM region. 0.9.1 OWNS the
@@ -1994,6 +2273,46 @@ fn tui_bpaste_disable() { emit_raw("\x1b[?2004l"); return 0; }
 # so native click-drag text selection is intercepted in the feed — Shift+drag bypasses it in most
 # terminals (standard TUI behavior).
 fn tui_mouse_enable() { emit_raw("\x1b[?1000h\x1b[?1006h"); return 0; }
+
+# tui_wrap_disable / tui_wrap_enable (0.44.2): DECAWM (?7) — the terminal's automatic line wrap.
+#
+# ⚠ THE HINT ROW IS THE LAST ROW, AND IT WAS THE ONE BAND NOBODY CLIPPED. Every other band budgets its
+# columns (the feed through feed_clip_seg, the tree through feed_clip, the composer through _comp_avail);
+# tui_draw_hint just writes. The slash palette lists every matching command, and for the bare prefix "/"
+# that is all of them — 177 visible columns. With autowrap on, writing past column 80 of the LAST row
+# makes the terminal SCROLL the alt screen: the status bar and the oldest feed rows walk off the top, and
+# because the next keystroke repaints the composer at absolute rows over a shifted frame, the damage
+# compounds until a full repaint. The default hint is already 83 columns once hoosh is configured and one
+# line is in the recall ring, so this was reachable without the palette at all.
+#
+# Turning DECAWM off for the alt screen fixes the whole class in one place rather than teaching six
+# writers to count columns: thoth clips every band it cares about itself, so wrap was only ever a way for
+# a miscount to become corruption. Restored on exit — the operator's shell wants its wrap back.
+fn tui_wrap_disable() { emit_raw("\x1b[?7l"); return 0; }
+fn tui_wrap_enable() { emit_raw("\x1b[?7h"); return 0; }
+# tui_modes_reassert (0.44.2): re-send every DECSET this front end depends on.
+#
+# ⚠ THE MODES WERE SET ONCE, IN tui_loop's PREAMBLE, AND NEVER AGAIN. A child process that runs on
+# thoth's own terminal can undo any of them: a full-screen program (`less`, `vim`, `top`) pops the alt
+# screen and pops mouse tracking on exit; a plain `reset`/`tput init` clears the lot; a curses program
+# that dies mid-draw leaves whatever it had. thoth's only child on the shared terminal is `/run`, and
+# after ONE such command the operator has an alt screen that looks normal and a MOUSE WHEEL THAT NO
+# LONGER SCROLLS THE FEED — reported as exactly that, and impossible to attribute to the /run that
+# caused it minutes earlier. All four sequences are idempotent, so re-sending them is free.
+fn tui_modes_reassert() {
+    # ⚠ GATED ON THE LOOP ACTUALLY RUNNING, not on the tier. main.cyr binds this hook unconditionally
+    # (it has no way to know which front end will win), and every sequence below is a DECSET — firing
+    # them from the line REPL would shove a plain terminal into the alt screen after a /run and leave
+    # the user staring at a blank one. `_tui_running` is set inside tui_loop and cleared on exit, so it
+    # is the only flag that answers "is an alt screen up right now".
+    if (_tui_running == 0) { return 0; }
+    tty_alt_enter();
+    tui_kitty_enable();
+    tui_bpaste_enable();
+    tui_mouse_enable();
+    tui_wrap_disable();
+    return 0;
+}
 fn tui_mouse_disable() { emit_raw("\x1b[?1006l\x1b[?1000l"); return 0; }
 
 # turn-interrupt substrate (intr_*) moved to src/intr.cyr (0.30.8 decoupling).
@@ -2071,6 +2390,7 @@ fn tui_loop() {
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tui_bpaste_enable();                          # 0.17.0: bracketed paste (multi-line paste -> composer)
     tui_mouse_enable();                           # 0.17.2: SGR mouse (wheel scroll, click focus/tree)
+    tui_wrap_disable();                           # 0.44.2: no autowrap — an over-long hint row must clip, never scroll the frame
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
@@ -2295,6 +2615,7 @@ fn tui_loop() {
         }
     }
     # teardown — restore the terminal on every exit path.
+    tui_wrap_enable();              # 0.44.2: give the operator's shell its autowrap back
     tui_mouse_disable();            # 0.17.2: stop SGR mouse reporting (don't leave the terminal in it)
     tui_bpaste_disable();           # 0.17.0: pop bracketed-paste mode
     tui_kitty_disable();            # 0.11.9: pop the kitty keyboard protocol (restore legacy keys)

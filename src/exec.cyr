@@ -16,8 +16,26 @@ fn run_shell(cmdline) {
     vec_push(args, "/bin/sh");
     vec_push(args, "-c");
     vec_push(args, cmdline);
-    return exec_vec(args);
+    var rc = exec_vec(args);
+    exec_child_done();   # 0.44.2: the child owned the terminal — let the front end re-assert its modes
+    return rc;
 }
+
+# --- the wait-loop tick seam (0.44.2) -----------------------------------------------------------------
+# exec.cyr is SUBSTRATE and knows nothing about presentation. But its waitpid poll loop is the only place
+# a running shell command hands the main thread back, so it is the only place the TUI's working indicator
+# can advance while a command runs. Rather than reach up into the TUI (the layering the seams in
+# src/seams.cyr exist to prevent), the loop calls an optional hook that main.cyr binds to spin_tick.
+# Unbound — line REPL, one-shot, the GUI, every test binary — it is a null check.
+var _exec_wait_tick = 0;
+fn exec_wait_tick_set(fp) { _exec_wait_tick = fp; return 0; }
+
+# The other half of the same seam: a hook fired after a child that SHARED thoth's terminal has exited, so
+# the front end can re-assert the terminal modes that child may have cleared (main.cyr binds
+# tui_modes_reassert). Only run_shell needs it — every other child in this tree redirects to a file.
+var _exec_child_done = 0;
+fn exec_child_done_set(fp) { _exec_child_done = fp; return 0; }
+fn exec_child_done() { if (_exec_child_done != 0) { fncall0(_exec_child_done); } return 0; }
 
 # --- timed, output-capturing shell exec (0.16.0; the model's `shell` tool backend) ---
 #
@@ -255,6 +273,11 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
         } else {
             syscall(7, 0, 0, 100);                    # poll(NULL,0,100ms) — portable 100ms sleep
             elapsed = elapsed + 100;
+            # 0.44.2: this loop is the ONE place a running shell command hands the main thread back, so it
+            # is where the working indicator gets to move. Through the seam — exec.cyr is substrate and
+            # must not reach into the TUI; main.cyr binds spin_tick. Unbound (line REPL, one-shot, GUI,
+            # tests) it is a null check, so the floor is unchanged.
+            if (_exec_wait_tick != 0) { fncall0(_exec_wait_tick); }
         }
     }
     var timed = 0;

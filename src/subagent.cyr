@@ -348,7 +348,7 @@ fn _sub_iter(model, sys, mem, tools_len) {
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_post(_hoosh_endpoint_url(), h, _sub_req, len);
+    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _sub_req, len, hoosh_http_opts());   # 0.44.2: per-read deadline
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _agent_round_kind = 2; return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);

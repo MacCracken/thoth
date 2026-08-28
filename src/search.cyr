@@ -42,6 +42,16 @@ var SEARCH_LINE_CAP   = 400;     # per-line bytes reported (a minified bundle is
 var _search_out = 0;             # SEARCH_OUT_CAP output buffer
 var _search_file = 0;            # SEARCH_FILE_CAP file-read buffer
 var _search_path = 0;            # PROJECT_PATH_MAX path scratch for the walk
+# ⚠ 0.44.2 — SEARCH_MAX_FILES WAS NOT A BOUND ON THE WALK. It is read and incremented only inside
+# _search_scan_file, so it bounded files OPENED, not entries VISITED — and a glob-only search never opens
+# anything. With fewer than SEARCH_MAX_HITS matches nothing stopped it: `search {"glob":"*.toml"}` in a
+# built Rust project walked every entry under target/, three `is_symlink` syscalls deep per path
+# component, allocating a path copy per directory out of a bump heap that never frees. And nothing could
+# cancel it: _search_walk had no intr_check, and the executor only polls BETWEEN tool calls. A default-on,
+# ungated tool the model reaches with no confirm could therefore stall a turn for minutes.
+# Now the ENTRY count is the bound (it counts what the walk actually does), and the walk honours Esc.
+var _search_entries = 0;         # directory entries VISITED this call (the real work bound)
+var SEARCH_MAX_ENTRIES = 200000; # ~a large monorepo; far past any real project, far short of a stall
 var _search_hits = 0;            # matches reported this call
 var _search_files_seen = 0;      # files opened this call
 var _search_truncated = 0;       # 1 if a bound bit (hits/files/output) — reported, never silent
@@ -200,6 +210,13 @@ fn _search_walk(dir, needle, ic, globpat, depth) {
             elif (_project_no_symlink(_search_path) == 0) { i = i + 1; }   # skip links; never follow one
             elif (_search_skip_dir(e) == 1) { i = i + 1; }
             else {
+                # 0.44.2: the walk's own bound + cancellation, checked per ENTRY (the unit of work) rather
+                # than per file opened. Both set the truncation flag, so the summary already says the
+                # result is incomplete — a search that quietly returns less than it found is the failure
+                # this file's own comments call out.
+                _search_entries = _search_entries + 1;
+                if (_search_entries > SEARCH_MAX_ENTRIES) { _search_truncated = 1; return 1; }
+                if (intr_check() == 1) { _search_truncated = 1; return 1; }
                 if (is_dir(str_from(_search_path)) == 1) {
                     var sub = alloc(o + 1);
                     if (sub != 0) {
@@ -236,6 +253,17 @@ fn _search_skip_dir(name) {
     if (streq(name, "build") == 1) { return 1; }
     if (streq(name, "node_modules") == 1) { return 1; }
     if (streq(name, "rust-old") == 1) { return 1; }   # the AGNOS-family parity oracles: large, frozen, never the answer
+    # 0.44.2: the rest of the usual build/dependency output. Each is machine-generated, each is routinely
+    # the largest thing in a checkout, and none of it is ever the answer to "where is this code".
+    if (streq(name, "target") == 1) { return 1; }     # cargo
+    if (streq(name, "dist") == 1) { return 1; }
+    if (streq(name, ".venv") == 1) { return 1; }
+    if (streq(name, "venv") == 1) { return 1; }
+    if (streq(name, "__pycache__") == 1) { return 1; }
+    if (streq(name, ".mypy_cache") == 1) { return 1; }
+    if (streq(name, ".pytest_cache") == 1) { return 1; }
+    if (streq(name, ".next") == 1) { return 1; }
+    if (streq(name, ".cache") == 1) { return 1; }
     return 0;
 }
 
@@ -285,7 +313,7 @@ fn search_tool(args_cstr) {
     if (_search_out == 0) { _search_out = alloc(SEARCH_OUT_CAP); }
     if (_search_path == 0) { _search_path = alloc(PROJECT_PATH_MAX + 1); }
     if ((_search_out == 0) || (_search_path == 0)) { return "(search: out of memory)"; }
-    _search_off = 0; _search_hits = 0; _search_files_seen = 0; _search_truncated = 0;
+    _search_off = 0; _search_hits = 0; _search_files_seen = 0; _search_truncated = 0; _search_entries = 0;
 
     _search_walk(root, needle, ic, globpat, 0);
 
@@ -297,11 +325,23 @@ fn search_tool(args_cstr) {
     # A trailing summary, not a leading one: the model reads the hits first, and a count it can trust
     # matters most when a bound bit. Truncation is always stated — a search that silently returns less
     # than it found teaches the model the code does not contain what it does.
+    #
+    # ⚠ 0.44.2 — two wrong facts in one line. The plural suffix was a bare "es" for BOTH nouns, so a
+    # name search reported "6 filees"; and the "in N files scanned" clause printed
+    # `_search_files_seen`, which counts files OPENED to read their CONTENT — always 0 for a
+    # glob-only search, giving the flatly self-contradicting "6 filees in 0 files scanned". A model
+    # reading that learns the tool is broken and stops trusting the count. Now: the noun carries its
+    # own plural, and the scanned clause is omitted entirely when nothing was opened (a name search
+    # matches on the directory walk, so there is no scan count to report).
     _search_apc("\n(");
     _search_apint(_search_hits);
-    if (needle == 0) { _search_apc(" file"); } else { _search_apc(" match"); }
-    if (_search_hits != 1) { _search_apc("es"); }
-    _search_apc(" in "); _search_apint(_search_files_seen); _search_apc(" files scanned");
+    if (needle == 0) { _search_apc(" file"); if (_search_hits != 1) { _search_apc("s"); } }
+    else { _search_apc(" match"); if (_search_hits != 1) { _search_apc("es"); } }
+    if (_search_files_seen > 0) {
+        _search_apc(" in "); _search_apint(_search_files_seen);
+        _search_apc(" file"); if (_search_files_seen != 1) { _search_apc("s"); }
+        _search_apc(" scanned");
+    }
     if (_search_truncated == 1) { _search_apc("; LIMIT REACHED - results are incomplete, narrow with 'path' or 'glob'"); }
     _search_apc(")\n");
     store8(_search_out + _search_off, 0);

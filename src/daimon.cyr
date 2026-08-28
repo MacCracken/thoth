@@ -140,7 +140,7 @@ fn daimon_list_tools() {
     var url = _daimon_tools_endpoint();
     var h = sandhi_headers_new();
     ui_emit(ROLE_FAINT, "  -> daimon "); oprintln(url);
-    var r = sandhi_http_get(url, h);
+    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: registry/probe GET — fail fast
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
         return 0 - 1;
@@ -195,7 +195,7 @@ fn daimon_call(name, args_json) {
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
     ui_emit(ROLE_FAINT, "  -> daimon tool '"); ui_emit(ROLE_ACCENT, name); ui_emit(ROLE_FAINT, "' "); oprintln(url);
-    var r = sandhi_http_post(url, h, _daimon_req, len);
+    var r = sandhi_http_post_opts(url, h, _daimon_req, len, hoosh_http_opts());   # 0.44.2: a tool invoke gets the TURN deadline (an MCP tool may be slow)
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
         return 0 - 1;
@@ -254,7 +254,7 @@ fn daimon_invoke(name, args_json) {
     var len = daimon_build_call(_daimon_req, name, args_json);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    var r = sandhi_http_post(url, h, _daimon_req, len);
+    var r = sandhi_http_post_opts(url, h, _daimon_req, len, hoosh_http_opts());   # 0.44.2: a tool invoke gets the TURN deadline (an MCP tool may be slow)
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
@@ -316,7 +316,7 @@ fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap, st_out) {
 fn daimon_tools_value() {
     var url = _daimon_tools_endpoint();
     var h = sandhi_headers_new();
-    var r = sandhi_http_get(url, h);
+    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: registry/probe GET — fail fast
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }

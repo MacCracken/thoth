@@ -113,15 +113,156 @@ fn log_commit(level) {
     return 0;
 }
 
+# --- long text: the CONVERSATION in the log (0.44.2) ---------------------------------------------------
+#
+# The structured line is deliberately small (LOG_BUF_CAP) and sakshi is zero-alloc, so a model reply or a
+# multi-paragraph task does not fit in one event. It still belongs in the log: `--logs FILE` exists so a
+# session that CRASHES or HANGS leaves behind what it was doing, and "what it was doing" is mostly prose.
+#
+# So long values are emitted as a RUN of ordinary events, each carrying one bounded chunk:
+#
+#     event=task part=1 of=3 text=Review this project: read the README ...
+#
+# One line per chunk keeps the file grep-able and line-oriented (a partial last line after a crash is one
+# lost chunk, not a lost session). Control bytes are neutralised — a newline inside the value would end
+# the record early and a stray ESC would reach whatever reads the file, so both are folded to a visible
+# form here rather than at the far end.
+var LOG_TEXT_CHUNK = 480;        # value bytes per emitted line (LOG_BUF_CAP less the envelope + key)
+
+# _log_append_clean: append n bytes of arbitrary text, control bytes neutralised. A newline becomes a
+# literal backslash-n so one record stays one line; other C0/DEL bytes become '?'. Bounded by the buffer.
+fn _log_append_clean(p, n) {
+    var i = 0;
+    while (i < n) {
+        var b = load8(p + i) & 255;
+        if (b == 10) {
+            if (_log_off < (LOG_BUF_CAP - 2)) { store8(_log_buf + _log_off, 92); _log_off = _log_off + 1; store8(_log_buf + _log_off, 110); _log_off = _log_off + 1; }
+        } else {
+            if ((b < 32) || (b == 127)) { b = 63; }
+            if (_log_off < (LOG_BUF_CAP - 1)) { store8(_log_buf + _log_off, b); _log_off = _log_off + 1; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# log_text: emit `event=<event> part=i of=n <key>=<chunk>` lines covering text[0..len). A zero length
+# still emits ONE line with an empty value — "the model answered nothing" is itself worth recording, and
+# a silent no-op would read the same as logging being off. No-op when logging is unbound. I/O.
+fn log_text(event, key, p, len) {
+    if (_log_enabled == 0) { return 0; }
+    if (p == 0) { len = 0; }
+    var parts = 1;
+    if (len > 0) { parts = (len + LOG_TEXT_CHUNK - 1) / LOG_TEXT_CHUNK; }
+    var i = 0;
+    var off = 0;
+    while (i < parts) {
+        var n = len - off;
+        if (n > LOG_TEXT_CHUNK) { n = LOG_TEXT_CHUNK; }
+        if (n < 0) { n = 0; }
+        log_begin(event);
+        log_kv_int("part", i + 1);
+        log_kv_int("of", parts);
+        _log_append(" "); _log_append(key); _log_append("=");
+        if (n > 0) { _log_append_clean(p + off, n); }
+        log_commit(SK_INFO);
+        off = off + n;
+        i = i + 1;
+    }
+    return 0;
+}
+
+# log_tool: one line per executed tool call — name, verdict, whether it produced a usable result, its
+# wall-time and its size, plus the arguments (bounded). The ARGUMENTS matter: "read_file failed" is not a
+# post-mortem, "read_file {\"path\":\"src/tasks/health.js\"} failed" is. `kind` is the roundlog RL_* verdict,
+# rendered as a word so the file needs no key. No-op when logging is unbound. Pure + I/O via log_commit.
+var LOG_ARGS_MAX = 300;          # argument bytes recorded per call (a long paste is trimmed, never dropped)
+# `verdict` is a caller-supplied word ("allow"/"deny"/"noname") rather than the RL_* constant: log.cyr is
+# included BEFORE roundlog.cyr (a global's address cannot be forward-referenced the way a function's can),
+# and the roundlog already owns a kind->word mapping worth reusing at the call site.
+fn log_tool(name, args, verdict, ok, ms, bytes) {
+    if (_log_enabled == 0) { return 0; }
+    log_begin("tool");
+    log_kv_str("name", name);
+    log_kv_str("verdict", verdict);
+    log_kv_int("ok", ok);
+    log_kv_int("ms", ms);
+    log_kv_int("bytes", bytes);
+    if (args != 0) {
+        var n = strlen(args);
+        var trimmed = 0;
+        if (n > LOG_ARGS_MAX) { n = LOG_ARGS_MAX; trimmed = 1; }
+        _log_append(" args=");
+        _log_append_clean(args, n);
+        if (trimmed == 1) { _log_append("...(trimmed)"); }
+    }
+    if (ok == 1) { log_commit(SK_DEBUG); } else { log_commit(SK_WARN); }
+    return 0;
+}
+
+# --- the --logs argv binding (0.44.2) -----------------------------------------------------------------
+#
+# `[log].file` binds logging from the CONFIG, which is read after several things that can already fail,
+# and only if the operator remembered to write it down before the session that broke. `--logs FILE` binds
+# it from ARGV, at the top of main, before config parsing and before any seam is touched — so a run that
+# dies on a bad config, an unreachable gateway, or a hang leaves a file behind either way. argv WINS over
+# `[log].file` for the same reason `--tier` wins over `[ui].tier`: the flag is the operator's decision for
+# THIS run, and a run started specifically to capture a failure must not have its destination overridden
+# by a config the operator is trying to debug.
+#
+# The default level is DEBUG rather than info: the flag's whole purpose is a post-mortem, and a level that
+# drops detail defeats it. `--log-level` / `[log].level` still override.
+var _log_argv_bound = 0;
+fn log_argv_bound() { return _log_argv_bound; }
+
+# log_argv_init: bind logging to `path` at `lvls` (0 -> debug). Announced on STDERR, never stdout — a
+# one-shot's stdout is the answer and must stay clean, and this runs before the tier is even resolved.
+# Returns 1 when bound, 0 when the path could not be opened (announced; logging stays off). I/O.
+fn log_argv_init(path, lvls) {
+    if (path == 0) { return 0; }
+    if (load8(path) == 0) { emit_err("thoth: --logs needs a file path; logging stays off\n"); return 0; }
+    var lv = lvls;
+    if (lv == 0) { lv = "debug"; }
+    var level = _log_parse_level(lv);
+    if (level < 0) { return 0; }                     # explicit "off" wins even over the flag
+    if (sakshi_output_file(path) < 0) {
+        emit_err("thoth: --logs cannot open '"); emit_err(path); emit_err("' — logging disabled\n");
+        return 0;
+    }
+    sakshi_set_level(level);
+    _log_enabled = 1;
+    _log_argv_bound = 1;
+    log_begin("session_start"); log_kv_str("source", "argv"); log_kv_str("version", thoth_version()); log_commit(SK_INFO);
+    emit_err("thoth: session log -> "); emit_err(path); emit_err(" (level "); emit_err(lv); emit_err(")\n");
+    return 1;
+}
+
 # log_init: bind structured logging to thoth.cyml [log]. Off unless [log].file or
 # [log].level is set; "off" level keeps it off. A file target appends; a bad path
 # is announced and logging stays off. Call once at startup after config_load. I/O.
 fn log_init() {
+    # 0.44.2: `--logs` already bound the sink at the top of main. The flag is the operator's decision for
+    # THIS run — re-binding to [log].file here would silently redirect a post-mortem capture into the very
+    # file the operator was trying to bypass. A configured LEVEL still applies (it narrows nothing the
+    # flag promised), which is why only the file half is skipped.
+    if (_log_argv_bound == 1) {
+        var alv = config_log_level();
+        if (alv != 0) { var al = _log_parse_level(alv); if (al >= 0) { sakshi_set_level(al); } }
+        return 1;
+    }
     var file = config_log_file();
     var lvls = config_log_level();
     if ((file == 0) && (lvls == 0)) { return 0; }   # not configured -> stays off
+    # ⚠ 0.44.2 — `[log].file` WITH NO `[log].level` CRASHED THOTH AT STARTUP. `_log_parse_level(0)` correctly
+    # defaults to SK_INFO, so the level was never the problem; the announcement below then did `emit(lvls)`
+    # with lvls == 0, and emit is `syscall(SYS_WRITE, 2, s, strlen(s))` — strlen(0) dereferences the null
+    # page. A file with no level is the OBVIOUS way to write that config (the level has a sensible default,
+    # so why state it), which means the crash sat on the most likely spelling of the feature. Name the
+    # effective level instead of the configured one, so there is always a string to print.
     var level = _log_parse_level(lvls);
     if (level < 0) { return 0; }                     # explicit "off"
+    var lname = lvls;
+    if (lname == 0) { lname = "info"; }              # the default _log_parse_level applied
     if (file != 0) {
         if (sakshi_output_file(file) < 0) {
             emit("log: cannot open '"); emit(file); oprintln("' — structured logging disabled.");
@@ -134,7 +275,7 @@ fn log_init() {
     log_commit(SK_INFO);
     if (file != 0) {
         emit("log: structured driver events -> "); emit(file);
-        emit(" (level "); emit(lvls); oprintln(")");
+        emit(" (level "); emit(lname); oprintln(")");
     }
     return 1;
 }

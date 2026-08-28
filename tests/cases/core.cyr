@@ -1039,6 +1039,21 @@ fn test_oneshot_pipe_provenance() {
 # BY LENGTH (an embedded NUL survives). elapsed_ms is a param so the builder is deterministic.
 fn test_json_envelope() {
     test_group("JSON-envelope output (oneshot.cyr / hoosh.cyr)");
+
+    # ⚠ 0.44.2 — THE ENVELOPE USED THE UNBOUNDED _append_int. Every bounded appender before it stops with
+    # `off` at cap-1, so once an earlier field saturated the buffer, _append_int wrote digits at cap,
+    # cap+1, ... and then a NUL past the end — a heap out-of-bounds WRITE — and returned a length GREATER
+    # than the cap, which the caller hands straight to emit_raw_n and the -o writer. Adjacent heap bytes
+    # were printed to stdout and written to the user's file. Exactly the 0.39.0 A-6 defect, in the one
+    # builder that never got the _cap treatment. A tiny cap forces the saturation deterministically.
+    var eb[80];
+    var ei = 0;
+    while (ei < 80) { store8(&eb + ei, 0xEE); ei = ei + 1; }        # canary the WHOLE buffer
+    var elen = oneshot_json_envelope(&eb, 48, "a reply long enough to saturate a 48-byte envelope", 50, 123456);
+    assert(elen <= 47, "the returned length never names a byte outside the buffer");
+    assert_eq(load8(&eb + elen), 0, "the NUL lands inside the allocation");
+    assert_eq(load8(&eb + 60), 0xEE, "and nothing past the cap was touched");
+
     var av[64];
     store64(&av + 0, "thoth");
     # --json / -j set the flag without forcing a run or joining the task.
@@ -1577,6 +1592,100 @@ fn test_logging() {
     log_begin("x");
     log_kv_int("d", 0 - 5);
     assert(streq(log_message(), "event=x d=-5"), "negative int field");
+
+    # --- 0.44.2: the SESSION LOG ---
+    # ⚠ `[log].file` WITH NO `[log].level` CRASHED THOTH AT STARTUP: the announcement did emit(lvls) with
+    # lvls == 0, and emit is write(2, s, strlen(s)) — strlen(0) faults. That is the OBVIOUS way to write
+    # the config (the level has a default), so the crash sat on the likeliest spelling of the feature.
+    # Here we can only prove the level RESOLVES without a configured string; log_init's file open is I/O.
+    assert_eq(_log_parse_level(config_log_level()), SK_INFO, "file-without-level resolves to the info default (no null deref)");
+
+    # log_text: long values become a RUN of part=i of=n lines rather than one clipped record.
+    # The chunker is exercised through log_message by driving log_begin/log_kv_int directly — log_text
+    # itself commits through sakshi, which needs a bound sink.
+    var lt = alloc(LOG_TEXT_CHUNK * 2 + 16);
+    var li = 0;
+    while (li < (LOG_TEXT_CHUNK + 5)) { store8(lt + li, 97); li = li + 1; }   # 'a' x (chunk+5)
+    store8(lt + li, 0);
+    assert_eq((strlen(lt) + LOG_TEXT_CHUNK - 1) / LOG_TEXT_CHUNK, 2, "a value 5 bytes past one chunk needs exactly two parts");
+
+    # _log_append_clean neutralises what would otherwise END the record early or reach a terminal.
+    log_begin("t");
+    _log_append(" v=");
+    var lc = alloc(8);
+    store8(lc + 0, 65); store8(lc + 1, 10); store8(lc + 2, 27); store8(lc + 3, 66); store8(lc + 4, 0);   # "A\n<ESC>B"
+    _log_append_clean(lc, 4);
+    assert(streq(log_message(), "event=t v=A\\n?B"), "a newline becomes a literal \\n and ESC becomes '?' — one record stays one line");
+
+    # log_tool renders the verdict as a word (log.cyr is included BEFORE roundlog.cyr, so it cannot
+    # reference RL_*; the caller passes roundlog_kind_str, and these are the three it can produce).
+    assert(streq(roundlog_kind_str(RL_ALLOWED), "allow"), "roundlog verdict word: allow");
+    assert(streq(roundlog_kind_str(RL_DENIED), "deny"), "roundlog verdict word: deny");
+    assert(streq(roundlog_kind_str(RL_NONAME), "noname"), "roundlog verdict word: noname");
+    return 0;
+}
+
+# --- 0.44.2: --logs / --log-level on argv ---------------------------------------------------------
+# `[log].file` binds logging from the CONFIG — read after several things that can already fail, and only
+# if the operator wrote it down BEFORE the session that broke. `--logs FILE` binds it from argv at the top
+# of main, so a run that dies on a bad config, an unreachable gateway or a hang still leaves a record.
+fn test_logs_flag() {
+    test_group("--logs / --log-level (0.44.2)");
+    var av[64];
+
+    # --logs=FILE (attached form)
+    store64(&av + 0, "thoth"); store64(&av + 8, "--logs=/tmp/t.log");
+    assert_eq(_oneshot_parse(&av, 2), ONESHOT_NONE, "--logs alone does NOT force a one-shot (it is a modifier, like -o)");
+    assert(streq(oneshot_log_path(), "/tmp/t.log"), "--logs=FILE captures the path");
+    assert_eq(oneshot_log_level(), 0, "no level given -> unset (log_argv_init defaults it to debug)");
+
+    # --logs FILE (separate form) + --log-level
+    store64(&av + 0, "thoth"); store64(&av + 8, "--logs"); store64(&av + 16, "/tmp/s.log");
+    store64(&av + 24, "--log-level"); store64(&av + 32, "warn"); store64(&av + 40, "review this");
+    assert_eq(_oneshot_parse(&av, 6), ONESHOT_RUN, "a task alongside --logs still runs one-shot");
+    assert(streq(oneshot_log_path(), "/tmp/s.log"), "--logs FILE consumes the next token");
+    assert(streq(oneshot_log_level(), "warn"), "--log-level FILE consumes the next token");
+    assert(streq(_oneshot_task, "review this"), "neither flag's VALUE leaks into the task text");
+
+    # the singular spelling half of everyone types
+    store64(&av + 0, "thoth"); store64(&av + 8, "--log=/tmp/one.log");
+    _oneshot_parse(&av, 2);
+    assert(streq(oneshot_log_path(), "/tmp/one.log"), "--log= is accepted as a synonym");
+
+    # ⚠ a following FLAG is never eaten as the value (same rule --tier and -o follow)
+    store64(&av + 0, "thoth"); store64(&av + 8, "--logs"); store64(&av + 16, "--version");
+    assert_eq(_oneshot_parse(&av, 3), ONESHOT_VERSION, "--logs --version still prints the version");
+    assert_eq(oneshot_log_path(), 0, "a dangling --logs captures no path rather than eating the next flag");
+
+    # absent -> 0, and the parser RESETS both before its early return (no stale path across calls)
+    store64(&av + 0, "thoth");
+    assert_eq(_oneshot_parse(&av, 1), ONESHOT_NONE, "bare thoth -> interactive");
+    assert_eq(oneshot_log_path(), 0, "no --logs -> no path (state reset before the early return)");
+    assert_eq(oneshot_log_level(), 0, "no --log-level -> no level");
+    return 0;
+}
+
+# --- 0.44.2: [hoosh].timeout_ms ------------------------------------------------------------------
+# Until this key existed thoth passed sandhi no options, so read_ms was 0, so SO_RCVTIMEO was never set
+# and every recv was unbounded. A gateway that accepted and then went silent parked thoth in recv
+# permanently — with Esc unpolled and Ctrl-C disabled by the TUI's own termios, only kill recovered it.
+fn test_hoosh_timeout() {
+    test_group("[hoosh].timeout_ms (0.44.2)");
+    var saved = _cfg_hoosh_timeout_ms;
+    _cfg_hoosh_timeout_ms = 0 - 1;
+    assert_eq(config_hoosh_timeout_ms(), HOOSH_TIMEOUT_MS_DEFAULT, "absent -> the generous default (a stall detector, not a latency budget)");
+    _cfg_hoosh_timeout_ms = 0;
+    assert_eq(config_hoosh_timeout_ms(), 0, "an explicit 0 restores the pre-0.44.2 unbounded behaviour");
+    _cfg_hoosh_timeout_ms = 5;
+    assert_eq(config_hoosh_timeout_ms(), HOOSH_TIMEOUT_MS_MIN, "a silly-small value is floored, not honoured");
+    _cfg_hoosh_timeout_ms = 45000;
+    assert_eq(config_hoosh_timeout_ms(), 45000, "a real value passes through");
+    assert_eq(_cfg_known_key("hoosh", "timeout_ms"), 1, "timeout_ms is a KNOWN key (the 0.43.5 spell-checker must not flag it)");
+    # the probe profile is deliberately NOT configurable: raising the turn timeout for a slow model must
+    # not turn a reachability check that runs before the first paint into a three-minute freeze.
+    assert(HOOSH_PROBE_MS < HOOSH_TIMEOUT_MS_DEFAULT, "the probe deadline is far shorter than the turn deadline");
+    assert(HOOSH_PROBE_CONNECT_MS < HOOSH_CONNECT_MS, "so is its connect deadline");
+    _cfg_hoosh_timeout_ms = saved;
     return 0;
 }
 

@@ -423,6 +423,67 @@ fn test_agent() {
     assert(streq(agent_tc_args(av3, 1), "{\"path\":\"CLAUDE.md\"}"), "call 1 keeps its own arguments");
     assert(streq(agent_tc_name(av3, 2), "list_dir"), "call 2 keeps its own NAME (not overwritten by the last)");
     assert(streq(agent_tc_args(av3, 2), "{\"path\":\".\"}"), "call 2 keeps its own arguments");
+    # ⚠ 0.44.2 — A HEADERLESS SLOT. Captured off the wire against hoosh 2.6.4's Anthropic translation:
+    # the `content_block_start` carrying a tool_use's id+name was dropped, but its `input_json_delta`
+    # fragments were forwarded, so the slot ended the round with arguments and NOTHING else. That used to
+    # be emitted verbatim as {"id":"","function":{"name":"", ...}} — t-ron denied the nameless call, the
+    # round carried on, and then the assistant message went into HISTORY where the provider rejects a
+    # tool_use with an empty id and name. Every later round came back empty: the turn "got stuck" long
+    # after the tool that broke it scrolled away, and only a new session cured it.
+    _ag_reset();
+    var hl1 = "{\"index\":1,\"function\":{\"arguments\":\"{\\\"path\\\": \\\"src/tasks\\\"}\"}}";
+    var hl2 = "{\"index\":2,\"id\":\"tu_ok\",\"type\":\"function\",\"function\":{\"name\":\"list_dir\",\"arguments\":\"{\\\"path\\\":\\\"src\\\"}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_buf(hl1, strlen(hl1)));
+    _agent_accum_delta(bayan_json_v_parse_buf(hl2, strlen(hl2)));
+    var abh[2048];
+    _ag_build_array(&abh);
+    assert_eq(ag_dropped(), 1, "headerless slot COUNTED as dropped, not silently emitted");
+    var avh = bayan_json_v_parse_buf(&abh, strlen(&abh));
+    assert_eq(agent_tc_count(avh), 1, "only the call that has a name survives into the assistant echo");
+    assert(streq(agent_tc_name(avh, 0), "list_dir"), "the surviving call is the named one");
+    assert(_t_count_sub(&abh, strlen(&abh), "\"name\":\"\"", strlen("\"name\":\"\"")) == 0, "no empty NAME reaches the conversation");
+    assert(_t_count_sub(&abh, strlen(&abh), "\"id\":\"\"", strlen("\"id\":\"\"")) == 0, "no empty ID reaches the conversation");
+
+    # A slot with a NAME but no id is rescuable — thoth owns both sides of the pairing, so it mints one.
+    _ag_reset();
+    var ni = "{\"index\":0,\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a\\\"}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_buf(ni, strlen(ni)));
+    var abn[1024];
+    _ag_build_array(&abn);
+    assert_eq(ag_dropped(), 0, "a missing ID is not a reason to drop the call");
+    var avn = bayan_json_v_parse_buf(&abn, strlen(&abn));
+    assert_eq(agent_tc_count(avn), 1, "the id-less call is kept");
+    assert(streq(agent_tc_id(avn, 0), "thoth_call_0"), "a local id is minted for it");
+
+    # An empty-string NAME is not a name. Before 0.44.2 every consumer tested `nm != 0`, so "" sailed past
+    # the no-name arm and was handed to t-ron, which answered "tool_name contains invalid characters".
+    var es = "[{\"id\":\"x\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{}\"}}]";
+    var esv = bayan_json_v_parse_buf(es, strlen(es));
+    assert_eq(agent_tc_name(esv, 0), 0, "an empty-string tool name reads as NO name");
+
+    # Past AGENT_MAX_CALLS the round is trimmed — but now it SAYS so (it used to be a bare return).
+    _ag_reset();
+    var oc = "{\"index\":99,\"id\":\"z\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}";
+    _agent_accum_delta(bayan_json_v_parse_buf(oc, strlen(oc)));
+    assert_eq(ag_over_cap(), 1, "a delta past AGENT_MAX_CALLS is flagged, not swallowed");
+    _ag_reset();
+    assert_eq(ag_over_cap(), 0, "the over-cap flag clears per round");
+
+    # Arguments that overflow AG_ARGS_CAP are CUT, so what is left is not parseable JSON. Emitting it
+    # invoked a tool with a fabricated argument set; now the slot is dropped and named.
+    _ag_reset();
+    var big = alloc(AG_ARGS_CAP + 512);
+    var bo = _append_cstr_cap(big, 0, AG_ARGS_CAP + 512, "{\"index\":0,\"id\":\"b\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"");
+    var bi = 0;
+    while (bi < (AG_ARGS_CAP + 64)) { store8(big + bo, 120); bo = bo + 1; bi = bi + 1; }   # 'x' x (cap+64)
+    bo = _append_cstr_cap(big, bo, AG_ARGS_CAP + 512, "\"}}");
+    store8(big + bo, 0);
+    _agent_accum_delta(bayan_json_v_parse_buf(big, bo));
+    assert_eq(ag_oversize(), 1, "arguments past AG_ARGS_CAP are flagged");
+    var abo[1024];
+    _ag_build_array(&abo);
+    assert(streq(&abo, "[]"), "a slot with CUT arguments is never emitted (it would not be valid JSON)");
+
     # the indexed fragment path must be untouched by the fix
     _ag_reset();
     var f1 = "{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"a\\\":\"}}";
@@ -692,6 +753,93 @@ fn test_parallel() {
 # builder now writes through, so an oversized untrusted string truncates in-buffer
 # instead of overflowing a fixed destination. Each check plants a canary one byte
 # past the cap and asserts it survives.
+# --- 0.44.2: the per-turn TOOL WORKING SET, and the tools ADVERTISEMENT --------------------------
+# Two buffers whose overflow used to produce MALFORMED JSON in the POST body rather than a shorter one.
+fn test_workset_hardening() {
+    test_group("tool working set + tools array (0.44.2)");
+
+    # ⚠ The working set holds every assistant tool-call echo and every tool RESULT of the current turn,
+    # and the next round's request is built from it. Every append dropped silently at the cap, and
+    # _agent_work_puts_esc bailed MID-STRING — so a turn that read more than the cap in files ended with
+    # an unterminated JSON string in the body. Before the cap bit, results were merely CUT: the model did
+    # not get what it asked for, asked again, and the turn walked in circles (measured: nine rounds
+    # re-reading the same two files). At the cap the gateway answered nothing and the turn died looking
+    # like a model failure.
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    _agent_work_reset();
+    assert_eq(agent_work_full(), 0, "a fresh turn's working set is not full");
+    assert_eq(_agent_work_room(), AGENT_WORK_CAP - 1 - AGENT_WORK_TAIL, "room excludes the tail reserve");
+
+    # a normal result is emitted whole
+    assert_eq(_agent_add_result("call_1", "hello"), 0, "a normal result is written");
+    assert_eq(agent_work_full(), 0, "and does not mark the set full");
+    assert(_t_count_sub(_agent_work, _agent_work_len, "\"tool_call_id\":\"call_1\"", strlen("\"tool_call_id\":\"call_1\"")) == 1, "the id is carried onto the result message");
+
+    # drive the set to the reserve and prove the message is STILL valid JSON with its id intact —
+    # a provider rejects an assistant tool_use with no matching tool result, so "skip it" is not an option.
+    _agent_work_len = AGENT_WORK_CAP - 1 - AGENT_WORK_TAIL - 8;
+    var mark = _agent_work_len;
+    _agent_add_result("call_late", "this result no longer fits");
+    assert_eq(agent_work_full(), 1, "running out of room MARKS the set full");
+    assert(_t_count_sub(_agent_work + mark, _agent_work_len - mark, "\"tool_call_id\":\"call_late\"", strlen("\"tool_call_id\":\"call_late\"")) == 1, "the late result still carries its id (the pairing survives)");
+    assert(_t_count_sub(_agent_work + mark, _agent_work_len - mark, "working set is full", strlen("working set is full")) == 1, "and SAYS why it is empty, so the model does not just reissue the call");
+    assert_eq(load8(_agent_work + _agent_work_len - 1), 125, "the message is closed with '}' — never left half-written");
+
+    # the assistant echo is REFUSED whole rather than truncated: half a tool_calls array is not a
+    # conversation, and sending one produced exactly the silent empty completion this release removes.
+    _agent_work_reset();
+    _agent_work_len = AGENT_WORK_CAP - 1 - AGENT_WORK_TAIL - 8;
+    var before = _agent_work_len;
+    assert_eq(_agent_add_assistant("[{\"id\":\"a\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{}\"}}]"), 0, "no room -> the echo is REFUSED, not truncated");
+    assert_eq(_agent_work_len, before, "and nothing at all was written");
+    assert_eq(agent_work_full(), 1, "the refusal marks the set full so the turn ends cleanly");
+    _agent_work_reset();
+    assert_eq(_agent_add_assistant("[]"), 1, "with room, the echo is written and reports success");
+
+    # ⚠ The tools ADVERTISEMENT had the same shape with a worse blast radius: the headroom guard decided
+    # whether a NEW tool could start but never bounded its SIZE, so a large registry left a half-written
+    # element (and sometimes no closing bracket). `,"tools":<malformed>` makes the whole body invalid, and
+    # because the registry FETCH succeeded the result LATCHED — every turn for the rest of the session.
+    var reg = "[";
+    var ri = 0;
+    while (ri < 40) {
+        if (ri > 0) { reg = "x"; }
+        ri = ri + 1;
+    }
+    # build a registry big enough to saturate AGENT_TOOLS_CAP, out of one long description repeated
+    var rb = alloc(AGENT_TOOLS_CAP * 4);
+    var ro = _append_cstr_cap(rb, 0, AGENT_TOOLS_CAP * 4, "[");
+    var rj = 0;
+    while (rj < 60) {
+        if (rj > 0) { ro = _append_cstr_cap(rb, ro, AGENT_TOOLS_CAP * 4, ","); }
+        ro = _append_cstr_cap(rb, ro, AGENT_TOOLS_CAP * 4, "{\"name\":\"t");
+        ro = _append_int_cap(rb, ro, AGENT_TOOLS_CAP * 4, rj);
+        ro = _append_cstr_cap(rb, ro, AGENT_TOOLS_CAP * 4, "\",\"description\":\"");
+        var rk = 0;
+        while (rk < 700) { ro = _append_cstr_cap(rb, ro, AGENT_TOOLS_CAP * 4, "d"); rk = rk + 1; }
+        ro = _append_cstr_cap(rb, ro, AGENT_TOOLS_CAP * 4, "\",\"inputSchema\":{\"type\":\"object\"}}");
+        rj = rj + 1;
+    }
+    ro = _append_cstr_cap(rb, ro, AGENT_TOOLS_CAP * 4, "]");
+    store8(rb + ro, 0);
+    var regv = bayan_json_v_parse_buf(rb, ro);
+    assert(regv != 0, "the oversized synthetic registry parses");
+    var tb = alloc(AGENT_TOOLS_CAP + 8);
+    var tl = agent_format_tools(tb, regv);
+    assert(tl > 0, "an oversized registry still yields a tools array");
+    assert(tl <= (AGENT_TOOLS_CAP - 1), "and it stays inside the buffer");
+    assert_eq(load8(tb + tl - 1), 93, "the array is CLOSED with ']' (this used to be dropped at the cap)");
+    var tv = bayan_json_v_parse_buf(tb, tl);
+    assert(tv != 0, "⭐ the truncated advertisement is still VALID JSON — the whole point of the rollback");
+    assert(agent_tools_skipped() > 0, "and the tools left out are counted, so the operator can be told");
+
+    # a local tool spliced onto a saturated array must refuse WHOLE rather than half-write itself
+    var sat = AGENT_TOOLS_CAP - 16;
+    assert_eq(_agent_tools_fits(sat, AGENT_TOOL_ELEM_RESERVE), 0, "no room -> a local tool does not splice");
+    assert_eq(_agent_tools_fits(0, AGENT_TOOL_ELEM_RESERVE), 1, "an empty array always has room");
+    return 0;
+}
+
 fn test_bounds_hardening() {
     test_group("bounded request assembly (untrusted-input clamp)");
     # _append_cstr_cap stops at cap-1 (reserving the last byte for the caller's NUL);
@@ -1501,6 +1649,28 @@ fn test_project() {
     assert(_ui_contains(search_tool("{\"glob\":\"search.cyr\"}"), "src/search.cyr") == 1, "glob-only finds files by name");
     assert(_ui_contains(search_tool("{\"pattern\":\"fn search_tool\",\"glob\":\"*.md\"}"), "no matches") == 1, "glob narrows content search (no .md defines it)");
     assert(_ui_contains(search_tool("{\"pattern\":\"zzq-not-present-anywhere-zzq\"}"), "no matches") == 1, "an absent pattern says so honestly");
+    # ⚠ 0.44.2 — the SUMMARY line stated two wrong facts. The plural suffix was a bare "es" for both
+    # nouns, so a name search reported "6 filees"; and the "in N files scanned" clause printed the count
+    # of files OPENED to read their CONTENT, which is always 0 for a glob-only search — giving the flatly
+    # self-contradicting "6 filees in 0 files scanned". A model reading that learns not to trust the count.
+    var sg = search_tool("{\"glob\":\"search.cyr\"}");
+    assert(_ui_contains(sg, "filees") == 0, "no 'filees' — the plural is formed per noun");
+    assert(_ui_contains(sg, "in 0 files scanned") == 0, "a glob-only search omits the scanned clause instead of claiming zero");
+    assert(_ui_contains(sg, " file in ") == 0, "and does not claim a scan it did not do");
+    var sc = search_tool("{\"pattern\":\"fn search_tool\"}");
+    assert(_ui_contains(sc, "files scanned") == 1, "a CONTENT search does report how many files it opened");
+    assert(_ui_contains(sc, "matches") + _ui_contains(sc, " match in ") >= 1, "and pluralises 'match' as 'matches'");
+
+    # The walk's own work bound. SEARCH_MAX_FILES only ever counted files OPENED, so a glob-only search
+    # had no bound at all: it walked the whole tree, three is_symlink syscalls per path component, out of
+    # a bump heap that never frees — and _search_walk had no intr_check, so Esc could not stop it.
+    assert(SEARCH_MAX_ENTRIES > 0, "the walk has an ENTRY bound, not just a files-opened one");
+    assert(_search_entries > 0, "and the walk actually counts entries");
+    assert_eq(_search_skip_dir("target"), 1, "cargo's target/ is skipped");
+    assert_eq(_search_skip_dir("__pycache__"), 1, "__pycache__ is skipped");
+    assert_eq(_search_skip_dir(".venv"), 1, ".venv is skipped");
+    assert_eq(_search_skip_dir("dist"), 1, "dist/ is skipped");
+    assert_eq(_search_skip_dir("src"), 0, "a real source directory is NOT skipped");
     assert(_ui_contains(search_tool("{}"), "give 'pattern'") == 1, "neither pattern nor glob -> a usable error, not a whole-tree dump");
     assert(_ui_contains(search_tool("{\"pattern\":\"\"}"), "give 'pattern'") == 1, "an empty pattern is treated as absent");
     assert(_ui_contains(search_tool("not json"), "not valid JSON") == 1, "malformed arguments -> honest error");

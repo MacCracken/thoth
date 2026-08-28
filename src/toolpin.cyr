@@ -133,14 +133,15 @@ fn toolpin_check(name, desc, schema) {
 
     # CHANGED. Withhold, and say so loudly: this is the CVE-2025-54136 shape.
     _tp_changed = _tp_changed + 1;
+    # 0.44.2: the WITHHOLD is the whole point of this control — a rug-pulled tool vanishes from the
+    # advertisement and the model is simply told it does not exist. If the reason is also invisible (as it
+    # was under OUT_NULL: one-shot and the GUI), the operator sees an agent that has mysteriously stopped
+    # using a tool and has nothing pointing at `/tools trust`. note_* keeps the reason on every surface.
     ui_emit(ROLE_RED, "  [toolpin] WITHHELD ");
-    ui_emit(ROLE_ACCENT, name);
-    ui_emit(ROLE_FAINT, " — its MCP definition CHANGED since this session pinned it.");
-    oprintln("");
-    ui_emit(ROLE_FAINT, "  a tool description is read by the model as instructions, so a silent swap is an injection with");
-    oprintln("");
-    ui_emit(ROLE_FAINT, "  approval already granted. Not advertised this turn. `/tools trust` to accept and re-pin.");
-    oprintln("");
+    note_emit(name);
+    note_println(" — its MCP definition CHANGED since this session pinned it.");
+    note_println("  a tool description is read by the model as instructions, so a silent swap is an injection with");
+    note_println("  approval already granted. Not advertised this turn. `/tools trust` to accept and re-pin.");
     log_begin("toolpin"); log_kv_str("tool", name); log_kv_str("result", "withheld_definition_changed");
     log_commit(SK_WARN);
     return 0;

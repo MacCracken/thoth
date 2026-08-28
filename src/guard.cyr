@@ -70,10 +70,11 @@ fn guard_wrap_untrusted(text, source) {
 
     # Visible to the HUMAN first. The model is the party being defended against here, so the user is the
     # one who needs to know — and a silent wrap would leave them unable to explain later behaviour.
+    # 0.44.2: note_* rather than emit/oprintln — those are discards under OUT_NULL, which is what one-shot
+    # and the GUI run turns under, so on two of three surfaces this warning was announced to nobody.
     ui_emit(ROLE_RED, "  [untrusted] ");
-    ui_emit(ROLE_FAINT, "content from "); emit(source);
-    ui_emit(ROLE_FAINT, " looks like it may contain instructions aimed at the model — marked as data, not obeyed as commands");
-    oprintln("");
+    note_emit("content from "); note_emit(source);
+    note_println(" looks like it may contain instructions aimed at the model — marked as data, not obeyed as commands");
 
     var cap = GUARD_CAP;
     var off = 0;

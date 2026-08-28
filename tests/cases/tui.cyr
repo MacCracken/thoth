@@ -910,6 +910,21 @@ fn test_fsearch() {
 fn test_mention() {
     test_group("@file mentions (mention.cyr, 0.21.0)");
 
+    # ⚠ 0.44.2 — THE ROOM GUARD DID NOT COUNT THE UNTRUSTED BANNER. It reserved 40 slack bytes for "the
+    # truncation marker plus the NUL" (17 bytes' worth), but when guard_scan_text flags a file the header
+    # ALSO carries a 127-byte banner that the reservation never counted — and _mention_apc had no cap
+    # check at all, so it copied until the source NUL. Near the buffer bound that wrote ~104 bytes past
+    # the 64 KB allocation, into the bump-allocated file-content buffer sitting immediately after it —
+    # which the very next memcpy then reads from. [guard].enabled defaults on, so this was the default
+    # configuration. The banner is now a named constant so the guard and the writer measure the same
+    # thing, and _mention_apc is bounded regardless.
+    assert(strlen(MENTION_UNTRUSTED) > 100, "the untrusted banner really is the ~127 bytes the old guard ignored");
+    if (_mention_buf == 0) { _mention_buf = alloc(MENTION_BUF_CAP); }
+    store8(_mention_buf + MENTION_BUF_CAP - 1, 55);                 # canary on the LAST valid byte
+    var mo = _mention_apc(MENTION_BUF_CAP - 4, MENTION_UNTRUSTED);  # 127 bytes into 3 bytes of room
+    assert_eq(mo, MENTION_BUF_CAP - 1, "_mention_apc stops at the cap instead of running past the allocation");
+    assert_eq(load8(_mention_buf + MENTION_BUF_CAP - 1), 55, "the last byte is left for the caller's NUL, never overwritten");
+
     # --- no mention -> byte-identical passthrough (SAME pointer), count 0 ---
     var a = "hello world, nothing here";
     var ra = mention_expand(a);
@@ -1035,6 +1050,70 @@ fn test_spinner() {
     var f0 = spin_frame();
     spin_advance(); spin_advance();
     assert_eq(spin_frame() - f0, 2, "spin_advance steps the frame");
+
+    # --- 0.44.2: the ANIMATOR ---
+    # 0.9.2 could only advance the frame where dispatch handed control back — per streamed SSE chunk. So
+    # the glyph HELD STILL waiting for a gateway's first byte, for a whole non-streaming turn, and for the
+    # length of every tool call: reported as "the animations lock up waiting for responses". A short-lived
+    # worker thread now owns the glyph for the duration of ONE blocking call. It must NEVER arm outside
+    # the alt screen (the line REPL, one-shot and the GUI all share this code path and none of them has a
+    # hint row to paint), and it must never arm with no dispatch in flight.
+    var saved_active = _spin_active;
+    var saved_mode = out_mode();
+    _spin_active = 0;
+    out_mode_set(OUT_RING);
+    assert_eq(spin_anim_arm(), 0, "no dispatch in flight -> the animator does not arm");
+    assert_eq(spin_anim_active(), 0, "and no worker exists");
+    _spin_active = 1;
+    out_mode_set(OUT_FD1);
+    assert_eq(spin_anim_arm(), 0, "off the alt screen (line REPL / one-shot) -> the animator does not arm");
+    assert_eq(spin_anim_active(), 0, "still no worker");
+    # claim/release/disarm are all safe no-ops with nothing armed — the SSE callback calls claim/release
+    # on EVERY frame, including the frames of a stream that never armed one.
+    spin_anim_claim(); spin_anim_release(); spin_anim_disarm();
+    assert_eq(spin_anim_active(), 0, "claim/release/disarm are inert when unarmed");
+    # spin_tick is the thread-free half (the shell tool's waitpid poll drives it through exec's seam).
+    var t0 = spin_frame();
+    spin_tick();
+    assert_eq(spin_frame(), t0, "spin_tick is a no-op off the alt screen (the line floor stays byte-identical)");
+    out_mode_set(OUT_RING);
+    spin_tick();
+    assert_eq(spin_frame() - t0, 1, "under OUT_RING with a dispatch in flight, spin_tick advances the frame");
+    out_mode_set(saved_mode);
+    _spin_active = saved_active;
+    return 0;
+}
+
+# --- 0.44.2: the ESC decoder, SS3 keys, and the LEGACY mouse encoding -----------------------------
+# Three defects in one function, all of them reaching the composer as stray text or a swallowed key.
+fn test_key_decode_0442() {
+    test_group("ESC / SS3 / X10 mouse decoding (0.44.2)");
+
+    # SS3: tmux and screen turn on DECCKM, so arrows arrive as ESC O A rather than ESC [ A. thoth never
+    # sets DECCKM itself but does not control the multiplexer it runs under — inside tmux, pressing Up
+    # fell through as a lone Esc plus a bare letter and TYPED an 'A' into the composer.
+    assert_eq(_tui_ss3_final(65), KEY_UP, "SS3 'A' -> Up");
+    assert_eq(_tui_ss3_final(66), KEY_DOWN, "SS3 'B' -> Down");
+    assert_eq(_tui_ss3_final(67), KEY_RIGHT, "SS3 'C' -> Right");
+    assert_eq(_tui_ss3_final(68), KEY_LEFT, "SS3 'D' -> Left");
+    assert_eq(_tui_ss3_final(72), KEY_HOME, "SS3 'H' -> Home");
+    assert_eq(_tui_ss3_final(70), KEY_END, "SS3 'F' -> End");
+    assert_eq(_tui_ss3_final(80), KEY_NONE, "SS3 'P' (F1) is CONSUMED, not leaked as a character");
+
+    # The X10 mouse report shares _tui_mouse_decode with the SGR one, so a terminal that ignores ?1006h
+    # scrolls exactly like one that honours it. X10 is press-only, hence the fixed 'M' final.
+    assert_eq(_tui_mouse_decode(64, 77), KEY_SCROLL_UP, "legacy wheel-up decodes like SGR wheel-up");
+    assert_eq(_tui_mouse_decode(65, 77), KEY_SCROLL_DOWN, "legacy wheel-down decodes like SGR wheel-down");
+    assert_eq(_tui_mouse_decode(66, 77), KEY_NONE, "a horizontal wheel is still ignored, not turned into vertical scroll");
+    assert_eq(_tui_mouse_decode(0, 77), KEY_MOUSE, "a left press is still a click");
+
+    # The one-byte pushback. A lone Esc used to BLOCK until the next key and then EAT it.
+    _tui_pushback = 0 - 1;
+    _tui_push(90);                                  # 'Z'
+    var pb[8];
+    assert_eq(_tui_getb(&pb), 1, "a pushed byte is readable");
+    assert_eq(load8(&pb), 90, "and it is the byte that was pushed");
+    assert_eq(_tui_pushback, 0 - 1, "the pushback slot empties after one read");
     return 0;
 }
 

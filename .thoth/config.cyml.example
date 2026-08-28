@@ -141,6 +141,25 @@ model = "claude-haiku-4-5-20251001"
 #   manual /compact.
 #   [hoosh]
 #   summarize = true
+#
+# timeout_ms — the SOCKET deadline for every gateway call: read, write, and (at a
+#   fixed shorter value) connect. Default 180000 (3 minutes).
+#
+#   ⚠ Before 0.44.2 there was no deadline at ALL. A gateway that completed the TCP
+#   handshake and then said nothing — an upstream provider stall, a proxy holding
+#   the socket, a reverse proxy that lost its backend — parked thoth in recv
+#   FOREVER, and nothing could break it out: Esc is only polled inside the SSE
+#   callback (which never fires when no frame arrives) and the TUI has cleared
+#   ISIG and blocked SIGINT for the session, so Ctrl-C was neither a signal nor a
+#   readable byte. `kill` from another terminal was the only way out.
+#
+#   This is a STALL detector, not a latency budget: it is a PER-READ deadline, so
+#   a stream that keeps producing frames resets it on every frame and may run as
+#   long as it likes. A reasoning model thinking for two minutes before its first
+#   token is fine; two minutes of nothing at all is not. The floor is 1000.
+#   `0` restores the pre-0.44.2 unbounded behaviour if you really want it.
+#   [hoosh]
+#   timeout_ms = 180000
 
 # [subagent] — let the model DELEGATE a sub-task to a scoped child agent (0.43.0).
 # DEFAULT OFF. See docs/adr/0018-subagent-delegation-scoped-child-context.md.
@@ -334,6 +353,24 @@ model = "claude-haiku-4-5-20251001"
 #
 #   file  — append structured events to this path; omit to use stderr.
 #   level — minimum severity: off | fatal | error | warn | info | debug | trace
+#
+# 0.44.2 — `thoth --logs <file>` binds the same sink from ARGV instead, at the top
+# of main: before the config is read, before any seam is touched, before the tier
+# is even resolved. That is the difference that matters for a POST-MORTEM. A
+# `[log].file` only helps if you wrote it down before the session that broke;
+# `--logs` is what you reach for once it already has. argv WINS over this key for
+# the run it was given on (the same rule --tier follows), so a capture cannot be
+# redirected by the config you are trying to debug. `--log-level <lvl>` overrides
+# the level, which defaults to `debug` under the flag — the point of a
+# post-mortem is detail.
+#
+# The log is a TRANSCRIPT, not just a trace: 0.44.2 added turn_start with the task
+# text, one `round` line per agentic iteration (with the working-set size, so a
+# turn that walked in circles is visible), one `tool` line per call carrying its
+# arguments, authorization verdict, wall-time and result size, and the reply. Long
+# values split across `part=i of=n` lines, so a file truncated by a crash loses one
+# chunk rather than the session. For a readable markdown transcript of a session
+# that ENDED normally, use `/save <file>` instead.
 #           (default info). "off" disables logging even if a file is named.
 
 # [log]

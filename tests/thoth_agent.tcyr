@@ -1,18 +1,14 @@
-# tests/thoth_tui.tcyr — the T2 front-end suite.
+# thoth — CURATED test binary: the AGENTIC-LOOP suite (0.44.2).
 #
-# ⚠ SPLIT OUT OF thoth_core.tcyr AT 0.44.0 BECAUSE OF THE 8 MB PREPROCESSOR CEILING, not for taste.
-# Adding src/ask.cyr pushed thoth_core past cyrius's fixed `preprocess_out` arena slot — the exact
-# constraint the roadmap predicted would "block the next feature that needs a spine capability", biting
-# for the second release running. The src include chain here is IDENTICAL to thoth_core's (~4.9 MB of it
-# is vendored bundles the tests cannot drop: avatara 1.1 MB, bayan 641 KB, sit-read 416 KB, vyakarana
-# 401 KB); what differs is the test BODY, so each unit carries one instead of both.
+# Split out of tests/thoth_core.tcyr for one reason: the cyrius preprocessor's 8 MB expanded-source
+# ceiling. thoth_core carried core.cyr + agent.cyr + vendor.cyr on the FULL src chain and crossed it,
+# exactly as thoth_tui was split out at 0.44.0. The src include chain below is byte-identical to
+# thoth_core's — nothing is dropped, the bodies are simply distributed. `cyrius test` runs every
+# tests/*.tcyr, so the suite total is unchanged.
 #
-# Splitting the bodies rather than the sources is the only lever thoth owns today — the real fix is lean
-# upstream `[lib.X]` profiles (see roadmap: the sit carve). Nothing was dropped; every assertion that
-# lived in thoth_core still runs, in this unit.
-# thoth INTEGRATION tests — everything that needs the commands/tui hub: CLI/session/config/hoosh/
-# persona/cost/history/oneshot (core) + the agent spine + the rich TUI. FULL includes (the hub couples
-# these to the whole codebase — agent->spin_label, shell->_params_one, tui->dispatch). 0.30.9.
+# Holds tests/cases/agent.cyr: the agentic loop, tool dispatch, t-ron gating + audit, the roundlog,
+# parallel execution, the project/edit/shell/mcpres/ask tools.
+
 include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
@@ -77,29 +73,25 @@ include "src/oneshot.cyr"
 include "src/tui.cyr"
 
 include "tests/cases/testutil.cyr"
-include "tests/cases/tui.cyr"
+include "tests/cases/agent.cyr"
 
 fn main() {
     alloc_init();
     out_ring_sink_set(&feed_write);
-    test_ui();
-    test_tui();
-    test_feed();
-    test_feed_ring();
-    test_softwrap();
-    test_glyph_width();
-    test_feed_markers();
-    test_capture();
-    test_fsearch();
-    test_mention();
-    test_tab_complete();
-    test_spinner();
-    test_key_decode_0442();
-    test_stream_throttle();
-    test_ftree();
-    test_theme();
-    test_rainbow();
-    test_mpick();
+    test_shell();
+    test_agent();
+    test_daimon();
+    test_tron();
+    test_audit();
+    test_roundlog();
+    test_parallel();
+    test_bounds_hardening();
+    test_workset_hardening();
+    test_project();
+    test_edit();
+    test_editlog();
+    test_mcpres();
+    test_ask_user();
     return assert_summary();
 }
 var _e = main();

@@ -2,6 +2,177 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.2] - 2026-08-27
+
+**Capture what happened, and stop bricking the conversation.** Suite **289 + 956 + 747 + 499 + 183 + 5**
+(+90; `tests/cases/agent.cyr` moved to a new `tests/thoth_agent.tcyr` — the 8 MB preprocess ceiling
+again). Linux / aarch64 / AGNOS green; Windows unchanged (IOCP-gated, as at 0.44.1).
+
+Reported live: *"every time I try to get the model to review a project it gets stuck"*, *"mouse scroll
+doesn't rewind the conversation"*, *"it seems to lock up the animations waiting for responses"*, and
+*"we need a chat export so I can capture the logs even in crash or failure"*. All four turned out to be
+real, and the first turned out to be **three separate bugs wearing the same symptom**.
+
+### Added — `--logs <file>`: a session log bound before anything can fail
+
+`[log].file` only helps if you wrote it down before the session that broke. `thoth --logs session.log`
+binds the same sink from **argv, at the top of main** — before the config is read, before a seam is
+touched, before the tier is resolved — so a run that dies on a bad config, an unreachable gateway or a
+hang still leaves a record. argv wins over `[log].file` for that run (the rule `--tier` already follows),
+so a capture cannot be redirected by the config you are trying to debug. `--log-level` overrides the
+level, which defaults to `debug` under the flag: the point of a post-mortem is detail.
+
+It is a **transcript**, not just a trace. 0.44.2 adds `turn_start` with the task text, one `round` line
+per agentic iteration carrying the working-set size (so a turn that walked in circles is visible), one
+`tool` line per call with its arguments, authorization verdict, wall-time and result size, and the reply.
+Long values split across `part=i of=n` lines, so a file cut short by a crash loses one chunk rather than
+the session. Works in the TUI, the line REPL and one-shot. `/save <file>` remains the readable markdown
+transcript for a session that ended normally.
+
+### Fixed — one dropped SSE frame bricked the whole conversation
+
+Captured off the wire against the dev stack. A streamed tool call arrives as an opening frame carrying
+`{index, id, function.name}` followed by `arguments` fragments. hoosh's Anthropic translation
+intermittently drops that opening frame while forwarding the fragments, so the slot ended the round with
+arguments and **nothing else**. thoth emitted it verbatim:
+
+```json
+{"id":"","type":"function","function":{"name":"","arguments":"{\"path\": \"src/tasks\"}"}}
+```
+
+t-ron denied the nameless call (correctly — `tool_name contains invalid characters`), the round carried
+on, and then that assistant message went into the conversation **history**, where the provider rejects a
+`tool_use` block with an empty id and name. From that point every later round came back with no content
+and no tool calls. The turn looked stuck long after the tool that broke it had scrolled away, and a fresh
+session was the only cure.
+
+A headerless slot is now **dropped and announced** (the model re-issues it next round); a slot with a
+name but no id gets a locally minted one, because thoth owns both sides of that pairing. An
+**empty-string tool name is no longer a name** — every consumer tested `nm != 0`, so `""` sailed past the
+no-name arm and reached t-ron.
+
+Two more ways a streamed round silently came out smaller than the model asked for, both now counted and
+named: calls past `AGENT_MAX_CALLS` were discarded with a bare `return` (**and the cap was 8**, while the
+non-streaming path ran all of them — the same model, the same round, different work depending on
+`[hoosh].stream`; now 32), and `arguments` past `AG_ARGS_CAP` were **clipped mid-JSON** and sent, which
+made the `AGENT_ARGS_MAX` refusal unreachable because the clip happened first and made the value smaller
+than the threshold.
+
+### Fixed — the per-turn tool working set truncated into malformed JSON
+
+`_agent_work` holds every assistant tool-call echo and every tool result of the current turn, and the next
+round's request body is built from it. Every append dropped silently at the cap, and the JSON escaper
+bailed **mid-string**. Two failures in order: before the cap, results were cut, so the model did not get
+what it asked for, asked again, and the turn walked in circles (measured: nine rounds re-reading the same
+two files on a 1300-file project); at the cap the body stopped being valid JSON, the gateway answered
+nothing, and the turn died looking like a model failure.
+
+The working set now **never emits a partial message**. A tail reserve keeps the closing bytes affordable;
+a result that no longer fits is replaced by a short, valid message that says it was dropped (every
+`tool_use` must have a matching result, so skipping is not an option); an assistant echo that does not fit
+is refused outright and the turn **ends cleanly** naming the constraint. Capacity raised with it —
+request 512 KB → 1 MB, working set 128 KB → 384 KB, which also lifts the history budget from ~35 KB to
+~64 KB of prior conversation.
+
+### Fixed — no socket timeout anywhere: a stalled gateway hung thoth unkillably
+
+Every HTTP call passed sandhi no options, so `read_ms` was 0, so `SO_RCVTIMEO` was never set and every
+`recv` was an unbounded blocking read. A gateway that completed the TCP handshake and then said nothing
+parked thoth in `recv` **forever** — and nothing could break it out: Esc is only polled inside the SSE
+callback, which never fires when no frame arrives, and the TUI has cleared ISIG and blocked SIGINT for the
+session, so Ctrl-C was neither a signal nor a readable byte. `kill` from another terminal was the only
+recovery, and `hoosh_health_probe()` runs the same unbounded GET at TUI startup, **before the first
+paint**.
+
+New `[hoosh].timeout_ms` (default 180000) is threaded through every hoosh, daimon and MCP-resource call.
+It is a stall detector, not a latency budget — a per-READ deadline, so a stream that keeps producing
+frames may run as long as it likes. Probe calls (reachability, catalog, recap) get a fixed, much shorter
+deadline: raising the turn timeout for a slow model must not turn a startup reachability check into a
+three-minute freeze. `timeout_ms = 0` restores the old behaviour. Verified both ways against a listener
+that accepts and never replies: 4.07 s to a clean `TIMEOUT` with the default, still hung at `0`.
+
+### Fixed — an empty HTTP 200 stream is reported as a gateway fault, not a model failure
+
+Reproduced deterministically by replaying one captured request: hoosh's remote-streaming path calls the
+provider, gets a permanent 4xx, logs `provider: permanent error, not retrying` to **its own** log — and
+sends the client a well-formed 200 SSE stream containing one `finish_reason:"stop"` frame and nothing
+else. thoth said *"response had neither tool calls nor content"*, which is true and useless: it points at
+the model, the operator retries, the same thing happens, and the session looks stuck. thoth now counts the
+frames that actually carried something and, when a 200 stream carried none, says so and points at the one
+place the reason exists. (The underlying provider rejection is upstream and unfixable from here; what was
+fixable was the laundering of an error into a silent success.)
+
+### Fixed — the working indicator froze whenever thoth was actually working
+
+The spinner could only advance where dispatch handed control back — per streamed SSE chunk. Everywhere
+else the glyph held still: waiting for a gateway's first byte, for a whole non-streaming turn, and for the
+length of every tool call. Honest stillness reads as "the thing froze", and was reported as exactly that.
+
+A short-lived worker thread now owns the glyph for the duration of one blocking call, armed immediately
+before and joined immediately after, so it never outlives its window. Two writers share one terminal
+through a single atomic word (`IDLE` / `ARMED` / `PAINTING`): the worker writes only after winning
+`ARMED → PAINTING` and composes each frame as **one** self-contained write (save cursor, paint, restore),
+and the SSE callback takes the terminal back around its own painting, waiting out any frame in flight. The
+shell tool's `waitpid` poll drives the same indicator with no thread at all, through a seam so `exec.cyr`
+keeps no dependency on the TUI. Without threads (Windows/AGNOS) or on a `thread_create` failure the arm is
+a no-op and nothing changes. A/B against 0.44.1 on a stalled gateway: **0 frames before, all 10 cycling
+after.**
+
+### Fixed — mouse wheel, Esc, and arrow keys in tmux
+
+Three defects in one decoder, each reaching the composer as stray text or a swallowed key:
+
+* **The legacy X10 mouse report was not decoded.** thoth asks for SGR (`?1006h`) alongside `?1000h`, but
+  1006 is an xterm extension — a terminal that does not implement it answers in the X10 encoding instead.
+  Undecoded, that was the worst of both worlds: the wheel did not scroll the feed **and** three junk bytes
+  landed in the composer on every scroll. Both encodings now share one decoder, so the wheel behaves
+  identically either way.
+* **Terminal modes were asserted once and never re-asserted.** A `/run` child can pop the alt screen and
+  mouse tracking on exit; after one such command the operator had a screen that looked normal and a
+  **mouse wheel that no longer scrolled**, with no way to connect it to the `/run` minutes earlier.
+* **A lone Esc blocked until the next key and then ate it**, and SS3 keys (`ESC O A` — what tmux and
+  screen send for arrows) fell through as a lone Esc plus a bare letter, so pressing Up **typed an `A`**.
+  Fixed with a timed follow-up read and a one-byte pushback.
+
+Also: `/run`'s output no longer vanishes in the TUI (the child painted straight onto the frame and the
+post-dispatch repaint erased it; under the alt screen it is now captured into the feed, where it scrolls,
+survives a repaint, lands in `/save` and is searchable), and autowrap is disabled for the alt screen — the
+hint row is the last row and the one band nobody clipped, so the slash palette's 177 columns made the
+terminal **scroll the whole frame**.
+
+### Fixed — silent failures found by a bug sweep
+
+* **`[log].file` with no `[log].level` crashed thoth at startup** — the announcement did `emit(lvls)` with
+  a null pointer, and `emit` is `write(2, s, strlen(s))`. That is the obvious way to write the config, so
+  the crash sat on the likeliest spelling of the feature.
+* **The tools advertisement could be emitted unbalanced.** The headroom guard decided whether a new tool
+  could *start* but never bounded its *size*, so a large MCP registry left a half-written element and
+  sometimes no closing bracket — and because the registry fetch succeeded, the result **latched for the
+  whole session**. Each element is now written speculatively and rolled back whole; the tools left out are
+  counted and announced.
+* **`search` had no bound on the walk and could not be cancelled.** `SEARCH_MAX_FILES` counted files
+  *opened*, which a glob-only search never does, so `search {"glob":"*.toml"}` in a built Rust project
+  walked every entry under `target/`. Now bounded on entries visited, cancellable with Esc, and skipping
+  the rest of the usual build output (`target`, `dist`, `.venv`, `__pycache__`, `.next`, …).
+* **`@mention` wrote past its buffer.** The room guard reserved 40 slack bytes but the header carries a
+  127-byte UNTRUSTED banner when the guard flags a file, and the appender had no cap check at all — into
+  the bump-allocated buffer sitting immediately after it, which the next `memcpy` reads from. `[guard]`
+  defaults on, so this was the default configuration.
+* **The GUI ask modal queued a pointer to a stack array** into a draw list rasterised after the frame was
+  gone.
+* **`oneshot_json_envelope` used the unbounded `_append_int`** after saturating appends — a heap
+  out-of-bounds write whose over-long returned length was then printed to stdout and the `-o` file.
+* **`/rewind` reported a partial restore as a completed undo** (only successes were counted, with no else
+  branch), and **`/write` reported a short write as a full one** while `O_TRUNC` had already emptied the
+  file.
+* **A configured `pre_tool` hook on a target with no shell was inert and silent** while `/state` printed
+  `pre_tool(blocking)` in accent. It is announced now, and `/state` names it as not running.
+* **Security notices were discarded under `OUT_NULL`** — one-shot and the GUI run turns there, so a tool
+  withheld for a changed MCP definition, an injection flag, a redaction and a blocked hook were all
+  announced to nobody. They route to stderr when the normal channel is a discard.
+* **`search`'s summary stated two wrong facts**: `"6 filees"` (one plural suffix for both nouns) and
+  `"in 0 files scanned"` for a search that opens no files.
+
 ## [0.44.1] - 2026-08-26
 
 **The agent knows where it is.** Suite **289 + 1628 + 475 + 183 + 4** (+58), all targets green.

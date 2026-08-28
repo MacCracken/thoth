@@ -66,7 +66,8 @@ include "src/tui.cyr"
 
 include "tests/cases/testutil.cyr"
 include "tests/cases/core.cyr"
-include "tests/cases/agent.cyr"
+# tests/cases/agent.cyr moved to tests/thoth_agent.tcyr at 0.44.2 — the 8 MB preprocess ceiling again
+# (see that file's header). Same src chain there; nothing was dropped from the suite.
 include "tests/cases/vendor.cyr"   # vendor-pin integrity (0.38.6); no thoth deps — pure fs+str over src/vendor/
 
 fn main() {
@@ -95,7 +96,7 @@ fn main() {
     test_dry();
     test_memory();
     test_mem_seam();
-    test_shell(); test_shell_bufs_realloc();
+    test_shell_bufs_realloc();   # body lives in tests/cases/core.cyr (the shell TOOL tests moved to thoth_agent)
     test_oneshot();
     test_oneshot_pipe_provenance();
     test_json_envelope();
@@ -108,21 +109,11 @@ fn main() {
     test_inhist();
     test_inhist_persist();
     test_logging();
-    test_agent();
+    test_logs_flag();
+    test_hoosh_timeout();
     test_config_m4();
-    test_daimon();
-    test_edit();
-    test_editlog();
-    test_mcpres();
-    test_ask_user();
-    test_tron();
-    test_audit();
-    test_roundlog();
-    test_parallel();
-    test_bounds_hardening();
     test_state_reason_row(); test_history_dropped(); test_recap(); test_recap_drop_shift();
     test_git();
-    test_project();
     test_save(); test_save_formats();
     test_session_persist();
     test_ui_niceties();

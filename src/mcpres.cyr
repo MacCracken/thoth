@@ -88,7 +88,7 @@ fn mcpres_endpoints_reset() {
 fn _mcpres_get_array(url, key) {
     if (url == 0) { return 0; }                 # [daimon].url unset — see the builders above
     var h = sandhi_headers_new();
-    var r = sandhi_http_get(url, h);
+    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }
@@ -170,7 +170,7 @@ fn mcpres_read(uri) {
     if (n == 0) { return 0; }
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    var r = sandhi_http_post(ep, h, _mcpres_req, n);
+    var r = sandhi_http_post_opts(ep, h, _mcpres_req, n, hoosh_http_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }
@@ -219,7 +219,7 @@ fn mcpres_prompt_get(name, args_json) {
     store8(_mcpres_req + off, 0);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    var r = sandhi_http_post(ep, h, _mcpres_req, off);
+    var r = sandhi_http_post_opts(ep, h, _mcpres_req, off, hoosh_http_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }

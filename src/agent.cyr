@@ -18,7 +18,7 @@
 # AGENT_MAX_ITERS was a hardcoded 8 through 0.39.0. It is now [hoosh].max_iters via
 # config_hoosh_max_iters() (0.40.0, T1-2) — read at the loop, not cached, so /reload takes effect.
 var _agent_req = 0;
-var AGENT_REQ_CAP = 524288;
+var AGENT_REQ_CAP = 1048576;
 var _agent_tools_buf = 0;
 var AGENT_TOOLS_CAP = 32768;
 var _agent_tools_len = 0;     # cached serialized-tools byte length (session-stable)
@@ -37,12 +37,45 @@ fn agent_tools_cache_reset() {
 # tool_calls + tool results) as raw comma-joined JSON objects. The persisted
 # conversation (session history) supplies the user turn and prior exchanges; the
 # tool rounds are ephemeral — only the user turn and the final answer enter
-# history. Bounded; appends past the cap are dropped.
+# history. Bounded; see the working-set block below for what happens at the bound.
+#
+# 0.44.2 raised REQ 512 KB -> 1 MB and WORK 128 KB -> 384 KB. 128 KB of tool results is one medium
+# review turn on a real project — the Node project this was measured against filled 66 KB of RAW result
+# bytes in nine rounds before escaping, and escaping JS source (quotes and newlines both double) is where
+# the rest of the headroom went. The history budget grows with it: hist_cap is REQ - WORK - TOOLS, and a
+# tenth of that is the raw-content budget, so the framer now carries ~64 KB of prior conversation instead
+# of ~35 KB. The heap is a 256 MB lazily-committed chunk, so this costs virtual address space, not RAM.
 var _agent_work = 0;
-var AGENT_WORK_CAP = 131072;
+var AGENT_WORK_CAP = 393216;
 var _agent_work_len = 0;
 
-fn _agent_work_reset() { _agent_work_len = 0; return 0; }
+# --- the working set is BOUNDED, and running out of it must not corrupt the conversation (0.44.2) -----
+#
+# ⚠ This buffer holds every assistant tool-call echo and every tool RESULT of the current turn, and it is
+# what the next round's request body is built from. Every append here used to drop silently at the cap:
+# `_agent_work_putc` refused the byte, and `_agent_work_puts_esc` bailed out MID-STRING at CAP-8 — so a
+# turn that read more than 128 KB of files produced a working set ending in an unterminated JSON string,
+# which went into the POST body as-is. Two failures, in this order:
+#
+#   1. BEFORE the cap is reached but after room gets tight, results are cut short — the model does not see
+#      what it asked for, asks again, and the turn walks in circles re-reading the same files (observed:
+#      nine rounds re-reading CLAUDE.md and src/bench.js on a 1300-file project).
+#   2. AT the cap the body stops being valid JSON, the gateway answers nothing, and the turn dies with
+#      "response had neither tool calls nor content" — pointing at the model, never at the buffer.
+#
+# The rule now: the working set NEVER emits a partial message. A tail reserve is kept so the bytes that
+# CLOSE a message are always affordable; a result that no longer fits is replaced by a short, valid
+# message that SAYS it was dropped (the model must be told, or it repeats the call); an assistant echo
+# that does not fit is refused outright and the turn stops cleanly, because an assistant tool-call message
+# and its results are a matched set and half of one is not a conversation.
+var AGENT_WORK_TAIL = 4096;      # bytes held back so closing/minimal messages are always affordable
+var _agent_work_full = 0;        # 1 once an append was refused or shortened this turn
+fn agent_work_full() { return _agent_work_full; }
+fn agent_work_len() { return _agent_work_len; }
+# _agent_work_room: writable bytes left OUTSIDE the tail reserve.
+fn _agent_work_room() { return (AGENT_WORK_CAP - 1 - AGENT_WORK_TAIL) - _agent_work_len; }
+
+fn _agent_work_reset() { _agent_work_len = 0; _agent_work_full = 0; return 0; }
 fn _agent_work_putc(c) {
     if (_agent_work_len < (AGENT_WORK_CAP - 1)) { store8(_agent_work + _agent_work_len, c); _agent_work_len = _agent_work_len + 1; }
     return 0;
@@ -52,11 +85,17 @@ fn _agent_work_puts(s) {
     while (load8(s + i) != 0) { _agent_work_putc(load8(s + i)); i = i + 1; }
     return 0;
 }
-# _agent_work_puts_esc: append s as a JSON string body (bounded, escaped).
+# _agent_work_puts_esc: append s as a JSON string body (bounded, escaped). Stops at the tail reserve and
+# marks the value as cut IN the value — so the model reads "…[truncated" rather than silently receiving a
+# short file, and the caller's closing bytes still fit.
 fn _agent_work_puts_esc(s) {
     var i = 0;
     while (load8(s + i) != 0) {
-        if (_agent_work_len >= (AGENT_WORK_CAP - 8)) { return 0; }
+        if (_agent_work_room() <= 32) {
+            _agent_work_full = 1;
+            _agent_work_puts(" ...[truncated: this turn's tool working set is full]");
+            return 0;
+        }
         var c = load8(s + i);
         if (c == 34) { _agent_work_putc(92); _agent_work_putc(34); }
         elif (c == 92) { _agent_work_putc(92); _agent_work_putc(92); }
@@ -72,16 +111,42 @@ fn _agent_work_puts_esc(s) {
     }
     return 0;
 }
+# _agent_work_puts_id: append a tool_call id as a JSON string body. Separate from _agent_work_puts_esc for
+# two reasons: it must still work INSIDE the tail reserve (a dropped-result message needs its id even when
+# ordinary room is gone, or the pairing breaks), and the id is gateway-supplied — the non-streaming path
+# takes it straight from the response JSON with no length of its own, so it is bounded here. Ids are ~40
+# bytes in practice; anything past AGENT_ID_MAX is a malformed gateway, not a longer name.
+var AGENT_ID_MAX = 128;
+fn _agent_work_puts_id(id) {
+    if (id == 0) { return 0; }
+    var i = 0;
+    while (i < AGENT_ID_MAX) {
+        var c = load8(id + i);
+        if (c == 0) { return 0; }
+        if (_agent_work_len >= (AGENT_WORK_CAP - 8)) { return 0; }
+        if (c == 34) { _agent_work_putc(92); _agent_work_putc(34); }
+        elif (c == 92) { _agent_work_putc(92); _agent_work_putc(92); }
+        elif (c < 32) { _agent_work_putc(63); }
+        else { _agent_work_putc(c); }
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn _agent_work_sep() { if (_agent_work_len > 0) { _agent_work_putc(44); } return 0; }   # comma
 
 # Append the assistant message that carries the model's tool_calls, verbatim
 # (raw_tcs is the already-valid JSON array text from the response).
+# Returns 1 when the echo was written, 0 when there was no room — a REFUSAL, not a truncation: the caller
+# must end the turn rather than send an assistant message whose tool_calls array stops mid-array.
 fn _agent_add_assistant(raw_tcs) {
+    var need = strlen(raw_tcs) + 64;
+    if (_agent_work_room() < need) { _agent_work_full = 1; return 0; }
     _agent_work_sep();
     _agent_work_puts("{\"role\":\"assistant\",\"content\":null,\"tool_calls\":");
     _agent_work_puts(raw_tcs);
     _agent_work_puts("}");
-    return 0;
+    return 1;
 }
 # _agent_verify_append: run the configured verification and fold its summary onto a write tool's result
 # (0.41.0, T2-5). Returns the ORIGINAL result unchanged when verification is not configured.
@@ -112,10 +177,22 @@ fn _agent_verify_append(res) {
 }
 
 # Append a tool-result message for a given tool_call id.
+# ⚠ EVERY tool_call id must get a result message — a provider rejects an assistant tool_use with no
+# matching tool result, so "we ran out of room, skip this one" is not an option. When the room outside the
+# tail reserve is gone the message is still emitted, with a short content that names the reason: valid
+# JSON, correct pairing, and the model learns why it got nothing back instead of inferring the tool broke.
 fn _agent_add_result(id, text) {
+    if (_agent_work_room() < 256) {
+        _agent_work_full = 1;
+        _agent_work_sep();
+        _agent_work_puts("{\"role\":\"tool\",\"tool_call_id\":\"");
+        _agent_work_puts_id(id);
+        _agent_work_puts("\",\"content\":\"(result dropped: this turn's tool working set is full)\"}");
+        return 0;
+    }
     _agent_work_sep();
     _agent_work_puts("{\"role\":\"tool\",\"tool_call_id\":\"");
-    if (id != 0) { _agent_work_puts_esc(id); }
+    _agent_work_puts_id(id);
     _agent_work_puts("\",\"content\":\"");
     # 0.40.0 (T1-3): redact HERE, the single chokepoint where a tool result becomes a transcript message.
     # Upstream of every sink at once — the feed, the conversation store, /save, and the next request to
@@ -225,9 +302,20 @@ fn agent_format_tools(dst, tools_arr) {
     var wrote = 0;                  # 0.42.0: tools WRITTEN, not tools SEEN — the pin can skip one, and
                                     # `i > 0` as the comma test would then emit a leading or doubled comma
                                     # and hand the gateway malformed JSON.
+    # ⚠ 0.44.2 — THE HEADROOM GUARD BELOW DOES NOT BOUND THE ELEMENT IT ADMITS. `off > cap - 256` decides
+    # whether a NEW tool may start; it says nothing about how big that tool is, and a description plus a
+    # verbatim inputSchema pass-through is routinely far more than 256 bytes. Past the cap
+    # `_append_cstr_cap` stops mid-token, so the array ended in a half-written element — and if `off`
+    # landed on cap-1 the closing `]` was dropped as well. `,"tools":<malformed>` makes the whole POST body
+    # invalid JSON, and because the registry FETCH succeeded `_agent_tools_ready` latches: every agentic
+    # turn for the rest of the session sends the same broken advertisement. One large MCP registry bricked
+    # the session, and the function's own comment claimed the opposite ("a SHORTER but VALID tools array").
+    # Now each element is written speculatively and ROLLED BACK whole if it saturated the buffer.
+    var skipped = 0;
     while ((i < n) && (done == 0)) {
         if (off > (cap - 256)) { done = 1; }
         else {
+            var el_start = off;
             var t = bayan_json_v_arr_get(tools_arr, i);
             # 0.42.0 (T3): resolve the three fields BEFORE writing anything, so the trust-on-first-use pin
             # can withhold the whole tool rather than half-writing it. A definition that changed since this
@@ -268,15 +356,35 @@ fn agent_format_tools(dst, tools_arr) {
                 off = _append_cstr_cap(dst, off, cap, "{\"type\":\"object\"}");   # absent / empty / typeless -> permissive valid schema
             }
             off = _append_cstr_cap(dst, off, cap, "}}");
-            wrote = wrote + 1;
+            # Saturated? Then this element is truncated somewhere inside it. Roll the whole element back —
+            # including the comma that preceded it — and stop. `cap - 2` leaves room for the closing "]"
+            # plus the NUL, so the array below is always well-formed.
+            if (off >= (cap - 2)) { off = el_start; done = 1; skipped = n - i; }
+            else { wrote = wrote + 1; }
             i = i + 1;
             }
         }
     }
+    if (done == 1) { if (i < n) { skipped = n - i; } }
     off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
+    _agent_tools_skipped = skipped;
     return off;
 }
+# _agent_tools_skipped: registry tools left out of the advertisement for want of room. The caller announces
+# it — a model that is not told a tool exists cannot ask why it is missing, so only the operator can.
+var _agent_tools_skipped = 0;
+fn agent_tools_skipped() { return _agent_tools_skipped; }
+
+# _agent_tools_fits: 1 if a local tool needing `need` bytes still fits after `tl`, leaving room for the
+# closing bracket. The add_* helpers below splice fixed literals onto the registry array; without this an
+# over-large registry would half-write one of THEM instead, with the same session-bricking result.
+fn _agent_tools_fits(tl, need) {
+    if (tl == 0) { return 1; }
+    if ((tl + need) < (AGENT_TOOLS_CAP - 2)) { return 1; }
+    return 0;
+}
+var AGENT_TOOL_ELEM_RESERVE = 4096;   # generous: the largest literal below is ~2.5 KB
 
 # agent_tools_add_memory: append the thoth-native memory_write tool to the daimon
 # tools array in dst (0.12.2). tl == the current array length ("[...]" or 0 for an
@@ -286,6 +394,8 @@ fn agent_format_tools(dst, tools_arr) {
 # _agent_run_calls_serial — never forwarded to daimon. ADR-0012.
 fn agent_tools_add_memory(dst, tl) {
     if (seam_cap_state(SEAM_MEMORY) == CAP_ABSENT) { return tl; }
+    # 0.44.2: refuse WHOLE rather than splice a half-written element onto a saturated array.
+    if (_agent_tools_fits(tl, AGENT_TOOL_ELEM_RESERVE) == 0) { _agent_tools_skipped = _agent_tools_skipped + 1; return tl; }
     var cap = AGENT_TOOLS_CAP;
     var off = tl;
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
@@ -305,6 +415,8 @@ fn agent_tools_add_memory(dst, tl) {
 fn agent_tools_add_shell(dst, tl) {
     if (config_shell_enabled() == 0) { return tl; }
     if (shell_supported() == 0) { return tl; }
+    # 0.44.2: refuse WHOLE rather than splice a half-written element onto a saturated array.
+    if (_agent_tools_fits(tl, AGENT_TOOL_ELEM_RESERVE) == 0) { _agent_tools_skipped = _agent_tools_skipped + 1; return tl; }
     var cap = AGENT_TOOLS_CAP;
     var off = tl;
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
@@ -322,6 +434,8 @@ fn agent_tools_add_shell(dst, tl) {
 # the user's explicit grant are the boundary) in _agent_run_calls_serial. Same shape as agent_tools_add_shell;
 # adds TWO tools.
 fn agent_tools_add_project(dst, tl) {
+    # 0.44.2: refuse WHOLE rather than splice a half-written element onto a saturated array.
+    if (_agent_tools_fits(tl, AGENT_TOOL_ELEM_RESERVE) == 0) { _agent_tools_skipped = _agent_tools_skipped + 1; return tl; }
     var cap = AGENT_TOOLS_CAP;
     var off = tl;
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
@@ -364,6 +478,10 @@ fn agent_tools_add_delegate(dst, tl) {
 # it could answer by reading a file), and it warns that the budget is small.
 fn agent_tools_add_ask(dst, tl) {
     if (config_ask_enabled() == 0) { return tl; }
+    # 0.44.2: refuse WHOLE rather than splice a half-written element onto a saturated array.
+    if (_agent_tools_fits(tl, AGENT_TOOL_ELEM_RESERVE) == 0) { _agent_tools_skipped = _agent_tools_skipped + 1; return tl; }
+    # 0.44.2: refuse WHOLE rather than splice a half-written element onto a saturated array.
+    if (_agent_tools_fits(tl, AGENT_TOOL_ELEM_RESERVE) == 0) { _agent_tools_skipped = _agent_tools_skipped + 1; return tl; }
     var cap = AGENT_TOOLS_CAP;
     var off = tl;
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
@@ -379,6 +497,8 @@ fn agent_tools_add_ask(dst, tl) {
 # Surgical semantics: it replaces the UNIQUE occurrence of old_string; a non-unique/absent match is refused.
 fn agent_tools_add_edit(dst, tl) {
     if (config_edit_enabled() == 0) { return tl; }         # off by default; keep in lockstep with the dispatch guard
+    # 0.44.2: refuse WHOLE rather than splice a half-written element onto a saturated array.
+    if (_agent_tools_fits(tl, AGENT_TOOL_ELEM_RESERVE) == 0) { _agent_tools_skipped = _agent_tools_skipped + 1; return tl; }
     var cap = AGENT_TOOLS_CAP;
     var off = tl;
     if (tl == 0) { off = _append_cstr_cap(dst, off, cap, "["); }
@@ -487,7 +607,20 @@ fn _agent_tc_fn_str(tcs, i, key) {
     if (s == 0) { return 0; }
     return str_cstr(s);
 }
-fn agent_tc_name(tcs, i) { return _agent_tc_fn_str(tcs, i, "name"); }
+# agent_tc_name: the call's tool name, or 0 when there ISN'T one.
+#
+# ⚠ 0.44.2 — AN EMPTY STRING IS NOT A NAME. `_ag_build_array` used to write `"name":""` for a slot
+# whose opening delta never arrived, and every consumer here tested `nm != 0` — so `""` sailed past
+# the no-name arm, was printed as a blank tool name, and was handed to t-ron, which answered
+# `DENY: tool_name contains invalid characters` for a tool that never existed. Collapsing "" to 0
+# HERE (rather than at each of the four call sites) means the no-name arm, the local-tool probe and
+# the roundlog all agree on one reading of "unnamed".
+fn agent_tc_name(tcs, i) {
+    var n = _agent_tc_fn_str(tcs, i, "name");
+    if (n == 0) { return 0; }
+    if (load8(n) == 0) { return 0; }
+    return n;
+}
 
 # agent_tc_args: the call's `arguments` as a NUL-terminated JSON cstr, or 0.
 #
@@ -580,7 +713,14 @@ fn _agent_raw_tool_calls(body, len) {
 # streams in pieces across later frames, concatenated by index. We accumulate
 # into fixed per-index slots, then reconstruct the same tool_calls array text the
 # non-streaming path gets — so execution + the assistant echo reuse one code path.
-var AGENT_MAX_CALLS = 8;
+# ⚠ 0.44.2 — THIS WAS 8, AND THE OVERFLOW WAS SILENT. _agent_accum_delta discards any delta whose index
+# is >= this with a bare return, so a streamed round of twelve calls executed eight and the assistant echo,
+# the roundlog and the model's own view all agreed on a round it never made. The BLOCKING path has no such
+# cap (agent_tc_count returns the real length and the executor batches it), so the same model on the same
+# round did different work depending on [hoosh].stream. A model asked to read a directory of files emits
+# ten-plus calls in one round routinely. 32 slots at AG_ARGS_CAP is 512 KB of lazily-committed heap, and
+# the drops that remain are now counted and announced rather than swallowed.
+var AGENT_MAX_CALLS = 32;
 var AG_ID_CAP = 96;
 var AG_NAME_CAP = 96;
 var AG_ARGS_CAP = 16384;
@@ -589,6 +729,7 @@ var _ag_names = 0;
 var _ag_args = 0;
 var _ag_args_len = 0;        # AGENT_MAX_CALLS i64 slots
 var _ag_seen = 0;            # AGENT_MAX_CALLS byte flags
+var _ag_argsover = 0;        # AGENT_MAX_CALLS byte flags — this slot's arguments were clipped (0.44.2)
 var _ag_max = 0;            # highest index+1 observed this round
 var _agent_arr_buf = 0;     # reconstructed tool_calls array text
 var AGENT_ARR_CAP = 131072;
@@ -600,6 +741,7 @@ fn _ag_alloc() {
         _ag_args = alloc(AGENT_MAX_CALLS * AG_ARGS_CAP);
         _ag_args_len = alloc(AGENT_MAX_CALLS * 8);
         _ag_seen = alloc(AGENT_MAX_CALLS);
+        _ag_argsover = alloc(AGENT_MAX_CALLS);
         _agent_arr_buf = alloc(AGENT_ARR_CAP);
     }
     return 0;
@@ -607,9 +749,13 @@ fn _ag_alloc() {
 fn _ag_reset() {
     _ag_alloc();
     _ag_max = 0;
+    _ag_frames = 0;
+    _ag_over_cap = 0;
+    _ag_oversize = 0;
     var i = 0;
     while (i < AGENT_MAX_CALLS) {
         store8(_ag_seen + i, 0);
+        store8(_ag_argsover + i, 0);
         store64(_ag_args_len + (i * 8), 0);
         store8(_ag_ids + (i * AG_ID_CAP), 0);
         store8(_ag_names + (i * AG_NAME_CAP), 0);
@@ -627,12 +773,18 @@ fn _ag_copy_str(dst, cap, s) {
     return 0;
 }
 # _ag_append_args: append a Str fragment to slot idx's arguments buffer.
+# ⚠ 0.44.2 — OVERFLOW IS NOW RECORDED. This clipped at the cap and said nothing, which meant the slot
+# ended the round holding a JSON fragment: `{"path":"a/very/long/…` with no closing brace. That was then
+# emitted as a real call, the tool arm answered `arguments are not valid JSON`, and the model — told
+# nothing about a size limit — reissued the same oversized call every round until the iteration cap. The
+# AGENT_ARGS_MAX refusal that exists for exactly this case was unreachable, because the clip happened
+# first and made the value SMALLER than the threshold. A clipped slot is now dropped and named.
 fn _ag_append_args(idx, s) {
     var base = _ag_args + (idx * AG_ARGS_CAP);
     var cur = load64(_ag_args_len + (idx * 8));
     var n = str_len(s);
     var room = AG_ARGS_CAP - 1 - cur;
-    if (n > room) { n = room; }
+    if (n > room) { n = room; store8(_ag_argsover + idx, 1); _ag_oversize = 1; }
     if (n > 0) {
         memcpy(base + cur, str_data(s), n);
         cur = cur + n;
@@ -663,7 +815,8 @@ fn _agent_accum_delta(e) {
     var idxv = bayan_json_v_obj_get(e, "index");
     if (idxv != 0) { idx = bayan_json_v_int(idxv); }
     else { idx = _ag_max; }
-    if ((idx < 0) || (idx >= AGENT_MAX_CALLS)) { return 0; }
+    if (idx < 0) { return 0; }
+    if (idx >= AGENT_MAX_CALLS) { _ag_over_cap = 1; return 0; }   # 0.44.2: counted + announced, never silent
     if ((idx + 1) > _ag_max) { _ag_max = idx + 1; }
     store8(_ag_seen + idx, 1);
     var idv = bayan_json_v_obj_get(e, "id");
@@ -677,6 +830,36 @@ fn _agent_accum_delta(e) {
     }
     return 0;
 }
+# _ag_synth_id: give slot `i` a locally-minted call id (`thoth_call_<i>`) when the gateway never sent
+# one. SAFE because thoth owns BOTH sides of the pairing: the id it echoes in the assistant message is
+# the same id it stamps on that call's `{role:tool}` result, so the provider only has to see them match.
+# A call whose NAME is missing cannot be rescued this way — there is nothing to invoke — but a call
+# missing only its id is complete work that would otherwise be thrown away.
+fn _ag_synth_id(i) {
+    var b = _ag_ids + (i * AG_ID_CAP);
+    var o = _append_cstr_cap(b, 0, AG_ID_CAP, "thoth_call_");
+    o = _append_int(b, o, i);
+    store8(b + o, 0);
+    return 0;
+}
+
+# _ag_dropped: how many slots _ag_build_array refused to emit this round (name never arrived).
+# Read by the caller so the operator is TOLD rather than left with a round that quietly shrank.
+var _ag_dropped = 0;
+fn ag_dropped() { return _ag_dropped; }
+# _ag_frames: SSE data events this round, [DONE] excluded. ZERO useful frames on an HTTP 200 stream is a
+# GATEWAY fault, not a model that chose to say nothing — see _agent_empty_stream below.
+var _ag_frames = 0;
+fn ag_frames() { return _ag_frames; }
+# _ag_over_cap: 1 if this round tried to use more slots than AGENT_MAX_CALLS. Distinct from _ag_dropped —
+# that is a gateway defect, this is thoth's own ceiling, and the operator's remedy differs.
+var _ag_over_cap = 0;
+fn ag_over_cap() { return _ag_over_cap; }
+# _ag_oversize: slots whose accumulated `arguments` hit AG_ARGS_CAP. Their JSON is CUT, so what is left is
+# not parseable and running it would invoke a tool with a fabricated argument set — they are dropped too.
+var _ag_oversize = 0;
+fn ag_oversize() { return _ag_oversize; }
+
 # _ag_build_array: reconstruct the tool_calls array text from the slots into dst
 # (NUL-terminated); return the length. `arguments` is emitted as an escaped JSON
 # string (the accumulated value is raw JSON). Mirrors the non-streaming raw shape.
@@ -686,23 +869,48 @@ fn _agent_accum_delta(e) {
 # stops an adversarial round of 8 max-size calls from overflowing the buffer; the
 # reconstructed array truncates in-buffer (and bayan rejects a clipped element)
 # instead of corrupting the bump heap.
+#
+# ⚠ 0.44.2 — A HEADERLESS SLOT IS NEVER EMITTED. A streamed tool call arrives as an opening delta
+# carrying {index, id, function.name} followed by `arguments` fragments. If the gateway drops that
+# opening delta but forwards the fragments (measured off the wire against hoosh 2.6.4's Anthropic
+# translation, which silently `return 0`s when it cannot pull id+name out of a `content_block_start`),
+# the slot ends the round with arguments and NOTHING else. This used to emit it verbatim:
+#
+#     {"id":"","type":"function","function":{"name":"","arguments":"{\"path\": \"src/tasks\"}"}}
+#
+# t-ron denied the nameless call (correctly), the round carried on — and then that assistant message
+# went into the conversation history, where the provider rejects a tool_use block with an empty id and
+# name. From that point EVERY later round came back with no content and no tool calls: the turn looked
+# like it "got stuck" long after the tool that broke it had scrolled away, and a fresh session was the
+# only cure. One dropped SSE frame bricked the whole conversation.
+#
+# So: a slot with no name is DROPPED here (the model simply does not see that call's result and
+# re-issues it next round), and a slot with a name but no id gets a locally-minted one. The count of
+# drops is kept for the caller to announce — silently returning fewer calls than the model asked for
+# is the failure mode this whole comment exists to prevent.
 fn _ag_build_array(dst) {
     var cap = AGENT_ARR_CAP;
     var off = 0;
+    _ag_dropped = 0;
     off = _append_cstr_cap(dst, off, cap, "[");
     var wrote = 0;
     var i = 0;
     while (i < _ag_max) {
         if (load8(_ag_seen + i) == 1) {
-            if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
-            off = _append_cstr_cap(dst, off, cap, "{\"id\":\"");
-            off = _json_escape_into_cap(dst, off, cap, _ag_ids + (i * AG_ID_CAP));
-            off = _append_cstr_cap(dst, off, cap, "\",\"type\":\"function\",\"function\":{\"name\":\"");
-            off = _json_escape_into_cap(dst, off, cap, _ag_names + (i * AG_NAME_CAP));
-            off = _append_cstr_cap(dst, off, cap, "\",\"arguments\":\"");
-            off = _json_escape_into_cap(dst, off, cap, _ag_args + (i * AG_ARGS_CAP));
-            off = _append_cstr_cap(dst, off, cap, "\"}}");
-            wrote = 1;
+            if (load8(_ag_names + (i * AG_NAME_CAP)) == 0) { _ag_dropped = _ag_dropped + 1; }
+            elif (load8(_ag_argsover + i) == 1) { }        # 0.44.2: clipped arguments -> not valid JSON -> never emitted
+            else {
+                if (load8(_ag_ids + (i * AG_ID_CAP)) == 0) { _ag_synth_id(i); }
+                if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+                off = _append_cstr_cap(dst, off, cap, "{\"id\":\"");
+                off = _json_escape_into_cap(dst, off, cap, _ag_ids + (i * AG_ID_CAP));
+                off = _append_cstr_cap(dst, off, cap, "\",\"type\":\"function\",\"function\":{\"name\":\"");
+                off = _json_escape_into_cap(dst, off, cap, _ag_names + (i * AG_NAME_CAP));
+                off = _append_cstr_cap(dst, off, cap, "\",\"arguments\":\"");
+                off = _json_escape_into_cap(dst, off, cap, _ag_args + (i * AG_ARGS_CAP));
+                off = _append_cstr_cap(dst, off, cap, "\"}}");
+                wrote = 1;
+            }
         }
         i = i + 1;
     }
@@ -936,12 +1144,17 @@ fn _agent_run_calls_par(tcs, nc) {
             }
             s = s + 1;
         }
+        # 0.44.2: the main thread now BLOCKS in thread_join for the length of the slowest call in the
+        # batch, and the workers do only network — nothing on this side writes to the terminal until
+        # phase 3. That is exactly the window the animator was built for.
+        spin_anim_arm();
         s = 0;
         while (s < batch) {
             var th = load64(_par_thread + s * 8);
             if (th != 0) { thread_join(th); }
             s = s + 1;
         }
+        spin_anim_disarm();                 # before phase 3 prints anything
         spin_label_clear();                 # 0.19.1: batch joined -> back to the generic indicator
         # Phase 3 — print + record + append results in deterministic call order.
         k = 0;
@@ -986,6 +1199,7 @@ fn _agent_run_calls_par(tcs, nc) {
             events_tool_result(session_turns(), nmout, rl_ok, bytes);   # 0.43.1
             if (nmout != 0) { hooks_post_tool(nmout, _par_args + k * PAR_ARGS_CAP); }   # 0.43.1: cannot block
             _agent_call_telem(kind2, rl_ok, ms, bytes);            # 0.19.1: telemetry sub-line
+            log_tool(nmout, _par_args + k * PAR_ARGS_CAP, roundlog_kind_str(kind2), rl_ok, ms, bytes);   # 0.44.2: session log
             roundlog_add_call(nmout, kind2, rl_ok, ms, bytes, _par_args + k * PAR_ARGS_CAP);   # 0.30.17: + the snapshotted raw args
             _agent_add_result(_par_id + k * PAR_ID_CAP, res);
             k = k + 1;
@@ -1234,7 +1448,10 @@ fn _agent_run_calls_serial(tcs, nc) {
         }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
+            # 0.44.2: one blocking MCP round-trip with nothing printing until it returns — animate it.
+            spin_anim_arm();
             res = daimon_invoke(nm, ar);
+            spin_anim_disarm();
             var text_ok = 0; if (res != 0) { text_ok = 1; }         # parsed a result?  (before the placeholder reassign)
             if (res == 0) { res = "(tool returned no result)"; }
             rl_ok = _agent_tool_ok(text_ok, daimon_invoke_is_error());   # 0.30.18: text parsed AND not an MCP isError
@@ -1251,6 +1468,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         events_tool_result(session_turns(), nm, rl_ok, bytes);  # 0.42.0 (T3)
         if (nm != 0) { hooks_post_tool(nm, gp); }                # 0.41.0 (T2-4): after the work; cannot block
         _agent_call_telem(rl_kind, rl_ok, ms, bytes);           # 0.19.1: faint telemetry sub-line
+        log_tool(nm, ar, roundlog_kind_str(rl_kind), rl_ok, ms, bytes);   # 0.44.2: session log
         roundlog_add_call(nm, rl_kind, rl_ok, ms, bytes, ar);   # 0.30.17: + the raw args for the card/audit summary
         _agent_add_result(id, res);
         ci = ci + 1;
@@ -1264,6 +1482,9 @@ fn _agent_run_calls_serial(tcs, nc) {
 #   kind 2 = transport error (message already announced)
 #   kind 3 = non-2xx HTTP (status in _agent_round_status; message announced)
 var _agent_round_kind = 0;
+# _agent_empty_stream: 1 when the last streamed round returned HTTP 200 carrying not one usable frame.
+var _agent_empty_stream = 0;
+fn agent_empty_stream() { return _agent_empty_stream; }
 var _agent_round_raw = 0;
 var _agent_round_val = 0;
 var _agent_round_n = 0;
@@ -1285,18 +1506,21 @@ fn _agent_set_tools(raw, val, n) {
 # in _hoosh_acc; tool_call deltas fold into the per-index slots. [DONE] ends it.
 fn _agent_sse_cb(ctx, ev) {
     if (intr_check() == 1) { return 0; }   # 0.17.4 Esc -> stop the stream cleanly (partial kept); 0.34.3: via the seam so the GUI stop-poll hook fires per frame too (TUI unchanged — no hook -> intr_poll)
+    # 0.44.2: this callback PRINTS (mdhl_feed + feed_stream_tick). Take the terminal from the animator for
+    # the duration, so a worker frame can never interleave with a repaint. No-op when no animator is armed.
+    spin_anim_claim();
     var data = sandhi_sse_event_data(ev);
-    if (data == 0) { return 1; }
-    if (streq(data, "[DONE]") == 1) { return 0; }
+    if (data == 0) { spin_anim_release(); return 1; }
+    if (streq(data, "[DONE]") == 1) { spin_anim_release(); return 0; }
     var v = bayan_json_v_parse_buf(data, strlen(data));
-    if (v == 0) { return 1; }
+    if (v == 0) { spin_anim_release(); return 1; }
     _hoosh_account_usage(v);   # 0.10.2/0.10.3: tokens + cost from the trailing usage frame
     var choices = bayan_json_v_obj_get(v, "choices");
-    if (choices == 0) { return 1; }
+    if (choices == 0) { spin_anim_release(); return 1; }
     var first = bayan_json_v_arr_get(choices, 0);
-    if (first == 0) { return 1; }
+    if (first == 0) { spin_anim_release(); return 1; }
     var delta = bayan_json_v_obj_get(first, "delta");
-    if (delta == 0) { return 1; }
+    if (delta == 0) { spin_anim_release(); return 1; }
     var rc = bayan_json_v_obj_get(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty on Opus 4.8)
     if (rc != 0) {
         var rs = bayan_json_v_str(rc);
@@ -1313,7 +1537,15 @@ fn _agent_sse_cb(ctx, ev) {
         var i = 0;
         while (i < tn) { _agent_accum_delta(bayan_json_v_arr_get(tcs, i)); i = i + 1; }
     }
+    # ⚠ COUNT ONLY FRAMES THAT CARRY SOMETHING. The terminating frame is `"delta":{}` with
+    # finish_reason "stop", so counting every delta would make an empty stream look like a one-frame
+    # answer — which is exactly the confusion this counter exists to remove. content, reasoning and
+    # tool_calls are the three ways a frame can be useful; a frame with none of them is bookkeeping.
+    if (rc != 0) { _ag_frames = _ag_frames + 1; }
+    elif (content != 0) { _ag_frames = _ag_frames + 1; }
+    elif (tcs != 0) { _ag_frames = _ag_frames + 1; }
     feed_stream_tick();   # 0.9.2: TUI incremental paint + spinner (no-op off the TUI)
+    spin_anim_release();  # 0.44.2: give the glyph back to the animator until the next chunk
     return 1;
 }
 
@@ -1324,7 +1556,11 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_post(_hoosh_endpoint_url(), h, _agent_req, len);
+    # 0.44.2: a non-streaming round is ONE blocking POST with no callback at all — the frame could never
+    # move for its whole duration, which is the longest stillness of any path here.
+    spin_anim_arm();
+    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _agent_req, len, hoosh_http_opts());   # 0.44.2: per-read deadline (see config_hoosh_timeout_ms)
+    spin_anim_disarm();
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var en = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(en);
@@ -1368,7 +1604,12 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     store64(_agent_cell, 0);
     mdhl_reset();    # 0.15.1: bracket the fenced-code highlighter around this iteration's stream
     intr_arm();      # 0.17.4: enter Esc-poll mode around the stream (TUI-only; no-op off OUT_RING)
-    var sr = sandhi_http_stream(_hoosh_endpoint_url(), "POST", h, _agent_req, len, &_agent_sse_cb, _agent_cell);
+    # 0.44.2: hand the spinner to the animator for the whole stream. The gap that mattered is the FIRST
+    # byte — a cold cloud round can sit in recv for seconds with nothing to tick the frame — but it also
+    # covers a mid-stream stall. _agent_sse_cb claims the terminal back around its own painting.
+    spin_anim_arm();
+    var sr = sandhi_http_stream_opts(_hoosh_endpoint_url(), "POST", h, _agent_req, len, &_agent_sse_cb, _agent_cell, hoosh_http_opts());   # 0.44.2: per-read deadline
+    spin_anim_disarm();
     intr_disarm();   # 0.17.4: restore cooked (the following t-ron confirm reads a line in cooked mode)
     mdhl_finish();   # drain the filter (residual line + open block) before the finishing newline / status branching
     if (_hoosh_acc_len > 0) { oprintln(""); }   # finish the streamed line
@@ -1384,13 +1625,87 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
         oprintln("  (error body not surfaced in stream mode; set [hoosh].stream=false to see it)");
         _agent_round_kind = 3; _agent_round_status = status; return 0;
     }
+    # ⚠ 0.44.2 — AN EMPTY 200 STREAM IS A GATEWAY FAULT, AND IT USED TO READ AS A MODEL FAILURE.
+    # Measured against the live stack: hoosh 2.6.4's remote-streaming path calls the provider, gets a
+    # permanent 4xx back, logs `provider: permanent error, not retrying` to its OWN log — and then sends
+    # the client a perfectly well-formed HTTP 200 SSE stream consisting of one `finish_reason:"stop"`
+    # frame and nothing else. thoth said "response had neither tool calls nor content", which is true and
+    # useless: it points at the model, the operator retries, the same thing happens, and the session
+    # looks stuck. Reproduced deterministically by replaying one captured request body; the trigger there
+    # was the provider rejecting a large-token request, but the SHAPE is general — any upstream error the
+    # gateway cannot forward arrives here as silence.
+    #
+    # thoth cannot see the gateway's log, so it does not guess at a cause. It reports what it can PROVE:
+    # the request was accepted, the stream carried no frames at all, and that is the gateway's business
+    # rather than the model's.
+    var frames_seen = _ag_frames;
     if (_ag_max > 0) {
         var rl = _ag_build_array(_agent_arr_buf);
         var val = bayan_json_v_parse_buf(_agent_arr_buf, rl);
-        _agent_set_tools(_agent_arr_buf, val, agent_tc_count(val));
+        var vn = agent_tc_count(val);
+        # 0.44.2: a slot whose opening delta never arrived is dropped by _ag_build_array rather than
+        # emitted nameless (see the comment there). SAY SO — the round is about to run fewer calls than
+        # the model asked for, and a silent shrink is indistinguishable from the model changing its mind.
+        if (ag_dropped() > 0) {
+            ui_emit(ROLE_RED, "  gateway dropped the opening frame for ");
+            ofmt_int(ag_dropped());
+            ui_emit(ROLE_RED, " tool call(s)");
+            ui_emit(ROLE_FAINT, " — skipped, not sent (the model re-issues them next round)");
+            oprintln("");
+            log_begin("tool_call_dropped"); log_kv_int("count", ag_dropped()); log_kv_int("turn", session_turns()); log_commit(SK_WARN);
+        }
+        # 0.44.2: the other two ways a streamed round can come out smaller than the model asked for. Both
+        # were silent; both present downstream as "the agent ignored what I told it to do".
+        if (ag_over_cap() == 1) {
+            ui_emit(ROLE_RED, "  the model asked for more than ");
+            ofmt_int(AGENT_MAX_CALLS);
+            ui_emit(ROLE_RED, " tool calls in one round");
+            ui_emit(ROLE_FAINT, " — the rest were not run");
+            oprintln("");
+            log_begin("tool_calls_over_cap"); log_kv_int("cap", AGENT_MAX_CALLS); log_kv_int("turn", session_turns()); log_commit(SK_WARN);
+        }
+        if (ag_oversize() == 1) {
+            ui_emit(ROLE_RED, "  a tool call's arguments exceeded ");
+            ofmt_int(AG_ARGS_CAP - 1);
+            ui_emit(ROLE_RED, " bytes");
+            ui_emit(ROLE_FAINT, " — dropped rather than sent half-written");
+            oprintln("");
+            log_begin("tool_args_oversize"); log_kv_int("cap", AG_ARGS_CAP - 1); log_kv_int("turn", session_turns()); log_commit(SK_WARN);
+        }
+        if (vn > 0) { _agent_set_tools(_agent_arr_buf, val, vn); }
+        else { _agent_round_kind = 0; }        # every call was headerless -> nothing to run this round
     } else {
         _agent_round_kind = 0;
+        if ((frames_seen == 0) && (_hoosh_acc_len == 0)) { _agent_empty_stream = 1; }
     }
+    return 0;
+}
+
+# _agent_finish_workfull (0.44.2): land a turn that ran out of TOOL WORKING SET honestly.
+#
+# The working set (_agent_work) holds this turn's assistant tool-call echoes and every tool result. It is
+# bounded, and a big review turn on a real project can fill it. Before this the buffer just stopped
+# accepting bytes: results were cut mid-string, the request body stopped being valid JSON, and the turn
+# died looking like a model failure. Now the turn ENDS at the round where the room ran out, keeps whatever
+# the model had already said, and names the actual constraint plus the two things that clear it.
+#
+# Mirrors _agent_finish_interrupted's history discipline: keep a streamed partial (completing the
+# user+assistant pair) or pop the unanswered user turn if nothing streamed at all.
+fn _agent_finish_workfull(iter) {
+    ui_emit(ROLE_RED, "  this turn's tool working set is full");
+    ui_emit(ROLE_FAINT, " ("); ofmt_int(_agent_work_len / 1024); ui_emit(ROLE_FAINT, " KB of tool results across ");
+    ofmt_int(iter + 1); ui_emit(ROLE_FAINT, " rounds) — stopping here rather than sending a truncated conversation");
+    oprintln("");
+    ui_emit(ROLE_FAINT, "  ask a narrower follow-up, or /compact to free room, and the answer so far is kept");
+    oprintln("");
+    if (_hoosh_acc_len > 0) {
+        session_history_append("assistant", _hoosh_acc, _hoosh_acc_len);
+        citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns());
+        reasonlog_record(session_turns(), hoosh_last_reason(), hoosh_last_reason_len());
+        sess_persist_save();
+    } else { session_history_pop_last(); }
+    log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "work_full");
+    log_kv_int("work_bytes", _agent_work_len); log_commit(SK_WARN);
     return 0;
 }
 
@@ -1433,6 +1748,7 @@ fn agent_turn(prompt) {
     # turn. Cache only on success: a transient daimon-down on the first turn leaves
     # _agent_tools_ready=0 so a later turn retries (degraded honestly, never sticky).
     if (_agent_tools_ready == 0) {
+        _agent_tools_skipped = 0;                             # 0.44.2: this build's count, not the last one's
         var dtv = 0;                                          # 0.20.0: only fetch daimon's registry when the seam
         if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { dtv = daimon_tools_value(); }   # is present (shell-standalone: no GET)
         daimon_mem_scan(dtv);                                # 0.32.0: prime the mneme memory-seam cache off this same registry fetch (no extra GET)
@@ -1449,6 +1765,17 @@ fn agent_turn(prompt) {
         # daimon-down would latch an empty registry forever. Gate on the daimon fetch (dtv) so a daimon-down
         # first turn leaves _agent_tools_ready=0 and a later turn retries (the documented self-heal above).
         if ((seam_status(SEAM_DAIMON) == SEAM_ABSENT) || (dtv != 0)) { _agent_tools_ready = 1; }
+        # 0.44.2: a registry too big for AGENT_TOOLS_CAP now yields a SHORTER but VALID advertisement (it
+        # used to yield a malformed one). Say which way it went — the model cannot report a tool it was
+        # never told about, so silence here reads as "the agent refuses to use my MCP server".
+        if (_agent_tools_skipped > 0) {
+            ui_emit(ROLE_RED, "  tool advertisement full");
+            ui_emit(ROLE_FAINT, " — "); ofmt_int(_agent_tools_skipped);
+            ui_emit(ROLE_FAINT, " tool(s) not advertised this session (registry exceeds ");
+            ofmt_int(AGENT_TOOLS_CAP); ui_emit(ROLE_FAINT, " bytes)");
+            oprintln("");
+            log_begin("tools_truncated"); log_kv_int("skipped", _agent_tools_skipped); log_commit(SK_WARN);
+        }
     }
     var tools_len = _agent_tools_len;
     var want_stream = config_hoosh_stream();
@@ -1471,8 +1798,22 @@ fn agent_turn(prompt) {
     var done = 0;
     var round_no = 0;
     var max_iters = config_hoosh_max_iters();      # 0.40.0 (T1-2): configurable, read per turn so /reload lands
+    # 0.44.2: the SESSION LOG's opening record for this turn. `--logs` exists so a run that never reaches
+    # its answer still explains itself, and the first thing anyone reads back is "what was it asked to
+    # do" — so the prompt goes down BEFORE the first request leaves, not after a turn that may not land.
+    log_begin("turn_start"); log_kv_int("turn", session_turns()); log_kv_str("model", model);
+    log_kv_int("max_iters", max_iters); log_kv_int("tool_bytes", tools_len); log_commit(SK_INFO);
+    log_text("task", "text", prompt, strlen(prompt));
     while ((done == 0) && (iter < max_iters)) {
         _hoosh_acc_reset();
+        _agent_empty_stream = 0;
+        # 0.44.2: one line per round BEFORE the request goes out. A hang leaves the last `round` line as
+        # the marker of exactly where it stopped — which round, and whether a reply or a tool ever came
+        # back — and that is the single most useful fact in a post-mortem of a turn that never returned.
+        log_begin("round"); log_kv_int("turn", session_turns()); log_kv_int("iter", iter + 1);
+        log_kv_int("work_bytes", _agent_work_len);
+        if (want_stream == 1) { log_kv_str("mode", "stream"); } else { log_kv_str("mode", "block"); }
+        log_commit(SK_DEBUG);
         if (want_stream == 1) { _agent_iter_stream(model, sys, mem, _agent_tools_buf, tools_len); }
         else { _agent_iter_block(model, sys, mem, _agent_tools_buf, tools_len); }
         # 0.17.4: a SINGLE if/elif chain — exactly one arm runs. (Was three bare `if`s; k==2/k==3
@@ -1499,7 +1840,12 @@ fn agent_turn(prompt) {
         } elif (k == 1) {
             var raw = _agent_round_raw;
             if (raw == 0) { raw = "[]"; }
-            _agent_add_assistant(raw);
+            # 0.44.2: the echo is refused rather than truncated when the working set is out of room. Stop
+            # the turn HERE — half an assistant tool_calls array is not a conversation, and sending one
+            # produces exactly the silent "response had neither tool calls nor content" this release exists
+            # to remove.
+            if (_agent_add_assistant(raw) == 0) { _agent_finish_workfull(iter); done = 1; }
+            else {
             round_no = round_no + 1;
             roundlog_open(session_turns(), round_no);
             # 0.34.1: cancel mid-round. Arm the Esc-poll around the (possibly long) tool phase so a keystroke during
@@ -1511,11 +1857,27 @@ fn agent_turn(prompt) {
             intr_check();                     # 0.34.1: final drain BEFORE disarm — catch an Esc pressed during the LAST/only tool call (the serial poll runs before each call, not after the last)
             intr_disarm();
             if (intr_pending() == 1) { _agent_finish_interrupted(iter); done = 1; }
+            elif (_agent_work_full == 1) { _agent_finish_workfull(iter); done = 1; }   # 0.44.2: results were dropped — stop before the next round asks for more
+            }
         } else {
             if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); reasonlog_record(session_turns(), hoosh_last_reason(), hoosh_last_reason_len()); sess_persist_save(); grounding_emit(); }   # 0.32.4: grounding line (silent if no recall); 0.33.4: persist cited sources; 0.33.5: persist tool calls; 0.35.3: persist this turn's reasoning for the landed fold
+            elif (_agent_empty_stream == 1) {
+                # The gateway ACCEPTED the request (HTTP 200) and streamed nothing at all. Name that as
+                # the gateway's fault, and point at the one place the reason actually exists.
+                ui_emit(ROLE_RED, "  hoosh returned an EMPTY stream");
+                ui_emit(ROLE_FAINT, " — HTTP 200, no content, no tool calls, not one frame.");
+                oprintln("");
+                ui_emit(ROLE_FAINT, "  the gateway accepted the request and produced nothing, so the reason is on ITS side, not the model's:");
+                oprintln("");
+                ui_emit(ROLE_FAINT, "  check the hoosh log (an upstream provider error is not forwarded to this stream).");
+                oprintln("");
+                session_history_pop_last();
+                log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "empty_stream"); log_commit(SK_ERROR);
+            }
             else { oprintln("  hoosh: response had neither tool calls nor content."); session_history_pop_last(); }
             done = 1;
             log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "ok"); log_commit(SK_INFO);
+            log_text("reply", "text", _hoosh_acc, _hoosh_acc_len);   # 0.44.2: the answer itself, so the log is a transcript and not just a trace
         }
         iter = iter + 1;
     }

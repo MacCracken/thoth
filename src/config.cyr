@@ -27,6 +27,7 @@ var _cfg_hoosh_stream = 1;   # 1 = stream completions (default), 0 = blocking
 var _cfg_hoosh_history = 1;  # 1 = multi-turn context (default), 0 = stateless
 var _cfg_hoosh_tools = 1;    # 1 = agentic tool-calling when daimon wired (default), 0 = off
 var _cfg_hoosh_max_iters = 0 - 1;   # agentic tool ROUNDS per turn; -1 = unset -> default (clamped in the getter)
+var _cfg_hoosh_timeout_ms = 0 - 1;  # 0.44.2: [hoosh].timeout_ms — socket read/write deadline; -1 = unset -> default
 var _cfg_hoosh_compact_at = 0 - 1;  # 0.40.0 (T1-5): auto-compact once session tokens cross this; -1/absent = off
 var _cfg_redact_enabled = 1;        # 0.40.0 (T1-3): [redact].enabled — DEFAULT ON (see config_redact_enabled)
 var _cfg_guard_enabled = 1;         # 0.41.0 (T2-3): [guard].enabled — DEFAULT ON (see config_guard_enabled)
@@ -815,6 +816,7 @@ fn _cfg_known_key(sec, key) {
         if (streq(key, "history") == 1) { return 1; }
         if (streq(key, "tools") == 1) { return 1; }
         if (streq(key, "max_iters") == 1) { return 1; }
+        if (streq(key, "timeout_ms") == 1) { return 1; }
         if (streq(key, "compact_at") == 1) { return 1; }
         if (streq(key, "parallel") == 1) { return 1; }
         if (streq(key, "reasoning") == 1) { return 1; }
@@ -977,6 +979,7 @@ fn config_load() {
     _cfg_hoosh_history = _cfg2_bool(hoosh_l, hoosh_g, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg2_bool(hoosh_l, hoosh_g, "tools", 1);        # default on
     _cfg_hoosh_max_iters = _cfg2_int(hoosh_l, hoosh_g, "max_iters");    # -1 when absent -> default in the getter
+    _cfg_hoosh_timeout_ms = _cfg2_int(hoosh_l, hoosh_g, "timeout_ms");  # 0.44.2: -1/absent -> HOOSH_TIMEOUT_MS_DEFAULT
     _cfg_hoosh_compact_at = _cfg2_int(hoosh_l, hoosh_g, "compact_at");  # -1/absent -> off (0 from the getter)
     _cfg_hoosh_parallel = _cfg2_bool(hoosh_l, hoosh_g, "parallel", 1);  # default on
     _cfg_hoosh_reasoning = _reasoning_level_from(_cfg2_str(hoosh_l, hoosh_g, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
@@ -1209,6 +1212,32 @@ fn config_hoosh_max_iters() {
     var n = _cfg_hoosh_max_iters;
     if (n <= 0) { return HOOSH_MAX_ITERS_DEFAULT; }
     if (n > HOOSH_MAX_ITERS_CEILING) { return HOOSH_MAX_ITERS_CEILING; }
+    return n;
+}
+
+# config_hoosh_timeout_ms: the SOCKET deadline for every gateway call — read, write, and (scaled down)
+# connect. 0.44.2.
+#
+# ⚠ Until this key existed thoth passed sandhi NO options at all, which means read_ms == 0, which means
+# `SO_RCVTIMEO` was never set and every recv was an unbounded blocking read. A gateway that completes the
+# TCP handshake and then says nothing — an upstream provider stall, a proxy holding the socket open, a
+# reverse proxy that has lost its backend — parked thoth in `recv` FOREVER. And nothing could break it
+# out: `intr_check` (Esc) only runs inside the SSE callback, which never fires because no frame arrives,
+# and the TUI has cleared ISIG and blocked SIGINT for the session, so Ctrl-C is neither a signal nor a
+# readable byte. The only recovery was `kill` from another terminal. Two comments in this tree already
+# assumed a timeout that was never configured (src/intr.cyr, src/hoosh.cyr's probe).
+#
+# The default is deliberately GENEROUS (180 s): it is a stall detector, not a latency budget. A reasoning
+# model can legitimately think for minutes before its first token, and this is a per-READ deadline, not a
+# per-turn one — a stream that keeps producing frames resets it on every frame and may run as long as it
+# likes. `0` restores the old unbounded behaviour for anyone who needs it; the floor is 1 s.
+var HOOSH_TIMEOUT_MS_DEFAULT = 180000;
+var HOOSH_TIMEOUT_MS_MIN = 1000;
+fn config_hoosh_timeout_ms() {
+    var n = _cfg_hoosh_timeout_ms;
+    if (n < 0) { return HOOSH_TIMEOUT_MS_DEFAULT; }   # absent -> default
+    if (n == 0) { return 0; }                          # explicit 0 -> unbounded (the pre-0.44.2 behaviour)
+    if (n < HOOSH_TIMEOUT_MS_MIN) { return HOOSH_TIMEOUT_MS_MIN; }
     return n;
 }
 

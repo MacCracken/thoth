@@ -129,6 +129,8 @@ fn main() {
     out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); only the TUI arms OUT_RING
     confirm_hooks_set(&tui_confirm_begin, &tui_confirm_end);   # wire the gate confirm's live-screen bracket (TUI-decoupling)
     reply_sink_set(&mdhl_reply, &mdhl_reset, &mdhl_feed, &mdhl_finish, &feed_stream_tick);   # wire hoosh's reply render to mdhl + the TUI paint (all tiers; TUI-decoupling)
+    exec_wait_tick_set(&spin_tick);   # 0.44.2: advance the working indicator from the shell tool's waitpid poll (no-op off the TUI)
+    exec_child_done_set(&tui_modes_reassert);   # 0.44.2: a /run child can clear alt-screen/mouse/paste/kitty — re-assert after it
     # Classify the one-shot mode from argv FIRST (it needs no config). For any one-shot
     # mode, discard the seam-init chrome that follows: gate_init / log_init print to fd 1
     # when [tron].policy / [log].file are configured, and that would leak onto the clean
@@ -137,6 +139,11 @@ fn main() {
     # still announces itself to the interactive user).
     var mode = oneshot_mode();
     if (mode != ONESHOT_NONE) { out_mode_set(OUT_NULL); }
+    # 0.44.2: `--logs FILE` binds the session log HERE — before config_load, before the seams, before the
+    # tier is resolved — because the failures worth capturing include the ones that happen during those
+    # steps. It announces on stderr (fd2), so a one-shot's stdout stays the answer and nothing else.
+    # log_init() below sees the binding and leaves the sink alone; [log].level still narrows the level.
+    log_argv_init(oneshot_log_path(), oneshot_log_level());
     config_load();          # read thoth.cyml -> flips hoosh/daimon seams to remote when urls are set
     # 0.11.10: apply the --tier preference (parsed from argv above) BEFORE detection. A bad value
     # is announced on stderr (fd2 — honest even in one-shot, where fd1 is the OUT_NULL discard) and

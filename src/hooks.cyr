@@ -192,24 +192,44 @@ fn hooks_session_end() {
 # never got to weigh anything, and treating that as a deny would break a session over a broken script. A
 # hook that STARTED and ran out of time is a security control that was consulted and did not answer — and
 # thoth's house rule is that security degrades CLOSED. The timeout is already announced by _hook_run.
+# ⚠ 0.44.2 — A CONFIGURED pre_tool HOOK ON A TARGET WITH NO SHELL WAS INERT AND SILENT. On AGNOS —
+# thoth's canonical target — exec.cyr defines `shell_supported() { return 0; }`, so this returned PROCEED
+# with no message, no log line and no counter bump, while /state kept printing `pre_tool(blocking)` in
+# accent. A security control reported present while its seam is absent is the exact shape the house rules
+# forbid. It is NOT turned into a blanket deny: denying every tool call would make thoth unusable on the
+# target it is built for, and the rule that matters here is "never SILENTLY allow". So it is announced —
+# once per session, on every surface — and /state now names it as unavailable rather than blocking.
+var _hooks_shell_gap = 0;      # 1 once a configured hook was found unrunnable on this target
+var _hooks_gap_told = 0;
+fn hooks_shell_gap() { return _hooks_shell_gap; }
+fn _hooks_note_gap(which) {
+    _hooks_shell_gap = 1;
+    if (_hooks_gap_told == 1) { return 0; }
+    _hooks_gap_told = 1;
+    note_emit("  [hooks] "); note_emit(which);
+    note_println(" is configured but this target has no shell to run it — the hook is NOT running");
+    log_begin("hook"); log_kv_str("event", which); log_kv_str("result", "unavailable_no_shell"); log_commit(SK_WARN);
+    return 0;
+}
+
 fn hooks_pre_tool(tool, args) {
     var c = config_hook_pre_tool();
     if (c == 0) { return 1; }
     if (load8(c) == 0) { return 1; }
-    if (shell_supported() == 0) { return 1; }
+    if (shell_supported() == 0) { _hooks_note_gap("pre_tool"); return 1; }
     var rc = _hook_run(c, "pre_tool", tool, args);
     if (rc == (0 - 2)) {                                    # timed out -> the control did not answer -> DENY
         _hook_blocked = _hook_blocked + 1;
-        ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); emit(tool);
-        ui_emit(ROLE_FAINT, " (the hook timed out — degrading closed)"); oprintln("");
+        ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit(tool);
+        note_println(" (the hook timed out — degrading closed)");
         log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool);
         log_kv_int("blocked", 1); log_kv_str("reason", "timeout"); log_commit(SK_WARN);
         return 0;
     }
     if (rc <= 0) { return 1; }                              # 0 = allow; -1 = could not SPAWN -> do not fake a deny
     _hook_blocked = _hook_blocked + 1;
-    ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); emit(tool);
-    ui_emit(ROLE_FAINT, " (exit "); ofmt_int(rc); ui_emit(ROLE_FAINT, ")"); oprintln("");
+    ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit(tool);
+    ui_emit(ROLE_FAINT, " (exit "); ofmt_int(rc); note_println(")");
     log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool);
     log_kv_int("blocked", 1); log_commit(SK_WARN);
     return 0;

@@ -160,12 +160,22 @@ fn ckpt_restore_one(i) {
 # ckpt_restore_turn: restore every checkpoint from `turn`, NEWEST FIRST so a file written twice in one
 # turn lands on its oldest snapshot — the state before the turn began, which is what "undo the turn"
 # means. Returns the number of files restored.
+# ⚠ 0.44.2 — A FAILED RESTORE WAS COUNTED AS NOTHING AND REPORTED AS NOTHING. Only successes were
+# counted and there was no else branch, so a write that failed (a file made read-only since the snapshot,
+# a full disk, a directory that moved) simply did not appear in the total — and /rewind printed a
+# completed undo over a tree still holding the model's changes. "Undo" is precisely the operation an
+# operator must be able to trust; a partial one reported as whole is worse than a refusal.
+# `ckpt_restore_failed()` carries the count so the caller can say so.
+var _ckpt_failed = 0;
+fn ckpt_restore_failed() { return _ckpt_failed; }
 fn ckpt_restore_turn(turn) {
     var done = 0;
+    _ckpt_failed = 0;
     var i = _ckpt_n - 1;
     while (i >= 0) {
         if (load64(_ckpt_turn + i * 8) == turn) {
             if (ckpt_restore_one(i) == 1) { done = done + 1; }
+            else { _ckpt_failed = _ckpt_failed + 1; }
         }
         i = i - 1;
     }

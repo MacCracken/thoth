@@ -284,6 +284,22 @@ one is decided.
   feeds its cost producer. Degrades quietly today rather than honestly — the token/cost row simply
   is not fed on that path.
 
+- ⛔ **hoosh drops SSE frames on the Anthropic streaming path, and launders provider errors into an
+  empty 200 stream** (upstream, hoosh 2.6.4 — surfaced and captured off the wire at 0.44.2). Two
+  distinct defects in `_remote_stream_cb` / `handle_chat_stream` (`src/lib/handlers.cyr`):
+  1. `_emit_anthropic_tool_delta` silently `return 0`s when it cannot pull `id`+`name` out of a
+     `content_block_start`, so a tool call's OPENING frame can be dropped while its
+     `input_json_delta` fragments are still forwarded — the client receives arguments belonging to
+     a call with no name and no id. Observed intermittently; the same shape also loses a fragment
+     mid-`arguments`, producing a call whose JSON is cut. thoth 0.44.2 now drops and announces such
+     a call instead of letting it poison the conversation, but the frames are still lost.
+  2. When the provider returns a permanent 4xx, hoosh logs `provider: permanent error, not retrying`
+     to its **own** log, discards the provider's error body, and sends the client a well-formed
+     HTTP 200 SSE stream containing one `finish_reason:"stop"` frame and nothing else. An error
+     laundered into a silent success. thoth 0.44.2 reports an all-empty 200 stream as a gateway
+     fault rather than a model failure, but cannot say WHY — only hoosh knows.
+  Reproduced deterministically by replaying one captured request body; not fixable from thoth.
+
 - **t-ron's audit export is unescaped and flat-sized** (upstream, t-ron — surfaced by 0.42.0's
   `/audit export`). `_audit_export_event` splices `reason` into JSON with no escaping, and sizes
   the whole buffer at a flat 512 bytes/event against a reason whose length it does not bound. Both

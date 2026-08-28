@@ -94,10 +94,18 @@ thoth 'review this diff'                 # run one task, print the answer, exit
 git diff | thoth 'review this'           # piped stdin is appended to the task
 thoth --json 'summarize' | jq .response  # one JSON object per turn (for jq/CI)
 thoth -o out.md 'draft a README'         # tee the answer to a file as well as stdout
+thoth --logs session.log                 # append a session log (works interactively too)
 source <(thoth --completion bash)        # tab-complete thoth's flags (bash or zsh)
 thoth gui                                # open the desktop GUI instead of the TUI
 thoth --help                             # the full one-shot reference
 ```
+
+`--logs <file>` (0.44.2) records the session — the task, each agentic round, every tool call with
+its authorization verdict and result size, and the reply — and binds **before the config is read**,
+so a run that crashes, hangs or is killed still leaves a record. `/save <file>` writes a readable
+markdown transcript of a session that ended normally. `[hoosh].timeout_ms` (default 3 minutes) is
+the per-read socket deadline: before 0.44.2 a gateway that accepted a connection and then went
+silent hung thoth with no way out but `kill`.
 
 Define `[alias]` macros in `.thoth/config.cyml` (`ship = "/run git status"`) to add your own
 slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI, **Ctrl-P**

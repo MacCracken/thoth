@@ -520,8 +520,14 @@ fn cmd_state() {
     }
     if (config_hooks_any() == 1) {
         ui_label("  hooks   : ");
+        # 0.44.2: on a target with no shell a configured hook CANNOT RUN, and this row used to claim
+        # `pre_tool(blocking)` in accent anyway — a capability reported present while its seam is absent.
+        var hooks_runnable = shell_supported();
         if (config_hook_session_start() != 0) { emit("session_start "); }
-        if (config_hook_pre_tool() != 0) { ui_emit(ROLE_ACCENT, "pre_tool(blocking) "); }
+        if (config_hook_pre_tool() != 0) {
+            if (hooks_runnable == 1) { ui_emit(ROLE_ACCENT, "pre_tool(blocking) "); }
+            else { ui_emit(ROLE_RED, "pre_tool(NOT RUNNING - no shell on this target) "); }
+        }
         if (config_hook_post_tool() != 0) { emit("post_tool "); }
         if (config_hook_session_end() != 0) { emit("session_end "); }
         if (hooks_fired() > 0) { emit("— "); ofmt_int(hooks_fired()); emit(" fired"); }
@@ -1309,6 +1315,19 @@ fn cmd_write(line) {
     }
     var rc = file_write_all(_write_path, _write_out, clen + 1);
     if (rc < 0) { emit("write failed: "); oprintln(_write_path); return 0; }
+    # ⚠ 0.44.2 — A SHORT WRITE WAS REPORTED AS A COMPLETE ONE. file_write_all opens with O_TRUNC and
+    # returns one sys_write's result, so a partial write comes back POSITIVE and smaller than len — and
+    # this printed its own requested length regardless. The target had already been emptied by O_TRUNC, so
+    # the outcome was the user's file replaced by a fragment while thoth said it wrote the whole thing.
+    # Every other writer in this file already compares the returned count (/save, /audit export); this was
+    # the one that did not, and it is the one that overwrites a file the user named.
+    if (rc < (clen + 1)) {
+        ui_emit(ROLE_RED, "write INCOMPLETE: "); emit(_write_path);
+        ui_emit(ROLE_FAINT, " — "); ofmt_int(rc); ui_emit(ROLE_FAINT, " of "); ofmt_int(clen + 1);
+        ui_emit(ROLE_FAINT, " bytes written; the file was truncated first, so it now holds only that much");
+        oprintln("");
+        return 0;
+    }
     emit("wrote "); ofmt_int(clen + 1); emit(" bytes (+newline) -> "); oprintln(_write_path);
     return 0;
 }
@@ -1599,9 +1618,42 @@ fn cmd_run(line) {
         oprintln("  denied. nothing ran.");
         return 0;
     }
+    # ⚠ 0.44.2 — IN THE TUI, /run's OUTPUT USED TO VANISH. run_shell hands the child thoth's own stdout,
+    # which is fine in line mode (it streams live and stays on screen) but not under the alt screen: the
+    # child paints straight onto the frame, and the repaint that follows dispatch overwrites every row it
+    # touched. The command really ran, the exit code really printed — and the output the operator asked
+    # for was gone before they could read it. Under OUT_RING we CAPTURE instead, so the output enters the
+    # feed ring like any other command output: it scrolls, it survives a repaint, it lands in /save, and
+    # it is searchable with Ctrl-F. The line/one-shot path keeps streaming live, byte-identical.
+    if ((out_mode() == OUT_RING) && (shell_supported() == 1)) { return _cmd_run_captured(cmdline); }
     var rc = run_shell(cmdline);
     if (rc == (0 - 1)) { oprintln("  (failed to spawn /bin/sh)"); return 0; }
     emit("  exit "); ofmt_int(rc); oprintln("");
+    return 0;
+}
+
+# _cmd_run_captured: the TUI arm of /run — same command, same gate (already passed), output routed through
+# the feed instead of the raw frame. Reuses the model shell tool's capture backend (a temp-file redirect
+# with a wall-clock timeout), so a runaway `/run` is bounded here exactly as it is for the model.
+var RUN_CAP_BUF = 65536;
+var _run_cap_buf = 0;
+fn _cmd_run_captured(cmdline) {
+    if (_run_cap_buf == 0) { _run_cap_buf = alloc(RUN_CAP_BUF); }
+    if (_run_cap_buf == 0) { oprintln("  (out of memory)"); return 0; }
+    var status[16];
+    var n = exec_shell_capture(cmdline, _run_cap_buf, RUN_CAP_BUF, config_shell_timeout_ms(), &status);
+    var code = load64(&status);
+    var timed = load64(&status + 8);
+    if (code == (0 - 1)) { oprintln("  (failed to spawn /bin/sh)"); return 0; }
+    if (code == (0 - 3)) { oprintln("  (a capturing shell is not available on this target)"); return 0; }
+    if (n > 0) {
+        store8(_run_cap_buf + n, 0);
+        emit_n(_run_cap_buf, n);
+        if (load8(_run_cap_buf + n - 1) != 10) { oprintln(""); }   # the ring is line-oriented; never glue the exit line on
+    }
+    if (n >= (RUN_CAP_BUF - 1)) { ui_emit(ROLE_FAINT, "  (output truncated at "); ofmt_int(RUN_CAP_BUF - 1); ui_emit(ROLE_FAINT, " bytes)"); oprintln(""); }
+    if (timed == 1) { ui_emit(ROLE_RED, "  timed out"); ui_emit(ROLE_FAINT, " — killed after "); ofmt_int(config_shell_timeout_ms()); ui_emit(ROLE_FAINT, "ms"); oprintln(""); return 0; }
+    emit("  exit "); ofmt_int(code); oprintln("");
     return 0;
 }
 
@@ -1742,6 +1794,17 @@ fn cmd_rewind(line) {
         var t = ckpt_last_turn();
         var done = ckpt_restore_turn(t);
         if (done == 0) { ui_emit(ROLE_RED, "rewind failed"); ui_emit(ROLE_FAINT, " — no file could be restored (a snapshot may be gone)"); oprintln(""); return 0; }
+        # 0.44.2: a PARTIAL undo used to print as a completed one — failures were counted nowhere. "Undo"
+        # is the operation an operator must be able to trust, and a tree still holding the model's changes
+        # while thoth says it rewound them is worse than a refusal.
+        if (ckpt_restore_failed() > 0) {
+            ui_emit(ROLE_RED, "rewind INCOMPLETE"); ui_emit(ROLE_FAINT, " — restored "); ofmt_int(done);
+            ui_emit(ROLE_FAINT, " file(s) from turn "); ofmt_int(t);
+            ui_emit(ROLE_FAINT, ", but "); ofmt_int(ckpt_restore_failed());
+            ui_emit(ROLE_FAINT, " could NOT be written back (still holding the model's changes)");
+            oprintln("");
+            return 0;
+        }
         emit("rewound "); ofmt_int(done); emit(" file(s) from turn "); ofmt_int(t); oprintln(".");
         ui_emit(ROLE_FAINT, "  the conversation is unchanged — the model can still see what it tried."); oprintln("");
         return 0;
