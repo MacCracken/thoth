@@ -72,11 +72,13 @@ mkdir -p "$OUT"
 # different symbol names; the classifier, not the lane, was stale.
 ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX|EPOLL_CTL_ADD|EPOLLIN|SYS_SOCKET|SYS_CONNECT'
 #
-# ⚠ TTY_SIGMASK_WINCH is deliberately NOT listed. It is thoth's OWN bug, not a floor gap: src/tui.cyr
-# calls darshana's termios/signalfd half with no non-Linux guard, and darshana gates that half to
-# `#ifdef CYRIUS_TARGET_LINUX`. It is the SAME root cause that breaks the macOS lane (see the roadmap's
-# known limitations), and the win lane surfaces it too. Listing it here would paper over a defect thoth
-# is supposed to fix; the lane stays red on it on purpose, and the fix clears both lanes at once.
+# ⚠ TTY_SIGMASK_WINCH is deliberately NOT listed, and stays unlisted now that it is FIXED. It was
+# thoth's OWN bug, not a floor gap: src/tui.cyr called darshana's termios/signalfd half with no
+# non-Linux guard while darshana gates that half to `#ifdef CYRIUS_TARGET_LINUX`, which is why the
+# macOS lane had not compiled since 0.6.4 and why this lane reported it beside its real gaps. Closed at
+# 0.44.3 by src/term.cyr — every thoth caller goes through `term_*`, which exists on every target.
+# Keeping the symbol off every list here makes this lane the REGRESSION TRIPWIRE: a new raw `tty_*`
+# call in thoth source turns the win lane red again, which is exactly what should happen.
 #
 # TRANSIENT_GAP — a FIXABLE upstream bug already fixed-or-filed; present ONLY
 # because thoth's vendored snapshot (lib/, synced from the cyrius toolchain) lags
@@ -97,9 +99,30 @@ ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX|EPOLL_CTL_ADD
 #   (The 6.2.15-era SYS_LSEEK entry cleared earlier the same way.)
 TRANSIENT_GAP=''
 
+# VENDOR_GAP — a symbol reached ONLY from a vendored upstream bundle (src/vendor/**), which the target
+# floor does not define and which thoth has NO call site for. Distinct from ARCH_GAP (a primitive the
+# target genuinely lacks, reached from thoth's own code or the stdlib) and from TRANSIENT_GAP (a fix
+# that exists upstream and has not been re-vendored yet). It is listed so a best-effort lane reports
+# what it is actually blocked on instead of one class masking another — NOT to excuse a thoth defect.
+#
+# ⚠ The test for adding a symbol here is EVIDENCE, not convenience: `grep -rn <sym> src/ | grep -v
+# vendor` must be empty, and the call site must live in src/vendor/. If thoth's own source reaches it,
+# it belongs in ARCH_GAP or, more likely, it is a bug to fix — which is exactly what
+# `TTY_SIGMASK_WINCH` was through 0.44.2, and why it is deliberately absent from every list here.
+#
+#   SIGHUP, SIG_BLOCK — src/vendor/t-ron.cyr's signal.cyr (SIGHUP-driven policy hot-reload). Windows
+#     has no POSIX signals, so the floor defines neither constant. thoth has ZERO callers of
+#     `sighup_init` — the code is dead in this consumer. Upstream fix: t-ron gating its signal half to
+#     Linux, or publishing a [lib.X] profile without it. Tracked in roadmap.md's known limitations.
+#   sys_rmdir — src/vendor/sit-read.cyr's sf_rmdir. lib/syscalls_windows.cyr defines no `sys_rmdir`
+#     (it routes DeleteFileW and MoveFileExW but not RemoveDirectoryW). A cyrius Windows-floor gap
+#     reached through a vendored bundle, not a thoth call. Upstream fix: cyrius.
+VENDOR_GAP='SIGHUP|SIG_BLOCK|sys_rmdir'
+
 # Guard the empty case: "$ARCH_GAP|" (trailing pipe) would match the empty string
 # in grep -qE and swallow EVERY failure as a "known gap". Only union when non-empty.
-if [ -n "$TRANSIENT_GAP" ]; then KNOWN_GAP="$ARCH_GAP|$TRANSIENT_GAP"; else KNOWN_GAP="$ARCH_GAP"; fi
+KNOWN_GAP="$ARCH_GAP|$VENDOR_GAP"
+if [ -n "$TRANSIENT_GAP" ]; then KNOWN_GAP="$KNOWN_GAP|$TRANSIENT_GAP"; fi
 
 is_macos_host() { [ "$(uname -s 2>/dev/null)" = "Darwin" ]; }
 
@@ -143,7 +166,20 @@ _run_best_effort() {
     # bugs. The win lane was the live case: it reports the architectural epoll/ws2_32 gaps AND
     # TTY_SIGMASK_WINCH, which is thoth's un-guarded call into darshana's Linux-only TTY half (the same
     # root cause that breaks the macOS lane). Under the old test that defect was invisible.
-    local undef; undef="$(echo "$log" | grep -oE "undefined variable '[A-Za-z_][A-Za-z0-9_]*'" | sed -E "s/.*'(.*)'/\1/" | sort -u)"
+    # 0.44.3: collect undefined FUNCTIONS as well as undefined variables. The classifier only ever read
+    # `undefined variable`, so a lane blocked on a reachable undefined FUNCTION — the error cyrius
+    # actually refuses to emit on ("refusing to emit binary with N reachable undefined function(s)") —
+    # was invisible to it. Through 0.44.2 the win lane hid ELEVEN of them behind two undefined variables.
+    #
+    # ⚠ READ THE SUFFIX THE RIGHT WAY ROUND. cyrius prints EVERY undefined function bare during the
+    # compile pass, then re-prints the REACHABLE ones after the "N unreachable fns" note, hedged
+    # "(call site may be unreachable)". So the hedged list is the one that blocks the binary — its
+    # length is exactly the N in the refusal — and the bare list is mostly dead references. Matching
+    # the bare form instead reports the dead ones as blockers: it named `load_signing_seed` and the two
+    # other documented sit dead-path placeholders, which have never blocked any lane.
+    local undef_v; undef_v="$(echo "$log" | grep -oE "undefined variable '[A-Za-z_][A-Za-z0-9_]*'" | sed -E "s/.*'(.*)'/\1/" | sort -u)"
+    local undef_f; undef_f="$(echo "$log" | grep -E "undefined function '[A-Za-z_][A-Za-z0-9_]*' \(call site may be unreachable\)" | grep -oE "'[A-Za-z_][A-Za-z0-9_]*'" | tr -d "'" | sort -u)"
+    local undef; undef="$(printf '%s\n%s\n' "$undef_v" "$undef_f" | grep -v '^$' | sort -u)"
     if [ -n "$undef" ]; then
         local unexpected; unexpected="$(echo "$undef" | grep -vE "^($KNOWN_GAP)$" || true)"
         if [ -z "$unexpected" ]; then

@@ -544,7 +544,19 @@ fn _oneshot_run_task() {
 
 fn one_shot_run() {
     # Append piped stdin as the payload (never read an interactive tty here).
-    if (tty_isatty(0) == 0) { _oneshot_append_stdin(); }
+    #
+    # ⚠ 0.44.3 — the guard is `term_can_probe()`, NOT `term_isatty(0) == 0` alone. On a target with no
+    # tty probe at all (see src/term.cyr) `term_isatty` answers 0 for EVERY fd, a real terminal
+    # included, and this line would then read an interactive stdin and block forever waiting for the
+    # operator to type EOF — a hang, presenting as "thoth does nothing". Where thoth cannot tell a pipe
+    # from a terminal it says so on stderr and skips the payload: honest degradation, announced, never
+    # a silent drop and never a hang. argv still carries the task, so one-shot still works.
+    if (term_can_probe() == 1) {
+        if (term_isatty(0) == 0) { _oneshot_append_stdin(); }
+    }
+    if (term_can_probe() == 0) {
+        emit_err("thoth: piped stdin unavailable on this build (no tty probe — cannot distinguish a pipe from a terminal); pass the task on argv\n");
+    }
     if (_oneshot_task_len == 0) {
         emit_err("thoth: no task given (provide it on argv, or pipe it in with -p)\n");
         return 1;

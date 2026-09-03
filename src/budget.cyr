@@ -1,0 +1,148 @@
+# budget.cyr — spend ENFORCEMENT over the session's token/cost accounting (0.44.3).
+#
+# thoth has counted tokens since 0.10.2 and cost since 0.10.3, and has bounded neither. The only
+# spend controls it had were structural: `[hoosh].max_iters` bounds ROUNDS (not spend — one round of a
+# 200 K-token context costs what forty small ones do), delegation depth is capped at 1, and
+# `[subagent].enabled` is off by default. ADR-0018 says out loud that the subagent default should be
+# revisited "if real budget enforcement ever lands"; the gap review has carried the same item since
+# 0.39.0. This is that enforcement, deliberately small: a ceiling, checked before thoth spends, that
+# ends the turn cleanly and says which ceiling and by how much.
+#
+# THREE RULES, and the third is the one that makes it honest.
+#
+# 1. CHECK BEFORE THE CALL, not after it. A budget checked after a round has already been paid for.
+#    The check sits at the top of the agentic loop, before the request leaves, and again before a
+#    delegated child turn — the two places thoth decides to spend more.
+#
+# 2. `>=`, NOT `>`. A budget that is exactly met is spent. `>` lets one more full round through on the
+#    boundary, which on a large context is the single most expensive round of the session.
+#
+# 3. ⚠ AN UNENFORCEABLE BUDGET MUST SAY SO. thoth does not meter itself — it folds in whatever `usage`
+#    the gateway reports, and hoosh 2.6.4 sends NO usage frame on the STREAMING path (a carried
+#    limitation: thoth asks for `stream_options.include_usage`, hoosh's source references neither
+#    token). `[hoosh].stream` defaults ON. So on the DEFAULT path the tally never advances, and a
+#    token budget configured there would sit at zero forever and silently never fire — a security-
+#    shaped control that is decorative, which the house rules call a gap, not a degrade. `budget_warn`
+#    below announces that ONCE per session, the first time a turn ends with a budget configured and no
+#    usage ever reported, naming the reason and the switch. It is the difference between "you are
+#    protected" and "you are not protected and here is why".
+#
+# Cost carries the same caveat one level deeper: cost is derived from tokens AND a `[pricing.<model>]`
+# rate, so an unpriced model contributes real tokens and zero cost. `session_cost_unpriced_count()`
+# already counts exactly that, and the warning names it.
+
+var BUDGET_OK = 0;        # within budget (or no budget set)
+var BUDGET_TOKENS = 1;    # the token ceiling is met or exceeded
+var BUDGET_COST = 2;      # the cost ceiling is met or exceeded
+
+# budget_status: BUDGET_OK / BUDGET_TOKENS / BUDGET_COST for the CURRENT session totals. Pure — no
+# output, no state change — so callers can consult it for display as well as for enforcement, and so
+# it is unit-testable by driving session_add_tokens/session_add_cost directly.
+#
+# Tokens are checked before cost because the token tally is the one that always exists: cost needs a
+# pricing rate, and reporting "cost budget exceeded" while the real constraint was tokens would point
+# the operator at the wrong config key.
+fn budget_status() {
+    var tcap = config_budget_tokens();
+    if (tcap > 0) {
+        if (session_tokens() >= tcap) { return BUDGET_TOKENS; }
+    }
+    var ccap = config_budget_cost_micro();
+    if (ccap > 0) {
+        if (session_cost_micro() >= ccap) { return BUDGET_COST; }
+    }
+    return BUDGET_OK;
+}
+
+# budget_active: 1 when EITHER ceiling is set. Used to decide whether the measurability warning is
+# worth emitting at all — a session with no budget has nothing to be unable to enforce.
+fn budget_active() {
+    if (config_budget_tokens() > 0) { return 1; }
+    if (config_budget_cost_micro() > 0) { return 1; }
+    return 0;
+}
+
+# budget_report: name the exceeded ceiling on the active surface. Mirrors the `max_iters` cap message
+# — say WHICH bound, the number, what has been spent, and the key that moves it — because a bare
+# "budget exceeded" is the same dead end the 0.38.5 iteration cap was.
+fn budget_report(st) {
+    if (st == BUDGET_TOKENS) {
+        ui_emit(ROLE_RED, "  session token budget reached");
+        ui_emit(ROLE_FAINT, " ("); ofmt_int(session_tokens());
+        ui_emit(ROLE_FAINT, " of "); ofmt_int(config_budget_tokens());
+        ui_emit(ROLE_FAINT, ") — the turn was stopped before spending more");
+        oprintln("");
+        ui_emit(ROLE_FAINT, "  raise or remove it with [budget].max_tokens; /reload picks it up mid-session");
+        oprintln("");
+        return 0;
+    }
+    if (st == BUDGET_COST) {
+        var cb[32];
+        var sb[32];
+        cost_fmt(&cb, session_cost_micro());
+        cost_fmt(&sb, config_budget_cost_micro());
+        ui_emit(ROLE_RED, "  session cost budget reached");
+        ui_emit(ROLE_FAINT, " ("); emit(&cb);
+        ui_emit(ROLE_FAINT, " of "); emit(&sb);
+        ui_emit(ROLE_FAINT, ") — the turn was stopped before spending more");
+        oprintln("");
+        ui_emit(ROLE_FAINT, "  raise or remove it with [budget].max_cost_micro; /reload picks it up mid-session");
+        oprintln("");
+        return 0;
+    }
+    return 0;
+}
+
+# budget_block: the ENFORCEMENT call. 1 == "do not spend; the turn must end", 0 == proceed. Reports on
+# the way out so every caller gets the same message, and writes the same fact to the session log so a
+# `--logs` post-mortem shows a stopped turn as a BUDGET stop rather than an unexplained short turn.
+fn budget_block() {
+    var st = budget_status();
+    if (st == BUDGET_OK) { return 0; }
+    budget_report(st);
+    log_begin("budget");
+    if (st == BUDGET_TOKENS) { log_kv_str("limit", "max_tokens"); log_kv_int("cap", config_budget_tokens()); log_kv_int("spent", session_tokens()); }
+    else { log_kv_str("limit", "max_cost_micro"); log_kv_int("cap", config_budget_cost_micro()); log_kv_int("spent", session_cost_micro()); }
+    log_kv_str("verdict", "stop");
+    log_commit(SK_WARN);
+    return 1;
+}
+
+# --- the measurability warning (rule 3) ----------------------------------------------------------
+var _budget_warned = 0;      # emitted at most ONCE per session — a per-turn nag teaches nothing new
+
+# budget_warn_unmeasured: call at the END of a turn. When a budget is configured but the gateway has
+# never reported usage, the ceiling cannot fire and the operator must be told, once, with the reason.
+#
+# ⚠ This is not defensive filler. The failure it names is LIVE at the time of writing: hoosh 2.6.4
+# emits no usage frame on the streaming path and `[hoosh].stream` defaults on, so the common setup for
+# a budget is exactly the one where it does nothing. Announcing an unenforceable control beats
+# pretending, and it is the same posture as the banner's live-reachability line and the absent-t-ron
+# confirm — thoth never fakes a capability it does not have.
+fn budget_warn_unmeasured() {
+    if (_budget_warned == 1) { return 0; }
+    if (budget_active() == 0) { return 0; }
+    if (session_tokens_seen() == 1) {
+        # tokens ARE flowing; the only remaining hole is a COST budget over an unpriced model.
+        if (config_budget_cost_micro() <= 0) { return 0; }
+        if (session_cost_seen() == 1) { return 0; }
+        if (session_cost_unpriced_count() == 0) { return 0; }
+        _budget_warned = 1;
+        ui_emit(ROLE_RED, "  [budget] cost cannot be measured for this model");
+        ui_emit(ROLE_FAINT, " — usage arrived but no [pricing.<model>] rate is declared, so");
+        ui_emit(ROLE_FAINT, " [budget].max_cost_micro will not fire. [budget].max_tokens still will.");
+        oprintln("");
+        return 0;
+    }
+    _budget_warned = 1;
+    ui_emit(ROLE_RED, "  [budget] cannot be enforced on this path");
+    ui_emit(ROLE_FAINT, " — the gateway reported no token usage for this turn, so the session tally");
+    ui_emit(ROLE_FAINT, " never advances and the ceiling can never be reached. hoosh sends no usage");
+    ui_emit(ROLE_FAINT, " frame while streaming; set [hoosh].stream = false to make the budget live.");
+    oprintln("");
+    log_begin("budget"); log_kv_str("state", "unmeasurable"); log_kv_str("reason", "no usage reported"); log_commit(SK_WARN);
+    return 0;
+}
+
+# budget_reset_warned: test hook + /reset seam — a fresh session may warn again.
+fn budget_reset_warned() { _budget_warned = 0; return 0; }

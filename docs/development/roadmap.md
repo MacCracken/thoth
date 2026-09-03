@@ -82,10 +82,26 @@ Four gates remain, in rough dependency order.
    with a coverage table against the first-party standards checklist): the **fail-closed
    posture** and the **t-ron authorization choke point** are both covered there.
 
-   What remains is genuinely untouched — an independent review of the **parallel-tool-execution
-   concurrency model** (the audit's six dimensions did not include concurrency; the last pass
-   over the parallel executor was 0.7.0), plus whatever external sign-off "pass" is taken to
-   mean. **Status: blocking · owner: TBD · scope narrowed, not yet scheduled.**
+   ⭐ **0.44.3 CLOSED THE CONCURRENCY HALF.** The 0.44.3 sweep ran a dedicated concurrency dimension
+   over `_agent_run_calls_par` and every seam it touches, and it was worth doing — four confirmed
+   findings, all on the DEFAULT path (`[hoosh].parallel` is on):
+   - **the 0.44.2 socket deadline was never threaded through `daimon_fetch_into`**, so a silent MCP
+     host parked a worker thread forever with the main thread blocked behind it in `thread_join` and
+     Esc unpolled — the identical unkillable hang 0.44.2 was written to fix, on the path it did not
+     read;
+   - **the tool NAME was gated in full and executed truncated** (the arguments already had exactly
+     this protection);
+   - **results over 128 KB were lost** and reported as "(tool returned no result)";
+   - **the 0.44.1 wrong-tree correction was serial-only.**
+
+   All four are fixed and the executor's slot allocations are now OOM-checked. This is the second
+   time the parallel path has been found missing something the serial path had (0.43.1: the blocking
+   `pre_tool` hook), which is the pattern worth naming: **the default path is the one that gets read
+   least.**
+
+   What remains of this gate is the external sign-off half — whatever "pass" is taken to mean by
+   someone who is not the author. **Status: blocking · owner: TBD · the concurrency review is done;
+   the sign-off is not.**
 
    ⚠ The 0.43.0 doc sweep is a live argument for this gate. Reading the parallel executor closely
    enough to document it surfaced that `hooks_pre_tool` and the tool events existed **only** in the
@@ -104,7 +120,8 @@ Four gates remain, in rough dependency order.
 **Satisfied on Linux** and **AGNOS-buildable** (gate 1); AGNOS-green pends gate 2. **Open:**
 
 - [ ] **At least one downstream consumer green on AGNOS** — gate 2 (external)
-- [ ] **Security review pass** — gate 3 (narrowed to the concurrency model + sign-off)
+- [ ] **Security review pass** — gate 3 (the concurrency model was reviewed at 0.44.3; **only the
+      external sign-off remains**)
 - [ ] **1.0 versioning scheme decided (SemVer vs CalVer)** — gate 4
       (deferred ADR; see [ADR-0004](../adr/0004-semver-pre-release.md))
 
@@ -148,6 +165,11 @@ one is decided.
 - **GUI slash-command affordances** — surface `/retry`, `/edit`, `/bookmark`, `/thumbs` in the
   GUI. The GUI composer runs `cmd_task` directly, bypassing `dispatch`, so these are TUI/REPL-only
   today; needs the GUI to route slash-commands.
+
+  ⚠ **0.44.3 raised the value of this item.** The GUI's authorization modal deliberately does NOT
+  offer the "allow for the whole session" answer the terminal prompt does, because the two things
+  that make a session grant safe — seeing that it is still acting, and revoking it — both live behind
+  `/grants`, which the GUI cannot reach. Routing slash-commands is what lets that option come back.
 - **GUI pointer plumbing** — mouse click-to-switch on the conversation sidebar (keyboard-only
   today), and re-rendering a resumed conversation's tool/citation data as live GUI feed cards
   (today it round-trips and shows in `/save`, but the live cards are session-local). Both gated
@@ -217,8 +239,6 @@ one is decided.
     staying red/green — once both are role markers the painter cannot tell a notice from prose.
     Exempting semantic roles at marker-expansion would fix it. Directly-painted chrome (status
     bar, tree, prompts) is already unaffected.
-  - **A persistent `[ui].theme` config key** — the theme is per-session only; there is no way to
-    start in a chosen theme, on any tier.
   - **A diagonal / animated phase** — the hue is a pure function of COLUMN, so every row shares
     one gradient; a per-row offset would give the classic lolcat diagonal, but must stay
     deterministic or `feed_repaint` shimmers.
@@ -232,38 +252,52 @@ one is decided.
 > external/substrate primitive. Recorded here so they are not lost in code comments. **The first
 > two are defects, not degradations, and are labelled as such.**
 
-- ⛔ **The macOS build lane is BROKEN, and it is thoth's bug.** Not a degradation — the compile
-  fails. `src/tui.cyr:1865` / `:1918` reference `TTY_SIGMASK_WINCH` and the file calls six `tty_*`
-  functions (`tty_isatty`, `tty_winsize`, `tty_cooked`, `tty_raw`, `tty_open_signalfd`,
-  `tty_close_signalfd`) with **no macOS guard** — but darshana gates its entire termios/winsize/
-  signalfd half to `#ifdef CYRIUS_TARGET_LINUX`, because BSD termios is a different struct and is
-  explicitly out of scope for darshana v1.0. So the T2 TUI cannot link off Linux. **Re-tested at
-  0.43.0** on real Apple Silicon with the pinned 6.5.35 toolchain: the two `TTY_SIGMASK_WINCH`
-  errors above, then `refusing to emit binary with 6 reachable undefined function(s)`. Long-standing
-  (last known-good lane was **0.6.4**), not a dep-refresh regression.
-  **The fix is thoth-side and needs no dep bump**: gate the T2 TUI off non-Linux and fall back to
-  the line tier — the same degradation already coded for AGNOS in `tui_events_init`. darshana's
-  ANSI/cursor half is portable and unaffected. Sizing it properly means checking whether the GUI
-  tier has the same exposure.
+- **macOS builds and runs again — with a NEW floor gap behind it.** The lane's blocker was thoth's own
+  (`src/tui.cyr` calling darshana's Linux-gated termios/signalfd half with no target guard), closed at
+  0.44.3 by `src/term.cyr`. Verified natively on Apple Silicon (macOS 26.6.2): the Mach-O arm64 binary
+  compiles with no undefined symbol and `thoth --version` / the line REPL run. ⚠ The toolchain there is
+  **6.5.35**, not the pinned 6.5.43 — that version is not installed on the Mac and there is no package
+  registry to install it from; the two `lib/` snapshots differ by **zero** removed, renamed or
+  newly-private symbols (symbol-diffed both directions), so the lane's result is not toolchain-dependent,
+  but a native 6.5.43 build there is still owed.
 
-  ⚠ **0.43.2 — the WINDOWS lane fails for the same reason, which was not visible before.** The win
-  lane's best-effort classifier had two faults, both fixed in `scripts/build.sh`: its `ARCH_GAP`
-  pattern matched only the syscall NUMBER constants (`SYS_EPOLL_*`) while the toolchain now surfaces
-  the epoll FLAG constants (`EPOLL_CTL_ADD` / `EPOLLIN`) and the ws2_32-routed socket calls; and it
-  classified a lane as an expected gap if the log contained **any** known symbol, when its own header
-  promised **only**. So one architectural gap masked every other undefined symbol in the same build.
-  With both fixed, the win lane reports precisely:
+  ⛔ **What the unblocked lane exposed: `getenv` always returns 0 on macOS.** `lib/io.cyr`'s `getenv`
+  reads `/proc/self/environ`, which Darwin does not have, and has a branch for AGNOS but none for macOS
+  (Windows is served by the `GetEnvironmentVariableA` reroute). Measured on the Mac: `TERM` and `HOME`
+  both come back null in a process where both are set. Consequences, both honest degradations rather
+  than failures: **no colour** (`_ui_color_capable` needs `TERM`, so every macOS session resolves to
+  PT_PLAIN — `NO_COLOR` is equally inert), and **no global config layer** (`~/.thoth/config.cyml` is
+  found via `HOME`, so on macOS only the local layer exists). This is a cyrius floor gap, not thoth's to
+  patch — porting the floor means fixing it where the floor lives. Filed upstream at
+  `cyrius/docs/development/issues/2026-09-03-macos-getenv-always-null-no-proc.md` with a reproduction
+  and two suggested implementations.
 
-  ```
-  architectural gaps present: EPOLLIN, EPOLL_CTL_ADD, SYS_CONNECT, SYS_SOCKET
-  UNEXPECTED undefined symbols: SIGHUP, SIG_BLOCK, TTY_SIGMASK_WINCH
-  ```
+  ⚠ **The T2 TUI does not run on macOS and is not meant to yet.** `term_raw` returns -1 there (darshana
+  has no BSD termios peer and 0.44.3 does not invent one — a stub pretending to work is worse than an
+  honest refusal), so thoth takes the line tier, which is the already-coded degradation. A real BSD
+  termios peer belongs to darshana v2; when it ships, `src/term.cyr`'s macOS branch collapses into the
+  forwarder branch and nothing above it changes.
 
-  The first line is the permanent IOCP/ws2_32 floor gap. The second is **this defect** — thoth's
-  un-guarded call into darshana's Linux-only TTY half. So the non-Linux TUI guard is not a
-  macOS-only fix: it clears thoth's own contribution to **two** lanes, leaving Windows blocked purely
-  on the architectural floor where it belongs. That raises this item's value above what its
-  macOS-only framing suggested.
+- **The Windows lane is now blocked purely outside thoth's authored source.** 0.44.3 took its reachable
+  undefined functions from **11 to 1** and removed `TTY_SIGMASK_WINCH`, `EPOLL_CTL_ADD` and `EPOLLIN`
+  from thoth's own code entirely. What is left is three upstream classes, and `scripts/build.sh` now
+  names them separately instead of letting one mask the others:
+  - **architectural** — `SYS_SOCKET` / `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). Permanent by
+    design; the lane gates closed, announced.
+  - **vendored** (`VENDOR_GAP`, new at 0.44.3) — `SIGHUP` / `SIG_BLOCK` from `src/vendor/t-ron.cyr`'s
+    SIGHUP-driven policy hot-reload, which thoth has **zero** callers of, and `sys_rmdir` from
+    `src/vendor/sit-read.cyr` against a Windows floor that routes `DeleteFileW` and `MoveFileExW` but
+    not `RemoveDirectoryW`. Upstream fixes: t-ron gating its signal half to Linux (or publishing a
+    profile without it), and cyrius adding `sys_rmdir` to the Windows peer.
+  - `TTY_SIGMASK_WINCH` stays off **every** list on purpose, so a new raw `tty_*` call in thoth source
+    turns this lane red again — it is the regression tripwire for the defect just closed.
+
+  ⚠ **The lane classifier itself was half-blind and is fixed.** It only ever collected `undefined
+  variable`, never `undefined function` — the error cyrius actually refuses to emit on — so through
+  0.44.2 eleven reachable undefined functions hid behind two undefined variables. It now collects both,
+  reading the reachable set from the list cyrius prints AFTER its "N unreachable fns" note (the earlier
+  bare list is mostly dead references; matching it instead reported the three documented sit dead-path
+  placeholders as blockers, which have never blocked any lane).
 
 - ⛔ **sit's git read-mode status reports false positives** (upstream, sit — thoth is a pure
   consumer). Every tracked mode-`100755` file and every tracked zero-byte file comes back
@@ -312,6 +346,16 @@ one is decided.
   **bhava**'s domain. Already a backlogged thoth integration — **consume bhava** (the same pattern
   mneme cleared) once it is Cyrius-ported; never reimplement sentiment/mood analysis in thoth. Not
   on a numbered arc until bhava lands.
+
+- **Hook event facts sit in the child's argv.** `[hooks]` passes event facts (`THOTH_EVENT`,
+  `THOTH_TOOL`, `THOTH_ARGS`) as quoted `VAR='...'` assignments prefixed to the `/bin/sh -c` string.
+  The quoting is correct — no tool argument can close it and append a command — but the assignments
+  are part of the child's **argv**, so on Linux up to ~16 KB of the model's tool arguments are
+  readable through `/proc/<pid>/cmdline` for the life of the hook. `src/hooks.cyr` used to claim event
+  facts were "never interpolated into the command", which was true about injection and wrong about
+  exposure; corrected in the source at 0.44.3. Closing it needs a portable spawn-with-environment
+  primitive `src/exec.cyr` does not have (the floor's `execve` shapes differ per target). Not a new
+  risk class — a hook is already an unsandboxed command the operator chose — but a real one.
 
 - **Input-history file hardening.** The opt-in `[history].file` is best-effort-secured today (a
   fresh file is created `0600` on POSIX; degrade-closed — an unwritable path or mid-session write

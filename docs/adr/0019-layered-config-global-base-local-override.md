@@ -1,6 +1,15 @@
 # ADR-0019 — Layered config: `~/.thoth/` is the base, the project layers on top
 
 **Status:** Accepted (0.43.3) · **Supersedes the discovery half of** [ADR-0016](0016-thoth-home-dir-config-memory-discovery.md)
+· ⚠ **Superseded in part by** [ADR-0021](0021-authority-keys-are-global-only.md) (0.44.3)
+
+> ⚠ **Read ADR-0021 before relying on the security rule below.** This ADR states the right
+> principle — *authority does not accumulate from the less-trusted side* — and enforced it for
+> exactly two LIST keys. Every authority-granting SCALAR was left on the ordinary
+> local-overrides-global path, and a `git clone` reproduces the local layer: a repository's
+> `[hooks].session_start` was arbitrary code executed at launch. ADR-0021 extends the rule to the
+> scalars and, in doing so, retracts this ADR's example of "a project t-ron policy" as something
+> the local layer may set.
 
 ## Context
 

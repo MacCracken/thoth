@@ -500,7 +500,15 @@ fn hoosh_recap_call(span) {
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _hoosh_sum_req, len, hoosh_probe_opts());   # 0.44.2: the recap is a SIDE call — never let it outlast the turn it is serving
+    # ⚠ 0.44.3 — THE TURN DEADLINE, NOT THE PROBE ONE. 0.44.2 gave this `hoosh_probe_opts()` reasoning
+    # that "the recap is a SIDE call", but the probe profile is a fixed few seconds meant for a
+    # reachability GET, and this is a full model completion over the whole conversation — the slowest
+    # kind of call thoth makes. A slow-but-healthy model therefore failed the recap every time on a
+    # deadline the operator could not see or change, and `[hoosh].timeout_ms = 0` — documented as the
+    # spelling that restores the pre-0.44.2 unbounded behaviour — did not restore it here, because the
+    # probe profile ignores the config entirely. It is bounded, and bounded by the knob that means
+    # "how long may a model call take".
+    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _hoosh_sum_req, len, hoosh_http_opts());
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_sum_err = HOOSH_SUM_TRANSPORT; return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);

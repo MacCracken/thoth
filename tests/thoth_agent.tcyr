@@ -26,6 +26,7 @@ include "src/vendor/sankoch.cyr"    # git-object inflate (0.13.0); before sit-re
 include "src/vendor/sit-read.cyr"   # sit read-only VCS API (branch/status/diff)
 include "src/util.cyr"
 include "src/version.cyr"
+include "src/term.cyr"        # portable terminal-CONTROL floor (0.44.3); tui/oneshot reach darshana only through it
 include "src/ui.cyr"
 include "src/feed.cyr"
 include "src/ftree.cyr"
@@ -40,6 +41,7 @@ include "src/gate.cyr"
 include "src/git.cyr"      # git producer (0.13.0); before seams (SEAM_GIT reads git_present)
 include "src/seams.cyr"
 include "src/session.cyr"
+include "src/budget.cyr"      # [budget] spend enforcement (0.44.3)
 include "src/roundlog.cyr"
 include "src/editlog.cyr"  # model edit diff ring (0.31.1)
 include "src/exec.cyr"

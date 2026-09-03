@@ -33,7 +33,13 @@
 # silently replaced by `[REDACTED]` is otherwise indistinguishable from a tool that returned nothing
 # useful — and the user would debug the wrong thing.
 
-var REDACT_CAP = 262144;      # bounded working copy; a result larger than this is passed through UNSCANNED (see below)
+# ⚠ 0.44.3 — RAISED 256 KiB -> 1.25 MiB, because the note below ("above every bounded tool result thoth
+# produces") had gone stale in the one place it mattered: `[shell].max_output` is operator-set with a
+# ceiling of SHELL_OUT_MAX = 1 MiB, so any value above 256 KiB silently turned redaction OFF for shell
+# results — the tool most likely to print an `env` or a token-bearing build log. The cap now clears that
+# ceiling with 256 KiB of headroom for the redaction's own growth (`[REDACTED]` is longer than most of
+# what it replaces). It is a bound on a WORKING COPY, not on what the model sees.
+var REDACT_CAP = 1310720;     # 1.25 MiB: SHELL_OUT_MAX (1 MiB) + growth headroom — see the note above
 var _redact_buf = 0;
 var _redact_n = 0;            # results redacted this session (for /state)
 
@@ -57,7 +63,15 @@ fn redact_tool_result(text) {
     if (redact_active() == 0) { return text; }
     var n = strlen(text);
     if (n == 0) { return text; }
-    if (n >= REDACT_CAP) { return text; }              # too big to buffer -> pass through, never truncate
+    # Too big to buffer -> pass through, never truncate (see the header: truncating to fit a scanner
+    # trades a certain harm for a possible one). ⚠ 0.44.3: SAY SO. This is the one path where the
+    # feature does not run, and it used to be indistinguishable from "scanned, nothing found" — an
+    # operator who has `[redact]` on is entitled to know when it did not look.
+    if (n >= REDACT_CAP) {
+        ui_emit(ROLE_RED, "  [redact] ");
+        note_println("  this tool result is too large to scan — it was NOT checked for secrets");
+        return text;
+    }
     if (_redact_buf == 0) { _redact_buf = alloc(REDACT_CAP); }
     if (_redact_buf == 0) { return text; }
 
@@ -73,7 +87,18 @@ fn redact_tool_result(text) {
         while ((i < n) && (same == 1)) { if (load8(od + i) != load8(text + i)) { same = 0; } i = i + 1; }
         if (same == 1) { return text; }                # clean — hand back the caller's own pointer
     }
-    if (on >= REDACT_CAP) { return text; }             # redaction grew it past the buffer; leave it alone
+    # ⚠ 0.44.3 — THIS ARM DISCARDS A SUCCESSFUL REDACTION AND RETURNS THE SECRET. By the time control
+    # reaches here the scanner has already found secret-shaped values and replaced them; `out` is the
+    # CLEAN text. Returning `text` hands the model, the feed, `/save` and the next gateway request the
+    # ORIGINAL — the worst possible outcome of a redactor, reached silently. It is now announced in the
+    # strongest terms available, and the raised cap above makes it unreachable for every producer thoth
+    # actually has. Kept (rather than truncated) because a cut result is a different, certain harm — but
+    # never again a quiet one.
+    if (on >= REDACT_CAP) {
+        ui_emit(ROLE_RED, "  [redact] ");
+        note_println("  a secret was found but the redacted result no longer fits the scan buffer — the ORIGINAL text was passed through UNREDACTED");
+        return text;
+    }
     var k = 0;
     while (k < on) { store8(_redact_buf + k, load8(od + k)); k = k + 1; }
     store8(_redact_buf + on, 0);

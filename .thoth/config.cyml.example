@@ -26,6 +26,29 @@
 #                             cloned must not be able to widen your global grants by appending to them.
 # An explicitly empty local list (`allow = []`) means empty; an ABSENT one inherits the global's.
 #
+# ⚠ 0.44.3 — SOME KEYS ARE READ FROM THE GLOBAL FILE ONLY, and a project setting them is refused and
+# NAMED (on stderr at startup, in the greeting, in /state and on /reload). See ADR-0021. The keys:
+#
+#     [hooks].session_start / pre_tool / post_tool / session_end   commands thoth runs as YOU
+#     [verify].command                                             the same, after every model write
+#     [tron].policy / [tron].agent                                 the policy that authorizes the model
+#     [log].file / [history].file / [session].file                 unjailed paths thoth writes/truncates
+#
+# The reason is blunt: a `git clone` reproduces `<repo>/.thoth/config.cyml`, so before this a repository
+# you cloned could put `[hooks].session_start = "curl ... | sh"` in it and thoth would run that AT
+# LAUNCH, before you typed anything. thoth cannot tell your project from someone else's.
+#
+# Related: `[hoosh].token` travels only with ITS OWN layer's `url`. If the local file redirects
+# `[hoosh].url` and supplies no token, your GLOBAL token is WITHHELD rather than sent to the host the
+# project chose. (Both layers naming the same url is not a redirect and changes nothing; likewise a
+# local key that names the SAME value the global already grants is not an escalation and is not
+# reported.)
+#
+# Everything that is only a PREFERENCE still layers normally: model, tier, theme, aliases, pricing,
+# caps, and the capability toggles ([shell].enabled, [edit].enabled, [subagent].enabled, ...). A repo
+# enabling a TOOL is not the same as a repo naming a COMMAND: every tool call still passes the t-ron
+# gate, and with no policy that gate is a fail-closed confirm you answer.
+#
 # Memory layers the same way: `~/.thoth/memory/` is read, then the project's `.thoth/memory/`, and both
 # are injected. `/remember` writes to the PROJECT store when there is one.
 #
@@ -174,7 +197,9 @@ model = "claude-haiku-4-5-20251001"
 # ⚠ OFF BY DEFAULT FOR SPEND, NOT FOR AUTHORITY. A child grants the model nothing
 # new — it can only call tools it was already offered, through the same t-ron
 # gate, the same jail, the same hooks and the same audit chain. What it does is
-# MULTIPLY token cost, and thoth has no budget enforcement yet.
+# MULTIPLY token cost. As of 0.44.3 that is bounded: a child's rounds are billed
+# to the SAME session tally `[budget]` (below) enforces, so one ceiling covers
+# the parent and every child it spawns.
 #
 # ⚠ The child CANNOT see your conversation. That is the feature (your window pays
 # nothing for what it reads) and the limitation (a task needing context must say
@@ -186,6 +211,38 @@ model = "claude-haiku-4-5-20251001"
 # [subagent]
 # enabled = true
 # max_iters = 8       # rounds ONE child may spend (default 8)
+
+# [budget] — a session SPEND ceiling (0.44.3). DEFAULT: unlimited (opt-in).
+#
+# thoth has counted tokens since 0.10.2 and cost since 0.10.3 and bounded neither.
+# `[hoosh].max_iters` bounds ROUNDS, which is not spend: one round over a 200 KB
+# context costs what forty small ones do. `[budget]` bounds the money.
+#
+# Both ceilings are SESSION-CUMULATIVE and checked BEFORE thoth spends — at the
+# top of the agentic loop and again between rounds, and before every delegated
+# child round. A ceiling that is exactly MET stops the turn (`>=`, not `>`): on a
+# large context the boundary round is the single most expensive one of the
+# session. When it bites, the turn ends cleanly and says which ceiling, what was
+# spent, and the key that moves it. `/reload` picks up a new value mid-session,
+# and `/state` shows the row.
+#
+# Absent, `0`, or a negative value all mean UNLIMITED — writing `max_tokens = 0`
+# to mean "no tokens at all" would let one typo brick a session.
+#
+# ⚠ THIS IS ONLY AS GOOD AS THE GATEWAY'S USAGE REPORTING, AND thoth SAYS SO.
+# thoth does not meter itself; it folds in whatever `usage` the gateway reports.
+# hoosh 2.6.4 sends NO usage frame on the STREAMING path and `[hoosh].stream`
+# defaults ON — so on the default path the tally never advances and the ceiling
+# can never be reached. thoth announces that once per session and marks the
+# `/state` row "NOT ENFORCEABLE" rather than letting you believe you are covered.
+# Set `[hoosh].stream = false` to make a token budget live.
+#
+# ⚠ A COST ceiling needs a rate. Cost is tokens x `[pricing.<model>]`, so a model
+# with no declared rate contributes real tokens and zero cost — the cost ceiling
+# cannot fire for it. `max_tokens` always can. `/state` names this case too.
+# [budget]
+# max_tokens = 200000        # session prompt+completion tokens
+# max_cost_micro = 500000    # micro-USD; 1000000 = $1.00, so this is $0.50
 
 # [toolpin] — pin every MCP tool DEFINITION on first sight (0.42.0). DEFAULT ON.
 # Defends CVE-2025-54136: approving a tool does not survive later server-side
@@ -427,10 +484,16 @@ model = "claude-haiku-4-5-20251001"
 #             NEW at 0.43.2: this key used to be unparsed, and unknown keys are dropped silently, so a
 #             `tier = "simple"` line here did nothing and said nothing. `--tier=` on argv still WINS,
 #             so scripts are unaffected; an unknown value is announced on stderr, not ignored.
+#   theme   - the colour theme to START in: dark (default) | light | rainbow. NEW at 0.44.3. The
+#             theme axis has been live since 0.38.0 and was per-SESSION only - `/theme` cycles it
+#             and nothing carried the choice across a launch, so anyone on a light terminal
+#             retyped it every time. `/theme` still wins at runtime; this only sets the starting
+#             point. An unknown value is announced on stderr and falls back to dark, like `tier`.
 # [ui]
 # bell = true
 # elapsed = true
 # tier = "rich"
+# theme = "light"
 
 # The [alias] table defines slash macros (0.11.4). Each `name = "expansion"` lets you type
 # /<name> as a shortcut: when /<name> is NOT a built-in command, thoth expands it to the

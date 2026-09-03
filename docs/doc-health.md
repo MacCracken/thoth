@@ -6,6 +6,23 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.44.3** (2026-09-03, not a full sweep): the release added
+> [`docs/adr/0021-authority-keys-are-global-only.md`](adr/0021-authority-keys-are-global-only.md) and
+> indexed it in `adr/README.md`; marked **ADR-0019 superseded in part** (its "a project t-ron policy"
+> example is retracted); updated `CHANGELOG.md`, `docs/development/state.md` (version block, Tests
+> counts, the Toolchain block re-measured with `CYRIUS_STATS` **after the last edit**, the Targets
+> matrix — macOS now BUILDS+RUNS, Windows blocked outside thoth's source — and two new
+> Surface-at-a-glance rows for `term`/`budget`), `docs/development/roadmap.md` (v1.0 gate 3's
+> concurrency half **closed**; the macOS/Windows ⛔ limitation replaced with what actually remains; a
+> new ⛔ for the hooks-argv exposure; the `[ui].theme` polish item removed as shipped; the GUI
+> slash-command item re-valued), `docs/development/gap-review.md` **and its `.html` twin in lockstep**
+> (budget enforcement shipped → removed), `README.md` (status stamp),
+> `.thoth/config.cyml.example` (`[budget]`, `[ui].theme`, and the now-false "no budget enforcement"
+> line inside `[subagent]`), and `docs/guides/getting-started.md` (source layout: `term.cyr`,
+> `budget.cyr`). Filed upstream:
+> `cyrius/docs/development/issues/2026-09-03-macos-getenv-always-null-no-proc.md`.
+> The rows below still carry their 0.43.2 sweep status.
+>
 > **Touched at 0.44.2** (2026-08-27, not a full sweep): the release updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block, Tests counts, the Front-doors/Observability surface rows),
 > `docs/development/roadmap.md` (a new ⛔ carried limitation — hoosh dropping SSE frames and laundering

@@ -133,6 +133,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/config.cyr` — runtime config from `.thoth/config.cyml` (seam URLs, toggles); resolves
   the `.thoth/` home (walk up from CWD, then `~/.thoth`; legacy `./thoth.cyml` fallback).
 - `src/seams.cyr` — the capability-seam registry (the seven spine seams + status).
+- `src/term.cyr` — the portable terminal-CONTROL floor (0.44.3): the ONE route from thoth source to darshana's Linux/AGNOS-gated termios / winsize / signalfd half. On a target without it (macOS, Windows) every entry point answers honestly, so thoth takes the line tier instead of failing to link. **Add new terminal-control calls here, never a raw `tty_*` in thoth source.**
 - `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls.
 - `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`).
 - `src/daimon.cyr` — the daimon seam client (MCP tool list + call).
@@ -171,6 +172,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/ask.cyr` — the `ask_user` tool ([ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)): the model asks YOU a question mid-turn and blocks for the answer. Off by default (`[ask].enabled`).
 - `src/gui/gask.cyr` — the T3 question modal (view-builder + key fold; the blocking poll loop is in `gpresent`).
 - `src/subagent.cyr` — `delegate(task)`: a scoped child *context*, off by default ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)).
+- `src/budget.cyr` — `[budget]` spend enforcement (0.44.3): session token / cost ceilings checked before every turn and between agentic rounds, delegated children billed to the same tally — and an announcement when the gateway reports no usage, because a ceiling nothing measures is not a bound.
 - `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.
 - `src/hooks.cyr` — operator lifecycle hooks (`[hooks]`); `pre_tool` can BLOCK a tool call.
 - `src/toolpin.cyr` — trust-on-first-use hashing of tool definitions (the rug-pull defence, `[toolpin]`).

@@ -37,8 +37,20 @@
 #  * Hooks come from the OPERATOR'S CONFIG and nowhere else. The model cannot register, read, alter or
 #    invoke one — `.thoth/config.cyml` is inside `_project_sensitive`, so it is not even readable by the
 #    model's own tools (0.39.0, A-3).
-#  * Event facts go through the ENVIRONMENT, never interpolated into the command. This is the difference
-#    between a hook system and a remote-code-execution primitive.
+#  * Event facts go through the ENVIRONMENT rather than being substituted INTO the operator's command
+#    text. That is the difference between a hook system and a remote-code-execution primitive, and it
+#    holds: `_hook_env_append` emits a quoted `VAR='...'` assignment and escapes the value, so no tool
+#    argument can close the quote and append a command.
+#    ⚠ 0.44.3 — BUT THE ASSIGNMENTS ARE PREFIXED TO THE `/bin/sh -c` STRING, so they are part of the
+#    child's ARGV, not of a passed environment block. On Linux that argv is world-readable through
+#    `/proc/<pid>/cmdline` for the life of the hook, which means up to ~16 KB of the model's tool
+#    ARGUMENTS — paths, and whatever else it put in a call — are briefly visible to any local user. The
+#    earlier form of this bullet said "never interpolated into the command", which was true about
+#    INJECTION and wrong about EXPOSURE; a documented residual is a claim with an expiry date, and this
+#    one had drifted. Closing it needs a portable spawn-with-environment primitive that `exec.cyr` does
+#    not have (the floor offers `sys_execve` shapes that differ per target), so it is recorded in
+#    roadmap.md's known limitations rather than papered over. Not a new risk class — a hook is already
+#    an unsandboxed command the operator chose — but it is a real one and it is now written down.
 #  * A hook runs UNSANDBOXED, as the user, exactly like `/run`, the `shell` tool and `[verify].command`.
 #    That is not a new risk class, but it IS a new instance of one, and when the OS-sandbox seam lands
 #    this is one of the paths that should move behind it.

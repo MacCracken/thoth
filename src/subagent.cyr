@@ -237,6 +237,7 @@ var _sv_roundlog_cur = 0; var _sv_roundlog_total = 0;
 var _sv_cite_n = 0; var _sv_cite_off = 0; var _sv_cite_buf = 0; var _sv_cite_ptrs = 0;
 var _sv_cite_search_id = 0; var _sv_cite_fb_note_id = 0;
 var _sv_recall = 0;
+var _sv_work_full = 0;      # 0.44.3: the parent's over-cap flag — a tool round WRITES it, so it swaps
 
 # _sub_enter: point every round-scoped buffer at the child's storage.
 # EXACT INVERSE of _sub_exit — keep them in the same order so a diff shows a mismatch.
@@ -253,9 +254,18 @@ fn _sub_enter() {
     _sv_roundlog_cur = _roundlog_cur;   _sv_roundlog_total = _roundlog_total;
     _sv_cite_n = _cite_n; _sv_cite_off = _cite_off; _sv_cite_buf = _cite_buf; _sv_cite_ptrs = _cite_ptrs;
     _sv_cite_search_id = _cite_search_id; _sv_cite_fb_note_id = _cite_fb_note_id;
+    # ⚠ 0.44.3 — `_agent_work_full` IS PART OF THE SWAP SET, and this is the THIRD time a member was
+    # missed (`_roundlog_cur` at 0.43.0, memory recall + citations at 0.43.2). The test question ADR-0018
+    # settled is "does a tool round WRITE this global", not "is it a buffer" — and `_agent_add_result`
+    # sets this one on every over-cap append. So a child that filled its OWN 384 KB working set left the
+    # flag raised, `_sub_exit` restored the parent's BUFFER but not the flag, and the parent's very next
+    # round hit `_agent_finish_workfull` and ended the turn announcing that ITS results had been dropped
+    # — a fabricated diagnosis about a buffer that was fine. Same failure shape as the `_roundlog_cur`
+    # miss: not a crash, a LIE.
+    _sv_work_full = _agent_work_full;
     _sv_recall = _mem_recall_buf;
 
-    _agent_work = _sub_work;           _agent_work_len = 0;
+    _agent_work = _sub_work;           _agent_work_len = 0;  _agent_work_full = 0;
     _hoosh_acc = _sub_acc;             _hoosh_acc_len = 0;
     _reason_acc = _sub_reason;         _reason_acc_len = 0;
     _agent_tools_buf = _sub_tools;     _agent_tools_len = 0;  _agent_tools_ready = 0;
@@ -292,6 +302,7 @@ fn _sub_exit() {
     _cite_n = _sv_cite_n; _cite_off = _sv_cite_off; _cite_buf = _sv_cite_buf; _cite_ptrs = _sv_cite_ptrs;
     _cite_search_id = _sv_cite_search_id; _cite_fb_note_id = _sv_cite_fb_note_id;
     _mem_recall_buf = _sv_recall;
+    _agent_work_full = _sv_work_full;   # 0.44.3 — see _sub_enter
     # editlog needs no swap once the round above is closed: editlog_record keys on
     # (turn, roundlog_cur_round(), ci), and with no round open roundlog_cur_round() answers 0 — which is
     # never a real parent round, since agent_turn increments before opening and so starts at 1. A child
@@ -427,6 +438,12 @@ fn subagent_run(task, max_iters) {
         # because the parent only polls between ITS OWN calls. Checked before each child round and
         # after its tools, so a cancel lands within one round at worst.
         if (intr_pending() == 1) { _sub_rounds_last = round_no; return _sub_fail("it was interrupted"); }
+        # 0.44.3: the session SPEND ceiling bounds a CHILD too, and delegation is precisely where a
+        # runaway multiplies — depth 1 and SUB_MAX_PER_TURN bound how MANY children run, never what any
+        # one of them costs. The child's usage folds into the SAME session tally (`_sess_tokens` /
+        # `_sess_cost_micro` are deliberately NOT in the _sub_enter swap set — a delegated round spends
+        # the operator's real money, so it must count), which is what makes one ceiling cover both.
+        if (budget_block() == 1) { _sub_rounds_last = round_no; return _sub_fail("the session budget was reached"); }
         _hoosh_acc_len = 0;                       # the child's acc (swapped), not the parent's
         _sub_iter(model, sys, mem, tools_len);
         var k = _agent_round_kind;
@@ -438,7 +455,18 @@ fn subagent_run(task, max_iters) {
         elif (k == 1) {
             var raw = _agent_round_raw;
             if (raw == 0) { raw = "[]"; }
-            _agent_add_assistant(raw);
+            # ⚠ 0.44.3 — THE REFUSAL IS LOAD-BEARING AND WAS DISCARDED. `_agent_add_assistant` returns 0
+            # when the echo does not fit, and its own header says why the caller must stop: "a REFUSAL,
+            # not a truncation — the caller must end the turn rather than send an assistant message
+            # whose tool_calls array stops mid-array." The parent's loop obeys that. The child ignored
+            # the return and ran its tools anyway, so their RESULTS were appended to a working set with
+            # no matching `tool_use` echo — orphaned `tool` messages, which the provider rejects
+            # outright, turning a full child into a dead round instead of a short answer. Ending here
+            # returns what the child has, which is the whole point of a bounded delegation.
+            if (_agent_add_assistant(raw) == 0) {
+                _sub_rounds_last = round_no;
+                return _sub_fail("its working set filled before it could finish");
+            }
             round_no = round_no + 1;
             # THE SAME dispatch the parent uses — one gate, one hook, one jail, one audit chain.
             _agent_run_calls(_agent_round_val, _agent_round_n);

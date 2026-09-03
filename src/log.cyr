@@ -82,9 +82,16 @@ fn log_begin(event) {
 }
 
 # log_kv_str / log_kv_int: append ` key=value`. A 0 string value renders as `-`.
+# ⚠ 0.44.3 — THE VALUE IS NEUTRALISED, and it was not. `_log_append_clean` sits three lines below with
+# the policy spelled out ("a newline inside the value would end the record early and a stray ESC would
+# reach whatever reads the file"), and this — the function every caller actually uses — appended the
+# value RAW. `log_tool` passes the MODEL'S chosen tool name through here, and `log_kv_str("reason", …)`
+# carries a third party's text, so a name containing "\n" forged a whole extra log record: a fabricated
+# `verdict=allow` line in the file a post-mortem is read from. The KEY stays raw — keys are literals
+# this file's own callers write, never untrusted input.
 fn log_kv_str(k, v) {
     _log_append(" "); _log_append(k); _log_append("=");
-    if (v != 0) { _log_append(v); } else { _log_append("-"); }
+    if (v != 0) { _log_append_clean(v, strlen(v)); } else { _log_append("-"); }
     return 0;
 }
 fn log_kv_int(k, n) {
@@ -127,7 +134,19 @@ fn log_commit(level) {
 # lost chunk, not a lost session). Control bytes are neutralised — a newline inside the value would end
 # the record early and a stray ESC would reach whatever reads the file, so both are folded to a visible
 # form here rather than at the far end.
-var LOG_TEXT_CHUNK = 480;        # value bytes per emitted line (LOG_BUF_CAP less the envelope + key)
+# ⚠ 0.44.3 — THE CHUNK WAS TWICE WHAT SURVIVES THE SINK, so the transcript silently lost most of every
+# long value. sakshi's file/stderr writer formats each event into a `var buf[256]` via `_sk_fmt_line`
+# (lib/sakshi.cyr) — `[<ns timestamp>] [<LEVEL>] <message>\n`, about 31 bytes of prefix — and its ring
+# and UDP sinks clamp the message at 256 outright. A 480-byte chunk therefore reached the file as ~225
+# bytes and the rest was dropped with no marker: `--logs` exists so a run that CRASHES leaves behind
+# what it was doing, and more than half of "what it was doing" was never written.
+#
+# The chunk is now sized to the SINK, and `log_text` fills by EMITTED cost rather than source bytes —
+# `_log_append_clean` turns one newline into two characters, so a source-byte budget overflows on any
+# prose with line breaks in it, which is all of it.
+var LOG_LINE_MAX = 210;          # message bytes that reliably survive sakshi's 256-byte formatted line
+var LOG_TEXT_RESERVE = 48;       # room for `<event> part=N of=M <key>=` before the value starts
+var LOG_TEXT_CHUNK = 160;        # EMITTED value bytes per line (LOG_LINE_MAX less the reserve, rounded down)
 
 # _log_append_clean: append n bytes of arbitrary text, control bytes neutralised. A newline becomes a
 # literal backslash-n so one record stays one line; other C0/DEL bytes become '?'. Bounded by the buffer.
@@ -149,17 +168,49 @@ fn _log_append_clean(p, n) {
 # log_text: emit `event=<event> part=i of=n <key>=<chunk>` lines covering text[0..len). A zero length
 # still emits ONE line with an empty value — "the model answered nothing" is itself worth recording, and
 # a silent no-op would read the same as logging being off. No-op when logging is unbound. I/O.
+# _log_text_span: how many SOURCE bytes starting at `off` fit in `budget` EMITTED bytes, given that
+# `_log_append_clean` renders a newline as two characters and everything else as one. Pure — and the
+# reason log_text needs two passes: `of=N` has to be right on the FIRST line, so the parts are counted
+# with the same function that later fills them.
+fn _log_text_span(p, len, off, budget) {
+    var used = 0;
+    var i = off;
+    while (i < len) {
+        var c = 1;
+        if ((load8(p + i) & 255) == 10) { c = 2; }
+        if ((used + c) > budget) { return i - off; }
+        used = used + c;
+        i = i + 1;
+    }
+    return i - off;
+}
+
 fn log_text(event, key, p, len) {
     if (_log_enabled == 0) { return 0; }
     if (p == 0) { len = 0; }
+    var budget = LOG_TEXT_CHUNK;
+    if (budget < 16) { budget = 16; }
+    # pass 1 — count the parts by the SAME fill the emit loop performs, so `of=` is a fact
     var parts = 1;
-    if (len > 0) { parts = (len + LOG_TEXT_CHUNK - 1) / LOG_TEXT_CHUNK; }
+    if (len > 0) {
+        parts = 0;
+        var co = 0;
+        while (co < len) {
+            var cs = _log_text_span(p, len, co, budget);
+            if (cs <= 0) { cs = 1; }             # a lone newline wider than the budget: never loop forever
+            co = co + cs;
+            parts = parts + 1;
+        }
+        if (parts < 1) { parts = 1; }
+    }
     var i = 0;
     var off = 0;
     while (i < parts) {
-        var n = len - off;
-        if (n > LOG_TEXT_CHUNK) { n = LOG_TEXT_CHUNK; }
-        if (n < 0) { n = 0; }
+        var n = 0;
+        if (off < len) {
+            n = _log_text_span(p, len, off, budget);
+            if (n <= 0) { n = 1; }
+        }
         log_begin(event);
         log_kv_int("part", i + 1);
         log_kv_int("of", parts);
@@ -176,7 +227,11 @@ fn log_text(event, key, p, len) {
 # wall-time and its size, plus the arguments (bounded). The ARGUMENTS matter: "read_file failed" is not a
 # post-mortem, "read_file {\"path\":\"src/tasks/health.js\"} failed" is. `kind` is the roundlog RL_* verdict,
 # rendered as a word so the file needs no key. No-op when logging is unbound. Pure + I/O via log_commit.
-var LOG_ARGS_MAX = 300;          # argument bytes recorded per call (a long paste is trimmed, never dropped)
+# 0.44.3: was 300, which did not survive the sink either (see LOG_LINE_MAX). The INLINE excerpt is now
+# sized to fit beside the rest of the `tool` line's fields; the FULL arguments follow as their own
+# chunked `tool_args` run, so a long call is recorded completely instead of clipped — strictly more
+# information than the 300-byte inline form ever delivered.
+var LOG_ARGS_MAX = 96;           # inline excerpt on the `tool` line; the full value goes to `tool_args`
 # `verdict` is a caller-supplied word ("allow"/"deny"/"noname") rather than the RL_* constant: log.cyr is
 # included BEFORE roundlog.cyr (a global's address cannot be forward-referenced the way a function's can),
 # and the roundlog already owns a kind->word mapping worth reusing at the call site.
@@ -188,15 +243,21 @@ fn log_tool(name, args, verdict, ok, ms, bytes) {
     log_kv_int("ok", ok);
     log_kv_int("ms", ms);
     log_kv_int("bytes", bytes);
+    var full_args = 0;
     if (args != 0) {
         var n = strlen(args);
         var trimmed = 0;
-        if (n > LOG_ARGS_MAX) { n = LOG_ARGS_MAX; trimmed = 1; }
+        if (n > LOG_ARGS_MAX) { n = LOG_ARGS_MAX; trimmed = 1; full_args = 1; }
         _log_append(" args=");
         _log_append_clean(args, n);
         if (trimmed == 1) { _log_append("...(trimmed)"); }
     }
     if (ok == 1) { log_commit(SK_DEBUG); } else { log_commit(SK_WARN); }
+    # 0.44.3: the arguments in FULL, chunked, when the inline excerpt above had to trim. 0.44.2 added
+    # arguments to this line because "read_file failed" is not a post-mortem and
+    # `read_file {"path":"src/tasks/health.js"} failed` is — and then clipped exactly the long calls
+    # where that reasoning bites hardest. `tool_args` carries the whole value across `part=i of=n` lines.
+    if (full_args == 1) { log_text("tool_args", "args", args, strlen(args)); }
     return 0;
 }
 

@@ -194,9 +194,18 @@ fn _agent_add_result(id, text) {
     _agent_work_puts("{\"role\":\"tool\",\"tool_call_id\":\"");
     _agent_work_puts_id(id);
     _agent_work_puts("\",\"content\":\"");
-    # 0.40.0 (T1-3): redact HERE, the single chokepoint where a tool result becomes a transcript message.
-    # Upstream of every sink at once — the feed, the conversation store, /save, and the next request to
-    # the gateway — so a secret caught here never leaves the machine at all. No-op when [redact] is off.
+    # 0.40.0 (T1-3): redact HERE, the chokepoint where a tool result becomes a transcript message —
+    # upstream of the conversation store, /save and the next request to the gateway. No-op when
+    # [redact] is off.
+    #
+    # ⚠ 0.44.3 — "UPSTREAM OF EVERY SINK AT ONCE" WAS NOT TRUE OF THE FEED, which this comment used to
+    # claim. Both executors PRINT the result before calling this function, and under OUT_RING that print
+    # goes into the feed ring — which `/save` exports and the TUI shows. So thoth announced "[redacted]"
+    # and then wrote the unredacted secret into the transcript the operator exports, in the same turn.
+    # Every display site now redacts first (`res = redact_tool_result(res)`), which makes the earliest
+    # sink the redaction point; the call below is kept because the redactor is idempotent — a second
+    # scan of already-clean text matches nothing and announces nothing — and because it keeps this
+    # function safe for any future caller that does not print first.
     # 0.40.0 (T1-3) redaction and 0.41.0 (T2-3) injection-guarding, in that ORDER and both at this one
     # chokepoint. Redact first: a secret must not survive into the wrapped copy the guard would build,
     # and the guard's envelope text must not itself be scanned for secrets.
@@ -365,7 +374,12 @@ fn agent_format_tools(dst, tools_arr) {
             }
         }
     }
-    if (done == 1) { if (i < n) { skipped = n - i; } }
+    # ⚠ 0.44.3 — THIS RECOMPUTE UNDER-COUNTED BY EXACTLY ONE. The rollback arm inside the loop already
+    # sets `skipped = n - i` at the index of the element it REJECTED, and then `i = i + 1` runs
+    # unconditionally, so recomputing here with the incremented `i` forgets the rolled-back element
+    # itself. The operator was told "3 tools omitted" when four were. The in-loop value is the correct
+    # one; this line now only fills in the case where nothing set it.
+    if (done == 1) { if (skipped == 0) { if (i < n) { skipped = n - i; } } }
     off = _append_cstr_cap(dst, off, cap, "]");
     store8(dst + off, 0);
     _agent_tools_skipped = skipped;
@@ -720,6 +734,8 @@ fn _agent_raw_tool_calls(body, len) {
 # round did different work depending on [hoosh].stream. A model asked to read a directory of files emits
 # ten-plus calls in one round routinely. 32 slots at AG_ARGS_CAP is 512 KB of lazily-committed heap, and
 # the drops that remain are now counted and announced rather than swallowed.
+# ⚠ `RL_MAX_CALLS` (src/roundlog.cyr) MUST track this. 0.44.2 raised this 8 -> 32 and left that at 8,
+# so /audit under-reported every round of nine or more calls for a release. Change both.
 var AGENT_MAX_CALLS = 32;
 var AG_ID_CAP = 96;
 var AG_NAME_CAP = 96;
@@ -993,6 +1009,7 @@ var _par_has_name = 0;       # PAR_MAX byte flags: 1 if the call had a name
 var _par_allowed = 0;        # PAR_MAX byte flags: 1 if the gate allowed it
 var _par_kind = 0;           # PAR_MAX i64 roundlog verdict kinds
 var _par_over = 0;           # PAR_MAX byte flags: 1 if args exceeded AGENT_ARGS_MAX (refused)
+var _par_overname = 0;       # PAR_MAX byte flags: 1 if the tool NAME exceeded the slot (refused, 0.44.3)
 var _par_hookblocked = 0;    # PAR_MAX byte flags: 1 if the operator's pre_tool hook denied it (0.43.1)
 
 fn _par_ctx_ptr(s) { return _par_ctx + s * PAR_CTX_SZ; }
@@ -1013,9 +1030,28 @@ fn _par_alloc() {
     _par_allowed = alloc(PAR_MAX);
     _par_kind = alloc(PAR_MAX * 8);
     _par_over = alloc(PAR_MAX);
+    _par_overname = alloc(PAR_MAX);
     _par_hookblocked = alloc(PAR_MAX);
-    var i = 0;
+    # 0.44.3: an unchecked alloc here is a NULL WRITE on the first `store8`/`store64` of phase 1 — the
+    # arena loop below already refuses on OOM and the caller already falls back to the serial executor,
+    # so the honest thing is to take that same exit for every slot buffer rather than only the arenas.
     var ok = 1;
+    if (_par_arena == 0) { ok = 0; }
+    if (_par_req == 0) { ok = 0; }
+    if (_par_out == 0) { ok = 0; }
+    if (_par_name == 0) { ok = 0; }
+    if (_par_args == 0) { ok = 0; }
+    if (_par_id == 0) { ok = 0; }
+    if (_par_ctx == 0) { ok = 0; }
+    if (_par_thread == 0) { ok = 0; }
+    if (_par_has_name == 0) { ok = 0; }
+    if (_par_allowed == 0) { ok = 0; }
+    if (_par_kind == 0) { ok = 0; }
+    if (_par_over == 0) { ok = 0; }
+    if (_par_overname == 0) { ok = 0; }
+    if (_par_hookblocked == 0) { ok = 0; }
+    if (ok == 0) { return 0; }
+    var i = 0;
     while (i < PAR_MAX) {
         var aa = arena_allocator(PAR_ARENA_CAP);
         store64(_par_arena + i * 8, aa);
@@ -1074,6 +1110,9 @@ fn _agent_tool_ok(text_ok, is_error) {
 fn _agent_run_calls_par(tcs, nc) {
     _par_alloc();
     _daimon_call_endpoint();         # pre-warm the cached URL on the main thread
+    hoosh_http_opts();               # 0.44.3: pre-warm the socket-deadline options too — daimon_fetch_into
+                                     # reads them from a worker thread, and building the cached object
+                                     # there would be a race. Same discipline as the URL above.
     var base = 0;
     while (base < nc) {
         # 0.43.2: honour Esc BETWEEN batches, mirroring the serial executor's per-call poll. `nc` is the
@@ -1094,11 +1133,24 @@ fn _agent_run_calls_par(tcs, nc) {
             _par_cstr_copy(_par_name + k * PAR_NAME_CAP, PAR_NAME_CAP, nm);
             store8(_par_has_name + k, 0);
             if (nm != 0) { store8(_par_has_name + k, 1); }
+            # ⚠ 0.44.3 — GATE ONE STRING, EXECUTE ANOTHER. `_par_cstr_copy` TRUNCATES at
+            # PAR_NAME_CAP-1 (255) while the t-ron gate below runs on the full `nm`, so a name longer
+            # than the slot was authorized in one form and POSTed to daimon in another. The arguments
+            # already had this exact protection (`strlen(ga) > AGENT_ARGS_MAX` refuses BEFORE gating,
+            # "so t-ron never scans a truncated payload"); the name did not. Refuse, symmetrically —
+            # a 256-byte tool name is not a real call, and silently renaming one is worse than saying no.
+            store8(_par_overname + k, 0);
+            if (nm != 0) { if (strlen(nm) > (PAR_NAME_CAP - 1)) { store8(_par_overname + k, 1); } }
             var ga = ar; if (ga == 0) { ga = "{}"; }
             _par_cstr_copy(_par_args + k * PAR_ARGS_CAP, PAR_ARGS_CAP, ga);
             _par_cstr_copy(_par_id + k * PAR_ID_CAP, PAR_ID_CAP, id);
-            ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
-            if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } oprintln("");
+            # 0.44.3: same sanitising as the serial executor — see the note there. The parallel path is
+            # the DEFAULT one (`[hoosh].parallel`), so this is the line that actually prints in most sessions.
+            ui_emit(ROLE_FAINT, "  tool-call: ");
+            if (nm != 0) { emit(ui_sgr(ROLE_ACCENT)); emit_clean_line(nm); emit(ui_reset()); }
+            else { ui_emit(ROLE_FAINT, "(unnamed)"); }
+            if (ar != 0) { emit(" "); emit(ui_sgr(ROLE_MUTED)); emit_clean_line(ar); emit(ui_reset()); }
+            oprintln("");
             events_tool_call(session_turns(), nm, ar);          # 0.43.1: the stream was silently incomplete here
             var allowed = 0;
             var kind = RL_DENIED;
@@ -1118,6 +1170,7 @@ fn _agent_run_calls_par(tcs, nc) {
             # narrow authority. Phase 1 is already a serial loop over the batch, so the hook keeps running
             # one at a time and never races.
             if (nm == 0) { kind = RL_NONAME; }
+            elif (load8(_par_overname + k) == 1) { kind = RL_DENIED; }
             elif (strlen(ga) > AGENT_ARGS_MAX) { store8(_par_over + k, 1); kind = RL_DENIED; }
             elif (hooks_pre_tool(nm, ga) == 0) { store8(_par_hookblocked + k, 1); kind = RL_DENIED; }
             elif (gate_authorize(nm, ga, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
@@ -1171,6 +1224,13 @@ fn _agent_run_calls_par(tcs, nc) {
                     # worker's daimon_fetch_into returned -1 (transport failure) — kept
                     # distinct from a parsed-but-empty 2xx body so the model sees why.
                     res = "(tool call failed: transport error)";
+                } elif (rlen > (PAR_OUT_CAP - 1)) {
+                    # 0.44.3: the body did not fit the slot. The clip lands mid-JSON, so parsing it would
+                    # fail and report "(tool returned no result)" — a lie about a call that succeeded and
+                    # returned too much. Say what happened, and say it to the MODEL, whose next move
+                    # (ask for less) depends on knowing which of the two it was. The serial executor has
+                    # no such cap, so this is also where the two paths stop disagreeing silently.
+                    res = "(tool result too large for this round and was discarded; ask for a smaller slice)";
                 } else {
                     res = "(tool returned no result)";
                     var st = load64(_par_ctx_ptr(k) + 56);           # 0.31.5: the worker-stashed HTTP status
@@ -1183,12 +1243,22 @@ fn _agent_run_calls_par(tcs, nc) {
                     elif (text != 0) {
                         res = str_cstr(text);
                         rl_ok = _agent_tool_ok(1, daimon_extract_is_error(_par_out + k * PAR_OUT_CAP, rlen));   # 0.30.18: honor isError
+                        # 0.44.3: the 0.44.1 WRONG-TREE correction, which shipped on the serial path only.
+                        # A daimon-hosted `fs_read` is rooted at $BOTE_FS_ROOT while thoth's `read_file` is
+                        # rooted at the launch cwd, and when the host tool MISSES a file this project
+                        # actually has, naming the call that works is what stopped the model looping. The
+                        # parallel executor is the DEFAULT, so the fix has been absent from the common path
+                        # for the whole release that introduced it.
+                        if (daimon_extract_is_error(_par_out + k * PAR_OUT_CAP, rlen) == 1) {
+                            res = _agent_xtree_append(res, _par_args + k * PAR_ARGS_CAP);
+                        }
                     }
                 }
-                ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+                res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
             } else {
                 res = "denied by authorization policy";
                 if (load8(_par_over + k) == 1) { res = "(tool arguments too large; call refused — split into smaller calls)"; }
+                if (load8(_par_overname + k) == 1) { res = "(tool name too long; call refused)"; }
                 # 0.43.1: say WHICH control refused. A hook denial and a policy denial are different facts,
                 # and the model's next move differs — the serial path has always distinguished them.
                 if (load8(_par_hookblocked + k) == 1) { res = "(blocked by the pre_tool hook)"; }
@@ -1305,8 +1375,17 @@ fn _agent_run_calls_serial(tcs, nc) {
         var nm = agent_tc_name(tcs, ci);
         var ar = agent_tc_args(tcs, ci);
         var id = agent_tc_id(tcs, ci);
-        ui_emit(ROLE_FAINT, "  tool-call: "); if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(unnamed)"); }
-        if (ar != 0) { emit(" "); ui_emit(ROLE_MUTED, ar); } oprintln("");
+        # ⚠ 0.44.3 — `nm` and `ar` are the MODEL'S bytes and this line is CHROME. Emitted raw they were the
+        # third sibling of the 0.39.0 audit's A-7/A-8 pair: feed_clip copies an unrecognised escape
+        # verbatim (it must — thoth's role markers ride that channel), so an ESC in a tool name reached
+        # the terminal. Worse here than in the tree pane, because this line prints BEFORE the t-ron gate
+        # runs, so even a call that is about to be DENIED gets to paint. The role colour is thoth's; the
+        # bytes inside it are not.
+        ui_emit(ROLE_FAINT, "  tool-call: ");
+        if (nm != 0) { emit(ui_sgr(ROLE_ACCENT)); emit_clean_line(nm); emit(ui_reset()); }
+        else { ui_emit(ROLE_FAINT, "(unnamed)"); }
+        if (ar != 0) { emit(" "); emit(ui_sgr(ROLE_MUTED)); emit_clean_line(ar); emit(ui_reset()); }
+        oprintln("");
         events_tool_call(session_turns(), nm, ar);          # 0.42.0 (T3): NDJSON for machine consumers
         var gp = ar; if (gp == 0) { gp = "{}"; }
         var res = 0;
@@ -1327,7 +1406,7 @@ fn _agent_run_calls_serial(tcs, nc) {
                 rl_kind = RL_ALLOWED;
                 res = memory_write_tool(gp);
                 rl_ok = 1;
-                ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+                res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
             } else {
                 res = "denied by authorization policy";
             }
@@ -1364,14 +1443,14 @@ fn _agent_run_calls_serial(tcs, nc) {
             res = shell_run_tool(gp);
             if (shell_last_allowed() == 1) { rl_kind = RL_ALLOWED; }
             rl_ok = shell_last_ok();
-            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (streq(nm, "shell") == 1) {
             # "shell" emitted while the tool is disabled / unsupported (it was never advertised):
             # return an honest not-enabled string. Do NOT run it and do NOT fall through to
             # daimon_invoke — never execute or forward a tool the model was not offered. rl stays DENIED.
             res = "(shell tool is not enabled in this session)";
-            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (streq(nm, "edit") == 1) {
             # thoth-native edit tool (0.31.0, ADR-0017): the model rewrites a project file. edit_tool self-gates
@@ -1389,7 +1468,7 @@ fn _agent_run_calls_serial(tcs, nc) {
             } else {
                 res = "(edit tool is not enabled in this session)";
             }
-            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (streq(nm, "create_file") == 1) {
             # thoth-native create tool (0.31.3, ADR-0017): the model makes a NEW project file. create_file_tool
@@ -1406,7 +1485,7 @@ fn _agent_run_calls_serial(tcs, nc) {
             } else {
                 res = "(create_file tool is not enabled in this session)";
             }
-            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (streq(nm, "ask_user") == 1) {
             # 0.44.0 (T4-1): the one tool that runs TOWARD the user. LOCAL and matched unconditionally
@@ -1444,7 +1523,7 @@ fn _agent_run_calls_serial(tcs, nc) {
             # served — and daimon_invoke -> _daimon_call_endpoint would strlen() a NULL daimon URL. Refuse
             # honestly (rl stays DENIED); never touch the network. Only reachable when the seam is absent.
             res = "(tool not available: no daimon wired — only the local shell/memory tools run standalone)";
-            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
@@ -1458,7 +1537,7 @@ fn _agent_run_calls_serial(tcs, nc) {
             # 0.44.1: a host file tool that MISSED a file this project has is the wrong-tree mistake; say so,
             # and name the call that works. Only on a failure, so a working host tool is left alone.
             if (daimon_invoke_is_error() == 1) { res = _agent_xtree_append(res, ar); }
-            ui_emit(ROLE_FAINT, "  result: "); oprintln(res);
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         } else {
             res = "denied by authorization policy";
         }
@@ -1494,6 +1573,49 @@ var _agent_cell = 0;
 # _agent_finish_outcome: shared classification — given a fully-received response
 # (raw tool_calls text + parsed array + content already handled), set the round
 # outcome. Content for the final answer is left in _hoosh_acc by the caller.
+# _agent_normalize_block: put a NON-STREAMING round's tool_calls through the SAME slot hygiene the
+# streaming accumulator applies, and return the rebuilt array text (or 0 to keep the provider's).
+#
+# ⚠ 0.44.3 — 0.44.2's TOOL-CALL HYGIENE WAS STREAM-ONLY, AND THE SUBAGENT NEVER STREAMS. All of it —
+# drop a slot with no name, mint a locally-generated id when the provider omitted one, refuse a call
+# whose arguments were clipped mid-JSON — lives in `_ag_build_array`, which only the SSE path reached.
+# The blocking path took the provider's array VERBATIM and handed it to `_agent_add_assistant`, so the
+# exact defect 0.44.2 was written to survive (hoosh dropping a tool call's opening frame, leaving
+# `{"id":"","function":{"name":"",...}}`) still went into HISTORY, where the provider rejects a
+# `tool_use` with an empty id and name and every later round comes back empty. `_sub_iter` calls
+# `_agent_iter_block` unconditionally, so a delegated turn had NONE of the protection.
+#
+# Rebuilding through the one builder is what makes the two paths agree by construction rather than by
+# two implementations that have to be kept in step.
+fn _agent_normalize_block(tcs, nc) {
+    _ag_reset();
+    var i = 0;
+    var kept = 0;
+    while ((i < nc) && (i < AGENT_MAX_CALLS)) {
+        var nm = agent_tc_name(tcs, i);           # already answers 0 for an empty-string name (0.44.2)
+        var id = agent_tc_id(tcs, i);
+        var ar = agent_tc_args(tcs, i);
+        if (nm != 0) {
+            _ag_copy_str(_ag_names + (i * AG_NAME_CAP), AG_NAME_CAP, str_from(nm));
+            if (id != 0) { _ag_copy_str(_ag_ids + (i * AG_ID_CAP), AG_ID_CAP, str_from(id)); }
+            if (ar != 0) { _ag_copy_str(_ag_args + (i * AG_ARGS_CAP), AG_ARGS_CAP, str_from(ar)); }
+            store8(_ag_seen + i, 1);
+            kept = kept + 1;
+        }
+        _ag_max = i + 1;
+        i = i + 1;
+    }
+    if (kept == 0) { return 0; }
+    _ag_build_array(_agent_arr_buf);
+    if (_ag_dropped > 0) {
+        ui_emit(ROLE_RED, "  [dropped "); ofmt_int(_ag_dropped);
+        ui_emit(ROLE_RED, " malformed tool call(s)");
+        ui_emit(ROLE_FAINT, " — the gateway sent a call with no name; the model can re-issue it");
+        oprintln("");
+    }
+    return _agent_arr_buf;
+}
+
 fn _agent_set_tools(raw, val, n) {
     _agent_round_raw = raw;
     _agent_round_val = val;
@@ -1583,7 +1705,11 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
         if (content != 0) { _hoosh_print_reply(content); _hoosh_acc_append(str_data(content), str_len(content)); }   # 0.15.1: fenced-code highlighting
         _agent_round_kind = 0;
     } else {
-        var raw = _agent_raw_tool_calls(body, blen);
+        # 0.44.3: normalise through the shared builder first (see _agent_normalize_block). Falls back to
+        # the provider's own array only when normalisation kept nothing, which keeps the previous
+        # behaviour for the degenerate case rather than silently emptying a round.
+        var raw = _agent_normalize_block(tcs, nc);
+        if (raw == 0) { raw = _agent_raw_tool_calls(body, blen); }
         if (raw == 0) { raw = "[]"; }
         _agent_set_tools(raw, tcs, nc);
     }
@@ -1797,6 +1923,7 @@ fn agent_turn(prompt) {
     var iter = 0;
     var done = 0;
     var round_no = 0;
+    var budget_stop = 0;                           # 0.44.3: the turn ended on a [budget] ceiling, not on max_iters
     var max_iters = config_hoosh_max_iters();      # 0.40.0 (T1-2): configurable, read per turn so /reload lands
     # 0.44.2: the SESSION LOG's opening record for this turn. `--logs` exists so a run that never reaches
     # its answer still explains itself, and the first thing anyone reads back is "what was it asked to
@@ -1804,6 +1931,13 @@ fn agent_turn(prompt) {
     log_begin("turn_start"); log_kv_int("turn", session_turns()); log_kv_str("model", model);
     log_kv_int("max_iters", max_iters); log_kv_int("tool_bytes", tools_len); log_commit(SK_INFO);
     log_text("task", "text", prompt, strlen(prompt));
+    # 0.44.3 — CHECK BEFORE THE CALL. `[budget]` bounds SPEND, and `max_iters` never could: it bounds
+    # rounds, and one round over a 200 KB context costs what forty small ones do.
+    # This entry check is the SECOND line, not the first: `_task_dispatch` already refused the turn if
+    # the ceiling was met, and it has to, because a plain (`[hoosh].tools = false`) turn never reaches
+    # this loop at all. It is kept because it costs one comparison and because a future caller of
+    # agent_turn that does not come through the chokepoint must still be bounded.
+    if (budget_block() == 1) { budget_stop = 1; done = 1; }
     while ((done == 0) && (iter < max_iters)) {
         _hoosh_acc_reset();
         _agent_empty_stream = 0;
@@ -1880,8 +2014,22 @@ fn agent_turn(prompt) {
             log_text("reply", "text", _hoosh_acc, _hoosh_acc_len);   # 0.44.2: the answer itself, so the log is a transcript and not just a trace
         }
         iter = iter + 1;
+        # 0.44.3: re-check between rounds. The round just completed is the one that may have crossed the
+        # ceiling, and the next one is the spend this stops. Only when the turn is still running — a turn
+        # that already has its answer must not be rewritten into a budget failure after the fact.
+        if (done == 0) {
+            if (budget_block() == 1) { budget_stop = 1; done = 1; }
+        }
     }
-    if (done == 0) {
+    if (budget_stop == 1) {
+        # Same cleanup as the max_iters path, and for the same reason: no FINAL answer was produced, so
+        # the dangling user message is popped and the accumulator cleared (a one-shot run must exit
+        # nonzero rather than print the last round's interim narration as if it were the answer).
+        session_history_pop_last();
+        _hoosh_acc_reset();
+        log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "budget"); log_commit(SK_WARN);
+    }
+    if ((done == 0) && (budget_stop == 0)) {
         # 0.40.0 (T1-2): name the cap and how to raise it. A bare "hit the iteration cap" tells the user
         # nothing actionable — and thoth has been bitten by exactly that: the 0.38.5 tool-argument bug
         # presented as this message every time, with no hint that the ceiling was 8 or that it moves.

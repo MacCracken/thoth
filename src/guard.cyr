@@ -34,6 +34,13 @@
 # scan, what to say, how to wrap — and none of the heuristics.
 
 var GUARD_CAP = 262144;        # bounded working copy; larger content is passed through UNWRAPPED (see below)
+# ⚠ 0.44.3 — THE ENVELOPE COSTS BYTES AND THE CAP CHECK IGNORED THEM. `guard_scan_text` bounds the RAW
+# text at GUARD_CAP, but the wrap prepends ~330 bytes of preamble and appends a closer, so content in
+# the band [GUARD_CAP - envelope, GUARD_CAP) was accepted for wrapping and then silently CUT by
+# `_append_cstr_cap` — in a function whose own header promises it never truncates, and cutting the very
+# content it was invoked to preserve. Reserved explicitly, with room to spare so an editor of the
+# preamble text does not have to re-measure it.
+var GUARD_ENVELOPE = 512;      # bytes the wrap itself costs (preamble + `source` + closer), reserved
 var _guard_buf = 0;
 var _guard_n = 0;              # untrusted spans flagged this session (for /state)
 
@@ -64,6 +71,16 @@ fn guard_wrap_untrusted(text, source) {
     if (guard_active() == 0) { return text; }
     if (guard_scan_text(text) == 0) { return text; }
     var n = strlen(text);
+    # 0.44.3: the envelope must FIT, not just the content. Over the reserve, take the same
+    # pass-through-unwrapped exit the header describes — and announce it, because "not wrapped" and
+    # "scanned clean" look identical to the operator otherwise, and here it is the opposite verdict:
+    # the scanner DID trip and the envelope could not be applied.
+    if ((n + GUARD_ENVELOPE) > (GUARD_CAP - 1)) {
+        ui_emit(ROLE_RED, "  [untrusted] ");
+        note_emit("content from "); note_emit(source);
+        note_println(" tripped the injection heuristics but is too large to mark — it was passed through UNWRAPPED");
+        return text;
+    }
     if (_guard_buf == 0) { _guard_buf = alloc(GUARD_CAP); }
     if (_guard_buf == 0) { return text; }
     _guard_n = _guard_n + 1;

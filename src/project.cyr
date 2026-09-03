@@ -432,6 +432,21 @@ fn read_file_tool(args_cstr) {
     var n = file_read_all(path, _project_read_buf, PROJECT_READ_CAP);
     if (n < 0) { return "(read_file: could not read the file)"; }
     store8(_project_read_buf + n, 0);
+    # ⚠ 0.44.3 — SAY WHEN IT IS A PREFIX. A file at or over the cap came back as an unmarked prefix, and
+    # the model was told that WAS the file: it then reasons about a function it cannot see the end of,
+    # reports a symbol as absent when it is on line 3000, or edits against a truncated view. Every other
+    # bound in this tree announces itself when it bites (`search`, `shell`, the working set); this one
+    # did not. Appending the marker is safe — the buffer is allocated at CAP+1 and the marker replaces
+    # the tail of the content, so the note can never itself overflow.
+    if (n >= PROJECT_READ_CAP) {
+        var mk = "\n[... read_file: TRUNCATED — this is only the first ";
+        var mo = PROJECT_READ_CAP - 96;
+        if (mo < 0) { mo = 0; }
+        mo = _append_cstr_cap(_project_read_buf, mo, PROJECT_READ_CAP, mk);
+        mo = _append_int_cap(_project_read_buf, mo, PROJECT_READ_CAP, PROJECT_READ_CAP);
+        mo = _append_cstr_cap(_project_read_buf, mo, PROJECT_READ_CAP, " bytes of a larger file]");
+        store8(_project_read_buf + mo, 0);
+    }
     return _project_read_buf;
 }
 

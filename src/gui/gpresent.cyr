@@ -128,6 +128,11 @@ fn gui_ask() {
     # Copy ask.cyr's already-sanitised strings into the modal's own view state. gask.cyr deliberately
     # holds no seam of its own so it stays a headless-testable view-builder; this is the bridge.
     gask_open(ask_question());
+    # 0.44.3: pick the modal's FIXED label from who is actually asking. `confirm` poses authorization
+    # prompts through this same seam (gate.cyr), and labelling one of those "the agent is asking" tells
+    # the operator the wrong thing about a security decision — the agent REQUESTED the action; thoth is
+    # the one asking whether to allow it.
+    if (ask_is_authz() == 1) { gask_set_label(GASK_LABEL_AUTHZ); }
     var i = 0;
     while (i < ask_option_count()) { gask_add_option(ask_option_at(i)); i = i + 1; }
     _gui_dirty = 1;
@@ -190,6 +195,16 @@ fn gui_run() {
     inhist_init();                                       # composer history recall ring (0.30.15)
     gstop_set_win(win); intr_check_hook_set(&_gstop_poll);
     ask_hook_set(&gui_ask);                              # 0.44.0 (T4-1): claim the ask seam for THIS front end   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
+    # 0.44.3: this surface owns the screen — there is no terminal to prompt on and no cooked stdin anyone
+    # is typing into, so the authorization confirm must go through the modal above. Declaring it here (at
+    # THIS front end's startup, like the ask hook itself) rather than letting `confirm` infer it from
+    # out_mode is what makes it correct in BOTH windows: the turn runs under OUT_NULL, command dispatch
+    # under OUT_RING, and neither can do a read_line.
+    confirm_no_tty_set(1);
+    # ...and drop the TUI's confirm bracket. main.cyr registers it unconditionally (it cannot know which
+    # front end will win); left in place, a confirm raised during a GUI command dispatch would run T2
+    # painters over a terminal that has no alt screen up.
+    confirm_hooks_set(0, 0);
     var pfd[8];
     _gpresent_frame(win);                                # first paint
     var running = 1;

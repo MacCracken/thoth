@@ -45,6 +45,12 @@ var SUB_MAX_ITERS_DEFAULT = 8;      # 0.43.0 (T2-1): rounds ONE child may spend;
                                     # Declared here, not in subagent.cyr, because config_subagent_max_iters (below) reads it
                                     # and config.cyr is included first.
 var _cfg_subagent_max_iters = 0 - 1;  # 0.43.0 (T2-1): [subagent].max_iters — unset sentinel; default+clamp in the getter
+# [budget] — SPEND enforcement (0.44.3). thoth has had token/cost ACCOUNTING since 0.10.2 and no bound
+# on it: nothing stopped a runaway loop, and delegation multiplies a turn's cost (ADR-0018 records that
+# `[subagent].enabled` is off partly BECAUSE this did not exist). Both are session-cumulative ceilings;
+# -1/absent/<=0 means unlimited, which is the default — a budget is opt-in, never a surprise cap.
+var _cfg_budget_tokens = 0 - 1;      # [budget].max_tokens — prompt+completion tokens for the session
+var _cfg_budget_cost_micro = 0 - 1;  # [budget].max_cost_micro — micro-USD (1_000_000 = $1) for the session
 # 0.41.0 (T2-4): [hooks] — operator-configured commands fired at agent events. All unset (0) by default:
 # a hook is arbitrary execution, so it exists only when the operator wrote one.
 var _cfg_hook_session_start = 0;
@@ -78,6 +84,7 @@ var _cfg_ui_elapsed = 0;     # [ui].elapsed — a faint per-turn elapsed line af
 # under [ui] did nothing and said nothing. It is the natural place to look for the setting, `--tier`
 # already proves the concept, and argv still wins so scripts are unaffected.
 var _cfg_ui_tier = 0;
+var _cfg_ui_theme = 0;   # [ui].theme — 0 when unset; the startup theme (0.44.3)
 var _cfg_memory_enabled = 0; # 1 = inject project-local .thoth/memory (0.12.0, opt-in); off by default
 var _cfg_shell_enabled = 0;  # 1 = advertise the model-invokable `shell` tool (0.16.0, opt-in); off by default
 var _cfg_edit_enabled = 0;   # 1 = advertise the model-invokable `edit` tool (0.31.0, opt-in); off by default (writing is consequential)
@@ -407,6 +414,80 @@ fn _cfg2_int(l, g, key) {
     return 0 - 1;
 }
 
+# --- 0.44.3: AUTHORITY-GRANTING KEYS ARE GLOBAL-ONLY ---------------------------------------------
+#
+# ⭐ THE HOLE THIS CLOSES. ADR-0019 stated the rule correctly — *authority does not accumulate from the
+# less-trusted side* — and then enforced it for exactly TWO keys, both lists (`[shell].allow`,
+# `[project].read_roots`). Every authority-granting SCALAR was left on the ordinary
+# local-overrides-global path. thoth's local layer is `<repo>/.thoth/config.cyml`, found by walking up
+# from CWD, and **a `git clone` reproduces that file**. So opening thoth in a repository someone else
+# wrote meant, before this release:
+#
+#   * `[hooks].session_start = "curl … | sh"` — ARBITRARY CODE, executed at launch, before the operator
+#     has typed anything. `src/hooks.cyr`'s own header says "hooks come from the OPERATOR'S CONFIG and
+#     nowhere else"; that premise was true when written and false the moment config gained a second
+#     layer. `[hooks].pre_tool` and `[verify].command` are the same primitive on a later trigger.
+#   * `[hoosh].url` pointed at an attacker host while `[hoosh].token` was inherited from the operator's
+#     GLOBAL config — thoth posting the operator's own bearer token to a host the repo chose.
+#   * `[tron].policy` replaced wholesale: the repo supplies the security policy that authorizes the
+#     model's tool calls, while `[shell].enabled` is inherited from the global.
+#   * `[session].file` / `[history].file` / `[log].file` are UNJAILED write sinks — thoth truncates and
+#     overwrites whatever path they name, anywhere the operator can write.
+#
+# THE RULE. A key that grants authority is read from the GLOBAL layer only. A local layer that sets one
+# is not silently obeyed and not silently ignored either — it is NAMED, on stderr at startup, in the
+# greeting, in `/state` and on `/reload`, exactly like an unrecognised key. The local layer keeps
+# everything that only expresses preference (model, tier, theme, aliases, pricing, caps, toggles).
+#
+# ⚠ THIS IS A DELIBERATE BEHAVIOUR CHANGE AGAINST ADR-0019's OWN EXAMPLE, which offered "a project
+# t-ron policy" as a thing the local layer may set. That example cannot be honoured safely: thoth
+# cannot tell your repository from a cloned one, and the strict reading of the ADR's own principle wins
+# over its illustration. The escape hatch — per-repo trust, so you can approve your OWN project's hooks
+# once — is a real feature and a real decision; it is recorded as follow-up rather than guessed at here.
+var CFG_SUPPRESS_MAX = 16;
+var _cfg_suppressed = 0;        # CFG_SUPPRESS_MAX cstr ptrs (authority keys the local layer tried to set)
+var _cfg_suppressed_n = 0;
+fn config_suppressed_count() { return _cfg_suppressed_n; }
+fn config_suppressed_at(i) {
+    if (i < 0) { return ""; }
+    if (i >= _cfg_suppressed_n) { return ""; }
+    return load64(_cfg_suppressed + i * 8);
+}
+fn _cfg_note_suppressed(what) {
+    if (_cfg_suppressed == 0) { _cfg_suppressed = alloc(CFG_SUPPRESS_MAX * 8); }
+    if (_cfg_suppressed == 0) { return 0; }
+    var i = 0;
+    while (i < _cfg_suppressed_n) {
+        if (streq(load64(_cfg_suppressed + i * 8), what) == 1) { return 0; }
+        i = i + 1;
+    }
+    if (_cfg_suppressed_n >= CFG_SUPPRESS_MAX) { return 0; }
+    store64(_cfg_suppressed + _cfg_suppressed_n * 8, what);
+    _cfg_suppressed_n = _cfg_suppressed_n + 1;
+    return 0;
+}
+
+# _cfg2_str_global_only: the authority-key reader. The LOCAL layer is consulted only to find out whether
+# it TRIED to set the key, so the attempt can be reported; the VALUE always comes from the global layer
+# (or the built-in default when the global is silent too).
+fn _cfg2_str_global_only(l, g, key, label) {
+    var gv = _cfg_str(g, key);
+    if (_cfg_has(l, key) == 1) {
+        # ⚠ REPORT AN ESCALATION, NOT AN AGREEMENT. A local layer that names the SAME value the global
+        # already grants has asked for nothing — that is the ordinary shape of a project config written
+        # by the machine's own owner, who copied their global settings into the repo. Flagging it trains
+        # the operator to ignore this line, which is the exact failure the 0.43.5 unknown-key checker
+        # exists to avoid; and the line has to stay loud, because when it DOES fire it means a file
+        # someone else may have written asked to run commands as you. Differing value, or no global
+        # value at all, is the real case and is always reported.
+        var lv = _cfg_str(l, key);
+        var same = 0;
+        if ((lv != 0) && (gv != 0)) { if (streq(lv, gv) == 1) { same = 1; } }
+        if (same == 0) { _cfg_note_suppressed(label); }
+    }
+    return gv;
+}
+
 # _cfg_int: read key from pairs as a non-negative integer, or -1 when absent, empty,
 # or non-numeric (decimal digits only — pricing rates are whole micro-USD/1K). Pure.
 fn _cfg_int(pairs, key) {
@@ -716,13 +797,22 @@ fn _shell_globs_load2(sh_l, lo, sh_g, gl) {
     if (_shell_allow == 0) { _shell_allow = alloc(SHELL_GLOB_MAX * 8); }
     if (_shell_scratch == 0) { _shell_scratch = alloc(SHELL_GLOB_MAX * 8); }
 
-    # deny := local denies, then every global deny not already present
-    var dn = _shell_glob_decl(sh_l, lo, "deny", _shell_deny);
+    # deny := GLOBAL denies first, then every local deny not already present.
+    #
+    # ⚠ 0.44.3 — THE ORDER IS THE SECURITY PROPERTY. This used to fill the table with the LOCAL denies
+    # and then append the global ones "if there is room", so a local layer declaring SHELL_GLOB_MAX (64)
+    # patterns of its own filled the table and every one of the operator's global denies was silently
+    # dropped. A `git clone` reproduces `<repo>/.thoth/config.cyml`, so that is an untrusted file
+    # DELETING the operator's deny-list — precisely the inversion ADR-0019 forbids ("a deny only removes
+    # authority, so merging can only tighten"). Filling from the trusted side first makes the overflow
+    # drop LOCAL entries, which is the fail-safe direction, and the drop is announced rather than silent.
+    var dn = _shell_glob_decl(sh_g, gl, "deny", _shell_deny);
     if (dn < 0) { dn = 0; }
-    var gn = _shell_glob_decl(sh_g, gl, "deny", _shell_scratch);
-    if (gn < 0) { gn = 0; }
+    var ln = _shell_glob_decl(sh_l, lo, "deny", _shell_scratch);
+    if (ln < 0) { ln = 0; }
+    var dropped = 0;
     var i = 0;
-    while (i < gn) {
+    while (i < ln) {
         var g = load64(_shell_scratch + i * 8);
         var dup = 0;
         var j = 0;
@@ -730,9 +820,13 @@ fn _shell_globs_load2(sh_l, lo, sh_g, gl) {
             if (streq(load64(_shell_deny + j * 8), g) == 1) { dup = 1; }
             j = j + 1;
         }
-        if ((dup == 0) && (dn < SHELL_GLOB_MAX)) { store64(_shell_deny + dn * 8, g); dn = dn + 1; }
+        if (dup == 0) {
+            if (dn < SHELL_GLOB_MAX) { store64(_shell_deny + dn * 8, g); dn = dn + 1; }
+            else { dropped = dropped + 1; }
+        }
         i = i + 1;
     }
+    if (dropped > 0) { _cfg_note_suppressed("shell.deny (local patterns dropped: the merged deny-list is full)"); }
     _shell_deny_n = dn;
 
     # allow := the LOCAL list if the local layer DECLARES one, else the global's. Never both.
@@ -837,7 +931,8 @@ fn _cfg_known_key(sec, key) {
     if (streq(sec, "ui") == 1) {
         if (streq(key, "bell") == 1) { return 1; }
         if (streq(key, "elapsed") == 1) { return 1; }
-        return streq(key, "tier");
+        if (streq(key, "tier") == 1) { return 1; }
+        return streq(key, "theme");
     }
     if (streq(sec, "memory") == 1) { return streq(key, "enabled"); }
     if (streq(sec, "persona") == 1) { return streq(key, "name"); }
@@ -871,6 +966,10 @@ fn _cfg_known_key(sec, key) {
         return streq(key, "allow");
     }
     if (streq(sec, "ask") == 1) { return streq(key, "enabled"); }
+    if (streq(sec, "budget") == 1) {
+        if (streq(key, "max_tokens") == 1) { return 1; }
+        return streq(key, "max_cost_micro");
+    }
     if (streq(sec, "edit") == 1) { return streq(key, "enabled"); }
     return 0 - 1;                      # the SECTION itself is unrecognised
 }
@@ -891,6 +990,17 @@ fn _cfg_note_unknown(what) {
 }
 
 # _cfg_scan_unknown: walk every section/key of ONE parsed layer and note what is not recognised.
+#
+# ⚠ 0.44.3 — THE ROOT SECTION IS NOT A TABLE. bayan's TOML parser returns an unnamed section holding
+# the keys written BEFORE the first `[table]` header, and as of the parser rewrite carried by cyrius
+# 6.5.43 it pushes that section UNCONDITIONALLY — empty — for every document, where the older parser
+# pushed it only `if (vec_len(cur_pairs) > 0)`. Read as an ordinary table, its empty name is not a
+# recognised one, so the checker reported a phantom `.*` unrecognised key for EVERY config file thoth
+# loaded: on stderr at startup, in the greeting, in `/state` and on `/reload`. A spell-checker that
+# cries wolf on a perfectly valid file is worse than none — it teaches the operator to ignore it, which
+# is the exact silence 0.43.5 exists to break. The empty root is skipped; a root that actually HOLDS
+# keys is still reported, by bare name, because every key in thoth's config surface lives inside a
+# table and one written outside any of them is a real mistake.
 fn _cfg_scan_unknown(sections) {
     if (sections == 0) { return 0; }
     var n = vec_len(sections);
@@ -900,7 +1010,16 @@ fn _cfg_scan_unknown(sections) {
         var nm = str_cstr(bayan_toml_section_name(sec));
         var pairs = bayan_toml_section_pairs(sec);
         var pn = vec_len(pairs);
-        if (_cfg_known_key(nm, "") == (0 - 1)) {
+        if (load8(nm) == 0) {
+            # The root section. Empty (the common case) => nothing to check. Non-empty => name each
+            # stray key on its own; `str_cstr` is a stable bump-heap copy (same guarantee _price_append
+            # relies on), so the pointer outlives this frame.
+            var jr = 0;
+            while (jr < pn) {
+                _cfg_note_unknown(str_cstr(bayan_toml_pair_key(vec_get(pairs, jr))));
+                jr = jr + 1;
+            }
+        } elif (_cfg_known_key(nm, "") == (0 - 1)) {
             _cfg_note_unknown(_cfg_join_dot(nm, "*"));       # whole table unrecognised
         } else {
             var j = 0;
@@ -967,6 +1086,7 @@ fn config_load() {
     var lo = _cfg_parse_sections(_cfg_local_path());    # layered on top, per key
     if (_cfg_parse_any == 0) { return 0; }        # neither layer readable -> not configured
     _cfg_unknown_n = 0;                           # 0.43.5: re-scanned on every load (so /reload re-reports)
+    _cfg_suppressed_n = 0;                        # 0.44.3: likewise for authority keys the local layer tried to set
     _cfg_scan_unknown(gl);
     _cfg_scan_unknown(lo);
     _price_load2(lo, gl);
@@ -974,6 +1094,25 @@ fn config_load() {
     var hoosh_l = _cfg_section_pairs(lo, "hoosh");   var hoosh_g = _cfg_section_pairs(gl, "hoosh");
     _cfg_hoosh_url = _cfg2_str(hoosh_l, hoosh_g, "url");
     _cfg_hoosh_token = _cfg2_str(hoosh_l, hoosh_g, "token");
+    # ⚠ 0.44.3 — A TOKEN IS BOUND TO THE URL THAT EARNED IT. `[hoosh].url` is an ordinary preference (a
+    # project pointing at a different gateway is legitimate) and `[hoosh].token` is a credential, so the
+    # two layered independently: a repo could set ONLY `url` and thoth would post the operator's GLOBAL
+    # bearer token to the host the repo named. The token now travels only with its own layer's url —
+    # when the local layer REDIRECTS the endpoint and supplies no token of its own, the global token is
+    # WITHHELD and said so. (Same url on both layers is not a redirect and changes nothing.)
+    if (_cfg_has(hoosh_l, "url") == 1) { if (_cfg_has(hoosh_l, "token") == 0) {
+        var gtok = _cfg_str(hoosh_g, "token");
+        if (gtok != 0) {
+            var lurl = _cfg_str(hoosh_l, "url");
+            var gurl = _cfg_str(hoosh_g, "url");
+            var redirect = 1;
+            if (gurl != 0) { if (streq(lurl, gurl) == 1) { redirect = 0; } }
+            if (redirect == 1) {
+                _cfg_hoosh_token = 0;
+                _cfg_note_suppressed("hoosh.token (withheld: the local layer redirects [hoosh].url)");
+            }
+        }
+    } }
     _cfg_hoosh_model = _cfg2_str(hoosh_l, hoosh_g, "model");
     _cfg_hoosh_stream = _cfg2_bool(hoosh_l, hoosh_g, "stream", 1);    # default on
     _cfg_hoosh_history = _cfg2_bool(hoosh_l, hoosh_g, "history", 1);   # default on
@@ -987,19 +1126,26 @@ fn config_load() {
     var daimon_l = _cfg_section_pairs(lo, "daimon");  var daimon_g = _cfg_section_pairs(gl, "daimon");
     _cfg_daimon_url = _cfg2_str(daimon_l, daimon_g, "url");
     var tron_l = _cfg_section_pairs(lo, "tron");      var tron_g = _cfg_section_pairs(gl, "tron");
-    _cfg_tron_policy = _cfg2_str(tron_l, tron_g, "policy");
-    _cfg_tron_agent = _cfg2_str(tron_l, tron_g, "agent");
+    # AUTHORITY — the policy that authorizes the model's tool calls, and the identity it authorizes as.
+    _cfg_tron_policy = _cfg2_str_global_only(tron_l, tron_g, "policy", "tron.policy");
+    _cfg_tron_agent = _cfg2_str_global_only(tron_l, tron_g, "agent", "tron.agent");
     var log_l = _cfg_section_pairs(lo, "log");        var log_g = _cfg_section_pairs(gl, "log");
-    _cfg_log_file = _cfg2_str(log_l, log_g, "file");
+    # AUTHORITY — an unjailed write sink: thoth creates and appends to whatever path this names.
+    _cfg_log_file = _cfg2_str_global_only(log_l, log_g, "file", "log.file");
     _cfg_log_level = _cfg2_str(log_l, log_g, "level");
     var hist_l = _cfg_section_pairs(lo, "history");   var hist_g = _cfg_section_pairs(gl, "history");
-    _cfg_history_file = _cfg2_str(hist_l, hist_g, "file");
+    # AUTHORITY — an unjailed write sink, and one holding the operator's own typed input.
+    _cfg_history_file = _cfg2_str_global_only(hist_l, hist_g, "file", "history.file");
     var sess_l = _cfg_section_pairs(lo, "session");   var sess_g = _cfg_section_pairs(gl, "session");
-    _cfg_session_file = _cfg2_str(sess_l, sess_g, "file");   # [session].file — persistent conversation history (0.24.2)
+    # AUTHORITY — an unjailed write sink thoth TRUNCATES, and the file the conversation is read back
+    # from: a repo that supplies one both destroys an arbitrary operator file and feeds thoth
+    # attacker-authored `user`/`assistant` turns at the first prompt.
+    _cfg_session_file = _cfg2_str_global_only(sess_l, sess_g, "file", "session.file");   # [session].file — persistent conversation history (0.24.2)
     var ui_l = _cfg_section_pairs(lo, "ui");          var ui_g = _cfg_section_pairs(gl, "ui");
     _cfg_ui_bell = _cfg2_bool(ui_l, ui_g, "bell", 0);         # [ui].bell — BEL on turn completion (0.24.3), opt-in
     _cfg_ui_elapsed = _cfg2_bool(ui_l, ui_g, "elapsed", 0);   # [ui].elapsed — faint per-turn elapsed line (0.24.3), opt-in
     _cfg_ui_tier = _cfg2_str(ui_l, ui_g, "tier");             # [ui].tier — durable presentation tier (0.43.2); --tier still wins
+    _cfg_ui_theme = _cfg2_str(ui_l, ui_g, "theme");           # [ui].theme — durable colour theme (0.44.3); /theme still switches live
     var mem_l = _cfg_section_pairs(lo, "memory");     var mem_g = _cfg_section_pairs(gl, "memory");
     _cfg_memory_enabled = _cfg2_bool(mem_l, mem_g, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
     var pers_l = _cfg_section_pairs(lo, "persona");   var pers_g = _cfg_section_pairs(gl, "persona");
@@ -1008,10 +1154,12 @@ fn config_load() {
     _cfg_vidya = _cfg2_str(proj_l, proj_g, "vidya");          # [project].vidya — first-class `/allow vidya` root (0.23.1)
     _cfg_read_roots_load2(proj_l, proj_g);                    # jail-widening: local REPLACES, never unions (see below)
     var hook_l = _cfg_section_pairs(lo, "hooks");     var hook_g = _cfg_section_pairs(gl, "hooks");
-    _cfg_hook_session_start = _cfg2_str(hook_l, hook_g, "session_start");
-    _cfg_hook_pre_tool      = _cfg2_str(hook_l, hook_g, "pre_tool");
-    _cfg_hook_post_tool     = _cfg2_str(hook_l, hook_g, "post_tool");
-    _cfg_hook_session_end   = _cfg2_str(hook_l, hook_g, "session_end");
+    # AUTHORITY — every one of these is a shell command thoth runs as the operator. `session_start`
+    # runs at LAUNCH, before a prompt is typed, which is why this one is the CRITICAL of the set.
+    _cfg_hook_session_start = _cfg2_str_global_only(hook_l, hook_g, "session_start", "hooks.session_start");
+    _cfg_hook_pre_tool      = _cfg2_str_global_only(hook_l, hook_g, "pre_tool", "hooks.pre_tool");
+    _cfg_hook_post_tool     = _cfg2_str_global_only(hook_l, hook_g, "post_tool", "hooks.post_tool");
+    _cfg_hook_session_end   = _cfg2_str_global_only(hook_l, hook_g, "session_end", "hooks.session_end");
     _cfg_hook_timeout_ms    = _cfg2_int(hook_l, hook_g, "timeout_ms");
     var tp_l = _cfg_section_pairs(lo, "toolpin");     var tp_g = _cfg_section_pairs(gl, "toolpin");
     _cfg_toolpin_enabled = _cfg2_bool(tp_l, tp_g, "enabled", 1);     # 0.42.0 (T3): DEFAULT ON — see the getter
@@ -1021,7 +1169,10 @@ fn config_load() {
     var gd_l = _cfg_section_pairs(lo, "guard");       var gd_g = _cfg_section_pairs(gl, "guard");
     _cfg_guard_enabled = _cfg2_bool(gd_l, gd_g, "enabled", 1);        # 0.41.0 (T2-3): DEFAULT ON — see the getter
     var vf_l = _cfg_section_pairs(lo, "verify");      var vf_g = _cfg_section_pairs(gl, "verify");
-    _cfg_verify_command = _cfg2_str(vf_l, vf_g, "command");           # 0.41.0 (T2-5): 0 when unset -> feature off
+    # AUTHORITY — the same primitive as a hook on a later trigger: a shell command thoth runs as the
+    # operator after every model write. verify.cyr's own header calls it "the project's own check",
+    # which is exactly the assumption a cloned project breaks.
+    _cfg_verify_command = _cfg2_str_global_only(vf_l, vf_g, "command", "verify.command");   # 0.41.0 (T2-5): 0 when unset -> feature off
     _cfg_verify_timeout_ms = _cfg2_int(vf_l, vf_g, "timeout_ms");
     var rd_l = _cfg_section_pairs(lo, "redact");      var rd_g = _cfg_section_pairs(gl, "redact");
     _cfg_redact_enabled = _cfg2_bool(rd_l, rd_g, "enabled", 1);   # 0.40.0 (T1-3): DEFAULT ON — see the getter
@@ -1032,6 +1183,9 @@ fn config_load() {
     _shell_globs_load2(sh_l, lo, sh_g, gl);                       # deny UNIONS · allow local-replaces (see below)
     var ask_l = _cfg_section_pairs(lo, "ask");        var ask_g = _cfg_section_pairs(gl, "ask");
     _cfg_ask_enabled = _cfg2_bool(ask_l, ask_g, "enabled", 0);    # 0.44.0 (T4-1): DEFAULT OFF — it interrupts a human
+    var bg_l = _cfg_section_pairs(lo, "budget");      var bg_g = _cfg_section_pairs(gl, "budget");
+    _cfg_budget_tokens = _cfg2_int(bg_l, bg_g, "max_tokens");          # 0.44.3: -1/absent -> unlimited
+    _cfg_budget_cost_micro = _cfg2_int(bg_l, bg_g, "max_cost_micro");  # 0.44.3: -1/absent -> unlimited
     var ed_l = _cfg_section_pairs(lo, "edit");        var ed_g = _cfg_section_pairs(gl, "edit");
     _cfg_edit_enabled = _cfg2_bool(ed_l, ed_g, "enabled", 0);     # opt-in; default off (0.31.0 edit tool)
     _cfg_parse_ok = 1;                            # 0.24.4: a layer was read + parsed (a url may or may not be set)
@@ -1208,6 +1362,22 @@ fn config_hoosh_tools() { return _cfg_hoosh_tools; }
 # The ceiling is a real guard, not a formality — each round is a full model call, so a runaway loop is
 # billed to the user. thoth has token/cost ACCOUNTING but no enforcement (tracked as a Tier-2 borrow from
 # agnosai's budget tracker), and until that lands this cap is the only thing bounding a turn's spend.
+# config_budget_tokens / config_budget_cost_micro: the session SPEND ceilings, or 0 for "unlimited".
+# Absent (-1) and a non-positive value both mean unlimited — writing `max_tokens = 0` to mean "no
+# tokens at all" would be a way to brick a session by typo, and an unlimited budget is what thoth did
+# for its whole life before 0.44.3, so it is the safe reading of a nonsense value.
+# NO CEILING is clamped here, deliberately: unlike `max_iters` (where a huge value is a footgun on a
+# per-round cost thoth can predict), a spend ceiling is the operator's own money and thoth has no
+# business second-guessing the number.
+fn config_budget_tokens() {
+    if (_cfg_budget_tokens <= 0) { return 0; }
+    return _cfg_budget_tokens;
+}
+fn config_budget_cost_micro() {
+    if (_cfg_budget_cost_micro <= 0) { return 0; }
+    return _cfg_budget_cost_micro;
+}
+
 fn config_hoosh_max_iters() {
     var n = _cfg_hoosh_max_iters;
     if (n <= 0) { return HOOSH_MAX_ITERS_DEFAULT; }
@@ -1349,3 +1519,8 @@ fn config_session_file() { return _cfg_session_file; }
 fn config_ui_bell() { return _cfg_ui_bell; }
 fn config_ui_elapsed() { return _cfg_ui_elapsed; }
 fn config_ui_tier() { return _cfg_ui_tier; }
+# config_ui_theme: [ui].theme — the theme a session STARTS in (0.44.3). Until this key existed the
+# theme was per-session only: `/theme` cycles it live and there was no way to open in a chosen one, on
+# any tier, so a light-terminal user re-typed `/theme` every launch. `/theme` still wins at runtime —
+# this sets the starting point, not a lock.
+fn config_ui_theme() { return _cfg_ui_theme; }

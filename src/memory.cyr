@@ -606,6 +606,14 @@ fn memory_append(text) {
     store8(_remember_buf + 2 + tl, 10);     # '\n'
     var rc = file_append_locked(memory_index_path(), _remember_buf, tl + 3);
     if (rc < 0) { return 0 - 1; }
+    # ⚠ 0.44.3 — A SHORT WRITE IS NOT A COMPLETE ONE. `file_append_locked` returns the bytes actually
+    # written; a full disk, a quota or a signal can land fewer than asked, and this returned that count
+    # to a caller that only tested `< 0`. So `/remember` and the model's `memory_write` printed "saved"
+    # over a fact stored as a fragment — which then comes BACK on the next recall as though it were what
+    # the user wrote. 0.44.2 fixed exactly this shape for `/rewind` and `/write`; this is the third
+    # sibling. Reported as a failure so the caller can say so; the partial line stays on disk (removing
+    # it would need a rewrite this function cannot do atomically) and the message says which.
+    if (rc < (tl + 3)) { return 0 - 3; }
     memory_invalidate();
     return rc;
 }
@@ -627,6 +635,9 @@ fn memory_write_tool(args_cstr) {
     if (load8(text) == 0) { return "memory_write: 'text' is empty"; }
     var rc = memory_append(text);
     if (rc == (0 - 2)) { return "memory_write: .thoth/memory/ does not exist — create it first"; }
+    # 0.44.3: a PARTIAL write is not a save. Told plainly so the model does not carry on believing the
+    # fact is stored — and told that a fragment IS on disk, since that is what a later recall will find.
+    if (rc == (0 - 3)) { return "memory_write: PARTIAL write — the note was cut short and a fragment is on disk; it was NOT saved intact"; }
     if (rc < 0) { return "memory_write: write failed"; }
     if (mem_last_target() == 1) { return "saved to mneme (semantic memory)"; }
     return "saved to project memory (.thoth/memory/MEMORY.md)";

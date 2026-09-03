@@ -228,17 +228,16 @@ private-IP guard would reject. Revisit only if thoth gains a direct fetch; if it
 
 ### Borrow the idea, not the code
 
+> **Budget enforcement SHIPPED at 0.44.3** and is removed from this list (this file carries only what
+> thoth has *not* committed to; the CHANGELOG carries what shipped). `[budget].max_tokens` /
+> `max_cost_micro` are session ceilings checked before every turn at the one dispatch chokepoint and
+> again between agentic rounds, with `>=` semantics, covering delegated children on the same tally.
+> The one thing agnosai's shape did not supply is the part that matters most here: thoth does not meter
+> itself, so a ceiling is only as real as the gateway's `usage` reporting — an unenforceable budget is
+> announced and marked NOT ENFORCEABLE in `/state` rather than left to look like protection.
+
 - **`RiskLevel` (low/medium/high)** on an action. thoth's gate is binary allow/deny/flag; a risk tier
   is the prerequisite for both a graduated permission posture and an approval queue.
-- **Budget *enforcement*** (`orchestrator/budget.cyr`): check-before-call, `>=` semantics, a typed
-  exceeded-reason. thoth has token/cost **accounting** and no enforcement — nothing stops a runaway
-  loop from spending. The logic is trivial against thoth's existing counters; the *shape* is what is
-  worth copying.
-
-  ⚠ **This got more urgent at 0.43.0, and the release says so out loud.** Delegation multiplies a turn's
-  cost, and the only bounds available today are structural — depth 1, a separate per-child round budget,
-  and off-by-default. `[subagent].enabled` is off *because* of this gap, and ADR-0018 records that the
-  default should be revisited if real budget enforcement ever lands. A round limit bounds turns, not spend.
 - **Asynchronous approvals** (`orchestrator/approval.cyr`): a pending-decision queue that outlives
   the prompt, so an unattended run can *park* a risky edit instead of denying it. thoth's `confirm()`
   is otherwise strictly better (fail-closed, explicit y/yes only), and session-scoped grants already

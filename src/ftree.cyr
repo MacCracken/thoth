@@ -365,8 +365,23 @@ fn ftree_complete(prefix, out, outcap) {
         if (cstr_starts_with(e, name) == 1) {
             count = count + 1;
             if (count == 1) {
+                # ⚠ 0.44.3 — SANITISE HERE. The 0.39.0 audit (A-7/A-8) closed filename escape-injection
+                # by filtering `_tree_set_name`, on the stated premise that it is "the single chokepoint
+                # where filesystem bytes enter thoth's tree model", and named `@`-Tab completion as one
+                # of the two sinks that covers. It is not: `ftree_complete` calls `dir_list` ITSELF and
+                # never touches the tree model, so completion has been copying raw dirent bytes into the
+                # composer ever since. REPRODUCED, not argued: a file named `zzQ<ESC>[2Jevil` in the
+                # launch directory, `@zz` + Tab in the T2 composer, and the repaint wrote the ESC to
+                # fd 1 and cleared the screen. A `git clone` reproduces filenames byte for byte, so the
+                # attacker needs no shell, no model and no tool call — only a file in the tree.
                 var c = 0;
-                while ((load8(e + c) != 0) && (c < 4095)) { store8(_ftc_lcp + c, load8(e + c)); c = c + 1; }
+                while ((load8(e + c) != 0) && (c < 4095)) {
+                    var fb = load8(e + c) & 255;
+                    if (fb < 32) { fb = 63; }
+                    if (fb == 127) { fb = 63; }
+                    store8(_ftc_lcp + c, fb);
+                    c = c + 1;
+                }
                 store8(_ftc_lcp + c, 0);
                 uniq_isdir = is_dir(path_join(dirstr, vec_get(v, j)));
             } else {

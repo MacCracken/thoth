@@ -120,6 +120,80 @@ fn _grant_add(verb, obj) {
     _grant_n = _grant_n + 1;
     return 1;
 }
+# --- a front end that owns the screen (0.44.3) ------------------------------------------------------
+# The T3 GUI has no terminal to prompt on, but it DOES have a modal (0.44.0's `gui_ask`, over the ask
+# seam). It declares that here at its own startup, like the ask hook itself — `confirm` cannot infer it
+# from out_mode, because the GUI's turn runs under OUT_NULL and its command dispatch under OUT_RING.
+var _confirm_no_tty = 0;
+fn confirm_no_tty_set(v) { _confirm_no_tty = v; return 0; }
+
+# _confirm_via_ask: the authorization prompt, posed through the front end's own modal. The three answers
+# are the same three the terminal path offers; `ask_resolve` maps a bare "1"/"2"/"3" onto them and the
+# y/a free-text forms still match. A cancelled prompt is a DENY — a dismissed modal is not consent.
+fn _confirm_via_ask(verb, obj) {
+    if (_ask_q_buf == 0) { _ask_q_buf = alloc(CONFIRM_Q_CAP); }
+    if (_ask_q_buf == 0) { return 0; }
+    var off = 0;
+    if (gate_active() == 0) { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "Authorize this action? (t-ron absent - thoth is asking because nothing else can)\n"); }
+    else { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "Authorize this action? (t-ron flagged it for confirmation)\n"); }
+    off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, _confirm_verb_buf);
+    off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, " ");
+    off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, _confirm_obj_buf);
+    store8(_ask_q_buf + off, 0);
+    # ⚠ NO SESSION-GRANT OPTION ON THIS PATH, deliberately. A grant is durable authority, and the two
+    # things that make one safe — being able to SEE that it is still acting (`note_println` goes to a
+    # stderr the window cannot show) and being able to REVOKE it (`/grants`) — are both unreachable from
+    # inside the T3 window, whose composer runs cmd_task directly and routes no slash commands. Offering
+    # it here would let authority accumulate somewhere the operator can neither review nor clear, which
+    # is the opposite of the posture the rest of this file takes. Re-offer it when the GUI routes slash
+    # commands (roadmap: "GUI slash-command affordances"); until then the operator re-approves, which
+    # costs a keystroke and hides nothing.
+    if (ask_pose(_ask_q_buf, "no", "yes, once", 0) == 0) {
+        log_begin("authz"); log_kv_str("tool", obj); log_kv_str("gate", "modal");
+        log_kv_str("verdict", "deny"); log_kv_str("reason", "cancelled"); log_commit(SK_WARN);
+        return 0;
+    }
+    var a = ask_answer_buf();
+    if (streq(a, "yes, once") == 1) { return 1; }
+    if ((streq(a, "y") == 1) || (streq(a, "Y") == 1) || (streq(a, "yes") == 1)) { return 1; }
+    log_begin("authz"); log_kv_str("tool", obj); log_kv_str("gate", "modal"); log_kv_str("verdict", "deny"); log_commit(SK_INFO);
+    return 0;
+}
+
+# _confirm_grant_yes: the "allow for the session" answer, shared by both confirm paths so the terminal
+# and the modal cannot drift on what a grant means (or on the degrade when the table is full).
+fn _confirm_grant_yes(verb, obj) {
+    if (_grant_add(verb, obj) == 1) { note_println("  [granted for this session - /grants to review or clear]"); }
+    else { note_println("  [allowed once; not grantable (grant table full or the command is too long)]"); }
+    return 1;
+}
+var CONFIRM_Q_CAP = 1024;
+var _ask_q_buf = 0;
+
+# ⚠ 0.44.3 — THE PROMPT'S OWN TEXT WAS UNTRUSTED AND UNFILTERED. `obj` is the thing being authorized:
+# the model's chosen shell command, or a tool name a third-party MCP server picked. `confirm` printed it
+# with a bare `emit`, one line above the y/N the operator answers — so the party the decision is ABOUT
+# controlled the bytes of the decision. A `\r` plus a cursor move is enough to overwrite the verb, hide
+# the real command, or paint a fake "[t-ron: allowed]" line under the prompt. This is the same class the
+# 0.39.0 audit closed for filenames (A-7/A-8) and its own theme names exactly: a boundary applied at one
+# sink and not its sibling. Both halves now go through the house sanitiser before they are drawn, on
+# EVERY confirm path — terminal, modal, and the two stderr denials.
+var CONFIRM_LABEL_CAP = 512;
+var _confirm_verb_buf = 0;
+var _confirm_obj_buf = 0;
+# _confirm_labels: sanitise (verb, obj) into stable buffers for display. Returns 0 on OOM, in which case
+# the caller must fall through to a DENY — refusing to draw a prompt we cannot draw safely is the
+# fail-closed answer, and it is the same posture the jail takes when it cannot check a path.
+fn _confirm_labels(verb, obj) {
+    if (_confirm_verb_buf == 0) { _confirm_verb_buf = alloc(CONFIRM_LABEL_CAP); }
+    if (_confirm_obj_buf == 0) { _confirm_obj_buf = alloc(CONFIRM_LABEL_CAP); }
+    if (_confirm_verb_buf == 0) { return 0; }
+    if (_confirm_obj_buf == 0) { return 0; }
+    safe_label_copy(_confirm_verb_buf, CONFIRM_LABEL_CAP, verb);
+    safe_label_copy(_confirm_obj_buf, CONFIRM_LABEL_CAP, obj);
+    return 1;
+}
+
 
 # confirm: fail-closed interactive authorization — the stand-in when the
 # t-ron seam is absent, and the resolution for a t-ron FLAG verdict. Names
@@ -155,8 +229,25 @@ fn confirm(verb, obj) {
     # on which a human could answer, and an unanswerable prompt must fail closed rather than deadlock.
     # (OUT_RING — the T2 TUI — is deliberately NOT caught here: it has confirm hooks that bracket back to
     # the live screen precisely so the prompt IS visible, which is the case immediately below.)
+    # ⭐ 0.44.3 — THE GUI CAN ANSWER NOW, AND THE COMMENT ABOVE IS STALE. It rests on "the GUI has no
+    # modal and no path from evdev to read_line"; 0.44.0 built exactly that pair. Leaving the deny made
+    # every gated action permanently refused in T3 (edit/create_file/shell/remember + every MCP tool),
+    # with the reason on a stderr the window cannot show and no way to grant authority from inside it —
+    # a security control INERT on one surface, which the house rules count as a gap, not a degrade.
+    # Sanitise BEFORE any branch draws either string. On OOM there is no safe way to render the prompt,
+    # so the answer is the fail-closed one — a denial we can explain beats a prompt we cannot trust.
+    if (_confirm_labels(verb, obj) == 0) {
+        emit_err("  [authorization required — denied; the prompt could not be prepared (out of memory)]\n");
+        return 0;
+    }
+    if (_confirm_no_tty == 1) {
+        if (ask_hook_active() == 1) { return _confirm_via_ask(verb, obj); }
+        emit_err("  [authorization required: "); emit_err(_confirm_verb_buf); emit_err(" "); emit_err(_confirm_obj_buf);
+        emit_err(" — denied; this surface registered no way to ask. configure [tron].policy to authorize it]\n");
+        return 0;
+    }
     if (out_mode() == OUT_NULL) {
-        emit_err("  [authorization required: "); emit_err(verb); emit_err(" "); emit_err(obj);
+        emit_err("  [authorization required: "); emit_err(_confirm_verb_buf); emit_err(" "); emit_err(_confirm_obj_buf);
         emit_err(" — denied; this surface cannot prompt. configure [tron].policy to authorize it]\n");
         return 0;
     }
@@ -168,7 +259,7 @@ fn confirm(verb, obj) {
     if ((capturing == 1) && (_confirm_begin_fn != 0)) { fncall0(_confirm_begin_fn); }
     if (gate_active() == 0) { ui_emit(ROLE_ACCENT, "  [t-ron absent: fail-closed] authorize "); }
     else { ui_emit(ROLE_ACCENT, "  [t-ron flag: confirm] authorize "); }
-    emit(verb); emit(" "); emit(obj);
+    emit(_confirm_verb_buf); emit(" "); emit(_confirm_obj_buf);
     emit("? [y/N/a=allow all session] ");
     var ans[64];
     var n = read_line(&ans, 64);
@@ -177,14 +268,7 @@ fn confirm(verb, obj) {
     # 'a' = yes, AND remember this exact (verb, obj) for the rest of the session. If the grant cannot be
     # stored (table full, or either string over its cap) the answer degrades to a plain one-shot yes —
     # never to a truncated grant, which would match actions the user never approved.
-    if ((streq(&ans, "a") == 1) || (streq(&ans, "A") == 1)) {
-        if (_grant_add(verb, obj) == 1) {
-            ui_emit(ROLE_MUTED, "  [granted for this session — /grants to review or clear]"); oprintln("");
-        } else {
-            ui_emit(ROLE_MUTED, "  [allowed once; not grantable (grant table full or the command is too long)]"); oprintln("");
-        }
-        return 1;
-    }
+    if ((streq(&ans, "a") == 1) || (streq(&ans, "A") == 1)) { return _confirm_grant_yes(verb, obj); }
     if (streq(&ans, "y") == 1) { return 1; }
     if (streq(&ans, "Y") == 1) { return 1; }
     if (streq(&ans, "yes") == 1) { return 1; }

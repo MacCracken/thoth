@@ -94,20 +94,10 @@ fn _ask_alloc() {
 # Newlines are substituted too, unlike the hook-output policy that keeps them. A '\n' inside a question
 # would be a free extra screen row the model controls — layout forgery in a modal whose shape is the
 # only thing telling the user this is thoth asking.
-fn _ask_copy_clean(dst, cap, src) {
-    if (dst == 0) { return 0; }
-    if (src == 0) { store8(dst, 0); return 0; }
-    var i = 0;
-    while ((load8(src + i) != 0) && (i < (cap - 1))) {
-        var b = load8(src + i) & 255;
-        if (b < 32) { b = 63; }
-        if (b == 127) { b = 63; }
-        store8(dst + i, b);
-        i = i + 1;
-    }
-    store8(dst + i, 0);
-    return i;
-}
+# 0.44.3: ONE implementation, in src/util.cyr, now that gate.cyr's authorization prompt needs the same
+# policy. The header above is kept because it records WHY the rule is what it is; the bytes are
+# `safe_label_copy`'s. Two copies of a sanitiser is how the 0.39.0 A-7/A-8 pair happened.
+fn _ask_copy_clean(dst, cap, src) { return safe_label_copy(dst, cap, src); }
 
 # --- answer plumbing (called by the front end) --------------------------------
 fn ask_answer_buf() { _ask_alloc(); return _ask_ans; }
@@ -193,6 +183,46 @@ fn ask_resolve(line) {
     return ask_set_answer(line);
 }
 
+# --- posing a question that is NOT the model's (0.44.3) ------------------------
+#
+# The seam below was built for `ask_user`, but "display this, block until the operator answers" is also
+# exactly what thoth's OWN authorization confirm needs on a surface with no terminal to prompt on.
+#
+# ⚠ THIS MUST NOT SPEND THE MODEL'S BUDGET. `_ask_turn_n` / `_ask_runs` bound how many questions the
+# MODEL may ask and /state reports them as such; charging an authorization prompt to that budget would
+# let a run of gated tool calls silence a later, genuine ask_user. Same seam, different accounting.
+fn ask_hook_active() { if (_ask_hook != 0) { return 1; } return 0; }
+
+# ask_is_authz: 1 while the pending question is THOTH's own authorization prompt rather than the model's
+# `ask_user`. A front end reads it to pick its fixed label — "the agent is asking" is a LIE when thoth
+# is the one asking, and on a security prompt the operator's first question is *who wants this*. Set by
+# ask_pose, cleared by the tool, so it can never be stale across the two callers.
+var _ask_authz = 0;
+fn ask_is_authz() { return _ask_authz; }
+
+# ask_can_reach: 1 when a human could actually answer on this surface. Exposed so callers reason about
+# reachability with the SAME matrix ask_user uses, rather than re-deriving it from out_mode.
+fn ask_can_reach() { return _ask_surface_ok(); }
+
+# ask_pose: put `q` (with up to three suggested answers, any of which may be 0) to the operator and block.
+# Returns 1 when answered — the text is in ask_answer_buf() — and 0 when cancelled or unreachable.
+fn ask_pose(q, o0, o1, o2) {
+    if (_ask_alloc() == 0) { return 0; }
+    if (_ask_surface_ok() == 0) { return 0; }
+    _ask_authz = 1;
+    _ask_copy_clean(_ask_q, ASK_Q_CAP, q);
+    _ask_nopt = 0;
+    if (o0 != 0) { _ask_copy_clean(_ask_opts + _ask_nopt * ASK_OPT_CAP, ASK_OPT_CAP, o0); _ask_nopt = _ask_nopt + 1; }
+    if (o1 != 0) { _ask_copy_clean(_ask_opts + _ask_nopt * ASK_OPT_CAP, ASK_OPT_CAP, o1); _ask_nopt = _ask_nopt + 1; }
+    if (o2 != 0) { _ask_copy_clean(_ask_opts + _ask_nopt * ASK_OPT_CAP, ASK_OPT_CAP, o2); _ask_nopt = _ask_nopt + 1; }
+    _ask_state = 0;
+    store8(_ask_ans, 0);
+    if (_ask_hook != 0) { fncall0(_ask_hook); }
+    else { _ask_prompt_line(); }
+    if (_ask_state == 1) { return 1; }
+    return 0;
+}
+
 # --- the tool -----------------------------------------------------------------
 #
 # Returns the operator's answer, or an honest string saying why there is none. It NEVER returns an empty
@@ -252,6 +282,7 @@ fn ask_user_tool(args_json) {
 
     _ask_state = 0;
     store8(_ask_ans, 0);
+    _ask_authz = 0;                  # this one IS the model's question — see ask_is_authz
     _ask_turn_n = _ask_turn_n + 1;
     _ask_runs = _ask_runs + 1;
 

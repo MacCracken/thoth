@@ -2,6 +2,217 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.3] - 2026-09-03
+
+**An audit, a toolchain refresh, and the lane that had not compiled since 0.6.4.** Suite
+**300 + 1011 + 755 + 505 + 183 + 5** (+80). Linux / aarch64 / AGNOS green; **macOS builds and RUNS
+again**; Windows blocked entirely outside thoth's authored source.
+
+A 130-agent adversarial sweep (11 dimensions, every finding handed to three skeptics with distinct
+lenses) filed **38 confirmed findings, 1 refuted**. They are not 38 unrelated bugs — they are five
+themes, and the largest one is a security hole this project's own ADR predicted and then failed to
+enforce.
+
+### Fixed — a cloned repository could run commands as you at launch ([ADR-0021](docs/adr/0021-authority-keys-are-global-only.md))
+
+ADR-0019 made config two layers and stated the rule plainly: **authority does not accumulate from the
+less-trusted side.** It then enforced that for exactly **two keys**, both lists. Every
+authority-granting **scalar** stayed on the ordinary local-overrides-global path — and the local layer
+is `<repo>/.thoth/config.cyml`, which **a `git clone` reproduces**.
+
+So opening thoth in somebody else's repository meant that repository could supply
+`[hooks].session_start` — **arbitrary code, executed at launch, before a prompt is typed**. Also
+`[verify].command` (the same primitive after every model write), `[tron].policy` (the repo supplying
+the policy that authorizes the model's tool calls), and `[session].file` / `[history].file` /
+`[log].file` (unjailed write sinks thoth truncates and overwrites; `[session].file` is read *back*, so
+a repo could ship attacker-authored `user`/`assistant` turns). And because `[hoosh].url` and
+`[hoosh].token` layered independently, a repo setting only `url` had **the operator's global bearer
+token POSTed to a host it chose**.
+
+⭐ **Demonstrated, not argued.** With the fix reverted, a repo whose config carried
+`[hooks].session_start = "touch …"` executed it at launch. `src/hooks.cyr`'s own header said hooks
+"come from the OPERATOR'S CONFIG and nowhere else" — true when written, false from the moment config
+grew a second layer. *A documented residual is a claim with an expiry date*, which is the 0.39.0
+audit's own theme, landing on the 0.43.3 design.
+
+Authority keys are now read from the **global layer only**, and two rules fall out of the same
+principle: a **token is bound to the URL that earned it** (a local layer that redirects `[hoosh].url`
+without supplying its own token gets the global one **withheld**), and **`[shell].deny` merges from
+the trusted side first** — it used to fill with the local patterns and append global ones "if there is
+room", so a local layer declaring 64 denies **evicted the operator's entire deny-list**, the exact
+inversion the ADR forbids.
+
+Nothing is silent: every suppressed key is named on stderr, in the greeting, in `/state` and on
+`/reload`. A local layer naming the **same value** the global already grants has asked for nothing and
+is not reported — a checker that cries wolf teaches you to ignore it.
+
+### Fixed — terminal-escape injection, at four more sinks
+
+The 0.39.0 audit closed this class for filenames (A-7/A-8) and recorded that the fix went "at the
+source, not the sinks". It did not, in four places, and one of them the audit had explicitly named as
+covered:
+
+* **`@`-Tab completion** — `ftree_complete` calls `dir_list` itself and never touches the tree model,
+  so the sanitiser guarding the tree pane was not on this path at all. ⭐ **Reproduced on the shipping
+  binary under a pty**: a file named `zzQ<ESC>[2Jevil` in the launch directory, `@zz` + Tab, and the
+  composer repaint wrote the ESC to fd 1 and cleared the screen. No shell, no model, no tool call —
+  only a file in a repo you cloned. Fixed at the ingest point, and `led_insert_cstr` now applies the
+  same policy `led_paste` has had since 0.17.0.
+* **The authorization prompt itself** — `confirm` printed the model's chosen shell command, or a
+  third-party MCP server's tool name, **raw**, one line above the y/N the operator answers. The party
+  the decision is *about* controlled the bytes of the decision.
+* **Tool names, arguments and results** on both executors — and the tool-call line prints *before* the
+  t-ron gate, so even a call about to be denied got to paint.
+* **`/save`** — an exported transcript is a file someone will `cat`; a reply's escapes went to disk
+  live.
+
+One sanitiser now lives in `src/util.cyr` (`safe_label_copy`, `emit_clean_line`, `emit_clean_text`)
+rather than a fifth private copy — a boundary applied at one sink and not its sibling is *how this
+class recurs*.
+
+### Fixed — the parallel executor: the 0.44.2 hang fix never reached the default path
+
+`[hoosh].parallel` defaults ON, and the roadmap names the concurrency model as the untouched residual
+of the v1.0 security-review gate. It was worth reading:
+
+* **No socket deadline.** 0.44.2 threaded `[hoosh].timeout_ms` through `daimon_invoke` (the *serial*
+  path) and left `daimon_fetch_into` on a bare post — so an MCP host that accepted and went silent
+  parked a worker thread forever, with the main thread blocked behind it in `thread_join` and Esc
+  unpolled. The identical 0.44.2 bug, on the path 0.44.2 did not read.
+* **Gate one string, execute another.** The tool NAME was truncated into a 256-byte slot while t-ron
+  gated the full one. The arguments already had exactly this protection; the name did not.
+* **Results over 128 KB vanished.** The clip landed mid-JSON, parsing failed, and the round reported
+  "(tool returned no result)" — a lie about a call that succeeded and returned too much.
+* **The 0.44.1 wrong-tree correction was serial-only**, absent from the default path for the whole
+  release that introduced it.
+
+### Fixed — silent truncation reported as success
+
+* `read_file` handed the model a 64 KB prefix and called it the file.
+* `search` stopped scanning a file at its cap **without setting the truncation flag its own design
+  promises** — matches past the cap were missing from a result the model was told was complete.
+* `memory_append` treated a SHORT write as a save, so `/remember` printed "remembered" over a fragment
+  that comes back on the next recall as though it were what you wrote.
+* `[redact]` **passed results over 256 KB through unscanned** — and `[shell].max_output` is
+  operator-set with a 1 MiB ceiling, so any value above 256 KB silently turned redaction off for the
+  tool most likely to print a token. Worse, when a redaction *grew* past the buffer the successful
+  redaction was discarded and **the original secret-bearing text returned**. Cap raised past the shell
+  ceiling; both paths now announce.
+* `[guard]`'s envelope costs ~330 bytes the cap check ignored, so it truncated content in the function
+  whose header promises it never truncates.
+* **Un-redacted results reached the feed before redaction ran**, so `/save` exported the secret thoth
+  had just announced it removed. "Upstream of every sink at once" was true of everything except the
+  first sink.
+* **`--logs` lost most of every long value.** sakshi formats each event into a 256-byte buffer; the
+  chunk was 480. The transcript is now sized to the sink and fills by *emitted* cost, and a tool call's
+  full arguments follow as their own chunked run instead of being clipped.
+* `log_kv_str` appended untrusted values raw three lines above the sanitising appender, so a
+  model-chosen tool name could forge a whole log record — a fabricated `verdict=allow` line in the file
+  a post-mortem is read from.
+
+### Fixed — the subagent swap set, a third time
+
+`_agent_work_full` is written by a tool round and was not swapped, so a child that filled its own
+working set left the flag raised and the **parent's** next round ended announcing that ITS results had
+been dropped. Same shape as `_roundlog_cur` (0.43.0) and memory recall (0.43.2): not a crash, a lie.
+The child also ignored `_agent_add_assistant`'s refusal — documented as "a REFUSAL, not a truncation;
+the caller must end the turn" — and ran its tools anyway, posting orphaned `tool` messages.
+
+And **0.44.2's tool-call hygiene was streaming-only**: dropping a headerless slot, minting a missing
+id, refusing clipped arguments all lived in the SSE accumulator. `_agent_iter_block` took the
+provider's array verbatim, so the wire shape 0.44.2 was written to survive still poisoned history
+there — and `_sub_iter` never streams, so **a delegated turn had none of the protection**. Both paths
+now go through one builder.
+
+### Fixed — `/new` after `/compact` permanently bricked the new conversation
+
+The compact floor is an index into ONE conversation's message vector. `conv_switch` clears it and says
+why in a comment; `conv_fork` clears it. `conv_new` — the one a user reaches most — did not, so a
+fresh conversation dropped the first N messages of a history that has none, for its whole life.
+
+### Added — `[budget]`: a session spend ceiling
+
+thoth has counted tokens since 0.10.2 and cost since 0.10.3 and bounded neither; `[hoosh].max_iters`
+bounds *rounds*, which is not spend. `[budget].max_tokens` / `max_cost_micro` are session-cumulative
+ceilings checked **before** thoth spends — at the one dispatch chokepoint every surface goes through,
+and again between agentic rounds — with `>=` semantics, covering delegated children on the same tally.
+ADR-0018 said `[subagent].enabled` is off partly *because* this did not exist.
+
+⭐ **The live test found the hole in the feature itself**: written into the agentic loop alone, a
+`[hoosh].tools = false` turn — which spends exactly the same money — sailed past a budget `/state` was
+simultaneously reporting as REACHED.
+
+⚠ **A ceiling is only as real as the gateway's usage reporting, and thoth says so.** hoosh 2.6.4 sends
+no usage frame while streaming and `[hoosh].stream` defaults on, so on the default path the tally never
+advances and the ceiling can never fire. That is announced once per session and marked
+`NOT ENFORCEABLE` in `/state`, rather than left to look like protection.
+
+### Added — `src/term.cyr`, and the macOS lane compiles for the first time since 0.6.4
+
+darshana gates its whole termios/winsize/signalfd half to Linux (BSD termios is out of scope for its
+v1.0) and `src/tui.cyr` called it with **no target guard** — one thoth-side bug, two red lanes, and
+never a floor gap. Every caller now goes through `term_*`: a forwarder where the capability is real, an
+honest refusal where it is not, so thoth runs the **line tier** there instead of failing to link.
+
+Verified natively on Apple Silicon: the Mach-O arm64 binary compiles with no undefined symbol and runs.
+Windows went from **11 reachable undefined functions to 1**, and `TTY_SIGMASK_WINCH` / `EPOLL_CTL_ADD`
+/ `EPOLLIN` left thoth's source entirely; what remains is architectural (IOCP, ws2_32) plus two
+vendored bundles, now classified separately by `scripts/build.sh` instead of one class masking the
+others.
+
+⚠ **Unblocking the lane exposed a floor gap**: `getenv` returns 0 for everything on macOS
+(`lib/io.cyr` reads `/proc/self/environ`, which Darwin lacks, and has an AGNOS branch but no macOS
+one). Measured, not inferred — `TERM` and `HOME` both null where both are set. So macOS gets no colour
+and no `~/.thoth/config.cyml`. Filed upstream with a reproduction and two suggested implementations.
+`ui_isatty` was also issuing the **Linux** `TCGETS` request code on every non-AGNOS target, which
+answered "not a tty" for every fd on Darwin; the probe now lives in one place and is verified per
+target.
+
+### Added — `[ui].theme`
+
+The theme axis has been live since 0.38.0 and was per-session only: `/theme` cycles it and nothing
+carried the choice across a launch, so a light-terminal user retyped it every time. `/theme` still
+wins at runtime; an unknown value is announced on stderr, like `[ui].tier`.
+
+### Changed — toolchain 6.5.35 → 6.5.43
+
+No source migration, and that was **checked**: zero public symbols removed, zero newly `private`, zero
+`var`s removed, and the 11 added collide with nothing (duplicate `var` is silent, so that scan is not
+optional). `lib sync --full` then `cmp`-swept all 102 files — 0 differing.
+
+⚠ **It did force a behaviour fix, caught by the suite rather than by reading a changelog.** bayan's
+TOML parser now pushes the unnamed ROOT section **unconditionally**, where the old one pushed it only
+when it held pairs — so `_cfg_scan_unknown` read it as an unrecognised table and **every config file
+thoth loaded reported a phantom `.*` unrecognised key**. Eight existing assertions went red, each off
+by exactly one, which is what identified it.
+
+⭐ The compiler-table ceilings moved a long way: `fn_table 8753/131072`, `identifiers 278270/8388608`,
+`var_table 5087/1048576`. `var_table` was the tightest at 60 % in 0.43.2 and is now under 0.5 %.
+
+### Also fixed
+
+* `RL_MAX_CALLS` was still 8 while `AGENT_MAX_CALLS` went to 32 at 0.44.2 — `/audit`, the GUI's tool
+  cards and the persisted turn all under-reported any round of nine or more calls, on the surface whose
+  job is to certify what ran.
+* The GUI's authorization modal **clipped the action being authorized off the card**: the question was
+  one clipped row and the prompt's preamble alone is 79 characters, so the operator was shown a yes/no
+  about text they could not read. It wraps now, and the modal's fixed label names **who** is asking —
+  "the agent is asking" is a lie when thoth is the one asking about the agent.
+* The GUI modal no longer offers a **session grant**: the two things that make one safe — seeing it is
+  still acting, and revoking it — are both unreachable from inside a window that routes no slash
+  commands.
+* The history recap was given the fixed few-second **probe** deadline though it is a full model
+  completion, and `[hoosh].timeout_ms = 0` did not restore its old behaviour.
+* `agent_format_tools` under-reported omitted tools by exactly one.
+* The parallel executor's slot allocations were unchecked (a null write on OOM).
+* `src/hooks.cyr`'s claim that event facts are "never interpolated into the command" was true about
+  *injection* and wrong about *exposure* — the assignments are prefixed to the `/bin/sh -c` string, so
+  up to ~16 KB of the model's tool arguments sit in `/proc/<pid>/cmdline`. Corrected in the source and
+  recorded as a carried limitation gated on a portable spawn-with-environment primitive.
+* `scripts/build.sh`'s lane classifier only ever collected `undefined variable`, never
+  `undefined function` — the error cyrius actually refuses to emit on. Through 0.44.2, eleven reachable
+  undefined functions hid behind two undefined variables.
+
 ## [0.44.2] - 2026-08-27
 
 **Capture what happened, and stop bricking the conversation.** Suite **289 + 956 + 747 + 499 + 183 + 5**

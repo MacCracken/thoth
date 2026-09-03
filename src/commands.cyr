@@ -365,6 +365,21 @@ fn cmd_state() {
         }
         oprintln("");
     }
+    # 0.44.3: authority-granting keys the LOCAL layer tried to set. Not a typo report — this says a
+    # project asked for authority the operator did not grant it, which the operator should see even
+    # (especially) when they are not the one who wrote that file.
+    if (config_suppressed_count() > 0) {
+        ui_label("          : ");
+        ui_emit(ROLE_RED, "SUPPRESSED authority key(s) from the local layer: ");
+        var _sk = 0;
+        while (_sk < config_suppressed_count()) {
+            if (_sk > 0) { ui_emit(ROLE_FAINT, ", "); }
+            ui_emit(ROLE_ACCENT, config_suppressed_at(_sk));
+            _sk = _sk + 1;
+        }
+        ui_emit(ROLE_FAINT, " — set these in ~/.thoth/config.cyml if you want them");
+        oprintln("");
+    }
     ui_label("  turns   : "); ofmt_int(status_ival(SF_TURNS)); oprintln("");
     ui_label("  persona : "); ui_emit(ROLE_ACCENT, status_sval(SF_PERSONA));
     ui_emit(ROLE_FAINT, " ("); emit(ui_sgr(ROLE_FAINT)); emit(persona_role()); emit(ui_reset());
@@ -550,9 +565,42 @@ fn cmd_state() {
         ui_emit(ROLE_GREEN, "on"); ui_emit(ROLE_FAINT, " — depth 1, ");
         ofmt_int(config_subagent_max_iters()); ui_emit(ROLE_FAINT, " rounds/child");
         if (subagent_runs() > 0) { emit(" · "); ofmt_int(subagent_runs()); emit(" delegated"); }
-        # 0.43.0: say the spend bound out loud. The iteration cap is the ONLY thing bounding a turn's
-        # cost, and delegation multiplies it — a user should not have to read an ADR to learn that.
-        ui_emit(ROLE_MUTED, "  (multiplies spend; no budget enforcement)"); oprintln("");
+        # 0.43.0: say the spend bound out loud — delegation multiplies a turn's cost and a user should
+        # not have to read an ADR to learn that. 0.44.3: it is no longer unbounded, so the line no longer
+        # says it is. A child's rounds are billed to the SAME session tally the [budget] row reports.
+        if (budget_active() == 1) { ui_emit(ROLE_MUTED, "  (multiplies spend; bounded by [budget])"); }
+        else { ui_emit(ROLE_MUTED, "  (multiplies spend; no [budget] ceiling set)"); }
+        oprintln("");
+    }
+    # 0.44.3: the SPEND row. Shown only when a ceiling is set — an unbudgeted session has nothing to
+    # report and thoth does not invent a row to say "unlimited". When one IS set, this states what is
+    # spent against it AND whether it can be enforced at all: a ceiling nothing is measuring is not a
+    # bound, and the operator must be able to see which of the two they have.
+    if (budget_active() == 1) {
+        ui_label("  budget  : ");
+        var first = 1;
+        if (config_budget_tokens() > 0) {
+            ofmt_int(session_tokens()); emit(" / "); ofmt_int(config_budget_tokens()); emit(" tokens");
+            first = 0;
+        }
+        if (config_budget_cost_micro() > 0) {
+            if (first == 0) { emit(" · "); }
+            var bc[32];
+            var bl[32];
+            cost_fmt(&bc, session_cost_micro());
+            cost_fmt(&bl, config_budget_cost_micro());
+            emit(&bc); emit(" / "); emit(&bl);
+        }
+        if (budget_status() != BUDGET_OK) { ui_emit(ROLE_RED, "  — REACHED; turns stop here"); }
+        elif (session_tokens_seen() == 0) {
+            ui_emit(ROLE_RED, "  — NOT ENFORCEABLE");
+            ui_emit(ROLE_FAINT, ": the gateway has reported no usage, so the tally never advances");
+            ui_emit(ROLE_FAINT, " ([hoosh].stream = false makes it live)");
+        }
+        elif (config_budget_cost_micro() > 0) {
+            if (session_cost_seen() == 0) { ui_emit(ROLE_FAINT, "  — cost unpriced: declare [pricing.<model>] or the cost ceiling cannot fire"); }
+        }
+        oprintln("");
     }
     ui_label("  daimon  : ");
     if (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_FAINT, "absent (set [daimon].url in .thoth/config.cyml)"); oprintln(""); }
@@ -727,6 +775,37 @@ fn _allow_root_hint() {
 var SAVE_BUF = 2048;         # == FEED_LINE_CAP; a stripped line is never longer than the raw feed line
 var _save_buf = 0;
 
+# _save_write_clean: write `len` bytes of MODEL-AUTHORED text, terminal-escape sequences neutralised.
+# Returns 1 on a full write, 0 on short/error — the same contract as _save_write_str.
+#
+# ⚠ 0.44.3 — AN EXPORTED TRANSCRIPT IS A FILE SOMEONE WILL `cat`. The reply text written here is the
+# model's, and it went to disk verbatim: an ESC sequence in a reply sat live in the `.md` and executed
+# the moment the file was displayed — the 0.39.0 A-7/A-8 class again, at a sink nobody had looked at
+# because it is a file rather than a screen. Newlines and tabs survive (they are the reply's own
+# markdown); ESC and the rest of C0 plus DEL become '?', preserving the byte count so nothing shifts.
+#
+# ⚠ STATED RESIDUAL, not fixed here: a reply that CONTAINS a line like `## user` is still
+# indistinguishable, at the markdown level, from a turn header this function wrote. Escaping it would
+# mangle legitimate markdown in every honest reply to defend a document's structure rather than the
+# reader's terminal, so the trade is deliberate. A machine consumer should read `/save --json`, where
+# turns are structural and cannot be forged by content.
+fn _save_write_clean(fd, p, len) {
+    var buf[264];
+    var o = 0;
+    var i = 0;
+    while (i < len) {
+        var b = load8(p + i) & 255;
+        if (b < 32) { if ((b != 10) && (b != 9)) { b = 63; } }
+        if (b == 127) { b = 63; }
+        store8(&buf + o, b);
+        o = o + 1;
+        if (o >= 256) { if (file_write(fd, &buf, o) != o) { return 0; } o = 0; }
+        i = i + 1;
+    }
+    if (o > 0) { if (file_write(fd, &buf, o) != o) { return 0; } }
+    return 1;
+}
+
 # _save_write_str: file_write a NUL-terminated string; 1 on a full write, 0 on short/error.
 fn _save_write_str(fd, s) {
     var n = strlen(s);
@@ -753,7 +832,7 @@ fn _save_history(fd) {
         if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
         var content = session_history_content(i);
         var clen = strlen(content);
-        if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0; } }
+        if (clen > 0) { if (_save_write_clean(fd, content, clen) == 0) { ok = 0; } }
         if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
         var cc = session_history_citation_count(i);   # 0.33.4: the reply's recalled sources
         if (cc > 0) {
@@ -861,7 +940,7 @@ fn _save_plain(fd) {
         if (_save_write_str(fd, ": ") == 0) { ok = 0; }
         var content = session_history_content(i);
         var clen = strlen(content);
-        if (clen > 0) { if (file_write(fd, content, clen) != clen) { ok = 0; } }
+        if (clen > 0) { if (_save_write_clean(fd, content, clen) == 0) { ok = 0; } }
         if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
         i = i + 1;
     }
@@ -1353,6 +1432,11 @@ fn cmd_remember(line) {
         ui_emit(ROLE_MUTED, " — create it first (mkdir -p "); emit(memory_dir()); ui_emit(ROLE_MUTED, "), then /remember."); oprintln("");
         return 0;
     }
+    if (rc == (0 - 3)) {
+        emit("  "); ui_emit(ROLE_RED, "PARTIAL write - the fact was cut short and IS on disk");
+        ui_emit(ROLE_MUTED, " (check "); emit(memory_index_path()); ui_emit(ROLE_MUTED, " and re-save it)"); oprintln("");
+        return 0;
+    }
     if (rc < 0) { emit("  "); ui_emit(ROLE_RED, "write failed - memory not saved"); oprintln(""); return 0; }
     if (mem_last_target() == 1) {                    # 0.32.0: routed to mneme (semantic memory), not the local file
         emit("remembered -> "); ui_emit(ROLE_GREEN, "mneme"); ui_emit(ROLE_MUTED, " (semantic memory via daimon)"); oprintln("");
@@ -1379,6 +1463,11 @@ fn cmd_bookmark() {
     if (rc == (0 - 2)) {
         emit("  "); ui_emit(ROLE_RED, memory_dir()); ui_emit(ROLE_RED, " not found");
         ui_emit(ROLE_MUTED, " - create it first (mkdir -p "); emit(memory_dir()); ui_emit(ROLE_MUTED, ")."); oprintln(""); return 0;
+    }
+    if (rc == (0 - 3)) {
+        emit("  "); ui_emit(ROLE_RED, "PARTIAL write - the reply was cut short and IS on disk");
+        ui_emit(ROLE_MUTED, " (check "); emit(memory_index_path()); ui_emit(ROLE_MUTED, " and re-save it)"); oprintln("");
+        return 0;
     }
     if (rc < 0) { emit("  "); ui_emit(ROLE_RED, "write failed - reply not bookmarked"); oprintln(""); return 0; }
     if (mem_last_target() == 1) {
@@ -1981,6 +2070,18 @@ fn cmd_reload() {
     ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent]"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
+    ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file (0.44.3 — authority)"); oprintln("");
+    if (config_suppressed_count() > 0) {
+        ui_emit(ROLE_RED, "  note: "); ofmt_int(config_suppressed_count());
+        ui_emit(ROLE_RED, " authority key(s) SUPPRESSED from the local layer: ");
+        var _sp = 0;
+        while (_sp < config_suppressed_count()) {
+            if (_sp > 0) { ui_emit(ROLE_FAINT, ", "); }
+            ui_emit(ROLE_ACCENT, config_suppressed_at(_sp));
+            _sp = _sp + 1;
+        }
+        oprintln("");
+    }
     if (config_unknown_count() > 0) {
         ui_emit(ROLE_RED, "  note: "); ofmt_int(config_unknown_count());
         ui_emit(ROLE_RED, " unrecognised key(s), ignored: ");
@@ -2406,6 +2507,19 @@ fn _task_dispatch(prompt) {
         events_error(session_turns(), 0, 1);
         return 0;
     }
+    # 0.44.3 — THE [budget] CHECK BELONGS HERE, at the ONE dispatch chokepoint every surface goes
+    # through: one-shot, the line REPL, the T2 TUI, the T3 GUI and /retry. It was first written into the
+    # agentic loop alone, and a live run against a canned gateway showed the hole immediately: with
+    # `[hoosh].tools = false` a turn never reaches that loop, so a PLAIN turn — which spends exactly the
+    # same money — sailed past a budget that /state was simultaneously reporting as REACHED. A spend
+    # control on one of two paths is not a spend control. The loop keeps its own BETWEEN-ROUNDS check,
+    # which this cannot do: only the loop knows a turn is about to buy another round.
+    # Reported and logged by budget_block; the events consumer is told the same way the absent-seam arm
+    # above tells it, so a machine consumer never reads an empty stream and a bare exit code.
+    if (budget_block() == 1) {
+        events_error(session_turns(), 0, 1);
+        return 0;
+    }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop
     # (the model can call MCP tools, gated by t-ron); else a plain hoosh turn.
     var t0 = clock_now_ms();                          # 0.24.3: time the turn for [ui].elapsed
@@ -2429,6 +2543,10 @@ fn _task_dispatch(prompt) {
     # inject a side-call into the middle of the exchange the user is watching. Silent no-op when unset.
     # Placed at this single dispatch chokepoint so /retry and one-shot get it too, not just /task.
     hoosh_compact_auto();
+    # 0.44.3: once per session, if a budget is configured but nothing is measuring it, SAY SO. Here
+    # rather than inside the agentic loop for the same reason the check above moved: a plain turn is
+    # just as unmeasured, and its operator is just as entitled to know the ceiling cannot fire.
+    budget_warn_unmeasured();
     return rc;
 }
 

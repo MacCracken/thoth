@@ -298,7 +298,17 @@ fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap, st_out) {
     var len = daimon_build_call(req_buf, name, args_json);
     var h = sandhi_headers_new_a(a);
     sandhi_headers_set_a(a, h, "Content-Type", "application/json");
-    var r = sandhi_http_post_a(a, url, h, req_buf, len);
+    # ⚠ 0.44.3 — THE 0.44.2 SOCKET DEADLINE NEVER REACHED THIS FUNCTION, WHICH IS THE DEFAULT PATH.
+    # `daimon_invoke` (the SERIAL executor, four screens up) was threaded with `hoosh_http_opts()` at
+    # 0.44.2; this one — the PARALLEL executor's worker, and `[hoosh].parallel` defaults ON — kept the
+    # bare `sandhi_http_post_a`, so `read_ms` stayed 0, `SO_RCVTIMEO` was never set and every `recv` was
+    # an unbounded blocking read. An MCP host that accepted the connection and went silent parked a
+    # WORKER THREAD forever, and the main thread parked in `thread_join` behind it: Esc is not polled
+    # inside a batch and the TUI has cleared ISIG, so `kill` was again the only way out. Exactly the
+    # 0.44.2 bug, on the path 0.44.2 did not read. The options object is PRE-WARMED on the main thread
+    # by `_agent_run_calls_par` — same discipline as the endpoint URL — so this is a cache read here,
+    # never a concurrent build.
+    var r = sandhi_http_post_opts_a(a, url, h, req_buf, len, hoosh_http_opts());
     if (sandhi_http_err_kind(r) != SANDHI_OK) { store64(st_out, 0 - 1); return 0 - 1; }
     store64(st_out, sandhi_http_status(r));         # 0.31.5: stash the status for the serial phase
     var body = sandhi_http_body(r);
@@ -307,6 +317,13 @@ fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap, st_out) {
     if (n > (out_cap - 1)) { n = out_cap - 1; }
     if (n > 0) { memcpy(out, body, n); }
     store8(out + n, 0);
+    # ⚠ 0.44.3 — REPORT THE CLIP. A body larger than the slot was silently cut, and the cut lands in the
+    # middle of the JSON envelope, so `daimon_extract_text` then failed to parse and the round reported
+    # "(tool returned no result)" — a LIE about a call that succeeded and returned too much. The serial
+    # path has no such cap (it parses the body in place), so the two executors disagreed on the same
+    # call. Negative `st_out` already means transport failure, so the overflow is signalled by returning
+    # the TRUE length: a return greater than out_cap-1 tells the caller how much was lost.
+    if (blen > (out_cap - 1)) { return blen; }
     return n;
 }
 

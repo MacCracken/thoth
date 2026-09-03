@@ -1140,6 +1140,57 @@ fn _gask_find_text(cmds, needle) {
     return 0;
 }
 
+# _gask_off_of: byte offset of `needle` inside `hay`, or -1. (testutil's _t_count_sub counts; this
+# locates, which is what a clip test needs.)
+fn _gask_off_of(hay, needle) {
+    var hn = strlen(hay);
+    var nn = strlen(needle);
+    if (nn == 0) { return 0; }
+    var i = 0;
+    while ((i + nn) <= hn) {
+        var j = 0;
+        var ok = 1;
+        while (j < nn) {
+            if (load8(hay + i + j) != load8(needle + j)) { ok = 0; j = nn; }
+            else { j = j + 1; }
+        }
+        if (ok == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# _gask_visible: 1 if `needle` falls inside the CLIP WINDOW of some drawn text command.
+#
+# ⚠ THE OBVIOUS TEST IS THE WRONG TEST, and writing it that way first is why this helper exists.
+# gd_push_text stores the POINTER and the codepoint clip separately — the clip is applied by the
+# rasterizer, not by truncating the string — so `_ui_contains(gd_text(c), needle)` answers "is the
+# needle somewhere in the string this row starts at", which is true even when the row draws none of it.
+# Reverting the wrap to one row left that assertion green while the operator saw nothing. What has to
+# be asserted is the needle's CODEPOINT offset from the row's own start against that row's gd_aux.
+fn _gask_visible(cmds, needle) {
+    var i = 0;
+    while (i < vec_len(cmds)) {
+        var c = vec_get(cmds, i);
+        if (gd_kind(c) == GD_TEXT) { if (gd_text(c) != 0) {
+            var off = _gask_off_of(gd_text(c), needle);
+            if (off >= 0) {
+                var cps = 0;
+                var b = 0;
+                while (b < off) {
+                    if ((load8(gd_text(c) + b) & 0xC0) != 0x80) { cps = cps + 1; }
+                    b = b + 1;
+                }
+                # gd_aux 0 == no clip (thoth-owned chrome); otherwise the row draws gd_aux codepoints.
+                if (gd_aux(c) == 0) { return 1; }
+                if ((cps + 1) <= gd_aux(c)) { return 1; }
+            }
+        } }
+        i = i + 1;
+    }
+    return 0;
+}
+
 fn test_gask() {
     test_group("T3 question modal (gui/gask.cyr, 0.44.0)");
     # inert until opened: the ordinary frame must be byte-identical when no question is pending
@@ -1189,6 +1240,52 @@ fn test_gask() {
     assert_eq(_gask_key(14, 0), 0, "Backspace is pending");
     assert_eq(gask_len(), 0, "...and deletes");
     assert_eq(_gask_key(28, 0), 2, "Enter with no text AND no highlight declines rather than answering blank");
+
+    # --- 0.44.3: the question WRAPS, and the label names who is asking -------------------------------
+    #
+    # ⚠ THIS IS A SECURITY FIX WEARING TYPOGRAPHY'S CLOTHES. Through 0.44.2 the question was ONE
+    # gd_push_text clipped to the card's interior (~86cp at the 720px cap). Fine for a model's short
+    # question; NOT fine once `confirm` began posing authorization prompts through this same modal,
+    # because that prompt's fixed preamble is 79 characters before the verb and object even start — so
+    # the operator was shown a yes/no about an action whose text had been clipped off the card entirely.
+    # Reverting the wrap in gask_build turns the "the object is visible" assertion below red.
+    gask_close();
+    gask_open("Authorize this action? (t-ron absent - thoth is asking because nothing else can) thoth_shell rm -rf /home/you/important-directory");
+    gask_set_label(GASK_LABEL_AUTHZ);
+    var wc = gd_list_new();
+    gask_build(wc, 960, 600);
+    assert(_gask_find_text(wc, "thoth needs your authorization") != 0, "an authorization prompt is labelled as THOTH asking");
+    assert(_gask_find_text(wc, "the agent is asking") == 0, "...and never as the agent, which is the party being decided about");
+    assert(_gask_find_text(wc, "Authorize this action") != 0, "the question's first row is drawn");
+    # ⚠ The object is what the operator is actually authorizing, and this asserts it is INSIDE A DRAWN
+    # ROW'S CLIP WINDOW — not merely inside a string some row points at. See _gask_visible: the naive
+    # form of this assertion stayed green with the wrap reverted to one row, which is exactly the bug.
+    assert_eq(_gask_visible(wc, "important-directory"), 1, "the ACTION being authorized is actually DRAWN, not clipped off the end");
+    assert_eq(_gask_visible(wc, "Authorize this action"), 1, "...and so is the preamble that precedes it");
+
+    # the wrap is BOUNDED — layout forgery is still refused. A question far past the row budget must not
+    # grow the card without limit or push the affordance line off it.
+    gask_close();
+    gask_open("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    var bc = gd_list_new();
+    gask_build(bc, 960, 600);
+    assert(_gask_find_text(bc, "Esc decline") != 0, "even a question far past the row budget leaves the affordance line on the card");
+    assert_eq(_gask_q_rows(80), GASK_Q_ROWS, "...because the row count is clamped, not grown to fit");
+
+    # the wrap advances by whole CODEPOINTS — a byte-wise advance would open a row mid-UTF-8 sequence
+    gask_close();
+    gask_open("aéb");                       # 'é' is two bytes
+    var p0 = gask_question();
+    assert_eq(load8(_gask_adv_cp(p0, 1)) & 255, 0xC3, "one codepoint past 'a' lands on the LEAD byte of the two-byte character");
+    assert_eq(load8(_gask_adv_cp(p0, 2)) & 255, 98, "two codepoints past lands on 'b', not inside the sequence");
+    assert_eq(load8(_gask_adv_cp(p0, 99)), 0, "advancing past the end stops at the terminator");
+
+    # the label defaults back for the model's own questions — an authz label must never latch
+    gask_close();
+    gask_open("plain question");
+    var lc = gd_list_new();
+    gask_build(lc, 960, 600);
+    assert(_gask_find_text(lc, "the agent is asking") != 0, "gask_open resets the label, so an authz prompt cannot latch onto the next ask_user");
     gask_close();
     return 0;
 }

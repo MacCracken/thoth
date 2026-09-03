@@ -391,10 +391,21 @@ fn led_feed(key, ch) {
 # led_insert_cstr: insert NUL-terminated `s` at the cursor via the tested led_feed KEY_CHAR path
 # (byte-by-byte; excess dropped at COMPOSER_CAP by led_feed's own guard). Returns bytes inserted.
 # Used by @file Tab completion (0.21.1). PURE (mutates the composer).
+# ⚠ 0.44.3 — BELT AND BRACES, and the reason is the bug this pairs with. `led_paste` has dropped ESC,
+# C0 and DEL since 0.17.0 because the composer's bytes are painted straight to fd 1 by
+# `tui_draw_composer`; this sibling entry point into the SAME buffer applied none of it, and
+# `ftree_complete` was feeding it raw dirent bytes. The source is fixed (ftree.cyr), but the 0.39.0
+# audit's own theme is that a boundary applied at one sink and not its sibling is how these recur — so
+# the policy now lives on both paths, and a future caller of led_insert_cstr cannot reopen it.
 fn led_insert_cstr(s) {
     var before = _comp_len;
     var i = 0;
-    while (load8(s + i) != 0) { led_feed(KEY_CHAR, load8(s + i)); i = i + 1; }
+    while (load8(s + i) != 0) {
+        var b = load8(s + i) & 255;
+        if (b == 9) { led_feed(KEY_CHAR, 32); }               # tab -> space, as led_paste does
+        elif ((b >= 32) && (b != 127)) { led_feed(KEY_CHAR, b); }
+        i = i + 1;
+    }
     return _comp_len - before;
 }
 
@@ -512,8 +523,8 @@ var _tui_cols = 80;
 # tui_active: 1 if the T2 front-end should drive this session (PT_RICH + a real tty).
 fn tui_active() {
     if (ui_tier() != PT_RICH) { return 0; }
-    if (tty_isatty(0) == 0) { return 0; }
-    if (tty_isatty(1) == 0) { return 0; }
+    if (term_isatty(0) == 0) { return 0; }
+    if (term_isatty(1) == 0) { return 0; }
     return 1;
 }
 
@@ -1892,7 +1903,12 @@ fn tui_confirm_end() {
 # file owns and the model's bytes never occupy the affordance position.
 fn tui_ask() {
     tui_confirm_begin();
-    ui_emit(ROLE_ACCENT, "  [the agent is asking] "); emit(ask_question()); oprintln("");
+    # 0.44.3: the label names who is asking. `ask_pose` (gate.cyr's authorization prompt) rides this
+    # same seam, and calling that "the agent" would misattribute a security decision to the party the
+    # decision is ABOUT. Fixed literals thoth owns; never derived from the question text.
+    if (ask_is_authz() == 1) { ui_emit(ROLE_ACCENT, "  [thoth needs your authorization] "); }
+    else { ui_emit(ROLE_ACCENT, "  [the agent is asking] "); }
+    emit(ask_question()); oprintln("");
     var i = 0;
     while (i < ask_option_count()) {
         emit("    "); ofmt_int(i + 1); emit(") "); ui_emit(ROLE_MUTED, ask_option_at(i)); oprintln("");
@@ -2104,7 +2120,7 @@ fn tui_relayout() {
     var rr[8];
     var cc[8];
     store64(&rr, 0); store64(&cc, 0);
-    if (tty_winsize(1, &rr, &cc) == 0) {
+    if (term_winsize(1, &rr, &cc) == 0) {
         if (load64(&rr) > 4) { _tui_rows = load64(&rr); }
         if (load64(&cc) > 0) { _tui_cols = load64(&cc); }
     }
@@ -2142,12 +2158,12 @@ fn tui_run_line(line) {
     feed_flush_pending();                        # seal the echo as its own feed line
     feed_repaint();                              # show the echo IMMEDIATELY (before a slow turn)
     spin_begin();                                # show the working indicator for the dispatch window
-    tty_cooked();                                # canonical mode for read_line-based confirms
+    term_cooked();                               # canonical mode for read_line-based confirms
     var keep = dispatch(line);
     spin_end();                                  # stop the indicator (relayout restores the hint row)
     out_mode_set(OUT_FD1);                        # stop capturing before any chrome paints
     git_probe();                                 # the turn may have changed the worktree (/run, agentic edit) — refresh git for the status bar (the following tui_relayout repaints it)
-    if (tty_raw(0) < 0) { return 0; }            # couldn't re-enter raw -> end the session cleanly
+    if (term_raw(0) < 0) { return 0; }           # couldn't re-enter raw -> end the session cleanly
     feed_flush_pending();                        # seal a trailing un-newlined dispatch line
     feed_repaint();                              # paint the captured output
     return keep;
@@ -2176,16 +2192,20 @@ var _winch_drain = 0;         # 128-byte signalfd_siginfo drain buffer
 # instant resize). The SIGINT fd is opened separately and kept blocked but NOT
 # epoll-registered (we want SIGINT ignored, not delivered).
 fn tui_events_init() {
-    #ifdef CYRIUS_TARGET_AGNOS
-    # agnos has no signalfd and no epoll-on-signalfd multiplex, and the fb
-    # console emits no SIGWINCH resize event. Return 0 so the caller takes
-    # thoth's own bare-blocking-read fallback (instant resize disabled —
-    # an acceptable, already-coded degradation). Keeps TTY_SIGMASK_WINCH /
-    # tty_open_signalfd / sys_epoll_* off the agnos target.
+    #ifndef CYRIUS_TARGET_LINUX
+    # Everywhere but Linux, thoth takes its own bare-blocking-read fallback (instant resize disabled —
+    # an acceptable, already-coded degradation) and this whole multiplex is compiled out.
+    #   agnos  — no signalfd, no epoll-on-signalfd multiplex, and the fb console emits no SIGWINCH.
+    #   macOS  — kqueue, not epoll; darshana has no BSD termios/signalfd peer (see src/term.cyr).
+    #   win    — IOCP, not epoll; no signalfd at all.
+    # ⚠ 0.44.3 WIDENED this gate from `CYRIUS_TARGET_AGNOS` to "not Linux". The old gate compiled the
+    # branch below on macOS and Windows, where `TTY_SIGMASK_WINCH`, `EPOLL_CTL_ADD`, `EPOLLIN` and the
+    # `sys_epoll_*` family do not exist — which is a large part of why NEITHER lane could link. epoll
+    # is the Linux primitive here; the correct gate names Linux, not "everything except agnos".
     return 0;
     #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    _winch_fd = tty_open_signalfd(TTY_SIGMASK_WINCH);
+    #ifdef CYRIUS_TARGET_LINUX
+    _winch_fd = term_open_signalfd(term_sigmask_winch());
     if (_winch_fd < 0) { return 0; }
     _epfd = sys_epoll_create();
     if (_epfd < 0) { return 0; }
@@ -2202,12 +2222,12 @@ fn tui_events_init() {
 # so a key is decoded against the NEW geometry. Level-triggered epoll: a ready fd not
 # acted on re-fires next call, so returning one event per call loses nothing.
 fn tui_wait_event() {
-    #ifdef CYRIUS_TARGET_AGNOS
-    # Unreachable on agnos (_events_ok is 0 → the loop uses the bare read), but
-    # it must still compile: agnos has no sys_epoll_wait. Safe default EV_KEY.
+    #ifndef CYRIUS_TARGET_LINUX
+    # Unreachable off Linux (_events_ok is 0 → the loop uses the bare read), but it must still
+    # COMPILE: no non-Linux target has sys_epoll_wait. Safe default EV_KEY.
     return EV_KEY;
     #endif
-    #ifndef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_LINUX
     var n = sys_epoll_wait(_epfd, _ev_buf, 2, 0 - 1);   # timeout -1: block until ready
     if (n <= 0) { return EV_KEY; }                      # EINTR/spurious -> attempt a read
     var i = 0;
@@ -2223,23 +2243,23 @@ fn tui_wait_event() {
 # readable so this won't block. Coalesced resizes that queued more re-fire epoll and
 # are drained next pass (each just re-relayouts, idempotent).
 fn tui_drain_winch() {
-    #ifndef CYRIUS_TARGET_AGNOS
+    #ifdef CYRIUS_TARGET_LINUX
     syscall(SYS_READ, _winch_fd, _winch_drain, 128);
     #endif
-    return 0;   # agnos: no WINCH signalfd was opened — nothing to drain
+    return 0;   # off Linux: no WINCH signalfd was opened — nothing to drain
 }
 
 # tui_events_teardown: close both signalfds (restoring the thread signal mask) and the
 # epoll fd. Also fixes the 0.9.0/0.9.1 leak where the SIGINT signalfd was opened but
 # never closed (its SIG_BLOCK persisted after the TUI exited).
 fn tui_events_teardown() {
-    #ifdef CYRIUS_TARGET_AGNOS
-    # Nothing was opened on agnos (tui_events_init returned 0) — no teardown.
+    #ifndef CYRIUS_TARGET_LINUX
+    # Nothing was opened off Linux (tui_events_init returned 0) — no teardown.
     return 0;
     #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    if (_winch_fd >= 0) { tty_close_signalfd(_winch_fd, TTY_SIGMASK_WINCH); _winch_fd = 0 - 1; }
-    if (_sigint_fd >= 0) { tty_close_signalfd(_sigint_fd, 2); _sigint_fd = 0 - 1; }
+    #ifdef CYRIUS_TARGET_LINUX
+    if (_winch_fd >= 0) { term_close_signalfd(_winch_fd, term_sigmask_winch()); _winch_fd = 0 - 1; }
+    if (_sigint_fd >= 0) { term_close_signalfd(_sigint_fd, 2); _sigint_fd = 0 - 1; }
     if (_epfd >= 0) { file_close(_epfd); _epfd = 0 - 1; }
     return 0;
     #endif
@@ -2358,8 +2378,8 @@ fn _tui_mouse_click() {
 # feed / raw-composer layout. Falls back to repl_loop if the tty isn't usable. This
 # is interactive terminal control — verify on a live TTY (`--tier=rich`), not piped.
 fn tui_loop() {
-    if (tty_isatty(0) == 0) { return repl_loop(); }
-    if (tty_raw(0) < 0) { return repl_loop(); }   # no raw mode -> degrade to the REPL
+    if (term_isatty(0) == 0) { return repl_loop(); }
+    if (term_raw(0) < 0) { return repl_loop(); }   # no raw mode -> degrade to the REPL
     # Block SIGINT for the whole TUI session (sigprocmask via signalfd). The dispatch
     # window runs in COOKED mode (ISIG on) so a Ctrl-C there would otherwise raise
     # SIGINT and, with no handler, kill us WITH the alt-screen up + scroll region set
@@ -2376,7 +2396,7 @@ fn tui_loop() {
     # ENOMEM, so it is narrow — but it is no longer harmless, and thoth announces a lost
     # capability rather than faking it (see the notice below, after the feed is up).
     #ifndef CYRIUS_TARGET_AGNOS
-    _sigint_fd = tty_open_signalfd(2);   # block SIGINT (mask bit for signal 2) for the session
+    _sigint_fd = term_open_signalfd(2);  # block SIGINT (mask bit for signal 2) for the session
     #endif
     # 0.44.0 (T4-1): claim the ask seam for THIS front end, here rather than in main's preamble — the
     # hook must belong to the surface that is actually running. confirm_hooks_set can be unconditional
@@ -2620,7 +2640,7 @@ fn tui_loop() {
     tui_bpaste_disable();           # 0.17.0: pop bracketed-paste mode
     tui_kitty_disable();            # 0.11.9: pop the kitty keyboard protocol (restore legacy keys)
     tty_cursor_show();
-    tty_cooked();
+    term_cooked();
     _tui_scroll_region(1, _tui_rows);
     tty_alt_leave();
     tui_events_teardown();          # close the signalfds (restore the signal mask) + epoll fd

@@ -455,6 +455,29 @@ fn test_agent() {
     assert_eq(agent_tc_count(avn), 1, "the id-less call is kept");
     assert(streq(agent_tc_id(avn, 0), "thoth_call_0"), "a local id is minted for it");
 
+    # ⚠ 0.44.3 — THE SAME HYGIENE ON THE NON-STREAMING PATH, which had none of it. Everything asserted
+    # above lives in `_ag_build_array`, which only the SSE accumulator reached: `_agent_iter_block` took
+    # the provider's tool_calls array VERBATIM into the assistant echo, so the exact wire shape the
+    # block above describes still poisoned HISTORY there. And `_sub_iter` calls `_agent_iter_block`
+    # unconditionally — a delegated turn was never protected at all. `_agent_normalize_block` puts the
+    # blocking path through the same builder, so the two agree by construction.
+    var blk = "[{\"id\":\"\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{\\\"path\\\": \\\"src\\\"}\"}},{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"VERSION\\\"}\"}}]";
+    var blkv = bayan_json_v_parse_buf(blk, strlen(blk));
+    assert_eq(agent_tc_count(blkv), 2, "the provider sent two elements (one of them headerless)");
+    var nb = _agent_normalize_block(blkv, 2);
+    assert(nb != 0, "normalisation keeps the round when at least one call is well-formed");
+    var nbv = bayan_json_v_parse_buf(nb, strlen(nb));
+    assert_eq(agent_tc_count(nbv), 1, "the nameless element is DROPPED, not echoed into history");
+    assert(streq(agent_tc_name(nbv, 0), "read_file"), "...and the good call survives");
+    assert(streq(agent_tc_id(nbv, 0), "thoth_call_1"), "...with a locally minted id, since the provider sent none");
+    assert(_t_count_sub(nb, strlen(nb), "\"id\":\"\"", strlen("\"id\":\"\"")) == 0, "no empty ID reaches the conversation on the blocking path either");
+    assert(_t_count_sub(nb, strlen(nb), "\"name\":\"\"", strlen("\"name\":\"\"")) == 0, "no empty NAME either");
+    # a round where NOTHING is well-formed returns 0, so the caller keeps its old behaviour rather than
+    # silently emptying the round
+    var bad = "[{\"id\":\"\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{}\"}}]";
+    var badv = bayan_json_v_parse_buf(bad, strlen(bad));
+    assert_eq(_agent_normalize_block(badv, 1), 0, "an all-malformed round normalises to 0 (caller falls back)");
+
     # An empty-string NAME is not a name. Before 0.44.2 every consumer tested `nm != 0`, so "" sailed past
     # the no-name arm and was handed to t-ron, which answered "tool_name contains invalid characters".
     var es = "[{\"id\":\"x\",\"type\":\"function\",\"function\":{\"name\":\"\",\"arguments\":\"{}\"}}]";

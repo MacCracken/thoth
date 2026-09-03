@@ -1,0 +1,137 @@
+# term.cyr — the portable terminal-CONTROL floor (0.44.3).
+#
+# thoth is OS-agnostic at the substrate layer (ADR-0001): one source tree, the target picked at build
+# time, written against a PORTABLE interface and never against a per-OS file. Terminal control is
+# substrate — and it was the one piece of substrate thoth reached for WITHOUT a portable interface.
+#
+# THE DEFECT THIS MODULE CLOSES. The vendored darshana splits in two halves:
+#
+#   * the ANSI/cursor half (alt-screen, clear, move, SGR, scroll region) — pure escape bytes, portable,
+#     ungated, and correct on every target;
+#   * the TERMIOS/winsize/signalfd half (`tty_raw`, `tty_cooked`, `tty_winsize`, `tty_isatty`,
+#     `tty_open_signalfd`, `tty_close_signalfd`, `TTY_SIGMASK_*`) — defined ONLY inside
+#     `#ifdef CYRIUS_TARGET_LINUX` and, as separate peers, `#ifdef CYRIUS_TARGET_AGNOS`.
+#     BSD termios is a different struct and is explicitly out of scope for darshana v1.0.
+#
+# `src/tui.cyr` and `src/oneshot.cyr` called the second half with no target guard. On macOS and Windows
+# NEITHER darshana branch compiles, so those names do not exist — and cyrius refuses to emit a binary
+# with reachable undefined functions. That is why the macOS lane has not COMPILED since 0.6.4 and why
+# the Windows lane reported `TTY_SIGMASK_WINCH` alongside its genuine architectural gaps: one thoth-side
+# bug, two red lanes, and it was never a floor gap.
+#
+# THE SHAPE OF THE FIX. Every thoth caller now goes through `term_*`, which exists on EVERY target:
+# a forwarder where the capability is real, an honest refusal where it is not. That is the same
+# capability-gated contract the rest of thoth uses — the T2 TUI's own `tty_isatty` / `tty_raw`
+# guards ALREADY fall back to the line REPL when the terminal cannot be driven, so making those two
+# calls answer honestly on a target with no termios is the entire behavioural change: **thoth runs the
+# line tier there, announced, instead of failing to link.** No feature is removed and no capability is
+# faked (out-of-scope rule: "silent degradation of any capability").
+#
+# WHY A THOTH-SIDE SHIM AND NOT A DARSHANA PATCH. Growing real BSD termios belongs to darshana, and
+# this module does not attempt it — `term_raw` on macOS returns -1 (the SAME value darshana's own AGNOS
+# peer returns for "no raw-input mechanism here"), which is the honest answer, not a stub pretending to
+# work. If darshana v2 ships a BSD peer, the macOS branch below collapses into the forwarder branch and
+# nothing above it changes. This is porting the floor, not forking the spine (ADR-0001/0002).
+#
+# TWO CAPABILITIES, NOT ONE — the distinction is load-bearing and easy to collapse by accident:
+#
+#   `term_have()`      — can this build put the terminal into RAW mode and take it back (drive a
+#                        full-screen TUI)? Linux + AGNOS yes, macOS + Windows no.
+#   `term_can_probe()` — can this build ANSWER `term_isatty` at all? Linux + AGNOS + macOS yes
+#                        (macOS via the BSD request code below), Windows no.
+#
+# They differ on macOS, and a caller that conflates them gets a real bug: `one_shot_run` reads stdin
+# when `term_isatty(0)` says "not a tty", so on a build that answers 0 for EVERYTHING it would read an
+# interactive terminal and BLOCK FOREVER waiting for the operator to type EOF. Pipe ingestion is gated
+# on `term_can_probe()` — where thoth cannot tell a pipe from a terminal it says so and skips, rather
+# than hanging or silently dropping the payload.
+#
+# ⚠ ADD NEW CALLS HERE, NOT DIRECTLY TO `tty_*`. A raw `tty_raw`/`tty_winsize`/`tty_open_signalfd` in
+# thoth source is a portability CLAIM that only Linux and AGNOS honour, and the failure mode is a lane
+# that stops compiling — visible only if someone reads that lane's output. `scripts/build.sh` treats
+# `TTY_SIGMASK_WINCH` as an UNEXPECTED symbol precisely so a regression here goes red.
+
+#ifdef CYRIUS_TARGET_MACOS
+# macOS: darshana has no BSD termios peer, so raw/cooked/signalfd are honestly unavailable.
+#
+# `term_isatty` IS answered, because the mechanism is portable and only the REQUEST CODE differs:
+# `TIOCGWINSZ` is `_IOR('t', 104, struct winsize)` = 0x40087468 on BSD/Darwin against Linux's 0x5413.
+# The stdlib's `SYS_IOCTL` is already arch/OS-correct (29 on Darwin, 16/29 on Linux x86_64/aarch64), so
+# the only per-OS datum is the request. Without this, every macOS run answers "not a tty" and degrades
+# to PT_PLAIN — colourless output on a colour terminal, which is a WRONG answer rather than an absent
+# capability. A `winsize` query that succeeds is the same evidence darshana's own two peers use.
+var _TERM_TIOCGWINSZ_BSD = 0x40087468;
+
+fn term_have() { return 0; }
+fn term_can_probe() { return 1; }
+
+fn term_isatty(fd) {
+    var ws[8];
+    if (syscall(SYS_IOCTL, fd, _TERM_TIOCGWINSZ_BSD, &ws) < 0) { return 0; }
+    return 1;
+}
+
+# Real answer available on Darwin for the same reason `term_isatty` is: TIOCGWINSZ fills a
+# `struct winsize { u16 ws_row, ws_col, ws_xpixel, ws_ypixel }` — identical layout to Linux's, so the
+# row/col extraction below matches darshana's Linux peer byte for byte. Contract: 0 on success
+# (rows/cols written through the out-pointers), -1 on failure.
+fn term_winsize(fd, out_rows, out_cols) {
+    var ws[8];
+    store64(&ws, 0);
+    if (syscall(SYS_IOCTL, fd, _TERM_TIOCGWINSZ_BSD, &ws) < 0) { return 0 - 1; }
+    store64(out_rows, load8(&ws) | (load8(&ws + 1) << 8));
+    store64(out_cols, load8(&ws + 2) | (load8(&ws + 3) << 8));
+    return 0;
+}
+
+# -1 == "could not enter raw mode", the contract every caller already branches on (tui_loop degrades to
+# repl_loop, tui_dispatch ends the session cleanly). Identical to darshana's AGNOS peer.
+fn term_raw(fd) { return 0 - 1; }
+# Idempotent success: raw was never entered, so there is no termios state to restore. Matches both of
+# darshana's peers, whose Linux `tty_cooked` is likewise a no-op when not raw.
+fn term_cooked() { return 0; }
+fn term_open_signalfd(sigmask) { return 0 - 1; }
+fn term_close_signalfd(fd, sigmask) { return 0; }
+fn term_sigmask_winch() { return 0; }
+#endif
+
+#ifdef CYRIUS_TARGET_WIN
+# Windows: no termios, no signalfd, and `syscall(SYS_IOCTL, ...)` is not among the numbers the Win
+# reroute routes (it returns -ENOSYS), so there is no honest tty probe either — console mode is a
+# GetConsoleMode/SetConsoleMode affair the floor does not expose. Everything refuses. The Windows lane
+# remains gated on its ARCHITECTURAL floor gaps (IOCP for epoll, WaitOnAddress for futex); this module
+# only makes sure thoth stops contributing avoidable undefined symbols to that report.
+fn term_have() { return 0; }
+fn term_can_probe() { return 0; }
+fn term_isatty(fd) { return 0; }
+fn term_winsize(fd, out_rows, out_cols) { return 0 - 1; }
+fn term_raw(fd) { return 0 - 1; }
+fn term_cooked() { return 0; }
+fn term_open_signalfd(sigmask) { return 0 - 1; }
+fn term_close_signalfd(fd, sigmask) { return 0; }
+fn term_sigmask_winch() { return 0; }
+#endif
+
+#ifndef CYRIUS_TARGET_MACOS
+#ifndef CYRIUS_TARGET_WIN
+# Linux (x86_64 + aarch64) and AGNOS: darshana ships a real peer for BOTH, so these are pure
+# forwarders and the generated code is identical to the pre-0.44.3 direct calls. Both capabilities
+# report 1 — terminal control and the tty probe are genuinely available.
+#
+# The AGNOS peer's semantics differ from Linux's in ways that are DELIBERATE and already relied on:
+# `tty_raw` returns -1 (no raw-input mechanism on the fb console yet, so thoth takes the line REPL),
+# `tty_isatty` answers from the framebuffer console-grid syscall, and `TTY_SIGMASK_WINCH` uses agnos's
+# `1 << sig` set layout rather than Linux's `1 << (sig-1)`. Forwarding preserves each verbatim —
+# `term_sigmask_winch()` is a FUNCTION, not a re-exported constant, so the right per-target value is
+# carried without this module duplicating either number.
+fn term_have() { return 1; }
+fn term_can_probe() { return 1; }
+fn term_isatty(fd) { return tty_isatty(fd); }
+fn term_winsize(fd, out_rows, out_cols) { return tty_winsize(fd, out_rows, out_cols); }
+fn term_raw(fd) { return tty_raw(fd); }
+fn term_cooked() { return tty_cooked(); }
+fn term_open_signalfd(sigmask) { return tty_open_signalfd(sigmask); }
+fn term_close_signalfd(fd, sigmask) { return tty_close_signalfd(fd, sigmask); }
+fn term_sigmask_winch() { return TTY_SIGMASK_WINCH; }
+#endif
+#endif

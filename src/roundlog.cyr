@@ -15,7 +15,12 @@
 # faked). Each round records up to RL_MAX_CALLS calls (matching the loop cap).
 
 var ROUNDLOG_CAP = 16;       # ring: retain the most recent 16 rounds
-var RL_MAX_CALLS = 8;        # per round (matches AGENT_MAX_CALLS)
+# ⚠ 0.44.3 — RAISED 8 -> 32 TO RE-MATCH `AGENT_MAX_CALLS`, which 0.44.2 raised from 8 to 32 and this
+# comment kept CLAIMING it matched. A round of nine or more tool calls therefore recorded eight, and
+# `/audit`, the GUI's per-round tool cards and the persisted turn all reported a call count that was
+# not the one that ran — the audit surface understating the tool activity it exists to certify. The
+# "matches" note is only true if someone changes both; the pairing is now spelled out at both ends.
+var RL_MAX_CALLS = 32;       # per round — MUST track AGENT_MAX_CALLS (src/agent.cyr); see the note above
 var RL_NAME_CAP = 64;        # bytes copied of each tool name (NUL-terminated)
 var RL_ARG_CAP = 128;        # bytes copied of each call's arg summary (0.30.17; sanitized + NUL-terminated)
 

@@ -65,21 +65,35 @@ var UI_SGR_BUF_CAP = 320;
 
 # Linux x86_64: ioctl(fd, TCGETS) returns 0 iff fd is a terminal. (Not in the
 # vendored syscall constants; the well-known Linux value.)
-var UI_TCGETS = 0x5401;
+# UI_TCGETS (0x5401, the LINUX TCGETS request) was removed at 0.44.3 — see ui_isatty below.
+# A per-OS ioctl REQUEST code does not belong in a portable module; src/term.cyr owns the probe now.
 
-# ui_isatty: 1 if fd is a tty, else 0 — ioctl(TCGETS) into a throwaway termios buf.
+# ui_isatty: 1 if fd is a tty, else 0 — the predicate the whole presentation tier hangs off.
+#
+# ⚠ 0.44.3 — this used to issue `ioctl(fd, TCGETS)` itself, with the LINUX request code, on every
+# non-agnos target. `SYS_IOCTL` is arch/OS-correct from the stdlib, but the REQUEST is not portable:
+# Darwin's TCGETS-equivalent is TIOCGETA (0x40487413), so on macOS the call always failed and this
+# always answered 0 — "not a tty" for every fd, on a real terminal. Nothing surfaced it because the
+# macOS lane had not COMPILED since 0.6.4; unblocking that lane (src/term.cyr) would otherwise have
+# shipped a Mac build that is silently colourless on a colour terminal, since `_ui_color_capable`
+# consults this and PT_RICH/PT_ANSI both require it. The probe now lives in ONE place, per-target and
+# verified per-target — measured on real Apple Silicon: rc=0 under a pty, ENOTTY on a pipe.
+#
+# The mechanism changes on Linux too, from TCGETS to TIOCGWINSZ (darshana's `tty_isatty`), and the
+# verdict does not: both ioctls succeed on exactly the set of TTYs, which is the equivalence darshana's
+# own header documents and glibc's isatty(3) relies on.
 fn ui_isatty(fd) {
     #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no ioctl(TCGETS) tty probe — and Linux syscall 16 (SYS_IOCTL)
     # is `kill` on agnos, so the raw call would be actively wrong, not merely
     # undefined. The agnos fb console interprets ANSI/SGR, so treat any fd as
-    # an interactive terminal and let thoth emit its colored TUI.
+    # an interactive terminal and let thoth emit its colored TUI. (Deliberately
+    # NOT term_isatty, whose agnos peer answers from the framebuffer console
+    # grid and so says 0 before the fb is up — this must stay unconditional.)
     return 1;
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    var tbuf[64];
-    if (syscall(SYS_IOCTL, fd, UI_TCGETS, &tbuf) == 0) { return 1; }
-    return 0;
+    return term_isatty(fd);
     #endif
 }
 

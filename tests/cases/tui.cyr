@@ -1172,6 +1172,58 @@ fn test_ftree() {
     ftree_reset();
     _ftree_append("ünïcode-ok.cyr", 0, 0);            # high bytes (UTF-8) must pass through untouched
     assert(streq(ftree_name(0), "ünïcode-ok.cyr") == 1, "UTF-8 bytes are NOT mangled (>= 128 passes)");
+
+    # ⚠ 0.44.3 — THE SECOND SINK WAS NEVER ACTUALLY CLOSED, and the paragraph above SAID IT WAS.
+    # `_tree_set_name` is the chokepoint for the tree PANE; `ftree_complete` calls `dir_list` itself and
+    # never touches the tree model, so `@`-Tab completion went on copying raw dirent bytes into the
+    # composer — which `tui_draw_composer` paints straight to fd 1. Reproduced on the shipping binary
+    # under a pty before the fix: a file named `zzQ<ESC>[2Jevil`, `@zz` + Tab, and the terminal cleared.
+    # The prose above was the only thing guarding it, and prose does not fail a build. This drives the
+    # REAL completion path against a real directory entry, so removing either filter turns it red.
+    xmkdir("/tmp/thoth_ftc_test", 448);
+    var evilp[128];
+    var eo = 0;
+    var epfx = "/tmp/thoth_ftc_test/zzQ";
+    while (load8(epfx + eo) != 0) { store8(&evilp + eo, load8(epfx + eo)); eo = eo + 1; }
+    store8(&evilp + eo, 27); eo = eo + 1;             # a raw ESC, mid-filename
+    store8(&evilp + eo, 91); eo = eo + 1;             # '['
+    store8(&evilp + eo, 50); eo = eo + 1;             # '2'
+    store8(&evilp + eo, 74); eo = eo + 1;             # 'J'  -> ESC[2J, erase display
+    store8(&evilp + eo, 101); eo = eo + 1;            # 'e'
+    store8(&evilp + eo, 0);
+    var efd = file_open(&evilp, O_WRONLY | O_CREAT, 384);
+    if (efd >= 0) {
+        file_close(efd);
+        var cout[512];
+        store8(&cout, 0);
+        var ncand = ftree_complete("/tmp/thoth_ftc_test/zzQ", &cout, 512);
+        assert(ncand >= 1, "the fixture entry is found by completion (else this test proves nothing)");
+        assert_eq(_t_has_esc(&cout, strlen(&cout)), 0, "no ESC byte reaches the completion suffix");
+        var cb = 0;
+        var cbad = 0;
+        while (load8(&cout + cb) != 0) {
+            if ((load8(&cout + cb) & 255) < 32) { cbad = 1; }
+            if ((load8(&cout + cb) & 255) == 127) { cbad = 1; }
+            cb = cb + 1;
+        }
+        assert_eq(cbad, 0, "...and no other C0 control or DEL either");
+    }
+
+    # ...and the composer's own insert path refuses them too, so a future caller cannot reopen the sink.
+    # `led_paste` has dropped ESC/C0/DEL since 0.17.0; `led_insert_cstr` writes to the SAME buffer and
+    # applied none of it. A boundary at one sink and not its sibling is how A-7/A-8 happened.
+    led_reset();
+    led_insert_cstr("ok\x1b[2Jbad\x07");
+    assert_eq(_t_has_esc(led_buf(), led_len()), 0, "led_insert_cstr drops ESC");
+    var lb = 0;
+    var lbad = 0;
+    while (lb < led_len()) {
+        if ((load8(led_buf() + lb) & 255) < 32) { lbad = 1; }
+        lb = lb + 1;
+    }
+    assert_eq(lbad, 0, "...and every other C0 control");
+    assert(led_len() > 0, "...while the printable bytes still land");
+    led_reset();
     ftree_reset();
     _ftree_append("src", 1, 0);
     _ftree_append("VERSION", 0, 0);

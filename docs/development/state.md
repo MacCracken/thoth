@@ -7,6 +7,44 @@
 
 ## Version
 
+**0.44.3** — **the audit found one hole its own ADR had predicted** (2026-09-03,
+[ADR-0021](../adr/0021-authority-keys-are-global-only.md)). A 130-agent adversarial sweep (11
+dimensions, three distinct-lens skeptics per finding) filed **38 confirmed, 1 refuted** — five themes,
+not 38 bugs. ⭐ **A cloned repository could run commands as you at launch.** ADR-0019 stated
+*authority does not accumulate from the less-trusted side* and enforced it for two LIST keys; every
+authority-granting SCALAR stayed on the ordinary local-overrides-global path, and a `git clone`
+reproduces `<repo>/.thoth/config.cyml`. So a repo supplied `[hooks].session_start` (arbitrary code,
+before a prompt is typed), `[verify].command`, `[tron].policy`, and the `[log]`/`[history]`/`[session]`
+write sinks — and because `[hoosh].url` and `token` layered independently, a repo setting only `url`
+had the operator's GLOBAL bearer token POSTed to a host it chose. Demonstrated by reverting the fix and
+watching the hook fire. Authority keys are global-only now; a token is bound to the URL that earned it;
+`[shell].deny` merges from the trusted side first (it used to let 64 local denies EVICT the operator's
+whole list). Every suppression is named; agreement between layers is not an escalation and is not
+reported. ⭐ **Terminal-escape injection at four more sinks** — the 0.39.0 A-7/A-8 fix went "at the
+source" and did not, including at `@`-Tab completion, which that audit named as covered:
+**reproduced under a pty** on the shipping binary (a file named `zzQ<ESC>[2Jevil`, `@zz`+Tab, screen
+cleared) with no shell, no model and no tool call. Also the authorization prompt itself, tool
+names/args/results on both executors, and `/save`. One sanitiser now lives in `util.cyr`. ⭐ **The
+0.44.2 hang fix never reached the DEFAULT path**: `[hoosh].parallel` is on and `daimon_fetch_into` had
+no socket deadline, so a silent MCP host parked a worker thread forever with the main thread blocked
+behind it. Same executor also gated the full tool name and executed a 256-byte truncation of it, lost
+results over 128 KB as "(tool returned no result)", and never got the 0.44.1 wrong-tree correction.
+⭐ **Silent truncation reported as success**, seven ways — including `[redact]` passing >256 KB
+results UNSCANNED (and `[shell].max_output` reaches 1 MiB), discarding a *successful* redaction and
+returning the secret, and un-redacted results reaching the feed BEFORE redaction so `/save` exported
+what thoth had just announced it removed. ⭐ **The subagent swap set missed a member for the third
+time** (`_agent_work_full`); 0.44.2's tool-call hygiene was streaming-only and the subagent never
+streams. **NEW `[budget]`** — session token/cost ceilings checked before every turn at the one
+dispatch chokepoint (the live test found the hole in the feature itself: a `tools = false` turn
+bypassed a budget `/state` called REACHED) — and it ANNOUNCES when the gateway reports no usage,
+because a ceiling nothing measures is not a bound. **NEW `src/term.cyr`** — the macOS lane compiles
+and RUNS for the first time since 0.6.4 (verified on Apple Silicon); Windows went 11 reachable
+undefined functions → 1, all outside thoth's source. That unblocking exposed a cyrius floor gap
+(`getenv` is always 0 on macOS — no `/proc`), filed upstream. **NEW `[ui].theme`.** Toolchain
+6.5.35 → 6.5.43: no source migration, but bayan's rewritten TOML parser now emits an unconditional
+empty ROOT section, which made every config file report a phantom `.*` unrecognised key — caught by
+eight existing assertions each off by exactly one. Suite **300 + 1011 + 755 + 505 + 183 + 5**.
+
 **0.44.2** — **capture what happened, and stop bricking the conversation** (2026-08-27). Four live
 reports, and the first one turned out to be THREE bugs wearing the same symptom. ⭐ **A single dropped SSE
 frame bricked the whole conversation**: hoosh's Anthropic translation intermittently drops a tool call's
@@ -3113,8 +3151,31 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.35` (in `cyrius.cyml [package].cyrius`), matching the
-  installed `cycc`. The pin advanced steadily across the 0.11.x–0.33.x arc via
+- **Cyrius pin**: `6.5.43` (in `cyrius.cyml [package].cyrius`). 0.44.3 moved it from
+  `6.5.35`, and the hop forced no source migration — **checked, not assumed**: zero public
+  stdlib symbols removed, zero newly `private`, zero `var` removed, and the 11 `var`s added
+  (bayan's `TOML_K_*` kinds, `_AW_DT_DIR`, `_hm_seed*`) collide with nothing in `src/`
+  (duplicate `var` is silent, so that scan is not optional). `cyrius lib sync --full` then
+  `cmp`-swept all 102 snapshot files: **0 differing**.
+
+  ⚠ **It DID force a behaviour fix, caught by the suite rather than by reading a changelog.**
+  bayan's TOML parser was rewritten between the two snapshots and now pushes the unnamed ROOT
+  section **unconditionally** (empty) for every document, where 6.5.35 pushed it only
+  `if (vec_len(cur_pairs) > 0)`. `_cfg_scan_unknown` read it as an ordinary table with an
+  unrecognised name, so **every config file thoth loaded reported a phantom `.*` unrecognised
+  key** — on stderr, in the greeting, in `/state` and on `/reload`. Eight existing assertions
+  went red, each off by exactly one, which is what identified it. Fixed in `_cfg_scan_unknown`
+  and pinned by three new assertions that go red when the guard is reverted.
+
+  ⭐ **The compiler-table ceilings moved, a lot.** Measured after the last edit of this release:
+  `fn_table 8753 / 131072` (was /32768), `identifiers 278270 / 8388608` (was /524288),
+  `var_table 5087 / 1048576` (was /8192), `fixup_table 39825 / 1048576`; static data 651,336 B.
+  Every one of these was a live worry at 0.37.0–0.38.2; none is now — `var_table`, the tightest at
+  60 % in 0.43.2, is under 0.5 %. The 8 MB `preprocess_out` arena remains the real ceiling and is
+  unchanged; the binding units re-summed at **≈4.32 MB** (`src/main.cyr`) and **≈4.30 MB**
+  (`tests/thoth_core.tcyr`) of project source, still comfortably inside it.
+
+  The pin advanced steadily across the 0.11.x–0.33.x arc via
   `cyrius lib sync` floor refreshes (no thoth source change) — most recently
   6.4.29 → 6.4.46 → 6.4.49 (0.27.0 and the 0.30.x GUI work) → 6.4.57 (0.32.0
   atomic writes) → 6.4.58 (0.32.1) → 6.4.62 (0.33.2) → 6.4.78 (0.38.2) →
@@ -3214,17 +3275,17 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **All five lanes re-verified at 0.43.0 (Cyrius 6.5.35)**, the macOS one on real
-Apple Silicon hardware rather than inferred — see
+source. **All five lanes re-verified at 0.44.3 (Cyrius 6.5.43; the macOS lane natively on
+Apple Silicon with the 6.5.35 installed there — see its row)** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
 | x86_64 Linux | _(default)_ | **shipped** — built, tested (264 + 1894 + 183 + 3), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (re-verified 0.38.6 / Cyrius 6.5.35) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **does NOT build** — `TTY_SIGMASK_WINCH` + 6 `tty_*` fns undefined; darshana gates its whole termios/signalfd half to Linux and `src/tui.cyr` calls it unguarded. **thoth's own gap, not the deps'** — a pristine `HEAD` baseline fails identically. Last known-good was 0.6.4 | `build/thoth_macos` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS again at 0.44.3** — first since 0.6.4. `src/term.cyr` closed thoth's own unguarded call into darshana's Linux-gated termios half; verified natively on Apple Silicon (macOS 26.6.2), `--version` + line REPL. ⚠ Built with the **6.5.35** installed on that Mac, not the pinned 6.5.43 (not installed there; no package registry) — the two `lib/` snapshots differ by zero removed/renamed/newly-private symbols. Line tier only (no BSD termios ⇒ no T2), and no colour / no global config until the upstream `getenv` gap is fixed | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **builds `OK`** — re-verified 0.38.6. The old `SYS_LSEEK` and `SIGHUP` blockers are both closed | `build/thoth_agnos` |
-| Windows | `--win` | **staged** — 13 errors at 0.38.6 (was 14; darshana's `SYS_IOCTL` removal un-shadowed the Windows stdlib value). Residue is the architectural IOCP/epoll + `SYS_FUTEX` set | `build/thoth.exe` |
+| Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
 produces a valid statically-linked ARM ELF (`file` → `ELF 64-bit … ARM aarch64`;
@@ -3261,8 +3322,8 @@ toolchain re-bundles patra ≥1.12.4. The genuine, **architectural** Windows gap
 by-design Win32 differences with no raw-syscall equivalent. `scripts/build.sh` now
 separates these `ARCH_GAP`s from the transient `SYS_GETRANDOM`/`SIGHUP` lag.
 
-**macOS — does NOT build, and it is thoth's gap, not a dependency's (re-tested on
-real hardware, re-confirmed at 0.43.0):** the lane was last known-good at **0.6.4** and has since
+**macOS — FIXED at 0.44.3; the history below is kept because the diagnosis is the point.**
+Through 0.44.2 the lane was last known-good at **0.6.4** and had since
 regressed. Re-tested properly rather than assumed: cyrius **6.5.35** was cross-built
 for arm64 Mach-O from this Linux host (`scripts/build-macos-arm64-tarball.sh`, the
 same script the release pipeline uses), installed and ad-hoc codesigned on an Apple
@@ -3277,13 +3338,25 @@ error: refusing to emit binary with 6 reachable undefined function(s)
 
 **Not caused by the 0.38.6 refresh** — a pristine `git archive HEAD` baseline (deps
 at 0.38.5) built with the same compiler fails with the byte-identical errors. The
-cause is a contract mismatch thoth owns: darshana gates its **entire**
+cause WAS a contract mismatch thoth owned: darshana gates its **entire**
 termios/winsize/signalfd half to `#ifdef CYRIUS_TARGET_LINUX` — BSD termios is a
 different struct and is explicitly out of scope for darshana v1.0 — and
-`src/tui.cyr` calls that half with no macOS guard. Fixing it is thoth-side work
-(gate the T2 TUI off non-Linux and fall back to the line tier, the degradation
-already coded for AGNOS), **not** a dep bump. The ANSI/cursor half of darshana is
-portable and unaffected.
+`src/tui.cyr` called that half with no macOS guard. **Closed at 0.44.3** by the
+new `src/term.cyr`: every thoth caller goes through `term_*`, a forwarder where
+the capability is real and an honest refusal where it is not. Verified natively
+on Apple Silicon — the Mach-O arm64 binary compiles with no undefined symbol and
+runs (`--version`, the line REPL). The T2 TUI still does not run there
+(`term_raw` returns -1; no BSD termios peer exists to call) and takes the line
+tier, which is the degradation already coded for AGNOS. The ANSI/cursor half of
+darshana is portable and was never affected.
+
+⛔ **What that unblocking exposed:** `getenv` returns 0 for everything on macOS
+(`lib/io.cyr` reads `/proc/self/environ`, which Darwin does not have, and has an
+AGNOS branch but no macOS one). Measured, not inferred: `TERM` and `HOME` both
+null in a process where both are set. So macOS gets no colour (the tier resolves
+to PT_PLAIN) and no `~/.thoth/config.cyml` global layer. A cyrius floor gap, not
+thoth's to patch — filed upstream at
+`cyrius/docs/development/issues/2026-09-03-macos-getenv-always-null-no-proc.md`.
 
 Historical note, still true of the toolchain: cycc emits ~86 "syscall
 not routed by the Mach-O ARM translation (ESYSXLAT/__got)" warnings: the
@@ -3313,6 +3386,12 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
   local `.thoth/memory` reader).
 - **Model tools** — `project` (jailed `read_file`/`list_dir`, default-on), `edit` (jailed `edit`/`create_file`,
   `thoth_edit`-gated), `shell` (`thoth_shell`-gated), `mention` (`@file` expansion), `git` (consumes sit).
+- **Portable floor** — `term` (0.44.3): the ONE route from thoth source to darshana's Linux/AGNOS-gated
+  termios/winsize/signalfd half, so a target without it degrades honestly instead of failing to link. A raw
+  `tty_*` call anywhere else in `src/` is a portability claim only two targets honour.
+- **Spend** — `budget` (0.44.3): `[budget].max_tokens` / `max_cost_micro`, session ceilings checked before every
+  turn at the `_task_dispatch` chokepoint and again between agentic rounds, covering delegated children on the
+  same tally — and announcing when the gateway reports no usage, because a ceiling nothing measures is not a bound.
 - **Presentation ladder** — `ui` + `surface` (the shared, tier-agnostic status **view-model**) drive three
   renderers: line-mode, the **T2 TUI** (`tui` / `feed` / `ftree` / `mdhl` / `diff` / `intr`), and the sovereign
   **T3 desktop GUI** (`src/gui/*`: the `gdraw` IR + `graster` rasterizer + the `gstatus`/`gtree`/`gtool`/`gfeed`/
@@ -3327,8 +3406,8 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **289 + 956 + 747 + 499 + 183 + 5 assertions across the suites as of
-0.44.2 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **300 + 1011 + 755 + 505 + 183 + 5 assertions across the suites as of
+0.44.3 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

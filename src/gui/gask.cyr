@@ -21,6 +21,16 @@
 # question or a flood of options could push the modal's own chrome off screen. Hence the hard clip and
 # the option cap that ask.cyr already applies.
 
+# ⚠ 0.44.3 — THE QUESTION IS WRAPPED, NOT CLIPPED TO ONE LINE, and that is a security fix rather than
+# a typography one. Through 0.44.2 `gask_build` drew the question with a SINGLE `gd_push_text` clipped
+# to the card's interior width — about 86 codepoints at the 720px cap. That was survivable for a model's
+# short question and NOT survivable once `confirm` started posing through this modal (gate.cyr): its
+# fixed preamble is 79 characters on its own, so the verb and the object — *the action being
+# authorized* — fell off the end. The operator was shown a yes/no about something they could not read.
+# Wrapping to GASK_Q_ROWS rows keeps the layout-forgery bound (a crafted question still cannot push the
+# card's own affordance line off the card — it is truncated at the row cap) while making the bytes that
+# matter visible.
+var GASK_Q_ROWS = 5;            # question rows before the hard truncate (5 x ~86cp)
 var GASK_PAD = 14;              # inner padding of the modal card
 var GASK_ROW_H = 22;            # one option row
 var GASK_MAXW = 720;            # the card never spans the whole window — it must read as an overlay
@@ -35,6 +45,18 @@ var _gask_len = 0;
 # That keeps it a pure view-builder over gdraw + ui — no config, no JSON, no seams — which is what lets
 # tests/thoth_gui.tcyr include it headlessly beside gstatus/gtree/gconv and drive it with fixture text.
 # gui_ask (gpresent.cyr, the runnable half) copies ask.cyr's already-sanitised strings in via gask_open.
+# The FIXED label above the question. It is a literal this file owns and the model never occupies it —
+# but "the agent is asking" is a LIE when thoth is the one asking, which it is whenever `confirm` poses
+# an authorization through this modal. Two literals, selected by the caller; never derived from text.
+var GASK_LABEL_AGENT = 0;
+var GASK_LABEL_AUTHZ = 1;
+var _gask_label = 0;
+fn gask_set_label(k) { _gask_label = k; return 0; }
+fn gask_label() {
+    if (_gask_label == GASK_LABEL_AUTHZ) { return "thoth needs your authorization"; }
+    return "the agent is asking";
+}
+
 var GASK_Q_CAP = 1024;
 var GASK_OPT_MAX = 6;
 var GASK_OPT_CAP = 128;
@@ -53,7 +75,38 @@ fn _gask_cp(dst, cap, src) {
     return i;
 }
 # gask_open: install the question + options and raise the modal. Strings are already sanitised upstream.
-fn gask_open(q) { _gask_vm(); _gask_cp(_gask_q, GASK_Q_CAP, q); _gask_nopt = 0; _gask_len = 0; _gask_sel = 0 - 1; _gask_active = 1; return 0; }
+fn gask_open(q) { _gask_vm(); _gask_cp(_gask_q, GASK_Q_CAP, q); _gask_nopt = 0; _gask_len = 0; _gask_sel = 0 - 1; _gask_label = GASK_LABEL_AGENT; _gask_active = 1; return 0; }
+
+# _gask_adv_cp: advance `p` by `n` whole CODEPOINTS, stopping at NUL. gd_push_text clips by codepoint,
+# so a wrap that advanced by BYTES would hand it a pointer into the middle of a UTF-8 sequence and the
+# row would open with a broken glyph. Continuation bytes are 0b10xxxxxx; a codepoint is one lead byte
+# plus every continuation that follows it.
+fn _gask_adv_cp(p, n) {
+    var i = 0;
+    while (i < n) {
+        if (load8(p) == 0) { return p; }
+        p = p + 1;
+        while ((load8(p) & 0xC0) == 0x80) { p = p + 1; }
+        i = i + 1;
+    }
+    return p;
+}
+
+# _gask_q_rows: how many rows the question needs at `maxcp` codepoints per row, clamped to GASK_Q_ROWS.
+# Counts CODEPOINTS, not bytes, so a multi-byte question is not given rows it does not need.
+fn _gask_q_rows(maxcp) {
+    if (maxcp < 1) { return 1; }
+    var p = gask_question();
+    var cps = 0;
+    while (load8(p) != 0) {
+        if ((load8(p) & 0xC0) != 0x80) { cps = cps + 1; }
+        p = p + 1;
+    }
+    var rows = (cps + maxcp - 1) / maxcp;
+    if (rows < 1) { rows = 1; }
+    if (rows > GASK_Q_ROWS) { rows = GASK_Q_ROWS; }
+    return rows;
+}
 fn gask_add_option(t) {
     _gask_vm();
     if (_gask_nopt >= GASK_OPT_MAX) { return 0; }
@@ -96,7 +149,12 @@ fn gask_build(cmds, w, h) {
     var cw = w - 120;
     if (cw > GASK_MAXW) { cw = GASK_MAXW; }
     if (cw < 240) { cw = 240; }
-    var ch = GASK_PAD * 4 + GASK_ROW_H * (nopt + 3);
+    # The height must know how many QUESTION rows there will be, so `maxcp` is computed before it —
+    # it depends only on `cw`, which is already fixed above.
+    var maxcp0 = (cw - GASK_PAD * 2) / 8;
+    if (maxcp0 < 8) { maxcp0 = 8; }
+    var qrows = _gask_q_rows(maxcp0);
+    var ch = GASK_PAD * 4 + GASK_ROW_H * (nopt + 2 + qrows);
     if (ch > (h - 40)) { ch = h - 40; }
     var cx = (w - cw) / 2;
     var cy = (h - ch) / 2;
@@ -115,10 +173,22 @@ fn gask_build(cmds, w, h) {
     # ⚠ The label is a FIXED literal this file owns, drawn in thoth's accent role, and it always precedes
     # the model's bytes. The operator must be able to tell thoth asking from a model that has written
     # something shaped like a prompt; the model never gets to occupy this position.
-    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_ACCENT), "the agent is asking", 0);
+    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_ACCENT), gask_label(), 0);
     ty = ty + GASK_ROW_H;
-    gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FG), gask_question(), maxcp);
-    ty = ty + GASK_ROW_H + 4;
+    # The question, wrapped across up to GASK_Q_ROWS rows (see the header note): the action being
+    # authorized must be readable, and one clipped row could not carry it.
+    var qp = gask_question();
+    var qr = 0;
+    while (qr < qrows) {
+        if (load8(qp) == 0) { qr = qrows; }
+        else {
+            gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FG), qp, maxcp);
+            ty = ty + GASK_ROW_H;
+            qp = _gask_adv_cp(qp, maxcp);
+            qr = qr + 1;
+        }
+    }
+    ty = ty + 4;
     var i = 0;
     while (i < nopt) {
         var col = _ui_rgb(ROLE_MUTED);

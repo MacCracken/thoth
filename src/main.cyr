@@ -58,6 +58,7 @@ include "src/vendor/sit-read.cyr"
 # daimon follows hoosh (it reuses hoosh's cstr/json append helpers).
 include "src/util.cyr"
 include "src/version.cyr"  # thoth_version() — GENERATED from VERSION (scripts/gen-version.sh)
+include "src/term.cyr"     # portable terminal-CONTROL floor (0.44.3) — the ONLY route to darshana's Linux/AGNOS-gated termios+signalfd half; before ui/tui/oneshot, after darshana
 include "src/ui.cyr"
 include "src/feed.cyr"     # self-managed feed buffer (M7 / 0.9.1); after ui (feed_clip calls ui_reset)
 include "src/ftree.cyr"    # file-tree pane geometry + model (M7 / 0.9.3)
@@ -72,6 +73,7 @@ include "src/gate.cyr"
 include "src/git.cyr"      # git producer (0.13.0) — consumes sit's read-only VCS API; before seams (SEAM_GIT reads git_present)
 include "src/seams.cyr"
 include "src/session.cyr"
+include "src/budget.cyr"   # [budget] spend ENFORCEMENT over the session token/cost tally (0.44.3); after session (reads its counters + cost_fmt), before agent/subagent (checked in both loops)
 include "src/roundlog.cyr"
 include "src/editlog.cyr"  # model `edit` diff ring (0.31.1) — records edit changes keyed by (turn,round,call); after sit-read (compute_file_diff), before agent (fed there) + gui (read there)
 include "src/exec.cyr"
@@ -175,7 +177,33 @@ fn main() {
         }
         emit_err("\n");
     }
+    # 0.44.3: the same treatment for AUTHORITY keys the local layer tried to set — but louder, because
+    # this one is not a typo, it is a repository asking to run commands as you. Named on stderr so a
+    # one-shot/CI caller sees it too; `/state` lists them and `/reload` re-reports.
+    if (config_suppressed_count() > 0) {
+        emit_err("thoth: SUPPRESSED authority-granting key(s) from the local .thoth/config.cyml — a project may not\n");
+        emit_err("       grant authority the global config did not; these are read from ~/.thoth/config.cyml only: ");
+        var sk = 0;
+        while (sk < config_suppressed_count()) {
+            if (sk > 0) { emit_err(", "); }
+            emit_err(config_suppressed_at(sk));
+            sk = sk + 1;
+        }
+        emit_err("\n");
+    }
     ui_detect_tier();       # resolve the presentation tier (T0..T3) once; degrades closed to plain
+    # 0.44.3: [ui].theme — the theme a session STARTS in. The theme axis has been live since 0.38.0 and
+    # was per-session ONLY: `/theme` cycles it and nothing carried the choice across a launch, so anyone
+    # on a light terminal retyped it every time. Applied AFTER ui_detect_tier because _ui_apply rebuilds
+    # the palette for the resolved tier — setting the theme first would have it overwritten. An unknown
+    # value is ANNOUNCED on stderr and dropped, exactly like [ui].tier: the config parser ignoring a key
+    # it half-knows is the silence 0.43.5 exists to break.
+    var cth = config_ui_theme();
+    if (cth != 0) { if (load8(cth) != 0) {
+        var thi = ui_theme_from_name(cth);
+        if (thi >= 0) { ui_set_theme(thi); }
+        else { emit_err("thoth: unknown [ui].theme (use dark|light|rainbow); using dark\n"); }
+    } }
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm
     out_mode_set(OUT_FD1);  # restore before any one-shot output (no-op when mode == NONE)

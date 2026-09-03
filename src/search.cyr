@@ -149,6 +149,12 @@ fn _search_scan_file(relpath, needle, ic) {
     var n = file_read_all(relpath, _search_file, SEARCH_FILE_CAP);
     if (n <= 0) { return 0; }                       # unreadable or empty -> not an error, just no hits
     store8(_search_file + n, 0);
+    # 0.44.3 - A FILE CUT AT THE CAP IS A TRUNCATED SEARCH, and this never said so. `_search_truncated`
+    # is the flag the tool's own result uses to tell the model "these are not all the matches"; it was
+    # set for the FILE-COUNT bound above and for the hit cap, but not for the per-file byte cap. So a
+    # match past the cap in a large file was missing from a result the model was told was complete -
+    # the failure shape the whole `search` design says it avoids (every bound reported when it bites).
+    if (n >= SEARCH_FILE_CAP) { _search_truncated = 1; }
     var line = 1;
     var start = 0;
     var i = 0;

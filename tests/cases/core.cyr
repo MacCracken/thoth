@@ -2599,7 +2599,7 @@ fn test_config_layering() {
     _cfg_scan_unknown(_lay_parse("[log]\nfile=\"f\"\nlevel=\"info\"\n"));
     _cfg_scan_unknown(_lay_parse("[history]\nfile=\"f\"\n"));
     _cfg_scan_unknown(_lay_parse("[session]\nfile=\"f\"\n"));
-    _cfg_scan_unknown(_lay_parse("[ui]\nbell=true\nelapsed=true\ntier=\"rich\"\n"));
+    _cfg_scan_unknown(_lay_parse("[ui]\nbell=true\nelapsed=true\ntier=\"rich\"\ntheme=\"light\"\n"));
     _cfg_scan_unknown(_lay_parse("[memory]\nenabled=true\n"));
     _cfg_scan_unknown(_lay_parse("[persona]\nname=\"n\"\n"));
     _cfg_scan_unknown(_lay_parse("[project]\nvidya=\"v\"\nread_roots=[\"/a\"]\n"));
@@ -2612,6 +2612,233 @@ fn test_config_layering() {
     _cfg_scan_unknown(_lay_parse("[shell]\nenabled=true\ntimeout_ms=1\nmax_output=1\ndeny=[\"a\"]\nallow=[\"b\"]\n"));
     _cfg_scan_unknown(_lay_parse("[edit]\nenabled=true\n"));
     assert_eq(config_unknown_count(), 0, "EVERY documented key of EVERY table passes the checker clean");
+    # ⚠ 0.44.3 — THE ROOT SECTION IS NOT AN UNRECOGNISED TABLE. bayan returns an unnamed section for
+    # the keys written before the first [table] header, and the parser rewrite carried by cyrius 6.5.43
+    # pushes it UNCONDITIONALLY (empty) for every document where the older one pushed it only when it
+    # held pairs. Read as a table, its empty name is unrecognised — so EVERY valid config file reported
+    # a phantom `.*`, on stderr, in the greeting, in /state and on /reload. Caught by the eight
+    # assertions above going red on the toolchain bump, every one of them off by exactly one.
+    # Reverting the guard in _cfg_scan_unknown turns these three red as well.
     _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[hoosh]\nurl = \"u\"\n"));
+    assert_eq(config_unknown_count(), 0, "an EMPTY root section is not an unrecognised table");
+    # ...but a key written OUTSIDE any table is a real mistake and is still named, bare.
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("stray = 1\n[hoosh]\nurl = \"u\"\n"));
+    assert_eq(config_unknown_count(), 1, "a key outside any table IS reported");
+    assert(streq(config_unknown_at(0), "stray") == 1, "...by its bare name, with no leading dot");
+    _cfg_unknown_n = 0;
+    return 0;
+}
+
+# test_shell_deny_union: the deny-list merges from the TRUSTED side first (0.44.3).
+#
+# ⚠ ADR-0019's whole argument for unioning `[shell].deny` is that "a deny only removes authority, so
+# merging can only tighten". That held only while the table had room: the merge filled with the LOCAL
+# patterns first and appended global ones `if (dn < SHELL_GLOB_MAX)`, so an untrusted local layer
+# declaring 64 denies of its own EVICTED every global deny the operator had written. Filling from the
+# trusted side makes an overflow drop LOCAL entries, which is the fail-safe direction.
+fn test_shell_deny_union() {
+    test_group("[shell].deny merges trusted-side-first (config.cyr, 0.44.3)");
+    var gtxt = "[shell]\ndeny = [\"rm -rf *\", \"curl *\", \"* | sh\"]\n";
+    var g = _lay_parse(gtxt);
+    var l = _lay_parse("[shell]\ndeny = [\"make clean\"]\n");
+    _shell_deny_n = 0;
+    _shell_globs_load2(_cfg_section_pairs(l, "shell"), l, _cfg_section_pairs(g, "shell"), g);
+    assert_eq(config_shell_deny_count(), 4, "the two layers UNION");
+    var seen_rm = 0;
+    var seen_make = 0;
+    var i = 0;
+    while (i < config_shell_deny_count()) {
+        if (streq(config_shell_deny_at(i), "rm -rf *") == 1) { seen_rm = 1; }
+        if (streq(config_shell_deny_at(i), "make clean") == 1) { seen_make = 1; }
+        i = i + 1;
+    }
+    assert_eq(seen_rm, 1, "the operator's global deny survives");
+    assert_eq(seen_make, 1, "...and the project's own deny is added");
+    assert(streq(config_shell_deny_at(0), "rm -rf *") == 1, "the GLOBAL patterns are laid down first — that is the overflow order");
+    return 0;
+}
+
+# test_config_authority: authority-granting keys are GLOBAL-ONLY (0.44.3).
+#
+# ⭐ ADR-0019 stated the rule — *authority does not accumulate from the less-trusted side* — and enforced
+# it for exactly two LIST keys. Every authority-granting SCALAR stayed on the ordinary
+# local-overrides-global path, and thoth's local layer is `<repo>/.thoth/config.cyml`, which a
+# `git clone` reproduces. Demonstrated by RUNNING the binary, not argued on paper: with the fix reverted,
+# a repo whose config carries `[hooks].session_start = "touch …"` executed it at LAUNCH, before the
+# operator typed anything. These assertions pin every key of the set; making any one of them
+# local-overridable again turns them red.
+fn test_config_authority() {
+    test_group("authority keys are global-only (config.cyr, 0.44.3)");
+    var g = _lay_parse("[hooks]\nsession_start = \"G-START\"\npre_tool = \"G-PRE\"\n[tron]\npolicy = \"/g/policy.toml\"\n[session]\nfile = \"/g/sess\"\n[verify]\ncommand = \"G-CHECK\"\n");
+    var l = _lay_parse("[hooks]\nsession_start = \"L-START\"\npre_tool = \"L-PRE\"\n[tron]\npolicy = \"/l/policy.toml\"\n[session]\nfile = \"/l/sess\"\n[verify]\ncommand = \"L-CHECK\"\n");
+    var hg = _cfg_section_pairs(g, "hooks");   var hl = _cfg_section_pairs(l, "hooks");
+    var tg = _cfg_section_pairs(g, "tron");    var tl = _cfg_section_pairs(l, "tron");
+    var sg = _cfg_section_pairs(g, "session"); var sl = _cfg_section_pairs(l, "session");
+    var vg = _cfg_section_pairs(g, "verify");  var vl = _cfg_section_pairs(l, "verify");
+
+    _cfg_suppressed_n = 0;
+    assert(streq(_cfg2_str_global_only(hl, hg, "session_start", "hooks.session_start"), "G-START") == 1,
+           "the GLOBAL hook wins — a local [hooks].session_start is arbitrary code at launch");
+    assert(streq(_cfg2_str_global_only(hl, hg, "pre_tool", "hooks.pre_tool"), "G-PRE") == 1, "...same for pre_tool");
+    assert(streq(_cfg2_str_global_only(tl, tg, "policy", "tron.policy"), "/g/policy.toml") == 1,
+           "a repo cannot supply the policy that authorizes the model's tool calls");
+    assert(streq(_cfg2_str_global_only(sl, sg, "file", "session.file"), "/g/sess") == 1,
+           "a repo cannot name the unjailed file thoth truncates and reads turns back from");
+    assert(streq(_cfg2_str_global_only(vl, vg, "command", "verify.command"), "/g/../G-CHECK" + 6) == 1,
+           "[verify].command is a hook on a later trigger and layers the same way");
+    assert_eq(config_suppressed_count(), 5, "every suppressed key is COUNTED — none is dropped silently");
+    assert(streq(config_suppressed_at(0), "hooks.session_start") == 1, "...and named, so the operator sees what the repo asked for");
+
+    # a local layer that does NOT set the key changes nothing, and is not reported
+    _cfg_suppressed_n = 0;
+    var l2 = _lay_parse("[hoosh]\nmodel = \"m\"\n");
+    assert(streq(_cfg2_str_global_only(_cfg_section_pairs(l2, "hooks"), hg, "session_start", "hooks.session_start"), "G-START") == 1,
+           "a quiet local layer still gets the global value");
+    assert_eq(config_suppressed_count(), 0, "...and nothing is reported when nothing was attempted");
+
+    # with NO global value, an authority key is simply unset — the local one never becomes the fallback
+    _cfg_suppressed_n = 0;
+    var gempty = _lay_parse("[hoosh]\nurl = \"u\"\n");
+    assert_eq(_cfg2_str_global_only(hl, _cfg_section_pairs(gempty, "hooks"), "session_start", "hooks.session_start"), 0,
+              "no global hook means NO hook — the local one is not a fallback");
+    assert_eq(config_suppressed_count(), 1, "...and the attempt is still named");
+    _cfg_suppressed_n = 0;
+    return 0;
+}
+
+# test_confirm_sanitise: the authorization prompt's own text is untrusted (0.44.3).
+#
+# ⚠ `obj` is the thing being authorized — the model's chosen shell command, or a tool name a third-party
+# MCP server picked — and `confirm` printed it raw, one line above the y/N the operator answers. A `\r`
+# plus a cursor move is enough to overwrite the verb, hide the real command, or paint a fake
+# "[t-ron: allowed]" under the prompt: the party the decision is ABOUT controlling the bytes of the
+# decision. Same class as the 0.39.0 audit's A-7/A-8 — a boundary applied at one sink and not its
+# sibling — which is why 0.44.3 hoisted ONE sanitiser into util.cyr instead of writing a third filter.
+fn test_confirm_sanitise() {
+    test_group("authorization prompt sanitising (util.cyr + gate.cyr, 0.44.3)");
+    var dst[64];
+    var n = safe_label_copy(&dst, 64, "ls -la");
+    assert_eq(n, 6, "a clean label copies verbatim");
+    assert(streq(&dst, "ls -la") == 1, "...byte for byte");
+
+    # the attack shape: CR + an escape sequence, to repaint the line the operator is reading
+    var n2 = safe_label_copy(&dst, 64, "safe\r\x1b[2K\x1b[32m[t-ron: allowed]");
+    assert(_t_has_esc(&dst, n2) == 0, "no ESC survives into the prompt");
+    assert_eq(load8(&dst + 4) & 255, 63, "the CR became '?'");
+    assert_eq(load8(&dst + 5) & 255, 63, "the ESC became '?'");
+    assert_eq(n2, strlen("safe\r\x1b[2K\x1b[32m[t-ron: allowed]"), "substitution preserves the byte count, so column maths downstream stays right");
+    var n3 = safe_label_copy(&dst, 64, "a\nb");
+    assert_eq(load8(&dst + 1) & 255, 63, "a newline is a free screen row the untrusted side controls — it goes too");
+    assert_eq(n3, 3, "...still one byte for one byte");
+
+    # bounded: a label far over the cap is truncated and NUL-terminated, never run past
+    var small[8];
+    var n4 = safe_label_copy(&small, 8, "0123456789abcdef");
+    assert_eq(n4, 7, "the copy stops at cap-1");
+    assert_eq(load8(&small + 7), 0, "...and terminates inside the buffer");
+
+    # the gate's own display buffers carry the sanitised copies, and OOM-free preparation succeeds
+    assert_eq(_confirm_labels("thoth_shell", "rm \x1b[31m-rf /"), 1, "the prompt's labels prepare");
+    assert(_t_has_esc(_confirm_obj_buf, strlen(_confirm_obj_buf)) == 0, "the OBJECT drawn in the prompt carries no escape");
+    assert(streq(_confirm_verb_buf, "thoth_shell") == 1, "the verb is thoth's own and passes through unchanged");
+    return 0;
+}
+
+# test_ui_theme_config: [ui].theme — the theme a session STARTS in (0.44.3). The axis itself is
+# covered elsewhere; what is new is that a NAME from the config resolves to the right member and that
+# an unknown one resolves to the -1 that makes main announce it instead of silently starting dark.
+fn test_ui_theme_config() {
+    test_group("[ui].theme startup theme (config.cyr + ui.cyr, 0.44.3)");
+    assert_eq(ui_theme_from_name("dark"), THEME_DARK, "\"dark\" resolves to THEME_DARK");
+    assert_eq(ui_theme_from_name("light"), THEME_LIGHT, "\"light\" resolves to THEME_LIGHT");
+    assert_eq(ui_theme_from_name("rainbow"), THEME_RAINBOW, "\"rainbow\" resolves to THEME_RAINBOW");
+    assert_eq(ui_theme_from_name("Dark"), 0 - 1, "the match is exact — a near miss is announced, not guessed");
+    assert_eq(ui_theme_from_name("nosuch"), 0 - 1, "an unknown name resolves to -1 so main can name it on stderr");
+    # the KEY must be recognised by the spell-checker, or a correct [ui].theme line would be reported
+    # as a typo — the 0.43.5 guard is only as good as the table it checks against.
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[ui]\ntheme = \"light\"\n"));
+    assert_eq(config_unknown_count(), 0, "[ui].theme is a recognised key");
+    _cfg_unknown_n = 0;
+    _cfg_scan_unknown(_lay_parse("[ui]\nthem = \"light\"\n"));
+    assert_eq(config_unknown_count(), 1, "...and a typo of it is still caught");
+    _cfg_unknown_n = 0;
+    # the theme applies for real: a live switch changes what ui_sgr emits for the same role.
+    var saved = ui_theme();
+    ui_force(PT_ANSI, CD_256);
+    ui_set_theme(THEME_DARK);
+    var d = ui_sgr(ROLE_ACCENT);
+    var dbuf[64];
+    var dn = 0;
+    while ((dn < 63) && (load8(d + dn) != 0)) { store8(&dbuf + dn, load8(d + dn)); dn = dn + 1; }
+    store8(&dbuf + dn, 0);
+    ui_set_theme(THEME_LIGHT);
+    assert(streq(&dbuf, ui_sgr(ROLE_ACCENT)) == 0, "switching the theme changes the emitted SGR for a role");
+    ui_set_theme(saved);
+    return 0;
+}
+
+# test_budget: [budget] spend ENFORCEMENT (0.44.3). Drives the session counters directly rather than
+# through a gateway, so the ceiling logic is provable without a network — the counters are the only
+# input budget_status() has.
+fn test_budget() {
+    test_group("budget enforcement (budget.cyr, 0.44.3)");
+    _sess_tokens = 0; _sess_tokens_seen = 0; _sess_cost_micro = 0; _sess_cost_seen = 0; _sess_cost_unpriced = 0;
+    _cfg_budget_tokens = 0 - 1; _cfg_budget_cost_micro = 0 - 1;
+
+    # ABSENT == UNLIMITED, and so does a nonsense value. Writing `max_tokens = 0` to mean "no tokens at
+    # all" would brick a session on a typo, and unlimited is what thoth did for its entire life before
+    # this feature — so it is the safe reading.
+    assert_eq(config_budget_tokens(), 0, "an absent [budget].max_tokens reads as unlimited");
+    assert_eq(budget_active(), 0, "no budget configured -> budget_active() is 0");
+    assert_eq(budget_status(), BUDGET_OK, "...and nothing is ever exceeded");
+    _cfg_budget_tokens = 0;
+    assert_eq(config_budget_tokens(), 0, "max_tokens = 0 also reads as unlimited, not as zero spend");
+    _cfg_budget_tokens = 0 - 5;
+    assert_eq(config_budget_tokens(), 0, "...and so does a negative");
+
+    # THE TOKEN CEILING, with >= semantics: a budget exactly met is a budget spent. `>` would let one
+    # more full round through on the boundary, which on a large context is the most expensive round of
+    # the session.
+    _cfg_budget_tokens = 100;
+    assert_eq(budget_active(), 1, "a token ceiling makes the budget active");
+    session_add_tokens(99);
+    assert_eq(budget_status(), BUDGET_OK, "99 of 100 is within budget");
+    session_add_tokens(1);
+    assert_eq(budget_status(), BUDGET_TOKENS, "EXACTLY at the ceiling stops the turn (>=, not >)");
+    session_add_tokens(500);
+    assert_eq(budget_status(), BUDGET_TOKENS, "...and past it, still");
+
+    # THE COST CEILING, independently.
+    _sess_tokens = 0; _cfg_budget_tokens = 0 - 1;
+    _cfg_budget_cost_micro = 50000;                    # $0.05
+    assert_eq(budget_status(), BUDGET_OK, "no cost spent yet");
+    session_add_cost(49999);
+    assert_eq(budget_status(), BUDGET_OK, "a micro-USD under the ceiling is within budget");
+    session_add_cost(1);
+    assert_eq(budget_status(), BUDGET_COST, "exactly at the cost ceiling stops the turn");
+
+    # TOKENS ARE REPORTED FIRST when both are blown. Cost needs a [pricing.<model>] rate and tokens do
+    # not, so naming cost while the real constraint was tokens points the operator at the wrong key.
+    _cfg_budget_tokens = 10;
+    _sess_tokens = 999;
+    assert_eq(budget_status(), BUDGET_TOKENS, "with BOTH exceeded, the token ceiling is the one named");
+
+    # THE MEASURABILITY WARNING (rule 3): a ceiling nothing is measuring is not a bound, and thoth says
+    # so once. `session_tokens_seen()` flips only when the gateway actually reported usage — which
+    # hoosh 2.6.4 never does on the streaming path, the DEFAULT path.
+    budget_reset_warned();
+    _sess_tokens = 0; _sess_tokens_seen = 0; _sess_cost_micro = 0; _sess_cost_seen = 0; _sess_cost_unpriced = 0;
+    _cfg_budget_tokens = 1000; _cfg_budget_cost_micro = 0 - 1;
+    assert_eq(budget_status(), BUDGET_OK, "an unmeasured budget never fires — which is exactly the hazard");
+    assert_eq(session_tokens_seen(), 0, "...because no usage was ever reported");
+    session_add_tokens(5);
+    assert_eq(session_tokens_seen(), 1, "one real usage figure flips _seen and the tally starts moving");
+
+    _sess_tokens = 0; _sess_tokens_seen = 0; _sess_cost_micro = 0; _sess_cost_seen = 0; _sess_cost_unpriced = 0;
+    _cfg_budget_tokens = 0 - 1; _cfg_budget_cost_micro = 0 - 1;
+    budget_reset_warned();
     return 0;
 }

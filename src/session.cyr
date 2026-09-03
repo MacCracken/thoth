@@ -133,7 +133,15 @@ fn session_recap_covers() { _conv_ensure(); return conv_recap_covers(_conv_activ
 fn session_set_recap(text, covers) { _conv_ensure(); return conv_set_recap(_conv_active, text, covers); }
 fn session_recap_clear() { _conv_ensure(); return conv_set_recap(_conv_active, 0, 0); }
 # conv_new: start a fresh conversation and make it active; returns its index.
-fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_active = vec_len(_conv_store) - 1; return _conv_active; }
+#
+# ⚠ 0.44.3 — IT MUST CLEAR THE COMPACT FLOOR, for exactly the reason `conv_switch` below spells out and
+# `conv_fork` already honours: the floor is an INDEX into ONE conversation's message vector. `/compact`
+# on a long conversation sets it to (say) 40; `/new` then made an EMPTY conversation active while the
+# floor still said 40, so every request built from that point dropped the first forty messages of a
+# history that has none — permanently, for the life of the new conversation. Two of the three
+# conversation-switching entry points cleared it and the third did not; the sibling that was missed is
+# the one a user reaches most.
+fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_active = vec_len(_conv_store) - 1; hoosh_compact_floor_clear(); return _conv_active; }
 # conv_switch: make conversation `i` active (bounds-checked); returns the active index.
 # ⚠ conv_switch clears the compact floor: the floor is an INDEX into ONE conversation's message vector,
 # so carrying it across a switch would evict an arbitrary prefix of the conversation you switched TO —
