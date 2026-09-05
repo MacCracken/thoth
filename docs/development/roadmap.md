@@ -69,10 +69,12 @@ Four gates remain, in rough dependency order.
    (`agnos/scripts/smoke/basestack-run-smoke.sh`: *"Reusable across aegis/bote/phylax/hoosh/thoth"*).
    Nothing in thoth's tree said so, so the claim was re-read for releases instead of re-run —
    the exact failure [`../doc-health.md`](../doc-health.md) lesson 1 exists to catch. Measured
-   2026-09-04 on the 5,371,944-byte `build/thoth_agnos`: gnoboot + OVMF boot the kernel,
-   exec-from-disk streams the ELF off ext2, `elf_load` maps it, ring-3 code reaches `write(1)`,
-   `thoth 0.44.3` appears on the serial console, `run: exit 0`, no fault. Verified non-vacuous
-   by breaking it: a deliberately wrong expect-string makes the same harness FAIL.
+   2026-09-04 on the ~5.4 MB `build/thoth_agnos`: gnoboot + OVMF boot the kernel, exec-from-disk
+   streams the ELF off ext2, `elf_load` maps it, ring-3 code reaches `write(1)`, thoth's own version
+   string appears on the serial console, `run: exit 0`, no fault. Verified non-vacuous by breaking
+   it: a deliberately wrong expect-string makes the same harness FAIL. Re-run at every release —
+   `scripts/agnos-run.sh` derives the expected string from `VERSION`, so it cannot pass on a stale
+   binary.
 
    ⚠ Read the lane's output correctly before calling a regression: it prints three
    `undefined function` warnings (`load_signing_seed`, `sign_commit_body`,
@@ -221,31 +223,37 @@ one is decided.
   **bote** `[lib.jsonx]` micro-profile (233 fns → 7). Both are upstream-profile + `sync-*.sh`
   re-vendor work, and neither profile exists upstream yet.
 
-  **This is warning hygiene, not headroom.** Re-measured at **0.43.2** with `CYRIUS_STATS=1` (re-run,
-  not re-read — the house rule in [`../doc-health.md`](../doc-health.md)): `fn_table` **8522/32768
-  (26 %)**, identifiers **271744/524288 (52 %)**, `var_table` **4942/8192 (60 %)** — the tightest of the
-  three. The static-data warning reads **1,002,408 bytes (~1.0 MB)**; it is vendored sigil and unfixable
-  from thoth. `CYRIUS_DCE` does not help.
+  **This is warning hygiene, not headroom — and at 0.44.5 it is not even a capacity argument any more.**
+  Re-measured at **0.44.5** on the 6.5.51 pin with `CYRIUS_STATS=1` (re-run, not re-read — the house rule
+  in [`../doc-health.md`](../doc-health.md)): `fn_table` **8760/131072 (6.7 %)**, identifiers
+  **278512/8388608 (3.3 %)**, `var_table` **5095/1048576 (0.5 %)**, `fixup_table` **39905/1048576**, plus
+  6.5.51's new `fn_name_hash 8760/32768 slots, maxprobe 13`. The static-data warning reads **651,400
+  bytes**. `CYRIUS_DCE` does not help.
 
-  ⚠ **The real ceiling is elsewhere: cyrius's fixed 8 MB `preprocess_out` arena slot**, a hard error with
-  no flag and no manifest key. Filed upstream as
-  `cyrius/docs/development/issues/2026-08-24-preprocess-out-8mb-ceiling.md`.
+  ⚠ **Read the DENOMINATORS, not just the numerators.** The 0.43.2 figures above this line were
+  `8522/32768 (26 %)`, `271744/524288 (52 %)` and `4942/8192 (60 %) — the tightest of the three`. The
+  numerators barely moved; the **caps** grew 4x / 16x / 128x. `var_table` went from "the tightest at
+  60 %" to under 0.5 % without thoth changing a line. A cap is a measurement too.
 
-  **Read the number correctly.** 0.43.0 published "over the limit by 5,370 bytes" and that was a
-  **misread, retracted at 0.43.1**: the compiler reports the size at which expansion *aborted*, not a
-  total, so a larger probe file yields a larger number for the same tree. Headroom is measured by summing
-  the include graph. Re-summed at **0.43.2**: `src/main.cyr` **≈4.79 MB** and `tests/thoth_core.tcyr`
-  **≈4.94 MB** of project sources, against a `lib/` snapshot of ≈7.34 MB from which each unit pulls only
-  its declared subset. So the binding unit sits in the **low-to-mid 60 % range** of the 8 MB slot, not the
-  ~96 % the pre-retraction figure implied.
+  ✅ **The 8 MB `preprocess_out` ceiling is CLOSED — raised to 24 MB at cyrius 6.5.40**, which is *below*
+  the 6.5.43 pin thoth was already running. Three thoth docs went on calling it "a fixed 8 MB arena, a
+  hard error with no flag" after their own compiler had fixed it. The filing is in cyrius's
+  `issues/archived/`, and its own note is worth carrying: `preprocess_out` was only the **first of five
+  stacked caps** (token table, identifier pool, function table, identifier dedup), so raising it alone
+  would have bought ~30 %, not 3x.
 
-  That is real headroom, and it changes the *urgency* without changing the *direction*: the slot is fixed,
-  the trajectory is one way, and 0.43.0 did hit it — cleared by dropping the GUI block that unit never
-  tested (131 KB), not by shrinking the feature. Lean `[lib.X]` profiles are the shipped workaround
-  (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit `[lib.read]`, sankoch `[lib.zlib]`) and they buy
-  features, not trajectory. The sit carve below remains the largest single win available thoth-side, but
-  it is **no longer the most likely thing to block the next feature** — that claim was derived from the
-  retracted number and is withdrawn with it.
+  ⚠ **It was load-bearing, not spare.** Re-summed at 0.44.5 by walking the actual include graph — 85
+  project files + the 41 declared stdlib modules + `lib/unicode/` — the binding unit is **8.84 MB**:
+  **110 % of the old 8 MB slot**, **37 % of the new 24 MB one**. thoth had already outgrown the old
+  ceiling. (The 0.43.2 "≈4.79 MB / ≈4.94 MB" figures counted *project sources only* and omitted the
+  stdlib half the same unit pulls in, which is why they read as comfortable.)
+
+  **The direction survives; the urgency does not.** 0.43.0 genuinely hit the old wall and cleared it by
+  dropping a GUI block that unit never tested (131 KB), not by shrinking a feature. Lean `[lib.X]`
+  profiles remain the shipped workaround (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit
+  `[lib.read]`, sankoch `[lib.zlib]`) and they buy features, not trajectory. But the sit carve is now
+  **purely** about the three `undefined function` warnings and the `cmd_reset` collision — every
+  capacity justification it once carried has been retired by measurement.
 
 > **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will
 > grow **voice input** (mic → speech-to-text) and **read-back** (text-to-speech) — but by
@@ -278,25 +286,83 @@ one is decided.
 > external/substrate primitive. Recorded here so they are not lost in code comments. **The first
 > two are defects, not degradations, and are labelled as such.**
 
-- **macOS builds and runs again — with a NEW floor gap behind it.** The lane's blocker was thoth's own
-  (`src/tui.cyr` calling darshana's Linux-gated termios/signalfd half with no target guard), closed at
-  0.44.3 by `src/term.cyr`. Verified natively on Apple Silicon (macOS 26.6.2): the Mach-O arm64 binary
-  compiles with no undefined symbol and `thoth --version` / the line REPL run. ⚠ The toolchain there is
-  **6.5.35**, not the pinned 6.5.43 — that version is not installed on the Mac and there is no package
-  registry to install it from; the two `lib/` snapshots differ by **zero** removed, renamed or
-  newly-private symbols (symbol-diffed both directions), so the lane's result is not toolchain-dependent,
-  but a native 6.5.43 build there is still owed.
+- **macOS builds and runs — and the floor gap behind it is now closed too.** The lane's blocker was
+  thoth's own (`src/tui.cyr` calling darshana's Linux-gated termios/signalfd half with no target
+  guard), closed at 0.44.3 by `src/term.cyr`. Verified natively on Apple Silicon (macOS 26.6.2): the
+  Mach-O arm64 binary compiles with no undefined symbol and `thoth --version` / the line REPL run.
 
-  ⛔ **What the unblocked lane exposed: `getenv` always returns 0 on macOS.** `lib/io.cyr`'s `getenv`
-  reads `/proc/self/environ`, which Darwin does not have, and has a branch for AGNOS but none for macOS
-  (Windows is served by the `GetEnvironmentVariableA` reroute). Measured on the Mac: `TERM` and `HOME`
-  both come back null in a process where both are set. Consequences, both honest degradations rather
-  than failures: **no colour** (`_ui_color_capable` needs `TERM`, so every macOS session resolves to
-  PT_PLAIN — `NO_COLOR` is equally inert), and **no global config layer** (`~/.thoth/config.cyml` is
-  found via `HOME`, so on macOS only the local layer exists). This is a cyrius floor gap, not thoth's to
-  patch — porting the floor means fixing it where the floor lives. Filed upstream at
-  `cyrius/docs/development/issues/2026-09-03-macos-getenv-always-null-no-proc.md` with a reproduction
-  and two suggested implementations.
+  ⚠ **Still owed: a native build at the CURRENT pin.** The Mac has **6.5.35** installed, against a pin
+  now at **6.5.51**, and the pin gate refuses outright — so 0.44.5's macOS evidence is a floor-level
+  A/B probe (below), not a full thoth binary. Installing a 6.5.51 macOS toolchain there is a
+  cyrius-repo task (`scripts/build-macos-arm64-tarball.sh` cross-emits one from Linux); it has been
+  owed since 0.44.3, when the pin was 6.5.43, and the debt simply moved with the pin. It is not
+  load-bearing for the lane's *result* — the snapshots differ by zero removed, renamed or
+  newly-private symbols in both directions — but it is the difference between "the floor fix works on
+  Darwin" (proven) and "thoth at 0.44.5 runs on Darwin" (inferred).
+
+  ✅ **`getenv` on macOS — FIXED upstream at cyrius 6.5.45, CONSUMED by thoth at 0.44.5.** The gap
+  0.44.3's unblocked lane exposed: `lib/io.cyr`'s `getenv` read `/proc/self/environ`, which Darwin does
+  not have, with a branch for AGNOS and none for macOS. Consequences were **no colour**
+  (`_ui_color_capable` needs `TERM`, so every macOS session resolved to PT_PLAIN) and **no global config
+  layer** (`~/.thoth/config.cyml` is found via `HOME`) — and, after ADR-0021, that second one meant
+  **every authority key was suppressed on macOS**, so a Mac user could not set `[tron].policy`,
+  `[hooks]` or `[verify]` by any means. cyrius now reads envp off the Mach-O init stack; the filing is
+  in that repo's `issues/archived/`.
+
+  ⭐ **Verified on real hardware, as an A/B rather than a claim** (ecb, Apple Silicon, macOS 26.6.2):
+  the same probe built the same way returns `<NULL>` for `HOME`/`TERM`/a custom var against the stock
+  6.5.35 floor, and returns all three correctly against the `lib/io.cyr` thoth now ships. The filing
+  also undercounted its own blast radius — **Windows was broken identically** (the
+  `GetEnvironmentVariableA` reroute existed but nothing in the stdlib called it) and is fixed in the
+  same hop.
+
+  ⚠ **Owed: a full macOS thoth binary at the 6.5.51 pin.** Only 6.5.35 is installed on that Mac and
+  the pin gate refuses; shipping a 6.5.51 macOS toolchain there is a cyrius-repo task. The floor fix
+  itself reaches the Mac regardless, because thoth git-tracks its own `lib/`. Note the same bug bites
+  cyrius's own tooling there: 6.5.35's dep resolver resolves `HOME` to a fallback `/root` on macOS.
+
+  ⛔ **DEFECT (fail-OPEN), found by the first-ever macOS run of the test suite at 0.44.5: process
+  spawn is broken on macOS, so `shell`, `[hooks]` and `[verify]` do not work there.** The lane has
+  only ever been checked with `--version` and the line REPL; once the Mac had a toolchain at the pin,
+  `cyrius test` ran natively for the first time and returned **780 passed / 29 failed**, against
+  2814/2814 on Linux at the same commit. All 29 are one root cause in five groups: `shell tool` (13),
+  `lifecycle hooks` (7), `pre_tool hook covers the parallel executor` (3), `verification loop` (3),
+  and the `read_roots` half of the jail tests (3).
+
+  ⭐ **The security consequence is the reason this is labelled a defect and not a degradation.** A
+  `pre_tool` hook that exits non-zero is supposed to BLOCK the tool call; on macOS the assertion
+  `a NON-ZERO exit BLOCKS the call` returns **allowed**. The operator's blocking deny — the control
+  `[hooks]` exists to provide, documented as "a deterministic, code-enforced deny a prompt cannot
+  argue with" — **fails open** there. Same for a hook that times out, which is documented as degrading
+  CLOSED. This violates the house rule that security degrades closed, on a target thoth now advertises
+  as supported.
+
+  **Root cause, measured — three hardcoded Linux-x86_64 constants in `src/exec.cyr`, and the file says
+  so itself.** Its own comment declares the path *"Linux x86_64 syscall #109. DECLARED x86_64-ONLY:
+  this whole POSIX path already uses a raw x86_64 poll(#7) below, and the aarch64 lane ships
+  size-gapped, so it never runs there."* That was true when written and stopped being true the moment
+  0.44.3 unblocked the macOS lane — **a documented residual is a claim with an expiry date**, this
+  project's own recurring theme, landing again.
+  1. `sys_open(path, 193, 384)` — `193` is `O_WRONLY|O_CREAT|O_EXCL` in **Linux** numbering. Darwin
+     uses `O_CREAT = 0x200`, `O_EXCL = 0x800`. The capture temp file is therefore never created,
+     `out_fd < 0`, and `exec_shell_capture` returns the `-1` spawn-fail sentinel — which is exactly
+     what the failing assertions report (`printf exits 0 (got -1, expected 0)`).
+  2. `syscall(109, 0, 0)` / `syscall(109, pid, pid)` — raw Linux `setpgid`. cyrius warns at build
+     time: *"syscall 109 not routed by the Mach-O ARM translation; will fault on macOS"* (twice,
+     matching the two call sites). The process-group kill silently degrades.
+  3. `syscall(7, 0, 0, 100)` — raw Linux `poll` as a 100 ms sleep. Same class; `lib/chrono.cyr`
+     already exposes a portable `sleep_ms`.
+
+  **Two owners.** (2) and (3) are thoth's — the same shape as the `src/tui.cyr` termios bug 0.44.3
+  fixed, and the fix is the house rule from [[arm64-legacy-syscall-constants]]: *a raw
+  `syscall(SYS_FOO, …)` is a portability CLAIM; use the stdlib wrapper*. (1) is a **floor gap worth
+  filing**: `lib/syscalls_macos.cyr`'s `sys_open` passes flags through raw and defines no `O_*`, while
+  `lib/io.cyr:44` defines `O_CREAT = 64` — the Linux value — globally, so *every* cyrius consumer that
+  opens a file with `O_CREAT` on Darwin is wrong, not just thoth.
+
+  ⚠ **Until this is fixed, `shell` / `[hooks]` / `[verify]` must be treated as NOT AVAILABLE on
+  macOS.** thoth does not currently announce that, which is itself a violation of announce-don't-fake
+  and is part of the fix.
 
   ⚠ **The T2 TUI does not run on macOS and is not meant to yet.** `term_raw` returns -1 there (darshana
   has no BSD termios peer and 0.44.3 does not invent one — a stub pretending to work is worse than an

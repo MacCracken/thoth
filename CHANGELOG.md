@@ -2,6 +2,97 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.5] - 2026-09-04
+
+**Toolchain refresh 6.5.43 → 6.5.51 — and macOS gets its environment back.** Suite
+**300 + 1011 + 810 + 505 + 183 + 5** (unchanged). Linux / aarch64 / AGNOS green; Windows unchanged.
+No thoth source change: this is a floor refresh plus the doc corrections it forces.
+
+### Changed — Cyrius pin `6.5.43` → `6.5.51`
+
+Checked, not assumed, per the refresh checklist. Symbol-diffed both snapshots in both directions:
+**one** public fn removed (`sys_blkstats`, a withdrawn AGNOS syscall thoth never called), **zero**
+newly `private`, **six** top-level `var`s added (all TLS/thread internals) and **six** enum members
+— none colliding with anything in `src/`. `cyrius lib sync --full` then `cmp`-swept all 102 snapshot
+files: **0 differing**, with exactly the 10 files the snapshot diff predicted actually changed.
+Warning sets re-diffed **per target** (linux / aarch64 / agnos / win): identical except byte counts,
+plus one new reachable fn on the AGNOS lane (`sys_sysinfo_n`). The suite was run **first** on the new
+pin — 2814/2814, no behavioural surprise (bayan is byte-unchanged this hop, so no repeat of the TOML
+rewrite that 6.5.43 slipped in).
+
+⚠ **One gap in our own checklist, now closed.** The recorded procedure scans for removed fns, newly
+`private` fns and added top-level `var`s — but **not enum members**, and 6.5.51 extends
+`SysInfoConst`/`SysInfoOffset` in place. A duplicate enum member is exactly as silent as a duplicate
+`var`. The scan is now part of the procedure.
+
+### Fixed — `getenv` works on macOS again (and, it turns out, on Windows)
+
+cyrius 6.5.45 fixed `getenv` returning 0 for **every** name on macOS: `lib/io.cyr` read
+`/proc/self/environ`, which Darwin does not have, and had a branch for AGNOS but none for Darwin. It
+now reads envp off the Mach-O init stack. thoth was two releases past the fix and still carrying the
+gap as an open limitation — the fix ships **inside thoth's own git-tracked `lib/`**, so the pin is
+what was holding it out.
+
+What this restores on macOS: **colour** (`_ui_color_capable` needs `TERM`, so every session had
+resolved to PT_PLAIN, with `NO_COLOR` equally inert) and the **`~/.thoth/config.cyml` global layer**
+— which after ADR-0021 matters far more than it did when the gap was filed, because authority keys
+are read from the global layer *only*. With `HOME` null there was no global layer, so **`[tron].policy`,
+`[hooks]` and `[verify]` were unsettable on macOS by any means**, and non-interactive use with any
+gated tool was dead.
+
+⭐ **Verified on real hardware as an A/B, not asserted.** On ecb (Apple Silicon, macOS 26.6.2) the same
+probe built the same way returns `<NULL>` for `HOME` / `TERM` / a custom var against the stock 6.5.35
+floor, and returns all three correctly against the `lib/io.cyr` thoth now ships. The upstream filing
+also **undercounted its own blast radius**: Windows was broken identically — the
+`GetEnvironmentVariableA` reroute existed but nothing in the stdlib ever called it — and is fixed in
+the same hop. Three targets with no `/proc`, one defect, handled once per target instead of once for
+the class.
+
+**Verified end to end on the Mac once it was brought to 6.5.51.** `scripts/build.sh macos` produces a
+6.45 MB arm64 Mach-O; the binary reports its version, and both consequences of the `getenv` fix are
+observable on it: the greeting emits the amber palette under a pty with `TERM` set (zero ANSI before),
+and adding a `~/.thoth/config.cyml` that grants the same authority keys as the local layer makes the
+ADR-0021 suppression notice **disappear** — which can only happen if `HOME` resolves and the global
+layer parses.
+
+⛔ **AND THAT FIRST NATIVE TEST RUN FOUND THE LANE IS MUCH NARROWER THAN "BUILDS AND RUNS" SOUNDED.**
+`cyrius test` had never run on macOS — the lane has only ever been checked with `--version` and the
+line REPL. It returns **780 passed / 29 failed**, against 2814/0 on Linux at the same commit. One root
+cause, five groups (`shell` 13, `[hooks]` 7, the parallel `pre_tool` hook 3, `[verify]` 3, `read_roots`
+3): `src/exec.cyr` hardcodes **Linux-x86_64** constants — `sys_open(path, 193, 384)` (Darwin's `O_CREAT`
+is `0x200`, not `64`, so the capture temp file is never created and every spawn returns the `-1`
+sentinel), plus raw `setpgid`#109 and `poll`#7 that cyrius warns at build time are unrouted on Mach-O.
+⭐ **`[hooks]` therefore fails OPEN there** — a `pre_tool` hook exiting non-zero does not block the
+call — which is a security regression on a target thoth advertises as supported, so it is filed as a
+DEFECT rather than a degradation. `src/exec.cyr`'s own comment declares the path *"DECLARED
+x86_64-ONLY"*: true when written, false since 0.44.3 unblocked the lane. Not fixed here — a floor
+refresh should not carry a behaviour change — and recorded in the roadmap with its two owners (the raw
+syscalls are thoth's; `lib/io.cyr`'s global `O_CREAT = 64` is wrong for Darwin for *every* cyrius
+consumer and is worth filing upstream).
+
+### Fixed (docs) — the capacity argument thoth had been making for three releases was obsolete
+
+⛔ **The 8 MB `preprocess_out` ceiling was raised to 24 MB at cyrius 6.5.40 — *below* the 6.5.43 pin
+thoth was already running.** Three documents went on calling it "a fixed 8 MB arena, a hard error with
+no flag, filed upstream" after their own compiler had fixed it, and the vendor-carve item's urgency was
+argued from it.
+
+⚠ **And it had been load-bearing, not spare.** Re-summed by walking the actual include graph (85
+project files + 41 declared stdlib modules + `lib/unicode/`), the binding unit is **8.84 MB** — **110 %
+of the old 8 MB slot**, 37 % of the new one. thoth had already outgrown the old ceiling; the raise is
+what keeps it building. The 0.43.2 figures that read as comfortable (`≈4.79 MB`) counted *project
+sources only* and omitted the stdlib half the same unit pulls in.
+
+⚠ **Read the denominators, not just the numerators.** `CYRIUS_STATS` re-measured: `fn_table`
+**8760/131072 (6.7 %)**, identifiers **278512/8388608 (3.3 %)**, `var_table` **5095/1048576 (0.5 %)**,
+plus 6.5.51's new `fn_name_hash 8760/32768 slots, maxprobe 13`. The numerators barely moved since
+0.43.2; the **caps** grew 4x / 16x / 128x. `var_table` went from "the tightest of the three at 60 %" to
+under 0.5 % without thoth changing a line. A cap is a measurement too, and this one had never been
+re-read.
+
+Consequence for the roadmap: the sit vendor-carve is now **purely** about three `undefined function`
+warnings and one `duplicate fn` collision. Every capacity justification it carried is retired.
+
 ## [0.44.4] - 2026-09-04
 
 **thoth runs on AGNOS, and four controls that were half-shipped are now whole.** Suite

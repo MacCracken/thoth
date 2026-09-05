@@ -91,7 +91,17 @@ enum SysNrAgnos {
     SYS_LSTAT = 102;               # lstat(path,len,statbuf) → 0/-1; no-follow on the FINAL symlink (1.56.53)
     SYS_STATFS = 103;              # statfs(path, pathlen, buf) → 0 / -1; fills a FROZEN 32-byte record (1.56.56/.57)
     SYS_MOUNTLIST = 104;           # mountlist(buf, max) → record count / -1; 80-byte records (1.56.59)
-    SYS_BLKSTATS = 105;            # blkstats(tag, field) → cumulative SECTORS / -1 (agnos 1.56.59)
+    # ⛔ SYS_BLKSTATS = 105 WAS HERE AND IS WITHDRAWN (v6.5.45). agnos minted it in the
+    # 1.56.59 cut, filed it, and cyrius shipped the peer in 6.5.44 — then an extend-vs-mint
+    # audit of the whole 106-syscall surface found it never needed a number: a closed 5-value
+    # tag enum over flat by-tag arrays is exactly a fixed-size tail block, so the counters
+    # belong in `sysinfo`#35's tail and now live at +104 (see sys_sysinfo_n in lib/sys.cyr).
+    # ⚠ REMOVED RATHER THAN LEFT STANDING: a needless syscall number is PERMANENT SURFACE —
+    # every consumer, every ABI gate and every peer carries it forever, and it becomes the
+    # obvious place to hang the next block-telemetry field. Verified against the LIVE agnos
+    # kernel, not the filing: `kernel/core/syscall.cyr` has no `num == 105` arm and `blkstats`
+    # appears nowhere in kernel/. A wrapper with no kernel arm does not error — the caller gets
+    # the dispatch fall-through value and may render it as a statistic. Do not re-add 105.
     SYS_UNAME = 34;                # uname(buf, len=64) → 0; 4×16-byte fields (§4.3)
     SYS_SYSINFO = 35;             # sysinfo(buf, len=40) → 0; 5×u64, byte-direct (§4.4)
     SYS_LSEEK = 58;               # lseek(fd, offset, whence) → new pos / -1; whence 0=SET/1=CUR/2=END
@@ -198,7 +208,8 @@ fn sys_ptrscan(buf, max): i64 {
 #   +8   u64 state       1 = ready · 2 = running · 3 = claiming (0 = dead is skipped)
 #   +16  u64 ppid        0 = init
 #   +24  u8  name[32]    NUL-terminated basename, recorded by the ELF loader
-#   +56  u64 reserved    always 0 today
+#   +56  u64 packed      LOW u32 = cpu ticks (100 Hz) · HIGH u32 = rss pages (4 KiB)
+#                    (agnos 1.56.59; the record size did NOT change)
 #
 # ⭐ WHY IT EXISTS. Before this, AGNOS had NO enumeration primitive of any kind — the
 # ring-3 surface offered getpid/spawn/waitpid/kill and nothing that could answer "what is
@@ -209,9 +220,24 @@ fn sys_ptrscan(buf, max): i64 {
 # cannot change mid-walk, but a pid may exit before the caller acts on it. That race is
 # inherent to any ps(1) and belongs to the caller — re-probe before signalling.
 #
-# ⚠ THE RESERVED FIELD IS NOT SPARE SPACE. Per-process rss and cpu time are not tracked by
-# the kernel yet; when they are, they land at +56 and the record size does NOT change.
-# Consumers should zero-check it rather than assuming it stays 0 forever.
+# ⛔ READ THE HALVES, NEVER THE SLOT. `load32(rec + 56)` is the cpu tick count and
+# `load32(rec + 60)` the rss page count on little-endian targets; equivalently
+# `load64(rec + 56) & 0xFFFFFFFF` and `(load64(rec + 56) >> 32) & 0xFFFFFFFF`. Rendering the
+# packed u64 as EITHER field yields a positive, plausible, nonsensical number — on a live
+# process it is about 6.6e12, which formats fine and reads as 2,000 years of ticks or 25 PB of
+# pages.
+#
+# ⚠ THIS SLOT WAS DOCUMENTED AS `reserved, always 0` UNTIL v6.5.46, and agnos 1.56.59 had
+# filled it (`kernel/core/syscall.cyr`, one `store64(pl_rec + 56, (pl_rs << 32) | pl_tk)`).
+# A consumer trusting the old text does one of two things and both are bad: zero-check the u64
+# and skip it — staying CORRECT while silently reading no data, which is what chakshu did for a
+# release — or render it, and publish the nonsense number above. This is the second release
+# chakshu lost to a stale note in this file; `proclist` itself was recorded as "blocked
+# upstream" for five releases after it shipped.
+#
+# ⚠ THE RSS HALF IS 4 KiB PAGES BUT ITS RESOLUTION IS 2 MB: the kernel counts present-AND-user
+# PDEs and adds 512 pages each, so the value is always a multiple of 512. It is honest as
+# "physical memory committed to this process", not as a precise footprint.
 #
 # ⚠ GUARD THE CALL SITE. A kernel older than 1.56.47 has no `#99` arm. Treat a negative
 # return as "this kernel cannot enumerate" and degrade, rather than reporting an empty
@@ -219,6 +245,14 @@ fn sys_ptrscan(buf, max): i64 {
 fn sys_proclist(buf, max): i64 {
     return syscall(SYS_PROCLIST, buf, max);
 }
+
+# Accessors for the `+56` packed pair. Named, because hand-decoding a packed field at every
+# call site is how the halves get swapped — and both halves are plausible positive integers, so
+# a swap produces a wrong number rather than an obvious failure.
+# `rec` is a record base as returned by walking the sys_proclist buffer in 64-byte strides.
+fn proclist_cpu_ticks(rec): i64 { return load64(rec + 56) & 0xFFFFFFFF; }
+# RSS in 4 KiB pages. ⚠ Always a multiple of 512 — see the resolution note above.
+fn proclist_rss_pages(rec): i64 { return (load64(rec + 56) >> 32) & 0xFFFFFFFF; }
 
 # ── Mount-enumeration band (agnos 1.56.59, `#104 mountlist`) ────────
 #
@@ -919,35 +953,6 @@ fn sys_blk_write(h, lba, buf, nsec): i64 { return syscall(SYS_BLK_WRITE, h, lba,
 # blk_info(h, out) — device geometry → 0 / -1 (writes {capacity_lbas, lba_bytes}).
 fn sys_blk_info(h, out): i64             { return syscall(SYS_BLK_INFO, h, out); }
 
-# blkstats(tag, field) — per-device cumulative disk I/O → sectors / -1 (agnos 1.56.59, `#105`).
-#   tag    a BLK_* device tag: 1 virtio · 2 nvme · 3 ahci · 4 usb-ms · 5 ramdisk. This is the
-#          SAME identity `blk_enum`#75 hands out, so a consumer enumerates with #75 and reads
-#          each device's traffic here — there is no second naming scheme to reconcile.
-#   field  0 = sectors READ · 1 = sectors WRITTEN.
-#   -1     for a tag outside 1..5 or an unknown field.
-#
-# Counted at `blk_read_on`/`blk_write_on`, the one place every backend passes through, and only
-# on a COMPLETED transfer. Monotonic since boot, never reset — so a monitor differences two
-# samples for a rate, and anything that cleared them would yield a negative delta.
-#
-# ⚠ SECTORS, NOT BYTES, DELIBERATELY. This layer transfers exactly one sector per call, and a
-# byte count computed kernel-side would have to multiply by the per-device LBA size, which can
-# be 4096 — so it would be wrong the moment a 4Kn device appears. A caller wanting bytes
-# multiplies by the `lba_bytes` that `blk_info`#79 already reports to it.
-#
-# ⚠ A NEW NUMBER RATHER THAN WIDENING `blk_info`#79, and the reason generalises: #79 fills a
-# FIXED struct with no length argument, so extending its record is an ABI break for every
-# already-shipped caller. It is the same rule that minted `mountlist`#104 instead of widening
-# `mount`#11 — unused syscall argument registers carry STALE VALUES rather than zero on agnos,
-# so widening a shipped number hands old callers an arbitrary value.
-#
-# ⚠ AGNOS-ONLY, on the same honest-gap reasoning as `sys_mountlist` / `sys_statfs` above: a
-# consumer that calls this builds on agnos and fails to LINK elsewhere, which is a better
-# failure than a number invented from memory (the v6.5.36 defect class — `sys_pause` issuing
-# flock) or a fail-closed -1 stub claiming unsupported on hosts that do have disk counters.
-fn sys_blkstats(tag, field): i64 {
-    return syscall(SYS_BLKSTATS, tag, field);
-}
 # blk_close(h) — release the handle → 0 / -1.
 fn sys_blk_close(h): i64                 { return syscall(SYS_BLK_CLOSE, h); }
 

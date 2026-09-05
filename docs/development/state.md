@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.44.5** — **toolchain refresh 6.5.43 → 6.5.51; macOS gets its environment back** (2026-09-04).
+No thoth source change — a floor refresh plus the doc corrections it forces. Symbol-diffed both ways
+(1 fn removed, thoth never called it; 0 newly private; 6 vars + 6 enum members added, no collisions),
+`lib sync --full` + `cmp` on all 102 files (0 differing), warning sets re-diffed **per target**
+(identical bar byte counts), suite run FIRST on the new pin (2814/2814). ⭐ **cyrius 6.5.45's `getenv`
+fix lands**: `getenv` returned 0 for every name on macOS (no `/proc` on Darwin), which cost **colour**
+and the **global config layer** — and after ADR-0021 that second one meant `[tron].policy`, `[hooks]`
+and `[verify]` were unsettable on macOS *by any means*. Verified on ecb as an A/B: stock 6.5.35 floor
+returns `<NULL>` for `HOME`/`TERM`, thoth's shipped `lib/io.cyr` returns both. Windows was broken
+identically and is fixed in the same hop. ⛔ Also retired a capacity argument three docs had been
+making since 0.43.0: **the 8 MB `preprocess_out` ceiling was raised to 24 MB at 6.5.40, below the pin
+thoth already ran** — and it had been load-bearing, since the binding unit re-sums to **8.84 MB**,
+110 % of the old slot. The caps grew 4x/16x/128x while the numerators barely moved. Once the Mac was brought to 6.5.51 the lane was verified end to end — but the
+first-ever native `cyrius test` there returned **780/29 FAILED** (Linux 2814/0 at the same commit): ⛔
+`src/exec.cyr` hardcodes Linux-x86_64 open flags + `setpgid`#109 + `poll`#7, so process spawn is broken
+and **`shell` / `[hooks]` / `[verify]` do not work on macOS — `[hooks]` fails OPEN.** Filed as a DEFECT
+in the roadmap, deliberately not fixed inside a floor refresh.
+
 **0.44.4** — **thoth runs on AGNOS, and four half-shipped controls are now whole** (2026-09-04). An
 8-dimension adversarial sweep over the shipped 0.44.3 tree (every finding handed to an independent
 skeptic) filed **34 confirmed, 29 refuted** — and most refutations read *"already documented, verbatim"*,
@@ -3170,7 +3188,24 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.43` (in `cyrius.cyml [package].cyrius`). 0.44.3 moved it from
+- **Cyrius pin**: `6.5.51` (in `cyrius.cyml [package].cyrius`). 0.44.5 moved it from `6.5.43`,
+  and the hop forced **no source migration** — checked, not assumed. Symbol-diffed both ways:
+  **one** public stdlib fn removed (`sys_blkstats`, a withdrawn AGNOS syscall thoth never called),
+  **zero** newly `private`, **six** top-level `var`s added (all TLS/thread internals: `_tls_blk`,
+  `_tls_key`, `_tls_live`, `_THR_CTL`, `TLS_REG_MAX`, `THREADS_CONCURRENT`) and **six** enum members
+  (`SI_CPU_BASE`, `SI_BLK_BASE`, `SYSINFO_SIZE_CPU`, …) — none colliding with anything in `src/`.
+  ⚠ The enum-member scan is NEW and is not optional: 6.5.51 extends `SysInfoConst`/`SysInfoOffset`
+  in place, and a duplicate enum member is as silent as a duplicate `var`. `cyrius lib sync --full`
+  then `cmp`-swept all 102 snapshot files: **0 differing**, 10 files actually changed
+  (`io`, `sys`, `sigil`, `syscalls_x86_64_agnos`, `sync_macos`, `thread*`), exactly matching the
+  snapshot diff. Warning sets re-diffed **per target** (linux/aarch64/agnos/win): identical to
+  0.44.4 except byte counts, plus one new reachable fn on the AGNOS lane (`sys_sysinfo_n`).
+  Suite run FIRST on the new pin — 2814/2814, no behavioural surprise (bayan is byte-unchanged this
+  hop, so no repeat of the 6.5.43 TOML rewrite below).
+
+  ⭐ **What this hop BUYS: `getenv` works on macOS (and Windows) again.** See the Targets matrix.
+
+  0.44.3 moved it from
   `6.5.35`, and the hop forced no source migration — **checked, not assumed**: zero public
   stdlib symbols removed, zero newly `private`, zero `var` removed, and the 11 `var`s added
   (bayan's `TOML_K_*` kinds, `_AW_DT_DIR`, `_hm_seed*`) collide with nothing in `src/`
@@ -3186,13 +3221,24 @@ floor; never fork the spine.**
   went red, each off by exactly one, which is what identified it. Fixed in `_cfg_scan_unknown`
   and pinned by three new assertions that go red when the guard is reverted.
 
-  ⭐ **The compiler-table ceilings moved, a lot.** Measured after the last edit of this release:
-  `fn_table 8753 / 131072` (was /32768), `identifiers 278270 / 8388608` (was /524288),
-  `var_table 5087 / 1048576` (was /8192), `fixup_table 39825 / 1048576`; static data 651,336 B.
-  Every one of these was a live worry at 0.37.0–0.38.2; none is now — `var_table`, the tightest at
-  60 % in 0.43.2, is under 0.5 %. The 8 MB `preprocess_out` arena remains the real ceiling and is
-  unchanged; the binding units re-summed at **≈4.32 MB** (`src/main.cyr`) and **≈4.30 MB**
-  (`tests/thoth_core.tcyr`) of project source, still comfortably inside it.
+  ⭐ **The compiler-table ceilings moved, a lot.** Re-measured at 6.5.51 after the last edit of this
+  release: `fn_table 8760 / 131072` (was /32768), `identifiers 278512 / 8388608` (was /524288),
+  `var_table 5095 / 1048576` (was /8192), `fixup_table 39905 / 1048576`, and a new 6.5.51 meter
+  `fn_name_hash 8760 / 32768 slots, maxprobe 13`; static data 651,400 B. Every one of these was a
+  live worry at 0.37.0–0.38.2; none is now — `var_table`, the tightest at 60 % in 0.43.2, is under
+  0.5 %.
+
+  ⛔ **AND THE 8 MB `preprocess_out` CEILING IS GONE — it was raised to 24 MB at cyrius 6.5.40, i.e.
+  BELOW the 6.5.43 pin thoth was already on.** Three thoth docs went on calling it "a fixed 8 MB
+  arena, a hard error with no flag" after their own compiler had fixed it; the upstream filing
+  (`2026-08-24-preprocess-out-8mb-ceiling.md`) is in cyrius's `archived/` with the note that
+  `preprocess_out` was only the first of FIVE stacked caps, all raised.
+
+  ⚠ **This was not spare headroom — it was load-bearing.** Re-summed at 0.44.5 by walking the actual
+  include graph (85 project files + 41 declared stdlib modules + `lib/unicode/`): the binding unit is
+  **8.84 MB**, which is **110 % of the old 8 MB slot** and **37 % of the new 24 MB one**. thoth had
+  already outgrown the old ceiling; the raise is what keeps it building. (The earlier "≈4.32 MB"
+  figure counted project source only, not the stdlib half the same unit pulls in.)
 
   The pin advanced steadily across the 0.11.x–0.33.x arc via
   `cyrius lib sync` floor refreshes (no thoth source change) — most recently
@@ -3302,7 +3348,7 @@ Apple Silicon with the 6.5.35 installed there — see its row)** — see
 |---|---|---|---|
 | x86_64 Linux | _(default)_ | **shipped** — built, tested (264 + 1894 + 183 + 3), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (re-verified 0.38.6 / Cyrius 6.5.35) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS again at 0.44.3** — first since 0.6.4. `src/term.cyr` closed thoth's own unguarded call into darshana's Linux-gated termios half; verified natively on Apple Silicon (macOS 26.6.2), `--version` + line REPL. ⚠ Built with the **6.5.35** installed on that Mac, not the pinned 6.5.43 (not installed there; no package registry) — the two `lib/` snapshots differ by zero removed/renamed/newly-private symbols. Line tier only (no BSD termios ⇒ no T2), and no colour / no global config until the upstream `getenv` gap is fixed | `build/thoth_macos` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS at the 6.5.51 pin** (verified natively on Apple Silicon, macOS 26.6.2, 0.44.5 — 6.45 MB Mach-O arm64). ⭐ `getenv` FIXED: colour and the `~/.thoth/config.cyml` global layer both work again, proven behaviourally on the shipping binary. ⛔ **BUT the first-ever native `cyrius test` run there returned 780/29 FAILED** (Linux: 2814/0 at the same commit): `src/exec.cyr` hardcodes Linux-x86_64 open flags + `setpgid`#109 + `poll`#7, so process spawn is broken and **`shell`, `[hooks]` and `[verify]` do not work — and `[hooks]` fails OPEN.** Treat those three as unavailable on macOS until fixed; see the roadmap's DEFECT entry. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.38.6 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
 

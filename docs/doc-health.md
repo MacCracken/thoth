@@ -6,6 +6,30 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.44.5** (2026-09-04, not a full sweep): the toolchain refresh 6.5.43 → 6.5.51 updated
+> `CHANGELOG.md`, `docs/development/state.md` (version block, the whole **Toolchain** block re-measured
+> after the last edit, the macOS row of the **Targets** matrix), `docs/development/roadmap.md` (the
+> macOS `getenv` limitation **closed**, verified on hardware; the vendor-carve capacity argument
+> **retired**), and `README.md` (status stamp + the multi-target paragraph, which still said macOS
+> does not build — stale since 0.44.3 and doubly so now).
+>
+> ⭐ **Three lessons, all of them lesson 1 wearing different hats.**
+> 1. **A CAP is a measurement too, and nobody re-reads denominators.** The roadmap tracked
+>    `fn_table 8522/32768`, `identifiers 271744/524288`, `var_table 4942/8192 (60 %, the tightest)`.
+>    Re-measured: the numerators barely moved, but the caps had grown **4x / 16x / 128x**, so the
+>    "tightest" number is now 0.5 %. Three releases of capacity argument rested on denominators that
+>    had silently changed. When re-running a measurement, re-run *both halves of the fraction*.
+> 2. **A limitation filed upstream needs its ARCHIVE checked, not its filing re-read.** Both the
+>    `preprocess_out` ceiling and the macOS `getenv` gap were fixed in cyrius **below the pin thoth was
+>    already running** — the filings had moved to `issues/archived/` with ✅ banners. thoth kept
+>    describing both as open. A carried "filed upstream" item should be re-checked against the dep's
+>    archive every refresh; that is a two-second `ls`.
+> 3. **A retired worry can still have been load-bearing — say which.** The 8 MB ceiling was gone, but
+>    re-summing the include graph showed the binding unit at **8.84 MB, 110 % of the old slot**. "This
+>    is no longer a problem" and "this was never a problem" are different claims, and only the first
+>    one is true here. The earlier comfortable-looking figure had counted project sources and omitted
+>    the stdlib half of the same unit.
+>
 > **Touched at 0.44.4** (2026-09-04, not a full sweep): the release added `scripts/agnos-run.sh` and
 > updated `CHANGELOG.md`, `docs/development/state.md` (version block, Tests counts, the **Targets**
 > matrix — AGNOS now BUILDS **and RUNS** — and the `## Next` block, which had drifted into
