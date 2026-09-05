@@ -49,10 +49,12 @@ var _shell_logcmd = 0;       # bounded command copy for the audit log, lazy
 var SHELL_LOGCMD_CAP = 208;  # audit-log command field is truncated to this (bounds the log line)
 var _shell_deny_pat = 0;     # the [shell.deny] pattern that matched (for the refusal message), or 0
 var _shell_last_allowed = 0; # 1 if the last shell_run_tool passed the gate (for roundlog accounting)
-var _shell_last_ok = 0;      # 1 if the last shell_run_tool actually ran + captured a result
+var _shell_last_ok = 0;      # 1 if the last shell_run_tool RAN TO COMPLETION inside the deadline
 
 # shell_last_allowed / shell_last_ok: the roundlog outcome of the last shell_run_tool, read by the
 # dispatch site in agent.cyr (mirrors how the memory branch sets rl_kind/rl_ok inline).
+# `ok` = the command ran to completion inside [shell].timeout_ms. A non-zero EXIT CODE is still ok
+# (a legitimate result the model acts on); a DEADLINE KILL is not (thoth stopped it, answer unknown).
 fn shell_last_allowed() { return _shell_last_allowed; }
 fn shell_last_ok() { return _shell_last_ok; }
 
@@ -246,5 +248,11 @@ fn shell_run_tool(args_cstr) {
     if (timed == 1) { verdict = "timeout"; }
     _shell_audit_run(cmd, verdict, code, total, sev);
     _shell_last_ok = 1;
+    # 0.44.4: ok means RAN TO COMPLETION, not "we reached the fork". A command the deadline SIGKILLed
+    # reported ok:true to --events, the session log, /audit and the round card — the one outcome an
+    # operator most needs to see as a failure, recorded as a success. The split is deliberate: a
+    # NON-ZERO EXIT is a legitimate result (`grep` found nothing; the model reads the code and reacts),
+    # so it stays ok:true; a TIMEOUT is thoth killing the command with the answer unknown, so it does not.
+    if (timed == 1) { _shell_last_ok = 0; }
     return _shell_build_result(total, code, timed, config_shell_timeout_ms(), truncated);
 }

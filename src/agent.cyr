@@ -762,8 +762,73 @@ fn _ag_alloc() {
     }
     return 0;
 }
+# 0.44.4 — THE PROVIDER'S OWN ERROR, off the stream.
+#
+# hoosh <=2.6.4 discarded a permanent provider 4xx and sent the client a well-formed HTTP 200 SSE
+# stream carrying one `finish_reason:"stop"` frame — an error laundered into a silent success. thoth
+# 0.44.2 learned to REPORT that as a gateway fault, and printed "an upstream provider error is not
+# forwarded to this stream", which was true then.
+#
+# It is not true now: hoosh 2.6.5+ forwards the provider's status and message IN-STREAM as
+#   {"error":{"type":"upstream_error","code":429,"message":"..."},"choices":[{"delta":{},...}]}
+# and thoth read only `choices[0].delta`, so it held the operator's answer and told them to go find it
+# in someone else's log. Captured off a fake gateway emitting that exact frame against the shipping
+# binary. The frame carries `choices` today; the read is placed BEFORE the `choices` guard anyway, so
+# a leaner future error frame cannot make this silently stop firing.
+#
+# `message` is PROVIDER-controlled text. hoosh bounds it and flattens control bytes, but that is a
+# dep's invariant and not thoth's, so it is copied bounded here and printed through emit_clean_line.
+var AG_ERRMSG_CAP = 512;
+var _ag_err_code = 0;        # provider HTTP status off the stream, 0 if none seen
+var _ag_err_msg = 0;         # AG_ERRMSG_CAP bounded copy of the provider's message, lazy
+var _ag_err_seen = 0;        # 1 if an in-stream error frame arrived this round
+
+# _ag_err_reset: clear the in-stream error for a NEW ROUND.
+#
+# ⚠ This is a RESET SET, and the recorded lesson (0.43.0 _roundlog_cur, 0.43.2 memory recall, 0.44.3
+# _agent_work_full) is that a member missed here fails as a LIE, not a crash: last round's provider
+# error would be reported against this round's turn. Called from the same two places
+# `_agent_empty_stream` and `_ag_frames` are cleared.
+fn _ag_err_reset() {
+    _ag_err_code = 0;
+    _ag_err_seen = 0;
+    if (_ag_err_msg != 0) { store8(_ag_err_msg, 0); }
+    return 0;
+}
+fn agent_err_seen() { return _ag_err_seen; }
+fn agent_err_code() { return _ag_err_code; }
+fn agent_err_msg() { if (_ag_err_msg == 0) { return 0; } if (load8(_ag_err_msg) == 0) { return 0; } return _ag_err_msg; }
+
+# _ag_err_capture: pull a top-level `error` object out of an already-parsed frame. Returns 1 if one
+# was found. Keeps the FIRST error of a round — the provider's initiating fault, not a later echo.
+fn _ag_err_capture(v) {
+    var err = bayan_json_v_obj_get(v, "error");
+    if (err == 0) { return 0; }
+    if (_ag_err_seen == 1) { return 1; }
+    _ag_err_seen = 1;
+    var c = bayan_json_v_obj_get(err, "code");
+    if (c != 0) { _ag_err_code = bayan_json_v_int(c); }
+    var m = bayan_json_v_obj_get(err, "message");
+    if (m != 0) {
+        var ms = bayan_json_v_str(m);
+        if (ms != 0) {
+            if (_ag_err_msg == 0) { _ag_err_msg = alloc(AG_ERRMSG_CAP); }
+            if (_ag_err_msg != 0) {
+                var n = str_len(ms);
+                if (n > (AG_ERRMSG_CAP - 1)) { n = AG_ERRMSG_CAP - 1; }
+                var d = str_data(ms);
+                var i = 0;
+                while (i < n) { store8(_ag_err_msg + i, load8(d + i)); i = i + 1; }
+                store8(_ag_err_msg + i, 0);
+            }
+        }
+    }
+    return 1;
+}
+
 fn _ag_reset() {
     _ag_alloc();
+    _ag_err_reset();
     _ag_max = 0;
     _ag_frames = 0;
     _ag_over_cap = 0;
@@ -991,6 +1056,19 @@ var PAR_ARGS_CAP = 16384;
 # clipped payload (t-ron scans the same bytes daimon would receive). Unifies the
 # previously divergent serial-unbounded / parallel-silently-truncated behavior.
 var AGENT_ARGS_MAX = 16383;
+# Max tool-call `name` bytes accepted, shared by BOTH execution paths (= PAR_NAME_CAP-1,
+# the parallel slot's usable size), for the same reason AGENT_ARGS_MAX exists one line up.
+#
+# ⚠ 0.44.4 — the THIRD time a protection landed on one executor and not its twin (0.43.1: the
+# blocking `pre_tool` hook; 0.44.3: the socket deadline, the name truncation, the 128 KB result
+# clip — all parallel-only misses). This one runs the other way: 0.44.3 gave the PARALLEL path a
+# name guard and left the serial path unbounded, so `[hoosh].parallel = false` still forwarded a
+# name of any length. The name is the model's own `function.name` and it is NOT inert data
+# downstream: t-ron's audit ring copies it with no clip (`_audit_dup_cstr`) and its JSON export
+# sizes the whole buffer at a flat 512 bytes/event, so a long name writes past that allocation.
+# thoth cannot fix t-ron's serializer from here, but it can refuse to hand it a name no real tool
+# has. A 256-byte tool name is not a call; it is a payload.
+var AGENT_NAME_MAX = 255;
 var PAR_ID_CAP = 128;
 var PAR_OUT_CAP = 131072;    # per-call result text, copied out of the arena
 var PAR_ARENA_CAP = 524288;  # per-call arena: headers + url + conn buffers + response body
@@ -1011,6 +1089,7 @@ var _par_kind = 0;           # PAR_MAX i64 roundlog verdict kinds
 var _par_over = 0;           # PAR_MAX byte flags: 1 if args exceeded AGENT_ARGS_MAX (refused)
 var _par_overname = 0;       # PAR_MAX byte flags: 1 if the tool NAME exceeded the slot (refused, 0.44.3)
 var _par_hookblocked = 0;    # PAR_MAX byte flags: 1 if the operator's pre_tool hook denied it (0.43.1)
+var _par_withheld = 0;       # PAR_MAX byte flags: 1 if toolpin withheld it this session (0.44.4)
 
 fn _par_ctx_ptr(s) { return _par_ctx + s * PAR_CTX_SZ; }
 
@@ -1032,6 +1111,7 @@ fn _par_alloc() {
     _par_over = alloc(PAR_MAX);
     _par_overname = alloc(PAR_MAX);
     _par_hookblocked = alloc(PAR_MAX);
+    _par_withheld = alloc(PAR_MAX);
     # 0.44.3: an unchecked alloc here is a NULL WRITE on the first `store8`/`store64` of phase 1 — the
     # arena loop below already refuses on OOM and the caller already falls back to the serial executor,
     # so the honest thing is to take that same exit for every slot buffer rather than only the arenas.
@@ -1050,6 +1130,7 @@ fn _par_alloc() {
     if (_par_over == 0) { ok = 0; }
     if (_par_overname == 0) { ok = 0; }
     if (_par_hookblocked == 0) { ok = 0; }
+    if (_par_withheld == 0) { ok = 0; }
     if (ok == 0) { return 0; }
     var i = 0;
     while (i < PAR_MAX) {
@@ -1140,7 +1221,7 @@ fn _agent_run_calls_par(tcs, nc) {
             # "so t-ron never scans a truncated payload"); the name did not. Refuse, symmetrically —
             # a 256-byte tool name is not a real call, and silently renaming one is worse than saying no.
             store8(_par_overname + k, 0);
-            if (nm != 0) { if (strlen(nm) > (PAR_NAME_CAP - 1)) { store8(_par_overname + k, 1); } }
+            if (nm != 0) { if (strlen(nm) > AGENT_NAME_MAX) { store8(_par_overname + k, 1); } }
             var ga = ar; if (ga == 0) { ga = "{}"; }
             _par_cstr_copy(_par_args + k * PAR_ARGS_CAP, PAR_ARGS_CAP, ga);
             _par_cstr_copy(_par_id + k * PAR_ID_CAP, PAR_ID_CAP, id);
@@ -1156,6 +1237,7 @@ fn _agent_run_calls_par(tcs, nc) {
             var kind = RL_DENIED;
             store8(_par_over + k, 0);
             store8(_par_hookblocked + k, 0);
+            store8(_par_withheld + k, 0);
             # Refuse oversize args BEFORE gating, and gate on the FULL `ga` (an
             # accepted call's slot copy equals it, since strlen(ga) <= AGENT_ARGS_MAX
             # = PAR_ARGS_CAP-1) — so t-ron never scans a truncated payload and no
@@ -1173,6 +1255,9 @@ fn _agent_run_calls_par(tcs, nc) {
             elif (load8(_par_overname + k) == 1) { kind = RL_DENIED; }
             elif (strlen(ga) > AGENT_ARGS_MAX) { store8(_par_over + k, 1); kind = RL_DENIED; }
             elif (hooks_pre_tool(nm, ga) == 0) { store8(_par_hookblocked + k, 1); kind = RL_DENIED; }
+            # 0.44.4: a rug-pulled tool is withheld from the advertisement; refuse it here too, or it stays
+            # fully invokable on the DEFAULT executor. Same placement as the serial twin: before the gate.
+            elif (toolpin_withheld(nm) == 1) { store8(_par_withheld + k, 1); kind = RL_DENIED; }
             elif (gate_authorize(nm, ga, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
             store8(_par_allowed + k, allowed);
             store64(_par_kind + k * 8, kind);
@@ -1262,6 +1347,7 @@ fn _agent_run_calls_par(tcs, nc) {
                 # 0.43.1: say WHICH control refused. A hook denial and a policy denial are different facts,
                 # and the model's next move differs — the serial path has always distinguished them.
                 if (load8(_par_hookblocked + k) == 1) { res = "(blocked by the pre_tool hook)"; }
+                if (load8(_par_withheld + k) == 1) { res = "(tool definition changed this session; withheld — `/tools trust` to accept and re-pin)"; }
             }
             var nmout = 0;
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
@@ -1394,6 +1480,11 @@ fn _agent_run_calls_serial(tcs, nc) {
         spin_label_set(nm);                     # 0.19.1: name the running tool on the spinner (no-op off TUI)
         var t0 = clock_now_ms();                # 0.19.1: time the gate+invoke
         if (nm == 0) { res = "(no tool name)"; rl_kind = RL_NONAME; }
+        # 0.44.4: refuse an oversize NAME before it reaches the gate, symmetrically with the parallel
+        # path (see AGENT_NAME_MAX). t-ron copies the name into its audit ring unclipped and exports at
+        # a flat 512 bytes/event, so an over-long name writes past that allocation — and the name is the
+        # model's own `function.name`. Refused BEFORE `gate_authorize`, so the ring never receives it.
+        elif (strlen(nm) > AGENT_NAME_MAX) { res = "(tool name too long; call refused)"; rl_kind = RL_DENIED; }
         elif (strlen(gp) > AGENT_ARGS_MAX) { res = "(tool arguments too large; call refused — split into smaller calls)"; rl_kind = RL_DENIED; }
         # 0.41.0 (T2-4): the operator's pre_tool hook. Placed HERE — before the per-tool arms, so it sees
         # EVERY tool including the local ones — and it can only ever DENY. A hook cannot approve what
@@ -1525,6 +1616,14 @@ fn _agent_run_calls_serial(tcs, nc) {
             res = "(tool not available: no daimon wired — only the local shell/memory tools run standalone)";
             res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
+        # 0.44.4: a tool whose MCP definition CHANGED this session is withheld from the advertisement —
+        # and, until now, nothing stopped the model naming it anyway (from earlier context, a
+        # hallucination, or the injection this defense exists for). Refuse it here, BEFORE the gate, the
+        # way every local arm already refuses its own disabled/denied case. Left DENIED in the roundlog.
+        elif (toolpin_withheld(nm) == 1) {
+            res = "(tool definition changed this session; withheld — `/tools trust` to accept and re-pin)";
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
+        }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
             rl_kind = RL_ALLOWED;
             # 0.44.2: one blocking MCP round-trip with nothing printing until it returns — animate it.
@@ -1637,6 +1736,10 @@ fn _agent_sse_cb(ctx, ev) {
     var v = bayan_json_v_parse_buf(data, strlen(data));
     if (v == 0) { spin_anim_release(); return 1; }
     _hoosh_account_usage(v);   # 0.10.2/0.10.3: tokens + cost from the trailing usage frame
+    # 0.44.4: hoosh 2.6.5+ forwards the provider's own error IN-STREAM. Read it BEFORE the `choices`
+    # guard below — the current frame happens to carry `choices`, a future leaner one might not, and a
+    # check placed after that early return would silently never fire. See _ag_err_capture.
+    _ag_err_capture(v);
     var choices = bayan_json_v_obj_get(v, "choices");
     if (choices == 0) { spin_anim_release(); return 1; }
     var first = bayan_json_v_arr_get(choices, 0);
@@ -1941,6 +2044,7 @@ fn agent_turn(prompt) {
     while ((done == 0) && (iter < max_iters)) {
         _hoosh_acc_reset();
         _agent_empty_stream = 0;
+        _ag_err_reset();        # 0.44.4: same reset set — see _ag_err_reset
         # 0.44.2: one line per round BEFORE the request goes out. A hang leaves the last `round` line as
         # the marker of exactly where it stopped — which round, and whether a reply or a tool ever came
         # back — and that is the single most useful fact in a post-mortem of a turn that never returned.
@@ -2001,10 +2105,26 @@ fn agent_turn(prompt) {
                 ui_emit(ROLE_RED, "  hoosh returned an EMPTY stream");
                 ui_emit(ROLE_FAINT, " — HTTP 200, no content, no tool calls, not one frame.");
                 oprintln("");
-                ui_emit(ROLE_FAINT, "  the gateway accepted the request and produced nothing, so the reason is on ITS side, not the model's:");
-                oprintln("");
-                ui_emit(ROLE_FAINT, "  check the hoosh log (an upstream provider error is not forwarded to this stream).");
-                oprintln("");
+                # 0.44.4: if the provider's own error came down the stream, SAY IT. hoosh 2.6.5+ forwards
+                # status + message in-stream; thoth used to read past it and send the operator to a log
+                # for a fact it was already holding. Only fall back to the generic advice when there
+                # genuinely was no error frame — an empty stream with no reason is still possible.
+                if (agent_err_seen() == 1) {
+                    ui_emit(ROLE_FAINT, "  the provider rejected it and hoosh forwarded the reason:");
+                    oprintln("");
+                    ui_emit(ROLE_RED, "  upstream");
+                    if (agent_err_code() > 0) { ui_emit(ROLE_RED, " HTTP "); emit(ui_sgr(ROLE_RED)); ofmt_int(agent_err_code()); emit(ui_reset()); }
+                    if (agent_err_msg() != 0) { ui_emit(ROLE_FAINT, ": "); emit_clean_line(agent_err_msg()); }
+                    oprintln("");
+                    log_begin("stream_upstream_error"); log_kv_int("http", agent_err_code());
+                    if (agent_err_msg() != 0) { log_kv_str("message", agent_err_msg()); }
+                    log_kv_int("turn", session_turns()); log_commit(SK_ERROR);
+                } else {
+                    ui_emit(ROLE_FAINT, "  the gateway accepted the request and produced nothing, so the reason is on ITS side, not the model's:");
+                    oprintln("");
+                    ui_emit(ROLE_FAINT, "  check the hoosh log (it forwards a provider error in-stream since 2.6.5; this stream carried none).");
+                    oprintln("");
+                }
                 session_history_pop_last();
                 log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "empty_stream"); log_commit(SK_ERROR);
             }

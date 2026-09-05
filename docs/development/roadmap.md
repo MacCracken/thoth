@@ -57,10 +57,22 @@ data-producer polish.
 
 Four gates remain, in rough dependency order.
 
-1. **AGNOS lane — BUILD cleared, runtime is gate 2.** The `--agnos` lane compiles a valid
+1. **AGNOS lane — BUILD cleared, and the ELF now RUNS. ✓** The `--agnos` lane compiles a valid
    statically-linked x86_64-AGNOS ELF with **no unresolved symbol on any reachable path**, and
-   zero thoth source change. The **runtime** half — the ELF targets the AGNOS syscall ABI and
-   cannot be exercised on a Linux host — is gate 2. **Status: build ✓ · runtime → gate 2.**
+   zero thoth source change. The **runtime** half is no longer open: `./scripts/agnos-run.sh`
+   boots the real AGNOS kernel under QEMU and thoth loads and runs in ring 3.
+   **Status: build ✓ · runtime ✓ (2026-09-04) · remaining end-to-end work is gate 2.**
+
+   ⭐ **This gate said the ELF "cannot be exercised on a Linux host" and that was wrong.** It is
+   true that a Linux *process* cannot run an AGNOS-ABI binary — but AGNOS ships a QEMU harness
+   that boots the real kernel, and it has NAMED thoth since before this gate was written
+   (`agnos/scripts/smoke/basestack-run-smoke.sh`: *"Reusable across aegis/bote/phylax/hoosh/thoth"*).
+   Nothing in thoth's tree said so, so the claim was re-read for releases instead of re-run —
+   the exact failure [`../doc-health.md`](../doc-health.md) lesson 1 exists to catch. Measured
+   2026-09-04 on the 5,371,944-byte `build/thoth_agnos`: gnoboot + OVMF boot the kernel,
+   exec-from-disk streams the ELF off ext2, `elf_load` maps it, ring-3 code reaches `write(1)`,
+   `thoth 0.44.3` appears on the serial console, `run: exit 0`, no fault. Verified non-vacuous
+   by breaking it: a deliberately wrong expect-string makes the same harness FAIL.
 
    ⚠ Read the lane's output correctly before calling a regression: it prints three
    `undefined function` warnings (`load_signing_seed`, `sign_commit_body`,
@@ -70,10 +82,22 @@ Four gates remain, in rough dependency order.
    0.13.x, *after* this gate's build half cleared at 0.12.3. They are expected output, not a
    gate failure. Clearing them is the vendor-carve item below.
 
-2. **At least one downstream consumer green on AGNOS (external verification gate).** The
-   nearest advanceable gate: gate 1's build half is done, so this is unblocked to start. It
-   needs a real AGNOS runner to exercise the `build/thoth_agnos` ELF with the spine native and
-   a consumer green end to end. **Status: blocking · owner: external · needs an AGNOS host.**
+2. **At least one downstream consumer green on AGNOS (end-to-end gate).** Read as three rungs,
+   because collapsing them is what let this gate sit as "needs an AGNOS host" while a host was
+   next door:
+
+   - **Rung 1 — thoth loads and runs in ring 3. ✓ PROVEN 2026-09-04.** `./scripts/agnos-run.sh`
+     (a wrapper around AGNOS's own `basestack-run-smoke.sh` — we shell out to it, we do not
+     vendor it: a runner for AGNOS is AGNOS's domain). Reproducible in ~90s on any host with
+     QEMU + OVMF + a built gnoboot.
+   - **Rung 2 — a real turn against the spine, staged on the same image.** Open. Needs a
+     current `hoosh_agnos` (the one on disk is 2.4.11, from 2026-07-01, against hoosh 2.6.9)
+     and a daimon beside it. This is the rung that actually satisfies the gate's wording.
+   - **Rung 3 — the interactive TUI over agnsh.** Open, and the least urgent.
+
+   **Status: rung 1 ✓ · rungs 2–3 blocking · owner: thoth (NOT external).** The old status read
+   *"owner: external · needs an AGNOS host"*; that assigned thoth's own work to nobody and
+   sequenced the rest of v1.0 behind a blocker that did not exist.
 
 3. **Security review pass (process gate) — RE-PINNED to its actual residual.** Two of this
    gate's three named areas were swept by the 0.39.0 P(-1) audit
@@ -117,9 +141,11 @@ Four gates remain, in rough dependency order.
 
 ### v1.0 criteria checklist
 
-**Satisfied on Linux** and **AGNOS-buildable** (gate 1); AGNOS-green pends gate 2. **Open:**
+**Satisfied on Linux**; **AGNOS-buildable AND AGNOS-runnable** (gate 1, both halves ✓ — the ELF
+loads and runs in ring 3, `./scripts/agnos-run.sh`). AGNOS-*green* pends gate 2's rungs 2–3. **Open:**
 
-- [ ] **At least one downstream consumer green on AGNOS** — gate 2 (external)
+- [ ] **At least one downstream consumer green on AGNOS** — gate 2, rungs 2–3 (owner: thoth;
+      rung 1 — thoth runs in ring 3 — is ✓ as of 2026-09-04)
 - [ ] **Security review pass** — gate 3 (the concurrency model was reviewed at 0.44.3; **only the
       external sign-off remains**)
 - [ ] **1.0 versioning scheme decided (SemVer vs CalVer)** — gate 4
@@ -327,19 +353,42 @@ one is decided.
      a call with no name and no id. Observed intermittently; the same shape also loses a fragment
      mid-`arguments`, producing a call whose JSON is cut. thoth 0.44.2 now drops and announces such
      a call instead of letting it poison the conversation, but the frames are still lost.
-  2. When the provider returns a permanent 4xx, hoosh logs `provider: permanent error, not retrying`
-     to its **own** log, discards the provider's error body, and sends the client a well-formed
-     HTTP 200 SSE stream containing one `finish_reason:"stop"` frame and nothing else. An error
-     laundered into a silent success. thoth 0.44.2 reports an all-empty 200 stream as a gateway
-     fault rather than a model failure, but cannot say WHY — only hoosh knows.
-  Reproduced deterministically by replaying one captured request body; not fixable from thoth.
+  2. ✅ **CLOSED upstream at hoosh 2.6.5–2.6.8, and CONSUMED by thoth at 0.44.4.** hoosh used to log
+     `provider: permanent error, not retrying` to its **own** log, discard the provider's error body,
+     and send the client a well-formed HTTP 200 SSE stream carrying one `finish_reason:"stop"` frame
+     and nothing else — an error laundered into a silent success. It now forwards the provider's
+     status and message **in-stream** as a top-level `error` object, and reads the provider's HTTP
+     status on the local streaming path (2.6.8).
+
+     ⚠ thoth then threw it away for four hoosh releases: `_agent_sse_cb` read only
+     `choices[0].delta`, so the frame scored zero, the turn looked like an empty stream, and thoth
+     printed *"an upstream provider error is not forwarded to this stream"* — true when written,
+     false from 2.6.5, and it sent the operator to a log for a fact thoth was holding. Now captured
+     and shown on the interactive and one-shot surfaces and in `--events`
+     (`upstream_http` / `upstream_message`).
+
+  Sub-point 1 was reproduced deterministically by replaying one captured request body and remains open
+  upstream. Sub-point 2 is closed on both sides.
 
 - **t-ron's audit export is unescaped and flat-sized** (upstream, t-ron — surfaced by 0.42.0's
-  `/audit export`). `_audit_export_event` splices `reason` into JSON with no escaping, and sizes
-  the whole buffer at a flat 512 bytes/event against a reason whose length it does not bound. Both
-  are safe **today** only because every reason t-ron emits is a short fixed label. A reason
-  carrying a quote, backslash or control byte would make thoth's export invalid JSON; a long one
-  would overrun the buffer. Not fixable from thoth without re-deriving the serializer.
+  `/audit export`; **re-scoped at 0.44.4**). `_audit_export_event` splices **`agent`, `tool` AND
+  `reason`** into JSON with no escaping (t-ron 2.1.9 `src/audit.cyr:194`, `:196`, `:202`) and sizes the
+  whole buffer at a flat `n * 512 + 32` (`:216`).
+
+  ⭐ **This entry used to exculpate itself — "safe today only because every reason t-ron emits is a
+  short fixed label" — and that premise is false twice over.** `tool_name` is spliced independently of
+  the reason; and the DEFAULT unknown-tool path (`_tron_format_unknown_tool`, reached for any tool not
+  in the allow list, with `default_unknown_tool = DA_DENY`) **interpolates the tool name into the
+  reason**. The only filter on that name is `tron_is_safe_identifier`, which accepts every printable
+  ASCII byte — `"` and `\` both pass. Measured, not argued: a tool named `read"file` makes `/audit
+  export` emit JSON that fails to parse; a 4000-byte name writes **3598 bytes past** the allocation.
+  The name is the model's own `function.name`, so this is reachable from untrusted model output, and
+  the artifact it corrupts is a SECURITY record. *A documented residual is a claim with an expiry
+  date*; this one's had expired.
+
+  **thoth's half is fixed at 0.44.4** — both executors refuse a name over `AGENT_NAME_MAX` before
+  `gate_authorize`, so the ring never receives one. The escaper and length-derived sizing belong in
+  t-ron (2.1.10), then a re-vendor plus a line-anchored needle in `tests/cases/vendor.cyr`.
 
 - **bhava — the sentiment→mood loop** (a backlogged seam, gated on bhava's Cyrius port).
   SecureYeoman feeds a turn's response sentiment back into the active persona's mood; that loop is

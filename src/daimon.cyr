@@ -50,6 +50,25 @@ fn _daimon_call_endpoint() {
     return _daimon_call_url;
 }
 
+# daimon_endpoints_reset (0.44.4): drop the cached tools/call URLs and the mneme probe, so the next
+# use re-joins them from the CURRENT [daimon].url. Called by `/reload`.
+#
+# ⚠ WHY. 0.43.0 added `mcpres_endpoints_reset()` to `cmd_reload` with the note "else a changed
+# [daimon].url is silently ignored" — and reset only the RESOURCES/PROMPTS four. These two, cached the
+# same way and older, were left. The result was worse than not reloading at all: after a `/reload`
+# that changed the host, `/resources` and `/prompts` went to the NEW daimon while the tool registry
+# and every MCP tool call kept going to the OLD one — a session silently split across two hosts, with
+# the tool traffic (and whatever it carries) still reaching the host the operator thought they had
+# left. `cmd_reload`'s own contract is "we never claim a reload changed something it didn't"; it was
+# claiming the opposite here, printing `[daimon] url` under "restart to change" while having already
+# moved half the seam.
+fn daimon_endpoints_reset() {
+    _daimon_tools_url = 0;
+    _daimon_call_url = 0;
+    _daimon_mem_probed = 0 - 1;   # re-probe: a different host may or may not front mneme
+    return 0;
+}
+
 # daimon_build_call: write the /v1/mcp/call body for (name, args_json) into
 # dst, NUL-terminated; return the byte length. args_json is the caller's raw
 # JSON object (already valid JSON) or 0 for no arguments. Pure — unit-tested.

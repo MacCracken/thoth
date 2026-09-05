@@ -2056,6 +2056,7 @@ fn cmd_reload() {
         return 0;
     }
     agent_tools_cache_reset();                # re-advertise tools next turn (picks up [shell].enabled / [hoosh].tools / daimon)
+    daimon_endpoints_reset();                 # 0.44.4: drop the cached tools/call URLs + mneme probe — WITHOUT this a changed [daimon].url moved resources/prompts but left tool traffic on the OLD host
     mcpres_endpoints_reset();                 # 0.43.0 (T2-7): drop the cached resources/prompts URLs + probe, else a changed [daimon].url is silently ignored
     hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
     ui_emit(ROLE_GREEN, "reloaded "); emit(config_path()); oprintln("");
@@ -2067,9 +2068,9 @@ fn cmd_reload() {
     if (config_source() == 3) {
         ui_emit(ROLE_FAINT, "  (legacy path — move it to .thoth/config.cyml)"); oprintln("");
     }
-    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent]"); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
-    ui_emit(ROLE_FAINT, "  restart to change: [hoosh]/[daimon] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
+    ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
     ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file (0.44.3 — authority)"); oprintln("");
     if (config_suppressed_count() > 0) {
         ui_emit(ROLE_RED, "  note: "); ofmt_int(config_suppressed_count());
@@ -2504,7 +2505,7 @@ fn _task_dispatch(prompt) {
         oprintln("  elsewhere). set [hoosh].url in .thoth/config.cyml. degraded honestly, never faked.");
         # No turn actually starts, so no turn_start/turn_end bracket — but an events consumer must still
         # be TOLD why nothing happened rather than reading an empty stream and a bare exit code.
-        events_error(session_turns(), 0, 1);
+        events_error(session_turns(), 0, 1, 0, 0);
         return 0;
     }
     # 0.44.3 — THE [budget] CHECK BELONGS HERE, at the ONE dispatch chokepoint every surface goes
@@ -2517,7 +2518,7 @@ fn _task_dispatch(prompt) {
     # Reported and logged by budget_block; the events consumer is told the same way the absent-seam arm
     # above tells it, so a machine consumer never reads an empty stream and a bare exit code.
     if (budget_block() == 1) {
-        events_error(session_turns(), 0, 1);
+        events_error(session_turns(), 0, 1, 0, 0);
         return 0;
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop
@@ -2536,7 +2537,8 @@ fn _task_dispatch(prompt) {
     if (rc != 0) { ev_ok = 0; }
     elif (hoosh_last_reply_len() == 0) { ev_ok = 0; }
     if (ev_ok == 1) { events_response(session_turns(), hoosh_last_reply(), hoosh_last_reply_len()); }
-    else { events_error(session_turns(), rc, 0); }
+    # 0.44.4: carry the provider's own in-stream error (hoosh 2.6.5+) to the machine consumer too.
+    else { events_error(session_turns(), rc, 0, agent_err_code(), agent_err_msg()); }
     events_turn_end(session_turns(), ev_ok, clock_now_ms() - t0);
     _task_turn_feedback(t0);                          # interactive BEL + faint elapsed line (opt-in)
     # 0.40.0 (T1-5): the [hoosh].compact_at trigger, AFTER the turn — never mid-turn, where it would

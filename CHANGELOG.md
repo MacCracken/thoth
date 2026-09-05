@@ -2,6 +2,123 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.4] - 2026-09-04
+
+**thoth runs on AGNOS, and four controls that were half-shipped are now whole.** Suite
+**300 + 1011 + 810 + 505 + 183 + 5** (+55). Linux / aarch64 / AGNOS green; Windows unchanged.
+
+An 8-dimension adversarial sweep over the shipped 0.44.3 tree — every finding handed to an independent
+skeptic — filed 34 confirmed and 29 refuted. The refutations are the useful half of that ratio: most
+read *"already documented, verbatim"*, which is what a doc set that is mostly honest looks like from
+the outside. What survived clusters into one theme, and it is the same one 0.44.3 named: **a control
+that exists on one path and not its twin, described as though it existed on both.**
+
+### Added — `scripts/agnos-run.sh`, and v1.0 gate 1's runtime half is CLOSED
+
+⭐ **thoth 0.44.4 loads and runs in ring 3 on AGNOS.** gnoboot + OVMF boot the real kernel under QEMU,
+exec-from-disk streams the 5.4 MB ELF off ext2, `elf_load` maps it, ring-3 code reaches `write(1)`,
+`thoth 0.44.4` appears on the serial console, `run: exit 0`, no fault. Verified non-vacuous by breaking
+it: a deliberately wrong expect-string makes the same harness FAIL.
+
+⚠ **The roadmap said this "cannot be exercised on a Linux host" and assigned gate 2 to `owner: external
+· needs an AGNOS host`. Both were wrong, and had been for the whole arc.** A Linux *process* cannot run
+an AGNOS-ABI binary — but AGNOS ships a parameterised QEMU harness that has **named thoth** since before
+that status was written (`agnos/scripts/smoke/basestack-run-smoke.sh`: *"Reusable across
+aegis/bote/phylax/hoosh/thoth"*). Nothing in thoth's tree mentioned it, so the claim was re-read every
+release instead of re-run — the failure [`docs/doc-health.md`](docs/doc-health.md) lesson 1 exists to
+catch, on the gate the entire v1.0 plan was sequenced behind.
+
+The new script **shells out** to that harness rather than vendoring it: a runner for AGNOS is AGNOS's
+domain, and copying it here would be forking the spine for the same reason thoth consumes hoosh/daimon/
+bote/t-ron/avatara. It derives its expect-string from `VERSION` (a literal would keep passing against a
+stale binary after a bump), refuses to hardcode `AGNOS_ALLOW_PIN_DRIFT`, detects a kernel built without
+the `BASESTACK_SELFTEST` hook and says so rather than reporting a FAIL about thoth, and **degrades
+closed**: a missing prerequisite exits 2 and announces, never a pass.
+
+Gate 2 is now read as three rungs — rung 1 (thoth runs) ✓; rung 2 (a real turn against a native spine)
+and rung 3 (the TUI over agnsh) open, **owner: thoth**. A `--version` print exercises neither, and the
+script says so in its own output so a PASS cannot be over-read.
+
+### Fixed — a rug-pulled MCP tool was withheld from the advertisement and fully invokable
+
+`toolpin` (0.42.0) is thoth's CVE-2025-54136 defense: hash a tool's definition, and when it changes,
+**withhold** it. The file stated the guarantee plainly — *"The model is never told the tool exists, so
+it cannot call it"* — and so did the CHANGELOG. **That is an inference about the model, not an
+enforcement.** A name can arrive from an earlier turn still in context, from a hallucination, or from
+the very injected text this control defends against; none of those consult the advertisement. Every
+LOCAL tool arm already gates itself at dispatch instead of trusting the advertisement. The daimon arms
+did not, so for two minors the swapped tool was invisible **and** callable.
+
+`toolpin_withheld` is now checked at the dispatcher on **both** executors, before the t-ron gate. A
+tool with no baseline is never refused (that would be theatre), and a definition that reverts to its
+pin lifts the withhold rather than staying sticky.
+
+### Fixed — the serial executor forwarded a tool name of any length
+
+0.44.3 gave the **parallel** path a tool-name guard and left the serial path unbounded — the same
+serial/parallel asymmetry as 0.43.1 and 0.44.3, running the other way. The name is the model's own
+`function.name`, and it is not inert downstream: t-ron copies it into its audit ring **unclipped** and
+sizes its JSON export at a flat 512 bytes/event, so an over-long name writes past that allocation.
+thoth cannot fix a dep's serializer from here, but it can refuse to hand it a name no real tool has.
+One shared `AGENT_NAME_MAX` now feeds both refusals, the way `AGENT_ARGS_MAX` already did — and a test
+asserts the two stay equal, so they cannot quietly diverge a third time.
+
+⚠ **The upstream half is still open and is worse than the roadmap says.** `_audit_export_event` splices
+`agent`, `tool` **and** `reason` unescaped, and the roadmap's exculpating premise — *"safe today only
+because every reason t-ron emits is a short fixed label"* — is false twice: the `tool_name` field is
+spliced independently of the reason, and the default unknown-tool path interpolates the name **into**
+the reason. A tool named `read"file` makes `/audit export` emit invalid JSON today. Filed as a carried
+limitation with the exculpation removed; the escaper and the resize belong in t-ron.
+
+### Fixed — thoth threw away the provider error hoosh had already handed it
+
+0.44.2 taught thoth to report an all-empty HTTP 200 stream as a gateway fault and to print *"an upstream
+provider error is not forwarded to this stream"*. **That sentence stopped being true at hoosh 2.6.5**,
+which forwards the provider's status and message in-stream as a top-level `error` object. thoth read
+only `choices[0].delta`, so it held `HTTP 429 · rate_limit_error: ...` and told the operator to go find
+it in somebody else's log. Reproduced against the shipping binary with a fake gateway emitting hoosh's
+exact frame.
+
+The error is now captured and printed — on the interactive surface, on the **one-shot** surface (which
+would otherwise still print the least actionable sentence thoth has, *"no completion returned"*), and
+in the `--events` NDJSON as `upstream_http` / `upstream_message`, omitted-until-present. The read sits
+**before** the `choices` guard on purpose: the current frame carries `choices`, a leaner future one
+might not, and a check behind that early return would silently never fire.
+
+### Fixed — `/reload` split the session across two daimon hosts
+
+0.43.0 added `mcpres_endpoints_reset()` to `cmd_reload` with the note *"else a changed `[daimon].url` is
+silently ignored"* — and reset only the resources/prompts four. The tools-registry and tool-call URLs,
+cached identically and older, were left. So a `/reload` that changed the host sent `/resources` and
+`/prompts` to the **new** daimon while every MCP tool call kept going to the **old** one, with the
+banner printing `[daimon] url` under *"restart to change"* the whole time. `cmd_reload`'s own contract
+is *"we never claim a reload changed something it didn't"*; here it claimed the opposite. `[daimon] url`
+has moved to the *"now active"* line, where it now belongs.
+
+### Fixed — `shell` reported a command it had killed as a success
+
+`_shell_last_ok` was set unconditionally once the capture returned, so a command the deadline SIGKILLed
+recorded `ok: true` to `--events`, the session log, `/audit` and the round card — the single outcome an
+operator most needs to see as a failure. `ok` now means **ran to completion inside the deadline**. The
+split is deliberate and tested both ways: a non-zero **exit code** is a legitimate result the model acts
+on and stays `ok`; a **deadline kill** is thoth stopping the command with the answer unknown, and is not.
+
+This was the post-gate path, which nothing had ever exercised because the confirm blocks on stdin. A
+session grant makes it reachable, which is what made the branch testable at all.
+
+### Tests — +55, and every one of them was verified by breaking the fix
+
+Per the 0.44.3 rule that *an assertion which still passes when you break the fix is not a test*, each
+fix was reverted in turn and the suite re-run: the toolpin withhold (2 fail), the shell deadline (1),
+the daimon reset (4), the reset-set member (3), the shared name cap (1), the in-stream error (3).
+
+⭐ **One of those breaks exposed a hole in the test rather than in the fix, which is the point of doing
+it.** Deleting the error-capture **call site** inside `_agent_sse_cb` left every assertion passing,
+because the tests exercised the helper directly — verifying the *mechanism* and not the *path*, the
+lesson this project paid for at 0.38.x. A sandhi SSE event is a plain struct, so a frame is now handed
+to the **real callback** exactly as the transport would, and removing the call site fails three
+assertions.
+
 ## [0.44.3] - 2026-09-03
 
 **An audit, a toolchain refresh, and the lane that had not compiled since 0.6.4.** Suite

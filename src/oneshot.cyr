@@ -417,6 +417,15 @@ fn _oneshot_report_error(rc) {
         emit_err(" (run interactively to see the gateway's response body)\n");
         return 0;
     }
+    # 0.44.4: rc == 0 with no answer is the "empty stream" case, and it is exactly where the PROVIDER's
+    # reason is most useful — "no completion returned" is the least actionable sentence thoth prints.
+    # hoosh 2.6.5+ forwards status + message in-stream; if one arrived, say it here too. Without this the
+    # fix would land on the interactive surface only and one-shot would keep throwing the reason away.
+    if (agent_err_seen() == 1) {
+        emit_err(" — upstream");
+        if (agent_err_code() > 0) { emit_err(" HTTP "); emit_err_int(agent_err_code()); }
+        if (agent_err_msg() != 0) { emit_err(": "); emit_err(agent_err_msg()); }
+    }
     emit_err("\n");
     return 0;
 }

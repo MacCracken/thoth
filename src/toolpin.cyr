@@ -20,9 +20,16 @@
 #   * First sight of a tool -> pin SHA-256 over `name \0 description \0 inputSchema`. Silent; a first
 #     session has nothing to compare against and pretending otherwise would be theatre.
 #   * Unchanged -> nothing said. Silence is the common case and must stay quiet.
-#   * CHANGED -> the tool is WITHHELD from the advertisement and the change is announced. The model is
-#     never told the tool exists, so it cannot call it, so the swapped description never reaches the
-#     model's context at all — which is the actual thing being defended.
+#   * CHANGED -> the tool is WITHHELD from the advertisement AND refused at the dispatcher, and the
+#     change is announced. Withholding keeps the swapped description out of the model's context, which
+#     is the payload; refusing at dispatch is what makes "withheld" a control rather than a prediction.
+#
+#     ⚠ 0.44.4 CORRECTION. This line used to read "The model is never told the tool exists, so it
+#     cannot call it." That was an inference about the model, not an enforcement: a name can arrive
+#     from an earlier turn still in context, a hallucination, or the injected text this file defends
+#     against — none of which consult the advertisement. The advertisement half shipped at 0.42.0
+#     without the dispatch half, so for two minors a rug-pulled tool was invisible and fully
+#     invokable. Both halves now exist; see `toolpin_withheld`.
 #   * `/tools trust` accepts the new definitions and re-pins, for the legitimate case: a server upgrade.
 #
 # Withholding rather than warning-and-continuing is deliberate. A warning the operator scrolls past leaves
@@ -48,19 +55,43 @@ var _tp_names = 0;                 # TOOLPIN_MAX * TOOLPIN_NAME_CAP
 var _tp_hashes = 0;                # TOOLPIN_MAX * TOOLPIN_HASH_CAP
 var _tp_blob = 0;                  # scratch for the canonical definition bytes
 var _tp_changed = 0;               # tools withheld this probe because their definition moved
+var _tp_withheld = 0;              # TOOLPIN_MAX bytes, parallel to _tp_names: 1 = this tool is withheld
 var _tp_overflow = 0;              # 1 if the registry exceeded TOOLPIN_MAX
 
 fn toolpin_count() { return _tp_n; }
 fn toolpin_changed() { return _tp_changed; }
+
+# toolpin_withheld (0.44.4): 1 if `name` is a tool this session pinned and has since seen CHANGE.
+#
+# ⚠ WHY THIS EXISTS. Withholding a tool from the ADVERTISEMENT is not the same as blocking it, and
+# this file used to claim it was: "The model is never told the tool exists, so it cannot call it."
+# That is an inference about the model's behaviour, not a control — the model can name any tool it
+# likes, from an earlier turn's context, a system prompt, a hallucination, or the very injection this
+# defense exists for. Every LOCAL tool arm already enforces its own gate at dispatch rather than
+# trusting the advertisement; the daimon arms did not, so a rug-pulled tool was invisible AND fully
+# invokable. Read at the dispatcher by both executors (src/agent.cyr), before the t-ron gate.
+#
+# Returns 0 for a tool that was never pinned (including one advertised UNPINNED past TOOLPIN_MAX):
+# a tool with no baseline cannot be said to have changed, and refusing it would be theatre.
+fn toolpin_withheld(name) {
+    if (config_toolpin_enabled() == 0) { return 0; }
+    if (name == 0) { return 0; }
+    if (_tp_withheld == 0) { return 0; }
+    var idx = _tp_find(name);
+    if (idx < 0) { return 0; }
+    return load8(_tp_withheld + idx);
+}
 fn toolpin_reset() { _tp_n = 0; _tp_changed = 0; _tp_overflow = 0; return 0; }
 
 fn _tp_bufs() {
     if (_tp_names == 0) { _tp_names = alloc(TOOLPIN_MAX * TOOLPIN_NAME_CAP); }
     if (_tp_hashes == 0) { _tp_hashes = alloc(TOOLPIN_MAX * TOOLPIN_HASH_CAP); }
     if (_tp_blob == 0) { _tp_blob = alloc(TOOLPIN_BLOB_CAP); }
+    if (_tp_withheld == 0) { _tp_withheld = alloc(TOOLPIN_MAX); }
     if (_tp_names == 0) { return 0; }
     if (_tp_hashes == 0) { return 0; }
     if (_tp_blob == 0) { return 0; }
+    if (_tp_withheld == 0) { return 0; }
     return 1;
 }
 
@@ -126,13 +157,15 @@ fn toolpin_check(name, desc, schema) {
         var j = 0;
         while ((load8(h + j) != 0) && (j < (TOOLPIN_HASH_CAP - 1))) { store8(hd + j, load8(h + j)); j = j + 1; }
         store8(hd + j, 0);
+        store8(_tp_withheld + _tp_n, 0);
         _tp_n = _tp_n + 1;
         return 1;
     }
-    if (streq(_tp_hashes + idx * TOOLPIN_HASH_CAP, h) == 1) { return 1; }   # unchanged — stay quiet
+    if (streq(_tp_hashes + idx * TOOLPIN_HASH_CAP, h) == 1) { store8(_tp_withheld + idx, 0); return 1; }   # unchanged — stay quiet, and lift any prior withhold
 
     # CHANGED. Withhold, and say so loudly: this is the CVE-2025-54136 shape.
     _tp_changed = _tp_changed + 1;
+    store8(_tp_withheld + idx, 1);      # 0.44.4: also REFUSE it at the dispatcher — see toolpin_withheld
     # 0.44.2: the WITHHOLD is the whole point of this control — a rug-pulled tool vanishes from the
     # advertisement and the model is simply told it does not exist. If the reason is also invisible (as it
     # was under OUT_NULL: one-shot and the GUI), the operator sees an agent that has mysteriously stopped

@@ -6,6 +6,28 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.44.4** (2026-09-04, not a full sweep): the release added `scripts/agnos-run.sh` and
+> updated `CHANGELOG.md`, `docs/development/state.md` (version block, Tests counts, the **Targets**
+> matrix — AGNOS now BUILDS **and RUNS** — and the `## Next` block, which had drifted into
+> contradicting its own matrix by still saying macOS does not build), `docs/development/roadmap.md`
+> (gate 1's runtime half **closed**; gate 2 re-read as three rungs and re-owned from `external` to
+> **thoth**; the v1.0 checklist; the hoosh SSE limitation **split** — sub-point 2 closed at hoosh
+> 2.6.5–2.6.8 and consumed at 0.44.4, sub-point 1 still open; the t-ron audit-export limitation
+> **re-scoped from latent to reachable**) and `README.md` (status stamp + the AGNOS-runs line).
+>
+> ⭐ **Two lessons this cut paid for, both instances of lesson 1 below.**
+> 1. **A status that names an external blocker is a measurement, and it expires like any other.**
+>    Gate 2 read *"owner: external · needs an AGNOS host"* and gate 1 said the ELF *"cannot be
+>    exercised on a Linux host"*. AGNOS's own QEMU harness had **named thoth** since before either
+>    line was written. Nothing in thoth's tree referenced it, so the claim was re-read every release
+>    instead of re-run — on the gate the whole v1.0 plan was sequenced behind. Rows that assign work
+>    to someone else belong in the "re-measure" bucket, not "durable".
+> 2. **An exculpating clause is the part of a limitation most likely to be stale.** The t-ron
+>    audit-export entry excused itself with *"safe today only because every reason t-ron emits is a
+>    short fixed label"*. That premise was false twice over, and the excuse is what kept the item
+>    un-actioned. When re-checking a carried limitation, re-check the reason it was deprioritised
+>    first — that sentence is doing the load-bearing work.
+>
 > **Touched at 0.44.3** (2026-09-03, not a full sweep): the release added
 > [`docs/adr/0021-authority-keys-are-global-only.md`](adr/0021-authority-keys-are-global-only.md) and
 > indexed it in `adr/README.md`; marked **ADR-0019 superseded in part** (its "a project t-ron policy"

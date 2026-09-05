@@ -160,6 +160,28 @@ fn test_shell() {
     assert(tl_on > 0, "enabled -> add_shell appends the tool");
     assert_eq(load8(tb), 91, "advertised tools array starts with '['");
 
+    # --- 0.44.4: `ok` MEANS RAN TO COMPLETION, NOT "WE REACHED THE FORK" ---
+    # A command the deadline SIGKILLs reported ok:true to --events, the session log, /audit and the
+    # round card — the single outcome an operator most needs to see as a failure, recorded as a success.
+    # This is the POST-GATE path, which nothing had ever exercised because the confirm blocks on stdin;
+    # a session grant resolves it without a prompt, which is what makes the branch testable at all.
+    _shell_deny_n = 0;
+    _shell_allow_n = 0;
+    _cfg_shell_enabled = 1;
+    _cfg_shell_timeout_ms = 300;
+    assert_eq(_grant_add("run shell", "sleep 5"), 1, "session grant recorded so the post-gate path is reachable");
+    var tres = shell_run_tool("{\"command\":\"sleep 5\"}");
+    assert_eq(_shell_last_allowed, 1, "...the grant carried it past the gate (else the rest proves nothing)");
+    assert_eq(shell_last_ok(), 0, "a deadline-KILLED command is NOT ok — it is the failure the operator must see");
+    assert(tres != 0, "...and it still returns a result string for the model");
+    # The deliberate other half of the split: a NON-ZERO EXIT is a legitimate result the model acts on
+    # (grep found nothing), so it stays ok. Breaking the fix into `_shell_last_ok = 0` unconditionally
+    # would pass the assertion above and fail this one.
+    assert_eq(_grant_add("run shell", "exit 3"), 1, "grant for the non-zero-exit case");
+    shell_run_tool("{\"command\":\"exit 3\"}");
+    assert_eq(shell_last_ok(), 1, "a non-zero EXIT CODE is a legitimate result, still ok");
+    grants_clear();
+
     # restore defaults so later tests / a fresh config see clean state
     _cfg_shell_enabled = 0;
     _cfg_shell_timeout_ms = 0 - 1;
@@ -507,6 +529,87 @@ fn test_agent() {
     _ag_build_array(&abo);
     assert(streq(&abo, "[]"), "a slot with CUT arguments is never emitted (it would not be valid JSON)");
 
+    # 0.44.4 — THE NAME CAP IS SHARED BY BOTH EXECUTORS, BY CONSTRUCTION.
+    # 0.44.3 gave the PARALLEL path a tool-name guard (t-ron copies the name into its audit ring
+    # unclipped and exports at a flat 512 bytes/event, so an over-long name writes past that
+    # allocation) and left the serial path unbounded — the same serial/parallel asymmetry, running the
+    # other way. One constant now feeds both refusals; this fails if they are allowed to diverge again.
+    assert_eq(AGENT_NAME_MAX, PAR_NAME_CAP - 1, "the shared name cap equals the parallel slot's usable size");
+    assert_eq(AGENT_ARGS_MAX, PAR_ARGS_CAP - 1, "...as the args cap already did (the precedent this copies)");
+
+    # 0.44.4 — THE PROVIDER'S OWN ERROR, OFF THE STREAM.
+    # hoosh 2.6.5+ forwards a permanent provider error IN-STREAM as a top-level `error` object; thoth
+    # read only choices[0].delta, so it held the operator's answer (HTTP 429, "rate limit...") and
+    # printed "an upstream provider error is not forwarded to this stream". These fail if _ag_err_capture
+    # stops reading the frame, or if the reset set drops a member.
+    _ag_err_reset();
+    assert_eq(agent_err_seen(), 0, "no error seen after a reset");
+    assert_eq(agent_err_code(), 0, "...no code");
+    assert_eq(agent_err_msg(), 0, "...and no message");
+    var efr = "{\"id\":\"x\",\"model\":\"m\",\"error\":{\"type\":\"upstream_error\",\"code\":429,\"message\":\"rate_limit_error: slow down\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}";
+    assert_eq(_ag_err_capture(bayan_json_v_parse_buf(efr, strlen(efr))), 1, "an in-stream error frame is recognised");
+    assert_eq(agent_err_seen(), 1, "...and recorded");
+    assert_eq(agent_err_code(), 429, "...with the PROVIDER's status, not the gateway's 200");
+    assert(agent_err_msg() != 0, "...and the provider's message is present");
+    if (agent_err_msg() != 0) { assert(streq(agent_err_msg(), "rate_limit_error: slow down"), "...and it is the provider's text, which is the fact the operator needs"); }
+    # the FIRST error of a round wins — a later echo must not overwrite the initiating fault
+    var efr2 = "{\"error\":{\"code\":500,\"message\":\"later\"}}";
+    _ag_err_capture(bayan_json_v_parse_buf(efr2, strlen(efr2)));
+    assert_eq(agent_err_code(), 429, "a second error frame does not overwrite the first");
+    # an ORDINARY content frame must not look like an error (else every turn would report one)
+    _ag_err_reset();
+    var okf = "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}";
+    assert_eq(_ag_err_capture(bayan_json_v_parse_buf(okf, strlen(okf))), 0, "a normal content frame carries no error");
+    assert_eq(agent_err_seen(), 0, "...and sets nothing");
+    # the reset set: _ag_reset must clear it too, or last round's error is reported against this turn
+    _ag_err_capture(bayan_json_v_parse_buf(efr, strlen(efr)));
+    assert_eq(agent_err_seen(), 1, "an error is pending");
+    _ag_reset();
+    assert_eq(agent_err_seen(), 0, "_ag_reset clears it — a missed reset member fails as a LIE, not a crash");
+    assert_eq(agent_err_code(), 0, "...including the code");
+    assert_eq(agent_err_msg(), 0, "...including the message");
+    # ⭐ AND THE SAME THING THROUGH THE REAL CALLBACK, NOT JUST THE HELPER.
+    # Testing `_ag_err_capture` alone verifies the MECHANISM and not the PATH: deleting the call site
+    # inside `_agent_sse_cb` left every assertion above passing. This project has paid for that lesson
+    # twice (0.38.x: a tint verified at the painter while nothing routed a user to it). A sandhi SSE
+    # event is a plain struct — `sandhi_sse_event_data` is one load64 — so a frame can be handed to the
+    # real callback exactly as the transport would. These fail if the call site is removed.
+    _ag_err_reset();
+    var evbuf = alloc(64);
+    store64(evbuf + SANDHI_SSE_OFF_EVENT, 0);
+    store64(evbuf + SANDHI_SSE_OFF_DATA, efr);
+    store64(evbuf + SANDHI_SSE_OFF_ID, 0);
+    store64(evbuf + SANDHI_SSE_OFF_RETRY, 0);
+    assert_eq(_agent_sse_cb(0, evbuf), 1, "the callback consumes an upstream_error frame and keeps the stream open");
+    assert_eq(agent_err_seen(), 1, "...and the error is captured ON THE REAL PATH, not just by the helper");
+    assert_eq(agent_err_code(), 429, "...with the provider's status");
+    assert(agent_err_msg() != 0, "...and carries the provider's message");
+    if (agent_err_msg() != 0) { assert(streq(agent_err_msg(), "rate_limit_error: slow down"), "...with the provider's exact text"); }
+    # The error frame is `delta:{}` — it must NOT count as a useful frame, or an all-error stream would
+    # look like a one-frame answer and never reach the empty-stream branch that reports it.
+    assert_eq(_ag_frames, 0, "an error frame is bookkeeping, not content — it must not count as a frame");
+    # ...and an ordinary content frame through the same callback still sets nothing.
+    _ag_err_reset();
+    store64(evbuf + SANDHI_SSE_OFF_DATA, okf);
+    assert_eq(_agent_sse_cb(0, evbuf), 1, "a normal content frame is consumed");
+    assert_eq(agent_err_seen(), 0, "...and reports no upstream error");
+    _hoosh_acc_reset();
+    _ag_reset();
+
+    # a message longer than the buffer is CLIPPED, never overrun (provider-controlled text)
+    _ag_err_reset();
+    var errbig = alloc(2048);
+    var errbo = 0;
+    errbo = _append_cstr(errbig, errbo, "{\"error\":{\"code\":400,\"message\":\"");
+    var errbi = 0;
+    while (errbi < 900) { store8(errbig + errbo, 65); errbo = errbo + 1; errbi = errbi + 1; }
+    errbo = _append_cstr(errbig, errbo, "\"}}");
+    store8(errbig + errbo, 0);
+    _ag_err_capture(bayan_json_v_parse_buf(errbig, strlen(errbig)));
+    assert_eq(agent_err_seen(), 1, "an over-long provider message is still captured");
+    assert(strlen(agent_err_msg()) < AG_ERRMSG_CAP, "...bounded to the buffer, never overrun");
+    _ag_err_reset();
+
     # the indexed fragment path must be untouched by the fix
     _ag_reset();
     var f1 = "{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"a\\\":\"}}";
@@ -526,6 +629,27 @@ fn test_agent() {
 # extraction against canned bodies (no network).
 fn test_daimon() {
     test_group("daimon call building");
+    # 0.44.4 — /reload MUST re-point the tools/call endpoints, not just resources/prompts.
+    # 0.43.0 added mcpres_endpoints_reset() to cmd_reload "else a changed [daimon].url is silently
+    # ignored" and reset only the resources/prompts four. These two, cached identically and older, were
+    # left — so a /reload that changed the host sent /resources and /prompts to the NEW daimon while
+    # every MCP tool call kept going to the OLD one. Assert the SENTINELS clear: this fails if the
+    # body of daimon_endpoints_reset is emptied.
+    var _du_save = _cfg_daimon_url;
+    _cfg_daimon_url = "http://old:9000";
+    assert(streq(_daimon_tools_endpoint(), "http://old:9000/v1/mcp/tools"), "tools endpoint joins the configured url");
+    assert(streq(_daimon_call_endpoint(), "http://old:9000/v1/mcp/call"), "call endpoint joins the configured url");
+    # Without the reset the CACHE wins and both still name the old host — which is the bug.
+    _cfg_daimon_url = "http://new:9100";
+    assert(streq(_daimon_tools_endpoint(), "http://old:9000/v1/mcp/tools"), "...and is cached (the bind-once behaviour /reload must undo)");
+    daimon_endpoints_reset();
+    assert_eq(_daimon_tools_url, 0, "reset clears the cached tools URL");
+    assert_eq(_daimon_call_url, 0, "reset clears the cached call URL");
+    assert_eq(_daimon_mem_probed, 0 - 1, "reset re-arms the mneme probe — a different host may not front mneme");
+    assert(streq(_daimon_tools_endpoint(), "http://new:9100/v1/mcp/tools"), "...so tool traffic FOLLOWS the reload to the new host");
+    assert(streq(_daimon_call_endpoint(), "http://new:9100/v1/mcp/call"), "...and so does the tool-CALL endpoint");
+    _cfg_daimon_url = _du_save;
+    daimon_endpoints_reset();
     var cb[256];
     daimon_build_call(&cb, "echo", "{\"x\":1}");
     assert(streq(&cb, "{\"name\":\"echo\",\"arguments\":{\"x\":1}}"), "call body with args");
@@ -1039,6 +1163,31 @@ fn test_project() {
     assert_eq(dropped, 1, "trust drops the pins it had");
     assert_eq(toolpin_count(), 0, "...leaving none");
     assert_eq(toolpin_check("fs_read", "changed", ""), 1, "...so the new definition is accepted as the baseline");
+    # 0.44.4 — WITHHELD MUST ALSO MEAN REFUSED. Withholding a tool from the advertisement is not a
+    # control on its own: the model can name a tool from earlier context, a hallucination, or the very
+    # injection this defends against, none of which consult the advertisement. 0.42.0 shipped the
+    # advertisement half and claimed the block ("so it cannot call it"); the daimon dispatch arms did
+    # not check. These assertions fail if `toolpin_withheld` stops reporting the withhold.
+    toolpin_reset();
+    assert_eq(toolpin_withheld("fs_read"), 0, "an UNKNOWN tool is not withheld (no baseline -> nothing changed)");
+    assert_eq(toolpin_check("fs_read", "orig", ""), 1, "pin it");
+    assert_eq(toolpin_withheld("fs_read"), 0, "...a freshly pinned tool is not withheld");
+    assert_eq(toolpin_check("fs_read", "orig", ""), 1, "unchanged");
+    assert_eq(toolpin_withheld("fs_read"), 0, "...an unchanged tool is not withheld");
+    assert_eq(toolpin_check("fs_read", "SWAPPED", ""), 0, "the rug-pull is withheld from the advertisement");
+    assert_eq(toolpin_withheld("fs_read"), 1, "...AND is refused at the dispatcher — the half 0.42.0 claimed but never enforced");
+    # a second tool must not be tarred by its neighbour's withhold (the flag is per-slot, not global)
+    assert_eq(toolpin_check("fs_write", "w", ""), 1, "a different tool pins normally");
+    assert_eq(toolpin_withheld("fs_write"), 0, "...and is NOT withheld because a sibling was");
+    # reverting to the pinned definition lifts the withhold — a server that rolls back is trusted again
+    assert_eq(toolpin_check("fs_read", "orig", ""), 1, "the definition reverts to its pin");
+    assert_eq(toolpin_withheld("fs_read"), 0, "...so the withhold is LIFTED, not sticky");
+    # /tools trust re-baselines and clears
+    assert_eq(toolpin_check("fs_read", "SWAPPED", ""), 0, "withheld again");
+    assert_eq(toolpin_withheld("fs_read"), 1, "...and refused again");
+    toolpin_trust_all();
+    assert_eq(toolpin_withheld("fs_read"), 0, "`/tools trust` clears the refusal along with the pins");
+
     # ⚠ THE REGRESSION RISK THIS INTRODUCED: withholding a tool means the advertisement loop can SKIP an
     # element, so the comma separator can no longer key off the loop index. Getting that wrong emits a
     # leading or doubled comma and hands the gateway malformed JSON — which fails as an opaque 400, not as
@@ -1088,7 +1237,7 @@ fn test_project() {
     events_turn_start(1, "m");
     events_tool_call(1, "shell", "{}");
     events_tool_result(1, "shell", 1, 10);
-    events_error(1, 502, 0);
+    events_error(1, 502, 0, 0, 0);
     events_response(1, "hi", 2);
     events_turn_end(1, 1, 5);
     assert_eq(events_count(), 0, "...so no emitter writes a byte while disabled");

@@ -183,11 +183,18 @@ fn ev_fail_text(rc, seam_absent) {
 # events_error: the failure twin of `events_response`. `http` is present ONLY for a real status code
 # (rc > 0) — the same omit-until-present discipline `tokens` follows, since a faked 0 would read as a
 # status a consumer could branch on.
-fn events_error(turn, rc, seam_absent) {
+# 0.44.4: `up_code`/`up_msg` carry the PROVIDER's own error when hoosh forwarded one in-stream (2.6.5+).
+# Passed in, not probed — this file states its own rule one function up ("to keep this file free of a
+# seam dependency"), and it is included before agent.cyr. `up_code` 0 / `up_msg` 0 means none was seen,
+# and the fields are then OMITTED rather than zero-filled: the same omit-until-present discipline
+# `http` and `tokens` follow, since a faked 0 reads as a status a consumer could branch on.
+fn events_error(turn, rc, seam_absent, up_code, up_msg) {
     if (_ev_on == 0) { return 0; }
     var off = _ev_begin("error", turn);
     off = _ev_str_field(off, "message", ev_fail_text(rc, seam_absent), 1024);
     if (rc > 0) { off = _ev_int_field(off, "http", rc); }
+    if (up_code > 0) { off = _ev_int_field(off, "upstream_http", up_code); }
+    if (up_msg != 0) { off = _ev_str_field(off, "upstream_message", up_msg, 512); }
     return _ev_end(off);
 }
 

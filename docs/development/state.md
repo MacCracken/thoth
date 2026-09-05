@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.44.4** — **thoth runs on AGNOS, and four half-shipped controls are now whole** (2026-09-04). An
+8-dimension adversarial sweep over the shipped 0.44.3 tree (every finding handed to an independent
+skeptic) filed **34 confirmed, 29 refuted** — and most refutations read *"already documented, verbatim"*,
+which is what a mostly-honest doc set looks like from outside. ⭐ **v1.0 gate 1's runtime half is CLOSED**:
+`./scripts/agnos-run.sh` boots the real AGNOS kernel under QEMU and the 5.4 MB ELF loads off ext2, runs
+in ring 3, prints its version and exits 0 (verified non-vacuous — a wrong expect-string FAILs). The
+roadmap had called this *"cannot be exercised on a Linux host"* and assigned gate 2 to `owner: external`
+while AGNOS's own harness had **named thoth** the whole time; the script shells out to it rather than
+vendoring it. Also fixed, all one theme — *a control on one path but not its twin*: a rug-pulled MCP tool
+was withheld from the advertisement and **fully invokable** at the dispatcher (`toolpin`'s "so it cannot
+call it" was an inference about the model, not an enforcement); the **serial** executor forwarded a tool
+name of any length while the parallel one refused it (0.44.3's guard, mirrored — one shared
+`AGENT_NAME_MAX` now feeds both); thoth **discarded the provider error hoosh 2.6.5+ forwards in-stream**
+and told the operator it was not forwarded; `/reload` moved resources/prompts to a changed `[daimon].url`
+but left **tool traffic on the old host**; and `shell` reported a command it had SIGKILLed as `ok: true`.
+Suite **300 + 1011 + 810 + 505 + 183 + 5** (+55), each new test verified by breaking the fix — one of
+which exposed a hole in the *test* (it covered the helper, not the callback path). Linux / aarch64 /
+AGNOS green.
+
 **0.44.3** — **the audit found one hole its own ADR had predicted** (2026-09-03,
 [ADR-0021](../adr/0021-authority-keys-are-global-only.md)). A 130-agent adversarial sweep (11
 dimensions, three distinct-lens skeptics per finding) filed **38 confirmed, 1 refuted** — five themes,
@@ -3284,7 +3303,7 @@ Apple Silicon with the 6.5.35 installed there — see its row)** — see
 | x86_64 Linux | _(default)_ | **shipped** — built, tested (264 + 1894 + 183 + 3), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (re-verified 0.38.6 / Cyrius 6.5.35) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
 | macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS again at 0.44.3** — first since 0.6.4. `src/term.cyr` closed thoth's own unguarded call into darshana's Linux-gated termios half; verified natively on Apple Silicon (macOS 26.6.2), `--version` + line REPL. ⚠ Built with the **6.5.35** installed on that Mac, not the pinned 6.5.43 (not installed there; no package registry) — the two `lib/` snapshots differ by zero removed/renamed/newly-private symbols. Line tier only (no BSD termios ⇒ no T2), and no colour / no global config until the upstream `getenv` gap is fixed | `build/thoth_macos` |
-| AGNOS (x86_64) | `--agnos` | **builds `OK`** — re-verified 0.38.6. The old `SYS_LSEEK` and `SIGHUP` blockers are both closed | `build/thoth_agnos` |
+| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.38.6 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
@@ -3406,8 +3425,8 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **300 + 1011 + 755 + 505 + 183 + 5 assertions across the suites as of
-0.44.3 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **300 + 1011 + 810 + 505 + 183 + 5 assertions across the suites as of
+0.44.4 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3424,10 +3443,13 @@ citations, grounding, `/notes`), and the **chat-management arc** (named multi-co
 richer message schema, `/search`). Per-version detail is in the log above + [CHANGELOG](../../CHANGELOG.md).
 
 **The path to v1.0 is dominated by AGNOS lighting up, not by feature work in thoth.** Four gates (see
-[`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓** (a valid static x86_64-AGNOS ELF,
-zero thoth change), **runtime** pends an AGNOS host (= gate 2); (2) ≥1 downstream consumer green on AGNOS
-(external); (3) a security review (not scheduled); (4) the SemVer-vs-CalVer 1.0 decision (deferred,
-[ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux ships; aarch64 builds; macOS does **NOT** build (thoth's own gap —
-`src/tui.cyr` calls darshana's Linux-gated termios/signalfd half unguarded; see the Targets matrix);
-Windows staged on architectural floor gaps. Full-stack live e2e against the real spine
-(hoosh/daimon) is a host-side step — the build sandbox blocks a compiled binary's TCP.
+[`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓ and runtime ✓** (a valid static
+x86_64-AGNOS ELF, zero thoth change, and it **loads and runs in ring 3** — `./scripts/agnos-run.sh`,
+proven 2026-09-04); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
+(a real turn against a native spine, then the TUI over agnsh) open, **owner: thoth**; (3) a security
+review — the concurrency half closed at 0.44.3, the filed `docs/audit/` record is the residual; (4) the
+SemVer-vs-CalVer 1.0 decision (deferred, [ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux
+ships; aarch64 builds; **macOS builds and runs** as of 0.44.3 (`src/term.cyr` closed thoth's unguarded
+call into darshana's Linux-gated termios half — line tier only, no BSD termios ⇒ no T2; see the Targets
+matrix); Windows staged, blocked entirely outside thoth's authored source. Full-stack live e2e against
+the real spine (hoosh/daimon) is a host-side step — the build sandbox blocks a compiled binary's TCP.
