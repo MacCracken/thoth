@@ -59,7 +59,7 @@ fn test_vendor_pins() {
     _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.14.1", "avatara pinned at 2.14.1");
     _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.3.7",  "bote-core pinned at 3.3.7");
     _vd_pin("src/vendor/libro.cyr",     "# Version: 2.8.12", "libro pinned at 2.8.12");
-    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.1.9",  "t-ron pinned at 2.1.9");
+    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.1.10", "t-ron pinned at 2.1.10");
     _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.6.2",  "sit-read pinned at 1.6.2");
     _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.7.9",  "sankoch-zlib pinned at 2.7.9");
     _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.4.0",  "vyakarana pinned at 2.4.0");
@@ -140,6 +140,21 @@ fn test_vendor_hazards() {
     # keeps ONE mention — the changelog comment recording the removal, where the call
     # sits inside backticks — so pin that every occurrence is that quoted one.
     assert_eq(_vd_count("syscall(SYS_CHDIR"), _vd_count("`syscall(SYS_CHDIR"), "sit-read: chdir-free (sit >= 1.3.1) — the only mention is the quoted comment");
+
+    # ---- t-ron: no chacha20_xor (it silently overrode sigil's) ----
+    # Through t-ron 2.1.9 the bundle carried its own `chacha20_xor`, same name and
+    # same arity as the one in `lib/sigil.cyr`, which thoth pulls via [deps].stdlib.
+    # Same arity means cyrius only WARNS, so it rode along for six t-ron patches:
+    #   warning:src/vendor/t-ron.cyr:3585:1: duplicate fn 'chacha20_xor'
+    #     (last definition wins; first defined in lib/sigil.cyr)
+    # "last definition wins" meant sigil's own chacha20_aead_encrypt/_decrypt
+    # called T-RON's cipher, which keys its keystream off a single process-global
+    # buffer where sigil uses a per-thread lane, and never wipes it after use.
+    # t-ron 2.1.5 recorded this as a "benign" duplicate; it was not. t-ron 2.1.10
+    # renamed it `cc20_xor`. Pin the absence so a future sync cannot bring it back.
+    _vd_read("src/vendor/t-ron.cyr");
+    assert_eq(_vd_count("\nfn chacha20_xor("), 0, "t-ron defines no chacha20_xor (sigil's must win)");
+    assert(_vd_count("\nfn cc20_xor(") == 1, "t-ron: the cc20_xor rename actually applied");
 
     # ---- sankoch: the zlib profile must not drag stream.cyr back in ----
     # The full sankoch bundle defines `_stream_grow`, which collides with

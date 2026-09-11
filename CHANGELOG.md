@@ -2,6 +2,66 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.44.6] - 2026-09-10
+
+**Toolchain 6.5.51 → 6.6.2 — the `Result` / `Option` / `Either` value form — and the
+vendored t-ron bundle that was overriding sigil's cipher.** Suite
+**300 + 1013 + 810 + 505 + 183 + 5** (+2: the new t-ron collision pins). Linux /
+aarch64 / AGNOS green; Windows unchanged.
+
+### Changed — Cyrius pin `6.5.51` → `6.6.2`
+
+6.6.0 made `Result` / `Option` / `Either` a two-register `(tag, payload)` **value**
+— zero-allocation construction — and deleted the `payload()` accessor. A function
+returning one now yields two registers, so `var r = f();` binds the **tag alone**.
+
+thoth's own source needed four sites migrated. One deserves calling out, in
+`src/config.cyr::_cfg_parse_sections`:
+
+```
+var r = bayan_cyml_parse_file_r(path);
+if (is_err_result(r) == 1) { return 0; }
+var doc = load64(r + 8);          # offset 8 of the BOXED Result object
+```
+
+`load64(r + 8)` was reading the boxed Result's payload **field**. Under the value
+form there is no box: `bayan_cyml_parse_file_r` returns `Ok(doc)` and the payload
+arrives in the second register directly, so the read becomes `var doc = r_v;`.
+
+### Fixed — t-ron 2.1.9's `chacha20_xor` was silently overriding sigil's
+
+⛔ **A real collision in this tree, not a theoretical one.** Building against the
+old bundle reproduces it verbatim:
+
+```
+warning:src/vendor/t-ron.cyr:3585:1: duplicate fn 'chacha20_xor'
+  (last definition wins; first defined in lib/sigil.cyr)
+```
+
+Same name, **same arity**, so cyrius only warned — which is why it rode along for
+six t-ron patches. "Last definition wins" meant sigil's own
+`chacha20_aead_encrypt` / `_decrypt` did not call sigil's cipher; they called
+t-ron's, which keys its keystream off a single **process-global** buffer where
+sigil uses a per-thread lane, and never wipes it after use. t-ron 2.1.5 had
+recorded the duplicate as "benign". It was not.
+
+Resolved upstream: t-ron 2.1.10 renamed it `cc20_xor`. `scripts/sync-tron.sh`
+now defaults to that tag, and `tests/cases/vendor.cyr` pins **both** halves —
+zero `chacha20_xor`, exactly one `cc20_xor` — so a future sync cannot bring the
+shadow back. That file already existed for precisely this class; this is its
+fourth entry, after darshana's `SYS_IOCTL`, sit's `entry_hash` / `ann_new`, and
+sankoch's `_stream_grow`.
+
+### Changed — vendored t-ron 2.1.9 → 2.1.10
+
+Beyond the rename, 2.1.10 fixes two **silent** socket-error guards in
+`_llm_http_post` (`if (sock_connect(...) < 0)` and `if (sock_send(...) < 0)` could
+never fire once `Err`'s tag is `1`, so a refused connection read as success), and
+renames its `circuit_breaker_*` family to `safety_circuit_breaker_*` after cyrius
+6.6.2 promoted same-name/different-arity duplicates to a hard error. Neither
+affected thoth directly — thoth vendors no majra, so the circuit-breaker family
+had no counterpart here — but both ship in the bundle.
+
 ## [0.44.5] - 2026-09-04
 
 **Toolchain refresh 6.5.43 → 6.5.51 — and macOS gets its environment back.** Suite

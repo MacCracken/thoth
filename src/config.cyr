@@ -1054,7 +1054,10 @@ fn _cfg_parse_sections(path) {
     if (path == 0) { return 0; }
     var r_t, r_v = bayan_cyml_parse_file_r(path);
     if (is_err_result(r_t) == 1) { return 0; }
-    var doc = load64(r + 8);
+    # The value form carries the payload directly. This read used to be
+    # `load64(r + 8)` — offset 8 of the BOXED Result object, which no
+    # longer exists; `bayan_cyml_parse_file_r` returns Ok(doc).
+    var doc = r_v;
     var hp = bayan_cyml_doc_header(doc);
     var hl = bayan_cyml_doc_header_len(doc);
     _cfg_parse_any = 1;
