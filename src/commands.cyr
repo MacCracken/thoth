@@ -1125,13 +1125,13 @@ fn cmd_personas(line) {
 fn _cmd_persona_shadow(tgt) {
     var base = 0;
     if (tgt != 0) {
-        var r = find_and_validate(tgt);
-        if (is_err_result(r) == 1) {
+        var r_t, r_v = find_and_validate(tgt);
+        if (is_err_result(r_t) == 1) {
             emit("unknown persona: '"); emit(tgt); oprintln("'");
             oprintln("  /persona shadow [name] shadows the active persona, or a named archetype. see /personas.");
             return 0;
         }
-        base = result_unwrap(r);
+        base = result_unwrap(r_t, r_v);
     }
     if (persona_shadow(base) == 0) { oprintln("shadow unavailable for the active persona."); return 0; }
     emit("persona -> "); emit(persona_name());
@@ -1172,8 +1172,8 @@ fn _cmd_persona_blend(rest) {
                 if (wi < 1) { wi = 1; }
                 if (wi > 99) { wi = 99; }                   # bounded (weight built by repeated add below)
             }
-            var r = find_and_validate(_persona_tok);
-            if (is_err_result(r) == 1) {
+            var r_t, r_v = find_and_validate(_persona_tok);
+            if (is_err_result(r_t) == 1) {
                 emit("unknown persona: '"); emit(_persona_tok); oprintln("'");
                 oprintln("  see /personas for the available archetypes.");
                 return 0;
@@ -1181,7 +1181,7 @@ fn _cmd_persona_blend(rest) {
             var w = 0.0;                                    # integer weight -> f64 (no int->f64 builtin)
             var k = 0;
             while (k < wi) { w = f64_add(w, 1.0); k = k + 1; }
-            vec_push(wv, weighted_new(result_unwrap(r), w));
+            vec_push(wv, weighted_new(result_unwrap(r_t, r_v), w));
             count = count + 1;
         }
     }

@@ -1104,8 +1104,8 @@ fn persona_profile() {
         # the active-persona display (banner/status/state) rather than faked.
         var pn = config_persona();
         if (pn != 0) {
-            var r = find_and_validate(pn);
-            if (is_err_result(r) == 0) { _persona_profile = result_unwrap(r); return _persona_profile; }
+            var r_t, r_v = find_and_validate(pn);
+            if (is_err_result(r_t) == 0) { _persona_profile = result_unwrap(r_t, r_v); return _persona_profile; }
         }
         _persona_profile = egyptian_thoth();
     }
@@ -1128,9 +1128,9 @@ fn persona_set(p) {
 # Returns 1 on success, 0 if the name is not a known/valid archetype (caller gives an honest refusal).
 # Pure consumption — avatara owns lookup + validation; thoth only selects. 0.22.0.
 fn persona_switch(name) {
-    var r = find_and_validate(name);
-    if (is_err_result(r) == 1) { return 0; }
-    persona_set(result_unwrap(r));
+    var r_t, r_v = find_and_validate(name);
+    if (is_err_result(r_t) == 1) { return 0; }
+    persona_set(result_unwrap(r_t, r_v));
     return 1;
 }
 
@@ -1150,9 +1150,9 @@ fn persona_shadow(base) {
 # blends the traits and carries the DOMINANT (highest-weight) archetype's name/soul/spirit prose + a
 # "A + B" composite name, so the result is a usable persona. Returns 1, or 0 if compose rejects the inputs.
 fn persona_blend(wv) {
-    var r = compose(wv);
-    if (is_err_result(r) == 1) { return 0; }
-    persona_set(result_unwrap(r));
+    var r_t, r_v = compose(wv);
+    if (is_err_result(r_t) == 1) { return 0; }
+    persona_set(result_unwrap(r_t, r_v));
     return 1;
 }
 

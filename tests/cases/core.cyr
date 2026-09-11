@@ -370,10 +370,10 @@ fn test_persona_switch() {
     # 0.22.2 blend: weighted compose (Athena:2 + Odin) -> composite persona, dominant leads the voice
     persona_set(egyptian_thoth());
     var wv = vec_new();
-    var ra = find_and_validate("Athena");
-    var ro = find_and_validate("Odin");
-    vec_push(wv, weighted_new(result_unwrap(ra), 2.0));
-    vec_push(wv, weighted_new(result_unwrap(ro), 1.0));
+    var ra_t, ra_v = find_and_validate("Athena");
+    var ro_t, ro_v = find_and_validate("Odin");
+    vec_push(wv, weighted_new(result_unwrap(ra_t, ra_v), 2.0));
+    vec_push(wv, weighted_new(result_unwrap(ro_t, ro_v), 1.0));
     assert_eq(persona_blend(wv), 1, "weighted blend (Athena:2 + Odin) succeeds");
     assert(persona_soul() != 0, "blend persona has soul prose (from the dominant, usable)");
     assert(cstr_starts_with(persona_name(), "Athena") == 1, "composite name leads with the dominant (Athena)");
@@ -2121,9 +2121,9 @@ fn test_role() {
     assert_eq(persona_role_is_override(), 0, "persona switch clears a custom override");
     assert_eq(persona_aspect(), profile_dominant_aspect(persona_profile()), "switch -> dominant aspect is the active default");
     # a NON-Thoth archetype's default role derives from its dominant aspect (0.24.5 change; was desc)
-    var od = find_and_validate("Odin");
-    if (is_err_result(od) == 0) {
-        persona_set(result_unwrap(od));
+    var od_t, od_v = find_and_validate("Odin");
+    if (is_err_result(od_t) == 0) {
+        persona_set(result_unwrap(od_t, od_v));
         assert(streq(persona_role(), aspect_role(profile_dominant_aspect(persona_profile()))) == 1, "switched persona default role = its dominant aspect");
     }
     # out-of-range aspect select is a safe no-op

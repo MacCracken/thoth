@@ -10,14 +10,17 @@
 # call surfaces are satisfied by the sibling vendored bundles, and glob_match
 # by the stdlib `regex` dep.
 #
-# NOTE: t-ron's bundle carries its own chacha20_xor, colliding benignly with
-# stdlib sigil's (same signature + semantics; last definition wins). Known
-# and accepted in t-ron's own 2.1.5 notes.
+# NOTE: t-ron's bundle USED to carry its own `chacha20_xor`, colliding with
+# stdlib sigil's at the same arity. t-ron 2.1.5 recorded that as "benign"
+# and it was not: "last definition wins" meant sigil's chacha20_aead_encrypt
+# / _decrypt called t-ron's process-global, never-wiped keystream instead of
+# sigil's per-thread lane. t-ron 2.1.10 renamed it to `cc20_xor`, so from
+# that tag on there is no collision. Do not re-introduce the claim.
 #
-# Usage: ./scripts/sync-tron.sh [tag]   (default: 2.1.9)
+# Usage: ./scripts/sync-tron.sh [tag]   (default: 2.1.10)
 set -euo pipefail
 
-TAG="${1:-2.1.9}"
+TAG="${1:-2.1.10}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/t-ron.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/t-ron/${TAG}/dist/t-ron.cyr"
