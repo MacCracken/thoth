@@ -80,20 +80,20 @@ fn test_tui() {
     led_feed(KEY_CHAR, 122);                                    # 'z' (non-empty line)
     assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
     # geometry (0.11.9: faint rules + dynamic multi-line composer; pure (rows,lines,show)).
-    # 0.45.0: the status bar moved BELOW the input — feed · rule · composer · hint · blank · status (last row).
+    # 0.45.0: feed · rule · blank · input · blank · status (last row). No hint row: the hints are the input's placeholder.
     assert_eq(tui_status_row(24), 24, "status bar on the last row (0.45.0: below the input, no longer row 1)");
-    assert_eq(tui_status_gap_row(24), 23, "one blank row separates the input zone from the status bar");
-    assert_eq(tui_hint_row(24, 1), 22, "hint row directly under the composer, above the blank + status");
-    assert_eq(tui_hint_row(24, 0), 24, "status hidden -> the hint drops back to the last row");
-    assert_eq(tui_composer_bot(24, 1), 21, "composer block bottom just above the hint");
-    assert_eq(tui_composer_bot(24, 0), 23, "status hidden -> composer bottom just above the last-row hint");
-    assert_eq(tui_composer_top(24, 1, 1), 21, "1-line composer top == bottom (one row)");
-    assert_eq(tui_composer_top(24, 2, 1), 20, "a 2-line composer grows up one row");
-    assert_eq(tui_sep_bottom_row(24, 1, 1), 20, "the rule sits above a 1-line composer");
+    assert_eq(tui_status_gap_row(24), 23, "a line break above the status bar");
+    assert_eq(tui_composer_bot(24, 1), 22, "the input sits directly above that line break");
+    assert_eq(tui_composer_bot(24, 0), 24, "status hidden -> the input takes the last row (the bar's line break goes with it)");
+    assert_eq(tui_composer_top(24, 1, 1), 22, "1-line composer top == bottom (one row)");
+    assert_eq(tui_composer_top(24, 2, 1), 21, "a 2-line composer grows up one row");
+    assert_eq(tui_composer_gap_row(24, 1, 1), 21, "a line break above the input");
+    assert_eq(tui_composer_gap_row(24, 2, 1), 20, "...which moves up with a growing composer");
+    assert_eq(tui_sep_bottom_row(24, 1, 1), 20, "the rule sits above the input's line break");
     assert_eq(tui_feed_top(), 1, "feed starts at row 1 (no status bar above it any more)");
-    assert_eq(tui_feed_bot(24, 1, 1), 19, "feed bottom above the rule + 1-line composer");
+    assert_eq(tui_feed_bot(24, 1, 1), 19, "feed bottom above the rule");
     assert_eq(tui_feed_bot(24, 2, 1), 18, "a 2-line composer pushes the feed bottom up one");
-    assert_eq(tui_feed_bot(24, 1, 0), 21, "status hidden -> the feed reclaims the status row AND its blank row");
+    assert_eq(tui_feed_bot(24, 1, 0), 21, "status hidden -> the feed reclaims the bar and its line break");
     assert_eq(tui_composer_height(24, 1, 1), 1, "one logical line -> one composer row");
     assert_eq(tui_composer_height(24, 20, 1), 8, "composer height clamps to COMPOSER_MAX_ROWS");
     assert(tui_composer_max(8, 0) > tui_composer_max(8, 1), "hidden status frees more composer rows (below the clamp)");
@@ -108,20 +108,20 @@ fn test_tui() {
             while (_gl <= 10) {
                 var _tfb = tui_feed_bot(_gr, _gl, _gs);
                 var _tsep = tui_sep_bottom_row(_gr, _gl, _gs);
+                var _tgap = tui_composer_gap_row(_gr, _gl, _gs);
                 var _tct = tui_composer_top(_gr, _gl, _gs);
                 var _tcb = tui_composer_bot(_gr, _gs);
-                var _thr = tui_hint_row(_gr, _gs);
                 if (_tfb < tui_feed_top()) { _gbad = _gbad + 1; }            # MIN_FEED: at least one feed row
                 if (_tsep != _tfb + 1) { _gbad = _gbad + 1; }
-                if (_tct != _tsep + 1) { _gbad = _gbad + 1; }
+                if (_tgap != _tsep + 1) { _gbad = _gbad + 1; }               # the line break above the input
+                if (_tct != _tgap + 1) { _gbad = _gbad + 1; }
                 if ((_tcb - _tct + 1) != tui_composer_height(_gr, _gl, _gs)) { _gbad = _gbad + 1; }
-                if (_thr != _tcb + 1) { _gbad = _gbad + 1; }
                 if (_gs == 1) {
-                    if (tui_status_gap_row(_gr) != _thr + 1) { _gbad = _gbad + 1; }
+                    if (tui_status_gap_row(_gr) != _tcb + 1) { _gbad = _gbad + 1; }   # the line break above the bar
                     if (tui_status_row(_gr) != tui_status_gap_row(_gr) + 1) { _gbad = _gbad + 1; }
                     if (tui_status_row(_gr) != _gr) { _gbad = _gbad + 1; }
                 } else {
-                    if (_thr != _gr) { _gbad = _gbad + 1; }
+                    if (_tcb != _gr) { _gbad = _gbad + 1; }
                 }
                 _gl = _gl + 1;
             }
@@ -129,7 +129,7 @@ fn test_tui() {
         }
         _gr = _gr + 1;
     }
-    assert_eq(_gbad, 0, "feed/rule/composer/hint/blank/status tile every row, no gap or overlap (8..60 rows, both states)");
+    assert_eq(_gbad, 0, "feed/rule/blank/input/blank/status tile every row, no gap or overlap (8..60 rows, both states)");
     # slash-command palette matchers
     assert_eq(_buf_has_space("/seams x", 8), 1, "space detected -> command token complete");
     assert_eq(_buf_has_space("/se", 3), 0, "no space -> still typing the token");
@@ -796,6 +796,60 @@ fn test_status_bar_0450() {
     return 0;
 }
 
+# 0.45.0: the keybinding hints are the input's PLACEHOLDER — shown while nothing is typed, gone once something is — and
+# the strips that used to own a hint row (the find / pick prompts, the slash palette) render inside the input too. The
+# painters move the cursor (fd 1, not capturable), so this asserts the decision and the emitted content under OUT_RING
+# at the plain tier; the row geometry is test_tui's, and the live paint is pty-verified.
+fn test_composer_placeholder_0450() {
+    test_group("hints are the input's placeholder; strips render inside the input (0.45.0)");
+    var _t0 = ui_tier();
+    var _d0 = ui_color_depth();
+    ui_force(PT_PLAIN, CD_NONE);
+    var _st = _tui_show_tree;
+    var _fo = _tui_focus;
+    _tui_show_tree = 0; _tui_focus = FOCUS_COMPOSER; _mpick_active = 0; _fsearch_active = 0;
+    # the decision: an empty input shows the placeholder, a draft replaces it, an open modal always owns the row
+    led_reset();
+    assert_eq(_tui_input_placeholder_on(), 1, "an empty input shows its placeholder");
+    led_feed(KEY_CHAR, 104);
+    assert_eq(_tui_input_placeholder_on(), 0, "the first typed character replaces the placeholder with the draft");
+    _fsearch_active = 1;
+    assert_eq(_tui_input_placeholder_on(), 1, "an open find prompt owns the input even over a draft");
+    _fsearch_active = 0;
+    led_reset();
+    # the content: the keybinding hints for the focused pane
+    feed_init();
+    out_mode_set(OUT_RING);
+    tui_composer_placeholder_emit();
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 1, "the placeholder is one line");
+    var _hp = "Ctrl-X exit · Ctrl-G status · Ctrl-B files · ";
+    assert_eq(memeq(feed_line_ptr(0), _hp, strlen(_hp)), 1, "input focused: the keybinding hints");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "Enter send", 10), 1, "...ending in how to send");
+    _tui_show_tree = 1; _tui_focus = FOCUS_TREE;
+    feed_init(); out_mode_set(OUT_RING); tui_composer_placeholder_emit(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "Enter read/open", 15), 1, "tree focused: the tree's keys");
+    _tui_focus = FOCUS_COMPOSER;
+    feed_init(); out_mode_set(OUT_RING); tui_composer_placeholder_emit(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "Tab tree", 8), 1, "tree shown, input focused: Tab moves to the tree");
+    _tui_show_tree = 0;
+    # an open modal's prompt takes the placeholder's place
+    fsearch_init(); fsearch_reset(); _fsearch_active = 1;
+    feed_init(); out_mode_set(OUT_RING); tui_composer_placeholder_emit(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(memeq(feed_line_ptr(0), "find: ", 6), 1, "the find prompt is drawn inside the input");
+    _fsearch_active = 0;
+    # the slash palette that follows a typed '/token'
+    led_reset(); led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 109); led_feed(KEY_CHAR, 111);     # "/mo"
+    assert_eq(tui_palette_active(), 1, "typing '/mo' opens the palette");
+    feed_init(); out_mode_set(OUT_RING); tui_draw_palette(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "/model", 6), 2, "the palette lists /model and /models");
+    led_reset();
+    _tui_show_tree = _st; _tui_focus = _fo;
+    ui_force(_t0, _d0);
+    return 0;
+}
+
 # re-renderable feed (0.18.0): the ring stores role MARKERS (reverse-mapped at seal); the painter
 # EXPANDS them to the current theme's concrete SGR — byte-identical output now, recolorable later.
 fn test_feed_markers() {
@@ -1176,7 +1230,7 @@ fn test_spinner() {
     # length of every tool call: reported as "the animations lock up waiting for responses". A short-lived
     # worker thread now owns the glyph for the duration of ONE blocking call. It must NEVER arm outside
     # the alt screen (the line REPL, one-shot and the GUI all share this code path and none of them has a
-    # hint row to paint), and it must never arm with no dispatch in flight.
+    # TUI input row to paint), and it must never arm with no dispatch in flight.
     var saved_active = _spin_active;
     var saved_mode = out_mode();
     _spin_active = 0;

@@ -777,7 +777,9 @@ fn _ag_alloc() {
 # a leaner future error frame cannot make this silently stop firing.
 #
 # `message` is PROVIDER-controlled text. hoosh bounds it and flattens control bytes, but that is a
-# dep's invariant and not thoth's, so it is copied bounded here and printed through emit_clean_line.
+# dep's invariant and not thoth's, so it is copied bounded AND cleaned here (0.45.0, _ag_err_capture).
+# Every reader of agent_err_msg() — the interactive landing, one-shot's stderr line, the log, the error
+# event — gets that one clean copy.
 var AG_ERRMSG_CAP = 512;
 var _ag_err_code = 0;        # provider HTTP status off the stream, 0 if none seen
 var _ag_err_msg = 0;         # AG_ERRMSG_CAP bounded copy of the provider's message, lazy
@@ -801,6 +803,14 @@ fn agent_err_msg() { if (_ag_err_msg == 0) { return 0; } if (load8(_ag_err_msg) 
 
 # _ag_err_capture: pull a top-level `error` object out of an already-parsed frame. Returns 1 if one
 # was found. Keeps the FIRST error of a round — the provider's initiating fault, not a later echo.
+#
+# ⚠ 0.45.0 — THE MESSAGE IS CLEANED IN THE COPY, where the provider's bytes enter thoth. A JSON unicode
+# escape decodes to a real ESC, and this copy was byte for byte: the interactive landing drew it through
+# emit_clean_line, but `_oneshot_report_error` wrote it to stderr with a plain emit_err — the operator's
+# terminal. Reproduced under a pty against a fake gateway streaming exactly this frame: one `thoth "hello"`
+# put ESC [7m on the terminal. LABEL policy (`_clean_byte` in util.cyr, one byte for one): the message is
+# one line of chrome everywhere it is shown, so a newline goes too, or it would forge a second `thoth:`
+# line. By LENGTH, so an escaped NUL becomes '?' instead of silently cutting the reason short.
 fn _ag_err_capture(v) {
     var err = bayan_json_v_obj_get(v, "error");
     if (err == 0) { return 0; }
@@ -818,7 +828,7 @@ fn _ag_err_capture(v) {
                 if (n > (AG_ERRMSG_CAP - 1)) { n = AG_ERRMSG_CAP - 1; }
                 var d = str_data(ms);
                 var i = 0;
-                while (i < n) { store8(_ag_err_msg + i, load8(d + i)); i = i + 1; }
+                while (i < n) { store8(_ag_err_msg + i, _clean_byte(load8(d + i) & 255, 0)); i = i + 1; }
                 store8(_ag_err_msg + i, 0);
             }
         }
@@ -1748,12 +1758,12 @@ fn _agent_sse_cb(ctx, ev) {
     if (delta == 0) { spin_anim_release(); return 1; }
     var rc = bayan_json_v_obj_get(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty on Opus 4.8)
     if (rc != 0) {
-        var rs = bayan_json_v_str(rc);
+        var rs = _hoosh_clean_text(rc);   # 0.45.0: the model's text is cleaned where it enters (see _hoosh_clean_text)
         if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
     }
     var content = bayan_json_v_obj_get(delta, "content");
     if (content != 0) {
-        var s = bayan_json_v_str(content);
+        var s = _hoosh_clean_text(content);   # 0.45.0: cleaned BEFORE mdhl_feed and the accumulator both see it
         if (s != 0) { var n = str_len(s); if (n > 0) { mdhl_feed(str_data(s), n); _hoosh_acc_append(str_data(s), n); } }   # 0.15.1: fenced-code highlighter
     }
     var tcs = bayan_json_v_obj_get(delta, "tool_calls");

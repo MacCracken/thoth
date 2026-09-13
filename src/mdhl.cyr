@@ -26,9 +26,12 @@
 # FLOOR (byte-identical): at PT_PLAIN (piped / one-shot / CI / NO_COLOR) mdhl_feed and
 # mdhl_reply are a strict pass-through — `emit_n(ptr,n)` on the same bytes, same order,
 # once — and mdhl_finish is a no-op. So the concatenation of the calls equals today's
-# emit_n. The raw reply accumulator (_hoosh_acc) is untouched, so history / --json / -o
-# read the RAW bytes. Included AFTER src/diff.cyr (calls _hl_span) — hoosh/agent forward-
-# reference mdhl_* the same whole-unit way they reference feed_write.
+# emit_n. The reply accumulator (_hoosh_acc) is untouched, so history / --json / -o
+# read the reply's own bytes, never mdhl's styling. ⚠ Those bytes reach mdhl already
+# cleaned (0.45.0, _hoosh_clean_text in hoosh.cyr): mdhl passes prose through verbatim,
+# so it must never be the first thing to see a reply. Included AFTER src/diff.cyr (calls
+# _hl_span) — hoosh/agent forward-reference mdhl_* the same whole-unit way they reference
+# feed_write.
 
 var MDHL_LINE_CAP = 2048;         # one assembled line (mirrors FEED_LINE_CAP); alloc'd
 var MDHL_BLOCK_CAP = 262144;      # 256 KiB accumulated code block; over-cap -> stream verbatim

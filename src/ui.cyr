@@ -614,6 +614,15 @@ fn ui_emit_n(role, ptr, n) {
     emit(ui_reset());
     return 0;
 }
+# ui_emit_clean (0.45.0): ui_emit for UNTRUSTED one-line text — a path, a typed argument, a provider name — drawn
+# through emit_clean_line (LABEL policy: every C0 byte and DEL becomes '?'). For clean text the bytes are exactly
+# ui_emit's: sgr + text + reset.
+fn ui_emit_clean(role, s) {
+    emit(ui_sgr(role));
+    emit_clean_line(s);
+    emit(ui_reset());
+    return 0;
+}
 
 # ui_match_on: the feed-search match highlight SGR — reverse video for a match, reverse+underline for the
 # CURRENT match (cur==1), or "" at the plain tier (floor: a highlight adds zero bytes). Theme- and

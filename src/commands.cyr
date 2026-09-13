@@ -131,6 +131,32 @@ fn alias_expand(line, depth) {
     return dst;
 }
 
+# _alias_value_has_ctl (0.45.0): 1 when the [alias] value that `line`'s slash token names holds a byte the house TEXT
+# policy substitutes — ESC or any other C0 byte except tab and newline, or DEL — else 0 (0 too when no alias matches).
+#
+# ⚠ WHY A WHOLE-ALIAS REFUSAL. ADR-0021 keeps [alias] in the LOCAL layer, so a cloned repository's .thoth/config.cyml
+# supplies it, and TOML decodes a unicode escape into a real ESC byte. _dispatch_d re-dispatches an expansion as if the
+# operator had typed it, and command after command echoed that argument raw: the task echo, /run's proposal, /write's
+# path, /role's label, the persona and theme refusals, /models <provider>, every path /read /git /allow /save and
+# /audit export print, conversation titles, /search and /find. Each of those now sanitises its own value, which still
+# matters for a line the operator types or pastes. But an alias is text the operator did not type and has no use for a
+# control byte, so it is refused where it would enter, which also closes a door nobody has found yet. It reads the
+# VALUE, not the built line: arguments typed after the alias name are the operator's own and are judged by the command
+# that prints them. Tab and newline stay allowed, as in prose, because a multi-line task alias is legitimate. The byte
+# test is _clean_byte, the policy's one-byte form, so the policy is not restated here.
+fn _alias_value_has_ctl(line) {
+    _alias_name_of(line, &_alias_name, ALIAS_NAME_CAP);
+    var v = config_alias_lookup(&_alias_name);
+    if (v == 0) { return 0; }
+    var i = 0;
+    while (load8(v + i) != 0) {
+        var b = load8(v + i) & 255;
+        if (_clean_byte(b, 1) != b) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
 # classify_input: map a trimmed input line to a Cmd id. Pure — unit-tested.
 fn classify_input(line) {
     if (load8(line) == 0) { return CMD_EMPTY; }
@@ -657,10 +683,12 @@ fn cmd_git(line) {
     # 0.19.2: `/git <path>` renders that file's diff (HEAD blob vs working tree) via sit_diff_path through
     # the colored diff renderer. sit_diff_path returns 0 when the file is unchanged / untracked-and-absent /
     # too large to diff — reported honestly, never a blank or a fake diff.
+    # 0.45.0: the path is drawn through the LABEL sanitiser, here and in diff_render_ann's header. It is the operator's
+    # argument (typed, or a repo-local [alias] expansion) and a filename can hold a control byte, so sit gets it raw.
     if (arg != 0) {
         var ops = sit_diff_path(repo, arg);
         if (ops == 0) {
-            emit("  "); ui_emit(ROLE_BLUE, arg); ui_emit(ROLE_MUTED, " — no changes vs HEAD (unchanged, untracked-and-absent, or too large)"); oprintln("");
+            emit("  "); ui_emit_clean(ROLE_BLUE, arg); ui_emit(ROLE_MUTED, " — no changes vs HEAD (unchanged, untracked-and-absent, or too large)"); oprintln("");
         } else {
             diff_render_ann(arg, ops);
         }
@@ -731,7 +759,7 @@ fn cmd_allow(line) {
         } else {
             var i = 0;
             while (i < n) {
-                emit("  "); ui_emit(ROLE_GREEN, "granted"); emit("  "); emit(project_read_root_at(i)); oprintln("");
+                emit("  "); ui_emit(ROLE_GREEN, "granted"); emit("  "); emit_clean_line(project_read_root_at(i)); oprintln("");
                 i = i + 1;
             }
         }
@@ -749,17 +777,20 @@ fn cmd_allow(line) {
             return 0;
         }
         if (project_grant_root(vp) == 1) {
-            ui_emit(ROLE_GREEN, "granted"); emit(" read access to vidya: "); emit(vp); oprintln("");
+            ui_emit(ROLE_GREEN, "granted"); emit(" read access to vidya: "); emit_clean_line(vp); oprintln("");
         } else {
-            ui_emit(ROLE_RED, "could not grant"); emit(" "); emit(vp); oprintln("");
+            ui_emit(ROLE_RED, "could not grant"); emit(" "); emit_clean_line(vp); oprintln("");
             _allow_root_hint();
         }
         return 0;
     }
+    # 0.45.0: every path this command prints goes through the LABEL sanitiser — the argument (typed, or a repo-local
+    # [alias] expansion), the configured vidya path (a preference key the local layer keeps, ADR-0021), and each granted
+    # root the bare listing shows. A directory name can hold a control byte, so the grant itself keeps the raw bytes.
     if (project_grant_root(arg) == 1) {
-        ui_emit(ROLE_GREEN, "granted"); emit(" read access to "); emit(arg); oprintln("");
+        ui_emit(ROLE_GREEN, "granted"); emit(" read access to "); emit_clean_line(arg); oprintln("");
     } else {
-        ui_emit(ROLE_RED, "could not grant"); emit(" "); emit(arg); oprintln("");
+        ui_emit(ROLE_RED, "could not grant"); emit(" "); emit_clean_line(arg); oprintln("");
         _allow_root_hint();
     }
     return 0;
@@ -959,22 +990,24 @@ fn cmd_save(line) {
     }
     if (_save_buf == 0) { _save_buf = alloc(SAVE_BUF); }
     var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0644, like the -o tee
-    if (fd < 0) { ui_emit(ROLE_RED, "could not open "); emit(path); ui_emit(ROLE_FAINT, " for writing"); oprintln(""); return 0; }
+    # 0.45.0: `path` is the operator's argument — typed, or a repo-local [alias] expansion — and a filename can hold a
+    # control byte, so every result line below names it through the LABEL sanitiser; the file is opened with the raw bytes.
+    if (fd < 0) { ui_emit(ROLE_RED, "could not open "); emit_clean_line(path); ui_emit(ROLE_FAINT, " for writing"); oprintln(""); return 0; }
     var ok = 1;
     # 0.36.5: --json / --plain are tier-neutral (the conversation, not the rendered scrollback) — a machine or a
     # bare-text export shouldn't depend on whether you happened to be in the TUI.
     if (fmt == SAVE_FMT_JSON) {
         if (_save_json(fd) == 0) { ok = 0; }
         file_close(fd);
-        if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(nhist); emit(" messages (json) to "); emit(path); oprintln(""); }
-        else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+        if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(nhist); emit(" messages (json) to "); emit_clean_line(path); oprintln(""); }
+        else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit_clean_line(path); oprintln(""); }
         return 0;
     }
     if (fmt == SAVE_FMT_PLAIN) {
         if (_save_plain(fd) == 0) { ok = 0; }
         file_close(fd);
-        if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(nhist); emit(" messages (plain) to "); emit(path); oprintln(""); }
-        else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+        if (ok == 1) { ui_emit(ROLE_GREEN, "saved "); ofmt_int(nhist); emit(" messages (plain) to "); emit_clean_line(path); oprintln(""); }
+        else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit_clean_line(path); oprintln(""); }
         return 0;
     }
     if (_save_write_str(fd, "# thoth transcript\n\n") == 0) { ok = 0; }
@@ -998,8 +1031,8 @@ fn cmd_save(line) {
     if (ok == 1) {
         ui_emit(ROLE_GREEN, "saved "); ofmt_int(nsaved);
         if (nfeed > 0) { emit(" lines to "); } else { emit(" messages to "); }
-        emit(path); oprintln("");
-    } else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln(""); }
+        emit_clean_line(path); oprintln("");
+    } else { ui_emit(ROLE_RED, "save incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit_clean_line(path); oprintln(""); }
     return 0;
 }
 
@@ -1100,7 +1133,7 @@ fn cmd_personas(line) {
     var bv = by_tradition(arg);
     var bn = vec_len(bv);
     if (bn == 0) {
-        emit("unknown tradition: '"); emit(arg); oprintln("'");
+        emit("unknown tradition: '"); emit_clean_line(arg); oprintln("'");   # 0.45.0: the unmatched argument, sanitised (typed or [alias]-borne)
         oprintln("  /personas lists the available traditions (case-sensitive).");
         return 0;
     }
@@ -1127,7 +1160,7 @@ fn _cmd_persona_shadow(tgt) {
     if (tgt != 0) {
         var r_t, r_v = find_and_validate(tgt);
         if (is_err_result(r_t) == 1) {
-            emit("unknown persona: '"); emit(tgt); oprintln("'");
+            emit("unknown persona: '"); emit_clean_line(tgt); oprintln("'");   # 0.45.0: sanitised, as cmd_persona's refusal
             oprintln("  /persona shadow [name] shadows the active persona, or a named archetype. see /personas.");
             return 0;
         }
@@ -1174,7 +1207,7 @@ fn _cmd_persona_blend(rest) {
             }
             var r_t, r_v = find_and_validate(_persona_tok);
             if (is_err_result(r_t) == 1) {
-                emit("unknown persona: '"); emit(_persona_tok); oprintln("'");
+                emit("unknown persona: '"); emit_clean_line(_persona_tok); oprintln("'");   # 0.45.0: sanitised, as cmd_persona's refusal
                 oprintln("  see /personas for the available archetypes.");
                 return 0;
             }
@@ -1212,7 +1245,7 @@ fn cmd_persona(line) {
     if (token_is(arg, "shadow") == 1) { return _cmd_persona_shadow(arg_after(arg)); }   # 0.22.2
     if (token_is(arg, "blend") == 1) { return _cmd_persona_blend(arg_after(arg)); }      # 0.22.2
     if (persona_switch(arg) == 0) {
-        emit("unknown persona: '"); emit(arg); oprintln("'");
+        emit("unknown persona: '"); emit_clean_line(arg); oprintln("'");   # 0.45.0: the unmatched argument, sanitised (typed or [alias]-borne)
         oprintln("  see /personas for the available archetypes (names are case-sensitive).");
         return 0;
     }
@@ -1275,14 +1308,17 @@ fn cmd_model(line) {
         return 0;
     }
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) {
-        emit("cannot switch to '"); emit(arg); oprintln("': hoosh seam is absent.");
+        emit("cannot switch to '"); emit_clean_line(arg); oprintln("': hoosh seam is absent.");
         oprintln("set [hoosh].url in .thoth/config.cyml; mid-session switching routes through hoosh. see /seams.");
         return 0;
     }
     session_set_model_copy(arg);
     term_title_set();                        # 0.22.3: reflect the new model in the terminal title
-    emit("model -> "); oprintln(arg);
-    emit("  next turn routes to hoosh as '"); emit(arg); oprintln("' (mid-session switch).");
+    # 0.45.0: echo the STORED id, not `arg` — the copy is sanitised (session_set_model_copy) and is exactly what the
+    # next turn sends; echoing the raw line printed a typed escape straight back to the terminal.
+    var cur = session_model();
+    emit("model -> "); oprintln(cur);
+    emit("  next turn routes to hoosh as '"); emit(cur); oprintln("' (mid-session switch).");
     log_begin("model_switch"); log_kv_str("model", arg); log_commit(SK_INFO);
     return 0;
 }
@@ -1322,15 +1358,26 @@ fn _read_highlight(path, buf, n) {
     return _hl_span(lang, buf, n, ui_reset());
 }
 
+# _read_note (0.45.0): one of /read's two refusal lines, "<label><path>", the path through the LABEL sanitiser. Shared
+# because the second ("read failed: ") needs the file to vanish between file_exists and file_read_all's own open, which
+# no test can arrange; this way it prints exactly as the tested "no such file: " line does.
+fn _read_note(label, path) {
+    emit(label); emit_clean_line(path); oprintln("");
+    return 0;
+}
+
 fn cmd_read(line) {
     var path = arg_after(line);
     if (path == 0) { oprintln("usage: /read <file>"); return 0; }
-    if (file_exists(path) == 0) { emit("no such file: "); oprintln(path); return 0; }
+    # 0.45.0: the path — typed, or a repo-local [alias] expansion — is named through the LABEL sanitiser on all three
+    # lines; a filename can hold a control byte, so the file is still opened with the raw bytes. (The CONTENT is the
+    # file's own and prints as before.)
+    if (file_exists(path) == 0) { _read_note("no such file: ", path); return 0; }
     if (_read_buf == 0) { _read_buf = alloc(READ_BUF_CAP); }
     var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
-    if (n < 0) { emit("read failed: "); oprintln(path); return 0; }
+    if (n < 0) { _read_note("read failed: ", path); return 0; }
     store8(_read_buf + n, 0);
-    ui_emit(ROLE_FAINT, "--- "); ui_emit(ROLE_BLUE, path); ui_emit(ROLE_FAINT, " (");
+    ui_emit(ROLE_FAINT, "--- "); ui_emit_clean(ROLE_BLUE, path); ui_emit(ROLE_FAINT, " (");
     emit(ui_sgr(ROLE_FAINT)); ofmt_int(n); emit(ui_reset());
     ui_emit(ROLE_FAINT, " bytes) ---"); oprintln("");
     if (_read_highlight(path, _read_buf, n) == 0) { emit_n(_read_buf, n); }
@@ -1348,6 +1395,16 @@ var _write_out = 0;
 var _write_old = 0;
 var WRITE_BUF_CAP = 4096;
 var WRITE_OLD_CAP = 65536;   # old-file snapshot for the diff (capped; larger -> summarized)
+
+# _write_incomplete_note (0.45.0): cmd_write's INCOMPLETE line, split out so it is testable — no test can arrange a
+# short positive write portably. The path goes through the LABEL sanitiser, like every other line cmd_write prints.
+fn _write_incomplete_note(path, rc, want) {
+    ui_emit(ROLE_RED, "write INCOMPLETE: "); emit_clean_line(path);
+    ui_emit(ROLE_FAINT, " — "); ofmt_int(rc); ui_emit(ROLE_FAINT, " of "); ofmt_int(want);
+    ui_emit(ROLE_FAINT, " bytes written; the file was truncated first, so it now holds only that much");
+    oprintln("");
+    return 0;
+}
 
 fn cmd_write(line) {
     var rest = arg_after(line);
@@ -1367,7 +1424,10 @@ fn cmd_write(line) {
     while (load8(rest + j) == 32) { j = j + 1; }
     if (load8(rest + j) != 0) { content = rest + j; }
     if (content == 0) { oprintln("usage: /write <path> <content>"); return 0; }
-    ui_emit(ROLE_FAINT, "propose write -> "); ui_emit(ROLE_BLUE, _write_path); oprintln("");
+    # 0.45.0: the path — typed, or a repo-local [alias] expansion — is named through the LABEL sanitiser on every line
+    # below and in the diff card's header (diff_render); a filename can hold a control byte, so the gate's params and
+    # the write itself keep the raw bytes. This proposal line is printed BEFORE the gate prompt.
+    ui_emit(ROLE_FAINT, "propose write -> "); ui_emit_clean(ROLE_BLUE, _write_path); oprintln("");
     var wparams = _params_one("path", _write_path);
     if (gate_authorize("thoth_write", wparams, "write to", _write_path) == 0) {
         ui_emit(ROLE_RED, "  denied. nothing written."); oprintln("");
@@ -1393,7 +1453,7 @@ fn cmd_write(line) {
         diff_render(_write_path, _write_old, oldlen, _write_out, clen + 1);
     }
     var rc = file_write_all(_write_path, _write_out, clen + 1);
-    if (rc < 0) { emit("write failed: "); oprintln(_write_path); return 0; }
+    if (rc < 0) { emit("write failed: "); emit_clean_line(_write_path); oprintln(""); return 0; }
     # ⚠ 0.44.2 — A SHORT WRITE WAS REPORTED AS A COMPLETE ONE. file_write_all opens with O_TRUNC and
     # returns one sys_write's result, so a partial write comes back POSITIVE and smaller than len — and
     # this printed its own requested length regardless. The target had already been emptied by O_TRUNC, so
@@ -1401,13 +1461,10 @@ fn cmd_write(line) {
     # Every other writer in this file already compares the returned count (/save, /audit export); this was
     # the one that did not, and it is the one that overwrites a file the user named.
     if (rc < (clen + 1)) {
-        ui_emit(ROLE_RED, "write INCOMPLETE: "); emit(_write_path);
-        ui_emit(ROLE_FAINT, " — "); ofmt_int(rc); ui_emit(ROLE_FAINT, " of "); ofmt_int(clen + 1);
-        ui_emit(ROLE_FAINT, " bytes written; the file was truncated first, so it now holds only that much");
-        oprintln("");
+        _write_incomplete_note(_write_path, rc, clen + 1);
         return 0;
     }
-    emit("wrote "); ofmt_int(clen + 1); emit(" bytes (+newline) -> "); oprintln(_write_path);
+    emit("wrote "); ofmt_int(clen + 1); emit(" bytes (+newline) -> "); emit_clean_line(_write_path); oprintln("");
     return 0;
 }
 
@@ -1547,7 +1604,7 @@ fn cmd_new(line) {
     var title = arg_after(line);
     if (title != 0) { conv_set_title(idx, conv_dup_title(title)); }
     emit("new conversation "); ofmt_int(idx + 1);
-    if (title != 0) { emit(": "); ui_emit(ROLE_FG, title); }
+    if (title != 0) { emit(": "); ui_emit(ROLE_FG, conv_title(idx)); }   # 0.45.0: the STORED title (conv_dup_title sanitises it), not the raw line
     oprintln("");
     return 0;
 }
@@ -1568,7 +1625,7 @@ fn cmd_rename(line) {
     var title = arg_after(line);
     if (title == 0) { oprintln("usage: /rename <title>"); return 0; }
     conv_set_title(conv_active(), conv_dup_title(title));
-    emit("renamed to "); ui_emit(ROLE_FG, title); oprintln("");
+    emit("renamed to "); ui_emit(ROLE_FG, conv_title(conv_active())); oprintln("");   # 0.45.0: the STORED, sanitised title
     return 0;
 }
 fn cmd_delete(line) {
@@ -1649,7 +1706,7 @@ fn cmd_search(line) {
     if (q == 0) { oprintln("usage: /search <text>   (searches all conversations)"); return 0; }
     var nc = conv_count();
     if (nc == 0) { emit("  "); ui_emit(ROLE_FAINT, "no conversations to search"); oprintln(""); return 0; }
-    ui_emit(ROLE_MUTED, "search "); ui_emit(ROLE_ACCENT, q); ui_emit(ROLE_MUTED, ":"); oprintln("");
+    ui_emit(ROLE_MUTED, "search "); ui_emit_clean(ROLE_ACCENT, q); ui_emit(ROLE_MUTED, ":"); oprintln("");   # 0.45.0: the query, sanitised (typed or [alias]-borne); matching reads it raw
     var qlen = strlen(q);
     var hits = 0;
     var nconv = 0;
@@ -1701,7 +1758,10 @@ fn cmd_run(line) {
     var cmdline = arg_after(line);
     if (cmdline == 0) { oprintln("usage: /run <shell command>"); return 0; }
     oprintln("this /run is a local built-in shell escape (substrate), not the MCP tool spine.");
-    emit("  proposed: "); oprintln(cmdline);
+    # 0.45.0: the proposal names the command through the LABEL sanitiser, as the gate prompt below already does. It is
+    # printed BEFORE that prompt, from the operator's line or a repo-local [alias] expansion, and it went out raw; the
+    # gate's params and the shell still get the command exactly as written.
+    emit("  proposed: "); emit_clean_line(cmdline); oprintln("");
     var rparams = _params_one("cmd", cmdline);
     if (gate_authorize("thoth_run", rparams, "run", cmdline) == 0) {
         oprintln("  denied. nothing ran.");
@@ -1810,6 +1870,19 @@ fn cmd_call(line) {
     var nlen = i;
     if (nlen > (CALL_NAME_CAP - 1)) { nlen = CALL_NAME_CAP - 1; }
     store8(_call_name + nlen, 0);
+    # 0.45.0: a name holding a control byte is REFUSED here, where it enters thoth — no MCP tool name holds one.
+    # The confirm prompt drew its own sanitised copy, but after approval daimon_call's "-> daimon tool '<name>'"
+    # trace and the gate's "[session grant]" line printed this one raw, from a line-mode line or a repo-local
+    # [alias] expansion (a preference key the local layer keeps, ADR-0021) alike — both reproduced under a pty.
+    # Refused, NOT substituted as the model id is: t-ron rejects such a name itself when a policy is loaded, and a
+    # '?' copy passes that check — tried under a wildcard policy, it went out to daimon. The copy goes through the
+    # house sanitiser first so the refusal can name it; any byte that changed was a control byte.
+    safe_label_copy(_call_name, nlen + 1, _call_name);
+    if (memeq(_call_name, rest, nlen) == 0) {
+        emit("  refused: tool name '"); emit(_call_name);
+        oprintln("' holds a control byte, which no MCP tool name does. no request sent.");
+        return 0;
+    }
     var args = 0;
     while (load8(rest + i) == 32) { i = i + 1; }
     if (load8(rest + i) != 0) { args = rest + i; }
@@ -1970,7 +2043,7 @@ fn cmd_compact(line) {
     ui_emit(ROLE_MUTED, "  compacting… (one small model call)"); oprintln("");
     var done = hoosh_compact_now(keep);
     if (done < 0) {
-        ui_emit(ROLE_RED, "compact failed"); ui_emit(ROLE_FAINT, " — "); oprintln(hoosh_recap_err());
+        ui_emit(ROLE_RED, "compact failed"); ui_emit(ROLE_FAINT, " — "); oprintln(hoosh_recap_err_msg(hoosh_recap_err()));
         ui_emit(ROLE_FAINT, "  nothing was dropped; the conversation is unchanged."); oprintln("");
         return 0;
     }
@@ -2005,8 +2078,10 @@ fn cmd_grants(line) {
     ui_emit(ROLE_ACCENT, "session grants ("); ofmt_int(n); ui_emit(ROLE_ACCENT, ", exact match, not persisted):"); oprintln("");
     var i = 0;
     while (i < n) {
-        emit("  "); ui_emit(ROLE_ACCENT, grant_verb_at(i)); emit(" ");
-        oprintln(grant_obj_at(i));
+        # 0.45.0: a grant stores the RAW (verb, obj) it matches on — a model's shell command, tool name or edit path —
+        # so the listing draws it through the label sanitiser, as confirm does (an escape in it reached a pty).
+        emit("  "); emit(ui_sgr(ROLE_ACCENT)); emit_clean_line(grant_verb_at(i)); emit(ui_reset()); emit(" ");
+        emit_clean_line(grant_obj_at(i)); oprintln("");
         i = i + 1;
     }
     ui_emit(ROLE_FAINT, "  /grants clear to revoke. these never reach disk — for a durable rule use [tron].policy."); oprintln("");
@@ -2150,17 +2225,19 @@ fn _audit_export(path) {
     # 0600 on CREATE. An already-existing file keeps its own mode — thoth never silently re-tightens a
     # path the operator chose, and never asserts a mode it did not set (the same rule [history].file follows).
     var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    # 0.45.0: `path` — typed, or a repo-local [alias] expansion — is named through the LABEL sanitiser on every line below;
+    # a filename can hold a control byte, so the file is opened with the raw bytes.
     if (fd < 0) {
-        ui_emit(ROLE_RED, "could not open "); emit(path); ui_emit(ROLE_FAINT, " for writing"); oprintln("");
+        ui_emit(ROLE_RED, "could not open "); emit_clean_line(path); ui_emit(ROLE_FAINT, " for writing"); oprintln("");
         return 0;
     }
     var w = file_write(fd, json, n);
     file_close(fd);
     if (w != n) {
-        ui_emit(ROLE_RED, "export incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit(path); oprintln("");
+        ui_emit(ROLE_RED, "export incomplete "); ui_emit(ROLE_FAINT, "(write error) — "); emit_clean_line(path); oprintln("");
         return 0;
     }
-    ui_emit(ROLE_GREEN, "exported "); ofmt_int(total); emit(" audit event(s) to "); emit(path); oprintln("");
+    ui_emit(ROLE_GREEN, "exported "); ofmt_int(total); emit(" audit event(s) to "); emit_clean_line(path); oprintln("");
     emit("  chain: "); ofmt_int(audit_chain_len(a)); emit(" entries, ");
     if (audit_verify_chain(a) == 0) { ui_emit(ROLE_GREEN, "integrity OK"); }
     else { ui_emit(ROLE_RED, "INTEGRITY FAILED (tamper detected)"); }
@@ -2223,6 +2300,55 @@ fn _mcpres_unavailable(noun) {
     return 0;
 }
 
+# _mcpres_label (0.45.0): draw one server-supplied string field (a JSON Str) in `role` through the house LABEL
+# sanitiser. /resources and /prompts printed every field — a resource's uri, name, description and mimeType, a
+# prompt's name, description and argument names — straight out of daimon's registry response, raw: an escape in any
+# of them reached the terminal (reproduced under a pty). The shape of /tools' _daimon_tool_row: the LABEL policy for
+# descriptions too, so a newline cannot forge a row, and the length form, so an escaped NUL cannot cut a field short.
+# A clean field's bytes are the old form exactly: sgr + text + reset.
+fn _mcpres_label(role, s) {
+    emit(ui_sgr(role)); emit_clean_line_n(str_data(s), str_len(s)); emit(ui_reset());
+    return 0;
+}
+
+# _mcpres_resource_row: one /resources entry, "  <uri>  <name>  [<mimeType>]" and the description under it.
+fn _mcpres_resource_row(r) {
+    var uri = _mcpres_str(r, "uri");
+    var nm = _mcpres_str(r, "name");
+    var de = _mcpres_str(r, "description");
+    var mt = _mcpres_str(r, "mimeType");
+    emit("  ");
+    if (uri != 0) { _mcpres_label(ROLE_ACCENT, uri); } else { ui_emit(ROLE_FAINT, "(no uri)"); }
+    if (nm != 0) { emit("  "); emit_clean_line_n(str_data(nm), str_len(nm)); }
+    if (mt != 0) { ui_emit(ROLE_FAINT, "  ["); _mcpres_label(ROLE_FAINT, mt); ui_emit(ROLE_FAINT, "]"); }
+    oprintln("");
+    if (de != 0) { ui_emit(ROLE_FAINT, "      "); _mcpres_label(ROLE_FAINT, de); oprintln(""); }
+    return 0;
+}
+
+# _mcpres_prompt_row: one /prompts entry, "  /<name> <arg>..." and the description under it.
+fn _mcpres_prompt_row(p) {
+    var nm = _mcpres_str(p, "name");
+    var de = _mcpres_str(p, "description");
+    emit("  /");
+    if (nm != 0) { _mcpres_label(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(no name)"); }
+    # Argument names come from the server; render them as the positional order the slash form takes.
+    var av = 0;
+    if (p != 0) { av = bayan_json_v_obj_get(p, "arguments"); }
+    if (av != 0) {
+        var an = bayan_json_v_arr_len(av);
+        var k = 0;
+        while (k < an) {
+            var anm = _mcpres_str(bayan_json_v_arr_get(av, k), "name");
+            if (anm != 0) { emit(" <"); _mcpres_label(ROLE_MUTED, anm); emit(">"); }
+            k = k + 1;
+        }
+    }
+    oprintln("");
+    if (de != 0) { ui_emit(ROLE_FAINT, "      "); _mcpres_label(ROLE_FAINT, de); oprintln(""); }
+    return 0;
+}
+
 fn cmd_resources() {
     var rv = daimon_resources_value();
     if (rv == 0) { return _mcpres_unavailable("resources"); }
@@ -2234,17 +2360,7 @@ fn cmd_resources() {
     emit("MCP resources ("); ofmt_int(n); oprintln("):");
     var i = 0;
     while (i < n) {
-        var r = bayan_json_v_arr_get(rv, i);
-        var uri = _mcpres_field(r, "uri");
-        var nm = _mcpres_field(r, "name");
-        var de = _mcpres_field(r, "description");
-        var mt = _mcpres_field(r, "mimeType");
-        emit("  ");
-        if (uri != 0) { ui_emit(ROLE_ACCENT, uri); } else { ui_emit(ROLE_FAINT, "(no uri)"); }
-        if (nm != 0) { emit("  "); emit(nm); }
-        if (mt != 0) { ui_emit(ROLE_FAINT, "  ["); ui_emit(ROLE_FAINT, mt); ui_emit(ROLE_FAINT, "]"); }
-        oprintln("");
-        if (de != 0) { ui_emit(ROLE_FAINT, "      "); ui_emit(ROLE_FAINT, de); oprintln(""); }
+        _mcpres_resource_row(bayan_json_v_arr_get(rv, i));   # 0.45.0: sanitised
         i = i + 1;
     }
     ui_emit(ROLE_FAINT, "  /resource <uri> reads one into the conversation."); oprintln("");
@@ -2262,29 +2378,25 @@ fn cmd_prompts() {
     emit("MCP prompts ("); ofmt_int(n); oprintln("), each usable as a slash command:");
     var i = 0;
     while (i < n) {
-        var p = bayan_json_v_arr_get(pv, i);
-        var nm = _mcpres_field(p, "name");
-        var de = _mcpres_field(p, "description");
-        emit("  /");
-        if (nm != 0) { ui_emit(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(no name)"); }
-        # Argument names come from the server; render them as the positional order the slash form takes.
-        var av = 0;
-        if (p != 0) { av = bayan_json_v_obj_get(p, "arguments"); }
-        if (av != 0) {
-            var an = bayan_json_v_arr_len(av);
-            var k = 0;
-            while (k < an) {
-                var a = bayan_json_v_arr_get(av, k);
-                var anm = _mcpres_field(a, "name");
-                if (anm != 0) { emit(" <"); ui_emit(ROLE_MUTED, anm); emit(">"); }
-                k = k + 1;
-            }
-        }
-        oprintln("");
-        if (de != 0) { ui_emit(ROLE_FAINT, "      "); ui_emit(ROLE_FAINT, de); oprintln(""); }
+        _mcpres_prompt_row(bayan_json_v_arr_get(pv, i));     # 0.45.0: sanitised
         i = i + 1;
     }
     ui_emit(ROLE_FAINT, "  built-ins and your [alias] entries always win over a server prompt name."); oprintln("");
+    return 0;
+}
+
+# _line_arg_has_ctl (0.45.0): 1 when the cstring `s` holds a byte the house LABEL policy substitutes — a C0 control byte
+# or DEL — else 0. It asks _clean_byte, the policy's own one-byte form, instead of restating which bytes count (a second
+# copy of the policy is how the 0.39.0 audit's A-7/A-8 happened), and it reads the whole string. For a line argument
+# that is SENT ON as well as shown: such a value is refused, where a label would only be cleaned.
+fn _line_arg_has_ctl(s) {
+    if (s == 0) { return 0; }
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var b = load8(s + i) & 255;
+        if (_clean_byte(b, 0) != b) { return 1; }
+        i = i + 1;
+    }
     return 0;
 }
 
@@ -2301,6 +2413,16 @@ fn cmd_resource(line) {
     if ((uri == 0) || (load8(uri) == 0)) {
         ui_emit(ROLE_RED, "usage: "); emit("/resource <uri>");
         ui_emit(ROLE_FAINT, "   (/resources to list)"); oprintln("");
+        return 0;
+    }
+    # 0.45.0: a uri holding a control byte is REFUSED here, where it enters thoth; URI syntax (RFC 3986) has no place
+    # for one. Both lines below printed it raw ("read <uri>", "could not read <uri>"), and it arrives on the operator's
+    # line or in a repo-local [alias] expansion (a preference key the local layer keeps, ADR-0021) — the alias door
+    # reproduced under a pty. Refused, not cleaned for display: the request body carries the uri, so the line would
+    # show '?' while daimon received the byte, and a '?' copy sent instead would name another uri (a query starts there).
+    if (_line_arg_has_ctl(uri) == 1) {
+        emit("  refused: uri '"); emit_clean_line(uri);
+        oprintln("' holds a control byte, which no URI does. no request sent.");
         return 0;
     }
     var text = mcpres_read(uri);
@@ -2343,6 +2465,17 @@ fn cmd_prompt_slash(line) {
     var nm = _alias_name_of(line, _pslash_name, PSLASH_NAME_CAP);
     if (nm == 0) { return 0; }
     if (load8(nm) == 0) { return 0; }
+    # 0.45.0: a name holding a control byte is REFUSED before any use. The three lines below printed it raw ("could not
+    # reach daimon's prompt registry — /<name>", "prompt <name> could not be rendered", "[mcp prompt] <name>"), from the
+    # operator's line or a repo-local [alias] expansion — all three reproduced under a pty through the alias. Refused,
+    # not cleaned for display, for /resource's reason: the name is matched against daimon's registry and sent in the
+    # prompts/get body. /prompts already draws such a name with '?', so typing what it shows never matched. The wording
+    # says what was withheld: on a session's first prompt lookup the capability probe above has already asked daimon.
+    if (_line_arg_has_ctl(nm) == 1) {
+        emit("  refused: prompt name '"); emit_clean_line(nm);
+        oprintln("' holds a control byte. not sent to daimon.");
+        return 1;
+    }
     var pv = daimon_prompts_value();
     if (pv == 0) {
         # The probe said prompts exist, so this is a live failure, not an absent capability. Reporting
@@ -2388,11 +2521,19 @@ fn cmd_prompt_slash(line) {
     # for the same reason (re-expanding stored text would double-inject).
     var safe = guard_wrap_untrusted(redact_tool_result(text), "an MCP prompt");
     session_bump_turn();
-    emit("task: "); oprintln(safe);
+    _mcpres_task_echo(safe);
     # No session_history_append here: agent_turn (agent.cyr) / hoosh_send both append the user turn
     # themselves, exactly as they do for cmd_task. Appending here too would double the message.
     _task_dispatch(safe);
     return 1;
+}
+
+# _mcpres_task_echo (0.45.0): the "task: <text>" echo of a rendered MCP prompt. The text is the server's (redacted and
+# guard-wrapped, never filtered) and was printed raw: an escape in a prompts/get reply reached the terminal (reproduced
+# under a pty). PROSE, so the TEXT policy: the prompt's own newlines and tabs survive. The turn still gets `text` as is.
+fn _mcpres_task_echo(text) {
+    emit("task: "); emit_clean_text(text); oprintln("");
+    return 0;
 }
 
 var PROMPT_ARGS_CAP = 4096;
@@ -2554,7 +2695,11 @@ fn _task_dispatch(prompt) {
 
 fn cmd_task(line) {
     session_bump_turn();
-    emit("task: "); oprintln(line);              # echo the ORIGINAL line (with @mentions), not the expansion
+    # 0.45.0: the echo goes through the TEXT sanitiser, as _mcpres_task_echo's does. The line is the operator's — typed,
+    # or a repo-local [alias] expansion re-dispatched as if typed (/edit's new text lands here too) — and it reached the
+    # terminal raw. PROSE, so its newlines and tabs survive; the turn itself still gets `line` as written, and the
+    # conversation title taken from it is cleaned where it is stored (_conv_autotitle).
+    emit("task: "); emit_clean_text(line); oprintln("");   # echo the ORIGINAL line (with @mentions), not the expansion
     # @file mentions (0.21.0): a `@path` that resolves to a readable file gets that file's content
     # appended to the prompt as delimited context. Non-resolving @tokens stay literal, so ordinary
     # prose is untouched and `prompt == line` (byte-identical) when nothing resolves.
@@ -2694,7 +2839,7 @@ fn cmd_theme(line) {
     }
     var t = ui_theme_from_name(arg);
     if (t < 0) {
-        emit("unknown theme '"); emit(arg); oprintln("' — try: dark, light, rainbow");
+        emit("unknown theme '"); emit_clean_line(arg); oprintln("' — try: dark, light, rainbow");   # 0.45.0: sanitised (typed or [alias]-borne)
         return 0;
     }
     ui_set_theme(t);
@@ -2833,7 +2978,16 @@ fn _dispatch_d(line, depth) {
         # write past the last per-depth buffer (the deepest write is slot ALIAS_MAX_DEPTH-1).
         if (depth >= ALIAS_MAX_DEPTH) { oprintln("alias: expansion too deep (cycle?)"); return 1; }
         var ex = alias_expand(line, depth);
-        if (ex != 0) { return _dispatch_d(ex, depth + 1); }
+        if (ex != 0) {
+            # 0.45.0: an alias whose VALUE holds a control byte is refused whole, before anything runs — see
+            # _alias_value_has_ctl. Checked at every depth, so a clean alias cannot chain to a hostile one.
+            if (_alias_value_has_ctl(line) == 1) {
+                emit("  refused: alias '/"); emit_clean_line(&_alias_name);
+                oprintln("' expands to text holding a control byte. nothing was run.");
+                return 1;
+            }
+            return _dispatch_d(ex, depth + 1);
+        }
         # 0.43.0 (T2-7): a server-published MCP PROMPT is usable as a slash command.
         #
         # ⚠ ORDER: built-ins win (they never reach this gap at all), then the operator's [alias]

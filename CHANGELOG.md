@@ -4,34 +4,44 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.45.0] - 2026-09-12
 
-**The status bar moves below the input and leads with where you are.** On the TUI and the GUI the bar
-is now the bottom band, under the composer and a line of padding, and it opens with the launch
-directory's name and git branch where `{(o> thoth (<version>) · <persona>` used to be. The version
-moved into the greeting: `{(o> Thoth - The Librarian: 0.45.0`. Suite
-**316 + 1021 + 810 + 521 + 183 + 5** (+40). Linux / aarch64 / AGNOS build with the same warning set as 0.44.6.
+**The status bar moves below the input and leads with where you are.** On the TUI and the GUI the bar is
+now the bottom band, a line break below the input, and it opens with the launch directory's name and git
+branch where `{(o> thoth (<version>) · <persona>` used to be. The keybinding hints moved INTO the empty input
+as its placeholder, with a line break above the input as well, and the version moved into the greeting:
+`{(o> Thoth - The Librarian: 0.45.0`. The `Fixed` sections below close the terminal-escape paths found this
+release — through the model id, the gateway and daimon text, the authorization gate, MCP resources and
+prompts, the model's reply, the provider's in-stream error and `[alias]` expansions — and a crash on a failed
+recap. Suite **317 + 1319 + 826 + 532 + 183 + 5** (+366). Linux / aarch64 / AGNOS build with the same warning
+set as 0.44.6.
 
-### Changed — TUI layout: feed · rule · composer · hint · blank · status
+### Changed — TUI layout: feed · rule · line break · input · line break · status
 
-The hint row stays directly under the composer — it carries the slash palette, the Ctrl-F / Ctrl-P
-prompts and the working spinner, all of which are about what is being typed — then one blank row,
-then the status bar on the last row. Ctrl-G hides the bar **and** its blank row, so the hint returns
-to the last row. The feed keeps the height it had before in both states (19 rows of a 24-row
-terminal with the bar shown, 21 hidden), and the rule that sat under the old top bar is gone.
+There is no hint row. The keybinding hints are the input's **placeholder** — drawn faint inside the empty
+input after its `{(o> ` prompt, and gone with the first typed character — and everything else that used to
+borrow a row renders inside the input too: the slash palette right after the typed token
+(`{(o> /mo  /model /models`), the Ctrl-F and Ctrl-P prompts while those modals own the input, the
+authorization prompt, and the working spinner while a turn runs (`{(o>  ⠹ working…`, with the cursor parked
+on the blank column before the glyph). One blank row sits above the input and one above the status bar on
+the last row. Ctrl-G hides the bar **and** its line break, so the input takes the last row. The feed keeps the
+height it had before in both states (19 rows of a 24-row terminal with the bar shown, 21 hidden), and the
+rule that sat under the old top bar is gone.
 
-The row helpers changed shape to match (`tui_status_row(rows)`, new `tui_status_gap_row`,
-`tui_hint_row(rows, show)`, `tui_composer_bot(rows, show)`, `tui_feed_top()`), and a new assertion
-walks 8–60 rows × both states × 1–10 composer lines checking that the bands tile the screen with no
-gap or overlap. Verified on a real pty (24×100) with the shipping binary: startup, `/mo` listing
-`/model /models` directly under the composer, a two-line composer growing upward with the hint still
-beneath it, and Ctrl-G hide / show.
+The row helpers changed shape to match (`tui_status_row(rows)`, new `tui_status_gap_row` and
+`tui_composer_gap_row`, `tui_composer_bot(rows, show)`, `tui_feed_top()`; `tui_hint_row` and `tui_draw_hint`
+are gone), and an assertion walks 8–60 rows × both states × 1–10 composer lines checking that the bands tile
+the screen with no gap or overlap. `test_composer_placeholder_0450` covers the placeholder decision and its
+content per focus, the find prompt and the palette. Verified on a real pty (24×100) with the shipping binary:
+startup, `/mo`, a two-line draft growing upward, Ctrl-U bringing the placeholder back, Ctrl-F, Ctrl-G hide /
+show, and `/run` through its authorization prompt and the spinner.
 
 ### Changed — GUI frame: the status strip is the bottom band
 
-`gframe_build` lays out the body, the composer line, 20 px of padding (`GFRAME_COMPOSER_GAP`, one
-feed line), a rule, and the strip on the bottom edge. Ctrl+S takes the padding away with the strip,
-so the composer line returns to the window's edge, as Ctrl-G does in the TUI. Tests assert the
-strip's background sits at `h - GFRAME_STRIP_H`, that nothing draws one at the top, and where the
-composer row lands with the strip hidden.
+`gframe_build` lays out the body, a rule, 20 px of padding (`GFRAME_COMPOSER_GAP`, one feed line), the
+composer line, the same padding again, a rule, and the strip on the bottom edge — the TUI's two line breaks
+in pixels (the GUI's hints were already the composer's placeholder). Ctrl+S takes the lower padding away with
+the strip, so the composer line returns to the window's edge, as Ctrl-G does in the TUI. Tests assert the
+strip's background sits at `h - GFRAME_STRIP_H`, that nothing draws one at the top, the padding on both sides
+of the composer, and where the composer row lands with the strip hidden.
 
 ### Changed — the bar leads with repo + branch
 
@@ -64,6 +74,309 @@ already showed the version and is unchanged.
 
 The bar's integers now go through `ofmt_int` (byte-identical to `fmt_int` under `OUT_FD1`), so its
 content can be captured and asserted under `OUT_RING`.
+
+### Fixed — a terminal escape through the model id
+
+⚠ **The model id is sanitised where it enters (`safe_label_copy`), at each of its three doors.** Every
+surface draws it as chrome — the TUI bar writes it straight to the terminal under `OUT_FD1` — and none
+of its sources filtered it. Reproduced under a pty against this release's code before the fix, then
+re-run after it:
+
+| Door | Raw ESC reaching the terminal |
+|---|---|
+| `[hoosh].model` in a repository's `.thoth/config.cyml` — the bar, `/state`, `/model` | 20 → 0 |
+| a model id in the gateway's catalog — Ctrl-P picker rows, the switch, `/models`, `/models <provider>` | 40 → 0 |
+| `/model <id>` typed at the line-mode prompt — the `model -> ` and `next turn routes to` echoes | 2 → 0 |
+
+- **Config.** ADR-0021 leaves `model` to the local layer as a preference key, and a TOML basic string
+  decodes a unicode escape into a real ESC byte, so a cloned repository chose bytes in the operator's
+  status bar. The configured default never passed through `session_set_model_copy`; the new
+  `_cfg_label` copies it through the sanitiser at load.
+- **Catalog.** `_mp_add`, the picker's single store, now sanitises (its rows are painted with
+  `emit_raw_n`). Both listings print ids straight out of the response, so they share a new
+  `_hoosh_model_row` that draws the id through `emit_clean_line`.
+- **Switch.** `session_set_model_copy` sanitises, and `/model` echoes the stored id rather than the raw
+  line; the seam-absent refusal cleans it too.
+
+No legitimate model id carries a control byte, so real ids are stored byte for byte, and a clean
+`/models` row is byte-identical to before. The window title always stripped control bytes on its own;
+its test now aliases raw bytes in through `session_set_model` so that strip stays covered.
+`test_model_id_sanitise` (+21, core driver) was checked by breaking each fix: reverting any one of the
+six sites fails exactly that site's assertions.
+
+### Fixed — terminal escapes through the gateway urls, a gateway's error text, and a `/call` tool name
+
+⚠ **Three more untrusted strings reached the terminal raw; each is now stopped where it enters.** Found by
+reading, then reproduced under a pty against this release's code — a fake local gateway serving the
+response-borne ones — before the fix, and re-run after it:
+
+| Door | Raw ESC reaching the terminal (TUI / line mode) |
+|---|---|
+| `[hoosh].url` / `[daimon].url` in a repo-local config — startup, `/state`, Ctrl-P, `/models`, `/tools` | 66 / 6 → 0 |
+| a gateway's non-2xx `error.message` — `/models`, `/models <provider>`, a blocking or agentic turn | 27 / 4 → 0 |
+| a `/call` tool name via a repo-local `[alias]` or line mode — the daimon trace, the `[session grant]` line | 5 / 4 → 0 |
+| daimon's replies — a tool's name and description in `/tools`, its result and error text in `/call` | 27 / 4 → 0 |
+
+- **Urls.** ADR-0021 withholds the global token from a redirected url but leaves the url to the local layer,
+  and TOML decodes a unicode escape into a real ESC. `_cfg_label` now copies both urls at load, which covers
+  every sink at once (each prints `config_hoosh_url()`, `config_daimon_url()` or an endpoint joined from
+  them). No working endpoint changes: a url holding a control byte never reached one. Against the fake
+  gateway, an escape after the port dialed `GET /` (sandhi drops the tail, and the `/v1` path with it), one in
+  the path went out raw on the request line, and one in the host sent nothing. After the fix the first two
+  dial `/` and `/v1` with the rest as a query, the third still sends nothing, and a clean url dials
+  `/v1/models` as before. The token binding still compares the raw layer values.
+- **Error text.** `_hoosh_print_str`, the one printer behind all four non-2xx paths, draws through a new
+  `emit_clean_text_n`: the text policy (newlines and tabs survive) over exactly `len` bytes, because JSON's
+  escaped NUL decodes to a real NUL that a cstring sanitiser stops at, silently dropping the rest of the
+  message. `emit_clean_line_n` is its label sibling; one loop in `util.cyr` now serves all four forms.
+- **`/call`.** `cmd_call` refuses a name holding a control byte — no MCP tool name holds one — naming it
+  cleaned, before the gate. Refused rather than substituted: with a t-ron policy loaded t-ron already rejects
+  such a name, and a `?`-substituted copy passed that check under a wildcard policy and went out to daimon.
+  Refusing makes the default no-policy path fail the same way; a clean name reaches the gate as before.
+- **daimon's replies.** Checking whether the `/call` name was cleaned upstream found the rest of `daimon.cyr`
+  printing the same way. `/tools` rows go through a new `_daimon_tool_row` (label policy, so a newline in a
+  description cannot forge a row) and `_daimon_print_str` through `emit_clean_text_n`. The agentic loop
+  already drew tool results through `emit_clean_text`; `/call` was the path that did not.
+
+`test_seam_text_sanitise` (+31, core driver) drives the real config loader over a hostile local layer and each
+printer under `OUT_RING`. It was checked by breaking each fix: reverting any one of the eight sites fails that
+site's assertions, and swapping the error printer for the cstring sanitiser fails the NUL assertion.
+
+### Fixed — terminal escapes through the authorization gate's object and daimon's resources and prompts
+
+⚠ **Two more doors found by reading during the entry above.** Each was reproduced under a pty against this
+release's code before the fix, then re-run after it. A fake gateway served the model's tool calls and daimon's
+registries:
+
+| Door | Raw ESC reaching the terminal (TUI / line mode / one-shot) |
+|---|---|
+| a model's shell command — `[session grant]` and `/grants` after an `a` answer, `[t-ron] allow:`, the one-shot denial | 24 / 4 / 2 → 0 |
+| a model's MCP tool name — the same grant lines on either executor, the TUI spinner's `running <tool>` | 17 / 3 / 2 → 0 |
+| a model's edit path or delegate task — `[t-ron] allow:`, the one-shot denial, the `[delegate]` line | — / 3 / 2 → 0 |
+| daimon's registries — every field `/resources` and `/prompts` print, a rendered prompt's `task:` echo | 116 / 8 / — → 0 |
+
+- **The gate.** `confirm` prepared its sanitised labels only after the grant and one-shot branches, so those two
+  lines drew `obj` raw. The labels now come first, and the grant still matches the raw pair. `gate_authorize`'s
+  `[t-ron] allow:` line draws through `emit_clean_line`. With a policy loaded, t-ron already refuses a control
+  byte in a tool name (0 raw in that run), but a shell command or an edit path travels as params, not as the name.
+  The same runs found three siblings, now sanitised with the label policy: `/grants` listed the stored pair raw,
+  `spin_label_set` copied the tool name into a buffer painted with `emit_raw`, and `[delegate]` printed the task raw.
+- **The registries.** `/resources` and `/prompts` rows go through new `_mcpres_resource_row` /
+  `_mcpres_prompt_row`, each field drawn by `emit_clean_line_n` over its JSON Str (`_mcpres_str`). As in `/tools`,
+  descriptions use the label policy too. `_mcpres_field` stays raw for data: a prompt name to match, text for the
+  model. The `task:` echo of a rendered prompt uses `emit_clean_text`, and the turn still receives the text unchanged.
+
+`test_gate_mcpres_sanitise` (+42, core driver) drives each printer under `OUT_RING`, and the one-shot denial with
+fd 2 pointed at a file. It was checked by breaking each fix: reverting any one of the nine sites fails that site's
+assertions, and so do the cstring sanitiser (NUL) and a swapped label/text policy.
+
+### Fixed — a terminal escape through the model's reply text
+
+⚠ **The model's reply is cleaned where it enters thoth, before anything draws or stores it.** A reply's `content`
+(and `reasoning_content`) is a JSON string, and a JSON unicode escape decodes into a real ESC byte. No render path
+stopped one: mdhl passes prose through verbatim, and `feed_clip` copies an unrecognised escape whole because thoth's
+own role markers ride the same channel. Reproduced under a pty against a fake local gateway whose reply carried three
+escapes — in prose, inside a fenced code block, and (when streamed) an ESC ending one frame with its `[7m` opening
+the next — before the fix, then re-run after it:
+
+| Path | Raw ESC reaching the terminal — line tier | — TUI |
+|---|---|---|
+| blocking, agentic (the default) | 3 → 0 | 15 → 0 |
+| blocking, plain (`[hoosh].tools = false`) | 3 → 0 | 15 → 0 |
+| streamed, agentic | 3 → 0 | 23 → 0 |
+| streamed, plain | 3 → 0 | 20 → 0 |
+| `NO_COLOR`, blocking / streamed | 3 / 3 → 0 | — |
+| one-shot `thoth "<task>"`, blocking / streamed | 3 / 3 → 0 | — |
+
+The TUI counts are higher because every repaint wrote the escapes again. After the fix each marker still reaches the
+screen, as `?[7m…`, exactly as many times: the text is shown, only the escape is defanged.
+
+- **One entry, every door.** `_hoosh_clean_text` returns a decoded JSON string with the text policy applied in place
+  (a new `clean_text_n` in `util.cyr`). `hoosh_extract_content` returns through it — the one extractor behind a
+  plain blocking turn, an agentic round, a delegated child's round and the overflow recap — and so do both SSE
+  callbacks, `_hoosh_sse_cb` and `_agent_sse_cb`, for `content` and `reasoning_content`, and `hoosh_extract_delta`.
+- **The accumulator and history hold the cleaned text.** The bytes are cleaned before their first consumer, so the
+  reply accumulator — and everything that reads it: history, the session file, `/save`, one-shot stdout (which
+  prints the accumulator itself), `--json`, the event stream, the GUI feed, a delegated child's answer — holds
+  exactly what the terminal was given.
+- **Per byte, so a split escape is cleaned too.** The ESC that ends one frame is already `?` before the next frame's
+  `[7m` arrives; nothing is carried between frames.
+- **The text policy.** Newlines and tabs are the reply's own structure and survive; every other C0 byte (a carriage
+  return included) and DEL becomes `?`, one for one, so lengths and streamed byte counts are unchanged. A reply
+  without control bytes is stored and drawn byte for byte. Reasoning reaches only the GUI's thinking fold, never the
+  terminal (0 raw escapes before the fix as well), but it arrives in the same frames and is cleaned at the same point.
+- `_clean_byte` now holds the policy for one byte, shared by `_emit_clean_n` and `clean_text_n`.
+
+`test_reply_text_sanitise` (+48, core driver) drives the blocking extractor and both real SSE callbacks — frames handed
+over as sandhi hands them, rendered through mdhl at the TUI's tier into the feed ring — and checks the render, the reply
+accumulator and the reasoning accumulator after each. It was checked by breaking each fix: reverting any one of the six
+entry sites (either extractor, or `content` / `reasoning_content` in either callback) fails exactly that site's
+assertions, a `_hoosh_clean_text` that cleans nothing fails all 24 door assertions, and the label policy in its place
+fails the newline and tab ones.
+
+### Fixed — a terminal escape through the provider's in-stream error text
+
+⚠ **The provider's error message is cleaned where it enters thoth: the copy in `_ag_err_capture`.** hoosh 2.6.5+
+forwards a provider's error in-stream as `{"error":{"code":…,"message":…}}`, and a JSON unicode escape in `message`
+decodes into a real ESC byte. thoth copied that text byte for byte. The interactive landing drew it through
+`emit_clean_line`, but one-shot's `_oneshot_report_error` wrote it to stderr with a plain `emit_err`, and stderr is
+normally the operator's terminal. Found by reading during the reply-text fix above, then reproduced under a pty
+against a fake local gateway whose stream carried `{"error":{"code":429,"message":"x<ESC>[7mERRMARK"}}` and then
+`[DONE]` — before the fix, and re-run after it:
+
+| Run | Raw ESC reaching the terminal |
+|---|---|
+| one-shot `thoth "hello"`, plain / `--events` / `--logs FILE` — the stderr diagnostic | 1 / 1 / 1 → 0 |
+| interactive, line tier — the `upstream HTTP 429:` line, already drawn through `emit_clean_line` | 0 → 0 |
+
+After the fix the stderr line ends `upstream HTTP 429: x?[7mERRMARK`: the reason is still shown, only the escape is
+defanged.
+
+- **One copy, every reader.** `_ag_err_capture` is the message's only writer, and four places read it: the
+  interactive landing, `_oneshot_report_error`, the `stream_upstream_error` log line and the `error` event. The copy
+  now passes each byte through `_clean_byte`, the one-byte policy from the reply-text fix, so all four get one text.
+- **The label policy.** The message is one line of chrome wherever it appears, so a newline or a tab becomes `?` too
+  — a newline would open a forged second `thoth:` line on stderr — along with every other C0 byte and DEL, one for
+  one. The copy stays by length: JSON's escaped NUL decodes to a real NUL, and every reader treats the message as a
+  cstring, so before the fix a NUL silently cut the provider's reason short. It is now a `?`, and the rest survives.
+- **The log and the event stream were already safe.** `log_kv_str` has neutralised its values since 0.44.3 (the
+  `--logs` file held no raw escape before the fix), and `events_error` JSON-escapes its fields. Both now receive the
+  cleaned text: the event's `upstream_message` reads `x?[7mERRMARK` where it used to carry the escape as JSON text,
+  the choice the reply-text fix made for the `response` event.
+
+`test_upstream_err_sanitise` (+16, agent driver) hands the real `_agent_sse_cb` a frame whose message carries an
+escaped ESC, NUL, newline and tab, checks the stored message, and captures `_oneshot_report_error` with fd 2 pointed
+at a file. Written before the fix, it failed 7 assertions against the unfixed copy. It was checked by breaking the
+fix: a byte-for-byte copy again fails all 7, the text policy in its place fails the 3 that a surviving newline and
+tab trip, and `safe_label_copy` over the cstring fails the 3 that need the text after the NUL.
+
+### Fixed — terminal escapes through an `[alias]`-borne `/resource` uri and MCP prompt name
+
+⚠ **Two operator-line doors, each fed by a repo-local `[alias]`.** ADR-0021 leaves `[alias]` to the local layer, and
+TOML decodes a unicode escape into a real ESC byte, so a cloned repository could put `/resource mem://a<ESC>[7m…` or
+`/p<ESC>[7m…` behind a short alias name. Each line was reproduced under a pty against this release's code before the
+fix, with a fake daimon serving its registries, then failing the read and render, then failing the prompt listing, and
+re-run after it:
+
+| Door | Line | Raw ESC reaching the terminal (TUI / line mode) |
+|---|---|---|
+| `/resource <uri>` | `read <uri> — N bytes` | 5 / 1 → 0 |
+| | `could not read <uri>` | 5 / 1 → 0 |
+| a prompt slash command's name | `[mcp prompt] <name>` | 5 / 1 → 0 |
+| | `prompt <name> could not be rendered` | 5 / 1 → 0 |
+| | `could not reach daimon's prompt registry — /<name>` | 5 / 1 → 0 |
+
+One-shot and the GUI never expand an alias, so neither has a column.
+
+- **Refused, not cleaned for display.** Both values also leave thoth: each is JSON-escaped into its request body, and
+  daimon received the raw ESC in both. Cleaning only the echo would show `?` while daimon got the byte, and a `?` copy
+  sent instead is a different request (in a uri, `?` begins the query). So each is refused where it enters, as `/call`
+  refuses a tool name: `cmd_resource` before `mcpres_read` (no request sent), and `cmd_prompt_slash` after the cached
+  capability probe but before the registry fetch (the name is not sent to daimon, though a session's first lookup has
+  already probed). Each refusal names the value through `emit_clean_line`.
+- **One check, the policy's own byte test.** `_line_arg_has_ctl` asks `_clean_byte`, the one-byte label policy from the
+  reply-text fix, about every byte of the argument instead of restating which bytes count. Nothing that worked is
+  refused: URI syntax has no place for a control byte, and `/prompts` already draws such a prompt name with `?`, so
+  typing what it shows never matched. Clean aliases to a real uri and a real prompt still reach `resources/read` and
+  `prompts/get` byte for byte.
+
+`test_alias_line_sanitise` (+19, core driver) loads a TOML `[alias]` table spelling the escape as a config file does and
+dispatches through `alias_expand` under `OUT_RING`; nothing in it dials, with or without the fix. It was checked by
+breaking each fix: removing either refusal, or letting either print its value raw, fails that site's assertions; a prompt
+refusal that falls through to "unknown command" fails the whole-answer assertion; and a check that stops after 64 bytes
+fails the three long-argument assertions, one that looks for ESC alone fails DEL and TAB, and one that keeps whitespace
+as the text policy does fails TAB.
+
+### Fixed — the rest of the `[alias]`-borne echo doors: a whole-alias refusal, plus ~two dozen commands that echoed their argument raw
+
+⚠ **The same repo-local `[alias]` reaches most of the command surface, not just `/resource` and the prompt gap.**
+`alias_expand` re-dispatches an expansion as if the operator had typed it (line REPL and TUI only — one-shot and the
+GUI call `cmd_task` directly and never expand an alias), and a sweep found roughly two dozen commands that then wrote
+that argument to the terminal with no filter. A cloned repository's `.thoth/config.cyml` supplies the `[alias]` table
+(ADR-0021 keeps it in the local layer) and TOML decodes a unicode escape into a real ESC byte, so a short alias name
+could carry `<ESC>[7m…` into any of them. Each door was reproduced under a pty against this release's code, through the
+alias, before the fix — raw escapes reaching the terminal (rich TUI / line mode), 0 after:
+
+| Command | Line(s) it echoed the argument on |
+|---|---|
+| a free-text task | the `task:` echo (and `/edit`, which re-runs through it) — **TEXT** policy |
+| `/run <cmd>` | the `proposed:` line, printed **before** the gate prompt |
+| `/write <path>` | the proposal, the diff card's header, the result / INCOMPLETE / failed lines |
+| `/role <label>` | the echo, then `/role`, `/persona`, `/state`, the shadow/blend lines — cleaned **at the store** |
+| `/personas`, `/persona`, `/persona shadow`, `/persona blend` | each `unknown tradition/persona:` refusal |
+| `/theme <name>` | the `unknown theme` refusal |
+| `/models <provider>` | the `models for provider '…'` header and the `(no models for '…')` line |
+| `/read <path>` | `no such file`, `read failed`, and the file's `--- <path> ---` header |
+| `/git <path>` | the no-changes line and the diff card's header |
+| `/allow <path>` | the grant, the refusal, and every stored root the bare listing shows (incl. `[project].vidya`) |
+| `/save <path>` | the saved / incomplete / could-not-open lines (md, `--json`, `--plain`) |
+| `/audit export <path>` | the exported / incomplete / could-not-open lines |
+| `/new`, `/rename`, `/fork` titles | the echo, `/conversations`, `/switch`, `/search`, the GUI sidebar — cleaned **at the store**, and re-cleaned when an old session file is loaded |
+| `/search <q>` | the `search <q>:` header |
+| `/find <q>` | the TUI find prompt (`find: <q>`) |
+
+- **A whole-alias refusal, on top of the per-site fixes (the operator's design call).** Each site above is cleaned in
+  its own right — that still matters for a line the operator types or pastes — but an `[alias]` expansion is text the
+  operator did not type and has no legitimate use for a control byte. So `_dispatch_d` refuses, whole, any alias whose
+  **value** holds one, before anything runs, at every expansion depth (a clean alias cannot chain to a hostile one).
+  This also closes any alias-borne echo a sweep missed. Tab and newline stay allowed at the alias level (a multi-line
+  task alias is legitimate); arguments the operator types *after* an alias name are the operator's own and are judged by
+  the command that prints them. The check, `_alias_value_has_ctl`, asks `_clean_byte` — the one-byte policy — about the
+  whole value, never restating which bytes count.
+- **Cleaned at the store, not just at each display.** A conversation title and a custom `/role` label are each drawn by
+  several readers and persisted, so they are sanitised where they enter the store (`_conv_autotitle` /
+  `conv_dup_title`, `persona_role_override_set`) — one clean copy every later reader and the session file share. A
+  title saved by an older build is cleaned again where it is read back.
+- **A path is cleaned for display and used raw.** A Linux filename may legally hold a control byte (the 0.39.0
+  precedent), so `/read`, `/git`, `/allow`, `/save`, `/audit export` and `/write` name the path through the LABEL
+  sanitiser but open/grant/diff the raw bytes. New shared helpers `clean_line_n` (util, the LABEL twin of
+  `clean_text_n`) and `ui_emit_clean` (ui) keep every site on the one policy.
+
+`test_alias_ctl_refused`, `test_cmd_echo_sanitise`, `test_path_echo_sanitise` and `test_title_sanitise` (core driver)
+drive each door through the real `dispatch` path under `OUT_RING` — a TOML `[alias]` table built with `_stx_cat_bs`, the
+operator's own line, and the session-file loader — asserting 0 raw escapes and the `?`-substituted form, that a hostile
+alias runs nothing, and that tab/newline survive where prose allows them. Each was checked by reverting its site: every
+per-site revert fails that site's assertions, removing the alias refusal fails the "nothing ran" assertions, a
+LABEL↔TEXT swap fails the newline/tab assertions, and a narrowed policy (ESC-only) fails DEL. The `/dev/full` write-error
+lines are exercised where that device exists and skipped where it does not.
+
+### Fixed — a failed `/compact` or `[hoosh].compact_at` recap killed thoth
+
+⚠ **Both failure lines printed an error code where they wanted text.** `hoosh_recap_err()` answers an integer
+(`HOOSH_SUM_TRANSPORT` 1, `HOOSH_SUM_HTTP` 2, `HOOSH_SUM_EMPTY` 3). `cmd_compact` passed it to `oprintln` and
+`hoosh_compact_auto` to `emit`, and both `strlen` their argument, so the first failed recap read address 1, 2 or 3 and
+thoth died with SIGSEGV halfway through the line: in line mode `compact failed — ` or `[auto-compact failed: ` was the
+last thing printed, and the TUI died before the line reached its feed, leaving the alternate screen up. Under
+`OUT_NULL` (one-shot) `emit` and `oprintln` return before reading the pointer. Reproduced under a pty with the
+shipping binary against a fake gateway that answered every turn and failed only the recap, in a session past the
+keep window (4 turns before `/compact`, 5 with `compact_at = 1`), then re-run after the fix:
+
+| Recap failure | Before: `/compact` and `compact_at`, line mode and TUI | After: the line names |
+|---|---|---|
+| HTTP 500 | 4 of 4 runs killed (SIGSEGV) | `the gateway returned an HTTP error` |
+| no listener | 4 of 4 runs killed (SIGSEGV) | `the gateway did not answer (transport error)` |
+| empty completion | 4 of 4 runs killed (SIGSEGV) | `the gateway returned no recap text` |
+
+After the fix all twelve runs stay up and exit 0 on `/quit`, each failure line is followed by its nothing-dropped
+notice, and where the gateway was still listening the next turn was answered with the session's first message still
+in its request: a failed compaction still drops nothing.
+
+- **One helper, both lines.** `hoosh_recap_err_msg(code)`, beside `hoosh_recap_err()`, maps the code to its sentence,
+  and `cmd_compact` and `hoosh_compact_auto` both print through it. It answers for every value: when
+  `hoosh_compact_now` cannot allocate its span buffer it returns -1 before any recap call has set a code, so
+  `HOOSH_SUM_OK` reaches the line too, and that and any value outside the enum read `no recap was produced`.
+- **"Did not answer", not "unreachable".** A transport failure includes the turn deadline, which a slow but healthy
+  model can hit on a recap (0.44.3), so the words do not claim the gateway is down. The recap records which of the
+  three failures happened but not an HTTP status, so the line names the class.
+
+`test_recap_fail_report` (+17, core driver) checks the words for each code and for two that no failure sets, then runs
+each failure line — `/compact` and the `compact_at` trigger, under `OUT_FD1` (line mode) and `OUT_RING` (the TUI's
+feed) — in a forked child whose recap fails on a url sandhi cannot parse, so nothing dials. The parent asserts the
+child exited 0 and printed the whole line, so a fault shows up as failed assertions instead of taking the suite down.
+It was checked by breaking the fix: printing the code again at both lines fails the 10 child assertions (each faulting
+child's wait status is 139, SIGSEGV), at either line alone that line's 5; a helper that hands back the transport code
+fails those 10 and its own words assertion; a helper whose fallback is not a string fails the 2 assertions for codes no
+failure sets; and with the helper removed the suite does not compile. The rest of the suite ran after every fault.
 
 ## [0.44.6] - 2026-09-10
 

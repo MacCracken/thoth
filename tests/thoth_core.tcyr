@@ -119,13 +119,22 @@ fn main() {
     test_logs_flag();
     test_hoosh_timeout();
     test_config_m4();
-    test_state_reason_row(); test_history_dropped(); test_recap(); test_recap_drop_shift();
+    test_state_reason_row(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();
     test_git();
     test_save(); test_save_formats();
     test_session_persist();
     test_ui_niceties();
     test_reload();
     test_model_switch();
+    test_model_id_sanitise();
+    test_seam_text_sanitise();
+    test_gate_mcpres_sanitise();
+    test_reply_text_sanitise();
+    test_alias_line_sanitise();
+    test_alias_ctl_refused();
+    test_cmd_echo_sanitise();
+    test_path_echo_sanitise();
+    test_title_sanitise();
     test_vendor_pins(); test_vendor_hazards();
     return assert_summary();
 }

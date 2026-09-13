@@ -7,16 +7,21 @@
 
 ## Version
 
-**0.45.0** — **the status bar moves below the input and leads with where you are** (2026-09-12). TUI
-and GUI both. The TUI is now feed · rule · composer · hint · blank · status (last row); the GUI is
-body · composer · a line of padding · strip (bottom edge). The bar opens with the launch directory's
-name and git branch (`thoth · main +2  model …`) where `{(o> thoth (<version>) · <persona>` sat, and
-the version moved into the greeting (`{(o> Thoth - The Librarian: 0.45.0`). The repo label is a new
-display-only view-model field (`SF_REPO`, from `$PWD`) sanitised where it enters — verified end to end
-with an escape-named directory, and its test verified by breaking the fix. The branch needed no filter:
-sit's `refname_valid` already refuses control bytes. Ctrl-G / Ctrl+S hide the bar together with its
-padding, and the feed keeps its previous height in both states. Verified on a real pty and by
-rasterising the GUI frame. Suite **316 + 1021 + 810 + 521 + 183 + 5**.
+**0.45.0** — **the status bar moves below the input and leads with where you are; the release's escape
+paths close** (2026-09-12). TUI and GUI both. The TUI is now feed · rule · line break · input · line break ·
+status (last row), with no hint row: the keybinding hints are the empty input's faint placeholder, and the
+slash palette, the find / pick prompts, the authorization prompt and the working spinner render inside the
+input. The GUI is body · padding · composer · padding · strip (bottom edge). The bar opens with the launch
+directory's name and git branch (`thoth · main +2  model …`) where `{(o> thoth (<version>) · <persona>` sat,
+and the version moved into the greeting (`{(o> Thoth - The Librarian: 0.45.0`). The repo label is a new
+display-only view-model field (`SF_REPO`, from `$PWD`) sanitised where it enters; the branch needed no filter
+(sit's `refname_valid` already refuses control bytes). Ctrl-G / Ctrl+S hide the bar together with its line
+break. The release also closes the terminal-escape paths found in it — the model id, gateway and daimon text,
+the authorization gate's object, MCP resources and prompts, the model's reply and reasoning, the provider's
+in-stream error, and `[alias]` expansions (refused whole when the value holds a control byte, plus ~two dozen
+per-site echoes) — and a SIGSEGV on a failed `/compact` or `compact_at` recap, with the fixes break-tested
+(the CHANGELOG has the per-door detail). Verified on a real pty and by rasterising the GUI frame. Suite
+**317 + 1319 + 826 + 532 + 183 + 5**.
 
 **0.44.6** — **toolchain 6.5.51 → 6.6.2, and a t-ron cipher collision** (2026-09-10). cyrius 6.6.0
 made `Result` / `Option` / `Either` a two-register value; four thoth sites migrated, one of which
@@ -3491,7 +3496,7 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **316 + 1021 + 810 + 521 + 183 + 5 assertions across the suites as of
+`tests/thoth_render.tcyr`. **317 + 1319 + 826 + 532 + 183 + 5 assertions across the suites as of
 0.45.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored

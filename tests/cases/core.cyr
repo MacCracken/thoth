@@ -1716,14 +1716,137 @@ fn test_model_switch() {
     session_set_model_copy("opus-x");
     _term_title_build(tb, 256);
     assert(streq(tb, "thoth - opus-x") == 1, "title reflects the active model (session_model wins)");
-    # control bytes (BEL 0x07 / ESC 0x1b / DEL 0x7f) in the model are stripped -> no OSC escape injection
+    # control bytes (BEL 0x07 / ESC 0x1b / DEL 0x7f) in the model are stripped -> no OSC escape injection.
+    # 0.45.0: session_set_model_copy substitutes those bytes itself now, so the raw bytes are ALIASED in through
+    # session_set_model to keep proving the title builder's own strip — the defence behind the entry-point one.
     var mbuf[16];
     store8(&mbuf + 0, 97); store8(&mbuf + 1, 7); store8(&mbuf + 2, 98);   # 'a' BEL 'b'
     store8(&mbuf + 3, 27); store8(&mbuf + 4, 99); store8(&mbuf + 5, 127); store8(&mbuf + 6, 0);  # ESC 'c' DEL
-    session_set_model_copy(&mbuf);
+    session_set_model(&mbuf);
     _term_title_build(tb, 256);
     assert(streq(tb, "thoth - abc") == 1, "control bytes stripped from the title (no escape injection)");
     session_reset();
+    return 0;
+}
+
+# _mid_feed_count: how many times `needle` occurs across every line the feed ring holds (test-local).
+fn _mid_feed_count(needle) {
+    var t = 0;
+    var r = 0;
+    while (r < feed_count()) { t = t + _t_count_sub(feed_line_ptr(r), feed_line_len(r), needle, strlen(needle)); r = r + 1; }
+    return t;
+}
+
+# _mid_toml_model: write "[hoosh]" and `model = "<a><b>"` into dst exactly as a config file holds them, with a
+# literal backslash between a and b when bs == 1 (so b can begin a TOML unicode escape). Returns the byte length.
+# Newline (10), quote (34) and backslash (92) are stored as bytes, so no layer of string quoting can rewrite them.
+fn _mid_toml_model(dst, cap, a, bs, b) {
+    var o = _append_cstr_cap(dst, 0, cap, "[hoosh]");
+    store8(dst + o, 10); o = o + 1;
+    o = _append_cstr_cap(dst, o, cap, "model = ");
+    store8(dst + o, 34); o = o + 1;
+    o = _append_cstr_cap(dst, o, cap, a);
+    if (bs == 1) { store8(dst + o, 92); o = o + 1; }
+    o = _append_cstr_cap(dst, o, cap, b);
+    store8(dst + o, 34); store8(dst + o + 1, 10);
+    return o + 2;
+}
+
+# test_model_id_sanitise (0.45.0): the MODEL ID is untrusted bytes headed for chrome, sanitised where it ENTERS thoth.
+# Each door was reproduced under a pty before the fix — a raw ESC reached fd 1 from the TUI status bar, /state,
+# /model, the Ctrl-P picker's rows and its "model -> " line, and both /models listings:
+#   [hoosh].model — a PREFERENCE key, so a cloned repo's .thoth/config.cyml sets it (ADR-0021)  -> _cfg_label at load
+#   the catalog   — the gateway's ids, stored by the picker / printed by /models              -> _mp_add, _hoosh_model_row
+#   /model <id>   — the operator's own line, sharing the picker's switch                       -> session_set_model_copy
+# Needles are ESC + "[7m...", never _t_has_esc over a feed line: feed lines legitimately carry ESC-prefixed MARKERS.
+fn test_model_id_sanitise() {
+    test_group("model id sanitised where it enters (session/config/mpick/hoosh/commands, 0.45.0)");
+
+    # --- session_set_model_copy: the one store behind /model and the picker's switch ---
+    session_reset();
+    session_set_model_copy("m\x1b[7mEVIL\x07\r\n");
+    assert(streq(session_model(), "m?[7mEVIL???") == 1, "C0 bytes in a switched-to model id become '?', one for one");
+    var dbuf[8];
+    store8(&dbuf + 0, 100); store8(&dbuf + 1, 127); store8(&dbuf + 2, 0);   # 'd' DEL
+    session_set_model_copy(&dbuf);
+    assert(streq(session_model(), "d?") == 1, "...and so does DEL");
+    var lng = alloc(MODEL_BUF_CAP + 64);
+    var li = 0;
+    while (li < (MODEL_BUF_CAP + 63)) { store8(lng + li, 97); li = li + 1; }
+    store8(lng + MODEL_BUF_CAP + 63, 0);
+    session_set_model_copy(lng);
+    assert_eq(strlen(session_model()), MODEL_BUF_CAP - 1, "an over-long model id is still bounded at cap - 1 bytes");
+    session_reset();
+
+    # --- the gateway's catalog into the picker: _mp_add is the single choke point its rows paint from ---
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0;
+    assert_eq(_mp_add("cat\x1b[7mEVIL\x07"), 1, "a hostile catalog id still loads, as a visible row");
+    assert_eq(_mp_add("clean-model"), 1, "a clean id loads after it");
+    mpick_refilter();
+    assert(streq(mpick_id_at(0), "cat?[7mEVIL?") == 1, "the picker stores the catalog id sanitised (its rows emit these bytes raw)");
+    assert(streq(mpick_id_at(1), "clean-model") == 1, "...and the next id byte for byte, so the store offsets are intact");
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0;
+
+    # --- /models and /models <provider>: each row prints an id straight out of the gateway's response ---
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_model_row(str_new("cat\x1b[7mEVIL", 11), "clean-model");
+    _hoosh_model_row(str_new("clean-model", 11), "clean-model");
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "two catalog rows, one feed line each");
+    assert_eq(_mid_feed_count("\x1b[7mEVIL"), 0, "a /models row carries no raw escape from a catalog id");
+    assert_eq(_mid_feed_count("?[7mEVIL"), 1, "...the id is shown with '?' in its place");
+    assert_eq(_mid_feed_count("* "), 1, "the current routing target is still the one starred row");
+
+    # --- /model <id>: the switch echoes the STORED id; the seam-absent refusal echoes the line cleaned ---
+    var saved_url = _cfg_hoosh_url;
+    var saved_log = _log_enabled;
+    var saved_tier = _ui_tier;
+    _log_enabled = 0;                            # never append this test's switch to a real configured log
+    _ui_tier = PT_PLAIN;                         # ...nor let term_title_set write a title escape into the test output
+    _cfg_hoosh_url = "http://127.0.0.1:9";       # hoosh seam REMOTE, so the switch branch runs (cmd_model never dials)
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_model("/model typed\x1b[7mEVIL");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(streq(session_model(), "typed?[7mEVIL") == 1, "/model stores the sanitised id");
+    assert_eq(_mid_feed_count("\x1b[7mEVIL"), 0, "/model echoes no raw escape");
+    assert_eq(_mid_feed_count("?[7mEVIL"), 2, "...both echo lines name the stored id (model -> / next turn routes to)");
+    session_reset();
+    _cfg_hoosh_url = 0;                          # seam ABSENT: nothing is stored, and the refusal names the line
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_model("/model typed\x1b[7mEVIL");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mEVIL"), 0, "the seam-absent refusal echoes no raw escape either");
+    assert_eq(_mid_feed_count("?[7mEVIL"), 1, "...it names the id cleaned");
+    assert_eq(session_model(), 0, "...and switches nothing");
+    _cfg_hoosh_url = saved_url;
+    _log_enabled = saved_log;
+    _ui_tier = saved_tier;
+    feed_init();
+
+    # --- [hoosh].model through the REAL loader: a hostile local layer over a benign global, as a cloned repo's ---
+    # White-box: point the cached layer paths at files written here, then forget them and reload the real layers.
+    var gpath = "/tmp/thoth_t_model_global.cyml";
+    var lpath = "/tmp/thoth_t_model_local.cyml";
+    var ftxt = alloc(128);
+    file_write_all(gpath, ftxt, _mid_toml_model(ftxt, 128, "global-benign", 0, ""));
+    file_write_all(lpath, ftxt, _mid_toml_model(ftxt, 128, "x", 1, "u001b[7mEVIL"));
+    _cfg_gpath_c = gpath; _cfg_gpath_done = 1;
+    _cfg_lpath_c = lpath; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    # the premise, or the assertions after it could pass vacuously: the parser really hands thoth an ESC byte
+    var raw = _cfg2_str(_cfg_section_pairs(_cfg_parse_sections(lpath), "hoosh"), 0, "model");
+    assert(raw != 0, "premise: the local fixture parses");
+    assert_eq(_t_count_sub(raw, strlen(raw), "\x1b[7mEVIL", 8), 1, "premise: bayan decodes the TOML unicode escape into a raw ESC byte");
+    config_load();
+    assert(streq(config_hoosh_model(), "x?[7mEVIL") == 1, "[hoosh].model from a repo's local layer loads sanitised (the local value won; ESC -> '?')");
+    session_reset();
+    status_snapshot();
+    assert(streq(status_sval(SF_MODEL), "x?[7mEVIL") == 1, "...and that is what the status bar's model field carries");
+    # restore: forget the fixture paths and reload whatever real layers this machine has
+    _cfg_gpath_c = 0; _cfg_gpath_done = 0; _cfg_lpath_c = 0; _cfg_lpath_done = 0; _cfg_lsource = 0; _cfg_path_c = 0;
+    config_load();
+    if (_cfg_parse_any == 0) { _cfg_hoosh_model = 0; }   # no real layer (CI): config_load returned before this key
+    xunlink(gpath); xunlink(lpath);
     return 0;
 }
 
@@ -2433,6 +2556,110 @@ fn test_recap_drop_shift() {
     return 0;
 }
 
+# test_recap_fail_report (0.45.0): a FAILED recap names its cause, and thoth survives saying it. hoosh_recap_err() is
+# a HOOSH_SUM_* INTEGER, and the /compact and [hoosh].compact_at failure lines handed it straight to oprintln / emit,
+# which strlen their argument — under a pty against a fake gateway (HTTP 500, no listener, empty completion) all
+# twelve line-mode and TUI runs died with SIGSEGV. Each printer runs in a forked CHILD, so that fault reads as failed
+# assertions here instead of a dead suite. The recap fails on a url sandhi cannot parse, so nothing dials.
+var RFR_COMPACT = 0;
+var RFR_AUTO = 1;
+var _rfr_st = 0;       # the child's wait status: 0 = exited 0; a fault leaves its signal number in the low 7 bits
+var _rfr_want = 0;     # times the expected failure line appears in what the child printed
+var _rfr_tail = 0;     # times the companion line appears (the printer was reached, not skipped)
+
+# _rfr_is_text: 1 when hoosh_recap_err_msg(code) is a string holding `word`. An answer below the first page is a bare
+# code, refused before anything reads it, so a helper that hands back the code fails here instead of faulting.
+fn _rfr_is_text(code, word) {
+    var m = hoosh_recap_err_msg(code);
+    if (m < 4096) { return 0; }
+    return _ui_contains(m, word);
+}
+
+# _rfr_line: pre + the words for `code` + post, NUL-terminated in dst (a bare code spells a marker no printer emits).
+fn _rfr_line(dst, cap, pre, code, post) {
+    var m = hoosh_recap_err_msg(code);
+    if (m < 4096) { m = "<a code, not a string>"; }
+    var o = _append_cstr_cap(dst, 0, cap, pre);
+    o = _append_cstr_cap(dst, o, cap, m);
+    o = _append_cstr_cap(dst, o, cap, post);
+    store8(dst + o, 0);
+    return o;
+}
+
+# _rfr_run: fork a child that fails one recap printer under output mode `mode` with fds 1 and 2 on a file (an
+# OUT_RING feed is written out after), then exits 0; reap it and count `want` and `tail` in what it printed.
+fn _rfr_run(which, mode, want, tail) {
+    var pbuf[64];                                               # per-pid, so two suites running at once never share it
+    var po = _append_cstr_cap(&pbuf, 0, 64, "/tmp/thoth_t_recap_fail_");
+    po = _append_int_cap(&pbuf, po, 64, sys_getpid());
+    po = _append_cstr_cap(&pbuf, po, 64, ".txt");
+    store8(&pbuf + po, 0);
+    var path = &pbuf;
+    xunlink(path);
+    _rfr_st = 0 - 1; _rfr_want = 0; _rfr_tail = 0;
+    var pid = sys_fork();
+    if (pid < 0) { return 0; }
+    if (pid == 0) {
+        var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+        if (fd < 0) { sys_exit_group(3); }
+        sys_dup2(fd, 1); sys_dup2(fd, 2);
+        _ui_tier = PT_PLAIN;                                   # no SGR between a line's spans, so it matches whole
+        session_reset(); session_history_clear();
+        var i = 0;
+        while (i < 10) { session_history_append("user", "remember this", 13); i = i + 1; }   # past both keeps (6, 8)
+        _cfg_hoosh_history = 1;
+        _cfg_hoosh_url = "notaurl"; _hoosh_endpoint = 0;       # sandhi refuses the scheme: HOOSH_SUM_TRANSPORT, no dial
+        feed_init(); out_mode_set(mode);
+        if (which == RFR_AUTO) { _cfg_hoosh_compact_at = 1; session_add_tokens(100); hoosh_compact_auto(); }
+        else { cmd_compact("/compact"); }
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        if (mode == OUT_RING) {
+            var r = 0;
+            while (r < feed_count()) { file_write(1, feed_line_ptr(r), feed_line_len(r)); file_write(1, "\n", 1); r = r + 1; }
+        }
+        sys_exit_group(0);
+    }
+    var stbuf[4];
+    if (sys_waitpid(pid, &stbuf, 0) == pid) { _rfr_st = load32(&stbuf); }
+    var buf[4096];
+    var n = _save_read(path, &buf, 4095);
+    _rfr_want = _t_count_sub(&buf, n, want, strlen(want));
+    _rfr_tail = _t_count_sub(&buf, n, tail, strlen(tail));
+    xunlink(path);
+    return 0;
+}
+
+fn test_recap_fail_report() {
+    test_group("a failed recap names its cause without faulting (0.45.0)");
+    assert(_rfr_is_text(HOOSH_SUM_TRANSPORT, "did not answer") == 1, "a transport failure says the gateway did not answer");
+    assert(_rfr_is_text(HOOSH_SUM_HTTP, "HTTP error") == 1, "an HTTP failure says so");
+    assert(_rfr_is_text(HOOSH_SUM_EMPTY, "no recap text") == 1, "an empty or missing completion says no recap text came back");
+    assert(_rfr_is_text(HOOSH_SUM_OK, "no recap was produced") == 1, "a code no failure sets still reads as a sentence");
+    assert(_rfr_is_text(99, "no recap was produced") == 1, "...and so does a code outside the enum");
+
+    var want[192];
+    _rfr_line(&want, 192, "compact failed — ", HOOSH_SUM_TRANSPORT, "\n  nothing was dropped");
+    _rfr_run(RFR_COMPACT, OUT_FD1, &want, "compacting");
+    assert_eq(_rfr_st, 0, "/compact, line mode: a failed recap does not fault (the child exits 0)");
+    assert_eq(_rfr_want, 1, "/compact, line mode: the failure line names the cause, then says nothing was dropped");
+    assert_eq(_rfr_tail, 1, "/compact, line mode: it got as far as the recap call");
+    _rfr_run(RFR_COMPACT, OUT_RING, &want, "compacting");
+    assert_eq(_rfr_st, 0, "/compact, TUI feed: a failed recap does not fault");
+    assert_eq(_rfr_want, 1, "/compact, TUI feed: the failure line names the cause, then says nothing was dropped");
+    assert_eq(_rfr_tail, 1, "/compact, TUI feed: it got as far as the recap call");
+
+    _rfr_line(&want, 192, "  [auto-compact failed: ", HOOSH_SUM_TRANSPORT, " — nothing dropped]\n");
+    _rfr_run(RFR_AUTO, OUT_FD1, &want, "summarizing older turns]\n");
+    assert_eq(_rfr_st, 0, "[hoosh].compact_at, line mode: a failed recap does not fault");
+    assert_eq(_rfr_want, 1, "[hoosh].compact_at, line mode: the failure line names the cause, whole");
+    assert_eq(_rfr_tail, 1, "[hoosh].compact_at, line mode: the trigger announced itself first");
+    _rfr_run(RFR_AUTO, OUT_RING, &want, "summarizing older turns]\n");
+    assert_eq(_rfr_st, 0, "[hoosh].compact_at, TUI feed: a failed recap does not fault");
+    assert_eq(_rfr_want, 1, "[hoosh].compact_at, TUI feed: the failure line names the cause, whole");
+    assert_eq(_rfr_tail, 1, "[hoosh].compact_at, TUI feed: the trigger announced itself first");
+    return 0;
+}
+
 # /save export formats (0.36.5): --json / --plain are TIER-NEUTRAL (the conversation, not the rendered scrollback),
 # so a machine/bare export does not depend on whether you were in the TUI. Markdown stays the untouched default.
 fn test_save_formats() {
@@ -2791,6 +3018,1008 @@ fn test_ui_theme_config() {
     ui_set_theme(THEME_LIGHT);
     assert(streq(&dbuf, ui_sgr(ROLE_ACCENT)) == 0, "switching the theme changes the emitted SGR for a role");
     ui_set_theme(saved);
+    return 0;
+}
+
+# _stx_cat_bs: append `a`, ONE literal backslash, then `b` to dst at `off` (cap-bounded); returns the new offset.
+# The backslash is STORED as byte 92 so no layer of string quoting can rewrite it: a backslash-u escape is how TOML
+# and JSON spell ESC and NUL, and that escape (not a raw byte) is what a config file or a gateway body carries.
+fn _stx_cat_bs(dst, off, cap, a, b) {
+    var o = _append_cstr_cap(dst, off, cap, a);
+    if (o < (cap - 1)) { store8(dst + o, 92); o = o + 1; }
+    return _append_cstr_cap(dst, o, cap, b);
+}
+
+# test_seam_text_sanitise (0.45.0): three more untrusted strings that reached the terminal raw, each sanitised where
+# it ENTERS thoth, each door reproduced under a pty before the fix:
+#   [hoosh].url / [daimon].url — PREFERENCE keys, so a cloned repo's local layer sets them  -> _cfg_label at load
+#   a gateway's error.message   — a non-2xx body, printed straight out of the response      -> _hoosh_print_str
+#   a /call tool name           — a line-mode line, or a repo-local [alias] expansion        -> cmd_call's copy
+# plus the two daimon siblings the /call check found: a registry's tool name/description (/tools) and a tool's result
+# or error text (/call). Needles are ESC + "[7m...", never _t_has_esc over a feed line: feed lines carry ESC markers.
+fn test_seam_text_sanitise() {
+    test_group("seam text sanitised where it enters (config/hoosh/commands/daimon, 0.45.0)");
+
+    # --- [hoosh].url + [daimon].url through the REAL loader: a hostile local layer over a benign global ---
+    var gpath = "/tmp/thoth_t_url_global.cyml";
+    var lpath = "/tmp/thoth_t_url_local.cyml";
+    var ft = alloc(512);
+    var o = _append_cstr_cap(ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"GTOK\"\n[daimon]\nurl = \"http://127.0.0.1:8090\"\n");
+    file_write_all(gpath, ft, o);
+    o = _stx_cat_bs(ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:9", "u001b[7mURLMARK\"\n");
+    o = _stx_cat_bs(ft, o, 512, "[daimon]\nurl = \"http://127.0.0.1:9", "u001b[7mDURLMARK\"\n");
+    file_write_all(lpath, ft, o);
+    _cfg_gpath_c = gpath; _cfg_gpath_done = 1;
+    _cfg_lpath_c = lpath; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    # the premise, or the assertions after it could pass vacuously: the parser really hands thoth an ESC byte
+    var raw = _cfg2_str(_cfg_section_pairs(_cfg_parse_sections(lpath), "hoosh"), 0, "url");
+    assert(raw != 0, "premise: the local url fixture parses");
+    assert_eq(_t_count_sub(raw, strlen(raw), "\x1b[7mURLMARK", 11), 1, "premise: bayan decodes the TOML unicode escape into a raw ESC byte");
+    config_load();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:9?[7mURLMARK") == 1, "[hoosh].url from a repo's local layer loads sanitised (ESC -> '?')");
+    assert(streq(config_daimon_url(), "http://127.0.0.1:9?[7mDURLMARK") == 1, "...and so does [daimon].url");
+    assert_eq(config_hoosh_token(), 0, "the global token is still withheld: the redirect test reads the RAW layer values");
+    _hoosh_models_ep = 0;
+    daimon_endpoints_reset();
+    var mu = _hoosh_models_url();
+    var du = _daimon_tools_endpoint();
+    assert_eq(_t_count_sub(mu, strlen(mu), "\x1b[", 2), 0, "the joined url a '-> hoosh' trace prints carries no escape");
+    assert_eq(_t_count_sub(du, strlen(du), "\x1b[", 2), 0, "...nor the one a '-> daimon' trace prints");
+    o = _append_cstr_cap(ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:8089/gw\"\n");
+    file_write_all(lpath, ft, o);
+    config_load();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8089/gw") == 1, "a clean url is stored byte for byte");
+    assert(streq(config_daimon_url(), "http://127.0.0.1:8090") == 1, "...and so is the global layer's, under a quiet local one");
+    # restore: forget the fixture paths and reload whatever real layers this machine has
+    _cfg_gpath_c = 0; _cfg_gpath_done = 0; _cfg_lpath_c = 0; _cfg_lpath_done = 0; _cfg_lsource = 0; _cfg_path_c = 0;
+    config_load();
+    if (_cfg_parse_any == 0) { _cfg_hoosh_url = 0; _cfg_hoosh_token = 0; _cfg_daimon_url = 0; _cfg_suppressed_n = 0; }   # no real layer (CI)
+    _hoosh_models_ep = 0;
+    daimon_endpoints_reset();
+    xunlink(gpath); xunlink(lpath);
+
+    # --- a gateway's error.message: _hoosh_print_str is the one printer behind all four non-2xx paths ---
+    var eb = alloc(256);
+    var eo = _stx_cat_bs(eb, 0, 256, "{\"error\":{\"message\":\"gw", "u001b[7mERRMARK refused");
+    eo = _stx_cat_bs(eb, eo, 256, "", "nsecond");
+    eo = _stx_cat_bs(eb, eo, 256, "", "u0000tail\"}}");
+    var em = hoosh_extract_error(eb, eo);
+    assert(em != 0, "premise: the error body parses");
+    assert_eq(_t_count_sub(str_data(em), str_len(em), "\x1b[7mERRMARK", 11), 1, "premise: the JSON escape decodes into a raw ESC byte");
+    assert_eq(str_len(em), 33, "premise: the escaped NUL decodes to ONE byte inside the Str, not its end");
+    assert_eq(load8(str_data(em) + 28), 0, "premise: ...and that byte is a real NUL");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_print_str(em);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mERRMARK"), 0, "a gateway's error message reaches the feed with no raw escape");
+    assert_eq(_mid_feed_count("gw?[7mERRMARK refused"), 1, "...shown with '?' in the escape's place, the prose intact");
+    assert_eq(feed_count(), 2, "the TEXT policy keeps the message's own newline: two feed lines");
+    assert_eq(_mid_feed_count("second?tail"), 1, "an escaped NUL becomes '?' too, never the end of the message");
+
+    # --- /call <tool>: a name holding a control byte is refused where it enters; a clean name still reaches the gate ---
+    var saved_durl = _cfg_daimon_url;
+    var saved_log = _log_enabled;
+    _log_enabled = 0;                            # never append this test's authz line to a real configured log
+    _cfg_daimon_url = "http://127.0.0.1:9";      # daimon seam REMOTE, so cmd_call reaches its copy (nothing here dials)
+    one_shot_set(1);                             # any call that DOES reach the gate is denied without a prompt
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_call("/call t\x1b[7mNAMEMARK {}");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(streq(_call_name, "t?[7mNAMEMARK") == 1, "/call copies the tool name through the house sanitiser");
+    assert_eq(_mid_feed_count("refused: tool name 't?[7mNAMEMARK' holds a control byte"), 1, "...and REFUSES a name that held a control byte, naming it cleaned");
+    assert_eq(_mid_feed_count("denied. no request sent."), 0, "...before the gate: nothing is authorized, nothing is sent");
+    assert_eq(_mid_feed_count("\x1b[7mNAMEMARK"), 0, "nothing /call printed carries a raw escape");
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_call("/call clean_tool {}");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused"), 0, "a clean name is not refused...");
+    assert_eq(_mid_feed_count("denied. no request sent."), 1, "...it reaches the fail-closed gate exactly as before");
+    one_shot_set(0);
+    _cfg_daimon_url = saved_durl;
+    _log_enabled = saved_log;
+
+    # --- the daimon siblings: a registry's tool name/description (/tools) and a tool's result text (/call) ---
+    var tb = alloc(256);
+    var to = _stx_cat_bs(tb, 0, 256, "{\"name\":\"t", "u001b[7mTOOLMARK\",\"description\":\"d");
+    to = _stx_cat_bs(tb, to, 256, "", "u001b[7mDESCMARK");
+    to = _stx_cat_bs(tb, to, 256, "", "nforged row\"}");
+    var tv = bayan_json_v_parse_buf(tb, to);
+    assert(tv != 0, "premise: the registry entry parses");
+    var rs = "r\x1b[7mRESMARK ok\nline two";
+    feed_init(); out_mode_set(OUT_RING);
+    _daimon_tool_row(bayan_json_v_obj_get(tv, "name"), bayan_json_v_obj_get(tv, "description"));
+    _daimon_print_str(str_new(rs, strlen(rs)));
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mTOOLMARK"), 0, "a /tools row carries no raw escape from a registry tool's name");
+    assert_eq(_mid_feed_count("\x1b[7mDESCMARK"), 0, "...nor from its description");
+    assert_eq(_mid_feed_count("t?[7mTOOLMARK"), 1, "the name is still shown, '?' in the escape's place");
+    assert_eq(_mid_feed_count("d?[7mDESCMARK?forged row"), 1, "the description is a LABEL: its newline is a '?' too, so it forges no row");
+    assert_eq(_mid_feed_count("\x1b[7mRESMARK"), 0, "a /call result carries no raw escape either");
+    assert_eq(_mid_feed_count("r?[7mRESMARK ok"), 1, "...shown with '?'");
+    assert_eq(feed_count(), 3, "one tool row, then the result with its own newline kept (TEXT policy)");
+    feed_init();
+    return 0;
+}
+
+# test_gate_mcpres_sanitise (0.45.0): two more untrusted strings that reached the terminal raw, each door reproduced
+# under a pty before the fix:
+#   the gate's OBJECT — a model's shell command, tool name or edit path — on the "[session grant]" line, the one-shot
+#     stderr denial, the "[t-ron] allow:" line and /grants; plus the spinner label and the "[delegate]" line
+#   daimon's MCP registries — every field /resources and /prompts print, and a rendered prompt's "task:" echo
+# Needles are ESC + "[7m...", never _t_has_esc over a feed line: feed lines carry ESC-prefixed role markers.
+fn test_gate_mcpres_sanitise() {
+    test_group("gate object + MCP resources/prompts sanitised (gate/commands/tui/subagent, 0.45.0)");
+    var saved_log = _log_enabled;
+    _log_enabled = 0;                            # never append this test's authz lines to a real configured log
+    var gobj = "echo hi\x1b[7mGATEMARK";
+
+    # --- a session grant: the line confirm prints when a granted action repeats, then the /grants listing ---
+    grants_clear();
+    assert_eq(_grant_add("run shell", gobj), 1, "premise: the raw (verb, obj) pair is grantable");
+    feed_init(); out_mode_set(OUT_RING);
+    var ok = confirm("run shell", gobj);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(ok, 1, "the grant still matches the RAW (verb, obj) and allows");
+    assert_eq(_mid_feed_count("\x1b[7mGATEMARK"), 0, "the [session grant] line draws no raw escape from the object");
+    assert_eq(_mid_feed_count("run shell echo hi?[7mGATEMARK"), 1, "...and names the action, '?' in the escape's place");
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_grants("/grants");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mGATEMARK"), 0, "/grants lists the stored object with no raw escape");
+    assert_eq(_mid_feed_count("echo hi?[7mGATEMARK"), 1, "...shown sanitised, on one row");
+    grants_clear();
+
+    # --- one-shot: the denial is written to STDERR, so fd 2 points at a file for the one call ---
+    var epath = "/tmp/thoth_t_gate_stderr.txt";
+    var efd = file_open(epath, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    var save2 = 200;
+    var saved_ok = 0;
+    if (efd >= 0) { if (sys_dup2(2, save2) == save2) { saved_ok = 1; } }
+    assert_eq(saved_ok, 1, "premise: a capture file is open and stderr is saved");
+    var okd = 1;
+    if (saved_ok == 1) {
+        sys_dup2(efd, 2);
+        one_shot_set(1);
+        okd = confirm("run shell", gobj);
+        one_shot_set(0);
+        sys_dup2(save2, 2);
+        file_close(save2);
+    }
+    if (efd >= 0) { file_close(efd); }
+    var eb = alloc(1024);
+    var en = file_read_all(epath, eb, 1023);
+    assert_eq(okd, 0, "one-shot still DENIES an action with no grant");
+    assert(en > 0, "premise: the denial was captured from stderr");
+    assert_eq(_t_count_sub(eb, en, "\x1b[7mGATEMARK", strlen("\x1b[7mGATEMARK")), 0, "the one-shot denial on stderr carries no raw escape");
+    assert_eq(_t_count_sub(eb, en, "run shell echo hi?[7mGATEMARK", strlen("run shell echo hi?[7mGATEMARK")), 1, "...and names the action sanitised");
+    xunlink(epath);
+
+    # --- a t-ron policy that ALLOWS it: the "[t-ron] allow:" line (a shell command is params, not the name t-ron checks) ---
+    var saved_tron = _gate_tron;
+    var saved_agent = _cfg_tron_agent;
+    _cfg_tron_agent = 0;                         # the policy below names the default agent id
+    var tr = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(tr, "[agent.\"thoth\"]\nallow = [\"*\"]\n"), TRON_ERR_NONE, "premise: an allow-all policy loads");
+    _gate_tron = tr;
+    feed_init(); out_mode_set(OUT_RING);
+    var oka = gate_authorize("thoth_shell", _params_one("command", gobj), "run shell", gobj);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    _gate_tron = saved_tron;
+    _cfg_tron_agent = saved_agent;
+    assert_eq(oka, 1, "premise: t-ron allows the call");
+    assert_eq(_mid_feed_count("\x1b[7mGATEMARK"), 0, "the [t-ron] allow: line draws no raw escape from the object");
+    assert_eq(_mid_feed_count("run shell echo hi?[7mGATEMARK"), 1, "...and names the action sanitised");
+
+    # --- the spinner label (the model's tool name, painted with emit_raw) and the [delegate] line (the model's task) ---
+    var saved_spin = _spin_active;
+    _spin_active = 0;                            # spin_paint is a no-op: this checks the stored label alone
+    spin_label_set("t\x1b[7mSPINMARK");
+    assert(streq(_spin_label_buf, "t?[7mSPINMARK") == 1, "the spinner stores a tool name sanitised, '?' in the escape's place");
+    spin_label_clear();
+    _spin_active = saved_spin;
+    feed_init(); out_mode_set(OUT_RING);
+    _sub_announce("look\x1b[7mTASKMARK\nforged");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mTASKMARK"), 0, "the [delegate] line draws no raw escape from the model's task");
+    assert_eq(_mid_feed_count("look?[7mTASKMARK?forged"), 1, "...shown with '?', its newline too (LABEL policy)");
+    assert_eq(feed_count(), 1, "...so the task forges no second row");
+
+    # --- daimon's registries: one /resources row and one /prompts row from hostile JSON, then a prompt's task echo ---
+    var rb = alloc(512);
+    var ro = _stx_cat_bs(rb, 0, 512, "{\"uri\":\"mem://a", "u001b[7mURIMARK\",\"name\":\"n");
+    ro = _stx_cat_bs(rb, ro, 512, "", "u001b[7mRNAMEMARK\",\"mimeType\":\"text/plain");
+    ro = _stx_cat_bs(rb, ro, 512, "", "u001b[7mMIMEMARK\",\"description\":\"d");
+    ro = _stx_cat_bs(rb, ro, 512, "", "u001b[7mRDESCMARK");
+    ro = _stx_cat_bs(rb, ro, 512, "", "nforged row");
+    ro = _stx_cat_bs(rb, ro, 512, "", "u0000tail\"}");
+    var rv = bayan_json_v_parse_buf(rb, ro);
+    assert(rv != 0, "premise: the resource entry parses");
+    var ds = _mcpres_str(rv, "description");
+    assert(ds != 0, "premise: the description is a string");
+    if (ds != 0) {
+        assert_eq(_t_count_sub(str_data(ds), str_len(ds), "\x1b[7mRDESCMARK", strlen("\x1b[7mRDESCMARK")), 1, "premise: bayan decodes the JSON escape into a raw ESC byte");
+        assert_eq(load8(str_data(ds) + str_len(ds) - 5), 0, "premise: ...and the escaped NUL into a real NUL inside the Str");
+    }
+    feed_init(); out_mode_set(OUT_RING);
+    _mcpres_resource_row(rv);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mURIMARK"), 0, "a /resources row draws no raw escape from the uri");
+    assert_eq(_mid_feed_count("\x1b[7mRNAMEMARK"), 0, "...nor from the name");
+    assert_eq(_mid_feed_count("\x1b[7mMIMEMARK"), 0, "...nor from the mimeType");
+    assert_eq(_mid_feed_count("\x1b[7mRDESCMARK"), 0, "...nor from the description");
+    assert_eq(_mid_feed_count("mem://a?[7mURIMARK"), 1, "the uri is still shown, '?' in the escape's place");
+    assert_eq(_mid_feed_count("n?[7mRNAMEMARK"), 1, "...the name too");
+    assert_eq(_mid_feed_count("text/plain?[7mMIMEMARK"), 1, "...and the mimeType");
+    assert_eq(_mid_feed_count("d?[7mRDESCMARK?forged row?tail"), 1, "the description is a LABEL: its newline and escaped NUL are '?', never a forged row or the field's end");
+    assert_eq(feed_count(), 2, "one entry row, then its description row");
+    var pb = alloc(512);
+    var po = _stx_cat_bs(pb, 0, 512, "{\"name\":\"p", "u001b[7mPNAMEMARK\",\"description\":\"pd");
+    po = _stx_cat_bs(pb, po, 512, "", "u001b[7mPDESCMARK\",\"arguments\":[{\"name\":\"a");
+    po = _stx_cat_bs(pb, po, 512, "", "u001b[7mARGMARK\"}]}");
+    var pv = bayan_json_v_parse_buf(pb, po);
+    assert(pv != 0, "premise: the prompt entry parses");
+    feed_init(); out_mode_set(OUT_RING);
+    _mcpres_prompt_row(pv);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mPNAMEMARK"), 0, "a /prompts row draws no raw escape from the prompt's name");
+    assert_eq(_mid_feed_count("\x1b[7mARGMARK"), 0, "...nor from an argument name");
+    assert_eq(_mid_feed_count("\x1b[7mPDESCMARK"), 0, "...nor from the description");
+    assert_eq(_mid_feed_count("p?[7mPNAMEMARK"), 1, "the prompt's name is still shown, '?' in the escape's place");
+    assert_eq(_mid_feed_count("a?[7mARGMARK"), 1, "...its argument name too");
+    assert_eq(_mid_feed_count("pd?[7mPDESCMARK"), 1, "...and its description");
+    feed_init(); out_mode_set(OUT_RING);
+    _mcpres_task_echo("render\x1b[7mPTEXTMARK body\nsecond line");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mPTEXTMARK"), 0, "a rendered MCP prompt's task: echo draws no raw escape");
+    assert_eq(_mid_feed_count("task: render?[7mPTEXTMARK body"), 1, "...shown with '?'");
+    assert_eq(feed_count(), 2, "the echo is PROSE (TEXT policy): the prompt's own newline is kept");
+    feed_init();
+    _log_enabled = saved_log;
+    return 0;
+}
+
+# test_reply_text_sanitise (0.45.0): the MODEL'S REPLY is untrusted bytes headed for the terminal AND for storage, so
+# it is cleaned where it ENTERS thoth — _hoosh_clean_text, over each decoded JSON string — before any consumer sees
+# it. Reproduced under a pty against a fake gateway before the fix: a reply carrying ESC [7m reached the terminal raw
+# on every path (blocking and streamed, agentic and plain, both tiers, NO_COLOR, one-shot stdout). Each door is driven
+# through its REAL entry — the blocking extractor, and both SSE callbacks handed frames exactly as sandhi hands them —
+# and the render, the reply accumulator and the reasoning accumulator are checked after it. Needles are
+# ESC + "[7m...", never _t_has_esc over a feed line: feed lines carry ESC-prefixed MARKERS.
+
+# _rtx_frame_open: start an OpenAI streaming frame in `f`, up to the opening quote of delta.<key>; returns the offset.
+fn _rtx_frame_open(f, cap, key) {
+    var o = _append_cstr_cap(f, 0, cap, "{\"choices\":[{\"index\":0,\"delta\":{\"");
+    o = _append_cstr_cap(f, o, cap, key);
+    return _append_cstr_cap(f, o, cap, "\":\"");
+}
+
+# _rtx_ev: a sandhi SSE event carrying `data`. The event is a plain struct, so a frame reaches a callback exactly as
+# the transport hands it (the pattern tests/cases/agent.cyr uses for the in-stream error frame).
+fn _rtx_ev(data) {
+    var ev = alloc(64);
+    store64(ev + SANDHI_SSE_OFF_EVENT, 0);
+    store64(ev + SANDHI_SSE_OFF_DATA, data);
+    store64(ev + SANDHI_SSE_OFF_ID, 0);
+    store64(ev + SANDHI_SSE_OFF_RETRY, 0);
+    return ev;
+}
+
+fn test_reply_text_sanitise() {
+    test_group("model reply text sanitised where it enters (util/hoosh/agent, 0.45.0)");
+    var sv_tier = _ui_tier;
+    var sv_depth = _ui_depth;
+    var sv_det = _ui_detected;
+
+    # --- the policy, in place: clean_text_n ---
+    var pb[16];
+    store8(&pb + 0, 97);  store8(&pb + 1, 27);  store8(&pb + 2, 10);  store8(&pb + 3, 9);     # a ESC LF TAB
+    store8(&pb + 4, 13);  store8(&pb + 5, 0);   store8(&pb + 6, 127); store8(&pb + 7, 7);     # CR NUL DEL BEL
+    store8(&pb + 8, 195); store8(&pb + 9, 169); store8(&pb + 10, 98);                         # e-acute (UTF-8), b
+    assert_eq(clean_text_n(&pb, 11), 5, "clean_text_n changes exactly the five control bytes (ESC CR NUL DEL BEL)");
+    var pe[16];
+    store8(&pe + 0, 97);  store8(&pe + 1, 63);  store8(&pe + 2, 10);  store8(&pe + 3, 9);
+    store8(&pe + 4, 63);  store8(&pe + 5, 63);  store8(&pe + 6, 63);  store8(&pe + 7, 63);
+    store8(&pe + 8, 195); store8(&pe + 9, 169); store8(&pe + 10, 98);
+    assert_eq(memeq(&pb, &pe, 11), 1, "...each to '?' where it lies; newline, tab and a UTF-8 glyph survive byte for byte");
+    assert_eq(clean_text_n(0, 4), 0, "a null pointer is a no-op");
+
+    # --- a blocking completion: hoosh_extract_content, the ONE extractor behind all four blocking doors ---
+    var bb = alloc(512);
+    var bo = _stx_cat_bs(bb, 0, 512, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"reply", "u001b[7mREPLYMARK text");
+    bo = _stx_cat_bs(bb, bo, 512, "", "nnext");
+    bo = _stx_cat_bs(bb, bo, 512, "", "tcell");
+    bo = _stx_cat_bs(bb, bo, 512, "", "u0000tail\"}}]}");
+    store8(bb + bo, 0);
+    # the premise, or the assertions after it could pass vacuously: the parser really hands thoth an ESC byte
+    var braw = bayan_json_v_str(bayan_json_v_obj_get(bayan_json_v_obj_get(bayan_json_v_arr_get(bayan_json_v_obj_get(bayan_json_v_parse_buf(bb, bo), "choices"), 0), "message"), "content"));
+    assert(braw != 0, "premise: the completion parses");
+    assert_eq(_t_count_sub(str_data(braw), str_len(braw), "\x1b[7mREPLYMARK", 13), 1, "premise: the JSON escape decodes into a raw ESC byte");
+    var bs = hoosh_extract_content(bb, bo);
+    assert(bs != 0, "hoosh_extract_content still returns the reply");
+    assert_eq(_t_count_sub(str_data(bs), str_len(bs), "\x1b", 1), 0, "a blocking reply comes out of the extractor with no ESC");
+    assert_eq(_t_count_sub(str_data(bs), str_len(bs), "reply?[7mREPLYMARK text", 23), 1, "...'?' in its place, the prose intact");
+    assert_eq(str_len(bs), 38, "...one byte for one: the length is unchanged");
+    assert_eq(load8(str_data(bs) + 23), 10, "the TEXT policy keeps the reply's own newline");
+    assert_eq(load8(str_data(bs) + 28), 9, "...and its tab");
+    assert_eq(load8(str_data(bs) + 33), 63, "an escaped NUL becomes '?', never the end of the reply");
+    # ...and drawn through the REAL render sink (mdhl) at the TUI's tier, into the feed ring
+    ui_force(PT_RICH, CD_TRUE);
+    reply_sink_set(&mdhl_reply, &mdhl_reset, &mdhl_feed, &mdhl_finish, 0);   # no per-frame paint hook in a test
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_print_reply(bs);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mREPLYMARK"), 0, "the rendered blocking reply carries no raw escape into the feed");
+    assert_eq(_mid_feed_count("reply?[7mREPLYMARK text"), 1, "...it is shown with '?'");
+    assert_eq(_mid_feed_count("\x1b["), 0, "...and no line of it holds ESC + '[' at all");
+    # a clean reply is stored byte for byte
+    var cbody = alloc(256);
+    var cbo = _stx_cat_bs(cbody, 0, 256, "{\"choices\":[{\"message\":{\"content\":\"plain **bold** `code`", "n");
+    cbo = _stx_cat_bs(cbody, cbo, 256, "", "tindented\"}}]}");
+    store8(cbody + cbo, 0);
+    var cs = hoosh_extract_content(cbody, cbo);
+    var cx = alloc(64);
+    var cxo = _append_cstr_cap(cx, 0, 64, "plain **bold** `code`");
+    store8(cx + cxo, 10); store8(cx + cxo + 1, 9);
+    cxo = _append_cstr_cap(cx, cxo + 2, 64, "indented");
+    assert(cs != 0, "premise: a clean completion parses");
+    assert_eq(str_len(cs), cxo, "a clean reply keeps its length");
+    assert_eq(memeq(str_data(cs), cx, cxo), 1, "...and every byte: markdown, newline and tab untouched");
+
+    # --- streamed frames, as sandhi hands them: reasoning, content, and ONE ESC split across two frames ---
+    var fr_reason = alloc(256);
+    var o = _rtx_frame_open(fr_reason, 256, "reasoning_content");
+    o = _stx_cat_bs(fr_reason, o, 256, "think", "u001b[7mREASONMARK done\"}}]}");
+    store8(fr_reason + o, 0);
+    var fr_c1 = alloc(256);
+    o = _rtx_frame_open(fr_c1, 256, "content");
+    o = _stx_cat_bs(fr_c1, o, 256, "reply", "u001b[7mREPLYMARK text");
+    o = _stx_cat_bs(fr_c1, o, 256, "", "n\"}}]}");
+    store8(fr_c1 + o, 0);
+    var fr_c2 = alloc(256);                                  # this frame ENDS with the escape...
+    o = _rtx_frame_open(fr_c2, 256, "content");
+    o = _stx_cat_bs(fr_c2, o, 256, "split", "u001b\"}}]}");
+    store8(fr_c2 + o, 0);
+    var fr_c3 = alloc(256);                                  # ...and this one OPENS with the "[7m" that completes it
+    o = _rtx_frame_open(fr_c3, 256, "content");
+    o = _stx_cat_bs(fr_c3, o, 256, "[7mSPLITMARK end", "n\"}}]}");
+    store8(fr_c3 + o, 0);
+    var p2 = bayan_json_v_str(bayan_json_v_obj_get(bayan_json_v_obj_get(bayan_json_v_arr_get(bayan_json_v_obj_get(bayan_json_v_parse_buf(fr_c2, strlen(fr_c2)), "choices"), 0), "delta"), "content"));
+    assert(p2 != 0, "premise: the split frame parses");
+    assert_eq(load8(str_data(p2) + str_len(p2) - 1), 27, "premise: its content really ends in a raw ESC byte");
+
+    # --- the plain turn's callback: _hoosh_sse_cb -> the reply-render sink (mdhl) + the accumulators ---
+    intr_reset();
+    _hoosh_acc_reset();
+    var cell = alloc(8);
+    store64(cell, 0);
+    feed_init(); out_mode_set(OUT_RING);
+    _reply_begin();
+    assert_eq(_hoosh_sse_cb(cell, _rtx_ev(fr_reason)), 1, "the plain turn's callback consumes the reasoning frame");
+    assert_eq(_hoosh_sse_cb(cell, _rtx_ev(fr_c1)), 1, "...the content frame");
+    assert_eq(_hoosh_sse_cb(cell, _rtx_ev(fr_c2)), 1, "...the frame that ends in an ESC");
+    assert_eq(_hoosh_sse_cb(cell, _rtx_ev(fr_c3)), 1, "...and the frame that completes it");
+    _reply_end();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mREPLYMARK"), 0, "a streamed plain turn draws no raw escape");
+    assert_eq(_mid_feed_count("\x1b[7mSPLITMARK"), 0, "...not even one split across two frames");
+    assert_eq(_mid_feed_count("split?[7mSPLITMARK end"), 1, "...the split escape shows as '?', the frames' text rejoined on one line");
+    assert_eq(_mid_feed_count("\x1b["), 0, "...and no feed line holds ESC + '[' at all");
+    var ra = hoosh_last_reply();
+    var rl = hoosh_last_reply_len();
+    assert_eq(_t_count_sub(ra, rl, "\x1b", 1), 0, "the reply accumulator holds no ESC (history, the session file and one-shot stdout read it)");
+    assert_eq(_t_count_sub(ra, rl, "reply?[7mREPLYMARK text", 23), 1, "...it holds the same '?' text the terminal was given");
+    assert_eq(_t_count_sub(ra, rl, "split?[7mSPLITMARK end", 22), 1, "...with the split escape cleaned");
+    assert_eq(load64(cell), rl, "the callback's byte count still matches the accumulator (one for one)");
+    assert_eq(_t_count_sub(hoosh_last_reason(), hoosh_last_reason_len(), "\x1b", 1), 0, "the reasoning accumulator (the GUI fold, reasonlog) holds no ESC");
+    assert_eq(_t_count_sub(hoosh_last_reason(), hoosh_last_reason_len(), "think?[7mREASONMARK done", 24), 1, "...reasoning is cleaned where it enters, like the reply");
+
+    # --- the agentic loop's callback: _agent_sse_cb -> mdhl_feed directly + the same accumulators ---
+    _hoosh_acc_reset();
+    _ag_reset();
+    feed_init(); out_mode_set(OUT_RING);
+    mdhl_reset();
+    # every call pings feed_stream_tick; stamping the throttle keeps it inside its frame budget, so nothing is painted
+    _stream_last_paint_ms = clock_now_ms();
+    assert_eq(_agent_sse_cb(0, _rtx_ev(fr_reason)), 1, "the agentic callback consumes the reasoning frame");
+    _stream_last_paint_ms = clock_now_ms();
+    assert_eq(_agent_sse_cb(0, _rtx_ev(fr_c1)), 1, "...the content frame");
+    _stream_last_paint_ms = clock_now_ms();
+    assert_eq(_agent_sse_cb(0, _rtx_ev(fr_c2)), 1, "...the frame that ends in an ESC");
+    _stream_last_paint_ms = clock_now_ms();
+    assert_eq(_agent_sse_cb(0, _rtx_ev(fr_c3)), 1, "...and the frame that completes it");
+    mdhl_finish();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mREPLYMARK"), 0, "a streamed agentic round draws no raw escape");
+    assert_eq(_mid_feed_count("\x1b[7mSPLITMARK"), 0, "...not even one split across two frames");
+    assert_eq(_mid_feed_count("split?[7mSPLITMARK end"), 1, "...the split escape shows as '?' there too");
+    assert_eq(_mid_feed_count("\x1b["), 0, "...and no feed line holds ESC + '[' at all");
+    var ra2 = hoosh_last_reply();
+    var rl2 = hoosh_last_reply_len();
+    assert_eq(_t_count_sub(ra2, rl2, "\x1b", 1), 0, "the agentic reply accumulator holds no ESC");
+    assert_eq(_t_count_sub(ra2, rl2, "split?[7mSPLITMARK end", 22), 1, "...the split escape cleaned in it");
+    assert_eq(_t_count_sub(hoosh_last_reason(), hoosh_last_reason_len(), "\x1b", 1), 0, "the agentic reasoning accumulator holds no ESC");
+    assert_eq(_t_count_sub(hoosh_last_reason(), hoosh_last_reason_len(), "think?[7mREASONMARK done", 24), 1, "...cleaned where it entered");
+
+    # --- hoosh_extract_delta, the streaming extractor's pure form: cleaned too, so no raw sibling waits for a caller ---
+    var dsx = hoosh_extract_delta(fr_c1, strlen(fr_c1));
+    assert(dsx != 0, "premise: hoosh_extract_delta reads the content frame");
+    assert_eq(_t_count_sub(str_data(dsx), str_len(dsx), "reply?[7mREPLYMARK text", 23), 1, "hoosh_extract_delta returns the content cleaned");
+
+    reply_sink_set(0, 0, 0, 0, 0);
+    _ui_tier = sv_tier; _ui_depth = sv_depth; _ui_detected = sv_det;
+    _hoosh_acc_reset();
+    _ag_reset();
+    feed_init();
+    return 0;
+}
+
+# test_alias_line_sanitise (0.45.0): a repo-local [alias] expansion reaches a command as the operator's own line, and two
+# commands echoed its argument raw — /resource's uri ("read <uri>", "could not read <uri>") and a prompt slash command's
+# name ("[mcp prompt] <name>", "prompt <name> could not be rendered", "could not reach daimon's prompt registry — /<name>").
+# Both values are also sent to daimon, so both are REFUSED where they enter; each door was reproduced under a pty first.
+# The alias table is spelled the way a cloned repo spells ESC. Since the alias-level refusal (_alias_value_has_ctl, see
+# test_alias_ctl_refused) such an alias never reaches either command, so the two refusals are driven by the operator's
+# own line, which a paste can still carry; the clean aliases still go through alias_expand. Nothing here dials, with
+# or without the fix: /resource runs with no daimon url, and the prompt gap with one sandhi cannot parse ("nodial:").
+# Needles are ESC + "[7m...", never _t_has_esc over a feed line: feed lines carry ESC-prefixed role markers.
+fn test_alias_line_sanitise() {
+    test_group("alias-borne /resource uri + prompt slash name refused where they enter (commands, 0.45.0)");
+    var saved_durl = _cfg_daimon_url;
+    var saved_probed = _mcpres_probed;
+    var saved_log = _log_enabled;
+    _log_enabled = 0;                            # never append to a real configured log
+
+    # --- the alias table, spelled the way a cloned repo's .thoth/config.cyml spells ESC: a TOML unicode escape ---
+    var ab = alloc(512);
+    var ao = _stx_cat_bs(ab, 0, 512, "[alias]\nrr = \"/resource mem://a", "u001b[7mALIASURIMARK\"\n");
+    ao = _stx_cat_bs(ab, ao, 512, "pp = \"/p", "u001b[7mPNAMEMARK x\"\n");
+    ao = _append_cstr_cap(ab, ao, 512, "rc = \"/resource mem://clean\"\npc = \"/p1 hi\"\n");
+    _alias_load(bayan_toml_parse(str_new(ab, ao)));
+    assert_eq(config_alias_count(), 4, "premise: the four aliases load");
+    var ex = alias_expand("/rr", 0);
+    assert(ex != 0, "premise: /rr expands");
+    if (ex != 0) {
+        assert_eq(_t_count_sub(ex, strlen(ex), "\x1b[7mALIASURIMARK", strlen("\x1b[7mALIASURIMARK")), 1, "premise: the expansion holds a raw ESC byte");
+    }
+
+    # --- /resource <uri>: with no daimon url, a uri that passes the check fails in mcpres_read before any request ---
+    _cfg_daimon_url = 0;
+    mcpres_endpoints_reset();
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/rr");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused: alias '/rr'"), 1, "through its alias the uri never reaches /resource: the alias itself is refused");
+    assert_eq(_mid_feed_count("ALIASURIMARK"), 0, "...naming the alias, never its value");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/resource mem://a\x1b[7mALIASURIMARK");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mALIASURIMARK"), 0, "/resource draws no raw escape from a typed uri");
+    assert_eq(_mid_feed_count("refused: uri 'mem://a?[7mALIASURIMARK' holds a control byte"), 1, "...it REFUSES the uri, naming it cleaned");
+    assert_eq(_mid_feed_count("could not read"), 0, "...before any read is tried");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/rc");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused"), 0, "a clean uri is not refused...");
+    assert_eq(_mid_feed_count("mem://clean"), 1, "...it reaches mcpres_read as before (could not read: no daimon url)");
+
+    # --- a prompt slash command: daimon configured, and the probe's cached answer says prompts exist ---
+    _cfg_daimon_url = "nodial:";                 # configured; sandhi refuses the scheme before any connect
+    mcpres_endpoints_reset();
+    _mcpres_probed = 1;
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/pp");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused: alias '/pp'"), 1, "through its alias the name never reaches the prompt gap: the alias is refused");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/p\x1b[7mPNAMEMARK x");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mPNAMEMARK"), 0, "a prompt slash command draws no raw escape from a typed name");
+    assert_eq(_mid_feed_count("refused: prompt name 'p?[7mPNAMEMARK' holds a control byte"), 1, "...it REFUSES the name, naming it cleaned");
+    assert_eq(_mid_feed_count("could not reach"), 0, "...before the registry is asked for it");
+    assert_eq(_mid_feed_count("unknown command"), 0, "...and the refusal is the whole answer");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/pc");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused"), 0, "a clean prompt name is not refused...");
+    assert_eq(_mid_feed_count("could not reach daimon's prompt registry"), 1, "...it reaches the registry fetch as before");
+
+    # --- the check reads the whole argument, with the LABEL policy's own byte set (_clean_byte) ---
+    var lb = alloc(200);
+    var li = 0;
+    while (li < 150) { store8(lb + li, 97); li = li + 1; }
+    store8(lb + 150, 0);
+    assert_eq(_line_arg_has_ctl(lb), 0, "150 plain bytes hold no control byte");
+    store8(lb + 140, 27);
+    assert_eq(_line_arg_has_ctl(lb), 1, "an ESC at byte 140, far past any short prefix, is found");
+    store8(lb + 140, 127);
+    assert_eq(_line_arg_has_ctl(lb), 1, "...and so is DEL, the sanitiser's other substitution");
+    store8(lb + 140, 97);
+    store8(lb + 149, 9);
+    assert_eq(_line_arg_has_ctl(lb), 1, "...and a TAB in the last byte: the LABEL policy keeps no whitespace");
+    store8(lb + 149, 97);
+    store8(lb + 10, 195); store8(lb + 11, 169);
+    assert_eq(_line_arg_has_ctl(lb), 0, "UTF-8 bytes are not control bytes: an IRI's non-ASCII letter passes");
+
+    _alias_n = 0;
+    _cfg_daimon_url = saved_durl;
+    mcpres_endpoints_reset();
+    _mcpres_probed = saved_probed;
+    _log_enabled = saved_log;
+    feed_init();
+    return 0;
+}
+
+# test_alias_ctl_refused (0.45.0): an [alias] whose VALUE holds a control byte is refused whole, before anything runs.
+# ADR-0021 keeps [alias] in the local layer, so a cloned repository's .thoth/config.cyml supplies it, and TOML decodes a
+# unicode escape into a real ESC byte. _dispatch_d re-dispatched such an expansion as if the operator had typed it, and
+# some twenty commands echoed its argument raw (every door reproduced under a pty through an alias). Driven through the
+# real path: a TOML [alias] table spelled with _stx_cat_bs -> dispatch -> alias_expand -> the refusal. Nothing dials:
+# hoosh is absent, so a task that got through would only print the degrade. Needles are ESC + "[" text, never
+# _t_has_esc over a feed line (feed lines carry ESC-prefixed role markers).
+fn test_alias_ctl_refused() {
+    test_group("[alias] value holding a control byte refused before dispatch (commands, 0.45.0)");
+    var saved_log = _log_enabled;
+    var saved_url = _cfg_hoosh_url;
+    _log_enabled = 0;
+    _cfg_hoosh_url = 0;
+    session_reset();
+
+    var ab = alloc(1024);
+    var ao = _stx_cat_bs(ab, 0, 1024, "[alias]\nrn = \"/rename r", "u001b[7mRENMARK\"\n");
+    ao = _stx_cat_bs(ab, ao, 1024, "tk = \"hello ", "u001b[7mTASKMARK there\"\n");
+    ao = _stx_cat_bs(ab, ao, 1024, "dl = \"/rename d", "u007fDELMARK\"\n");
+    ao = _stx_cat_bs(ab, ao, 1024, "tb = \"/theme a", "tTABMARK\"\n");
+    ao = _stx_cat_bs(ab, ao, 1024, "nl = \"/theme b", "nNLMARK\"\n");
+    ao = _append_cstr_cap(ab, ao, 1024, "ch = \"/rn\"\nok = \"/rename clean title\"\nth = \"/theme\"\n");
+    _alias_load(bayan_toml_parse(str_new(ab, ao)));
+    assert_eq(config_alias_count(), 8, "premise: the eight aliases load");
+    var ex = alias_expand("/rn", 0);
+    assert(ex != 0, "premise: /rn expands");
+    if (ex != 0) {
+        assert_eq(_t_count_sub(ex, strlen(ex), "\x1b[7mRENMARK", strlen("\x1b[7mRENMARK")), 1, "premise: the TOML escape decodes to a raw ESC byte in the expansion");
+    }
+    var tbv = config_alias_lookup("tb");
+    var nlv = config_alias_lookup("nl");
+    assert((tbv != 0) && (nlv != 0), "premise: the tab and newline aliases load");
+    if ((tbv != 0) && (nlv != 0)) {
+        assert_eq(load8(tbv + 8), 9, "premise: the TOML tab escape decodes to a real tab");
+        assert_eq(load8(nlv + 8), 10, "premise: the TOML newline escape decodes to a real newline");
+    }
+
+    # --- a hostile value is refused whole, and nothing it named runs ---
+    var turns0 = session_turns();
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/rn");
+    dispatch("/tk");
+    dispatch("/dl");
+    dispatch("/ch");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused: alias '/rn' expands to text holding a control byte. nothing was run."), 2, "/rn is refused, and so is /ch, a clean alias that chains to it");
+    assert_eq(_mid_feed_count("refused: alias '/tk'"), 1, "a task alias holding ESC is refused");
+    assert_eq(_mid_feed_count("refused: alias '/dl'"), 1, "...and a command alias holding DEL");
+    assert_eq(_mid_feed_count("RENMARK"), 0, "the refusal names the ALIAS, never its value");
+    assert_eq(_mid_feed_count("TASKMARK"), 0, "...so no part of a hostile value reaches the feed");
+    assert_eq(_mid_feed_count("renamed"), 0, "nothing was renamed");
+    assert_eq(_mid_feed_count("task:"), 0, "no task was echoed or dispatched");
+    assert_eq(session_turns(), turns0, "...and no turn was counted");
+    assert_eq(conv_count(), 0, "the conversation store was never touched");
+
+    # --- tab and newline are allowed at the alias level; the command's own sanitiser shows each as '?' ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/tb");
+    dispatch("/nl");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("refused"), 0, "a value holding a tab or a newline is not refused...");
+    assert_eq(_mid_feed_count("unknown theme 'a?TABMARK'"), 1, "...it runs, and /theme names the tab with '?'");
+    assert_eq(_mid_feed_count("unknown theme 'b?NLMARK'"), 1, "...and the newline, so it forges no second row");
+
+    # --- a clean alias still runs; arguments the operator typed after one are the command's to judge ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/ok");
+    dispatch("/th x\x1b[7mTHEMEMARK");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(streq(conv_title(conv_active()), "clean title") == 1, "a clean alias runs as before");
+    assert_eq(_mid_feed_count("refused"), 0, "a clean value is not refused for an ESC in the typed argument (the VALUE is judged)");
+    assert_eq(_mid_feed_count("\x1b[7mTHEMEMARK"), 0, "...the command's own sanitiser covers that argument");
+    assert_eq(_mid_feed_count("unknown theme 'x?[7mTHEMEMARK'"), 1, "...and shows it with '?'");
+
+    # --- the check itself: the TEXT policy's byte set, over the whole value ---
+    assert_eq(_alias_value_has_ctl("/nope"), 0, "no alias -> 0");
+    assert_eq(_alias_value_has_ctl("/ok"), 0, "a clean value -> 0");
+    assert_eq(_alias_value_has_ctl("/tb"), 0, "a tab -> 0");
+    assert_eq(_alias_value_has_ctl("/nl"), 0, "a newline -> 0");
+    assert_eq(_alias_value_has_ctl("/rn"), 1, "ESC -> 1");
+    assert_eq(_alias_value_has_ctl("/dl"), 1, "DEL -> 1");
+    assert_eq(_alias_value_has_ctl("/rn typed args"), 1, "the alias name is the token before the first space");
+    var bigv = alloc(2100);
+    var bi = 0;
+    while (bi < 2048) { store8(bigv + bi, 65); bi = bi + 1; }
+    store8(bigv + 2048, 0);
+    store8(bigv + 1500, 27);                     # past ALIAS_LINE_CAP: the expansion would drop it, the check must not
+    store64(_alias_names + _alias_n * 8, "bigesc");
+    store64(_alias_vals + _alias_n * 8, bigv);
+    _alias_n = _alias_n + 1;
+    assert_eq(_alias_value_has_ctl("/bigesc"), 1, "the whole value is read, even past the expansion cap");
+    store8(bigv + 1500, 195); store8(bigv + 1501, 169);
+    assert_eq(_alias_value_has_ctl("/bigesc"), 0, "UTF-8 bytes are not control bytes");
+
+    _alias_n = 0;
+    session_reset();
+    _cfg_hoosh_url = saved_url;
+    _log_enabled = saved_log;
+    feed_init();
+    return 0;
+}
+
+# test_cmd_echo_sanitise (0.45.0): commands that echo the operator's argument, each fed a line holding a real ESC — what a
+# pasted line brings in line mode, and what a repo-local [alias] brought before the alias-level refusal (every door
+# reproduced under a pty through an alias first). One-line chrome takes the LABEL policy; the task echo is PROSE (TEXT
+# policy); the /role label is cleaned where it is STORED, so each later reader draws the clean copy. Needles are
+# ESC + "[7m...", never _t_has_esc over a feed line.
+fn test_cmd_echo_sanitise() {
+    test_group("argument echoes sanitised: task, /run, /theme, persona refusals, /role, /models, /search, /find (0.45.0)");
+    var saved_log = _log_enabled;
+    var saved_url = _cfg_hoosh_url;
+    _log_enabled = 0;
+    _cfg_hoosh_url = 0;                          # hoosh ABSENT: a task prints its degrade and never dials
+    session_reset();
+    persona_set(egyptian_thoth());
+
+    # --- the task: echo — PROSE, so a newline in the line survives while ESC does not ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("hello\x1b[7mTASKMARK there");
+    dispatch("one\nt\x1b[7mTASKMARK2 two");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mTASKMARK"), 0, "the task: echo draws no raw escape");
+    assert_eq(_mid_feed_count("task: hello?[7mTASKMARK there"), 1, "...it shows the line with '?' in the escape's place");
+    assert_eq(_mid_feed_count("t?[7mTASKMARK2 two"), 1, "a two-line task's second line is shown cleaned...");
+    assert_eq(_mid_feed_count("one?t"), 0, "...on a row of its own: the echo keeps the task's newline (TEXT policy)");
+
+    # --- /run's proposal, printed BEFORE the gate: a policy that allows nothing, so nothing runs ---
+    var saved_tron = _gate_tron;
+    var saved_agent = _cfg_tron_agent;
+    _cfg_tron_agent = 0;                         # the policy names the default agent id
+    var tr = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(tr, "[agent.\"thoth\"]\nallow = [\"thoth_nothing\"]\n"), TRON_ERR_NONE, "premise: a policy that allows no /run loads");
+    _gate_tron = tr;
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/run echo hi\x1b[7mRUNMARK");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    _gate_tron = saved_tron;
+    _cfg_tron_agent = saved_agent;
+    assert_eq(_mid_feed_count("denied. nothing ran."), 1, "premise: the policy denied the command, so it never ran");
+    assert_eq(_mid_feed_count("\x1b[7mRUNMARK"), 0, "/run's proposal draws no raw escape");
+    assert_eq(_mid_feed_count("proposed: echo hi?[7mRUNMARK"), 1, "...it names the command with '?'");
+
+    # --- /theme and the persona refusals: each names the argument it could not match ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/theme x\x1b[7mTHEMEMARK");
+    dispatch("/personas x\x1b[7mTRADMARK");
+    dispatch("/persona x\x1b[7mPERSMARK");
+    dispatch("/persona shadow x\x1b[7mSHADMARK");
+    dispatch("/persona blend x\x1b[7mBLENDMARK Odin");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mTHEMEMARK"), 0, "/theme's refusal draws no raw escape");
+    assert_eq(_mid_feed_count("unknown theme 'x?[7mTHEMEMARK'"), 1, "...it names the theme with '?'");
+    assert_eq(_mid_feed_count("\x1b[7mTRADMARK"), 0, "/personas' refusal draws no raw escape");
+    assert_eq(_mid_feed_count("unknown tradition: 'x?[7mTRADMARK'"), 1, "...it names the tradition with '?'");
+    assert_eq(_mid_feed_count("\x1b[7mPERSMARK"), 0, "/persona's refusal draws no raw escape");
+    assert_eq(_mid_feed_count("unknown persona: 'x?[7mPERSMARK'"), 1, "...it names the archetype with '?'");
+    assert_eq(_mid_feed_count("\x1b[7mSHADMARK"), 0, "/persona shadow's refusal draws no raw escape");
+    assert_eq(_mid_feed_count("unknown persona: 'x?[7mSHADMARK'"), 1, "...it names the archetype with '?'");
+    assert_eq(_mid_feed_count("\x1b[7mBLENDMARK"), 0, "/persona blend's refusal draws no raw escape");
+    assert_eq(_mid_feed_count("unknown persona: 'x?[7mBLENDMARK'"), 1, "...it names the archetype with '?'");
+    assert(streq(persona_name(), "Thoth") == 1, "premise: no refusal switched the persona");
+
+    # --- /role: the custom label is cleaned where it is STORED, so its echo and every later reader draw that copy.
+    # The label carries ESC, a TAB and a DEL: LABEL policy turns all three to '?'. A TAB proves the policy is LABEL not
+    # TEXT (TEXT keeps a tab, forging structure into a one-line label), and a DEL proves the whole C0+DEL set, not ESC
+    # alone, so a narrowed clean_line_n is caught. ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/role Keeper\x1b[7mROLEMARK\x09m\x7fz");
+    dispatch("/role");
+    dispatch("/persona");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(streq(persona_role(), "Keeper?[7mROLEMARK?m?z") == 1, "/role stores the custom label with '?' for the escape, the tab AND the DEL (LABEL policy)");
+    assert_eq(_mid_feed_count("\x1b[7mROLEMARK"), 0, "...so its echo, the /role listing and /persona draw no raw escape");
+    assert_eq(_mid_feed_count("Keeper?[7mROLEMARK?m?z"), 3, "...and each of the three shows the stored label");
+    assert(_ui_contains(persona_system_prompt(), "Keeper?[7mROLEMARK?m?z") == 1, "the system prompt reads the same stored copy");
+    persona_role_reset();
+
+    # --- /models <provider>: the listing over a canned catalog body, exactly as the gateway answers it ---
+    var cb = "{\"object\":\"list\",\"data\":[{\"id\":\"m1\",\"owned_by\":\"p\"}]}";
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_models_show("p\x1b[7mPROVMARK", cb, strlen(cb));
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mPROVMARK"), 0, "/models <provider> draws no raw escape from the provider");
+    assert_eq(_mid_feed_count("p?[7mPROVMARK"), 2, "...its header and its no-models line both show it with '?'");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_models_show("p", cb, strlen(cb));
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("m1"), 1, "a clean provider still lists its model: the owned_by filter compares the raw bytes");
+
+    # --- /search: the query in the header line ---
+    session_history_append("user", "some text", 9);
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/search x\x1b[7mSEARCHMARK");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mSEARCHMARK"), 0, "/search's header draws no raw escape from the query");
+    assert_eq(_mid_feed_count("x?[7mSEARCHMARK"), 1, "...it shows the query with '?'");
+
+    # --- /find: the TUI's find prompt (inside the input since 0.45.0) draws the query /find seeded ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/find x\x1b[7mFINDMARK");
+    _tui_draw_search_hint();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(fsearch_query_ptr(), fsearch_qlen(), "\x1b[7mFINDMARK", strlen("\x1b[7mFINDMARK")), 1, "premise: /find seeds the query raw (matching reads the raw bytes)");
+    assert_eq(_mid_feed_count("\x1b[7mFINDMARK"), 0, "the /find prompt draws no raw escape from the query");
+    assert_eq(_mid_feed_count("x?[7mFINDMARK"), 1, "...it shows the query with '?'");
+    _fsearch_active = 0;
+    _fsearch_edit = 0;
+    fsearch_reset();
+
+    session_reset();
+    _cfg_hoosh_url = saved_url;
+    _log_enabled = saved_log;
+    feed_init();
+    return 0;
+}
+
+# test_path_echo_sanitise (0.45.0): every command that names a path the operator gave — /read, /git, /allow, /save,
+# /audit export, /write — each fed a path holding a real ESC. A Linux filename may legally hold one (the 0.39.0
+# precedent), so a path is cleaned for DISPLAY and used raw. Every door was reproduced under a pty through a repo-local
+# [alias] first. The write-error lines use a symlink to /dev/full, which fails every write; where there is no
+# /dev/full they are skipped.
+fn test_path_echo_sanitise() {
+    test_group("path echoes sanitised for display: /read /git /allow /save /audit export /write (0.45.0)");
+    var saved_log = _log_enabled;
+    _log_enabled = 0;
+    var full = file_exists("/dev/full");
+    session_reset();
+
+    # --- /read: no such file, the file's header, and the refusal line both share ---
+    var rdf = "/tmp/thoth_t_rd\x1b[7mREADMARK.txt";
+    xunlink("/tmp/thoth_t_rd\x1b[7mREADNOMARK.txt");
+    var fdr = file_open(rdf, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fdr >= 0) { file_write(fdr, "hello\n", 6); file_close(fdr); }
+    assert(fdr >= 0, "premise: a file whose name holds ESC can be created");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/read /tmp/thoth_t_rd\x1b[7mREADNOMARK.txt");
+    dispatch("/read /tmp/thoth_t_rd\x1b[7mREADMARK.txt");
+    _read_note("read failed: ", "/tmp/thoth_t_rd\x1b[7mREADFAILMARK.txt");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    xunlink(rdf);
+    assert_eq(_mid_feed_count("hello"), 1, "premise: the file was read and its content shown");
+    assert_eq(_mid_feed_count("\x1b[7mREAD"), 0, "no /read line draws a raw escape from the path");
+    assert_eq(_mid_feed_count("no such file: /tmp/thoth_t_rd?[7mREADNOMARK.txt"), 1, "...no such file names it with '?'");
+    assert_eq(_mid_feed_count("/tmp/thoth_t_rd?[7mREADMARK.txt"), 1, "...the file's header names it with '?'");
+    assert_eq(_mid_feed_count("read failed: /tmp/thoth_t_rd?[7mREADFAILMARK.txt"), 1, "...and so does read failed");
+
+    # --- /git <path>: sit reads the repository at the working directory ---
+    # A clone or the main checkout has a .git directory. A scratch copy has none, so a minimal one (HEAD on an unborn
+    # branch) is made for the call and removed after. A linked worktree's .git is a FILE; there the line is skipped.
+    var made = 0;
+    if (file_exists(".git") == 0) {
+        xmkdir(".git", 0x1C0);
+        var hf = file_open(".git/HEAD", O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+        if (hf >= 0) { file_write(hf, "ref: refs/heads/main\n", 21); file_close(hf); made = 1; }
+    }
+    var opened = sit_repo_open(".");
+    if (made == 1) { assert_eq(opened, 1, "premise: sit opens the minimal repository made for the call"); }
+    if (opened == 1) {
+        feed_init(); out_mode_set(OUT_RING);
+        dispatch("/git x\x1b[7mGITNOMARK.txt");
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        assert_eq(_mid_feed_count("\x1b[7mGITNOMARK"), 0, "/git <path> draws no raw escape from the path");
+        assert_eq(_mid_feed_count("x?[7mGITNOMARK.txt"), 1, "...its no-changes line names it with '?'");
+    }
+    if (made == 1) { xunlink(".git/HEAD"); xrmdir(".git"); }
+    feed_init(); out_mode_set(OUT_RING);
+    diff_render_ann("g\x1b[7mGITMARK.txt", vec_new());
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mGITMARK"), 0, "the /git diff card's header draws no raw escape from the path");
+    assert_eq(_mid_feed_count("g?[7mGITMARK.txt"), 1, "...it names it with '?'");
+
+    # --- /allow: the argument, a relative refusal, the stored-roots listing, then the configured vidya path ---
+    var saved_roots = _read_roots_n;
+    var saved_vidya = _cfg_vidya;
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/allow /tmp/thoth_t_a\x1b[7mALLOWMARK");
+    dispatch("/allow x\x1b[7mALLOWRELMARK");
+    dispatch("/allow");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mALLOW"), 0, "no /allow line draws a raw escape from a path");
+    assert_eq(_mid_feed_count(" read access to /tmp/thoth_t_a?[7mALLOWMARK"), 1, "...the grant names it with '?'");
+    assert_eq(_mid_feed_count(" x?[7mALLOWRELMARK"), 1, "...so does the refusal of a relative root");
+    assert_eq(_mid_feed_count("  /tmp/thoth_t_a?[7mALLOWMARK"), 1, "...and the bare listing shows the STORED root with '?'");
+    _cfg_vidya = "/tmp/thoth_t_v\x1b[7mVIDYAMARK";
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/allow vidya");
+    _cfg_vidya = "v\x1b[7mVIDYANOMARK";           # relative, so the grant is refused
+    dispatch("/allow vidya");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    _cfg_vidya = saved_vidya;
+    _read_roots_n = saved_roots;
+    assert_eq(_mid_feed_count("\x1b[7mVIDYA"), 0, "/allow vidya draws no raw escape from [project].vidya (a local-layer preference key)");
+    assert_eq(_mid_feed_count("read access to vidya: /tmp/thoth_t_v?[7mVIDYAMARK"), 1, "...the grant names it with '?'");
+    assert_eq(_mid_feed_count(" v?[7mVIDYANOMARK"), 1, "...and so does the refusal");
+
+    # --- /save: every result line names the path ---
+    session_history_append("user", "hello there", 11);
+    feed_init(); out_mode_set(OUT_RING);
+    oprintln("a line to save");
+    dispatch("/save /tmp/thoth_t_s\x1b[7mSAVEMARK.md");
+    dispatch("/save --json /tmp/thoth_t_s\x1b[7mSAVEJMARK.json");
+    dispatch("/save --plain /tmp/thoth_t_s\x1b[7mSAVEPMARK.txt");
+    dispatch("/save /tmp/thoth_t_nodir/o\x1b[7mSAVEOPENMARK.md");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    xunlink("/tmp/thoth_t_s\x1b[7mSAVEMARK.md");
+    xunlink("/tmp/thoth_t_s\x1b[7mSAVEJMARK.json");
+    xunlink("/tmp/thoth_t_s\x1b[7mSAVEPMARK.txt");
+    assert_eq(_mid_feed_count("\x1b[7mSAVE"), 0, "no /save line draws a raw escape from the path");
+    assert_eq(_mid_feed_count(" lines to /tmp/thoth_t_s?[7mSAVEMARK.md"), 1, "...saved names it with '?'");
+    assert_eq(_mid_feed_count(" (json) to /tmp/thoth_t_s?[7mSAVEJMARK.json"), 1, "...so does saved (json)");
+    assert_eq(_mid_feed_count(" (plain) to /tmp/thoth_t_s?[7mSAVEPMARK.txt"), 1, "...and saved (plain)");
+    assert_eq(_mid_feed_count("/tmp/thoth_t_nodir/o?[7mSAVEOPENMARK.md"), 1, "...and could not open");
+    if (full == 1) {
+        xunlink("/tmp/thoth_t_sf\x1b[7mSAVEFULLMARK.md");
+        xunlink("/tmp/thoth_t_sf\x1b[7mSAVEJFULLMARK.json");
+        xunlink("/tmp/thoth_t_sf\x1b[7mSAVEPFULLMARK.txt");
+        xsymlink("/dev/full", "/tmp/thoth_t_sf\x1b[7mSAVEFULLMARK.md");
+        xsymlink("/dev/full", "/tmp/thoth_t_sf\x1b[7mSAVEJFULLMARK.json");
+        xsymlink("/dev/full", "/tmp/thoth_t_sf\x1b[7mSAVEPFULLMARK.txt");
+        feed_init(); out_mode_set(OUT_RING);
+        oprintln("a line to save");
+        dispatch("/save /tmp/thoth_t_sf\x1b[7mSAVEFULLMARK.md");
+        dispatch("/save --json /tmp/thoth_t_sf\x1b[7mSAVEJFULLMARK.json");
+        dispatch("/save --plain /tmp/thoth_t_sf\x1b[7mSAVEPFULLMARK.txt");
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        xunlink("/tmp/thoth_t_sf\x1b[7mSAVEFULLMARK.md");
+        xunlink("/tmp/thoth_t_sf\x1b[7mSAVEJFULLMARK.json");
+        xunlink("/tmp/thoth_t_sf\x1b[7mSAVEPFULLMARK.txt");
+        assert_eq(_mid_feed_count("save incomplete"), 3, "premise: all three saves failed on /dev/full");
+        assert_eq(_mid_feed_count("\x1b[7mSAVE"), 0, "no save-incomplete line draws a raw escape");
+        assert_eq(_mid_feed_count("/tmp/thoth_t_sf?[7mSAVEFULLMARK.md"), 1, "...the markdown one names the path with '?'");
+        assert_eq(_mid_feed_count("/tmp/thoth_t_sf?[7mSAVEJFULLMARK.json"), 1, "...the json one too");
+        assert_eq(_mid_feed_count("/tmp/thoth_t_sf?[7mSAVEPFULLMARK.txt"), 1, "...and the plain one");
+    }
+
+    # --- /audit export: a t-ron seam with one recorded check, so there is a chain to export ---
+    var saved_tron = _gate_tron;
+    var saved_agent = _cfg_tron_agent;
+    _cfg_tron_agent = 0;
+    var ta = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(ta, "[agent.\"thoth\"]\nallow = [\"*\"]\n"), TRON_ERR_NONE, "premise: an allow-all policy loads");
+    tron_check(ta, tool_call_new("thoth", "echo_hi", "{}", 1000));
+    _gate_tron = ta;
+    xunlink("/tmp/thoth_t_e\x1b[7mAUDITMARK.json");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/audit export /tmp/thoth_t_e\x1b[7mAUDITMARK.json");
+    dispatch("/audit export /tmp/thoth_t_nodir/o\x1b[7mAUDITOPENMARK.json");
+    if (full == 1) {
+        xunlink("/tmp/thoth_t_ef\x1b[7mAUDITFULLMARK.json");
+        xsymlink("/dev/full", "/tmp/thoth_t_ef\x1b[7mAUDITFULLMARK.json");
+        dispatch("/audit export /tmp/thoth_t_ef\x1b[7mAUDITFULLMARK.json");
+        xunlink("/tmp/thoth_t_ef\x1b[7mAUDITFULLMARK.json");
+    }
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    xunlink("/tmp/thoth_t_e\x1b[7mAUDITMARK.json");
+    assert_eq(_mid_feed_count("\x1b[7mAUDIT"), 0, "no /audit export line draws a raw escape from the path");
+    assert_eq(_mid_feed_count(" audit event(s) to /tmp/thoth_t_e?[7mAUDITMARK.json"), 1, "...exported names it with '?'");
+    assert_eq(_mid_feed_count("/tmp/thoth_t_nodir/o?[7mAUDITOPENMARK.json"), 1, "...so does could not open");
+    if (full == 1) { assert_eq(_mid_feed_count("/tmp/thoth_t_ef?[7mAUDITFULLMARK.json"), 1, "...and export incomplete"); }
+
+    # --- /write, still under the allow-all seam: the proposal, the diff card's header and the result line ---
+    xunlink("/tmp/thoth_t_w\x1b[7mWRITEMARK.txt");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/write /tmp/thoth_t_w\x1b[7mWRITEMARK.txt hello");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    xunlink("/tmp/thoth_t_w\x1b[7mWRITEMARK.txt");
+    assert_eq(_mid_feed_count("wrote 6 bytes"), 1, "premise: the allow-all policy let the write through");
+    assert_eq(_mid_feed_count("\x1b[7mWRITEMARK"), 0, "no /write line draws a raw escape from the path");
+    assert_eq(_mid_feed_count("/tmp/thoth_t_w?[7mWRITEMARK.txt"), 4, "...the proposal, the [t-ron] allow line, the diff card's header and the result all name it with '?'");
+    if (full == 1) {
+        xunlink("/tmp/thoth_t_wf\x1b[7mWFAILMARK.txt");
+        xsymlink("/dev/full", "/tmp/thoth_t_wf\x1b[7mWFAILMARK.txt");
+        feed_init(); out_mode_set(OUT_RING);
+        dispatch("/write /tmp/thoth_t_wf\x1b[7mWFAILMARK.txt hello");
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        xunlink("/tmp/thoth_t_wf\x1b[7mWFAILMARK.txt");
+        assert_eq(_mid_feed_count("\x1b[7mWFAILMARK"), 0, "a failed /write draws no raw escape from the path");
+        assert_eq(_mid_feed_count("write failed: /tmp/thoth_t_wf?[7mWFAILMARK.txt"), 1, "...write failed names it with '?'");
+    }
+    _gate_tron = saved_tron;
+    _cfg_tron_agent = saved_agent;
+    feed_init(); out_mode_set(OUT_RING);
+    _write_incomplete_note("/tmp/thoth_t_wi\x1b[7mWINCMARK.txt", 3, 6);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mWINCMARK"), 0, "the write INCOMPLETE line draws no raw escape (no test can make a short write)");
+    assert_eq(_mid_feed_count("/tmp/thoth_t_wi?[7mWINCMARK.txt"), 1, "...it names the path with '?'");
+
+    session_reset();
+    _log_enabled = saved_log;
+    feed_init();
+    return 0;
+}
+
+# test_title_sanitise (0.45.0): a conversation title is chrome everywhere it is drawn, so it is cleaned where it is
+# STORED — _conv_autotitle for a title taken from a task, conv_dup_title for /new /rename /fork, and the session file's
+# loader for a title saved before the fix. Each reader (/conversations, /switch, /fork, /search, the GUI sidebar) then
+# draws the clean copy, and /new and /rename echo it. Every door was reproduced under a pty through an alias first.
+fn test_title_sanitise() {
+    test_group("conversation titles sanitised where they are stored (session/commands, 0.45.0)");
+    var saved_log = _log_enabled;
+    var saved_sp = _sess_path;
+    _log_enabled = 0;
+    _sess_path = 0;                              # /fork persists; never rewrite a real session file
+    session_reset();
+
+    # --- the title a task gives an untitled conversation: its first line, LABEL policy (a tab becomes '?' too) ---
+    var ct = alloc(32);
+    var co = _append_cstr_cap(ct, 0, 32, "hi\x1b[7mAUTOMARK");
+    store8(ct + co, 9); co = co + 1;
+    store8(ct + co, 120); co = co + 1;
+    store8(ct + co, 0);
+    session_history_append("user", ct, co);
+    assert(streq(conv_title(0), "hi?[7mAUTOMARK?x") == 1, "the auto-title is stored with '?' for the escape and the tab");
+
+    # --- /new, /rename and /fork copy an explicit title through conv_dup_title; /new and /rename echo the stored copy ---
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/new n\x1b[7mNEWMARK");
+    dispatch("/rename r\x1b[7mRENMARK");
+    dispatch("/fork f\x1b[7mFORKMARK");
+    dispatch("/conversations");
+    dispatch("/switch 1");
+    dispatch("/search hi");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(streq(conv_title(1), "r?[7mRENMARK") == 1, "/rename stores its title with '?'");
+    assert(streq(conv_title(2), "f?[7mFORKMARK") == 1, "/fork stores its title with '?'");
+    assert_eq(_mid_feed_count("\x1b[7mNEWMARK"), 0, "/new's echo draws no raw escape");
+    assert_eq(_mid_feed_count("n?[7mNEWMARK"), 1, "...it echoes the stored title");
+    assert_eq(_mid_feed_count("\x1b[7mRENMARK"), 0, "/rename's echo and the listing draw no raw escape");
+    assert_eq(_mid_feed_count("r?[7mRENMARK"), 2, "...the echo and /conversations both show the stored title");
+    assert_eq(_mid_feed_count("\x1b[7mFORKMARK"), 0, "/fork's line and the listing draw no raw escape");
+    assert_eq(_mid_feed_count("f?[7mFORKMARK"), 2, "...both show the stored title");
+    assert_eq(_mid_feed_count("\x1b[7mAUTOMARK"), 0, "the auto-title reaches /conversations, /switch and /search with no raw escape");
+    assert_eq(_mid_feed_count("hi?[7mAUTOMARK?x"), 3, "...each of the three shows the stored title");
+
+    # --- the session file: a title saved before the fix is cleaned where it is read back ---
+    var sf = "/tmp/thoth_t_title_sess";
+    var sb = alloc(128);
+    var so = _append_cstr_cap(sb, 0, 128, "THOTH-SESSION-2");
+    store8(sb + so, 9); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "0");
+    store8(sb + so, 10); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "CONV");
+    store8(sb + so, 9); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "15");
+    store8(sb + so, 10); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "old\x1b[7mSESSMARK");
+    store8(sb + so, 10); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "user");
+    store8(sb + so, 9); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "2");
+    store8(sb + so, 10); so = so + 1;
+    so = _append_cstr_cap(sb, so, 128, "hi");
+    store8(sb + so, 10); so = so + 1;
+    var sfd = file_open(sf, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    var sw = 0 - 1;
+    if (sfd >= 0) { sw = file_write(sfd, sb, so); file_close(sfd); }
+    assert_eq(sw, so, "premise: a session file holding a raw title is on disk");
+    session_reset();
+    assert_eq(_sess_load_file(sf), 1, "premise: it loads (one message)");
+    assert(streq(conv_title(0), "old?[7mSESSMARK") == 1, "a title read back from the session file is cleaned where it is loaded");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/conversations");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mSESSMARK"), 0, "...so /conversations draws no raw escape from it");
+    assert_eq(_mid_feed_count("old?[7mSESSMARK"), 1, "...and shows it with '?'");
+    xunlink(sf);
+
+    session_reset();
+    _sess_path = saved_sp;
+    _log_enabled = saved_log;
+    feed_init();
     return 0;
 }
 

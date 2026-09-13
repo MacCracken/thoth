@@ -462,24 +462,24 @@ fn led_paste(src, len) {
 }
 
 # --- pure: layout geometry (0.11.9: faint rules + dynamic multi-line composer) ---
-# Bands top-to-bottom (0.45.0 — the status bar moved from row 1 to BELOW the input): feed · RULE · the composer
-# block (1..MAX rows, grows upward with line count) · hint · blank · status on the last row. The hint row stays
-# directly under the composer because it is the composer's own strip — the slash palette, the find/pick prompts and
-# the working spinner all speak about what is being typed — and one blank row then separates that input zone from
-# the status bar. Toggling the status bar off (Ctrl-G) frees BOTH the status row and its blank separator into the
-# feed, so the hint drops back to the last row; the rule above the composer always stands. The composer height
-# tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are PURE and take explicit
-# (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so they unit-test without mutating the
-# composer/show globals.
+# Bands top-to-bottom (0.45.0): feed · RULE · blank · the composer block (1..MAX rows, grows upward with line count)
+# · blank · status on the last row. There is NO hint row: the keybinding hints are the input's PLACEHOLDER, drawn
+# faint inside the empty input and gone with the first typed character, and everything else that used to borrow a
+# row of its own is drawn inside the input too — the slash palette after the typed token, the find / pick prompts
+# while those modals own the input, the working spinner while a turn runs (the input is empty then). The two blank
+# rows are line breaks: one above the input, one above the status bar. Toggling the bar off (Ctrl-G) frees the bar
+# AND its line break into the feed, so the input takes the last row; the rule and the line break above the input
+# always stand. The composer height tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are
+# PURE and take explicit (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so they unit-test without
+# mutating the composer/show globals.
 var COMPOSER_MAX_ROWS = 8;    # the composer never grows past this (a long paste scrolls within)
 var MIN_FEED = 1;             # the feed never shrinks below this many rows
 
 fn tui_status_row(rows) { return rows; }            # the status bar: the last row (status shown only)
-fn tui_status_gap_row(rows) { return rows - 1; }    # the blank row between the hint and the status bar (status shown only)
-fn tui_hint_row(rows, show) { if (show == 1) { return rows - 2; } return rows; }
+fn tui_status_gap_row(rows) { return rows - 1; }    # the line break above the status bar (status shown only)
 # tui_composer_max: the largest composer height that still leaves MIN_FEED feed rows,
-# capped at COMPOSER_MAX_ROWS. chrome around the feed + composer = rule+hint+blank+status (4)
-# when status shown, else rule+hint (2). Clamped to >= 1.
+# capped at COMPOSER_MAX_ROWS. chrome around the feed + composer = the rule and line break above the input,
+# the line break and status bar below it (4) when status shown, else rule + line break (2). Clamped to >= 1.
 fn tui_composer_max(rows, show) {
     var chrome = 2;
     if (show == 1) { chrome = 4; }
@@ -496,9 +496,10 @@ fn tui_composer_height(rows, lines, show) {
     if (h > mx) { h = mx; }
     return h;
 }
-fn tui_composer_bot(rows, show) { return tui_hint_row(rows, show) - 1; }   # composer block's last row (just above the hint)
+fn tui_composer_bot(rows, show) { if (show == 1) { return rows - 2; } return rows; }   # the input's last row (above the bar's line break)
 fn tui_composer_top(rows, lines, show) { return tui_composer_bot(rows, show) - tui_composer_height(rows, lines, show) + 1; }
-fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }   # the rule between feed + composer
+fn tui_composer_gap_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }   # the line break above the input
+fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 2; }   # the rule between feed + input
 fn tui_feed_top() { return 1; }                     # the feed owns row 1 now that no status bar sits above it
 fn tui_feed_bot(rows, lines, show) { return tui_sep_bottom_row(rows, lines, show) - 1; }
 # _comp_vscroll_first: first visible logical line so cursor line `cl` stays within a
@@ -970,10 +971,10 @@ fn tui_status_emit() {
 }
 
 # --- slash-command palette ------------------------------------------------
-# While the composer holds a partial '/command' token (no space yet), the hint row
-# becomes a filtered list of matching commands. The matchers are pure + unit-tested;
-# the render is I/O. (A multi-row dropdown above the composer is a later refinement —
-# it needs the feed-buffer redraw model.)
+# While the composer holds a partial '/command' token (no space yet), the input row lists the
+# matching commands right after the typed token (0.45.0 — they had a hint row of their own). The
+# matchers are pure + unit-tested; the render is I/O. (A multi-row dropdown above the composer is a
+# later refinement — it needs the feed-buffer redraw model.)
 # ⚠ KEEP IN SYNC with classify_input in src/commands.cyr. This list has drifted before — it was still 18
 # entries after /fork, /grants, /compact, /context, /rewind and /conversations landed. It is a
 # COMPILE-TIME list and structurally cannot offer a runtime-sized set, so the server-published prompt
@@ -1032,16 +1033,18 @@ fn tui_palette_active() {
     if (_buf_has_space(led_buf(), led_len()) == 1) { return 0; }   # token complete
     return 1;
 }
-# tui_draw_palette: render the matching commands (accent) for the current prefix.
+# tui_draw_palette: render the matching commands (accent) for the current prefix, at the cursor — which
+# tui_draw_composer leaves one column past the typed token (0.45.0).
 fn tui_draw_palette() {
     var prefix = led_buf();
     var any = 0;
     var i = 0;
     # 0.44.2: stop on the terminal WIDTH rather than on SLASH_N. DECAWM is off so an overrun would clip
     # rather than corrupt, but clipping mid-name reads as a command that does not exist — ending on a
-    # whole name plus a "+N" count tells the truth about what was left out.
+    # whole name plus a "+N" count tells the truth about what was left out. 0.45.0: the names follow the
+    # typed token on the input row, so the prompt, the token and the gap after it come off the budget.
     var used = 0;
-    var budget = _tui_cols - 6;
+    var budget = _tui_cols - 7 - led_len();
     if (budget < 8) { budget = 8; }
     var left = 0;
     while (i < SLASH_N) {
@@ -1058,17 +1061,25 @@ fn tui_draw_palette() {
     return 0;
 }
 
-# tui_draw_hint: the bottom strip — the slash-command palette while typing a
-# '/command', else the keybinding hints. Discoverability matters without a mouse.
-fn tui_draw_hint() {
-    tty_move(tui_hint_row(_tui_rows, _tui_show_status), 1);
-    tty_clear_to_eol();
-    if (_mpick_active == 1) { _tui_draw_pick_hint(); return 0; }       # 0.24.0: the picker strip owns the hint row
-    if (_fsearch_active == 1) { _tui_draw_search_hint(); return 0; }   # 0.18.4: the search strip owns the hint row
+# _tui_input_placeholder_on: 1 when the input row shows a placeholder instead of the draft — nothing typed yet, or a
+# modal (the model picker, the feed search) owns the input and draws its prompt there (0.45.0).
+fn _tui_input_placeholder_on() {
+    if ((_mpick_active == 1) || (_fsearch_active == 1)) { return 1; }
+    if (_comp_len == 0) { return 1; }
+    return 0;
+}
+
+# tui_composer_placeholder_emit: what the input shows after its "{(o> " prompt when there is no draft to show (0.45.0
+# — this was the hint row under the input). Emitted at the cursor with no cursor moves, so a test can capture it under
+# OUT_RING. An open modal's prompt wins; otherwise the keybinding hints for the focused pane, FAINT so they read as a
+# hint and vanish with the first typed character. Discoverability matters without a mouse. (While a turn runs,
+# spin_paint draws the working indicator over this.)
+fn tui_composer_placeholder_emit() {
+    if (_mpick_active == 1) { _tui_draw_pick_hint(); return 0; }       # 0.24.0: the picker's prompt owns the input
+    if (_fsearch_active == 1) { _tui_draw_search_hint(); return 0; }   # 0.18.4: the search prompt owns the input
     if ((_tui_show_tree == 1) && (_tui_focus == FOCUS_TREE)) {
         ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
-    } elif (tui_palette_active() == 1) { tui_draw_palette(); }
-    elif (_tui_show_tree == 1) {
+    } elif (_tui_show_tree == 1) {
         ui_emit(ROLE_FAINT, "Tab tree · Ctrl-B hide · Ctrl-G status · ");
         if (inhist_count() > 0) { ui_emit(ROLE_FAINT, "↑↓ history · "); }
         ui_emit(ROLE_FAINT, "Enter send");
@@ -1085,12 +1096,15 @@ fn tui_draw_hint() {
 # The search UI is chrome (emit to the terminal) + a scroll-to-match + the modal key handler. All of it
 # runs only inside tui_loop (PT_RICH). fsearch.cyr owns the pure matching/render/state; this is the glue.
 
-# _tui_draw_search_hint: the search strip in the hint row (the caller moved there + cleared). Shows the
-# query, the i/n match position (or "no matches" / "type to search"), and the nav keys. ⌃C is the reliable
-# close (Esc is best-effort — a lone Esc may not register until the next key).
+# _tui_draw_search_hint: the search prompt inside the input, after its "{(o> " prompt (0.45.0 — it had the hint row;
+# the caller moved there + cleared). Shows the query, the i/n match position (or "no matches" / "type to search"),
+# and the nav keys. ⌃C is the reliable close (Esc is best-effort — a lone Esc may not register until the next key).
+# 0.45.0: the query is drawn through the LABEL sanitiser. `/find <text>` seeds it from the command line — typed, or a
+# repo-local [alias] expansion — and it went to the terminal raw on every hint repaint. Matching still reads the raw
+# query; '?' keeps the byte count, so _tui_park_search's caret column is unchanged.
 fn _tui_draw_search_hint() {
     ui_emit(ROLE_ACCENT, "find: ");
-    emit(ui_sgr(ROLE_FG)); emit_n(fsearch_query_ptr(), fsearch_qlen()); emit(ui_reset());
+    emit(ui_sgr(ROLE_FG)); emit_clean_line_n(fsearch_query_ptr(), fsearch_qlen()); emit(ui_reset());
     ui_emit(ROLE_FAINT, "  ");
     if (fsearch_qlen() == 0) { ui_emit(ROLE_FAINT, "(type to search)"); }
     elif (fsearch_count() == 0) { ui_emit(ROLE_RED, "no matches"); }
@@ -1103,11 +1117,11 @@ fn _tui_draw_search_hint() {
     return 0;
 }
 
-# _tui_park_search: park the cursor at the query caret in the hint row (after "find: " + the query).
+# _tui_park_search: park the cursor at the query caret inside the input (after "{(o> find: " + the query).
 fn _tui_park_search() {
-    var col = 7 + fsearch_qlen();                 # "find: " is 6 visible cols; query starts at col 7
+    var col = 12 + fsearch_qlen();                # "{(o> " is 5 cols and "find: " 6 more, so the query starts at col 12
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_hint_row(_tui_rows, _tui_show_status), col);
+    tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), col);
     return 0;
 }
 
@@ -1190,7 +1204,7 @@ fn _tui_search_key(key) {
         if (key == KEY_CHAR) { fsearch_query_push(_tui_key_ch); _tui_search_after_query(); }
         elif (key == KEY_BACKSPACE) { fsearch_query_pop(); _tui_search_after_query(); }
         elif (key == KEY_ENTER) {
-            if (fsearch_qlen() > 0) { _fsearch_edit = 0; tui_draw_hint(); _tui_park_search(); }
+            if (fsearch_qlen() > 0) { _fsearch_edit = 0; tui_draw_composer(); }
             else { _tui_search_exit(); }
         }
         elif (key == KEY_DOWN) { _tui_search_go(fsearch_next()); }
@@ -1203,7 +1217,7 @@ fn _tui_search_key(key) {
         }
         elif ((key == KEY_DOWN) || (key == KEY_ENTER)) { _tui_search_go(fsearch_next()); }
         elif (key == KEY_UP) { _tui_search_go(fsearch_prev()); }
-        elif (key == KEY_BACKSPACE) { _fsearch_edit = 1; tui_draw_hint(); _tui_park_search(); }
+        elif (key == KEY_BACKSPACE) { _fsearch_edit = 1; tui_draw_composer(); }
     }
     return 0;
 }
@@ -1239,8 +1253,8 @@ fn _tui_pick_paint_row(id, sel, active, fwidth) {
 }
 
 # _tui_pick_paint: overwrite the feed band with the filtered model list (scrolled so the selection shows),
-# then draw the query strip in the hint row and park at the caret. The status bar, tree and composer keep
-# their last frame (unchanged while picking); only the feed region and the hint row are the picker's.
+# then draw the query prompt inside the input and park at the caret. The status bar and tree keep their last
+# frame (unchanged while picking); only the feed region and the input row are the picker's (0.45.0).
 fn _tui_pick_paint() {
     var top = tui_feed_top();
     var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
@@ -1269,13 +1283,13 @@ fn _tui_pick_paint() {
         }
         r = r + 1;
     }
-    tui_draw_hint();                              # the _mpick_active gate makes this paint the pick strip
-    _tui_park_pick();
+    tui_draw_composer();                          # the _mpick_active gate makes the input show the pick prompt + park at its caret
     return 0;
 }
 
-# _tui_draw_pick_hint: the picker strip in the hint row (the caller moved there + cleared) — the query, the
-# i/n position (or "no matches" / "no models"), and the nav keys. ⌃C is the reliable close (Esc best-effort).
+# _tui_draw_pick_hint: the picker prompt inside the input, after its "{(o> " prompt (0.45.0 — it had the hint row;
+# the caller moved there + cleared) — the query, the i/n position (or "no matches" / "no models"), and the nav keys.
+# ⌃C is the reliable close (Esc best-effort).
 fn _tui_draw_pick_hint() {
     ui_emit(ROLE_ACCENT, "pick: ");
     emit(ui_sgr(ROLE_FG)); emit_n(mpick_query_ptr(), mpick_qlen()); emit(ui_reset());
@@ -1290,11 +1304,11 @@ fn _tui_draw_pick_hint() {
     return 0;
 }
 
-# _tui_park_pick: park the cursor at the query caret in the hint row (after "pick: " + the query).
+# _tui_park_pick: park the cursor at the query caret inside the input (after "{(o> pick: " + the query).
 fn _tui_park_pick() {
-    var col = 7 + mpick_qlen();                   # "pick: " is 6 visible cols; query starts at col 7
+    var col = 12 + mpick_qlen();                  # "{(o> " is 5 cols and "pick: " 6 more, so the query starts at col 12
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_hint_row(_tui_rows, _tui_show_status), col);
+    tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), col);
     return 0;
 }
 
@@ -1405,11 +1419,26 @@ fn tui_park_cursor() {
 # every other row (wrap continuation or a later logical line) gets a 5-col indent so content stays aligned
 # under the prompt. Each row paints one `avail`-wide byte segment of its logical line, so a long line grows
 # the composer + word-wraps instead of horizontal-scrolling.
+# 0.45.0: it also owns the line break above the input (cleared on every paint, so a feed row the composer grew over
+# is never left behind), the PLACEHOLDER an empty input shows in place of a draft (tui_composer_placeholder_emit),
+# and the slash palette, which follows the typed '/token' on its row.
 fn tui_draw_composer() {
     var a = _comp_avail();
     var total = _comp_total_rows();
     var H = tui_composer_height(_tui_rows, total, _tui_show_status);
     var top = tui_composer_top(_tui_rows, total, _tui_show_status);
+    if (top > 1) { tty_move(top - 1, 1); tty_clear_to_eol(); }   # the line break above the input
+    if (_tui_input_placeholder_on() == 1) {
+        # no draft to show: clear every composer row (a modal can open over a multi-line draft, which stays in the
+        # buffer and returns when the modal closes), then the prompt + placeholder on the first row
+        var r = 0;
+        while (r < H) { tty_move(top + r, 1); tty_clear_to_eol(); r = r + 1; }
+        tty_move(top, 1);
+        ui_emit(ROLE_ACCENT, "{(o> ");
+        tui_composer_placeholder_emit();
+        tui_park_cursor();
+        return 0;
+    }
     var vf = _comp_vscroll_first(_comp_cursor_prow(), total, H);
     var n = led_lines();
     var pr = 0;                  # absolute physical row being walked
@@ -1436,6 +1465,12 @@ fn tui_draw_composer() {
         }
         li = li + 1;
     }
+    # the palette follows the typed '/token' (tui_palette_active means one logical line with no space, so the token
+    # sits on the first row whenever it fits that row), one blank column after it
+    if ((tui_palette_active() == 1) && (led_len() < a)) {
+        tty_move(top, 7 + led_len());
+        tui_draw_palette();
+    }
     tui_park_cursor();
     return 0;
 }
@@ -1445,8 +1480,8 @@ fn tui_draw_composer() {
 # from the loop. The only in-dispatch heartbeat is hoosh's per-SSE-chunk callback:
 # a STREAMING turn advances the frame on each chunk (feed_stream_tick → animated);
 # a BLOCKING turn / /run shows the SAME glyph held still — honest, never faked
-# motion. The indicator lives on the hint row for the dispatch window, suspended
-# across an interactive confirm (which owns the composer/hint rows).
+# motion. The indicator lives inside the (empty) input for the dispatch window (0.45.0 — it
+# had the hint row), suspended across an interactive confirm (which owns the input row).
 var _spin_frame = 0;
 var _spin_active = 0;        # 1 while a dispatch is in flight (the indicator shows)
 var _spin_suspended = 0;     # saved _spin_active across a confirm
@@ -1492,32 +1527,34 @@ var _spin_label = 0;             # 1 while a tool label is active (else generic 
 fn spin_label_set(name) {
     if (name == 0) { return spin_label_clear(); }
     if (_spin_label_buf == 0) { _spin_label_buf = alloc(SPIN_LABEL_CAP); }
-    var i = 0;
-    while ((i < (SPIN_LABEL_CAP - 1)) && (load8(name + i) != 0)) { store8(_spin_label_buf + i, load8(name + i)); i = i + 1; }
-    store8(_spin_label_buf + i, 0);
+    # 0.45.0: `name` is the MODEL'S tool name and spin_paint draws this buffer with emit_raw, so an escape in it
+    # reached the terminal (reproduced under a pty). Copied through the house sanitiser, bounded exactly as before.
+    safe_label_copy(_spin_label_buf, SPIN_LABEL_CAP, name);
     _spin_label = 1;
     spin_paint();
     return 0;
 }
 fn spin_label_clear() { _spin_label = 0; spin_paint(); return 0; }
 
-# spin_paint: draw the working indicator on the hint row (chrome — emit_raw, never
-# captured). No-op when inactive. The caller restores the hint row via tui_draw_hint
-# once the dispatch ends.
+# spin_paint: draw the working indicator inside the input, after its prompt and one blank column — the cursor parks
+# on that column, so it never covers the glyph (chrome — emit_raw, never captured). The input is empty for the whole
+# dispatch window: the line was cleared on submit and keys wait in the tty until the turn ends (0.45.0 — the
+# indicator had a hint row of its own). No-op when inactive; the post-dispatch relayout puts the placeholder back.
 fn spin_paint() {
     if (_spin_active == 0) { return 0; }
-    tty_move(tui_hint_row(_tui_rows, _tui_show_status), 1);
+    tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), 6);
     tty_clear_to_eol();
+    emit_raw(" ");
     emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw(spin_glyph(_spin_frame)); emit_raw(ui_reset());
     emit_raw(ui_sgr(ROLE_FAINT));
     if (_spin_label == 1) { emit_raw(" running "); emit_raw(_spin_label_buf); emit_raw("…"); }
     else { emit_raw(" working…"); }
     emit_raw(ui_reset());
-    tui_park_cursor();          # return the cursor to the prompt line, not the spinner row
+    tui_park_cursor();          # back to the input's edit column (the blank one before the glyph)
     return 0;
 }
 fn spin_begin() { _spin_frame = 0; _spin_active = 1; _spin_label = 0; _stream_last_paint_ms = 0; spin_paint(); return 0; }   # start each turn at frame 0, unlabeled; _stream_last=0 so the first streamed chunk paints instantly
-fn spin_end() { spin_anim_disarm(); _spin_active = 0; return 0; }   # caller redraws the hint row after
+fn spin_end() { spin_anim_disarm(); _spin_active = 0; return 0; }   # the caller's relayout repaints the input's placeholder
 
 # --- the working-state ANIMATOR (0.44.2) ------------------------------------------------------------
 #
@@ -1580,8 +1617,9 @@ fn _spin_anim_ap(off, s) {
     return off;
 }
 
-# _spin_anim_frame: compose the whole frame — save cursor, move to the hint row, clear it, draw the
-# glyph + label, restore cursor — and return its byte length. Uses DECSC/DECRC (ESC 7 / ESC 8) rather
+# _spin_anim_frame: compose the whole frame — save cursor, move to the input row's column 6 (just past the prompt,
+# 0.45.0), clear to the end of the row, draw spin_paint's blank + glyph + label, restore cursor — and return its
+# byte length. Uses DECSC/DECRC (ESC 7 / ESC 8) rather
 # than recomputing the composer position: the worker must not read the layout globals the main thread
 # owns, and "put it back exactly where it was" is the only cursor contract it needs.
 fn _spin_anim_frame(row) {
@@ -1592,8 +1630,9 @@ fn _spin_anim_frame(row) {
     var rn = fmt_int_buf(row, &rb);
     var ri = 0;
     while (ri < rn) { off = _spin_anim_apc(off, load8(&rb + ri)); ri = ri + 1; }
-    off = _spin_anim_ap(off, ";1H");
+    off = _spin_anim_ap(off, ";6H");
     off = _spin_anim_apc(off, 27); off = _spin_anim_apc(off, 91); off = _spin_anim_apc(off, 75);   # CSI K
+    off = _spin_anim_apc(off, 32);                                        # the blank column the cursor parks on
     off = _spin_anim_ap(off, ui_sgr(ROLE_ACCENT));
     off = _spin_anim_ap(off, spin_glyph(_spin_frame));
     off = _spin_anim_ap(off, ui_reset());
@@ -1637,7 +1676,7 @@ fn spin_anim_arm() {
     if (_spin_anim_alloc() == 0) { return 0; }
     atomic_store(_spin_anim_run, 1);
     atomic_store(_spin_anim_state, SPIN_ANIM_ARMED);
-    var t = thread_create(&_spin_anim_worker, tui_hint_row(_tui_rows, _tui_show_status));
+    var t = thread_create(&_spin_anim_worker, tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status));   # the input row (empty mid-turn)
     if (t == 0) {                                       # no threads on this target -> the 0.9.2 behaviour
         atomic_store(_spin_anim_run, 0);
         atomic_store(_spin_anim_state, SPIN_ANIM_IDLE);
@@ -1897,8 +1936,7 @@ fn tui_confirm_begin() {
     intr_suspend();                                     # 0.34.1: leave Esc-poll mode so the cooked y/n read_line works (agentic tool-phase arming)
     feed_flush_pending();
     feed_repaint();
-    _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt
-    tty_move(tui_hint_row(_tui_rows, _tui_show_status), 1); tty_clear_to_eol();
+    _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt (the clear below erases its glyph)
     out_mode_set(OUT_FD1);
     tty_move(tui_composer_bot(_tui_rows, _tui_show_status), 1);
     tty_clear_to_eol();
@@ -2118,14 +2156,14 @@ fn _tui_tree_key(key) {
     elif (key == KEY_CHAR) {
         _tui_focus = FOCUS_COMPOSER;
         led_feed(KEY_CHAR, _tui_key_ch);
-        tui_draw_hint(); tui_draw_composer();
+        tui_draw_composer();
     }
     return 0;
 }
 
 # tui_repaint_body: repaint the whole frame at the CURRENT geometry (no winsize read) —
-# the status bar with its blank row, feed, tree, the faint rule, hint, composer (0.45.0: the
-# bar is the last row now, so the second rule that sat under it is gone). No tty_clear (every
+# the status bar with its line break, feed, tree, the faint rule, the input with its line break and
+# placeholder (0.45.0: no hint row, no second rule under a top bar). No tty_clear (every
 # band issues per-row clear_to_eol), so it is also the no-flash repaint for a composer height
 # change (a newline grew/shrank the composer, resizing the feed band). The composer is
 # drawn LAST so the cursor parks at the edit position.
@@ -2140,8 +2178,7 @@ fn tui_repaint_body() {
     tui_draw_status();                 # the last row + the blank row above it (paints nothing when hidden)
     feed_repaint();
     tui_draw_tree();
-    tui_draw_rule(tui_sep_bottom_row(_tui_rows, lines, _tui_show_status), _tui_cols);   # rule above the composer
-    tui_draw_hint();
+    tui_draw_rule(tui_sep_bottom_row(_tui_rows, lines, _tui_show_status), _tui_cols);   # rule above the input's line break
     tui_draw_composer();
     return 0;
 }
@@ -2168,12 +2205,11 @@ fn tui_cur_composer_height() { return tui_composer_height(_tui_rows, _comp_total
 # tui_after_edit: redraw after a composer edit, given the composer height BEFORE the edit.
 # If a newline was inserted/removed (height changed), the feed band resized -> reflow the
 # whole body (tui_repaint_body, no tty_clear -> no flash). Otherwise the cheap partial
-# redraw (hint + composer) suffices — ordinary typing never touches the feed.
+# redraw (the input row, which carries its placeholder and palette) suffices — ordinary typing never touches the feed.
 fn tui_after_edit(before_h) {
     if (tui_cur_composer_height() != before_h) {
         tui_repaint_body();
     } else {
-        tui_draw_hint();
         tui_draw_composer();
     }
     return 0;
@@ -2328,14 +2364,16 @@ fn tui_mouse_enable() { emit_raw("\x1b[?1000h\x1b[?1006h"); return 0; }
 
 # tui_wrap_disable / tui_wrap_enable (0.44.2): DECAWM (?7) — the terminal's automatic line wrap.
 #
-# ⚠ THE HINT ROW IS THE LAST ROW, AND IT WAS THE ONE BAND NOBODY CLIPPED. Every other band budgets its
+# ⚠ THE HINT ROW WAS THE LAST ROW, AND IT WAS THE ONE BAND NOBODY CLIPPED. Every other band budgets its
 # columns (the feed through feed_clip_seg, the tree through feed_clip, the composer through _comp_avail);
-# tui_draw_hint just writes. The slash palette lists every matching command, and for the bare prefix "/"
+# the hint painter just wrote. The slash palette lists every matching command, and for the bare prefix "/"
 # that is all of them — 177 visible columns. With autowrap on, writing past column 80 of the LAST row
 # makes the terminal SCROLL the alt screen: the status bar and the oldest feed rows walk off the top, and
 # because the next keystroke repaints the composer at absolute rows over a shifted frame, the damage
 # compounds until a full repaint. The default hint is already 83 columns once hoosh is configured and one
-# line is in the recall ring, so this was reachable without the palette at all.
+# line is in the recall ring, so this was reachable without the palette at all. (0.45.0: the hints and the
+# palette moved INTO the input row and the status bar took the last row — which runs past 80 columns just
+# as easily, so the reason stands.)
 #
 # Turning DECAWM off for the alt screen fixes the whole class in one place rather than teaching six
 # writers to count columns: thoth clips every band it cares about itself, so wrap was only ever a way for
@@ -2393,16 +2431,16 @@ fn _tui_mouse_click() {
                     if (ftree_exp(li) == 1) { ftree_collapse(); } else { ftree_expand(); }
                     tui_relayout();                              # the visible row count changed
                 } else {
-                    tui_draw_tree(); tui_draw_hint(); tui_park_cursor();   # file -> selection moved
+                    tui_draw_tree(); tui_draw_composer();              # file -> selection moved (the placeholder follows focus)
                 }
             } else {
-                tui_draw_hint(); tui_park_cursor();              # empty tree area -> just focus tree
+                tui_draw_composer();                             # empty tree area -> just focus tree
             }
             return 0;
         }
     }
     _tui_focus = FOCUS_COMPOSER;                                 # anywhere else -> focus the composer
-    tui_draw_hint(); tui_park_cursor();
+    tui_draw_composer();
     return 0;
 }
 
@@ -2601,7 +2639,7 @@ fn tui_loop() {
                 if (atc == 0) {
                     if (_tui_show_tree == 1) {
                         if (_tui_focus == FOCUS_TREE) { _tui_focus = FOCUS_COMPOSER; } else { _tui_focus = FOCUS_TREE; }
-                        tui_draw_hint(); tui_park_cursor();
+                        tui_draw_composer();
                     }
                 }
             } elif (key == KEY_SCROLL_UP) { _tui_feed_scroll_by(3);

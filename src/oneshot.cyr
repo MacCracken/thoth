@@ -421,6 +421,9 @@ fn _oneshot_report_error(rc) {
     # reason is most useful — "no completion returned" is the least actionable sentence thoth prints.
     # hoosh 2.6.5+ forwards status + message in-stream; if one arrived, say it here too. Without this the
     # fix would land on the interactive surface only and one-shot would keep throwing the reason away.
+    # 0.45.0: the message is the PROVIDER's text and this line is the operator's terminal. A plain emit_err
+    # is safe only because `_ag_err_capture` cleans the copy where it enters; before that, an escape in the
+    # provider's message reached the terminal from here, raw.
     if (agent_err_seen() == 1) {
         emit_err(" — upstream");
         if (agent_err_code() > 0) { emit_err(" HTTP "); emit_err_int(agent_err_code()); }

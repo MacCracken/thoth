@@ -100,14 +100,21 @@ fn _mcpres_get_array(url, key) {
 fn daimon_resources_value() { return _mcpres_get_array(_daimon_res_endpoint(), "resources"); }
 fn daimon_prompts_value()   { return _mcpres_get_array(_daimon_prompts_endpoint(), "prompts"); }
 
-# _mcpres_field: a NUL-terminated cstr for object field `key`, or 0 when the field
-# is absent or is not a string. THE NULL CHECK IS THE POINT — a third-party server
-# controls this shape (audit finding A-4).
-fn _mcpres_field(obj, key) {
+# _mcpres_str: the JSON Str for object field `key`, or 0 when the field is absent
+# or is not a string. THE NULL CHECK IS THE POINT — a third-party server controls
+# this shape (audit finding A-4).
+fn _mcpres_str(obj, key) {
     if (obj == 0) { return 0; }
     var v = bayan_json_v_obj_get(obj, key);
     if (v == 0) { return 0; }
-    var s = bayan_json_v_str(v);
+    return bayan_json_v_str(v);
+}
+
+# _mcpres_field: the same field as a NUL-terminated cstr, or 0. The server's bytes,
+# unfiltered — for DATA (a name to match, text for the model). Anything drawn goes
+# through the sanitiser instead (commands.cyr's _mcpres_label, 0.45.0).
+fn _mcpres_field(obj, key) {
+    var s = _mcpres_str(obj, key);
     if (s == 0) { return 0; }
     return str_cstr(s);
 }

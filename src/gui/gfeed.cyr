@@ -598,13 +598,14 @@ fn gfeed_build(cmds, x, y, w, h) {
 }
 
 # --- the whole window frame (feed + composer line + status strip) ------------------------------------------
-# Top-to-bottom: the body (optional sidebar / tree panes + the feed), the composer line, one line of padding, and the
-# status strip on the bottom edge (0.45.0 — it was the TOP band; the TUI moved its bar below the input in the same
-# release). PURE — assembles a cmd list over the tested pipeline; the present loop (gpresent.cyr) rasters it into
-# the wl_shm buffer. Lives here (a view-builder) so it is headless-testable.
+# Top-to-bottom: the body (optional sidebar / tree panes + the feed), a rule, a line of padding, the composer line,
+# another line of padding, and the status strip on the bottom edge (0.45.0 — it was the TOP band; the TUI moved its bar
+# below the input in the same release, with the same two line breaks). PURE — assembles a cmd list over the tested
+# pipeline; the present loop (gpresent.cyr) rasters it into the wl_shm buffer. Lives here (a view-builder) so it is
+# headless-testable.
 var GFRAME_STRIP_H = 34;
 var GFRAME_COMPOSER_H = 40;
-var GFRAME_COMPOSER_GAP = 20;   # 0.45.0: one feed line (GFEED_LH) of padding between the composer and the strip below it
+var GFRAME_COMPOSER_GAP = 20;   # 0.45.0: one feed line (GFEED_LH) of padding above the composer, and again between it and the strip
 fn _gframe_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
 
 # --- the throbbing owl eye (0.30.11): the `o` in the {(o> composer prompt pulses colour as a LIVE status
@@ -655,7 +656,8 @@ fn gframe_build(w, h) {
     # the full width. The tree hides on a narrow window (gtree_w -> 0) OR via Ctrl+B (0.32.x), giving the feed the
     # whole body as before.
     var comp_top = comp_bot - GFRAME_COMPOSER_H;                             # composer line (above the strip)
-    var body_h = comp_top - body_top;
+    var rule_y = comp_top - GFRAME_COMPOSER_GAP;                             # 0.45.0: a line of padding ABOVE the input too
+    var body_h = rule_y - body_top;
     if (body_h < 0) { body_h = 0; }
     # left band, accumulating: an optional conversation sidebar (0.33.6), then an optional file-tree pane, then the
     # feed takes the rest. Each left pane is followed by a 1px vertical rule. Both hide on a narrow window OR via
@@ -676,7 +678,7 @@ fn gframe_build(w, h) {
         feed_x = feed_x + tw + 1;
     }
     gfeed_build(cmds, feed_x, body_top, w - feed_x, body_h);
-    gd_push_rect(cmds, 0, comp_top, w, 1, _ui_rgb(ROLE_FAINT));
+    gd_push_rect(cmds, 0, rule_y, w, 1, _ui_rgb(ROLE_FAINT));                 # the rule closing the body, a line above the input
     var cty = comp_top + (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2;
     # the `>` prompt dims when focus is on the tree (so the active pane is obvious), bright on the composer.
     var promptc = _ui_rgb(ROLE_ACCENT_DIM);

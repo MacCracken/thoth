@@ -135,10 +135,15 @@ fn daimon_extract_is_error(body, body_len) {
 }
 
 # _daimon_print_str: write a Str (ptr+len) to stdout, newline-terminated. I/O.
+#
+# 0.45.0: through emit_clean_text_n, like _hoosh_print_str. /call prints a THIRD-PARTY MCP tool's result text with
+# this, and daimon's error text on a non-2xx — bytes straight out of the response, so this print is where they
+# enter thoth. The agentic loop has drawn the same results through emit_clean_text since 0.44.3; /call was the
+# sibling still writing them raw (an escape in a tool's result reached the terminal under a pty). TEXT policy.
 fn _daimon_print_str(s) {
     var d = str_data(s);
     var n = str_len(s);
-    emit_n(d, n);
+    emit_clean_text_n(d, n);
     if (n > 0) { if (load8(d + n - 1) != 10) { oprintln(""); } }
     if (n == 0) { oprintln(""); }
     return 0;
@@ -150,6 +155,32 @@ fn _daimon_announce_transport_error(r, url) {
     emit("  daimon transport error: "); oprintln(ename);
     emit("  endpoint "); emit(url);
     oprintln(" unreachable — is daimon up? (degraded, not faked)");
+    return 0;
+}
+
+# _daimon_tool_row (0.45.0): one /tools row — "  <name>  - <description>" — from a registry entry's `name` and
+# `description` JSON values (either may be 0). A THIRD-PARTY MCP server picks both, and daimon_list_tools printed
+# them straight out of the registry response with ui_emit_n, raw: an escape in either reached the terminal
+# (reproduced under a pty). Both now go through emit_clean_line_n — the LABEL policy for the description too, since
+# the row is one line thoth composed and a newline in it lets the server forge rows. A clean entry's bytes are the
+# old form exactly: sgr + text + reset.
+fn _daimon_tool_row(name, desc) {
+    emit("  ");
+    # 0.39.0 (audit A-4): a THIRD-PARTY MCP server controls its own name/description, so a
+    # non-string value here is attacker-reachable, not merely malformed. `bayan_json_v_str`
+    # answers 0 for a non-JTAG_STR tag and the str_data/str_len below would deref 0.
+    var ns = 0;
+    if (name != 0) { ns = bayan_json_v_str(name); }
+    if (ns != 0) { emit(ui_sgr(ROLE_ACCENT)); emit_clean_line_n(str_data(ns), str_len(ns)); emit(ui_reset()); }
+    else { ui_emit(ROLE_FAINT, "(unnamed)"); }
+    if (desc != 0) {
+        var ds = bayan_json_v_str(desc);
+        if (ds != 0) {
+            ui_emit(ROLE_FAINT, "  - ");
+            emit(ui_sgr(ROLE_MUTED)); emit_clean_line_n(str_data(ds), str_len(ds)); emit(ui_reset());
+        }
+    }
+    oprintln("");
     return 0;
 }
 
@@ -181,24 +212,7 @@ fn daimon_list_tools() {
     var i = 0;
     while (i < n) {
         var t = bayan_json_v_arr_get(tools, i);
-        var name = bayan_json_v_obj_get(t, "name");
-        var desc = bayan_json_v_obj_get(t, "description");
-        emit("  ");
-        # 0.39.0 (audit A-4): a THIRD-PARTY MCP server controls its own name/description, so a
-        # non-string value here is attacker-reachable, not merely malformed. `bayan_json_v_str`
-        # answers 0 for a non-JTAG_STR tag and the str_data/str_len below would deref 0.
-        var ns = 0;
-        if (name != 0) { ns = bayan_json_v_str(name); }
-        if (ns != 0) { ui_emit_n(ROLE_ACCENT, str_data(ns), str_len(ns)); }
-        else { ui_emit(ROLE_FAINT, "(unnamed)"); }
-        if (desc != 0) {
-            var ds = bayan_json_v_str(desc);
-            if (ds != 0) {
-                ui_emit(ROLE_FAINT, "  - ");
-                ui_emit_n(ROLE_MUTED, str_data(ds), str_len(ds));
-            }
-        }
-        oprintln("");
+        _daimon_tool_row(bayan_json_v_obj_get(t, "name"), bayan_json_v_obj_get(t, "description"));   # 0.45.0: sanitised
         i = i + 1;
     }
     return 0;

@@ -216,6 +216,16 @@ fn test_gui() {
     assert_eq(_stop, 0, "no status strip at the top of the window any more");
     assert(_eye_y < FH - GFRAME_STRIP_H, "the composer line is ABOVE the status strip");
     assert_eq(FH - GFRAME_STRIP_H - 1 - (_eye_y + GR_GLYPH_H), (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2 + GFRAME_COMPOSER_GAP, "one extra line of padding (GFRAME_COMPOSER_GAP) between the composer text and the strip's rule");
+    # ...and a line of padding ABOVE the input too: the rule that closes the body sits GFRAME_COMPOSER_GAP above the
+    # composer band, so the text row clears it by that line plus the band's own inset.
+    var _rule_y = _eye_y - (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2 - GFRAME_COMPOSER_GAP;
+    var _rfound = 0; var _rfi = 0;
+    while (_rfi < vec_len(frame)) {
+        var _rfc = vec_get(frame, _rfi);
+        if ((gd_kind(_rfc) == GD_RECT) && (gd_y(_rfc) == _rule_y) && (gd_h(_rfc) == 1) && (gd_w(_rfc) == FW)) { _rfound = 1; }
+        _rfi = _rfi + 1;
+    }
+    assert_eq(_rfound, 1, "the rule above the input sits one line of padding above the composer band");
     # Ctrl+S: the strip AND its padding go, and the composer line returns to the window's bottom edge
     gstatus_toggle_hidden();
     var _hid = gframe_build(FW, FH);

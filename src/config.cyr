@@ -366,6 +366,23 @@ fn _cfg_unquote(s) {
     return d;
 }
 
+# _cfg_label (0.45.0): a sanitised COPY of config string `s`, for a value that will be DRAWN as chrome — every C0 byte
+# and DEL becomes '?' (safe_label_copy, the house sanitiser), byte count kept, no length cap — or 0 for 0.
+#
+# ⚠ For a preference key a repository's LOCAL layer may set (ADR-0021 leaves those there) whose value reaches the
+# terminal. [hoosh].model is that key: a TOML basic string decodes a unicode escape into a real ESC byte, so a cloned
+# repo's .thoth/config.cyml put a live escape into the TUI status bar, /state and /model — reproduced under a pty
+# before this existed. A fresh alloc per load, not a fixed buffer: /reload re-runs it, and the file decides the
+# length. An allocation failure answers 0 (no value), never the raw bytes.
+fn _cfg_label(s) {
+    if (s == 0) { return 0; }
+    var n = strlen(s);
+    var d = alloc(n + 1);
+    if (d == 0) { return 0; }
+    safe_label_copy(d, n + 1, s);
+    return d;
+}
+
 # _cfg_bool: read a TOML bool key (the parser keeps `true`/`false` as literal
 # text) as 1/0, returning `dflt` when absent or unrecognized. Pure.
 fn _cfg_bool(pairs, key, dflt) {
@@ -1095,7 +1112,13 @@ fn config_load() {
     _price_load2(lo, gl);
     _alias_load2(lo, gl);
     var hoosh_l = _cfg_section_pairs(lo, "hoosh");   var hoosh_g = _cfg_section_pairs(gl, "hoosh");
-    _cfg_hoosh_url = _cfg2_str(hoosh_l, hoosh_g, "url");
+    # 0.45.0: sanitised at LOAD (_cfg_label), like [hoosh].model below — a preference key a repo's local layer may
+    # set, drawn raw as chrome by the startup line, /state, the Ctrl-P picker and every "-> hoosh" trace. It changes
+    # no working endpoint: a url holding a control byte never reached one. Against a local gateway, an escape after
+    # the port dialed "/" (sandhi drops the tail, and the /v1 path with it), one in the path went out raw on the
+    # request line, one in the host resolved nothing. A clean url is stored byte for byte. The token binding below
+    # still compares the RAW layer values.
+    _cfg_hoosh_url = _cfg_label(_cfg2_str(hoosh_l, hoosh_g, "url"));
     _cfg_hoosh_token = _cfg2_str(hoosh_l, hoosh_g, "token");
     # ⚠ 0.44.3 — A TOKEN IS BOUND TO THE URL THAT EARNED IT. `[hoosh].url` is an ordinary preference (a
     # project pointing at a different gateway is legitimate) and `[hoosh].token` is a credential, so the
@@ -1116,7 +1139,8 @@ fn config_load() {
             }
         }
     } }
-    _cfg_hoosh_model = _cfg2_str(hoosh_l, hoosh_g, "model");
+    # 0.45.0: sanitised at LOAD — the id is drawn as chrome on every surface, and a repo's local layer may set it.
+    _cfg_hoosh_model = _cfg_label(_cfg2_str(hoosh_l, hoosh_g, "model"));
     _cfg_hoosh_stream = _cfg2_bool(hoosh_l, hoosh_g, "stream", 1);    # default on
     _cfg_hoosh_history = _cfg2_bool(hoosh_l, hoosh_g, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg2_bool(hoosh_l, hoosh_g, "tools", 1);        # default on
@@ -1127,7 +1151,8 @@ fn config_load() {
     _cfg_hoosh_reasoning = _reasoning_level_from(_cfg2_str(hoosh_l, hoosh_g, "reasoning"));   # 0.35.2: off/low/medium/high -> 0-3
     _cfg_hoosh_summarize = _cfg2_bool(hoosh_l, hoosh_g, "summarize", 0);   # 0.36.4: default OFF — it spends an extra call
     var daimon_l = _cfg_section_pairs(lo, "daimon");  var daimon_g = _cfg_section_pairs(gl, "daimon");
-    _cfg_daimon_url = _cfg2_str(daimon_l, daimon_g, "url");
+    # 0.45.0: sanitised at LOAD, as [hoosh].url above — /state, /tools and every "-> daimon" trace draw it raw.
+    _cfg_daimon_url = _cfg_label(_cfg2_str(daimon_l, daimon_g, "url"));
     var tron_l = _cfg_section_pairs(lo, "tron");      var tron_g = _cfg_section_pairs(gl, "tron");
     # AUTHORITY — the policy that authorizes the model's tool calls, and the identity it authorizes as.
     _cfg_tron_policy = _cfg2_str_global_only(tron_l, tron_g, "policy", "tron.policy");

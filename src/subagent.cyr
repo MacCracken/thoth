@@ -516,6 +516,14 @@ fn _sub_fail(why) {
     return _sub_answer;
 }
 
+# _sub_announce (0.45.0): the "[delegate] <task>" line. The task is the MODEL'S text, the same bytes the gate just
+# authorized, and was drawn raw: an escape in it reached the terminal (reproduced under a pty). LABEL policy, like
+# the tool-call line that printed it a moment earlier: one line of chrome, so a newline in the task forges no row.
+fn _sub_announce(task) {
+    ui_emit(ROLE_FAINT, "  [delegate] "); emit(ui_sgr(ROLE_MUTED)); emit_clean_line(task); emit(ui_reset()); oprintln("");
+    return 0;
+}
+
 # subagent_tool: the model-facing `delegate` tool. `args_json` is {"task":"…"}.
 #
 # ⚠ GATED under the reserved verb `thoth_delegate`, so a [tron].policy can refuse delegation outright.
@@ -565,7 +573,7 @@ fn subagent_tool(args_json) {
     _sub_task_remember(task);                    # 0.44.1: recorded once ALLOWED, so a denial is not a repeat
     _sub_turn_n = _sub_turn_n + 1;               # ...and it spends the turn's budget
     var iters = config_subagent_max_iters();
-    ui_emit(ROLE_FAINT, "  [delegate] "); ui_emit(ROLE_MUTED, task); oprintln("");
+    _sub_announce(task);                         # 0.45.0: sanitised
     events_subagent_start(session_turns(), task);
     _sub_runs = _sub_runs + 1;
     _sub_enter();

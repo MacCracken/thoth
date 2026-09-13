@@ -43,6 +43,10 @@ var HOOSH_CATALOG_PATH = "/v1/models/catalog";
 # Assistant-reply accumulator (0.5.1): both turn paths leave the full assistant
 # text here (streaming appends each delta; blocking copies the parsed content) so
 # hoosh_send can record it in the conversation history. Reset at each turn start.
+# 0.45.0: it holds the reply as CLEANED where it entered (_hoosh_clean_text), the same bytes the terminal was given —
+# never the raw wire text. Everything downstream reads this copy: history and the session file, /save, one-shot
+# stdout and --json, the event stream, the GUI feed, a delegated child's answer. The reasoning accumulator below
+# holds its text the same way.
 var _hoosh_acc = 0;
 var _hoosh_acc_len = 0;
 var HOOSH_ACC_CAP = 65536;
@@ -466,6 +470,17 @@ var HOOSH_SUM_EMPTY = 3;
 var _hoosh_sum_req = 0;
 var _hoosh_sum_err = 0;
 fn hoosh_recap_err() { return _hoosh_sum_err; }
+# hoosh_recap_err_msg: the words for a HOOSH_SUM_* code — the one source for the /compact and [hoosh].compact_at
+# failure lines. ⚠ 0.45.0: both printed hoosh_recap_err() itself, an INTEGER, through oprintln / emit, which strlen
+# their argument, so every failed recap read address 1..3 and killed thoth with SIGSEGV in line mode and the TUI
+# (OUT_NULL returns before reading it). Total over every value: hoosh_compact_now's span-alloc failure returns -1
+# before any recap call has set a code, so HOOSH_SUM_OK reaches the printers too. PURE.
+fn hoosh_recap_err_msg(code) {
+    if (code == HOOSH_SUM_TRANSPORT) { return "the gateway did not answer (transport error)"; }
+    if (code == HOOSH_SUM_HTTP) { return "the gateway returned an HTTP error"; }
+    if (code == HOOSH_SUM_EMPTY) { return "the gateway returned no recap text"; }
+    return "no recap was produced";
+}
 var HOOSH_SUM_SYS = "You compress conversation history. Reply with a terse third-person recap of the exchange below: decisions made, facts established, and open threads. No preamble, no markdown, under 150 words.";
 
 # _hoosh_sum_build: a MINIMAL single-shot body. NOT hoosh_build_request — that hardcodes HOOSH_MAX_TOKENS and
@@ -629,7 +644,7 @@ fn hoosh_compact_auto() {
     ui_emit(ROLE_MUTED, " tokens past [hoosh].compact_at — summarizing older turns]"); oprintln("");
     var done = hoosh_compact_now(COMPACT_AUTO_KEEP);
     if (done < 0) {
-        ui_emit(ROLE_MUTED, "  [auto-compact failed: "); emit(hoosh_recap_err());
+        ui_emit(ROLE_MUTED, "  [auto-compact failed: "); emit(hoosh_recap_err_msg(hoosh_recap_err()));
         ui_emit(ROLE_MUTED, " — nothing dropped]"); oprintln("");
     }
     return 0;
@@ -771,9 +786,36 @@ fn hoosh_dry_buf() {
     return _hoosh_req;
 }
 
+# _hoosh_clean_text (0.45.0): the Str of JSON string value `v` with the TEXT policy applied IN PLACE (clean_text_n),
+# or 0 when `v` is not a string.
+#
+# ⚠ THIS IS WHERE THE MODEL'S TEXT ENTERS THOTH, and every door that reads it calls this: the blocking extractor
+# below (a plain turn, an agentic round, a delegated child's round, the overflow recap) and both SSE callbacks —
+# _hoosh_sse_cb here, _agent_sse_cb in agent.cyr — for `content` and `reasoning_content` alike. A gateway's JSON
+# string can decode to a real ESC, and no sink after this point stops one: mdhl passes prose through verbatim, and
+# feed_clip copies an unrecognised escape whole because thoth's own role markers ride the same channel. Reproduced
+# under a pty against a fake gateway: a reply carrying ESC [7m reached the terminal raw on every path — blocking and
+# streamed, agentic and plain, the line tier, the TUI (repainted raw on every frame), NO_COLOR, and one-shot stdout,
+# which prints the accumulator itself.
+#
+# Cleaning the decoded bytes before the first consumer sees them covers every sink at once: the terminal, and the
+# reply and reasoning accumulators that history, the session file, /save, --json, the event stream, the GUI feed and
+# the reasoning fold all read. What thoth keeps is what it showed. TEXT policy: newlines and tabs are the reply's own
+# structure; every other C0 byte (a carriage return included) and DEL becomes '?', one for one. Per BYTE, so an
+# escape split across two streamed frames is cleaned in both halves: the ESC that ends one frame is already '?' when
+# the next frame's "[7m" arrives. In place is safe because the JSON parser decodes every string into a fresh buffer
+# of its own, never a slice of the body.
+fn _hoosh_clean_text(v) {
+    var s = bayan_json_v_str(v);
+    if (s == 0) { return 0; }
+    clean_text_n(str_data(s), str_len(s));
+    return s;
+}
+
 # hoosh_extract_content: parse an OpenAI-shaped response body and return the
 # assistant text as a Str (choices[0].message.content), or 0 if absent/wrong
-# shape. Pure — unit-tested against canned bodies.
+# shape. Pure — unit-tested against canned bodies. 0.45.0: returned CLEANED
+# (_hoosh_clean_text) — this extractor is where a blocking reply enters.
 fn hoosh_extract_content(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
@@ -785,14 +827,15 @@ fn hoosh_extract_content(body, body_len) {
     if (msg == 0) { return 0; }
     var content = bayan_json_v_obj_get(msg, "content");
     if (content == 0) { return 0; }
-    return bayan_json_v_str(content);
+    return _hoosh_clean_text(content);
 }
 
 # hoosh_extract_delta: pull choices[0].delta.content out of ONE OpenAI SSE
 # streaming frame's `data:` JSON as a Str, or 0 when absent (the role-only
 # opening delta, the finish frame, or a malformed payload). Pure — unit-tested.
 # This is the streaming sibling of hoosh_extract_content (which reads the
-# non-streaming message.content).
+# non-streaming message.content). 0.45.0: cleaned like its sibling, so no raw
+# form of the reply is left waiting for a future caller.
 fn hoosh_extract_delta(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
@@ -804,7 +847,7 @@ fn hoosh_extract_delta(body, body_len) {
     if (delta == 0) { return 0; }
     var content = bayan_json_v_obj_get(delta, "content");
     if (content == 0) { return 0; }
-    return bayan_json_v_str(content);
+    return _hoosh_clean_text(content);
 }
 
 # hoosh_extract_error: pull error.message out of an error response body as a
@@ -980,15 +1023,25 @@ fn hoosh_list_models() {
         # gateway relaying some provider's model list. Skip the malformed entry, keep listing.
         if (id != 0) {
             var ids = bayan_json_v_str(id);
-            if (ids != 0) {
-                if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
-                else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
-                oprintln("");
-            }
+            if (ids != 0) { _hoosh_model_row(ids, cur); }
         }
         i = i + 1;
     }
     emit("(* = current; switch with /model <id>. routing target now: "); emit(cur); oprintln(")");
+    return 0;
+}
+
+# _hoosh_model_row (0.45.0): one row of /models or /models <provider> — "* <id>" in accent for the current routing
+# target, else "  <id>" — with the id drawn through emit_clean_line. These ids are the gateway's bytes, printed straight
+# out of its response with nothing storing them first, so this print IS where they enter thoth; both listings wrote
+# them raw until now, and a catalog id carrying an escape reached the terminal (reproduced under a pty). For a clean
+# id the bytes are exactly the old ui_emit_n form: sgr + id + reset.
+fn _hoosh_model_row(ids, cur) {
+    var role = ROLE_FG;
+    if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); role = ROLE_ACCENT; }
+    else { emit("  "); }
+    emit(ui_sgr(role)); emit_clean_line(str_cstr(ids)); emit(ui_reset());
+    oprintln("");
     return 0;
 }
 
@@ -1055,13 +1108,21 @@ fn hoosh_list_provider_models(provider) {
         else { var em = hoosh_extract_error(body, blen); if (em != 0) { emit("  "); _hoosh_print_str(em); } }
         return status;
     }
+    return _hoosh_provider_models_show(provider, body, blen);
+}
+
+# _hoosh_provider_models_show (0.45.0): the listing half of hoosh_list_provider_models — the header, one row per model
+# the provider owns, the footer — over a catalog body already fetched. Split out so the two lines that name the
+# provider are testable without a gateway. `provider` is the operator's /models argument, which a repo-local [alias]
+# expansion can supply, so both lines print it through the LABEL sanitiser; the owned_by filter still compares raw.
+fn _hoosh_provider_models_show(provider, body, blen) {
     # The catalog shares /v1/models' {object:list, data:[...]} shape, each entry
     # {id, owned_by}; reuse the same extractor and filter on owned_by.
     var data = hoosh_extract_models(body, blen);
     if (data == 0) { oprintln("  hoosh: response received but no model catalog could be parsed."); return 0 - 1; }
     var n = bayan_json_v_arr_len(data);
     var cur = _hoosh_model();
-    ui_emit(ROLE_ACCENT, "models for provider '"); ui_emit(ROLE_ACCENT, provider); ui_emit(ROLE_ACCENT, "':"); oprintln("");
+    ui_emit(ROLE_ACCENT, "models for provider '"); ui_emit_clean(ROLE_ACCENT, provider); ui_emit(ROLE_ACCENT, "':"); oprintln("");
     var i = 0;
     var shown = 0;
     while (i < n) {
@@ -1074,9 +1135,7 @@ fn hoosh_list_provider_models(provider) {
                 if (id != 0) {
                     var ids = bayan_json_v_str(id);       # 0.39.0 (audit A-4): non-string id -> 0, not a Str
                     if (ids != 0) {
-                        if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); ui_emit_n(ROLE_ACCENT, str_data(ids), str_len(ids)); }
-                        else { emit("  "); ui_emit_n(ROLE_FG, str_data(ids), str_len(ids)); }
-                        oprintln("");
+                        _hoosh_model_row(ids, cur);           # 0.45.0: the id through the sanitiser
                         shown = shown + 1;
                     }
                 }
@@ -1085,7 +1144,7 @@ fn hoosh_list_provider_models(provider) {
         i = i + 1;
     }
     if (shown == 0) {
-        emit("  (no models for '"); emit(provider); oprintln("' — run /models to list providers)");
+        emit("  (no models for '"); emit_clean_line(provider); oprintln("' — run /models to list providers)");
         return 0;
     }
     emit("(* = current; switch with /model <id>. "); ofmt_int(shown); oprintln(" model(s).)");
@@ -1182,10 +1241,16 @@ fn hoosh_auth_cache_reset() { _hoosh_auth = 0; return 0; }
 
 # _hoosh_print_str: write a Str (ptr+len) to stdout with a trailing newline if
 # it doesn't already end in one. I/O.
+#
+# 0.45.0: through the house sanitiser (emit_clean_text_n). Every caller hands it a non-2xx body's `error.message` —
+# /models, /models <provider>, a blocking turn, an agentic block round — bytes printed straight out of the gateway's
+# response with nothing storing them first, so this print IS where they enter thoth; all four wrote them raw, and an
+# escape in the message reached the terminal (reproduced under a pty). The TEXT policy, not the label one: this is
+# prose, and its newlines and tabs are the message's own. The (ptr, len) form, so an escaped NUL cannot end it early.
 fn _hoosh_print_str(s) {
     var d = str_data(s);
     var n = str_len(s);
-    emit_n(d, n);
+    emit_clean_text_n(d, n);
     if (n > 0) { if (load8(d + n - 1) != 10) { oprintln(""); } }
     return 0;
 }
@@ -1256,12 +1321,12 @@ fn _hoosh_sse_cb(ctx, ev) {
     # repaints as reasoning streams. Empty on Opus 4.8 (reasoning stays internal).
     var rc = bayan_json_v_obj_get(delta, "reasoning_content");
     if (rc != 0) {
-        var rs = bayan_json_v_str(rc);
+        var rs = _hoosh_clean_text(rc);      # 0.45.0: the model's text is cleaned where it enters (see _hoosh_clean_text)
         if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
     }
     var content = bayan_json_v_obj_get(delta, "content");
     if (content == 0) { return 1; }          # role-only / finish / non-content frame
-    var s = bayan_json_v_str(content);
+    var s = _hoosh_clean_text(content);      # 0.45.0: cleaned BEFORE the render sink and the accumulator both see it
     if (s == 0) { return 1; }
     var n = str_len(s);
     if (n > 0) {

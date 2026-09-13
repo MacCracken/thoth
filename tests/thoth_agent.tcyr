@@ -82,6 +82,7 @@ fn main() {
     out_ring_sink_set(&feed_write);
     test_shell();
     test_agent();
+    test_upstream_err_sanitise();
     test_daimon();
     test_tron();
     test_audit();

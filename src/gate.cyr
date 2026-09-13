@@ -209,14 +209,24 @@ fn confirm(verb, obj) {
     # time. A silent auto-allow is indistinguishable from having no gate; the user must be able to see
     # that an answer they gave earlier is still acting. Checked BEFORE the non-interactive branches so a
     # grant made interactively still holds if the surface later changes.
+    # Sanitise BEFORE any branch draws either string. On OOM there is no safe way to render the prompt,
+    # so the answer is the fail-closed one — a denial we can explain beats a prompt we cannot trust.
+    # 0.45.0: this used to run AFTER the two branches below, so the session-grant line and the one-shot denial
+    # still drew `obj` raw — a model's shell command, tool name or edit path reached the terminal on the second
+    # call of a granted action, and on stderr in one-shot (both reproduced under a pty). The grant itself still
+    # matches the RAW (verb, obj); only what is drawn is the sanitised copy.
+    if (_confirm_labels(verb, obj) == 0) {
+        emit_err("  [authorization required — denied; the prompt could not be prepared (out of memory)]\n");
+        return 0;
+    }
     if (_grant_has(verb, obj) == 1) {
-        ui_emit(ROLE_GREEN, "  [session grant] "); emit(verb); emit(" "); emit(obj);
+        ui_emit(ROLE_GREEN, "  [session grant] "); emit(_confirm_verb_buf); emit(" "); emit(_confirm_obj_buf);
         ui_emit(ROLE_MUTED, "  (/grants to review or clear)"); oprintln("");
         log_begin("authz"); log_kv_str("gate", "session_grant"); log_kv_str("verb", verb); log_kv_int("allow", 1); log_commit(SK_INFO);
         return 1;
     }
     if (one_shot_active() == 1) {
-        emit_err("  [authorization required: "); emit_err(verb); emit_err(" "); emit_err(obj);
+        emit_err("  [authorization required: "); emit_err(_confirm_verb_buf); emit_err(" "); emit_err(_confirm_obj_buf);
         emit_err(" — denied; one-shot is non-interactive. configure [tron].policy or run interactively]\n");
         return 0;
     }
@@ -234,12 +244,7 @@ fn confirm(verb, obj) {
     # every gated action permanently refused in T3 (edit/create_file/shell/remember + every MCP tool),
     # with the reason on a stderr the window cannot show and no way to grant authority from inside it —
     # a security control INERT on one surface, which the house rules count as a gap, not a degrade.
-    # Sanitise BEFORE any branch draws either string. On OOM there is no safe way to render the prompt,
-    # so the answer is the fail-closed one — a denial we can explain beats a prompt we cannot trust.
-    if (_confirm_labels(verb, obj) == 0) {
-        emit_err("  [authorization required — denied; the prompt could not be prepared (out of memory)]\n");
-        return 0;
-    }
+    # (The sanitised labels every branch below draws were prepared at the top of this function.)
     if (_confirm_no_tty == 1) {
         if (ask_hook_active() == 1) { return _confirm_via_ask(verb, obj); }
         emit_err("  [authorization required: "); emit_err(_confirm_verb_buf); emit_err(" "); emit_err(_confirm_obj_buf);
@@ -346,7 +351,9 @@ fn gate_authorize(tool_name, params, verb, obj) {
     }
     var k = gate_verdict(tool_name, params);
     if (k == VK_ALLOW) {
-        ui_emit(ROLE_GREEN, "  [t-ron] allow: "); emit(verb); emit(" "); oprintln(obj);
+        # 0.45.0: through the label sanitiser, like confirm's lines. t-ron validates a tool NAME, but `obj` is often
+        # not one — a shell command or an edit path travels as params, and reached a pty raw on this line.
+        ui_emit(ROLE_GREEN, "  [t-ron] allow: "); emit_clean_line(verb); emit(" "); emit_clean_line(obj); oprintln("");
         log_begin("authz"); log_kv_str("tool", tool_name); log_kv_str("verdict", "allow");
         log_commit(SK_INFO);
         return 1;

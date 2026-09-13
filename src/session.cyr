@@ -212,6 +212,12 @@ fn conv_delete(i) {
 
 # _conv_autotitle: a title cstr from a message's first line (<= CONV_TITLE_MAX bytes, "..." if truncated). Used to
 # name a conversation from its first user message. Copies to stable storage.
+#
+# 0.45.0: the copy is where a DERIVED title enters the store, so it takes the LABEL policy (_clean_byte). A title is one
+# line of chrome everywhere it is drawn — /conversations, /switch, /fork, /search, the GUI sidebar — and the session
+# file keeps it. The first line of a task went in byte for byte, so a task typed in line mode or supplied by a
+# repo-local [alias] expansion left ESC in the title for every one of those to print. One byte for one: the cap and
+# the ellipsis are unchanged.
 var CONV_TITLE_MAX = 48;
 fn _conv_autotitle(content, clen) {
     var t = alloc(CONV_TITLE_MAX + 4);
@@ -220,9 +226,9 @@ fn _conv_autotitle(content, clen) {
     var i = 0;
     var done = 0;
     while ((done == 0) && (i < cap)) {
-        var ch = load8(content + i);
+        var ch = load8(content + i) & 255;
         if (ch == 10) { done = 1; }              # stop at the first newline
-        else { store8(t + i, ch); i = i + 1; }
+        else { store8(t + i, _clean_byte(ch, 0)); i = i + 1; }
     }
     # An empty first line (e.g. a newline-leading message) derives no title: return 0 (leave untitled, defer to a
     # later user message) rather than a blank "" title. A "" title would persist as CONV tlen-0 — indistinguishable
@@ -237,13 +243,15 @@ fn _conv_autotitle(content, clen) {
 
 # conv_dup_title: a stable, length-capped copy of a title cstr — for /new + /rename, whose arg points into the
 # transient input line and must be copied before conv_set_title stores it. Caps at CONV_TITLE_STORE_MAX bytes.
+# 0.45.0: the copy is where an EXPLICIT title enters the store (/new, /rename, /fork — a typed line or an [alias]
+# expansion), so it takes the LABEL policy for _conv_autotitle's reason; /new and /rename echo this stored copy.
 var CONV_TITLE_STORE_MAX = 128;
 fn conv_dup_title(s) {
     var n = strlen(s);
     if (n > CONV_TITLE_STORE_MAX) { n = CONV_TITLE_STORE_MAX; }
     var d = alloc(n + 1);
     var i = 0;
-    while (i < n) { store8(d + i, load8(s + i)); i = i + 1; }
+    while (i < n) { store8(d + i, _clean_byte(load8(s + i) & 255, 0)); i = i + 1; }
     store8(d + n, 0);
     return d;
 }
@@ -982,7 +990,9 @@ fn _sess_load_v2(mend, total) {
                         else {
                             if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CONV", 4) == 1)) {
                                 var title = 0;
-                                if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); }
+                                # 0.45.0: a title is chrome (see _conv_autotitle). A file written before that fix still
+                                # holds the raw bytes, so the title is cleaned again where it is read back.
+                                if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); clean_line_n(title, strlen(title)); }
                                 conv_load_add(title);    # new conversation, becomes the append target
                             } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CITE", 4) == 1)) {
                                 # 0.33.4: a cited-source title for the just-appended message
@@ -1070,16 +1080,18 @@ fn session_set_model(m) { _sess_model = m; return 0; }
 # /model arg points into the reused input-line buffer, which the next read
 # overwrites — so a mid-session switch must copy, not alias. Reuses one static
 # buffer (model ids are short; avoids accreting in the never-freeing bump heap).
+#
+# 0.45.0: through the house sanitiser (safe_label_copy), because this is where a SWITCHED-TO id enters thoth — typed at
+# /model, or picked from the gateway's catalog in the Ctrl-P picker — and every surface then draws it as chrome: the TUI
+# status bar writes it straight to the terminal under OUT_FD1. No real model id carries a control byte, so a legitimate
+# id is stored byte for byte; a hostile one is stored with '?' and fails at the gateway, visibly, instead of in the
+# operator's terminal. (The [hoosh].model default enters separately — see _cfg_label.) Same bound as the loop this
+# replaced (cap - 1 bytes + NUL).
 var _model_buf = 0;
 var MODEL_BUF_CAP = 256;
 fn session_set_model_copy(m) {
     if (_model_buf == 0) { _model_buf = alloc(MODEL_BUF_CAP); }
-    var i = 0;
-    while ((load8(m + i) != 0) && (i < (MODEL_BUF_CAP - 1))) {
-        store8(_model_buf + i, load8(m + i));
-        i = i + 1;
-    }
-    store8(_model_buf + i, 0);
+    safe_label_copy(_model_buf, MODEL_BUF_CAP, m);
     _sess_model = _model_buf;
     return 0;
 }
@@ -1200,12 +1212,16 @@ fn persona_role_select_aspect(i) {
 }
 # persona_role_override_set: set a USER role label `s` (any text), copied to stable storage; it trumps the
 # aspect. Marks the system prompt dirty. Returns 1, 0 for a null arg.
+# 0.45.0: the copy takes the LABEL policy (clean_line_n). The label is typed at /role or supplied by a repo-local
+# [alias] expansion, and every reader draws it as chrome — /role's echo and listing, bare /persona, /state — so the
+# stored copy is the one place to clean it. The system prompt reads the same copy.
 fn persona_role_override_set(s) {
     if (s == 0) { return 0; }
     var n = strlen(s);
     var c = alloc(n + 1);
     if (n > 0) { memcpy(c, s, n); }
     store8(c + n, 0);
+    clean_line_n(c, n);
     _persona_role_override = c;
     _persona_sys_dirty = 1;
     return 1;

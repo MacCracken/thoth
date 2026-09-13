@@ -104,22 +104,31 @@ fn emit_err_n(ptr, n) { syscall(SYS_WRITE, 2, ptr, n); return 0; }
 # role markers ride the same channel — so an ESC inside a model-chosen tool name or a third-party MCP
 # server's result text reaches the terminal and is executed by it. Substitute rather than drop, for the
 # reason the whole house rule gives: '?' preserves the byte count, so column maths stays correct.
-fn _emit_clean(s, keep_ws) {
-    if (s == 0) { return 0; }
+#
+# emit_clean_line_n / emit_clean_text_n (0.45.0): the same two policies over exactly `n` bytes, for a Str taken
+# straight out of a parsed response (ptr + len). Not a convenience: a JSON escape for NUL (backslash, u, 0000)
+# decodes to a real NUL byte, and the cstring forms stop there, silently dropping the rest of an error message.
+# Here a NUL is a C0 byte like any other and becomes '?'. ONE loop behind all four forms; a second copy of the
+# policy is how A-7/A-8 happened.
+#
+# _clean_byte (0.45.0): that policy for ONE byte. The emit loop below and the in-place clean_text_n both call it, so
+# the two ways of cleaning (write the bytes out, or fix them where they lie) cannot drift apart.
+fn _clean_byte(b, keep_ws) {
+    if (keep_ws == 1) {
+        if (b == 10) { return b; }
+        if (b == 9) { return b; }
+    }
+    if (b < 32) { return 63; }
+    if (b == 127) { return 63; }
+    return b;
+}
+fn _emit_clean_n(p, n, keep_ws) {
+    if (p == 0) { return 0; }
     var buf[264];
     var o = 0;
     var i = 0;
-    while (load8(s + i) != 0) {
-        var b = load8(s + i) & 255;
-        var drop = 0;
-        if (b < 32) { drop = 1; }
-        if (b == 127) { drop = 1; }
-        if (keep_ws == 1) {
-            if (b == 10) { drop = 0; }
-            if (b == 9) { drop = 0; }
-        }
-        if (drop == 1) { b = 63; }
-        store8(&buf + o, b);
+    while (i < n) {
+        store8(&buf + o, _clean_byte(load8(p + i) & 255, keep_ws));
         o = o + 1;
         if (o >= 255) { store8(&buf + o, 0); emit(&buf); o = 0; }
         i = i + 1;
@@ -128,8 +137,37 @@ fn _emit_clean(s, keep_ws) {
     if (o > 0) { emit(&buf); }
     return 0;
 }
+fn _emit_clean(s, keep_ws) {
+    if (s == 0) { return 0; }
+    return _emit_clean_n(s, strlen(s), keep_ws);
+}
 fn emit_clean_line(s) { return _emit_clean(s, 0); }
 fn emit_clean_text(s) { return _emit_clean(s, 1); }
+fn emit_clean_line_n(p, n) { return _emit_clean_n(p, n, 0); }
+fn emit_clean_text_n(p, n) { return _emit_clean_n(p, n, 1); }
+
+# clean_text_n (0.45.0): the TEXT policy applied IN PLACE to exactly `n` bytes; returns how many bytes it changed.
+# For untrusted prose that thoth KEEPS as well as draws — the model's reply, whose bytes go to the terminal, the
+# reply accumulator, history, the session file and one-shot stdout. Cleaning them once where they are decoded gives
+# every one of those the same clean copy; an emit-time form would have to be repeated at each. Same length out as
+# in, so a Str's length stays true.
+#
+# clean_line_n (0.45.0): the LABEL policy in place — for a value thoth STORES and then draws as one line of chrome, so
+# every later display reads the one clean copy: a conversation title, a custom /role label. One loop behind both forms.
+fn _clean_in_place_n(p, n, keep_ws) {
+    if (p == 0) { return 0; }
+    var changed = 0;
+    var i = 0;
+    while (i < n) {
+        var b = load8(p + i) & 255;
+        var nb = _clean_byte(b, keep_ws);
+        if (nb != b) { store8(p + i, nb); changed = changed + 1; }
+        i = i + 1;
+    }
+    return changed;
+}
+fn clean_text_n(p, n) { return _clean_in_place_n(p, n, 1); }
+fn clean_line_n(p, n) { return _clean_in_place_n(p, n, 0); }
 
 fn safe_label_copy(dst, cap, src) {
     if (dst == 0) { return 0; }

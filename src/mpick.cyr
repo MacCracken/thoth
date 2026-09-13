@@ -40,15 +40,19 @@ fn mpick_init() {
 # owned + stable. An EMPTY id is refused here — the single choke point — so a malformed catalog entry
 # ({"id":""}, a non-null zero-length Str from bayan) can never become a blank row that switches to an empty
 # model (session_set_model_copy("") — a silent, dishonest switch). Every caller (mpick_load) is thus covered.
+#
+# 0.45.0: the copy goes through the house sanitiser (safe_label_copy) for the same single-choke-point reason — this is
+# where a catalog id ENTERS thoth, and the gateway is a less-trusted party than the operator. The rows paint these bytes
+# raw (_tui_pick_emit_clip -> emit_raw_n, straight to the terminal) and a switch echoes them on the feed's "model -> "
+# line, so an escape inside a catalog id reached the screen twice. '?' keeps the byte count, so the store arithmetic
+# here is unchanged, and a hostile id stays a visible, selectable row.
 fn _mp_add(s) {
     if (_mp_n >= MPICK_MAX) { return 0; }
     var len = strlen(s);
     if (len == 0) { return 0; }                   # refuse an empty id (defensive: malformed catalog entry)
     if ((_mp_store_off + len + 1) > MPICK_STORE) { return 0; }
     var dst = _mp_store + _mp_store_off;
-    var k = 0;
-    while (k < len) { store8(dst + k, load8(s + k)); k = k + 1; }
-    store8(dst + len, 0);
+    safe_label_copy(dst, len + 1, s);             # len bytes + NUL; C0 and DEL become '?'
     store64(_mp_ids + _mp_n * 8, dst);
     _mp_store_off = _mp_store_off + len + 1;
     _mp_n = _mp_n + 1;

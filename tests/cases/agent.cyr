@@ -625,6 +625,99 @@ fn test_agent() {
 }
 
 
+# test_upstream_err_sanitise (0.45.0): the PROVIDER'S error text, forwarded in-stream by hoosh 2.6.5+, is untrusted
+# bytes, and a JSON unicode escape in it decodes to a real ESC. It is cleaned where it ENTERS thoth — the bounded copy
+# in _ag_err_capture, with the LABEL policy — so every reader of agent_err_msg() gets one clean copy. Reproduced under
+# a pty before the fix: one-shot `thoth "hello"` against a fake gateway streaming this error frame wrote ESC [7m to
+# the terminal through _oneshot_report_error's stderr line. The frame goes through the REAL callback, as sandhi hands
+# it, and that stderr line is captured with fd 2 pointed at a file. The frame's JSON escapes are built byte by byte
+# (a backslash, then the escape's text); needles are ESC + "[7m".
+fn test_upstream_err_sanitise() {
+    test_group("in-stream provider error text sanitised where it enters (agent/oneshot, 0.45.0)");
+    # {"error":{"code":429,"message":"x<ESC>[7mERRMARK a<NUL>b<LF>c<TAB>d"}}, each control byte JSON-escaped
+    var fr = alloc(256);
+    var o = _append_cstr(fr, 0, "{\"error\":{\"code\":429,\"message\":\"x");
+    store8(fr + o, 92); o = o + 1; o = _append_cstr(fr, o, "u001b[7mERRMARK a");
+    store8(fr + o, 92); o = o + 1; o = _append_cstr(fr, o, "u0000b");
+    store8(fr + o, 92); o = o + 1; o = _append_cstr(fr, o, "nc");
+    store8(fr + o, 92); o = o + 1; o = _append_cstr(fr, o, "td\"}}");
+    store8(fr + o, 0);
+    # premise: bayan really decodes those escapes into raw bytes, so nothing below can pass vacuously
+    var ps = 0;
+    var pv = bayan_json_v_parse_buf(fr, o);
+    if (pv != 0) {
+        var pe = bayan_json_v_obj_get(pv, "error");
+        if (pe != 0) {
+            var pm = bayan_json_v_obj_get(pe, "message");
+            if (pm != 0) { ps = bayan_json_v_str(pm); }
+        }
+    }
+    assert(ps != 0, "premise: the frame parses and carries a message");
+    if (ps != 0) {
+        assert_eq(_t_count_sub(str_data(ps), str_len(ps), "\x1b[7mERRMARK", strlen("\x1b[7mERRMARK")), 1, "premise: the JSON escape decodes to a REAL ESC");
+        assert_eq(str_len(ps), 20, "premise: ...and the escaped NUL to a real NUL INSIDE the Str, which runs on past it");
+    }
+
+    # --- the entry: the frame through the real SSE callback ---
+    _ag_err_reset();
+    var ev = alloc(64);
+    store64(ev + SANDHI_SSE_OFF_EVENT, 0);
+    store64(ev + SANDHI_SSE_OFF_DATA, fr);
+    store64(ev + SANDHI_SSE_OFF_ID, 0);
+    store64(ev + SANDHI_SSE_OFF_RETRY, 0);
+    assert_eq(_agent_sse_cb(0, ev), 1, "the callback consumes the error frame");
+    assert_eq(agent_err_seen(), 1, "premise: the error is captured on the real path");
+    assert_eq(agent_err_code(), 429, "premise: ...with the provider's status");
+    var em = agent_err_msg();
+    assert(em != 0, "...and a message");
+    if (em != 0) {
+        var en = strlen(em);
+        var ctl = 0;
+        var ci = 0;
+        while (ci < en) {
+            var cb = load8(em + ci) & 255;
+            if ((cb < 32) || (cb == 127)) { ctl = ctl + 1; }
+            ci = ci + 1;
+        }
+        assert_eq(_t_count_sub(em, en, "\x1b[7mERRMARK", strlen("\x1b[7mERRMARK")), 0, "the stored message holds no raw escape");
+        assert_eq(ctl, 0, "...and no control byte at all");
+        assert_eq(_t_count_sub(em, en, "x?[7mERRMARK a", strlen("x?[7mERRMARK a")), 1, "...the provider's text is kept, '?' in the escape's place");
+        assert_eq(en, 20, "...ALL of it: an escaped NUL becomes '?' instead of ending the message (a copy by length)");
+        assert_eq(_t_count_sub(em, en, "a?b?c?d", strlen("a?b?c?d")), 1, "...and its newline and tab are '?' too: LABEL policy, one line of chrome");
+    }
+
+    # --- the sink that printed it raw: one-shot's stderr diagnostic, fd 2 pointed at a file for the one call ---
+    var saved_url = _cfg_hoosh_url;
+    _cfg_hoosh_url = "http://127.0.0.1:9";     # a wired hoosh seam; unwired, the report stops at "no model backend"
+    var epath = "/tmp/thoth_t_upstream_err_stderr.txt";
+    var efd = file_open(epath, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    var save2 = 201;
+    var saved_ok = 0;
+    if (efd >= 0) { if (sys_dup2(2, save2) == save2) { saved_ok = 1; } }
+    assert_eq(saved_ok, 1, "premise: a capture file is open and stderr is saved");
+    if (saved_ok == 1) {
+        sys_dup2(efd, 2);
+        _oneshot_report_error(0);
+        sys_dup2(save2, 2);
+        file_close(save2);
+    }
+    if (efd >= 0) { file_close(efd); }
+    _cfg_hoosh_url = saved_url;
+    var eb = alloc(512);
+    var eblen = file_read_all(epath, eb, 511);
+    assert(eblen > 0, "premise: the one-shot diagnostic was captured from stderr");
+    if (eblen > 0) {
+        var want = "upstream HTTP 429: x?[7mERRMARK a?b?c?d\n";
+        assert_eq(_t_count_sub(eb, eblen, "\x1b[7mERRMARK", strlen("\x1b[7mERRMARK")), 0, "the one-shot stderr line carries no raw escape");
+        assert_eq(_t_count_sub(eb, eblen, want, strlen(want)), 1, "...and gives the provider's whole reason, defanged, on ONE line");
+    }
+    xunlink(epath);
+    _ag_err_reset();
+    _hoosh_acc_reset();
+    _ag_reset();
+    return 0;
+}
+
 # The daimon client's pure pieces: call-body building and tool-result
 # extraction against canned bodies (no network).
 fn test_daimon() {

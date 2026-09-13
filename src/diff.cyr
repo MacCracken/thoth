@@ -233,7 +233,7 @@ fn _diff_run(path, ob, ol_bytes, nb, nl_bytes, render, lang) {
 fn diff_render(path, ob, ol_bytes, nb, nl_bytes) {
     var lang = 0;                                                  # grammar for body highlighting
     if (ui_tier() != PT_PLAIN) { lang = detect_language(path); }   # 0 if unknown -> plain bodies
-    emit("  "); ui_emit(ROLE_BLUE, path); oprintln("");
+    emit("  "); ui_emit_clean(ROLE_BLUE, path); oprintln("");      # 0.45.0: a path is untrusted bytes — a filename can hold ESC
     var packed = _diff_run(path, ob, ol_bytes, nb, nl_bytes, 0, lang);   # count first for the header
     if (packed == (0 - 1)) {
         _diff_run(path, ob, ol_bytes, nb, nl_bytes, 1, lang);           # prints the "too big" note
@@ -265,7 +265,7 @@ fn diff_stats(ob, ol_bytes, nb, nl_bytes) {
 fn diff_render_ann(path, ops) {
     var lang = 0;
     if (ui_tier() != PT_PLAIN) { lang = detect_language(path); }
-    emit("  "); ui_emit(ROLE_BLUE, path); oprintln("");
+    emit("  "); ui_emit_clean(ROLE_BLUE, path); oprintln("");      # 0.45.0: the /git <path> argument, sanitised for display
     var n = vec_len(ops);
     var adds = 0;
     var dels = 0;
