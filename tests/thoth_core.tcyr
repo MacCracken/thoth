@@ -61,6 +61,8 @@ include "src/diff.cyr"
 include "src/mdhl.cyr"     # markdown fenced-code highlighter (0.15.1); after diff (calls _hl_span)
 include "src/mdmodel.cyr"  # 0.36.0: structural-markdown model (gfeed leaf lowers it)
 include "src/surface.cyr"  # status view-model (0.28.0, Stage B); after its producers (session/hoosh/git/ui), before commands+tui
+include "src/splash.cyr"    # the startup ibis — GENERATED (scripts/gen-splash.sh)
+include "src/greet.cyr"     # the greeting view-model + layout (0.45.3); after surface, before tui/gfeed
 include "src/commands.cyr"
 include "src/repl.cyr"
 include "src/oneshot.cyr"

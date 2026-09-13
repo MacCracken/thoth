@@ -887,16 +887,87 @@ fn tui_draw_status() {
     return 0;
 }
 
-# tui_intro_emit: the greeting's first line (0.45.0) — `{(o> <persona> - <Role>: <version>`, e.g.
-# `{(o> Thoth - The Librarian: 0.45.0`. The version lives here now that the status bar leads with the repo + branch
-# instead; the role is title-cased for the title position (persona_role_title — the stored role is untouched).
-fn tui_intro_emit() {
-    ui_emit(ROLE_ACCENT, "{(o> ");
-    ui_emit(ROLE_ACCENT, persona_name());
-    ui_emit(ROLE_FAINT, " - ");
-    ui_emit(ROLE_ACCENT_DIM, persona_role_title());
-    ui_emit(ROLE_FAINT, ": ");
-    ui_emit(ROLE_MUTED, thoth_version());
+# --- the greeting block (0.45.3) --------------------------------------------------------------------------
+# The ibis splash beside a framed box — `{(o> <persona> - <Role>: <version>` (0.45.0's first line, now the box's
+# title), an open row, then the hoosh status + config notes — modelled by src/greet.cyr (greet_build) and laid
+# out on the feed's cell grid (greet_layout). tui_greeting_emit paints it as one captured feed line per physical
+# row: [art row, padded to its width][gap][box row]. Every line is exactly as wide as the layout says, so a line
+# never soft-wraps under the block and the frame stays a frame. Emitted at the cursor with no cursor moves, so a
+# test captures it under OUT_RING.
+
+# _tui_spaces: n spaces (from a static run; chunked, so any n works).
+var _TUI_SPACES = "                                                                ";   # 64
+fn _tui_spaces(n) {
+    while (n > 64) { emit_n(_TUI_SPACES, 64); n = n - 64; }
+    if (n > 0) { emit_n(_TUI_SPACES, n); }
+    return 0;
+}
+
+# _tui_splash_row_emit: art row i of width w — one coloured RUN per shade change (splash_tier -> greet_tier_role),
+# spaces raw, then padding to w (the generated rows carry no trailing spaces).
+fn _tui_splash_row_emit(w, i) {
+    var row = splash_row(w, i);
+    if (row == 0) { _tui_spaces(w); return 0; }
+    var len = strlen(row);
+    var j = 0;
+    while (j < len) {
+        var t = splash_tier(load8(row + j));
+        var k = j + 1;
+        while ((k < len) && (splash_tier(load8(row + k)) == t)) { k = k + 1; }
+        if (t < 0) { emit_n(row + j, k - j); }
+        else { ui_emit_n(greet_tier_role(t), row + j, k - j); }
+        j = k;
+    }
+    _tui_spaces(w - len);
+    return 0;
+}
+
+# _tui_box_rule: n box-drawing dashes in the frame role.
+fn _tui_box_rule(n) {
+    emit(ui_sgr(ROLE_FAINT));
+    var i = 0;
+    while (i < n) { emit("─"); i = i + 1; }
+    emit(ui_reset());
+    return 0;
+}
+
+# _tui_box_row_emit: physical box row b (0 = the top border, greet_box_rows()-1 = the bottom); a content row
+# is `│ ` + its pieces + padding + ` │`, so every box row spans exactly inner + GREET_FRAME columns.
+fn _tui_box_row_emit(b) {
+    var inner = greet_inner();
+    if (b == 0) { ui_emit(ROLE_FAINT, "┌"); _tui_box_rule(inner + 2); ui_emit(ROLE_FAINT, "┐"); return 0; }
+    if (b == (greet_box_rows() - 1)) { ui_emit(ROLE_FAINT, "└"); _tui_box_rule(inner + 2); ui_emit(ROLE_FAINT, "┘"); return 0; }
+    ui_emit(ROLE_FAINT, "│ ");
+    var used = 0;
+    if (greet_phys_locate(b - 1) == 1) {
+        greet_seg_begin(greet_loc_r(), greet_loc_s());
+        while (greet_piece_next() == 1) {
+            ui_emit_n(greet_piece_role(), greet_piece_ptr(), greet_piece_len());
+            used = used + greet_piece_cols();
+        }
+    }
+    _tui_spaces(inner - used);
+    ui_emit(ROLE_FAINT, " │");
+    return 0;
+}
+
+# tui_greeting_emit: lay the block out for a cols x rows feed grid (rows = what may sit under the greeting's top
+# row; the caller reserves its own lines below) and paint it, one feed line per physical row.
+fn tui_greeting_emit(cols, rows) {
+    greet_layout(cols, rows);
+    var r = 0;
+    while (r < greet_total()) {
+        if (greet_art_w() > 0) {
+            var ai = r - greet_art_y();
+            if ((ai >= 0) && (ai < greet_art_rows())) { _tui_splash_row_emit(greet_art_w(), ai); }
+            else { _tui_spaces(greet_art_w()); }
+            _tui_spaces(GREET_GAP);
+        }
+        var bi = r - greet_box_y();
+        if ((bi >= 0) && (bi < greet_box_rows())) { _tui_box_row_emit(bi); }
+        feed_flush_pending();
+        r = r + 1;
+    }
     return 0;
 }
 
@@ -2226,6 +2297,14 @@ fn tui_repaint_body() {
 # tui_relayout: re-read the terminal size, then repaint the whole frame. No scroll region
 # — the feed is self-managed now.
 fn tui_relayout() {
+    _tui_read_winsize();
+    tui_repaint_body();
+    return 0;
+}
+
+# _tui_read_winsize: refresh _tui_rows/_tui_cols from the terminal (kept on failure). Split out of tui_relayout
+# (0.45.3) so the greeting can size its block to the live grid BEFORE it is seeded into the feed.
+fn _tui_read_winsize() {
     var rr[8];
     var cc[8];
     store64(&rr, 0); store64(&cc, 0);
@@ -2233,7 +2312,6 @@ fn tui_relayout() {
         if (load64(&rr) > 4) { _tui_rows = load64(&rr); }
         if (load64(&cc) > 0) { _tui_cols = load64(&cc); }
     }
-    tui_repaint_body();
     return 0;
 }
 
@@ -2526,63 +2604,19 @@ fn tui_loop() {
     feed_init();                                  # 0.9.1: the self-managed feed ring
     inhist_init();                                # 0.11.1: the composer input-history recall ring
     out_mode_set(OUT_RING);                        # seed the welcome banner into the feed
-    # the scribe greeting, sourced from the avatara persona (mirrors print_banner). 0.45.0: its first line carries the
-    # VERSION — `{(o> Thoth - The Librarian: <version>` — now that the status bar leads with the repo + branch instead.
-    tui_intro_emit();
-    feed_flush_pending();
-    ui_emit(ROLE_MUTED, persona_tagline());
-    feed_flush_pending();
-    # 0.11.9: the greeting states the LIVE inference status (was a hardcoded "READY"). A real
-    # reachability PROBE (hoosh_reachable — a silent GET to the gateway), not mere config:
-    # READY when the gateway actually answers; otherwise it says so (unreachable when a URL is
-    # set, absent when none is) — honest, never faked. The "type a task" guidance is below.
-    ui_emit(ROLE_FAINT, "Status: ");
-    # 0.26.0: READY only when a CONFIGURED gateway actually answers. Never claim
-    # READY off the silent localhost default when no config was found — the old bug
-    # was: launched in another repo -> no config discovered -> probed the default
-    # 127.0.0.1:8088 -> a stray local hoosh answered -> "READY", masking that the
-    # user's config was never loaded. Now the config source is stated honestly.
+    # 0.45.3: the greeting is a BLOCK — the ibis splash beside a framed box: `{(o> <persona> - <Role>: <version>`,
+    # an open row, then the hoosh status + the config notes (src/greet.cyr models it; the GUI paints the same
+    # model). Sized to the LIVE grid, so the winsize is read here, before the first relayout. The status is the
+    # 0.26.0 probe: READY only when a CONFIGURED gateway actually answers — never off the silent localhost
+    # default when no config was found (the old bug: launched in another repo -> no config discovered -> a stray
+    # local hoosh answered -> "READY", masking that the user's config never loaded); greet_build states the
+    # config source honestly, plus 0.43.2's legacy-file, 0.43.3's two-layer and 0.43.5's unknown-key notes.
+    _tui_read_winsize();
     var _up = 0;
     if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _up = 1; }   # probe + SEED the status-bar dot
-    if (config_hoosh_configured() == 1) {
-        if (_up == 1) { ui_emit(ROLE_GREEN, "READY"); }
-        else {
-            ui_emit(ROLE_RED, "hoosh unreachable");
-            ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); ui_emit(ROLE_FAINT, " (is the gateway up?)");
-        }
-    } elif (config_parse_ok() == 1) {
-        ui_emit(ROLE_RED, "hoosh absent");
-        ui_emit(ROLE_FAINT, " — no [hoosh].url in "); emit(config_path());
-        if (_up == 1) { ui_emit(ROLE_MUTED, "  [default "); emit(config_hoosh_url()); ui_emit(ROLE_MUTED, " is reachable]"); }
-    } else {
-        ui_emit(ROLE_RED, "no config");
-        ui_emit(ROLE_FAINT, " — no "); emit(config_path()); ui_emit(ROLE_FAINT, " found (add one, or ~/.thoth/config.cyml)");
-        if (_up == 1) { ui_emit(ROLE_MUTED, "  [default "); emit(config_hoosh_url()); ui_emit(ROLE_MUTED, " is reachable]"); }
-    }
-    feed_flush_pending();
-    # 0.43.2: a session running off the LEGACY ./thoth.cyml says so. Only the two failure branches above
-    # ever named the config file, so a legacy load looked exactly like a preferred one — while every
-    # hint in /state and /reload pointed at `.thoth/config.cyml`, the file thoth was not reading.
-    if (config_source() == 3) {
-        ui_emit(ROLE_RED, "config: legacy ./thoth.cyml");
-        ui_emit(ROLE_FAINT, " — move it to .thoth/config.cyml (back-compat fallback)");
-        feed_flush_pending();
-    }
-    # 0.43.3: say when BOTH layers are in play, so a value that came from the global is not a mystery.
-    if (config_global_path() != 0) {
-        if (config_local_path() != 0) {
-            ui_emit(ROLE_FAINT, "config: ~/.thoth/config.cyml + this project's — local wins per key (/state shows both)");
-            feed_flush_pending();
-        }
-    }
-    # 0.43.5: a mistyped config key is otherwise indistinguishable from not having written the line.
-    if (config_unknown_count() > 0) {
-        ui_emit(ROLE_RED, "config: "); ofmt_int(config_unknown_count());
-        ui_emit(ROLE_RED, " unrecognised key(s)");
-        ui_emit(ROLE_FAINT, " — ignored. /state names them.");
-        feed_flush_pending();
-    }
-    ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");
+    greet_build(_up);
+    tui_greeting_emit(tui_feed_width(_tui_cols, _tui_show_tree), _tui_feed_rows() - 1);   # -1: the help line below
+    ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");   # the first line under the block
     feed_flush_pending();
     # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`
     # is what blocks SIGINT for the session; if it failed (EMFILE / ENOMEM) SIGINT is

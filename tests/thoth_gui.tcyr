@@ -13,6 +13,7 @@ include "src/util.cyr"
 include "src/version.cyr"
 include "src/term.cyr"        # portable terminal-CONTROL floor (0.44.3); ui_isatty routes its tty probe through it
 include "src/ui.cyr"
+include "src/feed.cyr"        # 0.45.3: greet.cyr measures its rows with the feed's glyph scanner (main.cyr order: after ui)
 include "src/intr.cyr"
 include "src/ftree.cyr"
 include "src/inhist.cyr"
@@ -24,6 +25,8 @@ include "src/seams.cyr"
 include "src/session.cyr"
 include "src/hoosh.cyr"
 include "src/surface.cyr"
+include "src/splash.cyr"    # the startup ibis — GENERATED (scripts/gen-splash.sh)
+include "src/greet.cyr"     # the greeting view-model + layout (0.45.3); after surface, before tui/gfeed
 include "src/vendor/kashi.cyr"
 include "src/gui/gdraw.cyr"
 include "src/gui/graster.cyr"

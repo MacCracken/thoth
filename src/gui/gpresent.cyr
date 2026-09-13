@@ -193,6 +193,13 @@ fn gui_run() {
     ftree_load();                                        # populate the file-tree pane (0.30.5)
     git_probe();                                         # so the tree's git badges + the status git field have data
     inhist_init();                                       # composer history recall ring (0.30.15)
+    # 0.45.3: the greeting block's model (the framed status box beside the ibis) — built ONCE here, at this
+    # front end's startup like the ask seam below, never per frame: it snapshots config + persona state and
+    # takes the hoosh probe result (a silent GET, which also seeds the status strip's health dot). The frame
+    # builder (_gfeed_greeting) only lays the stored model out on the current window.
+    var _gup = 0;
+    if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _gup = 1; }
+    greet_build(_gup);
     gstop_set_win(win); intr_check_hook_set(&_gstop_poll);
     ask_hook_set(&gui_ask);                              # 0.44.0 (T4-1): claim the ask seam for THIS front end   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
     # 0.44.3: this surface owns the screen — there is no terminal to prompt on and no cooked stdin anyone

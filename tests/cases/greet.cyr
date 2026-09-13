@@ -1,0 +1,201 @@
+# tests/cases/greet.cyr — the startup greeting block (0.45.3): src/greet.cyr's model + layout + piece walker,
+# and the TUI leaf (tui_greeting_emit) captured under OUT_RING. The GUI leaf is covered in tests/cases/gui.cyr.
+
+# _tg_row_text: concatenate row r's span texts into dst (cap bytes); returns the length. The reference for the
+# "pieces reproduce the row" invariant.
+fn _tg_row_text(r, dst, cap) {
+    var o = 0;
+    var k = 0;
+    while (k < greet_row_spans(r)) {
+        var t = greet_span_text(r, k);
+        var n = strlen(t);
+        if ((o + n) < cap) { var i = 0; while (i < n) { store8(dst + o + i, load8(t + i)); i = i + 1; } o = o + n; }
+        k = k + 1;
+    }
+    store8(dst + o, 0);
+    return o;
+}
+
+# _tg_pieces_text: walk EVERY physical row of logical row r and concatenate the pieces' bytes into dst; also
+# checks each physical row's columns stay within the inner width (returns -1 on a violation).
+fn _tg_pieces_text(r, dst, cap) {
+    var o = 0;
+    var s = 0;
+    var bad = 0;
+    var segs = greet_row_segs(r);
+    while (s < segs) {
+        greet_seg_begin(r, s);
+        var cols = 0;
+        while (greet_piece_next() == 1) {
+            var n = greet_piece_len();
+            if ((o + n) < cap) { var i = 0; while (i < n) { store8(dst + o + i, load8(greet_piece_ptr() + i)); i = i + 1; } o = o + n; }
+            cols = cols + greet_piece_cols();
+        }
+        if (cols > greet_inner()) { bad = 1; }
+        s = s + 1;
+    }
+    store8(dst + o, 0);
+    if (bad == 1) { return 0 - 1; }
+    return o;
+}
+
+# _tg_row_has: 1 if any span of row r is exactly `needle`.
+fn _tg_row_has(r, needle) {
+    var k = 0;
+    while (k < greet_row_spans(r)) { if (streq(greet_span_text(r, k), needle) == 1) { return 1; } k = k + 1; }
+    return 0;
+}
+
+fn test_greet() {
+    println("=== the startup greeting block: model + layout + pieces (greet.cyr, 0.45.3) ===");
+    var _t0 = ui_tier();
+    var _d0 = ui_color_depth();
+    ui_force(PT_PLAIN, CD_NONE);
+    persona_role_reset();
+    session_set_model(0);
+
+    # --- the model: title, open row, status ---------------------------------------------------------------
+    greet_build(1);
+    assert_eq(greet_built(), 1, "greet_build marks the model built");
+    assert(greet_rows() >= 3, "at least the title, the open row and the status row");
+    assert_eq(greet_row_spans(0), 6, "the title row is six spans: owl, persona, ` - `, role, `: `, version");
+    assert(streq(greet_span_text(0, 0), "{(o> ") == 1, "the title opens with the owl glyph");
+    assert_eq(greet_span_role(0, 0), ROLE_ACCENT, "...in the accent role");
+    assert(streq(greet_span_text(0, 1), persona_name()) == 1, "then the persona");
+    assert(streq(greet_span_text(0, 3), persona_role_title()) == 1, "the role, title-cased for the title position");
+    assert_eq(greet_span_role(0, 3), ROLE_ACCENT_DIM, "...accent-dim");
+    assert(streq(greet_span_text(0, 5), thoth_version()) == 1, "the version closes the title");
+    assert_eq(greet_span_role(0, 5), ROLE_MUTED, "...muted");
+    assert_eq(greet_row_spans(1), 0, "row 1 is the open line (a row with no spans)");
+    assert(streq(greet_span_text(2, 0), "Status: ") == 1, "row 2 is the status row");
+    assert_eq(greet_span_role(2, 0), ROLE_FAINT, "the `Status: ` label is faint");
+    # the honesty rules (0.26.0): READY only when a CONFIGURED gateway answered — whichever state this test
+    # process is in, `up` must be reported against it, never off the localhost default
+    if (config_hoosh_configured() == 1) {
+        assert(streq(greet_span_text(2, 1), "READY") == 1, "a configured gateway that answered -> READY");
+        assert_eq(greet_span_role(2, 1), ROLE_GREEN, "...green");
+        greet_build(0);
+        assert(streq(greet_span_text(2, 1), "hoosh unreachable") == 1, "a configured gateway that did not answer -> unreachable");
+        assert_eq(greet_span_role(2, 1), ROLE_RED, "...red");
+        assert(streq(greet_span_text(2, 3), config_hoosh_url()) == 1, "...naming the url");
+        var _mr = 3;
+        assert(streq(greet_span_text(_mr, 0), "model ") == 1, "a configured gateway -> the model row follows");
+        assert(streq(greet_span_text(_mr, 1), _hoosh_model()) == 1, "...with the model in play");
+    } else {
+        assert(streq(greet_span_text(2, 1), "READY") == 0, "no configured gateway -> never READY, even when the default answered");
+        assert_eq(greet_span_role(2, 1), ROLE_RED, "...the status is red");
+        assert_eq(_tg_row_has(2, "  [default "), 1, "...but the reachable default is NOTED");
+        greet_build(0);
+        assert_eq(_tg_row_has(2, "  [default "), 0, "no answer -> no `[default … is reachable]` note");
+        # no model row without a gateway: the row after the status is the config row or nothing
+        var _nr = greet_rows();
+        var _r = 3;
+        while (_r < _nr) { assert(streq(greet_span_text(_r, 0), "model ") == 0, "no gateway -> no model row"); _r = _r + 1; }
+    }
+    var _cfg_rows = 0;
+    var _cr = 3;
+    while (_cr < greet_rows()) { if (streq(greet_span_text(_cr, 0), "config ") == 1) { _cfg_rows = _cfg_rows + 1; } _cr = _cr + 1; }
+    assert_eq(_cfg_rows, config_parse_ok(), "exactly one config row when a config was read, none otherwise");
+    # the store OWNS its bytes: a span's text is a copy, not the producer's pointer
+    assert(greet_span_text(0, 5) != thoth_version(), "the version span is a COPY of thoth_version() (the store owns its bytes)");
+
+    # --- the layout: art choice by columns AND rows --------------------------------------------------------
+    greet_layout(100, 35);
+    assert_eq(greet_art_w(), 56, "100 cols x 35 rows -> the 56-col ibis (its 31 rows fit; 28 content cols are left)");
+    assert_eq(greet_art_rows(), splash_rows(56), "...with its row count");
+    assert_eq(greet_box_x(), 58, "the box starts after the art + the 2-col gap");
+    assert(greet_inner() <= (100 - 56 - 2 - 4), "the box's inner width fits beside the art");
+    assert_eq(greet_total(), 31, "the block is as tall as its taller part (the art)");
+    assert_eq(greet_art_y(), 0, "the art is the taller part -> it starts at the top");
+    assert_eq(greet_box_y(), (31 - greet_box_rows()) / 2, "the box is centred on the art");
+    greet_layout(80, 20);
+    assert_eq(greet_art_w(), 32, "80 x 20 -> the 32-col ibis (18 rows) — 40 cols would need 22 rows");
+    greet_layout(80, 40);
+    assert_eq(greet_art_w(), 40, "80 x 40 -> 40 cols: 48 would leave the box only 22 content cols");
+    greet_layout(60, 40);
+    assert_eq(greet_art_w(), 0, "60 cols -> no art: even 32 + gap + 28 + frame is 66");
+    assert_eq(greet_box_x(), 0, "...so the box starts at the first column");
+    assert(greet_inner() <= 56, "...and its inner width is what the grid allows");
+    assert_eq(greet_total(), greet_box_rows(), "...and the block is the box");
+    greet_layout(200, 10);
+    assert_eq(greet_art_w(), 0, "10 rows -> no art (the smallest ibis is 18 rows): never a clipped ibis");
+    greet_layout(24, 40);
+    assert_eq(greet_inner(), 20, "a 24-col grid -> a 20-col box interior (the frame is 4)");
+
+    # --- the wrap + the piece walker: every physical row within the inner width, bytes reproduced exactly ----
+    var _ref[1024];
+    var _got[1024];
+    var _r2 = 0;
+    while (_r2 < greet_rows()) {
+        var _rl = _tg_row_text(_r2, &_ref, 1024);
+        var _gl = _tg_pieces_text(_r2, &_got, 1024);
+        assert(_gl >= 0, "every physical row of a wrapped row stays within the inner width");
+        assert_eq(_gl, _rl, "the pieces of a row carry exactly the row's bytes (nothing lost or doubled at a wrap)");
+        assert_eq(memeq(&_ref, &_got, _rl), 1, "...in order");
+        _r2 = _r2 + 1;
+    }
+    # a word wrap: the title (34 cols) at a 20-col interior breaks after a space, so no physical row opens mid-word
+    greet_seg_begin(0, 1);
+    assert_eq(greet_piece_next(), 1, "the title's second physical row has a piece");
+    assert(load8(greet_piece_ptr()) != 32, "a wrapped row never opens with the space it broke at");
+    if (streq(persona_name(), "Thoth") == 1) {
+        # `{(o> Thoth - The Librarian: <ver>` at 20 columns: the word that overflows is `Librarian:` (cols 17..26), so a
+        # WORD wrap opens row 2 on it; a char wrap would have opened on `rarian`
+        assert_eq(memeq(greet_piece_ptr(), "Librarian", 9), 1, "the break falls before the overflowing word, not inside it");
+        assert_eq(greet_piece_len(), 9, "...and the piece is that word's slice of the role span");
+    }
+    assert(greet_phys_locate(0) == 1, "physical content row 0 exists");
+    assert_eq(greet_loc_r(), 0, "...and is the title's first row");
+    assert_eq(greet_loc_s(), 0, "...segment 0");
+    assert(greet_phys_locate(greet_box_rows() - 2) == 0, "past the last content row -> 0");
+
+    # --- the TUI leaf: one captured line per physical row, every line exactly as wide as the layout says ----
+    feed_init();
+    out_mode_set(OUT_RING);
+    tui_greeting_emit(100, 35);
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), greet_total(), "tui_greeting_emit seeds exactly greet_total() feed lines");
+    var _li = 0;
+    var _wide = 0;
+    while (_li < feed_count()) {
+        if (feed_vis(_li) > 100) { _wide = _wide + 1; }
+        var _bi = _li - greet_box_y();
+        if ((_bi >= 0) && (_bi < greet_box_rows())) {
+            assert_eq(feed_vis(_li), 58 + greet_inner() + 4, "a box row is art + gap + frame + interior wide, exactly");
+        } else {
+            assert_eq(feed_vis(_li), 58, "an art-only row is art + gap wide (padded)");
+        }
+        _li = _li + 1;
+    }
+    assert_eq(_wide, 0, "no greeting line is wider than the feed (nothing can soft-wrap under the block)");
+    var _top = feed_line_ptr(greet_box_y());
+    var _tn = feed_line_len(greet_box_y());
+    assert_eq(_t_count_sub(_top, _tn, "┌", 3), 1, "the box's top border opens with ┌");
+    assert_eq(_t_count_sub(_top, _tn, "┐", 3), 1, "...and closes with ┐");
+    var _tl = feed_line_ptr(greet_box_y() + 1);
+    var _tln = feed_line_len(greet_box_y() + 1);
+    assert_eq(_t_count_sub(_tl, _tln, "│ {(o> ", 8), 1, "the title row is the first content row, behind `│ `");
+    assert_eq(_t_count_sub(_tl, _tln, thoth_version(), strlen(thoth_version())), 1, "...carrying the version");
+    var _ol = feed_line_ptr(greet_box_y() + 2);
+    var _oln = feed_line_len(greet_box_y() + 2);
+    assert_eq(_t_count_sub(_ol, _oln, "│", 3), 2, "the open row is an empty framed row");
+    var _bot = feed_line_ptr(greet_box_y() + greet_box_rows() - 1);
+    var _botn = feed_line_len(greet_box_y() + greet_box_rows() - 1);
+    assert_eq(_t_count_sub(_bot, _botn, "└", 3), 1, "the bottom border");
+    var _a0 = feed_line_ptr(0);
+    assert(load8(_a0) < 128, "row 0 is an art row (the art is the taller block) — a ramp byte or a space, not a frame glyph");
+    # the art's bytes are the generated table's, verbatim (PT_PLAIN: no escapes to strip)
+    var _row0 = splash_row(56, 0);
+    assert_eq(memeq(_a0, _row0, strlen(_row0)), 1, "art row 0 reproduces the splash table's row 0");
+    # no art: the box alone from column 0
+    feed_init();
+    out_mode_set(OUT_RING);
+    tui_greeting_emit(40, 10);
+    out_mode_set(OUT_FD1);
+    assert_eq(greet_art_w(), 0, "40 x 10 -> no art");
+    assert_eq(feed_count(), greet_box_rows(), "...the block is the box");
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "┌", 3), 1, "...opening with the top border in column 0");
+    assert_eq(feed_vis(0), 40, "...spanning the whole 40-col grid (inner 36 + frame 4)");
+    ui_force(_t0, _d0);
+    return 0;
+}

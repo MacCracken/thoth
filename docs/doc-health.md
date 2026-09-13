@@ -6,6 +6,12 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.3** (2026-09-13, not a full sweep): the greeting block (the ibis splash beside the framed status
+> box) updated `CHANGELOG.md`, `docs/development/state.md` (version block, the **Presentation ladder** bullet, **Tests**
+> counts, the **Targets** header), `docs/guides/getting-started.md` (source layout: `src/greet.cyr`, the generated
+> `src/splash.cyr` + `scripts/gen-splash.sh`), `README.md` (stamp) and this file. The roadmap is untouched (nothing
+> forward-facing changed).
+>
 > **Touched at 0.45.2** (2026-09-12, not a full sweep): the brief audit updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block, **Tests**, the **Targets** header and rows, the Targets prose's closed
 > blockers, **Next**), `docs/development/roadmap.md` (gate 1's warning list, gate 2's hoosh version, a gate 3 note

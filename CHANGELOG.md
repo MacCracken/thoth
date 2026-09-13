@@ -2,6 +2,70 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.45.3] - 2026-09-13
+
+**The greeting is a block: the ibis beside a framed status box.** thoth now opens on its mark — the Thoth ibis
+under the sun disk from `thoth_v1.tiff`, rendered as coloured ASCII density art — with a framed box beside it:
+`{(o> Thoth - The Librarian: 0.45.3`, an open row, then the hoosh status and the config notes; `type a task…` is
+the first line under the block. The same model paints the TUI feed and the GUI window. The art is GENERATED
+from the TIFF by `scripts/gen-splash.sh` (ImageMagick + awk), the way `gen-version.sh` embeds `VERSION`. Suite
+**322 + 1348 + 846 + 635 + 183 + 5** (+99). Linux / aarch64 / AGNOS build with the same warning set as 0.45.2.
+
+### Added — the startup ibis, generated from the TIFF
+
+`scripts/gen-splash.sh` flattens `thoth_v1.tiff` onto white, thresholds it to ink, drops the ring around the
+mark as *the ink component with the largest bounding box* (no hand-picked id, no geometry), trims to the figure
+and box-averages it to 32 / 40 / 48 / 56 columns at a 1:2 cell with a gamma-0.6 ramp `" .:-=+*#%@"` → the
+generated `src/splash.cyr` (`splash_row(w, i)`, `splash_rows(w)`, `splash_width(k)`, `splash_tier(ch)`). The
+rows are 7-bit ASCII with no escapes and no trailing spaces, so the GUI's CP437 raster and a dumb terminal draw
+the same cells. `splash_tier` folds a ramp byte to a 0..3 shade and `greet_tier_role` maps the shades onto the
+palette's own warm ramp — accent, accent-dim, muted, faint — so the ibis is the signature amber on either theme
+and needs no colour of its own. Density won over a line-art rendering (skeleton + glyph matching against the
+kashi VGA font): the mark's parallel coils sit ~1.4 cells apart at 48 columns and only resolve past 80, while
+shaded cells read at every splash size once colour carries the tone.
+
+### Changed — the greeting: `[ibis] [box]`, then the help line
+
+`src/greet.cyr` is the greeting's view-model + layout, in the `surface.cyr` mould — facts, never bytes.
+`greet_build(up)` snapshots the box's rows as (role, text) spans into an OWNED store (copies: `/reload` re-allocs
+the config strings they quote) — the title line, the open row, then the 0.26.0 status rules verbatim (READY only
+when a CONFIGURED gateway answered; otherwise which of url / config is missing, with the reachable default as a
+NOTE), a `model <id>  (/model to change)` row when a gateway is configured, a `config <path>` row naming the
+file(s) in play, and 0.43.2's legacy-file / 0.43.5's unknown-key warnings as red rows. `up` is the probe result
+the surface measured — the model never dials. `greet_layout(cols, rows)` picks the widest art whose rows fit and
+which still leaves the box 28 content columns (none when nothing fits — the box alone, never a clipped ibis),
+sizes the box to its longest row within what is left, word-wraps the rows that overflow it, and centres the
+shorter block on the taller. `greet_seg_begin` / `greet_piece_next` walk a physical box row as pieces (role,
+ptr, bytes, columns, codepoints) so neither painter knows where a wrap fell. The box is a plain row list: a new
+line of information is `_greet_row()` + spans.
+
+TUI: `tui_greeting_emit(cols, rows)` seeds one feed line per physical row — the art row padded to its width, the
+2-column gap, the box row (`┌─┐` / `│ … │` / `└─┘`, faint) — every line exactly as wide as the layout says, so
+nothing soft-wraps under the block. The winsize is read before the seed (`_tui_read_winsize`, split out of
+`tui_relayout`) so the block fits the live grid: an 80×24 terminal gets the 32-column ibis, 100×40 the 56.
+`tui_intro_emit`, the inline Status / config emission and the tagline line are gone from the TUI greeting — the
+first two moved into the box; the tagline (the backronym) now shows only in line mode's `print_banner`, which is
+unchanged.
+
+GUI: `_gfeed_greeting` lays the same model out on the raster's 8×16 cells (less three rows for the help line),
+draws the art rows `GR_GLYPH_H` apart with one text command per shade run, the box as a `gd_push_border`, and
+its rows as pieces through `gd_push_text`'s codepoint cap — straight from the model's copy, no per-line copy.
+`gui_run` builds the model once at startup (a silent probe, which also seeds the strip's health dot) like the
+ask seam; the frame builder only lays it out. The default 960×600 window shows the 48-column ibis.
+
+Tests (+99): `tests/cases/greet.cyr` covers the model (title spans and roles, the open row, both status
+branches against whichever config state the process is in, the config row, that the store owns its bytes), the
+layout (56 at 100×35, 32 at 80×20, 40 at 80×40, none at 60 columns or at 10 rows, the box centred), the wrap
+(every physical row within the inner width; the pieces of a row reproduce its bytes exactly; the title at 20
+columns breaks BEFORE `Librarian`, not inside it) and the TUI leaf (one line per physical row, art-only rows
+padded, the frame's four corners, the box alone from column 0 when no art fits). Each was proven by breaking
+its subject: no padding (27 failures), a char wrap (2), a frame one row short (1). The GUI test asserts the
+border command, the art left of the box and the title's spans at their new origin.
+
+Verified on a real pty at 80×24 (no config), 100×40 and 130×50 (a configured, unreachable gateway: the status
+wraps at a word, the model and config rows follow), and on the GUI frame at 900×400 with the tree pane (the
+box alone) and 960×600 (the 48-column ibis).
+
 ## [0.45.2] - 2026-09-12
 
 **Brief audit and repairs: the symlink jail sees past a path's first component, process spawn works on macOS,

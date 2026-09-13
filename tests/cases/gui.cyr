@@ -246,24 +246,36 @@ fn test_gui() {
     assert_eq(_hstrip, 0, "strip hidden -> no strip background is drawn");
     assert_eq(_hlo, 1, "strip hidden -> the frame's lower rule stays, on the window's last pixel row");
     gstatus_toggle_hidden();
-    # 0.45.0: the greeting's first line is `{(o> <persona> - <Role>: <version>` — the version moved here off the strip.
+    # 0.45.3: the greeting is the TUI's BLOCK — the ibis beside a framed box whose first content row is
+    # `{(o> <persona> - <Role>: <version>` (0.45.0's line; the version lives here, off the strip). The model is
+    # built at gui_run's startup; here the test builds it (no probe -> `up` = 0) and lays it out on 800x400 px:
+    # 100 x 22 cells -> the 40-col ibis (22 rows) and a box to its right.
     session_history_clear();
+    greet_build(0);
     var _gg = gd_list_new();
-    _gfeed_greeting(_gg, 14, 10, 800);
+    _gfeed_greeting(_gg, 14, 10, 800, 400);
+    assert_eq(greet_art_w(), 40, "800x400 px -> the 40-col ibis (22 rows fit 22 cells; 48 would need 27)");
+    var _gbx = 14 + greet_box_x() * GR_GLYPH_W;                 # the box's left edge
+    var _gty = 10 + (greet_box_y() + 1) * GR_GLYPH_H;            # the title row: under the top border
     var _gowl_x = 0 - 1; var _grole_x = 0 - 1; var _gver_x = 0 - 1; var _ggi = 0;
+    var _gborder = 0; var _gart = 0;
     while (_ggi < vec_len(_gg)) {
         var _ggc = vec_get(_gg, _ggi);
-        if ((gd_kind(_ggc) == GD_TEXT) && (gd_text(_ggc) != 0) && (gd_y(_ggc) == 10)) {
+        if ((gd_kind(_ggc) == GD_TEXT) && (gd_text(_ggc) != 0) && (gd_y(_ggc) == _gty)) {
             if (streq(gd_text(_ggc), "{(o> ") == 1) { _gowl_x = gd_x(_ggc); }
             if (streq(gd_text(_ggc), persona_role_title()) == 1) { _grole_x = gd_x(_ggc); }
             if (streq(gd_text(_ggc), thoth_version()) == 1) { _gver_x = gd_x(_ggc); }
         }
+        if ((gd_kind(_ggc) == GD_TEXT) && (gd_x(_ggc) < _gbx)) { _gart = _gart + 1; }
+        if ((gd_kind(_ggc) == GD_BORDER) && (gd_x(_ggc) == _gbx) && (gd_w(_ggc) == (greet_inner() + GREET_FRAME) * GR_GLYPH_W) && (gd_h(_ggc) == greet_box_rows() * GR_GLYPH_H)) { _gborder = 1; }
         _ggi = _ggi + 1;
     }
-    assert_eq(_gowl_x, 14, "the GUI greeting opens with the owl glyph at the feed's left edge");
+    assert_eq(_gborder, 1, "the box is one border command, exactly (inner + frame) x box-rows cells");
+    assert(_gart > 0, "the ibis is drawn left of the box");
+    assert_eq(_gowl_x, _gbx + 2 * GR_GLYPH_W, "the title opens with the owl glyph behind the box's `│ ` (two cells in)");
     assert(_grole_x > _gowl_x, "the role follows the owl + persona on the same row");
-    var _gexp = 14 + (gr_text_cols("{(o> ", 0) + gr_text_cols(persona_name(), 0) + 3 + gr_text_cols(persona_role_title(), 0) + 2) * GR_GLYPH_W;
-    assert_eq(_gver_x, _gexp, "the version closes the line, exactly after `{(o> <persona> - <Role>: ` (codepoint-advanced)");
+    var _gexp = _gowl_x + (gr_text_cols("{(o> ", 0) + gr_text_cols(persona_name(), 0) + 3 + gr_text_cols(persona_role_title(), 0) + 2) * GR_GLYPH_W;
+    assert_eq(_gver_x, _gexp, "the version closes the line, exactly after `{(o> <persona> - <Role>: ` (column-advanced)");
     var _gbuf = gr_fb_new(FW, FH);
     gr_fb_clear(_gbuf, FW, FH, _gframe_bg());
     gr_raster(gframe_build(FW, FH), _gbuf, FW, FH);

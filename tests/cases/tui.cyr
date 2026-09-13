@@ -763,25 +763,26 @@ fn test_status_bar_0450() {
         var _bin_lead = _t_count_sub(&_bg, _bo, _blab, strlen(_blab));
         assert_eq(_bin_bar, _bin_lead, "the branch appears only in the lead (the trailing git field is gone)");
     }
-    # --- the greeting's first line ---
+    # --- the greeting's title line (0.45.3: the first content row of the greeting block's box) ---
     persona_role_reset();
+    greet_build(0);
     feed_init();
     out_mode_set(OUT_RING);
-    tui_intro_emit();
-    feed_flush_pending();
+    tui_greeting_emit(120, 40);
     out_mode_set(OUT_FD1);
     var _ig[640];
     var _io = 0;
-    _io = _ftree_append_cstr(&_ig, _io, 640, "{(o> ");
+    _io = _ftree_append_cstr(&_ig, _io, 640, "│ {(o> ");
     _io = _ftree_append_cstr(&_ig, _io, 640, persona_name());
     _io = _ftree_append_cstr(&_ig, _io, 640, " - ");
     _io = _ftree_append_cstr(&_ig, _io, 640, persona_role_title());
     _io = _ftree_append_cstr(&_ig, _io, 640, ": ");
     _io = _ftree_append_cstr(&_ig, _io, 640, thoth_version());
     store8(&_ig + _io, 0);
-    assert_eq(feed_count(), 1, "the greeting's first line is one captured line");
-    assert_eq(feed_line_len(0), _io, "the greeting line is exactly `{(o> <persona> - <Role>: <version>`");
-    assert_eq(memeq(feed_line_ptr(0), &_ig, _io), 1, "the greeting carries the version (moved off the status bar)");
+    var _tr = greet_box_y() + 1;                                   # the box's first content row
+    assert_eq(feed_count(), greet_total(), "the greeting block is one captured line per physical row");
+    assert_eq(_t_count_sub(feed_line_ptr(_tr), feed_line_len(_tr), &_ig, _io), 1, "the title row reads `│ {(o> <persona> - <Role>: <version>` (the version lives here, off the status bar)");
+    assert_eq(_t_count_sub(feed_line_ptr(_tr), feed_line_len(_tr), "│", 3), 2, "...framed on both sides");
     if (streq(persona_name(), "Thoth") == 1) {
         assert(streq(persona_role_title(), "The Librarian") == 1, "the default role is title-cased for the title position");
         assert(streq(persona_role(), "the Librarian") == 1, "...while persona_role() itself stays sentence-case");

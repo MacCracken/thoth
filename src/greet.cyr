@@ -1,0 +1,376 @@
+# src/greet.cyr — the startup GREETING view-model + layout (0.45.3).
+#
+# The greeting is a BLOCK: the ibis splash (src/splash.cyr, generated from thoth_v1.tiff) beside a framed box —
+# the name + version line, an open row, then the hoosh status and the config notes. It is modelled ONCE here and
+# painted by two leaves on the same cell grid: tui_greeting_emit (src/tui.cyr, one captured feed line per
+# physical row) and _gfeed_greeting (src/gui/gfeed.cyr, draw commands). Like src/surface.cyr this file holds
+# FACTS — (role, text) spans and geometry — never bytes for a sink: it never emits and never dials.
+#
+#   greet_build(up)        snapshot the box's logical rows as spans into an OWNED store. Copies, not pointers:
+#                          /reload re-allocs the config strings the rows quote (the 0.37.0 pattern). `up` is the
+#                          hoosh probe result (1 = a configured gateway answered) — the probe is I/O the surface
+#                          does once at startup, so the 0.26.0 honesty rules (READY only when a CONFIGURED
+#                          gateway answers; otherwise say which of url / config is missing) live here, applied to
+#                          a result the caller measured.
+#   greet_layout(cols, rows)  pure arithmetic over the store + the splash table: the widest art whose rows fit
+#                          `rows` and which still leaves the box GREET_INNER_MIN content columns; the box's inner
+#                          width (its longest row, capped by what is left); the box's PHYSICAL rows (a logical row
+#                          word-wraps at the inner width); and the vertical offsets that centre the shorter block
+#                          on the taller. No art at all when none fits — the box alone, never a clipped ibis.
+#   greet_seg_begin / greet_piece_next  walk one physical box row as PIECES (role, ptr, bytes, cols, codepoints)
+#                          so a painter draws it without knowing where a wrap fell — the TUI emits the bytes, the
+#                          GUI pushes the codepoints.
+#
+# The box is expected to grow (more rows later): a row is just `_greet_row()` + spans, and everything below
+# is row-count agnostic.
+
+var GREET_ROWS_CAP = 24;       # logical rows
+var GREET_SPANS_CAP = 128;     # spans, all rows
+var GREET_TEXT_CAP = 4096;     # bytes of copied span text (each span NUL-terminated)
+var GREET_SEGS_CAP = 8;        # physical rows one logical row may wrap into (the tail is clipped past that)
+var GREET_GAP = 2;             # columns between the art and the box
+var GREET_INNER_MIN = 28;      # beside an art the box keeps at least this many content columns
+var GREET_INNER_FLOOR = 8;     # the absolute floor (no art) — below it rows are clipped, the frame still closes
+var GREET_FRAME = 4;           # the frame's columns: `│ ` + content + ` │`
+
+var _greet_text = 0;      # alloc(GREET_TEXT_CAP)
+var _greet_tlen = 0;
+var _greet_srole = 0;     # alloc(GREET_SPANS_CAP*8): role per span
+var _greet_soff = 0;      # alloc(GREET_SPANS_CAP*8): byte offset of the span's NUL-terminated copy
+var _greet_rfirst = 0;    # alloc(GREET_ROWS_CAP*8): first span index of a row
+var _greet_rn = 0;        # alloc(GREET_ROWS_CAP*8): span count of a row (0 = an open row)
+var _greet_segs = 0;      # alloc(GREET_ROWS_CAP*GREET_SEGS_CAP*8): per row, the start COLUMN of each physical row
+var _greet_segn = 0;      # alloc(GREET_ROWS_CAP*8): physical rows per logical row (>= 1 once laid out)
+var _greet_rows = 0;
+var _greet_spans = 0;
+var _greet_built = 0;
+# the layout (greet_layout) — declared here, ahead of every reader
+var _gl_cols = 0; var _gl_rows = 0;                 # the grid the layout was computed for (0 = none yet)
+var _gl_art_w = 0; var _gl_art_rows = 0; var _gl_art_y = 0;
+var _gl_inner = 0; var _gl_box_rows = 0; var _gl_box_y = 0;
+var _gl_total = 0;
+var _gl_loc_r = 0; var _gl_loc_s = 0;               # greet_phys_locate's answer
+# the piece walker (greet_seg_begin / greet_piece_next)
+var _gp_r = 0; var _gp_k = 0; var _gp_col = 0; var _gp_c0 = 0; var _gp_c1 = 0;
+var _gp_role = 0; var _gp_ptr = 0; var _gp_len = 0; var _gp_cols = 0; var _gp_cp = 0;
+
+fn _greet_ensure() {
+    if (_greet_text != 0) { return 0; }
+    _greet_text = alloc(GREET_TEXT_CAP);
+    _greet_srole = alloc(GREET_SPANS_CAP * 8);
+    _greet_soff = alloc(GREET_SPANS_CAP * 8);
+    _greet_rfirst = alloc(GREET_ROWS_CAP * 8);
+    _greet_rn = alloc(GREET_ROWS_CAP * 8);
+    _greet_segs = alloc(GREET_ROWS_CAP * GREET_SEGS_CAP * 8);
+    _greet_segn = alloc(GREET_ROWS_CAP * 8);
+    return 0;
+}
+
+# _greet_row: open a new logical row (empty until spans are added; an empty row IS a row — the open line).
+fn _greet_row() {
+    if (_greet_rows >= GREET_ROWS_CAP) { return 0; }
+    store64(_greet_rfirst + _greet_rows * 8, _greet_spans);
+    store64(_greet_rn + _greet_rows * 8, 0);
+    _greet_rows = _greet_rows + 1;
+    return 0;
+}
+
+# _greet_span_n: append (role, n bytes at ptr) to the current row, COPIED into the store. A span that would
+# overflow the store (or the span table) is dropped whole — never truncated mid-glyph.
+fn _greet_span_n(role, ptr, n) {
+    if (ptr == 0) { return 0; }
+    if (_greet_rows == 0) { return 0; }
+    if (_greet_spans >= GREET_SPANS_CAP) { return 0; }
+    if ((_greet_tlen + n + 1) > GREET_TEXT_CAP) { return 0; }
+    var dst = _greet_text + _greet_tlen;
+    var i = 0;
+    while (i < n) { store8(dst + i, load8(ptr + i)); i = i + 1; }
+    store8(dst + n, 0);
+    store64(_greet_srole + _greet_spans * 8, role);
+    store64(_greet_soff + _greet_spans * 8, _greet_tlen);
+    _greet_tlen = _greet_tlen + n + 1;
+    _greet_spans = _greet_spans + 1;
+    var r = _greet_rows - 1;
+    store64(_greet_rn + r * 8, load64(_greet_rn + r * 8) + 1);
+    return 0;
+}
+fn _greet_span(role, s) { if (s == 0) { return 0; } return _greet_span_n(role, s, strlen(s)); }
+fn _greet_span_int(role, n) {
+    var b[32];
+    var len = fmt_int_buf(n, &b);
+    return _greet_span_n(role, &b, len);
+}
+
+# --- the model --------------------------------------------------------------------------------------------
+fn greet_built() { return _greet_built; }
+fn greet_rows() { return _greet_rows; }
+fn greet_row_spans(r) { if ((r < 0) || (r >= _greet_rows)) { return 0; } return load64(_greet_rn + r * 8); }
+fn _greet_span_index(r, k) { return load64(_greet_rfirst + r * 8) + k; }
+fn greet_span_role(r, k) {
+    if ((k < 0) || (k >= greet_row_spans(r))) { return 0 - 1; }
+    return load64(_greet_srole + _greet_span_index(r, k) * 8);
+}
+fn greet_span_text(r, k) {
+    if ((k < 0) || (k >= greet_row_spans(r))) { return 0; }
+    return _greet_text + load64(_greet_soff + _greet_span_index(r, k) * 8);
+}
+
+# greet_tier_role: the colour role for a splash shade (splash_tier: 0 = densest .. 3 = faintest). The art is
+# the signature amber, shaded down the palette's own warm ramp — accent, accent-dim, muted, faint.
+fn greet_tier_role(t) {
+    if (t == 0) { return ROLE_ACCENT; }
+    if (t == 1) { return ROLE_ACCENT_DIM; }
+    if (t == 2) { return ROLE_MUTED; }
+    return ROLE_FAINT;
+}
+
+# greet_build: (re)build the box rows from the persona, the version and the config state, with `up` the
+# caller's hoosh probe result. The status texts are 0.26.0's, verbatim (they used to be emitted inline by the
+# TUI greeting): READY only when a CONFIGURED gateway actually answers — never off the silent localhost default
+# when no config was found, because that masked a config that never loaded. The `[default … is reachable]`
+# note stays a NOTE. The model row appears only when a gateway is configured (matching the placeholder's Ctrl-P
+# hint); the config row names the file(s) in play; the red rows are 0.43.2/0.43.3/0.43.5's warnings.
+fn greet_build(up) {
+    _greet_ensure();
+    _greet_rows = 0; _greet_spans = 0; _greet_tlen = 0;
+    # the name + version line — `{(o> <persona> - <Role>: <version>` (0.45.0's first greeting line)
+    _greet_row();
+    _greet_span(ROLE_ACCENT, "{(o> ");
+    _greet_span(ROLE_ACCENT, persona_name());
+    _greet_span(ROLE_FAINT, " - ");
+    _greet_span(ROLE_ACCENT_DIM, persona_role_title());
+    _greet_span(ROLE_FAINT, ": ");
+    _greet_span(ROLE_MUTED, thoth_version());
+    _greet_row();                                   # the open line
+    # the hoosh status
+    _greet_row();
+    _greet_span(ROLE_FAINT, "Status: ");
+    if (config_hoosh_configured() == 1) {
+        if (up == 1) { _greet_span(ROLE_GREEN, "READY"); }
+        else {
+            _greet_span(ROLE_RED, "hoosh unreachable");
+            _greet_span(ROLE_FAINT, " — "); _greet_span(ROLE_FG, config_hoosh_url()); _greet_span(ROLE_FAINT, " (is the gateway up?)");
+        }
+    } elif (config_parse_ok() == 1) {
+        _greet_span(ROLE_RED, "hoosh absent");
+        _greet_span(ROLE_FAINT, " — no [hoosh].url in "); _greet_span(ROLE_FG, config_path());
+        if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
+    } else {
+        _greet_span(ROLE_RED, "no config");
+        _greet_span(ROLE_FAINT, " — no "); _greet_span(ROLE_FG, config_path()); _greet_span(ROLE_FAINT, " found (add one, or ~/.thoth/config.cyml)");
+        if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
+    }
+    # the model in play (session override, else the config default, else hoosh's own routing)
+    if (config_hoosh_configured() == 1) {
+        _greet_row();
+        _greet_span(ROLE_FAINT, "model "); _greet_span(ROLE_ACCENT, _hoosh_model()); _greet_span(ROLE_FAINT, "  (/model to change)");
+    }
+    # the config file(s) in play — both layers when both loaded (0.43.3: a value from the global is not a mystery)
+    if (config_parse_ok() == 1) {
+        _greet_row();
+        _greet_span(ROLE_FAINT, "config "); _greet_span(ROLE_FG, config_path());
+        if (config_global_path() != 0) { if (config_local_path() != 0) {
+            _greet_span(ROLE_FAINT, " + "); _greet_span(ROLE_FG, config_global_path()); _greet_span(ROLE_FAINT, " (local wins per key; /state shows both)");
+        } }
+    }
+    if (config_source() == 3) {                     # 0.43.2: a session on the LEGACY ./thoth.cyml says so
+        _greet_row();
+        _greet_span(ROLE_RED, "config: legacy ./thoth.cyml"); _greet_span(ROLE_FAINT, " — move it to .thoth/config.cyml (back-compat fallback)");
+    }
+    if (config_unknown_count() > 0) {              # 0.43.5: a mistyped key is otherwise indistinguishable from an unwritten line
+        _greet_row();
+        _greet_span(ROLE_RED, "config: "); _greet_span_int(ROLE_RED, config_unknown_count()); _greet_span(ROLE_RED, " unrecognised key(s)");
+        _greet_span(ROLE_FAINT, " — ignored. /state names them.");
+    }
+    _greet_built = 1;
+    _gl_cols = 0;                                   # any previous layout is stale
+    return 0;
+}
+
+# --- the layout ------------------------------------------------------------------------------------------
+
+fn greet_art_w() { return _gl_art_w; }
+fn greet_art_rows() { return _gl_art_rows; }
+fn greet_art_y() { return _gl_art_y; }
+fn greet_inner() { return _gl_inner; }
+fn greet_box_rows() { return _gl_box_rows; }
+fn greet_box_y() { return _gl_box_y; }
+fn greet_total() { return _gl_total; }
+fn greet_box_x() { if (_gl_art_w == 0) { return 0; } return _gl_art_w + GREET_GAP; }   # the box's first column
+fn greet_row_segs(r) { if ((r < 0) || (r >= _greet_rows)) { return 0; } return load64(_greet_segn + r * 8); }   # physical rows of logical row r (after greet_layout)
+
+# greet_row_cols: the visible columns of logical row r — the sum of its spans' glyph widths (feed.cyr's scanner:
+# a wide glyph is 2, a combining mark 0).
+fn greet_row_cols(r) {
+    var cols = 0;
+    var k = 0;
+    var n = greet_row_spans(r);
+    while (k < n) {
+        var t = greet_span_text(r, k);
+        var len = strlen(t);
+        var i = 0;
+        while (i < len) {
+            var gl = _feed_glyph_len(t, i, len);
+            cols = cols + feed_glyph_cols(t, i, gl);
+            i = i + gl;
+        }
+        k = k + 1;
+    }
+    return cols;
+}
+
+# _greet_wrap_row: word-wrap logical row r at `inner` columns into physical rows; records each physical row's
+# start column in _greet_segs[r] and returns the count. Breaks after the last space that fits, else hard at
+# the column (a word longer than the row). Past GREET_SEGS_CAP rows the rest of the row is clipped by the
+# piece walker (its window closes at the inner width).
+fn _greet_wrap_row(r, inner) {
+    var base = _greet_segs + r * GREET_SEGS_CAP * 8;
+    store64(base, 0);
+    var n = 1;
+    var line_start = 0;
+    var last_sp = 0 - 1;                            # column of the last space seen on this physical row
+    var col = 0;
+    var k = 0;
+    var ns = greet_row_spans(r);
+    while (k < ns) {
+        var t = greet_span_text(r, k);
+        var len = strlen(t);
+        var i = 0;
+        while (i < len) {
+            var gl = _feed_glyph_len(t, i, len);
+            var gw = feed_glyph_cols(t, i, gl);
+            if (((col + gw) - line_start) > inner) {
+                if (n < GREET_SEGS_CAP) {
+                    var brk = col;
+                    if (last_sp > line_start) { brk = last_sp + 1; }
+                    if (brk <= line_start) { brk = col; }
+                    if (brk > line_start) {
+                        store64(base + n * 8, brk);
+                        n = n + 1;
+                        line_start = brk;
+                        last_sp = 0 - 1;
+                    }
+                }
+            }
+            if ((gl == 1) && (load8(t + i) == 32)) { last_sp = col; }
+            col = col + gw;
+            i = i + gl;
+        }
+        k = k + 1;
+    }
+    store64(_greet_segn + r * 8, n);
+    return n;
+}
+
+# greet_layout: lay the block out on a cols x rows cell grid (rows = what the caller can show under the
+# greeting's top; the caller reserves its own lines below the block). Art: the widest of the splash table's
+# widths whose rows fit and which leaves the box GREET_INNER_MIN + frame columns; none when nothing fits.
+# Box: inner = its longest row, capped by the columns left beside the art (floored at GREET_INNER_FLOOR).
+# The shorter block is centred on the taller.
+fn greet_layout(cols, rows) {
+    _greet_ensure();
+    _gl_cols = cols; _gl_rows = rows;
+    var natural = 0;
+    var r = 0;
+    while (r < _greet_rows) {
+        var c = greet_row_cols(r);
+        if (c > natural) { natural = c; }
+        r = r + 1;
+    }
+    if (natural < GREET_INNER_FLOOR) { natural = GREET_INNER_FLOOR; }
+    _gl_art_w = 0; _gl_art_rows = 0;
+    var k = splash_widths() - 1;
+    while ((k >= 0) && (_gl_art_w == 0)) {
+        var w = splash_width(k);
+        var need = w + GREET_GAP + GREET_INNER_MIN + GREET_FRAME;
+        if ((need <= cols) && (splash_rows(w) <= rows)) { _gl_art_w = w; _gl_art_rows = splash_rows(w); }
+        k = k - 1;
+    }
+    var avail = cols - GREET_FRAME;
+    if (_gl_art_w > 0) { avail = avail - _gl_art_w - GREET_GAP; }
+    _gl_inner = natural;
+    if (_gl_inner > avail) { _gl_inner = avail; }
+    if (_gl_inner < GREET_INNER_FLOOR) { _gl_inner = GREET_INNER_FLOOR; }
+    _gl_box_rows = 2;
+    r = 0;
+    while (r < _greet_rows) { _gl_box_rows = _gl_box_rows + _greet_wrap_row(r, _gl_inner); r = r + 1; }
+    _gl_total = _gl_box_rows;
+    if (_gl_art_rows > _gl_total) { _gl_total = _gl_art_rows; }
+    _gl_art_y = (_gl_total - _gl_art_rows) / 2;
+    _gl_box_y = (_gl_total - _gl_box_rows) / 2;
+    return 0;
+}
+
+# greet_phys_locate: map physical CONTENT row p (0-based, the row under the top border) to its logical row +
+# segment (greet_loc_r / greet_loc_s). 1 when p is a content row, 0 past the end.
+fn greet_loc_r() { return _gl_loc_r; }
+fn greet_loc_s() { return _gl_loc_s; }
+fn greet_phys_locate(p) {
+    if (p < 0) { return 0; }
+    var r = 0;
+    while (r < _greet_rows) {
+        var n = load64(_greet_segn + r * 8);
+        if (p < n) { _gl_loc_r = r; _gl_loc_s = p; return 1; }
+        p = p - n;
+        r = r + 1;
+    }
+    return 0;
+}
+
+# --- the piece walker ------------------------------------------------------------------------------------
+# greet_seg_begin(r, s) then greet_piece_next() until it returns 0: each piece is one span's slice that falls in
+# physical row s of logical row r — (role, ptr, bytes, cols, codepoints). ptr points into the store's NUL-
+# terminated copy, so a GUI painter can hand (ptr, codepoints) to gd_push_text unchanged.
+fn greet_piece_role() { return _gp_role; }
+fn greet_piece_ptr() { return _gp_ptr; }
+fn greet_piece_len() { return _gp_len; }
+fn greet_piece_cols() { return _gp_cols; }
+fn greet_piece_cp() { return _gp_cp; }
+
+fn greet_seg_begin(r, s) {
+    _gp_r = r; _gp_k = 0; _gp_col = 0;
+    var base = _greet_segs + r * GREET_SEGS_CAP * 8;
+    var n = load64(_greet_segn + r * 8);
+    _gp_c0 = 0;
+    if ((s >= 0) && (s < n)) { _gp_c0 = load64(base + s * 8); }
+    _gp_c1 = _gp_c0 + _gl_inner;                    # the window closes at the inner width even on the last row
+    if ((s + 1) < n) {
+        var nx = load64(base + (s + 1) * 8);
+        if (nx < _gp_c1) { _gp_c1 = nx; }
+    }
+    return 0;
+}
+
+fn greet_piece_next() {
+    var ns = greet_row_spans(_gp_r);
+    while (_gp_k < ns) {
+        var t = greet_span_text(_gp_r, _gp_k);
+        var len = strlen(t);
+        var i = 0;
+        var col = _gp_col;
+        var sb = 0 - 1;
+        var eb = 0;
+        var pc = 0;
+        var pcp = 0;
+        while (i < len) {
+            var gl = _feed_glyph_len(t, i, len);
+            var gw = feed_glyph_cols(t, i, gl);
+            if ((col >= _gp_c0) && (col < _gp_c1)) {
+                if (sb < 0) { sb = i; }
+                eb = i + gl;
+                pc = pc + gw;
+                pcp = pcp + 1;
+            }
+            col = col + gw;
+            i = i + gl;
+        }
+        _gp_role = greet_span_role(_gp_r, _gp_k);
+        _gp_col = col;
+        _gp_k = _gp_k + 1;
+        if (sb >= 0) {
+            _gp_ptr = t + sb; _gp_len = eb - sb; _gp_cols = pc; _gp_cp = pcp;
+            return 1;
+        }
+    }
+    return 0;
+}

@@ -410,23 +410,61 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
 # _gfeed_greeting: the empty-state opening screen (no conversation yet). Honest — the app's greeting, not a
 # faked message. Returns the next y.
 #
-# 0.45.0: the first line is the TUI greeting's — `{(o> <persona> - <Role>: <version>` — drawn span by span on one
-# row. The version lives here now that the status strip leads with the repo + branch instead. The pen advances by
-# CODEPOINTS (_gstatus_txt), so a non-ASCII persona or role never drifts the spans that follow it.
-fn _gfeed_greeting(cmds, x, y, avail_px) {
-    var cy = y;
-    var pen = x;
-    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_ACCENT), "{(o> ");
-    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_ACCENT), persona_name());
-    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_FAINT), " - ");
-    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_ACCENT_DIM), persona_role_title());
-    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_FAINT), ": ");
-    _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_MUTED), thoth_version());
-    cy = cy + GFEED_LH;
-    cy = cy + GFEED_GAP;
-    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_MUTED), "a sovereign agentic coding TUI — now with a desktop window.");
-    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin.");
+# 0.45.3: the TUI's greeting BLOCK, on the raster's 8x16 cell grid — the ibis splash (src/splash.cyr) beside a
+# framed box holding `{(o> <persona> - <Role>: <version>` (0.45.0's first line), an open row, then the hoosh status
+# + config notes. src/greet.cyr models it (greet_build ran at gui_run's startup; greet_layout here, on the cells
+# that fit avail_px x avail_h less the help line below) and both front ends paint the SAME model. Art rows are
+# GR_GLYPH_H apart (the 1:2 cell the art was rendered for), one text command per shade RUN; the box is a
+# gd_push_border with its rows walked as pieces — gd_push_text's max_cp cap draws exactly the piece's codepoints
+# straight from the model's copy, so a wrapped row needs no per-line copy. Pen advance is by COLUMNS (the model's
+# glyph widths), matching the TUI leaf cell for cell.
+fn _gfeed_greeting(cmds, x, y, avail_px, avail_h) {
+    var rows = avail_h / GR_GLYPH_H - 3;                          # keep the help line (+ a gap) visible under the block
+    greet_layout(avail_px / GR_GLYPH_W, rows);
+    var aw = greet_art_w();
+    if (aw > 0) {
+        var ai = 0;
+        while (ai < greet_art_rows()) {
+            _gfeed_splash_row(cmds, x, y + (greet_art_y() + ai) * GR_GLYPH_H, aw, ai);
+            ai = ai + 1;
+        }
+    }
+    var bx = x + greet_box_x() * GR_GLYPH_W;
+    var by = y + greet_box_y() * GR_GLYPH_H;
+    if (cmds != 0) { gd_push_border(cmds, bx, by, (greet_inner() + GREET_FRAME) * GR_GLYPH_W, greet_box_rows() * GR_GLYPH_H, _ui_rgb(ROLE_FAINT)); }
+    var b = 0;
+    while (b < (greet_box_rows() - 2)) {                          # the content rows, under the top border
+        if (greet_phys_locate(b) == 1) {
+            var pen = bx + 2 * GR_GLYPH_W;
+            var py = by + (1 + b) * GR_GLYPH_H;
+            greet_seg_begin(greet_loc_r(), greet_loc_s());
+            while (greet_piece_next() == 1) {
+                if (cmds != 0) { gd_push_text(cmds, pen, py, _ui_rgb(greet_piece_role()), greet_piece_ptr(), greet_piece_cp()); }
+                pen = pen + greet_piece_cols() * GR_GLYPH_W;
+            }
+        }
+        b = b + 1;
+    }
+    var cy = y + greet_total() * GR_GLYPH_H + GFEED_GAP;
+    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin.");   # the first line under the block
     return cy;
+}
+
+# _gfeed_splash_row: art row i of width w at (x, py) — one text command per shade run (splash_tier ->
+# greet_tier_role -> the theme's rgb); spaces advance the pen and draw nothing.
+fn _gfeed_splash_row(cmds, x, py, w, i) {
+    var row = splash_row(w, i);
+    if (row == 0) { return 0; }
+    var len = strlen(row);
+    var j = 0;
+    while (j < len) {
+        var t = splash_tier(load8(row + j));
+        var k = j + 1;
+        while ((k < len) && (splash_tier(load8(row + k)) == t)) { k = k + 1; }
+        if ((t >= 0) && (cmds != 0)) { gd_push_text(cmds, x + j * GR_GLYPH_W, py, _ui_rgb(greet_tier_role(t)), row + j, k - j); }
+        j = k;
+    }
+    return 0;
 }
 
 # 0.35.2 reasoning fold: the collapse preference for the live "thinking" block (the model's chain-of-thought,
@@ -578,7 +616,7 @@ fn gfeed_build(cmds, x, y, w, h) {
     var endy = 0;
     if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0)) {
         gscroll_reset();                                         # nothing to scroll on the empty greeting
-        endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail);
+        endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail, h - GFEED_GAP);
     } else {
         var total = _gfeed_flow(0, xbase, 0, avail, n);          # measure-only pass (incl. a pending turn) -> total height
         var base = gfeed_anchor_y(total, y, h);                  # bottom-anchored start (scroll == 0)

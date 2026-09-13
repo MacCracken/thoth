@@ -146,6 +146,10 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/mdhl.cyr` — the markdown + fenced-code syntax highlighter for the reply feed and `/read`.
 - `src/ui.cyr` — the presentation surface: tier detection + the semantic color-role API (M7).
 - `src/surface.cyr` — the tier-agnostic status **view-model** (facts-not-bytes) the line/TUI/GUI renderers share.
+- `src/greet.cyr` — the startup greeting's view-model + layout (0.45.3): the ibis splash beside the framed status
+  box — owned (role, text) spans, the widest art that fits the grid, word-wrapped rows — painted by the TUI and the GUI.
+- `src/splash.cyr` — the ibis as ASCII density art at 32/40/48/56 columns, **generated** from `thoth_v1.tiff` by
+  `scripts/gen-splash.sh` (ImageMagick + awk; re-run when the TIFF changes — never edit by hand).
 - `src/feed.cyr` — the self-managed T2 feed ring + the escape-aware clip / soft-wrap (M7).
 - `src/ftree.cyr` — the togglable file-tree pane: geometry + flattened-tree model (M7).
 - `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI.

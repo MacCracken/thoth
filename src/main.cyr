@@ -101,6 +101,8 @@ include "src/diff.cyr"
 include "src/mdhl.cyr"      # markdown fenced-code-block highlighter for the reply feed (0.15.1); after diff (calls _hl_span)
 include "src/mdmodel.cyr"    # shared structural-markdown MODEL (0.36.0): pure facts-not-bytes classifier + inline spans; GUI feed leaf lowers it (later cut migrates mdhl onto it)
 include "src/surface.cyr"   # status view-model (0.28.0, Stage B; ADR-0009 realization); after its producers, before commands+tui
+include "src/splash.cyr"    # the startup ibis as ASCII density art — GENERATED from thoth_v1.tiff (scripts/gen-splash.sh)
+include "src/greet.cyr"     # the startup greeting view-model + layout (0.45.3): the splash beside the framed status box; after surface (persona/config/hoosh producers), before tui + gfeed (its two painters)
 # T3 GUI (0.29.0+): draw-command IR + kashi CPU rasterizer + view-builders. kashi (font) before graster;
 # kashi is vendored as its FREESTANDING CORE (kashi 1.0.6 `src/font_data.cyr`), NOT the generated
 # `dist/kashi.cyr` library face — the GUI wants 8x16 glyph rows, not the PSF/BDF/PCF loader surface,
