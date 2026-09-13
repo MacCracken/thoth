@@ -212,16 +212,53 @@ fn _cfg_global_path() {
     return _cfg_gpath_c;
 }
 
+# _cfg_same_bytes: 1 when the files at `a` and `b` hold identical bytes. Both are read whole, capped at
+# CFG_SAME_CAP; a file AT the cap is reported different, so a doubt can never drop a layer. Portable by
+# construction (file_read_all + memeq — no stat layout, no realpath). 0.45.3.
+var CFG_SAME_CAP = 32768;
+fn _cfg_same_bytes(a, b) {
+    if ((a == 0) || (b == 0)) { return 0; }
+    var ba = alloc(CFG_SAME_CAP);
+    var na = file_read_all(a, ba, CFG_SAME_CAP);
+    if ((na < 0) || (na >= CFG_SAME_CAP)) { return 0; }
+    var bb = alloc(CFG_SAME_CAP);
+    var nb = file_read_all(b, bb, CFG_SAME_CAP);
+    if (nb != na) { return 0; }
+    return memeq(ba, bb, na);
+}
+
+# config_path_display: `path` with a leading `$HOME/` folded to `~/` — how a message NAMES a file under the
+# user's home (the greeting's config row, 0.45.3). A fresh cstr when folded, else `path` itself; never a
+# path anything opens (display only). 0 -> 0.
+fn config_path_display(path) {
+    if (path == 0) { return 0; }
+    var home = getenv("HOME");
+    if (home == 0) { return path; }
+    var hl = strlen(home);
+    while ((hl > 1) && (load8(home + hl - 1) == 47)) { hl = hl - 1; }     # a trailing '/' on $HOME
+    if (hl < 1) { return path; }
+    if (load8(home) != 47) { return path; }
+    var pl = strlen(path);
+    if (pl <= hl) { return path; }
+    if (memeq(path, home, hl) == 0) { return path; }
+    if (load8(path + hl) != 47) { return path; }                          # `/home/xy` is not under `/home/x`
+    var out = alloc(pl - hl + 2);
+    store8(out, 126);                                                     # '~'
+    memcpy(out + 1, path + hl, pl - hl);
+    store8(out + 1 + pl - hl, 0);
+    return out;
+}
+
 # _cfg_local_path: the nearest `.thoth/config.cyml` walking UP from CWD, else the legacy `./thoth.cyml`,
 # else 0.
 #
-# ⚠ STATED LIMITATION, not a hidden one: when CWD is $HOME (or under it with no nearer config), the walk
-# can reach `~/.thoth/config.cyml` and return it as the "local" layer as well as the global. There is no
-# portable path-resolution primitive to detect that — the stdlib has no `getcwd`/`realpath` wrapper, and
-# a raw `syscall(SYS_GETCWD, ...)` is exactly the portability claim aarch64 does not honour, so inventing
-# one here would fork the floor to fix a label. It is harmless in BEHAVIOUR: layering a file over itself
-# resolves every key to the same value, so the loaded config is identical either way. The only effect is
-# that `/state` names the same path on both rows, which is odd-looking but true.
+# ⚠ When CWD is $HOME (or under it with no nearer config), the walk reaches `~/.thoth/config.cyml` itself.
+# Through 0.45.2 it returned that as the "local" layer as well as the global — harmless in BEHAVIOUR (layering
+# a file over itself resolves every key to the same value) but wrong in every message. There is still no
+# portable path-resolution primitive (no `getcwd`/`realpath` wrapper; a raw `syscall(SYS_GETCWD, ...)` is the
+# portability claim aarch64 does not honour), so 0.45.3 recognises the file by its BYTES instead — see the
+# note inside the walk. A copy of the global config placed as a project config is folded into the global
+# layer by the same test, which changes nothing it loads.
 fn _cfg_local_path() {
     if (_cfg_lpath_done == 1) { return _cfg_lpath_c; }
     _cfg_lpath_done = 1;
@@ -231,6 +268,14 @@ fn _cfg_local_path() {
     while (lvl < 40) {
         var cand = _cfg_join2(_cfg_updir(lvl, ".thoth"), "config.cyml");
         if (file_exists(cand) == 1) {
+            # 0.45.3: the limitation above, closed for the case that matters. From `~/Repos/<x>` with no nearer
+            # config the walk reached `../../.thoth/config.cyml` — the GLOBAL file — and named it as the local layer
+            # too (`config ../../.thoth/config.cyml + /home/x/.thoth/config.cyml — local wins per key`). A candidate
+            # holding the global file's exact bytes IS that file seen from below (or a copy of it, which layers to the
+            # same config — the very argument that made the double read harmless): it is not a local layer, and the
+            # walk ends here, because nothing above $HOME's own config is this project's. Identity by bytes, not by
+            # path: the floor still has no realpath/getcwd, and $PWD is display-grade (see project_root_display).
+            if (_cfg_same_bytes(cand, _cfg_global_path()) == 1) { return 0; }
             _cfg_lpath_c = cand; _cfg_lsource = 1;
             return _cfg_lpath_c;
         }

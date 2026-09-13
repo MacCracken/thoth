@@ -2751,6 +2751,35 @@ fn _lay_allow_has(pat) {
     return 0;
 }
 
+# --- CONFIG PATHS (0.45.3): the global file seen from below, and `~/…` in messages ---------------------
+# _cfg_same_bytes is what stops the walk from naming `~/.thoth/config.cyml` as a LOCAL layer when CWD is under
+# $HOME with no nearer config (`config ../../.thoth/config.cyml + /home/x/.thoth/config.cyml`): identity by
+# bytes, since the floor has no realpath. Fixtures are git-TRACKED files, so CI reads what local reads.
+fn test_config_paths() {
+    test_group("config paths: byte identity + ~ display (config.cyr, 0.45.3)");
+    assert_eq(_cfg_same_bytes("VERSION", "VERSION"), 1, "a file holds its own bytes");
+    assert_eq(_cfg_same_bytes("VERSION", "LICENSE"), 0, "two different files differ");
+    assert_eq(_cfg_same_bytes("VERSION", "tests/cases/no-such-fixture.cyml"), 0, "a missing file is never `the same` (a doubt drops no layer)");
+    assert_eq(_cfg_same_bytes("tests/cases/no-such-fixture.cyml", "VERSION"), 0, "...either way round");
+    assert_eq(_cfg_same_bytes(0, "VERSION"), 0, "a null path is not a file");
+    assert_eq(_cfg_same_bytes("VERSION", 0), 0, "...either way round");
+    assert_eq(_cfg_same_bytes("CHANGELOG.md", "CHANGELOG.md"), 0, "a file AT the read cap is reported different, not identical");
+    var _home = getenv("HOME");
+    if (_home != 0) {
+        var _hp = _cfg_join2(_home, ".thoth/config.cyml");
+        var _hd = config_path_display(_hp);
+        assert(streq(_hd, "~/.thoth/config.cyml") == 1, "a path under $HOME is shown as ~/…");
+        assert(_hd != _hp, "...as a fresh string (the real path is untouched)");
+        var _hs = alloc(strlen(_home) + 8);
+        memcpy(_hs, _home, strlen(_home)); memcpy(_hs + strlen(_home), "2/x.cyml", 9);
+        assert_eq(config_path_display(_hs), _hs, "`$HOME2/x` is not under $HOME — shown as written");
+        assert_eq(config_path_display(_home), _home, "$HOME itself is shown as written");
+    }
+    assert_eq(config_path_display(".thoth/config.cyml"), ".thoth/config.cyml", "a relative path is shown as written");
+    assert_eq(config_path_display(0), 0, "null -> null");
+    return 0;
+}
+
 fn test_config_layering() {
     test_group("config layering: local over global (config.cyr, 0.43.3)");
 

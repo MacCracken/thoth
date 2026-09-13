@@ -979,8 +979,10 @@ fn tui_greeting_emit(cols, rows) {
 # terminal clipped it first. Each half is omitted on its own when its producer has nothing (ADR-0010).
 fn tui_status_emit() {
     status_snapshot();    # 0.28.0: the shared status view-model (Stage B). Reads the git CACHE (no probe) — the paint never walks the worktree.
+    _tui_spaces(UI_TAB_COLS);   # 0.45.3: the bar starts a tab in from the edge
     var lead = 0;         # 1 once the repo/branch lead drew something, so "model" gets its two-space gutter
     if (status_present(SF_REPO) == 1) {
+        ui_emit(ROLE_ACCENT_DIM, "📁 ");   # 0.45.3: a folder before the location opened (U+1F4C1, two columns)
         ui_emit(ROLE_ACCENT_DIM, status_sval(SF_REPO));
         lead = 1;
     }
@@ -2615,7 +2617,9 @@ fn tui_loop() {
     var _up = 0;
     if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _up = 1; }   # probe + SEED the status-bar dot
     greet_build(_up);
-    tui_greeting_emit(tui_feed_width(_tui_cols, _tui_show_tree), _tui_feed_rows() - 1);   # -1: the help line below
+    tui_greeting_emit(tui_feed_width(_tui_cols, _tui_show_tree), _tui_feed_rows() - 2);   # -2: the open row + the help line below
+    oprintln("");                                                 # an open row between the block and the help line (0.45.3; a bare newline seals a blank feed row — flush alone would not)
+    _tui_spaces(greet_help_indent());                              # two tabs in
     ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");   # the first line under the block
     feed_flush_pending();
     # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`

@@ -419,7 +419,7 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
 # straight from the model's copy, so a wrapped row needs no per-line copy. Pen advance is by COLUMNS (the model's
 # glyph widths), matching the TUI leaf cell for cell.
 fn _gfeed_greeting(cmds, x, y, avail_px, avail_h) {
-    var rows = avail_h / GR_GLYPH_H - 3;                          # keep the help line (+ a gap) visible under the block
+    var rows = avail_h / GR_GLYPH_H - 3;                          # keep the open row + the gap + the help line (48 px = 3 rows) visible under the block
     greet_layout(avail_px / GR_GLYPH_W, rows);
     var aw = greet_art_w();
     if (aw > 0) {
@@ -445,8 +445,10 @@ fn _gfeed_greeting(cmds, x, y, avail_px, avail_h) {
         }
         b = b + 1;
     }
-    var cy = y + greet_total() * GR_GLYPH_H + GFEED_GAP;
-    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin.");   # the first line under the block
+    # the help line: an open row under the block, then two tabs in (0.45.3) — the first line under the block
+    var cy = y + (greet_total() + 1) * GR_GLYPH_H + GFEED_GAP;
+    var hx = x + greet_help_indent() * GR_GLYPH_W;
+    cy = _gfeed_para(cmds, hx, cy, avail_px - greet_help_indent() * GR_GLYPH_W, _ui_rgb(ROLE_FAINT), "type a task below to begin.");
     return cy;
 }
 

@@ -736,7 +736,11 @@ fn test_status_bar_0450() {
     # golden lead, built from the producers: `<repo> · <branch> +N  model <id>` (each half omitted when absent)
     var _bg[640];
     var _bo = 0;
-    if (project_dir_name() != 0) { _bo = _ftree_append_cstr(&_bg, _bo, 640, project_dir_name()); }
+    _bo = _ftree_append_cstr(&_bg, _bo, 640, "        ");                       # 0.45.3: a tab in from the edge
+    if (project_dir_name() != 0) {
+        _bo = _ftree_append_cstr(&_bg, _bo, 640, "📁 ");                        # 0.45.3: a folder before the location
+        _bo = _ftree_append_cstr(&_bg, _bo, 640, project_dir_name());
+    }
     var _blab = 0;
     if (git_present() == 1) {
         _blab = git_branch();
@@ -755,7 +759,7 @@ fn test_status_bar_0450() {
     _bo = _ftree_append_cstr(&_bg, _bo, 640, "model claude-opus-5");
     store8(&_bg + _bo, 0);
     assert(_bn >= _bo, "the bar is at least as long as its lead");
-    assert_eq(memeq(_bp, &_bg, _bo), 1, "the bar opens with `<repo> · <branch> +N  model <id>` — nothing left of the repo");
+    assert_eq(memeq(_bp, &_bg, _bo), 1, "the bar opens a tab in with `📁 <repo> · <branch> +N  model <id>` — nothing else left of the folder");
     assert_eq(_t_count_sub(_bp, _bn, "{(o>", 4), 0, "the owl/brand block is gone from the bar");
     assert_eq(_t_count_sub(_bp, _bn, thoth_version(), strlen(thoth_version())), 0, "the version is no longer on the bar");
     if (_blab != 0) {

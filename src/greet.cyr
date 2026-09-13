@@ -117,6 +117,9 @@ fn greet_span_text(r, k) {
 
 # greet_tier_role: the colour role for a splash shade (splash_tier: 0 = densest .. 3 = faintest). The art is
 # the signature amber, shaded down the palette's own warm ramp — accent, accent-dim, muted, faint.
+# greet_help_indent: the columns the help line under the block starts at — two tabs in (0.45.3).
+fn greet_help_indent() { return 2 * UI_TAB_COLS; }
+
 fn greet_tier_role(t) {
     if (t == 0) { return ROLE_ACCENT; }
     if (t == 1) { return ROLE_ACCENT_DIM; }
@@ -125,11 +128,12 @@ fn greet_tier_role(t) {
 }
 
 # greet_build: (re)build the box rows from the persona, the version and the config state, with `up` the
-# caller's hoosh probe result. The status texts are 0.26.0's, verbatim (they used to be emitted inline by the
-# TUI greeting): READY only when a CONFIGURED gateway actually answers — never off the silent localhost default
-# when no config was found, because that masked a config that never loaded. The `[default … is reachable]`
-# note stays a NOTE. The model row appears only when a gateway is configured (matching the placeholder's Ctrl-P
-# hint); the config row names the file(s) in play; the red rows are 0.43.2/0.43.3/0.43.5's warnings.
+# caller's hoosh probe result. Groups, an open row between them: the title · the stack's status (`Status:` +
+# the `hoosh @ <address>` line in the mark's colour) · the model · the config. The status rules are 0.26.0's:
+# READY only when a CONFIGURED gateway actually answers — never off the silent localhost default when no
+# config was found, because that masked a config that never loaded. The `[default … is reachable]` note stays
+# a NOTE. The model row appears only when a gateway is configured (matching the placeholder's Ctrl-P hint);
+# the config row names the file(s) in play, `~/…` under $HOME; the red rows are 0.43.2/0.43.5's warnings.
 fn greet_build(up) {
     _greet_ensure();
     _greet_rows = 0; _greet_spans = 0; _greet_tlen = 0;
@@ -142,35 +146,50 @@ fn greet_build(up) {
     _greet_span(ROLE_FAINT, ": ");
     _greet_span(ROLE_MUTED, thoth_version());
     _greet_row();                                   # the open line
-    # the hoosh status
+    # the stack: is it ready or not — `Status:` answers, and the line under it names the component at its
+    # address in the SAME colour as the mark (0.45.3): `hoosh @ <url>` green under READY, `hoosh @ <url> (not
+    # found)` red under unreachable; with no url configured the address line says what is unset and where.
     _greet_row();
     _greet_span(ROLE_FAINT, "Status: ");
     if (config_hoosh_configured() == 1) {
-        if (up == 1) { _greet_span(ROLE_GREEN, "READY"); }
-        else {
+        if (up == 1) {
+            _greet_span(ROLE_GREEN, "READY");
+            _greet_row();
+            _greet_span(ROLE_GREEN, "hoosh @ "); _greet_span(ROLE_GREEN, config_hoosh_url());
+        } else {
             _greet_span(ROLE_RED, "hoosh unreachable");
-            _greet_span(ROLE_FAINT, " — "); _greet_span(ROLE_FG, config_hoosh_url()); _greet_span(ROLE_FAINT, " (is the gateway up?)");
+            _greet_row();
+            _greet_span(ROLE_RED, "hoosh @ "); _greet_span(ROLE_RED, config_hoosh_url()); _greet_span(ROLE_RED, " (not found)");
         }
     } elif (config_parse_ok() == 1) {
         _greet_span(ROLE_RED, "hoosh absent");
-        _greet_span(ROLE_FAINT, " — no [hoosh].url in "); _greet_span(ROLE_FG, config_path());
+        _greet_row();
+        _greet_span(ROLE_RED, "hoosh @ (unset) — no [hoosh].url in "); _greet_span(ROLE_RED, config_path_display(config_path()));
         if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
     } else {
         _greet_span(ROLE_RED, "no config");
-        _greet_span(ROLE_FAINT, " — no "); _greet_span(ROLE_FG, config_path()); _greet_span(ROLE_FAINT, " found (add one, or ~/.thoth/config.cyml)");
+        _greet_row();
+        _greet_span(ROLE_RED, "hoosh @ (unset) — no "); _greet_span(ROLE_RED, config_path_display(config_path()));
+        _greet_span(ROLE_RED, " found (add one, or ~/.thoth/config.cyml)");
         if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
     }
-    # the model in play (session override, else the config default, else hoosh's own routing)
+    # the model in play (session override, else the config default, else hoosh's own routing) — its own group,
+    # an open row above it (0.45.3)
     if (config_hoosh_configured() == 1) {
+        _greet_row();
         _greet_row();
         _greet_span(ROLE_FAINT, "model "); _greet_span(ROLE_ACCENT, _hoosh_model()); _greet_span(ROLE_FAINT, "  (/model to change)");
     }
-    # the config file(s) in play — both layers when both loaded (0.43.3: a value from the global is not a mystery)
+    # the config file(s) in play — both layers when both loaded (0.43.3: a value from the global is not a mystery);
+    # paths under $HOME read `~/…` (0.45.3). Its own group, an open row above it; the red config warnings sit
+    # directly under it.
     if (config_parse_ok() == 1) {
         _greet_row();
-        _greet_span(ROLE_FAINT, "config "); _greet_span(ROLE_FG, config_path());
+        _greet_row();
+        _greet_span(ROLE_FAINT, "config "); _greet_span(ROLE_FG, config_path_display(config_path()));
         if (config_global_path() != 0) { if (config_local_path() != 0) {
-            _greet_span(ROLE_FAINT, " + "); _greet_span(ROLE_FG, config_global_path()); _greet_span(ROLE_FAINT, " (local wins per key; /state shows both)");
+            _greet_span(ROLE_FAINT, " + "); _greet_span(ROLE_FG, config_path_display(config_global_path()));
+            _greet_span(ROLE_FAINT, " (local wins per key; /state shows both)");
         } }
     }
     if (config_source() == 3) {                     # 0.43.2: a session on the LEGACY ./thoth.cyml says so

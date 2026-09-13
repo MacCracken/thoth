@@ -91,6 +91,7 @@ fn main() {
     test_role();
     test_config();
     test_config_layering();
+    test_config_paths();
     test_budget();
     test_ui_theme_config();
     test_shell_deny_union();

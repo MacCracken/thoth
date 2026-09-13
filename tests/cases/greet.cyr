@@ -71,31 +71,56 @@ fn test_greet() {
     assert_eq(greet_span_role(2, 0), ROLE_FAINT, "the `Status: ` label is faint");
     # the honesty rules (0.26.0): READY only when a CONFIGURED gateway answered — whichever state this test
     # process is in, `up` must be reported against it, never off the localhost default
+    # 0.45.3: the line under `Status:` names the component at its address, in the MARK's colour
     if (config_hoosh_configured() == 1) {
         assert(streq(greet_span_text(2, 1), "READY") == 1, "a configured gateway that answered -> READY");
         assert_eq(greet_span_role(2, 1), ROLE_GREEN, "...green");
+        assert(streq(greet_span_text(3, 0), "hoosh @ ") == 1, "...and the address line follows");
+        assert(streq(greet_span_text(3, 1), config_hoosh_url()) == 1, "...naming the url");
+        assert_eq(greet_span_role(3, 0), ROLE_GREEN, "...in the mark's green");
+        assert_eq(greet_span_role(3, 1), ROLE_GREEN, "...the url too");
+        assert_eq(greet_row_spans(3), 2, "...and nothing after the url when it answered");
         greet_build(0);
         assert(streq(greet_span_text(2, 1), "hoosh unreachable") == 1, "a configured gateway that did not answer -> unreachable");
         assert_eq(greet_span_role(2, 1), ROLE_RED, "...red");
-        assert(streq(greet_span_text(2, 3), config_hoosh_url()) == 1, "...naming the url");
-        var _mr = 3;
-        assert(streq(greet_span_text(_mr, 0), "model ") == 1, "a configured gateway -> the model row follows");
-        assert(streq(greet_span_text(_mr, 1), _hoosh_model()) == 1, "...with the model in play");
+        assert(streq(greet_span_text(3, 0), "hoosh @ ") == 1, "...the address line follows");
+        assert(streq(greet_span_text(3, 1), config_hoosh_url()) == 1, "...naming the url");
+        assert(streq(greet_span_text(3, 2), " (not found)") == 1, "...marked (not found)");
+        assert_eq(greet_span_role(3, 0), ROLE_RED, "...in the SAME red as the mark");
+        assert_eq(greet_span_role(3, 2), ROLE_RED, "...all of it");
+        assert_eq(greet_row_spans(4), 0, "an open row between the status group and the model");
+        assert(streq(greet_span_text(5, 0), "model ") == 1, "a configured gateway -> the model row follows");
+        assert(streq(greet_span_text(5, 1), _hoosh_model()) == 1, "...with the model in play");
+        if (config_parse_ok() == 1) {
+            assert_eq(greet_row_spans(6), 0, "an open row between the model and the config");
+            assert(streq(greet_span_text(7, 0), "config ") == 1, "...then the config row");
+        }
     } else {
         assert(streq(greet_span_text(2, 1), "READY") == 0, "no configured gateway -> never READY, even when the default answered");
         assert_eq(greet_span_role(2, 1), ROLE_RED, "...the status is red");
-        assert_eq(_tg_row_has(2, "  [default "), 1, "...but the reachable default is NOTED");
+        assert_eq(memeq(greet_span_text(3, 0), "hoosh @ (unset)", 15), 1, "...the address line says the url is unset");
+        assert_eq(greet_span_role(3, 0), ROLE_RED, "...in the mark's red");
+        assert_eq(_tg_row_has(3, "  [default "), 1, "...but the reachable default is NOTED, on the address line");
         greet_build(0);
-        assert_eq(_tg_row_has(2, "  [default "), 0, "no answer -> no `[default … is reachable]` note");
-        # no model row without a gateway: the row after the status is the config row or nothing
+        assert_eq(_tg_row_has(3, "  [default "), 0, "no answer -> no `[default … is reachable]` note");
+        # no model row without a gateway: the row after the status group is the config group or nothing
         var _nr = greet_rows();
-        var _r = 3;
+        var _r = 4;
         while (_r < _nr) { assert(streq(greet_span_text(_r, 0), "model ") == 0, "no gateway -> no model row"); _r = _r + 1; }
+        if (config_parse_ok() == 1) {
+            assert_eq(greet_row_spans(4), 0, "an open row between the status group and the config");
+            assert(streq(greet_span_text(5, 0), "config ") == 1, "...then the config row");
+        }
     }
     var _cfg_rows = 0;
     var _cr = 3;
     while (_cr < greet_rows()) { if (streq(greet_span_text(_cr, 0), "config ") == 1) { _cfg_rows = _cfg_rows + 1; } _cr = _cr + 1; }
     assert_eq(_cfg_rows, config_parse_ok(), "exactly one config row when a config was read, none otherwise");
+    if (config_parse_ok() == 1) {
+        var _cfr = 5;
+        if (config_hoosh_configured() == 1) { _cfr = 7; }
+        assert(streq(greet_span_text(_cfr, 1), config_path_display(config_path())) == 1, "the config row names the file with $HOME folded to ~");
+    }
     # the store OWNS its bytes: a span's text is a copy, not the producer's pointer
     assert(greet_span_text(0, 5) != thoth_version(), "the version span is a COPY of thoth_version() (the store owns its bytes)");
 
