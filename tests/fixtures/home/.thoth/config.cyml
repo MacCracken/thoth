@@ -1,0 +1,6 @@
+# tests/fixtures/home/.thoth/config.cyml — a git-TRACKED stand-in for `~/.thoth/config.cyml`.
+# tests/cases/core.cyr (test_memory_root_identity) points the walks at tests/fixtures/home/.thoth and names
+# this file as "the global config", so the walk meets the global file's exact bytes at level 0 — the
+# `~/Repos/<x>` layout, on a tree CI has. Never loaded as a config; no secrets here.
+[hoosh]
+model = "fixture-global-model"

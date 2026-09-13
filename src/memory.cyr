@@ -71,15 +71,21 @@ fn _mem_append_dir(buf, off, cap, dir, index_path) {
 fn memory_global_dir() {
     if (_mem_gdir_done == 1) { return _mem_gdir_c; }
     _mem_gdir_done = 1;
-    _mem_gdir_c = 0;
-    # When the resolved root IS $HOME/.thoth there is only one store; reporting a global layer as well
-    # would inject every fact twice and burn the budget on duplicates.
+    _mem_gdir_c = _mem_global_dir_under(getenv("HOME"));
+    return _mem_gdir_c;
+}
+# _mem_global_dir_under: `<home>/.thoth/memory` when it is a directory AND is not the store memory_dir()
+# already names, else 0. When the resolved root IS $HOME/.thoth there is only one store; reporting a
+# global layer as well would inject every fact twice and burn the budget on duplicates. 0.45.3: that is
+# so whichever way the root became home — the fallback, or the walk reaching `~/.thoth` from `~/Repos/<x>`
+# (thoth_root_is_home covers both now; it used to cover only the fallback). Split from memory_global_dir so
+# the suite can ask it about a git-tracked fixture home.
+fn _mem_global_dir_under(home) {
     if (thoth_root_is_home() == 1) { return 0; }
-    var home = getenv("HOME");
     if (home == 0) { return 0; }
     var gd = _cfg_join2(_cfg_join2(home, ".thoth"), "memory");
-    if (is_dir(str_from(gd)) == 1) { _mem_gdir_c = gd; }
-    return _mem_gdir_c;
+    if (is_dir(str_from(gd)) == 1) { return gd; }
+    return 0;
 }
 
 fn memory_index_path() {

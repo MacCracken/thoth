@@ -92,6 +92,7 @@ fn main() {
     test_config();
     test_config_layering();
     test_config_paths();
+    test_memory_root_identity();   # 0.45.3: the walk reaching ~/.thoth reads it once (fixtures: tests/fixtures/home)
     test_budget();
     test_ui_theme_config();
     test_shell_deny_union();

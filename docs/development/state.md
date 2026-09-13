@@ -19,9 +19,14 @@ starts a tab in with a folder before the location. One model, two painters: `tui
 physical row, none wider than the feed) and `_gfeed_greeting` (the 8×16 cell grid, a border command, pieces
 through `gd_push_text`'s codepoint cap). The four splash shades ride the palette's own warm ramp, so the ibis needs
 no colour of its own. Fixed alongside: the config walk reaching `~/.thoth/config.cyml` from `~/Repos/<x>` named it
-as a local layer too — recognised by its bytes now (`_cfg_same_bytes`), shown as `~/…`. Verified on a real pty at
-80×24 / 100×40 / 130×50 / a scratch `~/Repos/taar` and on GUI frames at 900×400 / 960×600.
-Suite **324 + 1361 + 846 + 640 + 183 + 5** (+117); Linux / aarch64 / AGNOS build with 0.45.2's warning set.
+as a local layer too — recognised by its bytes now (`_cfg_same_bytes`), shown as `~/…`; and the root walk reaching
+`~/.thoth` the same way returned it as the PROJECT root, so `memory_global_dir()` named `~/.thoth/memory` a second
+layer and every fact was injected twice — the walked root is now judged by the level at which the config walk met
+the global file's bytes, corroborated by the depth `$PWD` places CWD at under `$HOME` (`_thoth_root_home_verdict`;
+`$PWD` can only veto, never claim; no global config = no claim, the double read kept over a dropped layer). Verified
+on a real pty at 80×24 / 100×40 / 130×50 / a scratch `~/Repos/taar` and on GUI frames at 900×400 / 960×600; the
+memory fix on a scratch `$HOME` (`/dry`: HEAD twice, now once).
+Suite **324 + 1397 + 846 + 640 + 183 + 5** (+153); Linux / aarch64 / AGNOS build with 0.45.2's warning set.
 
 **0.45.2** — **brief audit and repairs: the symlink jail sees past a path's first component, process spawn works on
 macOS, and a hook that cannot run now denies** (2026-09-12). A read-only audit of the roadmap's open items and the
@@ -3533,7 +3538,7 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **324 + 1361 + 846 + 640 + 183 + 5 assertions across the suites as of
+`tests/thoth_render.tcyr`. **324 + 1397 + 846 + 640 + 183 + 5 assertions across the suites as of
 0.45.3 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored

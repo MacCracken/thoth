@@ -112,10 +112,16 @@ var HOOSH_URL_DEFAULT = "http://127.0.0.1:8088";
 # for "launched in another repo, couldn't find the gateway yet claimed READY".
 var _thoth_root = 0;          # resolved `.thoth/` dir (cstr), or 0 if none
 var _thoth_root_done = 0;
-# 1 when _thoth_root_resolve fell back to $HOME/.thoth rather than finding one by walking up. Lets the
-# memory layer know that "local" and "global" are the SAME directory, so it reads it once instead of
-# injecting every fact twice — the exact test the config layer has no portable primitive for.
+# 1 when the resolved root IS $HOME/.thoth — because _thoth_root_resolve fell back to it, or (0.45.3) because
+# the walk reached it from below and the evidence says so (see _thoth_root_home_verdict). Lets the memory
+# layer know that "local" and "global" are the SAME directory, so it reads it once instead of injecting
+# every fact twice.
 var _thoth_root_is_home = 0;
+var _thoth_root_lvl = 0 - 1;  # the walk level (`../` count) the root was found at; -1 for the fallback / none
+# The directory name both walks look for at each level. A test seam: pointed at a git-tracked fixture tree
+# (`tests/fixtures/home/.thoth`), level 0 of both walks lands in that tree, which is the only way to exercise
+# the walks on a known layout — there is no chdir on the floor, and the real ~/.thoth is not the suite's.
+var _cfg_walk_dir = ".thoth";
 var _cfg_path_c = 0;          # cached resolved config-file path (cstr); set only once a file is FOUND
 var _cfg_source = 0;          # 0 none · 1 <root>/config.cyml · 3 legacy ./thoth.cyml
 
@@ -157,16 +163,27 @@ fn _cfg_updir(lvl, name) {
 # file is located any more; see _cfg_local_path, which walks for the FILE. The distinction matters: a
 # `.thoth/` dir containing only `checkpoints/` (which is what running thoth from a subdirectory creates)
 # used to stop the config search dead, so thoth reported "no config" in a repo that had one.
+#
+# ⚠ The walk can reach `~/.thoth` ITSELF: from `~/Repos/<x>` with no project `.thoth/` it finds `../../.thoth`,
+# which is $HOME/.thoth seen from below. Through 0.45.2 that came back as the PROJECT root with
+# _thoth_root_is_home = 0, so memory_global_dir() reported $HOME/.thoth/memory as a second layer and every fact
+# was injected twice — the exact case the flag exists for, reached by the branch that never set it. A
+# directory has no bytes to recognise it by (the config walk's 0.45.3 fix compares FILE bytes), so the walked
+# root is judged by _thoth_root_home_verdict from the evidence there is; the fallback branch still sets the
+# flag outright. Resolved ONCE, like the root: /reload re-walks the config layers but never moves the root.
 fn _thoth_root_resolve() {
     if (_thoth_root_done == 1) { return _thoth_root; }
     _thoth_root_done = 1;
     _thoth_root = 0;
     _thoth_root_is_home = 0;
+    _thoth_root_lvl = 0 - 1;
     var lvl = 0;
     while (lvl < 40) {
-        var cand = _cfg_updir(lvl, ".thoth");
+        var cand = _cfg_updir(lvl, _cfg_walk_dir);
         if (is_dir(str_from(cand)) == 1) {
             _thoth_root = cand;
+            _thoth_root_lvl = lvl;
+            _thoth_root_is_home = _thoth_root_home_verdict(lvl, _cfg_local_global_lvl(), _cfg_pwd_home_depth());
             return _thoth_root;
         }
         lvl = lvl + 1;
@@ -179,8 +196,83 @@ fn _thoth_root_resolve() {
     return _thoth_root;
 }
 
-# thoth_root_is_home: 1 when the resolved `.thoth/` home IS $HOME/.thoth (no project one was found).
+# thoth_root_is_home: 1 when the resolved `.thoth/` home IS $HOME/.thoth — by the fallback, or by the walk
+# reaching it from below (0.45.3).
 fn thoth_root_is_home() { _thoth_root_resolve(); return _thoth_root_is_home; }
+
+# --- is the walked-up `.thoth` $HOME/.thoth? (0.45.3) ---------------------------------------------------
+#
+# The floor has no realpath/getcwd, so directory identity is INFERRED, from two signals, each honest about
+# what it proves:
+#
+#   1. THE BYTES (primary). _cfg_local_path walks the same levels for `config.cyml` and, when a candidate holds
+#      the GLOBAL file's exact bytes, records the level it found them at (_cfg_lglobal_lvl). A root found at
+#      that same level is the directory holding that file: $HOME/.thoth — or a project `.thoth/` whose config is
+#      a verbatim copy of the global. The config layer folds the copy harmlessly (same bytes, same config); the
+#      memory layer must NOT, because `<copy>/memory/` and `~/.thoth/memory/` are two different stores.
+#   2. THE SHELL'S WORD (corroboration). $PWD is display-grade — the launching shell sets it and nothing here
+#      verifies it against the real cwd (project_root_display's warning applies verbatim) — but it can COUNT: if
+#      it places CWD `n` levels under $HOME, the walk's level `n` is where $HOME/.thoth would be. When it is
+#      usable it must agree with the bytes; when it is unusable the bytes decide alone.
+#
+# What a wrong $PWD can and cannot cause. It can only ever VETO — a wrong depth, or a $PWD that says CWD is
+# outside $HOME, keeps is_home at 0, i.e. the pre-0.45.3 double read (the memory budget wasted on duplicates,
+# nothing lost). It cannot make a root home on its own: without the bytes at the same level there is no claim,
+# so a lying $PWD never drops the global memory layer by itself. The one false positive left needs BOTH a
+# byte-copied global config in a project `.thoth/` AND a $PWD placing $HOME exactly there (or a symlinked
+# layout in which `..` physically climbs somewhere $PWD does not name); that costs the global memory facts for
+# the session, never authority — memory injection is opt-in prose, and every jail decision stays lexical.
+# Without a global config file (or one at _cfg_same_bytes's cap) there are no bytes to recognise, so the
+# walked root is never called home and both layers are kept: a doubt drops no layer.
+var HOME_DEPTH_NONE = 0 - 1;      # no usable claim: $PWD or $HOME unset / not absolute
+var HOME_DEPTH_OUTSIDE = 0 - 2;   # both usable, and $PWD is not under $HOME
+
+# _cfg_home_depth: how many path components below `home` the absolute path `pwd` is — 0 when it IS `home` —
+# else HOME_DEPTH_OUTSIDE / HOME_DEPTH_NONE. PURE. Same prefix rule as config_path_display (`/home/xy` is not
+# under `/home/x`; a trailing `/` on `home` is ignored); a run of `/` counts as one separator, a trailing one
+# as none. `.` / `..` components are counted like any other — a $PWD carrying them mislabels the depth, which
+# is a veto, never a claim.
+fn _cfg_home_depth(pwd, home) {
+    if ((pwd == 0) || (home == 0)) { return HOME_DEPTH_NONE; }
+    if ((load8(pwd) != 47) || (load8(home) != 47)) { return HOME_DEPTH_NONE; }
+    var hl = strlen(home);
+    while ((hl > 0) && (load8(home + hl - 1) == 47)) { hl = hl - 1; }
+    if (strlen(pwd) < hl) { return HOME_DEPTH_OUTSIDE; }
+    if (memeq(pwd, home, hl) == 0) { return HOME_DEPTH_OUTSIDE; }
+    var p = pwd + hl;
+    if ((load8(p) != 47) && (load8(p) != 0)) { return HOME_DEPTH_OUTSIDE; }
+    var depth = 0;
+    while (load8(p) != 0) {
+        while (load8(p) == 47) { p = p + 1; }
+        if (load8(p) != 0) {
+            depth = depth + 1;
+            while ((load8(p) != 0) && (load8(p) != 47)) { p = p + 1; }
+        }
+    }
+    return depth;
+}
+
+# _cfg_pwd_home_depth: _cfg_home_depth of the launch directory as $PWD names it (project_root_display — the one
+# reader of $PWD, with its warning) under $HOME. Resolved once; the cache is the test seam.
+var _cfg_pwd_depth_c = 0;
+var _cfg_pwd_depth_done = 0;
+fn _cfg_pwd_home_depth() {
+    if (_cfg_pwd_depth_done == 1) { return _cfg_pwd_depth_c; }
+    _cfg_pwd_depth_done = 1;
+    _cfg_pwd_depth_c = _cfg_home_depth(project_root_display(), getenv("HOME"));
+    return _cfg_pwd_depth_c;
+}
+
+# _thoth_root_home_verdict: 1 when the `.thoth` the root walk found at `root_lvl` is $HOME/.thoth, given
+# `cfg_lvl` (the level the config walk found the global file's bytes at, -1 for none) and `pwd_lvl` (the
+# depth the shell places CWD at under $HOME, or HOME_DEPTH_NONE / HOME_DEPTH_OUTSIDE). PURE — the rule above.
+fn _thoth_root_home_verdict(root_lvl, cfg_lvl, pwd_lvl) {
+    if (root_lvl < 0) { return 0; }
+    if (cfg_lvl != root_lvl) { return 0; }             # no bytes at this level: no claim (covers cfg_lvl = -1)
+    if (pwd_lvl == HOME_DEPTH_NONE) { return 1; }      # nothing to check the bytes against
+    if (pwd_lvl != root_lvl) { return 0; }             # the shell puts $HOME elsewhere: a doubt keeps both layers
+    return 1;
+}
 
 # --- THE TWO CONFIG LAYERS (0.43.3) --------------------------------------------
 #
@@ -198,6 +290,10 @@ var _cfg_gpath_done = 0;
 var _cfg_lpath_c = 0;    # resolved local layer (walk-up, then legacy ./thoth.cyml), or 0 — cached
 var _cfg_lpath_done = 0;
 var _cfg_lsource = 0;    # 0 none · 1 <dir>/.thoth/config.cyml · 3 legacy ./thoth.cyml
+# 0.45.3: the walk level (`../` count) at which the local walk met a config.cyml holding the GLOBAL file's
+# bytes, or -1. The root walk reads it to tell $HOME/.thoth from a project `.thoth/` (_thoth_root_home_verdict).
+var _cfg_lglobal_lvl = 0 - 1;
+fn _cfg_local_global_lvl() { _cfg_local_path(); return _cfg_lglobal_lvl; }
 
 # _cfg_global_path: `$HOME/.thoth/config.cyml` if it exists, else 0.
 fn _cfg_global_path() {
@@ -264,9 +360,10 @@ fn _cfg_local_path() {
     _cfg_lpath_done = 1;
     _cfg_lpath_c = 0;
     _cfg_lsource = 0;
+    _cfg_lglobal_lvl = 0 - 1;
     var lvl = 0;
     while (lvl < 40) {
-        var cand = _cfg_join2(_cfg_updir(lvl, ".thoth"), "config.cyml");
+        var cand = _cfg_join2(_cfg_updir(lvl, _cfg_walk_dir), "config.cyml");
         if (file_exists(cand) == 1) {
             # 0.45.3: the limitation above, closed for the case that matters. From `~/Repos/<x>` with no nearer
             # config the walk reached `../../.thoth/config.cyml` — the GLOBAL file — and named it as the local layer
@@ -275,7 +372,8 @@ fn _cfg_local_path() {
             # same config — the very argument that made the double read harmless): it is not a local layer, and the
             # walk ends here, because nothing above $HOME's own config is this project's. Identity by bytes, not by
             # path: the floor still has no realpath/getcwd, and $PWD is display-grade (see project_root_display).
-            if (_cfg_same_bytes(cand, _cfg_global_path()) == 1) { return 0; }
+            # The LEVEL is recorded for the root walk, which has no bytes of its own to go by.
+            if (_cfg_same_bytes(cand, _cfg_global_path()) == 1) { _cfg_lglobal_lvl = lvl; return 0; }
             _cfg_lpath_c = cand; _cfg_lsource = 1;
             return _cfg_lpath_c;
         }
@@ -310,7 +408,7 @@ fn config_local_path() { return _cfg_local_path(); }
 fn config_path_recheck() {
     _cfg_path_c = 0; _cfg_source = 0;
     _cfg_gpath_done = 0; _cfg_gpath_c = 0;      # 0.43.3: BOTH layers re-resolve, or /reload sees a stale pair
-    _cfg_lpath_done = 0; _cfg_lpath_c = 0; _cfg_lsource = 0;
+    _cfg_lpath_done = 0; _cfg_lpath_c = 0; _cfg_lsource = 0; _cfg_lglobal_lvl = 0 - 1;
     return 0;
 }
 

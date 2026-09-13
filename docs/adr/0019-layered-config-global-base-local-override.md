@@ -93,6 +93,17 @@ resolves every key to the same value. The only effect is that `/state` names the
 rows. The memory layer does *not* have this problem — `_thoth_root_resolve` records which branch matched,
 so it reads a single store once instead of injecting every fact twice.
 
+> ⚠ **Both sentences above were wrong, and 0.45.3 fixed both.** The config half: the walk now recognises the
+> global file by its BYTES (`_cfg_same_bytes`), so from under `$HOME` it names `~/.thoth/config.cyml` once. The
+> memory half was the opposite of what this said: "which branch matched" only ever marked the FALLBACK branch,
+> and from `~/Repos/<x>` with no project `.thoth/` the walk branch reached `../../.thoth` — `$HOME/.thoth` — and
+> returned it as the project root, so `memory_global_dir()` reported the same store as a second layer and every
+> fact went in twice. A directory has no bytes to recognise, so the walked root is judged by the level at which
+> the config walk met the global file's bytes, corroborated by the depth `$PWD` places CWD at under `$HOME`
+> (`_thoth_root_home_verdict`, `src/config.cyr`). `$PWD` stays display-grade: it can only veto (back to the double
+> read), never claim (a dropped layer). With no global `config.cyml` there are no bytes, so the walked root is never
+> called home and the double read stays — a stated limitation, kept over a dropped layer.
+
 ## Evidence
 
 Measured against the shipped binary with a fake `HOME`, before and after:

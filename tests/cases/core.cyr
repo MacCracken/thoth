@@ -2780,6 +2780,111 @@ fn test_config_paths() {
     return 0;
 }
 
+# --- MEMORY ROOT IDENTITY (0.45.3): the walk reaching ~/.thoth from below reads it ONCE ------------------
+# From `~/Repos/<x>` with no project `.thoth/` the root walk finds `../../.thoth` — $HOME/.thoth — and used to
+# return it as the PROJECT root (is_home = 0), so memory_global_dir() reported $HOME/.thoth/memory as a second
+# layer and every fact went in twice. A directory has no bytes, so the root is judged by the level at which the
+# config walk met the global file's bytes, corroborated by the depth $PWD places CWD at under $HOME
+# (_thoth_root_home_verdict). The walks run on the tracked fixture tree tests/fixtures/home/.thoth via the
+# _cfg_walk_dir seam — there is no chdir on the floor, and the real ~/.thoth is not the suite's.
+fn _mri_reset() {
+    _cfg_lpath_done = 0; _cfg_lpath_c = 0; _cfg_lsource = 0; _cfg_lglobal_lvl = 0 - 1; _cfg_path_c = 0; _cfg_source = 0;
+    _thoth_root_done = 0; _thoth_root = 0; _thoth_root_is_home = 0; _thoth_root_lvl = 0 - 1;
+    _mem_dir_c = 0; _mem_idx_c = 0; _mem_gdir_done = 0; _mem_gdir_c = 0;
+    memory_invalidate();
+    return 0;
+}
+fn test_memory_root_identity() {
+    test_group("memory root: the walk reaching ~/.thoth reads it once (config.cyr + memory.cyr, 0.45.3)");
+
+    # --- the shell's word: how many levels under $HOME it places CWD (pure) ---
+    assert_eq(_cfg_home_depth("/home/x/Repos/taar", "/home/x"), 2, "~/Repos/taar is 2 levels under $HOME");
+    assert_eq(_cfg_home_depth("/home/x", "/home/x"), 0, "CWD = $HOME -> 0");
+    assert_eq(_cfg_home_depth("/home/x/", "/home/x/"), 0, "...trailing slashes on either side");
+    assert_eq(_cfg_home_depth("/home/x/a//b/", "/home/x"), 2, "a run of `/` is one separator, a trailing one none");
+    assert_eq(_cfg_home_depth("/home/xy/a", "/home/x"), HOME_DEPTH_OUTSIDE, "`/home/xy` is not under `/home/x`");
+    assert_eq(_cfg_home_depth("/data/a", "/home/x"), HOME_DEPTH_OUTSIDE, "a path elsewhere is outside");
+    assert_eq(_cfg_home_depth("/home", "/home/x"), HOME_DEPTH_OUTSIDE, "a parent of $HOME is outside it");
+    assert_eq(_cfg_home_depth("Repos/taar", "/home/x"), HOME_DEPTH_NONE, "a relative $PWD makes no claim");
+    assert_eq(_cfg_home_depth("/home/x/a", "home/x"), HOME_DEPTH_NONE, "a relative $HOME makes no claim");
+    assert_eq(_cfg_home_depth(0, "/home/x"), HOME_DEPTH_NONE, "no $PWD -> no claim");
+    assert_eq(_cfg_home_depth("/home/x/a", 0), HOME_DEPTH_NONE, "no $HOME -> no claim");
+
+    # --- the verdict (pure): bytes at the root's level are the claim; the shell can only veto ---
+    assert_eq(_thoth_root_home_verdict(2, 2, 2), 1, "~/Repos/taar: the global bytes at level 2, the shell agrees -> home");
+    assert_eq(_thoth_root_home_verdict(0, 0, 0), 1, "CWD = $HOME: level 0 all round -> home");
+    assert_eq(_thoth_root_home_verdict(2, 2, HOME_DEPTH_NONE), 1, "no usable $PWD: the bytes decide alone");
+    assert_eq(_thoth_root_home_verdict(0, 0 - 1, 2), 0, "a project root, no global hit -> two layers");
+    assert_eq(_thoth_root_home_verdict(2, 0 - 1, 2), 0, "no global config to recognise -> no claim (the double read, never a dropped layer)");
+    assert_eq(_thoth_root_home_verdict(1, 2, 2), 0, "a nearer `.thoth` below the global one is the project's");
+    assert_eq(_thoth_root_home_verdict(0, 0, 2), 0, "a byte-copied global config in a project `.thoth`: the shell vetoes");
+    assert_eq(_thoth_root_home_verdict(2, 2, 5), 0, "a wrong-depth $PWD vetoes -> the double read, never a dropped layer");
+    assert_eq(_thoth_root_home_verdict(2, 2, HOME_DEPTH_OUTSIDE), 0, "a $PWD outside $HOME vetoes");
+    assert_eq(_thoth_root_home_verdict(0 - 1, 0 - 1, 2), 0, "no walked root -> 0 (the fallback sets the flag itself)");
+
+    # --- end to end on the fixture tree: both walks land in tests/fixtures/home/.thoth at level 0 ---
+    var _fx_home = "tests/fixtures/home";
+    var _fx_dir = "tests/fixtures/home/.thoth";
+    var _fx_cfg = "tests/fixtures/home/.thoth/config.cyml";
+    var _fx_mem = "tests/fixtures/home/.thoth/memory";
+    var _saved_gpath = _cfg_gpath_c;
+    var _saved_gdone = _cfg_gpath_done;
+    _cfg_walk_dir = _fx_dir;
+    _cfg_gpath_c = _fx_cfg; _cfg_gpath_done = 1;                 # "the global file": the bytes the walk will meet
+    _cfg_pwd_depth_c = 0; _cfg_pwd_depth_done = 1;               # "the shell says CWD is $HOME"
+    _cfg_memory_enabled = 1;
+    _mri_reset();
+    assert_eq(_cfg_local_path(), 0, "the config walk meets the global file's bytes at level 0 -> no local layer");
+    assert_eq(_cfg_lglobal_lvl, 0, "...and records the level it met them at");
+    var _r1 = _thoth_root_resolve();
+    assert((_r1 != 0) && (streq(_r1, _fx_dir) == 1), "the root walk finds the same directory at level 0");
+    assert_eq(_thoth_root_lvl, 0, "...and records its level");
+    assert_eq(thoth_root_is_home(), 1, "...and knows it IS ~/.thoth (the walk branch, not the fallback)");
+    assert(streq(memory_dir(), _fx_mem) == 1, "memory_dir is the fixture store");
+    assert_eq(_mem_global_dir_under(_fx_home), 0, "memory_global_dir reports NO second layer for it");
+    var _p1 = memory_system_prompt();
+    assert(_p1 != 0, "the memory system message is built from the one store");
+    var _c1 = 0;
+    if (_p1 != 0) { _c1 = _t_count_sub(_p1, strlen(_p1), "FIXTURE-FACT-0453", 17); }
+    assert_eq(_c1, 1, "the fact is injected ONCE");
+
+    # the shell disagrees (CWD 2 under $HOME, the root at level 0): a byte-copied global config in a project
+    # `.thoth/` — the second layer is KEPT, and this is what 0.45.2 did for the real ~/.thoth too: every fact twice
+    _cfg_pwd_depth_c = 2; _cfg_pwd_depth_done = 1;
+    _mri_reset();
+    _thoth_root_resolve();
+    assert_eq(thoth_root_is_home(), 0, "the shell's depth disagrees with the bytes' level -> not home");
+    var _g2 = _mem_global_dir_under(_fx_home);
+    assert((_g2 != 0) && (streq(_g2, _fx_mem) == 1), "...so the global layer is reported (the same store here)");
+    _mem_gdir_c = _fx_mem; _mem_gdir_done = 1;                   # what memory_global_dir() answers under a real $HOME here
+    var _p2 = memory_system_prompt();
+    var _c2 = 0;
+    if (_p2 != 0) { _c2 = _t_count_sub(_p2, strlen(_p2), "FIXTURE-FACT-0453", 17); }
+    assert_eq(_c2, 2, "...and the fact is injected TWICE (the 0.45.2 double read)");
+
+    # no usable $PWD: the bytes decide alone
+    _cfg_pwd_depth_c = HOME_DEPTH_NONE; _cfg_pwd_depth_done = 1;
+    _mri_reset();
+    _thoth_root_resolve();
+    assert_eq(thoth_root_is_home(), 1, "no usable $PWD: the bytes at level 0 make it home");
+
+    # no global config at all: no bytes to recognise, so the walked root is never called home
+    _cfg_gpath_c = 0; _cfg_gpath_done = 1;
+    _cfg_pwd_depth_c = 0; _cfg_pwd_depth_done = 1;
+    _mri_reset();
+    _thoth_root_resolve();
+    assert_eq(_cfg_lglobal_lvl, 0 - 1, "no global config -> the walk records no global level");
+    assert_eq(thoth_root_is_home(), 0, "...and the shell's word alone never makes a root home (a doubt drops no layer)");
+
+    # restore: the real walks, every cache unresolved
+    _cfg_walk_dir = ".thoth";
+    _cfg_gpath_c = _saved_gpath; _cfg_gpath_done = _saved_gdone;
+    _cfg_pwd_depth_c = 0; _cfg_pwd_depth_done = 0;
+    _cfg_memory_enabled = 0;
+    _mri_reset();
+    return 0;
+}
+
 fn test_config_layering() {
     test_group("config layering: local over global (config.cyr, 0.43.3)");
 

@@ -12,8 +12,8 @@ is the first line under the block, two tabs in. The status bar starts a tab in f
 before the location opened. The same model paints the TUI feed and the GUI window. The art is GENERATED from
 the TIFF by `scripts/gen-splash.sh` (ImageMagick + awk), the way `gen-version.sh` embeds `VERSION`. Also fixed:
 from `~/Repos/<x>` with no project config the greeting named `~/.thoth/config.cyml` twice, as
-`../../.thoth/config.cyml + /home/x/.thoth/config.cyml`; it is `config ~/.thoth/config.cyml` now. Suite
-**324 + 1361 + 846 + 640 + 183 + 5** (+117). Linux / aarch64 / AGNOS build with the same warning set as 0.45.2.
+`../../.thoth/config.cyml + /home/x/.thoth/config.cyml`; it is `config ~/.thoth/config.cyml` now — and the memory store it reached the same way was injected twice; once now. Suite
+**324 + 1397 + 846 + 640 + 183 + 5** (+153). Linux / aarch64 / AGNOS build with the same warning set as 0.45.2.
 
 ### Added — the startup ibis, generated from the TIFF
 
@@ -82,6 +82,46 @@ bytes is that file seen from below (`_cfg_same_bytes` — `file_read_all` + `mem
 at the cap reported different, so a doubt never drops a layer), the walk ends there, and `config_path()` names
 the global. A project config that is a verbatim copy of the global folds into it by the same test, which
 changes nothing it loads. Paths under `$HOME` are shown as `~/…` (`config_path_display`, display only).
+
+### Fixed — the memory store reached by the walk was injected twice
+
+The same walk, one level up in the design: `_thoth_root_resolve` finds the nearest `.thoth` DIRECTORY and only
+sets `_thoth_root_is_home` — the flag `memory_global_dir()` reads to know that "local" and "global" are the same
+store — when it falls back to `$HOME/.thoth` after finding nothing. From `~/Repos/<x>` with no project `.thoth/`
+the walk itself reached `../../.thoth`, which IS `$HOME/.thoth`, and returned it as the PROJECT root with the flag
+clear; `memory_global_dir()` then reported `$HOME/.thoth/memory` as a second layer, and every fact went into the
+system message twice — the exact case the flag exists for, reached by the branch that never set it. A directory
+has no bytes to compare, so the walked root is judged from two honest signals (`_thoth_root_home_verdict`): the
+config walk now RECORDS the level at which it met a `config.cyml` holding the global file's bytes
+(`_cfg_lglobal_lvl`), and a root found at that same level is the directory holding that file; `$PWD` — the
+launching shell's word, display-grade, never verified — is asked only how many levels under `$HOME` it places CWD
+(`_cfg_home_depth`, pure) and must agree when it is usable. What a wrong `$PWD` can and cannot do: it can only
+VETO — a wrong depth, or one placing CWD outside `$HOME`, keeps the flag clear, i.e. the old double read (budget
+wasted on duplicates, nothing lost); it can never make a root home by itself, so it never drops the global layer
+on its own. The corroboration is what protects a project `.thoth/` whose config is a verbatim copy of the global's
+— the config layer folds that copy harmlessly, the memory layer must not, since `<copy>/memory/` and
+`~/.thoth/memory/` are two stores — and it does: both are read, each once. Stated limitation: with no global
+`config.cyml` (or one at `_cfg_same_bytes`'s 32 KiB cap) there are no bytes to recognise the directory by, so a
+walked root is never called home and both layers are kept — the double read, never a dropped layer. Resolved once
+with the root; `/reload` re-walks the config layers but never moves the root.
+
+Tests (+36, `test_memory_root_identity`): `_cfg_home_depth` (`~/Repos/taar` is 2, `$HOME` itself 0, trailing and
+doubled slashes, `/home/xy` not under `/home/x`, a parent of `$HOME`, a relative or absent `$PWD`/`$HOME` making no
+claim), the verdict's truth table (bytes + a matching depth → home; bytes with no usable `$PWD` → home; no global
+hit, a nearer `.thoth`, a byte-copied config the shell vetoes, a wrong depth, a `$PWD` outside `$HOME`, no walked
+root → not home), and the walks end to end on a git-tracked fixture home (`tests/fixtures/home/.thoth/` — the walks
+are pointed at it through `_cfg_walk_dir`; there is no `chdir` on the floor and the real `~/.thoth` is not the
+suite's): the config walk records level 0, the root walk lands on the same directory and calls it home,
+`memory_global_dir` reports no second layer and the fixture's fact is injected ONCE; with the shell placing CWD two
+levels down the flag stays clear and the fact goes in TWICE (the 0.45.2 read, reproduced); no usable `$PWD` leaves
+the bytes to decide; no global config records no level and the shell's word alone never makes a root home. Proven
+by breaking the fix four ways in a scratch copy — the walked root never home (3 failures), the veto removed (5), the
+shell trusted alone (2), the level not recorded (4).
+
+Verified on the binary from a scratch `$HOME` holding only `.thoth/config.cyml` + `.thoth/memory/MEMORY.md`, CWD at
+`~/Repos/taar`, `/dry` on a pty: HEAD's binary sends the fact twice, this one once; once from `$HOME` itself; a
+`$PWD` outside `$HOME` twice (the veto); a project `.thoth/` with a byte-copied config and its own store sends both
+facts, each once; no global config at all, twice (the limitation above).
 
 Tests (+117): `tests/cases/greet.cyr` covers the model (title spans and roles, the open row, both status
 branches against whichever config state the process is in, the config row, that the store owns its bytes), the
