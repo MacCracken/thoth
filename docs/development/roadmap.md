@@ -438,6 +438,30 @@ one is decided.
   ABI gains a mode channel. thoth already degrades honestly (never asserts a mode it cannot
   enforce). **Not a v1.0 blocker.**
 
+- **The memory double read stays when there is no global `config.cyml`.** 0.45.3 tells `$HOME/.thoth`,
+  reached by the root walk from below (`~/Repos/<x>` with no project `.thoth/` → `../../.thoth`), from a project
+  `.thoth/` by the level at which the config walk met the global file's BYTES, with `$PWD`'s depth under `$HOME`
+  as a veto only (`_thoth_root_home_verdict`, `src/config.cyr`). With no `~/.thoth/config.cyml` — or one at
+  `_cfg_same_bytes`'s 32 KiB cap, where a file AT the cap reads as different — there are no bytes, so a `~/.thoth/`
+  holding only `memory/` is still returned as the project root AND reported by `memory_global_dir()` as the
+  global layer: every fact injected twice, the budget spent on duplicates. Kept deliberately over the other
+  failure — a dropped global layer is silent, the double read is only waste — and `$PWD` alone must never make
+  the claim (display-grade; tested against). Reproduce: the fake-`$HOME` pty run in the 0.45.3 CHANGELOG
+  entry with the global config removed and `[memory]` enabled from a legacy `./thoth.cyml` — `/dry` sends the
+  fact 2×.
+
+  **Candidate closure — the memory INDEX bytes.** The identity question is the memory store's own, so its own
+  file can answer it: compare `<root>/memory/MEMORY.md` against `$HOME/.thoth/memory/MEMORY.md` with
+  `_cfg_same_bytes` and take a match as a second byte source in `_thoth_root_home_verdict` (same level rule,
+  same `$PWD` veto). It is the better witness for this case: identical index bytes are the same file seen from
+  below or a verbatim copy, and for the INDEX the copy case is exactly the waste the flag exists to prevent —
+  the same bytes injected twice — whereas a copied config says nothing about the stores beneath it. Residuals to
+  state, not hide: a store with fact files but no `MEMORY.md` gives no signal (the double read stays there); a
+  copied index over DIFFERENT fact files would fold two stores into one and lose the global's facts, which is
+  what the `$PWD` veto is for; and the index needs its own byte cap (it can outgrow the config's 32 KiB while
+  `MEMORY_SYS_CAP` only ever injects its first 4 KiB). One more read pair at root resolution, no new primitive.
+  Test on the same tracked fixture home (`tests/fixtures/home/.thoth/`) with `_cfg_gpath_c = 0`.
+
 ## Out of scope (for v1.0)
 
 The deliberate non-goals — these keep future contributors from forking the spine or diluting the

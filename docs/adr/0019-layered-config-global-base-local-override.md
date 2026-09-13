@@ -102,7 +102,8 @@ so it reads a single store once instead of injecting every fact twice.
 > the config walk met the global file's bytes, corroborated by the depth `$PWD` places CWD at under `$HOME`
 > (`_thoth_root_home_verdict`, `src/config.cyr`). `$PWD` stays display-grade: it can only veto (back to the double
 > read), never claim (a dropped layer). With no global `config.cyml` there are no bytes, so the walked root is never
-> called home and the double read stays — a stated limitation, kept over a dropped layer.
+> called home and the double read stays — a stated limitation, kept over a dropped layer (roadmap: known
+> limitations, with the memory index's own bytes as the candidate closure).
 
 ## Evidence
 

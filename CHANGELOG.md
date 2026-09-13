@@ -102,8 +102,9 @@ on its own. The corroboration is what protects a project `.thoth/` whose config 
 — the config layer folds that copy harmlessly, the memory layer must not, since `<copy>/memory/` and
 `~/.thoth/memory/` are two stores — and it does: both are read, each once. Stated limitation: with no global
 `config.cyml` (or one at `_cfg_same_bytes`'s 32 KiB cap) there are no bytes to recognise the directory by, so a
-walked root is never called home and both layers are kept — the double read, never a dropped layer. Resolved once
-with the root; `/reload` re-walks the config layers but never moves the root.
+walked root is never called home and both layers are kept — the double read, never a dropped layer (carried on the
+roadmap's known limitations, with the memory index's own bytes as the candidate closure). Resolved once with the
+root; `/reload` re-walks the config layers but never moves the root.
 
 Tests (+36, `test_memory_root_identity`): `_cfg_home_depth` (`~/Repos/taar` is 2, `$HOME` itself 0, trailing and
 doubled slashes, `/home/xy` not under `/home/x`, a parent of `$HOME`, a relative or absent `$PWD`/`$HOME` making no
