@@ -6,6 +6,17 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.4** (2026-09-13, not a full sweep): the tagline / status-bar follow-ups updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block, **Tests** counts), `README.md` (stamp) and this file; and
+> `docs/development/roadmap.md` was **re-cut around the batch discipline** — repairs as numbered patch batches
+> (`0.45.5`, `0.45.6`), a waiting-on table with the version each upstream/floor item was last checked against
+> (hoosh 2.6.10, sit 1.6.2, t-ron 2.1.10, darshana 1.1.2, cyrius 6.6.3, bhava 2.0.0, kavach 3.12.5), feature
+> arcs as unpinned minor candidates, and the known-limitations list folded into a registry that points at its
+> batch. Two stale claims fixed on the way: the hooks-in-argv item said it needed a spawn-with-environment
+> primitive the floor lacks (`src/exec.cyr` already passes an `envp`; AGNOS has `sys_spawn_path_env`), and the
+> "polish minor" convention is retired (polish batches into patches). The 2026-08-24 audit's residuals are
+> carried in the registry. The gap review is untouched (nothing moved into or out of it).
+>
 > **Touched at 0.45.3** (2026-09-13, not a full sweep): the greeting block (the ibis splash beside the framed status
 > box) updated `CHANGELOG.md`, `docs/development/state.md` (version block, the **Presentation ladder** bullet, **Tests**
 > counts, the **Targets** header), `docs/guides/getting-started.md` (source layout: `src/greet.cyr`, the generated
@@ -190,7 +201,7 @@ These are the reason the file is worth keeping. Each was paid for.
 | File | Status | Notes |
 |---|---|---|
 | `state.md` | ✅ Fresh | The live version log + current-state block. **0.43.2 fixed five stale claims that contradicted this same file**: `## Next` said "macOS builds+runs" (its own matrix says otherwise); `## Posture` said "all five seams" (`SEAM_COUNT = 7`), pinned avatara at 2.14.0 (the bundle says 2.14.1), and named the legacy `thoth.cyml` as the binding config; `## Tests` reported 1675 assertions "as of 0.33.7"; the Targets matrix was anchored at 0.38.6 with stale `src/tui.cyr` line numbers. **Re-measure, do not re-read.** |
-| `roadmap.md` | ✅ Fresh | **Forward-facing only.** When a milestone completes, move it to the CHANGELOG — do not narrate it here. **It supersedes `gap-review.*`.** **0.43.2**: the `CYRIUS_STATS` table re-run (not re-read), and the retracted "over by 5,370 bytes" figure replaced with the include-graph measurement — including withdrawing the "most likely thing to block the next feature" claim that was derived from it. |
+| `roadmap.md` | ✅ Fresh | **Forward-facing only.** When a milestone completes, move it to the CHANGELOG — do not narrate it here. **It supersedes `gap-review.*`.** **0.45.4**: re-cut around the batch discipline — repair batches pinned to patches, feature arcs held for minors, a waiting-on table with re-check versions, the limitations list folded into a registry. **0.43.2**: the `CYRIUS_STATS` table re-run (not re-read), and the retracted "over by 5,370 bytes" figure replaced with the include-graph measurement — including withdrawing the "most likely thing to block the next feature" claim that was derived from it. |
 | `gap-review.md` | ✅ Fresh | Carries ONLY candidate gaps thoth has **not** committed to; anything on the roadmap is deliberately absent. **0.43.2**: the `~96 %` ceiling figure (same retracted misread) corrected; two references to the subagent ADR as forthcoming work fixed (it shipped at 0.43.0); open question Q3 restated on a premise that still exists; gap 4 updated to five untrusted-prose inlets. |
 | `gap-review.html` | ✅ Fresh | **The rendered twin of `gap-review.md`, not an older draft** — same content on the house design system, Artifact-shaped (starts at `<title>`, no doctype). It had drifted a release behind (three inlets, no subagent strength, the pre-retraction ceiling figure) and was re-synced at 0.43.2. ⚠ **Edit both, or neither.** |
 | `doc-health.md` | ✅ Fresh | This file. Rewritten at 0.43.2 — the previous version's tables were still the 0.33.7 sweep's rows under 0.43.0/0.43.1 prose. Opportunistic cadence. |

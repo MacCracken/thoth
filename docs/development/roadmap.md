@@ -15,6 +15,12 @@
 > **Where we are:** see [`state.md`](state.md) for the version and what is in it. M0–M7 and
 > the whole post-M7 feature arc have shipped; the four v1.0 gates below are the remaining
 > blocking work, and everything else in this file is non-gating.
+>
+> **How the rest is cut (0.45.4):** **repairs batch into patch releases** — the defects thoth owns are
+> grouped below into numbered repair batches, each pinned to the next `0.45.x`; **minors are held for
+> feature arcs** — a new capability earns `0.46.0`, `0.47.0`, …, never a polish sweep. Defects owned
+> upstream or by the floor wait, with the version to re-check, and re-vendor as their own patch when
+> the dependency ships.
 
 ## Framing (read first)
 
@@ -167,300 +173,267 @@ scheme is gate 4 above.
 **patches** (`X.Y.0` → `X.Y.1` → …). A new minor is for a genuinely new capability arc. When
 unsure, patch.
 
+**Batch discipline (0.45.4):**
+
+- **Patches are repair batches.** Known defects, owed verifications, dep refreshes and polish are
+  grouped into a numbered batch and shipped together as the next `0.45.x`. A batch is ordered by
+  priority; the top of the next batch is the next thing to build. Nothing in a repair batch adds a
+  capability.
+- **Minors are feature arcs.** `0.46.0` is the first feature added after this cut, whichever is decided;
+  a minor is never a sweep of small things — those are patches.
+- **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
+  line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
+  documented residual is a claim with an expiry date — every waiting item below names the version it
+  was last checked against, and a release re-checks them).
+
 ## Scheduled work
 
-> The only items here are ones with a version pin and a decision behind them. Everything else that has
-> been *identified* but not committed lives in [`gap-review.md`](gap-review.md).
+> Repair batches are pinned. Feature arcs are listed as candidates and stay unpinned until one is
+> decided — the pin lands here with the decision. Everything *identified* but not committed lives in
+> [`gap-review.md`](gap-review.md).
 
-*Nothing is currently version-pinned.* The two items that were pinned to 0.43.0 — subagent delegation and
-consuming MCP resources/prompts — **shipped in 0.43.0**; see the [CHANGELOG](../../CHANGELOG.md) and
-[ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md). The next pinned item lands here when
-one is decided.
+### Repair batch 1 → 0.45.5 (thoth-owned, no dependency)
 
-## Remaining work (non-gating, no version pin)
+In priority order. Each item's detail is in the registry below.
 
-> **None of this blocks v1.0** — the four gates take priority. Data fields follow
-> **omit-until-present** ([ADR-0010](../adr/0010-data-producer-honest-omit.md)): a field
-> surfaces only when its producer has real data, and announces absence in `/state` — never
-> faked.
+1. **File content prints raw on `/read`, the tree pane's Enter and `/git <path>`** — take the TEXT
+   policy (newlines and tabs kept, other C0 and DEL as `?`) at the three sinks. The decision is what
+   was missing; the policy and its sanitiser already exist (0.45.0). A cloned repository is untrusted
+   and one Enter in the tree pane runs a file's escape in the operator's terminal — the only ⛔ in
+   this batch. [registry → *content escapes*]
+2. **The memory double read with no global `config.cyml`** — the MEMORY.md byte witness: compare
+   `<root>/memory/MEMORY.md` against `$HOME/.thoth/memory/MEMORY.md` with `_cfg_same_bytes` as a
+   second byte source in `_thoth_root_home_verdict` (same level rule, same `$PWD` veto, its own cap).
+   Test on the tracked fixture home with `_cfg_gpath_c = 0`. [registry → *memory double read*]
+3. **`rainbow` tints semantic roles inside the feed** — the t-ron DENY line and the `/reprobe` health
+   notice cycle instead of staying red/green once they are role markers. Exempt semantic roles at
+   marker expansion; directly painted chrome is already right. [registry → *rainbow*]
+4. **Streaming token usage is requested and never sent** — thoth stops asking hoosh (2.6.10) for the
+   `stream_options.include_usage` frame it does not emit, keeps `[budget]`'s announcement that the
+   streaming path is unmetered, and files the frame against hoosh as the feature it is. [registry →
+   *streaming usage*]
+5. **Input-history polish** — `~`/`$HOME` expansion on `[history].file` and a `histfilesize`-style trim
+   (the file is bounded to the 128-line ring today). [registry → *input-history hardening*]
+6. **Owed verification: macOS at the pin** — install the pinned toolchain on the Mac (6.6.2 today; 6.6.3
+   after batch 2's refresh) and re-run the native suite there (0.45.2's run used a scratch copy pinned to
+   6.6.0). A release step, not code. [registry → *macOS*]
+7. **Polish, batched:** the `rainbow` diagonal phase (a per-row hue offset, deterministic so
+   `feed_repaint` never shimmers); settle the line-tier fenced-code asymmetry (highlighted at the line
+   tier, tinted by the TUI painter) either way; the GUI's on-compositor rainbow re-confirm (headless
+   pixel tests cover the rasterizer).
 
-### Carried-forward chat-surface items
+### Repair batch 2 → 0.45.6 (thoth-owned, needs a host or a dep refresh first)
 
-> **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard —
-> is being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family
-> chat/coding front-end. The rule is the same as the rest of the spine — **CONSUME already-built
-> AGNOS domains (mneme, bhava, an audio/voice domain), never reinvent them.** SY's enterprise
-> guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the
-> web-dashboard admin stay **out of scope**.
+1. **Hook event facts move from argv to the environment.** `[hooks]` prefixes `THOTH_EVENT` /
+   `THOTH_TOOL` / `THOTH_ARGS` as quoted assignments to the `/bin/sh -c` string, so up to ~16 KB of
+   the model's tool arguments sit in `/proc/<pid>/cmdline` for the hook's life. ⭐ **The "needs a
+   portable spawn-with-environment primitive" claim was stale:** `src/exec.cyr` already hands
+   `sys_execve` an (empty) `envp` on the POSIX path, and the AGNOS floor has `sys_spawn_path_env`.
+   Build the facts into that `envp` (Windows inherits `wenv=0` and needs a built block — gate it to
+   the lanes that can carry it, announce where one cannot). [registry → *hook event facts*]
+2. **Dep refresh sweep** — the vendored darshana **1.0.0 → 1.1.2**, bote-core **3.3.7 → 3.3.9**, and
+   the cyrius pin **6.6.2 → 6.6.3**; re-run every target and read every diff
+   (the refresh gotchas: symbol + enum diff, build AND read each target, `cyrius build` rewrites
+   `lib/`). A refresh has bitten before (0.38.2's max_tokens regression, 0.44.5's re-measured caps), which is
+   why it ships as its own step in the batch — re-run and read, never re-read.
+3. **`src/exec.cyr`'s Windows capture takes the exclusive create** — cyrius 6.4.58's reroute honours
+   `O_CREAT|O_EXCL`, so the POSIX path's exclusive create + retry loop can be shared; needs the
+   Windows host (cass) to run it. [registry → *Windows lane*]
 
-- **GUI slash-command affordances** — surface `/retry`, `/edit`, `/bookmark`, `/thumbs` in the
-  GUI. The GUI composer runs `cmd_task` directly, bypassing `dispatch`, so these are TUI/REPL-only
-  today; needs the GUI to route slash-commands.
+### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-  ⚠ **0.44.3 raised the value of this item.** The GUI's authorization modal deliberately does NOT
-  offer the "allow for the whole session" answer the terminal prompt does, because the two things
-  that make a session grant safe — seeing that it is still acting, and revoking it — both live behind
-  `/grants`, which the GUI cannot reach. Routing slash-commands is what lets that option come back.
-- **GUI pointer plumbing** — mouse click-to-switch on the conversation sidebar (keyboard-only
-  today), and re-rendering a resumed conversation's tool/citation data as live GUI feed cards
-  (today it round-trips and shows in `/save`, but the live cards are session-local). Both gated
-  on GUI pointer/event plumbing.
-- **Reasoning across resume** — persist a turn's reasoning fold into the conversation store so it
-  survives a restart (today the `reasonlog` is session-scoped, like the memory strip).
-- **A lightweight project-map hint** in the system prompt, so the agent gets a cheap directory
+Each carries the version it was last checked against. A release re-checks the list; a closed item
+becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
+
+| Owner | What | Checked against | thoth's half |
+|---|---|---|---|
+| **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" (14 on a clean tree) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
+| **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: a tool call's `content_block_start` can be lost while its `input_json_delta` fragments still arrive (reproducible from one captured body) | hoosh **2.6.10** | done — 0.44.2 drops and announces such a call |
+| **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — hoosh's own follow-up note) | hoosh **2.6.10** | batch 1 item 4 stops requesting it meanwhile |
+| **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped and sizes the buffer flat (`n * 512 + 32`) — a 4000-byte tool name writes past the allocation | t-ron **2.1.10** (vendored 2.1.10) | done — both executors refuse a name over `AGENT_NAME_MAX` before the gate |
+| **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` collision and the three `undefined function` warnings every lane prints) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only; every capacity argument was retired by measurement at 0.44.5 | neither profile exists upstream | `sync-*.sh` re-vendor when they do |
+| **darshana** | a BSD termios peer → the T2 TUI on macOS (`term_raw` honestly returns -1 there today; the line tier is the degradation) | darshana **1.1.2** — macOS still out of its scope | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
+| **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers) and sit's `sit_rmdir` against a floor with no `RemoveDirectoryW` route (`xrmdir` is in the floor since cyrius 6.5.2) | t-ron 2.1.10 · sit 1.6.2 · cyrius 6.6.3 | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |
+| **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history file to `0600`; `sys_chmod` is a return-0 stub on Windows and AGNOS) and a portable no-follow open bit (`O_NOFOLLOW` on the history file) | cyrius **6.6.3** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
+| **agnos (floor)** | `sys_open` carries no create-mode channel — a file created on AGNOS lands at the kernel default, not `0600` | the frozen 0–33 ABI | degrades honestly; a candidate filing if the ABI gains a mode channel |
+| **cyrius (floor)** | `is_symlink` returns 0 on Windows, so the jail's symlink walk (audit A-1) is a no-op there — **the PE lane must not ship without revisiting it** | cyrius **6.6.3** | the lane is closed anyway (architectural, below) |
+| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01, against hoosh 2.6.10) and a `daimon_agnos` beside it — gate 2 rung 2 | hoosh 2.6.10 · daimon 2.1.3 | `scripts/agnos-run.sh` is ready to stage them |
+
+**Permanent by design (not waiting):** the Windows lane's architectural half — `SYS_SOCKET` /
+`SYS_CONNECT` (ws2_32) and the epoll set (IOCP). The lane gates closed, announced.
+
+### Feature arcs → minors (0.46.0 and on) — candidates, unpinned until decided
+
+> **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
+> being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
+> front-end. The rule is the same as the rest of the spine — **CONSUME already-built AGNOS domains
+> (mneme, bhava, an audio/voice domain), never reinvent them.** SY's enterprise guardrail stack (t-ron
+> is thoth's answer), multi-platform group-chat bridges, and the web-dashboard admin stay **out of
+> scope**. Data fields follow **omit-until-present** ([ADR-0010](../adr/0010-data-producer-honest-omit.md)).
+
+- **F1 — GUI slash-command routing** (recommended first: it restores a safety option). Surface
+  `/retry`, `/edit`, `/bookmark`, `/thumbs` in the GUI, whose composer runs `cmd_task` directly and
+  bypasses `dispatch`. ⚠ 0.44.3 raised its value: the GUI's authorization modal deliberately does NOT
+  offer "allow for the whole session", because seeing that a grant is still acting and revoking it
+  both live behind `/grants`, which the GUI cannot reach. Routing slash-commands is what lets that
+  option come back.
+- **F2 — Model-picker reachability, then pricing.** hoosh serves `GET /v1/health/providers`
+  (provider, base_url, status, enabled, healthy per route), so reachability can be annotated **now**
+  by joining the catalog's `owned_by` against it. Per-model *pricing* still waits on hoosh:
+  `/v1/models/catalog` emits only `{id, owned_by}` (a `/v1/cost/estimate` round-trip is the
+  alternative).
+- **F3 — Reasoning across resume.** Persist a turn's reasoning fold into the conversation store so
+  it survives a restart (the `reasonlog` is session-scoped today, like the memory strip).
+- **F4 — GUI pointer plumbing.** Mouse click-to-switch on the conversation sidebar (keyboard-only
+  today) and re-rendering a resumed conversation's tool/citation data as live feed cards (today it
+  round-trips and shows in `/save`; the live cards are session-local).
+- **F5 — A lightweight project-map hint** in the system prompt, so the agent gets a cheap directory
   overview without a `list_dir` round-trip.
-- **Model-picker health/pricing** — annotate the `Ctrl-P` picker with per-model reachability and
-  pricing.
+- **Gated on another domain's Cyrius port (recorded, not on a numbered arc):** the **bhava**
+  sentiment→mood loop (bhava is **2.0.0** and still Rust — consume it when it is ported, never
+  reimplement sentiment/mood analysis); **voice / mic** — mic → speech-to-text and read-back — by
+  consuming an AGNOS audio/voice domain plus a portable audio-capture substrate.
+- **From the gap review, if adopted:** durable tool-definition pins (gap 3, created by 0.42.0's
+  session-scoped TOFU), OS-enforced sandboxing of `shell`/`edit` via kavach (gap 1 — the largest
+  safety delta; kavach is 3.12.5), network egress control (gap 2), ACP server mode (gap 7), OTLP
+  export of the audit trail (gap 5), image input (gap 6), git write operations (gap 8). Each moves
+  here with a decision and a pin.
 
-  ⚠ **Re-scoped: half of this is buildable today.** The old note said "*if* hoosh ever exposes
-  it", which is no longer true. hoosh 2.6.4 already serves `GET /v1/health/providers` (provider,
-  base_url, status, enabled, healthy per route), carries a pricing table, and serves
-  `/v1/cost/estimate` + `/v1/costs`. **Reachability can be annotated now** by joining the
-  catalog's `owned_by` against `/v1/health/providers`. What is still missing is per-MODEL data on
-  the endpoint the picker actually reads: `/v1/models/catalog` emits only `{id, owned_by}`. So
-  only per-model *pricing* waits on hoosh — and on a `/v1/cost/estimate` round-trip as the
-  alternative.
+## Carried defects and degradations (the registry)
 
-- **Vendor-carve cleanup** — tighten the **sit** `[lib.read]` carve (this is what drops the
-  `cmd_reset` collision and the three `undefined function` warnings gate 1 documents) and adopt a
-  **bote** `[lib.jsonx]` micro-profile (233 fns → 7). Both are upstream-profile + `sync-*.sh`
-  re-vendor work, and neither profile exists upstream yet.
+> The detail behind the batches above. Each entry is either a real defect thoth has not yet fixed
+> (**⛔**, all scheduled in a repair batch or waiting on its owner above) or an honest degradation
+> gated on an external / substrate primitive. Recorded here so it is not lost in code comments.
 
-  **This is warning hygiene, not headroom — and at 0.44.5 it is not even a capacity argument any more.**
-  Re-measured at **0.44.5** on the 6.5.51 pin with `CYRIUS_STATS=1` (re-run, not re-read — the house rule
-  in [`../doc-health.md`](../doc-health.md)): `fn_table` **8760/131072 (6.7 %)**, identifiers
-  **278512/8388608 (3.3 %)**, `var_table` **5095/1048576 (0.5 %)**, `fixup_table` **39905/1048576**, plus
-  6.5.51's new `fn_name_hash 8760/32768 slots, maxprobe 13`. The static-data warning reads **651,400
-  bytes**. `CYRIUS_DCE` does not help.
+- **Content escapes** (batch 1, item 1) — ⛔ **A file's CONTENT prints raw on `/read`, the tree pane's
+  Enter, and `/git <path>` diffs.** 0.45.0 sanitised every PATH these print and `src/commands.cyr`
+  records the content as deliberately left alone — it is the file's own text. But the repository is
+  not trusted: a cloned repo's file holding an OSC 52 or screen-clearing escape runs in the operator's
+  terminal on one Enter in the tree pane. The TEXT policy (newlines and tabs kept, other C0 as `?`)
+  closes it, at the cost of showing a file's deliberate escapes as `?`.
 
-  ⚠ **Read the DENOMINATORS, not just the numerators.** The 0.43.2 figures above this line were
-  `8522/32768 (26 %)`, `271744/524288 (52 %)` and `4942/8192 (60 %) — the tightest of the three`. The
-  numerators barely moved; the **caps** grew 4x / 16x / 128x. `var_table` went from "the tightest at
-  60 %" to under 0.5 % without thoth changing a line. A cap is a measurement too.
+- **Memory double read** (batch 1, item 2) — **stays when there is no global `config.cyml`.** 0.45.3
+  tells `$HOME/.thoth`, reached by the root walk from below (`~/Repos/<x>` with no project `.thoth/` →
+  `../../.thoth`), from a project `.thoth/` by the level at which the config walk met the global file's
+  BYTES, with `$PWD`'s depth under `$HOME` as a veto only (`_thoth_root_home_verdict`,
+  `src/config.cyr`). With no `~/.thoth/config.cyml` — or one at `_cfg_same_bytes`'s 32 KiB cap — there
+  are no bytes, so a `~/.thoth/` holding only `memory/` is still returned as the project root AND
+  reported by `memory_global_dir()` as the global layer: every fact injected twice. Kept deliberately
+  over the other failure — a dropped global layer is silent, the double read is only waste — and `$PWD`
+  alone must never make the claim (display-grade; tested against). Reproduce: the fake-`$HOME` pty run
+  in the 0.45.3 CHANGELOG entry with the global config removed and `[memory]` enabled from a legacy
+  `./thoth.cyml` — `/dry` sends the fact 2×.
 
-  ✅ **The 8 MB `preprocess_out` ceiling is CLOSED — raised to 24 MB at cyrius 6.5.40**, which is *below*
-  the 6.5.43 pin thoth was already running. Three thoth docs went on calling it "a fixed 8 MB arena, a
-  hard error with no flag" after their own compiler had fixed it. The filing is in cyrius's
-  `issues/archived/`, and its own note is worth carrying: `preprocess_out` was only the **first of five
-  stacked caps** (token table, identifier pool, function table, identifier dedup), so raising it alone
-  would have bought ~30 %, not 3x.
+  **Closure — the memory INDEX bytes.** The identity question is the memory store's own, so its own
+  file can answer it: identical `MEMORY.md` bytes are the same file seen from below or a verbatim
+  copy, and for the INDEX the copy case is exactly the waste the flag exists to prevent — the same
+  bytes injected twice — whereas a copied config says nothing about the stores beneath it. Residuals
+  to state, not hide: a store with fact files but no `MEMORY.md` gives no signal (the double read
+  stays there); a copied index over DIFFERENT fact files would fold two stores into one and lose the
+  global's facts, which is what the `$PWD` veto is for; and the index needs its own byte cap (it can
+  outgrow the config's 32 KiB while `MEMORY_SYS_CAP` only ever injects its first 4 KiB). One more
+  read pair at root resolution, no new primitive.
 
-  ⚠ **It was load-bearing, not spare.** Re-summed at 0.44.5 by walking the actual include graph — 85
-  project files + the 41 declared stdlib modules + `lib/unicode/` — the binding unit is **8.84 MB**:
-  **110 % of the old 8 MB slot**, **37 % of the new 24 MB one**. thoth had already outgrown the old
-  ceiling. (The 0.43.2 "≈4.79 MB / ≈4.94 MB" figures counted *project sources only* and omitted the
-  stdlib half the same unit pulls in, which is why they read as comfortable.)
+- **`rainbow`** (batch 1, items 3 and 7) — all three tiers cycle per grapheme and are reachable.
+  Remaining: the painter tints every glyph in the ring, so chrome routed *into* the feed (the t-ron
+  DENY line, the `/reprobe` health notice) cycles instead of staying red/green — once both are role
+  markers the painter cannot tell a notice from prose; exempting semantic roles at marker expansion
+  fixes it (directly painted chrome — status bar, tree, prompts — is unaffected). Polish: the hue is a
+  pure function of COLUMN, so every row shares one gradient — a per-row offset gives the classic
+  diagonal, but must stay deterministic or `feed_repaint` shimmers; the GUI's on-compositor
+  re-confirm; fenced code at the line tier stays syntax-highlighted (the TUI painter tints it), an
+  asymmetry to settle either way.
 
-  **The direction survives; the urgency does not.** 0.43.0 genuinely hit the old wall and cleared it by
-  dropping a GUI block that unit never tested (131 KB), not by shrinking a feature. Lean `[lib.X]`
-  profiles remain the shipped workaround (kavach `[lib.confine]`, agnosai `[lib.guard]`, sit
-  `[lib.read]`, sankoch `[lib.zlib]`) and they buy features, not trajectory. But the sit carve is now
-  **purely** about the three `undefined function` warnings and the `cmd_reset` collision — every
-  capacity justification it once carried has been retired by measurement.
+- **Streaming usage** (batch 1, item 4; hoosh row above) — **thoth asks hoosh for streaming token
+  usage that hoosh never sends.** Every streaming request carries `stream_options.include_usage`, but
+  hoosh (2.6.10) emits no trailing usage frame — its own changelog names the decode as follow-up work —
+  so `_hoosh_account_usage` waits for something that never arrives on the streaming path. `[budget]`
+  says so (it cannot be enforced there; `[hoosh].stream = false` is the way round), but the token/cost
+  row is still not fed while streaming.
 
-> **Long-term GUI capability (spine-inherited, not scheduled): voice / mic.** thoth's T3 GUI will
-> grow **voice input** (mic → speech-to-text) and **read-back** (text-to-speech) — but by
-> **consuming an AGNOS audio/voice domain**, exactly like mneme/bhava, *never* by hand-rolling
-> STT/TTS. Gated on that domain's Cyrius port + a portable audio-capture substrate. Recorded so
-> it isn't lost; not on a numbered arc.
+- **Input-history hardening** (batch 1, item 5; the floor rows above) — the opt-in `[history].file`
+  is best-effort-secured today (a fresh file is created `0600` on POSIX; degrade-closed — an unwritable
+  path or a mid-session write failure is announced). Residuals, documented in
+  `.thoth/config.cyml.example` + `src/inhist.cyr`: tightening a pre-existing, looser file to `0600`
+  needs a portable `chmod`/`fchmod` wrapper (never silently re-tighten, never assert a mode thoth
+  cannot enforce); `O_NOFOLLOW` on the open needs a portable no-follow bit (the AGNOS `AO_*` bridge
+  defines none) — until then, "keep it in an owner-only directory"; `~`/`$HOME` expansion and a
+  `histfilesize`-style trim are thoth's own (batch 1).
 
-### Polish backlog (gathers until it earns a sweep minor)
-
-> Small, independent UX items are parked here as they surface. **Convention:** none is scheduled
-> individually; when enough have gathered, a **polish minor** sweeps a vetted batch. This section
-> re-gathers from empty after each sweep.
-
-- **`rainbow` polish.** All three tiers cycle per grapheme and are reachable. Remaining:
-  - **Semantic roles inside the feed.** The painter tints every glyph in the ring, so chrome
-    routed *into* the feed (the t-ron DENY line, the `/reprobe` health notice) cycles instead of
-    staying red/green — once both are role markers the painter cannot tell a notice from prose.
-    Exempting semantic roles at marker-expansion would fix it. Directly-painted chrome (status
-    bar, tree, prompts) is already unaffected.
-  - **A diagonal / animated phase** — the hue is a pure function of COLUMN, so every row shares
-    one gradient; a per-row offset would give the classic lolcat diagonal, but must stay
-    deterministic or `feed_repaint` shimmers.
-  - **The GUI's on-compositor re-confirm** — headless pixel tests cover the rasterizer.
-  - **Fenced code at the line tier** stays syntax-highlighted (the TUI painter tints it) — an
-    asymmetry to settle either way.
-
-## Known limitations (carried, not fixed)
-
-> Each is either a real defect thoth has not yet fixed, or an honest degradation gated on an
-> external/substrate primitive. Recorded here so they are not lost in code comments. **Entries
-> marked ⛔ are defects, not degradations.**
-
-- **macOS builds and runs, and its native test suite is green.** Verified on Apple Silicon (macOS 26.6.2) at
-  0.45.2: the Mach-O arm64 binary builds with no undefined symbol and `cyrius test` passes in full there —
-  `shell`, `[hooks]` and `[verify]` included. ⚠ **Owed: a native run AT the pin.** The Mac has the **6.6.0**
-  toolchain against a **6.6.2** pin, so the run used a scratch copy pinned to 6.6.0 (the pin gate refuses
-  otherwise); install 6.6.2 there and re-run. The build prints 26 "syscall not routed by the Mach-O ARM
-  translation" warnings, none from a raw syscall in thoth's own `src/` (swept at 0.45.2).
-
-  ⚠ **The T2 TUI does not run on macOS and is not meant to yet.** `term_raw` returns -1 there (darshana
-  has no BSD termios peer and 0.44.3 does not invent one — a stub pretending to work is worse than an
-  honest refusal), so thoth takes the line tier, which is the already-coded degradation. A real BSD
-  termios peer belongs to darshana v2; when it ships, `src/term.cyr`'s macOS branch collapses into the
+- **macOS** (batch 1, item 6; darshana row above) — **builds and runs, and its native test suite is
+  green** (Apple Silicon, macOS 26.6.2, at 0.45.2: the Mach-O arm64 binary builds with no undefined
+  symbol and `cyrius test` passes in full there — `shell`, `[hooks]` and `[verify]` included). ⚠ Owed:
+  a native run AT the pin — the Mac has the **6.6.0** toolchain against a **6.6.2** pin. The build
+  prints 26 "syscall not routed by the Mach-O ARM translation" warnings, none from a raw syscall in
+  thoth's own `src/` (swept at 0.45.2). **The T2 TUI does not run on macOS and is not meant to yet:**
+  `term_raw` returns -1 there (darshana has no BSD termios peer and 0.44.3 does not invent one — a stub
+  pretending to work is worse than an honest refusal), so thoth takes the line tier, the already-coded
+  degradation. When darshana ships the peer, `src/term.cyr`'s macOS branch collapses into the
   forwarder branch and nothing above it changes.
 
-- **The Windows lane is now blocked purely outside thoth's authored source.** 0.44.3 took its reachable
-  undefined functions from **11 to 1** and removed `TTY_SIGMASK_WINCH`, `EPOLL_CTL_ADD` and `EPOLLIN`
-  from thoth's own code entirely. What is left is three upstream classes, and `scripts/build.sh` now
-  names them separately instead of letting one mask the others:
-  - **architectural** — `SYS_SOCKET` / `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). Permanent by
-    design; the lane gates closed, announced.
-  - **vendored** (`VENDOR_GAP`, new at 0.44.3) — `SIGHUP` / `SIG_BLOCK` from `src/vendor/t-ron.cyr`'s
-    SIGHUP-driven policy hot-reload, which thoth has **zero** callers of, and `sys_rmdir` from
-    `src/vendor/sit-read.cyr` against a Windows floor that routes `DeleteFileW` and `MoveFileExW` but
-    not `RemoveDirectoryW`. Upstream fixes: t-ron gating its signal half to Linux (or publishing a
-    profile without it), and either cyrius adding `sys_rmdir` to the Windows peer or sit folding its
-    `sit_rmdir` onto the floor's `xrmdir` (in the floor since cyrius 6.5.2).
-  - `TTY_SIGMASK_WINCH` stays off **every** list on purpose, so a new raw `tty_*` call in thoth source
-    turns this lane red again — it is the regression tripwire for the defect just closed.
-  - `src/exec.cyr`'s Windows capture still opens its temp file non-exclusively. cyrius 6.4.58's reroute
-    honours `O_CREAT|O_EXCL`, so it can take the POSIX path's exclusive create and retry loop — once it can
-    be run on the Windows host.
-
-  ⚠ **The lane classifier itself was half-blind and is fixed.** It only ever collected `undefined
-  variable`, never `undefined function` — the error cyrius actually refuses to emit on — so through
-  0.44.2 eleven reachable undefined functions hid behind two undefined variables. It now collects both,
-  reading the reachable set from the list cyrius prints AFTER its "N unreachable fns" note (the earlier
-  bare list is mostly dead references; matching it instead reported the three documented sit dead-path
-  placeholders as blockers, which have never blocked any lane).
-
-- ⛔ **sit's git read-mode status reports false positives** (upstream, sit — thoth is a pure
-  consumer). Every tracked mode-`100755` file and every tracked zero-byte file comes back
-  "modified" regardless of content. **Re-reproduced at 0.43.0, and starker than the original
-  report:** on a tree `git status` calls **completely clean (0 changed)**, `/git` reports **14
-  changed** — 13 mode-`100755` `scripts/*.sh` (as `A`) plus the zero-byte `docs/examples/.gitkeep`
-  (as `M`). Fourteen pure false positives isolating exactly the two predicted classes, with no true
-  positives to muddy the signal. Reproduced on sit **1.3.5** and **1.6.2**, so the 0.38.6 bump
-  neither caused nor fixed it. `src/git.cyr`'s `git_probe` copies sit's `{path, kind}` vec and compares nothing, so
-  the fix belongs in sit's comparator; it inflates `/git`, `/state`'s changed-file count and the
-  file-tree badges. Note sit's CLI cannot reproduce it — `sit status` handles only `.sit/` repos;
-  git read-mode is a library-only surface.
-
-- **thoth asks hoosh for streaming token usage that hoosh never sends.** Every streaming request
-  carries `stream_options.include_usage`, but hoosh (re-checked at **2.6.10**) emits no trailing usage
-  frame — its handlers name `include_usage` only in a comment marking the decode as follow-up work — so
-  `_hoosh_account_usage` waits for something that never arrives on the streaming path. `[budget]` says so
-  (it cannot be enforced there; `[hoosh].stream = false` is the way round), but the token/cost row is still
-  not fed while streaming. Either hoosh grows the frame or thoth stops requesting it.
-
-- ⛔ **hoosh drops SSE frames on the Anthropic streaming path, and launders provider errors into an
-  empty 200 stream** (upstream, hoosh 2.6.4 — surfaced and captured off the wire at 0.44.2). Two
-  distinct defects in `_remote_stream_cb` / `handle_chat_stream` (`src/lib/handlers.cyr`):
-  1. `_emit_anthropic_tool_delta` silently `return 0`s when it cannot pull `id`+`name` out of a
-     `content_block_start`, so a tool call's OPENING frame can be dropped while its
-     `input_json_delta` fragments are still forwarded — the client receives arguments belonging to
-     a call with no name and no id. Observed intermittently; the same shape also loses a fragment
-     mid-`arguments`, producing a call whose JSON is cut. thoth 0.44.2 now drops and announces such
-     a call instead of letting it poison the conversation, but the frames are still lost.
-  2. ✅ **CLOSED upstream at hoosh 2.6.5–2.6.8, and CONSUMED by thoth at 0.44.4.** hoosh used to log
-     `provider: permanent error, not retrying` to its **own** log, discard the provider's error body,
-     and send the client a well-formed HTTP 200 SSE stream carrying one `finish_reason:"stop"` frame
-     and nothing else — an error laundered into a silent success. It now forwards the provider's
-     status and message **in-stream** as a top-level `error` object, and reads the provider's HTTP
-     status on the local streaming path (2.6.8).
-
-     ⚠ thoth then threw it away for four hoosh releases: `_agent_sse_cb` read only
-     `choices[0].delta`, so the frame scored zero, the turn looked like an empty stream, and thoth
-     printed *"an upstream provider error is not forwarded to this stream"* — true when written,
-     false from 2.6.5, and it sent the operator to a log for a fact thoth was holding. Now captured
-     and shown on the interactive and one-shot surfaces and in `--events`
-     (`upstream_http` / `upstream_message`).
-
-  Sub-point 1 was reproduced deterministically by replaying one captured request body and remains open
-  upstream (still so at hoosh 2.6.10). Sub-point 2 is closed on both sides.
-
-- **t-ron's audit export is unescaped and flat-sized** (upstream, t-ron — surfaced by 0.42.0's
-  `/audit export`; **re-scoped at 0.44.4**). `_audit_export_event` splices **`agent`, `tool` AND
-  `reason`** into JSON with no escaping (`src/audit.cyr:194`, `:196`, `:202` — unchanged at t-ron 2.1.10,
-  the version thoth vendors) and sizes the whole buffer at a flat `n * 512 + 32` (`:216`).
-
-  ⭐ **This entry used to exculpate itself — "safe today only because every reason t-ron emits is a
-  short fixed label" — and that premise is false twice over.** `tool_name` is spliced independently of
-  the reason; and the DEFAULT unknown-tool path (`_tron_format_unknown_tool`, reached for any tool not
-  in the allow list, with `default_unknown_tool = DA_DENY`) **interpolates the tool name into the
-  reason**. The only filter on that name is `tron_is_safe_identifier`, which accepts every printable
-  ASCII byte — `"` and `\` both pass. Measured, not argued: a tool named `read"file` makes `/audit
-  export` emit JSON that fails to parse; a 4000-byte name writes **3598 bytes past** the allocation.
-  The name is the model's own `function.name`, so this is reachable from untrusted model output, and
-  the artifact it corrupts is a SECURITY record. *A documented residual is a claim with an expiry
-  date*; this one's had expired.
-
-  **thoth's half is fixed at 0.44.4** — both executors refuse a name over `AGENT_NAME_MAX` before
-  `gate_authorize`, so the ring never receives one. The escaper and length-derived sizing belong in
-  t-ron's next release (2.1.10 shipped without them), then a re-vendor plus a line-anchored needle in
-  `tests/cases/vendor.cyr`.
-
-- **bhava — the sentiment→mood loop** (a backlogged seam, gated on bhava's Cyrius port).
-  SecureYeoman feeds a turn's response sentiment back into the active persona's mood; that loop is
-  **bhava**'s domain. Already a backlogged thoth integration — **consume bhava** (the same pattern
-  mneme cleared) once it is Cyrius-ported; never reimplement sentiment/mood analysis in thoth. Not
-  on a numbered arc until bhava lands.
-
-- **A file's CONTENT prints raw on `/read`, the tree pane's Enter, and `/git <path>` diffs.** 0.45.0 sanitised
-  every PATH these print, and `src/commands.cyr` records the content as deliberately left alone — it is the
-  file's own text. But the repository is not trusted: a cloned repo's file holding an OSC 52 or screen-clearing
-  escape runs in the operator's terminal on one Enter in the tree pane. **A policy decision, not yet taken:** the
-  TEXT policy (newlines and tabs kept, other C0 as `?`) would close it, at the cost of showing a file's
-  deliberate escapes as `?`.
-
-- **Hook event facts sit in the child's argv.** `[hooks]` passes event facts (`THOTH_EVENT`,
-  `THOTH_TOOL`, `THOTH_ARGS`) as quoted `VAR='...'` assignments prefixed to the `/bin/sh -c` string.
+- **Hook event facts** (batch 2, item 1) — **sit in the child's argv.** `[hooks]` passes `THOTH_EVENT`,
+  `THOTH_TOOL`, `THOTH_ARGS` as quoted `VAR='...'` assignments prefixed to the `/bin/sh -c` string.
   The quoting is correct — no tool argument can close it and append a command — but the assignments
   are part of the child's **argv**, so on Linux up to ~16 KB of the model's tool arguments are
-  readable through `/proc/<pid>/cmdline` for the life of the hook. `src/hooks.cyr` used to claim event
-  facts were "never interpolated into the command", which was true about injection and wrong about
-  exposure; corrected in the source at 0.44.3. Closing it needs a portable spawn-with-environment
-  primitive `src/exec.cyr` does not have (the floor's `execve` shapes differ per target). Not a new
-  risk class — a hook is already an unsandboxed command the operator chose — but a real one.
+  readable through `/proc/<pid>/cmdline` for the life of the hook. Not a new risk class — a hook is
+  already an unsandboxed command the operator chose — but a real one. The envp channel is already in
+  `src/exec.cyr` (see batch 2).
 
-- **Input-history file hardening.** The opt-in `[history].file` is best-effort-secured today (a
-  fresh file is created `0600` on POSIX; degrade-closed — an unwritable path or mid-session write
-  failure is announced). The residuals are documented in `.thoth/config.cyml.example` +
-  `src/inhist.cyr` and wait on portable substrate primitives:
-  - **tighten a pre-existing / loosely-permissioned file to `0600`** — needs a portable
-    `chmod`/`fchmod` wrapper. Today `sys_chmod` is a **return-0 stub on Windows and on AGNOS**, so
-    calling it would claim a mode thoth cannot enforce there; a fresh file gets
-    `0600` on create but an existing looser file is left as-is (never silently re-tighten, never
-    assert a mode we cannot enforce). Lands if `lib/io.cyr` grows a portable file-mode wrapper.
-  - **`O_NOFOLLOW` on the history-file open** — needs a portable no-follow bit (the AGNOS `AO_*`
-    open bridge defines none). Defense-in-depth against a symlink redirect on a secret-bearing
-    file; until then it is documented "keep it in an owner-only directory."
-  - **`~`/`$HOME` path expansion + a `histfilesize`-style trim** — the path is used verbatim (no
-    shell `~` expansion) and the file is bounded to the recall ring (128 lines). Minor polish.
+- **Windows lane** (batch 2, item 3; the vendored-gap row above) — **blocked purely outside thoth's
+  authored source.** 0.44.3 took its reachable undefined functions from 11 to 1 and removed
+  `TTY_SIGMASK_WINCH`, `EPOLL_CTL_ADD` and `EPOLLIN` from thoth's own code entirely; `scripts/build.sh`
+  names the three remaining classes separately instead of letting one mask the others —
+  **architectural** (`SYS_SOCKET` / `SYS_CONNECT`, the epoll set; permanent, the lane gates closed,
+  announced), **vendored** (`VENDOR_GAP`: t-ron's signal half, sit's `sit_rmdir`), and thoth's own
+  exclusive create in `exec.cyr` (batch 2). `TTY_SIGMASK_WINCH` stays off **every** list on purpose,
+  so a new raw `tty_*` call in thoth source turns this lane red again — the regression tripwire.
+  The classifier collects `undefined function` as well as `undefined variable` (the error cyrius
+  actually refuses to emit on), reading the reachable set from the list cyrius prints AFTER its
+  "N unreachable fns" note. Audit A-1's residual rides with this lane: `is_symlink` is a no-op on
+  Windows, so the jail's symlink walk is too.
 
-- **AGNOS substrate gap — `sys_open` carries no create-mode channel.** The agnos open bridge
-  (`lib/io.cyr`, against the frozen 0-33 ABI) maps `O_*`→`AO_*` but has no permission-mode
-  argument, so a file created on AGNOS lands at the kernel default, not `0600`. A documented floor
-  gap (same class as the SIGHUP one); a **candidate to file against the agnos peer** if/when the
-  ABI gains a mode channel. thoth already degrades honestly (never asserts a mode it cannot
-  enforce). **Not a v1.0 blocker.**
+- **sit's git read-mode status** (sit row above) — ⛔ **reports false positives** (upstream; thoth is a
+  pure consumer). Every tracked mode-`100755` file and every tracked zero-byte file comes back
+  "modified" regardless of content: on a tree `git status` calls completely clean, `/git` reports 14
+  changed — 13 mode-`100755` `scripts/*.sh` (as `A`) plus the zero-byte `docs/examples/.gitkeep` (as
+  `M`), exactly the two predicted classes and no true positives. Reproduced on sit 1.3.5 and 1.6.2.
+  `src/git.cyr`'s `git_probe` copies sit's `{path, kind}` vec and compares nothing, so the fix belongs
+  in sit's comparator; it inflates `/git`, `/state`'s changed-file count and the file-tree badges.
+  sit's CLI cannot reproduce it — `sit status` handles only `.sit/` repos; git read-mode is a
+  library-only surface.
 
-- **The memory double read stays when there is no global `config.cyml`.** 0.45.3 tells `$HOME/.thoth`,
-  reached by the root walk from below (`~/Repos/<x>` with no project `.thoth/` → `../../.thoth`), from a project
-  `.thoth/` by the level at which the config walk met the global file's BYTES, with `$PWD`'s depth under `$HOME`
-  as a veto only (`_thoth_root_home_verdict`, `src/config.cyr`). With no `~/.thoth/config.cyml` — or one at
-  `_cfg_same_bytes`'s 32 KiB cap, where a file AT the cap reads as different — there are no bytes, so a `~/.thoth/`
-  holding only `memory/` is still returned as the project root AND reported by `memory_global_dir()` as the
-  global layer: every fact injected twice, the budget spent on duplicates. Kept deliberately over the other
-  failure — a dropped global layer is silent, the double read is only waste — and `$PWD` alone must never make
-  the claim (display-grade; tested against). Reproduce: the fake-`$HOME` pty run in the 0.45.3 CHANGELOG
-  entry with the global config removed and `[memory]` enabled from a legacy `./thoth.cyml` — `/dry` sends the
-  fact 2×.
+- **hoosh drops SSE frames on the Anthropic streaming path** (hoosh row above) — ⛔ upstream, surfaced
+  and captured off the wire at 0.44.2: `_emit_anthropic_tool_delta` silently `return 0`s when it cannot
+  pull `id`+`name` out of a `content_block_start`, so a tool call's OPENING frame can be dropped while
+  its `input_json_delta` fragments are still forwarded — the client receives arguments belonging to a
+  call with no name and no id; the same shape also loses a fragment mid-`arguments`. Reproduced
+  deterministically by replaying one captured request body; still open at hoosh 2.6.10. thoth drops
+  and announces such a call instead of letting it poison the conversation, but the frames are lost.
+  (The companion defect — provider errors laundered into an empty 200 stream — is closed on both
+  sides: hoosh 2.6.5–2.6.8 forwards them in-stream, thoth shows them since 0.44.4.)
 
-  **Candidate closure — the memory INDEX bytes.** The identity question is the memory store's own, so its own
-  file can answer it: compare `<root>/memory/MEMORY.md` against `$HOME/.thoth/memory/MEMORY.md` with
-  `_cfg_same_bytes` and take a match as a second byte source in `_thoth_root_home_verdict` (same level rule,
-  same `$PWD` veto). It is the better witness for this case: identical index bytes are the same file seen from
-  below or a verbatim copy, and for the INDEX the copy case is exactly the waste the flag exists to prevent —
-  the same bytes injected twice — whereas a copied config says nothing about the stores beneath it. Residuals to
-  state, not hide: a store with fact files but no `MEMORY.md` gives no signal (the double read stays there); a
-  copied index over DIFFERENT fact files would fold two stores into one and lose the global's facts, which is
-  what the `$PWD` veto is for; and the index needs its own byte cap (it can outgrow the config's 32 KiB while
-  `MEMORY_SYS_CAP` only ever injects its first 4 KiB). One more read pair at root resolution, no new primitive.
-  Test on the same tracked fixture home (`tests/fixtures/home/.thoth/`) with `_cfg_gpath_c = 0`.
+- **t-ron's audit export is unescaped and flat-sized** (t-ron row above) — upstream, surfaced by
+  0.42.0's `/audit export`. `_audit_export_event` splices `agent`, `tool` AND `reason` into JSON with
+  no escaping (`src/audit.cyr:194`, `:196`, `:202`, unchanged at t-ron 2.1.10) and sizes the whole
+  buffer at a flat `n * 512 + 32` (`:216`). The DEFAULT unknown-tool path interpolates the tool name
+  into the reason, and `tron_is_safe_identifier` accepts every printable ASCII byte — `"` and `\` pass.
+  Measured: a tool named `read"file` makes `/audit export` emit JSON that fails to parse; a 4000-byte
+  name writes **3598 bytes past** the allocation. The name is the model's own `function.name`, so this
+  is reachable from untrusted model output, and the artifact it corrupts is a SECURITY record. thoth's
+  half is done (0.44.4: both executors refuse a name over `AGENT_NAME_MAX` before `gate_authorize`);
+  the escaper and length-derived sizing belong in t-ron's next release, then a re-vendor plus a
+  line-anchored needle in `tests/cases/vendor.cyr`.
+
+- **AGNOS substrate gap — `sys_open` carries no create-mode channel** (agnos row above). The agnos
+  open bridge (`lib/io.cyr`, against the frozen 0–33 ABI) maps `O_*`→`AO_*` but has no permission-mode
+  argument, so a file created on AGNOS lands at the kernel default, not `0600`. thoth degrades honestly
+  (never asserts a mode it cannot enforce). **Not a v1.0 blocker.**
+
+- **Audit residuals carried from [2026-08-24](../audit/2026-08-24-audit.md)** (all 11 findings fixed
+  at 0.39.0): A-1's Windows `is_symlink` no-op (the Windows lane entry); the `shell` deny/allow filter
+  is a coarse pre-filter and says so — a real sandbox is gap 1 (kavach), a feature, not a repair; and
+  `cyrius fmt --check`'s 12 complaints are one deliberate convention (aligned trailing-comment
+  continuations) — advisory in thoth, not reformatted, so the next sweep does not re-litigate it.
 
 ## Out of scope (for v1.0)
 
