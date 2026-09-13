@@ -979,10 +979,13 @@ fn tui_greeting_emit(cols, rows) {
 # terminal clipped it first. Each half is omitted on its own when its producer has nothing (ADR-0010).
 fn tui_status_emit() {
     status_snapshot();    # 0.28.0: the shared status view-model (Stage B). Reads the git CACHE (no probe) — the paint never walks the worktree.
-    _tui_spaces(UI_TAB_COLS);   # 0.45.3: the bar starts a tab in from the edge
+    _tui_spaces(UI_STATUS_INDENT);   # 0.45.3: the bar starts two columns in from the edge
     var lead = 0;         # 1 once the repo/branch lead drew something, so "model" gets its two-space gutter
     if (status_present(SF_REPO) == 1) {
-        ui_emit(ROLE_ACCENT_DIM, "📁 ");   # 0.45.3: a folder before the location opened (U+1F4C1, two columns)
+        # 0.45.3: a flat folder before the location opened — U+F07B (nf-fa-folder), one column. A Nerd Font glyph:
+        # every Nerd Font carries it and it is what a status line's folder looks like; a terminal without one shows
+        # a box there (the emoji folder U+1F4C1 was worse — no plain font here had it at all, and it is two columns).
+        ui_emit(ROLE_ACCENT_DIM, " ");
         ui_emit(ROLE_ACCENT_DIM, status_sval(SF_REPO));
         lead = 1;
     }

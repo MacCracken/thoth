@@ -33,7 +33,8 @@ var ROLE_GREEN = 5;        # #94b87c diff-add / ok
 var ROLE_RED = 6;          # #d28a78 diff-del / error
 var ROLE_BLUE = 7;         # #82a9c6 paths
 var UI_ROLE_COUNT = 8;
-var UI_TAB_COLS = 8;       # a tab's worth of columns — the chrome's indent unit (0.45.3: the status bar's lead, the greeting's help line at 2x)
+var UI_TAB_COLS = 8;       # a tab's worth of columns — the chrome's indent unit (0.45.3: the greeting's help line sits 2x in)
+var UI_STATUS_INDENT = 2;  # the status bar / strip's inset from the edge, in columns (0.45.3)
 
 # Theme axis (0.10.0): a theme sits IN FRONT of the role axis — the three color
 # dispatchers (_ui_rgb/_ui_idx256/_ui_code16) branch on _ui_theme. dark is today's

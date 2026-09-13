@@ -111,17 +111,19 @@ fn test_gui() {
     assert(_lmodel_x > 0, "the strip still draws the model field");
     if (project_dir_name() != 0) {
         assert(streq(_lfirst, project_dir_name()) == 1, "the strip's first text is the repo label");
-        # 0.45.3: a tab in from the edge, then the folder icon (rects, 2 cells + a space), then the label
+        # 0.45.3: two cells in from the edge, then the flat folder (a filled tab over an outlined body, one cell +
+        # a space), then the label
         var _lrepo_x = 0 - 1; var _lrect = 0; var _lj = 0;
-        var _lexp = 0 + GSTATUS_PAD + UI_TAB_COLS * GR_GLYPH_W + GSTATUS_ICON_CELLS * GR_GLYPH_W;
+        var _licon_x = 0 + GSTATUS_PAD + UI_STATUS_INDENT * GR_GLYPH_W;
+        var _lexp = _licon_x + GSTATUS_ICON_CELLS * GR_GLYPH_W;
         while (_lj < vec_len(_l0)) {
             var _ljc = vec_get(_l0, _lj);
             if ((gd_kind(_ljc) == GD_TEXT) && (gd_text(_ljc) == _lfirst)) { _lrepo_x = gd_x(_ljc); }
-            if ((gd_kind(_ljc) == GD_RECT) && (gd_x(_ljc) == GSTATUS_PAD + UI_TAB_COLS * GR_GLYPH_W + 1) && (gd_w(_ljc) == 13)) { _lrect = 1; }
+            if ((gd_kind(_ljc) == GD_BORDER) && (gd_x(_ljc) == _licon_x) && (gd_w(_ljc) == GR_GLYPH_W)) { _lrect = 1; }
             _lj = _lj + 1;
         }
-        assert_eq(_lrepo_x, _lexp, "the repo label starts a tab + the folder icon in from the strip's edge");
-        assert_eq(_lrect, 1, "the folder icon's body is drawn a tab in, just before the label");
+        assert_eq(_lrepo_x, _lexp, "the repo label starts two cells + the folder icon in from the strip's edge");
+        assert_eq(_lrect, 1, "the folder's outlined body is drawn two cells in, within one cell, just before the label");
     }
     if (git_present() == 1) {
         assert_eq(_lbr_n, 1, "the branch is drawn exactly once (the trailing git field is gone)");

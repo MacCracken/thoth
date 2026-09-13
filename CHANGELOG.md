@@ -6,14 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 **The greeting is a block: the ibis beside a framed status box.** thoth now opens on its mark — the Thoth ibis
 under the sun disk from `thoth_v1.tiff`, rendered as coloured ASCII density art — with a framed box beside it:
-`{(o> Thoth - The Librarian: 0.45.3`, an open row, then the stack's status — `Status:` and, under it, `hoosh @
-<address>` in the mark's colour — then the model and the config, an open row between each group; `type a task…`
-is the first line under the block, two tabs in. The status bar starts a tab in from the edge with a folder
-before the location opened. The same model paints the TUI feed and the GUI window. The art is GENERATED from
+`{(o> Thoth - The Librarian: 0.45.3` with the backronym tagline under it, an open row, then the stack's status —
+`Status:` and, under it, `hoosh @ <address>` in the mark's colour — then the model and the config, an open row
+between each group; `type a task…` is the first line under the block, two tabs in. The status bar starts two
+columns in from the edge with a flat folder before the location opened. The same model paints the TUI feed and the GUI window. The art is GENERATED from
 the TIFF by `scripts/gen-splash.sh` (ImageMagick + awk), the way `gen-version.sh` embeds `VERSION`. Also fixed:
 from `~/Repos/<x>` with no project config the greeting named `~/.thoth/config.cyml` twice, as
 `../../.thoth/config.cyml + /home/x/.thoth/config.cyml`; it is `config ~/.thoth/config.cyml` now — and the memory store it reached the same way was injected twice; once now. Suite
-**324 + 1397 + 846 + 640 + 183 + 5** (+153). Linux / aarch64 / AGNOS build with the same warning set as 0.45.2.
+**324 + 1397 + 846 + 650 + 183 + 5** (+163). Linux / aarch64 / AGNOS build with the same warning set as 0.45.2.
 
 ### Added — the startup ibis, generated from the TIFF
 
@@ -32,7 +32,8 @@ shaded cells read at every splash size once colour carries the tone.
 
 `src/greet.cyr` is the greeting's view-model + layout, in the `surface.cyr` mould — facts, never bytes.
 `greet_build(up)` snapshots the box's rows as (role, text) spans into an OWNED store (copies: `/reload` re-allocs
-the config strings they quote), in groups with an open row between them: the title line; the stack's status —
+the config strings they quote), in groups with an open row between them: the title line with the tagline (the
+THOTH backronym, muted) directly under it; the stack's status —
 `Status: READY` / `hoosh unreachable` / `hoosh absent` / `no config` under the 0.26.0 rules (READY only when a
 CONFIGURED gateway answered) and, directly under it, the component at its address in the SAME colour as the mark:
 `hoosh @ <url>` green under READY, `hoosh @ <url> (not found)` red under unreachable, `hoosh @ (unset) — no
@@ -52,9 +53,8 @@ nothing soft-wraps under the block; then an open row and the help line two tabs 
 `UI_TAB_COLS`). The winsize is read before the seed (`_tui_read_winsize`, split out of `tui_relayout`) so the
 block fits the live grid: an 80×24 terminal gets the 32-column ibis (18 rows + the open row + the help line fill
 its 20-row band exactly), 100×40 the 56.
-`tui_intro_emit`, the inline Status / config emission and the tagline line are gone from the TUI greeting — the
-first two moved into the box; the tagline (the backronym) now shows only in line mode's `print_banner`, which is
-unchanged.
+`tui_intro_emit` and the inline Status / config / tagline emission are gone from the TUI greeting — all three
+moved into the box (line mode's `print_banner` is unchanged).
 
 GUI: `_gfeed_greeting` lays the same model out on the raster's 8×16 cells (less three rows for the open row,
 the gap and the help line, drawn two tabs in),
@@ -63,12 +63,16 @@ its rows as pieces through `gd_push_text`'s codepoint cap — straight from the 
 `gui_run` builds the model once at startup (a silent probe, which also seeds the strip's health dot) like the
 ask seam; the frame builder only lays it out. The default 960×600 window shows the 48-column ibis.
 
-### Changed — the status bar starts a tab in, with a folder before the location
+### Changed — the status bar starts two columns in, with a flat folder before the location
 
-`tui_status_emit` opens with `UI_TAB_COLS` (8) spaces, then `📁 ` before the launch directory's name when the
-bar has one (U+1F4C1, two columns; nothing else moved). The GUI strip does the same a tab in from its edge, with
-the folder drawn as two rects on the cell grid (`_gstatus_folder` — CP437 has no folder glyph) two cells wide
-plus the space, so the label lands where the TUI's does.
+`tui_status_emit` opens with `UI_STATUS_INDENT` (2) spaces, then ` ` before the launch directory's name when the
+bar has one — U+F07B, the Nerd Font folder (`nf-fa-folder`), one column; nothing else moved. It is a Nerd Font
+glyph on purpose: every Nerd Font carries it and it is what a status line's folder looks like; a terminal without
+one shows a box there. (The first cut of this used the emoji folder U+1F4C1, which was worse on both counts — no
+plain font on the development machine had it at all, and it is two columns.) The GUI strip does the same two
+cells in from its edge, with the folder drawn flat on the cell grid (`_gstatus_folder` — a filled tab over an
+outlined body inside one 8×16 cell, CP437 having no folder glyph) plus the space, so the label lands where the
+TUI's does.
 
 ### Fixed — the global config, reached by the walk, was named as a local layer too
 
@@ -124,15 +128,15 @@ Verified on the binary from a scratch `$HOME` holding only `.thoth/config.cyml` 
 `$PWD` outside `$HOME` twice (the veto); a project `.thoth/` with a byte-copied config and its own store sends both
 facts, each once; no global config at all, twice (the limitation above).
 
-Tests (+117): `tests/cases/greet.cyr` covers the model (title spans and roles, the open row, both status
+Tests (+127 on the greeting; +163 in all with the memory-root fix above): `tests/cases/greet.cyr` covers the model (title spans and roles, the open row, both status
 branches against whichever config state the process is in, the config row, that the store owns its bytes), the
 layout (56 at 100×35, 32 at 80×20, 40 at 80×40, none at 60 columns or at 10 rows, the box centred), the wrap
 (every physical row within the inner width; the pieces of a row reproduce its bytes exactly; the title at 20
-columns breaks BEFORE `Librarian`, not inside it), the address line under the status in the mark's colour and
-the open rows between the groups, and the TUI leaf (one line per physical row, art-only rows padded, the frame's
+columns breaks BEFORE `Librarian`, not inside it), the tagline row, the address line under the status in the
+mark's colour and the open rows between the groups, and the TUI leaf (one line per physical row, art-only rows padded, the frame's
 four corners, the box alone from column 0 when no art fits). Each was proven by breaking its subject: no padding
 (27 failures), a char wrap (2), a frame one row short (1). The GUI test asserts the border command, the art left
-of the box, the title's spans at their new origin, and the strip's label a tab + the folder icon in. The core
+of the box, the title's spans at their new origin, and the strip's label two cells + the folder icon in. The core
 suite pins `_cfg_same_bytes` (a file against itself, two files, a missing file either way round, a file at the
 cap) and `config_path_display` (`~/…`, `$HOME2/x` left alone, `$HOME` itself, a relative path) on git-tracked
 fixtures.

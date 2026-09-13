@@ -128,7 +128,7 @@ fn greet_tier_role(t) {
 }
 
 # greet_build: (re)build the box rows from the persona, the version and the config state, with `up` the
-# caller's hoosh probe result. Groups, an open row between them: the title · the stack's status (`Status:` +
+# caller's hoosh probe result. Groups, an open row between them: the title + tagline · the stack's status (`Status:` +
 # the `hoosh @ <address>` line in the mark's colour) · the model · the config. The status rules are 0.26.0's:
 # READY only when a CONFIGURED gateway actually answers — never off the silent localhost default when no
 # config was found, because that masked a config that never loaded. The `[default … is reachable]` note stays
@@ -145,6 +145,8 @@ fn greet_build(up) {
     _greet_span(ROLE_ACCENT_DIM, persona_role_title());
     _greet_span(ROLE_FAINT, ": ");
     _greet_span(ROLE_MUTED, thoth_version());
+    _greet_row();                                   # the tagline — the backronym — under the title (0.45.3)
+    _greet_span(ROLE_MUTED, persona_tagline());
     _greet_row();                                   # the open line
     # the stack: is it ready or not — `Status:` answers, and the line under it names the component at its
     # address in the SAME colour as the mark (0.45.3): `hoosh @ <url>` green under READY, `hoosh @ <url> (not

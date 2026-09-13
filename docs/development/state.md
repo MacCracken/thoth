@@ -15,7 +15,8 @@ open row, then the hoosh status + config notes (`src/greet.cyr`, the greeting's 
 the widest art that fits the live grid, word-wrapped rows, the shorter block centred on the taller), with
 `type a task…` the first line under it, two tabs in under an open row. The box groups — title · the stack's status
 (`Status:` + `hoosh @ <address>` in the mark's colour) · model · config — sit an open row apart; the status bar
-starts a tab in with a folder before the location. One model, two painters: `tui_greeting_emit` (one feed line per
+starts two columns in with a flat folder (U+F07B, a Nerd Font glyph) before the location; the backronym tagline
+sits under the title. One model, two painters: `tui_greeting_emit` (one feed line per
 physical row, none wider than the feed) and `_gfeed_greeting` (the 8×16 cell grid, a border command, pieces
 through `gd_push_text`'s codepoint cap). The four splash shades ride the palette's own warm ramp, so the ibis needs
 no colour of its own. Fixed alongside: the config walk reaching `~/.thoth/config.cyml` from `~/Repos/<x>` named it
@@ -26,7 +27,7 @@ the global file's bytes, corroborated by the depth `$PWD` places CWD at under `$
 `$PWD` can only veto, never claim; no global config = no claim, the double read kept over a dropped layer). Verified
 on a real pty at 80×24 / 100×40 / 130×50 / a scratch `~/Repos/taar` and on GUI frames at 900×400 / 960×600; the
 memory fix on a scratch `$HOME` (`/dry`: HEAD twice, now once).
-Suite **324 + 1397 + 846 + 640 + 183 + 5** (+153); Linux / aarch64 / AGNOS build with 0.45.2's warning set.
+Suite **324 + 1397 + 846 + 650 + 183 + 5** (+163); Linux / aarch64 / AGNOS build with 0.45.2's warning set.
 
 **0.45.2** — **brief audit and repairs: the symlink jail sees past a path's first component, process spawn works on
 macOS, and a hook that cannot run now denies** (2026-09-12). A read-only audit of the roadmap's open items and the
@@ -3538,7 +3539,7 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **324 + 1397 + 846 + 640 + 183 + 5 assertions across the suites as of
+`tests/thoth_render.tcyr`. **324 + 1397 + 846 + 650 + 183 + 5 assertions across the suites as of
 0.45.3 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored

@@ -34,13 +34,13 @@ fn _gstatus_txt(cmds, pen, ty, color, s) {
     return pen + gr_text_cols(s, 0) * GR_GLYPH_W;
 }
 
-# _gstatus_folder: a folder icon at the pen — the TUI's 📁 has no CP437 glyph, so it is three rects on the 8x16
-# cell: a tab (the folder's label edge) over a body, one glyph row tall, TWO cells wide like the emoji plus the
-# space after it; returns the pen advanced past both (0.45.3).
-var GSTATUS_ICON_CELLS = 3;   # icon (2 cells, like the 2-column emoji) + the space before the label
+# _gstatus_folder: a flat folder at the pen — the TUI's U+F07B has no CP437 glyph, so it is drawn on the cell: a
+# filled tab (the folder's label edge) over an OUTLINED body, inside one 8x16 cell, then the space before the label;
+# returns the pen advanced past both (0.45.3).
+var GSTATUS_ICON_CELLS = 2;   # the icon's cell + the space before the label (matches the TUI's glyph + space)
 fn _gstatus_folder(cmds, pen, ty, color) {
-    gd_push_rect(cmds, pen + 1, ty + 3, 6, 2, color);                    # the tab
-    gd_push_rect(cmds, pen + 1, ty + 5, 13, 8, color);                   # the body
+    gd_push_rect(cmds, pen, ty + 4, 4, 2, color);                        # the tab
+    gd_push_border(cmds, pen, ty + 6, 8, 6, color);                      # the body, outlined
     return pen + GSTATUS_ICON_CELLS * GR_GLYPH_W;
 }
 
@@ -66,7 +66,7 @@ fn gstatus_build(cmds, x, y, w, h) {
     # count — in place of the old `thoth <version> <persona>` block. The version moved to the greeting
     # (_gfeed_greeting) and the persona is one /state away. Each half is omitted on its own when its producer has
     # nothing (ADR-0010), and the git field no longer trails at the far end, where a narrow window clipped it first.
-    pen = pen + UI_TAB_COLS * GR_GLYPH_W;                 # 0.45.3: the strip starts a tab in from the edge
+    pen = pen + UI_STATUS_INDENT * GR_GLYPH_W;            # 0.45.3: the strip starts two cells in from the edge
     var lead = 0;
     if (status_present(SF_REPO) == 1) {
         pen = _gstatus_folder(cmds, pen, ty, _ui_rgb(ROLE_ACCENT_DIM));   # 0.45.3: a folder before the location opened

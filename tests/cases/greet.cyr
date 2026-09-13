@@ -66,59 +66,62 @@ fn test_greet() {
     assert_eq(greet_span_role(0, 3), ROLE_ACCENT_DIM, "...accent-dim");
     assert(streq(greet_span_text(0, 5), thoth_version()) == 1, "the version closes the title");
     assert_eq(greet_span_role(0, 5), ROLE_MUTED, "...muted");
-    assert_eq(greet_row_spans(1), 0, "row 1 is the open line (a row with no spans)");
-    assert(streq(greet_span_text(2, 0), "Status: ") == 1, "row 2 is the status row");
-    assert_eq(greet_span_role(2, 0), ROLE_FAINT, "the `Status: ` label is faint");
+    assert_eq(greet_row_spans(1), 1, "row 1 is the tagline (0.45.3)");
+    assert(streq(greet_span_text(1, 0), persona_tagline()) == 1, "...the backronym, under the title");
+    assert_eq(greet_span_role(1, 0), ROLE_MUTED, "...muted");
+    assert_eq(greet_row_spans(2), 0, "row 2 is the open line (a row with no spans)");
+    assert(streq(greet_span_text(3, 0), "Status: ") == 1, "row 3 is the status row");
+    assert_eq(greet_span_role(3, 0), ROLE_FAINT, "the `Status: ` label is faint");
     # the honesty rules (0.26.0): READY only when a CONFIGURED gateway answered — whichever state this test
     # process is in, `up` must be reported against it, never off the localhost default
     # 0.45.3: the line under `Status:` names the component at its address, in the MARK's colour
     if (config_hoosh_configured() == 1) {
-        assert(streq(greet_span_text(2, 1), "READY") == 1, "a configured gateway that answered -> READY");
-        assert_eq(greet_span_role(2, 1), ROLE_GREEN, "...green");
-        assert(streq(greet_span_text(3, 0), "hoosh @ ") == 1, "...and the address line follows");
-        assert(streq(greet_span_text(3, 1), config_hoosh_url()) == 1, "...naming the url");
-        assert_eq(greet_span_role(3, 0), ROLE_GREEN, "...in the mark's green");
-        assert_eq(greet_span_role(3, 1), ROLE_GREEN, "...the url too");
-        assert_eq(greet_row_spans(3), 2, "...and nothing after the url when it answered");
+        assert(streq(greet_span_text(3, 1), "READY") == 1, "a configured gateway that answered -> READY");
+        assert_eq(greet_span_role(3, 1), ROLE_GREEN, "...green");
+        assert(streq(greet_span_text(4, 0), "hoosh @ ") == 1, "...and the address line follows");
+        assert(streq(greet_span_text(4, 1), config_hoosh_url()) == 1, "...naming the url");
+        assert_eq(greet_span_role(4, 0), ROLE_GREEN, "...in the mark's green");
+        assert_eq(greet_span_role(4, 1), ROLE_GREEN, "...the url too");
+        assert_eq(greet_row_spans(4), 2, "...and nothing after the url when it answered");
         greet_build(0);
-        assert(streq(greet_span_text(2, 1), "hoosh unreachable") == 1, "a configured gateway that did not answer -> unreachable");
-        assert_eq(greet_span_role(2, 1), ROLE_RED, "...red");
-        assert(streq(greet_span_text(3, 0), "hoosh @ ") == 1, "...the address line follows");
-        assert(streq(greet_span_text(3, 1), config_hoosh_url()) == 1, "...naming the url");
-        assert(streq(greet_span_text(3, 2), " (not found)") == 1, "...marked (not found)");
-        assert_eq(greet_span_role(3, 0), ROLE_RED, "...in the SAME red as the mark");
-        assert_eq(greet_span_role(3, 2), ROLE_RED, "...all of it");
-        assert_eq(greet_row_spans(4), 0, "an open row between the status group and the model");
-        assert(streq(greet_span_text(5, 0), "model ") == 1, "a configured gateway -> the model row follows");
-        assert(streq(greet_span_text(5, 1), _hoosh_model()) == 1, "...with the model in play");
+        assert(streq(greet_span_text(3, 1), "hoosh unreachable") == 1, "a configured gateway that did not answer -> unreachable");
+        assert_eq(greet_span_role(3, 1), ROLE_RED, "...red");
+        assert(streq(greet_span_text(4, 0), "hoosh @ ") == 1, "...the address line follows");
+        assert(streq(greet_span_text(4, 1), config_hoosh_url()) == 1, "...naming the url");
+        assert(streq(greet_span_text(4, 2), " (not found)") == 1, "...marked (not found)");
+        assert_eq(greet_span_role(4, 0), ROLE_RED, "...in the SAME red as the mark");
+        assert_eq(greet_span_role(4, 2), ROLE_RED, "...all of it");
+        assert_eq(greet_row_spans(5), 0, "an open row between the status group and the model");
+        assert(streq(greet_span_text(6, 0), "model ") == 1, "a configured gateway -> the model row follows");
+        assert(streq(greet_span_text(6, 1), _hoosh_model()) == 1, "...with the model in play");
         if (config_parse_ok() == 1) {
-            assert_eq(greet_row_spans(6), 0, "an open row between the model and the config");
-            assert(streq(greet_span_text(7, 0), "config ") == 1, "...then the config row");
+            assert_eq(greet_row_spans(7), 0, "an open row between the model and the config");
+            assert(streq(greet_span_text(8, 0), "config ") == 1, "...then the config row");
         }
     } else {
-        assert(streq(greet_span_text(2, 1), "READY") == 0, "no configured gateway -> never READY, even when the default answered");
-        assert_eq(greet_span_role(2, 1), ROLE_RED, "...the status is red");
-        assert_eq(memeq(greet_span_text(3, 0), "hoosh @ (unset)", 15), 1, "...the address line says the url is unset");
-        assert_eq(greet_span_role(3, 0), ROLE_RED, "...in the mark's red");
-        assert_eq(_tg_row_has(3, "  [default "), 1, "...but the reachable default is NOTED, on the address line");
+        assert(streq(greet_span_text(3, 1), "READY") == 0, "no configured gateway -> never READY, even when the default answered");
+        assert_eq(greet_span_role(3, 1), ROLE_RED, "...the status is red");
+        assert_eq(memeq(greet_span_text(4, 0), "hoosh @ (unset)", 15), 1, "...the address line says the url is unset");
+        assert_eq(greet_span_role(4, 0), ROLE_RED, "...in the mark's red");
+        assert_eq(_tg_row_has(4, "  [default "), 1, "...but the reachable default is NOTED, on the address line");
         greet_build(0);
-        assert_eq(_tg_row_has(3, "  [default "), 0, "no answer -> no `[default … is reachable]` note");
+        assert_eq(_tg_row_has(4, "  [default "), 0, "no answer -> no `[default … is reachable]` note");
         # no model row without a gateway: the row after the status group is the config group or nothing
         var _nr = greet_rows();
-        var _r = 4;
+        var _r = 5;
         while (_r < _nr) { assert(streq(greet_span_text(_r, 0), "model ") == 0, "no gateway -> no model row"); _r = _r + 1; }
         if (config_parse_ok() == 1) {
-            assert_eq(greet_row_spans(4), 0, "an open row between the status group and the config");
-            assert(streq(greet_span_text(5, 0), "config ") == 1, "...then the config row");
+            assert_eq(greet_row_spans(5), 0, "an open row between the status group and the config");
+            assert(streq(greet_span_text(6, 0), "config ") == 1, "...then the config row");
         }
     }
     var _cfg_rows = 0;
-    var _cr = 3;
+    var _cr = 4;
     while (_cr < greet_rows()) { if (streq(greet_span_text(_cr, 0), "config ") == 1) { _cfg_rows = _cfg_rows + 1; } _cr = _cr + 1; }
     assert_eq(_cfg_rows, config_parse_ok(), "exactly one config row when a config was read, none otherwise");
     if (config_parse_ok() == 1) {
-        var _cfr = 5;
-        if (config_hoosh_configured() == 1) { _cfr = 7; }
+        var _cfr = 6;
+        if (config_hoosh_configured() == 1) { _cfr = 8; }
         assert(streq(greet_span_text(_cfr, 1), config_path_display(config_path())) == 1, "the config row names the file with $HOME folded to ~");
     }
     # the store OWNS its bytes: a span's text is a copy, not the producer's pointer
@@ -201,9 +204,18 @@ fn test_greet() {
     var _tln = feed_line_len(greet_box_y() + 1);
     assert_eq(_t_count_sub(_tl, _tln, "│ {(o> ", 8), 1, "the title row is the first content row, behind `│ `");
     assert_eq(_t_count_sub(_tl, _tln, thoth_version(), strlen(thoth_version())), 1, "...carrying the version");
-    var _ol = feed_line_ptr(greet_box_y() + 2);
-    var _oln = feed_line_len(greet_box_y() + 2);
-    assert_eq(_t_count_sub(_ol, _oln, "│", 3), 2, "the open row is an empty framed row");
+    # the tagline sits directly under the title's last physical row; it word-wraps at this interior (38 < 48 cols)
+    var _tgr = greet_box_y() + 1 + greet_row_segs(0);
+    var _tg = feed_line_ptr(_tgr);
+    var _tgn = feed_line_len(_tgr);
+    assert_eq(_t_count_sub(_tg, _tgn, persona_tagline(), 15), 1, "the tagline sits directly under the title (0.45.3)");
+    assert(greet_row_segs(1) >= 2, "...wrapped at a 38-col interior (the backronym is 48 cols)");
+    var _olr = _tgr + greet_row_segs(1);
+    var _ol = feed_line_ptr(_olr);
+    var _oln = feed_line_len(_olr);
+    assert_eq(_t_count_sub(_ol, _oln, "│", 3), 2, "then the open row — an empty framed row — before the status");
+    assert_eq(feed_vis(_olr), 58 + greet_inner() + 4, "...framed to the full box width");
+    assert_eq(_t_count_sub(_ol, _oln, "Status", 6), 0, "...with nothing on it");
     var _bot = feed_line_ptr(greet_box_y() + greet_box_rows() - 1);
     var _botn = feed_line_len(greet_box_y() + greet_box_rows() - 1);
     assert_eq(_t_count_sub(_bot, _botn, "└", 3), 1, "the bottom border");
