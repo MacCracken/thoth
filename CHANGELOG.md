@@ -2,6 +2,69 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.45.0] - 2026-09-12
+
+**The status bar moves below the input and leads with where you are.** On the TUI and the GUI the bar
+is now the bottom band, under the composer and a line of padding, and it opens with the launch
+directory's name and git branch where `{(o> thoth (<version>) · <persona>` used to be. The version
+moved into the greeting: `{(o> Thoth - The Librarian: 0.45.0`. Suite
+**316 + 1021 + 810 + 521 + 183 + 5** (+40). Linux / aarch64 / AGNOS build with the same warning set as 0.44.6.
+
+### Changed — TUI layout: feed · rule · composer · hint · blank · status
+
+The hint row stays directly under the composer — it carries the slash palette, the Ctrl-F / Ctrl-P
+prompts and the working spinner, all of which are about what is being typed — then one blank row,
+then the status bar on the last row. Ctrl-G hides the bar **and** its blank row, so the hint returns
+to the last row. The feed keeps the height it had before in both states (19 rows of a 24-row
+terminal with the bar shown, 21 hidden), and the rule that sat under the old top bar is gone.
+
+The row helpers changed shape to match (`tui_status_row(rows)`, new `tui_status_gap_row`,
+`tui_hint_row(rows, show)`, `tui_composer_bot(rows, show)`, `tui_feed_top()`), and a new assertion
+walks 8–60 rows × both states × 1–10 composer lines checking that the bands tile the screen with no
+gap or overlap. Verified on a real pty (24×100) with the shipping binary: startup, `/mo` listing
+`/model /models` directly under the composer, a two-line composer growing upward with the hint still
+beneath it, and Ctrl-G hide / show.
+
+### Changed — GUI frame: the status strip is the bottom band
+
+`gframe_build` lays out the body, the composer line, 20 px of padding (`GFRAME_COMPOSER_GAP`, one
+feed line), a rule, and the strip on the bottom edge. Ctrl+S takes the padding away with the strip,
+so the composer line returns to the window's edge, as Ctrl-G does in the TUI. Tests assert the
+strip's background sits at `h - GFRAME_STRIP_H`, that nothing draws one at the top, and where the
+composer row lands with the strip hidden.
+
+### Changed — the bar leads with repo + branch
+
+`{(o> thoth (0.44.6) · Thoth  model …` becomes `thoth · main +2  model …` in both renderers
+(`tui_status_emit`, `gstatus_build` — same fields, same order, same omit gates). The git field used
+to trail at the far end, the first thing a narrow terminal clipped; it is now the lead, drawn once.
+
+The label is a new view-model field, `SF_REPO`, fed by `project_dir_name()`: the last component of
+`$PWD`, resolved once. It is **display-only**, exactly like `project_root_display` beside it — a
+wrong `$PWD` mislabels the bar and can never reach a jail decision — and it is omitted when `$PWD` is
+unset, relative, `/`, or ends in `/` (ADR-0010). Outside a repo the bar shows the directory name
+alone.
+
+⚠ **The label is sanitised where it enters (`safe_label_copy`).** A directory name is untrusted
+bytes headed for the terminal. Launched inside a directory named `evil<ESC>[7mdir`, the bar reads
+`evil?[7mdir` and the raw pty stream carries no escape. The unit test was checked by breaking the
+fix: with a raw copy in its place, exactly that assertion fails.
+
+The branch needed no such filter. sit's `refname_valid` (S-25) already refuses a control byte in
+HEAD's target, so a repository whose HEAD names `ma<ESC>[7min` reads as detached — zero raw escapes
+from 0.44.6 and 0.45.0 alike, with or without the ref file present.
+
+### Changed — the greeting carries the version
+
+The TUI (`tui_intro_emit`) and the GUI (`_gfeed_greeting`) both open with
+`{(o> <persona> - <Role>: <version>`. `persona_role_title()` capitalises the role's first ASCII
+letter for that title position only; `persona_role()` stays `the Librarian` wherever it sits
+mid-sentence (the line-mode banner, the system prompt, `/role`, `/state`). The line-mode banner
+already showed the version and is unchanged.
+
+The bar's integers now go through `ofmt_int` (byte-identical to `fmt_int` under `OUT_FD1`), so its
+content can be captured and asserted under `OUT_RING`.
+
 ## [0.44.6] - 2026-09-10
 
 **Toolchain 6.5.51 → 6.6.2 — the `Result` / `Option` / `Either` value form — and the

@@ -409,10 +409,20 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
 
 # _gfeed_greeting: the empty-state opening screen (no conversation yet). Honest — the app's greeting, not a
 # faked message. Returns the next y.
+#
+# 0.45.0: the first line is the TUI greeting's — `{(o> <persona> - <Role>: <version>` — drawn span by span on one
+# row. The version lives here now that the status strip leads with the repo + branch instead. The pen advances by
+# CODEPOINTS (_gstatus_txt), so a non-ASCII persona or role never drifts the spans that follow it.
 fn _gfeed_greeting(cmds, x, y, avail_px) {
     var cy = y;
-    gd_push_text(cmds, x, cy, _ui_rgb(ROLE_ACCENT), persona_name(), 0);
-    cy = _gfeed_para(cmds, x + strlen(persona_name()) * GR_GLYPH_W + 8, cy, avail_px, _ui_rgb(ROLE_ACCENT_DIM), persona_role());
+    var pen = x;
+    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_ACCENT), "{(o> ");
+    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_ACCENT), persona_name());
+    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_FAINT), " - ");
+    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_ACCENT_DIM), persona_role_title());
+    pen = _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_FAINT), ": ");
+    _gstatus_txt(cmds, pen, cy, _ui_rgb(ROLE_MUTED), thoth_version());
+    cy = cy + GFEED_LH;
     cy = cy + GFEED_GAP;
     cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_MUTED), "a sovereign agentic coding TUI — now with a desktop window.");
     cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin. (input wiring lands next.)");
@@ -587,11 +597,14 @@ fn gfeed_build(cmds, x, y, w, h) {
     return endy;
 }
 
-# --- the whole window frame (status strip + feed + composer line) ------------------------------------------
-# The three-region mockup layout. PURE — assembles a cmd list over the tested pipeline; the present loop
-# (gpresent.cyr) rasters it into the wl_shm buffer. Lives here (a view-builder) so it is headless-testable.
+# --- the whole window frame (feed + composer line + status strip) ------------------------------------------
+# Top-to-bottom: the body (optional sidebar / tree panes + the feed), the composer line, one line of padding, and the
+# status strip on the bottom edge (0.45.0 — it was the TOP band; the TUI moved its bar below the input in the same
+# release). PURE — assembles a cmd list over the tested pipeline; the present loop (gpresent.cyr) rasters it into
+# the wl_shm buffer. Lives here (a view-builder) so it is headless-testable.
 var GFRAME_STRIP_H = 34;
 var GFRAME_COMPOSER_H = 40;
+var GFRAME_COMPOSER_GAP = 20;   # 0.45.0: one feed line (GFEED_LH) of padding between the composer and the strip below it
 fn _gframe_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
 
 # --- the throbbing owl eye (0.30.11): the `o` in the {(o> composer prompt pulses colour as a LIVE status
@@ -627,17 +640,21 @@ fn geye_color_now() { return geye_color(_geye_phase); }
 fn gframe_build(w, h) {
     var cmds = gd_list_new();
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
-    # status strip (0.32.x: hidden via Ctrl+S -> the feed reclaims its height). When shown it spans the full width.
+    # status strip — the BOTTOM band since 0.45.0, under the composer and one line of padding, as the TUI's bar sits
+    # below its input. Hidden via Ctrl+S (0.32.x) it takes that padding with it and the composer returns to the
+    # window's bottom edge (the TUI's Ctrl-G frees the status row AND its blank row the same way). Full width.
     var body_top = 0;
+    var comp_bot = h;                                                        # the y the composer line ends at
     if (gstatus_hidden() == 0) {
-        gstatus_build(cmds, 0, 0, w, GFRAME_STRIP_H);                        # status strip (the view-model)
-        gd_push_rect(cmds, 0, GFRAME_STRIP_H, w, 1, _ui_rgb(ROLE_FAINT));    # rule under the strip
-        body_top = GFRAME_STRIP_H + 1;
+        var strip_top = h - GFRAME_STRIP_H;
+        gstatus_build(cmds, 0, strip_top, w, GFRAME_STRIP_H);                # status strip (the view-model)
+        gd_push_rect(cmds, 0, strip_top - 1, w, 1, _ui_rgb(ROLE_FAINT));     # rule over the strip
+        comp_bot = strip_top - 1 - GFRAME_COMPOSER_GAP;
     }
-    # body band: an optional file-tree pane (left) + the conversation feed (right); status strip + composer span
+    # body band: an optional file-tree pane (left) + the conversation feed (right); the composer + status strip span
     # the full width. The tree hides on a narrow window (gtree_w -> 0) OR via Ctrl+B (0.32.x), giving the feed the
     # whole body as before.
-    var comp_top = h - GFRAME_COMPOSER_H;                                    # composer line (bottom)
+    var comp_top = comp_bot - GFRAME_COMPOSER_H;                             # composer line (above the strip)
     var body_h = comp_top - body_top;
     if (body_h < 0) { body_h = 0; }
     # left band, accumulating: an optional conversation sidebar (0.33.6), then an optional file-tree pane, then the

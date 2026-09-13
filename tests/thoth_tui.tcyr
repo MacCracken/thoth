@@ -102,6 +102,7 @@ fn main() {
     test_theme();
     test_rainbow();
     test_mpick();
+    test_status_bar_0450();
     return assert_summary();
 }
 var _e = main();

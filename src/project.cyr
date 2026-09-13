@@ -328,6 +328,39 @@ fn project_root_display() {
     return _proj_root_disp;
 }
 
+# _proj_dir_label: write the last component of the ABSOLUTE path `path` into dst (bounded by cap, NUL-terminated)
+# and return its length — 0 for no label: a null or relative path, the root "/" itself, or a path ending in '/'
+# (a trailing slash names no component; say nothing rather than guess). PURE.
+#
+# ⚠ SANITISED (safe_label_copy) because a directory name is untrusted bytes about to be drawn as chrome: the TUI
+# status bar writes it straight to the terminal, and an archive can unpack a directory whose name carries an escape.
+fn _proj_dir_label(dst, cap, path) {
+    store8(dst, 0);
+    if (path == 0) { return 0; }
+    if (load8(path) != 47) { return 0; }
+    var bn = _proj_basename(path);
+    if (bn == 0) { return 0; }
+    if (load8(bn) == 0) { return 0; }
+    return safe_label_copy(dst, cap, bn);
+}
+
+# project_dir_name (0.45.0): the launch directory's name — the status bar's lead, beside the git branch. DISPLAY
+# ONLY: it derives from project_root_display, so that function's $PWD warning applies verbatim (a wrong $PWD
+# mislabels the bar; nothing may ever feed this into a jail decision). 0 when there is no usable label, and the bar
+# then omits the field (ADR-0010). Resolved ONCE — thoth never leaves its launch directory, and the bar asks on
+# every paint, so an unusable $PWD must not cost a fresh buffer each time.
+var PROJ_DIR_NAME_CAP = 256;
+var _proj_dir_name = 0;
+var _proj_dir_name_done = 0;
+fn project_dir_name() {
+    if (_proj_dir_name_done == 0) {
+        _proj_dir_name_done = 1;
+        var buf = alloc(PROJ_DIR_NAME_CAP);
+        if (_proj_dir_label(buf, PROJ_DIR_NAME_CAP, project_root_display()) > 0) { _proj_dir_name = buf; }
+    }
+    return _proj_dir_name;
+}
+
 # _proj_is_project_abs: 1 when `path` is an ABSOLUTE path naming the launch directory or something below
 # it. Used ONLY to WORD a refusal — never to grant one. See the warning above.
 fn _proj_is_project_abs(path) {

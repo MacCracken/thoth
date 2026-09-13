@@ -1217,6 +1217,21 @@ fn persona_role_reset() {
     _persona_sys_dirty = 1;
     return 0;
 }
+# persona_role_title (0.45.0): the active role with its first letter capitalised, for a TITLE position — the TUI
+# and GUI greetings read `{(o> Thoth - The Librarian: <version>`. persona_role() itself stays sentence-case, since
+# everywhere else it sits mid-sentence (the line banner's "Thoth, the Librarian", the system prompt, /role, /state).
+# Only an ASCII a-z first byte changes; a digit or a multibyte first letter is left exactly as written. Copied
+# through the house sanitiser into ONE reused buffer (bounded at PERSONA_TITLE_CAP): a per-call alloc would leak a
+# copy on every GUI frame rebuild, and a custom `/role` label is text headed for chrome like any other label.
+var PERSONA_TITLE_CAP = 256;
+var _persona_title_buf = 0;
+fn persona_role_title() {
+    if (_persona_title_buf == 0) { _persona_title_buf = alloc(PERSONA_TITLE_CAP); }
+    safe_label_copy(_persona_title_buf, PERSONA_TITLE_CAP, persona_role());
+    var c = load8(_persona_title_buf);
+    if ((c >= 97) && (c <= 122)) { store8(_persona_title_buf, c - 32); }
+    return _persona_title_buf;
+}
 # The THOTH backronym is the APPLICATION's naming — a fixed statement of what the tool does — never the
 # active archetype's attribute. It stays constant across persona switches (identity split, 0.22.0).
 fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"; }

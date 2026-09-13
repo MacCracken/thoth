@@ -1,10 +1,10 @@
 # thoth — the T2 rich-TUI front-end (M7; landed 0.9.0, self-managed feed 0.9.1).
 #
-# The alt-screen, raw-mode interactive layout: a pinned status bar (row 1), a
-# SELF-MANAGED feed (0.9.1: dispatch output is captured into the src/feed.cyr ring
-# and painted here each frame — replacing 0.9.0's DECSTBM scroll-region trick, the
-# prerequisite for the file-tree pane + instant SIGWINCH), and a raw-mode composer
-# at the bottom. It is an ALTERNATIVE front-end to repl_loop(),
+# The alt-screen, raw-mode interactive layout: a SELF-MANAGED feed (0.9.1: dispatch
+# output is captured into the src/feed.cyr ring and painted here each frame — replacing
+# 0.9.0's DECSTBM scroll-region trick, the prerequisite for the file-tree pane + instant
+# SIGWINCH), a raw-mode composer, and a pinned status bar on the last row below it
+# (0.45.0; it was row 1). It is an ALTERNATIVE front-end to repl_loop(),
 # selected only when the presentation tier is T2 (PT_RICH) on a real TTY; everywhere
 # else the line-mode REPL stands in unchanged — degrade closed, port the floor.
 # Built on the vendored darshana substrate (tty_raw/alt/move/winsize/...).
@@ -462,22 +462,24 @@ fn led_paste(src, len) {
 }
 
 # --- pure: layout geometry (0.11.9: faint rules + dynamic multi-line composer) ---
-# Bands top-to-bottom (status shown): row 1 status · row 2 TOP RULE · feed ·
-# BOTTOM RULE · the composer block (1..MAX rows, grows upward with line count) ·
-# last row hint. Toggling the status bar off frees rows 1-2 into the feed (no status =
-# no top rule); the bottom rule above the composer always stands. The composer height
-# tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are PURE
-# and take explicit (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so
-# they unit-test without mutating the composer/show globals.
+# Bands top-to-bottom (0.45.0 — the status bar moved from row 1 to BELOW the input): feed · RULE · the composer
+# block (1..MAX rows, grows upward with line count) · hint · blank · status on the last row. The hint row stays
+# directly under the composer because it is the composer's own strip — the slash palette, the find/pick prompts and
+# the working spinner all speak about what is being typed — and one blank row then separates that input zone from
+# the status bar. Toggling the status bar off (Ctrl-G) frees BOTH the status row and its blank separator into the
+# feed, so the hint drops back to the last row; the rule above the composer always stands. The composer height
+# tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are PURE and take explicit
+# (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so they unit-test without mutating the
+# composer/show globals.
 var COMPOSER_MAX_ROWS = 8;    # the composer never grows past this (a long paste scrolls within)
 var MIN_FEED = 1;             # the feed never shrinks below this many rows
 
-fn tui_status_row() { return 1; }
-fn tui_hint_row(rows) { return rows; }
-fn tui_sep_top_row() { return 2; }                 # the rule under the status bar (status shown only)
+fn tui_status_row(rows) { return rows; }            # the status bar: the last row (status shown only)
+fn tui_status_gap_row(rows) { return rows - 1; }    # the blank row between the hint and the status bar (status shown only)
+fn tui_hint_row(rows, show) { if (show == 1) { return rows - 2; } return rows; }
 # tui_composer_max: the largest composer height that still leaves MIN_FEED feed rows,
-# capped at COMPOSER_MAX_ROWS. chrome above+below the feed = status+2rules+hint (4) when
-# status shown, else bottom-rule+hint (2). Clamped to >= 1.
+# capped at COMPOSER_MAX_ROWS. chrome around the feed + composer = rule+hint+blank+status (4)
+# when status shown, else rule+hint (2). Clamped to >= 1.
 fn tui_composer_max(rows, show) {
     var chrome = 2;
     if (show == 1) { chrome = 4; }
@@ -494,10 +496,10 @@ fn tui_composer_height(rows, lines, show) {
     if (h > mx) { h = mx; }
     return h;
 }
-fn tui_composer_bot(rows) { return rows - 1; }     # composer block's last row (above the hint)
-fn tui_composer_top(rows, lines, show) { return rows - tui_composer_height(rows, lines, show); }
-fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }
-fn tui_feed_top(show_status) { if (show_status == 1) { return 3; } return 1; }
+fn tui_composer_bot(rows, show) { return tui_hint_row(rows, show) - 1; }   # composer block's last row (just above the hint)
+fn tui_composer_top(rows, lines, show) { return tui_composer_bot(rows, show) - tui_composer_height(rows, lines, show) + 1; }
+fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }   # the rule between feed + composer
+fn tui_feed_top() { return 1; }                     # the feed owns row 1 now that no status bar sits above it
 fn tui_feed_bot(rows, lines, show) { return tui_sep_bottom_row(rows, lines, show) - 1; }
 # _comp_vscroll_first: first visible logical line so cursor line `cl` stays within a
 # window of `height` rows over `total` logical lines (mirrors _ftree_scroll_first). Pure.
@@ -873,18 +875,59 @@ fn _tui_scroll_region(top, bot) {
     return 0;
 }
 
-# tui_draw_status: render the pinned status bar at row 1 (or clear it when hidden).
-# ◆ thoth · model · the live presentation tier. Cursor is left for the caller to
-# reposition at the composer.
+# tui_draw_status: paint the status bar on the LAST row, with the blank row above it cleared as the input zone's
+# bottom margin (0.45.0 — the bar was row 1 until now). Hidden (Ctrl-G), it paints nothing: both rows then belong to
+# the feed and the hint (see the band layout above). Cursor is left for the caller to reposition at the composer.
 fn tui_draw_status() {
-    tty_move(1, 1);
-    tty_clear_to_eol();
     if (_tui_show_status == 0) { return 0; }
-    status_snapshot();    # 0.28.0: the shared status view-model (Stage B). Reads the git CACHE (no probe) — matches the prior bar behavior exactly.
-    emit(ui_sgr(ROLE_ACCENT)); emit("{(o> thoth (");  # the owl prompt doubles as the brand glyph
-    emit(thoth_version()); emit(")"); emit(ui_reset());
-    ui_emit(ROLE_FAINT, " · "); ui_emit(ROLE_ACCENT_DIM, status_sval(SF_PERSONA));   # active avatara persona (0.22.0)
-    ui_emit(ROLE_FAINT, "  model ");
+    tty_move(tui_status_gap_row(_tui_rows), 1);
+    tty_clear_to_eol();
+    tty_move(tui_status_row(_tui_rows), 1);
+    tty_clear_to_eol();
+    tui_status_emit();
+    return 0;
+}
+
+# tui_intro_emit: the greeting's first line (0.45.0) — `{(o> <persona> - <Role>: <version>`, e.g.
+# `{(o> Thoth - The Librarian: 0.45.0`. The version lives here now that the status bar leads with the repo + branch
+# instead; the role is title-cased for the title position (persona_role_title — the stored role is untouched).
+fn tui_intro_emit() {
+    ui_emit(ROLE_ACCENT, "{(o> ");
+    ui_emit(ROLE_ACCENT, persona_name());
+    ui_emit(ROLE_FAINT, " - ");
+    ui_emit(ROLE_ACCENT_DIM, persona_role_title());
+    ui_emit(ROLE_FAINT, ": ");
+    ui_emit(ROLE_MUTED, thoth_version());
+    return 0;
+}
+
+# tui_status_emit: the bar's CONTENT at the cursor — no cursor moves, so a test can capture it under OUT_RING (which
+# is also why its integers go through ofmt_int: stdlib fmt_int writes fd 1 directly; under OUT_FD1 the two are
+# byte-identical). 0.45.0: the bar LEADS with where you are — the launch directory's name, then (in a repo) the branch
+# + dirty count — in place of the old `{(o> thoth (<version>) · <persona>` block. The version moved to the greeting
+# (tui_intro_emit), the persona is one /state away, and the git field no longer trails at the far end, where a narrow
+# terminal clipped it first. Each half is omitted on its own when its producer has nothing (ADR-0010).
+fn tui_status_emit() {
+    status_snapshot();    # 0.28.0: the shared status view-model (Stage B). Reads the git CACHE (no probe) — the paint never walks the worktree.
+    var lead = 0;         # 1 once the repo/branch lead drew something, so "model" gets its two-space gutter
+    if (status_present(SF_REPO) == 1) {
+        ui_emit(ROLE_ACCENT_DIM, status_sval(SF_REPO));
+        lead = 1;
+    }
+    # git: branch (+dirty count), omitted when there is no repo at cwd (0.13.0, ADR-0010 — never a faked branch).
+    # The cache is probed at startup + after each turn + on /state|/git.
+    if (status_present(SF_GIT) == 1) {
+        if (lead == 1) { ui_emit(ROLE_FAINT, " · "); }
+        emit(ui_sgr(ROLE_ACCENT));
+        if (status_state(SF_GIT) == SF_GIT_DETACHED) { emit("(detached)"); } else { emit(status_sval(SF_GIT)); }
+        emit(ui_reset());
+        if (status_ival(SF_GIT) > 0) {
+            ui_emit(ROLE_FAINT, " +"); emit(ui_sgr(ROLE_FG)); ofmt_int(status_ival(SF_GIT)); emit(ui_reset());
+        }
+        lead = 1;
+    }
+    if (lead == 1) { ui_emit(ROLE_FAINT, "  "); }
+    ui_emit(ROLE_FAINT, "model ");
     var _mm = status_sval(SF_MODEL);
     if (_mm == 0) { _mm = "default"; }        # the bar's null placeholder (== the old _hoosh_model() fallback)
     ui_emit(ROLE_ACCENT, _mm);
@@ -898,19 +941,19 @@ fn tui_draw_status() {
         else { ui_emit(ROLE_FAINT, "○"); }
     }
     ui_emit(ROLE_FAINT, "  turns ");
-    emit(ui_sgr(ROLE_FG)); fmt_int(status_ival(SF_TURNS)); emit(ui_reset());
+    emit(ui_sgr(ROLE_FG)); ofmt_int(status_ival(SF_TURNS)); emit(ui_reset());
     # ctx: framed history bytes vs the ~32 KiB evict boundary (0.19.0). Omitted when single-turn / empty
     # (ADR-0010); the number turns RED once oldest turns start being evicted from the request.
     if (status_present(SF_CTX) == 1) {
         ui_emit(ROLE_FAINT, "  ctx ");
         if (status_state(SF_CTX) > 0) { emit(ui_sgr(ROLE_RED)); } else { emit(ui_sgr(ROLE_FG)); }
-        fmt_int(status_ival(SF_CTX)); emit("K"); emit(ui_reset());
-        emit(ui_sgr(ROLE_FAINT)); emit("/"); fmt_int(status_ival2(SF_CTX)); emit("K"); emit(ui_reset());
+        ofmt_int(status_ival(SF_CTX)); emit("K"); emit(ui_reset());
+        emit(ui_sgr(ROLE_FAINT)); emit("/"); ofmt_int(status_ival2(SF_CTX)); emit("K"); emit(ui_reset());
     }
     # tok: omitted until hoosh reports usage (0.10.2, ADR-0010 — never a placeholder).
     if (status_present(SF_TOKENS) == 1) {
         ui_emit(ROLE_FAINT, "  tok ");
-        emit(ui_sgr(ROLE_FG)); fmt_int(status_ival(SF_TOKENS)); emit(ui_reset());
+        emit(ui_sgr(ROLE_FG)); ofmt_int(status_ival(SF_TOKENS)); emit(ui_reset());
     }
     # cost: omitted until a priced response accumulates (0.10.3, ADR-0010).
     if (status_present(SF_COST) == 1) {
@@ -918,18 +961,6 @@ fn tui_draw_status() {
         cost_fmt(&_cbuf, status_ival(SF_COST));
         ui_emit(ROLE_FAINT, "  ");
         emit(ui_sgr(ROLE_GREEN)); emit(&_cbuf); emit(ui_reset());
-    }
-    # git: branch (+dirty count), omitted when there is no repo at cwd (0.13.0,
-    # ADR-0010 — never a faked branch). Reads the cache (probed at startup + after
-    # each turn + on /state|/git); the status paint never walks the worktree itself.
-    if (status_present(SF_GIT) == 1) {
-        ui_emit(ROLE_FAINT, "  ");
-        emit(ui_sgr(ROLE_ACCENT));
-        if (status_state(SF_GIT) == SF_GIT_DETACHED) { emit("(detached)"); } else { emit(status_sval(SF_GIT)); }
-        emit(ui_reset());
-        if (status_ival(SF_GIT) > 0) {
-            ui_emit(ROLE_FAINT, " +"); emit(ui_sgr(ROLE_FG)); fmt_int(status_ival(SF_GIT)); emit(ui_reset());
-        }
     }
     ui_emit(ROLE_FAINT, "  surface ");
     ui_emit(ROLE_GREEN, status_sval(SF_SURFACE));
@@ -1030,7 +1061,7 @@ fn tui_draw_palette() {
 # tui_draw_hint: the bottom strip — the slash-command palette while typing a
 # '/command', else the keybinding hints. Discoverability matters without a mouse.
 fn tui_draw_hint() {
-    tty_move(tui_hint_row(_tui_rows), 1);
+    tty_move(tui_hint_row(_tui_rows, _tui_show_status), 1);
     tty_clear_to_eol();
     if (_mpick_active == 1) { _tui_draw_pick_hint(); return 0; }       # 0.24.0: the picker strip owns the hint row
     if (_fsearch_active == 1) { _tui_draw_search_hint(); return 0; }   # 0.18.4: the search strip owns the hint row
@@ -1076,7 +1107,7 @@ fn _tui_draw_search_hint() {
 fn _tui_park_search() {
     var col = 7 + fsearch_qlen();                 # "find: " is 6 visible cols; query starts at col 7
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_hint_row(_tui_rows), col);
+    tty_move(tui_hint_row(_tui_rows, _tui_show_status), col);
     return 0;
 }
 
@@ -1211,7 +1242,7 @@ fn _tui_pick_paint_row(id, sel, active, fwidth) {
 # then draw the query strip in the hint row and park at the caret. The status bar, tree and composer keep
 # their last frame (unchanged while picking); only the feed region and the hint row are the picker's.
 fn _tui_pick_paint() {
-    var top = tui_feed_top(_tui_show_status);
+    var top = tui_feed_top();
     var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
@@ -1263,7 +1294,7 @@ fn _tui_draw_pick_hint() {
 fn _tui_park_pick() {
     var col = 7 + mpick_qlen();                   # "pick: " is 6 visible cols; query starts at col 7
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_hint_row(_tui_rows), col);
+    tty_move(tui_hint_row(_tui_rows, _tui_show_status), col);
     return 0;
 }
 
@@ -1339,7 +1370,8 @@ fn _tui_pick_key(key) {
 
 # tui_draw_rule: paint a faint full-width horizontal rule (─) on `row` (0.11.9). Chrome
 # (emit_raw); the per-column glyph is the 3-byte U+2500, each one visible column wide, so
-# `cols` of them fill the width. Painted under the status bar + above the composer.
+# `cols` of them fill the width. Painted above the composer (0.45.0: the rule that sat under the
+# top status bar went with the bar; the bar's own blank row separates it from the input instead).
 fn tui_draw_rule(row, cols) {
     tty_move(row, 1);
     tty_clear_to_eol();
@@ -1474,7 +1506,7 @@ fn spin_label_clear() { _spin_label = 0; spin_paint(); return 0; }
 # once the dispatch ends.
 fn spin_paint() {
     if (_spin_active == 0) { return 0; }
-    tty_move(tui_hint_row(_tui_rows), 1);
+    tty_move(tui_hint_row(_tui_rows, _tui_show_status), 1);
     tty_clear_to_eol();
     emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw(spin_glyph(_spin_frame)); emit_raw(ui_reset());
     emit_raw(ui_sgr(ROLE_FAINT));
@@ -1605,7 +1637,7 @@ fn spin_anim_arm() {
     if (_spin_anim_alloc() == 0) { return 0; }
     atomic_store(_spin_anim_run, 1);
     atomic_store(_spin_anim_state, SPIN_ANIM_ARMED);
-    var t = thread_create(&_spin_anim_worker, tui_hint_row(_tui_rows));
+    var t = thread_create(&_spin_anim_worker, tui_hint_row(_tui_rows, _tui_show_status));
     if (t == 0) {                                       # no threads on this target -> the 0.9.2 behaviour
         atomic_store(_spin_anim_run, 0);
         atomic_store(_spin_anim_state, SPIN_ANIM_IDLE);
@@ -1719,7 +1751,7 @@ fn tui_theme_next() {
 # yet) is rendered as a virtual bottom row so streaming is INCREMENTAL.
 fn feed_repaint() {
     if (_paint_buf == 0) { _paint_buf = alloc(PAINT_CAP); }
-    var top = tui_feed_top(_tui_show_status);
+    var top = tui_feed_top();
     var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
@@ -1797,7 +1829,7 @@ fn feed_repaint() {
 # rows, not logical lines — a wide line spans several); a new turn resets it to 0
 # (tui_run_line) so fresh output is always visible.
 fn _tui_feed_rows() {
-    var r = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status) - tui_feed_top(_tui_show_status) + 1;
+    var r = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status) - tui_feed_top() + 1;
     if (r < 1) { r = 1; }
     return r;
 }
@@ -1866,9 +1898,9 @@ fn tui_confirm_begin() {
     feed_flush_pending();
     feed_repaint();
     _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt
-    tty_move(tui_hint_row(_tui_rows), 1); tty_clear_to_eol();
+    tty_move(tui_hint_row(_tui_rows, _tui_show_status), 1); tty_clear_to_eol();
     out_mode_set(OUT_FD1);
-    tty_move(tui_composer_bot(_tui_rows), 1);
+    tty_move(tui_composer_bot(_tui_rows, _tui_show_status), 1);
     tty_clear_to_eol();
     return 0;
 }
@@ -2028,7 +2060,7 @@ fn _tui_paint_tree_row(li, tw, r) {
 fn tui_draw_tree() {
     if (_tui_show_tree == 0) { return 0; }
     var tw = tui_tree_w(_tui_cols, 1);
-    var top = tui_feed_top(_tui_show_status);
+    var top = tui_feed_top();
     var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
     var rows = bot - top + 1;
@@ -2092,8 +2124,9 @@ fn _tui_tree_key(key) {
 }
 
 # tui_repaint_body: repaint the whole frame at the CURRENT geometry (no winsize read) —
-# status bar, the two faint rules, feed, tree, hint, composer. No tty_clear (every band
-# issues per-row clear_to_eol), so it is also the no-flash repaint for a composer height
+# the status bar with its blank row, feed, tree, the faint rule, hint, composer (0.45.0: the
+# bar is the last row now, so the second rule that sat under it is gone). No tty_clear (every
+# band issues per-row clear_to_eol), so it is also the no-flash repaint for a composer height
 # change (a newline grew/shrank the composer, resizing the feed band). The composer is
 # drawn LAST so the cursor parks at the edit position.
 fn tui_repaint_body() {
@@ -2104,8 +2137,7 @@ fn tui_repaint_body() {
     # so the next scroll key resumes from a valid offset).
     var m = _tui_feed_maxscroll();
     if (feed_scroll() > m) { feed_scroll_set(m); }
-    tui_draw_status();
-    if (_tui_show_status == 1) { tui_draw_rule(tui_sep_top_row(), _tui_cols); }   # rule under the status bar
+    tui_draw_status();                 # the last row + the blank row above it (paints nothing when hidden)
     feed_repaint();
     tui_draw_tree();
     tui_draw_rule(tui_sep_bottom_row(_tui_rows, lines, _tui_show_status), _tui_cols);   # rule above the composer
@@ -2347,7 +2379,7 @@ fn _tui_mouse_click() {
     var col = _mouse_col;
     if (_tui_show_tree == 1) {
         var tw = tui_tree_w(_tui_cols, 1);
-        var top = tui_feed_top(_tui_show_status);
+        var top = tui_feed_top();
         var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
         if ((col <= tw) && (r >= top) && (r <= bot)) {           # a click in the tree pane
             var total = ftree_count();
@@ -2416,9 +2448,9 @@ fn tui_loop() {
     feed_init();                                  # 0.9.1: the self-managed feed ring
     inhist_init();                                # 0.11.1: the composer input-history recall ring
     out_mode_set(OUT_RING);                        # seed the welcome banner into the feed
-    # the scribe greeting, sourced from the avatara persona (mirrors print_banner):
-    ui_emit(ROLE_ACCENT, persona_name()); emit(", "); ui_emit(ROLE_ACCENT_DIM, persona_role());
-    emit(" - "); ui_emit(ROLE_ACCENT, "{(o>");
+    # the scribe greeting, sourced from the avatara persona (mirrors print_banner). 0.45.0: its first line carries the
+    # VERSION — `{(o> Thoth - The Librarian: <version>` — now that the status bar leads with the repo + branch instead.
+    tui_intro_emit();
     feed_flush_pending();
     ui_emit(ROLE_MUTED, persona_tagline());
     feed_flush_pending();

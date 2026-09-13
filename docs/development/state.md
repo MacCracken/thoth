@@ -7,6 +7,25 @@
 
 ## Version
 
+**0.45.0** — **the status bar moves below the input and leads with where you are** (2026-09-12). TUI
+and GUI both. The TUI is now feed · rule · composer · hint · blank · status (last row); the GUI is
+body · composer · a line of padding · strip (bottom edge). The bar opens with the launch directory's
+name and git branch (`thoth · main +2  model …`) where `{(o> thoth (<version>) · <persona>` sat, and
+the version moved into the greeting (`{(o> Thoth - The Librarian: 0.45.0`). The repo label is a new
+display-only view-model field (`SF_REPO`, from `$PWD`) sanitised where it enters — verified end to end
+with an escape-named directory, and its test verified by breaking the fix. The branch needed no filter:
+sit's `refname_valid` already refuses control bytes. Ctrl-G / Ctrl+S hide the bar together with its
+padding, and the feed keeps its previous height in both states. Verified on a real pty and by
+rasterising the GUI frame. Suite **316 + 1021 + 810 + 521 + 183 + 5**.
+
+**0.44.6** — **toolchain 6.5.51 → 6.6.2, and a t-ron cipher collision** (2026-09-10). cyrius 6.6.0
+made `Result` / `Option` / `Either` a two-register value; four thoth sites migrated, one of which
+read the payload field of a boxed Result that no longer exists. Vendored t-ron 2.1.9 defined
+`chacha20_xor` with sigil's name and arity, so "last definition wins" routed sigil's own AEAD through
+t-ron's process-global keystream buffer instead of sigil's per-thread lane; t-ron 2.1.10 renamed it
+`cc20_xor` and `tests/cases/vendor.cyr` pins both halves. Suite **300 + 1013 + 810 + 505 + 183 + 5**.
+*(Entry written at 0.45.0 — the 0.44.6 release did not refresh this file; detail in the CHANGELOG.)*
+
 **0.44.5** — **toolchain refresh 6.5.43 → 6.5.51; macOS gets its environment back** (2026-09-04).
 No thoth source change — a floor refresh plus the doc corrections it forces. Symbol-diffed both ways
 (1 fn removed, thoth never called it; 0 newly private; 6 vars + 6 enum members added, no collisions),
@@ -3188,8 +3207,9 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.5.51` (in `cyrius.cyml [package].cyrius`). 0.44.5 moved it from `6.5.43`,
-  and the hop forced **no source migration** — checked, not assumed. Symbol-diffed both ways:
+- **Cyrius pin**: `6.6.2` (in `cyrius.cyml [package].cyrius`), moved from `6.5.51` at 0.44.6 — the
+  `Result` / `Option` / `Either` value-form hop, which DID force a source migration (four sites; see the
+  CHANGELOG). The `6.5.43` → `6.5.51` hop recorded below (0.44.5) forced **no source migration** — checked, not assumed. Symbol-diffed both ways:
   **one** public stdlib fn removed (`sys_blkstats`, a withdrawn AGNOS syscall thoth never called),
   **zero** newly `private`, **six** top-level `var`s added (all TLS/thread internals: `_tls_blk`,
   `_tls_key`, `_tls_live`, `_THR_CTL`, `TLS_REG_MAX`, `THREADS_CONCURRENT`) and **six** enum members
@@ -3471,8 +3491,8 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **300 + 1011 + 810 + 505 + 183 + 5 assertions across the suites as of
-0.44.4 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **316 + 1021 + 810 + 521 + 183 + 5 assertions across the suites as of
+0.45.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

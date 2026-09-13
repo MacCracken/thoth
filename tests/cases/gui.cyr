@@ -89,6 +89,33 @@ fn test_gui() {
     gr_raster(scmds, sb, SW, SH);
     assert(load32(sb + (5 * SW + 5) * 4) != 0x000000, "status strip background painted over the clear");
     _gui_ppm_dump(sb, SW, SH, "/tmp/thoth_gui_status.ppm");
+    # 0.45.0: the strip LEADS with the repo label + branch; the old `thoth <version> <persona>` block is gone. The
+    # first text is the repo label, the branch is drawn once and LEFT of "model", and no span is the version.
+    git_probe();
+    var _l0 = gd_list_new();
+    gstatus_build(_l0, 0, 0, SW, SH);
+    var _lbr = git_branch();
+    if (git_detached() == 1) { _lbr = "(detached)"; }
+    var _lfirst = 0; var _lmodel_x = 0 - 1; var _lbr_x = 0 - 1; var _lbr_n = 0; var _lver = 0; var _li = 0;
+    while (_li < vec_len(_l0)) {
+        var _lc = vec_get(_l0, _li);
+        if ((gd_kind(_lc) == GD_TEXT) && (gd_text(_lc) != 0)) {
+            if (_lfirst == 0) { _lfirst = gd_text(_lc); }
+            if (streq(gd_text(_lc), "model") == 1) { _lmodel_x = gd_x(_lc); }
+            if (streq(gd_text(_lc), thoth_version()) == 1) { _lver = 1; }
+            if (streq(gd_text(_lc), _lbr) == 1) { _lbr_x = gd_x(_lc); _lbr_n = _lbr_n + 1; }
+        }
+        _li = _li + 1;
+    }
+    assert_eq(_lver, 0, "the version is no longer drawn in the status strip (it moved to the greeting)");
+    assert(_lmodel_x > 0, "the strip still draws the model field");
+    if (project_dir_name() != 0) {
+        assert(streq(_lfirst, project_dir_name()) == 1, "the strip's first text is the repo label");
+    }
+    if (git_present() == 1) {
+        assert_eq(_lbr_n, 1, "the branch is drawn exactly once (the trailing git field is gone)");
+        assert(_lbr_x < _lmodel_x, "the branch sits LEFT of the model field");
+    }
     # --- feed word-wrap: a long paragraph wraps to multiple lines ---
     var wcmds = gd_list_new();
     var yend = _gfeed_para(wcmds, 0, 0, 160, 0xFFFFFF, "the quick brown fox jumps over the lazy dog again and again yet more");
@@ -174,6 +201,55 @@ fn test_gui() {
     assert(vec_len(frame) > 8, "frame emitted status + feed + composer commands");
     gr_raster(frame, fbuf, FW, FH);
     _gui_ppm_dump(fbuf, FW, FH, "/tmp/thoth_gui_frame.ppm");
+    # 0.45.0: the status strip is the BOTTOM band — under the composer and one line of padding — not the top one.
+    var _eye_y = gd_y(geye_cell());                               # THIS frame's composer text row (read before any rebuild)
+    var _sbot = 0; var _stop = 0; var _sfi = 0;
+    while (_sfi < vec_len(frame)) {
+        var _sfc = vec_get(frame, _sfi);
+        if ((gd_kind(_sfc) == GD_RECT) && (gd_color(_sfc) == _gstatus_bg()) && (gd_h(_sfc) == GFRAME_STRIP_H)) {
+            if (gd_y(_sfc) == FH - GFRAME_STRIP_H) { _sbot = 1; }
+            if (gd_y(_sfc) == 0) { _stop = 1; }
+        }
+        _sfi = _sfi + 1;
+    }
+    assert_eq(_sbot, 1, "the status strip sits flush with the window's bottom edge");
+    assert_eq(_stop, 0, "no status strip at the top of the window any more");
+    assert(_eye_y < FH - GFRAME_STRIP_H, "the composer line is ABOVE the status strip");
+    assert_eq(FH - GFRAME_STRIP_H - 1 - (_eye_y + GR_GLYPH_H), (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2 + GFRAME_COMPOSER_GAP, "one extra line of padding (GFRAME_COMPOSER_GAP) between the composer text and the strip's rule");
+    # Ctrl+S: the strip AND its padding go, and the composer line returns to the window's bottom edge
+    gstatus_toggle_hidden();
+    var _hid = gframe_build(FW, FH);
+    assert_eq(gd_y(geye_cell()), FH - GFRAME_COMPOSER_H + (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2, "strip hidden -> the composer line is back on the bottom edge");
+    var _hsi = 0; var _hstrip = 0;
+    while (_hsi < vec_len(_hid)) {
+        var _hc = vec_get(_hid, _hsi);
+        if ((gd_kind(_hc) == GD_RECT) && (gd_color(_hc) == _gstatus_bg()) && (gd_h(_hc) == GFRAME_STRIP_H)) { _hstrip = 1; }
+        _hsi = _hsi + 1;
+    }
+    assert_eq(_hstrip, 0, "strip hidden -> no strip background is drawn");
+    gstatus_toggle_hidden();
+    # 0.45.0: the greeting's first line is `{(o> <persona> - <Role>: <version>` — the version moved here off the strip.
+    session_history_clear();
+    var _gg = gd_list_new();
+    _gfeed_greeting(_gg, 14, 10, 800);
+    var _gowl_x = 0 - 1; var _grole_x = 0 - 1; var _gver_x = 0 - 1; var _ggi = 0;
+    while (_ggi < vec_len(_gg)) {
+        var _ggc = vec_get(_gg, _ggi);
+        if ((gd_kind(_ggc) == GD_TEXT) && (gd_text(_ggc) != 0) && (gd_y(_ggc) == 10)) {
+            if (streq(gd_text(_ggc), "{(o> ") == 1) { _gowl_x = gd_x(_ggc); }
+            if (streq(gd_text(_ggc), persona_role_title()) == 1) { _grole_x = gd_x(_ggc); }
+            if (streq(gd_text(_ggc), thoth_version()) == 1) { _gver_x = gd_x(_ggc); }
+        }
+        _ggi = _ggi + 1;
+    }
+    assert_eq(_gowl_x, 14, "the GUI greeting opens with the owl glyph at the feed's left edge");
+    assert(_grole_x > _gowl_x, "the role follows the owl + persona on the same row");
+    var _gexp = 14 + (gr_text_cols("{(o> ", 0) + gr_text_cols(persona_name(), 0) + 3 + gr_text_cols(persona_role_title(), 0) + 2) * GR_GLYPH_W;
+    assert_eq(_gver_x, _gexp, "the version closes the line, exactly after `{(o> <persona> - <Role>: ` (codepoint-advanced)");
+    var _gbuf = gr_fb_new(FW, FH);
+    gr_fb_clear(_gbuf, FW, FH, _gframe_bg());
+    gr_raster(gframe_build(FW, FH), _gbuf, FW, FH);
+    _gui_ppm_dump(_gbuf, FW, FH, "/tmp/thoth_gui_greeting.ppm");
     # a frame with a conversation + a half-typed composer (interactive state) -> PPM
     gcomp_reset();
     var _tu = "add async support to the rate limiter";
@@ -486,6 +562,14 @@ fn test_surface() {
     status_snapshot();
     assert_eq(status_present(SF_GIT), git_present(), "git present == git_present()");
     assert_eq(status_ival(SF_GIT), git_dirty(), "git ival == git_dirty()");
+    # 0.45.0 repo label mirrors its producer: present iff project_dir_name() yields a label, and the SAME buffer
+    status_snapshot();
+    if (project_dir_name() != 0) {
+        assert_eq(status_present(SF_REPO), 1, "repo present when the launch directory yields a label");
+        assert_eq(status_sval(SF_REPO), project_dir_name(), "repo sval == project_dir_name() (the resolved-once buffer)");
+    } else {
+        assert_eq(status_present(SF_REPO), 0, "no label -> the repo field is omitted (never guessed)");
+    }
     # surface / theme name pointers
     status_snapshot();
     assert(streq(status_sval(SF_SURFACE), ui_tier_name()) == 1, "surface sval == ui_tier_name()");

@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.44.5 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.45.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -26,7 +26,7 @@ trait-derived **role** axis (`/role`).
 - **Rich TUI** (the default on a capable terminal; `--tier=simple|rich|auto`) — amber palette, syntax-highlighted
   diffs + fenced code, structural markdown incl. **tables**, a soft-wrapping feed, a word-wrapping composer, a
   file-tree pane (Ctrl-B), feed search (Ctrl-F), themes (`/theme dark|light|rainbow`), a reasoning-effort control
-  + persistent per-turn thinking fold, and a live spine-health + token/cost + git-branch status bar.
+  + persistent per-turn thinking fold, and a live repo/branch + spine-health + token/cost status bar under the input.
 - **Native desktop GUI** (`thoth gui`) — thoth's OWN sovereign Cyrius Wayland window (draw-command IR → kashi CPU
   rasterizer → wl_shm → a puka-forked present shell; live-confirmed on a real compositor): the same status strip,
   structural-markdown replies, per-turn tool-call + colored diff cards, and a conversation sidebar (Ctrl+K).

@@ -18,7 +18,7 @@
 # What it does NOT model: the ~13 /state-only config rows (hoosh url, resume, ui, memory, log, aliases,
 # shell, reads, agent, daimon, t-ron, spine, build). Those are single-view prose and stay in cmd_state.
 
-# --- field ids (bar draw order) --------------------------------------------
+# --- field ids (stable; each renderer owns its own draw order) -------------
 var SF_BRAND   = 0;   # thoth_version()
 var SF_PERSONA = 1;   # persona_name()
 var SF_MODEL   = 2;   # session_model() ?? config_hoosh_model()  (leaf picks the null placeholder)
@@ -30,7 +30,8 @@ var SF_COST    = 7;   # omit-until-seen (ADR-0010)
 var SF_GIT     = 8;   # branch/detached + dirty count (present only in a repo)
 var SF_SURFACE = 9;   # ui_tier_name()
 var SF_THEME   = 10;  # ui_theme_name()
-var SF_COUNT   = 11;
+var SF_REPO    = 11;  # project_dir_name() — the launch directory's name, the bar's lead (0.45.0; present only when $PWD yields one)
+var SF_COUNT   = 12;
 
 # --- per-field cells (one i64 each; a packed array, the feed.cyr idiom — Cyrius has no structs) ----------
 var SFC_PRESENT = 0;  # 0/1 — passed the omit/config gate for this field
@@ -101,6 +102,12 @@ fn status_snapshot() {
     if (git_detached() == 1) { _sf_set(SF_GIT, SFC_STATE, SF_GIT_DETACHED); } else { _sf_set(SF_GIT, SFC_STATE, SF_GIT_BRANCH); }
     _sf_set(SF_GIT, SFC_IVAL, git_dirty());
     _sf_set(SF_GIT, SFC_SPTR, git_branch());
+
+    # repo (0.45.0) — the launch directory's name, the bar's lead beside the branch. Present only when a label exists
+    # (project_dir_name: an absolute $PWD with a last component, sanitised, resolved once); omitted, never guessed.
+    var rn = project_dir_name();
+    if (rn != 0) { _sf_set(SF_REPO, SFC_PRESENT, 1); } else { _sf_set(SF_REPO, SFC_PRESENT, 0); }
+    _sf_set(SF_REPO, SFC_SPTR, rn);
 
     # surface / theme — IVAL carries ui_tier() so a leaf can gate the depth-name paren (/state does).
     _sf_set(SF_SURFACE, SFC_PRESENT, 1);

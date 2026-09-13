@@ -6,6 +6,13 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.0** (2026-09-12, not a full sweep): the status-bar move updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block, the **Toolchain** pin line and the **Tests** counts) and
+> `README.md` (status stamp, and the TUI bullet's status-bar description). ⚠ **0.44.6 had refreshed
+> neither `state.md` nor `README.md`**: the state file had no 0.44.6 entry and still named the 6.5.51
+> pin a release after the move to 6.6.2, and the README stamp read 0.44.5. Both were caught only
+> because this release had to write the next entry after them.
+
 > **Touched at 0.44.5** (2026-09-04, not a full sweep): the toolchain refresh 6.5.43 → 6.5.51 updated
 > `CHANGELOG.md`, `docs/development/state.md` (version block, the whole **Toolchain** block re-measured
 > after the last edit, the macOS row of the **Targets** matrix), `docs/development/roadmap.md` (the

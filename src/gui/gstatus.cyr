@@ -1,8 +1,9 @@
 # src/gui/gstatus.cyr — the GUI status-strip VIEW-BUILDER (T3, Phase 1).
 #
 # The desktop-tier renderer of the 0.28.0 STATUS VIEW-MODEL: it reads the SAME status_snapshot() facts the
-# TUI bar (tui_draw_status) and /state (cmd_state) read, and lowers them into draw-commands (src/gui/gdraw.cyr)
-# for a pinned status strip — the mockup's (Thoth.dc.html) top bar. This is the whole Stage-B payoff made
+# TUI bar (tui_status_emit) and /state (cmd_state) read, and lowers them into draw-commands (src/gui/gdraw.cyr)
+# for a pinned status strip — the mockup's (Thoth.dc.html) status bar, which since 0.45.0 sits on the window's
+# BOTTOM edge under the composer (gframe_build), as the TUI's bar does. This is the whole Stage-B payoff made
 # concrete: three renderers (line rows, TUI strip, GUI strip) over ONE facts-not-bytes model, no new producer.
 #
 # Colors come straight from ui.cyr's _ui_rgb(role) (== the packed XRGB the rasterizer wants), so the GUI
@@ -43,7 +44,7 @@ fn _gstatus_int(cmds, pen, ty, color, n) {
 }
 
 # gstatus_build: emit the status strip into `cmds` at (x,y) size (w,h). Reads the shared view-model. Mirrors
-# tui_draw_status's fields + omit gates, so the GUI strip and the TUI strip show the SAME facts.
+# tui_status_emit's fields, order + omit gates, so the GUI strip and the TUI bar show the SAME facts.
 fn gstatus_build(cmds, x, y, w, h) {
     status_snapshot();
     gd_push_rect(cmds, x, y, w, h, _gstatus_bg());       # strip background
@@ -51,9 +52,27 @@ fn gstatus_build(cmds, x, y, w, h) {
     var ty = y + (h - GR_GLYPH_H) / 2;                    # vertically center the 16px glyph row
     var pen = x + GSTATUS_PAD;
 
-    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), "thoth") + GSTATUS_GAP;
-    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), thoth_version()) + GSTATUS_GAP;
-    pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT_DIM), status_sval(SF_PERSONA)) + GSTATUS_GAP;
+    # 0.45.0: the strip LEADS with where you are — the launch directory's name, then (in a repo) the branch + dirty
+    # count — in place of the old `thoth <version> <persona>` block. The version moved to the greeting
+    # (_gfeed_greeting) and the persona is one /state away. Each half is omitted on its own when its producer has
+    # nothing (ADR-0010), and the git field no longer trails at the far end, where a narrow window clipped it first.
+    var lead = 0;
+    if (status_present(SF_REPO) == 1) {
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT_DIM), status_sval(SF_REPO));
+        lead = 1;
+    }
+    if (status_present(SF_GIT) == 1) {
+        if (lead == 1) { pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), " · "); }
+        var br = status_sval(SF_GIT);
+        if (status_state(SF_GIT) == SF_GIT_DETACHED) { br = "(detached)"; }
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), br);
+        if (status_ival(SF_GIT) > 0) {
+            pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), " +");
+            pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_GIT));
+        }
+        lead = 1;
+    }
+    if (lead == 1) { pen = pen + GSTATUS_GAP; }
 
     pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "model") + 8;
     var m = status_sval(SF_MODEL);
@@ -94,18 +113,6 @@ fn gstatus_build(cmds, x, y, w, h) {
         var cb = alloc(24);
         cost_fmt(cb, status_ival(SF_COST));
         pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_GREEN), cb) + GSTATUS_GAP;
-    }
-
-    # git branch (+dirty), omit off a repo
-    if (status_present(SF_GIT) == 1) {
-        var br = status_sval(SF_GIT);
-        if (status_state(SF_GIT) == SF_GIT_DETACHED) { br = "(detached)"; }
-        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), br);
-        if (status_ival(SF_GIT) > 0) {
-            pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), " +");
-            pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_GIT));
-        }
-        pen = pen + GSTATUS_GAP;
     }
 
     pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "surface") + 8;

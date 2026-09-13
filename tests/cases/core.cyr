@@ -1759,6 +1759,20 @@ fn test_git() {
     git_ensure_probed();
     assert_eq(git_present(), p, "ensure_probed keeps the probe result stable");
 
+    # 0.45.0: the status bar's repo label — the launch directory's last component, sanitised, or no label at all.
+    # (The branch beside it needs no filter in thoth: sit's refname_valid (S-25) refuses a control byte in HEAD's
+    # target, so such a HEAD reads as detached — checked against a real repo under a pty.)
+    var _pdl = alloc(PROJ_DIR_NAME_CAP);
+    assert_eq(_proj_dir_label(_pdl, PROJ_DIR_NAME_CAP, "/home/u/Repos/thoth"), 5, "label = the last path component");
+    assert(streq(_pdl, "thoth") == 1, "label text is the directory name");
+    assert_eq(_proj_dir_label(_pdl, PROJ_DIR_NAME_CAP, "/"), 0, "the root names no directory -> no label");
+    assert_eq(_proj_dir_label(_pdl, PROJ_DIR_NAME_CAP, "/a/b/"), 0, "a trailing slash names no component -> no label");
+    assert_eq(_proj_dir_label(_pdl, PROJ_DIR_NAME_CAP, "rel/dir"), 0, "a relative path is not a usable label");
+    assert_eq(_proj_dir_label(_pdl, PROJ_DIR_NAME_CAP, 0), 0, "null -> no label");
+    assert_eq(strlen(_pdl), 0, "no label leaves an empty string, never the previous label's bytes");
+    _proj_dir_label(_pdl, PROJ_DIR_NAME_CAP, "/tmp/x\x1b]0;pwn\x07y");
+    assert(streq(_pdl, "x?]0;pwn?y") == 1, "an escape in the directory name is substituted, byte count kept");
+
     # 0.22.4 file-tree git badges: git_status_of over the per-file status cache (white-box: inject entries,
     # then re-probe to restore the real state). kinds 1=modified, 2=new, 3=deleted; 0 = unchanged / no repo.
     if (_git_status_ptr == 0) { _git_status_ptr = alloc(GIT_STATUS_MAX * 8); _git_status_kind = alloc(GIT_STATUS_MAX); _git_status_buf = alloc(GIT_STATUS_BUF); }
