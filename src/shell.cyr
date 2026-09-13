@@ -23,7 +23,8 @@
 #      [shell].timeout_ms (partial output preserved), audited (proposed + verdict + exit/bytes).
 #
 # HONEST LIMITS: binary NULs in output are scrubbed to spaces (text-tool contract — the result is a
-# JSON string the model reads); the timeout kills the /bin/sh, not a backgrounded grandchild; the
+# JSON string the model reads); the timeout kills the /bin/sh's whole process group, so a backgrounded
+# grandchild dies with it — but a command that starts a session of its own escapes the group; the
 # temp capture file lives in world-writable /tmp (O_CREAT|O_EXCL, which DOES defeat a pre-planted
 # file or symlink — O_NOFOLLOW is not the load-bearing flag here — and since 0.39.0 mode 0600, not
 # the previous world-readable 0644).
@@ -236,7 +237,7 @@ fn shell_run_tool(args_cstr) {
     var total = exec_shell_capture(cmd, _shell_cap_buf, cap + 1, config_shell_timeout_ms(), &status);
     var code = load64(&status);
     var timed = load64(&status + 8);
-    if (code == (0 - 1)) { _shell_audit_run(cmd, "spawn-fail", code, 0, SK_WARN); return "(shell: failed to spawn /bin/sh)"; }
+    if (code == (0 - 1)) { _shell_audit_run(cmd, "spawn-fail", code, 0, SK_WARN); return "(shell: could not run the command — creating the capture file, forking or waiting failed)"; }
     if (code == (0 - 3)) { _shell_audit_run(cmd, "unsupported", code, 0, SK_WARN); return "(shell: unsupported on this target)"; }
     var truncated = 0;
     if (total > cap) { truncated = 1; total = cap; }   # drop the overflow probe byte; flag truncation

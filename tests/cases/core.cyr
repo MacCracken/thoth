@@ -3946,6 +3946,150 @@ fn test_path_echo_sanitise() {
 # STORED — _conv_autotitle for a title taken from a task, conv_dup_title for /new /rename /fork, and the session file's
 # loader for a title saved before the fix. Each reader (/conversations, /switch, /fork, /search, the GUI sidebar) then
 # draws the clean copy, and /new and /rename echo it. Every door was reproduced under a pty through an alias first.
+# 0.45.2 (audit S1–S9 + two critic finds): the remaining doors where untrusted bytes reached the terminal raw — a config
+# key NAME and the [ui].tier / [log].level values from a repo's local layer, the model's tool name in the roundlog, in
+# /audit's t-ron rows and in a hook's BLOCKED line, an MCP server's tool name in a toolpin notice, mneme's /notes text
+# and recalled titles, an untracked worktree name in /git, and the model's path in /rewind.
+fn test_sink_sweep_0452() {
+    test_group("remaining raw sinks sanitised: config keys + tier/level, roundlog, audit, hooks, toolpin, notes, recall, /git, /rewind (0.45.2)");
+    var saved_log = _log_enabled;
+    _log_enabled = 0;
+
+    # --- S1 + critic: a repo's local layer, through the real loader ---
+    var ukg = "/tmp/thoth_t_uk_global.cyml";
+    var ukl = "/tmp/thoth_t_uk_local.cyml";
+    var ukb = alloc(512);
+    var uo = _append_cstr_cap(ukb, 0, 512, "[hoosh]\n");
+    file_write_all(ukg, ukb, uo);
+    uo = _stx_cat_bs(ukb, 0, 512, "[hoosh]\n\"k", "u001b[7mKEYMARK\" = 1\n");
+    uo = _stx_cat_bs(ukb, uo, 512, "[ui]\ntier = \"t", "u001b[7mTIERMARK\"\n");
+    uo = _stx_cat_bs(ukb, uo, 512, "[log]\nlevel = \"l", "u001b[7mLVLMARK\"\n");
+    file_write_all(ukl, ukb, uo);
+    _cfg_gpath_c = ukg; _cfg_gpath_done = 1;
+    _cfg_lpath_c = ukl; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    config_load();
+    var ukn = 0;
+    var ukesc = 0;
+    var uki = 0;
+    while (uki < config_unknown_count()) {
+        var ku = config_unknown_at(uki);
+        if (_t_count_sub(ku, strlen(ku), "k?[7mKEYMARK", 12) == 1) { ukn = ukn + 1; }
+        ukesc = ukesc + _t_count_sub(ku, strlen(ku), "\x1b", 1);
+        uki = uki + 1;
+    }
+    assert_eq(ukn, 1, "an unrecognised key named with an escape is reported once, '?' in its place");
+    assert_eq(ukesc, 0, "...and no reported key name carries a raw ESC (launch stderr, /state, /reload)");
+    assert(streq(config_ui_tier(), "t?[7mTIERMARK") == 1, "[ui].tier from the local layer loads sanitised (/state draws it)");
+    assert(streq(config_log_level(), "l?[7mLVLMARK") == 1, "[log].level from the local layer loads sanitised (the launch line echoes it)");
+    _cfg_gpath_c = 0; _cfg_gpath_done = 0; _cfg_lpath_c = 0; _cfg_lpath_done = 0; _cfg_lsource = 0; _cfg_path_c = 0;
+    config_load();
+    xunlink(ukg); xunlink(ukl);
+
+    # --- S2: the model's tool name as the roundlog stores it (/audit and the tool cards draw that copy) ---
+    var rlb = alloc(RL_NAME_CAP);
+    _rl_copy_name(rlb, "rd\x1b[7mRLMARK\x7f");
+    assert(streq(rlb, "rd?[7mRLMARK?") == 1, "the roundlog stores a tool name with ESC and DEL as '?'");
+
+    # --- S5: /audit's t-ron chain row for a name t-ron refused (it records the raw name before refusing) ---
+    var saved_tron = _gate_tron;
+    var saved_agent = _cfg_tron_agent;
+    _cfg_tron_agent = 0;
+    var tr = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(tr, "[agent.\"thoth\"]\nallow = [\"*\"]\n"), TRON_ERR_NONE, "premise: an allow-all policy loads");
+    _gate_tron = tr;
+    feed_init(); out_mode_set(OUT_RING);
+    var bad = gate_authorize("bt\x1b[7mAUDMARK", _params_one("command", "x"), "run shell", "x");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    feed_init(); out_mode_set(OUT_RING);
+    gate_audit_report();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    _gate_tron = saved_tron;
+    _cfg_tron_agent = saved_agent;
+    assert_eq(bad, 0, "premise: t-ron refuses a tool name holding a control byte");
+    assert_eq(_mid_feed_count("\x1b[7mAUDMARK"), 0, "the /audit chain row draws no raw escape from the refused name");
+    assert(_mid_feed_count("bt?[7mAUDMARK") >= 1, "...it names it with '?'");
+
+    # --- S6: a pre_tool hook's BLOCKED line for a model-chosen name ---
+    hooks_reset();
+    _cfg_hook_pre_tool = "exit 3";
+    feed_init(); out_mode_set(OUT_RING);
+    var hb = hooks_pre_tool("ht\x1b[7mHOOKMARK", "{}");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    _cfg_hook_pre_tool = 0;
+    hooks_reset();
+    assert_eq(hb, 0, "premise: the hook's non-zero exit blocks the call");
+    assert_eq(_mid_feed_count("\x1b[7mHOOKMARK"), 0, "the [hook pre_tool] BLOCKED line draws no raw escape from the tool name");
+    assert_eq(_mid_feed_count("ht?[7mHOOKMARK"), 1, "...it names it with '?'");
+
+    # --- S4: a toolpin WITHHELD notice names an MCP server's tool ---
+    toolpin_reset();
+    assert_eq(toolpin_check("fp\x1b[7mPINMARK", "one", ""), 1, "premise: first sight pins the tool");
+    feed_init(); out_mode_set(OUT_RING);
+    var tw = toolpin_check("fp\x1b[7mPINMARK", "two", "");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    toolpin_reset();
+    assert_eq(tw, 0, "premise: a changed definition is withheld");
+    assert_eq(_mid_feed_count("\x1b[7mPINMARK"), 0, "the WITHHELD notice draws no raw escape from the tool name");
+    assert_eq(_mid_feed_count("fp?[7mPINMARK"), 1, "...it names it with '?'");
+
+    # --- S3: /notes prints mneme's result through the TEXT policy ---
+    feed_init(); out_mode_set(OUT_RING);
+    _notes_print("1. **n\x1b[7mNOTEMARK**\nsecond line");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mNOTEMARK"), 0, "/notes draws no raw escape from mneme's text");
+    assert_eq(_mid_feed_count("n?[7mNOTEMARK"), 1, "...it shows '?' in its place");
+    assert_eq(_mid_feed_count("second line"), 1, "...and keeps the result's own line structure");
+
+    # --- S7: a recalled note's title and path as captured (the recall line and the persisted message read these) ---
+    citations_reset();
+    citations_capture("1. **t\x1b[7mCITEMARK** (ID: abc, score 0.9)\nPath: p\x1b[7mCPATHMARK\n");
+    assert_eq(citations_count(), 1, "premise: one recalled note is captured");
+    assert(streq(citations_title(0), "t?[7mCITEMARK") == 1, "a recalled title is stored with '?' for ESC");
+    assert(streq(citations_path(0), "p?[7mCPATHMARK") == 1, "...and so is its path");
+    assert(streq(citations_feedback_note_id(), "abc") == 1, "...while the note id mneme gets back stays byte-exact");
+    citations_reset();
+
+    # --- S9: /rewind lists and restores a model-chosen path (cmd_rewind directly; dispatch gates it on [edit]) ---
+    ckpt_reset();
+    var rwp = "/tmp/thoth_t_rw\x1b[7mRWMARK.txt";
+    file_write_all(rwp, "before\n", 7);
+    assert_eq(ckpt_capture(rwp, 1), 1, "premise: a checkpoint of a file whose name holds ESC is taken");
+    file_write_all(rwp, "after\n", 6);
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_rewind("/rewind");
+    cmd_rewind("/rewind 1");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mRWMARK"), 0, "no /rewind line draws a raw escape from the path");
+    assert_eq(_mid_feed_count("/tmp/thoth_t_rw?[7mRWMARK.txt"), 2, "...the listing and the rewound line both name it with '?'");
+    var rwb = alloc(16);
+    assert_eq(file_read_all(rwp, rwb, 15), 7, "...and the restore still wrote back to the RAW path");
+    xunlink(rwp);
+    ckpt_reset();
+
+    # --- S8: /git's status list names an untracked file whose name holds ESC ---
+    var gsf = "_thoth_t_gs\x1b[7mGITSTMARK";
+    file_write_all(gsf, "x\n", 2);
+    var gmade = 0;
+    if (file_exists(".git") == 0) {
+        xmkdir(".git", 0x1C0);
+        var ghf = file_open(".git/HEAD", O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+        if (ghf >= 0) { file_write(ghf, "ref: refs/heads/main\n", 21); file_close(ghf); gmade = 1; }
+    }
+    if (sit_repo_open(".") == 1) {
+        feed_init(); out_mode_set(OUT_RING);
+        dispatch("/git");
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        assert_eq(_mid_feed_count("\x1b[7mGITSTMARK"), 0, "/git's status list draws no raw escape from an untracked name");
+        assert_eq(_mid_feed_count("_thoth_t_gs?[7mGITSTMARK"), 1, "...it names the file with '?'");
+    } else {
+        oprintln("  SKIP /git status list: no repository sit can open here (a linked worktree's .git is a file)");
+    }
+    if (gmade == 1) { xunlink(".git/HEAD"); xrmdir(".git"); }
+    xunlink(gsf);
+    _log_enabled = saved_log;
+    return 0;
+}
+
 fn test_title_sanitise() {
     test_group("conversation titles sanitised where they are stored (session/commands, 0.45.0)");
     var saved_log = _log_enabled;

@@ -109,9 +109,12 @@ fn _hook_env_append(dst, off, cap, key, value) {
     return off;
 }
 
-# _hook_run: run `cmd` with THOTH_EVENT/THOTH_TOOL/THOTH_ARGS exported. Returns the exit code, or -1 when
-# the hook could not be run at all (which callers treat as "did not block" — a broken hook must not become
-# an accidental deny-everything, which would be indistinguishable from thoth being broken).
+# _hook_run: run `cmd` with THOTH_EVENT/THOTH_TOOL/THOTH_ARGS exported. Returns the exit code, -2 when it timed out,
+# or -1 when the hook could not be run at all — announced here, on every surface, and not counted as fired.
+# ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never a
+# hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to create the capture file, to
+# fork or to wait. Until 0.45.2 that was every call on macOS (src/exec.cyr), and on Linux any local user who
+# pre-plants /tmp/thoth_sh_<pid>_<n> names makes the exclusive create fail — an operator's deny, off on demand.
 fn _hook_run(cmd, event, tool, args) {
     if (_hook_buf == 0) { _hook_buf = alloc(HOOK_OUT_CAP + 1); }
     if (_hook_cmd == 0) { _hook_cmd = alloc(HOOK_CMD_CAP); }
@@ -146,8 +149,14 @@ fn _hook_run(cmd, event, tool, args) {
     var n = exec_shell_capture(_hook_cmd, _hook_buf, HOOK_OUT_CAP, config_hook_timeout_ms(), &st);
     if (n < 0) { n = 0; }
     store8(_hook_buf + n, 0);
-    _hook_fired = _hook_fired + 1;
     var code = load64(&st);
+    if ((code == (0 - 1)) && (load64(&st + 8) == 0)) {
+        note_emit("  [hook "); note_emit(event);
+        note_println("] could NOT be run — creating its capture file, forking or waiting failed; it gave no verdict");
+        log_begin("hook"); log_kv_str("event", event); log_kv_str("result", "could_not_run"); log_commit(SK_WARN);
+        return 0 - 1;
+    }
+    _hook_fired = _hook_fired + 1;
     if (load64(&st + 8) == 1) {
         ui_emit(ROLE_RED, "  [hook "); emit(event); ui_emit(ROLE_RED, "] timed out"); oprintln("");
         # ⚠ 0.43.2: a TIMEOUT is its own outcome (-2), distinct from "could not spawn" (-1). They used to
@@ -195,15 +204,16 @@ fn hooks_session_end() {
 
 # hooks_pre_tool: 1 = proceed, 0 = BLOCKED by the hook. THE load-bearing event.
 #
-# Returns 1 (proceed) when no hook is configured, when the target cannot run one, and when the hook could
-# not be SPAWNED. That last case is deliberate: a hook that fails to spawn must not silently become a
-# deny-everything, which would present as thoth mysteriously refusing every tool. A hook denies by
-# EXITING NON-ZERO, which is a decision it actually made.
+# Returns 1 (proceed) when no hook is configured and when the target cannot run one (announced — see below). A
+# hook denies by EXITING NON-ZERO, which is a decision it actually made.
 #
-# ⚠ 0.43.2 — A TIMEOUT IS NOT A SPAWN FAILURE, and the two now part company. A hook that could not START
-# never got to weigh anything, and treating that as a deny would break a session over a broken script. A
-# hook that STARTED and ran out of time is a security control that was consulted and did not answer — and
-# thoth's house rule is that security degrades CLOSED. The timeout is already announced by _hook_run.
+# ⚠ 0.43.2 — A TIMEOUT IS A DENY. A hook that STARTED and ran out of time is a security control that was consulted
+# and did not answer — and thoth's house rule is that security degrades CLOSED.
+# ⚠ 0.45.2 — SO IS A HOOK THAT COULD NOT BE RUN. This used to return 1 there, reasoning that a hook which fails to
+# spawn must not become a mysterious deny-everything. But a broken SCRIPT exits non-zero (127 included) and already
+# denies; -1 is thoth failing to create the capture file, fork or wait — which made the operator's deny an allow on
+# every macOS call and, on Linux, for any local user able to pre-plant the capture file names. Nothing about it is
+# mysterious now: _hook_run names the cause and the BLOCKED line names the tool.
 # ⚠ 0.44.2 — A CONFIGURED pre_tool HOOK ON A TARGET WITH NO SHELL WAS INERT AND SILENT. On AGNOS —
 # thoth's canonical target — exec.cyr defines `shell_supported() { return 0; }`, so this returned PROCEED
 # with no message, no log line and no counter bump, while /state kept printing `pre_tool(blocking)` in
@@ -230,17 +240,20 @@ fn hooks_pre_tool(tool, args) {
     if (load8(c) == 0) { return 1; }
     if (shell_supported() == 0) { _hooks_note_gap("pre_tool"); return 1; }
     var rc = _hook_run(c, "pre_tool", tool, args);
-    if (rc == (0 - 2)) {                                    # timed out -> the control did not answer -> DENY
+    if (rc < 0) {                                           # -2 timed out / -1 could not run: no answer -> DENY
         _hook_blocked = _hook_blocked + 1;
-        ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit(tool);
-        note_println(" (the hook timed out — degrading closed)");
-        log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool);
-        log_kv_int("blocked", 1); log_kv_str("reason", "timeout"); log_commit(SK_WARN);
+        ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit_label(tool);
+        if (rc == (0 - 2)) { note_println(" (the hook timed out — degrading closed)"); }
+        else { note_println(" (the hook could not be run — degrading closed)"); }
+        log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool); log_kv_int("blocked", 1);
+        if (rc == (0 - 2)) { log_kv_str("reason", "timeout"); } else { log_kv_str("reason", "could_not_run"); }
+        log_commit(SK_WARN);
         return 0;
     }
-    if (rc <= 0) { return 1; }                              # 0 = allow; -1 = could not SPAWN -> do not fake a deny
+    if (rc == 0) { return 1; }                              # the hook allowed it
     _hook_blocked = _hook_blocked + 1;
-    ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit(tool);
+    # 0.45.2: the tool name is the model's (S6) — drawn through the label policy on every surface
+    ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit_label(tool);
     ui_emit(ROLE_FAINT, " (exit "); ofmt_int(rc); note_println(")");
     log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool);
     log_kv_int("blocked", 1); log_commit(SK_WARN);

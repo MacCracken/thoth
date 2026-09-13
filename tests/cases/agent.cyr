@@ -55,6 +55,23 @@ fn test_shell() {
     assert(dres != 0, "deny-glob command returns a refusal (before the gate)");
     assert_eq(shell_last_allowed(), 0, "deny-glob -> not allowed (roundlog DENIED)");
 
+    # --- 0.45.2: the capture file's name ends in 16 random hex digits, so its next names cannot be planted ---
+    var tpa = alloc(256);
+    var tpb = alloc(256);
+    var tpn = _exec_append_cstr(tpa, 0, _shell_tmp_path()); store8(tpa + tpn, 0);
+    var tpm = _exec_append_cstr(tpb, 0, _shell_tmp_path()); store8(tpb + tpm, 0);
+    assert_eq(memeq(tpa, "/tmp/thoth_sh_", 14), 1, "the capture file lives under /tmp/thoth_sh_");
+    var tph = 1;
+    var tpi = tpn - 16;
+    while (tpi < tpn) {
+        var tc = load8(tpa + tpi);
+        if (((tc < 48) || (tc > 57)) && ((tc < 97) || (tc > 102))) { tph = 0; }
+        tpi = tpi + 1;
+    }
+    assert_eq(tph, 1, "...and ends in 16 hex digits");
+    assert_eq(load8(tpa + tpn - 17), 95, "...after pid_counter_");
+    assert_eq(memeq(tpa + tpn - 16, tpb + tpm - 16, 16), 0, "two consecutive names differ in the random part");
+
     # --- shell_supported() on this POSIX build ---
     assert_eq(shell_supported(), 1, "shell supported on this POSIX target");
 
@@ -1739,6 +1756,19 @@ fn test_project() {
     assert_eq(hooks_pre_tool("shell", "{}"), 0, "a hook that TIMED OUT degrades CLOSED — it was consulted and did not answer");
     assert_eq(hooks_blocked(), blocked_before + 1, "...and the timeout denial is counted like any other block");
     _cfg_hook_timeout_ms = 0 - 1;
+    # ⚠ 0.45.2 — A HOOK THAT CANNOT BE RUN DENIES TOO. Pointing the capture prefix at a directory that does not exist makes
+    # the exclusive create fail for real: the -1 a full or read-only /tmp or a fork failure produces — and, until 0.45.2,
+    # every call on macOS. Until 0.45.2 that ALLOWED the call.
+    var hk_blocked = hooks_blocked();
+    var hk_fired = hooks_fired();
+    var hk_prefix = _shell_tmp_prefix;
+    _shell_tmp_prefix = "/nonexistent-thoth-test-dir/thoth_sh_";
+    _cfg_hook_pre_tool = "exit 0";                         # a hook that would ALLOW, if it ran
+    assert_eq(hooks_pre_tool("shell", "{}"), 0, "a hook that could not be RUN denies — it gave no verdict");
+    assert_eq(hooks_blocked(), hk_blocked + 1, "...and that denial is counted");
+    assert_eq(hooks_fired(), hk_fired, "...but a hook that never ran is not counted as fired");
+    _shell_tmp_prefix = hk_prefix;
+    assert_eq(hooks_pre_tool("shell", "{}"), 1, "premise: with the capture file creatable, the same hook runs and allows");
     # ⚠ THE SECURITY PROPERTY: event facts reach the hook through the ENVIRONMENT, never interpolated
     # into the command — the tool name and args are attacker-influenced (the MODEL chose them).
     _cfg_hook_pre_tool = "test \"$THOTH_TOOL\" = shell";
@@ -2059,11 +2089,56 @@ fn test_project() {
         oprintln("  SKIP symlink-jail: could not create a test symlink on this host");
     }
 
+    # ⚠ 0.45.2 — A LINK BELOW THE FIRST COMPONENT. Through 0.45.1 the walk tested the first component over and over, so a
+    # link one directory down was followed. The fixture links an in-project directory's child to a directory holding a
+    # known file, so a followed link is visible as that file's bytes, not only as a missing refusal.
+    test_group("a symlink below the first component is refused (project.cyr, 0.45.2)");
+    var ndir = "_thoth_nest_t";
+    var nlink = "_thoth_nest_t/in";
+    var ntgt = "/tmp/_thoth_nest_target";
+    var nsec = "/tmp/_thoth_nest_target/secret.txt";
+    xunlink(nlink); xrmdir(ndir); xunlink(nsec); xrmdir(ntgt);
+    xmkdir(ntgt, 0x1C0);
+    file_write_all(nsec, "NESTSECRET\n", 11);
+    if ((xmkdir(ndir, 0x1C0) == 0) && (xsymlink(ntgt, nlink) == 0) && (file_exists(nsec) == 1)) {
+        assert_eq(_project_no_symlink("_thoth_nest_t"), 1, "premise: the ordinary parent directory passes");
+        assert_eq(_project_no_symlink("_thoth_nest_t/in"), 0, "a symlink as the SECOND component is refused");
+        assert_eq(_project_no_symlink("_thoth_nest_t/in/secret.txt"), 0, "...and so is a path THROUGH it");
+        var nres = read_file_tool("{\"path\":\"_thoth_nest_t/in/secret.txt\"}");
+        assert(_ui_contains(nres, "NESTSECRET") == 0, "read_file does not return a file's bytes through a nested link");
+        assert(_ui_contains(nres, "symlink") == 1, "...it refuses, naming the symlink");
+        assert(_ui_contains(list_dir_tool("{\"path\":\"_thoth_nest_t/in\"}"), "symlink") == 1, "list_dir refuses the nested link");
+    } else {
+        oprintln("  SKIP nested symlink: could not create the fixture on this host");
+    }
+    xunlink(nlink); xrmdir(ndir); xunlink(nsec); xrmdir(ntgt);
+
     # --- end-to-end: a grant flips a previously-refused absolute path (via /etc on the Linux test host) ---
     assert_eq(project_grant_root("/etc"), 1, "grant /etc for the end-to-end check");
     assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "/etc:") == 1, "granted absolute dir now lists (not refused)");
     assert(_ui_contains(list_dir_tool("{\"path\":\"/etc\"}"), "refused") == 0, "granted absolute dir is no longer refused");
     assert(_ui_contains(read_file_tool("{\"path\":\"/etc/no_such_zzz\"}"), "no such file") == 1, "granted root: gate passes, missing file -> honest error (not refused)");
+
+    # --- 0.45.2: a granted root's OWN path may run through a symlink; a link BELOW a root is still refused ---
+    # macOS ships /etc, /tmp and /var as links into /private, so the three checks above failed on the first native
+    # run there. This builds that shape on any POSIX host: a directory holding a link to /etc, then a grant of each.
+    test_group("a granted root's own path is not refused for a symlink (project.cyr, 0.45.2)");
+    var gdir = "/tmp/_thoth_grant_t";
+    var glink = "/tmp/_thoth_grant_t/link";
+    xunlink(glink); xrmdir(gdir);                      # tolerate a leftover from an aborted run
+    var groots = _read_roots_n;
+    if ((xmkdir(gdir, 0x1C0) == 0) && (xsymlink("/etc", glink) == 0)) {
+        assert_eq(project_grant_root(gdir), 1, "grant a directory that holds a symlink");
+        assert(_ui_contains(list_dir_tool("{\"path\":\"/tmp/_thoth_grant_t/link\"}"), "symlink") == 1, "a link BELOW a granted root is still refused");
+        assert_eq(project_grant_root(glink), 1, "grant the link itself");
+        assert(_ui_contains(list_dir_tool("{\"path\":\"/tmp/_thoth_grant_t/link\"}"), "refused") == 0, "a root the operator named is not refused for being a link");
+        assert_eq(_project_granted_prefix_len("/tmp/_thoth_grant_t/link/hosts"), strlen(glink), "the longest granted root is the one skipped");
+        assert_eq(_project_granted_prefix_len("/tmp/_thoth_grant_tX"), 0, "a root is matched at a '/' boundary only");
+    } else {
+        oprintln("  SKIP granted-root symlink: could not create the fixture on this host");
+    }
+    _read_roots_n = groots;
+    xunlink(glink); xrmdir(gdir);
     return 0;
 }
 

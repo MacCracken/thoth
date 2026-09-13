@@ -283,6 +283,11 @@ fn citations_capture(res) {
                         while ((load8(e) != 0) && (load8(e) != 10)) { e = e + 1; }
                         path = _cite_copy(p, e - p);
                     } else { path = _cite_copy(after, 0); }
+                    # 0.45.2: the title and path are drawn on the recall line and persisted with the message, and they are
+                    # a note's own text (the model writes notes). Both take the LABEL policy here, once. The ids above go
+                    # back to mneme as JSON arguments and are never drawn, so they stay byte-exact.
+                    clean_line_n(title, strlen(title));
+                    clean_line_n(path, strlen(path));
                     store64(_cite_ptrs_buf() + _cite_n * 8, title);
                     store64(_cite_ptrs_buf() + (CITE_MAX + _cite_n) * 8, path);
                     _cite_n = _cite_n + 1;

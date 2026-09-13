@@ -135,6 +135,7 @@ fn main() {
     test_cmd_echo_sanitise();
     test_path_echo_sanitise();
     test_title_sanitise();
+    test_sink_sweep_0452();
     test_vendor_pins(); test_vendor_hazards();
     return assert_summary();
 }

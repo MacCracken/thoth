@@ -715,7 +715,7 @@ fn cmd_git(line) {
             elif (kind == 2) { ui_emit(ROLE_GREEN, "A "); }       # new (untracked)
             elif (kind == 3) { ui_emit(ROLE_RED, "D "); }         # deleted
             else { emit("? "); }
-            emit(sit_status_path(rec)); oprintln("");
+            emit_clean_line(sit_status_path(rec)); oprintln("");   # 0.45.2: an untracked name is the worktree's own text
             i = i + 1;
         }
     }
@@ -1574,8 +1574,15 @@ fn cmd_notes(line) {
     }
     var res = memory_notebook_search(query);
     if (res == 0) { emit("  "); ui_emit(ROLE_RED, "notebook: search failed (mneme unreachable or errored)"); oprintln(""); return 0; }
+    _notes_print(res);
+    return 0;
+}
+
+# _notes_print (0.45.2): mneme's result under its header, through the TEXT policy — it is a third party's decoded MCP
+# text, so its newline listing survives and a raw escape does not. "Verbatim" above stays true of the words.
+fn _notes_print(res) {
     ui_emit(ROLE_MUTED, "notebook (mneme):"); oprintln("");
-    emit(res); oprintln("");
+    emit_clean_text(res); oprintln("");
     return 0;
 }
 
@@ -1793,7 +1800,7 @@ fn _cmd_run_captured(cmdline) {
     var n = exec_shell_capture(cmdline, _run_cap_buf, RUN_CAP_BUF, config_shell_timeout_ms(), &status);
     var code = load64(&status);
     var timed = load64(&status + 8);
-    if (code == (0 - 1)) { oprintln("  (failed to spawn /bin/sh)"); return 0; }
+    if (code == (0 - 1)) { oprintln("  (could not run the command — creating the capture file, forking or waiting failed)"); return 0; }
     if (code == (0 - 3)) { oprintln("  (a capturing shell is not available on this target)"); return 0; }
     if (n > 0) {
         store8(_run_cap_buf + n, 0);
@@ -1943,7 +1950,7 @@ fn cmd_rewind(line) {
         while (i < n) {
             emit("  "); ofmt_int(i + 1); emit(". ");
             ui_emit(ROLE_FAINT, "turn "); ofmt_int(ckpt_turn_at(i)); emit("  ");
-            emit(ckpt_path_at(i));
+            emit_clean_line(ckpt_path_at(i));             # 0.45.2: the model's own path; the restore keeps the raw bytes
             if (ckpt_snap_at(i) < 0) { ui_emit(ROLE_GREEN, "  (created — rewind removes it)"); }
             oprintln("");
             i = i + 1;
@@ -1978,7 +1985,7 @@ fn cmd_rewind(line) {
     var k = atoi(arg);
     if ((k < 1) || (k > n)) { emit("no checkpoint "); ofmt_int(k); emit(" — there are "); ofmt_int(n); oprintln("."); return 0; }
     if (ckpt_restore_one(k - 1) == 0) { ui_emit(ROLE_RED, "rewind failed"); ui_emit(ROLE_FAINT, " — the snapshot could not be read back"); oprintln(""); return 0; }
-    emit("rewound "); oprintln(ckpt_path_at(k - 1));
+    emit("rewound "); emit_clean_line(ckpt_path_at(k - 1)); oprintln("");
     return 0;
 }
 

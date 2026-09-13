@@ -425,7 +425,7 @@ fn _gfeed_greeting(cmds, x, y, avail_px) {
     cy = cy + GFEED_LH;
     cy = cy + GFEED_GAP;
     cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_MUTED), "a sovereign agentic coding TUI — now with a desktop window.");
-    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin. (input wiring lands next.)");
+    cy = _gfeed_para(cmds, x, cy, avail_px, _ui_rgb(ROLE_FAINT), "type a task below to begin.");
     return cy;
 }
 

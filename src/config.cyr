@@ -992,7 +992,12 @@ fn _cfg_known_key(sec, key) {
 }
 
 # _cfg_note_unknown: record "<what>" (already a stable cstr) once, up to the cap.
+# 0.45.2: a key NAME is text from either layer — a cloned repo's included — and it is drawn at launch (stderr), in
+# /state and on /reload. Every caller hands in a fresh heap copy (str_cstr, _cfg_join_dot), so the LABEL policy is
+# applied to it in place, before the dedupe.
 fn _cfg_note_unknown(what) {
+    if (what == 0) { return 0; }
+    clean_line_n(what, strlen(what));
     if (_cfg_unknown == 0) { _cfg_unknown = alloc(CFG_UNKNOWN_MAX * 8); }
     if (_cfg_unknown == 0) { return 0; }
     var i = 0;
@@ -1160,7 +1165,7 @@ fn config_load() {
     var log_l = _cfg_section_pairs(lo, "log");        var log_g = _cfg_section_pairs(gl, "log");
     # AUTHORITY — an unjailed write sink: thoth creates and appends to whatever path this names.
     _cfg_log_file = _cfg2_str_global_only(log_l, log_g, "file", "log.file");
-    _cfg_log_level = _cfg2_str(log_l, log_g, "level");
+    _cfg_log_level = _cfg_label(_cfg2_str(log_l, log_g, "level"));   # 0.45.2: echoed at launch; the local layer may set it
     var hist_l = _cfg_section_pairs(lo, "history");   var hist_g = _cfg_section_pairs(gl, "history");
     # AUTHORITY — an unjailed write sink, and one holding the operator's own typed input.
     _cfg_history_file = _cfg2_str_global_only(hist_l, hist_g, "file", "history.file");
@@ -1172,7 +1177,7 @@ fn config_load() {
     var ui_l = _cfg_section_pairs(lo, "ui");          var ui_g = _cfg_section_pairs(gl, "ui");
     _cfg_ui_bell = _cfg2_bool(ui_l, ui_g, "bell", 0);         # [ui].bell — BEL on turn completion (0.24.3), opt-in
     _cfg_ui_elapsed = _cfg2_bool(ui_l, ui_g, "elapsed", 0);   # [ui].elapsed — faint per-turn elapsed line (0.24.3), opt-in
-    _cfg_ui_tier = _cfg2_str(ui_l, ui_g, "tier");             # [ui].tier — durable presentation tier (0.43.2); --tier still wins
+    _cfg_ui_tier = _cfg_label(_cfg2_str(ui_l, ui_g, "tier"));  # [ui].tier — durable presentation tier (0.43.2); --tier still wins; 0.45.2: /state draws it
     _cfg_ui_theme = _cfg2_str(ui_l, ui_g, "theme");           # [ui].theme — durable colour theme (0.44.3); /theme still switches live
     var mem_l = _cfg_section_pairs(lo, "memory");     var mem_g = _cfg_section_pairs(gl, "memory");
     _cfg_memory_enabled = _cfg2_bool(mem_l, mem_g, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)

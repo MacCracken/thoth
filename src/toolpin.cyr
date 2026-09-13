@@ -171,7 +171,7 @@ fn toolpin_check(name, desc, schema) {
     # was under OUT_NULL: one-shot and the GUI), the operator sees an agent that has mysteriously stopped
     # using a tool and has nothing pointing at `/tools trust`. note_* keeps the reason on every surface.
     ui_emit(ROLE_RED, "  [toolpin] WITHHELD ");
-    note_emit(name);
+    note_emit_label(name);                      # 0.45.2: the MCP server's own name for its tool — the label policy
     note_println(" — its MCP definition CHANGED since this session pinned it.");
     note_println("  a tool description is read by the model as instructions, so a silent swap is an injection with");
     note_println("  approval already granted. Not advertised this turn. `/tools trust` to accept and re-pin.");

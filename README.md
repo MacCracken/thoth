@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.45.1 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.45.2 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -74,12 +74,10 @@ Config is **two layers** ([ADR-0019](docs/adr/0019-layered-config-global-base-lo
 `~/.thoth/config.cyml` is the global base and the nearest `.thoth/config.cyml` overrides it **per key**.
 Memory layers the same way. Lists that grant the model authority (`[shell].allow`, `[project].read_roots`)
 are *replaced* by the local layer rather than merged, while `[shell].deny` unions — authority never
-accumulates from the less-trusted side. Multi-target (re-measured at 0.44.5): x86_64 Linux ships;
+accumulates from the less-trusted side. Multi-target (re-measured at 0.45.2): x86_64 Linux ships;
 aarch64 Linux builds; **AGNOS builds *and runs*** — the cross-built ELF loads and executes in ring 3 on
 the real kernel under QEMU (`./scripts/agnos-run.sh`); **macOS builds and runs** on Apple Silicon at the line tier
-(no BSD termios peer yet, so no rich TUI) — though `shell`, `[hooks]` and `[verify]` are currently
-broken there by hardcoded Linux syscall numbers in `src/exec.cyr`, so treat them as unavailable on
-macOS for now; Windows is staged on an architectural IOCP/ws2_32 floor gap, now blocked entirely
+(no BSD termios peer yet, so no rich TUI), with its full test suite passing natively; Windows is staged on an architectural IOCP/ws2_32 floor gap, now blocked entirely
 outside thoth's own source. See
 [`docs/development/state.md`](docs/development/state.md) and
 [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.
@@ -185,7 +183,8 @@ thoth --help                             # the full one-shot reference
 ```
 
 For multi-target builds use the driver — `./scripts/build.sh [linux|macos|win|aarch64|agnos|all]`
-(x86_64 Linux ships; aarch64 and agnos build; macos and win are the two open lanes — see
+(x86_64 Linux ships; aarch64 builds; agnos builds and runs; macos builds and runs at the line tier; win is the
+open lane — see
 [ADR-0008](docs/adr/0008-multi-target-builds.md)). The `macos` lane only runs on a Mac host: cyrius emits
 Mach-O natively there rather than cross-compiling.
 

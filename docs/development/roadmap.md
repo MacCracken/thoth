@@ -78,7 +78,7 @@ Four gates remain, in rough dependency order.
 
    ⚠ Read the lane's output correctly before calling a regression: it prints three
    `undefined function` warnings (`load_signing_seed`, `sign_commit_body`,
-   `verify_commit_body`) and two `duplicate fn` warnings (`chacha20_xor`, `cmd_reset`).
+   `verify_commit_body`) and one `duplicate fn` warning (`cmd_reset`).
    The three sign symbols are **dead-path placeholders from the vendored sit read bundle**,
    documented as such in `scripts/sync-sit.sh`; they arrived when sit was first vendored at
    0.13.x, *after* this gate's build half cleared at 0.12.3. They are expected output, not a
@@ -93,7 +93,7 @@ Four gates remain, in rough dependency order.
      vendor it: a runner for AGNOS is AGNOS's domain). Reproducible in ~90s on any host with
      QEMU + OVMF + a built gnoboot.
    - **Rung 2 — a real turn against the spine, staged on the same image.** Open. Needs a
-     current `hoosh_agnos` (the one on disk is 2.4.11, from 2026-07-01, against hoosh 2.6.9)
+     current `hoosh_agnos` (the one on disk is 2.4.11, from 2026-07-01, against hoosh 2.6.10)
      and a daimon beside it. This is the rung that actually satisfies the gate's wording.
    - **Rung 3 — the interactive TUI over agnsh.** Open, and the least urgent.
 
@@ -107,6 +107,9 @@ Four gates remain, in rough dependency order.
    each finding handed to an independent skeptic, 26 filed / 17 confirmed / 11 fixed, closing
    with a coverage table against the first-party standards checklist): the **fail-closed
    posture** and the **t-ron authorization choke point** are both covered there.
+   ⚠ That audit predates the GUI's authorization path (0.44.3 — the `ask_user` modal answering
+   `confirm`, [ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)), which grants
+   authority; the sign-off should read it too.
 
    ⭐ **0.44.3 CLOSED THE CONCURRENCY HALF.** The 0.44.3 sweep ran a dedicated concurrency dimension
    over `_agent_run_calls_par` and every seam it touches, and it was worth doing — four confirmed
@@ -283,86 +286,15 @@ one is decided.
 ## Known limitations (carried, not fixed)
 
 > Each is either a real defect thoth has not yet fixed, or an honest degradation gated on an
-> external/substrate primitive. Recorded here so they are not lost in code comments. **The first
-> two are defects, not degradations, and are labelled as such.**
+> external/substrate primitive. Recorded here so they are not lost in code comments. **Entries
+> marked ⛔ are defects, not degradations.**
 
-- **macOS builds and runs — and the floor gap behind it is now closed too.** The lane's blocker was
-  thoth's own (`src/tui.cyr` calling darshana's Linux-gated termios/signalfd half with no target
-  guard), closed at 0.44.3 by `src/term.cyr`. Verified natively on Apple Silicon (macOS 26.6.2): the
-  Mach-O arm64 binary compiles with no undefined symbol and `thoth --version` / the line REPL run.
-
-  ⚠ **Still owed: a native build at the CURRENT pin.** The Mac has **6.5.35** installed, against a pin
-  now at **6.5.51**, and the pin gate refuses outright — so 0.44.5's macOS evidence is a floor-level
-  A/B probe (below), not a full thoth binary. Installing a 6.5.51 macOS toolchain there is a
-  cyrius-repo task (`scripts/build-macos-arm64-tarball.sh` cross-emits one from Linux); it has been
-  owed since 0.44.3, when the pin was 6.5.43, and the debt simply moved with the pin. It is not
-  load-bearing for the lane's *result* — the snapshots differ by zero removed, renamed or
-  newly-private symbols in both directions — but it is the difference between "the floor fix works on
-  Darwin" (proven) and "thoth at 0.44.5 runs on Darwin" (inferred).
-
-  ✅ **`getenv` on macOS — FIXED upstream at cyrius 6.5.45, CONSUMED by thoth at 0.44.5.** The gap
-  0.44.3's unblocked lane exposed: `lib/io.cyr`'s `getenv` read `/proc/self/environ`, which Darwin does
-  not have, with a branch for AGNOS and none for macOS. Consequences were **no colour**
-  (`_ui_color_capable` needs `TERM`, so every macOS session resolved to PT_PLAIN) and **no global config
-  layer** (`~/.thoth/config.cyml` is found via `HOME`) — and, after ADR-0021, that second one meant
-  **every authority key was suppressed on macOS**, so a Mac user could not set `[tron].policy`,
-  `[hooks]` or `[verify]` by any means. cyrius now reads envp off the Mach-O init stack; the filing is
-  in that repo's `issues/archived/`.
-
-  ⭐ **Verified on real hardware, as an A/B rather than a claim** (ecb, Apple Silicon, macOS 26.6.2):
-  the same probe built the same way returns `<NULL>` for `HOME`/`TERM`/a custom var against the stock
-  6.5.35 floor, and returns all three correctly against the `lib/io.cyr` thoth now ships. The filing
-  also undercounted its own blast radius — **Windows was broken identically** (the
-  `GetEnvironmentVariableA` reroute existed but nothing in the stdlib called it) and is fixed in the
-  same hop.
-
-  ⚠ **Owed: a full macOS thoth binary at the 6.5.51 pin.** Only 6.5.35 is installed on that Mac and
-  the pin gate refuses; shipping a 6.5.51 macOS toolchain there is a cyrius-repo task. The floor fix
-  itself reaches the Mac regardless, because thoth git-tracks its own `lib/`. Note the same bug bites
-  cyrius's own tooling there: 6.5.35's dep resolver resolves `HOME` to a fallback `/root` on macOS.
-
-  ⛔ **DEFECT (fail-OPEN), found by the first-ever macOS run of the test suite at 0.44.5: process
-  spawn is broken on macOS, so `shell`, `[hooks]` and `[verify]` do not work there.** The lane has
-  only ever been checked with `--version` and the line REPL; once the Mac had a toolchain at the pin,
-  `cyrius test` ran natively for the first time and returned **780 passed / 29 failed**, against
-  2814/2814 on Linux at the same commit. All 29 are one root cause in five groups: `shell tool` (13),
-  `lifecycle hooks` (7), `pre_tool hook covers the parallel executor` (3), `verification loop` (3),
-  and the `read_roots` half of the jail tests (3).
-
-  ⭐ **The security consequence is the reason this is labelled a defect and not a degradation.** A
-  `pre_tool` hook that exits non-zero is supposed to BLOCK the tool call; on macOS the assertion
-  `a NON-ZERO exit BLOCKS the call` returns **allowed**. The operator's blocking deny — the control
-  `[hooks]` exists to provide, documented as "a deterministic, code-enforced deny a prompt cannot
-  argue with" — **fails open** there. Same for a hook that times out, which is documented as degrading
-  CLOSED. This violates the house rule that security degrades closed, on a target thoth now advertises
-  as supported.
-
-  **Root cause, measured — three hardcoded Linux-x86_64 constants in `src/exec.cyr`, and the file says
-  so itself.** Its own comment declares the path *"Linux x86_64 syscall #109. DECLARED x86_64-ONLY:
-  this whole POSIX path already uses a raw x86_64 poll(#7) below, and the aarch64 lane ships
-  size-gapped, so it never runs there."* That was true when written and stopped being true the moment
-  0.44.3 unblocked the macOS lane — **a documented residual is a claim with an expiry date**, this
-  project's own recurring theme, landing again.
-  1. `sys_open(path, 193, 384)` — `193` is `O_WRONLY|O_CREAT|O_EXCL` in **Linux** numbering. Darwin
-     uses `O_CREAT = 0x200`, `O_EXCL = 0x800`. The capture temp file is therefore never created,
-     `out_fd < 0`, and `exec_shell_capture` returns the `-1` spawn-fail sentinel — which is exactly
-     what the failing assertions report (`printf exits 0 (got -1, expected 0)`).
-  2. `syscall(109, 0, 0)` / `syscall(109, pid, pid)` — raw Linux `setpgid`. cyrius warns at build
-     time: *"syscall 109 not routed by the Mach-O ARM translation; will fault on macOS"* (twice,
-     matching the two call sites). The process-group kill silently degrades.
-  3. `syscall(7, 0, 0, 100)` — raw Linux `poll` as a 100 ms sleep. Same class; `lib/chrono.cyr`
-     already exposes a portable `sleep_ms`.
-
-  **Two owners.** (2) and (3) are thoth's — the same shape as the `src/tui.cyr` termios bug 0.44.3
-  fixed, and the fix is the house rule from [[arm64-legacy-syscall-constants]]: *a raw
-  `syscall(SYS_FOO, …)` is a portability CLAIM; use the stdlib wrapper*. (1) is a **floor gap worth
-  filing**: `lib/syscalls_macos.cyr`'s `sys_open` passes flags through raw and defines no `O_*`, while
-  `lib/io.cyr:44` defines `O_CREAT = 64` — the Linux value — globally, so *every* cyrius consumer that
-  opens a file with `O_CREAT` on Darwin is wrong, not just thoth.
-
-  ⚠ **Until this is fixed, `shell` / `[hooks]` / `[verify]` must be treated as NOT AVAILABLE on
-  macOS.** thoth does not currently announce that, which is itself a violation of announce-don't-fake
-  and is part of the fix.
+- **macOS builds and runs, and its native test suite is green.** Verified on Apple Silicon (macOS 26.6.2) at
+  0.45.2: the Mach-O arm64 binary builds with no undefined symbol and `cyrius test` passes in full there —
+  `shell`, `[hooks]` and `[verify]` included. ⚠ **Owed: a native run AT the pin.** The Mac has the **6.6.0**
+  toolchain against a **6.6.2** pin, so the run used a scratch copy pinned to 6.6.0 (the pin gate refuses
+  otherwise); install 6.6.2 there and re-run. The build prints 26 "syscall not routed by the Mach-O ARM
+  translation" warnings, none from a raw syscall in thoth's own `src/` (swept at 0.45.2).
 
   ⚠ **The T2 TUI does not run on macOS and is not meant to yet.** `term_raw` returns -1 there (darshana
   has no BSD termios peer and 0.44.3 does not invent one — a stub pretending to work is worse than an
@@ -380,9 +312,13 @@ one is decided.
     SIGHUP-driven policy hot-reload, which thoth has **zero** callers of, and `sys_rmdir` from
     `src/vendor/sit-read.cyr` against a Windows floor that routes `DeleteFileW` and `MoveFileExW` but
     not `RemoveDirectoryW`. Upstream fixes: t-ron gating its signal half to Linux (or publishing a
-    profile without it), and cyrius adding `sys_rmdir` to the Windows peer.
+    profile without it), and either cyrius adding `sys_rmdir` to the Windows peer or sit folding its
+    `sit_rmdir` onto the floor's `xrmdir` (in the floor since cyrius 6.5.2).
   - `TTY_SIGMASK_WINCH` stays off **every** list on purpose, so a new raw `tty_*` call in thoth source
     turns this lane red again — it is the regression tripwire for the defect just closed.
+  - `src/exec.cyr`'s Windows capture still opens its temp file non-exclusively. cyrius 6.4.58's reroute
+    honours `O_CREAT|O_EXCL`, so it can take the POSIX path's exclusive create and retry loop — once it can
+    be run on the Windows host.
 
   ⚠ **The lane classifier itself was half-blind and is fixed.** It only ever collected `undefined
   variable`, never `undefined function` — the error cyrius actually refuses to emit on — so through
@@ -404,11 +340,11 @@ one is decided.
   git read-mode is a library-only surface.
 
 - **thoth asks hoosh for streaming token usage that hoosh never sends.** Every streaming request
-  carries `stream_options.include_usage`, but hoosh **2.6.4**'s source contains no reference to either
-  token and emits no trailing usage frame, so `_hoosh_account_usage` waits for something that never
-  arrives on the streaming path. Either hoosh grows the frame or thoth stops claiming the field
-  feeds its cost producer. Degrades quietly today rather than honestly — the token/cost row simply
-  is not fed on that path.
+  carries `stream_options.include_usage`, but hoosh (re-checked at **2.6.10**) emits no trailing usage
+  frame — its handlers name `include_usage` only in a comment marking the decode as follow-up work — so
+  `_hoosh_account_usage` waits for something that never arrives on the streaming path. `[budget]` says so
+  (it cannot be enforced there; `[hoosh].stream = false` is the way round), but the token/cost row is still
+  not fed while streaming. Either hoosh grows the frame or thoth stops requesting it.
 
 - ⛔ **hoosh drops SSE frames on the Anthropic streaming path, and launders provider errors into an
   empty 200 stream** (upstream, hoosh 2.6.4 — surfaced and captured off the wire at 0.44.2). Two
@@ -434,12 +370,12 @@ one is decided.
      (`upstream_http` / `upstream_message`).
 
   Sub-point 1 was reproduced deterministically by replaying one captured request body and remains open
-  upstream. Sub-point 2 is closed on both sides.
+  upstream (still so at hoosh 2.6.10). Sub-point 2 is closed on both sides.
 
 - **t-ron's audit export is unescaped and flat-sized** (upstream, t-ron — surfaced by 0.42.0's
   `/audit export`; **re-scoped at 0.44.4**). `_audit_export_event` splices **`agent`, `tool` AND
-  `reason`** into JSON with no escaping (t-ron 2.1.9 `src/audit.cyr:194`, `:196`, `:202`) and sizes the
-  whole buffer at a flat `n * 512 + 32` (`:216`).
+  `reason`** into JSON with no escaping (`src/audit.cyr:194`, `:196`, `:202` — unchanged at t-ron 2.1.10,
+  the version thoth vendors) and sizes the whole buffer at a flat `n * 512 + 32` (`:216`).
 
   ⭐ **This entry used to exculpate itself — "safe today only because every reason t-ron emits is a
   short fixed label" — and that premise is false twice over.** `tool_name` is spliced independently of
@@ -454,13 +390,21 @@ one is decided.
 
   **thoth's half is fixed at 0.44.4** — both executors refuse a name over `AGENT_NAME_MAX` before
   `gate_authorize`, so the ring never receives one. The escaper and length-derived sizing belong in
-  t-ron (2.1.10), then a re-vendor plus a line-anchored needle in `tests/cases/vendor.cyr`.
+  t-ron's next release (2.1.10 shipped without them), then a re-vendor plus a line-anchored needle in
+  `tests/cases/vendor.cyr`.
 
 - **bhava — the sentiment→mood loop** (a backlogged seam, gated on bhava's Cyrius port).
   SecureYeoman feeds a turn's response sentiment back into the active persona's mood; that loop is
   **bhava**'s domain. Already a backlogged thoth integration — **consume bhava** (the same pattern
   mneme cleared) once it is Cyrius-ported; never reimplement sentiment/mood analysis in thoth. Not
   on a numbered arc until bhava lands.
+
+- **A file's CONTENT prints raw on `/read`, the tree pane's Enter, and `/git <path>` diffs.** 0.45.0 sanitised
+  every PATH these print, and `src/commands.cyr` records the content as deliberately left alone — it is the
+  file's own text. But the repository is not trusted: a cloned repo's file holding an OSC 52 or screen-clearing
+  escape runs in the operator's terminal on one Enter in the tree pane. **A policy decision, not yet taken:** the
+  TEXT policy (newlines and tabs kept, other C0 as `?`) would close it, at the cost of showing a file's
+  deliberate escapes as `?`.
 
 - **Hook event facts sit in the child's argv.** `[hooks]` passes event facts (`THOTH_EVENT`,
   `THOTH_TOOL`, `THOTH_ARGS`) as quoted `VAR='...'` assignments prefixed to the `/bin/sh -c` string.
@@ -477,8 +421,8 @@ one is decided.
   failure is announced). The residuals are documented in `.thoth/config.cyml.example` +
   `src/inhist.cyr` and wait on portable substrate primitives:
   - **tighten a pre-existing / loosely-permissioned file to `0600`** — needs a portable
-    `chmod`/`fchmod` wrapper. Today `sys_chmod` is **absent on Windows** and a **frozen-ABI no-op
-    on AGNOS**, so calling it would fork the floor / break the `--win` lane; a fresh file gets
+    `chmod`/`fchmod` wrapper. Today `sys_chmod` is a **return-0 stub on Windows and on AGNOS**, so
+    calling it would claim a mode thoth cannot enforce there; a fresh file gets
     `0600` on create but an existing looser file is left as-is (never silently re-tighten, never
     assert a mode we cannot enforce). Lands if `lib/io.cyr` grows a portable file-mode wrapper.
   - **`O_NOFOLLOW` on the history-file open** — needs a portable no-follow bit (the AGNOS `AO_*`

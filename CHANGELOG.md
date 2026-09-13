@@ -2,6 +2,99 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.45.2] - 2026-09-12
+
+**Brief audit and repairs: the symlink jail sees past a path's first component, process spawn works on macOS,
+and a hook that cannot run now denies.** A read-only audit of the roadmap's open items and the 0.45.x diff — four
+finders, every finding checked by an independent verifier, then a completeness critic — plus the first native macOS
+test run since 0.44.5, which reproduced the roadmap's ⛔ defect at **796 passed / 29 failed**. That run is fully
+green now. Every fix below was verified by breaking it again in a scratch copy and watching its assertion fail —
+which is how the first section was found. Suite **319 + 1348 + 846 + 539 + 183 + 5** (+56). Linux / aarch64 / AGNOS build
+with the same warning set as 0.45.1; macOS builds and passes its suite natively.
+
+### Fixed — the symlink jail tested only a path's FIRST component
+
+0.39.0 closed the jail's symlink escape (audit A-1) by testing every component of a path with `readlink`. To test a
+prefix the walk wrote a NUL where its `/` was and never put the `/` back, and `is_symlink` reads the path as a C
+string — so every later prefix read as the first component again. A link one directory down was followed: with
+`docs/link -> /etc`, `read_file docs/link/hostname` returned the file's bytes, `list_dir` listed the target and
+`search` walked through it. Every jail test had put its link at the first component. Found when this release's
+break test of the granted-root change below failed the wrong way; demonstrated against the old walk with a fixture
+whose `dir/link/secret.txt` came back as the secret's bytes. The `/` is restored after each test (+6).
+
+### Fixed — process spawn on macOS, and the process group on aarch64 Linux
+
+`exec_shell_capture` opened its capture file with the literal `193` — `O_WRONLY|O_CREAT|O_EXCL` in Linux numbering.
+Darwin's `O_CREAT` is `0x200`, so the file was never created, every call returned the `-1` sentinel, and `shell`,
+`[hooks]` and `[verify]` never ran on macOS. It passes the floor's per-target `O_*` names now.
+
+The child joined its own process group with a raw `syscall(109, 0, 0)` — `setpgid` in x86_64-Linux numbering only.
+The Mach-O backend routes no 109 (the call runs with a stale syscall register) and aarch64 Linux reads it as
+`timer_getoverrun`, so on both no group formed and a deadline kill missed a backgrounded grandchild. The floor has
+no `setpgid` wrapper; the child calls `sys_setsid()` instead — routed on every POSIX target, and a fresh child
+becomes the leader of a new group with the same id. The parent-side race-closer is gone (setsid cannot be called on
+another process, and the direct `kill(pid)` it guarded stays). The 100 ms wait uses the floor's `sleep_ms`. Two
+roadmap claims were wrong and are corrected: `poll` #7 was named a third cause but is routed on both backends, and
+the "floor gap" never existed — the floor has had Darwin `O_*` values since well before 0.44.5.
+
+Native macOS (Apple Silicon, the 6.6.0 toolchain installed there): `thoth_agent.tcyr` went from **796/29** to
+green, and the full suite passes on the final tree. The two `syscall 109 not routed` build warnings are gone.
+
+### Fixed — a pre_tool hook that cannot be run now DENIES
+
+`hooks_pre_tool` returned *proceed* when `_hook_run` reported `-1`, deliberately, so that a hook failing to spawn
+would not become a mysterious deny-everything. But `-1` is never the hook's own verdict: a broken script exits
+non-zero (127 included) and already denies. `-1` is thoth failing to create the capture file, fork or wait. That
+made an operator's blocking deny an allow on every macOS call, and on Linux on demand for any local user who
+pre-planted the predictable `/tmp/thoth_sh_<pid>_<n>` names. It now denies like a timeout; `_hook_run` announces
+the failure on every surface, logs it as `could_not_run`, and no longer counts the hook as fired. The `shell` tool
+and `/run` stop blaming `/bin/sh` for what is usually a capture-file failure.
+
+Denying there would have turned the planted-name trick into a session-long denial of service, so the capture name
+now ends in 16 random hex digits from the floor's `getrandom`; its next names cannot be guessed. The create stays
+`O_EXCL`. The spawn-failure test points a capture-prefix variable at a directory that does not exist.
+
+### Fixed — a granted root whose own path runs through a symlink
+
+macOS ships `/etc`, `/tmp` and `/var` as symlinks into `/private`, so the jail's symlink walk refused everything
+under a granted `/etc` or `/tmp/x` — 3 of the 29 macOS failures, and not the spawn defect the roadmap blamed for all
+29. The walk now skips the components that spell the longest granted root (the operator named that path); every
+component BELOW the root is still tested, and a relative in-project path is walked in full. The new test builds the
+same shape on any POSIX host.
+
+### Fixed — TUI regressions from 0.45.0
+
+- **Tree focus over a draft had no cue.** 0.45.0 made the hint row the input's placeholder, which shows only on an
+  empty input, so after Tab, Ctrl-B or a click into the tree with a draft nothing said where the keys went — and
+  Enter read a file instead of sending. The tree's own hint text now follows the draft on the input row, the way
+  the slash palette follows a typed token. The text is unchanged, and shared with the placeholder.
+- **The spinner painted over a draft.** The tree's Enter dispatches `/read` with the draft still in the input, and
+  the indicator erased its first row until the relayout. With a draft present it stays off.
+- **The slash palette ran off its row.** It starts after the typed token now, so its `+N more` suffix gets room
+  when names are left out, and the no-command note is shown only when it fits whole.
+
+Verified on a real pty: Ctrl-B and Tab over a draft, Enter in the tree with the draft in place (no indicator paint
+in the raw stream), and the palette at 30 and 80 columns.
+
+### Fixed — eleven more raw-terminal doors
+
+Each through the house LABEL or TEXT policy, each break-tested: unrecognised config **key names** (a cloned repo's
+`.thoth/config.cyml` reached launch stderr, `/state` and `/reload`) and the local layer's **`[ui].tier`** and
+**`[log].level`** values; the model's **tool name** as the roundlog stores it for `/audit`, in `/audit`'s **t-ron
+chain row** (t-ron records a refused name before refusing it) and in a **`pre_tool` hook's BLOCKED line**; an MCP
+server's tool name in a **toolpin WITHHELD** notice; **`/notes`** output; **recalled note titles and paths**;
+**`/git`'s untracked names**; and **`/rewind`**'s listing and `rewound` line (the restore still writes the raw path).
+
+### Changed — docs brought current
+
+The roadmap's gate 1 no longer lists the warning 0.44.6 removed, gate 2 names hoosh 2.6.10, gate 3 notes that the
+filed audit predates the GUI authorization path, the macOS entry is rewritten to its current state, the hoosh /
+t-ron / `sys_chmod` / Windows `sys_rmdir` entries are re-checked against today's upstream, and two entries are new:
+the Windows capture's exclusive create, and the open policy question of file CONTENT printing raw on `/read`.
+`state.md` (Targets header, rows and prose, Next), `README.md` (multi-target paragraph, build line) and
+`doc-health.md` (ADR rows 0019–0021) likewise. Stale comments in `exec.cyr`, `shell.cyr`, `hooks.cyr`, `tui.cyr`
+and `hoosh.cyr` corrected, and the GUI greeting drops "(input wiring lands next.)".
+
 ## [0.45.1] - 2026-09-12
 
 **The input is framed.** A rule now sits directly above the input and another directly below it, with the

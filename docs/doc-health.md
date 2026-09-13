@@ -6,6 +6,16 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.2** (2026-09-12, not a full sweep): the brief audit updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block, **Tests**, the **Targets** header and rows, the Targets prose's closed
+> blockers, **Next**), `docs/development/roadmap.md` (gate 1's warning list, gate 2's hoosh version, a gate 3 note
+> on audit coverage, the Known-limitations preamble, the macOS entry rewritten to its current state, the hoosh /
+> t-ron / `sys_chmod` / Windows `sys_rmdir` entries re-checked against today's upstream, a Windows exclusive-create
+> bullet, and a new entry for file content on `/read`), `README.md` (stamp, multi-target paragraph, build line) and
+> this file (ADR rows 0019–0021). ⚠ **The roadmap had missed 0.44.6's refresh as well** — the 0.45.0 note below
+> names only `state.md` and `README.md` — so gate 1 still listed a warning 0.44.6 removed and the macOS entry still
+> described a 6.5.51-era toolchain gap.
+>
 > **Touched at 0.45.1** (2026-09-12, not a full sweep): the input frame updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block and **Tests** counts) and `README.md` (status stamp).
 >
@@ -186,6 +196,9 @@ These are the reason the file is worth keeping. Each was paid for.
 | `README.md` (index) | ✅ Fresh | Index verified complete at 0.43.2 — **all 18 ADRs (0001–0018)** have a row. (The previous ledger row asserted "all 17 (0001–0017)"; the index itself was correct and already carried 0018 — the ledger's verification claim was the stale part.) Add a row whenever an ADR lands. |
 | `0017-model-edit-tool-jailed-gated-opt-in.md` | ✅ Fresh | **0.43.2**: fixed the doc set's only broken relative link — a "filed and shipped" link pointed at `docs/development/issues/`, a directory that does not exist in this repo (the issue lives in cyrius). Now a plain repo-qualified path, matching how `roadmap.md` cites the same class of cross-repo issue. |
 | `0018-subagent-delegation-scoped-child-context.md` | 🔵 Durable | The first ADR here written as a **fence** rather than a decision record — half its content is an explicit non-goals list, because the feature sits next to the spine rule. Its swap-set claim ("the complete list … provable by enumeration") was **tested and found incomplete at 0.43.2** (memory recall + citations were missing); the ADR's reasoning stands, its enumeration was extended. |
+| `0019-layered-config-global-base-local-override.md` | 🔵 Durable | **Row added at 0.45.2.** The global base + per-key local override (0.43.3); **superseded in part by 0021**. |
+| `0020-ask-user-the-tool-that-runs-toward-the-operator.md` | 🔵 Durable | **Row added at 0.45.2.** `ask_user`, the tool that runs toward the operator (0.44.0). |
+| `0021-authority-keys-are-global-only.md` | 🔵 Durable | **Row added at 0.45.2.** Authority keys are read from the global layer only (0.44.3). |
 | `0009` / `0012` / `0015` / `0016` | 🔵 Durable | Current (each carries its own dated addendum). |
 | `0001`–`0008`, `0010`–`0011`, `0013`–`0014` | 🔵 Durable | Point-in-time decisions; historical version stamps + assertion counts are correct as of each decision's date — **do not "refresh" them.** |
 | `template.md` | 🔵 Durable | The ADR starting point. |

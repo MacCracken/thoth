@@ -67,19 +67,39 @@ fn _exec_append_cstr(dst, off, s) {
     return off;
 }
 
-# _shell_tmp_path: build a fresh /tmp/thoth_sh_<pid>_<counter> path (NUL-terminated) into the
-# shared scratch and bump the counter. pid+counter is bounded and collision-resistant within one
-# session (two shell calls share a pid). No RNG needed / available. Residual (documented, not
-# faked): /tmp is world-writable and the frozen open ABI has no O_NOFOLLOW, so a pre-planted
-# symlink at the path is a TOCTOU vector — mitigated best-effort by O_EXCL on create below.
+# _shell_tmp_path: build a fresh /tmp/thoth_sh_<pid>_<counter>_<16 hex> path (NUL-terminated) into the shared scratch
+# and bump the counter. The create below is O_CREAT|O_EXCL, which refuses a pre-planted file or symlink outright (it
+# does not follow a link at the final component), so a planted name can make a create FAIL but never redirect it.
+#
+# ⚠ 0.45.2 — AND A FAILED CREATE NOW DENIES A pre_tool HOOK (src/hooks.cyr). With the old pid+counter name, which
+# anyone can read off `ps` and count from zero, another local user could plant the next names and turn every
+# hook-gated call into a denial (and every shell/verify call into a failure) for the whole session. Sixteen hex digits
+# from the floor's getrandom (routed on every target this path compiles for) make the next name unguessable. If the
+# RNG answers short the suffix is simply less random — the create stays exclusive, so that costs availability only.
+#
+# _shell_tmp_prefix is a variable for one reason: a test points it at a directory that does not exist, to make the
+# create fail for real.
+var _shell_tmp_prefix = "/tmp/thoth_sh_";
 fn _shell_tmp_path() {
-    if (_shell_tmp_buf == 0) { _shell_tmp_buf = alloc(64); }
+    if (_shell_tmp_buf == 0) { _shell_tmp_buf = alloc(256); }
     var off = 0;
-    off = _exec_append_cstr(_shell_tmp_buf, off, "/tmp/thoth_sh_");
+    off = _exec_append_cstr(_shell_tmp_buf, off, _shell_tmp_prefix);
+    if (off > 160) { off = 160; }                            # a test prefix is short; never let one crowd the buffer
     off = _append_int(_shell_tmp_buf, off, sys_getpid());
     store8(_shell_tmp_buf + off, 95); off = off + 1;         # '_'
     off = _append_int(_shell_tmp_buf, off, _shell_tmp_ctr);
     _shell_tmp_ctr = _shell_tmp_ctr + 1;
+    store8(_shell_tmp_buf + off, 95); off = off + 1;         # '_'
+    var rb[8];
+    store64(&rb, 0);
+    random_bytes(&rb, 8);
+    var k = 0;
+    while (k < 8) {
+        var b = load8(&rb + k) & 255;
+        store8(_shell_tmp_buf + off, load8("0123456789abcdef" + (b >> 4))); off = off + 1;
+        store8(_shell_tmp_buf + off, load8("0123456789abcdef" + (b & 15))); off = off + 1;
+        k = k + 1;
+    }
     store8(_shell_tmp_buf + off, 0);
     return _shell_tmp_buf;
 }
@@ -115,9 +135,11 @@ fn shell_supported() { return 0; }
 #     content guard: in the extremely narrow case where a lingering file (below) is reconstructed by a later
 #     run (pid reuse + the counter reset to 0) whose pre-delete ALSO fails on the still-live grandchild
 #     handle, a shorter new capture could read new-front + stale-tail. Not reachable without that exact combo.
-#   - No O_EXCL/O_NOFOLLOW (the CreateFileW reroute ignores them): collision resistance is getpid()+counter
+#   - No O_EXCL on this open (and no O_NOFOLLOW on any Windows path): collision resistance is getpid()+counter
 #     name-uniqueness plus a best-effort pre-delete; a pre-planted name is a TOCTOU residual (lower risk than
-#     /tmp — the CWD is the user's own project dir).
+#     /tmp — the CWD is the user's own project dir). ⚠ 0.45.2: the reason this used to give ("the CreateFileW
+#     reroute ignores them") expired at cyrius 6.4.58, which maps O_CREAT|O_EXCL to CREATE_NEW. Switching this
+#     open to an exclusive create needs the POSIX retry loop and a run on the Windows host; not done blind.
 #   - No process-group kill (Win32 has no POSIX pgid on this surface; a Job Object is not wired): a timeout
 #     TerminateProcess-es only the cmd.exe, so a detached grandchild (`start foo`, a backgrounded process)
 #     can survive AND — holding the inherited temp-file handle — makes the post-kill DeleteFileW fail
@@ -202,8 +224,13 @@ fn shell_supported() { return 1; }
 # stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
 # The caller owns NUL-termination of buf at the returned count (buf must be >= buflen+1).
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
-    # Open a fresh temp file with O_CREAT|O_EXCL|O_WRONLY (193), 0600 (384). O_EXCL fails on a
-    # pre-planted file/symlink; bump the counter and retry a few times before giving up closed.
+    # Open a fresh temp file with O_WRONLY|O_CREAT|O_EXCL, 0600 (384). O_EXCL fails on a pre-planted
+    # file/symlink; bump the counter and retry a few times before giving up closed.
+    #
+    # ⚠ 0.45.2: the flags were the literal 193 — O_WRONLY|O_CREAT|O_EXCL in LINUX numbering. Darwin's O_CREAT is
+    # 0x200 and its O_EXCL 0x800, so on macOS the file was never created, every capture returned the -1 sentinel,
+    # and `shell`, `[verify]` and `[hooks]` never ran there — with a pre_tool hook that could not run ALLOWING the
+    # call (src/hooks.cyr now denies). The floor's O_* names carry the right values on every POSIX peer.
     #
     # ⚠ 0.39.0 (audit A-2): the mode was 0644 (420) — WORLD-READABLE, in world-writable /tmp, for a file
     # that holds the FULL merged stdout+stderr of a command the MODEL chose to run. On a multi-user host
@@ -216,7 +243,7 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     var tries = 0;
     while ((tries < 8) && (out_fd < 0)) {
         path = _shell_tmp_path();
-        out_fd = sys_open(path, 193, 384);
+        out_fd = sys_open(path, O_WRONLY | O_CREAT | O_EXCL, 384);
         tries = tries + 1;
     }
     if (out_fd < 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; }
@@ -229,14 +256,14 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     if (pid == 0) {
         # 0.20.1: put the shell in its OWN process group (leader pgid == child pid) BEFORE execve, so a
         # timeout can SIGKILL the whole group — the shell AND any backgrounded grandchild (`cmd &`) — via
-        # kill(-pgid). Essential for the group-kill to be correct: without it the shell stays in thoth's
-        # group and kill(-child_pid) would target a non-existent group (harmless) while a grandchild leaks.
-        # setpgid(0,0) — Linux x86_64 syscall #109. DECLARED x86_64-ONLY: this whole POSIX path already uses
-        # a raw x86_64 poll(#7) below, and the aarch64 lane ships size-gapped, so it never runs there. If the
-        # aarch64 lane is ever un-gapped, BOTH numbers must become arch-conditional (aarch64 setpgid is #154,
-        # #109 there is rseq; aarch64 has no poll(#7), only ppoll) — else the group-kill silently degrades to
-        # the single-child kill and a backgrounded grandchild leaks.
-        syscall(109, 0, 0);
+        # kill(-pgid). Without it the shell stays in thoth's group and a grandchild leaks past the kill.
+        # ⚠ 0.45.2: this was a raw `syscall(109, 0, 0)` — setpgid in x86_64-Linux numbering only. aarch64 Linux
+        # reads 109 as timer_getoverrun and the Mach-O backend routes no 109 at all, so on both the group never
+        # formed and the kill silently degraded to the shell alone. The floor has no setpgid wrapper; it has
+        # setsid, routed on every POSIX target, which makes this fresh child (never a group leader) the leader
+        # of a new session AND a new group with pgid == pid — the same kill(-pid) target. Leaving the
+        # controlling terminal suits a captured command: stdin is /dev/null and its output goes to a file.
+        sys_setsid();
         sys_dup2(out_fd, 1);            # stdout -> temp file
         sys_dup2(out_fd, 2);            # stderr -> same file (merged, as a terminal shows it)
         sys_close(out_fd);
@@ -253,8 +280,10 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
         sys_exit(127);
     }
     sys_close(out_fd);                  # parent's write copy; the child holds its own duped fds
-    syscall(109, pid, pid);             # 0.20.1: parent-side setpgid(pid,pid) — closes the fork/setpgid race
-                                        # (benign EACCES if the child already exec'd, since it self-set the group)
+    # (0.20.1 also ran setpgid(pid, pid) here, to close the fork/setpgid race. setsid cannot be called on another
+    # process, and the race needs no closing: the group is only the deadline kill's target, no grandchild can
+    # exist before the child's own setsid (it precedes execve), and the direct kill(pid) below covers a shell
+    # that has not reached it yet.)
 
     var stbuf[4];                       # N BYTES: waitpid's status out-param is one 4-byte int (was [1];
                                         # both round to the 8B minimum frame slot so [1] was benign, but
@@ -271,7 +300,7 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
             else { code = 0 - 1; }
             reaped = 1;
         } else {
-            syscall(7, 0, 0, 100);                    # poll(NULL,0,100ms) — portable 100ms sleep
+            sleep_ms(100);                            # the floor's ms sleep (poll(NULL,0,ms) where that is the primitive)
             elapsed = elapsed + 100;
             # 0.44.2: this loop is the ONE place a running shell command hands the main thread back, so it
             # is where the working indicator gets to move. Through the seam — exec.cyr is substrate and

@@ -833,6 +833,16 @@ fn test_composer_placeholder_0450() {
     _tui_focus = FOCUS_COMPOSER;
     feed_init(); out_mode_set(OUT_RING); tui_composer_placeholder_emit(); feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "Tab tree", 8), 1, "tree shown, input focused: Tab moves to the tree");
+    # 0.45.2: the tree focused over a DRAFT shows no placeholder, so the tree's keys follow the draft instead
+    led_reset(); led_feed(KEY_CHAR, 104);
+    _tui_focus = FOCUS_TREE;
+    assert_eq(_tui_tree_cue_on(), 1, "tree focused over a draft: the tree's keys follow it (Enter reads a file here)");
+    _tui_focus = FOCUS_COMPOSER;
+    assert_eq(_tui_tree_cue_on(), 0, "...not while the input has focus");
+    _tui_focus = FOCUS_TREE;
+    led_reset();
+    assert_eq(_tui_tree_cue_on(), 0, "...nor over an empty input, whose placeholder already names them");
+    _tui_focus = FOCUS_COMPOSER;
     _tui_show_tree = 0;
     # an open modal's prompt takes the placeholder's place
     fsearch_init(); fsearch_reset(); _fsearch_active = 1;
@@ -844,6 +854,26 @@ fn test_composer_placeholder_0450() {
     assert_eq(tui_palette_active(), 1, "typing '/mo' opens the palette");
     feed_init(); out_mode_set(OUT_RING); tui_draw_palette(); feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "/model", 6), 2, "the palette lists /model and /models");
+    # 0.45.2: what follows the token fits the row. "/co" matches /copy /compact /context (24 columns); at 30 columns 20
+    # are left, and without room for " +N more" the line ran to 23.
+    var _pc = _tui_cols;
+    _tui_cols = 30;
+    led_reset(); led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 99); led_feed(KEY_CHAR, 111);     # "/co"
+    feed_init(); out_mode_set(OUT_RING); tui_draw_palette(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), " more", 5), 1, "premise: not every /co name fits 30 columns");
+    assert(feed_line_len(0) <= 20, "the names AND the +N suffix fit the columns after the token");
+    _tui_cols = 80;
+    led_reset(); led_feed(KEY_CHAR, 47);
+    var _pz = 0;
+    while (_pz < 40) { led_feed(KEY_CHAR, 122); _pz = _pz + 1; }                                # "/zzz…" (41 bytes)
+    feed_init(); out_mode_set(OUT_RING); tui_draw_palette(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    var _pn = 0;
+    if (feed_count() > 0) { _pn = _t_count_sub(feed_line_ptr(0), feed_line_len(0), "no command", 10); }
+    assert_eq(_pn, 0, "the no-command note is left out when it cannot fit whole");
+    led_reset(); led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 122);
+    feed_init(); out_mode_set(OUT_RING); tui_draw_palette(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "no command", 10), 1, "...and shown when it does");
+    _tui_cols = _pc;
     led_reset();
     _tui_show_tree = _st; _tui_focus = _fo;
     ui_force(_t0, _d0);

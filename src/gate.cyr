@@ -415,9 +415,11 @@ fn gate_audit_report() {
         var e = vec_get(recent, i);
         emit("    #"); ofmt_int(security_event_id(e));
         emit(" ["); emit(audit_kind_str(security_event_kind(e))); emit("] ");
-        emit(security_event_tool_name(e));
+        # 0.45.2: t-ron refuses a tool name holding a control byte but records it first, and its unknown-tool reason
+        # quotes the name. Both reach this row from the model's own function.name, so both take the LABEL policy.
+        emit_clean_line(security_event_tool_name(e));
         var r = security_event_reason(e);
-        if (r != 0 && load8(r) != 0) { emit(" — "); emit(r); }
+        if (r != 0 && load8(r) != 0) { emit(" — "); emit_clean_line(r); }
         oprintln("");
         i = i + 1;
     }

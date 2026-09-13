@@ -67,7 +67,8 @@ fn roundlog_open(turn_no, round_no) {
     return 0;
 }
 
-# Copy a NUL-terminated name into dst, bounded to RL_NAME_CAP-1 bytes + NUL.
+# Copy a NUL-terminated name into dst, bounded to RL_NAME_CAP-1 bytes + NUL, through the LABEL policy (0.45.2: the name
+# is the model's own function.name — dispatch and gating keep the raw one — and /audit and the tool cards draw this copy).
 # (No `break` — the codebase avoids it; a done-flag drives the loop.)
 fn _rl_copy_name(dst, name) {
     var i = 0;
@@ -76,7 +77,7 @@ fn _rl_copy_name(dst, name) {
     while ((done == 0) && (i < (RL_NAME_CAP - 1))) {
         var c = load8(name + i);
         if (c == 0) { done = 1; }
-        else { store8(dst + i, c); i = i + 1; }
+        else { store8(dst + i, _clean_byte(c & 255, 0)); i = i + 1; }
     }
     store8(dst + i, 0);
     return 0;

@@ -1041,9 +1041,22 @@ fn tui_draw_palette() {
     # rather than corrupt, but clipping mid-name reads as a command that does not exist — ending on a
     # whole name plus a "+N" count tells the truth about what was left out. 0.45.0: the names follow the
     # typed token on the input row, so the prompt, the token and the gap after it come off the budget.
+    #
+    # 0.45.2: that start column moved right, and two things were never budgeted — the " +N more" suffix and the
+    # no-command note. With DECAWM off they were cut short at the edge (an 80-column row and a 36-byte path-like
+    # token clipped the note mid-word). When the names do not all fit, room for the suffix comes off first; the
+    # note is shown only when it fits whole.
     var used = 0;
-    var budget = _tui_cols - 7 - led_len();
-    if (budget < 8) { budget = 8; }
+    var room = _tui_cols - 7 - led_len();                 # columns after the token and the gap that follows it
+    var want = 0;
+    var wi = 0;
+    while (wi < SLASH_N) {
+        if (cstr_starts_with(_slash_name(wi), prefix) == 1) { want = want + strlen(_slash_name(wi)) + 1; }
+        wi = wi + 1;
+    }
+    var budget = room;
+    if (want > room) { budget = room - 9; }               # " +NN more"
+    if (budget < 0) { budget = 0; }
     var left = 0;
     while (i < SLASH_N) {
         if (cstr_starts_with(_slash_name(i), prefix) == 1) {
@@ -1055,7 +1068,7 @@ fn tui_draw_palette() {
         i = i + 1;
     }
     if (left > 0) { ui_emit(ROLE_FAINT, " +"); ofmt_int(left); ui_emit(ROLE_FAINT, " more"); }
-    if (any == 0) { ui_emit(ROLE_FAINT, "  (no command — Enter sends as a task)"); }
+    if ((any == 0) && (room >= 38)) { ui_emit(ROLE_FAINT, "  (no command — Enter sends as a task)"); }
     return 0;
 }
 
@@ -1067,6 +1080,24 @@ fn _tui_input_placeholder_on() {
     return 0;
 }
 
+# _tui_tree_hint_emit: the file tree's keys, FAINT — the input's placeholder while the tree has focus, and (0.45.2) the
+# cue that follows a draft in the same situation. One copy of the text for both.
+fn _tui_tree_hint_emit() {
+    ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
+    return 0;
+}
+
+# _tui_tree_cue_on (0.45.2): 1 when the tree has focus while the input holds a draft. 0.45.0 made the hint row the
+# input's placeholder, and a placeholder shows only on an EMPTY input — so Tab, Ctrl-B or a click into the tree with
+# a draft left nothing saying where the keys now go, and Enter read a file instead of sending. The composer draw
+# then follows the draft with the tree's keys, the way the slash palette follows a typed token.
+fn _tui_tree_cue_on() {
+    if (_tui_show_tree == 0) { return 0; }
+    if (_tui_focus != FOCUS_TREE) { return 0; }
+    if (_tui_input_placeholder_on() == 1) { return 0; }  # an empty input (or an open modal) already says it
+    return 1;
+}
+
 # tui_composer_placeholder_emit: what the input shows after its "{(o> " prompt when there is no draft to show (0.45.0
 # — this was the hint row under the input). Emitted at the cursor with no cursor moves, so a test can capture it under
 # OUT_RING. An open modal's prompt wins; otherwise the keybinding hints for the focused pane, FAINT so they read as a
@@ -1076,7 +1107,7 @@ fn tui_composer_placeholder_emit() {
     if (_mpick_active == 1) { _tui_draw_pick_hint(); return 0; }       # 0.24.0: the picker's prompt owns the input
     if (_fsearch_active == 1) { _tui_draw_search_hint(); return 0; }   # 0.18.4: the search prompt owns the input
     if ((_tui_show_tree == 1) && (_tui_focus == FOCUS_TREE)) {
-        ui_emit(ROLE_FAINT, "↑↓ move · →← expand · Enter read/open · Tab composer · Ctrl-B hide");
+        _tui_tree_hint_emit();
     } elif (_tui_show_tree == 1) {
         ui_emit(ROLE_FAINT, "Tab tree · Ctrl-B hide · Ctrl-G status · ");
         if (inhist_count() > 0) { ui_emit(ROLE_FAINT, "↑↓ history · "); }
@@ -1443,6 +1474,8 @@ fn tui_draw_composer() {
     var pr = 0;                  # absolute physical row being walked
     var p = 0;                   # drawn (visible) row index, 0..H
     var li = 0;
+    var lastrow = top;           # the last row drawn and how many draft bytes it shows (for the tree cue)
+    var lastlen = 0;
     while ((li < n) && (p < H)) {
         var ls = led_line_start(li);
         var ll = led_line_len(li);
@@ -1457,6 +1490,9 @@ fn tui_draw_composer() {
                 var shown = ll - segstart;
                 if (shown > a) { shown = a; }
                 if (shown > 0) { emit_n(led_buf() + ls + segstart, shown); }
+                lastrow = top + p;
+                lastlen = shown;
+                if (lastlen < 0) { lastlen = 0; }
                 p = p + 1;
             }
             pr = pr + 1;
@@ -1466,7 +1502,10 @@ fn tui_draw_composer() {
     }
     # the palette follows the typed '/token' (tui_palette_active means one logical line with no space, so the token
     # sits on the first row whenever it fits that row), one blank column after it
-    if ((tui_palette_active() == 1) && (led_len() < a)) {
+    # 0.45.2: while the tree has focus the tree's keys follow the draft instead (keys go to the tree, not the palette)
+    if (_tui_tree_cue_on() == 1) {
+        if (lastlen < a) { tty_move(lastrow, 7 + lastlen); _tui_tree_hint_emit(); }
+    } elif ((tui_palette_active() == 1) && (led_len() < a)) {
         tty_move(top, 7 + led_len());
         tui_draw_palette();
     }
@@ -1539,8 +1578,11 @@ fn spin_label_clear() { _spin_label = 0; spin_paint(); return 0; }
 # on that column, so it never covers the glyph (chrome — emit_raw, never captured). The input is empty for the whole
 # dispatch window: the line was cleared on submit and keys wait in the tty until the turn ends (0.45.0 — the
 # indicator had a hint row of its own). No-op when inactive; the post-dispatch relayout puts the placeholder back.
+# ⚠ 0.45.2: not on every path. The tree's Enter dispatches /read with any draft still in the input, and this erased
+# the draft's first row until the relayout. With a draft present the indicator stays off (spin_anim_arm too).
 fn spin_paint() {
     if (_spin_active == 0) { return 0; }
+    if (_comp_len > 0) { return 0; }
     tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), 6);
     tty_clear_to_eol();
     emit_raw(" ");
@@ -1670,6 +1712,7 @@ fn _spin_anim_worker(arg) {
 # nothing to animate and this is a no-op, so the line REPL, one-shot and the GUI are untouched.
 fn spin_anim_arm() {
     if (_spin_active == 0) { return 0; }
+    if (_comp_len > 0) { return 0; }                   # 0.45.2: a draft owns the row (see spin_paint)
     if (out_mode() != OUT_RING) { return 0; }
     if (_spin_anim_thread != 0) { return 0; }          # already armed (nested call) — one worker only
     if (_spin_anim_alloc() == 0) { return 0; }
@@ -2225,7 +2268,7 @@ fn tui_run_line(line) {
     spin_begin();                                # show the working indicator for the dispatch window
     term_cooked();                               # canonical mode for read_line-based confirms
     var keep = dispatch(line);
-    spin_end();                                  # stop the indicator (relayout restores the hint row)
+    spin_end();                                  # stop the indicator (the caller's relayout repaints the input)
     out_mode_set(OUT_FD1);                        # stop capturing before any chrome paints
     git_probe();                                 # the turn may have changed the worktree (/run, agentic edit) — refresh git for the status bar (the following tui_relayout repaints it)
     if (term_raw(0) < 0) { return 0; }           # couldn't re-enter raw -> end the session cleanly
@@ -2477,7 +2520,7 @@ fn tui_loop() {
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tui_bpaste_enable();                          # 0.17.0: bracketed paste (multi-line paste -> composer)
     tui_mouse_enable();                           # 0.17.2: SGR mouse (wheel scroll, click focus/tree)
-    tui_wrap_disable();                           # 0.44.2: no autowrap — an over-long hint row must clip, never scroll the frame
+    tui_wrap_disable();                           # 0.44.2: no autowrap — an over-long chrome row (the input's placeholder, the status bar) must clip, never scroll the frame
     tty_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring

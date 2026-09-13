@@ -7,6 +7,22 @@
 
 ## Version
 
+**0.45.2** — **brief audit and repairs: the symlink jail sees past a path's first component, process spawn works on
+macOS, and a hook that cannot run now denies** (2026-09-12). A read-only audit of the roadmap's open items and the
+0.45.x diff (four finders, every finding checked by an independent verifier, then a completeness critic) plus the
+first native macOS test run since 0.44.5, which reproduced the roadmap's ⛔ defect at 796/29. ⛔ The 0.39.0 symlink
+jail only ever tested a path's FIRST component — the NUL written to end each prefix replaced its `/` for good — so a
+link one directory down was followed by `read_file`, `list_dir` and `search`; found by this release's own break
+tests, demonstrated against the old walk, fixed. `src/exec.cyr` passed Linux-numbered open flags (`193`) and a raw
+`setpgid` (`#109`): on macOS no capture file was ever created, so `shell`, `[hooks]` and `[verify]` never ran — with
+a `pre_tool` hook that could not run ALLOWING the call — and on aarch64 Linux the process group never formed.
+Per-target `O_*` names and `sys_setsid()` now, and the native macOS suite is green. A hook that cannot be run now
+DENIES (announced); the capture file name carries a random suffix so its next names cannot be planted; a granted
+root whose own path runs through a symlink (macOS `/etc`, `/tmp`) is usable; the TUI marks tree focus over a draft,
+keeps the spinner off it and fits the slash palette to its row; and eleven more raw-terminal doors close (config key
+names, `[ui].tier` / `[log].level`, the roundlog / `/audit` / hook / toolpin tool names, `/notes`, recalled titles,
+`/git` status, `/rewind`), each break-tested. Suite **319 + 1348 + 846 + 539 + 183 + 5**.
+
 **0.45.1** — **the input is framed** (2026-09-12). The blank rows 0.45.0 set around the input are rules now:
 feed · rule · input · rule · status, both painted by `tui_draw_composer` on every paint, with the `{(o>` prompt,
 the placeholder hints and everything that renders inside the input unchanged. Ctrl-G hides only the bar (the
@@ -3323,7 +3339,7 @@ floor; never fork the spine.**
   so no tagged `dist/` path resolves at all. That core is byte-identical across every 1.0.x tag from **1.0.2 to
   1.0.6**, verified tag-by-tag, so every 1.0.x bump is a no-op on the file; `sync-kashi.sh` asserts the
   freestanding contract (zero `include` lines) and reports whether the bytes actually moved.
-  **`tests/cases/vendor.cyr` now gates all of this in CI** (42 assertions): every bundle's `# Version:` header
+  **`tests/cases/vendor.cyr` now gates all of this in CI**: every bundle's `# Version:` header
   against the pin above, plus each collision/portability trap the tree has been bitten by — no `SYS_IOCTL` in
   darshana, no raw 2-arg `SYS_RENAME` in sit-read, both sync-time renames fully applied, sit chdir-free, no
   `_stream_grow` in the sankoch profile. A stale or half-applied sync used to build clean and pass every test.
@@ -3370,17 +3386,17 @@ floor; never fork the spine.**
 ## Targets (build matrix)
 
 The one source tree fans out to targets at **build time** via the build driver
-`scripts/build.sh` (`linux` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **All five lanes re-verified at 0.44.3 (Cyrius 6.5.43; the macOS lane natively on
-Apple Silicon with the 6.5.35 installed there — see its row)** — see
+`scripts/build.sh` (`linux` | `macos` | `win` | `aarch64` | `agnos` | `all`); no per-OS
+source. **Re-verified at 0.45.2 on the 6.6.2 pin: Linux built and tested, aarch64 and AGNOS built, macOS built
+and tested natively (with the 6.6.0 installed there). Each row carries its own stamp** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (264 + 1894 + 183 + 3), released | `build/thoth` |
-| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.38.6 / Cyrius 6.5.35) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS at the 6.5.51 pin** (verified natively on Apple Silicon, macOS 26.6.2, 0.44.5 — 6.45 MB Mach-O arm64). ⭐ `getenv` FIXED: colour and the `~/.thoth/config.cyml` global layer both work again, proven behaviourally on the shipping binary. ⛔ **BUT the first-ever native `cyrius test` run there returned 780/29 FAILED** (Linux: 2814/0 at the same commit): `src/exec.cyr` hardcodes Linux-x86_64 open flags + `setpgid`#109 + `poll`#7, so process spawn is broken and **`shell`, `[hooks]` and `[verify]` do not work — and `[hooks]` fails OPEN.** Treat those three as unavailable on macOS until fixed; see the roadmap's DEFECT entry. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
-| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.38.6 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (319 + 1348 + 846 + 539 + 183 + 5), released | `build/thoth` |
+| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.45.2 / Cyrius 6.6.2) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green at 0.45.2** (Apple Silicon, macOS 26.6.2; the 6.6.0 toolchain installed there, against the 6.6.2 pin — a run at the pin itself is owed). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
+| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.45.2 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
@@ -3391,7 +3407,7 @@ blocked on a cycc `#pure`/aarch64 pass-1 scanner bug (filed
 **resolved upstream in Cyrius v6.2.2**. Cross-built here; running it on real ARM
 hardware is a host-side step.
 
-**AGNOS block (upstream, not thoth) — the lseek gap RESOLVED at 6.2.37:** the
+**AGNOS — history; the lane builds and runs (see its row).** The lseek gap, RESOLVED at 6.2.37: the
 old blocker (`patra.cyr` → `SYS_LSEEK`, the filed
 `agnos/.../2026-06-16-cyrius-patra-lseek-syscall-gap.md`) is **closed** — the 6.2.37
 agnos peer `syscalls_x86_64_agnos.cyr` now defines `SYS_LSEEK = 58` (and
@@ -3404,16 +3420,15 @@ constants (`SIGHUP`, … — defined `SIGHUP=1 … SIGPWR=30` on the linux/macos
 peers), so the bare `SIGHUP` literal can't resolve. A **fixable floor gap, filed**:
 `agnos/.../2026-06-23-cyrius-agnos-peer-missing-signal-number-constants.md` (the agnos
 ABI owner should confirm the numbers rather than have it guessed). Behind it sit
-`SYS_FUTEX`/epoll. The lane lights up once the agnos peer gains the signal enum.
+`SYS_FUTEX`/epoll. (All closed since.)
 
-**Windows: `SYS_GETRANDOM` was a patra bug (now fixed), NOT a Win32 gap.** Windows
+**Windows — history; today's blockers are in its row and the roadmap.** `SYS_GETRANDOM` was a patra bug (fixed), NOT a Win32 gap. Windows
 has a CSPRNG — `bcryptprimitives!ProcessPrng`, wired as the `sys_getrandom()` peer
 wrapper. patra's `_wal_gen_salts` drew its WAL salts via a raw
 `syscall(SYS_GETRANDOM,…)` — a Linux-shaped call the Windows peer deliberately omits
 the constant for — so `--win` failed to link. **Fixed in patra v1.12.4**
 (`src/wal.cyr`, `#ifdef CYRIUS_TARGET_WIN` → `sys_getrandom()`; verified: patra builds
-`--win`, 834 Linux tests still pass). thoth's `--win` lane clears the moment the
-toolchain re-bundles patra ≥1.12.4. The genuine, **architectural** Windows gaps remain
+`--win`, 834 Linux tests still pass). That gap is closed. The genuine, **architectural** Windows gaps remain
 `SYS_FUTEX` (patra's mutex; Win uses `WaitOnAddress`) and the sandhi/epoll set (IOCP) —
 by-design Win32 differences with no raw-syscall equivalent. `scripts/build.sh` now
 separates these `ARCH_GAP`s from the transient `SYS_GETRANDOM`/`SIGHUP` lag.
@@ -3446,7 +3461,7 @@ runs (`--version`, the line REPL). The T2 TUI still does not run there
 tier, which is the degradation already coded for AGNOS. The ANSI/cursor half of
 darshana is portable and was never affected.
 
-⛔ **What that unblocking exposed:** `getenv` returns 0 for everything on macOS
+⛔ **What that unblocking exposed (FIXED upstream at cyrius 6.5.45, consumed at 0.44.5):** `getenv` returned 0 for everything on macOS
 (`lib/io.cyr` reads `/proc/self/environ`, which Darwin does not have, and has an
 AGNOS branch but no macOS one). Measured, not inferred: `TERM` and `HOME` both
 null in a process where both are set. So macOS gets no colour (the tier resolves
@@ -3454,12 +3469,10 @@ to PT_PLAIN) and no `~/.thoth/config.cyml` global layer. A cyrius floor gap, not
 thoth's to patch — filed upstream at
 `cyrius/docs/development/issues/2026-09-03-macos-getenv-always-null-no-proc.md`.
 
-Historical note, still true of the toolchain: cycc emits ~86 "syscall
-not routed by the Mach-O ARM translation (ESYSXLAT/__got)" warnings: the
-`var SYS_*; syscall(SYS_*,…)` first arg doesn't const-fold, so the reroute misses
-(upstream cyrius issue `2026-06-16-var-syscall-number-defeats-macho-pe-reroute`).
-The basic driver path is fine; patra's `lseek`/`futex` (t-ron's audit ledger) will
-fault at runtime once a `[tron].policy` is configured, until that cycc fix lands.
+Historical note: cycc once emitted ~86 "syscall not routed by the Mach-O ARM translation (ESYSXLAT/__got)"
+warnings here (upstream cyrius issue `2026-06-16-var-syscall-number-defeats-macho-pe-reroute`). At 0.45.2 the
+build prints 26, none from a raw syscall in thoth's own `src/`, and the full native suite — t-ron's in-process
+audit chain included — passes.
 
 ## Surface at a glance
 
@@ -3502,8 +3515,8 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **319 + 1319 + 826 + 532 + 183 + 5 assertions across the suites as of
-0.45.1 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **319 + 1348 + 846 + 539 + 183 + 5 assertions across the suites as of
+0.45.2 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3513,7 +3526,7 @@ fixtures use **git-tracked** files so CI matches local.
 ## Next
 
 See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 and the entire post-M7 feature arc have shipped
-(0.11.x → 0.33.7):** the terminal-citizen front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`)
+(0.11.x → 0.45.x):** the terminal-citizen front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`)
 with tool-call + colored diff cards and a conversation sidebar, the model **write tools** (`edit`/`create_file`/
 `shell` — thoth reads *and writes* code), the **memory arc** (consume mneme: `/remember`, semantic recall,
 citations, grounding, `/notes`), and the **chat-management arc** (named multi-conversation store, persistence, the
@@ -3524,9 +3537,8 @@ richer message schema, `/search`). Per-version detail is in the log above + [CHA
 x86_64-AGNOS ELF, zero thoth change, and it **loads and runs in ring 3** — `./scripts/agnos-run.sh`,
 proven 2026-09-04); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
 (a real turn against a native spine, then the TUI over agnsh) open, **owner: thoth**; (3) a security
-review — the concurrency half closed at 0.44.3, the filed `docs/audit/` record is the residual; (4) the
+review — the concurrency half closed at 0.44.3; only the external sign-off remains; (4) the
 SemVer-vs-CalVer 1.0 decision (deferred, [ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux
-ships; aarch64 builds; **macOS builds and runs** as of 0.44.3 (`src/term.cyr` closed thoth's unguarded
-call into darshana's Linux-gated termios half — line tier only, no BSD termios ⇒ no T2; see the Targets
-matrix); Windows staged, blocked entirely outside thoth's authored source. Full-stack live e2e against
+ships; aarch64 builds; **macOS builds, runs and passes its native suite** as of 0.45.2 (line tier only — no
+BSD termios ⇒ no T2; see the Targets matrix); Windows staged, blocked entirely outside thoth's authored source. Full-stack live e2e against
 the real spine (hoosh/daimon) is a host-side step — the build sandbox blocks a compiled binary's TCP.

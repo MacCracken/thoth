@@ -84,6 +84,18 @@ var _proj_sym_str = 0;        # ONE reusable 16-byte Str header (data,len). `str
 # Every component is tested, not just the last — `link/sub/file` escapes through `link` even though the
 # final component is an ordinary file. The prefix is tested WITHOUT its trailing '/', because readlink on
 # "link/" does not report the link itself.
+#
+# ⚠ 0.45.2 — THROUGH 0.45.1 ONLY THE FIRST COMPONENT WAS EVER TESTED. To test a prefix the walk writes a NUL where
+# its '/' was, and it never put the '/' back — so every later prefix read as the FIRST component again. With
+# `docs/link -> /etc`, `read_file docs/link/hostname` returned /etc's bytes and `search` walked through the link:
+# the 0.39.0 escape, still open one directory down. Every test put its link at the first component. Found when a
+# 0.45.2 break test of the granted-root skip below failed the wrong way. The '/' is restored after each test.
+#
+# ⚠ 0.45.2 — A GRANTED ROOT'S OWN PATH IS NOT RE-JUDGED. macOS ships /etc, /tmp and /var as symlinks into
+# /private, so this walk refused everything under a granted `/etc` or `/tmp/x` as "a symlink": a grant that
+# could never be used, on a supported target (found by the first native test run there). The operator named
+# that path, so the components that spell it are skipped; every component BELOW the root is still tested,
+# which is where a link planted in the tree would sit, and a relative in-project path is walked in full.
 fn _project_no_symlink(path) {
     if (path == 0) { return 0; }
     var n = strlen(path);
@@ -92,6 +104,8 @@ fn _project_no_symlink(path) {
     if (_proj_sym_buf == 0) { _proj_sym_buf = alloc(PROJECT_PATH_MAX + 1); }
     if (_proj_sym_str == 0) { _proj_sym_str = alloc(16); }
     if ((_proj_sym_buf == 0) || (_proj_sym_str == 0)) { return 0; }   # OOM -> fail CLOSED, never open
+    var skip = 0;                                         # bytes of a granted root's own spelling (0 = none)
+    if (load8(path) == 47) { skip = _project_granted_prefix_len(path); }
     var i = 0;
     while (i < n) {
         var c = load8(path + i);
@@ -99,11 +113,12 @@ fn _project_no_symlink(path) {
         if ((c == 47) || ((i + 1) == n)) {                # a component boundary, or the end of the path
             var plen = i + 1;
             if (c == 47) { plen = i; }                    # test "a/b", not "a/b/"
-            if (plen > 0) {                               # skip the empty prefix of a leading '/'
+            if (plen > skip) {                            # skip the empty prefix of a leading '/', and a root's own path
                 store8(_proj_sym_buf + plen, 0);
                 store64(_proj_sym_str, _proj_sym_buf);
                 store64(_proj_sym_str + 8, plen);
                 if (is_symlink(_proj_sym_str) == 1) { return 0; }
+                if (c == 47) { store8(_proj_sym_buf + plen, 47); }   # 0.45.2: put the '/' back for the next prefix
             }
         }
         i = i + 1;
@@ -272,6 +287,23 @@ fn _project_under_root(path) {
         i = i + 1;
     }
     return 0;
+}
+
+# _project_granted_prefix_len (0.45.2): the byte length of the LONGEST granted root that absolute `path` sits under
+# (path == root, or root then a '/'), else 0. PURE. The symlink walk skips that many bytes of components.
+fn _project_granted_prefix_len(path) {
+    var best = 0;
+    var i = 0;
+    while (i < _read_roots_n) {
+        var r = load64(_read_roots + i * 8);
+        var rl = strlen(r);
+        if ((rl > best) && (_project_prefix_eq(path, r, rl) == 1)) {
+            var b = load8(path + rl);
+            if ((b == 0) || (b == 47)) { best = rl; }
+        }
+        i = i + 1;
+    }
+    return best;
 }
 
 # _project_read_ok: the read boundary for read_file / list_dir. 1 if `path` is either a jailed in-project
