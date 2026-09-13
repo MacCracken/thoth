@@ -6,6 +6,9 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.1** (2026-09-12, not a full sweep): the input frame updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block and **Tests** counts) and `README.md` (status stamp).
+>
 > **Touched at 0.45.0** (2026-09-12, not a full sweep): the status-bar move — then the hints-into-the-input
 > rework and the merged escape-fix chain — updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block, the **Toolchain** pin line and the **Tests** counts) and

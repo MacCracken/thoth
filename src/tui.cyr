@@ -462,27 +462,27 @@ fn led_paste(src, len) {
 }
 
 # --- pure: layout geometry (0.11.9: faint rules + dynamic multi-line composer) ---
-# Bands top-to-bottom (0.45.0): feed · RULE · blank · the composer block (1..MAX rows, grows upward with line count)
-# · blank · status on the last row. There is NO hint row: the keybinding hints are the input's PLACEHOLDER, drawn
-# faint inside the empty input and gone with the first typed character, and everything else that used to borrow a
-# row of its own is drawn inside the input too — the slash palette after the typed token, the find / pick prompts
-# while those modals own the input, the working spinner while a turn runs (the input is empty then). The two blank
-# rows are line breaks: one above the input, one above the status bar. Toggling the bar off (Ctrl-G) frees the bar
-# AND its line break into the feed, so the input takes the last row; the rule and the line break above the input
-# always stand. The composer height tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are
-# PURE and take explicit (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so they unit-test without
-# mutating the composer/show globals.
+# Bands top-to-bottom (0.45.1): feed · RULE · the composer block (1..MAX rows, grows upward with line count) · RULE ·
+# status on the last row. The two rules FRAME the input — one directly above it, one directly below — and the status
+# bar sits under the frame. There is NO hint row: the keybinding hints are the input's PLACEHOLDER, drawn faint inside
+# the empty input and gone with the first typed character, and everything else that used to borrow a row of its own
+# is drawn inside the input too — the slash palette after the typed token, the find / pick prompts while those modals
+# own the input, the working spinner while a turn runs (the input is empty then). Toggling the bar off (Ctrl-G) frees
+# only the bar's row: the frame belongs to the input and stays, its lower rule taking the last row. The composer
+# height tracks led_lines(), clamped so the feed keeps at least MIN_FEED row(s). These are PURE and take explicit
+# (rows, lines, show) params — mirroring tui_tree_w/tui_feed_width — so they unit-test without mutating the
+# composer/show globals.
 var COMPOSER_MAX_ROWS = 8;    # the composer never grows past this (a long paste scrolls within)
 var MIN_FEED = 1;             # the feed never shrinks below this many rows
 
 fn tui_status_row(rows) { return rows; }            # the status bar: the last row (status shown only)
-fn tui_status_gap_row(rows) { return rows - 1; }    # the line break above the status bar (status shown only)
+fn tui_frame_bot_row(rows, show) { if (show == 1) { return rows - 1; } return rows; }   # the frame's lower rule (above the bar)
 # tui_composer_max: the largest composer height that still leaves MIN_FEED feed rows,
-# capped at COMPOSER_MAX_ROWS. chrome around the feed + composer = the rule and line break above the input,
-# the line break and status bar below it (4) when status shown, else rule + line break (2). Clamped to >= 1.
+# capped at COMPOSER_MAX_ROWS. chrome around the feed + composer = the frame's two rules + the status bar (3)
+# when status shown, else the two rules (2). Clamped to >= 1.
 fn tui_composer_max(rows, show) {
     var chrome = 2;
-    if (show == 1) { chrome = 4; }
+    if (show == 1) { chrome = 3; }
     var m = rows - chrome - MIN_FEED;
     if (m < 1) { m = 1; }
     if (m > COMPOSER_MAX_ROWS) { m = COMPOSER_MAX_ROWS; }
@@ -496,10 +496,9 @@ fn tui_composer_height(rows, lines, show) {
     if (h > mx) { h = mx; }
     return h;
 }
-fn tui_composer_bot(rows, show) { if (show == 1) { return rows - 2; } return rows; }   # the input's last row (above the bar's line break)
+fn tui_composer_bot(rows, show) { return tui_frame_bot_row(rows, show) - 1; }   # the input's last row (directly on the lower rule)
 fn tui_composer_top(rows, lines, show) { return tui_composer_bot(rows, show) - tui_composer_height(rows, lines, show) + 1; }
-fn tui_composer_gap_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }   # the line break above the input
-fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 2; }   # the rule between feed + input
+fn tui_sep_bottom_row(rows, lines, show) { return tui_composer_top(rows, lines, show) - 1; }   # the frame's upper rule, directly above the input
 fn tui_feed_top() { return 1; }                     # the feed owns row 1 now that no status bar sits above it
 fn tui_feed_bot(rows, lines, show) { return tui_sep_bottom_row(rows, lines, show) - 1; }
 # _comp_vscroll_first: first visible logical line so cursor line `cl` stays within a
@@ -876,13 +875,12 @@ fn _tui_scroll_region(top, bot) {
     return 0;
 }
 
-# tui_draw_status: paint the status bar on the LAST row, with the blank row above it cleared as the input zone's
-# bottom margin (0.45.0 — the bar was row 1 until now). Hidden (Ctrl-G), it paints nothing: both rows then belong to
-# the feed and the hint (see the band layout above). Cursor is left for the caller to reposition at the composer.
+# tui_draw_status: paint the status bar on the LAST row, under the input's frame (0.45.0 moved it there from row 1;
+# 0.45.1 framed the input, so the row above the bar is the frame's lower rule, painted with the input). Hidden
+# (Ctrl-G), it paints nothing: the frame then takes the last row (see the band layout above). Cursor is left for the
+# caller to reposition at the composer.
 fn tui_draw_status() {
     if (_tui_show_status == 0) { return 0; }
-    tty_move(tui_status_gap_row(_tui_rows), 1);
-    tty_clear_to_eol();
     tty_move(tui_status_row(_tui_rows), 1);
     tty_clear_to_eol();
     tui_status_emit();
@@ -1384,8 +1382,8 @@ fn _tui_pick_key(key) {
 
 # tui_draw_rule: paint a faint full-width horizontal rule (─) on `row` (0.11.9). Chrome
 # (emit_raw); the per-column glyph is the 3-byte U+2500, each one visible column wide, so
-# `cols` of them fill the width. Painted above the composer (0.45.0: the rule that sat under the
-# top status bar went with the bar; the bar's own blank row separates it from the input instead).
+# `cols` of them fill the width. 0.45.1: two of them frame the input — directly above and directly
+# below it (tui_draw_composer paints both) — with the status bar under the lower one.
 fn tui_draw_rule(row, cols) {
     tty_move(row, 1);
     tty_clear_to_eol();
@@ -1419,15 +1417,16 @@ fn tui_park_cursor() {
 # every other row (wrap continuation or a later logical line) gets a 5-col indent so content stays aligned
 # under the prompt. Each row paints one `avail`-wide byte segment of its logical line, so a long line grows
 # the composer + word-wraps instead of horizontal-scrolling.
-# 0.45.0: it also owns the line break above the input (cleared on every paint, so a feed row the composer grew over
-# is never left behind), the PLACEHOLDER an empty input shows in place of a draft (tui_composer_placeholder_emit),
-# and the slash palette, which follows the typed '/token' on its row.
+# 0.45.0/0.45.1: it also owns the input's FRAME — the rules directly above and below it, repainted with every paint
+# so they always sit on the composer's current geometry — the PLACEHOLDER an empty input shows in place of a draft
+# (tui_composer_placeholder_emit), and the slash palette, which follows the typed '/token' on its row.
 fn tui_draw_composer() {
     var a = _comp_avail();
     var total = _comp_total_rows();
     var H = tui_composer_height(_tui_rows, total, _tui_show_status);
     var top = tui_composer_top(_tui_rows, total, _tui_show_status);
-    if (top > 1) { tty_move(top - 1, 1); tty_clear_to_eol(); }   # the line break above the input
+    if (top > 1) { tui_draw_rule(top - 1, _tui_cols); }                          # the frame's upper rule
+    tui_draw_rule(tui_frame_bot_row(_tui_rows, _tui_show_status), _tui_cols);   # the frame's lower rule
     if (_tui_input_placeholder_on() == 1) {
         # no draft to show: clear every composer row (a modal can open over a multi-line draft, which stays in the
         # buffer and returns when the modal closes), then the prompt + placeholder on the first row
@@ -2162,24 +2161,22 @@ fn _tui_tree_key(key) {
 }
 
 # tui_repaint_body: repaint the whole frame at the CURRENT geometry (no winsize read) —
-# the status bar with its line break, feed, tree, the faint rule, the input with its line break and
-# placeholder (0.45.0: no hint row, no second rule under a top bar). No tty_clear (every
+# the status bar, feed, tree, and the input with its frame of two rules and its placeholder
+# (0.45.0/0.45.1: no hint row, no rule under a top bar). No tty_clear (every
 # band issues per-row clear_to_eol), so it is also the no-flash repaint for a composer height
 # change (a newline grew/shrank the composer, resizing the feed band). The composer is
 # drawn LAST so the cursor parks at the edit position.
 fn tui_repaint_body() {
-    var lines = _comp_total_rows();    # 0.25.1: composer geometry is PHYSICAL (soft-wrapped) rows, not logical lines
     # 0.11.3: a width OR composer-height change re-flows the document / resizes the band,
     # so the stored PHYSICAL-row scroll offset can exceed the new height — clamp it before
     # painting (the painter also floors start at 0, but clamping keeps feed_scroll() honest
     # so the next scroll key resumes from a valid offset).
     var m = _tui_feed_maxscroll();
     if (feed_scroll() > m) { feed_scroll_set(m); }
-    tui_draw_status();                 # the last row + the blank row above it (paints nothing when hidden)
+    tui_draw_status();                 # the last row (paints nothing when hidden)
     feed_repaint();
     tui_draw_tree();
-    tui_draw_rule(tui_sep_bottom_row(_tui_rows, lines, _tui_show_status), _tui_cols);   # rule above the input's line break
-    tui_draw_composer();
+    tui_draw_composer();               # the input with its frame (the rules directly above and below it)
     return 0;
 }
 

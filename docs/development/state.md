@@ -7,6 +7,12 @@
 
 ## Version
 
+**0.45.1** — **the input is framed** (2026-09-12). The blank rows 0.45.0 set around the input are rules now:
+feed · rule · input · rule · status, both painted by `tui_draw_composer` on every paint, with the `{(o>` prompt,
+the placeholder hints and everything that renders inside the input unchanged. Ctrl-G hides only the bar (the
+frame stays, its lower rule on the last row); the GUI draws the same two rules around its composer band and
+drops the 20 px padding. Suite **319 + 1319 + 826 + 532 + 183 + 5**.
+
 **0.45.0** — **the status bar moves below the input and leads with where you are; the release's escape
 paths close** (2026-09-12). TUI and GUI both. The TUI is now feed · rule · line break · input · line break ·
 status (last row), with no hint row: the keybinding hints are the empty input's faint placeholder, and the
@@ -3496,8 +3502,8 @@ fault at runtime once a `[tron].policy` is configured, until that cycc fix lands
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **317 + 1319 + 826 + 532 + 183 + 5 assertions across the suites as of
-0.45.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **319 + 1319 + 826 + 532 + 183 + 5 assertions across the suites as of
+0.45.1 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

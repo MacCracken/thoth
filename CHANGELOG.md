@@ -2,6 +2,33 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.45.1] - 2026-09-12
+
+**The input is framed.** A rule now sits directly above the input and another directly below it, with the
+status bar under the frame — thoth's own faint `─` rule, on the TUI and the GUI. The `{(o>` prompt and the
+placeholder hints are unchanged. Suite **319 + 1319 + 826 + 532 + 183 + 5** (+2). Linux / aarch64 / AGNOS
+build with the same warning set as 0.45.0.
+
+### Changed — the input sits between two rules
+
+0.45.0 set the input off with blank rows (feed · rule · blank · input · blank · status). They are rules now:
+feed · rule · input · rule · status. `tui_draw_composer` paints both on every paint, so the frame always sits
+on the composer's current geometry — a two-line draft grows it upward — and the slash palette, the find / pick
+and authorization prompts and the spinner render inside it exactly as before. Ctrl-G hides only the status
+bar: the frame belongs to the input, so its lower rule takes the last row. The feed gains the row the second
+blank used (20 of 24 rows with the bar shown; 21 hidden, as before).
+
+`tui_status_gap_row` and `tui_composer_gap_row` are gone; `tui_frame_bot_row(rows, show)` names the lower rule
+and `tui_sep_bottom_row` is now the upper one, directly above the input. The tiling assertion walks 8–60 rows ×
+both states × 1–10 composer lines with the frame in place.
+
+The GUI matches: `gframe_build` draws a 1 px rule directly above the composer band and one directly below it,
+right over the strip, and the 20 px `GFRAME_COMPOSER_GAP` padding is gone; with Ctrl+S the lower rule stays, on
+the window's last pixel row (+2 assertions).
+
+Verified on a real pty (24×100): idle, `/mo`, a two-line draft, Ctrl-U, Ctrl-F, Ctrl-G hide / show, and `/run`
+through its authorization prompt and the spinner; the 0.45.1 binary's startup screen shows the frame.
+
 ## [0.45.0] - 2026-09-12
 
 **The status bar moves below the input and leads with where you are.** On the TUI and the GUI the bar is

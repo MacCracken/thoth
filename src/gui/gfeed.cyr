@@ -598,14 +598,13 @@ fn gfeed_build(cmds, x, y, w, h) {
 }
 
 # --- the whole window frame (feed + composer line + status strip) ------------------------------------------
-# Top-to-bottom: the body (optional sidebar / tree panes + the feed), a rule, a line of padding, the composer line,
-# another line of padding, and the status strip on the bottom edge (0.45.0 — it was the TOP band; the TUI moved its bar
-# below the input in the same release, with the same two line breaks). PURE — assembles a cmd list over the tested
+# Top-to-bottom: the body (optional sidebar / tree panes + the feed), then the composer line FRAMED by two rules — one
+# directly above it, one directly below — and the status strip on the bottom edge under the frame (0.45.0 moved the
+# strip there from the top; 0.45.1 framed the input, as the TUI does). PURE — assembles a cmd list over the tested
 # pipeline; the present loop (gpresent.cyr) rasters it into the wl_shm buffer. Lives here (a view-builder) so it is
 # headless-testable.
 var GFRAME_STRIP_H = 34;
 var GFRAME_COMPOSER_H = 40;
-var GFRAME_COMPOSER_GAP = 20;   # 0.45.0: one feed line (GFEED_LH) of padding above the composer, and again between it and the strip
 fn _gframe_bg() { if (ui_theme() == THEME_LIGHT) { return 0xf5f0e4; } return 0x15120d; }
 
 # --- the throbbing owl eye (0.30.11): the `o` in the {(o> composer prompt pulses colour as a LIVE status
@@ -641,22 +640,21 @@ fn geye_color_now() { return geye_color(_geye_phase); }
 fn gframe_build(w, h) {
     var cmds = gd_list_new();
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
-    # status strip — the BOTTOM band since 0.45.0, under the composer and one line of padding, as the TUI's bar sits
-    # below its input. Hidden via Ctrl+S (0.32.x) it takes that padding with it and the composer returns to the
-    # window's bottom edge (the TUI's Ctrl-G frees the status row AND its blank row the same way). Full width.
+    # status strip — the BOTTOM band since 0.45.0, directly under the composer's frame, as the TUI's bar sits under
+    # its input. Hidden via Ctrl+S (0.32.x) only the strip goes: the frame belongs to the composer, so its lower rule
+    # moves to the window's bottom edge (the TUI's Ctrl-G frees only the bar's row the same way). Full width.
     var body_top = 0;
-    var comp_bot = h;                                                        # the y the composer line ends at
+    var frame_bot = h - 1;                                                   # the y of the frame's lower rule
     if (gstatus_hidden() == 0) {
         var strip_top = h - GFRAME_STRIP_H;
         gstatus_build(cmds, 0, strip_top, w, GFRAME_STRIP_H);                # status strip (the view-model)
-        gd_push_rect(cmds, 0, strip_top - 1, w, 1, _ui_rgb(ROLE_FAINT));     # rule over the strip
-        comp_bot = strip_top - 1 - GFRAME_COMPOSER_GAP;
+        frame_bot = strip_top - 1;
     }
     # body band: an optional file-tree pane (left) + the conversation feed (right); the composer + status strip span
     # the full width. The tree hides on a narrow window (gtree_w -> 0) OR via Ctrl+B (0.32.x), giving the feed the
     # whole body as before.
-    var comp_top = comp_bot - GFRAME_COMPOSER_H;                             # composer line (above the strip)
-    var rule_y = comp_top - GFRAME_COMPOSER_GAP;                             # 0.45.0: a line of padding ABOVE the input too
+    var comp_top = frame_bot - GFRAME_COMPOSER_H;                            # composer line, directly on the lower rule
+    var rule_y = comp_top - 1;                                               # 0.45.1: the frame's upper rule, directly above it
     var body_h = rule_y - body_top;
     if (body_h < 0) { body_h = 0; }
     # left band, accumulating: an optional conversation sidebar (0.33.6), then an optional file-tree pane, then the
@@ -678,7 +676,8 @@ fn gframe_build(w, h) {
         feed_x = feed_x + tw + 1;
     }
     gfeed_build(cmds, feed_x, body_top, w - feed_x, body_h);
-    gd_push_rect(cmds, 0, rule_y, w, 1, _ui_rgb(ROLE_FAINT));                 # the rule closing the body, a line above the input
+    gd_push_rect(cmds, 0, rule_y, w, 1, _ui_rgb(ROLE_FAINT));                 # the frame's upper rule
+    gd_push_rect(cmds, 0, frame_bot, w, 1, _ui_rgb(ROLE_FAINT));              # the frame's lower rule (right over the strip when shown)
     var cty = comp_top + (GFRAME_COMPOSER_H - GR_GLYPH_H) / 2;
     # the `>` prompt dims when focus is on the tree (so the active pane is obvious), bright on the composer.
     var promptc = _ui_rgb(ROLE_ACCENT_DIM);

@@ -80,20 +80,21 @@ fn test_tui() {
     led_feed(KEY_CHAR, 122);                                    # 'z' (non-empty line)
     assert_eq(led_feed(KEY_CTRLC, 0), ACT_EOF, "Ctrl-C exits even with text in the line");
     # geometry (0.11.9: faint rules + dynamic multi-line composer; pure (rows,lines,show)).
-    # 0.45.0: feed · rule · blank · input · blank · status (last row). No hint row: the hints are the input's placeholder.
+    # 0.45.1: feed · rule · input · rule · status (last row) — the input FRAMED by two rules. No hint row: the hints
+    # are the input's placeholder.
     assert_eq(tui_status_row(24), 24, "status bar on the last row (0.45.0: below the input, no longer row 1)");
-    assert_eq(tui_status_gap_row(24), 23, "a line break above the status bar");
-    assert_eq(tui_composer_bot(24, 1), 22, "the input sits directly above that line break");
-    assert_eq(tui_composer_bot(24, 0), 24, "status hidden -> the input takes the last row (the bar's line break goes with it)");
+    assert_eq(tui_frame_bot_row(24, 1), 23, "the frame's lower rule sits directly above the status bar");
+    assert_eq(tui_frame_bot_row(24, 0), 24, "status hidden -> the frame stays; its lower rule takes the last row");
+    assert_eq(tui_composer_bot(24, 1), 22, "the input sits directly on the lower rule");
+    assert_eq(tui_composer_bot(24, 0), 23, "status hidden -> the input sits directly on the last-row rule");
     assert_eq(tui_composer_top(24, 1, 1), 22, "1-line composer top == bottom (one row)");
     assert_eq(tui_composer_top(24, 2, 1), 21, "a 2-line composer grows up one row");
-    assert_eq(tui_composer_gap_row(24, 1, 1), 21, "a line break above the input");
-    assert_eq(tui_composer_gap_row(24, 2, 1), 20, "...which moves up with a growing composer");
-    assert_eq(tui_sep_bottom_row(24, 1, 1), 20, "the rule sits above the input's line break");
+    assert_eq(tui_sep_bottom_row(24, 1, 1), 21, "the frame's upper rule sits directly above the input");
+    assert_eq(tui_sep_bottom_row(24, 2, 1), 20, "...and moves up with a growing composer");
     assert_eq(tui_feed_top(), 1, "feed starts at row 1 (no status bar above it any more)");
-    assert_eq(tui_feed_bot(24, 1, 1), 19, "feed bottom above the rule");
-    assert_eq(tui_feed_bot(24, 2, 1), 18, "a 2-line composer pushes the feed bottom up one");
-    assert_eq(tui_feed_bot(24, 1, 0), 21, "status hidden -> the feed reclaims the bar and its line break");
+    assert_eq(tui_feed_bot(24, 1, 1), 20, "feed bottom directly above the upper rule");
+    assert_eq(tui_feed_bot(24, 2, 1), 19, "a 2-line composer pushes the feed bottom up one");
+    assert_eq(tui_feed_bot(24, 1, 0), 21, "status hidden -> the feed reclaims only the bar's row");
     assert_eq(tui_composer_height(24, 1, 1), 1, "one logical line -> one composer row");
     assert_eq(tui_composer_height(24, 20, 1), 8, "composer height clamps to COMPOSER_MAX_ROWS");
     assert(tui_composer_max(8, 0) > tui_composer_max(8, 1), "hidden status frees more composer rows (below the clamp)");
@@ -108,20 +109,19 @@ fn test_tui() {
             while (_gl <= 10) {
                 var _tfb = tui_feed_bot(_gr, _gl, _gs);
                 var _tsep = tui_sep_bottom_row(_gr, _gl, _gs);
-                var _tgap = tui_composer_gap_row(_gr, _gl, _gs);
                 var _tct = tui_composer_top(_gr, _gl, _gs);
                 var _tcb = tui_composer_bot(_gr, _gs);
+                var _tfr = tui_frame_bot_row(_gr, _gs);
                 if (_tfb < tui_feed_top()) { _gbad = _gbad + 1; }            # MIN_FEED: at least one feed row
-                if (_tsep != _tfb + 1) { _gbad = _gbad + 1; }
-                if (_tgap != _tsep + 1) { _gbad = _gbad + 1; }               # the line break above the input
-                if (_tct != _tgap + 1) { _gbad = _gbad + 1; }
+                if (_tsep != _tfb + 1) { _gbad = _gbad + 1; }                # the frame's upper rule
+                if (_tct != _tsep + 1) { _gbad = _gbad + 1; }
                 if ((_tcb - _tct + 1) != tui_composer_height(_gr, _gl, _gs)) { _gbad = _gbad + 1; }
+                if (_tfr != _tcb + 1) { _gbad = _gbad + 1; }                 # the frame's lower rule
                 if (_gs == 1) {
-                    if (tui_status_gap_row(_gr) != _tcb + 1) { _gbad = _gbad + 1; }   # the line break above the bar
-                    if (tui_status_row(_gr) != tui_status_gap_row(_gr) + 1) { _gbad = _gbad + 1; }
+                    if (tui_status_row(_gr) != _tfr + 1) { _gbad = _gbad + 1; }
                     if (tui_status_row(_gr) != _gr) { _gbad = _gbad + 1; }
                 } else {
-                    if (_tcb != _gr) { _gbad = _gbad + 1; }
+                    if (_tfr != _gr) { _gbad = _gbad + 1; }
                 }
                 _gl = _gl + 1;
             }
@@ -129,7 +129,7 @@ fn test_tui() {
         }
         _gr = _gr + 1;
     }
-    assert_eq(_gbad, 0, "feed/rule/blank/input/blank/status tile every row, no gap or overlap (8..60 rows, both states)");
+    assert_eq(_gbad, 0, "feed/rule/input/rule/status tile every row, no gap or overlap (8..60 rows, both states)");
     # slash-command palette matchers
     assert_eq(_buf_has_space("/seams x", 8), 1, "space detected -> command token complete");
     assert_eq(_buf_has_space("/se", 3), 0, "no space -> still typing the token");
