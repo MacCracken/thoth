@@ -120,13 +120,14 @@ fn main() {
     test_history_request();
     test_inhist();
     test_inhist_persist();
+    test_history_cmd_path();
     test_inhist_polish();          # 0.45.5: ~/$HOME expansion on [history].file + the [history].size trim
     test_logging();
     test_logs_flag();
     test_hoosh_timeout();
     test_config_m4();
     test_state_reason_row();
-    test_state_map_row(); test_dry_map(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();
+    test_state_map_row(); test_dry_map(); test_state_paths_clean(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();
     test_git();
     test_save(); test_save_formats();
     test_session_persist();

@@ -23,7 +23,7 @@ fn repl_loop() {
                 }
                 if (inhist_persist_broke() == 1) {   # 0.27.0: a history-file save failed mid-session -> announce ONCE
                     inhist_persist_broke_ack();
-                    ui_emit(ROLE_FAINT, "history file: write failed — recording disabled for this session"); println("");
+                    ui_emit(ROLE_FAINT, "input history: write failed — persistence disabled for this session"); println("");   # 0.50.1: the TUI's wording (one line on the three surfaces)
                 }
             }
         }

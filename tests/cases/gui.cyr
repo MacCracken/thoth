@@ -816,6 +816,38 @@ fn test_gui_history() {
     gfocus_set(GFOCUS_TREE); ftree_set_sel(1); gkey(103, 0, 0);
     assert_eq(ftree_sel(), 0, "tree-focused Up moves the tree selection, not history");
     gcomp_reset(); ftree_reset(); inhist_nav_reset(); gfocus_set(GFOCUS_COMPOSER);
+    # 0.50.1: the window binds [history].file + [history].size (ghist_bind — what gui_run calls in place of the bare
+    # inhist_init) and a STORED submit is saved to it (ghist_record) — the file round-trips through a fresh bind,
+    # trimmed to the size. Until 0.50.1 nothing on the window path bound the file or saved to it.
+    var _hf = _cfg_history_file; var _hs = _cfg_history_size;
+    var hpath = "build/.thoth_gui_hist.tmp";
+    file_write_all(hpath, "", 0);
+    _cfg_history_file = hpath; _cfg_history_size = 2;
+    ghist_bind();
+    assert_eq(inhist_persist_active(), 1, "ghist_bind binds [history].file (the window's half of main.cyr's bind)");
+    assert_eq(inhist_persist_size(), 2, "...and applies [history].size");
+    assert_eq(inhist_persist_recalled(), 0, "...an empty file recalls nothing");
+    assert_eq(ghist_record("foo", 3), 1, "a submit is stored");
+    assert_eq(ghist_record("foo", 3), 0, "...a consecutive dup is not (ignoredups)");
+    gcomp_reset(); gcomp_append(0x62); gcomp_append(0x61); gcomp_append(0x72);   # "bar" — through the key path
+    gkey(28, 0, 0); gcomp_reset();
+    gcomp_reset(); gcomp_append(0x62); gcomp_append(0x61); gcomp_append(0x7a);   # "baz"
+    gkey(28, 0, 0); gcomp_reset();
+    assert_eq(inhist_count(), 3, "three lines in the ring");
+    inhist_init();
+    assert_eq(inhist_persist_init(hpath), 2, "a fresh bind recalls what the window SAVED, trimmed to [history].size");
+    assert(streq(inhist_entry_ptr(0), "bar") == 1, "...the most recent two: bar");
+    assert(streq(inhist_entry_ptr(1), "baz") == 1, "...baz");
+    inhist_persist_init(0); inhist_persist_size_set(INHIST_CAP);
+    _cfg_history_file = "build/.no_such_dir_xyz/hist.tmp";
+    ghist_bind();
+    assert_eq(inhist_persist_active(), 0, "an unwritable [history].file leaves persistence off (degrade closed)");
+    assert_eq(inhist_persist_init_failed(), 1, "...as a fact the greeting can state");
+    assert_eq(ghist_record("qux", 3), 1, "...and the ring still records (in-memory only)");
+    inhist_persist_init(0); inhist_persist_size_set(INHIST_CAP);   # (the second bind re-applied size 2 — restore)
+    _cfg_history_file = _hf; _cfg_history_size = _hs;
+    xunlink(hpath);
+    inhist_init(); gcomp_reset(); inhist_nav_reset(); gfocus_set(GFOCUS_COMPOSER);
     return 0;
 }
 
@@ -1097,6 +1129,39 @@ fn test_gui_reason_resume() {
     bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, 0);
     assert_eq(_t_gd_text_count(bl, "larger than thoth can load"), 0, "on an empty conversation the greeting carries the fact instead — the flow stays silent");
     _sess_init_failed = 0;
+    # 0.50.1: the input-history file the window binds now — the greeting's history row is DRAWN (the model's row
+    # through _gfeed_greeting), and the same two standing notices the session store has: a save that failed
+    # mid-session, and an unbindable file carried by the flow only while the greeting is hidden
+    var _ip = _inhist_path; var _ir = _inhist_recalled; var _if = _inhist_init_failed; var _ic = _cfg_history_file;
+    _inhist_path = "/home/someone/.thoth_history"; _inhist_recalled = 7; _inhist_init_failed = 0; _inhist_broke = 0;
+    gcmd_clear(); greet_build(0);
+    var gl = gd_list_new();
+    gfeed_build(gl, 0, 0, 900, 400);
+    assert_eq(_t_gd_text_count(gl, "input history "), 1, "the window draws the greeting's history row (the bound file)");
+    assert_eq(_t_gd_text_count(gl, " recalled)"), 1, "...with the recalled count");
+    _inhist_path = 0;
+    greet_build(0);
+    gl = gd_list_new(); gfeed_build(gl, 0, 0, 900, 400);
+    assert_eq(_t_gd_text_count(gl, "input history "), 0, "...and no row when no file is configured");
+    session_history_append("user", "q", 1); session_history_append("assistant", "a", 1);
+    var nh0 = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    _inhist_broke = 1;
+    var nhb = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(nhb > nh0, "a failed input-history save adds a standing notice to the flow");
+    bl = gd_list_new();
+    assert_eq(_gfeed_flow(bl, 14, 0, 560, session_history_len()), nhb, "...measure == draw with it");
+    assert_eq(_t_gd_text_count(bl, "input history write failed"), 1, "...naming the failure once");
+    _inhist_broke = 0;
+    _inhist_init_failed = 1;
+    var nhi = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(nhi > nh0, "an unwritable history file adds a standing notice under the messages (the greeting is not drawn then)");
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, session_history_len());
+    assert_eq(_t_gd_text_count(bl, "input history cannot write"), 1, "...naming it");
+    session_history_clear();
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, 0);
+    assert_eq(_t_gd_text_count(bl, "input history cannot write"), 0, "on an empty conversation the greeting's red row carries it — the flow stays silent");
+    _inhist_path = _ip; _inhist_recalled = _ir; _inhist_init_failed = _if; _cfg_history_file = _ic;
+    greet_build(0);
     roundlog_reset(); session_history_clear(); session_reset();
     return 0;
 }
@@ -1918,6 +1983,10 @@ fn _tg_runner_quit(line) { oprintln("bye"); return 0; }
 fn _tg_runner_many(line) { var i = 0; while (i < 250) { emit("row"); ofmt_int(i); oprintln(""); i = i + 1; } return 1; }
 fn _tg_runner_long(line) { var i = 0; while (i < 700) { emit("x"); i = i + 1; } oprintln(""); return 1; }
 fn _tg_runner_silent(line) { return 1; }
+# 0.50.1: zero-argument runners for gcmd_capture — a session hook that printed, and one that did not
+fn _tg_hook_loud() { ui_emit(ROLE_FAINT, "  [hook session_start] "); emit("hi"); oprintln(""); return 0; }
+fn _tg_hook_quiet() { return 0; }
+fn _tg_hook_tail() { emit("tail"); return 0; }                      # no newline: the bracket must seal it
 # _tg_cmd_texts_at: count GD_TEXT commands whose text starts with `pfx` (first n bytes) at row y
 fn _tg_text_count(l, pfx, n) {
     var c = 0; var i = 0;
@@ -1944,6 +2013,59 @@ fn test_gcmd() {
     assert_eq(gcmd_count(), 0, "no cards to begin with");
     assert_eq(gcmd_build_anchored(0, 0, 10, 800, 0, 1), 10, "no cards -> the flow's y is untouched");
 
+    # --- 0.50.1: the zero-argument capture (the window's session_start hook) seals a card ONLY when something was
+    # printed, and a startup card draws UNDER the greeting instead of in its place ---
+    out_mode_set(OUT_RING); oprintln("stale"); out_mode_set(OUT_FD1);   # a dirty ring must not become a phantom card
+    assert_eq(gcmd_capture("[hook session_start]", &_tg_hook_quiet), 0 - 1, "a silent runner records no card (the ring is cleared first — a stale line is not the hook's)");
+    assert_eq(gcmd_count(), 0, "...none");
+    assert_eq(_gfeed_greeting_on(0), 1, "...so the greeting stays on an empty conversation");
+    assert_eq(out_mode(), OUT_FD1, "...and the sink is back to fd 1");
+    assert_eq(gcmd_capture("[hook session_start]", &_tg_hook_loud), 0, "a runner that printed is sealed as card 0");
+    assert_eq(gcmd_count(), 1, "...one card");
+    assert_eq(gcmd_startup(), 1, "...a STARTUP card");
+    assert(streq(gcmd_head(0), "[hook session_start]") == 1, "...headed as given");
+    assert_eq(gcmd_lines(0), 1, "...one line");
+    assert_eq(_t_count_sub(gcmd_line_ptr(0, 0), gcmd_line_len(0, 0), "[hook session_start]", 20), 1, "...the hook's report (the label)");
+    assert_eq(_t_count_sub(gcmd_line_ptr(0, 0), gcmd_line_len(0, 0), "hi", 2), 1, "...and its stdout (a role marker between the two spans)");
+    assert_eq(_gfeed_greeting_on(0), 1, "...and the greeting KEEPS its place over a startup card (a hook that announced a policy must not wipe the status / config rows)");
+    assert_eq(out_mode(), OUT_FD1, "...sink back to fd 1");
+    greet_build(0);
+    var _gh = gd_list_new();
+    var _ghy = gfeed_build(_gh, 0, 0, 900, 600);
+    assert_eq(_tg_text_count(_gh, persona_tagline(), 6), 1, "...the greeting is drawn");
+    assert_eq(_tg_text_count(_gh, "[hook session_start]", 20), 1, "...and the hook's card is drawn with it");
+    var _gh0 = gd_list_new();
+    gcmd_clear(); greet_build(0);
+    var _ghy0 = gfeed_build(_gh0, 0, 0, 900, 600);
+    assert(_ghy > _ghy0, "...UNDER the block (the build ends lower than the greeting alone)");
+    assert_eq(gfeed_build(gd_list_new(), 0, 0, 900, 600), _ghy0, "...a second build lands at the same y (deterministic)");
+    gcmd_capture("[hook session_start]", &_tg_hook_loud);
+    assert_eq(gfeed_build(gd_list_new(), 0, 0, 900, 600), _ghy, "...with the card too");
+    assert_eq(gcmd_run("/help", &_tg_runner_ok), 1, "then the operator's first command");
+    assert_eq(gcmd_count(), 2, "...two cards");
+    assert_eq(gcmd_startup(), 1, "...one of them a startup card");
+    assert_eq(_gfeed_greeting_on(0), 0, "...and the OPERATOR's card takes the greeting's place (0.46.0)");
+    gcmd_clear();
+    assert_eq(gcmd_startup(), 0, "/clear forgets the startup cards with the rest");
+    # a runner whose last line has no newline: the bracket seals it (feed_flush_pending)
+    assert_eq(gcmd_capture("[hook session_end]", &_tg_hook_tail), 0, "a runner ending without a newline still seals a card");
+    assert_eq(gcmd_lines(0), 1, "...its unterminated line sealed");
+    assert_eq(_t_count_sub(gcmd_line_ptr(0, 0), gcmd_line_len(0, 0), "tail", 4), 1, "...with its bytes");
+    gcmd_clear();
+    # the standing write-failure notices stand under the greeting too (a save can fail on a slash submit before
+    # any turn; /clear then puts the greeting back and the fact must not vanish with the card)
+    var _gn0 = gfeed_build(gd_list_new(), 0, 0, 900, 600);
+    _inhist_broke = 1;
+    var _gnl = gd_list_new();
+    var _gn1 = gfeed_build(_gnl, 0, 0, 900, 600);
+    assert(_gn1 > _gn0, "a failed input-history save stands under the greeting block");
+    assert_eq(_t_gd_text_count(_gnl, "input history write failed"), 1, "...naming it once");
+    assert_eq(_tg_text_count(_gnl, persona_tagline(), 6), 1, "...with the greeting still drawn");
+    _inhist_broke = 0; _sess_broke = 1;
+    _gnl = gd_list_new(); gfeed_build(_gnl, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(_gnl, "session file write failed"), 1, "...and the session store's notice likewise (0.48.0's stood only in the flow)");
+    _sess_broke = 0;
+    assert_eq(gfeed_build(gd_list_new(), 0, 0, 900, 600), _gn0, "...gone with the flags");
     # --- the bracket: the ring is the sink, sealed as a card; the runner's return is the bracket's ---
     assert_eq(gcmd_run("/x arg", &_tg_runner_ok), 1, "the runner's keep-running comes back");
     assert_eq(out_mode(), OUT_FD1, "...and the sink is back to fd 1");

@@ -96,12 +96,24 @@ fn _greet_span_n(role, ptr, n) {
 }
 fn _greet_span(role, s) { if (s == 0) { return 0; } return _greet_span_n(role, s, strlen(s)); }
 # _greet_span_clean (0.48.0): a span from a value the operator typed (a config path) — LABEL-sanitised on the way
-# into the store (C0 / DEL -> '?'), since the TUI paints greeting spans as raw feed bytes. Clipped at 511 bytes.
+# into the store (C0 / DEL -> '?'), since the TUI paints greeting spans as raw feed bytes. Clipped at 511 bytes —
+# on a glyph boundary (0.50.1): a clip inside a multi-byte sequence would leave a severed lead byte as the span's
+# tail (U+FFFD on the terminal, a width the layout did not count).
 fn _greet_span_clean(role, s) {
     if (s == 0) { return 0; }
     var cb[512];
-    safe_label_copy(&cb, 512, s);
-    return _greet_span_n(role, &cb, strlen(&cb));
+    var n = safe_label_copy(&cb, 512, s);
+    if (n == 511) {                                   # clipped: back off a trailing incomplete UTF-8 sequence
+        var k = n;
+        while ((k > 0) && ((load8(&cb + k - 1) & 0xC0) == 0x80)) { k = k - 1; }   # over the continuation bytes
+        if (k > 0) {
+            var lead = load8(&cb + k - 1) & 255;
+            var need = 1;
+            if ((lead & 0xE0) == 0xC0) { need = 2; } elif ((lead & 0xF0) == 0xE0) { need = 3; } elif ((lead & 0xF8) == 0xF0) { need = 4; }
+            if ((need > 1) && ((n - (k - 1)) < need)) { n = k - 1; store8(&cb + n, 0); }   # the sequence is short: drop it whole
+        }
+    }
+    return _greet_span_n(role, &cb, n);
 }
 fn _greet_span_int(role, n) {
     var b[32];
@@ -212,23 +224,36 @@ fn greet_build(up) {
         _greet_span(ROLE_RED, "config: "); _greet_span_int(ROLE_RED, config_unknown_count()); _greet_span(ROLE_RED, " unrecognised key(s)");
         _greet_span(ROLE_FAINT, " — ignored. /state names them.");
     }
-    # the conversation store (0.48.0): what a bound [session].file resumed, or why it could not be bound — its own
-    # group, an open row above it, AFTER the config group and its red warnings (which sit directly under the config
-    # row). Silent when persistence is off or the store was empty (nothing to say). The path is the operator's own
-    # config value, cleaned at the span like every path thoth echoes.
+    # the stores (0.48.0 / 0.50.1): what a bound [session].file resumed, or why it could not be bound; then the
+    # input-history file — its bound path and what it recalled, or that it cannot be written. ONE group, an open
+    # row above its first row, AFTER the config group and its red warnings (which sit directly under the config
+    # row). The session row is silent when persistence is off or the store was empty (nothing to say); the
+    # history row shows whenever the file is CONFIGURED — "bound" is the fact worth stating even at 0 recalled,
+    # as the TUI's feed line did until 0.50.1 (that line retired into this row, the 0.48.0 precedent; the REPL's
+    # banner keeps its own). The paths are the operator's own config values, cleaned at the span like every
+    # path thoth echoes.
+    var _stores = 0;
     if (sess_persist_init_failed() == 2) {
-        _greet_row();
-        _greet_row();
+        _greet_row(); _greet_row(); _stores = 1;
         _greet_span(ROLE_RED, "session file larger than thoth can load"); _greet_span(ROLE_FAINT, " — resume disabled (nothing is written back)");
     } elif (sess_persist_init_failed() == 1) {
-        _greet_row();
-        _greet_row();
+        _greet_row(); _greet_row(); _stores = 1;
         _greet_span(ROLE_RED, "session file not writable"); _greet_span(ROLE_FAINT, " — resume disabled");
     } elif ((sess_persist_active() == 1) && (sess_persist_resumed() > 0)) {
-        _greet_row();
-        _greet_row();
+        _greet_row(); _greet_row(); _stores = 1;
         _greet_span(ROLE_FAINT, "session "); _greet_span(ROLE_FG, "resumed "); _greet_span_int(ROLE_FG, sess_persist_resumed());
         _greet_span(ROLE_FG, " messages"); _greet_span(ROLE_FAINT, " from "); _greet_span_clean(ROLE_FG, config_path_display(sess_persist_path()));
+    }
+    if (inhist_persist_init_failed() == 1) {
+        if (_stores == 0) { _greet_row(); }
+        _greet_row();
+        _greet_span(ROLE_RED, "input history cannot write "); _greet_span_clean(ROLE_RED, config_path_display(config_history_file()));
+        _greet_span(ROLE_FAINT, " — not persisted (in-memory only)");
+    } elif (inhist_persist_active() == 1) {
+        if (_stores == 0) { _greet_row(); }
+        _greet_row();
+        _greet_span(ROLE_FAINT, "input history "); _greet_span_clean(ROLE_FG, config_path_display(inhist_persist_path()));
+        _greet_span(ROLE_FAINT, " ("); _greet_span_int(ROLE_FG, inhist_persist_recalled()); _greet_span(ROLE_FAINT, " recalled)");
     }
     _greet_built = 1;
     _gl_cols = 0;                                   # any previous layout is stale

@@ -442,10 +442,13 @@ model = "claude-haiku-4-5-20251001"
 # level = "info"
 
 # The [history] table enables PERSISTENT input-history recall (0.11.2). In the rich
-# TUI, Up/Down recall previously-submitted composer lines; by default that history is
-# session-local (in-memory only). Set `file` to persist it across sessions: thoth loads
-# it at startup and rewrites it (most-recent first, bounded to the recall ring) after
-# each submitted line.
+# TUI and the `thoth gui` window, Up/Down recall previously-submitted composer lines
+# (the line REPL records its submitted lines into the same ring and file, with no
+# recall keys of its own); by default that history is session-local (in-memory only).
+# Set `file` to persist it across sessions: thoth loads it at startup and rewrites it
+# (most-recent first, bounded to the recall ring) after each submitted line — the
+# window binds the file since 0.50.1. The greeting box's `input history` row names the
+# file and how many lines it recalled (the REPL's banner line says the same).
 #
 # This is the user's TYPED INPUT — it MAY contain secrets you typed. A FRESH file is
 # created mode 0600 (owner-only) on POSIX targets (best-effort: a PRE-EXISTING file keeps
@@ -464,6 +467,7 @@ model = "claude-haiku-4-5-20251001"
 #   size — how many lines the file keeps (1..128, the recall ring's size; default 128).
 #          The file is trimmed to the most recent `size` lines at the next save, like a
 #          shell's histfilesize; recall in the session still spans the whole ring.
+#          /reload re-applies it (0.50.1); `file` itself needs a restart.
 
 # [history]
 # file = "~/.thoth_history"           # or project-local ".thoth_history", or an absolute path

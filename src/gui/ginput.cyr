@@ -231,7 +231,9 @@ fn gscroll_clamp(maxv) { if (_gscroll > maxv) { _gscroll = maxv; } if (_gscroll 
 fn gscroll_page(dir) { var p = _gscroll_view_h - 20; if (p < 60) { p = 60; } gscroll_by(dir * p); return 0; }
 
 # --- composer history recall (0.30.15) --------------------------------------------------------------------
-# Up/Down over the inhist ring (the SAME ring + optional [history].file the TUI uses), mirroring _tui_recall_key:
+# Up/Down over the inhist ring (the SAME ring the TUI uses; its optional [history].file is bound by ghist_bind
+# since 0.50.1 — the 0.30.15 note that the window "shared" the file was never true: nothing on the window path
+# bound it, and ghist_record never saved), mirroring _tui_recall_key:
 # Up stashes the live draft on the first step then walks OLDER; Down walks NEWER and restores the draft past the
 # newest. gcomp_set swaps the composer content; a submitted turn pushes the text + resets the cursor (in gkey).
 var GHIST_DRAFT_CAP = 4096;
@@ -262,7 +264,30 @@ fn ghist_down() {
     return 0;
 }
 # ghist_record: push a submitted line into the ring + snap the cursor back to the draft (called on submit).
-fn ghist_record(ptr, len) { if (len > 0) { inhist_push(ptr, len); } inhist_nav_reset(); return 0; }
+# 0.50.1: a STORED line is mirrored to [history].file when persistence is active (a no-op off) — the same
+# push → save-if-stored → nav-reset the TUI (tui.cyr) and the REPL (repl.cyr) do per line; until now the window
+# pushed and never saved, so a bound file would still have stayed empty. Returns inhist_push's verdict (1 stored).
+fn ghist_record(ptr, len) {
+    var stored = 0;
+    if (len > 0) { stored = inhist_push(ptr, len); }
+    if (stored == 1) { inhist_persist_save(); }
+    inhist_nav_reset();
+    return stored;
+}
+# ghist_bind (0.50.1): the window's half of what main.cyr binds for the REPL (and tui_loop for the TUI) AFTER
+# `thoth gui` has already returned — the recall ring, then the opt-in [history].file (recalls prior lines; probes writability, degrading
+# closed) and [history].size (the lines a save keeps). No printed line: the greeting row states the outcome on
+# every surface (greet_build reads inhist_persist_* after this), and the flow carries a failure when the greeting
+# is hidden. Called by gui_run before greet_build, beside the session store's bind (0.48.0's precedent).
+fn ghist_bind() {
+    inhist_init();
+    var hp = config_history_file();
+    if (hp != 0) {
+        inhist_persist_init(hp);
+        inhist_persist_size_set(config_history_size());
+    }
+    return 0;
+}
 
 # gtree_mention: append `@<repo-relative path> ` for tree node li into the composer — rides the 0.21.0 @mention
 # machinery (cmd_task expands `@path` to that file's content). The path is the absolute ftree_path minus the cwd

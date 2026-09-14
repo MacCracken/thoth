@@ -1138,6 +1138,12 @@ fn test_bounds_hardening() {
 # pass. read_file/list_dir hit the filesystem (present-on-disk, not git status), so real files/dirs work.
 # _t_has: substring test over a NUL-terminated cstr.
 fn _t_has(hay, needle) { return _t_count_sub(hay, strlen(hay), needle, strlen(needle)); }
+# _t_feed_has (0.50.1): 1 when some line of the feed ring contains `needle` (the ring is the window's capture sink).
+fn _t_feed_has(needle) {
+    var r = 0;
+    while (r < feed_count()) { if (_t_count_sub(feed_line_ptr(r), feed_line_len(r), needle, strlen(needle)) > 0) { return 1; } r = r + 1; }
+    return 0;
+}
 # _t_before: 1 when `a` occurs before `b` in the cstr `hay` (both present).
 fn _t_before(hay, a, b) {
     var n = strlen(hay);
@@ -1967,6 +1973,45 @@ fn test_project() {
     assert_eq(hooks_pre_tool("shell", "{}"), 0, "a hook that TIMED OUT degrades CLOSED — it was consulted and did not answer");
     assert_eq(hooks_blocked(), blocked_before + 1, "...and the timeout denial is counted like any other block");
     _cfg_hook_timeout_ms = 0 - 1;
+    # 0.50.1: the SESSION hooks, pinned for the first time — the window fires them now (gui_run, through the card
+    # bracket / OUT_NULL), which relies on two facts: hooks_session_start reports through the current sink (so the
+    # ring captures it, and a clean silent hook prints nothing), and hooks_session_end returns _hook_run's outcome
+    # (so the window can name a timeout after its surface is gone).
+    var sv_hs = _cfg_hook_session_start; var sv_he = _cfg_hook_session_end;
+    var sv_fired = hooks_fired();
+    _cfg_hook_session_start = "echo hello";
+    feed_init(); out_mode_set(OUT_RING);
+    hooks_session_start();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(hooks_fired(), sv_fired + 1, "session_start: the hook ran");
+    assert_eq(_t_feed_has("[hook session_start] hello"), 1, "...its stdout reported through the current sink (the ring)");
+    _cfg_hook_session_start = "exit 0";
+    feed_init(); out_mode_set(OUT_RING);
+    hooks_session_start();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 0, "a clean, silent hook prints NOTHING (the window keeps its greeting)");
+    assert_eq(hooks_fired(), sv_fired + 2, "...and it RAN (the silence is the hook's, not a skip)");
+    _cfg_hook_session_start = "exit 3";
+    feed_init(); out_mode_set(OUT_RING);
+    hooks_session_start();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_feed_has("[hook session_start] exited 3 (continuing)"), 1, "a non-zero exit is announced, never fatal");
+    _cfg_hook_session_start = 0;
+    feed_init(); out_mode_set(OUT_RING);
+    hooks_session_start();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 0, "no session_start configured: nothing runs, nothing prints");
+    _cfg_hook_session_end = "exit 5";
+    out_mode_set(OUT_NULL);
+    assert_eq(hooks_session_end(), 5, "session_end returns the hook's exit code");
+    _cfg_hook_timeout_ms = 200;
+    _cfg_hook_session_end = "sleep 5";
+    assert_eq(hooks_session_end(), 0 - 2, "...and -2 when it timed out (the window names that on stderr)");
+    _cfg_hook_timeout_ms = 0 - 1;
+    _cfg_hook_session_end = 0;
+    assert_eq(hooks_session_end(), 0, "...0 when none is configured");
+    out_mode_set(OUT_FD1);
+    _cfg_hook_session_start = sv_hs; _cfg_hook_session_end = sv_he;
     # ⚠ 0.45.2 — A HOOK THAT CANNOT BE RUN DENIES TOO. Pointing the capture prefix at a directory that does not exist makes
     # the exclusive create fail for real: the -1 a full or read-only /tmp or a fork failure produces — and, until 0.45.2,
     # every call on macOS. Until 0.45.2 that ALLOWED the call.

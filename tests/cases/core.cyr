@@ -86,6 +86,21 @@ fn test_dry_map() {
     _pmap_root = sv_root;
     return 0;
 }
+# test_state_paths_clean (0.50.1): /state's resume and log rows echo the operator's paths `~/…` through the label
+# sanitiser — they printed the config value raw (the shape /history was repaired to).
+fn test_state_paths_clean() {
+    test_group("/state resume + log rows: paths cleaned (0.50.1)");
+    var sp = _sess_path; var sc = _cfg_session_file;
+    _sess_path = "/tmp/s\x1b[7mx";
+    _cfg_session_file = "/tmp/elsewhere";        # the BOUND path is the fact, not the config's current value
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_state();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("on — /tmp/s?[7mx"), 1, "the resume row names the bound store with its escape read as '?'");
+    assert_eq(_mid_feed_plain_count("elsewhere"), 0, "...not the config's current value");
+    _sess_path = sp; _cfg_session_file = sc;
+    return 0;
+}
 fn test_state_reason_row() {
     test_group("/state reason row (0.35.4; off the store since 0.48.0)");
     session_reset(); session_history_clear();
@@ -1633,6 +1648,53 @@ fn test_inhist_polish() {
     return 0;
 }
 
+# test_history_cmd_path (0.50.1): /history names the BOUND path, `~/…`, through the label sanitiser — it used to
+# print the config's value raw (as /state's resume and log rows did — test_state_paths_clean; and /reload may have
+# moved the config's value without rebinding).
+fn test_history_cmd_path() {
+    test_group("/history names the bound path, cleaned (0.50.1)");
+    inhist_init();
+    inhist_push("one", 3);
+    var sv = _inhist_path; var svc = _cfg_history_file;
+    _inhist_path = "/tmp/x\x1b[7my";
+    _cfg_history_file = "/tmp/elsewhere";        # the config's value has moved on (a /reload) — the BOUND path is the fact
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_history();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("persisted -> /tmp/x?[7my"), 1, "/history: the bound path, its escape read as '?'");
+    assert_eq(_mid_feed_plain_count("elsewhere"), 0, "...not the config's current value");
+    # the `~/` fold: a bound path under $HOME reads as `~/…`
+    var home = getenv("HOME");
+    if (home != 0) {
+        var hp = alloc(strlen(home) + 32);
+        var ho = _append_cstr_cap(hp, 0, strlen(home) + 32, home);
+        ho = _append_cstr_cap(hp, ho, strlen(home) + 32, "/.thoth_history_t");
+        _inhist_path = hp;
+        feed_init(); out_mode_set(OUT_RING);
+        cmd_history();
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        assert_eq(_mid_feed_plain_count("persisted -> ~/.thoth_history_t"), 1, "...a path under $HOME reads as `~/…`");
+    } else { assert(1, "(no $HOME in this process — the `~/` fold is not checked here; stated)"); }
+    _inhist_path = 0; _cfg_history_file = svc;
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_history();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("persisted"), 0, "...and no persisted line when nothing is bound");
+    # the ENTRIES are clean at the store: a pasted ESC never reaches /history, Up-recall or the file
+    inhist_init();
+    inhist_push("a\x1bb\tc", 5);
+    assert(streq(inhist_entry_ptr(0), "a?b\tc") == 1, "inhist_push cleans at the store (ESC -> '?', a tab kept — TEXT policy)");
+    inhist_push("x\ny", 3);
+    assert(streq(inhist_entry_ptr(1), "x\ny") == 1, "...a multi-line entry keeps its newline");
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_history();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("a?b"), 1, "...so /history prints the clean copy");
+    _inhist_path = sv;
+    inhist_init();
+    return 0;
+}
+
 fn test_inhist_persist() {
     test_group("input-history persistence (0.11.2)");
     var lpath = "build/.thoth_hist_load.tmp";
@@ -1647,6 +1709,9 @@ fn test_inhist_persist() {
     assert_eq(inhist_nav_at_draft(), 1, "cursor at the draft after load");
     assert_eq(inhist_persist_active(), 1, "persistence active (file writable)");
     assert_eq(inhist_persist_broke(), 0, "not broken after a clean init");
+    assert_eq(inhist_persist_recalled(), 2, "0.50.1: the bind keeps its recalled count as a fact");
+    assert_eq(inhist_persist_init_failed(), 0, "...and no failure");
+    assert((inhist_persist_path() != 0) && (streq(inhist_persist_path(), lpath) == 1), "...and the BOUND path");
 
     # init is NON-DESTRUCTIVE: the file is untouched (still holds the raw dup, not rewritten).
     var rbuf[64];
@@ -1698,12 +1763,18 @@ fn test_inhist_persist() {
     var bad = inhist_persist_init("build/.no_such_dir_xyz/hist.tmp");
     assert_eq(bad, 0 - 1, "unwritable path -> -1");
     assert_eq(inhist_persist_active(), 0, "persistence OFF after a write failure");
+    assert_eq(inhist_persist_init_failed(), 1, "0.50.1: the failed bind is a readable fact");
+    assert_eq(inhist_persist_path(), 0, "...with no bound path");
+    assert_eq(inhist_persist_recalled(), 0, "...and nothing recalled");
 
     # create the 0600 mode-check file (fresh path); the shell asserts the perms post-suite.
     inhist_init();
     inhist_persist_init("build/.thoth_hist_mode.tmp");
 
     inhist_persist_init(0);          # unbind persistence -> clean slate for later tests
+    assert_eq(inhist_persist_init_failed(), 0, "0.50.1: an unbind clears the failure fact");
+    assert_eq(inhist_persist_recalled(), 0, "...and the recalled count");
+    assert_eq(inhist_persist_path(), 0, "...and the path");
     inhist_init();
     led_reset();
     return 0;
@@ -1874,6 +1945,49 @@ fn test_model_switch() {
     _term_title_build(tb, 256);
     assert(streq(tb, "thoth - abc") == 1, "control bytes stripped from the title (no escape injection)");
     session_reset();
+    # 0.50.1: term_title_set writes NOTHING at PT_DESKTOP — the window's title is the compositor's, and emit_raw is
+    # blind to out_mode, so /model in the window used to write an OSC-0 escape to the LAUNCHING terminal's fd 1.
+    # Captured on fd 1 itself (the only sink emit_raw has); the rich tier proves the capture sees the escape.
+    var _tt0 = ui_tier(); var _td0 = ui_color_depth();
+    var _tp = "build/.thoth_title_cap.tmp";
+    if (_t_fd1_to(_tp) == 0) {
+        ui_force(PT_DESKTOP, CD_TRUE);
+        term_title_set();
+        _t_fd1_restore();
+        var _tcap[128];
+        var _tn = file_read_all(_tp, &_tcap, 127);
+        if (_tn < 0) { _tn = 0; }
+        assert_eq(_tn, 0, "at PT_DESKTOP term_title_set writes no byte to fd 1 (the window has no terminal to title)");
+        if (_t_fd1_to(_tp) == 0) {
+            ui_force(PT_RICH, CD_TRUE);
+            term_title_set();
+            _t_fd1_restore();
+            _tn = file_read_all(_tp, &_tcap, 127);
+            if (_tn < 0) { _tn = 0; }
+            assert_eq(_t_count_sub(&_tcap, _tn, "\x1b]0;thoth", 9), 1, "...while the rich tier writes the OSC-0 title (the capture works)");
+        } else { assert(1, "(fd 1 cannot be re-captured on this target — the rich-tier witness is not run here; stated)"); }
+        # the same class: a window turn's [ui].bell (a raw BEL to fd 1, blind to OUT_NULL) and /copy's OSC-52
+        var _bb = _cfg_ui_bell; _cfg_ui_bell = 1;
+        if (_t_fd1_to(_tp) == 0) {
+            ui_force(PT_DESKTOP, CD_TRUE);
+            _task_turn_feedback(clock_now_ms());
+            _t_fd1_restore();
+            _tn = file_read_all(_tp, &_tcap, 127);
+            if (_tn < 0) { _tn = 0; }
+            assert_eq(_tn, 0, "at PT_DESKTOP a turn's [ui].bell writes no byte to fd 1 (the launching terminal is not the window's surface)");
+        } else { assert(1, "(fd 1 cannot be re-captured — the bell check is not run here; stated)"); }
+        _cfg_ui_bell = _bb;
+        xunlink(_tp);
+    } else { assert(1, "(fd 1 cannot be captured on this target — the PT_DESKTOP title / bell checks are not run here; stated)"); }
+    ui_force(PT_DESKTOP, CD_TRUE);
+    var _ca = _hoosh_acc; var _cl = _hoosh_acc_len;
+    _hoosh_acc = "a reply"; _hoosh_acc_len = 7;                     # something to copy, so the gate is what answers
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_copy();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("the window has no terminal to write it to"), 1, "/copy in the window says the OSC-52 clipboard is the terminal's — it never writes the escape");
+    _hoosh_acc = _ca; _hoosh_acc_len = _cl;
+    ui_force(_tt0, _td0);
     return 0;
 }
 
@@ -2783,6 +2897,33 @@ fn test_reload() {
     # absent/unreadable file (keeps prior state); reaching the next assertion proves it did not crash.
     config_load();
     assert_eq(_agent_tools_ready, 0, "config_load re-run did not spuriously rebuild the tool cache");
+    # 0.50.1: cmd_reload through the config seams (a fixture global layer) — [history].size is re-applied to the
+    # next save and named on the "now active" line; it used to be re-parsed and then ignored, listed nowhere.
+    # cmd_reload re-runs discovery (config_path_recheck drops the cached layer paths), so the fixture is a real
+    # `.thoth/config.cyml` under a walk root of its own (`_cfg_walk_dir`, the 0.45.3 seam) — the local layer it finds
+    # at level 0; the machine's global layer (if any) sits under it, and [history].size is not a global-only key.
+    var _rd = "build/.thoth_t_reload";
+    var _rdt = "build/.thoth_t_reload/.thoth";
+    var _rg = "build/.thoth_t_reload/.thoth/config.cyml";
+    xmkdir(_rd, 0x1c0); xmkdir(_rdt, 0x1c0);
+    var _rt = alloc(128);
+    var _ro = _append_cstr_cap(_rt, 0, 128, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\n[history]\nsize = 5\n");
+    file_write_all(_rg, _rt, _ro);
+    var _swd = _cfg_walk_dir;
+    _cfg_walk_dir = _rdt;
+    inhist_persist_size_set(3);
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_reload();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(_mid_feed_plain_count("reloaded build/.thoth_t_reload/.thoth/config.cyml") >= 1, "premise: /reload found and reloaded the fixture layer");
+    assert_eq(inhist_persist_size(), 5, "/reload re-applies [history].size to the next save");
+    assert(_mid_feed_plain_count("[history].size") >= 1, "...and names it on the now-active line");
+    inhist_persist_size_set(INHIST_CAP);
+    _cfg_walk_dir = _swd;
+    config_path_recheck();
+    config_load();
+    if (_cfg_parse_any == 0) { _cfg_hoosh_url = 0; _cfg_history_size = 0 - 1; }   # no real layer (CI)
+    xunlink(_rg); xrmdir(_rdt); xrmdir(_rd);
     return 0;
 }
 
@@ -3681,7 +3822,7 @@ fn test_config_layering() {
     _cfg_scan_unknown(_lay_parse("[daimon]\nurl=\"u\"\n"));
     _cfg_scan_unknown(_lay_parse("[tron]\npolicy=\"p\"\nagent=\"a\"\n"));
     _cfg_scan_unknown(_lay_parse("[log]\nfile=\"f\"\nlevel=\"info\"\n"));
-    _cfg_scan_unknown(_lay_parse("[history]\nfile=\"f\"\n"));
+    _cfg_scan_unknown(_lay_parse("[history]\nfile=\"f\"\nsize=1\n"));   # 0.50.1: `size` (0.45.5) was missing here AND in the checker — every config that set it was told it was unrecognised
     _cfg_scan_unknown(_lay_parse("[session]\nfile=\"f\"\n"));
     _cfg_scan_unknown(_lay_parse("[ui]\nbell=true\nelapsed=true\ntier=\"rich\"\ntheme=\"light\"\n"));
     _cfg_scan_unknown(_lay_parse("[memory]\nenabled=true\n"));

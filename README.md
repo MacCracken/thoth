@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.50.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.50.1 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 

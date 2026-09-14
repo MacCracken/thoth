@@ -532,11 +532,17 @@ fn _pmap_s(cstr) { store64(_pmap_str, cstr); store64(_pmap_str + 8, strlen(cstr)
 # _pmap_is_dir: 1 when `path` is a directory — an O_NONBLOCK open (a FIFO opens at once instead of blocking for
 # a writer; a regular file opens too) and a getdents that only a directory answers. Mirrors lib/fs.cyr's
 # is_dir minus the blocking open. AGNOS's open is the directory test itself (AO_DIRECTORY) and has no FIFOs.
+# 0.50.1: the PE lane has no O_NONBLOCK (the map is absent there anyway — project_map_refresh clears it), so it
+# keeps is_dir too: a raw O_* name is a portability claim, and this one turned the lane's tripwire red at 0.50.0.
 fn _pmap_is_dir(cstr) {
     #ifdef CYRIUS_TARGET_AGNOS
     return is_dir(_pmap_s(cstr));
     #endif
+    #ifdef CYRIUS_TARGET_WIN
+    return is_dir(_pmap_s(cstr));
+    #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    #ifndef CYRIUS_TARGET_WIN
     var fd = sys_open(cstr, O_RDONLY | O_NONBLOCK, 0);
     if (fd < 0) { return 0; }
     var sbuf[4096];
@@ -546,6 +552,7 @@ fn _pmap_is_dir(cstr) {
     sys_close(fd);
     if (n >= 0) { return 1; }
     return 0;
+    #endif
     #endif
 }
 fn _pmap_root_cstr() { if (_pmap_root != 0) { return _pmap_root; } return "."; }

@@ -6,6 +6,12 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.50.1** (2026-09-14, not a full sweep): repair batch 3 updated `CHANGELOG.md`, `docs/development/state.md`
+> (version block, **Tests** counts), `docs/development/roadmap.md` (the registry's GUI `[history].file` entry closed;
+> three carried notes added: the compositor not pumped during a hook / shell wait, `gate_init` / `log_init` lines
+> discarded on the `thoth gui` path, the TUI's `session_start` report on the primary screen), `.thoth/config.cyml.example`
+> (`[history]` — the window, the greeting row, `/reload` and `size`), `README.md` (stamp) and this file. No ADR earned.
+>
 > **Touched at 0.50.0** (2026-09-13, not a full sweep): F5 updated `CHANGELOG.md`, `docs/development/state.md`
 > (version block, **Tests** counts), `docs/development/roadmap.md` (F5 → shipped with its residuals; the minor
 > candidates now start at 0.51.0), `docs/architecture/003` (the map beside the workspace clause), ADR-0015 (the

@@ -219,6 +219,7 @@ fn _gpresent_submit(win) {
             if (intr_pending() == 1) { gturn_stop(); } else { gturn_fail(); }
         }
         gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
+        git_probe();                          # 0.50.1: the turn may have changed the worktree (an agentic edit / shell) — the strip's git field + the tree's badges, as the TUI re-probes after every line; until now only a slash command did
         return 1;
     }
     return gpresent_run_command(gcomp_cstr());
@@ -253,12 +254,13 @@ fn gui_run() {
     # PT_DESKTOP + CD_TRUE is honest, not a fake: graster writes real 24-bit XRGB8888 into a wl_shm buffer,
     # so this window IS a truecolor surface no matter what tty spawned it. Safe on both counts: _ui_rgb never
     # consults tier/depth (which is why the GUI renders correctly today even at T0), and gui_run writes no
-    # escape to fd 1 (its only stdout path is emit_err, and the turn runs under OUT_NULL).
+    # escape to fd 1 (its only stdout path is emit_err, and the turn runs under OUT_NULL; 0.50.1: the session
+    # hooks run under the card bracket / OUT_NULL, and term_title_set returns at PT_DESKTOP).
     ui_force(PT_DESKTOP, CD_TRUE);
     var win = 1;
     ftree_load();                                        # populate the file-tree pane (0.30.5)
     git_probe();                                         # so the tree's git badges + the status git field have data
-    inhist_init();                                       # composer history recall ring (0.30.15)
+    ghist_bind();                                        # composer history recall ring (0.30.15) + [history].file/.size (0.50.1: bound HERE at last — main.cyr's bind sits after the `thoth gui` return)
     # 0.45.3: the greeting block's model (the framed status box beside the ibis) — built ONCE here, at this
     # front end's startup like the ask seam below, never per frame: it snapshots config + persona state and
     # takes the hoosh probe result (a silent GET, which also seeds the status strip's health dot). The frame
@@ -268,7 +270,8 @@ fn gui_run() {
     # it (sess_persist_save is a no-op while _sess_path is unbound, and nothing on this path ever bound it): a
     # conversation and its thinking folds died with the process. (Its tool cards are still the roundlog's — a
     # resumed reply draws its fold, not its cards; that half is F4.) Before greet_build, so the greeting's session
-    # row can say what was resumed.
+    # row can say what was resumed. 0.50.1: the input-history bind above sits before it for the same reason — the
+    # greeting's history row (both surfaces) reads the bind's outcome.
     sess_persist_init(config_session_file());
     var _gup = 0;
     if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _gup = 1; }
@@ -285,6 +288,16 @@ fn gui_run() {
     # front end will win); left in place, a confirm raised during a GUI command dispatch would run T2
     # painters over a terminal that has no alt screen up.
     confirm_hooks_set(0, 0);
+    # 0.50.1: the operator's session_start hook, fired for THIS front end too — main.cyr fires it for the REPL/TUI
+    # after `thoth gui` has already returned, so a configured [hooks].session_start never ran for the window
+    # (pre_tool / post_tool did, inside its turns: the lifecycle was half-wired). After every seam is claimed and
+    # the stores are bound, exactly where main.cyr fires it (after config, seams and the git probe; before any
+    # turn), and BEFORE the first frame so the frame carries its card when it printed. Under the card bracket:
+    # the report lands in the window, never on fd 1; a silent hook (the common notify-send) records nothing and
+    # the greeting stays. A slow hook delays the window's first map for its duration (up to [hooks].timeout_ms) —
+    # parity with the TUI, where nothing appears until the hook returns; a frozen already-mapped window that
+    # ignores close for that long would be worse.
+    gcmd_capture("[hook session_start]", &hooks_session_start);
     var pfd[8];
     _gpresent_frame(win);                                # first paint
     var running = 1;
@@ -330,5 +343,14 @@ fn gui_run() {
     }
     intr_check_hook_set(0); gstop_set_win(0);            # 0.34.3: unregister the GUI stop-poll before teardown
     gwl_win_close(win);
+    # 0.50.1: the session_end hook, after the surface is gone (main.cyr fires it after tui_loop's teardown).
+    # Under OUT_NULL: the hook's stdout has no surface any more (a closed terminal's case), "could not run"
+    # reaches stderr through note_*, and the one outcome that would otherwise be silent — a timeout — is named
+    # on stderr here. Every exit path funnels here (poll error, the compositor's close, Esc, /quit); the
+    # no-compositor return above fires neither hook, as session_start never fired.
+    out_mode_set(OUT_NULL);
+    var hrc = hooks_session_end();
+    out_mode_set(OUT_FD1);
+    if (hrc == (0 - 2)) { emit_err("thoth gui: [hook session_end] timed out\n"); }
     return 0;
 }

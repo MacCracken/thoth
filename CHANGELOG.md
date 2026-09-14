@@ -2,6 +2,124 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.50.1] - 2026-09-14
+
+**Repair batch 3 — the window finishes its startup.** `thoth gui` returns from `main.cyr` nine lines before the
+bindings the REPL/TUI get, and 0.48.0 closed only the session store's half of that gap. This patch closes the rest
+(the registry's one thoth-owned ⛔): the window binds `[history].file`, fires the operator's session hooks, refreshes
+git after a turn, and stops writing terminal escapes to the launching tty. Repairs only, no new capability. Suite
+**639 + 1731 + 963 + 792 + 190 + 5** (+109). Linux / aarch64 / AGNOS build with 0.45.6's warning set; the Windows
+lane back to its known-gap state (0.50.0's probe had turned its tripwire red — below); macOS built and tested
+natively at the 6.6.3 pin.
+
+- **The window persists its input history.** `gui_run` called `inhist_init()` and nothing else — no
+  `inhist_persist_init`, no `[history].size`, and `ghist_record` pushed a submit into the ring without ever saving
+  it, so even a bound file would have stayed empty (the 0.30.15 CHANGELOG's "shares the ring (and its optional
+  `[history].file`)" was never true for the file half). Now `ghist_bind` (ginput.cyr) binds the file and the size
+  exactly as main.cyr / tui.cyr do, before `greet_build` so the greeting can say so, and `ghist_record` saves a
+  STORED line (push → save-if-stored, the TUI's and REPL's order, then the window's own nav reset). A save that
+  fails mid-session stands as a red notice in the window (`input history write failed - persistence disabled for
+  this session`, the session store's 0.48.0 shape — no once-only line to ack there) — under the greeting block as
+  well as in the flow, since a save can fail on a slash submit before any turn and `/clear` puts the greeting back
+  (0.48.0's session notice stood only in the flow; it stands in both places now); a file that could not be bound
+  is carried by the flow whenever the greeting is hidden.
+- **The greeting box gains an `input history` row on BOTH surfaces** — `input history ~/.thoth_history (12
+  recalled)` in the stores group under the session row (one open row above the group), or the red `input history
+  cannot write ~/.thoth_history — not persisted (in-memory only)`; shown whenever the file is configured (bound is
+  the fact worth stating, even at 0 recalled). The TUI's separate `input history: …` feed line under the box retired
+  into it (the 0.48.0 session-row precedent; the line REPL's banner keeps its own line). `inhist_persist_init` keeps
+  its outcome as facts a view-model can read after the fact (`inhist_persist_path` / `_recalled` /
+  `_init_failed`), which is also what lets `/history` name the BOUND path — through `config_path_display` and the
+  label sanitiser, where it used to echo the config's current value raw. `/state`'s resume and log rows printed
+  their paths the same raw way; they read `~/…` and cleaned now. And the ring's ENTRIES are clean at the store
+  (`inhist_push` runs the TEXT policy: ESC / C0 / DEL → `?`, newlines and tabs kept) — what `/history` prints,
+  what Up-recall puts in the composer and what the file gets is the one clean copy, so a pasted ESC in a stdin
+  line or a foreign-written history file never reaches a terminal. The greeting's path span clips on a glyph
+  boundary (a 511-byte clip inside a multi-byte sequence left a severed lead byte).
+- **The session hooks fire for the window.** A configured `[hooks].session_start` never ran for `thoth gui`
+  (`pre_tool` / `post_tool` did, inside its turns — the lifecycle was half-wired), and `session_end` never ran at
+  exit. `gui_run` now fires `session_start` after every seam is claimed and the stores are bound (where main.cyr
+  fires it: after config, seams and the git probe; before any turn) and before the first frame, through
+  `gcmd_capture` — the slash-card bracket for a zero-argument runner, sealing a card ONLY when something was
+  printed, and sealing it as a STARTUP card: a silent hook (the common `notify-send`) records nothing; one that
+  prints, exits non-zero, times out or could not run shows its report in a card headed `[hook session_start]`
+  drawn UNDER the greeting block — the block keeps its place (a hook that announced a policy must not wipe the
+  status / config / stores rows the block exists to show; the operator's own first command still takes the
+  greeting's place, 0.46.0) — and nothing reaches fd 1. A slow hook delays the window's first map for its
+  duration (parity with the TUI, where nothing appears until the hook returns). `session_end` fires after
+  `gwl_win_close` under `OUT_NULL` — its stdout and a non-zero exit go unreported (the surface is gone; the
+  REPL/TUI show the stdout on the terminal after teardown), "could not run" reaches stderr through `note_*`, and
+  a timeout is named on stderr; `hooks_session_end` returns `_hook_run`'s outcome for that (main.cyr ignores it).
+  The no-compositor return fires neither, as `session_start` never fired.
+- **Git refreshes after a turn in the window.** The GUI re-probed only after a slash command; an agentic `edit` /
+  `shell` left the strip's git field and the tree's badges stale until the next one. `_gpresent_submit` now
+  probes after `gturn_end` as the TUI does after every line. The registry's `git_ensure_probed` wording named the
+  wrong function for the right call: `gui_run`'s startup `git_probe()` is equivalent (nothing probes earlier on
+  that path; the once-guard would be a no-op forever after it) — unchanged.
+- **No terminal escape from the window.** `/model` typed in the window reached `term_title_set`, whose only gate
+  was `PT_PLAIN`; at the window's `PT_DESKTOP` it wrote an OSC-0 title escape through `emit_raw` — blind to
+  `out_mode` — to fd 1, the LAUNCHING terminal (or a launcher's log), contradicting gpresent.cyr's "writes no escape
+  to fd 1". It returns at `PT_DESKTOP` now (the window's title is the compositor's). Two siblings of the same
+  class, found by the review: `/copy` in the window wrote its OSC-52 clipboard escape (up to ~87 KiB of base64)
+  to the launching terminal — it says the clipboard is the terminal TUI's now, as `/find` does for its modal;
+  and `[ui].bell` rang the launching terminal's BEL after every window turn (`_ui_emit_bell` is a raw write the
+  turn's `OUT_NULL` never saw) — silent at `PT_DESKTOP`.
+- **`/reload` applies `[history].size`.** The key was re-parsed and then ignored, and named on neither the
+  "now active" nor the "restart to change" list; it is re-applied to the next save and listed under "now active".
+  And the 0.43.5 key checker had drifted behind it: every config that set `[history].size` (documented since 0.45.5)
+  was told `unrecognised config key(s): history.size` on stderr, in the greeting box and on `/state` — found by
+  the pty check of this patch's greeting row. Known now; the documented-key scan test carries it.
+- **One wording for the mid-session write failure** on the terminal surfaces: the REPL's `history file: write
+  failed — recording disabled` became the TUI's `input history: write failed — persistence disabled for this
+  session`; the window's standing notice says the same in the flow's style (a hyphen, no colon).
+- **The Windows lane's tripwire, tripped at 0.50.0.** `_pmap_is_dir`'s `O_NONBLOCK` (a raw `O_*` name — a
+  portability claim) had no definition on the PE floor, so `scripts/build.sh win` reported `FAILED (not a known
+  gap): UNEXPECTED undefined symbols: O_NONBLOCK` instead of its known-gap skip. The PE arm keeps `is_dir` (the map
+  is absent there anyway — `project_map_refresh` clears it); the lane skips on its known gaps again.
+
+Decided honestly, not changed: `term_title_set` and `print_banner` at startup stay skipped for the window (no
+terminal to title, the greeting box is its banner); the TUI confirm bracket is already overridden there; no
+exit-time saves (neither front end has them — saves are per-submit / per-turn, and an exit rewrite would mask the
+failure the broke flag exists to surface). Recorded in the registry instead: the compositor is not pumped while a
+hook or `shell` waits (Esc / close are ignored for the hook's duration — pre-existing for `pre_tool` /
+`post_tool`, inherited by `session_start`); `gate_init` / `log_init` failure lines are discarded on the `thoth gui`
+path (`main.cyr` runs one-shot dispatch under `OUT_NULL`; `/state` shows both); the TUI prints `session_start`'s
+report to the primary screen before the alt screen goes up. Not changed: the REPL's banner line keeps its colon
+(`input history: …`) — the banner's style, not the box's; `/state` has no input-history row on any surface.
+
+Tests (+109): `test_inhist_persist` (core) — the bind's facts (recalled / failed / the bound path; cleared on
+unbind); `test_gui_history` (gui) — `ghist_bind` binds file + size, a stored submit is saved and a fresh bind
+recalls it trimmed to the size, an unwritable file leaves persistence off with the fact readable;
+`test_greet` (tui) — the history row's text and roles, bound at 0 recalled, the stores group with the session row
+(directly under it, one open row above), the red row naming the configured path with no recalled row beside it,
+the path cleaned, a path under `$HOME` read as `~/…`, the clip on a glyph boundary (510 not 511 when the 511th
+byte would sever a glyph; 511 when the glyph fits), the TUI leaf painting the row inside the box;
+`test_gui_reason_resume` (gui) — the row drawn, the two standing notices (measure == draw), the flow silent on
+an empty conversation; `test_gcmd` (gui) — `gcmd_capture` records nothing for a silent runner even over a dirty
+ring, seals a runner's unterminated last line, counts a startup card, the greeting drawn WITH the hook's card
+under it (deterministic y; the operator's card then takes the greeting's place; `/clear` forgets the startup
+count), the two write-failure notices under the greeting; the agent suite's hook block — the session hooks pinned
+for the first time (`session_start` reports through the current sink, prints nothing on a clean silent exit yet
+ran, announces a non-zero exit; `session_end` returns the exit code, -2 on a timeout, 0 unconfigured);
+`test_model_switch` (core) — fd 1 captured: nothing at `PT_DESKTOP` from the title or a turn's bell, the OSC-0
+title at the rich tier (a host that cannot capture fd 1 says so), `/copy` in the window answers with words;
+`test_history_cmd_path` (core) — `/history` names the bound path cleaned and `~/…`, not the config's, and the
+ring cleans at the store (ESC → `?`, a tab and a newline kept); `test_state_paths_clean` (core) — `/state`'s
+resume row names the bound store cleaned, not the config's; `test_reload` (core) — `cmd_reload` through a fixture
+`.thoth/config.cyml` under the walk-dir seam re-applies `[history].size` and names it; the documented-key scan
+gains `[history].size`. Proven by breaking, fifteen ways: no save on submit, no size applied, both window
+notices removed, the printed-only guard removed, the ring not cleared before a capture, startup cards not
+exempted (the greeting vanished), the notices not drawn under the greeting, the title gate removed (26 bytes on
+fd 1), the bell gate removed (1 byte), the `/copy` gate removed, the raw config path in `/history` and in
+`/state` (each first failed the WRONG way — a SIGSEGV on a null config value — until the test set the config's
+value too), the reload's size ignored, the ring not cleaned, the glyph back-off removed. Review-pinned, not
+test-pinned (gpresent.cyr is main-only): the three call sites in `gui_run` (`ghist_bind`, the two hook brackets)
+and the post-turn `git_probe`; the TUI's hoist of the bind above `greet_build` (pty-checked: the row inside the
+box, no feed line under it — the leaf test names this as pty-checked). Owed to the operator's eyes (no compositor
+in the harness): `thoth gui` — the history row in the box, a submitted line in `~/.thoth_history` after `/quit`, a
+`session_start` hook's card under the greeting and a silent one's absence, a `session_end` hook's side effect
+after close.
+
 ## [0.50.0] - 2026-09-13
 
 **A project map rides every turn's system prompt.** The fifth feature arc under the batch discipline (F5). The

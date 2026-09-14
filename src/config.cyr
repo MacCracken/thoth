@@ -1131,7 +1131,10 @@ fn _cfg_known_key(sec, key) {
         if (streq(key, "file") == 1) { return 1; }
         return streq(key, "level");
     }
-    if (streq(sec, "history") == 1) { return streq(key, "file"); }
+    if (streq(sec, "history") == 1) {
+        if (streq(key, "file") == 1) { return 1; }
+        return streq(key, "size");                  # 0.50.1: documented since 0.45.5 and flagged "unrecognised" ever since — the checker had drifted behind the surface
+    }
     if (streq(sec, "session") == 1) { return streq(key, "file"); }
     if (streq(sec, "ui") == 1) {
         if (streq(key, "bell") == 1) { return 1; }

@@ -17,7 +17,8 @@
 > blocking work, and everything else in this file is non-gating.
 >
 > **How the rest is cut (0.45.4):** **repairs batch into patch releases** — the defects thoth owns are
-> grouped below into numbered repair batches, each pinned to the next `0.45.x`; **minors are held for
+> grouped below into numbered repair batches, each pinned to the next patch of the current minor (`0.45.5`,
+> `0.45.6`, `0.50.1`, …); **minors are held for
 > feature arcs** — a new capability earns `0.46.0`, `0.47.0`, …, never a polish sweep. Defects owned
 > upstream or by the floor wait, with the version to re-check, and re-vendor as their own patch when
 > the dependency ships.
@@ -182,7 +183,8 @@ unsure, patch.
 - **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing), `0.47.0`
   the second (F2, the picker's provider health + pricing), `0.48.0` the third (F3, reasoning across resume),
   `0.49.0` the fourth (F4, GUI pointer plumbing + resumed cards), `0.50.0` the fifth (F5, the project-map
-  hint); the next decided feature earns `0.51.0`. A minor is never a sweep of small things — those are patches.
+  hint); `0.51.0` is decided (F6, durable tool-definition pins). A minor is never a sweep of small things — those
+  are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -205,8 +207,15 @@ operator's (no display in the harness). **Up next: batch 2.**
 
 Items 1–3 shipped (see the [CHANGELOG](../../CHANGELOG.md)): hook facts in the environment block (the PE lane
 reports "could not run" until its capture can carry one), darshana 1.1.2 / bote-core 3.3.9 / cyrius 6.6.3 with
-`lib/` at the pin, the Windows exclusive create verified on cass. **The next batch gathers from the registry
-below as repairs surface; nothing thoth-owned is pinned at the moment.**
+`lib/` at the pin, the Windows exclusive create verified on cass.
+
+### Repair batch 3 → shipped as 0.50.1
+
+The `thoth gui` dispatch-order gap closed (see the [CHANGELOG](../../CHANGELOG.md)): the window binds
+`[history].file` + `.size` and saves its submits, the greeting box's `input history` row on both surfaces, the
+session hooks fire for the window (a card only when the hook printed), git re-probed after a turn, no OSC-0 title
+escape from the window, `/reload` applies `[history].size`, `/history` names the bound path cleaned. **The next
+batch gathers from the registry below as repairs surface; nothing thoth-owned is pinned at the moment.**
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
@@ -289,6 +298,15 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   to 256 × 256 opens a turn on a wide tree — `dir_list_into` does not surface `d_type`; a stdlib arm that did
   would make the walk one `getdents` per directory); every agentic round re-sends the map's bytes (the same
   bytes each round, which is what provider prefix caching wants).
+- **F6 — Durable tool-definition pins — DECIDED for 0.51.0 (gap 3, the maintainer's call at 0.50.1).** The
+  0.42.0 pins are session-scoped by design: a definition swapped DURING a session (or across `/reprobe`) is
+  withheld and refused; one swapped BETWEEN two runs is accepted as first sight. The arc closes that: pins
+  persist in a store thoth writes and must then defend (a security-relevant file — tamper, replace,
+  symlink-redirect; an authority key under ADR-0021, global-only), so the next run compares against the last
+  one's pins and withholds a changed tool until `/tools trust`. The design pass answers where the store lives,
+  what it carries (name → hash, the daimon host, when pinned), how it is verified on load, and what the greeting
+  / `/state` / `/tools` say about it; the daimon-owned alternative (pin once for every consumer) is recorded
+  as the spine's eventual home, with thoth's store the client-side floor until daimon pins.
 - **Gated on another domain's Cyrius port (recorded, not on a numbered arc):** the **bhava**
   sentiment→mood loop (bhava is **2.0.0** and still Rust — consume it when it is ported, never
   reimplement sentiment/mood analysis); **voice / mic** — mic → speech-to-text and read-back — by
@@ -305,13 +323,22 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 > (**⛔**, all scheduled in a repair batch or waiting on its owner above) or an honest degradation
 > gated on an external / substrate primitive. Recorded here so it is not lost in code comments.
 
-- **⛔ The GUI does not bind `[history].file`** (surfaced by 0.48.0, F3) — `gui_run` initialises the composer's
-  recall ring (`inhist_init`) but never binds the persisted file the REPL/TUI bind (`inhist_persist_init` in
-  main.cyr, which `thoth gui` returns before); the 0.30.15 CHANGELOG called it "a small follow-up" and it never
-  landed. Composer recall in the window is in-memory only. The next repair batch: bind it at the top of
-  `gui_run` beside the session store (0.48.0's precedent), with the greeting's input-history line as the
-  window's notice. Also skipped on that path: `hooks_session_start` / `session_end` and `git_ensure_probed`
-  (the GUI calls `git_probe` itself) — decide each honestly when the batch is cut.
+- **The compositor is not pumped while a hook or `shell` waits** (recorded at 0.50.1) — `exec.cyr`'s wait loop
+  pumps only `_exec_wait_tick` (the TUI's spinner; a no-op off the TUI), never `_gstop_poll`, so for the duration of
+  a `pre_tool` / `post_tool` / (since 0.50.1) `session_start` hook or a `shell` tool call the window services no
+  Wayland event: Esc and the compositor's close are ignored until the wait ends (bounded by `[hooks].timeout_ms` /
+  the shell timeout). A real fix rebinds the wait tick to the GUI's stop-poll — behaviour, not repair: a
+  candidate, since `_gstop_poll` raises the interrupt and repaints from inside a foreign wait loop.
+
+- **`gate_init` / `log_init` failure lines are discarded on the `thoth gui` path** (recorded at 0.50.1) —
+  main.cyr runs one-shot dispatch under `OUT_NULL` and `thoth gui` is a one-shot mode, so "t-ron: policy … unreadable
+  — seam stays absent" and "log: cannot open … — structured logging disabled" (both `emit`) never reach the
+  operator; the seams degrade closed and `/state` names both. Switching them to `note_*` would put them on every
+  `thoth -p` run's stderr too — a cross-surface decision, deferred.
+
+- **The TUI prints `session_start`'s report to the primary screen** (recorded at 0.50.1) — main.cyr fires the hook
+  before `tui_loop` raises the alt screen, so a hook that printed is visible only after exit. A quirk of the fire
+  order, harmless; the window shows the same report as a card.
 
 - **The pointer on a live compositor** (residual of 0.49.0) — the decoder, the hit-test, the row resolvers and
   the click/wheel semantics are pinned headless (wire-shaped bytes into `gwl_wl__ptr_decode`; `gframe_build` then

@@ -302,11 +302,11 @@ fn cmd_history() {
     var i = 0;
     while (i < n) {
         emit(ui_sgr(ROLE_FAINT)); emit("  "); ofmt_int(i + 1); emit("  "); emit(ui_reset());
-        emit_n(inhist_entry_ptr(i), inhist_entry_len(i));
+        emit_n(inhist_entry_ptr(i), inhist_entry_len(i));   # the ring's copy is clean at the store (inhist_push, 0.50.1)
         oprintln("");
         i = i + 1;
     }
-    if (inhist_persist_active() == 1) { ui_emit(ROLE_MUTED, "  persisted -> "); emit(config_history_file()); oprintln(""); }
+    if (inhist_persist_active() == 1) { ui_emit(ROLE_MUTED, "  persisted -> "); emit_clean_line(config_path_display(inhist_persist_path())); oprintln(""); }   # 0.50.1: the BOUND path (not the config's, which /reload may have moved without rebinding), `~/…`, through the label sanitiser like every path thoth echoes
     return 0;
 }
 
@@ -475,7 +475,7 @@ fn cmd_state() {
     _state_reason_row();   # 0.35.4: [hoosh].reasoning effort + turns folded this session
     if (sess_persist_active() == 1) {     # 0.24.2: omit the row entirely when off (byte-identical floor)
         ui_label("  resume  : ");
-        ui_emit(ROLE_GREEN, "on"); emit(" — "); emit(config_session_file());
+        ui_emit(ROLE_GREEN, "on"); emit(" — "); emit_clean_line(config_path_display(sess_persist_path()));   # 0.50.1: the BOUND path, `~/…`, cleaned (it echoed the config value raw)
         ui_emit(ROLE_MUTED, " ([session].file; conversation persisted across restarts)"); oprintln("");
     }
     if ((config_ui_bell() == 1) || (config_ui_elapsed() == 1)) {   # 0.24.3: omit when both off (byte-identical floor)
@@ -519,7 +519,7 @@ fn cmd_state() {
     ui_label("  log     : ");
     if (log_active() == 0) { ui_emit(ROLE_FAINT, "off (set [log].file or [log].level in .thoth/config.cyml)"); oprintln(""); }
     else {
-        if (config_log_file() != 0) { emit(config_log_file()); } else { emit("stderr"); }
+        if (config_log_file() != 0) { emit_clean_line(config_path_display(config_log_file())); } else { emit("stderr"); }   # 0.50.1: `~/…`, cleaned
         ui_emit(ROLE_MUTED, " (structured driver events)"); oprintln("");
     }
     if (config_alias_count() > 0) {        # omit the row entirely when none are defined
@@ -1325,6 +1325,7 @@ var TERM_TITLE_CAP = 256;
 # color-capable tier); a NO-OP at PT_PLAIN (piped / dumb / CI) so the floor + one-shot output stay clean.
 fn term_title_set() {
     if (ui_tier() == PT_PLAIN) { return 0; }
+    if (ui_tier() == PT_DESKTOP) { return 0; }   # 0.50.1: the window's title is the compositor's (gwl_win_open); emit_raw is blind to out_mode, so this used to write an OSC-0 escape to fd 1 — the LAUNCHING terminal — on /model in the window
     if (_term_title == 0) { _term_title = alloc(TERM_TITLE_CAP); }
     var n = _term_title_build(_term_title, TERM_TITLE_CAP);
     emit_raw("\x1b]0;");
@@ -2184,6 +2185,7 @@ fn cmd_reload() {
     daimon_endpoints_reset();                 # 0.44.4: drop the cached tools/call URLs + mneme probe — WITHOUT this a changed [daimon].url moved resources/prompts but left tool traffic on the OLD host
     mcpres_endpoints_reset();                 # 0.43.0 (T2-7): drop the cached resources/prompts URLs + probe, else a changed [daimon].url is silently ignored
     hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
+    inhist_persist_size_set(config_history_size());   # 0.50.1: [history].size is an int the next save reads — re-applied here (it was re-parsed and then ignored, and named on neither list)
     ui_emit(ROLE_GREEN, "reloaded "); emit(config_path()); oprintln("");
     if (config_source() != prev_src) {
         ui_emit(ROLE_RED, "  note: the config FILE changed");
@@ -2193,7 +2195,7 @@ fn cmd_reload() {
     if (config_source() == 3) {
         ui_emit(ROLE_FAINT, "  (legacy path — move it to .thoth/config.cyml)"); oprintln("");
     }
-    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url · [project].map"); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url · [project].map · [history].size"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
     ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file (0.44.3 — authority)"); oprintln("");
@@ -2678,6 +2680,7 @@ fn _task_emit_secs(ms) {
 # clock_now_ms(). Both opt-in (default off) so the floor is byte-identical.
 fn _task_turn_feedback(t0) {
     if (one_shot_active() == 1) { return 0; }        # interactive-only; one-shot output stays clean
+    if (ui_tier() == PT_DESKTOP) { return 0; }       # 0.50.1: the window's turn runs under OUT_NULL, but the bell is a raw write to fd 1 — the launching terminal; nothing of a window turn belongs there
     if (config_ui_bell() == 1) { _ui_emit_bell(); }
     if (config_ui_elapsed() == 1) {
         emit(ui_sgr(ROLE_FAINT)); emit("("); _task_emit_secs(clock_now_ms() - t0); emit(")"); emit(ui_reset()); oprintln("");
@@ -2840,6 +2843,9 @@ fn cmd_clear() {
 fn cmd_copy() {
     var n = hoosh_last_reply_len();
     if (n <= 0) { oprintln("nothing to copy yet — no model reply this session"); return 0; }
+    # 0.50.1: the window has no terminal to hand the escape to — from a terminal launch fd 1 IS a tty (the
+    # launching one), and emit_raw is blind to out_mode, so the OSC-52 went there (the term_title_set class).
+    if (ui_tier() == PT_DESKTOP) { oprintln("copy: the OSC-52 clipboard is the terminal TUI's — the window has no terminal to write it to"); return 0; }
     if (ui_isatty(1) == 0) { oprintln("clipboard copy needs a terminal (stdout is not a tty)"); return 0; }
     var b64 = bayan_base64_encode(hoosh_last_reply(), n);
     var enc = ((n + 2) / 3) * 4;                          # base64 length (standard, '=' padded)

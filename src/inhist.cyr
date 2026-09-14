@@ -86,6 +86,10 @@ fn inhist_push(ptr, len) {
     while (i < len) { store8(dst + i, load8(ptr + i)); i = i + 1; }
     store8(dst + len, 0);
     store64(_inhist_lens + phys * 8, len);
+    # 0.50.1: clean AT THE STORE (the 0.45.0 rule) — the ring's copy is what /history prints, what Up-recall puts
+    # in the composer and what the file gets: an ESC / C0 / DEL byte from a pasted stdin line or a foreign-written
+    # history file reads as '?' everywhere; the TEXT policy keeps a multi-line entry's newlines and tabs.
+    clean_text_n(dst, len);
     return 1;
 }
 
@@ -156,6 +160,8 @@ fn inhist_nav_down() {
 var _inhist_path = 0;          # the active history-file path (cstr), or 0 == persistence OFF
 var _inhist_persist_max = 128; # 0.45.5: lines a save keeps ([history].size, 1..INHIST_CAP) — the most recent N
 var _inhist_broke = 0;         # 1 if a save failed mid-session (persistence auto-disabled)
+var _inhist_recalled = 0;      # 0.50.1: the lines the last bind recalled (a fact a greeting row can state later)
+var _inhist_init_failed = 0;   # 0.50.1: 1 when the last bind found the path set but unwritable (persistence stayed OFF)
 var INHIST_MODE = 0x180;       # 0600 rw------- — the CREATE mode (owner-only; best-effort)
 var INHIST_CHUNK = 4096;       # read-buffer size for streaming the file in on load
 var _inhist_chunk = 0;         # alloc(INHIST_CHUNK), lazy — load read buffer
@@ -283,13 +289,22 @@ fn _inhist_write_file(path) {
 fn inhist_persist_init(path) {
     _inhist_path = 0;
     _inhist_broke = 0;
+    _inhist_recalled = 0;
+    _inhist_init_failed = 0;
     if (path == 0) { return 0; }                 # not configured -> persistence OFF
     _inhist_load_file(path);
     inhist_nav_reset();                          # cursor -> draft, past the loaded entries
-    if (_inhist_probe_writable(path) < 0) { return 0 - 1; }   # unwritable -> announce + stay OFF
+    if (_inhist_probe_writable(path) < 0) { _inhist_init_failed = 1; return 0 - 1; }   # unwritable -> announce + stay OFF
     _inhist_path = path;                         # persistence ACTIVE
-    return inhist_count();
+    _inhist_recalled = inhist_count();
+    return _inhist_recalled;
 }
+# 0.50.1: the bind's outcome as FACTS a view-model can read after the fact (the greeting row on both surfaces,
+# the window's standing notice, /history's bound path) — until now only the return value carried them, so
+# nothing built later than the bind could state them.
+fn inhist_persist_path() { return _inhist_path; }               # the BOUND path (0 when off or failed)
+fn inhist_persist_recalled() { return _inhist_recalled; }       # lines recalled at the bind
+fn inhist_persist_init_failed() { return _inhist_init_failed; } # 1: the path was set but unwritable
 
 # inhist_persist_size_set: how many lines a save keeps — `[history].size`, clamped to 1..INHIST_CAP (0.45.5).
 # The ring itself is untouched (recall still spans INHIST_CAP); only the FILE is trimmed, at the next save,

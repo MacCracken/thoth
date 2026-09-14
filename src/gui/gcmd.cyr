@@ -31,6 +31,7 @@ var _gcmd_head = 0;            # alloc(GCMD_CARDS * GCMD_HEAD_CAP): the typed li
 var _gcmd_meta = 0;            # alloc(GCMD_CARDS * GCMD_META * 8)
 var _gcmd_first = 0;           # ring index of the oldest live card
 var _gcmd_count = 0;
+var _gcmd_startup = 0;         # 0.50.1: cards sealed at the window's STARTUP (a talking session_start hook) — not the operator's; the greeting keeps its place over them
 
 fn _gcmd_ensure() {
     if (_gcmd_base != 0) { return 1; }
@@ -46,7 +47,10 @@ fn _gcmd_meta_get(slot, cell) { return load64(_gcmd_meta + (slot * GCMD_META + c
 fn _gcmd_meta_set(slot, cell, v) { store64(_gcmd_meta + (slot * GCMD_META + cell) * 8, v); return 0; }
 
 fn gcmd_count() { return _gcmd_count; }
-fn gcmd_clear() { _gcmd_count = 0; _gcmd_first = 0; return 0; }
+fn gcmd_clear() { _gcmd_count = 0; _gcmd_first = 0; _gcmd_startup = 0; return 0; }
+# gcmd_startup (0.50.1): how many of the live cards are startup cards — when EVERY live card is one, the operator
+# has issued nothing and the greeting stays (gfeed draws those cards under the block instead of in its place).
+fn gcmd_startup() { if (_gcmd_startup > _gcmd_count) { return _gcmd_count; } return _gcmd_startup; }
 fn gcmd_anchor(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0 - 1; } return _gcmd_meta_get(_gcmd_slot(k), 1); }
 fn gcmd_lines(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 0); }
 fn gcmd_dropped(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 2); }
@@ -194,4 +198,25 @@ fn gcmd_run(line, run_fn) {
     out_mode_set(OUT_FD1);
     gcmd_record(line);
     return keep;
+}
+# gcmd_capture (0.50.1): the same bracket for a zero-argument runner that usually prints NOTHING — the operator's
+# session hooks at the window's startup (hooks_session_start: silent on a clean exit, a line only when the hook
+# printed, exited non-zero, timed out or could not be run). A card is sealed ONLY when something was printed, and
+# it is a STARTUP card: the greeting keeps its place over startup cards (they draw under the block — a hook that
+# announced a policy must not wipe the status / config / stores rows the block exists to show; an operator's
+# own first command still takes the greeting's place, 0.46.0). A silent hook records nothing at all. Nothing
+# reaches fd 1 (the launching terminal, or a launcher's log — the window is the surface). Returns the card's
+# index, or -1 when nothing was recorded.
+fn gcmd_capture(head, run0) {
+    feed_clear();
+    out_mode_set(OUT_RING);
+    fncall0(run0);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    if (feed_count() > 0) {
+        var k = gcmd_record(head);
+        if (k >= 0) { _gcmd_startup = _gcmd_startup + 1; }
+        return k;
+    }
+    return 0 - 1;
 }

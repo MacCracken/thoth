@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.50.1** — **repair batch 3: the window finishes its startup** (2026-09-14). `thoth gui` returns from main.cyr before
+the REPL/TUI bindings; 0.48.0 bound the session store there, this patch binds the rest. `ghist_bind` (ginput.cyr)
+binds `[history].file` + `[history].size` before `greet_build`, and `ghist_record` SAVES a stored submit (it never
+had — a bound file would have stayed empty); the greeting box carries an `input history <path> (N recalled)` / red
+`cannot write` row on both surfaces in the stores group (the TUI's feed line retired into it; `inhist_persist_path`
+/ `_recalled` / `_init_failed` keep the bind's outcome); the window stands a red notice for a failed save and, with the
+greeting hidden, for an unbindable file. The session hooks fire for the window: `session_start` after the seams and
+stores, before the first frame, through `gcmd_capture` (a STARTUP card only when the hook printed, drawn under the
+greeting block — the block keeps its place; nothing on fd 1);
+`session_end` after `gwl_win_close` under `OUT_NULL`, a timeout named on stderr (`hooks_session_end` returns the
+outcome). `_gpresent_submit` re-probes git after a turn (only slash commands did). `term_title_set` returns at
+`PT_DESKTOP` (`/model` in the window wrote an OSC-0 escape to the launching tty), and so do `/copy`'s OSC-52 and a
+turn's `[ui].bell` — nothing of the window reaches fd 1; the ring cleans at the store; the PE lane's tripwire (0.50.0's
+`O_NONBLOCK`) is back to its known-gap skip. `/reload` re-applies
+`[history].size` and lists it, and the key checker knows the key (it flagged it "unrecognised" since 0.45.5);
+`/history` names the BOUND path, cleaned. Suite **639 + 1731 + 963 + 792 + 190 + 5**
+(+109); Linux / aarch64 / AGNOS build with 0.45.6's warning set; macOS green natively at the 6.6.3 pin.
+
 **0.50.0** — **a project map rides every turn's system prompt** (2026-09-13, F5). `project_map_build` (project.cyr)
 lists the top two levels of the launch root into a 2 KiB buffer — every top-level entry, directories first in byte
 order and `/`-suffixed, each top-level directory with up to `PMAP_DIR_NAMES` (12) children and `+N more`;
@@ -45,8 +63,8 @@ now lives ON the message (session.cyr `+48`, a write-once arena set through `ses
 persisted as a trailing `RSN\t<len>\n<bytes>\n` frame beside `CITE`/`TOOL` (magic unchanged; the loader cleans the
 stored copy, appends records only for `user`/`assistant` and SKIPS unknown frames with their payloads; the load buffer
 is 16 MiB, lazy). `greason_build_msg(i)` draws a resumed reply's fold at turn 0. `gui_run` binds
-`sess_persist_init(config_session_file())` — the window never had — and the greeting box carries the session row on
-both surfaces (`session resumed N messages from ~/…` / the red not-writable row; the TUI's feed line for it retired);
+`sess_persist_init(config_session_file())` — the window never had (0.50.1 binds the rest: `[history].file`, the
+session hooks) — and the greeting box carries the session row on both surfaces (`session resumed N messages from ~/…` / the red not-writable row; the TUI's feed line for it retired);
 a failed save stands as a red notice in the window. `/save --json` gains `"reasoning"`, the markdown a `_thinking:_`
 block. Suite **406 + 1679 + 873 + 759 + 190 + 5** (+102); Linux / aarch64 / AGNOS build with 0.45.6's warning set.
 
@@ -3648,8 +3666,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **587 + 1706 + 954 + 769 + 190 + 5 assertions across the suites as of
-0.50.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **639 + 1731 + 963 + 792 + 190 + 5 assertions across the suites as of
+0.50.1 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3678,8 +3696,9 @@ the real spine (hoosh/daimon) is a host-side step — the build sandbox blocks a
 
 **Below the gates, the work is cut by the batch discipline (0.45.4):** repairs ship as numbered **patch
 batches** — `0.45.5` shipped batch 1 (content escapes, the memory double read, `rainbow`'s notices and diagonal,
-the streaming-usage decision, history-file polish, macOS at the pin) and `0.45.6` batch 2 (hook facts into the
-environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create); the next batch gathers from
-the registry — while **minors are held for feature arcs** (`0.46.0` = the first decided feature;
-the candidates are listed, GUI slash-command routing recommended first). Defects owned upstream or by the floor sit
-in a waiting-on table with the version each was last checked against.
+the streaming-usage decision, history-file polish, macOS at the pin), `0.45.6` batch 2 (hook facts into the
+environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create) and `0.50.1` batch 3 (the
+`thoth gui` dispatch-order gap: the window's `[history].file`, session hooks, git after a turn, no escapes to the
+launching tty); the next batch gathers from the registry — while **minors are held for feature arcs** (`0.46.0`
+through `0.50.0` = F1–F5; `0.51.0` decided at 0.50.1 = F6, durable tool-definition pins). Defects owned
+upstream or by the floor sit in a waiting-on table with the version each was last checked against.

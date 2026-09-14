@@ -2671,6 +2671,17 @@ fn tui_loop() {
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
     inhist_init();                                # 0.11.1: the composer input-history recall ring
+    # 0.11.2: bind opt-in input-history persistence ([history].file) — loads prior lines into the recall ring,
+    # probes writability (degrade-closed: an unwritable path leaves recall in-memory only). BEFORE greet_build
+    # (0.50.1): the greeting box states the outcome on its history row — the bound path + how many were
+    # recalled, or the red "cannot write" — where a separate feed line under the box used to (the 0.48.0 session
+    # row's precedent). The row asserts no file mode: 0600 is the best-effort CREATE mode (src/inhist.cyr — not
+    # guaranteed for a pre-existing file or on the AGNOS frozen ABI). Off entirely when [history].file is unset.
+    var _hpath = config_history_file();
+    if (_hpath != 0) {
+        inhist_persist_init(_hpath);
+        inhist_persist_size_set(config_history_size());   # 0.45.5: [history].size — the lines a save keeps
+    }
     out_mode_set(OUT_RING);                        # seed the welcome banner into the feed
     # 0.45.3: the greeting is a BLOCK — the ibis splash beside a framed box: `{(o> <persona> - <Role>: <version>`,
     # an open row, then the hoosh status + the config notes (src/greet.cyr models it; the GUI paints the same
@@ -2702,29 +2713,8 @@ fn tui_loop() {
         feed_flush_pending();
     }
     #endif
-    # 0.11.2: bind opt-in input-history persistence ([history].file). Loads prior lines
-    # into the recall ring and announces honestly into the feed — the active path + how
-    # many were recalled, or a degrade-closed "cannot write" note (recall then stays
-    # in-memory only). The banner does NOT assert a file mode: 0600 is the best-effort
-    # CREATE mode (see src/inhist.cyr — not guaranteed for a pre-existing file or on the
-    # AGNOS frozen ABI), so we never print a permission we can't universally verify. Off
-    # entirely when [history].file is unset.
-    var _hpath = config_history_file();
-    if (_hpath != 0) {
-        var _hn = inhist_persist_init(_hpath);
-        inhist_persist_size_set(config_history_size());   # 0.45.5: [history].size — the lines a save keeps
-        # 0.45.5: named as `~/…` under $HOME (the config may have said `~/` itself — expanded at load), through
-        # the LABEL sanitiser like every other path thoth echoes
-        if (_hn >= 0) {
-            ui_emit(ROLE_FAINT, "input history: "); emit_clean_line(config_path_display(_hpath));
-            ui_emit(ROLE_FAINT, " ("); ofmt_int(_hn); ui_emit(ROLE_FAINT, " recalled)");
-        } else {
-            ui_emit(ROLE_FAINT, "input history: cannot write "); emit_clean_line(config_path_display(_hpath));
-            ui_emit(ROLE_FAINT, " — not persisted (in-memory only)");
-        }
-        feed_flush_pending();
-    }
-    # (0.24.2's "resumed N messages …" feed line moved into the greeting box's session row at 0.48.0 — greet_build)
+    # (0.24.2's "resumed N messages …" feed line moved into the greeting box's session row at 0.48.0, and 0.11.2's
+    # "input history: …" line into its history row at 0.50.1 — greet_build, bound above)
     feed_flush_pending();
     out_mode_set(OUT_FD1);
     _tui_running = 1;

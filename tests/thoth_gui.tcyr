@@ -1,6 +1,7 @@
 # thoth GUI tests — T3 draw pipeline + view-builders (gdraw/graster/gstatus/ginput/gtree/gconv/gtool/gmem/gcmd/gfeed) + surface
 # + the window seam's pure halves (gwindow: the wl_pointer decoder + cursor bitmap, 0.49.0).
-# CURATED translation unit (0.30.9): only the GUI's transitive deps — NO tui/mdhl/feed/commands/vyakarana.
+# CURATED translation unit (0.30.9): only the GUI's transitive deps — NO tui/mdhl/commands/vyakarana (feed.cyr rides
+# since 0.45.3 as greet.cyr's glyph scanner and the card bracket's sink).
 # Fast: `cyrius test tests/thoth_gui.tcyr`. Enabled by the 0.30.8 TUI-decoupling.
 include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"

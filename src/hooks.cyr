@@ -176,13 +176,14 @@ fn hooks_session_start() {
     return 0;
 }
 
+# 0.50.1: returns _hook_run's outcome (the exit code, -2 timed out, -1 could not run) — main.cyr ignores it; the
+# window fires this after its surface is gone and names the one outcome that would otherwise be silent there.
 fn hooks_session_end() {
     var c = config_hook_session_end();
     if (c == 0) { return 0; }
     if (load8(c) == 0) { return 0; }
     if (shell_supported() == 0) { return 0; }
-    _hook_run(c, "session_end", "", "");
-    return 0;
+    return _hook_run(c, "session_end", "", "");
 }
 
 # hooks_pre_tool: 1 = proceed, 0 = BLOCKED by the hook. THE load-bearing event.
