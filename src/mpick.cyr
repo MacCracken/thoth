@@ -25,10 +25,13 @@ var _mp_first = 0;           # first visible filtered index (the render's scroll
 var _mp_query = 0;           # alloc(MPICK_QCAP): filter-query bytes (length is _mp_qlen, not NUL-terminated)
 var _mp_qlen = 0;
 var _mp_err = 0;             # last mpick_load outcome (MPICK_*)
+var _mp_prov = 0;            # 0.47.0: alloc(MPICK_MAX*8): per id, the provider-health table slot (hoosh_provider_index of owned_by), or -1
+var _mp_health_known = 0;    # 0.47.0: 1 when the last mpick_load got a fresh /v1/health/providers table, else 0 (rows read UNKNOWN)
 
 # mpick_init: one-time allocation of the picker's buffers. Idempotent.
 fn mpick_init() {
     if (_mp_ids == 0) { _mp_ids = alloc(MPICK_MAX * 8); }
+    if (_mp_prov == 0) { _mp_prov = alloc(MPICK_MAX * 8); }
     if (_mp_store == 0) { _mp_store = alloc(MPICK_STORE); }
     if (_mp_filt == 0) { _mp_filt = alloc(MPICK_MAX * 8); }
     if (_mp_query == 0) { _mp_query = alloc(MPICK_QCAP); }
@@ -54,6 +57,7 @@ fn _mp_add(s) {
     var dst = _mp_store + _mp_store_off;
     safe_label_copy(dst, len + 1, s);             # len bytes + NUL; C0 and DEL become '?'
     store64(_mp_ids + _mp_n * 8, dst);
+    store64(_mp_prov + _mp_n * 8, 0 - 1);        # 0.47.0: no provider known until mpick_load_from names one
     _mp_store_off = _mp_store_off + len + 1;
     _mp_n = _mp_n + 1;
     return 1;
@@ -71,6 +75,17 @@ fn mpick_load() {
         else { _mp_err = MPICK_ERR_HTTP; }
         return _mp_err;
     }
+    # 0.47.0: the provider health table, fetched alongside the catalog (hoosh's prober's state, one GET — the
+    # picker opens with it). A failed fetch leaves every row UNKNOWN and the hint says so; never a stale table.
+    _mp_health_known = hoosh_providers_fetch();
+    return mpick_load_from(data);
+}
+
+# mpick_load_from (0.47.0): the parse half of mpick_load over an already-fetched catalog array — each entry's id
+# into the store and its owned_by resolved against the provider-health table (hoosh_provider_index; -1 when the
+# table does not list it). Split out so the suite loads a catalog + a health body without a gateway. Returns
+# MPICK_OK / MPICK_ERR_EMPTY like mpick_load.
+fn mpick_load_from(data) {
     var n = bayan_json_v_arr_len(data);
     var i = 0;
     while (i < n) {
@@ -78,7 +93,15 @@ fn mpick_load() {
         var id = bayan_json_v_obj_get(m, "id");
         if (id != 0) {
             var ids = bayan_json_v_str(id);
-            if (ids != 0) { _mp_add(str_cstr(ids)); }
+            if (ids != 0) {
+                if (_mp_add(str_cstr(ids)) == 1) {
+                    var ob = bayan_json_v_obj_get(m, "owned_by");
+                    if (ob != 0) {
+                        var obs = bayan_json_v_str(ob);
+                        if (obs != 0) { store64(_mp_prov + (_mp_n - 1) * 8, hoosh_provider_index(str_cstr(obs))); }
+                    }
+                }
+            }
         }
         i = i + 1;
     }
@@ -87,6 +110,25 @@ fn mpick_load() {
     mpick_refilter();
     return MPICK_OK;
 }
+
+# mpick_health_known: 1 when the rows' states come from a fresh health table (else every row reads UNKNOWN).
+fn mpick_health_known() { return _mp_health_known; }
+# mpick_state_at: the provider-health state (HOOSH_PROV_*) of the model at FILTERED index fi — UNKNOWN when the
+# row is out of range, the catalog gave it no owned_by, or the table does not list its provider. PURE.
+fn mpick_state_at(fi) {
+    if (fi < 0) { return HOOSH_PROV_UNKNOWN; }
+    if (fi >= _mp_fn) { return HOOSH_PROV_UNKNOWN; }
+    var pi = load64(_mp_prov + load64(_mp_filt + fi * 8) * 8);
+    return hoosh_provider_state_at(pi);
+}
+# mpick_provider_slot_at: the provider-table slot of the model at FILTERED index fi, or -1. PURE.
+fn mpick_provider_slot_at(fi) {
+    if (fi < 0) { return 0 - 1; }
+    if (fi >= _mp_fn) { return 0 - 1; }
+    return load64(_mp_prov + load64(_mp_filt + fi * 8) * 8);
+}
+# mpick_provider_at: the provider name of the model at FILTERED index fi, or 0 when unknown. PURE.
+fn mpick_provider_at(fi) { return hoosh_provider_name_at(mpick_provider_slot_at(fi)); }
 
 # _mp_lc: ASCII-lowercase a byte (A-Z -> a-z). PURE.
 fn _mp_lc(b) {

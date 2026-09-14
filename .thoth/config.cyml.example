@@ -327,8 +327,10 @@ model = "claude-haiku-4-5-20251001"
 # enabled = false
 
 # The [pricing.<model>] tables price token usage so /state and the TUI status bar
-# can show a running session cost ($d.cc). Opt-in and honest: with no [pricing] for
-# the active model, the cost field is OMITTED (never a faked $0) and /state says so.
+# can show a running session cost ($d.cc), and (0.47.0) the Ctrl-P picker and
+# `/models <provider>` show a priced model's rate beside its id ("$3.00/$15.00 per M").
+# Opt-in and honest: with no [pricing] for the active model, the cost field is OMITTED
+# (never a faked $0) and /state says so; an unpriced row shows no rate.
 # hoosh reports the token counts (usage); thoth only multiplies them by the rate you
 # declare here. Cost is priced AT ACCUMULATE — each turn uses the model active at that
 # moment — so a mid-session /model switch is costed correctly.

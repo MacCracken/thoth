@@ -1828,6 +1828,315 @@ fn _mid_toml_model(dst, cap, a, bs, b) {
 #   the catalog   — the gateway's ids, stored by the picker / printed by /models              -> _mp_add, _hoosh_model_row
 #   /model <id>   — the operator's own line, sharing the picker's switch                       -> session_set_model_copy
 # Needles are ESC + "[7m...", never _t_has_esc over a feed line: feed lines legitimately carry ESC-prefixed MARKERS.
+# _mid_feed_plain_count: like _mid_feed_count over the feed's VISIBLE text — role/reset markers (2-byte ESC
+# sequences) stripped first, so a needle can span two differently-coloured segments ("anthropic  healthy").
+fn _mid_feed_plain_count(needle) {
+    var t = 0;
+    var r = 0;
+    var pl = alloc(FEED_LINE_CAP + 1);
+    while (r < feed_count()) {
+        var w = _t_strip_sgr(pl, feed_line_ptr(r), feed_line_len(r));
+        t = t + _t_count_sub(pl, w, needle, strlen(needle));
+        r = r + 1;
+    }
+    return t;
+}
+# _mid_feed_plain_is: 1 when feed line `r`'s visible text is exactly `text`.
+fn _mid_feed_plain_is(r, text) {
+    var pl = alloc(FEED_LINE_CAP + 1);
+    _t_strip_sgr(pl, feed_line_ptr(r), feed_line_len(r));
+    return streq(pl, text);
+}
+
+# _t_health_body: build a /v1/health/providers body into dst — the envelope hoosh emits ({"providers":[...],
+# "check_interval_secs":N}) around the routes given as one pre-joined JSON fragment. Returns the byte length.
+fn _t_health_body(dst, cap, routes) {
+    var o = _append_cstr_cap(dst, 0, cap, "{\"providers\":[");
+    o = _append_cstr_cap(dst, o, cap, routes);
+    o = _append_cstr_cap(dst, o, cap, "],\"check_interval_secs\":30}");
+    return o;
+}
+
+# test_provider_health (0.47.0, F2): the provider-health table thoth folds out of hoosh's GET /v1/health/providers
+# (one entry per ROUTE; hoosh routes a model through whichever enabled route's patterns match it, which the catalog
+# cannot tell thoth, so a kind's verdict is the one claim that holds for every route of it: healthy when all are,
+# unhealthy when all are, degraded when they disagree, unknown when none was ever measured), the `[pricing.<model>]`
+# label, and the /models listings that show them. The parse is PURE over a body — no gateway; the fetch runs
+# through its canned-body seam for the failure kinds.
+fn test_provider_health() {
+    test_group("provider health table + price label (hoosh.cyr, 0.47.0)");
+    var body = alloc(4096);
+
+    # --- never fetched: nothing is known, every lookup is UNKNOWN, never healthy ---
+    hoosh_providers_reset();
+    assert_eq(hoosh_providers_known(), 0, "before any fetch the table is not known");
+    assert_eq(hoosh_provider_count(), 0, "...and empty");
+    assert_eq(hoosh_provider_state("anthropic"), HOOSH_PROV_UNKNOWN, "...so a provider reads UNKNOWN");
+    assert_eq(hoosh_provider_index("anthropic"), 0 - 1, "...and has no slot");
+    assert_eq(hoosh_provider_state_at(0), HOOSH_PROV_UNKNOWN, "an out-of-range slot reads UNKNOWN");
+    assert_eq(hoosh_provider_name_at(0), 0, "...and has no name");
+    assert_eq(hoosh_provider_state(0), HOOSH_PROV_UNKNOWN, "a null name reads UNKNOWN");
+    assert_eq(hoosh_provider_index(0), 0 - 1, "...and has no slot");
+    assert_eq(hoosh_provider_routes_at(0), 0, "no routes counted out of range");
+
+    # --- the real shape: routes fold per provider; the status word decides, the booleans stand in for it ---
+    var o = _append_cstr_cap(body, 0, 4096, "{\"providers\":[");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"anthropic\",\"base_url\":\"https://api.anthropic.com\",\"status\":\"healthy\",\"enabled\":true,\"healthy\":true,\"consecutive_failures\":0,\"last_check_ms\":1757700000000},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"ollama\",\"base_url\":\"http://a:11434\",\"status\":\"unhealthy\",\"enabled\":true,\"healthy\":false,\"consecutive_failures\":3,\"last_check_ms\":1757700000000},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"ollama\",\"base_url\":\"http://b:11434\",\"status\":\"healthy\",\"enabled\":true,\"healthy\":true,\"consecutive_failures\":0,\"last_check_ms\":1757700000000},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"openai\",\"base_url\":\"https://api.openai.com\",\"status\":\"disabled\",\"enabled\":false,\"healthy\":true,\"consecutive_failures\":0,\"last_check_ms\":0},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"groq\",\"enabled\":true,\"healthy\":false},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"mistral\",\"enabled\":false,\"healthy\":true},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"deepseek\",\"base_url\":\"x\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"google\",\"base_url\":\"https://g\",\"status\":\"healthy\",\"enabled\":true,\"healthy\":true,\"consecutive_failures\":0,\"last_check_ms\":0},");
+    o = _append_cstr_cap(body, o, 4096, "{\"base_url\":\"nameless\",\"status\":\"healthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"\",\"status\":\"healthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":42,\"status\":\"healthy\"}");
+    var n = _append_cstr_cap(body, o, 4096, "],\"check_interval_secs\":30}");
+    assert_eq(hoosh_providers_parse(body, n), 7, "seven named providers out of eleven routes (two ollama routes fold; nameless, empty and non-string names skipped)");
+    assert_eq(hoosh_providers_known(), 1, "a parsed body marks the table known");
+    assert_eq(hoosh_provider_count(), 7, "the count is the fold's");
+    assert_eq(hoosh_providers_interval(), 30, "the envelope's check_interval_secs is kept");
+    assert_eq(hoosh_providers_dropped(), 0, "nothing dropped");
+    assert_eq(hoosh_provider_state("anthropic"), HOOSH_PROV_HEALTHY, "status \"healthy\" + a probe time -> HEALTHY");
+    assert_eq(hoosh_provider_state("ollama"), HOOSH_PROV_DEGRADED, "two ollama routes, one down: DEGRADED (hoosh routes by each route's patterns — a model may sit behind the down one)");
+    assert_eq(hoosh_provider_healthy_at(hoosh_provider_index("ollama")), 1, "...one of");
+    assert_eq(hoosh_provider_routes_at(hoosh_provider_index("ollama")), 2, "...two enabled routes");
+    assert_eq(hoosh_provider_state("openai"), HOOSH_PROV_DISABLED, "status \"disabled\" wins over healthy:true (a disabled route's record is stale by design)");
+    assert_eq(hoosh_provider_routes_at(hoosh_provider_index("openai")), 0, "...and a disabled route is not an enabled one");
+    assert_eq(hoosh_provider_state("groq"), HOOSH_PROV_UNHEALTHY, "no status word: enabled + healthy:false -> UNHEALTHY");
+    assert_eq(hoosh_provider_state("mistral"), HOOSH_PROV_DISABLED, "no status word: enabled:false -> DISABLED");
+    assert_eq(hoosh_provider_state("deepseek"), HOOSH_PROV_UNKNOWN, "a route with neither word nor booleans is UNKNOWN, never healthy");
+    assert_eq(hoosh_provider_state("google"), HOOSH_PROV_UNKNOWN, "\"healthy\" with last_check_ms 0 is hoosh's startup default, never measured -> UNKNOWN (ADR-0010)");
+    assert_eq(hoosh_provider_state("xai"), HOOSH_PROV_UNKNOWN, "a provider the endpoint did not list is UNKNOWN");
+    assert_eq(hoosh_provider_state("Anthropic"), HOOSH_PROV_HEALTHY, "the lookup folds ASCII case (a typed /models Anthropic)");
+    assert_eq(hoosh_provider_index("ollama"), 1, "slots follow first appearance");
+    assert(streq(hoosh_provider_name_at(1), "ollama") == 1, "...and name the provider");
+    assert(streq(hoosh_provider_state_word(HOOSH_PROV_HEALTHY), "healthy") == 1, "state word: healthy");
+    assert(streq(hoosh_provider_state_word(HOOSH_PROV_UNHEALTHY), "unhealthy") == 1, "state word: unhealthy (hoosh still routes through it when nothing better exists — not \"unreachable\")");
+    assert(streq(hoosh_provider_state_word(HOOSH_PROV_DISABLED), "disabled") == 1, "state word: disabled");
+    assert(streq(hoosh_provider_state_word(HOOSH_PROV_DEGRADED), "degraded") == 1, "state word: degraded");
+    assert(streq(hoosh_provider_state_word(HOOSH_PROV_UNKNOWN), "unknown") == 1, "state word: unknown");
+    assert_eq(hoosh_provider_state_role(HOOSH_PROV_HEALTHY), ROLE_GREEN, "healthy draws green");
+    assert_eq(hoosh_provider_state_role(HOOSH_PROV_UNHEALTHY), ROLE_RED, "unhealthy draws red");
+    assert_eq(hoosh_provider_state_role(HOOSH_PROV_DEGRADED), ROLE_ACCENT, "degraded draws amber");
+    assert_eq(hoosh_provider_state_role(HOOSH_PROV_DISABLED), ROLE_FAINT, "disabled draws faint");
+    assert_eq(hoosh_provider_state_role(HOOSH_PROV_UNKNOWN), ROLE_FAINT, "...and so does unknown");
+    var db[40];
+    assert_eq(hoosh_provider_detail(hoosh_provider_index("ollama"), &db, 40), 21, "a degraded slot has a detail (21 bytes)");
+    assert(streq(&db, " (1/2 routes healthy)") == 1, "...\" (1/2 routes healthy)\"");
+    assert_eq(hoosh_provider_detail(hoosh_provider_index("anthropic"), &db, 40), 0, "a healthy slot has none");
+    assert_eq(hoosh_provider_detail(hoosh_provider_index("ollama"), &db, 16), 0, "...nor does a destination under 32 bytes get a partial one");
+
+    # --- the fold is order-independent and one-directional: never HEALTHY unless every enabled route measured so ---
+    o = _append_cstr_cap(body, 0, 4096, "{\"providers\":[");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"p\",\"status\":\"healthy\"},{\"provider\":\"p\",\"status\":\"unhealthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"p2\",\"status\":\"unhealthy\"},{\"provider\":\"p2\",\"status\":\"healthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"q\",\"status\":\"disabled\"},{\"provider\":\"q\",\"status\":\"unhealthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"r\",\"status\":\"unhealthy\"},{\"provider\":\"r\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"s\"},{\"provider\":\"s\",\"status\":\"disabled\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"t\",\"status\":\"healthy\"},{\"provider\":\"t\",\"status\":\"healthy\"},{\"provider\":\"t\",\"status\":\"disabled\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"u\",\"status\":\"healthy\"},{\"provider\":\"u\",\"status\":\"healthy\",\"last_check_ms\":0}");
+    n = _append_cstr_cap(body, o, 4096, "]}");
+    assert_eq(hoosh_providers_parse(body, n), 7, "a new parse replaces the table (seven providers now)");
+    assert_eq(hoosh_providers_interval(), 0 - 1, "no check_interval_secs in this envelope -> -1");
+    assert_eq(hoosh_provider_state("p"), HOOSH_PROV_DEGRADED, "healthy then unhealthy -> DEGRADED");
+    assert_eq(hoosh_provider_state("p2"), HOOSH_PROV_DEGRADED, "unhealthy then healthy -> DEGRADED (order-independent)");
+    assert_eq(hoosh_provider_state("q"), HOOSH_PROV_UNHEALTHY, "disabled + unhealthy -> UNHEALTHY (a disabled route does not count against the enabled one)");
+    assert_eq(hoosh_provider_state("r"), HOOSH_PROV_DEGRADED, "unhealthy + unmeasured -> DEGRADED (the unmeasured route is no vote for healthy)");
+    assert_eq(hoosh_provider_state("s"), HOOSH_PROV_UNKNOWN, "unmeasured + disabled -> UNKNOWN (an enabled route exists, nothing is known of it)");
+    assert_eq(hoosh_provider_state("t"), HOOSH_PROV_HEALTHY, "healthy + healthy + disabled -> HEALTHY (every ENABLED route is)");
+    assert_eq(hoosh_provider_routes_at(hoosh_provider_index("t")), 2, "...two enabled routes counted");
+    assert_eq(hoosh_provider_state("u"), HOOSH_PROV_DEGRADED, "healthy + never-probed healthy -> DEGRADED, not HEALTHY (an unmeasured route is not a measured one)");
+    assert_eq(hoosh_provider_state("anthropic"), HOOSH_PROV_UNKNOWN, "the previous table's providers are gone");
+
+    # --- names are LABEL-sanitised and clipped at the store, and the join key goes through the same policy ---
+    o = _append_cstr_cap(body, 0, 4096, "{\"providers\":[{\"provider\":\"esc");
+    o = _stx_cat_bs(body, o, 4096, "", "u001b[7mX\",\"status\":\"healthy\"},{\"provider\":\"esc");
+    o = _stx_cat_bs(body, o, 4096, "", "u001b[7mX\",\"status\":\"unhealthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"a-provider-name-longer-than-thirty-one-bytes-A\",\"status\":\"unhealthy\"},");
+    o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"a-provider-name-longer-than-thirty-one-bytes-B\",\"status\":\"healthy\"}]}");
+    assert_eq(hoosh_providers_parse(body, o), 2, "a hostile name and an over-long name each take ONE slot across two routes");
+    assert(streq(hoosh_provider_name_at(0), "esc?[7mX") == 1, "the gateway's provider name is stored with '?' for the escape (it reaches the screen)");
+    assert_eq(hoosh_provider_state("esc?[7mX"), HOOSH_PROV_DEGRADED, "...and its two routes folded (one up, one down: degraded)");
+    assert_eq(hoosh_provider_state("esc\x1b[7mX"), HOOSH_PROV_DEGRADED, "...the RAW name (a catalog's owned_by) finds the same slot: the key is cleaned like the store");
+    assert_eq(strlen(hoosh_provider_name_at(1)), HOOSH_PROV_NAME_CAP - 1, "an over-long name is clipped at cap - 1 bytes");
+    assert_eq(hoosh_provider_state_at(1), HOOSH_PROV_DEGRADED, "...and two names that clip alike fold to one slot");
+    assert_eq(hoosh_provider_state("a-provider-name-longer-than-thirty-one-bytes-B"), HOOSH_PROV_DEGRADED, "...which the over-long key also finds");
+
+    # --- the table is bounded: HOOSH_PROV_MAX providers, the rest counted as dropped, not overflowed; and it holds
+    #     every kind hoosh 2.6.10 can name (17 + \"unknown\") ---
+    o = _append_cstr_cap(body, 0, 4096, "{\"providers\":[");
+    var k = 0;
+    while (k < (HOOSH_PROV_MAX + 2)) {
+        if (k > 0) { o = _append_cstr_cap(body, o, 4096, ","); }
+        o = _append_cstr_cap(body, o, 4096, "{\"provider\":\"prov");
+        o = _append_int(body, o, k);
+        o = _append_cstr_cap(body, o, 4096, "\",\"status\":\"healthy\"}");
+        k = k + 1;
+    }
+    o = _append_cstr_cap(body, o, 4096, "]}");
+    assert(HOOSH_PROV_MAX >= 18, "the table holds hoosh's 17 kinds + \"unknown\"");
+    assert_eq(hoosh_providers_parse(body, o), HOOSH_PROV_MAX, "HOOSH_PROV_MAX + 2 providers store HOOSH_PROV_MAX");
+    assert_eq(hoosh_providers_dropped(), 2, "...and count the two dropped");
+    assert_eq(hoosh_provider_state("prov0"), HOOSH_PROV_HEALTHY, "the first is kept");
+    assert_eq(hoosh_provider_state("prov17"), HOOSH_PROV_HEALTHY, "...so is the eighteenth");
+    var lastb[16];
+    var lo = _append_cstr(&lastb, 0, "prov"); lo = _append_int(&lastb, lo, HOOSH_PROV_MAX + 1); store8(&lastb + lo, 0);
+    assert_eq(hoosh_provider_state(&lastb), HOOSH_PROV_UNKNOWN, "the overflow is UNKNOWN, not a smashed slot");
+
+    # --- not that shape: the table empties and is NOT known (a picker paints every row unknown and says so) ---
+    n = _append_cstr_cap(body, 0, 4096, "{\"status\":\"ok\"}");
+    assert_eq(hoosh_providers_parse(body, n), 0 - 1, "a body without `providers` is refused");
+    assert_eq(hoosh_providers_known(), 0, "...and leaves the table unknown");
+    assert_eq(hoosh_provider_count(), 0, "...and empty");
+    assert_eq(hoosh_provider_state("prov0"), HOOSH_PROV_UNKNOWN, "...so yesterday's healthy provider does not linger");
+    n = _append_cstr_cap(body, 0, 4096, "{\"providers\":{\"anthropic\":\"healthy\"}}");
+    assert_eq(hoosh_providers_parse(body, n), 0 - 1, "a `providers` that is not an array is refused");
+    n = _append_cstr_cap(body, 0, 4096, "{\"providers\":[{\"provider\":\"x\",\"base_url\":\"http://a\"b\",\"status\":\"healthy\"}]}");
+    assert_eq(hoosh_providers_parse(body, n), 0 - 1, "an unparseable body (hoosh 2.6.10 emits base_url unescaped) is refused, not half-read");
+    assert_eq(hoosh_providers_known(), 0, "...and the table stays unknown");
+    n = _append_cstr_cap(body, 0, 4096, "{\"providers\":[],\"check_interval_secs\":0}");
+    assert_eq(hoosh_providers_parse(body, n), 0, "an empty providers list parses to zero — known, and every provider UNKNOWN");
+    assert_eq(hoosh_providers_known(), 1, "...the gateway answered, so the table IS known");
+    assert_eq(hoosh_providers_interval(), 0, "...and says hoosh is not probing");
+
+    # --- the fetch through its canned seam: the failure kinds, and what each leaves behind ---
+    n = _t_health_body(body, 4096, "{\"provider\":\"anthropic\",\"status\":\"healthy\",\"last_check_ms\":5}");
+    _hp_canned = body; _hp_canned_len = n; _hp_canned_fail = 0;
+    assert_eq(hoosh_providers_fetch(), 1, "a canned body fetches");
+    assert_eq(hoosh_providers_last_err(), HOOSH_HP_OK, "...no error");
+    assert_eq(hoosh_provider_state("anthropic"), HOOSH_PROV_HEALTHY, "...and fills the table");
+    _hp_canned_fail = 1;
+    assert_eq(hoosh_providers_fetch(), 0, "a transport failure reports 0");
+    assert_eq(hoosh_providers_last_err(), HOOSH_HP_TRANSPORT, "...as TRANSPORT");
+    assert_eq(hoosh_providers_known(), 0, "...the table is not known");
+    assert_eq(hoosh_provider_count(), 0, "...and EMPTY — the previous fetch's table does not linger");
+    assert_eq(hoosh_provider_state("anthropic"), HOOSH_PROV_UNKNOWN, "...so the provider it named reads UNKNOWN");
+    _hp_canned_fail = 0;
+    n = _append_cstr_cap(body, 0, 4096, "{\"nope\":1}");
+    _hp_canned_len = n;
+    assert_eq(hoosh_providers_fetch(), 0, "a body of another shape reports 0");
+    assert_eq(hoosh_providers_last_err(), HOOSH_HP_PARSE, "...as PARSE");
+    assert_eq(hoosh_providers_known(), 0, "...not known");
+    _hp_canned = 0; _hp_canned_len = 0;
+    hoosh_providers_reset();
+    assert_eq(hoosh_provider_count(), 0, "a reset empties the table");
+    assert_eq(hoosh_providers_known(), 0, "...and forgets it was known");
+
+    # --- the price label: the operator's [pricing.<model>] rate per MILLION tokens, both sides or nothing ---
+    var toml = "[pricing.claude-x]\ninput = 3000\noutput = 15000\n[pricing.half]\ninput = 250\n[pricing.outonly]\noutput = 100\n[pricing.free]\ninput = 0\noutput = 0\n[pricing.big]\ninput = 123456789\noutput = 987654321\n[pricing.huge]\ninput = 9223372036854776\noutput = 1\n[pricing.wrap]\ninput = 18446744073709551617\noutput = 3000\n[pricing.edge]\ninput = 9223372036854775807\noutput = 9223372036854775808\n";
+    var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
+    _price_load(sections);
+    var pb[64];
+    assert(hoosh_price_label("claude-x", &pb, 64) > 0, "a fully-declared model has a label");
+    assert(streq(&pb, "$3.00/$15.00 per M") == 1, "3000/15000 micro-USD per 1K -> $3.00/$15.00 per M");
+    assert_eq(hoosh_price_label("half", &pb, 64), 0, "an input-only section is unpriced (the cost accumulator's rule) — no label");
+    assert_eq(hoosh_price_label("outonly", &pb, 64), 0, "...and so is an output-only one");
+    assert(hoosh_price_label("free", &pb, 64) > 0, "an explicit `= 0` both sides is declared free — it has a label");
+    assert(streq(&pb, "$0.00/$0.00 per M") == 1, "...reading $0.00/$0.00 per M");
+    assert_eq(hoosh_price_label("unknown", &pb, 64), 0, "an undeclared model has no label");
+    assert_eq(hoosh_price_label("claude-x", &pb, 32), 0, "a destination under 48 bytes is refused (never a partial label)");
+    var bl = hoosh_price_label("big", &pb, 64);
+    assert(bl > 0, "a large rate still labels");
+    assert(streq(&pb, "$123456.78/$987654.32 per M") == 1, "...within the cap ($123456.78/$987654.32 per M)");
+    assert_eq(bl, 27, "the return is the byte length");
+    assert_eq(hoosh_price_label("huge", &pb, 64), 0, "a rate whose per-M product would wrap is unpriced, not a wrapped number dressed as a price");
+    assert_eq(config_price_input("wrap"), 0 - 1, "a 20-digit rate no longer wraps inside the config parser — it reads absent");
+    assert_eq(hoosh_price_label("wrap", &pb, 64), 0, "...so the row is unpriced, never \"$0.00/$3.00\"");
+    assert_eq(config_price_input("edge"), 9223372036854775807, "the largest i64 still parses");
+    assert_eq(config_price_output("edge"), 0 - 1, "...one past it reads absent");
+    _price_n = 0;
+
+    # --- /models rows: the provider kind + its health word when the table is fresh; nothing when it is not ---
+    n = _t_health_body(body, 4096, "{\"provider\":\"anthropic\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"ollama\",\"status\":\"unhealthy\"},{\"provider\":\"ollama\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"groq\",\"status\":\"unhealthy\"}");
+    hoosh_providers_parse(body, n);
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_row(str_new("anthropic", 9), "groq", 1);
+    _hoosh_provider_row(str_new("ollama", 6), "groq", 1);
+    _hoosh_provider_row(str_new("groq", 4), "groq", 1);
+    _hoosh_provider_row(str_new("xai", 3), "groq", 1);
+    _hoosh_provider_row(str_new("anthropic", 9), "groq", 0);
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 5, "five provider rows, one feed line each");
+    assert_eq(_mid_feed_plain_is(0, "  anthropic  healthy"), 1, "a healthy provider row: the kind, then its word");
+    assert_eq(_mid_feed_plain_is(1, "  ollama  degraded (1/2 routes healthy)"), 1, "a degraded one: the word, then how many of its routes are up");
+    assert_eq(_mid_feed_plain_is(2, "* groq  unhealthy"), 1, "the current routing target is the starred row, with its word");
+    assert_eq(_mid_feed_plain_is(3, "  xai  unknown"), 1, "a kind the table does not list reads unknown");
+    assert_eq(_mid_feed_plain_is(4, "  anthropic"), 1, "when the health GET failed (known == 0) the row is the kind alone — no word, not \"unknown\"");
+    feed_init();
+
+    # --- the whole bare listing over a canned /v1/models array: the note names WHY the words are missing ---
+    var ml = "{\"object\":\"list\",\"data\":[{\"id\":\"anthropic\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"ollama\",\"object\":\"model\",\"owned_by\":\"ollama\"},{\"id\":123}]}";
+    var mdata = hoosh_extract_models(ml, strlen(ml));
+    assert(mdata != 0, "premise: the models body parses");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_list_models_show(mdata, 1);
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("models hoosh offers (3):"), 1, "the header counts the entries");
+    assert_eq(_mid_feed_plain_count("  anthropic  healthy"), 1, "a row with its word");
+    assert_eq(_mid_feed_plain_count("  ollama  degraded (1/2 routes healthy)"), 1, "...the degraded row with its detail");
+    assert_eq(_mid_feed_plain_count("provider health unavailable"), 0, "a fresh table: no note");
+    assert_eq(_mid_feed_plain_count("not probing"), 0, "...and hoosh probes at 30 s: no probing note");
+    _hp_err = HOOSH_HP_TRANSPORT;
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_list_models_show(mdata, 0);
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("  anthropic\n"), 0, "premise-free check: rows are single lines");
+    assert_eq(_mid_feed_plain_is(1, "  anthropic"), 1, "hk == 0: the rows carry no word");
+    assert_eq(_mid_feed_plain_count("(provider health unavailable — GET /v1/health/providers unreachable)"), 1, "...and the note says the GET was unreachable");
+    _hp_err = HOOSH_HP_HTTP; _hp_http = 404;
+    feed_init(); out_mode_set(OUT_RING); _hoosh_list_models_show(mdata, 0); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("GET /v1/health/providers answered HTTP 404)"), 1, "an HTTP failure names the status");
+    _hp_err = HOOSH_HP_PARSE;
+    feed_init(); out_mode_set(OUT_RING); _hoosh_list_models_show(mdata, 0); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("sent a body thoth could not read — a route base_url with a quote?)"), 1, "an unparseable body names the likely cause");
+    _hp_err = HOOSH_HP_OK;
+    n = _append_cstr_cap(body, 0, 4096, "{\"providers\":[{\"provider\":\"anthropic\",\"status\":\"healthy\",\"last_check_ms\":0}],\"check_interval_secs\":0}");
+    hoosh_providers_parse(body, n);
+    feed_init(); out_mode_set(OUT_RING); _hoosh_list_models_show(mdata, 1); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("  anthropic  unknown"), 1, "hoosh not probing: the never-measured route reads unknown");
+    assert_eq(_mid_feed_plain_count("(hoosh is not probing its routes — health_check_interval_secs = 0 — so every state reads unknown)"), 1, "...and the note says why");
+    _hp_dropped = 3;
+    feed_init(); out_mode_set(OUT_RING); _hoosh_list_models_show(mdata, 1); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("(3 provider(s) past thoth's table read unknown)"), 1, "names past the table are announced");
+    _hp_dropped = 0;
+    feed_init();
+
+    # --- /models <provider>: the header names the provider's health in the state's colour, the rows their price ---
+    n = _t_health_body(body, 4096, "{\"provider\":\"anthropic\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"ollama\",\"status\":\"unhealthy\"}");
+    hoosh_providers_parse(body, n);
+    _price_load(sections);
+    var cat = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-x\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"claude-y\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"llama3\",\"object\":\"model\",\"owned_by\":\"ollama\"}]}";
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_models_show("Anthropic", cat, strlen(cat));
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("models for provider 'Anthropic' (healthy):"), 1, "the header carries the provider's state (looked up ignoring case)");
+    assert_eq(_mid_feed_plain_count("claude-x  $3.00/$15.00 per M"), 1, "a priced model's row shows its rate");
+    assert_eq(_mid_feed_plain_count("claude-y"), 1, "an unpriced model's row shows the id...");
+    assert_eq(_mid_feed_plain_count("claude-y "), 0, "...and nothing after it (ADR-0010: no rate, no label)");
+    assert_eq(_mid_feed_plain_count("llama3"), 0, "another provider's model is not listed");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_models_show("ollama", cat, strlen(cat));
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("models for provider 'ollama' (unhealthy):"), 1, "the second slot's header carries ITS state, not the first's");
+    assert_eq(_mid_feed_plain_count("llama3"), 1, "...with its model");
+    n = _t_health_body(body, 4096, "{\"provider\":\"ollama\",\"status\":\"unhealthy\"},{\"provider\":\"ollama\",\"status\":\"healthy\",\"last_check_ms\":5}");
+    hoosh_providers_parse(body, n);
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_models_show("ollama", cat, strlen(cat));
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("models for provider 'ollama' (degraded, 1/2 routes healthy):"), 1, "a degraded header keeps one pair of parentheses: the detail follows a comma");
+    hoosh_providers_reset();
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_provider_models_show("anthropic", cat, strlen(cat));
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("models for provider 'anthropic':"), 1, "with no fresh table the header has no state (omitted, not \"unknown\")");
+    _price_n = 0;
+    feed_init();
+    return 0;
+}
+
 fn test_model_id_sanitise() {
     test_group("model id sanitised where it enters (session/config/mpick/hoosh/commands, 0.45.0)");
 

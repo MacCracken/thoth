@@ -1346,19 +1346,38 @@ fn _tui_pick_emit_clip(id, max) {
     return n;
 }
 
-# _tui_pick_paint_row: paint one model row — a 2-col gutter ("> " selected, else "  "), the id (clipped to
-# the band width), and a green " *" when it is the active routing target. Selected row in accent, else FG.
-fn _tui_pick_paint_row(id, sel, active, fwidth) {
+# _tui_pick_paint_row: paint one model row — a 2-col gutter ("> " selected, else "  "), the provider-health dot
+# (0.47.0: ● green healthy · ● red unhealthy · ○ faint disabled / unknown — the status bar's own idiom), the id
+# (clipped to the band width), a green " *" when it is the active routing target, and the operator's
+# `[pricing.<model>]` rate as "  $in/$out per M" when one is declared (omitted otherwise, ADR-0010). Selected row in
+# accent, else FG. The price yields first when the band is narrow; the id is never cut for it.
+fn _tui_pick_paint_row(id, sel, active, state, fwidth) {
     var is_active = 0;
     if ((active != 0) && (streq(id, active) == 1)) { is_active = 1; }
     if (sel == 1) { emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw("> "); }
     else { emit_raw(ui_sgr(ROLE_FG)); emit_raw("  "); }
-    var budget = fwidth - 2;
-    if (is_active == 1) { budget = budget - 2; }
+    _tui_pick_dot(state);
+    if (sel == 1) { emit_raw(ui_sgr(ROLE_ACCENT)); } else { emit_raw(ui_sgr(ROLE_FG)); }
+    var cols = 4;                                             # the gutter + the dot and its space
+    var budget = fwidth - cols;
+    if (is_active == 1) { budget = budget - 2; }              # room reserved for " *"
     if (budget < 0) { budget = 0; }
-    _tui_pick_emit_clip(id, budget);
-    if (is_active == 1) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw(" *"); }
+    cols = cols + _tui_pick_emit_clip(id, budget);
+    if (is_active == 1) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw(" *"); cols = cols + 2; }
+    var pb[64];
+    var pl = hoosh_price_label(id, &pb, 64);
+    if (pl > 0) { if ((cols + 2 + pl) <= fwidth) { emit_raw(ui_sgr(ROLE_FAINT)); emit_raw("  "); emit_raw(&pb); } }
     emit_raw(ui_reset());
+    return 0;
+}
+
+# _tui_pick_dot: the provider-health glyph for a picker row (0.47.0) — the same ● / ○ the status bar's hoosh dot
+# uses: green healthy, red unhealthy, amber degraded (the kind's routes disagree), hollow for disabled / unknown.
+fn _tui_pick_dot(state) {
+    if (state == HOOSH_PROV_HEALTHY) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw("● "); }
+    elif (state == HOOSH_PROV_UNHEALTHY) { emit_raw(ui_sgr(ROLE_RED)); emit_raw("● "); }
+    elif (state == HOOSH_PROV_DEGRADED) { emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw("● "); }
+    else { emit_raw(ui_sgr(ROLE_FAINT)); emit_raw("○ "); }
     return 0;
 }
 
@@ -1389,7 +1408,7 @@ fn _tui_pick_paint() {
         if (fi < cnt) {
             var sel = 0;
             if (fi == cur) { sel = 1; }
-            _tui_pick_paint_row(mpick_id_at(fi), sel, active, fwidth);
+            _tui_pick_paint_row(mpick_id_at(fi), sel, active, mpick_state_at(fi), fwidth);
         }
         r = r + 1;
     }
@@ -1409,8 +1428,45 @@ fn _tui_draw_pick_hint() {
         else { ui_emit(ROLE_RED, "no matches"); }
     } else {
         emit(ui_sgr(ROLE_GREEN)); fmt_int(mpick_cur() + 1); emit("/"); fmt_int(mpick_count()); emit(ui_reset());
+        # 0.47.0: the selected model's provider and its health, in the state's colour — or the honest reason there is
+        # none (the health GET failed: every dot is ○ then, and this says why). The segment is budgeted against the
+        # row: the key legend after it must never be the part that yields ("⌃C close" is the documented way out),
+        # so it shrinks — provider + state + detail, then provider + state, then the state alone, then nothing (the
+        # row's dot still carries the state).
+        var _room = _tui_cols - (11 + mpick_qlen() + 2 + _tui_digits(mpick_cur() + 1) + 1 + _tui_digits(mpick_count()) + 2 + TUI_PICK_LEGEND_COLS);
+        _tui_pick_hint_health(_room);
     }
     ui_emit(ROLE_FAINT, "  ↑↓ move · Enter switch · ⌃C close");
+    return 0;
+}
+var TUI_PICK_LEGEND_COLS = 33;   # "↑↓ move · Enter switch · ⌃C close" — columns, not bytes
+# _tui_digits: decimal width of a non-negative int. PURE.
+fn _tui_digits(n) {
+    var d = 1;
+    while (n >= 10) { n = n / 10; d = d + 1; }
+    return d;
+}
+# _tui_pick_hint_health: the hint's health segment (0.47.0), shrunk to `room` columns — see _tui_draw_pick_hint.
+fn _tui_pick_hint_health(room) {
+    if (mpick_health_known() == 0) {
+        if (room >= 16) { ui_emit(ROLE_FAINT, "  health unknown"); }
+        return 0;
+    }
+    var _fi = mpick_cur();
+    var _pn = mpick_provider_at(_fi);
+    var _ps = mpick_state_at(_fi);
+    var _pw = hoosh_provider_state_word(_ps);
+    var _db[40];
+    var _dl = hoosh_provider_detail(mpick_provider_slot_at(_fi), &_db, 40);
+    var _pl = 0;
+    if (_pn != 0) { _pl = strlen(_pn) + 1; }
+    if ((2 + _pl + strlen(_pw) + _dl) > room) { _dl = 0; }               # the detail yields first
+    if ((2 + _pl + strlen(_pw)) > room) { _pl = 0; }                     # then the provider name
+    if ((2 + strlen(_pw)) > room) { return 0; }                          # then the whole segment
+    ui_emit(ROLE_FAINT, "  ");
+    if (_pl > 0) { ui_emit(ROLE_MUTED, _pn); ui_emit(ROLE_FAINT, " "); }
+    ui_emit(hoosh_provider_state_role(_ps), _pw);
+    if (_dl > 0) { ui_emit(ROLE_FAINT, &_db); }
     return 0;
 }
 

@@ -2,6 +2,80 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.47.0] - 2026-09-13
+
+**The model picker shows each provider's health and each model's rate.** The second feature arc under the batch
+discipline (F2). Ctrl-P listed ids and nothing else; whether the provider behind one was up, and what a turn on it
+would cost, were a `/models` and a config read away. Now every picker row, every `/models` row and the
+`/models <provider>` header carry the health hoosh's prober reports, and a priced model shows its rate beside its
+id. Suite **382 + 1620 + 873 + 740 + 190 + 5** (+205). Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
+### Added — provider health on the picker and the listings (F2)
+
+hoosh serves `GET /v1/health/providers` — one entry per ROUTE, `{provider, base_url, status, enabled, healthy,
+consecutive_failures, last_check_ms}` inside `{"providers":[…], "check_interval_secs":N}` — and the catalog's
+`owned_by` is the same string as the entry's `provider`: hoosh's provider KIND. `hoosh_providers_fetch` (hoosh.cyr)
+GETs it with the bearer under the probe deadlines and `hoosh_providers_parse` folds the routes into a 32-slot table
+per kind. What thoth cannot see is WHICH route serves a model — hoosh's `router_select` picks among the enabled
+routes whose `models` patterns match the id (healthy ones first, the unhealthy ones when none is), and the catalog
+names only the kind — so a kind's verdict is the one claim that holds for every route of it:
+
+- **healthy** — every enabled route measured healthy; **unhealthy** — every one measured unhealthy (hoosh still
+  tries them, so the word is not "unreachable"); **degraded** — the enabled routes disagree, with `(h/n routes
+  healthy)` after the word (a model may sit behind the down one); **disabled** — no enabled route; **unknown** —
+  no enabled route has a MEASURED state. A route reading `healthy` with `last_check_ms: 0` is hoosh's startup
+  default, never measured (`health_check_interval_secs = 0` leaves every route that way for good) — it counts as
+  unmeasured, never as healthy (ADR-0010). The status word decides; the `enabled`/`healthy` booleans stand in when
+  it is absent.
+- The **picker** (`_tui_pick_paint_row`): a dot after the gutter — ● green healthy, ● red unhealthy, ● amber
+  degraded, ○ faint disabled or unknown — and the hint names the selected row's `<provider> <state>` (with the
+  degraded detail), budgeted against the row so the key legend's `⌃C close` never yields: the detail goes first,
+  then the provider name, then the state. When the health GET failed every dot is hollow and the hint says
+  `health unknown`. `mpick_load` fetches the catalog first and the health table only after it (a dead gateway
+  pays one timeout, not two); `mpick_load_from` is the parse half, `mpick_state_at` / `mpick_provider_at` read the
+  FILTERED view.
+- **`/models`** rows: the kind, then its word in the state's colour; **`/models <provider>`** heads
+  `'<provider>' (<state>):` (looked up ignoring case, as the filter does). Both end with one note when there is
+  something to say — why the words are missing (`unreachable` / `answered HTTP n` / `sent a body thoth could not
+  read — a route base_url with a quote?`), that hoosh is not probing (`health_check_interval_secs = 0`), or that
+  names past the table read unknown. A failed fetch EMPTIES the table: last hour's health is never this
+  minute's.
+
+Provider names are LABEL-sanitised and clipped at the store, and the join key goes through the same policy, so a
+catalog's raw `owned_by` finds the slot its cleaned name took.
+
+### Added — the `[pricing.<model>]` rate beside a priced model
+
+`hoosh_price_label` renders `$<in>/$<out> per M` from the operator's `[pricing.<model>]` rates (micro-USD per 1K,
+shown per million) — on a picker row when the band has room (the price yields before the id does) and after a
+`/models <provider>` row. Both sides declared or no label, the cost accumulator's own rule: a half-declared
+section must not read `$3.00/$0.00`. hoosh (2.6.10) keeps its pricing table private — `POST /v1/cost/estimate`
+answers one model per call, and prices an unroutable model as OpenAI — so the operator's table, the one thoth has
+priced costs from since 0.10.3, is the source; when hoosh dumps its table the rows switch to it (the roadmap's
+waiting table). `_cfg_int` now saturates: a 20-digit rate used to WRAP into a small number and price a session at
+a fiction; it reads absent now, and a rate whose per-M product cannot be held is unpriced rather than a wrapped
+number dressed as a price.
+
+Tests (+205): `test_provider_health` (core) — the never-fetched reads, the real body shape with every route kind
+(the status word over the booleans, disabled over `healthy:true`, never-probed → unknown), the fold's
+order-independence (healthy+unhealthy → degraded either way, disabled routes not counted, unmeasured never a vote
+for healthy), sanitised/clipped names folding onto one slot from a raw key, the 32-slot bound with the dropped
+count, refused shapes (no `providers`, not an array, hoosh's unescaped `base_url`), the empty list (known, every
+state unknown), the fetch on its canned seam (transport / parse failures empty the table), the price label (both
+sides, `= 0` both sides, output-only, the cap, the overflow guards), the `/models` rows and the whole listing with
+each note, the `/models <provider>` headers (the second slot's own state; `(degraded, 1/2 routes healthy)`); `test_mpick_health` (tui) — the join per filtered row, a reload
+dropping a provider's state, `mpick_load` through both canned seams (this fetch's table not the last one's, a
+failed health GET leaves every row unknown, a failed catalog GET never attempts the health GET), the rows on fd 1
+(dot colours by role SGR, the star, the price yielding at one column short and fitting at exactly the width, the
+id clipping last), `_tui_pick_paint` itself with a scrolled band, and the hint (provider + state + detail, the
+`health unknown` line, no health text on the no-matches line, the four-step budget). Proven by breaking, twelve
+ways: the old best-route fold, never-probed reading healthy, the raw join key, the unbudgeted hint, the health GET
+before the catalog, the band loop indexing the row instead of the view, the status word ignored, a half-declared
+price, unsanitised names, the state read from the catalog order, a price that never yields, the hint ignoring
+the known flag — and the two parser guards. Live on a pty against a scratch hoosh 2.6.10: the picker with its
+dots, prices and hint; `/models`, `/models Anthropic`, `/models google`; a gateway with probing off (every row
+unknown, the note); a gateway 404-ing the health path (hollow dots, `health unknown`, the note).
+
 ## [0.46.0] - 2026-09-13
 
 **The GUI routes slash commands — and the authorization modal offers "yes, for this session" again.** The

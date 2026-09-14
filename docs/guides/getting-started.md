@@ -48,7 +48,7 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /seams              the capability ladder — which spine seams are wired
 {(o> /state              session state (turns, model, context, tokens, cost, spine)
 {(o> /model [id]         show the model, or switch it mid-session (routes via hoosh)
-{(o> /models             list the models the hoosh gateway offers
+{(o> /models [provider]  list the providers hoosh offers with their health, or a provider's models with their rates
 {(o> /read <file>        print a file (safe, read-only; syntax-highlighted in the TUI)
 {(o> /write <f> <text>   write a file — t-ron-gated (shows a colored diff first)
 {(o> /run <cmd>          run a shell command — t-ron-gated (fail-closed)
@@ -109,7 +109,9 @@ silent hung thoth with no way out but `kill`.
 
 Define `[alias]` macros in `.thoth/config.cyml` (`ship = "/run git status"`) to add your own
 slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI, **Ctrl-P**
-opens the model picker. thoth also **reads *and edits*** the project it was launched in: the agent has
+opens the model picker — each row carries its provider's health as hoosh's prober reports it (● green
+healthy, ● red unhealthy, ● amber degraded — the provider's routes disagree —, ○ disabled or unknown) and its
+`[pricing.<model>]` rate when one is declared; `/models` and `/models <provider>` print the same facts. thoth also **reads *and edits*** the project it was launched in: the agent has
 default-on jailed `read_file` / `list_dir` tools (reads confined to the launch directory, plus any
 `/allow`-granted roots), and — opt-in via `[edit].enabled` (off by default) — jailed **`edit`** (surgical
 unique-match replace) and **`create_file`** (create-only) write tools plus an opt-in `shell` tool, each t-ron-gated
@@ -135,7 +137,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/seams.cyr` — the capability-seam registry (the seven spine seams + status).
 - `src/term.cyr` — the portable terminal-CONTROL floor (0.44.3): the ONE route from thoth source to darshana's Linux/AGNOS-gated termios / winsize / signalfd half. On a target without it (macOS, Windows) every entry point answers honestly, so thoth takes the line tier instead of failing to link. **Add new terminal-control calls here, never a raw `tty_*` in thoth source.**
 - `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls.
-- `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`).
+- `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`, the provider-health table from `GET /v1/health/providers`).
 - `src/daimon.cyr` — the daimon seam client (MCP tool list + call).
 - `src/agent.cyr` — the model-driven agentic tool-calling loop.
 - `src/gate.cyr` — the t-ron authorization choke point (and fail-closed confirm).
@@ -169,7 +171,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/editlog.cyr` — the session ring of each edit's diff (keyed by turn/round/call), for the GUI diff cards.
 - `src/git.cyr` — the git producer (`/state` row, `/git`, status-bar branch) — consumes sit.
 - `src/shell.cyr` — the opt-in, t-ron-gated model-invokable `shell` tool (off by default).
-- `src/mpick.cyr` — the Ctrl-P model-picker palette.
+- `src/mpick.cyr` — the Ctrl-P model-picker palette (0.47.0: rows join the catalog's `owned_by` to hoosh's provider-health table).
 - `src/fsearch.cyr` — in-feed search.
 - `src/search.cyr` — the jailed `search` tool (glob + content grep across the project).
 - `src/checkpoint.cyr` — the file-snapshot store behind `/rewind` (a pre-edit copy per model write, 0.40.0).

@@ -689,7 +689,9 @@ fn _cfg2_str_global_only(l, g, key, label) {
 }
 
 # _cfg_int: read key from pairs as a non-negative integer, or -1 when absent, empty,
-# or non-numeric (decimal digits only — pricing rates are whole micro-USD/1K). Pure.
+# non-numeric (decimal digits only — pricing rates are whole micro-USD/1K), or too large for an i64 (0.47.0: a
+# 20-digit value used to WRAP into a small number and price a session at a fiction — an unrepresentable rate is
+# absent, never a wrapped one). Pure.
 fn _cfg_int(pairs, key) {
     if (pairs == 0) { return 0 - 1; }
     var v = bayan_toml_get(pairs, key);
@@ -702,7 +704,10 @@ fn _cfg_int(pairs, key) {
     while (i < n) {
         var ch = load8(d + i);
         if ((ch < 48) || (ch > 57)) { return 0 - 1; }   # any non-digit -> reject
-        acc = acc * 10 + (ch - 48);
+        if (acc > 922337203685477580) { return 0 - 1; }  # acc * 10 would pass i64
+        acc = acc * 10;
+        if (acc > (9223372036854775807 - (ch - 48))) { return 0 - 1; }
+        acc = acc + (ch - 48);
         i = i + 1;
     }
     return acc;

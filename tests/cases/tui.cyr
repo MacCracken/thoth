@@ -1719,6 +1719,227 @@ fn test_rainbow() {
     return 0;
 }
 
+# _t_pick_hp: a /v1/health/providers body into the provider table — the routes fragment inside hoosh's envelope.
+fn _t_pick_hp(routes) {
+    var b = alloc(1024);
+    var o = _append_cstr_cap(b, 0, 1024, "{\"providers\":[");
+    o = _append_cstr_cap(b, o, 1024, routes);
+    o = _append_cstr_cap(b, o, 1024, "],\"check_interval_secs\":30}");
+    return hoosh_providers_parse(b, o);
+}
+# _t_pick_rows_to: paint picker rows (and the hint) into a file off fd 1 — the rows are emit_raw (fd 1, never the
+# ring) — then read the file back: raw bytes into `raw` (NUL-terminated, length returned) and the visible text
+# (SGR stripped) into `vis`. -1 when fd 1 cannot be captured here (AGNOS).
+fn _t_pick_read(path, raw, vis, cap) {
+    var n = file_read_all(path, raw, cap - 1);
+    if (n < 0) { n = 0; }
+    store8(raw + n, 0);
+    _t_strip_sgr(vis, raw, n);
+    xunlink(path);
+    return n;
+}
+
+# _t_vis: occurrences of a NUL-terminated needle in the NUL-terminated visible text.
+fn _t_vis(vis, needle) { return _t_count_sub(vis, strlen(vis), needle, strlen(needle)); }
+
+# test_mpick_health (0.47.0, F2): the picker's rows carry hoosh's provider health (the catalog's owned_by joined
+# against /v1/health/providers, per FILTERED row), the operator's [pricing.<model>] rate when the band has room,
+# and the hint names the selected model's provider + state — or says the health is unknown when the GET failed.
+# The join is fed through mpick_load_from (the parse half of mpick_load) over a catalog body, and once through
+# mpick_load itself on the canned-body seams (the fetch ORDER and the failure paths).
+fn test_mpick_health() {
+    test_group("model picker: provider health + price (mpick.cyr / tui.cyr, 0.47.0)");
+    assert_eq(_t_pick_hp("{\"provider\":\"anthropic\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"ollama\",\"status\":\"unhealthy\"},{\"provider\":\"openai\",\"status\":\"disabled\"},{\"provider\":\"mistral\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"mistral\",\"status\":\"unhealthy\"}"), 4, "premise: four providers folded");
+    var cat = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-x\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"llama3\",\"object\":\"model\",\"owned_by\":\"ollama\"},{\"id\":\"gpt-4o\",\"object\":\"model\",\"owned_by\":\"openai\"},{\"id\":\"mystery\",\"object\":\"model\"},{\"id\":\"grok-3\",\"object\":\"model\",\"owned_by\":\"grok\"},{\"id\":\"\",\"owned_by\":\"anthropic\"},{\"id\":\"num\",\"owned_by\":7},{\"id\":\"mistral-large\",\"owned_by\":\"mistral\"}]}";
+    var data = hoosh_extract_models(cat, strlen(cat));
+    assert(data != 0, "premise: the catalog body parses to its data array");
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    _mp_health_known = 1;
+    assert_eq(mpick_load_from(data), MPICK_OK, "the catalog loads");
+    assert_eq(mpick_total(), 7, "seven ids (the empty one refused; a non-string owned_by still loads its id)");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_HEALTHY, "claude-x: anthropic is healthy");
+    var pn0 = mpick_provider_at(0);
+    assert((pn0 != 0) && (streq(pn0, "anthropic") == 1), "...and the row names its provider");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_UNHEALTHY, "llama3: ollama is unhealthy");
+    assert_eq(mpick_state_at(2), HOOSH_PROV_DISABLED, "gpt-4o: openai is disabled");
+    assert_eq(mpick_state_at(3), HOOSH_PROV_UNKNOWN, "a catalog entry without owned_by is UNKNOWN");
+    assert_eq(mpick_provider_at(3), 0, "...and names no provider");
+    assert_eq(mpick_provider_slot_at(3), 0 - 1, "...no slot");
+    assert_eq(mpick_state_at(4), HOOSH_PROV_UNKNOWN, "a provider the health table does not list is UNKNOWN (never healthy)");
+    assert_eq(mpick_provider_at(4), 0, "...and names no provider (the table is the only source of names)");
+    assert_eq(mpick_state_at(5), HOOSH_PROV_UNKNOWN, "a non-string owned_by is UNKNOWN");
+    assert_eq(mpick_state_at(6), HOOSH_PROV_DEGRADED, "mistral-large: mistral's routes disagree — degraded");
+    assert_eq(mpick_state_at(7), HOOSH_PROV_UNKNOWN, "past the view: UNKNOWN");
+    assert_eq(mpick_state_at(0 - 1), HOOSH_PROV_UNKNOWN, "before the view: UNKNOWN");
+    assert_eq(mpick_provider_at(7), 0, "past the view: no provider");
+    # the states follow the FILTERED view, not the catalog order
+    _mp_push_str("g");
+    assert_eq(mpick_count(), 3, "'g' -> gpt-4o, grok-3, mistral-large");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_DISABLED, "filtered row 0 is gpt-4o: disabled");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_UNKNOWN, "filtered row 1 is grok-3: unknown");
+    assert_eq(mpick_state_at(2), HOOSH_PROV_DEGRADED, "filtered row 2 is mistral-large: degraded");
+    _mp_qlen = 0; mpick_refilter();
+
+    # --- a reload with a table that no longer lists a provider drops the row's state (no stale health) ---
+    assert_eq(_t_pick_hp("{\"provider\":\"ollama\",\"status\":\"healthy\",\"last_check_ms\":5}"), 1, "premise: a fresh table with ollama only");
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    mpick_load_from(data);
+    assert_eq(mpick_state_at(0), HOOSH_PROV_UNKNOWN, "claude-x: anthropic is no longer listed -> UNKNOWN");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_HEALTHY, "llama3: ollama is healthy now");
+
+    # --- mpick_load itself, on the canned seams: the catalog first, the health only after it, failures honest ---
+    var hb = alloc(512);
+    var ho = _append_cstr_cap(hb, 0, 512, "{\"providers\":[{\"provider\":\"anthropic\",\"status\":\"unhealthy\"}],\"check_interval_secs\":30}");
+    _hoosh_cat_canned = cat; _hoosh_cat_canned_len = strlen(cat); _hoosh_cat_canned_fail = 0;
+    _hp_canned = hb; _hp_canned_len = ho; _hp_canned_fail = 0;
+    assert_eq(mpick_load(), MPICK_OK, "mpick_load over canned bodies: OK");
+    assert_eq(mpick_health_known(), 1, "...the health table is known");
+    assert_eq(mpick_total(), 7, "...seven ids");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_UNHEALTHY, "...and claude-x reads THIS fetch's table (anthropic unhealthy), not the previous one's");
+    _hp_canned_fail = 1;
+    assert_eq(mpick_load(), MPICK_OK, "a failed health GET does not fail the picker");
+    assert_eq(mpick_health_known(), 0, "...but the health is not known");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_UNKNOWN, "...and every row reads UNKNOWN — the populated table from a moment ago does not linger");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_UNKNOWN, "...every row");
+    _hp_canned_fail = 0;
+    _hoosh_cat_canned_fail = 1;
+    assert_eq(mpick_load(), MPICK_ERR_TRANSPORT, "a failed catalog GET fails the picker");
+    assert_eq(hoosh_providers_known(), 0, "...and the health GET is not even attempted (no second timeout on a dead gateway)");
+    assert_eq(mpick_health_known(), 0, "...so the picker's health flag is down too");
+    _hoosh_cat_canned = 0; _hoosh_cat_canned_len = 0; _hoosh_cat_canned_fail = 0;
+    _hp_canned = 0; _hp_canned_len = 0; _hp_canned_fail = 0;
+
+    # --- the rows on fd 1: dot colour by state, the id, the active star, the price when it fits ---
+    assert_eq(_t_pick_hp("{\"provider\":\"anthropic\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"ollama\",\"status\":\"unhealthy\"},{\"provider\":\"openai\",\"status\":\"disabled\"},{\"provider\":\"mistral\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"mistral\",\"status\":\"unhealthy\"}"), 4, "premise: the four-provider table again");
+    var toml = "[pricing.claude-x]\ninput = 3000\noutput = 15000\n";
+    _price_load(bayan_toml_parse(str_new(toml, strlen(toml))));
+    var path = "build/.thoth_pick_fd1.tmp";
+    var raw = alloc(4096);
+    var vis = alloc(4096);
+    ui_force(PT_ANSI, CD_TRUE);                           # the dots' colours are SGR — nothing to count at the T0 floor
+    ui_set_theme(THEME_DARK);
+    var g[32]; var r[32]; var f[32]; var a[32];           # sgr + "● " / "○ " needles, by hand
+    var gs = ui_sgr(ROLE_GREEN);
+    assert(strlen(gs) > 0, "premise: at T1 the green role has an SGR");
+    memcpy(&g, gs, strlen(gs)); memcpy(&g + strlen(gs), "● ", 4); store8(&g + strlen(gs) + 4, 0);
+    var rs = ui_sgr(ROLE_RED); memcpy(&r, rs, strlen(rs)); memcpy(&r + strlen(rs), "● ", 4); store8(&r + strlen(rs) + 4, 0);
+    var fs = ui_sgr(ROLE_FAINT); memcpy(&f, fs, strlen(fs)); memcpy(&f + strlen(fs), "○ ", 4); store8(&f + strlen(fs) + 4, 0);
+    var as = ui_sgr(ROLE_ACCENT); memcpy(&a, as, strlen(as)); memcpy(&a + strlen(as), "● ", 4); store8(&a + strlen(as) + 4, 0);
+    if (_t_fd1_to(path) == 0) {
+        _tui_pick_paint_row("claude-x", 1, "claude-x", HOOSH_PROV_HEALTHY, 60); emit_raw("\n");
+        _tui_pick_paint_row("llama3", 0, "claude-x", HOOSH_PROV_UNHEALTHY, 60); emit_raw("\n");
+        _tui_pick_paint_row("gpt-4o", 0, "claude-x", HOOSH_PROV_DISABLED, 60); emit_raw("\n");
+        _tui_pick_paint_row("mystery", 0, "claude-x", HOOSH_PROV_UNKNOWN, 60); emit_raw("\n");
+        _tui_pick_paint_row("mistral-large", 0, "claude-x", HOOSH_PROV_DEGRADED, 60); emit_raw("\n");
+        _t_fd1_restore();
+        var n = _t_pick_read(path, raw, vis, 4096);
+        assert_eq(_t_vis(vis, "> ● claude-x *  $3.00/$15.00 per M\n"), 1, "the selected, active, priced row: gutter, dot, id, star, rate");
+        assert_eq(_t_vis(vis, "  ● llama3\n"), 1, "an unhealthy row: dot + id, no star, no rate (unpriced)");
+        assert_eq(_t_vis(vis, "  ○ gpt-4o\n"), 1, "a disabled row draws the hollow dot");
+        assert_eq(_t_vis(vis, "  ○ mystery\n"), 1, "...and so does an unknown one");
+        assert_eq(_t_vis(vis, "  ● mistral-large\n"), 1, "a degraded row draws a filled dot");
+        assert_eq(_t_count_sub(raw, n, &g, strlen(&g)), 1, "one green dot (healthy)");
+        assert_eq(_t_count_sub(raw, n, &r, strlen(&r)), 1, "one red dot (unhealthy)");
+        assert_eq(_t_count_sub(raw, n, &a, strlen(&a)), 1, "one amber dot (degraded)");
+        assert_eq(_t_count_sub(raw, n, &f, strlen(&f)), 2, "two faint hollow dots (disabled + unknown)");
+    } else { assert(1, "fd 1 cannot be captured on this target — the picker rows are not checked here (stated)"); }
+    # the price yields to the band before the id does; the id is clipped last
+    if (_t_fd1_to(path) == 0) {
+        _tui_pick_paint_row("claude-x", 0, "claude-x", HOOSH_PROV_HEALTHY, 33); emit_raw("\n");   # 4 + 8 + 2 + 2 + 18 = 34 > 33
+        _tui_pick_paint_row("claude-x", 0, "claude-x", HOOSH_PROV_HEALTHY, 34); emit_raw("\n");   # exactly fits
+        _tui_pick_paint_row("claude-x", 0, 0, HOOSH_PROV_HEALTHY, 9); emit_raw("\n");             # 4 + 5: the id clips to "claud"
+        _t_fd1_restore();
+        _t_pick_read(path, raw, vis, 4096);
+        assert_eq(_t_vis(vis, "  ● claude-x *\n"), 1, "one column short: the rate is dropped, the id and star intact");
+        assert_eq(_t_vis(vis, "  ● claude-x *  $3.00/$15.00 per M\n"), 1, "at exactly the width the rate shows");
+        assert_eq(_t_vis(vis, "  ● claud\n"), 1, "a band narrower than the id clips the id (no rate, no star)");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+
+    # --- the band loop itself: _tui_pick_paint joins each visible row to ITS state (scrolled, so fi != r) ---
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    _mp_health_known = 1;
+    mpick_load_from(data);
+    var _sr = _tui_rows; var _sc = _tui_cols; var _sst = _tui_show_status; var _stt = _tui_show_tree; var _sfo = _tui_focus;
+    _tui_rows = 8; _tui_cols = 100; _tui_show_status = 0; _tui_show_tree = 0; _tui_focus = FOCUS_COMPOSER;
+    _mpick_active = 1; _fsearch_active = 0;
+    led_reset();
+    var _band = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status) - tui_feed_top() + 1;
+    assert((_band >= 2) && (_band < 7), "premise: an 8-row grid gives the picker a band of 2..6 rows (fewer than the 7 ids)");
+    _mp_cur = 6;                                          # the last id (mistral-large, degraded) -> the band scrolls
+    if (_t_fd1_to(path) == 0) {
+        _tui_pick_paint();
+        _t_fd1_restore();
+        var n2 = _t_pick_read(path, raw, vis, 4096);
+        assert_eq(mpick_first(), 7 - _band, "the band scrolled so the selection is its last row");
+        assert_eq(_t_vis(vis, "> ● mistral-large"), 1, "the selected row is the degraded model, drawn from its own slot");
+        assert_eq(_t_count_sub(raw, n2, &a, strlen(&a)), 1, "...with the one amber dot");
+        assert_eq(_t_count_sub(raw, n2, &g, strlen(&g)), 0, "no green dot: claude-x scrolled out of the band");
+        assert_eq(_t_vis(vis, "○ mystery"), 1, "mystery (unknown) is in the band, hollow");
+        assert_eq(_t_vis(vis, "○ grok-3"), 1, "grok-3 (unlisted provider) likewise");
+        assert_eq(_t_vis(vis, "pick: "), 1, "the composer shows the pick prompt");
+        assert_eq(_t_vis(vis, "7/7  mistral degraded (1/2 routes healthy)  "), 1, "...and the hint names the selected model's provider, state and detail");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _mpick_active = 0;
+    _tui_rows = _sr; _tui_cols = _sc; _tui_show_status = _sst; _tui_show_tree = _stt; _tui_focus = _sfo;
+    _price_n = 0;
+
+    # --- the hint: the selected model's provider + state, the honest 'health unknown', and the column budget ---
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    _mp_health_known = 1;
+    mpick_load_from(data);
+    _tui_cols = 100;
+    mpick_select_id("llama3");
+    if (_t_fd1_to(path) == 0) {
+        _tui_draw_pick_hint(); emit_raw("\n");
+        mpick_select_id("mystery");
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _mp_health_known = 0;
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _mp_push_str("zzz");                              # no matches: the health segment belongs to the count branch only
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _mp_qlen = 0; mpick_refilter();
+        _t_fd1_restore();
+        _t_pick_read(path, raw, vis, 4096);
+        assert_eq(_t_vis(vis, "2/7  ollama unhealthy  "), 1, "the hint names the selected model's provider and its state");
+        assert_eq(_t_vis(vis, "4/7  unknown  "), 1, "a model with no provider in the table: the state alone");
+        assert_eq(_t_vis(vis, "4/7  health unknown  "), 1, "when the health GET failed the hint says so instead");
+        assert_eq(_t_vis(vis, "no matches  ↑↓"), 1, "no matches: the legend follows the notice directly...");
+        assert_eq(_t_vis(vis, "health unknown"), 1, "...with no health text on that line (one line carries it, not two)");
+        assert_eq(_t_vis(vis, "Enter switch"), 4, "...the key legend follows in every case");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    # the budget: on a narrow grid the segment shrinks so the legend's "⌃C close" never yields — detail, then the
+    # provider name, then the state, then nothing
+    _mp_health_known = 1;
+    mpick_select_id("mistral-large");                    # "7/7" + "  mistral degraded (1/2 routes healthy)" = 42 cols of segment
+    if (_t_fd1_to(path) == 0) {
+        _tui_cols = 11 + 0 + 2 + 3 + 2 + TUI_PICK_LEGEND_COLS + 39;   # room 39: full segment (2 + 7 + 1 + 8 + 21 = 39)
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _tui_cols = _tui_cols - 1;                                     # room 38: the detail yields
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _tui_cols = 11 + 0 + 2 + 3 + 2 + TUI_PICK_LEGEND_COLS + 10;    # room 10: "  degraded" alone (2 + 8)
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _tui_cols = _tui_cols - 1;                                     # room 9: nothing
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _mp_health_known = 0;
+        _tui_cols = 11 + 0 + 2 + 3 + 2 + TUI_PICK_LEGEND_COLS + 15;    # room 15 < 16: "  health unknown" yields too
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _t_fd1_restore();
+        _t_pick_read(path, raw, vis, 4096);
+        assert_eq(_t_vis(vis, "7/7  mistral degraded (1/2 routes healthy)  ↑↓"), 1, "room for all of it: provider, state, detail");
+        assert_eq(_t_vis(vis, "7/7  mistral degraded  ↑↓"), 1, "one column short: the detail yields first");
+        assert_eq(_t_vis(vis, "7/7  degraded  ↑↓"), 1, "narrower: the provider name yields, the state stays");
+        assert_eq(_t_vis(vis, "7/7  ↑↓"), 2, "narrower still: the whole segment yields — the legend never does (this line and the next)");
+        assert_eq(_t_vis(vis, "health unknown"), 0, "...and 'health unknown' yields the same way");
+        assert_eq(_t_vis(vis, "⌃C close"), 5, "the close key is on every line");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _tui_cols = _sc;
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_health_known = 0;
+    hoosh_providers_reset();
+    ui_detect_tier();
+    return 0;
+}
+
 fn test_mpick() {
     test_group("model picker (mpick.cyr, 0.24.0)");
     mpick_init();

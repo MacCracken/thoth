@@ -6,6 +6,14 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.47.0** (2026-09-13, not a full sweep): F2 updated `CHANGELOG.md`, `docs/development/state.md`
+> (version block, the **Spine clients** bullet, **Tests** counts), `docs/development/roadmap.md` (F2 → shipped with its
+> residuals; the hoosh waiting row gains F2's three asks — the serving route per catalog entry, a pricing-table dump,
+> the unescaped `base_url`; the minor candidates now start at 0.48.0), `docs/guides/getting-started.md` (the
+> picker's dots and rates, the `/models [provider]` row, source layout), `.thoth/config.cyml.example` (`[pricing]`:
+> the picker and `/models <provider>` show the rate), `README.md` (stamp + the picker clause) and this file. No ADR
+> earned: the fold's honesty rule is ADR-0010 applied.
+>
 > **Touched at 0.46.0** (2026-09-13, not a full sweep): F1 updated `CHANGELOG.md`, `docs/development/state.md`
 > (version block, the **Presentation ladder** bullet — `gcmd`, **Tests** counts), `docs/development/roadmap.md` (F1 →
 > shipped; the minor candidates now start at 0.47.0), `docs/guides/getting-started.md` (source layout:

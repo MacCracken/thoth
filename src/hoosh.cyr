@@ -39,6 +39,8 @@ var HOOSH_PATH = "/v1/chat/completions";
 var HOOSH_MODELS_PATH = "/v1/models";
 var _hoosh_catalog_ep = 0;  # cached base url + the concrete per-provider catalog path
 var HOOSH_CATALOG_PATH = "/v1/models/catalog";
+var _hoosh_health_ep = 0;   # 0.47.0: cached base url + the per-route provider health path
+var HOOSH_HEALTH_PATH = "/v1/health/providers";
 
 # Assistant-reply accumulator (0.5.1): both turn paths leave the full assistant
 # text here (streaming appends each delta; blocking copies the parsed content) so
@@ -1012,6 +1014,15 @@ fn hoosh_list_models() {
     }
     var data = hoosh_extract_models(body, blen);
     if (data == 0) { oprintln("  hoosh: response received but no model list could be parsed."); return 0 - 1; }
+    # 0.47.0: /v1/models lists PROVIDER kinds (id == owned_by == the kind name), so each row can carry the health
+    # hoosh's prober reports for it — one more GET; omitted (not faked) when it fails
+    var hk = hoosh_providers_fetch();
+    return _hoosh_list_models_show(data, hk);
+}
+
+# _hoosh_list_models_show (0.47.0): the print half of hoosh_list_models over a fetched /v1/models array and the
+# health fetch's outcome — split out so the suite drives it with a canned catalog and hk = 0 / 1.
+fn _hoosh_list_models_show(data, hk) {
     var n = bayan_json_v_arr_len(data);
     var cur = _hoosh_model();
     ui_emit(ROLE_ACCENT, "models hoosh offers ("); ofmt_int(n); ui_emit(ROLE_ACCENT, "):"); oprintln("");
@@ -1026,11 +1037,39 @@ fn hoosh_list_models() {
         # gateway relaying some provider's model list. Skip the malformed entry, keep listing.
         if (id != 0) {
             var ids = bayan_json_v_str(id);
-            if (ids != 0) { _hoosh_model_row(ids, cur); }
+            if (ids != 0) { _hoosh_provider_row(ids, cur, hk); }
         }
         i = i + 1;
     }
     emit("(* = current; switch with /model <id>. routing target now: "); emit(cur); oprintln(")");
+    _hoosh_health_note(hk);
+    return 0;
+}
+
+# _hoosh_provider_row (0.47.0): a bare-/models row — the provider kind, then its health word in the state's colour
+# when the table is fresh ("healthy" / "unhealthy" / "degraded (h/n routes healthy)" / "disabled"; a kind the table
+# does not list reads "unknown"). Nothing after the kind when the table is not fresh.
+fn _hoosh_provider_row(ids, cur, known) {
+    var role = ROLE_FG;
+    if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); role = ROLE_ACCENT; }
+    else { emit("  "); }
+    emit(ui_sgr(role)); emit_clean_line(str_cstr(ids)); emit(ui_reset());
+    if (known == 1) { ui_emit(ROLE_FAINT, "  "); _hoosh_state_emit(hoosh_provider_index(str_cstr(ids)), 0); }
+    oprintln("");
+    return 0;
+}
+# _hoosh_state_emit: a table slot's word in its colour, plus the degraded detail (faint) — the listings' one
+# printer. `inparen` = 1 when the caller already wraps the whole in parentheses (the /models <provider> header):
+# the detail then follows a comma instead of nesting its own — "(degraded, 1/2 routes healthy)".
+fn _hoosh_state_emit(idx, inparen) {
+    var st = hoosh_provider_state_at(idx);
+    ui_emit(hoosh_provider_state_role(st), hoosh_provider_state_word(st));
+    var db[40];
+    var dl = hoosh_provider_detail(idx, &db, 40);
+    if (dl > 0) {
+        if (inparen == 1) { store8(&db + dl - 1, 0); ui_emit(ROLE_FAINT, ", "); ui_emit(ROLE_FAINT, &db + 2); }
+        else { ui_emit(ROLE_FAINT, &db); }
+    }
     return 0;
 }
 
@@ -1039,11 +1078,41 @@ fn hoosh_list_models() {
 # out of its response with nothing storing them first, so this print IS where they enter thoth; both listings wrote
 # them raw until now, and a catalog id carrying an escape reached the terminal (reproduced under a pty). For a clean
 # id the bytes are exactly the old ui_emit_n form: sgr + id + reset.
+# hoosh_price_label (0.47.0): "$<in>/$<out> per M" for a model with a `[pricing.<model>]` rate in the operator's config
+# (the rates are micro-USD per 1K tokens; shown per MILLION, the unit price lists use), into dst (cap >= 48); the byte
+# length, or 0 when the model is unpriced — the row then shows nothing (ADR-0010). Unpriced means what the cost
+# accumulator means by it (_hoosh_price_usage): BOTH sides declared, or neither counts — a half-declared section
+# must not read "$3.00/$0.00". hoosh (2.6.10) keeps its pricing table private (POST /v1/cost/estimate answers one
+# model at a time), so the operator's own table is the source.
+fn hoosh_price_label(model, dst, cap) {
+    if (cap < 48) { return 0; }
+    var pin = config_price_input(model);
+    if (pin < 0) { return 0; }
+    var pout = config_price_output(model);
+    if (pout < 0) { return 0; }
+    # a rate the per-M product cannot hold (the config parser accumulates digits unchecked) is unpriced, not a
+    # wrapped number dressed as a price
+    if ((pin > 9223372036854775) || (pout > 9223372036854775)) { return 0; }
+    var off = cost_fmt(dst, pin * 1000);
+    store8(dst + off, 47); off = off + 1;                    # '/'
+    off = off + cost_fmt(dst + off, pout * 1000);
+    off = _append_cstr(dst, off, " per M");
+    store8(dst + off, 0);
+    return off;
+}
+# _hoosh_row_price: the price label after a row's id, faint, when one is configured (0.47.0).
+fn _hoosh_row_price(id) {
+    var pb[64];
+    if (hoosh_price_label(id, &pb, 64) > 0) { ui_emit(ROLE_FAINT, "  "); ui_emit(ROLE_FAINT, &pb); }
+    return 0;
+}
+
 fn _hoosh_model_row(ids, cur) {
     var role = ROLE_FG;
     if (str_eq_cstr(ids, cur) == 1) { ui_emit(ROLE_GREEN, "* "); role = ROLE_ACCENT; }
     else { emit("  "); }
     emit(ui_sgr(role)); emit_clean_line(str_cstr(ids)); emit(ui_reset());
+    _hoosh_row_price(str_cstr(ids));                          # 0.47.0: the operator's [pricing.<model>] rate, when declared
     oprintln("");
     return 0;
 }
@@ -1060,8 +1129,15 @@ var _hoosh_cat_err = 0;
 # `data` array VALUE, or 0 on any failure; hoosh_catalog_last_err() then reports the kind for honest caller
 # messaging. Prints NOTHING (the picker owns the UI). I/O — the catalog is hoosh's domain (provider routing);
 # thoth only asks. The returned value points into the bump-heap response body (not freed); copy ids promptly.
+var _hoosh_cat_canned = 0;      # TEST SEAM (0.47.0): a canned catalog body hoosh_catalog_fetch parses instead of dialling
+var _hoosh_cat_canned_len = 0;
+var _hoosh_cat_canned_fail = 0; # TEST SEAM: 1 = the canned fetch reports a transport failure
 fn hoosh_catalog_fetch() {
     _hoosh_cat_err = HOOSH_CAT_OK;
+    if (_hoosh_cat_canned != 0) {
+        if (_hoosh_cat_canned_fail == 1) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
+        return hoosh_extract_models(_hoosh_cat_canned, _hoosh_cat_canned_len);
+    }
     var auth = _hoosh_auth_header();
     var h = sandhi_headers_new();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
@@ -1081,6 +1157,267 @@ fn hoosh_catalog_fetch() {
 
 # hoosh_catalog_last_err: the outcome of the last hoosh_catalog_fetch (HOOSH_CAT_*). PURE.
 fn hoosh_catalog_last_err() { return _hoosh_cat_err; }
+
+# --- provider health (0.47.0, F2: model-picker reachability) -----------------------------------------------
+# hoosh serves GET /v1/health/providers — one entry per ROUTE it knows, {provider, base_url, status, enabled,
+# healthy, consecutive_failures, last_check_ms}, the state its background prober maintains (hoosh 2.5.5+; the
+# prober is the ONLY writer of a route's health — nothing is learned from traffic), inside {"providers":[…],
+# "check_interval_secs":N}. The catalog's `owned_by` and this endpoint's `provider` are the SAME string — hoosh's
+# provider KIND name ("anthropic", "ollama", …; provider_name() in its types.cyr). What thoth cannot see is which
+# ROUTE serves a given model: hoosh's router_select picks among the enabled routes whose `models` PATTERNS match
+# the id (healthy ones first, the unhealthy ones when none is), and the catalog names only the kind. So the table
+# folds a kind's routes to the one claim thoth CAN make honestly:
+#   healthy   — every enabled route of the kind measured healthy (whichever serves the model is up)
+#   unhealthy — every enabled route measured unhealthy (hoosh still tries them — "unhealthy", not "unreachable")
+#   degraded  — the enabled routes disagree (a model may sit behind the down one; the count says how many are up)
+#   disabled  — the kind has no enabled route
+#   unknown   — no enabled route has a MEASURED state: last_check_ms == 0 means hoosh has never probed it and its
+#               record still holds the optimistic startup default (`health_check_interval_secs = 0` leaves every
+#               route that way for good) — an unmeasured value is unknown, never healthy (ADR-0010)
+# thoth reads the state; hoosh owns it (ADR-0002) — never a probe of thoth's own.
+var HOOSH_PROV_MAX = 32;      # above hoosh's 17 kind names + "unknown" (provider_name), with headroom
+var HOOSH_PROV_NAME_CAP = 32;
+var HOOSH_PROV_UNKNOWN = 0;
+var HOOSH_PROV_HEALTHY = 1;
+var HOOSH_PROV_UNHEALTHY = 2;
+var HOOSH_PROV_DISABLED = 3;
+var HOOSH_PROV_DEGRADED = 4;
+var HOOSH_HP_OK = 0;          # hoosh_providers_fetch outcomes (hoosh_providers_last_err)
+var HOOSH_HP_TRANSPORT = 1;
+var HOOSH_HP_HTTP = 2;
+var HOOSH_HP_PARSE = 3;
+var _hp_names = 0;            # alloc(HOOSH_PROV_MAX * HOOSH_PROV_NAME_CAP): provider names, NUL-terminated, LABEL-sanitised
+var _hp_state = 0;            # alloc(HOOSH_PROV_MAX * 8): HOOSH_PROV_* per name (the fold's verdict)
+var _hp_cnt = 0;              # alloc(HOOSH_PROV_MAX * 32): per name, the route counts — healthy · unhealthy · unmeasured · disabled
+var _hp_n = 0;
+var _hp_fetched = 0;          # 0 never · 1 the last fetch succeeded · -1 the last fetch failed
+var _hp_err = 0;              # HOOSH_HP_* — why the last fetch failed
+var _hp_http = 0;             # the status of an HTTP failure
+var _hp_interval = 0 - 1;     # the envelope's check_interval_secs (0 = hoosh is not probing), -1 when absent
+var _hp_dropped = 0;          # provider names past HOOSH_PROV_MAX in the last parse (the listings say so)
+var _hp_canned = 0;           # TEST SEAM: a canned health body (cstr) hoosh_providers_fetch parses instead of dialling
+var _hp_canned_len = 0;
+var _hp_canned_fail = 0;      # TEST SEAM: 1 = the canned fetch reports a transport failure
+
+fn _hp_ensure() {
+    if (_hp_names == 0) { _hp_names = alloc(HOOSH_PROV_MAX * HOOSH_PROV_NAME_CAP); }
+    if (_hp_state == 0) { _hp_state = alloc(HOOSH_PROV_MAX * 8); }
+    if (_hp_cnt == 0) { _hp_cnt = alloc(HOOSH_PROV_MAX * 32); }
+    return 0;
+}
+fn hoosh_providers_reset() { _hp_n = 0; _hp_fetched = 0; _hp_err = HOOSH_HP_OK; _hp_interval = 0 - 1; _hp_dropped = 0; return 0; }
+fn hoosh_providers_known() { if (_hp_fetched == 1) { return 1; } return 0; }
+fn hoosh_providers_last_err() { return _hp_err; }
+fn hoosh_providers_interval() { return _hp_interval; }
+fn hoosh_providers_dropped() { return _hp_dropped; }
+fn hoosh_provider_count() { return _hp_n; }
+fn hoosh_provider_name_at(i) { if ((i < 0) || (i >= _hp_n)) { return 0; } return _hp_names + i * HOOSH_PROV_NAME_CAP; }
+fn hoosh_provider_state_at(i) { if ((i < 0) || (i >= _hp_n)) { return HOOSH_PROV_UNKNOWN; } return load64(_hp_state + i * 8); }
+# hoosh_provider_routes_at: the kind's enabled-route count (healthy + unhealthy + unmeasured), 0 out of range. PURE.
+fn hoosh_provider_routes_at(i) {
+    if ((i < 0) || (i >= _hp_n)) { return 0; }
+    var c = _hp_cnt + i * 32;
+    return load64(c) + load64(c + 8) + load64(c + 16);
+}
+# hoosh_provider_healthy_at: how many of the kind's enabled routes measured healthy. PURE.
+fn hoosh_provider_healthy_at(i) { if ((i < 0) || (i >= _hp_n)) { return 0; } return load64(_hp_cnt + i * 32); }
+# hoosh_provider_index: the table slot for a provider name (a catalog entry's owned_by, or the operator's typed
+# `/models <provider>` argument), or -1. The key goes through the SAME label policy as the stored names (so a name
+# the store cleaned or clipped still finds its slot) and is matched ignoring ASCII case, as the catalog filter does.
+# PURE.
+fn hoosh_provider_index(name) {
+    if (name == 0) { return 0 - 1; }
+    var nb[32];                                   # HOOSH_PROV_NAME_CAP
+    safe_label_copy(&nb, HOOSH_PROV_NAME_CAP, name);
+    var i = 0;
+    while (i < _hp_n) {
+        if (_ci_eq(_hp_names + i * HOOSH_PROV_NAME_CAP, &nb) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+fn hoosh_provider_state(name) { return hoosh_provider_state_at(hoosh_provider_index(name)); }
+# hoosh_provider_state_word: the state as the word the surfaces print. PURE.
+fn hoosh_provider_state_word(st) {
+    if (st == HOOSH_PROV_HEALTHY) { return "healthy"; }
+    if (st == HOOSH_PROV_UNHEALTHY) { return "unhealthy"; }
+    if (st == HOOSH_PROV_DISABLED) { return "disabled"; }
+    if (st == HOOSH_PROV_DEGRADED) { return "degraded"; }
+    return "unknown";
+}
+# hoosh_provider_state_role: the colour role a provider state draws in — the status bar's dot idiom, amber for
+# a kind whose routes disagree.
+fn hoosh_provider_state_role(st) {
+    if (st == HOOSH_PROV_HEALTHY) { return ROLE_GREEN; }
+    if (st == HOOSH_PROV_UNHEALTHY) { return ROLE_RED; }
+    if (st == HOOSH_PROV_DEGRADED) { return ROLE_ACCENT; }
+    return ROLE_FAINT;
+}
+# hoosh_provider_detail: for a DEGRADED slot, " (h/n routes healthy)" into dst (cap >= 32); the byte length, or 0
+# for every other state (nothing to add to the word). PURE.
+fn hoosh_provider_detail(i, dst, cap) {
+    if (cap < 32) { return 0; }
+    if (hoosh_provider_state_at(i) != HOOSH_PROV_DEGRADED) { return 0; }
+    var off = _append_cstr(dst, 0, " (");
+    off = _append_int(dst, off, hoosh_provider_healthy_at(i));
+    store8(dst + off, 47); off = off + 1;                    # '/'
+    off = _append_int(dst, off, hoosh_provider_routes_at(i));
+    off = _append_cstr(dst, off, " routes healthy)");
+    store8(dst + off, 0);
+    return off;
+}
+# _hp_route_state: one route's state from its {status, enabled, healthy, last_check_ms} — the status word decides
+# when present (hoosh's own fold of the two booleans), the booleans when it is not; a route that reads healthy but
+# was never probed (last_check_ms present and 0) is UNMEASURED — hoosh's record starts healthy by design so that
+# startup is not an outage, and that default is not a measurement. PURE.
+fn _hp_route_state(entry) {
+    var rs = HOOSH_PROV_UNKNOWN;
+    var st = bayan_json_v_obj_get(entry, "status");
+    if (st != 0) {
+        var sv = bayan_json_v_str(st);
+        if (sv != 0) {
+            if (str_eq_cstr(sv, "healthy") == 1) { rs = HOOSH_PROV_HEALTHY; }
+            elif (str_eq_cstr(sv, "unhealthy") == 1) { rs = HOOSH_PROV_UNHEALTHY; }
+            elif (str_eq_cstr(sv, "disabled") == 1) { rs = HOOSH_PROV_DISABLED; }
+        }
+    }
+    if (rs == HOOSH_PROV_UNKNOWN) {
+        var en = bayan_json_v_obj_get(entry, "enabled");
+        if (en != 0) { if (bayan_json_v_tag(en) == JTAG_BOOL) { if (bayan_json_v_bool(en) == 0) { rs = HOOSH_PROV_DISABLED; } } }
+    }
+    if (rs == HOOSH_PROV_UNKNOWN) {
+        var he = bayan_json_v_obj_get(entry, "healthy");
+        if (he != 0) { if (bayan_json_v_tag(he) == JTAG_BOOL) { if (bayan_json_v_bool(he) == 1) { rs = HOOSH_PROV_HEALTHY; } else { rs = HOOSH_PROV_UNHEALTHY; } } }
+    }
+    if (rs == HOOSH_PROV_HEALTHY) {
+        var lc = bayan_json_v_obj_get(entry, "last_check_ms");
+        if (lc != 0) { if (bayan_json_v_tag(lc) == JTAG_INT) { if (bayan_json_v_int(lc) == 0) { rs = HOOSH_PROV_UNKNOWN; } } }
+    }
+    return rs;
+}
+# _hp_fold: a slot's verdict from its route counts (healthy · unhealthy · unmeasured · disabled). PURE.
+fn _hp_fold(c) {
+    var h = load64(c); var u = load64(c + 8); var k = load64(c + 16); var d = load64(c + 24);
+    if ((h + u + k) == 0) { if (d > 0) { return HOOSH_PROV_DISABLED; } return HOOSH_PROV_UNKNOWN; }
+    if ((h == 0) && (u == 0)) { return HOOSH_PROV_UNKNOWN; }
+    if ((u == 0) && (k == 0)) { return HOOSH_PROV_HEALTHY; }
+    if ((h == 0) && (k == 0)) { return HOOSH_PROV_UNHEALTHY; }
+    return HOOSH_PROV_DEGRADED;
+}
+# hoosh_providers_parse: fold a /v1/health/providers body into the table; returns the provider count, or -1 when
+# the body is not that shape (the table is then empty and NOT marked fetched). Each route counts toward its kind's
+# slot; the verdict is _hp_fold over the counts. A name is stored LABEL-sanitised and clipped at
+# HOOSH_PROV_NAME_CAP-1 (the gateway is a less-trusted party than the operator and these bytes reach the screen);
+# names past HOOSH_PROV_MAX are counted in _hp_dropped so the listings can say the table was full. PURE over its
+# bytes.
+fn hoosh_providers_parse(body, body_len) {
+    _hp_ensure();
+    _hp_n = 0;
+    _hp_fetched = 0;
+    _hp_interval = 0 - 1;
+    _hp_dropped = 0;
+    var v = bayan_json_v_parse_buf(body, body_len);
+    if (v == 0) { return 0 - 1; }
+    var arr = bayan_json_v_obj_get(v, "providers");
+    if (arr == 0) { return 0 - 1; }
+    if (bayan_json_v_tag(arr) != JTAG_ARR) { return 0 - 1; }
+    var iv = bayan_json_v_obj_get(v, "check_interval_secs");
+    if (iv != 0) { if (bayan_json_v_tag(iv) == JTAG_INT) { _hp_interval = bayan_json_v_int(iv); } }
+    var n = bayan_json_v_arr_len(arr);
+    var i = 0;
+    while (i < n) {
+        var e = bayan_json_v_arr_get(arr, i);
+        var pv = bayan_json_v_obj_get(e, "provider");
+        if (pv != 0) {
+            var ps = bayan_json_v_str(pv);
+            if (ps != 0) { if (str_len(ps) > 0) {
+                var name = str_cstr(ps);
+                var rs = _hp_route_state(e);
+                var idx = hoosh_provider_index(name);
+                if (idx < 0) {
+                    if (_hp_n < HOOSH_PROV_MAX) {
+                        idx = _hp_n;
+                        safe_label_copy(_hp_names + idx * HOOSH_PROV_NAME_CAP, HOOSH_PROV_NAME_CAP, name);
+                        var c0 = _hp_cnt + idx * 32;
+                        store64(c0, 0); store64(c0 + 8, 0); store64(c0 + 16, 0); store64(c0 + 24, 0);
+                        store64(_hp_state + idx * 8, HOOSH_PROV_UNKNOWN);
+                        _hp_n = _hp_n + 1;
+                    } else { _hp_dropped = _hp_dropped + 1; }
+                }
+                if (idx >= 0) {
+                    var c = _hp_cnt + idx * 32;
+                    if (rs == HOOSH_PROV_HEALTHY) { store64(c, load64(c) + 1); }
+                    elif (rs == HOOSH_PROV_UNHEALTHY) { store64(c + 8, load64(c + 8) + 1); }
+                    elif (rs == HOOSH_PROV_DISABLED) { store64(c + 24, load64(c + 24) + 1); }
+                    else { store64(c + 16, load64(c + 16) + 1); }
+                    store64(_hp_state + idx * 8, _hp_fold(c));
+                }
+            } }
+        }
+        i = i + 1;
+    }
+    _hp_fetched = 1;
+    return _hp_n;
+}
+# _hoosh_health_url: GET target for the provider health endpoint. Same base-trim + cache convention as the others.
+fn _hoosh_health_url() {
+    if (_hoosh_health_ep != 0) { return _hoosh_health_ep; }
+    var base = config_hoosh_url();
+    var blen = strlen(base);
+    if (blen > 0) { if (load8(base + blen - 1) == 47) { blen = blen - 1; } }   # trim one '/'
+    _hoosh_health_ep = alloc(blen + strlen(HOOSH_HEALTH_PATH) + 1);
+    var off = 0;
+    var i = 0;
+    while (i < blen) { store8(_hoosh_health_ep + off, load8(base + i)); off = off + 1; i = i + 1; }
+    off = _append_cstr(_hoosh_health_ep, off, HOOSH_HEALTH_PATH);
+    store8(_hoosh_health_ep + off, 0);
+    return _hoosh_health_ep;
+}
+# hoosh_providers_fetch: GET /v1/health/providers and fold it into the table. Returns 1 when the table is fresh, 0
+# when the gateway could not be reached / answered non-2xx / sent another shape (hoosh_providers_last_err says
+# which) — the table is then EMPTY and every state reads UNKNOWN (a stale table from an earlier fetch is dropped
+# too: a picker must not paint last hour's health as this minute's). I/O, silent; the callers say what they show.
+fn hoosh_providers_fetch() {
+    _hp_ensure();
+    _hp_n = 0;
+    _hp_fetched = 0 - 1;
+    _hp_err = HOOSH_HP_OK;
+    _hp_http = 0;
+    if (_hp_canned != 0) {                        # the test seam: no dial
+        if (_hp_canned_fail == 1) { _hp_err = HOOSH_HP_TRANSPORT; return 0; }
+        if (hoosh_providers_parse(_hp_canned, _hp_canned_len) < 0) { _hp_fetched = 0 - 1; _hp_err = HOOSH_HP_PARSE; return 0; }
+        return 1;
+    }
+    var auth = _hoosh_auth_header();
+    var h = sandhi_headers_new();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    var r = sandhi_http_get_opts(_hoosh_health_url(), h, hoosh_probe_opts());
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { _hp_err = HOOSH_HP_TRANSPORT; return 0; }
+    var status = sandhi_http_status(r);
+    if ((status < 200) || (status >= 300)) { _hp_err = HOOSH_HP_HTTP; _hp_http = status; return 0; }
+    if (hoosh_providers_parse(sandhi_http_body(r), sandhi_http_body_len(r)) < 0) { _hp_fetched = 0 - 1; _hp_err = HOOSH_HP_PARSE; return 0; }
+    return 1;
+}
+# _hoosh_health_note: after a listing, the one line that says why the health words are missing — the failure kind
+# of the last fetch (a transport error, the status, an unparseable body) — or, when the table IS fresh, that hoosh
+# is not probing (every state then reads unknown by the rule above) or that names past the table were dropped.
+# Nothing when there is nothing to say.
+fn _hoosh_health_note(hk) {
+    if (hk == 0) {
+        ui_emit(ROLE_FAINT, "(provider health unavailable — GET /v1/health/providers ");
+        if (_hp_err == HOOSH_HP_HTTP) { ui_emit(ROLE_FAINT, "answered HTTP "); emit(ui_sgr(ROLE_FAINT)); ofmt_int(_hp_http); emit(ui_reset()); }
+        elif (_hp_err == HOOSH_HP_PARSE) { ui_emit(ROLE_FAINT, "sent a body thoth could not read — a route base_url with a quote?"); }
+        else { ui_emit(ROLE_FAINT, "unreachable"); }
+        ui_emit(ROLE_FAINT, ")"); oprintln("");
+        return 0;
+    }
+    if (_hp_interval == 0) { ui_emit(ROLE_FAINT, "(hoosh is not probing its routes — health_check_interval_secs = 0 — so every state reads unknown)"); oprintln(""); }
+    if (_hp_dropped > 0) {
+        ui_emit(ROLE_FAINT, "("); emit(ui_sgr(ROLE_FAINT)); ofmt_int(_hp_dropped); emit(ui_reset());
+        ui_emit(ROLE_FAINT, " provider(s) past thoth's table read unknown)"); oprintln("");
+    }
+    return 0;
+}
 
 # hoosh_list_provider_models: list the concrete, switchable models a given provider
 # offers (GET /v1/models/catalog, filtered by owned_by), marking the active routing
@@ -1111,7 +1448,10 @@ fn hoosh_list_provider_models(provider) {
         else { var em = hoosh_extract_error(body, blen); if (em != 0) { emit("  "); _hoosh_print_str(em); } }
         return status;
     }
-    return _hoosh_provider_models_show(provider, body, blen);
+    var hk = hoosh_providers_fetch();               # 0.47.0: the header's health word (omitted when this fails)
+    var rc = _hoosh_provider_models_show(provider, body, blen);
+    _hoosh_health_note(hk);
+    return rc;
 }
 
 # _hoosh_provider_models_show (0.45.0): the listing half of hoosh_list_provider_models — the header, one row per model
@@ -1125,7 +1465,12 @@ fn _hoosh_provider_models_show(provider, body, blen) {
     if (data == 0) { oprintln("  hoosh: response received but no model catalog could be parsed."); return 0 - 1; }
     var n = bayan_json_v_arr_len(data);
     var cur = _hoosh_model();
-    ui_emit(ROLE_ACCENT, "models for provider '"); ui_emit_clean(ROLE_ACCENT, provider); ui_emit(ROLE_ACCENT, "':"); oprintln("");
+    ui_emit(ROLE_ACCENT, "models for provider '"); ui_emit_clean(ROLE_ACCENT, provider); ui_emit(ROLE_ACCENT, "'");
+    # 0.47.0: the provider's health from hoosh's prober, in the state's colour; omitted when the table is not fresh
+    if (hoosh_providers_known() == 1) {
+        ui_emit(ROLE_FAINT, " ("); _hoosh_state_emit(hoosh_provider_index(provider), 1); ui_emit(ROLE_FAINT, ")");
+    }
+    ui_emit(ROLE_ACCENT, ":"); oprintln("");
     var i = 0;
     var shown = 0;
     while (i < n) {

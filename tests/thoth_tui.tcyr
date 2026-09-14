@@ -106,6 +106,7 @@ fn main() {
     test_theme();
     test_rainbow();
     test_mpick();
+    test_mpick_health();
     test_status_bar_0450();
     test_composer_placeholder_0450();
     return assert_summary();

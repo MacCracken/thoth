@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.46.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.47.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -18,7 +18,7 @@ protocol) under **t-ron** authorization — deny is final, and no policy means a
 back until the model answers. Streaming (SSE), with parallel tool calls.
 
 **The signature move.** Switch the backing model mid-session through hoosh (`/model`, `/models`, or the Ctrl-P
-picker). The **persona** is sourced from **avatara** and switches mid-session too (`/persona`), with a
+picker — each row with its provider's health as hoosh's prober reports it and its configured rate). The **persona** is sourced from **avatara** and switches mid-session too (`/persona`), with a
 trait-derived **role** axis (`/role`).
 
 **Three surfaces, one view-model** — each degrading **closed**:

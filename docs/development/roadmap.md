@@ -179,8 +179,9 @@ unsure, patch.
   grouped into a numbered batch and shipped together as the next `0.45.x`. A batch is ordered by
   priority; the top of the next batch is the next thing to build. Nothing in a repair batch adds a
   capability.
-- **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing); the next
-  decided feature earns `0.47.0`. A minor is never a sweep of small things — those are patches.
+- **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing), `0.47.0`
+  the second (F2, the picker's provider health + pricing); the next decided feature earns `0.48.0`. A
+  minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -215,6 +216,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 |---|---|---|---|
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" (14 on a clean tree) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
 | **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: a tool call's `content_block_start` can be lost while its `input_json_delta` fragments still arrive (reproducible from one captured body) | hoosh **2.6.10** | done — 0.44.2 drops and announces such a call |
+| **hoosh** | three asks from F2: the serving ROUTE per catalog entry (a `base_url` or route index beside `owned_by` in `/v1/models/catalog`, so a model joins to ITS route's health instead of its kind's fold); a pricing-table dump (a `GET` that lists `pricing_lookup` for every catalog key) so the picker / `/models` rows can price from hoosh's numbers instead of the operator's `[pricing.<model>]`; and `/v1/health/providers` emitting `base_url` unescaped (`handlers.cyr`, the raw `add_cstr`) | hoosh **2.6.10** | done — 0.47.0 folds per kind (`degraded` when routes disagree), prices from the operator's table, and treats an unparseable health body as "unavailable" |
 | **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — hoosh's own follow-up note; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.6.10** | thoth keeps requesting it and already decodes it (0.45.5 decided) — the row lights up when hoosh ships the frame |
 | **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped and sizes the buffer flat (`n * 512 + 32`) — a 4000-byte tool name writes past the allocation | t-ron **2.1.10** (vendored 2.1.10) | done — both executors refuse a name over `AGENT_NAME_MAX` before the gate |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` collision and the three `undefined function` warnings every lane prints) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only; every capacity argument was retired by measurement at 0.44.5 | neither profile exists upstream | `sync-*.sh` re-vendor when they do |
@@ -228,7 +230,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 **Permanent by design (not waiting):** the Windows lane's architectural half — `SYS_SOCKET` /
 `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). The lane gates closed, announced.
 
-### Feature arcs → minors (0.47.0 and on) — candidates, unpinned until decided
+### Feature arcs → minors (0.48.0 and on) — candidates, unpinned until decided
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
 > being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
@@ -241,11 +243,17 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   command hub (cards in the feed; `/retry` and `/edit` as turns), the modal offers "yes, for this session"
   again, and `grants N` rides every status bar. Residual: on the PE lane `[hooks]` cannot carry an
   environment block (the waiting table).
-- **F2 — Model-picker reachability, then pricing.** hoosh serves `GET /v1/health/providers`
-  (provider, base_url, status, enabled, healthy per route), so reachability can be annotated **now**
-  by joining the catalog's `owned_by` against it. Per-model *pricing* still waits on hoosh:
-  `/v1/models/catalog` emits only `{id, owned_by}` (a `/v1/cost/estimate` round-trip is the
-  alternative).
+- **F2 — Model-picker reachability + pricing — shipped as 0.47.0.** The picker's rows, `/models` and
+  `/models <provider>` carry each provider's health as hoosh's prober reports it (`GET /v1/health/providers`,
+  the catalog's `owned_by` joined against the route table, folded per KIND: healthy / unhealthy only when every
+  enabled route agrees, `degraded (h/n routes healthy)` when they do not, unknown when none was measured) and a
+  model's `[pricing.<model>]` rate. Pricing came from the operator's own table — the one thoth has priced costs
+  from since 0.10.3 — because hoosh (2.6.10) serves no pricing table (`POST /v1/cost/estimate` answers one model
+  per call); when hoosh dumps its table, the rows switch source (the waiting table). Residuals: the catalog names
+  a model's provider KIND, not its serving ROUTE, so a kind with partitioned routes reads `degraded` for every
+  model of it (the waiting table asks hoosh for the route); hoosh's health `base_url` is emitted unescaped (a
+  quote in a route's url breaks the body; thoth then reads "health unavailable"); a remote route's "healthy" is a
+  TCP connect, not a valid key.
 - **F3 — Reasoning across resume.** Persist a turn's reasoning fold into the conversation store so
   it survives a restart (the `reasonlog` is session-scoped today, like the memory strip).
 - **F4 — GUI pointer plumbing.** Mouse click-to-switch on the conversation sidebar (keyboard-only

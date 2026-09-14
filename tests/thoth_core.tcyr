@@ -133,6 +133,7 @@ fn main() {
     test_reload();
     test_model_switch();
     test_model_id_sanitise();
+    test_provider_health();
     test_seam_text_sanitise();
     test_gate_mcpres_sanitise();
     test_reply_text_sanitise();

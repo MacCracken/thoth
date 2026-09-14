@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.47.0** — **the model picker shows each provider's health and each model's rate** (2026-09-13, F2). The picker's
+rows, `/models` and `/models <provider>` carry the health hoosh's prober reports (`GET /v1/health/providers`, one
+entry per ROUTE, folded per provider to its best route — a model is served by the first enabled route of its
+`owned_by` kind; `hoosh_providers_parse` / `hoosh_providers_fetch` in hoosh.cyr, the table read by `mpick_load_from`
+per row and by the listings' rows and header). What thoth cannot see is which ROUTE serves a model (hoosh routes by
+each route's `models` patterns; the catalog names only the kind), so a kind's verdict is the one claim that holds for
+all of its routes: healthy when every enabled route measured so, unhealthy when every one did, **degraded** `(h/n
+routes healthy)` when they disagree, disabled, or unknown when none was measured — a route reading `healthy` with
+`last_check_ms: 0` is hoosh's startup default, never a measurement (ADR-0010). ● green · ● red · ● amber · ○ faint in
+the picker, the word after the kind in `/models`, `<provider> <state>` in the picker's hint (budgeted so `⌃C close`
+never yields) — and a model's `[pricing.<model>]` rate as `$in/$out per M` (`hoosh_price_label`, both sides
+declared or nothing; the price yields to the band before the id does; `_cfg_int` saturates instead of wrapping).
+Omit-until-present throughout: a failed health GET empties the table, leaves every dot hollow, the hint saying
+`health unknown`, and both listings ending with the failure kind; a gateway that is not probing is named. hoosh
+serves no pricing table, so the rate is the operator's own (the table thoth has priced costs from since 0.10.3).
+Suite **382 + 1620 + 873 + 740 + 190 + 5** (+205); Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
 **0.46.0** — **the GUI routes slash commands; the authorization modal offers the session grant again** (2026-09-13,
 F1). The window's composer used to send every line to the model; `_gpresent_submit` now routes a slash line by its
 final class (`classify_final`, aliases resolved): prose and `/retry` / `/edit` as turns, everything else through
@@ -3559,7 +3576,7 @@ audit chain included — passes.
   store** — the `conv_*` API + `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool
   calls), `roundlog` / `editlog` / `memlog` (the tool-round / edit-diff / memory-grounding rings), `inhist`
   (composer history recall).
-- **Spine clients** — `hoosh` (inference, streaming, `/models`), `daimon` (MCP list/call), `agent` (the model-driven
+- **Spine clients** — `hoosh` (inference, streaming, `/models`, the provider-health table — 0.47.0), `daimon` (MCP list/call), `agent` (the model-driven
   agentic loop), `memory` (consume **mneme** via daimon — recall/citations/grounding/`/notes` — degrading to the
   local `.thoth/memory` reader).
 - **Model tools** — `project` (jailed `read_file`/`list_dir`, default-on), `edit` (jailed `edit`/`create_file`,
@@ -3587,8 +3604,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **382 + 1486 + 873 + 669 + 190 + 5 assertions across the suites as of
-0.46.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **382 + 1620 + 873 + 740 + 190 + 5 assertions across the suites as of
+0.47.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
