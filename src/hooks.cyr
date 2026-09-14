@@ -23,11 +23,16 @@
 # command string would be exactly the injection this file exists to help prevent). It is bounded by a
 # wall-clock timeout and its stdout/stderr is captured and shown.
 #
-# ⚠ The composed prefix uses `export K='v'; ` and NOT the shorter `K='v' cmd` assignment-prefix form. The
-# short form does not do what it looks like: in `FOO=bar sh -c 'echo $FOO'` the expansion happens before
-# the assignment takes effect, so a hook reading `$THOTH_TOOL` on its own command line would silently see
-# an EMPTY string — a hook that always passes, which is the worst possible failure for a security control.
-# Caught by the test that reads the variable back rather than merely asserting the hook ran.
+# 0.45.6: "in the environment" is literal now. The facts are handed to the child as its environment BLOCK
+# (`exec_shell_capture_env`: `THOTH_EVENT=…`, `THOTH_TOOL=…`, `THOTH_ARGS=…` as `KEY=value` strings, byte for
+# byte, no shell quoting in the path) and the operator's command runs UNMODIFIED as `/bin/sh -c <cmd>`.
+# Through 0.45.5 the facts were composed as an `export K='v'; ` prefix onto that command string — which put
+# them in the child's ARGV, world-readable through `/proc/<pid>/cmdline` for the hook's life (up to ~16 KB of
+# the model's tool arguments), and forced a lossy quoting (`'` became `"`, a newline a space). A process's
+# environment is owner-readable (`/proc/<pid>/environ` is mode 0400), and the values arrive exact.
+# (The old note about `K='v' cmd` vs `export K='v'; cmd` no longer applies: an environment block IS the
+# exported environment, and a hook reading `$THOTH_TOOL` sees it — the test that reads the variable back
+# still guards this.)
 #
 #   exit 0        -> proceed
 #   exit non-zero -> for `pre_tool`, BLOCK the call; for the others, the failure is reported and thoth
@@ -39,18 +44,14 @@
 #    model's own tools (0.39.0, A-3).
 #  * Event facts go through the ENVIRONMENT rather than being substituted INTO the operator's command
 #    text. That is the difference between a hook system and a remote-code-execution primitive, and it
-#    holds: `_hook_env_append` emits a quoted `VAR='...'` assignment and escapes the value, so no tool
-#    argument can close the quote and append a command.
-#    ⚠ 0.44.3 — BUT THE ASSIGNMENTS ARE PREFIXED TO THE `/bin/sh -c` STRING, so they are part of the
-#    child's ARGV, not of a passed environment block. On Linux that argv is world-readable through
-#    `/proc/<pid>/cmdline` for the life of the hook, which means up to ~16 KB of the model's tool
-#    ARGUMENTS — paths, and whatever else it put in a call — are briefly visible to any local user. The
-#    earlier form of this bullet said "never interpolated into the command", which was true about
-#    INJECTION and wrong about EXPOSURE; a documented residual is a claim with an expiry date, and this
-#    one had drifted. Closing it needs a portable spawn-with-environment primitive that `exec.cyr` does
-#    not have (the floor offers `sys_execve` shapes that differ per target), so it is recorded in
-#    roadmap.md's known limitations rather than papered over. Not a new risk class — a hook is already
-#    an unsandboxed command the operator chose — but it is a real one and it is now written down.
+#    holds by construction since 0.45.6: the command string thoth hands `/bin/sh -c` is the operator's
+#    own bytes, untouched; the facts travel in the environment block, where no byte of a value can become
+#    a command. (0.44.3 had found the previous form — an `export K='v'; ` prefix — put them in the child's
+#    argv, world-readable through `/proc/<pid>/cmdline`; and 0.45.6 found the "needs a portable
+#    spawn-with-environment primitive" excuse stale: the POSIX capture already passed `sys_execve` an
+#    empty envp, and the AGNOS floor has `sys_spawn_path_env`.) Where the capture cannot carry a block —
+#    the PE lane inherits thoth's environment and has no channel for a built one — the hook is reported
+#    as "could NOT be run" and a `pre_tool` denies: never a hook that ran blind and passed.
 #  * A hook runs UNSANDBOXED, as the user, exactly like `/run`, the `shell` tool and `[verify].command`.
 #    That is not a new risk class, but it IS a new instance of one, and when the OS-sandbox seam lands
 #    this is one of the paths that should move behind it.
@@ -58,95 +59,77 @@
 #    the strictest verdict wins and a hook cannot be used to widen authority.
 
 var HOOK_OUT_CAP = 4096;        # hook output shown/captured; a hook that talks more than this is misusing the seam
-# HOOK_TIMEOUT_* and HOOK_CMD_CAP live in src/config.cyr, beside the getter that clamps with them —
-# config.cyr is included by test drivers that do NOT include this file, so a constant the config reads
-# must be declared where the config is.
+# HOOK_TIMEOUT_* live in src/config.cyr, beside the getter that clamps with them — config.cyr is included by
+# test drivers that do NOT include this file, so a constant the config reads must be declared where the
+# config is. (HOOK_CMD_CAP went with the composed command at 0.45.6.)
 
 var _hook_buf = 0;
-var _hook_env = 0;              # the env prefix scratch ("K=v K=v ")
-var _hook_cmd = 0;              # the composed "env... sh-command" string
+var HOOK_ENV_CAP = 20480;       # 0.45.6: the `KEY=value` strings' scratch — holds THOTH_ARGS at AGENT_ARGS_MAX (16383) whole
+var _hook_env = 0;              # alloc(HOOK_ENV_CAP): the strings, each NUL-terminated
+var _hook_envp[48];             # N BYTES: up to 5 cstr pointers + the NUL terminator (40 B), headroom to 48
 var _hook_fired = 0;            # hooks run this session (for /state)
 var _hook_blocked = 0;          # pre_tool denials this session
-var _hook_last_clamped = 0;     # 0.43.2: the last _hook_env_append could not fit its value in full
+var _hook_last_clamped = 0;     # the last _hook_env_put could not fit its value in full (THOTH_ARGS past the scratch)
 
 fn hooks_fired() { return _hook_fired; }
 fn hooks_blocked() { return _hook_blocked; }
 fn hooks_reset() { _hook_fired = 0; _hook_blocked = 0; return 0; }
 
-# _hook_env_append: append `KEY='value'` with the value single-quoted and any embedded quote neutralised.
-#
-# ⚠ This is the security-critical function in the file. `value` is attacker-influenced (a tool name the
-# MODEL chose, a shell command it proposed). Single-quoting is what keeps it a string: inside '...' the
-# shell expands nothing. The only byte that can escape is `'` itself, and it is replaced rather than
-# escaped — a `'\''` dance is easy to get subtly wrong, and a hook does not need byte-exact fidelity of a
-# quote character, it needs to not be an injection vector.
-#
-# ⚠ 0.43.2: the value loop stops FOUR bytes short of `cap`, not one. The previous form did
-# `if (off >= (cap - 1)) { return off; }` — an early return out of the MIDDLE of a quoted value, so a
-# saturating value left the assignment with an opening quote and no closing one. The composed line was
-# then not a shell command at all. Reserving room for the closing "'; " plus the NUL means the line is
-# always syntactically whole, however short the value gets.
-fn _hook_env_append(dst, off, cap, key, value) {
-    off = _append_cstr_cap(dst, off, cap, "export ");
-    off = _append_cstr_cap(dst, off, cap, key);
-    off = _append_cstr_cap(dst, off, cap, "='");
+# _hook_env_put (0.45.6): write `KEY=value` NUL-terminated at dst+off, byte for byte — no quoting, this is an
+# environment string, not shell text; a NUL cannot occur in a cstr value and nothing else needs escaping.
+# Returns the offset past the NUL. A value that would not fit `cap` (with its NUL) is clamped whole-bytes and
+# _hook_last_clamped is raised, so the caller can export THOTH_ARGS_TRUNCATED=1 and announce it — a hook must
+# never decide on silently shortened arguments and believe they were complete. Only THOTH_ARGS can ever be
+# that large (AGENT_ARGS_MAX, which HOOK_ENV_CAP holds); the guard is for a caller past the executor's cap.
+fn _hook_env_put(dst, off, cap, key, value) {
     _hook_last_clamped = 0;
+    off = _append_cstr_cap(dst, off, cap, key);
+    off = _append_cstr_cap(dst, off, cap, "=");
     if (value != 0) {
-        var lim = cap - 4;                                 # "'; " + the NUL
+        var lim = cap - 1;                                 # room for the NUL
         var i = 0;
         while ((load8(value + i) != 0) && (off < lim)) {
-            var b = load8(value + i) & 255;
-            if (b == 39) { b = 34; }                       # ' -> "  (cannot terminate the quoting)
-            if (b == 10) { b = 32; }                       # newline -> space (keeps it one env assignment)
-            if (b < 32) { b = 32; }
-            store8(dst + off, b);
+            store8(dst + off, load8(value + i));
             off = off + 1;
             i = i + 1;
         }
-        if (load8(value + i) != 0) { _hook_last_clamped = 1; }   # value did not fit in full
+        if (load8(value + i) != 0) { _hook_last_clamped = 1; }
     }
-    off = _append_cstr_cap(dst, off, cap, "'; ");
-    return off;
+    if (off > (cap - 1)) { off = cap - 1; }
+    store8(dst + off, 0);
+    return off + 1;
 }
 
-# _hook_run: run `cmd` with THOTH_EVENT/THOTH_TOOL/THOTH_ARGS exported. Returns the exit code, -2 when it timed out,
-# or -1 when the hook could not be run at all — announced here, on every surface, and not counted as fired.
-# ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never a
-# hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to create the capture file, to
-# fork or to wait. Until 0.45.2 that was every call on macOS (src/exec.cyr), and on Linux any local user who
-# pre-plants /tmp/thoth_sh_<pid>_<n> names makes the exclusive create fail — an operator's deny, off on demand.
+# _hook_run: run `cmd` with THOTH_EVENT/THOTH_TOOL/THOTH_ARGS in its ENVIRONMENT. Returns the exit code, -2 when it
+# timed out, or -1 when the hook could not be run at all — announced here, on every surface, and not counted as
+# fired. ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never
+# a hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to create the capture file, to
+# fork or to wait — or, since 0.45.6, a target whose capture cannot carry an environment block (the PE lane).
 fn _hook_run(cmd, event, tool, args) {
     if (_hook_buf == 0) { _hook_buf = alloc(HOOK_OUT_CAP + 1); }
-    if (_hook_cmd == 0) { _hook_cmd = alloc(HOOK_CMD_CAP); }
-    if ((_hook_buf == 0) || (_hook_cmd == 0)) { return 0 - 1; }
-    var cap = HOOK_CMD_CAP;
+    if (_hook_env == 0) { _hook_env = alloc(HOOK_ENV_CAP); }
+    if ((_hook_buf == 0) || (_hook_env == 0)) { return 0 - 1; }
+    # the environment block: KEY=value strings back to back in the scratch, their pointers in _hook_envp
     var off = 0;
-    off = _hook_env_append(_hook_cmd, off, cap, "THOTH_EVENT", event);
-    off = _hook_env_append(_hook_cmd, off, cap, "THOTH_TOOL", tool);
-    # ⚠ 0.43.2: THOTH_ARGS is the one attacker-sized field here — the executor accepts tool arguments up
-    # to AGENT_ARGS_MAX (16383 bytes) and only THEN calls the hook. Composed against the bare cap it
-    # could consume the whole buffer and leave NO ROOM FOR THE OPERATOR'S COMMAND, so the hook that was
-    # supposed to run simply was not in the string — and the resulting syntax error was reported to the
-    # operator as their own hook's verdict. Reserve the command's bytes first: the command is the
-    # security control and must always survive; the args are what get clamped.
-    var argcap = cap - strlen(cmd) - 2;
-    if (argcap < 64) { argcap = 64; }                       # a pathological command: still emit a whole assignment
-    off = _hook_env_append(_hook_cmd, off, argcap, "THOTH_ARGS", args);
-    # Never let a hook decide on silently shortened arguments and believe they were complete. The
-    # operator's script can test this and fail closed on its own terms; announcing is thoth's job.
+    var nenv = 0;
+    store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
+    off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP, "THOTH_EVENT", event);
+    store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
+    off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP, "THOTH_TOOL", tool);
+    store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
+    off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP - 32, "THOTH_ARGS", args);   # keep room for the flag below
     if (_hook_last_clamped == 1) {
-        off = _append_cstr_cap(_hook_cmd, off, cap, "export THOTH_ARGS_TRUNCATED='1'; ");
+        store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
+        off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP, "THOTH_ARGS_TRUNCATED", "1");
         ui_emit(ROLE_RED, "  [hook "); emit(event);
         ui_emit(ROLE_RED, "] THOTH_ARGS was too large to pass in full");
         ui_emit(ROLE_FAINT, " — THOTH_ARGS_TRUNCATED=1 is exported"); oprintln("");
     }
-    off = _append_cstr_cap(_hook_cmd, off, cap, cmd);
-    if (off > (cap - 1)) { off = cap - 1; }
-    store8(_hook_cmd + off, 0);
+    store64(&_hook_envp + nenv * 8, 0);
 
     var st[16];
     store64(&st, 0 - 1); store64(&st + 8, 0);
-    var n = exec_shell_capture(_hook_cmd, _hook_buf, HOOK_OUT_CAP, config_hook_timeout_ms(), &st);
+    var n = exec_shell_capture_env(cmd, _hook_buf, HOOK_OUT_CAP, config_hook_timeout_ms(), &st, &_hook_envp);   # the operator's command, untouched
     if (n < 0) { n = 0; }
     store8(_hook_buf + n, 0);
     var code = load64(&st);

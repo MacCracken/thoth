@@ -2,6 +2,64 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.45.6] - 2026-09-13
+
+**Repair batch 2.** Hook event facts leave the command line for the child's environment block; the dep refresh
+— darshana 1.1.2, bote-core 3.3.9, the cyrius pin 6.6.3 with `lib/` fully re-synced; and the Windows capture
+creates its temp file exclusively. Suite **326 + 1478 + 855 + 666 + 190 + 5** (+9). Linux / aarch64 / AGNOS
+build with 0.45.2's warning set minus the "lib/ shadows the pin" warning (gone — `lib/` matches the pin now);
+macOS built and tested natively at the 6.6.3 pin.
+
+### Fixed — hook event facts travel in the environment block, not in argv (batch 2, item 1)
+
+`[hooks]` used to compose `export THOTH_EVENT='…'; export THOTH_TOOL='…'; export THOTH_ARGS='…'; <command>` and
+hand that whole string to `/bin/sh -c` — which put every fact, up to ~16 KB of the model's tool arguments, in
+the child's ARGV, world-readable through `/proc/<pid>/cmdline` for the hook's life (0.44.3 wrote it down; the
+excuse was a missing "portable spawn-with-environment primitive"). The excuse was stale: the POSIX capture
+already handed `sys_execve` an empty `envp`. `exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status,
+envp)` now takes a NUL-terminated array of `KEY=value` cstrs as the child's WHOLE environment (the plain form
+is the env form with none), and `_hook_run` builds `THOTH_EVENT=`, `THOTH_TOOL=`, `THOTH_ARGS=` (and
+`THOTH_ARGS_TRUNCATED=1` if a value had to be clamped past the 20 KiB scratch, which holds `AGENT_ARGS_MAX`
+whole) into it — byte for byte: a single quote no longer becomes a double quote, a newline no longer a space,
+and no shell quoting stands between a value and the hook. The operator's command runs UNMODIFIED. The hook's
+environment holds only those facts (no inherited PATH — the shell's own default, as before). On the PE lane,
+whose capture inherits thoth's environment and has no channel for a built block, a non-empty `envp` reports
+"could not run" and a `pre_tool` DENIES — never a hook that ran without its facts and passed. `HOOK_CMD_CAP`
+and the `_hook_env_append` quoting are retired. `.thoth/config.cyml.example` says how to read the facts.
+
+### Changed — dep refresh: darshana 1.1.2, bote-core 3.3.9, cyrius 6.6.3 (batch 2, item 2)
+
+`scripts/sync-darshana.sh 1.1.2` / `sync-bote.sh 3.3.9` (defaults bumped; the canonical bundles off the tags,
+byte-identical to the local dists). Symbol-swept both ways before anything else: darshana removed
+`_ansi_emit_u8` (thoth never called it), narrowed `tty_open_signalfd`'s failure rollback to the mask bits it
+added, and made `tty_close_signalfd` return -1/0 instead of a raw -errno (thoth ignores it); bote-core changed
+its version string and nothing else. The pin `6.6.2 → 6.6.3` refolds all twelve stdlib bundles (14 `lib/`
+files); of the five thoth includes, four changed only their version line and sigil re-indented an `#ifdef` —
+zero removed symbols, zero enum changes (the sweep's two hits, `UTS_*` and `DDEC_CTX_SIZE`, were a per-target
+twin and a module thoth does not include). `lib/` was re-synced with `cyrius lib sync --full` (110 files) —
+never the build's own side-effect sync, which skips same-size files. Every target built and the suite ran on
+the new pin FIRST (gotcha 10: a refolded module can change behaviour with no symbol diff); the only failures
+were the two vendor-pin gates, moved to the new versions. The Mac got 6.6.3 by the 0.45.5 tarball recipe (the
+rsync now excludes the local config). Static data 652,448 B.
+
+### Fixed — the Windows capture creates its temp file exclusively (batch 2, item 3)
+
+`exec_shell_capture` on the PE lane opened `thoth_sh_<pid>_<n>.tmp` with `O_WRONLY|O_CREAT` (OPEN_ALWAYS) after
+a best-effort pre-delete — a pre-planted name was a TOCTOU residual, and a file a timed-out grandchild still
+held could be reused with a stale tail. cyrius 6.4.58 maps `O_CREAT|O_EXCL` to `CREATE_NEW`, so it now takes
+the POSIX path's exclusive create with the same 8-try counter loop: a taken name fails the create and the next
+name is tried; the file is always fresh, so the stale-tail case is retired with the pre-delete. Verified on
+cass (Windows 11) with a throwaway `--win` harness around the real `src/exec.cyr`: a plain capture with its
+exit code, the first candidate name pre-planted (the counter moved on and the planted file's bytes were left
+alone), and an honest `-2` timeout. The grandchild-held-file residual (one temp file lingering until the
+grandchild exits) is unchanged and still documented.
+
+Tests (+9): the hook facts read back from `/proc/<pid>/environ` and absent from `/proc/<pid>/cmdline` (Linux;
+stated as skipped where there is no `/proc`), a single quote / newline / double quote arriving as themselves,
+`HOME` unset in the hook's environment, the truncation flag past the scratch and its absence at
+`AGENT_ARGS_MAX`. Proven by breaking the channel (7 failures). The vendor gates pin bote-core 3.3.9 and
+darshana 1.1.2.
+
 ## [0.45.5] - 2026-09-13
 
 **Repair batch 1.** The first patch cut under the batch discipline (0.45.4's roadmap): six repairs and the

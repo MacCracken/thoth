@@ -6,6 +6,13 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.6** (2026-09-13, not a full sweep): repair batch 2 updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block, **Toolchain** — the 6.6.3 pin and the vendored-dist line, **Targets**
+> header + aarch64/macOS rows, **Tests** counts, **Next**), `docs/development/roadmap.md` (batch 2 → shipped, the
+> hook-facts entry dropped, the Windows-lane entry and the two waiting rows updated), `.thoth/config.cyml.example`
+> (`[hooks]`: the facts are the environment block), the sync scripts' default tags, `README.md` (stamp) and this
+> file.
+>
 > **Touched at 0.45.5** (2026-09-13, not a full sweep): repair batch 1 updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block, **Targets** header — macOS at the pin, **Tests** counts, **Next**),
 > `docs/development/roadmap.md` (batch 1 → shipped, batch 2 marked NEXT, the streaming-usage decision reversed in the

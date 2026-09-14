@@ -199,24 +199,12 @@ the double read still stays for a store with no `MEMORY.md`; item 4 was decided 
 requesting the usage frame — see *streaming usage* below); the GUI's on-compositor rainbow confirm is the
 operator's (no display in the harness). **Up next: batch 2.**
 
-### Repair batch 2 → 0.45.6 (thoth-owned, needs a host or a dep refresh first) — NEXT
+### Repair batch 2 → shipped as 0.45.6
 
-1. **Hook event facts move from argv to the environment.** `[hooks]` prefixes `THOTH_EVENT` /
-   `THOTH_TOOL` / `THOTH_ARGS` as quoted assignments to the `/bin/sh -c` string, so up to ~16 KB of
-   the model's tool arguments sit in `/proc/<pid>/cmdline` for the hook's life. ⭐ **The "needs a
-   portable spawn-with-environment primitive" claim was stale:** `src/exec.cyr` already hands
-   `sys_execve` an (empty) `envp` on the POSIX path, and the AGNOS floor has `sys_spawn_path_env`.
-   Build the facts into that `envp` (Windows inherits `wenv=0` and needs a built block — gate it to
-   the lanes that can carry it, announce where one cannot). [registry → *hook event facts*]
-2. **Dep refresh sweep** — the vendored darshana **1.0.0 → 1.1.2**, bote-core **3.3.7 → 3.3.9**, and
-   the cyrius pin **6.6.2 → 6.6.3**; re-run every target and read every diff
-   (the refresh gotchas: symbol + enum diff, build AND read each target, `cyrius build` rewrites
-   `lib/`). A refresh has bitten before (0.38.2's max_tokens regression, 0.44.5's re-measured caps), which is
-   why it ships as its own step in the batch — re-run and read, never re-read. The Mac (ecb) now carries the
-   6.6.2 pin (installed at 0.45.5 by the tarball recipe); the 6.6.3 bump ships it the same way.
-3. **`src/exec.cyr`'s Windows capture takes the exclusive create** — cyrius 6.4.58's reroute honours
-   `O_CREAT|O_EXCL`, so the POSIX path's exclusive create + retry loop can be shared; needs the
-   Windows host (cass) to run it. [registry → *Windows lane*]
+Items 1–3 shipped (see the [CHANGELOG](../../CHANGELOG.md)): hook facts in the environment block (the PE lane
+reports "could not run" until its capture can carry one), darshana 1.1.2 / bote-core 3.3.9 / cyrius 6.6.3 with
+`lib/` at the pin, the Windows exclusive create verified on cass. **The next batch gathers from the registry
+below as repairs surface; nothing thoth-owned is pinned at the moment.**
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
@@ -230,8 +218,8 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 | **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — hoosh's own follow-up note; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.6.10** | thoth keeps requesting it and already decodes it (0.45.5 decided) — the row lights up when hoosh ships the frame |
 | **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped and sizes the buffer flat (`n * 512 + 32`) — a 4000-byte tool name writes past the allocation | t-ron **2.1.10** (vendored 2.1.10) | done — both executors refuse a name over `AGENT_NAME_MAX` before the gate |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` collision and the three `undefined function` warnings every lane prints) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only; every capacity argument was retired by measurement at 0.44.5 | neither profile exists upstream | `sync-*.sh` re-vendor when they do |
-| **darshana** | a BSD termios peer → the T2 TUI on macOS (`term_raw` honestly returns -1 there today; the line tier is the degradation) | darshana **1.1.2** — macOS still out of its scope | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
-| **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers) and sit's `sit_rmdir` against a floor with no `RemoveDirectoryW` route (`xrmdir` is in the floor since cyrius 6.5.2) | t-ron 2.1.10 · sit 1.6.2 · cyrius 6.6.3 | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |
+| **darshana** | a BSD termios peer → the T2 TUI on macOS (`term_raw` honestly returns -1 there today; the line tier is the degradation) | darshana **1.1.2** (vendored 1.1.2 at 0.45.6) — macOS still out of its scope | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
+| **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers) and sit's `sit_rmdir` against a floor with no `RemoveDirectoryW` route (`xrmdir` is in the floor since cyrius 6.5.2); and, since 0.45.6, a spawn that carries an environment BLOCK (the PE capture inherits; `[hooks]` reports "could not run" there) | t-ron 2.1.10 · sit 1.6.2 · cyrius 6.6.3 | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history file to `0600`; `sys_chmod` is a return-0 stub on Windows and AGNOS) and a portable no-follow open bit (`O_NOFOLLOW` on the history file) | cyrius **6.6.3** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **agnos (floor)** | `sys_open` carries no create-mode channel — a file created on AGNOS lands at the kernel default, not `0600` | the frozen 0–33 ABI | degrades honestly; a candidate filing if the ABI gains a mode channel |
 | **cyrius (floor)** | `is_symlink` returns 0 on Windows, so the jail's symlink walk (audit A-1) is a no-op there — **the PE lane must not ship without revisiting it** | cyrius **6.6.3** | the lane is closed anyway (architectural, below) |
@@ -325,21 +313,15 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   degradation. When darshana ships the peer, `src/term.cyr`'s macOS branch collapses into the
   forwarder branch and nothing above it changes.
 
-- **Hook event facts** (batch 2, item 1) — **sit in the child's argv.** `[hooks]` passes `THOTH_EVENT`,
-  `THOTH_TOOL`, `THOTH_ARGS` as quoted `VAR='...'` assignments prefixed to the `/bin/sh -c` string.
-  The quoting is correct — no tool argument can close it and append a command — but the assignments
-  are part of the child's **argv**, so on Linux up to ~16 KB of the model's tool arguments are
-  readable through `/proc/<pid>/cmdline` for the life of the hook. Not a new risk class — a hook is
-  already an unsandboxed command the operator chose — but a real one. The envp channel is already in
-  `src/exec.cyr` (see batch 2).
-
-- **Windows lane** (batch 2, item 3; the vendored-gap row above) — **blocked purely outside thoth's
-  authored source.** 0.44.3 took its reachable undefined functions from 11 to 1 and removed
-  `TTY_SIGMASK_WINCH`, `EPOLL_CTL_ADD` and `EPOLLIN` from thoth's own code entirely; `scripts/build.sh`
-  names the three remaining classes separately instead of letting one mask the others —
-  **architectural** (`SYS_SOCKET` / `SYS_CONNECT`, the epoll set; permanent, the lane gates closed,
-  announced), **vendored** (`VENDOR_GAP`: t-ron's signal half, sit's `sit_rmdir`), and thoth's own
-  exclusive create in `exec.cyr` (batch 2). `TTY_SIGMASK_WINCH` stays off **every** list on purpose,
+- **Windows lane** (the vendored-gap row above) — **blocked purely outside thoth's authored source.**
+  0.44.3 took its reachable undefined functions from 11 to 1 and removed `TTY_SIGMASK_WINCH`,
+  `EPOLL_CTL_ADD` and `EPOLLIN` from thoth's own code entirely; `scripts/build.sh` names the remaining
+  classes separately instead of letting one mask the others — **architectural** (`SYS_SOCKET` /
+  `SYS_CONNECT`, the epoll set; permanent, the lane gates closed, announced) and **vendored** (`VENDOR_GAP`:
+  t-ron's signal half, sit's `sit_rmdir`). thoth's own half is done: the capture's exclusive create shipped
+  at 0.45.6, verified on cass. What the lane cannot carry yet is an environment block for `[hooks]` (the PE
+  capture inherits thoth's environment), so a hook there reports "could not run" and a `pre_tool` denies.
+  `TTY_SIGMASK_WINCH` stays off **every** list on purpose,
   so a new raw `tty_*` call in thoth source turns this lane red again — the regression tripwire.
   The classifier collects `undefined function` as well as `undefined variable` (the error cyrius
   actually refuses to emit on), reading the reachable set from the list cyrius prints AFTER its

@@ -58,9 +58,8 @@ var _cfg_hook_pre_tool = 0;
 var _cfg_hook_post_tool = 0;
 var _cfg_hook_session_end = 0;
 var _cfg_hook_timeout_ms = 0 - 1;
-var HOOK_CMD_CAP = 32768;           # composed "export K=..; <command>"; a hook longer than this is refused.
-                                    # 0.43.2: 8192 was below the worst case it has to hold — THOTH_ARGS carries a tool
-                                    # call of up to AGENT_ARGS_MAX (16383) bytes, so the env prefix alone could exceed it.
+# (HOOK_CMD_CAP, the composed "export K=..; <command>" buffer's cap, retired at 0.45.6: the command runs untouched
+# and the event facts travel in the child's environment block — src/hooks.cyr HOOK_ENV_CAP.)
 var HOOK_TIMEOUT_DEFAULT_MS = 15000;
 var HOOK_TIMEOUT_MAX_MS = 120000;
 var _cfg_verify_command = 0;        # 0.41.0 (T2-5): [verify].command — the project's own check; 0 = unset

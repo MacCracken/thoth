@@ -290,6 +290,11 @@ model = "claude-haiku-4-5-20251001"
 #
 # Event facts arrive in the ENVIRONMENT — THOTH_EVENT, THOTH_TOOL, THOTH_ARGS —
 # never spliced into your command, because a tool name is text the MODEL chose.
+# 0.45.6: they are the hook's environment BLOCK (byte for byte — a quote or a
+# newline in the arguments arrives as itself), the command runs untouched, and
+# the hook's environment holds ONLY these facts (no PATH inherited — the shell's
+# own default, as before). THOTH_ARGS_TRUNCATED=1 is set if the arguments had
+# to be clamped. Read them quoted: "$THOTH_ARGS".
 #
 # A pre_tool hook is a deterministic, code-enforced deny a prompt cannot argue
 # with. It can only ever DENY: it runs alongside the t-ron gate, so the strictest

@@ -111,6 +111,9 @@ fn _shell_tmp_path() {
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     store64(status_out, 0 - 3); store64(status_out + 8, 0); return 0;
 }
+fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
+    store64(status_out, 0 - 3); store64(status_out + 8, 0); return 0;
+}
 fn shell_supported() { return 0; }
 #endif
 #ifdef CYRIUS_TARGET_WIN
@@ -130,16 +133,17 @@ fn shell_supported() { return 0; }
 #     is a fixed 16 KiB, so a command exceeding ~8179 bytes is REJECTED fail-closed ({-1,0}, no spawn) rather
 #     than overrunning the buffer (NOT silently truncated — _w_append_cstr has no cap).
 #   - The temp file lives in the CURRENT WORKING DIRECTORY (the PE surface has no GetTempPathW), not /tmp; a
-#     read-only CWD fails the create and degrades fail-CLOSED to {-1,0} (never a faked success). The open is
-#     OPEN_ALWAYS without O_TRUNC (the reroute ignores it), so the best-effort pre-delete is the only stale-
-#     content guard: in the extremely narrow case where a lingering file (below) is reconstructed by a later
+#     read-only CWD fails the create and degrades fail-CLOSED to {-1,0} (never a faked success). 0.45.6: the
+#     open is an EXCLUSIVE create (CREATE_NEW) with the POSIX retry loop, so the file is always fresh — the
+#     stale-tail case below is history. (Through 0.45.5 the open was OPEN_ALWAYS without O_TRUNC, the reroute
+#     ignoring it, so a best-effort pre-delete was the only stale-content guard: in the narrow case where a
+#     lingering file (below) was reconstructed by a later
 #     run (pid reuse + the counter reset to 0) whose pre-delete ALSO fails on the still-live grandchild
-#     handle, a shorter new capture could read new-front + stale-tail. Not reachable without that exact combo.
-#   - No O_EXCL on this open (and no O_NOFOLLOW on any Windows path): collision resistance is getpid()+counter
-#     name-uniqueness plus a best-effort pre-delete; a pre-planted name is a TOCTOU residual (lower risk than
-#     /tmp — the CWD is the user's own project dir). ⚠ 0.45.2: the reason this used to give ("the CreateFileW
-#     reroute ignores them") expired at cyrius 6.4.58, which maps O_CREAT|O_EXCL to CREATE_NEW. Switching this
-#     open to an exclusive create needs the POSIX retry loop and a run on the Windows host; not done blind.
+#     handle, a shorter new capture could read new-front + stale-tail — not reachable without that exact combo,
+#     and not reachable at all now that every capture file is created fresh.)
+#   - No O_NOFOLLOW on any Windows path (0.45.6 closed the O_EXCL half: the create is exclusive, a pre-planted
+#     name fails it and the counter moves on, as on POSIX — the TOCTOU residual 0.45.2 named is gone). The CWD
+#     is the user's own project dir, a lower-risk place than /tmp to begin with.
 #   - No process-group kill (Win32 has no POSIX pgid on this surface; a Job Object is not wired): a timeout
 #     TerminateProcess-es only the cmd.exe, so a detached grandchild (`start foo`, a backgrounded process)
 #     can survive AND — holding the inherited temp-file handle — makes the post-kill DeleteFileW fail
@@ -173,9 +177,19 @@ fn _shell_tmp_path_win() {
 
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     store64(status_out, 0 - 1); store64(status_out + 8, 0);       # fail-closed default {-1, 0}
-    var path = _shell_tmp_path_win();
-    sys_unlink(path);                                            # best-effort pre-delete (reroute has no O_TRUNC)
-    var out_fd = sys_open(path, 65, 0);                          # O_WRONLY|O_CREAT (1|64) -> CreateFileW OPEN_ALWAYS
+    # 0.45.6: the EXCLUSIVE create, as on POSIX — O_WRONLY|O_CREAT|O_EXCL, which the CreateFileW reroute maps to
+    # CREATE_NEW since cyrius 6.4.58: a pre-planted name (or a file a grandchild still holds from an earlier run)
+    # fails the create and the counter moves on to the next name, up to 8 tries, then fail closed. The file is
+    # therefore always FRESH, which also retires the OPEN_ALWAYS-without-O_TRUNC stale-tail case the pre-delete
+    # used to guard. Verified on cass (the Windows host) by pre-planting the first candidate name.
+    var out_fd = 0 - 1;
+    var path = 0;
+    var tries = 0;
+    while ((tries < 8) && (out_fd < 0)) {
+        path = _shell_tmp_path_win();
+        out_fd = sys_open(path, O_WRONLY | O_CREAT | O_EXCL, 384);
+        tries = tries + 1;
+    }
     if (out_fd < 0) { return 0; }                               # status stays {-1, 0}
     var sh = syscall(0xF003, out_fd, 1, 1);                      # SetHandleInformation(h, HANDLE_FLAG_INHERIT, 1)
     if (sh == 0) { sys_close(out_fd); sys_unlink(path); return 0; }   # non-inheritable -> empty capture; fail closed
@@ -210,6 +224,15 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     if (total < 0) { total = 0; }
     return total;
 }
+# exec_shell_capture_env (0.45.6): the environment-carrying form. The PE capture INHERITS thoth's environment
+# (wenv=0, so PATH reaches cmd.exe) and lib/process_win.cyr has no channel for a built block, so a caller that
+# needs its facts in the child's environment cannot be served here: with a non-empty `envp` this reports
+# "could not run" ({-1, 0}, no spawn) — announced by the caller, never a hook that ran without its facts and
+# passed. An empty `envp` is the plain capture.
+fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
+    if (envp != 0) { if (load64(envp) != 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; } }
+    return exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out);
+}
 fn shell_supported() { return 1; }
 #endif
 
@@ -223,7 +246,16 @@ fn shell_supported() { return 1; }
 # EMPTY environment (the shell's compiled-in default PATH), matching /run's exec_vec convention;
 # stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
 # The caller owns NUL-termination of buf at the returned count (buf must be >= buflen+1).
+#
+# exec_shell_capture_env (0.45.6): the same capture with `envp` — a NUL-terminated array of `KEY=value`
+# cstr pointers — as the child's WHOLE environment (0 = empty, the plain form). This is how [hooks] hands a
+# hook its event facts: an environment block is the process's own (`/proc/<pid>/environ` is owner-readable),
+# where the old `export K='v'; ` prefix rode in argv — world-readable through `/proc/<pid>/cmdline` for the
+# hook's life. No shell quoting is involved: a value goes to the child byte for byte.
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
+    return exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, 0);
+}
+fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     # Open a fresh temp file with O_WRONLY|O_CREAT|O_EXCL, 0600 (384). O_EXCL fails on a pre-planted
     # file/symlink; bump the counter and retry a few times before giving up closed.
     #
@@ -274,9 +306,11 @@ fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
         store64(&argv + 8,  "-c");
         store64(&argv + 16, cmdline);  # the model's command flows as ONE argv element (no double-shell)
         store64(&argv + 24, 0);
-        var envp[16];
-        store64(&envp, 0);
-        sys_execve("/bin/sh", &argv, &envp);
+        var env0[16];                  # the empty environment (the plain capture) — the shell's own default PATH
+        store64(&env0, 0);
+        var ep = envp;
+        if (ep == 0) { ep = &env0; }
+        sys_execve("/bin/sh", &argv, ep);
         sys_exit(127);
     }
     sys_close(out_fd);                  # parent's write copy; the child holds its own duped fds

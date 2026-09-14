@@ -1781,6 +1781,38 @@ fn test_project() {
     xunlink("/tmp/thoth_hook_injection_canary");
     assert_eq(hooks_pre_tool("x'; touch /tmp/thoth_hook_injection_canary; echo '", "{}"), 1, "a metacharacter-laden tool name does not break out of the quoting");
     assert_eq(file_exists("/tmp/thoth_hook_injection_canary"), 0, "...and the injected command did NOT run");
+    # 0.45.6 (repair batch 2, item 1): the facts are the child's ENVIRONMENT BLOCK, and the command is untouched.
+    # (a) exposure: the hook's own argv carries none of them — read back through /proc where there is one
+    if (file_exists("/proc/self/cmdline") == 1) {
+        # the pattern matches an ASSIGNMENT (`THOTH_X=`), never the hook's own text in argv (which holds the pattern)
+        _cfg_hook_pre_tool = "tr '\\0' ' ' < /proc/$$/cmdline | grep -q 'THOTH_[A-Z]*=' && exit 1; exit 0";
+        assert_eq(hooks_pre_tool("shell", "{\"secret\":\"in-the-args\"}"), 1, "no THOTH_ fact appears in the hook's argv (/proc/<pid>/cmdline) — they are in its environment");
+        _cfg_hook_pre_tool = "tr '\\0' ' ' < /proc/$$/cmdline | grep -q cmdline && exit 0; exit 1";
+        assert_eq(hooks_pre_tool("shell", "{}"), 1, "...and the argv IS the operator's command, verbatim");
+        _cfg_hook_pre_tool = "tr '\\0' ' ' < /proc/$$/environ | grep -q 'THOTH_ARGS={.secret.:.in-the-args.}' && exit 0; exit 1";
+        assert_eq(hooks_pre_tool("shell", "{\"secret\":\"in-the-args\"}"), 1, "...and the facts ARE in the environment block (/proc/<pid>/environ)");
+    } else {
+        assert(1, "no /proc here — the argv exposure check is Linux-only (stated)");
+    }
+    # (b) values arrive byte for byte: a single quote and a newline used to be rewritten by the quoting
+    _cfg_hook_pre_tool = "test \"$THOTH_ARGS\" = \"a'b\"";
+    assert_eq(hooks_pre_tool("shell", "a'b"), 1, "a single quote in THOTH_ARGS reaches the hook as itself (it used to become a double quote)");
+    _cfg_hook_pre_tool = "test \"$THOTH_ARGS\" = \"$(printf 'l1\\nl2')\"";
+    assert_eq(hooks_pre_tool("shell", "l1\nl2"), 1, "a newline in THOTH_ARGS reaches the hook as a newline (it used to become a space)");
+    _cfg_hook_pre_tool = "test \"$THOTH_TOOL\" = \"we\\\"ird\"";
+    assert_eq(hooks_pre_tool("we\"ird", "{}"), 1, "a double quote in THOTH_TOOL reaches the hook as itself");
+    # (c) the child's environment is ONLY the facts (no inherited PATH — the shell's own default, as before)
+    _cfg_hook_pre_tool = "test -z \"$HOME\"";
+    assert_eq(hooks_pre_tool("shell", "{}"), 1, "the hook does not inherit thoth's environment (HOME is unset in it)");
+    # (d) the truncation flag: a value past the scratch is clamped and announced, one within it is not
+    var huge = alloc(HOOK_ENV_CAP + 1024);
+    var hi = 0;
+    while (hi < (HOOK_ENV_CAP + 512)) { store8(huge + hi, 0x62); hi = hi + 1; }
+    store8(huge + hi, 0);
+    _cfg_hook_pre_tool = "test \"$THOTH_ARGS_TRUNCATED\" = 1";
+    assert_eq(hooks_pre_tool("edit", huge), 1, "a THOTH_ARGS past the environment scratch is clamped and THOTH_ARGS_TRUNCATED=1 is set");
+    _cfg_hook_pre_tool = "test -z \"$THOTH_ARGS_TRUNCATED\"";
+    assert_eq(hooks_pre_tool("edit", big_args), 1, "...while a THOTH_ARGS at AGENT_ARGS_MAX arrives whole, no flag");
     _cfg_hook_pre_tool = 0;
     hooks_reset();
     assert_eq(hooks_fired(), 0, "reset clears the counters");

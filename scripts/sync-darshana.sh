@@ -25,10 +25,10 @@
 # copy gone the stdlib's per-arch definition is the only one, which is the
 # right answer on every target. Do NOT reintroduce a local SYS_IOCTL.
 #
-# Usage: ./scripts/sync-darshana.sh [tag]   (default: 1.0.0)
+# Usage: ./scripts/sync-darshana.sh [tag]   (default: 1.1.2)
 set -euo pipefail
 
-TAG="${1:-1.0.0}"
+TAG="${1:-1.1.2}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/darshana.cyr"
 

@@ -20,7 +20,7 @@
 # Usage: ./scripts/sync-bote.sh [tag]   (default: 3.3.7)
 set -euo pipefail
 
-TAG="${1:-3.3.7}"
+TAG="${1:-3.3.9}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/bote-core.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/bote/${TAG}/dist/bote-core.cyr"

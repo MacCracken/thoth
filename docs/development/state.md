@@ -7,6 +7,16 @@
 
 ## Version
 
+**0.45.6** — **repair batch 2** (2026-09-13). Hook event facts travel in the child's environment BLOCK
+(`exec_shell_capture_env`; `THOTH_EVENT` / `THOTH_TOOL` / `THOTH_ARGS` as `KEY=value` strings, byte for byte, the
+operator's command untouched) instead of an `export K='v'; ` prefix in argv that `/proc/<pid>/cmdline` showed to
+every local user; the PE lane, which cannot carry a block, reports the hook as "could not run" (a `pre_tool`
+denies). The dep refresh: darshana 1.0.0 → 1.1.2, bote-core 3.3.7 → 3.3.9, the cyrius pin 6.6.2 → 6.6.3 with `lib/`
+fully re-synced — symbol-swept, every target built, the suite green on the new pin first, the Mac given 6.6.3 by the
+tarball recipe. The Windows capture creates its temp file EXCLUSIVELY (CREATE_NEW) with the POSIX retry loop —
+verified on cass by pre-planting the first candidate name. Suite **326 + 1478 + 855 + 666 + 190 + 5** (+9);
+Linux / aarch64 / AGNOS build with 0.45.2's warning set minus the lib-shadow warning; macOS green at the 6.6.3 pin.
+
 **0.45.5** — **repair batch 1** (2026-09-13). The first patch cut under the batch discipline — repairs only: file
 CONTENT goes through the TEXT policy on `/read`, the tree pane's Enter and every diff body (in place for `/read`, a
 scratch copy for diffs; a CRLF's CR folds to a space); the memory double read closes without a global config on the
@@ -3276,7 +3286,13 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.2` (in `cyrius.cyml [package].cyrius`), moved from `6.5.51` at 0.44.6 — the
+- **Cyrius pin**: `6.6.3` (in `cyrius.cyml [package].cyrius`), moved from `6.6.2` at 0.45.6 (repair batch 2). The
+  `6.6.2` → `6.6.3` hop refolds all twelve stdlib bundles (14 `lib/` files, 3013/1069 lines); of the five thoth
+  includes, four changed only their version line and sigil re-indented an `#ifdef` — **zero** removed symbols,
+  **zero** enum changes, the suite green on the new pin first (the gotcha-10 rule), all three targets building
+  with the "lib/ shadows the pin" warning gone. `lib/` was re-synced with `cyrius lib sync --full` (never the
+  build's own side-effect sync, which skips same-size files). Static data 652,448 B (was 651,904 B at 0.45.5).
+  The earlier hop, `6.5.51` → `6.6.2` at 0.44.6 — the
   `Result` / `Option` / `Either` value-form hop, which DID force a source migration (four sites; see the
   CHANGELOG). The `6.5.43` → `6.5.51` hop recorded below (0.44.5) forced **no source migration** — checked, not assumed. Symbol-diffed both ways:
   **one** public stdlib fn removed (`sys_blkstats`, a withdrawn AGNOS syscall thoth never called),
@@ -3371,9 +3387,11 @@ floor; never fork the spine.**
   `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via `cyrius lib sync`
   (88 modules).
 - **Vendored dists** (committed under `src/vendor/`, refreshed by `scripts/sync-*.sh` — the script's default
-  `TAG` is thoth's vendor pin of record). At 0.38.6: **avatara 2.14.1** · **bote-core 3.3.7** · **libro 2.8.12** ·
-  **sankoch-zlib 2.7.9** · **t-ron 2.1.9** · **sit-read 1.6.2** · **anuenue 1.2.0** · **vyakarana 2.4.0** ·
-  **darshana 1.0.0** · **kashi 1.0.6**. **Every one now has a sync script** — 0.38.6 added
+  `TAG` is thoth's vendor pin of record). At 0.45.6: **avatara 2.14.1** · **bote-core 3.3.9** (3.3.7 → 3.3.9, only
+  its version string changed) · **libro 2.8.12** · **sankoch-zlib 2.7.9** · **t-ron 2.1.10** · **sit-read 1.6.2** ·
+  **anuenue 1.2.0** · **vyakarana 2.4.0** · **darshana 1.1.2** (1.0.0 → 1.1.2: `tty_open_signalfd` rolls back only
+  the mask bits it added, `tty_close_signalfd` returns -1/0 instead of a raw -errno — thoth ignores it — and
+  `_ansi_emit_u8` is gone, which thoth never called) · **kashi 1.0.6**. **Every one now has a sync script** — 0.38.6 added
   `sync-darshana.sh`, `sync-vyakarana.sh` and `sync-kashi.sh`, closing the hand-vendored gap this line used to
   record. `kashi.cyr` still carries no `# Version:` header, and structurally cannot: thoth vendors kashi's
   **freestanding core `src/font_data.cyr`**, a module source, not the generated `dist/kashi.cyr` library face
@@ -3429,15 +3447,15 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `macos` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **Re-verified at 0.45.5 on the 6.6.2 pin: Linux built and tested, aarch64 and AGNOS built (0.45.2's warning
-sets, unchanged), macOS built and tested natively AT the pin (6.6.2 installed there at 0.45.5). Each row carries its own stamp** — see
+source. **Re-verified at 0.45.6 on the 6.6.3 pin: Linux built and tested, aarch64 and AGNOS built (0.45.2's warning
+sets minus the lib-shadow warning), macOS built and tested natively AT the pin (6.6.3 shipped there at 0.45.6). Each row carries its own stamp** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
 | x86_64 Linux | _(default)_ | **shipped** — built, tested (319 + 1348 + 846 + 539 + 183 + 5), released | `build/thoth` |
-| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.45.2 / Cyrius 6.6.2) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN at 0.45.5** (Apple Silicon, macOS 26.6.2; the 6.6.2 toolchain installed there at 0.45.5 by the tarball recipe — the owed run is paid; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
+| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.45.6 / Cyrius 6.6.3) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN at 0.45.6** (Apple Silicon, macOS 26.6.2; the 6.6.3 toolchain shipped there at 0.45.6 by the tarball recipe, 6.6.2 at 0.45.5; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.45.2 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
 
@@ -3559,8 +3577,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **326 + 1478 + 846 + 666 + 190 + 5 assertions across the suites as of
-0.45.5 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **326 + 1478 + 855 + 666 + 190 + 5 assertions across the suites as of
+0.45.6 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3589,8 +3607,8 @@ the real spine (hoosh/daimon) is a host-side step — the build sandbox blocks a
 
 **Below the gates, the work is cut by the batch discipline (0.45.4):** repairs ship as numbered **patch
 batches** — `0.45.5` shipped batch 1 (content escapes, the memory double read, `rainbow`'s notices and diagonal,
-the streaming-usage decision, history-file polish, macOS at the pin); `0.45.6` is batch 2 (hook facts into the
-environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create) — while **minors are held
-for feature arcs** (`0.46.0` = the first decided feature;
+the streaming-usage decision, history-file polish, macOS at the pin) and `0.45.6` batch 2 (hook facts into the
+environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create); the next batch gathers from
+the registry — while **minors are held for feature arcs** (`0.46.0` = the first decided feature;
 the candidates are listed, GUI slash-command routing recommended first). Defects owned upstream or by the floor sit
 in a waiting-on table with the version each was last checked against.
