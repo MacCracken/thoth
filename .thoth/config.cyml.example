@@ -489,8 +489,10 @@ model = "claude-haiku-4-5-20251001"
 # This is the user's TYPED INPUT — it MAY contain secrets you typed. A FRESH file is
 # created mode 0600 (owner-only) on POSIX targets (best-effort: a PRE-EXISTING file keeps
 # its current perms — thoth does not re-tighten it — and on AGNOS the frozen-ABI open
-# drops the create mode). The path is opened following symlinks. So: keep it in a
-# directory only YOU can write, and don't point it at a pre-existing world-readable file.
+# drops the create mode). Since 0.51.3 the file is opened with O_NOFOLLOW: a path whose final
+# component is a SYMLINK is refused (recall stays in-memory, announced), never followed into an
+# arbitrary file. So: keep it in a directory only YOU can write, and don't point it at a
+# pre-existing world-readable file.
 # Off by default; an unwritable path is announced and recall stays in-memory
 # (degrade-closed). DISTINCT from [hoosh].history, which toggles the model's multi-turn
 # CONVERSATION memory. Delete the file to clear your history.
@@ -520,7 +522,7 @@ model = "claude-haiku-4-5-20251001"
 # included, which can restate more of your prompt than the reply did — so it is MORE sensitive
 # than the input history. A FRESH file is created mode 0600 (owner-only) on POSIX (best-effort, same
 # residuals as [history].file: a PRE-EXISTING looser file is NOT re-tightened, AGNOS's
-# frozen-ABI open drops the create mode, and the path is opened following symlinks). Keep it in
+# frozen-ABI open drops the create mode). Keep it in
 # a directory only YOU can write; an unwritable path is announced and the session stays
 # in-memory (degrade-closed). /reset clears it; delete the file to wipe the saved conversation.
 #

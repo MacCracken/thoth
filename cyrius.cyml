@@ -5,7 +5,7 @@ description = "thoth — sovereign agentic coding TUI; a model-switching scribe 
 license = "GPL-3.0-only"
 repository = "https://github.com/MacCracken/thoth"
 language = "cyrius"
-cyrius = "6.6.3"
+cyrius = "6.6.4"
 
 [build]
 entry = "src/main.cyr"
@@ -38,6 +38,10 @@ stdlib = [
     # unicode: `_uc_decode_utf8`, needed by the vendored agnosai output-guard profile (0.40.0, T1-3) —
     # its scanner decodes UTF-8 to avoid splitting a multi-byte character mid-redaction.
     "unicode",
+    # sys (0.51.3 / cyrius 6.6.4): sigil 3.12.18's `agnosys_uname` now calls `sys_uname`, so the
+    # sigil bundle below needs it declared (dead-path in thoth — nothing reachable calls it — but an
+    # undefined-fn warning otherwise); before sigil like every module it builds on.
+    "sys",
     # data formats (json/toml/cyml/base64/bigint) — before sigil + transport
     "bayan",
     # structured logging the vendored libro audit chain emits through (M4)

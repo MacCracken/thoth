@@ -6,6 +6,8 @@ type: state
 
 # Documentation Health — thoth
 
+> **Repair batch 5 (0.51.3)** (2026-09-14): the cyrius 6.6.4 re-vendor (batch 4 item 10). `lib/` re-synced (`cyrius lib sync --full`); `"sys"` added to `[deps].stdlib` (sigil 3.12.18's `agnosys_uname` now calls `sys_uname` — dead-path here but an undefined-fn warning otherwise). `O_NOFOLLOW` now guards the toolpin store and `[history].file` opens (io.cyr gained the constant). Docs touched = `CHANGELOG.md`, `docs/development/state.md` (version block, Tests + Targets counts, the four Targets rows + the gate-1 rung re-stamped to 0.51.3 / 6.6.4 — macOS native suite re-run 822 + 1937 + 982 + 190 + 641 on the cross-built toolchain, AGNOS re-run `thoth 0.51.3` in ring 3), `docs/development/roadmap.md` (batch 5 shipped), `.thoth/config.cyml.example` (symlink prose — the O_NOFOLLOW residual), `README.md` / `CONTRIBUTING.md` (stamp) and this line. No full re-sweep — the tables below stand from the 0.51.1 sweep.
+>
 > **Repair batch 4 (0.51.2)** (2026-09-14): nine repairs from the pinned batch; docs touched = `CHANGELOG.md`,
 > `docs/development/state.md` (version block, Tests + Targets counts, the AGNOS row re-stamped after the runtime
 > re-run), `docs/development/roadmap.md` (batch 4 items 1–9 shipped, item 10 split to batch 5 → 0.51.3, gate 1 /

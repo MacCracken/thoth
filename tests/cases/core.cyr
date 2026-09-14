@@ -2060,6 +2060,9 @@ fn test_toolpin_store_symlink() {
         toolpin_store_init(link);
         assert_eq(toolpin_store_state(), 4, "a symlink at the path: state 4");
         assert_eq(toolpin_store_loaded(), 0, "...nothing read through it");
+        # 0.51.3: even if the is_symlink pre-check were bypassed, the read open now carries O_NOFOLLOW — a direct
+        # _tps_read of the link returns absent, never the target's bytes
+        assert(_tps_read(link) < 0, "...and _tps_read itself refuses the link (O_NOFOLLOW, cyrius 6.6.4)");
         assert_eq(toolpin_count(), 0, "...the table empty");
         toolpin_check("t_new", "N.", "");
         assert_eq(toolpin_store_flush(), 0, "...a flush is a no-op");
@@ -2510,6 +2513,31 @@ fn test_inhist_persist() {
     assert_eq(inhist_persist_init_failed(), 1, "0.50.1: the failed bind is a readable fact");
     assert_eq(inhist_persist_path(), 0, "...with no bound path");
     assert_eq(inhist_persist_recalled(), 0, "...and nothing recalled");
+
+    # 0.51.3: a symlinked [history].file is REFUSED (O_NOFOLLOW; the floor gained the bit at cyrius 6.6.4) —
+    # persistence stays off and announced, never following the link into an arbitrary file.
+    #ifndef CYRIUS_TARGET_WIN
+    var _hl_real = "build/.thoth_hist_real.tmp";
+    var _hl_link = "build/.thoth_hist_link.tmp";
+    file_write_all(_hl_real, "old\n", 4);
+    xunlink(_hl_link);
+    if (xsymlink(".thoth_hist_real.tmp", _hl_link) == 0) {
+        assert_eq(file_exists(_hl_link), 1, "premise: the link resolves");
+        inhist_init();
+        assert_eq(inhist_persist_init(_hl_link), 0 - 1, "a symlinked history file is refused (O_NOFOLLOW)");
+        assert_eq(inhist_persist_active(), 0, "...persistence stays off");
+        assert_eq(inhist_persist_init_failed(), 1, "...as a readable fact");
+        inhist_push("would-be-saved", 14);
+        inhist_persist_save();
+        var _hlb = alloc(64);
+        var _hln = file_read_all(_hl_real, _hlb, 63);
+        store8(_hlb + _hln, 0);
+        assert(streq(_hlb, "old\n") == 1, "...the link's target is untouched (never followed)");
+        assert_eq(is_symlink(str_from(_hl_link)), 1, "...and the link is still a link");
+        xunlink(_hl_link);
+    } else { assert(1, "(no symlink on this target — the symlinked-history case is not run here; stated)"); }
+    xunlink(_hl_real);
+    #endif
 
     # create the 0600 mode-check file (fresh path); the shell asserts the perms post-suite.
     inhist_init();

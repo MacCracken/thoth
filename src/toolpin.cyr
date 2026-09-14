@@ -561,7 +561,7 @@ fn _tps_exists(path) {
 # (never partially loaded — the 0.48.0 session-store rule: a file thoth did not read whole is never written back).
 fn _tps_read(path) {
     if (_tps_bufs() == 0) { return 0 - 1; }
-    var fd = file_open(path, O_RDONLY, 0);
+    var fd = file_open(path, O_RDONLY | O_NOFOLLOW, 0);   # 0.51.3: O_NOFOLLOW closes the TOCTOU between the is_symlink check and this open (portable since cyrius 6.6.4)
     if (fd < 0) { return 0 - 1; }
     var total = 0;
     var go = 1;
@@ -706,7 +706,7 @@ fn _tps_write_atomic(path, buf, len) {
             k = k + 1;
         }
         store8(tmp + off, 0);
-        fd = file_open(tmp, O_WRONLY | O_CREAT | O_EXCL, TPS_MODE);
+        fd = file_open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, TPS_MODE);   # 0.51.3: O_NOFOLLOW belt-and-braces with O_EXCL
         tries = tries + 1;
     }
     if (fd < 0) { return 0 - 1; }

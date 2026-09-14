@@ -168,17 +168,13 @@ Ordered; each is thoth-owned, small, and provable by a test or by breaking it.
    `thoth 0.51.1` in ring 3 and exited 0 — the first release-time re-run since 0.44.3 (the Targets row is
    stamped).
 
-### Repair batch 5 → 0.51.3 (re-vendor)
+### Repair batch 5 → shipped as 0.51.3 (re-vendor)
 
-Held out of 0.51.2 to keep that a PURE-SOURCE patch — this item rewrites `lib/`.
-
-1. **Re-vendor: cyrius 6.6.3 → 6.6.4, then `O_NOFOLLOW` on the two stores.** 6.6.4 declares
-   `O_NOFOLLOW` in every peer and bridges it — with `O_EXCL` — to AGNOS's `AO_NOFOLLOW` /
-   `AO_EXCL` (`lib/io.cyr:90-91`). That closes two waiting rows at once: the input-history open
-   and the toolpin store's `is_symlink`-then-`file_open` window both take the bit; the temp's
-   `O_EXCL` is honoured on AGNOS. A pin bump rewrites `lib/`, refolds every bundle and needs every
-   lane rebuilt and the Mac at the new pin (the 0.45.6 recipe) before anything above it is trusted.
-   `chmod`/`fchmod` stay waiting.
+The cyrius `6.6.3` → `6.6.4` re-vendor (see the [CHANGELOG](../../CHANGELOG.md)): `cyrius lib sync --full`
+brought a portable `O_NOFOLLOW` (`AO_NOFOLLOW` / `AO_EXCL` on AGNOS), which the `[history].file` and tool-pin
+store opens now take — a symlinked store is refused, not followed. `[deps].stdlib` gained `sys` (sigil 3.12.18's
+`agnosys_uname` calls `sys_uname`); the aarch64 lane lost two stale `raw syscall 5` warnings; every lane, macOS
+and the AGNOS runtime were re-verified. `chmod`/`fchmod` stay waiting (the row below).
 
 Recorded, not in the batch (registry below): the compositor pump during hook / `shell` waits
 (behaviour — a candidate), the `gate_init` / `log_init` lines on the `thoth gui` path (a cross-surface
@@ -209,9 +205,6 @@ closed item becomes a re-vendor patch with a line-anchored needle in `tests/case
 | **cyrius (floor)** | `is_symlink` returns 0 on Windows (`lib/fs.cyr:433`), so the jail's symlink walk (audit A-1) and the toolpin store's link refusal are no-ops there — **the PE lane must not ship without revisiting it** | cyrius **6.6.4** | the lane is closed anyway (architectural, below) |
 | **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:92`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.4) | degrades honestly; a candidate filing if the ABI gains a mode channel |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
-
-**Closed since the last check (re-vendor in batch 4, item 10):** cyrius 6.6.4's portable `O_NOFOLLOW` and the
-AGNOS `AO_NOFOLLOW` / `AO_EXCL` bridges.
 
 **Permanent by design (not waiting):** the Windows lane's architectural half — the raw socket path
 (`SYS_SOCKET` / `SYS_CONNECT` in `lib/sandhi.cyr`, ws2_32). At cyrius 6.6.3 the epoll/futex set no longer
@@ -353,10 +346,10 @@ Linux-Wayland only (F8).
   cannot be enforced on that path (`[hoosh].stream = false` is the way round). The request STAYS
   (decided 0.45.5): thoth's decode is in place, and the row lights up the release hoosh ships the
   frame — the hoosh row above.
-- **Input-history hardening** — a fresh `[history].file` is created `0600` on POSIX; a pre-existing
-  looser file is never re-tightened (the `chmod` floor row: never assert a mode thoth cannot
-  enforce); `O_NOFOLLOW` lands with batch 5 (the 6.6.4 re-vendor). Until then, "keep it in an
-  owner-only directory".
+- **Input-history hardening** — a fresh `[history].file` is created `0600` on POSIX and (0.51.3) opened
+  with `O_NOFOLLOW`, so a symlinked file is refused rather than followed; a pre-existing looser file is
+  still never re-tightened (the `chmod` floor row: never assert a mode thoth cannot enforce). The
+  tool-pin store takes the same bit.
 - **macOS** — builds, runs and passes its native suite at the pin; the T2 TUI does not run there:
   `term_raw` returns -1 (the darshana row), so thoth takes the line tier. When the BSD peer lands,
   `src/term.cyr`'s macOS branch collapses into the forwarder and nothing above it changes.

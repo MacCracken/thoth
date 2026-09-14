@@ -2,6 +2,40 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.51.3] - 2026-09-14
+
+**Repair batch 5 — the cyrius 6.6.4 re-vendor.** Held out of 0.51.2 because it rewrites `lib/`: the pin moves
+`6.6.3` → `6.6.4` and the two operator-state stores gain a portable `O_NOFOLLOW`. Suite
+**647 + 1959 + 985 + 823 + 190 + 5** (+15). Linux / aarch64 / AGNOS build; macOS built and tested natively at
+the new pin; the AGNOS runtime re-run in ring 3; the Windows lane at its known-gap skip.
+
+- **`[history].file` and the tool-pin store are opened with `O_NOFOLLOW`.** cyrius 6.6.4 adds a portable
+  `O_NOFOLLOW` (`var O_NOFOLLOW = 131072` in `lib/io.cyr`, bridged to `AO_NOFOLLOW` on AGNOS, `AO_EXCL` for the
+  temp's exclusive create) — the bit the floor lacked when both stores' symlink residuals were written. The
+  input-history opens (load, the non-destructive writability probe, the rewrite) now take it, so a `[history].file`
+  whose final component is a symlink is refused: recall stays in-memory, announced, never followed into an
+  arbitrary file (a cloned repo could ship the link). The tool-pin store's read takes it too, closing the
+  `is_symlink`-then-`file_open` window ADR-0022 named as a residual — even if the pre-check were bypassed, the
+  open refuses the link.
+- **`[deps].stdlib` declares `sys`.** sigil 3.12.18 (in 6.6.4) gained an `agnosys_uname` → `sys_uname` call, so
+  the vendored sigil bundle needs `lib/sys.cyr` declared; it is dead-path in thoth (nothing reachable calls it)
+  but an undefined-fn warning otherwise. Declared before sigil, like every module it builds on.
+- **The aarch64 lane is cleaner.** `6.6.4` fixed two raw `syscall 5` sites in `lib/dynlib.cyr` / `lib/fdlopen.cyr`,
+  so the aarch64 warning set loses those two lines — a strict improvement, no new warning on any lane.
+- **Re-verified end to end** (a pin bump is not trusted until every lane is): x86_64 / aarch64 / AGNOS build with
+  the warning set unchanged (x86, AGNOS) or reduced (aarch64); macOS built and its native suite green at the new
+  pin; the AGNOS runtime proof re-run under QEMU (`thoth 0.51.3` in ring 3, exit 0); the Windows lane skips on
+  its known stdlib gap.
+
+`chmod` / `fchmod` for tightening a pre-existing looser store stay waiting on the floor (`sys_chmod` is a return-0
+stub on Windows and AGNOS) — never assert a mode thoth cannot enforce.
+
+Tests (+15): `test_inhist_persist` (core) — a symlinked `[history].file` is refused (`O_NOFOLLOW`), persistence
+stays off as a readable fact, a save never reaches the link's target, the link stays a link (broken: drop
+`O_NOFOLLOW` from the probe open → the link is followed); `test_toolpin_store_symlink` (core) — `_tps_read` of a
+symlinked store returns absent on its own, not only via the `is_symlink` pre-check. Live: the AGNOS run above; the
+full suite and the warning-parity diff on every target.
+
 ## [0.51.2] - 2026-09-14
 
 **Repair batch 4.** Nine thoth-owned repairs from the pinned batch, each provable by a test or by breaking it;

@@ -154,6 +154,8 @@ fn inhist_nav_down() {
 # the file bounded at <= INHIST_CAP lines. Not atomic and not locked: a hard kill
 # mid-rewrite or two concurrent thoths sharing one file is last-writer-wins (known limit).
 #
+# 0.51.3: opened with O_NOFOLLOW (portable since cyrius 6.6.4, AO_NOFOLLOW on AGNOS) — a `[history].file`
+# whose final component is a symlink is refused, not followed; persistence stays in-memory and announced.
 # Uses the PORTABLE lib/io.cyr wrappers (`file_open`/`file_read`/`file_write`/
 # `file_close`) which bridge the AGNOS `AO_*`/namelen open ABI — never a raw sys_open.
 
@@ -206,7 +208,7 @@ fn _inhist_escape_into(dst, dstcap, src, srclen) {
 # missing/unreadable file is a no-op (no history yet). Bounded buffers — an overlong
 # line (we never write one) drops its overflow tail rather than overrun.
 fn _inhist_load_file(path) {
-    var fd = file_open(path, 0, 0);          # O_RDONLY (0); <0 if absent -> nothing to load
+    var fd = file_open(path, O_RDONLY | O_NOFOLLOW, 0);   # <0 if absent -> nothing to load; 0.51.3: O_NOFOLLOW refuses a symlinked history file (the floor gained the bit at cyrius 6.6.4)
     if (fd < 0) { return 0; }
     if (_inhist_chunk == 0) { _inhist_chunk = alloc(INHIST_CHUNK); }
     if (_inhist_line == 0) { _inhist_line = alloc(INHIST_LINE_CAP); }
@@ -253,7 +255,7 @@ fn _inhist_load_file(path) {
 # close. Returns 0 if writable, -1 otherwise. So binding persistence never mutates/trims
 # the user's file on mere startup.
 fn _inhist_probe_writable(path) {
-    var fd = file_open(path, O_WRONLY | O_CREAT, INHIST_MODE);   # no O_TRUNC -> content preserved
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_NOFOLLOW, INHIST_MODE);   # no O_TRUNC -> content preserved; 0.51.3: O_NOFOLLOW -> a symlinked file is refused here, so persistence stays off (degrade-closed, announced)
     if (fd < 0) { return 0 - 1; }
     file_close(fd);
     return 0;
@@ -265,7 +267,7 @@ fn _inhist_probe_writable(path) {
 # OR a write short-writes (so the caller degrades closed rather than silently leaving a
 # truncated file). Created 0600 if absent (best-effort — see the header note on perms).
 fn _inhist_write_file(path) {
-    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, INHIST_MODE);
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, INHIST_MODE);   # 0.51.3: O_NOFOLLOW (the probe already refused a link, so a save never reaches a followed one)
     if (fd < 0) { return 0 - 1; }
     if (_inhist_esc == 0) { _inhist_esc = alloc(INHIST_LINE_CAP * 2); }
     var ok = 0;
