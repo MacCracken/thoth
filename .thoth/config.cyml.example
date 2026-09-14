@@ -57,7 +57,8 @@
 # key like any local file). A legacy load is ANNOUNCED — in the greeting, in `/state`, and by `/reload`.
 #
 # This is NOT the build manifest (that is cyrius.cyml). It is thoth's own
-# runtime config, read once at startup. It is a CYML file: TOML above an
+# runtime config, read at startup and re-read on /reload (hot keys only — /reload
+# prints which). It is a CYML file: TOML above an
 # optional `---`, markdown below (the body, if any, is ignored).
 #
 # The [hoosh] table wires the hoosh seam (M3). Declaring a `url` is what flips
@@ -116,8 +117,9 @@ model = "claude-haiku-4-5-20251001"
 
 # [guard] — scan untrusted PROSE for prompt-injection attempts (0.41.0). DEFAULT
 # ON. t-ron's scanner walks TOOL PARAMS; it never sees prose. thoth injects
-# untrusted prose from @file mentions, tool results and recalled notes, and the
-# model reads all three as ordinary text.
+# untrusted prose from @file mentions, tool results, recalled notes, MCP
+# resources/prompts and piped stdin, and the model reads all of it as ordinary
+# text.
 #
 # It does NOT block — blocking on a heuristic would break legitimate work (a
 # security doc, a CHANGELOG describing an attack, thoth's own source). It MARKS:
@@ -145,8 +147,8 @@ model = "claude-haiku-4-5-20251001"
 #
 # parallel — run a round's tool calls concurrently. DEFAULT ON.
 #   Only fans out when the round has >1 call and none of them is a thoth-local
-#   tool (read_file/list_dir/search/shell/edit/create_file/memory_write/delegate
-#   force the whole round serial). Every call is still t-ron-gated and still runs
+#   tool (read_file/list_dir/search/shell/edit/create_file/memory_write/delegate/
+#   ask_user force the whole round serial). Every call is still t-ron-gated and still runs
 #   the [hooks] pre_tool deny either way — that was NOT true before 0.43.1, where
 #   the hook ran only on the serial path; if you are on an older build and rely on
 #   pre_tool as a hard deny, set this to false.
@@ -232,7 +234,7 @@ model = "claude-haiku-4-5-20251001"
 #
 # ⚠ THIS IS ONLY AS GOOD AS THE GATEWAY'S USAGE REPORTING, AND thoth SAYS SO.
 # thoth does not meter itself; it folds in whatever `usage` the gateway reports.
-# hoosh 2.6.4 sends NO usage frame on the STREAMING path and `[hoosh].stream`
+# hoosh (re-checked at 2.6.10) sends NO usage frame on the STREAMING path and `[hoosh].stream`
 # defaults ON — so on the default path the tally never advances and the ceiling
 # can never be reached. thoth announces that once per session and marks the
 # `/state` row "NOT ENFORCEABLE" rather than letting you believe you are covered.
@@ -266,7 +268,7 @@ model = "claude-haiku-4-5-20251001"
 # swapped BETWEEN two runs is withheld too, announced as `CHANGED since it was
 # pinned on <date> (a previous run)`. Through 0.50.x they died with the process
 # (a swap during a session, or across /reload, was all they caught). A registry
-# over 128 tools advertises the rest unpinned, and says so.
+# over 1024 pins (0.51.0; it was 128) advertises the rest unpinned, and says so.
 #
 # The whole [toolpin] table is AUTHORITY (global-only, ADR-0021): a cloned repo's
 # config cannot switch the defence off, redirect the store, or opt it out — a
@@ -277,8 +279,9 @@ model = "claude-haiku-4-5-20251001"
 #             ~/.thoth (thoth creates no directory; with none, pins stay
 #             session-scoped and the greeting says so). `~/` and `$HOME/` expand.
 #             A plain text file: `THOTH-TOOLPIN-1`, one `host <TAB> name <TAB> sha256
-#             <TAB> epoch` row per pin (host = [daimon].url at pin time — the same
-#             name on another daimon is another tool), and a `DIGEST` line over every
+#             <TAB> epoch` row per pin (host = [daimon].url at pin time, canonicalised:
+#             lower-cased, trailing slash dropped — the same name on another daimon is
+#             another tool), and a `DIGEST` line over every
 #             byte before it. Created 0600 on EVERY write on POSIX (a temp file renamed
 #             over the path). Use an absolute or `~/` path — a relative one resolves
 #             from wherever thoth is launched. A store thoth cannot verify — edited, truncated, a foreign file —
@@ -409,8 +412,10 @@ model = "claude-haiku-4-5-20251001"
 #   [agent."thoth".rate_limit]
 #   calls_per_minute = 60
 #
-# The built-ins authorize under reserved names: thoth_run (/run) and
-# thoth_write (/write); MCP tools authorize under their real tool name.
+# The built-ins authorize under reserved names: thoth_run (/run), thoth_write
+# (/write), thoth_shell (the model's shell), thoth_edit (edit + create_file),
+# thoth_delegate (delegate), thoth_remember (/remember + memory_write); MCP
+# tools authorize under their real tool name.
 
 # The [ask] table (0.44.0) enables `ask_user` — the one tool that runs toward YOU. When on, the model
 # may stop mid-turn and ask a question, with suggested answers it supplies and a free-text field you can
@@ -428,10 +433,10 @@ model = "claude-haiku-4-5-20251001"
 
 # [tron]
 
-# ⚠ THESE FOUR PATHS ARE THOTH'S OWN STATE, and since 0.43.2 the model's jail refuses them BY NAME.
-# `[tron].policy`, `[log].file`, `[history].file` and `[session].file` are whatever you name them, and
-# the project-relative values suggested below sit inside the directory the model can read (and, with
-# `[edit].enabled`, write). `_project_sensitive` therefore reads these four keys and refuses any path
+# ⚠ THESE FIVE PATHS ARE THOTH'S OWN STATE, and since 0.43.2 the model's jail refuses them BY NAME.
+# `[tron].policy`, `[log].file`, `[history].file`, `[session].file` and (0.51.1) `[toolpin].file` are
+# whatever you name them, and the project-relative values suggested below sit inside the directory the
+# model can read (and, with `[edit].enabled`, write). `_project_sensitive` therefore reads these five keys and refuses any path
 # whose final component matches one — relative or absolute, at any depth. Before that it matched only
 # the literals `.thoth` and `thoth.cyml`, so `.thoth_session` (the whole conversation store, in
 # plaintext) and `tron-policy.toml` (the allow/deny list constraining the model) were both fair game.
@@ -448,6 +453,7 @@ model = "claude-haiku-4-5-20251001"
 #
 #   file  — append structured events to this path; omit to use stderr.
 #   level — minimum severity: off | fatal | error | warn | info | debug | trace
+#           (default info). "off" disables logging even if a file is named.
 #
 # 0.44.2 — `thoth --logs <file>` binds the same sink from ARGV instead, at the top
 # of main: before the config is read, before any seam is touched, before the tier
@@ -466,7 +472,6 @@ model = "claude-haiku-4-5-20251001"
 # values split across `part=i of=n` lines, so a file truncated by a crash loses one
 # chunk rather than the session. For a readable markdown transcript of a session
 # that ENDED normally, use `/save <file>` instead.
-#           (default info). "off" disables logging even if a file is named.
 
 # [log]
 # file = "thoth-driver.log"
@@ -526,7 +531,7 @@ model = "claude-haiku-4-5-20251001"
 # [session]
 # file = ".thoth_session"             # project-local; or an absolute "/home/you/.thoth_session"
 
-# The [ui] table holds interactive turn-completion niceties (0.24.3). Both are opt-in (default off) and
+# The [ui] table holds interactive turn-completion niceties (0.24.3). bell and elapsed are opt-in (default off) and
 # INTERACTIVE-ONLY — one-shot (`thoth 'task'`) output stays clean. Enable them for a nicer REPL/TUI.
 #   bell    — ring the terminal BEL when a model turn finishes, so you can tab away and get pinged.
 #   elapsed — print a faint "(N.Ns)" line after each reply, showing how long the turn took.
@@ -558,6 +563,8 @@ model = "claude-haiku-4-5-20251001"
 #   - Built-ins always win — an alias named like a real command (read, run, …) never fires.
 #   - An alias to /run, /write, or /call still passes through the SAME t-ron authorization
 #     gate (the expansion is re-dispatched normally — aliases can't bypass security).
+#   - An alias may NOT expand to `/tools trust` or `/allow` (authority must be typed by you):
+#     the line is refused whole (0.51.0).
 #   - Recursion is bounded: an alias-to-alias chain is capped (a cycle is refused, not hung).
 #   - Values are taken VERBATIM (no shell/escape processing). Duplicate keys: the first wins.
 #   - The table is capped at 64 aliases; an alias name is at most 255 chars.
@@ -569,8 +576,9 @@ model = "claude-haiku-4-5-20251001"
 # fix     = "/read"
 
 # The [memory] table wires the memory seam (0.12.0; ADR-0012). Memory is mneme's
-# domain (the AGNOS knowledge base — semantic search / RAG). Until mneme's Cyrius
-# port ships, thoth stands in a DUMB project-local fallback: it reads a
+# domain (the AGNOS knowledge base — semantic search / RAG). When daimon hosts
+# mneme (0.32.0) recall is semantic through it and /remember writes there;
+# otherwise thoth stands in a DUMB project-local fallback: it reads a
 # .thoth/memory/ flat-file store and injects it into each turn as a system
 # message (the same way it injects the avatara persona). It does NOT search,
 # rank, embed, or link — that is mneme's engine, never thoth's.
@@ -662,7 +670,7 @@ model = "claude-haiku-4-5-20251001"
 # a shell can cd / chain / base64-decode around a string glob. Real containment is: default-off, your
 # trust decision to enable, the t-ron policy, and running thoth itself under OS-level confinement.
 # Residual limit (documented, not faked): the capture temp file lives in world-writable /tmp
-# (best-effort O_EXCL create, no O_NOFOLLOW). A command that exceeds the timeout is killed by PROCESS
+# (O_CREAT|O_EXCL, which defeats a pre-planted file or symlink; created 0600 since 0.39.0). A command that exceeds the timeout is killed by PROCESS
 # GROUP (0.20.1: kill(-pgid, SIGKILL)), so a backgrounded child dies with the shell.
 #
 # Back-compat: the legacy `[shell.deny]`/`[shell.allow]` SECTION form (each line `label = "glob"`, the

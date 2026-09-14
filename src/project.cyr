@@ -181,6 +181,10 @@ fn _proj_cfg_comp_eq(path, at, cfg) {
 #     i.e. an injection that survives `/reset`. A reasoning payload is cleaned again where it is read back
 #     (the loader's RSN branch), since the window draws it.
 #   * `.thoth_history` — may hold secrets the operator typed.
+#   * `[toolpin].file` (0.51.1) — the trust record of every MCP tool definition: readable it names the
+#     operator's hosts and tools, writable it re-baselines a swapped definition through thoth's own `edit`
+#     (the store's digest catches a foreign editor, not the model's `edit` running as the operator). The
+#     default `~/.thoth/toolpins` was covered by the `.thoth` component rule; a custom path was not.
 # So the refusal is now data-driven off the same config that names the files.
 #
 # ⚠ THE CONFUSED-DEPUTY FIX (0.39.0, audit A-3). thoth's config lives at `.thoth/config.cyml`, and
@@ -219,6 +223,7 @@ fn _project_sensitive(path) {
                 if (_proj_cfg_comp_eq(path, at, config_session_file()) == 1) { return 1; }
                 if (_proj_cfg_comp_eq(path, at, config_history_file()) == 1) { return 1; }
                 if (_proj_cfg_comp_eq(path, at, config_log_file()) == 1) { return 1; }
+                if (_proj_cfg_comp_eq(path, at, config_toolpin_file()) == 1) { return 1; }   # 0.51.1: the pin store (the sweep's finding)
             }
             at = i + 1;
         }

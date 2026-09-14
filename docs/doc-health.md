@@ -6,185 +6,21 @@ type: state
 
 # Documentation Health — thoth
 
-> **Touched at 0.51.0** (2026-09-14, not a full sweep): F6 wrote **ADR-0022** (tool pins durable, the keyless store's
-> honest claim) and updated `CHANGELOG.md`, `docs/development/state.md` (version block, **Tests** counts, the 0.42.0
-> sentence), `docs/development/roadmap.md` (F6 → shipped with residuals; the daimon row in the waiting table; the
-> candidates line), ADR-0021 (the key list + the open question's tool-pin half), `docs/adr/README.md`,
-> `docs/development/gap-review.md` (gap 3 closed with the daimon residual), `.thoth/config.cyml.example` (the
-> `[toolpin]` block rewritten: `file` / `durable` / the header's key list; the false `/reprobe` claim corrected),
-> `README.md` (stamp + the `[toolpin]` clause) and this file.
+> **Full sweep at 0.51.1** (2026-09-14). Five readers verified every doc set against the tree at 0.51.0
+> (`3009b60`: the root docs, the guides + examples, the architecture notes + ADRs, `state.md`'s current-state
+> sections, the gap review + the config example); every stated measurement was RE-RUN in a scratch copy (the
+> Linux build, the suite — 647 + 1921 + 977 + 824 + 190 = 4,559 assertions; the runner's closing `5 passed` is the
+> five suite binaries — `build.sh all`, a raw `--win`, `CYRIUS_STATS`, the include-graph re-sum) and the macOS
+> suite natively on ecb (823 + 1897 + 974 + 190 + 641). The AGNOS runtime proof did NOT re-run: the local kernel
+> image lacks `BASESTACK_SELFTEST` and `agnos-run.sh` refuses (exit 2) rather than pretend — roadmap batch 4.
+> `roadmap.md` was re-cut forward-only (F1–F6 and repair batches 1–3 live in the CHANGELOG; batch 4 is pinned to
+> 0.51.2 with ten items; the candidates F7–F14 are ordered with their gates); this ledger was rewritten from the
+> readers' verdicts row by row, and the "Touched at 0.44.2 … 0.51.0" notes it had accumulated (fourteen releases
+> of prepended prose over 0.43.2 tables — lesson 3 again) are replaced by this record; their durable content is
+> in the tier rows.
 >
-> **Touched at 0.50.1** (2026-09-14, not a full sweep): repair batch 3 updated `CHANGELOG.md`, `docs/development/state.md`
-> (version block, **Tests** counts), `docs/development/roadmap.md` (the registry's GUI `[history].file` entry closed;
-> three carried notes added: the compositor not pumped during a hook / shell wait, `gate_init` / `log_init` lines
-> discarded on the `thoth gui` path, the TUI's `session_start` report on the primary screen), `.thoth/config.cyml.example`
-> (`[history]` — the window, the greeting row, `/reload` and `size`), `README.md` (stamp) and this file. No ADR earned.
->
-> **Touched at 0.50.0** (2026-09-13, not a full sweep): F5 updated `CHANGELOG.md`, `docs/development/state.md`
-> (version block, **Tests** counts), `docs/development/roadmap.md` (F5 → shipped with its residuals; the minor
-> candidates now start at 0.51.0), `docs/architecture/003` (the map beside the workspace clause), ADR-0015 (the
-> "possible later tools" line closed: `search` 0.40.0, the map 0.50.0), `docs/guides/getting-started.md` (source
-> layout), `.thoth/config.cyml.example` (`[project].map`), `README.md` (stamp) and this file. No ADR earned: the map is
-> the workspace clause's shape, one message further on.
->
-> **Touched at 0.49.0** (2026-09-13, not a full sweep): F4 updated `CHANGELOG.md`, `docs/development/state.md`
-> (version block, **Tests** counts), `docs/development/roadmap.md` (F4 → shipped with its residuals; the registry
-> gains the on-compositor pointer check; the minor candidates now start at 0.50.0), `docs/guides/getting-started.md`
-> (the GUI takes the mouse; summary cards), `README.md` (stamp + the sidebar clause) and this file. No ADR earned:
-> the pointer is one more input on the existing window seam, and the summary card is 0.33.5's persisted set drawn.
->
-> **Touched at 0.48.0** (2026-09-13, not a full sweep): F3 updated `CHANGELOG.md`, `docs/development/state.md`
-> (version block, the **Session** bullet, **Tests** counts), `docs/development/roadmap.md` (F3 → shipped with its
-> residuals; the registry gains the GUI's unbound `[history].file` and the on-compositor fold check; the minor
-> candidates now start at 0.49.0), `docs/guides/getting-started.md` (`src/session.cyr` carries reasoning;
-> `src/reasonlog.cyr` is the capture seam), `.thoth/config.cyml.example` (`[session]`: the reasoning is in the file,
-> the GUI binds it), `src/project.cyr`'s refusal rationale, `README.md` (stamp) and this file. No ADR earned: the
-> message-owns-its-side-data rule is 0.33.4/0.33.5's, applied.
->
-> **Touched at 0.47.0** (2026-09-13, not a full sweep): F2 updated `CHANGELOG.md`, `docs/development/state.md`
-> (version block, the **Spine clients** bullet, **Tests** counts), `docs/development/roadmap.md` (F2 → shipped with its
-> residuals; the hoosh waiting row gains F2's three asks — the serving route per catalog entry, a pricing-table dump,
-> the unescaped `base_url`; the minor candidates now start at 0.48.0), `docs/guides/getting-started.md` (the
-> picker's dots and rates, the `/models [provider]` row, source layout), `.thoth/config.cyml.example` (`[pricing]`:
-> the picker and `/models <provider>` show the rate), `README.md` (stamp + the picker clause) and this file. No ADR
-> earned: the fold's honesty rule is ADR-0010 applied.
->
-> **Touched at 0.46.0** (2026-09-13, not a full sweep): F1 updated `CHANGELOG.md`, `docs/development/state.md`
-> (version block, the **Presentation ladder** bullet — `gcmd`, **Tests** counts), `docs/development/roadmap.md` (F1 →
-> shipped; the minor candidates now start at 0.47.0), `docs/guides/getting-started.md` (source layout:
-> `src/gui/gcmd.cyr`), `README.md` (stamp) and this file. ADR-0020 was checked and needs no change (its
-> session-grant sentence is about the ask tool, not the confirm modal).
->
-> **Touched at 0.45.6** (2026-09-13, not a full sweep): repair batch 2 updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block, **Toolchain** — the 6.6.3 pin and the vendored-dist line, **Targets**
-> header + aarch64/macOS rows, **Tests** counts, **Next**), `docs/development/roadmap.md` (batch 2 → shipped, the
-> hook-facts entry dropped, the Windows-lane entry and the two waiting rows updated), `.thoth/config.cyml.example`
-> (`[hooks]`: the facts are the environment block), the sync scripts' default tags, `README.md` (stamp) and this
-> file.
->
-> **Touched at 0.45.5** (2026-09-13, not a full sweep): repair batch 1 updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block, **Targets** header — macOS at the pin, **Tests** counts, **Next**),
-> `docs/development/roadmap.md` (batch 1 → shipped, batch 2 marked NEXT, the streaming-usage decision reversed in the
-> waiting table and the registry, the content-escapes entry dropped, the memory / rainbow / history / macOS entries
-> reduced to their residuals), `.thoth/config.cyml.example` (`[history].file` `~/` expansion, `[history].size`),
-> `README.md` (stamp) and this file.
->
-> **Touched at 0.45.4** (2026-09-13, not a full sweep): the tagline / status-bar follow-ups updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block, **Tests** counts), `README.md` (stamp) and this file; and
-> `docs/development/roadmap.md` was **re-cut around the batch discipline** — repairs as numbered patch batches
-> (`0.45.5`, `0.45.6`), a waiting-on table with the version each upstream/floor item was last checked against
-> (hoosh 2.6.10, sit 1.6.2, t-ron 2.1.10, darshana 1.1.2, cyrius 6.6.3, bhava 2.0.0, kavach 3.12.5), feature
-> arcs as unpinned minor candidates, and the known-limitations list folded into a registry that points at its
-> batch. Two stale claims fixed on the way: the hooks-in-argv item said it needed a spawn-with-environment
-> primitive the floor lacks (`src/exec.cyr` already passes an `envp`; AGNOS has `sys_spawn_path_env`), and the
-> "polish minor" convention is retired (polish batches into patches). The 2026-08-24 audit's residuals are
-> carried in the registry. The gap review is untouched (nothing moved into or out of it).
->
-> **Touched at 0.45.3** (2026-09-13, not a full sweep): the greeting block (the ibis splash beside the framed status
-> box) updated `CHANGELOG.md`, `docs/development/state.md` (version block, the **Presentation ladder** bullet, **Tests**
-> counts, the **Targets** header), `docs/guides/getting-started.md` (source layout: `src/greet.cyr`, the generated
-> `src/splash.cyr` + `scripts/gen-splash.sh`), `README.md` (stamp) and this file. The roadmap is untouched (nothing
-> forward-facing changed).
->
-> **Touched at 0.45.2** (2026-09-12, not a full sweep): the brief audit updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block, **Tests**, the **Targets** header and rows, the Targets prose's closed
-> blockers, **Next**), `docs/development/roadmap.md` (gate 1's warning list, gate 2's hoosh version, a gate 3 note
-> on audit coverage, the Known-limitations preamble, the macOS entry rewritten to its current state, the hoosh /
-> t-ron / `sys_chmod` / Windows `sys_rmdir` entries re-checked against today's upstream, a Windows exclusive-create
-> bullet, and a new entry for file content on `/read`), `README.md` (stamp, multi-target paragraph, build line) and
-> this file (ADR rows 0019–0021). ⚠ **The roadmap had missed 0.44.6's refresh as well** — the 0.45.0 note below
-> names only `state.md` and `README.md` — so gate 1 still listed a warning 0.44.6 removed and the macOS entry still
-> described a 6.5.51-era toolchain gap.
->
-> **Touched at 0.45.1** (2026-09-12, not a full sweep): the input frame updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block and **Tests** counts) and `README.md` (status stamp).
->
-> **Touched at 0.45.0** (2026-09-12, not a full sweep): the status-bar move — then the hints-into-the-input
-> rework and the merged escape-fix chain — updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block, the **Toolchain** pin line and the **Tests** counts) and
-> `README.md` (status stamp, and the TUI bullet's status-bar description). ⚠ **0.44.6 had refreshed
-> neither `state.md` nor `README.md`**: the state file had no 0.44.6 entry and still named the 6.5.51
-> pin a release after the move to 6.6.2, and the README stamp read 0.44.5. Both were caught only
-> because this release had to write the next entry after them.
-
-> **Touched at 0.44.5** (2026-09-04, not a full sweep): the toolchain refresh 6.5.43 → 6.5.51 updated
-> `CHANGELOG.md`, `docs/development/state.md` (version block, the whole **Toolchain** block re-measured
-> after the last edit, the macOS row of the **Targets** matrix), `docs/development/roadmap.md` (the
-> macOS `getenv` limitation **closed**, verified on hardware; the vendor-carve capacity argument
-> **retired**), and `README.md` (status stamp + the multi-target paragraph, which still said macOS
-> does not build — stale since 0.44.3 and doubly so now).
->
-> ⭐ **Three lessons, all of them lesson 1 wearing different hats.**
-> 1. **A CAP is a measurement too, and nobody re-reads denominators.** The roadmap tracked
->    `fn_table 8522/32768`, `identifiers 271744/524288`, `var_table 4942/8192 (60 %, the tightest)`.
->    Re-measured: the numerators barely moved, but the caps had grown **4x / 16x / 128x**, so the
->    "tightest" number is now 0.5 %. Three releases of capacity argument rested on denominators that
->    had silently changed. When re-running a measurement, re-run *both halves of the fraction*.
-> 2. **A limitation filed upstream needs its ARCHIVE checked, not its filing re-read.** Both the
->    `preprocess_out` ceiling and the macOS `getenv` gap were fixed in cyrius **below the pin thoth was
->    already running** — the filings had moved to `issues/archived/` with ✅ banners. thoth kept
->    describing both as open. A carried "filed upstream" item should be re-checked against the dep's
->    archive every refresh; that is a two-second `ls`.
-> 3. **A retired worry can still have been load-bearing — say which.** The 8 MB ceiling was gone, but
->    re-summing the include graph showed the binding unit at **8.84 MB, 110 % of the old slot**. "This
->    is no longer a problem" and "this was never a problem" are different claims, and only the first
->    one is true here. The earlier comfortable-looking figure had counted project sources and omitted
->    the stdlib half of the same unit.
->
-> **Touched at 0.44.4** (2026-09-04, not a full sweep): the release added `scripts/agnos-run.sh` and
-> updated `CHANGELOG.md`, `docs/development/state.md` (version block, Tests counts, the **Targets**
-> matrix — AGNOS now BUILDS **and RUNS** — and the `## Next` block, which had drifted into
-> contradicting its own matrix by still saying macOS does not build), `docs/development/roadmap.md`
-> (gate 1's runtime half **closed**; gate 2 re-read as three rungs and re-owned from `external` to
-> **thoth**; the v1.0 checklist; the hoosh SSE limitation **split** — sub-point 2 closed at hoosh
-> 2.6.5–2.6.8 and consumed at 0.44.4, sub-point 1 still open; the t-ron audit-export limitation
-> **re-scoped from latent to reachable**) and `README.md` (status stamp + the AGNOS-runs line).
->
-> ⭐ **Two lessons this cut paid for, both instances of lesson 1 below.**
-> 1. **A status that names an external blocker is a measurement, and it expires like any other.**
->    Gate 2 read *"owner: external · needs an AGNOS host"* and gate 1 said the ELF *"cannot be
->    exercised on a Linux host"*. AGNOS's own QEMU harness had **named thoth** since before either
->    line was written. Nothing in thoth's tree referenced it, so the claim was re-read every release
->    instead of re-run — on the gate the whole v1.0 plan was sequenced behind. Rows that assign work
->    to someone else belong in the "re-measure" bucket, not "durable".
-> 2. **An exculpating clause is the part of a limitation most likely to be stale.** The t-ron
->    audit-export entry excused itself with *"safe today only because every reason t-ron emits is a
->    short fixed label"*. That premise was false twice over, and the excuse is what kept the item
->    un-actioned. When re-checking a carried limitation, re-check the reason it was deprioritised
->    first — that sentence is doing the load-bearing work.
->
-> **Touched at 0.44.3** (2026-09-03, not a full sweep): the release added
-> [`docs/adr/0021-authority-keys-are-global-only.md`](adr/0021-authority-keys-are-global-only.md) and
-> indexed it in `adr/README.md`; marked **ADR-0019 superseded in part** (its "a project t-ron policy"
-> example is retracted); updated `CHANGELOG.md`, `docs/development/state.md` (version block, Tests
-> counts, the Toolchain block re-measured with `CYRIUS_STATS` **after the last edit**, the Targets
-> matrix — macOS now BUILDS+RUNS, Windows blocked outside thoth's source — and two new
-> Surface-at-a-glance rows for `term`/`budget`), `docs/development/roadmap.md` (v1.0 gate 3's
-> concurrency half **closed**; the macOS/Windows ⛔ limitation replaced with what actually remains; a
-> new ⛔ for the hooks-argv exposure; the `[ui].theme` polish item removed as shipped; the GUI
-> slash-command item re-valued), `docs/development/gap-review.md` **and its `.html` twin in lockstep**
-> (budget enforcement shipped → removed), `README.md` (status stamp),
-> `.thoth/config.cyml.example` (`[budget]`, `[ui].theme`, and the now-false "no budget enforcement"
-> line inside `[subagent]`), and `docs/guides/getting-started.md` (source layout: `term.cyr`,
-> `budget.cyr`). Filed upstream:
-> `cyrius/docs/development/issues/2026-09-03-macos-getenv-always-null-no-proc.md`.
-> The rows below still carry their 0.43.2 sweep status.
->
-> **Touched at 0.44.2** (2026-08-27, not a full sweep): the release updated `CHANGELOG.md`,
-> `docs/development/state.md` (version block, Tests counts, the Front-doors/Observability surface rows),
-> `docs/development/roadmap.md` (a new ⛔ carried limitation — hoosh dropping SSE frames and laundering
-> provider errors into an empty 200 stream), `README.md` (status stamp), `.thoth/config.cyml.example`
-> (`[hoosh].timeout_ms`, and `--logs` documented in the `[log]` block), `docs/examples/README.md` (a new
-> §4b on capturing a session that crashes or hangs) and `docs/guides/getting-started.md` (`--logs` in the
-> CLI list + a paragraph on it and `timeout_ms`). The rows below still carry their 0.43.2 sweep status.
->
-> **Last full refresh**: 2026-08-25 — **full doc sweep at 0.43.2**, run as six parallel reviewers (repo
-> hygiene, cross-doc consistency, the config/legacy-path surface, recently-changed code, the scripts,
-> the test suite), each finding handed to an independent skeptic before it was acted on. Every claim was
-> checked against the file it describes, and every *measurement* was re-run rather than re-read.
->
-> **Prior full sweeps**: 0.43.0/0.43.1 (prose only — see the lessons below), 0.33.7, 0.31.5 (this ledger
-> created).
+> **Prior full sweeps**: 0.43.2 (47 findings — "What the sweeps found"), 0.43.0/0.43.1 (prose only), 0.33.7,
+> 0.31.5 (this ledger created). Between 0.44.2 and 0.51.0 every release touched docs opportunistically, none swept.
 
 ## The three lessons this ledger exists to carry
 
@@ -209,9 +45,38 @@ These are the reason the file is worth keeping. Each was paid for.
    checked, which is precisely how `getting-started.md` and `CONTRIBUTING.md` drifted unnoticed. **If a
    sweep does not re-stamp the tables, it did not happen.**
 
-## What the 0.43.2 sweep actually found
+## What the sweeps found
 
-47 confirmed findings. The ones that mattered most, recorded so the next sweep knows where to look:
+### 0.51.0 — ~110 findings across five readers; the ones the next sweep should look for first
+
+- **Stamps and counts drift first.** CONTRIBUTING sat at 0.44.0 (seven minors behind, its feature list stopping
+  at 0.43.x); README's multi-target line said "re-measured at 0.45.2"; the Targets row's suite counts were three
+  minors stale while §Tests in the same file was current; the vendor list named ten bundles (eleven are vendored —
+  agnosai-guard was missing); "all 48 modules" (66). **Bump the stamp in the release, not the sweep.**
+- **Residuals carried past their fix.** ADR-0015/0017 still said "a symlink inside the project is followed"
+  (closed 0.39.0); ADR-0021 still said "on macOS every local authority key is suppressed" (closed 0.44.5);
+  ADR-0019's addendum still called the memory double read open (narrowed 0.45.5); ADR-0014's index row said
+  POSIX-only (a Windows lane since 0.20.2); the config example said "128 tools" (1024). **A residual is a claim
+  with an expiry date** — the roadmap's waiting table stamps each with the version it was last checked against.
+- **Two readers measured the same lane and the doc matched neither.** README, `state.md` and the roadmap all said
+  the Windows lane is blocked on "IOCP/epoll"; a raw `cyrius build --win` at 6.6.3 surfaces only
+  `SYS_SOCKET`/`SYS_CONNECT` plus three vendored names. Re-running the build, not re-reading the build script's
+  comment, found it.
+- **A doc accurate to the code found the code short.** The config example's "these four paths" matched
+  `_project_sensitive` exactly — and 0.51.0 had added a fifth own-state file (`[toolpin].file`) that neither
+  named: a custom store inside the jail was model-readable and `edit`-rewritable. **Flagged as CODE and fixed in
+  the same cut (0.51.1)**; the doc follows the fix, never precedes it.
+- **The roadmap had become a ledger.** Six "shipped as" bullets, three "shipped as" batch sections and a 0.45.5
+  macOS verification story sat in the forward-only file; one of its residuals (the GUI not binding
+  `[history].file`) had been closed a release earlier. Re-cut: nothing shipped is narrated there.
+- **`gap-review.html` drifted again** (stamp 0.43.2, a self-superseding footer, gap 3's 0.51.0 wording, Q2 answered
+  by ADR-0022 but still listed). Twins drift; the row says re-diff them at every touch.
+- **Dead links are a maintainer item, not a text fix.** The three genesis-repo standards URLs in CLAUDE.md,
+  CONTRIBUTING.md and the audit return 404 on the public remote (the files are untracked in the local clone). Open.
+
+### 0.43.2 — 47 findings
+
+The ones that mattered most, recorded so the next sweep knows where to look:
 
 - **A security defect the read-only review could not have found** — it needed the binary run. Piped
   stdin (`git diff | thoth 'review'`, advertised in `--help`) reached `cmd_task`, whose second act is
@@ -232,64 +97,85 @@ These are the reason the file is worth keeping. Each was paid for.
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh — touched this sweep** | ~16 | README, CLAUDE.md, CHANGELOG, VERSION, CONTRIBUTING, SECURITY, state.md, roadmap.md, gap-review.md + .html, doc-health.md, getting-started, adr/0017, adr/README — current as of **0.43.2**. |
-| 🔵 **Durable — decisions/invariants, re-read not rewrite** | ~19 | ADRs 0001–0016 + 0018 + 0020 + template, architecture/001 — point-in-time decisions, correct as history; re-read on a principle change, not per release. |
-| 🟡 **Stale — refresh in place** | 0 | None outstanding after this sweep. |
-| 🟠 **Read-through / gap** | 1 | `docs/examples/` is a usage cheat-sheet, not runnable programs. **Closed by rewording** at 0.43.2 (README + CLAUDE.md now say "usage cheat-sheet"); the row stays until real examples exist or the dir is retired. |
-| ❓ **Open question** | 0 | None. |
+| ✅ **Fresh — verified or fixed this sweep** | 31 | Every doc a reader verified against the tree at 0.51.0, and every stale one refreshed in this pass (per row below). |
+| 🔵 **Durable — decisions/invariants, re-read not rewrite** | 19 | ADRs 0001–0008, 0010–0011, 0013, 0018, 0020, 0022 + template; CODE_OF_CONDUCT; LICENSE; the two design assets; the scripts. Point-in-time or principle; re-read on a principle change. |
+| 🟡 **Stale — refresh in place** | 0 | None after this sweep; every stale row below is marked *stale → fixed at 0.51.1*. |
+| 🟠 **Read-through / gap** | 2 | `docs/examples/` (a cheat-sheet, not programs); ADR-0008 (no addendum by policy — the lane state lives in `state.md`'s matrix). |
+| ❓ **Open question** | 1 | The three genesis-repo standards links return 404 (CLAUDE.md, CONTRIBUTING.md, the audit). Maintainer: push upstream or repoint. |
 
 ## Tier 1 — Structural / root
 
 | File | Status | Notes |
 |---|---|---|
-| `README.md` | ✅ Fresh | **0.43.2**: status stamp; a stray unfinished editing note removed from the front page (an orphaned "SCRIBE" backronym competing with the project's own, plus an agnosai claim the gap review had declined); `docs/examples/` reworded off "runnable examples"; the two root design assets (`Thoth.dc.html`, `thoth_v1.tiff`) named so neither reads as scratch. Bump the stamp every release. |
-| `CHANGELOG.md` | ✅ Fresh | Source of truth for what shipped. Through **0.43.2**. Refreshed every release. |
-| `CLAUDE.md` | ✅ Fresh | Durable preferences/process/procedures; carries no volatile state (that is `state.md`). **0.43.2**: the `docs/examples/` pointer reworded. |
-| `CONTRIBUTING.md` | ✅ Fresh | **NEW ROW at 0.43.2** — it had none, and was stamped **0.26.0**, seventeen releases stale, with a feature list predating the write tools, `/rewind`, `[redact]`/`[guard]`/`[hooks]`/`[toolpin]`/`[verify]`, `--events`, subagents and MCP resources. Re-stamped 0.43.2. **It is the first file a new contributor reads — bump it on any feature-surface change.** |
-| `SECURITY.md` | ✅ Fresh | **NEW ROW at 0.43.2** — it claimed "no tagged release exists yet" against 158 tags, and pointed at a "first CalVer release" that [ADR-0004](adr/0004-semver-pre-release.md) formally rejected. Now: pre-1.0 SemVer `0.x`, fixed-forward support, and a live link to `docs/audit/`. |
-| `CODE_OF_CONDUCT.md` | 🔵 Durable | **NEW ROW at 0.43.2.** Carries no version-bound claims; re-read on a policy change, not per release. |
-| `VERSION` | ✅ Fresh | Single source of truth (`0.43.2`); `src/version.cyr` is generated from it via `scripts/gen-version.sh` (which `scripts/build.sh` runs before every build — and which, until 0.43.2, could silently fail to resolve and let the build ship a stale version string). |
+| `README.md` | ✅ Fresh (stale → fixed) | Stamp current; **fixed at 0.51.1**: "re-measured at 0.45.2" → 0.51.0 (lanes re-run); Windows "IOCP" → the ws2_32 socket gap + three vendored names (measured); "win is the open lane — see ADR-0008" → gates closed, matrix in `state.md`; the Ask-me-back paragraph moved out of `## Documentation`; `thoth_v1.tiff` named as the splash source. Bump the stamp every release; re-run `build.sh all` before touching the multi-target line. |
+| `CHANGELOG.md` | ✅ Fresh | Through **0.51.1**. Refreshed every release. |
+| `CLAUDE.md` | ✅ Fresh (stale → fixed) | Durable rules only. **Fixed at 0.51.1**: the `lib/` rule no longer says "dep symlinks" (0 symlinks; it is the synced stdlib snapshot `cyrius build`/`test` rewrite); `docs/audit/` and `gap-review.md` added to the doc list. Open: the standards links (❓). |
+| `CONTRIBUTING.md` | ✅ Fresh (stale → fixed) | **Was stamped 0.44.0** — seven minors behind, feature list stopping at 0.43.x, "x86_64 Linux ships" under-reporting three lanes; the 0.43.2 row said "re-stamped 0.43.2" and never recorded the 0.44.0 bump. Re-stamped 0.51.0 with the full surface. **The first file a contributor reads — bump it in every feature release.** Open: the standards links (❓). |
+| `SECURITY.md` | ✅ Fresh | Pre-1.0 SemVer, the tags, `docs/audit/` link resolves; verified 0.51.0. |
+| `CODE_OF_CONDUCT.md` | 🔵 Durable | No version-bound claims; Covenant 2.1 URL 200. |
+| `LICENSE` | 🔵 Durable | **New row.** GPL-3.0-only, as `cyrius.cyml` and the README state. |
+| `VERSION` | ✅ Fresh | `0.51.1`; `src/version.cyr` generated by `scripts/gen-version.sh` (run by `build.sh` first). |
+| `cyrius.cyml` | ✅ Fresh | **New row.** Pin `cyrius = "6.6.3"` (the sibling cyrius is 6.6.4 — the re-vendor is roadmap batch 4 item 10); the header's ordering rationale holds (its "sigil 3.7.8 / t-ron 2.1.5" stamps are first-seen context; the order still holds at sigil 3.12.17 / t-ron 2.1.10). CI reads the pin. |
+| `.thoth/config.cyml.example` | ✅ Fresh (stale → fixed) | **New row** (named in nine touch notes, never tabled). Every documented key is in `_cfg_known_key` and every read key is documented (55). **Fixed at 0.51.1**: 128 → 1024 pins; "hoosh 2.6.4" → re-checked 2.6.10; `ask_user` in the serial list; three → six untrusted inlets; the six reserved verbs; the orphaned `[log].level` line; "read once" → `/reload`; mneme consumed since 0.32.0; the capture temp's `O_EXCL` claim; the 0.51.0 alias refusal; host canonicalisation; "four paths" → five (`[toolpin].file`, with the code). |
+| `.gitignore` | 🔵 Durable | **New row.** Carries a 0.43.2 rationale block on checkpoints; still true. |
+| `.github/workflows/ci.yml`, `release.yml` | 🔵 Durable | **New row.** Read the pin from `cyrius.cyml` (no hardcoded toolchain); the 0.38.6 rationale block intact. |
+| `Thoth.dc.html` | 🔵 Durable | **New row.** The T3 pixel spec cited by ADR-0009 and the `src/gui/*` headers. |
+| `thoth_v1.tiff` | 🔵 Durable | **New row.** The emblem AND the source `scripts/gen-splash.sh` renders into `src/splash.cyr` (0.45.3). |
+| `scripts/build.sh` (header) | ✅ Fresh (stale → fixed) | **New row.** The target-matrix comment said the AGNOS ELF "cannot be exercised on a Linux host" — `agnos-run.sh` has run it under QEMU since 0.44.4; rewritten. `ARCH_GAP` still lists the epoll set as a tripwire (it does not surface at 6.6.3). |
+| `scripts/agnos-run.sh`, `gen-version.sh`, `gen-splash.sh`, `stack.sh`, `sync-*.sh` (10) | 🔵 Durable | **New row.** Headers verified; every vendored bundle has a sync script with the pin as its default TAG. |
 
 ## Tier 2 — Architecture (`docs/architecture/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `001-consumer-only-no-domain-logic.md` | 🔵 Durable | The consumer-only invariant; verified current (reflects the write tools + all seven seams). |
-| `002-capability-ladder.md` | ✅ Fresh | Re-verified at 0.43.2: the seam table still matches `src/seams.cyr` on all seven seams. |
-| `003-two-roots-project-jail-vs-mcp-host.md` | ✅ Fresh | **New at 0.44.1.** thoth's project jail (launch cwd) vs an MCP host's own root (`$BOTE_FS_ROOT`) — two roots, one description, and the registry advertised first. Written from a reproduced live failure, not from reading the code. Records what was tried and **removed** (a prose note on tool descriptions, measured as no-effect). |
-| `README.md` | ✅ Fresh | Re-verified at 0.44.1; indexes 001-003. |
+| `001-consumer-only-no-domain-logic.md` | ✅ Fresh (stale → fixed) | Spine list + degrade-closed verified. **Fixed at 0.51.1**: "a new tool → daimon" now distinguishes hosted tools from thoth's nine local-hands tools (ADR-0014/15/17/18/20; the line is identity, ADR-0018); the substrate fan-out list gained `syscalls_linux_common` + `fs_win`. |
+| `002-capability-ladder.md` | ✅ Fresh (stale → fixed) | Seam table matches `src/seams.cyr`. **Fixed**: "M6 deliverable (see roadmap)" → shipped 0.6.5 (CHANGELOG); the t-ron row gained `thoth_delegate` and the ungated read/ask tools; the sit row says `.git/` or `.sit/`, no ancestor walk. |
+| `003-two-roots-project-jail-vs-mcp-host.md` | ✅ Fresh | Verified against `src/project.cyr` / `src/agent.cyr`; `create_file` added to the jailed list. |
+| `README.md` | ✅ Fresh | Indexes 001–003; `create_file` added. |
 
 ## Tier 3 — Development (`docs/development/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `state.md` | ✅ Fresh | The live version log + current-state block. **0.43.2 fixed five stale claims that contradicted this same file**: `## Next` said "macOS builds+runs" (its own matrix says otherwise); `## Posture` said "all five seams" (`SEAM_COUNT = 7`), pinned avatara at 2.14.0 (the bundle says 2.14.1), and named the legacy `thoth.cyml` as the binding config; `## Tests` reported 1675 assertions "as of 0.33.7"; the Targets matrix was anchored at 0.38.6 with stale `src/tui.cyr` line numbers. **Re-measure, do not re-read.** |
-| `roadmap.md` | ✅ Fresh | **Forward-facing only.** When a milestone completes, move it to the CHANGELOG — do not narrate it here. **It supersedes `gap-review.*`.** **0.45.4**: re-cut around the batch discipline — repair batches pinned to patches, feature arcs held for minors, a waiting-on table with re-check versions, the limitations list folded into a registry. **0.43.2**: the `CYRIUS_STATS` table re-run (not re-read), and the retracted "over by 5,370 bytes" figure replaced with the include-graph measurement — including withdrawing the "most likely thing to block the next feature" claim that was derived from it. |
-| `gap-review.md` | ✅ Fresh | Carries ONLY candidate gaps thoth has **not** committed to; anything on the roadmap is deliberately absent. **0.43.2**: the `~96 %` ceiling figure (same retracted misread) corrected; two references to the subagent ADR as forthcoming work fixed (it shipped at 0.43.0); open question Q3 restated on a premise that still exists; gap 4 updated to five untrusted-prose inlets. |
-| `gap-review.html` | ✅ Fresh | **The rendered twin of `gap-review.md`, not an older draft** — same content on the house design system, Artifact-shaped (starts at `<title>`, no doctype). It had drifted a release behind (three inlets, no subagent strength, the pre-retraction ceiling figure) and was re-synced at 0.43.2. ⚠ **Edit both, or neither.** |
-| `doc-health.md` | ✅ Fresh | This file. Rewritten at 0.43.2 — the previous version's tables were still the 0.33.7 sweep's rows under 0.43.0/0.43.1 prose. Opportunistic cadence. |
+| `state.md` | ✅ Fresh (stale → fixed) | The per-version log is history; the current-state sections were re-measured. **Fixed at 0.51.1** (25 items): the Targets row's suite counts (three minors stale, contradicting §Tests); the `+ 5` is binaries not assertions; static data / `CYRIUS_STATS` / the include-graph re-sum (`string_data` at 44.5 % is now the tightest meter); eleven vendored bundles; the daimon ≥ 2.1.0 and hoosh ≥ 2.5.5 qualifiers; the four resources/prompts routes; the duplicated daimon-2.0.0 paragraph; the sit phantom count (16); `/run` does not ride `process_agnos`; the Windows gap = what the compiler reports; AGNOS runtime not re-run since 0.44.3 (said, not hidden); macOS re-verified on ecb; §Surface gained `search`/`delegate`/`ask_user`/`memory_write`, `mcpres`, `toolpin`, `gask`, `mpick`, the pointer, `[history].file` on the window; §Posture gained the security-floor paragraph and the full gate list; §Next says F1–F6 shipped and names batch 4. |
+| `roadmap.md` | ✅ Fresh (rewritten) | **Forward-only, re-cut at 0.51.1**: three open gates (gate 1 closed, its re-run owed), 0.51.1 = the sweep + the jail repair, batch 4 → 0.51.2 (ten items incl. the cyrius 6.6.4 re-vendor and the AGNOS re-run), the waiting table re-checked against hoosh 2.6.10 / daimon 2.1.3 / sit 1.6.2 / t-ron 2.1.10 / darshana 1.1.2 / cyrius 6.6.4 / kavach 3.12.5 / bhava 2.0.0, candidates F7–F14 ordered with gates, the registry trimmed to open items. F1–F6 and batches 1–3 live in the CHANGELOG. |
+| `gap-review.md` | ✅ Fresh (stale → fixed) | **Fixed**: bote 3.3.7 → 3.3.9; the "60 % of 8 MB" argument replaced by the 0.44.5 retraction (8.84 MB / 37 % of 24 MB); the pinning strength notes durability; five → six inlets + the map's directory names; Q2 (the durable rug-pull defence) answered by ADR-0022 and removed; ADR-0022 linked. Q1–Q3 still open. |
+| `gap-review.html` | ✅ Fresh (stale → fixed) | Re-synced: stamp 0.43.2 → 0.51.0; the footer no longer supersedes itself and carries the twin sentence; gap 3's wording/chip/legend; bote; the ceiling; pinning; inlets; Q2. Pre-existing rendering differences (a condensed intro, a leaf table) are by design. ⚠ **Edit both, or neither — diff them at every touch.** |
+| `doc-health.md` | ✅ Fresh | This file, rewritten at 0.51.1 as a full sweep. |
 
 ## Tier 4 — ADRs (`docs/adr/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `README.md` (index) | ✅ Fresh | Index verified complete at 0.43.2 — **all 18 ADRs (0001–0018)** have a row. (The previous ledger row asserted "all 17 (0001–0017)"; the index itself was correct and already carried 0018 — the ledger's verification claim was the stale part.) Add a row whenever an ADR lands. |
-| `0017-model-edit-tool-jailed-gated-opt-in.md` | ✅ Fresh | **0.43.2**: fixed the doc set's only broken relative link — a "filed and shipped" link pointed at `docs/development/issues/`, a directory that does not exist in this repo (the issue lives in cyrius). Now a plain repo-qualified path, matching how `roadmap.md` cites the same class of cross-repo issue. |
-| `0018-subagent-delegation-scoped-child-context.md` | 🔵 Durable | The first ADR here written as a **fence** rather than a decision record — half its content is an explicit non-goals list, because the feature sits next to the spine rule. Its swap-set claim ("the complete list … provable by enumeration") was **tested and found incomplete at 0.43.2** (memory recall + citations were missing); the ADR's reasoning stands, its enumeration was extended. |
-| `0019-layered-config-global-base-local-override.md` | 🔵 Durable | **Row added at 0.45.2.** The global base + per-key local override (0.43.3); **superseded in part by 0021**. |
-| `0020-ask-user-the-tool-that-runs-toward-the-operator.md` | 🔵 Durable | **Row added at 0.45.2.** `ask_user`, the tool that runs toward the operator (0.44.0). |
-| `0021-authority-keys-are-global-only.md` | 🔵 Durable | **Row added at 0.45.2.** Authority keys are read from the global layer only (0.44.3). |
-| `0009` / `0012` / `0015` / `0016` | 🔵 Durable | Current (each carries its own dated addendum). |
-| `0001`–`0008`, `0010`–`0011`, `0013`–`0014` | 🔵 Durable | Point-in-time decisions; historical version stamps + assertion counts are correct as of each decision's date — **do not "refresh" them.** |
+| `README.md` (index) | ✅ Fresh (stale → fixed) | **All 22 ADRs (0001–0022) have a row** (the 0.43.2 row said 18). **Fixed**: the 0016 and 0019 rows carry their supersession; the 0008 row says AGNOS runs / macOS runs / Windows on the socket gap (and points at the matrix); the 0014 row says POSIX + Windows. |
+| `0022-tool-pins-are-durable-defended-without-a-secret.md` | 🔵 Durable | **New row** (0.51.0). Verified against `src/toolpin.cyr` end to end; gained the `TPS_ROWS_MAX`/`TPS_READ_CAP` numbers, the 128 → 1024 table note, the ten states, and a 0.51.1 addendum for the `_project_sensitive` gap the sweep found (closed). |
+| `0021-authority-keys-are-global-only.md` | ✅ Fresh (stale → fixed) | Key list matches the `_cfg2_*_global_only` callers exactly. **Fixed**: the macOS "every local authority key suppressed" paragraph closed at 0.44.5 (cyrius 6.5.45 `getenv`). |
+| `0019-layered-config-global-base-local-override.md` | ✅ Fresh (stale → fixed) | Per-key layering verified. **Fixed**: the 0.45.3 addendum's "double read stays" → narrowed at 0.45.5 by `_thoth_index_is_global`; the last case named. |
+| `0020-ask-user-the-tool-that-runs-toward-the-operator.md` | 🔵 Durable | Verified line by line (`src/ask.cyr`, `gask`, the `/state` row). The "pending an on-compositor confirmation" line stands. |
+| `0018-subagent-delegation-scoped-child-context.md` | 🔵 Durable | Fence ADR; depth 1, the swap set verified. |
+| `0017-model-edit-tool-jailed-gated-opt-in.md` | ✅ Fresh (stale → fixed) | **Fixed**: "symlink-inside-project followed on write" → RESOLVED 0.39.0. |
+| `0016-thoth-home-dir-config-memory-discovery.md` | ✅ Fresh (stale → fixed) | Supersession banner + the 0.43.2 update verified; the greeting path → `src/greet.cyr`. |
+| `0015-project-read-tools-jailed-default-on.md` | ✅ Fresh (stale → fixed) | Jail + grants verified. **Fixed**: the two "symlink followed" residuals → RESOLVED 0.39.0 (the Windows `is_symlink` no-op remains). |
+| `0014-model-shell-tool-local-posix-gated.md` | ✅ Fresh (addendum) | Dated addendum: 0.20.1 process-group kill, 0.20.2 Windows lane, 0.39.0 0600 capture. Decision untouched. |
+| `0012-memory-seam-omit-until-mneme.md` | ✅ Fresh (stale → fixed) | Update banner verified (mneme via daimon). **Fixed**: two dead line numbers dropped; the write-residual sentence restated (AGNOS create mode; the memory append path lacks the 0.39.0 `is_symlink` walk — batch 4 item 5). |
+| `0009-presentation-capability-ladder.md` | ✅ Fresh (addendum) | The 0.30.0 addendum verified. **New 0.51.0 addendum**: `sf_*` never shipped under those names (the `ROLE_*` API + `status_snapshot` did); mihi/bnrmr never vendored; the tier is on `/state`, not `/seams`; the `.git/` gate cleared 0.13.0. The Decision is left as history. |
+| `0008-multi-target-builds.md` | 🟠 Read-through | Point-in-time (2026-06-12): still says AGNOS blocked on `lseek`, Windows/macOS/aarch64 "future". No addendum by policy — README / state / roadmap no longer point at it for current lane state. Candidate for an addendum in the 0009/0012 style if readers keep landing here. |
+| `0001`–`0007`, `0010`–`0011`, `0013` | 🔵 Durable | Point-in-time decisions; historical stamps correct as of each date — **do not "refresh" them.** Index summaries verified against each Decision. |
 | `template.md` | 🔵 Durable | The ADR starting point. |
 
 ## Tier 5 — Guides + examples (`docs/guides/`, `docs/examples/`)
 
 | File | Status | Notes |
 |---|---|---|
-| `guides/getting-started.md` | ✅ Fresh | **Was marked Fresh while anchored at 0.33.7** — the exact failure lesson 3 describes. **0.43.2**: "five spine seams" → seven; the 12 missing `src/*.cyr` modules added to the source layout (checkpoint, events, guard, hooks, mcpres, mdmodel, reasonlog, redact, search, subagent, toolpin, verify) — a scripted check now confirms **all 48 modules** have an entry; and the command reference gained `/context`, `/compact`, `/rewind`, `/fork`, `/grants`, `/resources`, `/resource`, `/prompts`. |
-| `examples/README.md` | 🟠 Read-through | A usage cheat-sheet, re-verified accurate. Not runnable programs — README and CLAUDE.md were reworded at 0.43.2 to stop promising otherwise (the ledger had previously named only CLAUDE.md, under-scoping its own finding). |
-| `examples/.gitkeep` | 🔵 Durable | Redundant (the README already tracks the dir); harmless. |
+| `guides/getting-started.md` | ✅ Fresh (stale → fixed) | A scripted comm confirms **all 66 modules** (53 `src/` + 13 `src/gui/`) have a row and every documented command exists. **Fixed at 0.51.1** (16 items): three → five test suites (twice); `/grants` described as read roots (it is authorization grants); `/allow` arg optional; the `reasonlog.cyr` row; the `toolpin.cyr` row (the durable store, ADR-0022); the `config.cyr` row contradicting the two-layer intro; `/write` diff-after-verdict; ⌃T cycles; Ctrl-D not bound in the TUI; `search` as the third default-on tool + the map; "Adding a command" names `_dispatch_d` + the palette; `diff.cyr` shares with `/git`; the vendor list gained anuenue + agnosai-guard (eleven); a `/help` catch-all line. Remaining omissions (`/help` covers them) noted, not wrong. |
+| `examples/README.md` | ✅ Fresh (stale → fixed) | Cheat-sheet, re-verified. **Fixed**: the "then `~/.thoth`" fallback wording → two merged layers (ADR-0019); `/quit` keys; the sample log line (`map_bytes`, `max_iters` 24, the sakshi prefix note). 🟠 still not runnable programs. |
+| `examples/.gitkeep` | 🔵 Durable → removal pinned | Redundant; also one of sit's two false-positive classes on `/git`. Removal is roadmap batch 4 item 6. |
+
+## Tier 6 — Audit (`docs/audit/`)
+
+| File | Status | Notes |
+|---|---|---|
+| `2026-08-24-audit.md` | 🔵 Durable | **New tier + row** (SECURITY.md links it; no row existed). A dated snapshot: the `src/x.cyr:NNN` citations and A-1…A-12 ids are historical by design. All 11 findings fixed at 0.39.0; A-1's Windows `is_symlink` no-op is carried on the roadmap. Its standards link is the ❓ 404. |
 
 ## Refresh procedure
 
@@ -308,6 +194,9 @@ When docs are touched:
 
 Cadence is **opportunistic** (touched when other docs are), not periodic — but a full sweep is worth
 running at a minor closeout or when a release burst has piled up drift.
+7. **At a full sweep, replace the "Touched at" notes with one sweep record** and re-stamp every row from a
+   reader's verdict, not from the previous row. Fourteen releases of prepended notes over 0.43.2 tables is how
+   this file re-learned lesson 3 at 0.51.0.
 
 ## What this file is NOT
 

@@ -40,7 +40,7 @@ reads `<root>/config.cyml`; when that file is not found it falls back to the leg
 existing setups keep working. Memory (`memory_dir()` / `memory_index_path()`) derives from the **same** root,
 so config and memory stay consistent regardless of launch directory.
 
-**Honest readiness** (`src/tui.cyr` greeting): READY is printed only when a *configured* `[hoosh].url` actually
+**Honest readiness** (`src/greet.cyr`, the greeting view-model every surface renders): READY is printed only when a *configured* `[hoosh].url` actually
 answers a live probe. When no config was discovered the greeting says "no config — no `<path>` found (add one,
 or `~/.thoth/config.cyml`)"; a config with no url says "hoosh absent"; a dead configured url says "hoosh
 unreachable — `<url>`". A reachable unconfigured default is noted "[default … is reachable]", never as READY.

@@ -28,14 +28,11 @@
 #            (the cycc #pure/pass-1 scanner gap closed in v6.2.2); still run as a
 #            best-effort lane so a future floor regression stays visible.
 #                                                                    build/thoth_aarch64
-#   agnos    AGNOS (early-demo OS) — staged (0.6.3), now BUILDING (0.12.3). Every
-#            prior blocker cleared upstream: `SYS_LSEEK` (6.2.37 peer, =58) and now
-#            the `SIGHUP` signal-NUMBER constant gap — the 6.3.38 agnos peer defines
-#            the signal enum, so the lane compiles a valid x86_64-AGNOS ELF with zero
-#            undefined symbols. This clears the BUILD half of v1.0 gate 1 (roadmap.md);
-#            the RUNTIME half (a downstream consumer green on real AGNOS) is gate 2,
-#            external — the ELF targets the AGNOS syscall ABI and cannot be exercised
-#            on a Linux host. Kept BEST-EFFORT until an AGNOS runner verifies it.
+#   agnos    AGNOS — BUILDS (0.12.3) and RUNS: ./scripts/agnos-run.sh boots the real
+#            kernel under QEMU and the ELF executes in ring 3 (proven 2026-09-04, 0.44.4).
+#            Still a best-effort lane HERE only because a Linux host cannot exec the ELF
+#            directly; the runtime check is the separate script (last re-run 0.44.3 —
+#            the local kernel lacks BASESTACK_SELFTEST; roadmap batch 4).
 #                                                                    build/thoth_agnos
 #
 # Usage:

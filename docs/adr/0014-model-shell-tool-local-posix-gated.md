@@ -110,3 +110,11 @@ Ship a thoth-native, **local**, **opt-in**, **POSIX-only** agentic tool named
 See also [ADR-0002](0002-consume-the-agnos-stack.md) (consume the spine),
 [ADR-0006](0006-m4-tool-spine-daimon-bote-tron.md) (t-ron authorization),
 [ADR-0010](0010-data-producer-honest-omit.md) (honest omit / announce-never-fake).
+
+## Addendum (0.51.0 doc sweep)
+
+Three of the residuals above closed: 0.20.1 kills the `/bin/sh`'s whole process group (`setpgid` +
+`kill(-pgid)`, `src/exec.cyr`), so a backgrounded grandchild dies with the timeout; 0.20.2 gave the
+tool a Windows lane (`shell_supported()` is 0 only on AGNOS, which announces it); 0.39.0 creates the
+capture temp `O_CREAT | O_EXCL` at 0600 — `O_NOFOLLOW` was never the load-bearing flag. The decision
+(opt-in, gated, a local capability) is unchanged.

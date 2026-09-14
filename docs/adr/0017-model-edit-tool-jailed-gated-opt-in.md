@@ -78,8 +78,9 @@ bytes written)`, counts via `diff_stats`); the colored diff card in the feed fol
     a path in the cyrius repo, not this one): `file_write_atomic` writes a unique sibling temp, loops until
     every byte lands (partial-write-safe), fsyncs, then atomically renames over the target, leaving the original
     intact on ANY failure. `_edit_do` now calls it, so an edit can no longer truncate the file.
-  - **Symlink-inside-project is followed on write** (no portable `O_NOFOLLOW`) — more dangerous for a
-    write than a read; the jail is a boundary, not a sandbox.
+  - ~~**Symlink-inside-project is followed on write**~~ **RESOLVED 0.39.0** — `_project_no_symlink`
+    refuses a link at any component on `edit` and `create_file`; the jail is still a boundary, not a
+    sandbox.
   - Separator/escape checks are POSIX/AGNOS-only (`/`, `..`, `~`); Windows `\`/`C:\` needs handling when
     `--win` ships.
   - ~~Creating *new* files is not yet supported~~ — added in 0.31.3 as a distinct **`create_file(path, content)`**

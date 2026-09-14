@@ -58,14 +58,19 @@ The semantics: a first run pins silently and creates the file at the first probe
 a changed definition is withheld from the advertisement, refused at dispatch, and announced as
 `CHANGED since it was pinned on <date> (a previous run)`, so the operator can tell a between-runs swap
 from an in-session one. A tool absent from the registry *keeps* its pin (a vanish-and-return with a
-new definition is precisely the swap). A flush re-reads and re-verifies the file, keeps other hosts'
+new definition is precisely the swap). The in-memory table grew from 128 to 1024 pins for the same
+reason: a store's rows are only ever added and must not crowd a live registry out of its slots (past
+it the remainder is advertised UNPINNED, and said). A flush re-reads and re-verifies the file, keeps other hosts'
 rows verbatim, unions same-host rows another session pinned since this one loaded (a pin is never
 downgraded — except under `/tools trust`, when this host's rows go by the operator's hand), and writes
 by temp + exclusive create at 0600 + `fsync` + rename. Any failure to verify — magic, row shape, count,
 digest — rejects the *whole* file (a per-line skip would be first sight through the back door; the file is
 verified whole *before* any row is applied), leaves it untouched as evidence, and makes the run
 session-scoped, announced; only `/tools trust` rewrites a rejected store. The writer stops at the same row
-cap the reader enforces, so thoth never writes a file it would then call edited. A symlink at the path is
+cap the reader enforces (`TPS_ROWS_MAX`, 8192 rows across every host; the load cap `TPS_READ_CAP` is 1 MiB),
+so thoth never writes a file it would then call edited. The store's ten states — unbound · loaded · new ·
+rejected · a symlink · unreadable · over the cap · no path · `durable = false` · write failed — are the
+one vocabulary every surface speaks (`src/toolpin.cyr`). A symlink at the path is
 refused before anything is read or written (the check is `is_symlink` then open — there is no portable
 `O_NOFOLLOW` on the floor, so the window between them is a named residual, not a defended one). A file the
 load buffer cannot hold is never written back — not by `/tools trust` either. An unreadable-but-present
@@ -131,3 +136,12 @@ waiting table.
   refused whole.
 - **Waiting for daimon** — rejected as the only answer: the spine's home is recorded above; the floor
   ships now.
+
+## Addendum (0.51.1)
+
+The 0.51.0 doc sweep found the store's one gap this ADR did not name: `_project_sensitive` — the rule
+that keeps the model's jailed tools off thoth's own state files — did not name `[toolpin].file`. The
+default `~/.thoth/toolpins` was covered by the `.thoth` component rule; a custom path inside the
+project jail was readable and, with `[edit].enabled`, rewritable — a swapped definition re-baselined
+through thoth's own `edit`, which the digest cannot catch (the model's `edit` runs as the operator).
+Closed at 0.51.1: the pin store is the fifth configured path the jail refuses.

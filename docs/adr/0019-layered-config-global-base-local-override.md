@@ -101,9 +101,11 @@ so it reads a single store once instead of injecting every fact twice.
 > fact went in twice. A directory has no bytes to recognise, so the walked root is judged by the level at which
 > the config walk met the global file's bytes, corroborated by the depth `$PWD` places CWD at under `$HOME`
 > (`_thoth_root_home_verdict`, `src/config.cyr`). `$PWD` stays display-grade: it can only veto (back to the double
-> read), never claim (a dropped layer). With no global `config.cyml` there are no bytes, so the walked root is never
-> called home and the double read stays — a stated limitation, kept over a dropped layer (roadmap: known
-> limitations, with the memory index's own bytes as the candidate closure).
+> read), never claim (a dropped layer). With no global `config.cyml` the walked root is recognised by the memory
+> INDEX's own bytes instead (0.45.5, `_thoth_index_is_global`: `<root>/memory/MEMORY.md` matching the global index,
+> same level rule and `$PWD` veto). What remains is a `~/.thoth/` with fact files but no `MEMORY.md` and no
+> `config.cyml` — no bytes to witness, so the double read stays there, kept deliberately over a dropped layer
+> (roadmap: the registry).
 
 ## Evidence
 

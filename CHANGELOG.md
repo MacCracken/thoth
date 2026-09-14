@@ -2,6 +2,76 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.51.1] - 2026-09-14
+
+**The doc sweep, and one repair it found.** A full documentation sweep at 0.51.0 — the first since 0.43.2: five
+readers verified every doc set against the tree with every stated measurement re-run, a planner re-cut the
+roadmap forward-only, and a reconciler produced one edit list (~110 findings). The one code change is the
+repair the sweep surfaced. Suite **647 + 1921 + 980 + 824 + 190 + 5** (+3). Linux / aarch64 / AGNOS build with
+0.45.6's warning set; the Windows lane at its known-gap skip; macOS built and tested natively at the 6.6.3 pin.
+
+- **The pin store inside the jail (security).** `_project_sensitive` — the rule that keeps the model's jailed
+  tools off thoth's own state files — named four operator-configured paths (`[tron].policy`, `[session].file`,
+  `[history].file`, `[log].file`) and not the fifth 0.51.0 added: `[toolpin].file`. The default
+  `~/.thoth/toolpins` was covered by the `.thoth` component rule; a custom store inside the project was readable
+  and, with `[edit].enabled`, rewritable — a swapped definition re-baselined through thoth's own `edit`, which
+  the store's digest cannot catch (the model's `edit` runs as the operator). The config example's "these four
+  paths" matched the code exactly, which is how a doc reader found a code gap. Closed: the pin store is the
+  fifth path the jail refuses (ADR-0022 addendum; the example says five).
+- **The roadmap is forward-only again.** F1–F6's "shipped as" bullets, the three "shipped as" batch sections,
+  gate 1's ✓ story and gate 3's closed-half narration moved to the CHANGELOG where they always belonged; the
+  file now carries: three open gates (gate 1 closed, its re-run OWED — the local AGNOS kernel lacks
+  `BASESTACK_SELFTEST`, so `agnos-run.sh` has refused since 0.44.3 rather than pretend, and the docs said "re-run
+  at every release"), **repair batch 4 → 0.51.2** (ten ordered items: the store's 2 MiB on a store-less run, the
+  agent suite's stray `hi`, a `/state` input-history row, five wrong user-visible strings the readers found
+  (`/reload`'s now-active list, `/help`'s `/quit` line, `--help` without `thoth gui`, the TUI slash palette 28
+  names behind `classify_input`, `/seams`' mneme string), `/remember`'s append path without the symlink walk,
+  `docs/examples/.gitkeep`, per-tool trust, an `--events` withheld/pinned kind, the AGNOS runtime re-run, and
+  last the cyrius 6.6.3 → 6.6.4 re-vendor that brings `O_NOFOLLOW` to the history and toolpin opens), the waiting
+  table re-checked against every sibling (cyrius is 6.6.4 upstream — `O_NOFOLLOW`/`AO_EXCL` closed there; hoosh's
+  multimodal gap added as F10's prerequisite; daimon pin-once), **candidates F7–F14 in a recommended order with
+  their gates** (the compositor pumped during hook/shell waits first — thoth-owned, met daily; then the AGNOS
+  window backend, untrusted reads through the subagent context, image input behind hoosh, git writes through
+  sit, kavach sandboxing behind its owner's decision, ACP server mode, OTLP export; "measure the map's effect"
+  as a session's task), and a registry cut to open items each naming where it is scheduled.
+- **What the readers fixed** (the ledger has the per-file list): CONTRIBUTING stamped 0.44.0 with a 0.43.x
+  feature list; README's "re-measured at 0.45.2" and its Windows "IOCP/epoll" story (a raw `--win` at 6.6.3
+  surfaces only `SYS_SOCKET`/`SYS_CONNECT` + three vendored names — the doc had matched neither reader's
+  measurement); "win is the open lane — see ADR-0008" (it gates closed; the matrix is `state.md`'s); CLAUDE.md
+  and CONTRIBUTING's `lib/` rule ("dep symlinks" — there are none; it is the synced stdlib snapshot); the guide's
+  three suites (five), `/grants` as read roots (it is authorization grants), `/quit` "or Ctrl-D" (not bound in
+  the TUI), a `config.cyr` row contradicting its own two-layer intro, `search` missing from the default-on
+  tools, "Adding a command" naming `dispatch` (the table is `_dispatch_d`, and the palette must follow); the
+  examples' "then `~/.thoth`" fallback (two merged layers) and a sample log line without `map_bytes`;
+  `state.md`'s Targets row three minors stale beside a current §Tests, `+ 5` counted as assertions (the five suite
+  binaries), ten vendored bundles (eleven — agnosai-guard), `CYRIUS_STATS` re-measured (`string_data` at 44.5 % is
+  the tightest meter now; the include graph 8.92 MB / 37 % of 24 MB), the hoosh ≥ 2.5.5 and daimon ≥ 2.1.0
+  qualifiers, the four resources/prompts routes, a duplicated paragraph, `/run` not riding `process_agnos`, sit's
+  phantom count (16, not 14), the AGNOS runtime not re-run since 0.44.3 (said, not hidden), a §Posture
+  security-floor paragraph and the full gate list, §Surface's missing `search`/`delegate`/`ask_user`/`mcpres`/
+  `toolpin`/`gask`/`mpick`/the pointer; ADR-0015/0017's "a symlink inside the project is followed" (closed
+  0.39.0), ADR-0021's "on macOS every local authority key is suppressed" (closed 0.44.5), ADR-0019's "the double
+  read stays" (narrowed 0.45.5), ADR-0012's dead line numbers and its write-residual sentence, the index rows for
+  0016/0019 (supersession) and 0014 (Windows since 0.20.2), dated addenda on ADR-0009 (what shipped under it:
+  the `ROLE_*` API, no mihi/bnrmr, the tier on `/state`) and ADR-0014 (three residuals closed), ADR-0022's
+  numbers (8192 rows, 1 MiB, the 128 → 1024 table, the ten states); the architecture notes' "a new tool →
+  daimon" (thoth's nine local-hands tools are its own), the t-ron row's `thoth_delegate`, the sit row's `.sit/`;
+  the gap review's bote 3.3.7 (3.3.9), the "60 % of 8 MB" argument (retracted at 0.44.5), five inlets (six + the
+  map's names), Q2 answered by ADR-0022 — and its `.html` twin re-synced from a 0.43.2 stamp; the config
+  example's "128 tools", "hoosh 2.6.4", the serial list without `ask_user`, "all three" inlets, two reserved
+  verbs (six), an orphaned `[log].level` line, "read once", "until mneme's port ships", the capture temp's
+  `O_EXCL`, the alias refusal, host canonicalisation.
+- **`docs/doc-health.md` rewritten as a full sweep** — the fourteen "Touched at" notes it had accumulated over
+  0.43.2 tables (lesson 3 again) replaced by one sweep record; every row re-stamped from a reader's verdict;
+  rows added for the files that had none (`LICENSE`, `cyrius.cyml`, the config example, `.gitignore`, the
+  workflows, the design assets, `scripts/`, `docs/audit/`, ADR-0022); a seventh step in the refresh procedure.
+- **Open for the maintainer:** the three genesis-repo standards links (CLAUDE.md, CONTRIBUTING.md, the audit)
+  return 404 on the public remote — the files are untracked in the local clone; push or repoint.
+
+Tests (+3): the jail refuses a configured `[toolpin].file` on `read_file` and `edit` (agent). Broken to prove it:
+the fifth check removed → the store readable. Verified as before: the full suite, three-target warning parity,
+the PE lane's known-gap skip, macOS natively on ecb.
+
 ## [0.51.0] - 2026-09-14
 
 **Tool pins are durable.** The sixth feature arc under the batch discipline (F6, ADR-0022; the maintainer's

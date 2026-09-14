@@ -3,8 +3,8 @@
 > Non-obvious invariant — *how the world is*, not *what we chose*. The choices
 > behind it are in the ADRs ([`../adr/`](../adr/)); this note states the standing
 > fact a reader can't derive from the code alone, and pins where it is enforced
-> so it cannot drift. It is the M6 "capability ladder, documented and honest"
-> deliverable (see [`../development/roadmap.md`](../development/roadmap.md)).
+> so it cannot drift. It was the M6 "capability ladder, documented and honest"
+> deliverable, shipped at 0.6.5 (see [`../../CHANGELOG.md`](../../CHANGELOG.md)).
 
 ## The invariant
 
@@ -33,10 +33,10 @@ this table is the prose mirror, not a second source of truth.
 | **hoosh** | remote-client | `[hoosh].url` set | **full** — turns route to a backing model; mid-session `/model` switch | **absent** — no model turns; local REPL commands only (announced) |
 | **daimon** | remote-client | `[daimon].url` set | **full** — `/tools` registry, `/call` execution, the agentic loop | **absent** — no tools; `/tools`/`/call`/loop report absent |
 | **bote** | native | always (vendored) | **full** — MCP protocol framing, in-process | — (never absent) |
-| **t-ron** | native | `[tron].policy` loads | **full** — per-tool authz on the operator `/run`/`/write`/`/call` **and** the model tools (`thoth_shell`, `thoth_remember`, and `thoth_edit` for `edit`/`create_file`); deny is final | **degraded** — built-in fail-closed confirm gate (deny/prompt); **never** a silent allow |
+| **t-ron** | native | `[tron].policy` loads | **full** — per-tool authz on the operator `/run`/`/write`/`/call` **and** the model tools (`thoth_shell`, `thoth_remember`, `thoth_edit` for `edit`/`create_file`, and `thoth_delegate` for `delegate`; `read_file`/`list_dir`/`search`/`ask_user` are jail-bounded, not gated); deny is final | **degraded** — built-in fail-closed confirm gate (deny/prompt); **never** a silent allow |
 | **avatara** | native | always (vendored) | **full** — the Thoth/Librarian archetype steers every turn | — (never absent) |
 | **mneme** | remote-client | daimon advertises the `mneme_*` tools | **full** — semantic + full-text recall from the mneme vault (`/remember`, per-turn recall, citations, `/notes`) | **degraded** when `[memory].enabled` (the local `.thoth/memory` flat-file reader stands in); **absent** when memory is off |
-| **sit** | native | a git repo at the working dir | **full** — branch/status + per-file diff (`/git`, the `/state` row, the status-bar branch) | **absent** — no repo; the git surface reports absent |
+| **sit** | native | a `.git/` or `.sit/` repo at the working dir (no ancestor walk) | **full** — branch/status + per-file diff (`/git`, the `/state` row, the status-bar branch) | **absent** — no repo; the git surface reports absent |
 
 The rows that make the two-dimension model necessary are **t-ron** and **mneme** —
 in both, the capability effect can't be read off the binding mode. t-ron's binding

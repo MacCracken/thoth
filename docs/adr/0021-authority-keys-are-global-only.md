@@ -71,10 +71,10 @@ thoth cannot tell your repository from a cloned one, and the strict reading of t
 principle wins over its example. Anyone relying on a project-local `[tron]`, `[hooks]` or `[verify]`
 block moves it to `~/.thoth/config.cyml`; thoth names exactly which keys and where.
 
-⚠ **On macOS every project-local authority key is currently suppressed**, because
-`getenv("HOME")` returns null there (a cyrius floor gap — `lib/io.cyr` reads `/proc/self/environ`,
-which Darwin does not have; filed upstream) so there is no global layer to grant from. That is the
-correct behaviour under this ADR, and it is a real limitation until the floor gap is fixed.
+⚠ ~~**On macOS every project-local authority key is currently suppressed**, because `getenv("HOME")`
+returned null there.~~ **Resolved at 0.44.5** (cyrius 6.5.45 gave Darwin a `getenv`): the global layer
+loads on macOS and this ADR applies there as on Linux. Between 0.44.3 and 0.44.5 macOS had no global
+layer, so every local authority key was suppressed — the correct fail-closed behaviour under this ADR.
 
 **What this does NOT change.** The local layer keeps everything that expresses preference: model,
 tier, theme, aliases, pricing, caps, and the capability toggles (`[shell].enabled`, `[edit].enabled`,

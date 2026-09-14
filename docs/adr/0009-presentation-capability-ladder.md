@@ -100,3 +100,13 @@ degrade-closed / port-the-floor doctrine are unchanged; T3 simply gains a *fourt
 renderer* over the same view-models rather than delegating the whole front-end to
 puka. The design mockup `Thoth.dc.html` is the T3 pixel spec (its palette == ui.cyr's
 roles). Landed 0.29.0 (headless pipeline) → 0.30.0 (runnable `thoth gui`).
+
+## Addendum (0.51.0 doc sweep) — as built
+
+The Decision above is history; what shipped under it: the render surface is the semantic
+colour-role API (`ui_emit(ROLE_*)`, `src/ui.cyr`) plus the facts-not-bytes view-models
+(`status_snapshot` in `src/surface.cyr`, 0.28.0; `greet_build` in `src/greet.cyr`, 0.45.3) — the `sf_*`
+names in the table never shipped under those names. mihi and bnrmr were never vendored: there is
+no GPU gate (T3 is the `thoth gui` subcommand), and the banner is the generated `src/splash.cyr`
+ibis plus anuenue's hue for `/theme rainbow`. The tier is reported on `/state`'s `surface` row, not
+`/seams`. The `.git/` read-mode gate cleared at 0.13.0 (the vendored `sit-read`).

@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.51.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.51.1 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -49,6 +49,10 @@ this is how that cost stops landing in your conversation. Depth-capped at 1, and
 through the *same* gate, hook, jail and audit chain as the parent's — there is exactly one dispatch path
 ([ADR-0018](docs/adr/0018-subagent-delegation-scoped-child-context.md)).
 
+**Ask-me-back.** With `[ask].enabled`, the model can stop mid-turn and ask you a question — suggested
+answers plus a free-text field — on the TUI, the desktop GUI or the line REPL; one-shot degrades
+honestly rather than blocking ([ADR-0020](docs/adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)).
+
 **Security you can point at.** A t-ron-gated tool spine with a fail-closed confirm when no policy is loaded;
 **`[redact]`** strips secrets from tool results before they reach the feed, the transcript or the next
 request; **`[guard]`** marks untrusted prose (file reads, recalled notes, MCP resources) as data rather than
@@ -76,11 +80,12 @@ Config is **two layers** ([ADR-0019](docs/adr/0019-layered-config-global-base-lo
 `~/.thoth/config.cyml` is the global base and the nearest `.thoth/config.cyml` overrides it **per key**.
 Memory layers the same way. Lists that grant the model authority (`[shell].allow`, `[project].read_roots`)
 are *replaced* by the local layer rather than merged, while `[shell].deny` unions — authority never
-accumulates from the less-trusted side. Multi-target (re-measured at 0.45.2): x86_64 Linux ships;
+accumulates from the less-trusted side. Multi-target (re-measured at 0.51.0 on the 6.6.3 pin): x86_64 Linux ships;
 aarch64 Linux builds; **AGNOS builds *and runs*** — the cross-built ELF loads and executes in ring 3 on
 the real kernel under QEMU (`./scripts/agnos-run.sh`); **macOS builds and runs** on Apple Silicon at the line tier
-(no BSD termios peer yet, so no rich TUI), with its full test suite passing natively; Windows is staged on an architectural IOCP/ws2_32 floor gap, now blocked entirely
-outside thoth's own source. See
+(no BSD termios peer yet, so no rich TUI), with its full test suite passing natively; Windows is staged on an architectural ws2_32 socket gap (`SYS_SOCKET`/`SYS_CONNECT` in the stdlib
+transport) plus three vendored symbols (t-ron's `SIGHUP`/`SIG_BLOCK`, sit's `sys_rmdir`) — blocked
+entirely outside thoth's own source. See
 [`docs/development/state.md`](docs/development/state.md) and
 [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.
 
@@ -185,8 +190,9 @@ thoth --help                             # the full one-shot reference
 ```
 
 For multi-target builds use the driver — `./scripts/build.sh [linux|macos|win|aarch64|agnos|all]`
-(x86_64 Linux ships; aarch64 builds; agnos builds and runs; macos builds and runs at the line tier; win is the
-open lane — see
+(x86_64 Linux ships; aarch64 builds; agnos builds and runs; macos builds and runs at the line tier; win gates
+closed on the floor — warns and ships no binary — see the Targets matrix in
+[`docs/development/state.md`](docs/development/state.md); the multi-target decision itself is
 [ADR-0008](docs/adr/0008-multi-target-builds.md)). The `macos` lane only runs on a Mac host: cyrius emits
 Mach-O natively there rather than cross-compiling.
 
@@ -195,9 +201,6 @@ pin is the source of truth; don't hardcode it elsewhere.
 
 ## Documentation
 
-**Ask-me-back.** With `[ask].enabled`, the model can stop mid-turn and ask you a question — suggested
-answers plus a free-text field — on the TUI, the desktop GUI or the line REPL; one-shot degrades
-honestly rather than blocking ([ADR-0020](docs/adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)).
 
 - [`docs/adr/`](docs/adr/) — Architecture Decision Records (*why X over Y?*)
 - [`docs/architecture/`](docs/architecture/) — non-obvious invariants about the code
@@ -211,7 +214,8 @@ honestly rather than blocking ([ADR-0020](docs/adr/0020-ask-user-the-tool-that-r
 **Design assets at the repo root**, named here so neither reads as scratch:
 [`Thoth.dc.html`](Thoth.dc.html) is the T3 GUI pixel spec (its palette is `src/ui.cyr`'s; cited by
 [ADR-0009](docs/adr/0009-presentation-capability-ladder.md) and the `src/gui/` headers), and
-`thoth_v1.tiff` is the project emblem — a line-art ibis with the lunar disc, papyrus and uraeus.
+`thoth_v1.tiff` is the project emblem — a line-art ibis with the lunar disc, papyrus and uraeus — and the
+source `scripts/gen-splash.sh` renders into the generated `src/splash.cyr` startup ibis.
 
 ## License
 

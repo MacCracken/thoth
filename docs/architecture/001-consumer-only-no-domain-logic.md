@@ -47,7 +47,11 @@ The fix is never "implement it here" — it is "add it to the owning crate and
 consume it":
 
 - A new model provider or routing rule → **hoosh**, then route to it.
-- A new tool, orchestration step, or host-registry entry → **daimon**.
+- A new **hosted** tool (one that runs on an MCP host), an orchestration step, or a host-registry
+  entry → **daimon**. thoth's own local-hands tools — `read_file` / `list_dir` / `search` / `edit` /
+  `create_file` / `shell` / `delegate` / `ask_user` / `memory_write` — are jailed, t-ron-gated substrate
+  over the launch directory (ADR-0014/0015/0017/0018/0020); the line is *identity* (ADR-0018): needs a
+  persona, a registry entry or a peer ⇒ daimon; one conversation's context ⇒ thoth.
 - A protocol-level change to how tools are spoken to → **bote**.
 - An authorization rule for what a tool may do → **t-ron**.
 - A change to the scribe persona, tone, or archetype behaviour → **avatara**.
@@ -73,10 +77,10 @@ argv, process spawn. That fan-out already exists in the vendored Cyrius stdlib,
 behind one stable interface:
 
 - `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`, `syscalls_aarch64_linux`,
-  `syscalls_macos`, `syscalls_windows`
+  `syscalls_linux_common`, `syscalls_macos`, `syscalls_windows`
 - `alloc_agnos`, `alloc_macos`, `alloc_windows`
 - `args_agnos`, `args_macos`, `args_win`
-- `process_agnos`, `process_win`
+- `process_agnos`, `process_win`, `fs_win` (e.g. — the set grows with the floor)
 
 thoth code is written against the portable interface and the target is selected
 at build time; thoth never calls a per-OS file directly. So portability is a

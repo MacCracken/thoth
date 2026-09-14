@@ -76,7 +76,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 - Do not skip tests before claiming changes work
 - Do not use `sys_system()` with unsanitized input — command injection
 - Do not trust external data (file / network / args) without validation
-- Do not modify `lib/` files (vendored stdlib / dep symlinks)
+- Do not modify `lib/` (the vendored stdlib snapshot synced from the cyrius pin by `cyrius lib sync`; `cyrius build` / `cyrius test` rewrite it as a side effect — a `lib/` diff means the pin moved, never that a file needs editing)
 - Do not hardcode toolchain versions in CI YAML — `cyrius = "X.Y.Z"` in `cyrius.cyml` is the source of truth
 
 ## Process
@@ -100,4 +100,6 @@ Project was scaffolded with `cyrius init`. **Do not manually create project stru
 - [`docs/examples/`](docs/examples/) — Usage cheat-sheet (configs + command recipes, not runnable programs)
 - [`docs/development/state.md`](docs/development/state.md) — Live state snapshot
 - [`docs/development/roadmap.md`](docs/development/roadmap.md) — Milestones through v1.0 (forward-facing only)
+- [`docs/development/gap-review.md`](docs/development/gap-review.md) — Candidate gaps not yet committed to (the roadmap supersedes it)
+- [`docs/audit/`](docs/audit/) — Security audit passes (findings + residuals)
 - [`docs/doc-health.md`](docs/doc-health.md) — Doc-currency ledger (fresh/durable/stale, refreshed on doc sweeps)

@@ -7,15 +7,18 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: 0.44.0 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
-> default) / REPL, a native Wayland GUI (`thoth gui`), and a one-shot/argv front-door with
-> `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
-> switching; jailed project read tools + `@file` mentions and the gated `edit` / `create_file` /
-> `shell` write tools with `/rewind` checkpoints; a git producer, project memory (mneme via
-> daimon), `web_fetch`/`web_search`, MCP resources/prompts, subagent delegation, and the
-> operator-side controls — `[hooks]`, `[toolpin]`, `[guard]`, `[redact]`, `[verify]` — plus a
-> comprehensive unit suite; x86_64 Linux ships (see `docs/development/state.md` for the full
-> target status). The remaining road to v1.0 is dominated by AGNOS lighting up, not feature work — see
+> **Status: 0.51.1 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
+> default) / REPL, a native Wayland GUI (`thoth gui`, with the mouse since 0.49.0), and a one-shot/argv
+> front-door with `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
+> switching with a picker that shows each provider's health and rate; jailed project read tools +
+> `@file` mentions, a per-turn project map, and the gated `edit` / `create_file` / `shell` write tools
+> with `/rewind` checkpoints; a git producer, project memory (mneme via daimon), `web_fetch`/`web_search`,
+> MCP resources/prompts, subagent delegation, the model's `ask_user`; the operator-side controls —
+> `[hooks]`, `[toolpin]` (durable across runs since 0.51.0), `[guard]`, `[redact]`, `[verify]`,
+> `[budget]` — over a layered global-base / per-key-local config whose authority keys are read
+> global-only (ADR-0019/0021); a comprehensive unit suite; x86_64 Linux ships, aarch64 builds, AGNOS
+> builds and runs in ring 3 under QEMU, macOS builds and runs natively at the line tier (see
+> `docs/development/state.md` for the matrix). The remaining road to v1.0 is dominated by AGNOS lighting up, not feature work — see
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) and
 > [`docs/development/state.md`](docs/development/state.md). Contributions follow the one rule
 > below: drive the AGNOS spine, never fork it.
@@ -62,7 +65,9 @@ spine)?* See [ADR-0001](docs/adr/0001-os-agnostic-agnos-primary.md),
 - Test after every change, not after the feature is "done".
 - Validate all external data (file / network / args); bound every buffer
   (`var buf[N]` = N **bytes**); never `sys_system()` with unsanitized input.
-- Do not modify `lib/` (vendored stdlib / dep symlinks).
+- Do not modify `lib/` (the vendored stdlib snapshot synced from the cyrius pin by `cyrius lib sync`;
+  `cyrius build` / `cyrius test` rewrite it as a side effect — a `lib/` diff means the pin moved, not that
+  a file needs editing).
 - Maintainers handle all git operations and releases.
 
 ## Reporting security issues

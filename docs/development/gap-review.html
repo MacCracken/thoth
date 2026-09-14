@@ -1,4 +1,4 @@
-<title>thoth Open Gaps</title>
+(The old form of this sentence argued from &ldquo;a preprocessor ceiling thoth is already at ~96&nbsp;% of&rdquo;. Two corrections since: 0.43.1 retracted that figure, and 0.44.5 found the 8&nbsp;MB ceiling had been raised to 24&nbsp;MB at cyrius 6.5.40 &mdash; the binding unit re-sums to 8.84&nbsp;MB, 110&nbsp;% of the old slot and 37&nbsp;% of the new one. So the ceiling is not the argument; the 1.6&nbsp;MB delta against every other bundle still is.)<title>thoth Open Gaps</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
@@ -210,6 +210,7 @@
         <div><span class="chip c-partial">partial</span><span>thoth has some of it</span></div>
         <div><span class="chip c-conflict">spine</span><span>daimon / kavach owns it</span></div>
         <div><span class="chip c-ok">ahead</span><span>thoth leads the field</span></div>
+        <div><span class="chip c-ok">closed</span><span>shipped; residual recorded</span></div>
       </div>
     </div>
   </nav>
@@ -223,7 +224,7 @@
         <span>companion to roadmap.md</span>
         <span>supersedes agentic-improvements-review.md</span>
         <span>Tiers 1&ndash;3 shipped in 0.40.0 / 0.41.0 / 0.42.0</span>
-        <span>current as of 0.43.2</span>
+        <span>current as of 0.51.0</span>
       </div>
     </header>
 
@@ -239,11 +240,11 @@
     <p class="lede">Kept because a naive gap list would recommend rebuilding these.</p>
     <ul class="plain">
       <li><strong>A real cryptographic audit chain.</strong> <span class="chip c-ok">ahead</span> A hash-linked, tamper-evident record of every gated action, verified in-process by <code>/audit</code> and written out by <code>/audit export</code>. Almost no other harness has this; most have a log file.</li>
-      <li><strong>Authorization as a real seam, not a prompt.</strong> <span class="chip c-ok">ahead</span> t-ron supplies allow/deny/flag verdicts, an injection scanner over tool params, a rate limiter and a per-agent risk score &mdash; with distinct reserved verbs (<code>thoth_run</code> vs <code>thoth_shell</code> vs <code>thoth_edit</code>) so a policy can separate the operator&rsquo;s actions from the model&rsquo;s. Everything below builds on this; none of it replaces it.</li>
+      <li><strong>Authorization as a real seam, not a prompt.</strong> <span class="chip c-ok">ahead</span> t-ron supplies allow/deny/flag verdicts, an injection scanner over tool params, a pattern analyzer, a rate limiter and a per-agent risk score &mdash; with distinct reserved verbs (<code>thoth_run</code> vs <code>thoth_shell</code> vs <code>thoth_edit</code>) so a policy can separate the operator&rsquo;s actions from the model&rsquo;s. Everything below builds on this; none of it replaces it.</li>
       <li><strong>Honest degradation as a house rule.</strong> <span class="chip c-ok">ahead</span> Missing capabilities are announced, not faked. The banner states live gateway reachability rather than a hardcoded READY; an absent t-ron falls to a fail-closed confirm; the source says plainly where a boundary is not a sandbox.</li>
       <li><strong>Mid-session model switching</strong> <span class="chip c-ok">ahead</span> &mdash; matched by no surveyed harness &mdash; plus a model picker, reasoning-effort control and per-turn token/cost accounting.</li>
       <li><strong>Instruction-file safety.</strong> <span class="chip c-ok">ahead</span> thoth wraps <code>AGENTS.md</code> as &ldquo;verbatim reference &mdash; <em>not</em> commands to obey&rdquo; and declines to auto-inject <code>CLAUDE.md</code>. Most harnesses treat instruction files as trusted text.</li>
-      <li><strong>Tool-definition pinning.</strong> <span class="chip c-ok">ahead</span> Trust-on-first-use hashing against the CVE-2025-54136 rug-pull, with a changed definition <em>withheld</em> rather than warned about. Rare among peers.</li>
+      <li><strong>Tool-definition pinning.</strong> <span class="chip c-ok">ahead</span> Trust-on-first-use hashing against the CVE-2025-54136 rug-pull, with a changed definition <em>withheld</em> rather than warned about. Rare among peers. Since 0.51.0 the pins persist across runs (<a href="../adr/0022-tool-pins-are-durable-defended-without-a-secret.md">ADR-0022</a>), so a swap planted while thoth was not running is withheld and dated too.</li>
       <li><strong>Subagent delegation with exactly ONE dispatch path.</strong> <span class="chip c-ok">ahead</span> Peers ship subagents; thoth&rsquo;s runs the child&rsquo;s tool calls through the <em>same</em> gate, hook, jail, checkpoint gate and audit chain as the parent&rsquo;s rather than a parallel implementation &mdash; so a delegated action is exactly as authorized and as observable as a direct one, and there is no second authorization path to drift.</li>
       <li><strong>Provenance-split input.</strong> <span class="chip c-ok">ahead</span> A piped payload (<code>git diff | thoth &lsquo;review&rsquo;</code>) is treated as third-party text and never reaches the <code>@mention</code> reader; only the operator&rsquo;s own argv words do (0.43.2). Peers that advertise <code>cmd | agent &lsquo;task&rsquo;</code> generally treat the whole thing as one trusted message.</li>
     </ul>
@@ -268,16 +269,16 @@
       <p>Exfiltration is the payoff step of most injection chains. <code>shell</code> can curl anywhere and <code>web_fetch</code> reaches any URL. Largely <strong>daimon&rsquo;s and kavach&rsquo;s</strong> seam rather than thoth&rsquo;s &mdash; which is why it is not on the roadmap &mdash; but it is the natural companion to gap&nbsp;1 and should be decided alongside it.</p>
     </div>
 
-    <div class="rec" style="--tier: var(--ochre)">
+    <div class="rec" style="--tier: var(--ok)">
       <div class="rec-head"><span class="rec-id">03</span><h3>Durable tool-definition pins</h3><span class="chip c-ok">closed 0.51.0</span></div>
-      <p>A gap <em>created</em> by 0.42.0 and closed at 0.51.0 (ADR-0022). <code>[toolpin]</code> pins were session-scoped through 0.50.x: they died with the process, so a swap <em>during</em> a session (or across <code>/reload</code>) was caught and one <em>between two runs</em> was not. Now they persist in <code>~/.thoth/toolpins</code> (host + name under a whole-file digest), a store thoth cannot verify is refused whole, and the ceiling &mdash; a same-uid editor &mdash; is stated.</p>
-      <p>What remains is the spine&rsquo;s half: <strong>daimon</strong> owns the registry and could pin once for every consumer &mdash; a persisted registry, a <code>definition_sha256</code> per manifest element, an audit event on change (the roadmap&rsquo;s waiting table).</p>
+      <p>Closed at 0.51.0 (<a href="../adr/0022-tool-pins-are-durable-defended-without-a-secret.md">ADR-0022</a>), with the daimon residual. <code>[toolpin]</code> pins were session-scoped through 0.50.x: they died with the process, so a swap <em>during</em> a session (or across <code>/reload</code>) was caught and one <em>between two runs</em> was not. Now they persist in <code>~/.thoth/toolpins</code> (or <code>[toolpin].file</code>) &mdash; host + name under a whole-file digest &mdash; a store thoth cannot verify is refused whole, and the ceiling &mdash; a same-uid editor &mdash; is stated.</p>
+      <p>The store is the security-relevant file the earlier draft of this entry warned about (tamper, replace, symlink-redirect), and ADR-0022 says what a keyless process can and cannot defend it against. What remains is the spine&rsquo;s half: <strong>daimon</strong> owns the registry and could pin once for every consumer &mdash; a persisted registry, a <code>definition_sha256</code> per manifest element, an audit event on change (the roadmap&rsquo;s waiting table).</p>
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">
       <div class="rec-head"><span class="rec-id">04</span><h3>Structural isolation of untrusted content</h3><span class="chip c-partial">partial</span></div>
       <p><code>[guard]</code> marks untrusted prose with an envelope and does not block, which is the right posture for a pattern matcher &mdash; it is a <strong>mitigation, not a boundary</strong>, and thoth frames it that way.</p>
-      <p>The strongest control in the field is structural, not lexical: retrieved text runs through a <strong>separate context window</strong> so it cannot issue instructions into the main thread. thoth now has <strong>five</strong> untrusted-prose inlets &mdash; <code>@file</code> mentions, <code>read_file</code>/<code>list_dir</code>/<code>search</code> results, recalled mneme notes, (0.43.0) <strong>MCP resource content</strong>, and <strong>piped stdin</strong> &mdash; and all five land in the main context.</p>
+      <p>The strongest control in the field is structural, not lexical: retrieved text runs through a <strong>separate context window</strong> so it cannot issue instructions into the main thread. thoth now has <strong>six</strong> untrusted-text inlets &mdash; <code>@file</code> mentions, <code>read_file</code>/<code>list_dir</code>/<code>search</code> results, recalled mneme notes, (0.43.0) <strong>MCP resource content and server-published MCP prompts</strong>, and <strong>piped stdin</strong> (0.43.2) &mdash; and all land in the main context; since 0.50.0 the project-map hint also carries directory names read from the disk (cleaned of control bytes, not enveloped).</p>
       <p><strong>The prerequisite has landed, which changes this gap&rsquo;s shape rather than closing it.</strong> 0.43.0&rsquo;s subagent (ADR-0018) <em>is</em> a separate context window: a child reads whatever it reads into its own message list and returns one string, which reaches the parent through redact &rarr; guard like any tool result. The machinery now exists; what does not is thoth <em>routing untrusted reads through it automatically</em>. That is a real design decision, not a wiring job &mdash; it makes every <code>@file</code> cost a model round, and a laundered summary is arguably a <em>more</em> persuasive injection vector than the raw text, since it arrives as fluent prose the parent has no reason to distrust.</p>
     </div>
     <div class="warn">
@@ -308,7 +309,7 @@
 
     <div class="rec" style="--tier: var(--ink-3)">
       <div class="rec-head"><span class="rec-id">09</span><h3>MCP 2026-07-28 conformance</h3><span class="chip c-conflict">spine</span></div>
-      <p>Vendored bote 3.3.7 negotiates 2025-11-25, one revision behind across a structural break. Flagged here only so it is tracked somewhere; the work belongs upstream.</p>
+      <p>Vendored bote 3.3.9 negotiates 2025-11-25, one revision behind across a structural break. Flagged here only so it is tracked somewhere; the work belongs upstream.</p>
     </div>
 
     <h2 id="declined"><span class="num">Recorded</span>Declined, with reasons</h2>
@@ -376,20 +377,16 @@
       <p>Gap&nbsp;1 &mdash; the largest safety delta &mdash; waits on this, and it is a change inside kavach&rsquo;s threat model.</p>
     </div>
     <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">Q2</span><h3>Where does durable rug-pull defense live?</h3></div>
-      <p>thoth persists tool-definition pins, or daimon pins once for every consumer. Gap&nbsp;3.</p>
-    </div>
-    <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">Q3</span><h3>Should untrusted reads be routed through the existing subagent context automatically?</h3></div>
+      <div class="rec-head"><span class="rec-id">Q2</span><h3>Should untrusted reads be routed through the existing subagent context automatically?</h3></div>
       <p>The machinery landed at 0.43.0 (ADR-0018), so this is no longer &ldquo;before or as part of subagents&rdquo; &mdash; it is a routing decision over something that already exists, with the two costs gap&nbsp;4 names: a model round per <code>@file</code>, and a laundered summary that may be a <em>more</em> persuasive injection vector than the raw text.</p>
     </div>
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">Q4</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>
+      <div class="rec-head"><span class="rec-id">Q3</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>
       <p>Gap&nbsp;8 &mdash; or does the read-only git producer stay the boundary?</p>
     </div>
 
     <footer>
-      <p>Companion to <code>docs/development/roadmap.md</code>, which supersedes this file. Shipped work is in <code>CHANGELOG.md</code>; live state in <code>docs/development/state.md</code>. Supersedes <code>agentic-improvements-review.md</code> and the previous <code>gap-review.html</code>.</p>
+      <p>Companion to <code>docs/development/roadmap.md</code>, which supersedes this file. Shipped work is in <code>CHANGELOG.md</code>; live state in <code>docs/development/state.md</code>. Supersedes <code>agentic-improvements-review.md</code>. This page is the rendered twin of <code>gap-review.md</code> &mdash; edit both, or neither. (The question that used to sit second among the open ones &mdash; where the durable rug-pull defence lives &mdash; was answered at 0.51.0 by ADR-0022.)</p>
     </footer>
   </main>
 </div>

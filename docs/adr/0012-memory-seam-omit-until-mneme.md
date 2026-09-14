@@ -35,8 +35,8 @@ spine fork.
 
 But there is a slice that is unambiguously thoth's, and it is **the verb thoth
 already ships**: context assembly. thoth reads the avatara persona
-(`persona_system_prompt`, `src/session.cyr:209`) and the conversation-history
-tail (`_hoosh_history_start`, `src/hoosh.cyr:338`) and threads both into every
+(`persona_system_prompt`, `src/session.cyr`) and the conversation-history
+tail (`_hoosh_history_start`, `src/hoosh.cyr`) and threads both into every
 request as leading `{role:system}` messages. Reading local context files and
 injecting them is the **same operation over a different source** — nothing new
 in kind.
@@ -99,9 +99,11 @@ a thoth-owned stand-in the real domain owner supersedes with a producer swap.
 - **Prompt-injection** is mitigated by opt-in + t-ron-gated writes +
   escaped-not-executed content, but a checked-in `.thoth/memory` remains a trust
   decision the user makes by enabling the seam.
-- **AGNOS write residuals** (no portable `fchmod` / `O_NOFOLLOW`, `sys_open`
-  carries no mode channel) are the same honesty debt as `[history].file`
-  ([roadmap](../development/roadmap.md)); documented, never a mode we can't enforce.
+- **Write residuals** (re-read at the 0.51.0 sweep): AGNOS's open carries no create mode (no
+  portable `fchmod`; the same honesty debt as `[history].file`, [roadmap](../development/roadmap.md)),
+  and the memory append path does not yet run the 0.39.0 `is_symlink` walk the project tools use — a
+  link at `.thoth/memory/*.md` is followed on `/remember` (repair batch 4). Documented, never a mode
+  we can't enforce.
 
 ## Slot
 

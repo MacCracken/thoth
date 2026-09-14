@@ -11,7 +11,7 @@
 
 **A file path means two different places depending on which tool receives it.**
 
-- thoth's own `read_file` / `list_dir` / `search` / `edit` resolve a path
+- thoth's own `read_file` / `list_dir` / `search` / `edit` / `create_file` resolve a path
   **relative to the directory thoth was launched in**, confined to it and below
   (plus any root the *user* granted with `/allow`). This is the project jail.
 - A tool that comes from **daimon's registry** executes on the **MCP host**, and

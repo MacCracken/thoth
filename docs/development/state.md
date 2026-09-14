@@ -7,6 +7,16 @@
 
 ## Version
 
+**0.51.1** — **the doc sweep, and one repair it found** (2026-09-14). The first full documentation sweep since
+0.43.2: every doc set verified against the tree with every measurement re-run; the roadmap re-cut forward-only
+(gates, batch 4 → 0.51.2, candidates F7–F14 ordered with their gates, the waiting table re-checked); the ledger
+rewritten; ~110 findings fixed across README / CONTRIBUTING / CLAUDE.md / the guide / the examples / the
+architecture notes / seven ADRs / the gap review + its twin / the config example / this file's current-state
+sections. The repair: `_project_sensitive` did not name `[toolpin].file`, so a custom pin store inside the jail was
+model-readable and `edit`-rewritable — the fifth configured path the jail refuses now. Suite
+**647 + 1921 + 980 + 824 + 190 + 5** (+3); Linux / aarch64 / AGNOS build with 0.45.6's warning set; macOS green
+natively at the 6.6.3 pin.
+
 **0.51.0** — **tool pins are durable** (2026-09-14, F6, ADR-0022). 0.42.0's rug-pull pins persist across runs in
 `~/.thoth/toolpins` (or `[toolpin].file`, an authority key; `[toolpin].durable = false` opts out; `[toolpin].enabled`
 global-only now — a repo could switch the defence off): `THOTH-TOOLPIN-1`, `host \t name \t sha256 \t epoch` rows,
@@ -3338,9 +3348,10 @@ thoth wires **all seven seams** (since 0.4.0 for M3–M5; mneme joined at 0.32.0
 the inference gateway over sandhi. M4 adds the tool spine: **daimon remote-client** (the MCP
 host — `/tools` lists its registry, `/call` invokes a tool), **bote native**
 (the vendored bote-core bundle IS the MCP protocol, in-process), and **t-ron
-native** (the vendored authorization engine gates `/run`, `/write`, and
-`/call` through one choke point — deny is final, no policy means the
-fail-closed confirm prompt). M5 adds **avatara native**: the vendored archetype
+native** (the vendored authorization engine gates `/run`, `/write`, `/call`, `/remember`/`/bookmark`
+and every model tool call — daimon tools in both executors, `edit`/`create_file` (`thoth_edit`), `shell`
+(`thoth_shell`), `delegate` (`thoth_delegate`), `memory_write` — through one choke point,
+`gate_authorize` — deny is final, no policy means the fail-closed confirm prompt). M5 adds **avatara native**: the vendored archetype
 bundle (avatara 2.14.1) supplies the Thoth/Librarian persona in-process — sourced
 from `egyptian_thoth()` via the `prof_*` accessors and threaded into the hoosh
 `{role:system}` message so the precision-0.95 scribe archetype steers the turn,
@@ -3349,11 +3360,22 @@ policy) still degrade honestly; nothing is faked. See
 [ADR-0006](../adr/0006-m4-tool-spine-daimon-bote-tron.md) and
 [ADR-0007](../adr/0007-m5-avatara-seam-native-persona-system-prompt.md).
 
+Beyond t-ron the floor degrades closed at every door it owns: untrusted prose passes the agnosai output
+guard and secret redaction; a `pre_tool` hook that cannot run DENIES; the read/edit jail is lexical plus a
+symlink walk, and refuses thoth's own state files (the config, the policy, the session / history / log
+files and — 0.51.1 — the pin store); MCP tool definitions are pinned on first sight and, since 0.51.0,
+persisted in a digest-checked `~/.thoth/toolpins` (ADR-0022) — a swapped definition is withheld; authority
+keys (`[tron].policy`/`.agent`, `[hooks].*`, `[verify].command`, `[log]`/`[history]`/`[session].file`,
+`[toolpin].*`) read from the global layer only (ADR-0021); `[budget]` ceilings bound spend; and an `[alias]`
+— a repo-settable preference — is refused whole when it carries a control byte (0.45.0) or expands to an
+authority command, `/tools trust` or `/allow` (0.51.0): those must be typed.
+
 The hoosh seam binds only when `.thoth/config.cyml` (legacy `./thoth.cyml` still read) declares `[hoosh].url` — no endpoint
 declared, no remote claim. Verified end-to-end against a live gateway (a turn
 routed to a real provider; a mid-session `/model` switch re-routed Anthropic →
 OpenAI in one session) — wired against hoosh 2.2.2, re-verified at **hoosh
-2.4.5** (0.2.1); the `/v1/chat/completions` contract is unchanged across that
+2.4.5** (0.2.1) and, per component, against hoosh 2.6.10 at 0.47.0 (the picker + health) and daimon 2.1.3
+at 0.51.0 (the pin store); the `/v1/chat/completions` contract is unchanged across that
 span. See [ADR-0005](../adr/0005-hoosh-seam-remote-over-sandhi.md).
 
 The settled identity (recorded so code doesn't entrench the wrong shape):
@@ -3393,7 +3415,8 @@ floor; never fork the spine.**
   includes, four changed only their version line and sigil re-indented an `#ifdef` — **zero** removed symbols,
   **zero** enum changes, the suite green on the new pin first (the gotcha-10 rule), all three targets building
   with the "lib/ shadows the pin" warning gone. `lib/` was re-synced with `cyrius lib sync --full` (never the
-  build's own side-effect sync, which skips same-size files). Static data 652,448 B (was 651,904 B at 0.45.5).
+  build's own side-effect sync, which skips same-size files). Static data 652,448 B at 0.45.6 (651,904 B at 0.45.5);
+  **654,768 B at 0.51.0** (AGNOS lane 655,232 B).
   The earlier hop, `6.5.51` → `6.6.2` at 0.44.6 — the
   `Result` / `Option` / `Either` value-form hop, which DID force a source migration (four sites; see the
   CHANGELOG). The `6.5.43` → `6.5.51` hop recorded below (0.44.5) forced **no source migration** — checked, not assumed. Symbol-diffed both ways:
@@ -3433,7 +3456,10 @@ floor; never fork the spine.**
   `var_table 5095 / 1048576` (was /8192), `fixup_table 39905 / 1048576`, and a new 6.5.51 meter
   `fn_name_hash 8760 / 32768 slots, maxprobe 13`; static data 651,400 B. Every one of these was a
   live worry at 0.37.0–0.38.2; none is now — `var_table`, the tightest at 60 % in 0.43.2, is under
-  0.5 %.
+  0.5 %. Re-measured at 0.51.0 on 6.6.3: `fn_table 9043 / 131072`, `identifiers 287480 / 8388608`,
+  `var_table 5337 / 1048576`, `fixup_table 42176 / 1048576`, `fn_name_hash 9043 / 32768` (maxprobe 13), plus
+  two meters not quoted before — `string_data 933,596 / 2,097,152` (**44.5 %, now the tightest**) and
+  `code_size 4,378,848 / 67,108,864`; static data 654,768 B.
 
   ⛔ **AND THE 8 MB `preprocess_out` CEILING IS GONE — it was raised to 24 MB at cyrius 6.5.40, i.e.
   BELOW the 6.5.43 pin thoth was already on.** Three thoth docs went on calling it "a fixed 8 MB
@@ -3443,7 +3469,10 @@ floor; never fork the spine.**
 
   ⚠ **This was not spare headroom — it was load-bearing.** Re-summed at 0.44.5 by walking the actual
   include graph (85 project files + 41 declared stdlib modules + `lib/unicode/`): the binding unit is
-  **8.84 MB**, which is **110 % of the old 8 MB slot** and **37 % of the new 24 MB one**. thoth had
+  **8.84 MB**, which is **110 % of the old 8 MB slot** and **37 % of the new 24 MB one** (at 0.51.0 the
+  `src/main.cyr` unit is 8.92 MB — 76 project files + 80 stdlib files incl. per-target peers — and the
+  largest unit, `tests/thoth_core.tcyr`, is 9.03 MB, 38 % of the 24 MB `preprocess_out`, still 25,165,824 B
+  at 6.6.3). thoth had
   already outgrown the old ceiling; the raise is what keeps it building. (The earlier "≈4.32 MB"
   figure counted project source only, not the stdlib half the same unit pulls in.)
 
@@ -3491,9 +3520,9 @@ floor; never fork the spine.**
 - **Vendored dists** (committed under `src/vendor/`, refreshed by `scripts/sync-*.sh` — the script's default
   `TAG` is thoth's vendor pin of record). At 0.45.6: **avatara 2.14.1** · **bote-core 3.3.9** (3.3.7 → 3.3.9, only
   its version string changed) · **libro 2.8.12** · **sankoch-zlib 2.7.9** · **t-ron 2.1.10** · **sit-read 1.6.2** ·
-  **anuenue 1.2.0** · **vyakarana 2.4.0** · **darshana 1.1.2** (1.0.0 → 1.1.2: `tty_open_signalfd` rolls back only
+  **anuenue 1.2.0** · **vyakarana 2.4.0** · **agnosai-guard 2.0.7** (the 0.40.0 output guard; `sync-agnosai.sh`) · **darshana 1.1.2** (1.0.0 → 1.1.2: `tty_open_signalfd` rolls back only
   the mask bits it added, `tty_close_signalfd` returns -1/0 instead of a raw -errno — thoth ignores it — and
-  `_ansi_emit_u8` is gone, which thoth never called) · **kashi 1.0.6**. **Every one now has a sync script** — 0.38.6 added
+  `_ansi_emit_u8` is gone, which thoth never called) · **kashi 1.0.6**. **Every one of the eleven has a sync script** — 0.38.6 added
   `sync-darshana.sh`, `sync-vyakarana.sh` and `sync-kashi.sh`, closing the hand-vendored gap this line used to
   record. `kashi.cyr` still carries no `# Version:` header, and structurally cannot: thoth vendors kashi's
   **freestanding core `src/font_data.cyr`**, a module source, not the generated `dist/kashi.cyr` library face
@@ -3505,33 +3534,36 @@ floor; never fork the spine.**
   against the pin above, plus each collision/portability trap the tree has been bitten by — no `SYS_IOCTL` in
   darshana, no raw 2-arg `SYS_RENAME` in sit-read, both sync-time renames fully applied, sit chdir-free, no
   `_stream_grow` in the sankoch profile. A stale or half-applied sync used to build clean and pass every test.
-- **Spine floors** (runtime servers thoth talks to over HTTP; not compiled in): **hoosh ≥ 2.5.2** (**≥ 2.6.1
-  for tools on locally-served models**), **daimon ≥ 1.4.0**, **mneme ≥ 1.1.1** — floors **unchanged** at 0.38.6.
+- **Spine floors** (runtime servers thoth talks to over HTTP; not compiled in): **hoosh ≥ 2.5.2** (≥ 2.6.1 for
+  tools on locally-served models; ≥ 2.5.5 for the 0.47.0 provider-health table, which reads unknown below it;
+  2.6.5+ forwards in-stream provider errors), **daimon ≥ 1.4.0** for tools/call (**≥ 2.1.0** for MCP resources +
+  prompts — 0.43.0, degrades on 404), **mneme ≥ 1.1.1** — hard floors unchanged since 0.38.6; the qualifiers are
+  0.43.0 and 0.47.0. Later per-component live checks: hoosh 2.6.10 (0.47.0 picker, on a pty), daimon 2.1.3
+  (0.51.0 pins, `serve 8097`).
   0.38.6 was developed and **live-verified end to end** against **hoosh 2.6.3 / daimon 2.0.2 / bote 3.3.7 /
   mneme 1.1.3** (all rebuilt from source, brought up via `scripts/stack.sh up`): the daimon registry reached the
   model (19 tools advertised), thoth's own `read_file` round-tripped a jailed file, a **daimon-hosted** tool
   (`bote_echo`) round-tripped through the MCP hop, the project-root jail correctly refused an out-of-tree read,
   and `/git` rendered branch + status through the newly-vendored sit 1.6.2. **daimon 2.0.x is a major bump but a
   drop-in**: it extracted its scheduler to samay and renamed its `ERR_*` constants, but thoth speaks only
-  `GET /v1/mcp/tools` + `POST /v1/mcp/call`, whose handlers are byte-identical since 1.4.0, and every wire field
-  thoth sends or parses (`tools`/`name`/`description`/`inputSchema`; `arguments`; `content[0].text`/`isError`)
-  is unchanged.
+  `GET /v1/mcp/tools` + `POST /v1/mcp/call` (byte-identical since 1.4.0) and, since 0.43.0, the four
+  resources/prompts routes daimon 2.1.0 added (`src/mcpres.cyr`); every wire field thoth sends or parses
+  (`tools`/`name`/`description`/`inputSchema`; `arguments`; `content[0].text`/`isError`) is unchanged.
   ⚠ **Two standing gaps re-confirmed at 0.38.6, neither caused by the refresh** (both reproduce on 0.38.5):
-  **(a)** thoth sends `stream_options.include_usage` on every streaming request, but hoosh 2.6.3 contains no
-  reference to either token and never emits a trailing usage frame — so `_hoosh_account_usage` is waiting for
-  something that does not arrive on the streaming path. **(b)** sit's **git read-mode status has false
+  **(a)** thoth sends `stream_options.include_usage` on every streaming request and already decodes the frame;
+  hoosh (re-checked at 2.6.10) meters a stream by the reservation and names decoding the provider's counts as its
+  own follow-up — 0.45.5 decided thoth keeps asking (the roadmap's waiting table); the token/cost row lights up
+  when hoosh ships it. **(b)** sit's **git read-mode status has false
   positives**: every tracked mode-`100755` file and every tracked zero-byte file is reported modified regardless
-  of content (63 entries vs git's 58 in this repo; the 5 extras were the 4 unmodified `scripts/*.sh` and
-  `docs/examples/.gitkeep`). Verified identical on sit **1.3.5** and **1.6.2**, and thoth is a pure consumer —
+  of content (16 phantom entries on a clean tree at 0.51.0: the fifteen executable `scripts/*.sh` and the
+  zero-byte `docs/examples/.gitkeep`; 63-vs-58 at 0.38.6). Verified identical on sit **1.3.5** and **1.6.2**, and thoth is a pure consumer —
   `git_probe` just copies sit's `{path, kind}` vec — so the fix belongs in sit's comparator. It inflates `/git`,
   `/state`'s changed count, and the file-tree badges. The hoosh floor is 2.5.2 because that release
   made the client's `max_tokens` authoritative — thoth sends its own reasoning budget
   (`HOOSH_MAX_TOKENS_REASONING`) on the strength of it. The **2.6.1** qualifier is narrower: cloud models
   work on any supported hoosh, but an Ollama-backed model gets no tools at all on the streaming default
   before 2.6.1 (and the agentic loop cannot close, since the continuation request was never converted back
-  to Ollama's shape). Against an older gateway, `[hoosh].stream = false` is the workaround. daimon **2.0.0** is a
-  major bump but a drop-in here: it extracted its scheduler to samay, and thoth uses only
-  `GET /v1/mcp/tools` + `POST /v1/mcp/call`, which are byte-identical since 1.4.0.
+  to Ollama's shape). Against an older gateway, `[hoosh].stream = false` is the workaround.
 - **Multi-OS substrate present in the vendored stdlib** (`lib/`), behind one
   stable interface:
   - syscalls — `syscalls_x86_64_agnos`, `syscalls_x86_64_linux`,
@@ -3539,8 +3571,9 @@ floor; never fork the spine.**
     (plus `syscalls_linux_common`)
   - alloc — `alloc_agnos`, `alloc_macos`, `alloc_windows`
   - args — `args_agnos`, `args_macos`, `args_win`
-  - process — `process_agnos`, `process_win` (the `/run` shell escape rides
-    this portable surface)
+  - process — `process_agnos`, `process_win` (thoth's `/run` / `shell` spawn in `src/exec.cyr` rides the
+    `sys_*` wrappers on POSIX and `process_win` on the PE lane; AGNOS announces "no shell" rather than
+    faking one)
 
   AGNOS is the primary target; Linux, macOS, and Windows are capability-gated
   reach targets.
@@ -3549,17 +3582,18 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `macos` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **Re-verified at 0.45.6 on the 6.6.3 pin: Linux built and tested, aarch64 and AGNOS built (0.45.2's warning
-sets minus the lib-shadow warning), macOS built and tested natively AT the pin (6.6.3 shipped there at 0.45.6). Each row carries its own stamp** — see
+source. **Re-verified at 0.51.0 on the 6.6.3 pin: Linux built and tested (4,559 assertions), aarch64 and AGNOS
+built (0.45.6's warning sets), Windows at its known-gap skip, macOS built and its native suite green (823 + 1897 +
+974 + 190 + 641, 0 failed; Apple Silicon, macOS 26.6.2). Each row carries its own stamp** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (319 + 1348 + 846 + 539 + 183 + 5), released | `build/thoth` |
-| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.45.6 / Cyrius 6.6.3) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN at 0.45.6** (Apple Silicon, macOS 26.6.2; the 6.6.3 toolchain shipped there at 0.45.6 by the tarball recipe, 6.6.2 at 0.45.5; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
-| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.45.2 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
-| Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (647 + 1921 + 980 + 824 + 190 assertions, five suite binaries green at 0.51.1), released | `build/thoth` |
+| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.51.0 / Cyrius 6.6.3; a 7,355,552-byte static ARM ELF) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN, re-verified 0.51.0** (823 + 1897 + 974 + 190 + 641, 0 failed; Apple Silicon, macOS 26.6.2; the 6.6.3 toolchain shipped there at 0.45.6 by the tarball recipe, 6.6.2 at 0.45.5; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
+| AGNOS (x86_64) | `--agnos` | **builds `OK` (re-verified 0.51.0, a 5,918,408-byte ELF) AND RAN** — **runtime proven 2026-09-04** on the 0.44.3 ELF (5,371,944 B): `./scripts/agnos-run.sh` boots the real kernel under QEMU and the ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0; verified non-vacuous (a wrong expect-string FAILs). ⚠ **Not re-run at 0.45.x–0.51.0** — the local AGNOS kernel image is built without the `BASESTACK_SELFTEST` hook and the script refuses (exit 2) rather than pretend; rebuild the kernel with the hook and re-run before calling the runtime half current (roadmap batch 4) | `build/thoth_agnos` |
+| Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left at 0.51.0 / 6.6.3: architectural `SYS_SOCKET`/`SYS_CONNECT` (`lib/sandhi.cyr`'s raw socket path; ws2_32 — the epoll set no longer surfaces since the PE floor routes IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) — exactly the five names in `scripts/build.sh win`'s known-gap skip | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
 produces a valid statically-linked ARM ELF (`file` → `ELF 64-bit … ARM aarch64`;
@@ -3651,13 +3685,18 @@ audit chain included — passes.
 - **Session + conversation** — `session` (session state, per-message model, and the **keyed multi-conversation
   store** — the `conv_*` API + `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool
   calls), `roundlog` / `editlog` / `memlog` (the tool-round / edit-diff / memory-grounding rings), `inhist`
-  (composer history recall); `reasonlog` is the reasoning capture seam (0.48.0: the reasoning itself lives on the
+  (composer history recall, persisted to `[history].file` on the REPL/TUI and — since 0.50.1 — the window);
+  `reasonlog` is the reasoning capture seam (0.48.0: the reasoning itself lives on the
   message in `session`).
-- **Spine clients** — `hoosh` (inference, streaming, `/models`, the provider-health table — 0.47.0), `daimon` (MCP list/call), `agent` (the model-driven
+- **Spine clients** — `hoosh` (inference, streaming, `/models`, the provider-health table — 0.47.0), `daimon` (MCP
+  list/call) + `mcpres` (MCP resources + prompts, daimon ≥ 2.1.0) + `toolpin` (tool-definition pins — first sight in
+  0.42.0, durable in `~/.thoth/toolpins` since 0.51.0, ADR-0022), `agent` (the model-driven
   agentic loop), `memory` (consume **mneme** via daimon — recall/citations/grounding/`/notes` — degrading to the
   local `.thoth/memory` reader).
-- **Model tools** — `project` (jailed `read_file`/`list_dir`, default-on), `edit` (jailed `edit`/`create_file`,
-  `thoth_edit`-gated), `shell` (`thoth_shell`-gated), `mention` (`@file` expansion), `git` (consumes sit).
+- **Model tools** — `project` (jailed `read_file`/`list_dir`, default-on; since 0.50.0 also the per-turn
+  project-map hint on the system prompt, `[project].map`), `search` (find files + text, 0.40.0), `edit` (jailed
+  `edit`/`create_file`, `thoth_edit`-gated), `shell` (`thoth_shell`-gated), `subagent` (`delegate`, ADR-0018), `ask`
+  (`ask_user`, ADR-0020), `memory_write`; plus `mention` (`@file` expansion) and `git` (consumes sit) feeding the turn.
 - **Portable floor** — `term` (0.44.3): the ONE route from thoth source to darshana's Linux/AGNOS-gated
   termios/winsize/signalfd half, so a target without it degrades honestly instead of failing to link. A raw
   `tty_*` call anywhere else in `src/` is a portability claim only two targets honour.
@@ -3669,8 +3708,11 @@ audit chain included — passes.
   `scripts/gen-splash.sh` — beside the framed status box) drive three renderers: line-mode, the **T2 TUI** (`tui` /
   `feed` / `ftree` / `mdhl` / `diff` / `intr`), and the sovereign **T3 desktop GUI** (`src/gui/*`: the `gdraw` IR +
   `graster` rasterizer + the `gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`/`gcmd` view-builders (`gcmd`:
-  slash-command cards, 0.46.0 — the window routes commands through the same hub) +
-  `gwindow`/`gpresent`/`ginput`).
+  slash-command cards, 0.46.0 — the window routes commands through the same hub) + `gwindow` (raw-wire Wayland;
+  since 0.49.0 a `wl_pointer` with a sovereign shm cursor — click-to-switch, wheel, hit-testing by the drawn
+  rectangles) / `gpresent` / `ginput` (the composer; since 0.50.1 it binds `[history].file` for the window) /
+  `gask` (the question modal)); the TUI side adds `mpick` (the Ctrl-P model picker, with provider health + price
+  since 0.47.0).
 - **Front doors** — the interactive REPL/TUI/GUI plus the one-shot `oneshot` argv path (`thoth 'task'`, `--json`,
   `-o`, `--completion`, `--tier`, `--logs`/`--log-level`).
 - **Observability** — `log` (the session log: driver events + the turn/round/tool/reply transcript, bound from
@@ -3681,8 +3723,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **647 + 1921 + 977 + 824 + 190 + 5 assertions across the suites as of
-0.51.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **647 (gui) + 1921 (core) + 980 (agent) + 824 (tui) + 190 (render) = 4,562 assertions, 0 failures, as of
+0.51.1 — the runner's closing `5 passed` is the five suite binaries, not assertions** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3691,17 +3733,20 @@ fixtures use **git-tracked** files so CI matches local.
 
 ## Next
 
-See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7 and the entire post-M7 feature arc have shipped
-(0.11.x → 0.45.x):** the terminal-citizen front door, the rich TUI, the sovereign **T3 desktop GUI** (`thoth gui`)
-with tool-call + colored diff cards and a conversation sidebar, the model **write tools** (`edit`/`create_file`/
-`shell` — thoth reads *and writes* code), the **memory arc** (consume mneme: `/remember`, semantic recall,
-citations, grounding, `/notes`), and the **chat-management arc** (named multi-conversation store, persistence, the
-richer message schema, `/search`). Per-version detail is in the log above + [CHANGELOG](../../CHANGELOG.md).
+See [`roadmap.md`](roadmap.md) for the sequencing. **M0–M7, the post-M7 feature arc and the six batch-discipline
+feature arcs have shipped (0.11.x → 0.51.0):** the terminal-citizen front door, the rich TUI, the sovereign **T3
+desktop GUI** (`thoth gui`) with tool-call + colored diff cards and a conversation sidebar, the model **write
+tools** (`edit`/`create_file`/`shell` — thoth reads *and writes* code), the **memory arc** (consume mneme:
+`/remember`, semantic recall, citations, grounding, `/notes`), the **chat-management arc** (named
+multi-conversation store, persistence, the richer message schema, `/search`), and — as F1–F6 — GUI slash-command
+routing (0.46.0), picker health + pricing (0.47.0), reasoning across resume (0.48.0), GUI pointer + summary cards
+(0.49.0), the project-map hint (0.50.0) and durable tool pins (0.51.0, ADR-0022). Per-version detail is in the log
+above + [CHANGELOG](../../CHANGELOG.md).
 
 **The path to v1.0 is dominated by AGNOS lighting up, not by feature work in thoth.** Four gates (see
 [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓ and runtime ✓** (a valid static
 x86_64-AGNOS ELF, zero thoth change, and it **loads and runs in ring 3** — `./scripts/agnos-run.sh`,
-proven 2026-09-04); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
+proven 2026-09-04; ⚠ not re-run since 0.44.3 — the local kernel lacks `BASESTACK_SELFTEST`, roadmap batch 4); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
 (a real turn against a native spine, then the TUI over agnsh) open, **owner: thoth**; (3) a security
 review — the concurrency half closed at 0.44.3; only the external sign-off remains; (4) the
 SemVer-vs-CalVer 1.0 decision (deferred, [ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux
@@ -3714,6 +3759,7 @@ batches** — `0.45.5` shipped batch 1 (content escapes, the memory double read,
 the streaming-usage decision, history-file polish, macOS at the pin), `0.45.6` batch 2 (hook facts into the
 environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create) and `0.50.1` batch 3 (the
 `thoth gui` dispatch-order gap: the window's `[history].file`, session hooks, git after a turn, no escapes to the
-launching tty); the next batch gathers from the registry — while **minors are held for feature arcs** (`0.46.0`
-through `0.51.0` = F1–F6; the next candidate needs a decision — the gap review's open questions). Defects owned
+launching tty); **batch 4 is pinned to 0.51.2** (the roadmap lists its ten items; 0.51.1 is the doc sweep plus the
+pin-store jail repair it found) — while **minors are held for feature arcs** (`0.46.0` through `0.51.0` = F1–F6; the
+candidates F7–F14 are ordered on the roadmap with their gates, the next decided one earns `0.52.0`). Defects owned
 upstream or by the floor sit in a waiting-on table with the version each was last checked against.

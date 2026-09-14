@@ -2366,15 +2366,22 @@ fn test_project() {
     # `.thoth`. The session store is the sharpest case: readable it leaks every other conversation,
     # writable it injects turns that are replayed as real history at the next launch.
     var _sv_pol = _cfg_tron_policy; var _sv_ses = _cfg_session_file;
-    var _sv_his = _cfg_history_file; var _sv_lg = _cfg_log_file;
+    var _sv_his = _cfg_history_file; var _sv_lg = _cfg_log_file; var _sv_tpf = _cfg_toolpin_file;
     _cfg_tron_policy = "tron-policy.toml";
     _cfg_session_file = ".thoth_session";
     _cfg_history_file = ".thoth_history";
     _cfg_log_file = "thoth-driver.log";
+    _cfg_toolpin_file = "pins/toolpins";
     assert_eq(_project_sensitive("tron-policy.toml"), 1, "the configured t-ron policy is sensitive");
     assert_eq(_project_sensitive(".thoth_session"), 1, "the configured session store is sensitive");
     assert_eq(_project_sensitive(".thoth_history"), 1, "the configured input history is sensitive");
     assert_eq(_project_sensitive("thoth-driver.log"), 1, "the configured driver log is sensitive");
+    # 0.51.1 (the doc sweep's finding): the pin store is the fifth — a custom [toolpin].file inside the jail was
+    # readable and, with [edit].enabled, rewritable: a swapped definition re-baselined through thoth's own edit
+    assert_eq(_project_sensitive("pins/toolpins"), 1, "the configured tool-pin store is sensitive");
+    assert(_ui_contains(edit_tool("{\"path\":\"pins/toolpins\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "refused") == 1, "edit refuses the configured pin store");
+    assert(_ui_contains(read_file_tool("{\"path\":\"pins/toolpins\"}"), "refused") == 1, "read_file refuses it too");
+    _cfg_toolpin_file = _sv_tpf;
     assert_eq(_project_sensitive("sub/dir/.thoth_session"), 1, "configured state at depth is sensitive");
     assert_eq(_project_sensitive("/home/u/proj/.thoth_session"), 1, "absolute form (granted root) is sensitive");
     assert_eq(_project_sensitive(".thoth_session.bak"), 0, "a near-miss name is still whole-component matched");

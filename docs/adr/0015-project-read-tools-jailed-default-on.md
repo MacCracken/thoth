@@ -56,10 +56,11 @@ permission, like every other restriction.
 - **Negative** — a new (jailed) surface thoth now owns; the model *can* read any project file when the
   loop is on, including a project-local secret (e.g. a checked-in `.env`) — but that is the trust model
   of a coding agent working in a project the user launched it in and enabled tools for, and the jail
-  blocks the worse case (reading outside the project). **Residual (documented, not faked)**: a symlink
-  *inside* the project pointing outside is followed (no portable `O_NOFOLLOW` — same class as the
-  `/tmp`-symlink residuals); it requires a pre-existing symlink in the user's own repo, lower risk than
-  the `..`-escape the jail blocks.
+  blocks the worse case (reading outside the project). ~~**Residual**: a symlink *inside* the project
+  pointing outside is followed (no portable `O_NOFOLLOW`).~~ **RESOLVED 0.39.0**: `_project_no_symlink`
+  refuses a symlink at any path component, on reads and writes, in the project and under granted roots
+  alike (the "no portable `O_NOFOLLOW`" premise was stale — `lib/fs.cyr` ships `is_symlink`); what
+  remains is the Windows lane, where `is_symlink` returns 0.
 - **Neutral** — sets up the 0.23.1 grant model (a `[project]` config section + a `/allow` grant, vidya
   as a first-class root) and possible later tools (a `grep`/glob search — `search`, 0.40.0; a project-map
   hint in the system prompt — `[project].map`, 0.50.0).
@@ -80,8 +81,8 @@ property: *the model can only read where the human pointed it.*
   slash command — the model cannot invoke it, exactly as it cannot invoke `/run`. So the widening is always a
   human authorization; the model just gets a bigger (still bounded, still `..`-free) read surface.
 - **Honest, surfaced, degrades closed.** `/allow` and `/state` (a `reads` row) list the active roots; a read
-  outside the project and every granted root is refused with an honest string. The symlink-inside-a-root
-  residual carries over from the jail (a granted root the user trusts, same risk class as the project).
+  outside the project and every granted root is refused with an honest string. The symlink walk covers
+  granted roots as it covers the project (0.39.0).
 - **Alternatives folded in here** (same reasoning as below): requiring absolute roots (no cwd/`..`
   normalization ambiguity), rejecting `/` (would negate the jail), and keeping grants human-only (a
   model-invokable "grant myself a root" tool would reopen the exfil vector the jail closes).

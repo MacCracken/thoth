@@ -27,7 +27,7 @@ config source and whether the gateway actually answers — never a faked READY).
 ```sh
 cyrius deps                              # resolve stdlib deps
 cyrius build src/main.cyr build/thoth    # compile the binary
-cyrius test                              # run the curated suites (tests/thoth_{core,gui,render}.tcyr + tests/cases/*.cyr)
+cyrius test                              # run the curated suites (tests/thoth_{core,agent,tui,gui,render}.tcyr over tests/cases/*.cyr)
 ./build/thoth                            # start thoth (rich TUI on a capable terminal; line REPL otherwise)
 ./build/thoth gui                        # open the sovereign Wayland desktop GUI (tier T3, needs a compositor)
 ```
@@ -50,7 +50,7 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /model [id]         show the model, or switch it mid-session (routes via hoosh)
 {(o> /models [provider]  list the providers hoosh offers with their health, or a provider's models with their rates
 {(o> /read <file>        print a file (safe, read-only; syntax-highlighted in the TUI)
-{(o> /write <f> <text>   write a file — t-ron-gated (shows a colored diff first)
+{(o> /write <f> <text>   write a file — t-ron-gated; on approval a colored diff of the change is shown, then the file is written
 {(o> /run <cmd>          run a shell command — t-ron-gated (fail-closed)
 {(o> /tools              list the MCP tools daimon hosts
 {(o> /call <tool> [json] invoke an MCP tool via daimon — t-ron-gated
@@ -58,7 +58,7 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /audit              show t-ron's audit chain (gated-action log)
 {(o> /reset              clear the multi-turn conversation context
 {(o> /clear              clear the content window (Shift-↑/↓ scrolls history)
-{(o> /theme [dark|light|rainbow] switch the color theme (⌃T toggles in the TUI)
+{(o> /theme [dark|light|rainbow] switch the color theme (⌃T cycles it in the TUI; [ui].theme sets the start)
 {(o> /persona [name]     show the active persona, or switch it mid-session (from avatara)
 {(o> /personas           list the available personas
 {(o> /role [name]        show or set the persona's role (the trait-derived third axis)
@@ -71,20 +71,21 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /rename <title>     rename the current conversation
 {(o> /delete <n>         delete conversation n
 {(o> /search <text>      search every conversation for text (jump with /switch)
-{(o> /allow <path>       grant the agent a read root beyond the launch dir
+{(o> /allow [path]       grant the agent a read root beyond the launch dir (/allow vidya for [project].vidya; bare /allow lists the roots)
 {(o> /save <file>        export the conversation transcript
 {(o> /reload             re-read .thoth/config.cyml mid-session (hot fields apply)
 {(o> /context            the context window — what this turn will carry, and what is being dropped
 {(o> /compact            summarize the conversation so far to reclaim context
 {(o> /rewind [n]         undo the model's file writes from a checkpoint (the write tools' undo)
 {(o> /fork               branch the current conversation into a new one from this point
-{(o> /grants             the read roots granted this session (see /allow)
+{(o> /grants [clear]     the session's authorization grants (an 'a' at a confirm prompt); clear revokes them — read roots are listed by a bare /allow
 {(o> /resources          list the MCP resources daimon's hosts expose
 {(o> /resource <uri>     read one resource into the conversation (wrapped as untrusted data)
 {(o> /prompts            list the MCP prompts daimon's hosts expose (run one as /<name>)
 {(o> @file.cyr           mention a file in a message → its contents are appended as context
 {(o> write me a quicksort   free text → a coding task → the model (agentic loop if daimon is wired)
-{(o> /quit               exit (or Ctrl-D / Ctrl-X)
+{(o> /quit               exit (also /exit; Ctrl-X in the TUI, Ctrl-D at the line REPL)
+{(o> /help               everything else — /context /compact /fork /history /bookmark /thumbs /retry /edit /find /copy /reprobe; /save --json|--plain; /tools [trust]; /audit [export F]
 ```
 
 thoth is also a non-interactive shell citizen (the 0.11.x front-door) — run one task and exit:
@@ -97,7 +98,7 @@ thoth -o out.md 'draft a README'         # tee the answer to a file as well as s
 thoth --logs session.log                 # append a session log (works interactively too)
 source <(thoth --completion bash)        # tab-complete thoth's flags (bash or zsh)
 thoth gui                                # open the desktop GUI instead of the TUI
-thoth --help                             # the full one-shot reference
+thoth --help                             # the one-shot flag reference (thoth gui is not listed there)
 ```
 
 `--logs <file>` (0.44.2) records the session — the task, each agentic round, every tool call with
@@ -112,8 +113,9 @@ slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI,
 opens the model picker — each row carries its provider's health as hoosh's prober reports it (● green
 healthy, ● red unhealthy, ● amber degraded — the provider's routes disagree —, ○ disabled or unknown) and its
 `[pricing.<model>]` rate when one is declared; `/models` and `/models <provider>` print the same facts. thoth also **reads *and edits*** the project it was launched in: the agent has
-default-on jailed `read_file` / `list_dir` tools (reads confined to the launch directory, plus any
-`/allow`-granted roots), and — opt-in via `[edit].enabled` (off by default) — jailed **`edit`** (surgical
+default-on jailed `read_file` / `list_dir` / `search` tools (reads and greps confined to the launch directory,
+plus any `/allow`-granted roots) and, since 0.50.0, a two-level map of the launch root on every turn
+(`[project].map`), and — opt-in via `[edit].enabled` (off by default) — jailed **`edit`** (surgical
 unique-match replace) and **`create_file`** (create-only) write tools plus an opt-in `shell` tool, each t-ron-gated
 under its own verb, so the model can change code, not just explore it. Every model edit/create shows as a colored
 diff card in the GUI feed.
@@ -132,8 +134,12 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/repl.cyr` — the read → dispatch → iterate loop.
 - `src/commands.cyr` — input classification + command handlers (the pure
   `classify_input` / `token_is` / `arg_after` helpers are unit-tested).
-- `src/config.cyr` — runtime config from `.thoth/config.cyml` (seam URLs, toggles); resolves
-  the `.thoth/` home (walk up from CWD, then `~/.thoth`; legacy `./thoth.cyml` fallback).
+- `src/config.cyr` — runtime config (seam URLs, toggles) from the two layers of
+  [ADR-0019](../adr/0019-layered-config-global-base-local-override.md): `~/.thoth/config.cyml` (the global base)
+  merged per key with the nearest `.thoth/config.cyml` walking up from CWD (the local override; a legacy
+  `./thoth.cyml` acts as the local layer); the `_cfg_known_key` table flags unrecognised keys, and the
+  [ADR-0021](../adr/0021-authority-keys-are-global-only.md) authority keys a local layer tried to set are named.
+  Also resolves the `.thoth/` home the memory + checkpoint stores hang off (walk up, then `~/.thoth`).
 - `src/seams.cyr` — the capability-seam registry (the seven spine seams + status).
 - `src/term.cyr` — the portable terminal-CONTROL floor (0.44.3): the ONE route from thoth source to darshana's Linux/AGNOS-gated termios / winsize / signalfd half. On a target without it (macOS, Windows) every entry point answers honestly, so thoth takes the line tier instead of failing to link. **Add new terminal-control calls here, never a raw `tty_*` in thoth source.**
 - `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls / reasoning (0.48.0).
@@ -144,7 +150,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/log.cyr` — structured driver-event logging (`[log]`, off by default).
 - `src/exec.cyr` — the local shell escape for `/run` (portable `process.cyr`).
 - `src/roundlog.cyr` — the session-local agentic tool-round trace `/audit` surfaces (0.7.0).
-- `src/diff.cyr` — the bounded LCS line-diff for `/write` / `/read`.
+- `src/diff.cyr` — the bounded LCS line-diff + colored renderer behind `/write` and `/git <path>` (shares its highlighter with `/read`).
 - `src/mdhl.cyr` — the markdown + fenced-code syntax highlighter for the reply feed and `/read`.
 - `src/ui.cyr` — the presentation surface: tier detection + the semantic color-role API (M7).
 - `src/surface.cyr` — the tier-agnostic status **view-model** (facts-not-bytes) the line/TUI/GUI renderers share.
@@ -187,26 +193,32 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/budget.cyr` — `[budget]` spend enforcement (0.44.3): session token / cost ceilings checked before every turn and between agentic rounds, delegated children billed to the same tally — and an announcement when the gateway reports no usage, because a ceiling nothing measures is not a bound.
 - `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.
 - `src/hooks.cyr` — operator lifecycle hooks (`[hooks]`); `pre_tool` can BLOCK a tool call.
-- `src/toolpin.cyr` — trust-on-first-use hashing of tool definitions (the rug-pull defence, `[toolpin]`).
+- `src/toolpin.cyr` — trust-on-first-use SHA-256 pinning of tool definitions (the rug-pull defence, `[toolpin]`); since 0.51.0 the pins are durable across runs in a 0600 store at `[toolpin].file` (default `~/.thoth/toolpins`, a global-only authority key — [ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)): `/tools` marks each row `pinned` / `WITHHELD` and names the store, `/tools trust` accepts changed definitions and rewrites it, `/state` and the greeting box carry a pins row.
 - `src/guard.cyr` — the injection-heuristic envelope over untrusted prose (`[guard]`).
 - `src/redact.cyr` — secret/PII redaction of tool results (`[redact]`, on by default).
 - `src/verify.cyr` — the post-edit `[verify].command` gate (run the build/tests after a model write).
 - `src/events.cyr` — the `--events` NDJSON stream (turn/tool brackets for a driving program).
-- `src/reasonlog.cyr` — the reasoning capture seam behind the Ctrl+R "thinking" fold (0.48.0: the reasoning lives on the message and resumes with it; this file keeps the capture call + the `/state` count).
+- `src/reasonlog.cyr` — the reasoning capture seam behind the Ctrl+R "thinking" fold (0.48.0: the reasoning lives on the assistant message in `session.cyr` and resumes with it; this file is only `reasonlog_record`, the call the reply-finalize sites make — the `/state` count reads `session_history_reason_count` off the store).
 - `src/mdmodel.cyr` — the shared structural-markdown model (facts-not-bytes) the line/TUI/GUI renderers classify with.
 - `src/util.cyr` — the output-capture sink (`OUT_FD1`/`OUT_RING`/`OUT_NULL`) + `read_line` / `emit` / helpers.
 - `src/version.cyr` — the single runtime version string (generated from `VERSION`).
 - `src/vendor/` — committed spine dist bundles (bote-core, libro, t-ron, avatara) plus the vendored vyakarana
-  tokenizer (syntax highlighting), darshana TTY substrate (the T2 TUI), kashi font rasterizer (the T3 GUI), and
-  sankoch (zlib) + sit-read (git read profile) behind the git producer.
-- `tests/` — the curated suites `tests/thoth_{core,gui,render}.tcyr` (thin drivers) over the topical bodies in
-  `tests/cases/*.cyr`; `src/test.cyr` is the `cyrius test` driver. (The old single `tests/thoth.tcyr` was split in 0.30.9.)
+  tokenizer (syntax highlighting), darshana TTY substrate (the T2 TUI), kashi font rasterizer (the T3 GUI),
+  anuenue (the HSV phase model behind `/theme rainbow`), agnosai-guard (the secret/PII scanner + redactor behind
+  `[redact]`), and sankoch (zlib) + sit-read (git read profile) behind the git producer — eleven bundles, each
+  version-pinned by `tests/cases/vendor.cyr`.
+- `tests/` — the curated suites `tests/thoth_{core,agent,tui,gui,render}.tcyr` (thin drivers; `tui` split out at
+  0.44.0 and `agent` at 0.44.2 for the preprocessor ceiling) over the topical bodies in `tests/cases/*.cyr` (core,
+  agent, tui, gui, render, greet, vendor + the shared `testutil.cyr`); `src/test.cyr` is the `cyrius test`
+  driver. (The old single `tests/thoth.tcyr` was split in 0.30.9.)
 
 ## Adding a command
 
 1. Add a `CMD_*` to the `enum Cmd` in `src/commands.cyr`.
 2. Recognize it in `classify_input` (add a `token_is` line).
-3. Write a `cmd_*` handler and wire it into `dispatch`.
+3. Write a `cmd_*` handler and wire it into `_dispatch_d` in `src/commands.cyr` (`dispatch` is the wrapper).
+   Add the name to the TUI slash palette (`_slash_name` + bump `SLASH_N` in `src/tui.cyr`) and a `_help_line`
+   to `cmd_help`.
 4. Add assertions to `tests/cases/core.cyr` (cover `classify_input` + any pure helper), wired via `tests/thoth_core.tcyr`.
 5. `cyrius test`, then `cyrius build`.
 
