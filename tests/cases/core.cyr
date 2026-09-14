@@ -23,6 +23,69 @@ fn _t_reason_line(expect) {   # emit the /state reason row to the feed ring; occ
 
 # /state reason row (0.35.4): the [hoosh].reasoning effort + turns-folded surface. PURE (config + reasonlog only,
 # no network probe) — captured via the OUT_RING feed sink like the elapsed-secs row.
+# _t_map_line: emit the /state map row to the feed ring; occurrences of `expect` in row 0.
+fn _t_map_line(expect) {
+    feed_init();
+    out_mode_set(OUT_RING);
+    _state_map_row();
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    return _mid_feed_plain_count(expect);              # the row's counts and words sit in different roles (markers between)
+}
+# test_state_map_row (0.50.0, F5): the /state "map" row — off, on before any turn, on with the last turn's counts,
+# and the truncation notice.
+fn test_state_map_row() {
+    test_group("/state map row (0.50.0, F5)");
+    var sv = _cfg_project_map;
+    project_map_clear();
+    _cfg_project_map = 0;
+    assert(_t_map_line("off") >= 1, "map row: off says off");
+    assert(_t_map_line("[project].map = false") >= 1, "...and names the key");
+    _cfg_project_map = 1;
+    assert(_t_map_line("none built yet") >= 1, "map row: on before any build says none was built yet");
+    assert_eq(_t_map_line("entries"), 0, "...no counts to report");
+    _pmap_ctx = "x"; _pmap_entries = 24; _pmap_bytes = 512; _pmap_truncated = 0; _pmap_unmappable = 0;
+    assert(_t_map_line("24 entries") >= 1, "map row: after a build, the entry count");
+    assert(_t_map_line("512 bytes") >= 1, "...and the byte count");
+    assert_eq(_t_map_line("truncated"), 0, "...no truncation notice when the cap did not bite");
+    _pmap_truncated = 1;
+    assert(_t_map_line("truncated at the cap") >= 1, "...and the notice when it did");
+    _pmap_truncated = 0; _pmap_unmappable = 1;
+    assert(_t_map_line("could not be listed") >= 1, "map row: an unlistable root reads as that, not as 'truncated'");
+    assert_eq(_t_map_line("entries"), 0, "...with no counts");
+    project_map_clear();
+    _cfg_project_map = sv;
+    return 0;
+}
+# test_dry_map (0.50.0, F5): the /dry turn site — of the three sites that refresh the map, only /dry is network-free,
+# so it stands for all three: the preview body carries the map as a system message, the build is left for /state,
+# and with the key off the same site clears it.
+fn test_dry_map() {
+    test_group("/dry carries the project map (0.50.0, F5)");
+    var sv_root = _pmap_root;
+    var sv = _cfg_project_map;
+    _pmap_root = "tests/fixtures/map";
+    _cfg_project_map = 1;
+    project_map_clear();
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_dry("/dry hi");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(_mid_feed_plain_count("{\"role\":\"system\",\"content\":\"Project map (the top two levels") >= 1, "/dry refreshes the map and its body carries it as a system message");
+    assert(_mid_feed_plain_count("{\"role\":\"user\",\"content\":\"hi\"}") >= 1, "...before the user turn");
+    assert(project_map_current() != 0, "...and the build stays for /state");
+    assert_eq(project_map_entries(), 24, "...the fixture's 24 entries");
+    _cfg_project_map = 0;
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_dry("/dry hi");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("Project map"), 0, "with [project].map off the same site sends no map");
+    assert(project_map_current() == 0, "...and clears the last build");
+    assert_eq(project_map_entries(), 0, "...and its counts");
+    project_map_clear();
+    _cfg_project_map = sv;
+    _pmap_root = sv_root;
+    return 0;
+}
 fn test_state_reason_row() {
     test_group("/state reason row (0.35.4; off the store since 0.48.0)");
     session_reset(); session_history_clear();
@@ -3623,7 +3686,7 @@ fn test_config_layering() {
     _cfg_scan_unknown(_lay_parse("[ui]\nbell=true\nelapsed=true\ntier=\"rich\"\ntheme=\"light\"\n"));
     _cfg_scan_unknown(_lay_parse("[memory]\nenabled=true\n"));
     _cfg_scan_unknown(_lay_parse("[persona]\nname=\"n\"\n"));
-    _cfg_scan_unknown(_lay_parse("[project]\nvidya=\"v\"\nread_roots=[\"/a\"]\n"));
+    _cfg_scan_unknown(_lay_parse("[project]\nvidya=\"v\"\nread_roots=[\"/a\"]\nmap=false\n"));
     _cfg_scan_unknown(_lay_parse("[hooks]\nsession_start=\"s\"\npre_tool=\"p\"\npost_tool=\"q\"\nsession_end=\"e\"\ntimeout_ms=1\n"));
     _cfg_scan_unknown(_lay_parse("[toolpin]\nenabled=true\n"));
     _cfg_scan_unknown(_lay_parse("[subagent]\nenabled=true\nmax_iters=1\n"));

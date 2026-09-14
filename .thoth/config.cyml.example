@@ -580,10 +580,22 @@ model = "claude-haiku-4-5-20251001"
 #   * per-session — `/allow <abs-path>` (and `/allow vidya` for the configured knowledge base below).
 # `/allow` with no argument lists the active grants; /state shows a "reads" row. A root must be absolute and
 # more than just "/". Reads under a granted root still refuse any `..` (no traversal). See ADR-0015.
+#
+#   map — the project-map HINT (0.50.0). When on (the default), every turn's system prompt carries a small
+#         map of the project root — the top two levels, directories first, each top-level directory with up
+#         to a dozen of its children and "+N more" — so the model knows the shape of the tree without spending
+#         a round on list_dir. Directories search never walks (.git, build, node_modules, target, …) and
+#         dot-directories are NAMED but not walked; thoth's own files (.thoth, the session / history / policy
+#         / log files) are not on it, as the tools refuse them. At most 2 KiB (a marker says when the cap bit);
+#         rebuilt at each turn, so a file the model created is on the next turn's map; a delegated child gets
+#         the parent's. Every agentic ROUND re-sends the system prompt, so those bytes ride each round. `/dry`
+#         shows the exact message; /state's "map" row says what the last turn sent. A PREFERENCE (a repo's
+#         local layer may turn it off): it names only what the jail already lets the model list.
 
 # [project]
 # vidya = "/home/you/Repos/vidya"                 # the Cyrius knowledge base; grant it with `/allow vidya`
 # read_roots = ["/home/you/Repos/otherrepo"]      # absolute roots readable from every startup
+# map = true                                      # the project-map hint in the system prompt (default on)
 
 # The [shell] table arms the model-invokable `shell` tool (0.16.0; ADR-0014). When enabled AND the
 # [daimon] seam is wired (agentic turns only), thoth advertises a `shell` tool to the backing model:

@@ -360,6 +360,10 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
         off = _json_escape_into_cap(dst, off, cap, mem);
         off = _append_cstr_cap(dst, off, cap, "\"},");
     }
+    if (_hoosh_has_map() == 1) {                                  # 0.50.0 (F5): the project map, when refreshed this turn
+        off = _hoosh_emit_map(dst, off, cap, 0);
+        off = _append_cstr_cap(dst, off, cap, ",");
+    }
     off = _append_cstr_cap(dst, off, cap, "{\"role\":\"user\",\"content\":\"");
     off = _json_escape_into_cap(dst, off, cap, prompt);
     off = _append_cstr_cap(dst, off, cap, "\"}],\"max_tokens\":");
@@ -669,6 +673,17 @@ fn _hoosh_emit_recap(dst, off, cap, start, wrote) {
     off = _append_cstr_cap(dst, off, cap, "\"}");
     return off;
 }
+# _hoosh_emit_map (0.50.0, F5): the project-map system message — after the persona and the memory context, before
+# the recap and the history — when a turn site refreshed one (project_map_current() != 0). Omitted otherwise:
+# byte-identical requests with [project].map = false, and in every suite golden (no turn site runs there).
+fn _hoosh_emit_map(dst, off, cap, wrote) {
+    var m = project_map_current();
+    if (m == 0) { return off; }
+    if (load8(m) == 0) { return off; }
+    if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
+    return _hoosh_emit_msg_cap(dst, off, cap, "system", m);
+}
+fn _hoosh_has_map() { var m = project_map_current(); if (m == 0) { return 0; } if (load8(m) == 0) { return 0; } return 1; }
 fn _hoosh_has_recap(start) {
     if (start <= 0) { return 0; }
     if (session_recap_covers() != start) { return 0; }
@@ -701,6 +716,8 @@ fn hoosh_build_messages(dst, model, system, mem, stream) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
+    off = _hoosh_emit_map(dst, off, cap, wrote);            # 0.50.0 (F5): the project map, when refreshed this turn
+    if (_hoosh_has_map() == 1) { wrote = 1; }
     # 0.36.4: the overflow recap — a system message standing in for the messages below `start` the budget can no
     # longer fit, so the model sees a summary instead of a silent gap. Omitted unless [hoosh].summarize produced one
     # covering exactly this skip (byte-identical floor when off / absent).
@@ -759,6 +776,8 @@ fn hoosh_build_dry(dst, model, system, mem, prompt, stream) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
+    off = _hoosh_emit_map(dst, off, cap, wrote);            # 0.50.0 (F5): the project map (/dry shows its exact bytes)
+    if (_hoosh_has_map() == 1) { wrote = 1; }
     var i = start;
     while (i < total) {
         if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
@@ -1788,6 +1807,7 @@ fn hoosh_send(prompt) {
     # this turn's prompt when the seam is bound (0.32.2). ADR-0012.
     var mem = 0;
     if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(prompt); }
+    project_map_refresh();          # 0.50.0 (F5): this turn's project map (the builders read it; 0 when [project].map is off)
     var want_stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     _hoosh_acc_reset();

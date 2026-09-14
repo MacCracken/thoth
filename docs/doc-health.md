@@ -6,6 +6,13 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.50.0** (2026-09-13, not a full sweep): F5 updated `CHANGELOG.md`, `docs/development/state.md`
+> (version block, **Tests** counts), `docs/development/roadmap.md` (F5 → shipped with its residuals; the minor
+> candidates now start at 0.51.0), `docs/architecture/003` (the map beside the workspace clause), ADR-0015 (the
+> "possible later tools" line closed: `search` 0.40.0, the map 0.50.0), `docs/guides/getting-started.md` (source
+> layout), `.thoth/config.cyml.example` (`[project].map`), `README.md` (stamp) and this file. No ADR earned: the map is
+> the workspace clause's shape, one message further on.
+>
 > **Touched at 0.49.0** (2026-09-13, not a full sweep): F4 updated `CHANGELOG.md`, `docs/development/state.md`
 > (version block, **Tests** counts), `docs/development/roadmap.md` (F4 → shipped with its residuals; the registry
 > gains the on-compositor pointer check; the minor candidates now start at 0.50.0), `docs/guides/getting-started.md`

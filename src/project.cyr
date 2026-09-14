@@ -470,6 +470,262 @@ fn project_prompt_clause() {
     return _proj_clause;
 }
 
+# --- the project map (0.50.0, F5) -----------------------------------------------------------------------------
+# A lightweight directory overview for the system prompt, so the agent knows the shape of the tree it stands in
+# without spending a round on list_dir: the top two levels of the launch root — every top-level entry (dirs first,
+# byte order, `/`-suffixed), each top-level directory with up to PMAP_DIR_NAMES of its children and "+N more" —
+# into its own bounded buffer, NUL-terminated, with an explicit marker when the cap bites (every other bound in
+# this file announces itself). Directories the search tool never walks (_search_skip_dir: .git, build,
+# node_modules, target, …) and dot-directories are NAMED but not walked ("(not walked)"), so the agent knows
+# `target/` exists without 3000 lines of it; thoth's own files (_project_sensitive: `.thoth`, the session /
+# history / policy / log files) are omitted, as the tools refuse them. Names ride RAW — the JSON emitter escapes
+# control bytes on the wire — and nothing here is drawn as chrome (/state prints only the counts).
+#
+# Built PER TURN at the three turn sites (hoosh_send, agent_turn, cmd_dry — project_map_refresh) so a file the
+# agent created last turn is on the map this turn, never mid-turn (the delegated child reuses the parent's map
+# — a tool round must not rewrite what the request builders read; the subagent swap-set rule). The walk is
+# alloc-free: dir_list_into into caller-owned buffers, ONE reusable Str header for every path handed to the
+# stdlib (str_from allocates a header per call), a stack path scratch — a per-turn walk must not grow the
+# never-freeing heap. Entries are probed with _pmap_is_dir (an O_NONBLOCK open + getdents), never is_dir's
+# blocking open: a FIFO in the tree would otherwise hang every turn before its request left. The walk stops
+# the moment the cap bites (nothing is probed for a map that cannot hold it), and a name goes in whole or not
+# at all (never a cut inside a multi-byte name); control bytes in a name read as '?' (a checked-in name with a
+# newline must not forge a map line in a SYSTEM message). The builders read project_map_current(), which is 0
+# until a turn site refreshed it — the request goldens stay byte-identical in the suite, and [project].map =
+# false leaves every request as it was (ADR-0010). The caps are constants in practice: every buffer is sized
+# once at first use (a test may LOWER PROJ_MAP_CAP; raising any cap after the first build would overrun).
+var PROJ_MAP_CAP = 2048;          # bytes of map text (NUL-terminated; a marker when it bites)
+var PMAP_MAX_ENTRIES = 256;       # entries read per directory listing (a bigger one is cut: "+N more" cannot count past it)
+var PMAP_NAMES_CAP = 8192;        # packed names per listing
+var PMAP_DIR_NAMES = 12;          # children shown per top-level directory before "+N more"
+var _pmap_buf = 0;                # alloc(PROJ_MAP_CAP): the map text
+var _pmap_ctx = 0;                # what the builders emit: _pmap_buf after a refresh that produced a map, else 0
+var _pmap_root = 0;               # TEST SEAM: the walk root; 0 = "." (the launch directory, like list_dir)
+var _pmap_scratch = 0;            # alloc(4096): the getdents batch
+var _pmap_names = 0; var _pmap_offs = 0;      # the top-level listing
+var _pmap_names2 = 0; var _pmap_offs2 = 0;    # a child listing
+var _pmap_order = 0; var _pmap_order2 = 0;   # alloc(PMAP_MAX_ENTRIES * 8) each: sort indices, top level / child
+var _pmap_entries = 0;            # entries named on the last map (the /state count — only what reached the map)
+var _pmap_truncated = 0;          # 1 when the last map hit PROJ_MAP_CAP
+var _pmap_unmappable = 0;         # 1 when the last build could not list the root (the map is a notice)
+var _pmap_bytes = 0;              # the last map's byte length
+var _pmap_str = 0;                # ONE reusable 16-byte Str header for the stdlib calls (data, len)
+var _pmap_pathbuf = 0;            # alloc(4096): "<root>/<name>" scratch
+var _pmap_subbuf = 0;             # alloc(4096): the top-level dir being walked (the path scratch is reused by its sort)
+var _pmap_flags = 0; var _pmap_cflags = 0;   # alloc(PMAP_MAX_ENTRIES) each: is_dir per entry, top level / child
+
+fn _pmap_ensure() {
+    if (_pmap_buf == 0) { _pmap_buf = alloc(PROJ_MAP_CAP); }
+    if (_pmap_scratch == 0) { _pmap_scratch = alloc(4096); }
+    if (_pmap_names == 0) { _pmap_names = alloc(PMAP_NAMES_CAP); _pmap_offs = alloc(PMAP_MAX_ENTRIES * 8); }
+    if (_pmap_names2 == 0) { _pmap_names2 = alloc(PMAP_NAMES_CAP); _pmap_offs2 = alloc(PMAP_MAX_ENTRIES * 8); }
+    if (_pmap_order == 0) { _pmap_order = alloc(PMAP_MAX_ENTRIES * 8); _pmap_order2 = alloc(PMAP_MAX_ENTRIES * 8); }
+    if (_pmap_pathbuf == 0) { _pmap_pathbuf = alloc(4096); }
+    if (_pmap_subbuf == 0) { _pmap_subbuf = alloc(4096); }
+    if (_pmap_flags == 0) { _pmap_flags = alloc(PMAP_MAX_ENTRIES); _pmap_cflags = alloc(PMAP_MAX_ENTRIES); }
+    if (_pmap_str == 0) { _pmap_str = alloc(16); }
+    return 0;
+}
+# _pmap_s: the reusable Str header over a NUL-terminated cstr (the stdlib takes Str; str_from would alloc one
+# header per call, per entry, per turn).
+fn _pmap_s(cstr) { store64(_pmap_str, cstr); store64(_pmap_str + 8, strlen(cstr)); return _pmap_str; }
+# _pmap_is_dir: 1 when `path` is a directory — an O_NONBLOCK open (a FIFO opens at once instead of blocking for
+# a writer; a regular file opens too) and a getdents that only a directory answers. Mirrors lib/fs.cyr's
+# is_dir minus the blocking open. AGNOS's open is the directory test itself (AO_DIRECTORY) and has no FIFOs.
+fn _pmap_is_dir(cstr) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return is_dir(_pmap_s(cstr));
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    var fd = sys_open(cstr, O_RDONLY | O_NONBLOCK, 0);
+    if (fd < 0) { return 0; }
+    var sbuf[4096];
+    var sbasep[8];
+    store64(&sbasep, 0);
+    var n = syscall(FSYS_GETDENTS64, fd, &sbuf, 4096, &sbasep);
+    sys_close(fd);
+    if (n >= 0) { return 1; }
+    return 0;
+    #endif
+}
+fn _pmap_root_cstr() { if (_pmap_root != 0) { return _pmap_root; } return "."; }
+# _pmap_path: "<dir>/<name>" into the scratch (bounded), returns the scratch. A dir of "." yields "./name".
+fn _pmap_path(dir, name) {
+    var off = _append_cstr_cap(_pmap_pathbuf, 0, 4096, dir);
+    off = _append_cstr_cap(_pmap_pathbuf, off, 4096, "/");
+    off = _append_cstr_cap(_pmap_pathbuf, off, 4096, name);
+    store8(_pmap_pathbuf + off, 0);
+    return _pmap_pathbuf;
+}
+# _pmap_list: list `dir` into (names, offs); returns the entry count (0 for an empty directory), -1 when the
+# directory could not be opened, or -2 when it holds more than the listing caps (dir_list_into refuses a short
+# read: never a confident partial picture) — the map names each case for what it is.
+fn _pmap_list(dir, names, offs) {
+    var n = dir_list_into(_pmap_s(dir), _pmap_scratch, 4096, names, PMAP_NAMES_CAP, offs, PMAP_MAX_ENTRIES);
+    if (n == (0 - 1)) { return 0 - 1; }
+    if (n < 0) { return 0 - 2; }
+    return n;
+}
+# _pmap_sort: order[0..n) = indices into (names, offs), directories first, then byte order within each half —
+# an insertion sort (n <= PMAP_MAX_ENTRIES) over a precomputed is_dir flag (one is_dir per entry, cached).
+# `dir` is the listed directory (for the is_dir probe). Returns n.
+fn _pmap_sort(dir, names, offs, n, flags, order) {
+    var i = 0;
+    while (i < n) {
+        store8(flags + i, _pmap_is_dir(_pmap_path(dir, names + load64(offs + i * 8))));
+        store64(order + i * 8, i);
+        i = i + 1;
+    }
+    i = 1;
+    while (i < n) {
+        var cur = load64(order + i * 8);
+        var j = i - 1;
+        var go = 1;
+        while ((j >= 0) && (go == 1)) {
+            var prev = load64(order + j * 8);
+            var before = 0;                                   # 1 when cur sorts before prev
+            var dc = load8(flags + cur); var dp = load8(flags + prev);
+            if (dc != dp) { if (dc == 1) { before = 1; } }
+            else { if (strcmp_cstr(names + load64(offs + cur * 8), names + load64(offs + prev * 8)) < 0) { before = 1; } }
+            if (before == 1) { store64(order + (j + 1) * 8, prev); j = j - 1; }
+            else { go = 0; }
+        }
+        store64(order + (j + 1) * 8, cur);
+        i = i + 1;
+    }
+    return n;
+}
+# _pmap_hidden: a dot-entry (a `.github/`, a `.env`) — named, never walked.
+fn _pmap_hidden(name) { if (load8(name) == 46) { return 1; } return 0; }
+# _pmap_put: append a cstr into the map WHOLE, or not at all — a cut inside a name would leave a partial entry
+# (or half a multi-byte character) on the wire; when it does not fit, the truncation flag is set and the walk
+# stops. 48 bytes stay reserved for the marker. Returns the new off. `clean` = 1 for a NAME from the disk:
+# control bytes and DEL read as '?' — a name is a line of a SYSTEM message, and a checked-in name carrying a
+# newline must not forge one (the map's own layout text goes in as written).
+fn _pmap_put_n(off, s, clean) {
+    if (_pmap_truncated == 1) { return off; }
+    var n = strlen(s);
+    if ((off + n) >= (PROJ_MAP_CAP - 48)) { _pmap_truncated = 1; return off; }
+    var i = 0;
+    while (i < n) {
+        var b = load8(s + i);
+        if (clean == 1) { if ((b < 32) || (b == 127)) { b = 63; } }
+        store8(_pmap_buf + off + i, b);
+        i = i + 1;
+    }
+    return off + n;
+}
+fn _pmap_put(off, s) { return _pmap_put_n(off, s, 0); }
+fn _pmap_put_name(off, s) { return _pmap_put_n(off, s, 1); }
+fn _pmap_put_int(off, n) {
+    var b[24];
+    var len = fmt_int_buf(n, &b);
+    store8(&b + len, 0);
+    return _pmap_put(off, &b);
+}
+# project_map_build: the map of `root` into _pmap_buf; returns its byte length, or 0 when the root lists
+# nothing (no map — the builders then omit the message). PURE over the tree; I/O = the listings.
+fn project_map_build(root) {
+    _pmap_ensure();
+    _pmap_entries = 0; _pmap_truncated = 0; _pmap_unmappable = 0; _pmap_bytes = 0;
+    var n = _pmap_list(root, _pmap_names, _pmap_offs);
+    if (n < 0) {                                                 # a bound that announces itself, never silence
+        var eoff = 0;
+        if (n == (0 - 1)) { eoff = _pmap_put(0, "Project map: the project root could not be listed - use list_dir and search.\n"); }
+        else {
+            eoff = _pmap_put(0, "Project map: the project root holds more entries than the map lists (past ");
+            eoff = _pmap_put_int(eoff, PMAP_MAX_ENTRIES);
+            eoff = _pmap_put(eoff, ") - use list_dir and search.\n");
+        }
+        store8(_pmap_buf + eoff, 0);
+        _pmap_bytes = eoff; _pmap_unmappable = 1;
+        return eoff;
+    }
+    if (n == 0) { store8(_pmap_buf, 0); return 0; }              # an empty root: nothing to map, no message
+    var flags = _pmap_flags;
+    var order_n = _pmap_sort(root, _pmap_names, _pmap_offs, n, flags, _pmap_order);
+    var off = 0;
+    if (config_hoosh_tools() == 1) { off = _pmap_put(0, "Project map (the top two levels of the project root; a name ending in / is a directory; use list_dir or search for the rest):\n"); }
+    else { off = _pmap_put(0, "Project map (the top two levels of the project root; a name ending in / is a directory):\n"); }
+    var files_started = 0;
+    var k = 0;
+    while ((k < order_n) && (_pmap_truncated == 0)) {           # the walk stops the moment the cap bites
+        var idx = load64(_pmap_order + k * 8);
+        var name = _pmap_names + load64(_pmap_offs + idx * 8);
+        if (_project_sensitive(name) == 0) {                     # thoth's own files: not on the map, as the tools refuse them
+            var line_start = off;                                # the entry lands whole or the line is rolled back
+            var line_entries = _pmap_entries;
+            if (load8(flags + idx) == 1) {
+                off = _pmap_put_name(off, name); off = _pmap_put(off, "/");
+                _pmap_entries = _pmap_entries + 1;
+                if ((_search_skip_dir(name) == 1) || (_pmap_hidden(name) == 1)) { off = _pmap_put(off, "  (not walked)\n"); }
+                elif (_project_no_symlink(_pmap_path(root, name)) == 0) { off = _pmap_put(off, "  (a symlink — not walked)\n"); }   # the jail never follows a link out of the project; neither does the map
+                else {
+                    var sub = _pmap_path(root, name);
+                    var subcopy = _pmap_subbuf;                # _pmap_path's scratch is reused by the child sort
+                    memcpy(subcopy, sub, strlen(sub) + 1);
+                    var cn = _pmap_list(subcopy, _pmap_names2, _pmap_offs2);
+                    if (cn == (0 - 1)) { off = _pmap_put(off, "  (could not be listed)\n"); }
+                    elif (cn == (0 - 2)) { off = _pmap_put(off, "  (more entries than the map lists - list_dir)\n"); }
+                    elif (cn == 0) { off = _pmap_put(off, "  (empty)\n"); }
+                    else {
+                        var cflags = _pmap_cflags;
+                        var cn2 = _pmap_sort(subcopy, _pmap_names2, _pmap_offs2, cn, cflags, _pmap_order2);
+                        off = _pmap_put(off, " ");
+                        var c = 0;
+                        var shown = 0;
+                        while ((c < cn2) && (shown < PMAP_DIR_NAMES) && (_pmap_truncated == 0)) {
+                            var cidx = load64(_pmap_order2 + c * 8);
+                            var cname = _pmap_names2 + load64(_pmap_offs2 + cidx * 8);
+                            if (_project_sensitive(cname) == 0) {
+                                off = _pmap_put(off, " "); off = _pmap_put_name(off, cname);
+                                if (load8(cflags + cidx) == 1) { off = _pmap_put(off, "/"); }
+                                _pmap_entries = _pmap_entries + 1;
+                                shown = shown + 1;
+                            }
+                            c = c + 1;
+                        }
+                        if (c < cn2) { off = _pmap_put(off, "  +"); off = _pmap_put_int(off, cn2 - c); off = _pmap_put(off, " more"); }
+                        off = _pmap_put(off, "\n");
+                    }
+                }
+            } else {
+                if (files_started == 0) { files_started = 1; } else { off = _pmap_put(off, "  "); }
+                off = _pmap_put_name(off, name);
+                _pmap_entries = _pmap_entries + 1;
+            }
+            if (_pmap_truncated == 1) { off = line_start; _pmap_entries = line_entries; }   # a line that did not fit whole is not on the map
+        }
+        k = k + 1;
+    }
+    if ((files_started == 1) && (_pmap_truncated == 0)) { off = _pmap_put(off, "\n"); }
+    if (_pmap_truncated == 1) {
+        if (off > 0) { if (load8(_pmap_buf + off - 1) != 10) { store8(_pmap_buf + off, 10); off = off + 1; } }   # the marker on its own line
+        off = _append_cstr_cap(_pmap_buf, off, PROJ_MAP_CAP, "... (map truncated at ");
+        off = _append_int_cap(_pmap_buf, off, PROJ_MAP_CAP, PROJ_MAP_CAP);
+        off = _append_cstr_cap(_pmap_buf, off, PROJ_MAP_CAP, " bytes)\n");
+    }
+    store8(_pmap_buf + off, 0);
+    _pmap_bytes = off;
+    return off;
+}
+# project_map_refresh: rebuild the map for this turn — or drop it when [project].map is off. Called at the turn
+# sites; the builders read project_map_current() after it.
+fn project_map_refresh() {
+    #ifdef CYRIUS_TARGET_WIN
+    project_map_clear(); return 0;                               # dir_list_into has no Windows arm: no map, no notice
+    #endif
+    if (config_project_map() == 0) { project_map_clear(); return 0; }
+    if (project_map_build(_pmap_root_cstr()) > 0) { _pmap_ctx = _pmap_buf; } else { project_map_clear(); }
+    return 0;
+}
+fn project_map_current() { return _pmap_ctx; }
+fn project_map_entries() { return _pmap_entries; }
+fn project_map_bytes() { return _pmap_bytes; }
+fn project_map_truncated() { return _pmap_truncated; }
+fn project_map_unmappable() { return _pmap_unmappable; }
+fn project_map_clear() { _pmap_ctx = 0; _pmap_entries = 0; _pmap_bytes = 0; _pmap_truncated = 0; _pmap_unmappable = 0; return 0; }
+
 # _proj_apc: append NUL-terminated cstr `s` into _project_out_buf at off, bounded. Returns the new off.
 fn _proj_apc(off, s) {
     var i = 0;

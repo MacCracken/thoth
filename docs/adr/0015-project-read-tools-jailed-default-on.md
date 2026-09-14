@@ -61,8 +61,8 @@ permission, like every other restriction.
   `/tmp`-symlink residuals); it requires a pre-existing symlink in the user's own repo, lower risk than
   the `..`-escape the jail blocks.
 - **Neutral** — sets up the 0.23.1 grant model (a `[project]` config section + a `/allow` grant, vidya
-  as a first-class root) and possible later tools (a `grep`/glob search, a project-map hint in the
-  system prompt).
+  as a first-class root) and possible later tools (a `grep`/glob search — `search`, 0.40.0; a project-map
+  hint in the system prompt — `[project].map`, 0.50.0).
 
 ## 0.23.1 update — user-granted read roots
 

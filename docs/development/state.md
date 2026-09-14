@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.50.0** — **a project map rides every turn's system prompt** (2026-09-13, F5). `project_map_build` (project.cyr)
+lists the top two levels of the launch root into a 2 KiB buffer — every top-level entry, directories first in byte
+order and `/`-suffixed, each top-level directory with up to `PMAP_DIR_NAMES` (12) children and `+N more`;
+search's junk directories (`_search_skip_dir`), dot-directories and symlinks named "(not walked)"; thoth's own files
+(`_project_sensitive`) omitted; lines whole or not at all, a marker when the cap bites, each listing bound named for
+what it is, a root past them a notice — never silence; names' control bytes `?`; alloc-free (`dir_list_into` into
+fixed buffers, one reusable `Str`, an index insertion sort, an `O_NONBLOCK` probe so a FIFO cannot hang a turn).
+`project_map_refresh()` runs at the three turn sites (hoosh_send, agent_turn, cmd_dry) — once per turn, never
+mid-round; a delegated child reuses the parent's. The five request builders emit it through `_hoosh_emit_map` as a
+system message after the persona and the memory context (0 until a turn site refreshed it, so the suite's goldens
+are byte-identical; `[project].map = false`, a preference, leaves every request as it was). `/state` gains a `map`
+row; the log's `turn_start` a `map_bytes`. Suite **587 + 1706 + 954 + 769 + 190 + 5** (+98); Linux / aarch64 /
+AGNOS build with 0.45.6's warning set; macOS green natively at the 6.6.3 pin.
+
 **0.49.0** — **the window takes the mouse; a resumed reply's tool calls and citations draw again** (2026-09-13, F4).
 `gwindow.cyr` binds `wl_pointer` off the seat's capabilities (v5 clamped to what the compositor advertises; released
 when the capability goes), decodes enter / leave / motion / button / axis (24.8 fixed → px; a touchpad's sub-pixel
@@ -3634,8 +3648,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **587 + 1689 + 873 + 769 + 190 + 5 assertions across the suites as of
-0.49.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **587 + 1706 + 954 + 769 + 190 + 5 assertions across the suites as of
+0.50.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

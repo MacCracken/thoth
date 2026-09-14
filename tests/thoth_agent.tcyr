@@ -93,6 +93,7 @@ fn main() {
     test_bounds_hardening();
     test_workset_hardening();
     test_project();
+    test_project_map();
     test_edit();
     test_editlog();
     test_mcpres();

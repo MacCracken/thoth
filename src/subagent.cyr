@@ -332,6 +332,8 @@ fn _sub_build_request(dst, model, system, mem, tools_buf, tools_len) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
+    off = _hoosh_emit_map(dst, off, cap, wrote);            # 0.50.0 (F5): the PARENT's map of this turn — the child stands in the same tree
+    if (_hoosh_has_map() == 1) { wrote = 1; }
     if (_agent_work_len > 0) {
         if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
         off = _agent_copy(dst, off, _agent_work, _agent_work_len, AGENT_REQ_CAP);

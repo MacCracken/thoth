@@ -1136,6 +1136,217 @@ fn test_bounds_hardening() {
 # project read/explore tools (0.23.0): the jail (pure) + read_file/list_dir over real repo files. The jail
 # is the security boundary — absolute paths, '~', and '..' components are refused; in-project relative paths
 # pass. read_file/list_dir hit the filesystem (present-on-disk, not git status), so real files/dirs work.
+# _t_has: substring test over a NUL-terminated cstr.
+fn _t_has(hay, needle) { return _t_count_sub(hay, strlen(hay), needle, strlen(needle)); }
+# _t_before: 1 when `a` occurs before `b` in the cstr `hay` (both present).
+fn _t_before(hay, a, b) {
+    var n = strlen(hay);
+    var ia = 0 - 1; var ib = 0 - 1;
+    var i = 0;
+    while ((i + strlen(a)) <= n) { if (ia < 0) { if (memeq(hay + i, a, strlen(a)) == 1) { ia = i; } } i = i + 1; }
+    i = 0;
+    while ((i + strlen(b)) <= n) { if (ib < 0) { if (memeq(hay + i, b, strlen(b)) == 1) { ib = i; } } i = i + 1; }
+    if ((ia < 0) || (ib < 0)) { return 0; }
+    if (ia < ib) { return 1; }
+    return 0;
+}
+
+# test_project_map (0.50.0, F5): the project-map hint — the top two levels of a tracked fixture tree, dirs first
+# in byte order, junk and dot directories named but not walked, thoth's own files omitted, a per-directory
+# "+N more", the cap's marker, the [project].map switch, and the message in every request builder.
+fn test_project_map() {
+    test_group("project map hint (project.cyr, 0.50.0 / F5)");
+    var sv_root = _pmap_root;
+    var sv_cfg = _cfg_project_map;
+    _pmap_root = "tests/fixtures/map";
+    var n = project_map_build(_pmap_root_cstr());
+    assert_eq(project_map_unmappable(), 0, "the fixture tree tests/fixtures/map/ is present and listable (fixtures must be git-tracked)");
+    assert(n > 0, "the fixture tree yields a map");
+    var m = _pmap_buf;
+    assert_eq(n, strlen(m), "...whose length is what the builder returned");
+    assert_eq(_t_has(m, "Project map (the top two levels of the project root"), 1, "the header says what it is and where to look for more");
+    assert_eq(_t_has(m, "use list_dir or search for the rest"), 1, "...naming the tools (agentic: [hoosh].tools on)");
+    var sv_tools = _cfg_hoosh_tools; _cfg_hoosh_tools = 0;
+    project_map_build(_pmap_root_cstr());
+    assert_eq(_t_has(_pmap_buf, "list_dir"), 0, "with tools off the header names no tool the model does not have");
+    assert_eq(_t_has(_pmap_buf, "\nsrc/  gui/ a.cyr main.cyr\n"), 1, "...the map itself is the same");
+    _cfg_hoosh_tools = sv_tools;
+    project_map_build(_pmap_root_cstr());
+    assert_eq(_t_has(m, "\ndocs/  notes.md\n"), 1, "a top-level directory lists its children (docs/: notes.md)");
+    assert_eq(_t_has(m, "\nsrc/  gui/ a.cyr main.cyr\n"), 1, "...dirs first, then files, byte order (src/: gui/ a.cyr main.cyr)");
+    assert_eq(_t_has(m, "g.cyr"), 0, "the third level is not on the map (src/gui/g.cyr)");
+    assert_eq(_t_has(m, "\nbuild/  (not walked)\n"), 1, "a junk directory (search's skip list) is named, not walked");
+    assert_eq(_t_has(m, "out.bin"), 0, "...its contents are not");
+    assert_eq(_t_has(m, "\nnode_modules/  (not walked)\n"), 1, "...node_modules likewise");
+    assert_eq(_t_has(m, "index.js"), 0, "...");
+    assert_eq(_t_has(m, "\n.hidden/  (not walked)\n"), 1, "a dot directory is named, not walked");
+    assert_eq(_t_has(m, "secret"), 0, "...its contents are not");
+    assert_eq(_t_has(m, ".thoth"), 0, "thoth's own directory is not on the map (the tools refuse it)");
+    assert_eq(_t_has(m, "thoth.cyml"), 0, "...nor the legacy config file");
+    assert_eq(_t_has(m, "\nmany/  f01.txt f02.txt f03.txt f04.txt f05.txt f06.txt f07.txt f08.txt f09.txt f10.txt f11.txt f12.txt  +2 more\n"), 1, "a directory with more than PMAP_DIR_NAMES children shows the first twelve and \"+N more\"");
+    assert_eq(_t_has(m, "\nREADME.md  VERSION\n"), 1, "the top-level files follow the directories, on one line");
+    assert_eq(_t_before(m, "\n.hidden/", "\nbuild/"), 1, "byte order among the directories (.hidden before build)");
+    assert_eq(_t_before(m, "\nmany/", "\nsrc/"), 1, "...many before src");
+    assert_eq(_t_before(m, "\nsrc/", "\nREADME.md"), 1, "...and every directory before the files");
+    assert_eq(project_map_entries(), 24, "24 entries named: 8 top-level, 1 + 3 + 12 shown children (the third level, the unwalked contents and the \"+2 more\" excluded)");
+    assert_eq(project_map_truncated(), 0, "...not truncated");
+    assert_eq(project_map_bytes(), n, "...the byte count is the length");
+    # a name is written raw for the wire (the JSON emitter escapes it there)
+    # the cap: a marker, the flag, and a NUL inside the cap
+    var sv_cap = PROJ_MAP_CAP;
+    PROJ_MAP_CAP = 256;                                   # the header is 132 bytes; 48 stay reserved: three lines fit, the fourth (many/) does not
+    var tn = project_map_build(_pmap_root_cstr());
+    assert(tn > 0, "a tiny cap still yields a map");
+    assert(tn < 256, "...within the cap");
+    assert_eq(project_map_truncated(), 1, "...flagged truncated");
+    assert_eq(_t_has(_pmap_buf, "\n... (map truncated at 256 bytes)\n"), 1, "...with the marker naming the cap, on its own line");
+    assert_eq(load8(_pmap_buf + tn), 0, "...NUL-terminated at the returned length");
+    assert(memeq(_pmap_buf + strlen(_pmap_buf) - 33, "... (map truncated at 256 bytes)\n", 33) == 1, "...the marker is the LAST thing on the map");
+    assert_eq(_t_has(_pmap_buf, "\n\n"), 0, "...and no blank line before it");
+    assert_eq(_t_has(_pmap_buf, "\n.hidden/  (not walked)\nbuild/  (not walked)\ndocs/  notes.md\n"), 1, "...the lines that fit are whole (the first three)");
+    assert_eq(_t_has(_pmap_buf, "many/"), 0, "...and the line that did not fit is not on the map at all — never cut inside an entry");
+    assert_eq(project_map_entries(), 4, "...the entry count is what LANDED (.hidden, build, docs, notes.md), not what was walked");
+    PROJ_MAP_CAP = sv_cap;
+    # a name with a control byte reads as '?' on the map (a checked-in newline must not forge a map line)
+    var ctl = "build/.thoth_map_ctl";
+    xmkdir(ctl, 0x1c0);
+    var ctlf = alloc(64);
+    var co = _append_cstr_cap(ctlf, 0, 64, ctl); co = _append_cstr_cap(ctlf, co, 64, "/bad\nname.txt"); store8(ctlf + co, 0);
+    if (file_write_all(ctlf, "x", 1) >= 0) {
+        _pmap_root = ctl;
+        project_map_build(_pmap_root_cstr());
+        assert_eq(_t_has(_pmap_buf, "bad?name.txt"), 1, "a newline inside a file name reads as '?' on the map");
+        assert_eq(_t_has(_pmap_buf, "bad\nname"), 0, "...never as a line break");
+        xunlink(ctlf);
+    } else { assert(1, "(a file name with a newline could not be created here — the control-byte rule is not exercised; stated)"); }
+    xrmdir(ctl);
+    # the child branches the tracked fixture cannot hold: an EMPTY directory, and one past the listing caps
+    var troot = "build/.thoth_map_t";
+    xmkdir(troot, 0x1c0);
+    xmkdir("build/.thoth_map_t/empty", 0x1c0);
+    xmkdir("build/.thoth_map_t/big", 0x1c0);
+    var bp = alloc(128);
+    var bi = 0;
+    while (bi < (PMAP_MAX_ENTRIES + 1)) {
+        var bo = _append_cstr_cap(bp, 0, 128, "build/.thoth_map_t/big/f"); bo = _append_int(bp, bo, bi); bo = _append_cstr_cap(bp, bo, 128, ".txt"); store8(bp + bo, 0);
+        file_write_all(bp, "x", 1);
+        bi = bi + 1;
+    }
+    _pmap_root = troot;
+    var bn = project_map_build(_pmap_root_cstr());
+    assert(bn > 0, "a root with an empty and an over-cap child maps");
+    assert_eq(_t_has(_pmap_buf, "\nempty/  (empty)\n"), 1, "an empty directory says so");
+    assert_eq(_t_has(_pmap_buf, "\nbig/  (more entries than the map lists - list_dir)\n"), 1, "a directory past the listing caps says THAT — not 'unreadable'");
+    assert_eq(_t_has(_pmap_buf, "f0.txt"), 0, "...and none of its entries is named");
+    # ...and a ROOT past the caps: a notice that names the cap, flagged unmappable (not 'truncated')
+    _pmap_root = "build/.thoth_map_t/big";
+    project_map_refresh();
+    assert(project_map_current() != 0, "an over-cap root yields a notice");
+    assert_eq(_t_has(project_map_current(), "holds more entries than the map lists (past 256)"), 1, "...naming the listing cap");
+    assert_eq(project_map_unmappable(), 1, "...flagged unmappable");
+    assert_eq(project_map_truncated(), 0, "...not 'truncated' (nothing was cut — nothing was listed)");
+    bi = 0;
+    while (bi < (PMAP_MAX_ENTRIES + 1)) {
+        var bo2 = _append_cstr_cap(bp, 0, 128, "build/.thoth_map_t/big/f"); bo2 = _append_int(bp, bo2, bi); bo2 = _append_cstr_cap(bp, bo2, 128, ".txt"); store8(bp + bo2, 0);
+        xunlink(bp);
+        bi = bi + 1;
+    }
+    xrmdir("build/.thoth_map_t/big"); xrmdir("build/.thoth_map_t/empty"); xrmdir(troot);
+    # a FIFO in the tree: the probe must not block on it (is_dir's plain open would wait for a writer FOREVER —
+    # this test would hang the suite, which is the honest net: a hang here is the bug, not a flake)
+    var fbuf[256];
+    var fst[8];
+    xmkdir("build/.thoth_map_f", 0x1c0);
+    if (exec_shell_capture("mkfifo build/.thoth_map_f/pipe", &fbuf, 256, 5000, &fst) >= 0) { if (load64(&fst) == 0) {
+        _pmap_root = "build/.thoth_map_f";
+        var fn2 = project_map_build(_pmap_root_cstr());
+        assert(fn2 > 0, "a root holding a FIFO still maps (the probe does not block on the pipe)");
+        assert_eq(_t_has(_pmap_buf, "pipe"), 1, "...and the pipe is listed among the files");
+        xunlink("build/.thoth_map_f/pipe");
+    } else { assert(1, "(mkfifo unavailable here — the FIFO rule is not exercised; stated)"); } }
+    xrmdir("build/.thoth_map_f");
+    _pmap_root = "tests/fixtures/map";
+    # the switch and the refresh
+    _cfg_project_map = 0;
+    project_map_refresh();
+    assert_eq(project_map_current(), 0, "[project].map = false: no map for the builders");
+    _cfg_project_map = 1;
+    project_map_refresh();
+    assert(project_map_current() != 0, "[project].map = true: the map is current");
+    assert_eq(_t_has(project_map_current(), "\nsrc/  gui/ a.cyr main.cyr\n"), 1, "...rebuilt from the fixture");
+    # a root that cannot be listed: a map that SAYS so (a bound announces itself), never a confident partial one
+    _pmap_root = "tests/fixtures/map/no-such-dir";
+    project_map_refresh();
+    assert(project_map_current() != 0, "an unlistable root yields a map that says so");
+    assert_eq(_t_has(project_map_current(), "the project root could not be listed - use list_dir and search"), 1, "...in words, for what it is");
+    assert_eq(project_map_unmappable(), 1, "...flagged unmappable for /state");
+    assert_eq(project_map_truncated(), 0, "...not 'truncated'");
+    assert_eq(project_map_entries(), 0, "...with no entries");
+    _cfg_project_map = 0;
+    project_map_refresh();
+    assert_eq(project_map_bytes(), 0, "[project].map = false clears the counters too (the log must not claim map_bytes for a map not sent)");
+    assert_eq(project_map_unmappable(), 0, "...all of them");
+    _cfg_project_map = 1;
+    # a symlinked top-level directory is named, never walked (the jail's rule: no link leads out of the project)
+    var lnk = "tests/fixtures/map/linkdir";
+    xunlink(lnk);
+    if (xsymlink("/etc", lnk) == 0) {
+        _pmap_root = "tests/fixtures/map";
+        project_map_refresh();
+        assert_eq(_t_has(project_map_current(), "\nlinkdir/  (a symlink — not walked)\n"), 1, "a symlink to a directory outside the project is named as a symlink and nothing under it is listed");
+        xunlink(lnk);
+    } else { assert(1, "(no symlink could be created here — the symlink rule is not exercised; stated)"); }
+    _pmap_root = "tests/fixtures/map";
+    project_map_refresh();
+    # every request builder carries it as a system message after the persona (and memory), before the history
+    var big = alloc(32768);
+    var sv_work0 = _agent_work_len; _agent_work_len = 0;             # an earlier test's working set is not this test's
+    var l1 = hoosh_build_messages(big, "m", "SYS", 0, 0);
+    assert(l1 > 0, "hoosh_build_messages builds");
+    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the multi-turn body carries the map as a system message");
+    assert_eq(_t_before(big, "\"content\":\"SYS\"", "Project map"), 1, "...after the persona");
+    assert_eq(_t_has(big, "src/  gui/ a.cyr main.cyr\\n"), 1, "...its newlines JSON-escaped");
+    var l2 = hoosh_build_messages(big, "m", "SYS", "MEM", 0);
+    assert_eq(_t_before(big, "\"content\":\"MEM\"", "Project map"), 1, "...and after the memory context when there is one");
+    assert(bayan_json_v_parse_buf(big, l2) != 0, "...and the body with all three system parts parses as JSON");
+    var l3 = hoosh_build_request(big, "m", "SYS", 0, "hi", 0);
+    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the single-turn body carries it");
+    assert_eq(_t_before(big, "Project map", "\"role\":\"user\",\"content\":\"hi\""), 1, "...before the user turn");
+    var j3 = bayan_json_v_parse_buf(big, l3);
+    assert(j3 != 0, "...and parses as JSON (the comma after the map)");
+    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get(j3, "messages")), 3, "...three messages: persona, map, user");
+    var l3b = hoosh_build_request(big, "m", 0, 0, "hi", 0);
+    var j3b = bayan_json_v_parse_buf(big, l3b);
+    assert(j3b != 0, "the single-turn body with NO persona parses too (the map is the first message)");
+    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get(j3b, "messages")), 2, "...two messages: map, user");
+    var l4 = hoosh_build_dry(big, "m", "SYS", 0, "hi", 0);
+    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the /dry preview shows it");
+    assert(bayan_json_v_parse_buf(big, l4) != 0, "...and parses");
+    var l5 = agent_build_request(big, "m", "SYS", 0, 0, 0, 0);
+    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the agentic body carries it");
+    var j5 = bayan_json_v_parse_buf(big, l5);
+    assert(j5 != 0, "...and parses as JSON");
+    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get(j5, "messages")), 2, "...two messages: persona, map (no history in this test)");
+    var l6 = _sub_build_request(big, "m", "SYS", 0, 0, 0);
+    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the delegated child's body carries the parent's map");
+    # the JSON stays well-formed with the map in place: the body parses, and the map is the second message
+    var jv = bayan_json_v_parse_buf(big, l6);
+    assert(jv != 0, "...and the child body parses as JSON");
+    var msgs = bayan_json_v_obj_get(jv, "messages");
+    assert_eq(bayan_json_v_arr_len(msgs), 2, "...two messages: the persona, the map");
+    var second = bayan_json_v_obj_get(bayan_json_v_arr_get(msgs, 1), "role");
+    assert((second != 0) && (str_eq_cstr(bayan_json_v_str(second), "system") == 1), "...the map's role is system");
+    # cleared: byte-identical to before (the suite's goldens rest on this floor)
+    project_map_clear();
+    var l7 = hoosh_build_messages(big, "m", "SYS", 0, 0);
+    assert_eq(_t_has(big, "Project map"), 0, "with no current map the body carries none");
+    _agent_work_len = sv_work0;
+    _pmap_root = sv_root;
+    _cfg_project_map = sv_cfg;
+    project_map_clear();
+    return 0;
+}
+
 fn test_project() {
     test_group("project read/explore tools (project.cyr, 0.23.0/0.23.1)");
     # --- jail (pure): accept in-project relative, refuse escapes ---

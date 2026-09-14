@@ -550,6 +550,8 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
+    off = _hoosh_emit_map(dst, off, cap, wrote);            # 0.50.0 (F5): the project map, refreshed once per turn (every round re-sends it)
+    if (_hoosh_has_map() == 1) { wrote = 1; }
     var total = session_history_len();
     # Budget history against the room left AFTER this turn's working tool-rounds
     # (_agent_work) and the advertised tools, so history + work + tools cannot
@@ -1977,6 +1979,7 @@ fn agent_turn(prompt) {
     # prompt when the seam is bound (0.32.2). ADR-0012.
     var mem = 0;
     if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(prompt); }
+    project_map_refresh();          # 0.50.0 (F5): this turn's project map — ONCE per turn, never mid-round (a child reuses it)
     if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
     if (_agent_tools_buf == 0) { _agent_tools_buf = alloc(AGENT_TOOLS_CAP); }
     if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
@@ -2042,7 +2045,7 @@ fn agent_turn(prompt) {
     # its answer still explains itself, and the first thing anyone reads back is "what was it asked to
     # do" — so the prompt goes down BEFORE the first request leaves, not after a turn that may not land.
     log_begin("turn_start"); log_kv_int("turn", session_turns()); log_kv_str("model", model);
-    log_kv_int("max_iters", max_iters); log_kv_int("tool_bytes", tools_len); log_commit(SK_INFO);
+    log_kv_int("max_iters", max_iters); log_kv_int("tool_bytes", tools_len); log_kv_int("map_bytes", project_map_bytes()); log_commit(SK_INFO);
     log_text("task", "text", prompt, strlen(prompt));
     # 0.44.3 — CHECK BEFORE THE CALL. `[budget]` bounds SPEND, and `max_iters` never could: it bounds
     # rounds, and one round over a 200 KB context costs what forty small ones do.

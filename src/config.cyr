@@ -1143,6 +1143,7 @@ fn _cfg_known_key(sec, key) {
     if (streq(sec, "persona") == 1) { return streq(key, "name"); }
     if (streq(sec, "project") == 1) {
         if (streq(key, "vidya") == 1) { return 1; }
+        if (streq(key, "map") == 1) { return 1; }      # 0.50.0 (F5): the project-map hint in the system prompt
         return streq(key, "read_roots");
     }
     if (streq(sec, "hooks") == 1) {
@@ -1376,6 +1377,7 @@ fn config_load() {
     _cfg_persona = _cfg2_str(pers_l, pers_g, "name");         # startup default archetype (0.22.0); absent -> egyptian_thoth
     var proj_l = _cfg_section_pairs(lo, "project");   var proj_g = _cfg_section_pairs(gl, "project");
     _cfg_vidya = _cfg2_str(proj_l, proj_g, "vidya");          # [project].vidya — first-class `/allow vidya` root (0.23.1)
+    _cfg_project_map = _cfg2_bool(proj_l, proj_g, "map", 1);   # 0.50.0 (F5): DEFAULT ON — a PREFERENCE (it names what the jail already lists)
     _cfg_read_roots_load2(proj_l, proj_g);                    # jail-widening: local REPLACES, never unions (see below)
     var hook_l = _cfg_section_pairs(lo, "hooks");     var hook_g = _cfg_section_pairs(gl, "hooks");
     # AUTHORITY — every one of these is a shell command thoth runs as the operator. `session_start`
@@ -1462,6 +1464,11 @@ fn config_hoosh_reasoning() { return _cfg_hoosh_reasoning; }
 # framer can no longer fit so the model keeps continuity instead of seeing a silent gap. Default OFF: it spends an
 # extra (small) completion whenever the skipped range grows, and thoth never spends the user's tokens uninvited.
 fn config_hoosh_summarize() { return _cfg_hoosh_summarize; }
+# config_project_map (0.50.0, F5): 1 when the project-map hint rides the system prompt (the default). A preference
+# under ADR-0021 — a local layer can only change what of the jailed tree is LISTED for the model and how many bytes
+# each request carries; it grants no path and names no command.
+var _cfg_project_map = 1;
+fn config_project_map() { return _cfg_project_map; }
 
 # config_redact_enabled: 1 when tool results are scanned for secret-shaped values before they enter the
 # conversation. 0.40.0 (T1-3).

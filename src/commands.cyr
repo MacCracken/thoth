@@ -339,6 +339,28 @@ fn _params_one(key, val) {
 # and a /reset drops them). Effort dials the model's reasoning; the count stays 0 on a model that keeps reasoning
 # INTERNAL (Opus 4.8) even at high effort, so it's the concrete "is reasoning actually streaming?" signal.
 # Extracted from cmd_state for unit-testability (no network probe — pure config + the store).
+# _state_map_row (0.50.0, F5): the /state "map" row — whether the project-map hint rides the system prompt, and
+# what the LAST BUILD (a turn, or /dry) held: entries, bytes, whether the cap bit, or that the root could not be
+# listed. Before any build the row says so rather than building one here (/state is chrome, not a turn site).
+# Pure over the state.
+fn _state_map_row() {
+    ui_label("  map     : ");
+    if (config_project_map() == 0) {
+        ui_emit(ROLE_FAINT, "off"); ui_emit(ROLE_MUTED, " ([project].map = false — the model asks list_dir instead)"); oprintln("");
+        return 0;
+    }
+    if (project_map_current() == 0) {
+        ui_emit(ROLE_MUTED, "on"); ui_emit(ROLE_FAINT, " · the top two levels of the project root, built at each turn (none built yet)"); oprintln("");
+        return 0;
+    }
+    ui_emit(ROLE_MUTED, "on"); ui_emit(ROLE_FAINT, " · last build: ");
+    if (project_map_unmappable() == 1) { ui_emit(ROLE_RED, "the root could not be listed — the model was told so"); oprintln(""); return 0; }
+    ofmt_int(project_map_entries()); ui_emit(ROLE_FAINT, " entries, ");
+    ofmt_int(project_map_bytes()); ui_emit(ROLE_FAINT, " bytes");
+    if (project_map_truncated() == 1) { ui_emit(ROLE_RED, " (truncated at the cap — the model was told to list_dir for the rest)"); }
+    oprintln("");
+    return 0;
+}
 fn _state_reason_row() {
     ui_label("  reason  : ");
     if (config_hoosh_reasoning() == 0) {
@@ -529,6 +551,7 @@ fn cmd_state() {
             ui_emit(ROLE_MUTED, " (/allow)"); oprintln("");
         } else { ui_emit(ROLE_MUTED, " — /allow to grant more"); oprintln(""); }
     }
+    _state_map_row();                      # 0.50.0 (F5): the project-map hint (it rides plain turns too, not only agentic ones)
     ui_label("  agent   : ");
     if (agent_enabled() == 1) {
         emit("agentic tool-calling on (");
@@ -2170,7 +2193,7 @@ fn cmd_reload() {
     if (config_source() == 3) {
         ui_emit(ROLE_FAINT, "  (legacy path — move it to .thoth/config.cyml)"); oprintln("");
     }
-    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url"); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url · [project].map"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
     ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file (0.44.3 — authority)"); oprintln("");
@@ -2914,6 +2937,7 @@ fn cmd_dry(line) {
     # injects mneme semantic recall keyed on the task (resolved at send, not in this preview).
     var mem = 0;
     if (seam_cap_state(SEAM_MEMORY) != CAP_ABSENT) { mem = memory_context(0); }
+    project_map_refresh();          # 0.50.0 (F5): the map a turn would carry — the preview shows its exact bytes
     var stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     var buf = hoosh_dry_buf();

@@ -2,6 +2,72 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.50.0] - 2026-09-13
+
+**A project map rides every turn's system prompt.** The fifth feature arc under the batch discipline (F5). The
+agent knew WHERE it stood (0.44.1's workspace clause names the root) but not what the tree looked like — its
+first act on a fresh task was a `list_dir` round, then another one level down. Now a small map of the launch root
+travels with the prompt, so the round is spent on the task. Suite **587 + 1706 + 954 + 769 + 190 + 5** (+98).
+Linux / aarch64 / AGNOS build with 0.45.6's warning set; macOS built and tested natively at the 6.6.3 pin.
+
+### Added — the project-map hint (F5)
+
+- **What it holds.** `project_map_build` (src/project.cyr): the top two levels of the launch root — every
+  top-level entry, directories first in byte order and `/`-suffixed, each top-level directory with up to
+  `PMAP_DIR_NAMES` (12) of its children and `+N more`; the directories `search` never walks (`_search_skip_dir`:
+  `.git`, `build`, `node_modules`, `target`, …), dot-directories and symlinked directories are NAMED with
+  `(not walked)` — the agent should know `target/` exists without three thousand lines of it, and the jail never
+  follows a link out of the project, so neither does the map; thoth's own files (`_project_sensitive`: `.thoth`,
+  the session / history / policy / log files) are not on it, as the tools refuse them. At most `PROJ_MAP_CAP`
+  (2 KiB): a line goes on whole or not at all (never a cut inside a name or a multi-byte character), the walk
+  stops the moment the cap bites, `... (map truncated at N bytes)` closes the map on its own line, and `/state`
+  counts only what landed. A directory past the listing caps says `(more entries than the map lists - list_dir)`
+  and one that cannot be opened `(could not be listed)` — each bound named for what it is; a ROOT in either
+  state maps to a one-line notice, never silence. A name's control bytes read as `?` (a checked-in name with a
+  newline must not forge a line of a system message). With `[hoosh].tools` off the header names no tool the
+  model does not have. Alloc-free: `dir_list_into` into fixed caller-owned buffers, ONE reusable `Str` header
+  for the stdlib calls, an index insertion sort, and a probe of its own — `_pmap_is_dir`, an `O_NONBLOCK` open
+  + `getdents` — because `is_dir`'s plain open would block forever on a FIFO in the tree, every turn, before
+  the request left. On thoth itself: 73 entries, ~1 KiB.
+- **When.** `project_map_refresh()` runs at the three turn sites — `hoosh_send`, `agent_turn`, `cmd_dry` —
+  once per turn and never mid-round, so a file the agent created is on the NEXT turn's map and a delegated
+  child (`_sub_build_request`) reuses the parent's (a tool round must not rewrite what the request builders
+  read — the subagent swap-set rule). Every agentic round re-sends it with the rest of the system prompt: the
+  same bytes each round, which is what a provider's prefix cache wants.
+- **Where.** The five request builders emit it through `_hoosh_emit_map` as a system message after the persona
+  and the memory context, before the recap and the history — only when `project_map_current()` is set, which is
+  0 until a turn site refreshed it: the suite's request goldens stay byte-identical, and `[project].map =
+  false` leaves every request exactly as it was (ADR-0010). `/dry` shows the exact message.
+- **Control and sight.** `[project].map = true|false` (default on) — a PREFERENCE under ADR-0021: a repo's local
+  layer may turn it off; it names only what the jail already lets the model list; `/reload` lists it among the
+  keys that take effect at the next turn. `/state` gains a `map` row on every session, agentic or not (off · on,
+  none built yet · last build: N entries, N bytes, truncated · the root could not be listed), and the log's
+  `turn_start` record a `map_bytes` beside `tool_bytes` (0 when the map is off). Documented in
+  `.thoth/config.cyml.example`, `docs/architecture/003` and ADR-0015's "possible later tools" line (closed:
+  `search` 0.40.0, the map 0.50.0). On the PE lane `dir_list_into` has no arm — the map is simply absent there.
+
+Tests (+98): `test_project_map` (agent) over the tracked fixture tree `tests/fixtures/map/` — a first guard that
+names the fixture when it is missing (an unlistable root is a notice, not an empty map, so `n > 0` alone would
+not have said so), the header with
+and without the tool sentence, a directory's children, dirs-first byte order, the third level absent, junk /
+dot / symlinked directories named not walked with nothing under them, thoth's own directory and the legacy
+config absent, twelve names then `+2 more`, the files line, the order among directories and before the files,
+the entry / byte counts; the cap at 256 bytes (the marker last and on its own line, no blank line, the lines
+that fit whole, the line that did not fit absent, the count what landed); a newline inside a file name reading
+as `?`; an empty child and a child past the listing caps (built under `build/` at test time, each named for what
+it is), a root past the caps (a notice, flagged unmappable not truncated), a FIFO in the root (the probe does not
+block — a blocking probe hangs the suite, the honest net); the switch clearing the counters; the message in all
+five builders — each body parsed back as JSON (persona + map + user; map first when there is no persona; the
+child's map second), the byte-identical floor when cleared; `test_state_map_row` (core) — off, on before a
+build, the counts, the truncation notice, the unlistable root; `test_dry_map` (core) — the `/dry` turn site, the
+one of the three that is network-free, standing for all three: the preview body carries the map as a system
+message before the user turn, the build stays for `/state`, and with the key off the same site sends none and
+clears the counts; the documented-key scan. Proven by breaking, eleven ways: junk directories walked, sensitive
+names on the map, no byte order, the child body without the map, the switch ignored, symlinks walked, an
+unmappable root silent, names not cleaned, a partial line kept at the cap, a blocking probe (the suite hung under
+`timeout`), the `/dry` refresh removed. Live: `/dry` on this repo (and on the Mac), on the fixture, the
+switch from the global and the local layer, `/state` before and after.
+
 ## [0.49.0] - 2026-09-13
 
 **The window takes the mouse — and a resumed reply's tool calls and citations draw again.** The fourth feature

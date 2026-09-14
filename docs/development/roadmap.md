@@ -181,8 +181,8 @@ unsure, patch.
   capability.
 - **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing), `0.47.0`
   the second (F2, the picker's provider health + pricing), `0.48.0` the third (F3, reasoning across resume),
-  `0.49.0` the fourth (F4, GUI pointer plumbing + resumed cards); the next decided feature earns `0.50.0`. A
-  minor is never a sweep of small things — those are patches.
+  `0.49.0` the fourth (F4, GUI pointer plumbing + resumed cards), `0.50.0` the fifth (F5, the project-map
+  hint); the next decided feature earns `0.51.0`. A minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -231,7 +231,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 **Permanent by design (not waiting):** the Windows lane's architectural half — `SYS_SOCKET` /
 `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). The lane gates closed, announced.
 
-### Feature arcs → minors (0.50.0 and on) — candidates, unpinned until decided
+### Feature arcs → minors (0.51.0 and on) — candidates, unpinned until decided
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
 > being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
@@ -278,8 +278,17 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   right button / double-click semantics; clicks that arrive while the drawn frame is stale (a key or a resize in
   the same batch) are dropped rather than resolved against old geometry; the pointer path is Linux-Wayland
   (aethersafha refused Wayland — the AGNOS window backend is still to come).
-- **F5 — A lightweight project-map hint** in the system prompt, so the agent gets a cheap directory
-  overview without a `list_dir` round-trip.
+- **F5 — A lightweight project-map hint — shipped as 0.50.0.** Every turn's system prompt carries a map of
+  the launch root (the top two levels: directories first in byte order, each top-level directory with up to
+  a dozen children and `+N more`; search's junk directories, dot-directories and symlinks named but not walked;
+  thoth's own files omitted; ≤ 2 KiB with a marker; `[project].map`, default on, a preference), rebuilt at each
+  turn, reused by a delegated child, shown by `/dry` and `/state`. Residuals: the effect on `list_dir`
+  round-trips was NOT measured live (no model here; the 0.44.1 lesson says measure prose before trusting it —
+  count `list_dir` calls per turn in `--logs` with the map on vs off); a root with more than 256 entries maps
+  to a notice, not a partial map; the dirs-first order needs one probe per child of every walked directory (up
+  to 256 × 256 opens a turn on a wide tree — `dir_list_into` does not surface `d_type`; a stdlib arm that did
+  would make the walk one `getdents` per directory); every agentic round re-sends the map's bytes (the same
+  bytes each round, which is what provider prefix caching wants).
 - **Gated on another domain's Cyrius port (recorded, not on a numbered arc):** the **bhava**
   sentiment→mood loop (bhava is **2.0.0** and still Rust — consume it when it is ported, never
   reimplement sentiment/mood analysis); **voice / mic** — mic → speech-to-text and read-back — by
