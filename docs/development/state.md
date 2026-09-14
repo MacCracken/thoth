@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.45.5** — **repair batch 1** (2026-09-13). The first patch cut under the batch discipline — repairs only: file
+CONTENT goes through the TEXT policy on `/read`, the tree pane's Enter and every diff body (in place for `/read`, a
+scratch copy for diffs; a CRLF's CR folds to a space); the memory double read closes without a global config on the
+memory INDEX's bytes (`_thoth_index_is_global`, same level rule and `$PWD` veto); the feed painter keeps a red/green
+notice its colour under `rainbow` (`ui_role_is_semantic`) and runs the gradient diagonally (`feed_rainbow_row_set`,
+the GUI raster by cell row); the line tier tints fenced code like the TUI; `[history].file` takes `~/` and `$HOME/`,
+`[history].size` trims the file; the streaming usage frame was decided the other way (thoth keeps requesting it —
+hoosh names the decode as its follow-up). The Mac got the 6.6.2 toolchain and ran the native suite at the pin — which
+caught a wrong test golden of 0.45.3's (no `$PWD` under `cyrius test` there), fixed. Suite **326 + 1478 + 846 + 666
++ 190 + 5** (+122); Linux / aarch64 / AGNOS build with 0.45.2's warning set; macOS green at the pin.
+
 **0.45.4** — **the tagline is back under the title; the status bar sits two columns in behind a flat folder**
 (2026-09-13). Two follow-ups to the greeting block: `Thinks, Handles, Orchestrates, Transforms, Heals` (muted)
 directly under `{(o> Thoth - The Librarian: <version>`, then the open row and `Status:`; and the status bar
@@ -3418,15 +3429,15 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `macos` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **Re-verified at 0.45.3 on the 6.6.2 pin: Linux built and tested, aarch64 and AGNOS built (0.45.2's warning
-sets, unchanged); macOS last built and tested natively at 0.45.2 (with the 6.6.0 installed there). Each row carries its own stamp** — see
+source. **Re-verified at 0.45.5 on the 6.6.2 pin: Linux built and tested, aarch64 and AGNOS built (0.45.2's warning
+sets, unchanged), macOS built and tested natively AT the pin (6.6.2 installed there at 0.45.5). Each row carries its own stamp** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
 | x86_64 Linux | _(default)_ | **shipped** — built, tested (319 + 1348 + 846 + 539 + 183 + 5), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (re-verified 0.45.2 / Cyrius 6.6.2) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green at 0.45.2** (Apple Silicon, macOS 26.6.2; the 6.6.0 toolchain installed there, against the 6.6.2 pin — a run at the pin itself is owed). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN at 0.45.5** (Apple Silicon, macOS 26.6.2; the 6.6.2 toolchain installed there at 0.45.5 by the tarball recipe — the owed run is paid; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS** — build re-verified 0.45.2 (the old `SYS_LSEEK` and `SIGHUP` blockers are both closed); **runtime proven 2026-09-04**: `./scripts/agnos-run.sh` boots the real kernel under QEMU and the 5,371,944-byte ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0. Verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left: architectural `SYS_SOCKET`/`SYS_CONNECT` + epoll (IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) | `build/thoth.exe` |
 
@@ -3548,8 +3559,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **324 + 1397 + 846 + 650 + 183 + 5 assertions across the suites as of
-0.45.4 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **326 + 1478 + 846 + 666 + 190 + 5 assertions across the suites as of
+0.45.5 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3577,9 +3588,9 @@ BSD termios ⇒ no T2; see the Targets matrix); Windows staged, blocked entirely
 the real spine (hoosh/daimon) is a host-side step — the build sandbox blocks a compiled binary's TCP.
 
 **Below the gates, the work is cut by the batch discipline (0.45.4):** repairs ship as numbered **patch
-batches** — `0.45.5` (content escapes on `/read` / tree Enter / `/git`, the memory double read without a global
-config, `rainbow` tinting notices, the never-sent streaming usage frame, history-file polish, the owed macOS run at
-the pin, batched polish) and `0.45.6` (hook facts into the environment, the darshana / bote-core / cyrius refresh,
-the Windows exclusive create) — while **minors are held for feature arcs** (`0.46.0` = the first decided feature;
+batches** — `0.45.5` shipped batch 1 (content escapes, the memory double read, `rainbow`'s notices and diagonal,
+the streaming-usage decision, history-file polish, macOS at the pin); `0.45.6` is batch 2 (hook facts into the
+environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create) — while **minors are held
+for feature arcs** (`0.46.0` = the first decided feature;
 the candidates are listed, GUI slash-command routing recommended first). Defects owned upstream or by the floor sit
 in a waiting-on table with the version each was last checked against.

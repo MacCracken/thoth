@@ -50,3 +50,31 @@ fn _canary_ok(p, n) {
     while (i < n) { if (load8(p + i) != 209) { return 0; } i = i + 1; }
     return 1;
 }
+
+# --- stdout capture (0.45.5) ------------------------------------------------
+# _t_fd1_to / _t_fd1_restore: capture what a LINE-tier emitter writes to fd 1 — the one sink a test cannot
+# otherwise read (OUT_RING declines the line-tier rainbow by design, so it can only be seen on fd 1). fd 1 is
+# parked on _T_FD1_PARK and pointed at `path` (created 0600, truncated); restore puts it back. ⚠ Make NO
+# assertion between the two calls — the harness prints its verdicts on fd 1 too. POSIX only (dup2): the
+# suites never run on AGNOS, and a caller treats -1 as "cannot capture here" (skip, honestly).
+var _T_FD1_PARK = 200;
+fn _t_fd1_to(path) {
+    #ifndef CYRIUS_TARGET_AGNOS
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    if (fd < 0) { return 0 - 1; }
+    if (sys_dup2(1, _T_FD1_PARK) < 0) { file_close(fd); return 0 - 1; }
+    sys_dup2(fd, 1);
+    file_close(fd);
+    return 0;
+    #endif
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0 - 1;
+    #endif
+}
+fn _t_fd1_restore() {
+    #ifndef CYRIUS_TARGET_AGNOS
+    sys_dup2(_T_FD1_PARK, 1);
+    file_close(_T_FD1_PARK);
+    #endif
+    return 0;
+}

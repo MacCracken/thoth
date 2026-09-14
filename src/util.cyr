@@ -134,13 +134,23 @@ fn _clean_byte(b, keep_ws) {
     if (b == 127) { return 63; }
     return b;
 }
+# _clean_at (0.45.5): the policy for byte i of the n bytes at p — _clean_byte plus the ONE rule that needs a
+# lookahead. Under the TEXT policy a CR directly before an LF is a Windows line end, not a carriage return that
+# could paint over the row: it becomes a SPACE (invisible at a line end, byte count kept), so a CRLF file read
+# with /read does not sprout a '?' at the end of every line. A lone CR stays '?': on the feed and the terminal
+# it would move the cursor to column 0 and let the rest of the line overwrite what came before it.
+fn _clean_at(p, i, n, keep_ws) {
+    var b = load8(p + i) & 255;
+    if ((keep_ws == 1) && (b == 13)) { if ((i + 1) < n) { if (load8(p + i + 1) == 10) { return 32; } } }
+    return _clean_byte(b, keep_ws);
+}
 fn _emit_clean_n(p, n, keep_ws) {
     if (p == 0) { return 0; }
     var buf[264];
     var o = 0;
     var i = 0;
     while (i < n) {
-        store8(&buf + o, _clean_byte(load8(p + i) & 255, keep_ws));
+        store8(&buf + o, _clean_at(p, i, n, keep_ws));
         o = o + 1;
         if (o >= 255) { store8(&buf + o, 0); emit(&buf); o = 0; }
         i = i + 1;
@@ -172,7 +182,7 @@ fn _clean_in_place_n(p, n, keep_ws) {
     var i = 0;
     while (i < n) {
         var b = load8(p + i) & 255;
-        var nb = _clean_byte(b, keep_ws);
+        var nb = _clean_at(p, i, n, keep_ws);
         if (nb != b) { store8(p + i, nb); changed = changed + 1; }
         i = i + 1;
     }

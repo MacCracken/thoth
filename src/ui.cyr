@@ -36,6 +36,17 @@ var UI_ROLE_COUNT = 8;
 var UI_TAB_COLS = 8;       # a tab's worth of columns — the chrome's indent unit (0.45.3: the greeting's help line sits 2x in)
 var UI_STATUS_INDENT = 2;  # the status bar / strip's inset from the edge, in columns (0.45.3)
 
+# ui_role_is_semantic (0.45.5): 1 for a role whose COLOUR carries meaning — green is ok / added, red is error /
+# denied / deleted — as opposed to the presentation roles (accent, fg, muted, faint, blue) that only shade prose.
+# The feed painter keeps a semantic span's own colour under /theme rainbow: a t-ron DENY line or the /reprobe
+# health notice must stay red or green, not cycle with the row. Directly painted chrome never went through the
+# painter and was always right.
+fn ui_role_is_semantic(role) {
+    if (role == ROLE_GREEN) { return 1; }
+    if (role == ROLE_RED) { return 1; }
+    return 0;
+}
+
 # Theme axis (0.10.0): a theme sits IN FRONT of the role axis — the three color
 # dispatchers (_ui_rgb/_ui_idx256/_ui_code16) branch on _ui_theme. dark is today's
 # amber (the byte-identical default); light is the mockup's warm-light palette. The
@@ -346,6 +357,8 @@ fn ui_theme_from_name(s) {
 # per full cycle: a touch under a standard 80-100 col terminal, so a wide line shows the whole
 # spectrum without the hue crawling so fast it reads as noise.
 var UI_RAINBOW_STEP = 18;
+var UI_RAINBOW_ROW_SHIFT = 2; # 0.45.5: the DIAGONAL — each row starts its gradient this many columns further along, so the
+                              # hue runs down the feed at a slant (lolcat's look) instead of every row sharing one gradient
 var _ui_rainbow_phase = 0;    # running; advances per glyph, wraps mod ANUENUE_PHASE_MOD
 var _ui_rainbow_ptr = 0;      # alloc(UI_RAINBOW_SGR_CAP): SHARED scratch for one escape
 var UI_RAINBOW_SGR_CAP = 32;  # "ESC[38;2;R;G;Bm" + NUL is <= 20; 32 is slack

@@ -1224,6 +1224,24 @@ fn test_gui_rainbow() {
     assert(inkA != inkB, "each glyph gets its OWN hue (per-glyph resolve, not the IR's per-run color)");
     assert_eq(inkA, ui_rainbow_rgb(0), "glyph 0 = the hue at column 0 (red)");
     assert_eq(inkB, ui_rainbow_rgb(UI_RAINBOW_STEP), "glyph 1 = the hue one UI_RAINBOW_STEP on");
+    # 0.45.5: the diagonal — one cell row down, column 0 starts UI_RAINBOW_ROW_SHIFT steps along (a two-row fb)
+    var fb2h = GR_GLYPH_H * 2;
+    var fb2 = alloc(fbw * fb2h * 4);
+    gr_fb_clear(fb2, fbw, fb2h, 0);
+    gr_fb_text(fb2, fbw, fb2h, 0, GR_GLYPH_H, "A", GD_RAINBOW, 0);
+    var inkR = 0;
+    var yr = GR_GLYPH_H;
+    while (yr < fb2h) {
+        var xr = 0;
+        while (xr < GR_GLYPH_W) {
+            var pr = load32(fb2 + (yr * fbw + xr) * 4);
+            if (pr != 0) { inkR = pr; }
+            xr = xr + 1;
+        }
+        yr = yr + 1;
+    }
+    assert(inkR != 0, "row 1 glyph painted");
+    assert_eq(inkR, ui_rainbow_rgb(UI_RAINBOW_ROW_SHIFT * UI_RAINBOW_STEP), "row 1, column 0 = the hue UI_RAINBOW_ROW_SHIFT steps along (the slant)");
 
     # A real color still passes through untouched (the sentinel is out of the 24-bit range, so it can never
     # collide with one).

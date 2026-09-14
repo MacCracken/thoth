@@ -110,6 +110,18 @@ fn _hl_span(lang, buf, n, reset_str) {
     return 1;
 }
 
+# _diff_clean_body (0.45.5): copy n bytes at p into the diff's scratch and apply the TEXT policy there; returns the
+# scratch, or 0 when the line is longer than DIFF_CLEAN_CAP (the caller then streams it clean, unhighlighted).
+var DIFF_CLEAN_CAP = 16384;
+var _diff_clean_buf = 0;
+fn _diff_clean_body(p, n) {
+    if (n > DIFF_CLEAN_CAP) { return 0; }
+    if (_diff_clean_buf == 0) { _diff_clean_buf = alloc(DIFF_CLEAN_CAP); }
+    memcpy(_diff_clean_buf, p, n);
+    clean_text_n(_diff_clean_buf, n);
+    return _diff_clean_buf;
+}
+
 # _diff_emit_line: render one hunk line — line-number gutter (faint), a colored
 # +/-/space gutter, then the line body: syntax-highlighted via `lang` (or emitted in
 # the gutter `role` when lang==0 / plain tier). kind 0=context 1=del 2=add. I/O.
@@ -148,9 +160,15 @@ fn _diff_emit_line(role, gutter, lineno, body_buf, off, len, lang) {
     # — println supplies the break.
     var rl = len;
     if (rl > 0) { if (load8(body_buf + off + rl - 1) == 10) { rl = rl - 1; } }
-    if ((lang != 0) && (plain == 0)) { _hl_span(lang, body_buf + off, rl, rst); }
-    elif (plain == 0) { emit(ui_sgr(role)); emit_n(body_buf + off, rl); emit(rst); }
-    else { emit_n(body_buf + off, rl); }
+    # 0.45.5: the body is a line of the HEAD blob or the worktree — the repository's own bytes, untrusted — so it
+    # goes through the TEXT policy. Into a SCRATCH copy, never in place: cmd_write renders its diff from the buffer
+    # it then writes to disk, and sit's line spans are the vendored reader's memory. A line past the scratch's cap
+    # is drawn clean without highlighting (the highlighter needs one contiguous buffer) — honest, not silent.
+    var body = _diff_clean_body(body_buf + off, rl);
+    if (body == 0) { if (plain == 0) { emit(ui_sgr(role)); } emit_clean_text_n(body_buf + off, rl); if (plain == 0) { emit(rst); } }
+    elif ((lang != 0) && (plain == 0)) { _hl_span(lang, body, rl, rst); }
+    elif (plain == 0) { emit(ui_sgr(role)); emit_n(body, rl); emit(rst); }
+    else { emit_n(body, rl); }
     if (has_bg == 1) { emit(ui_eol()); emit(ui_reset()); }
     oprintln("");
     return 0;

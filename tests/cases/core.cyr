@@ -1485,6 +1485,65 @@ fn test_inhist() {
 # build/ (gitignored). Verifies load->ring, save->reload round-trip, ignoredups across
 # persistence, and the degrade-closed unwritable-path path. The 0600 create-mode is
 # asserted empirically by the shell (stat) after the suite creates the mode-check file.
+# 0.45.5 (repair batch 1, item 5): `~/` and `$HOME/` on [history].file expand at load; [history].size trims the
+# FILE (not the ring) to the most recent N lines at the next save.
+fn test_inhist_polish() {
+    test_group("input history: ~/$HOME expansion + [history].size trim (config.cyr + inhist.cyr, 0.45.5)");
+    var home = getenv("HOME");
+    if (home != 0) {
+        var hl = strlen(home);
+        var e1 = _cfg_expand_home("~/.thoth_history");
+        assert_eq(memeq(e1, home, hl), 1, "`~/x` starts with $HOME");
+        assert(streq(e1 + hl, "/.thoth_history") == 1, "...and continues with the rest of the path");
+        assert(streq(_cfg_expand_home("~"), home) == 1, "a bare `~` is $HOME");
+        var e2 = _cfg_expand_home("$HOME/h");
+        assert_eq(memeq(e2, home, hl), 1, "`$HOME/x` starts with $HOME");
+        assert(streq(e2 + hl, "/h") == 1, "...then the rest");
+        assert(streq(_cfg_expand_home("$HOME"), home) == 1, "a bare `$HOME` is $HOME");
+        assert(streq(_cfg_expand_home("~user/x"), "~user/x") == 1, "`~user/…` is left alone (no user lookup)");
+        assert(streq(_cfg_expand_home("a/~/b"), "a/~/b") == 1, "a `~` elsewhere is left alone");
+        assert(streq(_cfg_expand_home("$HOMEX/y"), "$HOMEX/y") == 1, "`$HOMEX` is not `$HOME`");
+        assert(streq(_cfg_expand_home(".thoth_history"), ".thoth_history") == 1, "a relative path is used as written");
+        assert(streq(_cfg_expand_home("/abs/h"), "/abs/h") == 1, "an absolute path is used as written");
+    }
+    assert_eq(_cfg_expand_home(0), 0, "null -> null");
+    # the size key: absent -> the ring; written -> clamped to 1..INHIST_CAP
+    var hs = _lay_parse("[history]\nsize = 50\n");
+    assert_eq(_cfg2_int(_cfg_section_pairs(hs, "history"), 0, "size"), 50, "[history].size parses as an int");
+    var sv_size = _cfg_history_size;
+    _cfg_history_size = 0 - 1; assert_eq(config_history_size(), INHIST_CAP, "absent -> the whole ring (128)");
+    _cfg_history_size = 50;    assert_eq(config_history_size(), 50, "50 -> 50");
+    _cfg_history_size = 0;     assert_eq(config_history_size(), 1, "0 -> 1 (never silently nothing)");
+    _cfg_history_size = 9999;  assert_eq(config_history_size(), INHIST_CAP, "over the ring -> the ring");
+    _cfg_history_size = sv_size;
+    # the trim: a save keeps the most recent N, the ring keeps everything
+    var tpath = "build/.thoth_hist_size.tmp";
+    file_write_all(tpath, "", 0);
+    inhist_init();
+    inhist_persist_init(tpath);
+    inhist_persist_size_set(2);
+    assert_eq(inhist_persist_size(), 2, "size set to 2");
+    inhist_push("one", 3); inhist_push("two", 3); inhist_push("three", 5);
+    inhist_persist_save();
+    assert_eq(inhist_count(), 3, "the ring still holds all three (recall is untrimmed)");
+    var tbuf[64];
+    var tn = file_read_all(tpath, &tbuf, 63);
+    if (tn < 0) { tn = 0; }
+    store8(&tbuf + tn, 0);
+    assert(streq(&tbuf, "two\nthree\n") == 1, "the file keeps only the most recent 2 lines (histfilesize)");
+    inhist_init();
+    assert_eq(inhist_persist_init(tpath), 2, "...and a reload recalls exactly those 2");
+    assert(streq(inhist_entry_ptr(1), "three") == 1, "...newest last");
+    inhist_persist_size_set(0);
+    assert_eq(inhist_persist_size(), 1, "a size under 1 clamps to 1");
+    inhist_persist_size_set(9999);
+    assert_eq(inhist_persist_size(), INHIST_CAP, "a size over the ring clamps to the ring");
+    inhist_persist_size_set(INHIST_CAP);
+    xunlink(tpath);
+    inhist_init();
+    return 0;
+}
+
 fn test_inhist_persist() {
     test_group("input-history persistence (0.11.2)");
     var lpath = "build/.thoth_hist_load.tmp";
@@ -2885,6 +2944,102 @@ fn test_memory_root_identity() {
     return 0;
 }
 
+# --- MEMORY INDEX WITNESS (0.45.5, repair batch 1 item 2): the double read closed when there is no global config --
+# With no ~/.thoth/config.cyml the config walk meets no bytes, so 0.45.3 left a walked-up ~/.thoth a project's
+# root and the store was read twice. The memory INDEX is the store's own witness: `<root>/memory/MEMORY.md`
+# holding the global index's bytes is that index seen from below (or a verbatim copy — the same bytes injected
+# twice is exactly the waste the flag prevents). Same level rule, same $PWD veto. Stated residuals: a store
+# with no MEMORY.md gives no signal; a DIFFERENT index is a project's.
+fn _miw_reset() {
+    _mri_reset();
+    _cfg_gindex_c = 0; _cfg_gindex_done = 0; _thoth_idx_lvl = 0 - 1;
+    return 0;
+}
+fn test_memory_index_witness() {
+    test_group("memory root: the memory INDEX as a byte witness — the double read closes without a global config (0.45.5)");
+    var _fx_home = "tests/fixtures/home";
+    var _fx_dir = "tests/fixtures/home/.thoth";
+    var _fx_idx = "tests/fixtures/home/.thoth/memory/MEMORY.md";
+    var _fx_mem = "tests/fixtures/home/.thoth/memory";
+    var _saved_gpath = _cfg_gpath_c;
+    var _saved_gdone = _cfg_gpath_done;
+
+    # --- the comparer's cap is a parameter now: a file AT the cap is "different" (a doubt drops no layer) ---
+    assert_eq(_cfg_same_bytes_cap("VERSION", "VERSION", 4), 0, "a file at a 4-byte cap is reported different");
+    assert_eq(_cfg_same_bytes_cap("VERSION", "VERSION", 4096), 1, "...and identical under a cap that holds it");
+    assert_eq(_cfg_same_bytes("VERSION", "VERSION"), 1, "_cfg_same_bytes is the config cap (32 KiB)");
+
+    # --- the witness itself ---
+    _cfg_gindex_c = _fx_idx; _cfg_gindex_done = 1;               # "the global index": the bytes the walk will meet
+    assert_eq(_thoth_index_is_global(_fx_dir), 1, "the fixture home's own index IS the global index");
+    assert_eq(_thoth_index_is_global("tests/fixtures/proj/.thoth"), 0, "a project store's DIFFERENT index is not");
+    assert_eq(_thoth_index_is_global("tests/fixtures/bare/.thoth"), 0, "a store with no MEMORY.md gives no signal");
+    assert_eq(_thoth_index_is_global(0), 0, "no root -> 0");
+    _cfg_gindex_c = 0; _cfg_gindex_done = 1;
+    assert_eq(_thoth_index_is_global(_fx_dir), 0, "no global index -> no witness");
+
+    # --- end to end: NO global config, the walk lands in the fixture home at level 0, the INDEX recognises it ---
+    _cfg_walk_dir = _fx_dir;
+    _cfg_gpath_c = 0; _cfg_gpath_done = 1;                       # no ~/.thoth/config.cyml: the 0.45.3 residual
+    _cfg_gindex_c = _fx_idx; _cfg_gindex_done = 1;
+    _cfg_pwd_depth_c = 0; _cfg_pwd_depth_done = 1;               # "the shell says CWD is $HOME"
+    _cfg_memory_enabled = 1;
+    _mri_reset();
+    _thoth_root_resolve();
+    assert_eq(_cfg_lglobal_lvl, 0 - 1, "premise: the config walk met no global bytes");
+    assert_eq(_thoth_idx_lvl, 0, "the index witness matched at the root's level");
+    assert_eq(thoth_root_is_home(), 1, "...so the walked root IS ~/.thoth");
+    assert_eq(_mem_global_dir_under(_fx_home), 0, "...and memory_global_dir reports NO second layer");
+    # were the root NOT recognised, a real $HOME would answer the fixture store as the global layer — stand that in
+    # only in that case, so the count below discriminates (recognised: once; not: twice)
+    if (thoth_root_is_home() == 0) { _mem_gdir_c = _fx_mem; _mem_gdir_done = 1; }
+    var _p1 = memory_system_prompt();
+    var _c1 = 0;
+    if (_p1 != 0) { _c1 = _t_count_sub(_p1, strlen(_p1), "FIXTURE-FACT-0453", 17); }
+    assert_eq(_c1, 1, "the fact is injected ONCE (the 0.45.3 double read is closed)");
+
+    # the shell vetoes exactly as it does the config witness: CWD 2 under $HOME, the root at level 0
+    _cfg_pwd_depth_c = 2; _cfg_pwd_depth_done = 1;
+    _miw_reset(); _cfg_gindex_c = _fx_idx; _cfg_gindex_done = 1;
+    _thoth_root_resolve();
+    assert_eq(_thoth_idx_lvl, 0, "the index still matches at level 0");
+    assert_eq(thoth_root_is_home(), 0, "...but the shell's depth disagrees -> not home (a copied index over different facts is what this guards)");
+
+    # a project store with its own index: no witness, two layers
+    _cfg_walk_dir = "tests/fixtures/proj/.thoth";
+    _cfg_pwd_depth_c = 0; _cfg_pwd_depth_done = 1;
+    _miw_reset(); _cfg_gindex_c = _fx_idx; _cfg_gindex_done = 1;
+    _thoth_root_resolve();
+    assert_eq(_thoth_idx_lvl, 0 - 1, "a different index is no witness");
+    assert_eq(thoth_root_is_home(), 0, "...so a project store stays a project's");
+    var _g3 = _mem_global_dir_under(_fx_home);
+    assert((_g3 != 0) && (streq(_g3, _fx_mem) == 1), "...and the global layer is reported beside it");
+
+    # a store with fact files but no MEMORY.md: no signal — the stated residual, the double read stays there
+    _cfg_walk_dir = "tests/fixtures/bare/.thoth";
+    _miw_reset(); _cfg_gindex_c = _fx_idx; _cfg_gindex_done = 1;
+    _thoth_root_resolve();
+    assert_eq(_thoth_idx_lvl, 0 - 1, "no MEMORY.md -> no witness");
+    assert_eq(thoth_root_is_home(), 0, "...and no claim");
+
+    # the config witness still wins on its own (0.45.3's path is untouched): global config bytes, no index match needed
+    _cfg_walk_dir = _fx_dir;
+    _cfg_gpath_c = "tests/fixtures/home/.thoth/config.cyml"; _cfg_gpath_done = 1;
+    _miw_reset(); _cfg_gindex_c = 0; _cfg_gindex_done = 1;
+    _thoth_root_resolve();
+    assert_eq(_cfg_lglobal_lvl, 0, "the config walk meets the global bytes at level 0");
+    assert_eq(_thoth_idx_lvl, 0 - 1, "...the index witness was not needed (and not consulted)");
+    assert_eq(thoth_root_is_home(), 1, "...and the root is home by the config witness alone");
+
+    # restore: the real walks, every cache unresolved
+    _cfg_walk_dir = ".thoth";
+    _cfg_gpath_c = _saved_gpath; _cfg_gpath_done = _saved_gdone;
+    _cfg_pwd_depth_c = 0; _cfg_pwd_depth_done = 0;
+    _cfg_memory_enabled = 0;
+    _miw_reset();
+    return 0;
+}
+
 fn test_config_layering() {
     test_group("config layering: local over global (config.cyr, 0.43.3)");
 
@@ -3904,6 +4059,130 @@ fn test_cmd_echo_sanitise() {
 # precedent), so a path is cleaned for DISPLAY and used raw. Every door was reproduced under a pty through a repo-local
 # [alias] first. The write-error lines use a symlink to /dev/full, which fails every write; where there is no
 # /dev/full they are skipped.
+# _cs_feed_has_byte: 1 if any feed line holds byte `b` (raw, no escape parsing) — the leak detector for a byte
+# thoth's own SGRs never contain (BEL, a raw CR).
+fn _cs_feed_has_byte(b) {
+    var r = 0;
+    while (r < feed_count()) {
+        var p = feed_line_ptr(r); var n = feed_line_len(r); var i = 0;
+        while (i < n) { if ((load8(p + i) & 255) == b) { return 1; } i = i + 1; }
+        r = r + 1;
+    }
+    return 0;
+}
+# _cs_bytes_clean: 1 if the n bytes at p hold no C0 other than LF/TAB and no DEL.
+fn _cs_bytes_clean(p, n) {
+    var i = 0;
+    while (i < n) {
+        var b = load8(p + i) & 255;
+        if ((b < 32) && (b != 10) && (b != 9)) { return 0; }
+        if (b == 127) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# 0.45.5 (repair batch 1, item 1): a file's CONTENT goes through the TEXT policy on /read (and so the tree pane's
+# Enter, which dispatches /read) and on every diff body. Before this the content was "the file's own text" — and a
+# cloned repository's file holding an escape ran it in the operator's terminal.
+fn test_content_sanitise() {
+    test_group("file content sanitised on /read and diff bodies; CRLF folds to a space (0.45.5)");
+    var saved_log = _log_enabled;
+    _log_enabled = 0;
+    var sv_tier = _ui_tier; var sv_depth = _ui_depth; var sv_det = _ui_detected;
+    session_reset();
+
+    # --- the policy's one lookahead rule: CR before LF is a line end (space), a lone CR is a control byte ('?') ---
+    var cb[16];
+    store8(&cb + 0, 97); store8(&cb + 1, 13); store8(&cb + 2, 10); store8(&cb + 3, 98); store8(&cb + 4, 13); store8(&cb + 5, 99);   # a CR LF b CR c
+    assert_eq(clean_text_n(&cb, 6), 2, "clean_text_n changes both CRs");
+    assert_eq(load8(&cb + 1), 32, "...the CR before an LF becomes a SPACE (a CRLF file keeps its line ends invisible)");
+    assert_eq(load8(&cb + 2), 10, "...the LF survives");
+    assert_eq(load8(&cb + 4), 63, "...a lone CR becomes '?' (it would paint over the row)");
+    var cl[16];
+    store8(&cl + 0, 97); store8(&cl + 1, 13); store8(&cl + 2, 10); store8(&cl + 3, 98);
+    assert_eq(clean_line_n(&cl, 4), 2, "the LABEL policy is untouched: CR and LF both become '?'");
+    assert_eq(load8(&cl + 1), 63, "...CR");
+    assert_eq(load8(&cl + 2), 63, "...LF");
+    var ce[16];
+    store8(&ce + 0, 97); store8(&ce + 1, 13); store8(&ce + 2, 10); store8(&ce + 3, 98); store8(&ce + 4, 13);           # a CR LF b CR (CR last)
+    feed_init(); out_mode_set(OUT_RING);
+    emit_clean_text_n(&ce, 5); feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(feed_count(), 2, "the emit form: the LF still breaks the line");
+    assert_eq(feed_line_len(0), 2, "...`a ` — the CR before it became a space");
+    assert_eq(load8(feed_line_ptr(0) + 1), 32, "...a space, in the emit form too (one loop behind both forms)");
+    assert_eq(_t_count_sub(feed_line_ptr(1), feed_line_len(1), "b?", 2), 1, "...a CR at the very end (no LF after it) is '?'");
+
+    # --- /read: a file holding a screen-clear, an OSC 52 clipboard write, a CRLF line and a lone CR ---
+    ui_force(PT_PLAIN, CD_NONE);
+    var cf = "/tmp/thoth_t_content.txt";
+    var body = "line1\r\n\x1b[2Jcleared\n\x1b]52;c;SGVsbG8=\x07osc\ttab\r\nlone\rcr\n";
+    var blen = strlen(body);
+    var fdc = file_open(cf, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fdc >= 0) { file_write(fdc, body, blen); file_close(fdc); }
+    assert(fdc >= 0, "premise: the scratch file was written");
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/read /tmp/thoth_t_content.txt");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_cs_feed_has_byte(27), 0, "no /read line carries a raw ESC — the screen clear and the OSC 52 are neutralised");
+    assert_eq(_cs_feed_has_byte(7), 0, "...nor the OSC's BEL terminator");
+    assert_eq(_cs_feed_has_byte(13), 0, "...nor a raw CR");
+    assert_eq(_mid_feed_count("?[2Jcleared"), 1, "the screen clear reads as `?[2Jcleared`");
+    assert_eq(_mid_feed_count("?]52;c;SGVsbG8=?osc\ttab"), 1, "the OSC 52 reads as text, its tab kept");
+    assert_eq(_mid_feed_count("lone?cr"), 1, "a lone CR is '?'");
+    assert_eq(_mid_feed_count("line1 "), 1, "a CRLF line ends in a space, not '?'");
+    assert_eq(_mid_feed_count("line1?"), 0, "...never `line1?`");
+    var hb[32]; var hl = fmt_int_buf(blen, &hb); store8(&hb + hl, 0);
+    var hdr[64]; var ho = _append_cstr_cap(&hdr, 0, 64, " ("); ho = _append_cstr_cap(&hdr, ho, 64, &hb); ho = _append_cstr_cap(&hdr, ho, 64, " bytes) ---"); store8(&hdr + ho, 0);
+    assert_eq(_mid_feed_count(&hdr), 1, "the header still counts the file's bytes (the policy substitutes, never drops)");
+    # the highlighted path draws the same cleaned buffer: at the rich tier a .cyr name goes through the highlighter
+    var cfc = "/tmp/thoth_t_content.cyr";
+    var fdh = file_open(cfc, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fdh >= 0) { file_write(fdh, body, blen); file_close(fdh); }
+    ui_force(PT_RICH, CD_TRUE);
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/read /tmp/thoth_t_content.cyr");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(detect_language(cfc) != 0, "premise: .cyr is highlighted at the rich tier");
+    assert_eq(_cs_bytes_clean(_read_buf, blen), 1, "the read buffer the highlighter draws from is clean in place (LF and TAB kept)");
+    assert_eq(_cs_feed_has_byte(7), 0, "...and no BEL reaches the highlighted feed either");
+    assert_eq(_cs_feed_has_byte(13), 0, "...nor a raw CR");
+    xunlink(cf); xunlink(cfc);
+
+    # --- diff bodies: cleaned in a SCRATCH copy — the buffers handed in are untouched (cmd_write writes one of them) ---
+    ui_force(PT_PLAIN, CD_NONE);
+    var od = alloc(64); var nd = alloc(64);
+    var os_ = "keep\nold \x1b[31mred\r\n"; var ns_ = "keep\nnew \x07bell\n";
+    memcpy(od, os_, strlen(os_)); memcpy(nd, ns_, strlen(ns_));
+    feed_init(); out_mode_set(OUT_RING);
+    diff_render("x.txt", od, strlen(os_), nd, strlen(ns_));
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_cs_feed_has_byte(27), 0, "a diff body's ESC never reaches the feed");
+    assert_eq(_cs_feed_has_byte(7), 0, "...nor its BEL");
+    assert_eq(_cs_feed_has_byte(13), 0, "...nor its CR");
+    assert_eq(_mid_feed_count("old ?[31mred"), 1, "the del line shows the escape as '?'");
+    assert_eq(_mid_feed_count("new ?bell"), 1, "the add line shows the BEL as '?'");
+    assert_eq(memeq(od, os_, strlen(os_)), 1, "the OLD buffer is byte-identical after rendering (cleaned in the scratch, never in place)");
+    assert_eq(memeq(nd, ns_, strlen(ns_)), 1, "...and so is the NEW buffer, which cmd_write goes on to write to disk");
+    # a line past the scratch cap streams clean, unhighlighted
+    var big = DIFF_CLEAN_CAP + 64;
+    var lb = alloc(big + 2);
+    var li = 0;
+    while (li < big) { store8(lb + li, 120); li = li + 1; }                    # 'x' * big
+    store8(lb + 100, 27); store8(lb + big, 10); store8(lb + big + 1, 0);       # an ESC inside, LF at the end
+    feed_init(); out_mode_set(OUT_RING);
+    diff_render("y.txt", "", 0, lb, big + 1);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_cs_feed_has_byte(27), 0, "a line longer than the scratch cap is still drawn without its ESC");
+    assert_eq(_mid_feed_count("xxxx?xxxx"), 1, "...the ESC as '?' in place");
+
+    ui_force(sv_tier, sv_depth); _ui_detected = sv_det;
+    _log_enabled = saved_log;
+    session_reset();
+    return 0;
+}
+
 fn test_path_echo_sanitise() {
     test_group("path echoes sanitised for display: /read /git /allow /save /audit export /write (0.45.0)");
     var saved_log = _log_enabled;

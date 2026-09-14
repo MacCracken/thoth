@@ -246,8 +246,9 @@ fn main() {
         var hpath = config_history_file();
         if (hpath != 0) {
             var hn = inhist_persist_init(hpath);
-            if (hn >= 0) { ui_emit(ROLE_FAINT, "input history: "); emit(hpath); ui_emit(ROLE_FAINT, " ("); ofmt_int(hn); ui_emit(ROLE_FAINT, " recalled)"); oprintln(""); }
-            else { ui_emit(ROLE_FAINT, "input history: cannot write "); emit(hpath); ui_emit(ROLE_FAINT, " — not persisted (in-memory only)"); oprintln(""); }
+            inhist_persist_size_set(config_history_size());   # 0.45.5: [history].size — the lines a save keeps
+            if (hn >= 0) { ui_emit(ROLE_FAINT, "input history: "); emit_clean_line(config_path_display(hpath)); ui_emit(ROLE_FAINT, " ("); ofmt_int(hn); ui_emit(ROLE_FAINT, " recalled)"); oprintln(""); }
+            else { ui_emit(ROLE_FAINT, "input history: cannot write "); emit_clean_line(config_path_display(hpath)); ui_emit(ROLE_FAINT, " — not persisted (in-memory only)"); oprintln(""); }
         }
         repl_loop();
         hooks_session_end();

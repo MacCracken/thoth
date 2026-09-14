@@ -1370,13 +1370,18 @@ fn cmd_read(line) {
     var path = arg_after(line);
     if (path == 0) { oprintln("usage: /read <file>"); return 0; }
     # 0.45.0: the path — typed, or a repo-local [alias] expansion — is named through the LABEL sanitiser on all three
-    # lines; a filename can hold a control byte, so the file is still opened with the raw bytes. (The CONTENT is the
-    # file's own and prints as before.)
+    # lines; a filename can hold a control byte, so the file is still opened with the raw bytes.
     if (file_exists(path) == 0) { _read_note("no such file: ", path); return 0; }
     if (_read_buf == 0) { _read_buf = alloc(READ_BUF_CAP); }
     var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
     if (n < 0) { _read_note("read failed: ", path); return 0; }
     store8(_read_buf + n, 0);
+    # 0.45.5: the CONTENT goes through the TEXT policy too (newlines and tabs kept, a CRLF's CR a space, every other
+    # C0 byte and DEL a '?'). 0.45.0 left it alone as "the file's own text" — but the repository is not trusted: a
+    # cloned repo's file holding an OSC 52 or a screen-clearing escape ran in the operator's terminal on one Enter in
+    # the tree pane (which is this command). Cleaned IN PLACE before either printer below, so the highlighted and
+    # the plain paths draw the same bytes; a file's deliberate escapes now show as '?', which is the policy's cost.
+    clean_text_n(_read_buf, n);
     ui_emit(ROLE_FAINT, "--- "); ui_emit_clean(ROLE_BLUE, path); ui_emit(ROLE_FAINT, " (");
     emit(ui_sgr(ROLE_FAINT)); ofmt_int(n); emit(ui_reset());
     ui_emit(ROLE_FAINT, " bytes) ---"); oprintln("");

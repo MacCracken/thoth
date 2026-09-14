@@ -93,6 +93,7 @@ fn main() {
     test_config_layering();
     test_config_paths();
     test_memory_root_identity();   # 0.45.3: the walk reaching ~/.thoth reads it once (fixtures: tests/fixtures/home)
+    test_memory_index_witness();   # 0.45.5: the memory INDEX as a second witness — no global config needed (fixtures: home/proj/bare)
     test_budget();
     test_ui_theme_config();
     test_shell_deny_union();
@@ -119,6 +120,7 @@ fn main() {
     test_history_request();
     test_inhist();
     test_inhist_persist();
+    test_inhist_polish();          # 0.45.5: ~/$HOME expansion on [history].file + the [history].size trim
     test_logging();
     test_logs_flag();
     test_hoosh_timeout();
@@ -138,6 +140,7 @@ fn main() {
     test_alias_ctl_refused();
     test_cmd_echo_sanitise();
     test_path_echo_sanitise();
+    test_content_sanitise();
     test_title_sanitise();
     test_sink_sweep_0452();
     test_vendor_pins(); test_vendor_hazards();

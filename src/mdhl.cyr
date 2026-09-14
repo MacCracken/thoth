@@ -384,6 +384,12 @@ fn _mdhl_block_put(has_nl) {
 fn _mdhl_block_flush() {
     if (_mdhl_block_over == 1) { return 0; }       # interior already streamed verbatim
     if (_mdhl_block_len == 0) { return 0; }        # empty block
+    # 0.45.5: settled the tier asymmetry — under the line tier's rainbow a fenced block is TINTED like the
+    # prose around it, which is what the TUI's painter has done to code since 0.38.0 (it tints every glyph in
+    # the ring). Before this the line tier kept the block syntax-highlighted while the TUI did not, so the same
+    # reply looked different across the two surfaces. The rainbow means the rainbow on both; the highlighter's
+    # roles are presentation roles and lose to it either way.
+    if (_mdhl_rainbow_text(_mdhl_block, _mdhl_block_len) == 1) { return 0; }
     if ((_mdhl_grammar != 0) && (ui_tier() != PT_PLAIN)) {
         _hl_span(_mdhl_grammar, _mdhl_block, _mdhl_block_len, ui_reset());
     } else {

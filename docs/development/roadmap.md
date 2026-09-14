@@ -192,37 +192,14 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 1 → 0.45.5 (thoth-owned, no dependency)
+### Repair batch 1 → shipped as 0.45.5
 
-In priority order. Each item's detail is in the registry below.
+Items 1–7 shipped (see the [CHANGELOG](../../CHANGELOG.md)); the one residual each left is in the registry:
+the double read still stays for a store with no `MEMORY.md`; item 4 was decided the OTHER way (thoth keeps
+requesting the usage frame — see *streaming usage* below); the GUI's on-compositor rainbow confirm is the
+operator's (no display in the harness). **Up next: batch 2.**
 
-1. **File content prints raw on `/read`, the tree pane's Enter and `/git <path>`** — take the TEXT
-   policy (newlines and tabs kept, other C0 and DEL as `?`) at the three sinks. The decision is what
-   was missing; the policy and its sanitiser already exist (0.45.0). A cloned repository is untrusted
-   and one Enter in the tree pane runs a file's escape in the operator's terminal — the only ⛔ in
-   this batch. [registry → *content escapes*]
-2. **The memory double read with no global `config.cyml`** — the MEMORY.md byte witness: compare
-   `<root>/memory/MEMORY.md` against `$HOME/.thoth/memory/MEMORY.md` with `_cfg_same_bytes` as a
-   second byte source in `_thoth_root_home_verdict` (same level rule, same `$PWD` veto, its own cap).
-   Test on the tracked fixture home with `_cfg_gpath_c = 0`. [registry → *memory double read*]
-3. **`rainbow` tints semantic roles inside the feed** — the t-ron DENY line and the `/reprobe` health
-   notice cycle instead of staying red/green once they are role markers. Exempt semantic roles at
-   marker expansion; directly painted chrome is already right. [registry → *rainbow*]
-4. **Streaming token usage is requested and never sent** — thoth stops asking hoosh (2.6.10) for the
-   `stream_options.include_usage` frame it does not emit, keeps `[budget]`'s announcement that the
-   streaming path is unmetered, and files the frame against hoosh as the feature it is. [registry →
-   *streaming usage*]
-5. **Input-history polish** — `~`/`$HOME` expansion on `[history].file` and a `histfilesize`-style trim
-   (the file is bounded to the 128-line ring today). [registry → *input-history hardening*]
-6. **Owed verification: macOS at the pin** — install the pinned toolchain on the Mac (6.6.2 today; 6.6.3
-   after batch 2's refresh) and re-run the native suite there (0.45.2's run used a scratch copy pinned to
-   6.6.0). A release step, not code. [registry → *macOS*]
-7. **Polish, batched:** the `rainbow` diagonal phase (a per-row hue offset, deterministic so
-   `feed_repaint` never shimmers); settle the line-tier fenced-code asymmetry (highlighted at the line
-   tier, tinted by the TUI painter) either way; the GUI's on-compositor rainbow re-confirm (headless
-   pixel tests cover the rasterizer).
-
-### Repair batch 2 → 0.45.6 (thoth-owned, needs a host or a dep refresh first)
+### Repair batch 2 → 0.45.6 (thoth-owned, needs a host or a dep refresh first) — NEXT
 
 1. **Hook event facts move from argv to the environment.** `[hooks]` prefixes `THOTH_EVENT` /
    `THOTH_TOOL` / `THOTH_ARGS` as quoted assignments to the `/bin/sh -c` string, so up to ~16 KB of
@@ -235,7 +212,8 @@ In priority order. Each item's detail is in the registry below.
    the cyrius pin **6.6.2 → 6.6.3**; re-run every target and read every diff
    (the refresh gotchas: symbol + enum diff, build AND read each target, `cyrius build` rewrites
    `lib/`). A refresh has bitten before (0.38.2's max_tokens regression, 0.44.5's re-measured caps), which is
-   why it ships as its own step in the batch — re-run and read, never re-read.
+   why it ships as its own step in the batch — re-run and read, never re-read. The Mac (ecb) now carries the
+   6.6.2 pin (installed at 0.45.5 by the tarball recipe); the 6.6.3 bump ships it the same way.
 3. **`src/exec.cyr`'s Windows capture takes the exclusive create** — cyrius 6.4.58's reroute honours
    `O_CREAT|O_EXCL`, so the POSIX path's exclusive create + retry loop can be shared; needs the
    Windows host (cass) to run it. [registry → *Windows lane*]
@@ -249,7 +227,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 |---|---|---|---|
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" (14 on a clean tree) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
 | **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: a tool call's `content_block_start` can be lost while its `input_json_delta` fragments still arrive (reproducible from one captured body) | hoosh **2.6.10** | done — 0.44.2 drops and announces such a call |
-| **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — hoosh's own follow-up note) | hoosh **2.6.10** | batch 1 item 4 stops requesting it meanwhile |
+| **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — hoosh's own follow-up note; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.6.10** | thoth keeps requesting it and already decodes it (0.45.5 decided) — the row lights up when hoosh ships the frame |
 | **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped and sizes the buffer flat (`n * 512 + 32`) — a 4000-byte tool name writes past the allocation | t-ron **2.1.10** (vendored 2.1.10) | done — both executors refuse a name over `AGENT_NAME_MAX` before the gate |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` collision and the three `undefined function` warnings every lane prints) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only; every capacity argument was retired by measurement at 0.44.5 | neither profile exists upstream | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`term_raw` honestly returns -1 there today; the line tier is the degradation) | darshana **1.1.2** — macOS still out of its scope | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
@@ -305,67 +283,43 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 > (**⛔**, all scheduled in a repair batch or waiting on its owner above) or an honest degradation
 > gated on an external / substrate primitive. Recorded here so it is not lost in code comments.
 
-- **Content escapes** (batch 1, item 1) — ⛔ **A file's CONTENT prints raw on `/read`, the tree pane's
-  Enter, and `/git <path>` diffs.** 0.45.0 sanitised every PATH these print and `src/commands.cyr`
-  records the content as deliberately left alone — it is the file's own text. But the repository is
-  not trusted: a cloned repo's file holding an OSC 52 or screen-clearing escape runs in the operator's
-  terminal on one Enter in the tree pane. The TEXT policy (newlines and tabs kept, other C0 as `?`)
-  closes it, at the cost of showing a file's deliberate escapes as `?`.
+- **Memory double read — the last case** (residual of 0.45.5) — the root walk reaching `$HOME/.thoth` from
+  below (`~/Repos/<x>` with no project `.thoth/`) is recognised by the config file's bytes (0.45.3) or the memory
+  INDEX's bytes (0.45.5), each at the root's level and under the `$PWD` veto. A `~/.thoth/` holding fact files but
+  **no `MEMORY.md`** and no `config.cyml` gives no bytes to recognise, so it is still returned as the project root
+  AND reported by `memory_global_dir()` as the global layer: every fact injected twice. Kept deliberately over the
+  other failure — a dropped global layer is silent, the double read is only waste — and `$PWD` alone must never
+  make the claim (display-grade; tested against). A store without an index is also a store `/remember` never
+  wrote to, so the case is rare; it closes if the memory layer ever writes an index on first use.
 
-- **Memory double read** (batch 1, item 2) — **stays when there is no global `config.cyml`.** 0.45.3
-  tells `$HOME/.thoth`, reached by the root walk from below (`~/Repos/<x>` with no project `.thoth/` →
-  `../../.thoth`), from a project `.thoth/` by the level at which the config walk met the global file's
-  BYTES, with `$PWD`'s depth under `$HOME` as a veto only (`_thoth_root_home_verdict`,
-  `src/config.cyr`). With no `~/.thoth/config.cyml` — or one at `_cfg_same_bytes`'s 32 KiB cap — there
-  are no bytes, so a `~/.thoth/` holding only `memory/` is still returned as the project root AND
-  reported by `memory_global_dir()` as the global layer: every fact injected twice. Kept deliberately
-  over the other failure — a dropped global layer is silent, the double read is only waste — and `$PWD`
-  alone must never make the claim (display-grade; tested against). Reproduce: the fake-`$HOME` pty run
-  in the 0.45.3 CHANGELOG entry with the global config removed and `[memory]` enabled from a legacy
-  `./thoth.cyml` — `/dry` sends the fact 2×.
+- **`rainbow` — the on-compositor confirm** (residual of 0.45.5) — the painter keeps semantic spans their
+  colour and runs the gradient diagonally (0.45.5); both are pinned by the painter's and the raster's headless
+  pixel tests. What no test in the harness can do is watch the GUI on a live compositor; the operator's eyes
+  close this one (`thoth gui`, `/theme rainbow`).
 
-  **Closure — the memory INDEX bytes.** The identity question is the memory store's own, so its own
-  file can answer it: identical `MEMORY.md` bytes are the same file seen from below or a verbatim
-  copy, and for the INDEX the copy case is exactly the waste the flag exists to prevent — the same
-  bytes injected twice — whereas a copied config says nothing about the stores beneath it. Residuals
-  to state, not hide: a store with fact files but no `MEMORY.md` gives no signal (the double read
-  stays there); a copied index over DIFFERENT fact files would fold two stores into one and lose the
-  global's facts, which is what the `$PWD` veto is for; and the index needs its own byte cap (it can
-  outgrow the config's 32 KiB while `MEMORY_SYS_CAP` only ever injects its first 4 KiB). One more
-  read pair at root resolution, no new primitive.
+- **Streaming usage** (hoosh row above) — **thoth asks hoosh for streaming token usage that hoosh does not
+  send yet.** Every streaming request carries `stream_options.include_usage`; hoosh (2.6.10) meters a stream by
+  the reservation and names the decode as its own follow-up, so `_hoosh_account_usage` waits on the streaming
+  path and the token/cost row is not fed there. `[budget]` says so (it cannot be enforced there; `[hoosh].stream
+  = false` is the way round). 0.45.5 decided the request STAYS — it is what hoosh's follow-up will honour and
+  thoth's decode is in place and tested — so the row lights up the release hoosh ships the frame, with no thoth
+  change. The issue text to file against hoosh is in the 0.45.5 CHANGELOG entry.
 
-- **`rainbow`** (batch 1, items 3 and 7) — all three tiers cycle per grapheme and are reachable.
-  Remaining: the painter tints every glyph in the ring, so chrome routed *into* the feed (the t-ron
-  DENY line, the `/reprobe` health notice) cycles instead of staying red/green — once both are role
-  markers the painter cannot tell a notice from prose; exempting semantic roles at marker expansion
-  fixes it (directly painted chrome — status bar, tree, prompts — is unaffected). Polish: the hue is a
-  pure function of COLUMN, so every row shares one gradient — a per-row offset gives the classic
-  diagonal, but must stay deterministic or `feed_repaint` shimmers; the GUI's on-compositor
-  re-confirm; fenced code at the line tier stays syntax-highlighted (the TUI painter tints it), an
-  asymmetry to settle either way.
+- **Input-history hardening** (the floor rows above) — the opt-in `[history].file` is best-effort-secured
+  today (a fresh file is created `0600` on POSIX; degrade-closed — an unwritable path or a mid-session write
+  failure is announced; `~/` expands and `[history].size` trims since 0.45.5). Residuals, documented in
+  `.thoth/config.cyml.example` + `src/inhist.cyr`: tightening a pre-existing, looser file to `0600` needs a
+  portable `chmod`/`fchmod` wrapper (never silently re-tighten, never assert a mode thoth cannot enforce);
+  `O_NOFOLLOW` on the open needs a portable no-follow bit (the AGNOS `AO_*` bridge defines none) — until then,
+  "keep it in an owner-only directory".
 
-- **Streaming usage** (batch 1, item 4; hoosh row above) — **thoth asks hoosh for streaming token
-  usage that hoosh never sends.** Every streaming request carries `stream_options.include_usage`, but
-  hoosh (2.6.10) emits no trailing usage frame — its own changelog names the decode as follow-up work —
-  so `_hoosh_account_usage` waits for something that never arrives on the streaming path. `[budget]`
-  says so (it cannot be enforced there; `[hoosh].stream = false` is the way round), but the token/cost
-  row is still not fed while streaming.
-
-- **Input-history hardening** (batch 1, item 5; the floor rows above) — the opt-in `[history].file`
-  is best-effort-secured today (a fresh file is created `0600` on POSIX; degrade-closed — an unwritable
-  path or a mid-session write failure is announced). Residuals, documented in
-  `.thoth/config.cyml.example` + `src/inhist.cyr`: tightening a pre-existing, looser file to `0600`
-  needs a portable `chmod`/`fchmod` wrapper (never silently re-tighten, never assert a mode thoth
-  cannot enforce); `O_NOFOLLOW` on the open needs a portable no-follow bit (the AGNOS `AO_*` bridge
-  defines none) — until then, "keep it in an owner-only directory"; `~`/`$HOME` expansion and a
-  `histfilesize`-style trim are thoth's own (batch 1).
-
-- **macOS** (batch 1, item 6; darshana row above) — **builds and runs, and its native test suite is
-  green** (Apple Silicon, macOS 26.6.2, at 0.45.2: the Mach-O arm64 binary builds with no undefined
-  symbol and `cyrius test` passes in full there — `shell`, `[hooks]` and `[verify]` included). ⚠ Owed:
-  a native run AT the pin — the Mac has the **6.6.0** toolchain against a **6.6.2** pin. The build
-  prints 26 "syscall not routed by the Mach-O ARM translation" warnings, none from a raw syscall in
-  thoth's own `src/` (swept at 0.45.2). **The T2 TUI does not run on macOS and is not meant to yet:**
+- **macOS** (darshana row above) — **builds and runs, and its native test suite is green at the pin**
+  (Apple Silicon, macOS 26.6.2; at 0.45.5 with the 6.6.2 toolchain installed there: the Mach-O arm64 binary
+  builds with no undefined symbol and `cyrius test` passes in full — `shell`, `[hooks]` and `[verify]`
+  included). The build prints its "syscall not routed by the Mach-O ARM translation" warnings, none from a raw
+  syscall in thoth's own `src/` (swept at 0.45.2). ⚠ `cyrius test` there exports no `$PWD`, so a test golden
+  that assumes a repo lead is wrong on the Mac — the 0.45.5 lesson. **The T2 TUI does not run on macOS and is
+  not meant to yet:**
   `term_raw` returns -1 there (darshana has no BSD termios peer and 0.44.3 does not invent one — a stub
   pretending to work is worse than an honest refusal), so thoth takes the line tier, the already-coded
   degradation. When darshana ships the peer, `src/term.cyr`'s macOS branch collapses into the

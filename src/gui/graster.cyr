@@ -165,7 +165,7 @@ fn gr_fb_text(buf, fbw, fbh, x, y, cstr, xrgb, max_cp) {
             # no escape and no byte budget here: ink is an i64 argument into the framebuffer, so the tint
             # cannot cost text. A space rasterizes to all-zero glyph rows, so a tinted space paints nothing.
             var ink = xrgb;
-            if (ink == GD_RAINBOW) { ink = ui_rainbow_rgb((px / GR_GLYPH_W) * UI_RAINBOW_STEP); }
+            if (ink == GD_RAINBOW) { ink = ui_rainbow_rgb((px / GR_GLYPH_W + (y / GR_GLYPH_H) * UI_RAINBOW_ROW_SHIFT) * UI_RAINBOW_STEP); }   # 0.45.5: + the row's slant (y on the cell grid)
             if (g >= 32) { gr_fb_glyph(buf, fbw, fbh, px, y, g, ink); }
             px = px + GR_GLYPH_W;
             drawn = drawn + 1;

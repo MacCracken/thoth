@@ -79,6 +79,18 @@ fn test_git_diff() {
     assert_eq(_t_count_sub(feed_line_ptr(2), feed_line_len(2), "ctx", 3), 1, "context line body preserved");
     assert_eq(_t_count_sub(feed_line_ptr(3), feed_line_len(3), "removed", 7), 1, "del line body preserved");
     assert_eq(_t_count_sub(feed_line_ptr(4), feed_line_len(4), "added", 5), 1, "add line body preserved");
+    # 0.45.5: a body line is the repository's bytes — an ESC in it is drawn as '?' (the TEXT policy, in a scratch copy)
+    var eops = vec_new();
+    var etxt = alloc(32); memcpy(etxt, "bad\x1b[2Jline\n", 12);
+    vec_push(eops, _t_ann(2, etxt, 12, 0, 1));
+    feed_init();
+    out_mode_set(OUT_RING);
+    diff_render_ann("e.txt", eops);
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    assert_eq(_t_has_esc(feed_line_ptr(2), feed_line_len(2)), 0, "an escaped add line reaches the feed with no ESC");
+    assert_eq(_t_count_sub(feed_line_ptr(2), feed_line_len(2), "bad?[2Jline", 11), 1, "...the ESC drawn as '?'");
+    assert_eq(load8(etxt + 3), 27, "...and sit's line bytes are untouched (cleaned in the scratch, not in place)");
     return 0;
 }
 
@@ -134,6 +146,32 @@ fn test_mdhl_rainbow() {
     assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "\x1b[38;2;", 7), 0,
               "  ... and carries NO baked hue (the painter tints it later, compactly)");
     out_mode_set(OUT_FD1);
+    # 0.45.5 (repair batch 1, item 7): under the LINE tier's rainbow a fenced block is tinted like the prose — the
+    # asymmetry with the TUI (whose painter tints code too) is settled the rainbow's way. Read off fd 1, the only
+    # place the line tint is drawable.
+    assert_eq(ui_rainbow_line(), 1, "premise: OUT_FD1 + PT_ANSI + truecolor + rainbow -> the line tint is live");
+    var _fpath = "build/.thoth_rainbow_fd1.tmp";
+    var _fcap = _t_fd1_to(_fpath);
+    if (_fcap == 0) {
+        mdhl_reply("```cyr\nvar x = 1;\n```\n", 20);
+        _t_fd1_restore();
+        var _fb = alloc(4096);
+        var _fn = file_read_all(_fpath, _fb, 4095);
+        if (_fn < 0) { _fn = 0; }
+        store8(_fb + _fn, 0);
+        var _fs = alloc(4096);
+        _t_strip_sgr(_fs, _fb, _fn);
+        assert_eq(_t_count_sub(_fs, strlen(_fs), "var x = 1;", 10), 1, "the fenced block's text survives byte for byte (coverage)");
+        # "var x = 1;" has 7 non-space glyphs -> at least 7 hue escapes; the highlighter's role SGR for `var` (accent) is absent
+        assert(_t_count_sub(_fb, _fn, "\x1b[38;2;", 7) >= 7, "at least one truecolor escape per glyph (a role SGR is truecolor too — the discriminating check is the next one)");
+        var _acc[64]; var _ao = 0;                           # the highlighter's accent SGR + "var", by hand (no string helper in this suite)
+        var _asg = ui_sgr(ROLE_ACCENT); var _asl = strlen(_asg);
+        memcpy(&_acc, _asg, _asl); _ao = _asl; memcpy(&_acc + _ao, "var", 3); _ao = _ao + 3; store8(&_acc + _ao, 0);
+        assert_eq(_t_count_sub(_fb, _fn, &_acc, _ao), 0, "...and the keyword is not drawn in the highlighter's accent role");
+        xunlink(_fpath);
+    } else {
+        assert(1, "fd 1 cannot be captured on this target — the line-tier code tint is not checked here (stated)");
+    }
     ui_set_theme(THEME_DARK);
     ui_detect_tier();
     return 0;

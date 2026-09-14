@@ -58,6 +58,13 @@ var _feed_scroll = 0;      # PHYSICAL rows scrolled back from the newest (0 = pi
 # The in-progress (un-newlined) line. LITERAL size — MUST equal FEED_LINE_CAP
 # (Cyrius array dims can't be a `var` constant); if FEED_LINE_CAP moves, move this.
 var _feed_pending[2048];
+
+# 0.45.5: the rainbow's ROW term — the LOGICAL line the next feed_clip_seg paints (its ring index, so the hue
+# belongs to the TEXT: a scroll moves a line's colours with it, and a repaint of the same document paints the
+# same hues — no shimmer). feed_repaint sets it per line and clears it after; a direct caller (a test, the
+# tree) paints at row 0, which is the pre-0.45.5 gradient exactly.
+var _feed_rainbow_row = 0;
+fn feed_rainbow_row_set(r) { if (r < 0) { r = 0; } _feed_rainbow_row = r; return 0; }
 var _feed_pending_len = 0;
 
 # feed_init_ensure: lazily allocate the ring (idempotent). Separated from
@@ -321,6 +328,10 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
     var wrote = 0;
     var sgr_open = 0;
     var rainbow = ui_rainbow_active();                # 0.38.0: hoisted — constant for the whole row
+    var cur_role = 0 - 1;                             # 0.45.5: the role marker in force at this byte (-1 = none / reset),
+                                                      # tracked in BOTH phases so a wrapped segment inherits the span it
+                                                      # starts inside; a SEMANTIC role (ui_role_is_semantic) is exempt
+                                                      # from the rainbow tint — the marker's own colour stands
     var emitted = 0;                                  # 0 = SKIP phase, 1 = past the boundary
     var winend = skip_cols + max_cols;
     while (i < src_len) {
@@ -349,6 +360,7 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
                 if ((sl == 2) && (((b1m >= FEED_MARK_ROLE0) && (b1m <= (FEED_MARK_ROLE0 + 7))) || (b1m == FEED_MARK_RESET))) { ismark = 1; }
                 var isk = 0;
                 if ((sl >= 3) && (lastb == 75)) { isk = 1; }     # a real CSI ESC[...K
+                if (ismark == 1) { if (b1m == FEED_MARK_RESET) { cur_role = 0 - 1; } else { cur_role = b1m - FEED_MARK_ROLE0; } }
                 if (emitted == 0) {                              # SKIP: track SGR into carry, drop the escape
                     if (ismark == 1) {                           # 0.18.0: carry the marker's EXPANDED SGR
                         if (b1m == FEED_MARK_RESET) { _feed_carry_len = 0; }
@@ -406,10 +418,12 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
                     # most one escape per visible column. Without it, a run of combining marks never advances
                     # `cols`, so it stays inside the window unbounded and each mark buys another ~19 B —
                     # which is exactly how a review repro pushed a row past PAINT_CAP and dropped its tail.
-                    if ((rainbow == 1) && (gw0 > 0)) {
+                    # 0.45.5: a glyph inside a SEMANTIC role span (red / green) keeps the span's colour — no tint. The
+                    # marker's SGR was already written when it was met, so writing nothing here is what leaves it in force.
+                    if ((rainbow == 1) && (gw0 > 0) && (ui_role_is_semantic(cur_role) == 0)) {
                         var b0 = load8(src + i);
                         if ((b0 != 32) && (b0 != 9)) {
-                            var rs = ui_rainbow_sgr(cols * UI_RAINBOW_STEP);
+                            var rs = ui_rainbow_sgr((cols + _feed_rainbow_row * UI_RAINBOW_ROW_SHIFT) * UI_RAINBOW_STEP);   # 0.45.5: + the row's slant
                             var rsl = strlen(rs);
                             if ((wrote + rsl + gl) <= dst_cap) {
                                 var kr2 = 0;

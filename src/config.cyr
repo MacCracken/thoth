@@ -76,6 +76,7 @@ var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
 var _cfg_log_file = 0;       # cstring path for structured driver logs, or 0
 var _cfg_log_level = 0;      # cstring level (off/error/warn/info/debug/trace), or 0
 var _cfg_history_file = 0;   # cstring path for the persistent INPUT-history file (0.11.2), or 0
+var _cfg_history_size = 0 - 1;  # [history].size — lines the file keeps (0.45.5); -1 = absent -> the ring's cap
 var _cfg_session_file = 0;   # cstring path for the persistent CONVERSATION-history file (0.24.2), or 0
 var _cfg_ui_bell = 0;        # [ui].bell — emit a BEL on turn completion (0.24.3); opt-in, default off
 var _cfg_ui_elapsed = 0;     # [ui].elapsed — a faint per-turn elapsed line after each reply (0.24.3); opt-in, default off
@@ -118,6 +119,11 @@ var _thoth_root_done = 0;
 # every fact twice.
 var _thoth_root_is_home = 0;
 var _thoth_root_lvl = 0 - 1;  # the walk level (`../` count) the root was found at; -1 for the fallback / none
+# 0.45.5: the memory INDEX as a second byte witness for the root walk (see _thoth_index_is_global)
+var MEM_INDEX_SAME_CAP = 262144;   # an index can outgrow the config cap (MEMORY_SYS_CAP injects only its head); at the cap: "different"
+var _cfg_gindex_c = 0;             # $HOME/.thoth/memory/MEMORY.md when it exists — cached; the `_c`/`_done` pair is the test seam
+var _cfg_gindex_done = 0;
+var _thoth_idx_lvl = 0 - 1;        # the walk level the index witness matched at, or -1 (a test seam)
 # The directory name both walks look for at each level. A test seam: pointed at a git-tracked fixture tree
 # (`tests/fixtures/home/.thoth`), level 0 of both walks lands in that tree, which is the only way to exercise
 # the walks on a known layout — there is no chdir on the floor, and the real ~/.thoth is not the suite's.
@@ -177,13 +183,23 @@ fn _thoth_root_resolve() {
     _thoth_root = 0;
     _thoth_root_is_home = 0;
     _thoth_root_lvl = 0 - 1;
+    _thoth_idx_lvl = 0 - 1;
     var lvl = 0;
     while (lvl < 40) {
         var cand = _cfg_updir(lvl, _cfg_walk_dir);
         if (is_dir(str_from(cand)) == 1) {
             _thoth_root = cand;
             _thoth_root_lvl = lvl;
-            _thoth_root_is_home = _thoth_root_home_verdict(lvl, _cfg_local_global_lvl(), _cfg_pwd_home_depth());
+            # 0.45.5: a SECOND byte witness — the memory INDEX. With no ~/.thoth/config.cyml (or one past
+            # _cfg_same_bytes's cap) the config walk has no bytes to meet, and 0.45.3 left this root a project's:
+            # the double read. The identity question is the memory store's own, so its own file answers it:
+            # `<cand>/memory/MEMORY.md` holding the global index's bytes is that index seen from below — or a
+            # verbatim copy, and for the INDEX a copy is exactly the waste the flag exists to prevent (the same
+            # bytes injected twice), where a copied config said nothing about the stores beneath it. Same level
+            # rule, same $PWD veto; a store with no MEMORY.md gives no signal (that double read stays, stated).
+            var wit = _cfg_local_global_lvl();
+            if (wit != lvl) { if (_thoth_index_is_global(cand) == 1) { wit = lvl; _thoth_idx_lvl = lvl; } }
+            _thoth_root_is_home = _thoth_root_home_verdict(lvl, wit, _cfg_pwd_home_depth());
             return _thoth_root;
         }
         lvl = lvl + 1;
@@ -263,6 +279,30 @@ fn _cfg_pwd_home_depth() {
     return _cfg_pwd_depth_c;
 }
 
+# --- the memory index as a byte witness (0.45.5) ---------------------------------------------------------
+# The global index: `$HOME/.thoth/memory/MEMORY.md` when it exists, else 0 (a suite points the seam at a tracked
+# fixture, as it does `_cfg_gpath_c` for the global config).
+fn _thoth_global_index_path() {
+    if (_cfg_gindex_done == 1) { return _cfg_gindex_c; }
+    _cfg_gindex_done = 1;
+    _cfg_gindex_c = 0;
+    var home = getenv("HOME");
+    if (home != 0) {
+        var gi = _cfg_join2(_cfg_join2(home, ".thoth"), "memory/MEMORY.md");
+        if (file_exists(gi) == 1) { _cfg_gindex_c = gi; }
+    }
+    return _cfg_gindex_c;
+}
+# _thoth_index_is_global: 1 when `<root>/memory/MEMORY.md` exists and holds the global index's exact bytes.
+fn _thoth_index_is_global(root) {
+    if (root == 0) { return 0; }
+    var gi = _thoth_global_index_path();
+    if (gi == 0) { return 0; }
+    var ci = _cfg_join2(root, "memory/MEMORY.md");
+    if (file_exists(ci) == 0) { return 0; }
+    return _cfg_same_bytes_cap(ci, gi, MEM_INDEX_SAME_CAP);
+}
+
 # _thoth_root_home_verdict: 1 when the `.thoth` the root walk found at `root_lvl` is $HOME/.thoth, given
 # `cfg_lvl` (the level the config walk found the global file's bytes at, -1 for none) and `pwd_lvl` (the
 # depth the shell places CWD at under $HOME, or HOME_DEPTH_NONE / HOME_DEPTH_OUTSIDE). PURE — the rule above.
@@ -312,13 +352,14 @@ fn _cfg_global_path() {
 # CFG_SAME_CAP; a file AT the cap is reported different, so a doubt can never drop a layer. Portable by
 # construction (file_read_all + memeq — no stat layout, no realpath). 0.45.3.
 var CFG_SAME_CAP = 32768;
-fn _cfg_same_bytes(a, b) {
+fn _cfg_same_bytes(a, b) { return _cfg_same_bytes_cap(a, b, CFG_SAME_CAP); }
+fn _cfg_same_bytes_cap(a, b, cap) {
     if ((a == 0) || (b == 0)) { return 0; }
-    var ba = alloc(CFG_SAME_CAP);
-    var na = file_read_all(a, ba, CFG_SAME_CAP);
-    if ((na < 0) || (na >= CFG_SAME_CAP)) { return 0; }
-    var bb = alloc(CFG_SAME_CAP);
-    var nb = file_read_all(b, bb, CFG_SAME_CAP);
+    var ba = alloc(cap);
+    var na = file_read_all(a, ba, cap);
+    if ((na < 0) || (na >= cap)) { return 0; }
+    var bb = alloc(cap);
+    var nb = file_read_all(b, bb, cap);
     if (nb != na) { return 0; }
     return memeq(ba, bb, na);
 }
@@ -1311,7 +1352,10 @@ fn config_load() {
     _cfg_log_level = _cfg_label(_cfg2_str(log_l, log_g, "level"));   # 0.45.2: echoed at launch; the local layer may set it
     var hist_l = _cfg_section_pairs(lo, "history");   var hist_g = _cfg_section_pairs(gl, "history");
     # AUTHORITY — an unjailed write sink, and one holding the operator's own typed input.
-    _cfg_history_file = _cfg2_str_global_only(hist_l, hist_g, "file", "history.file");
+    # 0.45.5: a leading `~/` or `$HOME/` expands to the home directory (the path was verbatim before, so
+    # `~/.thoth_history` named a directory called `~`); otherwise the path is still used as written.
+    _cfg_history_file = _cfg_expand_home(_cfg2_str_global_only(hist_l, hist_g, "file", "history.file"));
+    _cfg_history_size = _cfg2_int(hist_l, hist_g, "size");           # 0.45.5: how many lines the file keeps
     var sess_l = _cfg_section_pairs(lo, "session");   var sess_g = _cfg_section_pairs(gl, "session");
     # AUTHORITY — an unjailed write sink thoth TRUNCATES, and the file the conversation is read back
     # from: a repo that supplies one both destroys an arbitrary operator file and feeds thoth
@@ -1685,6 +1729,42 @@ fn config_log_level() { return _cfg_log_level; }
 # with Up/Down) — DISTINCT from [hoosh].history (multi-turn conversation memory). Off by
 # default; when set, thoth persists/loads it at 0600 (it may hold typed secrets).
 fn config_history_file() { return _cfg_history_file; }
+# config_history_size: `[history].size` clamped to 1..INHIST_CAP, or INHIST_CAP when unset (0.45.5) — the
+# `histfilesize` of the input-history file: the most recent N submitted lines survive a save.
+fn config_history_size() {
+    var n = _cfg_history_size;
+    if (n < 0) { return INHIST_CAP; }                     # absent (-1): the whole ring, as before
+    if (n < 1) { return 1; }                              # a written 0 keeps one line, never "nothing" silently
+    if (n > INHIST_CAP) { return INHIST_CAP; }
+    return n;
+}
+
+# _cfg_expand_home (0.45.5): a configured path with a leading `~/` or `$HOME/` (or exactly `~` / `$HOME`)
+# resolved against $HOME — a fresh cstr; any other path, or no $HOME, comes back as given. Only the leading
+# form: `~user/…` and a `~` elsewhere are left alone, like every shell does for a quoted value.
+fn _cfg_expand_home(path) {
+    if (path == 0) { return 0; }
+    var home = getenv("HOME");
+    if (home == 0) { return path; }
+    var pre = 0;                                          # bytes of the prefix to replace
+    if (load8(path) == 126) {                             # '~'
+        if (load8(path + 1) == 0) { pre = 1; }
+        elif (load8(path + 1) == 47) { pre = 1; }
+    } elif (memeq(path, "$HOME", 5) == 1) {
+        if (load8(path + 5) == 0) { pre = 5; }
+        elif (load8(path + 5) == 47) { pre = 5; }
+    }
+    if (pre == 0) { return path; }
+    var hl = strlen(home);
+    while ((hl > 1) && (load8(home + hl - 1) == 47)) { hl = hl - 1; }   # a trailing '/' on $HOME
+    var rest = path + pre;                                # "" or "/…"
+    var rl = strlen(rest);
+    var out = alloc(hl + rl + 1);
+    memcpy(out, home, hl);
+    memcpy(out + hl, rest, rl);
+    store8(out + hl + rl, 0);
+    return out;
+}
 
 # config_session_file: path to the persistent CONVERSATION-history file (0.24.2), or 0 (none configured ->
 # resume OFF). Distinct from config_history_file (composer keystrokes) and the memory seam (durable facts).

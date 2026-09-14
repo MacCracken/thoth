@@ -18,9 +18,13 @@
 #    boundary, which on a large context is the single most expensive round of the session.
 #
 # 3. ⚠ AN UNENFORCEABLE BUDGET MUST SAY SO. thoth does not meter itself — it folds in whatever `usage`
-#    the gateway reports, and hoosh 2.6.4 sends NO usage frame on the STREAMING path (a carried
-#    limitation: thoth asks for `stream_options.include_usage`, hoosh's source references neither
-#    token). `[hoosh].stream` defaults ON. So on the DEFAULT path the tally never advances, and a
+#    the gateway reports, and hoosh sends NO usage frame on the STREAMING path (re-checked at 2.6.10:
+#    its streaming branch meters the RESERVATION — the client's max_tokens — and names decoding the
+#    provider's counts, OpenAI `stream_options.include_usage` / Anthropic `message_delta.usage`, as its
+#    own follow-up). thoth KEEPS asking for the frame on purpose (0.45.5 decided this): it is the
+#    standard option hoosh's follow-up will honour, and the decode on this side is in place and tested,
+#    so the row lights up the release hoosh ships it with no thoth change. `[hoosh].stream` defaults
+#    ON. So on the DEFAULT path the tally never advances today, and a
 #    token budget configured there would sit at zero forever and silently never fire — a security-
 #    shaped control that is decorative, which the house rules call a gap, not a degrade. `budget_warn`
 #    below announces that ONCE per session, the first time a turn ends with a budget configured and no
@@ -114,8 +118,8 @@ var _budget_warned = 0;      # emitted at most ONCE per session — a per-turn n
 # budget_warn_unmeasured: call at the END of a turn. When a budget is configured but the gateway has
 # never reported usage, the ceiling cannot fire and the operator must be told, once, with the reason.
 #
-# ⚠ This is not defensive filler. The failure it names is LIVE at the time of writing: hoosh 2.6.4
-# emits no usage frame on the streaming path and `[hoosh].stream` defaults on, so the common setup for
+# ⚠ This is not defensive filler. The failure it names is LIVE at the time of writing: hoosh (through
+# 2.6.10) emits no usage frame on the streaming path and `[hoosh].stream` defaults on, so the common setup for
 # a budget is exactly the one where it does nothing. Announcing an unenforceable control beats
 # pretending, and it is the same posture as the banner's live-reachability line and the absent-t-ron
 # confirm — thoth never fakes a capability it does not have.

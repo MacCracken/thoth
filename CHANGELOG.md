@@ -2,6 +2,107 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.45.5] - 2026-09-13
+
+**Repair batch 1.** The first patch cut under the batch discipline (0.45.4's roadmap): six repairs and the
+batched polish, no new capability. File content is sanitised on `/read`, the tree pane's Enter and every diff
+body; the memory double read closes without a global config, on the memory index's own bytes; `rainbow` keeps a
+red/green notice its colour and runs diagonally; `[history].file` takes `~/`, `[history].size` trims the file;
+the streaming usage frame is a recorded decision (keep asking); the native macOS suite ran at the 6.6.2 pin.
+Suite **326 + 1478 + 846 + 666 + 190 + 5** (+122). Linux / aarch64 / AGNOS build with the same warning set
+as 0.45.2; macOS built and tested natively at the pin (below).
+
+### Fixed — file content is sanitised on `/read`, the tree pane's Enter and diff bodies (batch 1, item 1)
+
+0.45.0 sanitised every PATH those print and recorded the content as "the file's own text". The repository is
+not trusted: a cloned repo's file holding a screen clear or an OSC 52 clipboard write ran in the operator's
+terminal on one Enter in the tree pane (which dispatches `/read`). The content now goes through the TEXT policy
+— `cmd_read` cleans its buffer IN PLACE before either printer, so the highlighted and the plain paths draw the
+same bytes; `_diff_emit_line` cleans every hunk body into a SCRATCH copy (`_diff_clean_body`, 16 KiB; a longer
+line streams clean without highlighting), never in place, because `cmd_write` renders its diff from the buffer
+it then writes to disk and sit's line spans are the vendored reader's memory. The policy gained its one
+lookahead rule: **a CR directly before an LF is a Windows line end and becomes a space** (invisible at a line
+end, byte count kept), so a CRLF file does not sprout a `?` at the end of every line; a lone CR stays `?` (it
+would paint over the row). `_clean_at` carries the rule for both the emit and the in-place forms — one loop
+behind both, as before. A file's deliberate escapes now show as `?`, which is the policy's cost.
+
+### Fixed — the memory double read closes without a global config (batch 1, item 2)
+
+0.45.3 told `$HOME/.thoth`, reached by the root walk from below, from a project `.thoth/` by the level at which
+the config walk met the global file's bytes — and with no `~/.thoth/config.cyml` there were no bytes, so the
+store was still read twice. The memory INDEX is now a second witness at the root's own level:
+`<root>/memory/MEMORY.md` holding the global index's exact bytes is that index seen from below (or a verbatim
+copy — for the INDEX the copy case is exactly the waste the flag prevents, the same bytes injected twice, where
+a copied config said nothing about the stores beneath it). Same level rule, same `$PWD` veto, its own 256 KiB
+cap (`_cfg_same_bytes_cap`; the config comparer keeps 32 KiB). Stated residual: a store with fact files but no
+`MEMORY.md` gives no signal, and the double read stays there. Tracked fixtures `tests/fixtures/proj` (a
+different index) and `tests/fixtures/bare` (no index) pin both sides.
+
+### Fixed — `rainbow` keeps a semantic notice its colour (batch 1, item 3)
+
+The feed painter hued every column-advancing glyph, so a t-ron DENY line or the `/reprobe` health notice
+cycled with the row once its role was a marker. `feed_clip_seg` now tracks the role marker in force through
+BOTH phases (a wrapped segment inherits the span it opens inside, via the carry) and skips the tint inside a
+SEMANTIC span — `ui_role_is_semantic`: green and red, the roles whose colour carries meaning. The marker's SGR
+was already written when it was met, so writing nothing is what leaves it in force; prose after the reset is
+tinted again.
+
+### Changed — the streaming usage frame: thoth keeps asking (batch 1, item 4, decided the other way)
+
+The roadmap said thoth would stop requesting `stream_options.include_usage`. Read against hoosh 2.6.10's own
+source that was the wrong repair: hoosh meters a streamed turn by the RESERVATION (the client's `max_tokens`)
+and names decoding the provider's counts — OpenAI `stream_options.include_usage`, Anthropic
+`message_delta.usage` — as its follow-up. The option thoth sends is exactly what that follow-up will honour,
+and `_agent_sse_cb` / `hoosh_extract_usage` already read the frame (tested), so the token/cost row lights up
+the release hoosh ships it with no thoth change. Dropping the option would have made thoth deaf to it. The
+request stays; `[budget]`'s announcement stays; the comments in `src/budget.cyr` and `src/hoosh.cyr` carry the
+current facts. **To file against hoosh** (a feature, not a defect): *"streaming path: decode the provider's
+usage (`stream_options.include_usage` / `message_delta.usage`) and emit the trailing usage frame — thoth
+0.10.2+ requests it and reads it; today a streamed turn is metered by the reservation only."*
+
+### Added — `[history].file` takes `~/` and `$HOME/`; `[history].size` trims the file (batch 1, item 5)
+
+A leading `~/` or `$HOME/` (or exactly `~` / `$HOME`) on `[history].file` expands to the home directory at
+load (`_cfg_expand_home`; before this the path was verbatim, so `~/.thoth_history` named a directory called
+`~`); anything else is used as written, and `~user/…` is left alone. `[history].size` (1..128, the recall
+ring's size; default 128) is a `histfilesize`: a save keeps the most recent N lines
+(`inhist_persist_size_set`), the ring itself is untouched, and an oversize file from before is trimmed the same
+way. Both front doors name the file as `~/…` through the LABEL sanitiser (`config_path_display`).
+`.thoth/config.cyml.example` documents both keys.
+
+### Changed — polish, batched (batch 1, item 7)
+
+- **The `rainbow` diagonal.** A row's gradient now starts `UI_RAINBOW_ROW_SHIFT` (2) columns further along per
+  logical line — the TUI keys it by the line's ring index (`feed_rainbow_row_set`, set by `feed_repaint` per
+  line and cleared after), so the hue belongs to the TEXT: a scroll moves a line's colours with it and a repaint
+  of the same document paints the same hues, no shimmer. The GUI raster keys it by the cell row (`y /
+  GR_GLYPH_H`). A direct painter call (the tree, a test) paints row 0 — the pre-0.45.5 gradient exactly.
+- **The line-tier fenced-code asymmetry, settled the rainbow's way.** Under the line tier's rainbow a fenced
+  block is now TINTED like the prose around it (`_mdhl_block_flush` → `_mdhl_rainbow_text`), which is what the
+  TUI's painter has done to code since 0.38.0; the same reply no longer looks different across the two
+  surfaces. Read off fd 1 in the test through a new `_t_fd1_to` / `_t_fd1_restore` capture (dup2; POSIX).
+- **The GUI's on-compositor rainbow re-confirm** needs a live Wayland display, which the harness has none of:
+  the headless pixel tests cover the rasterizer (row 0 and the slant); the eyes-on confirm is the operator's.
+
+### Verified — macOS at the 6.6.2 pin (batch 1, item 6)
+
+The Mac ran 6.6.0 against the 6.6.2 pin. The 6.6.2 toolchain was built from cyrius's tagged source
+(`scripts/build-macos-arm64-tarball.sh` in a `6.6.2` worktree), shipped, installed and ad-hoc signed on ecb,
+and this tree built and ran its native suite there at the pin. ⭐ **The first run failed one assertion — thoth's
+own test, not the Mac:** `cyrius test` there exports no `$PWD`, so the status bar draws no repo lead, and the
+0.45.3 golden's gutter rule (`_bo > 0`) had become always-true once the indent was prepended — a golden with a
+gutter the bar rightly never draws. The golden follows the bar's own `lead` flag now, and the TUI suite also
+passes locally with `$PWD` unset.
+
+Tests (+122): `test_content_sanitise` (the CRLF rule in both forms, `/read` at both tiers with the highlighted
+path proven on the cleaned buffer, `diff_render` leaving its inputs byte-identical, an over-cap line, an escaped
+`diff_render_ann` body); `test_memory_index_witness` (the parameterised cap, the witness on the three fixture
+stores, end to end with no global config, the `$PWD` veto, the config witness alone); the semantic-span and
+diagonal painter checks in `test_rainbow` (+ the GUI raster's row 1); `test_inhist_polish` (every expansion
+form, the size clamp, the trim on disk and on reload); the line-tier code tint via fd 1. Each proven by
+breaking its subject: the `/read` clean (10 failures), the diff scratch (7), the CRLF rule (4), the index
+witness (5), the semantic exemption (6), the trim (3), the code tint (1).
+
 ## [0.45.4] - 2026-09-13
 
 **The tagline is back under the title, and the status bar sits two columns in behind a flat folder.** Two

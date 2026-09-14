@@ -450,12 +450,17 @@ model = "claude-haiku-4-5-20251001"
 # CONVERSATION memory. Delete the file to clear your history.
 #
 #   file — path to the persistent input-history file (fresh file created 0600). Omit for
-#          in-memory-only recall (the default). Used VERBATIM — there is no shell `~`
-#          expansion, so give a relative path (resolved from where thoth is launched)
-#          or a full absolute path, not "~/...".
+#          in-memory-only recall (the default). A leading `~/` or `$HOME/` expands to your
+#          home directory (0.45.5); anything else is used as written — a relative path
+#          resolves from where thoth is launched. GLOBAL-ONLY (a project's config cannot
+#          redirect where your typed input is written).
+#   size — how many lines the file keeps (1..128, the recall ring's size; default 128).
+#          The file is trimmed to the most recent `size` lines at the next save, like a
+#          shell's histfilesize; recall in the session still spans the whole ring.
 
 # [history]
-# file = ".thoth_history"             # project-local; or an absolute "/home/you/.thoth_history"
+# file = "~/.thoth_history"           # or project-local ".thoth_history", or an absolute path
+# size = 50
 
 # The [session] table (0.24.2) persists the CONVERSATION HISTORY (the multi-turn messages —
 # your prompts AND the model's replies) to a file, so a restart RESUMES where you left off.

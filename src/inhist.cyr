@@ -154,6 +154,7 @@ fn inhist_nav_down() {
 # `file_close`) which bridge the AGNOS `AO_*`/namelen open ABI — never a raw sys_open.
 
 var _inhist_path = 0;          # the active history-file path (cstr), or 0 == persistence OFF
+var _inhist_persist_max = 128; # 0.45.5: lines a save keeps ([history].size, 1..INHIST_CAP) — the most recent N
 var _inhist_broke = 0;         # 1 if a save failed mid-session (persistence auto-disabled)
 var INHIST_MODE = 0x180;       # 0600 rw------- — the CREATE mode (owner-only; best-effort)
 var INHIST_CHUNK = 4096;       # read-buffer size for streaming the file in on load
@@ -263,6 +264,7 @@ fn _inhist_write_file(path) {
     if (_inhist_esc == 0) { _inhist_esc = alloc(INHIST_LINE_CAP * 2); }
     var ok = 0;
     var i = 0;
+    if (_inhist_count > _inhist_persist_max) { i = _inhist_count - _inhist_persist_max; }   # 0.45.5: keep the newest N
     while (i < _inhist_count) {
         var enc = _inhist_escape_into(_inhist_esc, INHIST_LINE_CAP * 2, inhist_entry_ptr(i), inhist_entry_len(i));
         if (file_write(fd, _inhist_esc, enc) != enc) { ok = 0 - 1; }   # short/failed write
@@ -288,6 +290,17 @@ fn inhist_persist_init(path) {
     _inhist_path = path;                         # persistence ACTIVE
     return inhist_count();
 }
+
+# inhist_persist_size_set: how many lines a save keeps — `[history].size`, clamped to 1..INHIST_CAP (0.45.5).
+# The ring itself is untouched (recall still spans INHIST_CAP); only the FILE is trimmed, at the next save,
+# to the most recent N — a `histfilesize`. An oversize file from before is trimmed the same way.
+fn inhist_persist_size_set(n) {
+    if (n < 1) { n = 1; }
+    if (n > INHIST_CAP) { n = INHIST_CAP; }
+    _inhist_persist_max = n;
+    return 0;
+}
+fn inhist_persist_size() { return _inhist_persist_max; }
 
 # inhist_persist_active: 1 if persistence is bound to a writable file.
 fn inhist_persist_active() { if (_inhist_path != 0) { return 1; } return 0; }

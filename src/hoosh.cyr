@@ -364,8 +364,10 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
     off = _append_int_cap(dst, off, cap, _hoosh_max_tokens());   # 0.38.2: the reasoning ceiling when effort is on
     off = _append_reasoning_effort(dst, off, cap);   # 0.35.2: reasoning_effort when [hoosh].reasoning set
     # stream_options:{include_usage} asks the gateway to append a final usage frame to the SSE stream (0.10.2).
-    # hoosh does not send one yet (re-checked at 2.6.10; see the roadmap), so a streamed turn still carries no
-    # token count — [budget] announces that it cannot be enforced on this path.
+    # hoosh does not send one yet (re-checked at 2.6.10: it meters a stream by the reservation and names this
+    # decode as its follow-up), so a streamed turn still carries no token count — [budget] announces that it
+    # cannot be enforced on this path. The option STAYS (0.45.5): it is what hoosh's follow-up will honour, and
+    # _agent_sse_cb / hoosh_extract_usage already read the frame, so nothing here changes when it lands.
     if (stream == 1) { off = _append_cstr_cap(dst, off, cap, ",\"stream\":true,\"stream_options\":{\"include_usage\":true}}"); }
     else { off = _append_cstr_cap(dst, off, cap, ",\"stream\":false}"); }
     if (off > (cap - 1)) { off = cap - 1; }   # 0.39.0 (A-6): the returned length is a POST body

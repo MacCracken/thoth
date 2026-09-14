@@ -736,16 +736,18 @@ fn test_status_bar_0450() {
     # golden lead, built from the producers: `<repo> · <branch> +N  model <id>` (each half omitted when absent)
     var _bg[640];
     var _bo = 0;
+    var _blead = 0;                                                             # 1 once the repo/branch lead drew (the bar's own rule)
     _bo = _ftree_append_cstr(&_bg, _bo, 640, "  ");                             # 0.45.3: two columns in from the edge
     if (project_dir_name() != 0) {
         _bo = _ftree_append_cstr(&_bg, _bo, 640, " ");                          # 0.45.3: the flat folder (U+F07B) before the location
         _bo = _ftree_append_cstr(&_bg, _bo, 640, project_dir_name());
+        _blead = 1;
     }
     var _blab = 0;
     if (git_present() == 1) {
         _blab = git_branch();
         if (git_detached() == 1) { _blab = "(detached)"; }
-        if (_bo > 0) { _bo = _ftree_append_cstr(&_bg, _bo, 640, " · "); }
+        if (_blead == 1) { _bo = _ftree_append_cstr(&_bg, _bo, 640, " · "); }
         _bo = _ftree_append_cstr(&_bg, _bo, 640, _blab);
         if (git_dirty() > 0) {
             var _bdb[24];
@@ -754,8 +756,12 @@ fn test_status_bar_0450() {
             _bo = _ftree_append_cstr(&_bg, _bo, 640, " +");
             _bo = _ftree_append_cstr(&_bg, _bo, 640, &_bdb);
         }
+        _blead = 1;
     }
-    if (_bo > 0) { _bo = _ftree_append_cstr(&_bg, _bo, 640, "  "); }
+    # 0.45.5: the gutter follows the LEAD, not "anything appended" — with the indent in front, `_bo > 0` was
+    # always true, so a run with no $PWD and no repo (cyrius test on the Mac exports neither) built a golden
+    # with a gutter the bar rightly never draws. Caught by the first macOS run at the pin.
+    if (_blead == 1) { _bo = _ftree_append_cstr(&_bg, _bo, 640, "  "); }
     _bo = _ftree_append_cstr(&_bg, _bo, 640, "model claude-opus-5");
     store8(&_bg + _bo, 0);
     assert(_bn >= _bo, "the bar is at least as long as its lead");
@@ -1630,6 +1636,73 @@ fn test_rainbow() {
     assert_eq(tui_theme_next(), THEME_LIGHT, "⌃T: dark -> light");
     assert_eq(tui_theme_next(), THEME_RAINBOW, "⌃T: light -> rainbow");
     assert_eq(tui_theme_next(), THEME_DARK, "⌃T: rainbow -> dark (cycles home, never -1)");
+
+    # 0.45.5 (repair batch 1, item 7): the DIAGONAL — a row's gradient starts UI_RAINBOW_ROW_SHIFT columns further
+    # along per logical line, keyed by the line's ring index (the hue belongs to the text), and a direct call paints
+    # row 0 (the old gradient exactly)
+    ui_force(PT_RICH, CD_TRUE);
+    ui_set_theme(THEME_RAINBOW);
+    feed_rainbow_row_set(1);
+    var _dg[512];
+    var _dgw = feed_clip_seg(&_dg, 500, "AB", 2, 0, 80);
+    store8(&_dg + _dgw, 0);
+    assert_eq(_ui_contains(&_dg, "38;2;255;36;0"), 1, "row 1: glyph 0 starts UI_RAINBOW_ROW_SHIFT (2) steps along (phase 36)");
+    assert_eq(_ui_contains(&_dg, "38;2;255;54;0"), 1, "...glyph 1 one step further (phase 54)");
+    var _dh[512];
+    var _dhw = feed_clip_seg(&_dh, 500, "AB", 2, 0, 80);
+    assert_eq(memeq(&_dg, &_dh, _dgw), 1, "...and a repaint of the same row is byte-identical (deterministic, no shimmer)");
+    feed_rainbow_row_set(0);
+    var _d0[512];
+    var _d0w = feed_clip_seg(&_d0, 500, "AB", 2, 0, 80);
+    store8(&_d0 + _d0w, 0);
+    assert_eq(_ui_contains(&_d0, "38;2;255;0;0"), 1, "row 0 again: the pre-0.45.5 gradient (phase 0 at column 0)");
+    feed_rainbow_row_set(0 - 5);
+    var _dn[512];
+    var _dnw = feed_clip_seg(&_dn, 500, "A", 1, 0, 80);
+    store8(&_dn + _dnw, 0);
+    assert_eq(_ui_contains(&_dn, "38;2;255;0;0"), 1, "a negative row clamps to 0");
+
+    # 0.45.5 (repair batch 1, item 3): a SEMANTIC role span keeps its colour under the rainbow. A t-ron DENY line
+    # or the /reprobe health notice is stored with a red/green marker; the painter used to hue every glyph by
+    # column, so the notice cycled with the row. Built through the real seal path (markers), painted by the
+    # real painter.
+    ui_force(PT_RICH, CD_TRUE);
+    ui_set_theme(THEME_RAINBOW);
+    assert_eq(ui_rainbow_active(), 1, "premise: the rainbow is active for the painter");
+    feed_init();
+    out_mode_set(OUT_RING);
+    emit("ab"); ui_emit(ROLE_RED, "DENY"); emit("cd");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var _sm[512];
+    var _smw = feed_clip_seg(&_sm, 500, feed_line_ptr(0), feed_line_len(0), 0, 80);
+    store8(&_sm + _smw, 0);
+    var _red_deny[64]; var _rdo = _ftree_append_cstr(&_red_deny, 0, 64, ui_sgr(ROLE_RED)); _rdo = _ftree_append_cstr(&_red_deny, _rdo, 64, "DENY"); store8(&_red_deny + _rdo, 0);
+    assert_eq(_t_count_sub(&_sm, _smw, &_red_deny, _rdo), 1, "the red span's glyphs follow the red SGR with NO hue escape between them");
+    assert_eq(_t_count_sub(&_sm, _smw, "\x1b[38;2;", 7), 5, "exactly 4 hue escapes (a, b, c, d) + the one red SGR — the DENY glyphs took none");
+    assert_eq(ui_role_is_semantic(ROLE_RED), 1, "red is semantic");
+    assert_eq(ui_role_is_semantic(ROLE_GREEN), 1, "green is semantic");
+    assert_eq(ui_role_is_semantic(ROLE_ACCENT), 0, "accent is presentation — tinted");
+    assert_eq(ui_role_is_semantic(0 - 1), 0, "no role -> tinted");
+    # a soft-wrapped segment that STARTS inside the span inherits it through the carry: "ENY" untinted, "cd" tinted
+    var _sw[512];
+    var _sww = feed_clip_seg(&_sw, 500, feed_line_ptr(0), feed_line_len(0), 3, 80);
+    store8(&_sw + _sww, 0);
+    var _red_eny[64]; var _reo = _ftree_append_cstr(&_red_eny, 0, 64, ui_sgr(ROLE_RED)); _reo = _ftree_append_cstr(&_red_eny, _reo, 64, "ENY"); store8(&_red_eny + _reo, 0);
+    assert_eq(_t_count_sub(&_sw, _sww, &_red_eny, _reo), 1, "a segment opening inside the span carries the red SGR and leaves ENY untinted");
+    assert_eq(_t_count_sub(&_sw, _sww, "\x1b[38;2;", 7), 3, "...2 hue escapes (c, d) + the carried red SGR");
+    # the green twin, and prose after the reset is tinted again
+    feed_init();
+    out_mode_set(OUT_RING);
+    ui_emit(ROLE_GREEN, "READY"); emit(" x");
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    var _sg[512];
+    var _sgw = feed_clip_seg(&_sg, 500, feed_line_ptr(0), feed_line_len(0), 0, 80);
+    store8(&_sg + _sgw, 0);
+    var _grn[64]; var _gro = _ftree_append_cstr(&_grn, 0, 64, ui_sgr(ROLE_GREEN)); _gro = _ftree_append_cstr(&_grn, _gro, 64, "READY"); store8(&_grn + _gro, 0);
+    assert_eq(_t_count_sub(&_sg, _sgw, &_grn, _gro), 1, "READY stays green under the rainbow");
+    assert_eq(_t_count_sub(&_sg, _sgw, "\x1b[38;2;", 7), 2, "...the green SGR + one hue for the `x` after the reset");
 
     # restore defaults for later tests
     ui_set_theme(THEME_DARK);

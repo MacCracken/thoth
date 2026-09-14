@@ -6,6 +6,13 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.45.5** (2026-09-13, not a full sweep): repair batch 1 updated `CHANGELOG.md`,
+> `docs/development/state.md` (version block, **Targets** header — macOS at the pin, **Tests** counts, **Next**),
+> `docs/development/roadmap.md` (batch 1 → shipped, batch 2 marked NEXT, the streaming-usage decision reversed in the
+> waiting table and the registry, the content-escapes entry dropped, the memory / rainbow / history / macOS entries
+> reduced to their residuals), `.thoth/config.cyml.example` (`[history].file` `~/` expansion, `[history].size`),
+> `README.md` (stamp) and this file.
+>
 > **Touched at 0.45.4** (2026-09-13, not a full sweep): the tagline / status-bar follow-ups updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block, **Tests** counts), `README.md` (stamp) and this file; and
 > `docs/development/roadmap.md` was **re-cut around the batch discipline** — repairs as numbered patch batches

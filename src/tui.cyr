@@ -1968,6 +1968,7 @@ fn feed_repaint() {
                 slen = fsearch_render(_hl_buf, HL_CAP, ptr, len, coff);
                 sptr = _hl_buf;
             }
+            feed_rainbow_row_set(li);                 # 0.45.5: the diagonal — this LOGICAL line's slant (its segments share it)
             var w = feed_clip_seg(_paint_buf, PAINT_CAP, sptr, slen, sg * fwidth, fwidth);
             if (w > 0) { emit_raw_n(_paint_buf, w); }
             sg = sg + 1;
@@ -1976,6 +1977,7 @@ fn feed_repaint() {
         tty_clear_to_eol();
         painted = painted + 1;
     }
+    feed_rainbow_row_set(0);                          # 0.45.5: a direct painter call after this (tree, tests) is row 0 again
     return 0;
 }
 
@@ -2649,11 +2651,14 @@ fn tui_loop() {
     var _hpath = config_history_file();
     if (_hpath != 0) {
         var _hn = inhist_persist_init(_hpath);
+        inhist_persist_size_set(config_history_size());   # 0.45.5: [history].size — the lines a save keeps
+        # 0.45.5: named as `~/…` under $HOME (the config may have said `~/` itself — expanded at load), through
+        # the LABEL sanitiser like every other path thoth echoes
         if (_hn >= 0) {
-            ui_emit(ROLE_FAINT, "input history: "); emit(_hpath);
+            ui_emit(ROLE_FAINT, "input history: "); emit_clean_line(config_path_display(_hpath));
             ui_emit(ROLE_FAINT, " ("); ofmt_int(_hn); ui_emit(ROLE_FAINT, " recalled)");
         } else {
-            ui_emit(ROLE_FAINT, "input history: cannot write "); emit(_hpath);
+            ui_emit(ROLE_FAINT, "input history: cannot write "); emit_clean_line(config_path_display(_hpath));
             ui_emit(ROLE_FAINT, " — not persisted (in-memory only)");
         }
         feed_flush_pending();
