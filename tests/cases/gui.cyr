@@ -990,45 +990,126 @@ fn test_gturn_reply_landed() {
     return 0;
 }
 
-# GUI per-turn reasoning fold (0.35.3): a LANDED turn keeps its thinking fold — the reasoning is persisted in
-# reasonlog keyed by the turn tag and rendered above ITS reply, even after later turns land (the live 0.35.2 fold
-# showed only the in-flight turn). PURE (greason_build_turn + reasonlog + session_history_turn over the feed).
+# GUI per-turn reasoning fold (0.35.3; on the message since 0.48.0): a LANDED turn keeps its thinking fold — the
+# reasoning is attached to ITS reply and rendered above it, even after later turns land (the live 0.35.2 fold
+# showed only the in-flight turn). PURE (greason_build_msg + session_history_reason over the feed).
 fn test_gui_reason_perturn() {
-    test_group("GUI per-turn reasoning fold (0.35.3)");
-    reasonlog_reset(); roundlog_reset(); session_reset(); session_history_clear();
+    test_group("GUI per-turn reasoning fold (0.35.3 / 0.48.0)");
+    roundlog_reset(); session_reset(); session_history_clear();
     if (greason_collapsed() == 1) { greason_toggle(); }   # ensure expanded so a record yields visible height
-    # turn 1 reasoned; turn 2 did NOT
+    # turn 1 reasoned; turn 2 did NOT — the production order: append the reply, then record onto it
     var t1 = session_bump_turn();
     session_history_append("user", "q1", 2);
-    reasonlog_record(t1, "because X then Y", 16);
     session_history_append("assistant", "a1", 2);
+    reasonlog_record(t1, "because X then Y", 16);
     var t2 = session_bump_turn();
     session_history_append("user", "q2", 2);
     session_history_append("assistant", "a2", 2);
-    # per-turn filtering: turn 1 has a fold, turn 2 (no reasoning) renders nothing
-    assert(greason_build_turn(0, 0, 0, 600, t1) > 0, "turn 1 (reasoned) has a fold block");
-    assert_eq(greason_build_turn(0, 0, 50, 600, t2), 50, "turn 2 (no reasoning) renders no fold (returns y)");
+    # per-message filtering: reply 1 has a fold, reply 2 (no reasoning) renders nothing, a user message never does
+    assert(greason_build_msg(0, 0, 0, 600, 1) > 0, "reply 1 (reasoned) has a fold block");
+    assert_eq(greason_build_msg(0, 0, 50, 600, 3), 50, "reply 2 (no reasoning) renders no fold (returns y)");
+    assert_eq(greason_build_msg(0, 0, 50, 600, 0), 50, "a user message renders no fold");
+    assert_eq(greason_build_msg(0, 0, 50, 600, 9), 50, "an index past the history renders no fold");
+    assert_eq(greason_build_msg(0, 0, 50, 600, 0 - 1), 50, "...nor a negative one");
     # measure == draw (parity): the measure-only height equals the drawn height
-    var mh = greason_build_turn(0, 0, 0, 600, t1);
+    var mh = greason_build_msg(0, 0, 0, 600, 1);
     var cmds = gd_list_new();
-    var dh = greason_build_turn(cmds, 0, 0, 600, t1);
+    var dh = greason_build_msg(cmds, 0, 0, 600, 1);
     assert_eq(mh, dh, "reasoning fold: measure height == draw height (parity)");
-    # the fold SURVIVES the reply landing + a later turn — the whole point of 0.35.3: with the record the feed is
-    # taller than without it (turn 1's fold interleaves above a1 even though a2 is the latest message).
+    # the fold SURVIVES the reply landing + a later turn — the whole point of 0.35.3: with the reasoning the feed
+    # is taller than without it (reply 1's fold interleaves above a1 even though a2 is the latest message).
     var with1 = _gfeed_flow(0, 14, 0, 560, session_history_len());
-    reasonlog_reset();
+    var ra = load64(vec_get(_sess_hist_vec(), 1) + 48);
+    store64(vec_get(_sess_hist_vec(), 1) + 48, 0);        # take the reasoning off the message
     var without = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    store64(vec_get(_sess_hist_vec(), 1) + 48, ra);       # ...and put it back
     assert(with1 > without, "a landed turn's reasoning fold persists above its reply after later turns land");
-    # collapse shrinks it: collapsed (header only) < expanded (header + body), same record
-    reasonlog_record(t1, "because X then Y", 16);
-    var exph = greason_build_turn(0, 0, 0, 600, t1);
+    # collapse shrinks it: collapsed (header only) < expanded (header + body), same reasoning
+    var exph = greason_build_msg(0, 0, 0, 600, 1);
     greason_toggle();                                     # collapse
-    var colh = greason_build_turn(0, 0, 0, 600, t1);
+    var colh = greason_build_msg(0, 0, 0, 600, 1);
     greason_toggle();                                     # restore expanded (the default)
     assert(colh > 0, "collapsed fold still renders a header row");
     assert(exph > colh, "collapsing the fold shrinks it (header only vs header + body)");
-    reasonlog_reset(); roundlog_reset(); session_history_clear(); session_reset();
+    roundlog_reset(); session_history_clear(); session_reset();
     return 0;
+}
+
+# GUI reasoning fold across RESUME (0.48.0, F3): the reasoning is persisted with the conversation (an RSN frame per
+# reply) and read back by INDEX, so a resumed reply — whose turn tag is 0, like every resumed message — still draws
+# its fold. The store is written, dropped, and reloaded from the file here: the fold on the reloaded reply can only
+# come from the RSN branch of the loader (there is no ring for it to come from).
+fn test_gui_reason_resume() {
+    test_group("GUI reasoning fold survives a resume (0.48.0, F3)");
+    var path = "build/.thoth_gui_reason_resume.tmp";
+    roundlog_reset(); session_reset(); session_history_clear();
+    if (greason_collapsed() == 1) { greason_toggle(); }
+    var t1 = session_bump_turn();
+    session_history_append("user", "why is the sky blue", 18);
+    session_history_append("assistant", "Rayleigh scattering.", 20);
+    reasonlog_record(t1, "shorter wavelengths scatter more\n\tso blue dominates", 51);
+    var t2 = session_bump_turn();
+    session_history_append("user", "and sunsets", 11);
+    session_history_append("assistant", "Longer path, red survives.", 26);
+    var live = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert_eq(_sess_write_file(path), 0, "premise: the store writes");
+    session_reset(); session_history_clear();
+    assert_eq(session_history_len(), 0, "premise: the conversation is gone");
+    assert_eq(_sess_load_file(path), 4, "the file loads its four messages back");
+    assert_eq(session_turns(), 0, "premise: a resumed session has no live turn");
+    assert_eq(session_history_turn(1), 0, "premise: a resumed message carries turn 0 (the old ring's key is dead here)");
+    assert_eq(session_history_reason_len(1), 51, "the resumed reply carries its reasoning (51 bytes)");
+    assert_eq(_t_count_sub(session_history_reason(1), session_history_reason_len(1), "shorter wavelengths scatter more\n\tso blue dominates", 51), 1, "...byte for byte, newline and tab intact");
+    assert_eq(session_history_reason(3), 0, "the reply that had none still has none");
+    assert(greason_build_msg(0, 0, 0, 600, 1) > 0, "the resumed reply draws its fold");
+    assert_eq(greason_build_msg(0, 0, 50, 600, 3), 50, "...the other draws none");
+    var resumed = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert_eq(resumed, live, "the resumed feed measures exactly as the live one did (the fold included)");
+    var mh = greason_build_msg(0, 0, 0, 600, 1);
+    var cmds = gd_list_new();
+    var dh = greason_build_msg(cmds, 0, 0, 600, 1);
+    assert_eq(mh, dh, "resumed fold: measure height == draw height (parity)");
+    assert(vec_len(cmds) > 0, "...and the draw pass emitted commands");
+    greason_toggle();
+    var colh = greason_build_msg(0, 0, 0, 600, 1);
+    greason_toggle();
+    assert(mh > colh, "Ctrl+R collapses a resumed fold like a live one");
+    xunlink(path);
+    # the window's standing notices (no once-only line to ack): a save that failed mid-session, and a store that
+    # could not be bound at startup — the latter only when the greeting (which carries it) is not drawn
+    var n0 = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    _sess_broke = 1;
+    var nb = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(nb > n0, "a failed session save adds a standing notice to the flow");
+    var bl = gd_list_new();
+    assert_eq(_gfeed_flow(bl, 14, 0, 560, session_history_len()), nb, "...measure == draw with it");
+    assert_eq(_t_gd_text_count(bl, "session file write failed"), 1, "...naming the failure once");
+    _sess_broke = 0;
+    _sess_init_failed = 1;
+    var ni = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(ni > n0, "an unwritable store adds a standing notice under the resumed messages (the greeting is not drawn then)");
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, session_history_len());
+    assert_eq(_t_gd_text_count(bl, "session file not writable"), 1, "...naming it");
+    _sess_init_failed = 2;
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, session_history_len());
+    assert_eq(_t_gd_text_count(bl, "larger than thoth can load"), 1, "...or the too-large reason");
+    session_history_clear();
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, 0);
+    assert_eq(_t_gd_text_count(bl, "larger than thoth can load"), 0, "on an empty conversation the greeting carries the fact instead — the flow stays silent");
+    _sess_init_failed = 0;
+    roundlog_reset(); session_history_clear(); session_reset();
+    return 0;
+}
+# _t_gd_text_count: how many text commands of a draw list carry `needle`.
+fn _t_gd_text_count(cmds, needle) {
+    var c = 0;
+    var i = 0;
+    while (i < vec_len(cmds)) {
+        var cmd = vec_get(cmds, i);
+        if (gd_kind(cmd) == GD_TEXT) { if (gd_text(cmd) != 0) { if (_t_count_sub(gd_text(cmd), strlen(gd_text(cmd)), needle, strlen(needle)) > 0) { c = c + 1; } } }
+        i = i + 1;
+    }
+    return c;
 }
 
 # GUI structural markdown (mdmodel + gfeed, 0.36.0): assistant replies render with structure — headings ACCENT,

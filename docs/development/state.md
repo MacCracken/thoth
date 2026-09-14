@@ -7,6 +7,18 @@
 
 ## Version
 
+**0.48.0** — **a reply's reasoning survives a restart; `thoth gui` resumes** (2026-09-13, F3). The GUI's thinking
+fold read a session-scoped ring keyed by the turn tag (0.35.3) — a resumed conversation drew no folds. The reasoning
+now lives ON the message (session.cyr `+48`, a write-once arena set through `session_history_reason_last_set`, read by
+`session_history_reason(i)`; the ring, `reasonlog_find`/`_text`/`_len` retired — `reasonlog_record` attaches + counts),
+persisted as a trailing `RSN\t<len>\n<bytes>\n` frame beside `CITE`/`TOOL` (magic unchanged; the loader cleans the
+stored copy, appends records only for `user`/`assistant` and SKIPS unknown frames with their payloads; the load buffer
+is 16 MiB, lazy). `greason_build_msg(i)` draws a resumed reply's fold at turn 0. `gui_run` binds
+`sess_persist_init(config_session_file())` — the window never had — and the greeting box carries the session row on
+both surfaces (`session resumed N messages from ~/…` / the red not-writable row; the TUI's feed line for it retired);
+a failed save stands as a red notice in the window. `/save --json` gains `"reasoning"`, the markdown a `_thinking:_`
+block. Suite **406 + 1679 + 873 + 759 + 190 + 5** (+102); Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
 **0.47.0** — **the model picker shows each provider's health and each model's rate** (2026-09-13, F2). The picker's
 rows, `/models` and `/models <provider>` carry the health hoosh's prober reports (`GET /v1/health/providers`, one
 entry per ROUTE, folded per provider to its best route — a model is served by the first enabled route of its
@@ -3575,7 +3587,8 @@ audit chain included — passes.
 - **Session + conversation** — `session` (session state, per-message model, and the **keyed multi-conversation
   store** — the `conv_*` API + `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool
   calls), `roundlog` / `editlog` / `memlog` (the tool-round / edit-diff / memory-grounding rings), `inhist`
-  (composer history recall).
+  (composer history recall); `reasonlog` is the reasoning capture seam (0.48.0: the reasoning itself lives on the
+  message in `session`).
 - **Spine clients** — `hoosh` (inference, streaming, `/models`, the provider-health table — 0.47.0), `daimon` (MCP list/call), `agent` (the model-driven
   agentic loop), `memory` (consume **mneme** via daimon — recall/citations/grounding/`/notes` — degrading to the
   local `.thoth/memory` reader).
@@ -3604,8 +3617,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **382 + 1620 + 873 + 740 + 190 + 5 assertions across the suites as of
-0.47.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **406 + 1679 + 873 + 759 + 190 + 5 assertions across the suites as of
+0.48.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

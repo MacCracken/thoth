@@ -24,20 +24,29 @@ fn _t_reason_line(expect) {   # emit the /state reason row to the feed ring; occ
 # /state reason row (0.35.4): the [hoosh].reasoning effort + turns-folded surface. PURE (config + reasonlog only,
 # no network probe) — captured via the OUT_RING feed sink like the elapsed-secs row.
 fn test_state_reason_row() {
-    test_group("/state reason row (0.35.4)");
-    reasonlog_reset();
+    test_group("/state reason row (0.35.4; off the store since 0.48.0)");
+    session_reset(); session_history_clear();
     _cfg_hoosh_reasoning = 0;                  # off
     assert(_t_reason_line("off") >= 1, "reason row: off shows 'off'");
     assert(_t_reason_line("low|medium|high") >= 1, "reason row: off gives the enable hint");
-    _cfg_hoosh_reasoning = 2;                  # medium, nothing folded yet (the Opus 4.8 case)
+    _cfg_hoosh_reasoning = 2;                  # medium, nothing captured yet (the Opus 4.8 case)
     assert(_t_reason_line("medium") >= 1, "reason row: shows the effort word");
-    assert(_t_reason_line("internal") >= 1, "reason row: on + 0 folds -> 'may keep reasoning internal'");
-    assert_eq(_t_reason_line("folded"), 0, "reason row: no folded-count when nothing captured");
-    reasonlog_record(1, "r", 1);               # two turns' reasoning captured
+    assert(_t_reason_line("internal") >= 1, "reason row: on + no reply with reasoning -> 'may keep reasoning internal'");
+    assert_eq(_t_reason_line("with reasoning"), 0, "reason row: no count when nothing captured");
+    session_history_append("user", "q", 1);
+    session_history_append("assistant", "a", 1);
+    reasonlog_record(1, "r", 1);               # two replies with reasoning
+    session_history_append("user", "q", 1);
+    session_history_append("assistant", "a", 1);
     reasonlog_record(2, "r", 1);
-    assert(_t_reason_line("folded") >= 1, "reason row: shows the folded surface once captured");
-    assert(_t_reason_line("2") >= 1, "reason row: reports the 2 folded turns");
-    _cfg_hoosh_reasoning = 0; reasonlog_reset();   # restore defaults
+    session_history_append("user", "q", 1);
+    session_history_append("assistant", "a", 1);   # ...and one without
+    assert(_t_reason_line("with reasoning") >= 1, "reason row: shows the count once captured");
+    assert(_t_reason_line("2") >= 1, "reason row: reports the 2 replies that carry reasoning (not the one without)");
+    assert_eq(_t_reason_line("3"), 0, "...not three");
+    session_history_clear();
+    assert(_t_reason_line("internal") >= 1, "reason row: a cleared conversation reads none again (the count is the store's, not a session counter)");
+    _cfg_hoosh_reasoning = 0; session_reset();   # restore defaults
     return 0;
 }
 
@@ -2562,6 +2571,90 @@ fn test_session_persist() {
     assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.33.5 round-trip: model field intact beside CITE+TOOL frames");
     assert_eq(session_history_citation_count(1), 1, "0.33.5 round-trip: citation intact beside TOOL frames");
 
+    # --- 0.48.0 (F3): per-message reasoning persists as a trailing RSN frame, beside the model, CITE and TOOL frames ---
+    session_reset();
+    session_set_model_copy("claude-opus-4-8");
+    session_history_append("user", "q", 1);
+    session_history_append("assistant", "a", 1);
+    session_history_cite_last_add("Design Notes");
+    session_history_tool_last_add(1, 1, "read_file", "path=foo.txt");
+    session_history_reason_last_set("first\tthink\nthen answer", 23);   # a tab AND a newline: length-prefixed, never flattened
+    session_history_append("user", "q2", 2);
+    session_history_append("assistant", "a2", 2);                        # no reasoning (Opus 4.8) -> no frame
+    assert_eq(_sess_write_file("/tmp/thoth_sess_v6"), 0, "0.48.0: v6 write ok");
+    var v6 = alloc(4096);
+    var v6n = file_read_all("/tmp/thoth_sess_v6", v6, 4095);
+    if (v6n < 0) { v6n = 0; }
+    store8(v6 + v6n, 0);
+    assert_eq(_t_count_sub(v6, v6n, "RSN\t23\nfirst\tthink\nthen answer\n", 31), 1, "the file holds ONE RSN frame: token, byte length, the bytes verbatim");
+    assert_eq(_t_count_sub(v6, v6n, "RSN", 3), 1, "...and no frame for the reply without reasoning (omit-until-present)");
+    assert(_t_count_sub(v6, v6n, "TOOL\t", 5) > 0, "premise: the TOOL frame is there too");
+    assert_eq(_t_count_sub(v6, v6n, "THOTH-SESSION-2\t", 16), 1, "the magic stays v2: a pre-0.48.0 thoth parses the records (and reads the RSN frame as a user record — the downgrade residual; a v3 magic would make it load NOTHING and truncate the store on its first save)");
+    session_reset();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v6"), 4, "0.48.0 round-trip: four records");
+    assert_eq(session_history_reason_len(1), 23, "0.48.0 round-trip: the reply's reasoning (23 bytes)");
+    assert_eq(_t_count_sub(session_history_reason(1), session_history_reason_len(1), "first\tthink\nthen answer", 23), 1, "0.48.0 round-trip: tab + newline intact");
+    assert_eq(session_history_reason(3), 0, "0.48.0 round-trip: the unreasoned reply has none");
+    assert_eq(session_history_reason(0), 0, "0.48.0 round-trip: user messages have none");
+    assert(streq(session_history_model(1), "claude-opus-4-8") == 1, "0.48.0 round-trip: model intact beside the RSN frame");
+    assert_eq(session_history_citation_count(1), 1, "0.48.0 round-trip: citation intact");
+    assert_eq(session_history_tool_count(1), 1, "0.48.0 round-trip: tool call intact");
+    assert_eq(session_history_turn(1), 0, "a resumed message carries turn 0 (the fold is read by index, not by turn)");
+    # an escape in the file (the store is an untrusted door) is cleaned where it is read back
+    var hb = alloc(512);
+    var ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nCONV\t0\n\nuser\t1\nq\nassistant\t1\na\nRSN\t10\nev");
+    ho = _stx_cat_bs(hb, ho, 512, "", "x");                              # a literal backslash-x is NOT an escape: bytes stay
+    ho = _append_cstr_cap(hb, ho, 512, "\x1b[7mil\n");
+    file_write_all("/tmp/thoth_sess_v6h", hb, ho);
+    session_reset();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v6h"), 2, "a hand-written file with an RSN frame loads its two records");
+    assert_eq(session_history_reason_len(1), 10, "...the reasoning's byte count is kept (one '?' for the ESC)");
+    assert_eq(_t_count_sub(session_history_reason(1), 10, "\x1b", 1), 0, "...with no raw escape in the stored copy");
+    assert_eq(_t_count_sub(session_history_reason(1), 10, "?[7mil", 6), 1, "...the ESC read back as '?'");
+    # an orphan RSN frame (before any record) attaches to nothing and creates nothing
+    ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nRSN\t5\nstray\nuser\t1\nq\n");
+    file_write_all("/tmp/thoth_sess_v6o", hb, ho);
+    session_reset();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v6o"), 1, "an orphan RSN frame before any record is skipped; the record after it loads");
+    assert_eq(conv_count(), 1, "...into one conversation (the frame spawned none)");
+    assert_eq(session_history_reason(0), 0, "...and the user message it preceded carries no reasoning");
+    # a frame token this thoth does not know (a NEWER thoth's) is SKIPPED with its payload — never loaded as a message
+    ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nCONV\t0\n\nuser\t1\nq\nFUTR\t9\nnot\ta\tmsg\nassistant\t1\na\nsystem\t3\nsys\n");
+    file_write_all("/tmp/thoth_sess_v6u", hb, ho);
+    session_reset();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v6u"), 2, "an unknown token (FUTR) and an unknown role (system) are skipped: two records load");
+    assert(streq(session_history_content(0), "q") == 1, "...the record before the unknown frame");
+    assert(streq(session_history_content(1), "a") == 1, "...and the one after it, intact (its payload was consumed by its length)");
+    assert(streq(session_history_role(1), "assistant") == 1, "...with its own role — not the 'user' an unknown token used to become");
+    # the load buffer holds a full conversation of replies WITH their reasoning
+    assert(SESS_READ_CAP >= (SESS_HIST_MAX * (HOOSH_ACC_CAP + MSG_REASON_CAP)), "SESS_READ_CAP covers SESS_HIST_MAX replies at content cap + reasoning cap");
+    # a store LARGER than the buffer loads its leading records only — and binding it would rewrite the file from
+    # that partial picture on the next save, destroying the tail. So it is announced and NOT bound.
+    var _cap0 = SESS_READ_CAP;
+    SESS_READ_CAP = 4096;                                 # the buffer is already alloc'd at the real cap; only the read shrinks
+    ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nCONV\t0\n\nuser\t1\nq\nassistant\t1\na\n");
+    file_write_all("/tmp/thoth_sess_v6big", hb, ho);
+    var bigfd = file_open("/tmp/thoth_sess_v6big", O_WRONLY | O_APPEND, 0x180);
+    var pad = alloc(4096);
+    var pi = 0;
+    while (pi < 4096) { store8(pad + pi, 32); pi = pi + 1; }
+    file_write(bigfd, pad, 4096); file_write(bigfd, pad, 4096);   # 8 KiB of tail past the 4 KiB cap
+    file_close(bigfd);
+    session_reset();
+    assert_eq(sess_persist_init("/tmp/thoth_sess_v6big"), 0 - 1, "a store larger than the load buffer refuses to bind");
+    assert_eq(sess_persist_init_failed(), 2, "...with the 'larger than thoth can load' reason");
+    assert_eq(sess_persist_active(), 0, "...so nothing is ever written back over the unread tail");
+    assert_eq(session_history_len(), 2, "...the leading records were still loaded (read-only)");
+    feed_init(); out_mode_set(OUT_RING); sess_persist_greeting(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("session file larger than thoth can load — resume disabled (nothing is written back)"), 1, "...and the REPL's line says so");
+    SESS_READ_CAP = _cap0;
+    session_reset();
+    assert(sess_persist_init("/tmp/thoth_sess_v6") >= 0, "the same-size store binds under the real cap");
+    assert_eq(sess_persist_init_failed(), 0, "...no failure");
+    _sess_path = 0;
+    xunlink("/tmp/thoth_sess_v6big");
+    xunlink("/tmp/thoth_sess_v6"); xunlink("/tmp/thoth_sess_v6h"); xunlink("/tmp/thoth_sess_v6o"); xunlink("/tmp/thoth_sess_v6u");
+
     _sess_path = 0;                # deactivate so later tests' assistant-appends don't write a file
     session_reset();              # leave a clean single-conversation store for subsequent tests
     session_history_clear();
@@ -2819,36 +2912,59 @@ fn test_mem_seam() {
     memlog_reset();
     assert_eq(memlog_find(7), 0, "memlog_reset clears");
 
-    # reasonlog (0.35.3): the per-turn reasoning record the GUI feed reads so a LANDED thinking fold survives.
-    reasonlog_reset();
+    # reasonlog (0.35.3; on the MESSAGE since 0.48.0): the capture seam the reply-finalize sites call — the reasoning
+    # lands on the just-appended assistant message, and the seam counts the turns folded this session.
+    session_reset(); session_history_clear();
+    session_history_append("user", "q", 1);
+    session_history_append("assistant", "a", 1);
     reasonlog_record(7, "step one then two", 17);
-    var rslot = reasonlog_find(7);
-    assert(rslot != 0, "reasonlog_find locates the recorded turn");
-    assert_eq(reasonlog_len(rslot), 17, "reasonlog len = 17");
-    assert_eq(streq(reasonlog_text(rslot), "step one then two"), 1, "reasonlog text round-trips (NUL-terminated)");
-    assert_eq(reasonlog_find(99), 0, "reasonlog_find miss -> 0");
+    assert_eq(session_history_reason_count(), 1, "one reply with reasoning");
+    assert_eq(session_history_reason_len(1), 17, "the reply carries its reasoning (len 17)");
+    assert_eq(streq(session_history_reason(1), "step one then two"), 1, "...the text round-trips (NUL-terminated)");
+    assert_eq(session_history_reason(0), 0, "the user message carries none");
+    assert_eq(session_history_reason_len(0), 0, "...len 0");
     reasonlog_record(0, "x", 1);             # untagged turn (<=0) -> not recorded
-    assert_eq(reasonlog_find(0), 0, "reasonlog: untagged turn not recorded");
+    assert_eq(session_history_reason_count(), 1, "reasonlog: untagged turn not recorded");
+    assert_eq(streq(session_history_reason(1), "step one then two"), 1, "...and the reply's reasoning is untouched");
     reasonlog_record(8, "x", 0);             # no reasoning (len<=0) -> not recorded (the Opus 4.8 case)
-    assert_eq(reasonlog_find(8), 0, "reasonlog: no reasoning -> not recorded");
+    assert_eq(session_history_reason_count(), 1, "reasonlog: no reasoning -> not recorded");
     reasonlog_record(9, 0, 5);               # null text -> not recorded
-    assert_eq(reasonlog_find(9), 0, "reasonlog: null text -> not recorded");
-    # newest-wins: re-recording a turn returns the latest text
-    reasonlog_record(5, "old", 3);
+    assert_eq(session_history_reason_count(), 1, "reasonlog: null text -> not recorded");
+    # newest-wins: re-recording the turn replaces the reply's reasoning — in a FRESH arena (write-once: a forked
+    # conversation shares the old pointer, so the old bytes must never change under it)
+    var ra0 = load64(vec_get(_sess_hist_vec(), 1) + 48);
+    var old0 = session_history_reason(1);
     reasonlog_record(5, "newer", 5);
-    var r5 = reasonlog_find(5);
-    assert_eq(reasonlog_len(r5), 5, "reasonlog newest-wins: latest len");
-    assert_eq(streq(reasonlog_text(r5), "newer"), 1, "reasonlog newest-wins: latest text");
-    # aging out: only the last REASONLOG_CAP turns stay in the ring window; older turns read as 0
-    reasonlog_reset();
-    var cap1 = REASONLOG_CAP + 1;
-    var ti = 1;
-    while (ti <= cap1) { reasonlog_record(ti, "r", 1); ti = ti + 1; }
-    assert_eq(reasonlog_find(1), 0, "reasonlog: oldest turn aged out of the ring");
-    assert(reasonlog_find(2) != 0, "reasonlog: turn within the ring window kept");
-    assert(reasonlog_find(cap1) != 0, "reasonlog: newest turn kept");
-    reasonlog_reset();
-    assert_eq(reasonlog_find(7), 0, "reasonlog_reset clears");
+    assert_eq(session_history_reason_len(1), 5, "reasonlog newest-wins: latest len");
+    assert_eq(streq(session_history_reason(1), "newer"), 1, "reasonlog newest-wins: latest text");
+    assert(load64(vec_get(_sess_hist_vec(), 1) + 48) != ra0, "...in a fresh arena");
+    assert_eq(streq(old0, "step one then two"), 1, "...the old arena's bytes untouched (a fork sharing it still reads them)");
+    var big = alloc(MSG_REASON_CAP + 64);
+    var bi = 0;
+    while (bi < (MSG_REASON_CAP + 63)) { store8(big + bi, 98); bi = bi + 1; }
+    store8(big + MSG_REASON_CAP + 63, 0);
+    reasonlog_record(6, big, MSG_REASON_CAP + 63);
+    assert_eq(session_history_reason_len(1), MSG_REASON_CAP - 1, "an over-cap reasoning is stored at cap - 1 bytes");
+    assert_eq(load8(session_history_reason(1) + MSG_REASON_CAP - 1), 0, "...NUL-terminated at the cap");
+    session_history_reason_last_set(0, 0);
+    assert_eq(session_history_reason(1), 0, "a clear (len 0) leaves the reply without reasoning");
+    assert_eq(session_history_reason_len(1), 0, "...len 0");
+    session_history_reason_last_set("back", 4);
+    assert_eq(streq(session_history_reason(1), "back"), 1, "...and a set after the clear works");
+    # a fork shares the reply's reasoning (the record is copied, the arena pointer with it)
+    var fk = conv_fork(conv_active());
+    assert(fk >= 0, "premise: the conversation forks");
+    conv_switch(fk);
+    assert_eq(_t_count_sub(session_history_reason(1), session_history_reason_len(1), "back", 4), 1, "the forked conversation's reply carries the same reasoning");
+    conv_switch(0);
+    assert_eq(session_history_reason_count(), 1, "the count is the store's: one reply carries reasoning");
+    session_history_clear(); session_reset();
+    # no message at all: the seam is a no-op, never a write to nothing
+    reasonlog_record(3, "orphan", 6);
+    assert_eq(session_history_len(), 0, "recording with no message appends nothing");
+    session_history_reason_last_set("orphan", 6);
+    assert_eq(session_history_len(), 0, "...nor does the set");
+    assert_eq(session_history_reason_count(), 0, "...and an empty conversation counts none");
 
     _daimon_mem_probed = 0 - 1;   # reset the cache — later tests assume unprobed
     return 0;
@@ -3081,6 +3197,37 @@ fn test_save_formats() {
     var mb = &mbuf;
     assert(mn > 0, "markdown export wrote a file");
     assert(_ui_contains(mb, "# thoth transcript") == 1, "markdown default unchanged");
+    # 0.48.0: a reply's reasoning rides the json (its own key, escaped) and the markdown (a _thinking:_ block); the
+    # plain export stays content-only; a reply without reasoning gets no key and no block
+    session_history_reason_last_set("think \"hard\"\nabout it", 21);
+    session_history_append("user", "more", 4);
+    session_history_append("assistant", "ok", 2);
+    xunlink("/tmp/thoth_t_save.json");
+    cmd_save("/save --json /tmp/thoth_t_save.json");
+    jn = _save_read("/tmp/thoth_t_save.json", &jbuf, 4095);
+    assert(_ui_contains(jb, "\"reasoning\":\"think \\\"hard\\\"\\nabout it\"") == 1, "json carries the reasoning under its own key, escaped");
+    assert_eq(_t_count_sub(jb, jn, "\"reasoning\"", 11), 1, "...once: the reply without reasoning has no key (omit-until-present)");
+    assert(_ui_contains(jb, "\"content\":\"ok\"}") == 1, "...and that reply's object still closes");
+    var jv = bayan_json_v_parse_buf(jb, jn);
+    assert(jv != 0, "the --json export parses as JSON");
+    var jm = bayan_json_v_obj_get(jv, "messages");
+    assert_eq(bayan_json_v_arr_len(jm), 4, "...four messages");
+    var jr = bayan_json_v_obj_get(bayan_json_v_arr_get(jm, 1), "reasoning");
+    assert(jr != 0, "...the reasoned reply's object carries the key");
+    var jrs = bayan_json_v_str(jr);
+    assert((jrs != 0) && (str_eq_cstr(jrs, "think \"hard\"\nabout it") == 1), "...decoding back to the bytes");
+    assert_eq(bayan_json_v_obj_get(bayan_json_v_arr_get(jm, 3), "reasoning"), 0, "...the unreasoned reply's object has none");
+    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get(bayan_json_v_arr_get(jm, 3), "content"))), "ok") == 1, "...and its content is intact after the own-chunk flush");
+    xunlink("/tmp/thoth_t_save.md");
+    cmd_save("/save /tmp/thoth_t_save.md");
+    mn = _save_read("/tmp/thoth_t_save.md", &mbuf, 4095);
+    assert_eq(_t_count_sub(mb, mn, "_thinking:_\nthink \"hard\"\nabout it\n\n", 35), 1, "markdown carries a _thinking:_ block after the reply's content");
+    assert_eq(_t_count_sub(mb, mn, "_thinking:_", 11), 1, "...once");
+    assert_eq(_t_count_sub(mb, mn, "line1\nline2\n\n_thinking:_", 23), 1, "...directly under ITS reply's content (not the other's)");
+    xunlink("/tmp/thoth_t_save.txt");
+    cmd_save("/save --plain /tmp/thoth_t_save.txt");
+    pn = _save_read("/tmp/thoth_t_save.txt", &pbuf, 4095);
+    assert_eq(_ui_contains(pb, "think"), 0, "plain stays content-only");
     session_reset(); session_history_clear();
     return 0;
 }

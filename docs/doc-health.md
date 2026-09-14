@@ -6,6 +6,14 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.48.0** (2026-09-13, not a full sweep): F3 updated `CHANGELOG.md`, `docs/development/state.md`
+> (version block, the **Session** bullet, **Tests** counts), `docs/development/roadmap.md` (F3 → shipped with its
+> residuals; the registry gains the GUI's unbound `[history].file` and the on-compositor fold check; the minor
+> candidates now start at 0.49.0), `docs/guides/getting-started.md` (`src/session.cyr` carries reasoning;
+> `src/reasonlog.cyr` is the capture seam), `.thoth/config.cyml.example` (`[session]`: the reasoning is in the file,
+> the GUI binds it), `src/project.cyr`'s refusal rationale, `README.md` (stamp) and this file. No ADR earned: the
+> message-owns-its-side-data rule is 0.33.4/0.33.5's, applied.
+>
 > **Touched at 0.47.0** (2026-09-13, not a full sweep): F2 updated `CHANGELOG.md`, `docs/development/state.md`
 > (version block, the **Spine clients** bullet, **Tests** counts), `docs/development/roadmap.md` (F2 → shipped with its
 > residuals; the hoosh waiting row gains F2's three asks — the serving route per catalog entry, a pricing-table dump,

@@ -233,6 +233,75 @@ fn test_greet() {
     assert_eq(feed_count(), greet_box_rows(), "...the block is the box");
     assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "┌", 3), 1, "...opening with the top border in column 0");
     assert_eq(feed_vis(0), 40, "...spanning the whole 40-col grid (inner 36 + frame 4)");
+
+    # --- 0.48.0 (F3): the session row — what a bound [session].file resumed, or that it could not be written ---
+    var _sp = _sess_path; var _sr = _sess_resumed; var _sf = _sess_init_failed;
+    _sess_path = 0; _sess_resumed = 0; _sess_init_failed = 0;
+    greet_build(1);
+    var _r = 0; var _hit = 0;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "session ") == 1) { _hit = 1; } if (_tg_row_has(_r, "session file not writable") == 1) { _hit = 1; } _r = _r + 1; }
+    assert_eq(_hit, 0, "persistence off: no session row (nothing to say)");
+    var _base = greet_rows();
+    _sess_path = "/home/someone/.thoth_session"; _sess_resumed = 0;
+    greet_build(1);
+    assert_eq(greet_rows(), _base, "bound but nothing resumed (an empty store): still no row");
+    _sess_resumed = 12;
+    greet_build(1);
+    _r = 0; var _srow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "session ") == 1) { _srow = _r; } _r = _r + 1; }
+    assert(_srow > 0, "bound and resumed: a session row");
+    assert_eq(greet_row_spans(_srow - 1), 0, "...under an open row (its own group)");
+    assert(streq(greet_span_text(_srow, 0), "session ") == 1, "...the faint label first");
+    assert_eq(greet_span_role(_srow, 0), ROLE_FAINT, "...faint");
+    var _rt[256];
+    _tg_row_text(_srow, &_rt, 256);
+    assert(streq(&_rt, "session resumed 12 messages from /home/someone/.thoth_session") == 1, "...`session resumed 12 messages from <path>`");
+    _sess_init_failed = 1;
+    greet_build(1);
+    _r = 0; var _frow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "session file not writable") == 1) { _frow = _r; } _r = _r + 1; }
+    assert(_frow > 0, "an unwritable session file: the red row instead");
+    assert_eq(greet_span_role(_frow, 0), ROLE_RED, "...red");
+    _tg_row_text(_frow, &_rt, 256);
+    assert(streq(&_rt, "session file not writable — resume disabled") == 1, "...`session file not writable — resume disabled`");
+    _r = 0; _hit = 0;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "session ") == 1) { _hit = 1; } _r = _r + 1; }
+    assert_eq(_hit, 0, "...and no resumed row beside it");
+    _sess_init_failed = 2;
+    greet_build(1);
+    _r = 0; _frow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "session file larger than thoth can load") == 1) { _frow = _r; } _r = _r + 1; }
+    assert(_frow > 0, "a store larger than the load buffer: its own red row");
+    _tg_row_text(_frow, &_rt, 256);
+    assert(streq(&_rt, "session file larger than thoth can load — resume disabled (nothing is written back)") == 1, "...saying nothing is written back");
+    # the session group sits AFTER the config group and its red warnings (which stay directly under the config row)
+    _sess_init_failed = 0; _sess_resumed = 3;
+    var _un0 = _cfg_unknown_n;
+    _cfg_unknown_n = 1;
+    greet_build(1);
+    _r = 0; var _crow = 0 - 1; var _wrow = 0 - 1; _srow = 0 - 1;
+    while (_r < greet_rows()) {
+        if (_tg_row_has(_r, "config ") == 1) { _crow = _r; }
+        if (_tg_row_has(_r, "config: ") == 1) { _wrow = _r; }
+        if (_tg_row_has(_r, "session ") == 1) { _srow = _r; }
+        _r = _r + 1;
+    }
+    assert((_wrow > 0) && (_srow > 0), "premise: the config warning and the session row are both built");
+    if (_crow >= 0) { assert_eq(_wrow, _crow + 1, "the red config warning sits directly under the config row"); }
+    else { assert(1, "(no config parsed in this process — the config row is absent, so only the order below is checked)"); }
+    assert(_srow > _wrow, "...and the session row comes after the warning");
+    assert_eq(greet_row_spans(_srow - 1), 0, "...under its own open row");
+    _cfg_unknown_n = _un0;
+    # the path is cleaned on its way into the box (the TUI paints greeting spans as raw bytes)
+    _sess_path = "/home/some\x1b[7mone/.thoth_session"; _sess_resumed = 2;
+    greet_build(1);
+    _r = 0; _srow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "session ") == 1) { _srow = _r; } _r = _r + 1; }
+    _tg_row_text(_srow, &_rt, 256);
+    assert_eq(_t_count_sub(&_rt, strlen(&_rt), "\x1b", 1), 0, "an escape in the configured path never reaches the greeting store");
+    assert_eq(_t_count_sub(&_rt, strlen(&_rt), "some?[7mone", 11), 1, "...it reads as '?'");
+    _sess_path = _sp; _sess_resumed = _sr; _sess_init_failed = _sf;
+    greet_build(1);
     ui_force(_t0, _d0);
     return 0;
 }

@@ -2,6 +2,85 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.48.0] - 2026-09-13
+
+**A reply's reasoning survives a restart — and `thoth gui` finally resumes.** The third feature arc under the
+batch discipline (F3). The GUI's thinking fold read a session-scoped ring keyed by the turn tag, so a resumed
+conversation — every message reloads at turn 0 — drew no folds, and eight later reasoned turns aged an older fold
+out while its reply stayed. The reasoning now lives ON the message, rides the conversation file, and comes back
+with it. And the window, the only front end that draws the fold, never bound `[session].file` at all — the store
+was neither loaded nor written under it — so the arc had to give the GUI its resume first. Suite **406 + 1679 +
+873 + 759 + 190 + 5** (+102). Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
+### Added — the reasoning on the message, persisted as an `RSN` frame (F3)
+
+- **The message is the store.** A session record grows from 48 to 56 bytes: `+48` is a lazily-alloc'd reasoning
+  arena `{len, bytes…}` set through `session_history_reason_last_set(text, len)` (a fresh arena every set — WRITE-
+  ONCE like content and model, because `conv_fork` copies the record and a forked message shares the pointer;
+  capped at `MSG_REASON_CAP - 1`, the live fold's own cap) and read by `session_history_reason(i)` /
+  `_len(i)`. The four reply-finalize sites still call `reasonlog_record(turn, text, len)`; it now attaches to
+  the just-appended reply and counts the turn for `/state`'s "folded" row. The 8-slot ring, `reasonlog_find` /
+  `_text` / `_len` are gone — one store, not two.
+- **The frame.** `RSN\t<len>\n<bytes>\n` follows a reply's `CITE` / `TOOL` frames; length-prefixed, so the
+  reasoning's own newlines and tabs travel verbatim; loaded through the same seam and then cleaned IN the stored
+  copy (the file is an untrusted door — project.cyr's rationale). Omit-until-present: a reply without reasoning
+  (Opus 4.8) writes no frame. The magic stays `THOTH-SESSION-2`; the load buffer grows to 16 MiB (lazily, only
+  when a file loads) so a full conversation of replies WITH their reasoning fits.
+- **The loader learned to skip.** A v2 record is appended only for the roles `user` / `assistant`
+  (`_sess_role_known`); any other token — a frame a NEWER thoth writes — is skipped with its payload. Before,
+  an unknown token became a "user" record: a store with one new frame would have replayed that frame's bytes to
+  the model as the operator's words. (A pre-0.48.0 thoth reading a 0.48.0 store still does exactly that with the
+  `RSN` frame — the reasoning re-sent as a user turn, a `SESS_HIST_MAX` slot per reply, cemented by that binary's
+  first save; downgrade only, recorded in the roadmap. A magic bump would be worse: an old thoth loads nothing
+  from a `THOTH-SESSION-3` file and truncates it on its first save.)
+- **The fold reads the message.** `greason_build_msg(cmds, x, cy, avail, i)` replaces the turn-keyed
+  `greason_build_turn`: a resumed reply draws its fold although its turn tag is 0; Ctrl+R collapses it like a
+  live one; measure == draw as before.
+- **`/save` carries it.** `--json` gains a `"reasoning"` key per reply that streamed any (flushed as its own
+  chunk — content and reasoning each escape to up to six times 64 KiB, so they never share one build); the
+  markdown transcript a `_thinking:_` block after the reply's content; `--plain` stays content-only.
+- **`/state`'s reason row reads the store.** `N reply(ies) with reasoning in this conversation` — derived, so a
+  resumed conversation counts its folds and a `/reset` drops them (the 0.35.4 "folded this session" counter went
+  with the ring; `/reset` no longer wipes a ring that another conversation's folds lived in).
+- **A store larger than the load buffer is not bound.** It used to load its leading records and the next save
+  rewrote the file from that partial picture, destroying every conversation past the cap. `sess_persist_init`
+  now refuses (`session file larger than thoth can load — resume disabled (nothing is written back)`) on every
+  surface's greeting, and the leading records stay readable.
+
+### Added — `thoth gui` binds the conversation store; the greeting says what it resumed
+
+`gui_run` calls `sess_persist_init(config_session_file())` at its startup (main.cyr binds it for the REPL/TUI
+after `thoth gui` has already returned — the window's `sess_persist_save` was a no-op under `OUT_NULL`, and a
+conversation, its tool cards and its folds died with the process). The greeting box gains a **session** group on
+both surfaces — `session resumed N messages from ~/…`, or the red `session file not writable — resume
+disabled` — so the TUI's separate feed line for it is gone (the REPL keeps its banner line). The window carries
+the same facts as standing red notices in the flow whenever the greeting is not drawn — a store that resumed
+messages hides the greeting, which is exactly when there is something to say — and a save that fails
+mid-session likewise (the REPL/TUI announce it once and ack; the window has no once-only line, and the failure
+is true of every turn after it). The session group sits after the config group and its red warnings; the path
+is cleaned on its way into the box like every path thoth echoes. `.thoth/config.cyml.example`'s `[session]`
+SECURITY note now says the file holds the model's chain-of-thought too.
+
+Tests (+102): the reasonlog block (the seam attaches to the last reply, counts, refuses an untagged turn / no
+reasoning / a null text, replaces in a fresh arena leaving the old bytes for a fork, caps at `MSG_REASON_CAP - 1`,
+clears, a fork shares the reasoning, a set with no message writes nothing); the `RSN` round trip beside the
+model / `CITE` / `TOOL` frames (the frame's bytes on disk, one frame for one reasoned reply, the v2 magic kept, tab
++ newline intact, turn 0 on reload; a hand-written file with an escape cleaned on load; an orphan `RSN` before any
+record skipped; an unknown token and an unknown role skipped with their payloads, the records around them intact;
+`SESS_READ_CAP` sized for a full conversation with reasoning); `/save` json (parsed back: the key inside the reasoned reply's object, none on the other) / markdown (the block under
+ITS reply) / plain; the GUI fold per
+message (the production order, no fold for a user message or an index out of range, parity, collapse) and
+**across a resume** — the store written, dropped and reloaded from the file, the resumed reply drawing its fold,
+the resumed feed measuring exactly as the live one, parity, Ctrl+R; the greeting's session row (off / bound but
+empty / resumed / not writable / too large / after the config warnings / an escape in the path); the window's
+standing notices (a failed save, an unbindable store under resumed messages, silent when the greeting carries it);
+`/state`'s derived count; the too-large store refusing to bind (the cap lowered in the test) and the REPL's line.
+Proven by breaking, eight ways: the loader dropping the `RSN` frame (the GUI resume test is the only net — there is
+no ring to pass through), the writer omitting it, the old unknown-token fallthrough, no clean on load, the fold
+gated on the turn tag, the overflow binding anyway, the window's notice dropped, `/state` counting messages. Live on a pty: a hand-built store with an `RSN`
+frame resumed in the TUI (the greeting's session row), `/save --json` and the markdown carrying the reasoning,
+`/reset` clearing it.
+
 ## [0.47.0] - 2026-09-13
 
 **The model picker shows each provider's health and each model's rate.** The second feature arc under the batch

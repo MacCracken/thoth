@@ -34,7 +34,7 @@ var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
-# backing model sees prior turns. Each message is alloc(48) (fields +0..+40 below — keep this in sync with the
+# backing model sees prior turns. Each message is alloc(56) (fields +0..+48 below — keep this in sync with the
 # alloc site; a doc/code drift here is exactly what preceded the 0.36.4 conv-struct OOB): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
@@ -45,7 +45,10 @@ var _sess_cost_unpriced = 0;
 # overwrite retroactively), +32 citations (0.33.4 — a lazily-alloc'd citation set: the recalled-source TITLES a reply
 # cited, or 0; persisted as trailing CITE frames, so a resumed conversation keeps its cited sources), +40 tool calls
 # (0.33.5 — a lazily-alloc'd set of {kind, ok, name, args} the reply produced, or 0; persisted as trailing TOOL
-# frames, so a resumed conversation keeps its tool cards),
+# frames, so a resumed conversation keeps its tool cards), +48 reasoning (0.48.0 — a lazily-alloc'd, WRITE-ONCE
+# {len@0, bytes@8.. NUL} arena holding the chain-of-thought the reply streamed, or 0; persisted as a trailing RSN frame, so a resumed
+# conversation keeps its thinking folds — the message is the ONE store of a reply's reasoning: reasonlog.cyr's ring
+# retired at 0.48.0). Each message is alloc(56) — keep this in sync with BOTH alloc sites (append + conv_fork),
 # which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
@@ -155,11 +158,12 @@ fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; hoos
 # Goose duplicate).
 #
 # ⚠ THE MESSAGE RECORDS ARE COPIED, NOT SHARED, and that is load-bearing rather than defensive. A message
-# record is 48 bytes and its last two fields are attached LAZILY AFTER the message exists —
-# `citations_attach_to_last` writes +32 and `roundlog_attach_calls_to_last` writes +40, both on the NEWEST
-# message. Sharing records would make the parent's next citation attach appear inside the fork (and vice
-# versa), so the two conversations would silently rewrite each other's history at exactly the point they
-# were supposed to diverge.
+# record is 56 bytes and its last three fields are attached LAZILY AFTER the message exists —
+# `citations_attach_to_last` writes +32, `roundlog_attach_calls_to_last` writes +40 and (0.48.0)
+# `session_history_reason_last_set` writes +48, all on the NEWEST message. Sharing records would make the
+# parent's next citation attach appear inside the fork (and vice versa), so the two conversations would silently
+# rewrite each other's history at exactly the point they were supposed to diverge. The +48 arena itself is
+# write-once (a re-set allocates a fresh one), so the pointer copy shares bytes that never change.
 #
 # The strings the records POINT AT are shared, deliberately: content (+8) and the per-message model id
 # (+24) are written once at append and never rewritten, so copying them would duplicate every byte of the
@@ -184,10 +188,11 @@ fn conv_fork(i) {
     var k = 0;
     while (k < n) {
         var sm = vec_get(sv, k);
-        var dm = alloc(48);
+        var dm = alloc(56);
         if (dm == 0) { return 0 - 1; }
         var b = 0;
-        while (b < 48) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included)
+        while (b < 56) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included; the
+                                                                        # +48 reasoning arena is shared — write-once per reply)
         vec_push(dv, dm);
         k = k + 1;
     }
@@ -492,6 +497,64 @@ fn session_history_tool_args(i, j) { var e = _sess_tool_entry(i, j); if (e == 0)
 # ASSISTANT reply is auto-tagged with the CURRENT session model (the one that produced it); user/system messages
 # carry no model. The loader calls _session_history_append_ex directly with the model parsed from the file (which
 # is the model at save time, not the live one). Drops the oldest message past SESS_HIST_MAX.
+# --- per-message reasoning (0.48.0, F3): the chain-of-thought a reply streamed --------------------------------
+# The GUI's thinking fold (0.35.2 live, 0.35.3 landed) read a session-scoped ring keyed by the turn tag — so a
+# resumed conversation (every message reloads at turn 0) drew no folds, and eight later reasoned turns aged an
+# older fold out while its reply stayed. The reasoning now lives ON the message at +48 — a lazily-alloc'd arena
+# {len@0, bytes@8.. NUL-terminated} — persisted as a trailing RSN frame and read back by INDEX, so a fold survives a
+# restart with its reply. Live capture (reasonlog_record at the four reply-finalize sites) and the file loader BOTH
+# funnel through session_history_reason_last_set, so the stored / persisted / reloaded text caps identically. The
+# store carries no reasonlog.cyr dependency. MSG_REASON_CAP matches REASON_ACC_CAP (hoosh.cyr) so a landed fold
+# shows exactly what the live fold did. The arena is WRITE-ONCE like content and model: a re-set allocates a fresh
+# one and the message points at it — never an edit in place, because conv_fork copies the record and the forked
+# message shares the arena pointer (the 0.33.x rule for every per-message field). Replies' content and reasoning
+# accrete on the never-freeing bump heap for the process lifetime; SESS_HIST_MAX bounds the count.
+var MSG_REASON_CAP = 65536;
+fn _msg_reason_last() {
+    if (conv_count() == 0) { return 0; }                 # no conversation yet -> nothing to attach to (an orphan RSN
+    var v = _sess_hist_vec();                            # frame before any record is a no-op, like CITE)
+    var n = vec_len(v);
+    if (n == 0) { return 0; }
+    return vec_get(v, n - 1);
+}
+# session_history_reason_last_set: attach `len` bytes of reasoning to the last message (copied into a FRESH arena,
+# capped at MSG_REASON_CAP - 1, NUL-terminated). len <= 0 or text == 0 clears it (the message points at nothing).
+# Idempotent — the last set wins.
+fn session_history_reason_last_set(text, len) {
+    var m = _msg_reason_last();
+    if (m == 0) { return 0; }
+    if ((text == 0) || (len <= 0)) { store64(m + 48, 0); return 0; }
+    var n = len;
+    if (n > (MSG_REASON_CAP - 1)) { n = MSG_REASON_CAP - 1; }
+    var ra = alloc(8 + n + 1);
+    store64(ra, n);
+    memcpy(ra + 8, text, n);
+    store8(ra + 8 + n, 0);
+    store64(m + 48, ra);
+    return 0;
+}
+# session_history_reason_count: how many messages of the ACTIVE conversation carry reasoning — the /state "reason"
+# row's count, derived from the store so a resume and a /reset are honest by construction. PURE.
+fn session_history_reason_count() {
+    var n = session_history_len();
+    var c = 0;
+    var i = 0;
+    while (i < n) { if (session_history_reason_len(i) > 0) { c = c + 1; } i = i + 1; }
+    return c;
+}
+# session_history_reason(i) / session_history_reason_len(i): message i's reasoning cstr (or 0) and its byte length
+# (0 when none — the Opus 4.8 case, a user message, a pre-0.48.0 file). PURE.
+fn session_history_reason(i) {
+    var ra = load64(vec_get(_sess_hist_vec(), i) + 48);
+    if (ra == 0) { return 0; }
+    return ra + 8;
+}
+fn session_history_reason_len(i) {
+    var ra = load64(vec_get(_sess_hist_vec(), i) + 48);
+    if (ra == 0) { return 0; }
+    return load64(ra);
+}
+
 fn session_history_append(role, content, clen) {
     var model = 0;
     if (streq(role, "assistant") == 1) { model = session_model(); }   # attribute the reply to its producing model
@@ -502,7 +565,7 @@ fn session_history_append(role, content, clen) {
 # never aliased, because session._model_buf (what session_model() returns) is one shared buffer a mid-session
 # switch overwrites; a raw alias would retroactively rewrite every earlier reply's model.
 fn _session_history_append_ex(role, content, clen, model) {
-    var m = alloc(48);
+    var m = alloc(56);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
@@ -514,6 +577,7 @@ fn _session_history_append_ex(role, content, clen, model) {
     store64(m + 24, mv);                     # 0.33.3: per-message model id (or 0)
     store64(m + 32, 0);                      # 0.33.4: citation set (lazily alloc'd when a cited title is attached)
     store64(m + 40, 0);                      # 0.33.5: tool-call set (lazily alloc'd when a tool call is attached)
+    store64(m + 48, 0);                      # 0.48.0: reasoning arena (lazily alloc'd when a reply's thinking is attached)
     var v = _sess_hist_vec();
     vec_push(v, m);
     # 0.36.4: the cap is DESTRUCTIVE — the oldest message is freed from the conversation for good (gone from the
@@ -660,10 +724,12 @@ fn session_history_clear() {
 var SESS_FILE_MAGIC = "THOTH-SESSION-1";     # v1 (legacy, single linear thread) — still LOADED for back-compat
 var SESS_FILE_MAGIC_V2 = "THOTH-SESSION-2";  # v2 (0.33.2) — all conversations, framed with CONV headers
 var SESS_MODE = 0x180;         # 0600 rw------- — best-effort CREATE mode (see the header note on perms)
-var SESS_READ_CAP = 3145728;   # 3 MiB load buffer (>= SESS_HIST_MAX * HOOSH_ACC_CAP); a larger file loads its leading records only
+var SESS_READ_CAP = 16777216;  # 16 MiB load buffer (0.48.0: >= SESS_HIST_MAX * (HOOSH_ACC_CAP + MSG_REASON_CAP), lazily alloc'd only when a file loads); a larger file loads its leading records only
 var _sess_path = 0;            # bound file path (0 = persistence OFF)
 var _sess_broke = 0;           # 1 if a save FAILED mid-session (persistence auto-disabled; announce once)
-var _sess_init_failed = 0;     # 1 if [session].file was set but unwritable at startup (announce once)
+var _sess_init_failed = 0;     # 1 if [session].file was set but unwritable at startup, 2 if it was larger than the load
+                               # buffer (0.48.0 — resume disabled so the truncated store is never written back); announce once
+var _sess_load_overflow = 0;   # 1 when the last _sess_load_file filled SESS_READ_CAP (the file is bigger; its tail never loaded)
 var _sess_resumed = 0;         # count of messages loaded at startup (for the greeting)
 var _sess_read_buf = 0;        # alloc(SESS_READ_CAP), lazy — whole-file load buffer
 var _sess_hdr_buf = 0;         # alloc(64), lazy — the "<role>\t<clen>\n" record header scratch on save
@@ -675,6 +741,13 @@ fn _sess_eqn(a, b, n) {
     return 1;
 }
 
+# _sess_role_known (0.48.0): 1 iff a frame token is one of the two roles a record can carry. The v2 loader appends a
+# record only for these; every other token is a frame (CONV / CITE / TOOL / RSN) or unknown-and-skipped.
+fn _sess_role_known(s, slen) {
+    if ((slen == 9) && (_sess_eqn(s, "assistant", 9) == 1)) { return 1; }
+    if ((slen == 4) && (_sess_eqn(s, "user", 4) == 1)) { return 1; }
+    return 0;
+}
 # _sess_role_literal: map a parsed role name to a STABLE literal. session_history_append stores the role
 # POINTER without copying (see its body), so it MUST outlive the call — never a temp/parse buffer. Unknown
 # roles default to "user" (a benign, honest fallback).
@@ -832,6 +905,8 @@ fn _sess_write_file(path) {
                     tj = tj + 1;
                 }
             }
+            var ra = load64(m + 48);                  # 0.48.0: a trailing RSN frame for this reply's reasoning
+            if (ra != 0) { if (_sess_write_reason(fd, ra + 8, load64(ra)) < 0) { ok = 0 - 1; } }
             mi = mi + 1;
         }
         ci = ci + 1;
@@ -848,6 +923,7 @@ fn _sess_load_file(path) {
     var fd = file_open(path, 0, 0);                       # O_RDONLY; <0 -> absent, nothing to resume
     if (fd < 0) { return 0; }
     if (_sess_read_buf == 0) { _sess_read_buf = alloc(SESS_READ_CAP); }
+    _sess_load_overflow = 0;
     var total = 0;
     var go = 1;
     while (go == 1) {
@@ -855,6 +931,10 @@ fn _sess_load_file(path) {
         if (got <= 0) { go = 0; }
         else { total = total + got; if (total >= SESS_READ_CAP) { go = 0; } }
     }
+    # 0.48.0: a file the buffer cannot hold loads its leading records only — and the next save would rewrite the
+    # store from that partial picture, destroying every conversation past the cap. Say so (sess_persist_init
+    # refuses to bind) rather than heal a file thoth never read whole.
+    if (total >= SESS_READ_CAP) { var probe[8]; if (file_read(fd, &probe, 1) > 0) { _sess_load_overflow = 1; } }
     file_close(fd);
     # v2 (0.33.2, all conversations): "THOTH-SESSION-2\t<active>\n" ...
     var mlv2 = strlen(SESS_FILE_MAGIC_V2);
@@ -945,6 +1025,22 @@ fn _sess_load_tool(p, num) {
     return 0;
 }
 
+# _sess_write_reason: a trailing "RSN\t<len>\n<reasoning>\n" frame (0.48.0). Length-prefixed like content, so the
+# reasoning's own newlines and tabs (kept by the TEXT policy) need no flattening; the bytes go straight to fd, never
+# through the 64-byte header scratch.
+fn _sess_write_reason(fd, text, len) {
+    var h = 0;
+    store8(_sess_hdr_buf, 82); store8(_sess_hdr_buf + 1, 83); store8(_sess_hdr_buf + 2, 78); h = 3;   # "RSN"
+    store8(_sess_hdr_buf + h, 9); h = h + 1;               # '\t'
+    h = _sess_uint_into(_sess_hdr_buf, h, len);
+    store8(_sess_hdr_buf + h, 10); h = h + 1;              # '\n'
+    var ok = 0;
+    if (file_write(fd, _sess_hdr_buf, h) != h) { ok = 0 - 1; }
+    if (len > 0) { if (file_write(fd, text, len) != len) { ok = 0 - 1; } }
+    if (file_write(fd, "\n", 1) != 1) { ok = 0 - 1; }
+    return ok;
+}
+
 # _sess_load_v2: the multi-conversation parser. `mend` = the '\t' offset after the magic. Both a CONV header and a
 # message record share the "<token>\t<num>\n<payload>\n" frame (token=="CONV": num=title_len, payload=title; else
 # token=role: num=clen, payload=content), so one loop + one bounds check handles both. Rebuilds the store from
@@ -1000,11 +1096,19 @@ fn _sess_load_v2(mend, total) {
                             } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "TOOL", 4) == 1)) {
                                 # 0.33.5: a tool call for the just-appended message
                                 if (num > 0) { _sess_load_tool(p, num); }
-                            } else {
+                            } else { if ((tlen == 3) && (_sess_eqn(_sess_read_buf + tstart, "RSN", 3) == 1)) {
+                                # 0.48.0: the just-appended reply's reasoning — copied through the one seam, then
+                                # cleaned IN the stored copy: the file is an untrusted door (project.cyr's rationale)
+                                if (num > 0) { session_history_reason_last_set(_sess_read_buf + p, num); var rl = _msg_reason_last(); if (rl != 0) { var rla = load64(rl + 48); if (rla != 0) { clean_text_n(rla + 8, load64(rla)); } } }
+                            } else { if (_sess_role_known(_sess_read_buf + tstart, tlen) == 1) {
                                 if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
                                 _session_history_append_ex(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num, model_ptr);
                                 loaded = loaded + 1;
-                            } } }
+                            } } } } }
+                            # 0.48.0: any other token is a frame this thoth does not know — a NEWER thoth's — and is
+                            # SKIPPED with its payload, never loaded as a message. (Before this an unknown token read
+                            # as a "user" record: a file with one new frame would have replayed that frame's bytes
+                            # to the model as the operator's words.)
                             p = p + num;
                             if ((p < total) && (load8(_sess_read_buf + p) == 10)) { p = p + 1; }   # skip payload separator
                         }
@@ -1038,6 +1142,7 @@ fn sess_persist_init(path) {
     if (path == 0) { return 0; }                         # not configured -> OFF
     _sess_load_file(path);
     _sess_resumed = session_total_messages();            # the ACTUAL resumed count across ALL conversations (post SESS_HIST_MAX per-conv eviction) — a >40-record conv parses more than it keeps; report what's really in context, never the raw parse count
+    if (_sess_load_overflow == 1) { _sess_init_failed = 2; return 0 - 1; }         # 0.48.0: too large to load whole -> announce + OFF (never written back)
     if (_sess_probe_writable(path) < 0) { _sess_init_failed = 1; return 0 - 1; }   # unwritable -> announce + OFF
     _sess_path = path;                                   # ACTIVE
     return _sess_resumed;
@@ -1053,14 +1158,21 @@ fn sess_persist_save() {
 }
 
 fn sess_persist_active() { if (_sess_path != 0) { return 1; } return 0; }
+fn sess_persist_path() { return _sess_path; }                       # the bound file, or 0 (0.48.0: the greeting's session row)
+fn sess_persist_init_failed() { return _sess_init_failed; }
 fn sess_persist_broke() { return _sess_broke; }
 fn sess_persist_broke_ack() { _sess_broke = 0; return 0; }
 fn sess_persist_resumed() { return _sess_resumed; }
 
-# sess_persist_greeting: emit the one-line resume note for the interactive greeting (REPL banner + TUI feed).
+# sess_persist_greeting: emit the one-line resume note for the REPL banner (the TUI and the GUI carry the same
+# facts as a row of the greeting box since 0.48.0 — greet_build).
 # Sink-aware (emit/oprintln). Honest: resumed N when messages were loaded, an unwritable note when the file
 # was set but could not be bound, nothing otherwise.
 fn sess_persist_greeting() {
+    if (_sess_init_failed == 2) {
+        emit("  "); ui_emit(ROLE_RED, "session file larger than thoth can load"); ui_emit(ROLE_FAINT, " — resume disabled (nothing is written back)"); oprintln("");
+        return 0;
+    }
     if (_sess_init_failed == 1) {
         emit("  "); ui_emit(ROLE_RED, "session file not writable"); ui_emit(ROLE_FAINT, " — resume disabled"); oprintln("");
         return 0;

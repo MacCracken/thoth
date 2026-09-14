@@ -136,7 +136,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
   the `.thoth/` home (walk up from CWD, then `~/.thoth`; legacy `./thoth.cyml` fallback).
 - `src/seams.cyr` — the capability-seam registry (the seven spine seams + status).
 - `src/term.cyr` — the portable terminal-CONTROL floor (0.44.3): the ONE route from thoth source to darshana's Linux/AGNOS-gated termios / winsize / signalfd half. On a target without it (macOS, Windows) every entry point answers honestly, so thoth takes the line tier instead of failing to link. **Add new terminal-control calls here, never a raw `tty_*` in thoth source.**
-- `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls.
+- `src/session.cyr` — session state + the avatara persona overlay, and the **keyed multi-conversation store** (`_conv_store` + the `conv_*` API) that backs `/conversations`/`/new`/`/switch`, with `THOTH-SESSION-2` persistence carrying each reply's model / cited sources / tool calls / reasoning (0.48.0).
 - `src/hoosh.cyr` — the hoosh seam client (chat completions, streaming, `/models`, the provider-health table from `GET /v1/health/providers`).
 - `src/daimon.cyr` — the daimon seam client (MCP tool list + call).
 - `src/agent.cyr` — the model-driven agentic tool-calling loop.
@@ -188,7 +188,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/redact.cyr` — secret/PII redaction of tool results (`[redact]`, on by default).
 - `src/verify.cyr` — the post-edit `[verify].command` gate (run the build/tests after a model write).
 - `src/events.cyr` — the `--events` NDJSON stream (turn/tool brackets for a driving program).
-- `src/reasonlog.cyr` — the per-turn ring behind the Ctrl+R "thinking" fold (session-scoped).
+- `src/reasonlog.cyr` — the reasoning capture seam behind the Ctrl+R "thinking" fold (0.48.0: the reasoning lives on the message and resumes with it; this file keeps the capture call + the `/state` count).
 - `src/mdmodel.cyr` — the shared structural-markdown model (facts-not-bytes) the line/TUI/GUI renderers classify with.
 - `src/util.cyr` — the output-capture sink (`OUT_FD1`/`OUT_RING`/`OUT_NULL`) + `read_line` / `emit` / helpers.
 - `src/version.cyr` — the single runtime version string (generated from `VERSION`).

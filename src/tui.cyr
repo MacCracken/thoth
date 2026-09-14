@@ -2724,7 +2724,7 @@ fn tui_loop() {
         }
         feed_flush_pending();
     }
-    sess_persist_greeting();   # 0.24.2: "resumed N messages …" (bound in main.cyr before the loop); silent if not resuming
+    # (0.24.2's "resumed N messages …" feed line moved into the greeting box's session row at 0.48.0 — greet_build)
     feed_flush_pending();
     out_mode_set(OUT_FD1);
     _tui_running = 1;

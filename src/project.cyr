@@ -175,9 +175,11 @@ fn _proj_cfg_comp_eq(path, at, cfg) {
 # That is the same confused-deputy shape A-3 closed, reopened through configuration:
 #   * `tron-policy.toml` — the model could read the exact allow/deny list constraining it, and with
 #     `[edit].enabled` rewrite it; the operator's next `/reload` or restart makes the rewrite live.
-#   * `.thoth_session` — the whole keyed conversation store in plaintext. Reading it leaks other
-#     conversations; editing it injects attacker-authored turns that are replayed as real history at the
-#     next launch (`sess_persist_init` in main.cyr), i.e. an injection that survives `/reset`.
+#   * `.thoth_session` — the whole keyed conversation store in plaintext (the model's reasoning too, since
+#     0.48.0). Reading it leaks other conversations; editing it injects attacker-authored turns that are
+#     replayed as real history at the next launch (`sess_persist_init` in main.cyr and, since 0.48.0, gui_run),
+#     i.e. an injection that survives `/reset`. A reasoning payload is cleaned again where it is read back
+#     (the loader's RSN branch), since the window draws it.
 #   * `.thoth_history` — may hold secrets the operator typed.
 # So the refusal is now data-driven off the same config that names the files.
 #

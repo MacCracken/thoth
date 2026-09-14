@@ -95,6 +95,14 @@ fn _greet_span_n(role, ptr, n) {
     return 0;
 }
 fn _greet_span(role, s) { if (s == 0) { return 0; } return _greet_span_n(role, s, strlen(s)); }
+# _greet_span_clean (0.48.0): a span from a value the operator typed (a config path) — LABEL-sanitised on the way
+# into the store (C0 / DEL -> '?'), since the TUI paints greeting spans as raw feed bytes. Clipped at 511 bytes.
+fn _greet_span_clean(role, s) {
+    if (s == 0) { return 0; }
+    var cb[512];
+    safe_label_copy(&cb, 512, s);
+    return _greet_span_n(role, &cb, strlen(&cb));
+}
 fn _greet_span_int(role, n) {
     var b[32];
     var len = fmt_int_buf(n, &b);
@@ -202,6 +210,24 @@ fn greet_build(up) {
         _greet_row();
         _greet_span(ROLE_RED, "config: "); _greet_span_int(ROLE_RED, config_unknown_count()); _greet_span(ROLE_RED, " unrecognised key(s)");
         _greet_span(ROLE_FAINT, " — ignored. /state names them.");
+    }
+    # the conversation store (0.48.0): what a bound [session].file resumed, or why it could not be bound — its own
+    # group, an open row above it, AFTER the config group and its red warnings (which sit directly under the config
+    # row). Silent when persistence is off or the store was empty (nothing to say). The path is the operator's own
+    # config value, cleaned at the span like every path thoth echoes.
+    if (sess_persist_init_failed() == 2) {
+        _greet_row();
+        _greet_row();
+        _greet_span(ROLE_RED, "session file larger than thoth can load"); _greet_span(ROLE_FAINT, " — resume disabled (nothing is written back)");
+    } elif (sess_persist_init_failed() == 1) {
+        _greet_row();
+        _greet_row();
+        _greet_span(ROLE_RED, "session file not writable"); _greet_span(ROLE_FAINT, " — resume disabled");
+    } elif ((sess_persist_active() == 1) && (sess_persist_resumed() > 0)) {
+        _greet_row();
+        _greet_row();
+        _greet_span(ROLE_FAINT, "session "); _greet_span(ROLE_FG, "resumed "); _greet_span_int(ROLE_FG, sess_persist_resumed());
+        _greet_span(ROLE_FG, " messages"); _greet_span(ROLE_FAINT, " from "); _greet_span_clean(ROLE_FG, config_path_display(sess_persist_path()));
     }
     _greet_built = 1;
     _gl_cols = 0;                                   # any previous layout is stale

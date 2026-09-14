@@ -334,10 +334,11 @@ fn _params_one(key, val) {
     return _gate_params;
 }
 
-# _state_reason_row (0.35.4): the /state "reason" row — the [hoosh].reasoning effort control + how many turns'
-# reasoning were folded (captured) this session. Effort dials the model's reasoning; the folded count is 0 on a
-# model that keeps reasoning INTERNAL (Opus 4.8) even at high effort, so it's the concrete "is reasoning actually
-# streaming?" signal. Extracted from cmd_state for unit-testability (no network probe — pure config + reasonlog).
+# _state_reason_row (0.35.4): the /state "reason" row — the [hoosh].reasoning effort control + how many replies of
+# the active conversation carry reasoning (0.48.0: read off the store, so a resumed conversation counts its folds
+# and a /reset drops them). Effort dials the model's reasoning; the count stays 0 on a model that keeps reasoning
+# INTERNAL (Opus 4.8) even at high effort, so it's the concrete "is reasoning actually streaming?" signal.
+# Extracted from cmd_state for unit-testability (no network probe — pure config + the store).
 fn _state_reason_row() {
     ui_label("  reason  : ");
     if (config_hoosh_reasoning() == 0) {
@@ -345,9 +346,9 @@ fn _state_reason_row() {
         return 0;
     }
     ui_emit(ROLE_ACCENT, config_hoosh_reasoning_effort()); ui_emit(ROLE_MUTED, " effort");
-    var n = reasonlog_total();
-    if (n > 0) { ui_emit(ROLE_MUTED, " · "); ofmt_int(n); ui_emit(ROLE_MUTED, " turn(s) folded this session"); }
-    else { ui_emit(ROLE_FAINT, " · none captured yet (this model may keep reasoning internal)"); }
+    var n = session_history_reason_count();   # 0.48.0: off the store — a resumed conversation's folds count, a /reset's do not
+    if (n > 0) { ui_emit(ROLE_MUTED, " · "); ofmt_int(n); ui_emit(ROLE_MUTED, " reply(ies) with reasoning in this conversation"); }
+    else { ui_emit(ROLE_FAINT, " · none captured in this conversation (this model may keep reasoning internal)"); }
     oprintln("");
     return 0;
 }
@@ -865,6 +866,12 @@ fn _save_history(fd) {
         var clen = strlen(content);
         if (clen > 0) { if (_save_write_clean(fd, content, clen) == 0) { ok = 0; } }
         if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
+        var rlen = session_history_reason_len(i);      # 0.48.0: the reply's reasoning (the thinking fold), when any
+        if (rlen > 0) {
+            if (_save_write_str(fd, "_thinking:_\n") == 0) { ok = 0; }
+            if (_save_write_clean(fd, session_history_reason(i), rlen) == 0) { ok = 0; }
+            if (_save_write_str(fd, "\n\n") == 0) { ok = 0; }
+        }
         var cc = session_history_citation_count(i);   # 0.33.4: the reply's recalled sources
         if (cc > 0) {
             if (_save_write_str(fd, "_recalled sources:_\n") == 0) { ok = 0; }
@@ -953,8 +960,17 @@ fn _save_json(fd) {
             off = _json_escape_into_cap(_save_jbuf, off, cap, mdl);
             off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
         }
-        off = _append_cstr_cap(_save_jbuf, off, cap, "}");
         if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
+        # 0.48.0: the reply's reasoning, when it streamed any (omit-until-present) — flushed as its OWN chunk: content
+        # and reasoning are each up to 64 KiB and escape to six times that, so the two never share one build
+        var rsn = session_history_reason(i);
+        if (rsn != 0) {
+            off = _append_cstr_cap(_save_jbuf, 0, cap, ",\"reasoning\":\"");
+            off = _json_escape_into_cap(_save_jbuf, off, cap, rsn);
+            off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
+            if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
+        }
+        if (_save_write_str(fd, "}") == 0) { ok = 0; }
         i = i + 1;
     }
     if (_save_write_str(fd, "]}\n") == 0) { ok = 0; }
@@ -2107,7 +2123,6 @@ fn cmd_reset() {
     roundlog_reset();
     editlog_reset();           # 0.31.1: drop the recorded edit diffs too
     memlog_reset();            # 0.32.5: drop the per-turn memory records too
-    reasonlog_reset();         # 0.35.3: drop the per-turn reasoning records too
     grants_clear();            # 0.40.0 (T1-6): the answers the user gave THIS session go with it — a
                                # grant outliving the conversation it was given in would be a surprise
     hoosh_compact_floor_clear();  # 0.40.0 (T1-5): an index into a history that no longer exists

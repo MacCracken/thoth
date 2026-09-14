@@ -180,8 +180,8 @@ unsure, patch.
   priority; the top of the next batch is the next thing to build. Nothing in a repair batch adds a
   capability.
 - **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing), `0.47.0`
-  the second (F2, the picker's provider health + pricing); the next decided feature earns `0.48.0`. A
-  minor is never a sweep of small things — those are patches.
+  the second (F2, the picker's provider health + pricing), `0.48.0` the third (F3, reasoning across resume);
+  the next decided feature earns `0.49.0`. A minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -230,7 +230,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 **Permanent by design (not waiting):** the Windows lane's architectural half — `SYS_SOCKET` /
 `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). The lane gates closed, announced.
 
-### Feature arcs → minors (0.48.0 and on) — candidates, unpinned until decided
+### Feature arcs → minors (0.49.0 and on) — candidates, unpinned until decided
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
 > being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
@@ -254,8 +254,17 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   model of it (the waiting table asks hoosh for the route); hoosh's health `base_url` is emitted unescaped (a
   quote in a route's url breaks the body; thoth then reads "health unavailable"); a remote route's "healthy" is a
   TCP connect, not a valid key.
-- **F3 — Reasoning across resume.** Persist a turn's reasoning fold into the conversation store so
-  it survives a restart (the `reasonlog` is session-scoped today, like the memory strip).
+- **F3 — Reasoning across resume — shipped as 0.48.0.** A reply's reasoning lives ON the message
+  (session.cyr `+48`, an `RSN` frame in the store, read by index — the 0.35.3 turn-keyed ring retired), so the
+  GUI's thinking fold survives a restart; `thoth gui` binds `[session].file` at last (it never had — the
+  window neither loaded nor wrote the store); the greeting box carries the resume row on both surfaces;
+  `/save` carries the reasoning (`--json` key, markdown `_thinking:_`). Residuals: the GUI still does not
+  bind `[history].file` (composer recall stays in-memory there — a follow-up patch, the registry below);
+  a pre-0.48.0 thoth reading a 0.48.0 store loads each `RSN` frame as a "user" record — shown as the operator's
+  words, re-sent to the model as a user turn, costing a `SESS_HIST_MAX` slot each, and cemented by that
+  binary's first save (downgrade only; a `THOTH-SESSION-3` magic would be worse — an old thoth loads nothing
+  and truncates the store on its first save; the 0.48.0 loader skips unknown frames, so the NEXT frame is
+  safe).
 - **F4 — GUI pointer plumbing.** Mouse click-to-switch on the conversation sidebar (keyboard-only
   today) and re-rendering a resumed conversation's tool/citation data as live feed cards (today it
   round-trips and shows in `/save`; the live cards are session-local).
@@ -276,6 +285,19 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 > The detail behind the batches above. Each entry is either a real defect thoth has not yet fixed
 > (**⛔**, all scheduled in a repair batch or waiting on its owner above) or an honest degradation
 > gated on an external / substrate primitive. Recorded here so it is not lost in code comments.
+
+- **⛔ The GUI does not bind `[history].file`** (surfaced by 0.48.0, F3) — `gui_run` initialises the composer's
+  recall ring (`inhist_init`) but never binds the persisted file the REPL/TUI bind (`inhist_persist_init` in
+  main.cyr, which `thoth gui` returns before); the 0.30.15 CHANGELOG called it "a small follow-up" and it never
+  landed. Composer recall in the window is in-memory only. The next repair batch: bind it at the top of
+  `gui_run` beside the session store (0.48.0's precedent), with the greeting's input-history line as the
+  window's notice. Also skipped on that path: `hooks_session_start` / `session_end` and `git_ensure_probed`
+  (the GUI calls `git_probe` itself) — decide each honestly when the batch is cut.
+
+- **The GUI thinking fold on a live compositor** (residual of 0.48.0) — the fold's survival across a restart is
+  pinned by the GUI suite's write → drop → reload → measure/draw test; what no test in the harness can do is open
+  the window on a compositor and see the resumed folds drawn. The operator's eyes close this one (`thoth gui`
+  with `[session].file` bound, a reasoning model, a restart).
 
 - **Memory double read — the last case** (residual of 0.45.5) — the root walk reaching `$HOME/.thoth` from
   below (`~/Repos/<x>` with no project `.thoth/`) is recognised by the config file's bytes (0.45.3) or the memory

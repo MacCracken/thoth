@@ -47,6 +47,6 @@ include "src/gui/gcmd.cyr"      # slash-command output cards (0.46.0, F1); befor
 include "src/gui/gfeed.cyr"
 include "tests/cases/testutil.cyr"   # 0.46.0: _t_count_sub for the command-card tests
 include "tests/cases/gui.cyr"
-fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_pane_toggles(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gui_toolcards_live(); test_gturn_reply_landed(); test_gui_toolcards_diff(); test_gui_reason_perturn(); test_gui_markdown(); test_gui_table(); test_gui_rainbow(); test_gask(); test_gcmd(); return assert_summary(); }
+fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_pane_toggles(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gui_toolcards_live(); test_gturn_reply_landed(); test_gui_toolcards_diff(); test_gui_reason_perturn(); test_gui_reason_resume(); test_gui_markdown(); test_gui_table(); test_gui_rainbow(); test_gask(); test_gcmd(); return assert_summary(); }
 var _e = main();
 syscall(60, _e);

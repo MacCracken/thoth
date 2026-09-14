@@ -481,7 +481,7 @@ fn greason_toggle() { if (_greason_collapsed == 0) { _greason_collapsed = 1; } e
 # a trailing GFEED_GAP — callers add it via the gtool/gmem `if (rcy > cy)` pattern). Collapsed -> just the header
 # row; expanded -> the header + the wrapped reasoning text (FAINT header, MUTED body, indented). len <= 0 -> cy
 # unchanged (nothing drawn; the Opus 4.8 case). Shared by the LIVE fold (0.35.2, reads _reason_acc) and the LANDED
-# per-turn fold (0.35.3, reads reasonlog) so the two render identically. The height decision reads only the passed
+# per-message fold (0.35.3; on the message since 0.48.0) so the two render identically. The height decision reads only the passed
 # text/len + the stable greason_collapsed() flag — both fixed for the duration of one gfeed_build, so measure==draw.
 fn _gfeed_reason_at(cmds, xbase, cy, avail, text, len) {
     if (len <= 0) { return cy; }
@@ -499,14 +499,15 @@ fn _gfeed_reason(cmds, xbase, cy, avail) {
     return _gfeed_reason_at(cmds, xbase, cy, avail, hoosh_last_reason(), hoosh_last_reason_len());
 }
 
-# greason_build_turn: the LANDED fold for turn `turn` — its reasoning persisted in reasonlog (0.35.3), so the fold
-# survives the reply landing. turn <= 0 or no record (never had reasoning / aged out of the ring) -> cy unchanged.
-# Mirrors gtool_build_turn / gmem_build_turn (same turn-tag key: session_history_turn(i) <-> reasonlog_find).
-fn greason_build_turn(cmds, x, cy, avail, turn) {
-    if (turn <= 0) { return cy; }
-    var slot = reasonlog_find(turn);
-    if (slot == 0) { return cy; }
-    return _gfeed_reason_at(cmds, x, cy, avail, reasonlog_text(slot), reasonlog_len(slot));
+# greason_build_msg: the LANDED fold for message `i` — its reasoning lives on the message (0.48.0: session.cyr +48,
+# persisted with the conversation as an RSN frame), so the fold survives the reply landing AND a restart: a resumed
+# reply draws its fold although its turn tag is 0. No reasoning (never had any / a user message / a pre-0.48.0
+# file) -> cy unchanged. Read by index, unlike gtool_build_turn / gmem_build_turn (whose rings are turn-keyed and
+# session-scoped).
+fn greason_build_msg(cmds, x, cy, avail, i) {
+    if (i < 0) { return cy; }
+    if (i >= session_history_len()) { return cy; }
+    return _gfeed_reason_at(cmds, x, cy, avail, session_history_reason(i), session_history_reason_len(i));
 }
 
 # _gfeed_flow: lay out all n conversation messages from (xbase, cy0) down an avail-wide column; return the y
@@ -526,11 +527,11 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
             cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), content);
         } else {
-            # 0.35.3: this turn's reasoning fold — persisted in reasonlog so it survives the reply landing (the live
-            # 0.35.2 fold showed only the in-flight turn). Renders ABOVE the tool cards (the model reasons FIRST),
-            # keyed by the message's turn tag. cy unchanged when the turn had no reasoning (Opus 4.8) or it aged out
-            # of the ring — mirrors gtool_build_turn's gating. Handoff from the live fold is seamless (same key).
-            var rcy = greason_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
+            # 0.35.3: this turn's reasoning fold — persisted so it survives the reply landing (the live 0.35.2 fold
+            # showed only the in-flight turn). Renders ABOVE the tool cards (the model reasons FIRST). 0.48.0: read
+            # off the MESSAGE (no ring, no turn key), so a resumed reply keeps its fold too. cy unchanged when the
+            # reply had no reasoning (Opus 4.8). Handoff from the live fold is seamless (the same renderer).
+            var rcy = greason_build_msg(cmds, xbase, cy, avail, i);
             if (rcy > cy) { cy = rcy + GFEED_GAP; }
             # tool-call cards (0.30.16; per-turn since 0.30.19): above EACH turn's answer, show the rounds THAT
             # turn ran — matched by the message's turn tag, so an earlier turn's cards stay put when later turns are
@@ -598,7 +599,31 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_MUTED), "- stopped -");
         cy = cy + GFEED_GAP;
     }
+    # 0.48.0: a conversation-file save that failed mid-session disabled resume (degraded closed, never faked). The
+    # REPL/TUI announce it once and ack; the window has no once-only line, so the notice stands for the process —
+    # what is true of every turn after the failure. Likewise a store thoth could not bind at startup (unwritable,
+    # or larger than it can load): the greeting box says so on an empty conversation, but a store that RESUMED
+    # messages hides the greeting — so the flow carries the same fact whenever the greeting is not drawn.
+    if (sess_persist_broke() == 1) {
+        cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "session file write failed - resume disabled for this session");
+        cy = cy + GFEED_GAP;
+    }
+    if (_gfeed_greeting_on(n) == 0) {
+        if (sess_persist_init_failed() == 2) {
+            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "session file larger than thoth can load - resume disabled (nothing is written back)");
+            cy = cy + GFEED_GAP;
+        } elif (sess_persist_init_failed() == 1) {
+            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "session file not writable - resume disabled");
+            cy = cy + GFEED_GAP;
+        }
+    }
     return cy;
+}
+# _gfeed_greeting_on: 1 when the greeting block takes the feed — an empty conversation with no turn, no notice and
+# no command card (0.46.0). The one gate gfeed_build and the flow's standing notices share.
+fn _gfeed_greeting_on(n) {
+    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gcmd_count() == 0)) { return 1; }
+    return 0;
 }
 
 # gfeed_anchor_y: the y the conversation flow starts at, given its measured `total` height and the region
@@ -620,7 +645,7 @@ fn gfeed_build(cmds, x, y, w, h) {
     gd_push_clip(cmds, x, y, w, h);
     var n = session_history_len();
     var endy = 0;
-    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gcmd_count() == 0)) {   # 0.46.0: a command card takes the greeting's place
+    if (_gfeed_greeting_on(n) == 1) {   # 0.46.0: a command card takes the greeting's place
         gscroll_reset();                                         # nothing to scroll on the empty greeting
         endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail, h - GFEED_GAP);
     } else {

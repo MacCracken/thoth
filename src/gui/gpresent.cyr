@@ -254,6 +254,13 @@ fn gui_run() {
     # front end's startup like the ask seam below, never per frame: it snapshots config + persona state and
     # takes the hoosh probe result (a silent GET, which also seeds the status strip's health dot). The frame
     # builder (_gfeed_greeting) only lays the stored model out on the current window.
+    # 0.48.0 (F3): bind conversation resume ([session].file) for THIS front end too — main.cyr binds it for the
+    # REPL/TUI after `thoth gui` has already returned, so until now the window neither loaded the store nor wrote
+    # it (sess_persist_save is a no-op while _sess_path is unbound, and nothing on this path ever bound it): a
+    # conversation and its thinking folds died with the process. (Its tool cards are still the roundlog's — a
+    # resumed reply draws its fold, not its cards; that half is F4.) Before greet_build, so the greeting's session
+    # row can say what was resumed.
+    sess_persist_init(config_session_file());
     var _gup = 0;
     if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _gup = 1; }
     greet_build(_gup);
