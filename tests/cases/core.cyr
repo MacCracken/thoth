@@ -826,6 +826,16 @@ fn test_alias() {
     assert(streq(alias_expand("/explain foo bar", 0), "explain this: foo bar"), "expand appends trailing args");
     assert_eq(alias_expand("/nope", 0), 0, "no alias -> 0 (falls through to unknown-command)");
 
+    # 0.46.0: classify_final — the class a line DISPATCHES as, aliases resolved (the GUI composer's router asks
+    # this to pick its bracket: a turn, a turn-running command, or a captured command)
+    assert_eq(classify_final("hello there"), CMD_TASK, "prose is a task");
+    assert_eq(classify_final("/help"), CMD_HELP, "a built-in is itself");
+    assert_eq(classify_final("/retry"), CMD_RETRY, "...including the turn-running ones");
+    assert_eq(classify_final("/ship"), CMD_RUN, "an alias to a command classifies as that command");
+    assert_eq(classify_final("/explain the bug"), CMD_TASK, "an alias to PROSE classifies as a task (it will run a turn)");
+    assert_eq(classify_final("/nope"), CMD_UNKNOWN_SLASH, "no alias -> unknown (the hub prints the refusal)");
+    assert_eq(classify_final("/quit"), CMD_QUIT, "/quit is the window's close");
+
     # per-depth buffers are disjoint: a depth-1 expansion must not clobber a depth-0 one.
     var d0 = alias_expand("/ship", 0);
     var d1 = alias_expand("/explain z", 1);
@@ -4176,6 +4186,14 @@ fn test_content_sanitise() {
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_cs_feed_has_byte(27), 0, "a line longer than the scratch cap is still drawn without its ESC");
     assert_eq(_mid_feed_count("xxxx?xxxx"), 1, "...the ESC as '?' in place");
+
+    # --- 0.46.0: /find answers the DESKTOP surface honestly (the GUI dispatches under OUT_RING too, so the sink alone
+    # no longer means "the TUI") ---
+    ui_force(PT_DESKTOP, CD_TRUE);
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/find needle");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("the search modal is the terminal TUI's"), 1, "/find in the window says the modal is the TUI's (PageUp/PageDown scroll)");
 
     ui_force(sv_tier, sv_depth); _ui_detected = sv_det;
     _log_enabled = saved_log;

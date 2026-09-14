@@ -517,6 +517,9 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     var cy = cy0;
     var i = 0;
     while (i < n) {
+        # 0.46.0: the slash-command cards issued when the history was i messages long sit BEFORE message i — at the
+        # point in the conversation the operator typed them (gcmd.cyr); those issued after the last message follow it
+        if (gcmd_count() > 0) { cy = gcmd_build_anchored(cmds, xbase, cy, avail, i, 0); }
         var role = session_history_role(i);
         var content = session_history_content(i);
         if (streq(role, "user") == 1) {
@@ -544,6 +547,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         cy = cy + GFEED_GAP;
         i = i + 1;
     }
+    if (gcmd_count() > 0) { cy = gcmd_build_anchored(cmds, xbase, cy, avail, n, 1); }   # 0.46.0: cards after the last message
     # a turn in flight (0.30.4): echo the just-submitted message as a provisional bubble + a working indicator,
     # BELOW the last real message. Part of the measured flow so the bottom-anchor keeps it visible. The pending
     # text is NOT in session_history yet (the turn appends it when it runs) — this is a transient render.
@@ -616,7 +620,7 @@ fn gfeed_build(cmds, x, y, w, h) {
     gd_push_clip(cmds, x, y, w, h);
     var n = session_history_len();
     var endy = 0;
-    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0)) {
+    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gcmd_count() == 0)) {   # 0.46.0: a command card takes the greeting's place
         gscroll_reset();                                         # nothing to scroll on the empty greeting
         endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail, h - GFEED_GAP);
     } else {

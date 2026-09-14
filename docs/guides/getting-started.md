@@ -175,6 +175,8 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/checkpoint.cyr` — the file-snapshot store behind `/rewind` (a pre-edit copy per model write, 0.40.0).
 - `src/ask.cyr` — the `ask_user` tool ([ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)): the model asks YOU a question mid-turn and blocks for the answer. Off by default (`[ask].enabled`).
 - `src/gui/gask.cyr` — the T3 question modal (view-builder + key fold; the blocking poll loop is in `gpresent`).
+- `src/gui/gcmd.cyr` — slash-command output cards (0.46.0): the window routes a slash line through the command
+  hub under the feed ring's capture and draws what it printed where it was issued.
 - `src/subagent.cyr` — `delegate(task)`: a scoped child *context*, off by default ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)).
 - `src/budget.cyr` — `[budget]` spend enforcement (0.44.3): session token / cost ceilings checked before every turn and between agentic rounds, delegated children billed to the same tally — and an announcement when the gateway reports no usage, because a ceiling nothing measures is not a bound.
 - `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.

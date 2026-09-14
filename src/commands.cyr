@@ -2824,6 +2824,12 @@ fn cmd_copy() {
 # there is no re-renderable feed to highlight, so it announces honestly and does nothing (floor-safe).
 fn cmd_find(line) {
     var q = arg_after(line);
+    # 0.46.0: the GUI dispatches under OUT_RING too (its command cards capture through the feed ring), so the sink
+    # alone no longer says "the TUI"; the desktop surface has PageUp/PageDown and no search modal — say so.
+    if (ui_tier() == PT_DESKTOP) {
+        oprintln("find: the search modal is the terminal TUI's — in the window, PageUp/PageDown scroll the feed");
+        return 0;
+    }
     if (out_mode() != OUT_RING) {
         oprintln("find: search runs in the rich TUI — start thoth in a terminal, then Ctrl-F (or /find <text>)");
         return 0;
@@ -2929,6 +2935,27 @@ fn cmd_dry(line) {
 # dispatch: run one input line. Returns 1 to keep looping, 0 to quit. The public entry —
 # repl.cyr / tui.cyr / oneshot.cyr call this; it seeds the alias-expansion depth at 0.
 fn dispatch(line) { return _dispatch_d(line, 0); }
+
+# classify_final (0.46.0): the class a line will DISPATCH as, aliases resolved — CMD_TASK for prose or an alias
+# that expands to prose, the built-in's id otherwise, CMD_UNKNOWN_SLASH when nothing matches (the hub then prints
+# "unknown command"). The GUI's composer asks this before handing a line over, because the three kinds of line
+# need three different brackets: a turn (cmd_task, live-painted by the pump), a command that RUNS a turn
+# (/retry, /edit — dispatched, live-painted the same way) and a plain command (dispatched under capture, shown as
+# a card). Bounded like _dispatch_d, and pure apart from alias_expand's per-depth scratch; a refused alias (a
+# control byte in its value) is left to the hub, which is where the refusal is printed.
+fn classify_final(line) {
+    var depth = 0;
+    var c = classify_input(line);
+    while ((c == CMD_UNKNOWN_SLASH) && (depth < ALIAS_MAX_DEPTH)) {
+        var ex = alias_expand(line, depth);
+        if (ex == 0) { return c; }
+        if (_alias_value_has_ctl(line) == 1) { return c; }
+        line = ex;
+        depth = depth + 1;
+        c = classify_input(line);
+    }
+    return c;
+}
 
 # _dispatch_d: dispatch at alias-expansion depth `depth`. Identical to the classic dispatch
 # for every built-in; the CMD_UNKNOWN_SLASH gap additionally tries [alias] expansion and

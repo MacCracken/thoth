@@ -179,8 +179,8 @@ unsure, patch.
   grouped into a numbered batch and shipped together as the next `0.45.x`. A batch is ordered by
   priority; the top of the next batch is the next thing to build. Nothing in a repair batch adds a
   capability.
-- **Minors are feature arcs.** `0.46.0` is the first feature added after this cut, whichever is decided;
-  a minor is never a sweep of small things — those are patches.
+- **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing); the next
+  decided feature earns `0.47.0`. A minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -228,7 +228,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 **Permanent by design (not waiting):** the Windows lane's architectural half — `SYS_SOCKET` /
 `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). The lane gates closed, announced.
 
-### Feature arcs → minors (0.46.0 and on) — candidates, unpinned until decided
+### Feature arcs → minors (0.47.0 and on) — candidates, unpinned until decided
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
 > being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
@@ -237,12 +237,10 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 > is thoth's answer), multi-platform group-chat bridges, and the web-dashboard admin stay **out of
 > scope**. Data fields follow **omit-until-present** ([ADR-0010](../adr/0010-data-producer-honest-omit.md)).
 
-- **F1 — GUI slash-command routing** (recommended first: it restores a safety option). Surface
-  `/retry`, `/edit`, `/bookmark`, `/thumbs` in the GUI, whose composer runs `cmd_task` directly and
-  bypasses `dispatch`. ⚠ 0.44.3 raised its value: the GUI's authorization modal deliberately does NOT
-  offer "allow for the whole session", because seeing that a grant is still acting and revoking it
-  both live behind `/grants`, which the GUI cannot reach. Routing slash-commands is what lets that
-  option come back.
+- **F1 — GUI slash-command routing — shipped as 0.46.0.** The window routes every slash line through the
+  command hub (cards in the feed; `/retry` and `/edit` as turns), the modal offers "yes, for this session"
+  again, and `grants N` rides every status bar. Residual: on the PE lane `[hooks]` cannot carry an
+  environment block (the waiting table).
 - **F2 — Model-picker reachability, then pricing.** hoosh serves `GET /v1/health/providers`
   (provider, base_url, status, enabled, healthy per route), so reachability can be annotated **now**
   by joining the catalog's `owned_by` against it. Per-model *pricing* still waits on hoosh:

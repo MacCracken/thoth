@@ -1434,3 +1434,163 @@ fn test_gask() {
     gask_close();
     return 0;
 }
+
+# --- slash-command cards (gcmd.cyr, 0.46.0 F1) ---------------------------------------------------------------
+# The window routes a slash line through the hub under capture and draws what it printed as a card. The suite has
+# no hub (commands.cyr is the agent stack), so the bracket runs a scripted runner that prints the way a command
+# does — ui_emit role spans and oprintln rows under OUT_RING — which is exactly what dispatch's output looks like.
+fn _tg_runner_ok(line) {
+    ui_emit(ROLE_FAINT, "label "); emit("plain"); oprintln("");
+    ui_emit(ROLE_RED, "DENIED"); emit(" tail"); oprintln("");
+    emit("unterminated");                                    # no newline: the bracket must seal it
+    return 1;
+}
+fn _tg_runner_quit(line) { oprintln("bye"); return 0; }
+fn _tg_runner_many(line) { var i = 0; while (i < 250) { emit("row"); ofmt_int(i); oprintln(""); i = i + 1; } return 1; }
+fn _tg_runner_long(line) { var i = 0; while (i < 700) { emit("x"); i = i + 1; } oprintln(""); return 1; }
+fn _tg_runner_silent(line) { return 1; }
+# _tg_cmd_texts_at: count GD_TEXT commands whose text starts with `pfx` (first n bytes) at row y
+fn _tg_text_count(l, pfx, n) {
+    var c = 0; var i = 0;
+    while (i < vec_len(l)) { var d = vec_get(l, i); if ((gd_kind(d) == GD_TEXT) && (gd_text(d) != 0)) { if (memeq(gd_text(d), pfx, n) == 1) { c = c + 1; } } i = i + 1; }
+    return c;
+}
+fn _tg_text_color(l, pfx, n) {
+    var i = 0;
+    while (i < vec_len(l)) { var d = vec_get(l, i); if ((gd_kind(d) == GD_TEXT) && (gd_text(d) != 0)) { if (memeq(gd_text(d), pfx, n) == 1) { return gd_color(d); } } i = i + 1; }
+    return 0 - 1;
+}
+fn _tg_border_ys(l, w, out, cap) {
+    var c = 0; var i = 0;
+    while (i < vec_len(l)) { var d = vec_get(l, i); if ((gd_kind(d) == GD_BORDER) && (gd_w(d) == w)) { if (c < cap) { store64(out + c * 8, gd_y(d)); } c = c + 1; } i = i + 1; }
+    return c;
+}
+fn test_gcmd() {
+    test_group("slash-command cards: the capture bracket, the store, the flow and the greeting (gcmd.cyr, 0.46.0)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    ui_set_theme(THEME_DARK);
+    out_ring_sink_set(&feed_write);           # main.cyr wires this at startup for every front end; this suite's main does not
+    session_history_clear();
+    gcmd_clear();
+    assert_eq(gcmd_count(), 0, "no cards to begin with");
+    assert_eq(gcmd_build_anchored(0, 0, 10, 800, 0, 1), 10, "no cards -> the flow's y is untouched");
+
+    # --- the bracket: the ring is the sink, sealed as a card; the runner's return is the bracket's ---
+    assert_eq(gcmd_run("/x arg", &_tg_runner_ok), 1, "the runner's keep-running comes back");
+    assert_eq(out_mode(), OUT_FD1, "...and the sink is back to fd 1");
+    assert_eq(gcmd_count(), 1, "one card");
+    assert(streq(gcmd_head(0), "/x arg") == 1, "headed by the typed line");
+    assert_eq(gcmd_lines(0), 3, "three captured lines — the unterminated one sealed by the bracket");
+    assert_eq(gcmd_dropped(0), 0, "nothing dropped");
+    assert_eq(gcmd_anchor(0), 0, "anchored at history length 0");
+    var _l1 = gcmd_line_ptr(0, 1);
+    var _n1 = gcmd_line_len(0, 1);
+    assert_eq(_t_count_sub(_l1, _n1, "DENIED", 6), 1, "the line's text is intact (the reset marker sits between the span and the tail)");
+    assert_eq(_t_count_sub(_l1, _n1, " tail", 5), 1, "...both parts");
+    var _mark[2]; store8(&_mark, 27); store8(&_mark + 1, FEED_MARK_ROLE0 + ROLE_RED);
+    assert_eq(_t_count_sub(_l1, _n1, &_mark, 2), 1, "...with the red ROLE MARKER, not a baked SGR (so /theme recolours it)");
+    assert_eq(_t_count_sub(_l1, _n1, "\x1b[38;", 5), 0, "...no raw truecolor escape stored");
+    assert_eq(load8(_l1 + _n1), 0, "each stored line is NUL-terminated (the builder pushes slices of it)");
+
+    # --- the card's draw: border, bar, the head, the lines with their colours ---
+    var _cl = gd_list_new();
+    var _yb = gcmd_build(_cl, 14, 10, 600, 0);
+    assert_eq(_yb, 10 + GCMD_PAD * 2 + 4 * GCMD_LH, "the card is pad + (head + 3 lines) rows tall");
+    assert_eq(gcmd_build(0, 14, 10, 600, 0), _yb, "...and measures the same with no command list (the pre-measure parity)");
+    var _bys[8];
+    assert_eq(_tg_border_ys(_cl, 600, &_bys, 1), 1, "one border, the column's width");
+    assert_eq(load64(&_bys), 10, "...at the card's y");
+    assert_eq(_tg_text_count(_cl, "{(o> ", 5), 1, "the owl opens the head row");
+    assert_eq(_tg_text_color(_cl, "{(o> ", 5), _ui_rgb(ROLE_ACCENT), "...in the accent");
+    assert_eq(_tg_text_count(_cl, "/x arg", 6), 1, "the typed line follows it");
+    assert_eq(_tg_text_color(_cl, "label ", 6), _ui_rgb(ROLE_FAINT), "a faint span draws faint (marker -> theme rgb)");
+    assert_eq(_tg_text_color(_cl, "plain", 5), _ui_rgb(ROLE_FG), "plain text after the reset draws in the foreground");
+    assert_eq(_tg_text_color(_cl, "DENIED", 6), _ui_rgb(ROLE_RED), "a red span draws red");
+    assert_eq(_tg_text_count(_cl, "unterminated", 12), 1, "the sealed trailing line is drawn");
+    # the rainbow: prose takes the sentinel, a semantic span keeps its colour (as the TUI painter since 0.45.5)
+    ui_set_theme(THEME_RAINBOW);
+    var _cr = gd_list_new();
+    gcmd_build(_cr, 14, 10, 600, 0);
+    assert_eq(_tg_text_color(_cr, "plain", 5), GD_RAINBOW, "rainbow: plain text takes the sentinel (resolved per glyph at raster)");
+    assert_eq(_tg_text_color(_cr, "DENIED", 6), _ui_rgb(ROLE_RED), "rainbow: a DENIED stays red");
+    ui_set_theme(THEME_DARK);
+
+    # --- the runner's quit comes back as 0 ---
+    assert_eq(gcmd_run("/quit", &_tg_runner_quit), 0, "a runner that says quit -> the bracket returns 0");
+    assert_eq(gcmd_count(), 2, "...its output is still a card");
+    # --- a silent command: a head-only card ---
+    gcmd_run("/silent", &_tg_runner_silent);
+    assert_eq(gcmd_lines(2), 0, "a command that printed nothing has no lines");
+    assert_eq(gcmd_build(0, 0, 0, 600, 2), GCMD_PAD * 2 + GCMD_LH, "...and is one row tall");
+    # --- overflow: the head is kept, the tail is counted, never silently dropped ---
+    gcmd_run("/many", &_tg_runner_many);
+    assert_eq(gcmd_lines(3), GCMD_LINES, "a 250-line capture keeps GCMD_LINES");
+    assert_eq(gcmd_dropped(3), 50, "...and counts the 50 it dropped");
+    var _cm = gd_list_new();
+    gcmd_build(_cm, 0, 0, 600, 3);
+    assert_eq(_tg_text_count(_cm, "… ", 4), 1, "...which the card says");
+    assert_eq(_tg_text_count(_cm, "row0", 4), 1, "...keeping its head");
+    # --- a long line is stored escape-safe within the cap ---
+    gcmd_run("/long", &_tg_runner_long);
+    assert(gcmd_line_len(4, 0) < GCMD_LINE_CAP, "a 700-byte line is truncated to the store's cap");
+    assert(gcmd_line_len(4, 0) >= 500, "...keeping its head");
+    # --- the ring: the oldest card goes ---
+    var _k = gcmd_count();
+    while (_k < GCMD_CARDS) { gcmd_run("/fill", &_tg_runner_silent); _k = _k + 1; }
+    assert_eq(gcmd_count(), GCMD_CARDS, "the ring fills to GCMD_CARDS");
+    gcmd_run("/ninth", &_tg_runner_silent);
+    assert_eq(gcmd_count(), GCMD_CARDS, "...and stays there");
+    assert(streq(gcmd_head(0), "/quit") == 1, "...the oldest card (/x arg) is gone; /quit is the oldest now");
+    assert(streq(gcmd_head(GCMD_CARDS - 1), "/ninth") == 1, "...the newest is last");
+
+    # --- the flow: a card sits before the message it preceded; later ones after the last message ---
+    gcmd_clear();
+    gcmd_run("/first", &_tg_runner_silent);                              # anchor 0: before message 0
+    session_history_append("user", "hello", 5);
+    session_history_append("assistant", "hi there", 8);
+    gcmd_run("/second", &_tg_runner_silent);                             # anchor 2: after the last message
+    assert_eq(gcmd_anchor(0), 0, "the first card is anchored at 0");
+    assert_eq(gcmd_anchor(1), 2, "the second at 2");
+    var _fl = gd_list_new();
+    var _fh = _gfeed_flow(_fl, 14, 0, 600, 2);
+    assert_eq(_gfeed_flow(0, 14, 0, 600, 2), _fh, "the flow measures the same with cards (the bottom-anchor parity)");
+    var _fys[8];
+    assert_eq(_tg_border_ys(_fl, 600, &_fys, 2), 2, "two card borders in the flow");
+    var _hy = 0 - 1; var _fi = 0;
+    while (_fi < vec_len(_fl)) { var _fd = vec_get(_fl, _fi); if ((gd_kind(_fd) == GD_TEXT) && (gd_text(_fd) != 0)) { if (streq(gd_text(_fd), "hello") == 1) { _hy = gd_y(_fd); } } _fi = _fi + 1; }
+    assert(_hy >= 0, "the user message is drawn");
+    assert(load64(&_fys) < _hy, "/first's card sits ABOVE the first message");
+    assert(load64(&_fys + 8) > _hy, "/second's card sits BELOW it");
+    # --- the greeting yields to a card on an empty conversation ---
+    session_history_clear();
+    gcmd_clear();
+    greet_build(0);
+    var _g0 = gd_list_new();
+    gfeed_build(_g0, 0, 0, 900, 400);
+    assert_eq(_tg_text_count(_g0, persona_tagline(), 6), 1, "empty history, no card -> the greeting (its tagline is drawn)");
+    gcmd_run("/help", &_tg_runner_ok);
+    var _g1 = gd_list_new();
+    gfeed_build(_g1, 0, 0, 900, 400);
+    assert_eq(_tg_text_count(_g1, persona_tagline(), 6), 0, "a card on an empty history takes the greeting's place");
+    assert_eq(_tg_text_count(_g1, "/help", 5), 1, "...and is drawn");
+    gcmd_clear();
+    session_history_clear();
+
+    # --- SF_GRANTS: the strip shows a session grant while one is acting, and nothing otherwise ---
+    grants_clear();
+    status_snapshot();
+    assert_eq(status_present(SF_GRANTS), 0, "no grant -> the field is omitted (ADR-0010)");
+    _grant_add("run", "ls -la");
+    status_snapshot();
+    assert_eq(status_present(SF_GRANTS), 1, "a session grant -> present");
+    assert_eq(status_ival(SF_GRANTS), 1, "...counted");
+    var _sl = gd_list_new();
+    gstatus_build(_sl, 0, 0, 900, 24);
+    assert_eq(_tg_text_count(_sl, "grants", 6), 1, "the strip draws `grants`");
+    grants_clear();
+    var _sl2 = gd_list_new();
+    gstatus_build(_sl2, 0, 0, 900, 24);
+    assert_eq(_tg_text_count(_sl2, "grants", 6), 0, "...and drops it once cleared");
+    ui_set_theme(THEME_DARK);
+    return 0;
+}

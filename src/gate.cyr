@@ -140,20 +140,24 @@ fn _confirm_via_ask(verb, obj) {
     off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, " ");
     off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, _confirm_obj_buf);
     store8(_ask_q_buf + off, 0);
-    # ⚠ NO SESSION-GRANT OPTION ON THIS PATH, deliberately. A grant is durable authority, and the two
-    # things that make one safe — being able to SEE that it is still acting (`note_println` goes to a
-    # stderr the window cannot show) and being able to REVOKE it (`/grants`) — are both unreachable from
-    # inside the T3 window, whose composer runs cmd_task directly and routes no slash commands. Offering
-    # it here would let authority accumulate somewhere the operator can neither review nor clear, which
-    # is the opposite of the posture the rest of this file takes. Re-offer it when the GUI routes slash
-    # commands (roadmap: "GUI slash-command affordances"); until then the operator re-approves, which
-    # costs a keystroke and hides nothing.
-    if (ask_pose(_ask_q_buf, "no", "yes, once", 0) == 0) {
+    # 0.46.0: THE SESSION-GRANT ANSWER IS BACK ON THIS PATH. Through 0.45.x it was withheld, deliberately: a grant
+    # is durable authority, and the two things that make one safe — being able to SEE that it is still acting and
+    # being able to REVOKE it (`/grants`) — were both unreachable from inside the T3 window, whose composer ran
+    # cmd_task directly and routed no slash commands. Both hold now: the window routes `/grants` (and every other
+    # command) through the hub as a card (src/gui/gcmd.cyr), and the status bar on EVERY surface carries a
+    # `grants N` field while one is acting (SF_GRANTS, src/surface.cyr) — the `note_println` below still goes where
+    # the window cannot show it, so the bar is the signal, not the note. Same answer text on both paths; the grant
+    # itself is `_confirm_grant_yes`, shared with the terminal prompt so the two cannot drift.
+    if (ask_pose(_ask_q_buf, "no", "yes, once", "yes, for this session") == 0) {
         log_begin("authz"); log_kv_str("tool", obj); log_kv_str("gate", "modal");
         log_kv_str("verdict", "deny"); log_kv_str("reason", "cancelled"); log_commit(SK_WARN);
         return 0;
     }
     var a = ask_answer_buf();
+    if (streq(a, "yes, for this session") == 1) {
+        log_begin("authz"); log_kv_str("tool", obj); log_kv_str("gate", "modal"); log_kv_str("verdict", "grant"); log_commit(SK_INFO);
+        return _confirm_grant_yes(verb, obj);
+    }
     if (streq(a, "yes, once") == 1) { return 1; }
     if ((streq(a, "y") == 1) || (streq(a, "Y") == 1) || (streq(a, "yes") == 1)) { return 1; }
     log_begin("authz"); log_kv_str("tool", obj); log_kv_str("gate", "modal"); log_kv_str("verdict", "deny"); log_commit(SK_INFO);

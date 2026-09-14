@@ -31,7 +31,8 @@ var SF_GIT     = 8;   # branch/detached + dirty count (present only in a repo)
 var SF_SURFACE = 9;   # ui_tier_name()
 var SF_THEME   = 10;  # ui_theme_name()
 var SF_REPO    = 11;  # project_dir_name() — the launch directory's name, the bar's lead (0.45.0; present only when $PWD yields one)
-var SF_COUNT   = 12;
+var SF_GRANTS  = 12;  # session grants in force (grant_count(); present only when > 0 — 0.46.0: authority that is still acting must be SEEN, on every surface)
+var SF_COUNT   = 13;
 
 # --- per-field cells (one i64 each; a packed array, the feed.cyr idiom — Cyrius has no structs) ----------
 var SFC_PRESENT = 0;  # 0/1 — passed the omit/config gate for this field
@@ -82,6 +83,11 @@ fn status_snapshot() {
 
     _sf_set(SF_TURNS, SFC_PRESENT, 1);
     _sf_set(SF_TURNS, SFC_IVAL, session_turns());
+    # grants — omit-until-present (ADR-0010): the count of "allow for the session" answers still acting. 0.46.0: the
+    # GUI's modal offers that answer again now that /grants is reachable from the window; a grant that the operator
+    # cannot see is the one thing src/gate.cyr's posture forbids, so the count rides the bar on both surfaces.
+    if (grant_count() > 0) { _sf_set(SF_GRANTS, SFC_PRESENT, 1); } else { _sf_set(SF_GRANTS, SFC_PRESENT, 0); }
+    _sf_set(SF_GRANTS, SFC_IVAL, grant_count());
 
     # ctx — present when history on AND non-empty; KiB via the single-sourced producer; evicted in STATE.
     if ((config_hoosh_history() == 1) && (session_history_len() > 0)) { _sf_set(SF_CTX, SFC_PRESENT, 1); }

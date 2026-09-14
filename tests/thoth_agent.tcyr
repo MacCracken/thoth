@@ -97,6 +97,7 @@ fn main() {
     test_editlog();
     test_mcpres();
     test_ask_user();
+    test_confirm_modal_grant();   # 0.46.0: the modal's session-grant answer + SF_GRANTS
     return assert_summary();
 }
 var _e = main();

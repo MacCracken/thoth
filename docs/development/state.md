@@ -7,6 +7,15 @@
 
 ## Version
 
+**0.46.0** — **the GUI routes slash commands; the authorization modal offers the session grant again** (2026-09-13,
+F1). The window's composer used to send every line to the model; `_gpresent_submit` now routes a slash line by its
+final class (`classify_final`, aliases resolved): prose and `/retry` / `/edit` as turns, everything else through
+`dispatch` under the feed ring's capture, sealed as a CARD (`src/gui/gcmd.cyr`: `{(o> /state` + the captured lines
+with their role markers, anchored where it was issued; the greeting yields to a card; `/clear` clears them, `/quit`
+closes the window). `_confirm_via_ask` poses "yes, for this session" (the same `_confirm_grant_yes` as the terminal
+prompt); `SF_GRANTS` puts `grants N` on the TUI bar and the GUI strip while a grant acts. `/find` answers the desktop
+honestly. Suite **382 + 1486 + 873 + 669 + 190 + 5** (+85); Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
 **0.45.6** — **repair batch 2** (2026-09-13). Hook event facts travel in the child's environment BLOCK
 (`exec_shell_capture_env`; `THOTH_EVENT` / `THOTH_TOOL` / `THOTH_ARGS` as `KEY=value` strings, byte for byte, the
 operator's command untouched) instead of an `export K='v'; ` prefix in argv that `/proc/<pid>/cmdline` showed to
@@ -3565,7 +3574,8 @@ audit chain included — passes.
   startup greeting's view-model + layout: the ibis splash — `splash`, GENERATED from `thoth_v1.tiff` by
   `scripts/gen-splash.sh` — beside the framed status box) drive three renderers: line-mode, the **T2 TUI** (`tui` /
   `feed` / `ftree` / `mdhl` / `diff` / `intr`), and the sovereign **T3 desktop GUI** (`src/gui/*`: the `gdraw` IR +
-  `graster` rasterizer + the `gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv` view-builders +
+  `graster` rasterizer + the `gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`/`gcmd` view-builders (`gcmd`:
+  slash-command cards, 0.46.0 — the window routes commands through the same hub) +
   `gwindow`/`gpresent`/`ginput`).
 - **Front doors** — the interactive REPL/TUI/GUI plus the one-shot `oneshot` argv path (`thoth 'task'`, `--json`,
   `-o`, `--completion`, `--tier`, `--logs`/`--log-level`).
@@ -3577,8 +3587,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **326 + 1478 + 855 + 666 + 190 + 5 assertions across the suites as of
-0.45.6 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **382 + 1486 + 873 + 669 + 190 + 5 assertions across the suites as of
+0.46.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-

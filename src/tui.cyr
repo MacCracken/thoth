@@ -1037,6 +1037,11 @@ fn tui_status_emit() {
         ui_emit(ROLE_FAINT, "  ");
         emit(ui_sgr(ROLE_GREEN)); emit(&_cbuf); emit(ui_reset());
     }
+    # grants (0.46.0): session grants still acting — omitted at zero; in the accent, because it is authority
+    if (status_present(SF_GRANTS) == 1) {
+        ui_emit(ROLE_FAINT, "  grants ");
+        emit(ui_sgr(ROLE_ACCENT)); ofmt_int(status_ival(SF_GRANTS)); emit(ui_reset());
+    }
     ui_emit(ROLE_FAINT, "  surface ");
     ui_emit(ROLE_GREEN, status_sval(SF_SURFACE));
     ui_emit(ROLE_FAINT, "  theme ");

@@ -768,6 +768,15 @@ fn test_status_bar_0450() {
     assert_eq(memeq(_bp, &_bg, _bo), 1, "the bar opens two columns in with ` <repo> · <branch> +N  model <id>` — nothing else left of the folder");
     assert_eq(_t_count_sub(_bp, _bn, "{(o>", 4), 0, "the owl/brand block is gone from the bar");
     assert_eq(_t_count_sub(_bp, _bn, thoth_version(), strlen(thoth_version())), 0, "the version is no longer on the bar");
+    # 0.46.0: a session grant in force rides the bar as `grants N` — omitted at zero (ADR-0010)
+    assert_eq(_t_count_sub(_bp, _bn, "grants ", 7), 0, "no grant -> no `grants` field on the bar");
+    grants_clear();
+    _grant_add("run", "ls");
+    feed_init(); out_mode_set(OUT_RING); tui_status_emit(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "grants 1", 8), 1, "one session grant -> `grants 1` on the bar");
+    grants_clear();
+    feed_init(); out_mode_set(OUT_RING); tui_status_emit(); feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_count_sub(feed_line_ptr(0), feed_line_len(0), "grants ", 7), 0, "...gone once /grants clears it");
     if (_blab != 0) {
         var _bin_bar = _t_count_sub(_bp, _bn, _blab, strlen(_blab));
         var _bin_lead = _t_count_sub(&_bg, _bo, _blab, strlen(_blab));

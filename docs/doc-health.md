@@ -6,6 +6,12 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.46.0** (2026-09-13, not a full sweep): F1 updated `CHANGELOG.md`, `docs/development/state.md`
+> (version block, the **Presentation ladder** bullet — `gcmd`, **Tests** counts), `docs/development/roadmap.md` (F1 →
+> shipped; the minor candidates now start at 0.47.0), `docs/guides/getting-started.md` (source layout:
+> `src/gui/gcmd.cyr`), `README.md` (stamp) and this file. ADR-0020 was checked and needs no change (its
+> session-grant sentence is about the ask tool, not the confirm modal).
+>
 > **Touched at 0.45.6** (2026-09-13, not a full sweep): repair batch 2 updated `CHANGELOG.md`,
 > `docs/development/state.md` (version block, **Toolchain** — the 6.6.3 pin and the vendored-dist line, **Targets**
 > header + aarch64/macOS rows, **Tests** counts, **Next**), `docs/development/roadmap.md` (batch 2 → shipped, the

@@ -120,6 +120,11 @@ fn gstatus_build(cmds, x, y, w, h) {
         pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "tok") + 8;
         pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_TOKENS)) + GSTATUS_GAP;
     }
+    # grants (0.46.0, omit-until-present): session grants still acting, in the accent — authority the operator must see
+    if (status_present(SF_GRANTS) == 1) {
+        pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "grants") + 8;
+        pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), status_ival(SF_GRANTS)) + GSTATUS_GAP;
+    }
     # cost (omit-until-priced)
     if (status_present(SF_COST) == 1) {
         var cb = alloc(24);

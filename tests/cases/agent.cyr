@@ -2431,6 +2431,58 @@ fn test_mcpres() {
 # outcome back through _ask_state, exactly as tui_ask and gui_ask do.
 fn _test_ask_hook() { ask_set_answer("stub-answer"); return 0; }
 fn _test_ask_hook_decline() { ask_cancel(); return 0; }
+fn _test_ask_hook_grant() { _test_ask_calls = _test_ask_calls + 1; ask_set_answer("yes, for this session"); return 0; }
+fn _test_ask_hook_once() { _test_ask_calls = _test_ask_calls + 1; ask_set_answer("yes, once"); return 0; }
+fn _test_ask_hook_no() { _test_ask_calls = _test_ask_calls + 1; ask_set_answer("no"); return 0; }
+var _test_ask_calls = 0;
+
+# 0.46.0 (F1): the authorization modal offers the session grant again — the window can reach /grants now and the
+# status bar shows a grant while it acts. Driven through the ask seam with scripted answers; the confirm itself is
+# the real one (confirm_no_tty routes it to the hook, as gui_run does).
+fn test_confirm_modal_grant() {
+    test_group("the authorization modal: yes / yes-once / yes-for-this-session (gate.cyr, 0.46.0)");
+    var sv_hook = _ask_hook;
+    var sv_notty = _confirm_no_tty;
+    var sv_log = _log_enabled;
+    _log_enabled = 0;
+    grants_clear();
+    confirm_no_tty_set(1);
+    out_mode_set(OUT_NULL);
+    ask_hook_set(&_test_ask_hook_no);
+    _test_ask_calls = 0;
+    assert_eq(confirm("run", "rm -rf build"), 0, "`no` in the modal denies");
+    assert_eq(_test_ask_calls, 1, "...the modal was posed once");
+    assert_eq(_ask_nopt, 3, "the modal poses THREE answers: no / yes, once / yes, for this session");
+    assert_eq(grant_count(), 0, "...and a deny grants nothing");
+    ask_hook_set(&_test_ask_hook_once);
+    assert_eq(confirm("run", "rm -rf build"), 1, "`yes, once` allows");
+    assert_eq(grant_count(), 0, "...without a grant");
+    _test_ask_calls = 0;
+    assert_eq(confirm("run", "rm -rf build"), 1, "...so the next identical action asks again");
+    assert_eq(_test_ask_calls, 1, "...(the modal was posed)");
+    ask_hook_set(&_test_ask_hook_grant);
+    _test_ask_calls = 0;
+    assert_eq(confirm("run", "rm -rf build"), 1, "`yes, for this session` allows");
+    assert_eq(grant_count(), 1, "...AND records a session grant");
+    assert_eq(_test_ask_calls, 1, "...(posed once)");
+    ask_hook_set(&_test_ask_hook_no);
+    _test_ask_calls = 0;
+    assert_eq(confirm("run", "rm -rf build"), 1, "the SAME action is allowed by the grant without asking — even a hook that would say no is not consulted");
+    assert_eq(_test_ask_calls, 0, "...the modal was NOT posed");
+    assert_eq(confirm("run", "ls"), 0, "a DIFFERENT action still asks (and this hook says no)");
+    assert_eq(_test_ask_calls, 1, "...the modal was posed for it");
+    status_snapshot();
+    assert_eq(status_present(SF_GRANTS), 1, "the status view-model shows the grant while it acts");
+    assert_eq(status_ival(SF_GRANTS), 1, "...one");
+    grants_clear();
+    status_snapshot();
+    assert_eq(status_present(SF_GRANTS), 0, "...and drops it once cleared (what /grants clear does)");
+    out_mode_set(OUT_FD1);
+    confirm_no_tty_set(sv_notty);
+    _ask_hook = sv_hook;
+    _log_enabled = sv_log;
+    return 0;
+}
 
 fn test_ask_user() {
     test_group("ask_user: question parsing, sanitising and bounds (ask.cyr, 0.44.0)");

@@ -1,0 +1,197 @@
+# src/gui/gcmd.cyr — slash-command output CARDS for the T3 GUI (0.46.0, F1: GUI slash-command routing).
+#
+# WHY. The window's composer handed every line to cmd_task, so `/theme rainbow` went to the MODEL as a task,
+# `/grants` was unreachable from inside the window — which is exactly why the authorization modal withheld its
+# "allow for the session" answer (src/gate.cyr: authority the operator can neither review nor revoke must not be
+# offered) — and the only commands the GUI had were Ctrl chords. gpresent now routes a slash line through the SAME
+# dispatch hub the REPL and the TUI use. What the command prints is captured the TUI's way (OUT_RING → the feed
+# ring) and recorded here as a CARD the feed draws at the point the command was issued: `{(o> /help` in the accent,
+# then the captured lines. Facts, not bytes: a stored line keeps its role MARKERS (_feed_pack's 2-byte
+# ESC+0xB0.. form), which _gcmd_line expands to the theme's colours per run — so /theme recolours a card exactly as
+# it recolours the TUI's scrollback, and a semantic role (red/green) keeps its colour under the rainbow, as in the
+# painter since 0.45.5.
+#
+# STORAGE. A ring of GCMD_CARDS cards; each holds the typed line (LABEL-sanitised: it is the operator's own text,
+# but it is chrome), up to GCMD_LINES captured lines of at most GCMD_LINE_CAP bytes each (escape-boundary-
+# truncated by _feed_safe_copy, so a marker is never severed), and its ANCHOR — session_history_len() when it was
+# issued — so _gfeed_flow interleaves it after that message. Past the card cap the oldest card is dropped; a
+# capture past GCMD_LINES keeps its head and says how many lines were dropped, never silently. Allocated on the
+# first record (~800 KiB), not at startup: most sessions never issue a command.
+var GCMD_CARDS = 8;
+var GCMD_LINES = 200;
+var GCMD_LINE_CAP = 512;
+var GCMD_HEAD_CAP = 256;
+var GCMD_PAD = 8;              # inner padding (as the tool card's)
+var GCMD_LH = 18;              # line height inside a card (as the tool card's)
+var GCMD_META = 3;             # i64 cells per card: nlines, anchor, dropped
+var GCMD_GAP = 12;             # px after a card (== the feed's GFEED_GAP; declared here, this file precedes gfeed.cyr)
+var _gcmd_base = 0;            # alloc(GCMD_CARDS * GCMD_LINES * GCMD_LINE_CAP)
+var _gcmd_lens = 0;            # alloc(GCMD_CARDS * GCMD_LINES * 8): stored byte length per line (NUL after it)
+var _gcmd_head = 0;            # alloc(GCMD_CARDS * GCMD_HEAD_CAP): the typed line, NUL-terminated
+var _gcmd_meta = 0;            # alloc(GCMD_CARDS * GCMD_META * 8)
+var _gcmd_first = 0;           # ring index of the oldest live card
+var _gcmd_count = 0;
+
+fn _gcmd_ensure() {
+    if (_gcmd_base != 0) { return 1; }
+    _gcmd_base = alloc(GCMD_CARDS * GCMD_LINES * GCMD_LINE_CAP);
+    _gcmd_lens = alloc(GCMD_CARDS * GCMD_LINES * 8);
+    _gcmd_head = alloc(GCMD_CARDS * GCMD_HEAD_CAP);
+    _gcmd_meta = alloc(GCMD_CARDS * GCMD_META * 8);
+    if ((_gcmd_base == 0) || (_gcmd_lens == 0) || (_gcmd_head == 0) || (_gcmd_meta == 0)) { _gcmd_base = 0; return 0; }
+    return 1;
+}
+fn _gcmd_slot(k) { return (_gcmd_first + k) % GCMD_CARDS; }       # k = 0..count-1, oldest first
+fn _gcmd_meta_get(slot, cell) { return load64(_gcmd_meta + (slot * GCMD_META + cell) * 8); }
+fn _gcmd_meta_set(slot, cell, v) { store64(_gcmd_meta + (slot * GCMD_META + cell) * 8, v); return 0; }
+
+fn gcmd_count() { return _gcmd_count; }
+fn gcmd_clear() { _gcmd_count = 0; _gcmd_first = 0; return 0; }
+fn gcmd_anchor(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0 - 1; } return _gcmd_meta_get(_gcmd_slot(k), 1); }
+fn gcmd_lines(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 0); }
+fn gcmd_dropped(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 2); }
+fn gcmd_head(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_head + _gcmd_slot(k) * GCMD_HEAD_CAP; }
+fn gcmd_line_ptr(k, i) { return _gcmd_base + (_gcmd_slot(k) * GCMD_LINES + i) * GCMD_LINE_CAP; }
+fn gcmd_line_len(k, i) { return load64(_gcmd_lens + (_gcmd_slot(k) * GCMD_LINES + i) * 8); }
+
+# gcmd_record: seal the feed ring's current lines (what the command printed under OUT_RING — the caller cleared
+# the ring before dispatching and flushed the pending line after) as a new card headed by `line`, anchored at the
+# current history length. Returns the card's index (oldest-first), or -1 when the store could not be allocated.
+fn gcmd_record(line) {
+    if (_gcmd_ensure() == 0) { return 0 - 1; }
+    var slot = 0;
+    if (_gcmd_count < GCMD_CARDS) { slot = (_gcmd_first + _gcmd_count) % GCMD_CARDS; _gcmd_count = _gcmd_count + 1; }
+    else { slot = _gcmd_first; _gcmd_first = (_gcmd_first + 1) % GCMD_CARDS; }   # ring full -> the oldest card goes
+    safe_label_copy(_gcmd_head + slot * GCMD_HEAD_CAP, GCMD_HEAD_CAP, line);
+    var n = feed_count();
+    var keep = n;
+    if (keep > GCMD_LINES) { keep = GCMD_LINES; }
+    var i = 0;
+    while (i < keep) {
+        var dst = _gcmd_base + (slot * GCMD_LINES + i) * GCMD_LINE_CAP;
+        var w = _feed_safe_copy(dst, GCMD_LINE_CAP - 1, feed_line_ptr(i), feed_line_len(i));
+        store8(dst + w, 0);
+        store64(_gcmd_lens + (slot * GCMD_LINES + i) * 8, w);
+        i = i + 1;
+    }
+    _gcmd_meta_set(slot, 0, keep);
+    _gcmd_meta_set(slot, 1, session_history_len());
+    _gcmd_meta_set(slot, 2, n - keep);
+    return _gcmd_count - 1;
+}
+
+# _gcmd_ink: the colour a stored line's role draws in — a semantic role (red / green) keeps its own colour under
+# the rainbow, as the TUI painter does since 0.45.5; every other role takes the feed's ink (the rainbow's sentinel
+# when it is on, else the theme's rgb). -1 (no role in force) is the foreground.
+fn _gcmd_ink(role) {
+    if (role < 0) { return _gfeed_ink(ROLE_FG); }
+    if (ui_role_is_semantic(role) == 1) { return _ui_rgb(role); }
+    return _gfeed_ink(role);
+}
+
+# _gcmd_line: draw one stored line at (x, y) within maxcols cells — text runs between escapes are pushed as
+# (ptr, codepoints) slices of the stored bytes (NO copy; the store is NUL-terminated per line), a role marker
+# switches the colour, a reset marker returns to the foreground, any other escape (a bold, a diff tint) is
+# skipped, and the pen advances by the run's COLUMNS (feed_glyph_cols) so a wide glyph is placed right. Returns
+# nothing drawn past maxcols (a long line is clipped, not wrapped — a command's output is a terminal's rows).
+# cmds == 0 measures nothing (a line is one row) and is a no-op.
+fn _gcmd_line(cmds, x, y, maxcols, ptr, len) {
+    if (cmds == 0) { return 0; }
+    var role = 0 - 1;
+    var i = 0;
+    var cols = 0;
+    while ((i < len) && (cols < maxcols)) {
+        var b = load8(ptr + i);
+        if (b == 27) {
+            var sl = _feed_esc_len(ptr, i, len);
+            if (sl == 2) {
+                var m = load8(ptr + i + 1);
+                if (m == FEED_MARK_RESET) { role = 0 - 1; }
+                elif ((m >= FEED_MARK_ROLE0) && (m < (FEED_MARK_ROLE0 + UI_ROLE_COUNT))) { role = m - FEED_MARK_ROLE0; }
+            }
+            i = i + sl;
+        } else {
+            var start = i;                                   # a run: bytes up to the next escape / the width
+            var rcols = 0;
+            var rcp = 0;
+            while ((i < len) && (load8(ptr + i) != 27) && ((cols + rcols) < maxcols)) {
+                var gl = _feed_glyph_len(ptr, i, len);
+                rcols = rcols + feed_glyph_cols(ptr, i, gl);
+                rcp = rcp + 1;
+                i = i + gl;
+            }
+            if (rcp > 0) {
+                gd_push_text(cmds, x + cols * GR_GLYPH_W, y, _gcmd_ink(role), ptr + start, rcp);
+                cols = cols + rcols;
+            }
+        }
+    }
+    return 0;
+}
+
+# gcmd_build: draw card k at (x, y) in a w-px column and return the y below it. cmds == 0 measures only — the
+# height is the same either way (the flow's bottom-anchor pre-measure relies on that parity).
+fn gcmd_build(cmds, x, y, w, k) {
+    if ((k < 0) || (k >= _gcmd_count)) { return y; }
+    var n = gcmd_lines(k);
+    var rows = 1 + n;
+    if (gcmd_dropped(k) > 0) { rows = rows + 1; }
+    var h = GCMD_PAD * 2 + rows * GCMD_LH;
+    if (cmds != 0) {
+        gd_push_border(cmds, x, y, w, h, _ui_rgb(ROLE_FAINT));       # card outline
+        gd_push_rect(cmds, x, y, 3, h, _ui_rgb(ROLE_MUTED));         # a left bar: muted — a command, not a tool round
+        gd_push_clip(cmds, x, y, w, h);
+        var ly = y + GCMD_PAD;
+        var lx = x + GCMD_PAD + 4;
+        var maxcols = (w - GCMD_PAD - GCMD_PAD - 4) / GR_GLYPH_W;
+        if (maxcols < 1) { maxcols = 1; }
+        var pen = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_ACCENT), "{(o> ");
+        gd_push_text(cmds, pen, ly, _ui_rgb(ROLE_FG), gcmd_head(k), maxcols - 5);
+        ly = ly + GCMD_LH;
+        var i = 0;
+        while (i < n) {
+            _gcmd_line(cmds, lx, ly, maxcols, gcmd_line_ptr(k, i), gcmd_line_len(k, i));
+            ly = ly + GCMD_LH;
+            i = i + 1;
+        }
+        if (gcmd_dropped(k) > 0) {
+            var p2 = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_FAINT), "… ");
+            p2 = _gstatus_int(cmds, p2, ly, _ui_rgb(ROLE_FAINT), gcmd_dropped(k));
+            _gstatus_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), " more lines (the card keeps its head)");
+        }
+        gd_push_unclip(cmds);
+    }
+    return y + h;
+}
+
+# gcmd_build_anchored: draw, in record order, every card anchored at history position `anchor` (or, when
+# `at_end` is 1, every card anchored at or past it — the cards issued after the last message). Returns the y
+# below the last card drawn (y itself when none), with GCMD_GAP after each card so the caller's flow spacing
+# holds. Measure-only when cmds == 0.
+fn gcmd_build_anchored(cmds, x, y, w, anchor, at_end) {
+    var cy = y;
+    var k = 0;
+    while (k < _gcmd_count) {
+        var a = gcmd_anchor(k);
+        var hit = 0;
+        if (at_end == 1) { if (a >= anchor) { hit = 1; } }
+        elif (a == anchor) { hit = 1; }
+        if (hit == 1) { cy = gcmd_build(cmds, x, cy, w, k) + GCMD_GAP; }
+        k = k + 1;
+    }
+    return cy;
+}
+
+# gcmd_run: the capture bracket — run `line` through `run_fn` (the command hub, `dispatch`; a test passes its own)
+# with the feed ring as the sink, cleared first, and seal what it printed as a card headed by `line`. Returns the
+# runner's own return (1 keep running, 0 quit). Lives here rather than in gpresent so the bracket is testable
+# without a window: gpresent hands it `&dispatch`.
+fn gcmd_run(line, run_fn) {
+    feed_clear();                                            # the sink starts empty: the card is THIS command's output only
+    out_mode_set(OUT_RING);
+    var keep = fncall1(run_fn, line);
+    feed_flush_pending();                                    # seal a trailing un-newlined line
+    out_mode_set(OUT_FD1);
+    gcmd_record(line);
+    return keep;
+}

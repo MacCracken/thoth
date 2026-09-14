@@ -2,6 +2,62 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.46.0] - 2026-09-13
+
+**The GUI routes slash commands — and the authorization modal offers "yes, for this session" again.** The
+first feature arc under the batch discipline (F1). The window's composer used to hand every line to the model
+as a task: `/theme rainbow` was a prompt, `/state`, `/help`, `/grants` were unreachable, and that unreachable
+`/grants` is exactly why the modal withheld its session-grant answer. Now a slash line goes through the same
+command hub as the REPL's and the TUI's, what it prints is drawn as a CARD in the feed where it was issued, a
+session grant is a `grants N` field on the status bar of every surface, and the modal's third answer is back.
+Suite **382 + 1486 + 873 + 669 + 190 + 5** (+85). Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
+### Added — slash commands in the window, as cards (F1)
+
+`_gpresent_submit` routes the composer's line by its FINAL class — `classify_final` (commands.cyr), which
+resolves an alias first, so `/ship` → `/run …` classifies as `/run` and an alias to prose as a task:
+
+- **a turn** (prose) — `cmd_task` under `OUT_NULL`, the pump painting it live, as before;
+- **a command that runs a turn** (`/retry`, `/edit`) — `dispatch` under the same bracket (the provisional
+  bubble shows the typed line; the reply lands in history as usual);
+- **any other command** — `gcmd_run` (src/gui/gcmd.cyr): the feed ring — the TUI's own capture sink, wired for
+  every front end since 0.9.1 — cleared, `dispatch` under `OUT_RING`, the pending line sealed, and the ring's
+  lines recorded as a card: `{(o> /state` in the accent, then what the command printed. Lines keep their role
+  MARKERS, which the builder expands to the theme's colours per run — `/theme` recolours a card as it recolours
+  the TUI's scrollback, and a red/green span keeps its colour under the rainbow (as the painter since 0.45.5).
+  A card is anchored at the history length when it was issued, so `_gfeed_flow` draws it before the message
+  that followed it (or after the last); a card on an empty conversation takes the greeting's place. A ring of
+  8 cards × 200 lines × 512 bytes, allocated on the first command; a longer capture keeps its head and says
+  how many lines it dropped; `/clear` clears the cards (the window's scrollback), `/quit` closes the window.
+  `gcmd_run` takes the hub as a runner so the bracket is tested without a window.
+
+`/find` answers the desktop surface honestly (the search modal is the TUI's; PageUp/PageDown scroll here) —
+its old "is this the TUI?" test was the capture sink, which the window now shares. `/save` already saves the
+conversation when the ring holds no scrollback, and `/copy`'s OSC 52 reaches the launching terminal. Ctrl+T
+stays as the keyboard's theme cycle; its comment no longer claims to be the only way.
+
+### Changed — the authorization modal offers the session grant; `grants N` rides every status bar
+
+`_confirm_via_ask` poses three answers — no / yes, once / **yes, for this session** — and the third records the
+grant through `_confirm_grant_yes`, the same function the terminal prompt uses, so the two paths cannot drift
+on what a grant means. 0.44.3 withheld it deliberately: authority the operator could neither SEE acting nor
+REVOKE must not be offered, and from inside the window neither was possible. Both are now: `/grants` is a
+card away, and the status view-model carries **`SF_GRANTS`** (omit-until-present, ADR-0010) — `grant_count()`
+while one is acting — drawn as `grants N` in the accent on the TUI bar and the GUI strip. The `note_println`
+that confirms a grant still goes where the window cannot show it; the bar is the signal, not the note. A
+second identical action is allowed by the grant without posing the modal; a different one still asks.
+
+Tests (+85): `test_gcmd` (the bracket through a scripted runner — the runner's keep/quit comes back, the
+unterminated line is sealed, a stored line carries the role marker and no baked escape, the card's height
+measures identically with and without a command list, the head/lines/colours, the rainbow's sentinel vs a
+red span, a silent command, a 250-line capture keeping 200 and saying 50 were dropped, a 700-byte line
+cut escape-safe, the 8-card ring, cards before and after their messages, the greeting yielding, the strip's
+`grants`); `classify_final` on prose / built-ins / a command alias / a prose alias / unknown / quit; `/find`
+on the desktop tier; the TUI bar's `grants 1`; `test_confirm_modal_grant` — the real `confirm` through the
+ask seam with scripted answers: three options posed, no / once / session, the grant allowing the same action
+without posing and a different action still asking, `SF_GRANTS` on and off. Proven by breaking: the modal's
+third answer (1 failure), the greeting yield (2), the flow interleave (3).
+
 ## [0.45.6] - 2026-09-13
 
 **Repair batch 2.** Hook event facts leave the command line for the child's environment block; the dep refresh
