@@ -26,6 +26,8 @@ include "src/git.cyr"
 include "src/seams.cyr"
 include "src/session.cyr"
 include "src/hoosh.cyr"
+include "src/log.cyr"       # 0.51.0: toolpin.cyr logs its store events
+include "src/toolpin.cyr"   # 0.51.0 (F6): the greeting's tool-pin row + the window's store notices read it
 include "src/surface.cyr"
 include "src/splash.cyr"    # the startup ibis — GENERATED (scripts/gen-splash.sh)
 include "src/greet.cyr"     # the greeting view-model + layout (0.45.3); after surface, before tui/gfeed

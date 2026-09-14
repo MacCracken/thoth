@@ -25,6 +25,10 @@ fn repl_loop() {
                     inhist_persist_broke_ack();
                     ui_emit(ROLE_FAINT, "input history: write failed — persistence disabled for this session"); println("");   # 0.50.1: the TUI's wording (one line on the three surfaces)
                 }
+                if (toolpin_store_broke() == 1) {    # 0.51.0 (F6): a pin-store write failed mid-session -> announce ONCE
+                    toolpin_store_broke_ack();
+                    ui_emit(ROLE_RED, "tool pins: store write failed — pins are session-scoped from here"); println("");
+                }
             }
         }
     }

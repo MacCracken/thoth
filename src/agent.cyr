@@ -1984,11 +1984,12 @@ fn agent_turn(prompt) {
     if (_agent_tools_buf == 0) { _agent_tools_buf = alloc(AGENT_TOOLS_CAP); }
     if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
 
-    # Tool advertisement is session-stable (the daimon endpoint and its registry do
-    # not change mid-session), so fetch + parse + serialize it ONCE and reuse the
-    # formatted buffer every turn — not a daimon GET + bayan parse + re-serialize per
-    # turn. Cache only on success: a transient daimon-down on the first turn leaves
-    # _agent_tools_ready=0 so a later turn retries (degraded honestly, never sticky).
+    # Tool advertisement is session-stable (the daimon endpoint and its registry are
+    # re-read only on /reload — which also rebinds the pin store's host — and /tools
+    # trust), so fetch + parse + serialize it ONCE and reuse the formatted buffer every
+    # turn — not a daimon GET + bayan parse + re-serialize per turn. Cache only on
+    # success: a transient daimon-down on the first turn leaves _agent_tools_ready=0 so
+    # a later turn retries (degraded honestly, never sticky).
     if (_agent_tools_ready == 0) {
         _agent_tools_skipped = 0;                             # 0.44.2: this build's count, not the last one's
         var dtv = 0;                                          # 0.20.0: only fetch daimon's registry when the seam
@@ -2002,6 +2003,7 @@ fn agent_turn(prompt) {
         tl = agent_tools_add_delegate(_agent_tools_buf, tl); # 0.43.0 (T2-1): + delegate when [subagent].enabled (opt-in, depth-1)
         tl = agent_tools_add_ask(_agent_tools_buf, tl);      # 0.44.0 (T4-1): + ask_user when [ask].enabled (opt-in; blocks on a human)
         _agent_tools_len = tl;
+        toolpin_store_flush();                                # 0.51.0 (F6): first-sight pins this probe took go to the store (a no-op when nothing is dirty or no store is bound)
         # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
         # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient
         # daimon-down would latch an empty registry forever. Gate on the daimon fetch (dtv) so a daimon-down

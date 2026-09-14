@@ -1424,6 +1424,7 @@ fn print_banner() {
     emit("  "); ui_emit(ROLE_MUTED, persona_tagline()); oprintln("");
     emit("  "); ui_emit(ROLE_FAINT, "a sovereign agentic coding TUI (fermenting). /help for commands."); oprintln("");
     sess_persist_greeting();      # 0.24.2: "  resumed N messages …" when [session].file restored a conversation (self-indents; silent otherwise)
+    toolpin_store_greeting();     # 0.51.0 (F6): "  tool pins: <store> (N pinned for this host)" — or why the pins are session-scoped
     oprintln("");
     return 0;
 }

@@ -269,9 +269,9 @@
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">03</span><h3>Durable tool-definition pins</h3><span class="chip c-partial">partial</span></div>
-      <p>A gap <em>created</em> by 0.42.0. <code>[toolpin]</code> pins are session-scoped by design: they die with the process, so a swap <em>during</em> a session (or across a <code>/reprobe</code>) is caught and one <em>between two runs</em> is not. That bound is stated honestly in the code and the CHANGELOG.</p>
-      <p>Closing it means a durable pin store &mdash; a <strong>security-relevant file thoth writes and must then defend</strong> (tamper, replace, symlink-redirect), so it is a real design decision rather than a small feature. There is also a legitimate argument that it belongs in <strong>daimon</strong>, which owns the registry and could pin once for every consumer.</p>
+      <div class="rec-head"><span class="rec-id">03</span><h3>Durable tool-definition pins</h3><span class="chip c-ok">closed 0.51.0</span></div>
+      <p>A gap <em>created</em> by 0.42.0 and closed at 0.51.0 (ADR-0022). <code>[toolpin]</code> pins were session-scoped through 0.50.x: they died with the process, so a swap <em>during</em> a session (or across <code>/reload</code>) was caught and one <em>between two runs</em> was not. Now they persist in <code>~/.thoth/toolpins</code> (host + name under a whole-file digest), a store thoth cannot verify is refused whole, and the ceiling &mdash; a same-uid editor &mdash; is stated.</p>
+      <p>What remains is the spine&rsquo;s half: <strong>daimon</strong> owns the registry and could pin once for every consumer &mdash; a persisted registry, a <code>definition_sha256</code> per manifest element, an audit event on change (the roadmap&rsquo;s waiting table).</p>
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">

@@ -619,6 +619,11 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "input history cannot write its file - not persisted (in-memory only)");
             cy = cy + GFEED_GAP;
         }
+        # 0.51.0 (F6): a pin store thoth refused at startup (the greeting's row says which when it is drawn)
+        if ((config_toolpin_enabled() == 1) && (toolpin_store_state() >= 3) && (toolpin_store_state() <= 6)) {
+            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "tool pin store refused at startup (rejected, a symlink, unreadable or too large) - pins are session-scoped this run; /state says which");
+            cy = cy + GFEED_GAP;
+        }
     }
     return cy;
 }
@@ -634,6 +639,10 @@ fn _gfeed_broke_notices(cmds, xbase, cy, avail) {
     }
     if (inhist_persist_broke() == 1) {
         cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "input history write failed - persistence disabled for this session");
+        cy = cy + GFEED_GAP;
+    }
+    if (toolpin_store_broke() == 1) {                          # 0.51.0 (F6)
+        cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "tool pin store write failed - pins are session-scoped from here");
         cy = cy + GFEED_GAP;
     }
     return cy;

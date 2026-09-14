@@ -109,7 +109,7 @@ fn test_greet() {
         # no model row without a gateway: the row after the status group is the config group or nothing
         var _nr = greet_rows();
         var _r = 5;
-        while (_r < _nr) { assert(streq(greet_span_text(_r, 0), "model ") == 0, "no gateway -> no model row"); _r = _r + 1; }
+        while (_r < _nr) { if (greet_row_spans(_r) > 0) { assert(streq(greet_span_text(_r, 0), "model ") == 0, "no gateway -> no model row"); } _r = _r + 1; }   # 0.51.0: the stores group (the tool-pin row) follows even with no config — skip its open row
         if (config_parse_ok() == 1) {
             assert_eq(greet_row_spans(5), 0, "an open row between the status group and the config");
             assert(streq(greet_span_text(6, 0), "config ") == 1, "...then the config row");
@@ -117,7 +117,7 @@ fn test_greet() {
     }
     var _cfg_rows = 0;
     var _cr = 4;
-    while (_cr < greet_rows()) { if (streq(greet_span_text(_cr, 0), "config ") == 1) { _cfg_rows = _cfg_rows + 1; } _cr = _cr + 1; }
+    while (_cr < greet_rows()) { if (greet_row_spans(_cr) > 0) { if (streq(greet_span_text(_cr, 0), "config ") == 1) { _cfg_rows = _cfg_rows + 1; } } _cr = _cr + 1; }
     assert_eq(_cfg_rows, config_parse_ok(), "exactly one config row when a config was read, none otherwise");
     if (config_parse_ok() == 1) {
         var _cfr = 6;
@@ -362,7 +362,7 @@ fn test_greet() {
     _r = 0; var _hrow = 0 - 1;
     while (_r < greet_rows()) { if (_tg_row_has(_r, "input history ") == 1) { _hrow = _r; } _r = _r + 1; }
     assert(_hrow > 0, "a bound file: the history row");
-    assert_eq(greet_rows(), _hbase + 2, "...one row under its own open row (no session row to share the group with)");
+    assert_eq(greet_rows(), _hbase + 1, "...one row in the stores group (0.51.0: the tool-pin row already opened it; no session row)");
     assert_eq(greet_row_spans(_hrow - 1), 0, "...under an open row");
     assert_eq(greet_span_role(_hrow, 0), ROLE_FAINT, "...the faint label first");
     _tg_row_text(_hrow, &_rt, 256);
@@ -442,6 +442,102 @@ fn test_greet() {
     _lt = greet_span_text(_hrow, 1);
     assert_eq(strlen(_lt), 511, "...while a glyph that fits whole at the cap is kept");
     _inhist_path = _ip; _inhist_recalled = _ir; _inhist_init_failed = _if; _cfg_history_file = _ic;
+    # --- 0.51.0 (F6): the tool-pin row — the third of the stores group: the store and this host's count, the new
+    # store, each refusal in RED, the no-store fact; silent only when pinning or the store is off ---
+    var _tpst = _tps_state; var _tppa = _tps_path; var _tplo = _tps_loaded; var _tpot = _tps_other; var _tpen = _cfg_toolpin_enabled;
+    _cfg_toolpin_enabled = 1;
+    _sess_path = 0; _sess_resumed = 0; _sess_init_failed = 0; _inhist_path = 0; _inhist_init_failed = 0;
+    _tps_state = 1; _tps_path = "/home/someone/.thoth/toolpins"; _tps_loaded = 7; _tps_other = 2;
+    greet_build(1);
+    _r = 0; var _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    assert(_prow > 0, "a loaded store: the tool-pin row");
+    assert_eq(greet_row_spans(_prow - 1), 0, "...the only store row: under its own open row");
+    assert_eq(greet_span_role(_prow, 0), ROLE_FAINT, "...the faint label first");
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins /home/someone/.thoth/toolpins (7 pinned for this host, 2 other)") == 1, "...`tool pins <path> (N pinned for this host, M other)`");
+    _tps_other = 0;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins /home/someone/.thoth/toolpins (7 pinned for this host)") == 1, "...no `other` clause when there are none");
+    _tps_state = 2;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins /home/someone/.thoth/toolpins (new — written at the first probe)") == 1, "a new store: says it is written at the first probe");
+    _tps_state = 3;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    assert(_prow > 0, "a rejected store: the row");
+    assert_eq(greet_span_role(_prow, 0), ROLE_RED, "...RED");
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins /home/someone/.thoth/toolpins REJECTED — not a thoth pin store, or edited; session-scoped this run (/tools trust rewrites it)") == 1, "...`REJECTED — … session-scoped this run`");
+    _tps_state = 4;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    assert_eq(greet_span_role(_prow, 0), ROLE_RED, "a symlink: RED");
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins /home/someone/.thoth/toolpins is a symlink — refused; session-scoped this run") == 1, "...`is a symlink — refused`");
+    _tps_state = 5;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins cannot open ") == 1) { _prow = _r; } _r = _r + 1; }
+    assert(_prow > 0, "unreadable: `tool pins cannot open <path>`");
+    assert_eq(greet_span_role(_prow, 0), ROLE_RED, "...RED");
+    _tps_state = 6;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins /home/someone/.thoth/toolpins larger than thoth can load — session-scoped this run (nothing is written back)") == 1, "too large: says nothing is written back");
+    _tps_state = 7; _tps_path = 0;
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins session-scoped") == 1) { _prow = _r; } _r = _r + 1; }
+    assert(_prow > 0, "no store: the fact is shown, not silent");
+    _tg_row_text(_prow, &_rt, 256);
+    assert(streq(&_rt, "tool pins session-scoped — no ~/.thoth to keep them in (set [toolpin].file)") == 1, "...and says how to get one");
+    _tps_state = 8;
+    greet_build(1);
+    _r = 0; _hit = 0;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins session-scoped") == 1) { _hit = 1; } if (_tg_row_has(_r, "tool pins ") == 1) { _hit = 1; } _r = _r + 1; }
+    assert_eq(_hit, 0, "[toolpin].durable = false: silent (the operator's choice)");
+    _cfg_toolpin_enabled = 0; _tps_state = 1; _tps_path = "/home/someone/.thoth/toolpins";
+    greet_build(1);
+    _r = 0; _hit = 0;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _hit = 1; } _r = _r + 1; }
+    assert_eq(_hit, 0, "pinning off: no row");
+    _cfg_toolpin_enabled = 1;
+    # with the session and history rows: ONE stores group, the pin row LAST, one open row above the three
+    _sess_path = "/home/someone/.thoth_session"; _sess_resumed = 3; _inhist_path = "/home/someone/.thoth_history"; _inhist_recalled = 1;
+    greet_build(1);
+    _r = 0; _srow = 0 - 1; _hrow = 0 - 1; _prow = 0 - 1;
+    while (_r < greet_rows()) {
+        if (_tg_row_has(_r, "session ") == 1) { _srow = _r; }
+        if (_tg_row_has(_r, "input history ") == 1) { _hrow = _r; }
+        if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; }
+        _r = _r + 1;
+    }
+    assert((_srow > 0) && (_hrow > 0) && (_prow > 0), "session + history + pins: three rows");
+    assert_eq(_hrow, _srow + 1, "...history directly under session");
+    assert_eq(_prow, _hrow + 1, "...pins directly under history (one group)");
+    assert_eq(greet_row_spans(_srow - 1), 0, "...one open row above the group");
+    assert(greet_rows() <= GREET_ROWS_CAP, "...within the row cap");
+    # the path is cleaned like the others
+    _tps_path = "/home/some\x1b[7mone/.thoth/toolpins";
+    greet_build(1);
+    _r = 0; _prow = 0 - 1;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, "tool pins ") == 1) { _prow = _r; } _r = _r + 1; }
+    _tg_row_text(_prow, &_rt, 256);
+    assert_eq(_t_count_sub(&_rt, strlen(&_rt), "\x1b", 1), 0, "an escape in the store path never reaches the greeting store");
+    assert_eq(_t_count_sub(&_rt, strlen(&_rt), "some?[7mone", 11), 1, "...it reads as '?'");
+    _tps_state = _tpst; _tps_path = _tppa; _tps_loaded = _tplo; _tps_other = _tpot; _cfg_toolpin_enabled = _tpen;
+    _inhist_path = _ip; _inhist_recalled = _ir; _inhist_init_failed = _if;
     _sess_path = _sp; _sess_resumed = _sr; _sess_init_failed = _sf;
     greet_build(1);
     ui_force(_t0, _d0);

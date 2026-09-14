@@ -164,6 +164,9 @@ fn _daimon_announce_transport_error(r, url) {
 # (reproduced under a pty). Both now go through emit_clean_line_n — the LABEL policy for the description too, since
 # the row is one line thoth composed and a newline in it lets the server forge rows. A clean entry's bytes are the
 # old form exactly: sgr + text + reset.
+# 0.51.0 (F6): the row ends with the tool's pin state as of the last probe — RED ` WITHHELD` (its definition
+# moved; refused at dispatch), FAINT ` pinned`, or nothing for a tool no probe has pinned. Returns 1 for a
+# withheld row (the listing's footer counts them).
 fn _daimon_tool_row(name, desc) {
     emit("  ");
     # 0.39.0 (audit A-4): a THIRD-PARTY MCP server controls its own name/description, so a
@@ -180,8 +183,14 @@ fn _daimon_tool_row(name, desc) {
             emit(ui_sgr(ROLE_MUTED)); emit_clean_line_n(str_data(ds), str_len(ds)); emit(ui_reset());
         }
     }
+    var wh = 0;
+    if ((ns != 0) && (config_toolpin_enabled() == 1)) {
+        var nc = str_cstr(ns);
+        if (toolpin_withheld(nc) == 1) { ui_emit(ROLE_RED, "  WITHHELD"); wh = 1; }
+        elif (toolpin_pinned(nc) == 1) { ui_emit(ROLE_FAINT, "  pinned"); }
+    }
     oprintln("");
-    return 0;
+    return wh;
 }
 
 # daimon_list_tools: GET the MCP host registry and print each tool. Returns 0
@@ -208,13 +217,25 @@ fn daimon_list_tools() {
     if (tools == 0) { oprintln("  daimon: no tools array in response."); return 0 - 1; }
     var n = bayan_json_v_arr_len(tools);
     ui_emit(ROLE_ACCENT, "tools daimon hosts ("); ofmt_int(n); ui_emit(ROLE_ACCENT, "):"); oprintln("");
+    # 0.51.0 (F6): where the pins live, then each row's pin state AS OF THE LAST PROBE (this listing is its own GET;
+    # the compare runs at the advertisement, not here)
+    if (config_toolpin_enabled() == 1) {
+        ui_emit(ROLE_FAINT, "  pins: ");
+        if (toolpin_store_state() == 1) { emit_clean_line(config_path_display(toolpin_store_path())); ui_emit(ROLE_FAINT, " · "); ofmt_int(toolpin_store_loaded()); ui_emit(ROLE_FAINT, " pinned for this host"); }
+        elif (toolpin_store_state() == 2) { emit_clean_line(config_path_display(toolpin_store_path())); ui_emit(ROLE_FAINT, " · new (written at the first probe)"); }
+        elif (toolpin_store_state() == 9) { ui_emit(ROLE_FAINT, "session-scoped from here (a store write failed — /state)"); }
+        else { ui_emit(ROLE_FAINT, "session-scoped (/state says why)"); }
+        oprintln("");
+    }
     if (n == 0) { oprintln("  (none registered)"); }
     var i = 0;
+    var withheld = 0;
     while (i < n) {
         var t = bayan_json_v_arr_get(tools, i);
-        _daimon_tool_row(bayan_json_v_obj_get(t, "name"), bayan_json_v_obj_get(t, "description"));   # 0.45.0: sanitised
+        withheld = withheld + _daimon_tool_row(bayan_json_v_obj_get(t, "name"), bayan_json_v_obj_get(t, "description"));   # 0.45.0: sanitised
         i = i + 1;
     }
+    if (withheld > 0) { ui_emit(ROLE_FAINT, "  /tools trust accepts the changed definitions for this host"); oprintln(""); }
     return 0;
 }
 

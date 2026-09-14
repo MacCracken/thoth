@@ -2,6 +2,148 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.51.0] - 2026-09-14
+
+**Tool pins are durable.** The sixth feature arc under the batch discipline (F6, ADR-0022; the maintainer's
+decision at 0.50.1 — gap 3 of the gap review). 0.42.0's rug-pull defence pinned every MCP tool definition on
+first sight and withheld one that changed — but the pins died with the process, so a definition swapped while
+thoth was not running was accepted as first sight. Now the pins persist across runs in a store thoth writes and
+defends as far as a keyless process honestly can, and a swap between runs is withheld like an in-session one.
+Suite **647 + 1921 + 977 + 824 + 190 + 5** (+244). Linux / aarch64 / AGNOS build with 0.45.6's warning set; the
+Windows lane at its known-gap skip; macOS built and tested natively at the 6.6.3 pin.
+
+- **The store.** `[toolpin].file` (an authority key — global-only, `~/` expands) or, unset, `~/.thoth/toolpins`
+  when the operator already has a `~/.thoth` (thoth creates no directory); with neither, pins are session-scoped
+  and every surface says so. On by default because the 0.42.0 defence is on by default — a between-runs half that
+  had to be switched on would be a weaker floor than the in-session half it extends; `[toolpin].durable = false`
+  opts the store off. A text file: `THOTH-TOOLPIN-1`, one `host \t name \t sha256 \t epoch` row per pin, a
+  `DIGEST` line over every byte before it. A pin is **host + name** — `[daimon].url` at pin time is the identity
+  daimon exposes (no server id travels on the wire), so the same name on another daimon is another tool, never
+  "CHANGED"; `/reload` rebinds the namespace when the url moves and the other host's rows ride along untouched.
+  The hash is 0.42.0's: SHA-256 over `name \0 description \0 inputSchema`, the schema bayan's compact
+  re-serialisation in wire key order (whitespace and escapes canonical; key order not — a reordering server
+  reads as changed, which withholds, never allows; recorded).
+- **What it defends, said plainly.** thoth has no secret, so the store carries a whole-file SHA-256 and claims
+  exactly what that buys (a per-line HMAC would be a per-line SHA-256 wearing a costume). It closes the CVE shape
+  between runs — the MCP server or daimon swapping a definition while thoth is down; neither touches the file.
+  The digest catches corruption, a torn write, a foreign writer, a stale format, a truncation — any of which
+  REJECTS the whole file (a per-line skip would be first sight through the back door), leaves it untouched as
+  evidence, and makes the run session-scoped, announced on every surface; only `/tools trust` rewrites a rejected
+  store. It does not catch a user or process with the operator's uid editing, replacing or deleting the store
+  (a deleted store is a first sight next run; the greeting reads `new` where it read `N pinned`). What holds
+  against that uid's neighbours: 0600 on **every** write — a temp created exclusively at 0600, `fsync`'d, renamed
+  over the path, so the inode is always thoth's own and a pre-existing looser file is 0600 after the first flush
+  (neither the session nor the history store can say that); a symlink at the path refused before anything is
+  read or written (a link planted after the bind is refused at the flush — persistence stops, the link is never
+  followed nor replaced); a file the load buffer cannot hold never written back — not even by `/tools trust`;
+  ADR-0021 (a cloned repo cannot point thoth at a store of pre-approved pins). The mode claim holds on POSIX:
+  AGNOS's open carries no create mode (the floor row) and Windows's is an ACL hint.
+- **Semantics.** A first run pins silently at the first probe and creates the file. Later runs compare: a changed
+  definition is withheld from the advertisement, refused at dispatch, and announced as `CHANGED since it was
+  pinned on <date> (a previous run)` — the operator can tell a between-runs swap from an in-session one (which
+  keeps its `since this session pinned it`). A tool absent from the registry KEEPS its pin (a vanish-and-return
+  with a new definition is precisely the swap). A flush re-reads and re-verifies the file, keeps other hosts'
+  rows verbatim, unions same-host rows another session pinned since this one loaded (a pin is never downgraded —
+  except under `/tools trust`), and refuses to write over a file that turned bad underneath, or to write one the
+  reader would reject (the writer stops at the same row cap): persistence stops — state 9, the path kept so
+  `/state` and `/tools` can name it after the once-notice is acked — and the pins still guard the session. The
+  bind verifies the WHOLE file before applying a row (the review found the first cut applying rows as it
+  verified them: a file rejected on its 1025th row had loaded its first rows as a previous run's pins); an
+  unreadable-but-present store is told apart from an absent one by `stat`, not by an open that fails for both
+  (the first cut would have called it `new` and renamed over it). Pins are keyed by the CANONICAL host
+  (lower-cased, trailing slash dropped), and a repo whose local config sets `[daimon].url` is named on the
+  greeting and `/state` as its own pin namespace — its tools are that daimon's, never a fresh first sight of the
+  operator's tool names. The table holds 1024 pins (it was 128): a store's rows are only ever added, and they
+  must not crowd a live registry out of its slots. An epoch past the year 9999 is a crafted row (rejected; the
+  date walk would spin on it). The two probe sites flush (the agent's advertisement
+  build and the delegated child's); `/tools trust` rewrites at once, this host's rows gone, and — an authority act
+  with no gate, a typed command being the operator's own hand — logs at WARN with the host and count, and says
+  whether the store was actually rewritten (a symlink or an over-cap store: `NOT rewritten`, with the reason).
+  An [alias] — a repo-settable preference — may not expand to `/tools trust` or `/allow`: refused whole, the
+  0.45.0 shape (a line reached through expansion was not typed by the operator). ONE bind
+  in `main.cyr` before the mode dispatch, so the REPL, the TUI, the window and ONE-SHOT all carry a previous run's
+  pins: an unattended scripted run is exactly where a between-runs swap pays most.
+- **`[toolpin]` is an authority table.** `enabled` moves to the global-only reading with `file` and `durable`: a
+  cloned repo's `.thoth/config.cyml` could set `enabled = false` and switch the rug-pull defence off, and `/reload`
+  applied it live — the class ADR-0021 forbids. A local attempt is named as suppressed like every authority key
+  (a local value agreeing with the global's is not reported). A behaviour change for any repo-local
+  `enabled = false`: it no longer works, and says so.
+- **Every surface.** The greeting box's stores group gains a third row — `tool pins ~/.thoth/toolpins (8 pinned
+  for this host, 2 other)` / `(new — written at the first probe)` / red `REJECTED` · `is a symlink` · `cannot
+  open` · `larger than thoth can load`, each `— session-scoped this run` / `tool pins session-scoped — no ~/.thoth
+  to keep them in (set [toolpin].file)`; silent only when the operator turned pinning or the store off. The REPL
+  banner carries the same line. `/state` gains a `pins` row (always — the defence is default-on, so its absence is
+  a fact) with this host's count and the others, or the reason, plus `· N withheld this session` in red.
+  `/tools` names the store on a header line and marks each tool `pinned` or `WITHHELD` as of the last probe
+  (the listing is its own GET; the compare runs at the advertisement), with a `/tools trust accepts…` footer.
+  The window stands a red notice for a failed store write and, while the greeting is hidden, for a store refused
+  at startup; the REPL/TUI announce the write failure once and ack. One-shot prints one stderr line before the
+  turn for a REFUSED store (rejected / symlink / unreadable / too large) and one after it for a write that
+  failed during the turn; a no-store run (no `~/.thoth`) is silent there — the greeting, `/state` and `/tools`
+  carry that fact on the interactive surfaces. Log events: `toolpin_store` (bind state, written, write_failed, host_rebind,
+  rewritten_after_reject), `toolpin` gains `pinned_first_sight` (only while a store is bound — the unbound path's
+  log stays byte-identical) and a `pinned_at` on the withheld event. `/reload` lists the tool-pin host rebind
+  under "now active" and `[toolpin]` under global-only.
+- **A false claim corrected.** toolpin.cyr, the example config and the gap review said the pins caught a swap
+  "across `/reprobe`" — `/reprobe` re-probes hoosh, never the tools (only `/reload`, `/tools trust`, a delegation
+  or the first turn re-run the compare). They say `/reload` now.
+
+Decided against, recorded in ADR-0022: a keyed MAC or a signed store (no secret exists); opt-in like
+`[session].file`; a per-line skip; dropping the pin of an absent tool; a confirm modal or a t-ron verb for
+`/tools trust`; canonicalising schema keys before hashing (a patch candidate if a real server reorders them);
+per-tool trust (a natural later patch); an `--events` kind. **The spine's eventual home:** daimon 2.1.3 keeps its
+registry in memory, takes `POST /v1/mcp/tools` without auth, overwrites on the same name and exposes no per-tool
+hash or identity; the end state is daimon pinning once for every consumer (a persisted registry, a
+`definition_sha256` + `pinned_at` per manifest element, an audit event on change, a per-consumer trust verb
+through t-ron) — recorded in the waiting table; thoth's store is the client-side floor until then. Residuals:
+two sessions trusting the same host at once are last-writer-wins on that host's rows; the PE lane's `is_symlink`
+is a no-op (the lane is closed anyway); AGNOS drops `O_EXCL` on the temp's create and syncs the whole fs for
+`fsync`.
+
+Tests (+244): `test_toolpin_store` (core) — a first run creates the store (magic, rows host-first, the digest
+trailer, writable by its owner), a second run loads it (`from_store`, the epoch), an unchanged definition quiet,
+a between-runs swap withheld with the dated wording, an in-session swap with the other, an absent tool's row
+kept across a flush, `/tools trust` dropping this host's rows and rewriting at once, a third run clean;
+`test_toolpin_store_tamper` (core) — one flipped hex digit rejects the whole file (nothing loaded, the run
+session-scoped, a flush a no-op, the file byte-identical), `/tools trust` rewriting it fresh, no digest line /
+a wrong magic (its digest recomputed, so the magic check is what rejects) / a five-field row / an ESC in a name /
+a malformed hash / an epoch past 9999 / one row past the lowered row cap each rejected with NOTHING landed in the
+table, a good row followed by a bad one likewise (the whole file verified before a row is applied), the writer
+refusing a file that would exceed the row cap (state 9, the file untouched and still loading), a file at the
+lowered load cap (state 6, nothing written back — not by `/tools trust` either), a symlink planted after the bind
+refused at flush (broke; the target byte-identical; the link still a link); `test_toolpin_store_symlink` (core) — a link that RESOLVES at the path: state 4, nothing read, no write even
+under trust (which says it did not), the link still a link; `test_toolpin_store_hosts` (core) — host a's pin loaded, b's carried; b's same-named
+definition a CHANGE for a; the rebind to b clears the withhold, loads b's, keeps a's row after b's flush; the
+empty host; trust on b drops b's rows only; `test_toolpin_store_merge` (core) — another session's pin unioned
+at flush; a file edited underneath refused (broke, the path kept, left as it was, later flushes no-ops, the
+session still guarded); `test_toolpin_store_broke` (core) — an absent directory: new at bind, the first write
+fails, state 9 with the path kept, later flushes no-ops, `/state`'s wording before AND after the once-ack (never
+`no ~/.thoth` for a store that exists), the banner line; `test_toolpin_config` (core) — a repo's `enabled = false` /
+`file` / `durable` each suppressed and named, a local agreeing with the global not reported, global
+`durable = false` → state 8, the default resolver with and without `~/.thoth` (a HOME seam), the known keys;
+`test_state_pins_row` (core) — the `/state` row cleaned with the counts, REJECTED, symlink, no-store, off, the
+repo-local `[daimon].url` note; the `/tools` marks (the `  pinned` mark itself — the fixture is `t_ok`, not a
+name that contains the word — `WITHHELD` counted, none); the banner line and its silence; the alias refusal
+classifier (`/tools trust` and `/allow` refused, `/tools` and `/state` not); the agent suite — a store
+pre-seeded with a previous run's hash withholds the swapped tool on this run's first advertisement (the notice
+dated `2023-11-14`), the clean ones advertised, the first-sight pins flushed by the probe site, the withheld
+tool's old pin kept, the delegated child's build flushing too; `test_greet` (tui) — the row for every state
+with its exact text and role, the stores group of three (session, history, pins in that order, one open row),
+the row cap, the path cleaned; `test_gui_reason_resume` (gui) — the row drawn, the standing write-failed
+notice (measure == draw), the refused-store notice under the messages and silent on an empty conversation.
+Proven by breaking, eleven ways: the digest check removed (the flipped byte loads), the symlink pre-check
+removed, the union skipped, the flush's re-verify removed (the edited file overwritten), the from-store wording
+removed, the child's flush removed, the window's notice removed, the RED role swapped, the bind's
+verify-then-apply reverted (the good row lands), the writer's row cap removed, the over-cap store's trust
+rewrite re-enabled; one more passes — the rebind's explicit withheld-clear removed — because `_tp_add` resets the
+slot on load, so the invariant holds twice (left in as defence). Live, against a scratch daimon 2.1.3 (`serve 8097`, eight registered tools) and a dead hoosh url:
+the first turn pinned all eight into `~/.thoth/toolpins` at 0600 with a digest that verified independently;
+re-registering `echo_tool` with an injected description and starting a new thoth withheld it on the first turn
+(`CHANGED since it was pinned on 2026-09-14 (a previous run)`), `/tools` marked it `WITHHELD` with the trust
+footer, `/state` counted it, `/tools trust` rewrote the store; a flipped digit → `REJECTED` in the banner,
+`/state` and one-shot's stderr; `ln -s` → `REFUSED — is a symlink`; `rm` → `new` (the honest residual, read as
+such). macOS at the pin; the three-target warning set unchanged.
+
 ## [0.50.1] - 2026-09-14
 
 **Repair batch 3 — the window finishes its startup.** `thoth gui` returns from `main.cyr` nine lines before the

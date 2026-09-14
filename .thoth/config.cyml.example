@@ -33,6 +33,7 @@
 #     [verify].command                                             the same, after every model write
 #     [tron].policy / [tron].agent                                 the policy that authorizes the model
 #     [log].file / [history].file / [session].file                 unjailed paths thoth writes/truncates
+#     [toolpin].enabled / file / durable                           the rug-pull defence and its trust record (0.51.0)
 #
 # The reason is blunt: a `git clone` reproduces `<repo>/.thoth/config.cyml`, so before this a repository
 # you cloned could put `[hooks].session_start = "curl ... | sh"` in it and thoth would run that AT
@@ -260,12 +261,42 @@ model = "claude-haiku-4-5-20251001"
 #
 # ⚠ Scanning cannot substitute for this: the replacement text can be entirely
 # innocuous. Only identity works.
-# ⚠ SESSION-SCOPED. Pins die with the process, so this catches a swap DURING a
-# session (or across /reprobe), not one between two runs. Said plainly so nobody
-# reads more into it. A registry over 128 tools advertises the rest unpinned, and
-# says so.
+#
+# DURABLE since 0.51.0 (ADR-0022): the pins persist in a store, so a definition
+# swapped BETWEEN two runs is withheld too, announced as `CHANGED since it was
+# pinned on <date> (a previous run)`. Through 0.50.x they died with the process
+# (a swap during a session, or across /reload, was all they caught). A registry
+# over 128 tools advertises the rest unpinned, and says so.
+#
+# The whole [toolpin] table is AUTHORITY (global-only, ADR-0021): a cloned repo's
+# config cannot switch the defence off, redirect the store, or opt it out — a
+# local attempt is named as suppressed.
+#
+#   enabled — pin and withhold (default true). GLOBAL-ONLY since 0.51.0.
+#   file    — the pin store. Default: ~/.thoth/toolpins when you already have a
+#             ~/.thoth (thoth creates no directory; with none, pins stay
+#             session-scoped and the greeting says so). `~/` and `$HOME/` expand.
+#             A plain text file: `THOTH-TOOLPIN-1`, one `host <TAB> name <TAB> sha256
+#             <TAB> epoch` row per pin (host = [daimon].url at pin time — the same
+#             name on another daimon is another tool), and a `DIGEST` line over every
+#             byte before it. Created 0600 on EVERY write on POSIX (a temp file renamed
+#             over the path). Use an absolute or `~/` path — a relative one resolves
+#             from wherever thoth is launched. A store thoth cannot verify — edited, truncated, a foreign file —
+#             is REFUSED WHOLE and left untouched; a symlink at the path is refused;
+#             the run's pins are then session-scoped, announced on every surface, and
+#             only `/tools trust` rewrites the store. What the digest cannot catch: a
+#             user or process with YOUR uid editing or deleting the file (a deleted
+#             store is a first sight next run — the greeting reads `new`). Keep it
+#             where only you can write. GLOBAL-ONLY.
+#   durable — false keeps pins session-scoped (no store). GLOBAL-ONLY.
+#
+# `/tools` marks each tool `pinned` or `WITHHELD`; `/tools trust` accepts the
+# changed definitions for THIS daimon and rewrites the store; `/state` names the
+# store, or why pins are session-scoped.
 # [toolpin]
 # enabled = false
+# file = "~/.thoth/toolpins"
+# durable = true
 
 # [verify] — run the project's own check after the model writes, and hand the
 # model the result (0.41.0). Off unless set; there is no default, because thoth

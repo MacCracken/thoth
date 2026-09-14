@@ -576,9 +576,24 @@ fn one_shot_run() {
     # Run the turn through the existing seam with output discarded, then print only the
     # accumulated reply to fd 1 — so stdout is exactly the answer (clean for piping).
     var t0 = clock_now_ms();
+    # 0.51.0 (F6): a pin store thoth refused at startup makes this run's pins session-scoped — one line on stderr
+    # before the turn (the withheld notices themselves reach stderr through note_* under OUT_NULL, as before)
+    if ((config_toolpin_enabled() == 1) && (toolpin_store_state() >= 3) && (toolpin_store_state() <= 6)) {
+        emit_err("thoth: tool pins ");
+        if (toolpin_store_path() != 0) { emit_err_clean(config_path_display(toolpin_store_path())); emit_err(" "); }
+        if (toolpin_store_state() == 3) { emit_err("rejected (not a thoth pin store, or edited)"); }
+        elif (toolpin_store_state() == 4) { emit_err("is a symlink — refused"); }
+        elif (toolpin_store_state() == 5) { emit_err("unreadable"); }
+        else { emit_err("larger than thoth can load"); }
+        emit_err(" — tool pins are session-scoped this run\n");
+    }
     out_mode_set(OUT_NULL);
     var rc = _oneshot_run_task();
     out_mode_set(OUT_FD1);
+    if (toolpin_store_broke() == 1) {                              # 0.51.0 (F6): a store write that failed DURING the turn — the REPL/TUI announce it once; here, one stderr line
+        toolpin_store_broke_ack();
+        emit_err("thoth: tool pin store write failed — the pins this run took were not saved\n");
+    }
     var elapsed = clock_now_ms() - t0;
     if (elapsed < 0) { elapsed = 0; }            # guard a non-monotonic clock step
     if ((rc == 0) && (hoosh_last_reply_len() > 0)) {

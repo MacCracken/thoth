@@ -1549,6 +1549,54 @@ fn test_project() {
     _cfg_toolpin_enabled = 1;
     toolpin_reset();
 
+    # --- 0.51.0 (F6): a pin from a PREVIOUS RUN withholds a swapped definition on the first advertisement of this one ---
+    # The store pre-seeded with the middle tool's OLD hash (the pin a previous run took), then the live registry
+    # advertised: the swapped tool is withheld before this session ever pinned anything, and the notice names the
+    # between-runs swap. The subagent's build flushes the child's first-sight pins too.
+    var sv_durl = _cfg_daimon_url;
+    _cfg_daimon_url = "http://a:1";
+    var spath = "build/.thoth_tps_agent.tmp";
+    var srows = alloc(4096);
+    var so = _append_cstr_cap(srows, 0, 4096, "http://a:1\tt_b\t");
+    so = _append_cstr_cap(srows, so, 4096, _tp_digest("t_b", "B", ""));
+    so = _append_cstr_cap(srows, so, 4096, "\t1700000000\n");
+    var simg = alloc(8192);
+    var si = _append_cstr_cap(simg, 0, 8192, "THOTH-TOOLPIN-1\n");
+    si = _append_cstr_cap(simg, si, 8192, srows);
+    var sdg = sha256_hex(simg, si);
+    si = _append_cstr_cap(simg, si, 8192, "DIGEST\t"); si = _append_cstr_cap(simg, si, 8192, sdg); si = _append_cstr_cap(simg, si, 8192, "\n");
+    file_write_all(spath, simg, si);
+    toolpin_reset();
+    toolpin_store_init(spath);
+    assert_eq(toolpin_store_state(), 1, "the seeded store binds");
+    assert_eq(toolpin_store_loaded(), 1, "...with the previous run's pin of t_b");
+    feed_init(); out_mode_set(OUT_RING);
+    var tlen3 = agent_format_tools(tbuf, tv2);                       # t_b advertised as B-SWAPPED
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(tlen3 > 0, "advertisement produced");
+    assert(_ui_contains(tbuf, "t_b") == 0, "the tool whose definition moved BETWEEN RUNS is not advertised");
+    assert(_ui_contains(tbuf, "t_a") == 1, "...the clean ones are");
+    assert_eq(toolpin_withheld("t_b"), 1, "...and it is refused at dispatch");
+    assert(_t_feed_has("CHANGED since it was pinned on 2023-11-14") == 1, "...the notice dates the pin (a previous run's)");
+    assert_eq(toolpin_store_dirty(), 1, "t_a and t_c were first sight this run: the store is dirty");
+    assert_eq(toolpin_store_flush(), 0, "...and the probe site's flush writes them");
+    var sb = alloc(8192);
+    var sn = file_read_all(spath, sb, 8191);
+    assert(_t_count_sub(sb, sn, "\tt_a\t", 5) == 1, "...t_a is in the store");
+    assert(_t_count_sub(sb, sn, "\tt_b\t", 5) == 1, "...t_b's OLD pin stays (a withheld tool keeps its baseline until /tools trust)");
+    # the subagent's build flushes as well
+    toolpin_reset(); toolpin_store_init(spath);
+    _sub_tools = alloc(AGENT_TOOLS_CAP);
+    _cfg_daimon_url = 0;                                              # the seam absent: no registry GET (the harness has no daimon); the table keeps its host key
+    toolpin_check("t_child", "C.", "");                               # a first sight the child's probe would take
+    assert_eq(toolpin_store_dirty(), 1, "premise: dirty before the child's build");
+    _sub_tools_build();
+    assert_eq(toolpin_store_dirty(), 0, "the child's build flushes the store");
+    assert_eq(_t_count_sub(sb, file_read_all(spath, sb, 8191), "\tt_child\t", 9), 1, "...t_child is in the store");
+    xunlink(spath);
+    toolpin_reset(); _tps_path = 0; _tps_state = 0; _tps_dirty = 0; _tps_broke = 0;
+    _cfg_daimon_url = sv_durl;
+
     # --- streaming NDJSON events (0.42.0, T3) ---
     # ⚠ These events write STRAIGHT TO FD 1, so a test that enabled them would splice event lines into the
     # harness's own output. What is asserted here is therefore everything OBSERVABLE without emitting:

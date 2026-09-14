@@ -7,6 +7,20 @@
 
 ## Version
 
+**0.51.0** — **tool pins are durable** (2026-09-14, F6, ADR-0022). 0.42.0's rug-pull pins persist across runs in
+`~/.thoth/toolpins` (or `[toolpin].file`, an authority key; `[toolpin].durable = false` opts out; `[toolpin].enabled`
+global-only now — a repo could switch the defence off): `THOTH-TOOLPIN-1`, `host \t name \t sha256 \t epoch` rows,
+a whole-file `DIGEST` — keyed by HOST + name (`[daimon].url` at pin time; `/reload` rebinds the namespace). A store that
+does not verify is rejected WHOLE and left as evidence (the run session-scoped, announced; only `/tools trust` rewrites
+it); a symlink at the path refused; 0600 on every write by temp + exclusive create + `fsync` + rename; a flush re-reads,
+unions another session's pins, refuses a file edited underneath. A definition changed between runs is withheld and
+announced `CHANGED since it was pinned on <date> (a previous run)`; an absent tool keeps its pin. The ceiling is stated:
+a same-uid editor or a deleted store is not caught. Surfaces: the greeting's third stores row, the REPL banner, a
+`/state` `pins` row, `/tools` marks (`pinned` / `WITHHELD`) + the trust footer, the window's notices, one-shot's
+stderr, `toolpin_store` log events. One bind in `main.cyr` (REPL, TUI, window, one-shot). daimon pinning once for
+every consumer is the spine's eventual home (the waiting table). Suite **647 + 1921 + 977 + 824 + 190 + 5** (+244);
+Linux / aarch64 / AGNOS build with 0.45.6's warning set; macOS green natively at the 6.6.3 pin.
+
 **0.50.1** — **repair batch 3: the window finishes its startup** (2026-09-14). `thoth gui` returns from main.cyr before
 the REPL/TUI bindings; 0.48.0 bound the session store there, this patch binds the rest. `ghist_bind` (ginput.cyr)
 binds `[history].file` + `[history].size` before `greet_build`, and `ghist_record` SAVES a stored submit (it never
@@ -500,7 +514,8 @@ passed** (2026-08-24). **`[toolpin]`**, on by default — trust-on-first-use SHA
 `name \0 description \0 inputSchema`, the CVE-2025-54136 rug-pull defense. A changed definition is
 **WITHHELD from the advertisement**, not warned about: a warning the operator scrolls past leaves the
 swapped description in the model's context, which is the entire payload. Scanning cannot fix this class —
-the replacement text can be innocuous, so only IDENTITY works. Session-scoped, and said so. **`--events`**
+the replacement text can be innocuous, so only IDENTITY works. Session-scoped, and said so (durable since 0.51.0,
+ADR-0022). **`--events`**
 — NDJSON on fd 1 so another program can watch an agentic turn (`turn_start` → `tool_call`/`tool_result` →
 `response`/`error` → `turn_end`); every string escaped, because a model-chosen tool name could otherwise
 emit a newline and **forge an event line**. **`/audit export <file>`** — t-ron's own `audit_export_json`
@@ -3666,8 +3681,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **639 + 1731 + 963 + 792 + 190 + 5 assertions across the suites as of
-0.50.1 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **647 + 1921 + 977 + 824 + 190 + 5 assertions across the suites as of
+0.51.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3700,5 +3715,5 @@ the streaming-usage decision, history-file polish, macOS at the pin), `0.45.6` b
 environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create) and `0.50.1` batch 3 (the
 `thoth gui` dispatch-order gap: the window's `[history].file`, session hooks, git after a turn, no escapes to the
 launching tty); the next batch gathers from the registry — while **minors are held for feature arcs** (`0.46.0`
-through `0.50.0` = F1–F5; `0.51.0` decided at 0.50.1 = F6, durable tool-definition pins). Defects owned
+through `0.51.0` = F1–F6; the next candidate needs a decision — the gap review's open questions). Defects owned
 upstream or by the floor sit in a waiting-on table with the version each was last checked against.

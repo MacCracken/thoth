@@ -154,6 +154,48 @@ fn greet_tier_role(t) {
 # config was found, because that masked a config that never loaded. The `[default … is reachable]` note stays
 # a NOTE. The model row appears only when a gateway is configured (matching the placeholder's Ctrl-P hint);
 # the config row names the file(s) in play, `~/…` under $HOME; the red rows are 0.43.2/0.43.5's warnings.
+var _greet_stores = 0;                          # 0.51.0: shared with _greet_pins_row — 1 once the stores group has a row
+fn _greet_pins_row() {
+    if (config_toolpin_enabled() == 0) { return 0; }
+    var st = toolpin_store_state();
+    if (st == 8) { return 0; }
+    if (_greet_stores == 0) { _greet_row(); }
+    _greet_stores = 1;
+    _greet_row();
+    var p = toolpin_store_path();
+    if ((st == 1) && (p != 0)) {
+        _greet_span(ROLE_FAINT, "tool pins "); _greet_span_clean(ROLE_FG, config_path_display(p));
+        _greet_span(ROLE_FAINT, " ("); _greet_span_int(ROLE_FG, toolpin_store_loaded()); _greet_span(ROLE_FAINT, " pinned for this host");
+        if (toolpin_store_other() > 0) { _greet_span(ROLE_FAINT, ", "); _greet_span_int(ROLE_FG, toolpin_store_other()); _greet_span(ROLE_FAINT, " other"); }
+        _greet_span(ROLE_FAINT, ")");
+    } elif ((st == 2) && (p != 0)) {
+        _greet_span(ROLE_FAINT, "tool pins "); _greet_span_clean(ROLE_FG, config_path_display(p)); _greet_span(ROLE_FAINT, " (new — written at the first probe)");
+    } elif ((st == 3) && (p != 0)) {
+        _greet_span(ROLE_RED, "tool pins "); _greet_span_clean(ROLE_RED, config_path_display(p)); _greet_span(ROLE_RED, " REJECTED");
+        _greet_span(ROLE_FAINT, " — not a thoth pin store, or edited; session-scoped this run (/tools trust rewrites it)");
+    } elif ((st == 4) && (p != 0)) {
+        _greet_span(ROLE_RED, "tool pins "); _greet_span_clean(ROLE_RED, config_path_display(p)); _greet_span(ROLE_RED, " is a symlink");
+        _greet_span(ROLE_FAINT, " — refused; session-scoped this run");
+    } elif ((st == 5) && (p != 0)) {
+        _greet_span(ROLE_RED, "tool pins cannot open "); _greet_span_clean(ROLE_RED, config_path_display(p));
+        _greet_span(ROLE_FAINT, " — session-scoped this run");
+    } elif ((st == 6) && (p != 0)) {
+        _greet_span(ROLE_RED, "tool pins "); _greet_span_clean(ROLE_RED, config_path_display(p)); _greet_span(ROLE_RED, " larger than thoth can load");
+        _greet_span(ROLE_FAINT, " — session-scoped this run (nothing is written back)");
+    } elif ((st == 9) && (p != 0)) {                # (a later greet_build, e.g. a test: the greeting is built once at startup, before any write)
+        _greet_span(ROLE_RED, "tool pins store write failed"); _greet_span(ROLE_FAINT, " — "); _greet_span_clean(ROLE_FG, config_path_display(p));
+        _greet_span(ROLE_FAINT, "; pins are session-scoped from here");
+    } else {
+        _greet_span(ROLE_FAINT, "tool pins session-scoped"); _greet_span(ROLE_FAINT, " — no ~/.thoth to keep them in (set [toolpin].file)");
+    }
+    # a repo that set [daimon].url points thoth at ANOTHER daimon — its tools pin in their own namespace; say so
+    # here, where the operator reads what the pins cover, rather than let a same-named tool read as first sight
+    if (config_daimon_url_local() == 1) {
+        _greet_row();
+        _greet_span(ROLE_RED, "this repo's [daimon].url"); _greet_span(ROLE_FAINT, " — its tools pin in their own namespace; your global daimon's pins do not apply");
+    }
+    return 0;
+}
 fn greet_build(up) {
     _greet_ensure();
     _greet_rows = 0; _greet_spans = 0; _greet_tlen = 0;
@@ -233,6 +275,7 @@ fn greet_build(up) {
     # banner keeps its own). The paths are the operator's own config values, cleaned at the span like every
     # path thoth echoes.
     var _stores = 0;
+    _greet_stores = 0;
     if (sess_persist_init_failed() == 2) {
         _greet_row(); _greet_row(); _stores = 1;
         _greet_span(ROLE_RED, "session file larger than thoth can load"); _greet_span(ROLE_FAINT, " — resume disabled (nothing is written back)");
@@ -245,16 +288,22 @@ fn greet_build(up) {
         _greet_span(ROLE_FG, " messages"); _greet_span(ROLE_FAINT, " from "); _greet_span_clean(ROLE_FG, config_path_display(sess_persist_path()));
     }
     if (inhist_persist_init_failed() == 1) {
-        if (_stores == 0) { _greet_row(); }
+        if (_stores == 0) { _greet_row(); } _stores = 1;
         _greet_row();
         _greet_span(ROLE_RED, "input history cannot write "); _greet_span_clean(ROLE_RED, config_path_display(config_history_file()));
         _greet_span(ROLE_FAINT, " — not persisted (in-memory only)");
     } elif (inhist_persist_active() == 1) {
-        if (_stores == 0) { _greet_row(); }
+        if (_stores == 0) { _greet_row(); } _stores = 1;
         _greet_row();
         _greet_span(ROLE_FAINT, "input history "); _greet_span_clean(ROLE_FG, config_path_display(inhist_persist_path()));
         _greet_span(ROLE_FAINT, " ("); _greet_span_int(ROLE_FG, inhist_persist_recalled()); _greet_span(ROLE_FAINT, " recalled)");
     }
+    # the tool-pin store (0.51.0, F6): the third row of the stores group — where a previous run's pins were read
+    # from and how many, or why they are session-scoped (RED for a store thoth refused). Shown whenever pinning is
+    # on: the defence is default-on, so its between-runs half being absent is a fact worth a row; silent only when
+    # the operator turned pinning or the store off.
+    if (_stores == 1) { _greet_stores = 1; }
+    _greet_pins_row();
     _greet_built = 1;
     _gl_cols = 0;                                   # any previous layout is stale
     return 0;

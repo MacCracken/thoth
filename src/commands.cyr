@@ -250,7 +250,7 @@ fn cmd_help() {
     _help_line("  /compact [keep]", "    summarize older turns now and stop sending them (default keep 6)");
     _help_line("  /rewind [n|last]", "   undo the model's file writes (bare: list them)");
     _help_line("  /fork [title]", "      branch this conversation; the original is left intact (/branch)");
-    _help_line("  /tools [trust]", "     list MCP tools; 'trust' re-pins definitions that changed");
+    _help_line("  /tools [trust]", "     list MCP tools with each one's pin state; 'trust' accepts changed definitions for this host and rewrites the pin store");
     _help_line("  /retry", "             re-run your last message for a fresh reply (/regenerate)");
     _help_line("  /edit <text>", "       replace your last message with new text and re-run");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
@@ -359,6 +359,46 @@ fn _state_map_row() {
     ofmt_int(project_map_bytes()); ui_emit(ROLE_FAINT, " bytes");
     if (project_map_truncated() == 1) { ui_emit(ROLE_RED, " (truncated at the cap — the model was told to list_dir for the rest)"); }
     oprintln("");
+    return 0;
+}
+# _state_pins_row (0.51.0, F6): the tool-pin store — ALWAYS a row (the defence is default-on, so its absence is a
+# fact): the bound path with this host's count, or the reason pins are session-scoped (RED for a store thoth
+# refused), or off. The per-session withheld count rides the row in red when a definition moved.
+fn _state_pins_row() {
+    ui_label("  pins    : ");
+    if (config_toolpin_enabled() == 0) { ui_emit(ROLE_FAINT, "off ([toolpin].enabled = false — tool definitions are not pinned)"); oprintln(""); return 0; }
+    var st = toolpin_store_state();
+    var p = toolpin_store_path();
+    if (st == 9) {                                                           # a write failed mid-session (the path is kept for this line)
+        ui_emit(ROLE_RED, "session-scoped from here"); ui_emit(ROLE_FAINT, " — a store write failed ("); emit_clean_line(config_path_display(p)); ui_emit(ROLE_FAINT, "; /tools trust retries the rewrite)");
+    } elif (p == 0) {
+        if (st == 8) { ui_emit(ROLE_FAINT, "session-scoped ([toolpin].durable = false)"); }
+        else { ui_emit(ROLE_FAINT, "session-scoped — no ~/.thoth to keep them in (set [toolpin].file in the global config)"); }
+    } elif (st == 1) {
+        ui_emit(ROLE_GREEN, "on"); emit(" — "); emit_clean_line(config_path_display(p));
+        emit(" ("); ofmt_int(toolpin_store_loaded()); emit(" for ");
+        if (load8(toolpin_store_host()) != 0) { emit_clean_line(toolpin_store_host()); } else { emit("this host"); }
+        if (toolpin_store_other() > 0) { emit(", "); ofmt_int(toolpin_store_other()); emit(" other"); }
+        if (toolpin_store_unstorable() > 0) { emit(", "); ofmt_int(toolpin_store_unstorable()); emit(" unstorable"); }
+        emit(")");
+    } elif (st == 2) {
+        ui_emit(ROLE_GREEN, "on"); emit(" — "); emit_clean_line(config_path_display(p)); ui_emit(ROLE_FAINT, " (new — written at the first probe)");
+    } elif (st == 3) {
+        ui_emit(ROLE_RED, "REJECTED"); emit(" — "); emit_clean_line(config_path_display(p)); ui_emit(ROLE_FAINT, " is not a thoth pin store, or was edited (session-scoped this run; /tools trust rewrites it)");
+    } elif (st == 4) {
+        ui_emit(ROLE_RED, "REFUSED"); emit(" — "); emit_clean_line(config_path_display(p)); ui_emit(ROLE_FAINT, " is a symlink (session-scoped this run)");
+    } elif (st == 5) {
+        ui_emit(ROLE_RED, "unreadable"); emit(" — "); emit_clean_line(config_path_display(p)); ui_emit(ROLE_FAINT, " (session-scoped this run)");
+    } elif (st == 6) {
+        ui_emit(ROLE_RED, "too large"); emit(" — "); emit_clean_line(config_path_display(p)); ui_emit(ROLE_FAINT, " is larger than thoth can load (session-scoped this run; nothing is written back)");
+    } else {
+        ui_emit(ROLE_FAINT, "session-scoped"); emit(" — "); emit_clean_line(config_path_display(p));
+    }
+    if (toolpin_changed() > 0) { emit(" · "); ui_emit(ROLE_RED, ""); ofmt_int(toolpin_changed()); ui_emit(ROLE_RED, " withheld this session"); }
+    oprintln("");
+    if ((config_daimon_url_local() == 1) && (st != 8)) {                   # a repo pointed thoth at its own daimon: another namespace, said
+        ui_label("          : "); ui_emit(ROLE_RED, "this repo's [daimon].url"); ui_emit(ROLE_FAINT, " — its tools pin in their own namespace; your global daimon's pins do not apply here"); oprintln("");
+    }
     return 0;
 }
 fn _state_reason_row() {
@@ -478,6 +518,7 @@ fn cmd_state() {
         ui_emit(ROLE_GREEN, "on"); emit(" — "); emit_clean_line(config_path_display(sess_persist_path()));   # 0.50.1: the BOUND path, `~/…`, cleaned (it echoed the config value raw)
         ui_emit(ROLE_MUTED, " ([session].file; conversation persisted across restarts)"); oprintln("");
     }
+    _state_pins_row();     # 0.51.0 (F6): the tool-pin store — where the trust record lives, or why it is session-scoped
     if ((config_ui_bell() == 1) || (config_ui_elapsed() == 1)) {   # 0.24.3: omit when both off (byte-identical floor)
         ui_label("  ui      : ");
         var first = 1;
@@ -1876,7 +1917,16 @@ fn cmd_tools_dispatch(line) {
         }
         var had = toolpin_trust_all();
         agent_tools_cache_reset();                # force a re-probe so the new definitions are re-pinned
-        emit("dropped "); ofmt_int(had); oprintln(" tool pin(s); the next turn re-pins from the live registry.");
+        emit("dropped "); ofmt_int(had); emit(" tool pin(s) for ");
+        if (load8(toolpin_store_host()) != 0) { emit_clean_line(toolpin_store_host()); } else { emit("this host"); }
+        # 0.51.0 (F6): the store is rewritten at once (this host's rows gone; other hosts' kept) — or say why not,
+        # from the FACT of a write (toolpin_trust_wrote), never from the path being bound
+        if (toolpin_store_path() == 0) { ui_emit(ROLE_FAINT, " (session-scoped: no store)"); }
+        elif (toolpin_trust_wrote() == 1) { emit("; store rewritten ("); emit_clean_line(config_path_display(toolpin_store_path())); emit(")"); }
+        elif (toolpin_store_state() == 4) { ui_emit(ROLE_RED, "; store NOT rewritten"); ui_emit(ROLE_FAINT, " — "); emit_clean_line(config_path_display(toolpin_store_path())); ui_emit(ROLE_FAINT, " is a symlink (refused)"); }
+        elif (toolpin_store_state() == 6) { ui_emit(ROLE_RED, "; store NOT rewritten"); ui_emit(ROLE_FAINT, " — larger than thoth can load (delete it to start over)"); }
+        else { ui_emit(ROLE_RED, "; the store could not be rewritten"); ui_emit(ROLE_FAINT, " — pins are session-scoped from here"); }
+        oprintln(" — the next turn re-pins from the live registry.");
         ui_emit(ROLE_FAINT, "  any definition that changed is now the accepted baseline. /tools to see the registry."); oprintln("");
         return 0;
     }
@@ -2183,6 +2233,7 @@ fn cmd_reload() {
     }
     agent_tools_cache_reset();                # re-advertise tools next turn (picks up [shell].enabled / [hoosh].tools / daimon)
     daimon_endpoints_reset();                 # 0.44.4: drop the cached tools/call URLs + mneme probe — WITHOUT this a changed [daimon].url moved resources/prompts but left tool traffic on the OLD host
+    toolpin_host_rebind();                    # 0.51.0 (F6): a moved [daimon].url is another pin namespace — this host's pins flushed, the new host's loaded, nothing reads as CHANGED
     mcpres_endpoints_reset();                 # 0.43.0 (T2-7): drop the cached resources/prompts URLs + probe, else a changed [daimon].url is silently ignored
     hoosh_auth_cache_reset();                 # a rotated [hoosh].token takes effect next request (else stale Bearer header)
     inhist_persist_size_set(config_history_size());   # 0.50.1: [history].size is an int the next save reads — re-applied here (it was re-parsed and then ignored, and named on neither list)
@@ -2195,10 +2246,10 @@ fn cmd_reload() {
     if (config_source() == 3) {
         ui_emit(ROLE_FAINT, "  (legacy path — move it to .thoth/config.cyml)"); oprintln("");
     }
-    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url · [project].map · [history].size"); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url (+ the tool-pin host) · [project].map · [history].size"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
-    ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [history]/[session] file"); oprintln("");
-    ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file (0.44.3 — authority)"); oprintln("");
+    ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [history]/[session] file · [toolpin] enabled/file/durable"); oprintln("");
+    ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file · [toolpin] (0.44.3 / 0.51.0 — authority)"); oprintln("");
     if (config_suppressed_count() > 0) {
         ui_emit(ROLE_RED, "  note: "); ofmt_int(config_suppressed_count());
         ui_emit(ROLE_RED, " authority key(s) SUPPRESSED from the local layer: ");
@@ -3007,6 +3058,18 @@ fn classify_final(line) {
 # re-dispatches the result one level deeper (bounded by ALIAS_MAX_DEPTH). With no [alias]
 # configured, config_alias_lookup is always 0 -> alias_expand is 0 -> the same "unknown
 # command" line as before, so the floor stays byte-identical.
+# _alias_target_is_authority (0.51.0): 1 when an alias EXPANSION is `/tools trust` or `/allow …` — the two typed
+# authority acts a repo-authored alias must not reach.
+fn _alias_target_is_authority(ex) {
+    if (ex == 0) { return 0; }
+    var c = classify_input(ex);
+    if (c == CMD_ALLOW) { return 1; }
+    if (c == CMD_TOOLS) {
+        var a = arg_after(ex);
+        if ((a != 0) && (streq(a, "trust") == 1)) { return 1; }
+    }
+    return 0;
+}
 fn _dispatch_d(line, depth) {
     var c = classify_input(line);
     if (c == CMD_QUIT) { return 0; }
@@ -3068,6 +3131,15 @@ fn _dispatch_d(line, depth) {
             if (_alias_value_has_ctl(line) == 1) {
                 emit("  refused: alias '/"); emit_clean_line(&_alias_name);
                 oprintln("' expands to text holding a control byte. nothing was run.");
+                return 1;
+            }
+            # 0.51.0 (F6): `/tools trust` is an authority act with no gate BECAUSE a typed slash command is the
+            # operator's own hand — an alias is a repo-settable preference (a cloned repo's `.thoth/config.cyml`
+            # may define one), so a line that reaches it through expansion was not typed by the operator: refused
+            # whole, in the 0.45.0 shape. (`/allow` shares the reasoning and the refusal.)
+            if (_alias_target_is_authority(ex) == 1) {
+                emit("  refused: alias '/"); emit_clean_line(&_alias_name);
+                oprintln("' expands to an authority command (/tools trust, /allow) — it must be typed, not aliased. nothing was run.");
                 return 1;
             }
             return _dispatch_d(ex, depth + 1);

@@ -183,8 +183,8 @@ unsure, patch.
 - **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing), `0.47.0`
   the second (F2, the picker's provider health + pricing), `0.48.0` the third (F3, reasoning across resume),
   `0.49.0` the fourth (F4, GUI pointer plumbing + resumed cards), `0.50.0` the fifth (F5, the project-map
-  hint); `0.51.0` is decided (F6, durable tool-definition pins). A minor is never a sweep of small things — those
-  are patches.
+  hint), `0.51.0` the sixth (F6, durable tool-definition pins); the next decided feature earns `0.52.0`. A
+  minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -227,6 +227,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" (14 on a clean tree) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
 | **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: a tool call's `content_block_start` can be lost while its `input_json_delta` fragments still arrive (reproducible from one captured body) | hoosh **2.6.10** | done — 0.44.2 drops and announces such a call |
 | **hoosh** | three asks from F2: the serving ROUTE per catalog entry (a `base_url` or route index beside `owned_by` in `/v1/models/catalog`, so a model joins to ITS route's health instead of its kind's fold); a pricing-table dump (a `GET` that lists `pricing_lookup` for every catalog key) so the picker / `/models` rows can price from hoosh's numbers instead of the operator's `[pricing.<model>]`; and `/v1/health/providers` emitting `base_url` unescaped (`handlers.cyr`, the raw `add_cstr`) | hoosh **2.6.10** | done — 0.47.0 folds per kind (`degraded` when routes disagree), prices from the operator's table, and treats an unparseable health body as "unavailable" |
+| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth and overwrites on the same name | daimon **2.1.3** | done — 0.51.0's store is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
 | **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — hoosh's own follow-up note; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.6.10** | thoth keeps requesting it and already decodes it (0.45.5 decided) — the row lights up when hoosh ships the frame |
 | **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped and sizes the buffer flat (`n * 512 + 32`) — a 4000-byte tool name writes past the allocation | t-ron **2.1.10** (vendored 2.1.10) | done — both executors refuse a name over `AGENT_NAME_MAX` before the gate |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` collision and the three `undefined function` warnings every lane prints) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only; every capacity argument was retired by measurement at 0.44.5 | neither profile exists upstream | `sync-*.sh` re-vendor when they do |
@@ -298,21 +299,20 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   to 256 × 256 opens a turn on a wide tree — `dir_list_into` does not surface `d_type`; a stdlib arm that did
   would make the walk one `getdents` per directory); every agentic round re-sends the map's bytes (the same
   bytes each round, which is what provider prefix caching wants).
-- **F6 — Durable tool-definition pins — DECIDED for 0.51.0 (gap 3, the maintainer's call at 0.50.1).** The
-  0.42.0 pins are session-scoped by design: a definition swapped DURING a session (or across `/reprobe`) is
-  withheld and refused; one swapped BETWEEN two runs is accepted as first sight. The arc closes that: pins
-  persist in a store thoth writes and must then defend (a security-relevant file — tamper, replace,
-  symlink-redirect; an authority key under ADR-0021, global-only), so the next run compares against the last
-  one's pins and withholds a changed tool until `/tools trust`. The design pass answers where the store lives,
-  what it carries (name → hash, the daimon host, when pinned), how it is verified on load, and what the greeting
-  / `/state` / `/tools` say about it; the daimon-owned alternative (pin once for every consumer) is recorded
-  as the spine's eventual home, with thoth's store the client-side floor until daimon pins.
+- **F6 — Durable tool-definition pins — shipped as 0.51.0 (ADR-0022).** The pins persist in `~/.thoth/toolpins`
+  (or `[toolpin].file`, an authority key), host + name under a whole-file digest; a store that does not verify is
+  rejected whole (never a silent first sight); 0600 on every write by temp + rename; a symlink refused; a
+  definition swapped between runs withheld and dated. Residuals: the ceiling is a same-uid editor or a deleted
+  store (stated in the ADR and the config example); two sessions trusting the same host at once are
+  last-writer-wins on that host's rows; schema key order is part of the hash (a reordering server reads as
+  changed — closed, never open; canonicalise if one appears); per-tool trust and an `--events` kind are later
+  patches; the PE lane's `is_symlink` no-op and AGNOS's dropped `O_EXCL` / whole-fs `fsync` ride the existing
+  floor rows; **the spine's home** — daimon pinning once for every consumer — sits in the waiting table.
 - **Gated on another domain's Cyrius port (recorded, not on a numbered arc):** the **bhava**
   sentiment→mood loop (bhava is **2.0.0** and still Rust — consume it when it is ported, never
   reimplement sentiment/mood analysis); **voice / mic** — mic → speech-to-text and read-back — by
   consuming an AGNOS audio/voice domain plus a portable audio-capture substrate.
-- **From the gap review, if adopted:** durable tool-definition pins (gap 3, created by 0.42.0's
-  session-scoped TOFU), OS-enforced sandboxing of `shell`/`edit` via kavach (gap 1 — the largest
+- **From the gap review, if adopted:** OS-enforced sandboxing of `shell`/`edit` via kavach (gap 1 — the largest
   safety delta; kavach is 3.12.5), network egress control (gap 2), ACP server mode (gap 7), OTLP
   export of the audit trail (gap 5), image input (gap 6), git write operations (gap 8). Each moves
   here with a decision and a pin.

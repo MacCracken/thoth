@@ -121,6 +121,7 @@ fn main() {
     test_inhist();
     test_inhist_persist();
     test_history_cmd_path();
+    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_config(); test_state_pins_row();
     test_inhist_polish();          # 0.45.5: ~/$HOME expansion on [history].file + the [history].size trim
     test_logging();
     test_logs_flag();

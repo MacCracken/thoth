@@ -402,6 +402,7 @@ fn _sub_tools_build() {
     # config key, so the child's tool set tracks the parent's exactly. The ONE difference is that
     # agent_tools_add_delegate is not called: that omission is what caps depth at 1.
     var tl = agent_format_tools(_sub_tools, dtv);
+    toolpin_store_flush();                                    # 0.51.0 (F6): the child's probe pins into the same host-scoped table — persist them too
     tl = agent_tools_add_memory(_sub_tools, tl);
     tl = agent_tools_add_shell(_sub_tools, tl);
     tl = agent_tools_add_project(_sub_tools, tl);

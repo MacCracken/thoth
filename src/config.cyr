@@ -31,7 +31,9 @@ var _cfg_hoosh_timeout_ms = 0 - 1;  # 0.44.2: [hoosh].timeout_ms — socket read
 var _cfg_hoosh_compact_at = 0 - 1;  # 0.40.0 (T1-5): auto-compact once session tokens cross this; -1/absent = off
 var _cfg_redact_enabled = 1;        # 0.40.0 (T1-3): [redact].enabled — DEFAULT ON (see config_redact_enabled)
 var _cfg_guard_enabled = 1;         # 0.41.0 (T2-3): [guard].enabled — DEFAULT ON (see config_guard_enabled)
-var _cfg_toolpin_enabled = 1;       # 0.42.0 (T3): [toolpin].enabled — DEFAULT ON (see config_toolpin_enabled)
+var _cfg_toolpin_enabled = 1;       # 0.42.0 (T3): [toolpin].enabled — DEFAULT ON (see config_toolpin_enabled); 0.51.0: GLOBAL-ONLY (a repo cannot switch the defence off)
+var _cfg_toolpin_file = 0;          # 0.51.0 (F6): [toolpin].file — the durable pin store, or 0 -> the default under ~/.thoth (see config_toolpin_file); AUTHORITY
+var _cfg_toolpin_durable = 1;       # 0.51.0 (F6): [toolpin].durable — false keeps pins session-scoped; GLOBAL-ONLY
 var _cfg_ask_enabled = 0;         # [ask].enabled — the ask_user tool (0.44.0); opt-in
 var _cfg_subagent_enabled = 0;      # 0.43.0 (T2-1): [subagent].enabled — DEFAULT OFF (see config_subagent_enabled)
 # 0.43.0 (T2-1): subagent depth — 0 = the parent's own turn, 1 = inside a delegation.
@@ -70,6 +72,7 @@ var _cfg_hoosh_parallel = 1; # 1 = run a round's tool calls concurrently (defaul
 var _cfg_hoosh_reasoning = 0;  # 0.35.2: [hoosh].reasoning effort level (0 = off, 1 = low, 2 = medium, 3 = high) -> reasoning_effort
 var _cfg_hoosh_summarize = 0;  # 0.36.4: [hoosh].summarize — recap the byte-budget-skipped history (costs an extra small call)
 var _cfg_daimon_url = 0;     # cstring, or 0 if unset (daimon seam stays absent)
+var _cfg_daimon_url_local = 0;   # 0.51.0: 1 when the LOCAL layer set [daimon].url to a value the global did not (its own pin namespace)
 var _cfg_tron_policy = 0;    # cstring path to a t-ron policy TOML, or 0
 var _cfg_tron_agent = 0;     # cstring agent id for t-ron calls, or 0 -> default
 var _cfg_log_file = 0;       # cstring path for structured driver logs, or 0
@@ -612,6 +615,18 @@ fn _cfg2_int(l, g, key) {
     if (_cfg_has(l, key) == 1) { return _cfg_int(l, key); }
     if (_cfg_has(g, key) == 1) { return _cfg_int(g, key); }
     return 0 - 1;
+}
+# _cfg2_bool_global_only (0.51.0): a BOOL authority key — read from the global layer only; a local layer that
+# names it is reported as suppressed (unless it names the global's own value — the _cfg2_str_global_only rule).
+fn _cfg2_bool_global_only(l, g, key, label, dflt) {
+    var gv = _cfg_bool(g, key, dflt);
+    if (_cfg_has(l, key) == 1) {
+        var lv = _cfg_bool(l, key, dflt);
+        var same = 0;
+        if ((lv == gv) && (_cfg_has(g, key) == 1)) { same = 1; }
+        if (same == 0) { _cfg_note_suppressed(label); }
+    }
+    return gv;
 }
 
 # --- 0.44.3: AUTHORITY-GRANTING KEYS ARE GLOBAL-ONLY ---------------------------------------------
@@ -1156,7 +1171,11 @@ fn _cfg_known_key(sec, key) {
         if (streq(key, "session_end") == 1) { return 1; }
         return streq(key, "timeout_ms");
     }
-    if (streq(sec, "toolpin") == 1) { return streq(key, "enabled"); }
+    if (streq(sec, "toolpin") == 1) {
+        if (streq(key, "enabled") == 1) { return 1; }
+        if (streq(key, "file") == 1) { return 1; }          # 0.51.0 (F6)
+        return streq(key, "durable");                       # 0.51.0 (F6)
+    }
     if (streq(sec, "subagent") == 1) {
         if (streq(key, "enabled") == 1) { return 1; }
         return streq(key, "max_iters");
@@ -1350,6 +1369,18 @@ fn config_load() {
     var daimon_l = _cfg_section_pairs(lo, "daimon");  var daimon_g = _cfg_section_pairs(gl, "daimon");
     # 0.45.0: sanitised at LOAD, as [hoosh].url above — /state, /tools and every "-> daimon" trace draw it raw.
     _cfg_daimon_url = _cfg_label(_cfg2_str(daimon_l, daimon_g, "url"));
+    # 0.51.0 (F6): [daimon].url stays a layered preference — but a repo that sets it points thoth at ANOTHER
+    # daimon, whose tools are pinned in their own namespace; the pin surfaces name that (never silently a
+    # fresh first sight of the operator's own tool names). 1 when the LOCAL layer set the url to something the
+    # global did not.
+    _cfg_daimon_url_local = 0;
+    if (_cfg_has(daimon_l, "url") == 1) {
+        var dl = _cfg_str(daimon_l, "url");
+        var dg = _cfg_str(daimon_g, "url");
+        var same = 0;
+        if ((dl != 0) && (dg != 0)) { if (streq(dl, dg) == 1) { same = 1; } }
+        if (same == 0) { _cfg_daimon_url_local = 1; }
+    }
     var tron_l = _cfg_section_pairs(lo, "tron");      var tron_g = _cfg_section_pairs(gl, "tron");
     # AUTHORITY — the policy that authorizes the model's tool calls, and the identity it authorizes as.
     _cfg_tron_policy = _cfg2_str_global_only(tron_l, tron_g, "policy", "tron.policy");
@@ -1391,7 +1422,13 @@ fn config_load() {
     _cfg_hook_session_end   = _cfg2_str_global_only(hook_l, hook_g, "session_end", "hooks.session_end");
     _cfg_hook_timeout_ms    = _cfg2_int(hook_l, hook_g, "timeout_ms");
     var tp_l = _cfg_section_pairs(lo, "toolpin");     var tp_g = _cfg_section_pairs(gl, "toolpin");
-    _cfg_toolpin_enabled = _cfg2_bool(tp_l, tp_g, "enabled", 1);     # 0.42.0 (T3): DEFAULT ON — see the getter
+    # 0.51.0 (F6): the whole [toolpin] table is AUTHORITY. `enabled` used to layer per key, so a cloned repo's
+    # `.thoth/config.cyml` could switch the rug-pull defence off (and /reload applied it live) — the class
+    # ADR-0021 forbids; `file` is where thoth writes and reads back its trust record (a repo shipping a store of
+    # pre-approved pins would approve a swapped definition); `durable` opts the store off, which is the same act.
+    _cfg_toolpin_enabled = _cfg2_bool_global_only(tp_l, tp_g, "enabled", "toolpin.enabled", 1);   # 0.42.0 (T3): DEFAULT ON — see the getter
+    _cfg_toolpin_file = _cfg_expand_home(_cfg2_str_global_only(tp_l, tp_g, "file", "toolpin.file"));
+    _cfg_toolpin_durable = _cfg2_bool_global_only(tp_l, tp_g, "durable", "toolpin.durable", 1);
     var sub_l = _cfg_section_pairs(lo, "subagent");   var sub_g = _cfg_section_pairs(gl, "subagent");
     _cfg_subagent_enabled = _cfg2_bool(sub_l, sub_g, "enabled", 0);   # 0.43.0 (T2-1): DEFAULT OFF — see the getter
     _cfg_subagent_max_iters = _cfg2_int(sub_l, sub_g, "max_iters");   # -1 when absent -> default in the getter
@@ -1492,6 +1529,28 @@ fn config_guard_enabled() { return _cfg_guard_enabled; }
 # removes risk rather than adding capability. Unlike those two it CAN withhold a tool, so the opt-out
 # exists for an operator whose registry legitimately churns mid-session.
 fn config_toolpin_enabled() { return _cfg_toolpin_enabled; }
+
+# config_toolpin_file (0.51.0, F6): the durable pin store's path, or 0 for session-scoped pins. `[toolpin].file`
+# when set (global-only, `~/` expanded at load); else the DEFAULT `$HOME/.thoth/toolpins` when the operator
+# already has a `~/.thoth` (thoth creates no directory — the 0.45.3 root rule); else 0. `[toolpin].durable =
+# false` is 0 outright. The default is ON because the 0.42.0 defence is on by default: a between-runs half that
+# had to be switched on would be a weaker floor than the in-session half it extends. Pure — the bind
+# (toolpin_store_init, main.cyr) is the only caller with side effects, so `cyrius test` never touches a real store.
+var _cfg_toolpin_home_seam = 0;     # test seam: overrides getenv("HOME") for the default resolver (0 = the real one)
+var _cfg_toolpin_default_c = 0;
+fn config_toolpin_durable() { return _cfg_toolpin_durable; }
+fn config_toolpin_file() {
+    if (_cfg_toolpin_durable == 0) { return 0; }
+    if (_cfg_toolpin_file != 0) { return _cfg_toolpin_file; }
+    var home = _cfg_toolpin_home_seam;
+    if (home == 0) { home = getenv("HOME"); }
+    if (home == 0) { return 0; }
+    if (load8(home) == 0) { return 0; }
+    var root = _cfg_join2(home, ".thoth");
+    if (is_dir(str_from(root)) == 0) { return 0; }
+    _cfg_toolpin_default_c = _cfg_join2(root, "toolpins");
+    return _cfg_toolpin_default_c;
+}
 
 # config_subagent_enabled: 1 when the model may call `delegate` to run a scoped child context
 # (0.43.0, T2-1; ADR-0018). DEFAULT OFF — and the reason is NOT that it grants new authority, because it
@@ -1660,6 +1719,7 @@ fn config_daimon_configured() {
 # config_daimon_url: the configured daimon endpoint, or 0 if unset (the daimon
 # seam never claims remote without a declared endpoint — no default here).
 fn config_daimon_url() { return _cfg_daimon_url; }
+fn config_daimon_url_local() { return _cfg_daimon_url_local; }
 
 # config_memory_enabled: 1 if the project-local .thoth/memory seam is enabled
 # (0.12.0; opt-in, off by default). A checked-in .thoth/memory is a prompt-

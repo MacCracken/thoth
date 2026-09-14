@@ -6,6 +6,14 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.51.0** (2026-09-14, not a full sweep): F6 wrote **ADR-0022** (tool pins durable, the keyless store's
+> honest claim) and updated `CHANGELOG.md`, `docs/development/state.md` (version block, **Tests** counts, the 0.42.0
+> sentence), `docs/development/roadmap.md` (F6 → shipped with residuals; the daimon row in the waiting table; the
+> candidates line), ADR-0021 (the key list + the open question's tool-pin half), `docs/adr/README.md`,
+> `docs/development/gap-review.md` (gap 3 closed with the daimon residual), `.thoth/config.cyml.example` (the
+> `[toolpin]` block rewritten: `file` / `durable` / the header's key list; the false `/reprobe` claim corrected),
+> `README.md` (stamp + the `[toolpin]` clause) and this file.
+>
 > **Touched at 0.50.1** (2026-09-14, not a full sweep): repair batch 3 updated `CHANGELOG.md`, `docs/development/state.md`
 > (version block, **Tests** counts), `docs/development/roadmap.md` (the registry's GUI `[history].file` entry closed;
 > three carried notes added: the compositor not pumped during a hook / shell wait, `gate_init` / `log_init` lines

@@ -41,7 +41,9 @@ residual is a claim with an expiry date, and nothing was re-checking this one.
 solely to discover that it *tried* to set one, so the attempt can be named.
 
 Authority keys are: the four `[hooks]` commands, `[verify].command`, `[tron].policy`, `[tron].agent`,
-and `[log].file` / `[history].file` / `[session].file`. Two further rules fall out of the same
+`[log].file` / `[history].file` / `[session].file`, and — since 0.51.0 (ADR-0022) — the whole
+`[toolpin]` table: `enabled` (a repo must not switch the rug-pull defence off), `file` (where thoth
+writes and reads back its trust record) and `durable`. Two further rules fall out of the same
 principle:
 
 - **A token is bound to the URL that earned it.** When the local layer *redirects* `[hoosh].url` and
@@ -86,4 +88,7 @@ confirm the operator answers. `[hooks]` had no such gate, which is why it was th
 hooks once. The natural shape is trust-on-first-use over the local layer's authority keys, mirroring
 what `[toolpin]` already does for tool definitions: prompt once, remember the decision, fail closed
 where nobody can be asked. It is a real feature with a real threat model of its own (where is the
-trust record kept, and what defends *it*?), so it is recorded here rather than guessed at.
+trust record kept, and what defends *it*?), so it is recorded here rather than guessed at. ADR-0022
+(0.51.0) answers that question for the tool-definition half — a keyless store defended by 0600, an
+atomic rename, a symlink refusal and a whole-file digest, with its ceiling (a same-uid editor) stated;
+the per-repo-hooks half stays open.

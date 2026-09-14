@@ -100,16 +100,19 @@ Exfiltration is the payoff step of most injection chains. `shell` can curl anywh
 reaches any URL. Largely **daimon's and kavach's** seam rather than thoth's, which is why it is not
 on the roadmap — but it is the natural companion to gap 1 and should be decided with it.
 
-### 3 · Durable tool-definition pins — **new gap, created by 0.42.0**
+### 3 · Durable tool-definition pins — **closed at 0.51.0 (ADR-0022), with the daimon residual**
 
-`[toolpin]` pins are **session-scoped** by design: they die with the process, so a swap *during* a
-session (or across a `/reprobe`) is caught and one *between two runs* is not. That bound is stated
-honestly in the code and the CHANGELOG.
+`[toolpin]` pins were **session-scoped** through 0.50.x: they died with the process, so a swap *during*
+a session (or across `/reload`) was caught and one *between two runs* was not. 0.51.0 persists them in
+`~/.thoth/toolpins` (or `[toolpin].file`), host + name under a whole-file digest, refusing a store it
+cannot verify rather than reading it as first sight; the ceiling — a same-uid editor — is stated. What
+stays open is the spine's half below.
 
-Closing it means a durable pin store — which would be a **security-relevant file thoth writes and
-must then defend** (tamper, replace, symlink-redirect), so it is a real design decision rather than
-a small feature. There is also a legitimate argument that it belongs in **daimon**, which owns the
-registry and could pin once for every consumer instead of each consumer pinning separately.
+The store is the security-relevant file the earlier draft of this entry warned about (tamper, replace,
+symlink-redirect), and ADR-0022 says what a keyless process can and cannot defend it against. What
+remains is the spine's half: it belongs in **daimon**, which owns the registry and could pin once for
+every consumer instead of each consumer pinning separately — a persisted registry, a `definition_sha256`
+per manifest element, an audit event on change (the roadmap's waiting table).
 
 ### 4 · Structural isolation of untrusted content — **partial; the strongest available control**
 

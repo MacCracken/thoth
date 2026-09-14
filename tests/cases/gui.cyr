@@ -1161,6 +1161,33 @@ fn test_gui_reason_resume() {
     bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, 0);
     assert_eq(_t_gd_text_count(bl, "input history cannot write"), 0, "on an empty conversation the greeting's red row carries it — the flow stays silent");
     _inhist_path = _ip; _inhist_recalled = _ir; _inhist_init_failed = _if; _cfg_history_file = _ic;
+    # 0.51.0 (F6): the tool-pin store's notices in the window — the greeting's row drawn; a save that failed
+    # mid-session standing; a store refused at startup carried by the flow while the greeting is hidden
+    var _tpst = _tps_state; var _tppa = _tps_path; var _tplo = _tps_loaded; var _tpbr = _tps_broke; var _tpen = _cfg_toolpin_enabled;
+    _cfg_toolpin_enabled = 1;
+    _tps_state = 1; _tps_path = "/home/someone/.thoth/toolpins"; _tps_loaded = 4; _tps_other = 0; _tps_broke = 0;
+    gcmd_clear(); greet_build(0);
+    gl = gd_list_new(); gfeed_build(gl, 0, 0, 900, 400);
+    assert_eq(_t_gd_text_count(gl, "tool pins "), 1, "the window draws the greeting's tool-pin row");
+    assert_eq(_t_gd_text_count(gl, " pinned for this host"), 1, "...with this host's count");
+    session_history_append("user", "q", 1); session_history_append("assistant", "a", 1);
+    var np0 = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    _tps_broke = 1;
+    var npb = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(npb > np0, "a failed pin-store write adds a standing notice to the flow");
+    bl = gd_list_new();
+    assert_eq(_gfeed_flow(bl, 14, 0, 560, session_history_len()), npb, "...measure == draw with it");
+    assert_eq(_t_gd_text_count(bl, "tool pin store write failed"), 1, "...naming the failure once");
+    _tps_broke = 0;
+    _tps_state = 3;
+    var npi = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    assert(npi > np0, "a store refused at startup adds a standing notice under the messages (the greeting is not drawn then)");
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, session_history_len());
+    assert_eq(_t_gd_text_count(bl, "tool pin store refused at startup"), 1, "...naming it");
+    session_history_clear();
+    bl = gd_list_new(); _gfeed_flow(bl, 14, 0, 560, 0);
+    assert_eq(_t_gd_text_count(bl, "tool pin store refused at startup"), 0, "on an empty conversation the greeting's red row carries it — the flow stays silent");
+    _tps_state = _tpst; _tps_path = _tppa; _tps_loaded = _tplo; _tps_broke = _tpbr; _cfg_toolpin_enabled = _tpen;
     greet_build(0);
     roundlog_reset(); session_history_clear(); session_reset();
     return 0;
