@@ -231,6 +231,7 @@ fn toolpin_check(name, desc, schema) {
             _tps_dirty = 1;
             log_begin("toolpin"); log_kv_str("tool", name); log_kv_str("result", "pinned_first_sight"); log_commit(SK_INFO);
         }
+        events_tool_pinned(name);              # 0.51.2: --events (no-op when off)
         return 1;
     }
     if (streq(_tp_hashes + idx * TOOLPIN_HASH_CAP, h) == 1) { store8(_tp_withheld + idx, 0); return 1; }   # unchanged — stay quiet, and lift any prior withhold
@@ -261,6 +262,7 @@ fn toolpin_check(name, desc, schema) {
     log_begin("toolpin"); log_kv_str("tool", name); log_kv_str("result", "withheld_definition_changed");
     if (load8(_tp_from_store + idx) == 1) { log_kv_int("pinned_at", load64(_tp_pinned_at + idx * 8)); }
     log_commit(SK_WARN);
+    events_tool_withheld(name, load8(_tp_from_store + idx), load64(_tp_pinned_at + idx * 8));   # 0.51.2: --events
     return 0;
 }
 
@@ -270,7 +272,40 @@ fn toolpin_check(name, desc, schema) {
 # by _tp_n bounding), and the store rewritten at once with this host's rows gone (other hosts' kept) — an
 # authority act with no gate (a typed slash command is the operator's own hand), so it is logged at WARN.
 var _tps_trust_wrote = 0;                  # 0.51.0: 1 when the last `/tools trust` rewrote the store (the command says which)
+var _tps_skip_name = 0;                    # 0.51.2: during a single-tool trust flush, the name whose FILE row must not be unioned back
 fn toolpin_trust_wrote() { return _tps_trust_wrote; }
+# toolpin_trust_one (0.51.2): `/tools trust <name>` — accept ONE tool's changed definition without costing the
+# other pins their history. The row leaves the table (the last row takes its slot), the store is rewritten at
+# once with that one row gone (the union must not bring the file's copy back — `_tps_skip_name`), and the next
+# probe re-pins the tool at first sight. Returns 1 dropped, 0 when no such pin (nothing to trust — said, never a
+# silent no-op). Same authority shape as the wholesale trust: WARN log, no gate, alias-refused.
+fn toolpin_trust_one(name) {
+    _tps_trust_wrote = 0;
+    if (name == 0) { return 0; }
+    if (_tp_bufs() == 0) { return 0; }
+    var idx = _tp_find(name);
+    if (idx < 0) { return 0; }
+    var last = _tp_n - 1;
+    if (idx != last) {
+        memcpy(_tp_names + idx * TOOLPIN_NAME_CAP, _tp_names + last * TOOLPIN_NAME_CAP, TOOLPIN_NAME_CAP);
+        memcpy(_tp_hashes + idx * TOOLPIN_HASH_CAP, _tp_hashes + last * TOOLPIN_HASH_CAP, TOOLPIN_HASH_CAP);
+        store8(_tp_withheld + idx, load8(_tp_withheld + last));
+        store64(_tp_pinned_at + idx * 8, load64(_tp_pinned_at + last * 8));
+        store8(_tp_from_store + idx, load8(_tp_from_store + last));
+    }
+    store8(_tp_withheld + last, 0);
+    _tp_n = last;
+    log_begin("toolpin"); log_kv_str("result", "trusted_one"); log_kv_str("tool", name); log_kv_str("host", _tps_host_cstr()); log_commit(SK_WARN);
+    if (_tps_path != 0) {
+        var before = _tps_written;
+        _tps_dirty = 1;
+        _tps_skip_name = name;
+        toolpin_store_flush();
+        _tps_skip_name = 0;
+        if (_tps_written > before) { _tps_trust_wrote = 1; }
+    }
+    return 1;
+}
 fn toolpin_trust_all() {
     var had = _tp_n;
     _tp_n = 0;
@@ -349,11 +384,20 @@ fn toolpin_store_dirty() { return _tps_dirty; }
 fn toolpin_store_written() { return _tps_written; }
 fn toolpin_store_host() { return _tps_host_cstr(); }
 fn _tps_bound() { if (_tps_path == 0) { return 0; } if ((_tps_state == 1) || (_tps_state == 2)) { return 1; } return 0; }
-fn _tps_bufs() {
+# _tps_host_buf: the 512-byte host key alone — every bind needs it (the table is keyed by it even with no store).
+# _tps_bufs: the two TPS_READ_CAP file buffers, alloc'd at the FIRST read or render — a session-scoped run (no
+# ~/.thoth, durable = false, a rejected store) never reads or writes a file and must not pay 2 MiB of never-freed
+# heap for one it does not have (0.51.2; the first cut alloc'd all three at the bind).
+fn _tps_host_buf() {
     if (_tps_host == 0) { _tps_host = alloc(TPS_HOST_CAP); if (_tps_host != 0) { store8(_tps_host, 0); } }
+    if (_tps_host == 0) { return 0; }
+    return 1;
+}
+fn _tps_bufs() {
+    if (_tps_host_buf() == 0) { return 0; }
     if (_tps_buf == 0) { _tps_buf = alloc(TPS_READ_CAP); }
     if (_tps_out == 0) { _tps_out = alloc(TPS_READ_CAP); }
-    if ((_tps_host == 0) || (_tps_buf == 0) || (_tps_out == 0)) { return 0; }
+    if ((_tps_buf == 0) || (_tps_out == 0)) { return 0; }
     return 1;
 }
 fn _tps_host_cstr() { if (_tps_host == 0) { return ""; } return _tps_host; }
@@ -377,7 +421,7 @@ fn _tps_host_canon(dst, u) {
     return i;
 }
 fn _tps_host_set() {
-    if (_tps_bufs() == 0) { return 0; }
+    if (_tps_host_buf() == 0) { return 0; }
     _tps_host_canon(_tps_host, config_daimon_url());
     return 0;
 }
@@ -496,7 +540,9 @@ fn _tps_parse(buf, len, apply) {
             if (apply == 1) {
                 memcpy(&nb, buf + f1 + 1, nlen); store8(&nb + nlen, 0);
                 memcpy(&hb, buf + f2 + 1, 64); store8(&hb + 64, 0);
-                if (_tp_find(&nb) < 0) { if (_tp_add(&nb, &hb, secs, 1) < 0) { _tp_overflow = 1; } }
+                var skip = 0;
+                if (_tps_skip_name != 0) { if (streq(&nb, _tps_skip_name) == 1) { skip = 1; } }   # a single-tool trust: the file's copy must not come back
+                if ((skip == 0) && (_tp_find(&nb) < 0)) { if (_tp_add(&nb, &hb, secs, 1) < 0) { _tp_overflow = 1; } }
             }
         } else { _tps_p_other = _tps_p_other + 1; }
         i = e + 1;
@@ -577,6 +623,7 @@ fn _tps_append_cstr(off, s) { return _tps_append(off, s, strlen(s)); }
 # Returns the image length, or -1 when it does not fit.
 var _tps_render_rows = 0;                  # rows the last render put in the image (the writer's own count against TPS_ROWS_MAX)
 fn _tps_render(have, blen) {
+    if (_tps_bufs() == 0) { return 0 - 1; }
     var off = _tps_append_cstr(0, TPS_MAGIC);
     off = _tps_append(off, "\n", 1);
     _tps_render_rows = 0;

@@ -250,7 +250,7 @@ fn cmd_help() {
     _help_line("  /compact [keep]", "    summarize older turns now and stop sending them (default keep 6)");
     _help_line("  /rewind [n|last]", "   undo the model's file writes (bare: list them)");
     _help_line("  /fork [title]", "      branch this conversation; the original is left intact (/branch)");
-    _help_line("  /tools [trust]", "     list MCP tools with each one's pin state; 'trust' accepts changed definitions for this host and rewrites the pin store");
+    _help_line("  /tools [trust [<tool>]]", "list MCP tools with each one's pin state; 'trust' accepts changed definitions for this host (or one tool) and rewrites the pin store");
     _help_line("  /retry", "             re-run your last message for a fresh reply (/regenerate)");
     _help_line("  /edit <text>", "       replace your last message with new text and re-run");
     _help_line("  /reset", "             clear the conversation context (start fresh)");
@@ -270,7 +270,7 @@ fn cmd_help() {
     _help_line("  /rename <title>", "    rename the current conversation");
     _help_line("  /delete <n>", "        delete conversation n");
     _help_line("  /search <text>", "     search all conversations for text");
-    _help_line("  /quit", "              exit (or Ctrl-D)");
+    _help_line("  /quit", "              exit (also /exit; Ctrl-X in the TUI, Ctrl-D at the line REPL)");
     _help_line("  <anything else>", "    a coding task -> routed to the model (hoosh)");
     return 0;
 }
@@ -359,6 +359,23 @@ fn _state_map_row() {
     ofmt_int(project_map_bytes()); ui_emit(ROLE_FAINT, " bytes");
     if (project_map_truncated() == 1) { ui_emit(ROLE_RED, " (truncated at the cap — the model was told to list_dir for the rest)"); }
     oprintln("");
+    return 0;
+}
+# _state_history_row (0.51.2): the composer-history store, from the bind's own facts (0.50.1) — the bound path
+# cleaned + what it recalled, red when the bind failed; omitted entirely when [history].file is unset (the
+# byte-identical floor, like the resume row). The greeting box's row, on the surface that outlives it.
+fn _state_history_row() {
+    if (inhist_persist_init_failed() == 1) {
+        ui_label("  history : ");
+        ui_emit(ROLE_RED, "cannot write"); emit(" — "); emit_clean_line(config_path_display(config_history_file()));
+        ui_emit(ROLE_MUTED, " ([history].file; recall is in-memory only)"); oprintln("");
+        return 0;
+    }
+    if (inhist_persist_active() == 0) { return 0; }
+    ui_label("  history : ");
+    ui_emit(ROLE_GREEN, "on"); emit(" — "); emit_clean_line(config_path_display(inhist_persist_path()));
+    emit(" ("); ofmt_int(inhist_persist_recalled()); emit(" recalled"); emit(", keeps "); ofmt_int(inhist_persist_size()); emit(")");
+    ui_emit(ROLE_MUTED, " ([history].file; composer recall persisted across restarts)"); oprintln("");
     return 0;
 }
 # _state_pins_row (0.51.0, F6): the tool-pin store — ALWAYS a row (the defence is default-on, so its absence is a
@@ -518,6 +535,7 @@ fn cmd_state() {
         ui_emit(ROLE_GREEN, "on"); emit(" — "); emit_clean_line(config_path_display(sess_persist_path()));   # 0.50.1: the BOUND path, `~/…`, cleaned (it echoed the config value raw)
         ui_emit(ROLE_MUTED, " ([session].file; conversation persisted across restarts)"); oprintln("");
     }
+    _state_history_row();  # 0.51.2: the composer-history store — the greeting box's row, on the surface that outlives it
     _state_pins_row();     # 0.51.0 (F6): the tool-pin store — where the trust record lives, or why it is session-scoped
     if ((config_ui_bell() == 1) || (config_ui_elapsed() == 1)) {   # 0.24.3: omit when both off (byte-identical floor)
         ui_label("  ui      : ");
@@ -1575,6 +1593,10 @@ fn cmd_remember(line) {
         ui_emit(ROLE_MUTED, " — create it first (mkdir -p "); emit(memory_dir()); ui_emit(ROLE_MUTED, "), then /remember."); oprintln("");
         return 0;
     }
+    if (rc == (0 - 4)) {
+        emit("  "); ui_emit(ROLE_RED, "refused - "); emit_clean_line(memory_index_path()); ui_emit(ROLE_RED, " (or its directory) is a symlink");
+        ui_emit(ROLE_MUTED, " — a link would carry the fact out of the project; nothing written"); oprintln(""); return 0;
+    }
     if (rc == (0 - 3)) {
         emit("  "); ui_emit(ROLE_RED, "PARTIAL write - the fact was cut short and IS on disk");
         ui_emit(ROLE_MUTED, " (check "); emit(memory_index_path()); ui_emit(ROLE_MUTED, " and re-save it)"); oprintln("");
@@ -1606,6 +1628,10 @@ fn cmd_bookmark() {
     if (rc == (0 - 2)) {
         emit("  "); ui_emit(ROLE_RED, memory_dir()); ui_emit(ROLE_RED, " not found");
         ui_emit(ROLE_MUTED, " - create it first (mkdir -p "); emit(memory_dir()); ui_emit(ROLE_MUTED, ")."); oprintln(""); return 0;
+    }
+    if (rc == (0 - 4)) {
+        emit("  "); ui_emit(ROLE_RED, "refused - "); emit_clean_line(memory_index_path()); ui_emit(ROLE_RED, " (or its directory) is a symlink");
+        ui_emit(ROLE_MUTED, " — a link would carry the reply out of the project; nothing written"); oprintln(""); return 0;
     }
     if (rc == (0 - 3)) {
         emit("  "); ui_emit(ROLE_RED, "PARTIAL write - the reply was cut short and IS on disk");
@@ -1910,6 +1936,24 @@ fn _cmd_run_captured(cmdline) {
 # why it is a command and not a heuristic.
 fn cmd_tools_dispatch(line) {
     var arg = arg_after(line);
+    # 0.51.2: `/tools trust <name>` — one tool, the other pins keep their history
+    if ((arg != 0) && (cstr_starts_with(arg, "trust ") == 1)) {
+        if (config_toolpin_enabled() == 0) { oprintln("tool pinning is off ([toolpin].enabled = false) — nothing to trust."); return 0; }
+        var one = arg_after(arg);
+        if ((one == 0) || (load8(one) == 0)) { oprintln("usage: /tools trust [<tool>]"); return 0; }
+        if (toolpin_trust_one(one) == 0) {
+            emit("no pin for "); emit_clean_line(one); oprintln(" on this host — nothing to trust (/tools lists what is pinned).");
+            return 0;
+        }
+        agent_tools_cache_reset();
+        emit("dropped the pin for "); emit_clean_line(one); emit(" on ");
+        if (load8(toolpin_store_host()) != 0) { emit_clean_line(toolpin_store_host()); } else { emit("this host"); }
+        if (toolpin_store_path() == 0) { ui_emit(ROLE_FAINT, " (session-scoped: no store)"); }
+        elif (toolpin_trust_wrote() == 1) { emit("; store rewritten ("); emit_clean_line(config_path_display(toolpin_store_path())); emit(")"); }
+        else { ui_emit(ROLE_RED, "; store NOT rewritten"); ui_emit(ROLE_FAINT, " — /state says why"); }
+        oprintln(" — the next turn re-pins it from the live registry; the other pins keep their history.");
+        return 0;
+    }
     if ((arg != 0) && (streq(arg, "trust") == 1)) {
         if (config_toolpin_enabled() == 0) {
             oprintln("tool pinning is off ([toolpin].enabled = false) — nothing to trust.");
@@ -2246,9 +2290,9 @@ fn cmd_reload() {
     if (config_source() == 3) {
         ui_emit(ROLE_FAINT, "  (legacy path — move it to .thoth/config.cyml)"); oprintln("");
     }
-    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] · [pricing] · [hoosh] flags/token/model · [memory] · [subagent] · [daimon] url (+ the tool-pin host) · [project].map · [history].size"); oprintln("");
+    ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] bell/elapsed · [pricing] · [hoosh] flags/token/model/caps · [memory] · [subagent] · [budget] · [guard] · [redact] · [edit] · [ask] · [verify]/[hooks] values · [daimon] url (+ the tool-pin host) · [project].map · [history].size"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
-    ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [history]/[session] file · [toolpin] enabled/file/durable"); oprintln("");
+    ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [ui] tier/theme (or /theme) · [history]/[session] file · [toolpin] enabled/file/durable"); oprintln("");
     ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file · [toolpin] (0.44.3 / 0.51.0 — authority)"); oprintln("");
     if (config_suppressed_count() > 0) {
         ui_emit(ROLE_RED, "  note: "); ofmt_int(config_suppressed_count());
@@ -3066,7 +3110,7 @@ fn _alias_target_is_authority(ex) {
     if (c == CMD_ALLOW) { return 1; }
     if (c == CMD_TOOLS) {
         var a = arg_after(ex);
-        if ((a != 0) && (streq(a, "trust") == 1)) { return 1; }
+        if ((a != 0) && (cstr_starts_with(a, "trust") == 1)) { return 1; }   # `trust` and `trust <name>` alike (0.51.2)
     }
     return 0;
 }

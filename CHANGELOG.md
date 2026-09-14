@@ -2,6 +2,71 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.51.2] - 2026-09-14
+
+**Repair batch 4.** Nine thoth-owned repairs from the pinned batch, each provable by a test or by breaking it;
+the tenth (the cyrius 6.6.4 re-vendor) is held for 0.51.3 to keep this a pure-source patch. Suite
+**647 + 1952 + 985 + 823 + 190 + 5** (+35). Linux / aarch64 / AGNOS build with 0.45.6's warning set; the Windows
+lane at its known-gap skip; macOS built and tested natively at the 6.6.3 pin; **the AGNOS runtime proof re-run**
+(below).
+
+- **The tool-pin store's 2 MiB is not paid by a run that has no store.** `_tps_bufs` allocated the two 1 MiB
+  read/rewrite buffers at the bind (`_tps_host_set` reached it just to canonicalise the host key), so a
+  session-scoped run — no `~/.thoth`, `[toolpin].durable = false`, a rejected store — carried 2 MiB of
+  never-freed heap for a file it never touched. The host key splits out (`_tps_host_buf`); the file buffers wait
+  for the first read or flush.
+- **The agent suite no longer prints a stray `hi`.** `_agent_sse_cb` paints a content delta to the reply sink;
+  a test fed it a real `{"content":"hi"}` frame on fd 1 with no newline, so `hi` rode in front of the next
+  group's header in every suite log. The frame now goes through the ring sink, as a streamed turn does.
+- **`/state` gains a `history` row.** It named `resume`, `log`, `pins` and `map` but not the composer-history
+  store on any surface. One row from the bind's own facts: the bound path cleaned + the recalled count and the
+  size, red when the bind failed, omitted when `[history].file` is unset (the byte-identical floor).
+- **Five wrong user-visible strings.** `/reload`'s "now active" line now names the per-use keys it omitted
+  (`[budget]` / `[guard]` / `[redact]` / `[edit]` / `[ask]` / `[verify]` + `[hooks]` values) and moves `[ui]
+  tier/theme` to the restart line (they are bound once at startup); `/help`'s `/quit` says "Ctrl-X in the TUI,
+  Ctrl-D at the line REPL" (Ctrl-D is not bound in the TUI); `thoth --help` lists `thoth gui`; the TUI's slash
+  palette is rebuilt from `classify_input`'s canonical names (it had drifted 28 behind — a loop now proves every
+  palette entry classifies to a real command and the palette reaches every command id, so the next command must
+  be added to both); `/seams`' t-ron line names the four model-tool verbs and its memory-off line no longer says
+  "mneme not yet Cyrius-ported" (consumed via daimon since 0.32.0).
+- **`/remember`'s append path takes the 0.39.0 symlink walk.** The read jail refuses a symlinked component; the
+  WRITE side did not, so a link planted at `.thoth/memory` or `MEMORY.md` (a cloned repo can ship one) would
+  carry a `/remember`, a `/bookmark` or the model's `memory_write` into an arbitrary file. Refused now (`-4`),
+  never followed — on all three callers.
+- **`docs/examples/.gitkeep` removed.** Redundant beside the tracked `README.md`, and one of sit's two
+  git-status false-positive classes (a zero-byte tracked file), so `/git` on a clean tree reads one fewer
+  phantom change (15, not 16).
+- **Per-tool trust: `/tools trust <name>`.** ADR-0022 named it a natural later patch. `/tools trust` drops every
+  pin for the host; `/tools trust <name>` drops one — from the table and the store, the other pins keeping their
+  history — and the next probe re-pins that tool at first sight. Same authority shape (WARN log, no gate,
+  alias-refused: an alias to `/tools trust <name>` is refused whole like the bare form). The flush that rewrites
+  the store must not union the file's copy of the dropped row back (`_tps_skip_name`).
+- **An `--events` kind for `tool_pinned` / `tool_withheld`.** The 0.42.0 NDJSON stream carried turn / tool /
+  response / error; a tool's pin state at the advertisement — a first sight, or a withheld line marking whether
+  the definition changed between runs — is now on the machine channel too, not only on stderr. Byte-identical
+  when `--events` is off.
+- **The AGNOS runtime proof re-run — the first since 0.44.3.** `AGNOS_REPO=~/Repos/agnos scripts/agnos-run.sh`
+  rebuilt the local kernel with `BASESTACK_SELFTEST`, booted it under QEMU (KVM), and the 5,927,776-byte ELF
+  loaded off ext2, ran in ring 3, printed `thoth 0.51.1` and exited 0 with no fault (verified non-vacuous — a
+  wrong expect-string FAILs). The Targets row and gate 1 are stamped; the docs said "re-run at every release"
+  and had not since 0.44.3 (the local kernel lacked the hook, and `agnos-run.sh` refused rather than pretend).
+
+Held for **repair batch 5 → 0.51.3** (it rewrites `lib/`): the cyrius 6.6.3 → 6.6.4 re-vendor, which brings a
+portable `O_NOFOLLOW` (and `AO_EXCL` on AGNOS) to the input-history and tool-pin-store opens — closing the
+`is_symlink`-then-`file_open` window each has today.
+
+Tests (+35): `test_toolpin_store` (core) — the store-less bind allocates no file buffer; per-tool trust drops one
+pin from the table and the store without the union bringing it back, the others kept, the next probe re-pinning
+it (broken: the skip-name not honoured → the row returns). `test_state_history_row` (core) — off / bound with
+the counts / a failed bind red, the path cleaned. `test_help_strings` (core) — `/help`'s `/quit`, `/reload`'s
+two lists through the walk-dir seam, `thoth --help` naming `thoth gui` on captured fd 1. `test_memory_append_symlink`
+(core) — a symlinked memory dir and a symlinked index each refused (`-4`), nothing written through either, the
+real dir still writable (broken: the walk removed → the write follows the link). The TUI palette drift loops
+(broken two ways: a stale name, a dropped entry). `test_events` (agent) — the two new kinds no-op when off, and
+with `--events` on and fd 1 captured, a first sight emits one `tool_pinned` line and an in-session swap one
+`tool_withheld` (`between_runs:false`), each newline-framed, the human notice on stderr. `/seams` prose
+(core, both surfaces). Live: the AGNOS run above.
+
 ## [0.51.1] - 2026-09-14
 
 **The doc sweep, and one repair it found.** A full documentation sweep at 0.51.0 — the first since 0.43.2: five

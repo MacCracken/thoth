@@ -7,7 +7,7 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: 0.51.1 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
+> **Status: 0.51.2 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
 > default) / REPL, a native Wayland GUI (`thoth gui`, with the mouse since 0.49.0), and a one-shot/argv
 > front-door with `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
 > switching with a picker that shows each provider's health and rate; jailed project read tools +

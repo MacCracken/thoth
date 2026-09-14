@@ -605,10 +605,14 @@ fn test_agent() {
     # The error frame is `delta:{}` — it must NOT count as a useful frame, or an all-error stream would
     # look like a one-frame answer and never reach the empty-stream branch that reports it.
     assert_eq(_ag_frames, 0, "an error frame is bookkeeping, not content — it must not count as a frame");
-    # ...and an ordinary content frame through the same callback still sets nothing.
+    # ...and an ordinary content frame through the same callback still sets nothing. Under the ring sink (0.51.2):
+    # the callback PAINTS the delta ("hi", no newline) through the reply sink — on fd 1 it landed in front of the
+    # next group's header in every suite log.
     _ag_err_reset();
     store64(evbuf + SANDHI_SSE_OFF_DATA, okf);
+    feed_init(); out_mode_set(OUT_RING);
     assert_eq(_agent_sse_cb(0, evbuf), 1, "a normal content frame is consumed");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(agent_err_seen(), 0, "...and reports no upstream error");
     _hoosh_acc_reset();
     _ag_reset();
@@ -1615,6 +1619,8 @@ fn test_project() {
     events_error(1, 502, 0, 0, 0);
     events_response(1, "hi", 2);
     events_turn_end(1, 1, 5);
+    events_tool_pinned("t");                     # 0.51.2
+    events_tool_withheld("t", 1, 1700000000);
     assert_eq(events_count(), 0, "...so no emitter writes a byte while disabled");
 
     # the rc -> cause mapping. ONE source of truth: the `error` event's `message` and the one-shot stderr
@@ -1637,6 +1643,33 @@ fn test_project() {
     # coincidence, not a contract, and it is exactly the kind of thing that breaks silently when the
     # other module changes. The fix makes the invariant hold on its own; this drives `_ev_end` at the
     # saturating precondition directly rather than pretending to reproduce a live bug it cannot reach.
+    # 0.51.2: with --events ON, an advertisement's pin state reaches the machine channel — a first sight and,
+    # on a between-runs swap, a withheld line naming whether the pin was a previous run's. Driven through the real
+    # toolpin_check; the lines go straight to fd 1, so capture it (they would otherwise corrupt the suite output).
+    var _evp = "build/.thoth_ev_cap.tmp";
+    if (_t_fd1_to(_evp) == 0) {
+        events_enable();
+        events_reset();
+        toolpin_reset();
+        out_mode_set(OUT_NULL);                               # --events implies OUT_NULL: the human withhold notice is off, only the machine lines hit fd 1
+        toolpin_check("t_ev", "one", "");                     # first sight
+        toolpin_check("t_ev", "one", "");                     # unchanged (quiet, no event)
+        toolpin_check("t_ev", "SWAPPED", "");                 # in-session change -> withheld
+        out_mode_set(OUT_FD1);
+        events_disable();
+        events_reset();
+        toolpin_reset();
+        _t_fd1_restore();
+        var _evb = alloc(8192);
+        var _evn = file_read_all(_evp, _evb, 8191);
+        if (_evn < 0) { _evn = 0; }
+        assert_eq(_t_count_sub(_evb, _evn, "\"event\":\"tool_pinned\"", 21), 1, "first sight emits one tool_pinned line");
+        assert_eq(_t_count_sub(_evb, _evn, "\"event\":\"tool_withheld\"", 23), 1, "...a swap emits one tool_withheld line");
+        assert_eq(_t_count_sub(_evb, _evn, "\"name\":\"t_ev\"", 13), 2, "...each names the tool");
+        assert_eq(_t_count_sub(_evb, _evn, "\"between_runs\":false", 20), 1, "...the swap marked in-session (between_runs false)");
+        assert_eq(_t_count_sub(_evb, _evn, "\n", 1), 2, "...two lines, each newline-framed (the unchanged probe stays quiet, and the human notice went to stderr)");
+        xunlink(_evp);
+    } else { assert(1, "(fd 1 cannot be captured on this target — the --events pin lines are not checked here; stated)"); }
     var tinycap = 64;
     var tiny = alloc(tinycap + 8);
     var pi = 0;

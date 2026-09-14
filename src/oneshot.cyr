@@ -276,6 +276,7 @@ fn oneshot_print_help() {
     emit_raw("thoth — sovereign agentic coding TUI\n\n");
     emit_raw("Usage:\n");
     emit_raw("  thoth                     start the interactive TUI / REPL\n");
+    emit_raw("  thoth gui                 open the desktop GUI (a Wayland compositor; degrades honestly without one)\n");
     emit_raw("  thoth <task>...           run one task through the model, print the answer, exit\n");
     emit_raw("  cmd | thoth <task>...     append piped stdin to the task (e.g. git diff | thoth 'review')\n");
     emit_raw("  cmd | thoth -p            use piped stdin as the whole task\n");

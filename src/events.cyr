@@ -59,6 +59,7 @@ var _ev_n = 0;                  # events emitted this process (for tests)
 
 fn events_enabled() { return _ev_on; }
 fn events_enable() { _ev_on = 1; return 0; }
+fn events_disable() { _ev_on = 0; return 0; }   # 0.51.2: for a test that captures fd 1 around an enabled section
 fn events_count() { return _ev_n; }
 fn events_reset() { _ev_n = 0; return 0; }
 
@@ -158,6 +159,25 @@ fn events_tool_call(turn, name, args) {
 fn _ev_depth_field(off) {
     if (_sub_depth == 0) { return off; }
     return _ev_int_field(off, "depth", _sub_depth);
+}
+
+# events_tool_pinned / events_tool_withheld (0.51.2): a machine consumer of --events must learn a tool's pin
+# state at the advertisement, where a between-runs swap is caught — not only from the withhold note on stderr.
+# `first_sight` = a pin taken this run; `withheld` = its definition changed since a previous run pinned it
+# (`from_store` 1) or since this session did (0). Byte-identical when --events is off (the `_ev_on` guard).
+fn events_tool_pinned(name) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("tool_pinned", session_turns());
+    off = _ev_str_field(off, "name", name, 256);
+    return _ev_end(off);
+}
+fn events_tool_withheld(name, from_store, pinned_at) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("tool_withheld", session_turns());
+    off = _ev_str_field(off, "name", name, 256);
+    off = _ev_bool_field(off, "between_runs", from_store);
+    if (pinned_at > 0) { off = _ev_int_field(off, "pinned_at", pinned_at); }
+    return _ev_end(off);
 }
 
 fn events_tool_result(turn, name, ok, bytes) {

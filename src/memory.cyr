@@ -595,6 +595,14 @@ fn memory_feedback(search_id, note_id) {
 # no portable mkdir: sys_mkdir's arg shape forks on AGNOS), or -1 on write
 # failure. Invalidates the reader cache on success so the fact is live next turn.
 # VERBATIM only — no summarize / tag / dedupe / link (that is mneme's engine).
+# _mem_link_refused: 1 when the memory directory or the index file is a symlink (either would redirect the
+# append; the project jail refuses the same shape on a read since 0.39.0). Ancestors above the memory dir are
+# the root the operator launched in or chose — not walked (a `/home` that is a link is not the concern here).
+fn _mem_link_refused() {
+    if (is_symlink(str_from(memory_dir())) == 1) { return 1; }
+    if (is_symlink(str_from(memory_index_path())) == 1) { return 1; }
+    return 0;
+}
 fn memory_append(text) {
     # 0.32.0: route to mneme when the seam binds (daimon hosts mneme_*). Probe once
     # here — the write path is user-initiated, so the one-time GET is fine; the local
@@ -608,6 +616,10 @@ fn memory_append(text) {
     }
     _mem_last_target = 0;
     if (is_dir(str_from(memory_dir())) == 0) { return 0 - 2; }
+    # 0.51.2: the append path takes the 0.39.0 symlink refusal the read jail already has — a link planted at
+    # `.thoth/memory` or at `MEMORY.md` (a cloned repo can ship one) would otherwise carry the operator's
+    # /remember, a /bookmark or the model's memory_write into an arbitrary file. Refused, never followed (-4).
+    if (_mem_link_refused() == 1) { return 0 - 4; }
     if (_remember_buf == 0) { _remember_buf = alloc(REMEMBER_CAP); }
     var tl = strlen(text);
     if (tl > (REMEMBER_CAP - 4)) { tl = REMEMBER_CAP - 4; }
@@ -646,6 +658,7 @@ fn memory_write_tool(args_cstr) {
     if (load8(text) == 0) { return "memory_write: 'text' is empty"; }
     var rc = memory_append(text);
     if (rc == (0 - 2)) { return "memory_write: .thoth/memory/ does not exist — create it first"; }
+    if (rc == (0 - 4)) { return "memory_write: refused — the memory directory or MEMORY.md is a symlink (a link would carry the note out of the project)"; }
     # 0.44.3: a PARTIAL write is not a save. Told plainly so the model does not carry on believing the
     # fact is stored — and told that a fragment IS on disk, since that is what a later recall will find.
     if (rc == (0 - 3)) { return "memory_write: PARTIAL write — the note was cut short and a fragment is on disk; it was NOT saved intact"; }

@@ -106,7 +106,7 @@ fn main() {
     test_cost();
     test_alias();
     test_dry();
-    test_memory();
+    test_memory(); test_memory_append_symlink();
     test_mem_seam();
     test_shell_bufs_realloc();   # body lives in tests/cases/core.cyr (the shell TOOL tests moved to thoth_agent)
     test_oneshot();
@@ -128,7 +128,7 @@ fn main() {
     test_hoosh_timeout();
     test_config_m4();
     test_state_reason_row();
-    test_state_map_row(); test_dry_map(); test_state_paths_clean(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();
+    test_state_map_row(); test_dry_map(); test_state_paths_clean(); test_state_history_row(); test_help_strings(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();
     test_git();
     test_save(); test_save_formats();
     test_session_persist();

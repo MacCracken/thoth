@@ -1059,33 +1059,58 @@ fn tui_status_emit() {
 # COMPILE-TIME list and structurally cannot offer a runtime-sized set, so the server-published prompt
 # commands (0.43.0, T2-7) are deliberately absent: they are discoverable through /prompts instead. Adding
 # a built-in command means adding it here AND bumping SLASH_N.
-var SLASH_N = 25;
+var SLASH_N = 47;
+# 0.51.2: every canonical command of classify_input (aliases — /?, /exit, /branch, /convos, /regenerate, /ping — are
+# not listed twice); the TUI suite proves the two stay in step by classifying every entry AND counting the command
+# ids the palette reaches against the enum.
 fn _slash_name(i) {
     if (i == 0) { return "/help"; }
     if (i == 1) { return "/seams"; }
     if (i == 2) { return "/state"; }
     if (i == 3) { return "/model"; }
     if (i == 4) { return "/models"; }
-    if (i == 5) { return "/read"; }
-    if (i == 6) { return "/write"; }
-    if (i == 7) { return "/run"; }
-    if (i == 8) { return "/tools"; }
-    if (i == 9) { return "/call"; }
-    if (i == 10) { return "/audit"; }
-    if (i == 11) { return "/reset"; }
-    if (i == 12) { return "/clear"; }
-    if (i == 13) { return "/theme"; }
-    if (i == 14) { return "/dry"; }
-    if (i == 15) { return "/copy"; }
-    if (i == 16) { return "/find"; }
-    if (i == 17) { return "/grants"; }      # 0.40.0
-    if (i == 18) { return "/compact"; }     # 0.40.0
-    if (i == 19) { return "/context"; }     # 0.40.0
-    if (i == 20) { return "/rewind"; }      # 0.40.0
-    if (i == 21) { return "/fork"; }        # 0.41.0
-    if (i == 22) { return "/resources"; }   # 0.43.0
-    if (i == 23) { return "/prompts"; }     # 0.43.0
-    if (i == 24) { return "/quit"; }
+    if (i == 5) { return "/persona"; }
+    if (i == 6) { return "/personas"; }
+    if (i == 7) { return "/role"; }
+    if (i == 8) { return "/read"; }
+    if (i == 9) { return "/write"; }
+    if (i == 10) { return "/run"; }
+    if (i == 11) { return "/edit"; }
+    if (i == 12) { return "/retry"; }
+    if (i == 13) { return "/tools"; }
+    if (i == 14) { return "/call"; }
+    if (i == 15) { return "/resources"; }
+    if (i == 16) { return "/resource"; }
+    if (i == 17) { return "/prompts"; }
+    if (i == 18) { return "/audit"; }
+    if (i == 19) { return "/grants"; }
+    if (i == 20) { return "/allow"; }
+    if (i == 21) { return "/compact"; }
+    if (i == 22) { return "/context"; }
+    if (i == 23) { return "/rewind"; }
+    if (i == 24) { return "/fork"; }
+    if (i == 25) { return "/reset"; }
+    if (i == 26) { return "/clear"; }
+    if (i == 27) { return "/theme"; }
+    if (i == 28) { return "/dry"; }
+    if (i == 29) { return "/remember"; }
+    if (i == 30) { return "/notes"; }
+    if (i == 31) { return "/bookmark"; }
+    if (i == 32) { return "/thumbs"; }
+    if (i == 33) { return "/conversations"; }
+    if (i == 34) { return "/new"; }
+    if (i == 35) { return "/switch"; }
+    if (i == 36) { return "/rename"; }
+    if (i == 37) { return "/delete"; }
+    if (i == 38) { return "/search"; }
+    if (i == 39) { return "/save"; }
+    if (i == 40) { return "/git"; }
+    if (i == 41) { return "/copy"; }
+    if (i == 42) { return "/find"; }
+    if (i == 43) { return "/history"; }
+    if (i == 44) { return "/reprobe"; }
+    if (i == 45) { return "/reload"; }
+    if (i == 46) { return "/quit"; }
     return "";
 }
 # _buf_has_space: 1 if buf[0..n) holds a space OR a newline — either terminates the

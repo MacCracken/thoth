@@ -52,11 +52,10 @@ See [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) for the full reasoning,
 v1.0 is an **AGNOS gate**: the downstream-green criterion is satisfied **on AGNOS**, where
 the whole spine is native. Everything thoth owns is shipping; what remains is AGNOS lighting
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
-0.44.4 and is owed a re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
+0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. ⚠ It has not re-run since 0.44.3: the local kernel image is built without the
-`BASESTACK_SELFTEST` hook and the script refuses (exit 2) rather than pretend — batch 4 carries the
-rebuild + re-run.
+stale binary. Last re-run 0.51.2 (2026-09-14): the 5.9 MB ELF printed `thoth 0.51.1` in ring 3 and
+exited 0 under QEMU, the first release-time re-run since 0.44.3.
 
 Three gates remain, in dependency order.
 
@@ -164,17 +163,22 @@ Ordered; each is thoth-owned, small, and provable by a test or by breaking it.
 8. **An `--events` kind for `withheld` / `pinned`.** The 0.42.0 NDJSON stream carries turn / tool /
    response / error; a tool withheld at the advertisement is a fact an unattended driver needs on
    the machine channel, not only on stderr. Same emitter set, byte-identical when disabled.
-9. **Re-run the AGNOS runtime proof.** Rebuild the local kernel with `BASESTACK_SELFTEST`, run
-   `AGNOS_REPO=~/Repos/agnos scripts/agnos-run.sh` against the 0.51.x ELF, and stamp the Targets
-   row — the first release-time re-run since 0.44.3.
-10. **Re-vendor: cyrius 6.6.3 → 6.6.4, then `O_NOFOLLOW` on the two stores.** 6.6.4 declares
-    `O_NOFOLLOW` in every peer and bridges it — with `O_EXCL` — to AGNOS's `AO_NOFOLLOW` /
-    `AO_EXCL` (`lib/io.cyr:90-91`). That closes two waiting rows at once: the input-history open
-    and the toolpin store's `is_symlink`-then-`file_open` window both take the bit; the temp's
-    `O_EXCL` is honoured on AGNOS. Last in the batch because a pin bump rewrites `lib/`, refolds
-    every bundle and needs every lane rebuilt and the Mac at the new pin (the 0.45.6 recipe) before
-    anything above it is trusted. `chmod`/`fchmod` stay waiting. If 0.51.2 is to stay a pure-source
-    patch, this item and the two `O_NOFOLLOW` opens move together to 0.51.3.
+9. **Re-run the AGNOS runtime proof — DONE at 0.51.2.** `AGNOS_REPO=~/Repos/agnos scripts/agnos-run.sh`
+   rebuilt the local kernel with `BASESTACK_SELFTEST`, booted it under QEMU, and the 5.9 MB ELF printed
+   `thoth 0.51.1` in ring 3 and exited 0 — the first release-time re-run since 0.44.3 (the Targets row is
+   stamped).
+
+### Repair batch 5 → 0.51.3 (re-vendor)
+
+Held out of 0.51.2 to keep that a PURE-SOURCE patch — this item rewrites `lib/`.
+
+1. **Re-vendor: cyrius 6.6.3 → 6.6.4, then `O_NOFOLLOW` on the two stores.** 6.6.4 declares
+   `O_NOFOLLOW` in every peer and bridges it — with `O_EXCL` — to AGNOS's `AO_NOFOLLOW` /
+   `AO_EXCL` (`lib/io.cyr:90-91`). That closes two waiting rows at once: the input-history open
+   and the toolpin store's `is_symlink`-then-`file_open` window both take the bit; the temp's
+   `O_EXCL` is honoured on AGNOS. A pin bump rewrites `lib/`, refolds every bundle and needs every
+   lane rebuilt and the Mac at the new pin (the 0.45.6 recipe) before anything above it is trusted.
+   `chmod`/`fchmod` stay waiting.
 
 Recorded, not in the batch (registry below): the compositor pump during hook / `shell` waits
 (behaviour — a candidate), the `gate_init` / `log_init` lines on the `thoth gui` path (a cross-surface
@@ -281,11 +285,12 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled in repair batch 4 (0.51.2):** the toolpin store's 2 MiB on a store-less run · the agent
-suite's stray `hi` · no `input history` row on `/state` · five wrong user-visible strings (`/reload`,
-`/help`, `--help`, the slash palette, `/seams`) · `/remember`'s append path without the symlink walk ·
+**Shipped in repair batch 4 (0.51.2):** the toolpin store's 2 MiB on a store-less run · the agent
+suite's stray `hi` · the `input history` row on `/state` · five wrong user-visible strings (`/reload`,
+`/help`, `--help`, the slash palette, `/seams`) · `/remember`'s append-path symlink walk ·
 `docs/examples/.gitkeep` · per-tool trust · the `--events` withheld/pinned kind · the AGNOS runtime
-re-run · `O_NOFOLLOW` on the history and toolpin opens (the 6.6.4 re-vendor).
+re-run. **Held for repair batch 5 (0.51.3):** the cyrius 6.6.4 re-vendor + `O_NOFOLLOW` on the history
+and toolpin opens (it rewrites `lib/`; kept out of a pure-source patch).
 
 **Candidates above:** the compositor not pumped during a hook / `shell` wait (F7) · the pointer path
 Linux-Wayland only (F8).
@@ -350,7 +355,8 @@ Linux-Wayland only (F8).
   frame — the hoosh row above.
 - **Input-history hardening** — a fresh `[history].file` is created `0600` on POSIX; a pre-existing
   looser file is never re-tightened (the `chmod` floor row: never assert a mode thoth cannot
-  enforce); `O_NOFOLLOW` lands with batch 4 (item 10). Until then, "keep it in an owner-only directory".
+  enforce); `O_NOFOLLOW` lands with batch 5 (the 6.6.4 re-vendor). Until then, "keep it in an
+  owner-only directory".
 - **macOS** — builds, runs and passes its native suite at the pin; the T2 TUI does not run there:
   `term_raw` returns -1 (the darshana row), so thoth takes the line tier. When the BSD peer lands,
   `src/term.cyr`'s macOS branch collapses into the forwarder and nothing above it changes.

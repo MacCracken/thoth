@@ -7,6 +7,17 @@
 
 ## Version
 
+**0.51.2** — **repair batch 4** (2026-09-14). Nine thoth-owned repairs from the pinned batch: the tool-pin store's
+2 MiB not paid by a store-less run, the agent suite's stray `hi`, a `/state` `history` row, five wrong
+user-visible strings (`/reload`'s two lists, `/help`'s `/quit`, `--help`'s `thoth gui`, the TUI palette rebuilt
+from `classify_input` with a drift-catching loop, `/seams`' verbs + mneme line), `/remember`'s append path taking
+the 0.39.0 symlink walk, `docs/examples/.gitkeep` removed, per-tool trust (`/tools trust <name>`), and an
+`--events` `tool_pinned` / `tool_withheld` kind; plus **the AGNOS runtime proof re-run** (the 5.9 MB ELF prints
+`thoth 0.51.1` in ring 3 under QEMU and exits 0 — the first release-time re-run since 0.44.3). The cyrius 6.6.4
+re-vendor (`O_NOFOLLOW` on the two stores) is held for repair batch 5 / 0.51.3 (it rewrites `lib/`). Suite
+**647 + 1952 + 985 + 823 + 190 + 5** (+35); Linux / aarch64 / AGNOS build with 0.45.6's warning set; macOS green
+natively at the 6.6.3 pin.
+
 **0.51.1** — **the doc sweep, and one repair it found** (2026-09-14). The first full documentation sweep since
 0.43.2: every doc set verified against the tree with every measurement re-run; the roadmap re-cut forward-only
 (gates, batch 4 → 0.51.2, candidates F7–F14 ordered with their gates, the waiting table re-checked); the ledger
@@ -3589,10 +3600,10 @@ built (0.45.6's warning sets), Windows at its known-gap skip, macOS built and it
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (647 + 1921 + 980 + 824 + 190 assertions, five suite binaries green at 0.51.1), released | `build/thoth` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (647 + 1952 + 985 + 823 + 190 assertions, five suite binaries green at 0.51.2), released | `build/thoth` |
 | aarch64 Linux | `--aarch64` | **builds** (re-verified 0.51.0 / Cyrius 6.6.3; a 7,355,552-byte static ARM ELF) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
 | macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN, re-verified 0.51.0** (823 + 1897 + 974 + 190 + 641, 0 failed; Apple Silicon, macOS 26.6.2; the 6.6.3 toolchain shipped there at 0.45.6 by the tarball recipe, 6.6.2 at 0.45.5; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
-| AGNOS (x86_64) | `--agnos` | **builds `OK` (re-verified 0.51.0, a 5,918,408-byte ELF) AND RAN** — **runtime proven 2026-09-04** on the 0.44.3 ELF (5,371,944 B): `./scripts/agnos-run.sh` boots the real kernel under QEMU and the ELF loads off ext2, runs in ring 3, prints `thoth 0.44.3` and exits 0; verified non-vacuous (a wrong expect-string FAILs). ⚠ **Not re-run at 0.45.x–0.51.0** — the local AGNOS kernel image is built without the `BASESTACK_SELFTEST` hook and the script refuses (exit 2) rather than pretend; rebuild the kernel with the hook and re-run before calling the runtime half current (roadmap batch 4) | `build/thoth_agnos` |
+| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS — re-run at 0.51.2** (2026-09-14): `AGNOS_REPO=~/Repos/agnos ./scripts/agnos-run.sh` rebuilt the kernel with `BASESTACK_SELFTEST`, booted it under QEMU (KVM), and the 5,927,776-byte ELF loaded off ext2, ran in ring 3, printed `thoth 0.51.1` and exited 0 with no fault. The first release-time re-run since 0.44.3; verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left at 0.51.0 / 6.6.3: architectural `SYS_SOCKET`/`SYS_CONNECT` (`lib/sandhi.cyr`'s raw socket path; ws2_32 — the epoll set no longer surfaces since the PE floor routes IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) — exactly the five names in `scripts/build.sh win`'s known-gap skip | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
@@ -3723,8 +3734,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **647 (gui) + 1921 (core) + 980 (agent) + 824 (tui) + 190 (render) = 4,562 assertions, 0 failures, as of
-0.51.1 — the runner's closing `5 passed` is the five suite binaries, not assertions** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **647 (gui) + 1952 (core) + 985 (agent) + 823 (tui) + 190 (render) = 4,597 assertions, 0 failures, as of
+0.51.2 — the runner's closing `5 passed` is the five suite binaries, not assertions** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3746,7 +3757,7 @@ above + [CHANGELOG](../../CHANGELOG.md).
 **The path to v1.0 is dominated by AGNOS lighting up, not by feature work in thoth.** Four gates (see
 [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓ and runtime ✓** (a valid static
 x86_64-AGNOS ELF, zero thoth change, and it **loads and runs in ring 3** — `./scripts/agnos-run.sh`,
-proven 2026-09-04; ⚠ not re-run since 0.44.3 — the local kernel lacks `BASESTACK_SELFTEST`, roadmap batch 4); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
+re-run at 0.51.2: the 5.9 MB ELF prints `thoth 0.51.1` in ring 3 and exits 0); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
 (a real turn against a native spine, then the TUI over agnsh) open, **owner: thoth**; (3) a security
 review — the concurrency half closed at 0.44.3; only the external sign-off remains; (4) the
 SemVer-vs-CalVer 1.0 decision (deferred, [ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux

@@ -6,6 +6,13 @@ type: state
 
 # Documentation Health — thoth
 
+> **Repair batch 4 (0.51.2)** (2026-09-14): nine repairs from the pinned batch; docs touched = `CHANGELOG.md`,
+> `docs/development/state.md` (version block, Tests + Targets counts, the AGNOS row re-stamped after the runtime
+> re-run), `docs/development/roadmap.md` (batch 4 items 1–9 shipped, item 10 split to batch 5 → 0.51.3, gate 1 /
+> the Targets AGNOS row re-run), `.thoth/config.cyml.example` unchanged, `README.md` / `CONTRIBUTING.md` (stamp)
+> and this line. `docs/examples/.gitkeep` was removed (batch 4 item 6). No full re-sweep — the tables below
+> stand from the 0.51.1 sweep.
+>
 > **Full sweep at 0.51.1** (2026-09-14). Five readers verified every doc set against the tree at 0.51.0
 > (`3009b60`: the root docs, the guides + examples, the architecture notes + ADRs, `state.md`'s current-state
 > sections, the gap review + the config example); every stated measurement was RE-RUN in a scratch copy (the

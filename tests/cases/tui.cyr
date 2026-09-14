@@ -133,21 +133,30 @@ fn test_tui() {
     # slash-command palette matchers
     assert_eq(_buf_has_space("/seams x", 8), 1, "space detected -> command token complete");
     assert_eq(_buf_has_space("/se", 3), 0, "no space -> still typing the token");
-    assert_eq(tui_palette_count("/s"), 2, "'/s' matches /seams + /state");
-    assert_eq(tui_palette_count("/se"), 1, "'/se' matches /seams only");
+    # 0.51.2: the palette is rebuilt from classify_input's canonical names (it had drifted 28 names behind); the
+    # counts below are the current list's, and the two loops after them are what keep it honest — every palette
+    # entry classifies to a command, and the command ids the palette reaches cover the whole enum
+    assert_eq(tui_palette_count("/s"), 5, "'/s' matches /seams + /state + /switch + /search + /save");
+    assert_eq(tui_palette_count("/se"), 2, "'/se' matches /seams + /search");
     assert_eq(tui_palette_count("/m"), 2, "'/m' matches /model + /models");
-    # 0.43.0: refreshed with the slash list itself. These numbers encoded the STALE 18-entry list and
-    # only moved when the list was corrected — /compact and /context have started with "/c" since 0.40.0
-    # and were simply missing from the palette. Keep them in step with _slash_name in src/tui.cyr.
-    assert_eq(tui_palette_count("/c"), 5, "'/c' matches /call + /clear + /copy + /compact + /context");
-    assert_eq(tui_palette_count("/co"), 3, "'/co' matches /copy + /compact + /context");
+    assert_eq(tui_palette_count("/c"), 6, "'/c' matches /call + /clear + /copy + /compact + /context + /conversations");
     assert_eq(tui_palette_count("/cop"), 1, "'/cop' narrows to /copy alone");
-    assert_eq(tui_palette_count("/re"), 4, "'/re' matches /read + /reset + /rewind + /resources");
-    assert_eq(tui_palette_count("/res"), 2, "'/res' still matches /reset AND /resources");
-    assert_eq(tui_palette_count("/reso"), 1, "'/reso' narrows to /resources");
-    assert_eq(tui_palette_count("/pr"), 1, "'/pr' matches the new /prompts");
+    assert_eq(tui_palette_count("/res"), 3, "'/res' matches /reset + /resources + /resource");
+    assert_eq(tui_palette_count("/reso"), 2, "'/reso' narrows to /resources + /resource");
+    assert_eq(tui_palette_count("/pr"), 1, "'/pr' matches /prompts");
     assert_eq(tui_palette_count("/copy"), 1, "'/copy' matches /copy");
-    assert_eq(tui_palette_count("/t"), 2, "'/t' matches /tools + /theme");
+    var _pi = 0; var _pbad = 0; var _pmask[64];
+    var _pk = 0; while (_pk < 64) { store8(&_pmask + _pk, 0); _pk = _pk + 1; }
+    while (_pi < SLASH_N) {
+        var _pc = classify_input(_slash_name(_pi));
+        if ((_pc == CMD_UNKNOWN_SLASH) || (_pc == CMD_TASK) || (_pc == CMD_EMPTY)) { _pbad = _pbad + 1; }
+        elif (_pc < 64) { store8(&_pmask + _pc, 1); }
+        _pi = _pi + 1;
+    }
+    assert_eq(_pbad, 0, "every palette entry classifies to a real command (no stale name)");
+    var _pcov = 0; _pk = 0;
+    while (_pk < 64) { if (load8(&_pmask + _pk) == 1) { _pcov = _pcov + 1; } _pk = _pk + 1; }
+    assert_eq(_pcov, CMD_PROMPTS - 2, "the palette reaches every command id of the enum (all but EMPTY / UNKNOWN_SLASH / TASK) — add a command, add it here");
     assert_eq(tui_palette_count("/zz"), 0, "no command matches '/zz'");
     led_reset();
     led_feed(KEY_CHAR, 47); led_feed(KEY_CHAR, 115);            # "/s"
