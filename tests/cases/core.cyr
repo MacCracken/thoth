@@ -592,12 +592,19 @@ fn test_hoosh() {
     assert(_hoosh_history_start(HOOSH_REQ_CAP) <= session_history_len(), "a floor past the end clamps to the length");
     hoosh_compact_floor_clear();
     assert_eq(hoosh_compact_floor(), 0, "clear resets it");
-    # /reset and a conversation switch must both drop the floor — it is an INDEX into one history
+    # /reset and a conversation switch must both drop the floor — it is an INDEX into one history. 0.49.0: a switch
+    # to the conversation ALREADY active is a no-op (it used to drop the floor silently); a switch to another
+    # conversation still clears it.
     hoosh_compact_floor_set(3);
     session_history_clear();
     conv_switch(conv_active());
-    assert_eq(hoosh_compact_floor(), 0, "switching conversations clears the floor (it indexes one history)");
-    session_history_clear();
+    assert_eq(hoosh_compact_floor(), 3, "a switch to the active conversation keeps the floor (no-op, 0.49.0)");
+    var _other = conv_new();
+    assert_eq(hoosh_compact_floor(), 0, "a new conversation clears the floor");
+    conv_switch(0); hoosh_compact_floor_set(3);
+    conv_switch(_other);
+    assert_eq(hoosh_compact_floor(), 0, "switching to another conversation clears the floor (it indexes one history)");
+    session_reset(); session_history_clear();
 
     test_group("hoosh model catalog extraction");
     var mbody = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-sonnet-4-6\"},{\"id\":\"gpt-4o\"}]}";
@@ -2611,6 +2618,19 @@ fn test_session_persist() {
     assert_eq(session_history_reason_len(1), 10, "...the reasoning's byte count is kept (one '?' for the ESC)");
     assert_eq(_t_count_sub(session_history_reason(1), 10, "\x1b", 1), 0, "...with no raw escape in the stored copy");
     assert_eq(_t_count_sub(session_history_reason(1), 10, "?[7mil", 6), 1, "...the ESC read back as '?'");
+    # 0.49.0: TOOL and CITE payloads are cleaned where they are read back too (the GUI draws them from the file)
+    ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nCONV\t0\n\nuser\t1\nq\nassistant\t1\na\nCITE\t9\nti\x1b[7mtle\nTOOL\t21\n1\t1\tna\x1b[7mme\targ\x1b[7ms\n");
+    file_write_all("/tmp/thoth_sess_v6t", hb, ho);
+    session_reset();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v6t"), 2, "a hand-written file with CITE + TOOL frames loads its two records");
+    assert_eq(session_history_citation_count(1), 1, "...the citation");
+    var _ct = session_history_citation_title(1, 0);
+    assert((_ct != 0) && (streq(_ct, "ti?[7mtle") == 1), "...its title with '?' for the ESC");
+    assert_eq(session_history_tool_count(1), 1, "...the tool call");
+    var _tn = session_history_tool_name(1, 0); var _ta = session_history_tool_args(1, 0);
+    assert((_tn != 0) && (streq(_tn, "na?[7mme") == 1), "...its name cleaned");
+    assert((_ta != 0) && (streq(_ta, "arg?[7ms") == 1), "...and its args");
+    xunlink("/tmp/thoth_sess_v6t");
     # an orphan RSN frame (before any record) attaches to nothing and creates nothing
     ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nRSN\t5\nstray\nuser\t1\nq\n");
     file_write_all("/tmp/thoth_sess_v6o", hb, ho);
@@ -2951,6 +2971,11 @@ fn test_mem_seam() {
     assert_eq(session_history_reason_len(1), 0, "...len 0");
     session_history_reason_last_set("back", 4);
     assert_eq(streq(session_history_reason(1), "back"), 1, "...and a set after the clear works");
+    # 0.49.0: a switch to the ACTIVE conversation is a no-op — it used to clear the /compact floor
+    hoosh_compact_floor_set(2);
+    assert_eq(conv_switch(conv_active()), conv_active(), "conv_switch to the active conversation returns it");
+    assert_eq(hoosh_compact_floor(), 2, "...and leaves the /compact floor alone");
+    hoosh_compact_floor_clear();
     # a fork shares the reply's reasoning (the record is copied, the arena pointer with it)
     var fk = conv_fork(conv_active());
     assert(fk >= 0, "premise: the conversation forks");

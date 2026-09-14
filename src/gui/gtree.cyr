@@ -19,6 +19,7 @@ var GTREE_ROW_H   = 18;   # px per tree row
 var GTREE_INDENT  = 12;   # px per depth level
 var GTREE_MIN_WIN = 640;  # below this WINDOW width the tree is hidden (the feed gets the whole body)
 var GTREE_PANE_W  = 230;  # the pane width when shown (the mockup's 230px)
+var _gtree_top_drawn = 0; var _gtree_first_drawn = 0; var _gtree_rows_drawn = 0;   # 0.49.0: what the last build drew (gtree_row_at, the sticky origin)
 
 # gtree_w: the tree-pane width for a window `win_w` px wide — 0 (hidden) below GTREE_MIN_WIN, else GTREE_PANE_W
 # clamped to at most half the window. Responsive: a narrow window gives the feed the whole body (honest degrade).
@@ -61,8 +62,12 @@ fn _gtree_gitkind(li) {
 }
 
 # _gtree_scroll_first: the first visible row so the selection stays in view (centered when the tree overflows).
+# 0.49.0: STICKY — the origin last drawn stays while the selection is inside its window (a click selects by screen
+# position; recentring on every selection moved the rows under the pointer, so a second click hit another node).
 fn _gtree_scroll_first(total, rows, sel) {
     if (total <= rows) { return 0; }
+    var prev = _gtree_first_drawn;
+    if ((prev >= 0) && (prev <= (total - rows))) { if ((sel >= prev) && (sel < (prev + rows))) { return prev; } }
     var first = sel - rows / 2;
     if (first < 0) { first = 0; }
     if (first > (total - rows)) { first = total - rows; }
@@ -115,6 +120,7 @@ fn gtree_build(cmds, x, y, w, h) {
     var total = ftree_count();
     var badges = git_present();
     var first = _gtree_scroll_first(total, rows, ftree_sel());
+    _gtree_top_drawn = top - 1; _gtree_first_drawn = first; _gtree_rows_drawn = rows;   # 0.49.0: gtree_row_at reads these
     var i = 0;
     while (i < rows) {
         var li = first + i;
@@ -123,4 +129,16 @@ fn gtree_build(cmds, x, y, w, h) {
     }
     gd_push_unclip(cmds);
     return 0;
+}
+
+# gtree_row_at (0.49.0, F4): the tree node under surface y `py` per the last gtree_build (the row's highlight rect
+# spans [rowy - 1, rowy - 1 + GTREE_ROW_H)), or -1. PURE.
+fn gtree_row_at(py) {
+    if (_gtree_rows_drawn <= 0) { return 0 - 1; }
+    if (py < _gtree_top_drawn) { return 0 - 1; }
+    var r = (py - _gtree_top_drawn) / GTREE_ROW_H;
+    if (r >= _gtree_rows_drawn) { return 0 - 1; }
+    var li = _gtree_first_drawn + r;
+    if (li >= ftree_count()) { return 0 - 1; }
+    return li;
 }

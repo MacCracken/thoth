@@ -39,7 +39,8 @@ var _sess_cost_unpriced = 0;
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
 # so both must be copied), +16 turn (session_turns() at append time — 0.30.19, so the GUI feed can render each
-# turn's tool cards above ITS reply; in-memory only, NOT persisted — a resumed message gets turn 0 = no cards,
+# turn's tool cards above ITS reply; in-memory only, NOT persisted — a resumed message gets turn 0 = no LIVE cards
+# (0.49.0: its persisted calls draw as a summary card instead),
 # +24 model (0.33.3 — a STABLE COPY of the model id that produced an assistant reply, or 0; persisted, so a resumed
 # conversation remembers which model said what — NOT the shared session._model_buf, which a mid-session switch would
 # overwrite retroactively), +32 citations (0.33.4 — a lazily-alloc'd citation set: the recalled-source TITLES a reply
@@ -149,7 +150,10 @@ fn conv_new() { _conv_ensure(); vec_push(_conv_store, _conv_alloc(0)); _conv_act
 # ⚠ conv_switch clears the compact floor: the floor is an INDEX into ONE conversation's message vector,
 # so carrying it across a switch would evict an arbitrary prefix of the conversation you switched TO —
 # silently, and by a number that means nothing there. 0.40.0 (T1-5).
-fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { _conv_active = i; hoosh_compact_floor_clear(); } } return _conv_active; }
+# conv_switch: make conversation i the active one. 0.49.0: a switch to the conversation ALREADY active is a no-op —
+# it used to clear the /compact floor (the recap was silently dropped and the compacted messages re-sent in full
+# on the next turn) on a `/switch <self>`, the sidebar's Enter on the current row, and now a click on it.
+fn conv_switch(i) { if (i >= 0) { if (i < conv_count()) { if (i != _conv_active) { _conv_active = i; hoosh_compact_floor_clear(); } } } return _conv_active; }
 
 # conv_fork: copy conversation `i` into a NEW conversation, switch to it, and return its index (or -1).
 # 0.41.0 (T2-6). The store already did the hard part — keyed, named, persisted, switchable conversations —
@@ -442,6 +446,8 @@ fn session_history_citation_title(i, j) {
 # TOOL frames, so a resumed conversation keeps its tool cards. Live capture funnels through roundlog.cyr's
 # roundlog_attach_calls_to_last; the loader funnels through the same _add, so both cap + sanitize identically. The
 # store carries no roundlog.cyr dependency. Set: count@0, then MSG_TOOL_MAX entries {kind@0, ok@8, name@16, args@24}.
+# `kind` is roundlog's RL_* int by convention (0 denied · 1 allowed · 2 no name) — the GUI's summary card
+# (gtool.cyr) and /save read it through those names; the store itself never interprets it.
 var MSG_TOOL_MAX = 8;
 fn _msg_tool_last() {
     if (conv_count() == 0) { return 0; }
@@ -1021,6 +1027,7 @@ fn _sess_load_tool(p, num) {
     var name = _sess_dup_bytes(_sess_read_buf + nstart, q - nstart);
     q = q + 1;                                           # skip '\t'
     var args = _sess_dup_bytes(_sess_read_buf + q, end - q);   # args = the remainder
+    clean_line_n(name, strlen(name)); clean_line_n(args, strlen(args));   # 0.49.0: the file is an untrusted door; the GUI draws these
     session_history_tool_last_add(kind, okv, name, args);
     return 0;
 }
@@ -1091,8 +1098,9 @@ fn _sess_load_v2(mend, total) {
                                 if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); clean_line_n(title, strlen(title)); }
                                 conv_load_add(title);    # new conversation, becomes the append target
                             } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CITE", 4) == 1)) {
-                                # 0.33.4: a cited-source title for the just-appended message
-                                if (num > 0) { session_history_cite_last_add(_sess_dup_bytes(_sess_read_buf + p, num)); }
+                                # 0.33.4: a cited-source title for the just-appended message (0.49.0: cleaned where it is
+                                # read back, like a CONV title — the GUI draws it from the file)
+                                if (num > 0) { var ct = _sess_dup_bytes(_sess_read_buf + p, num); clean_line_n(ct, strlen(ct)); session_history_cite_last_add(ct); }
                             } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "TOOL", 4) == 1)) {
                                 # 0.33.5: a tool call for the just-appended message
                                 if (num > 0) { _sess_load_tool(p, num); }

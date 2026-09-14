@@ -162,7 +162,7 @@ fn gtree_toggle_hidden() {
 }
 fn gstatus_toggle_hidden() { if (_gstatus_hidden == 1) { _gstatus_hidden = 0; } else { _gstatus_hidden = 1; } return 0; }
 
-# --- conversation sidebar (0.33.6) — a left pane over the conv_* store, keyboard-driven ----------------------
+# --- conversation sidebar (0.33.6) — a left pane over the conv_* store, keyboard-driven (+ click since 0.49.0) ---
 # Hidden by DEFAULT (the store is one conversation until /new; the pre-0.33.6 layout stays byte-identical). A Ctrl
 # chord reveals it; ↑/↓ move the selection, Enter switches (conv_switch + reset the feed scroll so the switched
 # conversation shows from its newest). Revealing preselects the active conversation. State here (before gconv.cyr /
@@ -345,3 +345,4 @@ fn gkey(code, shift, ctrl) {
     if (a == 2) { ghist_record(gcomp_cstr(), gcomp_len()); gscroll_reset(); }   # record the submission; snap to the latest
     return a;
 }
+

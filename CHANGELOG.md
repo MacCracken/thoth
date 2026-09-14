@@ -2,6 +2,102 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.49.0] - 2026-09-13
+
+**The window takes the mouse — and a resumed reply's tool calls and citations draw again.** The fourth feature
+arc under the batch discipline (F4). The T3 window was keyboard-only since 0.30.0: the conversation sidebar
+switched on Enter, the tree on Enter, the feed scrolled on PageUp. And a resumed conversation showed its replies'
+thinking folds (0.48.0) but not their tool cards or recalled sources — the data round-tripped in the store and
+showed in `/save`, while the cards read only this session's rings. Suite **587 + 1689 + 873 + 769 + 190 + 5**
+(+201). Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
+### Added — `wl_pointer`: click and wheel, with a sovereign cursor (F4)
+
+- **The seat's pointer.** `gwindow.cyr` binds `wl_pointer` when the seat's capabilities carry it (the seat is
+  bound at v5, now clamped to what the compositor advertises; the pointer is released — a v3+ request, sent only
+  when the bound version has it — when the capability goes), and decodes enter / leave / motion / button / axis
+  — `wl_fixed` 24.8 to whole surface pixels (masked and divided: Cyrius's shift is logical), a touchpad's
+  sub-pixel axis steps accumulated until a whole pixel is owed; a frame declaring fewer bytes than its event
+  carries is dropped, never decoded from the bytes after it. A left-button PRESS queues a click at the last
+  position; releases and motion queue nothing (the app never needs hover, and a rebuild per motion would be an
+  unbounded bump-heap leak). `gwl_win_next_pointer` drains `{kind, x, y, arg}` records the way
+  `gwl_win_next_key` drains keys; `GWL_WIN_EV_POINTER` flags them.
+- **The cursor.** The protocol leaves the image undefined until a client sets one — whatever the compositor
+  last showed, or nothing (what Hyprland users see over a client that never sets one). thoth draws its own
+  12×19 arrow into an ARGB8888 shm buffer on a surface of its own and hands it to the compositor with
+  `wl_pointer.set_cursor` on every enter (the role first, the buffer committed once after it). No cursor
+  theme, no library.
+- **The hit-test.** `gframe_build` records the rectangles it lays out (sidebar, tree, feed, composer, strip);
+  `gframe_hit(px, py)` resolves a point to a pane by the SAME numbers the frame was drawn with — never a second
+  copy of the layout math — and `gconv_row_at` / `gtree_row_at` a row by the scroll origin each builder drew
+  with. Pure, so the suite drives them after a `gframe_build(960, 600)`.
+- **What a click does** (`gpointer_click`): a sidebar row switches to that conversation and focuses the
+  composer (what Enter does from the keyboard; the ACTIVE row only selects + focuses — `conv_switch` to the
+  conversation already active is a no-op now, where it used to drop the `/compact` floor on `/switch <self>`
+  and the sidebar's Enter too); a tree row selects it and focuses the tree, and a second click on the selected
+  row while the tree is focused acts as Enter (a dir toggles, a file is @mentioned); the feed or the composer
+  focus the composer; the strip, a rule, the sidebar header, a pane hidden since the frame was drawn — nothing.
+  Right and middle buttons are ignored. The sidebar's and the tree's scroll origins are STICKY — the list
+  recentres only when the selection leaves the window — because a click selects by screen position and a
+  recentre on every selection moved the rows under a stationary pointer (the second click landed elsewhere).
+  **The wheel** (`gpointer_wheel`) scrolls the feed only, by `GPTR_WHEEL_GAIN` (4) × the wire delta — a mouse
+  notch (15 px) is three feed lines; a touchpad scrolls proportionally. `gpointer_pump` (pure) is the present
+  loop's drain: everything applied, or everything discarded — mid-turn (a click on a sidebar row while a reply
+  streams must not switch conversations under the turn), under the question modal (keyboard-driven), and
+  whenever the drawn frame is stale (a key or a resize in the same batch: a click resolves against the frame as
+  LAST DRAWN, so such a record is dropped, never misplaced); and one view-changing click per batch, since the
+  first makes the geometry record stale until the repaint.
+
+### Added — summary cards for what the rings no longer hold (F4)
+
+`gtool_build_msg(i)` / `gmem_build_msg(i)` replace the turn-keyed calls in the feed flow: they draw the live
+per-turn cards / two-row strip while this session's roundlog / memlog still hold the message's turn, else the
+message's OWN persisted set — the `{kind, ok, name, args}` calls 0.33.5 attached and the cited titles 0.33.4
+attached — as one **`tool calls (summary)`** card (name · verdict in its colour · args, clipped) and one
+`recalled: [1] Title …` row. An honest subset, labelled: no round grouping, no ms / bytes, no diff, no grounding
+verdict — none of which is in the store (omit-until-present, never "unverified" as a stand-in). That covers a
+resumed reply (turn 0) AND a live reply whose rounds sixteen later rounds aged out of the ring — its card used
+to vanish. `TOOL` and `CITE` payloads are now cleaned where they are read back, like `RSN` and `CONV` (the file
+is an untrusted door; the window draws these).
+
+### Fixed — every sidebar subline showed the last row's message count
+
+`_gconv_row` formatted each row's `<n> msg` into ONE shared scratch whose POINTER `gd_push_text` stored per row,
+so the raster read the last row's count for every subline. A fresh buffer per row (the `_gtool_int` pattern).
+
+### Changed — the greeting's two-layer config rule on its own row
+
+`config <local> + <global>` no longer carries ` (local wins per key; /state shows both)` on the same row — the
+rule sits on the row under it, without the parentheses, so the box never wraps mid-parenthesis.
+
+Tests (+201): `test_gui_pointer` — the wire decoder on wire-shaped bytes (fixed-point floor and clamp, enter's
+serial, motion's position, a press queued at the pointer's position and its release not, a horizontal axis
+ignored, three sub-pixel touchpad steps adding up to one record with the fraction carried, leave, the ring
+keeping 31 of forty presses and wrapping, a size-8 button frame dropped and a full one decoded), the cursor
+bitmap (hotspot opaque, corner transparent, an interior white) and the `set_cursor` request's bytes (object,
+opcode, size, serial, surface, hotspot), `gframe_hit` over every band at 960×600 with the sidebar, the tree and
+the strip each hidden in turn, the 1px rule between panes, off-surface points, `gconv_row_at` / `gtree_row_at`
+(header, each row to its last pixel, past the list; a twenty-conversation sidebar and a thirty-node tree
+resolving by their SCROLLED origins, the origin sticky across the second click, recentring when the selection
+leaves), the sidebar's sublines each with their own count, clicks (right button ignored, a sidebar row switching
++ selecting + focusing the composer + snapping the scroll + the feed following, the active row keeping the
+`/compact` floor and the scroll, the header and a hidden pane's stale rectangle doing nothing, a tree row
+selecting + focusing, the second click @mentioning + handing focus back, a click on the selected row from the
+composer only re-focusing, a dir expanding, the feed focusing once, the strip nothing) and the wheel (sidebar
+no, feed yes, a notch = 60 px, a touchpad step proportional, back to the latest, no-ops), and `gpointer_pump`
+(a discarding drain changing nothing, an applying one focusing + scrolling, two presses in one batch applying
+the first only);
+`test_gui_resumed_cards` — the summary card and strip on a reloaded reply (height, parity, the header word, every
+name, exactly one ok / err / deny, the args, no telemetry or round number, none for a reply without calls / a
+user message / an index out of range; the strip's label + titles and no verdict), the flow taller with them, a
+live reply keeping its round card and telemetry and its two-row memlog strip, then losing its rounds to the ring
+and getting the summary (and its citations' one-row strip once the memlog forgets the turn); the greeting's rule
+row driven through the config seams (a local layer over a global one); TOOL + CITE payloads cleaned on load; a
+self-switch keeping the floor. Proven by breaking, eleven ways: the sidebar rows off by ten pixels, the sidebar
+rectangle not recorded, releases queued as clicks, the summary card never drawn, the wheel inverted, the TOOL
+payload not cleaned, an aged-out reply drawing nothing, the shared subline scratch, the rule back on the config
+row, the tree origin recentring under the pointer, the self-switch clearing the floor.
+
 ## [0.48.0] - 2026-09-13
 
 **A reply's reasoning survives a restart — and `thoth gui` finally resumes.** The third feature arc under the

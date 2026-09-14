@@ -121,7 +121,7 @@ include "src/gui/gmem.cyr"        # per-turn MEMORY strip (0.32.5): recalled sou
 include "src/gui/gask.cyr"      # T3 question modal (0.44.0, T4-1) — the ask_user front end; before gfeed (composited by gframe_build)
 include "src/gui/gcmd.cyr"      # slash-command output cards (0.46.0, F1); before gfeed (the flow interleaves them); reads the feed ring
 include "src/gui/gfeed.cyr"       # conversation-feed view-builder (0.30.1); reads session_history; headless-testable
-include "src/gui/gwindow.cyr"    # sovereign Wayland window seam (present shell); main-only (compositor-gated, not unit-tested)
+include "src/gui/gwindow.cyr"    # sovereign Wayland window seam (present shell); compositor-gated — only its pure halves (the pointer decoder, the cursor bitmap) are unit-tested (0.49.0)
 include "src/commands.cyr"
 include "src/gui/gpresent.cyr"   # T3 GUI present loop (gui_run); AFTER commands (calls cmd_task on submit); main-only
 include "src/repl.cyr"

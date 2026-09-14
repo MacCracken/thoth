@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.48.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.49.0 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -29,7 +29,8 @@ trait-derived **role** axis (`/role`).
   + persistent per-turn thinking fold, and a live repo/branch + spine-health + token/cost status bar under the input.
 - **Native desktop GUI** (`thoth gui`) — thoth's OWN sovereign Cyrius Wayland window (draw-command IR → kashi CPU
   rasterizer → wl_shm → a puka-forked present shell; live-confirmed on a real compositor): the same status strip,
-  structural-markdown replies, per-turn tool-call + colored diff cards, and a conversation sidebar (Ctrl+K).
+  structural-markdown replies, per-turn tool-call + colored diff cards, and a conversation sidebar (Ctrl+K, or a
+  click — the window takes the mouse since 0.49.0: click-to-switch, click-to-focus, wheel scroll).
 - **Shell citizen** — a one-shot/argv front door (`thoth 'task'`, `git diff | thoth 'review'`), `--json` for jq/CI,
   `-o`/`--out` tee, completion (`--completion bash|zsh`), `[alias]` macros, `/dry` request preview — on a
   byte-identical plain line-mode floor when piped/CI.

@@ -1,11 +1,12 @@
 # src/gui/gwindow.cyr — sovereign Wayland window seam for the T3 GUI (0.30.0).
 #
 # A self-contained Wayland client: wl_registry/compositor/shm + xdg-shell + a memfd/mmap XRGB8888
-# wl_shm buffer + evdev keyboard, over the raw wire (no libwayland). PORTED verbatim from jalwa's
-# gui/wayland.cyr (itself a puka fork), renamed jlw_->gwl_ / JLW_->GWL_ / app-id -> "thoth"; thoth owns
-# its copy (port the floor — the window substrate is FLOOR, destined to extract to aethersafha later).
-# The gwin_win_* seam (open/present_begin/present_commit/poll_events/next_key/close/size_px) is the API
-# gpresent.cyr drives. UNVERIFIABLE headless (needs a live compositor); degrades cleanly when absent.
+# wl_shm buffer + evdev keyboard + (0.49.0, F4) a wl_pointer with a sovereign shm arrow cursor, over the raw
+# wire (no libwayland). PORTED verbatim from jalwa's gui/wayland.cyr (itself a puka fork), renamed jlw_->gwl_ /
+# JLW_->GWL_ / app-id -> "thoth"; thoth owns its copy (port the floor — the window substrate is FLOOR, destined to
+# extract to aethersafha later). The gwin_win_* seam (open/present_begin/present_commit/poll_events/next_key/
+# next_pointer/close/size_px) is the API gpresent.cyr drives. UNVERIFIABLE headless (needs a live compositor)
+# except the pure halves (the pointer decoder, the cursor bitmap — in the GUI suite); degrades cleanly when absent.
 #
 #
 #
@@ -95,9 +96,19 @@ enum JlwWlAbi {
     GWL_EV_TOPLEVEL_CONFIGURE = 0; GWL_EV_TOPLEVEL_CLOSE = 1;
     GWL_EV_BUFFER_RELEASE = 0;
     GWL_OP_SEAT_GET_KEYBOARD = 1;
-    GWL_EV_SEAT_CAPS = 0;            # wl_seat.capabilities; KEYBOARD bit = 2
+    GWL_EV_SEAT_CAPS = 0;            # wl_seat.capabilities; POINTER bit = 1, KEYBOARD bit = 2
     GWL_EV_KBD_KEY = 3;             # wl_keyboard.key (serial,time,key,state)
     GWL_EV_KBD_MODS = 4;           # wl_keyboard.modifiers (serial,depressed,...)
+    # ---- wl_pointer (0.49.0, F4) ----
+    GWL_OP_SEAT_GET_POINTER = 0;
+    GWL_OP_PTR_SET_CURSOR = 0;      # wl_pointer.set_cursor (serial, surface, hotspot_x, hotspot_y)
+    GWL_OP_PTR_RELEASE = 1;         # wl_pointer.release (since v3)
+    GWL_EV_PTR_ENTER  = 0;          # (serial, surface, surface_x fixed, surface_y fixed)
+    GWL_EV_PTR_LEAVE  = 1;          # (serial, surface)
+    GWL_EV_PTR_MOTION = 2;          # (time, surface_x fixed, surface_y fixed)
+    GWL_EV_PTR_BUTTON = 3;          # (serial, time, button, state)  BTN_LEFT = 0x110; state 1 = pressed
+    GWL_EV_PTR_AXIS   = 4;          # (time, axis, value fixed)       axis 0 = vertical; value in surface px (24.8)
+    GWL_WL_SHM_ARGB8888 = 0;        # the cursor buffer's format (alpha, unlike the opaque window buffer)
 }
 
 var gwl_wl_fd      = 0 - 1;
@@ -119,6 +130,23 @@ var gwl_wl_buf_oid = 0; var gwl_wl_kbd_oid = 0; var gwl_wl_frame_oid = 0;
 var gwl_wl_cur_sync = 0; var gwl_wl_sync_done = 0;
 var gwl_wl_configured = 0; var gwl_wl_cfg_w = 0; var gwl_wl_cfg_h = 0;
 var gwl_wl_closed = 0; var gwl_wl_buf_busy = 0; var gwl_wl_frame_done = 1; var gwl_wl_nglobals = 0;
+
+# pointer (0.49.0, F4): the wl_pointer object, the live surface-local position (px), and a ring of pointer
+# records (kind, x, y, arg) the app drains via gwl_win_next_pointer — BUTTON (arg = button code, on PRESS only:
+# a click is a press; releases are dropped, as is motion — the app never needs hover) and AXIS (arg = the wheel's
+# vertical value in surface px, positive = the content scrolls up). The cursor: a sovereign arrow the client draws
+# into its own ARGB shm buffer and hands the compositor on every enter (wl_pointer.set_cursor); without it the
+# cursor image over the window is undefined by the protocol — whatever the compositor last showed, or nothing
+# (what Hyprland users see over a client that never sets one).
+var gwl_wl_ptr_oid = 0;
+var gwl_wl_seat_ver = 0;                                  # the version the seat was BOUND at (the pointer's too)
+var gwl_wl_ptr_x = 0; var gwl_wl_ptr_y = 0;
+var gwl_wl_ptr_in = 0;                                    # 1 while the pointer is over the window
+var gwl_wl_axis_acc = 0;                                  # the vertical axis's unconsumed 24.8 fraction (a touchpad's fine steps add up)
+var gwl_wl_pq[128];                                       # 32 records * 4 i64 (module-global: 1024 bytes)
+var gwl_wl_pq_head = 0; var gwl_wl_pq_tail = 0;
+var gwl_wl_cur_surf = 0; var gwl_wl_cur_buf = 0;          # the cursor surface + its ARGB buffer (0 until drawn)
+var gwl_wl_cur_fd = 0 - 1; var gwl_wl_cur_ptr = 0;
 
 # keyboard: a ring of (evdev_keycode, value, mods) records + the live mod mask.
 var gwl_wl_mods = 0;
@@ -327,6 +355,192 @@ fn gwl_wl__kbd(o, op): i64 {
     return 0;
 }
 
+# ---- pointer (0.49.0, F4) ----
+var GWL_PTR_BUTTON = 1;
+var GWL_PTR_AXIS = 2;
+fn gwl_wl__push_ptr(kind, x, y, arg): i64 {
+    var nt = (gwl_wl_pq_tail + 1) % 32;
+    if (nt == gwl_wl_pq_head) { return 0; }    # full: drop
+    var b = gwl_wl_pq_tail * 4;
+    store64(&gwl_wl_pq + b * 8, kind);
+    store64(&gwl_wl_pq + (b + 1) * 8, x);
+    store64(&gwl_wl_pq + (b + 2) * 8, y);
+    store64(&gwl_wl_pq + (b + 3) * 8, arg);
+    gwl_wl_pq_tail = nt;
+    return 0;
+}
+fn gwl_wl_pop_ptr(out32): i64 {                # writes kind,x,y,arg; 1 if popped else 0
+    if (gwl_wl_pq_head == gwl_wl_pq_tail) { return 0; }
+    var b = gwl_wl_pq_head * 4;
+    store64(out32, load64(&gwl_wl_pq + b * 8));
+    store64(out32 + 8, load64(&gwl_wl_pq + (b + 1) * 8));
+    store64(out32 + 16, load64(&gwl_wl_pq + (b + 2) * 8));
+    store64(out32 + 24, load64(&gwl_wl_pq + (b + 3) * 8));
+    gwl_wl_pq_head = (gwl_wl_pq_head + 1) % 32;
+    return 1;
+}
+fn gwl_wl_ptr_pending(): i64 { if (gwl_wl_pq_head != gwl_wl_pq_tail) { return 1; } return 0; }
+# gwl_wl_fixed_px: a wl_fixed (signed 24.8) wire word -> whole surface pixels (floored; never below 0 — a
+# coordinate left of / above the surface is clamped to its edge). PURE.
+fn gwl_wl_fixed_px(v): i64 {
+    var f = v & 0xFFFFFFFF;
+    if (f >= 0x80000000) { f = f - 0x100000000; }
+    if (f < 0) { return 0; }
+    return f / 256;
+}
+# gwl_wl__ptr_decode: fold ONE wl_pointer event (opcode `op`, arguments at `args`) into the position + the ring.
+# Split from the dispatch so the suite can feed it wire-shaped bytes without a compositor. PURE over its bytes.
+fn gwl_wl__ptr_decode(op, args): i64 {
+    if (op == GWL_EV_PTR_ENTER) {
+        gwl_wl_ptr_in = 1;
+        gwl_wl_ptr_x = gwl_wl_fixed_px(load32(args + 8));
+        gwl_wl_ptr_y = gwl_wl_fixed_px(load32(args + 12));
+        return load32(args);                                # the serial — set_cursor wants it
+    }
+    if (op == GWL_EV_PTR_LEAVE) { gwl_wl_ptr_in = 0; return 0; }
+    if (op == GWL_EV_PTR_MOTION) {
+        gwl_wl_ptr_x = gwl_wl_fixed_px(load32(args + 4));
+        gwl_wl_ptr_y = gwl_wl_fixed_px(load32(args + 8));
+        return 0;
+    }
+    if (op == GWL_EV_PTR_BUTTON) {
+        if (load32(args + 12) == 1) { gwl_wl__push_ptr(GWL_PTR_BUTTON, gwl_wl_ptr_x, gwl_wl_ptr_y, load32(args + 8)); }
+        return 0;
+    }
+    if (op == GWL_EV_PTR_AXIS) {
+        if (load32(args + 4) == 0) {                        # vertical only
+            var f = load32(args + 8) & 0xFFFFFFFF;
+            if (f >= 0x80000000) { f = f - 0x100000000; }
+            gwl_wl_axis_acc = gwl_wl_axis_acc + f;          # accumulate in 24.8 — a touchpad sends sub-pixel steps
+            var whole = gwl_wl_axis_acc / 256;              # (truncates toward zero; the fraction stays)
+            if (whole != 0) { gwl_wl_axis_acc = gwl_wl_axis_acc - whole * 256; gwl_wl__push_ptr(GWL_PTR_AXIS, gwl_wl_ptr_x, gwl_wl_ptr_y, whole); }
+        }
+        return 0;
+    }
+    return 0;                                               # frame / axis_source / axis_stop / axis_discrete: ignored
+}
+# gwl_wl__ptr_need: the argument bytes each wl_pointer event carries — a frame declaring fewer is dropped, never
+# decoded from the bytes after it (gwl_wl__parse checks only that the declared size is buffered). PURE.
+fn gwl_wl__ptr_need(op): i64 {
+    if (op == GWL_EV_PTR_ENTER) { return 16; }
+    if (op == GWL_EV_PTR_LEAVE) { return 8; }
+    if (op == GWL_EV_PTR_MOTION) { return 12; }
+    if (op == GWL_EV_PTR_BUTTON) { return 16; }
+    if (op == GWL_EV_PTR_AXIS) { return 12; }
+    return 0;
+}
+fn gwl_wl__ptr(o, op): i64 {
+    var size = gwl_wire_msg_size(&gwl_wl_rbuf + o);
+    if (size < (8 + gwl_wl__ptr_need(op))) { return 0; }
+    var serial = gwl_wl__ptr_decode(op, &gwl_wl_rbuf + o + 8);
+    if (op == GWL_EV_PTR_ENTER) { gwl_wl__cursor_show(serial); }
+    return 0;
+}
+
+# ---- the cursor (0.49.0): a 12x19 arrow drawn ONCE into an ARGB8888 shm buffer on a surface of its own ----
+# Rows: '#' black, '.' white, ' ' transparent. The hotspot is the arrow's tip at (0, 0).
+fn gwl_wl__cursor_row(r): i64 {
+    if (r == 0)  { return "#           "; }
+    if (r == 1)  { return "##          "; }
+    if (r == 2)  { return "#.#         "; }
+    if (r == 3)  { return "#..#        "; }
+    if (r == 4)  { return "#...#       "; }
+    if (r == 5)  { return "#....#      "; }
+    if (r == 6)  { return "#.....#     "; }
+    if (r == 7)  { return "#......#    "; }
+    if (r == 8)  { return "#.......#   "; }
+    if (r == 9)  { return "#........#  "; }
+    if (r == 10) { return "#.....##### "; }
+    if (r == 11) { return "#..#..#     "; }
+    if (r == 12) { return "#.# #..#    "; }
+    if (r == 13) { return "##  #..#    "; }
+    if (r == 14) { return "#    #..#   "; }
+    if (r == 15) { return "     #..#   "; }
+    if (r == 16) { return "      #..#  "; }
+    if (r == 17) { return "      #..#  "; }
+    return "       ##   ";
+}
+var GWL_CUR_W = 12;
+var GWL_CUR_H = 19;
+# gwl_wl__cursor_paint: fill an ARGB8888 pixel buffer (w*h*4 bytes) with the arrow. PURE over the buffer.
+fn gwl_wl__cursor_paint(px): i64 {
+    var r = 0;
+    while (r < GWL_CUR_H) {
+        var row = gwl_wl__cursor_row(r);
+        var c = 0;
+        while (c < GWL_CUR_W) {
+            var ch = load8(row + c);
+            var v = 0;                                        # transparent
+            if (ch == 35) { v = 0xFF000000; }                 # '#': opaque black
+            if (ch == 46) { v = 0xFFFFFFFF; }                 # '.': opaque white
+            store32(px + (r * GWL_CUR_W + c) * 4, v);
+            c = c + 1;
+        }
+        r = r + 1;
+    }
+    return 0;
+}
+# gwl_wl__cursor_make: the cursor surface + buffer, once. 0 on any failure (the window then has no cursor of its
+# own — the compositor's choice, as before 0.49.0; never fatal).
+fn gwl_wl__cursor_make(): i64 {
+    if (gwl_wl_cur_surf != 0) { return 1; }
+    var size = GWL_CUR_W * GWL_CUR_H * 4;
+    var fd = syscall(GWL_SYS_MEMFD_CREATE, "thoth-cursor", GWL_MFD_CLOEXEC);
+    if (fd < 0) { return 0; }
+    if (syscall(GWL_SYS_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
+    var ptr = syscall(GWL_SYS_MMAP9, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
+    if (ptr < 0) { if (ptr > (0 - 4096)) { gwl_wl_sys_close(fd); return 0; } }
+    if (ptr == (0 - 1)) { gwl_wl_sys_close(fd); return 0; }
+    gwl_wl__cursor_paint(ptr);
+    var pool = gwl_wl_alloc_id();
+    store32(&gwl_wl_sbuf + 8, pool);
+    store32(&gwl_wl_sbuf + 12, size);
+    gwl_wire_hdr_put(&gwl_wl_sbuf, gwl_wl_shm_oid, GWL_OP_SHM_CREATE_POOL, 16);
+    gwl_wl__send_fd(16, fd);
+    gwl_wl_cur_buf = gwl_wl_alloc_id();
+    store32(&gwl_wl_sbuf + 8, gwl_wl_cur_buf);
+    store32(&gwl_wl_sbuf + 12, 0);
+    store32(&gwl_wl_sbuf + 16, GWL_CUR_W);
+    store32(&gwl_wl_sbuf + 20, GWL_CUR_H);
+    store32(&gwl_wl_sbuf + 24, GWL_CUR_W * 4);
+    store32(&gwl_wl_sbuf + 28, GWL_WL_SHM_ARGB8888);
+    gwl_wire_hdr_put(&gwl_wl_sbuf, pool, GWL_OP_POOL_CREATE_BUFFER, 32);
+    gwl_wl__send(32);
+    gwl_wl__req0(pool, GWL_OP_POOL_DESTROY);                 # the buffer keeps the pool's storage alive
+    gwl_wl_cur_surf = gwl_wl_alloc_id();
+    gwl_wl__req1(gwl_wl_comp_oid, GWL_OP_COMPOSITOR_CREATE_SURFACE, gwl_wl_cur_surf);
+    gwl_wl_cur_fd = fd; gwl_wl_cur_ptr = ptr;
+    return 1;
+}
+var gwl_wl_cur_committed = 0;
+# gwl_wl__cursor_show: wl_pointer.set_cursor(serial, our surface, hotspot 0,0) — on every enter (the protocol
+# forgets the cursor between entries). The FIRST time this also gives the surface its content: set_cursor assigns
+# the cursor role, THEN the buffer is attached + committed — the order every cursor client uses.
+fn gwl_wl__cursor_show(serial): i64 {
+    if (gwl_wl_ptr_oid == 0) { return 0; }
+    if (gwl_wl__cursor_make() == 0) { return 0; }
+    store32(&gwl_wl_sbuf + 8, serial);
+    store32(&gwl_wl_sbuf + 12, gwl_wl_cur_surf);
+    store32(&gwl_wl_sbuf + 16, 0);
+    store32(&gwl_wl_sbuf + 20, 0);
+    gwl_wire_hdr_put(&gwl_wl_sbuf, gwl_wl_ptr_oid, GWL_OP_PTR_SET_CURSOR, 24);
+    gwl_wl__send(24);
+    if (gwl_wl_cur_committed == 0) {
+        store32(&gwl_wl_sbuf + 8, gwl_wl_cur_buf);
+        store32(&gwl_wl_sbuf + 12, 0);
+        store32(&gwl_wl_sbuf + 16, 0);
+        gwl_wire_hdr_put(&gwl_wl_sbuf, gwl_wl_cur_surf, GWL_OP_SURFACE_ATTACH, 20);
+        gwl_wl__send(20);
+        store32(&gwl_wl_sbuf + 8, 0); store32(&gwl_wl_sbuf + 12, 0);
+        store32(&gwl_wl_sbuf + 16, GWL_CUR_W); store32(&gwl_wl_sbuf + 20, GWL_CUR_H);
+        gwl_wire_hdr_put(&gwl_wl_sbuf, gwl_wl_cur_surf, GWL_OP_SURFACE_DAMAGE_BUFFER, 24);
+        gwl_wl__send(24);
+        gwl_wl__req0(gwl_wl_cur_surf, GWL_OP_SURFACE_COMMIT);
+        gwl_wl_cur_committed = 1;
+    }
+    return 0;
+}
+
 # ---- event dispatch ----
 fn gwl_wl__handle(o): i64 {
     var id = load32(&gwl_wl_rbuf + o);
@@ -377,16 +591,29 @@ fn gwl_wl__handle(o): i64 {
     if (id == gwl_wl_buf_oid) { if (op == GWL_EV_BUFFER_RELEASE) { gwl_wl_buf_busy = 0; } return 0; }
     if (id == gwl_wl_seat_oid) {
         if (op == GWL_EV_SEAT_CAPS) {
-            if ((load32(&gwl_wl_rbuf + o + 8) & 2) != 0) {     # KEYBOARD capability
+            var caps = load32(&gwl_wl_rbuf + o + 8);
+            if ((caps & 2) != 0) {                             # KEYBOARD capability
                 if (gwl_wl_kbd_oid == 0) {
                     gwl_wl_kbd_oid = gwl_wl_alloc_id();
                     gwl_wl__req1(gwl_wl_seat_oid, GWL_OP_SEAT_GET_KEYBOARD, gwl_wl_kbd_oid);
+                }
+            }
+            if ((caps & 1) != 0) {                             # POINTER capability (0.49.0)
+                if (gwl_wl_ptr_oid == 0) {
+                    gwl_wl_ptr_oid = gwl_wl_alloc_id();
+                    gwl_wl__req1(gwl_wl_seat_oid, GWL_OP_SEAT_GET_POINTER, gwl_wl_ptr_oid);
+                }
+            } else {
+                if (gwl_wl_ptr_oid != 0) {                     # the pointer went away (undock): release it, as the protocol asks
+                    if (gwl_wl_seat_ver >= 3) { gwl_wl__req0(gwl_wl_ptr_oid, GWL_OP_PTR_RELEASE); }   # release is v3+; below it, just forget the id
+                    gwl_wl_ptr_oid = 0; gwl_wl_ptr_in = 0;
                 }
             }
         }
         return 0;
     }
     if (id == gwl_wl_kbd_oid) { return gwl_wl__kbd(o, op); }
+    if (id == gwl_wl_ptr_oid) { if (gwl_wl_ptr_oid != 0) { return gwl_wl__ptr(o, op); } }
     return 0;
 }
 
@@ -557,6 +784,7 @@ enum JlwWinAbi {
     GWL_WIN_EV_KEY    = 2;
     GWL_WIN_EV_CLOSE  = 4;
     GWL_WIN_EV_FRAME  = 8;
+    GWL_WIN_EV_POINTER = 16;   # 0.49.0: a click or a wheel step is queued (gwl_win_next_pointer)
     GWL_WIN_CAP_SHM   = 0;     # gwl_win_present_begin returns a CPU pixel buffer
     GWL_WIN_CAP_GPU   = 1;     # gwl_win_present_begin returns 0; caller records GPU draws
 }
@@ -579,7 +807,12 @@ fn gwl_win_open(title, init_w, init_h): i64 {
     gwl_wl_comp_oid = gwl_wl_bind(gwl_wl_gn_comp, "wl_compositor", 4);
     gwl_wl_shm_oid  = gwl_wl_bind(gwl_wl_gn_shm, "wl_shm", 1);
     gwl_wl_xdg_oid  = gwl_wl_bind(gwl_wl_gn_xdg, "xdg_wm_base", 1);
-    if (gwl_wl_gn_seat != 0) { gwl_wl_seat_oid = gwl_wl_bind(gwl_wl_gn_seat, "wl_seat", 5); }   # -> capabilities -> keyboard
+    if (gwl_wl_gn_seat != 0) {                                                     # -> capabilities -> keyboard + pointer
+        var sv = 5;                                                                # v5: wl_pointer.frame + axis_* (decoded as no-ops)
+        if ((gwl_wl_gv_seat > 0) && (gwl_wl_gv_seat < sv)) { sv = gwl_wl_gv_seat; }   # 0.49.0: never above what the compositor advertises
+        gwl_wl_seat_oid = gwl_wl_bind(gwl_wl_gn_seat, "wl_seat", sv);
+        gwl_wl_seat_ver = sv;
+    }
 
     gwl_wl_surf_oid = gwl_wl_alloc_id();
     gwl_wl__req1(gwl_wl_comp_oid, GWL_OP_COMPOSITOR_CREATE_SURFACE, gwl_wl_surf_oid);
@@ -652,6 +885,7 @@ fn gwl_win_poll_events(win): i64 {
     if (gwl_wl_closed == 1) { m = m | GWL_WIN_EV_CLOSE; }
     if (gwl_wl_frame_done == 1) { m = m | GWL_WIN_EV_FRAME; }
     if (gwl_wl_key_pending() == 1) { m = m | GWL_WIN_EV_KEY; }
+    if (gwl_wl_ptr_pending() == 1) { m = m | GWL_WIN_EV_POINTER; }
     # The compositor configured a new size (the serial was already acked in the
     # dispatch). Surface it once; the caller adopts it via gwl_win_resize_apply.
     if (gwl_wl_cfg_w > 0) { if (gwl_wl_cfg_h > 0) {
@@ -675,5 +909,8 @@ fn gwl_win_resize_apply(win): i64 {
 # Drain one key record: out24[+0]=evdev keycode, [+8]=value(1=press), [+16]=mods.
 # Returns 1 if a record was produced, 0 if the queue is empty.
 fn gwl_win_next_key(win, out24): i64 { return gwl_wl_pop_key(out24); }
+# Drain one pointer record (0.49.0): out32[+0]=kind (GWL_PTR_BUTTON / GWL_PTR_AXIS), [+8]=x, [+16]=y (surface px),
+# [+24]=arg (the button code, or the wheel's vertical px). 1 if a record was produced, 0 if the queue is empty.
+fn gwl_win_next_pointer(win, out32): i64 { return gwl_wl_pop_ptr(out32); }
 
 fn gwl_win_close(win): i64 { gwl_wl_close(); return 0; }

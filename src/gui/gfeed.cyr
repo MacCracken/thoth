@@ -535,13 +535,15 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             if (rcy > cy) { cy = rcy + GFEED_GAP; }
             # tool-call cards (0.30.16; per-turn since 0.30.19): above EACH turn's answer, show the rounds THAT
             # turn ran — matched by the message's turn tag, so an earlier turn's cards stay put when later turns are
-            # added (a failed turn has no reply, so its cards render below with the failure notice). gtool_build_turn
-            # returns cy unchanged when the turn used no tools, or its rounds have aged out of the roundlog ring.
-            var tcy = gtool_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
+            # added (a failed turn has no reply, so its cards render below with the failure notice). Returns cy
+            # unchanged when the turn used no tools, or its rounds have aged out of the roundlog ring. 0.49.0: a
+            # RESUMED reply (turn 0) draws its persisted calls as one card instead (gtool_build_msg picks).
+            var tcy = gtool_build_msg(cmds, xbase, cy, avail, i);
             if (tcy > cy) { cy = tcy + GFEED_GAP; }
-            # memory strip (0.32.5): this turn's recalled sources + grounding verdict, from the persisted memlog
-            # (the line/TUI ui_emit is lost under the GUI turn's OUT_NULL). y unchanged when the turn recalled nothing.
-            var mcy = gmem_build_turn(cmds, xbase, cy, avail, session_history_turn(i));
+            # memory strip (0.32.5): this turn's recalled sources + grounding verdict, from the session-scoped memlog
+            # ring (the line/TUI ui_emit is lost under the GUI turn's OUT_NULL). y unchanged when the turn recalled nothing.
+            # 0.49.0: a resumed reply draws its persisted citations as one row (no verdict — not in the store).
+            var mcy = gmem_build_msg(cmds, xbase, cy, avail, i);
             if (mcy > cy) { cy = mcy + GFEED_GAP; }
             cy = _gfeed_md(cmds, xbase, cy, avail, content);   # 0.36.0: structural markdown (was flat _gfeed_para)
         }
@@ -706,9 +708,116 @@ fn geye_color(p) {
 }
 fn geye_color_now() { return geye_color(_geye_phase); }
 
+# --- the frame's geometry record + hit-test (0.49.0, F4) --------------------------------------------------------
+# gframe_build records the rectangles it lays out (the sidebar, the tree, the feed, the composer, the strip) so a
+# pointer position can be resolved to a pane — gframe_hit — by the SAME numbers the frame was drawn with, never a
+# second copy of the layout math. Widths are 0 for a pane that was not drawn. Row resolution inside a pane is the
+# pane's own (gconv_row_at / gtree_row_at read the scroll origin each builder recorded).
+var GHIT_NONE = 0;
+var GHIT_CONV = 1;
+var GHIT_TREE = 2;
+var GHIT_FEED = 3;
+var GHIT_COMPOSER = 4;
+var GHIT_STRIP = 5;
+var _gl_conv_x = 0; var _gl_conv_w = 0;
+var _gl_tree_x = 0; var _gl_tree_w = 0;
+var _gl_feed_x = 0; var _gl_feed_w = 0;
+var _gl_body_top = 0; var _gl_body_h = 0;
+var _gl_comp_top = 0; var _gl_frame_bot = 0;
+var _gl_strip_top = 0; var _gl_w = 0; var _gl_h = 0;
+# gframe_hit: the pane under (px, py), in surface pixels, per the last gframe_build. PURE.
+fn gframe_hit(px, py) {
+    if ((px < 0) || (py < 0)) { return GHIT_NONE; }
+    if ((px >= _gl_w) || (py >= _gl_h)) { return GHIT_NONE; }
+    if ((py >= _gl_body_top) && (py < (_gl_body_top + _gl_body_h))) {
+        if (_gl_conv_w > 0) { if ((px >= _gl_conv_x) && (px < (_gl_conv_x + _gl_conv_w))) { return GHIT_CONV; } }
+        if (_gl_tree_w > 0) { if ((px >= _gl_tree_x) && (px < (_gl_tree_x + _gl_tree_w))) { return GHIT_TREE; } }
+        if ((px >= _gl_feed_x) && (px < (_gl_feed_x + _gl_feed_w))) { return GHIT_FEED; }
+        return GHIT_NONE;                                                   # a 1px rule between panes
+    }
+    if ((py >= _gl_comp_top) && (py <= _gl_frame_bot)) { return GHIT_COMPOSER; }
+    if (_gl_strip_top > 0) { if (py >= _gl_strip_top) { return GHIT_STRIP; } }
+    return GHIT_NONE;
+}
+
+# --- the pointer (0.49.0, F4) --------------------------------------------------------------------------------
+# gpointer_click: a left-button PRESS at (px, py) — resolved by gframe_hit against the frame as last drawn.
+#   sidebar row  -> select + switch to that conversation (what Enter does from the keyboard), focus the composer;
+#   tree row     -> select it and focus the tree; a click on the ALREADY-selected row acts like Enter (a dir
+#                   toggles, a file is @mentioned into the composer);
+#   feed / composer -> focus the composer;  anything else -> nothing.
+# Other buttons are ignored. Returns 1 when the view changed (a repaint is due), else 0. PURE over the GUI state.
+var GPTR_BTN_LEFT = 272;                                  # BTN_LEFT (0x110)
+fn gpointer_click(px, py, button) {
+    if (button != GPTR_BTN_LEFT) { return 0; }
+    var pane = gframe_hit(px, py);
+    # a pane hidden since the frame was drawn (its Ctrl chord in the same batch) still has a rectangle in the record:
+    # refuse it — focus must never land on a hidden pane (the toggles' own invariant)
+    if ((pane == GHIT_CONV) && (gconv_hidden() == 1)) { return 0; }
+    if ((pane == GHIT_TREE) && (gtree_hidden() == 1)) { return 0; }
+    if (pane == GHIT_CONV) {
+        var ci = gconv_row_at(py);
+        if (ci < 0) { return 0; }
+        _gconv_sel = ci; gconv_sel_clamp();
+        if (ci != conv_active()) { conv_switch(ci); gscroll_reset(); }   # the active row: select + focus only
+        _gfocus = GFOCUS_COMPOSER;
+        return 1;
+    }
+    if (pane == GHIT_TREE) {
+        var li = gtree_row_at(py);
+        if (li < 0) { return 0; }
+        if ((li == ftree_sel()) && (_gfocus == GFOCUS_TREE)) { gtree_key(28, 0); return 1; }   # a second click = Enter
+        ftree_set_sel(li);
+        _gfocus = GFOCUS_TREE;
+        return 1;
+    }
+    if ((pane == GHIT_FEED) || (pane == GHIT_COMPOSER)) {
+        if (_gfocus == GFOCUS_COMPOSER) { return 0; }
+        _gfocus = GFOCUS_COMPOSER;
+        return 1;
+    }
+    return 0;
+}
+# gpointer_wheel: a vertical axis step of `px_delta` surface px (positive = the wheel rolled toward the user, i.e.
+# the content moves UP = scroll toward NEWER; negative = toward OLDER) over (px, py). Only the feed scrolls, by
+# GPTR_WHEEL_GAIN x the wire delta: a mouse notch is 15 px on the wire -> 60 px = three feed lines; a touchpad's
+# fine steps (accumulated to whole px by the decoder) scroll proportionally. Returns 1 when the offset changed.
+var GPTR_WHEEL_GAIN = 4;
+fn gpointer_wheel(px, py, px_delta) {
+    if (gframe_hit(px, py) != GHIT_FEED) { return 0; }
+    if (px_delta == 0) { return 0; }
+    var before = gscroll();
+    gscroll_by(0 - px_delta * GPTR_WHEEL_GAIN);
+    if (gscroll() != before) { return 1; }
+    return 0;
+}
+# gpointer_pump: drain the window's pointer ring — every queued click and wheel step through the two handlers
+# above (drop == 0), or discarded (drop == 1: mid-turn, under the modal, or while the drawn frame is stale — a
+# click resolves against the frame as LAST DRAWN, so a record that arrives with a pending rebuild would be
+# misplaced, never just late). ONE view-changing click per batch: after it the geometry record is stale until the
+# repaint, so a second press in the same drain is dropped, not misplaced. Returns 1 when the view changed.
+# The present loop's seam (gpresent.cyr); pure over the ring + the GUI state, so the suite drives it.
+fn gpointer_pump(drop) {
+    var rec[32];
+    var changed = 0;
+    var clicked = 0;
+    while (gwl_wl_pop_ptr(&rec) == 1) {
+        if (drop == 0) {
+            var kind = load64(&rec);
+            var px = load64(&rec + 8);
+            var py = load64(&rec + 16);
+            var arg = load64(&rec + 24);
+            if (kind == GWL_PTR_BUTTON) { if (clicked == 0) { if (gpointer_click(px, py, arg) == 1) { changed = 1; clicked = 1; } } }
+            if (kind == GWL_PTR_AXIS) { if (gpointer_wheel(px, py, arg) == 1) { changed = 1; } }
+        }
+    }
+    return changed;
+}
+
 fn gframe_build(w, h) {
     var cmds = gd_list_new();
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
+    _gl_w = w; _gl_h = h; _gl_conv_w = 0; _gl_tree_w = 0; _gl_strip_top = 0;   # 0.49.0: the geometry record
     # status strip — the BOTTOM band since 0.45.0, directly under the composer's frame, as the TUI's bar sits under
     # its input. Hidden via Ctrl+S (0.32.x) only the strip goes: the frame belongs to the composer, so its lower rule
     # moves to the window's bottom edge (the TUI's Ctrl-G frees only the bar's row the same way). Full width.
@@ -718,6 +827,7 @@ fn gframe_build(w, h) {
         var strip_top = h - GFRAME_STRIP_H;
         gstatus_build(cmds, 0, strip_top, w, GFRAME_STRIP_H);                # status strip (the view-model)
         frame_bot = strip_top - 1;
+        _gl_strip_top = strip_top;
     }
     # body band: an optional file-tree pane (left) + the conversation feed (right); the composer + status strip span
     # the full width. The tree hides on a narrow window (gtree_w -> 0) OR via Ctrl+B (0.32.x), giving the feed the
@@ -726,6 +836,7 @@ fn gframe_build(w, h) {
     var rule_y = comp_top - 1;                                               # 0.45.1: the frame's upper rule, directly above it
     var body_h = rule_y - body_top;
     if (body_h < 0) { body_h = 0; }
+    _gl_body_top = body_top; _gl_body_h = body_h; _gl_comp_top = comp_top; _gl_frame_bot = frame_bot;
     # left band, accumulating: an optional conversation sidebar (0.33.6), then an optional file-tree pane, then the
     # feed takes the rest. Each left pane is followed by a 1px vertical rule. Both hide on a narrow window OR via
     # their Ctrl chord (conv=Ctrl+K default-hidden, tree=Ctrl+B), giving the feed more/all of the body.
@@ -735,6 +846,7 @@ fn gframe_build(w, h) {
     if (cw > 0) {
         gconv_build(cmds, feed_x, body_top, cw, body_h);
         gd_push_rect(cmds, feed_x + cw, body_top, 1, body_h, _ui_rgb(ROLE_FAINT));
+        _gl_conv_x = feed_x; _gl_conv_w = cw;
         feed_x = feed_x + cw + 1;
     }
     var tw = 0;
@@ -742,8 +854,10 @@ fn gframe_build(w, h) {
     if (tw > 0) {
         gtree_build(cmds, feed_x, body_top, tw, body_h);
         gd_push_rect(cmds, feed_x + tw, body_top, 1, body_h, _ui_rgb(ROLE_FAINT));   # vertical rule between tree + feed
+        _gl_tree_x = feed_x; _gl_tree_w = tw;
         feed_x = feed_x + tw + 1;
     }
+    _gl_feed_x = feed_x; _gl_feed_w = w - feed_x;
     gfeed_build(cmds, feed_x, body_top, w - feed_x, body_h);
     gd_push_rect(cmds, 0, rule_y, w, 1, _ui_rgb(ROLE_FAINT));                 # the frame's upper rule
     gd_push_rect(cmds, 0, frame_bot, w, 1, _ui_rgb(ROLE_FAINT));              # the frame's lower rule (right over the strip when shown)

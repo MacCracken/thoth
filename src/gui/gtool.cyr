@@ -10,6 +10,8 @@
 # chronologically correct without a per-message turn tag; older turns show no cards (honest — roundlog itself
 # retains only the last ROUNDLOG_CAP rounds and elides the rest, announced by /audit, never faked). Richer
 # content (tool args, colored diffs) and per-turn interleave are follow-ups; both need more than roundlog keeps.
+# (0.30.19 added the per-turn interleave; 0.49.0 the SUMMARY card at the bottom of this file — the message's own
+# persisted calls once the ring no longer holds its rounds, and for a resumed reply.)
 #
 # PURE + headless-testable: builds draw-commands over the tested pipeline (gdraw + graster), reads only the
 # roundlog producer + session_turns + the shared _ui_rgb palette; no display, no producer of its own. Like the
@@ -183,3 +185,62 @@ fn gtool_build_turn(cmds, x, y, w, turn) {
 # gtool_build: the CURRENT turn's cards — used for the failed-turn notice (its assistant was popped, so the
 # per-assistant feed path can't place its cards). Interactive success uses gtool_build_turn per message.
 fn gtool_build(cmds, x, y, w) { return gtool_build_turn(cmds, x, y, w, session_turns()); }
+
+# --- the SUMMARY card (0.49.0, F4) ---------------------------------------------------------------------------
+# A resumed message carries turn 0 and its rounds belong to a prior session's roundlog — so gtool_build_turn draws
+# nothing for it, although the reply's tool calls DID round-trip (0.33.5: {kind, ok, name, args} per call on the
+# message, session_history_tool_*). The same happens to a LIVE reply once sixteen later rounds age its rounds out
+# of the ring. This draws the message's own persisted set as ONE card, an honest SUBSET of the live cards: the
+# calls with their name, verdict and args; no round grouping, no ms / bytes, no diff (none of those is in the
+# store; the store also keeps at most MSG_TOOL_MAX calls), and the header says "(summary)" so the difference is
+# visible, never faked. gtool_build_msg draws the live cards when the ring still has the turn's rounds, else this.
+fn _gtool_summary_card(cmds, x, y, w, i) {
+    var nc = session_history_tool_count(i);
+    var rows = 1 + nc;                                                    # header + one line per call
+    var h = GTOOL_PAD * 2 + rows * GTOOL_LH;
+    if (cmds != 0) {
+        gd_push_border(cmds, x, y, w, h, _ui_rgb(ROLE_FAINT));
+        gd_push_rect(cmds, x, y, 3, h, _ui_rgb(ROLE_ACCENT_DIM));
+        var hy = y + GTOOL_PAD;
+        var pen = _gtool_txt(cmds, x + GTOOL_PAD, hy, _ui_rgb(ROLE_MUTED), "tool calls ");
+        _gtool_txt(cmds, pen, hy, _ui_rgb(ROLE_FAINT), "(summary)");
+        var ci = 0;
+        var ly = hy + GTOOL_LH;
+        while (ci < nc) {
+            var cx = x + GTOOL_PAD + GTOOL_IND;
+            var kind = session_history_tool_kind(i, ci);
+            var ok = session_history_tool_ok(i, ci);
+            var nm = session_history_tool_name(i, ci);
+            if (nm == 0) { nm = "(unnamed)"; }
+            var p2 = _gtool_txt(cmds, cx, ly, _ui_rgb(ROLE_ACCENT), nm);
+            p2 = _gtool_txt(cmds, p2 + GR_GLYPH_W, ly, _gtool_status_color(kind, ok), _gtool_status_word(kind, ok));
+            var ax = p2 + GR_GLYPH_W;
+            var maxc = ((x + w - GTOOL_PAD) - ax) / GR_GLYPH_W;
+            var aq = session_history_tool_args(i, ci);
+            if (aq != 0) { if ((load8(aq) != 0) && (maxc >= 1)) { gd_push_text(cmds, ax, ly, _ui_rgb(ROLE_FAINT), aq, maxc); } }
+            ly = ly + GTOOL_LH;
+            ci = ci + 1;
+        }
+    }
+    return y + h;
+}
+# gtool_build_msg: the tool block for message `i` — the live per-turn cards when this session's roundlog still holds
+# the message's rounds (its turn tag > 0 and not aged out), else the summary card from the message's own persisted
+# calls (or y unchanged when it has none — a plain Q&A reply, or a live reply whose rounds aged out before the
+# reply was appended... which cannot happen: the attach runs at finalize). cmds == 0 => measure only; both
+# branches measure == draw, and the choice reads only stable state.
+fn gtool_build_msg(cmds, x, y, w, i) {
+    if (i < 0) { return y; }
+    if (i >= session_history_len()) { return y; }
+    var turn = session_history_turn(i);
+    if (turn > 0) { if (_gtool_turn_in_ring(turn) == 1) { return gtool_build_turn(cmds, x, y, w, turn); } }
+    if (session_history_tool_count(i) <= 0) { return y; }
+    return _gtool_summary_card(cmds, x, y, w, i);
+}
+# _gtool_turn_in_ring: 1 when the roundlog still keeps at least one round of `turn`. PURE.
+fn _gtool_turn_in_ring(turn) {
+    var cnt = roundlog_count();
+    var i = 0;
+    while (i < cnt) { if (roundlog_round_turn(i) == turn) { return 1; } i = i + 1; }
+    return 0;
+}

@@ -1100,6 +1100,394 @@ fn test_gui_reason_resume() {
     roundlog_reset(); session_history_clear(); session_reset();
     return 0;
 }
+# GUI resumed tool cards + citation rows (0.49.0, F4): a resumed reply carries turn 0 and no roundlog/memlog
+# round, but its tool calls and cited sources round-tripped on the message (0.33.4/0.33.5) — the feed draws them
+# as an honest subset (one "(summary)" card: name, verdict, args; one "recalled:" row, no verdict), while a live
+# reply (turn > 0) keeps the richer per-round cards and the two-row strip.
+fn test_gui_resumed_cards() {
+    test_group("GUI resumed tool cards + citation rows (0.49.0, F4)");
+    var path = "build/.thoth_gui_resumed_cards.tmp";
+    roundlog_reset(); memlog_reset(); session_reset(); session_history_clear();
+    var t1 = session_bump_turn();
+    session_history_append("user", "list the repo", 13);
+    session_history_append("assistant", "Here it is.", 11);
+    session_history_tool_last_add(RL_ALLOWED, 1, "list_dir", "path=.");
+    session_history_tool_last_add(RL_ALLOWED, 0, "read_file", "path=missing.txt");
+    session_history_tool_last_add(RL_DENIED, 0, "shell", "rm -rf /");
+    session_history_cite_last_add("Design Notes");
+    session_history_cite_last_add("Auth Flow");
+    var t2 = session_bump_turn();
+    session_history_append("user", "thanks", 6);
+    session_history_append("assistant", "Welcome.", 8);                     # no tools, no citations
+    assert_eq(_sess_write_file(path), 0, "premise: the store writes");
+    session_reset(); session_history_clear();
+    assert_eq(_sess_load_file(path), 4, "premise: four messages reload");
+    assert_eq(session_history_turn(1), 0, "premise: the resumed reply carries turn 0");
+    assert_eq(session_history_tool_count(1), 3, "premise: its three calls round-tripped");
+    assert_eq(session_history_citation_count(1), 2, "premise: its two citations round-tripped");
+    # the resumed card
+    var ty = gtool_build_msg(0, 0, 0, 600, 1);
+    assert(ty > 0, "the resumed reply gets a tool card");
+    assert_eq(ty, GTOOL_PAD * 2 + 4 * GTOOL_LH, "...one header row + three call rows");
+    var cmds = gd_list_new();
+    assert_eq(gtool_build_msg(cmds, 0, 0, 600, 1), ty, "resumed card: measure height == draw height (parity)");
+    assert_eq(_t_gd_text_count(cmds, "(summary)"), 1, "...the header says it is a summary");
+    assert_eq(_t_gd_text_count(cmds, "list_dir"), 1, "...names the calls");
+    assert_eq(_t_gd_text_count(cmds, "read_file"), 1, "...all of them");
+    assert_eq(_t_gd_text_count(cmds, "shell"), 1, "...including the denied one");
+    assert_eq(_t_gd_text_count(cmds, "ok"), 1, "...one ok verdict");
+    assert_eq(_t_gd_text_count(cmds, "err"), 1, "...one err verdict");
+    assert_eq(_t_gd_text_count(cmds, "deny"), 1, "...one deny verdict");
+    assert_eq(_t_gd_text_count(cmds, "path=missing.txt"), 1, "...with the args");
+    assert_eq(_t_gd_text_count(cmds, "ms/"), 0, "...and no telemetry the store does not hold");
+    assert_eq(_t_gd_text_count(cmds, "tool round"), 0, "...nor a round number");
+    assert_eq(gtool_build_msg(0, 0, 50, 600, 3), 50, "the resumed reply without calls gets no card");
+    assert_eq(gtool_build_msg(0, 0, 50, 600, 0), 50, "a user message gets none");
+    assert_eq(gtool_build_msg(0, 0, 50, 600, 9), 50, "an index past the history gets none");
+    # the resumed citation row
+    var my = gmem_build_msg(0, 0, 0, 600, 1);
+    assert_eq(my, GTOOL_LH, "the resumed reply gets a one-row citation strip (no verdict row: not in the store)");
+    cmds = gd_list_new();
+    assert_eq(gmem_build_msg(cmds, 0, 0, 600, 1), my, "resumed strip: measure == draw");
+    assert_eq(_t_gd_text_count(cmds, "recalled: "), 1, "...the recalled label");
+    assert_eq(_t_gd_text_count(cmds, "Design Notes"), 1, "...the first title");
+    assert_eq(_t_gd_text_count(cmds, "Auth Flow"), 1, "...the second");
+    assert_eq(_t_gd_text_count(cmds, "grounding"), 0, "...and no verdict word");
+    assert_eq(gmem_build_msg(0, 0, 50, 600, 3), 50, "the resumed reply without citations gets no strip");
+    # the whole flow is taller with them than without
+    var withc = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    var ts = load64(vec_get(_sess_hist_vec(), 1) + 40);
+    var cs = load64(vec_get(_sess_hist_vec(), 1) + 32);
+    store64(vec_get(_sess_hist_vec(), 1) + 40, 0); store64(vec_get(_sess_hist_vec(), 1) + 32, 0);
+    var without = _gfeed_flow(0, 14, 0, 560, session_history_len());
+    store64(vec_get(_sess_hist_vec(), 1) + 40, ts); store64(vec_get(_sess_hist_vec(), 1) + 32, cs);
+    assert(withc > without, "the resumed feed is taller with the card + strip than without");
+    cmds = gd_list_new();
+    assert_eq(_gfeed_flow(cmds, 14, 0, 560, session_history_len()), withc, "...measure == draw through the flow");
+    # a LIVE reply (turn > 0) keeps the roundlog path: its persisted set is not drawn twice
+    var t3 = session_bump_turn();
+    roundlog_open(t3, 1);
+    roundlog_add_call("search", RL_ALLOWED, 1, 12, 300, "q=owl");
+    session_history_append("user", "find owls", 9);
+    session_history_append("assistant", "Found.", 6);
+    roundlog_attach_calls_to_last(t3);
+    var li = session_history_len() - 1;
+    assert(session_history_turn(li) > 0, "premise: the live reply carries its turn");
+    assert_eq(session_history_tool_count(li), 1, "premise: its call is on the message too");
+    cmds = gd_list_new();
+    var ly = gtool_build_msg(cmds, 0, 0, 600, li);
+    assert(ly > 0, "the live reply gets a card");
+    assert_eq(_t_gd_text_count(cmds, "tool round"), 1, "...the live round card (with its round number)");
+    assert_eq(_t_gd_text_count(cmds, "(summary)"), 0, "...not the summary");
+    assert_eq(_t_gd_text_count(cmds, "ms/"), 1, "...with the telemetry only the roundlog holds");
+    # the memory strip of a LIVE reply: the two-row memlog strip (sources + the coloured verdict) while the memlog
+    # holds the turn — a slot written white-box, since memlog_record's citations_* live in memory.cyr, not here
+    session_history_cite_last_add("Owl Notes");
+    _memlog_init();
+    var ms = _memlog_slot(_memlog_total); _memlog_total = _memlog_total + 1;
+    store64(ms, t3); store64(ms + 8, 1); store64(ms + 16, 1); _ml_copy_title(ms + 24, "Owl Notes");
+    assert(memlog_find(t3) != 0, "premise: the memlog holds the live turn");
+    cmds = gd_list_new();
+    var lmy = gmem_build_msg(cmds, 0, 0, 600, li);
+    assert_eq(lmy, 2 * GTOOL_LH, "a live reply with a memlog entry gets the two-row strip");
+    assert_eq(_t_gd_text_count(cmds, "grounding: "), 1, "...with the verdict row");
+    assert_eq(_t_gd_text_count(cmds, "grounded"), 1, "...grounded");
+    memlog_reset();
+    cmds = gd_list_new();
+    assert_eq(gmem_build_msg(cmds, 0, 0, 600, li), GTOOL_LH, "...once the memlog forgets the turn, the one-row summary from its citations");
+    assert_eq(_t_gd_text_count(cmds, "Owl Notes"), 1, "...naming the source");
+    assert_eq(_t_gd_text_count(cmds, "grounding"), 0, "...and no verdict (not in the store)");
+    # ...until its rounds age out of the ring: then the summary card takes over (the persisted set outlives the ring)
+    var k = 0;
+    while (k < ROUNDLOG_CAP) { roundlog_open(t3 + 100 + k, 1); roundlog_add_call("x", RL_ALLOWED, 1, 1, 1, ""); k = k + 1; }
+    assert_eq(_gtool_turn_in_ring(t3), 0, "premise: sixteen later rounds aged the live turn out");
+    cmds = gd_list_new();
+    var ay = gtool_build_msg(cmds, 0, 0, 600, li);
+    assert(ay > 0, "an aged-out live reply still gets a card");
+    assert_eq(_t_gd_text_count(cmds, "(summary)"), 1, "...the summary one, from its own record");
+    assert_eq(_t_gd_text_count(cmds, "search"), 1, "...naming its call");
+    assert_eq(_t_gd_text_count(cmds, "ms/"), 0, "...without the telemetry the ring no longer has");
+    xunlink(path);
+    roundlog_reset(); memlog_reset(); session_history_clear(); session_reset();
+    return 0;
+}
+
+# GUI pointer plumbing (0.49.0, F4): the frame records its rectangles as it lays them out, gframe_hit resolves a
+# surface point to a pane by those same numbers, the sidebar / tree resolve a row by the scroll origin they drew
+# with, and gpointer_click / gpointer_wheel act on the GUI state exactly as the keyboard paths do. The wire half —
+# wl_pointer events decoded from bytes — is fed wire-shaped arguments straight into gwl_wl__ptr_decode.
+fn test_gui_pointer() {
+    test_group("GUI pointer: hit-test, click-to-switch, wheel (0.49.0, F4)");
+    # --- the wire decoder: fixed 24.8, enter/motion/button/axis, the ring ---
+    assert_eq(gwl_wl_fixed_px(256 * 100), 100, "wl_fixed 100.0 -> 100 px");
+    assert_eq(gwl_wl_fixed_px(256 * 100 + 200), 100, "wl_fixed 100.78 -> 100 px (floored)");
+    assert_eq(gwl_wl_fixed_px(0xFFFFFF00), 0, "wl_fixed -1.0 -> 0 (a coordinate off the surface clamps to its edge)");
+    var args[32];
+    gwl_wl_pq_head = 0; gwl_wl_pq_tail = 0; gwl_wl_ptr_in = 0;
+    store32(&args, 77); store32(&args + 4, 9); store32(&args + 8, 256 * 300); store32(&args + 12, 256 * 40);   # enter(serial, surface, sx, sy)
+    assert_eq(gwl_wl__ptr_decode(GWL_EV_PTR_ENTER, &args), 77, "enter returns its serial (set_cursor needs it)");
+    assert_eq(gwl_wl_ptr_in, 1, "...and the pointer is in");
+    assert_eq(gwl_wl_ptr_x, 300, "...at x 300");
+    assert_eq(gwl_wl_ptr_y, 40, "...y 40");
+    assert_eq(gwl_wl_ptr_pending(), 0, "an enter queues nothing (hover is not an event the app wants)");
+    store32(&args, 5); store32(&args + 4, 256 * 310 + 128); store32(&args + 8, 256 * 45);                        # motion(time, sx, sy)
+    gwl_wl__ptr_decode(GWL_EV_PTR_MOTION, &args);
+    assert_eq(gwl_wl_ptr_x, 310, "motion moves the live position (310.5 -> 310)");
+    assert_eq(gwl_wl_ptr_pending(), 0, "...and queues nothing");
+    store32(&args, 78); store32(&args + 4, 6); store32(&args + 8, 272); store32(&args + 12, 1);                  # button(serial, time, BTN_LEFT, pressed)
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);
+    store32(&args + 12, 0);                                                                                       # ...released
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);
+    gwl_wl_axis_acc = 0;
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 256 * 15);                                       # axis(time, vertical, +15.0)
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    store32(&args + 4, 1);                                                                                        # a horizontal axis: ignored
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    store32(&args, 0); store32(&args + 4, 0); store32(&args + 8, 0xFFFFF100);                                     # axis vertical -15.0
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    store32(&args + 8, 100);                                                                                      # a touchpad's 0.39 px: accumulates, no record yet
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                                                                   # 300/256 -> one whole px, 44 left
+    var rec[32];
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "the press is queued");
+    assert_eq(load64(&rec), GWL_PTR_BUTTON, "...as a BUTTON record");
+    assert_eq(load64(&rec + 8), 310, "...at the position of the last motion (x)");
+    assert_eq(load64(&rec + 16), 45, "...(y)");
+    assert_eq(load64(&rec + 24), 272, "...carrying BTN_LEFT");
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "the wheel step is queued (the release was not)");
+    assert_eq(load64(&rec), GWL_PTR_AXIS, "...as an AXIS record");
+    assert_eq(load64(&rec + 24), 15, "...+15 px");
+    assert_eq(load64(&rec + 8), 310, "...at the pointer's x (the wheel resolves its pane from it)");
+    assert_eq(load64(&rec + 16), 45, "...and y");
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "the negative wheel step is queued (the horizontal one was not)");
+    assert_eq(load64(&rec + 24), 0 - 15, "...-15 px");
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "three sub-pixel touchpad steps add up to one record");
+    assert_eq(load64(&rec + 24), 1, "...of 1 px");
+    assert_eq(gwl_wl_axis_acc, 44, "...with the fraction carried (300 - 256)");
+    assert_eq(load64(&rec + 8), 310, "...at the pointer's position too");
+    assert_eq(gwl_wl_pop_ptr(&rec), 0, "the ring is drained");
+    # the ring holds 31 records and drops the rest; the head wraps
+    var wi = 0;
+    store32(&args, 80); store32(&args + 4, 6); store32(&args + 8, 272); store32(&args + 12, 1);
+    while (wi < 40) { gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args); wi = wi + 1; }
+    var wn = 0;
+    while (gwl_wl_pop_ptr(&rec) == 1) { wn = wn + 1; }
+    assert_eq(wn, 31, "forty presses: the ring keeps 31 and drops the rest (never past its slots)");
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "...and takes records again after the wrap");
+    assert_eq(gwl_wl_pop_ptr(&rec), 0, "...one");
+    # a short frame (a size below the event's argument bytes) is dropped, never decoded past its end
+    assert_eq(gwl_wl__ptr_need(GWL_EV_PTR_ENTER), 16, "enter carries 16 argument bytes");
+    assert_eq(gwl_wl__ptr_need(GWL_EV_PTR_BUTTON), 16, "button 16");
+    assert_eq(gwl_wl__ptr_need(GWL_EV_PTR_AXIS), 12, "axis 12");
+    assert_eq(gwl_wl__ptr_need(GWL_EV_PTR_LEAVE), 8, "leave 8");
+    gwl_wl_ptr_oid = 9; gwl_wl_rlen = 0;
+    gwl_wire_hdr_put(&gwl_wl_rbuf, 9, GWL_EV_PTR_BUTTON, 8);                     # a button frame declaring NO arguments
+    store32(&gwl_wl_rbuf + 8, 0); store32(&gwl_wl_rbuf + 12, 0); store32(&gwl_wl_rbuf + 16, 272); store32(&gwl_wl_rbuf + 20, 1);   # ...followed by press-shaped bytes
+    gwl_wl__ptr(0, GWL_EV_PTR_BUTTON);
+    assert_eq(gwl_wl_pop_ptr(&rec), 0, "a size-8 button frame queues nothing (the bytes after it are not its arguments)");
+    gwl_wire_hdr_put(&gwl_wl_rbuf, 9, GWL_EV_PTR_BUTTON, 24);
+    gwl_wl__ptr(0, GWL_EV_PTR_BUTTON);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "...a full-size one does");
+    gwl_wl_ptr_oid = 0;
+    # the set_cursor request on the wire (composed into the send scratch; the socket is closed here, so the send
+    # fails harmlessly): 24 bytes to the wl_pointer, opcode 0, serial, our surface, hotspot 0,0
+    gwl_wl_ptr_oid = 5; gwl_wl_cur_surf = 7; gwl_wl_cur_buf = 8; gwl_wl_cur_committed = 1;
+    gwl_wl__cursor_show(77);
+    assert_eq(gwl_wire_msg_id(&gwl_wl_sbuf), 5, "set_cursor goes to the wl_pointer object");
+    assert_eq(gwl_wire_msg_op(&gwl_wl_sbuf), GWL_OP_PTR_SET_CURSOR, "...opcode 0");
+    assert_eq(gwl_wire_msg_size(&gwl_wl_sbuf), 24, "...24 bytes: header + serial + surface + two hotspot ints");
+    assert_eq(load32(&gwl_wl_sbuf + 8), 77, "...the enter's serial");
+    assert_eq(load32(&gwl_wl_sbuf + 12), 7, "...our cursor surface");
+    assert_eq(load32(&gwl_wl_sbuf + 16), 0, "...hotspot x 0");
+    assert_eq(load32(&gwl_wl_sbuf + 20), 0, "...hotspot y 0 (the arrow's tip)");
+    gwl_wl_ptr_oid = 0; gwl_wl_cur_surf = 0; gwl_wl_cur_buf = 0; gwl_wl_cur_committed = 0;
+    store32(&args, 79); store32(&args + 4, 9);
+    gwl_wl__ptr_decode(GWL_EV_PTR_LEAVE, &args);
+    assert_eq(gwl_wl_ptr_in, 0, "leave takes the pointer out");
+    # the cursor bitmap: a 12x19 ARGB arrow, opaque ink on a transparent field
+    var cur = alloc(GWL_CUR_W * GWL_CUR_H * 4);
+    gwl_wl__cursor_paint(cur);
+    assert_eq(load32(cur) & 0xFFFFFFFF, 0xFF000000, "the hotspot pixel (0,0) is opaque black");
+    assert_eq(load32(cur + (GWL_CUR_W - 1) * 4) & 0xFFFFFFFF, 0, "the top-right pixel is transparent");
+    assert_eq(load32(cur + (5 * GWL_CUR_W + 2) * 4) & 0xFFFFFFFF, 0xFFFFFFFF, "an interior pixel is opaque white");
+
+    # --- the frame's hit-test over a 960x600 window with the sidebar + tree shown ---
+    session_reset(); session_history_clear();
+    session_history_append("user", "first", 5); session_history_append("assistant", "one", 3);
+    var c1 = conv_new();
+    session_history_append("user", "second", 6); session_history_append("assistant", "two", 3);
+    var c2 = conv_new();
+    session_history_append("user", "third", 5); session_history_append("assistant", "three", 5);
+    conv_switch(0);
+    if (gconv_hidden() == 1) { gconv_toggle_hidden(); }
+    if (gtree_hidden() == 1) { gtree_toggle_hidden(); }
+    if (gstatus_hidden() == 1) { gstatus_toggle_hidden(); }
+    ftree_init(); ftree_reset(); _ftree_set_cwd("/repo");
+    _ftree_append("src", 1, 0); _ftree_append("VERSION", 0, 0); _ftree_append("README.md", 0, 0);
+    gfocus_set(GFOCUS_COMPOSER);
+    conv_switch(1); session_history_append("user", "more", 4); session_history_append("assistant", "four", 4); conv_switch(0);
+    var fr = gframe_build(960, 600);
+    # (0.49.0: the "<n> msg" sublines used to share ONE scratch buffer — every row rastered the LAST row's count)
+    assert_eq(_t_gd_text_count(fr, "4 msg"), 1, "the sidebar's sublines carry each row's own count: one 4-message conversation");
+    assert_eq(_t_gd_text_count(fr, "2 msg"), 2, "...and two 2-message ones");
+    assert_eq(gframe_hit(10, 100), GHIT_CONV, "a point in the left band is the sidebar");
+    assert_eq(gframe_hit(GCONV_PANE_W + 1 + 10, 100), GHIT_TREE, "past the sidebar + its rule: the tree");
+    assert_eq(gframe_hit(GCONV_PANE_W + 1 + GTREE_PANE_W + 1 + 10, 100), GHIT_FEED, "past the tree + its rule: the feed");
+    assert_eq(gframe_hit(GCONV_PANE_W, 100), GHIT_NONE, "the 1px rule between panes is nobody's");
+    assert_eq(gframe_hit(500, 600 - GFRAME_STRIP_H + 5), GHIT_STRIP, "the bottom band is the status strip");
+    assert_eq(gframe_hit(500, 600 - GFRAME_STRIP_H - 1 - 10), GHIT_COMPOSER, "just above the strip: the composer");
+    assert_eq(gframe_hit(0 - 1, 100), GHIT_NONE, "off the surface: nothing");
+    assert_eq(gframe_hit(960, 100), GHIT_NONE, "...at the right edge too");
+    gconv_toggle_hidden();                                            # hide the sidebar: the tree moves to x 0
+    gframe_build(960, 600);
+    assert_eq(gframe_hit(10, 100), GHIT_TREE, "with the sidebar hidden the tree is the left band");
+    assert_eq(gframe_hit(GTREE_PANE_W + 1 + 10, 100), GHIT_FEED, "...and the feed starts right after the tree's rule");
+    gconv_toggle_hidden();
+    gtree_toggle_hidden();                                            # hide the tree: the feed starts after the sidebar
+    gframe_build(960, 600);
+    assert_eq(gframe_hit(GCONV_PANE_W + 1 + 10, 100), GHIT_FEED, "with the tree hidden the feed starts right after the sidebar's rule (the tree's stale rectangle is zeroed per build)");
+    gtree_toggle_hidden();
+    gstatus_toggle_hidden();                                          # hide the strip: the composer sits on the bottom edge
+    gframe_build(960, 600);
+    assert_eq(gframe_hit(500, 600 - 5), GHIT_COMPOSER, "with the strip hidden the bottom band is the composer");
+    assert_eq(gframe_hit(500, 600 - GFRAME_STRIP_H + 5), GHIT_COMPOSER, "...where the strip used to be too");
+    gstatus_toggle_hidden();
+    gframe_build(960, 600);
+    # --- rows: the sidebar's and the tree's, per the scroll origin they drew with ---
+    assert_eq(gconv_row_at(0), 0 - 1, "the sidebar header is no row");
+    var r0 = GCONV_PAD + GCONV_ROW_H + 10;                            # the first row's highlight rect
+    assert_eq(gconv_row_at(r0), 0, "the first row");
+    assert_eq(gconv_row_at(r0 + GCONV_ROW_H - 1), 0, "...to its last pixel");
+    assert_eq(gconv_row_at(r0 + GCONV_ROW_H), 1, "the second row");
+    assert_eq(gconv_row_at(r0 + 2 * GCONV_ROW_H + 5), 2, "the third");
+    assert_eq(gconv_row_at(r0 + 3 * GCONV_ROW_H + 5), 0 - 1, "past the three conversations: nothing");
+    var t0 = GTREE_PAD + GTREE_ROW_H + 6 - 1;
+    assert_eq(gtree_row_at(t0), 0, "the tree's first row");
+    assert_eq(gtree_row_at(t0 + GTREE_ROW_H * 2 + 3), 2, "...its third");
+    assert_eq(gtree_row_at(t0 + GTREE_ROW_H * 3 + 3), 0 - 1, "...past the last: nothing");
+    # --- clicks ---
+    assert_eq(conv_active(), 0, "premise: conversation 0 is active");
+    assert_eq(gpointer_click(10, r0 + 2 * GCONV_ROW_H + 5, 273), 0, "a right click does nothing");
+    assert_eq(conv_active(), 0, "...still conversation 0");
+    gscroll_by(40); gfocus_set(GFOCUS_TREE);
+    assert_eq(gpointer_click(10, r0 + 2 * GCONV_ROW_H + 5, GPTR_BTN_LEFT), 1, "a left click on the third sidebar row changes the view");
+    assert_eq(conv_active(), 2, "...switching to conversation 2");
+    assert_eq(gconv_sel(), 2, "...selecting its row");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "...and focus goes to the composer (the keyboard's Enter does the same)");
+    assert_eq(gscroll(), 0, "...and the feed snaps to the latest (as Enter does)");
+    assert_eq(streq(session_history_content(0), "third"), 1, "...the feed now shows that conversation");
+    hoosh_compact_floor_set(3);
+    gscroll_by(40);
+    assert_eq(gpointer_click(10, r0 + 2 * GCONV_ROW_H + 5, GPTR_BTN_LEFT), 1, "a click on the ACTIVE row still selects + focuses");
+    assert_eq(hoosh_compact_floor(), 3, "...but does not re-switch: the /compact floor survives (conv_switch to itself is a no-op)");
+    assert_eq(gscroll(), 40, "...and the scroll position is kept");
+    hoosh_compact_floor_clear(); gscroll_reset();
+    assert_eq(gpointer_click(10, 0, GPTR_BTN_LEFT), 0, "a click on the sidebar header does nothing");
+    gconv_toggle_hidden();                                            # the sidebar hidden since the frame was drawn (its chord this batch)
+    assert_eq(gpointer_click(10, r0 + 5, GPTR_BTN_LEFT), 0, "a click in a hidden pane's stale rectangle does nothing (focus never lands on a hidden pane)");
+    gconv_toggle_hidden();
+    var tx = GCONV_PANE_W + 1 + 10;
+    assert_eq(gpointer_click(tx, t0 + GTREE_ROW_H + 3, GPTR_BTN_LEFT), 1, "a click on a tree row changes the view");
+    assert_eq(ftree_sel(), 1, "...selecting VERSION");
+    assert_eq(gfocus(), GFOCUS_TREE, "...and focusing the tree");
+    gcomp_reset();
+    assert_eq(gpointer_click(tx, t0 + GTREE_ROW_H + 3, GPTR_BTN_LEFT), 1, "a second click on the selected file acts like Enter");
+    assert(gcomp_len() > 0, "...@mentioning it into the composer");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "...and handing focus back");
+    gcomp_reset();
+    assert_eq(gpointer_click(tx, t0 + GTREE_ROW_H + 3, GPTR_BTN_LEFT), 1, "a click on the selected row from the COMPOSER only focuses the tree again");
+    assert_eq(gcomp_len(), 0, "...no second @mention (the second-click rule needs the tree focused)");
+    assert_eq(gfocus(), GFOCUS_TREE, "...");
+    gtree_toggle_hidden();
+    assert_eq(gpointer_click(tx, t0 + GTREE_ROW_H + 3, GPTR_BTN_LEFT), 0, "a click in the hidden tree's stale rectangle does nothing");
+    gtree_toggle_hidden();
+    assert_eq(gpointer_click(tx, t0 + 3, GPTR_BTN_LEFT), 1, "a click on the dir row selects it");
+    gpointer_click(tx, t0 + 3, GPTR_BTN_LEFT);
+    assert_eq(ftree_exp(0), 1, "...a second click expands it");
+    gfocus_set(GFOCUS_TREE);
+    assert_eq(gpointer_click(700, 100, GPTR_BTN_LEFT), 1, "a click in the feed focuses the composer");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "...");
+    assert_eq(gpointer_click(700, 100, GPTR_BTN_LEFT), 0, "...a second one changes nothing");
+    assert_eq(gpointer_click(500, 600 - 5, GPTR_BTN_LEFT), 0, "a click on the status strip does nothing");
+    # --- the wheel: only over the feed, toward older on a push away, toward newer on a pull ---
+    gscroll_reset();
+    assert_eq(gpointer_wheel(10, 100, 0 - 15), 0, "a wheel step over the sidebar does not scroll the feed");
+    assert_eq(gpointer_wheel(700, 100, 0 - 15), 1, "a wheel step over the feed does");
+    assert_eq(gscroll(), 15 * GPTR_WHEEL_GAIN, "...a notch (15 px) scrolls 60 px = three lines toward the older messages");
+    assert_eq(gpointer_wheel(700, 100, 0 - 5), 1, "a touchpad's 5 px step scrolls proportionally");
+    assert_eq(gscroll(), 20 * GPTR_WHEEL_GAIN, "...20 px more");
+    assert_eq(gpointer_wheel(700, 100, 20), 1, "...and back");
+    assert_eq(gscroll(), 0, "...to the latest");
+    assert_eq(gpointer_wheel(700, 100, 15), 0, "at the latest a pull changes nothing");
+    assert_eq(gpointer_wheel(700, 100, 0), 0, "a zero step changes nothing");
+    # --- scrolled origins: a long sidebar and a long tree resolve rows by the origin they drew with, and the
+    #     origin is STICKY (a click selects by position; the rows must not move under the pointer) ---
+    var k = conv_count();
+    while (k < 20) { conv_new(); k = k + 1; }
+    conv_switch(0); _gconv_sel = 19; gconv_sel_clamp();
+    ftree_reset(); k = 0;
+    while (k < 30) { _ftree_append("f", 0, 0); k = k + 1; }
+    ftree_set_sel(29);
+    gframe_build(960, 600);
+    assert(_gconv_first_drawn > 0, "premise: twenty conversations with the last selected scroll the sidebar");
+    assert_eq(gconv_row_at(r0), _gconv_first_drawn, "the first drawn sidebar row is the scroll origin, not conversation 0");
+    assert(_gtree_first_drawn > 0, "premise: thirty nodes with the last selected scroll the tree");
+    assert_eq(gtree_row_at(t0), _gtree_first_drawn, "the first drawn tree row is its origin");
+    var f0 = _gtree_first_drawn;
+    assert_eq(gpointer_click(tx, t0 + 3, GPTR_BTN_LEFT), 1, "a click on the tree's first drawn row selects it");
+    assert_eq(ftree_sel(), f0, "...that node");
+    gframe_build(960, 600);
+    assert_eq(_gtree_first_drawn, f0, "...and the next frame keeps the origin (sticky): the rows did not move under the pointer");
+    assert_eq(gpointer_click(tx, t0 + 3, GPTR_BTN_LEFT), 1, "...so the second click lands on the same node");
+    assert_eq(ftree_sel(), f0, "...");
+    ftree_set_sel(0); gframe_build(960, 600);
+    assert_eq(_gtree_first_drawn, 0, "a selection outside the window recentres");
+    var c0 = _gconv_first_drawn;
+    assert_eq(gpointer_click(10, r0 + 5, GPTR_BTN_LEFT), 1, "a click on the sidebar's first drawn row switches to it");
+    assert_eq(conv_active(), c0, "...that conversation, not conversation 0");
+    gframe_build(960, 600);
+    assert_eq(_gconv_first_drawn, c0, "...and the sidebar keeps its origin");
+    # --- the pump: the loop's drain over the ring — everything applied, or everything discarded ---
+    gfocus_set(GFOCUS_TREE);
+    gwl_wl_pq_head = 0; gwl_wl_pq_tail = 0; gwl_wl_axis_acc = 0;
+    store32(&args, 5); store32(&args + 4, 256 * 700); store32(&args + 8, 256 * 100);
+    gwl_wl__ptr_decode(GWL_EV_PTR_MOTION, &args);                       # over the feed
+    store32(&args, 81); store32(&args + 4, 6); store32(&args + 8, 272); store32(&args + 12, 1);
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);                       # a click on the feed -> focus the composer
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFF100);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                         # a wheel step toward older
+    assert_eq(gpointer_pump(1), 0, "a discarding pump drains the ring and changes nothing");
+    assert_eq(gfocus(), GFOCUS_TREE, "...focus untouched");
+    assert_eq(gscroll(), 0, "...scroll untouched");
+    assert_eq(gwl_wl_ptr_pending(), 0, "...the ring empty");
+    store32(&args, 81); store32(&args + 4, 6); store32(&args + 8, 272); store32(&args + 12, 1);
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFF100);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    assert_eq(gpointer_pump(0), 1, "an applying pump changes the view");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "...the click focused the composer");
+    assert_eq(gscroll(), 60, "...the wheel step scrolled three lines toward older");
+    assert_eq(gwl_wl_ptr_pending(), 0, "...and the ring is empty");
+    # one view-changing click per batch: a second press in the same drain is dropped
+    gfocus_set(GFOCUS_TREE); gscroll_reset();
+    store32(&args, 82); store32(&args + 4, 6); store32(&args + 8, 272); store32(&args + 12, 1);
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);                       # click 1: feed -> focus composer
+    gwl_wl_ptr_x = tx; gwl_wl_ptr_y = t0 + 3;
+    gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);                       # click 2: a tree row — would focus the tree
+    assert_eq(gpointer_pump(0), 1, "two presses in one batch: the first applies");
+    assert_eq(gfocus(), GFOCUS_COMPOSER, "...the second is dropped (the frame is stale after the first)");
+    # restore the default layout + every seam this test touched
+    gcomp_reset(); gscroll_reset(); gfocus_set(GFOCUS_COMPOSER);
+    if (gconv_hidden() == 0) { gconv_toggle_hidden(); }
+    if (gtree_hidden() == 1) { gtree_toggle_hidden(); }
+    gwl_wl_axis_acc = 0; gwl_wl_pq_head = 0; gwl_wl_pq_tail = 0; gwl_wl_ptr_x = 0; gwl_wl_ptr_y = 0; gwl_wl_ptr_in = 0; gwl_wl_rlen = 0;
+    _gconv_sel = 0; _gconv_first_drawn = 0; _gconv_rows_drawn = 0; _gtree_first_drawn = 0; _gtree_rows_drawn = 0;
+    ftree_reset(); session_history_clear(); session_reset();
+    return 0;
+}
+
 # _t_gd_text_count: how many text commands of a draw list carry `needle`.
 fn _t_gd_text_count(cmds, needle) {
     var c = 0;

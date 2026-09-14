@@ -199,7 +199,8 @@ fn greet_build(up) {
         _greet_span(ROLE_FAINT, "config "); _greet_span(ROLE_FG, config_path_display(config_path()));
         if (config_global_path() != 0) { if (config_local_path() != 0) {
             _greet_span(ROLE_FAINT, " + "); _greet_span(ROLE_FG, config_path_display(config_global_path()));
-            _greet_span(ROLE_FAINT, " (local wins per key; /state shows both)");
+            _greet_row();                                # 0.49.0: the rule on its own row, so the box never wraps mid-parenthesis
+            _greet_span(ROLE_FAINT, "local wins per key; /state shows both");
         } }
     }
     if (config_source() == 3) {                     # 0.43.2: a session on the LEGACY ./thoth.cyml says so

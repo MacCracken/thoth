@@ -6,6 +6,12 @@ type: state
 
 # Documentation Health — thoth
 
+> **Touched at 0.49.0** (2026-09-13, not a full sweep): F4 updated `CHANGELOG.md`, `docs/development/state.md`
+> (version block, **Tests** counts), `docs/development/roadmap.md` (F4 → shipped with its residuals; the registry
+> gains the on-compositor pointer check; the minor candidates now start at 0.50.0), `docs/guides/getting-started.md`
+> (the GUI takes the mouse; summary cards), `README.md` (stamp + the sidebar clause) and this file. No ADR earned:
+> the pointer is one more input on the existing window seam, and the summary card is 0.33.5's persisted set drawn.
+>
 > **Touched at 0.48.0** (2026-09-13, not a full sweep): F3 updated `CHANGELOG.md`, `docs/development/state.md`
 > (version block, the **Session** bullet, **Tests** counts), `docs/development/roadmap.md` (F3 → shipped with its
 > residuals; the registry gains the GUI's unbound `[history].file` and the on-compositor fold check; the minor

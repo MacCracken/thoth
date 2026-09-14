@@ -274,24 +274,70 @@ fn test_greet() {
     assert(_frow > 0, "a store larger than the load buffer: its own red row");
     _tg_row_text(_frow, &_rt, 256);
     assert(streq(&_rt, "session file larger than thoth can load — resume disabled (nothing is written back)") == 1, "...saying nothing is written back");
-    # the session group sits AFTER the config group and its red warnings (which stay directly under the config row)
+    # the session group sits AFTER the config group and its red warnings (which stay directly under the config row —
+    # or under the two-layer rule row, 0.49.0: `local wins per key; /state shows both` on its own row, no parentheses)
     _sess_init_failed = 0; _sess_resumed = 3;
     var _un0 = _cfg_unknown_n;
     _cfg_unknown_n = 1;
     greet_build(1);
-    _r = 0; var _crow = 0 - 1; var _wrow = 0 - 1; _srow = 0 - 1;
+    _r = 0; var _crow = 0 - 1; var _wrow = 0 - 1; _srow = 0 - 1; var _lrow = 0 - 1;
     while (_r < greet_rows()) {
         if (_tg_row_has(_r, "config ") == 1) { _crow = _r; }
         if (_tg_row_has(_r, "config: ") == 1) { _wrow = _r; }
         if (_tg_row_has(_r, "session ") == 1) { _srow = _r; }
+        if (_tg_row_has(_r, "local wins per key; /state shows both") == 1) { _lrow = _r; }
         _r = _r + 1;
     }
     assert((_wrow > 0) && (_srow > 0), "premise: the config warning and the session row are both built");
-    if (_crow >= 0) { assert_eq(_wrow, _crow + 1, "the red config warning sits directly under the config row"); }
+    if (_crow >= 0) {
+        if (_lrow >= 0) {
+            assert_eq(_lrow, _crow + 1, "two layers: the rule sits on its own row directly under the config row");
+            assert_eq(greet_row_spans(_lrow), 1, "...one faint span, no parentheses");
+            assert_eq(greet_span_role(_lrow, 0), ROLE_FAINT, "...faint");
+            assert_eq(_wrow, _lrow + 1, "...and the red config warning directly under that");
+        } else { assert_eq(_wrow, _crow + 1, "the red config warning sits directly under the config row"); }
+    }
     else { assert(1, "(no config parsed in this process — the config row is absent, so only the order below is checked)"); }
     assert(_srow > _wrow, "...and the session row comes after the warning");
+    _r = 0; _hit = 0;
+    while (_r < greet_rows()) { if (_tg_row_has(_r, " (local wins per key; /state shows both)") == 1) { _hit = 1; } _r = _r + 1; }
+    assert_eq(_hit, 0, "the parenthesised form is gone");
     assert_eq(greet_row_spans(_srow - 1), 0, "...under its own open row");
     _cfg_unknown_n = _un0;
+    # the two-layer rule row, driven through the config seams (core.cyr's idiom) so it runs on every machine: a
+    # local layer over a global one -> `config <local> + <global>`, then `local wins per key; /state shows both`
+    # on the row under it, one faint span, no parentheses
+    var _gp = "/tmp/thoth_t_greet_global.cyml";
+    var _lp = "/tmp/thoth_t_greet_local.cyml";
+    var _ft = alloc(128);
+    var _fo = _append_cstr_cap(_ft, 0, 128, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\n");
+    file_write_all(_gp, _ft, _fo);
+    _fo = _append_cstr_cap(_ft, 0, 128, "[hoosh]\nmodel = \"m\"\n");
+    file_write_all(_lp, _ft, _fo);
+    _cfg_gpath_c = _gp; _cfg_gpath_done = 1;
+    _cfg_lpath_c = _lp; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    config_load();
+    assert_eq(config_parse_ok(), 1, "premise: the two fixture layers loaded");
+    assert((config_global_path() != 0) && (config_local_path() != 0), "premise: both layers are known");
+    greet_build(1);
+    _r = 0; _crow = 0 - 1; _lrow = 0 - 1;
+    while (_r < greet_rows()) {
+        if (_tg_row_has(_r, "config ") == 1) { _crow = _r; }
+        if (_tg_row_has(_r, "local wins per key; /state shows both") == 1) { _lrow = _r; }
+        _r = _r + 1;
+    }
+    assert(_crow >= 0, "two layers: the config row is built");
+    assert(_lrow >= 0, "...and the rule row");
+    assert_eq(_lrow, _crow + 1, "...directly under the config row (0.49.0: its own row, never a wrap mid-parenthesis)");
+    assert_eq(greet_row_spans(_lrow), 1, "...one span");
+    assert_eq(greet_span_role(_lrow, 0), ROLE_FAINT, "...faint");
+    _tg_row_text(_crow, &_rt, 256);
+    assert_eq(_t_count_sub(&_rt, strlen(&_rt), " + ", 3), 1, "...the config row names both layers with ` + `");
+    assert_eq(_t_count_sub(&_rt, strlen(&_rt), "(", 1), 0, "...and carries no parenthesised rule any more");
+    _cfg_gpath_c = 0; _cfg_gpath_done = 0; _cfg_lpath_c = 0; _cfg_lpath_done = 0; _cfg_lsource = 0; _cfg_path_c = 0;
+    config_load();
+    if (_cfg_parse_any == 0) { _cfg_hoosh_url = 0; _cfg_hoosh_model = 0; }   # no real layer (CI)
+    xunlink(_gp); xunlink(_lp);
     # the path is cleaned on its way into the box (the TUI paints greeting spans as raw bytes)
     _sess_path = "/home/some\x1b[7mone/.thoth_session"; _sess_resumed = 2;
     greet_build(1);

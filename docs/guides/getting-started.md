@@ -160,7 +160,11 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
   (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`) + the Wayland window seam
   (`gwindow`) + present loop (`gpresent`) + evdev input (`ginput`). Renders the same view-models as the line/TUI
   tiers, plus tool-call cards + colored diff cards, a per-turn memory/grounding strip (`gmem`), and a Ctrl+K
-  conversation sidebar (`gconv`) over the `conv_*` store.
+  conversation sidebar (`gconv`) over the `conv_*` store. Since 0.49.0 the window takes the mouse: a click on a
+  sidebar row switches the conversation, on a tree row selects it (a second click acts as Enter), on the feed or
+  composer focuses the composer; the wheel scrolls the feed (`gframe_hit` resolves a point by the rectangles the
+  frame was drawn with; `gwindow.cyr` binds `wl_pointer` and draws its own arrow cursor). A resumed reply's tool
+  calls and cited sources draw as a summary card / row from the message's persisted record.
 - `src/inhist.cyr` — the composer input-history recall ring + opt-in persistence (0.11.x).
 - `src/oneshot.cyr` — the one-shot / argv front-door (`thoth 'task'`, `--json`, `-o`, `--completion`, `--tier`).
 - `src/memory.cyr` — the memory seam: consumes **mneme** via daimon when hosted (`/remember`, semantic recall, citations, grounding, `/notes`), degrading to the local `.thoth/memory/` reader otherwise.

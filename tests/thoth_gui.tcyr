@@ -1,4 +1,5 @@
-# thoth GUI tests — T3 draw pipeline + view-builders (gdraw/graster/gstatus/ginput/gtree/gfeed) + surface.
+# thoth GUI tests — T3 draw pipeline + view-builders (gdraw/graster/gstatus/ginput/gtree/gconv/gtool/gmem/gcmd/gfeed) + surface
+# + the window seam's pure halves (gwindow: the wl_pointer decoder + cursor bitmap, 0.49.0).
 # CURATED translation unit (0.30.9): only the GUI's transitive deps — NO tui/mdhl/feed/commands/vyakarana.
 # Fast: `cyrius test tests/thoth_gui.tcyr`. Enabled by the 0.30.8 TUI-decoupling.
 include "src/vendor/bote-core.cyr"
@@ -45,8 +46,9 @@ include "src/gui/gmem.cyr"
 include "src/gui/gask.cyr"      # T3 question modal (0.44.0, T4-1) — the ask_user front end; before gfeed (composited by gframe_build)
 include "src/gui/gcmd.cyr"      # slash-command output cards (0.46.0, F1); before gfeed (the flow interleaves them)
 include "src/gui/gfeed.cyr"
+include "src/gui/gwindow.cyr"   # 0.49.0: the wl_pointer decoder + cursor bitmap are pure over bytes
 include "tests/cases/testutil.cyr"   # 0.46.0: _t_count_sub for the command-card tests
 include "tests/cases/gui.cyr"
-fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_pane_toggles(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gui_toolcards_live(); test_gturn_reply_landed(); test_gui_toolcards_diff(); test_gui_reason_perturn(); test_gui_reason_resume(); test_gui_markdown(); test_gui_table(); test_gui_rainbow(); test_gask(); test_gcmd(); return assert_summary(); }
+fn main() { alloc_init(); test_gui(); test_surface(); test_gui_nav(); test_gui_pane_toggles(); test_gui_eye(); test_gui_scroll(); test_gui_history(); test_gui_toolcards(); test_gui_toolcards_perturn(); test_gui_toolcards_live(); test_gturn_reply_landed(); test_gui_toolcards_diff(); test_gui_reason_perturn(); test_gui_reason_resume(); test_gui_resumed_cards(); test_gui_pointer(); test_gui_markdown(); test_gui_table(); test_gui_rainbow(); test_gask(); test_gcmd(); return assert_summary(); }
 var _e = main();
 syscall(60, _e);

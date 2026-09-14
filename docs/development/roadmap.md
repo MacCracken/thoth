@@ -180,8 +180,9 @@ unsure, patch.
   priority; the top of the next batch is the next thing to build. Nothing in a repair batch adds a
   capability.
 - **Minors are feature arcs.** `0.46.0` was the first (F1, the GUI's slash-command routing), `0.47.0`
-  the second (F2, the picker's provider health + pricing), `0.48.0` the third (F3, reasoning across resume);
-  the next decided feature earns `0.49.0`. A minor is never a sweep of small things — those are patches.
+  the second (F2, the picker's provider health + pricing), `0.48.0` the third (F3, reasoning across resume),
+  `0.49.0` the fourth (F4, GUI pointer plumbing + resumed cards); the next decided feature earns `0.50.0`. A
+  minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each with a
   line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md) lesson 1: a
   documented residual is a claim with an expiry date — every waiting item below names the version it
@@ -230,7 +231,7 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
 **Permanent by design (not waiting):** the Windows lane's architectural half — `SYS_SOCKET` /
 `SYS_CONNECT` (ws2_32) and the epoll set (IOCP). The lane gates closed, announced.
 
-### Feature arcs → minors (0.49.0 and on) — candidates, unpinned until decided
+### Feature arcs → minors (0.50.0 and on) — candidates, unpinned until decided
 
 > **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
 > being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
@@ -265,9 +266,18 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   binary's first save (downgrade only; a `THOTH-SESSION-3` magic would be worse — an old thoth loads nothing
   and truncates the store on its first save; the 0.48.0 loader skips unknown frames, so the NEXT frame is
   safe).
-- **F4 — GUI pointer plumbing.** Mouse click-to-switch on the conversation sidebar (keyboard-only
-  today) and re-rendering a resumed conversation's tool/citation data as live feed cards (today it
-  round-trips and shows in `/save`; the live cards are session-local).
+- **F4 — GUI pointer plumbing — shipped as 0.49.0.** The window binds `wl_pointer` (a sovereign shm arrow
+  cursor, click + wheel; motion never queued), the frame records its rectangles so `gframe_hit` resolves a
+  click by the numbers it was drawn with: a sidebar row switches the conversation, a tree row selects (a second
+  click acts as Enter), the feed/composer take focus, the wheel scrolls the feed. A resumed reply's tool calls
+  and cited sources draw as an honest SUMMARY card / row from the message's own persisted set (name, verdict,
+  args / titles — no round grouping, ms, diff or grounding verdict, none of which the store holds), and the same
+  summary takes over for a live reply once its rounds age out of the roundlog. Residuals: the store keeps at most
+  `MSG_TOOL_MAX` (8) calls per reply and no total (a summary cannot say "8 of 23"); the grounding verdict and the
+  edit diff are not persisted; the question modal stays keyboard-driven (clicks under it are dropped); no drag /
+  right button / double-click semantics; clicks that arrive while the drawn frame is stale (a key or a resize in
+  the same batch) are dropped rather than resolved against old geometry; the pointer path is Linux-Wayland
+  (aethersafha refused Wayland — the AGNOS window backend is still to come).
 - **F5 — A lightweight project-map hint** in the system prompt, so the agent gets a cheap directory
   overview without a `list_dir` round-trip.
 - **Gated on another domain's Cyrius port (recorded, not on a numbered arc):** the **bhava**
@@ -293,6 +303,13 @@ becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr
   `gui_run` beside the session store (0.48.0's precedent), with the greeting's input-history line as the
   window's notice. Also skipped on that path: `hooks_session_start` / `session_end` and `git_ensure_probed`
   (the GUI calls `git_probe` itself) — decide each honestly when the batch is cut.
+
+- **The pointer on a live compositor** (residual of 0.49.0) — the decoder, the hit-test, the row resolvers and
+  the click/wheel semantics are pinned headless (wire-shaped bytes into `gwl_wl__ptr_decode`; `gframe_build` then
+  `gpointer_click`); what no test in the harness can do is move a real mouse over the window: the cursor image
+  (a role-less-until-`set_cursor` surface; the arrow is 12×19 unscaled — small on a HiDPI output, like the
+  window itself), a click landing on the row it looks like it lands on, and a touchpad's two-finger scroll
+  feeling right at `GPTR_WHEEL_GAIN` 4. The operator's eyes close this one (`thoth gui`, Ctrl+K, click).
 
 - **The GUI thinking fold on a live compositor** (residual of 0.48.0) — the fold's survival across a restart is
   pinned by the GUI suite's write → drop → reload → measure/draw test; what no test in the harness can do is open

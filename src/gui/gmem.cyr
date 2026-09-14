@@ -55,3 +55,44 @@ fn gmem_build_turn(cmds, x, y, w, turn) {
     }
     return y + h;
 }
+
+# --- the SUMMARY strip (0.49.0, F4) --------------------------------------------------------------------------
+# A resumed message carries turn 0 and the memlog is session-scoped, so gmem_build_turn draws nothing for it —
+# although the reply's cited sources DID round-trip (0.33.4: up to MSG_CITE_MAX titles on the message); a live
+# reply loses its strip the same way once sixteen later recalled turns age it out. This draws the message's own
+# persisted set as ONE row — "recalled: [1] Title  [2] Title" — an honest subset of the live strip: the grounding
+# verdict is not in the store, so there is no verdict row (omit-until-present, never "unverified" as a stand-in).
+# gmem_build_msg draws the live strip while the memlog holds the turn, else this.
+fn _gmem_summary_row(cmds, x, y, w, i) {
+    var n = session_history_citation_count(i);
+    if (cmds != 0) {
+        var pen = _gtool_txt(cmds, x, y, _ui_rgb(ROLE_FAINT), "recalled: ");
+        var si = 0;
+        var stop = 0;
+        while ((si < n) && (stop == 0)) {
+            if (pen > ((x + w) - (GR_GLYPH_W * 8))) { stop = 1; }
+            else {
+                pen = _gtool_txt(cmds, pen, y, _ui_rgb(ROLE_ACCENT_DIM), "[");
+                pen = _gtool_int(cmds, pen, y, _ui_rgb(ROLE_ACCENT_DIM), si + 1);
+                pen = _gtool_txt(cmds, pen, y, _ui_rgb(ROLE_ACCENT_DIM), "] ");
+                var title = session_history_citation_title(i, si);
+                if (title == 0) { title = "(untitled)"; }
+                var maxc = ((x + w) - pen) / GR_GLYPH_W;
+                if (maxc >= 1) { gd_push_text(cmds, pen, y, _ui_rgb(ROLE_MUTED), title, maxc); }
+                pen = pen + (gr_text_cols(title, 0) + 2) * GR_GLYPH_W;
+                si = si + 1;
+            }
+        }
+    }
+    return y + GTOOL_LH;
+}
+# gmem_build_msg: the memory strip for message `i` — the live two-row strip while the memlog holds the message's
+# turn, else the one-row summary from its persisted citations (or y unchanged when it has none). Measure == draw.
+fn gmem_build_msg(cmds, x, y, w, i) {
+    if (i < 0) { return y; }
+    if (i >= session_history_len()) { return y; }
+    var turn = session_history_turn(i);
+    if (turn > 0) { if (memlog_find(turn) != 0) { return gmem_build_turn(cmds, x, y, w, turn); } }
+    if (session_history_citation_count(i) <= 0) { return y; }
+    return _gmem_summary_row(cmds, x, y, w, i);
+}

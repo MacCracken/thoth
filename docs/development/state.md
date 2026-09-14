@@ -7,6 +7,23 @@
 
 ## Version
 
+**0.49.0** — **the window takes the mouse; a resumed reply's tool calls and citations draw again** (2026-09-13, F4).
+`gwindow.cyr` binds `wl_pointer` off the seat's capabilities (v5 clamped to what the compositor advertises; released
+when the capability goes), decodes enter / leave / motion / button / axis (24.8 fixed → px; a touchpad's sub-pixel
+axis steps accumulate; presses queue, releases and motion never do) and sets a sovereign 12×19 ARGB shm arrow as the
+cursor on every enter. `gframe_build` records the rectangles it lays out; `gframe_hit(px, py)` (pure) resolves a
+point to a pane by those numbers, `gconv_row_at` / `gtree_row_at` a row by the scroll origin each builder drew with;
+`gpointer_click` switches on a sidebar row (Enter's path), selects a tree row (a second click acts as Enter), focuses
+the composer on the feed; `gpointer_wheel` scrolls the feed by `GPTR_WHEEL_GAIN` × the wire delta. The present loop
+drains records after keys, drops them mid-turn, under the modal, and in an iteration that resized. `gtool_build_msg`
+/ `gmem_build_msg` draw the live per-turn cards / strip while this session's rings hold the message's turn, else a
+SUMMARY card ("tool calls (summary)": name · verdict · args) / a one-row "recalled:" strip from the message's own
+persisted set — a resumed reply's, or a live reply's once its rounds aged out; TOOL/CITE payloads are cleaned at
+load like RSN. Sticky scroll origins (a click selects by position), `conv_switch` to the active conversation a
+no-op (it dropped the `/compact` floor), every sidebar subline with its own count (one shared scratch pointer drew
+the last row's everywhere). The greeting's two-layer config rule sits on its own row. Suite **587 + 1689 + 873 +
+769 + 190 + 5** (+201); Linux / aarch64 / AGNOS build with 0.45.6's warning set.
+
 **0.48.0** — **a reply's reasoning survives a restart; `thoth gui` resumes** (2026-09-13, F3). The GUI's thinking
 fold read a session-scoped ring keyed by the turn tag (0.35.3) — a resumed conversation drew no folds. The reasoning
 now lives ON the message (session.cyr `+48`, a write-once arena set through `session_history_reason_last_set`, read by
@@ -3617,8 +3634,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **406 + 1679 + 873 + 759 + 190 + 5 assertions across the suites as of
-0.48.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **587 + 1689 + 873 + 769 + 190 + 5 assertions across the suites as of
+0.49.0 (0 failures)** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
