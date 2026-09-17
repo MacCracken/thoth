@@ -553,12 +553,15 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     if (gcmd_count() > 0) { cy = gcmd_build_anchored(cmds, xbase, cy, avail, n, 1); }   # 0.46.0: cards after the last message
     cy = gcmd_running_build(cmds, xbase, cy, avail);          # 0.52.0 (F7): a command waiting on a child, under its predecessors
     # a turn in flight (0.30.4): echo the just-submitted message as a provisional bubble + a working indicator,
-    # BELOW the last real message. Part of the measured flow so the bottom-anchor keeps it visible. The pending
-    # text is NOT in session_history yet (the turn appends it when it runs) — this is a transient render.
+    # BELOW the last real message. Part of the measured flow so the bottom-anchor keeps it visible. The echo stands
+    # only until the turn appends the message itself (0.52.1: gturn_prompt_landed — from then the loop above draws
+    # it, and the echo drew the operator's line twice for the whole stream).
     if (gturn_active() == 1) {
-        if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
-        cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), gturn_text());
-        cy = cy + GFEED_GAP;
+        if (gturn_prompt_landed() == 0) {
+            if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
+            cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), gturn_text());
+            cy = cy + GFEED_GAP;
+        }
         # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
         # renders ABOVE the cards and partial answer. Empty on Opus 4.8 -> _gfeed_reason returns cy unchanged (no gap).
         var _rcy = _gfeed_reason(cmds, xbase, cy, avail);
@@ -649,10 +652,10 @@ fn _gfeed_broke_notices(cmds, xbase, cy, avail) {
     return cy;
 }
 # _gfeed_greeting_on: 1 when the greeting block takes the feed — an empty conversation with no turn, no notice and
-# no command card of the OPERATOR's (0.46.0; 0.50.1: a startup card — a session_start hook that printed — does
-# not count, it draws under the block). The one gate gfeed_build and the flow's standing notices share.
+# no command card of the OPERATOR's in this conversation (0.46.0; 0.50.1: a startup card — a session_start hook that
+# printed — does not count, it draws under the block; 0.52.1: another conversation's cards do not count). The one gate gfeed_build and the flow's standing notices share.
 fn _gfeed_greeting_on(n) {
-    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gcmd_count() == gcmd_startup())) { return 1; }
+    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gcmd_operator_here() == 0)) { return 1; }
     return 0;
 }
 
@@ -812,14 +815,19 @@ fn gpointer_click(px, py, button) {
 }
 # gpointer_wheel: a vertical axis step of `px_delta` surface px (positive = the wheel rolled toward the user, i.e.
 # the content moves UP = scroll toward NEWER; negative = toward OLDER) over (px, py). Only the feed scrolls, by
-# GPTR_WHEEL_GAIN x the wire delta: a mouse notch is 15 px on the wire -> 60 px = three feed lines; a touchpad's
-# fine steps (accumulated to whole px by the decoder) scroll proportionally. Returns 1 when the offset changed.
+# GPTR_WHEEL_GAIN x the wire delta: a mouse notch is 15 px on the wire -> 60 px = three feed lines. Returns 1 when the
+# offset changed.
 var GPTR_WHEEL_GAIN = 4;
-fn gpointer_wheel(px, py, px_delta) {
+fn gpointer_wheel(px, py, px_delta) { return gpointer_scroll(px, py, px_delta, GPTR_WHEEL_GAIN); }
+# gpointer_scroll (0.52.1): the step at a given gain. A touchpad's delta (GWL_PTR_AXIS_FINE — the decoder read its
+# axis_source) is already the distance the fingers moved, so it scrolls 1:1 (GPTR_FINE_GAIN), as GTK, Qt and the
+# browsers do; the notch gain made the feed run four times ahead of the fingers (measured live on Hyprland, 0.52.0).
+var GPTR_FINE_GAIN = 1;
+fn gpointer_scroll(px, py, px_delta, gain) {
     if (gframe_hit(px, py) != GHIT_FEED) { return 0; }
     if (px_delta == 0) { return 0; }
     var before = gscroll();
-    gscroll_by(0 - px_delta * GPTR_WHEEL_GAIN);
+    gscroll_by(0 - px_delta * gain);
     if (gscroll() != before) { return 1; }
     return 0;
 }
@@ -841,6 +849,7 @@ fn gpointer_pump(drop) {
             var arg = load64(&rec + 24);
             if (kind == GWL_PTR_BUTTON) { if (clicked == 0) { if (gpointer_click(px, py, arg) == 1) { changed = 1; clicked = 1; } } }
             if (kind == GWL_PTR_AXIS) { if (gpointer_wheel(px, py, arg) == 1) { changed = 1; } }
+            if (kind == GWL_PTR_AXIS_FINE) { if (gpointer_scroll(px, py, arg, GPTR_FINE_GAIN) == 1) { changed = 1; } }   # 0.52.1
         }
     }
     return changed;

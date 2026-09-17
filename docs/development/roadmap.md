@@ -54,7 +54,7 @@ the whole spine is native. Everything thoth owns is shipping; what remains is AG
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
 0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. Last re-run 0.52.0 (2026-09-16): the 5.9 MB ELF printed `thoth 0.52.0` in ring 3 and
+stale binary. Last re-run 0.52.1 (2026-09-17): the 5.9 MB ELF printed `thoth 0.52.1` in ring 3 and
 exited 0 under QEMU.
 
 Three gates remain, in dependency order.
@@ -117,21 +117,27 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 6 → 0.52.1
+### Repair batch 7 → 0.52.2
 
 Ordered; thoth-owned and provable by a test or by breaking it.
 
-1. **The agent suite still paints a stray `hi` — as a repaint.** 0.51.2 moved `test_upstream_err_sanitise`'s
-   `{"content":"hi"}` frame from fd 1 into the ring sink, but `_agent_sse_cb` then reaches `feed_stream_tick`, which
-   repaints twenty cursor-addressed feed rows to fd 1 (`ESC[1;1Hhi ESC[K ESC[2;1H…`) because `_stream_last_paint_ms`
-   is never stamped (`tests/cases/agent.cyr`, the `okf` frame). The 0.51.2 CHANGELOG line "no longer prints a stray
-   `hi`" is therefore half true, and the suite log still carries it (found at 0.52.0, present at 0.51.3). Stamp the
-   paint clock (or a sink that never repaints) around that one call, and assert fd 1 received nothing.
+1. **`scripts/agnos-run.sh` blames thoth for a boot that never reached the kernel.** At 0.52.1 two of three runs died
+   in gnoboot (`gnoboot: fail @ EBS` — ExitBootServices refused a stale memory-map key and gnoboot does not retry,
+   the gnoboot row below) and the script printed `FAIL: 'thoth 0.52.1' not found — thoth did not produce its expected
+   ring-3 output`. Nothing of thoth's had run. The script already turns a kernel without the selftest hook into an
+   honest `SKIP … nothing was executed` (exit 2); a serial log whose boot failed before the kernel is the same class —
+   name the boot failure, exit 2, never FAIL. Prove it against a captured `fail @ EBS` log.
+
+The window's checks are run live now (0.52.1): a headless Hyprland started from an SSH session drives `thoth gui` —
+screenshots over `wlr-screencopy`, keys and the pointer through the virtual-keyboard and virtual-pointer protocols,
+and a logging relay on the Wayland socket — so a GUI change is verified live before it ships, like the TUI's pty
+driver.
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each carries the version it was last checked against (2026-09-16, at 0.52.0). A release re-checks the list;
-a closed item becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
+Each carries the version it was last checked against (2026-09-17, at 0.52.1 — no row's dependency moved since
+0.52.0). A release re-checks the list; a closed item becomes a re-vendor patch with a line-anchored needle in
+`tests/cases/vendor.cyr`.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
@@ -150,6 +156,7 @@ a closed item becomes a re-vendor patch with a line-anchored needle in `tests/ca
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:248`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.6.4** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
 | **cyrius (floor)** | `is_symlink` returns 0 on Windows (`lib/fs.cyr:433`), so the jail's symlink walk (audit A-1) and the toolpin store's link refusal are no-ops there — **the PE lane must not ship without revisiting it** | cyrius **6.6.4** | the lane is closed anyway (architectural, below) |
 | **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:92`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.4) | degrades honestly; a candidate filing if the ABI gains a mode channel |
+| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make it intermittent — the AGNOS smoke died before the kernel in 2 of 3 boots at 0.52.1 (and in 1 of 2 with the passing 0.52.0 ELF padded). The smoke also stages BOOTX64.EFI built 2026-05-16 (v0.7.1) | gnoboot **0.7.2** | re-run until the kernel boots; repair batch 7 item 1 stops calling it a thoth FAIL |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
 
 **Permanent by design (not waiting):** the Windows lane's architectural half — the raw socket path
@@ -216,30 +223,15 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** the agent suite's repaint of a stray `hi` (repair batch 6, item 1).
+**Scheduled above:** `scripts/agnos-run.sh` calling a pre-kernel boot failure a thoth FAIL (repair batch 7, item 1).
 
 **Candidates above:** the pointer path Linux-Wayland only (F8).
 
-**Owed to the operator's eyes (no compositor in the harness; each pinned headless):**
-
-- **The pointer on a live compositor** — the cursor image (a role-less-until-`set_cursor` surface;
-  the 12×19 arrow is unscaled — small on a HiDPI output, like the window itself), a click landing on
-  the row it looks like it lands on, a touchpad's two-finger scroll at `GPTR_WHEEL_GAIN` 4
-  (`thoth gui`, Ctrl+K, click).
-- **The GUI thinking fold across a restart** (`thoth gui` with `[session].file` bound, a reasoning
-  model, a restart).
-- **`rainbow` on the GUI** — semantic spans keep their colour, the gradient runs diagonally
-  (`thoth gui`, `/theme rainbow`).
-- **The window's startup** — the history row in the box, a submitted line in `~/.thoth_history` after
-  `/quit`, a `session_start` hook's card under the greeting and a silent one's absence, a
-  `session_end` hook's side effect after close.
-- **The window pumped during a wait (0.52.0)** — with `[hooks].session_start = "sleep 20"`, the window maps at once
-  with a `running [hook session_start]  (Esc stops it)` row, and Esc stops the hook (an `interrupted` card) without
-  closing the window; during `/run sleep 30`, the window repaints and follows a resize, Esc stops the command, and
-  the close button closes the window within a tick; the close button mid-stream stops the turn (a `- stopped -`
-  notice or the kept partial) and closes it.
-
 **Degradations, by design or by the floor:**
+
+- **The window renders at buffer scale 1** — on a scaled output the compositor upscales it, so at scale 2 (Hyprland,
+  verified live at 0.52.1) the text and the 12×19 arrow are soft rather than small. `wl_surface.set_buffer_scale` (or
+  fractional scaling) would draw both crisp at the output's density; a feature if it earns a slot, not a repair.
 
 - **`gate_init` / `log_init` failure lines are discarded on the `thoth gui` path** — main.cyr runs
   one-shot dispatch under `OUT_NULL` (`src/main.cyr:146`) and `thoth gui` is a one-shot mode, so

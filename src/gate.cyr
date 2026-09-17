@@ -133,12 +133,17 @@ fn confirm_no_tty_set(v) { _confirm_no_tty = v; return 0; }
 fn _confirm_via_ask(verb, obj) {
     if (_ask_q_buf == 0) { _ask_q_buf = alloc(CONFIRM_Q_CAP); }
     if (_ask_q_buf == 0) { return 0; }
+    # 0.52.1: ONE line, the action FIRST — the terminal prompt's order ("authorize <verb> <obj>? ..."). Through 0.52.0
+    # the reason came first and a '\n' separated it from the action, but ask_pose runs the question through the
+    # model-text sanitiser, which substitutes every C0 byte, so the window drew "...nothing else can)?run echo hi"
+    # (seen live on Hyprland). The action leads so the modal's row cap can only ever cut the reason, never it.
     var off = 0;
-    if (gate_active() == 0) { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "Authorize this action? (t-ron absent - thoth is asking because nothing else can)\n"); }
-    else { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "Authorize this action? (t-ron flagged it for confirmation)\n"); }
+    off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "Authorize ");
     off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, _confirm_verb_buf);
     off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, " ");
     off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, _confirm_obj_buf);
+    if (gate_active() == 0) { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "? (t-ron absent - thoth is asking because nothing else can)"); }
+    else { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "? (t-ron flagged it for confirmation)"); }
     store8(_ask_q_buf + off, 0);
     # 0.46.0: THE SESSION-GRANT ANSWER IS BACK ON THIS PATH. Through 0.45.x it was withheld, deliberately: a grant
     # is durable authority, and the two things that make one safe — being able to SEE that it is still acting and

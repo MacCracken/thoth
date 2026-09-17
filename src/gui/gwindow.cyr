@@ -108,6 +108,8 @@ enum JlwWlAbi {
     GWL_EV_PTR_MOTION = 2;          # (time, surface_x fixed, surface_y fixed)
     GWL_EV_PTR_BUTTON = 3;          # (serial, time, button, state)  BTN_LEFT = 0x110; state 1 = pressed
     GWL_EV_PTR_AXIS   = 4;          # (time, axis, value fixed)       axis 0 = vertical; value in surface px (24.8)
+    GWL_EV_PTR_FRAME  = 5;          # (v5) the end of one logical pointer event
+    GWL_EV_PTR_AXIS_SOURCE = 6;     # (v5) (source) 0 wheel, 1 finger, 2 continuous, 3 wheel tilt — for the frame it is in
     GWL_WL_SHM_ARGB8888 = 0;        # the cursor buffer's format (alpha, unlike the opaque window buffer)
 }
 
@@ -130,6 +132,15 @@ var gwl_wl_buf_oid = 0; var gwl_wl_kbd_oid = 0; var gwl_wl_frame_oid = 0;
 var gwl_wl_cur_sync = 0; var gwl_wl_sync_done = 0;
 var gwl_wl_configured = 0; var gwl_wl_cfg_w = 0; var gwl_wl_cfg_h = 0;
 var gwl_wl_closed = 0; var gwl_wl_buf_busy = 0; var gwl_wl_frame_done = 1; var gwl_wl_nglobals = 0;
+# gwl_wl_busy_oid (0.52.1): the wl_buffer the busy flag waits on — the one last ATTACHED, which a resize may already
+# have destroyed and replaced. The flag cleared only on a release addressed to the CURRENT buffer id, so a configure
+# that landed while a frame was in flight (the resize destroys the attached buffer and makes a new one) left the
+# release addressed to the old id, ignored: gwl_win_ready never returned 1 again and the window stopped presenting
+# for good — frozen at its old size, keys taken but never drawn (reproduced live on Hyprland: a window mapped during
+# an output rescale; an interactive drag-resize races the same way). Cleared by that buffer's release, or by the
+# server's delete_id for it (the protocol's acknowledgement that it no longer holds the buffer — sent for every
+# destroyed object, so the wait cannot outlive it).
+var gwl_wl_busy_oid = 0;
 
 # pointer (0.49.0, F4): the wl_pointer object, the live surface-local position (px), and a ring of pointer
 # records (kind, x, y, arg) the app drains via gwl_win_next_pointer — BUTTON (arg = button code, on PRESS only:
@@ -143,6 +154,8 @@ var gwl_wl_seat_ver = 0;                                  # the version the seat
 var gwl_wl_ptr_x = 0; var gwl_wl_ptr_y = 0;
 var gwl_wl_ptr_in = 0;                                    # 1 while the pointer is over the window
 var gwl_wl_axis_acc = 0;                                  # the vertical axis's unconsumed 24.8 fraction (a touchpad's fine steps add up)
+var gwl_wl_axis_src = 0 - 1;                              # 0.52.1: this frame's wl_pointer.axis_source (-1 = none sent)
+var gwl_wl_axis_pend = 0;                                 # 0.52.1: this frame's whole-px vertical delta, pushed at wl_pointer.frame
 var gwl_wl_pq[128];                                       # 32 records * 4 i64 (module-global: 1024 bytes)
 var gwl_wl_pq_head = 0; var gwl_wl_pq_tail = 0;
 var gwl_wl_cur_surf = 0; var gwl_wl_cur_buf = 0;          # the cursor surface + its ARGB buffer (0 until drawn)
@@ -357,7 +370,8 @@ fn gwl_wl__kbd(o, op): i64 {
 
 # ---- pointer (0.49.0, F4) ----
 var GWL_PTR_BUTTON = 1;
-var GWL_PTR_AXIS = 2;
+var GWL_PTR_AXIS = 2;          # a wheel NOTCH's delta (a wheel, a tilt, or a source the compositor did not name)
+var GWL_PTR_AXIS_FINE = 3;     # 0.52.1: a touchpad's / a continuous device's delta — already the distance the content moves
 fn gwl_wl__push_ptr(kind, x, y, arg): i64 {
     var nt = (gwl_wl_pq_tail + 1) % 32;
     if (nt == gwl_wl_pq_head) { return 0; }    # full: drop
@@ -407,17 +421,37 @@ fn gwl_wl__ptr_decode(op, args): i64 {
         if (load32(args + 12) == 1) { gwl_wl__push_ptr(GWL_PTR_BUTTON, gwl_wl_ptr_x, gwl_wl_ptr_y, load32(args + 8)); }
         return 0;
     }
+    # 0.52.1: the axis SOURCE decides the record's kind — a finger (touchpad) or continuous source is FINE (its delta is
+    # the distance to move), anything else a NOTCH (the app scales it). Through 0.52.0 every delta was scaled like a notch,
+    # so a two-finger scroll moved the feed four pixels per pixel of finger travel (measured live on Hyprland). The protocol
+    # promises only that axis_source arrives before the frame ends — Hyprland 0.56 sends it AFTER the axis (seen through a
+    # logging proxy) — so a v5 seat's delta is held and pushed at wl_pointer.frame, when the source is known. A seat below
+    # v5 sends no frame (nor a source): its delta is pushed at once, as a notch — the 0.49.0 behaviour.
+    if (op == GWL_EV_PTR_AXIS_SOURCE) { gwl_wl_axis_src = load32(args); return 0; }
+    if (op == GWL_EV_PTR_FRAME) {
+        if (gwl_wl_axis_pend != 0) {
+            var fk = GWL_PTR_AXIS;
+            if ((gwl_wl_axis_src == 1) || (gwl_wl_axis_src == 2)) { fk = GWL_PTR_AXIS_FINE; }
+            gwl_wl__push_ptr(fk, gwl_wl_ptr_x, gwl_wl_ptr_y, gwl_wl_axis_pend);
+        }
+        gwl_wl_axis_pend = 0; gwl_wl_axis_src = 0 - 1;
+        return 0;
+    }
     if (op == GWL_EV_PTR_AXIS) {
         if (load32(args + 4) == 0) {                        # vertical only
             var f = load32(args + 8) & 0xFFFFFFFF;
             if (f >= 0x80000000) { f = f - 0x100000000; }
             gwl_wl_axis_acc = gwl_wl_axis_acc + f;          # accumulate in 24.8 — a touchpad sends sub-pixel steps
             var whole = gwl_wl_axis_acc / 256;              # (truncates toward zero; the fraction stays)
-            if (whole != 0) { gwl_wl_axis_acc = gwl_wl_axis_acc - whole * 256; gwl_wl__push_ptr(GWL_PTR_AXIS, gwl_wl_ptr_x, gwl_wl_ptr_y, whole); }
+            if (whole != 0) {
+                gwl_wl_axis_acc = gwl_wl_axis_acc - whole * 256;
+                if (gwl_wl_seat_ver >= 5) { gwl_wl_axis_pend = gwl_wl_axis_pend + whole; }                # held for the frame
+                else { gwl_wl__push_ptr(GWL_PTR_AXIS, gwl_wl_ptr_x, gwl_wl_ptr_y, whole); }               # no frames below v5
+            }
         }
         return 0;
     }
-    return 0;                                               # frame / axis_source / axis_stop / axis_discrete: ignored
+    return 0;                                               # axis_stop / axis_discrete: ignored
 }
 # gwl_wl__ptr_need: the argument bytes each wl_pointer event carries — a frame declaring fewer is dropped, never
 # decoded from the bytes after it (gwl_wl__parse checks only that the declared size is buffered). PURE.
@@ -427,6 +461,7 @@ fn gwl_wl__ptr_need(op): i64 {
     if (op == GWL_EV_PTR_MOTION) { return 12; }
     if (op == GWL_EV_PTR_BUTTON) { return 16; }
     if (op == GWL_EV_PTR_AXIS) { return 12; }
+    if (op == GWL_EV_PTR_AXIS_SOURCE) { return 4; }
     return 0;
 }
 fn gwl_wl__ptr(o, op): i64 {
@@ -547,6 +582,9 @@ fn gwl_wl__handle(o): i64 {
     var op = load32(&gwl_wl_rbuf + o + 4) & 0xFFFF;
     if (id == GWL_WL_DISPLAY_ID) {
         if (op == GWL_EV_DISPLAY_ERROR) { gwl_wl__emit_str("wl_display.error (fatal)\n"); gwl_wl_closed = 1; }
+        if (op == GWL_EV_DISPLAY_DELETE) {                  # 0.52.1: the attached buffer is gone server-side -> not busy
+            if (gwl_wire_msg_size(&gwl_wl_rbuf + o) >= 12) { if (load32(&gwl_wl_rbuf + o + 8) == gwl_wl_busy_oid) { gwl_wl_buf_busy = 0; } }
+        }
         return 0;
     }
     if (id == gwl_wl_cur_sync) { if (op == GWL_EV_CALLBACK_DONE) { gwl_wl_sync_done = 1; } return 0; }
@@ -588,7 +626,8 @@ fn gwl_wl__handle(o): i64 {
         if (op == GWL_EV_TOPLEVEL_CLOSE) { gwl_wl_closed = 1; }
         return 0;
     }
-    if (id == gwl_wl_buf_oid) { if (op == GWL_EV_BUFFER_RELEASE) { gwl_wl_buf_busy = 0; } return 0; }
+    if (id == gwl_wl_busy_oid) { if (op == GWL_EV_BUFFER_RELEASE) { gwl_wl_buf_busy = 0; } return 0; }   # 0.52.1: the ATTACHED buffer's id
+    if (id == gwl_wl_buf_oid) { return 0; }
     if (id == gwl_wl_seat_oid) {
         if (op == GWL_EV_SEAT_CAPS) {
             var caps = load32(&gwl_wl_rbuf + o + 8);
@@ -863,6 +902,7 @@ fn gwl_win_present_commit(win, x, y, w, h): i64 {
     gwl_wl__req1(gwl_wl_surf_oid, GWL_OP_SURFACE_FRAME, gwl_wl_frame_oid);
     gwl_wl__req0(gwl_wl_surf_oid, GWL_OP_SURFACE_COMMIT);
     gwl_wl_buf_busy = 1;
+    gwl_wl_busy_oid = gwl_wl_buf_oid;                       # 0.52.1: what the flag waits on, even after a resize replaces it
     return 0;
 }
 
@@ -909,7 +949,7 @@ fn gwl_win_resize_apply(win): i64 {
 # Drain one key record: out24[+0]=evdev keycode, [+8]=value(1=press), [+16]=mods.
 # Returns 1 if a record was produced, 0 if the queue is empty.
 fn gwl_win_next_key(win, out24): i64 { return gwl_wl_pop_key(out24); }
-# Drain one pointer record (0.49.0): out32[+0]=kind (GWL_PTR_BUTTON / GWL_PTR_AXIS), [+8]=x, [+16]=y (surface px),
+# Drain one pointer record (0.49.0): out32[+0]=kind (GWL_PTR_BUTTON / GWL_PTR_AXIS / GWL_PTR_AXIS_FINE), [+8]=x, [+16]=y (surface px),
 # [+24]=arg (the button code, or the wheel's vertical px). 1 if a record was produced, 0 if the queue is empty.
 fn gwl_win_next_pointer(win, out32): i64 { return gwl_wl_pop_ptr(out32); }
 

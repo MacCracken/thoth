@@ -14,7 +14,13 @@
 # STORAGE. A ring of GCMD_CARDS cards; each holds the typed line (LABEL-sanitised: it is the operator's own text,
 # but it is chrome), up to GCMD_LINES captured lines of at most GCMD_LINE_CAP bytes each (escape-boundary-
 # truncated by _feed_safe_copy, so a marker is never severed), and its ANCHOR — session_history_len() when it was
-# issued — so _gfeed_flow interleaves it after that message. Past the card cap the oldest card is dropped; a
+# issued — so _gfeed_flow interleaves it after that message. 0.52.1: a card belongs to the CONVERSATION it was issued
+# in (its id, never its store index — a delete shifts those) and is drawn only there; through 0.52.0 the anchor was a
+# bare length, so a card typed in one conversation drew inside every other at the same length, or after later turns
+# (seen live on Hyprland). The anchor is an ORDINAL (the length plus the conversation's dropped count), so the
+# SESS_HIST_MAX cap evicting old messages does not slide a card down its conversation, and sealing a card clamps this
+# conversation's older cards to the history's end when it SHRANK under them (/reset, /rewind) — a card never draws
+# after messages that arrived later. Past the card cap the oldest card is dropped; a
 # capture past GCMD_LINES keeps its head and says how many lines were dropped, never silently. Allocated on the
 # first record (~800 KiB), not at startup: most sessions never issue a command.
 var GCMD_CARDS = 8;
@@ -23,7 +29,7 @@ var GCMD_LINE_CAP = 512;
 var GCMD_HEAD_CAP = 256;
 var GCMD_PAD = 8;              # inner padding (as the tool card's)
 var GCMD_LH = 18;              # line height inside a card (as the tool card's)
-var GCMD_META = 3;             # i64 cells per card: nlines, anchor, dropped
+var GCMD_META = 5;             # i64 cells per card: nlines, anchor ordinal, dropped, conversation id (0.52.1), startup (0.52.1)
 var GCMD_GAP = 12;             # px after a card (== the feed's GFEED_GAP; declared here, this file precedes gfeed.cyr)
 var _gcmd_base = 0;            # alloc(GCMD_CARDS * GCMD_LINES * GCMD_LINE_CAP)
 var _gcmd_lens = 0;            # alloc(GCMD_CARDS * GCMD_LINES * 8): stored byte length per line (NUL after it)
@@ -31,7 +37,6 @@ var _gcmd_head = 0;            # alloc(GCMD_CARDS * GCMD_HEAD_CAP): the typed li
 var _gcmd_meta = 0;            # alloc(GCMD_CARDS * GCMD_META * 8)
 var _gcmd_first = 0;           # ring index of the oldest live card
 var _gcmd_count = 0;
-var _gcmd_startup = 0;         # 0.50.1: cards sealed at the window's STARTUP (a talking session_start hook) — not the operator's; the greeting keeps its place over them
 
 fn _gcmd_ensure() {
     if (_gcmd_base != 0) { return 1; }
@@ -84,11 +89,27 @@ fn gcmd_running_build(cmds, x, y, w) {
 }
 
 fn gcmd_count() { return _gcmd_count; }
-fn gcmd_clear() { _gcmd_count = 0; _gcmd_first = 0; _gcmd_startup = 0; return 0; }
-# gcmd_startup (0.50.1): how many of the live cards are startup cards — when EVERY live card is one, the operator
-# has issued nothing and the greeting stays (gfeed draws those cards under the block instead of in its place).
-fn gcmd_startup() { if (_gcmd_startup > _gcmd_count) { return _gcmd_count; } return _gcmd_startup; }
-fn gcmd_anchor(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0 - 1; } return _gcmd_meta_get(_gcmd_slot(k), 1); }
+fn gcmd_clear() { _gcmd_count = 0; _gcmd_first = 0; return 0; }
+# _gcmd_conv_now / _gcmd_dropped_now (0.52.1): the active conversation's id and dropped-message count, WITHOUT
+# creating the default conversation (the draw path must not allocate): before one exists, the id it will get.
+fn _gcmd_conv_now() { if (conv_count() == 0) { return _conv_next_id; } return conv_id(conv_active()); }
+fn _gcmd_dropped_now() { if (conv_count() == 0) { return 0; } return conv_dropped(conv_active()); }
+# gcmd_here (0.52.1): 1 when card k was issued in the ACTIVE conversation — the only cards its flow draws.
+fn gcmd_here(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } if (_gcmd_meta_get(_gcmd_slot(k), 3) == _gcmd_conv_now()) { return 1; } return 0; }
+# gcmd_startup (0.50.1): how many of the live cards are startup cards (a talking session_start hook — not the
+# operator's). 0.52.1: a flag on the card, so the ring evicting one is counted right.
+fn gcmd_startup() { var c = 0; var k = 0; while (k < _gcmd_count) { if (_gcmd_meta_get(_gcmd_slot(k), 4) == 1) { c = c + 1; } k = k + 1; } return c; }
+# gcmd_operator_here (0.52.1): the operator's cards in the ACTIVE conversation — when there are none, an empty
+# conversation keeps its greeting (the startup cards of this conversation draw under the block).
+fn gcmd_operator_here() { var c = 0; var k = 0; while (k < _gcmd_count) { if ((gcmd_here(k) == 1) && (_gcmd_meta_get(_gcmd_slot(k), 4) == 0)) { c = c + 1; } k = k + 1; } return c; }
+# gcmd_anchor: card k's position in the ACTIVE conversation's history as it stands now (the ordinal less the messages
+# the cap has dropped since; 0 when those evicted the point it was issued at), or -1 for no such card.
+fn gcmd_anchor(k) {
+    if ((k < 0) || (k >= _gcmd_count)) { return 0 - 1; }
+    var a = _gcmd_meta_get(_gcmd_slot(k), 1) - _gcmd_dropped_now();
+    if (a < 0) { a = 0; }
+    return a;
+}
 fn gcmd_lines(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 0); }
 fn gcmd_dropped(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 2); }
 fn gcmd_head(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_head + _gcmd_slot(k) * GCMD_HEAD_CAP; }
@@ -116,8 +137,19 @@ fn gcmd_record(line) {
         i = i + 1;
     }
     _gcmd_meta_set(slot, 0, keep);
-    _gcmd_meta_set(slot, 1, session_history_len());
+    var len = session_history_len();
+    var ord = len + _gcmd_dropped_now();
+    var conv = _gcmd_conv_now();
+    var j = 0;                                              # 0.52.1: this conversation's cards past a history that shrank
+    while (j < _gcmd_count) {
+        var sj = _gcmd_slot(j);
+        if ((sj != slot) && (_gcmd_meta_get(sj, 3) == conv) && (_gcmd_meta_get(sj, 1) > ord)) { _gcmd_meta_set(sj, 1, ord); }
+        j = j + 1;
+    }
+    _gcmd_meta_set(slot, 1, ord);
     _gcmd_meta_set(slot, 2, n - keep);
+    _gcmd_meta_set(slot, 3, conv);
+    _gcmd_meta_set(slot, 4, 0);
     return _gcmd_count - 1;
 }
 
@@ -205,18 +237,20 @@ fn gcmd_build(cmds, x, y, w, k) {
     return y + h;
 }
 
-# gcmd_build_anchored: draw, in record order, every card anchored at history position `anchor` (or, when
-# `at_end` is 1, every card anchored at or past it — the cards issued after the last message). Returns the y
-# below the last card drawn (y itself when none), with GCMD_GAP after each card so the caller's flow spacing
-# holds. Measure-only when cmds == 0.
+# gcmd_build_anchored: draw, in record order, every card of the ACTIVE conversation anchored at history position
+# `anchor` (or, when `at_end` is 1, every one anchored at or past it — the cards issued after the last message).
+# Returns the y below the last card drawn (y itself when none), with GCMD_GAP after each card so the caller's flow
+# spacing holds. Measure-only when cmds == 0.
 fn gcmd_build_anchored(cmds, x, y, w, anchor, at_end) {
     var cy = y;
     var k = 0;
     while (k < _gcmd_count) {
-        var a = gcmd_anchor(k);
         var hit = 0;
-        if (at_end == 1) { if (a >= anchor) { hit = 1; } }
-        elif (a == anchor) { hit = 1; }
+        if (gcmd_here(k) == 1) {                             # 0.52.1: another conversation's card is never drawn here
+            var a = gcmd_anchor(k);
+            if (at_end == 1) { if (a >= anchor) { hit = 1; } }
+            elif (a == anchor) { hit = 1; }
+        }
         if (hit == 1) { cy = gcmd_build(cmds, x, cy, w, k) + GCMD_GAP; }
         k = k + 1;
     }
@@ -238,6 +272,22 @@ fn gcmd_run(line, run_fn) {
     gcmd_record(line);
     return keep;
 }
+# gcmd_submit (0.52.1): the composer's line as a command — COPIED, the composer cleared, THEN run under the bracket.
+# gpresent passed gcomp_cstr() (the composer's own buffer) and cleared the composer only after the command returned.
+# That was invisible while a command froze the window; since 0.52.0 the window repaints while it waits, so the
+# submitted line sat in the composer as if it had never been sent, under its own `running` row (seen live on
+# Hyprland). The copy is required, not style: the composer's draw NUL-terminates its buffer at the cleared length,
+# which would empty the line under the command mid-dispatch. Returns the runner's return, as gcmd_run.
+var _gcmd_submit_buf = 0;
+fn gcmd_submit(line, run_fn) {
+    if (_gcmd_submit_buf == 0) { _gcmd_submit_buf = alloc(GCOMP_CAP); }
+    if (_gcmd_submit_buf == 0) { var k0 = gcmd_run(line, run_fn); gcomp_reset(); return k0; }   # no copy: the old order
+    var i = 0;
+    while ((load8(line + i) != 0) && (i < (GCOMP_CAP - 1))) { store8(_gcmd_submit_buf + i, load8(line + i)); i = i + 1; }
+    store8(_gcmd_submit_buf + i, 0);
+    gcomp_reset();
+    return gcmd_run(_gcmd_submit_buf, run_fn);
+}
 # gcmd_capture (0.50.1): the same bracket for a zero-argument runner that usually prints NOTHING — the operator's
 # session hooks at the window's startup (hooks_session_start: silent on a clean exit, a line only when the hook
 # printed, exited non-zero, timed out or could not be run). A card is sealed ONLY when something was printed, and
@@ -256,7 +306,7 @@ fn gcmd_capture(head, run0) {
     out_mode_set(OUT_FD1);
     if (feed_count() > 0) {
         var k = gcmd_record(head);
-        if (k >= 0) { _gcmd_startup = _gcmd_startup + 1; }
+        if (k >= 0) { _gcmd_meta_set(_gcmd_slot(k), 4, 1); }
         return k;
     }
     return 0 - 1;

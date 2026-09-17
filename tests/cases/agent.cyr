@@ -791,7 +791,13 @@ fn test_agent() {
     _ag_err_reset();
     store64(evbuf + SANDHI_SSE_OFF_DATA, okf);
     feed_init(); out_mode_set(OUT_RING);
+    # 0.52.1: ...and the callback's feed_stream_tick then REPAINTED twenty cursor-addressed rows of that ring to fd 1
+    # (`ESC[1;1Hhi ESC[K ...`) — the throttle clock was never stamped, so the tick painted. Stamped, the tick stays
+    # inside its frame budget; the spinner not advancing is the proof nothing was painted.
+    _stream_last_paint_ms = clock_now_ms();
+    var spin0 = spin_frame();
     assert_eq(_agent_sse_cb(0, evbuf), 1, "a normal content frame is consumed");
+    assert_eq(spin_frame(), spin0, "...without a repaint of the feed to fd 1 (the stray `hi` in the suite log)");
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(agent_err_seen(), 0, "...and reports no upstream error");
     _hoosh_acc_reset();
@@ -2976,6 +2982,10 @@ fn test_confirm_modal_grant() {
     _test_ask_calls = 0;
     assert_eq(confirm("run", "rm -rf build"), 0, "`no` in the modal denies");
     assert_eq(_test_ask_calls, 1, "...the modal was posed once");
+    # 0.52.1: the posed question is ONE line with the action first. It carried a '\n' after the reason, which the
+    # ask sanitiser substitutes, so the window drew "...nothing else can)?run rm -rf build" (live, Hyprland).
+    assert(streq(ask_question(), "Authorize run rm -rf build? (t-ron absent - thoth is asking because nothing else can)") == 1, "...asking `Authorize <verb> <obj>? (<why>)` on one line, the action first");
+    assert_eq(_ui_contains(ask_question(), "?run"), 0, "...no separator substituted into a stray '?'");
     assert_eq(_ask_nopt, 3, "the modal poses THREE answers: no / yes, once / yes, for this session");
     assert_eq(grant_count(), 0, "...and a deny grants nothing");
     ask_hook_set(&_test_ask_hook_once);

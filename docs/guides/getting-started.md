@@ -168,8 +168,9 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
   tiers, plus tool-call cards + colored diff cards, a per-turn memory/grounding strip (`gmem`), and a Ctrl+K
   conversation sidebar (`gconv`) over the `conv_*` store. Since 0.49.0 the window takes the mouse: a click on a
   sidebar row switches the conversation, on a tree row selects it (a second click acts as Enter), on the feed or
-  composer focuses the composer; the wheel scrolls the feed (`gframe_hit` resolves a point by the rectangles the
-  frame was drawn with; `gwindow.cyr` binds `wl_pointer` and draws its own arrow cursor). A resumed reply's tool
+  composer focuses the composer; the wheel scrolls the feed three lines a notch and a touchpad one-to-one (0.52.1: the
+  axis source, read at the pointer frame) (`gframe_hit` resolves a point by the rectangles the frame was drawn with;
+  `gwindow.cyr` binds `wl_pointer` and draws its own arrow cursor). A resumed reply's tool
   calls and cited sources draw as a summary card / row from the message's persisted record.
 - `src/inhist.cyr` — the composer input-history recall ring + opt-in persistence (0.11.x).
 - `src/oneshot.cyr` — the one-shot / argv front-door (`thoth 'task'`, `--json`, `-o`, `--completion`, `--tier`).
@@ -188,7 +189,8 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/ask.cyr` — the `ask_user` tool ([ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)): the model asks YOU a question mid-turn and blocks for the answer. Off by default (`[ask].enabled`).
 - `src/gui/gask.cyr` — the T3 question modal (view-builder + key fold; the blocking poll loop is in `gpresent`).
 - `src/gui/gcmd.cyr` — slash-command output cards (0.46.0): the window routes a slash line through the command
-  hub under the feed ring's capture and draws what it printed where it was issued.
+  hub under the feed ring's capture and draws what it printed where it was issued — in the conversation it was
+  issued in (0.52.1).
 - `src/subagent.cyr` — `delegate(task)`: a scoped child *context*, off by default ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)).
 - `src/budget.cyr` — `[budget]` spend enforcement (0.44.3): session token / cost ceilings checked before every turn and between agentic rounds, delegated children billed to the same tally — and an announcement when the gateway reports no usage, because a ceiling nothing measures is not a bound.
 - `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.

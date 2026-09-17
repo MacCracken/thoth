@@ -2,6 +2,105 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.1] - 2026-09-17
+
+**Repair batch 6: the window, driven live.** The window's checks that 0.49.0–0.52.0 had left "owed to the operator's
+eyes" were run on a live compositor from an SSH session: Hyprland 0.56.2 started headless on this machine, screenshots
+over `wlr-screencopy`, keys and the pointer through the virtual-keyboard and virtual-pointer protocols, and a logging
+relay on the Wayland socket for the wire. Every owed check passes (below). Running them found eight defects, all fixed
+here with the pinned batch-6 item: the worst froze the window for good when a resize raced a frame. Nothing here adds
+a capability. Suite **755 + 1959 + 1032 + 823 + 190 + 5** (+82). Linux / aarch64 / AGNOS build with 0.52.0's warning sets (diffed against
+a `git archive` of 0.52.0 built beside it); the Windows lane at its known-gap skip; macOS built and its native suite
+green (822 + 1937 + 1029 + 190 + 749); the AGNOS runtime re-run (`thoth 0.52.1` in ring 3, on the third boot — the first
+two died in gnoboot's `ExitBootServices` before the kernel ran; repair batch 7 carries it).
+
+- **A resize that raced a frame froze the window for good.** The present gate waits until the compositor releases the
+  buffer it last attached. A configure that landed while a frame was in flight made the resize destroy that buffer and
+  create a new one, and the release, addressed to the old id, was ignored, because the flag cleared only on a release
+  for the *current* id. `gwl_win_ready` never returned 1 again: the window stayed at its old size, took keys and drew
+  none of them. Reproduced two ways: a window mapped during an output rescale (the relay showed the release arriving
+  for the destroyed id), and a burst of 25 resizes. The 0.52.0 binary froze in 3 of 3 bursts, this one in 0 of 3. An
+  interactive drag-resize races the same way. The gate now follows the attached buffer's id (`gwl_wl_busy_oid`) and
+  clears on that buffer's release, or on the server's `delete_id` for it. The protocol sends that for every destroyed
+  object, so the wait cannot outlive it. The `delete_id` argument is size-checked like every wire read.
+- **A scrolled feed painted over the composer and the status strip.** The rasteriser's clip was one level: a pop
+  restored the whole frame. The frame's one nested push is a command card inside the feed's viewport, so everything
+  the flow drew after a card was unclipped, and with the feed scrolled up the hidden lower messages drew over the
+  composer and the strip. The clip is a stack now (`gr_clip_push` / `gr_clip_pop`, eight levels): a push intersects
+  with the clip in force (a card straddling the viewport's edge stays inside it) and a pop restores the level below.
+- **The authorization modal garbled its question.** `confirm` posed `<reason>\n<verb> <obj>` through the modal, and
+  the ask sanitiser (built for the model's text) substitutes every C0 byte, so the window drew `…nothing else
+  can)?run echo started-run; sleep 30`. The question is one line in the terminal prompt's order, action first:
+  `Authorize run echo hi? (t-ron absent - thoth is asking because nothing else can)`, so the modal's row cap can
+  only ever cut the reason. The question also wrapped at the width and split words, `run e` / `cho started-run`. It
+  breaks after the last whole word that fits now (a token wider than the row still breaks at the width), and the
+  card's height walks the same rows as its draw.
+- **Command cards drew in every conversation.** A card was anchored by the bare history length, so `/theme` typed in
+  one conversation drew inside every other at the same length, or after turns it had preceded (Ctrl+K between three
+  conversations). A card records its conversation's id (never its store index, which a delete shifts) and draws only
+  there. An empty conversation with no card of its own keeps the greeting. The anchor is an ordinal: the length plus
+  the conversation's dropped count, so the 40-message cap evicting old messages does not slide a card down. Sealing a
+  card clamps this conversation's older cards to the history's end when it shrank under them (`/reset`), so a card
+  never draws after messages that arrived later.
+- **The operator's line was drawn twice while a reply streamed.** The provisional echo assumed the prompt was not in
+  the history yet, but the turn appends it before it streams. The echo stands only until the turn's own user message
+  lands (`gturn_prompt_landed`: a message tagged past the turn in force at submit, scanned back over the turn's
+  tool-round messages; a tag check, so it holds at the history cap).
+- **The composer kept a running command's line.** The window dispatched the composer's own buffer and cleared the
+  composer after the command returned, which went unseen while a command froze the window. Since 0.52.0 the window
+  repaints during the wait, so the line sat in the composer as if never sent, under its own `running` row.
+  `gcmd_submit` copies the line, clears the composer and then runs it. The copy is required: the composer's draw
+  NUL-terminates its buffer at the cleared length, which would empty the line mid-dispatch.
+- **Touchpad scrolling ran four times ahead of the fingers.** Every axis delta got the wheel gain (a 15 px notch →
+  60 px, three lines), so a two-finger scroll moved the feed 4 px per finger pixel (measured: −1 → 4, −10 → 40). The
+  decoder reads `wl_pointer.axis_source`: a finger or continuous source scrolls 1:1 (as GTK, Qt and the browsers do),
+  and a wheel notch keeps the gain. Hyprland sends the source *after* the axis in the frame (seen on the wire), and
+  the protocol promises only that it arrives before `frame`. So a v5 seat's delta is held and pushed at `frame`. A
+  seat below v5 (no frames) keeps the immediate notch push.
+- **The agent suite's stray `hi` (pinned item).** 0.51.2 moved the `{"content":"hi"}` frame into the ring, but
+  `_agent_sse_cb` then reached `feed_stream_tick`, which repainted twenty cursor-addressed rows to fd 1 because the
+  throttle clock was never stamped. Stamped; the suite log carries no `ESC[1;1H` now.
+
+**The owed live checks, all passed** (the roadmap's list):
+- **Startup:** the greeting's `input history … (2 recalled)` row. `hello there` and `/quit` land in
+  `~/.thoth_history` (0600) after `/quit`. A talking `session_start` hook's card sits under the greeting, and a
+  silent hook draws none. `session_end`'s side effect lands after `/quit` and after the compositor's close.
+- **Waits (0.52.0):** with `session_start = "sleep 20"`, the window maps at once with `running [hook session_start]
+  (Esc stops it)`. Esc killed the hook in 0.06 s, the window stayed open, and the card read `interrupted - stopped
+  before it finished`. During `/run … sleep 30`, the window followed a float and a resize to 820×560 and repainted,
+  and Esc stopped it in 0.11 s with the partial output kept. The compositor's close during `/run sleep 31` ended the
+  child and thoth in 0.12 s. Closed mid-stream, thoth exited in 0.35 s with the partial reply kept in the session
+  store; a restart resumed it. Esc mid-stream kept the partial.
+- **Pointer (0.49.0):** the cursor over the window is thoth's own 12×19 arrow with its hotspot on the pointer. A click
+  on a conversation row, on its title or its `N msg` line, switches to that conversation. A click on a tree row
+  selects it and a second click @mentions it into the composer. Scroll: the numbers above.
+- **The thinking fold across a restart (0.48.0):** streamed live, toggled with Ctrl+R, back after a restart and
+  toggling there.
+- **`rainbow` on the window:** prose runs a diagonal gradient; a semantic green span (`hoosh: reachable`) keeps its
+  colour; code blocks and tables keep theirs. Inline code and headings take the gradient by design (`_md_role_color`).
+- **HiDPI:** the roadmap said the arrow is "small on a HiDPI output, like the window itself". At output scale 2,
+  Hyprland upscales the scale-1 buffer instead, so the window and its arrow come out soft, not small. The claim is
+  corrected (the registry's degradation line).
+
+Tests (+82): `test_gui_buffer_busy` (wire bytes through the real parser: the attached buffer's release clears the
+wait after a resize replaced it, a stray release does not, a `delete_id` for it ends the wait, another object's does
+not, and a `delete_id` declaring no argument is not read past its end); `test_gui_clip_stack` (nested push/pop and
+intersection on a raster, the depth cap, an unbalanced pop, and the live bug rebuilt: a card in the flow and the feed
+scrolled up leave nothing below the viewport); `test_gcmd_conversations` (a card is drawn only in its conversation and
+at its point; an empty conversation keeps the greeting; a `/reset` re-anchors older cards; 10 evicted messages leave a
+card at the top, not ten rows down); `test_gcmd_submit` (the composer is empty while the command runs, and the command
+keeps its whole line after a mid-run repaint touched the composer's buffer); `test_gturn_prompt_landed`; the pointer
+test's source frames (Hyprland's order and source-first, an unnamed source, wheel, continuous, a frame with no axis, a
+pre-v5 seat, 1:1 through the pump); the modal's word rows (`aaaa bbbb cccc` at 7, the width on a space, an over-wide
+token, the row count, and the real authorization question in a narrow window ending every row at a word boundary);
+the posed authorization question in `test_confirm_modal_grant`; the unpainted `hi` frame. Proven by breaking, eighteen
+ways, all caught: the one-level clip restored; the reason-first question with its newline; every card drawn in every
+conversation; the shrink clamp dropped; the anchor as a bare length; the echo drawn for the whole turn; the landed
+check without its turn-tag guard; the composer cleared after the command; the command run from the composer's own
+buffer; the throttle clock unstamped; the release matched against the current buffer only; the `delete_id` path
+dropped; its size check dropped; the axis pushed at the axis instead of the frame; every delta scaled as a notch; the
+frame keeping its source; the question broken at the width; its rows counted by the width.
+
 ## [0.52.0] - 2026-09-16
 
 **A running command belongs to the surface: the window stays live, and Esc stops it.** The seventh feature arc under

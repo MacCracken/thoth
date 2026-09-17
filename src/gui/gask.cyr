@@ -92,19 +92,39 @@ fn _gask_adv_cp(p, n) {
     return p;
 }
 
-# _gask_q_rows: how many rows the question needs at `maxcp` codepoints per row, clamped to GASK_Q_ROWS.
-# Counts CODEPOINTS, not bytes, so a multi-byte question is not given rows it does not need.
+# _gask_row_len (0.52.1): how many codepoints of `p` one row of `maxcp` draws — breaking after the LAST space that fits
+# when the rest does not, so a word is not split across rows. Through 0.52.0 the question broke at the width, so the
+# command being authorized read `run e` / `cho started-run` (seen live on Hyprland). A single token longer than the
+# row still breaks at the width. Codepoints, never bytes (the _gask_adv_cp rule). Never 0 at a non-NUL `p`.
+fn _gask_row_len(p, maxcp) {
+    var i = 0;
+    var q = p;
+    var sp = 0 - 1;
+    while (i < maxcp) {
+        if (load8(q) == 0) { return i; }                     # the rest fits
+        if (load8(q) == 32) { sp = i; }
+        q = _gask_adv_cp(q, 1);
+        i = i + 1;
+    }
+    if (load8(q) == 0) { return maxcp; }                     # it fills the row exactly
+    if (load8(q) == 32) { return maxcp; }                    # the width falls on a space: the row is whole words
+    if (sp > 0) { return sp; }
+    return maxcp;                                            # one token wider than the row
+}
+# _gask_row_next (0.52.1): where the row after `p` starts — past what the row drew and the one space it broke at.
+fn _gask_row_next(p, maxcp) {
+    var q = _gask_adv_cp(p, _gask_row_len(p, maxcp));
+    if (load8(q) == 32) { q = q + 1; }
+    return q;
+}
+# _gask_q_rows: how many rows the question needs at `maxcp` codepoints per row, clamped to GASK_Q_ROWS. Walks the SAME
+# rows gask_build draws (0.52.1: word breaks), so the card's height and its rows cannot disagree.
 fn _gask_q_rows(maxcp) {
     if (maxcp < 1) { return 1; }
     var p = gask_question();
-    var cps = 0;
-    while (load8(p) != 0) {
-        if ((load8(p) & 0xC0) != 0x80) { cps = cps + 1; }
-        p = p + 1;
-    }
-    var rows = (cps + maxcp - 1) / maxcp;
+    var rows = 0;
+    while ((load8(p) != 0) && (rows < GASK_Q_ROWS)) { rows = rows + 1; p = _gask_row_next(p, maxcp); }
     if (rows < 1) { rows = 1; }
-    if (rows > GASK_Q_ROWS) { rows = GASK_Q_ROWS; }
     return rows;
 }
 fn gask_add_option(t) {
@@ -182,9 +202,9 @@ fn gask_build(cmds, w, h) {
     while (qr < qrows) {
         if (load8(qp) == 0) { qr = qrows; }
         else {
-            gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FG), qp, maxcp);
+            gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FG), qp, _gask_row_len(qp, maxcp));   # 0.52.1: whole words
             ty = ty + GASK_ROW_H;
-            qp = _gask_adv_cp(qp, maxcp);
+            qp = _gask_row_next(qp, maxcp);
             qr = qr + 1;
         }
     }

@@ -251,8 +251,7 @@ fn _gpresent_submit(win) {
 fn gpresent_run_command(line) {
     var cls = classify_final(line);
     if (cls == CMD_CLEAR) { gcmd_clear(); gcomp_reset(); gscroll_reset(); return 1; }   # the window's scrollback IS the cards
-    var keep = gcmd_run(line, &dispatch);     # the capture bracket (gcmd.cyr): the ring as the sink, sealed as a card
-    gcomp_reset();
+    var keep = gcmd_submit(line, &dispatch);  # 0.52.1: copy the line + clear the composer FIRST (the window repaints while it runs), then the capture bracket (gcmd.cyr)
     gscroll_reset();                          # a fresh card is the newest thing: jump the feed to it
     git_probe();                              # the command may have changed the worktree (/run, /rewind) — the strip's git field
     _gui_dirty = 1;

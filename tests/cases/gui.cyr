@@ -790,6 +790,115 @@ fn test_gui_scroll() {
     return 0;
 }
 
+# 0.52.1: the present gate waits on the buffer that was ATTACHED. A configure landing while a frame was in flight made
+# the resize destroy that buffer and create another; its release arrived addressed to the old id and was ignored, so
+# gwl_win_ready never returned 1 again — the window froze at its old size (reproduced live on Hyprland through a
+# logging proxy). Wire bytes through the real parser.
+fn _tg_wire(off, oid, op, size): i64 { store32(&gwl_wl_rbuf + off, oid); store32(&gwl_wl_rbuf + off + 4, (size << 16) | op); return off + size; }
+fn test_gui_buffer_busy() {
+    test_group("the present gate follows the attached buffer across a resize (gwindow.cyr, 0.52.1)");
+    var sv_fd = gwl_wl_fd;
+    gwl_wl_frame_oid = 0; gwl_wl_frame_done = 1; gwl_wl_cur_sync = 0; gwl_wl_reg_id = 0; gwl_wl_ptr_oid = 0; gwl_wl_kbd_oid = 0;
+    gwl_wl_buf_busy = 1; gwl_wl_busy_oid = 14; gwl_wl_buf_oid = 18;        # frame on buffer 14 in flight; a resize made 18
+    assert_eq(gwl_win_ready(1), 0, "a frame in flight is not ready");
+    var o = _tg_wire(0, 14, GWL_EV_BUFFER_RELEASE, 8);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_buf_busy, 0, "the release addressed to the ATTACHED buffer clears it, though a resize replaced that buffer");
+    assert_eq(gwl_win_ready(1), 1, "...so the window presents again (it froze here)");
+    gwl_wl_buf_busy = 1;
+    o = _tg_wire(0, 18, GWL_EV_BUFFER_RELEASE, 8);                         # (the new buffer was never attached; a stray one)
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_buf_busy, 1, "a release for a buffer that was never attached does not clear the wait");
+    # the server may delete the destroyed buffer without a release: its delete_id ends the wait too
+    gwl_wl_buf_busy = 1; gwl_wl_busy_oid = 14;
+    o = _tg_wire(0, GWL_WL_DISPLAY_ID, GWL_EV_DISPLAY_DELETE, 12); store32(&gwl_wl_rbuf + 8, 13);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_buf_busy, 1, "a delete_id for another object leaves the wait");
+    o = _tg_wire(0, GWL_WL_DISPLAY_ID, GWL_EV_DISPLAY_DELETE, 12); store32(&gwl_wl_rbuf + 8, 14);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_buf_busy, 0, "the delete_id for the attached buffer ends it (the server holds it no longer)");
+    gwl_wl_buf_busy = 1; gwl_wl_busy_oid = 14;
+    store32(&gwl_wl_rbuf + 8, 14);                                         # the id sits where a 12-byte message would carry it
+    o = _tg_wire(0, GWL_WL_DISPLAY_ID, GWL_EV_DISPLAY_DELETE, 8);          # ...but this one DECLARES 8: no argument to read
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_buf_busy, 1, "a delete_id declaring no argument is not read past its end");
+    gwl_wl_buf_busy = 0; gwl_wl_busy_oid = 0; gwl_wl_buf_oid = 0; gwl_wl_rlen = 0; gwl_wl_fd = sv_fd;
+    return 0;
+}
+
+# 0.52.1: the raster clip is a STACK. It was one level — a POP restored the FULL frame — so the one nested push in the
+# frame (a command card inside the feed's viewport) dropped the viewport's clip for the rest of the flow, and a feed
+# scrolled up painted its hidden lower messages over the composer and the status strip (seen live on Hyprland).
+fn test_gui_clip_stack() {
+    test_group("the raster clip is a stack: a nested pop restores the viewport, not the frame (graster.cyr, 0.52.1)");
+    var W = 20; var H = 20;
+    var fb = gr_fb_new(W, H);
+    gr_fb_clear(fb, W, H, 0);
+    var cl = gd_list_new();
+    gd_push_clip(cl, 0, 0, 10, 10);                  # a viewport
+    gd_push_clip(cl, 5, 5, 20, 20);                  # a card straddling its edge
+    gd_push_rect(cl, 0, 0, 20, 20, 0xFF0000);
+    gd_push_unclip(cl);                              # the card's pop
+    gd_push_rect(cl, 12, 0, 4, 4, 0x00FF00);         # past the viewport
+    gd_push_rect(cl, 0, 0, 2, 2, 0x0000FF);          # inside it
+    gd_push_unclip(cl);                              # the viewport's pop
+    gd_push_rect(cl, 15, 15, 2, 2, 0xFFFFFF);
+    gr_raster(cl, fb, W, H);
+    assert_eq(load32(fb + (5 * W + 5) * 4), 0xFF0000, "a nested clip draws inside both rects");
+    assert_eq(load32(fb + (4 * W + 4) * 4), 0, "...not outside the inner one");
+    assert_eq(load32(fb + (12 * W + 12) * 4), 0, "...nor outside the OUTER one: a push intersects, so a card straddling the viewport stays inside it");
+    assert_eq(load32(fb + (0 * W + 12) * 4), 0, "after the card's pop the VIEWPORT's clip is back: a rect past it is not drawn");
+    assert_eq(load32(fb + 0), 0x0000FF, "...and a rect inside it is");
+    assert_eq(load32(fb + (15 * W + 15) * 4), 0xFFFFFF, "the outer pop restores the full frame");
+    # past the depth cap a push still narrows and its pop is absorbed; an unbalanced pop is the full frame
+    gr_clip_reset();
+    var i = 0;
+    while (i < GR_CLIP_DEPTH) { gr_clip_push(0, 0, 100, 100); i = i + 1; }
+    gr_clip_push(1, 1, 3, 3);                        # one past the cap
+    assert_eq(GR_CLIP_X0, 1, "a push past the cap still narrows the clip");
+    assert_eq(GR_CLIP_X1, 4, "...on both edges");
+    gr_clip_pop();
+    assert_eq(GR_CLIP_X1, 4, "...and its pop is absorbed (never widens to a level it did not save)");
+    gr_clip_pop();
+    assert_eq(GR_CLIP_X1, 100, "the next pop restores the level below it");
+    gr_clip_reset(); gr_clip_pop();
+    assert_eq(GR_CLIP_X1, 1000000, "a pop with nothing pushed is the full frame");
+
+    # the live bug, rebuilt: a card in the flow, the feed scrolled up, rastered — nothing lands below the viewport
+    ui_force(PT_DESKTOP, CD_TRUE);
+    out_ring_sink_set(&feed_write);
+    session_history_clear(); gcmd_clear(); gscroll_reset();
+    var q = "question";
+    var a = "a fairly long answer that spans a couple of wrapped lines to build height in the feed region here";
+    session_history_append("user", q, strlen(q)); session_history_append("assistant", a, strlen(a));
+    gcmd_run("/x", &_tg_runner_ok);                  # a card anchored after the first exchange
+    i = 0;
+    while (i < 8) { session_history_append("user", q, strlen(q)); session_history_append("assistant", a, strlen(a)); i = i + 1; }
+    var FW = 400; var FH = 320; var VH = 200;
+    var ff = gr_fb_new(FW, FH);
+    var bleed = 0; var drawn = 0;
+    var pass = 0;
+    while (pass < 2) {                               # at the bottom, then scrolled up
+        if (pass == 1) { gscroll_by(120); }
+        gr_fb_clear(ff, FW, FH, 0);
+        var fl = gd_list_new();
+        gfeed_build(fl, 0, 0, FW, VH);
+        gr_raster(fl, ff, FW, FH);
+        var y = 0;
+        while (y < FH) {
+            var x = 0;
+            while (x < FW) { if (load32(ff + (y * FW + x) * 4) != 0) { if (y >= VH) { bleed = bleed + 1; } else { drawn = drawn + 1; } } x = x + 1; }
+            y = y + 1;
+        }
+        pass = pass + 1;
+    }
+    assert(gscroll() > 0, "the feed is scrolled up (there is overflow below the viewport)");
+    assert(drawn > 0, "the flow drew inside its viewport");
+    assert_eq(bleed, 0, "...and NOTHING below it, with a card in the flow and the feed scrolled up (the composer and the strip live there)");
+    session_history_clear(); gcmd_clear(); gscroll_reset(); out_mode_set(OUT_FD1);
+    return 0;
+}
+
 # GUI composer history recall (0.30.15): Up/Down over the inhist ring; a submit records; the draft is stashed.
 fn test_gui_history() {
     test_group("GUI composer history recall (0.30.15)");
@@ -1018,6 +1127,33 @@ fn test_gturn_reply_landed() {
     assert_eq(gturn_reply_landed(), 0, "last assistant belongs to a prior turn -> not landed (the cap fix)");
     session_history_clear();
     assert_eq(gturn_reply_landed(), 0, "empty history -> not landed");
+    session_reset(); session_history_clear();
+    return 0;
+}
+
+# 0.52.1: the provisional echo of the operator's line stands only until the turn appends it. Through 0.52.0 it stood
+# for the whole turn, and the history drew the same line once the turn appended it — twice for the whole stream (seen
+# live on Hyprland with a slow streaming reply).
+fn test_gturn_prompt_landed() {
+    test_group("the in-flight echo stands only until the turn appends the prompt (ginput.cyr / gfeed.cyr, 0.52.1)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    session_bump_turn();
+    session_history_append("user", "slow: one", 9);            # an EARLIER turn with the same words
+    session_history_append("assistant", "earlier answer", 14);
+    gturn_begin("slow: one");
+    assert_eq(gturn_prompt_landed(), 0, "submitted, not yet appended -> not landed (the earlier identical prompt is a prior turn's)");
+    var l0 = gd_list_new(); gfeed_build(l0, 0, 0, 900, 600);
+    assert_eq(_tg_text_count(l0, "slow: one", 9), 2, "...the earlier turn's line + the echo");
+    session_bump_turn();                                        # cmd_task bumps, then the turn appends its prompt
+    session_history_append("user", "slow: one", 9);
+    assert_eq(gturn_prompt_landed(), 1, "appended by this turn -> landed");
+    var l1 = gd_list_new(); gfeed_build(l1, 0, 0, 900, 600);
+    assert_eq(_tg_text_count(l1, "slow: one", 9), 2, "...so the in-flight line is drawn ONCE while the reply streams (the earlier turn's + this one; it was three)");
+    session_history_append("assistant", "{}", 2);               # a tool round appends more of this turn after the prompt
+    session_history_append("tool", "{}", 2);
+    assert_eq(gturn_prompt_landed(), 1, "...still landed past this turn's own tool-round messages");
+    gturn_end();
     session_reset(); session_history_clear();
     return 0;
 }
@@ -1570,6 +1706,74 @@ fn test_gui_pointer() {
     gwl_wl__ptr_decode(GWL_EV_PTR_BUTTON, &args);                       # click 2: a tree row — would focus the tree
     assert_eq(gpointer_pump(0), 1, "two presses in one batch: the first applies");
     assert_eq(gfocus(), GFOCUS_COMPOSER, "...the second is dropped (the frame is stale after the first)");
+    # 0.52.1: the axis SOURCE picks the gain — a touchpad's delta is the distance to move (1:1); a notch is scaled. Every
+    # delta was scaled like a notch, so a two-finger scroll ran the feed four pixels per finger pixel (live, Hyprland).
+    # The source can follow the axis inside the frame (Hyprland 0.56 sends axis, axis_source, frame — seen through a
+    # logging proxy), so a v5 seat's delta is pushed at the FRAME.
+    var sv_sv = gwl_wl_seat_ver;
+    gwl_wl_seat_ver = 5;
+    gscroll_reset(); gwl_wl_pq_head = 0; gwl_wl_pq_tail = 0; gwl_wl_axis_acc = 0; gwl_wl_axis_src = 0 - 1; gwl_wl_axis_pend = 0;
+    gwl_wl_ptr_x = 700; gwl_wl_ptr_y = 100;
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFFB00);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                         # -5.0 px FIRST (Hyprland's order)
+    assert_eq(gwl_wl_ptr_pending(), 0, "a v5 seat's axis is held until its frame ends (the source may still come)");
+    store32(&args, 1);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS_SOURCE, &args);                  # ...then finger
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "the frame pushes the touchpad step");
+    assert_eq(load64(&rec), GWL_PTR_AXIS_FINE, "...as FINE, though its source came AFTER the axis");
+    assert_eq(load64(&rec + 24), 0 - 5, "...carrying its whole-px delta");
+    assert_eq(gwl_wl_axis_src, 0 - 1, "the frame ends the source (the next frame names its own)");
+    store32(&args, 1);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS_SOURCE, &args);                  # source FIRST (wlroots' order)
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFFB00);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "a source-first frame is pushed too");
+    assert_eq(load64(&rec), GWL_PTR_AXIS_FINE, "...as FINE");
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFFB00);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                         # a frame that names no source
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "an unnamed source's step is pushed");
+    assert_eq(load64(&rec), GWL_PTR_AXIS, "...as a NOTCH (the old scaling — a compositor that names none)");
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFF100);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                         # -15 wheel
+    store32(&args, 0);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS_SOURCE, &args);
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "a wheel notch is pushed");
+    assert_eq(load64(&rec), GWL_PTR_AXIS, "...as a NOTCH");
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFFB00);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    store32(&args, 2);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS_SOURCE, &args);                  # continuous
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "a continuous device's step is pushed");
+    assert_eq(load64(&rec), GWL_PTR_AXIS_FINE, "...as FINE");
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gwl_wl_ptr_pending(), 0, "a frame with no axis pushes nothing");
+    assert_eq(gwl_wl__ptr_need(GWL_EV_PTR_AXIS_SOURCE), 4, "axis_source carries 4 bytes (a frame declaring fewer is dropped)");
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFFB00);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                         # -5 finger, Hyprland's order
+    store32(&args, 1);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS_SOURCE, &args);
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    gframe_build(960, 600);
+    assert_eq(gpointer_pump(0), 1, "the pump applies a touchpad step");
+    assert_eq(gscroll(), 5, "...ONE to one: five finger pixels scroll the feed five pixels (it was twenty)");
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFF100);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);                         # -15 wheel
+    store32(&args, 0);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS_SOURCE, &args);
+    gwl_wl__ptr_decode(GWL_EV_PTR_FRAME, &args);
+    assert_eq(gpointer_pump(0), 1, "...and a wheel notch");
+    assert_eq(gscroll(), 5 + 15 * GPTR_WHEEL_GAIN, "...still three lines a notch");
+    gwl_wl_seat_ver = 3;                                                # a seat below v5 sends no frame: pushed at once
+    store32(&args, 7); store32(&args + 4, 0); store32(&args + 8, 0xFFFFF100);
+    gwl_wl__ptr_decode(GWL_EV_PTR_AXIS, &args);
+    assert_eq(gwl_wl_pop_ptr(&rec), 1, "a pre-v5 seat's step is pushed at once (no frame will come)");
+    assert_eq(load64(&rec), GWL_PTR_AXIS, "...as a NOTCH");
+    gwl_wl_seat_ver = sv_sv; gwl_wl_axis_src = 0 - 1; gwl_wl_axis_pend = 0;
     # restore the default layout + every seam this test touched
     gcomp_reset(); gscroll_reset(); gfocus_set(GFOCUS_COMPOSER);
     if (gconv_hidden() == 0) { gconv_toggle_hidden(); }
@@ -1986,6 +2190,43 @@ fn test_gask() {
     assert_eq(load8(_gask_adv_cp(p0, 2)) & 255, 98, "two codepoints past lands on 'b', not inside the sequence");
     assert_eq(load8(_gask_adv_cp(p0, 99)), 0, "advancing past the end stops at the terminator");
 
+    # 0.52.1: the question breaks at WORDS. At the width it split the command being authorized — `run e` / `cho
+    # started-run` (live, Hyprland). A token wider than the row still breaks at the width; height and draw agree.
+    gask_close();
+    gask_open("aaaa bbbb cccc");
+    var w0 = gask_question();
+    assert_eq(_gask_row_len(w0, 7), 4, "a row ends after the last whole word that fits (`aaaa`, not `aaaa bb`)");
+    var w1 = _gask_row_next(w0, 7);
+    assert_eq(load8(w1), 98, "...and the next row starts at the next word, the space it broke at not drawn");
+    assert_eq(_gask_row_len(w1, 7), 4, "...`bbbb`");
+    assert_eq(_gask_row_len(w0, 4), 4, "the width falling exactly on a space keeps the whole word");
+    assert_eq(load8(_gask_row_next(w0, 4)), 98, "...and the next row starts past that space");
+    assert_eq(_gask_row_len(w0, 99), 14, "a question that fits is one row, all of it");
+    assert_eq(_gask_q_rows(7), 3, "the row count walks the same words (three rows, where the width alone made two)");
+    gask_close();
+    gask_open("abcdefghij");
+    assert_eq(_gask_row_len(gask_question(), 4), 4, "a token wider than the row still breaks at the width");
+    assert_eq(_gask_q_rows(4), 3, "...ten codepoints in three rows of four");
+    gask_close();
+    gask_open("Authorize run echo started-run; sleep 30? (t-ron absent - thoth is asking because nothing else can)");
+    gask_set_label(GASK_LABEL_AUTHZ);
+    var ww = gd_list_new();
+    gask_build(ww, 600, 600);                         # a narrow window: the question takes several rows
+    var wrows = 0; var wbad = 0; var wi = 0;
+    while (wi < vec_len(ww)) {
+        var wd = vec_get(ww, wi);
+        if ((gd_kind(wd) == GD_TEXT) && (gd_text(wd) != 0) && (gd_color(wd) == _ui_rgb(ROLE_FG)) && (gd_aux(wd) > 0)) {
+            if ((gd_text(wd) >= gask_question()) && (gd_text(wd) < (gask_question() + strlen(gask_question())))) {
+                var wend = _gask_adv_cp(gd_text(wd), gd_aux(wd));
+                wrows = wrows + 1;
+                if ((load8(wend) != 0) && (load8(wend) != 32)) { wbad = wbad + 1; }
+            }
+        }
+        wi = wi + 1;
+    }
+    assert(wrows > 1, "the authorization question wraps in a narrow window");
+    assert_eq(wbad, 0, "...and every row ends at a word boundary (no `run e` / `cho`)");
+
     # the label defaults back for the model's own questions — an authz label must never latch
     gask_close();
     gask_open("plain question");
@@ -2210,6 +2451,91 @@ fn test_gcmd() {
     gstatus_build(_sl2, 0, 0, 900, 24);
     assert_eq(_tg_text_count(_sl2, "grants", 6), 0, "...and drops it once cleared");
     ui_set_theme(THEME_DARK);
+    return 0;
+}
+
+# 0.52.1: a submitted command leaves the composer BEFORE it runs — the window repaints while it waits (0.52.0), and
+# the line sat in the composer as if never sent. The runner does what a repaint does (gcomp_cstr) mid-run.
+var _tgs_comp_len = 0 - 1;
+var _tgs_line_ok = 0;
+fn _tg_runner_seecomp(line) {
+    _tgs_comp_len = gcomp_len();
+    gcomp_cstr();                                             # a repaint mid-run NUL-terminates the composer's buffer
+    _tgs_line_ok = streq(line, "/run make test");
+    oprintln("ran");
+    return 1;
+}
+fn test_gcmd_submit() {
+    test_group("a submitted command leaves the composer before it runs (gcmd.cyr, 0.52.1)");
+    out_ring_sink_set(&feed_write);
+    conv_load_begin(); gcmd_clear(); gcomp_reset();
+    var t = "/run make test"; var i = 0;
+    while (load8(t + i) != 0) { gcomp_append(load8(t + i)); i = i + 1; }
+    assert_eq(gcmd_submit(gcomp_cstr(), &_tg_runner_seecomp), 1, "the runner's keep-running comes back");
+    assert_eq(_tgs_comp_len, 0, "the composer was EMPTY while the command ran (the window draws it mid-run)");
+    assert_eq(_tgs_line_ok, 1, "...and the command still had its whole line after a mid-run repaint touched the composer");
+    assert_eq(gcmd_count(), 1, "...sealed as a card");
+    assert(streq(gcmd_head(0), "/run make test") == 1, "...headed by the typed line");
+    gcmd_clear(); conv_load_begin(); gcomp_reset(); out_mode_set(OUT_FD1);
+    return 0;
+}
+
+# 0.52.1: a card belongs to the conversation it was issued in. Through 0.52.0 its anchor was a bare history length, so a
+# `/theme` typed in one conversation drew inside every other conversation at the same length — or after turns it had
+# preceded (seen live on Hyprland, Ctrl+K between three conversations).
+fn _tg_text_y(l, pfx, n) {
+    var i = 0;
+    while (i < vec_len(l)) { var d = vec_get(l, i); if ((gd_kind(d) == GD_TEXT) && (gd_text(d) != 0)) { if (memeq(gd_text(d), pfx, n) == 1) { return gd_y(d); } } i = i + 1; }
+    return 0 - 1;
+}
+fn test_gcmd_conversations() {
+    test_group("command cards belong to their conversation, and keep their point in it (gcmd.cyr, 0.52.1)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    out_ring_sink_set(&feed_write);
+    conv_load_begin();                                        # a clean store: conversation ids start at 1
+    gcmd_clear(); gscroll_reset();
+    var u = "question"; var a = "answer";
+    session_history_append("user", u, strlen(u)); session_history_append("assistant", a, strlen(a));
+    gcmd_run("/theme rainbow", &_tg_runner_ok);               # card 0: conversation A, after its first exchange
+    conv_new();                                               # conversation B
+    gcmd_run("/new", &_tg_runner_ok);                         # card 1: B, at its top
+    var ua = "in b"; session_history_append("user", ua, strlen(ua)); session_history_append("assistant", a, strlen(a));
+    assert_eq(gcmd_here(0), 0, "in B, A's card is not here");
+    assert_eq(gcmd_here(1), 1, "...B's is");
+    var lb = gd_list_new(); gfeed_build(lb, 0, 0, 900, 600);
+    assert_eq(_tg_text_count(lb, "/theme rainbow", 14), 0, "B's feed does not draw A's card");
+    assert_eq(_tg_text_count(lb, "/new", 4), 1, "...it draws its own");
+    assert(_tg_text_y(lb, "/new", 4) < _tg_text_y(lb, "in b", 4), "...at the point it was issued (before B's first message)");
+    conv_switch(0);
+    var la = gd_list_new(); gfeed_build(la, 0, 0, 900, 600);
+    assert_eq(_tg_text_count(la, "/theme rainbow", 14), 1, "A's feed draws A's card");
+    assert_eq(_tg_text_count(la, "/new", 4), 0, "...and not B's");
+    conv_new();                                               # C: empty, no card of its own
+    assert_eq(gcmd_operator_here(), 0, "an empty conversation with no card of its own counts none");
+    assert_eq(_gfeed_greeting_on(0), 1, "...so it keeps the greeting (another conversation's cards do not take its place)");
+    # the history SHRINKS under a card (/reset): the next card sealed clamps it, so it does not draw after later messages
+    conv_switch(0);
+    assert_eq(gcmd_anchor(0), 2, "A's card sits after A's first exchange");
+    session_history_clear();
+    gcmd_run("/reset", &_tg_runner_ok);                       # card 2: A, at 0 — and card 0 clamped to the new end
+    assert_eq(gcmd_anchor(0), 0, "a history that shrank under a card re-anchors it at the end that is left");
+    var ur = "after reset"; session_history_append("user", ur, strlen(ur)); session_history_append("assistant", a, strlen(a));
+    var lr = gd_list_new(); gfeed_build(lr, 0, 0, 900, 600);
+    assert(_tg_text_y(lr, "/theme rainbow", 14) < _tg_text_y(lr, "after reset", 11), "...so it draws BEFORE the messages that came after it, not after them");
+    # the SESS_HIST_MAX cap evicts old messages: the card keeps its point in the conversation, not its index
+    conv_new();                                               # D
+    var i = 0;
+    while (i < 10) { session_history_append("user", u, strlen(u)); i = i + 1; }
+    gcmd_run("/model x", &_tg_runner_ok);                     # issued after D's tenth message
+    var k = gcmd_count() - 1;
+    assert_eq(gcmd_anchor(k), 10, "D's card sits after its tenth message");
+    i = 0;
+    while (i < SESS_HIST_MAX) { session_history_append("user", u, strlen(u)); i = i + 1; }   # 10 of the first ten evicted
+    assert_eq(session_history_dropped(), 10, "the cap dropped D's ten oldest messages");
+    assert_eq(gcmd_anchor(k), 0, "...and the card is still before the eleventh (now index 0), not ten messages further down");
+    session_history_append("user", u, strlen(u));
+    assert_eq(gcmd_anchor(k), 0, "...its point evicted too, it stays at the top");
+    gcmd_clear(); conv_load_begin(); out_mode_set(OUT_FD1);
     return 0;
 }
 

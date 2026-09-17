@@ -24,13 +24,43 @@ fn gr_fb_clear(buf, w, h, xrgb) {
     return 0;
 }
 
-# ---- clip rect (one level: a panel/viewport pushes a rect, POP restores full) ----
+# ---- clip rect: a STACK (0.52.1) — a PUSH intersects with the clip in force and saves it, a POP restores it ----
+# Until 0.52.1 the clip was one level: a PUSH replaced the rect and a POP restored the FULL frame. The one nested
+# push in the frame — a command card inside the feed's viewport (gcmd_build under gfeed_build) — therefore dropped
+# the viewport's clip for everything the flow drew after the card, and a feed scrolled up painted its hidden lower
+# messages over the composer and the status strip (seen live on Hyprland, 0.52.0). Intersecting also keeps a card
+# that straddles the viewport's edge inside it. Past GR_CLIP_DEPTH a push still intersects (never widens) and its
+# pop is absorbed, so the enclosing pop restores the level below it; a POP with nothing pushed is the full frame.
 var GR_CLIP_X0 = 0;
 var GR_CLIP_Y0 = 0;
 var GR_CLIP_X1 = 1000000;
 var GR_CLIP_Y1 = 1000000;
-fn gr_clip_reset() { GR_CLIP_X0 = 0; GR_CLIP_Y0 = 0; GR_CLIP_X1 = 1000000; GR_CLIP_Y1 = 1000000; return 0; }
+var GR_CLIP_DEPTH = 8;
+var _gr_clip_saved[32];        # 32 i64 slots (module-global: 256 bytes) = GR_CLIP_DEPTH levels x (x0, y0, x1, y1)
+var _gr_clip_sp = 0;           # saved levels in use
+var _gr_clip_over = 0;         # pushes past GR_CLIP_DEPTH whose pops restore nothing
+fn gr_clip_reset() { GR_CLIP_X0 = 0; GR_CLIP_Y0 = 0; GR_CLIP_X1 = 1000000; GR_CLIP_Y1 = 1000000; _gr_clip_sp = 0; _gr_clip_over = 0; return 0; }
 fn gr_clip_set(x, y, w, h) { GR_CLIP_X0 = x; GR_CLIP_Y0 = y; GR_CLIP_X1 = x + w; GR_CLIP_Y1 = y + h; return 0; }
+fn gr_clip_push(x, y, w, h) {
+    if (_gr_clip_sp < GR_CLIP_DEPTH) {
+        var p = &_gr_clip_saved + _gr_clip_sp * 32;
+        store64(p, GR_CLIP_X0); store64(p + 8, GR_CLIP_Y0); store64(p + 16, GR_CLIP_X1); store64(p + 24, GR_CLIP_Y1);
+        _gr_clip_sp = _gr_clip_sp + 1;
+    } else { _gr_clip_over = _gr_clip_over + 1; }
+    if (x > GR_CLIP_X0) { GR_CLIP_X0 = x; }
+    if (y > GR_CLIP_Y0) { GR_CLIP_Y0 = y; }
+    if ((x + w) < GR_CLIP_X1) { GR_CLIP_X1 = x + w; }
+    if ((y + h) < GR_CLIP_Y1) { GR_CLIP_Y1 = y + h; }
+    return 0;
+}
+fn gr_clip_pop() {
+    if (_gr_clip_over > 0) { _gr_clip_over = _gr_clip_over - 1; return 0; }
+    if (_gr_clip_sp == 0) { gr_clip_reset(); return 0; }
+    _gr_clip_sp = _gr_clip_sp - 1;
+    var p = &_gr_clip_saved + _gr_clip_sp * 32;
+    GR_CLIP_X0 = load64(p); GR_CLIP_Y0 = load64(p + 8); GR_CLIP_X1 = load64(p + 16); GR_CLIP_Y1 = load64(p + 24);
+    return 0;
+}
 
 # plot one pixel, clamped to the fb bounds AND the active clip rect.
 fn gr_fb_plot(buf, fbw, fbh, x, y, xrgb) {
@@ -206,8 +236,8 @@ fn gr_raster(cmds, buf, fbw, fbh) {
         if (k == GD_RECT)   { gr_fb_fill_rect(buf, fbw, fbh, gd_x(c), gd_y(c), gd_w(c), gd_h(c), gd_color(c)); }
         elif (k == GD_BORDER) { gr_fb_border(buf, fbw, fbh, gd_x(c), gd_y(c), gd_w(c), gd_h(c), gd_color(c)); }
         elif (k == GD_TEXT) { gr_fb_text(buf, fbw, fbh, gd_x(c), gd_y(c), gd_text(c), gd_color(c), gd_aux(c)); }
-        elif (k == GD_CLIP_PUSH) { gr_clip_set(gd_x(c), gd_y(c), gd_w(c), gd_h(c)); }
-        elif (k == GD_CLIP_POP) { gr_clip_reset(); }
+        elif (k == GD_CLIP_PUSH) { gr_clip_push(gd_x(c), gd_y(c), gd_w(c), gd_h(c)); }
+        elif (k == GD_CLIP_POP) { gr_clip_pop(); }
         i = i + 1;
     }
     return 0;

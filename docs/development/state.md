@@ -7,6 +7,24 @@
 
 ## Version
 
+**0.52.1** — **repair batch 6: the window, driven live** (2026-09-17). The window's owed checks were run on a live
+compositor from an SSH session (Hyprland 0.56.2 headless; screenshots over `wlr-screencopy`; keys and the pointer through
+the virtual-keyboard / virtual-pointer protocols; a logging relay on the Wayland socket) and all pass: startup (history
+row, `~/.thoth_history` after `/quit`, a talking and a silent `session_start`, `session_end` after `/quit` and after the
+close), the 0.52.0 waits (a `sleep 20` hook mapped as running, Esc 0.06 s; `/run` followed a resize, Esc 0.11 s; the
+close ended a `/run` in 0.12 s and a stream in 0.35 s with the partial kept and resumed), the pointer (thoth's own
+arrow, clicks on conversation and tree rows), the thinking fold across a restart, `rainbow`. Running them found eight
+defects, fixed with the pinned `hi` repaint: **a resize that raced a frame froze the window for good** (the present gate
+waited on a release addressed to the destroyed buffer — it follows the attached buffer's id now, cleared by its
+release or `delete_id`; 3 of 3 resize bursts froze 0.52.0, 0 of 3 this build); a scrolled feed painting over the
+composer and strip (the raster clip is a stack); the authorization modal's `can)?run` question (one line, action first)
+and its mid-word wrap; command cards drawn in every conversation (scoped by id, an ordinal anchor, clamped on a shrink);
+the operator's line drawn twice while streaming; the composer keeping a running command's line; touchpad scrolling at
+4× (the axis source read at the frame — Hyprland sends it after the axis; 1:1 for a finger, the notch keeps three
+lines). HiDPI corrected: at scale 2 the window is upscaled soft, not small. Suite **755 + 1959 + 1032 + 823 + 190 + 5**
+(+82); Linux / aarch64 / AGNOS warning sets identical to 0.52.0's; macOS green natively (822 + 1937 + 1029 + 190 + 749);
+AGNOS runs `thoth 0.52.1` in ring 3 (the third boot — gnoboot's `ExitBootServices` flaked twice; repair batch 7).
+
 **0.52.0** — **a running command belongs to the surface** (2026-09-16, F7). `exec.cyr`'s wait loop — the one place
 a running command hands the main thread back — calls a surface-owned **wait poll** instead of the TUI's spinner
 tick: the TUI's (`tui_wait_poll`: the spinner + an Esc drain where the poll mode is armed — a turn's tool phase and,
@@ -3623,18 +3641,19 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `macos` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **Re-verified at 0.52.0 on the 6.6.4 pin: Linux built and tested (4,677 assertions), aarch64 and AGNOS
-built with warning sets identical to 0.51.3's, Windows at its known-gap skip, macOS built and its native suite green
-(822 + 1937 + 1026 + 190 + 670, 0 failed), AGNOS runs `thoth 0.52.0` in ring 3. Each row
+source. **Re-verified at 0.52.1 on the 6.6.4 pin: Linux built and tested (4,759 assertions), aarch64 and AGNOS
+built with warning sets identical to 0.52.0's (all four lanes diffed against a `git archive` of 0.52.0 built beside
+it), Windows at its known-gap skip, macOS built and its native suite green (822 + 1937 + 1029 + 190 + 749, 0 failed),
+AGNOS runs `thoth 0.52.1` in ring 3. Each row
 carries its own stamp** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (676 + 1959 + 1029 + 823 + 190 assertions, five suite binaries green at 0.52.0), released | `build/thoth` |
-| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.52.0 / Cyrius 6.6.4, warning set identical to 0.51.3's; a static ARM ELF; 6.6.4 dropped the two stale `raw syscall 5` warnings) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN, re-verified 0.52.0** (822 + 1937 + 1026 + 190 + 670, 0 failed; Apple Silicon, macOS 26.6.2; the 6.6.4 toolchain cross-built on Linux (`scripts/build-macos-arm64-tarball.sh`) and installed into `~/.cyrius/versions/6.6.4` there — `cyrius install` has no registry; 6.6.3 shipped at 0.45.6; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
-| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS — re-run every release** (last 0.52.0, 2026-09-16): `AGNOS_REPO=~/Repos/agnos ./scripts/agnos-run.sh` boots the kernel under QEMU (KVM) and the ~5.9 MB ELF loads off ext2, runs in ring 3, prints `thoth <VERSION>` and exits 0 with no fault. Re-established at 0.51.2 after the local kernel was rebuilt with `BASESTACK_SELFTEST` (the first re-run since 0.44.3); verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (755 + 1959 + 1032 + 823 + 190 assertions, five suite binaries green at 0.52.1), released | `build/thoth` |
+| aarch64 Linux | `--aarch64` | **builds** (re-verified 0.52.1 / Cyrius 6.6.4, warning set identical to 0.52.0's; a static ARM ELF; 6.6.4 dropped the two stale `raw syscall 5` warnings) — valid static ARM ELF, not yet ARM-run-tested. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN, re-verified 0.52.1** (822 + 1937 + 1029 + 190 + 749, 0 failed; Apple Silicon, macOS 26.6.2; the 6.6.4 toolchain cross-built on Linux (`scripts/build-macos-arm64-tarball.sh`) and installed into `~/.cyrius/versions/6.6.4` there — `cyrius install` has no registry; 6.6.3 shipped at 0.45.6; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
+| AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS — re-run every release** (last 0.52.1, 2026-09-17; two of its three boots died in gnoboot's `ExitBootServices` before the kernel — the roadmap's gnoboot row): `AGNOS_REPO=~/Repos/agnos ./scripts/agnos-run.sh` boots the kernel under QEMU (KVM) and the ~5.9 MB ELF loads off ext2, runs in ring 3, prints `thoth <VERSION>` and exits 0 with no fault. Re-established at 0.51.2 after the local kernel was rebuilt with `BASESTACK_SELFTEST` (the first re-run since 0.44.3); verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
 | Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source at 0.44.3** — reachable undefined functions **11 → 1**. Left at 0.51.0 / 6.6.3: architectural `SYS_SOCKET`/`SYS_CONNECT` (`lib/sandhi.cyr`'s raw socket path; ws2_32 — the epoll set no longer surfaces since the PE floor routes IOCP), and vendored `SIGHUP`/`SIG_BLOCK` (t-ron's signal half, zero thoth callers) + `sys_rmdir` (sit; the Win floor routes `DeleteFileW` but not `RemoveDirectoryW`) — exactly the five names in `scripts/build.sh win`'s known-gap skip | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
@@ -3767,8 +3786,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **676 (gui) + 1959 (core) + 1029 (agent) + 823 (tui) + 190 (render) = 4,677 assertions, 0 failures, as of
-0.52.0 — the runner's closing `5 passed` is the five suite binaries, not assertions** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **755 (gui) + 1959 (core) + 1032 (agent) + 823 (tui) + 190 (render) = 4,759 assertions, 0 failures, as of
+0.52.1 — the runner's closing `5 passed` is the five suite binaries, not assertions** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -3791,7 +3810,7 @@ the window pumped, Esc stopping a running command on both surfaces (0.52.0). Per
 **The path to v1.0 is dominated by AGNOS lighting up, not by feature work in thoth.** Four gates (see
 [`roadmap.md`](roadmap.md) → *Path to v1.0*): (1) the AGNOS lane — **build ✓ and runtime ✓** (a valid static
 x86_64-AGNOS ELF, zero thoth change, and it **loads and runs in ring 3** — `./scripts/agnos-run.sh`,
-re-run at 0.52.0: the ~5.9 MB ELF prints `thoth 0.52.0` in ring 3 and exits 0); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
+re-run at 0.52.1: the ~5.9 MB ELF prints `thoth 0.52.1` in ring 3 and exits 0); (2) ≥1 downstream consumer green on AGNOS — **rung 1 ✓** (thoth runs), rungs 2–3
 (a real turn against a native spine, then the TUI over agnsh) open, **owner: thoth**; (3) a security
 review — the concurrency half closed at 0.44.3; only the external sign-off remains; (4) the
 SemVer-vs-CalVer 1.0 decision (deferred, [ADR-0004](../adr/0004-semver-pre-release.md)). x86_64 Linux
@@ -3804,8 +3823,9 @@ batches** — `0.45.5` shipped batch 1 (content escapes, the memory double read,
 the streaming-usage decision, history-file polish, macOS at the pin), `0.45.6` batch 2 (hook facts into the
 environment, the darshana / bote-core / cyrius refresh, the Windows exclusive create) and `0.50.1` batch 3 (the
 `thoth gui` dispatch-order gap: the window's `[history].file`, session hooks, git after a turn, no escapes to the
-launching tty), `0.51.2` batch 4 (nine sweep-found repairs) and `0.51.3` batch 5 (the cyrius 6.6.4 re-vendor);
-**batch 6 is pinned to 0.52.1** (the roadmap lists it) — while **minors are held for feature arcs** (`0.46.0`
+launching tty), `0.51.2` batch 4 (nine sweep-found repairs), `0.51.3` batch 5 (the cyrius 6.6.4 re-vendor) and `0.52.1`
+batch 6 (the window driven live on a headless compositor: the resize freeze, the feed clip, the modal, cards per
+conversation, touchpad scroll and three more); **batch 7 is pinned to 0.52.2** (the roadmap lists it) — while **minors are held for feature arcs** (`0.46.0`
 through `0.52.0` = F1–F7; the candidates F8–F14 are ordered on the roadmap with their gates, the next decided one
 earns `0.53.0`). Defects owned
 upstream or by the floor sit in a waiting-on table with the version each was last checked against.

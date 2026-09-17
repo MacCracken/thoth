@@ -18,8 +18,8 @@
 var GD_RECT      = 0;   # filled rectangle (color)
 var GD_TEXT      = 1;   # UTF-8 cstr at (x,y), color; aux = max codepoints (0 = uncapped)
 var GD_BORDER    = 2;   # 1px rectangle outline (color)
-var GD_CLIP_PUSH = 3;   # push a clip rect (x,y,w,h) for scroll viewports / panels
-var GD_CLIP_POP  = 4;   # restore the full-frame clip
+var GD_CLIP_PUSH = 3;   # push a clip rect (x,y,w,h) for scroll viewports / panels — INTERSECTED with the clip in force (0.52.1)
+var GD_CLIP_POP  = 4;   # restore the clip in force before the matching push (0.52.1: a stack; was the full frame)
 
 # cell byte offsets (8 i64 slots)
 var GDC_KIND = 0; var GDC_X = 8; var GDC_Y = 16; var GDC_W = 24;

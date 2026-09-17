@@ -136,6 +136,6 @@ fn gstatus_build(cmds, x, y, w, h) {
     pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_GREEN), status_sval(SF_SURFACE)) + GSTATUS_GAP;
     pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), "theme") + 8;
     pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_ACCENT), status_sval(SF_THEME)) + GSTATUS_GAP;
-    gd_push_unclip(cmds);                                 # restore the full-frame clip
+    gd_push_unclip(cmds);                                 # restore the clip in force before the strip's
     return pen;
 }
