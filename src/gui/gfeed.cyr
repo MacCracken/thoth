@@ -551,6 +551,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         i = i + 1;
     }
     if (gcmd_count() > 0) { cy = gcmd_build_anchored(cmds, xbase, cy, avail, n, 1); }   # 0.46.0: cards after the last message
+    cy = gcmd_running_build(cmds, xbase, cy, avail);          # 0.52.0 (F7): a command waiting on a child, under its predecessors
     # a turn in flight (0.30.4): echo the just-submitted message as a provisional bubble + a working indicator,
     # BELOW the last real message. Part of the measured flow so the bottom-anchor keeps it visible. The pending
     # text is NOT in session_history yet (the turn appends it when it runs) — this is a transient render.
@@ -680,6 +681,7 @@ fn gfeed_build(cmds, x, y, w, h) {
         # 0.50.1: the standing notices and the startup cards (a session_start hook's report) draw UNDER the block
         endy = _gfeed_broke_notices(cmds, xbase, endy + GFEED_GAP, avail);
         if (gcmd_count() > 0) { endy = gcmd_build_anchored(cmds, xbase, endy, avail, 0, 1); }
+        endy = gcmd_running_build(cmds, xbase, endy, avail);  # 0.52.0 (F7): the startup hook (or a first command) still running
     } else {
         var total = _gfeed_flow(0, xbase, 0, avail, n);          # measure-only pass (incl. a pending turn) -> total height
         var base = gfeed_anchor_y(total, y, h);                  # bottom-anchored start (scroll == 0)

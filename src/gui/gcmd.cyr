@@ -46,6 +46,43 @@ fn _gcmd_slot(k) { return (_gcmd_first + k) % GCMD_CARDS; }       # k = 0..count
 fn _gcmd_meta_get(slot, cell) { return load64(_gcmd_meta + (slot * GCMD_META + cell) * 8); }
 fn _gcmd_meta_set(slot, cell, v) { store64(_gcmd_meta + (slot * GCMD_META + cell) * 8, v); return 0; }
 
+# --- the command in flight (0.52.0, F7) ---------------------------------------------------------------------------
+# The window is pumped while a command or a startup hook waits on a child now (gpresent's _gwait_poll), so it repaints
+# and must say what it is waiting on: the pump drains keys mid-work exactly as mid-turn (Esc stops, anything else is
+# dropped), and a frame that looked idle while typing did nothing would be the lie. Both brackets below mark the line
+# RUNNING for their runner's duration; the feed draws one row for it — `running /run make  (Esc stops it)` — under
+# the cards. Cleared when the runner returns, before the card is sealed. A command that never waits is never pumped,
+# so its row is never drawn.
+var _gcmd_running = 0;
+var _gcmd_running_head = 0;    # alloc(GCMD_HEAD_CAP): the running line, LABEL-sanitised like a card's head
+fn gcmd_running() { return _gcmd_running; }
+fn gcmd_running_head() { if (_gcmd_running_head == 0) { return ""; } return _gcmd_running_head; }
+fn _gcmd_running_begin(line) {
+    if (_gcmd_running_head == 0) { _gcmd_running_head = alloc(GCMD_HEAD_CAP); }
+    if (_gcmd_running_head == 0) { return 0; }
+    safe_label_copy(_gcmd_running_head, GCMD_HEAD_CAP, line);
+    _gcmd_running = 1;
+    return 0;
+}
+fn _gcmd_running_end() { _gcmd_running = 0; return 0; }
+
+# gcmd_running_build: the running row at (x, y) in a w-px column; returns the y below it (y itself when nothing runs).
+# cmds == 0 measures only — the same height either way (the flow's bottom-anchor pre-measure relies on that parity).
+fn gcmd_running_build(cmds, x, y, w) {
+    if (_gcmd_running == 0) { return y; }
+    if (cmds != 0) {
+        gd_push_rect(cmds, x, y + 4, 8, 8, _ui_rgb(ROLE_ACCENT));               # the working mark (the turn's, static)
+        var maxcols = (w - 16) / GR_GLYPH_W;
+        var pen = _gstatus_txt(cmds, x + 16, y, _ui_rgb(ROLE_MUTED), "running ");
+        var hcols = maxcols - 8 - 17;                                            # "running " + "  (Esc stops it)"
+        if (hcols < 1) { hcols = 1; }
+        var hn = gr_text_cols(gcmd_running_head(), hcols);                     # codepoints drawn, capped to the room
+        gd_push_text(cmds, pen, y, _ui_rgb(ROLE_FG), gcmd_running_head(), hn);
+        _gstatus_txt(cmds, pen + hn * GR_GLYPH_W, y, _ui_rgb(ROLE_FAINT), "  (Esc stops it)");
+    }
+    return y + GCMD_LH + GCMD_GAP;
+}
+
 fn gcmd_count() { return _gcmd_count; }
 fn gcmd_clear() { _gcmd_count = 0; _gcmd_first = 0; _gcmd_startup = 0; return 0; }
 # gcmd_startup (0.50.1): how many of the live cards are startup cards — when EVERY live card is one, the operator
@@ -193,7 +230,9 @@ fn gcmd_build_anchored(cmds, x, y, w, anchor, at_end) {
 fn gcmd_run(line, run_fn) {
     feed_clear();                                            # the sink starts empty: the card is THIS command's output only
     out_mode_set(OUT_RING);
+    _gcmd_running_begin(line);                               # 0.52.0 (F7): the pump draws the running row while it waits
     var keep = fncall1(run_fn, line);
+    _gcmd_running_end();
     feed_flush_pending();                                    # seal a trailing un-newlined line
     out_mode_set(OUT_FD1);
     gcmd_record(line);
@@ -210,7 +249,9 @@ fn gcmd_run(line, run_fn) {
 fn gcmd_capture(head, run0) {
     feed_clear();
     out_mode_set(OUT_RING);
+    _gcmd_running_begin(head);                               # 0.52.0 (F7): a slow session_start hook shows as running
     fncall0(run0);
+    _gcmd_running_end();
     feed_flush_pending();
     out_mode_set(OUT_FD1);
     if (feed_count() > 0) {

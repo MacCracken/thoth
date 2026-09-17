@@ -29,7 +29,7 @@ var VERIFY_TAIL = 3000;            # when over cap, keep the TAIL: a compiler na
 var _verify_buf = 0;
 var _verify_res = 0;
 var _verify_runs = 0;              # verifications run this session (for /state)
-var _verify_last_ok = 0 - 1;       # -1 never run · 0 last run failed · 1 last run passed
+var _verify_last_ok = 0 - 1;       # -1 never run · 0 last run failed · 1 last run passed · 2 last run interrupted (0.52.0)
 
 fn verify_runs() { return _verify_runs; }
 fn verify_last_ok() { return _verify_last_ok; }
@@ -67,7 +67,9 @@ fn verify_run() {
     var code = load64(&st);
     var timed_out = load64(&st + 8);
     _verify_runs = _verify_runs + 1;
-    if (code == 0) { _verify_last_ok = 1; } else { _verify_last_ok = 0; }
+    if (code == 0) { _verify_last_ok = 1; }
+    elif (code == (0 - 4)) { _verify_last_ok = 2; }     # 0.52.0 (F7): stopped by the operator — no verdict, not a failure
+    else { _verify_last_ok = 0; }
 
     var cap = VERIFY_OUT_CAP + 512;
     var off = 0;
@@ -77,6 +79,11 @@ fn verify_run() {
     if (timed_out == 1) {
         off = _append_cstr_cap(_verify_res, off, cap, "TIMED OUT (no verdict — the check did not finish; treat the change as unverified)");
         ui_emit(ROLE_RED, "  verify: timed out"); oprintln("");
+    } elif (code == (0 - 4)) {
+        # 0.52.0 (F7): Esc (or the window closing) stopped the check. Said as what it is — the operator's act, not a
+        # failure of the change and not a timeout — and still UNVERIFIED, because nothing finished checking it.
+        off = _append_cstr_cap(_verify_res, off, cap, "INTERRUPTED (the operator stopped the check before it finished — the change is UNVERIFIED)");
+        ui_emit(ROLE_MUTED, "  verify: interrupted"); oprintln("");
     } elif (code == (0 - 1)) {
         off = _append_cstr_cap(_verify_res, off, cap, "could not be run (spawn failed) — the change is UNVERIFIED");
         ui_emit(ROLE_RED, "  verify: could not run"); oprintln("");

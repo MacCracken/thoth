@@ -103,6 +103,12 @@ fn _gstop_poll() {
     var pfd[8];
     if (_gpresent_poll_fd(&pfd, gwl_win_fd(_gstop_win), 0) > 0) {   # non-blocking peek; nothing queued -> skip
         var ev = gwl_win_poll_events(_gstop_win);
+        # 0.52.0 (F7): the compositor's close mid-work was read here and DROPPED — the window stayed up until the turn
+        # ended on its own. Now it requests the window's end and raises the interrupt; gui_run closes on the request.
+        if ((ev & GWL_WIN_EV_CLOSE) != 0) { gclose_request(); }
+        # 0.52.0: a new size is adopted here too, as the idle loop adopts it — the pump now runs through whole commands
+        # (a build can take minutes), and a window repainted at its old size for that long reads as broken.
+        if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(_gstop_win); _gui_dirty = 1; }
         if ((ev & GWL_WIN_EV_KEY) != 0) {
             var rec[24];
             while (gwl_win_next_key(_gstop_win, &rec) == 1) {
@@ -121,6 +127,20 @@ fn _gstop_poll() {
         if (gwl_win_ready(_gstop_win) == 1) { _gpresent_frame(_gstop_win); }
     }
     return 0;
+}
+
+# _gwait_poll (0.52.0, F7): the window's half of exec's wait poll (src/exec.cyr), bound by gui_run for the window's
+# life. A model's `shell` call, a hook, a [verify] check or a /run blocks this loop exactly as a turn's stream does,
+# but only the stream's SSE callback reached the pump: for the length of a command the window serviced no Wayland
+# event — no repaint, Esc ignored, the compositor's close ignored, a hung hook freezing the window until
+# [hooks].timeout_ms. This IS the pump (drain the fd, Esc and close raise the interrupt, repaint throttled +
+# ready-gated), returning the interrupt generation the wait compares. While a close is pending it moves the
+# generation on every tick, so a wait that STARTS after the close (the post_tool hook of the call the close stopped)
+# ends at its first tick instead of running to its end in a window that is going away.
+fn _gwait_poll() {
+    _gstop_poll();
+    if (gclose_requested() == 1) { intr_signal(); }
+    return intr_seq();
 }
 
 # gui_ask: the blocking asker registered with ask_hook_set from gui_run. Opens the modal, pumps the
@@ -148,9 +168,10 @@ fn gui_ask() {
     var done = 0;
     while (done == 0) {
         var pfd[8];
-        if (_gpresent_poll_fd(&pfd, gwl_win_fd(win), 250) > 0) {
+        if (gclose_requested() == 1) { ask_cancel(); done = 1; }     # 0.52.0 (F7): closing already (the pump read it) — nobody will answer
+        elif (_gpresent_poll_fd(&pfd, gwl_win_fd(win), 250) > 0) {
             var ev = gwl_win_poll_events(win);
-            if ((ev & GWL_WIN_EV_CLOSE) != 0) { ask_cancel(); done = 1; }
+            if ((ev & GWL_WIN_EV_CLOSE) != 0) { gclose_request(); ask_cancel(); done = 1; }   # 0.52.0: and the window closes after
             if ((ev & GWL_WIN_EV_POINTER) != 0) { _gpresent_drop_pointer(win); }    # 0.49.0: the modal is keyboard-driven
             if ((ev & GWL_WIN_EV_KEY) != 0) {
                 var rec[24];
@@ -277,6 +298,7 @@ fn gui_run() {
     if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _gup = 1; }
     greet_build(_gup);
     gstop_set_win(win); intr_check_hook_set(&_gstop_poll);
+    exec_wait_poll_set(&_gwait_poll);                    # 0.52.0 (F7): a command's wait pumps the window too (main.cyr bound the TUI's poll)
     ask_hook_set(&gui_ask);                              # 0.44.0 (T4-1): claim the ask seam for THIS front end   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
     # 0.44.3: this surface owns the screen — there is no terminal to prompt on and no cooked stdin anyone
     # is typing into, so the authorization confirm must go through the modal above. Declaring it here (at
@@ -292,16 +314,18 @@ fn gui_run() {
     # after `thoth gui` has already returned, so a configured [hooks].session_start never ran for the window
     # (pre_tool / post_tool did, inside its turns: the lifecycle was half-wired). After every seam is claimed and
     # the stores are bound, exactly where main.cyr fires it (after config, seams and the git probe; before any
-    # turn), and BEFORE the first frame so the frame carries its card when it printed. Under the card bracket:
-    # the report lands in the window, never on fd 1; a silent hook (the common notify-send) records nothing and
-    # the greeting stays. A slow hook delays the window's first map for its duration (up to [hooks].timeout_ms) —
-    # parity with the TUI, where nothing appears until the hook returns; a frozen already-mapped window that
-    # ignores close for that long would be worse.
-    gcmd_capture("[hook session_start]", &hooks_session_start);
+    # turn). Under the card bracket: the report lands in the window, never on fd 1; a silent hook (the common
+    # notify-send) records nothing and the greeting stays.
+    # 0.52.0 (F7): AFTER the first frame. It ran before it, because a slow hook in a mapped window was a frozen
+    # window that ignored close for up to [hooks].timeout_ms — worse than a late map. The wait poll pumps the
+    # window now, so the window maps at once, draws the hook as running, and Esc stops it (close closes); its card,
+    # when it printed, lands with the next frame.
     var pfd[8];
     _gpresent_frame(win);                                # first paint
+    gcmd_capture("[hook session_start]", &hooks_session_start);
+    _gui_dirty = 1; _gui_pending = 1;                    # the hook's card (or none), and the running row gone
     var running = 1;
-    while (running == 1) {
+    while ((running == 1) && (gclose_requested() == 0)) {   # 0.52.0 (F7): a close the pump read while work ran ends the loop here
         # poll with a THROB tick (0.30.11): wake every ~120ms even when idle so the owl eye can pulse. poll(2)
         # returns >0 when the wl fd has data (service events then), 0 on the timeout (advance the throb), <0 on
         # error. gwl_win_poll_events MUST be called only when the fd is readable (it does one read).
@@ -342,6 +366,7 @@ fn gui_run() {
         }
     }
     intr_check_hook_set(0); gstop_set_win(0);            # 0.34.3: unregister the GUI stop-poll before teardown
+    exec_wait_poll_set(0);                               # 0.52.0: and its wait poll — session_end runs with no window to pump
     gwl_win_close(win);
     # 0.50.1: the session_end hook, after the surface is gone (main.cyr fires it after tui_loop's teardown).
     # Under OUT_NULL: the hook's stdout has no surface any more (a closed terminal's case), "could not run"

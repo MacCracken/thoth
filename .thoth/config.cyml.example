@@ -310,7 +310,8 @@ model = "claude-haiku-4-5-20251001"
 # the TAIL — a compiler names its error at the end.
 #
 # ⚠ The command is YOURS, never the model's; it cannot propose or alter it. But it
-# IS command execution, unsandboxed, same footing as /run.
+# IS command execution, unsandboxed, same footing as /run. Esc stops a running check (0.52.0): the result
+# says INTERRUPTED and the change stays UNVERIFIED; /state reads "last interrupted", not FAILED.
 # [verify]
 # command = "cyrius test"       # double-quoted; see the [hooks] quoting note below
 # timeout_ms = 120000
@@ -335,6 +336,9 @@ model = "claude-haiku-4-5-20251001"
 # verdict wins and a hook can never widen authority.
 #
 # ⚠ A hook runs unsandboxed as you, same footing as /run.
+# Esc stops a running hook (0.52.0) — in the TUI during a turn's tool phase, in the window at any time
+# (the window's close does too). Its process group is killed as timeout_ms kills it, and a pre_tool hook
+# stopped this way gave no verdict, so it DENIES — "interrupted", never an allow.
 # ⚠ QUOTING. Use a DOUBLE-quoted TOML string and escape any inner double quotes
 # (\"). A single-quoted TOML literal string works ONLY if it contains no double
 # quote — the config parser truncates a literal string at the first one, which for
@@ -659,7 +663,9 @@ model = "claude-haiku-4-5-20251001"
 #
 #   enabled    — true to advertise the shell tool (default false).
 #   timeout_ms — per-command wall-clock timeout; a command that exceeds it is SIGKILLed and its
-#                partial output kept (default 30000 = 30s; clamped to 600000).
+#                partial output kept (default 30000 = 30s; clamped to 600000). Esc stops one sooner (0.52.0 —
+#                the TUI's tool phase, the window at any time): the same group kill, the partial output kept,
+#                the result naming the operator's stop; the same bound governs a captured /run.
 #   max_output — max bytes of captured output surfaced to the model; more is truncated with a marker
 #                (default 65536 = 64 KiB; clamped to 1048576). Binary NUL bytes are scrubbed to spaces.
 #

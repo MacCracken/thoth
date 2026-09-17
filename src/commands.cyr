@@ -639,6 +639,7 @@ fn cmd_state() {
             emit(" — "); ofmt_int(verify_runs()); emit(" run");
             if (verify_last_ok() == 1) { ui_emit(ROLE_GREEN, ", last passed"); }
             elif (verify_last_ok() == 0) { ui_emit(ROLE_RED, ", last FAILED"); }
+            elif (verify_last_ok() == 2) { ui_emit(ROLE_MUTED, ", last interrupted"); }   # 0.52.0 (F7)
         }
         oprintln("");
     }
@@ -1909,7 +1910,13 @@ fn _cmd_run_captured(cmdline) {
     if (_run_cap_buf == 0) { _run_cap_buf = alloc(RUN_CAP_BUF); }
     if (_run_cap_buf == 0) { oprintln("  (out of memory)"); return 0; }
     var status[16];
+    # 0.52.0 (F7): Esc stops a /run. The TUI runs a command in COOKED mode (a lone Esc is not readable there), so the
+    # capture is bracketed by the same poll mode a turn's tool phase uses — the wait poll (tui_wait_poll) drains the
+    # terminal each tick and an Esc moves the generation exec compares. After the gate, never around it: the confirm
+    # is a cooked read_line. OUT_RING-gated and a no-op for a front end with its own poll (the window drains its fd).
+    intr_arm();
     var n = exec_shell_capture(cmdline, _run_cap_buf, RUN_CAP_BUF, config_shell_timeout_ms(), &status);
+    intr_disarm();
     var code = load64(&status);
     var timed = load64(&status + 8);
     if (code == (0 - 1)) { oprintln("  (could not run the command — creating the capture file, forking or waiting failed)"); return 0; }
@@ -1921,6 +1928,7 @@ fn _cmd_run_captured(cmdline) {
     }
     if (n >= (RUN_CAP_BUF - 1)) { ui_emit(ROLE_FAINT, "  (output truncated at "); ofmt_int(RUN_CAP_BUF - 1); ui_emit(ROLE_FAINT, " bytes)"); oprintln(""); }
     if (timed == 1) { ui_emit(ROLE_RED, "  timed out"); ui_emit(ROLE_FAINT, " — killed after "); ofmt_int(config_shell_timeout_ms()); ui_emit(ROLE_FAINT, "ms"); oprintln(""); return 0; }
+    if (code == (0 - 4)) { ui_emit(ROLE_MUTED, "  interrupted"); ui_emit(ROLE_FAINT, " — stopped by the operator (the process group was killed)"); oprintln(""); return 0; }   # 0.52.0 (F7)
     emit("  exit "); ofmt_int(code); oprintln("");
     return 0;
 }

@@ -1926,7 +1926,7 @@ fn spin_anim_active() { if (_spin_anim_thread != 0) { return 1; } return 0; }
 # anyway — the shell tool's waitpid loop (src/exec.cyr) ticks every 100 ms while a command runs. No thread
 # and no handshake needed there: the main thread is the only writer, so this is just the frame the SSE
 # callback would have given it. Suppressed when an animator worker is armed (it owns the glyph) and off
-# the TUI. Wired as a SEAM (exec_wait_tick_set) so exec.cyr keeps no dependency on the TUI.
+# the TUI. Reached through exec's wait-poll seam (tui_wait_poll, below) so exec.cyr keeps no dependency on the TUI.
 fn spin_tick() {
     if (_spin_active == 0) { return 0; }
     if (out_mode() != OUT_RING) { return 0; }
@@ -1934,6 +1934,18 @@ fn spin_tick() {
     spin_advance();
     spin_paint();
     return 0;
+}
+
+# tui_wait_poll (0.52.0, F7): the TUI's half of exec's wait poll (src/exec.cyr), bound by main.cyr for every front end
+# but the window. It does what the 0.44.2 tick did — advance the working indicator — and drains the terminal for Esc
+# through intr_check, which reads stdin ONLY while something armed the poll mode: agent_turn around the tool phase (a
+# model's `shell` call, a pre_tool / post_tool hook, a [verify] run) and _cmd_run_captured around a /run. An Esc there
+# moves the generation this returns and exec stops the command. Nothing is armed for the session hooks, the line REPL
+# or one-shot, so they read nothing here and see a generation that never moves — byte-identical.
+fn tui_wait_poll() {
+    spin_tick();
+    intr_check();
+    return intr_seq();
 }
 
 # --- the self-managed feed painter (0.9.1) --------------------------------

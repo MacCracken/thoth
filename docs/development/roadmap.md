@@ -54,8 +54,8 @@ the whole spine is native. Everything thoth owns is shipping; what remains is AG
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
 0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. Last re-run 0.51.2 (2026-09-14): the 5.9 MB ELF printed `thoth 0.51.1` in ring 3 and
-exited 0 under QEMU, the first release-time re-run since 0.44.3.
+stale binary. Last re-run 0.52.0 (2026-09-16): the 5.9 MB ELF printed `thoth 0.52.0` in ring 3 and
+exited 0 under QEMU.
 
 Three gates remain, in dependency order.
 
@@ -104,8 +104,8 @@ unsure, patch.
   grouped into a numbered batch and shipped together as the next patch of the current minor. A
   batch is ordered by priority; the top of the next batch is the next thing to build. Nothing in
   a repair batch adds a capability.
-- **Minors are feature arcs.** Six have shipped (F1–F6 — the CHANGELOG); the next decided
-  feature earns `0.52.0`. A minor is never a sweep of small things — those are patches.
+- **Minors are feature arcs.** Seven have shipped (F1–F7 — the CHANGELOG); the next decided
+  feature earns `0.53.0`. A minor is never a sweep of small things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each
   with a line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md)
   lesson 1: a documented residual is a claim with an expiry date — every waiting item below names
@@ -117,80 +117,26 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### 0.51.1 — the doc sweep, and one repair it found
+### Repair batch 6 → 0.52.1
 
-Shipped with the sweep (the CHANGELOG): `_project_sensitive` did not name `[toolpin].file`, so a custom
-store inside the project jail was model-readable and, with `[edit].enabled`, rewritable — a swapped
-definition re-baselined through thoth's own `edit`. The default `~/.thoth/toolpins` was covered by the
-`.thoth` component rule; a custom path outside it was not. Closed; the config example says "five paths".
+Ordered; thoth-owned and provable by a test or by breaking it.
 
-### Repair batch 4 → 0.51.2
-
-Ordered; each is thoth-owned, small, and provable by a test or by breaking it.
-
-1. **The toolpin store's 2 MiB is paid by a run that has no store.** `_tps_host_set`
-   (`src/toolpin.cyr`) calls `_tps_bufs()` to canonicalise a 512-byte host, and `_tps_bufs` allocates
-   the two `TPS_READ_CAP` (1 MiB) read/rewrite buffers with it — once per process, but for a
-   session-scoped run (no `~/.thoth`, `durable = false`, a rejected store) that never reads or writes
-   a file. Split the host allocation out; allocate the file buffers at the first read or flush.
-2. **The agent suite prints a stray `hi` before a group header.** `tests/cases/agent.cyr:610-611`
-   feeds a real `{"delta":{"content":"hi"}}` frame through `_agent_sse_cb`, which paints the delta to
-   fd 1 with no newline; the next thing printed is `test_upstream_err_sanitise`'s header. Run that
-   call under the ring sink (or stamp `_stream_last_paint_ms` first) — hygiene, and the reason a
-   suite log is grep-able.
-3. **`/state` gains an `input history` row.** `/state` names `resume`, `log`, `pins` and `map` and
-   not the composer-history store, on any surface. One row from the bind's own facts
-   (`inhist_persist_path` / `_recalled` / `_init_failed`, 0.50.1): bound path cleaned + recalled
-   count, red when the bind failed, silent when `[history].file` is unset — the greeting box's row,
-   on the surface that outlives it.
-4. **Five user-visible strings the sweep found wrong.** `/reload`'s "now active" line omits
-   `[budget]` / `[guard]` / `[redact]` / `[edit]` / `[ask]` and lists `[ui] tier/theme` as live (they
-   are restart); `/help`'s `/quit` line says "or Ctrl-D" (Ctrl-D is not bound in the TUI — Ctrl-X
-   exits there, Ctrl-D only at the line REPL); `thoth --help` does not list `thoth gui`; the TUI's
-   slash palette (`_slash_name`, `SLASH_N = 25`) is 28 names behind `classify_input`; `/seams`'
-   mneme fallback string still says "(mneme not yet Cyrius-ported)" and its t-ron line omits the
-   four model-tool verbs. Each with a test against the string.
-5. **`/remember`'s append path has no symlink walk.** `src/memory.cyr` writes `.thoth/memory/*.md`
-   through a link the 0.39.0 jail walk (`is_symlink` per component) would refuse on a read. Reuse
-   the walk on the write path; a test with a planted link.
-6. **`docs/examples/.gitkeep` is redundant** — `docs/examples/README.md` (5 KB) is tracked beside
-   it. Remove it; it is also one of sit's two false-positive classes on `/git` (a zero-byte tracked
-   file), so `/git` on a clean tree reads one fewer phantom change.
-7. **Per-tool trust: `/tools trust <name>`.** ADR-0022 named it "a natural later patch". Today
-   `/tools trust` drops every pin for the host; a single withheld tool the operator has read and
-   accepts should not cost the other pins their history. Same authority shape (WARN log, no gate,
-   alias-refused); the store rewrite drops one row.
-8. **An `--events` kind for `withheld` / `pinned`.** The 0.42.0 NDJSON stream carries turn / tool /
-   response / error; a tool withheld at the advertisement is a fact an unattended driver needs on
-   the machine channel, not only on stderr. Same emitter set, byte-identical when disabled.
-9. **Re-run the AGNOS runtime proof — DONE at 0.51.2.** `AGNOS_REPO=~/Repos/agnos scripts/agnos-run.sh`
-   rebuilt the local kernel with `BASESTACK_SELFTEST`, booted it under QEMU, and the 5.9 MB ELF printed
-   `thoth 0.51.1` in ring 3 and exited 0 — the first release-time re-run since 0.44.3 (the Targets row is
-   stamped).
-
-### Repair batch 5 → shipped as 0.51.3 (re-vendor)
-
-The cyrius `6.6.3` → `6.6.4` re-vendor (see the [CHANGELOG](../../CHANGELOG.md)): `cyrius lib sync --full`
-brought a portable `O_NOFOLLOW` (`AO_NOFOLLOW` / `AO_EXCL` on AGNOS), which the `[history].file` and tool-pin
-store opens now take — a symlinked store is refused, not followed. `[deps].stdlib` gained `sys` (sigil 3.12.18's
-`agnosys_uname` calls `sys_uname`); the aarch64 lane lost two stale `raw syscall 5` warnings; every lane, macOS
-and the AGNOS runtime were re-verified. `chmod`/`fchmod` stay waiting (the row below).
-
-Recorded, not in the batch (registry below): the compositor pump during hook / `shell` waits
-(behaviour — a candidate), the `gate_init` / `log_init` lines on the `thoth gui` path (a cross-surface
-decision), `session_start`'s report on the TUI's primary screen (harmless), `/reload` not rebinding
-`[history]` / `[session]` / `[toolpin]` files (documented in `/reload`'s own output and the config
-example — a restart, by design).
+1. **The agent suite still paints a stray `hi` — as a repaint.** 0.51.2 moved `test_upstream_err_sanitise`'s
+   `{"content":"hi"}` frame from fd 1 into the ring sink, but `_agent_sse_cb` then reaches `feed_stream_tick`, which
+   repaints twenty cursor-addressed feed rows to fd 1 (`ESC[1;1Hhi ESC[K ESC[2;1H…`) because `_stream_last_paint_ms`
+   is never stamped (`tests/cases/agent.cyr`, the `okf` frame). The 0.51.2 CHANGELOG line "no longer prints a stray
+   `hi`" is therefore half true, and the suite log still carries it (found at 0.52.0, present at 0.51.3). Stamp the
+   paint clock (or a sink that never repaints) around that one call, and assert fd 1 received nothing.
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each carries the version it was last checked against (2026-09-14). A release re-checks the list; a
-closed item becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
+Each carries the version it was last checked against (2026-09-16, at 0.52.0). A release re-checks the list;
+a closed item becomes a re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01) and a `daimon_agnos` (none exists) — gate 1 rung 2 | hoosh 2.6.10 · daimon 2.1.3 | `scripts/agnos-run.sh` is ready to stage them |
-| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:47`) and overwrites on the same name | daimon **2.1.3** | done — 0.51.0's store is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
+| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01) and a `daimon_agnos` (none exists: daimon's `--agnos` build fails with 53 errors — measured upstream as a cyrius `cbt` sidecar-leaf resolution pulling `lib/syscalls_linux_common.cyr` in through bote's `dist/bote.deps`, plus 3 in daimon's own `src/agent.cyr`; filed in daimon's `docs/development/issues/2026-09-14-daimon-does-not-build-for-agnos.md`) — gate 1 rung 2 | hoosh 2.6.10 · daimon **2.1.4** | `scripts/agnos-run.sh` is ready to stage them |
+| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:47`) and overwrites on the same name | daimon **2.1.4** (a toolchain bump; unchanged) | done — 0.51.0's store is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" (16 on a clean tree at 0.51.0 — the fifteen executable `scripts/*.sh` and the zero-byte `docs/examples/.gitkeep`; `_blob_differs_from_file` calls an unreadable side "differs", `src/api.cyr:146`) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
 | **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: `_emit_anthropic_tool_delta` returns 0 when a `content_block_start` lacks `id`+`name` (`src/lib/handlers.cyr:1542`) while the `input_json_delta` fragments still arrive | hoosh **2.6.10** | done — 0.44.2 drops and announces such a call |
 | **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — named as hoosh's own follow-up at `handlers.cyr:2516`; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.6.10** | thoth keeps requesting it and already decodes it — the row lights up when hoosh ships the frame |
@@ -222,20 +168,12 @@ The lane gates closed, announced.
 
 Recommended order, with the reason for the place. Each is ONE minor; its cuts are patches.
 
-- **F7 — The compositor pumped while a hook or `shell` waits.** `exec.cyr`'s wait loop pumps only
-  `_exec_wait_tick` (the TUI spinner), never `_gstop_poll`, so for a `pre_tool` / `post_tool` /
-  `session_start` hook or a `shell` call the window services no Wayland event: Esc and the
-  compositor's close are ignored until the wait ends. Scope: the wait tick becomes a surface-owned
-  poll (the GUI's drains the fd, repaints, raises the interrupt; the TUI's keeps the spinner);
-  the interrupt cancels the wait honestly (kill the child, report `interrupted`). **Gate:** none —
-  thoth-owned. **First** because it is the one entry in the registry an operator meets every day
-  (a hook that hangs freezes the window), it needs no upstream, and it is behaviour, not repair.
 - **F8 — The AGNOS window backend for the GUI.** The pointer path and the window are Linux-Wayland
   (aethersafha refused Wayland). Scope: the `gwl_*` seam behind a backend contract, the AGNOS
   backend consuming aethersafha's client protocol, keyboard + pointer + shm buffers. **Gate:** gate 1
   rung 3 (the TUI over agnsh) is the sane precondition; aethersafha's client contract must be stable.
-  **Second** because it is the GUI's half of "AGNOS canonical" and the last part of thoth that runs
-  only on Linux.
+  **First** now that F7 has shipped: it is the GUI's half of "AGNOS canonical" and the last part of thoth
+  that runs only on Linux.
 - **F9 — Untrusted reads through the subagent context (gap 4).** Route `@file` / `read_file` /
   `web_fetch` results through the 0.43.0 child context so retrieved text cannot instruct the main
   thread. **Gate:** the maintainer's decision (gap review question 3) — a model round per `@file`, and a
@@ -278,15 +216,9 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Shipped in repair batch 4 (0.51.2):** the toolpin store's 2 MiB on a store-less run · the agent
-suite's stray `hi` · the `input history` row on `/state` · five wrong user-visible strings (`/reload`,
-`/help`, `--help`, the slash palette, `/seams`) · `/remember`'s append-path symlink walk ·
-`docs/examples/.gitkeep` · per-tool trust · the `--events` withheld/pinned kind · the AGNOS runtime
-re-run. **Held for repair batch 5 (0.51.3):** the cyrius 6.6.4 re-vendor + `O_NOFOLLOW` on the history
-and toolpin opens (it rewrites `lib/`; kept out of a pure-source patch).
+**Scheduled above:** the agent suite's repaint of a stray `hi` (repair batch 6, item 1).
 
-**Candidates above:** the compositor not pumped during a hook / `shell` wait (F7) · the pointer path
-Linux-Wayland only (F8).
+**Candidates above:** the pointer path Linux-Wayland only (F8).
 
 **Owed to the operator's eyes (no compositor in the harness; each pinned headless):**
 
@@ -301,6 +233,11 @@ Linux-Wayland only (F8).
 - **The window's startup** — the history row in the box, a submitted line in `~/.thoth_history` after
   `/quit`, a `session_start` hook's card under the greeting and a silent one's absence, a
   `session_end` hook's side effect after close.
+- **The window pumped during a wait (0.52.0)** — with `[hooks].session_start = "sleep 20"`, the window maps at once
+  with a `running [hook session_start]  (Esc stops it)` row, and Esc stops the hook (an `interrupted` card) without
+  closing the window; during `/run sleep 30`, the window repaints and follows a resize, Esc stops the command, and
+  the close button closes the window within a tick; the close button mid-stream stops the turn (a `- stopped -`
+  notice or the kept partial) and closes it.
 
 **Degradations, by design or by the floor:**
 
@@ -309,7 +246,13 @@ Linux-Wayland only (F8).
   "t-ron: policy … unreadable — seam stays absent" and "log: cannot open … — structured logging
   disabled" never reach the operator; the seams degrade closed and `/state` names both. Switching
   them to `note_*` puts them on every `thoth -p` run's stderr too — a cross-surface decision,
-  deferred; it is also a natural cut of F7 (the window has a notice row for exactly this).
+  deferred (the window's notice row could carry them — a cut of the F7 arc if decided).
+- **What a stop cannot reach (0.52.0)** — Esc stops a command only where a wait loop hands control back. A Windows
+  capture is one blocking wait inside `lib/process_win.cyr` (it still ends at its deadline; the lane is closed
+  anyway); line mode's streaming `/run` gives the child the terminal (unchanged since before F7); and a blocking
+  network call — `daimon_invoke`, a non-streaming round, `hoosh_health_probe` — is a socket read with no poll in it,
+  so the window is not pumped during one (bounded by `[hoosh].timeout_ms`). A pumped network wait needs the
+  transport to return between reads.
 - **The TUI prints `session_start`'s report to the primary screen** — main.cyr fires the hook
   (`:242`) before `tui_loop` raises the alt screen (`:244`), so a hook that printed is visible
   only after exit. Harmless; the window shows the same report as a card.

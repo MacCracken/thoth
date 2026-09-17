@@ -134,7 +134,7 @@ fn main() {
     out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); only the TUI arms OUT_RING
     confirm_hooks_set(&tui_confirm_begin, &tui_confirm_end);   # wire the gate confirm's live-screen bracket (TUI-decoupling)
     reply_sink_set(&mdhl_reply, &mdhl_reset, &mdhl_feed, &mdhl_finish, &feed_stream_tick);   # wire hoosh's reply render to mdhl + the TUI paint (all tiers; TUI-decoupling)
-    exec_wait_tick_set(&spin_tick);   # 0.44.2: advance the working indicator from the shell tool's waitpid poll (no-op off the TUI)
+    exec_wait_poll_set(&tui_wait_poll);   # 0.52.0 (F7): a running command's wait poll — the working indicator (0.44.2's tick) + an Esc stops it where the poll mode is armed; `thoth gui` binds the window's own
     exec_child_done_set(&tui_modes_reassert);   # 0.44.2: a /run child can clear alt-screen/mouse/paste/kitty — re-assert after it
     # Classify the one-shot mode from argv FIRST (it needs no config). For any one-shot
     # mode, discard the seam-init chrome that follows: gate_init / log_init print to fd 1

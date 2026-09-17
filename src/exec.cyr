@@ -21,14 +21,25 @@ fn run_shell(cmdline) {
     return rc;
 }
 
-# --- the wait-loop tick seam (0.44.2) -----------------------------------------------------------------
+# --- the wait-loop poll seam (0.44.2 a tick; 0.52.0 a poll, F7) ---------------------------------------
 # exec.cyr is SUBSTRATE and knows nothing about presentation. But its waitpid poll loop is the only place
-# a running shell command hands the main thread back, so it is the only place the TUI's working indicator
-# can advance while a command runs. Rather than reach up into the TUI (the layering the seams in
-# src/seams.cyr exist to prevent), the loop calls an optional hook that main.cyr binds to spin_tick.
-# Unbound — line REPL, one-shot, the GUI, every test binary — it is a null check.
-var _exec_wait_tick = 0;
-fn exec_wait_tick_set(fp) { _exec_wait_tick = fp; return 0; }
+# a running command hands the main thread back, so it is the only place a front end can stay alive while
+# one runs. Rather than reach up into a front end (the layering the seams in src/seams.cyr exist to
+# prevent), the loop calls an optional hook the front end binds.
+#
+# Through 0.51 that hook was a void TICK bound to the TUI spinner, and nothing else ran: the window serviced
+# no Wayland event for the length of a `shell` call, a hook, a [verify] check or a /run — no repaint, Esc
+# ignored, the compositor's close ignored, a hung hook freezing the window until its timeout — and on
+# neither surface could Esc stop the command. 0.52.0 makes it a surface-owned POLL: main.cyr binds the
+# TUI's (tui_wait_poll: the spinner, and the tool phase's Esc drain), gui_run the window's (_gwait_poll:
+# the Wayland pump, the repaint, Esc and close). The poll RETURNS the surface's stop generation (intr_seq —
+# a number that moves when the operator asks to stop). The loop reads it as the child starts and, when it
+# moves, kills the child's group exactly as the deadline does and reports -4 with the partial output.
+# An EDGE, not the turn's level flag: a stop asked for before this command began does not cancel it.
+# Unbound — every test binary that binds none — it is a null check; on a surface with no stop to offer
+# the generation never moves, so the line REPL and one-shot are byte-identical.
+var _exec_wait_poll = 0;
+fn exec_wait_poll_set(fp) { _exec_wait_poll = fp; return 0; }
 
 # The other half of the same seam: a hook fired after a child that SHARED thoth's terminal has exited, so
 # the front end can re-assert the terminal modes that child may have cleared (main.cyr binds
@@ -154,6 +165,9 @@ fn shell_supported() { return 0; }
 #     POSIX 0..127 / 128+signal shape; -1 (spawn/open) and -2 (timeout) remain thoth's own sentinels.
 #   - stdin is not redirected to a NUL device (_win_create_process wires only stdout+stderr): a command that
 #     reads stdin may block until the deadline and be reported as an HONEST -2 timeout (never a wrong answer).
+#   - No stop (0.52.0): _win_wait_timeout is ONE blocking wait inside lib/process_win.cyr, so the surface's wait
+#     poll is never called here — no Esc can end a Windows capture early (it still ends at its deadline), and a
+#     front end would not be pumped during it. A poll needs a waiter that returns between checks.
 #
 # The full thoth --win binary is still gated on the async/epoll->IOCP transport (lib/async.cyr); this
 # capturing shell is proven via a minimal exec-only --win harness on cass and ships with the Windows binary
@@ -238,10 +252,24 @@ fn shell_supported() { return 1; }
 
 #ifndef CYRIUS_TARGET_AGNOS
 #ifndef CYRIUS_TARGET_WIN
+# _exec_kill_group: SIGKILL a capture child's whole PROCESS GROUP and reap it — the deadline's kill (0.20.1), shared
+# since 0.52.0 with the operator's stop. The group first (negative pid), so a backgrounded grandchild dies with the
+# shell; then the shell directly as a belt-and-suspenders (harmless ESRCH if the group kill already reached it, and it
+# guarantees the shell dies even if its setsid did not take, so the blocking reap never hangs). Grandchildren
+# reparent to init; the direct child is reaped here — no zombie.
+fn _exec_kill_group(pid, stbuf) {
+    sys_kill(0 - pid, 9);                             # SIGKILL the process group (shell + grandchildren)
+    sys_kill(pid, 9);                                 # + the shell directly (defensive)
+    sys_waitpid(pid, stbuf, 0);                       # BLOCKING reap
+    return 0;
+}
+
 # exec_shell_capture: run `/bin/sh -c cmdline`, capturing merged stdout+stderr into buf[0..buflen)
 # (a temp file under the hood), enforcing a wall-clock timeout. status_out points to TWO i64 slots:
-#   [0] = exit code: 0..127 normal, 128+sig on a signal, -1 on spawn/open failure, -2 on timeout-kill
-#   [1] = 1 if the command was SIGKILLed by the deadline, else 0
+#   [0] = exit code: 0..127 normal, 128+sig on a signal, -1 on spawn/open failure, -2 on timeout-kill,
+#         -4 when the operator STOPPED it (0.52.0: the surface's wait poll moved its generation — Esc, or the
+#         window closing; the group is killed as the deadline kills it, the partial output kept)
+#   [1] = 1 if the command was SIGKILLed by the deadline, else 0 (a stop is not a deadline: 0 with -4)
 # Returns the number of bytes captured (>= 0; may be partial on timeout). The child runs with an
 # EMPTY environment (the shell's compiled-in default PATH), matching /run's exec_vec convention;
 # stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
@@ -325,7 +353,18 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     var elapsed = 0;
     var reaped = 0;
     var code = 0;
-    while ((elapsed < timeout_ms) && (reaped == 0)) {
+    # 0.52.0 (F7): the surface's stop generation as the child starts — read BEFORE the first sleep, so a stop asked
+    # for during the first tick is a move, not the baseline. `stop` is 1 once it has moved, 2 once one more look
+    # found the child still running: a child that exited on its own in the tick the stop arrived in keeps its REAL
+    # exit code (a pre_tool hook that had already answered keeps its verdict) instead of being reported stopped.
+    var gen0 = 0;
+    var stop = 0;
+    # 0.52.0: the deadline is WALL-clock, measured from here. It used to count the 100 ms sleeps, which was near enough
+    # while the tick was a spinner glyph; the window's pump now repaints inside the tick (a full CPU raster on a large
+    # window is tens of ms), and a sleep-count would let a 30 s [shell].timeout_ms run for a minute.
+    var t_start = clock_now_ms();
+    if (_exec_wait_poll != 0) { gen0 = fncall0(_exec_wait_poll); }
+    while ((elapsed < timeout_ms) && (reaped == 0) && (stop < 2)) {
         var w = sys_waitpid(pid, &stbuf, 1);          # 1 = WNOHANG
         if (w == pid) {
             var st = load32(&stbuf);
@@ -333,27 +372,25 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
             elif (WIFSIGNALED(st) == 1) { code = 128 + WTERMSIG(st); }
             else { code = 0 - 1; }
             reaped = 1;
+        } elif (stop == 1) {
+            stop = 2;                                 # asked to stop, and still running after the last look: kill it below
         } else {
             sleep_ms(100);                            # the floor's ms sleep (poll(NULL,0,ms) where that is the primitive)
-            elapsed = elapsed + 100;
-            # 0.44.2: this loop is the ONE place a running shell command hands the main thread back, so it
-            # is where the working indicator gets to move. Through the seam — exec.cyr is substrate and
-            # must not reach into the TUI; main.cyr binds spin_tick. Unbound (line REPL, one-shot, GUI,
-            # tests) it is a null check, so the floor is unchanged.
-            if (_exec_wait_tick != 0) { fncall0(_exec_wait_tick); }
+            # 0.44.2: this loop is the ONE place a running command hands the main thread back, so it is where a
+            # front end gets to live. Through the seam — exec.cyr is substrate and must not reach into a front end.
+            # 0.52.0: the surface's poll (the TUI's spinner + Esc drain, the window's pump) returns its generation.
+            if (_exec_wait_poll != 0) { if (fncall0(_exec_wait_poll) != gen0) { stop = 1; } }
+            elapsed = clock_now_ms() - t_start;       # after the poll: its repaint is the operator's time too
         }
     }
     var timed = 0;
     if (reaped == 0) {
-        # 0.20.1: SIGKILL the whole PROCESS GROUP (negative pid), so a backgrounded grandchild dies with the
-        # shell — then the shell DIRECTLY as a belt-and-suspenders (harmless ESRCH if the group kill already
-        # reaped it, and it guarantees the shell dies even in the unlikely case setpgid did not take, so the
-        # blocking reap below never hangs). The direct child is reaped here; grandchildren reparent to init.
-        sys_kill(0 - pid, 9);                         # SIGKILL the process group (shell + grandchildren)
-        sys_kill(pid, 9);                             # + the shell directly (defensive)
-        sys_waitpid(pid, &stbuf, 0);                  # BLOCKING reap — no zombie
-        timed = 1;
-        code = 0 - 2;
+        _exec_kill_group(pid, &stbuf);                # 0.20.1: the whole PROCESS GROUP, then the shell, then the reap
+        if (stop > 0) { code = 0 - 4; }               # 0.52.0: the operator stopped it — never reported as a deadline
+        else {
+            timed = 1;
+            code = 0 - 2;
+        }
     }
     store64(status_out, code);
     store64(status_out + 8, timed);

@@ -208,6 +208,186 @@ fn test_shell() {
     return 0;
 }
 
+# --- 0.52.0 (F7): the wait poll — a running command is the surface's, and the operator can stop it ---------------
+# A fake surface poll: returns a generation that MOVES from its `_tw_move_at`-th call on (1 = the baseline read as the
+# child starts; 0 = never), optionally sleeping `_tw_slow_ms` on the call that moves it (so a child can finish inside
+# the tick the stop arrives in — the case where its real exit code must survive).
+var _tw_calls = 0;
+var _tw_move_at = 0;
+var _tw_slow_ms = 0;
+fn _tw_poll() {
+    _tw_calls = _tw_calls + 1;
+    if ((_tw_move_at > 0) && (_tw_calls >= _tw_move_at)) {
+        if ((_tw_slow_ms > 0) && (_tw_calls == _tw_move_at)) { sleep_ms(_tw_slow_ms); }
+        return 42;
+    }
+    return 41;
+}
+fn _tw_slow_poll() { _tw_calls = _tw_calls + 1; sleep_ms(_tw_slow_ms); return 41; }   # a poll that costs time, never moves
+fn _tw_arm(move_at) { _tw_calls = 0; _tw_move_at = move_at; _tw_slow_ms = 0; exec_wait_poll_set(&_tw_poll); return 0; }
+# a front end's interrupt hook that raises the stop on its 3rd call (the TUI poll routes through intr_check)
+var _tw_hook_calls = 0;
+fn _tw_hook_third() { _tw_hook_calls = _tw_hook_calls + 1; if (_tw_hook_calls == 3) { intr_signal(); } return 0; }
+
+fn test_wait_poll() {
+    test_group("the wait poll: a running command stops when the operator asks (exec.cyr, 0.52.0)");
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];
+
+    # the floor: a poll whose generation never moves changes nothing
+    _tw_arm(0);
+    var n0 = exec_shell_capture("sleep 0.3; printf done", buf, cap, 5000, &st);
+    store8(buf + n0, 0);
+    assert(streq(buf, "done"), "an unmoving generation: the command runs to its end");
+    assert_eq(load64(&st), 0, "...exit 0");
+    assert_eq(load64(&st + 8), 0, "...not timed out");
+    assert(_tw_calls >= 3, "...and the poll was pumped while it ran (the baseline + one call per tick)");
+    _tw_arm(0);
+    exec_shell_capture("exit 0", buf, cap, 5000, &st);
+    assert(_tw_calls >= 1, "the generation is read as the child starts — before any tick (a stop in the first tick is a move)");
+
+    # a stop mid-run: killed at the tick, the partial output kept, reported as -4 — never as a deadline
+    _tw_arm(3);
+    var t0 = clock_now_ms();
+    var n1 = exec_shell_capture("printf pre; sleep 5", buf, cap, 5000, &st);
+    var el = clock_now_ms() - t0;
+    store8(buf + n1, 0);
+    assert_eq(load64(&st), 0 - 4, "a moved generation stops the command: status -4");
+    assert_eq(load64(&st + 8), 0, "...which is NOT the deadline flag (a stop is the operator's act, not a timeout)");
+    assert(el < 2000, "...at the tick the generation moved, not at the command's 5 s end");
+    assert(streq(buf, "pre"), "...and the output it printed before the stop is kept");
+
+    # the stop kills the whole process group, as the deadline does (a backgrounded grandchild dies with the shell)
+    exec_wait_poll_set(0);
+    exec_shell_capture("rm -f /tmp/thoth_gc_52_0", buf, cap, 5000, &st);
+    _tw_arm(3);
+    exec_shell_capture("(sleep 1; : > /tmp/thoth_gc_52_0) & sleep 5", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 0 - 4, "a backgrounding command is stopped too (no hang in the reap)");
+    exec_wait_poll_set(0);
+    var ngc = exec_shell_capture("sleep 1; test -e /tmp/thoth_gc_52_0 && echo LIVE || echo DEAD", buf, cap, 5000, &st);
+    store8(buf + ngc, 0);
+    assert(streq(buf, "DEAD\n"), "...and its grandchild died with it (the process-group kill)");
+    exec_shell_capture("rm -f /tmp/thoth_gc_52_0", buf, cap, 5000, &st);
+
+    # a child that exited on its own inside the tick the stop arrived in keeps its REAL exit code (one more look)
+    _tw_arm(2);
+    _tw_slow_ms = 500;                     # the moving call outlasts the child's 100 ms
+    exec_shell_capture("sleep 0.1; exit 7", buf, cap, 5000, &st);
+    assert_eq(_tw_calls, 2, "premise: the stop arrived at the first tick (the child had not exited at the first look)");
+    assert_eq(load64(&st), 7, "a child that finished in the stop's tick reports its own exit 7, not -4 (a hook's verdict survives)");
+
+    # the deadline is WALL time: a poll that spends 250 ms per tick (the window's raster on a large frame) must not
+    # stretch a 500 ms timeout into ten ticks of sleep-counting
+    _tw_arm(0);
+    _tw_slow_ms = 250;
+    _tw_move_at = 0;
+    exec_wait_poll_set(&_tw_slow_poll);
+    t0 = clock_now_ms();
+    exec_shell_capture("sleep 5", buf, cap, 500, &st);
+    el = clock_now_ms() - t0;
+    assert_eq(load64(&st), 0 - 2, "a slow poll: the command still times out (-2)");
+    assert(el < 1500, "...within about its 500 ms of WALL time, not 5 x (100 ms sleep + 250 ms poll)");
+
+    # the TUI's poll: an EDGE — a stop raised BEFORE the command began does not cancel it
+    exec_wait_poll_set(&tui_wait_poll);
+    intr_check_hook_set(0);
+    intr_reset();
+    intr_signal();                         # the flag an interrupted turn leaves up until the next turn's reset
+    var n2 = exec_shell_capture("sleep 0.3; printf done", buf, cap, 5000, &st);
+    store8(buf + n2, 0);
+    assert_eq(load64(&st), 0, "tui_wait_poll: a stop left up from before the command does NOT kill it (else the next /run dies at once)");
+    assert(streq(buf, "done"), "...it ran to its end");
+    # ...and a stop raised WHILE it runs does: tui_wait_poll drains through intr_check (a front end's hook here)
+    intr_reset();
+    _tw_hook_calls = 0;
+    intr_check_hook_set(&_tw_hook_third);
+    t0 = clock_now_ms();
+    exec_shell_capture("printf pre; sleep 5", buf, cap, 5000, &st);
+    el = clock_now_ms() - t0;
+    intr_check_hook_set(0);
+    assert_eq(load64(&st), 0 - 4, "tui_wait_poll: a stop raised while the command runs stops it (intr_check -> the generation)");
+    assert(el < 2000, "...promptly");
+    intr_reset();
+
+    # hooks: a pre_tool hook the operator stopped gave no verdict — it DENIES, and says why
+    exec_wait_poll_set(0);
+    hooks_reset();
+    _cfg_hook_timeout_ms = 5000;
+    _cfg_hook_pre_tool = "sleep 5";
+    _tw_arm(3);
+    feed_init(); out_mode_set(OUT_RING);
+    t0 = clock_now_ms();
+    var hv = hooks_pre_tool("shell", "{}");
+    el = clock_now_ms() - t0;
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(hv, 0, "a pre_tool hook stopped mid-run DENIES the call — no verdict degrades closed, like a timeout");
+    assert(el < 2000, "...stopped at the tick, not after its 5 s");
+    assert_eq(hooks_blocked(), 1, "...counted as a block");
+    assert_eq(hooks_fired(), 1, "...and as fired (it ran)");
+    assert_eq(_t_feed_has("[hook pre_tool] interrupted"), 1, "...the hook's line says interrupted");
+    assert_eq(_t_feed_has("was interrupted before it answered"), 1, "...and the BLOCKED line names why (not a timeout, not 'could not be run')");
+    assert_eq(_t_feed_has("timed out"), 0, "...never reported as a timeout");
+    _cfg_hook_pre_tool = 0;
+    _cfg_hook_session_start = "sleep 5";
+    _tw_arm(3);
+    feed_init(); out_mode_set(OUT_RING);
+    hooks_session_start();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_feed_has("[hook session_start] interrupted"), 1, "a session_start hook stopped mid-run says so (the window's startup card)");
+    assert_eq(_t_feed_has("exited"), 0, "...and no 'exited -4'");
+    _cfg_hook_session_start = 0;
+    _cfg_hook_timeout_ms = 0 - 1;
+    hooks_reset();
+
+    # the model's shell tool: the result says the operator stopped it, and the call is NOT ok
+    _shell_deny_n = 0; _shell_allow_n = 0;
+    _cfg_shell_enabled = 1;
+    _cfg_shell_timeout_ms = 5000;
+    assert_eq(_grant_add("run shell", "printf part; sleep 5"), 1, "session grant so the post-gate path is reachable");
+    _tw_arm(3);
+    var sres = shell_run_tool("{\"command\":\"printf part; sleep 5\"}");
+    assert_eq(shell_last_allowed(), 1, "...the grant carried it past the gate");
+    assert_eq(shell_last_ok(), 0, "a stopped shell call is NOT ok — it never finished (the round card, --events, /audit)");
+    assert(_t_has(sres, "part") > 0, "...the partial output reaches the result");
+    assert(_t_has(sres, "(interrupted by the operator - killed; partial output above)") > 0, "...with a footer naming the stop");
+    assert(_t_has(sres, "exit -4") == 0, "...never as 'exit -4'");
+    grants_clear();
+    assert(_t_has(_shell_build_result(0, 0 - 4, 0, 5000, 0), "(no output; interrupted by the operator - killed)") > 0, "no output: the concise form names the stop");
+    _cfg_shell_enabled = 0;
+    _cfg_shell_timeout_ms = 0 - 1;
+
+    # [verify]: an interrupted check is UNVERIFIED and recorded as interrupted — not a failure of the change
+    verify_reset();
+    _cfg_verify_timeout_ms = 5000;
+    _cfg_verify_command = "sleep 5";
+    _tw_arm(3);
+    feed_init(); out_mode_set(OUT_RING);
+    var vres = verify_run();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(_t_has(vres, "INTERRUPTED") > 0, "an interrupted check reads INTERRUPTED in the tool result");
+    assert(_t_has(vres, "UNVERIFIED") > 0, "...and says the change is unverified");
+    assert(_t_has(vres, "FAILED") == 0, "...never FAILED (the change did not fail anything)");
+    assert_eq(verify_last_ok(), 2, "...recorded as interrupted (2), for /state");
+    assert_eq(_t_feed_has("verify: interrupted"), 1, "...and the live line says so");
+    _cfg_verify_command = 0;
+    _cfg_verify_timeout_ms = 0 - 1;
+    verify_reset();
+
+    # /run (captured — the TUI's and the window's arm): the partial output, then the stop
+    _tw_arm(3);
+    feed_init(); out_mode_set(OUT_RING);
+    _cmd_run_captured("printf runpart; sleep 5");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_t_feed_has("runpart"), 1, "/run: the output before the stop is shown");
+    assert_eq(_t_feed_has("interrupted"), 1, "...then the stop is named");
+    assert_eq(_t_feed_has("exit -4"), 0, "...never 'exit -4'");
+    assert_eq(intr_armed(), 0, "...and the poll mode it armed is released after the command");
+
+    exec_wait_poll_set(0);
+    return 0;
+}
+
 
 # Agentic tool-calling loop (0.6.0): the pure pieces — tool advertisement,
 # tool_calls parsing, raw extraction, and request shaping. The loop itself is I/O.

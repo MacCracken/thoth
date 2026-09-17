@@ -118,6 +118,18 @@ fn gturn_fail() { _gturn_failed = 1; return 0; }
 # (not the alarming "is hoosh reachable?" failure one). If a partial WAS streamed it became the reply, so no notice.
 fn gturn_stop() { _gturn_stopped = 1; return 0; }
 
+# --- the compositor's close while work runs (0.52.0, F7) -----------------------------------------------------------
+# The window's close button (xdg_toplevel.close, or the compositor dropping the connection) could only be honoured
+# by the idle loop: arriving mid-turn or mid-command it was read by the pump and dropped, and the window stayed up
+# until the work ended on its own. A close now REQUESTS the window's end and raises the interrupt, so the work in
+# flight stops the way an Esc stops it — a stream at its next frame, a tool round before its next call, a running
+# command or hook at its next wait tick — and the present loop, which reads the request, closes once control returns.
+# Sticky for the process (a closing window does not un-close). PURE + headless-testable.
+var _gclose_req = 0;
+fn gclose_requested() { return _gclose_req; }
+fn gclose_request() { _gclose_req = 1; intr_signal(); return 0; }
+fn gclose_reset() { _gclose_req = 0; return 0; }        # tests only — the window never un-closes
+
 # gturn_reply_landed: did the just-run turn leave a fresh assistant reply? True iff the LAST history row is an
 # assistant tagged with the CURRENT turn (0.30.19). This replaces gpresent's old net-growth check
 # (`session_history_len() <= _n0`), which FALSE-FIRED at the SESS_HIST_MAX cap: once history is full, each append

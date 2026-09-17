@@ -83,6 +83,7 @@ fn main() {
     alloc_init();
     out_ring_sink_set(&feed_write);
     test_shell();
+    test_wait_poll();             # 0.52.0 (F7): the surface's wait poll stops a running command
     test_agent();
     test_upstream_err_sanitise();
     test_daimon();

@@ -148,7 +148,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/agent.cyr` — the model-driven agentic tool-calling loop.
 - `src/gate.cyr` — the t-ron authorization choke point (and fail-closed confirm).
 - `src/log.cyr` — structured driver-event logging (`[log]`, off by default).
-- `src/exec.cyr` — the local shell escape for `/run` (portable `process.cyr`).
+- `src/exec.cyr` — the local shell escape for `/run` (portable `process.cyr`) and the timed, captured `/bin/sh -c` behind `shell`, `[hooks]`, `[verify]` and the TUI's `/run`; its wait loop calls the surface's **wait poll** (0.52.0 — `tui_wait_poll` / the window's `_gwait_poll`), which keeps the front end alive and stops the command when the operator asks.
 - `src/roundlog.cyr` — the session-local agentic tool-round trace `/audit` surfaces (0.7.0).
 - `src/diff.cyr` — the bounded LCS line-diff + colored renderer behind `/write` and `/git <path>` (shares its highlighter with `/read`).
 - `src/mdhl.cyr` — the markdown + fenced-code syntax highlighter for the reply feed and `/read`.
@@ -160,7 +160,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
   `scripts/gen-splash.sh` (ImageMagick + awk; re-run when the TIFF changes — never edit by hand).
 - `src/feed.cyr` — the self-managed T2 feed ring + the escape-aware clip / soft-wrap (M7).
 - `src/ftree.cyr` — the togglable file-tree pane: geometry + flattened-tree model (M7).
-- `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI.
+- `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI: the turn's level flag and (0.52.0) the stop generation `intr_seq` a running command's wait compares — an edge, so a stop left over from an earlier turn never kills a later command.
 - `src/tui.cyr` — the T2 alt-screen front-end: status bar, composer, palette, painter (M7).
 - `src/gui/` — the sovereign T3 desktop GUI (`thoth gui`): the draw-command IR (`gdraw`) + kashi CPU rasterizer
   (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`) + the Wayland window seam

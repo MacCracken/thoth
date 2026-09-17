@@ -17,9 +17,18 @@
 var _intr_saved = 0;          # cooked termios saved by intr_arm (lazy 60B alloc)
 var _intr_active = 0;         # 1 while the poll-mode termios is installed
 var _intr_flag = 0;           # 1 once Esc was seen THIS turn
+var _intr_seq = 0;            # 0.52.0 (F7): every raise, never reset — see intr_seq
+var _intr_check_fn = 0;       # front-end interrupt-poll hook (0.34.1, below); 0 -> the built-in stdin poll (TUI/REPL)
 
 fn intr_reset() { _intr_flag = 0; return 0; }     # call ONCE at turn start (hoosh_send / agent_turn)
 fn intr_pending() { return _intr_flag; }
+
+# intr_seq (0.52.0, F7): the interrupt GENERATION — a count of every raise (an Esc intr_poll drained, a front end's
+# intr_signal), never reset. `_intr_flag` is a LEVEL scoped to a turn: it stays up from the Esc until the next turn's
+# intr_reset. A running command needs an EDGE — "was a stop asked for while THIS command ran?" — or the flag an
+# interrupted turn left up would kill a later /run the moment it started. exec's wait loop reads the generation as its
+# child starts (through the surface's wait poll) and stops the child when it moves.
+fn intr_seq() { return _intr_seq; }
 
 # intr_arm: install the non-canonical VMIN=0/VTIME=0 poll termios around one streaming read. Saves the
 # current (cooked) termios into a PRIVATE buffer so intr_disarm can restore it — it does NOT use
@@ -28,6 +37,10 @@ fn intr_pending() { return _intr_flag; }
 fn intr_arm() {
     _intr_active = 0;
     if (out_mode() != OUT_RING) { return 0; }        # TUI-only -> floor byte-identical
+    # 0.52.0: a front end that registered its own poll reads its OWN input (the window drains the Wayland fd), so the
+    # terminal it was launched from is not the stop key's source — /run under the window's card bracket (OUT_RING)
+    # must not flip that terminal into poll mode for the length of the command.
+    if (_intr_check_fn != 0) { return 0; }
     #ifdef CYRIUS_TARGET_LINUX
     if (_intr_saved == 0) { _intr_saved = alloc(60); }
     if (syscall(SYS_IOCTL, 0, TCGETS, _intr_saved) < 0) { return 0; }   # not a tty -> stay disarmed
@@ -54,7 +67,7 @@ fn intr_poll() {
     var c[8];
     var n = syscall(SYS_READ, 0, &c, 1);
     while (n > 0) {
-        if (load8(&c) == 27) { _intr_flag = 1; }
+        if (load8(&c) == 27) { _intr_flag = 1; _intr_seq = _intr_seq + 1; }
         n = syscall(SYS_READ, 0, &c, 1);
     }
     return _intr_flag;
@@ -78,11 +91,10 @@ fn intr_note() { ui_emit(ROLE_MUTED, "  — interrupted"); oprintln(""); return 
 # intr_check is FRONT-END-AGNOSTIC: for the TUI it drains stdin (the built-in poll below); a GUI (0.34.2) registers
 # its own non-blocking input poll via intr_check_hook_set (which calls intr_signal on its stop key), so the SAME
 # loop checkpoints serve both front-ends without agent.cyr knowing which is active.
-var _intr_check_fn = 0;      # front-end interrupt-poll hook; 0 -> the built-in stdin poll (TUI/REPL)
 var _intr_suspended = 0;     # 1 while intr_suspend left poll-mode for a cooked read (a confirm), pending resume
 fn intr_check_hook_set(h) { _intr_check_fn = h; return 0; }
 fn intr_armed() { return _intr_active; }
-fn intr_signal() { _intr_flag = 1; return 0; }   # raise the interrupt flag directly (a GUI stop key, 0.34.2 — or a test)
+fn intr_signal() { _intr_flag = 1; _intr_seq = _intr_seq + 1; return 0; }   # raise the interrupt flag directly (a GUI stop key, 0.34.2 — or a test); 0.52.0: and move the generation
 
 # intr_check: the front-end-agnostic interrupt checkpoint — refresh the flag from the registered front-end poll
 # (GUI) or the built-in stdin drain (TUI, no-op if not armed), and return it. Cheap + non-blocking; hot-loop safe.

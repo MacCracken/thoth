@@ -2212,3 +2212,102 @@ fn test_gcmd() {
     ui_set_theme(THEME_DARK);
     return 0;
 }
+
+# 0.52.0 (F7): the window pumped while a command waits. The pump itself (gpresent's _gwait_poll) needs a compositor;
+# what it relies on is pure: the close REQUEST (it raises the interrupt and moves the generation a running command's
+# wait compares), and the RUNNING row the brackets mark and the feed draws while a command or a startup hook waits.
+var _tgr_seen = 0;
+var _tgr_head = 0;
+fn _tgr_runner(line) { _tgr_seen = gcmd_running(); _tgr_head = gcmd_running_head(); oprintln("out"); return 1; }
+fn _tgr_hook() { _tgr_seen = gcmd_running(); _tgr_head = gcmd_running_head(); return 0; }
+fn test_gcmd_running() {
+    test_group("the window pumped while a command waits: close request + the running row (0.52.0, F7)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    ui_set_theme(THEME_DARK);
+    out_ring_sink_set(&feed_write);
+
+    # --- the close request: sticky, raises the interrupt, and MOVES the generation (an edge the wait can see) ---
+    gclose_reset();
+    intr_reset();
+    assert_eq(gclose_requested(), 0, "no close requested at rest");
+    var g0 = intr_seq();
+    gclose_request();
+    assert_eq(gclose_requested(), 1, "a close mid-work is REQUESTED (gui_run's loop reads it once control returns)");
+    assert_eq(intr_pending(), 1, "...it raises the interrupt, so the stream / the tool round stops as on Esc");
+    assert(intr_seq() != g0, "...and moves the generation, so a running command's wait stops at its next tick");
+    var g1 = intr_seq();
+    intr_signal();
+    assert(intr_seq() != g1, "every raise moves it again (the pump re-raises while closing, so a LATER wait stops too)");
+    intr_reset();
+    assert(intr_seq() != g0, "intr_reset clears the turn's flag but never rewinds the generation (the edge stays monotonic)");
+    assert_eq(gclose_requested(), 1, "...and the request is sticky (a closing window does not un-close)");
+    gclose_reset();
+
+    # --- the brackets mark the line running for the runner's duration, and only then ---
+    gcmd_clear();
+    session_history_clear();
+    assert_eq(gcmd_running(), 0, "nothing running at rest");
+    _tgr_seen = 0; _tgr_head = 0;
+    gcmd_run("/run make", &_tgr_runner);
+    assert_eq(_tgr_seen, 1, "gcmd_run: the command is RUNNING while its runner runs (the pump draws that frame)");
+    assert((_tgr_head != 0) && (streq(_tgr_head, "/run make") == 1), "...headed by the typed line");
+    assert_eq(gcmd_running(), 0, "...and not after it returns (the card is sealed instead)");
+    assert_eq(gcmd_count(), 1, "...its card recorded as before");
+    _tgr_seen = 0; _tgr_head = 0;
+    gcmd_capture("[hook session_start]", &_tgr_hook);
+    assert_eq(_tgr_seen, 1, "gcmd_capture: a startup hook is RUNNING while it runs (a slow one shows)");
+    assert((_tgr_head != 0) && (streq(_tgr_head, "[hook session_start]") == 1), "...headed as the card would be");
+    assert_eq(gcmd_running(), 0, "...cleared after");
+    _gcmd_running_begin("/run \x1b[31mred");
+    assert_eq(_t_count_sub(gcmd_running_head(), strlen(gcmd_running_head()), "\x1b", 1), 0, "the running head is LABEL-sanitised like a card's (no escape reaches the frame)");
+    _gcmd_running_end();
+
+    # --- the row: drawn while running, measured the same as drawn, gone after ---
+    gcmd_clear();
+    session_history_append("user", "hello", 5);
+    session_history_append("assistant", "hi there", 8);
+    var h0 = _gfeed_flow(0, 14, 0, 600, 2);
+    _gcmd_running_begin("/run make");
+    var fl = gd_list_new();
+    var h1 = _gfeed_flow(fl, 14, 0, 600, 2);
+    assert(h1 > h0, "the flow grows by the running row while a command waits");
+    assert_eq(_gfeed_flow(0, 14, 0, 600, 2), h1, "...and measures the same with no command list (the bottom-anchor parity)");
+    assert_eq(_t_gd_text_count(fl, "running "), 1, "...the row says running");
+    assert_eq(_t_gd_text_count(fl, "/run make"), 1, "...names the command");
+    assert_eq(_t_gd_text_count(fl, "(Esc stops it)"), 1, "...and how to stop it");
+    var fy = 0 - 1; var ry = 0 - 1; var fi = 0;
+    while (fi < vec_len(fl)) {
+        var fd = vec_get(fl, fi);
+        if ((gd_kind(fd) == GD_TEXT) && (gd_text(fd) != 0)) {
+            if (streq(gd_text(fd), "hi there") == 1) { fy = gd_y(fd); }
+            if (streq(gd_text(fd), "running ") == 1) { ry = gd_y(fd); }
+        }
+        fi = fi + 1;
+    }
+    assert((fy >= 0) && (ry > fy), "...UNDER the conversation (where the command's card will land)");
+    # a narrow column clips the head, never the stop hint
+    var nl = gd_list_new();
+    _gcmd_running_begin("/run a-very-long-command-line-that-cannot-fit-in-a-narrow-column --with --many --flags");
+    gcmd_running_build(nl, 0, 0, 300);
+    assert_eq(_t_gd_text_count(nl, "(Esc stops it)"), 1, "a long head in a narrow column still leaves the stop hint drawn");
+    var ni = 0; var ncp = 0 - 1;
+    while (ni < vec_len(nl)) { var nd = vec_get(nl, ni); if ((gd_kind(nd) == GD_TEXT) && (gd_text(nd) != 0)) { if (memeq(gd_text(nd), "/run a-very", 11) == 1) { ncp = gd_aux(nd); } } ni = ni + 1; }
+    assert((ncp > 0) && (((ncp + 8 + 17) * GR_GLYPH_W) <= (300 - 16)), "...the head is capped to the room left (running + head + hint fit the column)");
+    _gcmd_running_end();
+    assert_eq(_gfeed_flow(0, 14, 0, 600, 2), h0, "the row is gone when the command returns");
+    session_history_clear();
+
+    # --- under the greeting: the startup hook runs while the greeting is up, so the row draws under the block ---
+    greet_build(0);
+    var e0 = gfeed_build(gd_list_new(), 0, 0, 900, 600);
+    _gcmd_running_begin("[hook session_start]");
+    var gl = gd_list_new();
+    var e1 = gfeed_build(gl, 0, 0, 900, 600);
+    assert(e1 > e0, "under the greeting: the running row draws below the block (a slow startup hook shows)");
+    assert_eq(_tg_text_count(gl, persona_tagline(), 6), 1, "...the greeting stays (a hook is not the operator's first command)");
+    assert_eq(_t_gd_text_count(gl, "[hook session_start]"), 1, "...naming the hook");
+    _gcmd_running_end();
+    assert_eq(gfeed_build(gd_list_new(), 0, 0, 900, 600), e0, "...and gone when it returns");
+    gcmd_clear();
+    return 0;
+}

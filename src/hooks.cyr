@@ -101,8 +101,9 @@ fn _hook_env_put(dst, off, cap, key, value) {
 }
 
 # _hook_run: run `cmd` with THOTH_EVENT/THOTH_TOOL/THOTH_ARGS in its ENVIRONMENT. Returns the exit code, -2 when it
-# timed out, or -1 when the hook could not be run at all — announced here, on every surface, and not counted as
-# fired. ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never
+# timed out, -4 when the operator stopped it (0.52.0: Esc, or the window closing — see exec.cyr's wait poll), or -1
+# when the hook could not be run at all — announced here, on every surface, and not counted as fired.
+# ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never
 # a hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to create the capture file, to
 # fork or to wait — or, since 0.45.6, a target whose capture cannot carry an environment block (the PE lane).
 fn _hook_run(cmd, event, tool, args) {
@@ -146,6 +147,13 @@ fn _hook_run(cmd, event, tool, args) {
         # share -1 and therefore shared a verdict, which made "the security control did not finish"
         # identical to "the security control approved". hooks_pre_tool now denies on -2.
         return 0 - 2;
+    }
+    # 0.52.0 (F7): the operator STOPPED it — the group killed as a deadline kills it, no verdict given. Its own outcome,
+    # not a timeout: the hook did not overrun anything, the operator acted. Like a timeout, its partial output is not
+    # shown (a half-printed report is not the hook's report); hooks_pre_tool denies on it.
+    if (code == (0 - 4)) {
+        ui_emit(ROLE_MUTED, "  [hook "); emit(event); ui_emit(ROLE_MUTED, "] interrupted"); ui_emit(ROLE_FAINT, " — stopped before it finished"); oprintln("");
+        return 0 - 4;
     }
     if (n > 0) {
         ui_emit(ROLE_FAINT, "  [hook "); emit(event); ui_emit(ROLE_FAINT, "] ");
@@ -193,6 +201,8 @@ fn hooks_session_end() {
 #
 # ⚠ 0.43.2 — A TIMEOUT IS A DENY. A hook that STARTED and ran out of time is a security control that was consulted
 # and did not answer — and thoth's house rule is that security degrades CLOSED.
+# ⚠ 0.52.0 — SO IS A HOOK THE OPERATOR STOPPED (Esc mid-hook, or the window closing). It gave no verdict; the turn it
+# belonged to is stopping anyway, and "stopped" must never read as "approved".
 # ⚠ 0.45.2 — SO IS A HOOK THAT COULD NOT BE RUN. This used to return 1 there, reasoning that a hook which fails to
 # spawn must not become a mysterious deny-everything. But a broken SCRIPT exits non-zero (127 included) and already
 # denies; -1 is thoth failing to create the capture file, fork or wait — which made the operator's deny an allow on
@@ -224,13 +234,16 @@ fn hooks_pre_tool(tool, args) {
     if (load8(c) == 0) { return 1; }
     if (shell_supported() == 0) { _hooks_note_gap("pre_tool"); return 1; }
     var rc = _hook_run(c, "pre_tool", tool, args);
-    if (rc < 0) {                                           # -2 timed out / -1 could not run: no answer -> DENY
+    if (rc < 0) {                                           # -2 timed out / -4 stopped / -1 could not run: no answer -> DENY
         _hook_blocked = _hook_blocked + 1;
         ui_emit(ROLE_RED, "  [hook pre_tool] BLOCKED "); note_emit_label(tool);
         if (rc == (0 - 2)) { note_println(" (the hook timed out — degrading closed)"); }
+        elif (rc == (0 - 4)) { note_println(" (the hook was interrupted before it answered — degrading closed)"); }   # 0.52.0 (F7)
         else { note_println(" (the hook could not be run — degrading closed)"); }
         log_begin("hook"); log_kv_str("event", "pre_tool"); log_kv_str("tool", tool); log_kv_int("blocked", 1);
-        if (rc == (0 - 2)) { log_kv_str("reason", "timeout"); } else { log_kv_str("reason", "could_not_run"); }
+        if (rc == (0 - 2)) { log_kv_str("reason", "timeout"); }
+        elif (rc == (0 - 4)) { log_kv_str("reason", "interrupted"); }
+        else { log_kv_str("reason", "could_not_run"); }
         log_commit(SK_WARN);
         return 0;
     }

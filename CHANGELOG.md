@@ -2,6 +2,80 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.0] - 2026-09-16
+
+**A running command belongs to the surface: the window stays live, and Esc stops it.** The seventh feature arc under
+the batch discipline (F7, first in the roadmap's recommended order — thoth-owned, no gate). `src/exec.cyr`'s wait
+loop is the one place a running command hands the main thread back, and through 0.51 it ticked the TUI spinner and
+nothing else. For the length of a model's `shell` call, a `pre_tool` / `post_tool` / `session_start` hook, a
+`[verify]` check or a `/run`, the window serviced no Wayland event — no repaint, Esc ignored, the compositor's close
+ignored, a hung hook freezing it until `[hooks].timeout_ms` — and on neither surface could Esc stop the command.
+Suite **676 + 1959 + 1029 + 823 + 190 + 5** (+73). Linux / aarch64 / AGNOS build with 0.51.3's warning sets; the
+Windows lane at its known-gap skip; macOS built and its native suite green (822 + 1937 + 1026 + 190 + 670); the
+AGNOS runtime re-run (`thoth 0.52.0` in ring 3).
+
+- **The wait is a surface-owned poll.** `exec_wait_tick_set` becomes `exec_wait_poll_set`, and each front end binds
+  its own: main.cyr the TUI's `tui_wait_poll` (the spinner, plus an Esc drain wherever the poll mode is armed), and
+  `thoth gui` the window's `_gwait_poll` (the Wayland pump: repaint, resize, Esc, close). The poll returns the
+  surface's **stop generation** — `intr_seq`, new, a count of every interrupt raise that is never reset. The loop
+  reads it as the child starts; when it moves, the loop kills the child's process group exactly as the deadline
+  does, keeps the partial output and reports **-4**, never a timeout. It takes one more `waitpid` first, so a child
+  that exited on its own in the tick the stop arrived keeps its real exit code (a `pre_tool` hook that had already
+  answered keeps its verdict). The deadline is now measured in **wall time**: it used to count the 100 ms sleeps,
+  which was close enough while the tick only drew a spinner glyph. The window's pump now rasters a frame inside the
+  tick, so on a large window a 30 s `[shell].timeout_ms` could have run for a minute.
+- **An edge, not the turn's flag.** `_intr_flag` stays up from an Esc until the next turn resets it. Read as a level,
+  it would kill a later `/run` the moment it started. Only a stop asked for while the command runs cancels it.
+- **Every caller names the stop.** The model's `shell` result ends `(interrupted by the operator - killed; partial
+  output above)`, and the call is not `ok` (the round card, `--events`, `/audit`, log verdict `interrupted`). A
+  `pre_tool` hook the operator stopped gave no verdict, so it **denies**, like a timeout: `BLOCKED <tool> (the hook
+  was interrupted before it answered — degrading closed)`, log reason `interrupted`. Any hook prints `[hook <event>]
+  interrupted`. `[verify]` folds `INTERRUPTED (… the change is UNVERIFIED)` into the tool result, and `/state` reads
+  `last interrupted` (not `FAILED`). `/run` prints the output so far, then `interrupted — stopped by the operator`.
+- **The TUI.** Esc stops a running command in a turn's tool phase (the poll mode `agent_turn` already arms) and a
+  `/run` (bracketed by the same poll mode after its gate: the TUI runs commands in cooked mode, where a lone Esc is
+  unreadable). The session hooks, the line REPL and one-shot arm nothing, so their generation never moves and their
+  output is byte-identical.
+- **The window.** The pump runs through whole commands: it repaints, adopts a new size as the idle loop does, drops
+  pointer events and drains keys (Esc stops; anything else is dropped, as mid-turn). The compositor's close, read and
+  dropped mid-turn since 0.34.3, now requests the window's end and raises the interrupt. A stream stops at its next
+  frame, a tool round before its next call, a command at its next tick, and an open question modal cancels. The
+  loop closes once control returns; while it is closing, any later wait is stopped at its first tick. A command or
+  startup hook waiting on a child draws a `running <line>  (Esc stops it)` row under the cards. `session_start` now
+  fires after the first frame, so the window maps at once and a slow hook shows as running. It used to fire before
+  the map because a slow hook in a mapped window froze it and ignored close for the hook's whole run; the pump
+  removes that reason. `/run` under the card bracket no longer flips the launching terminal's mode (`intr_arm` is a
+  no-op for a front end that registered its own poll).
+
+Still not stoppable: a Windows capture (one blocking wait inside `lib/process_win.cyr`, with no return between
+checks; the lane is closed anyway), line mode's streaming `/run` (the child owns the terminal; unchanged) and a
+blocking network call (`daimon_invoke`, a non-streaming round). The pump runs only where a wait loop hands control
+back.
+
+Tests (+73): `test_wait_poll` (agent) — an unmoving generation changes nothing and is read before the first tick; a
+moved one stops `printf pre; sleep 5` at the tick (-4, not the deadline flag, the partial `pre` kept) and kills a
+backgrounded grandchild with the group; a child finishing inside the stop's tick reports its own exit 7; a poll that
+spends 250 ms a tick still times a 500 ms deadline out in wall time; `tui_wait_poll` ignores a stop raised before the
+command (the edge) and stops one raised during it (through `intr_check`); a stopped `pre_tool` hook denies, is counted
+as blocked and fired, and says `interrupted` (never `timed out`); a stopped `session_start` says so; the `shell`
+tool's stopped call is not `ok`, keeps its partial output and names the stop in both result forms; `[verify]` reads
+`INTERRUPTED` / `UNVERIFIED`, never `FAILED`, and records 2; `/run` shows its partial output, names the stop and
+releases the poll mode. `test_gcmd_running` (gui) — the close request raises the interrupt and moves the generation,
+which `intr_reset` never rewinds; both brackets mark the line running only for their runner's duration; the head is
+label-sanitised; the row draws under the conversation and under the greeting, measures the same as it draws, keeps the
+stop hint in a narrow column and is gone when the command returns. Proven by breaking, sixteen ways — fifteen caught:
+the stop check ignored, the extra look removed (kill at once), a level compare instead of the edge, the baseline not
+read before the first tick, the sleep-counted deadline restored, `tui_wait_poll` without `intr_check`, the hook's `-4`
+arm and its BLOCKED wording each dropped, the stopped `shell` call left `ok`, `[verify]`'s and `/run`'s `-4` arms
+dropped, the running mark and the greeting's row removed, the close request not raising the interrupt, the running
+head unsanitised. One break passes: `/run`'s `intr_disarm` removed, because the suite has no tty, so the poll mode
+never engages there. Live, the TUI in a pty against a stub gateway: Esc stopped a model's `sleep 37` in 0.16 s
+(`interrupted by the operator`, the turn `— interrupted`), a `pre_tool` hook's `sleep 39` in 0.16 s (BLOCKED, the tool
+never ran) and a `/run sleep 38` in 0.09 s. A `/run` right after the interrupted turn ran to `exit 0`. The same driver
+against 0.51.3: `sleep 37` outlived the Esc for the whole 15 s window. One-shot's stdout is byte-identical to 0.51.3's
+for the same tool-calling turn. The window's half needs a compositor and is owed to the operator's eyes (the roadmap
+names the checks).
+
 ## [0.51.3] - 2026-09-14
 
 **Repair batch 5 — the cyrius 6.6.4 re-vendor.** Held out of 0.51.2 because it rewrites `lib/`: the pin moves

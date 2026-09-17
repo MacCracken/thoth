@@ -55,7 +55,8 @@ var _shell_last_ok = 0;      # 1 if the last shell_run_tool RAN TO COMPLETION in
 # shell_last_allowed / shell_last_ok: the roundlog outcome of the last shell_run_tool, read by the
 # dispatch site in agent.cyr (mirrors how the memory branch sets rl_kind/rl_ok inline).
 # `ok` = the command ran to completion inside [shell].timeout_ms. A non-zero EXIT CODE is still ok
-# (a legitimate result the model acts on); a DEADLINE KILL is not (thoth stopped it, answer unknown).
+# (a legitimate result the model acts on); a DEADLINE KILL is not (thoth stopped it, answer unknown),
+# and neither is the operator's STOP (0.52.0 — Esc, or the window closing, killed it mid-run).
 fn shell_last_allowed() { return _shell_last_allowed; }
 fn shell_last_ok() { return _shell_last_ok; }
 
@@ -168,6 +169,8 @@ fn _shell_build_result(cap_total, code, timed, timeout_ms, truncated) {
             off = _exec_append_cstr(_shell_res_buf, off, "timed out after ");
             off = _append_int(_shell_res_buf, off, timeout_ms);
             off = _exec_append_cstr(_shell_res_buf, off, " ms - killed");
+        } elif (code == (0 - 4)) {
+            off = _exec_append_cstr(_shell_res_buf, off, "interrupted by the operator - killed");   # 0.52.0 (F7)
         } else {
             off = _exec_append_cstr(_shell_res_buf, off, "exit ");
             off = _append_int(_shell_res_buf, off, code);
@@ -183,6 +186,8 @@ fn _shell_build_result(cap_total, code, timed, timeout_ms, truncated) {
         off = _exec_append_cstr(_shell_res_buf, off, "timed out after ");
         off = _append_int(_shell_res_buf, off, timeout_ms);
         off = _exec_append_cstr(_shell_res_buf, off, " ms - killed; partial output above");
+    } elif (code == (0 - 4)) {
+        off = _exec_append_cstr(_shell_res_buf, off, "interrupted by the operator - killed; partial output above");   # 0.52.0 (F7)
     } else {
         off = _exec_append_cstr(_shell_res_buf, off, "exit ");
         off = _append_int(_shell_res_buf, off, code);
@@ -242,11 +247,14 @@ fn shell_run_tool(args_cstr) {
     var truncated = 0;
     if (total > cap) { truncated = 1; total = cap; }   # drop the overflow probe byte; flag truncation
     store8(_shell_cap_buf + total, 0);          # NUL-terminate for the escaper (mandatory; index <= cap)
+    var stopped = 0;
+    if (code == (0 - 4)) { stopped = 1; }      # 0.52.0 (F7): the operator stopped it (Esc, or the window closing)
     var sev = SK_INFO;
-    if (timed == 1) { sev = SK_WARN; }
+    if ((timed == 1) || (stopped == 1)) { sev = SK_WARN; }
     elif (code != 0) { sev = SK_WARN; }
     var verdict = "exit";
     if (timed == 1) { verdict = "timeout"; }
+    elif (stopped == 1) { verdict = "interrupted"; }
     _shell_audit_run(cmd, verdict, code, total, sev);
     _shell_last_ok = 1;
     # 0.44.4: ok means RAN TO COMPLETION, not "we reached the fork". A command the deadline SIGKILLed
@@ -254,6 +262,7 @@ fn shell_run_tool(args_cstr) {
     # operator most needs to see as a failure, recorded as a success. The split is deliberate: a
     # NON-ZERO EXIT is a legitimate result (`grep` found nothing; the model reads the code and reacts),
     # so it stays ok:true; a TIMEOUT is thoth killing the command with the answer unknown, so it does not.
-    if (timed == 1) { _shell_last_ok = 0; }
+    # 0.52.0: an operator's STOP is the same unknown answer — the command never finished.
+    if ((timed == 1) || (stopped == 1)) { _shell_last_ok = 0; }
     return _shell_build_result(total, code, timed, config_shell_timeout_ms(), truncated);
 }
