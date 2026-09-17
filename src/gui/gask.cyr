@@ -10,7 +10,7 @@
 # gui_run (cmd_task under OUT_NULL), so while a question is pending the present loop is blocked several
 # frames up the stack and cannot pump anything. The only thing keeping the window alive mid-turn is
 # `_gstop_poll` (gpresent.cyr), the interrupt seam's poll hook, which drains the Wayland fd and repaints
-# at ~30fps. This modal is built on the same three primitives that pump uses — _gpresent_poll_fd,
+# at ~30fps. This modal is built on the same three primitives that pump uses — gwl_win_wait (0.52.3; a raw poll before),
 # gwl_win_poll_events/gwl_win_next_key, _gpresent_frame — but BLOCKING rather than peeking, in its own
 # nested loop. Single-threaded and non-reentrant by construction: it runs on the tool round's stack and
 # nothing else can be pumping the window at the same time.

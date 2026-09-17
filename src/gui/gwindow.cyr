@@ -12,9 +12,30 @@
 #
 #
 
-fn gwl_wl_sys_socket(dom, typ, proto) { return syscall(41, dom, typ, proto); }
-fn gwl_wl_sys_connect(fd, addr, len) { return syscall(42, fd, addr, len); }
-fn gwl_wl_sys_close(fd) { return syscall(3, fd); }
+# ---- the system calls this backend makes (0.52.3) ----
+# Cyrius numbers a raw `syscall(N)` in x86_64-Linux terms, and on aarch64 the compiler renumbers the ones its table
+# knows (ESYSXLAT — generated from the calls BOTH stdlib syscall tables define): 41 becomes socket (198), 42 connect,
+# 9/11 mmap/munmap, and `poll` (7) becomes `ppoll` with the timeout converted — each measured under qemu-aarch64.
+# AGNOS has its own numbering and no such map (#41 is `sleep_ms` there, #7 `open`) and macOS has no Wayland, so off
+# Linux gui_run refuses before any of these is reached (gwl_win_backend_select).
+enum GwlSysNr {
+    GWL_NR_POLL = 7; GWL_NR_MMAP = 9; GWL_NR_MUNMAP = 11; GWL_NR_SOCKET = 41; GWL_NR_CONNECT = 42;
+}
+# ⚠ THREE CALLS THE TABLE DOES NOT KNOW. memfd_create, ftruncate and sendmsg are in neither stdlib table, so on aarch64
+# an x86_64 number passes through unrenumbered and silently: 319 is "unknown syscall", 77 runs `tee` and 46 runs
+# `ftruncate` (measured under qemu-aarch64 -strace). Through 0.52.2 that was the whole window on aarch64 Linux — no
+# buffer, and the fd-passing sendmsg truncating a file descriptor instead. The native numbers are written below until
+# the stdlib names these calls (filed in cyrius); test_gui_shm_calls runs all three for real, so a change on either
+# side fails the suite wherever it runs — natively, and under qemu-aarch64.
+#ifdef CYRIUS_ARCH_AARCH64
+enum GwlSysNrUnmapped { GWL_NR_SENDMSG = 211; GWL_NR_FTRUNCATE = 46; GWL_NR_MEMFD_CREATE = 279; }
+#endif
+#ifndef CYRIUS_ARCH_AARCH64
+enum GwlSysNrUnmapped { GWL_NR_SENDMSG = 46; GWL_NR_FTRUNCATE = 77; GWL_NR_MEMFD_CREATE = 319; }
+#endif
+fn gwl_wl_sys_socket(dom, typ, proto) { return syscall(GWL_NR_SOCKET, dom, typ, proto); }
+fn gwl_wl_sys_connect(fd, addr, len) { return syscall(GWL_NR_CONNECT, fd, addr, len); }
+fn gwl_wl_sys_close(fd) { return file_close(fd); }
 
 # ================================================================
 # wire.cyr — Wayland wire-protocol codec (PURE: no syscalls; headless-testable).
@@ -77,7 +98,6 @@ fn gwl_wire_str_next(off, L): i64 { return off + 4 + ((L + 3) & (0 - 4)); }
 enum JlwWlAbi {
     GWL_WL_AF_UNIX        = 1;
     GWL_WL_SOCK_STREAM    = 1;
-    GWL_WL_SYS_SENDMSG    = 46;
     GWL_WL_DISPLAY_ID     = 1;       # wl_display always has object id 1 (implicit)
     # ---- request opcodes ----
     GWL_OP_DISPLAY_SYNC   = 0;   GWL_OP_DISPLAY_GETREG = 1;
@@ -99,6 +119,8 @@ enum JlwWlAbi {
     GWL_EV_SEAT_CAPS = 0;            # wl_seat.capabilities; POINTER bit = 1, KEYBOARD bit = 2
     GWL_EV_KBD_KEY = 3;             # wl_keyboard.key (serial,time,key,state)
     GWL_EV_KBD_MODS = 4;           # wl_keyboard.modifiers (serial,depressed,...)
+    GWL_EV_KBD_LEAVE = 2;          # wl_keyboard.leave (serial, surface) — focus gone: a held key stops repeating
+    GWL_EV_KBD_REPEAT_INFO = 5;    # wl_keyboard.repeat_info (rate per second, delay ms), seat v4+
     # ---- wl_pointer (0.49.0, F4) ----
     GWL_OP_SEAT_GET_POINTER = 0;
     GWL_OP_PTR_SET_CURSOR = 0;      # wl_pointer.set_cursor (serial, surface, hotspot_x, hotspot_y)
@@ -161,10 +183,28 @@ var gwl_wl_pq_head = 0; var gwl_wl_pq_tail = 0;
 var gwl_wl_cur_surf = 0; var gwl_wl_cur_buf = 0;          # the cursor surface + its ARGB buffer (0 until drawn)
 var gwl_wl_cur_fd = 0 - 1; var gwl_wl_cur_ptr = 0;
 
-# keyboard: a ring of (evdev_keycode, value, mods) records + the live mod mask.
+# keyboard: a ring of (evdev_keycode, value, mods) records + the live mod mask. value 1 = a press, 2 = a repeat of a
+# held key; releases are not queued (0.52.3 — nothing reads one, and they took half the ring).
+# 0.52.3: 256 records, was 32 — a burst of key events a busy loop had not drained (a fast typist on a slow machine, a
+# virtual keyboard's paste) overflowed 31 slots and the rest were dropped (seen live: "hello from aarch64" typed into
+# the aarch64 build under qemu arrived as "hello from aarch6"). Past the cap a record is still dropped, never overrun.
 var gwl_wl_mods = 0;
-var gwl_wl_kq[96];              # 32 records * 3 i64 (module-global: 768 bytes)
+var GWL_KQ_CAP = 256;
+var gwl_wl_kq[768];             # 256 records * 3 i64 (module-global: 6144 bytes)
 var gwl_wl_kq_head = 0; var gwl_wl_kq_tail = 0;
+
+# ---- key repeat (0.52.3) ----
+# A Wayland compositor sends a key's press and its release and never a repeat: the CLIENT repeats a held key, at the
+# rate and after the delay wl_keyboard.repeat_info names. The window did not, so holding Backspace deleted one
+# character and holding an arrow moved one row (measured live: a 1.5 s hold gave one keystroke). A held non-modifier key
+# is remembered on its press; the loop's clock queues value-2 records at the rate once the delay passes; its release,
+# a different key's press, or the focus leaving ends it. Before repeat_info arrives (or on a seat below v4, which never
+# sends it): 25 per second after 600 ms. A rate of 0 means no repeat.
+var gwl_wl_rep_rate = 25;
+var gwl_wl_rep_delay = 600;
+var gwl_wl_rep_code = 0;        # the key held down (0 = none)
+var gwl_wl_rep_next = 0;        # the clock (ms) of its next repeat
+var GWL_REP_CATCHUP = 8;        # repeats one late tick may queue — a stalled loop never floods the composer after it
 
 # xkb 'depressed' bitmask -> puka MOD_* mask (values fixed at 1/4/2/8 here to keep
 # client.cyr independent of input.cyr — the probe includes neither).
@@ -177,7 +217,7 @@ fn gwl_wl__derive_mods(dep): i64 {
     return m;
 }
 fn gwl_wl__push_key(code, val, mods): i64 {
-    var nt = (gwl_wl_kq_tail + 1) % 32;
+    var nt = (gwl_wl_kq_tail + 1) % GWL_KQ_CAP;
     if (nt == gwl_wl_kq_head) { return 0; }    # full: drop
     var b = gwl_wl_kq_tail * 3;
     store64(&gwl_wl_kq + b * 8, code);
@@ -192,7 +232,7 @@ fn gwl_wl_pop_key(out24): i64 {                # writes code,val,mods; 1 if popp
     store64(out24, load64(&gwl_wl_kq + b * 8));
     store64(out24 + 8, load64(&gwl_wl_kq + (b + 1) * 8));
     store64(out24 + 16, load64(&gwl_wl_kq + (b + 2) * 8));
-    gwl_wl_kq_head = (gwl_wl_kq_head + 1) % 32;
+    gwl_wl_kq_head = (gwl_wl_kq_head + 1) % GWL_KQ_CAP;
     return 1;
 }
 fn gwl_wl_key_pending(): i64 { if (gwl_wl_kq_head != gwl_wl_kq_tail) { return 1; } return 0; }
@@ -200,7 +240,7 @@ fn gwl_wl_key_pending(): i64 { if (gwl_wl_kq_head != gwl_wl_kq_tail) { return 1;
 fn gwl_wl_alloc_id(): i64 { var id = gwl_wl_next_id; gwl_wl_next_id = gwl_wl_next_id + 1; return id; }
 
 # ---- stdout helpers (probe visibility) ----
-fn gwl_wl__emit(s, n): i64 { syscall(1, 1, s, n); return 0; }
+fn gwl_wl__emit(s, n): i64 { file_write(1, s, n); return 0; }
 fn gwl_wl__emit_str(s): i64 { return gwl_wl__emit(s, strlen(s)); }
 fn gwl_wl__emit_uint(n): i64 {
     if (n == 0) { return gwl_wl__emit("0", 1); }
@@ -310,7 +350,7 @@ fn gwl_wl__send_fd(size, fd): i64 {
     store64(&mh + 32, &cmsg);
     store64(&mh + 40, 24);              # controllen = CMSG_SPACE(4)
     store32(&mh + 48, 0);
-    return syscall(GWL_WL_SYS_SENDMSG, gwl_wl_fd, &mh, 0);
+    return syscall(GWL_NR_SENDMSG, gwl_wl_fd, &mh, 0);
 }
 
 fn gwl_wl_get_registry(): i64 {
@@ -352,19 +392,74 @@ fn gwl_wl__set_string(target, op, s): i64 {
 }
 fn gwl_wl__pong(serial): i64 { return gwl_wl__req1(gwl_wl_xdg_oid, GWL_OP_XDG_PONG, serial); }
 
-# wl_keyboard events. modifiers updates the live mask; key queues an
-# (evdev_keycode, value, mods) record the app drains via gwl_win_next_key.
-# wl_keyboard.key delivers the RAW evdev keycode (NOT evdev+8 — that offset is
-# only for feeding libxkbcommon, which a sovereign client doesn't use), so it
-# goes straight to evdev__keymap. keymap/enter/leave/repeat_info are ignored
-# (US-layout; the keymap fd is discarded by the plain read() in gwl_wl_pump).
-fn gwl_wl__kbd(o, op): i64 {
-    if (op == GWL_EV_KBD_MODS) { gwl_wl_mods = gwl_wl__derive_mods(load32(&gwl_wl_rbuf + o + 12)); return 0; }
-    if (op == GWL_EV_KBD_KEY) {
-        var key = load32(&gwl_wl_rbuf + o + 16);
-        var state = load32(&gwl_wl_rbuf + o + 20);
-        gwl_wl__push_key(key, state, gwl_wl_mods);
+# gwl_wl__is_modifier: 1 for the evdev modifier keys (Ctrl, Shift, Alt, Super, Caps Lock) — never repeated. PURE.
+fn gwl_wl__is_modifier(code): i64 {
+    if ((code == 29) || (code == 97)) { return 1; }        # Ctrl
+    if ((code == 42) || (code == 54)) { return 1; }        # Shift
+    if ((code == 56) || (code == 100)) { return 1; }       # Alt
+    if ((code == 125) || (code == 126)) { return 1; }      # Super
+    if (code == 58) { return 1; }                          # Caps Lock
+    return 0;
+}
+# gwl_wl__key_event (0.52.3): fold one wl_keyboard.key at clock `now` — a press is queued and (unless a modifier) becomes
+# the held key; a release queues nothing and ends that key's repeat. PURE over the ring + the repeat state.
+fn gwl_wl__key_event(key, state, now): i64 {
+    if (state == 1) {
+        gwl_wl__push_key(key, 1, gwl_wl_mods);
+        if (gwl_wl__is_modifier(key) == 0) { gwl_wl_rep_code = key; gwl_wl_rep_next = now + gwl_wl_rep_delay; }
+        return 0;
     }
+    if (key == gwl_wl_rep_code) { gwl_wl_rep_code = 0; }
+    return 0;
+}
+# gwl_wl__repeat_tick (0.52.3): queue the held key's repeats that are due at clock `now` (at most GWL_REP_CATCHUP) and
+# return how many. PURE over the ring + the repeat state.
+fn gwl_wl__repeat_tick(now): i64 {
+    if (gwl_wl_rep_code == 0) { return 0; }
+    if (gwl_wl_rep_rate <= 0) { return 0; }
+    var step = 1000 / gwl_wl_rep_rate;
+    if (step < 1) { step = 1; }
+    var n = 0;
+    while ((now >= gwl_wl_rep_next) && (n < GWL_REP_CATCHUP)) {
+        gwl_wl__push_key(gwl_wl_rep_code, 2, gwl_wl_mods);
+        gwl_wl_rep_next = gwl_wl_rep_next + step;
+        n = n + 1;
+    }
+    if (now >= gwl_wl_rep_next) { gwl_wl_rep_next = now + step; }   # the backlog past the bound is dropped, not owed
+    return n;
+}
+# gwl_wl__repeat_due_in (0.52.3): ms until the held key's next repeat at clock `now` (0 when due), or -1 when none will
+# come — the loop's wait is no longer than this. PURE.
+fn gwl_wl__repeat_due_in(now): i64 {
+    if (gwl_wl_rep_code == 0) { return 0 - 1; }
+    if (gwl_wl_rep_rate <= 0) { return 0 - 1; }
+    if (now >= gwl_wl_rep_next) { return 0; }
+    return gwl_wl_rep_next - now;
+}
+
+# wl_keyboard events. modifiers updates the live mask; key folds through gwl_wl__key_event (a press queued as an
+# (evdev_keycode, value, mods) record the app drains via gwl_win_next_key; 0.52.3: the held key's repeat);
+# repeat_info sets the repeat rate/delay (0.52.3) and leave ends a repeat. wl_keyboard.key delivers the RAW evdev
+# keycode (NOT evdev+8 — that offset is only for feeding libxkbcommon, which a sovereign client doesn't use), so it goes
+# straight to evdev__keymap. keymap and enter are ignored (US-layout; the keymap fd is discarded by the plain read() in
+# gwl_wl_pump). Each read is size-checked by the caller against the declared message size.
+fn gwl_wl__kbd(o, op): i64 {
+    var size = gwl_wire_msg_size(&gwl_wl_rbuf + o);
+    if (op == GWL_EV_KBD_MODS) { if (size >= 16) { gwl_wl_mods = gwl_wl__derive_mods(load32(&gwl_wl_rbuf + o + 12)); } return 0; }
+    if (op == GWL_EV_KBD_KEY) {
+        if (size < 24) { return 0; }
+        gwl_wl__key_event(load32(&gwl_wl_rbuf + o + 16), load32(&gwl_wl_rbuf + o + 20), clock_now_ms());
+        return 0;
+    }
+    if (op == GWL_EV_KBD_REPEAT_INFO) {
+        if (size < 16) { return 0; }
+        var rate = load32(&gwl_wl_rbuf + o + 8);
+        var delay = load32(&gwl_wl_rbuf + o + 12);
+        if ((rate >= 0) && (rate <= 1000)) { gwl_wl_rep_rate = rate; }       # u32 on the wire; a negative or absurd rate is ignored
+        if ((delay >= 0) && (delay <= 10000)) { gwl_wl_rep_delay = delay; }
+        return 0;
+    }
+    if (op == GWL_EV_KBD_LEAVE) { gwl_wl_rep_code = 0; return 0; }
     return 0;
 }
 
@@ -520,10 +615,10 @@ fn gwl_wl__cursor_paint(px): i64 {
 fn gwl_wl__cursor_make(): i64 {
     if (gwl_wl_cur_surf != 0) { return 1; }
     var size = GWL_CUR_W * GWL_CUR_H * 4;
-    var fd = syscall(GWL_SYS_MEMFD_CREATE, "thoth-cursor", GWL_MFD_CLOEXEC);
+    var fd = syscall(GWL_NR_MEMFD_CREATE, "thoth-cursor", GWL_MFD_CLOEXEC);
     if (fd < 0) { return 0; }
-    if (syscall(GWL_SYS_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
-    var ptr = syscall(GWL_SYS_MMAP9, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
+    if (syscall(GWL_NR_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
+    var ptr = syscall(GWL_NR_MMAP, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
     if (ptr < 0) { if (ptr > (0 - 4096)) { gwl_wl_sys_close(fd); return 0; } }
     if (ptr == (0 - 1)) { gwl_wl_sys_close(fd); return 0; }
     gwl_wl__cursor_paint(ptr);
@@ -707,10 +802,6 @@ fn gwl_wl_close(): i64 {
 # ================================================================
 
 enum JlwShmAbi {
-    GWL_SYS_MEMFD_CREATE = 319;
-    GWL_SYS_FTRUNCATE    = 77;
-    GWL_SYS_MMAP9        = 9;
-    GWL_SYS_MUNMAP11     = 11;
     GWL_MFD_CLOEXEC      = 1;
     GWL_SHM_PROT_RW      = 3;        # PROT_READ|PROT_WRITE
     GWL_SHM_MAP_SHARED   = 1;
@@ -734,10 +825,10 @@ fn gwl_shm_create(w, h): i64 {
     var stride = w * 4;
     var size = stride * h;
     if (size <= 0) { return 0; }
-    var fd = syscall(GWL_SYS_MEMFD_CREATE, "jalwa-wl", GWL_MFD_CLOEXEC);
+    var fd = syscall(GWL_NR_MEMFD_CREATE, "jalwa-wl", GWL_MFD_CLOEXEC);
     if (fd < 0) { return 0; }
-    if (syscall(GWL_SYS_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
-    var ptr = syscall(GWL_SYS_MMAP9, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
+    if (syscall(GWL_NR_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
+    var ptr = syscall(GWL_NR_MMAP, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
     if (ptr == (0 - 1)) { gwl_wl_sys_close(fd); return 0; }
     if (ptr < 0) { if (ptr > (0 - 4096)) { gwl_wl_sys_close(fd); return 0; } }
     gwl_shm_fd = fd; gwl_shm_ptr = ptr; gwl_shm_size = size; gwl_shm_cap = size;
@@ -777,7 +868,7 @@ fn gwl_shm_resize(w, h): i64 {
         # grow: release the old buffer/pool/mapping/fd, then build fresh at `size`.
         if (gwl_wl_buf_oid != 0) { gwl_wl__req0(gwl_wl_buf_oid, GWL_OP_BUFFER_DESTROY); }
         if (gwl_shm_pool != 0)   { gwl_wl__req0(gwl_shm_pool, GWL_OP_POOL_DESTROY); }
-        if (gwl_shm_ptr != 0)    { syscall(GWL_SYS_MUNMAP11, gwl_shm_ptr, gwl_shm_size); gwl_shm_ptr = 0; }
+        if (gwl_shm_ptr != 0)    { syscall(GWL_NR_MUNMAP, gwl_shm_ptr, gwl_shm_size); gwl_shm_ptr = 0; }
         if (gwl_shm_fd >= 0)     { gwl_wl_sys_close(gwl_shm_fd); gwl_shm_fd = 0 - 1; }
         return gwl_shm_create(w, h);
     }
@@ -831,7 +922,43 @@ enum JlwWinAbi {
 var gwl_win_w = 0;
 var gwl_win_h = 0;
 
-fn gwl_win_backend_select(): i64 { return 0; }   # one backend today (Wayland)
+# gwl_win_backend_select (0.52.3): which window backend this build has — GWL_BACKEND_WAYLAND on Linux (x86_64 and
+# aarch64), GWL_BACKEND_NONE everywhere else, where gui_run refuses before a single call below is made. It returned
+# 0 ("Wayland") on every target through 0.52.2. AGNOS's backend (over setu) is the roadmap's F8.
+var GWL_BACKEND_NONE = 0;
+var GWL_BACKEND_WAYLAND = 1;
+fn gwl_win_backend_select(): i64 {
+    #ifdef CYRIUS_TARGET_LINUX
+    return GWL_BACKEND_WAYLAND;
+    #endif
+    #ifndef CYRIUS_TARGET_LINUX
+    return GWL_BACKEND_NONE;
+    #endif
+}
+# gwl_win_backend_none_reason (0.52.3): the one line gui_run prints where there is no backend.
+fn gwl_win_backend_none_reason() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return "thoth gui: no window backend on AGNOS yet - the window is Wayland, on Linux; AGNOS's (over setu) is the roadmap's F8\n";
+    #endif
+    #ifdef CYRIUS_TARGET_MACOS
+    return "thoth gui: no window backend on macOS - the window is Wayland, on Linux\n";
+    #endif
+    #ifdef CYRIUS_TARGET_WIN
+    return "thoth gui: no window backend on Windows - the window is Wayland, on Linux\n";
+    #endif
+    return "thoth gui: no window backend on this target - the window is Wayland, on Linux\n";
+}
+
+# gwl_win_wait (0.52.3): block until the window's fd has something to read or timeout_ms passes (0 = a peek). > 0
+# readable, 0 timed out, < 0 an error. The present loop made this raw `poll` itself; the wait belongs to the backend,
+# because a second backend (AGNOS's, over setu — the roadmap's F8) has no fd to poll and waits its own way.
+fn gwl_win_wait(win, timeout_ms): i64 {
+    var pfd[8];
+    store32(&pfd, gwl_wl_fd);
+    store16(&pfd + 4, 1);                                   # POLLIN
+    store16(&pfd + 6, 0);
+    return syscall(GWL_NR_POLL, &pfd, 1, timeout_ms);
+}
 
 # Connect, bind globals, create the xdg-shell window, wait the first configure,
 # allocate the present buffer. Returns an opaque handle (1) or 0 on failure.
@@ -949,6 +1076,10 @@ fn gwl_win_resize_apply(win): i64 {
 # Drain one key record: out24[+0]=evdev keycode, [+8]=value(1=press), [+16]=mods.
 # Returns 1 if a record was produced, 0 if the queue is empty.
 fn gwl_win_next_key(win, out24): i64 { return gwl_wl_pop_key(out24); }
+# gwl_win_repeat_tick / gwl_win_repeat_due_in (0.52.3): the held key's repeats on the loop's clock — queue what is due
+# (then drain as after a key event), and how long the loop may wait before the next one (-1: no key held).
+fn gwl_win_repeat_tick(win): i64 { return gwl_wl__repeat_tick(clock_now_ms()); }
+fn gwl_win_repeat_due_in(win): i64 { return gwl_wl__repeat_due_in(clock_now_ms()); }
 # Drain one pointer record (0.49.0): out32[+0]=kind (GWL_PTR_BUTTON / GWL_PTR_AXIS / GWL_PTR_AXIS_FINE), [+8]=x, [+16]=y (surface px),
 # [+24]=arg (the button code, or the wheel's vertical px). 1 if a record was produced, 0 if the queue is empty.
 fn gwl_win_next_pointer(win, out32): i64 { return gwl_wl_pop_ptr(out32); }

@@ -30,13 +30,22 @@
 # Usage:
 #   ./scripts/agnos-run.sh              # build the agnos lane, then run it
 #   ./scripts/agnos-run.sh --no-build   # run whatever is already at build/thoth_agnos
+#   ./scripts/agnos-run.sh --classify LOG   # say whether a serial log's boot reached the kernel (no run)
 #
 # Env:
 #   AGNOS_REPO   path to the agnos checkout   (default: ../agnos relative to this repo)
 #   QEMU_TIMEOUT seconds to dwell for the prompt, passed through (harness default: 120)
 #   ARK_NO_KVM   set to force TCG instead of KVM (slow on a multi-MB load)
+#   AGNOS_RUN_BOOTS  boots to try when one dies BEFORE the kernel (default 3; see below)
 #
-# Exit: 0 PASS · 1 the run FAILED · 2 a prerequisite is missing (nothing was run).
+# ⚠ A BOOT THAT NEVER REACHED THE KERNEL IS NOT A THOTH RESULT (0.52.2). gnoboot calls ExitBootServices once and
+# gives up when the firmware refuses a stale memory-map key (`gnoboot: fail @ EBS` in the serial log — the roadmap's
+# gnoboot row), which at 0.52.1 took two of three boots. The harness then printed "FAIL: 'thoth 0.52.1' not found —
+# thoth did not produce its expected ring-3 output", about a binary that was never loaded. A serial log with
+# gnoboot's failure line, or with no kernel log line at all, is classified pre-kernel: the boot is retried (said so),
+# and when every boot dies there the run is a SKIP — nothing was executed — never a FAIL.
+#
+# Exit: 0 PASS · 1 the run FAILED · 2 a prerequisite is missing, or no boot reached the kernel (nothing was run).
 # A missing prerequisite is deliberately NOT a pass — this lane degrades closed and
 # announces, like every other capability thoth cannot reach.
 
@@ -50,11 +59,27 @@ HARNESS="$AGNOS_REPO/scripts/smoke/basestack-run-smoke.sh"
 KERNEL="$AGNOS_REPO/build/agnos"
 ELF="$ROOT/build/thoth_agnos"
 
+# boot_reached_kernel LOG: 0 when the serial log shows the AGNOS kernel running (a `[ seconds.micros ]` log line) and
+# no bootloader failure; 1 otherwise, with the reason on stdout. `strings`, because the log carries firmware escapes.
+boot_reached_kernel() {
+    local fail
+    fail="$(strings "$1" 2>/dev/null | grep -m1 -E 'gnoboot: fail @')"
+    if [ -n "$fail" ]; then echo "the bootloader failed ($fail)"; return 1; fi
+    if ! strings "$1" 2>/dev/null | grep -q -E '\[ *[0-9]+\.[0-9]{6}\]'; then
+        echo "no kernel log line in the serial log"; return 1
+    fi
+    return 0
+}
+
 DO_BUILD=1
 case "${1:-}" in
     --no-build) DO_BUILD=0 ;;
+    --classify)
+        [ -f "${2:-}" ] || { echo "usage: $0 --classify SERIAL_LOG" >&2; exit 2; }
+        if why="$(boot_reached_kernel "$2")"; then echo "kernel-ran"; else echo "pre-kernel: $why"; fi
+        exit 0 ;;
     "")         ;;
-    *) echo "usage: $0 [--no-build]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--no-build | --classify LOG]" >&2; exit 2 ;;
 esac
 
 # The expected console string is thoth's OWN version, read from the single source of
@@ -103,9 +128,24 @@ if ! strings "$KERNEL" 2>/dev/null | grep -q 'basestack selftest'; then
     exit 2
 fi
 
-echo "==> handing build/thoth_agnos to the AGNOS runner (expecting: '$EXPECT')"
-sh "$HARNESS" "$ELF" "$EXPECT" thoth
-rc=$?
+SERIAL="$AGNOS_REPO/build/basestack-run-smoke-logs/basestack-thoth.log"
+BOOTS="${AGNOS_RUN_BOOTS:-3}"
+boot=1
+while :; do
+    echo "==> handing build/thoth_agnos to the AGNOS runner (expecting: '$EXPECT'; boot $boot of $BOOTS)"
+    sh "$HARNESS" "$ELF" "$EXPECT" thoth
+    rc=$?
+    [ "$rc" -eq 0 ] && break
+    if why="$(boot_reached_kernel "$SERIAL")"; then break; fi   # the kernel ran: the harness's verdict stands
+    echo ""
+    echo "agnos-run: boot $boot of $BOOTS died BEFORE the kernel ran — $why."
+    echo "  Nothing of thoth's was loaded; the harness's FAIL above is not about thoth (the roadmap's gnoboot row)."
+    if [ "$boot" -ge "$BOOTS" ]; then
+        echo "SKIP: no boot reached the kernel in $BOOTS tries — nothing was executed." >&2
+        exit 2
+    fi
+    boot=$(( boot + 1 ))
+done
 
 echo ""
 if [ "$rc" -eq 0 ]; then

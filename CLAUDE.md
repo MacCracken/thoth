@@ -83,7 +83,7 @@ cyrius test                          # run [build].test + tests/*.tcyr
 
 1. **Work phase** — features, roadmap items, bug fixes
 2. **Build check** — `cyrius build`
-3. **Test + benchmark additions** for new code
+3. **Test + benchmark additions** for new code — and a change to a front end is verified LIVE, not only by suite: the window with `scripts/gui-live.sh` (a headless Hyprland started from any session, SSH included — screenshots, keys, pointer, a wire relay; never "owed to the operator's eyes"), the TUI with `scripts/live/ptydrive.py` (a real pty), both against `scripts/live/stubhoosh.py`
 4. **Internal review** — performance, memory, correctness, edge cases; for every new feature, ask "is this substrate or capability?" — substrate ports, capability binds to the spine
 5. **Documentation** — update CHANGELOG, `docs/development/state.md`, any ADR the change earned
 6. **Version sync** — edit `VERSION` (the single source of truth), run `scripts/gen-version.sh` to regenerate `src/version.cyr` (`thoth_version()`; `scripts/build.sh` also does this before each build), bump the CHANGELOG header. `cyrius.cyml` already reads `VERSION` via `${file:VERSION}`; never inline the version in `.cyr` source — read `thoth_version()`.

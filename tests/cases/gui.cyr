@@ -790,6 +790,156 @@ fn test_gui_scroll() {
     return 0;
 }
 
+# 0.52.3: under Wayland a held key's repeat is the CLIENT's job, and the window did none — a 1.5 s hold of Backspace
+# deleted one character (live, headless Hyprland). And releases shared the 32-slot key ring with the presses, so an
+# undrained burst dropped keys ("hello from aarch64" arrived as "hello from aarch6" in the aarch64 build under qemu).
+fn test_gui_key_repeat() {
+    test_group("a held key repeats at repeat_info's rate; releases no longer fill the key ring (gwindow.cyr, 0.52.3)");
+    var sv_rate = gwl_wl_rep_rate; var sv_delay = gwl_wl_rep_delay; var sv_kbd = gwl_wl_kbd_oid;
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0; gwl_wl_rep_code = 0; gwl_wl_mods = 0;
+    gwl_wl_frame_oid = 0; gwl_wl_cur_sync = 0; gwl_wl_reg_id = 0; gwl_wl_ptr_oid = 0; gwl_wl_buf_oid = 0; gwl_wl_busy_oid = 0;
+    gwl_wl_kbd_oid = 9;
+    var rec[24];
+    var o = _tg_wire(0, 9, GWL_EV_KBD_REPEAT_INFO, 16);
+    store32(&gwl_wl_rbuf + 8, 40); store32(&gwl_wl_rbuf + 12, 250);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_rep_rate, 40, "repeat_info's rate is read off the wire");
+    assert_eq(gwl_wl_rep_delay, 250, "...and its delay");
+    gwl_wl__key_event(30, 1, 1000);
+    assert_eq(gwl_wl_pop_key(&rec), 1, "a press is queued");
+    assert_eq(load64(&rec + 8), 1, "...as a press");
+    assert_eq(gwl_wl__repeat_due_in(1000), 250, "the held key's first repeat is due after the delay");
+    assert_eq(gwl_wl__repeat_tick(1249), 0, "nothing repeats before the delay");
+    assert_eq(gwl_wl__repeat_tick(1250), 1, "the first repeat comes at the delay");
+    assert_eq(gwl_wl_pop_key(&rec), 1, "...queued");
+    assert_eq(load64(&rec), 30, "...the held key");
+    assert_eq(load64(&rec + 8), 2, "...as a repeat");
+    var k = 0; var t = 1251;
+    while (t <= 2250) { k = k + gwl_wl__repeat_tick(t); t = t + 1; }
+    assert_eq(k, 40, "then 40 in the next second (one every 25 ms)");
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0;
+    assert_eq(gwl_wl__repeat_tick(9000), GWL_REP_CATCHUP, "a late tick catches up at most GWL_REP_CATCHUP, never a flood after a stall");
+    assert_eq(gwl_wl__repeat_tick(9001), 0, "...and the backlog past that is dropped, not owed");
+    gwl_wl__key_event(30, 0, 9002);
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0;
+    assert_eq(gwl_wl__repeat_tick(20000), 0, "the key's release ends its repeat");
+    assert_eq(gwl_wl__repeat_due_in(20000), 0 - 1, "...and nothing is due");
+    gwl_wl__key_event(30, 0, 20001);
+    assert_eq(gwl_wl_kq_tail, 0, "a release queues nothing (nothing reads one)");
+    gwl_wl__key_event(42, 1, 30000);
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0;
+    assert_eq(gwl_wl__repeat_tick(40000), 0, "a held Shift never repeats");
+    gwl_wl__key_event(30, 1, 50000);
+    gwl_wl__key_event(31, 1, 50100);
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0;
+    gwl_wl__repeat_tick(50350);
+    assert_eq(gwl_wl_pop_key(&rec), 1, "a second key pressed while one is held");
+    assert_eq(load64(&rec), 31, "...is the one that repeats");
+    o = _tg_wire(0, 9, GWL_EV_KBD_LEAVE, 16);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl__repeat_due_in(50400), 0 - 1, "the keyboard focus leaving ends the repeat");
+    gwl_wl_rep_rate = 0;
+    gwl_wl__key_event(30, 1, 60000);
+    assert_eq(gwl_wl__repeat_tick(70000), 0, "a repeat_info rate of 0 turns repeat off");
+    assert_eq(gwl_wl__repeat_due_in(70000), 0 - 1, "...nothing is due");
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0; gwl_wl_rep_rate = 25; gwl_wl_rep_code = 0;
+    var i = 0;
+    while (i < 255) { gwl_wl__key_event(30, 1, 0); gwl_wl__key_event(30, 0, 0); i = i + 1; }
+    var got = 0;
+    while (gwl_wl_pop_key(&rec) == 1) { got = got + 1; }
+    assert_eq(got, 255, "255 keys with their releases, undrained, lose none");
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0; gwl_wl_rep_code = 0;
+    o = _tg_wire(0, 9, GWL_EV_KBD_KEY, 16);                        # declares 16 bytes: no key or state to read
+    store32(&gwl_wl_rbuf + 16, 30); store32(&gwl_wl_rbuf + 20, 1);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_key_pending(), 0, "a key event declaring fewer bytes than a key carries is not read past its end");
+    gwl_wl_rep_rate = sv_rate; gwl_wl_rep_delay = sv_delay; gwl_wl_kbd_oid = sv_kbd; gwl_wl_rep_code = 0;
+    gwl_wl_kq_head = 0; gwl_wl_kq_tail = 0; gwl_wl_rlen = 0;
+    return 0;
+}
+
+# 0.52.3: the window backend is chosen per build, and the wait is the backend's. The Wayland seam's calls were raw
+# x86_64-Linux numbers compiled into every lane (on AGNOS #41 is sleep_ms; aarch64 has no `poll`), and the present loop
+# waited with its own raw `poll`. On a pipe: the peek, the timed wait (aarch64 converts it to a timespec) and a ready fd.
+fn test_gui_backend() {
+    test_group("the window backend is per target, and the wait is the backend's (gwindow.cyr, 0.52.3)");
+    #ifdef CYRIUS_TARGET_LINUX
+    assert_eq(gwl_win_backend_select(), GWL_BACKEND_WAYLAND, "a Linux build has the Wayland backend");
+    var fds[8];
+    assert_eq(sys_pipe(&fds), 0, "a pipe to wait on");
+    var rfd = load32(&fds);
+    var wfd = load32(&fds + 4);
+    var sv = gwl_wl_fd;
+    gwl_wl_fd = rfd;
+    assert_eq(gwl_win_wait(1, 0), 0, "an empty fd: a peek returns 0 at once");
+    var t0 = clock_now_ms();
+    assert_eq(gwl_win_wait(1, 60), 0, "a timed wait on an empty fd times out");
+    assert((clock_now_ms() - t0) >= 50, "...after its timeout, not at once");
+    file_write(wfd, "x", 1);
+    assert(gwl_win_wait(1, 1000) > 0, "a readable fd: the wait returns it");
+    var one[8];
+    file_read(rfd, &one, 1);
+    assert_eq(gwl_win_wait(1, 0), 0, "...and drained, a peek is empty again");
+    file_close(rfd);
+    file_close(wfd);
+    gwl_wl_fd = sv;
+    #endif
+    #ifndef CYRIUS_TARGET_LINUX
+    assert_eq(gwl_win_backend_select(), GWL_BACKEND_NONE, "a build off Linux has no window backend: thoth gui refuses before any call");
+    assert(strlen(gwl_win_backend_none_reason()) > 20, "...and says why");
+    #endif
+    return 0;
+}
+
+# 0.52.3: the window's buffer and fd-passing calls, run for real on whatever architecture the suite runs on. On aarch64
+# the x86_64 numbers of memfd_create / ftruncate / sendmsg passed through unrenumbered (319 unknown, 77 `tee`, 46
+# `ftruncate`), so the window never had a buffer there. A socketpair stands in for the compositor: the buffer is made,
+# the memfd is really sized, and the fd that arrives on the other end IS that memfd.
+fn test_gui_shm_calls() {
+    test_group("the window's buffer + fd-passing calls run as themselves on this architecture (gwindow.cyr, 0.52.3)");
+    #ifdef CYRIUS_TARGET_LINUX
+    var sv_fd = gwl_wl_fd; var sv_shm = gwl_wl_shm_oid; var sv_id = gwl_wl_next_id; var sv_buf = gwl_wl_buf_oid;
+    var sp[8];
+    assert_eq(sys_socketpair(1, 1, 0, &sp), 0, "a unix socketpair stands in for the compositor");
+    var a = load32(&sp);
+    var b = load32(&sp + 4);
+    gwl_wl_fd = a; gwl_wl_shm_oid = 5; gwl_wl_next_id = 40;
+    gwl_shm_fd = 0 - 1; gwl_shm_ptr = 0; gwl_shm_cap = 0; gwl_shm_pool = 0; gwl_shm_size = 0;
+    var ptr = gwl_shm_create(8, 4);
+    assert(ptr != 0, "the buffer is made: memfd_create, ftruncate and mmap each ran as themselves");
+    var st[160];
+    assert_eq(sys_fstat(gwl_shm_fd, &st), 0, "the memfd is a real fd");
+    assert_eq(load64(&st + 48), 8 * 4 * 4, "...sized by ftruncate to the buffer (on aarch64 x86's 77 ran `tee`)");
+    if (ptr != 0) { store32(ptr, 0x11223344); }
+    var iov[16];
+    var got[128];
+    store64(&iov, &got);
+    store64(&iov + 8, 128);
+    var cm[32];
+    store64(&cm, 0);
+    var mh[56];
+    store64(&mh, 0); store64(&mh + 8, 0);
+    store64(&mh + 16, &iov); store64(&mh + 24, 1);
+    store64(&mh + 32, &cm); store64(&mh + 40, 32); store64(&mh + 48, 0);
+    var n = sys_recvmsg(b, &mh, 0x40);                          # MSG_DONTWAIT: a send that never happened fails here, never hangs
+    assert(n >= 16, "the compositor's end receives the create_pool request");
+    assert_eq(load32(&got), 5, "...addressed to wl_shm");
+    assert_eq(load32(&got + 4) & 0xFFFF, GWL_OP_SHM_CREATE_POOL, "...as create_pool");
+    assert_eq(load32(&cm + 16 - 4), 1, "...with SCM_RIGHTS ancillary data (sendmsg ran as itself; on aarch64 x86's 46 ran ftruncate)");
+    var passed = load32(&cm + 16);
+    var st2[160];
+    assert_eq(sys_fstat(passed, &st2), 0, "the passed fd is live");
+    assert_eq(load64(&st2 + 8), load64(&st + 8), "...and it IS the memfd (the same inode)");
+    file_close(passed);
+    if (ptr != 0) { syscall(GWL_NR_MUNMAP, gwl_shm_ptr, gwl_shm_size); }
+    file_close(gwl_shm_fd);
+    file_close(a); file_close(b);
+    gwl_shm_fd = 0 - 1; gwl_shm_ptr = 0; gwl_shm_cap = 0; gwl_shm_pool = 0; gwl_shm_size = 0;
+    gwl_wl_fd = sv_fd; gwl_wl_shm_oid = sv_shm; gwl_wl_next_id = sv_id; gwl_wl_buf_oid = sv_buf;
+    #endif
+    return 0;
+}
+
 # 0.52.1: the present gate waits on the buffer that was ATTACHED. A configure landing while a frame was in flight made
 # the resize destroy that buffer and create another; its release arrived addressed to the old id and was ignored, so
 # gwl_win_ready never returned 1 again — the window froze at its old size (reproduced live on Hyprland through a

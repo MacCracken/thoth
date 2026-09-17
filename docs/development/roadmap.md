@@ -54,7 +54,7 @@ the whole spine is native. Everything thoth owns is shipping; what remains is AG
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
 0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. Last re-run 0.52.1 (2026-09-17): the 5.9 MB ELF printed `thoth 0.52.1` in ring 3 and
+stale binary. Last re-run 0.52.3 (2026-09-17): the 5.9 MB ELF printed `thoth 0.52.3` in ring 3 and
 exited 0 under QEMU.
 
 Three gates remain, in dependency order.
@@ -117,21 +117,14 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 7 → 0.52.2
+### Repair batch 9 → 0.52.4 (empty)
 
-Ordered; thoth-owned and provable by a test or by breaking it.
+No thoth-owned defect is known. The next one found opens this batch; until then the next thing to build is the first
+feature candidate below whose gate is open.
 
-1. **`scripts/agnos-run.sh` blames thoth for a boot that never reached the kernel.** At 0.52.1 two of three runs died
-   in gnoboot (`gnoboot: fail @ EBS` — ExitBootServices refused a stale memory-map key and gnoboot does not retry,
-   the gnoboot row below) and the script printed `FAIL: 'thoth 0.52.1' not found — thoth did not produce its expected
-   ring-3 output`. Nothing of thoth's had run. The script already turns a kernel without the selftest hook into an
-   honest `SKIP … nothing was executed` (exit 2); a serial log whose boot failed before the kernel is the same class —
-   name the boot failure, exit 2, never FAIL. Prove it against a captured `fail @ EBS` log.
-
-The window's checks are run live now (0.52.1): a headless Hyprland started from an SSH session drives `thoth gui` —
-screenshots over `wlr-screencopy`, keys and the pointer through the virtual-keyboard and virtual-pointer protocols,
-and a logging relay on the Wayland socket — so a GUI change is verified live before it ships, like the TUI's pty
-driver.
+The window's checks run live: `scripts/gui-live.sh` starts a private headless Hyprland from any session (SSH
+included) with a screenshot + input kit and a stub gateway (an aarch64 build runs under `qemu-aarch64` against it), and
+`scripts/live/ptydrive.py` drives the TUI in a pty — a front-end change is verified running, not only by suite.
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
@@ -156,7 +149,8 @@ Each carries the version it was last checked against (2026-09-17, at 0.52.1 — 
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:248`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.6.4** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
 | **cyrius (floor)** | `is_symlink` returns 0 on Windows (`lib/fs.cyr:433`), so the jail's symlink walk (audit A-1) and the toolpin store's link refusal are no-ops there — **the PE lane must not ship without revisiting it** | cyrius **6.6.4** | the lane is closed anyway (architectural, below) |
 | **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:92`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.4) | degrades honestly; a candidate filing if the ABI gains a mode channel |
-| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make it intermittent — the AGNOS smoke died before the kernel in 2 of 3 boots at 0.52.1 (and in 1 of 2 with the passing 0.52.0 ELF padded). The smoke also stages BOOTX64.EFI built 2026-05-16 (v0.7.1) | gnoboot **0.7.2** | re-run until the kernel boots; repair batch 7 item 1 stops calling it a thoth FAIL |
+| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make it intermittent — the AGNOS smoke died before the kernel in 2 of 3 boots at 0.52.1 (and in 1 of 2 with the passing 0.52.0 ELF padded). The smoke also stages BOOTX64.EFI built 2026-05-16 (v0.7.1) | gnoboot **0.7.2** | done — `scripts/agnos-run.sh` (0.52.2) classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
+| **cyrius (stdlib)** | `memfd_create`, `ftruncate` and `sendmsg` have no `SYS_*` name in either syscall table, so ESYSXLAT cannot renumber them for aarch64 and an x86_64 number passes through silently (319 unknown, 77 → `tee`, 46 → `ftruncate`); filed as cyrius `docs/development/issues/2026-09-17-thoth-memfd-ftruncate-sendmsg-unnamed-pass-through-on-aarch64.md`. ⚠ The stopgap has one hazard: named later, the regenerated table renumbers thoth's aarch64 literal 46 (native `ftruncate`) as x86 `sendmsg` | cyrius **6.6.4** | done — `src/gui/gwindow.cyr` writes the aarch64 numbers under `#ifdef CYRIUS_ARCH_AARCH64`, and `test_gui_shm_calls` runs all three for real (natively, and as an aarch64 binary under `qemu-aarch64`); switch to the names the release they ship |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
 
 **Permanent by design (not waiting):** the Windows lane's architectural half — the raw socket path
@@ -175,12 +169,31 @@ The lane gates closed, announced.
 
 Recommended order, with the reason for the place. Each is ONE minor; its cuts are patches.
 
-- **F8 — The AGNOS window backend for the GUI.** The pointer path and the window are Linux-Wayland
-  (aethersafha refused Wayland). Scope: the `gwl_*` seam behind a backend contract, the AGNOS
-  backend consuming aethersafha's client protocol, keyboard + pointer + shm buffers. **Gate:** gate 1
-  rung 3 (the TUI over agnsh) is the sane precondition; aethersafha's client contract must be stable.
-  **First** now that F7 has shipped: it is the GUI's half of "AGNOS canonical" and the last part of thoth
-  that runs only on Linux.
+- **F8 — The AGNOS window backend for the GUI.** Scope: the window seam behind a backend contract (the wait, the
+  buffer, keys, pointer, configure, close), and an AGNOS backend over **setu** — aethersafha's client protocol, consumed
+  as `setu/dist/setu.cyr` (0.8.9), never re-implemented. The pattern exists: puka's `src/platform/setu/window_setu.cyr`
+  fills the same `win_*` contract thoth's seam mirrors. **Gate — read from the source 2026-09-17, not met:**
+  - **The contract is not declared stable.** There is no protocol version on the wire (`SETU_HELLO` is defined but
+    aethersafha's handshake refuses anything before `CREATE_SURFACE`), `ATTACH` went from five arguments to six at
+    setu 0.8.8, and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
+    present, a per-surface opt-in for pointer motion.
+  - **thoth cannot be launched as a window.** On AGNOS a client does not dial: aethersafha spawns it with its end of a
+    channel in `AGNOS_CHAN`, and its launcher registers only `/bin/puka` and `/bin/crab`
+    (`aethersafha/src/main.cyr:1097`). A spawned client gets no `HOME`.
+  - **Every GUI chord would be dead.** Any key pressed with Ctrl held never reaches a client
+    (`aethersafha/src/main.cyr:1318`; aethersafha's issue `2026-09-13-claimed-keys-never-reach-a-client.md`), which
+    is Ctrl+B/S/K/R/T — and F2/F3 are claimed too.
+  - **The floor:** a buffer slot is 2 MB without a GPU carve-out (QEMU), so the 960×600 default does not fit; a
+    channel fd cannot be waited on (`epoll_wait` reports signalfd/timerfd/TCP only — the wait is a non-blocking poll
+    and `sys_pause`, crab's way).
+  - **Gate 1 rung 3 cannot be reached:** AGNOS has no raw terminal (no termios; console stdin is cooked and drops
+    every key without an ASCII value), so the TUI takes the line REPL there.
+  Off Linux `thoth gui` refuses before any call (`gwl_win_backend_select`, the seam's one switch); an AGNOS backend
+  slots in there, with `gwl_win_wait` as its wait. **The next step is upstream, filed as aethersafha's `docs/development/issues/2026-09-17-a-setu-client-outside-the-registry-cannot-start.md`:**
+  a way to start a setu client that is not puka or crab, HOME/PWD for a spawned client, the keys a client can count on
+  (the 0.16.25 ruling made Ctrl chords chrome — thoth accepts it and needs non-chord routes to its pane toggles on
+  AGNOS), and the largest surface a client may attach. **First** in the order still: it is
+  the GUI's half of "AGNOS canonical" and the last part of thoth that runs only on Linux.
 - **F9 — Untrusted reads through the subagent context (gap 4).** Route `@file` / `read_file` /
   `web_fetch` results through the 0.43.0 child context so retrieved text cannot instruct the main
   thread. **Gate:** the maintainer's decision (gap review question 3) — a model round per `@file`, and a
@@ -223,7 +236,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** `scripts/agnos-run.sh` calling a pre-kernel boot failure a thoth FAIL (repair batch 7, item 1).
+**Scheduled above:** nothing — repair batch 9 is empty.
 
 **Candidates above:** the pointer path Linux-Wayland only (F8).
 

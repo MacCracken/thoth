@@ -2,6 +2,120 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.3] - 2026-09-17
+
+**Repair batch 8: the window's system calls on aarch64 and off Linux, and its keyboard.** The batch was pinned as
+"`thoth gui` issues x86_64-Linux system calls on every target". Measuring it narrowed that. Cyrius renumbers raw
+calls for aarch64, so most of the window was right there all along. Three calls were not renumbered, and those three
+kept the window from ever working on aarch64 Linux. The live runs that proved that fix found two keyboard defects on
+every architecture: no key repeat, and dropped keys. Suite **796 + 1959 + 1032 + 823 + 190 + 5** (+41). Linux /
+aarch64 / AGNOS build with 0.52.1's warning sets (all four lanes diffed); all five suites also pass as aarch64 binaries
+under `qemu-aarch64` (4,800 of 4,800); the Windows lane at its known-gap skip; macOS
+built, its native suite green (822 + 1937 + 1029 + 190 + 775) and `thoth gui` refusing there; the AGNOS runtime re-run
+(`thoth 0.52.3` in ring 3).
+
+- **The window never worked on aarch64 Linux.**
+  - Cyrius numbers a raw `syscall(N)` in x86_64 terms. For aarch64 it renumbers only the calls that both stdlib syscall
+    tables name. `socket`, `connect`, `mmap` and `munmap` are renumbered, and `poll` becomes `ppoll` with the timeout
+    converted; each was measured under `qemu-aarch64 -strace` (a 50 ms wait took 51 ms).
+  - `memfd_create`, `ftruncate` and `sendmsg` are in neither table, so their x86_64 numbers passed through unchanged:
+    319 is "unknown syscall", 77 runs `tee`, and 46 runs `ftruncate`. The window had no buffer on aarch64 Linux, and
+    its fd-passing `sendmsg` would have truncated a file descriptor. The lane built `OK` throughout.
+  - The three now use their aarch64 numbers under `#ifdef CYRIUS_ARCH_AARCH64`, until the stdlib names them (filed as
+    cyrius `docs/development/issues/2026-09-17-thoth-memfd-ftruncate-sendmsg-unnamed-pass-through-on-aarch64.md`).
+  - Live: the aarch64 `thoth gui`, run under `qemu-aarch64` against the headless compositor, maps, streams a turn,
+    opens the sidebar, and takes a 64-character line intact.
+- **Off Linux, `thoth gui` refuses before making any call.** `gwl_win_backend_select` returns the Wayland backend on
+  Linux and none elsewhere. On AGNOS, macOS and Windows, `thoth gui` now prints `thoth gui: no window backend on
+  <target> - the window is Wayland, on Linux` and exits non-zero.
+  - AGNOS has its own syscall numbering and no translation (#41 is `sleep_ms` there). Through 0.52.2 the seam was
+    reached once `XDG_RUNTIME_DIR` was set; otherwise the window's message said to run under "aethersafha on AGNOS",
+    a path that does not exist yet (the roadmap's F8).
+  - The same message on Linux now names a Wayland compositor and nothing else.
+  - The present loop's raw `poll` moved behind the seam as `gwl_win_wait`, the one wait a second backend replaces.
+- **A held key did not repeat.** A Wayland compositor sends only a key's press and release; the client repeats a held
+  key at the rate and delay `wl_keyboard.repeat_info` names. The window ignored `repeat_info`, so holding Backspace
+  deleted one character and holding an arrow moved one row (live: a 1.5 s hold gave one keystroke).
+  - A held non-modifier key now repeats at `repeat_info`'s rate after its delay (25 per second after 600 ms until the
+    event arrives). Its release, a different key's press, or the focus leaving ends it, and a rate of 0 disables it.
+  - The loop waits no longer than the next repeat is due. A late tick catches up at most 8 repeats, so a stalled
+    loop never floods the composer.
+  - The question modal takes repeats as well.
+  - Live: a 1.5 s Backspace hold deleted 24 characters, and a 1.5 s hold of `x` typed 24.
+- **Keys were dropped under load.** Releases shared the 32-slot key ring with the presses, though nothing reads a
+  release, so an undrained burst of about 16 keys overflowed the ring. Seen live: "hello from aarch64" typed into the
+  aarch64 build under qemu arrived as "hello from aarch6". Releases are no longer queued, and the ring holds 256
+  records. Past that a record is still dropped, never overrun.
+- **The kit:** `scripts/gui-live.sh launch` runs an aarch64 binary under `qemu-aarch64`, detected from the ELF header;
+  `wlkit.py` gains `hold KEY SECS`.
+
+Tests (+41), each proven by breaking it:
+- `test_gui_shm_calls`: a socketpair stands in for the compositor. The buffer is made, `fstat` shows the memfd really
+  sized, and the fd that arrives with `SCM_RIGHTS` is that memfd's inode. The suite ran as an aarch64 binary under
+  `qemu-aarch64`: 772 of 772 with the fix, and 8 failures, all in this test, with aarch64 given the x86_64 numbers again.
+- `test_gui_backend`: the Linux build has the Wayland backend (and a build off Linux has none, run natively on macOS).
+  `gwl_win_wait` on a pipe covers the peek, a 60 ms timed wait that really lasts its timeout, and a ready fd.
+- `test_gui_key_repeat`, through the real parser:
+  - `repeat_info` decoded; a press queued once; nothing before the delay; the first repeat at the delay; 40 in the
+    next second at a rate of 40.
+  - The catch-up bound; release, focus leave and a rate of 0 each end the repeat; a held Shift never repeats; a
+    second key takes over.
+  - 255 undrained keys with their releases all kept; a truncated key event not read past its end.
+- Nine breaks, all caught: the Linux build reporting no backend; a wrong `poll` number (the suite hangs, and its
+  timeout fails it); the three aarch64 numbers reverted (run under `qemu-aarch64`); releases queued again; the
+  32-slot ring; no repeat; an unbounded catch-up; leave ignored; the key event's size check dropped.
+
+## [0.52.2] - 2026-09-17
+
+**Repair batch 7, and the live verification kit checked in.** 0.52.1 verified the window on a headless compositor
+with a kit that lived in one session's scratch directory. It is in `scripts/` now, so any session (an SSH one
+included) verifies a front-end change the same way. Batch 7's one item: `scripts/agnos-run.sh` no longer calls a boot
+that died before the AGNOS kernel a thoth failure. No thoth source changed. Suite **755 + 1959 + 1032 + 823 + 190 + 5**
+(unchanged); the AGNOS runtime re-run passes (`thoth 0.52.2` in ring 3).
+
+- **`scripts/gui-live.sh`.**
+  - `up` starts a private headless Hyprland. libseat's noop backend opens the first DRM card the user can open, and the
+    generated config disables every connected connector, so the physical display is never touched.
+    `hyprctl output create headless` makes the output, and the script finds its own instance by pid in
+    `hyprctl instances -j`. `up` also starts the input/screenshot kit and the stub gateway.
+  - `launch NAME [BIN]` runs `thoth gui` from a copy of the binary (a rebuild never meets `Text file busy`), with a fake
+    HOME and a throwaway git project.
+  - The other commands: `do` (type, key with modifiers, move, click, scroll, wheel, size), `shot`, `png` (crop, vshift),
+    `hypr`, `proxy`, `close`, `env`, `status`, `down`. Only processes whose command lines match what the script started
+    are signalled.
+- **The throwaway project lives outside any checkout.** It goes under `$TMPDIR` by default (`THOTH_LIVE_PROJ`), and
+  `launch` refuses a project with a thoth config above it. thoth's config discovery walks up from the working
+  directory: on the kit's first run the project sat under this repo's `build/`, inherited the repo's own
+  `.thoth/config.cyml`, and that file's `[hoosh].url` and model overrode the stub. Nothing was listening, so nothing
+  was sent.
+- **`scripts/live/`** holds the pieces, all Python 3 stdlib only:
+  - `wlkit.py`: raw-wire Wayland — screencopy PNGs, plus a virtual keyboard (with an XKB keymap) and a virtual pointer
+    bound to the output, served over a unix socket with request/reply.
+  - `wlprobe.py`: the minimal control client for an A/B.
+  - `wlproxy.py`: the logging relay.
+  - `pngtool.py`: crop and vshift.
+  - `stubhoosh.py`: the scripted gateway (`run:` makes a `shell` call; also `think:`, `slow:`, `md`).
+  - `ptydrive.py`: the TUI in a pty, driven by a step script (send, keys, wait, proc, gone, mark, dump).
+- **`agnos-run.sh`: a boot that never reached the kernel is not a thoth result.** gnoboot gives up when
+  `ExitBootServices` refuses a stale memory-map key (the roadmap's gnoboot row). The harness then printed
+  `FAIL: 'thoth 0.52.1' not found — thoth did not produce its expected ring-3 output`, about a binary that was never
+  loaded. A serial log with gnoboot's `fail @` line, or with no kernel log line, is now classified pre-kernel. The boot
+  is retried and the retry announced (`AGNOS_RUN_BOOTS`, default 3); when every boot dies there, the run is a SKIP
+  (exit 2), never a FAIL. `--classify LOG` prints the verdict for a saved log.
+- **Process:** CLAUDE.md's step 3 now asks for a live run of any front-end change; CONTRIBUTING gains
+  "Verifying a front end live".
+
+Verification:
+- **The kit, end to end:** `up`; `launch`; typing, `ctrl+k` and `/theme light`; a turn against the stub; the proxy
+  path; `close`; and `down` with a window still open, leaving no compositor, helper, socket or runtime directory
+  behind. Two bugs were caught on the way: a window launched through the relay carries the relay's pid, which the
+  mapped check and `close` now use; and `( cd X && prog & echo $! )` records a waiting bash rather than the program.
+- **`ptydrive.py`** drove the TUI through a streamed reply, a model `shell` call's `sleep 23` stopped by Esc in
+  0.02 s, and Ctrl-X (exit 0).
+- **`--classify`** reads a captured `fail @ EBS` log and a firmware-only log as pre-kernel, and a passing log as
+  `kernel-ran`.
+- **A real `agnos-run.sh`** lost boot 1 to gnoboot, said so, and passed on boot 2.
+
 ## [0.52.1] - 2026-09-17
 
 **Repair batch 6: the window, driven live.** The window's checks that 0.49.0–0.52.0 had left "owed to the operator's

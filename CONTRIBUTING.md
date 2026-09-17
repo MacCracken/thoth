@@ -7,7 +7,7 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: 0.52.1 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
+> **Status: 0.52.3 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
 > default) / REPL, a native Wayland GUI (`thoth gui`, with the mouse since 0.49.0), and a one-shot/argv
 > front-door with `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
 > switching with a picker that shows each provider's health and rate; jailed project read tools +
@@ -33,6 +33,26 @@ cyrius test                              # run [build].test + tests/*.tcyr
 
 The toolchain version is pinned in `cyrius.cyml` (`[package].cyrius`) — that pin
 is the single source of truth. Do not hardcode it anywhere else.
+
+### Verifying a front end live
+
+The suites test view-builders and wire decoders; a change to the TUI or the window is also run for real, and
+neither needs anyone at the machine:
+
+```sh
+scripts/gui-live.sh up                   # a private headless Hyprland + the input/screenshot kit + a stub gateway
+scripts/gui-live.sh launch w1            # build/thoth gui, in a throwaway project, HOME under build/live/w1
+scripts/gui-live.sh do type hello        # keys, `key ctrl+k`, `click X Y`, `scroll -40`, `wheel -1`
+scripts/gui-live.sh shot w1-after        # -> build/live/shots/w1-after.png
+scripts/gui-live.sh down                 # stop it all
+```
+
+`scripts/live/ptydrive.py` drives the TUI in a pty from a step script (`send`, `keys \x1b`, `wait TEXT`,
+`gone sleep`), and `scripts/live/stubhoosh.py` is the scripted gateway both use (`run: <cmd>` makes a `shell` call,
+`think:` streams reasoning, `slow:` a long stream, `md` markdown). Run a throwaway project OUTSIDE any checkout: thoth
+reads the nearest `.thoth/config.cyml` up the tree, and a checkout's would send the prompts to a real gateway.
+`scripts/live/wlproxy.py` logs a window's Wayland traffic both ways and `scripts/live/wlprobe.py` is a minimal
+control client for an A/B.
 
 ## The one rule that defines thoth
 

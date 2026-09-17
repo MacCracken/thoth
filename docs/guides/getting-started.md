@@ -30,6 +30,7 @@ cyrius build src/main.cyr build/thoth    # compile the binary
 cyrius test                              # run the curated suites (tests/thoth_{core,agent,tui,gui,render}.tcyr over tests/cases/*.cyr)
 ./build/thoth                            # start thoth (rich TUI on a capable terminal; line REPL otherwise)
 ./build/thoth gui                        # open the sovereign Wayland desktop GUI (tier T3, needs a compositor)
+scripts/gui-live.sh up                   # no desktop (an SSH session)? a private headless one to verify the window on
 ```
 
 The toolchain pin lives in `cyrius.cyml [package].cyrius`; CI reads it — don't
