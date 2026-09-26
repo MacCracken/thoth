@@ -2474,7 +2474,11 @@ var _winch_fd = 0 - 1;
 var _sigint_fd = 0 - 1;       # the blocked-SIGINT signalfd (tracked so teardown can close it)
 var _epfd = 0 - 1;
 var _events_ok = 0;           # 1 if the epoll multiplex is up (else a bare blocking read)
-var _ev_buf = 0;              # epoll_wait output: maxevents * 12 (packed epoll_event)
+# ⚠ 0.52.5 — this was `_ev_buf`, the name src/events.cyr gives its 8 KiB `--events` line buffer, and cyrius makes two
+# top-level `var`s of one name ONE variable, silently. `thoth --events` with no task opens this TUI with events on:
+# tui_events_init sized the shared buffer at 64 bytes and every event line was then built into it (a 379-byte
+# `tool_call` line, measured in a pty), over `_winch_drain` and whatever the heap held after it.
+var _tui_epoll_buf = 0;       # epoll_wait output: maxevents * 12 (packed epoll_event)
 var _winch_drain = 0;         # 128-byte signalfd_siginfo drain buffer
 
 # tui_events_init: open the WINCH signalfd, create the epoll instance, and register
@@ -2500,7 +2504,7 @@ fn tui_events_init() {
     if (_winch_fd < 0) { return 0; }
     _epfd = sys_epoll_create();
     if (_epfd < 0) { return 0; }
-    if (_ev_buf == 0) { _ev_buf = alloc(64); }
+    if (_tui_epoll_buf == 0) { _tui_epoll_buf = alloc(64); }
     if (_winch_drain == 0) { _winch_drain = alloc(128); }
     sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, 0, epoll_event_new(EPOLLIN, 0));            # stdin, data=0
     sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, _winch_fd, epoll_event_new(EPOLLIN, _winch_fd));
@@ -2519,11 +2523,11 @@ fn tui_wait_event() {
     return EV_KEY;
     #endif
     #ifdef CYRIUS_TARGET_LINUX
-    var n = sys_epoll_wait(_epfd, _ev_buf, 2, 0 - 1);   # timeout -1: block until ready
+    var n = sys_epoll_wait(_epfd, _tui_epoll_buf, 2, 0 - 1);   # timeout -1: block until ready
     if (n <= 0) { return EV_KEY; }                      # EINTR/spurious -> attempt a read
     var i = 0;
     while (i < n) {
-        if (load64(_ev_buf + i * 12 + 4) == _winch_fd) { return EV_WINCH; }   # data @ +4
+        if (load64(_tui_epoll_buf + i * 12 + 4) == _winch_fd) { return EV_WINCH; }   # data @ +4
         i = i + 1;
     }
     return EV_KEY;

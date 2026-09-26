@@ -54,7 +54,7 @@ the whole spine is native. Everything thoth owns is shipping; what remains is AG
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
 0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. Last re-run 0.52.4 (2026-09-26): the 6.0 MB ELF printed `thoth 0.52.4` in ring 3 and
+stale binary. Last re-run 0.52.5 (2026-09-26): the 6.0 MB ELF printed `thoth 0.52.5` in ring 3 and
 exited 0 under QEMU, on the first boot.
 
 Three gates remain, in dependency order.
@@ -117,28 +117,10 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 9 → 0.52.5
+### Repair batch 10 → 0.52.6 (empty)
 
-Two findings from 0.52.4's dependency refresh. Both are older than that release; neither shipped in it, because each
-is its own change.
-
-1. **A tool name t-ron's audit cannot hold still reaches the gate.** t-ron's `_audit_details` (`src/audit.cyr:12`)
-   allocates the tool name's length + 256 bytes, then writes `tool + reason + deny code + 44` bytes — and the reason
-   repeats the tool name and adds the agent id (`_tron_format_unknown_tool`, `src/tron.cyr:304`: `tool + agent + 34`;
-   `_policy_format_deny`, `src/policy.cyr:145`: `tool + agent + 37`). With the agent `thoth` and the `unauthorized`
-   code, a policy deny writes past the allocation from a 159-byte name and an unknown tool from 162. Both executors
-   refuse a name over `AGENT_NAME_MAX` (255, `src/agent.cyr:1083`) before the gate — above that line, so the existing
-   guard does not cover this path. `/audit export` fails lower than the cap too: a ring of such events overruns
-   `audit_export_json`'s `n * 512 + 32` buffer from a ~199-byte name, and t-ron's `tron_is_safe_identifier` admits `"`
-   and `\`, which the export splices unescaped. thoth's half: bound the name handed to `tron_check` by what t-ron's
-   buffers hold, less the configured `[tron].agent`'s length (a global-only key with no cap), refusing as today, with
-   a break test at the boundary; and correct `cmd_audit`'s comment (`src/commands.cyr:2370-2382`), which calls every
-   reason a short fixed label — a policy reason embeds the tool name. The fix itself is t-ron's (its waiting row
-   below); re-vendor when it ships.
-2. **`_ev_buf` is one global under two declarations.** `src/events.cyr:53` (the `--events` line buffer, `EV_CAP`
-   8 KiB) and `src/tui.cyr:2477` (the TUI's 64-byte `epoll_wait` buffer) both declare `var _ev_buf`, and cyrius makes
-   them one variable, so whichever allocates first sizes both. Latent while `--events` is one-shot only and the TUI
-   never runs in that process; rename one, and pin the two names apart.
+No thoth-owned defect is known. The next one found opens this batch; until then the next thing to build is the first
+feature candidate below whose gate is open.
 
 The window's checks run live: `scripts/gui-live.sh` starts a private headless Hyprland from any session (SSH
 included) with a screenshot + input kit and a stub gateway (an aarch64 build runs under `qemu-aarch64` against it), and
@@ -161,7 +143,7 @@ release re-checks the list; a closed item becomes a re-vendor patch with a line-
 | **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — named as hoosh's own follow-up at `handlers.cyr:3001`; the stream still charges the reservation estimate; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.7.1** | thoth keeps requesting it and already decodes it — the row lights up when hoosh ships the frame |
 | **hoosh** | three asks from the picker: the serving ROUTE per catalog entry (a `base_url` or route index beside `owned_by` in `/v1/models/catalog` — `handle_models_catalog`, `handlers.cyr:362`, still emits `id` / `object` / `owned_by`; so a model joins to ITS route's health instead of its kind's fold — a kind with partitioned routes reads `degraded` for every model of it today); a pricing-table dump (a `GET` listing `pricing_lookup` for every catalog key — `/v1/cost/estimate` answers one model per call); `/v1/health/providers` emitting `base_url` unescaped (`handlers.cyr:922`, a raw `add_cstr` — a quote in a route url breaks the body and thoth reads "health unavailable"). And a remote route's `healthy` is a TCP connect (`health_probe`, `health.cyr:51`, `net_connect_nb` at `:60`), never a valid key | hoosh **2.7.1** | done — 0.47.0 folds per kind, prices from the operator's table, treats an unparseable health body as unavailable |
 | **hoosh** | multimodal content parts: `content` is read as a string (`src/lib/provider.cyr:474`) and a plain message passes through verbatim (`:490`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; `metadata.cyr:20` already carries a per-model `vision` bit — the prerequisite for candidate F10 | hoosh **2.7.1** | none yet — thoth sends text only |
-| **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a ring of deny events overruns it from a ~199-byte tool name, and a `"` in a name (which `tron_is_safe_identifier`, `gate.cyr:66`, admits) makes the export invalid JSON; and `_audit_details` (`:12`) allocates `tool + 256` but writes `2 · tool + agent + 90..93` on a deny, from a ~159-byte name. The artifact is a SECURITY record | t-ron **2.1.11** (vendored 2.1.11; no source change since 2.1.10) | not enough — both executors refuse a name over `AGENT_NAME_MAX` (255) before the gate, above both thresholds: repair batch 9 item 1 |
+| **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a ring of deny events overruns it from ~185-byte tool names (one event alone from ~199), and a `"` in a name (which `tron_is_safe_identifier`, `gate.cyr:66`, admits) makes the export invalid JSON; and `_audit_details` (`:12`) allocates `tool + 256` but writes `2 · tool + agent + 90..93` on a deny, from a ~159-byte name. The artifact is a SECURITY record | t-ron **2.1.11** (vendored 2.1.11; no source change since 2.1.10) | done — 0.52.5 refuses, while t-ron is bound, a name longer than t-ron's audit buffers hold (`GATE_TRON_NAME_ROOM`, 163 bytes less the agent id) or holding a quote, backslash, control or non-ASCII byte, before `tron_check` (`gate_name_fit`); `test_gate_name_fit` fails if a t-ron sync moves the boundary |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the three `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.6.2's `[lib.read]` still defines `cmd_reset` and leaves the three unresolved (by sit's design, `cyrius.cyml:62-64`); bote 3.3.13 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.1.2** (vendored 1.1.2) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
 | **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers), sit's `sf_rmdir` calling `sys_rmdir`, which the PE floor still does not define (6.6.6 routes `RemoveDirectoryW`, but only through the portable `xrmdir`, `lib/io.cyr:162` — sit's own comment expects to fold onto it), and a spawn that carries an environment BLOCK (the PE capture inherits; `[hooks]` reports "could not run" and a `pre_tool` denies) | t-ron 2.1.11 · sit 1.6.2 · cyrius **6.6.6** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |

@@ -2,6 +2,68 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.5] - 2026-09-26
+
+**Repair batch 9: tool names t-ron's audit record cannot hold, and one buffer that was two.** Both items came out of
+0.52.4's dependency refresh, and both predate it. Suite **796 + 1974 + 1078 + 829 + 190 + 5** (+48). Linux, aarch64
+and AGNOS build with 0.52.4's warning sets (all four lanes diffed). All five suites pass as aarch64 binaries under
+`qemu-aarch64`, macOS is green natively, the Windows lane stays at its known-gap skip, and the AGNOS runtime re-run
+printed `thoth 0.52.5` in ring 3.
+
+- **A tool name t-ron's audit record cannot hold no longer reaches t-ron.**
+  - t-ron records every verdict, in its event ring and as a libro chain entry whose details `_audit_details` builds.
+    It splices the tool name, the agent id and the verdict's reason into JSON with no escaping, into a buffer of the
+    name's length + 256 bytes. A policy deny's reason quotes the name and the agent, so it writes `2·tool + agent +
+    93` bytes: past the allocation from a 159-byte name (with the agent `thoth`). `/audit export` (`n·512 + 32`)
+    overran from names of about 185 bytes.
+  - thoth's executors refused only names over 255 bytes (`AGENT_NAME_MAX`), and t-ron's own check admits 256. Through
+    0.52.4 the model could name a 159–255-byte tool and write past t-ron's buffers when the call was denied.
+  - t-ron also admits `"` and `\`, so a name like `x","verdict":"allow` wrote fields of its own into the security
+    record and the export. A control or non-ASCII byte t-ron refuses, but records raw first.
+  - While t-ron is bound, thoth now refuses all of these before t-ron's check (`gate_name_fit`, `src/gate.cyr`): a
+    name longer than the room t-ron's buffers give (163 bytes less the agent id), or one holding a quote, backslash,
+    control or non-ASCII byte. The record never holds them.
+  - Both executors tell the model which refusal it hit: "(tool name too long for the t-ron audit record; call
+    refused)" or "(tool name holds a quote, backslash, control or non-ASCII byte, which the t-ron audit record cannot
+    carry; call refused)". The operator sees `[t-ron] DENY (not checked): …`, and the gate applies the same check to
+    every other caller (`/call` among them). A `[tron].agent` id long enough to leave no room is named as the cause.
+  - Without t-ron bound nothing changes: there is no record, and the 255-byte cap stays.
+  - The fix itself is t-ron's (escape the fields, size the buffers from what they hold); the roadmap's waiting row
+    carries it. `cmd_audit`'s comment, which called the export safe because "every reason is a short fixed label", is
+    corrected.
+  - Live, with a policy bound: `/call` of a 170-byte name and of `x"y` each printed `[t-ron] DENY (not checked)` with
+    its reason, `/call echo_ok` went to t-ron, and `/audit` then held exactly one event.
+- **`thoth --events` in the TUI built its event lines in a 64-byte buffer.**
+  - `src/events.cyr` (the 8 KiB `--events` line buffer) and `src/tui.cyr` (the TUI's 64-byte `epoll_wait` buffer)
+    both declared `var _ev_buf`. cyrius makes two top-level declarations of one name a single variable, without a
+    warning when their shapes agree.
+  - The roadmap had called this latent because `--events` is one-shot only. It is not: `--events` is a modifier, so
+    `thoth --events` with no task opens the TUI with events on. `tui_events_init` sized the shared buffer at 64 bytes,
+    and every event line was then built in it. Measured in a pty: a 379-byte `tool_call` line, running over
+    `_winch_drain` and whatever the heap held after it. Nothing visibly broke; the overrun was silent.
+  - The TUI's buffer is now `_tui_epoll_buf`.
+  - A new test walks thoth's own `src/` and fails if any top-level `var` or enum member is declared in two files. This
+    was the only one (`main.cyr` and `test.cyr`, which share an `r`, are separate entry points).
+
+Tests (+48), each proven by breaking it:
+- `test_gate_name_fit` (agent, +37):
+  - At the room, a policy deny's details fill t-ron's allocation exactly. The room is derived from the vendored
+    t-ron, and a sync that moves the boundary fails here. An unknown-tool deny's and a correlation alert's details fit
+    too, and 120 room-length denials export inside t-ron's buffer.
+  - With t-ron bound: a name one byte over the room, a quote, a backslash, a control byte, DEL and a non-ASCII byte are
+    refused and never recorded; a name at the room is checked and recorded; a `[tron].agent` id of the whole room is
+    named.
+  - Both executors return the specific refusal and t-ron records nothing. With no t-ron bound, only the 255-byte cap
+    applies.
+- `test_tui_epoll_buf_apart` (tui, +6): the real epoll multiplex comes up and the event-line buffer stays unallocated.
+  A 300-byte event line then takes its own buffer and leaves the allocation behind the epoll buffer untouched.
+- `test_src_globals_once` (core, +4): the walk above.
+- The 0.45.2 `/audit` row test (core, +1): a control-byte name is now refused before t-ron can record it. The row's
+  cleaning is kept, checked on a name recorded through t-ron directly.
+- Breaks: the guard off (agent 24, core 1); quotes admitted (agent 14); the room one byte wider (agent 6); the
+  parallel executor back to the slot-only check (agent 7); the shared name restored (tui 3, and core 1, naming
+  `_ev_buf in src/events.cyr and src/tui.cyr`).
+
 ## [0.52.4] - 2026-09-26
 
 **Cyrius 6.6.6, and every vendored bundle at its latest tag.** The pin moves `6.6.4` → `6.6.6`, `lib/` is re-synced,

@@ -2005,3 +2005,42 @@ fn test_mpick() {
     assert_eq(mpick_cur(), 0, "the selection clamps to the shrunken view");
     return 0;
 }
+
+# 0.52.5 (repair batch 9): the TUI's epoll buffer and the `--events` line buffer are two globals. Both files declared
+# `var _ev_buf`, which cyrius merges into ONE variable without a word, so `thoth --events` with no task (the TUI, with
+# events on) built every event line in the 64-byte buffer tui_events_init had sized — a 379-byte `tool_call` line,
+# measured in a pty, ran over `_winch_drain` (allocated right behind it) and on into the heap. The sentinel is
+# `_winch_drain`.
+fn test_tui_epoll_buf_apart() {
+    test_group("the TUI's epoll buffer is not the --events line buffer (tui.cyr / events.cyr, 0.52.5)");
+    #ifdef CYRIUS_TARGET_LINUX
+    var sv_ep = _tui_epoll_buf; var sv_dr = _winch_drain; var sv_ev = _ev_buf; var sv_on = _ev_on;
+    _tui_epoll_buf = 0; _winch_drain = 0; _ev_buf = 0;
+    assert_eq(tui_events_init(), 1, "premise: the epoll multiplex comes up in the test process");
+    assert(_tui_epoll_buf != 0, "the TUI allocated its epoll buffer");
+    assert_eq(_ev_buf, 0, "...and the event-line buffer is still unallocated: they are two variables");
+    var i = 0;
+    while (i < 128) { store8(_winch_drain + i, 90); i = i + 1; }        # 'Z' x 128
+    var args = alloc(400);
+    var o = _append_cstr_cap(args, 0, 400, "{\"command\":\"echo ");
+    var j = 0;
+    while (j < 300) { store8(args + o, 120); o = o + 1; j = j + 1; }  # 300 x 'x'
+    o = _append_cstr_cap(args, o, 400, "\"}");
+    store8(args + o, 0);
+    events_enable();
+    _t_fd1_to("build/.thoth_t_evbuf.out");
+    events_tool_call(1, "shell", args);
+    _t_fd1_restore();
+    if (sv_on == 0) { events_disable(); }
+    xunlink("build/.thoth_t_evbuf.out");
+    assert(_ev_buf != 0, "the event line took a buffer of its own");
+    assert(_ev_buf != _tui_epoll_buf, "...not the TUI's");
+    var intact = 1;
+    i = 0;
+    while (i < 128) { if (load8(_winch_drain + i) != 90) { intact = 0; } i = i + 1; }
+    assert_eq(intact, 1, "a 300-byte event line leaves the allocation after the epoll buffer untouched");
+    tui_events_teardown();
+    _tui_epoll_buf = sv_ep; _winch_drain = sv_dr; _ev_buf = sv_ev;
+    #endif
+    return 0;
+}

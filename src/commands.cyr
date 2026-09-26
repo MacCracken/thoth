@@ -2367,19 +2367,20 @@ fn cmd_reload() {
 # verifies as nothing. What it does contain is still sensitive — which tools ran, under which agent id, at
 # what time, and which were denied — so the file is created 0600 and the operator is told what they hold.
 #
-# What it does NOT contain, checked rather than assumed: no tool PARAMETERS. Every `reason` t-ron can emit
-# is a fixed label — a policy string built from the (already character-validated) tool/agent names, a
-# scanner label like "shell injection pattern", or "rate limit exceeded". No model-chosen text reaches the
-# field. An earlier draft of this comment warned that a reason "can quote the parameters that triggered
-# it"; reading t-ron's `_tron_format_injection` / `scanner_scan_text` shows it cannot, so the warning is
-# not made.
+# What it does NOT contain, checked rather than assumed: no tool PARAMETERS. A `reason` is a fixed label (a
+# scanner label like "shell injection pattern", "rate limit exceeded") or a policy / unknown-tool sentence that
+# QUOTES the tool name and the agent id; no parameter text reaches the field. An earlier draft of this comment
+# warned that a reason "can quote the parameters that triggered it"; reading t-ron's `_tron_format_injection` /
+# `scanner_scan_text` shows it cannot, so the warning is not made.
 #
-# ⚠ UPSTREAM FRAGILITY, recorded because thoth's file is what would break: `_audit_export_event` splices
-# `reason` into the JSON with NO escaping, and sizes the whole buffer at a flat 512 bytes/event against a
-# reason whose length it does not bound. Both are safe today only because every reason is one of those
-# short fixed labels. The day t-ron grows a reason carrying a quote, a backslash or a control byte, this
-# export silently becomes invalid JSON; a long one overruns the buffer. Neither is fixable from thoth
-# without re-deriving the serializer — i.e. forking the spine — so it belongs to t-ron.
+# ⚠ UPSTREAM FRAGILITY, recorded because thoth's file is what would break: `_audit_export_event` splices the agent
+# id, the tool name and the `reason` into the JSON with NO escaping, and sizes the whole buffer at a flat 512
+# bytes/event against names whose length it does not bound. Through 0.52.4 this comment called that safe because
+# "every reason is a short fixed label" — it was not: the policy reason quotes the model's own tool name, and
+# t-ron's name check admits a quote, a backslash and up to 256 bytes, so a ring of ~185-byte names overran the
+# buffer and a `"` in a name could write fields of its own into the record. Since 0.52.5 thoth refuses such a
+# name before the gate (gate_name_fit, src/gate.cyr), so the export cannot receive one. Escaping belongs to t-ron;
+# re-deriving the serializer here would be forking the spine.
 fn _audit_export(path) {
     var a = gate_audit();
     if (a == 0) {

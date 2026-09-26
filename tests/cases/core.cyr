@@ -5951,6 +5951,8 @@ fn test_sink_sweep_0452() {
     assert(streq(rlb, "rd?[7mRLMARK?") == 1, "the roundlog stores a tool name with ESC and DEL as '?'");
 
     # --- S5: /audit's t-ron chain row for a name t-ron refused (it records the raw name before refusing) ---
+    # 0.52.5: through thoth's gate such a name no longer reaches t-ron at all (gate_name_fit refuses it first, so the
+    # record never holds it). The row's cleaning stays as defense in depth, checked on a name t-ron itself recorded.
     var saved_tron = _gate_tron;
     var saved_agent = _cfg_tron_agent;
     _cfg_tron_agent = 0;
@@ -5960,13 +5962,15 @@ fn test_sink_sweep_0452() {
     feed_init(); out_mode_set(OUT_RING);
     var bad = gate_authorize("bt\x1b[7mAUDMARK", _params_one("command", "x"), "run shell", "x");
     feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(bad, 0, "premise: a tool name holding a control byte is refused");
+    assert_eq(query_total_events(tron_audit(tr)), 0, "0.52.5: ...by thoth, before t-ron's check, so the record never holds it");
+    tron_check(tr, tool_call_new("thoth", "bt\x1b[7mAUDMARK", "{}", 1000));   # a caller that skipped thoth's gate
     feed_init(); out_mode_set(OUT_RING);
     gate_audit_report();
     feed_flush_pending(); out_mode_set(OUT_FD1);
     _gate_tron = saved_tron;
     _cfg_tron_agent = saved_agent;
-    assert_eq(bad, 0, "premise: t-ron refuses a tool name holding a control byte");
-    assert_eq(_mid_feed_count("\x1b[7mAUDMARK"), 0, "the /audit chain row draws no raw escape from the refused name");
+    assert_eq(_mid_feed_count("\x1b[7mAUDMARK"), 0, "the /audit chain row draws no raw escape from a name t-ron recorded");
     assert(_mid_feed_count("bt?[7mAUDMARK") >= 1, "...it names it with '?'");
 
     # --- S6: a pre_tool hook's BLOCKED line for a model-chosen name ---

@@ -1111,6 +1111,118 @@ fn test_audit() {
 }
 
 
+# 0.52.5 (repair batch 9): a tool name t-ron's audit record cannot hold never reaches tron_check. The room is derived
+# from the vendored t-ron, so the first group pins it against t-ron's own writers: at the room a policy deny's details
+# fill their allocation EXACTLY (and every byte past it writes two), and a ring of such denials exports inside its
+# buffer — a t-ron sync that moves either fails here. The rest drive the real gate and both executors with a policy
+# bound, and read what t-ron recorded.
+fn _tg_fill(n, ch) {
+    var p = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(p + i, ch); i = i + 1; }
+    store8(p + n, 0);
+    return p;
+}
+# _tg_calls_json: a tool_calls array of one call per name (arguments "{}"), for the executors. Names are copied raw —
+# a caller that wants a quote in one passes it already JSON-escaped.
+fn _tg_calls_json(n1, n2) {
+    var cap = 1024;
+    var b = alloc(cap);
+    var o = _append_cstr_cap(b, 0, cap, "[{\"id\":\"a\",\"function\":{\"name\":\"");
+    o = _append_cstr_cap(b, o, cap, n1);
+    o = _append_cstr_cap(b, o, cap, "\",\"arguments\":\"{}\"}}");
+    if (n2 != 0) {
+        o = _append_cstr_cap(b, o, cap, ",{\"id\":\"b\",\"function\":{\"name\":\"");
+        o = _append_cstr_cap(b, o, cap, n2);
+        o = _append_cstr_cap(b, o, cap, "\",\"arguments\":\"{}\"}}");
+    }
+    o = _append_cstr_cap(b, o, cap, "]");
+    store8(b + o, 0);
+    return b;
+}
+fn test_gate_name_fit() {
+    test_group("the room t-ron's audit record gives a tool name, pinned against t-ron's own writers (gate.cyr, 0.52.5)");
+    var agent = TRON_AGENT_DEFAULT;
+    var room = GATE_TRON_NAME_ROOM - strlen(agent);
+    var nm = _tg_fill(room, 110);                                   # the longest name the gate passes: 'n' x room
+    var d = _audit_details(nm, _policy_format_deny(agent, nm), DENY_UNAUTHORIZED);
+    assert_eq(str_len(d) + 1, room + 256, "at the room a policy deny's details fill t-ron's allocation (tool + 256) exactly");
+    var d2 = _audit_details(nm, _tron_format_unknown_tool(nm, agent), DENY_UNAUTHORIZED);
+    assert((str_len(d2) + 1) <= (room + 256), "...an unknown-tool deny's details fit too");
+    var d3 = _audit_details(nm, _corr_format_alert(nm, 12, 3600), 0 - 1);
+    assert((str_len(d3) + 1) <= (room + 256), "...and a correlation alert's (a flag: no deny code)");
+    var te = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(te, "[agent.\"thoth\"]\nallow = [\"echo_*\"]\ndeny = [\"n*\"]\n"), TRON_ERR_NONE, "premise: a policy denying n* loads");
+    var ei = 0;
+    while (ei < 120) { tron_check(te, tool_call_new(agent, nm, "{}", 1000 + ei)); ei = ei + 1; }
+    var ea = tron_audit(te);
+    assert_eq(query_total_denials(ea), 120, "premise: 120 policy denials of a room-length name are recorded");
+    assert(strlen(audit_export_json(ea)) < (120 * 512 + 32), "...and they export inside t-ron's n x 512 + 32 buffer");
+
+    test_group("a name t-ron's audit record cannot hold is refused before the check (gate.cyr, 0.52.5)");
+    var sv_tron = _gate_tron; var sv_agent = _cfg_tron_agent; var sv_mode = out_mode();
+    _cfg_tron_agent = 0;
+    _gate_tron = 0;
+    assert_eq(gate_name_fit(_tg_fill(250, 97)), GATE_NAME_OK, "with no t-ron bound there is no record: any name fits");
+    assert_eq(gate_name_fit("x\"y"), GATE_NAME_OK, "...a quote too (the confirm prompt draws a cleaned copy)");
+    var tg = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(tg, "[agent.\"thoth\"]\nallow = [\"*\"]\n"), TRON_ERR_NONE, "premise: an allow-all policy loads");
+    _gate_tron = tg;
+    var ga = tron_audit(tg);
+    assert_eq(gate_name_fit(_tg_fill(room, 97)), GATE_NAME_OK, "bound: a name at the room fits");
+    assert_eq(gate_name_fit(_tg_fill(room + 1, 97)), GATE_NAME_LONG, "...one byte over does not");
+    assert_eq(gate_name_fit("x\",\"verdict\":\"allow"), GATE_NAME_BYTE, "...a quote is refused: it would write fields into the record");
+    assert_eq(gate_name_fit("a\\b"), GATE_NAME_BYTE, "...a backslash");
+    assert_eq(gate_name_fit("a\x01b"), GATE_NAME_BYTE, "...a control byte (t-ron refuses one, but records it first)");
+    assert_eq(gate_name_fit("a\x7fb"), GATE_NAME_BYTE, "...DEL");
+    assert_eq(gate_name_fit("caf\xc3\xa9"), GATE_NAME_BYTE, "...a non-ASCII byte");
+    assert_eq(gate_name_fit("fs.read-file_2"), GATE_NAME_OK, "...an ordinary name fits");
+    feed_init(); out_mode_set(OUT_RING);
+    var before = query_total_events(ga);
+    assert_eq(gate_authorize(_tg_fill(room + 1, 97), "{}", "call tool", "x"), 0, "the gate denies a name over the room");
+    assert_eq(gate_authorize("x\"y", "{}", "call tool", "x"), 0, "...and a quoted one");
+    assert_eq(query_total_events(ga), before, "...and t-ron records neither: they were never checked");
+    assert_eq(_t_feed_has("DENY (not checked)"), 1, "...the operator is told the check did not run");
+    assert_eq(gate_authorize(_tg_fill(room, 97), "{}", "call tool", "x"), 1, "a name at the room goes to t-ron (allowed by the policy)");
+    assert_eq(query_total_events(ga), before + 1, "...which records it");
+    _cfg_tron_agent = _tg_fill(GATE_TRON_NAME_ROOM, 97);
+    assert_eq(gate_name_fit("read_file"), GATE_NAME_AGENT, "a [tron].agent id the length of the room leaves none for a name");
+    _cfg_tron_agent = 0;
+
+    test_group("both executors tell the model which name refusal it hit (agent.cyr, 0.52.5)");
+    assert_eq(_agent_name_code(_tg_fill(AGENT_NAME_MAX + 1, 97)), 1, "over the slot is its own refusal");
+    assert(streq(_agent_name_result(1), "(tool name too long; call refused)"), "...with the 0.44.4 wording");
+    assert_eq(_agent_name_code(_tg_fill(room + 1, 97)), 1 + GATE_NAME_LONG, "bound: over the room");
+    assert_eq(_agent_name_code("x\"y"), 1 + GATE_NAME_BYTE, "bound: a quote");
+    assert_eq(_agent_name_code("read_file"), 0, "an ordinary name proceeds");
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    var sv_daimon = _cfg_daimon_url;
+    _cfg_daimon_url = "http://127.0.0.1:9";                        # reserved discard port: the round fans out
+    var pj = _tg_calls_json(_tg_fill(room + 1, 97), "x\\\"y");      # an over-room name, and x"y
+    var pv = bayan_json_v_parse_buf(pj, strlen(pj));
+    assert_eq(agent_tc_count(pv), 2, "premise: two calls parse");
+    assert_eq(_agent_round_has_local(pv, 2), 0, "premise: neither is local, so the round runs in parallel");
+    _agent_work_reset();
+    before = query_total_events(ga);
+    _agent_run_calls(pv, 2);
+    assert_eq(_ui_contains(_agent_work, "tool name too long for the t-ron audit record"), 1, "parallel: the over-room call reads as that refusal");
+    assert_eq(_ui_contains(_agent_work, "holds a quote, backslash"), 1, "...the quoted one as its own");
+    assert_eq(query_total_events(ga), before, "...and t-ron records neither");
+    var sj = _tg_calls_json("x\\\"y", 0);
+    var sv = bayan_json_v_parse_buf(sj, strlen(sj));
+    _agent_work_reset();
+    _agent_run_calls(sv, 1);
+    assert_eq(_ui_contains(_agent_work, "holds a quote, backslash"), 1, "serial: the quoted call reads as that refusal");
+    assert_eq(query_total_events(ga), before, "...unrecorded");
+    _cfg_daimon_url = sv_daimon;
+    _gate_tron = 0;
+    assert_eq(_agent_name_code(_tg_fill(room + 1, 97)), 0, "with no t-ron bound a longer name is held to the slot only");
+    _gate_tron = sv_tron; _cfg_tron_agent = sv_agent;
+    out_mode_set(sv_mode); feed_init();
+    return 0;
+}
+
 # Agentic tool-round trace (roundlog): the session-local ring /audit surfaces.
 # Pure data-structure ops — no I/O — so the recording + ring eviction is testable.
 fn test_roundlog() {

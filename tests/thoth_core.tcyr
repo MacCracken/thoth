@@ -147,7 +147,7 @@ fn main() {
     test_content_sanitise();
     test_title_sanitise();
     test_sink_sweep_0452();
-    test_vendor_pins(); test_vendor_hazards();
+    test_vendor_pins(); test_vendor_hazards(); test_src_globals_once();
     return assert_summary();
 }
 var _e = main();

@@ -165,3 +165,103 @@ fn test_vendor_hazards() {
     assert_eq(_vd_count("_stream_grow"), 0, "sankoch zlib profile drops stream.cyr (no _stream_grow vs vyakarana's)");
     return 0;
 }
+
+# 0.52.5 (repair batch 9): thoth's own source declares each top-level `var` and enum member in ONE file. cyrius makes two
+# top-level declarations of one name a single variable, silently when their shapes agree (a clashing `fn` at least
+# warns; 6.6.6 refuses only a different type or size), which is how events.cyr's 8 KiB `--events` line buffer and the
+# TUI's 64-byte epoll buffer were one `_ev_buf` through 0.52.4. Walks src/ but not src/vendor/ (the bundles' overlaps
+# are the sync scripts' collision scan). src/main.cyr and src/test.cyr are separate entry points, never compiled
+# together, so the `r` both declare is not a collision.
+var _vd_seen = 0;               # name -> the file that declared it first
+var _vd_ndecl = 0;
+var _vd_dups = 0;
+fn _vd_say(s) { syscall(SYS_WRITE, 1, s, strlen(s)); return 0; }
+fn _vd_is_ident(c) {
+    if ((c >= 97) && (c <= 122)) { return 1; }
+    if ((c >= 65) && (c <= 90)) { return 1; }
+    if ((c >= 48) && (c <= 57)) { return 1; }
+    if (c == 95) { return 1; }
+    return 0;
+}
+# _vd_global: record one top-level name `path` declares; a name another file already declared is a collision.
+fn _vd_global(start, n, path) {
+    var name = alloc(n + 1);
+    memcpy(name, start, n);
+    store8(name + n, 0);
+    _vd_ndecl = _vd_ndecl + 1;
+    if (map_has(_vd_seen, name) == 1) {
+        var prev = map_get(_vd_seen, name);
+        if (streq(prev, path) == 1) { return 0; }                   # one file's #ifdef arms
+        if ((streq(prev, "src/main.cyr") == 1) && (streq(path, "src/test.cyr") == 1)) { return 0; }
+        if ((streq(prev, "src/test.cyr") == 1) && (streq(path, "src/main.cyr") == 1)) { return 0; }
+        _vd_dups = _vd_dups + 1;
+        _vd_say("    collision: "); _vd_say(name); _vd_say(" in "); _vd_say(prev); _vd_say(" and "); _vd_say(path); _vd_say("\n");
+        return 1;
+    }
+    map_set(_vd_seen, name, path);
+    return 0;
+}
+# _vd_scan_globals: every column-0 `var` and every enum member (an identifier followed by `=` inside an enum's braces,
+# `#` comments skipped) in the file last read.
+fn _vd_scan_globals(path) {
+    var b = _VD_BUF;
+    var n = _VD_LEN;
+    var i = 0;
+    while (i < n) {
+        if (((i + 4) <= n) && (memeq(b + i, "var ", 4) == 1)) {
+            var s = i + 4;
+            while ((s < n) && (load8(b + s) == 32)) { s = s + 1; }
+            var e = s;
+            while ((e < n) && (_vd_is_ident(load8(b + e)) == 1)) { e = e + 1; }
+            if (e > s) { _vd_global(b + s, e - s, path); }
+        }
+        elif (((i + 5) <= n) && (memeq(b + i, "enum ", 5) == 1)) {
+            var k = i;
+            while ((k < n) && (load8(b + k) != 123)) { k = k + 1; }          # '{'
+            k = k + 1;
+            while ((k < n) && (load8(b + k) != 125)) {                        # '}'
+                var c = load8(b + k);
+                if (c == 35) { while ((k < n) && (load8(b + k) != 10)) { k = k + 1; } }   # '#' to the end of the line
+                elif (_vd_is_ident(c) == 1) {
+                    var ms = k;
+                    while ((k < n) && (_vd_is_ident(load8(b + k)) == 1)) { k = k + 1; }
+                    var me = k;
+                    while ((k < n) && (load8(b + k) == 32)) { k = k + 1; }
+                    if ((k < n) && (load8(b + k) == 61) && (load8(b + k + 1) != 61)) { _vd_global(b + ms, me - ms, path); }
+                }
+                else { k = k + 1; }
+            }
+            i = k;
+        }
+        while ((i < n) && (load8(b + i) != 10)) { i = i + 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn test_src_globals_once() {
+    test_group("thoth's own source declares each global once (src/, 0.52.5)");
+    _vd_seen = map_new();
+    _vd_ndecl = 0;
+    _vd_dups = 0;
+    var files = find_files(str_from("src"), str_from(".cyr"));
+    var nf = 0;
+    var unread = 0;
+    var fi = 0;
+    while (fi < vec_len(files)) {
+        var fp = str_cstr(vec_get(files, fi));
+        var vendored = 0;
+        if (strlen(fp) >= 11) { vendored = memeq(fp, "src/vendor/", 11); }
+        if (vendored == 0) {
+            var n = _vd_read(fp);
+            if ((n <= 0) || (n >= _VD_CAP)) { unread = unread + 1; }
+            _vd_scan_globals(fp);
+            nf = nf + 1;
+        }
+        fi = fi + 1;
+    }
+    assert(nf >= 60, "premise: the walk found thoth's own sources (not the vendored ones)");
+    assert_eq(unread, 0, "...and read every one whole");
+    assert(_vd_ndecl >= 1300, "premise: ...and their globals and enum members");
+    assert_eq(_vd_dups, 0, "no top-level var or enum member is declared in two of them");
+    return 0;
+}
