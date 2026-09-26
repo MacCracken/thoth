@@ -111,9 +111,11 @@ TRANSIENT_GAP=''
 #     has no POSIX signals, so the floor defines neither constant. thoth has ZERO callers of
 #     `sighup_init` — the code is dead in this consumer. Upstream fix: t-ron gating its signal half to
 #     Linux, or publishing a [lib.X] profile without it. Tracked in roadmap.md's known limitations.
-#   sys_rmdir — src/vendor/sit-read.cyr's sf_rmdir. lib/syscalls_windows.cyr defines no `sys_rmdir`
-#     (it routes DeleteFileW and MoveFileExW but not RemoveDirectoryW). A cyrius Windows-floor gap
-#     reached through a vendored bundle, not a thoth call. Upstream fix: cyrius.
+#   sys_rmdir — src/vendor/sit-read.cyr's sf_rmdir. lib/syscalls_windows.cyr defines no `sys_rmdir`.
+#     Since cyrius 6.6.6 the floor routes RemoveDirectoryW, but through the portable `xrmdir` (lib/io.cyr),
+#     not a `sys_rmdir` wrapper — and sf_rmdir calls sys_rmdir directly, as its own comment expects to
+#     fold onto xrmdir once the stdlib had one. Reached through a vendored bundle, not a thoth call.
+#     Upstream fix: sit (call xrmdir).
 VENDOR_GAP='SIGHUP|SIG_BLOCK|sys_rmdir'
 
 # Guard the empty case: "$ARCH_GAP|" (trailing pipe) would match the empty string

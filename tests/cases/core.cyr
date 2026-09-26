@@ -4344,6 +4344,30 @@ fn test_memory_append_symlink() {
     return 0;
 }
 
+# test_mem_append_counted (0.52.4): memory_append's append keeps the byte count. cyrius 6.6.6's file_append_locked
+# returns -errno when a write fails partway, dropping how much landed, so memory_append's PARTIAL answer (-3) was
+# unreachable. The counted append tells the three outcomes apart: the open failed (-1, nothing written), a write
+# failed (the count that landed — 0 on /dev/full, where the open succeeds and every write fails), or all of it.
+fn test_mem_append_counted() {
+    test_group("the memory append counts what landed (memory.cyr, 0.52.4)");
+    var p = "build/.thoth_t_memcount.md";
+    xunlink(p);
+    assert_eq(_mem_append_counted(p, "- one\n", 6), 6, "an append into a new file lands whole");
+    assert_eq(_mem_append_counted(p, "- two\n", 6), 6, "a second append lands whole");
+    var b = alloc(64);
+    var n = file_read_all(p, b, 63);
+    assert_eq(n, 12, "...APPENDED, not truncated: both records are there");
+    assert_eq(_t_count_sub(b, n, "- one\n- two\n", 12), 1, "...in order");
+    xunlink(p);
+    assert_eq(_mem_append_counted("build/.thoth_t_nodir/MEMORY.md", "- x\n", 4), 0 - 1, "an open that fails is -1: nothing written");
+    #ifdef CYRIUS_TARGET_LINUX
+    if (file_exists("/dev/full") == 1) {
+        assert_eq(_mem_append_counted("/dev/full", "- x\n", 4), 0, "a write that fails after the open counts 0, not -1 (the floor would say -ENOSPC)");
+    }
+    #endif
+    return 0;
+}
+
 # --- MEMORY ROOT IDENTITY (0.45.3): the walk reaching ~/.thoth from below reads it ONCE ------------------
 # From `~/Repos/<x>` with no project `.thoth/` the root walk finds `../../.thoth` — $HOME/.thoth — and used to
 # return it as the PROJECT root (is_home = 0), so memory_global_dir() reported $HOME/.thoth/memory as a second
@@ -5844,22 +5868,32 @@ fn test_path_echo_sanitise() {
     assert_eq(_mid_feed_count("wrote 6 bytes"), 1, "premise: the allow-all policy let the write through");
     assert_eq(_mid_feed_count("\x1b[7mWRITEMARK"), 0, "no /write line draws a raw escape from the path");
     assert_eq(_mid_feed_count("/tmp/thoth_t_w?[7mWRITEMARK.txt"), 4, "...the proposal, the [t-ron] allow line, the diff card's header and the result all name it with '?'");
+    # an open that fails leaves the file as it was: "write failed"
+    feed_init(); out_mode_set(OUT_RING);
+    dispatch("/write /tmp/thoth_t_nodir/w\x1b[7mWFAILMARK.txt hello");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\x1b[7mWFAILMARK"), 0, "a failed /write draws no raw escape from the path");
+    assert_eq(_mid_feed_count("write failed: /tmp/thoth_t_nodir/w?[7mWFAILMARK.txt"), 1, "...write failed names it with '?'");
     if (full == 1) {
-        xunlink("/tmp/thoth_t_wf\x1b[7mWFAILMARK.txt");
-        xsymlink("/dev/full", "/tmp/thoth_t_wf\x1b[7mWFAILMARK.txt");
+        # 0.52.4: a write that fails after the open is counted (cyrius 6.6.6's file_write_all returns -errno and drops
+        # the count), so /dev/full reaches the INCOMPLETE line for real: 0 of 6 bytes, and it says the file was emptied
+        xunlink("/tmp/thoth_t_wf\x1b[7mWFULLMARK.txt");
+        xsymlink("/dev/full", "/tmp/thoth_t_wf\x1b[7mWFULLMARK.txt");
         feed_init(); out_mode_set(OUT_RING);
-        dispatch("/write /tmp/thoth_t_wf\x1b[7mWFAILMARK.txt hello");
+        dispatch("/write /tmp/thoth_t_wf\x1b[7mWFULLMARK.txt hello");
         feed_flush_pending(); out_mode_set(OUT_FD1);
-        xunlink("/tmp/thoth_t_wf\x1b[7mWFAILMARK.txt");
-        assert_eq(_mid_feed_count("\x1b[7mWFAILMARK"), 0, "a failed /write draws no raw escape from the path");
-        assert_eq(_mid_feed_count("write failed: /tmp/thoth_t_wf?[7mWFAILMARK.txt"), 1, "...write failed names it with '?'");
+        xunlink("/tmp/thoth_t_wf\x1b[7mWFULLMARK.txt");
+        assert_eq(_mid_feed_count("\x1b[7mWFULLMARK"), 0, "a write that failed after the open draws no raw escape from the path");
+        assert_eq(_mid_feed_plain_count("write INCOMPLETE: /tmp/thoth_t_wf?[7mWFULLMARK.txt"), 1, "...it is INCOMPLETE, not 'failed': the open truncated the file");
+        assert_eq(_mid_feed_plain_count("0 of 6 bytes written"), 1, "...and it counts what landed (nothing)");
+        assert_eq(_mid_feed_count("write failed: /tmp/thoth_t_wf"), 0, "...never the open-failed line");
     }
     _gate_tron = saved_tron;
     _cfg_tron_agent = saved_agent;
     feed_init(); out_mode_set(OUT_RING);
     _write_incomplete_note("/tmp/thoth_t_wi\x1b[7mWINCMARK.txt", 3, 6);
     feed_flush_pending(); out_mode_set(OUT_FD1);
-    assert_eq(_mid_feed_count("\x1b[7mWINCMARK"), 0, "the write INCOMPLETE line draws no raw escape (no test can make a short write)");
+    assert_eq(_mid_feed_count("\x1b[7mWINCMARK"), 0, "the write INCOMPLETE line draws no raw escape (no test can make a short POSITIVE write)");
     assert_eq(_mid_feed_count("/tmp/thoth_t_wi?[7mWINCMARK.txt"), 1, "...it names the path with '?'");
 
     session_reset();

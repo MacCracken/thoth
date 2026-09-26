@@ -18,19 +18,20 @@
 # lives in the include comment in src/main.cyr and in the CHANGELOG; this script
 # is the thing that makes the claim re-checkable.
 #
-# ⚠ kashi gitignores /dist/, so `git show <tag>:dist/kashi.cyr` does NOT resolve
-# even at a tagged release. src/font_data.cyr IS tracked — hence the raw URL
-# below points at src/, not dist/.
+# ⚠ Through 1.0.9 kashi gitignored /dist/, so `git show <tag>:dist/kashi.cyr` did
+# not resolve at a tagged release; 1.0.10 commits `dist/kashi.cyr`, but that is the
+# stdlib-using library face, not the core. src/font_data.cyr IS tracked at every
+# tag — hence the raw URL below points at src/, not dist/.
 #
 # HISTORY: the core has been BYTE-IDENTICAL across the entire 1.0.x line
-# (verified at 1.0.2 / 1.0.3 / 1.0.4 / 1.0.5 / 1.0.6), so a kashi version bump is
+# (verified tag by tag from 1.0.2 through 1.0.10), so a kashi version bump is
 # usually a no-op on this file. Re-run the script anyway on a refresh — a no-op
 # that is checked beats a no-op that is assumed.
 #
-# Usage: ./scripts/sync-kashi.sh [tag]   (default: 1.0.6)
+# Usage: ./scripts/sync-kashi.sh [tag]   (default: 1.0.10)
 set -euo pipefail
 
-TAG="${1:-1.0.6}"
+TAG="${1:-1.0.10}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/kashi.cyr"
 PREV="$(mktemp)"

@@ -2714,6 +2714,12 @@ fn _edit_streq_out(out, s) {
     if (load8(out + i) != 0) { return 0; }   # out must also end here
     return 1;
 }
+# A file's permission bits, read the way the floor's own _io_keep_mode reads them (STAT_MODE is per target).
+fn _edit_mode_of(path) {
+    var st[144];
+    if (xstat(path, &st) != 0) { return 0 - 1; }
+    return load32(&st + STAT_MODE) & 0x1FF;
+}
 fn test_edit() {
     test_group("edit tool: pure surgical-replace core (_edit_apply)");
     var out = alloc(256);
@@ -2760,6 +2766,33 @@ fn test_edit() {
     xunlink(fpath);
     var r3 = _edit_do(fpath, "x", 1, "y", 1);
     assert_eq(edit_last_ok(), 0, "edit of a nonexistent file -> not ok");
+
+    # 0.52.4: file_write_atomic renames a fresh sibling temp over the path. Through cyrius 6.6.5 that temp was created
+    # 0644 & ~umask, so an edit stripped a script's execute bit and widened a 0600 file; 6.6.6 gives the temp the
+    # existing file's permission bits, and /rewind writes back through the same call. POSIX only: the floor's chmod is
+    # a stub on Windows and AGNOS, and file_write_atomic keeps no mode there.
+    test_group("edit tool: an edit keeps the file's mode (cyrius 6.6.6 file_write_atomic, 0.52.4)");
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    ckpt_reset();
+    var mpath = "build/edit_mode_selftest.sh";
+    var mseed = "#!/bin/sh\necho OLD\n";
+    xunlink(mpath);
+    assert(file_write_all(mpath, mseed, strlen(mseed)) > 0, "seeded a script fixture");
+    assert_eq(sys_chmod(mpath, 493), 0, "made it 0755");
+    _edit_do(mpath, "OLD", 3, "NEW", 3);
+    assert_eq(edit_last_ok(), 1, "the edit applied");
+    assert_eq(_edit_mode_of(mpath), 493, "a 0755 script is still 0755 after an edit (the execute bit survives)");
+    assert_eq(sys_chmod(mpath, 384), 0, "made it 0600");
+    _edit_do(mpath, "NEW", 3, "NEWER", 5);
+    assert_eq(edit_last_ok(), 1, "the second edit applied");
+    assert_eq(_edit_mode_of(mpath), 384, "a 0600 file is still 0600 after an edit (not widened)");
+    assert_eq(ckpt_restore_one(1), 1, "/rewind's restore of that edit succeeds");
+    assert_eq(_edit_mode_of(mpath), 384, "...and the restored file is still 0600");
+    ckpt_reset();
+    xunlink(mpath);
+    #endif
+    #endif
 
     test_group("edit tool: parse + jail refusals (pre-gate)");
     assert(streq(edit_tool(0), "(edit: missing arguments)") == 1, "null args refused");

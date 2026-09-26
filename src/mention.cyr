@@ -149,9 +149,10 @@ fn _mention_seen_add() {
 fn _mention_inject(o, budget) {
     _mention_last_added = 0;
     var n = file_read_all(_mention_path, _mention_read, MENTION_FILE_CAP + 1);
-    # n <= 0 -> nothing to inject, leave literal. A DIRECTORY reads as 0 (file_open succeeds O_RDONLY,
-    # the first read hits EISDIR<0 which file_read_all treats as EOF -> total 0); a genuinely empty file
-    # is also 0. Both stay literal (portable — avoids a per-target is-dir stat; xstat is a Windows stub).
+    # n <= 0 -> nothing to inject, leave literal. A DIRECTORY reads as -EISDIR (file_open succeeds O_RDONLY
+    # and the first read fails; through cyrius 6.6.5 file_read_all treated that as EOF and returned 0); a
+    # genuinely empty file is 0. Both stay literal (portable — avoids a per-target is-dir stat; xstat is a
+    # Windows stub).
     if (n <= 0) { return o; }
     var trunc = 0;
     if (n > MENTION_FILE_CAP) { n = MENTION_FILE_CAP; trunc = 1; }   # per-file cap

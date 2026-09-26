@@ -894,7 +894,9 @@ fn test_gui_backend() {
 # 0.52.3: the window's buffer and fd-passing calls, run for real on whatever architecture the suite runs on. On aarch64
 # the x86_64 numbers of memfd_create / ftruncate / sendmsg passed through unrenumbered (319 unknown, 77 `tee`, 46
 # `ftruncate`), so the window never had a buffer there. A socketpair stands in for the compositor: the buffer is made,
-# the memfd is really sized, and the fd that arrives on the other end IS that memfd.
+# the memfd is really sized, and the fd that arrives on the other end IS that memfd. 0.52.4: the three go through the
+# stdlib's wrappers — cyrius 6.6.5's `sendmsg` 46 → 211 row turned 0.52.3's native aarch64 46 (ftruncate) into a
+# sendmsg, and 8 of these assertions failed under qemu-aarch64 at the 6.6.6 pin until the switch.
 fn test_gui_shm_calls() {
     test_group("the window's buffer + fd-passing calls run as themselves on this architecture (gwindow.cyr, 0.52.3)");
     #ifdef CYRIUS_TARGET_LINUX
@@ -909,7 +911,7 @@ fn test_gui_shm_calls() {
     assert(ptr != 0, "the buffer is made: memfd_create, ftruncate and mmap each ran as themselves");
     var st[160];
     assert_eq(sys_fstat(gwl_shm_fd, &st), 0, "the memfd is a real fd");
-    assert_eq(load64(&st + 48), 8 * 4 * 4, "...sized by ftruncate to the buffer (on aarch64 x86's 77 ran `tee`)");
+    assert_eq(load64(&st + 48), 8 * 4 * 4, "...sized by ftruncate to the buffer (aarch64: x86's 77 ran `tee` through 6.6.4, a native 46 runs sendmsg from 6.6.5)");
     if (ptr != 0) { store32(ptr, 0x11223344); }
     var iov[16];
     var got[128];

@@ -603,6 +603,35 @@ fn _mem_link_refused() {
     if (is_symlink(str_from(memory_index_path())) == 1) { return 1; }
     return 0;
 }
+# _mem_append_counted (0.52.4): file_append_locked's open, lock and append, keeping the count. Since cyrius 6.6.6
+# file_append_locked loops until the whole record lands and returns -errno when a write fails partway — so a torn
+# record, still on disk, no longer comes back as the bytes that landed, and memory_append's PARTIAL answer (-3)
+# could not be reached. Returns -1 when the open failed (nothing written), else the bytes appended: len, or fewer
+# when a write failed partway. The lock is held across the loop, so the record stays contiguous.
+fn _mem_append_counted(path, buf, len) {
+    var flags = O_WRONLY | O_CREAT;
+    #ifndef CYRIUS_TARGET_AGNOS
+    flags = flags | O_APPEND;
+    #endif
+    var fd = file_open(path, flags, 0x1A4);
+    if (fd < 0) { return 0 - 1; }
+    file_lock(fd);
+    #ifdef CYRIUS_TARGET_AGNOS
+    xlseek(fd, 0, 2);                  # SEEK_END — AGNOS has no O_APPEND yet (as file_append_locked)
+    #endif
+    var off = 0;
+    var go = 1;
+    while (go == 1) {
+        if (off >= len) { go = 0; }
+        else {
+            var w = file_write(fd, buf + off, len - off);
+            if (w <= 0) { go = 0; } else { off = off + w; }
+        }
+    }
+    file_unlock(fd);
+    file_close(fd);
+    return off;
+}
 fn memory_append(text) {
     # 0.32.0: route to mneme when the seam binds (daimon hosts mneme_*). Probe once
     # here — the write path is user-initiated, so the one-time GET is fine; the local
@@ -627,15 +656,15 @@ fn memory_append(text) {
     store8(_remember_buf + 1, 32);          # ' '
     memcpy(_remember_buf + 2, text, tl);
     store8(_remember_buf + 2 + tl, 10);     # '\n'
-    var rc = file_append_locked(memory_index_path(), _remember_buf, tl + 3);
-    if (rc < 0) { return 0 - 1; }
-    # ⚠ 0.44.3 — A SHORT WRITE IS NOT A COMPLETE ONE. `file_append_locked` returns the bytes actually
-    # written; a full disk, a quota or a signal can land fewer than asked, and this returned that count
-    # to a caller that only tested `< 0`. So `/remember` and the model's `memory_write` printed "saved"
-    # over a fact stored as a fragment — which then comes BACK on the next recall as though it were what
-    # the user wrote. 0.44.2 fixed exactly this shape for `/rewind` and `/write`; this is the third
-    # sibling. Reported as a failure so the caller can say so; the partial line stays on disk (removing
-    # it would need a rewrite this function cannot do atomically) and the message says which.
+    var rc = _mem_append_counted(memory_index_path(), _remember_buf, tl + 3);
+    if (rc <= 0) { return 0 - 1; }
+    # ⚠ 0.44.3 — A SHORT WRITE IS NOT A COMPLETE ONE. A full disk, a quota or a signal can land fewer bytes
+    # than asked, and this returned that count to a caller that only tested `< 0`. So `/remember` and the
+    # model's `memory_write` printed "saved" over a fact stored as a fragment — which then comes BACK on the
+    # next recall as though it were what the user wrote. 0.44.2 fixed exactly this shape for `/rewind` and
+    # `/write`; this is the third sibling. Reported as a failure so the caller can say so; the partial line
+    # stays on disk (removing it would need a rewrite this function cannot do atomically) and the message
+    # says which.
     if (rc < (tl + 3)) { return 0 - 3; }
     memory_invalidate();
     return rc;

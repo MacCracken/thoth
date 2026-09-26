@@ -12,27 +12,23 @@
 #
 #
 
-# ---- the system calls this backend makes (0.52.3) ----
-# Cyrius numbers a raw `syscall(N)` in x86_64-Linux terms, and on aarch64 the compiler renumbers the ones its table
-# knows (ESYSXLAT — generated from the calls BOTH stdlib syscall tables define): 41 becomes socket (198), 42 connect,
-# 9/11 mmap/munmap, and `poll` (7) becomes `ppoll` with the timeout converted — each measured under qemu-aarch64.
-# AGNOS has its own numbering and no such map (#41 is `sleep_ms` there, #7 `open`) and macOS has no Wayland, so off
-# Linux gui_run refuses before any of these is reached (gwl_win_backend_select).
+# ---- the system calls this backend makes (0.52.3; 0.52.4) ----
+# Cyrius numbers a raw `syscall(N)` in x86_64-Linux terms, and on aarch64 the compiler's emitter renumbers the ones its
+# hand-written ESYSXLAT chain has a row for: 41 becomes socket (198), 42 connect, 9/11 mmap/munmap, and `poll` (7)
+# becomes `ppoll` with the timeout converted — each measured under qemu-aarch64. (The table generated from the calls
+# BOTH stdlib syscall tables name is only the raw-literal diagnostic; it renumbers nothing.) AGNOS has its own numbering
+# and no such map (#41 is `sleep_ms` there, #7 `open`) and macOS has no Wayland, so off Linux gui_run refuses before
+# any of these is reached (gwl_win_backend_select).
 enum GwlSysNr {
     GWL_NR_POLL = 7; GWL_NR_MMAP = 9; GWL_NR_MUNMAP = 11; GWL_NR_SOCKET = 41; GWL_NR_CONNECT = 42;
 }
-# ⚠ THREE CALLS THE TABLE DOES NOT KNOW. memfd_create, ftruncate and sendmsg are in neither stdlib table, so on aarch64
-# an x86_64 number passes through unrenumbered and silently: 319 is "unknown syscall", 77 runs `tee` and 46 runs
-# `ftruncate` (measured under qemu-aarch64 -strace). Through 0.52.2 that was the whole window on aarch64 Linux — no
-# buffer, and the fd-passing sendmsg truncating a file descriptor instead. The native numbers are written below until
-# the stdlib names these calls (filed in cyrius); test_gui_shm_calls runs all three for real, so a change on either
-# side fails the suite wherever it runs — natively, and under qemu-aarch64.
-#ifdef CYRIUS_ARCH_AARCH64
-enum GwlSysNrUnmapped { GWL_NR_SENDMSG = 211; GWL_NR_FTRUNCATE = 46; GWL_NR_MEMFD_CREATE = 279; }
-#endif
-#ifndef CYRIUS_ARCH_AARCH64
-enum GwlSysNrUnmapped { GWL_NR_SENDMSG = 46; GWL_NR_FTRUNCATE = 77; GWL_NR_MEMFD_CREATE = 319; }
-#endif
+# memfd_create, ftruncate and sendmsg go through the stdlib's wrappers (sys_memfd_create / sys_ftruncate / sys_sendmsg,
+# cyrius 6.6.5), which spell each call with the number its target's peer declares. Through 6.6.4 no table named them,
+# so on aarch64 an x86_64 number passed through unrenumbered and silently — 319 "unknown syscall", 77 ran `tee`, 46 ran
+# `ftruncate` — and the window had no buffer there through 0.52.2. 0.52.3 wrote the native aarch64 numbers instead,
+# which held only while nothing renumbered them: 6.6.5 added the rows, `sendmsg` 46 → 211 among them, and the native 46
+# (ftruncate) then ran as sendmsg (qemu-aarch64 -strace: `sendmsg(5, 128, ...) = -1 EFAULT`). test_gui_shm_calls runs
+# all three for real, natively and as an aarch64 binary under qemu-aarch64.
 fn gwl_wl_sys_socket(dom, typ, proto) { return syscall(GWL_NR_SOCKET, dom, typ, proto); }
 fn gwl_wl_sys_connect(fd, addr, len) { return syscall(GWL_NR_CONNECT, fd, addr, len); }
 fn gwl_wl_sys_close(fd) { return file_close(fd); }
@@ -350,7 +346,7 @@ fn gwl_wl__send_fd(size, fd): i64 {
     store64(&mh + 32, &cmsg);
     store64(&mh + 40, 24);              # controllen = CMSG_SPACE(4)
     store32(&mh + 48, 0);
-    return syscall(GWL_NR_SENDMSG, gwl_wl_fd, &mh, 0);
+    return sys_sendmsg(gwl_wl_fd, &mh, 0);
 }
 
 fn gwl_wl_get_registry(): i64 {
@@ -615,9 +611,9 @@ fn gwl_wl__cursor_paint(px): i64 {
 fn gwl_wl__cursor_make(): i64 {
     if (gwl_wl_cur_surf != 0) { return 1; }
     var size = GWL_CUR_W * GWL_CUR_H * 4;
-    var fd = syscall(GWL_NR_MEMFD_CREATE, "thoth-cursor", GWL_MFD_CLOEXEC);
+    var fd = sys_memfd_create("thoth-cursor", GWL_MFD_CLOEXEC);
     if (fd < 0) { return 0; }
-    if (syscall(GWL_NR_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
+    if (sys_ftruncate(fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
     var ptr = syscall(GWL_NR_MMAP, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
     if (ptr < 0) { if (ptr > (0 - 4096)) { gwl_wl_sys_close(fd); return 0; } }
     if (ptr == (0 - 1)) { gwl_wl_sys_close(fd); return 0; }
@@ -825,9 +821,9 @@ fn gwl_shm_create(w, h): i64 {
     var stride = w * 4;
     var size = stride * h;
     if (size <= 0) { return 0; }
-    var fd = syscall(GWL_NR_MEMFD_CREATE, "jalwa-wl", GWL_MFD_CLOEXEC);
+    var fd = sys_memfd_create("jalwa-wl", GWL_MFD_CLOEXEC);
     if (fd < 0) { return 0; }
-    if (syscall(GWL_NR_FTRUNCATE, fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
+    if (sys_ftruncate(fd, size) < 0) { gwl_wl_sys_close(fd); return 0; }
     var ptr = syscall(GWL_NR_MMAP, 0, size, GWL_SHM_PROT_RW, GWL_SHM_MAP_SHARED, fd, 0);
     if (ptr == (0 - 1)) { gwl_wl_sys_close(fd); return 0; }
     if (ptr < 0) { if (ptr > (0 - 4096)) { gwl_wl_sys_close(fd); return 0; } }

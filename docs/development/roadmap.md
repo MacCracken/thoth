@@ -47,35 +47,6 @@ runs best), and the gap between them is an explicit, documented contract.
 
 See [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) for the full reasoning, [ADR-0002](../adr/0002-consume-the-agnos-stack.md) for the consume-the-stack mandate, and [architecture note 001](../architecture/001-consumer-only-no-domain-logic.md) for the invariant.
 
-## Moving the cyrius pin to 6.6.5
-
-⛔ Before bumping the pin to 6.6.5: in the same commit, replace the per-arch `GwlSysNrUnmapped`
-syscall literals in `src/gui/gwindow.cyr:30-35` with the stdlib wrappers. 6.6.5 adds an ESYSXLAT row
-`46 → 211` (x86 `sendmsg`), so the aarch64 `GWL_NR_FTRUNCATE = 46` (`:31`) becomes a `sendmsg`. Both
-shm-pool paths (`:620`, `:830`) then fail on aarch64 Linux. The window buffer (`:830`) makes
-`gwl_win_open` return 0, so `thoth gui` reports "no Wayland compositor available"
-(`src/gui/gpresent.cyr:278`), which names the wrong cause. The cursor buffer (`:620`) fails silently and
-the compositor's cursor is used instead. This is the hazard the `memfd_create` row under *Waiting on
-upstream or the floor* already names.
-
-cyrius 6.6.5 is not tagged yet. Nothing below can land against the pin until it is.
-
-- [ ] ⛔ Delete both `GwlSysNrUnmapped` arms. Call `sys_memfd_create(name, flags)` (`:618`, `:828`),
-      `sys_ftruncate(fd, size)` (`:620`, `:830`) and `sys_sendmsg(fd, &mh, 0)` (`:353`). The wrappers are
-      new in 6.6.5, so this change ships with the pin bump. The aarch64 `211` and `279` are not row sources
-      in 6.6.5, so only the `46` breaks at the bump. `test_gui_shm_calls` (native and `qemu-aarch64`) is the
-      check. See the cyrius CHANGELOG [6.6.5] entry "`memfd_create`, `ftruncate`, `sendmsg` and eleven more
-      had NO STDLIB NAME".
-- [ ] Rewrite the comment at `src/gui/gwindow.cyr:24-29` ("…until the stdlib names these calls (filed in
-      cyrius)"). The header at `:17` is wrong too: it says ESYSXLAT is "generated from the calls BOTH stdlib
-      syscall tables define", but ESYSXLAT is a hand-written chain and the generated table is only the
-      diagnostic (same CHANGELOG entry). Close the `memfd_create` row under *Waiting on upstream or the
-      floor*, which asks to "switch to the names the release they ship". The cyrius filing is now
-      `issues/archived/2026-09-17-thoth-memfd-ftruncate-sendmsg-unnamed-pass-through-on-aarch64.md`.
-- [ ] Re-run `cyrius deps` in the bump commit. The aarch64 peer moved `SYS_UNLINKAT` 35 → 263, and the
-      compiler's matching row is also new. If an old vendored `lib/` is built by the 6.6.5 compiler,
-      `sys_unlink` runs `nanosleep`, and nothing detects the mismatch (same CHANGELOG entry).
-
 ## Path to v1.0 — the blocking gates
 
 v1.0 is an **AGNOS gate**: the downstream-green criterion is satisfied **on AGNOS**, where
@@ -83,8 +54,8 @@ the whole spine is native. Everything thoth owns is shipping; what remains is AG
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
 0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. Last re-run 0.52.3 (2026-09-17): the 5.9 MB ELF printed `thoth 0.52.3` in ring 3 and
-exited 0 under QEMU.
+stale binary. Last re-run 0.52.4 (2026-09-26): the 6.0 MB ELF printed `thoth 0.52.4` in ring 3 and
+exited 0 under QEMU, on the first boot.
 
 Three gates remain, in dependency order.
 
@@ -146,10 +117,28 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 9 → 0.52.4 (empty)
+### Repair batch 9 → 0.52.5
 
-No thoth-owned defect is known. The next one found opens this batch; until then the next thing to build is the first
-feature candidate below whose gate is open.
+Two findings from 0.52.4's dependency refresh. Both are older than that release; neither shipped in it, because each
+is its own change.
+
+1. **A tool name t-ron's audit cannot hold still reaches the gate.** t-ron's `_audit_details` (`src/audit.cyr:12`)
+   allocates the tool name's length + 256 bytes, then writes `tool + reason + deny code + 44` bytes — and the reason
+   repeats the tool name and adds the agent id (`_tron_format_unknown_tool`, `src/tron.cyr:304`: `tool + agent + 34`;
+   `_policy_format_deny`, `src/policy.cyr:145`: `tool + agent + 37`). With the agent `thoth` and the `unauthorized`
+   code, a policy deny writes past the allocation from a 159-byte name and an unknown tool from 162. Both executors
+   refuse a name over `AGENT_NAME_MAX` (255, `src/agent.cyr:1083`) before the gate — above that line, so the existing
+   guard does not cover this path. `/audit export` fails lower than the cap too: a ring of such events overruns
+   `audit_export_json`'s `n * 512 + 32` buffer from a ~199-byte name, and t-ron's `tron_is_safe_identifier` admits `"`
+   and `\`, which the export splices unescaped. thoth's half: bound the name handed to `tron_check` by what t-ron's
+   buffers hold, less the configured `[tron].agent`'s length (a global-only key with no cap), refusing as today, with
+   a break test at the boundary; and correct `cmd_audit`'s comment (`src/commands.cyr:2370-2382`), which calls every
+   reason a short fixed label — a policy reason embeds the tool name. The fix itself is t-ron's (its waiting row
+   below); re-vendor when it ships.
+2. **`_ev_buf` is one global under two declarations.** `src/events.cyr:53` (the `--events` line buffer, `EV_CAP`
+   8 KiB) and `src/tui.cyr:2477` (the TUI's 64-byte `epoll_wait` buffer) both declare `var _ev_buf`, and cyrius makes
+   them one variable, so whichever allocates first sizes both. Latent while `--events` is one-shot only and the TUI
+   never runs in that process; rename one, and pin the two names apart.
 
 The window's checks run live: `scripts/gui-live.sh` starts a private headless Hyprland from any session (SSH
 included) with a screenshot + input kit and a stub gateway (an aarch64 build runs under `qemu-aarch64` against it), and
@@ -157,29 +146,30 @@ included) with a screenshot + input kit and a stub gateway (an aarch64 build run
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each carries the version it was last checked against (2026-09-17, at 0.52.1 — no row's dependency moved since
-0.52.0). A release re-checks the list; a closed item becomes a re-vendor patch with a line-anchored needle in
+Each carries the version it was last checked against (2026-09-26, at 0.52.4: every row re-read against hoosh 2.7.1,
+daimon 2.4.3, sit 1.6.2, t-ron 2.1.11, bote 3.3.13, darshana 1.1.2, cyrius 6.6.6, agnos 1.57.9, gnoboot 0.7.2 and
+bhava 2.0.0 — the `memfd_create` row closed with the pin, and daimon's half of the AGNOS row closed upstream). A
+release re-checks the list; a closed item becomes a re-vendor patch with a line-anchored needle in
 `tests/cases/vendor.cyr`.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01) and a `daimon_agnos` (none exists: daimon's `--agnos` build fails with 53 errors — measured upstream as a cyrius `cbt` sidecar-leaf resolution pulling `lib/syscalls_linux_common.cyr` in through bote's `dist/bote.deps`, plus 3 in daimon's own `src/agent.cyr`; filed in daimon's `docs/development/issues/2026-09-14-daimon-does-not-build-for-agnos.md`) — gate 1 rung 2 | hoosh 2.6.10 · daimon **2.1.4** | `scripts/agnos-run.sh` is ready to stage them |
-| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:47`) and overwrites on the same name | daimon **2.1.4** (a toolchain bump; unchanged) | done — 0.51.0's store is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
+| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.7.1 has no agnos build in its CI or scripts). daimon's half is closed upstream: 2.1.7 builds and boots on AGNOS (its issue archived), and `build/daimon-agnos` 2.4.3 is on disk (2026-09-23) — gate 1 rung 2 | hoosh **2.7.1** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
+| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:12`; daimon's roadmap puts caller auth at 2.5.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:134-142`). Since 2.1.4: 2.2.3 refuses a builtin's name (409 + `mcp.register.shadow`), 2.3.0 binds 127.0.0.1, 2.3.4 refuses cross-site state changes | daimon **2.4.3** | done — 0.51.0's store is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" (16 on a clean tree at 0.51.0 — the fifteen executable `scripts/*.sh` and the zero-byte `docs/examples/.gitkeep`; `_blob_differs_from_file` calls an unreadable side "differs", `src/api.cyr:146`) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
-| **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: `_emit_anthropic_tool_delta` returns 0 when a `content_block_start` lacks `id`+`name` (`src/lib/handlers.cyr:1542`) while the `input_json_delta` fragments still arrive | hoosh **2.6.10** | done — 0.44.2 drops and announces such a call |
-| **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — named as hoosh's own follow-up at `handlers.cyr:2516`; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.6.10** | thoth keeps requesting it and already decodes it — the row lights up when hoosh ships the frame |
-| **hoosh** | three asks from the picker: the serving ROUTE per catalog entry (a `base_url` or route index beside `owned_by` in `/v1/models/catalog`, so a model joins to ITS route's health instead of its kind's fold — a kind with partitioned routes reads `degraded` for every model of it today); a pricing-table dump (a `GET` listing `pricing_lookup` for every catalog key — `/v1/cost/estimate` answers one model per call); `/v1/health/providers` emitting `base_url` unescaped (`handlers.cyr:641`, a raw `add_cstr` — a quote in a route url breaks the body and thoth reads "health unavailable"). And a remote route's `healthy` is a TCP connect (`health.cyr:16`), never a valid key | hoosh **2.6.10** | done — 0.47.0 folds per kind, prices from the operator's table, treats an unparseable health body as unavailable |
-| **hoosh** | multimodal content parts: `content` is read as a string (`src/lib/provider.cyr:445`) and a plain message passes through verbatim (`:461`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; `metadata.cyr` already carries a per-model `vision` bit — the prerequisite for candidate F10 | hoosh **2.6.10** | none yet — thoth sends text only |
-| **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a 4000-byte tool name writes past the allocation; the artifact is a SECURITY record | t-ron **2.1.10** (vendored 2.1.10) | done — both executors refuse a name over `AGENT_NAME_MAX` before the gate |
-| **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the three `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither profile exists upstream (sit 1.6.2 · bote 3.3.9) | `sync-*.sh` re-vendor when they do |
+| **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: `_emit_anthropic_tool_delta` returns 0 when a `content_block_start` lacks `id`+`name` (`src/lib/handlers.cyr:1997`) while the `input_json_delta` fragments still arrive | hoosh **2.7.1** | done — 0.44.2 drops and announces such a call |
+| **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — named as hoosh's own follow-up at `handlers.cyr:3001`; the stream still charges the reservation estimate; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.7.1** | thoth keeps requesting it and already decodes it — the row lights up when hoosh ships the frame |
+| **hoosh** | three asks from the picker: the serving ROUTE per catalog entry (a `base_url` or route index beside `owned_by` in `/v1/models/catalog` — `handle_models_catalog`, `handlers.cyr:362`, still emits `id` / `object` / `owned_by`; so a model joins to ITS route's health instead of its kind's fold — a kind with partitioned routes reads `degraded` for every model of it today); a pricing-table dump (a `GET` listing `pricing_lookup` for every catalog key — `/v1/cost/estimate` answers one model per call); `/v1/health/providers` emitting `base_url` unescaped (`handlers.cyr:922`, a raw `add_cstr` — a quote in a route url breaks the body and thoth reads "health unavailable"). And a remote route's `healthy` is a TCP connect (`health_probe`, `health.cyr:51`, `net_connect_nb` at `:60`), never a valid key | hoosh **2.7.1** | done — 0.47.0 folds per kind, prices from the operator's table, treats an unparseable health body as unavailable |
+| **hoosh** | multimodal content parts: `content` is read as a string (`src/lib/provider.cyr:474`) and a plain message passes through verbatim (`:490`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; `metadata.cyr:20` already carries a per-model `vision` bit — the prerequisite for candidate F10 | hoosh **2.7.1** | none yet — thoth sends text only |
+| **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a ring of deny events overruns it from a ~199-byte tool name, and a `"` in a name (which `tron_is_safe_identifier`, `gate.cyr:66`, admits) makes the export invalid JSON; and `_audit_details` (`:12`) allocates `tool + 256` but writes `2 · tool + agent + 90..93` on a deny, from a ~159-byte name. The artifact is a SECURITY record | t-ron **2.1.11** (vendored 2.1.11; no source change since 2.1.10) | not enough — both executors refuse a name over `AGENT_NAME_MAX` (255) before the gate, above both thresholds: repair batch 9 item 1 |
+| **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the three `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.6.2's `[lib.read]` still defines `cmd_reset` and leaves the three unresolved (by sit's design, `cyrius.cyml:62-64`); bote 3.3.13 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.1.2** (vendored 1.1.2) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
-| **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers), sit's `sit_rmdir` against a floor with no `RemoveDirectoryW` route (`lib/io.cyr:142`), and a spawn that carries an environment BLOCK (the PE capture inherits; `[hooks]` reports "could not run" and a `pre_tool` denies) | t-ron 2.1.10 · sit 1.6.2 · cyrius **6.6.4** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |
-| **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:238` and AGNOS `syscalls_x86_64_agnos.cyr:685`) | cyrius **6.6.4** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
-| **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:248`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.6.4** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
-| **cyrius (floor)** | `is_symlink` returns 0 on Windows (`lib/fs.cyr:433`), so the jail's symlink walk (audit A-1) and the toolpin store's link refusal are no-ops there — **the PE lane must not ship without revisiting it** | cyrius **6.6.4** | the lane is closed anyway (architectural, below) |
-| **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:92`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.4) | degrades honestly; a candidate filing if the ABI gains a mode channel |
-| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make it intermittent — the AGNOS smoke died before the kernel in 2 of 3 boots at 0.52.1 (and in 1 of 2 with the passing 0.52.0 ELF padded). The smoke also stages BOOTX64.EFI built 2026-05-16 (v0.7.1) | gnoboot **0.7.2** | done — `scripts/agnos-run.sh` (0.52.2) classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
-| **cyrius (stdlib)** | `memfd_create`, `ftruncate` and `sendmsg` have no `SYS_*` name in either syscall table, so ESYSXLAT cannot renumber them for aarch64 and an x86_64 number passes through silently (319 unknown, 77 → `tee`, 46 → `ftruncate`); filed as cyrius `docs/development/issues/2026-09-17-thoth-memfd-ftruncate-sendmsg-unnamed-pass-through-on-aarch64.md`. ⚠ The stopgap has one hazard: named later, the regenerated table renumbers thoth's aarch64 literal 46 (native `ftruncate`) as x86 `sendmsg` | cyrius **6.6.4** | done — `src/gui/gwindow.cyr` writes the aarch64 numbers under `#ifdef CYRIUS_ARCH_AARCH64`, and `test_gui_shm_calls` runs all three for real (natively, and as an aarch64 binary under `qemu-aarch64`); switch to the names the release they ship |
+| **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers), sit's `sf_rmdir` calling `sys_rmdir`, which the PE floor still does not define (6.6.6 routes `RemoveDirectoryW`, but only through the portable `xrmdir`, `lib/io.cyr:162` — sit's own comment expects to fold onto it), and a spawn that carries an environment BLOCK (the PE capture inherits; `[hooks]` reports "could not run" and a `pre_tool` denies) | t-ron 2.1.11 · sit 1.6.2 · cyrius **6.6.6** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |
+| **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:295` and AGNOS `syscalls_x86_64_agnos.cyr:705`; 6.6.6's `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.6.6** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
+| **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:248`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.6.6** (`fs.cyr` unchanged) | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
+| **cyrius (floor)** | `is_symlink` returns 0 on Windows (`lib/fs.cyr:433`), so the jail's symlink walk (audit A-1) and the toolpin store's link refusal are no-ops there — **the PE lane must not ship without revisiting it**; at 6.6.6 a PE `O_CREAT \| O_EXCL` create also follows a final symlink | cyrius **6.6.6** | the lane is closed anyway (architectural, below) |
+| **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.9) | degrades honestly; a candidate filing if the ABI gains a mode channel |
+| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make it intermittent — the AGNOS smoke died before the kernel in 2 of 3 boots at 0.52.1 (and in 1 of 2 with the passing 0.52.0 ELF padded). The smoke stages `gnoboot/build/BOOTX64.EFI` (built 2026-09-11, hours before the 0.7.2 commits; 0.7.2's banner still reads v0.7.1). 0.52.4's run passed on its first boot | gnoboot **0.7.2** | done — `scripts/agnos-run.sh` (0.52.2) classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
 
 **Permanent by design (not waiting):** the Windows lane's architectural half — the raw socket path
@@ -367,96 +357,3 @@ identity by accident.
   HTTP gateway*, not a linked crate, so it never becomes a `cyrius.cyml` git-dep; the stdlib
   `sandhi` transport is what M3 declared.) The **off-AGNOS reach transport** — the
   native-vs-remote binding distinction — is deferred to a later ADR once that work is real.
-
----
-
-## Moving the cyrius pin to 6.6.6
-
-**Current pin:** `cyrius = "6.6.4"` (`cyrius.cyml`).
-
-⛔ **Pin 6.6.6 BEFORE the `--win` gate lifts.** thoth has a real, `cass`-verified
-Windows path today (`src/exec.cyr:130+`, `exec_shell_capture` under
-`#ifdef CYRIUS_TARGET_WIN`), and the full `--win` binary is gated only on the
-async/epoll→IOCP transport. Every one of thoth's persistent-state writers is
-**unguarded** — no `CYRIUS_TARGET_WIN` / `#ifndef` around any of them — so they
-compile straight into that binary the moment the gate lifts:
-
-| site | what it rewrites |
-| --- | --- |
-| `src/session.cyr:867` `_sess_write_file` | the whole conversation store, truncate-and-rewrite |
-| `src/inhist.cyr:270` `_inhist_write_file` | the input-history ring, truncate-and-rewrite |
-| `src/commands.cyr:1091` | `/save` transcript |
-| `src/commands.cyr:2382` | (same shape, 0600) |
-| `src/oneshot.cyr:484` `_oneshot_write_out` | the `-o` argv redirect |
-| 47 × `file_write_all` | `lib/io.cyr:546` opens `O_WRONLY\|O_CREAT\|O_TRUNC` |
-
-All of them open `O_WRONLY|O_CREAT|O_TRUNC`, and **before 6.6.6 a PE build's
-`O_TRUNC` did not truncate**. Any rewrite that produced *shorter* content left
-the old tail in place — a trimmed session file would have been silently corrupted
-with a fragment of the previous, larger one, and `_sess_write_file`'s own header
-comment ("truncate + rewrite") would simply have been false on Windows. The
-callers all check for short writes and degrade closed, but none of them can see
-a tail they never wrote.
-
-thoth already knows this bug — it worked around it once. `src/exec.cyr:149` and
-`:197` record that "through 0.45.5 the open was `OPEN_ALWAYS` without `O_TRUNC`,
-the reroute ignoring it", and 0.45.6 replaced it with an exclusive
-`O_WRONLY|O_CREAT|O_EXCL` create plus a retry loop. **Keep that workaround** —
-`O_EXCL` is a stronger guarantee than `O_TRUNC` and also closes the TOCTOU half —
-but note that the stale-tail hazard it was defending against is what 6.6.6
-actually fixes, so it stops being load-bearing.
-
-Also newly correct on PE: the 96 `file_exists` / `file_read_all` sites. Both open
-read-only (`lib/io.cyr:503`, `:836`) and 6.6.6 stops PE asking for write access on
-a read, so a file thoth reads off a read-only checkout or volume now succeeds.
-
-### What thoth gains everywhere, not just on Windows
-
-**`file_write_atomic` now keeps an existing file's mode** (it was writing
-`0644 & ~umask`). thoth calls it at `src/edit.cyr:164` — the model's file-edit
-tool — and at `src/checkpoint.cyr:116` / `:156`. Before 6.6.6, thoth editing a
-`chmod +x` script silently stripped the execute bit, and editing a `0600` config
-silently widened it to `0644`. That is a live correctness fix on Linux and macOS
-too, and it is probably the most user-visible thing in this pin for thoth.
-
-The companion new verb, `file_replace_atomic`, writes **through** a symlink.
-`file_write_atomic` deliberately does not. If thoth ever needs to edit a
-symlinked file in place (a dotfile linked into a repo, say), that is the verb —
-but it is an opt-in, and the current `file_write_atomic` behaviour is the safer
-default for a tool editing files a model chose.
-
-### Checked and clear — so the pin should be uneventful
-
-- **28 structs but 0 struct-typed `var` declarations** anywhere in `src/`,
-  `tests/` or `programs/`, so neither the new different-struct-copy error nor the
-  by-value >8 B deep-copy change has a site to fire on.
-- **0 real `async fn`.** Every `async fn` hit is Rust-origin prose in comments.
-  The async-with-vector-param and async->8 B-struct-return errors cannot apply.
-- 0 `operator` fns, 0 `ret2`/`rethi`, 0 `: cstring` params, no SIMD intrinsics.
-- **No `var` in a top-level block**, so the new block scoping is a heads-up only.
-- The `r` global at `src/main.cyr:266` and `src/test.cyr:14` looks like a
-  redeclaration but is not: those are `[build].entry` and `[build].test`, two
-  separate entry points, never co-linked. Nothing else among the 1,188 globals
-  is declared twice.
-- **`lib/regression.cyr` + `lib/regression_agnos.cyr` are vendored but unused** —
-  zero `regression_*` calls anywhere in `src/`, `tests/` or `programs/`, and
-  `regression` is not in `[deps].stdlib`. 6.6.6's deadline/`PR_SET_PDEATHSIG`
-  change to that module is therefore inert here. If the copy is ever refreshed it
-  now needs `lib/io.cyr` alongside it — already vendored.
-- No own `vec_*` definitions, so `assert.cyr`'s new transitive `vec.cyr` include
-  cannot collide. No `lib/` symlinks.
-- ⚠ **`cyrius.lock` is absent.** 6.6.6 makes `cyrius deps`/`publish` **fail** when
-  the lock cannot be written, rather than carrying on. Run `cyrius deps` once
-  after the bump and confirm the lock lands.
-
-### Verify after bumping
-
-1. `cyrius deps` → confirm `cyrius.lock` is written (see above).
-2. `cyrius test` + the `tests/cases/` suite; `src/edit.cyr` and
-   `src/checkpoint.cyr` are the paths whose *behaviour* changed, so watch
-   `tests/cases/agent.cyr:2447-2479`.
-3. **New, and worth adding:** edit a `0755` file and a `0600` file through the
-   edit tool and assert the mode survives. That was wrong before 6.6.6 and
-   nothing in the suite would have caught it.
-4. On `cass`, via the exec-only `--win` harness: write a long session, then a
-   short one, and confirm no tail of the long one survives.

@@ -22,18 +22,18 @@ include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
-# vyakarana (2.4.0) — source-code tokenizer for syntax highlighting (/read, diffs).
+# vyakarana (2.4.2) — source-code tokenizer for syntax highlighting (/read, diffs).
 # Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
 include "src/vendor/vyakarana.cyr"
-# darshana (1.0.0, API frozen at v1) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
+# darshana (1.1.2; API frozen at v1 since 1.0.0) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
 # (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
 include "src/vendor/darshana.cyr"
-# anuenue (1.2.0 [lib] profile) — the HSV phase model behind `/theme rainbow` (0.38.0).
+# anuenue (1.3.6 [lib] profile) — the HSV phase model behind `/theme rainbow` (0.38.0).
 # ONE constant + ONE fn (ANUENUE_PHASE_MOD / hsv_rainbow); standalone over zero deps —
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
-# agnosai (2.0.7 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
+# agnosai (2.1.0 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
 # TWO modules, ~530 lines: agnosai's units + output_filter. NOT the orchestration engine — thoth consumes
 # hoosh for inference and daimon for tools, and agnosai's own llm/ layer names thoth's hoosh.cyr as its
 # reference implementation. The profile was published upstream at thoth's request rather than the two
@@ -41,11 +41,11 @@ include "src/vendor/anuenue.cyr"
 include "src/vendor/agnosai-guard.cyr"
 # sit (1.6.2 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
-# sit_repo_* API only (its command layer is dead here). sankoch (2.7.9 zlib
+# sit_repo_* API only (its command layer is dead here). sankoch (2.8.0 zlib
 # PROFILE, `dist/sankoch-zlib.cyr` — 53 globals, tracks current sankoch) supplies
 # the git-object inflate the bundle references bare. Only sit's entry_hash/ann_new
 # are renamed on sync (vs libro/bote); the old sankoch-2.2.5 pin, the _stream_grow
-# rename, and the SYS_CHDIR sed are all gone (sankoch 2.7.9 zlib profile + sit
+# rename, and the SYS_CHDIR sed are all gone (the sankoch zlib profile + sit
 # 1.3.1's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
 # ⚠ 1.6.2 is a REQUIRED floor, not just "latest": sit 1.6.1's sf_rename named
 # SYS_RENAME directly, which arm64 Linux does not define at all, breaking thoth's
@@ -104,7 +104,7 @@ include "src/surface.cyr"   # status view-model (0.28.0, Stage B; ADR-0009 reali
 include "src/splash.cyr"    # the startup ibis as ASCII density art — GENERATED from thoth_v1.tiff (scripts/gen-splash.sh)
 include "src/greet.cyr"     # the startup greeting view-model + layout (0.45.3): the splash beside the framed status box; after surface (persona/config/hoosh producers), before tui + gfeed (its two painters)
 # T3 GUI (0.29.0+): draw-command IR + kashi CPU rasterizer + view-builders. kashi (font) before graster;
-# kashi is vendored as its FREESTANDING CORE (kashi 1.0.6 `src/font_data.cyr`), NOT the generated
+# kashi is vendored as its FREESTANDING CORE (kashi 1.0.10 `src/font_data.cyr`), NOT the generated
 # `dist/kashi.cyr` library face — the GUI wants 8x16 glyph rows, not the PSF/BDF/PCF loader surface,
 # and the core's no-stdlib/no-heap/no-syscall contract is what lets it sit under graster. It carries
 # no `# Version:` header for that reason; byte-identical across every 1.0.x tag. See scripts/sync-kashi.sh.

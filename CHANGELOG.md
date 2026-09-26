@@ -2,6 +2,120 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.4] - 2026-09-26
+
+**Cyrius 6.6.6, and every vendored bundle at its latest tag.** The pin moves `6.6.4` → `6.6.6`, `lib/` is re-synced,
+and nine of the eleven vendored bundles move to their current tags. The new floor also required three thoth changes.
+The window's `memfd_create`, `ftruncate` and `sendmsg` now go through the new stdlib wrappers: under 6.6.5's
+renumbering, the window's aarch64 `ftruncate` would have run as `sendmsg`. `/write` and `/remember` count their own bytes again,
+because 6.6.6's writers no longer report how much of a failed write landed. Suite **796 + 1969 + 1041 + 823 + 190 +
+5** (+19). Linux, aarch64 and AGNOS build; each lane's warning set matches 0.52.3's except for one message reworded. All
+five suites also pass as aarch64 binaries under `qemu-aarch64` (4,819 of 4,819). macOS built, and its native suite is
+green (822 + 1944 + 1038 + 190 + 775). The Windows lane stays at its known-gap skip; the PE write fixes were proven on
+`cass`. The AGNOS runtime re-run printed `thoth 0.52.4` in ring 3.
+
+- **The toolchain: 6.6.4 → 6.6.6.**
+  - `cyrius lib sync --full` copied the 111-file snapshot: 27 files changed and `lib/alloc_cx.cyr` is new. The `cmp`
+    sweep of every snapshot file came back clean.
+  - The symbol diff between the two snapshots found no function, global or enum member removed and nothing made
+    `private`. The additions (164 functions, 111 globals, 40 enum members) collide with nothing thoth compiles:
+    checked against thoth's own source and tests, and each vendored bundle against the others and `lib/`.
+  - The suite ran green on the new pin before any source change, at 0.52.3's counts.
+  - `cyrius deps` writes no `cyrius.lock` for thoth, so 6.6.6's new failure on an unwritable lock cannot reach it.
+    cbt writes a lock only when a git dependency resolves, on `--relock`, or to re-stamp an existing lock, and thoth
+    declares only stdlib modules and has no lock.
+- **Without this change, the window on aarch64 would have lost its buffer again.**
+  - 0.52.3 wrote native aarch64 numbers for the three calls no stdlib table named. Cyrius 6.6.5 named them and added
+    renumbering rows for them, one of which is `sendmsg` 46 → 211, so the window's native 46 (`ftruncate`) would now
+    run as `sendmsg`.
+  - At the 6.6.6 pin with unmodified source, the GUI suite built as an aarch64 binary failed 8 assertions in
+    `test_gui_shm_calls` under `qemu-aarch64`. `-strace` showed `sendmsg(5,128,…) = -1 EFAULT` where `ftruncate`
+    belonged.
+  - The window now calls `sys_memfd_create`, `sys_ftruncate` and `sys_sendmsg`, which are new in 6.6.5 and defined
+    on every target: Linux on both architectures, plus declining stubs on AGNOS, Windows and (for `memfd_create`)
+    macOS. The per-architecture numbers are gone.
+  - Under qemu: 796 of 796, and the three calls traced as themselves (`ftruncate(5,128) = 0`).
+  - Live, the x86_64 window and the aarch64 window under qemu each mapped on the headless compositor, drew thoth's
+    own cursor and streamed a turn. The aarch64 window took a 64-character line intact.
+- **`/write` and `/remember` say what a failed write left on disk again.**
+  - 6.6.6's `file_write_all` and `file_append_locked` loop until every byte lands and return `-errno` when a write
+    fails partway, so the count of bytes that did land is gone.
+  - `/write` opens its file with `O_TRUNC`, so the count matters. Its INCOMPLETE line (0.44.2) became unreachable,
+    and a torn write printed `write failed` as though the file were untouched.
+  - `/remember` and the model's `memory_write` answered "memory not saved", although a fragment was on disk for the
+    next recall to read. Their PARTIAL answer (0.44.3) became unreachable.
+  - Both now use the same open and write loop but keep the count (`_write_in_place`, `_mem_append_counted`). An open
+    that fails prints `write failed`, and the file is as it was. A write that fails after the open is INCOMPLETE and
+    gives the bytes that landed.
+  - That count can now be 0, which is new: a write that failed at once after `O_TRUNC` used to print `write failed`
+    over a file it had just emptied. Live: `/write` to a `/dev/full` link prints `write INCOMPLETE: … 0 of 6 bytes
+    written`, and a path in a missing directory prints `write failed`.
+- **Edits keep the file's mode.**
+  - 6.6.6's `file_write_atomic` gives the replacement file the existing file's permission bits. Before, it got
+    `0644 & ~umask`.
+  - The `edit` tool and `/rewind` write through `file_write_atomic`. Editing a `0755` script no longer drops its
+    execute bit, and editing a `0600` file no longer widens it to `0644`.
+  - This holds on Linux and macOS. Windows and AGNOS keep no mode.
+- **A line-mode `/run` no longer outlives thoth.**
+  - 6.6.6's `exec_vec` sets `PR_SET_PDEATHSIG` in the child on Linux.
+  - A/B in a pty: `/run nohup sleep 47`, then SIGKILL the thoth process. Under 0.52.3 the `sleep` was orphaned
+    (parent pid 1) and kept running; under 0.52.4 it died with thoth.
+  - The TUI's captured `/run` and the model's `shell` use thoth's own spawn, which kills the command's process group
+    on Esc or a deadline; they are unchanged.
+- **Windows: the PE lane's `O_TRUNC` now truncates and `O_APPEND` now appends (6.6.6).**
+  - Proven on `cass` with a throwaway `--win` harness that replays thoth's writers: the session store's and input
+    history's rewrites, `/write`, and `/remember`. It was built at both pins.
+  - At 6.6.4, each rewrite left the 3,000-byte file in place, so a 2,994-byte stale tail sat behind the new 6 bytes.
+    A second `/remember` overwrote the first.
+  - At 6.6.6, all four are right (6, 6, 6 and 12 bytes).
+  - The full `.exe` stays gated on its known gaps: `SYS_SOCKET` / `SYS_CONNECT`, t-ron's `SIGHUP`, and sit's
+    `sys_rmdir`. `sys_rename` is no longer among them, because the PE floor now defines it.
+- **The vendored bundles.** darshana 1.1.2 and sit 1.6.2 were already current. The others:
+  - **bote-core** 3.3.9 → 3.3.13. It answers `ping` and accepts protocol `2025-06-18`. Both are dead code for thoth,
+    which never drives the dispatcher.
+  - **libro** 2.8.12 → 2.10.3, the pin t-ron 2.1.11 records. Appends are faster, and entry timestamps come from
+    `clock_epoch_secs`; before, they read 1970 on arm64 macOS.
+  - **t-ron** 2.1.10 → 2.1.11. Only the version line changed.
+  - **sankoch-zlib** 2.7.9 → 2.8.0. It adds an allocator-arena guard. The `zlib_decompress_with_ratio_cap` that sit
+    calls now passes a default output cap (0) to its inner decoder and inflates as before.
+  - **avatara** 2.14.1 → 2.15.0.
+  - **agnosai-guard** 2.0.7 → 2.1.0. Only comments changed.
+  - **anuenue** 1.2.0 → 1.3.6. `hsv_rainbow` was rewritten flat and emits the same bytes.
+  - **vyakarana** 2.4.0 → 2.4.2. Its `_stream_grow` is now `_vyk_stream_grow`, so the name the sankoch profile once
+    had to avoid is gone from vyakarana too.
+  - **kashi** 1.0.6 → 1.0.10. The vendored core is byte-identical at every tag from 1.0.6 to 1.0.10.
+  - Each sync script's pin of record moved, and `tests/cases/vendor.cyr` pins the new headers.
+- **avatara 2.15.0 changes what `/personas` and `/persona` show and accept.** Verified live against 0.52.3:
+  - There are now 41 traditions and 503 archetypes (there were 37 and 504).
+  - "Polynesian" became "Hawaiian" and "Māori", and "Mystic" became "Christian", "Sufi" and "Jewish". A "Sami"
+    tradition was added, and Madderakka moved to it from "Finnish".
+  - Morana was removed, and "Dogen" is now "Dōgen".
+  - `/personas Polynesian` names an unknown tradition now, and a `[persona].name` of `Morana` or `Dogen` falls back
+    to Thoth.
+- **Diagnostics.** On every lane, sigil's 256 KiB crypto-bank array reports as a located `warning:` instead of an
+  unlocated `note:`. It is the same buffer, sigil is unchanged, and cyrius 6.6.5 reworded the diagnostic. The aarch64
+  binary grew by 135 KB to 7,564,208 bytes; 131 KB of that came with the pin alone, because 6.6.5 generates more code
+  at each syscall site.
+
+Found during this refresh and not fixed here, because each is its own change (the roadmap opens repair batch 9 with
+both):
+- t-ron's `_audit_details` allocates the tool name's length plus 256 bytes. It then writes the name twice (once
+  inside the verdict's reason) plus the agent name, so a denied or unknown tool with a name of about 160 bytes or more
+  writes past the allocation; `/audit export` overruns its buffer from about 199 bytes. thoth passes names up to
+  `AGENT_NAME_MAX` (255) to the gate.
+- `events.cyr` and `tui.cyr` both declare a global `_ev_buf` of different sizes, so one variable serves both. It is
+  latent while `--events` is one-shot only.
+
+Tests (+19), each proven by breaking it:
+- `test_edit` (agent, +9): an edit keeps a `0755` script `0755` and a `0600` file `0600`, and a `/rewind` restore
+  keeps `0600`. Against 6.6.5's floor (the same tree, pinned 6.6.5), all three mode assertions fail at `0644`.
+- `test_mem_append_counted` (core, +6): appends are counted, and an append appends rather than truncates. An open
+  that fails returns -1. On `/dev/full`, a write that fails after the open counts 0 rather than returning `-ENOSPC`.
+- The `/write` sanitise test (core, +4 net): an open that fails prints `write failed` with the path's escape shown as
+  `?`. `/dev/full` reaches the INCOMPLETE line for real (`0 of 6 bytes`).
+- Breaks: with the counted append and the counted `/write` reverted to the floor's semantics in a scratch copy, 5
+  assertions fail. The window's aarch64 literals at the 6.6.6 pin fail 8 under `qemu-aarch64`.
+
 ## [0.52.3] - 2026-09-17
 
 **Repair batch 8: the window's system calls on aarch64 and off Linux, and its keyboard.** The batch was pinned as

@@ -171,8 +171,9 @@ sit's write surface at all.
 
 ### 9 · MCP 2026-07-28 conformance — **bote's problem, not thoth's**
 
-Vendored bote 3.3.9 negotiates 2025-11-25, one revision behind across a structural break. Flagged
-here only so it is tracked somewhere; the work belongs upstream.
+Vendored bote 3.3.13 negotiates 2025-11-25, one revision behind across a structural break (3.3.13
+added 2025-06-18 to the accepted set, not the newer revision). Flagged here only so it is tracked
+somewhere; the work belongs upstream.
 
 ### Declined, with reasons recorded
 

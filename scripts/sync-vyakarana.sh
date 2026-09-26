@@ -18,15 +18,16 @@
 # ⚠ COLLISION WATCH: vyakarana carries `_stream_*` helpers. Through sankoch
 # 2.4.8 the FULL sankoch bundle also defined `_stream_grow` and thoth had to
 # sed one of them; the lean `[lib.zlib]` profile thoth vendors today drops
-# sankoch's stream.cyr, so there is no rename left to apply. If a new
-# `duplicate fn` warning naming a `_stream_*` symbol ever appears in the build,
-# that is this hazard returning — diff the build's warning SET before and
-# after a sync, not just its pass/fail.
+# sankoch's stream.cyr, so there is no rename left to apply — and vyakarana
+# 2.4.2 renamed its own to `_vyk_stream_grow`. Its other `_stream_*` helpers
+# remain, so if a new `duplicate fn` warning naming a `_stream_*` symbol ever
+# appears in the build, that is this hazard returning — diff the build's
+# warning SET before and after a sync, not just its pass/fail.
 #
-# Usage: ./scripts/sync-vyakarana.sh [tag]   (default: 2.4.0)
+# Usage: ./scripts/sync-vyakarana.sh [tag]   (default: 2.4.2)
 set -euo pipefail
 
-TAG="${1:-2.4.0}"
+TAG="${1:-2.4.2}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/vyakarana.cyr"
 

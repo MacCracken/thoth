@@ -25,10 +25,10 @@
 # `cyrius.cyml [deps].stdlib` gained `unicode` at 0.40.0. Its other leaves (alloc/io/str/string/vec/
 # sakshi) were already declared.
 #
-# Usage: ./scripts/sync-agnosai.sh [tag]   (default: 2.0.7)
+# Usage: ./scripts/sync-agnosai.sh [tag]   (default: 2.1.0)
 set -euo pipefail
 
-TAG="${1:-2.0.7}"
+TAG="${1:-2.1.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/agnosai-guard.cyr"
 

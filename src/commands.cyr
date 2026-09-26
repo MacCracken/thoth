@@ -1511,6 +1511,27 @@ fn _write_incomplete_note(path, rc, want) {
     return 0;
 }
 
+# _write_in_place (0.52.4): /write's rewrite — file_write_all's open and write loop, keeping the count. Since cyrius
+# 6.6.6 file_write_all loops until every byte lands and returns -errno when a write fails partway, so the bytes that
+# DID land (after O_TRUNC emptied the file) are no longer reported, and the INCOMPLETE line above could not be
+# reached. Returns -1 when the open failed (the file as it was), else the bytes written: len, or fewer when a write
+# failed partway.
+fn _write_in_place(path, buf, len) {
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    if (fd < 0) { return 0 - 1; }
+    var off = 0;
+    var go = 1;
+    while (go == 1) {
+        if (off >= len) { go = 0; }
+        else {
+            var w = file_write(fd, buf + off, len - off);
+            if (w <= 0) { go = 0; } else { off = off + w; }
+        }
+    }
+    file_close(fd);
+    return off;
+}
+
 fn cmd_write(line) {
     var rest = arg_after(line);
     if (rest == 0) { oprintln("usage: /write <path> <content>"); return 0; }
@@ -1557,14 +1578,13 @@ fn cmd_write(line) {
     } else {
         diff_render(_write_path, _write_old, oldlen, _write_out, clen + 1);
     }
-    var rc = file_write_all(_write_path, _write_out, clen + 1);
+    var rc = _write_in_place(_write_path, _write_out, clen + 1);
     if (rc < 0) { emit("write failed: "); emit_clean_line(_write_path); oprintln(""); return 0; }
-    # ⚠ 0.44.2 — A SHORT WRITE WAS REPORTED AS A COMPLETE ONE. file_write_all opens with O_TRUNC and
-    # returns one sys_write's result, so a partial write comes back POSITIVE and smaller than len — and
-    # this printed its own requested length regardless. The target had already been emptied by O_TRUNC, so
-    # the outcome was the user's file replaced by a fragment while thoth said it wrote the whole thing.
-    # Every other writer in this file already compares the returned count (/save, /audit export); this was
-    # the one that did not, and it is the one that overwrites a file the user named.
+    # ⚠ 0.44.2 — A SHORT WRITE WAS REPORTED AS A COMPLETE ONE. The write opens with O_TRUNC, so a partial
+    # write leaves the target emptied and holding a fragment — and this printed its own requested length
+    # regardless, so the outcome was the user's file replaced by a fragment while thoth said it wrote the
+    # whole thing. Every other writer in this file already compares the returned count (/save, /audit
+    # export); this was the one that did not, and it is the one that overwrites a file the user named.
     if (rc < (clen + 1)) {
         _write_incomplete_note(_write_path, rc, clen + 1);
         return 0;
