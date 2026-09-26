@@ -47,6 +47,35 @@ runs best), and the gap between them is an explicit, documented contract.
 
 See [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) for the full reasoning, [ADR-0002](../adr/0002-consume-the-agnos-stack.md) for the consume-the-stack mandate, and [architecture note 001](../architecture/001-consumer-only-no-domain-logic.md) for the invariant.
 
+## Moving the cyrius pin to 6.6.5
+
+⛔ Before bumping the pin to 6.6.5: in the same commit, replace the per-arch `GwlSysNrUnmapped`
+syscall literals in `src/gui/gwindow.cyr:30-35` with the stdlib wrappers. 6.6.5 adds an ESYSXLAT row
+`46 → 211` (x86 `sendmsg`), so the aarch64 `GWL_NR_FTRUNCATE = 46` (`:31`) becomes a `sendmsg`. Both
+shm-pool paths (`:620`, `:830`) then fail on aarch64 Linux. The window buffer (`:830`) makes
+`gwl_win_open` return 0, so `thoth gui` reports "no Wayland compositor available"
+(`src/gui/gpresent.cyr:278`), which names the wrong cause. The cursor buffer (`:620`) fails silently and
+the compositor's cursor is used instead. This is the hazard the `memfd_create` row under *Waiting on
+upstream or the floor* already names.
+
+cyrius 6.6.5 is not tagged yet. Nothing below can land against the pin until it is.
+
+- [ ] ⛔ Delete both `GwlSysNrUnmapped` arms. Call `sys_memfd_create(name, flags)` (`:618`, `:828`),
+      `sys_ftruncate(fd, size)` (`:620`, `:830`) and `sys_sendmsg(fd, &mh, 0)` (`:353`). The wrappers are
+      new in 6.6.5, so this change ships with the pin bump. The aarch64 `211` and `279` are not row sources
+      in 6.6.5, so only the `46` breaks at the bump. `test_gui_shm_calls` (native and `qemu-aarch64`) is the
+      check. See the cyrius CHANGELOG [6.6.5] entry "`memfd_create`, `ftruncate`, `sendmsg` and eleven more
+      had NO STDLIB NAME".
+- [ ] Rewrite the comment at `src/gui/gwindow.cyr:24-29` ("…until the stdlib names these calls (filed in
+      cyrius)"). The header at `:17` is wrong too: it says ESYSXLAT is "generated from the calls BOTH stdlib
+      syscall tables define", but ESYSXLAT is a hand-written chain and the generated table is only the
+      diagnostic (same CHANGELOG entry). Close the `memfd_create` row under *Waiting on upstream or the
+      floor*, which asks to "switch to the names the release they ship". The cyrius filing is now
+      `issues/archived/2026-09-17-thoth-memfd-ftruncate-sendmsg-unnamed-pass-through-on-aarch64.md`.
+- [ ] Re-run `cyrius deps` in the bump commit. The aarch64 peer moved `SYS_UNLINKAT` 35 → 263, and the
+      compiler's matching row is also new. If an old vendored `lib/` is built by the 6.6.5 compiler,
+      `sys_unlink` runs `nanosleep`, and nothing detects the mismatch (same CHANGELOG entry).
+
 ## Path to v1.0 — the blocking gates
 
 v1.0 is an **AGNOS gate**: the downstream-green criterion is satisfied **on AGNOS**, where
@@ -338,3 +367,96 @@ identity by accident.
   HTTP gateway*, not a linked crate, so it never becomes a `cyrius.cyml` git-dep; the stdlib
   `sandhi` transport is what M3 declared.) The **off-AGNOS reach transport** — the
   native-vs-remote binding distinction — is deferred to a later ADR once that work is real.
+
+---
+
+## Moving the cyrius pin to 6.6.6
+
+**Current pin:** `cyrius = "6.6.4"` (`cyrius.cyml`).
+
+⛔ **Pin 6.6.6 BEFORE the `--win` gate lifts.** thoth has a real, `cass`-verified
+Windows path today (`src/exec.cyr:130+`, `exec_shell_capture` under
+`#ifdef CYRIUS_TARGET_WIN`), and the full `--win` binary is gated only on the
+async/epoll→IOCP transport. Every one of thoth's persistent-state writers is
+**unguarded** — no `CYRIUS_TARGET_WIN` / `#ifndef` around any of them — so they
+compile straight into that binary the moment the gate lifts:
+
+| site | what it rewrites |
+| --- | --- |
+| `src/session.cyr:867` `_sess_write_file` | the whole conversation store, truncate-and-rewrite |
+| `src/inhist.cyr:270` `_inhist_write_file` | the input-history ring, truncate-and-rewrite |
+| `src/commands.cyr:1091` | `/save` transcript |
+| `src/commands.cyr:2382` | (same shape, 0600) |
+| `src/oneshot.cyr:484` `_oneshot_write_out` | the `-o` argv redirect |
+| 47 × `file_write_all` | `lib/io.cyr:546` opens `O_WRONLY\|O_CREAT\|O_TRUNC` |
+
+All of them open `O_WRONLY|O_CREAT|O_TRUNC`, and **before 6.6.6 a PE build's
+`O_TRUNC` did not truncate**. Any rewrite that produced *shorter* content left
+the old tail in place — a trimmed session file would have been silently corrupted
+with a fragment of the previous, larger one, and `_sess_write_file`'s own header
+comment ("truncate + rewrite") would simply have been false on Windows. The
+callers all check for short writes and degrade closed, but none of them can see
+a tail they never wrote.
+
+thoth already knows this bug — it worked around it once. `src/exec.cyr:149` and
+`:197` record that "through 0.45.5 the open was `OPEN_ALWAYS` without `O_TRUNC`,
+the reroute ignoring it", and 0.45.6 replaced it with an exclusive
+`O_WRONLY|O_CREAT|O_EXCL` create plus a retry loop. **Keep that workaround** —
+`O_EXCL` is a stronger guarantee than `O_TRUNC` and also closes the TOCTOU half —
+but note that the stale-tail hazard it was defending against is what 6.6.6
+actually fixes, so it stops being load-bearing.
+
+Also newly correct on PE: the 96 `file_exists` / `file_read_all` sites. Both open
+read-only (`lib/io.cyr:503`, `:836`) and 6.6.6 stops PE asking for write access on
+a read, so a file thoth reads off a read-only checkout or volume now succeeds.
+
+### What thoth gains everywhere, not just on Windows
+
+**`file_write_atomic` now keeps an existing file's mode** (it was writing
+`0644 & ~umask`). thoth calls it at `src/edit.cyr:164` — the model's file-edit
+tool — and at `src/checkpoint.cyr:116` / `:156`. Before 6.6.6, thoth editing a
+`chmod +x` script silently stripped the execute bit, and editing a `0600` config
+silently widened it to `0644`. That is a live correctness fix on Linux and macOS
+too, and it is probably the most user-visible thing in this pin for thoth.
+
+The companion new verb, `file_replace_atomic`, writes **through** a symlink.
+`file_write_atomic` deliberately does not. If thoth ever needs to edit a
+symlinked file in place (a dotfile linked into a repo, say), that is the verb —
+but it is an opt-in, and the current `file_write_atomic` behaviour is the safer
+default for a tool editing files a model chose.
+
+### Checked and clear — so the pin should be uneventful
+
+- **28 structs but 0 struct-typed `var` declarations** anywhere in `src/`,
+  `tests/` or `programs/`, so neither the new different-struct-copy error nor the
+  by-value >8 B deep-copy change has a site to fire on.
+- **0 real `async fn`.** Every `async fn` hit is Rust-origin prose in comments.
+  The async-with-vector-param and async->8 B-struct-return errors cannot apply.
+- 0 `operator` fns, 0 `ret2`/`rethi`, 0 `: cstring` params, no SIMD intrinsics.
+- **No `var` in a top-level block**, so the new block scoping is a heads-up only.
+- The `r` global at `src/main.cyr:266` and `src/test.cyr:14` looks like a
+  redeclaration but is not: those are `[build].entry` and `[build].test`, two
+  separate entry points, never co-linked. Nothing else among the 1,188 globals
+  is declared twice.
+- **`lib/regression.cyr` + `lib/regression_agnos.cyr` are vendored but unused** —
+  zero `regression_*` calls anywhere in `src/`, `tests/` or `programs/`, and
+  `regression` is not in `[deps].stdlib`. 6.6.6's deadline/`PR_SET_PDEATHSIG`
+  change to that module is therefore inert here. If the copy is ever refreshed it
+  now needs `lib/io.cyr` alongside it — already vendored.
+- No own `vec_*` definitions, so `assert.cyr`'s new transitive `vec.cyr` include
+  cannot collide. No `lib/` symlinks.
+- ⚠ **`cyrius.lock` is absent.** 6.6.6 makes `cyrius deps`/`publish` **fail** when
+  the lock cannot be written, rather than carrying on. Run `cyrius deps` once
+  after the bump and confirm the lock lands.
+
+### Verify after bumping
+
+1. `cyrius deps` → confirm `cyrius.lock` is written (see above).
+2. `cyrius test` + the `tests/cases/` suite; `src/edit.cyr` and
+   `src/checkpoint.cyr` are the paths whose *behaviour* changed, so watch
+   `tests/cases/agent.cyr:2447-2479`.
+3. **New, and worth adding:** edit a `0755` file and a `0600` file through the
+   edit tool and assert the mode survives. That was wrong before 6.6.6 and
+   nothing in the suite would have caught it.
+4. On `cass`, via the exec-only `--win` harness: write a long session, then a
+   short one, and confirm no tail of the long one survives.
