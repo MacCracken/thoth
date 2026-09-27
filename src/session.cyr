@@ -1085,7 +1085,10 @@ fn _sess_load_v2(mend, total) {
                         var mstart = p;                  # model token up to '\n'
                         while ((p < total) && (load8(_sess_read_buf + p) != 10) && (load8(_sess_read_buf + p) != 9)) { p = p + 1; }
                         if ((p >= total) || (load8(_sess_read_buf + p) != 10)) { parsing = 0; }
-                        else { var mlen = p - mstart; if (mlen > 0) { model_ptr = _sess_dup_bytes(_sess_read_buf + mstart, mlen); } }
+                        # 0.52.6: cleaned at the store like the CONV / CITE / RSN / TOOL frames beside it — the model token
+                        # was the one frame field that was not, and /save wrote it raw into its `## <role> (<model>)` header
+                        # (a live reply takes session_model(), already clean; only a file could carry an escape)
+                        else { var mlen = p - mstart; if (mlen > 0) { model_ptr = _sess_dup_bytes(_sess_read_buf + mstart, mlen); clean_line_n(model_ptr, strlen(model_ptr)); } }
                     } else { if (sep != 10) { parsing = 0; } }   # neither '\t' nor '\n' -> malformed
                     if (parsing == 1) {
                         p = p + 1;                       # skip '\n' before the payload

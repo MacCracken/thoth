@@ -2011,6 +2011,35 @@ fn test_mpick() {
 # events on) built every event line in the 64-byte buffer tui_events_init had sized — a 379-byte `tool_call` line,
 # measured in a pty, ran over `_winch_drain` (allocated right behind it) and on into the heap. The sentinel is
 # `_winch_drain`.
+# test_tui_confirm_rows (0.52.6, audits F1 + C1): the confirm bracket gives the question every row its bytes need and
+# lets the terminal wrap it — the row was clipped at the edge (autowrap off), so a command's tail and the `? [y/N/a]`
+# never reached the screen — and answers 0 when the screen has too few rows, so confirm() refuses instead.
+fn test_tui_confirm_rows() {
+    test_group("the TUI confirm question gets the rows it needs, wrapped — or is refused (tui.cyr, 0.52.6)");
+    var _sr = _tui_rows; var _sc = _tui_cols; var _sst = _tui_show_status;
+    _tui_rows = 24; _tui_cols = 80; _tui_show_status = 1;
+    var path = "build/.thoth_t_confirm_rows.out";
+    var raw = alloc(16384);
+    var vis = alloc(16384);
+    if (_t_fd1_to(path) == 0) {
+        _confirm_prompt_cols = 300;                           # four rows of 80, and the answer's room
+        var ok = tui_confirm_begin();
+        tui_confirm_end();
+        _confirm_prompt_cols = 1900;                          # more rows than the screen has above the composer
+        var no = tui_confirm_begin();
+        tui_confirm_end();
+        _confirm_prompt_cols = 0;
+        _t_fd1_restore();
+        var n = _t_pick_read(path, raw, vis, 16384);
+        assert_eq(ok, 1, "a 300-byte question fits a 24x80 screen");
+        assert_eq(no, 0, "...a 1,900-byte one does not, and the bracket says so (confirm() then refuses)");
+        assert(_t_count_sub(raw, n, "\x1b[?7h", 5) >= 1, "the bracket turns autowrap ON for a question of several rows");
+        assert(_t_count_sub(raw, n, "\x1b[?7l", 5) >= 2, "...and OFF again after (the frame itself never wraps)");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _tui_rows = _sr; _tui_cols = _sc; _tui_show_status = _sst;
+    return 0;
+}
+
 fn test_tui_epoll_buf_apart() {
     test_group("the TUI's epoll buffer is not the --events line buffer (tui.cyr / events.cyr, 0.52.5)");
     #ifdef CYRIUS_TARGET_LINUX

@@ -653,13 +653,15 @@ fn _cfg2_bool_global_only(l, g, key, label, dflt) {
 # is not silently obeyed and not silently ignored either — it is NAMED, on stderr at startup, in the
 # greeting, in `/state` and on `/reload`, exactly like an unrecognised key. The local layer keeps
 # everything that only expresses preference (model, tier, theme, aliases, pricing, caps, toggles).
+# 0.52.6: one toggle is not a preference — `[memory].enabled` switches on an injection no gate stands in front of
+# (ADR-0012's opt-in is the operator's trust decision), so it is global-only too.
 #
 # ⚠ THIS IS A DELIBERATE BEHAVIOUR CHANGE AGAINST ADR-0019's OWN EXAMPLE, which offered "a project
 # t-ron policy" as a thing the local layer may set. That example cannot be honoured safely: thoth
 # cannot tell your repository from a cloned one, and the strict reading of the ADR's own principle wins
 # over its illustration. The escape hatch — per-repo trust, so you can approve your OWN project's hooks
 # once — is a real feature and a real decision; it is recorded as follow-up rather than guessed at here.
-var CFG_SUPPRESS_MAX = 16;
+var CFG_SUPPRESS_MAX = 32;      # 0.52.6: was 16 against 15 nameable keys (a full list dropped the next one SILENTLY)
 var _cfg_suppressed = 0;        # CFG_SUPPRESS_MAX cstr ptrs (authority keys the local layer tried to set)
 var _cfg_suppressed_n = 0;
 fn config_suppressed_count() { return _cfg_suppressed_n; }
@@ -1314,6 +1316,68 @@ fn _cfg_parse_sections(path) {
 # the user's), while `[shell].allow` and `[project].read_roots` are REPLACED wholesale by the local layer
 # when it sets them. A repo you cloned must not be able to widen the global allow-list or the read jail
 # by appending to it — that is authority, and authority does not accumulate from the less-trusted side.
+# --- /reload keeps what it cannot apply (0.52.6, audits E2 + A7) --------------------------------------------------
+# `/reload` re-parses the config, and its own last lines name what takes a restart — [hoosh].url, [tron], [log],
+# [persona], [ui] tier/theme, the [history] and [session] files, [toolpin]. Those values were re-read into the getters
+# the running session consults all the same, so the line was false where it mattered most:
+#   * [hoosh].url: the four endpoint caches keep the url the session started with while the token re-binds — a token
+#     written for a NEW url went to the OLD one, the 0.44.3 url-token binding broken across a reload;
+#   * [toolpin].enabled flipped every pin check live (off lifted every withhold at once), and [toolpin].file moved the
+#     jail's protection off the store thoth keeps writing;
+#   * [tron].agent changed the id each t-ron check names, under the policy bound at startup.
+# config_reload_hold() snapshots them before the re-parse; config_reload_keep() puts back any that changed and names
+# each ("changed — restart to apply"). A token changed under an UNCHANGED url still applies: that is a rotation.
+var _cfg_rh_url = 0; var _cfg_rh_tok = 0; var _cfg_rh_tpol = 0; var _cfg_rh_tag = 0; var _cfg_rh_logf = 0;
+var _cfg_rh_logl = 0; var _cfg_rh_pers = 0; var _cfg_rh_tier = 0; var _cfg_rh_theme = 0; var _cfg_rh_hist = 0;
+var _cfg_rh_sess = 0; var _cfg_rh_tpen = 0; var _cfg_rh_tpf = 0; var _cfg_rh_tpd = 0;
+var CFG_HELD_MAX = 16;
+var _cfg_held = 0;              # CFG_HELD_MAX cstr labels: keys the last reload changed but could not apply
+var _cfg_held_n = 0;
+fn config_held_count() { return _cfg_held_n; }
+fn config_held_at(i) {
+    if ((i < 0) || (i >= _cfg_held_n)) { return ""; }
+    return load64(_cfg_held + i * 8);
+}
+fn _cfg_note_held(what) {
+    if (_cfg_held == 0) { _cfg_held = alloc(CFG_HELD_MAX * 8); }
+    if ((_cfg_held == 0) || (_cfg_held_n >= CFG_HELD_MAX)) { return 0; }
+    store64(_cfg_held + _cfg_held_n * 8, what);
+    _cfg_held_n = _cfg_held_n + 1;
+    return 0;
+}
+fn _cfg_same_str(a, b) {
+    if (a == 0) { if (b == 0) { return 1; } return 0; }
+    if (b == 0) { return 0; }
+    return streq(a, b);
+}
+fn config_reload_hold() {
+    _cfg_rh_url = _cfg_hoosh_url; _cfg_rh_tok = _cfg_hoosh_token; _cfg_rh_tpol = _cfg_tron_policy; _cfg_rh_tag = _cfg_tron_agent;
+    _cfg_rh_logf = _cfg_log_file; _cfg_rh_logl = _cfg_log_level; _cfg_rh_pers = _cfg_persona; _cfg_rh_tier = _cfg_ui_tier;
+    _cfg_rh_theme = _cfg_ui_theme; _cfg_rh_hist = _cfg_history_file; _cfg_rh_sess = _cfg_session_file;
+    _cfg_rh_tpen = _cfg_toolpin_enabled; _cfg_rh_tpf = _cfg_toolpin_file; _cfg_rh_tpd = _cfg_toolpin_durable;
+    return 0;
+}
+fn config_reload_keep() {
+    _cfg_held_n = 0;
+    if (_cfg_same_str(_cfg_hoosh_url, _cfg_rh_url) == 0) {
+        _cfg_hoosh_url = _cfg_rh_url; _cfg_hoosh_token = _cfg_rh_tok;
+        _cfg_note_held("[hoosh].url (its token stays with the url in use)");
+    }
+    if (_cfg_same_str(_cfg_tron_policy, _cfg_rh_tpol) == 0) { _cfg_tron_policy = _cfg_rh_tpol; _cfg_note_held("[tron].policy"); }
+    if (_cfg_same_str(_cfg_tron_agent, _cfg_rh_tag) == 0) { _cfg_tron_agent = _cfg_rh_tag; _cfg_note_held("[tron].agent"); }
+    if (_cfg_same_str(_cfg_log_file, _cfg_rh_logf) == 0) { _cfg_log_file = _cfg_rh_logf; _cfg_note_held("[log].file"); }
+    if (_cfg_same_str(_cfg_log_level, _cfg_rh_logl) == 0) { _cfg_log_level = _cfg_rh_logl; _cfg_note_held("[log].level"); }
+    if (_cfg_same_str(_cfg_persona, _cfg_rh_pers) == 0) { _cfg_persona = _cfg_rh_pers; _cfg_note_held("[persona].name"); }
+    if (_cfg_same_str(_cfg_ui_tier, _cfg_rh_tier) == 0) { _cfg_ui_tier = _cfg_rh_tier; _cfg_note_held("[ui].tier"); }
+    if (_cfg_same_str(_cfg_ui_theme, _cfg_rh_theme) == 0) { _cfg_ui_theme = _cfg_rh_theme; _cfg_note_held("[ui].theme (/theme switches live)"); }
+    if (_cfg_same_str(_cfg_history_file, _cfg_rh_hist) == 0) { _cfg_history_file = _cfg_rh_hist; _cfg_note_held("[history].file"); }
+    if (_cfg_same_str(_cfg_session_file, _cfg_rh_sess) == 0) { _cfg_session_file = _cfg_rh_sess; _cfg_note_held("[session].file"); }
+    if (_cfg_toolpin_enabled != _cfg_rh_tpen) { _cfg_toolpin_enabled = _cfg_rh_tpen; _cfg_note_held("[toolpin].enabled"); }
+    if (_cfg_same_str(_cfg_toolpin_file, _cfg_rh_tpf) == 0) { _cfg_toolpin_file = _cfg_rh_tpf; _cfg_note_held("[toolpin].file"); }
+    if (_cfg_toolpin_durable != _cfg_rh_tpd) { _cfg_toolpin_durable = _cfg_rh_tpd; _cfg_note_held("[toolpin].durable"); }
+    return _cfg_held_n;
+}
+
 fn config_load() {
     _cfg_loaded = 1;
     _cfg_parse_ok = 0;                            # 0.24.4: cleared until a file is actually read + parsed
@@ -1342,10 +1406,17 @@ fn config_load() {
     # bearer token to the host the repo named. The token now travels only with its own layer's url —
     # when the local layer REDIRECTS the endpoint and supplies no token of its own, the global token is
     # WITHHELD and said so. (Same url on both layers is not a redirect and changes nothing.)
-    if (_cfg_has(hoosh_l, "url") == 1) { if (_cfg_has(hoosh_l, "token") == 0) {
+    # ⚠ 0.52.6 — decided by VALUE, the way the values above are read. The test was `_cfg_has` (the key is PRESENT)
+    # while _cfg2_str reads an empty value as unset: a local `token = ""` beside a redirected url counted as "the
+    # repo brings its own token", skipped the withhold, and the empty value then fell back to the GLOBAL token —
+    # posted to the repo's host by the greeting's probe at launch, before a key was pressed. And a local `url = ""`
+    # (present, so the old test went on) reached `streq(0, gurl)`: strlen of a null pointer, a crash at startup in
+    # that repo. An empty url is no redirect (the global url stays in effect, so its token may too); an empty token
+    # is no token.
+    var lurl = _cfg_str(hoosh_l, "url");
+    if (lurl != 0) { if (_cfg_str(hoosh_l, "token") == 0) {
         var gtok = _cfg_str(hoosh_g, "token");
         if (gtok != 0) {
-            var lurl = _cfg_str(hoosh_l, "url");
             var gurl = _cfg_str(hoosh_g, "url");
             var redirect = 1;
             if (gurl != 0) { if (streq(lurl, gurl) == 1) { redirect = 0; } }
@@ -1406,7 +1477,12 @@ fn config_load() {
     _cfg_ui_tier = _cfg_label(_cfg2_str(ui_l, ui_g, "tier"));  # [ui].tier — durable presentation tier (0.43.2); --tier still wins; 0.45.2: /state draws it
     _cfg_ui_theme = _cfg2_str(ui_l, ui_g, "theme");           # [ui].theme — durable colour theme (0.44.3); /theme still switches live
     var mem_l = _cfg_section_pairs(lo, "memory");     var mem_g = _cfg_section_pairs(gl, "memory");
-    _cfg_memory_enabled = _cfg2_bool(mem_l, mem_g, "enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
+    # 0.52.6 (audit H1): GLOBAL-ONLY. ADR-0012 made local memory opt-in because "a repository could ship a
+    # .thoth/memory to steer an agent" — the operator makes that trust decision by enabling the reader. Since 0.43.3
+    # the repository's own layer could make it instead: a clone's `[memory] enabled = true` switched on an injection
+    # that no gate stands in front of (the reader runs before every turn; ADR-0021's case for letting a repo enable a
+    # TOOL is that each call still meets the gate). Suppressed and named, like every authority key.
+    _cfg_memory_enabled = _cfg2_bool_global_only(mem_l, mem_g, "enabled", "memory.enabled", 0);  # opt-in; default off (prompt-injection guard, ADR-0012)
     var pers_l = _cfg_section_pairs(lo, "persona");   var pers_g = _cfg_section_pairs(gl, "persona");
     _cfg_persona = _cfg2_str(pers_l, pers_g, "name");         # startup default archetype (0.22.0); absent -> egyptian_thoth
     var proj_l = _cfg_section_pairs(lo, "project");   var proj_g = _cfg_section_pairs(gl, "project");

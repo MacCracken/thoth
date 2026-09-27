@@ -2224,6 +2224,130 @@ fn test_toolpin_store_broke() {
     return 0;
 }
 
+# test_toolpin_store_conflict (0.52.6, audit A2): a pin another session stored is compared BEFORE this session's probe
+# (toolpin_store_refresh), and when the two sessions pinned one tool with different definitions the OLDER pin is the
+# baseline — the flush used to write this session's first sight over the other's older pin.
+fn test_toolpin_store_conflict() {
+    test_group("durable tool pins: another session's older pin is the baseline, compared before this probe (0.52.6)");
+    var sv_url = _cfg_daimon_url; var sv_en = _cfg_toolpin_enabled;
+    _cfg_daimon_url = "http://a:1"; _cfg_toolpin_enabled = 1;
+    var path = "build/.thoth_tps_conflict.tmp";
+    var rows = alloc(4096);
+    var o = _t_tps_row(rows, 4096, 0, "http://a:1", "t1", "One.", "", "1700000000");
+    store8(rows + o, 0);
+    _t_tps_write(path, rows);
+    _t_tps_clean(); toolpin_store_init(path);
+    assert_eq(toolpin_store_loaded(), 1, "session A binds and loads t1");
+    # "session B" pins tX while A runs, before A has ever seen tX
+    var rows2 = alloc(4096);
+    var o2 = _t_tps_row(rows2, 4096, 0, "http://a:1", "t1", "One.", "", "1700000000");
+    o2 = _t_tps_row(rows2, 4096, o2, "http://a:1", "tX", "Orig.", "", "1700000100");
+    store8(rows2 + o2, 0);
+    _t_tps_write(path, rows2);
+    assert_eq(toolpin_store_refresh(), 1, "A's probe refreshes from the store first");
+    assert_eq(toolpin_pinned("tX"), 1, "...so B's pin of tX is in A's table");
+    assert_eq(toolpin_check("tX", "Swapped.", ""), 0, "a definition swapped since B pinned it is WITHHELD on A's first look — not first-sighted");
+    assert_eq(toolpin_withheld("tX"), 1, "...and refused at A's dispatcher");
+    # the race the refresh cannot close: B's older pin lands between A's probe and A's flush
+    _t_tps_clean(); toolpin_store_init(path);
+    assert_eq(toolpin_check("tY", "Swapped.", ""), 1, "A first-sights tY (nothing stored for it yet)");
+    var ad0 = toolpin_store_adopted();
+    var rows3 = alloc(4096);
+    var o3 = _t_tps_row(rows3, 4096, 0, "http://a:1", "t1", "One.", "", "1700000000");
+    o3 = _t_tps_row(rows3, 4096, o3, "http://a:1", "tY", "Orig.", "", "1700000200");
+    store8(rows3 + o3, 0);
+    _t_tps_write(path, rows3);
+    feed_init(); out_mode_set(OUT_RING);
+    assert_eq(toolpin_store_flush(), 0, "A flushes");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(_t_tps_file_has(path, _t_tps_hash("tY", "Orig.", "")) == 1, "...and B's OLDER pin of tY survives in the store");
+    assert_eq(_t_tps_file_has(path, _t_tps_hash("tY", "Swapped.", "")), 0, "...A's newer first sight does not overwrite it");
+    assert_eq(toolpin_withheld("tY"), 1, "...A withholds tY from here (its live definition is not the baseline)");
+    assert(toolpin_store_adopted() > ad0, "...the probe site is told to re-advertise");
+    assert(_mid_feed_plain_count("differs from the pin another thoth session took") >= 1, "...and the operator is told why");
+    # the other way round: A's first sight is the OLDER pin — A keeps it (B adopts A's at its own union)
+    _t_tps_clean(); toolpin_store_init(path);
+    toolpin_check("tZ", "Mine.", "");
+    var rows4 = alloc(4096);
+    var o4 = _t_tps_row(rows4, 4096, 0, "http://a:1", "t1", "One.", "", "1700000000");
+    o4 = _t_tps_row(rows4, 4096, o4, "http://a:1", "tZ", "Theirs.", "", "253402300799");
+    store8(rows4 + o4, 0);
+    _t_tps_write(path, rows4);
+    assert_eq(toolpin_store_flush(), 0, "A flushes against B's NEWER pin of tZ");
+    assert(_t_tps_file_has(path, _t_tps_hash("tZ", "Mine.", "")) == 1, "...A's older pin is the one stored");
+    assert_eq(toolpin_withheld("tZ"), 0, "...and A does not withhold its own baseline");
+    xunlink(path);
+    _t_tps_clean();
+    _cfg_daimon_url = sv_url; _cfg_toolpin_enabled = sv_en;
+    return 0;
+}
+
+# test_toolpin_store_trust_others (0.52.6, audit A3): `/tools trust` on a store whose last write failed (state 9) keeps
+# the other daimons' rows when the file still verifies; only a REJECTED file is replaced fresh, and that is said.
+fn test_toolpin_store_trust_others() {
+    test_group("durable tool pins: `/tools trust` after a failed write keeps other hosts' pins (0.52.6)");
+    var sv_url = _cfg_daimon_url; var sv_en = _cfg_toolpin_enabled;
+    _cfg_daimon_url = "http://a:1"; _cfg_toolpin_enabled = 1;
+    var path = "build/.thoth_tps_trust9.tmp";
+    var rows = alloc(4096);
+    var o = _t_tps_row(rows, 4096, 0, "http://a:1", "t1", "One.", "", "1700000000");
+    o = _t_tps_row(rows, 4096, o, "http://b:2", "u1", "Other host.", "", "1700000000");
+    store8(rows + o, 0);
+    _t_tps_write(path, rows);
+    _t_tps_clean(); toolpin_store_init(path);
+    assert_eq(toolpin_store_other(), 1, "premise: one other host's row in the store");
+    _tps_state = 9; _tps_broke = 1;                                  # a write failed mid-session (the file itself is intact)
+    toolpin_trust_all();
+    assert_eq(toolpin_trust_wrote(), 1, "the trust rewrites the store");
+    assert_eq(_t_tps_file_has(path, "\tu1\t"), 1, "...KEEPING the other daimon's pin (the file verified)");
+    assert_eq(_t_tps_file_has(path, "\tt1\t"), 0, "...while this host's rows go (the trust)");
+    assert_eq(toolpin_trust_lost_other(), 0, "...and nothing is reported lost");
+    # a REJECTED store is not one thoth wrote: replaced fresh, and the loss is named
+    var img = alloc(8192);
+    var n = _t_tps_compose(img, 8192, rows);
+    store8(img + n - 3, 48);                                        # a digest digit changed
+    file_write_all(path, img, n);
+    _t_tps_clean(); toolpin_store_init(path);
+    assert_eq(toolpin_store_state(), 3, "premise: a tampered store is rejected at the bind");
+    toolpin_trust_all();
+    assert_eq(toolpin_trust_wrote(), 1, "the trust rewrites a rejected store");
+    assert_eq(toolpin_trust_lost_other(), 1, "...and says the other rows in it were not kept");
+    xunlink(path);
+    _t_tps_clean();
+    _cfg_daimon_url = sv_url; _cfg_toolpin_enabled = sv_en;
+    return 0;
+}
+
+# test_toolpin_store_full_carry (0.52.6, audit A5): a stored pin the full table cannot take is carried into the next
+# rewrite, not erased — and the union no longer sets the first-sight overflow latch that silenced toolpin_check.
+fn test_toolpin_store_full_carry() {
+    test_group("durable tool pins: rows a full table cannot hold are carried, not erased (0.52.6)");
+    var sv_url = _cfg_daimon_url; var sv_en = _cfg_toolpin_enabled; var sv_max = TOOLPIN_MAX;
+    _cfg_daimon_url = "http://a:1"; _cfg_toolpin_enabled = 1;
+    var path = "build/.thoth_tps_full.tmp";
+    var rows = alloc(4096);
+    var o = _t_tps_row(rows, 4096, 0, "http://a:1", "t1", "One.", "", "1700000000");
+    o = _t_tps_row(rows, 4096, o, "http://a:1", "t2", "Two.", "", "1700000000");
+    o = _t_tps_row(rows, 4096, o, "http://a:1", "t3", "Three.", "", "1700000000");
+    store8(rows + o, 0);
+    _t_tps_write(path, rows);
+    _t_tps_clean();
+    _tp_bufs();                                                     # the buffers sized at the real cap first
+    TOOLPIN_MAX = 2;
+    toolpin_store_init(path);
+    assert_eq(toolpin_count(), 2, "premise: the table (cap 2) takes two of the three stored pins");
+    assert_eq(_tp_overflow, 0, "...and the union does not set the first-sight overflow latch");
+    _tps_dirty = 1;
+    assert_eq(toolpin_store_flush(), 0, "a flush rewrites the store");
+    assert_eq(_t_tps_file_has(path, "\tt3\t"), 1, "...carrying the pin the table could not hold");
+    assert((_t_tps_file_has(path, "\tt1\t") == 1) && (_t_tps_file_has(path, "\tt2\t") == 1), "...beside the two it did");
+    TOOLPIN_MAX = sv_max;
+    xunlink(path);
+    _t_tps_clean();
+    _cfg_daimon_url = sv_url; _cfg_toolpin_enabled = sv_en;
+    return 0;
+}
+
 fn test_toolpin_config() {
     test_group("[toolpin] is an AUTHORITY table: enabled / file / durable global-only; the default store (0.51.0 / F6)");
     # the fixture layers rewrite every _cfg_* global; the ones later tests read as "unconfigured" (test_config_m4)
@@ -2303,6 +2427,115 @@ fn test_toolpin_config() {
     _cfg_toolpin_enabled = s_te; _cfg_toolpin_file = s_tf; _cfg_toolpin_durable = s_td;
     xunlink(_gp); xunlink(_lp);
     _t_tps_clean();
+    return 0;
+}
+
+# test_config_token_by_value (0.52.6): the 0.44.3 token binding decided "the local layer brings its own token" by the
+# KEY being present, while every value is read with an empty string as unset — so a repo's `token = ""` beside a
+# redirected url kept the operator's global token on the repo's host (the greeting's probe sent it at launch), and a
+# repo's `url = ""` reached streq(0, …) and crashed thoth at startup.
+fn test_config_token_by_value() {
+    test_group("the hoosh token binding is decided by value: an empty local token or url (config.cyr, 0.52.6)");
+    var s_hu = _cfg_hoosh_url; var s_ht = _cfg_hoosh_token; var s_du = _cfg_daimon_url; var s_tp = _cfg_tron_policy; var s_ta = _cfg_tron_agent;
+    var s_po = _cfg_parse_ok; var s_pa = _cfg_parse_any; var s_un = _cfg_unknown_n; var s_sn = _cfg_suppressed_n; var s_src = _cfg_source;
+    var s_gp = _cfg_gpath_c; var s_gd = _cfg_gpath_done; var s_lp = _cfg_lpath_c; var s_ld = _cfg_lpath_done; var s_ls = _cfg_lsource; var s_pc = _cfg_path_c;
+    var _gp = "/tmp/thoth_t_tok_global.cyml";
+    var _lp = "/tmp/thoth_t_tok_local.cyml";
+    var _ft = alloc(256);
+    var _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"GLOBAL-CANARY\"\n");
+    file_write_all(_gp, _ft, _fo);
+    _cfg_gpath_c = _gp; _cfg_gpath_done = 1;
+    _cfg_lpath_c = _lp; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    # a redirect with an EMPTY token: no token of the repo's own, so the global one is withheld and named
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:9\"\ntoken = \"\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert_eq(config_parse_ok(), 1, "premise: the two fixture layers loaded");
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:9") == 1, "premise: the repo's url is in effect");
+    assert_eq(config_hoosh_token(), 0, "a redirect with `token = \"\"` does not carry the operator's global token to the repo's host");
+    var sup = 0; var i = 0;
+    while (i < config_suppressed_count()) { if (memeq(config_suppressed_at(i), "hoosh.token", 11) == 1) { sup = sup + 1; } i = i + 1; }
+    assert_eq(sup, 1, "...and the withhold is named, like the one for an absent token");
+    # the control: no token line at all — withheld, as since 0.44.3
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:9\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert_eq(config_hoosh_token(), 0, "a redirect with no token line: withheld (unchanged)");
+    # the repo's OWN token travels with the repo's url
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:9\"\ntoken = \"REPO-TOKEN\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "REPO-TOKEN") == 1), "a redirect with a token of its own uses that token");
+    # an EMPTY url is no redirect: the global url stays in effect, and its token with it — and loading it does not crash
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088") == 1, "a local `url = \"\"` loads (no null-pointer compare) and leaves the global url in effect");
+    assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "GLOBAL-CANARY") == 1), "...with the global token, which belongs to it");
+    # [memory].enabled is global-only (audit H1): a repo cannot switch on the ungated memory injection
+    _fo = _append_cstr_cap(_ft, 0, 256, "[memory]\nenabled = true\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert_eq(config_memory_enabled(), 0, "a repo's `[memory] enabled = true` does not switch the memory reader on");
+    sup = 0; i = 0;
+    while (i < config_suppressed_count()) { if (streq(config_suppressed_at(i), "memory.enabled") == 1) { sup = sup + 1; } i = i + 1; }
+    assert_eq(sup, 1, "...and the attempt is named as SUPPRESSED");
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"GLOBAL-CANARY\"\n[memory]\nenabled = true\n");
+    file_write_all(_gp, _ft, _fo);
+    config_load();
+    assert_eq(config_memory_enabled(), 1, "the operator's own `enabled = true` does");
+    sup = 0; i = 0;
+    while (i < config_suppressed_count()) { if (streq(config_suppressed_at(i), "memory.enabled") == 1) { sup = sup + 1; } i = i + 1; }
+    assert_eq(sup, 0, "...and a local layer agreeing with it asks nothing (not reported)");
+    _cfg_memory_enabled = 0;
+    _cfg_gpath_c = s_gp; _cfg_gpath_done = s_gd; _cfg_lpath_c = s_lp; _cfg_lpath_done = s_ld; _cfg_lsource = s_ls; _cfg_path_c = s_pc;
+    _cfg_hoosh_url = s_hu; _cfg_hoosh_token = s_ht; _cfg_daimon_url = s_du; _cfg_tron_policy = s_tp; _cfg_tron_agent = s_ta;
+    _cfg_parse_ok = s_po; _cfg_parse_any = s_pa; _cfg_unknown_n = s_un; _cfg_suppressed_n = s_sn; _cfg_source = s_src;
+    xunlink(_gp); xunlink(_lp);
+    return 0;
+}
+
+# test_config_reload_holds (0.52.6, audits E2 + A7): /reload's "restart to change" keys keep the values the session runs
+# on. [hoosh].url stays with its token (the endpoint caches are the startup url's, and a token re-bound under them went
+# to the old host); [toolpin].enabled no longer flips every pin check live; [tron].agent no longer renames the checks.
+fn test_config_reload_holds() {
+    test_group("/reload keeps the restart-to-change keys at the values in use (config.cyr, 0.52.6)");
+    var s_hu = _cfg_hoosh_url; var s_ht = _cfg_hoosh_token; var s_du = _cfg_daimon_url; var s_tp = _cfg_tron_policy; var s_ta = _cfg_tron_agent;
+    var s_po = _cfg_parse_ok; var s_pa = _cfg_parse_any; var s_un = _cfg_unknown_n; var s_sn = _cfg_suppressed_n; var s_src = _cfg_source;
+    var s_te = _cfg_toolpin_enabled; var s_tf = _cfg_toolpin_file; var s_td = _cfg_toolpin_durable;
+    var s_gp = _cfg_gpath_c; var s_gd = _cfg_gpath_done; var s_lp = _cfg_lpath_c; var s_ld = _cfg_lpath_done; var s_ls = _cfg_lsource; var s_pc = _cfg_path_c;
+    var _gp = "/tmp/thoth_t_reload_global.cyml";
+    var _ft = alloc(512);
+    var _fo = _append_cstr_cap(_ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"TOKEN-A\"\n[toolpin]\nenabled = true\n[tron]\nagent = \"thoth\"\n");
+    file_write_all(_gp, _ft, _fo);
+    _cfg_gpath_c = _gp; _cfg_gpath_done = 1;
+    _cfg_lpath_c = 0; _cfg_lpath_done = 1; _cfg_lsource = 0;
+    config_load();
+    assert_eq(config_parse_ok(), 1, "premise: the fixture config loaded");
+    # the operator edits the config: a new gateway with its own token, pinning off, another agent id — then /reload
+    config_reload_hold();
+    _fo = _append_cstr_cap(_ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:9099\"\ntoken = \"TOKEN-B\"\n[toolpin]\nenabled = false\n[tron]\nagent = \"other\"\n");
+    file_write_all(_gp, _ft, _fo);
+    config_load();
+    var held = config_reload_keep();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088") == 1, "[hoosh].url keeps the url the session's endpoints were built for");
+    assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "TOKEN-A") == 1), "...and its token WITH it — the new url's token never reaches the old host");
+    assert_eq(config_toolpin_enabled(), 1, "[toolpin].enabled does not flip the pin checks live");
+    assert(streq(config_tron_agent(), "thoth") == 1, "[tron].agent does not rename the running checks");
+    assert_eq(held, 3, "the three changed keys are held");
+    assert_eq(memeq(config_held_at(0), "[hoosh].url", 11), 1, "...and named, for /reload's 'changed, restart to apply' line");
+    # a token ROTATION — same url, new token — does apply
+    _fo = _append_cstr_cap(_ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"TOKEN-A2\"\n[toolpin]\nenabled = true\n[tron]\nagent = \"thoth\"\n");
+    file_write_all(_gp, _ft, _fo);
+    config_reload_hold();
+    config_load();
+    assert_eq(config_reload_keep(), 0, "a rotated token under the same url holds nothing");
+    assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "TOKEN-A2") == 1), "...and the rotated token takes effect");
+    _cfg_gpath_c = s_gp; _cfg_gpath_done = s_gd; _cfg_lpath_c = s_lp; _cfg_lpath_done = s_ld; _cfg_lsource = s_ls; _cfg_path_c = s_pc;
+    _cfg_hoosh_url = s_hu; _cfg_hoosh_token = s_ht; _cfg_daimon_url = s_du; _cfg_tron_policy = s_tp; _cfg_tron_agent = s_ta;
+    _cfg_parse_ok = s_po; _cfg_parse_any = s_pa; _cfg_unknown_n = s_un; _cfg_suppressed_n = s_sn; _cfg_source = s_src;
+    _cfg_toolpin_enabled = s_te; _cfg_toolpin_file = s_tf; _cfg_toolpin_durable = s_td;
+    xunlink(_gp);
     return 0;
 }
 
@@ -3580,6 +3813,22 @@ fn test_session_persist() {
     assert((_tn != 0) && (streq(_tn, "na?[7mme") == 1), "...its name cleaned");
     assert((_ta != 0) && (streq(_ta, "arg?[7ms") == 1), "...and its args");
     xunlink("/tmp/thoth_sess_v6t");
+    # 0.52.6: the per-message MODEL token is cleaned where it is read back too — the one field of a record the loader did
+    # not clean, and /save wrote it raw into its `## <role> (<model>)` header
+    ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nCONV\t0\n\nuser\t1\nq\nassistant\t1\tmo\x1b]0;x\x07del\na\n");
+    file_write_all("/tmp/thoth_sess_v6m", hb, ho);
+    session_reset();
+    assert_eq(_sess_load_file("/tmp/thoth_sess_v6m"), 2, "a hand-written file whose model token carries an OSC loads its two records");
+    var _mm = session_history_model(1);
+    assert((_mm != 0) && (streq(_mm, "mo?]0;x?del") == 1), "...the model token cleaned at the store ('?' for the ESC and the BEL)");
+    var _svfd = file_open("/tmp/thoth_sess_v6m.md", O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    assert_eq(_save_history(_svfd), 1, ".../save's markdown writer runs over it");
+    file_close(_svfd);
+    var _svb = alloc(512);
+    var _svn = file_read_all("/tmp/thoth_sess_v6m.md", _svb, 511);
+    assert_eq(_t_count_sub(_svb, _svn, "\x1b", 1), 0, "...and its header carries no raw escape");
+    assert_eq(_t_count_sub(_svb, _svn, "## assistant (mo?]0;x?del)", 26), 1, "...naming the model, cleaned");
+    xunlink("/tmp/thoth_sess_v6m"); xunlink("/tmp/thoth_sess_v6m.md");
     # an orphan RSN frame (before any record) attaches to nothing and creates nothing
     ho = _append_cstr_cap(hb, 0, 512, "THOTH-SESSION-2\t0\nRSN\t5\nstray\nuser\t1\nq\n");
     file_write_all("/tmp/thoth_sess_v6o", hb, ho);
@@ -4340,6 +4589,111 @@ fn test_memory_append_symlink() {
     #endif
     xunlink("build/.thoth_t_memlink/real/MEMORY.md"); xrmdir(real); xrmdir(d);
     _mem_dir_c = sv_dir; _mem_idx_c = sv_idx; _daimon_mem_probed = sv_probe; _cfg_daimon_url = sv_du;
+    memory_invalidate();
+    return 0;
+}
+
+# test_memory_read_links (0.52.6, audit H1): the memory reader followed every link — a cloned repository's
+# `AGENTS.md -> ../../.ssh/…` (or a link at the store, the index or a fact) was injected into the system message and
+# sent to the gateway on the first turn. A PROJECT store and AGENTS.md are now read the way the jail reads; the
+# operator's own `~/.thoth` store is not walked. Fixture under build/ (git-ignored, removed after).
+fn test_memory_read_links() {
+    test_group("the memory reader never follows a project's links (memory.cyr, 0.52.6)");
+    var sv_dir = _mem_dir_c; var sv_idx = _mem_idx_c; var sv_en = _cfg_memory_enabled; var sv_ag = _mem_agents_path;
+    var sv_gd = _mem_gdir_c; var sv_gdd = _mem_gdir_done; var sv_rd = _thoth_root_done; var sv_rh = _thoth_root_is_home;
+    var d = "build/.thoth_t_memread";
+    xmkdir(d, 0x1c0); xmkdir("build/.thoth_t_memread/store", 0x1c0);
+    file_write_all("build/.thoth_t_memread/secret1.txt", "SECRET-OUT-ONE", 14);
+    file_write_all("build/.thoth_t_memread/secret2.txt", "SECRET-OUT-TWO", 14);
+    file_write_all("build/.thoth_t_memread/secret3.txt", "SECRET-OUT-THREE", 16);
+    file_write_all("build/.thoth_t_memread/store/real.md", "REAL-FACT-OK", 12);
+    #ifndef CYRIUS_TARGET_WIN
+    var linked = 0;
+    if (xsymlink("secret1.txt", "build/.thoth_t_memread/AGENTS.md") == 0) {
+        if (xsymlink("../secret2.txt", "build/.thoth_t_memread/store/MEMORY.md") == 0) {
+            if (xsymlink("../secret3.txt", "build/.thoth_t_memread/store/leak.md") == 0) {
+                if (xsymlink("store", "build/.thoth_t_memread/storelink") == 0) { linked = 1; }
+            }
+        }
+    }
+    if (linked == 1) {
+        _cfg_memory_enabled = 1;
+        _mem_agents_path = "build/.thoth_t_memread/AGENTS.md";
+        _mem_gdir_done = 1; _mem_gdir_c = 0;                            # no global layer in this fixture
+        _thoth_root_done = 1; _thoth_root_is_home = 0;                  # a PROJECT store
+        _mem_dir_c = "build/.thoth_t_memread/store"; _mem_idx_c = "build/.thoth_t_memread/store/MEMORY.md";
+        memory_invalidate();
+        feed_init(); out_mode_set(OUT_RING);
+        var m = memory_system_prompt();
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        assert(m != 0, "premise: the real fact builds a memory message");
+        var ml = 0; if (m != 0) { ml = strlen(m); }
+        assert_eq(_t_count_sub(m, ml, "REAL-FACT-OK", 12), 1, "a real fact in the project store is read");
+        assert_eq(_t_count_sub(m, ml, "SECRET-OUT-", 11), 0, "...and not one byte through a link: AGENTS.md, the index, a fact");
+        assert_eq(memory_refused_count(), 3, "...each of the three links counted");
+        assert(_mid_feed_plain_count("[memory] skipped") >= 3, "...and named where the operator sees it");
+        assert_eq(memory_fact_count(), 1, "/state's fact count is what the reader reads (the linked fact is not one)");
+        # a store reached THROUGH a link: none of it
+        _mem_dir_c = "build/.thoth_t_memread/storelink"; _mem_idx_c = "build/.thoth_t_memread/storelink/MEMORY.md";
+        memory_invalidate();
+        feed_init(); out_mode_set(OUT_RING);
+        m = memory_system_prompt();
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        ml = 0; if (m != 0) { ml = strlen(m); }
+        assert_eq(_t_count_sub(m, ml, "REAL-FACT-OK", 12), 0, "a store whose directory is a link is not read at all");
+        assert_eq(memory_fact_count(), 0, "...and counts no fact");
+        # the operator's OWN store ($HOME/.thoth — the resolved root is home) is not walked: a dotfiles manager links it
+        _thoth_root_is_home = 1;
+        memory_invalidate();
+        feed_init(); out_mode_set(OUT_RING);
+        m = memory_system_prompt();
+        feed_flush_pending(); out_mode_set(OUT_FD1);
+        ml = 0; if (m != 0) { ml = strlen(m); }
+        assert_eq(_t_count_sub(m, ml, "REAL-FACT-OK", 12), 1, "the operator's own store is read through its links");
+        assert_eq(_t_count_sub(m, ml, "SECRET-OUT-ONE", 14), 0, "...while AGENTS.md (the launch directory's) is still refused");
+        assert_eq(memory_refused_count(), 1, "...the one refusal");
+    } else { assert(1, "(no symlink on this target — stated)"); }
+    xunlink("build/.thoth_t_memread/storelink"); xunlink("build/.thoth_t_memread/store/leak.md"); xunlink("build/.thoth_t_memread/store/MEMORY.md");
+    xunlink("build/.thoth_t_memread/AGENTS.md");
+    #endif
+    xunlink("build/.thoth_t_memread/store/real.md"); xrmdir("build/.thoth_t_memread/store");
+    xunlink("build/.thoth_t_memread/secret1.txt"); xunlink("build/.thoth_t_memread/secret2.txt"); xunlink("build/.thoth_t_memread/secret3.txt");
+    xrmdir(d);
+    _mem_dir_c = sv_dir; _mem_idx_c = sv_idx; _cfg_memory_enabled = sv_en; _mem_agents_path = sv_ag;
+    _mem_gdir_c = sv_gd; _mem_gdir_done = sv_gdd; _thoth_root_done = sv_rd; _thoth_root_is_home = sv_rh;
+    memory_invalidate();
+    feed_init();
+    return 0;
+}
+
+# test_memory_append_linked_root (0.52.6, audit D2): /remember refused a linked `memory/` or `MEMORY.md` but walked no
+# higher — a cloned repository's `.thoth -> ../../.thoth` carried the append into the operator's global store.
+fn test_memory_append_linked_root() {
+    test_group("/remember walks a project store's whole path, `.thoth` included (memory.cyr, 0.52.6)");
+    var sv_dir = _mem_dir_c; var sv_idx = _mem_idx_c; var sv_probe = _daimon_mem_probed; var sv_du = _cfg_daimon_url;
+    var sv_rd = _thoth_root_done; var sv_rh = _thoth_root_is_home;
+    _daimon_mem_probed = 0; _cfg_daimon_url = 0;                  # no mneme: the local branch
+    var d = "build/.thoth_t_memroot";
+    xmkdir(d, 0x1c0); xmkdir("build/.thoth_t_memroot/target", 0x1c0); xmkdir("build/.thoth_t_memroot/target/memory", 0x1c0);
+    xmkdir("build/.thoth_t_memroot/proj", 0x1c0);
+    file_write_all("build/.thoth_t_memroot/target/memory/MEMORY.md", "", 0);
+    #ifndef CYRIUS_TARGET_WIN
+    if (xsymlink("../target", "build/.thoth_t_memroot/proj/.thoth") == 0) {
+        _mem_dir_c = "build/.thoth_t_memroot/proj/.thoth/memory"; _mem_idx_c = "build/.thoth_t_memroot/proj/.thoth/memory/MEMORY.md";
+        _thoth_root_done = 1; _thoth_root_is_home = 0;              # the walk found a PROJECT's `.thoth`
+        assert_eq(memory_append("through a linked root"), 0 - 4, "a project store reached through a linked `.thoth` is refused (-4)");
+        var b = alloc(4096);
+        var n = file_read_all("build/.thoth_t_memroot/target/memory/MEMORY.md", b, 4095);
+        assert_eq(_t_count_sub(b, n, "through a linked root", 21), 0, "...nothing lands in the store the link names");
+        _thoth_root_is_home = 1;                                    # the operator's own ~/.thoth, linked by a dotfiles manager
+        assert(memory_append("into my own store") > 0, "the operator's own store is appended through its link (not walked)");
+        xunlink("build/.thoth_t_memroot/proj/.thoth");
+    } else { assert(1, "(no symlink on this target — stated)"); }
+    #endif
+    xunlink("build/.thoth_t_memroot/target/memory/MEMORY.md");
+    xrmdir("build/.thoth_t_memroot/target/memory"); xrmdir("build/.thoth_t_memroot/target"); xrmdir("build/.thoth_t_memroot/proj"); xrmdir(d);
+    _mem_dir_c = sv_dir; _mem_idx_c = sv_idx; _daimon_mem_probed = sv_probe; _cfg_daimon_url = sv_du;
+    _thoth_root_done = sv_rd; _thoth_root_is_home = sv_rh;
     memory_invalidate();
     return 0;
 }
@@ -5986,13 +6340,15 @@ fn test_sink_sweep_0452() {
     assert_eq(_mid_feed_count("ht?[7mHOOKMARK"), 1, "...it names it with '?'");
 
     # --- S4: a toolpin WITHHELD notice names an MCP server's tool ---
+    # 0.52.6 (audit A4): a name holding a control byte cannot be pinned at all now (no store row can carry it), so the
+    # notice fires on its FIRST sight — the sanitised naming is what this checks, on the notice that now carries it
+    # (a pinnable name has no C0 / DEL byte left for the CHANGED notice to clean)
     toolpin_reset();
-    assert_eq(toolpin_check("fp\x1b[7mPINMARK", "one", ""), 1, "premise: first sight pins the tool");
     feed_init(); out_mode_set(OUT_RING);
-    var tw = toolpin_check("fp\x1b[7mPINMARK", "two", "");
+    var tw = toolpin_check("fp\x1b[7mPINMARK", "one", "");
     feed_flush_pending(); out_mode_set(OUT_FD1);
     toolpin_reset();
-    assert_eq(tw, 0, "premise: a changed definition is withheld");
+    assert_eq(tw, 0, "premise: a name holding an escape is withheld on sight (0.52.6: it cannot be pinned)");
     assert_eq(_mid_feed_count("\x1b[7mPINMARK"), 0, "the WITHHELD notice draws no raw escape from the tool name");
     assert_eq(_mid_feed_count("fp?[7mPINMARK"), 1, "...it names it with '?'");
 

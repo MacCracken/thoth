@@ -187,9 +187,78 @@ var _ask_q_buf = 0;
 # 0.39.0 audit closed for filenames (A-7/A-8) and its own theme names exactly: a boundary applied at one
 # sink and not its sibling. Both halves now go through the house sanitiser before they are drawn, on
 # EVERY confirm path — terminal, modal, and the two stderr denials.
-var CONFIRM_LABEL_CAP = 512;
+var CONFIRM_LABEL_CAP = 2048;     # 0.52.6: was 512 — a label is never shown CUT now (an object past CONFIRM_SHOW_MAX is refused)
 var _confirm_verb_buf = 0;
 var _confirm_obj_buf = 0;
+
+# ⚠ 0.52.6 (audits C1 + F1) — A PROMPT MUST NEVER BE ABLE TO HIDE PART OF THE ACTION IT AUTHORIZES. The object was cut
+# three ways, silently, while `y` authorized all of it: safe_label_copy stopped at 511 bytes; the TUI printed the
+# question on ONE row with autowrap off, so everything past the terminal's width — and the `? [y/N/a]` itself — never
+# reached the screen; and the window's modal drew five rows of ~86 codepoints and dropped the rest. Reproduced end to
+# end: `echo build-ok` + ~2,100 spaces + `; touch …` showed as `authorize run shell echo build-ok` and the payload ran
+# on `y`. Now: an object longer than CONFIRM_SHOW_MAX, or holding a run of CONFIRM_BLANK_RUN blank codepoints (the
+# padding that pushes a tail out of view — ASCII spaces and the Unicode blanks that draw as nothing), is REFUSED with
+# its length and the way to allow it; the TUI gives the question every row its bytes need (and refuses when the screen
+# has too few); the modal sizes itself to the question (and refuses a yes while any of it is off the card).
+var CONFIRM_SHOW_MAX = 1024;      # bytes of a (sanitised) object an interactive answer may authorize
+var CONFIRM_BLANK_RUN = 64;       # blank codepoints in a row that make an object unshowable
+var _confirm_prompt_cols = 0;     # the bytes of the question being drawn (the TUI bracket sizes its rows from it; 0 = one row)
+fn confirm_prompt_cols() { return _confirm_prompt_cols; }
+# _confirm_blank_len: the byte length of the blank codepoint at `p`, or 0 — ASCII space, NBSP, U+2000–U+200B, U+202F,
+# U+205F, U+2800, U+3000, U+3164, U+FFA0 (the codepoints that draw as empty cells).
+fn _confirm_blank_len(p) {
+    var b0 = load8(p) & 255;
+    if (b0 == 32) { return 1; }
+    if (b0 == 0xC2) { if ((load8(p + 1) & 255) == 0xA0) { return 2; } return 0; }
+    if (b0 == 0xE2) {
+        var b1 = load8(p + 1) & 255; var b2 = load8(p + 2) & 255;
+        if ((b1 == 0x80) && (b2 >= 0x80) && (b2 <= 0x8B)) { return 3; }
+        if ((b1 == 0x80) && (b2 == 0xAF)) { return 3; }
+        if ((b1 == 0x81) && (b2 == 0x9F)) { return 3; }
+        if ((b1 == 0xA0) && (b2 == 0x80)) { return 3; }
+        return 0;
+    }
+    if (b0 == 0xE3) {
+        var c1 = load8(p + 1) & 255; var c2 = load8(p + 2) & 255;
+        if ((c1 == 0x80) && (c2 == 0x80)) { return 3; }
+        if ((c1 == 0x85) && (c2 == 0xA4)) { return 3; }
+        return 0;
+    }
+    if (b0 == 0xEF) { if (((load8(p + 1) & 255) == 0xBE) && ((load8(p + 2) & 255) == 0xA0)) { return 3; } return 0; }
+    return 0;
+}
+# _confirm_unshowable: why the (sanitised) object cannot be shown whole for an answer, or 0 when it can.
+var _confirm_why_n = 0;           # the length / run the reason names
+fn _confirm_unshowable(label) {
+    var n = strlen(label);
+    _confirm_why_n = n;
+    if (n > CONFIRM_SHOW_MAX) { return "too long to show in full"; }
+    var i = 0;
+    var run = 0;
+    while (i < n) {
+        var bl = _confirm_blank_len(label + i);
+        if (bl > 0) {
+            run = run + 1;
+            if (run >= CONFIRM_BLANK_RUN) { _confirm_why_n = run; return "it holds a run of blanks that would push part of it out of view"; }
+            i = i + bl;
+        } else { run = 0; i = i + 1; }
+    }
+    return 0;
+}
+# _confirm_refuse_unshowable: the refusal, on every surface (note_* reaches stderr where the normal channel discards).
+fn _confirm_refuse_unshowable(verb_label, obj_label, why) {
+    var head[72];
+    var hn = safe_label_copy(&head, 61, obj_label);
+    note_emit_role(ROLE_RED, "  [authorization refused] ");
+    note_emit(verb_label); note_emit(" "); note_emit(&head);
+    if (strlen(obj_label) > hn) { note_emit("…"); }
+    note_emit(" — "); note_emit(why);
+    var nb[24];
+    fmt_int_buf(strlen(obj_label), &nb);
+    note_emit(" ("); note_emit(&nb); note_emit(" bytes). A prompt must show the whole action; allow it by [tron].policy, or run it yourself.");
+    note_println("");
+    return 0;
+}
 # _confirm_labels: sanitise (verb, obj) into stable buffers for display. Returns 0 on OOM, in which case
 # the caller must fall through to a DENY — refusing to draw a prompt we cannot draw safely is the
 # fail-closed answer, and it is the same posture the jail takes when it cannot check a path.
@@ -226,6 +295,15 @@ fn confirm(verb, obj) {
     # matches the RAW (verb, obj); only what is drawn is the sanitised copy.
     if (_confirm_labels(verb, obj) == 0) {
         emit_err("  [authorization required — denied; the prompt could not be prepared (out of memory)]\n");
+        return 0;
+    }
+    # 0.52.6 (audits C1 + F1): an action that cannot be shown whole is not posed — on any surface, answered or granted.
+    # (safe_label_copy stops at CONFIRM_LABEL_CAP - 1: an object that long was cut, and is refused as too long.)
+    var _uw = _confirm_unshowable(_confirm_obj_buf);
+    if ((_uw == 0) && (strlen(obj) >= (CONFIRM_LABEL_CAP - 1))) { _uw = "too long to show in full"; }
+    if (_uw != 0) {
+        _confirm_refuse_unshowable(_confirm_verb_buf, _confirm_obj_buf, _uw);
+        log_begin("authz"); log_kv_str("gate", "confirm"); log_kv_str("verb", verb); log_kv_str("verdict", "deny"); log_kv_str("reason", "unshowable"); log_kv_int("bytes", strlen(obj)); log_commit(SK_WARN);
         return 0;
     }
     if (_grant_has(verb, obj) == 1) {
@@ -270,14 +348,28 @@ fn confirm(verb, obj) {
     # VISIBLE rather than buried in the ring. Off the TUI (REPL/piped, OUT_FD1)
     # both hooks are skipped and this path is byte-identical to before.
     var capturing = (out_mode() == OUT_RING);
-    if ((capturing == 1) && (_confirm_begin_fn != 0)) { fncall0(_confirm_begin_fn); }
-    if (gate_active() == 0) { ui_emit(ROLE_ACCENT, "  [t-ron absent: fail-closed] authorize "); }
-    else { ui_emit(ROLE_ACCENT, "  [t-ron flag: confirm] authorize "); }
+    var pre = "  [t-ron flag: confirm] authorize ";
+    if (gate_active() == 0) { pre = "  [t-ron absent: fail-closed] authorize "; }
+    var post = "? [y/N/a=allow all session] ";
+    # 0.52.6: the question's bytes, measured BEFORE it is drawn — the TUI bracket gives it that many columns of rows (the
+    # terminal wraps it) and answers 0 when its screen has too few, which refuses rather than draws a cut action
+    _confirm_prompt_cols = strlen(pre) + strlen(_confirm_verb_buf) + 1 + strlen(_confirm_obj_buf) + strlen(post);
+    if ((capturing == 1) && (_confirm_begin_fn != 0)) {
+        if (fncall0(_confirm_begin_fn) == 0) {
+            if (_confirm_end_fn != 0) { fncall0(_confirm_end_fn); }
+            _confirm_prompt_cols = 0;
+            _confirm_refuse_unshowable(_confirm_verb_buf, _confirm_obj_buf, "the terminal is too small to show it in full (enlarge it)");
+            log_begin("authz"); log_kv_str("gate", "confirm"); log_kv_str("verb", verb); log_kv_str("verdict", "deny"); log_kv_str("reason", "screen_too_small"); log_commit(SK_WARN);
+            return 0;
+        }
+    }
+    ui_emit(ROLE_ACCENT, pre);
     emit(_confirm_verb_buf); emit(" "); emit(_confirm_obj_buf);
-    emit("? [y/N/a=allow all session] ");
+    emit(post);
     var ans[64];
     var n = read_line(&ans, 64);
     if ((capturing == 1) && (_confirm_end_fn != 0)) { fncall0(_confirm_end_fn); }
+    _confirm_prompt_cols = 0;
     if (n <= 0) { return 0; }
     # 'a' = yes, AND remember this exact (verb, obj) for the rest of the session. If the grant cannot be
     # stored (table full, or either string over its cap) the answer degrades to a plain one-shot yes —

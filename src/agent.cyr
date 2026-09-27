@@ -1382,7 +1382,7 @@ fn _agent_run_calls_par(tcs, nc) {
                 # 0.43.1: say WHICH control refused. A hook denial and a policy denial are different facts,
                 # and the model's next move differs — the serial path has always distinguished them.
                 if (load8(_par_hookblocked + k) == 1) { res = "(blocked by the pre_tool hook)"; }
-                if (load8(_par_withheld + k) == 1) { res = "(tool definition changed this session; withheld — `/tools trust` to accept and re-pin)"; }
+                if (load8(_par_withheld + k) == 1) { res = toolpin_withheld_text(_par_name + k * PAR_NAME_CAP); }   # 0.52.6: or a name thoth cannot pin (audit A1)
             }
             var nmout = 0;
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
@@ -1659,7 +1659,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         # hallucination, or the injection this defense exists for). Refuse it here, BEFORE the gate, the
         # way every local arm already refuses its own disabled/denied case. Left DENIED in the roundlog.
         elif (toolpin_withheld(nm) == 1) {
-            res = "(tool definition changed this session; withheld — `/tools trust` to accept and re-pin)";
+            res = toolpin_withheld_text(nm);                  # 0.52.6: or a name thoth cannot pin (audit A1)
             res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {
@@ -2021,6 +2021,7 @@ fn agent_turn(prompt) {
         var dtv = 0;                                          # 0.20.0: only fetch daimon's registry when the seam
         if (seam_status(SEAM_DAIMON) != SEAM_ABSENT) { dtv = daimon_tools_value(); }   # is present (shell-standalone: no GET)
         daimon_mem_scan(dtv);                                # 0.32.0: prime the mneme memory-seam cache off this same registry fetch (no extra GET)
+        toolpin_store_refresh();                             # 0.52.6 (audit A2): another session's pins, stored since the bind, are compared THIS probe
         var tl = agent_format_tools(_agent_tools_buf, dtv);
         tl = agent_tools_add_memory(_agent_tools_buf, tl);   # 0.12.2: + memory_write when [memory].enabled
         tl = agent_tools_add_shell(_agent_tools_buf, tl);    # 0.16.0: + shell when [shell].enabled AND POSIX-capable
@@ -2029,12 +2030,14 @@ fn agent_turn(prompt) {
         tl = agent_tools_add_delegate(_agent_tools_buf, tl); # 0.43.0 (T2-1): + delegate when [subagent].enabled (opt-in, depth-1)
         tl = agent_tools_add_ask(_agent_tools_buf, tl);      # 0.44.0 (T4-1): + ask_user when [ask].enabled (opt-in; blocks on a human)
         _agent_tools_len = tl;
+        var _pin_ad = toolpin_store_adopted();
         toolpin_store_flush();                                # 0.51.0 (F6): first-sight pins this probe took go to the store (a no-op when nothing is dirty or no store is bound)
         # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
         # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient
         # daimon-down would latch an empty registry forever. Gate on the daimon fetch (dtv) so a daimon-down
         # first turn leaves _agent_tools_ready=0 and a later turn retries (the documented self-heal above).
         if ((seam_status(SEAM_DAIMON) == SEAM_ABSENT) || (dtv != 0)) { _agent_tools_ready = 1; }
+        if (toolpin_store_adopted() != _pin_ad) { _agent_tools_ready = 0; }   # 0.52.6 (audit A2): the flush gave a first sight up to an older pin — re-advertise without it next turn
         # 0.44.2: a registry too big for AGENT_TOOLS_CAP now yields a SHORTER but VALID advertisement (it
         # used to yield a malformed one). Say which way it went — the model cannot report a tool it was
         # never told about, so silence here reads as "the agent refuses to use my MCP server".

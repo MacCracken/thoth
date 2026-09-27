@@ -2332,7 +2332,24 @@ fn test_gask() {
     var bc = gd_list_new();
     gask_build(bc, 960, 600);
     assert(_gask_find_text(bc, "Esc decline") != 0, "even a question far past the row budget leaves the affordance line on the card");
-    assert_eq(_gask_q_rows(80), GASK_Q_ROWS, "...because the row count is clamped, not grown to fit");
+    assert_eq(_gask_q_rows(8), GASK_Q_ROWS, "...because the row count is clamped at GASK_Q_ROWS, never grown past it");
+    # 0.52.6 (audits C1 + F1): the card takes the rows the question needs — and a question it cannot hold WHOLE is marked,
+    # and an authorization cannot be answered yes until it is (the 5-row cap dropped the rest of the action silently)
+    assert_eq(gask_cut(), 0, "at 960x600 this question fits whole: nothing is cut");
+    gask_set_label(GASK_LABEL_AUTHZ);
+    gask_add_option("no"); gask_add_option("yes, once");
+    var sc = gd_list_new();
+    gask_build(sc, 960, 200);                         # a short window: fewer rows than the question needs
+    assert_eq(gask_cut(), 1, "a window too short for the whole question marks it cut");
+    assert(_gask_find_text(sc, "the question continues past this card") != 0, "...the card says so, in place of the row it cannot draw");
+    assert(_gask_find_text(sc, "Esc decline") != 0, "...with the affordance line still on the card");
+    _gask_sel = 1;
+    assert_eq(_gask_key(28, 0), 2, "...and Enter on 'yes' DECLINES while the authorization is not wholly shown");
+    var sc2 = gd_list_new();
+    gask_build(sc2, 960, 600);                        # the operator enlarges the window
+    assert_eq(gask_cut(), 0, "enlarged, the whole question is on the card again");
+    _gask_sel = 1;
+    assert_eq(_gask_key(28, 0), 1, "...and the same Enter answers");
 
     # the wrap advances by whole CODEPOINTS — a byte-wise advance would open a row mid-UTF-8 sequence
     gask_close();

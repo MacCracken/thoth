@@ -43,13 +43,50 @@ fn memory_dir() {
 # a repo stays with that repo unless the user is working out of their home.
 var _mem_gdir_c = 0;
 var _mem_gdir_done = 0;
+# --- the project store is read the way the jail reads (0.52.6, audit H1) ----------------------------------------
+# The reader followed every link. `AGENTS.md`, `MEMORY.md` and each `*.md` fact were plain file_read_alls, so a cloned
+# repository that shipped `AGENTS.md -> ../../.ssh/id_ed25519` — or a link at `.thoth`, at `.thoth/memory` or at any
+# fact — had that file's bytes injected into the system message and sent to the gateway with the first turn: no tool
+# call, no gate, no notice (reproduced against a capture gateway). The 0.39.0 jail's walk (_project_no_symlink: every
+# component of a relative path) now guards each read of the PROJECT store and of AGENTS.md; a refused path is skipped,
+# counted, and named on every surface (note_*: stderr under one-shot and the window). The operator's own store —
+# `~/.thoth/memory`, read as the global layer or resolved as the root — is not walked: a dotfiles manager links those,
+# and the operator chose them. (That a repository could switch the reader on at all is config.cyr's half:
+# `[memory].enabled` is global-only since 0.52.6.)
+var _mem_refused_n = 0;          # project paths this build skipped because a component is a symbolic link
+var _mem_refused_first = 0;      # the first of them, for /state (a path string the bump heap keeps)
+var _mem_agents_path = "AGENTS.md";   # the project-root AGENTS.md (launch-directory relative) — a var so a test can point it at a fixture
+fn memory_refused_count() { return _mem_refused_n; }
+fn memory_refused_first() { return _mem_refused_first; }
+# _mem_walk_project: 1 when the resolved store is a PROJECT's (walked), 0 when it is the operator's $HOME/.thoth
+fn _mem_walk_project() {
+    if (thoth_root_is_home() == 1) { return 0; }
+    return 1;
+}
+# _mem_link_free: 1 when `path` may be read — `walk` 0 is the operator's own store, else no component is a link. Silent.
+fn _mem_link_free(path, walk) {
+    if (walk == 0) { return 1; }
+    return _project_no_symlink(path);
+}
+# _mem_path_ok: _mem_link_free, and a refusal is counted and named once per build.
+fn _mem_path_ok(path, walk) {
+    if (_mem_link_free(path, walk) == 1) { return 1; }
+    _mem_refused_n = _mem_refused_n + 1;
+    if (_mem_refused_first == 0) { _mem_refused_first = path; }
+    note_emit("  [memory] skipped "); note_emit_label(path);
+    note_println(" — a symbolic link: a project's memory may not point outside it");
+    return 0;
+}
+
 # _mem_append_dir: append one memory store's MEMORY.md index and then its other .md fact files, in
-# directory order, whole-or-skip until `cap` fills. Returns the new offset.
-fn _mem_append_dir(buf, off, cap, dir, index_path) {
+# directory order, whole-or-skip until `cap` fills. Returns the new offset. `walk` 1 = a project's store
+# (0.52.6: no component of the store, the index or a fact may be a symbolic link), 0 = the operator's own.
+fn _mem_append_dir(buf, off, cap, dir, index_path, walk) {
     if (dir == 0) { return off; }
     var dirstr = str_from(dir);
     if (is_dir(dirstr) == 0) { return off; }
-    off = _mem_append_file(buf, off, cap, index_path, 0);
+    if (_mem_path_ok(dir, walk) == 0) { return off; }       # `.thoth` or `memory` itself is a link: none of it is read
+    if (_mem_path_ok(index_path, walk) == 1) { off = _mem_append_file(buf, off, cap, index_path, 0); }
     var v = dir_list(dirstr);
     var n = vec_len(v);
     var i = 0;
@@ -59,7 +96,7 @@ fn _mem_append_dir(buf, off, cap, dir, index_path) {
         if (is_dir(full) == 0) {
             if (_mem_is_md(str_data(name)) == 1) {
                 if (streq(str_data(name), "MEMORY.md") == 0) {
-                    off = _mem_append_file(buf, off, cap, str_data(full), 1);
+                    if (_mem_path_ok(str_data(full), walk) == 1) { off = _mem_append_file(buf, off, cap, str_data(full), 1); }
                 }
             }
         }
@@ -146,6 +183,7 @@ fn memory_system_prompt() {
     _memory_built = 1;
     _memory_sys = 0;
     if (config_memory_enabled() == 0) { return 0; }        # opt-in (ADR-0012)
+    _mem_refused_n = 0; _mem_refused_first = 0;             # 0.52.6: this build's refusals (a rebuild after /remember re-counts)
     var buf = alloc(MEMORY_SYS_CAP);
     var cap = MEMORY_SYS_CAP;
     var off = 0;
@@ -153,8 +191,8 @@ fn memory_system_prompt() {
     var pre_len = off;
     # 0) optional project-root AGENTS.md (model-facing project instructions — the
     #    conventional sibling of CLAUDE.md; read if present, bounded). CLAUDE.md
-    #    itself is NOT auto-injected (it is the harness's contract).
-    off = _mem_append_file(buf, off, cap, "AGENTS.md", 0);
+    #    itself is NOT auto-injected (it is the harness's contract). 0.52.6: never through a link (audit H1).
+    if (_mem_path_ok(_mem_agents_path, 1) == 1) { off = _mem_append_file(buf, off, cap, _mem_agents_path, 0); }
     # 1) the curated .thoth/memory index (priority), then fact files (if the dir
     #    exists), in directory order, whole-or-skip until the budget fills.
     #    Directory order (not recency): there is no portable mtime probe, and the
@@ -167,9 +205,9 @@ fn memory_system_prompt() {
     var gd = memory_global_dir();
     if (gd != 0) {
         off = _mem_append_dir(buf, off, pre_len + (cap - pre_len) / 2, gd,
-                              _cfg_join2(gd, "MEMORY.md"));
+                              _cfg_join2(gd, "MEMORY.md"), 0);       # the operator's own store: not walked
     }
-    off = _mem_append_dir(buf, off, cap, memory_dir(), memory_index_path());
+    off = _mem_append_dir(buf, off, cap, memory_dir(), memory_index_path(), _mem_walk_project());
     store8(buf + off, 0);
     if (off <= pre_len) { _memory_sys = 0; return 0; }     # nothing read (no AGENTS.md, no facts) -> omit
     _memory_sys = buf;
@@ -487,6 +525,8 @@ fn memory_notebook_search(query) {
 # MEMORY.md), for the honest /state line. 0 when disabled/absent. I/O.
 fn memory_fact_count() {
     if (config_memory_enabled() == 0) { return 0; }
+    var walk = _mem_walk_project();
+    if (_mem_link_free(memory_dir(), walk) == 0) { return 0; }   # 0.52.6: count what the reader reads — a linked store is none
     var dirstr = str_from(memory_dir());
     if (is_dir(dirstr) == 0) { return 0; }
     var v = dir_list(dirstr);
@@ -495,9 +535,10 @@ fn memory_fact_count() {
     var c = 0;
     while (i < n) {
         var name = vec_get(v, i);
-        if (is_dir(path_join(dirstr, name)) == 0) {
+        var full = path_join(dirstr, name);
+        if (is_dir(full) == 0) {
             if (_mem_is_md(str_data(name)) == 1) {
-                if (streq(str_data(name), "MEMORY.md") == 0) { c = c + 1; }
+                if (streq(str_data(name), "MEMORY.md") == 0) { if (_mem_link_free(str_data(full), walk) == 1) { c = c + 1; } }
             }
         }
         i = i + 1;
@@ -596,11 +637,16 @@ fn memory_feedback(search_id, note_id) {
 # failure. Invalidates the reader cache on success so the fact is live next turn.
 # VERBATIM only — no summarize / tag / dedupe / link (that is mneme's engine).
 # _mem_link_refused: 1 when the memory directory or the index file is a symlink (either would redirect the
-# append; the project jail refuses the same shape on a read since 0.39.0). Ancestors above the memory dir are
-# the root the operator launched in or chose — not walked (a `/home` that is a link is not the concern here).
+# append; the project jail refuses the same shape on a read since 0.39.0). 0.52.6 (audit D2): a PROJECT store is
+# walked whole, `.thoth` included — the 0.51.2 note here said the components above the memory dir were "the root
+# the operator launched in or chose", and a cloned repository's `.thoth` is neither: shipped as a link to
+# `../../.thoth`, it carried /remember, /bookmark and the model's memory_write past both leaf checks (a real
+# `memory/` reached THROUGH the link) into the operator's GLOBAL store, while the reply said `.thoth/memory/…`.
+# The components above `.thoth` are `..` climbs from the launch directory, which no link can rename.
 fn _mem_link_refused() {
     if (is_symlink(str_from(memory_dir())) == 1) { return 1; }
     if (is_symlink(str_from(memory_index_path())) == 1) { return 1; }
+    if (_mem_link_free(memory_index_path(), _mem_walk_project()) == 0) { return 1; }
     return 0;
 }
 # _mem_append_counted (0.52.4): file_append_locked's open, lock and append, keeping the count. Since cyrius 6.6.6

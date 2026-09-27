@@ -2150,17 +2150,31 @@ fn feed_stream_tick() {
 # y/n echo go LIVE to the screen instead of into the (invisible) ring; end resumes
 # capture for the remainder of dispatch. The REPL path never calls these (capture
 # isn't armed there) — the confirm stays byte-identical off the TUI.
+# 0.52.6 (audits F1 + C1): the question gets EVERY row its bytes need, and the terminal wraps it. It was one row with
+# autowrap off (0.44.2), so a command's tail past the width — and the `? [y/N/a]` itself — never reached the screen
+# while `y` authorized all of it. confirm() measures the question first (confirm_prompt_cols; 0 = the one-row ask
+# path); this answers 1 when the rows above the composer's bottom hold it, else 0 — and confirm() then refuses
+# rather than draw a cut action. Bytes over-count the columns of multi-byte text, so the rows can only be enough.
 fn tui_confirm_begin() {
     intr_suspend();                                     # 0.34.1: leave Esc-poll mode so the cooked y/n read_line works (agentic tool-phase arming)
     feed_flush_pending();
     feed_repaint();
     _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt (the clear below erases its glyph)
     out_mode_set(OUT_FD1);
-    tty_move(tui_composer_bot(_tui_rows, _tui_show_status), 1);
-    tty_clear_to_eol();
-    return 0;
+    var bot = tui_composer_bot(_tui_rows, _tui_show_status);
+    var need = 1;
+    var pc = confirm_prompt_cols();
+    if ((pc > 0) && (_tui_cols > 0)) { need = (pc + 8 + _tui_cols - 1) / _tui_cols; }   # +8: the typed answer's room
+    if (need > (bot - 1)) { return 0; }
+    var top = bot - need + 1;
+    var r = top;
+    while (r <= bot) { tty_move(r, 1); tty_clear_to_eol(); r = r + 1; }
+    tty_move(top, 1);
+    if (need > 1) { tui_wrap_enable(); }
+    return 1;
 }
 fn tui_confirm_end() {
+    tui_wrap_disable();                 # 0.52.6: the question may have wrapped (tui_confirm_begin); the frame never does
     tui_repaint_body();                 # 0.18.6: still OUT_FD1 here -> repaint to the SCREEN, clearing the
                                         # confirm prompt + its cooked y/n echo and restoring the {(o> composer
                                         # IMMEDIATELY (was: the confirm line lingered on the composer row until

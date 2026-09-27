@@ -1994,7 +1994,10 @@ fn cmd_tools_dispatch(line) {
         # 0.51.0 (F6): the store is rewritten at once (this host's rows gone; other hosts' kept) — or say why not,
         # from the FACT of a write (toolpin_trust_wrote), never from the path being bound
         if (toolpin_store_path() == 0) { ui_emit(ROLE_FAINT, " (session-scoped: no store)"); }
-        elif (toolpin_trust_wrote() == 1) { emit("; store rewritten ("); emit_clean_line(config_path_display(toolpin_store_path())); emit(")"); }
+        elif (toolpin_trust_wrote() == 1) {
+            emit("; store rewritten ("); emit_clean_line(config_path_display(toolpin_store_path())); emit(")");
+            if (toolpin_trust_lost_other() == 1) { ui_emit(ROLE_RED, " — it did not verify, so any other daimon's pins in it were not kept"); }   # 0.52.6 (audit A3)
+        }
         elif (toolpin_store_state() == 4) { ui_emit(ROLE_RED, "; store NOT rewritten"); ui_emit(ROLE_FAINT, " — "); emit_clean_line(config_path_display(toolpin_store_path())); ui_emit(ROLE_FAINT, " is a symlink (refused)"); }
         elif (toolpin_store_state() == 6) { ui_emit(ROLE_RED, "; store NOT rewritten"); ui_emit(ROLE_FAINT, " — larger than thoth can load (delete it to start over)"); }
         else { ui_emit(ROLE_RED, "; the store could not be rewritten"); ui_emit(ROLE_FAINT, " — pins are session-scoped from here"); }
@@ -2298,11 +2301,13 @@ fn cmd_reload() {
         ui_emit(ROLE_RED, "no "); emit(config_path()); ui_emit(ROLE_FAINT, " found — nothing to reload"); oprintln("");
         return 0;
     }
+    config_reload_hold();                     # 0.52.6 (audits E2 + A7): what the re-parse must not change under the running session
     config_load();                            # re-parse: rebuilds [alias]/[shell]/[pricing]/read_roots + all _cfg_* globals
     if (config_parse_ok() == 0) {             # readable? the file could not be read/parsed -> degrade honestly, don't fake success
         ui_emit(ROLE_RED, "reload failed"); ui_emit(ROLE_FAINT, " — could not read/parse "); emit(config_path()); ui_emit(ROLE_FAINT, " (config unchanged)"); oprintln("");
         return 0;
     }
+    var held = config_reload_keep();          # the restart-to-change keys keep the values in use (and are named below)
     agent_tools_cache_reset();                # re-advertise tools next turn (picks up [shell].enabled / [hoosh].tools / daimon)
     daimon_endpoints_reset();                 # 0.44.4: drop the cached tools/call URLs + mneme probe — WITHOUT this a changed [daimon].url moved resources/prompts but left tool traffic on the OLD host
     toolpin_host_rebind();                    # 0.51.0 (F6): a moved [daimon].url is another pin namespace — this host's pins flushed, the new host's loaded, nothing reads as CHANGED
@@ -2321,6 +2326,16 @@ fn cmd_reload() {
     ui_emit(ROLE_FAINT, "  now active: [alias] · [shell] rules · [ui] bell/elapsed · [pricing] · [hoosh] flags/token/model/caps · [memory] · [subagent] · [budget] · [guard] · [redact] · [edit] · [ask] · [verify]/[hooks] values · [daimon] url (+ the tool-pin host) · [project].map · [history].size"); oprintln("");
     ui_emit(ROLE_FAINT, "  additive:   [project] read_roots (new roots granted; restart to revoke)"); oprintln("");
     ui_emit(ROLE_FAINT, "  restart to change: [hoosh] url · [tron] · [log] · [persona] · [ui] tier/theme (or /theme) · [history]/[session] file · [toolpin] enabled/file/durable"); oprintln("");
+    if (held > 0) {                           # 0.52.6: which of them this reload found changed — kept at the value in use
+        ui_emit(ROLE_RED, "  changed, restart to apply: ");
+        var _hk = 0;
+        while (_hk < held) {
+            if (_hk > 0) { ui_emit(ROLE_FAINT, " · "); }
+            emit(config_held_at(_hk));
+            _hk = _hk + 1;
+        }
+        ui_emit(ROLE_FAINT, " — the running session keeps the values it started with"); oprintln("");
+    }
     ui_emit(ROLE_FAINT, "  global-only:  [hooks] · [verify].command · [tron] · [log]/[history]/[session].file · [toolpin] (0.44.3 / 0.51.0 — authority)"); oprintln("");
     if (config_suppressed_count() > 0) {
         ui_emit(ROLE_RED, "  note: "); ofmt_int(config_suppressed_count());

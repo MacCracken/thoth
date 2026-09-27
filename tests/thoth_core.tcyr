@@ -106,7 +106,7 @@ fn main() {
     test_cost();
     test_alias();
     test_dry();
-    test_memory(); test_memory_append_symlink(); test_mem_append_counted();
+    test_memory(); test_memory_append_symlink(); test_memory_append_linked_root(); test_memory_read_links(); test_mem_append_counted();
     test_mem_seam();
     test_shell_bufs_realloc();   # body lives in tests/cases/core.cyr (the shell TOOL tests moved to thoth_agent)
     test_oneshot();
@@ -121,7 +121,7 @@ fn main() {
     test_inhist();
     test_inhist_persist();
     test_history_cmd_path();
-    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_config(); test_state_pins_row();
+    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_store_conflict(); test_toolpin_store_trust_others(); test_toolpin_store_full_carry(); test_toolpin_config(); test_config_token_by_value(); test_config_reload_holds(); test_state_pins_row();
     test_inhist_polish();          # 0.45.5: ~/$HOME expansion on [history].file + the [history].size trim
     test_logging();
     test_logs_flag();
@@ -147,7 +147,7 @@ fn main() {
     test_content_sanitise();
     test_title_sanitise();
     test_sink_sweep_0452();
-    test_vendor_pins(); test_vendor_hazards(); test_src_globals_once();
+    test_vendor_pins(); test_vendor_hazards(); test_src_globals_apart();   # 0.52.6: runs test_src_globals_once first (thoth's own names), then checks them across the boundary
     return assert_summary();
 }
 var _e = main();

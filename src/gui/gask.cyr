@@ -30,7 +30,13 @@
 # Wrapping to GASK_Q_ROWS rows keeps the layout-forgery bound (a crafted question still cannot push the
 # card's own affordance line off the card — it is truncated at the row cap) while making the bytes that
 # matter visible.
-var GASK_Q_ROWS = 5;            # question rows before the hard truncate (5 x ~86cp)
+var GASK_Q_ROWS = 32;           # question rows at most (the layout-forgery bound); 0.52.6: was 5 — see _gask_cut
+# ⚠ 0.52.6 (audits C1 + F1) — THE ROW CAP CUT THE ACTION BEING AUTHORIZED, SILENTLY. Five rows of ~86 codepoints showed
+# at most ~430 of a question whose object alone may be 1,024 bytes; the loop just stopped, and the three answers still
+# authorized all of it. The card now takes as many rows as the question needs (up to GASK_Q_ROWS) and as the window
+# can hold; when the window cannot hold them the last row says so, in red, and an AUTHORIZATION cannot be answered
+# yes until the whole question is on the card (Enter declines; enlarging the window re-lays it out).
+var _gask_cut = 0;              # 1 when the last build could not draw the whole question
 var GASK_PAD = 14;              # inner padding of the modal card
 var GASK_ROW_H = 22;            # one option row
 var GASK_MAXW = 720;            # the card never spans the whole window — it must read as an overlay
@@ -127,6 +133,16 @@ fn _gask_q_rows(maxcp) {
     if (rows < 1) { rows = 1; }
     return rows;
 }
+# _gask_q_more (0.52.6): 1 when the question runs past `rows` rows at `maxcp` codepoints per row.
+fn _gask_q_more(maxcp, rows) {
+    if (maxcp < 1) { return 0; }
+    var p = gask_question();
+    var r = 0;
+    while ((load8(p) != 0) && (r < rows)) { r = r + 1; p = _gask_row_next(p, maxcp); }
+    if (load8(p) != 0) { return 1; }
+    return 0;
+}
+fn gask_cut() { return _gask_cut; }
 fn gask_add_option(t) {
     _gask_vm();
     if (_gask_nopt >= GASK_OPT_MAX) { return 0; }
@@ -173,7 +189,14 @@ fn gask_build(cmds, w, h) {
     # it depends only on `cw`, which is already fixed above.
     var maxcp0 = (cw - GASK_PAD * 2) / 8;
     if (maxcp0 < 8) { maxcp0 = 8; }
-    var qrows = _gask_q_rows(maxcp0);
+    var qneed = _gask_q_rows(maxcp0);
+    var qfit = ((h - 40) - GASK_PAD * 4) / GASK_ROW_H - (nopt + 2);   # the question rows this window can hold beside the rest
+    if (qfit < 1) { qfit = 1; }
+    var qrows = qneed;
+    if (qrows > qfit) { qrows = qfit; }
+    _gask_cut = 0;
+    if (qneed > qrows) { _gask_cut = 1; }
+    if (_gask_q_more(maxcp0, qrows) == 1) { _gask_cut = 1; }            # longer than GASK_Q_ROWS itself
     var ch = GASK_PAD * 4 + GASK_ROW_H * (nopt + 2 + qrows);
     if (ch > (h - 40)) { ch = h - 40; }
     var cx = (w - cw) / 2;
@@ -201,6 +224,11 @@ fn gask_build(cmds, w, h) {
     var qr = 0;
     while (qr < qrows) {
         if (load8(qp) == 0) { qr = qrows; }
+        elif ((_gask_cut == 1) && (qr == (qrows - 1))) {             # 0.52.6: the row that would have been cut says so
+            gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_RED), "... the question continues past this card - enlarge the window to read it", maxcp);
+            ty = ty + GASK_ROW_H;
+            qr = qrows;
+        }
         else {
             gd_push_text(cmds, cx + GASK_PAD, ty, _ui_rgb(ROLE_FG), qp, _gask_row_len(qp, maxcp));   # 0.52.1: whole words
             ty = ty + GASK_ROW_H;
@@ -251,6 +279,7 @@ fn gask_build(cmds, w, h) {
 fn _gask_key(code, shift) {
     if (code == 1) { return 2; }                                         # Esc -> decline
     if ((code == 28) || (code == 96)) {                                  # Enter -> accept
+        if ((_gask_cut == 1) && (_gask_label == GASK_LABEL_AUTHZ)) { return 2; }   # 0.52.6: no answer to a question not wholly shown
         if (_gask_len > 0) { return 1; }
         if (_gask_sel >= 0) { return 1; }
         return 2;
