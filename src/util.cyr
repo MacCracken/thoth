@@ -157,7 +157,41 @@ fn _clean_byte(b, keep_ws) {
 fn _clean_at(p, i, n, keep_ws) {
     var b = load8(p + i) & 255;
     if ((keep_ws == 1) && (b == 13)) { if ((i + 1) < n) { if (load8(p + i + 1) == 10) { return 32; } } }
+    if (_c1_at(p, i, n) == 1) { return 63; }                    # 0.52.6 (audit E9)
     return _clean_byte(b, keep_ws);
+}
+
+# _c1_at (0.52.6, audit E9): 1 when byte i of the n bytes at p is part of a C1 CONTROL — U+0080..U+009F encoded
+# (C2 80..C2 9F: the lead and its continuation), or a raw 0x80..0x9F that no UTF-8 lead before it accounts for.
+# The policy above stopped at C0 and DEL, and a terminal that honours C1 reads C2 9B (or a raw 9B) as CSI and 9D as
+# OSC — the same escape the '?' exists to defuse, one code page up (a catalog id, a provider's error text, a model
+# reply, a repo's [hoosh].model reached the screen and the terminal title with them). Decoded, never stripped
+# blindly: 0x80..0x9F are legal continuation bytes inside every other multi-byte character. Pure; in-place safe (a
+# lead this has already turned to '?' makes its continuation a stray, which is also refused).
+fn _c1_at(p, i, n) {
+    var b = load8(p + i) & 255;
+    if (b == 0xC2) {
+        if ((i + 1) < n) { var nx = load8(p + i + 1) & 255; if ((nx >= 0x80) && (nx <= 0x9F)) { return 1; } }
+        return 0;
+    }
+    if ((b < 0x80) || (b > 0x9F)) { return 0; }
+    var j = i - 1;
+    var k = 0;                                           # continuation bytes between the lead and byte i
+    while ((j >= 0) && (k < 3)) {
+        var c = load8(p + j) & 255;
+        if ((c < 0x80) || (c > 0xBF)) { j = 0 - 2; }     # found a non-continuation byte: stop (j restored below)
+        else { j = j - 1; k = k + 1; }
+    }
+    if (j == (0 - 2)) { j = i - 1 - k; } else { return 1; }   # ran out (start of string, or 3 continuations): a stray
+    var lead = load8(p + j) & 255;
+    var need = 0;
+    if ((lead >= 0xC2) && (lead <= 0xDF)) { need = 1; }
+    elif ((lead >= 0xE0) && (lead <= 0xEF)) { need = 2; }
+    elif ((lead >= 0xF0) && (lead <= 0xF4)) { need = 3; }
+    if (need == 0) { return 1; }                          # no lead accounts for it
+    if ((k + 1) > need) { return 1; }                     # past the sequence the lead began
+    if ((lead == 0xC2) && (need == 1)) { return 1; }      # C2 80..C2 9F: a C1 control
+    return 0;
 }
 fn _emit_clean_n(p, n, keep_ws) {
     if (p == 0) { return 0; }
@@ -210,10 +244,12 @@ fn safe_label_copy(dst, cap, src) {
     if (dst == 0) { return 0; }
     if (src == 0) { store8(dst, 0); return 0; }
     var i = 0;
+    var sn = strlen(src);
     while ((load8(src + i) != 0) && (i < (cap - 1))) {
         var b = load8(src + i) & 255;
         if (b < 32) { b = 63; }
         if (b == 127) { b = 63; }
+        if (_c1_at(src, i, sn) == 1) { b = 63; }              # 0.52.6 (audit E9): C1 controls too
         store8(dst + i, b);
         i = i + 1;
     }
@@ -329,4 +365,19 @@ fn cstr_starts_with(s, prefix) {
         }
     }
     return ret;
+}
+
+# _sat_mul / _sat_add (0.52.6): non-negative i64 arithmetic that stops at the maximum instead of wrapping (a negative
+# operand reads as 0 — no count or rate is negative).
+var SAT_MAX = 9223372036854775807;
+fn _sat_mul(a, b) {
+    if ((a <= 0) || (b <= 0)) { return 0; }
+    if (a > (SAT_MAX / b)) { return SAT_MAX; }
+    return a * b;
+}
+fn _sat_add(a, b) {
+    if (a < 0) { a = 0; }
+    if (b < 0) { b = 0; }
+    if (a > (SAT_MAX - b)) { return SAT_MAX; }
+    return a + b;
 }

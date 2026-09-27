@@ -2806,3 +2806,90 @@ fn test_gcmd_running() {
     gcmd_clear();
     return 0;
 }
+
+# test_gui_wire_bounds (0.52.6, audits B1–B3): the parser reads no field a message does not declare. A
+# wl_registry.global's name length is the compositor's u32 — the version word was read at 16 + padded(L), up to ~4 GiB
+# past the receive buffer (the audit's probe: L = 0x40000000 SIGSEGV'd). A configure's sides are bounded before
+# they size a buffer, and ping/configure read nothing a short message does not carry.
+fn test_gui_wire_bounds() {
+    test_group("the wire parser reads no field a message does not declare; configure sides are bounded (gwindow.cyr, 0.52.6)");
+    var sv_reg = gwl_wl_reg_id; var sv_top = gwl_wl_top_oid; var sv_xs = gwl_wl_xsurf_oid; var sv_xdg = gwl_wl_xdg_oid;
+    var sv_cw = gwl_wl_cfg_w; var sv_ch = gwl_wl_cfg_h; var sv_ng = gwl_wl_nglobals; var sv_seat = gwl_wl_gn_seat;
+    var sv_fd = gwl_wl_fd; var sv_cfgd = gwl_wl_configured; var sv_gv = gwl_wl_gv_seat;
+    gwl_wl_frame_oid = 0; gwl_wl_cur_sync = 0; gwl_wl_ptr_oid = 0; gwl_wl_kbd_oid = 0; gwl_wl_buf_oid = 0; gwl_wl_busy_oid = 0;
+    gwl_wl_reg_id = 2; gwl_wl_xdg_oid = 0; gwl_wl_xsurf_oid = 0; gwl_wl_top_oid = 0; gwl_wl_seat_oid = 0;
+    # a global whose name length runs ~1 GiB past a 20-byte message
+    gwl_wl_nglobals = 0;
+    var o = _tg_wire(0, 2, GWL_EV_REGISTRY_GLOBAL, 20);
+    store32(&gwl_wl_rbuf + 8, 7); store32(&gwl_wl_rbuf + 12, 0x40000000); store32(&gwl_wl_rbuf + 16, 1);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_nglobals, 0, "a global whose name runs past its message is dropped, never read past (it SIGSEGV'd)");
+    assert_eq(gwl_wl__global_fits(0), 0, "...the fit check refuses it");
+    # a name of exactly the declared room, no room left for the version word
+    o = _tg_wire(0, 2, GWL_EV_REGISTRY_GLOBAL, 24);
+    store32(&gwl_wl_rbuf + 8, 7); store32(&gwl_wl_rbuf + 12, 8);
+    assert_eq(gwl_wl__global_fits(0), 0, "a name that leaves no room for the version word is refused");
+    store32(&gwl_wl_rbuf + 12, 0);
+    assert_eq(gwl_wl__global_fits(0), 0, "an empty (null) name is refused");
+    # a well-formed wl_seat global: 8 + 4 + (4 + 8) + 4 = 28
+    o = _tg_wire(0, 2, GWL_EV_REGISTRY_GLOBAL, 28);
+    store32(&gwl_wl_rbuf + 8, 11);
+    var e = gwl_wire_put_str(&gwl_wl_rbuf, 12, "wl_seat", 7);
+    store32(&gwl_wl_rbuf + e, 7);
+    gwl_wl_gn_seat = 0; gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_nglobals, 1, "a well-formed global still registers");
+    assert_eq(gwl_wl_gn_seat, 11, "...by its name");
+    assert_eq(gwl_wl_gv_seat, 7, "...with its version");
+    # configure sides: past GWL_DIM_MAX ignored, in range taken, short message read not at all
+    gwl_wl_top_oid = 5; gwl_wl_cfg_w = 960; gwl_wl_cfg_h = 600;
+    o = _tg_wire(0, 5, GWL_EV_TOPLEVEL_CONFIGURE, 20);
+    store32(&gwl_wl_rbuf + 8, 0xFFFFFFFF); store32(&gwl_wl_rbuf + 12, 0x80000000); store32(&gwl_wl_rbuf + 16, 0);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_cfg_w, 960, "a configure width past GWL_DIM_MAX is ignored");
+    assert_eq(gwl_wl_cfg_h, 600, "...and a height");
+    o = _tg_wire(0, 5, GWL_EV_TOPLEVEL_CONFIGURE, 20);
+    store32(&gwl_wl_rbuf + 8, 1280); store32(&gwl_wl_rbuf + 12, 720); store32(&gwl_wl_rbuf + 16, 0);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_cfg_w * 10000 + gwl_wl_cfg_h, 12800720, "an in-range configure is taken");
+    o = _tg_wire(0, 5, GWL_EV_TOPLEVEL_CONFIGURE, 8);
+    store32(&gwl_wl_rbuf + 8, 640); store32(&gwl_wl_rbuf + 12, 480);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_cfg_w, 1280, "a configure declaring no sides reads none");
+    assert_eq(gwl_shm_create(GWL_DIM_MAX + 1, 10), 0, "the shm buffer refuses a side past GWL_DIM_MAX before the multiply");
+    assert_eq(gwl_shm_resize(10, 0x7FFFFFFF), 0, "...on resize too");
+    gwl_wl_xsurf_oid = 6; gwl_wl_configured = 0; gwl_wl_fd = 0 - 1;
+    o = _tg_wire(0, 6, GWL_EV_XDGSURF_CONFIGURE, 8);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_configured, 0, "an xdg_surface.configure without its serial is not acked");
+    gwl_wl_reg_id = sv_reg; gwl_wl_top_oid = sv_top; gwl_wl_xsurf_oid = sv_xs; gwl_wl_xdg_oid = sv_xdg;
+    gwl_wl_cfg_w = sv_cw; gwl_wl_cfg_h = sv_ch; gwl_wl_nglobals = sv_ng; gwl_wl_gn_seat = sv_seat; gwl_wl_gv_seat = sv_gv;
+    gwl_wl_fd = sv_fd; gwl_wl_configured = sv_cfgd; gwl_wl_rlen = 0;
+    return 0;
+}
+
+# test_gcmd_ring_head (0.52.6, audit C3): a command printing more than the feed ring holds lost its real head DURING
+# the run — the card showed "L952" as its first line under "the card keeps its head", and "1848 more lines" of 2800.
+fn _tg_gcmd_3000() {
+    var i = 0;
+    while (i < 3000) { emit("L"); ofmt_int(i); oprintln(""); i = i + 1; }
+    return 0;
+}
+fn test_gcmd_ring_head() {
+    test_group("a command past the feed ring says its head was not kept, and counts every line (gcmd.cyr, 0.52.6)");
+    out_ring_sink_set(&feed_write);
+    session_history_clear(); gcmd_clear();
+    assert_eq(gcmd_capture("/run big", &_tg_gcmd_3000), 0, "a 3000-line command is sealed as a card");
+    assert_eq(gcmd_lines(0), GCMD_LINES, "...keeping GCMD_LINES lines");
+    assert_eq(gcmd_skipped(0), 3000 - FEED_ROWS, "...and it records that the ring evicted the first 952 before the capture");
+    assert_eq(gcmd_skipped(0) + gcmd_lines(0) + gcmd_dropped(0), 3000, "...so skipped + kept + dropped is every line printed (1848 of 2800 were counted, 0.52.5)");
+    var l = gd_list_new();
+    gcmd_build(l, 0, 0, 900, 0);
+    assert(_tg_text_count(l, " earlier lines not kept", 23) >= 1, "the card draws the skipped count above its lines");
+    assert_eq(_tg_text_count(l, " more lines (the card keeps its head)", 37), 0, "...and never claims to keep a head it lost");
+    assert_eq(gcmd_build(0, 0, 0, 900, 0), gcmd_build(l, 0, 0, 900, 0), "the measured height matches the drawn one");
+    gcmd_clear();
+    assert_eq(gcmd_capture("/run small", &_tg_hook_loud), 0, "a short command...");
+    assert_eq(gcmd_skipped(0), 0, "...skips nothing (the ring's eviction count restarts with the capture)");
+    gcmd_clear(); session_history_clear();
+    return 0;
+}

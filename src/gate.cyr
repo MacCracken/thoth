@@ -385,12 +385,19 @@ fn confirm(verb, obj) {
 # once at startup, after config_load. Announces failures honestly; a broken
 # policy file leaves the seam ABSENT (fail closed to the confirm prompt), it
 # never half-loads. I/O (reads the policy file).
+# 0.52.6: the failure is KEPT (gate_policy_failed) — the line below goes out before the TUI's alternate screen and the
+# window, which covered it within the first frame, so the session ran fail-closed with no word on screen of why.
+var _gate_policy_fail = 0;      # 0 = none · 1 = unreadable · 2 = failed to parse
+fn gate_policy_failed() { return _gate_policy_fail; }
 fn gate_init() {
+    _gate_policy_fail = 0;
     var path = config_tron_policy();
     if (path == 0) { return 0; }
     var t = tron_new(tron_config_default());
     var rc = tron_load_policy_file(t, path);
     if (rc != TRON_ERR_NONE) {
+        _gate_policy_fail = 2;
+        if (rc == TRON_ERR_IO) { _gate_policy_fail = 1; }
         emit("t-ron: policy '"); emit(path);
         if (rc == TRON_ERR_IO) { oprintln("' unreadable — seam stays absent (fail-closed confirm gate)."); }
         else { oprintln("' failed to parse — seam stays absent (fail-closed confirm gate)."); }

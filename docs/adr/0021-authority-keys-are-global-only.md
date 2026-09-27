@@ -43,12 +43,15 @@ solely to discover that it *tried* to set one, so the attempt can be named.
 Authority keys are: the four `[hooks]` commands, `[verify].command`, `[tron].policy`, `[tron].agent`,
 `[log].file` / `[history].file` / `[session].file`, and — since 0.51.0 (ADR-0022) — the whole
 `[toolpin]` table: `enabled` (a repo must not switch the rug-pull defence off), `file` (where thoth
-writes and reads back its trust record) and `durable`. Two further rules fall out of the same
-principle:
+writes and reads back its trust record) and `durable`; since 0.52.6, `[memory].enabled` (ADR-0012's opt-in is the
+operator's trust decision: the injection it enables meets no gate) and `[history].size` (it decides how much of
+the operator's history file survives each save). Two further rules fall out of the same principle:
 
 - **A token is bound to the URL that earned it.** When the local layer *redirects* `[hoosh].url` and
   supplies no token of its own, the global `[hoosh].token` is **withheld**. Same URL on both layers
-  is not a redirect and changes nothing.
+  is not a redirect and changes nothing. (0.52.6: decided by value — an empty local token is no token, and an
+  empty local url no redirect; and the converse, ruled on as design question D2 — a local token with no url of its
+  own layer is ignored and named, never sent to the operator's gateway.)
 - **`[shell].deny` merges from the trusted side first.** The union filled with the local patterns and
   appended global ones "if there is room", so a local layer declaring `SHELL_GLOB_MAX` denies evicted
   every global deny — an untrusted file *deleting* the operator's deny-list, the exact inversion

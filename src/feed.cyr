@@ -80,9 +80,12 @@ fn feed_init_ensure() {
 
 # feed_clear: empty the ring (head/count/scroll/pending) WITHOUT freeing the backing
 # store. Backs the /clear command and the per-session reset.
+var _feed_evicted = 0;      # 0.52.6 (audit C3): lines the full ring evicted since the last clear
+fn feed_evicted() { return _feed_evicted; }
 fn feed_clear() {
     _feed_head = 0;
     _feed_count = 0;
+    _feed_evicted = 0;
     _feed_scroll = 0;
     _feed_pending_len = 0;
     return 0;
@@ -597,7 +600,7 @@ fn _feed_seal_pending() {
     store64(_feed_len + slot * 8, copied);
     store64(_feed_vis + slot * 8, feed_visible_cols(dst, copied));
     if (_feed_count < FEED_ROWS) { _feed_count = _feed_count + 1; }
-    else { _feed_head = (_feed_head + 1) % FEED_ROWS; }   # ring full -> evict oldest
+    else { _feed_head = (_feed_head + 1) % FEED_ROWS; _feed_evicted = _feed_evicted + 1; }   # ring full -> evict oldest (counted, 0.52.6)
     _feed_pending_len = 0;
     return 0;
 }

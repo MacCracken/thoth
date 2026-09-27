@@ -1453,12 +1453,14 @@ fn _tui_draw_pick_hint() {
         else { ui_emit(ROLE_RED, "no matches"); }
     } else {
         emit(ui_sgr(ROLE_GREEN)); fmt_int(mpick_cur() + 1); emit("/"); fmt_int(mpick_count()); emit(ui_reset());
+        var _unl = 0;                                                    # 0.52.6 (audit E11): what the store could not hold
+        if (mpick_unloaded() > 0) { ui_emit(ROLE_RED, " +"); fmt_int(mpick_unloaded()); ui_emit(ROLE_RED, " not loaded"); _unl = 13 + _tui_digits(mpick_unloaded()); }
         # 0.47.0: the selected model's provider and its health, in the state's colour — or the honest reason there is
         # none (the health GET failed: every dot is ○ then, and this says why). The segment is budgeted against the
         # row: the key legend after it must never be the part that yields ("⌃C close" is the documented way out),
         # so it shrinks — provider + state + detail, then provider + state, then the state alone, then nothing (the
         # row's dot still carries the state).
-        var _room = _tui_cols - (11 + mpick_qlen() + 2 + _tui_digits(mpick_cur() + 1) + 1 + _tui_digits(mpick_count()) + 2 + TUI_PICK_LEGEND_COLS);
+        var _room = _tui_cols - (11 + mpick_qlen() + 2 + _tui_digits(mpick_cur() + 1) + 1 + _tui_digits(mpick_count()) + _unl + 2 + TUI_PICK_LEGEND_COLS);
         _tui_pick_hint_health(_room);
     }
     ui_emit(ROLE_FAINT, "  ↑↓ move · Enter switch · ⌃C close");

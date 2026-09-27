@@ -51,26 +51,115 @@ fn intr_arm() {
     store8(&work + TIO_CC_BASE + TIO_VMIN, 0);         # override to VMIN=0 + VTIME=0: read returns at once
     store8(&work + TIO_CC_BASE + TIO_VTIME, 0);
     if (syscall(SYS_IOCTL, 0, TCSETS, &work) < 0) { return 0; }
+    _intr_parse_reset();                              # 0.52.6: a sequence cut off by the last disarm is not continued
     _intr_active = 1;
     #endif
     return 0;
 }
 
-# intr_poll: while armed, non-blockingly DRAIN pending stdin; set _intr_flag if any byte is Esc (27).
-# All pending bytes are consumed so mid-turn keystrokes don't leak into the next composer read. Any Esc
-# — including the lead byte of an arrow/mouse/paste sequence typed mid-turn — counts as interrupt (a
-# documented, mild edge). Called per SSE frame; between frames thoth blocks in the socket recv, so a
-# STALLED stream (no frame arriving) is only interruptible when the next frame lands or sandhi's read
-# timeout fires — a documented granularity limit. Safe off Linux: _intr_active is never set there.
+# intr_poll: while armed, non-blockingly DRAIN pending stdin; set _intr_flag on a STOP (_intr_feed below). All
+# pending bytes are consumed so mid-turn keystrokes don't leak into the next composer read. Called per SSE frame;
+# between frames thoth blocks in the socket recv, so a STALLED stream (no frame arriving) is only interruptible when
+# the next frame lands or sandhi's read timeout fires — a documented granularity limit. Safe off Linux: _intr_active
+# is never set there.
+#
+# ⚠ 0.52.6 (audit F6) — NOT EVERY ESC IS A STOP. Any byte 27 used to count, which the comment here called "a mild
+# edge" when a stray interrupt only ended a streaming reply. Since 0.52.0 (F7) the same poll KILLS a running command,
+# and the TUI turns mouse reporting on itself: a wheel scroll during `/run`, a `shell` call or `[verify]` killed it
+# (`ESC[<65;20;10M` -> "stopped by the operator"), and during a pre_tool hook it became a DENY the model was told
+# the hook made. Arrows, PgUp/PgDn, bracketed paste and kitty's CSI-u chords did the same. The bytes are now parsed:
+# a CSI / SS3 sequence, an X10 mouse report and a bracketed paste are consumed without counting, and a stop is a LONE
+# Esc (nothing follows it in the drain) or kitty's encoding of the Esc key, `ESC[27u` (with any modifier field).
 fn intr_poll() {
     if (_intr_active == 0) { return _intr_flag; }
     var c[8];
     var n = syscall(SYS_READ, 0, &c, 1);
     while (n > 0) {
-        if (load8(&c) == 27) { _intr_flag = 1; _intr_seq = _intr_seq + 1; }
+        if (_intr_feed(load8(&c) & 255) == 1) { intr_signal(); }
         n = syscall(SYS_READ, 0, &c, 1);
     }
+    if (_intr_feed_end() == 1) { intr_signal(); }
     return _intr_flag;
+}
+
+# --- the drain's parser (0.52.6, audit F6) ------------------------------------------------------------------------
+# State spans polls (a sequence split across two reads stays a sequence): 0 ground, 1 after ESC, 2 in a CSI (params
+# collected), 3 SS3 (one byte follows), 4 an X10 mouse report (three raw bytes follow), 5 inside a bracketed paste
+# (everything up to `ESC[201~` is text, an ESC in it included).
+var INTR_P_CAP = 16;
+var _intr_st = 0;
+var _intr_pn = 0;                 # CSI parameter bytes collected
+var _intr_pb[16];                 # module scope: 16 i64 slots — only the first INTR_P_CAP bytes are used
+var _intr_x10 = 0;                # X10 bytes still owed
+var _intr_paste = 0;              # 1 inside a bracketed paste
+fn _intr_parse_reset() { _intr_st = 0; _intr_pn = 0; _intr_x10 = 0; _intr_paste = 0; return 0; }
+
+# _intr_params_are(lit): 1 when the collected CSI parameter bytes equal `lit` exactly.
+fn _intr_params_are(lit) {
+    var n = strlen(lit);
+    if (n != _intr_pn) { return 0; }
+    var i = 0;
+    while (i < n) { if (load8(&_intr_pb + i) != load8(lit + i)) { return 0; } i = i + 1; }
+    return 1;
+}
+
+# _intr_params_lead(lit): 1 when the collected CSI parameter bytes begin with `lit`.
+fn _intr_params_lead(lit) {
+    var n = strlen(lit);
+    if (n > _intr_pn) { return 0; }
+    var i = 0;
+    while (i < n) { if (load8(&_intr_pb + i) != load8(lit + i)) { return 0; } i = i + 1; }
+    return 1;
+}
+
+# _intr_feed(b): one drained byte; 1 when it completes a STOP.
+fn _intr_feed(b) {
+    if (_intr_st == 4) {                                   # X10 mouse: Cb Cx Cy, raw
+        _intr_x10 = _intr_x10 - 1;
+        if (_intr_x10 <= 0) { _intr_st = 0; }
+        return 0;
+    }
+    if (_intr_st == 3) { _intr_st = 0; return 0; }         # SS3 final (ESC O P, arrows in application mode)
+    if (_intr_st == 2) {
+        if ((b >= 0x40) && (b <= 0x7E)) {                  # the CSI's final byte
+            var stop = 0;
+            if (_intr_paste == 0) {
+                if ((b == 117) && ((_intr_params_are("27") == 1) || (_intr_params_lead("27;") == 1))) { stop = 1; }   # kitty: ESC[27u, ESC[27;<mods>u
+                if ((b == 126) && (_intr_params_are("200") == 1)) { _intr_paste = 1; }
+                if ((b == 77) && (_intr_pn == 0)) { _intr_st = 4; _intr_x10 = 3; _intr_pn = 0; return 0; }   # X10: ESC [ M Cb Cx Cy
+            } elif ((b == 126) && (_intr_params_are("201") == 1)) { _intr_paste = 0; }
+            _intr_st = 0; _intr_pn = 0;
+            if (_intr_paste == 1) { _intr_st = 5; }
+            return stop;
+        }
+        if (_intr_pn < INTR_P_CAP) { store8(&_intr_pb + _intr_pn, b); _intr_pn = _intr_pn + 1; }
+        else { _intr_st = 0; _intr_pn = 0; if (_intr_paste == 1) { _intr_st = 5; } }   # a runaway sequence: back to ground, never swallowing for ever
+        return 0;
+    }
+    if (_intr_st == 1) {
+        if (b == 91) { _intr_st = 2; _intr_pn = 0; return 0; }        # CSI
+        if ((b == 79) && (_intr_paste == 0)) { _intr_st = 3; return 0; }   # SS3
+        if (b == 27) {                                    # ESC ESC: the first was a lone Esc (outside a paste)
+            if (_intr_paste == 1) { return 0; }
+            return 1;
+        }
+        _intr_st = 0;                                     # ESC + a key: an Alt chord, not a stop
+        if (_intr_paste == 1) { _intr_st = 5; }
+        return 0;
+    }
+    if (b == 27) { _intr_st = 1; return 0; }              # ground or paste: the start of something — decided by what follows
+    return 0;
+}
+
+# _intr_feed_end: the drain found nothing more. An ESC with nothing after it is the Esc KEY — a stop (outside a
+# paste). Any other partial sequence waits for the next poll.
+fn _intr_feed_end() {
+    if (_intr_st == 1) {
+        _intr_st = 0;
+        if (_intr_paste == 1) { _intr_st = 5; return 0; }
+        return 1;
+    }
+    return 0;
 }
 
 # intr_disarm: restore the saved cooked termios (for a following read_line confirm / the next turn).

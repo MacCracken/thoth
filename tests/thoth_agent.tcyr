@@ -89,7 +89,7 @@ fn main() {
     test_daimon();
     test_tron();
     test_audit();
-    test_gate_name_fit();
+    test_gate_name_fit(); test_par_stop_phase1();
     test_roundlog();
     test_parallel();
     test_bounds_hardening();

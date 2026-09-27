@@ -502,6 +502,8 @@ var _shell_deny = 0;     # SHELL_GLOB_MAX cstr ptrs (deny glob patterns)
 var _shell_deny_n = 0;
 var _shell_allow = 0;    # SHELL_GLOB_MAX cstr ptrs (allow glob patterns)
 var _shell_allow_n = 0;
+var _shell_allow_loc = 0;      # 0.52.6 (audit E4): the LOCAL layer's allow patterns — a second filter, never a replacement
+var _shell_allow_loc_n = 0;
 
 # _cfg_section_pairs: the pairs vec for table [name] in a parsed sections vec,
 # or 0 if the table is absent.
@@ -615,6 +617,16 @@ fn _cfg2_int(l, g, key) {
     if (_cfg_has(l, key) == 1) { return _cfg_int(l, key); }
     if (_cfg_has(g, key) == 1) { return _cfg_int(g, key); }
     return 0 - 1;
+}
+# _cfg2_int_global_only (0.52.6): an INT key read from the global layer only (-1 when the global is silent); a local
+# layer that names a different value is reported as suppressed — the _cfg2_bool_global_only rule.
+fn _cfg2_int_global_only(l, g, key, label) {
+    var gv = 0 - 1;
+    if (_cfg_has(g, key) == 1) { gv = _cfg_int(g, key); }
+    if (_cfg_has(l, key) == 1) {
+        if ((_cfg_has(g, key) == 0) || (_cfg_int(l, key) != gv)) { _cfg_note_suppressed(label); }
+    }
+    return gv;
 }
 # _cfg2_bool_global_only (0.51.0): a BOOL authority key — read from the global layer only; a local layer that
 # names it is reported as suppressed (unless it names the global's own value — the _cfg2_str_global_only rule).
@@ -744,9 +756,15 @@ fn _price_load(sections) {
     return _price_append(sections);
 }
 
-# _price_load2 (0.43.3): both layers, LOCAL FIRST — a project [pricing.<model>] overrides the global rate
-# for that model while every other global rate still applies. The append core skips a model already
-# stored, which also fixes a pre-existing wart: two [pricing.x] sections in ONE file used to store both.
+# _price_load2 (0.43.3): both layers. The append core skips a model already stored, which also fixes a pre-existing
+# wart: two [pricing.x] sections in ONE file used to store both.
+#
+# ⚠ 0.52.6 (design question D1, the maintainer's ruling) — A RATE IS THE BUDGET'S MEASURE, SO IT IS STRICTEST-WINS.
+# The local layer was loaded FIRST and won per model: a clone's `[pricing.<model>] input = 0, output = 0` priced the
+# operator's model as free (the cost ceiling never fired, and the "cannot be measured" warning never did either), and
+# 32 local sections filled PRICE_MAX before any global rate loaded. Now the GLOBAL rates fill the table first, a local
+# rate may only RAISE a rate the global sets (a higher price trips the ceiling sooner — the safe direction), and a local
+# rate that would lower one, or price a model the global does not, is ignored and named.
 fn _price_load2(lo, gl) {
     if (_price_models == 0) {
         _price_models = alloc(PRICE_MAX * 8);
@@ -754,9 +772,68 @@ fn _price_load2(lo, gl) {
         _price_out = alloc(PRICE_MAX * 8);
     }
     _price_n = 0;
-    _price_append(lo);
     _price_append(gl);
+    if (_price_sections(gl) > _price_n) { _cfg_note_suppressed("pricing (global sections past the table's 32 dropped)"); }
+    _price_raise_from(lo);
     return 0;
+}
+
+# _price_sections: how many [pricing.*] sections a layer declares.
+fn _price_sections(sections) {
+    if (sections == 0) { return 0; }
+    var c = 0;
+    var i = 0;
+    while (i < vec_len(sections)) {
+        if (cstr_starts_with(str_cstr(bayan_toml_section_name(vec_get(sections, i))), "pricing.") == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
+# _price_raise_from (0.52.6, D1): apply the LOCAL layer's rates as raises only — see _price_load2.
+fn _price_raise_from(sections) {
+    if (sections == 0) { return 0; }
+    var refused = 0;
+    var i = 0;
+    while (i < vec_len(sections)) {
+        var sec = vec_get(sections, i);
+        var nm = str_cstr(bayan_toml_section_name(sec));
+        if (cstr_starts_with(nm, "pricing.") == 1) {
+            var mid = nm + 8;
+            var prs = bayan_toml_section_pairs(sec);
+            var lin = _cfg_int(prs, "input");
+            var lout = _cfg_int(prs, "output");
+            var j = 0; var at = 0 - 1;
+            while (j < _price_n) { if (streq(load64(_price_models + j * 8), mid) == 1) { at = j; } j = j + 1; }
+            if (at < 0) { refused = 1; }                     # no global rate to raise
+            else {
+                var gin = load64(_price_in + at * 8);
+                var gout = load64(_price_out + at * 8);
+                if (lin >= 0) { if (lin > gin) { store64(_price_in + at * 8, lin); } elif (lin < gin) { refused = 1; } }
+                if (lout >= 0) { if (lout > gout) { store64(_price_out + at * 8, lout); } elif (lout < gout) { refused = 1; } }
+            }
+        }
+        i = i + 1;
+    }
+    if (refused == 1) { _cfg_note_suppressed("pricing (a local rate may only raise a rate the global config sets)"); }
+    return 0;
+}
+
+# _cfg2_int_ceiling (0.52.6, D1): a CEILING read strictest-wins — the lower of the two positive values; a local layer may
+# set one where the global has none (tightening) and may lower the global's, never raise, unset (0, negative) or
+# replace it with something unreadable: those keep the global value and are named. Returns -1 when neither sets one.
+fn _cfg2_int_ceiling(l, g, key, label) {
+    var gv = _cfg_int(g, key);
+    if (gv <= 0) { gv = 0 - 1; }
+    if (_cfg_has(l, key) == 0) { return gv; }
+    var lv = _cfg_int(l, key);
+    if (lv <= 0) {
+        if (gv > 0) { _cfg_note_suppressed(label); }
+        return gv;
+    }
+    if (gv < 0) { return lv; }
+    if (lv > gv) { _cfg_note_suppressed(label); return gv; }
+    return lv;
 }
 
 fn _price_append(sections) {
@@ -956,43 +1033,78 @@ fn _shell_glob_key_load(shell, key, tbl) {
     return 0;                                       # present but empty scalar -> zero patterns
 }
 
-# _cfg_read_roots_load: grant the [project] read_roots at startup (0.23.1). Accepts the canonical array form
-# `read_roots = ["/abs/a", "/abs/b"]` and, leniently, a bare scalar string as a single root. Each element is
-# handed to project_grant_root, which enforces the absolute-and-not-"/" rule (non-absolute or over-cap entries
-# are silently skipped there). Config roots are a PERSISTENT user grant (the user chose to put them in the
-# config), exactly like [shell].enabled. Returns the number of grant attempts made.
+# [project].read_roots (0.23.1): the canonical array form `read_roots = ["/abs/a", "/abs/b"]` and, leniently, a bare
+# scalar string as a single root. Each element is handed to project_grant_root, which enforces the absolute-and-not-"/"
+# rule (non-absolute or over-cap entries are skipped there).
 # _cfg_read_roots_load2 (0.43.3): the read JAIL, and the one place layering must NOT be additive.
 #
-# ⚠ STRICTEST WINS. `read_roots` grants the model read access outside the launch directory. If the two
-# layers unioned, a repo you cloned could widen your global jail just by appending a path to its own
-# config — authority accumulating from the LESS-trusted side, which is the wrong direction. So the local
-# layer REPLACES the global's list when it declares one, and inherits it untouched when it does not.
-# Whichever file is in charge, the resulting jail is exactly the list one file states.
+# ⚠ 0.52.6 (audit E3) — "REPLACE" WAS NOT "STRICTEST WINS". Through 0.52.5 a local layer that declared read_roots
+# replaced the global's list wholesale, and the comment here called that strictest-wins. It is only strictest when the
+# local list is a subset: a clone's `[project] read_roots = ["/home/you/.ssh"]` REPLACED the operator's list with a
+# root of its own choosing — a grant to the ungated read tools (read_file / list_dir meet no t-ron gate; the jail and
+# the operator's grant are the boundary), announced nowhere. The local layer may now only NARROW: when it declares a
+# list, the jail is those of its entries that sit under a GLOBAL root (project_root_within); every other entry is
+# refused and named, like an authority key. A local layer that says nothing inherits the global list.
+# Config roots are marked (project_grant_root_cfg) and dropped before each load, so a /reload revokes a root the
+# config no longer names; the session's /allow grants stay.
 fn _cfg_read_roots_load2(proj_l, proj_g) {
-    if (proj_l != 0) {
-        if (bayan_toml_get(proj_l, "read_roots") != 0) { return _cfg_read_roots_load(proj_l); }
+    project_roots_drop_cfg();
+    var gv = _cfg_roots_vec(proj_g);
+    var lv = 0;
+    if (proj_l != 0) { lv = _cfg_roots_vec(proj_l); }
+    if (lv == 0) {
+        if (gv == 0) { return 0; }
+        return _cfg_roots_grant(gv, 0, 0);
     }
-    return _cfg_read_roots_load(proj_g);
+    return _cfg_roots_grant(lv, gv, 1);              # no global roots: an empty `within` — the local list grants nothing
 }
 
-fn _cfg_read_roots_load(project) {
+# _cfg_roots_vec: the layer's read_roots as a vec of cstrs — the canonical array form, or leniently a bare scalar as
+# one root; 0 when the layer does not declare the key.
+fn _cfg_roots_vec(project) {
     if (project == 0) { return 0; }
     var v = bayan_toml_get(project, "read_roots");
     if (v == 0) { return 0; }
+    var out = vec_new();
     if (bayan_toml_is_array(v) == 0) {
-        if (str_len(v) > 0) { project_grant_root(str_cstr(v)); return 1; }   # bare scalar -> one root
-        return 0;
+        if (str_len(v) > 0) { vec_push(out, str_cstr(v)); }
+        return out;
     }
     var arr = bayan_toml_array_parse(v);
-    if (arr == 0) { return 0; }
+    if (arr == 0) { return out; }
     var n = vec_len(arr);
     var i = 0;
-    var c = 0;
     while (i < n) {
         var e = vec_get(arr, i);
-        if (str_len(e) > 0) { project_grant_root(str_cstr(e)); c = c + 1; }
+        if (str_len(e) > 0) { vec_push(out, str_cstr(e)); }
         i = i + 1;
     }
+    return out;
+}
+
+# _cfg_roots_grant: grant each root in `roots`. With `bounded` a root is granted only under an entry of `within` (the
+# global list; 0 = none, so nothing is); the rest are named (once) as refused. Returns the number granted.
+fn _cfg_roots_grant(roots, within, bounded) {
+    var n = vec_len(roots);
+    var c = 0;
+    var refused = 0;
+    var i = 0;
+    while (i < n) {
+        var r = vec_get(roots, i);
+        var ok = 1;
+        if (bounded == 1) {
+            ok = 0;
+            var j = 0;
+            while ((within != 0) && (j < vec_len(within)) && (ok == 0)) {
+                if (project_root_within(r, vec_get(within, j)) == 1) { ok = 1; }
+                j = j + 1;
+            }
+        }
+        if (ok == 1) { if (project_grant_root_cfg(r) == 1) { c = c + 1; } }
+        else { refused = refused + 1; }
+        i = i + 1;
+    }
+    if (refused > 0) { _cfg_note_suppressed("project.read_roots (a local root outside every global root)"); }
     return c;
 }
 
@@ -1051,11 +1163,18 @@ fn _shell_globs_load2(sh_l, lo, sh_g, gl) {
     if (dropped > 0) { _cfg_note_suppressed("shell.deny (local patterns dropped: the merged deny-list is full)"); }
     _shell_deny_n = dn;
 
-    # allow := the LOCAL list if the local layer DECLARES one, else the global's. Never both.
-    var an = _shell_glob_decl(sh_l, lo, "allow", _shell_allow);
-    if (an < 0) { an = _shell_glob_decl(sh_g, gl, "allow", _shell_allow); }
+    # allow := the GLOBAL list, and the LOCAL list as a second filter a command must also pass. ⚠ 0.52.6 (audit E4):
+    # this used to be "the local list if the local layer declares one, else the global's", and the verdict reads an
+    # EMPTY list as "no whitelist" — so a clone's `[shell] allow = []` erased the operator's whitelist (the comment
+    # below called that "allows nothing"; the verdict disagreed), and `allow = ["*"]` did the same by replacement.
+    # A local list can now only NARROW: an empty or absent one adds no filter and removes none.
+    if (_shell_allow_loc == 0) { _shell_allow_loc = alloc(SHELL_GLOB_MAX * 8); }
+    var an = _shell_glob_decl(sh_g, gl, "allow", _shell_allow);
     if (an < 0) { an = 0; }
     _shell_allow_n = an;
+    var lan = _shell_glob_decl(sh_l, lo, "allow", _shell_allow_loc);
+    if (lan < 0) { lan = 0; }
+    _shell_allow_loc_n = lan;
     return 0;
 }
 
@@ -1086,6 +1205,7 @@ fn _shell_globs_load(shell, sections) {
     var an = _shell_glob_key_load(shell, "allow", _shell_allow);
     if (an < 0) { an = _shell_glob_table_load(_cfg_section_pairs(sections, "shell.allow"), _shell_allow); }
     _shell_allow_n = an;
+    _shell_allow_loc_n = 0;                       # one layer: no second filter
     return 0;
 }
 
@@ -1313,9 +1433,10 @@ fn _cfg_parse_sections(path) {
 #
 # ⚠ THE SECURITY-RELEVANT LISTS DO NOT SIMPLY MERGE — see _shell_globs_load2 and _cfg_read_roots_load2.
 # The rule is STRICTEST WINS: deny-lists UNION across both layers (a project can add denies, never drop
-# the user's), while `[shell].allow` and `[project].read_roots` are REPLACED wholesale by the local layer
-# when it sets them. A repo you cloned must not be able to widen the global allow-list or the read jail
-# by appending to it — that is authority, and authority does not accumulate from the less-trusted side.
+# the user's), while `[shell].allow` and `[project].read_roots` only NARROW from the local layer (0.52.6, audits
+# E3 + E4 — through 0.52.5 the local list REPLACED the global's, which let a clone name a root, or an empty allow
+# list, of its own). A repo you cloned must not be able to widen the global allow-list or the read jail — that is
+# authority, and authority does not accumulate from the less-trusted side.
 # --- /reload keeps what it cannot apply (0.52.6, audits E2 + A7) --------------------------------------------------
 # `/reload` re-parses the config, and its own last lines name what takes a restart — [hoosh].url, [tron], [log],
 # [persona], [ui] tier/theme, the [history] and [session] files, [toolpin]. Those values were re-read into the getters
@@ -1426,6 +1547,20 @@ fn config_load() {
             }
         }
     } }
+    # 0.52.6 (design question D2, the maintainer's ruling): the other direction — a local token with NO local url. It
+    # replaced the operator's token and went to the operator's own gateway, unannounced (requests billed to, and
+    # attributed to, a credential the repository chose). A local token now travels only with a url of its own layer;
+    # alone it is ignored and named (the global token stays). The same value as the global's asked for nothing.
+    var ltok = _cfg_str(hoosh_l, "token");
+    if ((ltok != 0) && (lurl == 0)) {
+        var gtk = _cfg_str(hoosh_g, "token");
+        var same = 0;
+        if (gtk != 0) { if (streq(ltok, gtk) == 1) { same = 1; } }
+        if (same == 0) {
+            _cfg_hoosh_token = gtk;
+            _cfg_note_suppressed("hoosh.token (ignored: the local layer sets no [hoosh].url of its own)");
+        }
+    }
     # 0.45.0: sanitised at LOAD — the id is drawn as chrome on every surface, and a repo's local layer may set it.
     _cfg_hoosh_model = _cfg_label(_cfg2_str(hoosh_l, hoosh_g, "model"));
     _cfg_hoosh_stream = _cfg2_bool(hoosh_l, hoosh_g, "stream", 1);    # default on
@@ -1465,7 +1600,10 @@ fn config_load() {
     # 0.45.5: a leading `~/` or `$HOME/` expands to the home directory (the path was verbatim before, so
     # `~/.thoth_history` named a directory called `~`); otherwise the path is still used as written.
     _cfg_history_file = _cfg_expand_home(_cfg2_str_global_only(hist_l, hist_g, "file", "history.file"));
-    _cfg_history_size = _cfg2_int(hist_l, hist_g, "size");           # 0.45.5: how many lines the file keeps
+    # 0.45.5: how many lines the file keeps. 0.52.6 (audit E5): GLOBAL-ONLY, like the file it sizes — every stored
+    # submit rewrites the file (O_TRUNC) keeping the newest N, so a clone's `[history] size = 1` erased the
+    # operator's history down to one line at the first prompt, silently (and live, on /reload).
+    _cfg_history_size = _cfg2_int_global_only(hist_l, hist_g, "size", "history.size");
     var sess_l = _cfg_section_pairs(lo, "session");   var sess_g = _cfg_section_pairs(gl, "session");
     # AUTHORITY — an unjailed write sink thoth TRUNCATES, and the file the conversation is read back
     # from: a repo that supplies one both destroys an arbitrary operator file and feeds thoth
@@ -1488,7 +1626,7 @@ fn config_load() {
     var proj_l = _cfg_section_pairs(lo, "project");   var proj_g = _cfg_section_pairs(gl, "project");
     _cfg_vidya = _cfg2_str(proj_l, proj_g, "vidya");          # [project].vidya — first-class `/allow vidya` root (0.23.1)
     _cfg_project_map = _cfg2_bool(proj_l, proj_g, "map", 1);   # 0.50.0 (F5): DEFAULT ON — a PREFERENCE (it names what the jail already lists)
-    _cfg_read_roots_load2(proj_l, proj_g);                    # jail-widening: local REPLACES, never unions (see below)
+    _cfg_read_roots_load2(proj_l, proj_g);                    # jail-widening: the local layer only NARROWS (0.52.6, audit E3)
     var hook_l = _cfg_section_pairs(lo, "hooks");     var hook_g = _cfg_section_pairs(gl, "hooks");
     # AUTHORITY — every one of these is a shell command thoth runs as the operator. `session_start`
     # runs at LAUNCH, before a prompt is typed, which is why this one is the CRITICAL of the set.
@@ -1522,12 +1660,15 @@ fn config_load() {
     _cfg_shell_enabled = _cfg2_bool(sh_l, sh_g, "enabled", 0);    # opt-in; default off (0.16.0 shell tool)
     _cfg_shell_timeout_ms = _cfg2_int(sh_l, sh_g, "timeout_ms");  # -1 when absent -> default in the getter
     _cfg_shell_output_cap = _cfg2_int(sh_l, sh_g, "max_output");  # -1 when absent -> default in the getter
-    _shell_globs_load2(sh_l, lo, sh_g, gl);                       # deny UNIONS · allow local-replaces (see below)
+    _shell_globs_load2(sh_l, lo, sh_g, gl);                       # deny UNIONS · a local allow only narrows (0.52.6)
     var ask_l = _cfg_section_pairs(lo, "ask");        var ask_g = _cfg_section_pairs(gl, "ask");
     _cfg_ask_enabled = _cfg2_bool(ask_l, ask_g, "enabled", 0);    # 0.44.0 (T4-1): DEFAULT OFF — it interrupts a human
     var bg_l = _cfg_section_pairs(lo, "budget");      var bg_g = _cfg_section_pairs(gl, "budget");
-    _cfg_budget_tokens = _cfg2_int(bg_l, bg_g, "max_tokens");          # 0.44.3: -1/absent -> unlimited
-    _cfg_budget_cost_micro = _cfg2_int(bg_l, bg_g, "max_cost_micro");  # 0.44.3: -1/absent -> unlimited
+    # 0.44.3: -1/absent -> unlimited. 0.52.6 (D1): strictest-wins — the ceiling is the operator's spend authorization
+    # (budget.cyr calls it "a security-shaped control"), and a clone's `max_cost_micro = 0` (or any non-number) was
+    # read as "unlimited" by key presence, silently. A local value may lower it, never raise or remove it.
+    _cfg_budget_tokens = _cfg2_int_ceiling(bg_l, bg_g, "max_tokens", "budget.max_tokens (a local value may only lower the ceiling)");
+    _cfg_budget_cost_micro = _cfg2_int_ceiling(bg_l, bg_g, "max_cost_micro", "budget.max_cost_micro (a local value may only lower the ceiling)");
     var ed_l = _cfg_section_pairs(lo, "edit");        var ed_g = _cfg_section_pairs(gl, "edit");
     _cfg_edit_enabled = _cfg2_bool(ed_l, ed_g, "enabled", 0);     # opt-in; default off (0.31.0 edit tool)
     _cfg_parse_ok = 1;                            # 0.24.4: a layer was read + parsed (a url may or may not be set)
@@ -1855,6 +1996,14 @@ fn config_shell_allow_at(i) {
     if (i < 0) { return 0; }
     if (i >= _shell_allow_n) { return 0; }
     return load64(_shell_allow + i * 8);
+}
+# config_shell_allow_local_count / _at (0.52.6, audit E4): the local layer's allow patterns — when NON-EMPTY a command
+# must match one of these AS WELL as the global list's (each list, when non-empty, is a filter of its own).
+fn config_shell_allow_local_count() { return _shell_allow_loc_n; }
+fn config_shell_allow_local_at(i) {
+    if (i < 0) { return 0; }
+    if (i >= _shell_allow_loc_n) { return 0; }
+    return load64(_shell_allow_loc + i * 8);
 }
 
 # config_tron_policy: path to the t-ron policy TOML, or 0 if unset (the t-ron

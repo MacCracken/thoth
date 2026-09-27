@@ -595,6 +595,7 @@ fn cmd_state() {
             emit(" — timeout "); ofmt_int(config_shell_timeout_ms()); emit("ms, cap "); ofmt_int(config_shell_output_cap()); emit("B, thoth_shell-gated");
             if (config_shell_deny_count() > 0) { emit(", "); ofmt_int(config_shell_deny_count()); emit(" deny"); }
             if (config_shell_allow_count() > 0) { emit(", "); ofmt_int(config_shell_allow_count()); emit(" allow"); }
+            if (config_shell_allow_local_count() > 0) { emit(", "); ofmt_int(config_shell_allow_local_count()); emit(" project allow"); }   # 0.52.6: a second filter
             if (agent_enabled() == 0) { ui_emit(ROLE_MUTED, " (agentic loop off — set [hoosh].tools = true)"); }   # 0.20.0: shell no longer needs daimon; the loop needs [hoosh].tools
             elif (seam_status(SEAM_DAIMON) == SEAM_ABSENT) { ui_emit(ROLE_MUTED, " (standalone — no daimon)"); }
             oprintln("");
@@ -709,6 +710,10 @@ fn cmd_state() {
         }
         elif (config_budget_cost_micro() > 0) {
             if (session_cost_seen() == 0) { ui_emit(ROLE_FAINT, "  — cost unpriced: declare [pricing.<model>] or the cost ceiling cannot fire"); }
+            elif (session_cost_unpriced_count() > 0) {           # 0.52.6 (audit E6): some turns priced, some not
+                ui_emit(ROLE_RED, "  — PARTLY UNPRICED"); ui_emit(ROLE_FAINT, ": "); ofmt_int(session_cost_unpriced_count());
+                ui_emit(ROLE_FAINT, " response(s) on a model with no [pricing.<model>] are not in the cost tally");
+            }
         }
         oprintln("");
     }
@@ -1368,9 +1373,10 @@ fn _term_title_build(dst, cap) {
         # crafted /model arg or [hoosh].model value can never inject a terminal escape into the OSC-0
         # title. (The /copy OSC-52 path is injection-safe because it base64-encodes; this path filters.)
         var i = 0;
+        var mn = strlen(m);
         while ((load8(m + i) != 0) && (off < (cap - 1))) {
             var c = load8(m + i);
-            if ((c >= 32) && (c != 127)) { store8(dst + off, c); off = off + 1; }
+            if ((c >= 32) && (c != 127) && (_c1_at(m, i, mn) == 0)) { store8(dst + off, c); off = off + 1; }   # 0.52.6 (audit E9): and C1 (C2 9C ends an OSC early on a C1 terminal)
             i = i + 1;
         }
     }
@@ -3147,11 +3153,19 @@ fn classify_final(line) {
 # configured, config_alias_lookup is always 0 -> alias_expand is 0 -> the same "unknown
 # command" line as before, so the floor stays byte-identical.
 # _alias_target_is_authority (0.51.0): 1 when an alias EXPANSION is `/tools trust` or `/allow …` — the two typed
-# authority acts a repo-authored alias must not reach.
+# authority acts a repo-authored alias must not reach. 0.52.6 (audit F7): and the two UNGATED file writers, `/save`
+# and `/audit export` — each truncates whatever path it names (symlinks followed; `/save` writes model-authored
+# transcript text), so a clone's `[alias] test = "/save ../x"` replaced a file outside the project when the operator
+# typed `/test`. `/write` and `/run` are not listed: both meet the gate, which shows the path or command.
 fn _alias_target_is_authority(ex) {
     if (ex == 0) { return 0; }
     var c = classify_input(ex);
     if (c == CMD_ALLOW) { return 1; }
+    if (c == CMD_SAVE) { return 1; }
+    if (c == CMD_AUDIT) {
+        var e = arg_after(ex);
+        if ((e != 0) && (cstr_starts_with(e, "export") == 1)) { return 1; }
+    }
     if (c == CMD_TOOLS) {
         var a = arg_after(ex);
         if ((a != 0) && (cstr_starts_with(a, "trust") == 1)) { return 1; }   # `trust` and `trust <name>` alike (0.51.2)
@@ -3227,7 +3241,7 @@ fn _dispatch_d(line, depth) {
             # whole, in the 0.45.0 shape. (`/allow` shares the reasoning and the refusal.)
             if (_alias_target_is_authority(ex) == 1) {
                 emit("  refused: alias '/"); emit_clean_line(&_alias_name);
-                oprintln("' expands to an authority command (/tools trust, /allow) — it must be typed, not aliased. nothing was run.");
+                oprintln("' expands to an authority command (/tools trust, /allow, /save, /audit export) — it must be typed, not aliased. nothing was run.");
                 return 1;
             }
             return _dispatch_d(ex, depth + 1);

@@ -114,6 +114,7 @@ fn budget_block() {
 
 # --- the measurability warning (rule 3) ----------------------------------------------------------
 var _budget_warned = 0;      # emitted at most ONCE per session — a per-turn nag teaches nothing new
+var _budget_warned_mixed = 0; # 0.52.6 (audit E6): the "priced, then an unpriced model" line — once per session too
 
 # budget_warn_unmeasured: call at the END of a turn. When a budget is configured but the gateway has
 # never reported usage, the ceiling cannot fire and the operator must be told, once, with the reason.
@@ -129,8 +130,19 @@ fn budget_warn_unmeasured() {
     if (session_tokens_seen() == 1) {
         # tokens ARE flowing; the only remaining hole is a COST budget over an unpriced model.
         if (config_budget_cost_micro() <= 0) { return 0; }
-        if (session_cost_seen() == 1) { return 0; }
         if (session_cost_unpriced_count() == 0) { return 0; }
+        if (session_cost_seen() == 1) {
+            # ⚠ 0.52.6 (audit E6): "some turn was priced" used to silence this for the rest of the session, so a switch
+            # to an unpriced model (/model, the Ctrl-P picker, a /reload) froze the cost tally with no word. Said once.
+            if (_budget_warned_mixed == 1) { return 0; }
+            _budget_warned_mixed = 1;
+            ui_emit(ROLE_RED, "  [budget] this model is unpriced — its responses are not in the cost tally");
+            ui_emit(ROLE_FAINT, " — no [pricing.<model>] rate is declared for it, so [budget].max_cost_micro stops");
+            ui_emit(ROLE_FAINT, " advancing while it is in use. [budget].max_tokens still counts.");
+            oprintln("");
+            log_begin("budget"); log_kv_str("state", "partly_unpriced"); log_kv_int("unpriced", session_cost_unpriced_count()); log_commit(SK_WARN);
+            return 0;
+        }
         _budget_warned = 1;
         ui_emit(ROLE_RED, "  [budget] cost cannot be measured for this model");
         ui_emit(ROLE_FAINT, " — usage arrived but no [pricing.<model>] rate is declared, so");
@@ -149,4 +161,4 @@ fn budget_warn_unmeasured() {
 }
 
 # budget_reset_warned: test hook + /reset seam — a fresh session may warn again.
-fn budget_reset_warned() { _budget_warned = 0; return 0; }
+fn budget_reset_warned() { _budget_warned = 0; _budget_warned_mixed = 0; return 0; }

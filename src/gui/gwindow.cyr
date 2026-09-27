@@ -667,6 +667,20 @@ fn gwl_wl__cursor_show(serial): i64 {
     return 0;
 }
 
+var GWL_DIM_MAX = 16384;        # 0.52.6 (audit B2): the largest window side a configure may ask for (1 GiB of pixels at most)
+
+# gwl_wl__global_fits (0.52.6, audit B1): 1 when the wl_registry.global at `o` holds its whole name + version word
+# inside its declared size: header 8, name 4, the string (4 + padded(L)), version 4. L counts the NUL, so L >= 1; L
+# is capped first so the padding arithmetic stays small (a message is at most 0xFFFF bytes).
+fn gwl_wl__global_fits(o): i64 {
+    var size = gwl_wire_msg_size(&gwl_wl_rbuf + o);
+    if (size < 20) { return 0; }
+    var L = gwl_wire_str_len(&gwl_wl_rbuf, o + 12);
+    if ((L < 1) || (L > size)) { return 0; }
+    if (gwl_wire_str_next(12, L) + 4 > size) { return 0; }
+    return 1;
+}
+
 # ---- event dispatch ----
 fn gwl_wl__handle(o): i64 {
     var id = load32(&gwl_wl_rbuf + o);
@@ -681,7 +695,11 @@ fn gwl_wl__handle(o): i64 {
     if (id == gwl_wl_cur_sync) { if (op == GWL_EV_CALLBACK_DONE) { gwl_wl_sync_done = 1; } return 0; }
     if (id == gwl_wl_frame_oid) { if (op == GWL_EV_CALLBACK_DONE) { gwl_wl_frame_done = 1; } return 0; }
     if (id == gwl_wl_reg_id) {
-        if (op == GWL_EV_REGISTRY_GLOBAL) {
+        # 0.52.6 (audit B1): the interface name's length is the compositor's u32 and was never checked against the
+        # message — the version word was read at rbuf + 16 + padded(L), up to ~4 GiB past the 8 KiB buffer (a
+        # crafted global SIGSEGV'd the parser). The name and the version must sit inside the declared size, the name
+        # non-empty; a global that does not fit is dropped whole, never read past its end.
+        if ((op == GWL_EV_REGISTRY_GLOBAL) && (gwl_wl__global_fits(o) == 1)) {
             var nm = load32(&gwl_wl_rbuf + o + 8);
             var L = gwl_wire_str_len(&gwl_wl_rbuf, o + 12);
             var sp = gwl_wire_str_ptr(&gwl_wl_rbuf, o + 12);
@@ -698,9 +716,14 @@ fn gwl_wl__handle(o): i64 {
         }
         return 0;
     }
-    if (id == gwl_wl_xdg_oid) { if (op == GWL_EV_XDG_PING) { gwl_wl__pong(load32(&gwl_wl_rbuf + o + 8)); } return 0; }
+    # 0.52.6 (audit B3): ping and both configures read their arguments only when the message declares them — the
+    # parser's contract, which the newer keyboard/pointer/delete_id handlers already kept (a short one read stale bytes).
+    if (id == gwl_wl_xdg_oid) {
+        if ((op == GWL_EV_XDG_PING) && (gwl_wire_msg_size(&gwl_wl_rbuf + o) >= 12)) { gwl_wl__pong(load32(&gwl_wl_rbuf + o + 8)); }
+        return 0;
+    }
     if (id == gwl_wl_xsurf_oid) {
-        if (op == GWL_EV_XDGSURF_CONFIGURE) {
+        if ((op == GWL_EV_XDGSURF_CONFIGURE) && (gwl_wire_msg_size(&gwl_wl_rbuf + o) >= 12)) {
             var serial = load32(&gwl_wl_rbuf + o + 8);
             gwl_wl__req1(gwl_wl_xsurf_oid, GWL_OP_XDGSURF_ACK, serial);   # ack immediately
             gwl_wl_configured = 1;
@@ -708,11 +731,13 @@ fn gwl_wl__handle(o): i64 {
         return 0;
     }
     if (id == gwl_wl_top_oid) {
-        if (op == GWL_EV_TOPLEVEL_CONFIGURE) {
+        if ((op == GWL_EV_TOPLEVEL_CONFIGURE) && (gwl_wire_msg_size(&gwl_wl_rbuf + o) >= 16)) {
             var w = load32(&gwl_wl_rbuf + o + 8);
             var h = load32(&gwl_wl_rbuf + o + 12);
-            if (w > 0) { gwl_wl_cfg_w = w; }
-            if (h > 0) { gwl_wl_cfg_h = h; }
+            # 0.52.6 (audit B2): a side past GWL_DIM_MAX is ignored (the size in use stays) — w*h*4 is the shm
+            # buffer's size, and an unbounded u32 side asked for a multi-GiB ftruncate + mmap or overflowed the product.
+            if ((w > 0) && (w <= GWL_DIM_MAX)) { gwl_wl_cfg_w = w; }
+            if ((h > 0) && (h <= GWL_DIM_MAX)) { gwl_wl_cfg_h = h; }
         }
         if (op == GWL_EV_TOPLEVEL_CLOSE) { gwl_wl_closed = 1; }
         return 0;
@@ -818,6 +843,7 @@ var gwl_shm_w = 0; var gwl_shm_h = 0; var gwl_shm_stride = 0;
 # Allocate a memfd of W*H*4, map it, and create the wl_shm pool + wl_buffer.
 # Returns the mapped XRGB8888 pixel pointer, or 0 on failure. Sets gwl_wl_buf_oid.
 fn gwl_shm_create(w, h): i64 {
+    if ((w <= 0) || (h <= 0) || (w > GWL_DIM_MAX) || (h > GWL_DIM_MAX)) { return 0; }   # 0.52.6 (audit B2): before the multiply
     var stride = w * 4;
     var size = stride * h;
     if (size <= 0) { return 0; }
@@ -857,6 +883,7 @@ fn gwl_shm_create(w, h): i64 {
 # the window exceeds every prior size. Returns the (possibly remapped) pixel
 # pointer, or 0 on failure. The caller repaints fully before presenting.
 fn gwl_shm_resize(w, h): i64 {
+    if ((w <= 0) || (h <= 0) || (w > GWL_DIM_MAX) || (h > GWL_DIM_MAX)) { return 0; }   # 0.52.6 (audit B2): before the multiply
     var stride = w * 4;
     var size = stride * h;
     if (size <= 0) { return 0; }

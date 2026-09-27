@@ -384,6 +384,15 @@
       <div class="rec-head"><span class="rec-id">Q3</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>
       <p>Gap&nbsp;8 &mdash; or does the read-only git producer stay the boundary?</p>
     </div>
+    <div class="rec" style="--tier: var(--ochre)">
+      <div class="rec-head"><span class="rec-id">Q4</span><h3>May a repository&rsquo;s local layer switch off <code>[hoosh].timeout_ms</code>?</h3></div>
+      <p>The 0.52.6 audit&rsquo;s design question D4. A local <code>timeout_ms = 0</code> disables the 0.44.2 stall deadline; beside a repo-redirected <code>[hoosh].url</code> that is a hang the TUI cannot break out of. The strictest-wins reading (a local value may shorten the deadline, never disable it) is the one ADR-0019&rsquo;s principle points to; it was not ruled on at 0.52.6.</p>
+    </div>
+    <div class="rec" style="--tier: var(--lapis)">
+      <div class="rec-head"><span class="rec-id">Q5</span><h3>Should the project map ride a non-system role?</h3></div>
+      <p>Design question D3. 0.52.6 framed the map as the repository&rsquo;s data and put it through the injection guard (audit F2); what remains is whether repository-controlled names belong in a <code>system</code> message at all &mdash; ADR-0012 made the analogous memory surface opt-in.</p>
+    </div>
+    <p>Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched ignoring case into one slot, so two kinds sharing that prefix would share a health row (audit E11); no gateway in use names kinds that long.</p>
 
     <footer>
       <p>Companion to <code>docs/development/roadmap.md</code>, which supersedes this file. Shipped work is in <code>CHANGELOG.md</code>; live state in <code>docs/development/state.md</code>. Supersedes <code>agentic-improvements-review.md</code>. This page is the rendered twin of <code>gap-review.md</code> &mdash; edit both, or neither. (The question that used to sit second among the open ones &mdash; where the durable rug-pull defence lives &mdash; was answered at 0.51.0 by ADR-0022.)</p>

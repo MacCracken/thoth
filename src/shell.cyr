@@ -73,7 +73,7 @@ fn _shell_is_blank(s) {
 
 # _shell_glob_verdict: run the LOCAL glob filter over cmd. Returns 0 = pass (proceed to t-ron),
 # 1 = a [shell.deny] pattern matched (sets _shell_deny_pat), 2 = a non-empty [shell.allow] list had
-# no match. deny is evaluated first so it wins over allow. Patterns match the WHOLE command via
+# no match (0.52.6: either layer's — each non-empty list must be matched). deny is evaluated first so it wins over allow. Patterns match the WHOLE command via
 # glob_match (* / ? only), so callers use leading/trailing * for substring intent. Pure.
 fn _shell_glob_verdict(cmd) {
     _shell_deny_pat = 0;
@@ -93,6 +93,16 @@ fn _shell_glob_verdict(cmd) {
             j = j + 1;
         }
         if (hit == 0) { return 2; }
+    }
+    var ln = config_shell_allow_local_count();           # 0.52.6 (audit E4): the local list is a SECOND filter, never a replacement
+    if (ln > 0) {
+        var k = 0;
+        var lhit = 0;
+        while ((k < ln) && (lhit == 0)) {
+            if (glob_match(config_shell_allow_local_at(k), cmd) == 1) { lhit = 1; }
+            k = k + 1;
+        }
+        if (lhit == 0) { return 2; }
     }
     return 0;
 }

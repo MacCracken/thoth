@@ -77,11 +77,29 @@ fn _greet_row() {
 
 # _greet_span_n: append (role, n bytes at ptr) to the current row, COPIED into the store. A span that would
 # overflow the store (or the span table) is dropped whole — never truncated mid-glyph.
+# ⚠ 0.52.6 (audit C2): the RED rows are the greeting's security transparency ("this repo's [daimon].url", a rejected
+# pin store, unrecognised keys), and the store is shared with values a repository's local layer sets. A ~3.9 KB local
+# [hoosh].url (a preference key, sanitised but uncapped) filled the 4 KiB store and every later span — the daimon
+# warning among them — was dropped whole, silently. Config values now go in through _greet_span_clean (clipped at
+# 511 bytes), and the last GREET_RED_RESERVE bytes and spans are kept for RED spans alone, so no value can evict one.
+var GREET_RED_RESERVE = 1024;
+# _greet_row_leads_red: 1 when the current row's first span is RED (a warning row, whose explanation follows it).
+fn _greet_row_leads_red() {
+    var r = _greet_rows - 1;
+    if (r < 0) { return 0; }
+    if (load64(_greet_rn + r * 8) == 0) { return 0; }
+    return load64(_greet_srole + load64(_greet_rfirst + r * 8) * 8) == ROLE_RED;
+}
+var GREET_RED_SPANS = 16;
 fn _greet_span_n(role, ptr, n) {
     if (ptr == 0) { return 0; }
     if (_greet_rows == 0) { return 0; }
     if (_greet_spans >= GREET_SPANS_CAP) { return 0; }
     if ((_greet_tlen + n + 1) > GREET_TEXT_CAP) { return 0; }
+    if ((role != ROLE_RED) && (_greet_row_leads_red() == 0)) {   # a RED row's own faint tail may use the reserve too
+        if ((_greet_tlen + n + 1) > (GREET_TEXT_CAP - GREET_RED_RESERVE)) { return 0; }
+        if (_greet_spans >= (GREET_SPANS_CAP - GREET_RED_SPANS)) { return 0; }
+    }
     var dst = _greet_text + _greet_tlen;
     var i = 0;
     while (i < n) { store8(dst + i, load8(ptr + i)); i = i + 1; }
@@ -219,23 +237,23 @@ fn greet_build(up) {
         if (up == 1) {
             _greet_span(ROLE_GREEN, "READY");
             _greet_row();
-            _greet_span(ROLE_GREEN, "hoosh @ "); _greet_span(ROLE_GREEN, config_hoosh_url());
+            _greet_span(ROLE_GREEN, "hoosh @ "); _greet_span_clean(ROLE_GREEN, config_hoosh_url());
         } else {
             _greet_span(ROLE_RED, "hoosh unreachable");
             _greet_row();
-            _greet_span(ROLE_RED, "hoosh @ "); _greet_span(ROLE_RED, config_hoosh_url()); _greet_span(ROLE_RED, " (not found)");
+            _greet_span(ROLE_RED, "hoosh @ "); _greet_span_clean(ROLE_RED, config_hoosh_url()); _greet_span(ROLE_RED, " (not found)");
         }
     } elif (config_parse_ok() == 1) {
         _greet_span(ROLE_RED, "hoosh absent");
         _greet_row();
-        _greet_span(ROLE_RED, "hoosh @ (unset) — no [hoosh].url in "); _greet_span(ROLE_RED, config_path_display(config_path()));
-        if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
+        _greet_span(ROLE_RED, "hoosh @ (unset) — no [hoosh].url in "); _greet_span_clean(ROLE_RED, config_path_display(config_path()));
+        if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span_clean(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
     } else {
         _greet_span(ROLE_RED, "no config");
         _greet_row();
-        _greet_span(ROLE_RED, "hoosh @ (unset) — no "); _greet_span(ROLE_RED, config_path_display(config_path()));
+        _greet_span(ROLE_RED, "hoosh @ (unset) — no "); _greet_span_clean(ROLE_RED, config_path_display(config_path()));
         _greet_span(ROLE_RED, " found (add one, or ~/.thoth/config.cyml)");
-        if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
+        if (up == 1) { _greet_span(ROLE_MUTED, "  [default "); _greet_span_clean(ROLE_MUTED, config_hoosh_url()); _greet_span(ROLE_MUTED, " is reachable]"); }
     }
     # the model in play (session override, else the config default, else hoosh's own routing) — its own group,
     # an open row above it (0.45.3)
@@ -250,9 +268,9 @@ fn greet_build(up) {
     if (config_parse_ok() == 1) {
         _greet_row();
         _greet_row();
-        _greet_span(ROLE_FAINT, "config "); _greet_span(ROLE_FG, config_path_display(config_path()));
+        _greet_span(ROLE_FAINT, "config "); _greet_span_clean(ROLE_FG, config_path_display(config_path()));
         if (config_global_path() != 0) { if (config_local_path() != 0) {
-            _greet_span(ROLE_FAINT, " + "); _greet_span(ROLE_FG, config_path_display(config_global_path()));
+            _greet_span(ROLE_FAINT, " + "); _greet_span_clean(ROLE_FG, config_path_display(config_global_path()));
             _greet_row();                                # 0.49.0: the rule on its own row, so the box never wraps mid-parenthesis
             _greet_span(ROLE_FAINT, "local wins per key; /state shows both");
         } }
@@ -260,6 +278,20 @@ fn greet_build(up) {
     if (config_source() == 3) {                     # 0.43.2: a session on the LEGACY ./thoth.cyml says so
         _greet_row();
         _greet_span(ROLE_RED, "config: legacy ./thoth.cyml"); _greet_span(ROLE_FAINT, " — move it to .thoth/config.cyml (back-compat fallback)");
+    }
+    # 0.52.6: a startup failure of the two seams the operator configured for SECURITY and RECORD — printed before the TUI's
+    # alternate screen (bytes 0–87 of a pty capture; the switch came at 205) and the window's first frame, and never
+    # shown again: a session running fail-closed on a broken policy looked identical to one with no policy at all.
+    if (gate_policy_failed() != 0) {
+        _greet_row();
+        _greet_span(ROLE_RED, "t-ron policy "); _greet_span_clean(ROLE_RED, config_path_display(config_tron_policy()));
+        if (gate_policy_failed() == 1) { _greet_span(ROLE_RED, " unreadable"); } else { _greet_span(ROLE_RED, " failed to parse"); }
+        _greet_span(ROLE_FAINT, " — t-ron absent: every gated action asks (fail-closed)");
+    }
+    if (log_open_failed() == 1) {
+        _greet_row();
+        _greet_span(ROLE_RED, "log cannot open "); _greet_span_clean(ROLE_RED, config_path_display(config_log_file()));
+        _greet_span(ROLE_FAINT, " — structured logging disabled");
     }
     if (config_unknown_count() > 0) {              # 0.43.5: a mistyped key is otherwise indistinguishable from an unwritten line
         _greet_row();

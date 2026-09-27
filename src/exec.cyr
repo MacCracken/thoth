@@ -308,12 +308,18 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     }
     if (out_fd < 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; }
 
+    var ppid = sys_getpid();
     var pid = sys_fork();
     if (pid < 0) {
         sys_close(out_fd); sys_unlink(path);
         store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
     }
     if (pid == 0) {
+        # 0.52.6 (audit F4): the parent-death signal, as the floor's own runners have had unconditionally since 6.6.6
+        # (lib/process.cyr: "a SIGKILLed parent runs no cleanup … the kernel has to do it"). The setsid below leaves
+        # the terminal, so a hang-up never reached this child either: a `/run sleep 47` outlived a killed thoth with
+        # ppid 1. The guard's getppid re-check exits a child whose parent died before the prctl.
+        _proc_child_guard(ppid);
         # 0.20.1: put the shell in its OWN process group (leader pgid == child pid) BEFORE execve, so a
         # timeout can SIGKILL the whole group — the shell AND any backgrounded grandchild (`cmd &`) — via
         # kill(-pgid). Without it the shell stays in thoth's group and a grandchild leaks past the kill.

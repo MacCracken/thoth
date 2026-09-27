@@ -543,3 +543,67 @@ fn test_greet() {
     ui_force(_t0, _d0);
     return 0;
 }
+
+# test_greet_red_reserve (0.52.6, audit C2): a repository's long [hoosh].url (a local preference key, sanitised but
+# uncapped) filled the 4 KiB span store and the greeting's RED security rows were dropped whole — "this repo's
+# [daimon].url" among them, while the repo HAD redirected daimon.
+fn test_greet_red_reserve() {
+    test_group("a long config value cannot evict the greeting's warning rows (greet.cyr, 0.52.6)");
+    var sv_url = _cfg_hoosh_url; var sv_loc = _cfg_daimon_url_local; var sv_du = _cfg_daimon_url;
+    var big = alloc(4000);
+    var o = _append_cstr_cap(big, 0, 4000, "http://h/");
+    while (o < 3925) { store8(big + o, 97); o = o + 1; }
+    store8(big + o, 0);
+    _cfg_hoosh_url = big; _cfg_daimon_url_local = 1; _cfg_daimon_url = "http://127.0.0.1:1";
+    greet_build(1);
+    var r = 0; var drow = 0 - 1; var urow = 0 - 1;
+    while (r < greet_rows()) {
+        if (_tg_row_has(r, "this repo's [daimon].url") == 1) { drow = r; }
+        if (_tg_row_has(r, "hoosh @ ") == 1) { urow = r; }
+        r = r + 1;
+    }
+    assert(drow >= 0, "the daimon warning row survives a 3.9 KB local [hoosh].url (it was dropped, 0.52.5)");
+    assert(_tg_row_has(drow, " — its tools pin in their own namespace; your global daimon's pins do not apply") == 1, "...with its explanation");
+    assert(urow >= 0, "the url row is still drawn");
+    var ul = 0; var k = 0;
+    while (k < greet_row_spans(urow)) { ul = ul + strlen(greet_span_text(urow, k)); k = k + 1; }
+    assert(ul < 600, "...clipped (a config value spans at most 511 bytes)");
+    _cfg_hoosh_url = sv_url; _cfg_daimon_url_local = sv_loc; _cfg_daimon_url = sv_du;
+    greet_build(1);
+    return 0;
+}
+
+# test_greet_seam_failures (0.52.6): a [tron].policy or [log].file that fails at startup is named in the greeting —
+# the stderr line went out before the TUI's alternate screen / the window's first frame and was never seen again.
+fn test_greet_seam_failures() {
+    test_group("a startup policy / log failure is named in the greeting (greet.cyr, 0.52.6)");
+    var sv_pf = _gate_policy_fail; var sv_lf = _log_open_failed; var sv_tp = _cfg_tron_policy; var sv_lg = _cfg_log_file;
+    _cfg_tron_policy = "/etc/thoth/pol.toml"; _cfg_log_file = "/var/log/thoth.log";
+    _gate_policy_fail = 1; _log_open_failed = 1;
+    greet_build(1);
+    var r = 0; var prow = 0 - 1; var lrow = 0 - 1;
+    while (r < greet_rows()) {
+        if (_tg_row_has(r, "t-ron policy ") == 1) { prow = r; }
+        if (_tg_row_has(r, "log cannot open ") == 1) { lrow = r; }
+        r = r + 1;
+    }
+    assert(prow >= 0, "an unreadable policy has its row");
+    assert_eq(greet_span_role(prow, 0), ROLE_RED, "...RED");
+    assert(_tg_row_has(prow, "/etc/thoth/pol.toml") == 1, "...naming the path");
+    assert(_tg_row_has(prow, " unreadable") == 1, "...and the cause");
+    assert(_tg_row_has(prow, " — t-ron absent: every gated action asks (fail-closed)") == 1, "...and what it means");
+    assert(lrow >= 0, "a log file that cannot open has its row");
+    _gate_policy_fail = 2; _log_open_failed = 0;
+    greet_build(1);
+    r = 0; prow = 0 - 1; lrow = 0 - 1;
+    while (r < greet_rows()) {
+        if (_tg_row_has(r, " failed to parse") == 1) { prow = r; }
+        if (_tg_row_has(r, "log cannot open ") == 1) { lrow = r; }
+        r = r + 1;
+    }
+    assert(prow >= 0, "a policy that fails to parse says so");
+    assert_eq(lrow, 0 - 1, "...and a log that opened has no row");
+    _gate_policy_fail = sv_pf; _log_open_failed = sv_lf; _cfg_tron_policy = sv_tp; _cfg_log_file = sv_lg;
+    greet_build(1);
+    return 0;
+}

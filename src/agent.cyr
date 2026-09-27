@@ -1242,6 +1242,12 @@ fn _agent_run_calls_par(tcs, nc) {
         # Phase 1 — snapshot {id,name,args} into stable slots + serial t-ron gate.
         var k = 0;
         while (k < batch) {
+            # 0.52.6 (audit F5): phase 1 is a SERIAL loop on this thread — hooks and the gate, one call at a time,
+            # before any worker starts — so "the calls are already in flight" never held for it. A stop during call
+            # 1's pre_tool hook ran call 2's hook to completion and consulted the gate for it (with an allow policy it
+            # would have fired). Poll before each call, as the serial executor does; the turn ends on a stop, so the
+            # calls not reached are simply not run.
+            if (intr_check() == 1) { return 0; }
             var ci = base + k;
             var nm = agent_tc_name(tcs, ci);
             var ar = agent_tc_args(tcs, ci);
@@ -1298,6 +1304,7 @@ fn _agent_run_calls_par(tcs, nc) {
             store64(_par_kind + k * 8, kind);
             k = k + 1;
         }
+        if (intr_check() == 1) { return 0; }  # 0.52.6 (audit F5): a stop during the last call's gate prompt — nothing fans out
         # Phase 2 — fan out the allowed calls; each worker owns its slot's arena.
         _agent_spin_ntools(batch);          # 0.19.1: label the spinner for the concurrent batch
         var s = 0;
@@ -1388,7 +1395,7 @@ fn _agent_run_calls_par(tcs, nc) {
             if (load8(_par_has_name + k) == 1) { nmout = _par_name + k * PAR_NAME_CAP; }
             var bytes = 0; if (res != 0) { bytes = strlen(res); }   # 0.19.1
             events_tool_result(session_turns(), nmout, rl_ok, bytes);   # 0.43.1
-            if (nmout != 0) { hooks_post_tool(nmout, _par_args + k * PAR_ARGS_CAP); }   # 0.43.1: cannot block
+            if (nmout != 0) { hooks_post_tool_cut(nmout, _par_args + k * PAR_ARGS_CAP, load8(_par_over + k)); }   # 0.43.1: cannot block; 0.52.6 (audit F3): an oversize call's slot copy is CUT — say so
             _agent_call_telem(kind2, rl_ok, ms, bytes);            # 0.19.1: telemetry sub-line
             log_tool(nmout, _par_args + k * PAR_ARGS_CAP, roundlog_kind_str(kind2), rl_ok, ms, bytes);   # 0.44.2: session log
             roundlog_add_call(nmout, kind2, rl_ok, ms, bytes, _par_args + k * PAR_ARGS_CAP);   # 0.30.17: + the snapshotted raw args

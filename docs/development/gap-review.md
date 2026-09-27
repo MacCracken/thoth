@@ -288,6 +288,19 @@ Each of these blocks something above. None has a default answer.
    that may be a *more* persuasive injection vector than the raw text.
 3. **Should thoth drive sit's write surface at all** (gap 8), or does the read-only git producer stay
    the boundary?
+4. **May a repository's local layer switch off `[hoosh].timeout_ms`?** (The 0.52.6 audit's design question D4.) A
+   local `timeout_ms = 0` disables the 0.44.2 stall deadline; beside a repo-redirected `[hoosh].url` that is a hang
+   the TUI cannot break out of. The strictest-wins reading (a local value may shorten the deadline, never disable
+   it) is the one [ADR-0019](../adr/0019-layered-config-global-base-local-override.md)'s principle points to; it was
+   not ruled on at 0.52.6.
+5. **Should the project map ride a non-system role?** (Design question D3.) 0.52.6 framed the map as the repository's
+   data and put it through the injection guard (audit F2); what remains is whether repository-controlled names
+   belong in a `system` message at all — [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md) made the analogous memory
+   surface opt-in.
+
+(Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched
+ignoring case into one slot, so two kinds sharing that prefix would share a health row — audit E11; no gateway in
+use names kinds that long.)
 
 (The question that used to sit second — where the durable rug-pull defence lives — was answered at
 0.51.0 by ADR-0022: thoth's store is the client-side floor now, and daimon pinning once for every consumer

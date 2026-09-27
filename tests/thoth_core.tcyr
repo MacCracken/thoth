@@ -121,7 +121,7 @@ fn main() {
     test_inhist();
     test_inhist_persist();
     test_history_cmd_path();
-    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_store_conflict(); test_toolpin_store_trust_others(); test_toolpin_store_full_carry(); test_toolpin_config(); test_config_token_by_value(); test_config_reload_holds(); test_state_pins_row();
+    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_store_conflict(); test_toolpin_store_trust_others(); test_toolpin_store_full_carry(); test_toolpin_config(); test_config_token_by_value(); test_config_reload_holds(); test_read_roots_narrow(); test_intr_escape_parse(); test_history_size_global(); test_compact_auto_budget(); test_clean_c1(); test_state_pins_row();
     test_inhist_polish();          # 0.45.5: ~/$HOME expansion on [history].file + the [history].size trim
     test_logging();
     test_logs_flag();

@@ -1601,7 +1601,18 @@ fn test_project_map() {
     if (xsymlink("/etc", lnk) == 0) {
         _pmap_root = "tests/fixtures/map";
         project_map_refresh();
-        assert_eq(_t_has(project_map_current(), "\nlinkdir/  (a symlink — not walked)\n"), 1, "a symlink to a directory outside the project is named as a symlink and nothing under it is listed");
+        assert_eq(_t_has(project_map_current(), "\nlinkdir  (a symlink — not followed)\n"), 1, "a symlink to a directory outside the project is named as a symlink and nothing under it is listed");
+        # 0.52.6 (audit F8): and its target is never OPENED — the probe answered a link by opening what it named, every
+        # turn (a device node, an autofs path, someone's FIFO). A link is 2, decided by readlink alone.
+        assert_eq(_pmap_is_dir(lnk), 2, "the map's probe answers a symlink as a symlink, without opening its target (0.52.6)");
+        var ffb[256]; var ffst[16];
+        xunlink(lnk);
+        if (exec_shell_capture("rm -f build/.thoth_map_lf && mkfifo build/.thoth_map_lf", &ffb, 256, 5000, &ffst) >= 0) { if (load64(&ffst) == 0) {
+            xsymlink("../../../build/.thoth_map_lf", lnk);
+            assert_eq(_pmap_is_dir(lnk), 2, "...a link to a FIFO too (its writer is never released)");
+            xunlink("build/.thoth_map_lf");
+        } }
+        assert_eq(_pmap_is_dir("tests/fixtures/map"), 1, "...while a real directory is still a directory");
         xunlink(lnk);
     } else { assert(1, "(no symlink could be created here — the symlink rule is not exercised; stated)"); }
     _pmap_root = "tests/fixtures/map";
@@ -2531,6 +2542,19 @@ fn test_project() {
     assert_eq(hooks_pre_tool("edit", huge), 1, "a THOTH_ARGS past the environment scratch is clamped and THOTH_ARGS_TRUNCATED=1 is set");
     _cfg_hook_pre_tool = "test -z \"$THOTH_ARGS_TRUNCATED\"";
     assert_eq(hooks_pre_tool("edit", big_args), 1, "...while a THOTH_ARGS at AGENT_ARGS_MAX arrives whole, no flag");
+    # (e) 0.52.6 (audit F3): a tool name past the scratch — post_tool runs for a call the name check refused, with the
+    # full name — is cut at AGENT_NAME_MAX and flagged, and THOTH_ARGS still arrives (the name used to fill the whole
+    # scratch, and the next envp pointer landed one byte past it: execve exported the heap there, THOTH_ARGS was lost)
+    _cfg_hook_pre_tool = "test \"$THOTH_TOOL_TRUNCATED\" = 1 && test \"${#THOTH_TOOL}\" = 255 && test \"$THOTH_ARGS\" = '{\"k\":1}' && test -z \"$THOTH_ARGS_TRUNCATED\"";
+    assert_eq(hooks_pre_tool(huge, "{\"k\":1}"), 1, "a tool name past the scratch is cut at AGENT_NAME_MAX, flagged, and THOTH_ARGS arrives whole beside it");
+    _cfg_hook_pre_tool = "test -z \"$THOTH_TOOL_TRUNCATED\" && test \"$THOTH_TOOL\" = read_file";
+    assert_eq(hooks_pre_tool("read_file", "{}"), 1, "...an ordinary name carries no flag");
+    _cfg_hook_post_tool = "test \"$THOTH_ARGS_TRUNCATED\" = 1 && touch build/.thoth_f3_cut";
+    xunlink("build/.thoth_f3_cut");
+    hooks_post_tool_cut("shell", "{\"a\":", 1);
+    assert_eq(file_exists("build/.thoth_f3_cut"), 1, "the parallel executor's cut slot copy reaches post_tool flagged THOTH_ARGS_TRUNCATED=1");
+    xunlink("build/.thoth_f3_cut");
+    _cfg_hook_post_tool = 0;
     _cfg_hook_pre_tool = 0;
     hooks_reset();
     assert_eq(hooks_fired(), 0, "reset clears the counters");
@@ -3462,5 +3486,44 @@ fn test_ask_user() {
 
     _cfg_ask_enabled = sv_en;
     _ask_hook = sv_hook;
+    return 0;
+}
+
+# test_par_stop_phase1 (0.52.6, audit F5): the parallel executor's phase 1 (hooks + gate, serial on the main thread)
+# polls for a stop before each call, as the serial executor does. A stop during call 1's pre_tool hook ran call 2's
+# hook to completion (3.2 s in the audit's probe) and consulted the gate for it.
+var _tps_fired = 0;
+fn _t_par_stop_hook() {                                            # the stop key, pressed once call 1's hook has written
+    if ((_tps_fired == 0) && (file_exists("build/.thoth_f5_hooks") == 1)) { _tps_fired = 1; intr_signal(); }
+    return 0;
+}
+fn test_par_stop_phase1() {
+    test_group("a stop during the parallel executor's gate phase runs no further hook or gate (agent.cyr, 0.52.6)");
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    var sv_daimon = _cfg_daimon_url; var sv_pre = _cfg_hook_pre_tool;
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    _cfg_hook_pre_tool = "echo x >> build/.thoth_f5_hooks";
+    var pj = _tg_calls_json("t_one", "t_two");
+    var pv = bayan_json_v_parse_buf(pj, strlen(pj));
+    assert_eq(_agent_round_has_local(pv, 2), 0, "premise: neither call is local, so the round runs in parallel");
+    var sv_tron = _gate_tron;
+    var tg = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(tg, "[agent.\"thoth\"]\nallow = [\"*\"]\n"), TRON_ERR_NONE, "premise: an allow-all policy (no confirm prompt)");
+    _gate_tron = tg;
+    xunlink("build/.thoth_f5_hooks");
+    intr_reset(); _tps_fired = 0;
+    intr_check_hook_set(&_t_par_stop_hook);
+    _agent_work_reset();
+    _agent_run_calls(pv, 2);
+    intr_check_hook_set(0); intr_reset();
+    var hb[64];
+    var hn = file_read_all("build/.thoth_f5_hooks", &hb, 63);
+    assert_eq(hn, 2, "a stop after call 1's hook runs no hook for call 2 (both ran, 0.52.5)");
+    assert_eq(_ui_contains(_agent_work, "t_two"), 0, "...and no result is recorded for a call not reached");
+    xunlink("build/.thoth_f5_hooks");
+    _cfg_daimon_url = sv_daimon; _cfg_hook_pre_tool = sv_pre; _gate_tron = sv_tron;
+    out_mode_set(sv_mode); feed_init();
     return 0;
 }

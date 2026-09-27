@@ -41,6 +41,7 @@ var _project_out_buf = 0;
 var READ_ROOTS_MAX = 16;         # max user-granted read roots (0.23.1)
 var _read_roots = 0;             # alloc(READ_ROOTS_MAX*8): array of owned cstr ptrs (absolute, trailing-'/'-stripped)
 var _read_roots_n = 0;
+var _read_roots_cfg = 0;         # 0.52.6 (audit E3): alloc(READ_ROOTS_MAX) — 1 where the root came from config (a /reload re-grants those)
 
 # _project_no_dotdot: 1 if `path` has no `..` path component (start, or after a '/', followed by '/' or end);
 # else 0. PURE. Reading past the NUL is safe — the byte after a NUL is 0, which ends the `..` test cleanly.
@@ -266,8 +267,56 @@ fn project_grant_root(path) {
     while (k < len) { store8(buf + k, load8(path + k)); k = k + 1; }
     store8(buf + len, 0);
     store64(_read_roots + _read_roots_n * 8, buf);
+    if (_read_roots_cfg == 0) { _read_roots_cfg = alloc(READ_ROOTS_MAX); }
+    store8(_read_roots_cfg + _read_roots_n, 0);
     _read_roots_n = _read_roots_n + 1;
     return 1;
+}
+
+# project_grant_root_cfg (0.52.6, audit E3): project_grant_root for a root the CONFIG names — marked, so a /reload
+# can take it back (project_roots_drop_cfg). A root /allow already granted stays the operator's.
+fn project_grant_root_cfg(path) {
+    var n0 = _read_roots_n;
+    var r = project_grant_root(path);
+    if ((r == 1) && (_read_roots_n > n0)) { store8(_read_roots_cfg + n0, 1); }
+    return r;
+}
+
+# project_roots_drop_cfg (0.52.6, audit E3): forget every config-granted root, keeping the session's /allow grants
+# in order. Through 0.52.5 grants only accumulated: a root removed from the config (or a local layer's, since the
+# layer is gone) stayed granted until restart. config_load re-grants what the config names now.
+fn project_roots_drop_cfg() {
+    if (_read_roots_cfg == 0) { return 0; }
+    var w = 0;
+    var i = 0;
+    while (i < _read_roots_n) {
+        if (load8(_read_roots_cfg + i) == 0) {
+            store64(_read_roots + w * 8, load64(_read_roots + i * 8));
+            store8(_read_roots_cfg + w, 0);
+            w = w + 1;
+        }
+        i = i + 1;
+    }
+    _read_roots_n = w;
+    return 0;
+}
+
+# project_root_within (0.52.6, audit E3): 1 when absolute `child` (no `..` component) is `parent` or sits below it at a
+# '/' boundary — trailing '/'-s on either ignored. PURE. The local layer's read_roots may only name such a child of
+# a GLOBAL root: it narrows the jail, never widens it.
+fn project_root_within(child, parent) {
+    if ((child == 0) || (parent == 0)) { return 0; }
+    if ((load8(child) != 47) || (load8(parent) != 47)) { return 0; }
+    if (_project_no_dotdot(child) == 0) { return 0; }
+    var pl = strlen(parent);
+    while ((pl > 1) && (load8(parent + pl - 1) == 47)) { pl = pl - 1; }
+    if (pl < 2) { return 0; }                     # "/" is never a root
+    var cl = strlen(child);
+    while ((cl > 1) && (load8(child + cl - 1) == 47)) { cl = cl - 1; }
+    if (cl < pl) { return 0; }
+    if (_project_prefix_eq(child, parent, pl) == 0) { return 0; }
+    if (cl == pl) { return 1; }
+    return load8(child + pl) == 47;
 }
 
 # _project_prefix_eq: 1 if the first `n` bytes of `a` and `b` are equal; else 0. PURE.
@@ -534,7 +583,7 @@ fn _pmap_ensure() {
 # _pmap_s: the reusable Str header over a NUL-terminated cstr (the stdlib takes Str; str_from would alloc one
 # header per call, per entry, per turn).
 fn _pmap_s(cstr) { store64(_pmap_str, cstr); store64(_pmap_str + 8, strlen(cstr)); return _pmap_str; }
-# _pmap_is_dir: 1 when `path` is a directory — an O_NONBLOCK open (a FIFO opens at once instead of blocking for
+# _pmap_is_dir: 1 when `path` is a directory, 2 when it is a symlink (0.52.6: not opened — its target is unknown) — an O_NONBLOCK open (a FIFO opens at once instead of blocking for
 # a writer; a regular file opens too) and a getdents that only a directory answers. Mirrors lib/fs.cyr's
 # is_dir minus the blocking open. AGNOS's open is the directory test itself (AO_DIRECTORY) and has no FIFOs.
 # 0.50.1: the PE lane has no O_NONBLOCK (the map is absent there anyway — project_map_refresh clears it), so it
@@ -548,6 +597,11 @@ fn _pmap_is_dir(cstr) {
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     #ifndef CYRIUS_TARGET_WIN
+    # 0.52.6 (audit F8): a symlink is answered 2 and NEVER OPENED. The open followed it, so every turn opened whatever
+    # a repository's link named — a device node the user can reach (opening a serial port can reset a board), an
+    # autofs path (a hung turn), someone's FIFO (its blocked writer released). The header's "neither does the map
+    # [follow a link out]" held for the walk and not for this probe. is_symlink is a readlink: the link, not its target.
+    if (is_symlink(_pmap_s(cstr)) == 1) { return 2; }
     var fd = sys_open(cstr, O_RDONLY | O_NONBLOCK, 0);
     if (fd < 0) { return 0; }
     var sbuf[4096];
@@ -597,6 +651,7 @@ fn _pmap_sort(dir, names, offs, n, flags, order) {
             var prev = load64(order + j * 8);
             var before = 0;                                   # 1 when cur sorts before prev
             var dc = load8(flags + cur); var dp = load8(flags + prev);
+            if (dc == 2) { dc = 1; } if (dp == 2) { dp = 1; }   # a symlink sorts with the directories (named, never walked)
             if (dc != dp) { if (dc == 1) { before = 1; } }
             else { if (strcmp_cstr(names + load64(offs + cur * 8), names + load64(offs + prev * 8)) < 0) { before = 1; } }
             if (before == 1) { store64(order + (j + 1) * 8, prev); j = j - 1; }
@@ -669,7 +724,10 @@ fn project_map_build(root) {
         if (_project_sensitive(name) == 0) {                     # thoth's own files: not on the map, as the tools refuse them
             var line_start = off;                                # the entry lands whole or the line is rolled back
             var line_entries = _pmap_entries;
-            if (load8(flags + idx) == 1) {
+            if (load8(flags + idx) == 2) {
+                off = _pmap_put_name(off, name); off = _pmap_put(off, "  (a symlink — not followed)\n");   # 0.52.6 (audit F8): its target never opened
+                _pmap_entries = _pmap_entries + 1;
+            } elif (load8(flags + idx) == 1) {
                 off = _pmap_put_name(off, name); off = _pmap_put(off, "/");
                 _pmap_entries = _pmap_entries + 1;
                 if ((_search_skip_dir(name) == 1) || (_pmap_hidden(name) == 1)) { off = _pmap_put(off, "  (not walked)\n"); }

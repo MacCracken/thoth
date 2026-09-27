@@ -54,7 +54,7 @@ the whole spine is native. Everything thoth owns is shipping; what remains is AG
 up plus two process gates. Gate 1 (the `--agnos` ELF builds, loads and runs in ring 3) closed at
 0.44.4 and is re-run at every release — `scripts/agnos-run.sh` shells out to AGNOS's own
 `basestack-run-smoke.sh` and derives the expected string from `VERSION`, so it cannot pass on a
-stale binary. Last re-run 0.52.5 (2026-09-26): the 6.0 MB ELF printed `thoth 0.52.5` in ring 3 and
+stale binary. Last re-run 0.52.6 (2026-09-27): the 6.0 MB ELF printed `thoth 0.52.6` in ring 3 and
 exited 0 under QEMU, on the first boot.
 
 Three gates remain, in dependency order.
@@ -117,10 +117,15 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 10 → 0.52.6 (empty)
+### Repair batch 11 → 0.52.7
 
-No thoth-owned defect is known. The next one found opens this batch; until then the next thing to build is the first
-feature candidate below whose gate is open.
+1. **The cyrius 6.6.7 refresh.** 6.6.7 is installed on the build machine and is now its default toolchain (found at
+   0.52.6: AGNOS's kernel build refused the drift from its 6.6.6 pin). thoth stays on 6.6.6 until this batch moves the
+   pin, re-syncs `lib/` and re-reads the symbol + enum diff and every lane's warnings (the refresh gotchas in
+   `docs/doc-health.md`).
+
+No thoth-owned defect is known beyond it: batch 10 (0.52.6) closed every finding of the 0.45.3–0.52.5 audit, and the
+design questions it did not rule on sit in [`gap-review.md`](gap-review.md).
 
 The window's checks run live: `scripts/gui-live.sh` starts a private headless Hyprland from any session (SSH
 included) with a screenshot + input kit and a stub gateway (an aarch64 build runs under `qemu-aarch64` against it), and
@@ -173,28 +178,29 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 - **F8 — The AGNOS window backend for the GUI.** Scope: the window seam behind a backend contract (the wait, the
   buffer, keys, pointer, configure, close), and an AGNOS backend over **setu** — aethersafha's client protocol, consumed
   as `setu/dist/setu.cyr` (0.8.9), never re-implemented. The pattern exists: puka's `src/platform/setu/window_setu.cyr`
-  fills the same `win_*` contract thoth's seam mirrors. **Gate — read from the source 2026-09-17, not met:**
+  fills the same `win_*` contract thoth's seam mirrors. **Gate — read from the source 2026-09-17, re-read 2026-09-27 (0.52.6), not met:**
   - **The contract is not declared stable.** There is no protocol version on the wire (`SETU_HELLO` is defined but
     aethersafha's handshake refuses anything before `CREATE_SURFACE`), `ATTACH` went from five arguments to six at
     setu 0.8.8, and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
     present, a per-surface opt-in for pointer motion.
-  - **thoth cannot be launched as a window.** On AGNOS a client does not dial: aethersafha spawns it with its end of a
-    channel in `AGNOS_CHAN`, and its launcher registers only `/bin/puka` and `/bin/crab`
-    (`aethersafha/src/main.cyr:1097`). A spawned client gets no `HOME`.
-  - **Every GUI chord would be dead.** Any key pressed with Ctrl held never reaches a client
-    (`aethersafha/src/main.cyr:1318`; aethersafha's issue `2026-09-13-claimed-keys-never-reach-a-client.md`), which
-    is Ctrl+B/S/K/R/T — and F2/F3 are claimed too.
+  - ~~**thoth cannot be launched as a window**~~ and ~~**every GUI chord would be dead**~~ — answered by aethersafha
+    0.16.26 (below): a launcher row, `--spawn`, `HOME`/`PWD` for a spawned client, and a written key contract in which
+    Ctrl chords stay the compositor's (a ruling thoth accepts: it needs non-chord routes to its pane toggles there).
   - **The floor:** a buffer slot is 2 MB without a GPU carve-out (QEMU), so the 960×600 default does not fit; a
     channel fd cannot be waited on (`epoll_wait` reports signalfd/timerfd/TCP only — the wait is a non-blocking poll
     and `sys_pause`, crab's way).
   - **Gate 1 rung 3 cannot be reached:** AGNOS has no raw terminal (no termios; console stdin is cooked and drops
     every key without an ASCII value), so the TUI takes the line REPL there.
   Off Linux `thoth gui` refuses before any call (`gwl_win_backend_select`, the seam's one switch); an AGNOS backend
-  slots in there, with `gwl_win_wait` as its wait. **The next step is upstream, filed as aethersafha's `docs/development/issues/2026-09-17-a-setu-client-outside-the-registry-cannot-start.md`:**
-  a way to start a setu client that is not puka or crab, HOME/PWD for a spawned client, the keys a client can count on
-  (the 0.16.25 ruling made Ctrl chords chrome — thoth accepts it and needs non-chord routes to its pane toggles on
-  AGNOS), and the largest surface a client may attach. **First** in the order still: it is
-  the GUI's half of "AGNOS canonical" and the last part of thoth that runs only on Linux.
+  slots in there, with `gwl_win_wait` as its wait. **The upstream filing is answered** (aethersafha 0.16.26,
+  2026-09-27, re-read at 0.52.6 from its CHANGELOG and `src/main.cyr:1106`): `/bin/thoth gui` is a launcher row when
+  `/bin/thoth` exists, `--spawn NAME` starts a registered app at boot, every spawned client inherits `HOME` and `PWD`,
+  and [`001-setu-client-contract.md`](https://github.com/MacCracken/aethersafha/blob/main/docs/architecture/001-setu-client-contract.md)
+  writes down how a client starts, its environment, the keys that reach it (no chrome key is claimed bare any more —
+  bare F2/F3 are the client's; Ctrl chords stay the compositor's, so thoth's pane toggles need non-chord routes on
+  AGNOS) and the largest surface it may attach (960×540 fits a QEMU slot; thoth's 960×600 default does not). What
+  still stands of the gate: no protocol version on the wire, and the channel fd cannot be waited on. **First** in the
+  order still: it is the GUI's half of "AGNOS canonical" and the last part of thoth that runs only on Linux.
 - **F9 — Untrusted reads through the subagent context (gap 4).** Route `@file` / `read_file` /
   `web_fetch` results through the 0.43.0 child context so retrieved text cannot instruct the main
   thread. **Gate:** the maintainer's decision (gap review question 3) — a model round per `@file`, and a

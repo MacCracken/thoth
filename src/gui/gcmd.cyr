@@ -29,7 +29,7 @@ var GCMD_LINE_CAP = 512;
 var GCMD_HEAD_CAP = 256;
 var GCMD_PAD = 8;              # inner padding (as the tool card's)
 var GCMD_LH = 18;              # line height inside a card (as the tool card's)
-var GCMD_META = 5;             # i64 cells per card: nlines, anchor ordinal, dropped, conversation id (0.52.1), startup (0.52.1)
+var GCMD_META = 6;             # i64 cells per card: nlines, anchor ordinal, dropped, conversation id (0.52.1), startup (0.52.1), skipped (0.52.6)
 var GCMD_GAP = 12;             # px after a card (== the feed's GFEED_GAP; declared here, this file precedes gfeed.cyr)
 var _gcmd_base = 0;            # alloc(GCMD_CARDS * GCMD_LINES * GCMD_LINE_CAP)
 var _gcmd_lens = 0;            # alloc(GCMD_CARDS * GCMD_LINES * 8): stored byte length per line (NUL after it)
@@ -112,6 +112,8 @@ fn gcmd_anchor(k) {
 }
 fn gcmd_lines(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 0); }
 fn gcmd_dropped(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 2); }
+# gcmd_skipped (0.52.6, audit C3): lines the feed ring evicted BEFORE the card's first kept line — the head is not kept.
+fn gcmd_skipped(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_meta_get(_gcmd_slot(k), 5); }
 fn gcmd_head(k) { if ((k < 0) || (k >= _gcmd_count)) { return 0; } return _gcmd_head + _gcmd_slot(k) * GCMD_HEAD_CAP; }
 fn gcmd_line_ptr(k, i) { return _gcmd_base + (_gcmd_slot(k) * GCMD_LINES + i) * GCMD_LINE_CAP; }
 fn gcmd_line_len(k, i) { return load64(_gcmd_lens + (_gcmd_slot(k) * GCMD_LINES + i) * 8); }
@@ -150,6 +152,10 @@ fn gcmd_record(line) {
     _gcmd_meta_set(slot, 2, n - keep);
     _gcmd_meta_set(slot, 3, conv);
     _gcmd_meta_set(slot, 4, 0);
+    # ⚠ 0.52.6 (audit C3): past FEED_ROWS lines the ring evicted the command's real head DURING the run, so the kept
+    # block started mid-output and "N more lines" counted only the ring's remainder — a 3000-line command showed
+    # "L952…" as its head and "1848 more" of 2800 dropped. The evicted count is kept and drawn above the lines.
+    _gcmd_meta_set(slot, 5, feed_evicted());
     return _gcmd_count - 1;
 }
 
@@ -209,6 +215,7 @@ fn gcmd_build(cmds, x, y, w, k) {
     var n = gcmd_lines(k);
     var rows = 1 + n;
     if (gcmd_dropped(k) > 0) { rows = rows + 1; }
+    if (gcmd_skipped(k) > 0) { rows = rows + 1; }
     var h = GCMD_PAD * 2 + rows * GCMD_LH;
     if (cmds != 0) {
         gd_push_border(cmds, x, y, w, h, _ui_rgb(ROLE_FAINT));       # card outline
@@ -221,6 +228,12 @@ fn gcmd_build(cmds, x, y, w, k) {
         var pen = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_ACCENT), "{(o> ");
         gd_push_text(cmds, pen, ly, _ui_rgb(ROLE_FG), gcmd_head(k), maxcols - 5);
         ly = ly + GCMD_LH;
+        if (gcmd_skipped(k) > 0) {
+            var p1 = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_FAINT), "… ");
+            p1 = _gstatus_int(cmds, p1, ly, _ui_rgb(ROLE_FAINT), gcmd_skipped(k));
+            _gstatus_txt(cmds, p1, ly, _ui_rgb(ROLE_FAINT), " earlier lines not kept (past the feed's ring)");
+            ly = ly + GCMD_LH;
+        }
         var i = 0;
         while (i < n) {
             _gcmd_line(cmds, lx, ly, maxcols, gcmd_line_ptr(k, i), gcmd_line_len(k, i));
@@ -230,7 +243,8 @@ fn gcmd_build(cmds, x, y, w, k) {
         if (gcmd_dropped(k) > 0) {
             var p2 = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_FAINT), "… ");
             p2 = _gstatus_int(cmds, p2, ly, _ui_rgb(ROLE_FAINT), gcmd_dropped(k));
-            _gstatus_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), " more lines (the card keeps its head)");
+            if (gcmd_skipped(k) > 0) { _gstatus_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), " more lines"); }
+            else { _gstatus_txt(cmds, p2, ly, _ui_rgb(ROLE_FAINT), " more lines (the card keeps its head)"); }
         }
         gd_push_unclip(cmds);
     }

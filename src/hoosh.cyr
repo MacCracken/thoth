@@ -649,6 +649,12 @@ fn hoosh_compact_auto() {
     var n = session_history_len();
     if (n <= COMPACT_AUTO_KEEP) { return 0; }
     if ((n - COMPACT_AUTO_KEEP) <= session_recap_covers()) { return 0; }   # already compacted this far
+    # 0.52.6 (audit E10): the recap is a model call, and the budget's rule 1 is "check before the call". It ran after
+    # the turn with no check, so the turn that crossed the ceiling bought one more completion past it. Skipped, said.
+    if (budget_status() != BUDGET_OK) {
+        ui_emit(ROLE_MUTED, "  [auto-compact skipped: the [budget] ceiling is reached — nothing summarized, nothing dropped]"); oprintln("");
+        return 0;
+    }
     ui_emit(ROLE_MUTED, "  [auto-compact: "); ofmt_int(session_tokens());
     ui_emit(ROLE_MUTED, " tokens past [hoosh].compact_at — summarizing older turns]"); oprintln("");
     var done = hoosh_compact_now(COMPACT_AUTO_KEEP);
@@ -908,8 +914,13 @@ fn _hoosh_usage_field(v, key) {
     if (u == 0) { return 0 - 1; }
     var t = bayan_json_v_obj_get(u, key);
     if (t == 0) { return 0 - 1; }
-    return bayan_json_v_int(t);
+    var n = bayan_json_v_int(t);
+    # 0.52.6 (audit E8): a figure no real response carries (past 2^40 tokens, or negative) is ABSENT, not counted — the
+    # tallies had no overflow guard, so a body near the i64 maximum wrapped them: a tripped ceiling read OK again.
+    if ((n < 0) || (n > HOOSH_USAGE_MAX)) { return 0 - 1; }
+    return n;
 }
+var HOOSH_USAGE_MAX = 1099511627776;   # 2^40 tokens in one response: implausible, and small enough that no product below overflows
 
 # _hoosh_usage_total: usage.total_tokens, or -1 when absent. Pure.
 fn _hoosh_usage_total(v) { return _hoosh_usage_field(v, "total_tokens"); }
@@ -918,7 +929,9 @@ fn _hoosh_usage_total(v) { return _hoosh_usage_field(v, "total_tokens"); }
 # input/output rates (each micro-USD per 1000 tokens). Integer division truncates the
 # sub-micro-USD remainder, so cost is never overstated. Pure — unit-tested.
 fn hoosh_cost_micro(prompt, completion, in_rate, out_rate) {
-    return (prompt * in_rate + completion * out_rate) / 1000;
+    # 0.52.6 (audit E8): saturating — a rate is the operator's (any i64 [pricing] value) and a product that wrapped
+    # priced an absurd prompt at $0 or less. Past the i64 range the cost reads as the maximum, which trips any ceiling.
+    return _sat_add(_sat_mul(prompt, in_rate), _sat_mul(completion, out_rate)) / 1000;
 }
 
 # _hoosh_account_usage: fold one response's usage (from an already-parsed value) into
@@ -1277,11 +1290,13 @@ fn hoosh_provider_state_role(st) {
 fn hoosh_provider_detail(i, dst, cap) {
     if (cap < 32) { return 0; }
     if (hoosh_provider_state_at(i) != HOOSH_PROV_DEGRADED) { return 0; }
-    var off = _append_cstr(dst, 0, " (");
-    off = _append_int(dst, off, hoosh_provider_healthy_at(i));
-    store8(dst + off, 47); off = off + 1;                    # '/'
-    off = _append_int(dst, off, hoosh_provider_routes_at(i));
-    off = _append_cstr(dst, off, " routes healthy)");
+    # 0.52.6 (audit E11): every write bounded by `cap` (the `cap >= 32` check promised it; the appends were not capped)
+    var off = _append_cstr_cap(dst, 0, cap, " (");
+    off = _append_int_cap(dst, off, cap, hoosh_provider_healthy_at(i));
+    off = _append_cstr_cap(dst, off, cap, "/");
+    off = _append_int_cap(dst, off, cap, hoosh_provider_routes_at(i));
+    off = _append_cstr_cap(dst, off, cap, " routes healthy)");
+    if (off > (cap - 1)) { off = cap - 1; }
     store8(dst + off, 0);
     return off;
 }

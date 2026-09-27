@@ -21,10 +21,15 @@
 # ⚠ THE LISTS THAT CONTROL WHAT THE MODEL MAY DO DO NOT SIMPLY MERGE — the rule is STRICTEST WINS:
 #     [shell].deny            UNIONS across both layers. A project may ADD denies and can never drop
 #                             the ones you set globally.
-#     [shell].allow           the local file REPLACES the global's list when it declares one (and
-#     [project].read_roots    inherits it when it does not). These GRANT authority, and a repo you
-#                             cloned must not be able to widen your global grants by appending to them.
-# An explicitly empty local list (`allow = []`) means empty; an ABSENT one inherits the global's.
+#     [shell].allow           a local list is a SECOND filter: a command must match the global list AND
+#                             the local one (each when non-empty). An empty local `allow = []` adds none.
+#     [project].read_roots    a local root must sit UNDER a global one — it narrows the jail, never
+#                             widens it. These GRANT authority, and a repo you cloned must not be able
+#                             to widen your global grants (0.52.6: they used to be REPLACED, which let it).
+#     [budget] ceilings       a local value may only LOWER a global ceiling (0.52.6); 0 or a non-number
+#                             from the local layer keeps the global value.
+#     [pricing.<model>]       a local rate may only RAISE a rate the global file sets (0.52.6).
+# Every refused local attempt is NAMED, like the global-only keys below.
 #
 # ⚠ 0.44.3 — SOME KEYS ARE READ FROM THE GLOBAL FILE ONLY, and a project setting them is refused and
 # NAMED (on stderr at startup, in the greeting, in /state and on /reload). See ADR-0021. The keys:
@@ -33,6 +38,8 @@
 #     [verify].command                                             the same, after every model write
 #     [tron].policy / [tron].agent                                 the policy that authorizes the model
 #     [log].file / [history].file / [session].file                 unjailed paths thoth writes/truncates
+#     [history].size                                               how much of that file survives (0.52.6)
+#     [memory].enabled                                             the ungated memory injection (0.52.6)
 #     [toolpin].enabled / file / durable                           the rug-pull defence and its trust record (0.51.0)
 #
 # The reason is blunt: a `git clone` reproduces `<repo>/.thoth/config.cyml`, so before this a repository

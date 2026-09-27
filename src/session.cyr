@@ -319,7 +319,7 @@ fn session_tokens() { return _sess_tokens; }
 fn session_tokens_seen() { return _sess_tokens_seen; }
 fn session_add_tokens(n) {
     if (n < 0) { return 0; }
-    _sess_tokens = _sess_tokens + n;
+    _sess_tokens = _sat_add(_sess_tokens, n);             # 0.52.6 (audit E8): saturates, never wraps below a ceiling
     _sess_tokens_seen = 1;
     return 0;
 }
@@ -333,7 +333,7 @@ fn session_cost_seen() { return _sess_cost_seen; }
 fn session_cost_unpriced_count() { return _sess_cost_unpriced; }
 fn session_add_cost(micro) {
     if (micro < 0) { return 0; }
-    _sess_cost_micro = _sess_cost_micro + micro;
+    _sess_cost_micro = _sat_add(_sess_cost_micro, micro); # 0.52.6 (audit E8)
     _sess_cost_seen = 1;
     return 0;
 }

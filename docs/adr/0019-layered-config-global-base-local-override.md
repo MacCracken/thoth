@@ -57,10 +57,20 @@ Layering a list is not a neutral act when the list controls what the model may d
 
 | Key | Rule | Why |
 |---|---|---|
-| all scalars, `[alias]`, `[pricing.*]` | local wins per key | ordinary refinement; no authority involved |
+| all scalars, `[alias]` | local wins per key | ordinary refinement; no authority involved |
 | `[shell].deny` | **UNION** across both layers | a deny only ever REMOVES authority, so merging can only make the filter stricter — a project may add denies and can never drop the user's |
-| `[shell].allow` | local **REPLACES** wholesale when it declares one | an allow GRANTS authority. Unioning would let a repo you cloned widen your global allow-list by appending one glob |
-| `[project].read_roots` | local **REPLACES** wholesale when it declares one | same reasoning: this is the model's read jail |
+| `[shell].allow` | ~~local REPLACES wholesale~~ **a second filter** (0.52.6): a command must match the global list and the local one, each when non-empty | an allow GRANTS authority. Unioning would let a repo you cloned widen your global allow-list by appending one glob |
+| `[project].read_roots` | ~~local REPLACES wholesale~~ **local only NARROWS** (0.52.6): a local root must sit under a global one | same reasoning: this is the model's read jail |
+| `[pricing.*]`, `[budget]` ceilings | ~~local wins per key~~ **strictest wins** (0.52.6): a local rate may only raise a global rate, a local ceiling only lower the global one | the rate is the budget's measure and the ceiling is the operator's spend authorization |
+
+**Amendment (0.52.6).** "REPLACES" was recorded here as strictest-wins, and it is only that when the local list is a
+subset of the global one. The 0.52.6 audit reproduced both failures: a clone's `read_roots = ["/home/you/.ssh"]`
+replaced the operator's roots with its own (the read tools meet no t-ron gate), and a clone's `[shell] allow = []`
+replaced the operator's whitelist with an empty list, which the verdict reads as *no whitelist*. The same audit found
+`[pricing.<model>] input = 0` and `[budget] max_cost_micro = 0` from the local layer switching the budget off, and the
+maintainer ruled them strictest-wins too. Each refused attempt is named, as ADR-0021's authority keys are. The
+paragraph below about an explicitly empty list is still how a layer's list is read; since 0.52.6 an empty local
+`allow` simply adds no filter.
 
 **Authority does not accumulate from the less-trusted side.** A cloned repo's config is the less-trusted
 side. Whichever layer is in charge of an allow-list, the resulting authority is exactly what one file

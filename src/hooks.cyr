@@ -66,7 +66,7 @@ var HOOK_OUT_CAP = 4096;        # hook output shown/captured; a hook that talks 
 var _hook_buf = 0;
 var HOOK_ENV_CAP = 20480;       # 0.45.6: the `KEY=value` strings' scratch — holds THOTH_ARGS at AGENT_ARGS_MAX (16383) whole
 var _hook_env = 0;              # alloc(HOOK_ENV_CAP): the strings, each NUL-terminated
-var _hook_envp[48];             # N BYTES: up to 5 cstr pointers + the NUL terminator (40 B), headroom to 48
+var _hook_envp[48];             # up to 6 cstr pointers + the NUL terminator (56 B; 0.52.6 added THOTH_TOOL_TRUNCATED) — a module-scope array is 48 i64 slots
 var _hook_fired = 0;            # hooks run this session (for /state)
 var _hook_blocked = 0;          # pre_tool denials this session
 var _hook_last_clamped = 0;     # the last _hook_env_put could not fit its value in full (THOTH_ARGS past the scratch)
@@ -79,8 +79,11 @@ fn hooks_reset() { _hook_fired = 0; _hook_blocked = 0; return 0; }
 # environment string, not shell text; a NUL cannot occur in a cstr value and nothing else needs escaping.
 # Returns the offset past the NUL. A value that would not fit `cap` (with its NUL) is clamped whole-bytes and
 # _hook_last_clamped is raised, so the caller can export THOTH_ARGS_TRUNCATED=1 and announce it — a hook must
-# never decide on silently shortened arguments and believe they were complete. Only THOTH_ARGS can ever be
-# that large (AGENT_ARGS_MAX, which HOOK_ENV_CAP holds); the guard is for a caller past the executor's cap.
+# never decide on silently shortened arguments and believe they were complete. ⚠ 0.52.6 (audit F3): "only THOTH_ARGS
+# can ever be that large" was false — post_tool runs for a call the name check REFUSED, with the full name (20 KiB
+# and more on the block path and in a subagent, where names are not normalised), so THOTH_TOOL filled the scratch,
+# the next pointer landed one byte past it and execve exported whatever the heap held there. THOTH_TOOL is now cut
+# at AGENT_NAME_MAX with its own THOTH_TOOL_TRUNCATED=1, and every value is bounded so the flags always fit.
 fn _hook_env_put(dst, off, cap, key, value) {
     _hook_last_clamped = 0;
     off = _append_cstr_cap(dst, off, cap, key);
@@ -106,7 +109,12 @@ fn _hook_env_put(dst, off, cap, key, value) {
 # ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never
 # a hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to create the capture file, to
 # fork or to wait — or, since 0.45.6, a target whose capture cannot carry an environment block (the PE lane).
-fn _hook_run(cmd, event, tool, args) {
+fn _hook_run(cmd, event, tool, args) { return _hook_run_cut(cmd, event, tool, args, 0); }
+
+# _hook_run_cut (0.52.6, audit F3): _hook_run for arguments the caller already knows are cut (`args_cut` = 1: the
+# parallel executor's slot copy of a call refused as oversize) — THOTH_ARGS_TRUNCATED=1 is exported and announced
+# exactly as for a clamp here, since a hook must never read shortened arguments as whole.
+fn _hook_run_cut(cmd, event, tool, args, args_cut) {
     if (_hook_buf == 0) { _hook_buf = alloc(HOOK_OUT_CAP + 1); }
     if (_hook_env == 0) { _hook_env = alloc(HOOK_ENV_CAP); }
     if ((_hook_buf == 0) || (_hook_env == 0)) { return 0 - 1; }
@@ -116,9 +124,14 @@ fn _hook_run(cmd, event, tool, args) {
     store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
     off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP, "THOTH_EVENT", event);
     store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
-    off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP, "THOTH_TOOL", tool);
+    off = _hook_env_put(_hook_env, off, off + 12 + AGENT_NAME_MAX, "THOTH_TOOL", tool);   # "THOTH_TOOL=" + the name cap + NUL
+    if (_hook_last_clamped == 1) {
+        store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
+        off = _hook_env_put(_hook_env, off, off + 32, "THOTH_TOOL_TRUNCATED", "1");
+    }
     store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
     off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP - 32, "THOTH_ARGS", args);   # keep room for the flag below
+    if (args_cut == 1) { _hook_last_clamped = 1; }
     if (_hook_last_clamped == 1) {
         store64(&_hook_envp + nenv * 8, _hook_env + off); nenv = nenv + 1;
         off = _hook_env_put(_hook_env, off, HOOK_ENV_CAP, "THOTH_ARGS_TRUNCATED", "1");
@@ -259,11 +272,14 @@ fn hooks_pre_tool(tool, args) {
 
 # hooks_post_tool: fire-and-report after a tool has run. Cannot block — the work is already done, and a
 # hook that pretended otherwise would be lying about what it can undo.
-fn hooks_post_tool(tool, args) {
+fn hooks_post_tool(tool, args) { return hooks_post_tool_cut(tool, args, 0); }
+# hooks_post_tool_cut (0.52.6, audit F3): `args_cut` = 1 when `args` is a cut copy (the parallel slot of a call refused
+# as oversize) — the hook sees THOTH_ARGS_TRUNCATED=1, as the serial path's full-argument call would give it.
+fn hooks_post_tool_cut(tool, args, args_cut) {
     var c = config_hook_post_tool();
     if (c == 0) { return 0; }
     if (load8(c) == 0) { return 0; }
     if (shell_supported() == 0) { return 0; }
-    _hook_run(c, "post_tool", tool, args);
+    _hook_run_cut(c, "post_tool", tool, args, args_cut);
     return 0;
 }

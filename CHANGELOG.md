@@ -2,6 +2,131 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.6] - 2026-09-27
+
+**Repair batch 10: an audit of everything since the last one.** Six auditors read 0.45.3–0.52.5 by area (the tool-pin
+store, the window's wire, the GUI's view builders, the persisted stores, the config layers and the picker, and
+exec / hooks / the map / the TUI), and each finding was reproduced before it was fixed. Two HIGH findings (an
+authorization prompt that hid part of the command it authorized, and a tool definition too large to pin that was
+advertised unchecked), a HIGH-class config grant (a repository could widen the ungated read tools' jail), a wire read
+that crashed the window, and about thirty smaller ones. Two design questions the audit raised were ruled on by the
+maintainer and are fixed here (a repository's budget and pricing, and a token with no url); two more are recorded in
+`gap-review.md`. Suite **826 + 2138 + 1130 + 850 + 190 + 5** (+267). Linux, aarch64 and AGNOS build with 0.52.5's
+warning sets (all three lanes diffed). All five suites pass as aarch64 binaries under `qemu-aarch64` (5,134 of 5,134).
+macOS is green natively (843 + 2113 + 1127 + 190 + 805), the Windows lane stays at its known-gap skip, the window was
+driven live on a headless compositor, and the AGNOS runtime re-run printed `thoth 0.52.6` in ring 3.
+
+- **An authorization prompt can no longer hide part of what it authorizes** (audits C1, F1; HIGH).
+  - The object was cut three ways while `y` approved all of it: `safe_label_copy` stopped at 511 bytes; the TUI drew
+    the question on one row with autowrap off, so everything past the terminal's width (the `? [y/N/a]` included)
+    never reached the screen; and the window's modal drew five rows of about 86 codepoints. Reproduced end to end in
+    a pty: `echo build-ok`, about 2,100 spaces and `; touch …` showed as `authorize run shell echo build-ok`, and the
+    hidden command ran on `y`.
+  - An object longer than 1,024 bytes (`CONFIRM_SHOW_MAX`), or holding a run of 64 blank codepoints (ASCII spaces and
+    the Unicode blanks that draw as nothing), is now refused with its length and the way to allow it (`[tron].policy`).
+  - The TUI gives the question every row its bytes need and refuses when the screen has too few; the window's modal
+    sizes itself to the question and will not take a yes while any of it is off the card.
+- **Durable tool pins** (audit A).
+  - A1 (HIGH): a definition too large to hash was advertised with no pin check, even for a tool already pinned — a
+    server could swap a pinned tool's description and pad its schema to about 33 KB. A definition thoth cannot pin
+    is now withheld and named, and both executors refuse a call to it with the reason.
+  - A2: a session that first saw a tool merged its definition over a pin another session had stored since, without
+    comparing them. Other sessions' stored pins are read back before each probe and the older pin is the baseline.
+  - A3: `/tools trust` after a failed store write rewrote the file and dropped every other host's pins. They are kept
+    whenever the file verifies, and the operator is told when it did not.
+  - A4: a name holding a control byte was never stored, yet `/tools` showed it pinned. It is now unpinnable, and
+    withheld.
+  - A5: with the table full (1,024 pins) the merge erased other sessions' rows from the file. They are carried.
+  - A6: every jail check in the default configuration allocated for the pin store's path (20,000 `search` checks,
+    8.8 MB). The jail compares the bound path.
+- **A repository's local config can only tighten what the operator's global config grants.**
+  - `[project].read_roots` (audit E3, HIGH-class): a declared local list replaced the global's, so a clone could
+    name any directory as a root for `read_file` / `list_dir`, which meet no t-ron gate. A local root must now sit
+    under a global one (it narrows the jail, never widens it); any other is refused and named. Config roots are
+    dropped and re-granted on `/reload`, so a removed root is revoked; `/allow` grants stay.
+  - `[shell].allow` (E4): the local list replaced the global whitelist, and the verdict reads an empty list as "no
+    whitelist" — so `allow = []` let every command through. The local list is now a second filter a command must
+    also pass.
+  - `[budget]` and `[pricing]` (design question D1, ruled on): a local `max_cost_micro = 0`, or anything
+    non-numeric, read as unlimited, and local rates loaded first and won — `input = 0` priced the model as free, and
+    32 local sections filled the table. The ceiling is now strictest-wins (a local value may only lower it), global
+    rates fill the table first, and a local rate may only raise a rate the global sets. Each refusal is named.
+  - `[hoosh].token` without a local url (D2, ruled on): the local token replaced the operator's and went to the
+    operator's own gateway. It is now used only beside a url of its own layer; alone it is ignored and named. The
+    other direction (a redirected url with an empty token, E1) and a local `url = ""` (a startup crash) are decided
+    by value now.
+  - `[history].size` (E5) and `[memory].enabled` (H1) are global-only, like the files and injections they control: a
+    local `size = 1` rewrote the operator's history file down to one line at the first submit.
+  - Aliases (F7): a repository alias could reach `/save` and `/audit export`, which write any path without a gate
+    (`[alias] test = "/save ../x"` replaced a file outside the project). Both join `/tools trust` and `/allow` as
+    commands an alias cannot run. `CFG_SUPPRESS_MAX` goes from 16 to 32, as the list of nameable keys had passed 16.
+  - The greeting (C2): a 3.9 KB local `[hoosh].url` filled the greeting's 4 KiB span store and evicted the red "this
+    repo's [daimon].url" row. Config values are clipped at 511 bytes there, and the last 1 KiB is kept for warning
+    rows.
+- **Repository content that reaches the model or the disk.**
+  - The project map (F2): repository names rode a system message with no framing and never met the injection guard.
+    The header now says the names are the repository's data and not instructions, and the map goes through the
+    guard (its own wrapped copy, rescanned only when the tree changes).
+  - The map's probe (F8) opened every symlink's target each turn — a device node, an autofs path, someone's FIFO. A
+    link is now named ("a symlink — not followed") without being opened.
+  - The memory reader (H1) followed links anywhere in a project store, and `/remember` checked only the two leaf
+    paths (D2): a repository's `.thoth` symlink redirected `/remember`, `/bookmark` and `memory_write` outside the
+    project. No component of a project store may be a link, on read or write.
+- **Text that reaches the terminal.**
+  - The session loader (D1) cleaned every frame but the per-message model id, which `/save` then wrote raw.
+  - C1 controls (E9): the sanitisers stopped at C0 and DEL. U+0080–U+009F (and a raw 0x80–0x9F no UTF-8 lead
+    accounts for) now become `?` too, decoded so the continuation bytes of other characters are untouched; the
+    terminal title drops them as well.
+- **`/reload`** (E2, A7, E7): the keys its own banner says need a restart were applied anyway — a new `[hoosh].url`
+  took the new token to the running session's endpoints, `[toolpin].enabled` flipped live. They are held at the
+  values in use and named as changed. That also keeps the session and history files a session writes on the tools'
+  refusal list after a reload renames them.
+- **Running commands.**
+  - Parent death (F4): the capture child (`/run`, `shell`, hooks, `[verify]`) had no parent-death signal and its own
+    session, so `/run sleep 47` outlived a killed thoth. It now gets the floor's `_proc_child_guard`. Proven both
+    ways in a pty.
+  - Esc (F6): any escape-led input counted as a stop, so a mouse-wheel report the TUI itself enables killed a running
+    `/run`, and during a pre_tool hook became a denial. The poll now parses what it drains (CSI, SS3, X10 mouse,
+    bracketed paste), and only a lone Esc or kitty's `ESC[27u` stops. Proven live: two wheel reports and an arrow left
+    `sleep 37` running, and Esc then stopped it in 0.02 s.
+  - The parallel executor (F5) checked for a stop only between batches; its gate phase runs serially before any
+    thread starts, so a stop during call 1's hook ran call 2's hook and gate anyway. It checks before each call now.
+  - Hooks (F3): a tool name of 20 KB or more (the block path and subagents do not normalise names) filled the hook
+    environment, and the next pointer landed past it. `THOTH_TOOL` is cut at 255 bytes with `THOTH_TOOL_TRUNCATED=1`,
+    and the parallel executor's cut copy of an oversize call reaches post_tool flagged `THOTH_ARGS_TRUNCATED=1`.
+- **The window.**
+  - B1: a `wl_registry.global`'s name length was never checked against its message, and the version word was read up
+    to about 4 GiB past the receive buffer (the audit's probe crashed the parser). A global that does not fit is
+    dropped.
+  - B2, B3: a configure side above 16,384 is ignored before it sizes a buffer, and ping and both configures read
+    only arguments their message declares.
+  - C3: a command printing more than the feed's 2,048 lines lost its head during the run, and the card still said it
+    kept its head. It now says how many earlier lines were not kept. Live: `/run seq 3000` shows 955 earlier, 200
+    kept, 1,848 more.
+- **Budget and picker.**
+  - E10: auto-compact ran a recap after the turn that crossed the ceiling. It is skipped past the ceiling, with a
+    notice.
+  - E6: one priced turn silenced the unmeasurable-cost warning for the session, so a switch to an unpriced model froze
+    the tally silently. It is said once, and `/state` reads "PARTLY UNPRICED".
+  - E8: usage figures near the i64 maximum wrapped the tallies (a tripped ceiling read OK again). A figure past 2^40
+    is absent, and the tallies and cost saturate.
+  - E11: catalog ids past the picker's 256 are named in the hint ("+44 not loaded"), and the degraded-route detail
+    writes within its buffer.
+- **A `[tron].policy` or `[log].file` that fails at startup is named in the greeting**, on both surfaces. The stderr
+  line went out before the TUI's alternate screen and the window's first frame, and a session running fail-closed
+  on a broken policy looked like one with no policy.
+- A drift test now checks thoth's top-level names against every vendored bundle and stdlib module as well as against
+  each other.
+
+Tests (+267), each proven by breaking the fix it covers. Among them: `test_confirm_whole_action`, `test_tui_confirm_rows`
+and the modal's row rule; the pin-store tests for A1–A6; `test_read_roots_narrow`, the `[shell].allow` layering
+cases, `test_history_size_global`, the D1 pricing and ceiling cases and the D2 token cases; `test_memory_read_links`
+and `test_memory_append_linked_root`; `test_project_map_guard` and the map's symlink probe; `test_clean_c1`;
+`test_config_reload_holds`; `test_intr_escape_parse`, `test_par_stop_phase1` and the hook-environment cases;
+`test_gui_wire_bounds` (the B1 break reproduces the crash, exit 139) and `test_gcmd_ring_head`;
+`test_compact_auto_budget`, the E6 and E8 cases and `test_mpick_unloaded`; `test_greet_red_reserve` and
+`test_greet_seam_failures`; `test_src_globals_apart`.
+
 ## [0.52.5] - 2026-09-26
 
 **Repair batch 9: tool names t-ron's audit record cannot hold, and one buffer that was two.** Both items came out of

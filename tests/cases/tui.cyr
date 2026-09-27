@@ -2073,3 +2073,41 @@ fn test_tui_epoll_buf_apart() {
     #endif
     return 0;
 }
+
+# test_mpick_unloaded (0.52.6, audit E11): a catalog past the picker's store (MPICK_MAX ids) lost its tail silently —
+# the hint's i/n covered only what loaded. The count is kept and the hint names it.
+fn test_mpick_unloaded() {
+    test_group("the picker names the catalog ids it could not hold (mpick.cyr / tui.cyr, 0.52.6)");
+    var cap = 16384;
+    var b = alloc(cap);
+    var o = _append_cstr_cap(b, 0, cap, "{\"object\":\"list\",\"data\":[");
+    var i = 0;
+    while (i < 300) {
+        if (i > 0) { o = _append_cstr_cap(b, o, cap, ","); }
+        o = _append_cstr_cap(b, o, cap, "{\"id\":\"m");
+        o = _append_int_cap(b, o, cap, i);
+        o = _append_cstr_cap(b, o, cap, "\"}");
+        i = i + 1;
+    }
+    o = _append_cstr_cap(b, o, cap, "]}");
+    var data = hoosh_extract_models(b, o);
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    _mp_health_known = 0;
+    assert_eq(mpick_load_from(data), MPICK_OK, "a 300-id catalog loads");
+    assert_eq(mpick_total(), MPICK_MAX, "...the store holds MPICK_MAX of them");
+    assert_eq(mpick_unloaded(), 300 - MPICK_MAX, "...and counts the 44 it could not (they vanished silently, 0.52.5)");
+    var path = "build/.thoth_pick_unl.tmp";
+    var raw = alloc(4096); var vis = alloc(4096);
+    var sc = _tui_cols; _tui_cols = 120;
+    if (_t_fd1_to(path) == 0) {
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _t_fd1_restore();
+        _t_pick_read(path, raw, vis, 4096);
+        assert_eq(_t_vis(vis, "1/256 +44 not loaded"), 1, "the hint names them beside the count");
+        assert_eq(_t_vis(vis, "⌃C close"), 1, "...and the key legend still fits");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _tui_cols = sc;
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_unloaded = 0;
+    return 0;
+}

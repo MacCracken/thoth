@@ -16,6 +16,8 @@
 # off, never silently faked.
 
 var _log_enabled = 0;        # 1 once log_init binds an output
+var _log_open_failed = 0;    # 0.52.6: 1 when [log].file could not be opened at startup
+fn log_open_failed() { return _log_open_failed; }
 
 # The structured-message builder writes into one reused buffer (sakshi is
 # zero-alloc; this keeps thoth's side allocation-free per event too). Bounded —
@@ -327,6 +329,7 @@ fn log_init() {
     if (file != 0) {
         if (sakshi_output_file(file) < 0) {
             emit("log: cannot open '"); emit(file); oprintln("' — structured logging disabled.");
+            _log_open_failed = 1;                    # 0.52.6: kept for the greeting (this line is covered by the TUI / window)
             return 0;
         }
     }

@@ -87,6 +87,7 @@ fn mpick_load() {
 # MPICK_OK / MPICK_ERR_EMPTY like mpick_load.
 fn mpick_load_from(data) {
     var n = bayan_json_v_arr_len(data);
+    _mp_unloaded = 0;
     var i = 0;
     while (i < n) {
         var m = bayan_json_v_arr_get(data, i);
@@ -94,7 +95,9 @@ fn mpick_load_from(data) {
         if (id != 0) {
             var ids = bayan_json_v_str(id);
             if (ids != 0) {
-                if (_mp_add(str_cstr(ids)) == 1) {
+                var added = _mp_add(str_cstr(ids));
+                if ((added == 0) && (str_len(ids) > 0)) { _mp_unloaded = _mp_unloaded + 1; }   # 0.52.6 (audit E11): past MPICK_MAX / MPICK_STORE — counted, never silently gone
+                if (added == 1) {
                     var ob = bayan_json_v_obj_get(m, "owned_by");
                     if (ob != 0) {
                         var obs = bayan_json_v_str(ob);
@@ -216,6 +219,10 @@ fn mpick_select_id(want) {
 
 # --- accessors (for the TUI render) — all PURE -----------------------------
 fn mpick_total() { return _mp_n; }        # total loaded (unfiltered)
+# mpick_unloaded (0.52.6, audit E11): catalog ids the picker could not hold (past MPICK_MAX ids or MPICK_STORE bytes) —
+# the i/n it shows covers only what loaded, so the hint names the rest.
+var _mp_unloaded = 0;
+fn mpick_unloaded() { return _mp_unloaded; }
 fn mpick_count() { return _mp_fn; }       # filtered count
 fn mpick_cur() { return _mp_cur; }        # selection index in the filtered view
 fn mpick_err() { return _mp_err; }
