@@ -2,7 +2,7 @@
 #
 # The desktop-tier renderer of the 0.28.0 STATUS VIEW-MODEL: it reads the SAME status_snapshot() facts the
 # TUI bar (tui_status_emit) and /state (cmd_state) read, and lowers them into draw-commands (src/gui/gdraw.cyr)
-# for a pinned status strip — the mockup's (Thoth.dc.html) status bar, which since 0.45.0 sits on the window's
+# for a pinned status strip — the mockup's status bar, which since 0.45.0 sits on the window's
 # BOTTOM edge under the composer (gframe_build), as the TUI's bar does. This is the whole Stage-B payoff made
 # concrete: three renderers (line rows, TUI strip, GUI strip) over ONE facts-not-bytes model, no new producer.
 #

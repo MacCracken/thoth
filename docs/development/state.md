@@ -3534,7 +3534,9 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.6` (in `cyrius.cyml [package].cyrius`), moved from `6.6.4` at 0.52.4. The `6.6.4` → `6.6.6`
+- **Cyrius pin**: `6.6.6` (in `cyrius.cyml [package].cyrius`), moved from `6.6.4` at 0.52.4, and held there by
+  decision (2026-09-28): the build machine's default is now 6.6.10 (6.6.7–6.6.10 installed), and the `cyrius` wrapper
+  builds this tree at the manifest pin (`cyrius --version` in the checkout reports `manifest-pin: 6.6.6`). The `6.6.4` → `6.6.6`
   hop re-synced the whole snapshot (`cyrius lib sync --full`, 111 files, 27 changed and `lib/alloc_cx.cyr` new, the
   `cmp` sweep clean). Symbol-diffed both ways: **zero** functions, globals or enum members removed, **zero** made
   `private`; the 164 functions, 111 globals and 40 enum members added collide with nothing thoth compiles. The suite
@@ -3919,7 +3921,7 @@ kit checked in) and `0.52.3` batch 8 (the window's aarch64 syscalls, its refusal
 `0.52.4` moved the pin to cyrius 6.6.6 and every vendored bundle to its latest tag, `0.52.5` batch 9 (the two
 findings that refresh recorded: tool names t-ron's audit record cannot hold, and the shared `_ev_buf`) and `0.52.6`
 batch 10 (an audit of 0.45.3–0.52.5 by area: the authorization prompt, the pin store, the local config layer, the
-window's wire and ~30 more); **batch 11 holds the cyrius 6.6.7 refresh** (the roadmap) — while **minors are held for feature arcs** (`0.46.0`
+window's wire and ~30 more); **batch 11 is empty and the toolchain stays on cyrius 6.6.6** (the roadmap) — while **minors are held for feature arcs** (`0.46.0`
 through `0.52.0` = F1–F7; the candidates F8–F14 are ordered on the roadmap with their gates, the next decided one
 earns `0.53.0`). Defects owned
 upstream or by the floor sit in a waiting-on table with the version each was last checked against.

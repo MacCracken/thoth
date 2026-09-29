@@ -13,47 +13,36 @@ test = "src/test.cyr"
 output = "build/thoth"
 
 [deps]
-# Libs are OPT-IN and Cyrius does NOT resolve transitive deps — so the hoosh
-# seam's transport (sandhi) drags its whole transitive stdlib set in here by
-# hand. Under-declaring is not a link error: cyrius non-strict mode patches the
-# missing call sites with placeholder bytes that loop back into init (the
-# 2026-04-24 sandhi HTTPS-loop saga), so every module sandhi.cyr references
-# must be listed. Grouped: driver core · config (thoth.cyml) · hoosh transport.
-# Order matters: most stdlib modules don't self-`include` their cross-deps, so
-# the resolver falls back to this array order. Low-level floor first, then the
-# crypto + dynamic-link layers, then the high-level transport that consumes
-# them (tls/ws/sandhi). dynlib uses mmap's PROT_NONE without including it, so
-# mmap MUST precede dynlib — and dynlib/fdlopen/mmap MUST precede tls + sandhi.
-# bayan (the 6.1.25 data-domain carve: json/toml/cyml/base64/bigint/u128/csv)
-# MUST precede sigil (u256) and the transport (json/base64); it also carries
-# the thoth.cyml config surface (cyml header split + toml pairs).
+# Stdlib modules are opt-in and Cyrius resolves no transitive deps: every module thoth, its vendored
+# bundles or the sandhi transport calls into is listed here by hand. Under-declaring is not a link
+# error — non-strict mode patches a missing call site with placeholder bytes that loop back into
+# init — so every module sandhi.cyr references must be listed.
+# Order matters: most modules don't `include` their cross-deps, so the resolver falls back to this
+# array's order. A module comes after everything it builds on: the substrate first, then the data,
+# crypto and dynamic-link layers, then the transport that consumes them.
 stdlib = [
-    # driver core (M2) — base substrate + text; slice for the vendored
-    # libro→agnosys subscript syntax (M4)
+    # substrate + text; slice for the vendored libro→agnosys subscript syntax
     "syscalls", "alloc", "result", "tagged", "fmt", "io", "fs", "str", "string", "vec", "slice", "args", "process", "assert", "bench",
-    # general utilities sandhi/sigil build on; regex carries glob_match for
-    # the vendored t-ron policy globs (M4); math carries f64_le/f64_ge for the
-    # vendored avatara archetype f64 ops (M5 — the other f64 ops are builtins)
+    # utilities sandhi/sigil build on; regex carries glob_match (t-ron's policy globs), math carries
+    # f64_le/f64_ge for avatara's archetype (its other f64 ops are builtins)
     "fnptr", "freelist", "hashmap", "chrono", "regex", "math",
-    # unicode: `_uc_decode_utf8`, needed by the vendored agnosai output-guard profile (0.40.0, T1-3) —
-    # its scanner decodes UTF-8 to avoid splitting a multi-byte character mid-redaction.
+    # `_uc_decode_utf8`: the agnosai output guard decodes UTF-8 so a redaction never splits a character
     "unicode",
-    # sys (0.51.3 / cyrius 6.6.4): sigil 3.12.18's `agnosys_uname` now calls `sys_uname`, so the
-    # sigil bundle below needs it declared (dead-path in thoth — nothing reachable calls it — but an
-    # undefined-fn warning otherwise); before sigil like every module it builds on.
+    # sigil's `agnosys_uname` calls `sys_uname` (dead-path in thoth, an undefined-fn warning otherwise)
     "sys",
-    # data formats (json/toml/cyml/base64/bigint) — before sigil + transport
+    # data formats (json/toml/cyml/base64/bigint/u128/csv) and the thoth.cyml config surface (the cyml
+    # header split + toml pairs) — before sigil (u256) and the transport (json/base64)
     "bayan",
-    # structured logging the vendored libro audit chain emits through (M4)
+    # structured logging the vendored libro audit chain emits through
     "patra",
-    # concurrency + crypto floor, ALL before sigil: sigil 3.7.8's serial hash
-    # path self-installs a per-thread TLS scratch bank and its batch verify
-    # spawns workers — without atomic/thread/thread_local first, the SHA-256
-    # in the vendored libro's chain_append traps SIGILL (t-ron 2.1.5 note).
+    # concurrency + crypto, ALL before sigil: its serial hash path installs a per-thread TLS scratch
+    # bank and its batch verify spawns workers — without atomic/thread/thread_local first, the SHA-256
+    # in libro's chain_append traps SIGILL
     "atomic", "sync", "thread", "thread_local", "ct", "keccak", "random", "sigil",
-    # dynamic-link floor TLS needs (mmap before dynlib — PROT_NONE)
+    # the dynamic-link floor TLS needs — mmap before dynlib (which uses mmap's PROT_NONE without
+    # including it), all three before tls + sandhi
     "mmap", "dynlib", "fdlopen",
-    # async (sandhi's epoll server)
+    # sandhi's epoll server
     "async",
     # transport: net/http/tls/ws + sakshi spans, then sandhi
     "net", "http", "tls", "ws", "sakshi", "sandhi",

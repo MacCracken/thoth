@@ -212,11 +212,9 @@ pin is the source of truth; don't hardcode it elsewhere.
 - [`docs/development/gap-review.md`](docs/development/gap-review.md) — candidate gaps thoth has *not* committed to
 - [`docs/doc-health.md`](docs/doc-health.md) — the doc-currency ledger
 
-**Design assets at the repo root**, named here so neither reads as scratch:
-[`Thoth.dc.html`](Thoth.dc.html) is the T3 GUI pixel spec (its palette is `src/ui.cyr`'s; cited by
-[ADR-0009](docs/adr/0009-presentation-capability-ladder.md) and the `src/gui/` headers), and
-`thoth_v1.tiff` is the project emblem — a line-art ibis with the lunar disc, papyrus and uraeus — and the
-source `scripts/gen-splash.sh` renders into the generated `src/splash.cyr` startup ibis.
+**The design asset at the repo root**, named here so it does not read as scratch: `thoth_v1.tiff` is the
+project emblem — a line-art ibis with the lunar disc, papyrus and uraeus — and the source
+`scripts/gen-splash.sh` renders into the generated `src/splash.cyr` startup ibis.
 
 ## License
 

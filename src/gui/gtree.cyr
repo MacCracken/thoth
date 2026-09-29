@@ -1,7 +1,7 @@
 # src/gui/gtree.cyr — the GUI file-tree pane view-builder (T3, 0.30.5).
 #
 # The desktop-tier renderer of ftree.cyr's flattened tree model — the SAME model the TUI file-tree pane reads —
-# lowered into draw-commands for a LEFT column, the mockup's (Thoth.dc.html) file-tree pane. A view-builder like
+# lowered into draw-commands for a LEFT column, the mockup's file-tree pane. A view-builder like
 # gstatus/gfeed: it READS producers (ftree_* + git_status_of) and owns no state, emitting byte-free draw
 # commands. STATIC render this cut (the loaded tree + git badges); keyboard nav (focus / ↑↓ / expand-collapse)
 # is a follow-up, mirroring feed render (0.30.1) → feed interactive (0.30.2).

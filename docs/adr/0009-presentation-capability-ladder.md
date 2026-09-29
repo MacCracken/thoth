@@ -110,3 +110,15 @@ names in the table never shipped under those names. mihi and bnrmr were never ve
 no GPU gate (T3 is the `thoth gui` subcommand), and the banner is the generated `src/splash.cyr`
 ibis plus anuenue's hue for `/theme rainbow`. The tier is reported on `/state`'s `surface` row, not
 `/seams`. The `.git/` read-mode gate cleared at 0.13.0 (the vendored `sit-read`).
+
+## Addendum (2026-09-28) — the mockup retired
+
+`Thoth.dc.html` was deleted from the tree once its design had landed, so it cannot be mistaken for a
+live spec; it stays in git history (`d45b1bf`). What carried: the dark and light palettes as
+`src/ui.cyr`'s colour roles (⌃T cycles them on both surfaces), the status bar (on the bottom edge since
+0.45.0), the file-tree pane, the feed with its user marker and tool cards, the diff card (in full on the
+TUI — line numbers, row tint, syntax colour; the window's edit card colours its +/- lines only), the
+working indicator, the composer with its keybinding hints, and the slash palette (TUI only). What did
+not: a per-reply token/time/cost line (the bar carries session totals instead), the window's slash
+palette, click targets for theme and send, and the web page's own chrome (fade-ins, scrollbars, the
+webfont). The `src/gui/*` comments that say "the mockup's" are provenance notes.

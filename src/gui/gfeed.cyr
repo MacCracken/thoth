@@ -1,7 +1,7 @@
 # src/gui/gfeed.cyr — the GUI conversation-feed view-builder (T3, 0.30.1).
 #
 # Renders the conversation (session_history_*) as word-wrapped messages in the window body — the mockup's
-# (Thoth.dc.html) main region. A user message gets a `>` accent marker + its text; an agent message is plain
+# main region. A user message gets a `>` accent marker + its text; an agent message is plain
 # body text; each wraps to the available pixel width. When there is no conversation yet, an honest greeting
 # empty-state (the app's opening screen, never a faked exchange). PURE: builds draw-commands over the tested
 # pipeline (gdraw + graster's codepoint-accurate text); no display, no producer of its own — it reads the
