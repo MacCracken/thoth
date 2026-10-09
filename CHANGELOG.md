@@ -2,6 +2,90 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.7] - 2026-10-09
+
+**Repair batch 11: current models, and a model list that updates itself.** The model picker and `/models` showed
+whatever hoosh's catalog served, and hoosh ≤ 2.7.1 served a table compiled in mid-2025. Against the live Anthropic
+API, every Claude id it offered was retired or not a real id (`claude-opus-4`, `claude-3.5-haiku`, …), so a pick
+could only fail. thoth hardcodes no model list of its own, so the source fix is upstream: **hoosh 2.8.0** asks
+each provider for its models live, with prices, context windows and capabilities. This patch folds that in, and
+fixes what thoth itself had aged into:
+- the reasoning levels current models take;
+- an output ceiling built for 4K-output models;
+- replies that hit that ceiling, or were refused, without saying so;
+- the ids in its docs and examples.
+
+The cyrius pin stays at **6.6.6**. Suite **826 + 2208 + 1130 + 853 + 190 + 5** (+73).
+
+- **The model list comes from the providers** (hoosh 2.8.0; thoth reads it).
+  - The Ctrl-P picker and `/models` list what each provider serves now: 14 Claude models live on 2026-10-09,
+    against six unservable ids before. A model released tomorrow appears at hoosh's next refresh, with no thoth or
+    hoosh release.
+  - A row shows the gateway's own price where your `[pricing]` names no rate, marked `(hoosh)`. Your table still
+    wins, and it is still the only source the cost tally and `[budget].max_cost_micro` price from.
+  - `/models` rows show the context window too.
+- **Bare `/models` lists models, not providers.**
+  - Since hoosh 2.7.0 its `/v1/models` lists concrete ids, which thoth's bare `/models` had been reading as
+    provider kinds. Every row printed a model id with a health lookup that could only miss.
+  - It now reads the catalog and groups the models under their provider: health, count, and **key rejected**
+    when hoosh's authenticated catalog GET for that provider got a 401/403. That is the first place a revoked or
+    mistyped key shows; the remote health probe is a TCP connect and cannot see a key.
+  - A hoosh older than 2.7.0, which lists provider kinds, still gets the 0.47.0 rows.
+- **The picker's health is per model.** hoosh 2.8.0 names, per model, the routes that would serve it, and the
+  health table now keeps each route's own state. A model behind only the healthy one of a provider's two routes
+  reads healthy instead of its provider's "degraded"; one with no routes named falls back to the provider, as
+  before. The hint names a rejected key.
+- **`[hoosh].reasoning` takes `xhigh` and `max`,** the levels Claude 4.7 and later accept (`xhigh` is their
+  recommended agentic-coding level).
+  - hoosh 2.8.0 clamps a level to what the serving model takes. Measured: Sonnet 4.6 400s on `xhigh`; Haiku 4.5
+    400s on hoosh 2.7.1's adaptive shape at any level. hoosh 2.7.1 read either word as "no thinking".
+  - These levels ask for a matching output ceiling: 32K at `xhigh`, 64K at `max`. `off` through `high` are
+    unchanged.
+- **The reasoning fold fills on current Claude models.** Claude 4.7 and later return empty thinking text unless
+  the request asks for a summary. hoosh 2.8.0 is the first to ask, and both turn paths already folded
+  `reasoning_content`. Measured live: the window drew Opus 5.5's reasoning, and `/state` counted it.
+  - The comments, `/state` line and docs that called the empty fold "by design" ("Opus 4.8 keeps reasoning
+    internal") are corrected. That was hoosh never asking, not the model.
+- **`[hoosh].max_tokens` (new).** It sets the output ceiling for every request, clamped to 1,024–131,072.
+  - The old 4,096 (16,384 with reasoning) was sized for 2024-era 4K-output models; current models emit up to
+    128K, and an agentic edit or a long answer could run into the ceiling with no sign of it.
+  - The defaults are unchanged.
+- **A reply that ends short says why** (hoosh 2.8.0 carries the provider's `finish_reason`; thoth now reads it on
+  all four paths: plain/agentic × stream/blocking).
+  - **`length`:** "reply cut short — it reached the output ceiling (max_tokens N); raise [hoosh].max_tokens".
+    Measured live: a 1,024 ceiling cut a count to 3,000 and said so.
+  - **`content_filter`** (a Claude 5.x classifier refusal is HTTP 200 with `stop_reason: "refusal"`): "the model
+    declined this request". It is no longer reported as an empty stream, a gateway fault, or (on the plain path)
+    a transport failure that turned the status-bar dot red.
+  - A tool round cut short is named before its calls run. `--logs` records the finish reason.
+- **Stream usage counts.** thoth asked for the usage frame on every stream since 0.10.2, and hoosh ≤ 2.7.1 never
+  sent one. hoosh 2.8.0 does, from the provider's own counts, and thoth's existing decode reads it. Measured live:
+  a streamed agentic turn reported 1,524 tokens in `/state` and the status bar.
+- **Current ids in the docs.** The examples, the config template and `scripts/stack.sh` named retired or older
+  models.
+  - The config template priced Haiku 4.5 at $0.80/$4.00, which was Haiku 3.5's rate (Haiku 4.5 is $1/$5).
+  - They now use the current lineup and point the operator at `/models`, since ids change.
+  - The template documents `max_tokens`, the new reasoning levels, and the `(hoosh)` price.
+- **Found while verifying, fixed in hoosh 2.8.0.** hoosh's remote health probe connected to localhost:80 (its url
+  parser assumed `http://`), so every cloud route read "unhealthy" after 90 seconds while its requests worked,
+  and the picker painted every cloud model red.
+
+**Verification.**
+- All six suites pass on Linux. Break tests: deleting the stream callback's finish recording fails its
+  assertion, and so does folding picker rows by provider only.
+- Linux, aarch64 and AGNOS build with 0.52.6's warning sets, apart from one shifted line number and the
+  static-data size.
+- All five suites pass as aarch64 binaries under `qemu-aarch64` (5,207 of 5,207).
+- macOS is green natively (846 + 2183 + 1127 + 190 + 805), built at the pin through a private `CYRIUS_HOME`,
+  since the host's default toolchain had moved to 6.6.15.
+- The Windows lane stays at its known-gap skip.
+- Driven live, from a throwaway HOME, against a hoosh 2.8.0 serving the real Anthropic API: the TUI in a pty
+  (`/models`, the picker, an agentic turn with reasoning on, `/state`, a cut reply) and the window on a headless
+  compositor (the reasoning fold).
+- The AGNOS ring-3 re-run is deferred to the follow-up the AGNOS items move to, by the maintainer's call.
+- Other repos still choose models themselves and are not part of this release: secureyeoman's own catalog and
+  defaults, and agnosai's `llama3:*` crew defaults. They are listed in the roadmap for discussion.
+
 ## [0.52.6] - 2026-09-27
 
 **Repair batch 10: an audit of everything since the last one.** Six auditors read 0.45.3–0.52.5 by area (the tool-pin

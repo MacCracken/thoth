@@ -1864,6 +1864,22 @@ fn test_mpick_health() {
         assert_eq(_t_vis(vis, "  ● claude-x *  $3.00/$15.00 per M\n"), 1, "at exactly the width the rate shows");
         assert_eq(_t_vis(vis, "  ● claud\n"), 1, "a band narrower than the id clips the id (no rate, no star)");
     } else { assert(1, "fd 1 not capturable here (stated)"); }
+    # 0.52.7: a model the operator has not priced shows the GATEWAY's price when hoosh's catalog published one,
+    # marked "(hoosh)" — and the operator's rate still wins where it exists
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    var gcat = "[{\"id\":\"claude-opus-5-5\",\"owned_by\":\"anthropic\",\"pricing\":{\"input_micro_usd_per_1k\":4000,\"output_micro_usd_per_1k\":20000}},{\"id\":\"claude-x\",\"owned_by\":\"anthropic\",\"pricing\":{\"input_micro_usd_per_1k\":1,\"output_micro_usd_per_1k\":2}}]";
+    mpick_load_from(bayan_json_v_parse_buf(gcat, strlen(gcat)));
+    if (_t_fd1_to(path) == 0) {
+        _tui_pick_paint_row("claude-opus-5-5", 0, 0, HOOSH_PROV_HEALTHY, 80); emit_raw("\n");
+        _tui_pick_paint_row("claude-x", 0, 0, HOOSH_PROV_HEALTHY, 80); emit_raw("\n");
+        _tui_pick_paint_row("claude-opus-5-5", 0, 0, HOOSH_PROV_HEALTHY, 30); emit_raw("\n");
+        _t_fd1_restore();
+        _t_pick_read(path, raw, vis, 4096);
+        assert_eq(_t_vis(vis, "  ● claude-opus-5-5  $4.00/$20.00 per M (hoosh)\n"), 1, "an unpriced model shows the gateway's price, marked");
+        assert_eq(_t_vis(vis, "  ● claude-x  $3.00/$15.00 per M\n"), 1, "the operator's [pricing] rate wins over the gateway's");
+        assert_eq(_t_vis(vis, "  ● claude-opus-5-5\n"), 1, "the gateway's price yields to a narrow band like the operator's");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0;
 
     # --- the band loop itself: _tui_pick_paint joins each visible row to ITS state (scrolled, so fi != r) ---
     _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;

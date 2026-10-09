@@ -13,7 +13,7 @@ thoth's config lives in a discoverable `.thoth/` home (like `.git/`). Create
 [hoosh]
 url   = "http://127.0.0.1:8088"     # a running hoosh gateway (`hoosh serve 8088`)
 # token = "secret"                   # optional bearer; omit for an unauthenticated gateway
-# model = "claude-sonnet-4-6"        # optional default model; omit to let hoosh route
+# model = "claude-sonnet-5-5"        # optional default model; omit to let hoosh route (/models lists what it serves)
 
 [daimon]
 url = "http://127.0.0.1:8090"        # optional — wires daimon's MCP tools + the agentic loop
@@ -35,7 +35,7 @@ source and whether the gateway actually answers (never a faked `READY`).
 ```
 {(o> /seams              which spine seams are wired (the capability ladder)
 {(o> write a quicksort in Cyrius with a test     → a coding task; the model drives the turn
-{(o> /model gpt-4o       switch the backing model mid-session (routes via hoosh)
+{(o> /model claude-opus-5-5   switch the backing model mid-session (routes via hoosh; any id /models lists)
 {(o> /read src/main.cyr  print a file (read-only, syntax-highlighted)
 {(o> @src/config.cyr how does discovery work?    mention a file → its contents become context
 {(o> /git                the working repo — branch, status, per-file diff
@@ -82,7 +82,7 @@ not just a trace — the task, one line per agentic round (with the working-set 
 tool call with its arguments, authorization verdict, wall-time and result size, and the reply:
 
 ```
-event=turn_start turn=1 model=claude-opus-5 max_iters=24 tool_bytes=8439 map_bytes=1187
+event=turn_start turn=1 model=claude-opus-5-5 max_iters=24 tool_bytes=8439 map_bytes=1187
 event=task part=1 of=1 text=review this project
 event=round turn=1 iter=1 work_bytes=0 mode=stream
 event=tool name=read_file verdict=allow ok=1 ms=0 bytes=3145 args={"path": "README.md"}

@@ -472,7 +472,7 @@ fn _gfeed_splash_row(cmds, x, py, w, i) {
 # 0.35.2 reasoning fold: the collapse preference for the live "thinking" block (the model's chain-of-thought,
 # reasoning_content -> _reason_acc in hoosh.cyr). Default expanded (0). Ctrl+R toggles it (gkey -> greason_toggle).
 # The preference persists across turns (fold it away once, it stays away); the reasoning text itself is transient,
-# reset per turn/round with the reply. Inert on Opus 4.8, which keeps reasoning internal -> _reason_acc stays empty.
+# reset per turn/round with the reply. Empty when no reasoning text arrives (hoosh <= 2.7.1 on Claude 4.7+; see _reason_acc).
 var _greason_collapsed = 0;
 fn greason_collapsed() { return _greason_collapsed; }
 fn greason_toggle() { if (_greason_collapsed == 0) { _greason_collapsed = 1; } else { _greason_collapsed = 0; } return 0; }
@@ -480,7 +480,7 @@ fn greason_toggle() { if (_greason_collapsed == 0) { _greason_collapsed = 1; } e
 # _gfeed_reason_at: draw a reasoning fold for the given (text, len) at (xbase, cy) and return the y below it (WITHOUT
 # a trailing GFEED_GAP — callers add it via the gtool/gmem `if (rcy > cy)` pattern). Collapsed -> just the header
 # row; expanded -> the header + the wrapped reasoning text (FAINT header, MUTED body, indented). len <= 0 -> cy
-# unchanged (nothing drawn; the Opus 4.8 case). Shared by the LIVE fold (0.35.2, reads _reason_acc) and the LANDED
+# unchanged (nothing drawn; a turn with no reasoning text). Shared by the LIVE fold (0.35.2, reads _reason_acc) and the LANDED
 # per-message fold (0.35.3; on the message since 0.48.0) so the two render identically. The height decision reads only the passed
 # text/len + the stable greason_collapsed() flag — both fixed for the duration of one gfeed_build, so measure==draw.
 fn _gfeed_reason_at(cmds, xbase, cy, avail, text, len) {
@@ -530,7 +530,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             # 0.35.3: this turn's reasoning fold — persisted so it survives the reply landing (the live 0.35.2 fold
             # showed only the in-flight turn). Renders ABOVE the tool cards (the model reasons FIRST). 0.48.0: read
             # off the MESSAGE (no ring, no turn key), so a resumed reply keeps its fold too. cy unchanged when the
-            # reply had no reasoning (Opus 4.8). Handoff from the live fold is seamless (the same renderer).
+            # reply had no reasoning text. Handoff from the live fold is seamless (the same renderer).
             var rcy = greason_build_msg(cmds, xbase, cy, avail, i);
             if (rcy > cy) { cy = rcy + GFEED_GAP; }
             # tool-call cards (0.30.16; per-turn since 0.30.19): above EACH turn's answer, show the rounds THAT
@@ -563,7 +563,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             cy = cy + GFEED_GAP;
         }
         # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
-        # renders ABOVE the cards and partial answer. Empty on Opus 4.8 -> _gfeed_reason returns cy unchanged (no gap).
+        # renders ABOVE the cards and partial answer. No reasoning text -> _gfeed_reason returns cy unchanged (no gap).
         var _rcy = _gfeed_reason(cmds, xbase, cy, avail);
         if (_rcy > cy) { cy = _rcy + GFEED_GAP; }
         # 0.35.1: the CURRENT turn's tool-call cards, LIVE from the roundlog — each call is recorded as it completes

@@ -298,6 +298,16 @@ Each of these blocks something above. None has a default answer.
    belong in a `system` message at all — [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md) made the analogous memory
    surface opt-in.
 
+6. **May the cost tally price a turn from the gateway when `[pricing]` names no rate?** hoosh (2.8.0) publishes a
+   price per catalog model (known prices only — the operator's `[[models]]` block, a provider that lists its own, or
+   hoosh's table) and reports `cost_micro_usd` in every response's usage. The picker and `/models` show that price,
+   marked `(hoosh)`; the tally and `[budget].max_cost_micro` still price from the operator's table alone, so a
+   session on an unpriced model reads UNPRICED and its cost ceiling cannot fire. Reading the gateway's figure would
+   make the ceiling enforceable out of the box — but it trusts the gateway's arithmetic for a spend limit, and a
+   repository's local `[hoosh].url` (with its own token, the D2 ruling) is a gateway the operator did not choose.
+   If yes, the likely shape is: the operator's rate first, the gateway's figure second, and only from a global
+   `[hoosh].url`.
+
 (Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched
 ignoring case into one slot, so two kinds sharing that prefix would share a health row — audit E11; no gateway in
 use names kinds that long.)

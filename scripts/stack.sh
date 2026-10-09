@@ -35,7 +35,7 @@ HOOSH_PORT="${HOOSH_PORT:-8088}"
 DAIMON_PORT="${DAIMON_PORT:-8090}"
 BOTE_PORT="${BOTE_PORT:-9000}"
 MNEME_PORT="${MNEME_PORT:-8100}"
-MODEL="${THOTH_MODEL:-claude-opus-4-8}"
+MODEL="${THOTH_MODEL:-claude-opus-5-5}"   # the current default Opus; `thoth /models` lists what hoosh serves
 
 RUN_DIR="$STACK_HOME/run"
 LOG_DIR="$STACK_HOME/logs"

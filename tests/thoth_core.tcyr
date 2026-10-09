@@ -101,6 +101,7 @@ fn main() {
     test_confirm_sanitise();
     test_hoosh();
     test_provider_catalog();
+    test_current_models();   # 0.52.7: hoosh 2.8.0 fold-in — reasoning levels, finish reasons, per-route health, /models grouped
     test_stream_config();
     test_usage();
     test_cost();

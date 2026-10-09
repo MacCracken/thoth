@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.52.6 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.52.7 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -18,7 +18,9 @@ protocol) under **t-ron** authorization — deny is final, and no policy means a
 back until the model answers. Streaming (SSE), with parallel tool calls.
 
 **The signature move.** Switch the backing model mid-session through hoosh (`/model`, `/models`, or the Ctrl-P
-picker — each row with its provider's health as hoosh's prober reports it and its configured rate). The **persona** is sourced from **avatara** and switches mid-session too (`/persona`), with a
+picker). The list is what each provider serves right now: hoosh 2.8.0 asks the providers live, so a model released
+tomorrow appears without a release. Each row shows the health of the routes that would serve it, and its rate —
+yours from `[pricing]`, else the gateway's, marked `(hoosh)`. The **persona** is sourced from **avatara** and switches mid-session too (`/persona`), with a
 trait-derived **role** axis (`/role`).
 
 **Three surfaces, one view-model** — each degrading **closed**:
@@ -81,7 +83,7 @@ Config is **two layers** ([ADR-0019](docs/adr/0019-layered-config-global-base-lo
 Memory layers the same way. What grants the model authority or bounds its spend (`[shell].allow`,
 `[project].read_roots`, `[budget]`, `[pricing]`) the local layer may only *narrow*, while `[shell].deny` unions and
 the authority keys are global-only ([ADR-0021](docs/adr/0021-authority-keys-are-global-only.md)) — authority never
-accumulates from the less-trusted side. Multi-target (re-measured at 0.52.6 on the 6.6.6 pin): x86_64 Linux ships;
+accumulates from the less-trusted side. Multi-target (re-measured at 0.52.7 on the 6.6.6 pin; the AGNOS ring-3 run last at 0.52.6): x86_64 Linux ships;
 aarch64 Linux builds, all five test suites and the desktop window verified under `qemu-aarch64`; **AGNOS builds *and runs*** — the cross-built ELF loads and executes in ring 3 on
 the real kernel under QEMU (`./scripts/agnos-run.sh`); **macOS builds and runs** on Apple Silicon at the line tier
 (no BSD termios peer yet, so no rich TUI; the desktop window is Wayland, on Linux), with its full test suite passing natively; Windows is staged on an architectural ws2_32 socket gap (`SYS_SOCKET`/`SYS_CONNECT` in the stdlib

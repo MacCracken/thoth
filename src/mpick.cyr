@@ -27,11 +27,22 @@ var _mp_qlen = 0;
 var _mp_err = 0;             # last mpick_load outcome (MPICK_*)
 var _mp_prov = 0;            # 0.47.0: alloc(MPICK_MAX*8): per id, the provider-health table slot (hoosh_provider_index of owned_by), or -1
 var _mp_health_known = 0;    # 0.47.0: 1 when the last mpick_load got a fresh /v1/health/providers table, else 0 (rows read UNKNOWN)
+# 0.52.7 (hoosh 2.8.0's catalog): per id, the fold over the routes that would serve it (-1 = the entry named none —
+# an older hoosh — so the row reads its kind's state, as before), the gateway's own price (micro-USD per 1K tokens,
+# the [pricing] unit; -1 = none published) and the context window (-1 = not said).
+var _mp_rstate = 0;          # alloc(MPICK_MAX*8)
+var _mp_gin = 0;             # alloc(MPICK_MAX*8)
+var _mp_gout = 0;            # alloc(MPICK_MAX*8)
+var _mp_ctx = 0;             # alloc(MPICK_MAX*8)
 
 # mpick_init: one-time allocation of the picker's buffers. Idempotent.
 fn mpick_init() {
     if (_mp_ids == 0) { _mp_ids = alloc(MPICK_MAX * 8); }
     if (_mp_prov == 0) { _mp_prov = alloc(MPICK_MAX * 8); }
+    if (_mp_rstate == 0) { _mp_rstate = alloc(MPICK_MAX * 8); }
+    if (_mp_gin == 0) { _mp_gin = alloc(MPICK_MAX * 8); }
+    if (_mp_gout == 0) { _mp_gout = alloc(MPICK_MAX * 8); }
+    if (_mp_ctx == 0) { _mp_ctx = alloc(MPICK_MAX * 8); }
     if (_mp_store == 0) { _mp_store = alloc(MPICK_STORE); }
     if (_mp_filt == 0) { _mp_filt = alloc(MPICK_MAX * 8); }
     if (_mp_query == 0) { _mp_query = alloc(MPICK_QCAP); }
@@ -58,6 +69,10 @@ fn _mp_add(s) {
     safe_label_copy(dst, len + 1, s);             # len bytes + NUL; C0 and DEL become '?'
     store64(_mp_ids + _mp_n * 8, dst);
     store64(_mp_prov + _mp_n * 8, 0 - 1);        # 0.47.0: no provider known until mpick_load_from names one
+    store64(_mp_rstate + _mp_n * 8, 0 - 1);      # 0.52.7: no routes named yet
+    store64(_mp_gin + _mp_n * 8, 0 - 1);
+    store64(_mp_gout + _mp_n * 8, 0 - 1);
+    store64(_mp_ctx + _mp_n * 8, 0 - 1);
     _mp_store_off = _mp_store_off + len + 1;
     _mp_n = _mp_n + 1;
     return 1;
@@ -103,6 +118,7 @@ fn mpick_load_from(data) {
                         var obs = bayan_json_v_str(ob);
                         if (obs != 0) { store64(_mp_prov + (_mp_n - 1) * 8, hoosh_provider_index(str_cstr(obs))); }
                     }
+                    _mp_take_extras(_mp_n - 1, m);   # 0.52.7: routes / pricing / context window, when hoosh says
                 }
             }
         }
@@ -114,14 +130,68 @@ fn mpick_load_from(data) {
     return MPICK_OK;
 }
 
+# _mp_take_extras (0.52.7): what hoosh >= 2.8.0 says about one catalog entry beyond id / owned_by — the fold over its
+# `routes`, its `pricing` and its `context_window`. Absent fields leave the -1 _mp_add wrote (omit-until-present). A
+# price outside the range the label can print is dropped, as hoosh_price_label drops the operator's. PURE over m.
+fn _mp_take_extras(i, m) {
+    store64(_mp_rstate + i * 8, hoosh_routes_fold(bayan_json_v_obj_get(m, "routes")));
+    var pr = bayan_json_v_obj_get(m, "pricing");
+    if (pr != 0) {
+        var pi = bayan_json_v_obj_get(pr, "input_micro_usd_per_1k");
+        var po = bayan_json_v_obj_get(pr, "output_micro_usd_per_1k");
+        if ((bayan_json_v_tag(pi) == JTAG_INT) && (bayan_json_v_tag(po) == JTAG_INT)) {
+            var vi = bayan_json_v_int(pi);
+            var vo = bayan_json_v_int(po);
+            if ((vi >= 0) && (vo >= 0) && (vi <= 9223372036854775) && (vo <= 9223372036854775)) {
+                store64(_mp_gin + i * 8, vi);
+                store64(_mp_gout + i * 8, vo);
+            }
+        }
+    }
+    var cw = bayan_json_v_obj_get(m, "context_window");
+    if (bayan_json_v_tag(cw) == JTAG_INT) {
+        if (bayan_json_v_int(cw) > 0) { store64(_mp_ctx + i * 8, bayan_json_v_int(cw)); }
+    }
+    return 0;
+}
+
+# mpick_gw_price_of (0.52.7): the gateway's price for model `id` from the loaded catalog into out[0] / out[8], 1 when
+# hoosh published one, else 0. By id (the row painter knows ids, not slots). PURE.
+fn mpick_gw_price_of(id, out) {
+    var i = 0;
+    while (i < _mp_n) {
+        if (streq(load64(_mp_ids + i * 8), id) == 1) {
+            if (load64(_mp_gin + i * 8) < 0) { return 0; }
+            store64(out, load64(_mp_gin + i * 8));
+            store64(out + 8, load64(_mp_gout + i * 8));
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# mpick_ctx_at (0.52.7): the context window of the model at FILTERED index fi, or -1. PURE.
+fn mpick_ctx_at(fi) {
+    if ((fi < 0) || (fi >= _mp_fn)) { return 0 - 1; }
+    return load64(_mp_ctx + load64(_mp_filt + fi * 8) * 8);
+}
+
 # mpick_health_known: 1 when the rows' states come from a fresh health table (else every row reads UNKNOWN).
 fn mpick_health_known() { return _mp_health_known; }
 # mpick_state_at: the provider-health state (HOOSH_PROV_*) of the model at FILTERED index fi — UNKNOWN when the
 # row is out of range, the catalog gave it no owned_by, or the table does not list its provider. PURE.
+# 0.52.7: a row whose catalog entry named its routes (hoosh >= 2.8.0) reads THOSE routes' fold — a kind with one
+# route down and one up no longer paints every one of its models "degraded" when a model sits only behind the
+# healthy one (the waiting-table ask). An entry with no routes falls back to the kind, as before. With no fresh
+# health table the route fold is unknown too (every route counts unmeasured), so the "unknown" contract holds.
 fn mpick_state_at(fi) {
     if (fi < 0) { return HOOSH_PROV_UNKNOWN; }
     if (fi >= _mp_fn) { return HOOSH_PROV_UNKNOWN; }
-    var pi = load64(_mp_prov + load64(_mp_filt + fi * 8) * 8);
+    var slot = load64(_mp_filt + fi * 8);
+    var rs = load64(_mp_rstate + slot * 8);
+    if (rs >= 0) { return rs; }
+    var pi = load64(_mp_prov + slot * 8);
     return hoosh_provider_state_at(pi);
 }
 # mpick_provider_slot_at: the provider-table slot of the model at FILTERED index fi, or -1. PURE.

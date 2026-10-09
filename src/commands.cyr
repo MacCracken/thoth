@@ -336,8 +336,10 @@ fn _params_one(key, val) {
 
 # _state_reason_row (0.35.4): the /state "reason" row — the [hoosh].reasoning effort control + how many replies of
 # the active conversation carry reasoning (0.48.0: read off the store, so a resumed conversation counts its folds
-# and a /reset drops them). Effort dials the model's reasoning; the count stays 0 on a model that keeps reasoning
-# INTERNAL (Opus 4.8) even at high effort, so it's the concrete "is reasoning actually streaming?" signal.
+# and a /reset drops them). Effort dials the model's reasoning; the count stays 0 when no reasoning TEXT reaches thoth
+# — a model that thinks without returning it, or (measured) hoosh <= 2.7.1 on Claude 4.7 and later, which never asked
+# for the summary (`display: "summarized"`; hoosh 2.8.0 does) — so it's the concrete "is reasoning actually
+# streaming?" signal.
 # Extracted from cmd_state for unit-testability (no network probe — pure config + the store).
 # _state_map_row (0.50.0, F5): the /state "map" row — whether the project-map hint rides the system prompt, and
 # what the LAST BUILD (a turn, or /dry) held: entries, bytes, whether the cap bit, or that the root could not be
@@ -421,13 +423,13 @@ fn _state_pins_row() {
 fn _state_reason_row() {
     ui_label("  reason  : ");
     if (config_hoosh_reasoning() == 0) {
-        ui_emit(ROLE_FAINT, "off"); ui_emit(ROLE_MUTED, " (set [hoosh].reasoning = low|medium|high)"); oprintln("");
+        ui_emit(ROLE_FAINT, "off"); ui_emit(ROLE_MUTED, " (set [hoosh].reasoning = low|medium|high|xhigh|max)"); oprintln("");
         return 0;
     }
     ui_emit(ROLE_ACCENT, config_hoosh_reasoning_effort()); ui_emit(ROLE_MUTED, " effort");
     var n = session_history_reason_count();   # 0.48.0: off the store — a resumed conversation's folds count, a /reset's do not
     if (n > 0) { ui_emit(ROLE_MUTED, " · "); ofmt_int(n); ui_emit(ROLE_MUTED, " reply(ies) with reasoning in this conversation"); }
-    else { ui_emit(ROLE_FAINT, " · none captured in this conversation (this model may keep reasoning internal)"); }
+    else { ui_emit(ROLE_FAINT, " · none captured in this conversation (the model returned no reasoning text — hoosh >= 2.8.0 asks for it)"); }
     oprintln("");
     return 0;
 }

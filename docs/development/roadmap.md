@@ -116,27 +116,47 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 11 → 0.52.7
+### Repair batch 12 → 0.52.8
 
 Nothing pinned: no thoth-owned defect is known, and the design questions awaiting a ruling sit in
 [`gap-review.md`](gap-review.md). The toolchain stays on cyrius **6.6.6** — no refresh is scheduled.
 
+### Next steps — follow-ups awaiting the maintainer
+
+Ordered by what unblocks the most. None is pinned to a version until it is decided.
+
+1. **The AGNOS follow-up** (deferred together, by the maintainer's call). A current `hoosh_agnos` build (hoosh has
+   none in CI or `scripts/`; the one on disk downstream is 2.4.11) for gate 1 rung 2, and the ring-3 smoke re-run
+   that each release carries (`scripts/agnos-run.sh`; its stamp lives in `state.md`'s Targets row).
+2. **Model choice in the other consumers** — to discuss before anyone edits them. They still pick or list models
+   themselves instead of asking hoosh's catalog:
+   - **secureyeoman** keeps its own catalog, pricing and context tables (TypeScript `model-registry.ts`,
+     `cost-calculator.ts`, `context-compactor.ts`), plus Rust defaults in `sy-core`. Its `HooshDelegate` falls back
+     to `gpt-4o`. About a dozen internal tasks hardcode `claude-haiku-3-5-20241022`, which is not an Anthropic id.
+   - **agnosai** (and **agnostic**, which links it) sends `llama3:70b` / `llama3:405b` to hoosh when an agent sets
+     no `llm_model` (`_agnosai_crew_select_model`), and its README's `"llm_model": "capable"` is sent literally.
+   Each can read hoosh's `/v1/models/catalog` the way thoth does.
+3. **Pricing a turn from the gateway** (gap-review question 6) — whether the tally may use hoosh's per-model price
+   or its per-response `cost_micro_usd` when `[pricing]` names no rate. Today the picker shows the gateway's price
+   and the tally ignores it.
+
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each row carries the version it was last checked against (every row re-read 2026-09-26 against hoosh 2.7.1, daimon
-2.4.3, sit 1.6.2, t-ron 2.1.11, bote 3.3.13, darshana 1.1.2, cyrius 6.6.6, agnos 1.57.9, gnoboot 0.7.2 and bhava
+Each row carries the version it was last checked against (every row re-read 2026-10-09 against hoosh 2.8.0, daimon
+2.4.3, sit 1.6.2, t-ron 2.1.11, bote 3.3.16, darshana 1.1.2, cyrius 6.6.6, agnos 1.57.10, gnoboot 0.7.2 and bhava
 2.0.0). A release re-checks the list; a closed item becomes a re-vendor patch with a line-anchored needle in
-`tests/cases/vendor.cyr`.
+`tests/cases/vendor.cyr`. bote 3.3.16 and libro 2.10.6 are tagged (thoth vendors 3.3.13 / 2.10.3), but both pin
+cyrius 6.6.14, so they wait with the 6.6.6 pin.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.7.1 has no agnos build in its CI or scripts) — gate 1 rung 2; `daimon-agnos` 2.4.3 is ready beside it | hoosh **2.7.1** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
+| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.8.0 has no agnos build in its CI or scripts) — gate 1 rung 2; `daimon-agnos` 2.4.3 is ready beside it. Deferred with the AGNOS follow-up (next steps, item 1) | hoosh **2.8.0** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
 | **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:12`; daimon's roadmap puts caller auth at 2.5.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:134-142`) | daimon **2.4.3** | done — thoth's own pin store (ADR-0022) is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" — on a clean tree, every executable script (`_blob_differs_from_file` calls an unreadable side "differs", `src/api.cyr:146`) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
-| **hoosh** | ⛔ SSE frames dropped on the Anthropic streaming path: `_emit_anthropic_tool_delta` returns 0 when a `content_block_start` lacks `id`+`name` (`src/lib/handlers.cyr:1997`) while the `input_json_delta` fragments still arrive | hoosh **2.7.1** | done — thoth drops and announces such a call |
-| **hoosh** | the streaming usage frame (`stream_options.include_usage` / `message_delta.usage` decode — named as hoosh's own follow-up at `handlers.cyr:3001`; the stream still charges the reservation estimate; the issue text to file is in the 0.45.5 CHANGELOG entry) | hoosh **2.7.1** | thoth keeps requesting it and already decodes it — the row lights up when hoosh ships the frame |
-| **hoosh** | three asks from the picker: the serving ROUTE per catalog entry (a `base_url` or route index beside `owned_by` in `/v1/models/catalog` — `handle_models_catalog`, `handlers.cyr:362`, still emits `id` / `object` / `owned_by`; so a model joins to ITS route's health instead of its kind's fold — a kind with partitioned routes reads `degraded` for every model of it today); a pricing-table dump (a `GET` listing `pricing_lookup` for every catalog key — `/v1/cost/estimate` answers one model per call); `/v1/health/providers` emitting `base_url` unescaped (`handlers.cyr:922`, a raw `add_cstr` — a quote in a route url breaks the body and thoth reads "health unavailable"). And a remote route's `healthy` is a TCP connect (`health_probe`, `health.cyr:51`, `net_connect_nb` at `:60`), never a valid key | hoosh **2.7.1** | done — thoth folds health per kind, prices from the operator's table and treats an unparseable health body as unavailable |
-| **hoosh** | multimodal content parts: `content` is read as a string (`src/lib/provider.cyr:474`) and a plain message passes through verbatim (`:490`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; `metadata.cyr:20` already carries a per-model `vision` bit — the prerequisite for candidate F10 | hoosh **2.7.1** | none yet — thoth sends text only |
+| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:490`) and a plain `{role,content}` passes through verbatim (`:506`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.8.0** | none yet — thoth sends text only |
+| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.8.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
+| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.8.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
+| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.8.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
 | **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a ring of deny events overruns it from ~185-byte tool names (one event alone from ~199), and a `"` in a name (which `tron_is_safe_identifier`, `gate.cyr:66`, admits) makes the export invalid JSON; and `_audit_details` (`:12`) allocates `tool + 256` but writes `2 · tool + agent + 90..93` on a deny, from a ~159-byte name. The artifact is a SECURITY record | t-ron **2.1.11** (vendored 2.1.11) | done — while t-ron is bound, `gate_name_fit` refuses a name longer than t-ron's audit buffers hold (`GATE_TRON_NAME_ROOM`, 163 bytes less the agent id) or holding a quote, backslash, control or non-ASCII byte, before `tron_check`; `test_gate_name_fit` fails if a t-ron sync moves the boundary |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the three `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.6.2's `[lib.read]` still defines `cmd_reset` and leaves the three unresolved (by sit's design, `cyrius.cyml:62-64`); bote 3.3.13 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.1.2** (vendored 1.1.2) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
@@ -234,12 +254,6 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 - **The window renders at buffer scale 1** — on a scaled output the compositor upscales it, so at scale 2 (Hyprland,
   verified live) the text and the 12×19 arrow are soft rather than small. `wl_surface.set_buffer_scale` (or
   fractional scaling) would draw both crisp at the output's density; a feature if it earns a slot, not a repair.
-- **`gate_init` / `log_init` failure lines are discarded on the `thoth gui` path** — main.cyr runs
-  one-shot dispatch under `OUT_NULL` (`src/main.cyr:146`) and `thoth gui` is a one-shot mode, so
-  "t-ron: policy … unreadable — seam stays absent" and "log: cannot open … — structured logging
-  disabled" never reach the operator; the seams degrade closed and `/state` names both. Switching
-  them to `note_*` puts them on every `thoth -p` run's stderr too — a cross-surface decision,
-  deferred (the window's notice row could carry them — a patch if decided).
 - **What a stop cannot reach** — Esc stops a command only where a wait loop hands control back. A Windows
   capture is one blocking wait inside `lib/process_win.cyr` (it still ends at its deadline; the lane is closed
   anyway); line mode's streaming `/run` gives the child the terminal; and a blocking
@@ -277,11 +291,11 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
   returned as the project root AND as the global layer: every fact injected twice. Kept over the
   other failure (a dropped global layer is silent; the double read is only waste); `$PWD` alone
   must never make the claim. Closes if the memory layer ever writes an index on first use.
-- **Streaming usage** — every streaming request carries `stream_options.include_usage`; hoosh
-  meters a stream by the reservation, so the token/cost row is not fed there and `[budget]`
-  cannot be enforced on that path (`[hoosh].stream = false` is the way round). The request stays
-  by decision: thoth's decode is in place, and the row lights up the release hoosh ships the
-  frame — the hoosh row above.
+- **Streaming usage needs hoosh >= 2.8.0** — every streaming request carries `stream_options.include_usage`, which hoosh
+  answers from 2.8.0 on (from the provider's own counts); against an older hoosh a stream feeds no
+  token/cost row and `[budget]` cannot be enforced on that path (`[hoosh].stream = false` is the way round there).
+  A provider that reports no usage (most local OpenAI-compatible servers, unless they honour the option) still
+  leaves the row unfed.
 - **Input-history hardening** — a fresh `[history].file` is created `0600` on POSIX and opened
   with `O_NOFOLLOW`, so a symlinked file is refused rather than followed; a pre-existing looser file is
   still never re-tightened (the `chmod` floor row: never assert a mode thoth cannot enforce). The

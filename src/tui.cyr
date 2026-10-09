@@ -1389,8 +1389,13 @@ fn _tui_pick_paint_row(id, sel, active, state, fwidth) {
     if (budget < 0) { budget = 0; }
     cols = cols + _tui_pick_emit_clip(id, budget);
     if (is_active == 1) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw(" *"); cols = cols + 2; }
-    var pb[64];
-    var pl = hoosh_price_label(id, &pb, 64);
+    var pb[80];
+    var pl = hoosh_price_label(id, &pb, 80);
+    if (pl == 0) {
+        # 0.52.7: no operator rate — the gateway's own price, when its catalog published one, marked as hoosh's
+        var gw[16];
+        if (mpick_gw_price_of(id, &gw) == 1) { pl = hoosh_gw_price_label(load64(&gw), load64(&gw + 8), &pb, 80); }
+    }
     if (pl > 0) { if ((cols + 2 + pl) <= fwidth) { emit_raw(ui_sgr(ROLE_FAINT)); emit_raw("  "); emit_raw(&pb); } }
     emit_raw(ui_reset());
     return 0;
@@ -1484,16 +1489,24 @@ fn _tui_pick_hint_health(room) {
     var _ps = mpick_state_at(_fi);
     var _pw = hoosh_provider_state_word(_ps);
     var _db[40];
-    var _dl = hoosh_provider_detail(mpick_provider_slot_at(_fi), &_db, 40);
+    var _slot = mpick_provider_slot_at(_fi);
+    var _dl = hoosh_provider_detail(_slot, &_db, 40);
+    # 0.52.7: the kind's "(h/n routes healthy)" belongs to the kind; a row folded over ITS OWN routes (hoosh 2.8.0)
+    # can read healthy while its kind reads degraded, and the kind's count beside it would contradict the word.
+    if (_ps != hoosh_provider_state_at(_slot)) { _dl = 0; }
+    var _kb = 0;
+    if (hoosh_provider_key_rejected_at(_slot) > 0) { _kb = 14; }        # "  key rejected"
     var _pl = 0;
     if (_pn != 0) { _pl = strlen(_pn) + 1; }
-    if ((2 + _pl + strlen(_pw) + _dl) > room) { _dl = 0; }               # the detail yields first
-    if ((2 + _pl + strlen(_pw)) > room) { _pl = 0; }                     # then the provider name
+    if ((2 + _pl + strlen(_pw) + _dl + _kb) > room) { _dl = 0; }         # the detail yields first
+    if ((2 + _pl + strlen(_pw) + _kb) > room) { _pl = 0; }               # then the provider name
+    if ((2 + strlen(_pw) + _kb) > room) { _kb = 0; }                     # then the key note
     if ((2 + strlen(_pw)) > room) { return 0; }                          # then the whole segment
     ui_emit(ROLE_FAINT, "  ");
     if (_pl > 0) { ui_emit(ROLE_MUTED, _pn); ui_emit(ROLE_FAINT, " "); }
     ui_emit(hoosh_provider_state_role(_ps), _pw);
     if (_dl > 0) { ui_emit(ROLE_FAINT, &_db); }
+    if (_kb > 0) { ui_emit(ROLE_RED, "  key rejected"); }                # 0.52.7: its catalog GET answered 401 / 403
     return 0;
 }
 

@@ -11,12 +11,12 @@
 # reply-finalize sites call (hoosh_send, agent_turn's final answer, the interrupted and working-set-full partials)
 # (/state counts the replies that carry reasoning straight off the store — session_history_reason_count — so a
 # resume and a /reset read honestly; the 0.35.4 "folded this session" counter is gone with the ring). Never records
-# on Opus 4.8, which keeps reasoning internal (len 0 -> no record, no arena). PURE — no display, no I/O.
+# a turn that returned no reasoning text (len 0 -> no record, no arena). PURE — no display, no I/O.
 
 # reasonlog_record: capture TURN `turn`'s reasoning `text`/`len` (the final round's chain-of-thought, read from
 # `_reason_acc` via hoosh_last_reason at reply-finalize) onto the just-appended assistant message. Called AFTER
 # session_history_append("assistant", …) and BEFORE sess_persist_save() at every site, so the first save carries
-# it. No-op when the turn is untagged (<= 0 — no live turn) or there was no reasoning (len <= 0 — the Opus 4.8 case).
+# it. No-op when the turn is untagged (<= 0 — no live turn) or there was no reasoning text (len <= 0).
 # The text is COPIED (the accumulator is wiped at the next round), capped at MSG_REASON_CAP-1 + NUL-terminated.
 fn reasonlog_record(turn, text, len) {
     if (turn <= 0) { return 0; }

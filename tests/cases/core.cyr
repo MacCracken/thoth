@@ -172,9 +172,10 @@ fn test_state_reason_row() {
     _cfg_hoosh_reasoning = 0;                  # off
     assert(_t_reason_line("off") >= 1, "reason row: off shows 'off'");
     assert(_t_reason_line("low|medium|high") >= 1, "reason row: off gives the enable hint");
-    _cfg_hoosh_reasoning = 2;                  # medium, nothing captured yet (the Opus 4.8 case)
+    assert(_t_reason_line("low|medium|high|xhigh|max") >= 1, "reason row: ...naming the 0.52.7 levels too");
+    _cfg_hoosh_reasoning = 2;                  # medium, nothing captured yet (no reasoning text has arrived)
     assert(_t_reason_line("medium") >= 1, "reason row: shows the effort word");
-    assert(_t_reason_line("internal") >= 1, "reason row: on + no reply with reasoning -> 'may keep reasoning internal'");
+    assert(_t_reason_line("returned no reasoning text") >= 1, "reason row: on + no reply with reasoning -> says no reasoning TEXT arrived (0.52.7: hoosh >= 2.8.0 asks for it)");
     assert_eq(_t_reason_line("with reasoning"), 0, "reason row: no count when nothing captured");
     session_history_append("user", "q", 1);
     session_history_append("assistant", "a", 1);
@@ -188,7 +189,7 @@ fn test_state_reason_row() {
     assert(_t_reason_line("2") >= 1, "reason row: reports the 2 replies that carry reasoning (not the one without)");
     assert_eq(_t_reason_line("3"), 0, "...not three");
     session_history_clear();
-    assert(_t_reason_line("internal") >= 1, "reason row: a cleared conversation reads none again (the count is the store's, not a session counter)");
+    assert(_t_reason_line("returned no reasoning text") >= 1, "reason row: a cleared conversation reads none again (the count is the store's, not a session counter)");
     _cfg_hoosh_reasoning = 0; session_reset();   # restore defaults
     return 0;
 }
@@ -6805,5 +6806,173 @@ fn test_clean_c1() {
     _term_title_build(t, 128);
     assert(streq(t, "thoth - gpt]0;x") == 1, "the terminal title drops C1 as it drops C0 (C2 9C would end the OSC early)");
     _cfg_hoosh_model = sv_m;
+    return 0;
+}
+
+# test_current_models (0.52.7): what thoth folds in from hoosh 2.8.0 — the reasoning levels current models take
+# (xhigh, max) and the output ceiling that goes with them ([hoosh].max_tokens), the finish reason a reply now
+# carries (length / content_filter named on every surface), the per-ROUTE health and catalog_status a health row
+# now carries, and the grouped /models listing over a model list (prices from the gateway, marked, and context
+# windows). Every body is canned: no gateway.
+fn test_current_models() {
+    test_group("current models: reasoning levels, finish reasons, per-route health, /models grouped (0.52.7)");
+    # --- reasoning levels + the output ceiling ---
+    assert_eq(_reasoning_level_from("xhigh"), 4, "reasoning: xhigh -> 4");
+    assert_eq(_reasoning_level_from("max"), 5, "reasoning: max -> 5");
+    assert_eq(_reasoning_level_from("maximum"), 0, "reasoning: an unknown word stays off");
+    _cfg_hoosh_reasoning = 4; assert(streq(config_hoosh_reasoning_effort(), "xhigh"), "level 4 -> the word xhigh");
+    _cfg_hoosh_reasoning = 5; assert(streq(config_hoosh_reasoning_effort(), "max"), "level 5 -> the word max");
+    _cfg_hoosh_max_tokens = 0 - 1;
+    _cfg_hoosh_reasoning = 4; assert_eq(_hoosh_max_tokens(), 32768, "budget: xhigh asks for 32K (room to think)");
+    _cfg_hoosh_reasoning = 5; assert_eq(_hoosh_max_tokens(), 65536, "budget: max asks for 64K");
+    _cfg_hoosh_reasoning = 3; assert_eq(_hoosh_max_tokens(), 16384, "budget: high unchanged at 16K");
+    _cfg_hoosh_reasoning = 0; assert_eq(_hoosh_max_tokens(), 4096, "budget: off unchanged at 4096");
+    _cfg_hoosh_max_tokens = 20000;
+    assert_eq(config_hoosh_max_tokens(), 20000, "[hoosh].max_tokens is read as set");
+    assert_eq(_hoosh_max_tokens(), 20000, "...and wins over every default, reasoning off");
+    _cfg_hoosh_reasoning = 5; assert_eq(_hoosh_max_tokens(), 20000, "...and on");
+    _cfg_hoosh_max_tokens = 10; assert_eq(config_hoosh_max_tokens(), 1024, "a ceiling below the floor is raised to 1024 (a typo must not brick replies)");
+    _cfg_hoosh_max_tokens = 999999; assert_eq(config_hoosh_max_tokens(), 131072, "...and one past every model's output is clamped to 128K");
+    _cfg_hoosh_max_tokens = 0; assert_eq(config_hoosh_max_tokens(), 0, "0 reads unset (the defaults apply)");
+    _cfg_hoosh_max_tokens = 0 - 1;
+    _cfg_hoosh_reasoning = 4;
+    var rq[256];
+    hoosh_build_request(&rq, "m", 0, 0, "hi", 0);
+    assert(streq(&rq, "{\"model\":\"m\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":32768,\"reasoning_effort\":\"xhigh\",\"stream\":false}"), "the request carries xhigh and its ceiling");
+    _cfg_hoosh_reasoning = 0;
+    assert_eq(_cfg_known_key("hoosh", "max_tokens"), 1, "[hoosh].max_tokens is a recognised key (no 'unrecognised' warning)");
+
+    # --- finish reasons ---
+    _hoosh_acc_reset();
+    assert_eq(hoosh_finish(), HOOSH_FIN_NONE, "a fresh turn has no finish reason");
+    var f1 = "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"},\"finish_reason\":null}]}";
+    _hoosh_note_finish(bayan_json_v_parse_buf(f1, strlen(f1)));
+    assert_eq(hoosh_finish(), HOOSH_FIN_NONE, "a delta's null finish_reason leaves it alone");
+    var f2 = "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}";
+    _hoosh_note_finish(bayan_json_v_parse_buf(f2, strlen(f2)));
+    assert_eq(hoosh_finish(), HOOSH_FIN_LENGTH, "length is recorded");
+    var f3 = "{\"choices\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}";
+    _hoosh_note_finish(bayan_json_v_parse_buf(f3, strlen(f3)));
+    assert_eq(hoosh_finish(), HOOSH_FIN_LENGTH, "the usage chunk after it (choices: []) does not erase it");
+    var f4 = "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"content_filter\"}]}";
+    _hoosh_note_finish(bayan_json_v_parse_buf(f4, strlen(f4)));
+    assert_eq(hoosh_finish(), HOOSH_FIN_FILTER, "content_filter (a provider refusal) is recorded, buffered shape too");
+    var f5 = "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}";
+    _hoosh_note_finish(bayan_json_v_parse_buf(f5, strlen(f5)));
+    assert_eq(hoosh_finish(), HOOSH_FIN_TOOLS, "tool_calls");
+    var f6 = "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"weird\"}]}";
+    _hoosh_note_finish(bayan_json_v_parse_buf(f6, strlen(f6)));
+    assert_eq(hoosh_finish(), HOOSH_FIN_STOP, "an unknown word reads as a clean stop");
+    _hoosh_note_finish(0);
+    assert_eq(hoosh_finish(), HOOSH_FIN_STOP, "a null value is a no-op");
+    _hoosh_acc_reset();
+    assert_eq(hoosh_finish(), HOOSH_FIN_NONE, "the reset that starts each round clears it");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_finish = HOOSH_FIN_LENGTH; var n1 = hoosh_finish_note();
+    _hoosh_finish = HOOSH_FIN_FILTER; var n2 = hoosh_finish_note();
+    _hoosh_finish = HOOSH_FIN_STOP; var n3 = hoosh_finish_note();
+    _hoosh_finish = HOOSH_FIN_TOOLS; var n4 = hoosh_finish_note();
+    out_mode_set(OUT_FD1);
+    assert_eq(n1 + n2, 2, "length and content_filter each print their line");
+    assert_eq(n3 + n4, 0, "stop and tool_calls print nothing");
+    assert_eq(feed_count(), 2, "two lines on the feed, nothing else");
+    assert_eq(_mid_feed_plain_count("reply cut short — it reached the output ceiling (max_tokens 4096); raise [hoosh].max_tokens to let it finish"), 1, "a cut reply names the ceiling and the key that moves it");
+    assert_eq(_mid_feed_plain_count("the model declined this request — the provider stopped it with a safety refusal (finish_reason content_filter)"), 1, "a refusal says it was the provider's refusal, not a broken stream");
+    feed_init();
+    _hoosh_finish = HOOSH_FIN_NONE;
+    # ...and both stream callbacks record it off the wire (the plain turn's and the agentic round's), the usage
+    # chunk that follows the stop chunk leaving it alone
+    intr_reset();
+    _hoosh_acc_reset();
+    var fcell = alloc(8);
+    store64(fcell, 0);
+    var fstop = "{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"length\"}]}";
+    var fuse = "{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":25,\"completion_tokens\":12,\"total_tokens\":37,\"cost_micro_usd\":8,\"provider\":\"anthropic\"}}";
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_sse_cb(fcell, _rtx_ev(fstop));
+    _hoosh_sse_cb(fcell, _rtx_ev(fuse));
+    out_mode_set(OUT_FD1);
+    assert_eq(hoosh_finish(), HOOSH_FIN_LENGTH, "the plain turn's stream callback records the finish reason");
+    _hoosh_acc_reset();
+    _ag_reset();
+    var frf = "{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"content_filter\"}]}";
+    feed_init(); out_mode_set(OUT_RING);
+    _stream_last_paint_ms = clock_now_ms();
+    _agent_sse_cb(0, _rtx_ev(frf));
+    _stream_last_paint_ms = clock_now_ms();
+    _agent_sse_cb(0, _rtx_ev(fuse));
+    out_mode_set(OUT_FD1);
+    assert_eq(hoosh_finish(), HOOSH_FIN_FILTER, "...and so does the agentic round's");
+    feed_init();
+    _hoosh_acc_reset();
+
+    # --- per-route health, catalog_status, the route fold ---
+    var body = alloc(4096);
+    var n = _t_health_body(body, 4096, "{\"provider\":\"anthropic\",\"base_url\":\"https://api.anthropic.com\",\"status\":\"healthy\",\"last_check_ms\":5,\"catalog\":\"live\",\"catalog_status\":200,\"catalog_models\":14},{\"provider\":\"openai\",\"base_url\":\"https://api.openai.com\",\"status\":\"healthy\",\"last_check_ms\":5,\"catalog\":\"live\",\"catalog_status\":401,\"catalog_models\":0},{\"provider\":\"ollama\",\"base_url\":\"http://a:11434\",\"status\":\"unhealthy\",\"last_check_ms\":5},{\"provider\":\"ollama\",\"base_url\":\"http://b:11434\",\"status\":\"healthy\",\"last_check_ms\":5}");
+    hoosh_providers_parse(body, n);
+    assert_eq(hoosh_route_index("https://api.openai.com") >= 0, 1, "each route is recorded by its base_url");
+    assert_eq(hoosh_route_catalog_status_at(hoosh_route_index("https://api.openai.com")), 401, "...with its catalog_status");
+    assert_eq(hoosh_provider_key_rejected_at(hoosh_provider_index("openai")), 1, "a 401 catalog answer counts as a rejected key for the kind");
+    assert_eq(hoosh_provider_key_rejected_at(hoosh_provider_index("anthropic")), 0, "a 200 does not");
+    assert_eq(hoosh_route_state_at(hoosh_route_index("http://b:11434")), HOOSH_PROV_HEALTHY, "a route keeps its OWN state");
+    assert_eq(hoosh_provider_state("ollama"), HOOSH_PROV_DEGRADED, "premise: the kind's routes disagree -> degraded");
+    var rb1 = "[\"http://b:11434\"]";
+    assert_eq(hoosh_routes_fold(bayan_json_v_parse_buf(rb1, strlen(rb1))), HOOSH_PROV_HEALTHY, "a model behind only the healthy route reads healthy (not its kind's degraded)");
+    var rb2 = "[\"http://a:11434\",\"http://b:11434\"]";
+    assert_eq(hoosh_routes_fold(bayan_json_v_parse_buf(rb2, strlen(rb2))), HOOSH_PROV_DEGRADED, "behind both, it is degraded");
+    var rb3 = "[\"http://nowhere:1\"]";
+    assert_eq(hoosh_routes_fold(bayan_json_v_parse_buf(rb3, strlen(rb3))), HOOSH_PROV_UNKNOWN, "a route the table does not list is unmeasured, never healthy");
+    assert_eq(hoosh_routes_fold(0), 0 - 1, "no routes field (hoosh < 2.8.0) -> -1, the caller falls back to the kind");
+    var rb4 = "[]";
+    assert_eq(hoosh_routes_fold(bayan_json_v_parse_buf(rb4, strlen(rb4))), 0 - 1, "an empty routes array falls back too");
+
+    # --- the picker: route fold, gateway price, context window ---
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_qlen = 0;
+    var cat = "[{\"id\":\"qwen3:30b\",\"object\":\"model\",\"owned_by\":\"ollama\",\"routes\":[\"http://b:11434\"],\"context_window\":32768},{\"id\":\"llama3\",\"object\":\"model\",\"owned_by\":\"ollama\"},{\"id\":\"claude-opus-5-5\",\"object\":\"model\",\"owned_by\":\"anthropic\",\"routes\":[\"https://api.anthropic.com\"],\"context_window\":1000000,\"pricing\":{\"input_micro_usd_per_1k\":4000,\"output_micro_usd_per_1k\":20000}}]";
+    mpick_load_from(bayan_json_v_parse_buf(cat, strlen(cat)));
+    assert_eq(mpick_count(), 3, "three rows");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_HEALTHY, "picker: a row reads its own routes' fold");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_DEGRADED, "picker: an entry without routes reads its kind, as before");
+    assert_eq(mpick_ctx_at(2), 1000000, "picker: the context window is kept");
+    assert_eq(mpick_ctx_at(1), 0 - 1, "...absent when hoosh did not say");
+    var gp = alloc(16);
+    assert_eq(mpick_gw_price_of("claude-opus-5-5", gp), 1, "picker: the gateway's price is kept");
+    assert_eq(load64(gp), 4000, "...input, in the [pricing] unit");
+    assert_eq(load64(gp + 8), 20000, "...output");
+    assert_eq(mpick_gw_price_of("llama3", gp), 0, "...and none when hoosh published none");
+    var pl = alloc(80);
+    hoosh_gw_price_label(4000, 20000, pl, 80);
+    assert(streq(pl, "$4.00/$20.00 per M (hoosh)"), "the gateway's price is marked as hoosh's");
+    assert_eq(hoosh_gw_price_label(4000, 20000, pl, 40), 0, "a short destination is refused, never a partial label");
+    var cl = alloc(24);
+    _hoosh_ctx_label(1000000, cl, 24); assert(streq(cl, "1M context"), "ctx: 1M");
+    _hoosh_ctx_label(200000, cl, 24); assert(streq(cl, "200K context"), "ctx: 200K");
+    _hoosh_ctx_label(131072, cl, 24); assert(streq(cl, "131K context"), "ctx: 131K");
+    assert_eq(_hoosh_ctx_label(0, cl, 24), 0, "ctx: none for 0");
+
+    # --- bare /models over a MODEL list: grouped under provider headers ---
+    var ml = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-opus-5-5\",\"object\":\"model\",\"owned_by\":\"anthropic\",\"routes\":[\"https://api.anthropic.com\"],\"context_window\":1000000,\"pricing\":{\"input_micro_usd_per_1k\":4000,\"output_micro_usd_per_1k\":20000}},{\"id\":\"claude-haiku-5-5\",\"object\":\"model\",\"owned_by\":\"anthropic\"},{\"id\":\"gpt-4o\",\"object\":\"model\",\"owned_by\":\"openai\",\"context_window\":128000},{\"id\":\"orphan-model\",\"object\":\"model\"}]}";
+    var mdata = hoosh_extract_models(ml, strlen(ml));
+    assert_eq(_hoosh_models_are_kinds(mdata), 0, "a list with real model ids is a model list");
+    var kl = "{\"object\":\"list\",\"data\":[{\"id\":\"anthropic\",\"object\":\"model\",\"owned_by\":\"anthropic\"}]}";
+    assert_eq(_hoosh_models_are_kinds(hoosh_extract_models(kl, strlen(kl))), 1, "a hoosh < 2.7.0 kind list still takes the 0.47.0 rows");
+    session_set_model_copy("claude-haiku-5-5");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_list_models_show(mdata, 1);
+    out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("models hoosh offers (4):"), 1, "the header counts the models");
+    assert_eq(_mid_feed_plain_count("  anthropic  healthy  · 2 models"), 1, "a provider header: name, health, how many");
+    assert_eq(_mid_feed_plain_count("    claude-opus-5-5  $4.00/$20.00 per M (hoosh) · 1M context"), 1, "a model row: the gateway's price, marked, and the context window");
+    assert_eq(_mid_feed_plain_count("  * claude-haiku-5-5"), 1, "the routing target is starred under its provider");
+    assert_eq(_mid_feed_plain_count("  openai  healthy  · 1 model  key rejected"), 1, "a kind whose catalog GET was refused says so in its header");
+    assert_eq(_mid_feed_plain_count("    gpt-4o  128K context"), 1, "a row with only a context window");
+    assert_eq(_mid_feed_plain_count("  (unattributed)"), 1, "an entry with no owned_by is grouped, not dropped");
+    assert_eq(_mid_feed_plain_count("routing target now: claude-haiku-5-5)"), 1, "the footer names the target");
+    feed_init();
+    session_set_model(0);
+    hoosh_providers_reset();
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0;
     return 0;
 }

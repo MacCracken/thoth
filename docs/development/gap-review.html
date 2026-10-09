@@ -392,6 +392,10 @@
       <div class="rec-head"><span class="rec-id">Q5</span><h3>Should the project map ride a non-system role?</h3></div>
       <p>Design question D3. 0.52.6 framed the map as the repository&rsquo;s data and put it through the injection guard (audit F2); what remains is whether repository-controlled names belong in a <code>system</code> message at all &mdash; ADR-0012 made the analogous memory surface opt-in.</p>
     </div>
+    <div class="rec" style="--tier: var(--ochre)">
+      <div class="rec-head"><span class="rec-id">Q6</span><h3>May the cost tally price a turn from the gateway when <code>[pricing]</code> names no rate?</h3></div>
+      <p>hoosh (2.8.0) publishes a price per catalog model (known prices only &mdash; the operator&rsquo;s <code>[[models]]</code> block, a provider that lists its own, or hoosh&rsquo;s table) and reports <code>cost_micro_usd</code> in every response&rsquo;s usage. The picker and <code>/models</code> show that price, marked <code>(hoosh)</code>; the tally and <code>[budget].max_cost_micro</code> still price from the operator&rsquo;s table alone, so a session on an unpriced model reads UNPRICED and its cost ceiling cannot fire. Reading the gateway&rsquo;s figure would make the ceiling enforceable out of the box &mdash; but it trusts the gateway&rsquo;s arithmetic for a spend limit, and a repository&rsquo;s local <code>[hoosh].url</code> (with its own token, the D2 ruling) is a gateway the operator did not choose. If yes, the likely shape is: the operator&rsquo;s rate first, the gateway&rsquo;s figure second, and only from a global <code>[hoosh].url</code>.</p>
+    </div>
     <p>Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched ignoring case into one slot, so two kinds sharing that prefix would share a health row (audit E11); no gateway in use names kinds that long.</p>
 
     <footer>

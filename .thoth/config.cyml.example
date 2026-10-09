@@ -87,7 +87,10 @@ url   = "http://127.0.0.1:8088"
 # Optional default model. Omit to let hoosh route by its own provider config.
 # /model <id> overrides this per session (the mid-session switch); hoosh routes
 # each request by the model name, so switching providers is just a new id.
-model = "claude-haiku-4-5-20251001"
+# Model ids change as providers release and retire them: `/models` (or Ctrl-P in
+# the TUI) lists what YOUR gateway serves right now — hoosh >= 2.8.0 asks each
+# provider for its live list — so pick from there rather than copying an id.
+model = "claude-haiku-5-5"
 
 # Stream the completion as it is generated (Server-Sent Events). Default: true —
 # thoth prints each delta as it arrives, the natural interactive experience. Set
@@ -163,10 +166,24 @@ model = "claude-haiku-4-5-20251001"
 #   parallel = false
 #
 # reasoning — reasoning-effort control for models that expose one ("low" |
-#   "medium" | "high"). Unset means the gateway's own default. Some models keep
-#   reasoning internal, in which case the Ctrl+R thinking fold is empty BY DESIGN.
+#   "medium" | "high" | "xhigh" | "max"). Unset means the gateway's own default.
+#   xhigh and max are the levels Claude 4.7 and later take (xhigh is the
+#   recommended agentic-coding level there); hoosh >= 2.8.0 clamps a level to what
+#   the serving model accepts and asks the provider for its reasoning summary, so
+#   the Ctrl+R thinking fold fills on current Claude models (hoosh <= 2.7.1 read
+#   xhigh/max as "no thinking" and left the fold empty on Opus 4.7 and later).
+#   A higher level asks for a higher output ceiling with it (16K up to high, 32K
+#   at xhigh, 64K at max) — see max_tokens below.
 #   [hoosh]
 #   reasoning = "medium"
+#
+# max_tokens — the output ceiling every request asks for (tokens; thinking is
+#   drawn from it too). Unset: 4096, raised with [hoosh].reasoning as above. A
+#   reply that reaches it now SAYS so ("reply cut short ... raise
+#   [hoosh].max_tokens") — hoosh >= 2.8.0 carries the provider's finish reason.
+#   Clamped to 1024 .. 131072 (the largest output any current model takes).
+#   [hoosh]
+#   max_tokens = 32768
 #
 # summarize — when the history no longer fits the request budget, spend a cheap
 #   silent side-call to recap the turns being dropped instead of losing them.
@@ -390,13 +407,23 @@ model = "claude-haiku-4-5-20251001"
 # model to be priced — a section with only one side is treated as unpriced (and /state
 # says so), never billed at $0 on the missing side. A deliberately-free side is `= 0`.
 
-# [pricing.claude-haiku-4-5-20251001]
-# input  = 800     # $0.80 per 1M input tokens
-# output = 4000    # $4.00 per 1M output tokens
+# hoosh >= 2.8.0's catalog carries the gateway's own price per model, and /models
+# and the Ctrl-P picker show it marked "(hoosh)" where this table names no rate —
+# but thoth's tally (and so [budget].max_cost_micro) prices from THIS table only.
+# Rates below are Anthropic's published first-party rates as of 2026-10; check the
+# provider's pricing page, they change.
 
-# [pricing.claude-sonnet-4-6]
-# input  = 3000    # $3.00 per 1M input tokens
-# output = 15000   # $15.00 per 1M output tokens
+# [pricing.claude-haiku-5-5]
+# input  = 100     # $0.10 per 1M input tokens (prompts up to 100K; $0.50 above)
+# output = 500     # $0.50 per 1M output tokens ($2.50 above 100K input)
+
+# [pricing.claude-sonnet-5-5]
+# input  = 2000    # $2.00 per 1M input tokens
+# output = 10000   # $10.00 per 1M output tokens
+
+# [pricing.claude-opus-5-5]
+# input  = 4000    # $4.00 per 1M input tokens
+# output = 20000   # $20.00 per 1M output tokens
 
 # The [daimon] table wires the daimon seam (M4). Declaring a `url` flips the
 # seam from absent -> remote-client: /tools lists daimon's MCP host registry

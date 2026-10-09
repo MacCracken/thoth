@@ -1781,6 +1781,7 @@ fn _agent_sse_cb(ctx, ev) {
     var v = bayan_json_v_parse_buf(data, strlen(data));
     if (v == 0) { spin_anim_release(); return 1; }
     _hoosh_account_usage(v);   # 0.10.2/0.10.3: tokens + cost from the trailing usage frame
+    _hoosh_note_finish(v);     # 0.52.7: the provider's reason the round ended (hoosh >= 2.8.0)
     # 0.44.4: hoosh 2.6.5+ forwards the provider's own error IN-STREAM. Read it BEFORE the `choices`
     # guard below — the current frame happens to carry `choices`, a future leaner one might not, and a
     # check placed after that early return would silently never fire. See _ag_err_capture.
@@ -1791,7 +1792,7 @@ fn _agent_sse_cb(ctx, ev) {
     if (first == 0) { spin_anim_release(); return 1; }
     var delta = bayan_json_v_obj_get(first, "delta");
     if (delta == 0) { spin_anim_release(); return 1; }
-    var rc = bayan_json_v_obj_get(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty on Opus 4.8)
+    var rc = bayan_json_v_obj_get(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty when no reasoning text arrives — see _reason_acc)
     if (rc != 0) {
         var rs = _hoosh_clean_text(rc);   # 0.45.0: the model's text is cleaned where it enters (see _hoosh_clean_text)
         if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
@@ -1845,7 +1846,9 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
         if (em != 0) { emit("  "); _hoosh_print_str(em); }
         _agent_round_kind = 3; _agent_round_status = status; return 0;
     }
-    _hoosh_account_usage(bayan_json_v_parse_buf(body, blen));
+    var bv = bayan_json_v_parse_buf(body, blen);
+    _hoosh_account_usage(bv);
+    _hoosh_note_finish(bv);   # 0.52.7
     var tcs = agent_tool_calls(body, blen);
     var nc = agent_tc_count(tcs);
     if (nc == 0) {
@@ -2135,6 +2138,9 @@ fn agent_turn(prompt) {
             # to remove.
             if (_agent_add_assistant(raw) == 0) { _agent_finish_workfull(iter); done = 1; }
             else {
+            # 0.52.7: a tool round the ceiling cut off may carry a call whose arguments never finished — say why
+            # before the calls run (a malformed one is dropped and named by the parser, as before).
+            if (hoosh_finish() == HOOSH_FIN_LENGTH) { hoosh_finish_note(); }
             round_no = round_no + 1;
             roundlog_open(session_turns(), round_no);
             # 0.34.1: cancel mid-round. Arm the Esc-poll around the (possibly long) tool phase so a keystroke during
@@ -2149,7 +2155,14 @@ fn agent_turn(prompt) {
             elif (_agent_work_full == 1) { _agent_finish_workfull(iter); done = 1; }   # 0.44.2: results were dropped — stop before the next round asks for more
             }
         } else {
-            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); reasonlog_record(session_turns(), hoosh_last_reason(), hoosh_last_reason_len()); sess_persist_save(); grounding_emit(); }   # 0.32.4: grounding line (silent if no recall); 0.33.4: persist cited sources; 0.33.5: persist tool calls; 0.35.3: persist this turn's reasoning for the landed fold
+            if (_hoosh_acc_len > 0) { session_history_append("assistant", _hoosh_acc, _hoosh_acc_len); citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns()); reasonlog_record(session_turns(), hoosh_last_reason(), hoosh_last_reason_len()); sess_persist_save(); grounding_emit(); hoosh_finish_note(); }   # 0.32.4: grounding line (silent if no recall); 0.33.4: persist cited sources; 0.33.5: persist tool calls; 0.35.3: persist this turn's reasoning for the landed fold; 0.52.7: a reply cut short / refused says so
+            elif (hoosh_finish() == HOOSH_FIN_FILTER) {
+                # 0.52.7: a refusal with no text is the provider's ANSWER (HTTP 200, stop_reason "refusal"), not an
+                # empty or broken stream — the two arms below would send the operator to the gateway's log.
+                hoosh_finish_note();
+                session_history_pop_last();
+                log_begin("agent_turn"); log_kv_int("iters", iter + 1); log_kv_str("result", "refused"); log_commit(SK_WARN);
+            }
             elif (_agent_empty_stream == 1) {
                 # The gateway ACCEPTED the request (HTTP 200) and streamed nothing at all. Name that as
                 # the gateway's fault, and point at the one place the reason actually exists.

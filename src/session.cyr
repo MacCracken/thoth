@@ -549,7 +549,7 @@ fn session_history_reason_count() {
     return c;
 }
 # session_history_reason(i) / session_history_reason_len(i): message i's reasoning cstr (or 0) and its byte length
-# (0 when none — the Opus 4.8 case, a user message, a pre-0.48.0 file). PURE.
+# (0 when none — a reply with no reasoning text, a user message, a pre-0.48.0 file). PURE.
 fn session_history_reason(i) {
     var ra = load64(vec_get(_sess_hist_vec(), i) + 48);
     if (ra == 0) { return 0; }

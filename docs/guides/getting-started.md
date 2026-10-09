@@ -49,7 +49,7 @@ removed). Both drive the same dispatch loop. The prompt below is shown as `{(o> 
 {(o> /seams              the capability ladder — which spine seams are wired
 {(o> /state              session state (turns, model, context, tokens, cost, spine)
 {(o> /model [id]         show the model, or switch it mid-session (routes via hoosh)
-{(o> /models [provider]  list the providers hoosh offers with their health, or a provider's models with their rates
+{(o> /models [provider]  list the models hoosh offers, grouped by provider with health, rates and context windows (or one provider's)
 {(o> /read <file>        print a file (safe, read-only; syntax-highlighted in the TUI)
 {(o> /write <f> <text>   write a file — t-ron-gated; on approval a colored diff of the change is shown, then the file is written
 {(o> /run <cmd>          run a shell command — t-ron-gated (fail-closed)
@@ -111,9 +111,12 @@ silent hung thoth with no way out but `kill`.
 
 Define `[alias]` macros in `.thoth/config.cyml` (`ship = "/run git status"`) to add your own
 slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI, **Ctrl-P**
-opens the model picker — each row carries its provider's health as hoosh's prober reports it (● green
-healthy, ● red unhealthy, ● amber degraded — the provider's routes disagree —, ○ disabled or unknown) and its
-`[pricing.<model>]` rate when one is declared; `/models` and `/models <provider>` print the same facts. thoth also **reads *and edits*** the project it was launched in: the agent has
+opens the model picker. Its rows are what each provider serves right now (hoosh 2.8.0 asks the providers live).
+Each carries the health of the routes that would serve it, as hoosh's prober reports it: ● green healthy, ● red
+unhealthy, ● amber degraded (the routes disagree), ○ disabled or unknown. It also carries its rate: your
+`[pricing.<model>]` when declared, else the gateway's own, marked `(hoosh)`. Only yours feeds the cost tally.
+`/models` and `/models <provider>` print the same facts, with each model's context window, and name a provider whose
+key hoosh's catalog request was refused with. thoth also **reads *and edits*** the project it was launched in: the agent has
 default-on jailed `read_file` / `list_dir` / `search` tools (reads and greps confined to the launch directory,
 plus any `/allow`-granted roots) and, since 0.50.0, a two-level map of the launch root on every turn
 (`[project].map`), and — opt-in via `[edit].enabled` (off by default) — jailed **`edit`** (surgical
