@@ -745,7 +745,10 @@ fn gwl_wl__handle(o): i64 {
     if (id == gwl_wl_busy_oid) { if (op == GWL_EV_BUFFER_RELEASE) { gwl_wl_buf_busy = 0; } return 0; }   # 0.52.1: the ATTACHED buffer's id
     if (id == gwl_wl_buf_oid) { return 0; }
     if (id == gwl_wl_seat_oid) {
-        if (op == GWL_EV_SEAT_CAPS) {
+        # 0.52.8 (audit G4): only an argument the message carries is read — 0.52.6 bounded ping and both configures (B3) and
+        # missed this handler: an 8-byte capabilities event read the NEXT message's bytes as the capability mask (a
+        # keyboard and a pointer were bound on a 3), or four bytes past the receive buffer at its end.
+        if ((op == GWL_EV_SEAT_CAPS) && (gwl_wire_msg_size(&gwl_wl_rbuf + o) >= 12)) {
             var caps = load32(&gwl_wl_rbuf + o + 8);
             if ((caps & 2) != 0) {                             # KEYBOARD capability
                 if (gwl_wl_kbd_oid == 0) {

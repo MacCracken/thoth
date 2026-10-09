@@ -12,11 +12,13 @@ the window size; its output is pumped the whole time, so a step never blocks the
   sleep SECS
   proc NAME [SECS]   until a process named exactly NAME exists (pgrep -x — never -f, which matches this shell)
   gone NAME [SECS]   until none does; reports how long it took (time an Esc: `keys \\x1b` then `gone sleep`)
+  resize COLSxROWS   set the pty's window size (the kernel sends the child SIGWINCH)
   mark               start a new window for `wait` / `dump`
   dump               print the plain text since the mark
   # comment
 
-Each step prints one JSON line. Exit 1 when a wait / proc / gone timed out, 2 on a usage error. The child is killed
+Each step prints one JSON line, with `at`: the output's byte offset when the step began (with --log, a terminal model
+can replay the stream to any step, resizes included). Exit 1 when a wait / proc / gone timed out, 2 on a usage error. The child is killed
 at the end unless it already exited. ⚠ One-shot `thoth -p` reads an open stdin — give it </dev/null, not this.
 """
 import ast
@@ -122,7 +124,7 @@ def main(argv):
         if not line or line.startswith("#"):
             continue
         cmd, _, rest = line.partition(" ")
-        res = {"step": line}
+        res = {"step": line, "at": len(buf)}
         t0 = time.time()
         if cmd == "send":
             os.write(fd, rest.encode() + b"\r")
@@ -150,6 +152,10 @@ def main(argv):
             res["ok"] = ok
             res["seconds"] = round(time.time() - t0, 2)
             failed = failed or not ok
+        elif cmd == "resize":
+            rc, rr = (int(x) for x in rest.split("x"))
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rr, rc, 0, 0))
+            pump(0.1)
         elif cmd == "mark":
             mark[0] = len(buf)
         elif cmd == "dump":

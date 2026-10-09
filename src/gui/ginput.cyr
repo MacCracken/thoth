@@ -93,10 +93,25 @@ var _gturn_buf = 0;
 var _gturn_active = 0;
 var _gturn_failed = 0;    # the last turn appended no assistant reply -> surface an honest notice (transient)
 var _gturn_stopped = 0;   # 0.34.3: the last turn was Esc-INTERRUPTED (not a failure) -> a neutral "stopped" notice
+var _gturn_note = 0;      # 0.52.8 (audit A1): how the provider ENDED the last turn — 1 declined, 2 cut with no text, 3 a landed reply cut
+var _gturn_note_buf = 0;  # ...and the words (hoosh_finish_sentence), copied at the turn's end
 var _gturn_t0 = 0;        # 0.52.1: session_turns() at submit — a message tagged past it is THIS turn's
 fn gturn_active() { return _gturn_active; }
 fn gturn_failed() { return _gturn_failed; }
 fn gturn_stopped() { return _gturn_stopped; }
+fn gturn_note() { return _gturn_note; }
+fn gturn_note_text() { if (_gturn_note_buf == 0) { return ""; } return _gturn_note_buf; }
+# gturn_note_set (0.52.8, audit A1): the provider's own reason the turn ended short — a refusal, or the output ceiling.
+# The window ran every turn under OUT_NULL, where hoosh_finish_note's lines are a discard, and then called gturn_fail:
+# a refusal read "the turn did not complete - is hoosh reachable?", and a cut reply landed as if it were complete.
+fn gturn_note_set(kind, text) {
+    if (_gturn_note_buf == 0) { _gturn_note_buf = alloc(GTURN_CAP); }
+    var i = 0;
+    if (text != 0) { while ((load8(text + i) != 0) && (i < GTURN_CAP - 1)) { store8(_gturn_note_buf + i, load8(text + i)); i = i + 1; } }
+    store8(_gturn_note_buf + i, 0);
+    _gturn_note = kind;
+    return 0;
+}
 fn gturn_text() { if (_gturn_buf == 0) { return ""; } return _gturn_buf; }
 fn gturn_begin(text) {
     if (_gturn_buf == 0) { _gturn_buf = alloc(GTURN_CAP); }
@@ -107,11 +122,16 @@ fn gturn_begin(text) {
     _gturn_t0 = session_turns();
     _gturn_failed = 0;    # a new submit clears any prior failure/stopped notice
     _gturn_stopped = 0;
+    _gturn_note = 0;
     intr_reset();         # 0.34.3: clean interrupt flag before the turn, so the post-turn stop-vs-fail decision
                           # reads ONLY this turn's Esc (never a stale flag) even on a path that skips agent_turn's reset
     return 0;
 }
 fn gturn_end() { _gturn_active = 0; return 0; }
+# gturn_notices_clear (0.52.8): an operator's command card supersedes the last turn's transient notice. The feed draws the
+# notices after every card, so a refusal, a failure or "- stopped -" stood under the NEXT command's card and read as that
+# command's verdict (seen live: the gate refused `/d2`, and "the model declined this request" sat beneath its card).
+fn gturn_notices_clear() { _gturn_failed = 0; _gturn_stopped = 0; _gturn_note = 0; return 0; }
 # gturn_fail: the just-run turn produced no assistant reply (unreachable hoosh, transport/http error, empty
 # completion). The window renders only session_history, so error chrome never reaches it — this transient flag
 # lets the feed show an honest "didn't complete" notice instead of silently swallowing the message.
@@ -119,6 +139,21 @@ fn gturn_fail() { _gturn_failed = 1; return 0; }
 # gturn_stop (0.34.3): the just-run turn was Esc-INTERRUPTED with no partial reply kept — a neutral "stopped" notice
 # (not the alarming "is hoosh reachable?" failure one). If a partial WAS streamed it became the reply, so no notice.
 fn gturn_stop() { _gturn_stopped = 1; return 0; }
+# gturn_settle (0.52.8, audit A1): the just-run turn's honest outcome for the feed — stopped, ended short by the provider
+# (a refusal, or the output ceiling: gturn_note_set, in the TUI's own words), or failed. A landed reply that was cut is
+# still a reply, with the notice beneath it. Here, not in gpresent, so the suite drives it with no window.
+fn gturn_settle() {
+    var fin = hoosh_finish();
+    var shortk = 0;
+    if (fin == HOOSH_FIN_FILTER) { shortk = 1; }
+    elif (fin == HOOSH_FIN_LENGTH) { shortk = 2; }
+    if (gturn_reply_landed() == 0) {
+        if (intr_pending() == 1) { gturn_stop(); }
+        elif (shortk != 0) { gturn_note_set(shortk, hoosh_finish_sentence()); }
+        else { gturn_fail(); }
+    } elif (shortk == 2) { gturn_note_set(3, hoosh_finish_sentence()); }
+    return 0;
+}
 
 # --- the compositor's close while work runs (0.52.0, F7) -----------------------------------------------------------
 # The window's close button (xdg_toplevel.close, or the compositor dropping the connection) could only be honoured

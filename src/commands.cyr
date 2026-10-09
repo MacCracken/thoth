@@ -143,15 +143,16 @@ fn alias_expand(line, depth) {
 # control byte, so it is refused where it would enter, which also closes a door nobody has found yet. It reads the
 # VALUE, not the built line: arguments typed after the alias name are the operator's own and are judged by the command
 # that prints them. Tab and newline stay allowed, as in prose, because a multi-line task alias is legitimate. The byte
-# test is _clean_byte, the policy's one-byte form, so the policy is not restated here.
+# test is _clean_at, the policy itself (0.52.8: _clean_byte, its one-byte form, has no C1 rule), so it is not restated.
 fn _alias_value_has_ctl(line) {
     _alias_name_of(line, &_alias_name, ALIAS_NAME_CAP);
     var v = config_alias_lookup(&_alias_name);
     if (v == 0) { return 0; }
+    var vn = strlen(v);
     var i = 0;
     while (load8(v + i) != 0) {
         var b = load8(v + i) & 255;
-        if (_clean_byte(b, 1) != b) { return 1; }
+        if (_clean_at(v, i, vn, 1) != b) { return 1; }    # 0.52.8 (audit F6): the policy with its C1 rule (_clean_byte has none)
         i = i + 1;
     }
     return 0;
@@ -867,6 +868,28 @@ fn cmd_allow(line) {
             ui_emit(ROLE_FAINT, "  add a [project] vidya = \"/abs/path/to/vidya\" line to .thoth/config.cyml"); oprintln("");
             return 0;
         }
+        # ⚠ 0.52.8 (the maintainer's ruling R2): a path the REPOSITORY chose is bounded like its read_roots — under a
+        # read root the operator's global config grants, with no symlink below it — and granted with that root as its
+        # trust (the walk tests every component the repository spelled). `/allow vidya` granted any path the key named,
+        # and the key is a preference a clone's .thoth/config.cyml sets: `vidya = "/home/you/.ssh"` was one word away.
+        if (config_vidya_local() == 1) {
+            var vb = config_global_root_bound(vp);
+            var vwhy = 0;
+            if (vb == 0) { vwhy = "  this repository's .thoth/config.cyml chose that path, and it is not under a read root your global config grants"; }
+            elif (_project_no_symlink_from(vp, vb) == 0) { vwhy = "  this repository's .thoth/config.cyml chose that path, and it is reached through a symlink"; }
+            if (vwhy != 0) {
+                ui_emit(ROLE_RED, "refused"); emit(" vidya "); emit_clean_line(vp); oprintln("");
+                ui_emit(ROLE_FAINT, vwhy); oprintln("");
+                return 0;
+            }
+            if (_project_grant_root_t(vp, vb) == 1) {
+                ui_emit(ROLE_GREEN, "granted"); emit(" read access to vidya: "); emit_clean_line(vp); oprintln("");
+            } else {
+                ui_emit(ROLE_RED, "could not grant"); emit(" "); emit_clean_line(vp); oprintln("");
+                _allow_root_hint();
+            }
+            return 0;
+        }
         if (project_grant_root(vp) == 1) {
             ui_emit(ROLE_GREEN, "granted"); emit(" read access to vidya: "); emit_clean_line(vp); oprintln("");
         } else {
@@ -919,6 +942,7 @@ fn _save_write_clean(fd, p, len) {
         var b = load8(p + i) & 255;
         if (b < 32) { if ((b != 10) && (b != 9)) { b = 63; } }
         if (b == 127) { b = 63; }
+        if (_c1_at(p, i, len) == 1) { b = 63; }       # 0.52.8 (audit F2): the C1 controls too (a terminal that honours 9B)
         store8(&buf + o, b);
         o = o + 1;
         if (o >= 256) { if (file_write(fd, &buf, o) != o) { return 0; } o = 0; }
@@ -928,11 +952,11 @@ fn _save_write_clean(fd, p, len) {
     return 1;
 }
 
-# _save_write_str: file_write a NUL-terminated string; 1 on a full write, 0 on short/error.
+# _save_write_str: file_write a NUL-terminated string; 1 on a full write, 0 on short/error. 0.52.8 (audit F2): through the
+# text policy (_save_write_clean) — besides thoth's own headers it writes tool names, their arguments and citation
+# titles, which went to the file raw; a literal of thoth's is unchanged by it.
 fn _save_write_str(fd, s) {
-    var n = strlen(s);
-    if (file_write(fd, s, n) != n) { return 0; }
-    return 1;
+    return _save_write_clean(fd, s, strlen(s));
 }
 
 # _save_history (0.27.0): write the tier-neutral CONVERSATION history (session_history_*) as a markdown
@@ -2073,6 +2097,12 @@ fn cmd_call(line) {
     if (load8(rest + i) != 0) { args = rest + i; }
     var gp = args;
     if (gp == 0) { gp = "{}"; }
+    # 0.52.8 (audit D8): a withheld tool is refused here too, before the gate — /call (and a repository alias that expands
+    # to it) posed it like any other, with no word that its definition had changed or could not be pinned.
+    if (toolpin_withheld(_call_name) == 1) {
+        emit("  refused: "); emit(toolpin_withheld_text(_call_name)); oprintln(". no request sent.");
+        return 0;
+    }
     if (gate_authorize(_call_name, gp, "call tool", _call_name) == 0) {
         oprintln("  denied. no request sent.");
         return 0;
@@ -2877,6 +2907,7 @@ fn _task_dispatch(prompt) {
     var ev_ok = 1;
     if (rc != 0) { ev_ok = 0; }
     elif (hoosh_last_reply_len() == 0) { ev_ok = 0; }
+    events_finish_set(hoosh_finish_known());          # 0.52.8 (A2): the gateway's finish word rides both events
     if (ev_ok == 1) { events_response(session_turns(), hoosh_last_reply(), hoosh_last_reply_len()); }
     # 0.44.4: carry the provider's own in-stream error (hoosh 2.6.5+) to the machine consumer too.
     else { events_error(session_turns(), rc, 0, agent_err_code(), agent_err_msg()); }

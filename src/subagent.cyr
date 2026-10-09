@@ -238,6 +238,7 @@ var _sv_cite_n = 0; var _sv_cite_off = 0; var _sv_cite_buf = 0; var _sv_cite_ptr
 var _sv_cite_search_id = 0; var _sv_cite_fb_note_id = 0;
 var _sv_recall = 0;
 var _sv_work_full = 0;      # 0.44.3: the parent's over-cap flag — a tool round WRITES it, so it swaps
+var _sv_finish = 0;         # 0.52.8 (audit A5): how the provider ended the round — a child round WRITES it now, so it swaps
 
 # _sub_enter: point every round-scoped buffer at the child's storage.
 # EXACT INVERSE of _sub_exit — keep them in the same order so a diff shows a mismatch.
@@ -263,6 +264,7 @@ fn _sub_enter() {
     # — a fabricated diagnosis about a buffer that was fine. Same failure shape as the `_roundlog_cur`
     # miss: not a crash, a LIE.
     _sv_work_full = _agent_work_full;
+    _sv_finish = _hoosh_finish;                  # 0.52.8 (A5)
     _sv_recall = _mem_recall_buf;
 
     _agent_work = _sub_work;           _agent_work_len = 0;  _agent_work_full = 0;
@@ -303,6 +305,7 @@ fn _sub_exit() {
     _cite_search_id = _sv_cite_search_id; _cite_fb_note_id = _sv_cite_fb_note_id;
     _mem_recall_buf = _sv_recall;
     _agent_work_full = _sv_work_full;   # 0.44.3 — see _sub_enter
+    _hoosh_finish = _sv_finish;                  # 0.52.8 (A5): the child's last finish never becomes the parent's
     # editlog needs no swap once the round above is closed: editlog_record keys on
     # (turn, roundlog_cur_round(), ci), and with no round open roundlog_cur_round() answers 0 — which is
     # never a real parent round, since agent_turn increments before opening and so starts at 1. A child
@@ -356,6 +359,7 @@ fn _sub_build_request(dst, model, system, mem, tools_buf, tools_len) {
 # BLOCKING only: streaming would print the child's tokens into the parent's live reply, and the child's
 # output is not the user's answer.
 fn _sub_iter(model, sys, mem, tools_len) {
+    _hoosh_finish = HOOSH_FIN_NONE;           # 0.52.8 (A5): this round's finish, as the parent's rounds reset theirs
     var len = _sub_build_request(_sub_req, model, sys, mem, _sub_tools, tools_len);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
@@ -367,9 +371,16 @@ fn _sub_iter(model, sys, mem, tools_len) {
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
     if ((status < 200) || (status >= 300)) { _agent_round_kind = 3; _agent_round_status = status; return 0; }
+    return _sub_iter_parse(body, blen);
+}
+# _sub_iter_parse (0.52.8): a child round's 2xx half — usage, finish, the answer or the tool calls — split from the POST
+# so the suite drives it with a canned body.
+fn _sub_iter_parse(body, blen) {
     # The child's tokens are the SESSION's tokens — it spent them on the user's behalf, and hiding them
     # would make the cost row lie about what the turn cost.
-    _hoosh_account_usage(bayan_json_v_parse_buf(body, blen));
+    var bv = bayan_json_v_parse_buf(body, blen);
+    _hoosh_account_usage(bv);
+    _hoosh_note_finish(bv);                   # 0.52.8 (audit A5): a child cut at its output ceiling must not read as complete
     var tcs = agent_tool_calls(body, blen);
     var nc = agent_tc_count(tcs);
     if (nc == 0) {
@@ -401,9 +412,14 @@ fn _sub_tools_build() {
     # Same sequence agent_turn uses, in the same order — each agent_tools_add_* self-gates on its own
     # config key, so the child's tool set tracks the parent's exactly. The ONE difference is that
     # agent_tools_add_delegate is not called: that omission is what caps depth at 1.
+    var ad0 = toolpin_store_adopted();                        # 0.52.8 (D7): before the refresh — an adoption there retires the PARENT's cache too
     toolpin_store_refresh();                                  # 0.52.6 (audit A2): the parent's rule — another session's stored pins compared first
     var tl = agent_format_tools(_sub_tools, dtv);
     toolpin_store_flush();                                    # 0.51.0 (F6): the child's probe pins into the same host-scoped table — persist them too
+    # 0.52.8 (audit D7): an older pin adopted during the CHILD's probe (its refresh or its flush) withholds the tool — the
+    # child's own advertisement is built after the refresh and leaves it out, but the parent's cached one (restored by
+    # _sub_exit) still carried its definition for every later turn. It is re-built next turn.
+    if (toolpin_store_adopted() != ad0) { _sv_tools_ready = 0; }
     tl = agent_tools_add_memory(_sub_tools, tl);
     tl = agent_tools_add_shell(_sub_tools, tl);
     tl = agent_tools_add_project(_sub_tools, tl);
@@ -482,10 +498,27 @@ fn subagent_run(task, max_iters) {
         # Nothing came back. Distinguish the two causes rather than blaming the budget for both: a loop
         # that ran out of rounds is a different fact from a model that answered with empty content, and
         # telling the parent "it used all its rounds" when it used one is a fabricated measurement.
+        # 0.52.8 (audit A5): and the provider's own reason, when it gave one.
+        if (_hoosh_finish == HOOSH_FIN_FILTER) { return _sub_fail("the model declined the delegated task (a provider safety refusal)"); }
+        if (_hoosh_finish == HOOSH_FIN_LENGTH) { return _sub_fail("it reached its output ceiling before writing an answer"); }
         if (done == 1) { return _sub_fail("it returned an empty answer"); }
         return _sub_fail("it used all its rounds without reaching an answer");
     }
-    return _sub_capture();
+    var ans = _sub_capture();
+    _sub_mark_short();
+    return ans;
+}
+# _sub_mark_short (0.52.8, audit A5): a child cut at its output ceiling (or stopped by a refusal) returned to the parent
+# model as a COMPLETE answer, with nothing for the operator either. The captured answer is marked for the model and the
+# note names it for the operator. Returns 1 when it marked.
+fn _sub_mark_short() {
+    if ((_hoosh_finish != HOOSH_FIN_LENGTH) && (_hoosh_finish != HOOSH_FIN_FILTER)) { return 0; }
+    var off = strlen(_sub_answer);
+    if (_hoosh_finish == HOOSH_FIN_LENGTH) { off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, "\n[cut short at the output ceiling: may be incomplete]"); }
+    else { off = _append_cstr_cap(_sub_answer, off, SUB_ANSWER_CAP, "\n[stopped by a safety refusal: may be incomplete]"); }
+    store8(_sub_answer + off, 0);
+    hoosh_finish_note();
+    return 1;
 }
 
 # _sub_capture: copy the child's reply out of the swapped accumulator into stable storage BEFORE

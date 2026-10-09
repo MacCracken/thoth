@@ -63,7 +63,8 @@ fn gask_label() {
     return "the agent is asking";
 }
 
-var GASK_Q_CAP = 1024;
+var GASK_Q_CAP = 2048;          # 0.52.8 (audit D1): was 1024 — the gate's longest authorization question is 1,116 bytes
+var _gask_trunc = 0;            # 0.52.8: 1 when the question handed to gask_open did not fit GASK_Q_CAP (gask_build marks it cut)
 var GASK_OPT_MAX = 6;
 var GASK_OPT_CAP = 128;
 var _gask_q = 0;
@@ -81,18 +82,28 @@ fn _gask_cp(dst, cap, src) {
     return i;
 }
 # gask_open: install the question + options and raise the modal. Strings are already sanitised upstream.
-fn gask_open(q) { _gask_vm(); _gask_cp(_gask_q, GASK_Q_CAP, q); _gask_nopt = 0; _gask_len = 0; _gask_sel = 0 - 1; _gask_label = GASK_LABEL_AGENT; _gask_active = 1; return 0; }
+fn gask_open(q) {
+    _gask_vm();
+    _gask_trunc = 0;
+    if ((q != 0) && (strlen(q) >= GASK_Q_CAP)) { _gask_trunc = 1; }
+    _gask_cp(_gask_q, GASK_Q_CAP, q); _gask_nopt = 0; _gask_len = 0; _gask_sel = 0 - 1; _gask_label = GASK_LABEL_AGENT; _gask_active = 1;
+    _gask_cut = 1;                     # 0.52.8 (audit G6): cut until a build at this window's size says otherwise — a key
+                                       # arriving before the first frame was judged by the PREVIOUS modal's cut
+    return 0;
+}
 
 # _gask_adv_cp: advance `p` by `n` whole CODEPOINTS, stopping at NUL. gd_push_text clips by codepoint,
 # so a wrap that advanced by BYTES would hand it a pointer into the middle of a UTF-8 sequence and the
-# row would open with a broken glyph. Continuation bytes are 0b10xxxxxx; a codepoint is one lead byte
-# plus every continuation that follows it.
+# row would open with a broken glyph.
+# ⚠ 0.52.8 (audit D2): the step is the RASTERISER's (gr__utf8_at), cell for cell. This folded every continuation byte
+# into the codepoint before it, while gr_fb_text draws each malformed byte as a cell of its own — so a row of a raw lead
+# plus 100 stray 0xA0 bytes was one layout codepoint and 100 raster cells, the clip stopped the raster early, and the
+# next row began past bytes nothing drew. The gate now refuses such an object, and the card can no longer disagree.
 fn _gask_adv_cp(p, n) {
     var i = 0;
     while (i < n) {
         if (load8(p) == 0) { return p; }
-        p = p + 1;
-        while ((load8(p) & 0xC0) == 0x80) { p = p + 1; }
+        p = p + (gr__utf8_at(p, 0) % 8);
         i = i + 1;
     }
     return p;
@@ -191,10 +202,14 @@ fn gask_build(cmds, w, h) {
     if (maxcp0 < 8) { maxcp0 = 8; }
     var qneed = _gask_q_rows(maxcp0);
     var qfit = ((h - 40) - GASK_PAD * 4) / GASK_ROW_H - (nopt + 2);   # the question rows this window can hold beside the rest
-    if (qfit < 1) { qfit = 1; }
+    var noroom = 0;
+    if (qfit < 1) { qfit = 1; noroom = 1; }                         # 0.52.8 (audits D5 + G7): not even one row fits
     var qrows = qneed;
     if (qrows > qfit) { qrows = qfit; }
     _gask_cut = 0;
+    if (_gask_trunc == 1) { _gask_cut = 1; }                         # 0.52.8: a question cut on the way in is cut
+    if ((cw > w) || (noroom == 1)) { _gask_cut = 1; }                # 0.52.8 (audits D5 + G7): a card wider than the window,
+                                                                     # or one with no room for a question row, shows it cut
     if (qneed > qrows) { _gask_cut = 1; }
     if (_gask_q_more(maxcp0, qrows) == 1) { _gask_cut = 1; }            # longer than GASK_Q_ROWS itself
     var ch = GASK_PAD * 4 + GASK_ROW_H * (nopt + 2 + qrows);

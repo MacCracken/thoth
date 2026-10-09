@@ -308,6 +308,14 @@ Each of these blocks something above. None has a default answer.
    If yes, the likely shape is: the operator's rate first, the gateway's figure second, and only from a global
    `[hoosh].url`.
 
+7. **May a repository's local layer set `[log].level`?** (The 0.52.8 audit's design question C3, not ruled on.) The
+   level is a preference under [ADR-0021](../adr/0021-authority-keys-are-global-only.md), while the file it writes
+   (`[log].file`) is global-only. So a clone's `level = "off"` switches off the operator's own session log, and the
+   log is the record of what a session did (each turn, tool round and gate decision). It reaches an operator's
+   `--logs` capture too: "off" leaves the flag's sink bound, but a quieter level (`level = "error"`) narrows it. The
+   0.52.8 ruling for the switches that guard a session (a local layer may only turn `[guard]` and `[redact]` on)
+   points to the same shape here: a local level may make the log more detailed, never quieter than the global's.
+
 (Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched
 ignoring case into one slot, so two kinds sharing that prefix would share a health row — audit E11; no gateway in
 use names kinds that long.)

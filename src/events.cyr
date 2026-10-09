@@ -199,6 +199,19 @@ fn ev_fail_text(rc, seam_absent) {
     if (rc > 0) { return "hoosh returned an HTTP error"; }
     return "no completion returned";
 }
+# ev_fail_text_f (0.52.8, audit A2): ev_fail_text, but a turn the PROVIDER ended with no text is named for what it was
+# (`fword` is the gateway's finish word, or 0) — a refusal read "no completion returned", the same as a broken gateway.
+fn ev_fail_text_f(rc, seam_absent, fword) {
+    if ((rc == 0) && (seam_absent == 0) && (fword != 0)) {
+        if (streq(fword, "content_filter") == 1) { return "the model declined this request (a provider safety refusal)"; }
+        if (streq(fword, "length") == 1) { return "the reply was cut short before any text (the output ceiling, or a full context window)"; }
+    }
+    return ev_fail_text(rc, seam_absent);
+}
+# events_finish_set (0.52.8): the turn's finish word for the next `response` / `error` event (0 = the gateway sent none).
+# Passed in by the dispatcher rather than read, to keep this file free of a hoosh dependency (the rule one function up).
+var _ev_finish = 0;
+fn events_finish_set(fword) { _ev_finish = fword; return 0; }
 
 # events_error: the failure twin of `events_response`. `http` is present ONLY for a real status code
 # (rc > 0) — the same omit-until-present discipline `tokens` follows, since a faked 0 would read as a
@@ -211,7 +224,8 @@ fn ev_fail_text(rc, seam_absent) {
 fn events_error(turn, rc, seam_absent, up_code, up_msg) {
     if (_ev_on == 0) { return 0; }
     var off = _ev_begin("error", turn);
-    off = _ev_str_field(off, "message", ev_fail_text(rc, seam_absent), 1024);
+    off = _ev_str_field(off, "message", ev_fail_text_f(rc, seam_absent, _ev_finish), 1024);
+    if ((rc == 0) && (_ev_finish != 0)) { off = _ev_str_field(off, "finish_reason", _ev_finish, 32); }
     if (rc > 0) { off = _ev_int_field(off, "http", rc); }
     if (up_code > 0) { off = _ev_int_field(off, "upstream_http", up_code); }
     if (up_msg != 0) { off = _ev_str_field(off, "upstream_message", up_msg, 512); }
@@ -242,6 +256,7 @@ fn events_response(turn, reply, reply_len) {
         off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, ",\"text\":\"");
         off = _json_escape_n_into_cap(_ev_cur, off, _ev_cur_cap, reply, reply_len);
         off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\"");
+        if (_ev_finish != 0) { off = _ev_str_field(off, "finish_reason", _ev_finish, 32); }   # 0.52.8 (A2): a cut answer says so
     }
     return _ev_end(off);
 }

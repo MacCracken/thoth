@@ -89,10 +89,12 @@ fn _tree_name_slot(i) { return _tree_name + i * TREE_NAME_CAP; }
 # intended trade; such a name is pathological, and `/read` with an explicit path still reaches it.
 fn _tree_set_name(i, nameptr) {
     var dst = _tree_name_slot(i);
+    var nl = strlen(nameptr);
     var j = 0;
     while ((load8(nameptr + j) != 0) && (j < (TREE_NAME_CAP - 1))) {
         var b = load8(nameptr + j) & 255;
         if ((b < 32) || (b == 127)) { b = 63; }        # ESC / C0 / DEL -> '?' (width-preserving)
+        if (_c1_at(nameptr, j, nl) == 1) { b = 63; }  # 0.52.8 (audit F2): and the C1 controls (a repo filename with a 9B)
         store8(dst + j, b);
         j = j + 1;
     }
@@ -375,10 +377,12 @@ fn ftree_complete(prefix, out, outcap) {
                 # fd 1 and cleared the screen. A `git clone` reproduces filenames byte for byte, so the
                 # attacker needs no shell, no model and no tool call — only a file in the tree.
                 var c = 0;
+                var el = strlen(e);
                 while ((load8(e + c) != 0) && (c < 4095)) {
                     var fb = load8(e + c) & 255;
                     if (fb < 32) { fb = 63; }
                     if (fb == 127) { fb = 63; }
+                    if (_c1_at(e, c, el) == 1) { fb = 63; }    # 0.52.8 (audit F2): the C1 controls too
                     store8(_ftc_lcp + c, fb);
                     c = c + 1;
                 }

@@ -133,6 +133,7 @@ fn main() {
     args_init();            # snapshot the command line (one-shot/argv front-door, 0.11.0)
     out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); only the TUI arms OUT_RING
     confirm_hooks_set(&tui_confirm_begin, &tui_confirm_end);   # wire the gate confirm's live-screen bracket (TUI-decoupling)
+    confirm_fit_hook_set(&tui_confirm_still_fits);   # 0.52.8 (audit B1): an answer counts only while the screen still holds the question
     reply_sink_set(&mdhl_reply, &mdhl_reset, &mdhl_feed, &mdhl_finish, &feed_stream_tick);   # wire hoosh's reply render to mdhl + the TUI paint (all tiers; TUI-decoupling)
     exec_wait_poll_set(&tui_wait_poll);   # 0.52.0 (F7): a running command's wait poll — the working indicator (0.44.2's tick) + an Esc stops it where the poll mode is armed; `thoth gui` binds the window's own
     exec_child_done_set(&tui_modes_reassert);   # 0.44.2: a /run child can clear alt-screen/mouse/paste/kitty — re-assert after it
@@ -185,7 +186,10 @@ fn main() {
     # one-shot/CI caller sees it too; `/state` lists them and `/reload` re-reports.
     if (config_suppressed_count() > 0) {
         emit_err("thoth: SUPPRESSED authority-granting key(s) from the local .thoth/config.cyml — a project may not\n");
-        emit_err("       grant authority the global config did not; these are read from ~/.thoth/config.cyml only: ");
+        # 0.52.8: "these are read from ~/.thoth/config.cyml only" stopped being true at 0.52.6, when the list began to
+        # carry keys a local layer may still move the safe way (a lower budget, a raised rate; now a lower max_tokens,
+        # guard turned on). Each label states its own rule; this line says only what holds for all of them.
+        emit_err("       grant authority the global config did not; set these in ~/.thoth/config.cyml if you want them: ");
         var sk = 0;
         while (sk < config_suppressed_count()) {
             if (sk > 0) { emit_err(", "); }

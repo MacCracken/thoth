@@ -70,6 +70,8 @@ fn intr_arm() {
 # the hook made. Arrows, PgUp/PgDn, bracketed paste and kitty's CSI-u chords did the same. The bytes are now parsed:
 # a CSI / SS3 sequence, an X10 mouse report and a bracketed paste are consumed without counting, and a stop is a LONE
 # Esc (nothing follows it in the drain) or kitty's encoding of the Esc key, `ESC[27u` (with any modifier field).
+# 0.52.8 (ruling R3): and an Esc followed in the same drain by a byte that begins no terminal sequence — Esc, then Enter
+# or a letter, typed inside one 100 ms tick (0.52.6 read that as an Alt chord, and the command ran on).
 fn intr_poll() {
     if (_intr_active == 0) { return _intr_flag; }
     var c[8];
@@ -112,8 +114,21 @@ fn _intr_params_lead(lit) {
     return 1;
 }
 
+# _intr_seq_intro(b): 1 when ESC + b can begin a sequence a TERMINAL sends: CSI `[`, SS3 `O`, OSC `]`, DCS `P`, APC `_`,
+# PM `^`, SOS `X`, and ST `\` (the `ESC \` that ends the last five). Any other byte after an ESC is a key the operator
+# pressed after Esc. (An ESC after an ESC is not here: it is decided by what follows it, in _intr_feed.)
+fn _intr_seq_intro(b) {
+    if ((b == 91) || (b == 79) || (b == 93) || (b == 80)) { return 1; }
+    if ((b == 95) || (b == 94) || (b == 88) || (b == 92)) { return 1; }
+    return 0;
+}
+
 # _intr_feed(b): one drained byte; 1 when it completes a STOP.
 fn _intr_feed(b) {
+    # 0.52.8 (audit E6): an ESC inside an unfinished CSI, SS3 or X10 report abandons it and begins a new escape. No terminal
+    # puts a raw ESC inside one (an X10 report's three bytes are each >= 32), so this ESC is the operator's: after xterm's
+    # Alt+[ or Alt+O — `ESC [` / `ESC O` with no final byte — the next sixteen Esc presses were collected as parameters.
+    if ((b == 27) && ((_intr_st == 2) || (_intr_st == 3) || (_intr_st == 4))) { _intr_st = 1; _intr_pn = 0; _intr_x10 = 0; return 0; }
     if (_intr_st == 4) {                                   # X10 mouse: Cb Cx Cy, raw
         _intr_x10 = _intr_x10 - 1;
         if (_intr_x10 <= 0) { _intr_st = 0; }
@@ -143,9 +158,14 @@ fn _intr_feed(b) {
             if (_intr_paste == 1) { return 0; }
             return 1;
         }
-        _intr_st = 0;                                     # ESC + a key: an Alt chord, not a stop
-        if (_intr_paste == 1) { _intr_st = 5; }
-        return 0;
+        _intr_st = 0;
+        if (_intr_paste == 1) { _intr_st = 5; return 0; }   # inside a paste an ESC is text
+        # 0.52.8 (ruling R3): ESC + a byte that begins no terminal sequence is the Esc KEY with the next key typed inside
+        # the same drain — a stop. OSC, DCS, APC, PM and SOS lead strings a terminal sends (a colour or version reply):
+        # no stop, and their payload is plain bytes here — it holds no ESC but the `ESC \` that ends it, which lands back
+        # here and is no stop either.
+        if (_intr_seq_intro(b) == 1) { return 0; }
+        return 1;
     }
     if (b == 27) { _intr_st = 1; return 0; }              # ground or paste: the start of something — decided by what follows
     return 0;
@@ -155,8 +175,12 @@ fn _intr_feed(b) {
 # paste). Any other partial sequence waits for the next poll.
 fn _intr_feed_end() {
     if (_intr_st == 1) {
+        # 0.52.8 (audit E5): inside a paste the ESC stays pending — it may begin the `[201~` that ends the paste, in the
+        # next read. It used to be dropped: the end marker then read as pasted text, the paste never ended, and neither
+        # Esc nor `ESC[27u` stopped anything until the next intr_arm. (Whatever follows decides it, as in any read: `[`
+        # opens the CSI, anything else is more pasted text.)
+        if (_intr_paste == 1) { return 0; }
         _intr_st = 0;
-        if (_intr_paste == 1) { _intr_st = 5; return 0; }
         return 1;
     }
     return 0;

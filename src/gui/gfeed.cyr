@@ -598,6 +598,17 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "the turn did not complete - is hoosh reachable? try /reprobe");
         cy = cy + GFEED_GAP;
     }
+    # 0.52.8 (audit A1): the provider ENDED the turn short — a refusal, or the output ceiling — and the notice says which,
+    # in the words the TUI prints (hoosh_finish_sentence). With no reply landed, the tools the turn ran draw first, as a
+    # failed turn's do; a landed reply that was cut gets the notice beneath it.
+    if (gturn_note() != 0) {
+        if (gturn_note() != 3) {
+            var ncy = gtool_build(cmds, xbase, cy, avail);
+            if (ncy > cy) { cy = ncy + GFEED_GAP; }
+        }
+        cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), gturn_note_text());
+        cy = cy + GFEED_GAP;
+    }
     # 0.34.3: an Esc-INTERRUPTED turn that kept no partial — a neutral "stopped" notice, not the red failure one.
     if (gturn_stopped() == 1) {
         var scy = gtool_build(cmds, xbase, cy, avail);            # tools the stopped turn had run before Esc (if any)
@@ -655,7 +666,7 @@ fn _gfeed_broke_notices(cmds, xbase, cy, avail) {
 # no command card of the OPERATOR's in this conversation (0.46.0; 0.50.1: a startup card — a session_start hook that
 # printed — does not count, it draws under the block; 0.52.1: another conversation's cards do not count). The one gate gfeed_build and the flow's standing notices share.
 fn _gfeed_greeting_on(n) {
-    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gcmd_operator_here() == 0)) { return 1; }
+    if ((n == 0) && (gturn_active() == 0) && (gturn_failed() == 0) && (gturn_stopped() == 0) && (gturn_note() == 0) && (gcmd_operator_here() == 0)) { return 1; }
     return 0;
 }
 

@@ -6652,15 +6652,330 @@ fn test_budget() {
     return 0;
 }
 
+# test_toolpin_withheld_paths (0.52.8, audits D4 + D6 + D7 + D8): a tool thoth withholds is refused on EVERY path, and the
+# jail keeps the configured store. 0.52.6's "both executors refuse a call to it" held only for a tool already pinned;
+# /call posed a withheld tool like any other; with pinning off the jail forgot the store a later run trusts; and an
+# older pin a child's probe adopted left the parent advertising the swapped definition for the rest of the session.
+fn _ttw_store(path, name, desc, secs) {
+    var r = alloc(4096);
+    var o = _append_cstr_cap(r, 0, 4096, "THOTH-TOOLPIN-1\n");
+    o = _append_cstr_cap(r, o, 4096, "http://a:1\t"); o = _append_cstr_cap(r, o, 4096, name); o = _append_cstr_cap(r, o, 4096, "\t");
+    o = _append_cstr_cap(r, o, 4096, _tp_digest(name, desc, "")); o = _append_cstr_cap(r, o, 4096, "\t");
+    o = _append_cstr_cap(r, o, 4096, secs); o = _append_cstr_cap(r, o, 4096, "\n");
+    var dg = sha256_hex(r, o);
+    o = _append_cstr_cap(r, o, 4096, "DIGEST\t"); o = _append_cstr_cap(r, o, 4096, dg); o = _append_cstr_cap(r, o, 4096, "\n");
+    file_write_all(path, r, o);
+    return 0;
+}
+fn test_toolpin_withheld_paths() {
+    test_group("a tool thoth withholds is refused on every path; the configured store stays jailed (0.52.8)");
+    var sv_en = _cfg_toolpin_enabled; var sv_path = _tps_path; var sv_file = _cfg_toolpin_file; var sv_dur = _cfg_toolpin_durable;
+    var sv_url = _cfg_daimon_url; var sv_ready = _agent_tools_ready; var sv_svr = _sv_tools_ready; var sv_log = _log_enabled;
+    _log_enabled = 0;
+    _cfg_toolpin_enabled = 1;
+    _tps_path = 0;
+    toolpin_reset();
+    var big = alloc(40000);
+    var i = 0;
+    while (i < 33000) { store8(big + i, 120); i = i + 1; }
+    store8(big + i, 0);
+    out_mode_set(OUT_NULL);
+    assert_eq(toolpin_check("notes", big, "{}"), 0, "premise: a first sight too large to hash is withheld from the advertisement");
+    assert_eq(toolpin_withheld("notes"), 1, "...and refused at the dispatcher too (it was forwarded, 0.52.7)");
+    assert(strstr(toolpin_withheld_text("notes"), "over 32 KB") >= 0, "...with its reason");
+    toolpin_reset();
+    assert_eq(toolpin_check("notes2", "Take notes.", "{}"), 1, "premise: pinned at first sight");
+    assert_eq(toolpin_check("notes2", big, "{}"), 0, "premise: swapped past the hash cap, withheld");
+    toolpin_trust_all();
+    assert_eq(toolpin_withheld("notes2"), 1, "after /tools trust drops the table, the unpinnable definition stays refused");
+    assert_eq(toolpin_check("notes", "Take notes.", "{}"), 1, "a later definition thoth can pin is advertised again");
+    assert_eq(toolpin_withheld("notes"), 0, "...and no longer refused");
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    one_shot_set(1);
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_call("/call notes2 {}");
+    feed_flush_pending(); out_mode_set(OUT_NULL);
+    assert_eq(_mid_feed_count("refused: (tool withheld"), 1, "/call refuses a withheld tool and says why (it was posed, 0.52.7)");
+    assert_eq(_mid_feed_count("denied. no request sent."), 0, "...before the gate");
+    one_shot_set(0);
+    toolpin_reset();
+    _cfg_toolpin_durable = 1;
+    _cfg_toolpin_file = "/home/u/proj/pins.store";
+    _cfg_toolpin_enabled = 0;
+    assert_eq(_project_sensitive("pins.store"), 1, "with pinning off the configured store is still refused to read_file and edit");
+    _cfg_toolpin_enabled = 1;
+    _cfg_toolpin_file = sv_file;
+    _cfg_daimon_url = "http://a:1";
+    var path = "build/.thoth_tps_b12d7.tmp";
+    _ttw_store(path, "t_other", "x", "1700000000");
+    toolpin_reset(); toolpin_store_init(path);
+    assert_eq(toolpin_store_state(), 1, "premise: the store binds");
+    assert_eq(toolpin_check("tW", "Swapped.", ""), 1, "premise: the parent first-sights tW and advertises it");
+    toolpin_store_flush();
+    _sv_tools_ready = 1;
+    _ttw_store(path, "tW", "Orig.", "1700000000");
+    _sub_tools = alloc(AGENT_TOOLS_CAP);
+    _cfg_daimon_url = 0;
+    _sub_tools_build();
+    assert_eq(toolpin_withheld("tW"), 1, "premise: the child's probe adopted another session's older pin");
+    assert_eq(_sv_tools_ready, 0, "...and the parent's cached advertisement is retired (it kept the swapped definition, 0.52.7)");
+    xunlink(path);
+    toolpin_reset();
+    _tps_path = sv_path; _cfg_toolpin_enabled = sv_en; _cfg_toolpin_durable = sv_dur; _cfg_toolpin_file = sv_file;
+    _cfg_daimon_url = sv_url; _agent_tools_ready = sv_ready; _sv_tools_ready = sv_svr; _log_enabled = sv_log;
+    out_mode_set(OUT_FD1);
+    feed_init();
+    return 0;
+}
+
+# test_config_safe_direction (0.52.8, the maintainer's ruling R1 + audit A13): a repository's local layer may move a spend
+# or safety switch only toward its safe value — [guard] / [redact] on, [subagent] off, [hoosh].reasoning and
+# [hoosh].max_tokens lower — and the output ceilings are ones current models take.
+fn _tcs_named(needle) {
+    var n = 0; var i = 0;
+    while (i < config_suppressed_count()) { if (strstr(config_suppressed_at(i), needle) >= 0) { n = n + 1; } i = i + 1; }
+    return n;
+}
+fn test_config_safe_direction() {
+    test_group("a local layer may only move spend and safety switches toward safe (config.cyr, 0.52.8)");
+    var sv_sup = _cfg_suppressed_n; var sv_r = _cfg_hoosh_reasoning; var sv_mt = _cfg_hoosh_max_tokens;
+    _cfg_suppressed_n = 0;
+    var g = _cfg_section_pairs(_lay_parse("[hoosh]\nreasoning = \"high\"\nmax_tokens = 20000\n"), "hoosh");
+    var up = _cfg_section_pairs(_lay_parse("[hoosh]\nreasoning = \"max\"\nmax_tokens = 128000\n"), "hoosh");
+    _cfg_hoosh_spend_load(up, g);
+    assert_eq(config_hoosh_reasoning(), 3, "a local reasoning above the global's is ignored (it was taken, 0.52.7)");
+    assert_eq(config_hoosh_max_tokens(), 20000, "...and so is a local max_tokens above the global's");
+    assert_eq(_tcs_named("hoosh.reasoning"), 1, "...each named, like every key a local layer may not move");
+    assert_eq(_tcs_named("hoosh.max_tokens"), 1, "...both of them");
+    var down = _cfg_section_pairs(_lay_parse("[hoosh]\nreasoning = \"low\"\nmax_tokens = 8000\n"), "hoosh");
+    _cfg_hoosh_spend_load(down, g);
+    assert_eq(config_hoosh_reasoning(), 1, "a local layer may lower reasoning");
+    assert_eq(config_hoosh_max_tokens(), 8000, "...and max_tokens");
+    var raise = _cfg_section_pairs(_lay_parse("[hoosh]\nmax_tokens = 131072\n"), "hoosh");
+    _cfg_hoosh_spend_load(raise, 0);
+    assert_eq(config_hoosh_max_tokens(), 0, "the global silent, a local max_tokens above the effort's default is ignored");
+    var lowd = _cfg_section_pairs(_lay_parse("[hoosh]\nmax_tokens = 2048\n"), "hoosh");
+    _cfg_hoosh_spend_load(lowd, 0);
+    assert_eq(config_hoosh_max_tokens(), 2048, "...and one below it is taken");
+    var g2 = _cfg_section_pairs(_lay_parse("[hoosh]\nmax_tokens = 131072\n"), "hoosh");
+    _cfg_hoosh_spend_load(0, g2);
+    assert_eq(config_hoosh_max_tokens(), 128000, "the ceiling is 128,000 (every current model refuses 131072, measured)");
+    assert_eq(_hoosh_effort_default(5), 64000, "reasoning = max asks 64,000 (65,536 is over the Claude 4.5 models' 64,000)");
+    assert_eq(_hoosh_effort_default(4), 32768, "...xhigh 32,768, as before");
+    var off = _cfg_section_pairs(_lay_parse("[guard]\nenabled = false\n"), "guard");
+    var on = _cfg_section_pairs(_lay_parse("[guard]\nenabled = true\n"), "guard");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg2_bool_safe(off, 0, "enabled", "guard.enabled (a local layer may only turn it on)", 1, 1), 1, "a local [guard] enabled = false is ignored (a clone switched the injection guard off, 0.52.7)");
+    assert_eq(_tcs_named("guard.enabled"), 1, "...and named");
+    assert_eq(_cfg2_bool_safe(on, off, "enabled", "guard.enabled (a local layer may only turn it on)", 1, 1), 1, "a local layer may turn a switch ON where the global turned it off");
+    assert_eq(_cfg2_bool_safe(on, 0, "enabled", "subagent.enabled (a local layer may only turn it off)", 0, 0), 0, "a local [subagent] enabled = true is ignored (it multiplies spend)");
+    assert_eq(_cfg2_bool_safe(off, on, "enabled", "subagent.enabled (a local layer may only turn it off)", 0, 0), 0, "...and a local layer may turn delegation off");
+    assert_eq(_cfg2_bool_safe(0, off, "enabled", "x", 1, 1), 0, "the global's own value stands when the local layer is silent");
+    _cfg_suppressed_n = sv_sup; _cfg_hoosh_reasoning = sv_r; _cfg_hoosh_max_tokens = sv_mt;
+    return 0;
+}
+
+# test_allow_vidya_bound (0.52.8, the maintainer's ruling R2): `/allow vidya` bounds a path the REPOSITORY chose like
+# its read_roots. It granted whatever [project].vidya named, and a clone's `vidya = "/home/you/.ssh"` was one word away.
+fn test_allow_vidya_bound() {
+    test_group("/allow vidya bounds a path the repository chose, like its read_roots (commands.cyr, 0.52.8)");
+    var sv_n = _read_roots_n; var sv_tbl = _trl_roots_save();
+    var sv_v = _cfg_vidya; var sv_vl = _cfg_vidya_local; var sv_rg = _cfg_roots_global;
+    _read_roots_n = 0;
+    var g = _cfg_section_pairs(_lay_parse("[project]\nread_roots = [\"/srv/kb\"]\nvidya = \"/opt/vidya\"\n"), "project");
+    _cfg_roots_global = _cfg_roots_vec(g);
+    _cfg_vidya_load(_cfg_section_pairs(_lay_parse("[project]\nvidya = \"/home/you/.ssh\"\n"), "project"), g);
+    assert_eq(config_vidya_local(), 1, "premise: the repository chose the path");
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_allow("/allow vidya");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(project_read_roots_count(), 0, "a repository's vidya outside every global root is not granted (it was, 0.52.7)");
+    assert(_mid_feed_plain_count("not under a read root your global config grants") >= 1, "...and the refusal says why");
+    _cfg_vidya_load(_cfg_section_pairs(_lay_parse("[project]\nvidya = \"/srv/kb/vidya\"\n"), "project"), g);
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_allow("/allow vidya");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(project_read_roots_count(), 1, "one under a global root is granted");
+    assert_eq(_project_granted_prefix_len("/srv/kb/vidya/x.md"), 7, "...vouched for only as far as the global root, so its own components are walked");
+    _read_roots_n = 0;
+    _cfg_vidya_load(0, g);
+    assert_eq(config_vidya_local(), 0, "the operator's own vidya is not the repository's");
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_allow("/allow vidya");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(project_read_roots_count(), 1, "...and is granted as before, wherever it points");
+    _trl_roots_restore(sv_tbl, sv_n);
+    _cfg_vidya = sv_v; _cfg_vidya_local = sv_vl; _cfg_roots_global = sv_rg;
+    feed_init();
+    return 0;
+}
+
+# test_price_half_side (0.52.8, audit C2): a local rate may not complete a side the global leaves unset. `0 > -1` read as
+# a raise, so a clone's `input = 0` turned a half-declared model priced: the unpriced warning went silent and the cost
+# ceiling counted output only.
+fn test_price_half_side() {
+    test_group("a local rate cannot price a side the global leaves unset (config.cyr, 0.52.8)");
+    var sv_sup = _cfg_suppressed_n; var sv_n = _price_n;
+    _cfg_suppressed_n = 0;
+    var g = bayan_toml_parse(str_new("[pricing.opmodel]\noutput = 5\n", strlen("[pricing.opmodel]\noutput = 5\n")));
+    var l = bayan_toml_parse(str_new("[pricing.opmodel]\ninput = 0\n", strlen("[pricing.opmodel]\ninput = 0\n")));
+    _price_load2(l, g);
+    assert_eq(config_price_input("opmodel"), 0 - 1, "the side the global left unset stays unpriced (a local 0 completed it, 0.52.7)");
+    assert_eq(config_price_output("opmodel"), 5, "the global's own side is unchanged");
+    var named = 0; var i = 0;
+    while (i < config_suppressed_count()) { if (strstr(config_suppressed_at(i), "pricing (a local rate may only raise") >= 0) { named = named + 1; } i = i + 1; }
+    assert_eq(named, 1, "...and the refused rate is named");
+    var l2 = bayan_toml_parse(str_new("[pricing.opmodel]\noutput = 9\n", strlen("[pricing.opmodel]\noutput = 9\n")));
+    _price_load2(l2, g);
+    assert_eq(config_price_output("opmodel"), 9, "a local raise of a side the global sets is taken, as before");
+    _price_n = sv_n; _cfg_suppressed_n = sv_sup;
+    return 0;
+}
+
+# test_c1_sinks (0.52.8, audits F1 + F2 + E2 + F6): 0.52.6's C1 rule (audit E9) reaches every sink that kept its own copy
+# of the C0 filter — a branch name, a provider's error text, a tool's name and arguments in /audit, a repository
+# filename in the tree and the project map, /save, a hook's output, and the whole-alias refusal. Each passed a raw or
+# encoded U+009B (a C1 CSI to a terminal that honours it) before.
+fn _tc1_9b(p) { if (p == 0) { return 0; } return _t_count_sub(p, strlen(p), "\x9b", 1); }
+fn test_c1_sinks() {
+    test_group("the C1 rule reaches every sink that kept its own filter (0.52.8)");
+    _git_copy_branch("x\x9b2Jy");
+    assert_eq(_tc1_9b(git_branch()), 0, "a branch name's raw 9B never reaches the status bar (it was copied verbatim, 0.52.7)");
+    _git_copy_branch("x\xc2\x9b2Jy");
+    assert_eq(_tc1_9b(git_branch()), 0, "...nor an encoded U+009B");
+    _git_copy_branch("main");
+    _ag_err_reset();
+    var eb = "{\"error\":{\"message\":\"gw\\u009b2J refused\"}}";
+    _ag_err_capture(bayan_json_v_parse_buf(eb, strlen(eb)));
+    assert(agent_err_msg() != 0, "premise: the provider's error message was captured");
+    assert_eq(_tc1_9b(agent_err_msg()), 0, "a provider's error text loses its C1 before one-shot's stderr prints it");
+    _ag_err_reset();
+    var nm = alloc(RL_NAME_CAP);
+    _rl_copy_name(nm, "t\xc2\x9bx");
+    assert_eq(_tc1_9b(nm), 0, "/audit's copy of a tool name");
+    var ag = alloc(RL_ARG_CAP);
+    _rl_copy_args(ag, "{\"c\":\"a\x9bb\x7fc\"}");
+    assert_eq(_tc1_9b(ag), 0, "...and of its arguments");
+    assert_eq(_t_count_sub(ag, strlen(ag), "\x7f", 1), 0, "...DEL included");
+    ftree_init();
+    _tree_set_name(0, "f\x9bname");
+    assert_eq(_tc1_9b(_tree_name_slot(0)), 0, "a repository filename in the tree pane");
+    _pmap_ensure();
+    var po = _pmap_put_name(0, "dir\xc2\x9bx");
+    store8(_pmap_buf + po, 0);
+    assert_eq(_tc1_9b(_pmap_buf), 0, "...and in the project map (/dry prints it, JSON keeps 80..9F)");
+    var pb[64];
+    var pl = _append_cstr_cap(&pb, 0, 64, "/tmp/thoth_t_c1save_");
+    pl = _append_int_cap(&pb, pl, 64, sys_getpid());
+    store8(&pb + pl, 0);
+    var fd = file_open(&pb, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    if (fd >= 0) {
+        _save_write_clean(fd, "a\xc2\x9bb", 4);
+        _save_write_str(fd, "t\x9bn");
+        file_close(fd);
+        var rb = alloc(64);
+        var rn = file_read_all(&pb, rb, 63);
+        if (rn < 0) { rn = 0; }
+        store8(rb + rn, 0);
+        assert_eq(_tc1_9b(rb), 0, "/save writes no C1, through either writer");
+    } else { assert(1, "no capture file here (stated)"); }
+    xunlink(&pb);
+    store64(_alias_names + _alias_n * 8, "c1x");
+    store64(_alias_vals + _alias_n * 8, "/theme a\xc2\x9bb");
+    _alias_n = _alias_n + 1;
+    assert_eq(_alias_value_has_ctl("/c1x"), 1, "an alias value holding a C1 is refused whole (it was not, 0.52.7)");
+    _alias_n = _alias_n - 1;
+    var sv_post = _cfg_hook_post_tool;
+    _cfg_hook_post_tool = "printf 'h\\302\\233k'";
+    feed_init(); out_mode_set(OUT_RING);
+    hooks_post_tool("shell", "{}");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_count("\xc2\x9b"), 0, "a hook's output reaches the screen without its C1 (E2)");
+    assert(_mid_feed_plain_count("h??k") >= 1, "...shown with '?' in its place");
+    _cfg_hook_post_tool = sv_post;
+    hooks_reset();
+    feed_init();
+    return 0;
+}
+
+# test_models_overflow_counts (0.52.8, audits A9 + A10): what a full table drops is counted honestly — the grouped /models
+# listing counted every MODEL of a provider past its 32 as a provider, and a route past the 64-route table read
+# "unknown" with no word of why (its model now reads its provider's measured state instead).
+fn test_models_overflow_counts() {
+    test_group("a full provider or route table counts what it drops honestly (hoosh.cyr, 0.52.8)");
+    var b = alloc(8192);
+    var o = _append_cstr_cap(b, 0, 8192, "{\"object\":\"list\",\"data\":[");
+    var i = 0;
+    while (i < 32) {
+        if (i > 0) { o = _append_cstr_cap(b, o, 8192, ","); }
+        o = _append_cstr_cap(b, o, 8192, "{\"id\":\"m"); o = _append_int_cap(b, o, 8192, i);
+        o = _append_cstr_cap(b, o, 8192, "\",\"owned_by\":\"p"); o = _append_int_cap(b, o, 8192, i);
+        o = _append_cstr_cap(b, o, 8192, "\"}");
+        i = i + 1;
+    }
+    o = _append_cstr_cap(b, o, 8192, ",{\"id\":\"x1\",\"owned_by\":\"extra\"},{\"id\":\"x2\",\"owned_by\":\"extra\"},{\"id\":\"x3\",\"owned_by\":\"extra\"}]}");
+    store8(b + o, 0);
+    var data = hoosh_extract_models(b, o);
+    assert(data != 0, "premise: the body parses");
+    feed_init(); out_mode_set(OUT_RING);
+    _hoosh_list_models_grouped(data, 0);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("(1 more provider(s) past thoth's table"), 1, "ONE provider is past the table (it lists three models)");
+    assert_eq(_mid_feed_plain_count("(3 more provider(s) past thoth's table"), 0, "...not three (its model count, 0.52.7)");
+    feed_init();
+    hoosh_providers_reset();
+    var aj = "[\"https://route-65.example\"]";
+    var arr = bayan_json_v_parse_buf(aj, strlen(aj));
+    assert_eq(hoosh_routes_fold(arr), HOOSH_PROV_UNKNOWN, "premise: a route the table never listed is unmeasured");
+    _hr_dropped = 1;
+    assert_eq(hoosh_routes_fold(arr), 0 - 1, "...but one a FULL table dropped falls back to the provider's state (it read unknown, 0.52.7)");
+    hoosh_providers_reset();
+    assert_eq(_hr_dropped, 0, "a reset clears the drop count");
+    return 0;
+}
+
+# test_catalog_arena (0.52.8, audit A7): the catalog fetch holds a large catalog, and the picker's fetch + parse no longer
+# take from the heap that never frees on every open. sandhi's default 256 KB cap failed a catalog of ~780 models ("is
+# the gateway up?"), and each Ctrl-P open leaked the 256 KB buffer (sandhi allocates its cap up front) and the tree.
+fn test_catalog_arena() {
+    test_group("the catalog holds a large list, in an arena reused across fetches (hoosh.cyr, 0.52.8)");
+    var o = hoosh_catalog_opts();
+    assert(o != 0, "premise: the catalog profile exists");
+    assert_eq(load64(o + 16), HOOSH_CATALOG_CAP, "its response cap is the catalog's 2 MiB, not sandhi's 256 KB");
+    var cap = 160000;
+    var b = alloc(cap);
+    var bo = _append_cstr_cap(b, 0, cap, "{\"object\":\"list\",\"data\":[");
+    var i = 0;
+    while (i < 3000) {
+        if (i > 0) { bo = _append_cstr_cap(b, bo, cap, ","); }
+        bo = _append_cstr_cap(b, bo, cap, "{\"id\":\"model-"); bo = _append_int_cap(b, bo, cap, i);
+        bo = _append_cstr_cap(b, bo, cap, "\",\"owned_by\":\"p\"}");
+        i = i + 1;
+    }
+    bo = _append_cstr_cap(b, bo, cap, "]}");
+    var a = _hoosh_cat_arena_reset();
+    assert(a != 0, "premise: the catalog arena exists");
+    var d1 = hoosh_extract_models_a(a, b, bo);
+    assert_eq(bayan_json_v_arr_len(d1), 3000, "a 3,000-model catalog parses into the arena");
+    var h0 = alloc_used();
+    var k = 0;
+    while (k < 5) {
+        a = _hoosh_cat_arena_reset();
+        hoosh_extract_models_a(a, b, bo);
+        k = k + 1;
+    }
+    assert((alloc_used() - h0) < 4096, "five more fetch-and-parse cycles take nothing from the global heap (each kept its tree, 0.52.7)");
+    return 0;
+}
+
 # test_read_roots_narrow (0.52.6, audit E3): the local layer's [project].read_roots may only NARROW the operator's.
 # Through 0.52.5 a declared local list REPLACED the global's — a clone could name `/home/you/.ssh` as a root for the
 # ungated read tools, announced nowhere — and config grants only accumulated, so a /reload never revoked one.
 fn test_read_roots_narrow() {
     test_group("a local read_roots narrows the global's and never widens it; /reload revokes (config.cyr, 0.52.6)");
     var sv_n = _read_roots_n; var sv_sup = _cfg_suppressed_n;
-    var sv_tbl = alloc(READ_ROOTS_MAX * 9 + 8);                  # the table's entries and their config marks, restored after
+    var sv_tbl = _trl_roots_save();                               # the table's entries, trust and config marks, restored after
     var q = 0;
-    while (q < sv_n) { store64(sv_tbl + q * 8, load64(_read_roots + q * 8)); store8(sv_tbl + READ_ROOTS_MAX * 8 + q, load8(_read_roots_cfg + q)); q = q + 1; }
     _read_roots_n = 0; _cfg_suppressed_n = 0;
     var g = _cfg_section_pairs(_lay_parse("[project]\nread_roots = [\"/srv/docs\", \"/opt/ref/\"]\n"), "project");
     _cfg_read_roots_load2(0, g);
@@ -6690,9 +7005,109 @@ fn test_read_roots_narrow() {
     assert_eq(_project_read_ok("/opt/ref/a"), 1, "...the one it still names stays");
     assert_eq(_project_read_ok("/var/allowed/a"), 1, "...and the session's /allow grant is kept");
     assert_eq(project_read_roots_count(), 2, "no duplicate grows the table across reloads");
-    q = 0;
-    while (q < sv_n) { store64(_read_roots + q * 8, load64(sv_tbl + q * 8)); store8(_read_roots_cfg + q, load8(sv_tbl + READ_ROOTS_MAX * 8 + q)); q = q + 1; }
-    _read_roots_n = sv_n; _cfg_suppressed_n = sv_sup;
+    _trl_roots_restore(sv_tbl, sv_n);
+    _cfg_suppressed_n = sv_sup;
+    return 0;
+}
+
+# _trl_roots_save / _trl_roots_restore (0.52.8): snapshot the jail table — roots, trust (audit C1) and config marks.
+fn _trl_roots_save() {
+    var t = alloc(READ_ROOTS_MAX * 17 + 8);
+    var q = 0;
+    while (q < _read_roots_n) {
+        store64(t + q * 8, load64(_read_roots + q * 8));
+        store64(t + READ_ROOTS_MAX * 8 + q * 8, load64(_read_roots_trust + q * 8));
+        store8(t + READ_ROOTS_MAX * 16 + q, load8(_read_roots_cfg + q));
+        q = q + 1;
+    }
+    return t;
+}
+fn _trl_roots_restore(t, n) {
+    var q = 0;
+    while (q < n) {
+        store64(_read_roots + q * 8, load64(t + q * 8));
+        store64(_read_roots_trust + q * 8, load64(t + READ_ROOTS_MAX * 8 + q * 8));
+        store8(_read_roots_cfg + q, load8(t + READ_ROOTS_MAX * 16 + q));
+        q = q + 1;
+    }
+    _read_roots_n = n;
+    return 0;
+}
+
+# test_read_roots_link (0.52.8, audit C1): a repository's local read root never reaches outside the operator's grant
+# through a symlink. 0.52.6 bounded a local root to a global one LEXICALLY, and the symlink walk skipped a granted
+# root's own spelling — so a clone shipping `link -> ~/.ssh` and `read_roots = [".../evil/link"]` under a global
+# `/home/you/repos` read the key with read_file (no t-ron gate). The fixture is per-pid under /tmp.
+var _trl_base = 0;
+fn _trl_p(suffix) {
+    var b = alloc(256);
+    var o = _append_cstr_cap(b, 0, 256, _trl_base);
+    o = _append_cstr_cap(b, o, 256, suffix);
+    store8(b + o, 0);
+    return b;
+}
+fn _trl_args(path) {
+    var b = alloc(320);
+    var o = _append_cstr_cap(b, 0, 320, "{\"path\":\"");
+    o = _append_cstr_cap(b, o, 320, path);
+    o = _append_cstr_cap(b, o, 320, "\"}");
+    store8(b + o, 0);
+    return b;
+}
+# _trl_layer: a [project] layer whose read_roots are base + each of the (up to three, 0 = none) suffixes.
+fn _trl_layer(a, b, c) {
+    var t = alloc(1024);
+    var o = _append_cstr_cap(t, 0, 1024, "[project]\nread_roots = [\"");
+    o = _append_cstr_cap(t, o, 1024, _trl_p(a));
+    if (b != 0) { o = _append_cstr_cap(t, o, 1024, "\", \""); o = _append_cstr_cap(t, o, 1024, _trl_p(b)); }
+    if (c != 0) { o = _append_cstr_cap(t, o, 1024, "\", \""); o = _append_cstr_cap(t, o, 1024, _trl_p(c)); }
+    o = _append_cstr_cap(t, o, 1024, "\"]\n");
+    store8(t + o, 0);
+    return _cfg_section_pairs(_lay_parse(t), "project");
+}
+fn test_read_roots_link() {
+    test_group("a local read root never reaches outside the operator's grant through a symlink (project.cyr, 0.52.8)");
+    var sv_n = _read_roots_n; var sv_sup = _cfg_suppressed_n;
+    var sv_tbl = _trl_roots_save();
+    _read_roots_n = 0; _cfg_suppressed_n = 0;
+    var bb = alloc(64);
+    var bo = _append_cstr_cap(bb, 0, 64, "/tmp/thoth_t_rootlink_");
+    bo = _append_int_cap(bb, bo, 64, sys_getpid());
+    store8(bb + bo, 0);
+    _trl_base = bb;
+    xmkdir(_trl_base, 0x1c0); xmkdir(_trl_p("/global"), 0x1c0); xmkdir(_trl_p("/global/evil"), 0x1c0);
+    xmkdir(_trl_p("/global/real"), 0x1c0); xmkdir(_trl_p("/global/later"), 0x1c0); xmkdir(_trl_p("/secret"), 0x1c0);
+    file_write_all(_trl_p("/secret/key.txt"), "ROOTLINK-SECRET\n", 16);
+    file_write_all(_trl_p("/global/real/ok.txt"), "ROOTLINK-OK\n", 12);
+    assert_eq(xsymlink(_trl_p("/secret"), _trl_p("/global/evil/link")), 0, "fixture: the clone's link is made");
+    var g = _trl_layer("/global", 0, 0);
+    var l = _trl_layer("/global/evil/link", "/global/real", "/global/later");
+    _cfg_read_roots_load2(l, g);
+    assert_eq(project_read_roots_count(), 2, "the local root reached through a link is not granted; the two real ones are");
+    var named = 0; var i = 0;
+    while (i < config_suppressed_count()) { if (strstr(config_suppressed_at(i), "reached through a symlink") >= 0) { named = named + 1; } i = i + 1; }
+    assert_eq(named, 1, "...and the refusal is NAMED, like every other local root the layer may not have");
+    var r1 = read_file_tool(_trl_args(_trl_p("/global/evil/link/key.txt")));
+    assert_eq(strstr(r1, "ROOTLINK-SECRET"), 0 - 1, "read_file through the clone's link returns nothing of its target (it returned the key, 0.52.6)");
+    var r2 = read_file_tool(_trl_args(_trl_p("/global/real/ok.txt")));
+    assert(strstr(r2, "ROOTLINK-OK") >= 0, "a real local root under the global one still reads");
+    # A link that appears AFTER the grant (a pull, a checkout) is refused at the READ: the walk tests the local root's
+    # own components, because only the global root's spelling is vouched for.
+    xrmdir(_trl_p("/global/later"));
+    assert_eq(xsymlink(_trl_p("/secret"), _trl_p("/global/later")), 0, "fixture: a granted local root becomes a link");
+    var r3 = read_file_tool(_trl_args(_trl_p("/global/later/key.txt")));
+    assert_eq(strstr(r3, "ROOTLINK-SECRET"), 0 - 1, "a granted local root that becomes a link is walked and refused at the read");
+    assert(strstr(r3, "symlink") >= 0, "...and the refusal says why");
+    # The operator's own /allow of that path vouches for all of it — 0.45.2's rule (macOS ships /tmp as a link) stands.
+    project_grant_root(_trl_p("/global/later"));
+    var r4 = read_file_tool(_trl_args(_trl_p("/global/later/key.txt")));
+    assert(strstr(r4, "ROOTLINK-SECRET") >= 0, "the operator's /allow of the same path vouches for its whole spelling (0.45.2)");
+    _trl_roots_restore(sv_tbl, sv_n);
+    _cfg_suppressed_n = sv_sup;
+    xunlink(_trl_p("/global/later")); xunlink(_trl_p("/global/evil/link"));
+    xunlink(_trl_p("/secret/key.txt")); xunlink(_trl_p("/global/real/ok.txt"));
+    xrmdir(_trl_p("/global/real")); xrmdir(_trl_p("/global/evil")); xrmdir(_trl_p("/global")); xrmdir(_trl_p("/secret"));
+    xrmdir(_trl_base);
     return 0;
 }
 
@@ -6715,7 +7130,14 @@ fn test_intr_escape_parse() {
     assert_eq(_intr_drain("\x1bOA"), 0, "...nor an SS3 arrow (application mode)");
     assert_eq(_intr_drain("\x1b[M !!"), 0, "...nor an X10 mouse report (three raw bytes after ESC[M)");
     assert_eq(_intr_drain("\x1b[200~pasted \x1b text\x1b[201~"), 0, "...nor a bracketed paste, an ESC inside it included");
-    assert_eq(_intr_drain("\x1bx"), 0, "...nor an Alt chord");
+    assert_eq(_intr_drain("\x1bx"), 1, "Esc then a key in one drain IS a stop: x begins no terminal sequence (ruling R3; 0.52.6 read it as an Alt chord)");
+    assert_eq(_intr_drain("\x1b\r"), 1, "...Esc then Enter, typed inside one tick (0.52.6: the command ran on)");
+    assert_eq(_intr_drain("\x1bq"), 1, "...Esc then a letter");
+    assert_eq(_intr_drain("\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"), 0, "an OSC reply (ST-terminated) is not a stop");
+    assert_eq(_intr_drain("\x1b]0;title\x07"), 0, "...nor a BEL-terminated one");
+    assert_eq(_intr_drain("\x1bP>|xterm(388)\x1b\\"), 0, "...nor a DCS reply");
+    assert_eq(_intr_drain("\x1b_Gi=1;OK\x1b\\\x1b^pm\x1b\\\x1bXsos\x1b\\"), 0, "...nor APC, PM or SOS strings");
+    assert_eq(_intr_drain("\x1b[I\x1b[O\x1b[32;10;5M"), 0, "...nor focus reports or an urxvt mouse report");
     assert_eq(_intr_drain("\x1b[97;5u"), 0, "...nor a kitty CSI-u chord (Ctrl+a)");
     assert_eq(_intr_drain("\x1b[27u"), 1, "kitty's encoding of the Esc key IS a stop");
     assert_eq(_intr_drain("\x1b[27;1u"), 1, "...with a modifier field too");
@@ -6726,6 +7148,28 @@ fn test_intr_escape_parse() {
     assert_eq(_intr_drain(";10M"), 0, "...stays one report (the state spans polls)");
     assert_eq(_intr_drain("\x1b[99999999999999999999999"), 0, "a runaway sequence swallows no more than its cap...");
     assert_eq(_intr_drain("\x1b"), 1, "...and a following Esc still stops");
+    # 0.52.8 (audit E6): an ESC inside an unfinished sequence starts a new one (xterm's Alt+[ / Alt+O send `ESC [` /
+    # `ESC O` with no final byte, and the Esc presses after them were collected as its parameters)
+    _intr_parse_reset();
+    assert_eq(_intr_drain("\x1b["), 0, "ESC [ with no final byte yet is no stop...");
+    assert_eq(_intr_drain("\x1b"), 1, "...and an Esc in the next read stops (it was a CSI parameter, 0.52.7)");
+    _intr_parse_reset();                                 # each case from ground: a failed one must not feed the next
+    assert_eq(_intr_drain("\x1bO"), 0, "ESC O with no final byte yet is no stop...");
+    assert_eq(_intr_drain("\x1b"), 1, "...and an Esc in the next read stops (it was the SS3's final byte, 0.52.7)");
+    _intr_parse_reset();
+    assert_eq(_intr_drain("\x1b[M"), 0, "ESC [ M opens an X10 report...");
+    assert_eq(_intr_drain("\x1b"), 1, "...and an Esc (which no X10 byte can be) stops");
+    _intr_parse_reset();
+    assert_eq(_intr_drain("\x1b[\x1bx"), 1, "ESC [ then Esc + a key in one read: one stop");
+    # 0.52.8 (audit E5): a paste's end marker split right after its ESC still ends the paste
+    _intr_parse_reset();
+    assert_eq(_intr_drain("\x1b[200~pasted text\x1b"), 0, "a paste whose read ends on the ESC of its end marker is no stop...");
+    assert_eq(_intr_drain("[201~"), 0, "...the marker's rest in the next read...");
+    assert_eq(_intr_paste, 0, "...ends the paste (the ESC was dropped and the paste never ended, 0.52.7)");
+    assert_eq(_intr_drain("\x1b"), 1, "...so a lone Esc after it stops");
+    assert_eq(_intr_drain("\x1b[200~a\x1b"), 0, "a paste's ESC at the end of a read...");
+    assert_eq(_intr_drain("b more\x1b[201~"), 0, "...followed by more text is pasted text (no stop), and the paste ends at its marker");
+    assert_eq(_intr_paste, 0, "...outside the paste again");
     _intr_parse_reset();
     return 0;
 }
@@ -6781,6 +7225,66 @@ fn test_compact_auto_budget() {
     return 0;
 }
 
+# test_utf8_valid (0.52.8, audit D2): the gate refuses an object that is not well-formed UTF-8, so the well-formed test
+# must be exact — RFC 3629's overlong, surrogate, past-U+10FFFF, stray and truncated forms all fail; real text passes.
+fn _tuv(bytes, n) {
+    var b = alloc(n + 4);
+    var i = 0;
+    while (i < n) { store8(b + i, load8(bytes + i)); i = i + 1; }
+    store8(b + n, 0);
+    return utf8_valid(b);
+}
+fn test_utf8_valid() {
+    test_group("utf8_valid accepts well-formed UTF-8 only (util.cyr, 0.52.8)");
+    assert_eq(utf8_valid("plain ascii"), 1, "ASCII");
+    assert_eq(utf8_valid("café € ☕ — ok"), 1, "two-, three- and four-byte characters");
+    assert_eq(_tuv("\xf0\x9f\x98\x80", 4), 1, "an emoji (U+1F600)");
+    assert_eq(_tuv("\xf4\x8f\xbf\xbf", 4), 1, "U+10FFFF, the last codepoint");
+    assert_eq(_tuv("a\xa0b", 3), 0, "a stray continuation byte");
+    assert_eq(_tuv("\xc0\x80", 2), 0, "an overlong NUL (C0 80)");
+    assert_eq(_tuv("\xc1\x9b", 2), 0, "an overlong CSI (C1 9B)");
+    assert_eq(_tuv("\xe0\x82\x9b", 3), 0, "a three-byte overlong CSI (E0 82 9B)");
+    assert_eq(_tuv("\xed\xa0\x80", 3), 0, "a surrogate (ED A0 80)");
+    assert_eq(_tuv("\xf0\x80\x82\x9b", 4), 0, "a four-byte overlong (F0 80 82 9B)");
+    assert_eq(_tuv("\xf4\x90\x80\x80", 4), 0, "past U+10FFFF (F4 90 80 80)");
+    assert_eq(_tuv("\xf5\x80\x80\x80", 4), 0, "a lead byte no encoding uses (F5)");
+    assert_eq(_tuv("ok \xe2\x82", 5), 0, "a sequence cut short at the end");
+    assert_eq(_tuv("\xc3(", 2), 0, "a lead followed by ASCII");
+    return 0;
+}
+
+# test_clean_c1_context (0.52.8, audits F3 + F5): the C1 rule judges a byte by the lead behind it — across a stream
+# chunk boundary too (0.52.6 turned an em dash split as E2 | 80 94 into "??"), and only a WELL-FORMED lead vouches for
+# it (E0 82 9B is an overlong CSI, ED A0 9B a surrogate: their 9B stood).
+fn _tcc_clean(bytes, n) {
+    var b = alloc(n + 4);
+    var i = 0;
+    while (i < n) { store8(b + i, load8(bytes + i)); i = i + 1; }
+    store8(b + n, 0);
+    return clean_text_n(b, n);
+}
+fn _tcc_after(ctx, cn, bytes, n) {
+    var b = alloc(n + 4);
+    var i = 0;
+    while (i < n) { store8(b + i, load8(bytes + i)); i = i + 1; }
+    store8(b + n, 0);
+    return clean_text_n_after(b, n, ctx, cn);
+}
+fn test_clean_c1_context() {
+    test_group("the C1 rule reads a lead across a chunk boundary, and only a well-formed one (util.cyr, 0.52.8)");
+    assert_eq(_tcc_clean("\xe0\x82\x9b", 3), 2, "an overlong CSI (E0 82 9B) is cleaned (its 9B stood, 0.52.6)");
+    assert_eq(_tcc_clean("\xed\xa0\x9b", 3), 1, "...a surrogate's trailing 9B");
+    assert_eq(_tcc_clean("\xf0\x80\x82\x9b", 4), 3, "...a four-byte overlong's");
+    assert_eq(_tcc_clean("\xf4\x90\x80\x9b", 4), 3, "...one past U+10FFFF");
+    assert_eq(_tcc_clean("\xe2\x82\xac \xd0\x91 \xe4\xb8\xad \xf0\x9f\x98\x80", 15), 0, "valid text whose continuations fall in 80..9F is untouched");
+    assert_eq(_tcc_after("a\xe2", 2, "\x80\x94y", 3), 0, "an em dash split across two chunks is not corrupted (it read '??', 0.52.6)");
+    assert_eq(_tcc_after("ab", 2, "\x9b2J", 3), 1, "a raw 9B opening a chunk after ASCII is still a stray, and still cleaned");
+    assert_eq(_tcc_after("x\xc2", 2, "\x9b", 1), 1, "C2 | 9B split across chunks is still a C1 CSI, and cleaned");
+    assert_eq(_tcc_after(0, 0, "\x80y", 2), 1, "with nothing before it a continuation byte is a stray");
+    assert_eq(_tcc_after("\xf0\x9f", 2, "\x98\x80 ok", 5), 0, "a four-byte emoji split after its second byte is kept");
+    return 0;
+}
+
 # test_clean_c1 (0.52.6, audit E9): the sanitisers stopped at C0 and DEL — U+0080..U+009F (C2 80..C2 9F, and a raw
 # 0x80..0x9F no lead accounts for) passed, and a terminal that honours C1 reads 9B as CSI and 9D as OSC.
 fn test_clean_c1() {
@@ -6824,7 +7328,7 @@ fn test_current_models() {
     _cfg_hoosh_reasoning = 5; assert(streq(config_hoosh_reasoning_effort(), "max"), "level 5 -> the word max");
     _cfg_hoosh_max_tokens = 0 - 1;
     _cfg_hoosh_reasoning = 4; assert_eq(_hoosh_max_tokens(), 32768, "budget: xhigh asks for 32K (room to think)");
-    _cfg_hoosh_reasoning = 5; assert_eq(_hoosh_max_tokens(), 65536, "budget: max asks for 64K");
+    _cfg_hoosh_reasoning = 5; assert_eq(_hoosh_max_tokens(), 64000, "budget: max asks for 64,000 (0.52.8: 65,536 is over the Claude 4.5 models' ceiling)");
     _cfg_hoosh_reasoning = 3; assert_eq(_hoosh_max_tokens(), 16384, "budget: high unchanged at 16K");
     _cfg_hoosh_reasoning = 0; assert_eq(_hoosh_max_tokens(), 4096, "budget: off unchanged at 4096");
     _cfg_hoosh_max_tokens = 20000;
@@ -6832,7 +7336,7 @@ fn test_current_models() {
     assert_eq(_hoosh_max_tokens(), 20000, "...and wins over every default, reasoning off");
     _cfg_hoosh_reasoning = 5; assert_eq(_hoosh_max_tokens(), 20000, "...and on");
     _cfg_hoosh_max_tokens = 10; assert_eq(config_hoosh_max_tokens(), 1024, "a ceiling below the floor is raised to 1024 (a typo must not brick replies)");
-    _cfg_hoosh_max_tokens = 999999; assert_eq(config_hoosh_max_tokens(), 131072, "...and one past every model's output is clamped to 128K");
+    _cfg_hoosh_max_tokens = 999999; assert_eq(config_hoosh_max_tokens(), 128000, "...and one past every model's output is clamped to 128,000 (0.52.8: they refuse 131072)");
     _cfg_hoosh_max_tokens = 0; assert_eq(config_hoosh_max_tokens(), 0, "0 reads unset (the defaults apply)");
     _cfg_hoosh_max_tokens = 0 - 1;
     _cfg_hoosh_reasoning = 4;
@@ -6876,7 +7380,7 @@ fn test_current_models() {
     assert_eq(n1 + n2, 2, "length and content_filter each print their line");
     assert_eq(n3 + n4, 0, "stop and tool_calls print nothing");
     assert_eq(feed_count(), 2, "two lines on the feed, nothing else");
-    assert_eq(_mid_feed_plain_count("reply cut short — it reached the output ceiling (max_tokens 4096); raise [hoosh].max_tokens to let it finish"), 1, "a cut reply names the ceiling and the key that moves it");
+    assert_eq(_mid_feed_plain_count("reply cut short — it reached its output ceiling (max_tokens 4096, or the model's own lower limit) or filled its context window; raise [hoosh].max_tokens to let a long answer finish"), 1, "a cut reply names the ceiling, the other cause, and the key that moves it");
     assert_eq(_mid_feed_plain_count("the model declined this request — the provider stopped it with a safety refusal (finish_reason content_filter)"), 1, "a refusal says it was the provider's refusal, not a broken stream");
     feed_init();
     _hoosh_finish = HOOSH_FIN_NONE;

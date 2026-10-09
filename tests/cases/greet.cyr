@@ -46,6 +46,70 @@ fn _tg_row_has(r, needle) {
     return 0;
 }
 
+# test_greet_suppressed_row (0.52.8): the local keys thoth refused have a greeting row, on both surfaces. ADR-0021 said the
+# greeting names them; only stderr did, and the TUI's alternate screen and the window's first frame cover stderr.
+fn test_greet_suppressed_row() {
+    test_group("the local keys thoth refused are named in the greeting (greet.cyr, 0.52.8)");
+    var sv_n = _cfg_suppressed_n;
+    var sv_0 = 0; var sv_1 = 0;
+    if (_cfg_suppressed != 0) { sv_0 = load64(_cfg_suppressed); sv_1 = load64(_cfg_suppressed + 8); }
+    _cfg_suppressed_n = 0;
+    greet_build(1);
+    var r = 0; var srow = 0 - 1;
+    while (r < greet_rows()) { if (_tg_row_has(r, " local key(s) refused") == 1) { srow = r; } r = r + 1; }
+    assert_eq(srow, 0 - 1, "no refused key, no row");
+    _cfg_note_suppressed("guard.enabled (a local layer may only turn it on)");
+    _cfg_note_suppressed("hoosh.max_tokens (a local layer may only lower it)");
+    greet_build(1);
+    r = 0; srow = 0 - 1;
+    while (r < greet_rows()) { if (_tg_row_has(r, " local key(s) refused") == 1) { srow = r; } r = r + 1; }
+    assert(srow >= 0, "two refused local keys have their row");
+    assert_eq(greet_span_role(srow, 0), ROLE_RED, "...RED");
+    assert(_tgm_row_contains(srow, "config: 2 local key(s) refused") == 1, "...counting them");
+    assert(_tgm_row_contains(srow, "/state names them.") == 1, "...and saying where they are named");
+    _cfg_suppressed_n = sv_n;
+    if (_cfg_suppressed != 0) { store64(_cfg_suppressed, sv_0); store64(_cfg_suppressed + 8, sv_1); }
+    greet_build(1);
+    return 0;
+}
+
+# test_greet_model_clip (0.52.8, audit G5): the greeting clips the model id like every other config value (0.52.6, C2) — a
+# repository's 2.9 KB [hoosh].model filled the spans store's budget, and the config row lost the file it names.
+fn _tgm_row_contains(r, needle) {
+    var b = alloc(4096);
+    var n = _tg_row_text(r, b, 4096);
+    return _t_count_sub(b, n, needle, strlen(needle));
+}
+fn test_greet_model_clip() {
+    test_group("the greeting clips the model id like every config value (greet.cyr, 0.52.8)");
+    var sv_url = _cfg_hoosh_url; var sv_model = _cfg_hoosh_model; var sv_ok = _cfg_parse_ok; var sv_pc = _cfg_path_c;
+    _cfg_hoosh_url = "http://127.0.0.1:1"; _cfg_parse_ok = 1; _cfg_path_c = "/srv/repo/.thoth/config.cyml";
+    var big = alloc(3200);
+    session_set_model(0);
+    var n = 2600; var evicted = 0; var widest = 0;
+    while (n < 3072) {
+        var i = 0;
+        while (i < n) { store8(big + i, 109); i = i + 1; }
+        store8(big + n, 0);
+        _cfg_hoosh_model = big;
+        greet_build(1);
+        var r = 0; var mrow = 0 - 1; var crow = 0 - 1;
+        while (r < greet_rows()) {
+            if (_tgm_row_contains(r, "model ") > 0) { mrow = r; }
+            if (_tgm_row_contains(r, "config ") > 0) { crow = r; }
+            r = r + 1;
+        }
+        if (mrow >= 0) { var tb = alloc(4096); var wl = _tg_row_text(mrow, tb, 4096); if (wl > widest) { widest = wl; } }
+        if ((crow < 0) || (_tgm_row_contains(crow, "/srv/repo/.thoth/config.cyml") == 0)) { evicted = evicted + 1; }
+        n = n + 64;
+    }
+    assert(widest < 600, "the model id is clipped like every config value (511 bytes)");
+    assert_eq(evicted, 0, "the config row always names the file in play (a long [hoosh].model evicted it, 0.52.7)");
+    _cfg_hoosh_url = sv_url; _cfg_hoosh_model = sv_model; _cfg_parse_ok = sv_ok; _cfg_path_c = sv_pc;
+    greet_build(1);
+    return 0;
+}
+
 fn test_greet() {
     println("=== the startup greeting block: model + layout + pieces (greet.cyr, 0.45.3) ===");
     var _t0 = ui_tier();

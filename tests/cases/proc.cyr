@@ -1,0 +1,381 @@
+# tests/cases/proc.cyr — a capture's PROCESS TREE and the state its command starts with (src/exec.cyr, 0.52.8, repair
+# batch 12): the supervisor that kills the command's whole tree when thoth dies (audit E1 / ruling R4, E10), the signal
+# mask and dispositions a command inherits (E4), and the descriptors it inherits. Included by tests/thoth_agent.tcyr —
+# exec, the wait-poll seam and hoosh's _append_int are in that suite's include chain. POSIX only, as the capture is:
+# the suites never run on AGNOS or Windows, and there test_proc_capture is empty.
+
+#ifndef CYRIUS_TARGET_WIN
+#ifndef CYRIUS_TARGET_AGNOS
+# _prc_int(buf, n): the first decimal number in buf[0..n) after leading blanks, or -1 when there is none.
+fn _prc_int(buf, n) {
+    var i = 0;
+    while ((i < n) && ((load8(buf + i) == 32) || (load8(buf + i) == 9))) { i = i + 1; }
+    var v = 0;
+    var any = 0;
+    while ((i < n) && (load8(buf + i) >= 48) && (load8(buf + i) <= 57)) {
+        v = (v * 10) + (load8(buf + i) - 48);
+        any = 1;
+        i = i + 1;
+    }
+    if (any == 0) { return 0 - 1; }
+    return v;
+}
+
+# _prc_read_int(path, ms): wait up to `ms` for `path` to hold one whole line starting with a number (a running capture
+# writes it); that number, or -1.
+fn _prc_read_int(path, ms) {
+    var b[64];
+    var t0 = clock_now_ms();
+    while ((clock_now_ms() - t0) < ms) {
+        var n = file_read_all(path, &b, 63);
+        if (n > 0) {
+            if (load8(&b + n - 1) == 10) { return _prc_int(&b, n); }
+        }
+        sleep_ms(20);
+    }
+    return 0 - 1;
+}
+
+# _prc_group_live(pg): how many LIVE (not zombie) processes are in process group `pg`. kill(-pg, 0) answers "none at all"
+# for free; past that, `ps` tells the living from zombies — a reaper that is slow (or a container init that never reaps)
+# keeps a killed process's zombie in its group, and a zombie runs nothing.
+var _prc_ps_buf = 0;
+var PRC_PS_CAP = 262144;
+fn _prc_group_live(pg) {
+    if (sys_kill(0 - pg, 0) < 0) { return 0; }
+    if (_prc_ps_buf == 0) { _prc_ps_buf = alloc(PRC_PS_CAP + 1); }
+    var st[16];
+    var n = exec_shell_capture("ps -A -o pgid= -o stat=", _prc_ps_buf, PRC_PS_CAP, 10000, &st);
+    var live = 0;
+    var i = 0;
+    while (i < n) {
+        var e = i;
+        while ((e < n) && (load8(_prc_ps_buf + e) != 10)) { e = e + 1; }
+        var j = i;
+        while ((j < e) && (load8(_prc_ps_buf + j) == 32)) { j = j + 1; }
+        var v = _prc_int(_prc_ps_buf + j, e - j);
+        while ((j < e) && (load8(_prc_ps_buf + j) != 32)) { j = j + 1; }       # past the number
+        while ((j < e) && (load8(_prc_ps_buf + j) == 32)) { j = j + 1; }       # to the state letter
+        if ((v == pg) && (j < e)) {
+            if (load8(_prc_ps_buf + j) != 90) { live = live + 1; }             # 'Z' is a zombie
+        }
+        i = e + 1;
+    }
+    return live;
+}
+
+# _prc_group_gone(pg, ms): 1 once group `pg` has nothing alive in it, within `ms`; else 0.
+fn _prc_group_gone(pg, ms) {
+    var t0 = clock_now_ms();
+    while ((clock_now_ms() - t0) < ms) {
+        if (_prc_group_live(pg) == 0) { return 1; }
+        sleep_ms(50);
+    }
+    if (_prc_group_live(pg) == 0) { return 1; }
+    return 0;
+}
+
+# _prc_hex_after(buf, n, key): the hex number after `key` and its blanks in buf[0..n) (a /proc/<pid>/status field), or -1.
+fn _prc_hex_after(buf, n, key) {
+    var k = strlen(key);
+    var i = 0;
+    while ((i + k) <= n) {
+        if (memeq(buf + i, key, k) == 1) {
+            var j = i + k;
+            while ((j < n) && ((load8(buf + j) == 9) || (load8(buf + j) == 32))) { j = j + 1; }
+            var v = 0;
+            var any = 0;
+            var go = 1;
+            while ((j < n) && (go == 1)) {
+                var c = load8(buf + j);
+                var d = 0 - 1;
+                if ((c >= 48) && (c <= 57)) { d = c - 48; }
+                if ((c >= 97) && (c <= 102)) { d = c - 87; }
+                if (d < 0) { go = 0; }
+                else { v = (v * 16) + d; any = 1; j = j + 1; }
+            }
+            if (any == 1) { return v; }
+            return 0 - 1;
+        }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# The stand-in thoth for the leak case: its wait poll's first call forks a LEAKER — a process that holds a copy of every
+# descriptor this thoth has, the capture's death-pipe write end with them, and never closes it — and reports the
+# leaker's pid down `_prc_leak_fd`.
+var _prc_leaker = 0;
+var _prc_leak_fd = 0 - 1;
+fn _prc_leak_poll() {
+    if (_prc_leaker == 0) {
+        var lk = sys_fork();
+        if (lk == 0) { sleep_ms(6000); sys_exit(0); }
+        _prc_leaker = lk;
+        var pb[16];
+        store64(&pb, lk);
+        sys_write(_prc_leak_fd, &pb, 8);
+    }
+    return 41;
+}
+
+# test_capture_orphans (E1 / R4): SIGKILL the process that owns a running capture, and nothing of the command is left.
+fn test_capture_orphans() {
+    test_group("a SIGKILLed thoth leaves nothing of a running capture behind (exec.cyr, 0.52.8, audit E1 / ruling R4)");
+    exec_wait_poll_set(0);
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];
+    exec_shell_capture("exit 0", buf, cap, 5000, &st);   # the capture's path scratch is allocated before any fork
+    # the group is found and judged with `ps` (POSIX, on every host this suite runs on); where it is missing, say so
+    var hn = exec_shell_capture("command -v ps > /dev/null && echo have-ps", buf, cap, 5000, &st);
+    store8(buf + hn, 0);
+    if (_t_has(buf, "have-ps") == 0) {
+        oprintln("  SKIP capture orphans: no `ps` on this host's default PATH — the process group cannot be inspected here");
+        return 0;
+    }
+
+    # 1. the plain case: the shell FORKS its sleep (a list — `sleep 30` alone would be exec'd in place). The getppid
+    #    witness is off in the stand-in, so the DEATH PIPE alone has to end the group.
+    xunlink("build/.thoth_e1_pg");
+    var c = sys_fork();
+    if (c == 0) {
+        _exec_sv_ppid_witness = 0;
+        exec_shell_capture("ps -o pgid= -p $$ > build/.thoth_e1_pg; sleep 30; true", buf, cap, 60000, &st);
+        sys_exit(0);
+    }
+    var pg = _prc_read_int("build/.thoth_e1_pg", 5000);
+    assert(pg > 0, "premise: the running capture reported its process group");
+    if (pg > 0) {
+        assert(_prc_group_live(pg) >= 2, "premise: the shell and its sleep are alive while their thoth is");
+        sys_kill(c, 9);
+        sys_waitpid(c, &st, 0);
+        var gone = _prc_group_gone(pg, 2000);
+        assert_eq(gone, 1, "SIGKILL the thoth: nothing is left alive in the capture's process group (its shell's child ran on at ppid 1, 0.52.7)");
+        if (gone == 0) { sys_kill(0 - pg, 9); }        # a failing run never leaves its survivor behind
+    } else {
+        sys_kill(c, 9);
+        sys_waitpid(c, &st, 0);
+    }
+    xunlink("build/.thoth_e1_pg");
+
+    # 2. a write end that LEAKED into another process holds the death pipe's hang-up off — the reparenting still tells
+    #    the supervisor its thoth is gone (the getppid witness), and the group still dies, long before the leaker exits
+    xunlink("build/.thoth_e1_pg2");
+    var rp[16];
+    store64(&rp, 0);
+    sys_pipe(&rp);
+    var rrd = load32(&rp);
+    var rwr = load32(&rp + 4);
+    var c2 = sys_fork();
+    if (c2 == 0) {
+        sys_close(rrd);
+        _prc_leak_fd = rwr;
+        _prc_leaker = 0;
+        exec_wait_poll_set(&_prc_leak_poll);
+        exec_shell_capture("ps -o pgid= -p $$ > build/.thoth_e1_pg2; sleep 30; true", buf, cap, 60000, &st);
+        sys_exit(0);
+    }
+    sys_close(rwr);
+    var lb[16];
+    store64(&lb, 0);
+    var ln = sys_read(rrd, &lb, 8);
+    sys_close(rrd);
+    var leaker = 0;
+    if (ln == 8) { leaker = load64(&lb); }
+    assert(leaker > 0, "premise: the leaker holding a copy of the death pipe's write end is running");
+    var pg2 = _prc_read_int("build/.thoth_e1_pg2", 5000);
+    assert(pg2 > 0, "premise: the second capture reported its process group");
+    sys_kill(c2, 9);
+    sys_waitpid(c2, &st, 0);
+    if (pg2 > 0) {
+        var gone2 = _prc_group_gone(pg2, 1500);
+        assert_eq(gone2, 1, "...and with its write end leaked, the capture's group still dies once its thoth is gone (well before the leaker lets go)");
+        if (gone2 == 0) { sys_kill(0 - pg2, 9); }
+    }
+    if (leaker > 0) { sys_kill(leaker, 9); }
+    xunlink("build/.thoth_e1_pg2");
+
+    # 3. a thoth started with its stdio closed: the temp file and the death pipe take 0..2, and the supervisor's own
+    #    stdio dup2s must not overwrite the pipe (were they to, the capture file polled in its place reads "ready" at once
+    #    and every command dies at its start). The stand-in reports its capture down a pipe.
+    var qp[16];
+    store64(&qp, 0);
+    sys_pipe(&qp);
+    var qrd = load32(&qp);
+    var qwr = load32(&qp + 4);
+    var c3 = sys_fork();
+    if (c3 == 0) {
+        sys_close(qrd);
+        sys_close(0);
+        sys_close(2);
+        exec_wait_poll_set(0);
+        var qn = exec_shell_capture("sleep 0.2; printf closed-stdio; exit 4", buf, cap, 10000, &st);
+        var rec[64];
+        store64(&rec, load64(&st));
+        store64(&rec + 8, qn);
+        var k = 0;
+        while ((k < qn) && (k < 40)) { store8(&rec + 16 + k, load8(buf + k)); k = k + 1; }
+        sys_write(qwr, &rec, 56);
+        sys_exit(0);
+    }
+    sys_close(qwr);
+    var got[64];
+    store64(&got, 0);
+    var gn = 0;
+    var more = 1;
+    while ((gn < 56) && (more == 1)) {                 # blocks at most for the stand-in's capture (its 10 s deadline)
+        var r = sys_read(qrd, &got + gn, 56 - gn);
+        if (r <= 0) { more = 0; }
+        else { gn = gn + r; }
+    }
+    sys_close(qrd);
+    sys_waitpid(c3, &st, 0);
+    assert_eq(gn, 56, "premise: the stand-in with closed stdio reported its capture");
+    if (gn == 56) {
+        assert_eq(load64(&got), 4, "a thoth with fds 0 and 2 closed still runs a capture to its own exit code (4)");
+        assert_eq(load64(&got + 8), 12, "...and keeps its output");
+        assert_eq(memeq(&got + 16, "closed-stdio", 12), 1, "...byte for byte");
+    }
+    return 0;
+}
+
+# test_capture_status_mapping: what exec reports is unchanged by the supervisor between it and the shell — an exit code is
+# itself, a signal death is 128+sig, a deadline is -2 with its flag (these all held at 0.52.7, and must still).
+fn test_capture_status_mapping() {
+    test_group("the capture's status mapping is unchanged under the supervisor (exec.cyr, 0.52.8)");
+    exec_wait_poll_set(0);
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];
+    exec_shell_capture("exit 3", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 3, "exit 3 reads 3");
+    assert_eq(load64(&st + 8), 0, "...not timed out");
+    var n = exec_shell_capture("printf out; exit 5", buf, cap, 5000, &st);
+    store8(buf + n, 0);
+    assert_eq(load64(&st), 5, "printf; exit 5 reads 5");
+    assert(streq(buf, "out"), "...with its output");
+    exec_shell_capture("exit 255", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 255, "exit 255 reads 255");
+    exec_shell_capture("kill -TERM $$", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 128 + 15, "a shell killed by SIGTERM reads 143 (128+sig), as it did");
+    exec_shell_capture("kill -KILL $$", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 128 + 9, "...by SIGKILL, 137");
+    assert_eq(load64(&st + 8), 0, "...which is not the deadline's flag");
+    exec_shell_capture("/nonexistent/thoth-no-such-command", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 127, "a command the shell cannot find reads 127");
+    exec_shell_capture("sleep 5", buf, cap, 300, &st);
+    assert_eq(load64(&st), 0 - 2, "a deadline still reads -2");
+    assert_eq(load64(&st + 8), 1, "...with the timed-out flag");
+    # a job the command leaves running after it returns is the command's business, as before: the supervisor watches
+    # the shell, and only thoth's death or a kill takes the group
+    xunlink("build/.thoth_e1_bg");
+    exec_shell_capture("(sleep 0.5; : > build/.thoth_e1_bg) > /dev/null 2>&1 & exit 0", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 0, "a shell that backgrounds a job and exits reads 0");
+    var t0 = clock_now_ms();
+    while ((file_exists("build/.thoth_e1_bg") == 0) && ((clock_now_ms() - t0) < 3000)) { sleep_ms(50); }
+    assert_eq(file_exists("build/.thoth_e1_bg"), 1, "...and its background job still runs to its end (a clean exit kills nothing)");
+    xunlink("build/.thoth_e1_bg");
+    return 0;
+}
+
+# test_capture_inherits (E4 + the supervisor's descriptor sweep): a command starts with an empty signal mask, SIGPIPE and
+# SIGXFSZ at SIG_DFL, and none of thoth's descriptors.
+fn test_capture_inherits() {
+    test_group("a captured command inherits no signal mask, no SIGPIPE/SIGXFSZ ignore and no descriptor of thoth's (exec.cyr, 0.52.8, audit E4)");
+    exec_wait_poll_set(0);
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];
+    # the state thoth can be in: the TUI's signalfd blocks SIGINT + SIGWINCH; a launcher (Python, Node) ignores SIGPIPE +
+    # SIGXFSZ. (SIGPIPE and SIGXFSZ stay ignored in this test process afterwards — harmless: a write to a closed pipe
+    # here then fails with EPIPE instead of killing the suite. The mask is restored.)
+    var blk[16];
+    store64(&blk, 0x8000002);
+    store64(&blk + 8, 0);
+    var old[16];
+    store64(&old, 0);
+    store64(&old + 8, 0);
+    var masked = sys_sigprocmask(SIG_BLOCK, &blk, &old);
+    signal_ignore(SIGPIPE);
+    signal_ignore(25);
+
+    # SIGPIPE, portably: a writer into a pipe whose reader left dies of the signal, quietly, as from a shell
+    var n = exec_shell_capture("yes | head -c 1 > /dev/null; echo end", buf, cap, 10000, &st);
+    store8(buf + n, 0);
+    assert(_t_has(buf, "end") > 0, "premise: the pipeline ran");
+    assert_eq(_t_has(buf, "Broken pipe"), 0, "a writer into a closed pipe dies of SIGPIPE — no 'write error: Broken pipe' (thoth's launcher's ignore was inherited, 0.52.7)");
+
+    # SIGINT reaches the command (the mask is empty): a shell that signals itself dies of it
+    if (masked >= 0) {
+        n = exec_shell_capture("sh -c 'kill -INT $$; echo survived'; echo after", buf, cap, 10000, &st);
+        store8(buf + n, 0);
+        assert(_t_has(buf, "after") > 0, "premise: the outer shell ran on");
+        assert_eq(_t_has(buf, "survived"), 0, "a SIGINT the command sends itself is delivered (blocked, inherited from the TUI's signalfd, 0.52.7)");
+    } else {
+        oprintln("  SKIP SIGINT delivery: this target's floor sets no signal mask (it declines rt_sigprocmask), so thoth blocks nothing to inherit");
+    }
+
+    # the exact bits, read by the command itself (Linux /proc)
+    if (file_exists("/proc/self/status") == 1) {
+        var me = alloc(8193);
+        var mn = file_read_all("/proc/self/status", me, 8192);
+        var my_blk = _prc_hex_after(me, mn, "SigBlk:");
+        var my_ign = _prc_hex_after(me, mn, "SigIgn:");
+        assert((my_ign & 0x1001000) == 0x1001000, "premise: this process ignores SIGPIPE and SIGXFSZ");
+        n = exec_shell_capture("grep -E 'SigBlk|SigIgn' /proc/self/status", buf, cap, 10000, &st);
+        var cblk = _prc_hex_after(buf, n, "SigBlk:");
+        var cign = _prc_hex_after(buf, n, "SigIgn:");
+        if ((my_blk & 0x8000002) == 0x8000002) {
+            assert_eq(cblk, 0, "the command's SigBlk is 0 (it was 0x8000002 — SIGINT and SIGWINCH — in a TUI child, 0.52.7)");
+        } else {
+            oprintln("  SKIP SigBlk: this process's own mask is not visible in /proc (an emulator keeps it virtual)");
+        }
+        assert_eq(cign, my_ign & ((0 - 1) - 0x1001000), "the command's SigIgn is thoth's less SIGPIPE and SIGXFSZ — 0 unless thoth's launcher chose more (0x1001000, 0.52.7)");
+    } else {
+        oprintln("  SKIP signal bits: no /proc/self/status on this host — the SIGPIPE and SIGINT behaviour above is the check here");
+    }
+    if (masked >= 0) { sys_sigprocmask(SIG_SETMASK, &old, 0); }
+
+    # descriptors: one thoth holds open WITHOUT close-on-exec is not the command's
+    var nf = sys_open("/dev/null", 0, 0);
+    var hi = syscall(SYS_FCNTL, nf, 0, 77);           # F_DUPFD (0 on Linux and Darwin): the lowest free fd >= 77
+    sys_close(nf);
+    var cmd = alloc(128);
+    var off = _exec_append_cstr(cmd, 0, "test -e /dev/fd/");
+    off = _append_int(cmd, off, hi);
+    off = _exec_append_cstr(cmd, off, " && echo LEAKED || echo CLEAN");
+    store8(cmd + off, 0);
+    var pf = alloc(64);
+    var po = _exec_append_cstr(pf, 0, "/dev/fd/");
+    po = _append_int(pf, po, hi);
+    store8(pf + po, 0);
+    assert_eq(file_exists(pf), 1, "premise: this process holds the descriptor open");
+    n = exec_shell_capture(cmd, buf, cap, 5000, &st);
+    store8(buf + n, 0);
+    assert(streq(buf, "CLEAN\n"), "a descriptor thoth holds open is not inherited by the command (the shell held every one thoth had not marked close-on-exec, 0.52.7)");
+    # ...and on Linux the whole table: stdin, stdout, stderr — and ls's own directory (3) — nothing of thoth's, nor
+    # either end of the death pipe (the supervisor keeps its read end close-on-exec)
+    if (file_exists("/proc/self/status") == 1) {
+        n = exec_shell_capture("ls /dev/fd", buf, cap, 5000, &st);
+        store8(buf + n, 0);
+        assert(streq(buf, "0\n1\n2\n3\n"), "the command holds exactly its stdio (ls /dev/fd: 0 1 2, and 3 for the listing)");
+    }
+    sys_close(hi);
+    return 0;
+}
+
+#endif
+#endif
+
+fn test_proc_capture() {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    test_capture_status_mapping();
+    test_capture_orphans();
+    test_capture_inherits();
+    exec_wait_poll_set(0);
+    #endif
+    #endif
+    return 0;
+}

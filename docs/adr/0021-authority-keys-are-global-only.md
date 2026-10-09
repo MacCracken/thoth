@@ -84,6 +84,9 @@ tier, theme, aliases, pricing, caps, and the capability toggles (`[shell].enable
 `[subagent].enabled`, …). A repo enabling a *tool* is not the same class of hazard as a repo naming a
 *command*: every tool call still passes the t-ron gate, and with no policy that gate is a fail-closed
 confirm the operator answers. `[hooks]` had no such gate, which is why it was the CRITICAL of the set.
+*(0.52.6 and 0.52.8: the preferences that spend the operator's money or guard the session — the budget
+ceiling, pricing, `[subagent].enabled`, `[guard]`, `[redact]`, `[hoosh].reasoning` and `max_tokens` —
+move only in the safe direction from a local layer; see the addendum.)*
 
 ## The open question this leaves
 
@@ -95,3 +98,40 @@ trust record kept, and what defends *it*?), so it is recorded here rather than g
 (0.51.0) answers that question for the tool-definition half — a keyless store defended by 0600, an
 atomic rename, a symlink refusal and a whole-file digest, with its ceiling (a same-uid editor) stated;
 the per-repo-hooks half stays open.
+
+## Addendum (0.52.8) — the safe direction
+
+The Decision draws one line: authority keys come from the global layer, and every other key is a
+preference the local layer keeps. 0.52.6 found that rule too generous for keys that are preferences
+in form but spend the operator's money or weaken the session's defences, and gave three of them a
+*direction*: `[budget].max_cost_micro` is strictest-wins, a local `[pricing]` rate may only raise the
+global's, and a local `[project].read_roots` entry may only narrow a global root. The 0.52.8 audit
+(repair batch 12) found five more on the plain override path, and the maintainer ruled them the same
+way:
+
+| Local key | What it bought a clone | Now |
+|---|---|---|
+| `[guard].enabled`, `[redact].enabled` | The injection guard and secret redaction switched off for the operator's session | may only turn them **on** |
+| `[subagent].enabled` | Delegation switched on: each child is a whole model conversation the operator pays for | may only turn it **off** |
+| `[hoosh].reasoning`, `[hoosh].max_tokens` | Every request's output ceiling raised (`max_tokens = 128000`, `reasoning = "max"`), past a global `[budget].max_tokens` too, since the budget is checked before each call, not inside one | may only **lower** them |
+
+The comparison is with the global layer's value, or with thoth's default where the global says
+nothing. With no global `[hoosh].reasoning`, then, a repository cannot turn reasoning on, and the
+`max_tokens` it may lower is the effort's own default. A move the other way is ignored and named like
+a suppressed key (stderr, the greeting, `/state`, `/reload`). A value that agrees with the baseline is
+not reported, for the reason the Decision gives. (The greeting row is itself 0.52.8's: from 0.44.3 only
+stderr named a suppressed key at startup, and the TUI's alternate screen and the window's first frame
+cover stderr, so the Decision's "in the greeting" was not true until now.)
+
+`[project].vidya` stays a preference: a repository may say where its knowledge base lives. But
+`/allow vidya` turned the key into a read grant of whatever path it named, so a clone's
+`vidya = "/home/you/.ssh"` became the operator's one-word grant. A vidya path the local layer chose is
+now bounded like a local read root: it must lie under a root the global config grants, with no
+symlink below that root, or `/allow vidya` refuses and names the path. A global vidya is granted as
+before.
+
+The same audit found the 0.52.6 read-root bound incomplete. The jail's symlink walk skipped every
+component of a granted root's own spelling, so a local root that was itself a link inside a global
+root, or ran through one, reached outside it. The walk now trusts only the operator's own prefix: the
+global root a local root sits under, or an `/allow` grant. A local root reached through a link is
+refused when it is granted, and named.

@@ -260,7 +260,10 @@ fn greet_build(up) {
     if (config_hoosh_configured() == 1) {
         _greet_row();
         _greet_row();
-        _greet_span(ROLE_FAINT, "model "); _greet_span(ROLE_ACCENT, _hoosh_model()); _greet_span(ROLE_FAINT, "  (/model to change)");
+        # 0.52.8 (audit G5): clipped like every other config value here (C2) — [hoosh].model is a preference a repository's
+        # local layer sets, sanitised at load but not bounded, and a 2.9 KB one filled the spans store's 3 KiB for the rows
+        # below it (the config path, "local wins per key", the stores).
+        _greet_span(ROLE_FAINT, "model "); _greet_span_clean(ROLE_ACCENT, _hoosh_model()); _greet_span(ROLE_FAINT, "  (/model to change)");
     }
     # the config file(s) in play — both layers when both loaded (0.43.3: a value from the global is not a mystery);
     # paths under $HOME read `~/…` (0.45.3). Its own group, an open row above it; the red config warnings sit
@@ -292,6 +295,15 @@ fn greet_build(up) {
         _greet_row();
         _greet_span(ROLE_RED, "log cannot open "); _greet_span_clean(ROLE_RED, config_path_display(config_log_file()));
         _greet_span(ROLE_FAINT, " — structured logging disabled");
+    }
+    # 0.52.8: the local keys thoth refused (ADR-0021, and its 0.52.8 addendum's safe direction). ADR-0021 said the
+    # greeting names them, and since 0.44.3 only stderr did — which the TUI's alternate screen and the window's first
+    # frame cover, as with the two rows above: a clone's `[guard] enabled = false` was refused unseen unless the operator
+    # ran /state.
+    if (config_suppressed_count() > 0) {
+        _greet_row();
+        _greet_span(ROLE_RED, "config: "); _greet_span_int(ROLE_RED, config_suppressed_count()); _greet_span(ROLE_RED, " local key(s) refused");
+        _greet_span(ROLE_FAINT, " — a project may not grant authority or loosen a limit. /state names them.");
     }
     if (config_unknown_count() > 0) {              # 0.43.5: a mistyped key is otherwise indistinguishable from an unwritten line
         _greet_row();

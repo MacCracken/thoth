@@ -89,7 +89,7 @@ fn main() {
     out_ring_sink_set(&feed_write);
     test_ui();
     test_tui();
-    test_greet(); test_greet_red_reserve(); test_greet_seam_failures();
+    test_greet(); test_greet_red_reserve(); test_greet_seam_failures(); test_greet_model_clip(); test_greet_suppressed_row();
     test_feed();
     test_feed_ring();
     test_softwrap();
@@ -111,6 +111,9 @@ fn main() {
     test_composer_placeholder_0450();
     test_tui_epoll_buf_apart();
     test_tui_confirm_rows();      # 0.52.6: the confirm question's rows (audits F1 + C1)
+    test_tui_confirm_live_geometry();   # 0.52.8: sized for the live screen; a shrink while asking voids it (audit B1)
+    test_tui_ask_rows();          # 0.52.8: the asker's question gets its rows (audit B6)
+    test_mpick_stale_routes(); test_mpick_disabled_route_url(); test_mpick_nomatch_unloaded(); test_mpick_keybad_per_model();   # 0.52.8: per-route picker health (A6/B2, B3, B4, A11/B5)
     return assert_summary();
 }
 var _e = main();

@@ -1283,6 +1283,68 @@ fn test_gturn_reply_landed() {
     return 0;
 }
 
+# test_gturn_settle (0.52.8, audit A1): the window names how the provider ENDED a turn. It ran every turn under OUT_NULL,
+# where the finish note is a discard, and then called gturn_fail — a refusal read "the turn did not complete - is hoosh
+# reachable?", and a reply cut at the output ceiling landed as if it were complete.
+fn test_gturn_settle() {
+    test_group("the window names a refusal and a cut reply, in the TUI's words (ginput.cyr / gfeed.cyr, 0.52.8)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    intr_reset();
+    session_bump_turn();
+    session_history_append("user", "refuse", 6);
+    gturn_begin("refuse");
+    _hoosh_finish = HOOSH_FIN_FILTER;
+    gturn_settle();
+    assert_eq(gturn_failed(), 0, "a refusal is not drawn as a failure (it read 'is hoosh reachable?', 0.52.7)");
+    assert_eq(gturn_note(), 1, "...it is the provider's refusal");
+    assert_eq(_ui_contains(gturn_note_text(), "the model declined this request"), 1, "...in the words the TUI prints");
+    var l1 = gd_list_new(); gfeed_build(l1, 0, 0, 900, 600);
+    assert(_t_gd_text_count(l1, "the model declined this request") >= 1, "...and the feed draws it");
+    assert_eq(_t_gd_text_count(l1, "is hoosh reachable"), 0, "...instead of the gateway failure");
+    gturn_end();
+    session_bump_turn();
+    session_history_append("user", "cut", 3);
+    gturn_begin("cut");
+    session_history_append("assistant", "partial answer", 14);
+    _hoosh_finish = HOOSH_FIN_LENGTH;
+    gturn_settle();
+    assert_eq(gturn_note(), 3, "a landed reply that was cut gets the notice (it read as complete, 0.52.7)");
+    assert_eq(_ui_contains(gturn_note_text(), "reply cut short"), 1, "...that says so");
+    var l2 = gd_list_new(); gfeed_build(l2, 0, 0, 900, 600);
+    assert(_t_gd_text_count(l2, "reply cut short") >= 1, "...drawn under the reply");
+    gturn_end();
+    session_bump_turn();
+    gturn_begin("down");
+    _hoosh_finish = HOOSH_FIN_NONE;
+    gturn_settle();
+    assert_eq(gturn_failed(), 1, "a turn with no reply and no finish word is still a failure");
+    assert_eq(gturn_note(), 0, "...with no provider notice");
+    gturn_end();
+    gturn_begin("next");
+    assert_eq(gturn_note(), 0, "a new submit clears the notice");
+    gturn_end();
+    # 0.52.8 (seen live): an operator's command after a refused turn — the card is drawn, and the refusal is not drawn
+    # beneath it as if it were the command's verdict. The failure and stopped notices go the same way.
+    session_bump_turn();
+    gturn_begin("refuse");
+    _hoosh_finish = HOOSH_FIN_FILTER;
+    gturn_settle();
+    gturn_end();
+    assert_eq(gturn_note(), 1, "a refused turn leaves its notice");
+    gcmd_run("/x", &_tg_runner_ok);
+    assert_eq(gturn_note(), 0, "...and the next command's card clears it");
+    var l3 = gd_list_new(); gfeed_build(l3, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l3, "the model declined this request"), 0, "...so the card is not drawn over a stale refusal");
+    gturn_fail(); gturn_stop();
+    gcmd_run("/y", &_tg_runner_ok);
+    assert_eq(gturn_failed() + gturn_stopped(), 0, "...nor over a stale failure or stop");
+    gcmd_clear();
+    _hoosh_finish = HOOSH_FIN_NONE;
+    session_reset(); session_history_clear();
+    return 0;
+}
+
 # 0.52.1: the provisional echo of the operator's line stands only until the turn appends it. Through 0.52.0 it stood
 # for the whole turn, and the history drew the same line once the turn appended it — twice for the whole stream (seen
 # live on Hyprland with a slow streaming reply).
@@ -2253,6 +2315,96 @@ fn _gask_visible(cmds, needle) {
     return 0;
 }
 
+# test_gask_whole_question (0.52.8, audits D1 + D2): the card draws every byte of its question, or marks it cut. Stray
+# UTF-8 continuation bytes were one LAYOUT codepoint and a raster cell each, so a row's clip stopped the raster early
+# and the next row began past bytes nothing drew; and a question longer than the card's 1,024-byte copy lost its tail.
+# _tg_raster_bytes: the bytes gr_fb_text consumes drawing `max_cp` codepoints of `s` (gr_text_cols' stepping).
+fn _tg_raster_bytes(s, max_cp) {
+    var i = 0;
+    var cols = 0;
+    while ((load8(s + i) != 0) && (cols < max_cp)) { var pk = gr__utf8_at(s, i); i = i + (pk % 8); cols = cols + 1; }
+    return i;
+}
+# _tg_q_drawn: 1 when `needle` lies wholly inside the bytes some text command actually rasterises.
+fn _tg_q_drawn(cmds, needle) {
+    var i = 0;
+    while (i < vec_len(cmds)) {
+        var c = vec_get(cmds, i);
+        if ((gd_kind(c) == GD_TEXT) && (gd_text(c) != 0) && (gd_aux(c) > 0)) {
+            var t = gd_text(c);
+            var off = _gask_off_of(t, needle);
+            if (off >= 0) { if ((off + strlen(needle)) <= _tg_raster_bytes(t, gd_aux(c))) { return 1; } }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+fn test_gask_whole_question() {
+    test_group("the card draws every byte of its question, or marks it cut (gask.cyr, 0.52.8)");
+    var q = alloc(2048);
+    var o = _append_cstr_cap(q, 0, 2048, "Authorize run shell echo ok Z");
+    var i = 0;
+    while (i < 100) { store8(q + o, 0xA0); o = o + 1; i = i + 1; }
+    o = _append_cstr_cap(q, o, 2048, ";touch PWNED? (t-ron absent - thoth is asking because nothing else can)");
+    store8(q + o, 0);
+    gask_close();
+    gask_open(q);
+    gask_set_label(GASK_LABEL_AUTHZ);
+    gask_add_option("no"); gask_add_option("yes, once"); gask_add_option("yes, for this session");
+    var c = gd_list_new();
+    gask_build(c, 960, 900);
+    assert_eq(_tg_q_drawn(c, ";touch PWNED"), 1, "the text after 100 stray bytes is rasterised (the layout folded them into one codepoint, 0.52.7)");
+    gask_close();
+    var big = alloc(GASK_Q_CAP + 64);
+    var bo = 0;
+    while (bo < (GASK_Q_CAP + 10)) { store8(big + bo, 120); bo = bo + 1; }
+    store8(big + bo, 0);
+    gask_open(big);
+    gask_set_label(GASK_LABEL_AUTHZ);
+    gask_add_option("no"); gask_add_option("yes, once"); gask_add_option("yes, for this session");
+    var c2 = gd_list_new();
+    gask_build(c2, 3000, 3000);
+    assert_eq(gask_cut(), 1, "a question cut on its way into the card reads as cut, however large the window");
+    _gask_sel = 1;
+    assert_eq(_gask_key(28, 0), 2, "...and Enter on 'yes, once' is refused");
+    gask_close();
+    return 0;
+}
+
+# test_gask_open_and_narrow (0.52.8, audits G6 + D5 + G7): a freshly opened card is cut until it is built at the window's
+# size (a key arriving before the first frame was judged by the PREVIOUS modal's cut), and a card that cannot fit the
+# window — wider than it, or with no room for one question row — reads as cut, so no yes is taken on it.
+fn test_gask_open_and_narrow() {
+    test_group("the card is cut until built, and cut in a window too small for it (gask.cyr, 0.52.8)");
+    gask_close();
+    gask_open("Authorize run shell echo short? (t-ron absent - thoth is asking because nothing else can)");
+    gask_set_label(GASK_LABEL_AUTHZ);
+    gask_add_option("no"); gask_add_option("yes, once"); gask_add_option("yes, for this session");
+    var c = gd_list_new();
+    gask_build(c, 960, 900);
+    assert_eq(gask_cut(), 0, "premise: a short question fits a 960x900 card");
+    gask_close();
+    gask_open("Authorize run shell echo the-next-question? (t-ron absent - thoth is asking because nothing else can)");
+    gask_set_label(GASK_LABEL_AUTHZ);
+    gask_add_option("no"); gask_add_option("yes, once"); gask_add_option("yes, for this session");
+    _gask_sel = 1;
+    assert_eq(_gask_key(28, 0), 2, "Enter before the new card is built is refused (it was judged by the last card's cut)");
+    var c2 = gd_list_new();
+    gask_build(c2, 960, 900);
+    _gask_sel = 1;
+    assert_eq(_gask_key(28, 0), 1, "...and taken once it is built and shown whole");
+    var c3 = gd_list_new();
+    gask_build(c3, 200, 900);
+    assert_eq(gask_cut(), 1, "a card wider than a 200 px window reads as cut");
+    _gask_sel = 1;
+    assert_eq(_gask_key(28, 0), 2, "...so Enter on yes is refused");
+    var c4 = gd_list_new();
+    gask_build(c4, 960, 60);
+    assert_eq(gask_cut(), 1, "a window with no room for a question row reads as cut");
+    gask_close();
+    return 0;
+}
+
 fn test_gask() {
     test_group("T3 question modal (gui/gask.cyr, 0.44.0)");
     # inert until opened: the ordinary frame must be byte-identical when no question is pending
@@ -2811,6 +2963,26 @@ fn test_gcmd_running() {
 # wl_registry.global's name length is the compositor's u32 — the version word was read at 16 + padded(L), up to ~4 GiB
 # past the receive buffer (the audit's probe: L = 0x40000000 SIGSEGV'd). A configure's sides are bounded before
 # they size a buffer, and ping/configure read nothing a short message does not carry.
+# test_gui_seat_caps_short (0.52.8, audit G4): wl_seat.capabilities reads only the argument its message declares. 0.52.6
+# bounded ping and both configures (B3) and missed this handler: an 8-byte event read the NEXT message's object id as the
+# capability mask, and bound a keyboard and a pointer on a 3.
+fn test_gui_seat_caps_short() {
+    test_group("wl_seat.capabilities reads only the argument its message declares (gwindow.cyr, 0.52.8)");
+    var sv_fd = gwl_wl_fd; var sv_seat = gwl_wl_seat_oid; var sv_kbd = gwl_wl_kbd_oid; var sv_ptr = gwl_wl_ptr_oid;
+    gwl_wl_fd = 0 - 1;
+    gwl_wl_frame_oid = 0; gwl_wl_cur_sync = 0; gwl_wl_reg_id = 0; gwl_wl_xdg_oid = 0; gwl_wl_xsurf_oid = 0; gwl_wl_top_oid = 0;
+    gwl_wl_busy_oid = 0; gwl_wl_buf_oid = 0;
+    gwl_wl_seat_oid = 9; gwl_wl_kbd_oid = 0; gwl_wl_ptr_oid = 0;
+    var o = _tg_wire(0, 9, GWL_EV_SEAT_CAPS, 8);
+    o = _tg_wire(o, 3, GWL_EV_CALLBACK_DONE, 12);
+    store32(&gwl_wl_rbuf + 16, 0);
+    gwl_wl_rlen = o; gwl_wl__parse();
+    assert_eq(gwl_wl_kbd_oid, 0, "a capabilities event with no argument binds no keyboard (it read the next message's id 3, 0.52.7)");
+    assert_eq(gwl_wl_ptr_oid, 0, "...and no pointer");
+    gwl_wl_fd = sv_fd; gwl_wl_seat_oid = sv_seat; gwl_wl_kbd_oid = sv_kbd; gwl_wl_ptr_oid = sv_ptr; gwl_wl_rlen = 0;
+    return 0;
+}
+
 fn test_gui_wire_bounds() {
     test_group("the wire parser reads no field a message does not declare; configure sides are bounded (gwindow.cyr, 0.52.6)");
     var sv_reg = gwl_wl_reg_id; var sv_top = gwl_wl_top_oid; var sv_xs = gwl_wl_xsurf_oid; var sv_xdg = gwl_wl_xdg_oid;

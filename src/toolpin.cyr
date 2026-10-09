@@ -96,6 +96,7 @@ fn toolpin_withheld(name) {
     if (config_toolpin_enabled() == 0) { return 0; }
     if (name == 0) { return 0; }
     if (_tp_unpinnable(name) != 0) { return 1; }
+    if (_tp_unpin_has(name) == 1) { return 1; }            # 0.52.8 (audit D4): a definition refused as unpinnable, first sight included
     if (_tp_withheld == 0) { return 0; }
     var idx = _tp_find(name);
     if (idx < 0) { return 0; }
@@ -104,6 +105,7 @@ fn toolpin_withheld(name) {
 # toolpin_withheld_text (0.52.6): the result an executor hands the model for a call toolpin_withheld refused.
 fn toolpin_withheld_text(name) {
     if (_tp_unpinnable(name) != 0) { return "(tool withheld: thoth cannot pin its definition — its name is empty, over 127 bytes, or holds a control byte)"; }
+    if (_tp_unpin_has(name) == 1) { return "(tool withheld: its definition is over 32 KB, so thoth cannot pin it)"; }
     return "(tool definition changed this session; withheld — `/tools trust` to accept and re-pin)";
 }
 # _tp_unpinnable (0.52.6): why `name` cannot be pinned, or 0 when it can — empty, TOOLPIN_NAME_CAP bytes or more (the
@@ -235,6 +237,7 @@ fn toolpin_check(name, desc, schema) {
     var h = 0;
     if (why == 0) { h = _tp_digest(name, desc, schema); if (h == 0) { why = "its definition is over 32 KB"; } }
     if (why != 0) { return _tp_refuse_unpinnable(name, why); }
+    _tp_unpin_drop(name);                                     # 0.52.8 (D4): pinnable now — the table's own verdict governs from here
     var idx = _tp_find(name);
     if (idx < 0) {
         # TRUST ON FIRST USE. Silent by design: a first sighting has nothing to compare against.
@@ -292,6 +295,41 @@ fn toolpin_check(name, desc, schema) {
 # withheld (the dispatcher refuses it), and the refusal is named on every surface like a CHANGED one.
 var _tp_unpinnable_n = 0;                  # tools withheld this session because they could not be pinned
 fn toolpin_unpinnable() { return _tp_unpinnable_n; }
+# ⚠ 0.52.8 (audit D4): "both executors refuse a call to it" held only for a tool ALREADY PINNED — the mark went on its
+# table row, and a first-sight tool with a 33 KB definition has none, so it was withheld from the advertisement and
+# forwarded when the model named it anyway (and after `/tools trust` dropped the table, the pinned case was the same).
+# A pinnable NAME refused for its definition is now remembered for the session (_tp_unpin_list — not the pin table,
+# which the store would write) until a later probe can pin it.
+var _tp_unpin_list = 0;                    # vec of owned names refused because their DEFINITION could not be pinned
+fn _tp_unpin_has(name) {
+    if ((_tp_unpin_list == 0) || (name == 0)) { return 0; }
+    var i = 0;
+    while (i < vec_len(_tp_unpin_list)) {
+        if (streq(vec_get(_tp_unpin_list, i), name) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _tp_unpin_add(name) {
+    if (_tp_unpin_has(name) == 1) { return 0; }
+    if (_tp_unpin_list == 0) { _tp_unpin_list = vec_new(); }
+    var n = strlen(name);
+    var c = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(c + i, load8(name + i)); i = i + 1; }
+    store8(c + n, 0);
+    vec_push(_tp_unpin_list, c);
+    return 1;
+}
+fn _tp_unpin_drop(name) {
+    if (_tp_unpin_list == 0) { return 0; }
+    var i = 0;
+    while (i < vec_len(_tp_unpin_list)) {
+        if (streq(vec_get(_tp_unpin_list, i), name) == 1) { vec_remove(_tp_unpin_list, i); return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
 fn _tp_refuse_unpinnable(name, why) {
     _tp_unpinnable_n = _tp_unpinnable_n + 1;
     var nm = name;
@@ -299,6 +337,7 @@ fn _tp_refuse_unpinnable(name, why) {
     if ((load8(nm) != 0) && (strlen(nm) < TOOLPIN_NAME_CAP)) {
         var idx = _tp_find(nm);
         if (idx >= 0) { store8(_tp_withheld + idx, 1); }
+        if (_tp_unpinnable(nm) == 0) { _tp_unpin_add(nm); }   # a pinnable name: remembered for its definition (D4)
     }
     note_emit_role(ROLE_RED, "  [toolpin] WITHHELD ");
     if (load8(nm) != 0) { note_emit_label(nm); } else { note_emit("(an unnamed tool)"); }

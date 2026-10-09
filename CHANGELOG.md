@@ -2,6 +2,243 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.8] - 2026-10-09
+
+**Repair batch 12: an audit of 0.52.6 and 0.52.7.** Nothing was pinned to batch 12, so it became an audit of what the
+last two releases shipped. Seven auditors read it by area:
+- the authorization prompt on both surfaces;
+- the window's modal and wire;
+- the finish notes;
+- the picker and the catalog;
+- the config layers;
+- the sanitisers;
+- running commands.
+
+Each finding was reproduced before it was fixed, and each fix has a test that fails when the fix is reverted. There
+were five HIGH findings. One let a repository widen the read tools' jail; four let `y` approve more than the screen
+showed:
+- a repository's read root reached outside the jail through a symlink;
+- the TUI sized its prompt for the screen as it was before a resize;
+- the window's modal dropped the end of a question past 1,023 bytes;
+- the modal laid out stray UTF-8 bytes differently from how it drew them;
+- the modal never adopted a resize.
+
+The maintainer ruled on four design questions (R1–R4 below); they are fixed here. A fifth is recorded in
+`gap-review.md`. One finding needed hoosh: **hoosh 2.8.1** trims `max_tokens` to the serving model's own ceiling. The
+cyrius pin stays at **6.6.6**. Suite **852 + 2329 + 1215 + 888 + 190 + 5** (+267).
+
+- **An authorization prompt shows all of what `y` approves** (audits B1, B6, D1/G1, D2, D3, G2, G6, G7).
+  - B1 (TUI, HIGH): the question was sized for the terminal size thoth last read, and a resize during a turn waits
+    until the turn ends. A question sized for 100×30 was drawn on the 40×12 the operator had shrunk to. Its head
+    scrolled off and `y` still approved all of it (reproduced in a pty). A screen of 4 rows or fewer never registered
+    at all.
+    - The prompt now measures the live screen when it opens, with no floor: a screen too small refuses.
+    - If the terminal shrinks while the question is up, the answer is void: "the terminal shrank while it was asked,
+      and part of it may have left the screen".
+  - B6: an `ask_user` question in the TUI was drawn on one clipped row. It is sized the same way, and declined when it
+    cannot fit.
+  - D1 (window, HIGH): the gate, the ask seam and the modal each copied the question into 1,024 bytes, while the gate
+    admits a 1,024-byte object plus its verb and suffix. A shell command's tail past byte 1,023 was never drawn, and
+    "yes, once" ran it. Reproduced live: the hidden half created a file. The caps are 2,048 bytes now, and each copy
+    refuses rather than truncate.
+  - D2 (window, HIGH): the modal's layout folded each stray continuation byte (0x80–0xBF) into the codepoint before it,
+    while the rasteriser drew each one as a cell of its own. Behind about 100 raw 0xA0 bytes, the payload was never
+    drawn, and Enter approved it.
+    - The gate now refuses an object that is not valid UTF-8, on every surface: "it cannot be shown exactly as it
+      would run".
+    - The layout steps codepoints the way the rasteriser does.
+  - D3: 0.52.6's blank-run check reset at any other character, so a zero-width character every 63 blanks (U+200C,
+    U+2060, U+FEFF, …) evaded it, and it did not count the Hangul fillers U+115F and U+1160. It now classes each
+    codepoint:
+    - an invisible format character neither counts nor resets the run;
+    - the fillers count as blanks;
+    - a bidirectional control, which can reorder what the operator reads, is refused.
+  - G2 (window, HIGH): the modal never adopted a resize. Its layout and its whole-question check stayed at the size it
+    opened with while the compositor cropped the window. Reproduced live: a tiled split cut the command off mid-way,
+    and Enter ran all of it. It now lays out again at open, on every resize, and before it reads each key.
+  - G6, G7: a key was judged by the previous modal's state, and a window narrower than the card's minimum did not
+    count as cut off. Both refuse the yes now.
+- **The read jail** (C1, HIGH; D6).
+  - C1: the symlink walk skipped a granted root's own path. A local `[project].read_roots` entry was accepted because
+    its spelling sat under a global root, even when it was a symlink (`~/Repos/x/up → /`) or ran through one. The
+    walk never looked at the link, so `read_file` and `list_dir`, which meet no t-ron gate, read outside the jail.
+    - Each root now carries the prefix the operator trusts: its own path for a global root or an `/allow` grant, and
+      the global root it sits under for a local one.
+    - A local root reached through a symlink is refused when it is granted, and named.
+  - D6: with `[toolpin].enabled = false`, the jail stopped guarding a `[toolpin].file` inside the project (0.52.6's A6
+    compared only the bound store). It compares the configured path too.
+- **A repository's config may only tighten: five more keys and a path** (rulings R1 and R2; audits F4, C2).
+  - R1:
+    - a local layer may only turn `[guard].enabled` and `[redact].enabled` on (a clone could switch off the injection
+      guard and secret redaction);
+    - it may only turn `[subagent].enabled` off;
+    - it may only lower `[hoosh].reasoning` and `[hoosh].max_tokens`. A clone's `max_tokens = 128000` raised every
+      request, past a global `[budget].max_tokens` too, because the budget is checked between calls, not inside one.
+    - The baseline is the global's value, or thoth's default where the global says nothing. A move the other way is
+      ignored and named.
+  - R2: a `[project].vidya` path the local layer chose is bounded like a local read root. `/allow vidya` refuses it,
+    and names it, when it lies outside every global read root or is reached through a symlink. A clone's
+    `vidya = "/home/you/.ssh"` was one word from a grant.
+  - C2: a local `[pricing]` rate could fill in a side the global left unset. That side is refused, and named.
+  - ADR-0021 gains an addendum for the safe direction.
+- **Output ceilings current models accept** (A13, measured live; hoosh 2.8.1).
+  - `reasoning = "max"` asked for 65,536 tokens, which Opus, Sonnet and Haiku 4.5 refuse with a 400: their ceiling is
+    64,000.
+  - 0.52.7's documented maximum, `max_tokens = 131072`, was refused by every current model: 128,000 is the most any
+    takes.
+  - The `max` default is now 64,000 and the ceiling 128,000.
+  - hoosh 2.8.1 trims a request to the serving model's `max_output_tokens` from its catalog, so an older model's lower
+    ceiling no longer fails the request.
+- **A reply that ends short says why, on every surface** (A1–A5, A8, A12). In 0.52.7 only the TUI said it.
+  - A1 (window): the window drew neither note, and a refusal read "is hoosh reachable?". It now draws "the model
+    declined this request", or the cut note, when the turn ends.
+  - A2 (one-shot):
+    - The note was discarded with the screen output; it goes to stderr now.
+    - `--json` carries `finish_reason` (a cut reply's object says `length`), and so do `--events`' response and error
+      events.
+    - A refusal no longer reads "no completion returned". It exits 1 with the reason on stderr, as other failures
+      do.
+  - A3 (a plain blocking turn): an empty refusal, or a cut reply that held only thinking, printed nothing. It is named.
+  - A4: an agentic turn cut short with no text said "neither tool calls nor content". It is named as cut or refused.
+  - A8: a refused agentic turn wrote two `--logs` records ("refused", then "ok"). Each turn writes one.
+  - A5 (subagents): a child's cut reply went back to the parent as complete. The parent's tool result now ends "[cut
+    short at the output ceiling: may be incomplete]" (or the refusal's line), and the operator gets the note. A child
+    cut with no text fails, and says why.
+  - A12: the cut note said "raise [hoosh].max_tokens" even at the 128,000 ceiling, and a cut can also come from the
+    context window. The note names both causes now, and at the ceiling it does not suggest raising it.
+- **The picker and `/models`** (A6/B2, A7, A9, A10, A11/B5, B3, B4).
+  - A6: a failed health re-fetch kept the last fetch's per-route rows, so the picker drew health thoth no longer knew.
+    Every fetch clears them.
+  - B3: a disabled route that shared a provider's base url decided that provider's health. Disabled routes are skipped.
+  - A10: routes past the table's 64 were dropped silently. A model whose route was dropped falls back to its
+    provider's health.
+  - A11: "key rejected" was judged per provider, while health is per route, so a model whose only route had a good
+    key read "key rejected". It is judged from the model's own routes now.
+  - A7: a catalog over 256 KB, sandhi's default response cap, read "hoosh unreachable".
+    - The catalog GET now allows 2 MiB.
+    - It and the health GET allocate from arenas that are reset before each fetch. This also bounds an older leak of
+      about 512 KB per picker open.
+  - A9: grouped `/models` counted models, not providers, in its "more providers" line.
+  - B4: the "no matches" hint dropped "+N not loaded".
+- **C1 controls on every path to the terminal** (F1, F2, F3, F5, F6, E2, G5).
+  - F3 (a 0.52.6 regression): the stream sanitiser cleaned each delta on its own. A character split across two deltas
+    (`E2 | 80 94`) lost its lead, and its continuation bytes were read as C1 controls and shown as `??`. Both stream
+    callbacks now clean a delta with the bytes before it as context.
+  - F5: an overlong, surrogate or out-of-range lead (`E0 82 9B`, `ED A0 9B`, …) carried a raw C1 past the check. The
+    first continuation byte is checked against the lead's range.
+  - F1, F2, E2, F6, G5: these sinks filtered C0 only, and now filter C1 too:
+    - the git branch name on the status bar and in `/state` (sit admits 0x80–0x9F in a ref name);
+    - an in-stream provider error on one-shot's stderr;
+    - `/audit`'s tool names and arguments;
+    - the file tree and `@` completion;
+    - both of `/save`'s writers;
+    - the project map;
+    - hook output;
+    - the alias control check;
+    - the greeting's model id, which is now clipped as well.
+- **Tool pins** (D4, D7, D8).
+  - D4: a definition too large to pin, seen for the first time this session, was withheld from the advert but could
+    still be called, including after `/tools trust`. Such names are now kept for the session, and both executors
+    refuse a call to one, with the reason.
+  - D8: `/call` reached a withheld tool. It refuses before the gate.
+  - D7: a subagent's probe that adopted a changed definition left the parent advertising the old one. The parent
+    re-reads its tools.
+- **Running commands** (E1 and ruling R4, E3, E4, E5–E7 and ruling R3, E8, E9, E10).
+  - E1 / R4: 0.52.6's parent-death signal reached only `/bin/sh`. A process the shell forked (`sleep 46; true`, a
+    pipeline, `make`, a server) survived a killed thoth, adopted by init.
+    - Each capture (`/run` in the TUI and the window, the `shell` tool, hooks, `[verify]`) now runs under a small
+      supervisor that leads its own process group.
+    - When thoth's end of its pipe closes, or the supervisor's parent changes, it kills the whole group. The
+      parent-death signal stays as a backstop.
+    - This covers Linux and macOS. macOS has no parent-death signal at all, and nothing said so (E10).
+    - The supervisor polls every 10 ms, and closes descriptors 3–1,023 (the floor has no `close_range`).
+    - The line REPL's `/run` is not supervised: it shares thoth's terminal and process group, for job control and
+      password prompts.
+  - E4 (older than 0.52.6): a captured command inherited thoth's signal state. SIGINT and SIGWINCH were blocked
+    under the TUI, and SIGPIPE and SIGXFSZ stayed ignored whenever thoth's own launcher ignored them (Python and Node
+    do). So `timeout -s INT 1 sleep 3` ran the full 3 s, and a pipeline's writer got EPIPE instead of dying.
+    - The command now starts with an empty mask and default dispositions. Measured in a pty: 2.98 s before, 1.06 s
+      after.
+    - The line REPL's `/run` goes through the floor's `exec_vec`, which keeps a launcher's ignores (measured:
+      `/run yes | head -1` there printed "Broken pipe"). That half is on the roadmap's waiting table.
+  - R3: Esc followed, within one poll, by a key that cannot begin a terminal sequence (`Esc x`) stops now, as a lone Esc
+    does. 0.52.6 read it as an Alt chord. Mouse reports, arrows and pastes still never stop.
+  - E6: an Esc inside an unfinished sequence starts a new one, instead of being swallowed.
+  - E5: a paste whose end marker was split right after its Esc stayed open, and Esc was dead until the next paste.
+  - E3: the parallel executor's post_tool hook got phase 3's cut copies of the name and arguments, without the
+    TRUNCATED flags the serial path sets. It gets the whole ones.
+  - E8: a stop during the parallel gate phase left the calls already taken with no post_tool and no tool result. Each
+    gets "(not run — the operator stopped the turn)".
+  - E9: the 255-byte cut of `THOTH_TOOL` could end inside a UTF-8 character. It steps back to a character boundary.
+- **The window** (G4, G8).
+  - G8 (since 0.44.0): an open modal rebuilt and presented every frame while it waited: 28% CPU, and RSS up 16 MB in
+    25 seconds. It presents only when something changed.
+  - G4: the `wl_seat.capabilities` handler read its argument without checking that the message carried one.
+- **The project map** (F8): a symlink at the second level was listed as a plain name. It gets the first level's `@`
+  marker, and the header says what `@` means.
+- **Found while verifying live.**
+  - The greeting did not name the local keys thoth refused. ADR-0021 has said since 0.44.3 that it does, but only
+    stderr did, and on both surfaces the TUI's alternate screen and the window's first frame cover stderr. A clone's
+    `[guard] enabled = false` was refused unseen unless the operator ran `/state`. The greeting now has a red row:
+    "config: 5 local key(s) refused — a project may not grant authority or loosen a limit. /state names them."
+  - The stderr notice said the refused keys "are read from ~/.thoth/config.cyml only". That stopped being true at
+    0.52.6, when the list began to carry keys a local layer may still move the safe way. It now says "set these in
+    ~/.thoth/config.cyml if you want them", as `/state` does.
+  - In the window, the last turn's notice (a refusal, a failure, or "- stopped -") stayed beneath the next command's
+    card and read as that command's verdict. A command card now clears it.
+- **Consumers**, on their roadmaps only: agnosai's B33 and agnostic's M9 picker are to read hoosh's catalog for their
+  model ids. secureyeoman is left until its port is further along, by the maintainer's call.
+
+**Verification.**
+- All six suites pass on Linux.
+- Linux, aarch64 and AGNOS build with 0.52.7's warning sets, apart from one shifted line number and the static-data
+  size (+224 bytes).
+- All five suites pass as aarch64 binaries under `qemu-aarch64` (5,474 of 5,474).
+- macOS is green natively (875 + 2304 + 1206 + 190 + 831), built at the pin through a private `CYRIUS_HOME`. That
+  includes the supervisor's orphan test: a SIGKILLed stand-in thoth left no process of its capture.
+- The Windows lane stays at its known-gap skip.
+- Driven live from throwaway HOMEs, against the stub gateway unless noted:
+  - **The TUI, in a pty.**
+    - A question opened at 100×30, then the terminal shrank to 40×12: the yes was void, and the command never ran
+      (the log reads `verdict=deny reason=resized_while_asking`).
+    - The terminal shrank during the model's turn, before the prompt opened: the question was laid out for 40×12,
+      all of it on screen, and ran after the yes.
+    - A cut reply, a thinking-only cut and a refusal were each named, with one `--logs` record per turn.
+    - The five refused local keys were named on stderr, in the greeting and in `/state`, and `/allow vidya`
+      refused `/etc` with its reason.
+    - SIGKILLing thoth during `/run <sleep>; true` left no process of the command.
+  - **One-shot.** `--json` carried `finish_reason`, and so did `--events`' error event. The blocking path named a
+    refusal and a cut with only thinking.
+  - **The window, on a headless compositor.**
+    - A refusal and a cut drew their notices.
+    - The stray-byte alias was refused by the gate.
+    - A command of about 1,000 bytes showed whole in the modal.
+    - Resized to 640×700, the modal laid the command out again whole. At 480×320 it marked the question cut, and
+      "yes, once" was refused.
+    - An idle modal used 0.0% CPU over 20 seconds, with RSS flat.
+  - **Against the real Anthropic API, through hoosh 2.8.1.** `reasoning = "max"` on Haiku 4.5 succeeded (0.52.7's
+    65,536 was refused), with no clamp needed.
+- The pty driver gained a `resize` step and records each step's byte offset, so a terminal model can replay a log.
+  The stub gateway gained `cut:`, `thinkcut:`, `refuse` and `slowrun:` replies.
+- The AGNOS ring-3 re-run is deferred with the AGNOS follow-up, by the maintainer's call.
+
+Tests (+267), each proven by breaking the fix it covers. Among them:
+- the prompt and modal: `test_tui_confirm_live_geometry` (a real pty, resized), `test_confirm_fit_void`,
+  `test_tui_ask_rows`, `test_confirm_modal_whole`, `test_gask_whole_question`, `test_utf8_valid`,
+  `test_confirm_blank_evasion`, `test_gask_open_and_narrow`;
+- the jail and the layers: `test_read_roots_link`, `test_config_safe_direction`, `test_allow_vidya_bound`,
+  `test_price_half_side`, `test_toolpin_withheld_paths`;
+- the finish notes: `test_finish_every_surface`, `test_gturn_settle`;
+- the picker: `test_mpick_stale_routes`, `test_mpick_disabled_route_url`, `test_mpick_keybad_per_model`,
+  `test_mpick_nomatch_unloaded`, `test_models_overflow_counts`, `test_catalog_arena`;
+- the sanitisers: `test_clean_c1_context`, `test_c1_sinks`, `test_greet_model_clip`;
+- the greeting and the window's notices: `test_greet_suppressed_row`, and the command-card case of
+  `test_gturn_settle`;
+- commands and the executor: `test_proc_capture` (a SIGKILLed thoth leaves no process of a running capture; the status
+  mapping is unchanged; the command inherits no mask, ignore or descriptor), `test_par_post_tool_whole`,
+  `test_par_stop_closes_taken`;
+- the window's wire: `test_gui_seat_caps_short`.
+
 ## [0.52.7] - 2026-10-09
 
 **Repair batch 11: current models, and a model list that updates itself.** The model picker and `/models` showed

@@ -31,6 +31,7 @@ var _mp_health_known = 0;    # 0.47.0: 1 when the last mpick_load got a fresh /v
 # an older hoosh — so the row reads its kind's state, as before), the gateway's own price (micro-USD per 1K tokens,
 # the [pricing] unit; -1 = none published) and the context window (-1 = not said).
 var _mp_rstate = 0;          # alloc(MPICK_MAX*8)
+var _mp_rkeybad = 0;         # 0.52.8 (audits A11 + B5): alloc(MPICK_MAX*8) — the model's own routes refused 401/403, or -1 (none named)
 var _mp_gin = 0;             # alloc(MPICK_MAX*8)
 var _mp_gout = 0;            # alloc(MPICK_MAX*8)
 var _mp_ctx = 0;             # alloc(MPICK_MAX*8)
@@ -40,6 +41,7 @@ fn mpick_init() {
     if (_mp_ids == 0) { _mp_ids = alloc(MPICK_MAX * 8); }
     if (_mp_prov == 0) { _mp_prov = alloc(MPICK_MAX * 8); }
     if (_mp_rstate == 0) { _mp_rstate = alloc(MPICK_MAX * 8); }
+    if (_mp_rkeybad == 0) { _mp_rkeybad = alloc(MPICK_MAX * 8); }
     if (_mp_gin == 0) { _mp_gin = alloc(MPICK_MAX * 8); }
     if (_mp_gout == 0) { _mp_gout = alloc(MPICK_MAX * 8); }
     if (_mp_ctx == 0) { _mp_ctx = alloc(MPICK_MAX * 8); }
@@ -70,6 +72,7 @@ fn _mp_add(s) {
     store64(_mp_ids + _mp_n * 8, dst);
     store64(_mp_prov + _mp_n * 8, 0 - 1);        # 0.47.0: no provider known until mpick_load_from names one
     store64(_mp_rstate + _mp_n * 8, 0 - 1);      # 0.52.7: no routes named yet
+    store64(_mp_rkeybad + _mp_n * 8, 0 - 1);     # 0.52.8
     store64(_mp_gin + _mp_n * 8, 0 - 1);
     store64(_mp_gout + _mp_n * 8, 0 - 1);
     store64(_mp_ctx + _mp_n * 8, 0 - 1);
@@ -135,6 +138,7 @@ fn mpick_load_from(data) {
 # price outside the range the label can print is dropped, as hoosh_price_label drops the operator's. PURE over m.
 fn _mp_take_extras(i, m) {
     store64(_mp_rstate + i * 8, hoosh_routes_fold(bayan_json_v_obj_get(m, "routes")));
+    store64(_mp_rkeybad + i * 8, hoosh_routes_keybad(bayan_json_v_obj_get(m, "routes")));   # 0.52.8 (A11 + B5)
     var pr = bayan_json_v_obj_get(m, "pricing");
     if (pr != 0) {
         var pi = bayan_json_v_obj_get(pr, "input_micro_usd_per_1k");
@@ -193,6 +197,15 @@ fn mpick_state_at(fi) {
     if (rs >= 0) { return rs; }
     var pi = load64(_mp_prov + slot * 8);
     return hoosh_provider_state_at(pi);
+}
+# mpick_keybad_at (0.52.8, audits A11 + B5): how many of the routes behind the model at FILTERED index fi had their
+# catalog GET refused (401 / 403) — its OWN routes when its catalog entry named them, else its kind's, as its state.
+fn mpick_keybad_at(fi) {
+    if ((fi < 0) || (fi >= _mp_fn)) { return 0; }
+    var slot = load64(_mp_filt + fi * 8);
+    var kb = load64(_mp_rkeybad + slot * 8);
+    if ((kb >= 0) && (load64(_mp_rstate + slot * 8) >= 0)) { return kb; }
+    return hoosh_provider_key_rejected_at(load64(_mp_prov + slot * 8));
 }
 # mpick_provider_slot_at: the provider-table slot of the model at FILTERED index fi, or -1. PURE.
 fn mpick_provider_slot_at(fi) {

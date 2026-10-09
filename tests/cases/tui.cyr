@@ -2056,6 +2056,254 @@ fn test_tui_confirm_rows() {
     return 0;
 }
 
+# 0.52.8 (repair batch 12): the picker's per-route health — ported from the audit's own repros, asserting the fixed behaviour.
+
+fn test_mpick_stale_routes() {
+    test_group("a failed health re-fetch leaves no stale route state on the rows (hoosh.cyr, 0.52.8, audits A6 + B2)");
+    var hb = alloc(1024);
+    var ho = _append_cstr_cap(hb, 0, 1024, "{\"providers\":[{\"provider\":\"anthropic\",\"base_url\":\"https://api.anthropic.com\",\"status\":\"healthy\",\"last_check_ms\":5},{\"provider\":\"ollama\",\"base_url\":\"http://a:11434\",\"status\":\"unhealthy\",\"last_check_ms\":5}],\"check_interval_secs\":30}");
+    var cat = "{\"object\":\"list\",\"data\":[{\"id\":\"claude-x\",\"object\":\"model\",\"owned_by\":\"anthropic\",\"routes\":[\"https://api.anthropic.com\"]},{\"id\":\"llama3\",\"object\":\"model\",\"owned_by\":\"ollama\",\"routes\":[\"http://a:11434\"]}]}";
+    _hoosh_cat_canned = cat; _hoosh_cat_canned_len = strlen(cat); _hoosh_cat_canned_fail = 0;
+    _hp_canned = hb; _hp_canned_len = ho; _hp_canned_fail = 0;
+    assert_eq(mpick_load(), MPICK_OK, "premise: the picker loads over canned bodies");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_HEALTHY, "premise: claude-x healthy from a fresh table");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_UNHEALTHY, "premise: llama3 unhealthy from a fresh table");
+    _hp_canned_fail = 1;                                  # the next open: the catalog answers, the health GET fails
+    assert_eq(mpick_load(), MPICK_OK, "a failed health GET does not fail the picker");
+    assert_eq(mpick_health_known(), 0, "...the health is not known (the hint says 'health unknown')");
+    assert_eq(mpick_state_at(0), HOOSH_PROV_UNKNOWN, "claude-x must read UNKNOWN, not the previous fetch's healthy");
+    assert_eq(mpick_state_at(1), HOOSH_PROV_UNKNOWN, "llama3 must read UNKNOWN, not the previous fetch's unhealthy");
+    _hoosh_cat_canned = 0; _hoosh_cat_canned_len = 0; _hoosh_cat_canned_fail = 0;
+    _hp_canned = 0; _hp_canned_len = 0; _hp_canned_fail = 0;
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_health_known = 0;
+    hoosh_providers_reset();
+    return 0;
+}
+
+fn test_mpick_disabled_route_url() {
+    test_group("a disabled route sharing a base_url never decides a model's state (hoosh.cyr, 0.52.8, audit B3)");
+    # hoosh lists every route on /v1/health/providers (disabled ones too) but a catalog entry's `routes` names only
+    # ENABLED routes, by base_url. Two anthropic routes on one url, the first disabled (a retired key):
+    assert_eq(_t_pick_hp("{\"provider\":\"anthropic\",\"base_url\":\"https://api.anthropic.com\",\"status\":\"disabled\",\"enabled\":false},{\"provider\":\"anthropic\",\"base_url\":\"https://api.anthropic.com\",\"status\":\"healthy\",\"enabled\":true,\"last_check_ms\":5}"), 1, "premise: one kind");
+    assert_eq(hoosh_provider_state("anthropic"), HOOSH_PROV_HEALTHY, "premise: the kind folds healthy (its one enabled route is healthy)");
+    var cat = "[{\"id\":\"claude-x\",\"object\":\"model\",\"owned_by\":\"anthropic\",\"routes\":[\"https://api.anthropic.com\"]}]";
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_qlen = 0; _mp_first = 0;
+    _mp_health_known = 1;
+    mpick_load_from(bayan_json_v_parse_buf(cat, strlen(cat)));
+    assert_eq(mpick_state_at(0), HOOSH_PROV_HEALTHY, "the model is served by the healthy enabled route (0.52.6's kind fold said healthy; 0.52.7 reads the disabled row)");
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_health_known = 0;
+    hoosh_providers_reset();
+    return 0;
+}
+
+fn test_mpick_nomatch_unloaded() {
+    test_group("'no matches' over a truncated catalog still says ids were not loaded (tui.cyr, 0.52.8, audit B4)");
+    var cap = 16384;
+    var b = alloc(cap);
+    var o = _append_cstr_cap(b, 0, cap, "{\"object\":\"list\",\"data\":[");
+    var i = 0;
+    while (i < 300) {
+        if (i > 0) { o = _append_cstr_cap(b, o, cap, ","); }
+        o = _append_cstr_cap(b, o, cap, "{\"id\":\"m");
+        o = _append_int_cap(b, o, cap, i);
+        o = _append_cstr_cap(b, o, cap, "\"}");
+        i = i + 1;
+    }
+    o = _append_cstr_cap(b, o, cap, "]}");
+    var data = hoosh_extract_models(b, o);
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_qlen = 0; _mp_cur = 0; _mp_first = 0; _mp_fn = 0;
+    _mp_health_known = 0;
+    mpick_load_from(data);
+    _mp_push_str("m299");                                  # a model the store could not hold
+    var cnt = mpick_count();
+    var path = "build/.thoth_t_mp_nomatch.tmp";
+    var raw = alloc(4096); var vis = alloc(4096);
+    var sc = _tui_cols; _tui_cols = 120;
+    var cap_ok = _t_fd1_to(path);
+    if (cap_ok == 0) {
+        _tui_draw_pick_hint(); emit_raw("\n");
+        _t_fd1_restore();
+        _t_pick_read(path, raw, vis, 4096);
+    }
+    _tui_cols = sc;
+    assert_eq(cnt, 0, "premise: m299 is not among the 256 loaded");
+    if (cap_ok == 0) {
+        assert_eq(_t_vis(vis, "no matches"), 1, "premise: the hint says no matches");
+        assert_eq(_t_vis(vis, "not loaded"), 1, "...and must name the 44 ids it never loaded (the model searched for may be one)");
+    }
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_qlen = 0; _mp_unloaded = 0;
+    return 0;
+}
+
+fn test_mpick_keybad_per_model() {
+    test_group("'key rejected' follows the model's own routes, as its state does (tui.cyr, 0.52.8, audits A11 + B5)");
+    assert_eq(_t_pick_hp("{\"provider\":\"anthropic\",\"base_url\":\"https://a.example\",\"status\":\"healthy\",\"last_check_ms\":5,\"catalog_status\":401},{\"provider\":\"anthropic\",\"base_url\":\"https://b.example\",\"status\":\"healthy\",\"last_check_ms\":5,\"catalog_status\":200}"), 1, "premise: one kind, two routes");
+    var cat = "[{\"id\":\"claude-b-only\",\"object\":\"model\",\"owned_by\":\"anthropic\",\"routes\":[\"https://b.example\"]}]";
+    mpick_init();
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0; _mp_qlen = 0; _mp_first = 0;
+    _mp_health_known = 1;
+    mpick_load_from(bayan_json_v_parse_buf(cat, strlen(cat)));
+    var path = "build/.thoth_t_mp_kb.tmp";
+    var raw = alloc(4096); var vis = alloc(4096);
+    var sc = _tui_cols; _tui_cols = 160;
+    var cap_ok = _t_fd1_to(path);
+    if (cap_ok == 0) { _tui_draw_pick_hint(); emit_raw("\n"); _t_fd1_restore(); _t_pick_read(path, raw, vis, 4096); }
+    _tui_cols = sc;
+    if (cap_ok == 0) {
+        assert_eq(_t_vis(vis, "healthy"), 1, "premise: the row's own route is healthy");
+        assert_eq(_t_vis(vis, "key rejected"), 0, "the model's only route answered its catalog GET with 200 — no 'key rejected' for it");
+    }
+    _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_health_known = 0;
+    hoosh_providers_reset();
+    return 0;
+}
+
+# test_tui_confirm_live_geometry (0.52.8, audit B1): the confirm bracket sizes the question against the screen it is
+# drawn on, and voids an answer when that screen shrank while asking. The loop's _tui_rows/_tui_cols are the size it
+# last read — a resize during a turn waits for dispatch to return, and a screen of 4 rows or fewer never reached them —
+# so a 1,077-byte command sized for 100x30 was drawn on 40x12 and its head scrolled off under `y` (reproduced in a pty).
+#ifdef CYRIUS_TARGET_LINUX
+# _tt_pty_fd1: point fd 1 at a fresh pty slave sized rows x cols (fd 1 parked as _t_fd1_to does); the master, or -1.
+fn _tt_pty_fd1(rows, cols) {
+    var m = file_open("/dev/ptmx", O_RDWR | 256, 0);                 # 256 = O_NOCTTY on Linux
+    if (m < 0) { return 0 - 1; }
+    var z[8]; store64(&z, 0);
+    if (sys_ioctl(m, 0x40045431, &z) < 0) { file_close(m); return 0 - 1; }    # TIOCSPTLCK: unlock
+    var pn[8]; store64(&pn, 0);
+    if (sys_ioctl(m, 0x80045430, &pn) < 0) { file_close(m); return 0 - 1; }   # TIOCGPTN
+    var path[32];
+    var o = _append_cstr_cap(&path, 0, 32, "/dev/pts/");
+    o = _append_int_cap(&path, o, 32, load64(&pn) & 0xFFFFFFFF);
+    store8(&path + o, 0);
+    var s = file_open(&path, O_RDWR | 256, 0);
+    if (s < 0) { file_close(m); return 0 - 1; }
+    _tt_pty_size(s, rows, cols);
+    sys_dup2(1, _T_FD1_PARK);
+    sys_dup2(s, 1);
+    file_close(s);
+    return m;
+}
+# _tt_pty_size: TIOCSWINSZ on `fd` (struct winsize: rows, cols as u16).
+fn _tt_pty_size(fd, rows, cols) {
+    var ws[8];
+    store64(&ws, 0);
+    store8(&ws, rows & 255); store8(&ws + 1, (rows / 256) & 255);
+    store8(&ws + 2, cols & 255); store8(&ws + 3, (cols / 256) & 255);
+    return sys_ioctl(fd, 0x5414, &ws);
+}
+#endif
+fn test_tui_confirm_live_geometry() {
+    test_group("the confirm question is sized for the live screen, and a shrink while asking voids it (tui.cyr, 0.52.8)");
+    #ifdef CYRIUS_TARGET_LINUX
+    var _sr = _tui_rows; var _sc = _tui_cols; var _sst = _tui_show_status;
+    _tui_rows = 30; _tui_cols = 100; _tui_show_status = 1;
+    var m = _tt_pty_fd1(12, 40);
+    if (m >= 0) {
+        _confirm_prompt_cols = 1077;
+        var a = tui_confirm_begin();
+        var ac = _tui_cols;
+        tui_confirm_end();
+        _tui_rows = 30; _tui_cols = 40;
+        _tt_pty_size(1, 4, 40);
+        _tui_read_winsize();                                       # what a relayout does at 4 rows: keeps 30
+        _confirm_prompt_cols = 430;
+        var b = tui_confirm_begin();
+        tui_confirm_end();
+        _tt_pty_size(1, 24, 80);
+        _confirm_prompt_cols = 300;
+        var c = tui_confirm_begin();
+        var c_same = tui_confirm_still_fits();
+        _tt_pty_size(1, 12, 80);
+        var c_shrunk = tui_confirm_still_fits();
+        _tt_pty_size(1, 30, 100);
+        var c_grown = tui_confirm_still_fits();
+        tui_confirm_end();
+        _confirm_prompt_cols = 0;
+        _t_fd1_restore();
+        file_close(m);
+        out_mode_set(OUT_FD1);
+        assert_eq(a, 0, "a 1,077-byte question on a live 40x12 screen is refused (the stale 100x30 said it fit, 0.52.7)");
+        assert_eq(ac, 40, "...and the bracket adopted the live width for its repaint");
+        assert_eq(b, 0, "a 430-byte question on a 40x4 screen is refused (4 rows never reached _tui_rows)");
+        assert_eq(c, 1, "premise: a 300-byte question fits a live 24x80 screen");
+        assert_eq(c_same, 1, "an unchanged screen keeps the answer");
+        assert_eq(c_shrunk, 0, "a screen that shrank while asking voids the answer (part of the action may have left it)");
+        assert_eq(c_grown, 1, "...growing never hides what was drawn");
+    } else { assert(1, "no pty here (stated)"); }
+    _tui_rows = _sr; _tui_cols = _sc; _tui_show_status = _sst;
+    #else
+    assert(1, "the pty fixture is Linux-only (stated)");
+    #endif
+    var path = "build/.thoth_t_confirm_nopty.out";
+    if (_t_fd1_to(path) == 0) {
+        _confirm_prompt_cols = 300;
+        var d = tui_confirm_begin();
+        var d_fit = tui_confirm_still_fits();
+        tui_confirm_end();
+        _confirm_prompt_cols = 0;
+        _t_fd1_restore();
+        out_mode_set(OUT_FD1);
+        assert_eq(d, 1, "with no tty to measure, the loop's size is used, as before");
+        assert_eq(d_fit, 1, "...and the answer stands (nothing was measured to compare)");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    return 0;
+}
+
+# _tt_feed_plain_count: occurrences of `needle` in the feed's VISIBLE text (the core suite's _mid_feed_plain_count).
+fn _tt_feed_plain_count(needle) {
+    var t = 0;
+    var r = 0;
+    var pl = alloc(FEED_LINE_CAP + 1);
+    while (r < feed_count()) {
+        var w = _t_strip_sgr(pl, feed_line_ptr(r), feed_line_len(r));
+        t = t + _t_count_sub(pl, w, needle, strlen(needle));
+        r = r + 1;
+    }
+    return t;
+}
+# test_tui_ask_rows (0.52.8, audit B6): the asker's question gets the rows it needs, like confirm()'s — it rode the same
+# bracket on ONE row with autowrap off, so a question past the width lost its tail, the part being answered.
+fn test_tui_ask_rows() {
+    test_group("the TUI asker gives a long question its rows, or declines on a screen too small (tui.cyr, 0.52.8)");
+    var _sr = _tui_rows; var _sc = _tui_cols; var _sst = _tui_show_status;
+    _tui_rows = 24; _tui_cols = 80; _tui_show_status = 1;
+    _ask_alloc();
+    var q = alloc(400);
+    var o = _append_cstr_cap(q, 0, 400, "Q-HEAD ");
+    var i = 0;
+    while (i < 40) { o = _append_cstr_cap(q, o, 400, "word "); i = i + 1; }
+    o = _append_cstr_cap(q, o, 400, "Q-TAIL?");
+    store8(q + o, 0);
+    safe_label_copy(_ask_q, ASK_Q_CAP, q);
+    _ask_nopt = 0;
+    var path = "build/.thoth_t_ask_rows.out";
+    var raw = alloc(16384); var vis = alloc(16384);
+    if (_t_fd1_to(path) == 0) {
+        tui_ask();
+        _t_fd1_restore();
+        var n = _t_pick_read(path, raw, vis, 16384);
+        out_mode_set(OUT_FD1);
+        assert(_t_count_sub(raw, n, "Q-TAIL?", 7) >= 1, "premise: the question was written");
+        assert(_t_count_sub(raw, n, "\x1b[?7h", 5) >= 1, "a 214-byte question on 80 columns is drawn with autowrap ON (it was one clipped row)");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _tui_rows = 6;                                                 # too few rows above the composer for it
+    feed_init();
+    out_mode_set(OUT_RING);
+    if (_t_fd1_to(path) == 0) {
+        tui_ask();
+        _t_fd1_restore();
+        feed_flush_pending();
+        out_mode_set(OUT_FD1);
+        assert_eq(_tt_feed_plain_count("the terminal is too small to show the question"), 1, "a screen too small declines it and says why");
+    } else { assert(1, "fd 1 not capturable here (stated)"); }
+    feed_init();
+    out_mode_set(OUT_FD1);
+    _tui_rows = _sr; _tui_cols = _sc; _tui_show_status = _sst;
+    return 0;
+}
+
 fn test_tui_epoll_buf_apart() {
     test_group("the TUI's epoll buffer is not the --events line buffer (tui.cyr / events.cyr, 0.52.5)");
     #ifdef CYRIUS_TARGET_LINUX

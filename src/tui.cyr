@@ -1456,6 +1456,9 @@ fn _tui_draw_pick_hint() {
     if (mpick_count() == 0) {
         if (mpick_total() == 0) { ui_emit(ROLE_RED, "no models"); }
         else { ui_emit(ROLE_RED, "no matches"); }
+        # 0.52.8 (audit B4): the id being filtered for may be one the store could not hold — the "+N not loaded" count
+        # stood only beside a position, so "no matches" said nothing of the 44 never loaded.
+        if (mpick_unloaded() > 0) { ui_emit(ROLE_RED, " +"); fmt_int(mpick_unloaded()); ui_emit(ROLE_RED, " not loaded"); }
     } else {
         emit(ui_sgr(ROLE_GREEN)); fmt_int(mpick_cur() + 1); emit("/"); fmt_int(mpick_count()); emit(ui_reset());
         var _unl = 0;                                                    # 0.52.6 (audit E11): what the store could not hold
@@ -1495,7 +1498,7 @@ fn _tui_pick_hint_health(room) {
     # can read healthy while its kind reads degraded, and the kind's count beside it would contradict the word.
     if (_ps != hoosh_provider_state_at(_slot)) { _dl = 0; }
     var _kb = 0;
-    if (hoosh_provider_key_rejected_at(_slot) > 0) { _kb = 14; }        # "  key rejected"
+    if (mpick_keybad_at(_fi) > 0) { _kb = 14; }                         # "  key rejected" — 0.52.8 (audits A11 + B5): the model's own routes, as its state
     var _pl = 0;
     if (_pn != 0) { _pl = strlen(_pn) + 1; }
     if ((2 + _pl + strlen(_pw) + _dl + _kb) > room) { _dl = 0; }         # the detail yields first
@@ -2170,22 +2173,56 @@ fn feed_stream_tick() {
 # while `y` authorized all of it. confirm() measures the question first (confirm_prompt_cols; 0 = the one-row ask
 # path); this answers 1 when the rows above the composer's bottom hold it, else 0 — and confirm() then refuses
 # rather than draw a cut action. Bytes over-count the columns of multi-byte text, so the rows can only be enough.
+#
+# ⚠ 0.52.8 (audit B1) — THE ROWS WERE COUNTED ON A SCREEN THAT NO LONGER EXISTED. _tui_rows/_tui_cols are the size the
+# loop last read, and a resize during a turn waits on the SIGWINCH queue until dispatch returns — so a question sized
+# for the turn's 100x30 was drawn on the 40x12 the operator had shrunk the terminal to, its head scrolled off, and `y`
+# still authorized all of it (reproduced in a pty). A screen of 4 rows or fewer never reached _tui_rows at all. The
+# bracket now measures the live screen first (no floor: a tiny one refuses), adopts it for the repaint, and records
+# it — confirm() asks tui_confirm_still_fits after the answer and voids it when the screen shrank meanwhile.
+var _tui_cfm_rows = 0;            # the live size the question was sized for (0 = not measured: no tty)
+var _tui_cfm_cols = 0;
+var _tui_cfm_extra = 0;           # rows the asker draws below the question (tui_ask's options, hint and prompt)
 fn tui_confirm_begin() {
     intr_suspend();                                     # 0.34.1: leave Esc-poll mode so the cooked y/n read_line works (agentic tool-phase arming)
+    var lr = _tui_rows;
+    var lc = _tui_cols;
+    _tui_cfm_rows = 0; _tui_cfm_cols = 0;
+    var wr[8]; var wc[8];
+    store64(&wr, 0); store64(&wc, 0);
+    if (term_winsize(1, &wr, &wc) == 0) {
+        if ((load64(&wr) > 0) && (load64(&wc) > 0)) {
+            lr = load64(&wr); lc = load64(&wc);
+            _tui_cfm_rows = lr; _tui_cfm_cols = lc;
+            if (lr > 4) { _tui_rows = lr; }             # adopt it, as the queued resize will after the turn (the repaint below)
+            _tui_cols = lc;
+        }
+    }
     feed_flush_pending();
     feed_repaint();
     _spin_suspended = _spin_active; _spin_active = 0;   # hide the spinner during the prompt (the clear below erases its glyph)
     out_mode_set(OUT_FD1);
-    var bot = tui_composer_bot(_tui_rows, _tui_show_status);
+    var bot = tui_composer_bot(lr, _tui_show_status);
     var need = 1;
     var pc = confirm_prompt_cols();
-    if ((pc > 0) && (_tui_cols > 0)) { need = (pc + 8 + _tui_cols - 1) / _tui_cols; }   # +8: the typed answer's room
+    if ((pc > 0) && (lc > 0)) { need = (pc + 8 + lc - 1) / lc; }   # +8: the typed answer's room
+    need = need + _tui_cfm_extra;
     if (need > (bot - 1)) { return 0; }
     var top = bot - need + 1;
     var r = top;
     while (r <= bot) { tty_move(r, 1); tty_clear_to_eol(); r = r + 1; }
     tty_move(top, 1);
     if (need > 1) { tui_wrap_enable(); }
+    return 1;
+}
+# tui_confirm_still_fits (0.52.8, audit B1): after the answer — 1 when the screen is at least the size the question was
+# sized for, 0 when it shrank (or can no longer be measured, though it was). Growing never hides what was drawn.
+fn tui_confirm_still_fits() {
+    if ((_tui_cfm_rows == 0) || (_tui_cfm_cols == 0)) { return 1; }   # never measured (no tty): as before 0.52.8
+    var wr[8]; var wc[8];
+    store64(&wr, 0); store64(&wc, 0);
+    if (term_winsize(1, &wr, &wc) != 0) { return 0; }
+    if ((load64(&wr) < _tui_cfm_rows) || (load64(&wc) < _tui_cfm_cols)) { return 0; }
     return 1;
 }
 fn tui_confirm_end() {
@@ -2219,33 +2256,53 @@ fn tui_confirm_end() {
 # to be able to tell thoth asking from the model appearing to ask, so the label is a fixed literal this
 # file owns and the model's bytes never occupy the affordance position.
 fn tui_ask() {
-    tui_confirm_begin();
     # 0.44.3: the label names who is asking. `ask_pose` (gate.cyr's authorization prompt) rides this
     # same seam, and calling that "the agent" would misattribute a security decision to the party the
     # decision is ABOUT. Fixed literals thoth owns; never derived from the question text.
-    if (ask_is_authz() == 1) { ui_emit(ROLE_ACCENT, "  [thoth needs your authorization] "); }
-    else { ui_emit(ROLE_ACCENT, "  [the agent is asking] "); }
+    var label = "  [the agent is asking] ";
+    if (ask_is_authz() == 1) { label = "  [thoth needs your authorization] "; }
+    # 0.52.8 (audit B6): the question gets the rows its bytes need, like confirm()'s — it was drawn on ONE row with
+    # autowrap off, so a question past the terminal's width lost its tail, the part being answered. An upper bound:
+    # every byte drawn, plus a row of slack for each line's unfilled end (question, options, hint, prompt).
+    var hint = "    type your answer · empty cancels";
+    if (ask_option_count() > 0) { hint = "    a number picks an option · anything else is your own answer · empty cancels"; }
+    var pc = strlen(label) + strlen(ask_question()) + strlen(hint) + 4;
+    var oi = 0;
+    while (oi < ask_option_count()) { pc = pc + 10 + strlen(ask_option_at(oi)); oi = oi + 1; }
+    _confirm_prompt_cols = pc;
+    _tui_cfm_extra = ask_option_count() + 3;
+    var fits = tui_confirm_begin();
+    _tui_cfm_extra = 0;
+    if (fits == 0) {
+        tui_confirm_end();
+        _confirm_prompt_cols = 0;
+        ask_cancel();
+        ui_emit(ROLE_ACCENT, "  [asked] "); emit(ask_question()); oprintln("");
+        ui_emit(ROLE_RED, "  [declined] the terminal is too small to show the question in full (enlarge it)"); oprintln("");
+        return 0;
+    }
+    ui_emit(ROLE_ACCENT, label);
     emit(ask_question()); oprintln("");
     var i = 0;
     while (i < ask_option_count()) {
         emit("    "); ofmt_int(i + 1); emit(") "); ui_emit(ROLE_MUTED, ask_option_at(i)); oprintln("");
         i = i + 1;
     }
-    if (ask_option_count() > 0) {
-        ui_emit(ROLE_FAINT, "    a number picks an option · anything else is your own answer · empty cancels"); oprintln("");
-    } else {
-        ui_emit(ROLE_FAINT, "    type your answer · empty cancels"); oprintln("");
-    }
+    ui_emit(ROLE_FAINT, hint); oprintln("");
     emit("  > ");
     var buf[2048];
     var n = read_line(&buf, 2048);
-    if (n <= 0) { ask_cancel(); } else { ask_resolve(&buf); }
+    var shrank = 0;
+    if (tui_confirm_still_fits() == 0) { shrank = 1; }   # 0.52.8 (audit B1): a resize while asking voids the answer
+    if ((n <= 0) || (shrank == 1)) { ask_cancel(); } else { ask_resolve(&buf); }
     tui_confirm_end();
+    _confirm_prompt_cols = 0;
     # Echo the outcome INTO THE FEED so the conversation records what was asked and answered — otherwise
     # tui_confirm_end's repaint erases the whole exchange and the transcript shows a tool call with an
     # answer that appears from nowhere.
     ui_emit(ROLE_ACCENT, "  [asked] "); emit(ask_question()); oprintln("");
     if (ask_state() == 1) { ui_emit(ROLE_GREEN, "  [answered] "); emit(ask_answer_buf()); oprintln(""); }
+    elif (shrank == 1) { ui_emit(ROLE_RED, "  [declined] the terminal shrank while it was asked, and part of it may have left the screen"); oprintln(""); }
     else { ui_emit(ROLE_RED, "  [declined]"); oprintln(""); }
     return 0;
 }

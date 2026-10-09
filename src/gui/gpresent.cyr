@@ -160,6 +160,16 @@ fn _gask_wait_ms(win) {
     if ((r >= 0) && (r < t)) { t = r; }
     return t;
 }
+# _gask_layout_now (0.52.8, audits G2 + G6): build the frame — the modal's card and its cut — at the window's CURRENT size,
+# without waiting for the compositor's frame callback; the present follows when the window is ready.
+fn _gask_layout_now(win) {
+    var sz[16];
+    gwl_win_size_px(win, &sz);
+    _gui_cmds = gframe_build(load64(&sz), load64(&sz + 8));
+    _gui_dirty = 0;
+    _gui_pending = 1;
+    return 0;
+}
 fn gui_ask() {
     var win = gstop_win();
     if (win == 0) { ask_cancel(); return 0; }                            # no window -> nobody to ask
@@ -173,8 +183,8 @@ fn gui_ask() {
     if (ask_is_authz() == 1) { gask_set_label(GASK_LABEL_AUTHZ); }
     var i = 0;
     while (i < ask_option_count()) { gask_add_option(ask_option_at(i)); i = i + 1; }
-    _gui_dirty = 1;
-    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }
+    _gask_layout_now(win);                                    # 0.52.8 (audit G6): the cut is known before any key is judged
+    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); _gui_pending = 0; }
     var done = 0;
     while (done == 0) {
         if (gclose_requested() == 1) { ask_cancel(); done = 1; }     # 0.52.0 (F7): closing already (the pump read it) — nobody will answer
@@ -183,11 +193,17 @@ fn gui_ask() {
             if (gwl_win_wait(win, _gask_wait_ms(win)) > 0) { ev = gwl_win_poll_events(win); }
             if (gwl_win_repeat_tick(win) > 0) { ev = ev | GWL_WIN_EV_KEY; }   # 0.52.3: a held key's repeats come from the clock
             if ((ev & GWL_WIN_EV_CLOSE) != 0) { gclose_request(); ask_cancel(); done = 1; }   # 0.52.0: and the window closes after
+            # ⚠ 0.52.8 (audit G2): a new size is adopted and laid out BEFORE this batch's keys are judged. The modal never
+            # adopted a resize at all: its layout and its cut stayed at the size it opened at while the compositor cropped
+            # the stale buffer — a tiled split showed "Authorize run shell echo ok && echo ok && e" and Enter ran the rest
+            # (reproduced live), and enlarging a window the card called too small never re-laid it out.
+            if (((ev & GWL_WIN_EV_RESIZE) != 0) && (done == 0)) { gwl_win_resize_apply(win); _gask_layout_now(win); }
             if ((ev & GWL_WIN_EV_POINTER) != 0) { _gpresent_drop_pointer(win); }    # 0.49.0: the modal is keyboard-driven
             if (((ev & GWL_WIN_EV_KEY) != 0) && (done == 0)) {
                 var rec[24];
                 while ((gwl_win_next_key(win, &rec) == 1) && (done == 0)) {
                     if ((load64(&rec + 8) == 1) || (load64(&rec + 8) == 2)) {   # a press, or a held key's repeat (0.52.3)
+                        if (_gui_dirty == 1) { _gask_layout_now(win); }      # 0.52.8: each key is judged on the card as it stands
                         var mods = load64(&rec + 16);
                         var r = _gask_key(load64(&rec), mods & 1);
                         if (r == 2) { ask_cancel(); done = 1; }
@@ -198,16 +214,19 @@ fn gui_ask() {
                             else { ask_pick_option(gask_sel()); }
                             done = 1;
                         }
+                        else { _gui_dirty = 1; _gui_pending = 1; }       # typed, erased, or moved: redraw
                     }
                 }
             }
         }
-        _gui_dirty = 1;
-        if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }
+        # 0.52.8: present only what changed. Through 0.52.7 every pass marked the frame dirty, and every present asks for
+        # a frame callback that wakes the next pass — an idle modal rebuilt its frame at the display's rate (measured:
+        # 28% of a core, +16 MB in 25 s on the no-free heap).
+        if ((_gui_pending == 1) && (gwl_win_ready(win) == 1)) { _gpresent_frame(win); _gui_pending = 0; }
     }
     gask_close();
-    _gui_dirty = 1;
-    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); }
+    _gui_dirty = 1; _gui_pending = 1;
+    if (gwl_win_ready(win) == 1) { _gpresent_frame(win); _gui_pending = 0; }
     return 0;
 }
 
@@ -247,9 +266,8 @@ fn _gpresent_submit(win) {
         # 0.34.3: distinguish an Esc-INTERRUPT (intr flag set by the stop-poll) from a real
         # failure — a stopped turn with no partial gets a neutral "stopped" notice, not the
         # red "is hoosh reachable?" one.
-        if (gturn_reply_landed() == 0) {
-            if (intr_pending() == 1) { gturn_stop(); } else { gturn_fail(); }
-        }
+        gturn_settle();                       # 0.52.8 (audit A1): stopped, ended short by the provider, or failed
+
         gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
         git_probe();                          # 0.50.1: the turn may have changed the worktree (an agentic edit / shell) — the strip's git field + the tree's badges, as the TUI re-probes after every line; until now only a slash command did
         return 1;
@@ -324,6 +342,7 @@ fn gui_run() {
     # front end will win); left in place, a confirm raised during a GUI command dispatch would run T2
     # painters over a terminal that has no alt screen up.
     confirm_hooks_set(0, 0);
+    confirm_fit_hook_set(0);
     # 0.50.1: the operator's session_start hook, fired for THIS front end too — main.cyr fires it for the REPL/TUI
     # after `thoth gui` has already returned, so a configured [hooks].session_start never ran for the window
     # (pre_tool / post_tool did, inside its turns: the lifecycle was half-wired). After every seam is claimed and

@@ -252,14 +252,178 @@ fn shell_supported() { return 1; }
 
 #ifndef CYRIUS_TARGET_AGNOS
 #ifndef CYRIUS_TARGET_WIN
+# --- the capture's SUPERVISOR (0.52.8, batch 12: audit E1 / ruling R4, E4, E10) ---------------------------------------
+#
+# ⚠ THROUGH 0.52.7 A KILLED THOTH LEFT A CAPTURE'S CHILDREN RUNNING. The capture child was the shell itself, under the
+# floor's parent-death signal (0.52.6) — and PR_SET_PDEATHSIG is per-process and cleared on fork, so it reached the shell
+# and nothing the shell started. `/run sleep 46; true` (a list: the shell forks the sleep instead of exec'ing it), a make,
+# a dev server: SIGKILL thoth and the shell died while its children were reparented to init and ran on (measured: the
+# sleep at ppid 1). macOS had not even that much — prctl does not exist there (E10).
+#
+# So the capture child is now a small SUPERVISOR, and the command is ITS child:
+#
+#   thoth ─fork─▶ supervisor   setsid: a new session AND process group, pgid == its pid — exec's kill(-pid) target, as
+#                  │            the shell was; stdin /dev/null, stdout+stderr the capture file; it keeps ONLY the death
+#                  │            pipe's read end (every other descriptor it inherited is closed)
+#                  └─fork─▶ /bin/sh -c <cmd>   the same group, writing straight into the capture file; on Linux it
+#                               │             carries the parent-death signal (it fires if the supervisor dies)
+#                               └─ everything the command starts — the same group, unless it makes one of its own
+#
+# The supervisor waits for two things: the shell's exit, and thoth's death. Thoth's death is the DEATH PIPE: thoth makes
+# it, the supervisor keeps the read end, only thoth keeps the write end. When thoth dies — SIGKILL included, which runs
+# no cleanup at all — the kernel closes its descriptors, the read end reports a hang-up, and the supervisor SIGKILLs its
+# whole group, itself included, and removes the capture file nobody is left to read. A getppid check on every wakeup is
+# the second witness: a write end leaked into some other process could hold the hang-up off, never the reparenting.
+# A parent-death SIGKILL on the SUPERVISOR would be wrong — it would kill the supervisor before it could kill the group.
+# The backstop goes one level down, on the shell, where it helps: if the supervisor itself is killed, the shell dies
+# rather than run on unsupervised.
+#
+# The status thoth reads is the supervisor's, and it is the shell's: exit N is exit N, and a shell killed by signal S is
+# exit 128+S — the very number exec's mapping (below) gives a signal death, so /run's card, the shell tool's result, a
+# hook's verdict and [verify] read what they read before. exec's kills — the deadline, the operator's stop (Esc, the
+# window closing, the parallel executor's phase-1 stop through the same wait) — already aimed at the group (kill(-pid)),
+# and pid is now the supervisor, its leader: they reach the whole tree, as they reached the shell's.
+#
+# What each lane gets (E10):
+#   Linux x86_64 / aarch64  the supervisor, the death pipe, the getppid witness, and the shell's parent-death signal
+#   macOS arm64             the supervisor, the death pipe and the getppid witness — the mechanism that works there; no
+#                           parent-death signal (prctl is Linux-only: _proc_child_guard compiles to nothing)
+#   AGNOS / Windows         no capture child of this shape (above): AGNOS has none, Windows its own residuals
+# The line REPL's /run (run_shell -> the floor's exec_vec) is NOT supervised: it shares thoth's terminal and process
+# group (job control, a password prompt), so it cannot leave the session as this child does; it keeps the floor's
+# parent-death signal, on the shell only.
+#
+# EXEC_SV_FD_SCAN: the supervisor closes descriptors 3..EXEC_SV_FD_SCAN-1 (the floor has no close_range/closefrom).
+# 1024 is the default soft RLIMIT_NOFILE on Linux; macOS's is 256. Thoth holds a few dozen.
+var EXEC_SV_FD_SCAN = 1024;
+# _exec_sv_ppid_witness is a variable for one reason: a test turns the getppid witness off, to prove that the death pipe
+# alone kills the group (the witness would otherwise mask a broken pipe path within one slice).
+var _exec_sv_ppid_witness = 1;
+
+# _exec_child_signals_reset (0.52.8, audit E4): the signal state a command starts with. A signal MASK and an IGNORED
+# disposition both survive fork and execve, so every captured command inherited thoth's: the TUI's signalfd blocks
+# SIGINT and SIGWINCH (src/tui.cyr), and a launcher that ignores SIGPIPE and SIGXFSZ for itself (Python and Node both
+# do) hands that to thoth. Measured in a TUI child: SigBlk 0x8000002, SigIgn 0x1001000; `grep -rn "" /usr/include |
+# head -1` printed "write error: Broken pipe" instead of ending quietly, and `timeout -s INT 1 sleep 3` took 3 s. The
+# mask is cleared whole; SIGPIPE and SIGXFSZ go back to SIG_DFL (the pair Python's subprocess restores). Nothing else:
+# a SIGHUP that `nohup thoth` ignored is the operator's choice and stays theirs.
+# macOS: the floor declines rt_sigprocmask there (no Darwin peer is wired) and thoth blocks nothing on that lane — the
+# signalfd is the Linux TUI's; signal_default reaches BSD sigaction. SIGXFSZ is 25 on Linux and Darwin alike.
+fn _exec_child_signals_reset() {
+    var none[16];                                     # N BYTES: a kernel sigset is 8 (rt_sigprocmask's sigsetsize)
+    store64(&none, 0);
+    store64(&none + 8, 0);
+    sys_sigprocmask(SIG_SETMASK, &none, 0);
+    signal_default(SIGPIPE);
+    signal_default(25);                               # SIGXFSZ — the floor's Signal enum has no name for it
+    return 0;
+}
+
+# _exec_fd_above_stdio(fd): fd when it is above 2, else a duplicate at the lowest free descriptor >= 3 (fcntl F_DUPFD,
+# 0 on Linux and Darwin) with the original closed; -1 when that fails. The supervisor makes 0, 1 and 2 its stdio, so a
+# death-pipe end that landed there (a thoth started with its own stdio closed) would be overwritten by those dup2s —
+# and the capture file, polled in its place, reads "ready" at once: the supervisor would kill every command it started.
+fn _exec_fd_above_stdio(fd) {
+    if (fd > 2) { return fd; }
+    var hi = syscall(SYS_FCNTL, fd, 0, 3);
+    sys_close(fd);
+    return hi;
+}
+
+# _exec_sv_kill_group(path): the supervisor's end when thoth is gone, or when the shell can no longer be waited for —
+# the capture file removed (path 0 leaves it), then the whole group SIGKILLed, this process with it (so the exit after
+# it is never reached). `0 - getpid()` names the group this supervisor leads; never thoth's.
+fn _exec_sv_kill_group(path) {
+    if (path != 0) { sys_unlink(path); }
+    sys_kill(0 - sys_getpid(), 9);
+    sys_exit(137);
+    return 0;
+}
+
+# _exec_supervise(sh, drd, tpid, path): the supervisor's wait; it returns only by exiting. The poll on the death pipe is
+# also the sleep between looks at the shell, and a hang-up ends it at once, whatever the slice. The slice is short
+# because the shell's end reaches thoth only when this process exits: 1 ms for the first 50 ms (the common quick hook
+# or `shell` call), then 10 ms — a tenth of exec's own 100 ms tick.
+fn _exec_supervise(sh, drd, tpid, path) {
+    var st[4];                                        # N BYTES: wait4's status is one 4-byte int
+    var slice = 1;
+    var waited = 0;
+    while (1 == 1) {
+        var w = sys_waitpid(sh, &st, 1);              # 1 = WNOHANG
+        if (w == sh) {
+            var s = load32(&st);
+            if (WIFEXITED(s) == 1) { sys_exit(WEXITSTATUS(s)); }
+            if (WIFSIGNALED(s) == 1) { sys_exit(128 + WTERMSIG(s)); }   # the number exec's mapping gives a signal death
+        }
+        if (w < 0) { _exec_sv_kill_group(0); }        # the shell cannot be waited for: never leave its group unwatched
+        var r = _proc_poll_in(drd, slice);            # > 0 only once every write end is closed (thoth never writes)
+        if (r > 0) { _exec_sv_kill_group(path); }
+        if ((_exec_sv_ppid_witness == 1) && (sys_getppid() != tpid)) { _exec_sv_kill_group(path); }   # reparented: thoth is gone, whoever holds a write end
+        if (r < 0) { sleep_ms(slice); }               # a poll error: never spin
+        waited = waited + slice;
+        if (waited >= 50) { slice = 10; }
+    }
+    return 0;
+}
+
+# _exec_supervisor: the capture child (above). Never returns. `tpid` is thoth's pid; `drd` / `dwr` the death pipe's ends.
+fn _exec_supervisor(cmdline, envp, out_fd, drd, dwr, tpid, path) {
+    # 0.20.1 / 0.45.2: a new session, which makes this fresh child (never a group leader) the leader of a new process
+    # group with pgid == pid — exec's kill(-pid) target. The floor has no setpgid wrapper; setsid is routed on every POSIX
+    # target (the raw `syscall(109, 0, 0)` it replaced was setpgid in x86_64 numbering only, so on aarch64 and macOS the
+    # group never formed). Leaving the controlling terminal suits a captured command: its stdin is /dev/null, its output
+    # a file, and a hang-up of thoth's terminal is not its signal — thoth's death is (the pipe).
+    sys_setsid();
+    sys_dup2(out_fd, 1);                              # stdout -> the capture file
+    sys_dup2(out_fd, 2);                              # stderr -> the same file (merged, as a terminal shows it)
+    var dn = sys_open("/dev/null", 0, 0);             # 0 = O_RDONLY
+    if (dn > 0) { sys_dup2(dn, 0); }                  # stdin <- /dev/null (no hang on read; a dn of 0 already is stdin)
+    # Every other descriptor goes: the capture file's and /dev/null's originals, the death pipe's write end, and all of
+    # thoth's own — its sockets, the window's Wayland connection, another capture's pipe. None outlives thoth in here.
+    sys_close(dwr);
+    var fd = 3;
+    while (fd < EXEC_SV_FD_SCAN) {
+        if (fd != drd) { sys_close(fd); }
+        fd = fd + 1;
+    }
+    _exec_child_signals_reset();                      # E4: the shell, and everything it starts, inherits this
+    var argv[40];                                     # N BYTES: 4 ptrs (/bin/sh, -c, cmdline, NUL) = 32 B, headroom to 40
+    store64(&argv,      "/bin/sh");
+    store64(&argv + 8,  "-c");
+    store64(&argv + 16, cmdline);                     # the command flows as ONE argv element (no double-shell)
+    store64(&argv + 24, 0);
+    var env0[16];                                     # the empty environment (the plain capture) — the shell's own default PATH
+    store64(&env0, 0);
+    var ep = envp;
+    if (ep == 0) { ep = &env0; }
+    var me = sys_getpid();
+    var sh = sys_fork();
+    if (sh == 0) {
+        _proc_child_guard(me);                        # Linux: SIGKILL when the supervisor dies (its getppid re-check closes the race)
+        sys_execve("/bin/sh", &argv, ep);             # the death pipe's read end is close-on-exec: the command never holds it
+        sys_exit(127);
+    }
+    if (sh < 0) {
+        # No second process to be had (RLIMIT_NPROC, memory): run the command HERE, unsupervised — the 0.52.6 shape, with
+        # the floor's parent-death signal on the shell — rather than fail a command that can still run.
+        _proc_child_guard(tpid);
+        sys_execve("/bin/sh", &argv, ep);
+        sys_exit(127);
+    }
+    _exec_supervise(sh, drd, tpid, path);
+    sys_exit(127);
+    return 0;
+}
+
 # _exec_kill_group: SIGKILL a capture child's whole PROCESS GROUP and reap it — the deadline's kill (0.20.1), shared
-# since 0.52.0 with the operator's stop. The group first (negative pid), so a backgrounded grandchild dies with the
-# shell; then the shell directly as a belt-and-suspenders (harmless ESRCH if the group kill already reached it, and it
-# guarantees the shell dies even if its setsid did not take, so the blocking reap never hangs). Grandchildren
-# reparent to init; the direct child is reaped here — no zombie.
+# since 0.52.0 with the operator's stop. The group first (negative pid): since 0.52.8 pid is the SUPERVISOR, the group's
+# leader, so this takes it, the shell and everything the shell started (a backgrounded grandchild included); then the
+# supervisor directly as a belt-and-suspenders (harmless ESRCH if the group kill already reached it, and it guarantees
+# the child dies even if its setsid did not take, so the blocking reap never hangs). The shell, now an orphaned
+# zombie, is reaped by init; the direct child is reaped here — no zombie of thoth's.
 fn _exec_kill_group(pid, stbuf) {
-    sys_kill(0 - pid, 9);                             # SIGKILL the process group (shell + grandchildren)
-    sys_kill(pid, 9);                                 # + the shell directly (defensive)
+    sys_kill(0 - pid, 9);                             # SIGKILL the process group (supervisor + shell + its children)
+    sys_kill(pid, 9);                                 # + the supervisor directly (defensive)
     sys_waitpid(pid, stbuf, 0);                       # BLOCKING reap
     return 0;
 }
@@ -274,6 +438,9 @@ fn _exec_kill_group(pid, stbuf) {
 # EMPTY environment (the shell's compiled-in default PATH), matching /run's exec_vec convention;
 # stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
 # The caller owns NUL-termination of buf at the returned count (buf must be >= buflen+1).
+# 0.52.8: the command runs under the supervisor above (it kills the command's whole tree when thoth dies), with an
+# empty signal mask and SIGPIPE / SIGXFSZ at their defaults; a signal death reaches this loop as the supervisor's exit
+# 128+sig — the same number the WIFSIGNALED arm gives, so [0] reads exactly as it did.
 #
 # exec_shell_capture_env (0.45.6): the same capture with `envp` — a NUL-terminated array of `KEY=value`
 # cstr pointers — as the child's WHOLE environment (0 = empty, the plain form). This is how [hooks] hands a
@@ -308,50 +475,44 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     }
     if (out_fd < 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; }
 
-    var ppid = sys_getpid();
-    var pid = sys_fork();
-    if (pid < 0) {
+    # 0.52.8 (E1): the DEATH PIPE (the supervisor, above). Thoth keeps only the write end, and never writes to it. Both
+    # ends close-on-exec (fcntl F_SETFD FD_CLOEXEC — 2 and 1 on Linux and Darwin; Darwin's pipe takes no flags word, so
+    # pipe2's would be lost), so no exec'd process — the command included — ever holds either end. A pipe that cannot be
+    # made fails the capture closed, as a capture file that cannot be made does.
+    var dp[16];                                       # N BYTES: pipe writes two 4-byte fds
+    store64(&dp, 0);
+    if (sys_pipe(&dp) < 0) {
         sys_close(out_fd); sys_unlink(path);
         store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
     }
-    if (pid == 0) {
-        # 0.52.6 (audit F4): the parent-death signal, as the floor's own runners have had unconditionally since 6.6.6
-        # (lib/process.cyr: "a SIGKILLed parent runs no cleanup … the kernel has to do it"). The setsid below leaves
-        # the terminal, so a hang-up never reached this child either: a `/run sleep 47` outlived a killed thoth with
-        # ppid 1. The guard's getppid re-check exits a child whose parent died before the prctl.
-        _proc_child_guard(ppid);
-        # 0.20.1: put the shell in its OWN process group (leader pgid == child pid) BEFORE execve, so a
-        # timeout can SIGKILL the whole group — the shell AND any backgrounded grandchild (`cmd &`) — via
-        # kill(-pgid). Without it the shell stays in thoth's group and a grandchild leaks past the kill.
-        # ⚠ 0.45.2: this was a raw `syscall(109, 0, 0)` — setpgid in x86_64-Linux numbering only. aarch64 Linux
-        # reads 109 as timer_getoverrun and the Mach-O backend routes no 109 at all, so on both the group never
-        # formed and the kill silently degraded to the shell alone. The floor has no setpgid wrapper; it has
-        # setsid, routed on every POSIX target, which makes this fresh child (never a group leader) the leader
-        # of a new session AND a new group with pgid == pid — the same kill(-pid) target. Leaving the
-        # controlling terminal suits a captured command: stdin is /dev/null and its output goes to a file.
-        sys_setsid();
-        sys_dup2(out_fd, 1);            # stdout -> temp file
-        sys_dup2(out_fd, 2);            # stderr -> same file (merged, as a terminal shows it)
-        sys_close(out_fd);
-        var dn = sys_open("/dev/null", 0, 0);   # 0 = O_RDONLY
-        if (dn >= 0) { sys_dup2(dn, 0); sys_close(dn); }   # stdin <- /dev/null (no hang on read)
-        var argv[40];                  # N BYTES: 4 ptrs (/bin/sh, -c, cmdline, NUL) = 32 B, headroom to 40
-        store64(&argv,      "/bin/sh");
-        store64(&argv + 8,  "-c");
-        store64(&argv + 16, cmdline);  # the model's command flows as ONE argv element (no double-shell)
-        store64(&argv + 24, 0);
-        var env0[16];                  # the empty environment (the plain capture) — the shell's own default PATH
-        store64(&env0, 0);
-        var ep = envp;
-        if (ep == 0) { ep = &env0; }
-        sys_execve("/bin/sh", &argv, ep);
-        sys_exit(127);
+    var drd = _exec_fd_above_stdio(load32(&dp));
+    var dwr = _exec_fd_above_stdio(load32(&dp + 4));
+    if ((drd < 0) || (dwr < 0)) {
+        if (drd >= 0) { sys_close(drd); }
+        if (dwr >= 0) { sys_close(dwr); }
+        sys_close(out_fd); sys_unlink(path);
+        store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
     }
+    syscall(SYS_FCNTL, drd, 2, 1);
+    syscall(SYS_FCNTL, dwr, 2, 1);
+
+    var ppid = sys_getpid();
+    var pid = sys_fork();
+    if (pid < 0) {
+        sys_close(drd); sys_close(dwr);
+        sys_close(out_fd); sys_unlink(path);
+        store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
+    }
+    # 0.52.6 (audit F4) gave this child the parent-death signal, the floor's own since 6.6.6 (lib/process.cyr: "a
+    # SIGKILLed parent runs no cleanup … the kernel has to do it") — it reached the shell and none of its children. Since
+    # 0.52.8 the child is the supervisor, and the signal sits on the shell beneath it (above).
+    if (pid == 0) { _exec_supervisor(cmdline, envp, out_fd, drd, dwr, ppid, path); }
     sys_close(out_fd);                  # parent's write copy; the child holds its own duped fds
+    sys_close(drd);                     # the supervisor's end. Thoth holds the write end until the reap below
     # (0.20.1 also ran setpgid(pid, pid) here, to close the fork/setpgid race. setsid cannot be called on another
-    # process, and the race needs no closing: the group is only the deadline kill's target, no grandchild can
-    # exist before the child's own setsid (it precedes execve), and the direct kill(pid) below covers a shell
-    # that has not reached it yet.)
+    # process, and the race needs no closing: the group is only the kills' target, no grandchild can exist before the
+    # supervisor's own setsid (it precedes the shell's fork), and the direct kill(pid) below covers a supervisor that
+    # has not reached it yet.)
 
     var stbuf[4];                       # N BYTES: waitpid's status out-param is one 4-byte int (was [1];
                                         # both round to the 8B minimum frame slot so [1] was benign, but
@@ -391,13 +552,14 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     }
     var timed = 0;
     if (reaped == 0) {
-        _exec_kill_group(pid, &stbuf);                # 0.20.1: the whole PROCESS GROUP, then the shell, then the reap
+        _exec_kill_group(pid, &stbuf);                # 0.20.1: the whole PROCESS GROUP, then the supervisor, then the reap
         if (stop > 0) { code = 0 - 4; }               # 0.52.0: the operator stopped it — never reported as a deadline
         else {
             timed = 1;
             code = 0 - 2;
         }
     }
+    sys_close(dwr);                                   # 0.52.8: the supervisor is reaped — nothing is left to watch for thoth's death
     store64(status_out, code);
     store64(status_out + 8, timed);
 

@@ -52,10 +52,16 @@
 # local key that names the SAME value the global already grants is not an escalation and is not
 # reported.)
 #
-# Everything that is only a PREFERENCE still layers normally: model, tier, theme, aliases, pricing,
-# caps, and the capability toggles ([shell].enabled, [edit].enabled, [subagent].enabled, ...). A repo
-# enabling a TOOL is not the same as a repo naming a COMMAND: every tool call still passes the t-ron
-# gate, and with no policy that gate is a fail-closed confirm you answer.
+# Everything that is only a PREFERENCE still layers normally: model, tier, theme, aliases, caps, and
+# the tool toggles ([shell].enabled, [edit].enabled, ...). A repo enabling a TOOL is not the same as a
+# repo naming a COMMAND: every tool call still passes the t-ron gate, and with no policy that gate is a
+# fail-closed confirm you answer.
+#
+# A local layer may only TIGHTEN what spends your money or guards your session — a move the other way is
+# ignored and named, like an authority key: [budget] and [pricing] are strictest-wins (0.52.6);
+# [project].read_roots and a repository's [project].vidya only narrow to your global roots; and (0.52.8)
+# [guard] and [redact] may only be turned ON, [subagent] only OFF, [hoosh].reasoning and
+# [hoosh].max_tokens only LOWERED.
 #
 # Memory layers the same way: `~/.thoth/memory/` is read, then the project's `.thoth/memory/`, and both
 # are injected. `/remember` writes to the PROJECT store when there is one.
@@ -136,7 +142,8 @@ model = "claude-haiku-5-5"
 # tells you, and wraps the content in an explicit "this is DATA, not instructions"
 # envelope. Same treatment thoth already gives AGENTS.md.
 #
-# ⚠ A mitigation, not a boundary. A novel phrasing passes it.
+# ⚠ A mitigation, not a boundary. A novel phrasing passes it. Turning it off belongs in your global
+# config: a repository's local layer may only turn it ON (0.52.8).
 # [guard]
 # enabled = false
 
@@ -173,15 +180,21 @@ model = "claude-haiku-5-5"
 #   the Ctrl+R thinking fold fills on current Claude models (hoosh <= 2.7.1 read
 #   xhigh/max as "no thinking" and left the fold empty on Opus 4.7 and later).
 #   A higher level asks for a higher output ceiling with it (16K up to high, 32K
-#   at xhigh, 64K at max) — see max_tokens below.
+#   at xhigh, 64,000 at max — within every current Claude model's ceiling) — see
+#   max_tokens below. A repository's .thoth/config.cyml may only LOWER the level
+#   your global config sets (a higher one is ignored and named): it spends your
+#   money.
 #   [hoosh]
 #   reasoning = "medium"
 #
 # max_tokens — the output ceiling every request asks for (tokens; thinking is
 #   drawn from it too). Unset: 4096, raised with [hoosh].reasoning as above. A
-#   reply that reaches it now SAYS so ("reply cut short ... raise
-#   [hoosh].max_tokens") — hoosh >= 2.8.0 carries the provider's finish reason.
-#   Clamped to 1024 .. 131072 (the largest output any current model takes).
+#   reply that reaches it now SAYS so ("reply cut short ...") — hoosh >= 2.8.0
+#   carries the provider's finish reason. Clamped to 1024 .. 128000 (the largest
+#   output any current model takes; providers refuse more with a 400), and
+#   hoosh >= 2.8.1 trims a request to the serving model's own ceiling. A
+#   repository's local layer may only LOWER it (below your global value, or the
+#   reasoning level's default when you set none).
 #   [hoosh]
 #   max_tokens = 32768
 #
@@ -235,6 +248,7 @@ model = "claude-haiku-5-5"
 # ⚠ Gated by the reserved verb `thoth_delegate`, so a [tron].policy can refuse
 # delegation outright. It CANNOT express "subagents, but no shell": the child
 # authorizes as the same agent id, and shares its rate-limit bucket and risk score.
+# ⚠ Delegation multiplies spend, so a repository's local layer may only turn it OFF (0.52.8).
 # [subagent]
 # enabled = true
 # max_iters = 8       # rounds ONE child may spend (default 8)
@@ -384,7 +398,8 @@ model = "claude-haiku-5-5"
 #
 # ⚠ It is pattern matching, so it is a MITIGATION, not a boundary — the same framing
 # [shell.deny] gets. It will not catch a secret that looks like an ordinary word.
-# Turn it off if it interferes with legitimate work:
+# Turn it off, in your global config, if it interferes with legitimate work (a repository's local layer
+# may only turn it ON, 0.52.8):
 # [redact]
 # enabled = false
 
@@ -677,6 +692,8 @@ model = "claude-haiku-5-5"
 
 # [project]
 # vidya = "/home/you/Repos/vidya"                 # the Cyrius knowledge base; grant it with `/allow vidya`
+#                     (0.52.8: a vidya a repository's local layer names is granted only under one of your
+#                     global read_roots, and never through a symlink — /allow vidya refuses it otherwise)
 # read_roots = ["/home/you/Repos/otherrepo"]      # absolute roots readable from every startup
 # map = true                                      # the project-map hint in the system prompt (default on)
 

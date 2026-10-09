@@ -1502,14 +1502,14 @@ fn test_project_map() {
     # a name is written raw for the wire (the JSON emitter escapes it there)
     # the cap: a marker, the flag, and a NUL inside the cap
     var sv_cap = PROJ_MAP_CAP;
-    PROJ_MAP_CAP = 307;                                   # the header is 183 bytes (0.52.6: +51, its data framing); 48 stay reserved: three lines fit, the fourth (many/) does not
+    PROJ_MAP_CAP = 333;                                   # the header is 209 bytes (0.52.6: +51, its data framing; 0.52.8: +26, the @ legend); 48 stay reserved: three lines fit, the fourth (many/) does not
     var tn = project_map_build(_pmap_root_cstr());
     assert(tn > 0, "a tiny cap still yields a map");
-    assert(tn < 307, "...within the cap");
+    assert(tn < 333, "...within the cap");
     assert_eq(project_map_truncated(), 1, "...flagged truncated");
-    assert_eq(_t_has(_pmap_buf, "\n... (map truncated at 307 bytes)\n"), 1, "...with the marker naming the cap, on its own line");
+    assert_eq(_t_has(_pmap_buf, "\n... (map truncated at 333 bytes)\n"), 1, "...with the marker naming the cap, on its own line");
     assert_eq(load8(_pmap_buf + tn), 0, "...NUL-terminated at the returned length");
-    assert(memeq(_pmap_buf + strlen(_pmap_buf) - 33, "... (map truncated at 307 bytes)\n", 33) == 1, "...the marker is the LAST thing on the map");
+    assert(memeq(_pmap_buf + strlen(_pmap_buf) - 33, "... (map truncated at 333 bytes)\n", 33) == 1, "...the marker is the LAST thing on the map");
     assert_eq(_t_has(_pmap_buf, "\n\n"), 0, "...and no blank line before it");
     assert_eq(_t_has(_pmap_buf, "\n.hidden/  (not walked)\nbuild/  (not walked)\ndocs/  notes.md\n"), 1, "...the lines that fit are whole (the first three)");
     assert_eq(_t_has(_pmap_buf, "many/"), 0, "...and the line that did not fit is not on the map at all — never cut inside an entry");
@@ -1615,6 +1615,16 @@ fn test_project_map() {
         assert_eq(_pmap_is_dir("tests/fixtures/map"), 1, "...while a real directory is still a directory");
         xunlink(lnk);
     } else { assert(1, "(no symlink could be created here — the symlink rule is not exercised; stated)"); }
+    # 0.52.8 (audit F8): a symlink one level DOWN is named as one too (@, the header's legend) — it read as a plain name
+    var lnk2 = "tests/fixtures/map/src/zlink";
+    xunlink(lnk2);
+    if (xsymlink("a.cyr", lnk2) == 0) {
+        _pmap_root = "tests/fixtures/map";
+        project_map_refresh();
+        assert_eq(_t_has(project_map_current(), " zlink@"), 1, "a symlink one level down is marked @ (a bare name, 0.52.7)");
+        assert_eq(_t_has(project_map_current(), "@ a symlink not followed"), 1, "...and the header says what @ means");
+        xunlink(lnk2);
+    } else { assert(1, "(no symlink could be created here; stated)"); }
     _pmap_root = "tests/fixtures/map";
     project_map_refresh();
     # every request builder carries it as a system message after the persona (and memory), before the history
@@ -2825,8 +2835,10 @@ fn test_project() {
     # thoth writes (a /reload used to move the protection off the store in use), and the lookup allocates nothing:
     # the default resolver it replaced did three never-freed allocations and a directory probe per path COMPONENT,
     # for every entry a `search` walked
+    # 0.52.8 (audit D6): ...but the CONFIGURED file is guarded too, bound or not — with [toolpin].enabled = false nothing
+    # is bound, and a model could edit the store the next run (pinning on again) trusts. Comparing it allocates nothing.
     _tps_path = 0;
-    assert_eq(_project_sensitive("pins/toolpins"), 0, "a [toolpin].file no store was bound to is not the jail's to guard");
+    assert_eq(_project_sensitive("pins/toolpins"), 1, "a [toolpin].file no store was bound to is still the jail's to guard (0.52.8)");
     var _sv_tdur = _cfg_toolpin_durable;
     _cfg_toolpin_file = 0; _cfg_toolpin_durable = 1;                  # the default resolver's path (the one that allocated)
     var _h0 = alloc_used();
@@ -3304,6 +3316,361 @@ fn _t_fill(dst, off, c, n) {
     while (i < n) { store8(dst + off + i, c); i = i + 1; }
     return off + n;
 }
+# test_confirm_modal_whole (0.52.8, audits D1 + D2 + G1): the window's question carries the WHOLE object, or it is not
+# posed. Three 1,024-byte buffers on the way to the modal cut a 1,024-byte command's tail silently, and stray UTF-8
+# continuation bytes made the card skip what it never drew — both reproduced live (a PWNED file).
+fn test_confirm_modal_whole() {
+    test_group("the modal's question holds the whole action, and malformed text is never posed (gate.cyr, 0.52.8)");
+    var sv_hook = _ask_hook; var sv_notty = _confirm_no_tty; var sv_log = _log_enabled;
+    _log_enabled = 0;
+    grants_clear();
+    confirm_no_tty_set(1);
+    ask_hook_set(&_test_ask_hook_once);
+    var b = alloc(4096);
+    var o = _append_cstr_cap(b, 0, 4096, "echo ");
+    o = _t_fill(b, o, 120, 1024 - 5 - 13);
+    o = _append_cstr_cap(b, o, 4096, "; touch PWNED");
+    store8(b + o, 0);
+    assert_eq(strlen(b), 1024, "premise: a 1,024-byte command, the most the gate shows");
+    _test_ask_calls = 0;
+    out_mode_set(OUT_NULL);
+    assert_eq(confirm("run shell", b), 1, "premise: it is posed and answered");
+    assert_eq(_ui_contains(ask_question(), "; touch PWNED"), 1, "the window's question ends with the command's tail (cut at 1,023 bytes, 0.52.7)");
+    var vb = alloc(1200);
+    var vo = _t_fill(vb, 0, 118, 1100);
+    store8(vb + vo, 0);
+    _test_ask_calls = 0;
+    assert_eq(confirm(vb, b), 0, "a question too long for the modal to hold is refused");
+    assert_eq(_test_ask_calls, 0, "...and never posed cut");
+    var big = alloc(ASK_Q_CAP + 16);
+    var bo = _t_fill(big, 0, 113, ASK_Q_CAP + 4);
+    store8(big + bo, 0);
+    _test_ask_calls = 0;
+    assert_eq(ask_pose(big, "no", "yes, once", 0), 0, "ask_pose refuses an authorization question it cannot hold whole");
+    assert_eq(_test_ask_calls, 0, "...the front end never sees a cut one");
+    o = _append_cstr_cap(b, 0, 4096, "echo ok Z");
+    var k = 0;
+    while (k < 100) { store8(b + o, 0xA0); o = o + 1; k = k + 1; }
+    o = _append_cstr_cap(b, o, 4096, ";touch PWNED");
+    store8(b + o, 0);
+    _test_ask_calls = 0;
+    feed_init(); out_mode_set(OUT_RING);
+    var r2 = confirm("run shell", b);
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(r2, 0, "an object that is not valid UTF-8 is refused (100 stray 0xA0 hid the payload on the card)");
+    assert_eq(_test_ask_calls, 0, "...never posed");
+    assert(_t_ag_feed_plain_count("not valid UTF-8") >= 1, "...and the refusal says why");
+    _test_ask_calls = 0;
+    out_mode_set(OUT_NULL);
+    assert_eq(confirm("run shell", "echo café — ☕ ok"), 1, "well-formed multibyte text is posed as ever");
+    out_mode_set(OUT_FD1);
+    ask_hook_set(sv_hook); confirm_no_tty_set(sv_notty); _log_enabled = sv_log;
+    grants_clear();
+    feed_init();
+    return 0;
+}
+
+# test_confirm_blank_evasion (0.52.8, audit D3): a codepoint that draws nothing does not end a run of blanks, the Hangul
+# fillers count as blanks, and a bidi control is refused — the blank-run rule was evaded by a zero-width U+200C every
+# 63 spaces (945 adjacent blank columns inside the size limit), and a run of U+115F was not counted at all.
+fn _tcb_cps(dst, off, b0, b1, b2, count) {
+    var i = 0;
+    while (i < count) { store8(dst + off, b0); store8(dst + off + 1, b1); store8(dst + off + 2, b2); off = off + 3; i = i + 1; }
+    return off;
+}
+fn test_confirm_blank_evasion() {
+    test_group("zero-width breakers, wide fillers and bidi controls cannot hide part of an action (gate.cyr, 0.52.8)");
+    var sv_hook = _ask_hook; var sv_notty = _confirm_no_tty; var sv_log = _log_enabled;
+    _log_enabled = 0;
+    grants_clear();
+    confirm_no_tty_set(1);
+    ask_hook_set(&_test_ask_hook_once);
+    out_mode_set(OUT_NULL);
+    var b = alloc(4096);
+    var o = _append_cstr_cap(b, 0, 4096, "echo build-ok");
+    var r = 0;
+    while (r < 3) { o = _t_fill(b, o, 32, 63); o = _tcb_cps(b, o, 0xE2, 0x80, 0x8C, 1); r = r + 1; }
+    o = _t_fill(b, o, 32, 11);
+    o = _append_cstr_cap(b, o, 4096, "; touch PWNED");
+    store8(b + o, 0);
+    _test_ask_calls = 0;
+    assert_eq(confirm("run shell", b), 0, "spaces broken by U+200C every 63 are still one run (refused; it was posed, 0.52.7)");
+    assert_eq(_test_ask_calls, 0, "...never posed");
+    o = _append_cstr_cap(b, 0, 4096, "echo a");
+    r = 0;
+    while (r < 15) { o = _t_fill(b, o, 32, 63); o = _tcb_cps(b, o, 0xE2, 0x81, 0xA0, 1); r = r + 1; }
+    o = _append_cstr_cap(b, o, 4096, "; rm x");
+    store8(b + o, 0);
+    assert_eq(confirm("run shell", b), 0, "...and by U+2060, the word joiner");
+    o = _append_cstr_cap(b, 0, 4096, "echo a");
+    r = 0;
+    while (r < 3) { o = _t_fill(b, o, 32, 63); o = _tcb_cps(b, o, 0xEF, 0xBB, 0xBF, 1); r = r + 1; }
+    o = _append_cstr_cap(b, o, 4096, "; rm x");
+    store8(b + o, 0);
+    assert_eq(confirm("run shell", b), 0, "...and by U+FEFF, the byte-order mark");
+    o = _append_cstr_cap(b, 0, 4096, "echo a");
+    o = _tcb_cps(b, o, 0xE1, 0x85, 0x9F, CONFIRM_BLANK_RUN);
+    o = _append_cstr_cap(b, o, 4096, "; rm x");
+    store8(b + o, 0);
+    assert_eq(confirm("run shell", b), 0, "a run of U+115F, a wide Hangul filler, is counted as blanks");
+    o = _append_cstr_cap(b, 0, 4096, "echo safe ");
+    o = _tcb_cps(b, o, 0xE2, 0x80, 0xAE, 1);
+    o = _append_cstr_cap(b, o, 4096, "txt.exe; rm -rf x");
+    store8(b + o, 0);
+    feed_init(); out_mode_set(OUT_RING);
+    var rb = confirm("run shell", b);
+    feed_flush_pending(); out_mode_set(OUT_NULL);
+    assert_eq(rb, 0, "a right-to-left override is refused: it shows the action in a different order than it runs");
+    assert(_t_ag_feed_plain_count("bidirectional control") >= 1, "...and the refusal says why");
+    _test_ask_calls = 0;
+    assert_eq(confirm("run shell", "echo \xe2\x9d\xa4\xef\xb8\x8f \xf0\x9f\x91\xa8\xe2\x80\x8d\xf0\x9f\x91\xa9"), 1, "an emoji with a variation selector and a joiner is posed as ever");
+    o = _append_cstr_cap(b, 0, 4096, "printf 'a");
+    o = _t_fill(b, o, 32, CONFIRM_BLANK_RUN - 1);
+    o = _tcb_cps(b, o, 0xE2, 0x80, 0x8D, 1);
+    o = _append_cstr_cap(b, o, 4096, "b'");
+    store8(b + o, 0);
+    assert_eq(confirm("run shell", b), 1, "a run just under the limit followed by a joiner and ink is posed (indentation is ordinary)");
+    out_mode_set(OUT_FD1);
+    ask_hook_set(sv_hook); confirm_no_tty_set(sv_notty); _log_enabled = sv_log;
+    grants_clear();
+    feed_init();
+    return 0;
+}
+
+# test_finish_every_surface (0.52.8, audits A2 + A3 + A5 + A12): how the provider ENDED a turn reaches every surface, in
+# the same words. 0.52.7 printed its note through ui_emit / oprintln, a discard under the OUT_NULL one-shot and the
+# window run their turns in; the plain blocking path printed nothing for an empty refusal; a delegated child's round
+# never read its finish; and the cut note advised raising a ceiling already at the top.
+fn _tfe_note_stderr(buf, cap) {
+    var pb[64];
+    var po = _append_cstr_cap(&pb, 0, 64, "/tmp/thoth_t_finish_err_");
+    po = _append_int_cap(&pb, po, 64, sys_getpid());
+    store8(&pb + po, 0);
+    var n = 0;
+    var efd = file_open(&pb, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    if (efd >= 0) {
+        var save2 = 201;
+        if (sys_dup2(2, save2) == save2) {
+            sys_dup2(efd, 2);
+            out_mode_set(OUT_NULL);
+            hoosh_finish_note();
+            out_mode_set(OUT_FD1);
+            sys_dup2(save2, 2);
+            file_close(save2);
+        }
+        file_close(efd);
+        n = file_read_all(&pb, buf, cap - 1);
+        if (n < 0) { n = 0; }
+        store8(buf + n, 0);
+    }
+    xunlink(&pb);
+    return n;
+}
+fn test_finish_every_surface() {
+    test_group("how the provider ended a turn reaches every surface, in the same words (0.52.8)");
+    var sv_mt = _cfg_hoosh_max_tokens; var sv_log = _log_enabled;
+    _log_enabled = 0;
+    var eb = alloc(1024);
+    _cfg_hoosh_max_tokens = 4096;
+    _hoosh_finish = HOOSH_FIN_LENGTH;
+    var en = _tfe_note_stderr(eb, 1024);
+    assert_eq(_t_count_sub(eb, en, "reply cut short", 15), 1, "under OUT_NULL a cut reply is named on stderr (it was discarded, 0.52.7)");
+    assert_eq(_t_count_sub(eb, en, "max_tokens 4096", 15), 1, "...with the number");
+    assert_eq(_t_count_sub(eb, en, "raise [hoosh].max_tokens", 24), 1, "...and, below the ceiling, the remedy");
+    _hoosh_finish = HOOSH_FIN_FILTER;
+    en = _tfe_note_stderr(eb, 1024);
+    assert_eq(_t_count_sub(eb, en, "the model declined this request", 31), 1, "a refusal is named on stderr too");
+    _cfg_hoosh_max_tokens = HOOSH_MAX_TOKENS_CEILING;
+    _hoosh_finish = HOOSH_FIN_LENGTH;
+    var se = hoosh_finish_sentence();
+    assert_eq(_ui_contains(se, "the most thoth asks for"), 1, "at the ceiling the note says it is the ceiling");
+    assert_eq(_ui_contains(se, "raise [hoosh].max_tokens"), 0, "...and does not advise raising it (it did, 0.52.7)");
+    assert_eq(_ui_contains(se, "context window"), 1, "a filled context window is named as the other cause");
+    _cfg_hoosh_max_tokens = sv_mt;
+    var jb = alloc(2048);
+    var jl = oneshot_json_envelope(jb, 2048, "partial", 7, 1);
+    assert_eq(_t_count_sub(jb, jl, "\"finish_reason\":\"length\"", 24), 1, "--json carries finish_reason (a cut reply read as complete, 0.52.7)");
+    _hoosh_finish = HOOSH_FIN_NONE;
+    jl = oneshot_json_envelope(jb, 2048, "hi", 2, 1);
+    assert_eq(_t_count_sub(jb, jl, "finish_reason", 13), 0, "...and omits it when the gateway sent none");
+    assert_eq(_ui_contains(ev_fail_text_f(0, 0, "content_filter"), "declined"), 1, "a refusal is not 'no completion returned'");
+    assert_eq(_ui_contains(ev_fail_text_f(0, 0, "length"), "cut short"), 1, "...nor is a cut with no text");
+    assert_eq(_ui_contains(ev_fail_text_f(0 - 1, 0, "length"), "unreachable"), 1, "a transport failure stays a transport failure");
+    _hoosh_acc_reset();
+    var body = "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"content_filter\"}]}";
+    feed_init(); out_mode_set(OUT_RING);
+    var rc = _hoosh_blocking_show(body, strlen(body));
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(rc, 0, "an empty refusal on the blocking path is an answer (rc 0)");
+    assert(_t_ag_feed_plain_count("the model declined this request") >= 1, "...and it is named (the line REPL printed nothing, 0.52.7)");
+    _hoosh_acc_reset();
+    _hoosh_finish = HOOSH_FIN_NONE;
+    _sub_alloc();
+    var cb = "{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"partial\"},\"finish_reason\":\"length\"}]}";
+    _sub_iter_parse(cb, strlen(cb));
+    assert_eq(hoosh_finish(), HOOSH_FIN_LENGTH, "a delegated child's round reads its finish (it never did, 0.52.7)");
+    _append_cstr_cap(_sub_answer, 0, SUB_ANSWER_CAP, "partial");
+    store8(_sub_answer + 7, 0);
+    feed_init(); out_mode_set(OUT_RING);
+    var mk = _sub_mark_short();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(mk, 1, "a cut child answer is marked");
+    assert_eq(_ui_contains(_sub_answer, "[cut short at the output ceiling: may be incomplete]"), 1, "...for the parent model, which read it as complete");
+    assert(_t_ag_feed_plain_count("reply cut short") >= 1, "...and named for the operator");
+    _hoosh_finish = HOOSH_FIN_NONE;
+    _hoosh_acc_reset();
+    _ag_reset();
+    _log_enabled = sv_log;
+    feed_init();
+    return 0;
+}
+
+# test_par_post_tool_whole (0.52.8, audits E3 + E9): the parallel executor's post_tool gets what the serial one does — the
+# FULL name and arguments, cut and flagged by the hook layer itself. Its slot copies (255 / 16383 bytes) reached the hook
+# with no THOTH_TOOL_TRUNCATED and no THOTH_ARGS_TRUNCATED; and a cut at 255 bytes could end inside a UTF-8 character.
+fn _tpp_calls2(nm, ar) {
+    var cap = 4 * (strlen(nm) + strlen(ar)) + 512;
+    var b = alloc(cap);
+    var o = _append_cstr_cap(b, 0, cap, "[{\"id\":\"a\",\"function\":{\"name\":\"");
+    o = _append_cstr_cap(b, o, cap, nm);
+    o = _append_cstr_cap(b, o, cap, "\",\"arguments\":\"");
+    o = _append_cstr_cap(b, o, cap, ar);
+    o = _append_cstr_cap(b, o, cap, "\"}},{\"id\":\"b\",\"function\":{\"name\":\"");
+    o = _append_cstr_cap(b, o, cap, nm);
+    o = _append_cstr_cap(b, o, cap, "\",\"arguments\":\"");
+    o = _append_cstr_cap(b, o, cap, ar);
+    o = _append_cstr_cap(b, o, cap, "\"}}]");
+    store8(b + o, 0);
+    return b;
+}
+fn _tpp_fill(n, ch) {
+    var p = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(p + i, ch); i = i + 1; }
+    store8(p + n, 0);
+    return p;
+}
+fn _tpp_read(path) {
+    var b = alloc(4096);
+    var n = file_read_all(path, b, 4095);
+    if (n < 0) { n = 0; }
+    store8(b + n, 0);
+    return b;
+}
+fn test_par_post_tool_whole() {
+    test_group("the parallel executor's post_tool gets the full call, cut and flagged by the hook layer (agent.cyr, 0.52.8)");
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    var sv_daimon = _cfg_daimon_url; var sv_post = _cfg_hook_post_tool; var sv_pre = _cfg_hook_pre_tool;
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    _cfg_hook_pre_tool = 0;
+    _cfg_hook_post_tool = "if test \"$THOTH_TOOL_TRUNCATED\" = 1; then echo T >> build/.thoth_t_par_post; else echo t >> build/.thoth_t_par_post; fi; echo ${#THOTH_ARGS}:$THOTH_ARGS_TRUNCATED >> build/.thoth_t_par_post";
+    var pj = _tpp_calls2(_tpp_fill(300, 0x6e), _tpp_fill(17000, 0x78));
+    var pv = bayan_json_v_parse_buf(pj, strlen(pj));
+    assert_eq(agent_tc_count(pv), 2, "premise: two calls, a 300-byte name and 17,000 bytes of arguments each");
+    xunlink("build/.thoth_t_par_post");
+    _agent_work_reset();
+    _agent_run_calls_serial(pv, 2);
+    var s1 = _tpp_read("build/.thoth_t_par_post");
+    xunlink("build/.thoth_t_par_post");
+    _agent_work_reset();
+    _agent_run_calls_par(pv, 2);
+    var p1 = _tpp_read("build/.thoth_t_par_post");
+    xunlink("build/.thoth_t_par_post");
+    assert_eq(streq(s1, "T\n17000:\nT\n17000:\n"), 1, "premise: the serial post_tool sees the name flagged and the arguments whole");
+    assert_eq(streq(p1, s1), 1, "the parallel post_tool sees the same (its slot copies arrived cut, unflagged, 0.52.7)");
+    _cfg_hook_post_tool = "true";
+    var e = alloc(301);
+    var i = 0;
+    while (i < 300) { store8(e + i, 0xC3); store8(e + i + 1, 0xA9); i = i + 2; }
+    store8(e + 300, 0);
+    hooks_post_tool(e, "{}");
+    var tv = load64(&_hook_envp + 8);
+    assert_eq(cstr_starts_with(tv, "THOTH_TOOL="), 1, "premise: envp[1] is THOTH_TOOL");
+    var last = load8(tv + strlen(tv) - 1) & 255;
+    assert_eq(((last & 0xC0) == 0xC0), 0, "THOTH_TOOL cut at 255 bytes ends on a whole character (a dangling 0xC3, 0.52.7)");
+    _cfg_daimon_url = sv_daimon; _cfg_hook_post_tool = sv_post; _cfg_hook_pre_tool = sv_pre;
+    out_mode_set(sv_mode); feed_init();
+    hooks_reset();
+    return 0;
+}
+
+# test_par_stop_closes_taken (0.52.8, audit E8): a stop in the parallel gate phase CLOSES the calls already taken. A call
+# that had its tool_call event, its pre_tool hook and a gate allow was dropped with no post_tool and no tool_result.
+var _tps_fired = 0;
+fn _tps_stop_after_pre() {
+    if ((_tps_fired == 0) && (file_exists("build/.thoth_t_par_pre") == 1)) { _tps_fired = 1; intr_signal(); }
+    return 0;
+}
+fn test_par_stop_closes_taken() {
+    test_group("a stop in the parallel gate phase closes the calls it already took (agent.cyr, 0.52.8)");
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    var sv_daimon = _cfg_daimon_url; var sv_pre = _cfg_hook_pre_tool; var sv_post = _cfg_hook_post_tool;
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    _cfg_hook_pre_tool = "echo $THOTH_TOOL >> build/.thoth_t_par_pre";
+    _cfg_hook_post_tool = "echo $THOTH_TOOL >> build/.thoth_t_par_post2";
+    var sv_tron = _gate_tron;
+    var tg = tron_new(tron_config_default());
+    tron_load_policy(tg, "[agent.\"thoth\"]\nallow = [\"*\"]\n");
+    _gate_tron = tg;
+    var pj = _tg_calls_json("t_one", "t_two");
+    var pv = bayan_json_v_parse_buf(pj, strlen(pj));
+    xunlink("build/.thoth_t_par_pre"); xunlink("build/.thoth_t_par_post2"); xunlink("build/.thoth_t_par_ev");
+    intr_reset(); _tps_fired = 0; intr_check_hook_set(&_tps_stop_after_pre);
+    _agent_work_reset(); store8(_agent_work, 0);
+    events_enable(); _t_fd1_to("build/.thoth_t_par_ev");
+    _agent_run_calls_par(pv, 2);
+    _t_fd1_restore(); events_disable();
+    intr_check_hook_set(0); intr_reset();
+    var pp = _tpp_read("build/.thoth_t_par_pre"); var po = _tpp_read("build/.thoth_t_par_post2");
+    var ev = _tpp_read("build/.thoth_t_par_ev");
+    assert_eq(streq(pp, "t_one\n"), 1, "premise: the stop landed after call 1's pre_tool, before call 2 was taken");
+    assert_eq(streq(po, pp), 1, "every call whose pre_tool fired gets its post_tool (it got none, 0.52.7)");
+    assert_eq(_t_count_sub(ev, strlen(ev), "\"event\":\"tool_call\"", 19), _t_count_sub(ev, strlen(ev), "\"event\":\"tool_result\"", 21), "...and every tool_call event its tool_result");
+    assert(_t_count_sub(_agent_work, _agent_work_len, "not run", 7) >= 1, "...and the model is told the call was not run");
+    xunlink("build/.thoth_t_par_pre"); xunlink("build/.thoth_t_par_post2"); xunlink("build/.thoth_t_par_ev");
+    _cfg_daimon_url = sv_daimon; _cfg_hook_pre_tool = sv_pre; _cfg_hook_post_tool = sv_post; _gate_tron = sv_tron;
+    out_mode_set(sv_mode); feed_init();
+    hooks_reset();
+    return 0;
+}
+
+# test_confirm_fit_void (0.52.8, audit B1): on the terminal path an answer counts only while the screen still holds the
+# question — the bracket's fit hook, asked after the answer, voids a `y` given on a screen that shrank meanwhile.
+var _tcf_fit_v = 1;
+fn _tcf_begin() { return 1; }
+fn _tcf_end() { return 0; }
+fn _tcf_fit() { return _tcf_fit_v; }
+fn _tcf_answer_y() { store8(&_rl_buf, 121); store8(&_rl_buf + 1, 10); _rl_len = 2; _rl_pos = 0; return 0; }
+fn test_confirm_fit_void() {
+    test_group("a yes given while the screen shrank under the question is void (gate.cyr, 0.52.8)");
+    var sv_notty = _confirm_no_tty; var sv_log = _log_enabled; var sv_b = _confirm_begin_fn; var sv_e = _confirm_end_fn;
+    _log_enabled = 0;
+    grants_clear();
+    confirm_no_tty_set(0);
+    confirm_hooks_set(&_tcf_begin, &_tcf_end);
+    confirm_fit_hook_set(&_tcf_fit);
+    feed_init(); out_mode_set(OUT_RING);
+    _tcf_fit_v = 1; _tcf_answer_y();
+    var r1 = confirm("run shell", "echo ok");
+    _tcf_fit_v = 0; _tcf_answer_y();
+    var r2 = confirm("run shell", "echo ok");
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(r1, 1, "premise: a y on a screen that still holds the question authorizes");
+    assert_eq(r2, 0, "a y given after the screen shrank under the question is VOID");
+    assert(_t_ag_feed_plain_count("the terminal shrank while it was asked") >= 1, "...and the refusal says why");
+    confirm_fit_hook_set(0);
+    confirm_hooks_set(sv_b, sv_e);
+    confirm_no_tty_set(sv_notty);
+    _rl_len = 0; _rl_pos = 0;
+    _log_enabled = sv_log;
+    feed_init();
+    return 0;
+}
+
 # 0.52.6 (audits C1 + F1): an action that cannot be shown WHOLE is refused on every surface — never posed cut. The
 # reproduced chain: `echo build-ok` + ~2,100 spaces + `; touch …` read `authorize run shell echo build-ok`, and `y` ran
 # the payload. Driven through the real confirm with a front end that would answer yes.

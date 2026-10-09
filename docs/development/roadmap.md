@@ -116,10 +116,17 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 12 → 0.52.8
+### Repair batch 13 → 0.52.9
 
-Nothing pinned: no thoth-owned defect is known, and the design questions awaiting a ruling sit in
-[`gap-review.md`](gap-review.md). The toolchain stays on cyrius **6.6.6** — no refresh is scheduled.
+Two window defects, both older than 0.52.8, found while driving it live. The design questions awaiting a ruling sit
+in [`gap-review.md`](gap-review.md). The toolchain stays on cyrius **6.6.6** — no refresh is scheduled.
+
+1. **A command card clips each line at its width, with no wrap and no mark** (`gcmd_build`, since 0.46.0). A long
+   `/run` output line loses its tail, and so does a refusal's reason when stray bytes push it right. The TUI wraps
+   the same lines.
+2. **A turn that ends with no text drops its prompt from the window's feed** (the agent pops it from the history,
+   so a refused prompt is not resent). The notice then stands under the previous answer and names no prompt. The
+   TUI keeps the typed line above its note.
 
 ### Next steps — follow-ups awaiting the maintainer
 
@@ -128,21 +135,20 @@ Ordered by what unblocks the most. None is pinned to a version until it is decid
 1. **The AGNOS follow-up** (deferred together, by the maintainer's call). A current `hoosh_agnos` build (hoosh has
    none in CI or `scripts/`; the one on disk downstream is 2.4.11) for gate 1 rung 2, and the ring-3 smoke re-run
    that each release carries (`scripts/agnos-run.sh`; its stamp lives in `state.md`'s Targets row).
-2. **Model choice in the other consumers** — to discuss before anyone edits them. They still pick or list models
-   themselves instead of asking hoosh's catalog:
-   - **secureyeoman** keeps its own catalog, pricing and context tables (TypeScript `model-registry.ts`,
-     `cost-calculator.ts`, `context-compactor.ts`), plus Rust defaults in `sy-core`. Its `HooshDelegate` falls back
-     to `gpt-4o`. About a dozen internal tasks hardcode `claude-haiku-3-5-20241022`, which is not an Anthropic id.
-   - **agnosai** (and **agnostic**, which links it) sends `llama3:70b` / `llama3:405b` to hoosh when an agent sets
-     no `llm_model` (`_agnosai_crew_select_model`), and its README's `"llm_model": "capable"` is sent literally.
-   Each can read hoosh's `/v1/models/catalog` the way thoth does.
-3. **Pricing a turn from the gateway** (gap-review question 6) — whether the tally may use hoosh's per-model price
+2. **Pricing a turn from the gateway** (gap-review question 6) — whether the tally may use hoosh's per-model price
    or its per-response `cost_micro_usd` when `[pricing]` names no rate. Today the picker shows the gateway's price
    and the tally ignores it.
+3. **secureyeoman's model choice** — left until its port is further along, by the maintainer's call: spot fixes are
+   not worth making first. It keeps its own catalog, pricing and context tables (TypeScript `model-registry.ts`,
+   `cost-calculator.ts`, `context-compactor.ts`), plus Rust defaults in `sy-core`. Its `HooshDelegate` falls back to
+   `gpt-4o`, and about a dozen internal tasks hardcode `claude-haiku-3-5-20241022`, which is not an Anthropic id. The
+   port should read hoosh's `/v1/models/catalog` the way thoth does, and its chat surface comes to thoth anyway (see
+   the context note under *Feature arcs*). agnosai and agnostic carry their halves on their own roadmaps: agnosai's
+   B33 (crews choose and attribute models from the catalog) and agnostic's M9 model picker, which waits on B33.
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each row carries the version it was last checked against (every row re-read 2026-10-09 against hoosh 2.8.0, daimon
+Each row carries the version it was last checked against (every row re-read 2026-10-09 against hoosh 2.8.1, daimon
 2.4.3, sit 1.6.2, t-ron 2.1.11, bote 3.3.16, darshana 1.1.2, cyrius 6.6.6, agnos 1.57.10, gnoboot 0.7.2 and bhava
 2.0.0). A release re-checks the list; a closed item becomes a re-vendor patch with a line-anchored needle in
 `tests/cases/vendor.cyr`. bote 3.3.16 and libro 2.10.6 are tagged (thoth vendors 3.3.13 / 2.10.3), but both pin
@@ -150,19 +156,20 @@ cyrius 6.6.14, so they wait with the 6.6.6 pin.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.8.0 has no agnos build in its CI or scripts) — gate 1 rung 2; `daimon-agnos` 2.4.3 is ready beside it. Deferred with the AGNOS follow-up (next steps, item 1) | hoosh **2.8.0** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
+| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.8.1 has no agnos build in its CI or scripts) — gate 1 rung 2; `daimon-agnos` 2.4.3 is ready beside it. Deferred with the AGNOS follow-up (next steps, item 1) | hoosh **2.8.1** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
 | **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:12`; daimon's roadmap puts caller auth at 2.5.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:134-142`) | daimon **2.4.3** | done — thoth's own pin store (ADR-0022) is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
 | **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" — on a clean tree, every executable script (`_blob_differs_from_file` calls an unreadable side "differs", `src/api.cyr:146`) | sit **1.6.2** (vendored 1.6.2) | none — `git_probe` copies sit's vec; fix is sit's comparator |
-| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:490`) and a plain `{role,content}` passes through verbatim (`:506`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.8.0** | none yet — thoth sends text only |
-| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.8.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
-| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.8.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
-| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.8.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
+| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:490`) and a plain `{role,content}` passes through verbatim (`:506`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.8.1** | none yet — thoth sends text only |
+| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.8.1** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
+| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.8.1** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
+| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.8.1** | none — thoth prices from `[pricing]`, which has no cache rate either |
 | **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a ring of deny events overruns it from ~185-byte tool names (one event alone from ~199), and a `"` in a name (which `tron_is_safe_identifier`, `gate.cyr:66`, admits) makes the export invalid JSON; and `_audit_details` (`:12`) allocates `tool + 256` but writes `2 · tool + agent + 90..93` on a deny, from a ~159-byte name. The artifact is a SECURITY record | t-ron **2.1.11** (vendored 2.1.11) | done — while t-ron is bound, `gate_name_fit` refuses a name longer than t-ron's audit buffers hold (`GATE_TRON_NAME_ROOM`, 163 bytes less the agent id) or holding a quote, backslash, control or non-ASCII byte, before `tron_check`; `test_gate_name_fit` fails if a t-ron sync moves the boundary |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the three `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.6.2's `[lib.read]` still defines `cmd_reset` and leaves the three unresolved (by sit's design, `cyrius.cyml:62-64`); bote 3.3.13 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.1.2** (vendored 1.1.2) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
 | **t-ron / sit / cyrius** | the Windows lane's vendored gaps: t-ron's SIGHUP policy hot-reload (`SIGHUP` / `SIG_BLOCK`, zero thoth callers), sit's `sf_rmdir` calling `sys_rmdir`, which the PE floor still does not define (6.6.6 routes `RemoveDirectoryW`, but only through the portable `xrmdir`, `lib/io.cyr:162` — sit's own comment expects to fold onto it), and a spawn that carries an environment BLOCK (the PE capture inherits; `[hooks]` reports "could not run" and a `pre_tool` denies) | t-ron 2.1.11 · sit 1.6.2 · cyrius **6.6.6** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:295` and AGNOS `syscalls_x86_64_agnos.cyr:705`; 6.6.6's `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.6.6** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:248`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.6.6** (`fs.cyr` unchanged) | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
+| **cyrius (floor)** | `exec_vec` (`lib/process.cyr:315`) forks and execs with only the parent-death guard, so its child keeps every signal disposition and mask thoth has. thoth adds none in line mode, but it passes on what its own launcher ignored: Python and Node ignore `SIGPIPE` and `SIGXFSZ`, and a launch that does not restore them reaches the line REPL's `/run` (`run_shell`, `src/exec.cyr:14`, the only thoth caller). Measured from a `pty.fork` launch: `/run yes \| head -1` printed "yes: standard output: Broken pipe". The capture child (`/run` in the TUI and the window, the `shell` tool, hooks, `[verify]`) resets both itself since 0.52.8. The ask is a floor spawn that restores default dispositions and an empty mask in the child | cyrius **6.6.6** | none yet — if the floor declines, `run_shell` takes its own POSIX fork with the capture child's reset (it cannot take the supervisor: it shares the terminal and process group for job control and password prompts) |
 | **cyrius (floor)** | `is_symlink` returns 0 on Windows (`lib/fs.cyr:433`), so the jail's symlink walk (audit A-1) and the toolpin store's link refusal are no-ops there — **the PE lane must not ship without revisiting it**; at 6.6.6 a PE `O_CREAT \| O_EXCL` create also follows a final symlink | cyrius **6.6.6** | the lane is closed anyway (architectural, below) |
 | **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.9) | degrades honestly; a candidate filing if the ABI gains a mode channel |
 | **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make the smoke's boot intermittent (up to 2 of 3 boots have died before the kernel). The smoke stages `gnoboot/build/BOOTX64.EFI` (built 2026-09-11, before the 0.7.2 commits; its banner still reads v0.7.1) | gnoboot **0.7.2** | done — `scripts/agnos-run.sh` classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |

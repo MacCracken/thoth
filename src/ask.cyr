@@ -32,7 +32,7 @@
 # because the failure mode here is not privilege, it is pestering: a model that asks eight questions per
 # round has made the session unusable, and no authorization policy expresses "stop bothering me".
 
-var ASK_Q_CAP = 1024;         # sanitised question text
+var ASK_Q_CAP = 2048;         # sanitised question text (0.52.8, audit D1: 1024 cut the gate's longest authorization question)
 var ASK_OPT_MAX = 6;          # suggested answers offered; more than this stops being a menu
 var ASK_OPT_CAP = 128;        # one suggested answer
 var ASK_ANS_CAP = 2048;       # the operator's reply, free text
@@ -209,6 +209,7 @@ fn ask_can_reach() { return _ask_surface_ok(); }
 fn ask_pose(q, o0, o1, o2) {
     if (_ask_alloc() == 0) { return 0; }
     if (_ask_surface_ok() == 0) { return 0; }
+    if (strlen(q) >= ASK_Q_CAP) { return 0; }     # 0.52.8 (audit D1): an authorization question that cannot be held whole is not posed
     _ask_authz = 1;
     _ask_copy_clean(_ask_q, ASK_Q_CAP, q);
     _ask_nopt = 0;

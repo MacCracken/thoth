@@ -78,12 +78,14 @@ include "src/tui.cyr"
 
 include "tests/cases/testutil.cyr"
 include "tests/cases/agent.cyr"
+include "tests/cases/proc.cyr"     # 0.52.8: a capture's process tree (the supervisor) + what its command inherits
 
 fn main() {
     alloc_init();
     out_ring_sink_set(&feed_write);
     test_shell();
     test_wait_poll();             # 0.52.0 (F7): the surface's wait poll stops a running command
+    test_proc_capture();          # 0.52.8: the supervisor (a killed thoth leaves no orphans), the inherited signal state + fds
     test_agent();
     test_upstream_err_sanitise();
     test_daimon();
@@ -103,6 +105,12 @@ fn main() {
     test_ask_user();
     test_confirm_modal_grant();   # 0.46.0: the modal's session-grant answer + SF_GRANTS
     test_confirm_whole_action();  # 0.52.6: an action that cannot be shown whole is refused (audits C1 + F1)
+    test_confirm_fit_void();      # 0.52.8: a yes given while the screen shrank under the question is void (audit B1)
+    test_confirm_modal_whole();   # 0.52.8: the modal's question holds the whole action; malformed text is not posed (audits D1, D2, G1)
+    test_confirm_blank_evasion(); # 0.52.8: zero-width breakers, wide fillers, bidi controls (audit D3)
+    test_finish_every_surface();  # 0.52.8: the finish note on every surface (audits A2, A3, A5, A12)
+    test_par_post_tool_whole();   # 0.52.8: the parallel post_tool gets the full call (audits E3, E9)
+    test_par_stop_closes_taken(); # 0.52.8: a phase-1 stop closes the calls it took (audit E8)
     return assert_summary();
 }
 var _e = main();

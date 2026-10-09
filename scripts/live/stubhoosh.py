@@ -7,9 +7,13 @@ it answers ONLY the prompts below, so a live check exercises thoth's own surface
 OpenAI-shaped /v1/chat/completions — SSE when the request says "stream": true, else one JSON body — plus
 GET /v1/models (one model: stub-model) and GET /v1/health. The LAST user message picks the reply:
   run: <cmd>     one `shell` tool call running <cmd>; once a tool result follows it, the reply is "done"
+  slowrun: <cmd> the same tool call, sent after a 2 s pause (a turn to resize the terminal in)
   think: <x>     reasoning_content, then content "answer about <x>"
   slow: <x>      60 short content deltas 0.5 s apart (a stream to stop, or to close the window on)
   md             a markdown reply (heading, bold, inline code, a list, a fenced block, a table, a quote)
+  cut: <x>       content "partial answer about <x>", then finish_reason "length" (the output ceiling)
+  thinkcut: <x>  reasoning_content only, then finish_reason "length" with no content (cut while thinking)
+  refuse         no content, finish_reason "content_filter" (a provider's safety refusal, as hoosh 2.8.0 maps it)
   anything else  "hello from stub"
 Each request is logged to stdout: path, stream, message count, the chosen reply.
 """
@@ -34,8 +38,17 @@ def plan(msgs):
         text = " ".join(p.get("text", "") for p in text if isinstance(p, dict))
     if any(m.get("role") == "tool" for m in tail):
         return "text", None, "done"
+    if "slowrun:" in text:
+        return "slowtool", None, text.split("slowrun:", 1)[1].strip()
     if "run:" in text:
         return "tool", None, text.split("run:", 1)[1].strip()
+    if "thinkcut:" in text:
+        x = text.split("thinkcut:", 1)[1].strip()
+        return "cut", "pondering %s at length, and still pondering when the ceiling arrives" % x, ""
+    if "cut:" in text:
+        return "cut", None, "partial answer about " + text.split("cut:", 1)[1].strip()
+    if text.strip() == "refuse":
+        return "refuse", None, ""
     if "think:" in text:
         x = text.split("think:", 1)[1].strip()
         return "text", "pondering %s: first consider the premise, then weigh it, then conclude." % x, "answer about " + x
@@ -74,6 +87,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         stream = bool(body.get("stream"))
         kind, reasoning, arg = plan(msgs)
         print("POST", self.path, "stream", stream, "msgs", len(msgs), "reply", kind, flush=True)
+        if kind == "slowtool":
+            time.sleep(2)
+            kind = "tool"
+        finish_word = {"cut": "length", "refuse": "content_filter"}.get(kind, "stop")
         if not stream:
             if kind == "tool":
                 msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function",
@@ -81,7 +98,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 finish = "tool_calls"
             else:
                 msg = {"role": "assistant", "content": "slow reply (not streamed)" if kind == "slow" else arg}
-                finish = "stop"
+                finish = finish_word
                 if reasoning:
                     msg["reasoning_content"] = reasoning
             return self._json(200, {"id": "c1", "object": "chat.completion", "model": "stub-model",
@@ -119,7 +136,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 for k in range(0, len(arg), 16):
                     event({"content": arg[k:k + 16]})
                     time.sleep(0.02)
-                event({}, "stop")
+                event({}, finish_word)
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):

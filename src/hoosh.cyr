@@ -335,14 +335,20 @@ fn _append_int_cap(dst, off, cap, n) {
 fn _hoosh_max_tokens() {
     var op = config_hoosh_max_tokens();
     if (op > 0) { return op; }
-    var lvl = config_hoosh_reasoning();
+    return _hoosh_effort_default(config_hoosh_reasoning());
+}
+# _hoosh_effort_default (0.52.8): the output ceiling a reasoning level asks for when [hoosh].max_tokens is unset — also
+# the base a local layer's max_tokens may only lower (config_load, ruling R1). Any level at all reasons (16384).
+fn _hoosh_effort_default(lvl) {
     if (lvl >= 5) { return HOOSH_MAX_TOKENS_MAX; }
     if (lvl == 4) { return HOOSH_MAX_TOKENS_XHIGH; }
-    if (config_hoosh_reasoning_effort() != 0) { return HOOSH_MAX_TOKENS_REASONING; }
+    if (lvl >= 1) { return HOOSH_MAX_TOKENS_REASONING; }
     return HOOSH_MAX_TOKENS;
 }
 var HOOSH_MAX_TOKENS_XHIGH = 32768;
-var HOOSH_MAX_TOKENS_MAX = 65536;
+# 0.52.8 (A13): was 65536 — over the 64,000 the Claude 4.5 models take, so `reasoning = "max"` failed every request to
+# them with a 400 (measured 2026-10-09). 64,000 is within every current Claude model's ceiling.
+var HOOSH_MAX_TOKENS_MAX = 64000;
 
 fn _append_reasoning_effort(dst, off, cap) {
     var eff = config_hoosh_reasoning_effort();
@@ -854,6 +860,14 @@ fn _hoosh_clean_text(v) {
     clean_text_n(str_data(s), str_len(s));
     return s;
 }
+# _hoosh_clean_text_after (0.52.8, audit F3): _hoosh_clean_text for a STREAMED delta, judged after the text it continues
+# (`ctx`/`ctx_n`, the accumulator it is appended to) — see clean_text_n_after.
+fn _hoosh_clean_text_after(v, ctx, ctx_n) {
+    var s = bayan_json_v_str(v);
+    if (s == 0) { return 0; }
+    clean_text_n_after(str_data(s), str_len(s), ctx, ctx_n);
+    return s;
+}
 
 # hoosh_extract_content: parse an OpenAI-shaped response body and return the
 # assistant text as a Str (choices[0].message.content), or 0 if absent/wrong
@@ -909,8 +923,13 @@ fn hoosh_extract_error(body, body_len) {
 # `data` JSON array value (each element `{"id":"...","object":"model",...}`), or
 # 0 if absent/wrong shape. The caller iterates it with bayan_json_v_arr_*. Pure —
 # unit-tested. Shape consumed: {"object":"list","data":[{"id":"M"},...]}
-fn hoosh_extract_models(body, body_len) {
-    var v = bayan_json_v_parse_buf(body, body_len);
+fn hoosh_extract_models(body, body_len) { return hoosh_extract_models_a(0, body, body_len); }
+# hoosh_extract_models_a (0.52.8, audit A7): the same over allocator `a` (0 = the global heap) — the live fetches parse into
+# the catalog arena, so the tree lives until the next fetch resets it instead of for the life of the process.
+fn hoosh_extract_models_a(a, body, body_len) {
+    var v = 0;
+    if (a == 0) { v = bayan_json_v_parse_buf(body, body_len); }
+    else { v = bayan_json_v_parse_buf_a(a, body, body_len); }
     if (v == 0) { return 0; }
     var data = bayan_json_v_obj_get(v, "data");
     if (data == 0) { return 0; }
@@ -1017,23 +1036,64 @@ fn _hoosh_note_finish(v) {
 
 # hoosh_finish_note: the line a reply that did not end cleanly earns, on every surface (the feed carries it to the
 # TUI and the window). Silent for stop / tool_calls / none. Returns 1 when it printed.
+#
+# 0.52.8 (audit A2): through note_* — one-shot (and the window) run their turns under OUT_NULL, where ui_emit / oprintln
+# discard, so `thoth "…"` printed a cut reply as complete with nothing on stderr. (The window draws its own notice too,
+# _gpresent_submit.) (A12): `length` is also how hoosh reports a filled CONTEXT window, and hoosh 2.8.1 trims a request
+# to the model's own lower ceiling — so the line names both and no longer advises raising a ceiling already at the top.
 fn hoosh_finish_note() {
-    if (_hoosh_finish == HOOSH_FIN_LENGTH) {
-        ui_emit(ROLE_RED, "  reply cut short");
-        ui_emit(ROLE_FAINT, " — it reached the output ceiling (max_tokens "); ofmt_int(_hoosh_max_tokens());
-        ui_emit(ROLE_FAINT, "); raise [hoosh].max_tokens to let it finish");
-        oprintln("");
-        log_begin("reply_cut"); log_kv_int("max_tokens", _hoosh_max_tokens()); log_kv_int("turn", session_turns()); log_commit(SK_WARN);
-        return 1;
-    }
-    if (_hoosh_finish == HOOSH_FIN_FILTER) {
-        ui_emit(ROLE_RED, "  the model declined this request");
-        ui_emit(ROLE_FAINT, " — the provider stopped it with a safety refusal (finish_reason content_filter)");
-        oprintln("");
-        log_begin("reply_refused"); log_kv_int("turn", session_turns()); log_commit(SK_WARN);
-        return 1;
-    }
+    var lead = hoosh_finish_lead();
+    if (lead == 0) { return 0; }
+    note_emit_role(ROLE_RED, "  "); note_emit_role(ROLE_RED, lead);
+    note_emit_role(ROLE_FAINT, hoosh_finish_detail());
+    note_println("");
+    if (_hoosh_finish == HOOSH_FIN_LENGTH) { log_begin("reply_cut"); log_kv_int("max_tokens", _hoosh_max_tokens()); log_kv_int("turn", session_turns()); log_commit(SK_WARN); }
+    else { log_begin("reply_refused"); log_kv_int("turn", session_turns()); log_commit(SK_WARN); }
+    return 1;
+}
+# hoosh_finish_lead / hoosh_finish_detail / hoosh_finish_sentence (0.52.8): the note's words, composed in ONE place — the
+# TUI, the line REPL and one-shot print them (hoosh_finish_note), the window draws them (gfeed) — so no surface drifts.
+# The lead is 0 for stop / tool_calls / none.
+var HOOSH_FIN_TEXT_CAP = 320;
+var _hoosh_fin_detail = 0;
+var _hoosh_fin_sentence = 0;
+fn hoosh_finish_lead() {
+    if (_hoosh_finish == HOOSH_FIN_LENGTH) { return "reply cut short"; }
+    if (_hoosh_finish == HOOSH_FIN_FILTER) { return "the model declined this request"; }
     return 0;
+}
+fn hoosh_finish_detail() {
+    if (_hoosh_fin_detail == 0) { _hoosh_fin_detail = alloc(HOOSH_FIN_TEXT_CAP); }
+    var d = _hoosh_fin_detail;
+    var o = 0;
+    if (_hoosh_finish == HOOSH_FIN_LENGTH) {
+        o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, " — it reached its output ceiling (max_tokens ");
+        o = _append_int_cap(d, o, HOOSH_FIN_TEXT_CAP, _hoosh_max_tokens());
+        if (_hoosh_max_tokens() >= HOOSH_MAX_TOKENS_CEILING) {
+            o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, ", the most thoth asks for) or filled the model's context window");
+        } else {
+            o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, ", or the model's own lower limit) or filled its context window; raise [hoosh].max_tokens to let a long answer finish");
+        }
+    } elif (_hoosh_finish == HOOSH_FIN_FILTER) {
+        o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, " — the provider stopped it with a safety refusal (finish_reason content_filter)");
+    }
+    store8(d + o, 0);
+    return d;
+}
+fn hoosh_finish_sentence() {
+    var lead = hoosh_finish_lead();
+    if (lead == 0) { return 0; }
+    if (_hoosh_fin_sentence == 0) { _hoosh_fin_sentence = alloc(HOOSH_FIN_TEXT_CAP + 64); }
+    var o = _append_cstr_cap(_hoosh_fin_sentence, 0, HOOSH_FIN_TEXT_CAP + 64, lead);
+    o = _append_cstr_cap(_hoosh_fin_sentence, o, HOOSH_FIN_TEXT_CAP + 64, hoosh_finish_detail());
+    store8(_hoosh_fin_sentence + o, 0);
+    return _hoosh_fin_sentence;
+}
+# hoosh_finish_known (0.52.8): the finish word when the gateway sent one (hoosh 2.8.0+), else 0 — for the machine
+# channels (--json, --events), which omit a field they cannot fill rather than fake one (ADR-0010).
+fn hoosh_finish_known() {
+    if (_hoosh_finish == HOOSH_FIN_NONE) { return 0; }
+    return hoosh_finish_word(_hoosh_finish);
 }
 
 # hoosh_extract_usage: pull usage.total_tokens out of a response body (the blocking
@@ -1057,7 +1117,7 @@ fn hoosh_reachable() {
     var h = sandhi_headers_new();
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: fail fast — this runs before the first paint
+    var r = _hoosh_get_in(_hoosh_hp_arena_reset(), url, h, hoosh_probe_opts());   # 0.44.2: fail fast; 0.52.8: the health arena (256 KB a Ctrl-R otherwise)
     if (sandhi_http_err_kind(r) == SANDHI_OK) { return 1; }
     return 0;
 }
@@ -1103,13 +1163,14 @@ fn hoosh_list_models() {
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     ui_emit(ROLE_FAINT, "  -> hoosh "); oprintln(url);
-    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: fail fast — this runs before the first paint
+    var ca = _hoosh_cat_arena_reset();               # 0.52.8 (A7): the catalog arena, and the catalog's own cap
+    var r = _hoosh_get_in(ca, url, h, hoosh_catalog_opts());   # 0.44.2: fail fast — this runs before the first paint
     if (sandhi_http_err_kind(r) == SANDHI_OK) {
         if (sandhi_http_status(r) == 404) {
             url = _hoosh_models_url();
             var h2 = sandhi_headers_new();
             if (auth != 0) { sandhi_headers_set(h2, "Authorization", auth); }
-            r = sandhi_http_get_opts(url, h2, hoosh_probe_opts());
+            r = _hoosh_get_in(ca, url, h2, hoosh_catalog_opts());
         }
     }
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
@@ -1128,7 +1189,7 @@ fn hoosh_list_models() {
         if (em != 0) { emit("  "); _hoosh_print_str(em); }
         return status;
     }
-    var data = hoosh_extract_models(body, blen);
+    var data = hoosh_extract_models_a(ca, body, blen);
     if (data == 0) { oprintln("  hoosh: response received but no model list could be parsed."); return 0 - 1; }
     # 0.47.0: /v1/models lists PROVIDER kinds (id == owned_by == the kind name), so each row can carry the health
     # hoosh's prober reports for it — one more GET; omitted (not faked) when it fails
@@ -1270,6 +1331,7 @@ fn _hoosh_list_models_grouped(data, hk) {
     var provs[256];                                  # HOOSH_PROV_MAX cstr ptrs
     var np = 0;
     var over = 0;
+    var overv = 0;                                   # 0.52.8 (audit A9): the providers past the table, each counted ONCE
     var i = 0;
     while (i < n) {
         var p = _hoosh_entry_owner(bayan_json_v_arr_get(data, i));
@@ -1277,7 +1339,15 @@ fn _hoosh_list_models_grouped(data, hk) {
         var seen = 0;
         while (j < np) { if (streq(load64(&provs + j * 8), p) == 1) { seen = 1; } j = j + 1; }
         if (seen == 0) {
-            if (np < HOOSH_PROV_MAX) { store64(&provs + np * 8, p); np = np + 1; } else { over = over + 1; }
+            if (np < HOOSH_PROV_MAX) { store64(&provs + np * 8, p); np = np + 1; }
+            else {
+                # "(N more provider(s) ...)" counted every MODEL of a provider past the table, not the provider
+                if (overv == 0) { overv = vec_new(); }
+                var oj = 0;
+                var oseen = 0;
+                while (oj < vec_len(overv)) { if (streq(vec_get(overv, oj), p) == 1) { oseen = 1; } oj = oj + 1; }
+                if (oseen == 0) { vec_push(overv, p); over = over + 1; }
+            }
         }
         i = i + 1;
     }
@@ -1436,18 +1506,19 @@ fn hoosh_catalog_fetch() {
     var auth = _hoosh_auth_header();
     var h = sandhi_headers_new();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_get_opts(_hoosh_catalog_url(), h, hoosh_probe_opts());   # 0.44.2
+    var ca = _hoosh_cat_arena_reset();           # 0.52.8 (A7): the catalog arena, and the catalog's own cap
+    var r = _hoosh_get_in(ca, _hoosh_catalog_url(), h, hoosh_catalog_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
     var status = sandhi_http_status(r);
     if (status == 404) {                          # older gateway: fall back to the plain models list
         var h2 = sandhi_headers_new();
         if (auth != 0) { sandhi_headers_set(h2, "Authorization", auth); }
-        r = sandhi_http_get_opts(_hoosh_models_url(), h2, hoosh_probe_opts());   # 0.44.2
+        r = _hoosh_get_in(ca, _hoosh_models_url(), h2, hoosh_catalog_opts());   # 0.44.2
         if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_cat_err = HOOSH_CAT_TRANSPORT; return 0; }
         status = sandhi_http_status(r);
     }
     if ((status < 200) || (status >= 300)) { _hoosh_cat_err = HOOSH_CAT_HTTP; return 0; }
-    return hoosh_extract_models(sandhi_http_body(r), sandhi_http_body_len(r));
+    return hoosh_extract_models_a(ca, sandhi_http_body(r), sandhi_http_body_len(r));
 }
 
 # hoosh_catalog_last_err: the outcome of the last hoosh_catalog_fetch (HOOSH_CAT_*). PURE.
@@ -1501,6 +1572,7 @@ var _hr_urls = 0;             # alloc(HOOSH_ROUTE_MAX * HOOSH_ROUTE_URL_CAP): ea
 var _hr_state = 0;            # alloc(HOOSH_ROUTE_MAX * 8): the route's own state (HOOSH_PROV_*)
 var _hr_cat = 0;              # alloc(HOOSH_ROUTE_MAX * 8): its catalog_status (0 = not reported: an older hoosh, or not asked yet)
 var _hr_n = 0;
+var _hr_dropped = 0;         # 0.52.8 (audit A10): enabled routes past HOOSH_ROUTE_MAX in the last parse (their models fall back to the kind)
 var _hp_keybad = 0;           # alloc(HOOSH_PROV_MAX * 8): per kind, routes whose catalog answer was 401 / 403
 var _hp_canned = 0;           # TEST SEAM: a canned health body (cstr) hoosh_providers_fetch parses instead of dialling
 var _hp_canned_len = 0;
@@ -1516,7 +1588,7 @@ fn _hp_ensure() {
     if (_hr_cat == 0) { _hr_cat = alloc(HOOSH_ROUTE_MAX * 8); }
     return 0;
 }
-fn hoosh_providers_reset() { _hp_n = 0; _hr_n = 0; _hp_fetched = 0; _hp_err = HOOSH_HP_OK; _hp_interval = 0 - 1; _hp_dropped = 0; return 0; }
+fn hoosh_providers_reset() { _hp_n = 0; _hr_n = 0; _hr_dropped = 0; _hp_fetched = 0; _hp_err = HOOSH_HP_OK; _hp_interval = 0 - 1; _hp_dropped = 0; return 0; }
 
 # hoosh_route_index: the per-route slot for a base url (exact bytes), or -1. PURE.
 fn hoosh_route_index(url) {
@@ -1544,18 +1616,47 @@ fn hoosh_routes_fold(arr) {
     if (n == 0) { return 0 - 1; }
     var c[32];
     store64(&c, 0); store64(&c + 8, 0); store64(&c + 16, 0); store64(&c + 24, 0);
+    var missing = 0;
     var i = 0;
     while (i < n) {
         var us = bayan_json_v_str(bayan_json_v_arr_get(arr, i));
         var st = HOOSH_PROV_UNKNOWN;
-        if (us != 0) { st = hoosh_route_state_at(hoosh_route_index(str_cstr(us))); }
+        if (us != 0) {
+            var ri = hoosh_route_index(str_cstr(us));
+            if (ri < 0) { missing = missing + 1; }
+            st = hoosh_route_state_at(ri);
+        }
         if (st == HOOSH_PROV_HEALTHY) { store64(&c, load64(&c) + 1); }
         elif (st == HOOSH_PROV_UNHEALTHY) { store64(&c + 8, load64(&c + 8) + 1); }
         elif (st == HOOSH_PROV_DISABLED) { store64(&c + 24, load64(&c + 24) + 1); }
         else { store64(&c + 16, load64(&c + 16) + 1); }
         i = i + 1;
     }
+    # 0.52.8 (audit A10): a route the table had no room for is not "unmeasured" — the kind's own state (measured over
+    # every route it counted) is the honest answer, so the row falls back to it.
+    if ((missing > 0) && (_hr_dropped > 0)) { return 0 - 1; }
     return _hp_fold(&c);
+}
+# hoosh_routes_keybad (0.52.8, audits A11 + B5): how many of the routes a catalog entry names had their catalog GET
+# refused with 401 / 403, or -1 when the entry names none (the caller then reads the kind's count). The hint's "key
+# rejected" was the KIND's while the row's state was the model's own: a model behind only the good-key route read
+# "healthy  key rejected". PURE over the table.
+fn hoosh_routes_keybad(arr) {
+    if (arr == 0) { return 0 - 1; }
+    if (bayan_json_v_tag(arr) != JTAG_ARR) { return 0 - 1; }
+    var n = bayan_json_v_arr_len(arr);
+    if (n == 0) { return 0 - 1; }
+    var bad = 0;
+    var i = 0;
+    while (i < n) {
+        var us = bayan_json_v_str(bayan_json_v_arr_get(arr, i));
+        if (us != 0) {
+            var cs = hoosh_route_catalog_status_at(hoosh_route_index(str_cstr(us)));
+            if ((cs == 401) || (cs == 403)) { bad = bad + 1; }
+        }
+        i = i + 1;
+    }
+    return bad;
 }
 fn hoosh_providers_known() { if (_hp_fetched == 1) { return 1; } return 0; }
 fn hoosh_providers_last_err() { return _hp_err; }
@@ -1658,7 +1759,9 @@ fn _hp_catalog_status(entry) {
 # _hr_record: one health row into the per-route table (its base_url, own state and catalog_status). A url longer
 # than the slot is not recorded — it could never be matched whole, so a model behind it folds as unmeasured.
 fn _hr_record(entry, rs) {
-    if (_hr_n >= HOOSH_ROUTE_MAX) { return 0; }
+    if (rs == HOOSH_PROV_DISABLED) { return 0; }     # 0.52.8 (audit B3): a catalog never names a disabled route, and one at
+                                                     # the same base_url as the live route decided the fold (first match)
+    if (_hr_n >= HOOSH_ROUTE_MAX) { _hr_dropped = _hr_dropped + 1; return 0; }   # 0.52.8 (audit A10): counted, not silent
     var us = bayan_json_v_str(bayan_json_v_obj_get(entry, "base_url"));
     if (us == 0) { return 0; }
     var ul = str_len(us);
@@ -1686,14 +1789,19 @@ fn _hp_fold(c) {
 # HOOSH_PROV_NAME_CAP-1 (the gateway is a less-trusted party than the operator and these bytes reach the screen);
 # names past HOOSH_PROV_MAX are counted in _hp_dropped so the listings can say the table was full. PURE over its
 # bytes.
-fn hoosh_providers_parse(body, body_len) {
+fn hoosh_providers_parse(body, body_len) { return hoosh_providers_parse_a(0, body, body_len); }
+# hoosh_providers_parse_a (0.52.8): the same over allocator `a` (0 = the global heap) — the live fetch parses into the
+# health arena; every name and url is copied into thoth's own tables, so nothing points into it after the parse.
+fn hoosh_providers_parse_a(a, body, body_len) {
     _hp_ensure();
     _hp_n = 0;
-    _hr_n = 0;
+    _hr_n = 0; _hr_dropped = 0;
     _hp_fetched = 0;
     _hp_interval = 0 - 1;
     _hp_dropped = 0;
-    var v = bayan_json_v_parse_buf(body, body_len);
+    var v = 0;
+    if (a == 0) { v = bayan_json_v_parse_buf(body, body_len); }
+    else { v = bayan_json_v_parse_buf_a(a, body, body_len); }
     if (v == 0) { return 0 - 1; }
     var arr = bayan_json_v_obj_get(v, "providers");
     if (arr == 0) { return 0 - 1; }
@@ -1761,6 +1869,8 @@ fn _hoosh_health_url() {
 fn hoosh_providers_fetch() {
     _hp_ensure();
     _hp_n = 0;
+    _hr_n = 0; _hr_dropped = 0;                   # 0.52.8 (audits A6 + B2): the per-route table goes with the kind's — a failed
+                                                  # re-fetch left the LAST fetch's route states on the picker rows
     _hp_fetched = 0 - 1;
     _hp_err = HOOSH_HP_OK;
     _hp_http = 0;
@@ -1772,11 +1882,12 @@ fn hoosh_providers_fetch() {
     var auth = _hoosh_auth_header();
     var h = sandhi_headers_new();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_get_opts(_hoosh_health_url(), h, hoosh_probe_opts());
+    var ha = _hoosh_hp_arena_reset();             # 0.52.8: the health arena (its buffer and tree are not the heap's to keep)
+    var r = _hoosh_get_in(ha, _hoosh_health_url(), h, hoosh_probe_opts());
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hp_err = HOOSH_HP_TRANSPORT; return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { _hp_err = HOOSH_HP_HTTP; _hp_http = status; return 0; }
-    if (hoosh_providers_parse(sandhi_http_body(r), sandhi_http_body_len(r)) < 0) { _hp_fetched = 0 - 1; _hp_err = HOOSH_HP_PARSE; return 0; }
+    if (hoosh_providers_parse_a(ha, sandhi_http_body(r), sandhi_http_body_len(r)) < 0) { _hp_fetched = 0 - 1; _hp_err = HOOSH_HP_PARSE; return 0; }
     return 1;
 }
 # _hoosh_health_note: after a listing, the one line that says why the health words are missing — the failure kind
@@ -1812,7 +1923,7 @@ fn hoosh_list_provider_models(provider) {
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     ui_emit(ROLE_FAINT, "  -> hoosh "); oprintln(url);
-    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: fail fast — this runs before the first paint
+    var r = _hoosh_get_in(_hoosh_cat_arena_reset(), url, h, hoosh_catalog_opts());   # 0.44.2: fail fast; 0.52.8 (A7): the catalog's arena and cap
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(ename);
@@ -1955,6 +2066,47 @@ fn hoosh_probe_opts() {
     return _hoosh_opts_probe;
 }
 
+# hoosh_catalog_opts (0.52.8, audit A7): the PROBE profile with room for a model catalog. hoosh 2.8.0's entries are ~335
+# bytes, and sandhi's default 256 KB cap failed a catalog of ~780 models (OpenRouter's live list, or many providers) —
+# reported "unreachable — is the gateway up?". 2 MiB holds about 6,000. sandhi allocates the cap UP FRONT, so the
+# catalog GETs go through _hoosh_cat_arena (below), not the no-free heap.
+var HOOSH_CATALOG_CAP = 2097152;
+var _hoosh_opts_catalog = 0;
+fn hoosh_catalog_opts() {
+    if (_hoosh_opts_catalog == 0) {
+        var o = sandhi_http_options_new();
+        if (o == 0) { return 0; }
+        sandhi_http_options_read_ms(o, HOOSH_PROBE_MS);
+        sandhi_http_options_write_ms(o, HOOSH_PROBE_MS);
+        sandhi_http_options_connect_ms(o, HOOSH_PROBE_CONNECT_MS);
+        sandhi_http_options_max_response_bytes(o, HOOSH_CATALOG_CAP);
+        _hoosh_opts_catalog = o;
+    }
+    return _hoosh_opts_catalog;
+}
+# The catalog and health ARENAS (0.52.8): each fetch's response buffer (allocated at its full cap) and parse tree land in
+# a growable arena that is RESET before the next fetch — a grow arena keeps its chain, so repeated fetches converge on
+# their high-water mark and allocate nothing more. Through 0.52.7 every Ctrl-P open and every /models took 256 KB for
+# the catalog body and 256 KB for health (plus both parse trees) from the heap that never frees. Two arenas, because the
+# picker reads the catalog's tree after the health fetch. 0 when the arena cannot be made: the global heap, as before.
+var _hoosh_cat_arena = 0;
+var _hoosh_hp_arena = 0;
+fn _hoosh_cat_arena_reset() {
+    if (_hoosh_cat_arena == 0) { _hoosh_cat_arena = arena_allocator_growable(65536); }
+    if (_hoosh_cat_arena != 0) { reset_via(_hoosh_cat_arena); }
+    return _hoosh_cat_arena;
+}
+fn _hoosh_hp_arena_reset() {
+    if (_hoosh_hp_arena == 0) { _hoosh_hp_arena = arena_allocator_growable(16384); }
+    if (_hoosh_hp_arena != 0) { reset_via(_hoosh_hp_arena); }
+    return _hoosh_hp_arena;
+}
+# _hoosh_get_in(a, url, h, opts): a GET into arena `a`, or the global heap when there is none.
+fn _hoosh_get_in(a, url, h, opts) {
+    if (a == 0) { return sandhi_http_get_opts(url, h, opts); }
+    return sandhi_http_get_opts_a(a, url, h, opts);
+}
+
 # _hoosh_auth_header: cache and return the "Bearer <token>" header value, or 0
 # if no token is configured (unauthenticated gateway).
 fn _hoosh_auth_header() {
@@ -2056,12 +2208,12 @@ fn _hoosh_sse_cb(ctx, ev) {
     # repaints as reasoning streams. Empty when the gateway forwards no reasoning text (see _reason_acc).
     var rc = bayan_json_v_obj_get(delta, "reasoning_content");
     if (rc != 0) {
-        var rs = _hoosh_clean_text(rc);      # 0.45.0: the model's text is cleaned where it enters (see _hoosh_clean_text)
+        var rs = _hoosh_clean_text_after(rc, _reason_acc, _reason_acc_len);   # 0.45.0: cleaned where it enters; 0.52.8 (F3): after the text it continues
         if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
     }
     var content = bayan_json_v_obj_get(delta, "content");
     if (content == 0) { return 1; }          # role-only / finish / non-content frame
-    var s = _hoosh_clean_text(content);      # 0.45.0: cleaned BEFORE the render sink and the accumulator both see it
+    var s = _hoosh_clean_text_after(content, _hoosh_acc, _hoosh_acc_len);   # 0.45.0: cleaned BEFORE the render sink and the accumulator both see it; 0.52.8 (F3): after the text it continues
     if (s == 0) { return 1; }
     var n = str_len(s);
     if (n > 0) {
@@ -2145,6 +2297,11 @@ fn _hoosh_blocking_turn(url, h, len, model) {
         if (em != 0) { emit("  "); _hoosh_print_str(em); }
         return status;
     }
+    return _hoosh_blocking_show(body, blen);
+}
+# _hoosh_blocking_show (0.52.8): the blocking turn's 2xx half — account, note the finish, print — split from the POST so
+# the suite drives it with a canned body. Returns the turn's rc (0, or -1 when no completion could be parsed).
+fn _hoosh_blocking_show(body, blen) {
     var content = hoosh_extract_content(body, blen);
     if (content == 0) {
         oprintln("  hoosh: response received but no completion could be parsed.");
@@ -2154,6 +2311,9 @@ fn _hoosh_blocking_turn(url, h, len, model) {
     var bv = bayan_json_v_parse_buf(body, blen);
     _hoosh_account_usage(bv);
     _hoosh_note_finish(bv);                   # 0.52.7
+    # 0.52.8 (audit A3): hoosh 2.8.0 always sends "content", "" for a refusal or a round that spent its whole ceiling
+    # thinking — so this printed nothing and the turn vanished. Say why, as the stream path does (rc 0: an answer).
+    if (str_len(content) == 0) { if (hoosh_finish_note() == 1) { return 0; } }
     _hoosh_print_reply(content);   # 0.15.1: fenced-code highlighting (raw acc already stored above)
     return 0;
 }

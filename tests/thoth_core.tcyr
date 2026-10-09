@@ -122,7 +122,7 @@ fn main() {
     test_inhist();
     test_inhist_persist();
     test_history_cmd_path();
-    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_store_conflict(); test_toolpin_store_trust_others(); test_toolpin_store_full_carry(); test_toolpin_config(); test_config_token_by_value(); test_config_reload_holds(); test_read_roots_narrow(); test_intr_escape_parse(); test_history_size_global(); test_compact_auto_budget(); test_clean_c1(); test_state_pins_row();
+    test_toolpin_store(); test_toolpin_store_tamper(); test_toolpin_store_symlink(); test_toolpin_store_hosts(); test_toolpin_store_merge(); test_toolpin_store_broke(); test_toolpin_store_conflict(); test_toolpin_store_trust_others(); test_toolpin_store_full_carry(); test_toolpin_withheld_paths(); test_config_safe_direction(); test_allow_vidya_bound(); test_price_half_side(); test_c1_sinks(); test_models_overflow_counts(); test_catalog_arena(); test_toolpin_config(); test_config_token_by_value(); test_config_reload_holds(); test_read_roots_narrow(); test_read_roots_link(); test_intr_escape_parse(); test_history_size_global(); test_compact_auto_budget(); test_clean_c1(); test_utf8_valid(); test_clean_c1_context(); test_state_pins_row();
     test_inhist_polish();          # 0.45.5: ~/$HOME expansion on [history].file + the [history].size trim
     test_logging();
     test_logs_flag();

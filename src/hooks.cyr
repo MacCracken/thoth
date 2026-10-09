@@ -96,7 +96,12 @@ fn _hook_env_put(dst, off, cap, key, value) {
             off = off + 1;
             i = i + 1;
         }
-        if (load8(value + i) != 0) { _hook_last_clamped = 1; }
+        if (load8(value + i) != 0) {
+            _hook_last_clamped = 1;
+            # 0.52.8 (audit E9): never end inside a codepoint — the cut fell between a lead and its continuation (150 x
+            # "é" left a dangling 0xC3). Step back to that character's lead, so it is dropped whole.
+            while ((i > 0) && ((load8(value + i) & 0xC0) == 0x80)) { i = i - 1; off = off - 1; }
+        }
     }
     if (off > (cap - 1)) { off = cap - 1; }
     store8(dst + off, 0);
@@ -176,6 +181,7 @@ fn _hook_run_cut(cmd, event, tool, args, args_cut) {
             var b = load8(_hook_buf + i) & 255;
             if ((b < 32) && (b != 10)) { b = 63; }
             if (b == 127) { b = 63; }
+            if (_c1_at(_hook_buf, i, n) == 1) { b = 63; }   # 0.52.8 (audit E2): a hook echoing model bytes put C1 on the screen
             store8(_hook_buf + i, b);
             i = i + 1;
         }

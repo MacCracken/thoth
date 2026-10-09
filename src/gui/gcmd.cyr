@@ -276,6 +276,7 @@ fn gcmd_build_anchored(cmds, x, y, w, anchor, at_end) {
 # runner's own return (1 keep running, 0 quit). Lives here rather than in gpresent so the bracket is testable
 # without a window: gpresent hands it `&dispatch`.
 fn gcmd_run(line, run_fn) {
+    gturn_notices_clear();                                   # 0.52.8: the last turn's notice is not this card's verdict
     feed_clear();                                            # the sink starts empty: the card is THIS command's output only
     out_mode_set(OUT_RING);
     _gcmd_running_begin(line);                               # 0.52.0 (F7): the pump draws the running row while it waits

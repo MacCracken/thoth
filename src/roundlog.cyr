@@ -70,16 +70,9 @@ fn roundlog_open(turn_no, round_no) {
 # Copy a NUL-terminated name into dst, bounded to RL_NAME_CAP-1 bytes + NUL, through the LABEL policy (0.45.2: the name
 # is the model's own function.name — dispatch and gating keep the raw one — and /audit and the tool cards draw this copy).
 # (No `break` — the codebase avoids it; a done-flag drives the loop.)
+# 0.52.8 (audit F2): the label policy's own copy (safe_label_copy), C1 included — this one stopped at C0 and DEL.
 fn _rl_copy_name(dst, name) {
-    var i = 0;
-    var done = 0;
-    if (name == 0) { done = 1; }
-    while ((done == 0) && (i < (RL_NAME_CAP - 1))) {
-        var c = load8(name + i);
-        if (c == 0) { done = 1; }
-        else { store8(dst + i, _clean_byte(c & 255, 0)); i = i + 1; }
-    }
-    store8(dst + i, 0);
+    safe_label_copy(dst, RL_NAME_CAP, name);
     return 0;
 }
 
@@ -89,12 +82,15 @@ fn _rl_copy_name(dst, name) {
 fn _rl_copy_args(dst, src) {
     var i = 0;
     var done = 0;
-    if (src == 0) { done = 1; }
+    var sn = 0;
+    if (src == 0) { done = 1; } else { sn = strlen(src); }
     while ((done == 0) && (i < (RL_ARG_CAP - 1))) {
         var c = load8(src + i);
         if (c == 0) { done = 1; }
         else {
             if (c < 32) { c = 32; }
+            if (c == 127) { c = 63; }                       # 0.52.8 (audit F2): DEL and the C1 controls, as the label policy
+            if (_c1_at(src, i, sn) == 1) { c = 63; }
             store8(dst + i, c);
             i = i + 1;
         }

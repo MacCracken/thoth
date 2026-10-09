@@ -38,6 +38,10 @@ fn gate_active() {
 var _confirm_begin_fn = 0;
 var _confirm_end_fn = 0;
 fn confirm_hooks_set(bf, ef) { _confirm_begin_fn = bf; _confirm_end_fn = ef; return 0; }
+# 0.52.8 (audit B1): asked AFTER the answer is read — 1 when the screen still shows the question as it was drawn, 0 when
+# it shrank meanwhile (a resize can scroll or clip part of the action off while the operator decides). 0 = no hook.
+var _confirm_fit_fn = 0;
+fn confirm_fit_hook_set(f) { _confirm_fit_fn = f; return 0; }
 
 # --- session grants (0.40.0, T1-6) -------------------------------------------------------------------
 #
@@ -145,6 +149,11 @@ fn _confirm_via_ask(verb, obj) {
     if (gate_active() == 0) { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "? (t-ron absent - thoth is asking because nothing else can)"); }
     else { off = _append_cstr_cap(_ask_q_buf, off, CONFIRM_Q_CAP, "? (t-ron flagged it for confirmation)"); }
     store8(_ask_q_buf + off, 0);
+    if (off >= (CONFIRM_Q_CAP - 1)) {                   # 0.52.8 (audit D1): a question that did not fit whole is not posed
+        _confirm_refuse_unshowable(_confirm_verb_buf, _confirm_obj_buf, "too long to show in full");
+        log_begin("authz"); log_kv_str("tool", obj); log_kv_str("gate", "modal"); log_kv_str("verdict", "deny"); log_kv_str("reason", "unshowable"); log_commit(SK_WARN);
+        return 0;
+    }
     # 0.46.0: THE SESSION-GRANT ANSWER IS BACK ON THIS PATH. Through 0.45.x it was withheld, deliberately: a grant
     # is durable authority, and the two things that make one safe — being able to SEE that it is still acting and
     # being able to REVOKE it (`/grants`) — were both unreachable from inside the T3 window, whose composer ran
@@ -176,7 +185,11 @@ fn _confirm_grant_yes(verb, obj) {
     else { note_println("  [allowed once; not grantable (grant table full or the command is too long)]"); }
     return 1;
 }
-var CONFIRM_Q_CAP = 1024;
+# 0.52.8 (audits D1 + G1): was 1024 — but the question is "Authorize " + verb + " " + an object of up to CONFIRM_SHOW_MAX
+# (1,024) bytes + the reason (up to 59), so its tail was cut silently on the way to the window: up to 21 bytes of a
+# `shell` command never reached the modal and "yes, once" ran them (reproduced live — a PWNED file). The question now
+# always fits (2,048 > the 1,116 the longest takes), and _confirm_via_ask refuses rather than pose one that does not.
+var CONFIRM_Q_CAP = 2048;
 var _ask_q_buf = 0;
 
 # ⚠ 0.44.3 — THE PROMPT'S OWN TEXT WAS UNTRUSTED AND UNFILTERED. `obj` is the thing being authorized:
@@ -204,27 +217,24 @@ var CONFIRM_SHOW_MAX = 1024;      # bytes of a (sanitised) object an interactive
 var CONFIRM_BLANK_RUN = 64;       # blank codepoints in a row that make an object unshowable
 var _confirm_prompt_cols = 0;     # the bytes of the question being drawn (the TUI bracket sizes its rows from it; 0 = one row)
 fn confirm_prompt_cols() { return _confirm_prompt_cols; }
-# _confirm_blank_len: the byte length of the blank codepoint at `p`, or 0 — ASCII space, NBSP, U+2000–U+200B, U+202F,
-# U+205F, U+2800, U+3000, U+3164, U+FFA0 (the codepoints that draw as empty cells).
-fn _confirm_blank_len(p) {
-    var b0 = load8(p) & 255;
-    if (b0 == 32) { return 1; }
-    if (b0 == 0xC2) { if ((load8(p + 1) & 255) == 0xA0) { return 2; } return 0; }
-    if (b0 == 0xE2) {
-        var b1 = load8(p + 1) & 255; var b2 = load8(p + 2) & 255;
-        if ((b1 == 0x80) && (b2 >= 0x80) && (b2 <= 0x8B)) { return 3; }
-        if ((b1 == 0x80) && (b2 == 0xAF)) { return 3; }
-        if ((b1 == 0x81) && (b2 == 0x9F)) { return 3; }
-        if ((b1 == 0xA0) && (b2 == 0x80)) { return 3; }
-        return 0;
-    }
-    if (b0 == 0xE3) {
-        var c1 = load8(p + 1) & 255; var c2 = load8(p + 2) & 255;
-        if ((c1 == 0x80) && (c2 == 0x80)) { return 3; }
-        if ((c1 == 0x85) && (c2 == 0xA4)) { return 3; }
-        return 0;
-    }
-    if (b0 == 0xEF) { if (((load8(p + 1) & 255) == 0xBE) && ((load8(p + 2) & 255) == 0xA0)) { return 3; } return 0; }
+# _confirm_cp_class (0.52.8, audit D3): how codepoint `cp` draws, for the blank-run rule — 1 an empty cell (ASCII space,
+# NBSP, U+1680, U+2000–U+200B, U+202F, U+205F, U+2800, U+3000, U+3164, U+FFA0 and the Hangul fillers U+115F/U+1160), 2
+# NOTHING (zero-width: the soft hyphen, the joiners, the word joiner and invisible operators, the BOM, variation
+# selectors, tags, U+034F, U+180E, U+17B4/U+17B5, U+206A–U+206F), 3 a bidirectional control, 0 ink.
+# ⚠ Through 0.52.7 any byte that was not a listed blank ENDED the run — so a zero-width U+200C every 63 spaces kept
+# 945 adjacent blank columns inside the size limit and the payload rode a dozen empty rows below the verb, and a run of
+# U+115F (blank in common fonts) was not counted at all. A codepoint that draws nothing now neither adds to a run nor
+# ends it; and a bidi control (U+202A–U+202E, U+2066–U+2069, U+200E/U+200F, U+061C) can show the action in a different
+# order than it runs, so an object holding one is refused outright.
+fn _confirm_cp_class(cp) {
+    if ((cp == 32) || (cp == 0xA0) || (cp == 0x1680) || ((cp >= 0x2000) && (cp <= 0x200B))) { return 1; }
+    if ((cp == 0x202F) || (cp == 0x205F) || (cp == 0x2800) || (cp == 0x3000) || (cp == 0x3164) || (cp == 0xFFA0)) { return 1; }
+    if ((cp == 0x115F) || (cp == 0x1160)) { return 1; }
+    if ((cp == 0x061C) || (cp == 0x200E) || (cp == 0x200F)) { return 3; }
+    if (((cp >= 0x202A) && (cp <= 0x202E)) || ((cp >= 0x2066) && (cp <= 0x2069))) { return 3; }
+    if ((cp == 0xAD) || (cp == 0x034F) || (cp == 0x180E) || (cp == 0x200C) || (cp == 0x200D) || (cp == 0xFEFF)) { return 2; }
+    if ((cp == 0x17B4) || (cp == 0x17B5) || ((cp >= 0x2060) && (cp <= 0x2065)) || ((cp >= 0x206A) && (cp <= 0x206F))) { return 2; }
+    if (((cp >= 0xFE00) && (cp <= 0xFE0F)) || ((cp >= 0xE0000) && (cp <= 0xE007F)) || ((cp >= 0xE0100) && (cp <= 0xE01EF))) { return 2; }
     return 0;
 }
 # _confirm_unshowable: why the (sanitised) object cannot be shown whole for an answer, or 0 when it can.
@@ -233,15 +243,23 @@ fn _confirm_unshowable(label) {
     var n = strlen(label);
     _confirm_why_n = n;
     if (n > CONFIRM_SHOW_MAX) { return "too long to show in full"; }
+    # 0.52.8 (audit D2): bytes that are not well-formed UTF-8 draw differently on every surface — the window's rasteriser
+    # gave each stray continuation byte a cell of its own while its layout folded them into one codepoint, so a payload
+    # after 100 raw 0xA0 bytes never reached the card and Enter authorized it. Text that cannot be shown as it would run
+    # is not posed.
+    if (utf8_valid(label) == 0) { return "it is not valid UTF-8 text, so it cannot be shown exactly as it would run"; }
     var i = 0;
     var run = 0;
     while (i < n) {
-        var bl = _confirm_blank_len(label + i);
-        if (bl > 0) {
+        var sl = utf8_seq_len(label + i);
+        if (sl == 0) { sl = 1; }                               # (malformed text was refused above; this only bounds the walk)
+        var k = _confirm_cp_class(utf8_cp(label + i));
+        if (k == 3) { return "it holds a bidirectional control, which can show it in a different order than it runs"; }
+        if (k == 1) {
             run = run + 1;
             if (run >= CONFIRM_BLANK_RUN) { _confirm_why_n = run; return "it holds a run of blanks that would push part of it out of view"; }
-            i = i + bl;
-        } else { run = 0; i = i + 1; }
+        } elif (k == 0) { run = 0; }                          # ink ends a run; a codepoint that draws nothing does not
+        i = i + sl;
     }
     return 0;
 }
@@ -368,9 +386,16 @@ fn confirm(verb, obj) {
     emit(post);
     var ans[64];
     var n = read_line(&ans, 64);
+    var fits = 1;                                       # 0.52.8 (audit B1): a resize while asking voids the answer
+    if ((capturing == 1) && (_confirm_fit_fn != 0)) { fits = fncall0(_confirm_fit_fn); }
     if ((capturing == 1) && (_confirm_end_fn != 0)) { fncall0(_confirm_end_fn); }
     _confirm_prompt_cols = 0;
     if (n <= 0) { return 0; }
+    if (fits == 0) {
+        _confirm_refuse_unshowable(_confirm_verb_buf, _confirm_obj_buf, "the terminal shrank while it was asked, and part of it may have left the screen");
+        log_begin("authz"); log_kv_str("gate", "confirm"); log_kv_str("verb", verb); log_kv_str("verdict", "deny"); log_kv_str("reason", "resized_while_asking"); log_commit(SK_WARN);
+        return 0;
+    }
     # 'a' = yes, AND remember this exact (verb, obj) for the rest of the session. If the grant cannot be
     # stored (table full, or either string over its cap) the answer degrades to a plain one-shot yes —
     # never to a truncated grant, which would match actions the user never approved.

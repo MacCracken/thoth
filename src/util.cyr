@@ -191,7 +191,63 @@ fn _c1_at(p, i, n) {
     if (need == 0) { return 1; }                          # no lead accounts for it
     if ((k + 1) > need) { return 1; }                     # past the sequence the lead began
     if ((lead == 0xC2) && (need == 1)) { return 1; }      # C2 80..C2 9F: a C1 control
+    # 0.52.8 (audit F5): a lead accounts for byte i only if its sequence is WELL-FORMED — its first continuation (byte i
+    # itself when k is 0, so always inside the buffer) inside the lead's own range. E0 82 9B (an overlong CSI), ED A0 9B
+    # (a surrogate), F0 80 82 9B and F4 90 80 9B left the 9B standing for a terminal that decodes ill-formed UTF-8.
+    var b1 = load8(p + j + 1) & 255;
+    var lo = 0x80;
+    var hi = 0xBF;
+    if (lead == 0xE0) { lo = 0xA0; }
+    if (lead == 0xED) { hi = 0x9F; }
+    if (lead == 0xF0) { lo = 0x90; }
+    if (lead == 0xF4) { hi = 0x8F; }
+    if ((b1 < lo) || (b1 > hi)) { return 1; }
     return 0;
+}
+# utf8_seq_len (0.52.8): the length (1..4) of the WELL-FORMED UTF-8 sequence starting at p, or 0 when the bytes there
+# are not one — RFC 3629: no overlong form (C0/C1, E0 80..9F, F0 80..8F), no surrogate (ED A0..BF), nothing past
+# U+10FFFF (F4 90.., F5..FF), and no continuation byte without its lead. PURE; reads at most one byte past a NUL.
+fn utf8_seq_len(p) {
+    var b0 = load8(p) & 255;
+    if (b0 < 0x80) { return 1; }
+    if ((b0 < 0xC2) || (b0 > 0xF4)) { return 0; }
+    var b1 = load8(p + 1) & 255;
+    if (b0 < 0xE0) {
+        if ((b1 & 0xC0) == 0x80) { return 2; }
+        return 0;
+    }
+    var lo = 0x80;
+    var hi = 0xBF;
+    if (b0 == 0xE0) { lo = 0xA0; }
+    if (b0 == 0xED) { hi = 0x9F; }
+    if (b0 == 0xF0) { lo = 0x90; }
+    if (b0 == 0xF4) { hi = 0x8F; }
+    if ((b1 < lo) || (b1 > hi)) { return 0; }
+    if ((load8(p + 2) & 0xC0) != 0x80) { return 0; }
+    if (b0 < 0xF0) { return 3; }
+    if ((load8(p + 3) & 0xC0) != 0x80) { return 0; }
+    return 4;
+}
+# utf8_cp (0.52.8): the codepoint of the well-formed sequence at p (its length is utf8_seq_len); U+FFFD when there is none.
+fn utf8_cp(p) {
+    var l = utf8_seq_len(p);
+    var b0 = load8(p) & 255;
+    if (l == 1) { return b0; }
+    if (l == 2) { return ((b0 & 31) << 6) | (load8(p + 1) & 63); }
+    if (l == 3) { return ((b0 & 15) << 12) | ((load8(p + 1) & 63) << 6) | (load8(p + 2) & 63); }
+    if (l == 4) { return ((b0 & 7) << 18) | ((load8(p + 1) & 63) << 12) | ((load8(p + 2) & 63) << 6) | (load8(p + 3) & 63); }
+    return 0xFFFD;
+}
+# utf8_valid (0.52.8): 1 when the cstr at p is well-formed UTF-8 throughout (utf8_seq_len), else 0. PURE.
+fn utf8_valid(p) {
+    if (p == 0) { return 1; }
+    var i = 0;
+    while (load8(p + i) != 0) {
+        var l = utf8_seq_len(p + i);
+        if (l == 0) { return 0; }
+        i = i + l;
+    }
+    return 1;
 }
 fn _emit_clean_n(p, n, keep_ws) {
     if (p == 0) { return 0; }
@@ -239,6 +295,41 @@ fn _clean_in_place_n(p, n, keep_ws) {
 }
 fn clean_text_n(p, n) { return _clean_in_place_n(p, n, 1); }
 fn clean_line_n(p, n) { return _clean_in_place_n(p, n, 0); }
+# clean_text_n_after (0.52.8, audit F3): clean_text_n for a streamed chunk that FOLLOWS `ctx`/`ctx_n` (the cleaned text
+# already shown). 0.52.6's C1 rule looks BEHIND a byte for its lead, so a chunk boundary inside a codepoint — an em dash
+# E2 | 80 94 — read its continuation bytes as strays and turned them to '?'. The chunk's first three bytes (the most a
+# sequence can carry past its lead) are judged in a window that begins with the context's last three; the rest as
+# ever. A raw 0x9B that opens a chunk with no lead behind it is still a stray, and still '?'. Returns bytes changed.
+fn clean_text_n_after(p, n, ctx, ctx_n) {
+    if ((ctx == 0) || (ctx_n <= 0)) { return clean_text_n(p, n); }
+    var t = ctx_n;
+    if (t > 3) { t = 3; }
+    var w[16];
+    var k = 0;
+    while (k < t) { store8(&w + k, load8(ctx + ctx_n - t + k)); k = k + 1; }
+    var wp = n;
+    if (wp > 4) { wp = 4; }
+    var j = 0;
+    while (j < wp) { store8(&w + t + j, load8(p + j)); j = j + 1; }
+    var wn = t + wp;
+    var head = n;
+    if (head > 3) { head = 3; }
+    var changed = 0;
+    var i = 0;
+    while (i < head) {
+        var b = load8(p + i) & 255;
+        var nb = _clean_at(&w, t + i, wn, 1);
+        if (nb != b) { store8(p + i, nb); store8(&w + t + i, nb); changed = changed + 1; }
+        i = i + 1;
+    }
+    while (i < n) {
+        var b2 = load8(p + i) & 255;
+        var nb2 = _clean_at(p, i, n, 1);
+        if (nb2 != b2) { store8(p + i, nb2); changed = changed + 1; }
+        i = i + 1;
+    }
+    return changed;
+}
 
 fn safe_label_copy(dst, cap, src) {
     if (dst == 0) { return 0; }

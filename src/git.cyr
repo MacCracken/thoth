@@ -38,14 +38,12 @@ var _git_status_buf = 0;    # reused relative-path storage
 
 # _git_copy_branch: copy sit's heap branch cstring into our static buffer so we
 # never alias sit's arena past the probe (mirrors session_set_model_copy).
+# 0.52.8 (audit F1): through the LABEL policy — the copy was verbatim, and every surface draws it raw (the status bar,
+# the window's strip, /state). sit's refname_valid refuses C0, DEL and git's own specials but not 0x80..0x9F, so a
+# clone's `.git/HEAD` reading `ref: refs/heads/x<9B>2Jy` put a C1 CSI on the status bar.
 fn _git_copy_branch(br) {
     if (_git_branch_buf == 0) { _git_branch_buf = alloc(GIT_BRANCH_CAP); }
-    var i = 0;
-    while ((load8(br + i) != 0) && (i < (GIT_BRANCH_CAP - 1))) {
-        store8(_git_branch_buf + i, load8(br + i));
-        i = i + 1;
-    }
-    store8(_git_branch_buf + i, 0);
+    safe_label_copy(_git_branch_buf, GIT_BRANCH_CAP, br);
     return 0;
 }
 
