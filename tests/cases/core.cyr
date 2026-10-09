@@ -6843,7 +6843,12 @@ fn test_c1_sinks() {
     assert_eq(_tc1_9b(git_branch()), 0, "a branch name's raw 9B never reaches the status bar (it was copied verbatim, 0.52.7)");
     _git_copy_branch("x\xc2\x9b2Jy");
     assert_eq(_tc1_9b(git_branch()), 0, "...nor an encoded U+009B");
+    # a detached HEAD reads the '?' sentinel even after a branch filled the buffer (the release run's checkout of the
+    # 0.52.8 tag is detached, and this test's own `_git_copy_branch("main")` restore made the probe test read "main")
     _git_copy_branch("main");
+    _git_note_detached();
+    assert(streq(git_branch(), "?"), "a detached HEAD reads the '?' sentinel after a branch filled the buffer (it kept the name, 0.52.7)");
+    git_probe();                                     # back to the real probe state, attached or detached, for later readers
     _ag_err_reset();
     var eb = "{\"error\":{\"message\":\"gw\\u009b2J refused\"}}";
     _ag_err_capture(bayan_json_v_parse_buf(eb, strlen(eb)));

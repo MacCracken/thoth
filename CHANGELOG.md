@@ -25,7 +25,7 @@ showed:
 
 The maintainer ruled on four design questions (R1–R4 below); they are fixed here. A fifth is recorded in
 `gap-review.md`. One finding needed hoosh: **hoosh 2.8.1** trims `max_tokens` to the serving model's own ceiling. The
-cyrius pin stays at **6.6.6**. Suite **852 + 2329 + 1215 + 888 + 190 + 5** (+267).
+cyrius pin stays at **6.6.6**. Suite **852 + 2330 + 1215 + 888 + 190 + 5** (+268).
 
 - **An authorization prompt shows all of what `y` approves** (audits B1, B6, D1/G1, D2, D3, G2, G6, G7).
   - B1 (TUI, HIGH): the question was sized for the terminal size thoth last read, and a resize during a turn waits
@@ -186,15 +186,24 @@ cyrius pin stays at **6.6.6**. Suite **852 + 2329 + 1215 + 888 + 190 + 5** (+267
     ~/.thoth/config.cyml if you want them", as `/state` does.
   - In the window, the last turn's notice (a refusal, a failure, or "- stopped -") stayed beneath the next command's
     card and read as that command's verdict. A command card now clears it.
+- **Found by the release run.** The release job checks out the tag, which leaves HEAD detached, and its core suite
+  failed where CI on the `main` push had passed.
+  - `test_c1_sinks` left the git producer's branch buffer holding "main", and a detached probe never reset it, so
+    `git_branch()` read "main" instead of its "?" sentinel. No surface showed it: each draws "(detached)" from the
+    detached state.
+  - A detached probe now resets the sentinel. That also covers a session that starts on a branch and then checks out
+    a tag. The test re-probes when it is done.
+  - Reproduced, then verified, in a detached clone of the tag.
 - **Consumers**, on their roadmaps only: agnosai's B33 and agnostic's M9 picker are to read hoosh's catalog for their
   model ids. secureyeoman is left until its port is further along, by the maintainer's call.
 
 **Verification.**
-- All six suites pass on Linux.
+- All six suites pass on Linux, on a branch checkout and in a detached clone of the tag, as the release job runs
+  them.
 - Linux, aarch64 and AGNOS build with 0.52.7's warning sets, apart from one shifted line number and the static-data
   size (+224 bytes).
-- All five suites pass as aarch64 binaries under `qemu-aarch64` (5,474 of 5,474).
-- macOS is green natively (875 + 2304 + 1206 + 190 + 831), built at the pin through a private `CYRIUS_HOME`. That
+- All five suites pass as aarch64 binaries under `qemu-aarch64` (5,475 of 5,475).
+- macOS is green natively (875 + 2305 + 1206 + 190 + 831), built at the pin through a private `CYRIUS_HOME`. That
   includes the supervisor's orphan test: a SIGKILLed stand-in thoth left no process of its capture.
 - The Windows lane stays at its known-gap skip.
 - Driven live from throwaway HOMEs, against the stub gateway unless noted:
@@ -222,7 +231,7 @@ cyrius pin stays at **6.6.6**. Suite **852 + 2329 + 1215 + 888 + 190 + 5** (+267
   The stub gateway gained `cut:`, `thinkcut:`, `refuse` and `slowrun:` replies.
 - The AGNOS ring-3 re-run is deferred with the AGNOS follow-up, by the maintainer's call.
 
-Tests (+267), each proven by breaking the fix it covers. Among them:
+Tests (+268), each proven by breaking the fix it covers. Among them:
 - the prompt and modal: `test_tui_confirm_live_geometry` (a real pty, resized), `test_confirm_fit_void`,
   `test_tui_ask_rows`, `test_confirm_modal_whole`, `test_gask_whole_question`, `test_utf8_valid`,
   `test_confirm_blank_evasion`, `test_gask_open_and_narrow`;
@@ -231,7 +240,7 @@ Tests (+267), each proven by breaking the fix it covers. Among them:
 - the finish notes: `test_finish_every_surface`, `test_gturn_settle`;
 - the picker: `test_mpick_stale_routes`, `test_mpick_disabled_route_url`, `test_mpick_keybad_per_model`,
   `test_mpick_nomatch_unloaded`, `test_models_overflow_counts`, `test_catalog_arena`;
-- the sanitisers: `test_clean_c1_context`, `test_c1_sinks`, `test_greet_model_clip`;
+- the sanitisers: `test_clean_c1_context`, `test_c1_sinks` (with the detached-sentinel case), `test_greet_model_clip`;
 - the greeting and the window's notices: `test_greet_suppressed_row`, and the command-card case of
   `test_gturn_settle`;
 - commands and the executor: `test_proc_capture` (a SIGKILLed thoth leaves no process of a running capture; the status

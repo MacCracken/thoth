@@ -47,6 +47,16 @@ fn _git_copy_branch(br) {
     return 0;
 }
 
+# _git_note_detached (0.52.8): a detached HEAD reads git_branch()'s '?' sentinel even when an earlier probe filled the
+# buffer — a session that began on a branch and then checked out a tag kept the branch's name. The surfaces draw
+# "(detached)" off git_detached() and never showed it, but the sentinel is git_branch()'s contract, and the release
+# run (a tag checkout: detached) failed the test that pins it once another test had filled the buffer.
+fn _git_note_detached() {
+    _git_detached = 1;
+    if (_git_branch_buf != 0) { store8(_git_branch_buf, 63); store8(_git_branch_buf + 1, 0); }
+    return 0;
+}
+
 # git_probe: (re)read the working repo through sit. sit_repo_open(".") chdirs to
 # "." (a no-op — thoth never leaves its launch cwd), detects .git/ or .sit/, and
 # returns 1/0. On a repo we snapshot the branch + the changed-file count. Returns
@@ -61,7 +71,7 @@ fn git_probe() {
     if (repo == 0) { return 0; }     # no .git/ or .sit/ at the working directory
     _git_present = 1;
     var br = sit_repo_branch(repo);  # heap cstring, or 0 when HEAD is detached
-    if (br == 0) { _git_detached = 1; }
+    if (br == 0) { _git_note_detached(); }
     else { _git_copy_branch(br); }
     var st = sit_repo_status(repo);  # vec of {path, kind}; count + copy into the badge cache (before close)
     if (st != 0) {
