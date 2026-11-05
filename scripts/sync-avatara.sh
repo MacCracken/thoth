@@ -8,9 +8,8 @@
 # and authors only profile->string glue; it never reimplements archetype logic
 # (ADR-0003). The off-AGNOS overlay over the same contract.
 #
-# NOTE: the bundle's only non-builtin stdlib need is the `math` module
-# (f64_le / f64_ge — the other f64 ops are compiler builtins), so thoth's
-# cyrius.cyml [deps].stdlib declares `math`. The bundle carries its own
+# NOTE: every f64 op the bundle uses is a compiler builtin, so it needs no `math`
+# module. The bundle carries its own
 # self-contained `xalloc` (an OOM guard over stdlib alloc — defined nowhere
 # else). No fn/type collisions with the other bundles, the stdlib, or thoth's
 # own source — re-verified at 2.14.0 across its 797 fns / 664 enum constants.
@@ -18,10 +17,10 @@
 # vendored libro; libro 2.8.2 renamed its bare ERR_* to LIBRO_ERR_*, so avatara's
 # is now the sole definition and the shared token is gone.)
 #
-# Usage: ./scripts/sync-avatara.sh [tag]   (default: 2.15.0)
+# Usage: ./scripts/sync-avatara.sh [tag]   (default: 2.15.1)
 set -euo pipefail
 
-TAG="${1:-2.15.0}"
+TAG="${1:-2.15.1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/avatara.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/avatara/${TAG}/dist/avatara.cyr"

@@ -17,10 +17,10 @@
 # sigil's per-thread lane. t-ron 2.1.10 renamed it to `cc20_xor`, so from
 # that tag on there is no collision. Do not re-introduce the claim.
 #
-# Usage: ./scripts/sync-tron.sh [tag]   (default: 2.1.11)
+# Usage: ./scripts/sync-tron.sh [tag]   (default: 2.1.12)
 set -euo pipefail
 
-TAG="${1:-2.1.11}"
+TAG="${1:-2.1.12}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/t-ron.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/t-ron/${TAG}/dist/t-ron.cyr"

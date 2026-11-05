@@ -281,6 +281,24 @@ fn test_capture_status_mapping() {
 
 # test_capture_inherits (E4 + the supervisor's descriptor sweep): a command starts with an empty signal mask, SIGPIPE and
 # SIGXFSZ at SIG_DFL, and none of thoth's descriptors.
+# test_sigchld_ignored (0.52.9): a launcher's SIGCHLD ignore. Run in a forked child, since the ignore is process-wide
+# and the point is what the disposition does to a wait. Without exec_signals_init, run_shell answers -1 for a shell
+# that ran and exited 7 (the floor's `exec_*`, since 6.6.7).
+fn test_sigchld_ignored() {
+    test_group("a launcher's SIGCHLD ignore does not cost a command's exit status (exec.cyr, 0.52.9)");
+    var c = sys_fork();
+    if (c == 0) {
+        signal_ignore(SIGCHLD);
+        exec_signals_init();
+        sys_exit(run_shell("exit 7") & 255);
+    }
+    var st[16];
+    store64(&st, 0);
+    sys_waitpid(c, &st, 0);
+    assert_eq(WEXITSTATUS(load32(&st)), 7, "the shell's real exit code came back, with SIGCHLD ignored at launch");
+    return 0;
+}
+
 fn test_capture_inherits() {
     test_group("a captured command inherits no signal mask, no SIGPIPE/SIGXFSZ ignore and no descriptor of thoth's (exec.cyr, 0.52.8, audit E4)");
     exec_wait_poll_set(0);
@@ -374,6 +392,7 @@ fn test_proc_capture() {
     test_capture_status_mapping();
     test_capture_orphans();
     test_capture_inherits();
+    test_sigchld_ignored();
     exec_wait_poll_set(0);
     #endif
     #endif

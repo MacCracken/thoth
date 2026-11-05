@@ -223,7 +223,7 @@ fn shell_run_tool(args_cstr) {
     if (args_cstr == 0) { return "(shell: missing arguments)"; }
     var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(shell: arguments are not valid JSON)"; }
-    var cv = bayan_json_v_obj_get(v, "command");
+    var cv = bayan_json_v_obj_get_by_cstr(v, "command");
     if (cv == 0) { return "(shell: missing required 'command' argument)"; }
     var cs = bayan_json_v_str(cv);
     if (cs == 0) { return "(shell: 'command' must be a string)"; }

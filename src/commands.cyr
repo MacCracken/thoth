@@ -2563,7 +2563,7 @@ fn _mcpres_prompt_row(p) {
     if (nm != 0) { _mcpres_label(ROLE_ACCENT, nm); } else { ui_emit(ROLE_FAINT, "(no name)"); }
     # Argument names come from the server; render them as the positional order the slash form takes.
     var av = 0;
-    if (p != 0) { av = bayan_json_v_obj_get(p, "arguments"); }
+    if (p != 0) { av = bayan_json_v_obj_get_by_cstr(p, "arguments"); }
     if (av != 0) {
         var an = bayan_json_v_arr_len(av);
         var k = 0;
@@ -2777,7 +2777,7 @@ fn _prompt_args_json(p, rest) {
     var off = 0;
     off = _append_cstr_cap(_prompt_args_buf, off, PROMPT_ARGS_CAP, "{");
     var av = 0;
-    if (p != 0) { av = bayan_json_v_obj_get(p, "arguments"); }
+    if (p != 0) { av = bayan_json_v_obj_get_by_cstr(p, "arguments"); }
     var an = 0;
     if (av != 0) { an = bayan_json_v_arr_len(av); }
     var cur = rest;

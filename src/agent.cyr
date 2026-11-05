@@ -249,7 +249,7 @@ fn _agent_xtree_path(args_json) {
     if (args_json == 0) { return 0; }
     var v = bayan_json_v_parse_buf(args_json, strlen(args_json));
     if (v == 0) { return 0; }
-    var pv = bayan_json_v_obj_get(v, "path");
+    var pv = bayan_json_v_obj_get_by_cstr(v, "path");
     if (pv == 0) { return 0; }
     var ps = bayan_json_v_str(pv);
     if (ps == 0) { return 0; }
@@ -330,14 +330,14 @@ fn agent_format_tools(dst, tools_arr) {
             # can withhold the whole tool rather than half-writing it. A definition that changed since this
             # session pinned it is not advertised at all — the model never learns the tool exists, so the
             # swapped description never enters its context. See src/toolpin.cyr.
-            var nm = bayan_json_v_obj_get(t, "name");
-            var ds = bayan_json_v_obj_get(t, "description");
+            var nm = bayan_json_v_obj_get_by_cstr(t, "name");
+            var ds = bayan_json_v_obj_get_by_cstr(t, "description");
             var pin_name = "";
             var pin_desc = "";
             var pin_schema = "";
             if (nm != 0) { var nmp = bayan_json_v_str(nm); if (nmp != 0) { pin_name = str_cstr(nmp); } }
             if (ds != 0) { var dsp = bayan_json_v_str(ds); if (dsp != 0) { pin_desc = str_cstr(dsp); } }
-            var scp = bayan_json_v_obj_get(t, "inputSchema");
+            var scp = bayan_json_v_obj_get_by_cstr(t, "inputSchema");
             if (scp != 0) { var scb = bayan_json_v_build(scp); if (scb != 0) { pin_schema = str_cstr(scb); } }
             if (toolpin_check(pin_name, pin_desc, pin_schema) == 0) { i = i + 1; }
             else {
@@ -354,9 +354,9 @@ fn agent_format_tools(dst, tools_arr) {
             # calls). So thoth must never emit a typeless schema, regardless of what daimon advertises. (Upstream:
             # mneme should register a real inputSchema; filed. thoth stays a tolerant client.)
             off = _append_cstr_cap(dst, off, cap, "\",\"parameters\":");
-            var sc = bayan_json_v_obj_get(t, "inputSchema");
+            var sc = bayan_json_v_obj_get_by_cstr(t, "inputSchema");
             var has_type = 0;
-            if (sc != 0) { if (bayan_json_v_is_obj(sc) == 1) { if (bayan_json_v_obj_get(sc, "type") != 0) { has_type = 1; } } }
+            if (sc != 0) { if (bayan_json_v_is_obj(sc) == 1) { if (bayan_json_v_obj_get_by_cstr(sc, "type") != 0) { has_type = 1; } } }
             if (has_type == 1) {
                 var scs = bayan_json_v_build(sc);
                 if (scs != 0) { off = _append_cstr_cap(dst, off, cap, str_cstr(scs)); }
@@ -593,19 +593,19 @@ fn agent_build_request(dst, model, system, mem, tools_buf, tools_len, stream) {
 fn agent_tool_calls(body, len) {
     var v = bayan_json_v_parse_buf(body, len);
     if (v == 0) { return 0; }
-    var choices = bayan_json_v_obj_get(v, "choices");
+    var choices = bayan_json_v_obj_get_by_cstr(v, "choices");
     if (choices == 0) { return 0; }
     var first = bayan_json_v_arr_get(choices, 0);
     if (first == 0) { return 0; }
-    var msg = bayan_json_v_obj_get(first, "message");
+    var msg = bayan_json_v_obj_get_by_cstr(first, "message");
     if (msg == 0) { return 0; }
-    return bayan_json_v_obj_get(msg, "tool_calls");
+    return bayan_json_v_obj_get_by_cstr(msg, "tool_calls");
 }
 fn agent_tc_count(tcs) { if (tcs == 0) { return 0; } return bayan_json_v_arr_len(tcs); }
 fn _agent_tc_str(tcs, i, key) {
     var e = bayan_json_v_arr_get(tcs, i);
     if (e == 0) { return 0; }
-    var v = bayan_json_v_obj_get(e, key);
+    var v = bayan_json_v_obj_get_by_cstr(e, key);
     if (v == 0) { return 0; }
     var s = bayan_json_v_str(v);
     if (s == 0) { return 0; }
@@ -615,9 +615,9 @@ fn agent_tc_id(tcs, i) { return _agent_tc_str(tcs, i, "id"); }
 fn _agent_tc_fn_str(tcs, i, key) {
     var e = bayan_json_v_arr_get(tcs, i);
     if (e == 0) { return 0; }
-    var f = bayan_json_v_obj_get(e, "function");
+    var f = bayan_json_v_obj_get_by_cstr(e, "function");
     if (f == 0) { return 0; }
-    var v = bayan_json_v_obj_get(f, key);
+    var v = bayan_json_v_obj_get_by_cstr(f, key);
     if (v == 0) { return 0; }
     var s = bayan_json_v_str(v);
     if (s == 0) { return 0; }
@@ -656,9 +656,9 @@ fn agent_tc_name(tcs, i) {
 fn agent_tc_args(tcs, i) {
     var e = bayan_json_v_arr_get(tcs, i);
     if (e == 0) { return 0; }
-    var f = bayan_json_v_obj_get(e, "function");
+    var f = bayan_json_v_obj_get_by_cstr(e, "function");
     if (f == 0) { return 0; }
-    var v = bayan_json_v_obj_get(f, "arguments");
+    var v = bayan_json_v_obj_get_by_cstr(f, "arguments");
     if (v == 0) { return 0; }
     var s = bayan_json_v_str(v);
     if (s != 0) { return str_cstr(s); }          # OpenAI / Anthropic / Gemini: already a JSON string
@@ -814,13 +814,13 @@ fn agent_err_msg() { if (_ag_err_msg == 0) { return 0; } if (load8(_ag_err_msg) 
 # one line of chrome everywhere it is shown, so a newline goes too, or it would forge a second `thoth:`
 # line. By LENGTH, so an escaped NUL becomes '?' instead of silently cutting the reason short.
 fn _ag_err_capture(v) {
-    var err = bayan_json_v_obj_get(v, "error");
+    var err = bayan_json_v_obj_get_by_cstr(v, "error");
     if (err == 0) { return 0; }
     if (_ag_err_seen == 1) { return 1; }
     _ag_err_seen = 1;
-    var c = bayan_json_v_obj_get(err, "code");
+    var c = bayan_json_v_obj_get_by_cstr(err, "code");
     if (c != 0) { _ag_err_code = bayan_json_v_int(c); }
-    var m = bayan_json_v_obj_get(err, "message");
+    var m = bayan_json_v_obj_get_by_cstr(err, "message");
     if (m != 0) {
         var ms = bayan_json_v_str(m);
         if (ms != 0) {
@@ -905,20 +905,20 @@ fn _ag_append_args(idx, s) {
 # anyway, so "whole call" is the only sound reading of an index-less element.)
 fn _agent_accum_delta(e) {
     var idx = 0;
-    var idxv = bayan_json_v_obj_get(e, "index");
+    var idxv = bayan_json_v_obj_get_by_cstr(e, "index");
     if (idxv != 0) { idx = bayan_json_v_int(idxv); }
     else { idx = _ag_max; }
     if (idx < 0) { return 0; }
     if (idx >= AGENT_MAX_CALLS) { _ag_over_cap = 1; return 0; }   # 0.44.2: counted + announced, never silent
     if ((idx + 1) > _ag_max) { _ag_max = idx + 1; }
     store8(_ag_seen + idx, 1);
-    var idv = bayan_json_v_obj_get(e, "id");
+    var idv = bayan_json_v_obj_get_by_cstr(e, "id");
     if (idv != 0) { var s = bayan_json_v_str(idv); if (s != 0) { _ag_copy_str(_ag_ids + (idx * AG_ID_CAP), AG_ID_CAP, s); } }
-    var fnv = bayan_json_v_obj_get(e, "function");
+    var fnv = bayan_json_v_obj_get_by_cstr(e, "function");
     if (fnv != 0) {
-        var nmv = bayan_json_v_obj_get(fnv, "name");
+        var nmv = bayan_json_v_obj_get_by_cstr(fnv, "name");
         if (nmv != 0) { var ns = bayan_json_v_str(nmv); if (ns != 0) { _ag_copy_str(_ag_names + (idx * AG_NAME_CAP), AG_NAME_CAP, ns); } }
-        var arv = bayan_json_v_obj_get(fnv, "arguments");
+        var arv = bayan_json_v_obj_get_by_cstr(fnv, "arguments");
         if (arv != 0) { var as = bayan_json_v_str(arv); if (as != 0) { _ag_append_args(idx, as); } }
     }
     return 0;
@@ -1812,23 +1812,23 @@ fn _agent_sse_cb(ctx, ev) {
     # guard below — the current frame happens to carry `choices`, a future leaner one might not, and a
     # check placed after that early return would silently never fire. See _ag_err_capture.
     _ag_err_capture(v);
-    var choices = bayan_json_v_obj_get(v, "choices");
+    var choices = bayan_json_v_obj_get_by_cstr(v, "choices");
     if (choices == 0) { spin_anim_release(); return 1; }
     var first = bayan_json_v_arr_get(choices, 0);
     if (first == 0) { spin_anim_release(); return 1; }
-    var delta = bayan_json_v_obj_get(first, "delta");
+    var delta = bayan_json_v_obj_get_by_cstr(first, "delta");
     if (delta == 0) { spin_anim_release(); return 1; }
-    var rc = bayan_json_v_obj_get(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty when no reasoning text arrives — see _reason_acc)
+    var rc = bayan_json_v_obj_get_by_cstr(delta, "reasoning_content");   # 0.35.2: chain-of-thought stream -> reasoning fold (empty when no reasoning text arrives — see _reason_acc)
     if (rc != 0) {
         var rs = _hoosh_clean_text_after(rc, _reason_acc, _reason_acc_len);   # 0.45.0: cleaned where it enters; 0.52.8 (F3): after the text it continues
         if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
     }
-    var content = bayan_json_v_obj_get(delta, "content");
+    var content = bayan_json_v_obj_get_by_cstr(delta, "content");
     if (content != 0) {
         var s = _hoosh_clean_text_after(content, _hoosh_acc, _hoosh_acc_len);   # 0.45.0: cleaned BEFORE mdhl_feed and the accumulator both see it; 0.52.8 (F3): after the text it continues
         if (s != 0) { var n = str_len(s); if (n > 0) { mdhl_feed(str_data(s), n); _hoosh_acc_append(str_data(s), n); } }   # 0.15.1: fenced-code highlighter
     }
-    var tcs = bayan_json_v_obj_get(delta, "tool_calls");
+    var tcs = bayan_json_v_obj_get_by_cstr(delta, "tool_calls");
     if (tcs != 0) {
         var tn = bayan_json_v_arr_len(tcs);
         var i = 0;

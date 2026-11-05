@@ -2,6 +2,99 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.52.9] - 2026-11-05
+
+**Cyrius 6.6.20, and every vendored bundle at its last tag on that toolchain.** The pin moves `6.6.6` → `6.6.20`, `lib/`
+is re-synced, and ten of the eleven vendored bundles move. Each bundle stops at its newest tag pinned to cyrius 6.6.20
+or lower; every bundle's next tag needs 6.7.x. The suite stayed green on the new floor before any source change, and
+the warning sets looked clean. Reading the floor's 10,000-line changelog against thoth found what neither could show:
+a build-driver check dead since 6.6.10, and two floor changes that altered what thoth tells the operator. All are fixed
+here. Each fix has a test or a planted failure that fails when it is reverted. Suite **852 + 2332 + 1222 + 888 + 190 +
+6** (+9; the closing 6 is binaries, and the sixth is `[build].test`'s stub, which the runner now counts). Repair batch
+13 moves to 0.52.10.
+
+- **The toolchain: 6.6.6 → 6.6.20.**
+  - `cyrius lib sync --full` copied the 113-file snapshot: 96 files changed, and `lib/poison.cyr` and
+    `lib/tls_hostid.cyr` are new. A recursive `cmp` sweep of the snapshot came back clean.
+  - The symbol diff found 40 functions, 87 globals and 10 enum members removed. thoth's own source uses none of them.
+    The one hit is avatara's `f64_le` / `f64_ge`, compiler builtins since 6.6.13. They were the only reason `math` was
+    in `[deps].stdlib`, so it leaves the list, 43 KB lighter.
+  - Stdlib order no longer decides anything: every module includes what it calls. Reversing the whole list built the
+    same warnings and passed the same suites, so `cyrius.cyml`'s comments no longer claim otherwise.
+  - **`cyrius.lock` is new and belongs in the repository.** Since 6.6.9 a stdlib-only project gets a first lock. `lib/`
+    gains two files with it: commit all three together.
+  - 127 calls to the deprecated `bayan_json_v_obj_get` move to `bayan_json_v_obj_get_by_cstr`, the same lookup. All
+    keys are C strings; the five passed through a parameter were traced to their literals.
+  - A new compiler diagnostic flagged two `streq(str_data(name), …)` in `src/memory.cyr`. `dir_list` NUL-terminates
+    those names, so neither was a live bug; both are `str_eq_cstr` now.
+  - Comments that stated the old floor as fact are corrected: `is_symlink` on Windows, exclusive create on AGNOS and
+    Windows, `dir_list_into`'s Windows arm.
+- **The vendored bundles.**
+  - t-ron **2.1.12**, libro **2.10.8** and bote-core **3.3.17** move in lockstep: t-ron pins those two, and all three
+    sit on sigil 3.13.10, which is the one `lib/` carries.
+  - sit-read **1.6.4** carries sit's audit. For thoth, the part that matters is that git read-mode reads each `.idx`
+    and `.pack` once, where it re-read them per object into a heap that never frees.
+  - darshana **1.2.1** issues no raw syscall of its own any more, and adds the public `tty_raw_nonblock`. thoth still
+    calls the private `_tty_apply_raw_flags`, byte-identical across the bump (the roadmap's item).
+  - kashi **1.1.1** adds two cells past 0xFF and a Unicode map. thoth's rasteriser folds to a cell below 0x100 first,
+    so neither moved cell is reachable.
+  - avatara **2.15.1**, agnosai-guard **2.1.8**, sankoch-zlib **2.8.2** and vyakarana **2.4.3** change their headers;
+    agnosai also corrects one log length. anuenue stays at **1.3.6**, its last tag on the 6.6 line.
+  - **sit's new `Requires` block would have pulled the stdlib's whole sankoch in on top of thoth's zlib profile:** 161
+    duplicate functions with the stdlib's older copy winning, and 500 KB. sit-read calls nothing outside the profile,
+    so `scripts/sync-sit.sh` drops that one line, and a vendor test pins its absence.
+  - Every bundle was checked byte for byte against its tag. `sync-sit.sh`'s note that the tag does not exist yet told
+    the reader to use the local path, which copies a checkout's HEAD: 1.13.0 here. It now says so.
+- **The build driver's check for reachable undefined functions had been dead since cyrius 6.6.10.**
+  - `scripts/build.sh` matched the compiler's `(call site may be unreachable)`, which 6.6.10 reworded to `(reachable call
+    site)`. The list went empty with no error, so a best-effort lane blocked on a reachable undefined function reported
+    a clean known-gap skip.
+  - It reads the new wording, and the compiler's own refusal count is now a witness: a refusal that left the list empty
+    fails the lane, so the next rewording cannot hide the same way.
+  - Planted bug, same tree: the old pattern reports `BEST-EFFORT SKIP`, rc 0; the new one reports `FAILED`. Its first
+    real catch was this release's own `exec_signals_init`, written inside a POSIX-only block.
+  - `SYS_SOCKET`, `SYS_CONNECT` and `sys_rmdir` leave the gap lists: an entry for a closed gap only excuses a regression.
+- **An unreadable directory read as an empty one** (floor change, 6.6.10).
+  - `is_dir` answers from `stat` now, so it is 1 for a directory this process cannot read, while `dir_list` still
+    answers empty. Together they told the model such a directory held nothing, where 0.52.8 said it did not exist.
+  - `list_dir` now says "that directory could not be read". `search` keeps what it could read and names the rest:
+    "1 directory could not be read - results may be incomplete", and a miss says so too, instead of a clean "no matches".
+- **A launcher's ignored SIGCHLD** (floor change, 6.6.7).
+  - An ignored SIGCHLD survives `execve`, and the kernel then reaps every child itself. `exec_*` answers -1 for that
+    since 6.6.7, so line-mode `/run` printed "failed to spawn /bin/sh" over a command that had visibly run.
+  - The capture's wait tests only for its own pid, so in the same state every captured command sat out its whole
+    timeout. That half is older: 0.52.8's tool round had not finished after 40 s in a pty.
+  - thoth resets SIGCHLD to the default at startup. The same run takes 0.1 s.
+- **The suite no longer hangs on an open stdin.** `test_tui_ask_rows` (0.52.8) calls the real `tui_ask`, which reads
+  stdin, so `cyrius test` waited forever on an idle terminal or pipe; CI hands the suite an EOF and never showed it. At
+  6.6.20 the runner kills the binary after 300 s and reports a failure. A new `_t_fd0_eof` puts `/dev/null` under the
+  read, and the whole suite ran with stdin held open.
+- **The live kit works on Hyprland 0.57.** It takes Lua config, and `hyprctl dispatch` takes a Lua expression. The old
+  hyprlang file applied nothing: the physical connector stayed enabled with no DRM master, and the compositor aborted at
+  startup. `scripts/gui-live.sh` writes `hypr.lua`, and `close`, `down` and the documented float and resize forms are
+  ported and were each driven live.
+- **Floor changes kept as they are.**
+  - One SSE event of 256 KiB or more now ends a chunked stream with `PROTOCOL`. 0.52.8 dropped that event's bytes
+    silently and carried on, losing the content; an honest failure is the improvement. One-shot words it as the
+    generic transport error.
+  - Native TLS is stricter: `*.lan` is no longer a wildcard, an underscore host does not match `*.example.com`, an IP
+    host matches only iPAddress SANs and sends no SNI, and EKU is enforced on every CA and the trust anchor. A private-CA
+    or self-signed hoosh or daimon may need a new certificate. A real handshake to a public host works.
+- **The Windows lane is one bundle away from linking.** The architectural socket gap is gone at this floor. The lane
+  now stops only on t-ron's unconditional `sighup_init` (`SIGHUP`, `SIG_BLOCK`), which thoth never calls. With those two
+  constants defined in a throwaway copy, a full PE32+ `thoth.exe` linked (6.7 MB); it was not run. `is_symlink` works on
+  Windows and a PE `O_CREAT | O_EXCL` no longer follows a final symlink, so those two ship blockers are closed.
+- **Found, not fixed: a reply past 64 KiB is cut with no mark.** `HOOSH_ACC_CAP` holds the reply that history, `/save`,
+  one-shot stdout and `--json` read. Measured with ordinary small deltas on both 0.52.8 and 0.52.9, so it is older than
+  this release; it is on the roadmap as repair batch 13.
+
+Verified on the finished tree. Linux and AGNOS warning sets match 0.52.8's but for one sigil line number. aarch64 adds
+the three documented sit dead-path warnings and the static-data note Linux always printed. All five suites pass as
+aarch64 binaries under `qemu-aarch64` (5,484 of 5,484). macOS built with a 6.6.20 toolchain cross-built from the tag,
+and its native suite is green (875 + 2322 + 1213 + 190 + 835). A fresh clone at a detached tag with an empty `HOME`
+passes, the shape of the Release run. The TUI ran in a pty and the window on a headless compositor, x86_64 and aarch64
+under qemu, both against the stub gateway. The AGNOS ring-3 re-run stays deferred with the AGNOS follow-up.
+
 ## [0.52.8] - 2026-10-09
 
 **Repair batch 12: an audit of 0.52.6 and 0.52.7.** Nothing was pinned to batch 12, so it became an audit of what the

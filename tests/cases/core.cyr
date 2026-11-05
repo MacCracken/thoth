@@ -756,7 +756,7 @@ fn test_hoosh() {
     var data = hoosh_extract_models(mbody, strlen(mbody));
     assert(data != 0, "model list present");
     assert_eq(bayan_json_v_arr_len(data), 2, "two models in data array");
-    var m0 = bayan_json_v_obj_get(bayan_json_v_arr_get(data, 0), "id");
+    var m0 = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(data, 0), "id");
     assert(str_eq_cstr(bayan_json_v_str(m0), "claude-sonnet-4-6"), "first model id matches");
     var mempty = "{\"object\":\"list\",\"data\":[]}";
     assert_eq(bayan_json_v_arr_len(hoosh_extract_models(mempty, strlen(mempty))), 0, "empty catalog -> 0-length array");
@@ -772,10 +772,10 @@ fn test_hoosh() {
     var dbad = hoosh_extract_models(mbadid, strlen(mbadid));
     assert(dbad != 0, "catalog with a numeric id still parses");
     assert_eq(bayan_json_v_arr_len(dbad), 2, "both entries present");
-    var badid = bayan_json_v_obj_get(bayan_json_v_arr_get(dbad, 0), "id");
+    var badid = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(dbad, 0), "id");
     assert(badid != 0, "the 'id' KEY exists (this is what the old guard checked)");
     assert_eq(bayan_json_v_str(badid), 0, "but its VALUE is not a string -> 0 (the deref that crashed)");
-    var goodid = bayan_json_v_obj_get(bayan_json_v_arr_get(dbad, 1), "id");
+    var goodid = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(dbad, 1), "id");
     assert(str_eq_cstr(bayan_json_v_str(goodid), "ok-model"), "the well-formed sibling still renders");
 
     test_group("hoosh SSE delta extraction");
@@ -802,8 +802,8 @@ fn test_provider_catalog() {
     assert(d != 0, "catalog data array present");
     assert_eq(bayan_json_v_arr_len(d), 3, "three catalog entries");
     var e0 = bayan_json_v_arr_get(d, 0);
-    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get(e0, "owned_by")), "anthropic"), "entry owned_by parsed");
-    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get(e0, "id")), "claude-sonnet-4"), "entry id parsed");
+    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(e0, "owned_by")), "anthropic"), "entry owned_by parsed");
+    assert(str_eq_cstr(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(e0, "id")), "claude-sonnet-4"), "entry id parsed");
     # case-insensitive provider match (user may type 'Anthropic'; hoosh emits 'anthropic')
     assert_eq(_ci_eq("anthropic", "anthropic"), 1, "exact provider matches");
     assert_eq(_ci_eq("Anthropic", "anthropic"), 1, "provider match ignores case");
@@ -814,7 +814,7 @@ fn test_provider_catalog() {
     var i = 0;
     while (i < bayan_json_v_arr_len(d)) {
         var m = bayan_json_v_arr_get(d, i);
-        var ob = bayan_json_v_str(bayan_json_v_obj_get(m, "owned_by"));
+        var ob = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(m, "owned_by"));
         if (_ci_eq(str_cstr(ob), "anthropic") == 1) { matches = matches + 1; }
         i = i + 1;
     }
@@ -2622,21 +2622,21 @@ fn test_state_pins_row() {
     var j = "{\"name\":\"t_ok\",\"description\":\"P.\"}";
     var jv = bayan_json_v_parse_buf(j, strlen(j));
     feed_init(); out_mode_set(OUT_RING);
-    var w1 = _daimon_tool_row(bayan_json_v_obj_get(jv, "name"), bayan_json_v_obj_get(jv, "description"));
+    var w1 = _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv, "name"), bayan_json_v_obj_get_by_cstr(jv, "description"));
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(w1, 0, "a pinned row is not withheld");
     assert_eq(_mid_feed_plain_count("  pinned"), 1, "...and is marked `  pinned` (the mark, not a name)");
     var j2 = "{\"name\":\"t_gone\",\"description\":\"G!\"}";
     var jv2 = bayan_json_v_parse_buf(j2, strlen(j2));
     feed_init(); out_mode_set(OUT_RING);
-    var w2 = _daimon_tool_row(bayan_json_v_obj_get(jv2, "name"), bayan_json_v_obj_get(jv2, "description"));
+    var w2 = _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv2, "name"), bayan_json_v_obj_get_by_cstr(jv2, "description"));
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(w2, 1, "a withheld row is counted");
     assert(_mid_feed_plain_count("WITHHELD") >= 1, "...and marked `WITHHELD`");
     var j3 = "{\"name\":\"t_never\",\"description\":\"N.\"}";
     var jv3 = bayan_json_v_parse_buf(j3, strlen(j3));
     feed_init(); out_mode_set(OUT_RING);
-    _daimon_tool_row(bayan_json_v_obj_get(jv3, "name"), bayan_json_v_obj_get(jv3, "description"));
+    _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv3, "name"), bayan_json_v_obj_get_by_cstr(jv3, "description"));
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_mid_feed_plain_count("  pinned") + _mid_feed_plain_count("WITHHELD"), 0, "a tool no probe pinned carries no mark");
     # the local-layer daimon note
@@ -4512,14 +4512,14 @@ fn test_save_formats() {
     assert(_ui_contains(jb, "\"content\":\"ok\"}") == 1, "...and that reply's object still closes");
     var jv = bayan_json_v_parse_buf(jb, jn);
     assert(jv != 0, "the --json export parses as JSON");
-    var jm = bayan_json_v_obj_get(jv, "messages");
+    var jm = bayan_json_v_obj_get_by_cstr(jv, "messages");
     assert_eq(bayan_json_v_arr_len(jm), 4, "...four messages");
-    var jr = bayan_json_v_obj_get(bayan_json_v_arr_get(jm, 1), "reasoning");
+    var jr = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(jm, 1), "reasoning");
     assert(jr != 0, "...the reasoned reply's object carries the key");
     var jrs = bayan_json_v_str(jr);
     assert((jrs != 0) && (str_eq_cstr(jrs, "think \"hard\"\nabout it") == 1), "...decoding back to the bytes");
-    assert_eq(bayan_json_v_obj_get(bayan_json_v_arr_get(jm, 3), "reasoning"), 0, "...the unreasoned reply's object has none");
-    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get(bayan_json_v_arr_get(jm, 3), "content"))), "ok") == 1, "...and its content is intact after the own-chunk flush");
+    assert_eq(bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(jm, 3), "reasoning"), 0, "...the unreasoned reply's object has none");
+    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(jm, 3), "content"))), "ok") == 1, "...and its content is intact after the own-chunk flush");
     xunlink("/tmp/thoth_t_save.md");
     cmd_save("/save /tmp/thoth_t_save.md");
     mn = _save_read("/tmp/thoth_t_save.md", &mbuf, 4095);
@@ -5385,7 +5385,7 @@ fn test_seam_text_sanitise() {
     assert(tv != 0, "premise: the registry entry parses");
     var rs = "r\x1b[7mRESMARK ok\nline two";
     feed_init(); out_mode_set(OUT_RING);
-    _daimon_tool_row(bayan_json_v_obj_get(tv, "name"), bayan_json_v_obj_get(tv, "description"));
+    _daimon_tool_row(bayan_json_v_obj_get_by_cstr(tv, "name"), bayan_json_v_obj_get_by_cstr(tv, "description"));
     _daimon_print_str(str_new(rs, strlen(rs)));
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_mid_feed_count("\x1b[7mTOOLMARK"), 0, "a /tools row carries no raw escape from a registry tool's name");
@@ -5589,7 +5589,7 @@ fn test_reply_text_sanitise() {
     bo = _stx_cat_bs(bb, bo, 512, "", "u0000tail\"}}]}");
     store8(bb + bo, 0);
     # the premise, or the assertions after it could pass vacuously: the parser really hands thoth an ESC byte
-    var braw = bayan_json_v_str(bayan_json_v_obj_get(bayan_json_v_obj_get(bayan_json_v_arr_get(bayan_json_v_obj_get(bayan_json_v_parse_buf(bb, bo), "choices"), 0), "message"), "content"));
+    var braw = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(bayan_json_v_obj_get_by_cstr(bayan_json_v_parse_buf(bb, bo), "choices"), 0), "message"), "content"));
     assert(braw != 0, "premise: the completion parses");
     assert_eq(_t_count_sub(str_data(braw), str_len(braw), "\x1b[7mREPLYMARK", 13), 1, "premise: the JSON escape decodes into a raw ESC byte");
     var bs = hoosh_extract_content(bb, bo);
@@ -5641,7 +5641,7 @@ fn test_reply_text_sanitise() {
     o = _rtx_frame_open(fr_c3, 256, "content");
     o = _stx_cat_bs(fr_c3, o, 256, "[7mSPLITMARK end", "n\"}}]}");
     store8(fr_c3 + o, 0);
-    var p2 = bayan_json_v_str(bayan_json_v_obj_get(bayan_json_v_obj_get(bayan_json_v_arr_get(bayan_json_v_obj_get(bayan_json_v_parse_buf(fr_c2, strlen(fr_c2)), "choices"), 0), "delta"), "content"));
+    var p2 = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(bayan_json_v_obj_get_by_cstr(bayan_json_v_parse_buf(fr_c2, strlen(fr_c2)), "choices"), 0), "delta"), "content"));
     assert(p2 != 0, "premise: the split frame parses");
     assert_eq(load8(str_data(p2) + str_len(p2) - 1), 27, "premise: its content really ends in a raw ESC byte");
 

@@ -78,3 +78,28 @@ fn _t_fd1_restore() {
     #endif
     return 0;
 }
+
+# _t_fd0_eof / _t_fd0_restore: put /dev/null on stdin around code that really reads it. A test that reaches a real read
+# otherwise waits on whatever the runner left open: an idle pipe, or the operator's terminal. CI hands the suite an
+# EOF, so only those two ever show it. POSIX only, like the fd-1 pair; returns 0 on success.
+var _T_FD0_PARK = 201;
+fn _t_fd0_eof() {
+    #ifndef CYRIUS_TARGET_AGNOS
+    var fd = file_open("/dev/null", O_RDONLY, 0);
+    if (fd < 0) { return 0 - 1; }
+    if (sys_dup2(0, _T_FD0_PARK) < 0) { file_close(fd); return 0 - 1; }
+    sys_dup2(fd, 0);
+    file_close(fd);
+    return 0;
+    #endif
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0 - 1;
+    #endif
+}
+fn _t_fd0_restore() {
+    #ifndef CYRIUS_TARGET_AGNOS
+    sys_dup2(_T_FD0_PARK, 0);
+    file_close(_T_FD0_PARK);
+    #endif
+    return 0;
+}

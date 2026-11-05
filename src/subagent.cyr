@@ -581,7 +581,7 @@ fn subagent_tool(args_json) {
     if (args_json == 0) { return "(delegate: missing arguments)"; }
     var av = bayan_json_v_parse_buf(args_json, strlen(args_json));
     if (av == 0) { return "(delegate: arguments are not valid JSON)"; }
-    var tv2 = bayan_json_v_obj_get(av, "task");
+    var tv2 = bayan_json_v_obj_get_by_cstr(av, "task");
     if (tv2 == 0) { return "(delegate needs a \"task\" string)"; }
     var ts = bayan_json_v_str(tv2);                     # 0.39.0 A-4: a non-string value answers 0
     if (ts == 0) { return "(delegate needs a \"task\" string)"; }

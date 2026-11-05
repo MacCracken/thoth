@@ -23,15 +23,16 @@
 # stdlib-using library face, not the core. src/font_data.cyr IS tracked at every
 # tag — hence the raw URL below points at src/, not dist/.
 #
-# HISTORY: the core has been BYTE-IDENTICAL across the entire 1.0.x line
-# (verified tag by tag from 1.0.2 through 1.0.10), so a kashi version bump is
-# usually a no-op on this file. Re-run the script anyway on a refresh — a no-op
-# that is checked beats a no-op that is assumed.
+# HISTORY: the core was BYTE-IDENTICAL across the entire 1.0.x line (verified tag
+# by tag from 1.0.2 through 1.0.10), so a patch bump is usually a no-op on this
+# file. 1.1.0 changed it: a two-cell extension block past 0xFF and a Unicode->cell
+# map. Re-run the script on a refresh — a no-op that is checked beats a no-op that
+# is assumed.
 #
-# Usage: ./scripts/sync-kashi.sh [tag]   (default: 1.0.10)
+# Usage: ./scripts/sync-kashi.sh [tag]   (default: 1.1.1)
 set -euo pipefail
 
-TAG="${1:-1.0.10}"
+TAG="${1:-1.1.1}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/kashi.cyr"
 PREV="$(mktemp)"

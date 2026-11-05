@@ -109,14 +109,14 @@ fn mpick_load_from(data) {
     var i = 0;
     while (i < n) {
         var m = bayan_json_v_arr_get(data, i);
-        var id = bayan_json_v_obj_get(m, "id");
+        var id = bayan_json_v_obj_get_by_cstr(m, "id");
         if (id != 0) {
             var ids = bayan_json_v_str(id);
             if (ids != 0) {
                 var added = _mp_add(str_cstr(ids));
                 if ((added == 0) && (str_len(ids) > 0)) { _mp_unloaded = _mp_unloaded + 1; }   # 0.52.6 (audit E11): past MPICK_MAX / MPICK_STORE — counted, never silently gone
                 if (added == 1) {
-                    var ob = bayan_json_v_obj_get(m, "owned_by");
+                    var ob = bayan_json_v_obj_get_by_cstr(m, "owned_by");
                     if (ob != 0) {
                         var obs = bayan_json_v_str(ob);
                         if (obs != 0) { store64(_mp_prov + (_mp_n - 1) * 8, hoosh_provider_index(str_cstr(obs))); }
@@ -137,12 +137,12 @@ fn mpick_load_from(data) {
 # `routes`, its `pricing` and its `context_window`. Absent fields leave the -1 _mp_add wrote (omit-until-present). A
 # price outside the range the label can print is dropped, as hoosh_price_label drops the operator's. PURE over m.
 fn _mp_take_extras(i, m) {
-    store64(_mp_rstate + i * 8, hoosh_routes_fold(bayan_json_v_obj_get(m, "routes")));
-    store64(_mp_rkeybad + i * 8, hoosh_routes_keybad(bayan_json_v_obj_get(m, "routes")));   # 0.52.8 (A11 + B5)
-    var pr = bayan_json_v_obj_get(m, "pricing");
+    store64(_mp_rstate + i * 8, hoosh_routes_fold(bayan_json_v_obj_get_by_cstr(m, "routes")));
+    store64(_mp_rkeybad + i * 8, hoosh_routes_keybad(bayan_json_v_obj_get_by_cstr(m, "routes")));   # 0.52.8 (A11 + B5)
+    var pr = bayan_json_v_obj_get_by_cstr(m, "pricing");
     if (pr != 0) {
-        var pi = bayan_json_v_obj_get(pr, "input_micro_usd_per_1k");
-        var po = bayan_json_v_obj_get(pr, "output_micro_usd_per_1k");
+        var pi = bayan_json_v_obj_get_by_cstr(pr, "input_micro_usd_per_1k");
+        var po = bayan_json_v_obj_get_by_cstr(pr, "output_micro_usd_per_1k");
         if ((bayan_json_v_tag(pi) == JTAG_INT) && (bayan_json_v_tag(po) == JTAG_INT)) {
             var vi = bayan_json_v_int(pi);
             var vo = bayan_json_v_int(po);
@@ -152,7 +152,7 @@ fn _mp_take_extras(i, m) {
             }
         }
     }
-    var cw = bayan_json_v_obj_get(m, "context_window");
+    var cw = bayan_json_v_obj_get_by_cstr(m, "context_window");
     if (bayan_json_v_tag(cw) == JTAG_INT) {
         if (bayan_json_v_int(cw) > 0) { store64(_mp_ctx + i * 8, bayan_json_v_int(cw)); }
     }

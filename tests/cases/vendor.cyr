@@ -56,14 +56,14 @@ fn _vd_pin(path, header, label) {
 
 fn test_vendor_pins() {
     test_group("vendored dist bundles report their pinned version (src/vendor/, 0.38.6)");
-    _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.15.0", "avatara pinned at 2.15.0");
-    _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.3.13", "bote-core pinned at 3.3.13");
-    _vd_pin("src/vendor/libro.cyr",     "# Version: 2.10.3", "libro pinned at 2.10.3");
-    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.1.11", "t-ron pinned at 2.1.11");
-    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.6.2",  "sit-read pinned at 1.6.2");
-    _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.8.0",  "sankoch-zlib pinned at 2.8.0");
-    _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.4.2",  "vyakarana pinned at 2.4.2");
-    _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.1.2",  "darshana pinned at 1.1.2");
+    _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.15.1", "avatara pinned at 2.15.1");
+    _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.3.17", "bote-core pinned at 3.3.17");
+    _vd_pin("src/vendor/libro.cyr",     "# Version: 2.10.8", "libro pinned at 2.10.8");
+    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.1.12", "t-ron pinned at 2.1.12");
+    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.6.4",  "sit-read pinned at 1.6.4");
+    _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.8.2",  "sankoch-zlib pinned at 2.8.2");
+    _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.4.3",  "vyakarana pinned at 2.4.3");
+    _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.2.1",  "darshana pinned at 1.2.1");
     _vd_pin("src/vendor/anuenue.cyr",   "# Version: 1.3.6",  "anuenue pinned at 1.3.6");
     # 0.43.2: agnosai-guard was the ONE bundle outside this gate — nine of ten pinned, and the tenth is
     # the secret/PII redactor behind [redact] and the injection guard behind [guard], i.e. the one where
@@ -71,7 +71,7 @@ fn test_vendor_pins() {
     # bundle whose sync script checks are ALL non-fatal (`echo "WARN: …"`, exit 0), so nothing else
     # caught it: run sync-agnosai.sh with a stale tag, get a WARN among the normal success lines, commit,
     # and the tree builds clean and passes every other test with a downgraded redactor.
-    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.1.0", "agnosai-guard pinned at 2.1.0");
+    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.1.8", "agnosai-guard pinned at 2.1.8");
 
     # kashi is the exception and deliberately so: thoth vendors kashi's FREESTANDING
     # CORE (its `src/font_data.cyr`), not the generated `dist/kashi.cyr` library face,
@@ -135,6 +135,12 @@ fn test_vendor_hazards() {
     assert(_vd_count("_sit_entry_hash") > 0, "sit-read: the entry_hash rename actually applied");
     assert_eq(_vd_count("ann_new"), _vd_count("_sit_ann_new"), "sit-read: every ann_new is renamed (vs bote-core's)");
     assert(_vd_count("_sit_ann_new") > 0, "sit-read: the ann_new rename actually applied");
+    # sit 1.6.3's `Requires` block names the stdlib's full sankoch. On top of the zlib profile thoth vendors, that
+    # defines every profile function twice, the stdlib's copy wins, and the binary grows by the whole codec family.
+    # Anchored: only an include line can start there. scripts/sync-sit.sh drops it.
+    assert_eq(_vd_count("\ninclude \"lib/sankoch.cyr\""), 0, "sit-read: no stdlib sankoch include (the zlib profile is the one)");
+    assert(_vd_count("\ninclude \"lib/patra.cyr\"") == 1, "sanity: sit-read's Requires block is there to be read");
+
     # sit >= 1.3.1 made sit_repo_open chdir-free, which is what lets thoth build git
     # natively on AGNOS. A returning SYS_CHDIR would silently undo that. The bundle
     # keeps ONE mention — the changelog comment recording the removal, where the call

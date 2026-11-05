@@ -876,13 +876,13 @@ fn _hoosh_clean_text_after(v, ctx, ctx_n) {
 fn hoosh_extract_content(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
-    var choices = bayan_json_v_obj_get(v, "choices");
+    var choices = bayan_json_v_obj_get_by_cstr(v, "choices");
     if (choices == 0) { return 0; }
     var first = bayan_json_v_arr_get(choices, 0);
     if (first == 0) { return 0; }
-    var msg = bayan_json_v_obj_get(first, "message");
+    var msg = bayan_json_v_obj_get_by_cstr(first, "message");
     if (msg == 0) { return 0; }
-    var content = bayan_json_v_obj_get(msg, "content");
+    var content = bayan_json_v_obj_get_by_cstr(msg, "content");
     if (content == 0) { return 0; }
     return _hoosh_clean_text(content);
 }
@@ -896,13 +896,13 @@ fn hoosh_extract_content(body, body_len) {
 fn hoosh_extract_delta(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
-    var choices = bayan_json_v_obj_get(v, "choices");
+    var choices = bayan_json_v_obj_get_by_cstr(v, "choices");
     if (choices == 0) { return 0; }
     var first = bayan_json_v_arr_get(choices, 0);
     if (first == 0) { return 0; }
-    var delta = bayan_json_v_obj_get(first, "delta");
+    var delta = bayan_json_v_obj_get_by_cstr(first, "delta");
     if (delta == 0) { return 0; }
-    var content = bayan_json_v_obj_get(delta, "content");
+    var content = bayan_json_v_obj_get_by_cstr(delta, "content");
     if (content == 0) { return 0; }
     return _hoosh_clean_text(content);
 }
@@ -912,9 +912,9 @@ fn hoosh_extract_delta(body, body_len) {
 fn hoosh_extract_error(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
-    var err = bayan_json_v_obj_get(v, "error");
+    var err = bayan_json_v_obj_get_by_cstr(v, "error");
     if (err == 0) { return 0; }
-    var m = bayan_json_v_obj_get(err, "message");
+    var m = bayan_json_v_obj_get_by_cstr(err, "message");
     if (m == 0) { return 0; }
     return bayan_json_v_str(m);
 }
@@ -931,7 +931,7 @@ fn hoosh_extract_models_a(a, body, body_len) {
     if (a == 0) { v = bayan_json_v_parse_buf(body, body_len); }
     else { v = bayan_json_v_parse_buf_a(a, body, body_len); }
     if (v == 0) { return 0; }
-    var data = bayan_json_v_obj_get(v, "data");
+    var data = bayan_json_v_obj_get_by_cstr(v, "data");
     if (data == 0) { return 0; }
     return data;
 }
@@ -942,9 +942,9 @@ fn hoosh_extract_models_a(a, body, body_len) {
 # reuse the value it already parsed instead of parsing twice per frame.
 fn _hoosh_usage_field(v, key) {
     if (v == 0) { return 0 - 1; }
-    var u = bayan_json_v_obj_get(v, "usage");
+    var u = bayan_json_v_obj_get_by_cstr(v, "usage");
     if (u == 0) { return 0 - 1; }
-    var t = bayan_json_v_obj_get(u, key);
+    var t = bayan_json_v_obj_get_by_cstr(u, key);
     if (t == 0) { return 0 - 1; }
     var n = bayan_json_v_int(t);
     # 0.52.6 (audit E8): a figure no real response carries (past 2^40 tokens, or negative) is ABSENT, not counted — the
@@ -1021,11 +1021,11 @@ fn hoosh_finish_word(f) {
 # without one (every delta but the last) leaves it alone; an unknown word reads as stop. Pure but for the global.
 fn _hoosh_note_finish(v) {
     if (v == 0) { return 0; }
-    var ch = bayan_json_v_obj_get(v, "choices");
+    var ch = bayan_json_v_obj_get_by_cstr(v, "choices");
     if (ch == 0) { return 0; }
     var c0 = bayan_json_v_arr_get(ch, 0);
     if (c0 == 0) { return 0; }
-    var fr = bayan_json_v_str(bayan_json_v_obj_get(c0, "finish_reason"));
+    var fr = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(c0, "finish_reason"));
     if (fr == 0) { return 0; }
     if (str_eq_cstr(fr, "length") == 1) { _hoosh_finish = HOOSH_FIN_LENGTH; }
     elif (str_eq_cstr(fr, "content_filter") == 1) { _hoosh_finish = HOOSH_FIN_FILTER; }
@@ -1208,7 +1208,7 @@ fn _hoosh_list_models_show(data, hk) {
     var i = 0;
     while (i < n) {
         var m = bayan_json_v_arr_get(data, i);
-        var id = bayan_json_v_obj_get(m, "id");
+        var id = bayan_json_v_obj_get_by_cstr(m, "id");
         # 0.39.0 (audit A-4): `id != 0` proves the KEY exists, not that its VALUE is a string.
         # `bayan_json_v_str` answers 0 for any non-JTAG_STR tag, and str_data/str_len/str_eq_cstr
         # then dereference 0 — a SIGSEGV on `{"data":[{"id":123}]}`, which is wire data from a
@@ -1233,8 +1233,8 @@ fn _hoosh_models_are_kinds(data) {
     var i = 0;
     while (i < n) {
         var m = bayan_json_v_arr_get(data, i);
-        var ids = bayan_json_v_str(bayan_json_v_obj_get(m, "id"));
-        var obs = bayan_json_v_str(bayan_json_v_obj_get(m, "owned_by"));
+        var ids = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(m, "id"));
+        var obs = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(m, "owned_by"));
         if ((ids != 0) && (obs != 0)) {
             if (str_len(ids) != str_len(obs)) { return 0; }
             if (memeq(str_data(ids), str_data(obs), str_len(ids)) == 0) { return 0; }
@@ -1269,10 +1269,10 @@ fn _hoosh_entry_tail(ids, m) {
     var pb[80];
     var pl = hoosh_price_label(str_cstr(ids), &pb, 80);
     if ((pl == 0) && (m != 0)) {
-        var pr = bayan_json_v_obj_get(m, "pricing");
+        var pr = bayan_json_v_obj_get_by_cstr(m, "pricing");
         if (pr != 0) {
-            var pi = bayan_json_v_obj_get(pr, "input_micro_usd_per_1k");
-            var po = bayan_json_v_obj_get(pr, "output_micro_usd_per_1k");
+            var pi = bayan_json_v_obj_get_by_cstr(pr, "input_micro_usd_per_1k");
+            var po = bayan_json_v_obj_get_by_cstr(pr, "output_micro_usd_per_1k");
             if ((bayan_json_v_tag(pi) == JTAG_INT) && (bayan_json_v_tag(po) == JTAG_INT)) {
                 pl = hoosh_gw_price_label(bayan_json_v_int(pi), bayan_json_v_int(po), &pb, 80);
             }
@@ -1281,7 +1281,7 @@ fn _hoosh_entry_tail(ids, m) {
     var cb[24];
     var cl = 0;
     if (m != 0) {
-        var cw = bayan_json_v_obj_get(m, "context_window");
+        var cw = bayan_json_v_obj_get_by_cstr(m, "context_window");
         if (bayan_json_v_tag(cw) == JTAG_INT) { cl = _hoosh_ctx_label(bayan_json_v_int(cw), &cb, 24); }
     }
     if (pl > 0) { ui_emit(ROLE_FAINT, "  "); ui_emit(ROLE_FAINT, &pb); }
@@ -1362,7 +1362,7 @@ fn _hoosh_list_models_grouped(data, hk) {
         while (r < n) {
             var m = bayan_json_v_arr_get(data, r);
             if (streq(_hoosh_entry_owner(m), pk) == 1) {
-                var ids = bayan_json_v_str(bayan_json_v_obj_get(m, "id"));
+                var ids = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(m, "id"));
                 if (ids != 0) { _hoosh_model_row_m(ids, cur, m); }
             }
             r = r + 1;
@@ -1380,7 +1380,7 @@ fn _hoosh_list_models_grouped(data, hk) {
 
 # _hoosh_entry_owner (0.52.7): an entry's owned_by as a cstr, or "(unattributed)". PURE.
 fn _hoosh_entry_owner(m) {
-    var obs = bayan_json_v_str(bayan_json_v_obj_get(m, "owned_by"));
+    var obs = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(m, "owned_by"));
     if (obs == 0) { return "(unattributed)"; }
     if (str_len(obs) == 0) { return "(unattributed)"; }
     return str_cstr(obs);
@@ -1726,7 +1726,7 @@ fn hoosh_provider_detail(i, dst, cap) {
 # startup is not an outage, and that default is not a measurement. PURE.
 fn _hp_route_state(entry) {
     var rs = HOOSH_PROV_UNKNOWN;
-    var st = bayan_json_v_obj_get(entry, "status");
+    var st = bayan_json_v_obj_get_by_cstr(entry, "status");
     if (st != 0) {
         var sv = bayan_json_v_str(st);
         if (sv != 0) {
@@ -1736,22 +1736,22 @@ fn _hp_route_state(entry) {
         }
     }
     if (rs == HOOSH_PROV_UNKNOWN) {
-        var en = bayan_json_v_obj_get(entry, "enabled");
+        var en = bayan_json_v_obj_get_by_cstr(entry, "enabled");
         if (en != 0) { if (bayan_json_v_tag(en) == JTAG_BOOL) { if (bayan_json_v_bool(en) == 0) { rs = HOOSH_PROV_DISABLED; } } }
     }
     if (rs == HOOSH_PROV_UNKNOWN) {
-        var he = bayan_json_v_obj_get(entry, "healthy");
+        var he = bayan_json_v_obj_get_by_cstr(entry, "healthy");
         if (he != 0) { if (bayan_json_v_tag(he) == JTAG_BOOL) { if (bayan_json_v_bool(he) == 1) { rs = HOOSH_PROV_HEALTHY; } else { rs = HOOSH_PROV_UNHEALTHY; } } }
     }
     if (rs == HOOSH_PROV_HEALTHY) {
-        var lc = bayan_json_v_obj_get(entry, "last_check_ms");
+        var lc = bayan_json_v_obj_get_by_cstr(entry, "last_check_ms");
         if (lc != 0) { if (bayan_json_v_tag(lc) == JTAG_INT) { if (bayan_json_v_int(lc) == 0) { rs = HOOSH_PROV_UNKNOWN; } } }
     }
     return rs;
 }
 # _hp_catalog_status: a health row's catalog_status (hoosh >= 2.8.0), or 0 when absent / not a number. PURE.
 fn _hp_catalog_status(entry) {
-    var cs = bayan_json_v_obj_get(entry, "catalog_status");
+    var cs = bayan_json_v_obj_get_by_cstr(entry, "catalog_status");
     if (cs == 0) { return 0; }
     if (bayan_json_v_tag(cs) != JTAG_INT) { return 0; }
     return bayan_json_v_int(cs);
@@ -1762,7 +1762,7 @@ fn _hr_record(entry, rs) {
     if (rs == HOOSH_PROV_DISABLED) { return 0; }     # 0.52.8 (audit B3): a catalog never names a disabled route, and one at
                                                      # the same base_url as the live route decided the fold (first match)
     if (_hr_n >= HOOSH_ROUTE_MAX) { _hr_dropped = _hr_dropped + 1; return 0; }   # 0.52.8 (audit A10): counted, not silent
-    var us = bayan_json_v_str(bayan_json_v_obj_get(entry, "base_url"));
+    var us = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(entry, "base_url"));
     if (us == 0) { return 0; }
     var ul = str_len(us);
     if ((ul == 0) || (ul >= HOOSH_ROUTE_URL_CAP)) { return 0; }
@@ -1803,16 +1803,16 @@ fn hoosh_providers_parse_a(a, body, body_len) {
     if (a == 0) { v = bayan_json_v_parse_buf(body, body_len); }
     else { v = bayan_json_v_parse_buf_a(a, body, body_len); }
     if (v == 0) { return 0 - 1; }
-    var arr = bayan_json_v_obj_get(v, "providers");
+    var arr = bayan_json_v_obj_get_by_cstr(v, "providers");
     if (arr == 0) { return 0 - 1; }
     if (bayan_json_v_tag(arr) != JTAG_ARR) { return 0 - 1; }
-    var iv = bayan_json_v_obj_get(v, "check_interval_secs");
+    var iv = bayan_json_v_obj_get_by_cstr(v, "check_interval_secs");
     if (iv != 0) { if (bayan_json_v_tag(iv) == JTAG_INT) { _hp_interval = bayan_json_v_int(iv); } }
     var n = bayan_json_v_arr_len(arr);
     var i = 0;
     while (i < n) {
         var e = bayan_json_v_arr_get(arr, i);
-        var pv = bayan_json_v_obj_get(e, "provider");
+        var pv = bayan_json_v_obj_get_by_cstr(e, "provider");
         if (pv != 0) {
             var ps = bayan_json_v_str(pv);
             if (ps != 0) { if (str_len(ps) > 0) {
@@ -1972,11 +1972,11 @@ fn _hoosh_provider_models_show(provider, body, blen) {
     var shown = 0;
     while (i < n) {
         var m = bayan_json_v_arr_get(data, i);
-        var ob = bayan_json_v_obj_get(m, "owned_by");
+        var ob = bayan_json_v_obj_get_by_cstr(m, "owned_by");
         if (ob != 0) {
             var obs = bayan_json_v_str(ob);
             if ((obs != 0) && (_ci_eq(str_cstr(obs), provider) == 1)) {
-                var id = bayan_json_v_obj_get(m, "id");
+                var id = bayan_json_v_obj_get_by_cstr(m, "id");
                 if (id != 0) {
                     var ids = bayan_json_v_str(id);       # 0.39.0 (audit A-4): non-string id -> 0, not a Str
                     if (ids != 0) {
@@ -2196,22 +2196,22 @@ fn _hoosh_sse_cb(ctx, ev) {
     if (v == 0) { return 1; }
     _hoosh_account_usage(v);
     _hoosh_note_finish(v);                   # 0.52.7: the provider's reason the reply ended (hoosh >= 2.8.0)
-    var choices = bayan_json_v_obj_get(v, "choices");
+    var choices = bayan_json_v_obj_get_by_cstr(v, "choices");
     if (choices == 0) { return 1; }
     var first = bayan_json_v_arr_get(choices, 0);
     if (first == 0) { return 1; }            # usage frame / empty choices
-    var delta = bayan_json_v_obj_get(first, "delta");
+    var delta = bayan_json_v_obj_get_by_cstr(first, "delta");
     if (delta == 0) { return 1; }
     # 0.35.2: reasoning_content precedes content in a round and arrives in its own
     # frames (no content), so capture it BEFORE the content early-return. The GUI
     # stop-poll hook (0.35.0) fires per frame via the intr_check above, so the fold
     # repaints as reasoning streams. Empty when the gateway forwards no reasoning text (see _reason_acc).
-    var rc = bayan_json_v_obj_get(delta, "reasoning_content");
+    var rc = bayan_json_v_obj_get_by_cstr(delta, "reasoning_content");
     if (rc != 0) {
         var rs = _hoosh_clean_text_after(rc, _reason_acc, _reason_acc_len);   # 0.45.0: cleaned where it enters; 0.52.8 (F3): after the text it continues
         if (rs != 0) { var rn = str_len(rs); if (rn > 0) { _reason_acc_append(str_data(rs), rn); } }
     }
-    var content = bayan_json_v_obj_get(delta, "content");
+    var content = bayan_json_v_obj_get_by_cstr(delta, "content");
     if (content == 0) { return 1; }          # role-only / finish / non-content frame
     var s = _hoosh_clean_text_after(content, _hoosh_acc, _hoosh_acc_len);   # 0.45.0: cleaned BEFORE the render sink and the accumulator both see it; 0.52.8 (F3): after the text it continues
     if (s == 0) { return 1; }

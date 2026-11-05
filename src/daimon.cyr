@@ -114,11 +114,11 @@ fn daimon_build_call(dst, name, args_json) {
 fn daimon_extract_text(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0; }
-    var content = bayan_json_v_obj_get(v, "content");
+    var content = bayan_json_v_obj_get_by_cstr(v, "content");
     if (content == 0) { return 0; }
     var first = bayan_json_v_arr_get(content, 0);
     if (first == 0) { return 0; }
-    var text = bayan_json_v_obj_get(first, "text");
+    var text = bayan_json_v_obj_get_by_cstr(first, "text");
     if (text == 0) { return 0; }
     return bayan_json_v_str(text);
 }
@@ -128,7 +128,7 @@ fn daimon_extract_text(body, body_len) {
 fn daimon_extract_is_error(body, body_len) {
     var v = bayan_json_v_parse_buf(body, body_len);
     if (v == 0) { return 0 - 1; }
-    var ie = bayan_json_v_obj_get(v, "isError");
+    var ie = bayan_json_v_obj_get_by_cstr(v, "isError");
     if (ie == 0) { return 0 - 1; }
     if (bayan_json_v_is_bool(ie) == 0) { return 0 - 1; }
     return bayan_json_v_bool(ie);
@@ -213,7 +213,7 @@ fn daimon_list_tools() {
     var blen = sandhi_http_body_len(r);
     var v = bayan_json_v_parse_buf(body, blen);
     if (v == 0) { oprintln("  daimon: response received but not parseable."); return 0 - 1; }
-    var tools = bayan_json_v_obj_get(v, "tools");
+    var tools = bayan_json_v_obj_get_by_cstr(v, "tools");
     if (tools == 0) { oprintln("  daimon: no tools array in response."); return 0 - 1; }
     var n = bayan_json_v_arr_len(tools);
     ui_emit(ROLE_ACCENT, "tools daimon hosts ("); ofmt_int(n); ui_emit(ROLE_ACCENT, "):"); oprintln("");
@@ -232,7 +232,7 @@ fn daimon_list_tools() {
     var withheld = 0;
     while (i < n) {
         var t = bayan_json_v_arr_get(tools, i);
-        withheld = withheld + _daimon_tool_row(bayan_json_v_obj_get(t, "name"), bayan_json_v_obj_get(t, "description"));   # 0.45.0: sanitised
+        withheld = withheld + _daimon_tool_row(bayan_json_v_obj_get_by_cstr(t, "name"), bayan_json_v_obj_get_by_cstr(t, "description"));   # 0.45.0: sanitised
         i = i + 1;
     }
     if (withheld > 0) { ui_emit(ROLE_FAINT, "  /tools trust accepts the changed definitions for this host"); oprintln(""); }
@@ -395,7 +395,7 @@ fn daimon_tools_value() {
     var blen = sandhi_http_body_len(r);
     var v = bayan_json_v_parse_buf(body, blen);
     if (v == 0) { return 0; }
-    return bayan_json_v_obj_get(v, "tools");
+    return bayan_json_v_obj_get_by_cstr(v, "tools");
 }
 
 # --- mneme memory-seam probe (0.32.0) ------------------------------------------
@@ -442,7 +442,7 @@ fn daimon_mem_scan(tools_v) {
     while (i < n) {
         var t = bayan_json_v_arr_get(tools_v, i);
         if (t != 0) {
-            var nv = bayan_json_v_obj_get(t, "name");
+            var nv = bayan_json_v_obj_get_by_cstr(t, "name");
             if (nv != 0) {
                 var ns = bayan_json_v_str(nv);
                 if (ns != 0) { if (_daimon_name_is_mneme(ns) == 1) { _daimon_mem_probed = 1; } }

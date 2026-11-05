@@ -22,10 +22,10 @@ include "src/vendor/bote-core.cyr"
 include "src/vendor/libro.cyr"
 include "src/vendor/t-ron.cyr"
 include "src/vendor/avatara.cyr"
-# vyakarana (2.4.2) — source-code tokenizer for syntax highlighting (/read, diffs).
+# vyakarana (2.4.3) — source-code tokenizer for syntax highlighting (/read, diffs).
 # Independent of the spine bundles; self-contained over the stdlib. M7 / 0.8.4.
 include "src/vendor/vyakarana.cyr"
-# darshana (1.1.2; API frozen at v1 since 1.0.0) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
+# darshana (1.2.1; API frozen at v1 since 1.0.0) — TTY/raw-mode/ANSI/cursor substrate for the T2 rich-TUI
 # (alt-screen, raw input, winsize/SIGWINCH). Self-contained over the stdlib. M7 / 0.9.0.
 include "src/vendor/darshana.cyr"
 # anuenue (1.3.6 [lib] profile) — the HSV phase model behind `/theme rainbow` (0.38.0).
@@ -33,18 +33,19 @@ include "src/vendor/darshana.cyr"
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
-# agnosai (2.1.0 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
+# agnosai (2.1.8 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
 # TWO modules, ~530 lines: agnosai's units + output_filter. NOT the orchestration engine — thoth consumes
 # hoosh for inference and daimon for tools, and agnosai's own llm/ layer names thoth's hoosh.cyr as its
 # reference implementation. The profile was published upstream at thoth's request rather than the two
 # files being hand-copied, so this stays one source of truth. See scripts/sync-agnosai.sh.
 include "src/vendor/agnosai-guard.cyr"
-# sit (1.6.2 read profile) — .git/ read-mode: branch/status/diff on real git +
+# sit (1.6.4 read profile) — .git/ read-mode: branch/status/diff on real git +
 # .sit repos, no shell-out (0.13.0 git producer). Consumed via the read-only
-# sit_repo_* API only (its command layer is dead here). sankoch (2.8.0 zlib
+# sit_repo_* API only (its command layer is dead here). sankoch (2.8.2 zlib
 # PROFILE, `dist/sankoch-zlib.cyr` — 53 globals, tracks current sankoch) supplies
 # the git-object inflate the bundle references bare. Only sit's entry_hash/ann_new
-# are renamed on sync (vs libro/bote); the old sankoch-2.2.5 pin, the _stream_grow
+# are renamed on sync (vs libro/bote), and its `include "lib/sankoch.cyr"` is dropped (the stdlib's full bundle
+# would land on top of this profile); the old sankoch-2.2.5 pin, the _stream_grow
 # rename, and the SYS_CHDIR sed are all gone (the sankoch zlib profile + sit
 # 1.3.1's chdir-free sit_repo_open fixed the root causes). See scripts/sync-sit.sh.
 # ⚠ 1.6.2 is a REQUIRED floor, not just "latest": sit 1.6.1's sf_rename named
@@ -131,6 +132,7 @@ include "src/tui.cyr"       # T2 rich-TUI front-end (alt-screen); active only at
 fn main() {
     alloc_init();
     args_init();            # snapshot the command line (one-shot/argv front-door, 0.11.0)
+    exec_signals_init();    # 0.52.9: an inherited SIGCHLD ignore would cost every child's exit status
     out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); only the TUI arms OUT_RING
     confirm_hooks_set(&tui_confirm_begin, &tui_confirm_end);   # wire the gate confirm's live-screen bracket (TUI-decoupling)
     confirm_fit_hook_set(&tui_confirm_still_fits);   # 0.52.8 (audit B1): an answer counts only while the screen still holds the question

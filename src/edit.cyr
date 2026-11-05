@@ -184,18 +184,18 @@ fn edit_tool(args_cstr) {
     if (args_cstr == 0) { return "(edit: missing arguments)"; }
     var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(edit: arguments are not valid JSON)"; }
-    var pv = bayan_json_v_obj_get(v, "path");
+    var pv = bayan_json_v_obj_get_by_cstr(v, "path");
     if (pv == 0) { return "(edit: missing required string 'path')"; }
     var pvs = bayan_json_v_str(pv);
     if (pvs == 0) { return "(edit: 'path' must be a string)"; }
     var path = str_cstr(pvs);
-    var ov = bayan_json_v_obj_get(v, "old_string");
+    var ov = bayan_json_v_obj_get_by_cstr(v, "old_string");
     if (ov == 0) { return "(edit: missing required string 'old_string')"; }
     var ovs = bayan_json_v_str(ov);
     if (ovs == 0) { return "(edit: 'old_string' must be a string)"; }
     var oldstr = str_cstr(ovs);
     var oldstrlen = str_len(ovs);
-    var nv = bayan_json_v_obj_get(v, "new_string");
+    var nv = bayan_json_v_obj_get_by_cstr(v, "new_string");
     if (nv == 0) { return "(edit: missing required string 'new_string')"; }
     var nvs = bayan_json_v_str(nv);
     if (nvs == 0) { return "(edit: 'new_string' must be a string)"; }
@@ -243,9 +243,8 @@ fn _write_do(path, content, clen) {
     # 0.31.6: portable no-clobber create (cyrius 6.4.57 file_create_exclusive). Returns -EEXIST (-17) if the path
     # exists, else the new write fd. On POSIX this is O_CREAT|O_EXCL — the kernel refuses if the path exists
     # regardless of read permission (so it also covers the writable-but-UNREADABLE mode-0200 file that a plain
-    # file_exists O_RDONLY probe would miss) and refuses to follow a trailing symlink. AGNOS (no exclusive-create
-    # bit) and Windows (O_EXCL not yet mapped to CREATE_NEW) degrade to a file_exists pre-check + create — that
-    # per-target handling now lives in the stdlib, not here.
+    # file_exists O_RDONLY probe would miss) and refuses to follow a trailing symlink. AGNOS and Windows are atomic
+    # the same way, through their own exclusive-create bits; that per-target handling lives in the stdlib, not here.
     var fd = file_create_exclusive(path, 0x1A4);
     if (fd == (0 - 17)) { return "(create_file: that file already exists - use edit to modify it)"; }
     if (fd < 0) { return "(create_file: could not create the file (the path may be unwritable))"; }
@@ -276,12 +275,12 @@ fn create_file_tool(args_cstr) {
     if (args_cstr == 0) { return "(create_file: missing arguments)"; }
     var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(create_file: arguments are not valid JSON)"; }
-    var pv = bayan_json_v_obj_get(v, "path");
+    var pv = bayan_json_v_obj_get_by_cstr(v, "path");
     if (pv == 0) { return "(create_file: missing required string 'path')"; }
     var pvs = bayan_json_v_str(pv);
     if (pvs == 0) { return "(create_file: 'path' must be a string)"; }
     var path = str_cstr(pvs);
-    var cv = bayan_json_v_obj_get(v, "content");
+    var cv = bayan_json_v_obj_get_by_cstr(v, "content");
     if (cv == 0) { return "(create_file: missing required string 'content')"; }
     var cvs = bayan_json_v_str(cv);
     if (cvs == 0) { return "(create_file: 'content' must be a string)"; }

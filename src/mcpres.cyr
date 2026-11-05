@@ -94,7 +94,7 @@ fn _mcpres_get_array(url, key) {
     if ((status < 200) || (status >= 300)) { return 0; }
     var v = bayan_json_v_parse_buf(sandhi_http_body(r), sandhi_http_body_len(r));
     if (v == 0) { return 0; }
-    return bayan_json_v_obj_get(v, key);
+    return bayan_json_v_obj_get_by_cstr(v, key);
 }
 
 fn daimon_resources_value() { return _mcpres_get_array(_daimon_res_endpoint(), "resources"); }
@@ -105,7 +105,7 @@ fn daimon_prompts_value()   { return _mcpres_get_array(_daimon_prompts_endpoint(
 # this shape (audit finding A-4).
 fn _mcpres_str(obj, key) {
     if (obj == 0) { return 0; }
-    var v = bayan_json_v_obj_get(obj, key);
+    var v = bayan_json_v_obj_get_by_cstr(obj, key);
     if (v == 0) { return 0; }
     return bayan_json_v_str(v);
 }
@@ -183,7 +183,7 @@ fn mcpres_read(uri) {
     if ((status < 200) || (status >= 300)) { return 0; }
     var v = bayan_json_v_parse_buf(sandhi_http_body(r), sandhi_http_body_len(r));
     if (v == 0) { return 0; }
-    var contents = bayan_json_v_obj_get(v, "contents");
+    var contents = bayan_json_v_obj_get_by_cstr(v, "contents");
     if (contents == 0) { return 0; }
     var cn = bayan_json_v_arr_len(contents);
     var sb = str_builder_new();
@@ -232,7 +232,7 @@ fn mcpres_prompt_get(name, args_json) {
     if ((status < 200) || (status >= 300)) { return 0; }
     var v = bayan_json_v_parse_buf(sandhi_http_body(r), sandhi_http_body_len(r));
     if (v == 0) { return 0; }
-    var msgs = bayan_json_v_obj_get(v, "messages");
+    var msgs = bayan_json_v_obj_get_by_cstr(v, "messages");
     if (msgs == 0) { return 0; }
     var mn = bayan_json_v_arr_len(msgs);
     var sb = str_builder_new();
@@ -241,7 +241,7 @@ fn mcpres_prompt_get(name, args_json) {
     while (i < mn) {
         var m = bayan_json_v_arr_get(msgs, i);
         if (m != 0) {
-            var content = bayan_json_v_obj_get(m, "content");
+            var content = bayan_json_v_obj_get_by_cstr(m, "content");
             var t = _mcpres_field(content, "text");
             if (t != 0) {
                 if (found == 1) { str_builder_add_cstr(sb, "\n"); }

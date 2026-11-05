@@ -95,7 +95,7 @@ fn _mem_append_dir(buf, off, cap, dir, index_path, walk) {
         var full = path_join(dirstr, name);
         if (is_dir(full) == 0) {
             if (_mem_is_md(str_data(name)) == 1) {
-                if (streq(str_data(name), "MEMORY.md") == 0) {
+                if (str_eq_cstr(name, "MEMORY.md") == 0) {
                     if (_mem_path_ok(str_data(full), walk) == 1) { off = _mem_append_file(buf, off, cap, str_data(full), 1); }
                 }
             }
@@ -538,7 +538,7 @@ fn memory_fact_count() {
         var full = path_join(dirstr, name);
         if (is_dir(full) == 0) {
             if (_mem_is_md(str_data(name)) == 1) {
-                if (streq(str_data(name), "MEMORY.md") == 0) { if (_mem_link_free(str_data(full), walk) == 1) { c = c + 1; } }
+                if (str_eq_cstr(name, "MEMORY.md") == 0) { if (_mem_link_free(str_data(full), walk) == 1) { c = c + 1; } }
             }
         }
         i = i + 1;
@@ -725,7 +725,7 @@ fn memory_write_tool(args_cstr) {
     if (args_cstr == 0) { return "memory_write: missing arguments"; }
     var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "memory_write: arguments are not valid JSON"; }
-    var tv = bayan_json_v_obj_get(v, "text");
+    var tv = bayan_json_v_obj_get_by_cstr(v, "text");
     if (tv == 0) { return "memory_write: missing required 'text' argument"; }
     var ts = bayan_json_v_str(tv);
     if (ts == 0) { return "memory_write: 'text' must be a string"; }

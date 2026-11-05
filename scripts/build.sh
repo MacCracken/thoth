@@ -16,13 +16,9 @@
 #            from Linux is NOT the path (the ecosystem uses a macOS runner).
 #                                                                    build/thoth_macos
 #   win      Windows x86_64 — cross via cycc_win (`cyrius build --win`).
-#            BEST-EFFORT. The old `SYS_GETRANDOM` transient gap cleared at the
-#            6.3.38 refresh (patra ≥1.12.4 bundled), so the lane now stops on the
-#            genuine ARCHITECTURAL gaps: `SYS_EPOLL_CREATE1` (and the rest of the
-#            sandhi/epoll set → IOCP) and `SYS_FUTEX` (Win uses WaitOnAddress) —
-#            by-design Win32 differences with no raw-syscall equivalent. This lane
-#            WARNS on those symbols and continues; the .exe ships when the floor
-#            gates the architectural set (an IOCP/WaitOnAddress backend).
+#            BEST-EFFORT. Nothing architectural surfaces any more: the lane stops only
+#            on t-ron's signal half (VENDOR_GAP below), which thoth never calls. This
+#            lane WARNS on those symbols and continues; no .exe until t-ron gates them.
 #                                                                    build/thoth.exe
 #   aarch64  aarch64 Linux — cross via --aarch64. BUILDS as of cyrius 6.2.15
 #            (the cycc #pure/pass-1 scanner gap closed in v6.2.2); still run as a
@@ -64,10 +60,10 @@ mkdir -p "$OUT"
 # raw-syscall equivalent. Win32 has no futex (uses WaitOnAddress) and no epoll
 # (uses IOCP). These are PERMANENT by design; the lane gates closed, announced.
 # 0.43.2: this pattern matched only the syscall NUMBER constants, but the toolchain now surfaces the
-# epoll FLAG constants (EPOLL_CTL_ADD / EPOLLIN) and the ws2_32-routed socket calls first — so the win
-# lane's genuinely architectural failure was being reported as "FAILED (not a known gap)". Same gap,
-# different symbol names; the classifier, not the lane, was stale.
-ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX|EPOLL_CTL_ADD|EPOLLIN|SYS_SOCKET|SYS_CONNECT'
+# epoll FLAG constants (EPOLL_CTL_ADD / EPOLLIN) first — so the win lane's genuinely architectural failure
+# was being reported as "FAILED (not a known gap)". Same gap, different symbol names; the classifier, not
+# the lane, was stale. None of these surfaces at the current pin.
+ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX|EPOLL_CTL_ADD|EPOLLIN'
 #
 # ⚠ TTY_SIGMASK_WINCH is deliberately NOT listed, and stays unlisted now that it is FIXED. It was
 # thoth's OWN bug, not a floor gap: src/tui.cyr called darshana's termios/signalfd half with no
@@ -111,12 +107,7 @@ TRANSIENT_GAP=''
 #     has no POSIX signals, so the floor defines neither constant. thoth has ZERO callers of
 #     `sighup_init` — the code is dead in this consumer. Upstream fix: t-ron gating its signal half to
 #     Linux, or publishing a [lib.X] profile without it. Tracked in roadmap.md's known limitations.
-#   sys_rmdir — src/vendor/sit-read.cyr's sf_rmdir. lib/syscalls_windows.cyr defines no `sys_rmdir`.
-#     Since cyrius 6.6.6 the floor routes RemoveDirectoryW, but through the portable `xrmdir` (lib/io.cyr),
-#     not a `sys_rmdir` wrapper — and sf_rmdir calls sys_rmdir directly, as its own comment expects to
-#     fold onto xrmdir once the stdlib had one. Reached through a vendored bundle, not a thoth call.
-#     Upstream fix: sit (call xrmdir).
-VENDOR_GAP='SIGHUP|SIG_BLOCK|sys_rmdir'
+VENDOR_GAP='SIGHUP|SIG_BLOCK'
 
 # Guard the empty case: "$ARCH_GAP|" (trailing pipe) would match the empty string
 # in grep -qE and swallow EVERY failure as a "known gap". Only union when non-empty.
@@ -171,13 +162,21 @@ _run_best_effort() {
     # was invisible to it. Through 0.44.2 the win lane hid ELEVEN of them behind two undefined variables.
     #
     # ⚠ READ THE SUFFIX THE RIGHT WAY ROUND. cyrius prints EVERY undefined function bare during the
-    # compile pass, then re-prints the REACHABLE ones after the "N unreachable fns" note, hedged
-    # "(call site may be unreachable)". So the hedged list is the one that blocks the binary — its
-    # length is exactly the N in the refusal — and the bare list is mostly dead references. Matching
-    # the bare form instead reports the dead ones as blockers: it named `load_signing_seed` and the two
-    # other documented sit dead-path placeholders, which have never blocked any lane.
+    # compile pass, then re-prints the REACHABLE ones after the "N unreachable fns" note, marked
+    # "(reachable call site)". So the marked list is the one that blocks the binary — its length is
+    # exactly the N in the refusal — and the bare list is mostly dead references. Matching the bare
+    # form instead reports the dead ones as blockers: it named `load_signing_seed` and the two other
+    # documented sit dead-path placeholders, which have never blocked any lane.
     local undef_v; undef_v="$(echo "$log" | grep -oE "undefined variable '[A-Za-z_][A-Za-z0-9_]*'" | sed -E "s/.*'(.*)'/\1/" | sort -u)"
-    local undef_f; undef_f="$(echo "$log" | grep -E "undefined function '[A-Za-z_][A-Za-z0-9_]*' \(call site may be unreachable\)" | grep -oE "'[A-Za-z_][A-Za-z0-9_]*'" | tr -d "'" | sort -u)"
+    local undef_f; undef_f="$(echo "$log" | grep -E "undefined function '[A-Za-z_][A-Za-z0-9_]*' \(reachable call site\)" | grep -oE "'[A-Za-z_][A-Za-z0-9_]*'" | tr -d "'" | sort -u)"
+    # The refusal's own count is the witness. cyrius reworded that marker once (it read "(call site may be
+    # unreachable)" through 6.6.9) and this list went empty with no error, so a lane blocked on a reachable
+    # undefined function read as a clean skip. A refusal that left the list empty is never a known gap.
+    if [ -z "$undef_f" ] && echo "$log" | grep -qE "refusing to emit binary with [0-9]+ reachable undefined"; then
+        echo "    FAILED (not a known gap): $label — refused on reachable undefined functions this classifier could not read" >&2
+        echo "$log" | grep -E "^error|undefined function" | tail -20 >&2
+        return 1
+    fi
     local undef; undef="$(printf '%s\n%s\n' "$undef_v" "$undef_f" | grep -v '^$' | sort -u)"
     if [ -n "$undef" ]; then
         local unexpected; unexpected="$(echo "$undef" | grep -vE "^($KNOWN_GAP)$" || true)"

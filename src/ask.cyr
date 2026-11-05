@@ -237,7 +237,7 @@ fn ask_user_tool(args_json) {
     if (args_json == 0) { return "(ask_user: missing arguments)"; }
     var av = bayan_json_v_parse_buf(args_json, strlen(args_json));
     if (av == 0) { return "(ask_user: arguments are not valid JSON)"; }
-    var qv = bayan_json_v_obj_get(av, "question");
+    var qv = bayan_json_v_obj_get_by_cstr(av, "question");
     if (qv == 0) { return "(ask_user needs a \"question\" string)"; }
     # 0.39.0 (A-4): a non-string value answers 0 here rather than a pointer to walk.
     var qs = bayan_json_v_str(qv);
@@ -256,7 +256,7 @@ fn ask_user_tool(args_json) {
     # options[] — suggested answers. Absent, empty, or not an array is fine: a question with no options
     # is a plain free-text prompt, which is the common case.
     _ask_nopt = 0;
-    var ov = bayan_json_v_obj_get(av, "options");
+    var ov = bayan_json_v_obj_get_by_cstr(av, "options");
     if (ov != 0) {
         if (bayan_json_v_arr_len(ov) > 0) {
             var n = bayan_json_v_arr_len(ov);

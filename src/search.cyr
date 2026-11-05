@@ -55,6 +55,7 @@ var SEARCH_MAX_ENTRIES = 200000; # ~a large monorepo; far past any real project,
 var _search_hits = 0;            # matches reported this call
 var _search_files_seen = 0;      # files opened this call
 var _search_truncated = 0;       # 1 if a bound bit (hits/files/output) — reported, never silent
+var _search_unread = 0;          # directories the walk could not list — reported, never silent
 var _search_off = 0;             # write offset into _search_out
 
 # _search_apc: append a NUL-terminated cstr to the output buffer, bounded. Sets the truncation flag rather
@@ -184,14 +185,24 @@ fn _search_scan_file(relpath, needle, ic) {
     return 0;
 }
 
+# _search_apunread: the clause that names the directories the walk could not read.
+fn _search_apunread() {
+    _search_apint(_search_unread);
+    if (_search_unread == 1) { _search_apc(" directory"); } else { _search_apc(" directories"); }
+    _search_apc(" could not be read - results may be incomplete");
+    return 0;
+}
+
 # _search_walk: recurse `dir` (a repo-relative path, or "" for the root), applying the jail at EVERY level.
 # `needle` may be 0 (name-only search). Returns 1 when a bound says stop.
 fn _search_walk(dir, needle, ic, globpat, depth) {
     if (depth > SEARCH_MAX_DEPTH) { _search_truncated = 1; return 0; }
     var dirstr = str_from(".");
     if (load8(dir) != 0) { dirstr = str_from(dir); }
-    var v = dir_list(dirstr);
+    # 0.52.9: `dir_list` answers empty for a directory it cannot read, which reads as nothing to find there.
+    var v = vec_new();
     if (v == 0) { return 0; }
+    if (dir_list_checked(dirstr, v) < 0) { _search_unread = _search_unread + 1; }
     var n = vec_len(v);
     var i = 0;
     while (i < n) {
@@ -281,19 +292,19 @@ fn search_tool(args_cstr) {
     if (v == 0) { return "(search: arguments are not valid JSON)"; }
 
     var needle = 0;
-    var pv = bayan_json_v_obj_get(v, "pattern");
+    var pv = bayan_json_v_obj_get_by_cstr(v, "pattern");
     if (pv != 0) {
         var ps = bayan_json_v_str(pv);                       # 0.39.0 A-4: a non-string value answers 0
         if (ps != 0) { var pc = str_cstr(ps); if (load8(pc) != 0) { needle = pc; } }
     }
     var globpat = "";
-    var gv = bayan_json_v_obj_get(v, "glob");
+    var gv = bayan_json_v_obj_get_by_cstr(v, "glob");
     if (gv != 0) {
         var gs = bayan_json_v_str(gv);
         if (gs != 0) { globpat = str_cstr(gs); }
     }
     var root = "";
-    var rv = bayan_json_v_obj_get(v, "path");
+    var rv = bayan_json_v_obj_get_by_cstr(v, "path");
     if (rv != 0) {
         var rs = bayan_json_v_str(rv);
         if (rs != 0) {
@@ -302,7 +313,7 @@ fn search_tool(args_cstr) {
         }
     }
     var ic = 0;
-    var iv = bayan_json_v_obj_get(v, "ignore_case");
+    var iv = bayan_json_v_obj_get_by_cstr(v, "ignore_case");
     if (iv != 0) { if (bayan_json_v_bool(iv) == 1) { ic = 1; } }   # 0 for a non-JTAG_BOOL, so a string "true" is simply ignored
 
     if ((needle == 0) && (load8(globpat) == 0)) {
@@ -320,12 +331,20 @@ fn search_tool(args_cstr) {
     if (_search_path == 0) { _search_path = alloc(PROJECT_PATH_MAX + 1); }
     if ((_search_out == 0) || (_search_path == 0)) { return "(search: out of memory)"; }
     _search_off = 0; _search_hits = 0; _search_files_seen = 0; _search_truncated = 0; _search_entries = 0;
+    _search_unread = 0;
 
     _search_walk(root, needle, ic, globpat, 0);
 
     if (_search_hits == 0) {
         store8(_search_out + _search_off, 0);
         if (_search_truncated == 1) { return "(search: no matches within the search limits - narrow it with 'path' or 'glob')"; }
+        if (_search_unread > 0) {
+            _search_apc("(search: no matches, but ");
+            _search_apunread();
+            _search_apc(")");
+            store8(_search_out + _search_off, 0);
+            return _search_out;
+        }
         return "(search: no matches)";
     }
     # A trailing summary, not a leading one: the model reads the hits first, and a count it can trust
@@ -349,6 +368,7 @@ fn search_tool(args_cstr) {
         _search_apc(" scanned");
     }
     if (_search_truncated == 1) { _search_apc("; LIMIT REACHED - results are incomplete, narrow with 'path' or 'glob'"); }
+    if (_search_unread > 0) { _search_apc("; "); _search_apunread(); }
     _search_apc(")\n");
     store8(_search_out + _search_off, 0);
     return _search_out;

@@ -46,14 +46,9 @@
 # dist files — the zlib profile / 1.3.1 read bundle may not be tagged yet):
 #   SIT_LOCAL=/path/to/sit SANKOCH_LOCAL=/path/to/sankoch ./scripts/sync-sit.sh
 #
-# ⚠ AS OF thoth 0.38.6, USE THE LOCAL PATH FOR sit. The pin of record is **1.6.2**,
-# which is the fix thoth needed (sit 1.6.1's `sf_rename` named `SYS_RENAME`, which
-# arm64 Linux does not define, breaking `cyrius build --aarch64` outright). That fix
-# lives in sit's WORKING TREE and is not tagged/pushed yet — sit's own CLAUDE.md
-# leaves git to the user — so the plain curl path will 404 on `1.6.2` until it is.
-# `curl -sSf` under `set -e` makes that a loud abort rather than a silent stale file,
-# which is the right failure. Until the tag exists:
-#   SIT_LOCAL=/home/macro/Repos/sit SANKOCH_LOCAL=/home/macro/Repos/sankoch ./scripts/sync-sit.sh
+# ⚠ THE LOCAL PATH TAKES THE CHECKOUT, NOT THE TAG. `*_LOCAL` copies the working tree's dist file whatever
+# version that tree is at, and a sibling checkout usually sits on a newer line than thoth's cyrius pin allows
+# (the header check below only WARNs). Use the default curl path for a tagged pin; it aborts loudly on a 404.
 #
 # ⚠ AND KEEP THE DEFAULT ABOVE IN LOCKSTEP WITH THE PIN. Running this script with a
 # stale default is a **silent DOWNGRADE** of a committed file: it exits 0, prints its
@@ -63,18 +58,21 @@
 # bundle's `# Version:` header against the pin. That test is the real gate; this
 # comment is the reminder.
 #
-# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.6.2 2.8.0)
+# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.6.4 2.8.2)
 set -euo pipefail
 
-SIT_TAG="${1:-1.6.2}"
-SK_TAG="${2:-2.8.0}"
+SIT_TAG="${1:-1.6.4}"
+SK_TAG="${2:-2.8.2}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIT_DEST="$REPO_ROOT/src/vendor/sit-read.cyr"
 SK_DEST="$REPO_ROOT/src/vendor/sankoch.cyr"
 mkdir -p "$REPO_ROOT/src/vendor"
 
-# --- sit read bundle (with the entry_hash / ann_new collision renames) ---
-SIT_RENAME='s/\bentry_hash\b/_sit_entry_hash/g; s/\bann_new\b/_sit_ann_new/g'
+# --- sit read bundle (the entry_hash / ann_new collision renames; its stdlib sankoch include dropped) ---
+# The bundle's `Requires` block names `lib/sankoch.cyr`, the stdlib's FULL sankoch. Left in, it lands on top of the
+# zlib profile below: every one of the profile's functions is defined twice, the stdlib's copy wins, and the binary
+# carries the whole codec family. sit-read calls nothing outside the zlib profile, so the line goes.
+SIT_RENAME='s/\bentry_hash\b/_sit_entry_hash/g; s/\bann_new\b/_sit_ann_new/g; /^include "lib\/sankoch\.cyr"$/d'
 # ⚠ STAGE THEN MOVE. This is the only sync script that transforms its input, so it is the only one that
 # cannot use `curl -o` / `cp` — and writing the destination through `>` means the shell TRUNCATES it
 # before the producer runs. Any failure (a bad SIT_LOCAL, a 404, a dropped connection) therefore left
@@ -84,17 +82,18 @@ SIT_RENAME='s/\bentry_hash\b/_sit_entry_hash/g; s/\bann_new\b/_sit_ann_new/g'
 SIT_TMP="$(mktemp)"
 trap 'rm -f "$SIT_TMP"' EXIT
 if [ -n "${SIT_LOCAL:-}" ]; then
-    echo "Syncing sit-read $SIT_TAG from local $SIT_LOCAL/dist/sit-read.cyr (renaming entry_hash/ann_new)"
+    echo "Syncing sit-read $SIT_TAG from local $SIT_LOCAL/dist/sit-read.cyr (renames + the stdlib sankoch include dropped)"
     sed "$SIT_RENAME" "$SIT_LOCAL/dist/sit-read.cyr" > "$SIT_TMP"
 else
     URL="https://raw.githubusercontent.com/MacCracken/sit/${SIT_TAG}/dist/sit-read.cyr"
-    echo "Syncing sit-read $SIT_TAG from $URL (renaming entry_hash/ann_new)"
+    echo "Syncing sit-read $SIT_TAG from $URL (renames + the stdlib sankoch include dropped)"
     curl -sSf "$URL" | sed "$SIT_RENAME" > "$SIT_TMP"
 fi
 [ -s "$SIT_TMP" ] || { echo "FAILED: sit-read fetch produced no bytes — $SIT_DEST left untouched" >&2; exit 1; }
 mv "$SIT_TMP" "$SIT_DEST"
 grep -q "^# Version: ${SIT_TAG}\$" "$SIT_DEST" || echo "WARN: $SIT_DEST header != Version: $SIT_TAG"
 [ "$(grep -cE '\b(entry_hash|ann_new)\b' "$SIT_DEST")" = "0" ] || echo "WARN: unrenamed entry_hash/ann_new remains in $SIT_DEST"
+[ "$(grep -c '^include "lib/sankoch\.cyr"' "$SIT_DEST")" = "0" ] || echo "WARN: the stdlib sankoch include remains in $SIT_DEST"
 # code ref only (a non-comment line); sit 1.3.1's api.cyr mentions the token in a doc comment.
 [ "$(grep -E 'syscall\(SYS_CHDIR' "$SIT_DEST" | grep -vcE '^[[:space:]]*#')" = "0" ] || echo "WARN: SYS_CHDIR code ref in $SIT_DEST (expected sit >= 1.3.1 chdir-free)"
 

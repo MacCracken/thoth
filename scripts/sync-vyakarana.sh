@@ -24,10 +24,10 @@
 # appears in the build, that is this hazard returning — diff the build's
 # warning SET before and after a sync, not just its pass/fail.
 #
-# Usage: ./scripts/sync-vyakarana.sh [tag]   (default: 2.4.2)
+# Usage: ./scripts/sync-vyakarana.sh [tag]   (default: 2.4.3)
 set -euo pipefail
 
-TAG="${1:-2.4.2}"
+TAG="${1:-2.4.3}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/vyakarana.cyr"
 

@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.52.8 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.52.9 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -84,11 +84,10 @@ Memory layers the same way. What grants the model authority, bounds its spend or
 (`[shell].allow`, `[project].read_roots`, `[budget]`, `[pricing]`, `[hoosh].reasoning` / `max_tokens`, `[guard]`,
 `[redact]`, `[subagent]`) the local layer may only *tighten*, while `[shell].deny` unions and the authority keys are
 global-only ([ADR-0021](docs/adr/0021-authority-keys-are-global-only.md)) — authority never accumulates from the
-less-trusted side. Multi-target (re-measured at 0.52.8 on the 6.6.6 pin; the AGNOS ring-3 run last at 0.52.6): x86_64 Linux ships;
+less-trusted side. Multi-target (re-measured at 0.52.9 on the 6.6.20 pin; the AGNOS ring-3 run last at 0.52.6): x86_64 Linux ships;
 aarch64 Linux builds, all five test suites and the desktop window verified under `qemu-aarch64`; **AGNOS builds *and runs*** — the cross-built ELF loads and executes in ring 3 on
 the real kernel under QEMU (`./scripts/agnos-run.sh`); **macOS builds and runs** on Apple Silicon at the line tier
-(no BSD termios peer yet, so no rich TUI; the desktop window is Wayland, on Linux), with its full test suite passing natively; Windows is staged on an architectural ws2_32 socket gap (`SYS_SOCKET`/`SYS_CONNECT` in the stdlib
-transport) plus three vendored symbols (t-ron's `SIGHUP`/`SIG_BLOCK`, sit's `sys_rmdir`) — blocked
+(no BSD termios peer yet, so no rich TUI; the desktop window is Wayland, on Linux), with its full test suite passing natively; Windows is staged on two vendored symbols (t-ron's `SIGHUP`/`SIG_BLOCK`, in a signal path thoth never calls) — blocked
 entirely outside thoth's own source. See
 [`docs/development/state.md`](docs/development/state.md) and
 [`docs/development/roadmap.md`](docs/development/roadmap.md) for the live picture.

@@ -2280,6 +2280,7 @@ fn test_tui_ask_rows() {
     _ask_nopt = 0;
     var path = "build/.thoth_t_ask_rows.out";
     var raw = alloc(16384); var vis = alloc(16384);
+    _t_fd0_eof();                                                  # tui_ask reads its answer: a real read of stdin
     if (_t_fd1_to(path) == 0) {
         tui_ask();
         _t_fd1_restore();
@@ -2298,6 +2299,7 @@ fn test_tui_ask_rows() {
         out_mode_set(OUT_FD1);
         assert_eq(_tt_feed_plain_count("the terminal is too small to show the question"), 1, "a screen too small declines it and says why");
     } else { assert(1, "fd 1 not capturable here (stated)"); }
+    _t_fd0_restore();
     feed_init();
     out_mode_set(OUT_FD1);
     _tui_rows = _sr; _tui_cols = _sc; _tui_show_status = _sst;

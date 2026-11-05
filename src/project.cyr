@@ -19,8 +19,7 @@
 # model). Closed on both the read and the write side.
 # REMAINING RESIDUAL (documented, not faked): the separator/escape check is POSIX/AGNOS-correct ('/' + '..' +
 # '~'); Windows backslash + drive-letter (`C:\`) paths would need extra handling when the `--win` lane ships
-# (it is IOCP-gated and does not build today), and `is_symlink` returns 0 on Windows, so the link check is a
-# no-op there — the PE lane must not be shipped without revisiting both.
+# (it stops on t-ron's signal half today) — the PE lane must not be shipped without revisiting it.
 #
 # GRANTED READ ROOTS (0.23.1). The jail is the DEFAULT; the *user* (never the model) can widen it to additional
 # absolute roots — a permission model like every other restriction. Grants come from config ([project].read_roots,
@@ -73,8 +72,7 @@ var _proj_sym_str = 0;        # ONE reusable 16-byte Str header (data,len). `str
                               # leak 16 B × depth on every tool round; this is written in place instead.
 
 # _project_no_symlink: 1 if NO path component of `path` is a symlink; else 0. NOT pure — one readlink(2)
-# per component (via the stdlib's `is_symlink`, which is portable across linux/macos/agnos and returns 0
-# on Windows, where the PE lane has no readlink wrapper).
+# per component (via the stdlib's `is_symlink`, which is portable across linux/macos/agnos/Windows).
 #
 # ⚠ THIS CLOSES THE JAIL'S LOAD-BEARING RESIDUAL. Through 0.38.6 the jail was purely LEXICAL — it refused
 # `/`, `~` and `..`, and both this file and src/edit.cyr documented "a symlink INSIDE the project pointing
@@ -833,7 +831,7 @@ fn project_map_build(root) {
 # sites; the builders read project_map_current() after it.
 fn project_map_refresh() {
     #ifdef CYRIUS_TARGET_WIN
-    project_map_clear(); return 0;                               # dir_list_into has no Windows arm: no map, no notice
+    project_map_clear(); return 0;                               # the lane is closed, and its listing unproven: no map, no notice
     #endif
     if (config_project_map() == 0) { project_map_clear(); return 0; }
     if (project_map_build(_pmap_root_cstr()) > 0) { _pmap_ctx = _pmap_guarded(); } else { project_map_clear(); }
@@ -893,7 +891,7 @@ fn read_file_tool(args_cstr) {
     if (args_cstr == 0) { return "(read_file: missing arguments)"; }
     var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(read_file: arguments are not valid JSON)"; }
-    var pv = bayan_json_v_obj_get(v, "path");
+    var pv = bayan_json_v_obj_get_by_cstr(v, "path");
     if (pv == 0) { return "(read_file: missing required 'path' argument)"; }
     var ps = bayan_json_v_str(pv);
     if (ps == 0) { return "(read_file: 'path' must be a string)"; }
@@ -933,7 +931,7 @@ fn list_dir_tool(args_cstr) {
     if (args_cstr != 0) {
         var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
         if (v != 0) {
-            var pv = bayan_json_v_obj_get(v, "path");
+            var pv = bayan_json_v_obj_get_by_cstr(v, "path");
             if (pv != 0) {
                 var ps = bayan_json_v_str(pv);
                 if (ps != 0) {
@@ -949,7 +947,10 @@ fn list_dir_tool(args_cstr) {
     var dirstr = str_from(path);
     if (is_dir(dirstr) == 0) { return "(list_dir: no such directory)"; }
     if (_project_out_buf == 0) { _project_out_buf = alloc(PROJECT_LIST_CAP); }
-    var vv = dir_list(dirstr);
+    # 0.52.9: `is_dir` answers from stat, so it is 1 for a directory this process cannot read, and `dir_list` answers
+    # empty for one. Taken together they told the model an unreadable directory held nothing.
+    var vv = vec_new();
+    if (dir_list_checked(dirstr, vv) < 0) { return "(list_dir: that directory could not be read)"; }
     var n = vec_len(vv);
     var off = 0;
     off = _proj_apc(off, path); off = _proj_apc(off, ":\n");

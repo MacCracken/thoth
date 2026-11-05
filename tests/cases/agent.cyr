@@ -418,8 +418,8 @@ fn test_agent() {
     var sav = bayan_json_v_parse_buf(&stb, stl);
     assert(sav != 0, "the shell-only tools array parses");
     assert_eq(bayan_json_v_arr_len(sav), 1, "exactly one tool advertised standalone");
-    var stf = bayan_json_v_obj_get(bayan_json_v_arr_get(sav, 0), "function");
-    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get(stf, "name"))), "shell"), "the advertised tool is named 'shell'");
+    var stf = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(sav, 0), "function");
+    assert(streq(str_cstr(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(stf, "name"))), "shell"), "the advertised tool is named 'shell'");
     _cfg_shell_enabled = 0;   # restore
 
     # tool advertisement: daimon {name,description} -> OpenAI function tools
@@ -853,9 +853,9 @@ fn test_upstream_err_sanitise() {
     var ps = 0;
     var pv = bayan_json_v_parse_buf(fr, o);
     if (pv != 0) {
-        var pe = bayan_json_v_obj_get(pv, "error");
+        var pe = bayan_json_v_obj_get_by_cstr(pv, "error");
         if (pe != 0) {
-            var pm = bayan_json_v_obj_get(pe, "message");
+            var pm = bayan_json_v_obj_get_by_cstr(pe, "message");
             if (pm != 0) { ps = bayan_json_v_str(pm); }
         }
     }
@@ -1643,11 +1643,11 @@ fn test_project_map() {
     assert_eq(_t_before(big, "Project map", "\"role\":\"user\",\"content\":\"hi\""), 1, "...before the user turn");
     var j3 = bayan_json_v_parse_buf(big, l3);
     assert(j3 != 0, "...and parses as JSON (the comma after the map)");
-    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get(j3, "messages")), 3, "...three messages: persona, map, user");
+    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get_by_cstr(j3, "messages")), 3, "...three messages: persona, map, user");
     var l3b = hoosh_build_request(big, "m", 0, 0, "hi", 0);
     var j3b = bayan_json_v_parse_buf(big, l3b);
     assert(j3b != 0, "the single-turn body with NO persona parses too (the map is the first message)");
-    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get(j3b, "messages")), 2, "...two messages: map, user");
+    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get_by_cstr(j3b, "messages")), 2, "...two messages: map, user");
     var l4 = hoosh_build_dry(big, "m", "SYS", 0, "hi", 0);
     assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the /dry preview shows it");
     assert(bayan_json_v_parse_buf(big, l4) != 0, "...and parses");
@@ -1655,15 +1655,15 @@ fn test_project_map() {
     assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the agentic body carries it");
     var j5 = bayan_json_v_parse_buf(big, l5);
     assert(j5 != 0, "...and parses as JSON");
-    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get(j5, "messages")), 2, "...two messages: persona, map (no history in this test)");
+    assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get_by_cstr(j5, "messages")), 2, "...two messages: persona, map (no history in this test)");
     var l6 = _sub_build_request(big, "m", "SYS", 0, 0, 0);
     assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the delegated child's body carries the parent's map");
     # the JSON stays well-formed with the map in place: the body parses, and the map is the second message
     var jv = bayan_json_v_parse_buf(big, l6);
     assert(jv != 0, "...and the child body parses as JSON");
-    var msgs = bayan_json_v_obj_get(jv, "messages");
+    var msgs = bayan_json_v_obj_get_by_cstr(jv, "messages");
     assert_eq(bayan_json_v_arr_len(msgs), 2, "...two messages: the persona, the map");
-    var second = bayan_json_v_obj_get(bayan_json_v_arr_get(msgs, 1), "role");
+    var second = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(msgs, 1), "role");
     assert((second != 0) && (str_eq_cstr(bayan_json_v_str(second), "system") == 1), "...the map's role is system");
     # cleared: byte-identical to before (the suite's goldens rest on this floor)
     project_map_clear();
@@ -1714,6 +1714,38 @@ fn test_project_map_guard() {
     xrmdir(bad); xrmdir("build/.thoth_t_mapguard/src"); xrmdir(d);
     _pmap_root = sv_root; _cfg_project_map = sv_cfg; _cfg_guard_enabled = sv_ge;
     project_map_clear(); guard_reset(); feed_init();
+    return 0;
+}
+
+# test_unreadable_dir (0.52.9): `is_dir` answers from stat since cyrius 6.6.10, so a directory this process cannot read
+# is a directory, and `dir_list` answers empty for it. The two tools built on that pair must say they could not read
+# it, not that it holds nothing. chmod 000 binds nobody as root, so the premise is checked and stated.
+fn test_unreadable_dir() {
+    test_group("an unreadable directory is reported, never read as empty (project.cyr / search.cyr, 0.52.9)");
+    var top = "build/.thoth_unread_t";
+    var sub = "build/.thoth_unread_t/locked";
+    xmkdir(top, 0x1c0);
+    xmkdir(sub, 0x1c0);
+    file_write_all("build/.thoth_unread_t/seen.txt", "findme here\n", 12);
+    file_write_all("build/.thoth_unread_t/locked/hidden.txt", "findme there\n", 13);
+    sys_chmod(sub, 0);
+    var probe = vec_new();
+    if (dir_list_checked(str_from(sub), probe) < 0) {
+        assert_eq(is_dir(str_from(sub)), 1, "premise: the floor calls an unreadable directory a directory");
+        var l = list_dir_tool("{\"path\":\"build/.thoth_unread_t/locked\"}");
+        assert(_ui_contains(l, "could not be read") == 1, "list_dir says it could not read the directory");
+        assert(_ui_contains(l, "locked:") == 0, "...and prints no empty listing for it");
+        var s = search_tool("{\"pattern\":\"findme\",\"path\":\"build/.thoth_unread_t\"}");
+        assert(_ui_contains(s, "seen.txt") == 1, "search still reports what it could read");
+        assert(_ui_contains(s, "1 directory could not be read") == 1, "...and names the directory it could not");
+        var s2 = search_tool("{\"pattern\":\"findme\",\"path\":\"build/.thoth_unread_t/locked\"}");
+        assert(_ui_contains(s2, "no matches, but 1 directory could not be read") == 1, "no match in an unreadable root is not a clean 'no matches'");
+    } else { assert(1, "chmod 000 does not bind this user (root): not checkable here (stated)"); }
+    sys_chmod(sub, 0x1c0);
+    xunlink("build/.thoth_unread_t/locked/hidden.txt");
+    xunlink("build/.thoth_unread_t/seen.txt");
+    xrmdir(sub);
+    xrmdir(top);
     return 0;
 }
 

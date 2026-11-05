@@ -3,7 +3,22 @@
 # This is the driver's OWN local hands (a shell escape), NOT the daimon MCP
 # tool-execution spine (which is an absent seam). It is ALWAYS invoked behind
 # the t-ron-absent fail-closed confirm gate in cmd_run.
-#
+
+# exec_signals_init (0.52.9): SIGCHLD back to SIG_DFL, once, at startup. An ignored SIGCHLD survives execve, and under it
+# the kernel reaps every child itself, so a wait finds nothing: a launcher that ignores it (`trap '' CHLD`) cost thoth
+# every exit status. Since cyrius 6.6.7 the floor's `exec_*` answers -1 for that, so `/run` said "failed to spawn" over a
+# command that had run; and the capture's wait, which only tests for its own pid, sat out its whole timeout. thoth keeps
+# no handler of its own, so the default is simply correct. Linux and macOS: the other floors have no such state.
+fn exec_signals_init() {
+    #ifdef CYRIUS_TARGET_LINUX
+    signal_default(SIGCHLD);
+    #endif
+    #ifdef CYRIUS_TARGET_MACOS
+    signal_default(SIGCHLD);
+    #endif
+    return 0;
+}
+
 # run_shell executes `/bin/sh -c <cmdline>` via the PORTABLE process.cyr surface
 # (process.cyr #ifdefs to the agnos sys_spawn and Windows CreateProcessW
 # variants; POSIX fork/exec here). The child INHERITS thoth's stdout/stderr, so
@@ -152,9 +167,9 @@ fn shell_supported() { return 0; }
 #     run (pid reuse + the counter reset to 0) whose pre-delete ALSO fails on the still-live grandchild
 #     handle, a shorter new capture could read new-front + stale-tail — not reachable without that exact combo,
 #     and not reachable at all now that every capture file is created fresh.)
-#   - No O_NOFOLLOW on any Windows path (0.45.6 closed the O_EXCL half: the create is exclusive, a pre-planted
-#     name fails it and the counter moves on, as on POSIX — the TOCTOU residual 0.45.2 named is gone). The CWD
-#     is the user's own project dir, a lower-risk place than /tmp to begin with.
+#   - The create is exclusive: a pre-planted name fails it and the counter moves on, as on POSIX, a dangling
+#     symlink included (the TOCTOU residual 0.45.2 named is gone). The CWD is the user's own project dir, a
+#     lower-risk place than /tmp to begin with.
 #   - No process-group kill (Win32 has no POSIX pgid on this surface; a Job Object is not wired): a timeout
 #     TerminateProcess-es only the cmd.exe, so a detached grandchild (`start foo`, a backgrounded process)
 #     can survive AND — holding the inherited temp-file handle — makes the post-kill DeleteFileW fail
