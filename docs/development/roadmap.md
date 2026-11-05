@@ -256,6 +256,21 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 
 **Candidates above:** the pointer path Linux-Wayland only (F8).
 
+**Not yet scheduled** (found by darshana's consumer survey, 2026-10-12):
+
+- ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then overrides
+  VMIN/VTIME to 0 for its non-blocking Esc poll. darshana's ADR 0003 freezes only its public surface; a
+  `_`-prefixed symbol may be renamed or reshaped in any darshana release without a major bump, and the
+  next `scripts/sync-darshana.sh` would carry that in. darshana 1.2.0 shipped the public primitive,
+  `tty_raw_nonblock(fd)` (VMIN = 0 / VTIME = 0, restored by `tty_cooked()`); until thoth moves to it, thoth
+  owns the risk (or its own copy of the mask).
+- **darshana 1.3.0 needs cyrius ≥ 6.7.2** (found by darshana 1.3.0, 2026-10-12). Its
+  bundle declares private constants with `const` (cyrius 6.7.2), so under this repo's
+  `cyrius = "6.6.6"` pin a darshana ≥ 1.3.0 bundle fails to compile (`expected '=', got
+  identifier` — measured under 6.6.20 and 6.7.1; 1.2.1's bundle compiles under both).
+  Move the toolchain pin first; darshana 1.3.0 is tested on 6.7.9. Here it lands at the
+  next `scripts/sync-darshana.sh` to a 1.3.0 tag.
+
 **Degradations, by design or by the floor:**
 
 - **The window renders at buffer scale 1** — on a scaled output the compositor upscales it, so at scale 2 (Hyprland,
