@@ -2,6 +2,58 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.53.0] - 2026-11-05
+
+**Cyrius 6.7.9, and every vendored bundle at its last tag on that toolchain.** The pin moves `6.6.20` → `6.7.9`, `lib/`
+is re-synced, and ten of the eleven vendored bundle files change. Each bundle takes its newest tag pinned to cyrius
+6.7.9 or lower; every next tag needs 6.7.10 or later. The suite stayed green at the new pin before any source change,
+with the same warnings. Reading the floor's changelog against thoth found one change that turned a loud failure into a
+silent one, fixed here with a repair moved up from batch 13. Suite **852 + 2337 + 1226 + 888 + 190 + 6** (+9). This is
+a toolchain release, cut as a minor at the maintainer's call: the next feature arc earns `0.54.0`, and repair batch 13
+moves to 0.53.1.
+
+- **The toolchain: 6.6.20 → 6.7.9.**
+  - `cyrius lib sync --full` copied the 113-file snapshot and 67 files changed, none new. `lib sync` re-locked them
+    itself, and `cyrius deps --verify` reports 114 verified, 0 failed. A recursive `cmp` sweep came back clean.
+  - The symbol diff found 8 functions and 7 globals removed, and thoth uses none of them. 33 functions, 57 globals and
+    4 enum members are new.
+  - 6.7.x adds keywords and syntax. `const`, `trait`, `true`, `false`, `do` and `dyn` appear nowhere in thoth as
+    identifiers, the newly-compiled `!x` is not used, and every compiler message `scripts/build.sh` reads still matches.
+- **The vendored bundles.**
+  - t-ron **2.2.0**, libro **2.11.0** and bote-core **3.4.10** move in lockstep, as t-ron's manifest pins them.
+  - bote-core is the largest change: logging through sakshi, schemas compiled at registration, and a spec-conformance
+    pass. thoth calls none of it directly, and `tron_check` reaches none of it: only t-ron's `security_gate_*` does,
+    which thoth does not use.
+  - t-ron's change registers its own MCP tools correctly. thoth does not use them. `sighup_init` is still unconditional,
+    so the Windows lane stays where it was.
+  - darshana **1.3.0** adds to its surface and changes nothing thoth calls; `_tty_apply_raw_flags` is byte-identical.
+    It is the bundle the 6.7.2 floor was waiting on.
+  - sit-read **1.7.0**'s changes are write-side: bearer tokens bound to remotes, and refusing unresolved conflicts.
+  - agnosai-guard **2.2.0**, anuenue **1.5.0**, avatara **2.16.0**, sankoch-zlib **2.8.3** and vyakarana **2.5.0** change
+    their version line alone. kashi **1.2.0**'s core is byte-identical to 1.1.1's.
+  - Every bundle was checked byte for byte against its tag. `scripts/sync-sit.sh` still drops sit's stdlib sankoch include.
+- **A config layer the allocator refuses is no longer a config read** (floor change: bayan 1.5.13, cyrius 6.7.6).
+  - `bayan_toml_parse` now returns 0 on every refused allocation. Most of those used to end the process, so what had
+    been a loud failure became a silent one: a layer vanished, global-only authority keys included, while the load
+    reported a config read. Alone, a local layer would then apply with every global key at its default.
+  - A refused layer now counts as no config at all. thoth names it on stderr and starts unconfigured, the path a missing
+    config already takes.
+- **A line-mode `/run` child starts clean** (floor change: cyrius 6.7.9).
+  - `exec_vec` now clears the signal mask and restores SIGPIPE and SIGXFSZ in the child, which closes the roadmap's
+    floor row. A launcher's ignored SIGPIPE no longer reaches `/run`: `/run yes | head -1` no longer prints
+    "Broken pipe". Measured from the child: `SigIgn` 0x1000 on 0.52.9, 0 here.
+  - thoth's own resets stay: SIGCHLD is outside the floor's reset, and the capture forks for itself.
+  - A new test reads the child's own `/proc` entry. Run on the real 6.6.20 floor it fails on both values.
+- **Native `.sit` repositories.** patra 1.16.0 runs WAL recovery before every statement, so a status probe can now
+  write after a crashed `sit`. Nothing to change: read through a clean repository, and through one with damaged WALs
+  planted, `/git` answers as 0.52.9 did, and a damaged WAL is refused and left in place.
+
+Verified on the finished tree. Linux, aarch64 and AGNOS warning sets match 0.52.9's but for shifted line numbers. All
+five suites pass as aarch64 binaries under `qemu-aarch64` (5,493 of 5,493). macOS built with a 6.7.9 toolchain
+cross-built from the tag, and its native suite is green (875 + 2327 + 1213 + 190 + 835). A fresh clone at a detached tag
+with an empty `HOME` passes. The Windows lane stops only on t-ron's two names, and with them defined in a scratch copy
+a full PE still links (not run). The TUI ran in a pty and the window on a headless compositor, x86_64 and aarch64 under qemu, both against the stub gateway, and a real TLS handshake works. The AGNOS ring-3 re-run stays deferred with the AGNOS follow-up.
+
 ## [0.52.9] - 2026-11-05
 
 **Cyrius 6.6.20, and every vendored bundle at its last tag on that toolchain.** The pin moves `6.6.6` → `6.6.20`, `lib/`

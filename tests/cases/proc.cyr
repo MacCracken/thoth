@@ -299,6 +299,42 @@ fn test_sigchld_ignored() {
     return 0;
 }
 
+# test_run_shell_signals (0.53.0): a line-mode /run's child, which the capture's reset never reached: it comes through the
+# floor's exec_vec, which clears the mask and restores SIGPIPE and SIGXFSZ since cyrius 6.7.9. Through 6.6.20 it kept what
+# the launcher set ("yes: standard output: Broken pipe"). Read from the child's own /proc entry, in a forked child of
+# this suite, since both states are process-wide. macOS has no /proc, and the floor's mask half does not run there.
+fn test_run_shell_signals() {
+    test_group("a /run child starts with no mask and default SIGPIPE + SIGXFSZ (exec.cyr over the floor's exec_vec, 0.53.0)");
+    if (file_exists("/proc/self/status") == 0) {
+        oprintln("  SKIP: no /proc/self/status on this host");
+        return 0;
+    }
+    var path = "build/.thoth_t_runshell.out";
+    var c = sys_fork();
+    if (c == 0) {
+        var blk[16];
+        store64(&blk, 0x8000002);                     # SIGINT + SIGWINCH, as the TUI's signalfd blocks them
+        store64(&blk + 8, 0);
+        sys_sigprocmask(SIG_BLOCK, &blk, 0);
+        signal_ignore(SIGPIPE);
+        signal_ignore(25);
+        sys_exit(run_shell("grep -E 'SigBlk|SigIgn' /proc/self/status > build/.thoth_t_runshell.out") & 255);
+    }
+    var st[16];
+    store64(&st, 0);
+    sys_waitpid(c, &st, 0);
+    assert_eq(WEXITSTATUS(load32(&st)), 0, "premise: the child's shell ran");
+    var buf = alloc(1025);
+    var n = file_read_all(path, buf, 1024);
+    assert(n > 0, "premise: the shell wrote its own signal state");
+    var cblk = _prc_hex_after(buf, n, "SigBlk:");
+    var cign = _prc_hex_after(buf, n, "SigIgn:");
+    assert_eq(cblk & 0x8000002, 0, "the /run child's mask is clear of what its parent blocked");
+    assert_eq(cign & 0x1001000, 0, "the /run child does not ignore SIGPIPE or SIGXFSZ");
+    xunlink(path);
+    return 0;
+}
+
 fn test_capture_inherits() {
     test_group("a captured command inherits no signal mask, no SIGPIPE/SIGXFSZ ignore and no descriptor of thoth's (exec.cyr, 0.52.8, audit E4)");
     exec_wait_poll_set(0);
@@ -393,6 +429,7 @@ fn test_proc_capture() {
     test_capture_orphans();
     test_capture_inherits();
     test_sigchld_ignored();
+    test_run_shell_signals();
     exec_wait_poll_set(0);
     #endif
     #endif

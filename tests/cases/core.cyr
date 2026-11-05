@@ -2362,6 +2362,31 @@ fn test_toolpin_store_full_carry() {
     return 0;
 }
 
+# test_cfg_parse_refused (0.53.0): bayan_toml_parse answers 0 on every refused allocation. A layer that was read and then
+# refused must not count as read, and must take the whole config with it: alone, a local layer would apply without the
+# global's authority keys. ALLOC_MAX is the floor's public cap: lowered around the parse alone, so nothing else meets it.
+fn test_cfg_parse_refused() {
+    test_group("a config layer the allocator refused is not a config read, and no layer applies without it (config.cyr, 0.53.0)");
+    var s_pa = _cfg_parse_any; var s_pr = _cfg_parse_refused;
+    var src = str_from("[hoosh]\nurl = \"http://x\"\n");
+    _cfg_parse_any = 0; _cfg_parse_refused = 0;
+    assert(_cfg_parse_header(src) != 0, "premise: this header parses");
+    assert_eq(_cfg_layers_usable(), 1, "a parsed layer is usable");
+    var cap = ALLOC_MAX;
+    ALLOC_MAX = 1;
+    var r = _cfg_parse_header(src);
+    ALLOC_MAX = cap;
+    assert_eq(r, 0, "premise: the parse was refused");
+    assert_eq(_cfg_layers_usable(), 0, "one refused layer leaves no usable config, though the other parsed");
+    _cfg_parse_any = 0; _cfg_parse_refused = 0;
+    ALLOC_MAX = 1;
+    r = _cfg_parse_header(src);
+    ALLOC_MAX = cap;
+    assert_eq(_cfg_parse_any, 0, "a refused parse does not count as a config read");
+    _cfg_parse_any = s_pa; _cfg_parse_refused = s_pr;
+    return 0;
+}
+
 fn test_toolpin_config() {
     test_group("[toolpin] is an AUTHORITY table: enabled / file / durable global-only; the default store (0.51.0 / F6)");
     # the fixture layers rewrite every _cfg_* global; the ones later tests read as "unconfigured" (test_config_m4)

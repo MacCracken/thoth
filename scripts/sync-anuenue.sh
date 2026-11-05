@@ -14,10 +14,10 @@
 # filter/animate/colour/CLI machinery stays app-only and is NOT vendored here — thoth
 # emits its own truecolor escapes through src/ui.cyr's existing SGR builder.
 #
-# Usage: ./scripts/sync-anuenue.sh [tag]   (default: 1.3.6)
+# Usage: ./scripts/sync-anuenue.sh [tag]   (default: 1.5.0)
 set -euo pipefail
 
-TAG="${1:-1.3.6}"
+TAG="${1:-1.5.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/anuenue.cyr"
 URL="https://raw.githubusercontent.com/MacCracken/anuenue/${TAG}/dist/anuenue.cyr"

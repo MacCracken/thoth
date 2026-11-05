@@ -7,6 +7,18 @@
 
 ## Version
 
+**0.53.0** — **cyrius 6.7.9, and every vendored bundle at its last tag on that toolchain** (2026-11-05). The pin moves
+`6.6.20` → `6.7.9` and ten of the eleven bundle files change; each bundle takes its newest tag pinned to cyrius 6.7.9 or
+lower, because every next tag needs 6.7.10 or later. A toolchain release, cut as a minor at the maintainer's call. The
+suite was green at the new pin before any source change. One floor change turned a loud failure into a silent one:
+`bayan_toml_parse` answers 0 on every refused allocation, so a config layer could vanish, global-only authority keys
+included, while the load reported a read. A refused layer now means unconfigured, named on stderr. `exec_vec` now gives a
+line-mode `/run` child an empty mask and default SIGPIPE and SIGXFSZ, closing that roadmap row, pinned by a test that
+fails on the real 6.6.20 floor. Repair batch 13 moves to 0.53.1, and the next feature arc earns `0.54.0`. Suite **852 +
+2337 + 1226 + 888 + 190 + 6** (+9). Warning sets match 0.52.9's but for shifted line numbers; all five suites pass as
+aarch64 binaries under `qemu-aarch64` (5,493 of 5,493); macOS is green natively (875 + 2327 + 1213 + 190 + 835); a fresh
+detached clone passes, with the TUI and the window driven live. The AGNOS ring-3 re-run stays deferred.
+
 **0.52.9** — **cyrius 6.6.20, and every vendored bundle at its last tag on that toolchain** (2026-11-05). The pin moves
 `6.6.6` → `6.6.20` and ten of the eleven bundles move; each stops at its newest tag pinned to cyrius 6.6.20 or lower,
 because every next tag needs 6.7.x. Reading the floor's changelog against thoth found what the green suite could not:
@@ -22,7 +34,7 @@ sankoch on the zlib profile), `math` out of `[deps].stdlib` (`f64_le` / `f64_ge`
 `bayan_json_v_obj_get` calls renamed, and a new `cyrius.lock` plus `lib/poison.cyr` and `lib/tls_hostid.cyr` to commit.
 Also: a test that hung on an open stdin, and the live kit ported to Hyprland 0.57's Lua config. The Windows lane now
 stops only on t-ron's `sighup_init`; with its two constants defined in a scratch copy a full PE linked (not run). A
-reply past 64 KiB is cut with no mark, on 0.52.8 too: that is repair batch 13, which moves to 0.52.10. Suite **852 +
+reply past 64 KiB is cut with no mark, on 0.52.8 too: that is in repair batch 13. Suite **852 +
 2332 + 1222 + 888 + 190 + 6** (+9). Linux and AGNOS warning sets match 0.52.8's but for one sigil line number; all five
 suites pass as aarch64 binaries under `qemu-aarch64` (5,484 of 5,484); macOS is green natively (875 + 2322 + 1213 + 190
 + 835); a fresh detached clone passes, with the TUI and the window driven live. The AGNOS ring-3 re-run stays deferred
@@ -3607,9 +3619,16 @@ floor; never fork the spine.**
 
 ## Toolchain
 
-- **Cyrius pin**: `6.6.20` (in `cyrius.cyml [package].cyrius`), moved from `6.6.6` at 0.52.9. The build machine's
+- **Cyrius pin**: `6.7.9` (in `cyrius.cyml [package].cyrius`), moved from `6.6.20` at 0.53.0. The build machine's
   default is past it, and the `cyrius` wrapper builds this tree at the manifest pin (`cyrius --version` in the checkout
-  reports `manifest-pin: 6.6.20`). The hop re-synced the whole snapshot (`cyrius lib sync --full`, 113 files, 96 changed,
+  reports `manifest-pin: 6.7.9`). The hop re-synced the whole snapshot (`cyrius lib sync --full`, 113 files, 67 changed,
+  none new; it re-locks what it writes, and `cyrius deps --verify` reports 114 verified). Symbol-diffed: 8 functions and 7
+  globals removed, none used here; 33 functions, 57 globals and 4 enum members added. The new
+  keywords (`const`, `trait`, `true`, `false`, `do`, `dyn`) collide with nothing in thoth. Re-measured at 0.53.0 after the
+  last edit: `fn_table 9863 / 131072`, `identifiers 310099 / 8388608`, `var_table 5702 / 1048576`, `fixup_table 38925 /
+  1048576`, `fn_name_hash 9863 / 32768` (maxprobe 13), `string_data 951,516 / 2,097,152` (45.4 %, still the tightest),
+  `code_size 4,449,336 / 67,108,864`; static data 574,608 B.
+  Before it, `6.6.20` came from `6.6.6` at 0.52.9: that hop re-synced the whole snapshot (`cyrius lib sync --full`, 113 files, 96 changed,
   `lib/poison.cyr` and `lib/tls_hostid.cyr` new; the recursive `cmp` sweep clean). Symbol-diffed: 40 functions, 87
   globals and 10 enum members removed, none in thoth's own source (avatara's `f64_le` / `f64_ge` are compiler builtins
   since 6.6.13, so `math` left `[deps].stdlib`); 737 functions, 292 globals and 129 enum members added, and
@@ -3747,11 +3766,11 @@ floor; never fork the spine.**
   `f64_le`/`f64_ge`) and re-synced `lib/` to the pin via `cyrius lib sync`
   (88 modules).
 - **Vendored dists** (committed under `src/vendor/`, refreshed by `scripts/sync-*.sh` — the script's default
-  `TAG` is thoth's vendor pin of record). At 0.52.9: **avatara 2.15.1** · **bote-core 3.3.17** · **libro 2.10.8** (the
-  pin t-ron 2.1.12 records) · **sankoch-zlib 2.8.2** · **t-ron 2.1.12** · **sit-read 1.6.4** · **anuenue 1.3.6** ·
-  **vyakarana 2.4.3** · **agnosai-guard 2.1.8** (the 0.40.0 output guard; `sync-agnosai.sh`) · **darshana 1.2.1** ·
-  **kashi 1.1.1** — each is its newest tag pinned to cyrius 6.6.20 or lower (the next tag of every one pins 6.7.x), and
-  0.52.9 moved all but anuenue (each bundle's change is in the CHANGELOG). Generated bundles now open with a `Requires`
+  `TAG` is thoth's vendor pin of record). At 0.53.0: **avatara 2.16.0** · **bote-core 3.4.10** · **libro 2.11.0** (the
+  pin t-ron 2.2.0 records) · **sankoch-zlib 2.8.3** · **t-ron 2.2.0** · **sit-read 1.7.0** · **anuenue 1.5.0** ·
+  **vyakarana 2.5.0** · **agnosai-guard 2.2.0** (the 0.40.0 output guard; `sync-agnosai.sh`) · **darshana 1.3.0** ·
+  **kashi 1.2.0** — each is its newest tag pinned to cyrius 6.7.9 or lower (the next tag of every one pins 6.7.10 or
+  later; each bundle's change is in the CHANGELOG). Generated bundles now open with a `Requires`
   block of `include` lines. Those dedupe against `[deps].stdlib`, except sit-read's `lib/sankoch.cyr`, which
   `sync-sit.sh` drops: it would land the stdlib's full sankoch on the zlib profile. darshana came 1.0.0 → 1.1.2 at 0.45.6 (`tty_open_signalfd` rolls back only the mask bits it added,
   `tty_close_signalfd` returns -1/0 instead of a raw -errno — thoth ignores it — and `_ansi_emit_u8` is gone, which
@@ -3817,19 +3836,19 @@ floor; never fork the spine.**
 
 The one source tree fans out to targets at **build time** via the build driver
 `scripts/build.sh` (`linux` | `macos` | `win` | `aarch64` | `agnos` | `all`); no per-OS
-source. **Re-verified at 0.52.9 on the 6.6.20 pin: Linux built and tested (5,484 assertions, on a branch checkout, and 5,486 on a detached clone with an empty `HOME`, the shape of the Release run); Linux and
-AGNOS warning sets identical to 0.52.8's but for one sigil line number; aarch64 the same plus the three sit dead-path warnings and the static-data note Linux always printed; all five suites run as aarch64 binaries under
-`qemu-aarch64` (5,484 of 5,484); Windows at its known-gap skip, now only t-ron's two names; macOS built and its native suite green (875 + 2322 + 1213 + 190 + 835, 0 failed — through a private `CYRIUS_HOME`, on a 6.6.20 toolchain cross-built from the tag, ecb's own default having moved past it). The AGNOS ring-3 run was not repeated at 0.52.7, 0.52.8 or 0.52.9 (deferred with the AGNOS follow-up,
+source. **Re-verified at 0.53.0 on the 6.7.9 pin: Linux built and tested (5,493 assertions, on a branch checkout, and 5,495 on a detached clone with an empty `HOME`, the shape of the Release run); Linux, aarch64 and
+AGNOS warning sets identical to 0.52.9's but for shifted line numbers; all five suites run as aarch64 binaries under
+`qemu-aarch64` (5,493 of 5,493); Windows at its known-gap skip, t-ron's two names; macOS built and its native suite green (875 + 2327 + 1213 + 190 + 835, 0 failed — through a private `CYRIUS_HOME`, on a 6.7.9 toolchain cross-built from the tag, ecb's own default being past it). The AGNOS ring-3 run was not repeated at 0.52.7 through 0.53.0 (deferred with the AGNOS follow-up,
 by the maintainer's call — last at 0.52.6). Each row carries its own stamp** — see
 [ADR-0008](../adr/0008-multi-target-builds.md):
 
 | Target | Flag | Status | Output |
 |---|---|---|---|
-| x86_64 Linux | _(default)_ | **shipped** — built, tested (852 + 2332 + 1222 + 888 + 190 assertions, five suite binaries green at 0.52.9, on a detached clone too; the TUI in a pty and the window on a headless compositor driven live against the stub gateway; a real TLS handshake; a turn against a hoosh 2.8.1 serving the real Anthropic API at 0.52.8), released | `build/thoth` |
-| aarch64 Linux | `--aarch64` | **builds; suites and window RUN under emulation** (re-verified 0.52.9 / Cyrius 6.6.20, warning set as Linux's; all five suites pass as aarch64 binaries under `qemu-aarch64` (5,484 of 5,484); the window drove a turn, a tool round and a command card under qemu on Hyprland 0.57, rendering as x86_64's; at 0.52.4 `thoth gui` mapped, streamed a turn and took input under it — before 0.52.3 three unrenumbered calls left it without a buffer, and from 6.6.5 0.52.3's native numbers would have again (its `ftruncate` became a `sendmsg`; 0.52.4 calls the stdlib wrappers); a static ARM ELF, 7,564,840 bytes; 6.6.4 dropped the two stale `raw syscall 5` warnings) — run under user-mode emulation, not yet on ARM hardware. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
-| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN, re-verified 0.52.9** (875 + 2322 + 1213 + 190 + 835, 0 failed — ecb's `~/.cyrius/current` is past the pin, so the pin is reached through a private `CYRIUS_HOME` whose `bin` is `versions/6.6.20/bin`, a toolchain cross-built from the tag; since 6.6.11 the runner passes the environment on, so HOME-gated rows run here for the first time; 0.52.8: 875 + 2305 + 1206 + 190 + 831; 0.52.7: 846 + 2183 + 1127 + 190 + 805; `thoth gui` refuses — no window backend on macOS; Apple Silicon, macOS 26.6.2; the 6.6.6 toolchain was already installed there (`~/.cyrius/versions/6.6.6`, current) — `cyrius install` has no registry, so a pin ahead of the host is cross-built on Linux (`scripts/build-macos-arm64-tarball.sh`), as 6.6.4 was at 0.51.3; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
+| x86_64 Linux | _(default)_ | **shipped** — built, tested (852 + 2337 + 1226 + 888 + 190 assertions, five suite binaries green at 0.53.0, on a detached clone too; the TUI in a pty and the window on a headless compositor driven live against the stub gateway; a real TLS handshake; a turn against a hoosh 2.8.1 serving the real Anthropic API at 0.52.8), released | `build/thoth` |
+| aarch64 Linux | `--aarch64` | **builds; suites and window RUN under emulation** (re-verified 0.53.0 / Cyrius 6.7.9, warning set as Linux's; all five suites pass as aarch64 binaries under `qemu-aarch64` (5,493 of 5,493); the window drove a turn, a tool round and a command card under qemu on Hyprland 0.57, rendering as x86_64's; at 0.52.4 `thoth gui` mapped, streamed a turn and took input under it — before 0.52.3 three unrenumbered calls left it without a buffer, and from 6.6.5 0.52.3's native numbers would have again (its `ftruncate` became a `sendmsg`; 0.52.4 calls the stdlib wrappers); a static ARM ELF, 7,564,840 bytes; 6.6.4 dropped the two stale `raw syscall 5` warnings) — run under user-mode emulation, not yet on ARM hardware. Was **FAIL** at sit 1.6.1 (`SYS_RENAME`); regained via sit 1.6.2. 0.38.6 also fixed a live **miscompile** on this lane (darshana's x86-only `SYS_IOCTL`) | `build/thoth_aarch64` |
+| macOS (arm64) | `macos` _(Mac host)_ | **BUILDS + RUNS; native suite green AT THE PIN, re-verified 0.53.0** (875 + 2327 + 1213 + 190 + 835, 0 failed — ecb's `~/.cyrius/current` is past the pin, so the pin is reached through a private `CYRIUS_HOME` whose `bin` is `versions/6.7.9/bin`, a toolchain cross-built from the tag; 0.52.9: 875 + 2322 + 1213 + 190 + 835; since 6.6.11 the runner passes the environment on, so HOME-gated rows run here for the first time; 0.52.8: 875 + 2305 + 1206 + 190 + 831; 0.52.7: 846 + 2183 + 1127 + 190 + 805; `thoth gui` refuses — no window backend on macOS; Apple Silicon, macOS 26.6.2; the 6.6.6 toolchain was already installed there (`~/.cyrius/versions/6.6.6`, current) — `cyrius install` has no registry, so a pin ahead of the host is cross-built on Linux (`scripts/build-macos-arm64-tarball.sh`), as 6.6.4 was at 0.51.3; `cyrius test` there exports no `$PWD`, which is what caught a wrong 0.45.3 test golden). `getenv` works (colour, the global config layer). 0.45.2 fixed `src/exec.cyr`'s Linux-numbered open flags and raw `setpgid`, which had kept `shell`, `[hooks]` and `[verify]` from ever running there and let a `pre_tool` hook fail OPEN. Line tier only (no BSD termios ⇒ no T2) | `build/thoth_macos` |
 | AGNOS (x86_64) | `--agnos` | **builds `OK` AND RUNS — re-run every release** (last 0.52.6, 2026-09-27, passing on its first boot — the operator's kernel build lacks the hook, so a `BASESTACK_SELFTEST` build is made for the run and the original put back, as at 0.52.4; at 0.52.6 the machine's default toolchain had moved to 6.6.7, so the kernel was built at agnos's own 6.6.6 pin through a private `CYRIUS_HOME`; since 0.52.2 the runner retries a boot that died in gnoboot before the kernel — the roadmap's gnoboot row — and never reports it as a thoth FAIL): `AGNOS_REPO=~/Repos/agnos ./scripts/agnos-run.sh` boots the kernel under QEMU (KVM) and the ~5.9 MB ELF loads off ext2, runs in ring 3, prints `thoth <VERSION>` and exits 0 with no fault. Re-established at 0.51.2 after the local kernel was rebuilt with `BASESTACK_SELFTEST` (the first re-run since 0.44.3); verified non-vacuous (a wrong expect-string FAILs) | `build/thoth_agnos` |
-| Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source, on one bundle.** At 0.52.9 / 6.6.20 the lane stops only on `SIGHUP` / `SIG_BLOCK`, t-ron's `sighup_init`, with zero thoth callers: `scripts/build.sh win`'s known-gap skip names exactly those two. The sockets and `sys_rmdir` closed in the floor. With the two defined in a scratch copy a full PE32+ `thoth.exe` linked (6.7 MB; not run). `is_symlink` works on Windows and a PE exclusive create no longer follows a final symlink. Before it could ship: a capture with an environment block, and backslash and drive-letter paths in the jail | `build/thoth.exe` |
+| Windows | `--win` | **staged; blocked entirely OUTSIDE thoth's authored source, on one bundle.** At 0.53.0 / 6.7.9 the lane stops only on `SIGHUP` / `SIG_BLOCK`, t-ron's `sighup_init`, with zero thoth callers: `scripts/build.sh win`'s known-gap skip names exactly those two. The sockets and `sys_rmdir` closed in the floor. With the two defined in a scratch copy a full PE32+ `thoth.exe` linked (6.7 MB; not run). `is_symlink` works on Windows and a PE exclusive create no longer follows a final symlink. Before it could ship: a capture with an environment block, and backslash and drive-letter paths in the jail | `build/thoth.exe` |
 
 **aarch64 (unblocked since 0.6.4, re-verified 0.6.6):** `cyrius build --aarch64`
 produces a valid statically-linked ARM ELF (`file` → `ELF 64-bit … ARM aarch64`;
@@ -3961,8 +3980,8 @@ audit chain included — passes.
 
 `cyrius test` runs the split suites — one binary each, a thin driver over topical `tests/cases/*.cyr`:
 `tests/thoth_core.tcyr`, `tests/thoth_agent.tcyr`, `tests/thoth_tui.tcyr`, `tests/thoth_gui.tcyr`,
-`tests/thoth_render.tcyr`. **852 (gui) + 2332 (core) + 1222 (agent) + 888 (tui) + 190 (render) = 5,484 assertions, 0 failures, as of
-0.52.9 — the runner's closing `6 passed` is binaries, not assertions: the five suites and `[build].test`'s stub** — covering the driver core + command classification, the seam registry, session state + the
+`tests/thoth_render.tcyr`. **852 (gui) + 2337 (core) + 1226 (agent) + 888 (tui) + 190 (render) = 5,493 assertions, 0 failures, as of
+0.53.0 — the runner's closing `6 passed` is binaries, not assertions: the five suites and `[build].test`'s stub** — covering the driver core + command classification, the seam registry, session state + the
 multi-conversation store + the persisted message schema (model / citations / tool calls, round-tripped through the
 `THOTH-SESSION-2` format), hoosh/daimon request-build + response-extract, t-ron verdicts through the **real vendored
 engine** (allow/deny globs, deny-by-default), persona + role, the memory seam (recall/citations/grounding), cross-
@@ -4008,10 +4027,10 @@ batch 10 (an audit of 0.45.3–0.52.5 by area: the authorization prompt, the pin
 window's wire and ~30 more), `0.52.7` batch 11 (current models: the hoosh 2.8.0 live catalog folded in, the
 reasoning levels and output ceiling current models take, finish reasons named) and `0.52.8` batch 12 (an audit of
 0.52.6–0.52.7: the authorization prompt on both surfaces, the read jail, the safe direction for a repository's
-spend and guard keys, finish notes everywhere, the capture supervisor) and `0.52.9` moved the pin to cyrius 6.6.20 and
-every vendored bundle to its last tag on that toolchain; **batch 13 → 0.52.10 holds two window defects found live and
-two the refresh turned up, and the toolchain stays on cyrius 6.6.20** (the roadmap, which also lists the next steps
-awaiting the maintainer) — while **minors are held for feature arcs** (`0.46.0`
+spend and guard keys, finish notes everywhere, the capture supervisor) and `0.52.9` and `0.53.0` moved the pin to cyrius 6.6.20
+and then 6.7.9, with every vendored bundle at its last tag on each; **batch 13 → 0.53.1 holds two window defects found
+live and two items the refreshes turned up, and the toolchain stays on cyrius 6.7.9** (the roadmap, which also lists the
+next steps awaiting the maintainer) — while **minors are held for feature arcs** (`0.46.0`
 through `0.52.0` = F1–F7; the candidates F8–F14 are ordered on the roadmap with their gates, the next decided one
-earns `0.53.0`). Defects owned
+earns `0.54.0`). Defects owned
 upstream or by the floor sit in a waiting-on table with the version each was last checked against.
