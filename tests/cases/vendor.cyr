@@ -56,22 +56,22 @@ fn _vd_pin(path, header, label) {
 
 fn test_vendor_pins() {
     test_group("vendored dist bundles report their pinned version (src/vendor/, 0.38.6)");
-    _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.16.0", "avatara pinned at 2.16.0");
-    _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.4.10", "bote-core pinned at 3.4.10");
-    _vd_pin("src/vendor/libro.cyr",     "# Version: 2.11.0", "libro pinned at 2.11.0");
-    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.2.0", "t-ron pinned at 2.2.0");
-    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.7.0",  "sit-read pinned at 1.7.0");
-    _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.8.3",  "sankoch-zlib pinned at 2.8.3");
-    _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.5.0",  "vyakarana pinned at 2.5.0");
-    _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.3.0",  "darshana pinned at 1.3.0");
-    _vd_pin("src/vendor/anuenue.cyr",   "# Version: 1.5.0",  "anuenue pinned at 1.5.0");
+    _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.16.1", "avatara pinned at 2.16.1");
+    _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.8.15", "bote-core pinned at 3.8.15");
+    _vd_pin("src/vendor/libro.cyr",     "# Version: 2.11.3", "libro pinned at 2.11.3");
+    _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.2.4", "t-ron pinned at 2.2.4");
+    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.13.0",  "sit-read pinned at 1.13.0");
+    _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.8.9",  "sankoch-zlib pinned at 2.8.9");
+    _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.10.0",  "vyakarana pinned at 2.10.0");
+    _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.7.0",  "darshana pinned at 1.7.0");
+    _vd_pin("src/vendor/anuenue.cyr",   "# Version: 1.5.2",  "anuenue pinned at 1.5.2");
     # 0.43.2: agnosai-guard was the ONE bundle outside this gate — nine of ten pinned, and the tenth is
     # the secret/PII redactor behind [redact] and the injection guard behind [guard], i.e. the one where
     # a silently-wrong version is a security consequence rather than a cosmetic one. It is also the
     # bundle whose sync script checks are ALL non-fatal (`echo "WARN: …"`, exit 0), so nothing else
     # caught it: run sync-agnosai.sh with a stale tag, get a WARN among the normal success lines, commit,
     # and the tree builds clean and passes every other test with a downgraded redactor.
-    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.2.0", "agnosai-guard pinned at 2.2.0");
+    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.2.3", "agnosai-guard pinned at 2.2.3");
 
     # kashi is the exception and deliberately so: thoth vendors kashi's FREESTANDING
     # CORE (its `src/font_data.cyr`), not the generated `dist/kashi.cyr` library face,
@@ -117,6 +117,12 @@ fn test_vendor_hazards() {
     # reason the two are split textually rather than branched at runtime.
     assert(_vd_count("syscall(SYS_RENAME, old, strlen(old), new, strlen(new))") == 1, "sit-read: AGNOS 4-arg rename retained");
 
+    # ---- sit: status reads a tree's modes (sit 1.12.0) ----
+    # Through 1.11, git read-mode dropped every tree entry but 100644 and 40000, so on a clean tree each executable and
+    # symlink read as added. The comparator that hid it is gone; pin that it stays gone and the mode-aware reader is here.
+    assert_eq(_vd_count("\nfn _blob_differs_from_file("), 0, "sit-read: the mode-blind status comparator is gone");
+    assert(_vd_count("\nfn tree_entry_mode_valid(") == 1, "sit-read: trees keep every mode git writes");
+
     # ---- sit: the two integration renames scripts/sync-sit.sh applies ----
     # sit cannot know thoth also vendors libro and bote-core. Unrenamed, sit's
     # `entry_hash` (a tree accessor) wins the last-def over **libro**'s audit-chain
@@ -161,6 +167,13 @@ fn test_vendor_hazards() {
     _vd_read("src/vendor/t-ron.cyr");
     assert_eq(_vd_count("\nfn chacha20_xor("), 0, "t-ron defines no chacha20_xor (sigil's must win)");
     assert(_vd_count("\nfn cc20_xor(") == 1, "t-ron: the cc20_xor rename actually applied");
+
+    # ---- vyakarana: the rename scripts/sync-vyakarana.sh applies ----
+    # bote-core and vyakarana both define a private `_reg_ieq`, at 2 and 3 arguments, and a fn redefined at another arity
+    # is a compile error. A partition, for the reason the sit renames are: every occurrence must be the renamed one.
+    _vd_read("src/vendor/vyakarana.cyr");
+    assert_eq(_vd_count("_reg_ieq"), _vd_count("_vyk_reg_ieq"), "vyakarana: every _reg_ieq is renamed (vs bote-core's)");
+    assert(_vd_count("_vyk_reg_ieq") > 0, "vyakarana: the _reg_ieq rename actually applied");
 
     # ---- sankoch: the zlib profile must not drag stream.cyr back in ----
     # The full sankoch bundle defines `_stream_grow`, which collided with

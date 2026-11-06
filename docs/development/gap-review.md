@@ -171,9 +171,9 @@ sit's write surface at all.
 
 ### 9 · MCP 2026-07-28 conformance — **bote's problem, not thoth's**
 
-Vendored bote 3.4.10 negotiates 2025-11-25, one revision behind across a structural break (3.3.13
-added 2025-06-18 to the accepted set, not the newer revision). Flagged here only so it is tracked
-somewhere; the work belongs upstream.
+Vendored bote 3.8.15 serves 2026-07-28, the stateless revision, alongside the older ones; `initialize` still
+negotiates 2025-11-25 because the new revision has no `initialize`. thoth's t-ron path does not reach any of it.
+What is left is daimon's, as the host thoth actually speaks to.
 
 ### Declined, with reasons recorded
 
@@ -315,6 +315,24 @@ Each of these blocks something above. None has a default answer.
    `--logs` capture too: "off" leaves the flag's sink bound, but a quieter level (`level = "error"`) narrows it. The
    0.52.8 ruling for the switches that guard a session (a local layer may only turn `[guard]` and `[redact]` on)
    points to the same shape here: a local level may make the log more detailed, never quieter than the global's.
+
+8. **Should t-ron's payload scanner read a coding agent's shell commands and MCP file writes?** With a `[tron].policy`
+   bound, `tron_check` scans `thoth_shell`'s command and every MCP tool's arguments. `edit` and `create_file` gate on the
+   path alone, so their contents are not scanned. Measured through the real `tron_check` at t-ron 2.2.4, under an
+   `allow = ["*"]` policy:
+   - **Denied, and already denied at t-ron 2.2.0:** `git log --oneline -5; git status`, `git commit -m 'fix: rm stale
+     cache; update docs'`, `docker build -t x . && docker run --rm x`, `sed -i 's/a/b/' f.txt; cat f.txt`, `echo "a; rm b"`,
+     an `sqlite3` line with a `--` comment, an MCP write of SQL or of a Jinja template, and a search query naming `rm`.
+   - **Denied, new since then:** a heredoc holding a line that starts with a command name, `{{ a ~ b }}`, and an MCP write
+     of a shell script or of a README with a `curl` line. t-ron records these as the known cost of its stricter rules.
+   - **Allowed:** `cd src && make test`, pipelines, `for` loops, `$(…)`, `npm test && npm run lint || echo failed`, Python
+     heredocs, and MCP writes of Python, Cyrius and YAML.
+
+   The scanner is a mitigation, and the operator's policy, `[shell]` deny and allow, and the confirm gate are the
+   authority. A shell command is shell by definition, so scanning it for shell injection mostly measures how the
+   command is written. The options: keep it as shipped; skip the scan for `thoth_shell` alone, whose string thoth's
+   own `[shell]` lists already judge; or let an operator's key turn a scanner deny into the confirm prompt. Each
+   weakens a security control, so it is the maintainer's to rule on.
 
 (Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched
 ignoring case into one slot, so two kinds sharing that prefix would share a health row — audit E11; no gateway in

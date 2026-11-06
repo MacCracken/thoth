@@ -17,8 +17,8 @@
 #                                                                    build/thoth_macos
 #   win      Windows x86_64 — cross via cycc_win (`cyrius build --win`).
 #            BEST-EFFORT. Nothing architectural surfaces any more: the lane stops only
-#            on t-ron's signal half (VENDOR_GAP below), which thoth never calls. This
-#            lane WARNS on those symbols and continues; no .exe until t-ron gates them.
+#            on POSIX-only paths in vendored bundles (VENDOR_GAP below). This lane WARNS on
+#            those symbols and continues; no .exe until the bundles gate them.
 #                                                                    build/thoth.exe
 #   aarch64  aarch64 Linux — cross via --aarch64. BUILDS as of cyrius 6.2.15
 #            (the cycc #pure/pass-1 scanner gap closed in v6.2.2); still run as a
@@ -107,7 +107,11 @@ TRANSIENT_GAP=''
 #     has no POSIX signals, so the floor defines neither constant. thoth has ZERO callers of
 #     `sighup_init` — the code is dead in this consumer. Upstream fix: t-ron gating its signal half to
 #     Linux, or publishing a [lib.X] profile without it. Tracked in roadmap.md's known limitations.
-VENDOR_GAP='SIGHUP|SIG_BLOCK'
+#   SIG_SETMASK — the same t-ron signal half.
+#   SYS_GETEUID, SYS_FCHMOD, SYS_GETCWD, O_CLOEXEC, O_NONBLOCK, sys_fstat — src/vendor/sit-read.cyr, POSIX-only paths sit
+#     1.13.0 does not gate, on its write side and in its git reader. thoth's own O_NONBLOCK and SIG_SETMASK sit inside
+#     non-Windows blocks, so every Windows error for these is in a bundle. Upstream fix: sit gating them.
+VENDOR_GAP='SIGHUP|SIG_BLOCK|SIG_SETMASK|SYS_GETEUID|SYS_FCHMOD|SYS_GETCWD|O_CLOEXEC|O_NONBLOCK|sys_fstat'
 
 # Guard the empty case: "$ARCH_GAP|" (trailing pipe) would match the empty string
 # in grep -qE and swallow EVERY failure as a "known gap". Only union when non-empty.
@@ -211,8 +215,17 @@ _run_best_effort() {
 
 build_linux()   { _run "linux (x86_64)" "$OUT/thoth" ; }
 build_aarch64() { _run_best_effort "aarch64 (linux)" "$OUT/thoth_aarch64" -- --aarch64 ; }
-build_win()     { _run_best_effort "windows (x86_64 PE)" "$OUT/thoth.exe" -- --win ; }
-build_agnos()   { _run_best_effort "agnos (x86_64)" "$OUT/thoth_agnos" -- --agnos ; }
+# cyrius cross-builds PE and AGNOS only from x86_64 Linux: on a Mac or an aarch64 Linux host the CLI refuses both, and
+# through 6.7.10 it wrote a wrong-format file there instead. Announced, not failed: the target is unchanged.
+is_x86_linux_host() { [ "$(uname -s 2>/dev/null)" = "Linux" ] && [ "$(uname -m 2>/dev/null)" = "x86_64" ]; }
+build_win() {
+    if is_x86_linux_host; then _run_best_effort "windows (x86_64 PE)" "$OUT/thoth.exe" -- --win ; return $?; fi
+    echo "==> windows: SKIPPED on $(uname -s)/$(uname -m) — cross-built from x86_64 Linux."
+}
+build_agnos() {
+    if is_x86_linux_host; then _run_best_effort "agnos (x86_64)" "$OUT/thoth_agnos" -- --agnos ; return $?; fi
+    echo "==> agnos: SKIPPED on $(uname -s)/$(uname -m) — cross-built from x86_64 Linux."
+}
 
 # macOS is a SHIPPING lane on a Mac (native Mach-O) and a no-op elsewhere — we do
 # not pretend to cross-emit Mach-O from Linux.

@@ -116,11 +116,11 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 13 → 0.53.1
+### Repair batch 13 → 0.53.2
 
-Two window defects, both older than 0.52.8, found while driving it live, and two items the cyrius refreshes turned up.
-The design questions awaiting a ruling sit in [`gap-review.md`](gap-review.md). The toolchain stays on cyrius
-**6.7.9**: every vendored bundle's next tag needs a later pin, so a further move is its own decision.
+Two window defects, both older than 0.52.8, found while driving it live, and four items the cyrius refreshes turned up.
+The design questions awaiting a ruling sit in [`gap-review.md`](gap-review.md). thoth is on cyrius **6.7.18**, the
+newest release, with every vendored bundle at its newest tag.
 
 1. **A command card clips each line at its width, with no wrap and no mark** (`gcmd_build`, since 0.46.0). A long
    `/run` output line loses its tail, and so does a refusal's reason when stray bytes push it right. The TUI wraps
@@ -136,6 +136,12 @@ The design questions awaiting a ruling sit in [`gap-review.md`](gap-review.md). 
 4. **`scripts/build.sh`'s output-size skip is stale.** Its `SIZE_GAP` branch still treats `output too large` as a known
    skip and its comment says the aarch64 lane caps at 16 MiB; the compiler's output cap is 1 GiB now. A symbol that
    excuses a failure should not outlive its gap: the branch goes, so a real overflow fails the lane.
+5. **`daimon_build_call` parses on a worker thread** (`daimon_fetch_into`, the parallel executor), though that function's
+   own comment says bayan's parser is not thread-safe there. A refusal under a race would turn real arguments into
+   `{}`. Phase 1 now validates each call's arguments on the main thread, so the worker's parse is redundant and can go.
+   Not reproduced; the comment dates from bayan 1.0.3 and needs re-measuring against 1.11.1.
+6. **`gate_name_fit`'s 163-byte cap.** t-ron 2.2.3 fixed what it guarded: its audit writers size by escaped length and
+   escape, and it denies `"` and `\` itself. Whether thoth keeps the bound or lifts it to t-ron's own 256 is open.
 
 ### Next steps — follow-ups awaiting the maintainer
 
@@ -158,27 +164,24 @@ Ordered by what unblocks the most. None is pinned to a version until it is decid
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
 Each row carries the version it was last checked against (the floor and bundle rows re-read 2026-11-05 against sit
-1.7.0, t-ron 2.2.0, bote 3.4.10, darshana 1.3.0 and cyrius 6.7.9; the spine rows 2026-10-09 against hoosh 2.8.1,
+1.13.0, t-ron 2.2.4, bote 3.8.15, darshana 1.7.0 and cyrius 6.7.18; the spine rows 2026-10-09 against hoosh 2.8.1,
 daimon 2.4.3, agnos 1.57.10, gnoboot 0.7.2 and bhava 2.0.0). A release re-checks the list; a closed item becomes a
-re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`. Every vendored bundle has newer tags, but each
-of those pins cyrius 6.7.10 or later, so they wait with the 6.7.9 pin.
+re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`. Every vendored bundle is at its newest tag. t-ron 2.2.4 was
+tested on bote-core 3.8.9; thoth vendors 3.8.15, and nothing thoth reaches in t-ron calls into bote.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
 | **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.8.1 has no agnos build in its CI or scripts) — gate 1 rung 2; `daimon-agnos` 2.4.3 is ready beside it. Deferred with the AGNOS follow-up (next steps, item 1) | hoosh **2.8.1** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
 | **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:12`; daimon's roadmap puts caller auth at 2.5.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:134-142`) | daimon **2.4.3** | done — thoth's own pin store (ADR-0022) is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
-| **sit** | ⛔ git read-mode status false positives: every tracked `100755` file and every zero-byte file reads "modified" — on a clean tree, every executable script (`_blob_differs_from_file` calls an unreadable side "differs") | sit **1.7.0** (vendored 1.7.0) | none — `git_probe` copies sit's vec; fix is sit's comparator |
 | **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:490`) and a plain `{role,content}` passes through verbatim (`:506`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.8.1** | none yet — thoth sends text only |
 | **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.8.1** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
 | **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.8.1** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
 | **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.8.1** | none — thoth prices from `[pricing]`, which has no cache rate either |
-| **t-ron** | `_audit_export_event` splices `agent`/`tool`/`reason` unescaped (`src/audit.cyr:194`, `:196`, `:202`) and sizes the buffer flat (`n * 512 + 32`, `:216`) — a ring of deny events overruns it from ~185-byte tool names (one event alone from ~199), and a `"` in a name (which `tron_is_safe_identifier`, `gate.cyr:66`, admits) makes the export invalid JSON; and `_audit_details` (`:12`) allocates `tool + 256` but writes `2 · tool + agent + 90..93` on a deny, from a ~159-byte name. The artifact is a SECURITY record | t-ron **2.2.0** (vendored 2.2.0) | done — while t-ron is bound, `gate_name_fit` refuses a name longer than t-ron's audit buffers hold (`GATE_TRON_NAME_ROOM`, 163 bytes less the agent id) or holding a quote, backslash, control or non-ASCII byte, before `tron_check`; `test_gate_name_fit` fails if a t-ron sync moves the boundary |
-| **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the three `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.7.0's `[lib.read]` still defines `cmd_reset` and leaves the three unresolved (by sit's design); bote 3.4.10 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
-| **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.3.0** (vendored 1.3.0) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
-| **t-ron** | the one thing left between the Windows lane and a binary: `sighup_init`'s `SIGHUP` / `SIG_BLOCK`, unconditional in the bundle, with zero thoth callers. With the two defined in a scratch copy, a full PE32+ `thoth.exe` links at 6.7.9 (not run). The fix is t-ron gating its signal half to the targets that have it | t-ron **2.2.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and backslash and drive-letter paths in the jail |
-| **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:486` and AGNOS `syscalls_x86_64_agnos.cyr:1006`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.9** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
-| **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:311`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.9** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
-| **cyrius (floor)** | the exec family's signal reset runs its mask half on Linux only (`_proc_child_signals`, `lib/process.cyr:149`): on macOS the dispositions reset and a launcher's mask passes through to a `/run` child; thoth itself blocks nothing there. Filed upstream by cyrius | cyrius **6.7.9** | none — no thoth mask to clear |
+| **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body`, `commit_tree_hex` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.13.0's `[lib.read]` still defines `cmd_reset` and leaves four unresolved (the three, and `commit_tree_hex`, all unreachable); bote 3.8.15 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
+| **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.7.0** (vendored 1.7.0) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
+| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and backslash and drive-letter paths in the jail |
+| **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:610` and AGNOS `syscalls_x86_64_agnos.cyr:1048`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.18** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
+| **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
 | **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.9) | degrades honestly; a candidate filing if the ABI gains a mode channel |
 | **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make the smoke's boot intermittent (up to 2 of 3 boots have died before the kernel). The smoke stages `gnoboot/build/BOOTX64.EFI` (built 2026-09-11, before the 0.7.2 commits; its banner still reads v0.7.1) | gnoboot **0.7.2** | done — `scripts/agnos-run.sh` classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
@@ -258,7 +261,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** repair batch 13's four items.
+**Scheduled above:** repair batch 13's six items.
 
 **Candidates above:** the pointer path Linux-Wayland only (F8).
 
@@ -267,7 +270,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 - ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then overrides
   VMIN/VTIME to 0 for its non-blocking Esc poll. darshana's ADR 0003 freezes only its public surface; a
   `_`-prefixed symbol may be renamed or reshaped in any darshana release without a major bump, and the
-  next `scripts/sync-darshana.sh` would carry that in. The vendored 1.3.0 has the public primitive,
+  next `scripts/sync-darshana.sh` would carry that in. The vendored 1.7.0 has the public primitive,
   `tty_raw_nonblock(fd)` (VMIN = 0 / VTIME = 0, restored by `tty_cooked()`), and the private fn is byte-identical
   to 1.1.2's. It is not a one-word swap: `intr_arm` keeps a private termios copy precisely so it does not touch
   darshana's single raw slot, so moving means proving that bracket against the post-turn `tty_raw`, live. Until

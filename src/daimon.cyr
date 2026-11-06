@@ -93,8 +93,9 @@ fn daimon_build_call(dst, name, args_json) {
     # dispatch a tool thoth never gated. thoth authorizes `name` through t-ron BEFORE this point, so the
     # gate and the executed call could disagree — the same authorize-one-thing/do-another shape as the
     # parallel-path truncation. Validate that the text is exactly ONE well-formed JSON value before it
-    # goes in; anything else degrades to `{}` (the same substitution a null already took), which the
-    # agent loop surfaces to the model as an ordinary tool error.
+    # goes in; anything else degrades to `{}` (the same substitution a null already took). This is the
+    # backstop: the agent loop refuses such a call before it gets here (daimon_args_refused), since `{}`
+    # would run a tool with optional arguments on its defaults.
     var ok = 0;
     if (args_json != 0) {
         var alen = strlen(args_json);
@@ -106,6 +107,25 @@ fn daimon_build_call(dst, name, args_json) {
     if (off > (cap - 1)) { off = cap - 1; }
     store8(dst + off, 0);
     return off;
+}
+
+# daimon_args_refused (0.53.1): what the model is told when its `arguments` cannot go out, or 0 when they can (no text,
+# or one JSON value). bayan refuses a whole document over a duplicate key or a leading zero since cyrius 6.7.18, where the
+# first key used to win, so a model's slip now lands here. Sending `{}` instead would run a tool the model called with
+# arguments on its defaults, and report that as the call's result. Main thread only (it parses).
+var _daimon_args_msg = 0;
+var DAIMON_ARGS_MSG_CAP = 256;
+fn daimon_args_refused(args_json) {
+    if (args_json == 0) { return 0; }
+    var n = strlen(args_json);
+    if (n == 0) { return 0; }
+    if (bayan_json_v_parse_buf(args_json, n) != 0) { return 0; }
+    if (_daimon_args_msg == 0) { _daimon_args_msg = alloc(DAIMON_ARGS_MSG_CAP); }
+    var off = _append_cstr_cap(_daimon_args_msg, 0, DAIMON_ARGS_MSG_CAP - 1, "(tool call not sent: its arguments are not valid JSON: ");
+    off = _append_cstr_cap(_daimon_args_msg, off, DAIMON_ARGS_MSG_CAP - 1, bayan_json_last_error());
+    off = _append_cstr_cap(_daimon_args_msg, off, DAIMON_ARGS_MSG_CAP - 1, ")");
+    store8(_daimon_args_msg + off, 0);
+    return _daimon_args_msg;
 }
 
 # daimon_extract_text: parse an MCP tool-result body and return the first

@@ -1125,6 +1125,7 @@ var _par_over = 0;           # PAR_MAX byte flags: 1 if args exceeded AGENT_ARGS
 var _par_namecode = 0;       # PAR_MAX bytes: the tool NAME's _agent_name_code — 0, or why it was refused (0.44.3; 0.52.5)
 var _par_hookblocked = 0;    # PAR_MAX byte flags: 1 if the operator's pre_tool hook denied it (0.43.1)
 var _par_withheld = 0;       # PAR_MAX byte flags: 1 if toolpin withheld it this session (0.44.4)
+var _par_badargs = 0;        # PAR_MAX byte flags: 1 if its arguments cannot go out (0.53.1)
 var _par_nm = 0;             # 0.52.8 (audit E3): PAR_MAX i64 — the call's FULL name (phase 1's `nm`, valid for the round)
 var _par_ga = 0;             # 0.52.8 (audit E3): PAR_MAX i64 — its full arguments (phase 1's `ga`)
 var _par_stopped = 0;        # 0.52.8 (audit E8): PAR_MAX byte flags — taken in phase 1, then the operator stopped the turn
@@ -1150,6 +1151,7 @@ fn _par_alloc() {
     _par_namecode = alloc(PAR_MAX);
     _par_hookblocked = alloc(PAR_MAX);
     _par_withheld = alloc(PAR_MAX);
+    _par_badargs = alloc(PAR_MAX);
     _par_nm = alloc(PAR_MAX * 8);
     _par_ga = alloc(PAR_MAX * 8);
     _par_stopped = alloc(PAR_MAX);
@@ -1173,6 +1175,7 @@ fn _par_alloc() {
     if (_par_namecode == 0) { ok = 0; }
     if (_par_hookblocked == 0) { ok = 0; }
     if (_par_withheld == 0) { ok = 0; }
+    if (_par_badargs == 0) { ok = 0; }
     if (ok == 0) { return 0; }
     var i = 0;
     while (i < PAR_MAX) {
@@ -1293,6 +1296,7 @@ fn _agent_run_calls_par(tcs, nc) {
             store8(_par_over + k, 0);
             store8(_par_hookblocked + k, 0);
             store8(_par_withheld + k, 0);
+            store8(_par_badargs + k, 0);
             # Refuse oversize args BEFORE gating, and gate on the FULL `ga` (an
             # accepted call's slot copy equals it, since strlen(ga) <= AGENT_ARGS_MAX
             # = PAR_ARGS_CAP-1) — so t-ron never scans a truncated payload and no
@@ -1313,6 +1317,7 @@ fn _agent_run_calls_par(tcs, nc) {
             # 0.44.4: a rug-pulled tool is withheld from the advertisement; refuse it here too, or it stays
             # fully invokable on the DEFAULT executor. Same placement as the serial twin: before the gate.
             elif (toolpin_withheld(nm) == 1) { store8(_par_withheld + k, 1); kind = RL_DENIED; }
+            elif (daimon_args_refused(ga) != 0) { store8(_par_badargs + k, 1); kind = RL_DENIED; }
             elif (gate_authorize(nm, ga, "call tool", nm) == 1) { allowed = 1; kind = RL_ALLOWED; }
             store8(_par_allowed + k, allowed);
             store64(_par_kind + k * 8, kind);
@@ -1409,6 +1414,7 @@ fn _agent_run_calls_par(tcs, nc) {
                 # 0.43.1: say WHICH control refused. A hook denial and a policy denial are different facts,
                 # and the model's next move differs — the serial path has always distinguished them.
                 if (load8(_par_hookblocked + k) == 1) { res = "(blocked by the pre_tool hook)"; }
+                if (load8(_par_badargs + k) == 1) { res = daimon_args_refused(load64(_par_ga + k * 8)); }   # 0.53.1
                 if (load8(_par_withheld + k) == 1) { res = toolpin_withheld_text(_par_name + k * PAR_NAME_CAP); }   # 0.52.6: or a name thoth cannot pin (audit A1)
                 if (load8(_par_stopped + k) == 1) { res = "(not run — the operator stopped the turn)"; }   # 0.52.8 (audit E8)
             }
@@ -1693,6 +1699,11 @@ fn _agent_run_calls_serial(tcs, nc) {
         # way every local arm already refuses its own disabled/denied case. Left DENIED in the roundlog.
         elif (toolpin_withheld(nm) == 1) {
             res = toolpin_withheld_text(nm);                  # 0.52.6: or a name thoth cannot pin (audit A1)
+            res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
+        }
+        # 0.53.1: arguments that cannot go out stop here, on both executors. `{}` in their place would run the tool.
+        elif (daimon_args_refused(ar) != 0) {
+            res = daimon_args_refused(ar);
             res = redact_tool_result(res); ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
         }
         elif (gate_authorize(nm, gp, "call tool", nm) == 1) {

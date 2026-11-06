@@ -2,6 +2,67 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.53.1] - 2026-11-05
+
+**Cyrius 6.7.18, the newest release, and every vendored bundle at its newest tag.** The pin moves `6.7.9` → `6.7.18`,
+`lib/` is re-synced, and all eleven bundles move. This is the largest dep jump yet: bote-core grows from 154 KB to 743
+KB, sit-read from 464 KB to 669 KB, t-ron from 162 KB to 260 KB, and the binary from 5.98 MB to 6.62 MB. The suite stayed
+green at each step, but three things needed work, and a direct probe of t-ron's scanner found a design question the
+suite cannot see. Suite **852 + 2341 + 1239 + 888 + 190 + 6** (+17). Repair batch 13 moves to 0.53.2.
+
+- **The toolchain: 6.7.9 → 6.7.18.**
+  - `cyrius lib sync --full` copied the 113-file snapshot: 66 files changed, none new, and `cyrius deps --verify` reports
+    114 verified. A recursive `cmp` sweep came back clean. bayan moves 1.5.13 → 1.11.1 and sandhi 1.10.9 → 1.13.7.
+  - The symbol diff found 41 functions, 34 globals and 1 enum member removed, and thoth's own source uses none. 635
+    functions, 284 globals and 97 enum members are new, and the cross-boundary collision test holds.
+  - No new keywords, and every compiler message `scripts/build.sh` reads still matches.
+  - 8 deprecated `bayan_toml_get` / `bayan_toml_get_sections` calls move to `_by_cstr`, the same lookups.
+- **The vendored bundles.**
+  - bote-core **3.8.15**, t-ron **2.2.4** and libro **2.11.3**. t-ron 2.2.4 was tested on bote-core 3.8.9. thoth vendors the
+    newest, which compiles against it; nothing thoth reaches in t-ron calls into bote (only `security_gate_*` does).
+  - sit-read **1.13.0**, vyakarana **2.10.0**, darshana **1.7.0**, kashi **1.3.0**, sankoch-zlib **2.8.9**, agnosai-guard
+    **2.2.3**, avatara **2.16.1** and anuenue **1.5.2**. darshana's `_tty_apply_raw_flags` stays byte-identical, and
+    kashi's core adds one bound that thoth's fold never reaches.
+  - **`_reg_ieq` is private in both bote-core and vyakarana, at different arities, which the compiler refuses.** It stops
+    the build on every lane. `scripts/sync-vyakarana.sh` renames vyakarana's to `_vyk_reg_ieq`, the prefix it already
+    uses for this, and a vendor test catches a partial rename.
+  - Every bundle was checked byte for byte against its tag, sit and vyakarana after their integration edits.
+- **Three roadmap rows close.**
+  - ⛔ **git status false positives (sit 1.12.0).** A clean tree with an executable or a symlink read as changed: on the
+    same repository 0.53.0 reports `A link.txt`, `A run.sh`, and this release reports clean. A vendor test pins it.
+  - **t-ron's audit overflow (2.2.3).** Both writers now size by escaped length and escape. thoth's name check stays
+    until repair batch 13 decides whether to lift it.
+  - **The macOS signal mask (cyrius 6.7.12).** The reset now clears it there, and the suite's SIGINT row runs on the Mac
+    instead of skipping.
+- **A model's tool arguments the parser refuses now stop the call** (floor change: bayan, cyrius 6.7.18).
+  - bayan refuses a whole document over a duplicate key or a leading zero, where the first key used to win. Two paths
+    swallowed that. `list_dir` listed `.` in place of the path asked for. A host MCP tool went out with `{}`, so a tool
+    with optional arguments ran on its defaults and reported that as the result.
+  - Both executors now refuse before the gate and tell the model why: "tool call not sent: its arguments are not valid
+    JSON: duplicate key". `list_dir` says so too. `daimon_build_call` keeps its `{}` as a backstop.
+- **`scripts/build.sh all` works on a Mac and on aarch64 Linux again.** cyrius cross-builds PE and AGNOS only from x86_64
+  Linux now, and refuses elsewhere, so those lanes failed the whole script. They announce a skip. Proven on ecb.
+- **The Windows lane moved back.** sit 1.13.0 adds POSIX-only paths it does not gate, and t-ron adds `SIG_SETMASK`, so
+  the lane stops on nine names, where 0.53.0 stopped on two and a PE linked with those defined. Every one is in a
+  bundle. `VENDOR_GAP` lists them, with the evidence.
+- **Floor changes kept as they are.**
+  - A `---` line now ends a `config.cyml` header in a CRLF file, after a blank first line, or as the last line with no
+    newline. Keys below such a line vanish. Only an off-contract file meets this: the template puts markdown there.
+  - Native TLS adds more refusals of a non-conforming peer. A real handshake to a public host works; no private gateway
+    was tested.
+- **Found, not changed: t-ron's scanner reads a coding agent's commands.** With a policy bound, `tron_check` scans the
+  shell tool's command and every MCP tool's arguments, and denies everyday work. Already denied at t-ron 2.2.0: `git log
+  -5; git status` and `docker build -t x . && docker run --rm x`. Newly denied: a heredoc holding a line that starts with
+  a command name, and an MCP write of a shell script or a README with a `curl` line. `edit` and `create_file` gate on the
+  path alone and are unaffected. t-ron records these as the known cost of its rules, and any fix weakens a security
+  control, so it is question 8 in `gap-review.md`, with the measured table.
+
+Verified on the finished tree. Linux and AGNOS warning sets match 0.53.0's but for one added line, `commit_tree_hex`, an
+unreachable sit placeholder, and sigil's array-local warning, which is gone. All five suites pass as aarch64 binaries
+under `qemu-aarch64` (5,510 of 5,510). macOS built with a 6.7.18 toolchain cross-built from the tag, `build.sh all` returns
+0 there, and its native suite is green (875 + 2331 + 1228 + 190 + 835). A fresh clone at a detached tag with an empty
+`HOME` passes. The TUI ran in a pty and the window on a headless compositor, x86_64 and aarch64 under qemu, both against the stub gateway, and a real TLS handshake works. The AGNOS ring-3 re-run stays deferred with the AGNOS follow-up.
+
 ## [0.53.0] - 2026-11-05
 
 **Cyrius 6.7.9, and every vendored bundle at its last tag on that toolchain.** The pin moves `6.6.20` → `6.7.9`, `lib/`

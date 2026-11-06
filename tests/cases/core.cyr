@@ -831,7 +831,7 @@ fn test_stream_config() {
     assert_eq(_cfg_bool(0, "x", 0), 0, "null pairs -> default 0");
     var toml = "[hoosh]\nstream = false\non = true\n";
     var sections = bayan_toml_parse(str_new(toml, strlen(toml)));
-    var secs = bayan_toml_get_sections(sections, "hoosh");
+    var secs = bayan_toml_get_sections_by_cstr(sections, "hoosh");
     var pairs = bayan_toml_section_pairs(vec_get(secs, 0));
     assert_eq(_cfg_bool(pairs, "stream", 1), 0, "explicit false read as 0");
     assert_eq(_cfg_bool(pairs, "on", 0), 1, "explicit true read as 1");

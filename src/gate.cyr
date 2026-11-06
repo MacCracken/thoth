@@ -485,9 +485,10 @@ fn gate_verdict(tool_name, params) {
 # one closes its JSON string and writes fields of its own into the security record (`x","verdict":"allow`). A control
 # or non-ASCII byte t-ron refuses — but records first, raw.
 # thoth refuses all of these before `tron_check`, so t-ron never records them. Only while t-ron is bound: without it
-# there is no record. The fix itself is t-ron's (the roadmap's waiting row); GATE_TRON_NAME_ROOM is derived from the
-# vendored t-ron, and `test_gate_name_fit` fails if a t-ron sync moves the boundary.
-var GATE_TRON_NAME_ROOM = 163;       # max strlen(tool) + strlen(agent id) t-ron 2.1.11's audit buffers hold
+# there is no record. t-ron 2.2.3 fixed its half: both writers size by escaped length and escape, and `"` and `\` are
+# denied. The check stays as a bound on the name until repair batch 13 decides whether to lift it; GATE_TRON_NAME_ROOM
+# was derived from t-ron 2.1.11, and `test_gate_name_fit` pins it.
+var GATE_TRON_NAME_ROOM = 163;       # max strlen(tool) + strlen(agent id) t-ron 2.1.11's audit buffers held
 var GATE_NAME_OK = 0;
 var GATE_NAME_LONG = 1;              # tool + agent over the room
 var GATE_NAME_BYTE = 2;              # a quote, backslash, control or non-ASCII byte

@@ -512,7 +512,7 @@ var _shell_allow_loc_n = 0;
 # or 0 if the table is absent.
 fn _cfg_section_pairs(sections, name) {
     if (sections == 0) { return 0; }      # 0.43.3: a layer that is absent/unreadable has no sections
-    var secs = bayan_toml_get_sections(sections, name);
+    var secs = bayan_toml_get_sections_by_cstr(sections, name);
     if (vec_len(secs) == 0) { return 0; }
     return bayan_toml_section_pairs(vec_get(secs, 0));
 }
@@ -520,7 +520,7 @@ fn _cfg_section_pairs(sections, name) {
 # _cfg_str: read key from pairs as a stable cstring, or 0 if absent/empty.
 fn _cfg_str(pairs, key) {
     if (pairs == 0) { return 0; }
-    var v = bayan_toml_get(pairs, key);
+    var v = bayan_toml_get_by_cstr(pairs, key);
     if (v == 0) { return 0; }
     if (str_len(v) == 0) { return 0; }
     return _cfg_unquote(str_cstr(v));
@@ -578,7 +578,7 @@ fn _cfg_label(s) {
 # text) as 1/0, returning `dflt` when absent or unrecognized. Pure.
 fn _cfg_bool(pairs, key, dflt) {
     if (pairs == 0) { return dflt; }
-    var v = bayan_toml_get(pairs, key);
+    var v = bayan_toml_get_by_cstr(pairs, key);
     if (v == 0) { return dflt; }
     if (str_eq_cstr(v, "true") == 1) { return 1; }
     if (str_eq_cstr(v, "false") == 1) { return 0; }
@@ -599,7 +599,7 @@ fn _cfg_bool(pairs, key, dflt) {
 # deliberately turned streaming back on. `_cfg_has` asks the parser whether the key is there.
 fn _cfg_has(pairs, key) {
     if (pairs == 0) { return 0; }
-    if (bayan_toml_get(pairs, key) == 0) { return 0; }
+    if (bayan_toml_get_by_cstr(pairs, key) == 0) { return 0; }
     return 1;
 }
 
@@ -741,7 +741,7 @@ fn _cfg2_str_global_only(l, g, key, label) {
 # absent, never a wrapped one). Pure.
 fn _cfg_int(pairs, key) {
     if (pairs == 0) { return 0 - 1; }
-    var v = bayan_toml_get(pairs, key);
+    var v = bayan_toml_get_by_cstr(pairs, key);
     if (v == 0) { return 0 - 1; }
     var d = str_data(v);
     var n = str_len(v);
@@ -1042,7 +1042,7 @@ fn _shell_glob_array_load(arr, tbl) {
 # or empty string is present-with-zero (and does NOT fall through to a section).
 fn _shell_glob_key_load(shell, key, tbl) {
     if (shell == 0) { return 0 - 1; }
-    var v = bayan_toml_get(shell, key);
+    var v = bayan_toml_get_by_cstr(shell, key);
     if (v == 0) { return 0 - 1; }                 # key absent -> fall back to the section form
     if (bayan_toml_is_array(v) == 1) {
         return _shell_glob_array_load(bayan_toml_array_parse(v), tbl);
@@ -1085,7 +1085,7 @@ fn _cfg_read_roots_load2(proj_l, proj_g) {
 # one root; 0 when the layer does not declare the key.
 fn _cfg_roots_vec(project) {
     if (project == 0) { return 0; }
-    var v = bayan_toml_get(project, "read_roots");
+    var v = bayan_toml_get_by_cstr(project, "read_roots");
     if (v == 0) { return 0; }
     var out = vec_new();
     if (bayan_toml_is_array(v) == 0) {

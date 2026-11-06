@@ -29,10 +29,10 @@
 # map. Re-run the script on a refresh — a no-op that is checked beats a no-op that
 # is assumed.
 #
-# Usage: ./scripts/sync-kashi.sh [tag]   (default: 1.2.0)
+# Usage: ./scripts/sync-kashi.sh [tag]   (default: 1.3.0)
 set -euo pipefail
 
-TAG="${1:-1.2.0}"
+TAG="${1:-1.3.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/kashi.cyr"
 PREV="$(mktemp)"

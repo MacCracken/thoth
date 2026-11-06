@@ -98,6 +98,7 @@ fn main() {
     test_workset_hardening();
     test_project();
     test_unreadable_dir();        # 0.52.9: list_dir and search over a directory that cannot be read
+    test_tool_args_refused();     # 0.53.1: arguments the parser refuses stop the call, on both executors
     test_project_map();
     test_project_map_guard();     # 0.52.6: the map framed as data + the injection guard (audit F2)
     test_edit();

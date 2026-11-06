@@ -1749,6 +1749,55 @@ fn test_unreadable_dir() {
     return 0;
 }
 
+# test_tool_args_refused (0.53.1): a model's arguments the parser refuses. bayan refuses a duplicate key or a leading zero
+# since cyrius 6.7.18, where the first key used to win. list_dir's optional path hid that and listed ".", and a host tool
+# went out with `{}`, so a tool with optional arguments ran on its defaults. Port 9 refuses a connect: a call that went
+# out would report a transport failure, not this refusal.
+fn _tar_calls(args) {
+    var o = alloc(512);
+    var n = _append_cstr_cap(o, 0, 511, "[{\"id\":\"c1\",\"type\":\"function\",\"function\":{\"name\":\"t_one\",\"arguments\":\"");
+    n = _append_cstr_cap(o, n, 511, args);
+    n = _append_cstr_cap(o, n, 511, "\"}},{\"id\":\"c2\",\"type\":\"function\",\"function\":{\"name\":\"t_two\",\"arguments\":\"");
+    n = _append_cstr_cap(o, n, 511, args);
+    n = _append_cstr_cap(o, n, 511, "\"}}]");
+    store8(o + n, 0);
+    return bayan_json_v_parse_buf(o, n);
+}
+fn test_tool_args_refused() {
+    test_group("arguments the parser refuses stop the call and name why, on both executors (agent.cyr, 0.53.1)");
+    var dup = "{\"path\":\"src\",\"path\":\"src\"}";
+    assert(_ui_contains(list_dir_tool(dup), "not valid JSON") == 1, "list_dir refuses a duplicate key");
+    assert(_ui_contains(list_dir_tool(dup), "main.cyr") == 0, "...and lists nothing in its place");
+    assert(_ui_contains(list_dir_tool(""), "VERSION") == 1, "no arguments at all still lists the root");
+    assert_eq(daimon_args_refused(0), 0, "no arguments go out");
+    assert_eq(daimon_args_refused(""), 0, "empty arguments go out");
+    assert_eq(daimon_args_refused("{\"a\":1}"), 0, "one JSON value goes out");
+    assert(_ui_contains(daimon_args_refused("{\"a\":1,\"a\":2}"), "duplicate key") == 1, "a duplicate key is refused, by name");
+    assert(_ui_contains(daimon_args_refused("{\"n\":01}"), "leading zero") == 1, "a leading zero is refused, by name");
+    assert(_ui_contains(daimon_args_refused("not json"), "not sent") == 1, "non-JSON is refused too");
+
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    var sv_daimon = _cfg_daimon_url; var sv_tron = _gate_tron;
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    var tg = tron_new(tron_config_default());
+    tron_load_policy(tg, "[agent.\"thoth\"]\nallow = [\"*\"]\n");
+    _gate_tron = tg;
+    var pv = _tar_calls("{\\\"a\\\":1,\\\"a\\\":2}");
+    assert(pv != 0, "premise: the fixture round parses");
+    _agent_work_reset(); store8(_agent_work, 0);
+    _agent_run_calls_par(pv, 2);
+    assert_eq(_t_count_sub(_agent_work, _agent_work_len, "not sent", 8), 2, "the parallel executor refuses each call and tells the model");
+    assert_eq(_t_count_sub(_agent_work, _agent_work_len, "duplicate key", 13), 2, "...naming why");
+    _agent_work_reset(); store8(_agent_work, 0);
+    _agent_run_calls_serial(pv, 2);
+    assert_eq(_t_count_sub(_agent_work, _agent_work_len, "not sent", 8), 2, "the serial executor does the same");
+    _cfg_daimon_url = sv_daimon; _gate_tron = sv_tron;
+    out_mode_set(sv_mode); feed_init();
+    return 0;
+}
+
 fn test_project() {
     test_group("project read/explore tools (project.cyr, 0.23.0/0.23.1)");
     # --- jail (pure): accept in-project relative, refuse escapes ---

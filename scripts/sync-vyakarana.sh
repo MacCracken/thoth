@@ -24,10 +24,10 @@
 # appears in the build, that is this hazard returning — diff the build's
 # warning SET before and after a sync, not just its pass/fail.
 #
-# Usage: ./scripts/sync-vyakarana.sh [tag]   (default: 2.5.0)
+# Usage: ./scripts/sync-vyakarana.sh [tag]   (default: 2.10.0)
 set -euo pipefail
 
-TAG="${1:-2.5.0}"
+TAG="${1:-2.10.0}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEST="$REPO_ROOT/src/vendor/vyakarana.cyr"
 
@@ -43,6 +43,12 @@ else
     mkdir -p "$REPO_ROOT/src/vendor"
     curl -sSf "$URL" -o "$DEST"
 fi
+
+# `_reg_ieq` is private in vyakarana and in bote-core, with different arities, and a fn redefined at another arity is a
+# hard compile error. Neither project can know thoth vendors both. vyakarana takes the prefix it already uses for the
+# same reason (`_vyk_stream_grow`).
+sed -i 's/\b_reg_ieq\b/_vyk_reg_ieq/g' "$DEST"
+[ "$(grep -cE '(^|[^_a-z])_reg_ieq\b' "$DEST")" = "0" ] || echo "WARN: unrenamed _reg_ieq remains in $DEST"
 
 grep -q "^# Version: ${TAG}\$" "$DEST" || {
     echo "WARN: $DEST header does not report Version: $TAG"; }

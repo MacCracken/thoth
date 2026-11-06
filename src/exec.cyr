@@ -322,8 +322,8 @@ var _exec_sv_ppid_witness = 1;
 # head -1` printed "write error: Broken pipe" instead of ending quietly, and `timeout -s INT 1 sleep 3` took 3 s. The
 # mask is cleared whole; SIGPIPE and SIGXFSZ go back to SIG_DFL (the pair Python's subprocess restores). Nothing else:
 # a SIGHUP that `nohup thoth` ignored is the operator's choice and stays theirs.
-# macOS: the floor declines rt_sigprocmask there (no Darwin peer is wired) and thoth blocks nothing on that lane — the
-# signalfd is the Linux TUI's; signal_default reaches BSD sigaction. SIGXFSZ is 25 on Linux and Darwin alike.
+# macOS: thoth blocks nothing on that lane — the signalfd is the Linux TUI's — so the mask half clears only what a
+# launcher set; signal_default reaches BSD sigaction. SIGXFSZ is 25 on Linux and Darwin alike.
 fn _exec_child_signals_reset() {
     var none[16];                                     # N BYTES: a kernel sigset is 8 (rt_sigprocmask's sigsetsize)
     store64(&none, 0);
