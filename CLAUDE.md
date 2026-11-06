@@ -65,12 +65,14 @@ cyrius test                          # run [build].test + tests/*.tcyr
 - Research before implementation — check vidya / existing patterns
 - Build with `cyrius build`, not raw `cat file | cc5` — the manifest auto-resolves deps and prepends includes
 - Source files only need project includes — stdlib / external deps auto-resolve from `cyrius.cyml`
-- Every buffer declaration is a contract: `var buf[N]` = N **bytes**, not N entries
+- Every buffer declaration is a contract: a local `var buf[N]` = N **bytes**; a module-global `var buf[N]` = N i64 slots, 8N bytes ([note 004](docs/architecture/004-what-the-compiler-does-not-tell-you.md))
 - `&&` / `||` short-circuit; mixed expressions require explicit parens
 
 ## Rules (Hard Constraints)
 
 - **Do not commit or push** — the user handles all git operations
+- **One version at a time** — a `VERSION` bump ends the work. Stop and report; the user commits, tags and publishes it before the next cut starts. Never stack versions in one uncommitted tree. "Continue" means the next version, however many the roadmap lists
+- **Project knowledge goes in the repo**, never only in an agent's memory: a rule here, a how-to in `docs/guides/`, an invariant in `docs/architecture/`
 - **Never use `gh` CLI** — use `curl` to the GitHub API if needed
 - **Never fork the spine** — no OS-specific reimplementation, bundling, or substitute for a domain AGNOS already owns (inference, MCP protocol, MCP security, orchestration, archetype)
 - Do not skip tests before claiming changes work
@@ -87,6 +89,21 @@ cyrius test                          # run [build].test + tests/*.tcyr
 4. **Internal review** — performance, memory, correctness, edge cases; for every new feature, ask "is this substrate or capability?" — substrate ports, capability binds to the spine
 5. **Documentation** — update CHANGELOG, `docs/development/state.md`, any ADR the change earned
 6. **Version sync** — edit `VERSION` (the single source of truth), run `scripts/gen-version.sh` to regenerate `src/version.cyr` (`thoth_version()`; `scripts/build.sh` also does this before each build), bump the CHANGELOG header. `cyrius.cyml` already reads `VERSION` via `${file:VERSION}`; never inline the version in `.cyr` source — read `thoth_version()`.
+7. **Stop** — check that each CHANGELOG header appears once, in descending order (`grep -nE '^## \[' CHANGELOG.md`), list any new files the user must `git add`, and end the turn. The next version starts after this one is committed, tagged and published.
+
+## Versioning
+
+- **Minor = a new capability**: new API surface, something the app could not do before. **Patch = everything else**: repairs, dep refreshes, polish, and bringing a feature the app already has to another surface. The test is new API surface vs. a new layer of exposure. When unsure, patch
+- A feature arc is one minor, and its cuts are patches. Work lands in the active minor, never in a back-numbered patch. A toolchain minor is the user's call
+- Repairs go in numbered, priority-ordered patch batches on the roadmap. Feature candidates stay unpinned until the user pins them
+- A follow-up to a committed version is a new patch, not a fold into the committed entry
+
+## Ledgers
+
+- `roadmap.md` is forward-only: a shipped item is removed at release, not marked closed. No "closed at", "last re-run", "batch N shipped". Renumber ranks and cross-doc references when an item leaves
+- `cyrius.cyml` comments say only what a maintainer needs to edit it. No version, date or milestone stamps
+- `state.md`'s version log is append-only: a sweep corrects the current-state block and never rewrites a dated entry
+- [`docs/doc-health.md`](docs/doc-health.md) records every doc touched
 
 ## Scaffolding
 

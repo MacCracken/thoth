@@ -28,6 +28,11 @@ rsync -a --delete --exclude /build --exclude /.thoth/config.cyml ./ ecb:thoth-ve
 - **A project under your real home walks up into your real `~/.thoth`,** whatever `HOME` says, and takes it as a local layer. Keep a lab outside `~`: `/var/tmp` is on disk here.
 - **Wait for a stub to answer before driving thoth at it.** `curl -s http://127.0.0.1:PORT/v1/health` is enough. A cold Python on the Mac has
   lost that race.
+- **Keep the old binary** in scratch and A/B every live claim against it. `/proc/PID/io`'s `syscw` counts write calls where there is no strace. Tell builds apart by hash, not size: cyrius binaries page-align, and three different builds once had the same size.
+- **A wrapper can hide a signal bug.** `timeout(1)` gives its child a clean ignored-signal mask: an ignored SIGPIPE in the shell is gone under it, and an ignored-SIGCHLD regression read as
+  cleared under `exec timeout 20 thoth`. An agent's Bash tool hands every child an ignored SIGPIPE. Run a signal repro without the wrapper, against a control binary.
+- **Hold stdin open with a FIFO, not `sleep N |`.** A stray `sleep` breaks `ptydrive.py`'s `gone sleep`. Kill strays by pid, never with `pkill -f` or `pkill -x`.
+- **A config file with `---` fences reads as no config at all,** so an A/B on it shows nothing.
 
 ## V-1 — The real spine
 
@@ -116,14 +121,30 @@ ssh pi 'rm -rf thoth-verify'
 The `rsync` above carries `.git`. Run with `HOME` set to an empty directory, and expect the release's counts plus two. The Pi has 1.8 GB of memory and about 4 GB free. Remove
 `build/a64_*` here when done.
 
+The Pi drops off the network mid-`rsync`, and a half-synced tree fails with false numbers. Add `--timeout=30` and retry until it exits 0. It also caught test windows and kill deadlines too tight for a slow host, so read a timeout failure there as a finding.
+
 ## V-5 — macOS under attack
 
-Use the pinned toolchain through a private `CYRIUS_HOME`. `ecb` cannot fetch one: if `/tmp/cyrius-pin-<version>` is gone, cross-build it from the
-tag with `scripts/build-macos-arm64-tarball.sh` in the cyrius repo.
+Use the pinned toolchain through a private `CYRIUS_HOME`. Non-interactive SSH on `ecb` has no cyrius on `PATH`, and the private home leaves its own `~/.cyrius/current` alone:
 
 ```bash
 ssh ecb 'export CYRIUS_HOME=/tmp/cyrius-pin-6718 PATH=/tmp/cyrius-pin-6718/bin:$PATH; cd thoth-verify && mkdir -p build && cyrius build src/main.cyr build/thoth && python3 -I scripts/live/hostile-wire.py build/thoth'
 ```
+
+`ecb` cannot reach GitHub, so `cyrius install` and `cyriusly install` both fail there. If `/tmp/cyrius-pin-<version>` is gone, ship the toolchain from this machine:
+
+1. `git -C ~/Repos/cyrius archive <tag>` into scratch, copy `~/.cyrius/versions/<tag>/bin/cycc` to its `build/cycc`, and run `sh scripts/build-macos-arm64-tarball.sh <out>`.
+2. `scp` the tarball to `ecb` and unpack its `bin`, `lib` and `VERSION` into `~/.cyrius/versions/<tag>/`. Never touch `current`.
+3. Run `xattr -c` and `codesign --force -s -` on every non-`.sh` file in `bin`. The binaries are cross-built unsigned, and macOS kills them on first run with exit 137, which looks like a crash.
+4. Build the private home:
+
+   ```bash
+   ssh ecb 'V=6.7.18; P=/tmp/cyrius-pin-6718; mkdir -p $P; ln -s ~/.cyrius/versions/$V/bin $P/bin; ln -s ~/.cyrius/versions $P/versions; echo $V > $P/current'
+   ```
+
+The stock wrapper runs `$CYRIUS_HOME/bin/cycc`, not the pinned one. Pointing `CYRIUS_HOME` at `~/.cyrius` runs whatever `current` is, and the errors look like source faults (`expected identifier, got reserved keyword 'f64_le'`). Pointing it at a version directory looks for `versions/<V>/versions/<V>/lib`.
+
+macOS has no signalfd, and signal 10 is SIGBUS there.
 
 A clean run prints the scenario count, no `!!` line, and exits 0. Then, by hand, the attacks the 2026-11-05 audit ran on Linux:
 
@@ -182,3 +203,16 @@ never replaced:
 ```
 
 The same copy shape runs any other `--agnos` binary, through `agnos/scripts/smoke/basestack-run-smoke.sh ELF EXPECT NAME`.
+
+Run it serially. The harness writes one log per name and overwrites it, so a parallel run can read another's failed boot as its own. To check that a pass means something, give it a wrong expect string and watch it fail.
+
+## A turn that gets stuck or comes back empty
+
+Find out whose bytes are wrong before reading code. This found every "gets stuck" bug so far:
+
+1. **Capture.** Put a logging proxy between thoth and hoosh: a small Python listener that forwards `POST /v1/chat/completions` to `:8088`, writes each request and response to a numbered file, and returns them unchanged. Point a scratch project's `.thoth/config.cyml` at it, so nothing global changes. The files show whether the gateway sent the bad bytes or thoth misread them.
+2. **Replay.** Send a captured body with `curl`. This turned a random failure into 3 of 3. Replaying it at the provider directly separates the gateway from the model.
+3. **Bisect** the message list, cutting only at complete assistant-and-tool-result groups. A cut inside a group is an invalid conversation and fails for its own reason.
+4. **Control for size.** When a failure looks size-shaped, send equal-byte payloads of different token density. 20 KB of `yyyy` and of `word word` passed, and 20 KB of unique hex came back empty, which pointed at the provider's token count rather than the gateway's handling of large bodies.
+5. **Flip one thing.** Hold the body constant and change `stream`. That found hoosh's local streaming path dropping `tools`.
+6. **Run the real binary on a pty.** `curl` passed while the real path failed, and a one-shot `-p` hides the `tool-call:` and `result:` trace.

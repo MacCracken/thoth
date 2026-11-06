@@ -6,6 +6,8 @@ type: state
 
 # Documentation Health — thoth
 
+> **Project knowledge out of agent memory** (2026-11-06, under `[Unreleased]`): an audit of the agent's memory files against the tree. What the repo lacked moved in: `guides/toolchain-refresh.md`, `guides/writing-tests.md` and `architecture/004-what-the-compiler-does-not-tell-you.md` (all new), `verification-pass.md` (harness traps, the toolchain shipped to `ecb`, debugging a turn), and a t-ron policy example. `CLAUDE.md` gains the stop after each version, the versioning test and the ledger rules. `var buf[N]` is corrected in `CLAUDE.md` and `CONTRIBUTING.md`: a module-global array is N i64 slots, re-measured on 6.7.18.
+>
 > **0.54.0–0.54.2** (2026-11-06): ADR-0023 (new), ADR-0022's second addendum, the roadmap's shipped batches removed and the stop note, sit and cyrius rows corrected, `state.md`, the module guide, the config example on `timeout_ms`, and `verification-pass.md`'s V-3.
 >
 > **The not-verified pass** (2026-11-05, after the re-cut): a new record (`audit/2026-11-05-not-verified-pass.md`, tier 6), ADR-0022's addendum, gap-review question 8 in both twins, the roadmap's *Not verified* table run down and removed with its leftovers placed in batches 15–17, `state.md`'s Targets block, and the guide corrected by running it (the rsync exclude was deleting a tracked fixture; a lab under `~` reads the real `~/.thoth`).
@@ -175,7 +177,8 @@ The ones that mattered most, recorded so the next sweep knows where to look:
 | `001-consumer-only-no-domain-logic.md` | ✅ Fresh (stale → fixed) | Spine list + degrade-closed verified. **Fixed at 0.51.1**: "a new tool → daimon" now distinguishes hosted tools from thoth's nine local-hands tools (ADR-0014/15/17/18/20; the line is identity, ADR-0018); the substrate fan-out list gained `syscalls_linux_common` + `fs_win`. |
 | `002-capability-ladder.md` | ✅ Fresh (stale → fixed) | Seam table matches `src/seams.cyr`. **Fixed**: "M6 deliverable (see roadmap)" → shipped 0.6.5 (CHANGELOG); the t-ron row gained `thoth_delegate` and the ungated read/ask tools; the sit row says `.git/` or `.sit/`, no ancestor walk. |
 | `003-two-roots-project-jail-vs-mcp-host.md` | ✅ Fresh | Verified against `src/project.cyr` / `src/agent.cyr`; `create_file` added to the jailed list. |
-| `README.md` | ✅ Fresh | Indexes 001–003; `create_file` added. |
+| `004-what-the-compiler-does-not-tell-you.md` | ✅ Fresh (new) | Array sizes re-measured on 6.7.18; `modk` and the keyword list checked against the tree and cyrius. |
+| `README.md` | ✅ Fresh | Indexes 001–004; `create_file` added. |
 
 ## Tier 3 — Development (`docs/development/`)
 
@@ -211,7 +214,9 @@ The ones that mattered most, recorded so the next sweep knows where to look:
 
 | File | Status | Notes |
 |---|---|---|
-| `guides/verification-pass.md` | ✅ Fresh (new) | How to rerun each proof of the not-verified pass. Every section was run on 2026-11-05, and the guide corrected where running it disagreed. |
+| `guides/verification-pass.md` | ✅ Fresh (new) | How to rerun each proof of the not-verified pass. Every section was run on 2026-11-05, and the guide corrected where running it disagreed. The 2026-11-06 additions were checked against `ecb`, `lib/` and the shell, but the toolchain shipping steps were not re-run. |
+| `guides/toolchain-refresh.md` | ✅ Fresh (new) | The pin bump as a procedure. Its commands were run on 2026-11-06 against 6.7.9 and 6.7.18. |
+| `guides/writing-tests.md` | ✅ Fresh (new) | Suite layout, vendor pins, test traps, break tests. Named identifiers checked against the tree. |
 | `guides/getting-started.md` | ✅ Fresh (stale → fixed) | A scripted comm confirms **all 66 modules** (53 `src/` + 13 `src/gui/`) have a row and every documented command exists. **Fixed at 0.51.1** (16 items): three → five test suites (twice); `/grants` described as read roots (it is authorization grants); `/allow` arg optional; the `reasonlog.cyr` row; the `toolpin.cyr` row (the durable store, ADR-0022); the `config.cyr` row contradicting the two-layer intro; `/write` diff-after-verdict; ⌃T cycles; Ctrl-D not bound in the TUI; `search` as the third default-on tool + the map; "Adding a command" names `_dispatch_d` + the palette; `diff.cyr` shares with `/git`; the vendor list gained anuenue + agnosai-guard (eleven); a `/help` catch-all line. Remaining omissions (`/help` covers them) noted, not wrong. |
 | `examples/README.md` | ✅ Fresh (stale → fixed) | Cheat-sheet, re-verified. **Fixed**: the "then `~/.thoth`" fallback wording → two merged layers (ADR-0019); `/quit` keys; the sample log line (`map_bytes`, `max_iters` 24, the sakshi prefix note). 🟠 still not runnable programs. |
 | `examples/.gitkeep` | 🔵 Durable → removal pinned | Redundant; also one of sit's two false-positive classes on `/git`. Removal is roadmap batch 4 item 6. |

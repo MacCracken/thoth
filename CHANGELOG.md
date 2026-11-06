@@ -4,6 +4,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Project knowledge that lived only in agent memory is now in the repo.** New: `docs/guides/toolchain-refresh.md`, `docs/guides/writing-tests.md`, `docs/architecture/004-what-the-compiler-does-not-tell-you.md`. `docs/guides/verification-pass.md` gains harness traps, shipping a toolchain to `ecb`, and debugging a stuck turn, and `docs/examples/README.md` gains a t-ron policy.
+- **`CLAUDE.md` states the release stop:** a `VERSION` bump ends the work until it is committed, tagged and published, after 0.54.0 and 0.54.1 went out with no tag. It also gains the versioning test and the ledger rules.
+
+### Fixed
+
+- `CLAUDE.md` and `CONTRIBUTING.md` said `var buf[N]` is N bytes. That holds for locals: a module-global array is N i64 slots, 8N bytes, re-measured on 6.7.18.
+
 ## [0.54.2] - 2026-11-06
 
 **Repair batch 16: long replies and the composer.** A TUI frame is one write, a long reply no longer costs a full walk on every rebuild, a line wider than the window stays in view, and a picker row clips on a character.

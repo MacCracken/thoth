@@ -57,6 +57,22 @@ A one-shot turn writes only the answer to stdout (diagnostics go to stderr) and 
 on failure, so it composes cleanly in pipes and scripts. t-ron confirmation denies in one-shot
 (no interactive prompt) — configure a `[tron].policy` to allow specific tools non-interactively.
 
+A policy is a small TOML file, keyed by the agent id thoth authorizes as (`[tron].agent`, default `thoth`):
+
+```toml
+[agent."thoth"]
+allow = ["fs_*", "web_fetch", "web_search", "thoth_run", "thoth_write"]
+deny  = ["danger_*"]
+
+[agent."thoth".rate_limit]
+calls_per_minute = 120
+```
+
+The agent name must be quoted. `allow` and `deny` are globs. Deny wins, and a tool matching neither is refused. MCP tools authorize under
+their own names and thoth's actions under reserved ones: `thoth_run`, `thoth_write`, `thoth_shell`, `thoth_edit`, `thoth_verify`,
+`thoth_remember`, `thoth_delegate`. Past the lists, t-ron still applies its size guard, rate limit and payload scanner.
+`web_fetch` and `web_search` are bote's tools, hosted by daimon. `web_search` needs daimon started with `BOTE_SEARXNG_URL` pointing at a SearXNG instance.
+
 ## 4. CI / scripting — structured output
 
 ```sh

@@ -54,6 +54,9 @@ reads the nearest `.thoth/config.cyml` up the tree, and a checkout's would send 
 `scripts/live/wlproxy.py` logs a window's Wayland traffic both ways and `scripts/live/wlprobe.py` is a minimal
 control client for an A/B.
 
+Adding a test: [`docs/guides/writing-tests.md`](docs/guides/writing-tests.md). Moving the toolchain:
+[`docs/guides/toolchain-refresh.md`](docs/guides/toolchain-refresh.md).
+
 ## The one rule that defines thoth
 
 **Port the floor; never fork the spine.** thoth is a driver that owns **no**
@@ -83,8 +86,9 @@ spine)?* See [ADR-0001](docs/adr/0001-os-agnostic-agnos-primary.md),
 
 - One change at a time — never bundle unrelated changes.
 - Test after every change, not after the feature is "done".
-- Validate all external data (file / network / args); bound every buffer
-  (`var buf[N]` = N **bytes**); never `sys_system()` with unsanitized input.
+- Validate all external data (file / network / args); bound every buffer (a local
+  `var buf[N]` = N **bytes**, a module-global one = N i64 slots); never `sys_system()` with
+  unsanitized input.
 - Do not modify `lib/` (the vendored stdlib snapshot synced from the cyrius pin by `cyrius lib sync`;
   `cyrius build` / `cyrius test` rewrite it as a side effect — a `lib/` diff means the pin moved, not that
   a file needs editing).
