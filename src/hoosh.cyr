@@ -49,10 +49,18 @@ var HOOSH_HEALTH_PATH = "/v1/health/providers";
 # never the raw wire text. Everything downstream reads this copy: history and the session file, /save, one-shot
 # stdout and --json, the event stream, the GUI feed, a delegated child's answer. The reasoning accumulator below
 # holds its text the same way.
+# 0.53.2: it GROWS. It was a fixed 64 KiB that dropped the rest of a reply with no mark, while [hoosh].max_tokens asks for
+# several times that. Doubling on the never-freeing heap costs a long reply twice its own size once; the buffer is kept
+# for the turns after it. HOOSH_ACC_MAX bounds it (a local model with no ceiling can stream without end): at 128,000 tokens
+# it allows 32 bytes a token, so a reply a real ceiling stopped never reaches it. Past it the rest stays out of this copy
+# and the turn says so (hoosh_reply_cut, hoosh_finish_note), the only cut left.
 var _hoosh_acc = 0;
 var _hoosh_acc_len = 0;
-var HOOSH_ACC_CAP = 65536;
-fn _hoosh_acc_reset() { _hoosh_acc_len = 0; _reason_acc_reset(); _hoosh_finish = HOOSH_FIN_NONE; return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round); 0.52.7: so does the finish reason
+var _hoosh_acc_cap = 0;            # bytes allocated at _hoosh_acc
+var _hoosh_acc_cut = 0;            # 1 once this reply lost text to HOOSH_ACC_MAX, or to a refused allocation
+var HOOSH_ACC_CAP = 65536;         # the first allocation
+var HOOSH_ACC_MAX = 4194304;       # 4 MiB
+fn _hoosh_acc_reset() { _hoosh_acc_len = 0; _hoosh_acc_cut = 0; _hoosh_resp_bad = 0; _reason_acc_reset(); _hoosh_finish = HOOSH_FIN_NONE; return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round); 0.52.7: so does the finish reason
 
 # hoosh_last_reply / _len (0.11.0): the most recent turn's full assistant text and
 # its byte length (the blocking path copies the parsed content here, streaming
@@ -60,10 +68,33 @@ fn _hoosh_acc_reset() { _hoosh_acc_len = 0; _reason_acc_reset(); _hoosh_finish =
 # reads this AFTER the turn to print just the clean answer to stdout.
 fn hoosh_last_reply() { return _hoosh_acc; }
 fn hoosh_last_reply_len() { return _hoosh_acc_len; }
+fn hoosh_reply_cut() { return _hoosh_acc_cut; }
+# _hoosh_acc_grow: make room for `need` bytes (NUL included), up to HOOSH_ACC_MAX. A refused allocation leaves the buffer
+# as it was: the caller sees less room and cuts, which it reports.
+fn _hoosh_acc_grow(need) {
+    if (need > HOOSH_ACC_MAX) { need = HOOSH_ACC_MAX; }
+    if (need <= _hoosh_acc_cap) { return 0; }
+    var cap = _hoosh_acc_cap;
+    if (cap < HOOSH_ACC_CAP) { cap = HOOSH_ACC_CAP; }
+    while (cap < need) { cap = cap * 2; }
+    if (cap > HOOSH_ACC_MAX) { cap = HOOSH_ACC_MAX; }
+    var b = alloc(cap);
+    if (b == 0) { return 0; }
+    if (_hoosh_acc_len > 0) { memcpy(b, _hoosh_acc, _hoosh_acc_len); }
+    store8(b + _hoosh_acc_len, 0);
+    _hoosh_acc = b;
+    _hoosh_acc_cap = cap;
+    return 0;
+}
 fn _hoosh_acc_append(p, n) {
-    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
-    var room = HOOSH_ACC_CAP - 1 - _hoosh_acc_len;
-    if (n > room) { n = room; }
+    if ((n <= 0) || (_hoosh_acc_cut == 1)) { return 0; }
+    _hoosh_acc_grow(_hoosh_acc_len + n + 1);
+    var room = _hoosh_acc_cap - 1 - _hoosh_acc_len;
+    if (n > room) {
+        n = room;
+        _hoosh_acc_cut = 1;
+        while ((n > 0) && ((load8(p + n) & 192) == 128)) { n = n - 1; }   # never ends the copy inside a character
+    }
     if (n <= 0) { return 0; }
     memcpy(_hoosh_acc + _hoosh_acc_len, p, n);
     _hoosh_acc_len = _hoosh_acc_len + n;
@@ -401,7 +432,7 @@ fn hoosh_build_request(dst, model, system, mem, prompt, stream) {
 }
 
 # _hoosh_emit_msg_cap: the bounded message serializer — every write is clamped to `cap`
-# so a long history `content` (e.g. a prior assistant reply up to HOOSH_ACC_CAP,
+# so a long history `content` (e.g. a prior assistant reply up to HOOSH_ACC_MAX,
 # re-sent on the next turn) truncates in-buffer instead of overflowing the request
 # buffer. `role` is a trusted literal; `content` is the untrusted part. Pure.
 fn _hoosh_emit_msg_cap(dst, off, cap, role, content) {
@@ -1047,7 +1078,8 @@ fn hoosh_finish_note() {
     note_emit_role(ROLE_RED, "  "); note_emit_role(ROLE_RED, lead);
     note_emit_role(ROLE_FAINT, hoosh_finish_detail());
     note_println("");
-    if (_hoosh_finish == HOOSH_FIN_LENGTH) { log_begin("reply_cut"); log_kv_int("max_tokens", _hoosh_max_tokens()); log_kv_int("turn", session_turns()); log_commit(SK_WARN); }
+    if (_hoosh_acc_cut == 1) { log_begin("reply_kept_part"); log_kv_int("bytes", _hoosh_acc_len); log_kv_int("turn", session_turns()); log_commit(SK_WARN); }
+    elif (_hoosh_finish == HOOSH_FIN_LENGTH) { log_begin("reply_cut"); log_kv_int("max_tokens", _hoosh_max_tokens()); log_kv_int("turn", session_turns()); log_commit(SK_WARN); }
     else { log_begin("reply_refused"); log_kv_int("turn", session_turns()); log_commit(SK_WARN); }
     return 1;
 }
@@ -1058,6 +1090,7 @@ var HOOSH_FIN_TEXT_CAP = 320;
 var _hoosh_fin_detail = 0;
 var _hoosh_fin_sentence = 0;
 fn hoosh_finish_lead() {
+    if (_hoosh_acc_cut == 1) { return "reply cut short"; }             # 0.53.2: by thoth, past what it keeps of a reply
     if (_hoosh_finish == HOOSH_FIN_LENGTH) { return "reply cut short"; }
     if (_hoosh_finish == HOOSH_FIN_FILTER) { return "the model declined this request"; }
     return 0;
@@ -1066,7 +1099,11 @@ fn hoosh_finish_detail() {
     if (_hoosh_fin_detail == 0) { _hoosh_fin_detail = alloc(HOOSH_FIN_TEXT_CAP); }
     var d = _hoosh_fin_detail;
     var o = 0;
-    if (_hoosh_finish == HOOSH_FIN_LENGTH) {
+    if (_hoosh_acc_cut == 1) {
+        o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, " — thoth keeps ");
+        o = _append_int_cap(d, o, HOOSH_FIN_TEXT_CAP, _hoosh_acc_len);
+        o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, " bytes of one reply; the rest is not in the history, /save, -o or --json");
+    } elif (_hoosh_finish == HOOSH_FIN_LENGTH) {
         o = _append_cstr_cap(d, o, HOOSH_FIN_TEXT_CAP, " — it reached its output ceiling (max_tokens ");
         o = _append_int_cap(d, o, HOOSH_FIN_TEXT_CAP, _hoosh_max_tokens());
         if (_hoosh_max_tokens() >= HOOSH_MAX_TOKENS_CEILING) {
@@ -2051,6 +2088,48 @@ fn hoosh_http_opts() {
     return _hoosh_opts_turn;
 }
 
+# The BLOCKING turn ([hoosh].stream = false, 0.53.2). sandhi reads a whole response into one buffer, cap allocated up front, and
+# refuses past it. At its default 256 KiB a long reply was lost after it was paid for, and the turn blamed the connection.
+# HOOSH_BLOCK_CAP holds a reply at HOOSH_ACC_MAX in its JSON twice over, so the reply's own ceiling is what cuts it. The
+# buffer lands in an arena reset before each POST (the catalog's rule, below): nothing reads a body past its own round.
+var HOOSH_BLOCK_CAP = 8650752;
+var _hoosh_opts_block = 0;
+var _hoosh_opts_block_ms = 0 - 1;
+var _hoosh_block_arena = 0;
+fn hoosh_block_opts() {
+    var ms = config_hoosh_timeout_ms();
+    if ((_hoosh_opts_block == 0) || (_hoosh_opts_block_ms != ms)) {
+        var o = sandhi_http_options_new();
+        if (o == 0) { return hoosh_http_opts(); }
+        if (ms != 0) {
+            sandhi_http_options_read_ms(o, ms);
+            sandhi_http_options_write_ms(o, ms);
+            sandhi_http_options_connect_ms(o, HOOSH_CONNECT_MS);
+        }
+        sandhi_http_options_max_response_bytes(o, HOOSH_BLOCK_CAP);
+        _hoosh_opts_block = o;
+        _hoosh_opts_block_ms = ms;
+    }
+    return _hoosh_opts_block;
+}
+# _hoosh_post_blocking: the POST both blocking turn paths make. No arena: the default buffer on the global heap, as before.
+fn _hoosh_post_blocking(url, h, req, len) {
+    if (_hoosh_block_arena == 0) { _hoosh_block_arena = arena_allocator_growable(65536); }
+    if (_hoosh_block_arena == 0) { return sandhi_http_post_opts(url, h, req, len, hoosh_http_opts()); }
+    reset_via(_hoosh_block_arena);
+    return sandhi_http_post_opts_a(_hoosh_block_arena, url, h, req, len, hoosh_block_opts());
+}
+# _hoosh_resp_mark: 1 when a blocking POST failed on the response itself (sandhi's PROTOCOL: past the cap, or malformed), which
+# reached the turn as "unreachable, is the gateway up?" about a gateway that had just answered. Read until the next turn.
+var _hoosh_resp_bad = 0;
+fn hoosh_resp_bad() { return _hoosh_resp_bad; }
+fn hoosh_resp_bad_text() { return "hoosh answered, but its response was too long for a non-streaming turn, or malformed"; }
+fn _hoosh_resp_mark(kind) {
+    _hoosh_resp_bad = 0;
+    if (kind == SANDHI_ERR_PROTOCOL) { _hoosh_resp_bad = 1; }
+    return _hoosh_resp_bad;
+}
+
 # hoosh_probe_opts: the PROBE profile. Fixed, not configurable — its whole purpose is to be short, and a
 # user who raises [hoosh].timeout_ms for a slow model does not thereby want a six-second reachability
 # check to become a three-minute one.
@@ -2182,8 +2261,8 @@ fn _hoosh_print_reply(s) {
 # `[DONE]` sentinel ends the stream cleanly. ctx is an i64 cell counting bytes
 # emitted, so the caller can finish the line honestly and detect an empty stream.
 # Each delta is also appended to _hoosh_acc so the full reply can enter history
-# (0.5.1) — printing happens before accumulation, so a saved reply may be
-# truncated to HOOSH_ACC_CAP while the on-screen output is never clipped.
+# (0.5.1) — printing happens before accumulation, so a saved reply stops at
+# HOOSH_ACC_MAX (and says so) while the on-screen output is never clipped.
 fn _hoosh_sse_cb(ctx, ev) {
     if (intr_check() == 1) { return 0; }   # 0.17.4 Esc -> stop the stream cleanly (partial kept); 0.34.3: via the seam so the GUI stop-poll hook fires per frame too (TUI unchanged — no hook -> intr_poll)
     var data = sandhi_sse_event_data(ev);
@@ -2276,9 +2355,10 @@ fn _hoosh_stream_turn(url, h, len, model) {
 # stream mode cannot). I/O.
 fn _hoosh_blocking_turn(url, h, len, model) {
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ") "); oprintln(url);
-    var r = sandhi_http_post_opts(url, h, _hoosh_req, len, hoosh_http_opts());   # 0.44.2: per-read deadline
+    var r = _hoosh_post_blocking(url, h, _hoosh_req, len);   # 0.44.2: per-read deadline; 0.53.2: a long reply fits
     var ek = sandhi_http_err_kind(r);
     if (ek != SANDHI_OK) {
+        if (_hoosh_resp_mark(ek) == 1) { emit("  "); oprintln(hoosh_resp_bad_text()); return 0 - 1; }
         # NB: bind to a var before println — passing an explicitly `: i64`-typed
         # sandhi getter straight into oprintln(cstring) mis-dispatches to the int
         # print path in this cyrius (6.1.22). Storing first prints the name.

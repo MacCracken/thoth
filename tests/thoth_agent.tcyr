@@ -113,6 +113,7 @@ fn main() {
     test_finish_every_surface();  # 0.52.8: the finish note on every surface (audits A2, A3, A5, A12)
     test_par_post_tool_whole();   # 0.52.8: the parallel post_tool gets the full call (audits E3, E9)
     test_par_stop_closes_taken(); # 0.52.8: a phase-1 stop closes the calls it took (audit E8)
+    test_reply_long();     # 0.53.2: a reply past 64 KiB is kept, to a ceiling that says so
     return assert_summary();
 }
 var _e = main();

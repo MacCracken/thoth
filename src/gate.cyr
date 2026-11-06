@@ -469,40 +469,25 @@ fn gate_verdict(tool_name, params) {
     return k;
 }
 
-# ---- the tool names t-ron's audit record can hold (0.52.5, repair batch 9) ----
-# t-ron records every verdict twice — in its event ring and as a libro chain entry whose details `_audit_details`
-# builds — and `/audit export` serialises the ring. Both splice the tool name, the agent id and the verdict's reason
-# into JSON with no escaping, into buffers sized from the name alone:
-#   - `_audit_details` allocates tool + 256 and writes tool + reason + deny code + 44 bytes. A policy deny's reason is
-#     "tool '<tool>' denied by policy for agent '<agent>'" (tool + agent + 37) with the code "unauthorized" (12), so
-#     it writes 2·tool + agent + 93 — past the allocation once tool + agent > 163. The unknown-tool reason is 3 bytes
-#     shorter; a correlation alert (a flag: no code) carries tool + ~63; every other reason is a short fixed label.
-#   - `audit_export_json` allocates n·512 + 32 and writes 2·(tool + agent) + id digits + 134 per deny event, which
-#     the same bound keeps under 512 (460 + id digits at tool + agent = 163).
-# t-ron's own name check (`tron_is_safe_identifier`) admits any printable ASCII up to 256 bytes, so through 0.52.4 a
-# model-chosen name of 159–255 bytes (the executors' cap is AGENT_NAME_MAX) wrote past the details buffer on every
-# deny, and from about 185 bytes a ring of such denials overran the export. It also admits `"` and `\`: a name holding
-# one closes its JSON string and writes fields of its own into the security record (`x","verdict":"allow`). A control
-# or non-ASCII byte t-ron refuses — but records first, raw.
-# thoth refuses all of these before `tron_check`, so t-ron never records them. Only while t-ron is bound: without it
-# there is no record. t-ron 2.2.3 fixed its half: both writers size by escaped length and escape, and `"` and `\` are
-# denied. The check stays as a bound on the name until repair batch 13 decides whether to lift it; GATE_TRON_NAME_ROOM
-# was derived from t-ron 2.1.11, and `test_gate_name_fit` pins it.
-var GATE_TRON_NAME_ROOM = 163;       # max strlen(tool) + strlen(agent id) t-ron 2.1.11's audit buffers held
+# gate_name_fit (0.52.5, 0.53.2): a model-chosen tool name t-ron would refuse stops here, so t-ron never records it. Only
+# while t-ron is bound: without it there is no record. Through t-ron 2.2.2 a name of 159+ bytes wrote past its audit
+# details buffer on every deny, and a `"` or `\` in a name wrote fields of its own into the security record; thoth held
+# names to 163 bytes (with the agent id) until 2.2.3 made its writers size by escaped length and escape. The bound is now
+# t-ron's own (TRON_MAX_IDENTIFIER, each identifier on its own), read from the bundle, not a copy. The byte classes
+# stay: `tron_is_safe_identifier` denies all of them, and refusing here tells the model which it hit.
 var GATE_NAME_OK = 0;
-var GATE_NAME_LONG = 1;              # tool + agent over the room
+var GATE_NAME_LONG = 1;              # the tool name is longer than t-ron takes
 var GATE_NAME_BYTE = 2;              # a quote, backslash, control or non-ASCII byte
-var GATE_NAME_AGENT = 3;             # the configured agent id alone leaves no room for a tool name
+var GATE_NAME_AGENT = 3;             # the configured agent id is longer than t-ron takes
 
-# gate_name_fit: GATE_NAME_OK when t-ron's audit record can hold `name` (always, while no t-ron is bound), else the
+# gate_name_fit: GATE_NAME_OK when t-ron would take `name` (always, while no t-ron is bound), else the
 # GATE_NAME_* reason. Pure over the name and the configured agent id.
 fn gate_name_fit(name) {
     if (gate_active() == 0) { return GATE_NAME_OK; }
     if (name == 0) { return GATE_NAME_OK; }              # nameless calls are refused by their own arms
-    var al = strlen(config_tron_agent());
-    if (al >= GATE_TRON_NAME_ROOM) { return GATE_NAME_AGENT; }
+    if (strlen(config_tron_agent()) > TRON_MAX_IDENTIFIER) { return GATE_NAME_AGENT; }
     var n = strlen(name);
-    if ((n + al) > GATE_TRON_NAME_ROOM) { return GATE_NAME_LONG; }
+    if (n > TRON_MAX_IDENTIFIER) { return GATE_NAME_LONG; }
     var i = 0;
     while (i < n) {
         var c = load8(name + i) & 0xFF;
@@ -514,9 +499,9 @@ fn gate_name_fit(name) {
 
 # gate_name_why: the operator-facing sentence for a GATE_NAME_* refusal.
 fn gate_name_why(code) {
-    if (code == GATE_NAME_LONG) { return "the tool name is too long for t-ron's audit record"; }
-    if (code == GATE_NAME_BYTE) { return "the tool name holds a quote, backslash, control or non-ASCII byte, which t-ron's audit record cannot carry"; }
-    if (code == GATE_NAME_AGENT) { return "the [tron].agent id leaves no room in t-ron's audit record for a tool name"; }
+    if (code == GATE_NAME_LONG) { return "the tool name is longer than t-ron takes"; }
+    if (code == GATE_NAME_BYTE) { return "the tool name holds a quote, backslash, control or non-ASCII byte, which t-ron refuses"; }
+    if (code == GATE_NAME_AGENT) { return "the [tron].agent id is longer than t-ron takes"; }
     return "";
 }
 
@@ -533,7 +518,7 @@ fn gate_authorize(tool_name, params, verb, obj) {
         log_kv_int("allow", ok); log_commit(SK_INFO);
         return ok;
     }
-    # 0.52.5: a name t-ron's audit record cannot hold never reaches tron_check (see GATE_TRON_NAME_ROOM). The model's
+    # 0.52.5: a name t-ron would refuse never reaches tron_check (see gate_name_fit). The model's
     # calls are refused earlier by the executors, with a result naming why; this is the backstop for every other
     # caller (`/call` among them).
     var fit = gate_name_fit(tool_name);

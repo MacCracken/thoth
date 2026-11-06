@@ -98,6 +98,11 @@ var _gturn_note_buf = 0;  # ...and the words (hoosh_finish_sentence), copied at 
 var _gturn_t0 = 0;        # 0.52.1: session_turns() at submit — a message tagged past it is THIS turn's
 fn gturn_active() { return _gturn_active; }
 fn gturn_failed() { return _gturn_failed; }
+# gturn_orphan (0.53.2): 1 when the turn behind the standing notice left its prompt out of the history (the agent pops an
+# unanswered prompt, so a refused one is not resent). The feed then draws the prompt above the notice: it used to stand
+# under the previous answer, naming nothing. The TUI keeps the typed line above its note the same way.
+var _gturn_orphan = 0;
+fn gturn_orphan() { return _gturn_orphan; }
 fn gturn_stopped() { return _gturn_stopped; }
 fn gturn_note() { return _gturn_note; }
 fn gturn_note_text() { if (_gturn_note_buf == 0) { return ""; } return _gturn_note_buf; }
@@ -123,6 +128,7 @@ fn gturn_begin(text) {
     _gturn_failed = 0;    # a new submit clears any prior failure/stopped notice
     _gturn_stopped = 0;
     _gturn_note = 0;
+    _gturn_orphan = 0;
     intr_reset();         # 0.34.3: clean interrupt flag before the turn, so the post-turn stop-vs-fail decision
                           # reads ONLY this turn's Esc (never a stale flag) even on a path that skips agent_turn's reset
     return 0;
@@ -131,7 +137,7 @@ fn gturn_end() { _gturn_active = 0; return 0; }
 # gturn_notices_clear (0.52.8): an operator's command card supersedes the last turn's transient notice. The feed draws the
 # notices after every card, so a refusal, a failure or "- stopped -" stood under the NEXT command's card and read as that
 # command's verdict (seen live: the gate refused `/d2`, and "the model declined this request" sat beneath its card).
-fn gturn_notices_clear() { _gturn_failed = 0; _gturn_stopped = 0; _gturn_note = 0; return 0; }
+fn gturn_notices_clear() { _gturn_failed = 0; _gturn_stopped = 0; _gturn_note = 0; _gturn_orphan = 0; return 0; }
 # gturn_fail: the just-run turn produced no assistant reply (unreachable hoosh, transport/http error, empty
 # completion). The window renders only session_history, so error chrome never reaches it — this transient flag
 # lets the feed show an honest "didn't complete" notice instead of silently swallowing the message.
@@ -148,10 +154,12 @@ fn gturn_settle() {
     if (fin == HOOSH_FIN_FILTER) { shortk = 1; }
     elif (fin == HOOSH_FIN_LENGTH) { shortk = 2; }
     if (gturn_reply_landed() == 0) {
+        if (gturn_prompt_landed() == 0) { _gturn_orphan = 1; }
         if (intr_pending() == 1) { gturn_stop(); }
         elif (shortk != 0) { gturn_note_set(shortk, hoosh_finish_sentence()); }
+        elif (hoosh_resp_bad() == 1) { gturn_note_set(1, hoosh_resp_bad_text()); }
         else { gturn_fail(); }
-    } elif (shortk == 2) { gturn_note_set(3, hoosh_finish_sentence()); }
+    } elif ((shortk == 2) || (hoosh_reply_cut() == 1)) { gturn_note_set(3, hoosh_finish_sentence()); }
     return 0;
 }
 
@@ -255,6 +263,7 @@ fn gconv_key(code, shift) {
     if ((code == 28) || (code == 96)) {                       # Enter -> switch to the selected conversation
         gconv_sel_clamp();
         conv_switch(gconv_sel());
+        gturn_notices_clear();                           # 0.53.2: a notice and its prompt belong to the conversation they ended in
         gscroll_reset();                                      # show the switched conversation from its newest message
         _gfocus = GFOCUS_COMPOSER;
         return 0;

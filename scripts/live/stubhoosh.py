@@ -14,6 +14,8 @@ GET /v1/models (one model: stub-model) and GET /v1/health. The LAST user message
   cut: <x>       content "partial answer about <x>", then finish_reason "length" (the output ceiling)
   thinkcut: <x>  reasoning_content only, then finish_reason "length" with no content (cut while thinking)
   refuse         no content, finish_reason "content_filter" (a provider's safety refusal, as hoosh 2.8.0 maps it)
+  big: <n>       about n bytes of numbered 64-byte lines ending in a line "END-OF-REPLY", in small deltas
+  bigchunked: <n> the same, sent with Transfer-Encoding: chunked (what a real gateway does)
   anything else  "hello from stub"
 Each request is logged to stdout: path, stream, message count, the chosen reply.
 """
@@ -26,6 +28,11 @@ import time
 MD = ("# Heading one\n\nSome **bold** text, some `inline code`, and a [link](http://x).\n\n"
       "- item one\n- item two\n\n```python\ndef f(x):\n    return x + 1  # comment\n```\n\n"
       "| col a | col b |\n|---|---|\n| 1 | two |\n\n> a quote\n\nerror: something failed\n")
+
+
+def bigtext(n):
+    lines = ["L%08d %s\n" % (k, "x" * 54) for k in range(max(n, 64) // 64)]
+    return "".join(lines) + "END-OF-REPLY\n"
 
 
 def plan(msgs):
@@ -49,6 +56,10 @@ def plan(msgs):
         return "cut", None, "partial answer about " + text.split("cut:", 1)[1].strip()
     if text.strip() == "refuse":
         return "refuse", None, ""
+    if "bigchunked:" in text:
+        return "bigchunked", None, bigtext(int(text.split("bigchunked:", 1)[1].strip()))
+    if "big:" in text:
+        return "big", None, bigtext(int(text.split("big:", 1)[1].strip()))
     if "think:" in text:
         x = text.split("think:", 1)[1].strip()
         return "text", "pondering %s: first consider the premise, then weigh it, then conclude." % x, "answer about " + x
@@ -104,16 +115,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, {"id": "c1", "object": "chat.completion", "model": "stub-model",
                                     "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
                                     "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}})
+        chunked = kind == "bigchunked"
+        if chunked:
+            self.protocol_version = "HTTP/1.1"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "close")
+        if chunked:
+            self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
+
+        def send(raw):
+            if chunked:
+                raw = b"%x\r\n" % len(raw) + raw + b"\r\n"
+            self.wfile.write(raw)
 
         def event(delta, finish=None):
             chunk = {"id": "c1", "object": "chat.completion.chunk", "model": "stub-model",
                      "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
-            self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+            send(b"data: " + json.dumps(chunk).encode() + b"\n\n")
             self.wfile.flush()
         try:
             if kind == "tool":
@@ -135,9 +156,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         time.sleep(0.02)
                 for k in range(0, len(arg), 16):
                     event({"content": arg[k:k + 16]})
-                    time.sleep(0.02)
+                    if not kind.startswith("big"):
+                        time.sleep(0.02)
                 event({}, finish_word)
-            self.wfile.write(b"data: [DONE]\n\n")
+            send(b"data: [DONE]\n\n")
+            if chunked:
+                self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             print("the client went away mid-stream", flush=True)

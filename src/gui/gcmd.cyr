@@ -29,7 +29,7 @@ var GCMD_LINE_CAP = 512;
 var GCMD_HEAD_CAP = 256;
 var GCMD_PAD = 8;              # inner padding (as the tool card's)
 var GCMD_LH = 18;              # line height inside a card (as the tool card's)
-var GCMD_META = 6;             # i64 cells per card: nlines, anchor ordinal, dropped, conversation id (0.52.1), startup (0.52.1), skipped (0.52.6)
+var GCMD_META = 8;             # i64 cells per card: nlines, anchor ordinal, dropped, conversation id (0.52.1), startup (0.52.1), skipped (0.52.6), wrap width + its rows (0.53.2)
 var GCMD_GAP = 12;             # px after a card (== the feed's GFEED_GAP; declared here, this file precedes gfeed.cyr)
 var _gcmd_base = 0;            # alloc(GCMD_CARDS * GCMD_LINES * GCMD_LINE_CAP)
 var _gcmd_lens = 0;            # alloc(GCMD_CARDS * GCMD_LINES * 8): stored byte length per line (NUL after it)
@@ -156,6 +156,8 @@ fn gcmd_record(line) {
     # block started mid-output and "N more lines" counted only the ring's remainder — a 3000-line command showed
     # "L952…" as its head and "1848 more" of 2800 dropped. The evicted count is kept and drawn above the lines.
     _gcmd_meta_set(slot, 5, feed_evicted());
+    _gcmd_meta_set(slot, 6, 0);                              # 0.53.2: no wrap measured yet (a reused slot's belonged to its old card)
+    _gcmd_meta_set(slot, 7, 0);
     return _gcmd_count - 1;
 }
 
@@ -168,20 +170,20 @@ fn _gcmd_ink(role) {
     return _gfeed_ink(role);
 }
 
-# _gcmd_line: draw one stored line at (x, y) within maxcols cells — text runs between escapes are pushed as
-# (ptr, codepoints) slices of the stored bytes (NO copy; the store is NUL-terminated per line), a role marker
-# switches the colour, a reset marker returns to the foreground, any other escape (a bold, a diff tint) is
-# skipped, and the pen advances by the run's COLUMNS (feed_glyph_cols) so a wide glyph is placed right. Returns
-# nothing drawn past maxcols (a long line is clipped, not wrapped — a command's output is a terminal's rows).
-# cmds == 0 measures nothing (a line is one row) and is a no-op.
-fn _gcmd_line(cmds, x, y, maxcols, ptr, len) {
-    if (cmds == 0) { return 0; }
+# _gcmd_line: draw one stored line from (x, y), wrapping at maxcols cells, and return the rows it took — text runs
+# between escapes are pushed as (ptr, codepoints) slices of the stored bytes (NO copy; the store is NUL-terminated per
+# line), a role marker switches the colour, a reset marker returns to `ink0`, any other escape (a bold, a diff tint) is
+# skipped, and the pen advances by the run's COLUMNS (feed_glyph_cols) so a wide glyph is placed right and one that
+# does not fit starts the next row. cmds == 0 measures: the same walk with nothing pushed, so the two cannot disagree.
+# ink0 == -1 takes the feed's foreground. 0.53.2: through 0.53.1 a long line was clipped at the card's edge with no mark,
+# which lost a `/run` line's tail and a refusal's reason; the TUI always wrapped the same lines.
+fn _gcmd_line(cmds, x, y, maxcols, ptr, len, ink0) {
     var role = 0 - 1;
     var i = 0;
     var cols = 0;
-    while ((i < len) && (cols < maxcols)) {
-        var b = load8(ptr + i);
-        if (b == 27) {
+    var rows = 1;
+    while (i < len) {
+        if (load8(ptr + i) == 27) {
             var sl = _feed_esc_len(ptr, i, len);
             if (sl == 2) {
                 var m = load8(ptr + i + 1);
@@ -193,19 +195,45 @@ fn _gcmd_line(cmds, x, y, maxcols, ptr, len) {
             var start = i;                                   # a run: bytes up to the next escape / the width
             var rcols = 0;
             var rcp = 0;
-            while ((i < len) && (load8(ptr + i) != 27) && ((cols + rcols) < maxcols)) {
+            var full = 0;
+            while ((full == 0) && (i < len) && (load8(ptr + i) != 27)) {
                 var gl = _feed_glyph_len(ptr, i, len);
-                rcols = rcols + feed_glyph_cols(ptr, i, gl);
-                rcp = rcp + 1;
-                i = i + gl;
+                var gc = feed_glyph_cols(ptr, i, gl);
+                if (((cols + rcols + gc) > maxcols) && ((cols + rcols) > 0)) { full = 1; }   # > 0: a glyph wider than the card still lands
+                else { rcols = rcols + gc; rcp = rcp + 1; i = i + gl; }
             }
-            if (rcp > 0) {
-                gd_push_text(cmds, x + cols * GR_GLYPH_W, y, _gcmd_ink(role), ptr + start, rcp);
-                cols = cols + rcols;
+            if ((cmds != 0) && (rcp > 0)) {
+                var ink = ink0;
+                if ((role >= 0) || (ink0 < 0)) { ink = _gcmd_ink(role); }
+                gd_push_text(cmds, x + cols * GR_GLYPH_W, y, ink, ptr + start, rcp);
             }
+            cols = cols + rcols;
+            if (full == 1) { rows = rows + 1; y = y + GCMD_LH; cols = 0; }
         }
     }
-    return 0;
+    return rows;
+}
+
+# _gcmd_head_cols: the cells beside the card's `{(o> ` prompt mark.
+fn _gcmd_head_cols(maxcols) {
+    if (maxcols > 6) { return maxcols - 5; }
+    return 1;
+}
+# _gcmd_rows: the rows card k's head and lines take at maxcols. A card never changes once sealed, so the walk runs once per
+# width: the feed measures every card on every frame, and a full card is 100 KiB of glyphs.
+fn _gcmd_rows(k, maxcols) {
+    var slot = _gcmd_slot(k);
+    if (_gcmd_meta_get(slot, 6) == maxcols) { return _gcmd_meta_get(slot, 7); }
+    var rows = _gcmd_line(0, 0, 0, _gcmd_head_cols(maxcols), gcmd_head(k), strlen(gcmd_head(k)), 0);
+    var n = gcmd_lines(k);
+    var i = 0;
+    while (i < n) {
+        rows = rows + _gcmd_line(0, 0, 0, maxcols, gcmd_line_ptr(k, i), gcmd_line_len(k, i), 0);
+        i = i + 1;
+    }
+    _gcmd_meta_set(slot, 6, maxcols);
+    _gcmd_meta_set(slot, 7, rows);
+    return rows;
 }
 
 # gcmd_build: draw card k at (x, y) in a w-px column and return the y below it. cmds == 0 measures only — the
@@ -213,7 +241,9 @@ fn _gcmd_line(cmds, x, y, maxcols, ptr, len) {
 fn gcmd_build(cmds, x, y, w, k) {
     if ((k < 0) || (k >= _gcmd_count)) { return y; }
     var n = gcmd_lines(k);
-    var rows = 1 + n;
+    var maxcols = (w - GCMD_PAD - GCMD_PAD - 4) / GR_GLYPH_W;
+    if (maxcols < 1) { maxcols = 1; }
+    var rows = _gcmd_rows(k, maxcols);
     if (gcmd_dropped(k) > 0) { rows = rows + 1; }
     if (gcmd_skipped(k) > 0) { rows = rows + 1; }
     var h = GCMD_PAD * 2 + rows * GCMD_LH;
@@ -223,11 +253,8 @@ fn gcmd_build(cmds, x, y, w, k) {
         gd_push_clip(cmds, x, y, w, h);
         var ly = y + GCMD_PAD;
         var lx = x + GCMD_PAD + 4;
-        var maxcols = (w - GCMD_PAD - GCMD_PAD - 4) / GR_GLYPH_W;
-        if (maxcols < 1) { maxcols = 1; }
         var pen = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_ACCENT), "{(o> ");
-        gd_push_text(cmds, pen, ly, _ui_rgb(ROLE_FG), gcmd_head(k), maxcols - 5);
-        ly = ly + GCMD_LH;
+        ly = ly + GCMD_LH * _gcmd_line(cmds, pen, ly, _gcmd_head_cols(maxcols), gcmd_head(k), strlen(gcmd_head(k)), _ui_rgb(ROLE_FG));
         if (gcmd_skipped(k) > 0) {
             var p1 = _gstatus_txt(cmds, lx, ly, _ui_rgb(ROLE_FAINT), "… ");
             p1 = _gstatus_int(cmds, p1, ly, _ui_rgb(ROLE_FAINT), gcmd_skipped(k));
@@ -236,8 +263,7 @@ fn gcmd_build(cmds, x, y, w, k) {
         }
         var i = 0;
         while (i < n) {
-            _gcmd_line(cmds, lx, ly, maxcols, gcmd_line_ptr(k, i), gcmd_line_len(k, i));
-            ly = ly + GCMD_LH;
+            ly = ly + GCMD_LH * _gcmd_line(cmds, lx, ly, maxcols, gcmd_line_ptr(k, i), gcmd_line_len(k, i), 0 - 1);
             i = i + 1;
         }
         if (gcmd_dropped(k) > 0) {

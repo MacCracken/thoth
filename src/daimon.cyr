@@ -80,27 +80,36 @@ fn daimon_endpoints_reset() {
 # fixed framing is trusted, the two untrusted fields are clamped. (Truncation can
 # yield daimon-rejectable JSON; the agent loop already surfaces a tool error to the
 # model, and the call sites additionally pre-detect oversize — see _agent_run_calls.)
+# ⚠ 0.39.0 (audit A-10): `args_json` is the MODEL's `function.arguments`, spliced in RAW to preserve
+# whatever shape the gateway forwarded. Raw splicing of untrusted text into a JSON document thoth is
+# itself authoring is a JSON-injection seam: a value like `{}, "name":"other_tool"` closes the
+# arguments object and appends a SECOND `name` key, and a last-key-wins parser on the far side would
+# dispatch a tool thoth never gated. thoth authorizes `name` through t-ron BEFORE this point, so the
+# gate and the executed call could disagree — the same authorize-one-thing/do-another shape as the
+# parallel-path truncation. Validate that the text is exactly ONE well-formed JSON value before it
+# goes in; anything else degrades to `{}` (the same substitution a null already took). This is the
+# backstop: the agent loop refuses such a call before it gets here (daimon_args_refused), since `{}`
+# would run a tool with optional arguments on its defaults.
 fn daimon_build_call(dst, name, args_json) {
+    if (args_json != 0) {
+        var alen = strlen(args_json);
+        if (alen > 0) { if (bayan_json_v_parse_buf(args_json, alen) == 0) { args_json = 0; } }
+    }
+    return _daimon_call_body(dst, name, args_json);
+}
+
+# _daimon_call_body (0.53.2): the request body around arguments ALREADY KNOWN to be one JSON value (or none: `{}`). No
+# parse, so the worker thread can use it: phase 1 of the parallel executor refused anything else (daimon_args_refused)
+# on exactly the bytes the worker sends (the slot copy equals the checked `ga`), which left daimon_build_call's parse
+# there redundant. Every other caller goes through daimon_build_call.
+fn _daimon_call_body(dst, name, args_json) {
     var cap = DAIMON_REQ_CAP;
     var off = 0;
     off = _append_cstr_cap(dst, off, cap, "{\"name\":\"");
     off = _json_escape_into_cap(dst, off, cap, name);
     off = _append_cstr_cap(dst, off, cap, "\",\"arguments\":");
-    # ⚠ 0.39.0 (audit A-10): `args_json` is the MODEL's `function.arguments`, spliced in RAW to preserve
-    # whatever shape the gateway forwarded. Raw splicing of untrusted text into a JSON document thoth is
-    # itself authoring is a JSON-injection seam: a value like `{}, "name":"other_tool"` closes the
-    # arguments object and appends a SECOND `name` key, and a last-key-wins parser on the far side would
-    # dispatch a tool thoth never gated. thoth authorizes `name` through t-ron BEFORE this point, so the
-    # gate and the executed call could disagree — the same authorize-one-thing/do-another shape as the
-    # parallel-path truncation. Validate that the text is exactly ONE well-formed JSON value before it
-    # goes in; anything else degrades to `{}` (the same substitution a null already took). This is the
-    # backstop: the agent loop refuses such a call before it gets here (daimon_args_refused), since `{}`
-    # would run a tool with optional arguments on its defaults.
     var ok = 0;
-    if (args_json != 0) {
-        var alen = strlen(args_json);
-        if (alen > 0) { if (bayan_json_v_parse_buf(args_json, alen) != 0) { ok = 1; } }
-    }
+    if (args_json != 0) { if (load8(args_json) != 0) { ok = 1; } }
     if (ok == 1) { off = _append_cstr_cap(dst, off, cap, args_json); }
     else { off = _append_cstr_cap(dst, off, cap, "{}"); }
     off = _append_cstr_cap(dst, off, cap, "}");
@@ -353,12 +362,14 @@ fn daimon_invoke(name, args_json) {
 # tool execution — POST the MCP call for (name, args_json) and copy the RAW
 # response body bytes into the caller-owned `out` buffer (bounded by out_cap),
 # returning the byte length, or -1 on transport failure. It deliberately does NO
-# JSON parsing: bayan's value parser is NOT thread-safe — beyond the 1.0.3 cursor
-# fix its parse path still shares process state, and concurrent parses corrupt
-# (empirically ~98% wrong/empty under 8 threads; filed upstream). So the worker
-# only does the network — which sandhi 1.6.13 DOES make reentrant (per-dispatch
-# arena context + fresh un-pooled connection) — and the SERIAL phase parses each
-# raw body with daimon_extract_text. Every transient allocation here (headers, URL
+# JSON parsing: the worker only does the network — which sandhi 1.6.13 makes
+# reentrant (per-dispatch arena context + fresh un-pooled connection) — and the
+# SERIAL phase parses each raw body with daimon_extract_text. That split was forced
+# by bayan's parser sharing process state then (~98% wrong or empty under 8 threads).
+# Measured again at 0.53.2 on bayan 1.11.1: the parse state is a stack local, and
+# 320,000 concurrent parses gave none wrong. Only bayan_json_last_error's slots stay
+# shared, which is why a parse that reports a refusal still belongs on the main
+# thread (daimon_args_refused). Every transient allocation here (headers, URL
 # parse, connection, response struct + body) comes from the caller's arena `a`,
 # the request bytes go into the caller's `req_buf` (sized to hold the bounded
 # name+args), and the body is copied OUT of the arena into `out` BEFORE the caller
@@ -369,7 +380,7 @@ fn daimon_invoke(name, args_json) {
 # transport failure), so phase 3 can treat a non-2xx as a failed call symmetrically with daimon_invoke.
 fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap, st_out) {
     var url = _daimon_call_endpoint();
-    var len = daimon_build_call(req_buf, name, args_json);
+    var len = _daimon_call_body(req_buf, name, args_json);   # 0.53.2: phase 1 checked these bytes; no parse here
     var h = sandhi_headers_new_a(a);
     sandhi_headers_set_a(a, h, "Content-Type", "application/json");
     # ⚠ 0.44.3 — THE 0.44.2 SOCKET DEADLINE NEVER REACHED THIS FUNCTION, WHICH IS THE DEFAULT PATH.

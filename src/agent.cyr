@@ -1080,13 +1080,12 @@ var AGENT_ARGS_MAX = 16383;
 # sizes the whole buffer at a flat 512 bytes/event, so a long name writes past that allocation.
 # thoth cannot fix t-ron's serializer from here, but it can refuse to hand it a name no real tool
 # has. A 256-byte tool name is not a call; it is a payload.
-# ⚠ 0.52.5 — 255 was not low enough for t-ron: its audit record overflows from ~159 bytes, and a quote or a
-# backslash in a name forges fields in it. While t-ron is bound the tighter bound is gate_name_fit's
-# (GATE_TRON_NAME_ROOM, src/gate.cyr); _agent_name_code applies both, for both executors.
+# ⚠ 0.52.5: and a name t-ron would refuse (gate_name_fit, src/gate.cyr) goes no further while it is bound;
+# _agent_name_code applies both, for both executors.
 var AGENT_NAME_MAX = 255;
 
 # _agent_name_code: 0 when a tool call's name may proceed, else why not — 1 over AGENT_NAME_MAX (the slot, t-ron bound
-# or not), else 1 + a GATE_NAME_* code (a name t-ron's audit record cannot hold, 0.52.5). Refused BEFORE the hook and
+# or not), else 1 + a GATE_NAME_* code (a name t-ron would refuse, 0.52.5). Refused BEFORE the hook and
 # the gate, in both executors, so t-ron never records it. `nm` is non-zero.
 fn _agent_name_code(nm) {
     if (strlen(nm) > AGENT_NAME_MAX) { return 1; }
@@ -1099,9 +1098,9 @@ fn _agent_name_code(nm) {
 # retry with the advertised name.
 fn _agent_name_result(code) {
     if (code == 1) { return "(tool name too long; call refused)"; }
-    if (code == (1 + GATE_NAME_LONG)) { return "(tool name too long for the t-ron audit record; call refused)"; }
-    if (code == (1 + GATE_NAME_BYTE)) { return "(tool name holds a quote, backslash, control or non-ASCII byte, which the t-ron audit record cannot carry; call refused)"; }
-    if (code == (1 + GATE_NAME_AGENT)) { return "(the configured [tron].agent id leaves no room in the t-ron audit record for a tool name; call refused)"; }
+    if (code == (1 + GATE_NAME_LONG)) { return "(tool name longer than t-ron takes; call refused)"; }
+    if (code == (1 + GATE_NAME_BYTE)) { return "(tool name holds a quote, backslash, control or non-ASCII byte, which t-ron refuses; call refused)"; }
+    if (code == (1 + GATE_NAME_AGENT)) { return "(the configured [tron].agent id is longer than t-ron takes; call refused)"; }
     return 0;
 }
 var PAR_ID_CAP = 128;
@@ -1560,7 +1559,7 @@ fn _agent_run_calls_serial(tcs, nc) {
         # path (see AGENT_NAME_MAX). t-ron copies the name into its audit ring unclipped and exports at
         # a flat 512 bytes/event, so an over-long name writes past that allocation — and the name is the
         # model's own `function.name`. Refused BEFORE `gate_authorize`, so the ring never receives it.
-        # 0.52.5: and, while t-ron is bound, a name its audit record cannot hold (gate_name_fit).
+        # 0.52.5: and, while t-ron is bound, a name it would refuse (gate_name_fit).
         elif (ncode != 0) { res = _agent_name_result(ncode); rl_kind = RL_DENIED; }
         elif (strlen(gp) > AGENT_ARGS_MAX) { res = "(tool arguments too large; call refused — split into smaller calls)"; rl_kind = RL_DENIED; }
         # 0.41.0 (T2-4): the operator's pre_tool hook. Placed HERE — before the per-tool arms, so it sees
@@ -1867,9 +1866,10 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
     # 0.44.2: a non-streaming round is ONE blocking POST with no callback at all — the frame could never
     # move for its whole duration, which is the longest stillness of any path here.
     spin_anim_arm();
-    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _agent_req, len, hoosh_http_opts());   # 0.44.2: per-read deadline (see config_hoosh_timeout_ms)
+    var r = _hoosh_post_blocking(_hoosh_endpoint_url(), h, _agent_req, len);   # 0.44.2: per-read deadline (see config_hoosh_timeout_ms); 0.53.2: a long reply fits
     spin_anim_disarm();
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
+        if (_hoosh_resp_mark(sandhi_http_err_kind(r)) == 1) { emit("  "); oprintln(hoosh_resp_bad_text()); _agent_round_kind = 2; return 0; }
         var en = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(en);
         _agent_round_kind = 2; return 0;

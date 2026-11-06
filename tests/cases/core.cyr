@@ -3916,7 +3916,7 @@ fn test_session_persist() {
     assert(streq(session_history_content(1), "a") == 1, "...and the one after it, intact (its payload was consumed by its length)");
     assert(streq(session_history_role(1), "assistant") == 1, "...with its own role — not the 'user' an unknown token used to become");
     # the load buffer holds a full conversation of replies WITH their reasoning
-    assert(SESS_READ_CAP >= (SESS_HIST_MAX * (HOOSH_ACC_CAP + MSG_REASON_CAP)), "SESS_READ_CAP covers SESS_HIST_MAX replies at content cap + reasoning cap");
+    assert(SESS_READ_CAP >= (SESS_HIST_MAX * (HOOSH_ACC_MAX + MSG_REASON_CAP)), "SESS_READ_CAP covers SESS_HIST_MAX replies at their ceiling + reasoning cap");
     # a store LARGER than the buffer loads its leading records only — and binding it would rewrite the file from
     # that partial picture on the next save, destroying the tail. So it is announced and NOT bound.
     var _cap0 = SESS_READ_CAP;

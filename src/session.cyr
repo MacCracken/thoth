@@ -34,7 +34,7 @@ var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
-# backing model sees prior turns. Each message is alloc(56) (fields +0..+48 below — keep this in sync with the
+# backing model sees prior turns. Each message is alloc(72) (fields +0..+64 below — keep this in sync with the
 # alloc site; a doc/code drift here is exactly what preceded the 0.36.4 conv-struct OOB): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
@@ -49,7 +49,7 @@ var _sess_cost_unpriced = 0;
 # frames, so a resumed conversation keeps its tool cards), +48 reasoning (0.48.0 — a lazily-alloc'd, WRITE-ONCE
 # {len@0, bytes@8.. NUL} arena holding the chain-of-thought the reply streamed, or 0; persisted as a trailing RSN frame, so a resumed
 # conversation keeps its thinking folds — the message is the ONE store of a reply's reasoning: reasonlog.cyr's ring
-# retired at 0.48.0). Each message is alloc(56) — keep this in sync with BOTH alloc sites (append + conv_fork),
+# retired at 0.48.0). Each message is alloc(72) — keep this in sync with BOTH alloc sites (append + conv_fork),
 # which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
@@ -192,10 +192,10 @@ fn conv_fork(i) {
     var k = 0;
     while (k < n) {
         var sm = vec_get(sv, k);
-        var dm = alloc(56);
+        var dm = alloc(72);
         if (dm == 0) { return 0 - 1; }
         var b = 0;
-        while (b < 56) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included; the
+        while (b < 72) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included; the
                                                                         # +48 reasoning arena is shared — write-once per reply)
         vec_push(dv, dm);
         k = k + 1;
@@ -370,6 +370,19 @@ fn session_history_len() {
 }
 fn session_history_role(i)    { return load64(vec_get(_sess_hist_vec(), i)); }
 fn session_history_content(i) { return load64(vec_get(_sess_hist_vec(), i) + 8); }
+# session_history_layout (0.53.2): the height the window measured message i at for width `w`, or -1 when it has not. A
+# message never changes once stored, so one walk per width holds for every frame after it.
+fn session_history_layout(i, w) {
+    var m = vec_get(_sess_hist_vec(), i);
+    if (load64(m + 56) != w) { return 0 - 1; }
+    return load64(m + 64);
+}
+fn session_history_layout_set(i, w, h) {
+    var m = vec_get(_sess_hist_vec(), i);
+    store64(m + 56, w);
+    store64(m + 64, h);
+    return 0;
+}
 # session_history_turn(i): the session turn this message belongs to (0.30.19). Matches roundlog_round_turn so the
 # GUI feed renders a turn's tool cards above ITS reply. 0 for a resumed/pre-session message (no roundlog rounds).
 fn session_history_turn(i)    { return load64(vec_get(_sess_hist_vec(), i) + 16); }
@@ -571,7 +584,7 @@ fn session_history_append(role, content, clen) {
 # never aliased, because session._model_buf (what session_model() returns) is one shared buffer a mid-session
 # switch overwrites; a raw alias would retroactively rewrite every earlier reply's model.
 fn _session_history_append_ex(role, content, clen, model) {
-    var m = alloc(56);
+    var m = alloc(72);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
@@ -584,6 +597,8 @@ fn _session_history_append_ex(role, content, clen, model) {
     store64(m + 32, 0);                      # 0.33.4: citation set (lazily alloc'd when a cited title is attached)
     store64(m + 40, 0);                      # 0.33.5: tool-call set (lazily alloc'd when a tool call is attached)
     store64(m + 48, 0);                      # 0.48.0: reasoning arena (lazily alloc'd when a reply's thinking is attached)
+    store64(m + 56, 0);                      # 0.53.2: the width the window last laid this message out at (0 = not yet)
+    store64(m + 64, 0);                      # 0.53.2: ...and the height that gave
     var v = _sess_hist_vec();
     vec_push(v, m);
     # 0.36.4: the cap is DESTRUCTIVE — the oldest message is freed from the conversation for good (gone from the
@@ -730,14 +745,16 @@ fn session_history_clear() {
 var SESS_FILE_MAGIC = "THOTH-SESSION-1";     # v1 (legacy, single linear thread) — still LOADED for back-compat
 var SESS_FILE_MAGIC_V2 = "THOTH-SESSION-2";  # v2 (0.33.2) — all conversations, framed with CONV headers
 var SESS_MODE = 0x180;         # 0600 rw------- — best-effort CREATE mode (see the header note on perms)
-var SESS_READ_CAP = 16777216;  # 16 MiB load buffer (0.48.0: >= SESS_HIST_MAX * (HOOSH_ACC_CAP + MSG_REASON_CAP), lazily alloc'd only when a file loads); a larger file loads its leading records only
+var SESS_READ_CAP = 201326592; # 192 MiB: the most a load reads (0.48.0: >= SESS_HIST_MAX * (HOOSH_ACC_MAX + MSG_REASON_CAP)); a larger file loads its leading records only
+var SESS_READ_FIRST = 16777216;  # 0.53.2: the load buffer starts here, lazily, and doubles only for a file that fills it
 var _sess_path = 0;            # bound file path (0 = persistence OFF)
 var _sess_broke = 0;           # 1 if a save FAILED mid-session (persistence auto-disabled; announce once)
 var _sess_init_failed = 0;     # 1 if [session].file was set but unwritable at startup, 2 if it was larger than the load
                                # buffer (0.48.0 — resume disabled so the truncated store is never written back); announce once
 var _sess_load_overflow = 0;   # 1 when the last _sess_load_file filled SESS_READ_CAP (the file is bigger; its tail never loaded)
 var _sess_resumed = 0;         # count of messages loaded at startup (for the greeting)
-var _sess_read_buf = 0;        # alloc(SESS_READ_CAP), lazy — whole-file load buffer
+var _sess_read_buf = 0;        # lazy — whole-file load buffer
+var _sess_read_size = 0;       # bytes allocated at _sess_read_buf
 var _sess_hdr_buf = 0;         # alloc(64), lazy — the "<role>\t<clen>\n" record header scratch on save
 
 # _sess_eqn: 1 if the first `n` bytes of `a` and `b` are equal; else 0. PURE.
@@ -921,6 +938,24 @@ fn _sess_write_file(path) {
     return ok;
 }
 
+# _sess_read_limit: how much the load buffer may take now. _sess_read_grow: double it toward SESS_READ_CAP, keeping the `total`
+# bytes read so far; 1 when it grew. A refused allocation answers 0, and the load then reports the file as too large.
+fn _sess_read_limit() {
+    if (_sess_read_size < SESS_READ_CAP) { return _sess_read_size; }
+    return SESS_READ_CAP;
+}
+fn _sess_read_grow(total) {
+    if (_sess_read_size >= SESS_READ_CAP) { return 0; }
+    var want = _sess_read_size * 2;
+    if (want > SESS_READ_CAP) { want = SESS_READ_CAP; }
+    var b = alloc(want);
+    if (b == 0) { return 0; }
+    if (total > 0) { memcpy(b, _sess_read_buf, total); }
+    _sess_read_buf = b;
+    _sess_read_size = want;
+    return 1;
+}
+
 # _sess_load_file: read `path`, verify the magic line, and replay each record through session_history_append
 # (which applies the SESS_HIST_MAX cap, keeping the most-recent). Returns the count loaded. A missing file,
 # a foreign/corrupt first line, or a malformed/truncated record is handled gracefully (load what parsed, then
@@ -928,19 +963,24 @@ fn _sess_write_file(path) {
 fn _sess_load_file(path) {
     var fd = file_open(path, 0, 0);                       # O_RDONLY; <0 -> absent, nothing to resume
     if (fd < 0) { return 0; }
-    if (_sess_read_buf == 0) { _sess_read_buf = alloc(SESS_READ_CAP); }
+    if (_sess_read_buf == 0) { _sess_read_buf = alloc(SESS_READ_FIRST); _sess_read_size = SESS_READ_FIRST; }
     _sess_load_overflow = 0;
     var total = 0;
     var go = 1;
+    var limit = _sess_read_limit();
     while (go == 1) {
-        var got = file_read(fd, _sess_read_buf + total, SESS_READ_CAP - total);
-        if (got <= 0) { go = 0; }
-        else { total = total + got; if (total >= SESS_READ_CAP) { go = 0; } }
+        if ((total >= limit) && (_sess_read_grow(total) == 1)) { limit = _sess_read_limit(); }
+        if (total >= limit) { go = 0; }
+        else {
+            var got = file_read(fd, _sess_read_buf + total, limit - total);
+            if (got <= 0) { go = 0; }
+            else { total = total + got; }
+        }
     }
     # 0.48.0: a file the buffer cannot hold loads its leading records only — and the next save would rewrite the
     # store from that partial picture, destroying every conversation past the cap. Say so (sess_persist_init
     # refuses to bind) rather than heal a file thoth never read whole.
-    if (total >= SESS_READ_CAP) { var probe[8]; if (file_read(fd, &probe, 1) > 0) { _sess_load_overflow = 1; } }
+    if (total >= limit) { var probe[8]; if (file_read(fd, &probe, 1) > 0) { _sess_load_overflow = 1; } }
     file_close(fd);
     # v2 (0.33.2, all conversations): "THOTH-SESSION-2\t<active>\n" ...
     var mlv2 = strlen(SESS_FILE_MAGIC_V2);

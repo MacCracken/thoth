@@ -279,7 +279,7 @@ fn _gpresent_submit(win) {
 # the suite can drive it without a window. Returns 1 to keep running, 0 when the hub said to quit.
 fn gpresent_run_command(line) {
     var cls = classify_final(line);
-    if (cls == CMD_CLEAR) { gcmd_clear(); gcomp_reset(); gscroll_reset(); return 1; }   # the window's scrollback IS the cards
+    if (cls == CMD_CLEAR) { gcmd_clear(); gturn_notices_clear(); gcomp_reset(); gscroll_reset(); return 1; }   # the window's scrollback IS the cards, and a standing notice with its prompt (0.53.2)
     var keep = gcmd_submit(line, &dispatch);  # 0.52.1: copy the line + clear the composer FIRST (the window repaints while it runs), then the capture bracket (gcmd.cyr)
     gscroll_reset();                          # a fresh card is the newest thing: jump the feed to it
     git_probe();                              # the command may have changed the worktree (/run, /rewind) — the strip's git field

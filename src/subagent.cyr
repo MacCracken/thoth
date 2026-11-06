@@ -50,6 +50,7 @@ var SUB_ANSWER_CAP = 16384;      # the child's returned summary, bounded on the 
 var _sub_req = 0;                # the child's request body (never the parent's _agent_req)
 var _sub_work = 0;               # the child's message list (its ENTIRE context)
 var _sub_acc = 0;                # the child's reply accumulator
+var _sub_acc_cap = 0;            # ...and its size (it grows like the parent's, 0.53.2)
 var _sub_reason = 0;             # the child's reasoning accumulator
 var _sub_tools = 0;              # the child's narrowed tool advertisement
 var _sub_arr = 0;                # the child's reconstructed tool_calls array
@@ -168,6 +169,7 @@ fn _sub_alloc() {
     _sub_req = alloc(AGENT_REQ_CAP);
     _sub_work = alloc(AGENT_WORK_CAP);
     _sub_acc = alloc(HOOSH_ACC_CAP);
+    _sub_acc_cap = HOOSH_ACC_CAP;
     _sub_reason = alloc(HOOSH_ACC_CAP);
     _sub_tools = alloc(AGENT_TOOLS_CAP);
     _sub_arr = alloc(AGENT_ARR_CAP);
@@ -207,7 +209,7 @@ fn _sub_alloc() {
 # Plain globals rather than a struct, because depth is 1 by construction and a
 # struct would imply a stack that must never exist.
 var _sv_work = 0; var _sv_work_len = 0;
-var _sv_acc = 0; var _sv_acc_len = 0;
+var _sv_acc = 0; var _sv_acc_len = 0; var _sv_acc_cap = 0; var _sv_acc_cut = 0;
 var _sv_reason = 0; var _sv_reason_len = 0;
 var _sv_tools = 0; var _sv_tools_len = 0; var _sv_tools_ready = 0;
 var _sv_arr = 0;
@@ -244,7 +246,7 @@ var _sv_finish = 0;         # 0.52.8 (audit A5): how the provider ended the roun
 # EXACT INVERSE of _sub_exit — keep them in the same order so a diff shows a mismatch.
 fn _sub_enter() {
     _sv_work = _agent_work;            _sv_work_len = _agent_work_len;
-    _sv_acc = _hoosh_acc;              _sv_acc_len = _hoosh_acc_len;
+    _sv_acc = _hoosh_acc;              _sv_acc_len = _hoosh_acc_len;  _sv_acc_cap = _hoosh_acc_cap;  _sv_acc_cut = _hoosh_acc_cut;
     _sv_reason = _reason_acc;          _sv_reason_len = _reason_acc_len;
     _sv_tools = _agent_tools_buf;      _sv_tools_len = _agent_tools_len;  _sv_tools_ready = _agent_tools_ready;
     _sv_arr = _agent_arr_buf;
@@ -268,7 +270,7 @@ fn _sub_enter() {
     _sv_recall = _mem_recall_buf;
 
     _agent_work = _sub_work;           _agent_work_len = 0;  _agent_work_full = 0;
-    _hoosh_acc = _sub_acc;             _hoosh_acc_len = 0;
+    _hoosh_acc = _sub_acc;             _hoosh_acc_len = 0;  _hoosh_acc_cap = _sub_acc_cap;  _hoosh_acc_cut = 0;
     _reason_acc = _sub_reason;         _reason_acc_len = 0;
     _agent_tools_buf = _sub_tools;     _agent_tools_len = 0;  _agent_tools_ready = 0;
     _agent_arr_buf = _sub_arr;
@@ -292,7 +294,8 @@ fn _sub_enter() {
 fn _sub_exit() {
     _sub_depth = 0;
     _agent_work = _sv_work;            _agent_work_len = _sv_work_len;
-    _hoosh_acc = _sv_acc;              _hoosh_acc_len = _sv_acc_len;
+    _sub_acc = _hoosh_acc;             _sub_acc_cap = _hoosh_acc_cap;     # 0.53.2: a child's reply may have grown it
+    _hoosh_acc = _sv_acc;              _hoosh_acc_len = _sv_acc_len;  _hoosh_acc_cap = _sv_acc_cap;  _hoosh_acc_cut = _sv_acc_cut;
     _reason_acc = _sv_reason;          _reason_acc_len = _sv_reason_len;
     _agent_tools_buf = _sv_tools;      _agent_tools_len = _sv_tools_len;  _agent_tools_ready = _sv_tools_ready;
     _agent_arr_buf = _sv_arr;
@@ -464,7 +467,7 @@ fn subagent_run(task, max_iters) {
         # `_sess_cost_micro` are deliberately NOT in the _sub_enter swap set — a delegated round spends
         # the operator's real money, so it must count), which is what makes one ceiling cover both.
         if (budget_block() == 1) { _sub_rounds_last = round_no; return _sub_fail("the session budget was reached"); }
-        _hoosh_acc_len = 0;                       # the child's acc (swapped), not the parent's
+        _hoosh_acc_len = 0; _hoosh_acc_cut = 0;   # the child's acc (swapped), not the parent's
         _sub_iter(model, sys, mem, tools_len);
         var k = _agent_round_kind;
         # _sub_rounds_last is set on EVERY exit, not just the happy one — otherwise subagent_end and the

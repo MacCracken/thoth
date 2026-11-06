@@ -2,6 +2,55 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.53.2] - 2026-11-05
+
+**Repair batch 13.** The six items on the roadmap, plus two defects the first one uncovered once replies stopped being
+cut. A reply is kept whole now, on every path, and the window stays quick with one on screen. Suite **916 + 2341 + 1301 +
+888 + 190 + 6** (+126). Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` (5,636 of
+5,636), macOS is green natively, a fresh detached clone passes, and the TUI, the window and the aarch64 window were driven
+live. The AGNOS ring-3 re-run stays deferred.
+
+- **A reply past 64 KiB is no longer cut with no mark.** History, `/save`, one-shot stdout, `-o`, `--json`, `--events` and a
+  delegated child's answer all read one fixed buffer, while `[hoosh].max_tokens` asks for several times what it held. Measured
+  with small deltas: 100 KB of reply reached stdout as 65,536 bytes.
+  - The buffer grows now, to `HOOSH_ACC_MAX` (4 MiB, 32 bytes a token at thoth's 128,000-token top). A real ceiling stops
+    a reply before that; the bound is for a local model with none. Past it the copy stops at a character boundary and
+    the turn says so on every surface: `reply cut short — thoth keeps N bytes of one reply`, and `"reply_cut":true` on
+    `--json` and `--events`. A refused allocation takes the same path.
+  - Everything sized from the old number moved. `--json` and `--events` size their buffers from the reply, `/save --json`
+    flushes in chunks (it held 524 KB), and the session file's load buffer doubles from 16 MiB toward a 192 MiB cap, which still holds
+    `SESS_HIST_MAX` replies at the ceiling. A child's buffer grows on its own and survives the swap.
+  - `emit_raw_n` and the event writer loop until every byte is out: one `write` to a pipe or a tty may take part of a long reply.
+  - Measured live, streamed and chunked, through both turn paths: 1,015,638 bytes on stdout, `-o`, `--json` and `--events`, and
+    through the session file across a real resume.
+- **A long reply no longer fails a `[hoosh].stream = false` turn.** New: found while testing the above. sandhi refuses a
+  response past its 256 KB default, so a reply over about 250 KB was lost after it was paid for, and the turn said `gateway
+  unreachable — is it up?`. Blocking turns now read up to 8.25 MiB through an arena reset per POST, the catalog's rule, since
+  sandhi allocates its cap up front. Past that, the turn says the response was too long or malformed, on all three surfaces.
+- **The window stays quick with a long reply on screen.** New: the 64 KiB cut had hidden it. Every frame walked every reply
+  twice and put each line on the command list, the raster walked that list even for an idle window, and each rebuild paid
+  for it on the heap that never frees. A 300 KB reply held an idle window at half a core, and the ceiling would have stalled it.
+  - Rows outside the feed's region stay off the list (`gd_cull_set`), and a reply's height is measured once per width.
+  - Measured: 42 commands a frame at any length; a rebuild takes 1 ms at 64 KB, 18 ms at 1 MB, 72 ms at 4 MB. Idle CPU with 1 MB on
+    screen is 5.9% of a core, against 4.6% with an empty window and 53% with 300 KB before.
+- **A command card wraps a long line.** It clipped each line at its width with no mark, so `/run` output lost its tail, and so did
+  a refusal's reason when stray bytes pushed it right. The TUI always wrapped the same lines. A wide glyph that would cross
+  the edge starts the next row, a long typed line wraps beside the prompt mark, and a card's rows are cached per width.
+- **A turn that ends with no text keeps its prompt on screen.** The agent pops an unanswered prompt so a refused one is not
+  resent, which left the window's notice under the previous answer, naming nothing. The prompt now draws above the notice,
+  as the TUI keeps the typed line. It goes when the notice does, and `/clear` and a conversation switch now take both.
+- **`scripts/build.sh`'s stale size skip is gone.** A real `output too large` fails the lane. The compiler's cap is 1 GiB.
+- **The parallel worker no longer parses.** Phase 1 validates each call on the main thread, on the exact bytes the worker sends.
+  The comment calling bayan unsafe there was stale: measured at bayan 1.11.1, 320,000 concurrent parses under eight threads, half
+  of them refused documents, gave none wrong. Its parse state is a stack local now, and only the last-error slots stay shared.
+- **`gate_name_fit`'s 163-byte cap is lifted to t-ron's own 256**, read from the bundle (`TRON_MAX_IDENTIFIER`), per identifier.
+  t-ron 2.2.3 made the writers it guarded size and escape. The longest name now goes through t-ron's writers in the suite and
+  the output is parsed. The byte-class refusals stay: t-ron denies all of them, and thoth names which one the model hit.
+- **`gap-review.md` question 8 is ruled: t-ron's scanner stays as shipped.**
+- **Found, not changed** (roadmap, batch 14): the reasoning accumulator keeps its own silent 64 KiB cut, and each stream frame's
+  parse lands on the never-freeing heap (113 MB of peak memory per 1 MB of reply).
+- **Live harness:** `stubhoosh.py` gains `big: <n>` and `bigchunked: <n>`.
+
 ## [0.53.1] - 2026-11-05
 
 **Cyrius 6.7.18, the newest release, and every vendored bundle at its newest tag.** The pin moves `6.7.9` → `6.7.18`,

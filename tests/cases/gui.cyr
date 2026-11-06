@@ -191,7 +191,8 @@ fn test_gui() {
         }
         _ci = _ci + 1;
     }
-    assert(_minY < _fy, "oldest feed line is above the region top (clipped by the auto-scroll anchor)");
+    assert(_gfeed_flow(0, 10, 0, 880, session_history_len()) > _fh, "the feed overflows its region (the auto-scroll anchor is at work)");
+    assert((_minY + GD_CULL_TEXT_H) > _fy, "...and a line wholly above the region is not on the list (0.53.2)");
     assert(_maxY >= _fy, "newest feed line is at/below the region top (on screen)");
     assert(_maxY < _fy + _fh, "newest feed line is within the region bottom (visible)");
     # a rastered overflowing feed frame (visual confirmation the newest exchange sits at the bottom)
@@ -759,14 +760,12 @@ fn test_gui_scroll() {
     # scroll 0 = bottom-anchored (newest visible); record the top-most text y
     gscroll_reset();
     var _f0 = gd_list_new(); gfeed_build(_f0, 0, 40, 900, 200);
-    var _min0 = 1000000; var _si2 = 0;
-    while (_si2 < vec_len(_f0)) { var _c0 = vec_get(_f0, _si2); if (gd_kind(_c0) == GD_TEXT) { if (gd_y(_c0) < _min0) { _min0 = gd_y(_c0); } } _si2 = _si2 + 1; }
-    # scroll up -> the flow shifts DOWN (older content into view; top-most y increases)
-    gscroll_by(60);
+    var _yp0 = _tg_ptr_y(_f0, session_history_content(session_history_len() - 1));
+    assert(_yp0 > (0 - 99999), "the newest reply's first row is on the list");
+    # scroll up -> the flow shifts DOWN (older content into view; a row's y increases by the scroll)
+    gscroll_by(20);
     var _f1 = gd_list_new(); gfeed_build(_f1, 0, 40, 900, 200);
-    var _min1 = 1000000; _si2 = 0;
-    while (_si2 < vec_len(_f1)) { var _c1 = vec_get(_f1, _si2); if (gd_kind(_c1) == GD_TEXT) { if (gd_y(_c1) < _min1) { _min1 = gd_y(_c1); } } _si2 = _si2 + 1; }
-    assert(_min1 > _min0, "PgUp shifts the flow down (older messages scroll into view)");
+    assert_eq(_tg_ptr_y(_f1, session_history_content(session_history_len() - 1)), _yp0 + 20, "PgUp shifts the flow down (older messages scroll into view)");
     assert(gscroll() > 0, "scroll offset > 0 after scrolling up");
     # scroll is CLAMPED at the top (two huge scrolls settle at the same offset, > 0 given overflow)
     gscroll_by(100000); gfeed_build(gd_list_new(), 0, 40, 900, 200); var _m1 = gscroll();
@@ -1313,6 +1312,28 @@ fn test_gturn_settle() {
     assert_eq(_ui_contains(gturn_note_text(), "reply cut short"), 1, "...that says so");
     var l2 = gd_list_new(); gfeed_build(l2, 0, 0, 900, 600);
     assert(_t_gd_text_count(l2, "reply cut short") >= 1, "...drawn under the reply");
+    gturn_end();
+    # 0.53.2: so is a reply thoth itself kept only part of, whatever the provider's finish word was, and a blocking response
+    # it could not read is named, not blamed on the connection
+    session_bump_turn();
+    session_history_append("user", "long", 4);
+    gturn_begin("long");
+    session_history_append("assistant", "kept part", 9);
+    _hoosh_finish = HOOSH_FIN_STOP;
+    _hoosh_acc_cut = 1;
+    gturn_settle();
+    assert_eq(gturn_note(), 3, "a reply past what thoth keeps gets the notice beneath it");
+    assert_eq(_ui_contains(gturn_note_text(), "thoth keeps"), 1, "...in the note's words");
+    _hoosh_acc_cut = 0;
+    gturn_end();
+    session_bump_turn();
+    gturn_begin("toolong");
+    _hoosh_finish = HOOSH_FIN_NONE;
+    _hoosh_resp_mark(SANDHI_ERR_PROTOCOL);
+    gturn_settle();
+    assert_eq(gturn_failed(), 0, "a response too long to read is not 'is hoosh reachable?'");
+    assert_eq(_ui_contains(gturn_note_text(), "too long"), 1, "...it says what happened");
+    _hoosh_resp_mark(SANDHI_OK);
     gturn_end();
     session_bump_turn();
     gturn_begin("down");
@@ -3036,6 +3057,293 @@ fn test_gui_wire_bounds() {
     gwl_wl_reg_id = sv_reg; gwl_wl_top_oid = sv_top; gwl_wl_xsurf_oid = sv_xs; gwl_wl_xdg_oid = sv_xdg;
     gwl_wl_cfg_w = sv_cw; gwl_wl_cfg_h = sv_ch; gwl_wl_nglobals = sv_ng; gwl_wl_gn_seat = sv_seat; gwl_wl_gv_seat = sv_gv;
     gwl_wl_fd = sv_fd; gwl_wl_configured = sv_cfgd; gwl_wl_rlen = 0;
+    return 0;
+}
+
+# test_gcmd_wrap (0.53.2): a card clipped each line at its width with no mark, losing a `/run` line's tail and a refusal's
+# reason, where the TUI wraps the same lines. _tg_wrap_kept sums the codepoints a line's rows push: every byte drawn.
+var _tgw_n = 0;
+var _tgw_tail = 0;
+fn _tg_runner_width(line) {
+    var i = 0;
+    while (i < _tgw_n) { emit("x"); i = i + 1; }
+    if (_tgw_tail != 0) { emit(_tgw_tail); }
+    oprintln("");
+    return 1;
+}
+fn _tg_wrap_kept(l, ptr, len) {
+    var c = 0;
+    var i = 0;
+    while (i < vec_len(l)) {
+        var cmd = vec_get(l, i);
+        if ((gd_kind(cmd) == GD_TEXT) && (gd_text(cmd) >= ptr) && (gd_text(cmd) < (ptr + len))) { c = c + gd_aux(cmd); }
+        i = i + 1;
+    }
+    return c;
+}
+fn _tg_card_rows(w, k) { return (gcmd_build(0, 0, 0, w, k) - GCMD_PAD * 2) / GCMD_LH; }
+fn test_gcmd_wrap() {
+    test_group("a command card wraps a long line at its width, and loses nothing (gcmd.cyr, 0.53.2)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    out_ring_sink_set(&feed_write);
+    session_history_clear(); gcmd_clear();
+    var w = 600;
+    var mc = (w - GCMD_PAD - GCMD_PAD - 4) / GR_GLYPH_W;
+    _tgw_tail = 0;
+    _tgw_n = mc;
+    gcmd_run("/a", &_tg_runner_width);
+    assert_eq(_tg_card_rows(w, 0), 2, "a line of exactly the width is one row (plus the head)");
+    _tgw_n = mc + 1;
+    gcmd_run("/b", &_tg_runner_width);
+    assert_eq(_tg_card_rows(w, 1), 3, "...one cell more takes a second");
+    _tgw_n = mc * 3 - 8;
+    _tgw_tail = "TAILMARK";
+    gcmd_run("/c", &_tg_runner_width);
+    assert_eq(_tg_card_rows(w, 2), 4, "a line three widths long takes three rows");
+    var l = gd_list_new();
+    var yb = gcmd_build(l, 0, 0, w, 2);
+    assert_eq(yb, gcmd_build(0, 0, 0, w, 2), "...and the draw is as tall as the measure");
+    assert_eq(_tg_wrap_kept(l, gcmd_line_ptr(2, 0), gcmd_line_len(2, 0)), gcmd_line_len(2, 0), "...and every byte of it is drawn, the tail included");
+    assert_eq(_tg_card_rows(mc * GR_GLYPH_W / 2 + GCMD_PAD * 2 + 4, 2), 7, "a narrower window re-wraps: the same line takes six rows");
+    assert_eq(_tg_card_rows(w, 2), 4, "...and a wider one goes back");
+    _tgw_n = mc - 1;
+    _tgw_tail = "\xe7\x95\x8c";                                  # a two-cell glyph that does not fit the last cell
+    gcmd_run("/d", &_tg_runner_width);
+    assert_eq(_tg_card_rows(w, 3), 3, "a wide glyph that would cross the edge starts the next row");
+    _tgw_tail = 0;
+    _tgw_n = 1;
+    var hbuf = alloc(201);
+    var hi = 0;
+    store8(hbuf, 47);
+    hi = 1;
+    while (hi < 200) { store8(hbuf + hi, 104); hi = hi + 1; }
+    store8(hbuf + 200, 0);
+    gcmd_run(hbuf, &_tg_runner_width);
+    assert_eq(_tg_card_rows(w, 4), 1 + (199 + mc - 5) / (mc - 5) + 0, "a long typed line wraps beside the prompt mark too");
+    var lh = gd_list_new();
+    assert_eq(gcmd_build(lh, 0, 0, w, 4), gcmd_build(0, 0, 0, w, 4), "...with the draw as tall as the measure");
+    assert_eq(_tg_wrap_kept(lh, gcmd_head(4), GCMD_HEAD_CAP), strlen(gcmd_head(4)), "...and all of it drawn");
+    var sl = gd_list_new();
+    gcmd_build(sl, 0, 0, 8, 2);
+    assert(gcmd_build(0, 0, 0, 8, 2) > 0, "a width of one cell still ends (a glyph always lands)");
+    # a slot the ring reuses wraps its new card, not the width its old one measured
+    gcmd_clear();
+    _tgw_n = mc + 1;
+    var ci = 0;
+    while (ci < GCMD_CARDS) { gcmd_run("/r", &_tg_runner_width); assert_eq(_tg_card_rows(w, ci), 3, "premise: a two-row card"); ci = ci + 1; }
+    _tgw_n = 1;
+    gcmd_run("/s", &_tg_runner_width);
+    assert_eq(_tg_card_rows(w, GCMD_CARDS - 1), 2, "a card in a reused slot measures its own lines");
+    gcmd_clear();
+    return 0;
+}
+
+# test_gturn_orphan (0.53.2): the agent pops an unanswered prompt so a refused one is not resent, which left the window's
+# notice under the previous answer, naming nothing. The prompt draws above it while it stands.
+# _tg_ptr_y: the y of the text command starting at `p`, or a far sentinel when none is on the list.
+fn _tg_ptr_y(l, p) {
+    var i = 0;
+    while (i < vec_len(l)) {
+        var cmd = vec_get(l, i);
+        if ((gd_kind(cmd) == GD_TEXT) && (gd_text(cmd) == p)) { return gd_y(cmd); }
+        i = i + 1;
+    }
+    return 0 - 99999;
+}
+fn _tg_y_of(l, needle) {
+    var i = 0;
+    while (i < vec_len(l)) {
+        var cmd = vec_get(l, i);
+        if (gd_kind(cmd) == GD_TEXT) { if (gd_text(cmd) != 0) { if (_t_count_sub(gd_text(cmd), strlen(gd_text(cmd)), needle, strlen(needle)) > 0) { return gd_y(cmd); } } }
+        i = i + 1;
+    }
+    return 0 - 99999;
+}
+fn test_gturn_orphan() {
+    test_group("a turn that ended with no text keeps its prompt above the notice (ginput.cyr / gfeed.cyr, 0.53.2)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    out_ring_sink_set(&feed_write);
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    intr_reset();
+    session_bump_turn();
+    session_history_append("user", "first question", 14);
+    session_history_append("assistant", "first answer", 12);
+    gturn_begin("ORPHANPROMPT please");
+    session_bump_turn();
+    session_history_append("user", "ORPHANPROMPT please", 19);
+    session_history_pop_last();                               # what the agent does with an unanswered prompt
+    _hoosh_finish = HOOSH_FIN_FILTER;
+    gturn_settle();
+    gturn_end();
+    assert_eq(gturn_orphan(), 1, "the prompt left the history, so the turn is an orphan");
+    var l = gd_list_new(); gfeed_build(l, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l, "ORPHANPROMPT"), 1, "the feed draws the prompt, once");
+    assert(_tg_y_of(l, "ORPHANPROMPT") > _tg_y_of(l, "first answer"), "...under the previous answer");
+    assert(_tg_y_of(l, "the model declined") > _tg_y_of(l, "ORPHANPROMPT"), "...and above its notice");
+    assert_eq(gfeed_build(gd_list_new(), 0, 0, 900, 600), gfeed_build(l, 0, 0, 900, 600), "the two passes agree");
+    gcmd_run("/x", &_tg_runner_ok);
+    assert_eq(gturn_orphan(), 0, "the next command's card clears it with the notice");
+    var l2 = gd_list_new(); gfeed_build(l2, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l2, "ORPHANPROMPT"), 0, "...so nothing is left standing");
+    gcmd_clear();
+
+    gturn_begin("ORPHANPROMPT two");
+    session_bump_turn();
+    _hoosh_finish = HOOSH_FIN_NONE;
+    gturn_settle();
+    gturn_end();
+    assert_eq(gturn_failed(), 1, "premise: a failed turn");
+    var l3 = gd_list_new(); gfeed_build(l3, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l3, "ORPHANPROMPT two"), 1, "a failed turn keeps its prompt too");
+    gturn_begin("ORPHANPROMPT three");
+    assert_eq(gturn_orphan(), 0, "a new submit clears it");
+    intr_signal();
+    session_bump_turn();
+    gturn_settle();
+    gturn_end();
+    intr_reset();
+    assert_eq(gturn_stopped(), 1, "premise: a stopped turn");
+    var l4 = gd_list_new(); gfeed_build(l4, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l4, "ORPHANPROMPT three"), 1, "...and so does a stopped one");
+
+    # the prompt stayed in the history: the history draws it, and the echo must not draw it again
+    gturn_begin("KEPTPROMPT");
+    session_bump_turn();
+    session_history_append("user", "KEPTPROMPT", 10);
+    session_history_append("assistant", "partial answer", 14);
+    _hoosh_finish = HOOSH_FIN_LENGTH;
+    gturn_settle();
+    gturn_end();
+    assert_eq(gturn_orphan(), 0, "a landed reply leaves no orphan");
+    var l5 = gd_list_new(); gfeed_build(l5, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l5, "KEPTPROMPT"), 1, "...and its prompt draws once");
+    gturn_begin("HELDPROMPT");
+    session_bump_turn();
+    session_history_append("user", "HELDPROMPT", 10);          # no reply, but the turn kept its prompt
+    _hoosh_finish = HOOSH_FIN_FILTER;
+    gturn_settle();
+    gturn_end();
+    assert_eq(gturn_orphan(), 0, "a prompt the history kept is no orphan, reply or not");
+    var l6 = gd_list_new(); gfeed_build(l6, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l6, "HELDPROMPT"), 1, "...and draws once");
+
+    # a notice and its prompt stay with the conversation they ended in
+    gturn_begin("ORPHANPROMPT four");
+    session_bump_turn();
+    _hoosh_finish = HOOSH_FIN_FILTER;
+    gturn_settle();
+    gturn_end();
+    assert_eq(gturn_orphan(), 1, "premise: another orphan");
+    gconv_key(28, 0);
+    assert_eq(gturn_orphan() + gturn_note(), 0, "switching conversations takes the notice and its prompt with it");
+
+    _hoosh_finish = HOOSH_FIN_NONE;
+    gcmd_clear();
+    session_reset(); session_history_clear();
+    return 0;
+}
+
+# test_gfeed_view (0.53.2): a long reply cost every frame all of itself. The list holds what the region shows, and a
+# reply's height is measured once per width.
+fn _tgv_text(n) {
+    var b = alloc(n + 1);
+    var i = 0;
+    var line = 0;
+    while (i < n) {
+        if ((i % 40) == 39) { store8(b + i, 10); line = line + 1; }
+        elif ((i % 40) < 8) { var d = line; var k = 7 - (i % 40); while (k > 0) { d = d / 10; k = k - 1; } store8(b + i, 48 + (d % 10)); }
+        else { store8(b + i, 120); }
+        i = i + 1;
+    }
+    store8(b + n, 0);
+    return b;
+}
+# _tgv_has: rows holding `needle` within what each draws (a text command is a slice of a longer string).
+fn _tgv_has(l, needle) {
+    var c = 0;
+    var i = 0;
+    while (i < vec_len(l)) {
+        var cmd = vec_get(l, i);
+        if ((gd_kind(cmd) == GD_TEXT) && (gd_text(cmd) != 0)) {
+            var n = gd_aux(cmd);
+            if (n == 0) { n = strlen(gd_text(cmd)); }
+            c = c + _t_count_sub(gd_text(cmd), n, needle, strlen(needle));
+        }
+        i = i + 1;
+    }
+    return c;
+}
+fn test_gfeed_view() {
+    test_group("the feed's list holds what the region shows, however long the reply (gfeed.cyr, gdraw.cyr, 0.53.2)");
+    ui_force(PT_DESKTOP, CD_TRUE);
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    session_history_append("user", "write", 5);
+    var n = 400000;                                              # 10,000 lines
+    var body = _tgv_text(n);
+    session_history_append("assistant", body, n);
+    var l = gd_list_new();
+    gfeed_build(l, 0, 0, 900, 600);
+    assert(vec_len(l) < 80, "10,000 lines put a screenful on the list");
+    assert(_tgv_has(l, "00009999") >= 1, "...the newest line among them");
+    assert_eq(_tgv_has(l, "00000000"), 0, "...and not the oldest");
+    assert_eq(_gd_cull, 0, "the band is lifted when the feed is done");
+    assert(session_history_layout(1, 900 - GFEED_PAD - GFEED_PAD) > 0, "the reply's height is held for its width");
+    assert_eq(session_history_layout(1, 500), 0 - 1, "...and for no other");
+    var h = session_history_layout(1, 900 - GFEED_PAD - GFEED_PAD);
+    assert_eq(h, _gfeed_md(0, 0, 0, 900 - GFEED_PAD - GFEED_PAD, body), "...and it is what a full walk measures");
+    gscroll_view_h_set(600);
+    gscroll_clamp(h + 1000);
+    gscroll_by(h + 1000);
+    var l2 = gd_list_new();
+    gfeed_build(l2, 0, 0, 900, 600);
+    assert(_tgv_has(l2, "00000000") >= 1, "scrolled to the top, the oldest line draws");
+    assert_eq(_tgv_has(l2, "00009999"), 0, "...and the newest does not");
+    assert(_tgv_has(l2, "write") >= 1, "...with the prompt above it");
+    assert(vec_len(l2) < 80, "...still a screenful");
+    gscroll_reset();
+    gscroll_clamp(h / 2 + 1000);
+    gscroll_by(h / 2);
+    var l3 = gd_list_new();
+    gfeed_build(l3, 0, 0, 900, 600);
+    assert(vec_len(l3) < 80, "the middle of the reply is a screenful too");
+    assert(vec_len(l3) > 20, "...and not an empty one");
+    gscroll_reset();
+    var l4 = gd_list_new();
+    gfeed_build(l4, 0, 0, 500, 600);
+    assert(session_history_layout(1, 500 - GFEED_PAD - GFEED_PAD) > 0, "a new width measures again");
+
+    test_group("the reply still streaming is held to the view the same way (gfeed.cyr, 0.53.2)");
+    session_reset(); session_history_clear();
+    var sv_acc = _hoosh_acc; var sv_cap = _hoosh_acc_cap; var sv_len = _hoosh_acc_len;
+    _hoosh_acc = 0; _hoosh_acc_cap = 0;
+    _hoosh_acc_reset();
+    _hoosh_acc_append(body, n);
+    session_bump_turn();
+    gturn_begin("write");
+    session_history_append("user", "write", 5);
+    var l5 = gd_list_new();
+    gfeed_build(l5, 0, 0, 900, 600);
+    assert(vec_len(l5) < 80, "a long partial is a screenful");
+    assert(_tgv_has(l5, "00009999") >= 1, "...with its newest line");
+    _hoosh_acc_append("\nNEWLINE", 8);
+    var l6 = gd_list_new();
+    gfeed_build(l6, 0, 0, 900, 600);
+    assert(_tgv_has(l6, "NEWLINE") >= 1, "...which moves as the reply grows");
+    # a tool round resets the reply, and the next one may reach the same length with other text
+    var seen = _gfeed_live_h;
+    _hoosh_acc_reset();
+    gfeed_build(gd_list_new(), 0, 0, 900, 600);
+    assert_eq(_gfeed_live_n, 0, "a round with no text yet drops the held height");
+    var shortb = alloc(n + 9);
+    var si = 0;
+    while (si < (n + 8)) { store8(shortb + si, 121); si = si + 1; }
+    store8(shortb + n + 8, 0);
+    _hoosh_acc_append(shortb, n + 8);
+    gfeed_build(gd_list_new(), 0, 0, 900, 600);
+    assert(_gfeed_live_h != seen, "...so the next partial is measured, at the same length");
+    gturn_end();
+    _hoosh_acc = sv_acc; _hoosh_acc_cap = sv_cap; _hoosh_acc_len = sv_len; _hoosh_acc_cut = 0;
+    session_reset(); session_history_clear();
     return 0;
 }
 

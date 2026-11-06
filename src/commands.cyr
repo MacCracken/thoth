@@ -1050,6 +1050,23 @@ fn _save_parse_fmt(arg) {
     return SAVE_FMT_MD;
 }
 
+# _save_json_text: p[0..n) as the inside of a JSON string, escaped and flushed a chunk at a time (0.53.2): a reply can be
+# megabytes, and SAVE_JBUF holds one chunk escaped at its worst, six bytes for one. Escaping works byte by byte, so a
+# chunk may end inside a character. 1 on a full write.
+var SAVE_JCHUNK = 65536;
+fn _save_json_text(fd, p, n) {
+    var ok = 1;
+    var i = 0;
+    while (i < n) {
+        var take = n - i;
+        if (take > SAVE_JCHUNK) { take = SAVE_JCHUNK; }
+        var off = _json_escape_n_into_cap(_save_jbuf, 0, SAVE_JBUF, p + i, take);
+        if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
+        i = i + take;
+    }
+    return ok;
+}
+
 # _save_json: the conversation as one JSON object. Per-message build+flush keeps the buffer bounded.
 fn _save_json(fd) {
     if (_save_jbuf == 0) { _save_jbuf = alloc(SAVE_JBUF); }
@@ -1066,8 +1083,10 @@ fn _save_json(fd) {
         off = _append_cstr_cap(_save_jbuf, off, cap, "{\"role\":\"");
         off = _json_escape_into_cap(_save_jbuf, off, cap, session_history_role(i));
         off = _append_cstr_cap(_save_jbuf, off, cap, "\",\"content\":\"");
-        off = _json_escape_into_cap(_save_jbuf, off, cap, session_history_content(i));
-        off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
+        if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
+        var scontent = session_history_content(i);
+        if (_save_json_text(fd, scontent, strlen(scontent)) == 0) { ok = 0; }
+        off = _append_cstr_cap(_save_jbuf, 0, cap, "\"");
         var mdl = session_history_model(i);
         if (mdl != 0) {
             off = _append_cstr_cap(_save_jbuf, off, cap, ",\"model\":\"");
@@ -1075,8 +1094,8 @@ fn _save_json(fd) {
             off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
         }
         if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
-        # 0.48.0: the reply's reasoning, when it streamed any (omit-until-present) — flushed as its OWN chunk: content
-        # and reasoning are each up to 64 KiB and escape to six times that, so the two never share one build
+        # 0.48.0: the reply's reasoning, when it streamed any (omit-until-present) — flushed as its OWN chunk: reasoning
+        # is up to 64 KiB and escapes to six times that
         var rsn = session_history_reason(i);
         if (rsn != 0) {
             off = _append_cstr_cap(_save_jbuf, 0, cap, ",\"reasoning\":\"");
@@ -2426,14 +2445,8 @@ fn cmd_reload() {
 # warned that a reason "can quote the parameters that triggered it"; reading t-ron's `_tron_format_injection` /
 # `scanner_scan_text` shows it cannot, so the warning is not made.
 #
-# ⚠ UPSTREAM FRAGILITY, recorded because thoth's file is what would break: `_audit_export_event` splices the agent
-# id, the tool name and the `reason` into the JSON with NO escaping, and sizes the whole buffer at a flat 512
-# bytes/event against names whose length it does not bound. Through 0.52.4 this comment called that safe because
-# "every reason is a short fixed label" — it was not: the policy reason quotes the model's own tool name, and
-# t-ron's name check admits a quote, a backslash and up to 256 bytes, so a ring of ~185-byte names overran the
-# buffer and a `"` in a name could write fields of its own into the record. Since 0.52.5 thoth refuses such a
-# name before the gate (gate_name_fit, src/gate.cyr), so the export cannot receive one. Escaping belongs to t-ron;
-# re-deriving the serializer here would be forking the spine.
+# t-ron sizes and escapes this export itself since 2.2.3 (a first pass over the events); re-deriving the serializer here
+# would be forking the spine.
 fn _audit_export(path) {
     var a = gate_audit();
     if (a == 0) {
@@ -2908,6 +2921,7 @@ fn _task_dispatch(prompt) {
     if (rc != 0) { ev_ok = 0; }
     elif (hoosh_last_reply_len() == 0) { ev_ok = 0; }
     events_finish_set(hoosh_finish_known());          # 0.52.8 (A2): the gateway's finish word rides both events
+    events_reply_cut_set(hoosh_reply_cut());          # 0.53.2: a reply past what thoth keeps says so
     if (ev_ok == 1) { events_response(session_turns(), hoosh_last_reply(), hoosh_last_reply_len()); }
     # 0.44.4: carry the provider's own in-stream error (hoosh 2.6.5+) to the machine consumer too.
     else { events_error(session_turns(), rc, 0, agent_err_code(), agent_err_msg()); }
@@ -3015,9 +3029,8 @@ fn cmd_clear() {
 # may swallow it, and we cannot read back success), so the message never asserts it landed. Needs a real
 # terminal (the escape is meaningless on redirected stdout) — gated on ui_isatty(1), matching the tier
 # probe. NOT t-ron-gated: it only SETS the clipboard (never queries/reads it) with content the user can
-# already see — the same ungated display class as /read. The reply is bounded to HOOSH_ACC_CAP (64 KiB),
-# so no truncation is needed; a large payload is written with a write-all loop (a single tty write() can
-# be short). BEL (not ST) terminates the OSC — the more widely accepted form.
+# already see — the same ungated display class as /read. A large payload is written with a write-all
+# loop (a single tty write() can be short); a terminal may refuse a long one, which is why the line stays best-effort. BEL (not ST) terminates the OSC — the more widely accepted form.
 fn cmd_copy() {
     var n = hoosh_last_reply_len();
     if (n <= 0) { oprintln("nothing to copy yet — no model reply this session"); return 0; }

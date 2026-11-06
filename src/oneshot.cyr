@@ -76,13 +76,13 @@ var _oneshot_log_level = 0;
 fn oneshot_log_path() { return _oneshot_log_path; }
 fn oneshot_log_level() { return _oneshot_log_level; }
 
-# The JSON envelope buffer (lazy). Sized for a worst-case 6x-escaped max reply (HOOSH_ACC_CAP)
+# The JSON envelope buffer (lazy). Sized for this reply, 6x-escaped at worst (at least HOOSH_ACC_CAP's worth)
 # + a 6x-escaped model id (MODEL_BUF_CAP — a session /model id; a normal [hoosh].model id is
 # far shorter) + the fixed framing/ints, with headroom — so the escape core's cap-stop never
 # triggers and the object is always complete, valid JSON. Memory-safe regardless (every
 # append/escape is cap-bounded); only a pathological multi-KB config `model` value could clip
 # the field — the same accepted bound the hoosh request builders already carry.
-var ONESHOT_JSON_CAP = 0;   # computed at first use (HOOSH_ACC_CAP*6 + MODEL_BUF_CAP*6 + 256)
+var ONESHOT_JSON_CAP = 0;   # computed from the reply (its length*6 + MODEL_BUF_CAP*6 + 256)
 var _oneshot_json_buf = 0;
 
 # The assembled task (argv positionals joined by spaces, then the stdin payload).
@@ -408,6 +408,7 @@ fn _completion_zsh() {
 # by the SINK regardless of streaming mode. A live 502 with stream already false printed that advice and
 # following it changed nothing. Interactive is the only place the body actually surfaces.
 fn _oneshot_report_error(rc) {
+    if ((rc < 0) && (hoosh_resp_bad() == 1)) { emit_err("thoth: "); emit_err(hoosh_resp_bad_text()); emit_err("\n"); return 0; }
     var absent = 0;
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { absent = 1; }
     emit_err("thoth: "); emit_err(ev_fail_text_f(rc, absent, hoosh_finish_known()));   # 0.52.8 (A2): a refusal / cut named
@@ -471,6 +472,7 @@ fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
         off = _json_escape_into_cap(dst, off, cap, hoosh_finish_known());
         off = _append_cstr_cap(dst, off, cap, "\"");
     }
+    if (hoosh_reply_cut() == 1) { off = _append_cstr_cap(dst, off, cap, ",\"reply_cut\":true"); }   # 0.53.2: thoth kept part of it
     off = _append_cstr_cap(dst, off, cap, ",\"elapsed_ms\":");
     off = _append_int_cap(dst, off, cap, elapsed_ms);
     off = _append_cstr_cap(dst, off, cap, "}");
@@ -617,10 +619,14 @@ fn one_shot_run() {
         if (_oneshot_json == 1) {
             # one JSON object (clean for jq/CI); honest fields (tokens/cost omit-until-present),
             # the buffer sized so it never truncates.
-            if (_oneshot_json_buf == 0) {
-                ONESHOT_JSON_CAP = HOOSH_ACC_CAP * 6 + MODEL_BUF_CAP * 6 + 256;
-                _oneshot_json_buf = alloc(ONESHOT_JSON_CAP);
+            var jneed = olen;
+            if (jneed < HOOSH_ACC_CAP) { jneed = HOOSH_ACC_CAP; }
+            jneed = jneed * 6 + MODEL_BUF_CAP * 6 + 256;
+            if (jneed > ONESHOT_JSON_CAP) {
+                _oneshot_json_buf = alloc(jneed);
+                ONESHOT_JSON_CAP = jneed;
             }
+            if (_oneshot_json_buf == 0) { emit_err("thoth: out of memory building the JSON reply\n"); return 1; }
             olen = oneshot_json_envelope(_oneshot_json_buf, ONESHOT_JSON_CAP, obuf, olen, elapsed);
             obuf = _oneshot_json_buf;
         }

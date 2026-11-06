@@ -52,7 +52,7 @@ var EV_ARGS_MAX = 2048;         # tool args are echoed for observability, not fi
 var _ev_on = 0;
 var _ev_buf = 0;
 var _ev_rbuf = 0;               # the `response` line, sized so a full-length reply never truncates
-var EV_RESP_CAP = 0;            # set on first use from HOOSH_ACC_CAP (worst-case escape expansion)
+var EV_RESP_CAP = 0;            # set from the reply being written (worst-case escape expansion)
 var _ev_cur = 0;                # buffer the in-flight line is being built into
 var _ev_cur_cap = 0;            # its capacity — every helper bounds against THIS, not a fixed constant
 var _ev_n = 0;                  # events emitted this process (for tests)
@@ -99,7 +99,7 @@ fn _ev_end(off) {
     store8(_ev_cur + off, 0);
     # fd 1 directly — NOT emit()/ui_emit(), which route through out_mode and would be discarded under the
     # OUT_NULL that --events implies.
-    syscall(SYS_WRITE, 1, _ev_cur, off);
+    emit_raw_n(_ev_cur, off);                    # 0.53.2: a long reply's line may take more than one write
     _ev_n = _ev_n + 1;
     return 0;
 }
@@ -212,6 +212,8 @@ fn ev_fail_text_f(rc, seam_absent, fword) {
 # Passed in by the dispatcher rather than read, to keep this file free of a hoosh dependency (the rule one function up).
 var _ev_finish = 0;
 fn events_finish_set(fword) { _ev_finish = fword; return 0; }
+var _ev_reply_cut = 0;           # 0.53.2: 1 when thoth kept only part of the reply; passed in the same way
+fn events_reply_cut_set(cut) { _ev_reply_cut = cut; return 0; }
 
 # events_error: the failure twin of `events_response`. `http` is present ONLY for a real status code
 # (rc > 0) — the same omit-until-present discipline `tokens` follows, since a faked 0 would read as a
@@ -240,15 +242,18 @@ fn events_error(turn, rc, seam_absent, up_code, up_msg) {
 # ⚠ SIZED NOT TO TRUNCATE. This is the one event whose payload is the point, so it does NOT share the 8 KB
 # line buffer the others use: a 64 KB reply through the ordinary path would have been silently clipped at
 # 8 KB, losing the answer while still emitting well-formed JSON — the worst kind of failure, because it
-# looks like it worked. The buffer is HOOSH_ACC_CAP with the worst-case JSON escape expansion (6 bytes per
-# input byte, `\u00XX`) plus the envelope, which is the same sizing rule `oneshot_json_envelope` uses.
+# looks like it worked. The buffer is the reply with the worst-case JSON escape expansion (6 bytes per input
+# byte, `\u00XX`) plus the envelope, which is the same sizing rule `oneshot_json_envelope` uses. 0.53.2: from the reply
+# in hand, since a reply grows past HOOSH_ACC_CAP; never below that, so a short reply does not allocate twice.
 #
 # Held by LENGTH (not as a cstr) so an embedded NUL in the reply survives the escape.
 fn events_response(turn, reply, reply_len) {
     if (_ev_on == 0) { return 0; }
-    if (_ev_rbuf == 0) {
-        EV_RESP_CAP = HOOSH_ACC_CAP * 6 + 256;
-        _ev_rbuf = alloc(EV_RESP_CAP);
+    var need = reply_len * 6 + 256;
+    if (need < (HOOSH_ACC_CAP * 6 + 256)) { need = HOOSH_ACC_CAP * 6 + 256; }
+    if (need > EV_RESP_CAP) {
+        var nb = alloc(need);
+        if (nb != 0) { _ev_rbuf = nb; EV_RESP_CAP = need; }
     }
     if (_ev_rbuf == 0) { return 0; }
     var off = _ev_begin_in(_ev_rbuf, EV_RESP_CAP, "response", turn);
@@ -257,6 +262,7 @@ fn events_response(turn, reply, reply_len) {
         off = _json_escape_n_into_cap(_ev_cur, off, _ev_cur_cap, reply, reply_len);
         off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, "\"");
         if (_ev_finish != 0) { off = _ev_str_field(off, "finish_reason", _ev_finish, 32); }   # 0.52.8 (A2): a cut answer says so
+        if (_ev_reply_cut == 1) { off = _append_cstr_cap(_ev_cur, off, _ev_cur_cap, ",\"reply_cut\":true"); }   # 0.53.2: so does one thoth cut
     }
     return _ev_end(off);
 }

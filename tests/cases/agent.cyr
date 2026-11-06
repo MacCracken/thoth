@@ -1111,11 +1111,10 @@ fn test_audit() {
 }
 
 
-# 0.52.5 (repair batch 9): a tool name t-ron's audit record cannot hold never reaches tron_check. The room is derived
-# from the vendored t-ron, so the first group pins it against t-ron's own writers: at the room a policy deny's details
-# fill their allocation EXACTLY (and every byte past it writes two), and a ring of such denials exports inside its
-# buffer — a t-ron sync that moves either fails here. The rest drive the real gate and both executors with a policy
-# bound, and read what t-ron recorded.
+# 0.52.5 (repair batch 9): a tool name t-ron would refuse never reaches tron_check. The bound is the vendored t-ron's
+# own (0.53.2), so the first group runs the longest name it passes through t-ron's writers and parses what comes out: a
+# t-ron sync that stops sizing them fails here. The rest drive the real gate and both executors with a policy bound,
+# and read what t-ron recorded.
 fn _tg_fill(n, ch) {
     var p = alloc(n + 1);
     var i = 0;
@@ -1141,25 +1140,30 @@ fn _tg_calls_json(n1, n2) {
     return b;
 }
 fn test_gate_name_fit() {
-    test_group("the room t-ron's audit record gives a tool name, pinned against t-ron's own writers (gate.cyr, 0.52.5)");
+    test_group("the longest name the gate passes survives t-ron's own writers (gate.cyr, 0.53.2)");
     var agent = TRON_AGENT_DEFAULT;
-    var room = GATE_TRON_NAME_ROOM - strlen(agent);
+    var room = TRON_MAX_IDENTIFIER;
     var nm = _tg_fill(room, 110);                                   # the longest name the gate passes: 'n' x room
     var d = _audit_details(nm, _policy_format_deny(agent, nm), DENY_UNAUTHORIZED);
-    assert_eq(str_len(d) + 1, room + 256, "at the room a policy deny's details fill t-ron's allocation (tool + 256) exactly");
+    assert(bayan_json_v_parse_buf(str_data(d), str_len(d)) != 0, "a policy deny's details at the longest name are one JSON value");
     var d2 = _audit_details(nm, _tron_format_unknown_tool(nm, agent), DENY_UNAUTHORIZED);
-    assert((str_len(d2) + 1) <= (room + 256), "...an unknown-tool deny's details fit too");
+    assert(bayan_json_v_parse_buf(str_data(d2), str_len(d2)) != 0, "...an unknown-tool deny's too");
     var d3 = _audit_details(nm, _corr_format_alert(nm, 12, 3600), 0 - 1);
-    assert((str_len(d3) + 1) <= (room + 256), "...and a correlation alert's (a flag: no deny code)");
+    assert(bayan_json_v_parse_buf(str_data(d3), str_len(d3)) != 0, "...and a correlation alert's (a flag: no deny code)");
     var te = tron_new(tron_config_default());
     assert_eq(tron_load_policy(te, "[agent.\"thoth\"]\nallow = [\"echo_*\"]\ndeny = [\"n*\"]\n"), TRON_ERR_NONE, "premise: a policy denying n* loads");
     var ei = 0;
     while (ei < 120) { tron_check(te, tool_call_new(agent, nm, "{}", 1000 + ei)); ei = ei + 1; }
     var ea = tron_audit(te);
-    assert_eq(query_total_denials(ea), 120, "premise: 120 policy denials of a room-length name are recorded");
-    assert(strlen(audit_export_json(ea)) < (120 * 512 + 32), "...and they export inside t-ron's n x 512 + 32 buffer");
+    assert_eq(query_total_denials(ea), 120, "premise: 120 policy denials of the longest name are recorded");
+    var ej = audit_export_json(ea);
+    assert(ej != 0, "...and they export");
+    var ev = bayan_json_v_parse_buf(ej, strlen(ej));
+    assert(ev != 0, "...as one JSON value");
+    if (ev != 0) { assert_eq(bayan_json_v_arr_len(ev), 120, "...holding every event"); }
+    assert(TRON_MAX_IDENTIFIER >= AGENT_NAME_MAX, "the executors' slot is the tighter bound, so t-ron's is reached only through the gate");
 
-    test_group("a name t-ron's audit record cannot hold is refused before the check (gate.cyr, 0.52.5)");
+    test_group("a name t-ron would refuse is refused before the check (gate.cyr, 0.52.5)");
     var sv_tron = _gate_tron; var sv_agent = _cfg_tron_agent; var sv_mode = out_mode();
     _cfg_tron_agent = 0;
     _gate_tron = 0;
@@ -1171,9 +1175,9 @@ fn test_gate_name_fit() {
     var ga = tron_audit(tg);
     assert_eq(gate_name_fit(_tg_fill(room, 97)), GATE_NAME_OK, "bound: a name at the room fits");
     assert_eq(gate_name_fit(_tg_fill(room + 1, 97)), GATE_NAME_LONG, "...one byte over does not");
-    assert_eq(gate_name_fit("x\",\"verdict\":\"allow"), GATE_NAME_BYTE, "...a quote is refused: it would write fields into the record");
+    assert_eq(gate_name_fit("x\",\"verdict\":\"allow"), GATE_NAME_BYTE, "...a quote is refused");
     assert_eq(gate_name_fit("a\\b"), GATE_NAME_BYTE, "...a backslash");
-    assert_eq(gate_name_fit("a\x01b"), GATE_NAME_BYTE, "...a control byte (t-ron refuses one, but records it first)");
+    assert_eq(gate_name_fit("a\x01b"), GATE_NAME_BYTE, "...a control byte");
     assert_eq(gate_name_fit("a\x7fb"), GATE_NAME_BYTE, "...DEL");
     assert_eq(gate_name_fit("caf\xc3\xa9"), GATE_NAME_BYTE, "...a non-ASCII byte");
     assert_eq(gate_name_fit("fs.read-file_2"), GATE_NAME_OK, "...an ordinary name fits");
@@ -1185,14 +1189,18 @@ fn test_gate_name_fit() {
     assert_eq(_t_feed_has("DENY (not checked)"), 1, "...the operator is told the check did not run");
     assert_eq(gate_authorize(_tg_fill(room, 97), "{}", "call tool", "x"), 1, "a name at the room goes to t-ron (allowed by the policy)");
     assert_eq(query_total_events(ga), before + 1, "...which records it");
-    _cfg_tron_agent = _tg_fill(GATE_TRON_NAME_ROOM, 97);
-    assert_eq(gate_name_fit("read_file"), GATE_NAME_AGENT, "a [tron].agent id the length of the room leaves none for a name");
+    _cfg_tron_agent = _tg_fill(TRON_MAX_IDENTIFIER, 97);
+    assert_eq(gate_name_fit("read_file"), GATE_NAME_OK, "a [tron].agent id at t-ron's bound still fits: each identifier stands alone");
+    _cfg_tron_agent = _tg_fill(TRON_MAX_IDENTIFIER + 1, 97);
+    assert_eq(gate_name_fit("read_file"), GATE_NAME_AGENT, "...one byte over does not");
     _cfg_tron_agent = 0;
 
     test_group("both executors tell the model which name refusal it hit (agent.cyr, 0.52.5)");
     assert_eq(_agent_name_code(_tg_fill(AGENT_NAME_MAX + 1, 97)), 1, "over the slot is its own refusal");
     assert(streq(_agent_name_result(1), "(tool name too long; call refused)"), "...with the 0.44.4 wording");
-    assert_eq(_agent_name_code(_tg_fill(room + 1, 97)), 1 + GATE_NAME_LONG, "bound: over the room");
+    assert_eq(gate_name_fit(_tg_fill(AGENT_NAME_MAX, 97)), GATE_NAME_OK, "bound: a name at the executors' slot fits t-ron, so its 163-byte cap is gone");
+    assert_eq(_agent_name_code(_tg_fill(AGENT_NAME_MAX, 97)), 0, "...and proceeds");
+    assert_eq(_agent_name_code(_tg_fill(room + 1, 97)), 1, "bound: past both bounds, the slot's refusal names it");
     assert_eq(_agent_name_code("x\"y"), 1 + GATE_NAME_BYTE, "bound: a quote");
     assert_eq(_agent_name_code("read_file"), 0, "an ordinary name proceeds");
     if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
@@ -1206,7 +1214,7 @@ fn test_gate_name_fit() {
     _agent_work_reset();
     before = query_total_events(ga);
     _agent_run_calls(pv, 2);
-    assert_eq(_ui_contains(_agent_work, "tool name too long for the t-ron audit record"), 1, "parallel: the over-room call reads as that refusal");
+    assert_eq(_ui_contains(_agent_work, "(tool name too long; call refused)"), 1, "parallel: the over-room call reads as that refusal");
     assert_eq(_ui_contains(_agent_work, "holds a quote, backslash"), 1, "...the quoted one as its own");
     assert_eq(query_total_events(ga), before, "...and t-ron records neither");
     var sj = _tg_calls_json("x\\\"y", 0);
@@ -1217,9 +1225,163 @@ fn test_gate_name_fit() {
     assert_eq(query_total_events(ga), before, "...unrecorded");
     _cfg_daimon_url = sv_daimon;
     _gate_tron = 0;
-    assert_eq(_agent_name_code(_tg_fill(room + 1, 97)), 0, "with no t-ron bound a longer name is held to the slot only");
+    assert_eq(_agent_name_code(_tg_fill(AGENT_NAME_MAX, 97)), 0, "with no t-ron bound a name is held to the slot only");
+    assert_eq(_agent_name_code(_tg_fill(AGENT_NAME_MAX + 1, 97)), 1, "...which still stands");
     _gate_tron = sv_tron; _cfg_tron_agent = sv_agent;
     out_mode_set(sv_mode); feed_init();
+    return 0;
+}
+
+# 0.53.2 (repair batch 13): a reply past 64 KiB reached history, /save, one-shot stdout and --json cut, with no mark, while
+# [hoosh].max_tokens asks for several times that. The accumulator grows now, to a ceiling that says so.
+fn _trl_fill(dst, n) {
+    var i = 0;
+    while (i < n) { store8(dst + i, 97 + (i % 26)); i = i + 1; }
+    store8(dst + n, 0);
+    return dst;
+}
+fn test_reply_long() {
+    test_group("a long reply is kept whole, past the old 64 KiB (hoosh.cyr, 0.53.2)");
+    var sv_acc = _hoosh_acc; var sv_len = _hoosh_acc_len; var sv_cap = _hoosh_acc_cap;
+    _hoosh_acc = 0; _hoosh_acc_cap = 0;
+    _hoosh_acc_reset();
+    var chunk = _trl_fill(alloc(4097), 4096);
+    var i = 0;
+    while (i < 64) { _hoosh_acc_append(chunk, 4096); i = i + 1; }
+    assert_eq(hoosh_last_reply_len(), 262144, "256 KiB in small deltas stays 256 KiB");
+    assert_eq(hoosh_reply_cut(), 0, "...and nothing is marked cut");
+    assert_eq(load8(hoosh_last_reply() + 65536), load8(chunk), "the byte the old buffer dropped is there");
+    assert_eq(load8(hoosh_last_reply() + 262144), 0, "...and the copy ends in a NUL");
+    assert_eq(strlen(hoosh_last_reply()), 262144, "...so a reader of the cstr sees all of it");
+    var held = _hoosh_acc_cap;
+    _hoosh_acc_reset();
+    _hoosh_acc_append("x", 1);
+    assert_eq(_hoosh_acc_cap, held, "a later turn reuses the grown buffer");
+
+    test_group("past the ceiling the copy stops, and says so (hoosh.cyr, 0.53.2)");
+    var sv_max = HOOSH_ACC_MAX;
+    HOOSH_ACC_MAX = 131072;
+    _hoosh_acc = 0; _hoosh_acc_cap = 0;
+    _hoosh_acc_reset();
+    i = 0;
+    while (i < 64) { _hoosh_acc_append(chunk, 4096); i = i + 1; }
+    assert_eq(hoosh_last_reply_len(), 131071, "the copy fills the ceiling, NUL included");
+    assert_eq(hoosh_reply_cut(), 1, "...and is marked cut");
+    assert_eq(load8(hoosh_last_reply() + 131071), 0, "...and still ends in a NUL");
+    assert(_ui_contains(hoosh_finish_lead(), "cut short") == 1, "the note leads with the cut");
+    assert(_ui_contains(hoosh_finish_detail(), "131071 bytes") == 1, "...names how much was kept");
+    assert(_ui_contains(hoosh_finish_detail(), "--json") == 1, "...and where the rest is missing from");
+    _hoosh_acc_append("late", 4);
+    assert_eq(hoosh_last_reply_len(), 131071, "nothing lands after the cut");
+    _hoosh_acc_reset();
+    assert_eq(hoosh_reply_cut(), 0, "the next turn starts clean");
+    assert_eq(hoosh_finish_lead(), 0, "...with no note");
+
+    test_group("a cut never ends inside a character (hoosh.cyr, 0.53.2)");
+    var bm = alloc(HOOSH_ACC_MAX + 8);
+    _trl_fill(bm, HOOSH_ACC_MAX + 4);
+    store8(bm + 131070, 0xE2); store8(bm + 131071, 0x82); store8(bm + 131072, 0xAC);   # a 3-byte character across the end
+    _hoosh_acc_append(bm, HOOSH_ACC_MAX + 4);
+    assert_eq(hoosh_last_reply_len(), 131070, "the copy stops before the character");
+    assert_eq(hoosh_reply_cut(), 1, "...marked");
+
+    test_group("a refused allocation cuts the reply, and says so (hoosh.cyr, 0.53.2)");
+    HOOSH_ACC_MAX = sv_max;
+    _hoosh_acc = 0; _hoosh_acc_cap = 0;
+    _hoosh_acc_reset();
+    _hoosh_acc_append(chunk, 4096);
+    var cap = ALLOC_MAX;
+    ALLOC_MAX = 1;
+    i = 0;
+    while (i < 64) { _hoosh_acc_append(chunk, 4096); i = i + 1; }
+    ALLOC_MAX = cap;
+    assert_eq(hoosh_last_reply_len(), HOOSH_ACC_CAP - 1, "what was held stays");
+    assert_eq(hoosh_reply_cut(), 1, "...marked cut");
+    _hoosh_acc_reset();
+
+    test_group("the machine channels name a cut reply (oneshot.cyr, 0.53.2)");
+    var eb = alloc(4096);
+    var el = oneshot_json_envelope(eb, 4096, "hi", 2, 5);
+    assert(_ui_contains(eb, "reply_cut") == 0, "a whole reply carries no field");
+    _hoosh_acc_cut = 1;
+    el = oneshot_json_envelope(eb, 4096, "hi", 2, 5);
+    assert(bayan_json_v_parse_buf(eb, el) != 0, "premise: the envelope parses");
+    assert(_ui_contains(eb, "\"reply_cut\":true") == 1, "a cut reply says so");
+    _hoosh_acc_cut = 0;
+
+    test_group("a blocking response thoth cannot read is named, not blamed on the connection (hoosh.cyr, 0.53.2)");
+    assert_eq(_hoosh_resp_mark(SANDHI_ERR_CONNECT), 0, "a refused connect is still a connect failure");
+    assert_eq(hoosh_resp_bad(), 0, "...and raises nothing");
+    assert_eq(_hoosh_resp_mark(SANDHI_ERR_PROTOCOL), 1, "a response past the cap is marked");
+    assert(_ui_contains(hoosh_resp_bad_text(), "too long") == 1, "...in words that say so");
+    _hoosh_acc_reset();
+    assert_eq(hoosh_resp_bad(), 0, "the next turn clears it");
+    assert(HOOSH_BLOCK_CAP >= (HOOSH_ACC_MAX * 2), "a blocking body holds a reply at the ceiling in its JSON");
+    _hoosh_opts_block = 0;
+    assert_eq(load64(hoosh_block_opts() + 16), HOOSH_BLOCK_CAP, "the blocking options carry that cap (sandhi: +16 max_response_bytes)");
+
+    test_group("a delegated child's long reply grows the child's buffer, never the parent's (subagent.cyr, 0.53.2)");
+    _sub_alloc();
+    _hoosh_acc_reset();
+    _hoosh_acc_append("PARENT", 6);
+    var pa = _hoosh_acc; var pl = _hoosh_acc_len; var pc = _hoosh_acc_cap;
+    _sub_enter();
+    i = 0;
+    while (i < 64) { _hoosh_acc_append(chunk, 4096); i = i + 1; }
+    assert_eq(_hoosh_acc_len, 262144, "the child's reply grows past the first size");
+    var grown = _hoosh_acc;
+    _sub_exit();
+    assert(_hoosh_acc == pa, "the parent's buffer comes back");
+    assert_eq(_hoosh_acc_len, pl, "...at its length");
+    assert_eq(_hoosh_acc_cap, pc, "...and its size, not the child's");
+    assert(_sub_acc == grown, "the child's grown buffer stays the child's");
+    assert_eq(_sub_acc_cap, 524288, "...at its grown size");
+    _sub_enter();
+    assert(_hoosh_acc == grown, "the next child starts on it");
+    assert_eq(_hoosh_acc_cap, 524288, "...knowing its size");
+    _hoosh_acc_cut = 1;
+    _sub_exit();
+    assert_eq(_hoosh_acc_cut, 0, "a child's cut is not the parent's");
+    _hoosh_acc = sv_acc; _hoosh_acc_len = sv_len; _hoosh_acc_cap = sv_cap; _hoosh_acc_cut = 0;
+
+    test_group("a long reply survives the session file and /save --json (session.cyr, commands.cyr, 0.53.2)");
+    var path = "build/test_reply_long.sess";
+    var body = _trl_fill(alloc(600001), 600000);                   # past SAVE_JBUF, the most one build holds
+    store8(body + 70000, 34); store8(body + 70001, 10); store8(body + 200000, 1);   # bytes that escape to more than one
+    var sv_first = SESS_READ_FIRST; var sv_buf = _sess_read_buf; var sv_size = _sess_read_size;
+    var sv_conv = _conv_active;
+    session_reset();
+    session_history_append("user", "write a lot", 11);
+    session_history_append("assistant", body, 600000);
+    var jp = "build/test_reply_long.json";
+    var jfd = file_open(jp, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    assert(jfd >= 0, "premise: the export file opens");
+    assert_eq(_save_json(jfd), 1, "/save --json writes it");
+    file_close(jfd);
+    var jl = alloc(8);
+    var jb = file_read_whole(jp, jl);
+    assert(jb != 0, "premise: the export reads back");
+    if (jb != 0) {
+        var jv = bayan_json_v_parse_buf(jb, load64(jl));
+        assert(jv != 0, "the export is one JSON value");
+        if (jv != 0) {
+            var jm = bayan_json_v_arr_get(bayan_json_v_obj_get_by_cstr(jv, "messages"), 1);
+            assert_eq(str_len(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(jm, "content"))), 600000, "...holding the whole reply");
+        }
+    }
+    _sess_path = path;
+    sess_persist_save();
+    _sess_path = 0;
+    session_reset();
+    assert_eq(session_history_len(), 0, "premise: the history is empty before the load");
+    SESS_READ_FIRST = 4096; _sess_read_buf = 0; _sess_read_size = 0;
+    assert_eq(_sess_load_file(path), 2, "the load buffer grows to a file past its first size");
+    assert_eq(_sess_load_overflow, 0, "...with no overflow");
+    assert_eq(strlen(session_history_content(1)), 600000, "...and the reply comes back whole");
+    assert_eq(load8(session_history_content(1) + 599999), load8(body + 599999), "...to its last byte");
+    SESS_READ_FIRST = sv_first; _sess_read_buf = sv_buf; _sess_read_size = sv_size;
+    session_reset();
+    xunlink(path); xunlink(jp);
     return 0;
 }
 
@@ -1793,6 +1955,26 @@ fn test_tool_args_refused() {
     _agent_work_reset(); store8(_agent_work, 0);
     _agent_run_calls_serial(pv, 2);
     assert_eq(_t_count_sub(_agent_work, _agent_work_len, "not sent", 8), 2, "the serial executor does the same");
+
+    test_group("the parallel worker sends what phase 1 checked, with no parse of its own (daimon.cyr, 0.53.2)");
+    var bb = alloc(DAIMON_REQ_CAP);
+    assert_eq(_daimon_call_body(bb, "t_one", "{\"a\":1}"), strlen(bb), "the body's length is what it wrote");
+    assert(streq(bb, "{\"name\":\"t_one\",\"arguments\":{\"a\":1}}"), "the arguments go in verbatim");
+    _daimon_call_body(bb, "t_one", 0);
+    assert(streq(bb, "{\"name\":\"t_one\",\"arguments\":{}}"), "no arguments send {}");
+    _daimon_call_body(bb, "t_one", "");
+    assert(streq(bb, "{\"name\":\"t_one\",\"arguments\":{}}"), "...empty arguments too");
+    daimon_build_call(bb, "t_one", "not json");
+    assert(streq(bb, "{\"name\":\"t_one\",\"arguments\":{}}"), "the serial builder keeps its parse as the backstop");
+    # A parse on the worker would show here as {} (these bytes never reach a worker: phase 1 refuses them). They stand in
+    # for what a racing parse would have refused. Port 9 fails the connect after the body is built.
+    var wa = arena_allocator(1048576);
+    var wst = alloc(8);
+    var wout = alloc(256);
+    store8(bb, 0);
+    assert_eq(daimon_fetch_into(wa, bb, "t_one", "{\"a\":1,\"a\":2}", wout, 256, wst), 0 - 1, "premise: the fetch reports the refused connect");
+    assert(_ui_contains(bb, "{\"a\":1,\"a\":2}") == 1, "the worker's body carries the bytes it was handed");
+
     _cfg_daimon_url = sv_daimon; _gate_tron = sv_tron;
     out_mode_set(sv_mode); feed_init();
     return 0;

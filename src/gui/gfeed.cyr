@@ -142,13 +142,13 @@ fn _gfeed_md_wrap(cmds, x, cy, avail, base, len, base_role) {
             i = i + nb;
             if (cols > maxcols) {
                 if (last_sp_byte >= line_start) {
-                    if ((cmds != 0) && (last_sp_cols > 0)) { _gfeed_md_draw(cmds, x, cy, base, line_start, last_sp_byte, base_role); }
+                    if ((cmds != 0) && (last_sp_cols > 0) && (gd_culled(cy, GFEED_LH) == 0)) { _gfeed_md_draw(cmds, x, cy, base, line_start, last_sp_byte, base_role); }
                     cy = cy + GFEED_LH;
                     line_start = last_sp_byte + 1;
                     cols = cols - last_sp_cols - 1;
                     last_sp_byte = 0 - 1;
                 } else {
-                    if (cmds != 0) { _gfeed_md_draw(cmds, x, cy, base, line_start, i - nb, base_role); }
+                    if ((cmds != 0) && (gd_culled(cy, GFEED_LH) == 0)) { _gfeed_md_draw(cmds, x, cy, base, line_start, i - nb, base_role); }
                     cy = cy + GFEED_LH;
                     line_start = i - nb;
                     cols = 1;
@@ -157,14 +157,14 @@ fn _gfeed_md_wrap(cmds, x, cy, avail, base, len, base_role) {
             }
         }
     }
-    if (cols > 0) { if (cmds != 0) { _gfeed_md_draw(cmds, x, cy, base, line_start, len, base_role); } cy = cy + GFEED_LH; }
+    if (cols > 0) { if ((cmds != 0) && (gd_culled(cy, GFEED_LH) == 0)) { _gfeed_md_draw(cmds, x, cy, base, line_start, len, base_role); } cy = cy + GFEED_LH; }
     return cy;
 }
 
 # _gfeed_md_code_line: one fenced-code interior line — a full-width subtle background + the code in ROLE_BLUE
 # monospace, slightly inset, un-wrapped (long lines clip to the feed region). No per-token highlight yet (0.36.x).
 fn _gfeed_md_code_line(cmds, x, cy, avail, base, len) {
-    if (cmds != 0) {
+    if ((cmds != 0) && (gd_culled(cy, GFEED_LH) == 0)) {
         gd_push_rect(cmds, x, cy, avail, GFEED_LH, _md_code_bg());
         var cps = _md_cp_count(base, 0, len);
         if (cps > 0) { gd_push_text(cmds, x + GR_GLYPH_W, cy, _ui_rgb(ROLE_BLUE), base, cps); }
@@ -364,6 +364,7 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
     var ls = 0;
     var done = 0;
     while (done == 0) {
+        if ((cmds != 0) && (gd_below(cy) == 1)) { return cy; }   # 0.53.2: the rest is under the view; a caller on a band holds the height
         var le = ls;
         while ((load8(text + le) != 0) && (load8(text + le) != 10)) { le = le + 1; }
         var llen = le - ls;
@@ -405,6 +406,35 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
         }
     }
     return cy;
+}
+
+# _gfeed_msg_md: message i's reply at (x, cy), returning the y below it. Its height is measured once per width
+# (session_history_layout), and the draw runs only when it meets the view, so a long reply costs a frame what is on
+# screen. Through 0.53.1 every frame walked every reply twice; a 300 KB reply held an idle window at half a core.
+fn _gfeed_msg_md(cmds, x, cy, avail, i, content) {
+    var h = session_history_layout(i, avail);
+    if (h < 0) {
+        h = _gfeed_md(0, x, 0, avail, content);
+        session_history_layout_set(i, avail, h);
+    }
+    if ((cmds != 0) && (gd_culled(cy, h) == 0)) { _gfeed_md(cmds, x, cy, avail, content); }
+    return cy + h;
+}
+# _gfeed_live_md: the same for the reply still streaming: its height holds for as long as its length and the width do,
+# which is the two passes of one frame (no SSE frame lands between them).
+var _gfeed_live_n = 0;
+var _gfeed_live_w = 0;
+var _gfeed_live_h = 0;
+fn _gfeed_live_md(cmds, x, cy, avail) {
+    var text = hoosh_last_reply();
+    var n = hoosh_last_reply_len();
+    if ((n != _gfeed_live_n) || (avail != _gfeed_live_w)) {
+        _gfeed_live_h = _gfeed_md(0, x, 0, avail, text);
+        _gfeed_live_n = n;
+        _gfeed_live_w = avail;
+    }
+    if ((cmds != 0) && (gd_culled(cy, _gfeed_live_h) == 0)) { _gfeed_md(cmds, x, cy, avail, text); }
+    return cy + _gfeed_live_h;
 }
 
 # _gfeed_greeting: the empty-state opening screen (no conversation yet). Honest — the app's greeting, not a
@@ -514,6 +544,13 @@ fn greason_build_msg(cmds, x, cy, avail, i) {
 # after the last message (incl. its trailing GFEED_GAP). A user message gets a `>` accent marker + FG text; an
 # agent message is plain MUTED body. cmds == 0 => MEASURE ONLY (no draw), the SAME wrap/layout code as the draw
 # pass — so the measured total height is exactly the drawn height (the bottom-anchor relies on this).
+# _gfeed_prompt: the operator's line for the turn in flight or the turn that left no trace in the history, drawn as the
+# history draws a user message. Returns the y below it.
+fn _gfeed_prompt(cmds, xbase, cy, avail) {
+    if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
+    cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), gturn_text());
+    return cy + GFEED_GAP;
+}
 fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     var cy = cy0;
     var i = 0;
@@ -545,7 +582,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             # 0.49.0: a resumed reply draws its persisted citations as one row (no verdict — not in the store).
             var mcy = gmem_build_msg(cmds, xbase, cy, avail, i);
             if (mcy > cy) { cy = mcy + GFEED_GAP; }
-            cy = _gfeed_md(cmds, xbase, cy, avail, content);   # 0.36.0: structural markdown (was flat _gfeed_para)
+            cy = _gfeed_msg_md(cmds, xbase, cy, avail, i, content);   # 0.36.0: structural markdown (was flat _gfeed_para)
         }
         cy = cy + GFEED_GAP;
         i = i + 1;
@@ -557,11 +594,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     # only until the turn appends the message itself (0.52.1: gturn_prompt_landed — from then the loop above draws
     # it, and the echo drew the operator's line twice for the whole stream).
     if (gturn_active() == 1) {
-        if (gturn_prompt_landed() == 0) {
-            if (cmds != 0) { gd_push_text(cmds, xbase, cy, _ui_rgb(ROLE_ACCENT), "{(o>", 0); }   # the owl brand glyph
-            cy = _gfeed_para(cmds, xbase + 40, cy, avail - 40, _gfeed_ink(ROLE_FG), gturn_text());
-            cy = cy + GFEED_GAP;
-        }
+        if (gturn_prompt_landed() == 0) { cy = _gfeed_prompt(cmds, xbase, cy, avail); }
         # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
         # renders ABOVE the cards and partial answer. No reasoning text -> _gfeed_reason returns cy unchanged (no gap).
         var _rcy = _gfeed_reason(cmds, xbase, cy, avail);
@@ -580,9 +613,10 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         # when _hoosh_acc is reset — fall back to the static "working" mark. Measure/draw read _hoosh_acc at the same
         # instant (no SSE frame lands between the two passes), so the bottom-anchor parity holds.
         if (hoosh_last_reply_len() > 0) {
-            cy = _gfeed_md(cmds, xbase, cy, avail, hoosh_last_reply());   # 0.36.0: structural markdown, degrades on the incomplete partial
+            cy = _gfeed_live_md(cmds, xbase, cy, avail);          # 0.36.0: structural markdown, degrades on the incomplete partial
             cy = cy + GFEED_GAP;
         } else {
+            _gfeed_live_n = 0;                                    # 0.53.2: the next partial is measured afresh, even at the last one's length
             if (cmds != 0) {
                 gd_push_rect(cmds, xbase, cy + 4, 8, 8, _ui_rgb(ROLE_ACCENT));                   # a working mark (static)
                 gd_push_text(cmds, xbase + 16, cy, _ui_rgb(ROLE_MUTED), "thoth is working...", 0);
@@ -590,6 +624,9 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
             cy = cy + GFEED_LH + GFEED_GAP;
         }
     }
+    # 0.53.2: a turn that ended with no text took its prompt out of the history, so the notice below would stand under the
+    # previous answer and name nothing: the prompt draws above it, for as long as the notice stands.
+    if ((gturn_active() == 0) && (gturn_orphan() == 1)) { cy = _gfeed_prompt(cmds, xbase, cy, avail); }
     # a turn that appended no assistant reply (0.30.4): an honest transient notice — the window renders only
     # session_history, so a failed turn (unreachable hoosh, transport/http error) would otherwise vanish silently.
     if (gturn_failed() == 1) {
@@ -703,7 +740,9 @@ fn gfeed_build(cmds, x, y, w, h) {
         var maxsc = (y + GFEED_GAP) - base;                      # room to scroll up (0 when the flow fits)
         if (maxsc < 0) { maxsc = 0; }
         gscroll_clamp(maxsc);                                    # keep the scroll offset within the overflow
+        gd_cull_set(y, y + h);                                   # 0.53.2: only what the region shows goes on the list
         endy = _gfeed_flow(cmds, xbase, base + gscroll(), avail, n);   # draw, bottom-anchored + scrolled up
+        gd_cull_clear();
         if (gscroll() > 0) {                                     # scrolled off the bottom -> an honest "more below" hint
             var hy = y + h - GFEED_LH;
             gd_push_rect(cmds, x, hy - 2, w, GFEED_LH + 2, _gframe_bg());
@@ -805,7 +844,7 @@ fn gpointer_click(px, py, button) {
         var ci = gconv_row_at(py);
         if (ci < 0) { return 0; }
         _gconv_sel = ci; gconv_sel_clamp();
-        if (ci != conv_active()) { conv_switch(ci); gscroll_reset(); }   # the active row: select + focus only
+        if (ci != conv_active()) { conv_switch(ci); gturn_notices_clear(); gscroll_reset(); }   # the active row: select + focus only
         _gfocus = GFOCUS_COMPOSER;
         return 1;
     }

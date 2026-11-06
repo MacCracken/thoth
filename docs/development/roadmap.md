@@ -116,32 +116,19 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 13 → 0.53.2
+### Repair batch 14 → 0.53.3
 
-Two window defects, both older than 0.52.8, found while driving it live, and four items the cyrius refreshes turned up.
-The design questions awaiting a ruling sit in [`gap-review.md`](gap-review.md). thoth is on cyrius **6.7.18**, the
-newest release, with every vendored bundle at its newest tag.
+Two items found while keeping a long reply whole. The design questions awaiting a ruling sit in
+[`gap-review.md`](gap-review.md). thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its
+newest tag.
 
-1. **A command card clips each line at its width, with no wrap and no mark** (`gcmd_build`, since 0.46.0). A long
-   `/run` output line loses its tail, and so does a refusal's reason when stray bytes push it right. The TUI wraps
-   the same lines.
-2. **A turn that ends with no text drops its prompt from the window's feed** (the agent pops it from the history,
-   so a refused prompt is not resent). The notice then stands under the previous answer and names no prompt. The
-   TUI keeps the typed line above its note.
-3. **A reply past 64 KiB is cut with no mark** (`HOOSH_ACC_CAP`, `src/hoosh.cyr:54`). That buffer is what history,
-   `/save`, one-shot stdout, `--json` and a delegated child's answer read, and `[hoosh].max_tokens` defaults to 64,000
-   tokens, several times what it holds. Measured with ordinary small deltas: 100 KB of reply reaches stdout as 65,536
-   bytes, on 0.52.8 too. It needs a growable buffer or a stated cut, not a larger number (sandhi's rule: a cap is
-   allocated up front).
-4. **`scripts/build.sh`'s output-size skip is stale.** Its `SIZE_GAP` branch still treats `output too large` as a known
-   skip and its comment says the aarch64 lane caps at 16 MiB; the compiler's output cap is 1 GiB now. A symbol that
-   excuses a failure should not outlive its gap: the branch goes, so a real overflow fails the lane.
-5. **`daimon_build_call` parses on a worker thread** (`daimon_fetch_into`, the parallel executor), though that function's
-   own comment says bayan's parser is not thread-safe there. A refusal under a race would turn real arguments into
-   `{}`. Phase 1 now validates each call's arguments on the main thread, so the worker's parse is redundant and can go.
-   Not reproduced; the comment dates from bayan 1.0.3 and needs re-measuring against 1.11.1.
-6. **`gate_name_fit`'s 163-byte cap.** t-ron 2.2.3 fixed what it guarded: its audit writers size by escaped length and
-   escape, and it denies `"` and `\` itself. Whether thoth keeps the bound or lifts it to t-ron's own 256 is open.
+1. **The reasoning accumulator keeps a silent 64 KiB cut** (`REASON_ACC_CAP`, `MSG_REASON_CAP`). Past that a thinking fold
+   and its session record stop with no mark. It needs what the reply got: growth to a ceiling that says so, with the session
+   file's frame and the window's fold checked against it.
+2. **Each stream frame's parse lands on the never-freeing heap** (`bayan_json_v_parse_buf` in `_hoosh_sse_cb` and
+   `_agent_sse_cb`). Measured: peak RSS 13.6 MB for a 1 KB reply, 126 MB for 1 MB, about 1.8 KB a frame, and it adds up
+   across a session. `bayan_json_v_parse_buf_a` on an arena reset per frame is the shape, as long as nothing a frame
+   folds keeps a pointer into the tree.
 
 ### Next steps — follow-ups awaiting the maintainer
 
@@ -261,7 +248,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** repair batch 13's six items.
+**Scheduled above:** repair batch 14's two items.
 
 **Candidates above:** the pointer path Linux-Wayland only (F8).
 
