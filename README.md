@@ -84,7 +84,7 @@ Memory layers the same way. What grants the model authority, bounds its spend or
 (`[shell].allow`, `[project].read_roots`, `[budget]`, `[pricing]`, `[hoosh].reasoning` / `max_tokens`, `[guard]`,
 `[redact]`, `[subagent]`) the local layer may only *tighten*, while `[shell].deny` unions and the authority keys are
 global-only ([ADR-0021](docs/adr/0021-authority-keys-are-global-only.md)) — authority never accumulates from the
-less-trusted side. Multi-target (re-measured at 0.53.3 on the 6.7.18 pin; the AGNOS ring-3 run last at 0.52.6): x86_64 Linux ships;
+less-trusted side. Multi-target (re-measured at 0.53.3 on the 6.7.18 pin, the AGNOS ring-3 run included): x86_64 Linux ships;
 aarch64 Linux builds, all five test suites and the desktop window verified under `qemu-aarch64`; **AGNOS builds *and runs*** — the cross-built ELF loads and executes in ring 3 on
 the real kernel under QEMU (`./scripts/agnos-run.sh`); **macOS builds and runs** on Apple Silicon at the line tier
 (no BSD termios peer yet, so no rich TUI; the desktop window is Wayland, on Linux), with its full test suite passing natively; Windows is staged on POSIX-only paths in two vendored bundles (t-ron's signal half and parts of sit), none of which thoth

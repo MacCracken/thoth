@@ -22,14 +22,16 @@
 # the multi-MB ELF streams off ext2 via exec-from-disk, elf_load maps it, ring-3
 # code reaches write(1), and the process exits cleanly without faulting the box.
 #
-# ⚠ WHAT IT DOES NOT PROVE. v1.0 gate 2's criterion is "the spine native and a
+# ⚠ WHAT IT DOES NOT PROVE. v1.0 gate 1's criterion is "the spine native and a
 # consumer green end to end". A `--version` print-and-exit exercises NEITHER: no
 # hoosh, no daimon, no turn. This is rung 1 of that gate — necessary, not
-# sufficient. Do not report a PASS here as gate 2 cleared. See docs/development/roadmap.md.
+# sufficient. Do not report a PASS here as gate 1 cleared. See docs/development/roadmap.md.
 #
 # Usage:
 #   ./scripts/agnos-run.sh              # build the agnos lane, then run it
 #   ./scripts/agnos-run.sh --no-build   # run whatever is already at build/thoth_agnos
+#   ./scripts/agnos-run.sh --private    # build the selftest kernel in a throwaway copy of the agnos tree; agnos's own
+#                                       # build/ is never touched. Combines with --no-build.
 #   ./scripts/agnos-run.sh --classify LOG   # say whether a serial log's boot reached the kernel (no run)
 #
 # Env:
@@ -72,15 +74,19 @@ boot_reached_kernel() {
 }
 
 DO_BUILD=1
-case "${1:-}" in
-    --no-build) DO_BUILD=0 ;;
-    --classify)
-        [ -f "${2:-}" ] || { echo "usage: $0 --classify SERIAL_LOG" >&2; exit 2; }
-        if why="$(boot_reached_kernel "$2")"; then echo "kernel-ran"; else echo "pre-kernel: $why"; fi
-        exit 0 ;;
-    "")         ;;
-    *) echo "usage: $0 [--no-build | --classify LOG]" >&2; exit 2 ;;
-esac
+PRIVATE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --no-build) DO_BUILD=0 ;;
+        --private)  PRIVATE=1 ;;
+        --classify)
+            [ -f "${2:-}" ] || { echo "usage: $0 --classify SERIAL_LOG" >&2; exit 2; }
+            if why="$(boot_reached_kernel "$2")"; then echo "kernel-ran"; else echo "pre-kernel: $why"; fi
+            exit 0 ;;
+        *) echo "usage: $0 [--no-build] [--private] | --classify LOG" >&2; exit 2 ;;
+    esac
+    shift
+done
 
 # The expected console string is thoth's OWN version, read from the single source of
 # truth. A literal here would silently keep passing against a stale binary after a
@@ -109,6 +115,30 @@ if [ ! -f "$ELF" ]; then
     exit 2
 fi
 
+# --private: the hook is a build flag, so a run used to mean replacing the operator's build/agnos and putting it back
+# after. A copy of the tree takes the selftest build instead, under thoth's gitignored build/, and goes with the run.
+# A failed run keeps the copy: the serial log the harness names is inside it.
+if [ "$PRIVATE" -eq 1 ]; then
+    command -v rsync >/dev/null 2>&1 || { echo "SKIP: --private needs rsync — nothing was executed." >&2; exit 2; }
+    SIBLINGS_ROOT="${SIBLINGS_ROOT:-$(cd "$AGNOS_REPO/.." && pwd)}"
+    GNOBOOT_ROOT="${GNOBOOT_ROOT:-$SIBLINGS_ROOT/gnoboot}"
+    export SIBLINGS_ROOT GNOBOOT_ROOT
+    PRIV="$ROOT/build/agnos-private.$$"
+    KEEP_PRIV=0
+    trap '[ "$KEEP_PRIV" -eq 1 ] || rm -rf "$PRIV"' EXIT
+    echo "==> building a selftest kernel in a private copy of $AGNOS_REPO"
+    mkdir -p "$PRIV/build"
+    rsync -a --exclude build --exclude .git "$AGNOS_REPO/" "$PRIV/" || { echo "SKIP: could not copy $AGNOS_REPO — nothing was executed." >&2; exit 2; }
+    if ! ( cd "$PRIV" && BASESTACK_SELFTEST=1 sh scripts/build.sh ) > "$PRIV/build/selftest-build.log" 2>&1; then
+        tail -5 "$PRIV/build/selftest-build.log" >&2
+        echo "SKIP: the selftest kernel did not build — nothing was executed." >&2
+        exit 2
+    fi
+    AGNOS_REPO="$PRIV"
+    HARNESS="$AGNOS_REPO/scripts/smoke/basestack-run-smoke.sh"
+    KERNEL="$AGNOS_REPO/build/agnos"
+fi
+
 # The kernel must carry the BASESTACK_SELFTEST hook; without it the box boots to
 # agnsh and never execs /bin/probe, so the harness would report a FAIL that is
 # about the KERNEL's build flags and not about thoth. Detect it and say which.
@@ -122,7 +152,7 @@ if [ ! -f "$KERNEL" ]; then
 fi
 if ! strings "$KERNEL" 2>/dev/null | grep -q 'basestack selftest'; then
     echo "SKIP: $KERNEL was built WITHOUT the selftest hook — nothing was executed." >&2
-    miss "rebuild it:  BASESTACK_SELFTEST=1 sh scripts/build.sh   (in $AGNOS_REPO)"
+    miss "rebuild it:  BASESTACK_SELFTEST=1 sh scripts/build.sh   (in $AGNOS_REPO), or pass --private"
     miss "without the hook the box boots to agnsh and never execs /bin/probe, so the"
     miss "harness would report a FAIL about the kernel's flags, not about thoth."
     exit 2
@@ -150,9 +180,10 @@ done
 echo ""
 if [ "$rc" -eq 0 ]; then
     echo "agnos-run: PASS — thoth $VERSION loads and runs in ring 3 on AGNOS."
-    echo "  This is v1.0 gate 2 RUNG 1 only. Gate 2 wants the spine native and a"
+    echo "  This is v1.0 gate 1 RUNG 1 only. Gate 1 wants the spine native and a"
     echo "  consumer green end to end; a --version print exercises neither."
 else
     echo "agnos-run: FAIL — see the serial log named above."
+    [ "$PRIVATE" -eq 1 ] && KEEP_PRIV=1
 fi
 exit "$rc"

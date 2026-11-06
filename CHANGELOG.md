@@ -2,6 +2,38 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+**The roadmap re-cut, and what was checked to do it.** No change to thoth's source. Every open item now has a place from 0.54.x through 0.62.x, behind a *Not verified*
+table of seven proofs, and [`docs/guides/verification-pass.md`](docs/guides/verification-pass.md) holds the commands.
+
+### Added
+
+- **`scripts/agnos-run.sh --private`.** It builds the selftest kernel in a throwaway copy of the agnos tree, so a ring-3 run no longer means replacing the operator's kernel and putting
+  it back. A failed run keeps the copy, because the serial log is inside it.
+- **`scripts/live/hostile-wire.py`.** The 2026-11-05 audit's wire kit, checked in so it can run on the other lanes: 151 malformed and hostile gateway responses against a real `thoth -p`.
+- **`scripts/live/stubhoosh.py`:** `curly` (a command the kit cannot type) and `read: <path>` (one `read_file` call).
+
+### Fixed
+
+- `agnos-run.sh` called gate 1 "gate 2" in its header and in its PASS line.
+
+### Changed
+
+- **The roadmap.** Batch 15 is split across 0.54.0–0.54.2 with the window's network wait first, the darshana private call is scheduled, the gap-review rulings are a batch of their own, and
+  F8–F14 are pinned in order, F11 ahead of F10 now that its only gate is a ruling. A pin is a place in the order: an arc whose gate is shut gives up its number.
+- **Waiting rows re-read against today's repos.** Three claims were false: `agnos-run.sh` does not stage the spine, so rung 2 needs a runner; a current `hoosh_agnos` was not the blocker, since
+  `cyrius build --agnos` makes one in two seconds; and `fmt --check` reports nothing now.
+- **`gap-review.md` and its HTML twin** lose the closed tool-pin gap, the budget note and the narration of past questions, and renumber. Gap N in the roadmap follows.
+
+### Verified
+
+- **Ring 3:** thoth 0.53.3 and hoosh 2.10.0 each load, print their version and exit cleanly on agnos 1.57.17 with gnoboot 0.9.0.
+- **T-7 on real APFS:** `read_file` refuses `.THOTH/note.txt` and `.ThOtH/note.txt`, while an ordinary file reads.
+- **G-1 on screen:** the confirm card draws curly quotes and a dash as boxes, never as straight quotes.
+- **New hosts:** a cross-built `thoth --version` runs on a Raspberry Pi, and a PE with the lane's nine vendored names defined runs on Windows 11.
+- **`hostile-wire.py`:** 151 scenarios, none flagged.
+
 ## [0.53.3] - 2026-11-05
 
 **Repair batch 14, and a P(-1) audit, hardening and optimization sweep.** Six auditors filed 69 findings against 0.53.2, 10 of

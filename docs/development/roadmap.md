@@ -58,24 +58,24 @@ string from `VERSION`, so it cannot pass on a stale binary.
 Three gates remain, in dependency order.
 
 1. **At least one downstream consumer green on AGNOS (end-to-end).** Two rungs remain above the
-   ring-3 smoke:
+   ring-3 smoke, and both are scheduled as [0.55.x](#055x--a-real-turn-on-agnos):
    - **Rung 2 — a real turn against the spine, staged on the same image.** The rung that satisfies
-     the gate's wording. Needs a current `hoosh_agnos` (the one on disk is 2.4.11, 2026-07-01; hoosh
-     2.7.1 has no agnos build); `daimon-agnos` 2.4.3 is ready beside it, and `scripts/agnos-run.sh`
-     is ready to stage both.
+     the gate's wording. hoosh and daimon both build `--agnos`; what is missing is a runner, because
+     the smoke stages one `/bin/probe` and execs `--version`.
    - **Rung 3 — the interactive TUI over agnsh.** Least urgent, and gated on the floor: AGNOS has no
-     raw terminal (no termios; console stdin is cooked and drops every key without an ASCII value),
-     so the TUI takes the line REPL there.
+     raw terminal (no termios; every console fd reads the cooked line, which drops every key without
+     an ASCII value), so the TUI takes the line REPL there.
    **Status: blocking · owner: thoth.**
 
 2. **Security review pass (process gate) — the external sign-off.** What remains is whatever "pass"
    means to someone who is not the author. Its reading list: the fail-closed posture and the t-ron
-   choke point (the internal audit of record is [`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md)),
+   choke point (the internal audits of record are [`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md)
+   and [`../audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md)),
    the parallel executor's concurrency, the GUI's authorization path — the `ask_user` modal answering
    `confirm` and the session grant it can record
    ([ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)) — and the durable
-   tool-pin store ([ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)).
-   **Status: blocking · owner: TBD.**
+   tool-pin store ([ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)). It closes
+   the 0.x line, after the last arc, so the reviewer reads what ships. **Status: blocking · owner: TBD.**
 
 3. **1.0 versioning scheme decided (deferred ADR).** thoth stays SemVer `0.x` through pre-1.0
    by design ([ADR-0004](../adr/0004-semver-pre-release.md)). Whether 1.0 adopts CalVer (the
@@ -103,8 +103,8 @@ unsure, patch.
   grouped into a numbered batch and shipped together as the next patch of the current minor. A
   batch is ordered by priority; the top of the next batch is the next thing to build. Nothing in
   a repair batch adds a capability.
-- **Minors are feature arcs.** The next decided feature arc earns `0.54.0`. A minor is never a sweep
-  of small things — those are patches.
+- **Minors are feature arcs.** Each arc in the map below is one minor. A minor is never a sweep of small
+  things — those are patches.
 - **Upstream repairs re-vendor as their own patch** the release after the dependency ships, each
   with a line-anchored needle in `tests/cases/vendor.cyr` ([`../doc-health.md`](../doc-health.md)
   lesson 1: a documented residual is a claim with an expiry date — every waiting item below names
@@ -112,143 +112,189 @@ unsure, patch.
 
 ## Scheduled work
 
-> Repair batches are pinned. Feature arcs are listed as candidates and stay unpinned until one is
-> decided — the pin lands here with the decision. Everything *identified* but not committed lives in
-> [`gap-review.md`](gap-review.md).
+> **The order below is the plan.** Each minor is one arc and its cuts are patches. A pin is a place in the order, not a
+> promise that a gate opens: when an arc's turn comes and its gate is still shut, the next open arc takes the number and the
+> rest move up. Everything *identified* but not committed lives in [`gap-review.md`](gap-review.md).
 
-### Repair batch 15 → 0.53.4
+| Version | Arc | Gate |
+|---|---|---|
+| none | [**Not verified**](#not-verified--go-through-these-first): seven proofs owed | none; goes first |
+| 0.54.x | [**The live wait**](#054x--the-live-wait-then-the-audits-remainder), then the audit's remainder | none for the wait; rulings for the last batch |
+| 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | a runner; the floor for rung 3 |
+| 0.56.x | [**F8 — the AGNOS window**](#056x--f8-the-agnos-window) | a stable setu contract, a waitable channel |
+| 0.57.x | [**F9 — untrusted reads through the subagent context**](#057x--f9-untrusted-reads-through-the-subagent-context) | ruling: gap-review question 2 |
+| 0.58.x | [**F11 — git write operations through sit**](#058x--f11-git-write-operations-through-sit) | ruling: question 3 |
+| 0.59.x | [**F10 — image input**](#059x--f10-image-input) | hoosh's content parts |
+| 0.60.x | [**F12 — OS-enforced sandboxing and network egress**](#060x--f12-os-enforced-sandboxing-and-network-egress) | ruling: question 1, in kavach |
+| 0.61.x | [**F13 — ACP server mode**](#061x--f13-acp-server-mode) | none |
+| 0.62.x | [**F14 — OTLP export**](#062x--f14-otlp-export-of-the-audit-trail), then the v1.0 gates | none |
 
-What the [2026-11-05 audit](../audit/2026-11-05-audit.md) left, with the reason on each. The design questions awaiting a ruling sit
-in [`gap-review.md`](gap-review.md). thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its newest tag.
+### Not verified — go through these first
 
-1. **The window is dead during a silent network wait** (G-6, M-9), a streaming turn's first token included: no frames, Esc ignored, the
-   compositor's ping unanswered, and a hung gateway blocks the first frame. Measured: Esc at 1.5 s had no effect until the
-   wait ended. It takes a transport that returns between reads, for every POST.
-2. **Each window rebuild rescans every line of a long reply** (M-10). A sparse line index. 5.3 ms at 300 KB today.
-3. **SIGTERM leaves the terminal raw** (S-11). A handler or a signalfd in the input loop.
-4. **The TUI paints a frame in hundreds of syscalls** (M-5). A batched frame; the prototype needed a darshana change.
-5. **The composer has no long-line scroll and its caret is approximate** (G-9).
-6. **`git_probe` is slow on large trees and runs at startup** (P-10, M-3): 0.58 s a turn on this tree and 166 KB of heap a call, 2.6 MB on a
-   3.8k-file one. Move the TUI's startup probe after the first frame. The rest is sit's: see the waiting table.
-7. **Ctrl-C in line-mode `/run` reaches thoth** (P-11). SIGINT and SIGQUIT ignored around the wait, with the child's default restored
+What thoth claims without having run it where the claim lives. This has no version of its own: each row is run, what it finds joins
+the next cut, and the row leaves this table when it passes. Commands are in
+[`../guides/verification-pass.md`](../guides/verification-pass.md).
+
+| ID | Not yet proven | Where |
+|---|---|---|
+| V-1 | **The real spine.** W-6 (a blocking round's and a delegated child's tool pairing) and W-10 (invalid UTF-8 mapped to U+FFFD) were checked at a strict parser, not a provider. hoosh 2.10.0 and daimon 2.5.3 have not met a live thoth, nor have mneme recall's T-3 controls and `memory_write`'s prompt. | This host: `scripts/stack.sh`, a provider key |
+| V-2 | **The project map's effect.** `list_dir` calls per turn with `[project].map` on and off. The map costs bytes every round and its benefit has never been measured. | The same session as V-1 |
+| V-3 | **A large repository.** The largest tree tried has 3.8k files: `git_probe`, `search`, the map and `/tree` at 100k are unmeasured, and so is a long session's save on disk. | This host: a generated tree |
+| V-4 | **aarch64 on iron.** Every aarch64 suite has run under `qemu-aarch64`. A cross-built `thoth --version` runs on the Pi; the suites have not. | The Pi |
+| V-5 | **macOS under attack.** The 2026-11-05 audit attacked the Linux lanes only. macOS ran the regression suites, not the hostile wire kit, the capture's attacks or the store's. | The Mac: `scripts/live/hostile-wire.py` |
+| V-6 | **Windows past `--version`.** With the lane's nine names defined, a full PE links and prints its version on Windows 11. Nothing else has run there: the capture and its `_shell_tmp_buf`, `/run`, a turn, the read jail. | The Windows host |
+| V-7 | **Six files no auditor read:** `src/mpick.cyr`, `src/toolpin.cyr`'s store, `install.sh`, `scripts/live/wlkit.py`, `scripts/live/pngtool.py`, `scripts/gen-splash.sh`. | A read, with a repro for each finding |
+
+### 0.54.x — The live wait, then the audit's remainder
+
+Batch 15 is split by size, so the largest item opens the minor. Its IDs are the
+[2026-11-05 audit](../audit/2026-11-05-audit.md)'s. thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its newest tag.
+
+**0.54.0 — The window stays alive through a network wait** (G-6, M-9). The new capability this minor is named for. Today the window is
+dead during a silent network wait, a streaming turn's first token included: no frames, Esc ignored, the compositor's ping unanswered, and
+a hung gateway blocks the first frame. Measured: Esc at 1.5 s had no effect until the wait ended. It takes a transport that returns between
+reads, for every POST. It also closes the network half of *What a stop cannot reach* below.
+
+**0.54.1 — Repair batch 15: the terminal and the process**
+
+1. **SIGTERM leaves the terminal raw** (S-11). A handler or a signalfd in the input loop.
+2. ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then sets VMIN and VTIME to 0 for its non-blocking
+   Esc poll. darshana's ADR 0003 freezes only its public surface, so any darshana release may rename or reshape it, and the next
+   `scripts/sync-darshana.sh` would carry that in. The public `tty_raw_nonblock(fd)` exists, restored by `tty_cooked()`. It is not a one-word
+   swap: `intr_arm` keeps a private termios copy so it does not touch darshana's single raw slot, so the move means proving that bracket
+   against the post-turn `tty_raw`, live.
+3. **Ctrl-C in line-mode `/run` reaches thoth** (P-11). SIGINT and SIGQUIT ignored around the wait, with the child's default restored
    before exec.
-8. **Release rebuilds what CI tested** (P-8). Upload the CI binary and publish that one.
+4. **`git_probe` is slow on large trees and runs at startup** (P-10, M-3): 0.58 s a turn on this tree and 166 KB of heap a call, 2.6 MB on a
+   3.8k-file one. Move the TUI's startup probe after the first frame. The rest is sit's: see the waiting table.
+5. **Release rebuilds what CI tested** (P-8). Upload the CI binary and publish that one.
 
-### Next steps — follow-ups awaiting the maintainer
+**0.54.2 — Repair batch 16: long replies and the composer**
 
-Ordered by what unblocks the most. None is pinned to a version until it is decided.
+1. **Each window rebuild rescans every line of a long reply** (M-10). A sparse line index. 5.3 ms at 300 KB today.
+2. **The composer has no long-line scroll and its caret is approximate** (G-9).
+3. **The TUI paints a frame in hundreds of syscalls** (M-5). A batched frame; the prototype needed a darshana change, so that release
+   comes first and re-vendors as its own patch.
 
-1. **The AGNOS follow-up** (deferred together, by the maintainer's call). A current `hoosh_agnos` build (hoosh has
-   none in CI or `scripts/`; the one on disk downstream is 2.4.11) for gate 1 rung 2, and the ring-3 smoke re-run
-   that each release carries (`scripts/agnos-run.sh`; its stamp lives in `state.md`'s Targets row).
-2. **Pricing a turn from the gateway** (gap-review question 6) — whether the tally may use hoosh's per-model price
-   or its per-response `cost_micro_usd` when `[pricing]` names no rate. Today the picker shows the gateway's price
-   and the tally ignores it.
-3. **secureyeoman's model choice** — left until its port is further along, by the maintainer's call: spot fixes are
-   not worth making first. It keeps its own catalog, pricing and context tables (TypeScript `model-registry.ts`,
-   `cost-calculator.ts`, `context-compactor.ts`), plus Rust defaults in `sy-core`. Its `HooshDelegate` falls back to
-   `gpt-4o`, and about a dozen internal tasks hardcode `claude-haiku-3-5-20241022`, which is not an Anthropic id. The
-   port should read hoosh's `/v1/models/catalog` the way thoth does, and its chat surface comes to thoth anyway (see
-   the context note under *Feature arcs*). agnosai and agnostic carry their halves on their own roadmaps: agnosai's
-   B33 (crews choose and attribute models from the catalog) and agnostic's M9 model picker, which waits on B33.
+**0.54.3 — Repair batch 17: the rulings.** Each is small once ruled, and a row leaves if the ruling is no.
+
+1. **A local `[hoosh].timeout_ms`** (gap-review question 4): `0` disables the stall deadline beside a repository-redirected gateway.
+2. **A local `[log].level`** (question 7): a clone can quieten the operator's session log.
+3. **The project map's role** (question 5): whether repository-controlled names belong in a `system` message. V-2 informs it.
+4. **Pricing a turn from the gateway** (question 6): the picker shows the gateway's price and the tally ignores it, so `[budget].max_cost_micro`
+   cannot fire on an unpriced model.
+
+### 0.55.x — A real turn on AGNOS
+
+v1.0 gate 1. thoth and hoosh both print their versions in ring 3; nothing else of the spine's has run there with thoth.
+
+- **0.55.0 — Rung 2.** A runner that stages hoosh, daimon, a config and thoth on one image, starts the two services, gives hoosh a provider
+  (a stub on the host, over QEMU's network) and drives `thoth -p` to a reply on the serial console. `basestack-run-smoke.sh` cannot do it:
+  it stages one `/bin/probe`, and the selftest hook execs `--version`. A runner for AGNOS is AGNOS's domain, so it lands in `agnos/scripts/smoke/`
+  and `scripts/agnos-run.sh` shells out to it, as it does today. `bote-mcp-smoke.sh` is the nearest pattern: a kernel hook preloading a
+  ring-3 program. Whatever the first real turn finds, in thoth or the floor, is the arc's work.
+- **0.55.1 — The AGNOS hostile pass.** With a turn running, the attacks the 2026-11-05 audit ran on Linux: the wire kit, the capture and the
+  stores. It cannot start sooner, because `--version` reaches none of them.
+- **0.55.2 — Rung 3.** **Gate:** the floor. A `#97` terminal channel now carries a window size, so an emulator's terminal end is worth reading as
+  a route that does not need raw console reads.
+
+### 0.56.x — F8: the AGNOS window
+
+The GUI's half of "AGNOS canonical", and the last part of thoth that runs only on Linux. Scope: the window seam behind a backend contract
+(the wait, the buffer, keys, pointer, configure, close), and an AGNOS backend over **setu** — aethersafha's client protocol, consumed as
+`setu/dist/setu.cyr`, never re-implemented. The pattern exists: puka's `src/platform/setu/window_setu.cyr` fills the same `win_*` contract
+thoth's seam mirrors. Off Linux `thoth gui` refuses before any call (`gwl_win_backend_select`, the seam's one switch); an AGNOS backend slots
+in there, with `gwl_win_wait` as its wait.
+
+**Gate — re-read from the source against setu 0.8.13, aethersafha 0.17.7 and agnos 1.57.17, not met:**
+
+- **The contract is not declared stable.** There is no protocol version on the wire (`SETU_HELLO` is defined but aethersafha's handshake
+  refuses anything before `CREATE_SURFACE`), and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
+  present, a per-surface opt-in for pointer motion.
+- **The channel fd cannot be waited on.** `epoll_wait` takes a deadline now but watches signalfd, timerfd and TCP only, so the wait is a
+  non-blocking poll and `sys_pause`, crab's way.
+
+What the backend must honour — aethersafha's written client contract
+([`001-setu-client-contract.md`](https://github.com/MacCracken/aethersafha/blob/main/docs/architecture/001-setu-client-contract.md)):
+`/bin/thoth gui` is a launcher row when `/bin/thoth` exists and `--spawn NAME` starts a registered app at boot, with `HOME` and `PWD` inherited;
+bare F2/F3 are the client's but Ctrl chords stay the compositor's, so thoth's pane toggles need non-chord routes on AGNOS; the largest surface a
+client may attach is 960×540 (a buffer slot is 2 MB without a GPU carve-out), so thoth's 960×600 default does not fit.
+
+### 0.57.x — F9: untrusted reads through the subagent context
+
+Route `@file` / `read_file` / `web_fetch` results through the subagent child context so retrieved text cannot instruct the main thread (gap 3).
+The machinery exists, and it is the largest safety delta thoth can deliver alone. **Gate:** gap-review question 2: a model round per `@file`, and a
+laundered summary is arguably a more persuasive injection vector than raw text. Ships opt-in (`[guard].isolate`) if at all.
+
+### 0.58.x — F11: git write operations through sit
+
+Stage, commit, branch and worktree from the agent, through sit's write surface behind `thoth_git_write` in t-ron (gap 7). It moves the read-only
+boundary. **Gate:** gap-review question 3. It goes ahead of F10 because this ruling is its only gate.
+
+### 0.59.x — F10: image input
+
+A screenshot or an image path as a content part; the GUI can produce one from its own frame (gap 5), which few agents can do. **Gate:** hoosh must
+translate content parts per provider (the waiting table). thoth never translates provider shapes itself.
+
+### 0.60.x — F12: OS-enforced sandboxing and network egress
+
+`shell` and `edit` confined through kavach (gap 1), the largest safety delta overall; last of the safety arcs by blocker, not by value. **Gate:** gap-review
+question 1, kavach's design decision. Its interpreter blocklist is lifted only for a sandbox with a rootfs, so a host shell without one is still refused:
+either a host-exec confinement tier in kavach or a rootfs-shaped `shell` mode in thoth. `[lib.confine]` builds inside thoth. Network egress control (gap 2) is
+decided with it: daimon's and kavach's seam.
+
+### 0.61.x — F13: ACP server mode
+
+Drive thoth from another editor over the Agent Client Protocol (gap 6); `--events` is the one-way half already. **Gate:** none architectural. Big: a second
+front end's worth of surface, for distribution value.
+
+### 0.62.x — F14: OTLP export of the audit trail
+
+Emit the libro chain to a collector under the OpenTelemetry GenAI conventions (gap 4). **Gate:** none; low priority for an interactive TUI.
+
+**Then the v1.0 gates**, on this minor's last patches: a final P(-1) sweep, the external security review (gate 2) and the versioning ADR (gate 3).
+
+### No slot yet
+
+Each waits on a domain that has not been ported, so there is nothing to order: the **bhava** mood loop (the waiting table); **voice / mic** — mic → speech-to-text and
+read-back — by consuming an AGNOS audio/voice domain plus a portable audio-capture substrate, neither of which exists yet.
+
+**Context for the chat arcs.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is being handed to thoth: thoth's TUI + native T3 GUI
+become the canonical AGNOS-family chat/coding front-end. The rule is the same as the rest of the spine — **CONSUME already-built AGNOS domains (mneme, bhava, an
+audio/voice domain), never reinvent them.** SY's enterprise guardrail stack (t-ron is thoth's answer), multi-platform group-chat bridges, and the web-dashboard admin
+stay **out of scope**. Data fields follow **omit-until-present** ([ADR-0010](../adr/0010-data-producer-honest-omit.md)).
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each row carries the version it was last checked against (the floor and bundle rows re-read 2026-11-05 against sit
-1.13.0, t-ron 2.2.4, bote 3.8.15, darshana 1.7.0 and cyrius 6.7.18; the spine rows 2026-10-09 against hoosh 2.8.1,
-daimon 2.4.3, agnos 1.57.10, gnoboot 0.7.2 and bhava 2.0.0). A release re-checks the list; a closed item becomes a
-re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`. Every vendored bundle is at its newest tag. t-ron 2.2.4 was
-tested on bote-core 3.8.9; thoth vendors 3.8.15, and nothing thoth reaches in t-ron calls into bote.
+Each row carries the version it was last checked against, and every row was re-read on 2026-11-05. A release re-checks the list; a closed item becomes a
+re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`. t-ron 2.2.4 was tested on bote-core 3.8.9; thoth vendors 3.8.15, and nothing thoth reaches
+in t-ron calls into bote.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **AGNOS spine builds** | a current `hoosh_agnos` (on disk: 2.4.11, 2026-07-01; hoosh 2.8.1 has no agnos build in its CI or scripts) — gate 1 rung 2; `daimon-agnos` 2.4.3 is ready beside it. Deferred with the AGNOS follow-up (next steps, item 1) | hoosh **2.8.1** · daimon 2.4.3 | `scripts/agnos-run.sh` is ready to stage them |
-| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:12`; daimon's roadmap puts caller auth at 2.5.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:134-142`) | daimon **2.4.3** | done — thoth's own pin store (ADR-0022) is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
-| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:490`) and a plain `{role,content}` passes through verbatim (`:506`), so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.8.1** | none yet — thoth sends text only |
-| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.8.1** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
-| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.8.1** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
-| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.8.1** | none — thoth prices from `[pricing]`, which has no cache rate either |
+| **hoosh** | an `--agnos` lane: nothing in its CI or scripts builds one, so the `hoosh_agnos` on disk is 2.4.11. `cyrius build --agnos src/main.cyr` makes a current one | hoosh **2.10.0** · daimon 2.5.3 | 0.55.0's runner builds its own |
+| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:11`; daimon's roadmap puts caller auth at 2.6.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:133-140`) | daimon **2.5.3** | done — thoth's own pin store (ADR-0022) is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
+| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:543`) and a plain `{role,content}` passes through verbatim, so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.10.0** | none yet — thoth sends text only |
+| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.10.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
+| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.10.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
+| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
 | **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.3 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
-| **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap (P-10, M-3) | sit 1.13.0 | batch 15's item 6 moves what thoth can |
+| **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap (P-10, M-3) | sit 1.13.0 | batch 15 moves what thoth can |
 | **sakshi** | no mode parameter on its output file | cyrius 6.7.18 | `_log_open_safe` creates the file first |
+| **bayan** | an unterminated array in a config swallows the lines after it | cyrius 6.7.18 | none: that direction fails closed |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body`, `commit_tree_hex` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.13.0's `[lib.read]` still defines `cmd_reset` and leaves four unresolved (the three, and `commit_tree_hex`, all unreachable); bote 3.8.15 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.7.0** (vendored 1.7.0) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
-| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and backslash and drive-letter paths in the jail |
+| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and backslash and drive-letter paths in the jail. V-6 runs what can run before then |
 | **cyrius (floor)** | `lib/process_win.cyr:354`: `cmd.exe` is found by a search that takes in the cwd, so a planted one would run. The Windows lane is closed by the row above | cyrius 6.7.18 | none until the lane opens |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:610` and AGNOS `syscalls_x86_64_agnos.cyr:1048`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.18** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
-| **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.9) | degrades honestly; a candidate filing if the ABI gains a mode channel |
-| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:989`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry, and firmware events between the two calls make the smoke's boot intermittent (up to 2 of 3 boots have died before the kernel). The smoke stages `gnoboot/build/BOOTX64.EFI` (built 2026-09-11, before the 0.7.2 commits; its banner still reads v0.7.1) | gnoboot **0.7.2** | done — `scripts/agnos-run.sh` classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
+| **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | agnos **1.57.17** | degrades honestly; a candidate filing if the ABI gains a mode channel |
+| **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:1107`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry. The map is refreshed just before the call, which narrows the window and does not close it | gnoboot **0.9.0** | done — `scripts/agnos-run.sh` classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
+| **secureyeoman** | its model choice, left until its port is further along, by the maintainer's call: spot fixes are not worth making first. It keeps its own catalog, pricing and context tables (TypeScript `model-registry.ts`, `cost-calculator.ts`, `context-compactor.ts`) plus Rust defaults in `sy-core`, its `HooshDelegate` falls back to `gpt-4o`, and about a dozen internal tasks hardcode `claude-haiku-3-5-20241022`, which is not an Anthropic id. The port should read hoosh's `/v1/models/catalog` the way thoth does. agnosai's B33 and agnostic's M9 model picker carry their halves on their own roadmaps | secureyeoman | none: its chat surface comes to thoth anyway |
 
 **The Windows lane has no architectural half left to surface:** the raw socket path left `lib/sandhi.cyr` and the
 epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps the permanent names as a tripwire.
-
-### Feature arcs → minors (0.54.0 and on) — candidates, unpinned until decided
-
-> **Context.** SecureYeoman's chat surface — its TUI *and* the chat pane of its web dashboard — is
-> being handed to thoth: thoth's TUI + native T3 GUI become the canonical AGNOS-family chat/coding
-> front-end. The rule is the same as the rest of the spine — **CONSUME already-built AGNOS domains
-> (mneme, bhava, an audio/voice domain), never reinvent them.** SY's enterprise guardrail stack (t-ron
-> is thoth's answer), multi-platform group-chat bridges, and the web-dashboard admin stay **out of
-> scope**. Data fields follow **omit-until-present** ([ADR-0010](../adr/0010-data-producer-honest-omit.md)).
-
-Recommended order, with the reason for the place. Each is ONE minor; its cuts are patches.
-
-- **F8 — The AGNOS window backend for the GUI.** Scope: the window seam behind a backend contract (the wait, the
-  buffer, keys, pointer, configure, close), and an AGNOS backend over **setu** — aethersafha's client protocol, consumed
-  as `setu/dist/setu.cyr` (0.8.9), never re-implemented. The pattern exists: puka's `src/platform/setu/window_setu.cyr`
-  fills the same `win_*` contract thoth's seam mirrors. Off Linux `thoth gui` refuses before any call
-  (`gwl_win_backend_select`, the seam's one switch); an AGNOS backend slots in there, with `gwl_win_wait` as its wait.
-  **Gate — re-read from the source 2026-09-27, not met:**
-  - **The contract is not declared stable.** There is no protocol version on the wire (`SETU_HELLO` is defined but
-    aethersafha's handshake refuses anything before `CREATE_SURFACE`), `ATTACH` went from five arguments to six at
-    setu 0.8.8, and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
-    present, a per-surface opt-in for pointer motion.
-  - **The channel fd cannot be waited on** (`epoll_wait` reports signalfd/timerfd/TCP only — the wait is a
-    non-blocking poll and `sys_pause`, crab's way).
-  What the backend must honour — aethersafha's written client contract
-  ([`001-setu-client-contract.md`](https://github.com/MacCracken/aethersafha/blob/main/docs/architecture/001-setu-client-contract.md)):
-  `/bin/thoth gui` is a launcher row when `/bin/thoth` exists and `--spawn NAME` starts a registered app at boot, with
-  `HOME` and `PWD` inherited; bare F2/F3 are the client's but Ctrl chords stay the compositor's, so thoth's pane
-  toggles need non-chord routes on AGNOS; the largest surface a client may attach is 960×540 (a buffer slot is 2 MB
-  without a GPU carve-out), so thoth's 960×600 default does not fit. **First** in the order: it is the GUI's half of
-  "AGNOS canonical" and the last part of thoth that runs only on Linux.
-- **F9 — Untrusted reads through the subagent context (gap 4).** Route `@file` / `read_file` /
-  `web_fetch` results through the subagent child context so retrieved text cannot instruct the main
-  thread. **Gate:** the maintainer's decision (gap review question 2) — a model round per `@file`, and a
-  laundered summary is arguably a more persuasive injection vector than raw text; ships opt-in
-  (`[guard].isolate`) if at all. **Second** because the machinery exists and it is the largest safety
-  delta thoth can deliver alone; kept behind a decision, not a wiring job.
-- **F10 — Image input (gap 6).** A screenshot or an image path as a content part; the GUI can
-  produce one from its own frame. **Gate:** hoosh must translate content parts per provider (the
-  waiting row — `provider.cyr` reads `content` as a string; the `vision` bit in `metadata.cyr` is
-  there). **Third**: real value (the GUI is one of the few agents that can both take and read a
-  screenshot) but hoosh first — thoth never translates provider shapes itself.
-- **F11 — Git write operations through sit (gap 8).** Stage, commit, branch, worktree, from the
-  agent, through sit's write surface behind `thoth_git_write` in t-ron. **Gate:** the maintainer's
-  yes (gap review question 3) and sit's status comparator fix (a writer over a reader that reports
-  phantom changes is not honest). **Fourth**: high value, but it moves the read-only boundary and
-  needs two decisions outside thoth.
-- **F12 — OS-enforced sandboxing of `shell` / `edit` via kavach (gap 1).** **Gate:** kavach's
-  design decision — its interpreter blocklist became conditional on a rootfs at 3.12.1, so a host
-  shell without one is still refused; either a host-exec confinement tier in kavach or a
-  rootfs-shaped `shell` mode in thoth. Kavach is 3.12.5; `[lib.confine]` builds inside thoth.
-  Network egress control (gap 2) is decided with it — daimon's and kavach's seam. **Fifth** by
-  blocker, not by value: it is the largest safety delta, and it cannot start until kavach's owner
-  answers.
-- **F13 — ACP server mode (gap 7).** Drive thoth from another editor over the Agent Client
-  Protocol; `--events` is the one-way half already. **Gate:** none architectural; big (a second
-  front end's worth of surface). **Sixth** — distribution value, after the safety and AGNOS work.
-- **F14 — OTLP export of the audit trail (gap 5).** Emit the libro chain to a collector under the
-  OpenTelemetry GenAI conventions. **Gate:** none; low priority for an interactive TUI. Last.
-- **Measure, not build:** the project map's effect on `list_dir` round-trips was never measured
-  live (no model in the harness). Count `list_dir` calls per turn in `--logs` with `[project].map`
-  on vs off against a real gateway — the 0.44.1 lesson says measure prose before trusting it. A
-  session's task, not a release's.
-- **Gated on another domain's port (recorded, not on a numbered arc):** the **bhava** mood loop
-  (the waiting row); **voice / mic** — mic → speech-to-text and read-back — by consuming an AGNOS
-  audio/voice domain plus a portable audio-capture substrate, neither of which exists yet.
 
 ## Carried defects and degradations (the registry)
 
@@ -256,20 +302,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** repair batch 15's eight items.
-
-**Candidates above:** the pointer path Linux-Wayland only (F8).
-
-**Not yet scheduled** (found by darshana's consumer survey, 2026-10-12):
-
-- ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then overrides
-  VMIN/VTIME to 0 for its non-blocking Esc poll. darshana's ADR 0003 freezes only its public surface; a
-  `_`-prefixed symbol may be renamed or reshaped in any darshana release without a major bump, and the
-  next `scripts/sync-darshana.sh` would carry that in. The vendored 1.7.0 has the public primitive,
-  `tty_raw_nonblock(fd)` (VMIN = 0 / VTIME = 0, restored by `tty_cooked()`), and the private fn is byte-identical
-  to 1.1.2's. It is not a one-word swap: `intr_arm` keeps a private termios copy precisely so it does not touch
-  darshana's single raw slot, so moving means proving that bracket against the post-turn `tty_raw`, live. Until
-  then thoth owns the risk (or its own copy of the mask).
+**Scheduled above:** the 0.54.x batches, with the ⛔ darshana call in batch 15; the pointer path being Linux-Wayland only (F8).
 
 **Degradations, by design or by the floor:**
 
@@ -280,8 +313,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
   capture is one blocking wait inside `lib/process_win.cyr` (it still ends at its deadline; the lane is closed
   anyway); line mode's streaming `/run` gives the child the terminal; and a blocking
   network call — `daimon_invoke`, a non-streaming round, `hoosh_health_probe` — is a socket read with no poll in it,
-  so the window is not pumped during one (bounded by `[hoosh].timeout_ms`). A pumped network wait needs the
-  transport to return between reads.
+  so the window is not pumped during one (bounded by `[hoosh].timeout_ms`). 0.54.0 closes the network half.
 - **The TUI prints `session_start`'s report to the primary screen** — main.cyr fires the hook
   (`:242`) before `tui_loop` raises the alt screen (`:244`), so a hook that printed is visible
   only after exit. Harmless; the window shows the same report as a card.
@@ -325,14 +357,13 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 - **macOS** — builds, runs and passes its native suite at the pin; the T2 TUI does not run there:
   `term_raw` returns -1 (the darshana row), so thoth takes the line tier. When the BSD peer lands,
   `src/term.cyr`'s macOS branch collapses into the forwarder and nothing above it changes.
-- **Windows lane** — blocked outside thoth's authored source, on one thing: **vendored** `VENDOR_GAP`, t-ron's
-  signal half. `scripts/build.sh` keeps the permanent **architectural** names as a tripwire; none surfaces.
+- **Windows lane** — blocked outside thoth's authored source, on nine **vendored** `VENDOR_GAP` names in t-ron and sit
+  (the waiting table). `scripts/build.sh` keeps the permanent **architectural** names as a tripwire; none surfaces.
   The PE capture inherits thoth's environment, so `[hooks]` reports "could not run" there and a
   `pre_tool` denies. `TTY_SIGMASK_WINCH` stays off **every** list on
   purpose — a new raw `tty_*` call in thoth source turns the lane red, the regression tripwire.
 - **The `shell` deny/allow filter is a coarse pre-filter and says so** — a real sandbox is F12
-  (kavach), a feature, not a repair. `cyrius fmt --check`'s 12 complaints are one deliberate
-  convention (aligned trailing-comment continuations) — advisory in thoth, not reformatted.
+  (kavach), a feature, not a repair.
 
 ## Out of scope (for v1.0)
 

@@ -8,6 +8,8 @@ OpenAI-shaped /v1/chat/completions — SSE when the request says "stream": true,
 GET /v1/models (one model: stub-model) and GET /v1/health. The LAST user message picks the reply:
   run: <cmd>     one `shell` tool call running <cmd>; once a tool result follows it, the reply is "done"
   slowrun: <cmd> the same tool call, sent after a 2 s pause (a turn to resize the terminal in)
+  curly          the same tool call with curly quotes and a dash in its command (the kit cannot type them)
+  read: <path>   one `read_file` tool call on <path>; once a result follows it, the reply is "done"
   think: <x>     reasoning_content, then content "answer about <x>"
   slow: <x>      60 short content deltas 0.5 s apart (a stream to stop, or to close the window on)
   md             a markdown reply (heading, bold, inline code, a list, a fenced block, a table, a quote)
@@ -46,6 +48,10 @@ def plan(msgs):
         text = " ".join(p.get("text", "") for p in text if isinstance(p, dict))
     if any(m.get("role") == "tool" for m in tail):
         return "text", None, "done"
+    if text.strip() == "curly":  # a command the kit cannot type: the confirm card must draw these bytes, not ASCII
+        return "tool", None, "echo \u201cquoted\u201d \u2014 done"
+    if "read:" in text:
+        return "readtool", None, text.split("read:", 1)[1].strip()
     if "slowrun:" in text:
         return "slowtool", None, text.split("slowrun:", 1)[1].strip()
     if "run:" in text:
@@ -104,11 +110,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if kind == "slowtool":
             time.sleep(2)
             kind = "tool"
+        tool_name, tool_args = "shell", {"command": arg}
+        if kind == "readtool":
+            kind, tool_name, tool_args = "tool", "read_file", {"path": arg}
         finish_word = {"cut": "length", "refuse": "content_filter"}.get(kind, "stop")
         if not stream:
             if kind == "tool":
                 msg = {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function",
-                       "function": {"name": "shell", "arguments": json.dumps({"command": arg})}}]}
+                       "function": {"name": tool_name, "arguments": json.dumps(tool_args)}}]}
                 finish = "tool_calls"
             else:
                 msg = {"role": "assistant", "content": "slow reply (not streamed)" if kind == "slow" else arg}
@@ -142,8 +151,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             if kind == "tool":
                 event({"role": "assistant", "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
-                                                            "function": {"name": "shell", "arguments": ""}}]})
-                event({"tool_calls": [{"index": 0, "function": {"arguments": json.dumps({"command": arg})}}]})
+                                                            "function": {"name": tool_name, "arguments": ""}}]})
+                event({"tool_calls": [{"index": 0, "function": {"arguments": json.dumps(tool_args)}}]})
                 event({}, "tool_calls")
             elif kind == "slow":
                 event({"role": "assistant", "content": ""})

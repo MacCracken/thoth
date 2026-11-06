@@ -10,10 +10,6 @@
 > for "what is thoth going to do" and exactly one for "what has thoth not decided about".
 > Shipped work is in [`../../CHANGELOG.md`](../../CHANGELOG.md) and is not narrated here.
 
-**Superseded file:** this replaces `agentic-improvements-review.md` (the 0.39.0 tiered review). Its
-Tier-1, Tier-2 and Tier-3 recommendations were either shipped (0.40.0 / 0.41.0 / 0.42.0 — see the
-CHANGELOG), promoted to [`roadmap.md`](roadmap.md), or carried forward below.
-
 **[`gap-review.html`](gap-review.html) is this file's rendered twin**, not an older draft — same
 content on the house design system, for handing to someone. It drifted a release behind at 0.43.0
 (it still claimed three untrusted-prose inlets and omitted the subagent strength) and was
@@ -72,7 +68,10 @@ Kept because a naive gap list would recommend rebuilding these.
 
 ## The open gaps
 
-### 1 · OS-enforced sandboxing of `shell` / `edit` — **confirmed-missing; the largest safety delta**
+Each gap with a place in the order names its arc on the roadmap, and the roadmap wins where the two differ. This file keeps the evidence and
+the undecided question.
+
+### 1 · OS-enforced sandboxing of `shell` / `edit` — **confirmed-missing; the largest safety delta** (F12)
 
 thoth's own source is admirably blunt that it has none: the glob filter "is a COARSE convenience
 pre-filter, NOT a sandbox", the jail is "a boundary, not a sandbox". Peers enforce at the OS —
@@ -94,29 +93,15 @@ rather than shipped as a promise thoth could not keep.
 
 **The open question:** should kavach's interpreter blocklist become conditional (a host-exec
 confinement tier), or should thoth's `shell` gain a rootfs-shaped execution mode? Until one is
-answered this stays here rather than on the roadmap.
+answered, F12 cannot start.
 
-### 2 · Network egress control — **confirmed-missing**
+### 2 · Network egress control — **confirmed-missing** (F12)
 
 Exfiltration is the payoff step of most injection chains. `shell` can curl anywhere and `web_fetch`
-reaches any URL. Largely **daimon's and kavach's** seam rather than thoth's, which is why it is not
-on the roadmap — but it is the natural companion to gap 1 and should be decided with it.
+reaches any URL. Largely **daimon's and kavach's** seam rather than thoth's, so it is decided with gap 1,
+in F12.
 
-### 3 · Durable tool-definition pins — **closed at 0.51.0 ([ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)), with the daimon residual**
-
-`[toolpin]` pins were **session-scoped** through 0.50.x: they died with the process, so a swap *during*
-a session (or across `/reload`) was caught and one *between two runs* was not. 0.51.0 persists them in
-`~/.thoth/toolpins` (or `[toolpin].file`), host + name under a whole-file digest, refusing a store it
-cannot verify rather than reading it as first sight; the ceiling — a same-uid editor — is stated. What
-stays open is the spine's half below.
-
-The store is the security-relevant file the earlier draft of this entry warned about (tamper, replace,
-symlink-redirect), and ADR-0022 says what a keyless process can and cannot defend it against. What
-remains is the spine's half: it belongs in **daimon**, which owns the registry and could pin once for
-every consumer instead of each consumer pinning separately — a persisted registry, a `definition_sha256`
-per manifest element, an audit event on change (the roadmap's waiting table).
-
-### 4 · Structural isolation of untrusted content — **partial; the strongest available control**
+### 3 · Structural isolation of untrusted content — **partial; the strongest available control** (F9)
 
 `[guard]` marks untrusted prose with an envelope and does not block, which is the right posture for
 a pattern matcher — it is a **mitigation, not a boundary**, and thoth frames it that way.
@@ -145,31 +130,31 @@ design decision, not a wiring job — it makes every `@file` cost a model round,
 summary is arguably a *more* persuasive injection vector than the raw text, since it arrives as
 fluent prose the parent has no reason to distrust. Worth deciding deliberately.
 
-### 5 · Export the audit trail to a wire protocol (OTLP) — **partial**
+### 4 · Export the audit trail to a wire protocol (OTLP) — **partial** (F14)
 
 `/audit export` (0.42.0) closed the file half. What is still missing is emission to a collector,
 where the **OpenTelemetry GenAI semantic conventions** are the standard worth adopting. Low priority
 for an interactive TUI; listed so the choice of convention is recorded before anyone invents one.
 
-### 6 · Image / multimodal input — **confirmed-missing**
+### 5 · Image / multimodal input — **confirmed-missing** (F10)
 
 thoth has an unusual reason to care: it ships its own Wayland GUI, so it is one of the very few
 terminal agents that could *produce* a screenshot as well as consume one.
 
-### 7 · Agent Client Protocol (ACP) server mode — **partial**
+### 6 · Agent Client Protocol (ACP) server mode — **partial** (F13)
 
 ACP is doing for agents what LSP did for language servers (Zed, JetBrains, Neovim). A server mode
 would let thoth be driven from other editors without giving up its own TUI. Distribution value; no
 architectural conflict. Note that 0.42.0's `--events` stream is a meaningful step toward being
 drivable by another program, though it is one-way.
 
-### 8 · Git write operations / worktrees — **confirmed-missing**
+### 7 · Git write operations / worktrees — **confirmed-missing** (F11)
 
 The git producer is deliberately read-only, which is right for the status bar, but the agent can
 inspect a diff and never land it. Worth pairing with a decision about whether thoth should drive
 sit's write surface at all.
 
-### 9 · MCP 2026-07-28 conformance — **bote's problem, not thoth's**
+### 8 · MCP 2026-07-28 conformance — **bote's problem, not thoth's**
 
 Vendored bote 3.8.15 serves 2026-07-28, the stateless revision, alongside the older ones; `initialize` still
 negotiates 2025-11-25 because the new revision has no `initialize`. thoth's t-ron path does not reach any of it.
@@ -236,14 +221,6 @@ private-IP guard would reject. Revisit only if thoth gains a direct fetch; if it
 
 ### Borrow the idea, not the code
 
-> **Budget enforcement SHIPPED at 0.44.3** and is removed from this list (this file carries only what
-> thoth has *not* committed to; the CHANGELOG carries what shipped). `[budget].max_tokens` /
-> `max_cost_micro` are session ceilings checked before every turn at the one dispatch chokepoint and
-> again between agentic rounds, with `>=` semantics, covering delegated children on the same tally.
-> The one thing agnosai's shape did not supply is the part that matters most here: thoth does not meter
-> itself, so a ceiling is only as real as the gateway's `usage` reporting — an unenforceable budget is
-> announced and marked NOT ENFORCEABLE in `/state` rather than left to look like protection.
-
 - **`RiskLevel` (low/medium/high)** on an action. thoth's gate is binary allow/deny/flag; a risk tier
   is the prerequisite for both a graduated permission posture and an approval queue.
 - **Asynchronous approvals** (`orchestrator/approval.cyr`): a pending-decision queue that outlives
@@ -284,9 +261,9 @@ Each of these blocks something above. None has a default answer.
 2. **Should untrusted reads be routed through the existing subagent context automatically?** The
    machinery landed at 0.43.0 ([ADR-0018](../adr/0018-subagent-delegation-scoped-child-context.md)), so
    this is no longer "before or as part of subagents" — it is a routing decision over something that
-   already exists, with the two costs gap 4 names: a model round per `@file`, and a laundered summary
+   already exists, with the two costs gap 3 names: a model round per `@file`, and a laundered summary
    that may be a *more* persuasive injection vector than the raw text.
-3. **Should thoth drive sit's write surface at all** (gap 8), or does the read-only git producer stay
+3. **Should thoth drive sit's write surface at all** (gap 7), or does the read-only git producer stay
    the boundary?
 4. **May a repository's local layer switch off `[hoosh].timeout_ms`?** (The 0.52.6 audit's design question D4.) A
    local `timeout_ms = 0` disables the 0.44.2 stall deadline; beside a repo-redirected `[hoosh].url` that is a hang
@@ -323,7 +300,3 @@ Each of these blocks something above. None has a default answer.
 (Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched
 ignoring case into one slot, so two kinds sharing that prefix would share a health row — audit E11; no gateway in
 use names kinds that long.)
-
-(The question that used to sit second — where the durable rug-pull defence lives — was answered at
-0.51.0 by ADR-0022: thoth's store is the client-side floor now, and daimon pinning once for every consumer
-is the recorded end state on the roadmap's waiting table.)

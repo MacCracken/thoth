@@ -222,7 +222,6 @@
       <p class="standfirst">The candidate gaps between thoth and the current agentic-coding harness landscape that thoth has <strong>not committed to</strong>. Nothing here is scheduled and nothing here is a promise.</p>
       <div class="meta">
         <span>companion to roadmap.md</span>
-        <span>supersedes agentic-improvements-review.md</span>
         <span>Tiers 1&ndash;3 shipped in 0.40.0 / 0.41.0 / 0.42.0</span>
         <span>current as of 0.51.0</span>
       </div>
@@ -251,9 +250,10 @@
 
     <h2 id="gaps"><span class="num">The list</span>The open gaps</h2>
     <p class="lede">Ordered by consequence, not by effort. The numbering carries that ordering &mdash; gap&nbsp;1 is the largest safety delta thoth has.</p>
+    <p>Each gap with a place in the order names its arc on the roadmap, and the roadmap wins where the two differ. This page keeps the evidence and the undecided question.</p>
 
     <div class="rec" style="--tier: var(--crit)">
-      <div class="rec-head"><span class="rec-id">01</span><h3>OS-enforced sandboxing of <code>shell</code> / <code>edit</code></h3><span class="chip c-missing">missing</span></div>
+      <div class="rec-head"><span class="rec-id">01</span><h3>OS-enforced sandboxing of <code>shell</code> / <code>edit</code> <span style="font-weight:400">(F12)</span></h3><span class="chip c-missing">missing</span></div>
       <p>thoth&rsquo;s own source is blunt that it has none: the glob filter &ldquo;is a COARSE convenience pre-filter, NOT a sandbox&rdquo;; the jail is &ldquo;a boundary, not a sandbox&rdquo;. Peers enforce at the OS &mdash; Seatbelt on macOS, Landlock+seccomp on Linux, with read-only / workspace-write / full-access tiers.</p>
       <p><strong>Do not take agnosai&rsquo;s sandbox for this.</strong> Its own README says the process tier has &ldquo;No seccomp, no Landlock, no cgroups&rdquo;. The right seam is <strong>kavach</strong>, which AGNOS already assigns kernel confinement to. &ldquo;kavach owns the sandbox, not the application&rdquo; is a first-party standard.</p>
     </div>
@@ -265,18 +265,12 @@
     </div>
 
     <div class="rec" style="--tier: var(--ink-3)">
-      <div class="rec-head"><span class="rec-id">02</span><h3>Network egress control</h3><span class="chip c-conflict">spine</span></div>
-      <p>Exfiltration is the payoff step of most injection chains. <code>shell</code> can curl anywhere and <code>web_fetch</code> reaches any URL. Largely <strong>daimon&rsquo;s and kavach&rsquo;s</strong> seam rather than thoth&rsquo;s &mdash; which is why it is not on the roadmap &mdash; but it is the natural companion to gap&nbsp;1 and should be decided alongside it.</p>
-    </div>
-
-    <div class="rec" style="--tier: var(--ok)">
-      <div class="rec-head"><span class="rec-id">03</span><h3>Durable tool-definition pins</h3><span class="chip c-ok">closed 0.51.0</span></div>
-      <p>Closed at 0.51.0 (<a href="../adr/0022-tool-pins-are-durable-defended-without-a-secret.md">ADR-0022</a>), with the daimon residual. <code>[toolpin]</code> pins were session-scoped through 0.50.x: they died with the process, so a swap <em>during</em> a session (or across <code>/reload</code>) was caught and one <em>between two runs</em> was not. Now they persist in <code>~/.thoth/toolpins</code> (or <code>[toolpin].file</code>) &mdash; host + name under a whole-file digest &mdash; a store thoth cannot verify is refused whole, and the ceiling &mdash; a same-uid editor &mdash; is stated.</p>
-      <p>The store is the security-relevant file the earlier draft of this entry warned about (tamper, replace, symlink-redirect), and ADR-0022 says what a keyless process can and cannot defend it against. What remains is the spine&rsquo;s half: <strong>daimon</strong> owns the registry and could pin once for every consumer &mdash; a persisted registry, a <code>definition_sha256</code> per manifest element, an audit event on change (the roadmap&rsquo;s waiting table).</p>
+      <div class="rec-head"><span class="rec-id">02</span><h3>Network egress control <span style="font-weight:400">(F12)</span></h3><span class="chip c-conflict">spine</span></div>
+      <p>Exfiltration is the payoff step of most injection chains. <code>shell</code> can curl anywhere and <code>web_fetch</code> reaches any URL. Largely <strong>daimon&rsquo;s and kavach&rsquo;s</strong> seam rather than thoth&rsquo;s, so it is decided with gap&nbsp;1, in F12.</p>
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">04</span><h3>Structural isolation of untrusted content</h3><span class="chip c-partial">partial</span></div>
+      <div class="rec-head"><span class="rec-id">03</span><h3>Structural isolation of untrusted content <span style="font-weight:400">(F9)</span></h3><span class="chip c-partial">partial</span></div>
       <p><code>[guard]</code> marks untrusted prose with an envelope and does not block, which is the right posture for a pattern matcher &mdash; it is a <strong>mitigation, not a boundary</strong>, and thoth frames it that way.</p>
       <p>The strongest control in the field is structural, not lexical: retrieved text runs through a <strong>separate context window</strong> so it cannot issue instructions into the main thread. thoth now has <strong>six</strong> untrusted-text inlets &mdash; <code>@file</code> mentions, <code>read_file</code>/<code>list_dir</code>/<code>search</code> results, recalled mneme notes, (0.43.0) <strong>MCP resource content and server-published MCP prompts</strong>, and <strong>piped stdin</strong> (0.43.2) &mdash; and all land in the main context; since 0.50.0 the project-map hint also carries directory names read from the disk (cleaned of control bytes, not enveloped).</p>
       <p><strong>The prerequisite has landed, which changes this gap&rsquo;s shape rather than closing it.</strong> 0.43.0&rsquo;s subagent (ADR-0018) <em>is</em> a separate context window: a child reads whatever it reads into its own message list and returns one string, which reaches the parent through redact &rarr; guard like any tool result. The machinery now exists; what does not is thoth <em>routing untrusted reads through it automatically</em>. That is a real design decision, not a wiring job &mdash; it makes every <code>@file</code> cost a model round, and a laundered summary is arguably a <em>more</em> persuasive injection vector than the raw text, since it arrives as fluent prose the parent has no reason to distrust.</p>
@@ -288,28 +282,28 @@
     </div>
 
     <div class="rec" style="--tier: var(--ochre)">
-      <div class="rec-head"><span class="rec-id">05</span><h3>Export the audit trail to a wire protocol</h3><span class="chip c-partial">partial</span></div>
+      <div class="rec-head"><span class="rec-id">04</span><h3>Export the audit trail to a wire protocol <span style="font-weight:400">(F14)</span></h3><span class="chip c-partial">partial</span></div>
       <p><code>/audit export</code> (0.42.0) closed the file half. What is still missing is emission to a collector, where the <strong>OpenTelemetry GenAI semantic conventions</strong> are the standard worth adopting. Low priority for an interactive TUI; listed so the choice of convention is recorded before anyone invents one.</p>
     </div>
 
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">06</span><h3>Image / multimodal input</h3><span class="chip c-missing">missing</span></div>
+      <div class="rec-head"><span class="rec-id">05</span><h3>Image / multimodal input <span style="font-weight:400">(F10)</span></h3><span class="chip c-missing">missing</span></div>
       <p>thoth has an unusual reason to care: it ships its own Wayland GUI, so it is one of the very few terminal agents that could <em>produce</em> a screenshot as well as consume one.</p>
     </div>
 
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">07</span><h3>Agent Client Protocol (ACP) server mode</h3><span class="chip c-partial">partial</span></div>
+      <div class="rec-head"><span class="rec-id">06</span><h3>Agent Client Protocol (ACP) server mode <span style="font-weight:400">(F13)</span></h3><span class="chip c-partial">partial</span></div>
       <p>ACP is doing for agents what LSP did for language servers (Zed, JetBrains, Neovim). A server mode would let thoth be driven from other editors without giving up its own TUI. Distribution value; no architectural conflict. 0.42.0&rsquo;s <code>--events</code> stream is a meaningful step toward being drivable by another program, though it is one-way.</p>
     </div>
 
     <div class="rec" style="--tier: var(--lapis)">
-      <div class="rec-head"><span class="rec-id">08</span><h3>Git write operations / worktrees</h3><span class="chip c-missing">missing</span></div>
+      <div class="rec-head"><span class="rec-id">07</span><h3>Git write operations / worktrees <span style="font-weight:400">(F11)</span></h3><span class="chip c-missing">missing</span></div>
       <p>The git producer is deliberately read-only, which is right for the status bar, but the agent can inspect a diff and never land it. Worth pairing with a decision about whether thoth should drive sit&rsquo;s write surface at all.</p>
     </div>
 
     <div class="rec" style="--tier: var(--ink-3)">
-      <div class="rec-head"><span class="rec-id">09</span><h3>MCP 2026-07-28 conformance</h3><span class="chip c-conflict">spine</span></div>
-      <p>Vendored bote 3.3.13 negotiates 2025-11-25, one revision behind across a structural break (3.3.13 added 2025-06-18 to the accepted set, not the newer revision). Flagged here only so it is tracked somewhere; the work belongs upstream.</p>
+      <div class="rec-head"><span class="rec-id">08</span><h3>MCP 2026-07-28 conformance</h3><span class="chip c-conflict">spine</span></div>
+      <p>Vendored bote 3.8.15 serves 2026-07-28, the stateless revision, alongside the older ones; <code>initialize</code> still negotiates 2025-11-25 because the new revision has no <code>initialize</code>. thoth&rsquo;s t-ron path does not reach any of it. What is left is daimon&rsquo;s, as the host thoth actually speaks to.</p>
     </div>
 
     <h2 id="declined"><span class="num">Recorded</span>Declined, with reasons</h2>
@@ -352,7 +346,6 @@
     <p><code>ssrf</code>/<code>guarded_fetch</code> are deferred because they would <strong>actively misfire</strong>: thoth has no model-controlled outbound URL (<code>web_fetch</code>/<code>web_search</code> are bote tools hosted by daimon, where the guard belongs and where SSRF rejections are already logged), and thoth&rsquo;s only outbound URLs are operator-set with a default of <code>http://127.0.0.1:8088</code> &mdash; which a private-IP guard would reject.</p>
 
     <h3 style="margin-top:2rem">Borrow the idea, not the code</h3>
-    <p><strong>Budget enforcement SHIPPED at 0.44.3</strong> and is removed from this list &mdash; this page carries only what thoth has <em>not</em> committed to; the CHANGELOG carries what shipped. <code>[budget].max_tokens</code> / <code>max_cost_micro</code> are session ceilings checked before every turn at the one dispatch chokepoint and again between agentic rounds, with <code>&gt;=</code> semantics, covering delegated children on the same tally. The one thing agnosai&rsquo;s shape did not supply is the part that matters most here: thoth does not meter itself, so a ceiling is only as real as the gateway&rsquo;s <code>usage</code> reporting &mdash; an unenforceable budget is announced and marked NOT ENFORCEABLE in <code>/state</code> rather than left to look like protection.</p>
     <ul class="plain">
       <li><strong><code>RiskLevel</code> (low/medium/high)</strong> on an action. thoth&rsquo;s gate is binary allow/deny/flag; a risk tier is the prerequisite for both a graduated permission posture and an approval queue.</li>
       <li><strong>Asynchronous approvals</strong> &mdash; a pending-decision queue that outlives the prompt, so an unattended run can <em>park</em> a risky edit instead of denying it. thoth&rsquo;s <code>confirm()</code> is otherwise strictly better (fail-closed, explicit y/yes only), and session-scoped grants already removed the re-prompt-every-round problem.</li>
@@ -378,11 +371,11 @@
     </div>
     <div class="rec" style="--tier: var(--ochre)">
       <div class="rec-head"><span class="rec-id">Q2</span><h3>Should untrusted reads be routed through the existing subagent context automatically?</h3></div>
-      <p>The machinery landed at 0.43.0 (ADR-0018), so this is no longer &ldquo;before or as part of subagents&rdquo; &mdash; it is a routing decision over something that already exists, with the two costs gap&nbsp;4 names: a model round per <code>@file</code>, and a laundered summary that may be a <em>more</em> persuasive injection vector than the raw text.</p>
+      <p>The machinery landed at 0.43.0 (ADR-0018), so this is no longer &ldquo;before or as part of subagents&rdquo; &mdash; it is a routing decision over something that already exists, with the two costs gap&nbsp;3 names: a model round per <code>@file</code>, and a laundered summary that may be a <em>more</em> persuasive injection vector than the raw text.</p>
     </div>
     <div class="rec" style="--tier: var(--lapis)">
       <div class="rec-head"><span class="rec-id">Q3</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>
-      <p>Gap&nbsp;8 &mdash; or does the read-only git producer stay the boundary?</p>
+      <p>Gap&nbsp;7 &mdash; or does the read-only git producer stay the boundary?</p>
     </div>
     <div class="rec" style="--tier: var(--ochre)">
       <div class="rec-head"><span class="rec-id">Q4</span><h3>May a repository&rsquo;s local layer switch off <code>[hoosh].timeout_ms</code>?</h3></div>
