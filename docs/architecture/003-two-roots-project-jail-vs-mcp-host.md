@@ -51,8 +51,8 @@ where **it** is:
    (`src/project.cyr`) states the absolute launch directory, names
    `read_file` / `list_dir` / `search` as the tools jailed to it, and says host
    file tools are rooted elsewhere. It is part of thoth's operating clause in
-   `persona_system_prompt()`, so a subagent inherits it. Since 0.50.0 a second
-   system message carries the **project map** (`project_map_build`, the top two
+   `persona_system_prompt()`, so a subagent inherits it. Since 0.50.0 a user
+   message (a system message before 0.54.3) carries the **project map** (`project_map_build`, the top two
    levels of that root, rebuilt at each turn, `[project].map`), so the model
    also knows the SHAPE of the tree without spending a round on `list_dir`; the
    child gets the parent's.

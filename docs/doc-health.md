@@ -6,7 +6,9 @@ type: state
 
 # Documentation Health — thoth
 
-> **Project knowledge out of agent memory** (2026-11-06, under `[Unreleased]`): an audit of the agent's memory files against the tree. What the repo lacked moved in: `guides/toolchain-refresh.md`, `guides/writing-tests.md` and `architecture/004-what-the-compiler-does-not-tell-you.md` (all new), `verification-pass.md` (harness traps, the toolchain shipped to `ecb`, debugging a turn), and a t-ron policy example. `CLAUDE.md` gains the stop after each version, the versioning test and the ledger rules. `var buf[N]` is corrected in `CLAUDE.md` and `CONTRIBUTING.md`: a module-global array is N i64 slots, re-measured on 6.7.18.
+> **Repair batch 17 (0.54.3)** (2026-11-06): the five gap-review rulings. ADR-0021's addendum, ADR-0022's ruling, `architecture/003` and the module guide on the map's role, the config example on `timeout_ms`, `[log].level`, `[budget]`, `[pricing]` and `[project].map`, gap-review questions 4–8 out of both twins, the roadmap's 0.54.x arc out and two defects in, the daimon row, `state.md`, README and CONTRIBUTING stamps (CONTRIBUTING's had sat at 0.52.8), and `verification-pass.md`'s V-2 and clone traps.
+>
+> **Project knowledge out of agent memory** (2026-11-06, in 0.54.3): an audit of the agent's memory files against the tree. What the repo lacked moved in: `guides/toolchain-refresh.md`, `guides/writing-tests.md` and `architecture/004-what-the-compiler-does-not-tell-you.md` (all new), `verification-pass.md` (harness traps, the toolchain shipped to `ecb`, debugging a turn), and a t-ron policy example. `CLAUDE.md` gains the stop after each version, the versioning test and the ledger rules. `var buf[N]` is corrected in `CLAUDE.md` and `CONTRIBUTING.md`: a module-global array is N i64 slots, re-measured on 6.7.18.
 >
 > **0.54.0–0.54.2** (2026-11-06): ADR-0023 (new), ADR-0022's second addendum, the roadmap's shipped batches removed and the stop note, sit and cyrius rows corrected, `state.md`, the module guide, the config example on `timeout_ms`, and `verification-pass.md`'s V-3.
 >

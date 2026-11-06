@@ -570,7 +570,9 @@ fn cmd_state() {
     } else {
         var _cbuf[24];
         cost_fmt(&_cbuf, status_ival(SF_COST));
-        emit(&_cbuf); ui_emit(ROLE_MUTED, " total ([pricing], this session)");
+        emit(&_cbuf);
+        if (session_cost_gateway_count() > 0) { ui_emit(ROLE_MUTED, " total (with the gateway's figure, this session)"); }   # 0.54.3
+        else { ui_emit(ROLE_MUTED, " total ([pricing], this session)"); }
         if (status_ival2(SF_COST) > 0) {
             ui_emit(ROLE_FAINT, " — "); ofmt_int(status_ival2(SF_COST)); ui_emit(ROLE_FAINT, " unpriced response(s) omitted");
         }
@@ -723,6 +725,10 @@ fn cmd_state() {
             elif (session_cost_unpriced_count() > 0) {           # 0.52.6 (audit E6): some turns priced, some not
                 ui_emit(ROLE_RED, "  — PARTLY UNPRICED"); ui_emit(ROLE_FAINT, ": "); ofmt_int(session_cost_unpriced_count());
                 ui_emit(ROLE_FAINT, " response(s) on a model with no [pricing.<model>] are not in the cost tally");
+            }
+            elif (session_cost_gateway_count() > 0) {            # 0.54.3: say whose arithmetic the ceiling rests on
+                ui_emit(ROLE_FAINT, "  — "); ofmt_int(session_cost_gateway_count());
+                ui_emit(ROLE_FAINT, " response(s) priced by the gateway; [pricing.<model>] takes over when declared");
             }
         }
         oprintln("");

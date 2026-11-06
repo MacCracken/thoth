@@ -157,7 +157,10 @@ Five sentences above were tighter than the code, and the code now matches them o
 - **"Never written back, not even by `/tools trust`"** now holds in every state.
 - **Last-writer-wins** covers two sessions writing a first sight, not only two trusting: 39 of 400 simultaneous starts lost one host's rows. A lost pin is a first sight at the next run. There is no lock around a flush.
 
-What a refused store should mean is open: gap-review question 8.
+What a refused store should mean was gap-review question 8, ruled on 2026-11-06: it stays first sight, with a red line. Withholding every daimon tool until
+`/tools trust` would close the case at the cost of the thing an agent is for, and someone with the operator's uid could delete the store anyway. The repair belongs where the
+definitions live: daimon's `docs/development/issues/2026-11-06-a-client-that-loses-its-tool-pins-has-nothing-to-repair-from.md`. When it lands, a refused store rebuilds from daimon
+instead of counting every tool as a first sight.
 
 ## Addendum (0.54.1): a repository's daimon pins for the session
 

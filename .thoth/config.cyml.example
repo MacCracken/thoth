@@ -61,7 +61,8 @@
 # ignored and named, like an authority key: [budget] and [pricing] are strictest-wins (0.52.6);
 # [project].read_roots and a repository's [project].vidya only narrow to your global roots; and (0.52.8)
 # [guard] and [redact] may only be turned ON, [subagent] only OFF, [hoosh].reasoning and
-# [hoosh].max_tokens only LOWERED.
+# [hoosh].max_tokens only LOWERED; and (0.54.3) [hoosh].timeout_ms may only be SHORTENED, never lengthened or
+# switched off, and [log].level may only add detail.
 #
 # Memory layers the same way: `~/.thoth/memory/` is read, then the project's `.thoth/memory/`, and both
 # are injected. `/remember` writes to the PROJECT store when there is one.
@@ -220,7 +221,8 @@ model = "claude-haiku-5-5"
 #   a stream that keeps producing frames resets it on every frame and may run as
 #   long as it likes. A reasoning model thinking for two minutes before its first
 #   token is fine; two minutes of nothing at all is not. The floor is 1000.
-#   `0` restores the pre-0.44.2 unbounded behaviour if you really want it.
+#   `0` restores the pre-0.44.2 unbounded behaviour if you really want it, from
+#   this global file only: a repository may shorten the deadline, and that is all.
 #
 #   Since 0.54.0 Esc reaches a silent wait in the TUI and the window, whatever
 #   this says: the call is left to a worker and thoth moves on. A worker stuck
@@ -283,9 +285,12 @@ model = "claude-haiku-5-5"
 # `/state` row "NOT ENFORCEABLE" rather than letting you believe you are covered.
 # Set `[hoosh].stream = false` to make a token budget live.
 #
-# ⚠ A COST ceiling needs a rate. Cost is tokens x `[pricing.<model>]`, so a model
-# with no declared rate contributes real tokens and zero cost — the cost ceiling
-# cannot fire for it. `max_tokens` always can. `/state` names this case too.
+# ⚠ A COST ceiling needs a price. Cost is tokens x `[pricing.<model>]`, and since
+# 0.54.3 a model with no declared rate takes the gateway's own figure for each
+# response, so the ceiling works out of the box. That figure is used only from a
+# gateway you chose, not a repository's local [hoosh].url. A local provider reports
+# 0, which stays unpriced: the model contributes real tokens and no cost, and the
+# cost ceiling cannot fire for it. `max_tokens` always can. `/state` names both cases.
 # [budget]
 # max_tokens = 200000        # session prompt+completion tokens
 # max_cost_micro = 500000    # micro-USD; 1000000 = $1.00, so this is $0.50
@@ -414,10 +419,10 @@ model = "claude-haiku-5-5"
 # The [pricing.<model>] tables price token usage so /state and the TUI status bar
 # can show a running session cost ($d.cc), and (0.47.0) the Ctrl-P picker and
 # `/models <provider>` show a priced model's rate beside its id ("$3.00/$15.00 per M").
-# Opt-in and honest: with no [pricing] for the active model, the cost field is OMITTED
-# (never a faked $0) and /state says so; an unpriced row shows no rate.
-# hoosh reports the token counts (usage); thoth only multiplies them by the rate you
-# declare here. Cost is priced AT ACCUMULATE — each turn uses the model active at that
+# Honest: with no price for the active model the cost field is OMITTED (never a faked
+# $0) and /state says so; an unpriced row shows no rate.
+# hoosh reports the token counts (usage); thoth multiplies them by the rate you
+# declare here, and your rate always comes first. Cost is priced AT ACCUMULATE — each turn uses the model active at that
 # moment — so a mid-session /model switch is costed correctly.
 #
 # Rates are integer micro-USD per 1000 tokens, i.e. (USD per 1M tokens) x 1000:
@@ -431,8 +436,11 @@ model = "claude-haiku-5-5"
 # says so), never billed at $0 on the missing side. A deliberately-free side is `= 0`.
 
 # hoosh >= 2.8.0's catalog carries the gateway's own price per model, and /models
-# and the Ctrl-P picker show it marked "(hoosh)" where this table names no rate —
-# but thoth's tally (and so [budget].max_cost_micro) prices from THIS table only.
+# and the Ctrl-P picker show it marked "(hoosh)" where this table names no rate.
+# Since 0.54.3 the tally (and so [budget].max_cost_micro) falls back to the
+# `cost_micro_usd` hoosh reports on each response when this table names no rate and
+# [hoosh].url is yours, and /state counts those responses. For a model hoosh has no
+# price for, that figure is its fallback rate for the provider, so an estimate.
 # Rates below are Anthropic's published first-party rates as of 2026-10; check the
 # provider's pricing page, they change.
 
@@ -519,7 +527,8 @@ model = "claude-haiku-5-5"
 #
 #   file  — append structured events to this path; omit to use stderr.
 #   level — minimum severity: off | fatal | error | warn | info | debug | trace
-#           (default info). "off" disables logging even if a file is named.
+#           (default info). "off" disables logging even if a file is named. A
+#           repository's .thoth/config.cyml may add detail, never less than yours.
 #
 # 0.44.2 — `thoth --logs <file>` binds the same sink from ARGV instead, at the top
 # of main: before the config is read, before any seam is touched, before the tier
@@ -694,8 +703,8 @@ model = "claude-haiku-5-5"
 # `/allow` with no argument lists the active grants; /state shows a "reads" row. A root must be absolute and
 # more than just "/". Reads under a granted root still refuse any `..` (no traversal). See ADR-0015.
 #
-#   map — the project-map HINT (0.50.0). When on (the default), every turn's system prompt carries a small
-#         map of the project root — the top two levels, directories first, each top-level directory with up
+#   map — the project-map HINT (0.50.0). When on (the default), every turn carries a small user message
+#         (a system message before 0.54.3) with a map of the project root — the top two levels, directories first, each top-level directory with up
 #         to a dozen of its children and "+N more" — so the model knows the shape of the tree without spending
 #         a round on list_dir. Directories search never walks (.git, build, node_modules, target, …) and
 #         dot-directories are NAMED but not walked; thoth's own files (.thoth, the session / history / policy
@@ -710,7 +719,7 @@ model = "claude-haiku-5-5"
 #                     (0.52.8: a vidya a repository's local layer names is granted only under one of your
 #                     global read_roots, and never through a symlink — /allow vidya refuses it otherwise)
 # read_roots = ["/home/you/Repos/otherrepo"]      # absolute roots readable from every startup
-# map = true                                      # the project-map hint in the system prompt (default on)
+# map = true                                      # the project-map hint on every turn (default on)
 
 # The [shell] table arms the model-invokable `shell` tool (0.16.0; ADR-0014). When enabled AND the
 # [daimon] seam is wired (agentic turns only), thoth advertises a `shell` tool to the backing model:

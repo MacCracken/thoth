@@ -4,14 +4,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.54.3] - 2026-11-06
+
+**Repair batch 17: the audit's remainder, ruled.** A repository can tighten the stall deadline and the log and do nothing else to them, the project map leaves the `system` role, and a cost ceiling works with no `[pricing]` table. The fifth item, the pin store thoth refuses, stays as shipped, and its repair is filed with daimon. This closes 0.54.x: the next arc is 0.55.0.
+
+**What changes for you:**
+
+- `[budget].max_cost_micro` now fires on a model with no `[pricing]` rate, using the gateway's figure for each response, as long as `[hoosh].url` is yours. `/state` says how many responses were priced that way.
+- A repository's `.thoth/config.cyml` can no longer lengthen or switch off `[hoosh].timeout_ms`, or quieten `[log].level`. A refused value is named at startup.
+- If you relied on `timeout_ms = 0` in a project's config, move it to `~/.thoth/config.cyml`.
+
 ### Changed
 
+- **A repository may only shorten `[hoosh].timeout_ms`** (gap-review question 4). Beside a repository-redirected gateway, a local `0` was a hang. Against a gateway that never answers, with the operator's deadline at 2 s and a repository's `timeout_ms = 0`, 0.54.2 was still hung when killed at 14 s and 0.54.3 stops at 2.0 s.
+- **A repository may only add detail to `[log].level`** (question 7). A clone's `off` silenced the operator's log, and its `error` narrowed a `--logs` capture to one line of the six the same run writes now. A global file with no global level has the default info as its floor.
+- **The project map is a user message** (question 5), after the recap and before the history, because nothing a repository controls belongs at system level. The header now says thoth added the message and that it asks for nothing. Three runs of ten navigation tasks on claude-haiku-5-5 in a 328-file tree (29 of 30 pairs; one run hit the round limit): a median turn of 21.6k tokens as a user message, 21.3k as a system message and 22.2k with the map off. One search-heavy task ranged from 112k to 331k, and the other nine total 548k, 572k and 580k. The role moved nothing measurable, and the 27% saving from the not-verified pass (another tree, one run each) did not reproduce here.
+- **The cost tally falls back to the gateway's figure** (question 6): your rate first, then `usage.cost_micro_usd`, and only from a gateway you chose. A repository's `[hoosh].url` never prices. hoosh's 0 reads as no figure, so a local provider stays unpriced and keeps its warning. For a model hoosh has no price for, its figure is a provider-wide estimate. On a real provider with no `[pricing]` and a ceiling already met, 0.54.2 ran all three rounds of a task and 0.54.3 stopped after the first, streaming and blocking.
+- `/state`'s cost row says when the gateway's figure is in the total, and its budget row counts those responses.
 - **Project knowledge that lived only in agent memory is now in the repo.** New: `docs/guides/toolchain-refresh.md`, `docs/guides/writing-tests.md`, `docs/architecture/004-what-the-compiler-does-not-tell-you.md`. `docs/guides/verification-pass.md` gains harness traps, shipping a toolchain to `ecb`, and debugging a stuck turn, and `docs/examples/README.md` gains a t-ron policy.
 - **`CLAUDE.md` states the release stop:** a `VERSION` bump ends the work until it is committed, tagged and published, after 0.54.0 and 0.54.1 went out with no tag. It also gains the versioning test and the ledger rules.
 
 ### Fixed
 
 - `CLAUDE.md` and `CONTRIBUTING.md` said `var buf[N]` is N bytes. That holds for locals: a module-global array is N i64 slots, 8N bytes, re-measured on 6.7.18.
+
+### Ruled, with no change
+
+- **A pin store thoth refuses stays first sight, with a red line** (question 8). The alternative withheld every daimon tool until `/tools trust`, and an agent without its tools has lost the thing it is for. The repair belongs where the definitions live, and is filed as daimon's `docs/development/issues/2026-11-06-a-client-that-loses-its-tool-pins-has-nothing-to-repair-from.md`.
+
+### Verified
+
+- Suite 971 + 2508 + 1668 + 949 + 190 = 6,286, 0 failed (+100). A copy with `.git` and an empty `HOME` passes 6,288, with stdin closed and held open.
+- Break tests: 23 of 23 mutations failed a test.
+- Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` and on a Raspberry Pi (6,288 each), macOS is green natively (2499 + 1656 + 928 + 956 + 190), the hostile wire is clean on Linux and macOS, ring 3 passes, and the aarch64 window drove a tool round under qemu.
+- The TUI in a pty and the window on a headless compositor, each against the real gateway: a turn, `/state`, the budget row.
 
 ## [0.54.2] - 2026-11-06
 

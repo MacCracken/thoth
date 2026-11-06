@@ -70,7 +70,7 @@ fn test_dry_map() {
     feed_init(); out_mode_set(OUT_RING);
     cmd_dry("/dry hi");
     feed_flush_pending(); out_mode_set(OUT_FD1);
-    assert(_mid_feed_plain_count("{\"role\":\"system\",\"content\":\"Project map (the top two levels") >= 1, "/dry refreshes the map and its body carries it as a system message");
+    assert(_mid_feed_plain_count("{\"role\":\"user\",\"content\":\"Project map (the top two levels") >= 1, "/dry refreshes the map and its body carries it as a system message");
     assert(_mid_feed_plain_count("{\"role\":\"user\",\"content\":\"hi\"}") >= 1, "...before the user turn");
     assert(project_map_current() != 0, "...and the build stays for /state");
     assert_eq(project_map_entries(), 24, "...the fixture's 24 entries");
@@ -2385,6 +2385,241 @@ fn test_cfg_parse_refused() {
     ALLOC_MAX = cap;
     assert_eq(_cfg_parse_any, 0, "a refused parse does not count as a config read");
     _cfg_parse_any = s_pa; _cfg_parse_refused = s_pr;
+    return 0;
+}
+
+# test_local_tighten_only (0.54.3, gap-review questions 4 and 7, the maintainer's rulings): a repository's layer may shorten the
+# stall deadline and add log detail. It may not lengthen or disable the one, or quieten the other.
+fn _tlt_count(needle) {
+    var n = 0; var i = 0;
+    while (i < config_suppressed_count()) { if (strstr(config_suppressed_at(i), needle) >= 0) { n = n + 1; } i = i + 1; }
+    return n;
+}
+fn _tlt_h(txt) { return _cfg_section_pairs(_lay_parse(txt), "hoosh"); }
+fn _tlt_l(txt) { return _cfg_section_pairs(_lay_parse(txt), "log"); }
+fn test_local_tighten_only() {
+    test_group("a repository may only tighten the stall deadline and the log (0.54.3, questions 4 and 7)");
+    var s_sn = _cfg_suppressed_n; var s_ll = _cfg_log_level_local;
+    var g60 = _tlt_h("[hoosh]\ntimeout_ms = 60000\n");
+    var g0 = _tlt_h("[hoosh]\ntimeout_ms = 0\n");
+    var l0 = _tlt_h("[hoosh]\ntimeout_ms = 0\n");
+    var l30 = _tlt_h("[hoosh]\ntimeout_ms = 30000\n");
+    var l90 = _tlt_h("[hoosh]\ntimeout_ms = 90000\n");
+    var lfar = _tlt_h("[hoosh]\ntimeout_ms = 999000\n");
+    var lbad = _tlt_h("[hoosh]\ntimeout_ms = \"soon\"\n");
+    var tn = "hoosh.timeout_ms";
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_hoosh_timeout_load(0, 0), 0 - 1, "neither layer: unset, the compiled default");
+    assert_eq(_cfg_hoosh_timeout_load(0, g60), 60000, "the global alone stands");
+    assert_eq(_cfg_hoosh_timeout_load(l30, g60), 30000, "a local value may shorten the global's");
+    assert_eq(_cfg_hoosh_timeout_load(l30, 0), 30000, "...and the default");
+    assert_eq(_cfg_hoosh_timeout_load(l30, g0), 30000, "...and the operator's unbounded");
+    assert_eq(config_suppressed_count(), 0, "none of those is a refusal");
+    assert_eq(_cfg_hoosh_timeout_load(l0, g60), 60000, "a local 0 does not switch the global's deadline off (the hang this closes)");
+    assert_eq(_tlt_count(tn), 1, "...and is named");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_hoosh_timeout_load(l0, 0), 0 - 1, "...nor the default");
+    assert_eq(_tlt_count(tn), 1, "...named");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_hoosh_timeout_load(l90, g60), 60000, "a local value cannot lengthen the global's");
+    assert_eq(_tlt_count(tn), 1, "...named");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_hoosh_timeout_load(lfar, 0), 0 - 1, "...nor the default");
+    assert_eq(_tlt_count(tn), 1, "...named");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_hoosh_timeout_load(lbad, g60), 60000, "an unreadable local value keeps the global's");
+    assert_eq(_tlt_count(tn), 1, "...named");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_hoosh_timeout_load(l0, g0), 0, "the operator's own 0 stands");
+    assert_eq(config_suppressed_count(), 0, "...and a local 0 beside it asks for nothing, so nothing is named");
+
+    # the rank agrees with what the sink is set to, so the two cannot drift
+    assert_eq(_cfg_log_rank("off"), _log_parse_level("off"), "rank: off");
+    assert_eq(_cfg_log_rank("fatal"), _log_parse_level("fatal"), "rank: fatal");
+    assert_eq(_cfg_log_rank("error"), _log_parse_level("error"), "rank: error");
+    assert_eq(_cfg_log_rank("warn"), _log_parse_level("warn"), "rank: warn");
+    assert_eq(_cfg_log_rank("info"), _log_parse_level("info"), "rank: info");
+    assert_eq(_cfg_log_rank("debug"), _log_parse_level("debug"), "rank: debug");
+    assert_eq(_cfg_log_rank("trace"), _log_parse_level("trace"), "rank: trace");
+    assert_eq(_cfg_log_rank("bogus"), _log_parse_level("bogus"), "rank: an unknown word");
+    assert_eq(_cfg_log_rank(0), _log_parse_level(0), "rank: unset");
+
+    var ln = "log.level";
+    var gi = _tlt_l("[log]\nlevel = \"info\"\n");
+    var gf = _tlt_l("[log]\nfile = \"/tmp/x.log\"\n");
+    var ldbg = _tlt_l("[log]\nlevel = \"debug\"\n");
+    var lerr = _tlt_l("[log]\nlevel = \"error\"\n");
+    var loff = _tlt_l("[log]\nlevel = \"off\"\n");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_log_level_load(0, 0), 0, "neither layer: unset");
+    assert_eq(_cfg_log_level_local, 0, "...and not the local layer's");
+    assert(streq(_cfg_log_level_load(0, gi), "info") == 1, "the global alone stands");
+    assert(streq(_cfg_log_level_load(ldbg, gi), "debug") == 1, "a local level may add detail");
+    assert_eq(_cfg_log_level_local, 1, "...and is marked as the local layer's");
+    assert_eq(config_suppressed_count(), 0, "...with nothing refused");
+    assert(streq(_cfg_log_level_load(loff, gi), "info") == 1, "a clone's `off` does not silence the operator's log");
+    assert_eq(_cfg_log_level_local, 0, "...the level in force is the global's");
+    assert_eq(_tlt_count(ln), 1, "...and is named");
+    _cfg_suppressed_n = 0;
+    assert(streq(_cfg_log_level_load(lerr, gi), "info") == 1, "a quieter level does not narrow it either");
+    assert_eq(_tlt_count(ln), 1, "...named");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg_log_level_load(lerr, gf), 0, "a global file with no level: the floor is the default info it gets");
+    assert_eq(_tlt_count(ln), 1, "...named");
+    _cfg_suppressed_n = 0;
+    assert(streq(_cfg_log_level_load(ldbg, gf), "debug") == 1, "...and more detail than it is taken");
+    assert(streq(_cfg_log_level_load(lerr, 0), "error") == 1, "with nothing of the operator's bound, a local level is a preference");
+    assert_eq(_cfg_log_level_local, 1, "...marked, so log_init can hold a --logs capture against it");
+    assert_eq(config_suppressed_count(), 0, "...and not refused");
+
+    # a --logs capture: the flag's level holds against a repository's, and not against the operator's own
+    var s_ab = _log_argv_bound; var s_lv = sakshi_get_level(); var s_cl = _cfg_log_level;
+    _log_argv_bound = 1;
+    sakshi_set_level(SK_DEBUG); _cfg_log_level = "error"; _cfg_log_level_local = 1; _cfg_suppressed_n = 0;
+    log_init();
+    assert_eq(sakshi_get_level(), SK_DEBUG, "a repository's quieter level does not narrow a --logs capture");
+    assert_eq(_tlt_count(ln), 1, "...and is named");
+    sakshi_set_level(SK_DEBUG); _cfg_log_level = "off"; _cfg_suppressed_n = 0;
+    log_init();
+    assert_eq(sakshi_get_level(), SK_DEBUG, "...nor its `off`");
+    assert_eq(_tlt_count(ln), 1, "...named");
+    sakshi_set_level(SK_DEBUG); _cfg_log_level = "trace"; _cfg_suppressed_n = 0;
+    log_init();
+    assert_eq(sakshi_get_level(), SK_TRACE, "a repository's level may add detail to it");
+    sakshi_set_level(SK_DEBUG); _cfg_log_level = "error"; _cfg_log_level_local = 0;
+    log_init();
+    assert_eq(sakshi_get_level(), SK_ERROR, "the operator's own level still sets it");
+    _log_argv_bound = s_ab; sakshi_set_level(s_lv); _cfg_log_level = s_cl;
+    _cfg_suppressed_n = s_sn; _cfg_log_level_local = s_ll;
+    return 0;
+}
+
+# test_local_layers_load (0.54.3): the same rules through config_load and two real layers, and whose gateway is in use.
+fn test_local_layers_load() {
+    test_group("config_load holds the deadline and the log, and knows a repository's gateway (0.54.3)");
+    var s_hu = _cfg_hoosh_url; var s_ht = _cfg_hoosh_token; var s_du = _cfg_daimon_url; var s_tp = _cfg_tron_policy; var s_ta = _cfg_tron_agent;
+    var s_po = _cfg_parse_ok; var s_pa = _cfg_parse_any; var s_un = _cfg_unknown_n; var s_sn = _cfg_suppressed_n; var s_src = _cfg_source;
+    var s_to = _cfg_hoosh_timeout_ms; var s_lv = _cfg_log_level; var s_lf = _cfg_log_file; var s_ul = _cfg_hoosh_url_local; var s_ll = _cfg_log_level_local;
+    var s_gp = _cfg_gpath_c; var s_gd = _cfg_gpath_done; var s_lp = _cfg_lpath_c; var s_ld = _cfg_lpath_done; var s_ls = _cfg_lsource; var s_pc = _cfg_path_c;
+    var _gp = "/tmp/thoth_t_lay_global.cyml";
+    var _lp = "/tmp/thoth_t_lay_local.cyml";
+    var gt = "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntimeout_ms = 60000\n[log]\nlevel = \"info\"\n";
+    var lt = "[hoosh]\nurl = \"http://127.0.0.1:9999\"\ntimeout_ms = 0\n[log]\nlevel = \"off\"\n";
+    file_write_all(_gp, gt, strlen(gt));
+    file_write_all(_lp, lt, strlen(lt));
+    _cfg_gpath_c = _gp; _cfg_gpath_done = 1;
+    _cfg_lpath_c = _lp; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    config_load();
+    assert_eq(config_parse_ok(), 1, "premise: the two fixture layers loaded");
+    assert_eq(config_hoosh_timeout_ms(), 60000, "a repository's `timeout_ms = 0` leaves the operator's deadline");
+    assert(streq(config_log_level(), "info") == 1, "...its `level = off` leaves the operator's log");
+    assert_eq(config_hoosh_url_local(), 1, "...and a url of its own is a gateway the operator did not choose");
+    # /reload: the url in use is held, and whose it is with it
+    config_reload_hold();
+    var lt2 = "[hoosh]\ntimeout_ms = 30000\n";
+    file_write_all(_lp, lt2, strlen(lt2));
+    config_load();
+    assert_eq(config_hoosh_url_local(), 0, "premise: the new layers name no local url");
+    config_reload_keep();
+    assert_eq(config_hoosh_url_local(), 1, "/reload holds the url in use, so it stays the repository's gateway");
+    assert_eq(config_hoosh_timeout_ms(), 30000, "...and a shorter local deadline applies");
+    # the same url on both layers is no redirect
+    var lt3 = "[hoosh]\nurl = \"http://127.0.0.1:8088\"\n";
+    file_write_all(_lp, lt3, strlen(lt3));
+    config_load();
+    assert_eq(config_hoosh_url_local(), 0, "a local url equal to the global's is no redirect");
+    file_write_all(_lp, "", 0);
+    config_load();
+    assert_eq(config_hoosh_url_local(), 0, "no local url: the operator's gateway");
+    _cfg_gpath_c = s_gp; _cfg_gpath_done = s_gd; _cfg_lpath_c = s_lp; _cfg_lpath_done = s_ld; _cfg_lsource = s_ls; _cfg_path_c = s_pc;
+    _cfg_hoosh_url = s_hu; _cfg_hoosh_token = s_ht; _cfg_daimon_url = s_du; _cfg_tron_policy = s_tp; _cfg_tron_agent = s_ta;
+    _cfg_parse_ok = s_po; _cfg_parse_any = s_pa; _cfg_unknown_n = s_un; _cfg_suppressed_n = s_sn; _cfg_source = s_src;
+    _cfg_hoosh_timeout_ms = s_to; _cfg_log_level = s_lv; _cfg_log_file = s_lf; _cfg_hoosh_url_local = s_ul; _cfg_log_level_local = s_ll;
+    xunlink(_gp); xunlink(_lp);
+    return 0;
+}
+
+# test_gateway_cost (0.54.3, gap-review question 6, the maintainer's ruling): the operator's rate first, the gateway's figure
+# second, and only from a gateway the operator chose.
+fn _tgc_usage(body) { _hoosh_account_usage(bayan_json_v_parse_buf(body, strlen(body))); return 0; }
+fn test_gateway_cost() {
+    test_group("the cost tally falls back to the gateway's figure (0.54.3, question 6)");
+    var s_ul = _cfg_hoosh_url_local; var s_pn = _price_n;
+    var s_bt = _cfg_budget_tokens; var s_bc = _cfg_budget_cost_micro;
+    _price_n = 0;
+    _price_load(_lay_parse("[pricing.gw-rated]\ninput = 3000\noutput = 15000\n[pricing.gw-half]\ninput = 10\n[pricing.gw-free]\ninput = 0\noutput = 0\n"));
+    var ub = "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000,\"cost_micro_usd\":7777}}";
+    var u0 = "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000,\"cost_micro_usd\":0}}";
+    var un = "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000}}";
+    var ux = "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000,\"cost_micro_usd\":9223372036854775000}}";
+    var uneg = "{\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":1000,\"total_tokens\":2000,\"cost_micro_usd\":-5}}";
+    _cfg_hoosh_url_local = 0;
+    session_reset(); session_set_model("gw-unpriced");
+    _tgc_usage(ub);
+    assert_eq(session_cost_micro(), 7777, "an unpriced model on the operator's gateway takes the gateway's figure");
+    assert_eq(session_cost_seen(), 1, "...the tally is live");
+    assert_eq(session_cost_unpriced_count(), 0, "...and nothing is noted unpriced");
+    assert_eq(session_cost_gateway_count(), 1, "...and the response is counted as the gateway's");
+    _tgc_usage(ub);
+    assert_eq(session_cost_micro(), 15554, "it accumulates per response");
+    session_reset(); session_set_model("gw-rated");
+    _tgc_usage(ub);
+    assert_eq(session_cost_micro(), 18000, "the operator's rate comes first");
+    assert_eq(session_cost_gateway_count(), 0, "...and the gateway's figure is not used");
+    session_reset(); session_set_model("gw-free");
+    _tgc_usage(ub);
+    assert_eq(session_cost_micro(), 0, "a rate declared free stays free");
+    assert_eq(session_cost_seen(), 1, "...and priced");
+    assert_eq(session_cost_gateway_count(), 0, "...by the operator");
+    session_reset(); session_set_model("gw-half");
+    _tgc_usage(ub);
+    assert_eq(session_cost_micro(), 7777, "a half-declared rate is no rate: the gateway's figure stands");
+    assert_eq(session_cost_unpriced_count(), 0, "...and nothing is noted unpriced");
+    # a repository's gateway is one the operator did not choose
+    _cfg_hoosh_url_local = 1;
+    session_reset(); session_set_model("gw-unpriced");
+    _tgc_usage(ub);
+    assert_eq(session_cost_seen(), 0, "a repository's gateway does not price the tally");
+    assert_eq(session_cost_micro(), 0, "...at all");
+    assert_eq(session_cost_unpriced_count(), 1, "...the response is noted unpriced");
+    assert_eq(session_cost_gateway_count(), 0, "...and not as the gateway's");
+    session_reset(); session_set_model("gw-rated");
+    _tgc_usage(ub);
+    assert_eq(session_cost_micro(), 18000, "the operator's own rate still prices beside it");
+    _cfg_hoosh_url_local = 0;
+    # no usable figure stays unpriced, the warning with it
+    session_reset(); session_set_model("gw-unpriced");
+    _tgc_usage(u0);
+    assert_eq(session_cost_seen(), 0, "hoosh's 0 (a local provider) is no figure: it would silence the warning");
+    assert_eq(session_cost_unpriced_count(), 1, "...noted unpriced");
+    session_reset(); session_set_model("gw-unpriced");
+    _tgc_usage(un);
+    assert_eq(session_cost_unpriced_count(), 1, "an older gateway with no figure stays unpriced");
+    session_reset(); session_set_model("gw-unpriced");
+    _tgc_usage(ux);
+    assert_eq(session_cost_seen(), 0, "a figure no response carries reads as absent");
+    session_reset(); session_set_model("gw-unpriced");
+    _tgc_usage(uneg);
+    assert_eq(session_cost_seen(), 0, "...and so does a negative");
+    # the ruling's point: the ceiling fires out of the box
+    session_reset(); session_set_model("gw-unpriced");
+    _cfg_budget_tokens = 0 - 1; _cfg_budget_cost_micro = 5000;
+    assert_eq(budget_status(), BUDGET_OK, "premise: under the ceiling before the response");
+    _tgc_usage(ub);
+    assert_eq(budget_status(), BUDGET_COST, "the cost ceiling fires on the gateway's figure");
+    feed_init(); out_mode_set(OUT_RING);
+    _cfg_budget_cost_micro = 900000;
+    budget_warn_unmeasured();
+    cmd_state();
+    feed_flush_pending(); out_mode_set(OUT_FD1);
+    assert_eq(_mid_feed_plain_count("[budget]"), 0, "no unpriced warning for a tally that is live");
+    assert(_mid_feed_plain_count("priced by the gateway") >= 1, "/state says whose arithmetic the ceiling rests on");
+    assert(_mid_feed_plain_count("with the gateway's figure") >= 1, "...and the cost row does not credit [pricing]");
+    assert_eq(_mid_feed_plain_count("([pricing], this session)"), 0, "...at all");
+    feed_init();
+    session_set_model(0);
+    session_reset();
+    _price_n = s_pn; _cfg_budget_tokens = s_bt; _cfg_budget_cost_micro = s_bc; _cfg_hoosh_url_local = s_ul;
     return 0;
 }
 

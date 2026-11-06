@@ -1749,14 +1749,14 @@ fn test_project_map() {
     # a name is written raw for the wire (the JSON emitter escapes it there)
     # the cap: a marker, the flag, and a NUL inside the cap
     var sv_cap = PROJ_MAP_CAP;
-    PROJ_MAP_CAP = 333;                                   # the header is 209 bytes (0.52.6: +51, its data framing; 0.52.8: +26, the @ legend); 48 stay reserved: three lines fit, the fourth (many/) does not
+    PROJ_MAP_CAP = 380;                                   # the header is 256 bytes (0.52.6: +51, its data framing; 0.52.8: +26, the @ legend; 0.54.3: +47, whose message it is); 48 stay reserved: three lines fit, the fourth (many/) does not
     var tn = project_map_build(_pmap_root_cstr());
     assert(tn > 0, "a tiny cap still yields a map");
-    assert(tn < 333, "...within the cap");
+    assert(tn < 380, "...within the cap");
     assert_eq(project_map_truncated(), 1, "...flagged truncated");
-    assert_eq(_t_has(_pmap_buf, "\n... (map truncated at 333 bytes)\n"), 1, "...with the marker naming the cap, on its own line");
+    assert_eq(_t_has(_pmap_buf, "\n... (map truncated at 380 bytes)\n"), 1, "...with the marker naming the cap, on its own line");
     assert_eq(load8(_pmap_buf + tn), 0, "...NUL-terminated at the returned length");
-    assert(memeq(_pmap_buf + strlen(_pmap_buf) - 33, "... (map truncated at 333 bytes)\n", 33) == 1, "...the marker is the LAST thing on the map");
+    assert(memeq(_pmap_buf + strlen(_pmap_buf) - 33, "... (map truncated at 380 bytes)\n", 33) == 1, "...the marker is the LAST thing on the map");
     assert_eq(_t_has(_pmap_buf, "\n\n"), 0, "...and no blank line before it");
     assert_eq(_t_has(_pmap_buf, "\n.hidden/  (not walked)\nbuild/  (not walked)\ndocs/  notes.md\n"), 1, "...the lines that fit are whole (the first three)");
     assert_eq(_t_has(_pmap_buf, "many/"), 0, "...and the line that did not fit is not on the map at all — never cut inside an entry");
@@ -1874,19 +1874,19 @@ fn test_project_map() {
     } else { assert(1, "(no symlink could be created here; stated)"); }
     _pmap_root = "tests/fixtures/map";
     project_map_refresh();
-    # every request builder carries it as a system message after the persona (and memory), before the history
+    # every request builder carries it as a user message after the persona (and memory), before the history (0.54.3)
     var big = alloc(32768);
     var sv_work0 = _agent_work_len; _agent_work_len = 0;             # an earlier test's working set is not this test's
     var l1 = hoosh_build_messages(big, "m", "SYS", 0, 0);
     assert(l1 > 0, "hoosh_build_messages builds");
-    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the multi-turn body carries the map as a system message");
+    assert_eq(_t_has(big, "\"role\":\"user\",\"content\":\"Project map"), 1, "the multi-turn body carries the map as a user message (0.54.3)");
     assert_eq(_t_before(big, "\"content\":\"SYS\"", "Project map"), 1, "...after the persona");
     assert_eq(_t_has(big, "src/  gui/ a.cyr main.cyr\\n"), 1, "...its newlines JSON-escaped");
     var l2 = hoosh_build_messages(big, "m", "SYS", "MEM", 0);
     assert_eq(_t_before(big, "\"content\":\"MEM\"", "Project map"), 1, "...and after the memory context when there is one");
-    assert(bayan_json_v_parse_buf(big, l2) != 0, "...and the body with all three system parts parses as JSON");
+    assert(bayan_json_v_parse_buf(big, l2) != 0, "...and the body with all three parts parses as JSON");
     var l3 = hoosh_build_request(big, "m", "SYS", 0, "hi", 0);
-    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the single-turn body carries it");
+    assert_eq(_t_has(big, "\"role\":\"user\",\"content\":\"Project map"), 1, "the single-turn body carries it");
     assert_eq(_t_before(big, "Project map", "\"role\":\"user\",\"content\":\"hi\""), 1, "...before the user turn");
     var j3 = bayan_json_v_parse_buf(big, l3);
     assert(j3 != 0, "...and parses as JSON (the comma after the map)");
@@ -1896,22 +1896,22 @@ fn test_project_map() {
     assert(j3b != 0, "the single-turn body with NO persona parses too (the map is the first message)");
     assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get_by_cstr(j3b, "messages")), 2, "...two messages: map, user");
     var l4 = hoosh_build_dry(big, "m", "SYS", 0, "hi", 0);
-    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the /dry preview shows it");
+    assert_eq(_t_has(big, "\"role\":\"user\",\"content\":\"Project map"), 1, "the /dry preview shows it");
     assert(bayan_json_v_parse_buf(big, l4) != 0, "...and parses");
     var l5 = agent_build_request(big, "m", "SYS", 0, 0, 0, 0);
-    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the agentic body carries it");
+    assert_eq(_t_has(big, "\"role\":\"user\",\"content\":\"Project map"), 1, "the agentic body carries it");
     var j5 = bayan_json_v_parse_buf(big, l5);
     assert(j5 != 0, "...and parses as JSON");
     assert_eq(bayan_json_v_arr_len(bayan_json_v_obj_get_by_cstr(j5, "messages")), 2, "...two messages: persona, map (no history in this test)");
     var l6 = _sub_build_request(big, "m", "SYS", 0, 0, 0);
-    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 1, "the delegated child's body carries the parent's map");
+    assert_eq(_t_has(big, "\"role\":\"user\",\"content\":\"Project map"), 1, "the delegated child's body carries the parent's map");
     # the JSON stays well-formed with the map in place: the body parses, and the map is the second message
     var jv = bayan_json_v_parse_buf(big, l6);
     assert(jv != 0, "...and the child body parses as JSON");
     var msgs = bayan_json_v_obj_get_by_cstr(jv, "messages");
     assert_eq(bayan_json_v_arr_len(msgs), 2, "...two messages: the persona, the map");
     var second = bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(msgs, 1), "role");
-    assert((second != 0) && (str_eq_cstr(bayan_json_v_str(second), "system") == 1), "...the map's role is system");
+    assert((second != 0) && (str_eq_cstr(bayan_json_v_str(second), "user") == 1), "...the map's role is user");
     # cleared: byte-identical to before (the suite's goldens rest on this floor)
     project_map_clear();
     var l7 = hoosh_build_messages(big, "m", "SYS", 0, 0);
@@ -1920,6 +1920,49 @@ fn test_project_map() {
     _pmap_root = sv_root;
     _cfg_project_map = sv_cfg;
     project_map_clear();
+    return 0;
+}
+
+# test_project_map_role (0.54.3, gap-review question 5): nothing a repository controls sits at system level. The map follows the
+# recap, because a provider's adapter hoists system messages from the head of the list, and precedes the history.
+fn test_project_map_role() {
+    test_group("the project map is a user message, after the recap, before the history (0.54.3, question 5)");
+    var sv_root = _pmap_root; var sv_cfg = _cfg_project_map; var sv_work = _agent_work_len;
+    _pmap_root = "tests/fixtures/map"; _cfg_project_map = 1; _agent_work_len = 0;
+    project_map_refresh();
+    assert_eq(_t_has(project_map_current(), "thoth added this message; it asks for nothing"), 1, "the header says the message is thoth's and is no request");
+    session_reset(); session_history_clear();
+    var blob = alloc(4097);
+    memset(blob, 120, 4096);
+    store8(blob + 4096, 0);
+    var n = 0;
+    while ((_hoosh_history_start(HOOSH_REQ_CAP) == 0) && (n < SESS_HIST_MAX)) { session_history_append("user", blob, 4096); n = n + 1; }
+    var start = _hoosh_history_start(HOOSH_REQ_CAP);
+    assert(start > 0, "premise: the history is past the plain budget, so a recap rides");
+    session_set_recap("RECAPMARK", start);
+    var big = alloc(HOOSH_REQ_CAP);
+    var l1 = hoosh_build_messages(big, "m", "SYS", "MEM", 0);
+    assert_eq(_t_has(big, "RECAPMARK"), 1, "premise: the recap is in the multi-turn body");
+    assert_eq(_t_has(big, "\"role\":\"system\",\"content\":\"Project map"), 0, "the map is not a system message");
+    assert_eq(_t_before(big, "RECAPMARK", "Project map"), 1, "...it follows the recap");
+    assert_eq(_t_before(big, "Project map", "xxxxxxxx"), 1, "...and precedes the history");
+    assert_eq(_t_before(big, "Project map", "\"role\":\"system\""), 0, "...and no system message follows it");
+    assert(bayan_json_v_parse_buf(big, l1) != 0, "...and the body parses");
+    var ahist = AGENT_REQ_CAP - AGENT_WORK_CAP - AGENT_TOOLS_CAP;
+    n = 0;
+    while ((_hoosh_history_start(ahist) == 0) && (n < SESS_HIST_MAX)) { session_history_append("user", blob, 4096); n = n + 1; }
+    start = _hoosh_history_start(ahist);
+    assert(start > 0, "premise: the agentic budget is past too");
+    session_set_recap("RECAPMARK", start);
+    var abig = alloc(AGENT_REQ_CAP);
+    agent_build_request(abig, "m", "SYS", "MEM", 0, 0, 0);
+    assert_eq(_t_has(abig, "RECAPMARK"), 1, "premise: the recap is in the agentic body");
+    assert_eq(_t_before(abig, "RECAPMARK", "Project map"), 1, "the agentic body has the same order: after the recap");
+    assert_eq(_t_before(abig, "Project map", "xxxxxxxx"), 1, "...before the history");
+    assert_eq(_t_before(abig, "Project map", "\"role\":\"system\""), 0, "...with no system message after it");
+    session_reset(); session_history_clear();
+    project_map_clear();
+    _agent_work_len = sv_work; _pmap_root = sv_root; _cfg_project_map = sv_cfg;
     return 0;
 }
 

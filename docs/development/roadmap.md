@@ -118,7 +118,6 @@ unsure, patch.
 
 | Version | Arc | Gate |
 |---|---|---|
-| 0.54.x | [**The audit's remainder**](#054x--the-audits-remainder) | rulings: gap-review questions 4–8 |
 | 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | a runner; the floor for rung 3 |
 | 0.56.x | [**F8 — the AGNOS window**](#056x--f8-the-agnos-window) | a stable setu contract, a waitable channel |
 | 0.57.x | [**F9 — untrusted reads through the subagent context**](#057x--f9-untrusted-reads-through-the-subagent-context) | ruling: gap-review question 2 |
@@ -127,18 +126,6 @@ unsure, patch.
 | 0.60.x | [**F12 — OS-enforced sandboxing and network egress**](#060x--f12-os-enforced-sandboxing-and-network-egress) | ruling: question 1, in kavach |
 | 0.61.x | [**F13 — ACP server mode**](#061x--f13-acp-server-mode) | none |
 | 0.62.x | [**F14 — OTLP export**](#062x--f14-otlp-export-of-the-audit-trail), then the v1.0 gates | none |
-
-### 0.54.x — The audit's remainder
-
-Each is small once ruled, and a row leaves if the ruling is no. thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its newest tag.
-
-1. **A local `[hoosh].timeout_ms`** (gap-review question 4): `0` disables the stall deadline beside a repository-redirected gateway.
-2. **A local `[log].level`** (question 7): a clone can quieten the operator's session log.
-3. **The project map's role** (question 5): whether repository-controlled names belong in a `system` message. Measured with a real model, the map
-   saved 27% of tokens over nine navigation tasks (108k against 147k), six searches and two `list_dir` calls.
-4. **Pricing a turn from the gateway** (question 6): the picker shows the gateway's price and the tally ignores it, so `[budget].max_cost_micro`
-   cannot fire on an unpriced model.
-5. **What a refused pin store means** (question 8): today every tool is a first sight for that run, so a swapped definition is advertised, with one line said.
 
 ### 0.55.x — A real turn on AGNOS
 
@@ -229,7 +216,7 @@ in t-ron calls into bote.
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
 | **hoosh** | an `--agnos` lane: nothing in its CI or scripts builds one, so the `hoosh_agnos` on disk is 2.4.11. `cyrius build --agnos src/main.cyr` makes a current one | hoosh **2.10.0** · daimon 2.5.3 | 0.55.0's runner builds its own |
-| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:11`; daimon's roadmap puts caller auth at 2.6.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:133-140`) | daimon **2.5.3** | done — thoth's own pin store (ADR-0022) is the client-side floor; when the manifest carries a hash thoth compares its own to it (a mismatch = the two canonicalise differently, announced) |
+| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:11`; daimon's roadmap puts caller auth at 2.6.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:133-140`). Filed as daimon's `docs/development/issues/2026-11-06-a-client-that-loses-its-tool-pins-has-nothing-to-repair-from.md`: a client that loses its pins has nothing to repair trust from | daimon **2.5.3** | thoth's own pin store (ADR-0022) stays the client-side floor. When daimon ships this, a refused store rebuilds from daimon's pins instead of counting every tool as a first sight, and thoth compares its own hash to the manifest's (a mismatch = the two canonicalise differently, announced) |
 | **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:543`) and a plain `{role,content}` passes through verbatim, so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.10.0** | none yet — thoth sends text only |
 | **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.10.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
 | **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.10.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
@@ -261,6 +248,13 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
 **Scheduled above:** the pointer path being Linux-Wayland only (F8). **Proofs:** the runs behind this table, and how to repeat them, are in [`../guides/verification-pass.md`](../guides/verification-pass.md).
+
+**⛔ For the next repair batch:** a budget stop in one-shot `--json` prints no object. The stop is named on stderr, stdout is empty and the exit is 1, so a script reading the
+JSON gets nothing to parse. The cost ceiling firing out of the box since 0.54.3 makes this easier to reach.
+
+**⛔ Also for that batch:** a provider that stalls behind hoosh may never trip `[hoosh].timeout_ms`. hoosh sends an SSE `: keep-alive` comment through a silent stream every 15 s, and the deadline is per read, so
+the comments restart it. Seen on 2026-11-06: a claude-haiku-5-5 stream sat silent past 300 s until the run was killed. The cause is read from hoosh's source, not reproduced. A one-shot has no Esc, so a stall detector should
+count data frames, not bytes.
 
 **Degradations, by design or by the floor:**
 

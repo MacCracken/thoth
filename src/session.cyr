@@ -30,6 +30,7 @@ var _sess_tokens_seen = 0;
 # counts responses whose usage arrived but whose model had no [pricing] entry, so
 # /state can honestly note they were excluded rather than silently under-report.
 var _sess_cost_micro = 0;
+var _sess_cost_gateway = 0;   # 0.54.3: responses in the tally priced from the gateway's figure
 var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
@@ -308,6 +309,7 @@ fn session_reset() {
     _sess_cost_micro = 0;
     _sess_cost_seen = 0;
     _sess_cost_unpriced = 0;
+    _sess_cost_gateway = 0;
     return 0;
 }
 
@@ -338,6 +340,8 @@ fn session_add_cost(micro) {
     return 0;
 }
 fn session_note_unpriced() { _sess_cost_unpriced = _sess_cost_unpriced + 1; return 0; }
+fn session_note_gateway_cost() { _sess_cost_gateway = _sess_cost_gateway + 1; return 0; }
+fn session_cost_gateway_count() { return _sess_cost_gateway; }
 
 # cost_fmt: render integer micro-USD as a "$d.cc" cstring into dst (caller sizes it,
 # >= 24 B), returning the byte length. Truncates to whole cents (1 cent = 10000

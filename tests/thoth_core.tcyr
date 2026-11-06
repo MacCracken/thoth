@@ -128,6 +128,9 @@ fn main() {
     test_logging();
     test_logs_flag();
     test_hoosh_timeout();
+    test_local_tighten_only();     # 0.54.3: questions 4 and 7
+    test_local_layers_load();
+    test_gateway_cost();           # 0.54.3: question 6
     test_config_m4();
     test_state_reason_row();
     test_state_map_row(); test_dry_map(); test_state_paths_clean(); test_state_history_row(); test_help_strings(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();

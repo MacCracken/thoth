@@ -22,6 +22,7 @@ rsync -a --delete --exclude /build --exclude /.thoth/config.cyml ./ ecb:thoth-ve
 - **Anchor both excludes.** `--exclude /.thoth/config.cyml` keeps your local config home and `--exclude /build` skips the build output. Without the leading slash they also drop the tracked
   fixtures `tests/fixtures/home/.thoth/config.cyml` and `tests/fixtures/map/build/`, and about a dozen rows then fail with no fault in the code.
 - **A tree with no `.git` runs a few assertions fewer.** Copy `.git` too, with `HOME` set to an empty directory, for a run comparable to the release's.
+- **An empty `HOME` hides the toolchain from `cyrius test`,** and a copy of tracked files has no `build/`, where the tests write. Set `CYRIUS_HOME=$HOME/.cyrius` first and `mkdir build` in the copy, or the failures are the harness's.
 - **Hold stdin both ways for a final suite run:** closed with `</dev/null`, and open through a FIFO. Never use `nohup … &`: it makes the shell
   ignore SIGINT, and a test then fails on the harness.
 - **Under a sandboxing agent,** a compiled binary's local TCP needs the sandbox off.
@@ -74,7 +75,7 @@ and once with `false`:
 grep -c list_dir run-map-on.log run-map-off.log
 ```
 
-Report `list_dir` calls per turn, and the bytes the map added per round. This also informs gap-review question 5.
+Report `list_dir` calls per turn, and the bytes the map added per round. To compare the map's role, run a binary from each side of 0.54.3 on the same tasks. A task's tokens swing widely, so three runs say more than one.
 
 ## V-3 — A large repository
 

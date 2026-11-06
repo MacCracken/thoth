@@ -318,11 +318,17 @@ fn _log_open_safe(path) {
 fn log_init() {
     # 0.44.2: `--logs` already bound the sink at the top of main. The flag is the operator's decision for
     # THIS run — re-binding to [log].file here would silently redirect a post-mortem capture into the very
-    # file the operator was trying to bypass. A configured LEVEL still applies (it narrows nothing the
-    # flag promised), which is why only the file half is skipped.
+    # file the operator was trying to bypass. A configured LEVEL still applies, which is why only the file
+    # half is skipped. 0.54.3 (gap-review question 7): the operator's own level may set it, and a repository's
+    # may only add detail to the capture: `level = "error"` used to narrow a post-mortem to next to nothing.
     if (_log_argv_bound == 1) {
         var alv = config_log_level();
-        if (alv != 0) { var al = _log_parse_level(alv); if (al >= 0) { sakshi_set_level(al); } }
+        if (alv != 0) {
+            var al = _log_parse_level(alv);
+            if ((config_log_level_local() == 1) && (al < sakshi_get_level())) {
+                _cfg_note_suppressed("log.level (a local value may only add detail)");
+            } elif (al >= 0) { sakshi_set_level(al); }
+        }
         return 1;
     }
     var file = config_log_file();

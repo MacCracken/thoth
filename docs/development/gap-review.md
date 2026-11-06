@@ -265,38 +265,10 @@ Each of these blocks something above. None has a default answer.
    that may be a *more* persuasive injection vector than the raw text.
 3. **Should thoth drive sit's write surface at all** (gap 7), or does the read-only git producer stay
    the boundary?
-4. **May a repository's local layer switch off `[hoosh].timeout_ms`?** (The 0.52.6 audit's design question D4.) A
-   local `timeout_ms = 0` disables the 0.44.2 stall deadline; beside a repo-redirected `[hoosh].url` that is a hang
-   the TUI cannot break out of. The strictest-wins reading (a local value may shorten the deadline, never disable
-   it) is the one [ADR-0019](../adr/0019-layered-config-global-base-local-override.md)'s principle points to; it was
-   not ruled on at 0.52.6.
-5. **Should the project map ride a non-system role?** (Design question D3.) 0.52.6 framed the map as the repository's
-   data and put it through the injection guard (audit F2); what remains is whether repository-controlled names
-   belong in a `system` message at all — [ADR-0012](../adr/0012-memory-seam-omit-until-mneme.md) made the analogous memory
-   surface opt-in.
 
-6. **May the cost tally price a turn from the gateway when `[pricing]` names no rate?** hoosh (2.8.0) publishes a
-   price per catalog model (known prices only — the operator's `[[models]]` block, a provider that lists its own, or
-   hoosh's table) and reports `cost_micro_usd` in every response's usage. The picker and `/models` show that price,
-   marked `(hoosh)`; the tally and `[budget].max_cost_micro` still price from the operator's table alone, so a
-   session on an unpriced model reads UNPRICED and its cost ceiling cannot fire. Reading the gateway's figure would
-   make the ceiling enforceable out of the box — but it trusts the gateway's arithmetic for a spend limit, and a
-   repository's local `[hoosh].url` (with its own token, the D2 ruling) is a gateway the operator did not choose.
-   If yes, the likely shape is: the operator's rate first, the gateway's figure second, and only from a global
-   `[hoosh].url`.
-
-7. **May a repository's local layer set `[log].level`?** (The 0.52.8 audit's design question C3, not ruled on.) The
-   level is a preference under [ADR-0021](../adr/0021-authority-keys-are-global-only.md), while the file it writes
-   (`[log].file`) is global-only. So a clone's `level = "off"` switches off the operator's own session log, and the
-   log is the record of what a session did (each turn, tool round and gate decision). It reaches an operator's
-   `--logs` capture too: "off" leaves the flag's sink bound, but a quieter level (`level = "error"`) narrows it. The
-   0.52.8 ruling for the switches that guard a session (a local layer may only turn `[guard]` and `[redact]` on)
-   points to the same shape here: a local level may make the log more detailed, never quieter than the global's.
-
-8. **Should a pin store thoth refuses withhold daimon's tools?** (The not-verified pass's A-4.) A rejected, linked, unreadable or oversized store is refused whole, so the table is
-   empty and every tool is a first sight for that run: a swapped definition reaches the model, with one red line said. [ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)
-   chose that, because only someone with the operator's uid reaches those states, and that person could simply delete the file. Against it: security here degrades closed everywhere else. Withholding
-   daimon's tools until `/tools trust` would close it, at the cost of a run that loses its tools over a store it cannot read.
+(Ruled 2026-11-06, not questions: a repository may only shorten `[hoosh].timeout_ms` and only add detail to `[log].level`; the project map is a user message; the tally falls back to the
+gateway's figure, only from a gateway the operator chose. All four shipped at 0.54.3. A pin store thoth refuses stays first sight with a red line, because an agent without its tools has
+lost the thing it is for. The repair is filed with daimon and sits on the roadmap's waiting table.)
 
 (Ruled 2026-11-05, not a question: t-ron's payload scanner stays as shipped. With a `[tron].policy` bound it reads
 `thoth_shell`'s command and every MCP tool's arguments, and denies some everyday commands, such as `git log -5; git status`.

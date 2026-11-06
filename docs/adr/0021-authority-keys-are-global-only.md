@@ -160,3 +160,15 @@ local layer for anyone working under `/tmp`. A config another user owns is skipp
 stay. An operator working in a checkout another uid owns sees its config ignored, and is told.
 
 An unreadable global config now counts as a refused parse, so thoth starts unconfigured rather than running on the local layer alone.
+
+## Addendum (0.54.3)
+
+The maintainer ruled on four of the questions left open, and each draws the same line: what a repository controls does not reach the operator's limits, records or trust.
+
+- **`[hoosh].timeout_ms` may only shorten the deadline.** A local `0` beside a redirected `[hoosh].url` was a hang the TUI could not break out of. A local value that lengthens or
+  disables the deadline is ignored and named. A global `0` is the operator's own choice.
+- **`[log].level` may only add detail.** The file is global-only, and the log is the record of what a session did, so a clone's `level = "off"` silenced the operator's own record.
+  With a global file and no global level, the floor is the info that file gets by default. A `--logs` capture holds the same way, at the flag's level.
+- **The project map is a user message.** Nothing a repository controls belongs at system level. The guard's marking stays, and the header says the message is thoth's and asks for nothing.
+- **The tally may price from the gateway's figure, but only from a gateway the operator chose.** The operator's rate comes first, and a local `[hoosh].url` never prices. A ceiling that
+  cannot fire was worse than one resting on the gateway's arithmetic.

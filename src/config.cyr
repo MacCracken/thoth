@@ -22,6 +22,7 @@ var _cfg_loaded = 0;
 var _cfg_parse_ok = 0;       # 1 once config_load READ + parsed the file this call (regardless of whether a url was set); 0 = the file was unreadable — lets /reload degrade honestly (0.24.4)
 var _cfg_hoosh_url = 0;      # cstring, or 0 if unset
 var _cfg_hoosh_token = 0;    # cstring, or 0 if unset
+var _cfg_hoosh_url_local = 0;  # 0.54.3: 1 when a local layer redirected [hoosh].url (a gateway the operator did not choose)
 var _cfg_hoosh_model = 0;    # cstring, or 0 if unset
 var _cfg_hoosh_stream = 1;   # 1 = stream completions (default), 0 = blocking
 var _cfg_hoosh_history = 1;  # 1 = multi-turn context (default), 0 = stateless
@@ -911,6 +912,60 @@ fn _cfg2_int_ceiling(l, g, key, label) {
     return lv;
 }
 
+# _cfg_hoosh_timeout_load (0.54.3, gap-review question 4, the maintainer's ruling): the stall deadline, strictest wins. Beside
+# a repository-redirected [hoosh].url, a local `timeout_ms = 0` was a hang the TUI could not break out of, so a local value
+# may shorten the deadline and never lengthen or disable it. The base is the global's, or the compiled default when the
+# global is silent. A global 0 is the operator's own choice: any local deadline shortens it. Refused values keep the
+# global's (0 - 1 when it has none, the default) and are named. Returns what _cfg_hoosh_timeout_ms holds.
+fn _cfg_hoosh_timeout_load(l, g) {
+    var gv = _cfg_int(g, "timeout_ms");
+    if (gv < 0) { gv = 0 - 1; }
+    if (_cfg_has(l, "timeout_ms") == 0) { return gv; }
+    var lv = _cfg_int(l, "timeout_ms");
+    var label = "hoosh.timeout_ms (a local value may only shorten it, never switch it off)";
+    if ((lv == 0) && (gv == 0)) { return 0; }             # the same value asks for nothing
+    if (lv <= 0) { _cfg_note_suppressed(label); return gv; }
+    if (gv == 0) { return lv; }
+    var base = gv;
+    if (base < 0) { base = HOOSH_TIMEOUT_MS_DEFAULT; }
+    if (lv > base) { _cfg_note_suppressed(label); return gv; }
+    return lv;
+}
+
+# _cfg_log_rank (0.54.3): how much a [log].level records, the higher the more: -1 off, 0 fatal .. 5 trace, and unset or
+# unknown as info, which is what _log_parse_level gives them (a test holds the two together). Pure.
+fn _cfg_log_rank(s) {
+    if (s == 0) { return 3; }
+    if (streq(s, "off") == 1)   { return 0 - 1; }
+    if (streq(s, "fatal") == 1) { return 0; }
+    if (streq(s, "error") == 1) { return 1; }
+    if (streq(s, "warn") == 1)  { return 2; }
+    if (streq(s, "debug") == 1) { return 4; }
+    if (streq(s, "trace") == 1) { return 5; }
+    return 3;
+}
+# _cfg_log_level_load (0.54.3, gap-review question 7, the maintainer's ruling): the session log is the record of what a
+# session did and [log].file is the operator's, so a clone's `level = "off"` silenced the operator's own record. A local
+# level may add detail, never less than the global's. With no global level but a global file, the floor is the info that
+# file gets by default. With neither there is nothing of the operator's to quieten, except a --logs capture: log_init holds
+# that one, which is what config_log_level_local is for. Pure but for the suppressed note.
+var _cfg_log_level_local = 0;
+fn config_log_level_local() { return _cfg_log_level_local; }
+fn _cfg_log_level_load(l, g) {
+    _cfg_log_level_local = 0;
+    var gv = _cfg_str(g, "level");
+    var lv = _cfg_str(l, "level");
+    if (lv == 0) { return gv; }
+    if ((gv != 0) || (_cfg_str(g, "file") != 0)) {
+        if (_cfg_log_rank(lv) < _cfg_log_rank(gv)) {
+            _cfg_note_suppressed("log.level (a local value may only add detail)");
+            return gv;
+        }
+    }
+    _cfg_log_level_local = 1;
+    return lv;
+}
+
 fn _price_append(sections) {
     if (sections == 0) { return 0; }
     var n = vec_len(sections);
@@ -1590,7 +1645,7 @@ fn _cfg_parse_sections(path, is_global) {
 #   * [tron].agent changed the id each t-ron check names, under the policy bound at startup.
 # config_reload_hold() snapshots them before the re-parse; config_reload_keep() puts back any that changed and names
 # each ("changed — restart to apply"). A token changed under an UNCHANGED url still applies: that is a rotation.
-var _cfg_rh_url = 0; var _cfg_rh_tok = 0; var _cfg_rh_tpol = 0; var _cfg_rh_tag = 0; var _cfg_rh_logf = 0;
+var _cfg_rh_url = 0; var _cfg_rh_urll = 0; var _cfg_rh_tok = 0; var _cfg_rh_tpol = 0; var _cfg_rh_tag = 0; var _cfg_rh_logf = 0;
 var _cfg_rh_logl = 0; var _cfg_rh_pers = 0; var _cfg_rh_tier = 0; var _cfg_rh_theme = 0; var _cfg_rh_hist = 0;
 var _cfg_rh_sess = 0; var _cfg_rh_tpen = 0; var _cfg_rh_tpf = 0; var _cfg_rh_tpd = 0;
 var CFG_HELD_MAX = 16;
@@ -1614,7 +1669,7 @@ fn _cfg_same_str(a, b) {
     return streq(a, b);
 }
 fn config_reload_hold() {
-    _cfg_rh_url = _cfg_hoosh_url; _cfg_rh_tok = _cfg_hoosh_token; _cfg_rh_tpol = _cfg_tron_policy; _cfg_rh_tag = _cfg_tron_agent;
+    _cfg_rh_url = _cfg_hoosh_url; _cfg_rh_urll = _cfg_hoosh_url_local; _cfg_rh_tok = _cfg_hoosh_token; _cfg_rh_tpol = _cfg_tron_policy; _cfg_rh_tag = _cfg_tron_agent;
     _cfg_rh_logf = _cfg_log_file; _cfg_rh_logl = _cfg_log_level; _cfg_rh_pers = _cfg_persona; _cfg_rh_tier = _cfg_ui_tier;
     _cfg_rh_theme = _cfg_ui_theme; _cfg_rh_hist = _cfg_history_file; _cfg_rh_sess = _cfg_session_file;
     _cfg_rh_tpen = _cfg_toolpin_enabled; _cfg_rh_tpf = _cfg_toolpin_file; _cfg_rh_tpd = _cfg_toolpin_durable;
@@ -1623,7 +1678,7 @@ fn config_reload_hold() {
 fn config_reload_keep() {
     _cfg_held_n = 0;
     if (_cfg_same_str(_cfg_hoosh_url, _cfg_rh_url) == 0) {
-        _cfg_hoosh_url = _cfg_rh_url; _cfg_hoosh_token = _cfg_rh_tok;
+        _cfg_hoosh_url = _cfg_rh_url; _cfg_hoosh_url_local = _cfg_rh_urll; _cfg_hoosh_token = _cfg_rh_tok;
         _cfg_note_held("[hoosh].url (its token stays with the url in use)");
     }
     if (_cfg_same_str(_cfg_tron_policy, _cfg_rh_tpol) == 0) { _cfg_tron_policy = _cfg_rh_tpol; _cfg_note_held("[tron].policy"); }
@@ -1710,6 +1765,7 @@ fn config_load() {
         var gu2 = _cfg_str(hoosh_g, "url");
         if (gu2 != 0) { if (streq(lurl, gu2) == 1) { own_url = 0; } }
     }
+    _cfg_hoosh_url_local = own_url;    # 0.54.3: hoosh_gateway_cost prices only from a gateway the operator chose
     if ((ltok != 0) && (own_url == 0)) {
         var gtk = _cfg_str(hoosh_g, "token");
         var same = 0;
@@ -1725,7 +1781,7 @@ fn config_load() {
     _cfg_hoosh_history = _cfg2_bool(hoosh_l, hoosh_g, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg2_bool(hoosh_l, hoosh_g, "tools", 1);        # default on
     _cfg_hoosh_max_iters = _cfg2_int_capped(hoosh_l, hoosh_g, "max_iters", HOOSH_MAX_ITERS_DEFAULT, "hoosh.max_iters (a local value may only lower it)");    # -1 when absent -> default in the getter
-    _cfg_hoosh_timeout_ms = _cfg2_int(hoosh_l, hoosh_g, "timeout_ms");  # 0.44.2: -1/absent -> HOOSH_TIMEOUT_MS_DEFAULT
+    _cfg_hoosh_timeout_ms = _cfg_hoosh_timeout_load(hoosh_l, hoosh_g);  # 0.44.2: -1/absent -> HOOSH_TIMEOUT_MS_DEFAULT; 0.54.3: a local value may only shorten it
     _cfg_hoosh_compact_at = _cfg2_int(hoosh_l, hoosh_g, "compact_at");  # -1/absent -> off (0 from the getter)
     _cfg_hoosh_parallel = _cfg2_bool(hoosh_l, hoosh_g, "parallel", 1);  # default on
     _cfg_hoosh_spend_load(hoosh_l, hoosh_g);                      # 0.52.8 (ruling R1): reasoning + max_tokens, lower-only locally
@@ -1752,7 +1808,7 @@ fn config_load() {
     var log_l = _cfg_section_pairs(lo, "log");        var log_g = _cfg_section_pairs(gl, "log");
     # AUTHORITY — an unjailed write sink: thoth creates and appends to whatever path this names.
     _cfg_log_file = _cfg2_str_global_only(log_l, log_g, "file", "log.file");
-    _cfg_log_level = _cfg_label(_cfg2_str(log_l, log_g, "level"));   # 0.45.2: echoed at launch; the local layer may set it
+    _cfg_log_level = _cfg_label(_cfg_log_level_load(log_l, log_g));   # 0.45.2: echoed at launch; 0.54.3: a local value may only add detail
     var hist_l = _cfg_section_pairs(lo, "history");   var hist_g = _cfg_section_pairs(gl, "history");
     # AUTHORITY — an unjailed write sink, and one holding the operator's own typed input.
     # 0.45.5: a leading `~/` or `$HOME/` expands to the home directory (the path was verbatim before, so
@@ -1927,7 +1983,7 @@ var HOOSH_MAX_TOKENS_CEILING = 128000;
 # framer can no longer fit so the model keeps continuity instead of seeing a silent gap. Default OFF: it spends an
 # extra (small) completion whenever the skipped range grows, and thoth never spends the user's tokens uninvited.
 fn config_hoosh_summarize() { return _cfg_hoosh_summarize; }
-# config_project_map (0.50.0, F5): 1 when the project-map hint rides the system prompt (the default). A preference
+# config_project_map (0.50.0, F5): 1 when the project-map hint rides the request (the default). A preference
 # under ADR-0021 — a local layer can only change what of the jailed tree is LISTED for the model and how many bytes
 # each request carries; it grants no path and names no command.
 var _cfg_project_map = 1;
@@ -2118,7 +2174,8 @@ fn config_hoosh_max_iters() {
 # The default is deliberately GENEROUS (180 s): it is a stall detector, not a latency budget. A reasoning
 # model can legitimately think for minutes before its first token, and this is a per-READ deadline, not a
 # per-turn one — a stream that keeps producing frames resets it on every frame and may run as long as it
-# likes. `0` restores the old unbounded behaviour for anyone who needs it; the floor is 1 s.
+# likes. `0` restores the old unbounded behaviour for an operator who needs it (global only since 0.54.3, see
+# _cfg_hoosh_timeout_load); the floor is 1 s.
 var HOOSH_TIMEOUT_MS_DEFAULT = 180000;
 var HOOSH_TIMEOUT_MS_MIN = 1000;
 fn config_hoosh_timeout_ms() {
@@ -2261,6 +2318,8 @@ fn config_log_file() { return _cfg_log_file; }
 
 # config_log_level: the configured log level cstring, or 0 if unset.
 fn config_log_level() { return _cfg_log_level; }
+# config_hoosh_url_local (0.54.3): 1 when the gateway in use is one a repository's local layer named.
+fn config_hoosh_url_local() { return _cfg_hoosh_url_local; }
 
 # config_history_file: path to the persistent INPUT-history file (0.11.2), or 0 (none
 # -> recall is session-local only). This is the user's typed COMPOSER lines (recalled

@@ -809,15 +809,19 @@ fn _hoosh_emit_recap(dst, off, cap, start, wrote) {
     off = _append_cstr_cap(dst, off, cap, "\"}");
     return off;
 }
-# _hoosh_emit_map (0.50.0, F5): the project-map system message — after the persona and the memory context, before
-# the recap and the history — when a turn site refreshed one (project_map_current() != 0). Omitted otherwise:
-# byte-identical requests with [project].map = false, and in every suite golden (no turn site runs there).
+# _hoosh_emit_map (0.50.0, F5): the project-map message — after the persona, the memory context and the recap, before the
+# history — when a turn site refreshed one (project_map_current() != 0). Omitted otherwise: byte-identical requests with
+# [project].map = false, and in every suite golden (no turn site runs there).
+# 0.54.3 (gap-review question 5, the maintainer's ruling): a USER message. The names are the repository's, and nothing a
+# repository controls belongs at system level; the guard's marking and the header say what they are. It sits after the recap
+# because a provider's adapter hoists system messages from the head of the list, and the leading user message is a plain
+# run of user turns on every provider.
 fn _hoosh_emit_map(dst, off, cap, wrote) {
     var m = project_map_current();
     if (m == 0) { return off; }
     if (load8(m) == 0) { return off; }
     if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
-    return _hoosh_emit_msg_cap(dst, off, cap, "system", m);
+    return _hoosh_emit_msg_cap(dst, off, cap, "user", m);
 }
 fn _hoosh_has_map() { var m = project_map_current(); if (m == 0) { return 0; } if (load8(m) == 0) { return 0; } return 1; }
 fn _hoosh_has_recap(start) {
@@ -852,13 +856,13 @@ fn hoosh_build_messages(dst, model, system, mem, stream) {
         off = _hoosh_emit_msg_cap(dst, off, cap, "system", mem);
         wrote = 1;
     }
-    off = _hoosh_emit_map(dst, off, cap, wrote);            # 0.50.0 (F5): the project map, when refreshed this turn
-    if (_hoosh_has_map() == 1) { wrote = 1; }
     # 0.36.4: the overflow recap — a system message standing in for the messages below `start` the budget can no
     # longer fit, so the model sees a summary instead of a silent gap. Omitted unless [hoosh].summarize produced one
     # covering exactly this skip (byte-identical floor when off / absent).
     off = _hoosh_emit_recap(dst, off, cap, start, wrote);
     if (_hoosh_has_recap(start) == 1) { wrote = 1; }
+    off = _hoosh_emit_map(dst, off, cap, wrote);            # 0.50.0 (F5): the project map, when refreshed this turn
+    if (_hoosh_has_map() == 1) { wrote = 1; }
     var i = start;
     while (i < total) {
         if (wrote == 1) { off = _append_cstr_cap(dst, off, cap, ","); }
@@ -1083,6 +1087,19 @@ fn hoosh_cost_micro(prompt, completion, in_rate, out_rate) {
 # [pricing.<model>] rate, so a mid-session switch prices each turn correctly. A frame
 # with no usage is a no-op; usage present but the model unpriced is recorded honestly
 # (session_note_unpriced) rather than counted as $0. Called from both turn paths.
+#
+# _hoosh_gateway_cost (0.54.3, gap-review question 6, the maintainer's ruling): the gateway's own figure for a response, for a
+# model the operator's table does not price; -1 when it may not be used. A spend ceiling that cannot fire is worse than one
+# resting on the gateway's arithmetic, so the operator's rate comes first and this second, and only from a gateway the operator
+# chose: a repository's local [hoosh].url names one they did not. hoosh's 0 reads as no figure: it is what a local provider
+# reports, and counting it would silence the unpriced warning on a model with no price. For a model hoosh has no price for
+# the figure is its fallback rate for the provider, an estimate. A cached reply carries the original call's cost, as a rate does.
+fn _hoosh_gateway_cost(v) {
+    if (config_hoosh_url_local() == 1) { return 0 - 1; }
+    var c = _hoosh_usage_field(v, "cost_micro_usd");
+    if (c <= 0) { return 0 - 1; }
+    return c;
+}
 fn _hoosh_account_usage(v) {
     if (v == 0) { return 0; }
     var tot = _hoosh_usage_field(v, "total_tokens");
@@ -1100,7 +1117,13 @@ fn _hoosh_account_usage(v) {
     # missing side at $0 and showing an understated total (ADR-0010 honest-omit).
     # An explicit `= 0` reads as 0 (declared free), so a deliberately-free side
     # still prices — _cfg_int distinguishes an omitted key (-1) from `= 0`.
-    if ((in_rate < 0) || (out_rate < 0)) { session_note_unpriced(); return 0; }
+    if ((in_rate < 0) || (out_rate < 0)) {
+        var gw = _hoosh_gateway_cost(v);
+        if (gw < 0) { session_note_unpriced(); return 0; }
+        session_add_cost(gw);
+        session_note_gateway_cost();
+        return 0;
+    }
     session_add_cost(hoosh_cost_micro(p, c, in_rate, out_rate));
     return 0;
 }
@@ -1426,7 +1449,7 @@ fn _hoosh_ctx_label(n, dst, cap) {
 }
 
 # _hoosh_entry_tail (0.52.7): what a model row adds after its id, faint: the operator's [pricing] rate, else the
-# gateway's own (marked "(hoosh)" — thoth's tally does not price from it), then the context window, joined by " · ".
+# gateway's own (marked "(hoosh)"; the tally falls back to its per-response figure, _hoosh_gateway_cost), then the context window, joined by " · ".
 # `m` is the catalog entry (0 = id only). Nothing at all when nothing is known (ADR-0010).
 fn _hoosh_entry_tail(ids, m) {
     var pb[80];
@@ -1613,8 +1636,8 @@ fn hoosh_price_label_from(pin, pout, dst, cap) {
 }
 
 # hoosh_gw_price_label (0.52.7): the gateway's price for a model, as "$<in>/$<out> per M (hoosh)", into dst (cap >= 64).
-# Shown only where the operator's [pricing] names no rate — and marked, because thoth's cost tally prices from the
-# operator's table alone (a gateway-priced model still reads unpriced in /state). PURE over the inputs.
+# Shown only where the operator's [pricing] names no rate — and marked, because the rate is the gateway's and not the
+# operator's. PURE over the inputs.
 fn hoosh_gw_price_label(pin, pout, dst, cap) {
     if (cap < 64) { return 0; }
     var off = hoosh_price_label_from(pin, pout, dst, cap);
