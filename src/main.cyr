@@ -166,10 +166,10 @@ fn main() {
     if (oneshot_tier_seen() == 0) {
         var ct = config_ui_tier();
         if (ct != 0) { if (load8(ct) != 0) {
-            var cp = ui_tier_pref_from_name(ct);
-            if (cp >= 0) { ui_set_tier_pref(cp); }
-            else { emit_err("thoth: unknown [ui].tier (use auto|rich|simple); using auto\n"); }
-        } }
+                var cp = ui_tier_pref_from_name(ct);
+                if (cp >= 0) { ui_set_tier_pref(cp); }
+                else { emit_err("thoth: unknown [ui].tier (use auto|rich|simple); using auto\n"); }
+            } }
     }
     # 0.43.5: unrecognised config keys go to STDERR too, so a one-shot/CI caller (whose stdout must stay
     # clean, and who never sees the greeting or /state) still learns their config line did nothing.
@@ -209,10 +209,10 @@ fn main() {
     # it half-knows is the silence 0.43.5 exists to break.
     var cth = config_ui_theme();
     if (cth != 0) { if (load8(cth) != 0) {
-        var thi = ui_theme_from_name(cth);
-        if (thi >= 0) { ui_set_theme(thi); }
-        else { emit_err("thoth: unknown [ui].theme (use dark|light|rainbow); using dark\n"); }
-    } }
+            var thi = ui_theme_from_name(cth);
+            if (thi >= 0) { ui_set_theme(thi); }
+            else { emit_err("thoth: unknown [ui].theme (use dark|light|rainbow); using dark\n"); }
+        } }
     log_init();             # bind structured driver-event logging if [log] is configured; else off
     gate_init();            # bind the t-ron seam if [tron].policy loads; else fail-closed confirm
     # 0.51.0 (F6): bind the durable tool-pin store — ONE site, before the mode dispatch, so the REPL, the TUI, the
@@ -228,9 +228,18 @@ fn main() {
     if (mode == ONESHOT_COMPLETION) { return oneshot_print_completion(); }
     if (mode == ONESHOT_GUI) { return gui_run(); }   # 0.30.0: `thoth gui` opens the T3 Wayland window (degrades honestly if no compositor)
     if (mode == ONESHOT_RUN) {
+        # 0.53.3 (P-12): the session hooks fire here too: the template says once before the first turn and once at exit, and a scripted
+        # run is where a session_end hook matters most. Under OUT_NULL: stdout is the answer, and a failure reaches stderr.
+        var hm = out_mode();
+        out_mode_set(OUT_NULL);
+        hooks_session_start();
+        out_mode_set(hm);
         one_shot_set(1);
         var rc = one_shot_run();
         one_shot_set(0);
+        out_mode_set(OUT_NULL);
+        hooks_session_end();
+        out_mode_set(hm);
         return rc;
     }
     # 0.24.2: bind conversation resume ([session].file) — INTERACTIVE-ONLY (one-shot returned above, so it

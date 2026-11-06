@@ -118,3 +118,19 @@ Three of the residuals above closed: 0.20.1 kills the `/bin/sh`'s whole process 
 tool a Windows lane (`shell_supported()` is 0 only on AGNOS, which announces it); 0.39.0 creates the
 capture temp `O_CREAT | O_EXCL` at 0600 — `O_NOFOLLOW` was never the load-bearing flag. The decision
 (opt-in, gated, a local capability) is unchanged.
+
+## Addendum (0.53.3)
+
+The capture is a pipe on POSIX, not a temp file. The file had no bound while the command ran (`yes` wrote 2.5 GB to `/tmp` in a
+second, and a tmpfs is RAM), and it was read back by name, so a command could swap a FIFO in and hang thoth past its deadline
+with Esc dead. Now thoth drains the pipe as it polls, past the cap, so a child never blocks on a full pipe, and partial output
+survives a kill as it did. Windows keeps the temp file described above.
+
+The residual in the first addendum was wider than it said: a job left running **after the command returned** outlived the
+deadline and thoth, because the group was killed only while the shell lived. A dev server is a real workflow, so it is not killed at
+return. Instead a job still holding the capture's stdout dies at its next write, and one session-wide watcher (`_exec_bg_watch`) kills
+what is left when thoth goes, including on SIGKILL, since it watches a pipe rather than a signal. `setsid` with redirected output is
+the way out, and the tool's description says so.
+
+`[verify].command` is command execution on what the model just wrote, past a denied `thoth_shell`. It is gated under the reserved
+`thoth_verify`. The decision here (opt-in, gated, a local capability) is unchanged.

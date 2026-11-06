@@ -112,7 +112,7 @@ fn _hook_env_put(dst, off, cap, key, value) {
 # timed out, -4 when the operator stopped it (0.52.0: Esc, or the window closing — see exec.cyr's wait poll), or -1
 # when the hook could not be run at all — announced here, on every surface, and not counted as fired.
 # ⚠ 0.45.2: -1 used to be silent, counted as fired, and read by hooks_pre_tool as "did not block". It is never
-# a hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to create the capture file, to
+# a hook's own verdict (an exit code is 0..255, a signal 128+sig): it is thoth failing to set up the capture, to
 # fork or to wait — or, since 0.45.6, a target whose capture cannot carry an environment block (the PE lane).
 fn _hook_run(cmd, event, tool, args) { return _hook_run_cut(cmd, event, tool, args, 0); }
 
@@ -154,7 +154,7 @@ fn _hook_run_cut(cmd, event, tool, args, args_cut) {
     var code = load64(&st);
     if ((code == (0 - 1)) && (load64(&st + 8) == 0)) {
         note_emit("  [hook "); note_emit(event);
-        note_println("] could NOT be run — creating its capture file, forking or waiting failed; it gave no verdict");
+        note_println("] could NOT be run — setting up its capture, forking or waiting failed; it gave no verdict");
         log_begin("hook"); log_kv_str("event", event); log_kv_str("result", "could_not_run"); log_commit(SK_WARN);
         return 0 - 1;
     }
@@ -187,6 +187,7 @@ fn _hook_run_cut(cmd, event, tool, args, args_cut) {
         }
         emit(_hook_buf);
         oprintln("");
+        if (exec_capture_total() > n) { ui_emit(ROLE_FAINT, "  (the first "); ofmt_int(n); ui_emit(ROLE_FAINT, " of "); ofmt_int(exec_capture_total()); ui_emit(ROLE_FAINT, " bytes)"); oprintln(""); }   # 0.53.3: it stopped with no mark
     }
     return code;
 }
@@ -224,8 +225,8 @@ fn hooks_session_end() {
 # belonged to is stopping anyway, and "stopped" must never read as "approved".
 # ⚠ 0.45.2 — SO IS A HOOK THAT COULD NOT BE RUN. This used to return 1 there, reasoning that a hook which fails to
 # spawn must not become a mysterious deny-everything. But a broken SCRIPT exits non-zero (127 included) and already
-# denies; -1 is thoth failing to create the capture file, fork or wait — which made the operator's deny an allow on
-# every macOS call and, on Linux, for any local user able to pre-plant the capture file names. Nothing about it is
+# denies; -1 is thoth failing to set up the capture, fork or wait — which made the operator's deny an allow on
+# every macOS call and, on Linux, for any local user able to pre-plant the capture file names (a file then; a pipe since 0.53.3). Nothing about it is
 # mysterious now: _hook_run names the cause and the BLOCKED line names the tool.
 # ⚠ 0.44.2 — A CONFIGURED pre_tool HOOK ON A TARGET WITH NO SHELL WAS INERT AND SILENT. On AGNOS —
 # thoth's canonical target — exec.cyr defines `shell_supported() { return 0; }`, so this returned PROCEED

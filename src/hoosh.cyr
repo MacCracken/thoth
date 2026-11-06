@@ -69,31 +69,39 @@ fn _hoosh_acc_reset() { _hoosh_acc_len = 0; _hoosh_acc_cut = 0; _hoosh_resp_bad 
 fn hoosh_last_reply() { return _hoosh_acc; }
 fn hoosh_last_reply_len() { return _hoosh_acc_len; }
 fn hoosh_reply_cut() { return _hoosh_acc_cut; }
-# _hoosh_acc_grow: make room for `need` bytes (NUL included), up to HOOSH_ACC_MAX. A refused allocation leaves the buffer
-# as it was: the caller sees less room and cuts, which it reports.
-fn _hoosh_acc_grow(need) {
-    if (need > HOOSH_ACC_MAX) { need = HOOSH_ACC_MAX; }
-    if (need <= _hoosh_acc_cap) { return 0; }
-    var cap = _hoosh_acc_cap;
-    if (cap < HOOSH_ACC_CAP) { cap = HOOSH_ACC_CAP; }
-    while (cap < need) { cap = cap * 2; }
-    if (cap > HOOSH_ACC_MAX) { cap = HOOSH_ACC_MAX; }
-    var b = alloc(cap);
-    if (b == 0) { return 0; }
-    if (_hoosh_acc_len > 0) { memcpy(b, _hoosh_acc, _hoosh_acc_len); }
-    store8(b + _hoosh_acc_len, 0);
-    _hoosh_acc = b;
-    _hoosh_acc_cap = cap;
-    return 0;
+# _acc_grow: a buffer holding `len` bytes with room for `need` (NUL included), doubling from `first` and never past `max`.
+# Returns the buffer, in place or moved, and leaves its size in _acc_grown. A refused allocation returns it as it was: the
+# caller sees less room and cuts, which it reports. Shared by the reply and the reasoning, so the two cannot drift.
+var _acc_grown = 0;
+fn _acc_grow(buf, len, cap, need, first, max) {
+    _acc_grown = cap;
+    if (need > max) { need = max; }
+    if (need <= cap) { return buf; }
+    var c = cap;
+    if (c < first) { c = first; }
+    while (c < need) { c = c * 2; }
+    if (c > max) { c = max; }
+    var b = alloc(c);
+    if (b == 0) { return buf; }
+    if (len > 0) { memcpy(b, buf, len); }
+    store8(b + len, 0);
+    _acc_grown = c;
+    return b;
+}
+# _acc_fit: how many of p's bytes fit in `room`, never ending inside a character.
+fn _acc_fit(p, room) {
+    var n = room;
+    while ((n > 0) && ((load8(p + n) & 192) == 128)) { n = n - 1; }
+    return n;
 }
 fn _hoosh_acc_append(p, n) {
     if ((n <= 0) || (_hoosh_acc_cut == 1)) { return 0; }
-    _hoosh_acc_grow(_hoosh_acc_len + n + 1);
+    _hoosh_acc = _acc_grow(_hoosh_acc, _hoosh_acc_len, _hoosh_acc_cap, _hoosh_acc_len + n + 1, HOOSH_ACC_CAP, HOOSH_ACC_MAX);
+    _hoosh_acc_cap = _acc_grown;
     var room = _hoosh_acc_cap - 1 - _hoosh_acc_len;
     if (n > room) {
-        n = room;
         _hoosh_acc_cut = 1;
-        while ((n > 0) && ((load8(p + n) & 192) == 128)) { n = n - 1; }   # never ends the copy inside a character
+        n = _acc_fit(p, room);
     }
     if (n <= 0) { return 0; }
     memcpy(_hoosh_acc + _hoosh_acc_len, p, n);
@@ -101,6 +109,12 @@ fn _hoosh_acc_append(p, n) {
     store8(_hoosh_acc + _hoosh_acc_len, 0);
     return 0;
 }
+
+# _agent_stop_why (0.53.3): why the last turn stopped short of an answer, when thoth stopped it; the window's notice reads it.
+var _agent_stop_why = 0;
+fn agent_stop_why() { return _agent_stop_why; }
+fn agent_stop_why_clear() { _agent_stop_why = 0; return 0; }
+fn agent_stop_why_set(s) { _agent_stop_why = s; return 0; }
 
 # Reasoning accumulator (0.35.2): when a model exposes its chain-of-thought,
 # hoosh translates the provider's native thinking stream into `reasoning_content`
@@ -110,20 +124,37 @@ fn _hoosh_acc_append(p, n) {
 # models return EMPTY thinking text unless the request asks `display: "summarized"`,
 # and hoosh 2.8.0 is the first to ask. Reset per round, alongside _hoosh_acc. Mirrors
 # the accumulator directly above.
+# 0.53.3: it grows like the reply, to REASON_ACC_MAX. Reasoning reaches no machine channel and no request, so the cut is
+# marked in the text itself: the fold, /save and the session file all carry that line with no field of their own.
 var _reason_acc = 0;
 var _reason_acc_len = 0;
-var REASON_ACC_CAP = 65536;
-fn _reason_acc_reset() { _reason_acc_len = 0; return 0; }
+var _reason_acc_cap = 0;           # bytes allocated at _reason_acc
+var _reason_acc_cut = 0;           # 1 once this round's reasoning lost text
+var REASON_ACC_CAP = 65536;        # the first allocation
+var REASON_ACC_MAX = 1048576;      # 1 MiB; MSG_REASON_CAP (session.cyr) holds the same
+var REASON_CUT_ROOM = 64;          # kept free at every size, for the mark
+var REASON_CUT_MARK = "\n[thinking past this point was not kept]";
+fn _reason_acc_reset() { _reason_acc_len = 0; _reason_acc_cut = 0; return 0; }
 fn hoosh_last_reason() { return _reason_acc; }
 fn hoosh_last_reason_len() { return _reason_acc_len; }
 fn _reason_acc_append(p, n) {
-    if (_reason_acc == 0) { _reason_acc = alloc(REASON_ACC_CAP); }
-    var room = REASON_ACC_CAP - 1 - _reason_acc_len;
-    if (n > room) { n = room; }
-    if (n <= 0) { return 0; }
-    memcpy(_reason_acc + _reason_acc_len, p, n);
-    _reason_acc_len = _reason_acc_len + n;
-    store8(_reason_acc + _reason_acc_len, 0);
+    if ((n <= 0) || (_reason_acc_cut == 1)) { return 0; }
+    _reason_acc = _acc_grow(_reason_acc, _reason_acc_len, _reason_acc_cap, _reason_acc_len + n + 1 + REASON_CUT_ROOM, REASON_ACC_CAP, REASON_ACC_MAX);
+    _reason_acc_cap = _acc_grown;
+    var room = _reason_acc_cap - 1 - REASON_CUT_ROOM - _reason_acc_len;
+    if (n > room) {
+        _reason_acc_cut = 1;
+        n = _acc_fit(p, room);
+    }
+    if (n > 0) {
+        memcpy(_reason_acc + _reason_acc_len, p, n);
+        _reason_acc_len = _reason_acc_len + n;
+        store8(_reason_acc + _reason_acc_len, 0);
+    }
+    if ((_reason_acc_cut == 1) && (room >= 0)) {
+        _reason_acc_len = _append_cstr_cap(_reason_acc, _reason_acc_len, _reason_acc_cap, REASON_CUT_MARK);
+        store8(_reason_acc + _reason_acc_len, 0);
+    }
     return 0;
 }
 
@@ -270,13 +301,56 @@ fn _json_escape_n_into_cap(dst, off, cap, src, src_len) {
                 store8(dst + off, 48); off = off + 1;
                 store8(dst + off, _hoosh_hex_digit(hi)); off = off + 1;
                 store8(dst + off, _hoosh_hex_digit(lo)); off = off + 1;
-            } else {
+            } elif (c < 128) {
                 store8(dst + off, c); off = off + 1;
+            } else {
+                # 0.53.3 (W-10): one place guarantees valid UTF-8 on the wire. Fixed byte caps cut characters all over this tree
+                # (a file at read_file's cap, piped stdin, a span, a log field), and a strict parser refused the whole request.
+                # A byte that is not part of a well-formed sequence goes out as U+FFFD; a good one whole.
+                var sl = _json_utf8_len(src, i, src_len);
+                if (sl == 0) {
+                    store8(dst + off, 92); store8(dst + off + 1, 117); store8(dst + off + 2, 102);
+                    store8(dst + off + 3, 102); store8(dst + off + 4, 102); store8(dst + off + 5, 100);
+                    off = off + 6;
+                } else {
+                    var k = 0;
+                    while (k < sl) { store8(dst + off, load8(src + i + k)); off = off + 1; k = k + 1; }
+                    i = i + sl - 1;
+                }
             }
             i = i + 1;
         }
     }
     return off;
+}
+
+# _json_utf8_len: the length of the well-formed UTF-8 sequence at src[i], 0 if there is none (RFC 3629: no overlongs, no
+# surrogates, nothing past U+10FFFF). Pure.
+fn _json_utf8_len(src, i, n) {
+    var b = load8(src + i) & 255;
+    var want = 0;
+    var lo = 128;
+    var hi = 191;
+    if ((b >= 0xC2) && (b <= 0xDF)) { want = 2; }
+    elif ((b >= 0xE0) && (b <= 0xEF)) {
+        want = 3;
+        if (b == 0xE0) { lo = 0xA0; }
+        if (b == 0xED) { hi = 0x9F; }
+    } elif ((b >= 0xF0) && (b <= 0xF4)) {
+        want = 4;
+        if (b == 0xF0) { lo = 0x90; }
+        if (b == 0xF4) { hi = 0x8F; }
+    } else { return 0; }
+    if ((i + want) > n) { return 0; }
+    var c = load8(src + i + 1) & 255;
+    if ((c < lo) || (c > hi)) { return 0; }
+    var k = 2;
+    while (k < want) {
+        c = load8(src + i + k) & 255;
+        if ((c < 128) || (c > 191)) { return 0; }
+        k = k + 1;
+    }
+    return want;
 }
 
 # _json_escape_into_cap: the NUL-terminated wrapper (escape up to the first 0 byte) for untrusted (model/MCP)
@@ -1797,7 +1871,7 @@ fn _hp_catalog_status(entry) {
 # than the slot is not recorded — it could never be matched whole, so a model behind it folds as unmeasured.
 fn _hr_record(entry, rs) {
     if (rs == HOOSH_PROV_DISABLED) { return 0; }     # 0.52.8 (audit B3): a catalog never names a disabled route, and one at
-                                                     # the same base_url as the live route decided the fold (first match)
+    # the same base_url as the live route decided the fold (first match)
     if (_hr_n >= HOOSH_ROUTE_MAX) { _hr_dropped = _hr_dropped + 1; return 0; }   # 0.52.8 (audit A10): counted, not silent
     var us = bayan_json_v_str(bayan_json_v_obj_get_by_cstr(entry, "base_url"));
     if (us == 0) { return 0; }
@@ -1853,32 +1927,32 @@ fn hoosh_providers_parse_a(a, body, body_len) {
         if (pv != 0) {
             var ps = bayan_json_v_str(pv);
             if (ps != 0) { if (str_len(ps) > 0) {
-                var name = str_cstr(ps);
-                var rs = _hp_route_state(e);
-                var idx = hoosh_provider_index(name);
-                if (idx < 0) {
-                    if (_hp_n < HOOSH_PROV_MAX) {
-                        idx = _hp_n;
-                        safe_label_copy(_hp_names + idx * HOOSH_PROV_NAME_CAP, HOOSH_PROV_NAME_CAP, name);
-                        var c0 = _hp_cnt + idx * 32;
-                        store64(c0, 0); store64(c0 + 8, 0); store64(c0 + 16, 0); store64(c0 + 24, 0);
-                        store64(_hp_state + idx * 8, HOOSH_PROV_UNKNOWN);
-                        store64(_hp_keybad + idx * 8, 0);
-                        _hp_n = _hp_n + 1;
-                    } else { _hp_dropped = _hp_dropped + 1; }
-                }
-                if (idx >= 0) {
-                    var c = _hp_cnt + idx * 32;
-                    if (rs == HOOSH_PROV_HEALTHY) { store64(c, load64(c) + 1); }
-                    elif (rs == HOOSH_PROV_UNHEALTHY) { store64(c + 8, load64(c + 8) + 1); }
-                    elif (rs == HOOSH_PROV_DISABLED) { store64(c + 24, load64(c + 24) + 1); }
-                    else { store64(c + 16, load64(c + 16) + 1); }
-                    store64(_hp_state + idx * 8, _hp_fold(c));
-                    var cs = _hp_catalog_status(e);
-                    if ((cs == 401) || (cs == 403)) { store64(_hp_keybad + idx * 8, load64(_hp_keybad + idx * 8) + 1); }
-                }
-                _hr_record(e, rs);
-            } }
+                    var name = str_cstr(ps);
+                    var rs = _hp_route_state(e);
+                    var idx = hoosh_provider_index(name);
+                    if (idx < 0) {
+                        if (_hp_n < HOOSH_PROV_MAX) {
+                            idx = _hp_n;
+                            safe_label_copy(_hp_names + idx * HOOSH_PROV_NAME_CAP, HOOSH_PROV_NAME_CAP, name);
+                            var c0 = _hp_cnt + idx * 32;
+                            store64(c0, 0); store64(c0 + 8, 0); store64(c0 + 16, 0); store64(c0 + 24, 0);
+                            store64(_hp_state + idx * 8, HOOSH_PROV_UNKNOWN);
+                            store64(_hp_keybad + idx * 8, 0);
+                            _hp_n = _hp_n + 1;
+                        } else { _hp_dropped = _hp_dropped + 1; }
+                    }
+                    if (idx >= 0) {
+                        var c = _hp_cnt + idx * 32;
+                        if (rs == HOOSH_PROV_HEALTHY) { store64(c, load64(c) + 1); }
+                        elif (rs == HOOSH_PROV_UNHEALTHY) { store64(c + 8, load64(c + 8) + 1); }
+                        elif (rs == HOOSH_PROV_DISABLED) { store64(c + 24, load64(c + 24) + 1); }
+                        else { store64(c + 16, load64(c + 16) + 1); }
+                        store64(_hp_state + idx * 8, _hp_fold(c));
+                        var cs = _hp_catalog_status(e);
+                        if ((cs == 401) || (cs == 403)) { store64(_hp_keybad + idx * 8, load64(_hp_keybad + idx * 8) + 1); }
+                    }
+                    _hr_record(e, rs);
+                } }
         }
         i = i + 1;
     }
@@ -1907,7 +1981,7 @@ fn hoosh_providers_fetch() {
     _hp_ensure();
     _hp_n = 0;
     _hr_n = 0; _hr_dropped = 0;                   # 0.52.8 (audits A6 + B2): the per-route table goes with the kind's — a failed
-                                                  # re-fetch left the LAST fetch's route states on the picker rows
+    # re-fetch left the LAST fetch's route states on the picker rows
     _hp_fetched = 0 - 1;
     _hp_err = HOOSH_HP_OK;
     _hp_http = 0;
@@ -2130,6 +2204,26 @@ fn _hoosh_resp_mark(kind) {
     return _hoosh_resp_bad;
 }
 
+# The STREAM's memory (0.53.3). Parsed on the global heap, every frame stayed for the process's life: 113 MB of peak per 1 MB of
+# reply, and it added up across a session. Nothing keeps a pointer into a frame's tree (each reader copies, or folds to a
+# number), so a frame parses into an arena reset before the next. sandhi's own stream buffers land in a second arena, reset
+# before the next stream: nothing reads them past their round, and a child's stream starts after its parent's has ended.
+var _hoosh_frame_arena = 0;
+var _hoosh_stream_arena = 0;
+fn _hoosh_frame_parse(data) {
+    if (_hoosh_frame_arena == 0) { _hoosh_frame_arena = arena_allocator_growable(16384); }
+    if (_hoosh_frame_arena == 0) { return bayan_json_v_parse_buf(data, strlen(data)); }
+    reset_via(_hoosh_frame_arena);
+    return bayan_json_v_parse_buf_a(_hoosh_frame_arena, data, strlen(data));
+}
+# _hoosh_stream_post: the POST both streaming turn paths make. No arena: the global heap, as before.
+fn _hoosh_stream_post(url, h, req, len, cb, ctx) {
+    if (_hoosh_stream_arena == 0) { _hoosh_stream_arena = arena_allocator_growable(1048576); }
+    if (_hoosh_stream_arena == 0) { return sandhi_http_stream_opts(url, "POST", h, req, len, cb, ctx, hoosh_http_opts()); }
+    reset_via(_hoosh_stream_arena);
+    return sandhi_http_stream_opts_a(_hoosh_stream_arena, url, "POST", h, req, len, cb, ctx, hoosh_http_opts());
+}
+
 # hoosh_probe_opts: the PROBE profile. Fixed, not configurable — its whole purpose is to be short, and a
 # user who raises [hoosh].timeout_ms for a slow model does not thereby want a six-second reachability
 # check to become a three-minute one.
@@ -2271,7 +2365,7 @@ fn _hoosh_sse_cb(ctx, ev) {
     # Parse the frame once (was: hoosh_extract_delta re-parsing) so the trailing
     # usage frame (0.10.2 — choices:[] + a usage object, sent because the request
     # carried stream_options:{include_usage}) is captured on the same pass.
-    var v = bayan_json_v_parse_buf(data, strlen(data));
+    var v = _hoosh_frame_parse(data);
     if (v == 0) { return 1; }
     _hoosh_account_usage(v);
     _hoosh_note_finish(v);                   # 0.52.7: the provider's reason the reply ended (hoosh >= 2.8.0)
@@ -2316,7 +2410,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ", stream) "); oprintln(url);
     _reply_begin();  # 0.15.1: bracket the reply-render sink (mdhl highlighter) around the stream
     intr_arm();      # 0.17.4: enter Esc-poll mode around the stream (TUI-only; no-op off OUT_RING)
-    var sr = sandhi_http_stream_opts(url, "POST", h, _hoosh_req, len, &_hoosh_sse_cb, cell, hoosh_http_opts());   # 0.44.2: per-read deadline
+    var sr = _hoosh_stream_post(url, h, _hoosh_req, len, &_hoosh_sse_cb, cell);   # 0.44.2: per-read deadline; 0.53.3: in an arena
     intr_disarm();   # 0.17.4: restore cooked (for a following confirm / the next turn)
     _reply_end();    # flush the reply-render sink (residual line + any open block) BEFORE status branching, so every exit path drains
     var serr = sandhi_stream_err(sr);

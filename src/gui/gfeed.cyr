@@ -81,7 +81,7 @@ fn _gfeed_ink(role) {
 # _md_role_color: map an inline role (from the model) to a packed RGB, given the block's base role for plain text.
 fn _md_role_color(role, base_role) {
     if (ui_rainbow_active() == 1) { return GD_RAINBOW; }   # rainbow IS the fg: it overrides emphasis + code,
-                                                           # exactly as it overrides the role color on the TUI
+    # exactly as it overrides the role color on the TUI
     if (role == MDI_BOLD) { return _ui_rgb(ROLE_FG); }     # no bold font -> brightness conveys emphasis
     if (role == MDI_CODE) { return _ui_rgb(ROLE_BLUE); }
     return _ui_rgb(base_role);
@@ -524,9 +524,29 @@ fn _gfeed_reason_at(cmds, xbase, cy, avail, text, len) {
     return _gfeed_para(cmds, xbase + 24, cy, avail - 24, _ui_rgb(ROLE_MUTED), text);
 }
 
+# _gfeed_fold_h: an expanded fold's height: its header row and its wrapped text. Measured once per text and width (0.53.3,
+# as a reply is): a fold now reaches 1 MiB, and every frame walked it twice. Drawn only when it meets the view.
+fn _gfeed_fold_h(text, avail) { return GFEED_LH + _gfeed_para(0, 0, 0, avail - 24, 0, text); }
+fn _gfeed_fold_draw(cmds, xbase, cy, avail, text, len, h) {
+    if ((cmds != 0) && (gd_culled(cy, h) == 0)) { _gfeed_reason_at(cmds, xbase, cy, avail, text, len); }
+    return cy + h;
+}
+
 # _gfeed_reason: the LIVE fold for the in-flight turn — the current round's reasoning straight from _reason_acc.
+var _gfeed_lfold_n = 0;
+var _gfeed_lfold_w = 0;
+var _gfeed_lfold_h = 0;
 fn _gfeed_reason(cmds, xbase, cy, avail) {
-    return _gfeed_reason_at(cmds, xbase, cy, avail, hoosh_last_reason(), hoosh_last_reason_len());
+    var text = hoosh_last_reason();
+    var len = hoosh_last_reason_len();
+    if (len <= 0) { _gfeed_lfold_n = 0; return cy; }
+    if (greason_collapsed() == 1) { return _gfeed_reason_at(cmds, xbase, cy, avail, text, len); }
+    if ((len != _gfeed_lfold_n) || (avail != _gfeed_lfold_w)) {
+        _gfeed_lfold_h = _gfeed_fold_h(text, avail);
+        _gfeed_lfold_n = len;
+        _gfeed_lfold_w = avail;
+    }
+    return _gfeed_fold_draw(cmds, xbase, cy, avail, text, len, _gfeed_lfold_h);
 }
 
 # greason_build_msg: the LANDED fold for message `i` — its reasoning lives on the message (0.48.0: session.cyr +48,
@@ -537,7 +557,15 @@ fn _gfeed_reason(cmds, xbase, cy, avail) {
 fn greason_build_msg(cmds, x, cy, avail, i) {
     if (i < 0) { return cy; }
     if (i >= session_history_len()) { return cy; }
-    return _gfeed_reason_at(cmds, x, cy, avail, session_history_reason(i), session_history_reason_len(i));
+    var text = session_history_reason(i);
+    var len = session_history_reason_len(i);
+    if ((len <= 0) || (greason_collapsed() == 1)) { return _gfeed_reason_at(cmds, x, cy, avail, text, len); }
+    var h = session_history_fold(i, avail);
+    if (h < 0) {
+        h = _gfeed_fold_h(text, avail);
+        session_history_fold_set(i, avail, h);
+    }
+    return _gfeed_fold_draw(cmds, x, cy, avail, text, len, h);
 }
 
 # _gfeed_flow: lay out all n conversation messages from (xbase, cy0) down an avail-wide column; return the y
@@ -597,6 +625,7 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         if (gturn_prompt_landed() == 0) { cy = _gfeed_prompt(cmds, xbase, cy, avail); }
         # 0.35.2: the model's reasoning fold — chain-of-thought streams FIRST (before content + tool calls), so it
         # renders ABOVE the cards and partial answer. No reasoning text -> _gfeed_reason returns cy unchanged (no gap).
+        # 0.53.3 (G-3): the cards only once the prompt has landed: before that session_turns() is still the last turn's.
         var _rcy = _gfeed_reason(cmds, xbase, cy, avail);
         if (_rcy > cy) { cy = _rcy + GFEED_GAP; }
         # 0.35.1: the CURRENT turn's tool-call cards, LIVE from the roundlog — each call is recorded as it completes
@@ -604,8 +633,10 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
         # returns during the round (was post-turn only). gtool_build == gtool_build_turn(session_turns()) — the SAME
         # cards the per-message loop draws once the reply lands, so the mid-turn → post-turn handoff is seamless.
         # Measure/draw parity: gtool_build is parity-clean and the roundlog is unchanged between the two passes.
-        var _tcy = gtool_build(cmds, xbase, cy, avail);
-        if (_tcy > cy) { cy = _tcy + GFEED_GAP; }
+        if (gturn_prompt_landed() == 1) {
+            var _tcy = gtool_build(cmds, xbase, cy, avail);
+            if (_tcy > cy) { cy = _tcy + GFEED_GAP; }
+        }
         # 0.35.0 mid-turn pump: render the LIVE streaming partial reply (the model's output so far, in _hoosh_acc —
         # populated on both SSE paths even under the GUI turn's OUT_NULL) as a provisional agent bubble that grows
         # each frame as the pump (gpresent's _gstop_poll) repaints. Same call shape as a landed assistant message
@@ -660,11 +691,9 @@ fn _gfeed_flow(cmds, xbase, cy0, avail, n) {
     # messages hides the greeting — so the flow carries the same fact whenever the greeting is not drawn.
     cy = _gfeed_broke_notices(cmds, xbase, cy, avail);
     if (_gfeed_greeting_on(n) == 0) {
-        if (sess_persist_init_failed() == 2) {
-            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "session file larger than thoth can load - resume disabled (nothing is written back)");
-            cy = cy + GFEED_GAP;
-        } elif (sess_persist_init_failed() == 1) {
-            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), "session file not writable - resume disabled");
+        if (sess_persist_why() != 0) {
+            var swhy = gturn_note_join(sess_persist_why(), " - ", sess_persist_why_rest());
+            cy = _gfeed_para(cmds, xbase, cy, avail, _ui_rgb(ROLE_RED), swhy);
             cy = cy + GFEED_GAP;
         }
         if (inhist_persist_init_failed() == 1) {
@@ -726,7 +755,13 @@ fn gfeed_build(cmds, x, y, w, h) {
     gd_push_clip(cmds, x, y, w, h);
     var n = session_history_len();
     var endy = 0;
-    if (_gfeed_greeting_on(n) == 1) {   # 0.46.0: a command card takes the greeting's place
+    var greet = _gfeed_greeting_on(n);
+    # 0.53.3 (G-12): a startup hook's report taller than the greeting leaves room for goes to the flow, which scrolls: under the
+    # block only its head row showed, and a hook that exists to warn went unseen.
+    if ((greet == 1) && (gcmd_count() > 0)) {
+        if (gcmd_build_anchored(0, xbase, 0, avail, 0, 1) > (h / 3)) { greet = 0; }
+    }
+    if (greet == 1) {   # 0.46.0: a command card takes the greeting's place
         gscroll_reset();                                         # nothing to scroll on the empty greeting
         endy = _gfeed_greeting(cmds, xbase, y + GFEED_GAP, avail, h - GFEED_GAP);
         # 0.50.1: the standing notices and the startup cards (a session_start hook's report) draw UNDER the block
@@ -892,12 +927,13 @@ fn gpointer_pump(drop) {
     var changed = 0;
     var clicked = 0;
     while (gwl_wl_pop_ptr(&rec) == 1) {
-        if (drop == 0) {
+        if (drop != 1) {
             var kind = load64(&rec);
             var px = load64(&rec + 8);
             var py = load64(&rec + 16);
             var arg = load64(&rec + 24);
-            if (kind == GWL_PTR_BUTTON) { if (clicked == 0) { if (gpointer_click(px, py, arg) == 1) { changed = 1; clicked = 1; } } }
+            if ((kind == GWL_PTR_BUTTON) && (drop == 2)) { }      # 0.53.3 (G-11): 2 = a stale frame: a click is misplaced there, a wheel step is not
+            elif (kind == GWL_PTR_BUTTON) { if (clicked == 0) { if (gpointer_click(px, py, arg) == 1) { changed = 1; clicked = 1; } } }
             if (kind == GWL_PTR_AXIS) { if (gpointer_wheel(px, py, arg) == 1) { changed = 1; } }
             if (kind == GWL_PTR_AXIS_FINE) { if (gpointer_scroll(px, py, arg, GPTR_FINE_GAIN) == 1) { changed = 1; } }   # 0.52.1
         }
@@ -906,6 +942,7 @@ fn gpointer_pump(drop) {
 }
 
 fn gframe_build(w, h) {
+    gd_frame_rewind();
     var cmds = gd_list_new();
     gd_push_rect(cmds, 0, 0, w, h, _gframe_bg());                            # body background
     _gl_w = w; _gl_h = h; _gl_conv_w = 0; _gl_tree_w = 0; _gl_strip_top = 0;   # 0.49.0: the geometry record

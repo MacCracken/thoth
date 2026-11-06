@@ -41,7 +41,7 @@ else
     URL="https://raw.githubusercontent.com/MacCracken/vyakarana/${TAG}/dist/vyakarana.cyr"
     echo "Syncing vyakarana $TAG from $URL"
     mkdir -p "$REPO_ROOT/src/vendor"
-    curl -sSf "$URL" -o "$DEST"
+    curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 fi
 
 # `_reg_ieq` is private in vyakarana and in bote-core, with different arities, and a fn redefined at another arity is a

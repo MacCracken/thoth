@@ -2,6 +2,86 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.53.3] - 2026-11-05
+
+**Repair batch 14, and a P(-1) audit, hardening and optimization sweep.** Six auditors filed 69 findings against 0.53.2, 10 of
+them HIGH, and every one was reproduced before it was filed. All ten HIGH are fixed, and so is the rest but the eight items
+that move to batch 15. The record is [`docs/audit/2026-11-05-audit.md`](docs/audit/2026-11-05-audit.md). Suite **948 + 2380 + 1482 + 904 + 190 + 6**
+(+268). Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` (5,904 of 5,904), macOS is green natively, a fresh detached clone passes, and the TUI, the window and the aarch64 window were driven live. The AGNOS ring-3 re-run stays deferred.
+
+**What changes for you:**
+
+- **A t-ron policy that allows by name needs `thoth_verify`** if you use `[verify].command`. Each run now asks, and one-shot with no
+  policy does not run it.
+- **A relative `[tron].policy` or `[toolpin].file` now means `~/.thoth/`**, not the directory you launched from. Move the file there,
+  or give an absolute path.
+- **A `[session].file` that is not 0600 and yours is refused**, and thoth says so. `chmod 600` one that really is yours. thoth
+  creates these 0600, so this reaches only a store whose mode was loosened or one that came from elsewhere.
+- **A repository's local config can no longer raise `max_iters`, `[subagent].max_iters` or `[shell].max_output`**, set
+  `[hooks].timeout_ms`, or place its own token on your gateway by repeating your url. Each is named.
+- **A local config another user owns is skipped and named.** That includes a checkout owned by another uid.
+- **A background job from the `shell` tool or `/run` dies at its next write if it still holds stdout, and when thoth exits.** Start one that
+  must outlive this with `setsid` and its output redirected. The tool's description tells the model the same.
+
+**Repair batch 14:**
+
+- **A thinking fold is no longer cut at 64 KiB with no mark.** Reasoning grows to 1 MiB and a cut says so, on the fold and in the session file.
+- **Each stream frame parses on an arena reset per frame.** Peak RSS for a 1 MB reply went from 123 MB to 42 MB.
+
+**Security, the tool boundary:**
+
+- **t-ron always scans the whole command.** The copy was cut at 32 KB after escaping, so 5.6 KB of control bytes pushed `rm -rf` past what it
+  saw, and the command ran. The buffer is sized from the value now.
+- **A repository's alias cannot reach the `@file` reader.** An alias sent `@../../.ssh/id_rsa` and your global config to the gateway. A local alias
+  has mentions off, a relative `@` through a link stays text, and `/write` refuses a relative path through a link.
+- **`edit` and `create_file` refuse `.git`**, at any depth and in any case. `edit` could set `core.fsmonitor`, and your next `git status` ran it.
+- **`[verify]` is gated** under the reserved `thoth_verify`. It ran what the model had just written, past a denied `thoth_shell`.
+- **Mneme recall meets the pin check, redaction and the guard**, and runs only against a daimon your global config named.
+- **A prompt and a session grant cover the arguments.** `a` on one URL allowed any URL.
+- **`_project_sensitive` folds case**, so `.THOTH/config.cyml` on APFS is the same file.
+- **A FIFO no longer hangs** `read_file`, `search`, `edit`, `@`, `/read` or the tree's Enter.
+- **`/rewind`** repeats the jail and link checks, undoes a `create_file` properly, and refuses a linked checkpoints directory. `edit` re-checks
+  after the gate.
+- **The tool list stays well formed**: empty lists, a `delegate` that does not fit, and registry names that collide with local tools.
+- **A refused or failed read reads as failed** in `--events`, the round card and `/audit`. They all said `ok:true`.
+
+**Security, files and config:**
+
+- **`[session].file` refuses a symlink**, and the store is written through a temp file and a rename. A damaged store, a newer thoth's store or a failed
+  save no longer costs you the file: anything short of a clean read unbinds it and names why.
+- **An unreadable global config starts thoth unconfigured**, rather than running on the local layer alone.
+- **The session log is 0600**, `O_NOFOLLOW`, closed across exec, with C1 bytes cleaned.
+- **`1_000` is a number.** `1e3`, `1000.0` and `0x3E8` are named and ignored, where a ceiling spelled that way silently did not exist, and a repeated
+  table is named.
+
+**Reliability:**
+
+- **The capture is a pipe.** `yes` wrote 2.5 GB to `/tmp` in a second, and a command could swap a FIFO in for the capture file and hang thoth past its deadline.
+- **Verification keeps the real tail.** It kept the tail of the first 8 KB, so the compiler's error at the end was gone, with a false total.
+- **A large round of tool calls is no longer lost**, and the blocking path's echo and results describe the same round.
+- **Stop notices reach one-shot**, so a stopped turn no longer reports success.
+- **Requests carry valid UTF-8.** Byte caps cut characters; the escaper now maps a bad sequence to U+FFFD. A cut stdin says so.
+- **Redaction is bounded.** 60 KB of `x` took 20 s with no stop. The root cause is upstream, and a 2 KiB window holds it here.
+
+**Surfaces:**
+
+- **`/run` in the TUI is clean.** It painted a command's raw escapes on every repaint.
+- **A confirm is not answered by input queued before it.**
+- **Ill-formed UTF-8 is one cell, a feed line keeps its tail, and C1 is cleaned** at the sinks that missed it.
+- **The composer edits by character, and a cut paste says so.**
+- **The window's confirm draws what would run.** It folded curly quotes to ASCII, and a newline drew as `?`.
+- **A held key no longer answers a modal or closes the window.**
+- **A compositor dying mid-turn no longer kills thoth** before `session_end`.
+- **A new prompt's first frame is not the last reply**, and a startup hook's long card is readable.
+
+**Performance:** a frame draws from a pool (228 MB an hour during a wait, now flat), an idle window repaints only what changed, the prompt returns before
+the git probe, a clean result is scanned once, and a rule is one write. `redact_run_8k` 333.7 → 84.8 ms. Two benches are slower on
+purpose: `session_save_40` 449 µs → 2.80 ms (fsync and a rename) and `json_escape_60k` 333 → 374 µs (UTF-8 validation).
+
+**CI and release:** read-only by default, `contents: write` on the release job only, `persist-credentials: false`, actions pinned by SHA, `install.sh`
+fetched at the pin's tag, `cyrius deps --locked`, `SHA256SUMS` published. `src/vendor/SHA256SUMS` is checked by a test, and sync scripts stage, then move.
+`tests/thoth.bcyr` has 12 real benches, and `scripts/bench-history.sh` keeps their history.
+
 ## [0.53.2] - 2026-11-05
 
 **Repair batch 13.** The six items on the roadmap, plus two defects the first one uncovered once replies stopped being

@@ -42,7 +42,7 @@ else
     URL="https://raw.githubusercontent.com/MacCracken/agnosai/${TAG}/dist/agnosai-guard.cyr"
     echo "Syncing agnosai-guard $TAG from $URL"
     mkdir -p "$REPO_ROOT/src/vendor"
-    curl -sSf "$URL" -o "$DEST"
+    curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 fi
 
 grep -q "^# Version: ${TAG}\$" "$DEST" || {

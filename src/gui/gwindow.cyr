@@ -292,10 +292,10 @@ fn gwl_wl__sock_path(buf, cap): i64 {
     if (lim > GWL_WL_SUN_PATH_MAX) { lim = GWL_WL_SUN_PATH_MAX; }
     var wd = getenv("WAYLAND_DISPLAY");
     if (wd != 0) { if (load8(wd) == 0x2F) {
-        var n = gwl_wl__copy_cstr(buf, 0, lim, wd);
-        if (n < 0) { return 0 - 1; }
-        store8(buf + n, 0); return n;
-    } }
+            var n = gwl_wl__copy_cstr(buf, 0, lim, wd);
+            if (n < 0) { return 0 - 1; }
+            store8(buf + n, 0); return n;
+        } }
     var rt = getenv("XDG_RUNTIME_DIR");
     if (rt == 0) { return 0 - 1; }
     var n = gwl_wl__copy_cstr(buf, 0, lim, rt);
@@ -1039,6 +1039,7 @@ fn gwl_win_present_begin(win): i64 { return gwl_shm_ptr; }
 
 # attach + damage + frame (throttle) + commit. x,y,w,h = damage rect (buffer px).
 fn gwl_win_present_commit(win, x, y, w, h): i64 {
+    if (gwl_wl_closed == 1) { return 0; }             # 0.53.3 (G-5): nobody is left to commit to
     store32(&gwl_wl_sbuf + 8, gwl_wl_buf_oid);
     store32(&gwl_wl_sbuf + 12, 0);
     store32(&gwl_wl_sbuf + 16, 0);
@@ -1082,9 +1083,9 @@ fn gwl_win_poll_events(win): i64 {
     # The compositor configured a new size (the serial was already acked in the
     # dispatch). Surface it once; the caller adopts it via gwl_win_resize_apply.
     if (gwl_wl_cfg_w > 0) { if (gwl_wl_cfg_h > 0) {
-        if (gwl_wl_cfg_w != gwl_win_w) { m = m | GWL_WIN_EV_RESIZE; }
-        if (gwl_wl_cfg_h != gwl_win_h) { m = m | GWL_WIN_EV_RESIZE; }
-    } }
+            if (gwl_wl_cfg_w != gwl_win_w) { m = m | GWL_WIN_EV_RESIZE; }
+            if (gwl_wl_cfg_h != gwl_win_h) { m = m | GWL_WIN_EV_RESIZE; }
+        } }
     return m;
 }
 
@@ -1105,6 +1106,13 @@ fn gwl_win_next_key(win, out24): i64 { return gwl_wl_pop_key(out24); }
 # gwl_win_repeat_tick / gwl_win_repeat_due_in (0.52.3): the held key's repeats on the loop's clock — queue what is due
 # (then drain as after a key event), and how long the loop may wait before the next one (-1: no key held).
 fn gwl_win_repeat_tick(win): i64 { return gwl_wl__repeat_tick(clock_now_ms()); }
+# gwl_win_keys_forget (0.53.3): drop the queued keys and the held key's repeat.
+fn gwl_win_keys_forget(win): i64 {
+    var rec[24];
+    while (gwl_win_next_key(win, &rec) == 1) { }
+    gwl_wl_rep_code = 0;
+    return 0;
+}
 fn gwl_win_repeat_due_in(win): i64 { return gwl_wl__repeat_due_in(clock_now_ms()); }
 # Drain one pointer record (0.49.0): out32[+0]=kind (GWL_PTR_BUTTON / GWL_PTR_AXIS / GWL_PTR_AXIS_FINE), [+8]=x, [+16]=y (surface px),
 # [+24]=arg (the button code, or the wheel's vertical px). 1 if a record was produced, 0 if the queue is empty.

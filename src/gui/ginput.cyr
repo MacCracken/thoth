@@ -57,7 +57,15 @@ var _gcomp_len = 0;
 fn _gcomp_ensure() { if (_gcomp_buf == 0) { _gcomp_buf = alloc(GCOMP_CAP); } return 0; }
 fn gcomp_reset() { _gcomp_len = 0; return 0; }
 fn gcomp_append(ch) { _gcomp_ensure(); if (_gcomp_len < GCOMP_CAP - 1) { store8(_gcomp_buf + _gcomp_len, ch); _gcomp_len = _gcomp_len + 1; } return 0; }
-fn gcomp_backspace() { if (_gcomp_len > 0) { _gcomp_len = _gcomp_len - 1; } return 0; }
+# gcomp_backspace: one CHARACTER (0.53.3, G-9): recalling `café` and pressing Backspace left a lone 0xC3, and the gateway refused
+# the request.
+fn gcomp_backspace() {
+    if (_gcomp_len > 0) {
+        _gcomp_len = _gcomp_len - 1;
+        while ((_gcomp_len > 0) && ((load8(_gcomp_buf + _gcomp_len) & 192) == 128)) { _gcomp_len = _gcomp_len - 1; }
+    }
+    return 0;
+}
 fn gcomp_len() { return _gcomp_len; }
 # gcomp_cstr: NUL-terminate the buffer and return it (stable until the next edit). Empty -> "".
 fn gcomp_cstr() { _gcomp_ensure(); store8(_gcomp_buf + _gcomp_len, 0); return _gcomp_buf; }
@@ -118,6 +126,16 @@ fn gturn_note_set(kind, text) {
     return 0;
 }
 fn gturn_text() { if (_gturn_buf == 0) { return ""; } return _gturn_buf; }
+# gturn_note_join: a + b + c in one reused buffer, for a notice composed of parts.
+var _gnote_join = 0;
+fn gturn_note_join(a, b, c) {
+    if (_gnote_join == 0) { _gnote_join = alloc(GTURN_CAP); }
+    var o = _append_cstr_cap(_gnote_join, 0, GTURN_CAP, a);
+    o = _append_cstr_cap(_gnote_join, o, GTURN_CAP, b);
+    o = _append_cstr_cap(_gnote_join, o, GTURN_CAP, c);
+    store8(_gnote_join + o, 0);
+    return _gnote_join;
+}
 fn gturn_begin(text) {
     if (_gturn_buf == 0) { _gturn_buf = alloc(GTURN_CAP); }
     var i = 0;
@@ -129,8 +147,10 @@ fn gturn_begin(text) {
     _gturn_stopped = 0;
     _gturn_note = 0;
     _gturn_orphan = 0;
+    agent_stop_why_clear();
+    _hoosh_acc_reset();   # 0.53.3 (G-3): the live partial is THIS turn's. Until the first frame the feed drew the last reply under the new prompt, as its answer
     intr_reset();         # 0.34.3: clean interrupt flag before the turn, so the post-turn stop-vs-fail decision
-                          # reads ONLY this turn's Esc (never a stale flag) even on a path that skips agent_turn's reset
+    # reads ONLY this turn's Esc (never a stale flag) even on a path that skips agent_turn's reset
     return 0;
 }
 fn gturn_end() { _gturn_active = 0; return 0; }
@@ -158,6 +178,7 @@ fn gturn_settle() {
         if (intr_pending() == 1) { gturn_stop(); }
         elif (shortk != 0) { gturn_note_set(shortk, hoosh_finish_sentence()); }
         elif (hoosh_resp_bad() == 1) { gturn_note_set(1, hoosh_resp_bad_text()); }
+        elif (agent_stop_why() != 0) { gturn_note_set(1, agent_stop_why()); }   # 0.53.3 (W-8): a budget or a full working set, not "is hoosh reachable?"
         else { gturn_fail(); }
     } elif ((shortk == 2) || (hoosh_reply_cut() == 1)) { gturn_note_set(3, hoosh_finish_sentence()); }
     return 0;

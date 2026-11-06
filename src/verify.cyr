@@ -14,18 +14,22 @@
 # to would either break the alternation or need a fake id. Folding it into the result the model is already
 # waiting for is protocol-safe, costs no extra round, and puts the failure exactly where the model looks.
 #
-# ⚠ THE COMMAND IS THE OPERATOR'S, NOT THE MODEL'S. It comes from `[verify].command` in the user's config
-# and nowhere else — the model cannot propose, alter or read it. That is what keeps this from being a new
-# injection surface: prompt-injected content can cause a WRITE (which the jail and t-ron already govern),
-# but it can never influence what gets run afterwards.
+# ⚠ THE COMMAND STRING IS THE OPERATOR'S, AND WHAT IT RUNS IS NOT. `[verify].command` comes from the global config and the
+# model cannot alter it, but `make test` runs the Makefile the model just edited and `sh check.sh` the script it just wrote.
+# Through 0.53.2 this header said a write "can never influence what gets run afterwards", which held for the string alone:
+# with [shell] off and a policy denying `thoth_shell`, a model's `create_file check.sh` ran its code on the next line, and
+# the output came back to it (P-1, T-6). So a run is an action of its own: the reserved verb `thoth_verify`, through the
+# gate, by name (the string is the operator's own, and t-ron's payload scanner would judge how it is written). A policy must
+# allow it; with no t-ron it is a confirm ("yes, for this session" lasts the session), and one-shot with neither does
+# not run it and says so.
 #
 # ⚠ IT IS STILL COMMAND EXECUTION, unsandboxed, as the user. Same footing as `/run` and the `shell` tool
 # and stated with the same honesty: opt-in, off unless configured, and the configured string is echoed
 # when it runs so it is never a surprise. When the OS-sandbox seam lands this is one of the paths that
 # should move behind it.
 
-var VERIFY_OUT_CAP = 8192;         # bytes of verifier output fed back — enough for a failing test's tail
-var VERIFY_TAIL = 3000;            # when over cap, keep the TAIL: a compiler names the error at the END
+var VERIFY_OUT_CAP = 8192;         # the end of the verifier's output kept (0.53.3: the capture keeps its tail)
+var VERIFY_TAIL = 3000;            # of which fed back: a compiler names the error at the END
 var _verify_buf = 0;
 var _verify_res = 0;
 var _verify_runs = 0;              # verifications run this session (for /state)
@@ -50,7 +54,8 @@ fn verify_configured() {
 # The summary always states the exit code, because "it printed nothing" and "it passed" are different
 # facts and a model that cannot tell them apart will guess. Output is capped to the TAIL rather than the
 # head: a build failure names the error at the end, and truncating from the front is how a verification
-# loop ends up feeding the model a screen of successful compilation units instead of the one error.
+# loop ends up feeding the model a screen of successful compilation units instead of the one error. (0.53.3:
+# the capture itself keeps the tail. This tailed the first 8 KiB, so a long build's real error never arrived.)
 fn verify_run() {
     if (verify_configured() == 0) { return 0; }
     var cmd = config_verify_command();
@@ -58,11 +63,18 @@ fn verify_run() {
     if (_verify_res == 0) { _verify_res = alloc(VERIFY_OUT_CAP + 512); }
     if ((_verify_buf == 0) || (_verify_res == 0)) { return 0; }
 
+    if (gate_authorize("thoth_verify", "{}", "run verification", cmd) == 0) {
+        _verify_last_ok = 2;                            # no verdict, as a stopped check
+        ui_emit(ROLE_MUTED, "  verify: not authorized"); oprintln("");
+        return "\n\n[verification] not run: `thoth_verify` was not authorized. The change is UNVERIFIED.";
+    }
     ui_emit(ROLE_FAINT, "  verify: "); emit(cmd); oprintln("");
     var st[16];
     store64(&st, 0 - 1); store64(&st + 8, 0);
-    var n = exec_shell_capture(cmd, _verify_buf, VERIFY_OUT_CAP, config_verify_timeout_ms(), &st);
+    var n = exec_shell_capture_tail(cmd, _verify_buf, VERIFY_OUT_CAP, config_verify_timeout_ms(), &st);
     if (n < 0) { n = 0; }
+    var whole = exec_capture_total();
+    if (whole < n) { whole = n; }                       # Windows' capture counts what it returned
     store8(_verify_buf + n, 0);
     var code = load64(&st);
     var timed_out = load64(&st + 8);
@@ -104,7 +116,7 @@ fn verify_run() {
             off = _append_cstr_cap(_verify_res, off, cap, " (last ");
             off = _append_int_cap(_verify_res, off, cap, VERIFY_TAIL);
             off = _append_cstr_cap(_verify_res, off, cap, " of ");
-            off = _append_int_cap(_verify_res, off, cap, n);
+            off = _append_int_cap(_verify_res, off, cap, whole);
             off = _append_cstr_cap(_verify_res, off, cap, " bytes)");
         }
         off = _append_cstr_cap(_verify_res, off, cap, ":\n");
@@ -113,6 +125,7 @@ fn verify_run() {
             var b = load8(_verify_buf + i) & 255;
             if ((b < 32) && (b != 10) && (b != 9)) { b = 63; }   # same C0 policy as every other untrusted-bytes path
             if (b == 127) { b = 63; }
+            if (_c1_at(_verify_buf, i, n) == 1) { b = 63; }      # 0.53.3: and the C1 half (this text reaches the model and the feed)
             store8(_verify_res + off, b);
             off = off + 1;
             i = i + 1;

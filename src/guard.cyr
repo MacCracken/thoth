@@ -69,6 +69,13 @@ fn guard_scan_text(text) {
 fn guard_wrap_untrusted(text, source) {
     if (text == 0) { return text; }
     if (guard_active() == 0) { return text; }
+    # 0.53.3 (T-10): past the scan's cap the skip read as clean, and a repository's [shell].max_output could reach it.
+    if (strlen(text) >= GUARD_CAP) {
+        ui_emit(ROLE_RED, "  [untrusted] ");
+        note_emit("content from "); note_emit(source);
+        note_println(" is too large to scan for injection — it was passed through UNCHECKED");
+        return text;
+    }
     if (guard_scan_text(text) == 0) { return text; }
     var n = strlen(text);
     # 0.44.3: the envelope must FIT, not just the content. Over the reserve, take the same

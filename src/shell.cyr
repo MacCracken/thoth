@@ -24,10 +24,10 @@
 #
 # HONEST LIMITS: binary NULs in output are scrubbed to spaces (text-tool contract — the result is a
 # JSON string the model reads); the timeout kills the /bin/sh's whole process group, so a backgrounded
-# grandchild dies with it — but a command that starts a session of its own escapes the group; the
-# temp capture file lives in world-writable /tmp (O_CREAT|O_EXCL, which DOES defeat a pre-planted
-# file or symlink — O_NOFOLLOW is not the load-bearing flag here — and since 0.39.0 mode 0600, not
-# the previous world-readable 0644).
+# grandchild dies with it — but a command that starts a session of its own escapes the group. A job left running
+# after the command returns stays alive until its next write to the closed capture pipe, or until thoth exits
+# (0.53.3's watcher kills its group then); `setsid` with its output redirected is the way out, and the tool's
+# description says so. Windows captures through a temp file in the cwd (see exec.cyr).
 
 var _shell_cap_buf = 0;      # capture buffer (config cap + 1 for the NUL terminator), lazy
 var _shell_res_buf = 0;      # result/deny-message buffer (config cap + 256), lazy
@@ -245,14 +245,14 @@ fn shell_run_tool(args_cstr) {
 
     # 3) run it (timed, captured).
     var cap = _shell_bufs_ensure();   # 0.37.0: _shell_cap_buf is now guaranteed sized to THIS cap (cap+1) — a
-                                      # /reload that raised max_output re-allocs here instead of overflowing the old block
+    # /reload that raised max_output re-allocs here instead of overflowing the old block
     var status[16];                # two i64 slots: [0]=exit code, [1]=timed-out flag
     # Read up to cap+1 bytes into the cap+1 buffer: total > cap is the TRUE-overflow signal (output
     # exceeded the cap), so an output of exactly `cap` bytes is reported COMPLETE, not "truncated".
     var total = exec_shell_capture(cmd, _shell_cap_buf, cap + 1, config_shell_timeout_ms(), &status);
     var code = load64(&status);
     var timed = load64(&status + 8);
-    if (code == (0 - 1)) { _shell_audit_run(cmd, "spawn-fail", code, 0, SK_WARN); return "(shell: could not run the command — creating the capture file, forking or waiting failed)"; }
+    if (code == (0 - 1)) { _shell_audit_run(cmd, "spawn-fail", code, 0, SK_WARN); return "(shell: could not run the command — setting up the capture, forking or waiting failed)"; }
     if (code == (0 - 3)) { _shell_audit_run(cmd, "unsupported", code, 0, SK_WARN); return "(shell: unsupported on this target)"; }
     var truncated = 0;
     if (total > cap) { truncated = 1; total = cap; }   # drop the overflow probe byte; flag truncation

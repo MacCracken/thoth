@@ -246,16 +246,17 @@ fn test_tokens() {
     assert(streq(arg_after("/read foo.txt"), "foo.txt"), "arg extracted");
     assert(streq(arg_after("/model   gpt-5"), "gpt-5"), "skips extra spaces");
     assert(streq(arg_after("/write a.txt hi there"), "a.txt hi there"), "rest after first token");
-    # 0.34.4: _params_one must be BOUNDED — /bookmark feeds it a whole assistant reply (up to 64 KiB), which the
-    # old unbounded escaper wrote past the 32 KiB _gate_params buffer (heap overflow). A huge value now truncates
-    # in-buffer and keeps the closing `"}` envelope, never overrunning the cap.
+    # 0.34.4: _params_one must be BOUNDED — /bookmark feeds it a whole assistant reply, which the old unbounded escaper
+    # wrote past the 32 KiB _gate_params buffer (heap overflow). 0.53.3: bounded by being sized from the value: a cut copy
+    # is one t-ron passes while the whole command runs (T-1).
     var big = alloc(40001);
     var bi = 0;
     while (bi < 40000) { store8(big + bi, 65); bi = bi + 1; }   # 40000 'A' (> the 32 KiB cap)
     store8(big + 40000, 0);
     var pj = _params_one("text", big);
     var pl = strlen(pj);
-    assert(pl < 32768, "params_one bounded to < GATE_PARAMS_CAP on a 40 KiB value (no overflow)");
+    assert_eq(pl, 40000 + 11, "params_one keeps a 40 KiB value whole");
+    assert(pl < GATE_PARAMS_CAP, "...inside its buffer");
     assert(pl > 8, "params_one produced a result");
     assert_eq(load8(pj + pl - 1), 125, "params_one result ends with '}' (closer never dropped)");
     assert_eq(load8(pj + pl - 2), 34, "params_one result ends with '\"}' (string closed)");
@@ -315,7 +316,7 @@ fn test_capability_ladder() {
     # never silently allowing — security degrades CLOSED.
     assert_eq(seam_cap_state(SEAM_TRON), CAP_DEGRADED, "t-ron degrades closed, not absent");
     # full + fallback prose carry the honest semantics
-    assert(streq(seam_cap_full(SEAM_TRON), "per-tool authorization on /run, /write, /call, /remember and the model's tools (thoth_shell, thoth_edit, thoth_delegate, thoth_remember); deny is final"), "t-ron full prose names the model-tool verbs too (0.51.2)");
+    assert(streq(seam_cap_full(SEAM_TRON), "per-tool authorization on /run, /write, /call, /remember and the model's tools (thoth_shell, thoth_edit, thoth_delegate, thoth_remember), and [verify] (thoth_verify); deny is final"), "t-ron full prose names the model-tool verbs too (0.51.2)");
     assert_eq(_t_count_sub(seam_cap_fallback(SEAM_MEMORY), strlen(seam_cap_fallback(SEAM_MEMORY)), "not yet Cyrius-ported", 21), 0, "the memory-off fallback no longer claims mneme is unported (consumed via daimon since 0.32.0)");
     assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_HOOSH), "absent:"), 1, "hoosh fallback is absent");
     assert_eq(cstr_starts_with(seam_cap_fallback(SEAM_DAIMON), "absent:"), 1, "daimon fallback is absent");
@@ -2524,6 +2525,50 @@ fn test_config_token_by_value() {
     file_write_all(_lp, _ft, _fo);
     config_load();
     assert_eq(config_suppressed_count(), 0, "...a local token equal to the global's asked for nothing and is not named");
+    # 0.53.3 (W-12): naming the operator's own url beside the token was the same door by another key
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:8088\"\ntoken = \"REPO-TOKEN\"\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088") == 1, "premise: the url is the global one");
+    assert((config_hoosh_token() != 0) && (streq(config_hoosh_token(), "GLOBAL-CANARY") == 1), "a local token beside a url equal to the global's is ignored too");
+    sup = 0; i = 0;
+    while (i < config_suppressed_count()) { if (memeq(config_suppressed_at(i), "hoosh.token (ignored", 20) == 1) { sup = sup + 1; } i = i + 1; }
+    assert_eq(sup, 1, "...and named");
+    # 0.53.3 (W-11): a number thoth cannot read is named, and so is a table that repeats
+    _fo = _append_cstr_cap(_ft, 0, 256, "[budget]\nmax_tokens = 1e3\n[shell]\nenabled = true\n[shell]\nenabled = false\n");
+    file_write_all(_lp, _ft, _fo);
+    config_load();
+    var bad = 0; var rep = 0; i = 0;
+    while (i < _cfg_unknown_n) {
+        var un = load64(_cfg_unknown + i * 8);
+        if (_ui_contains(un, "max_tokens (not a plain") == 1) { bad = bad + 1; }
+        if (_ui_contains(un, "shell.* (a repeated table") == 1) { rep = rep + 1; }
+        i = i + 1;
+    }
+    assert_eq(bad, 1, "`max_tokens = 1e3` is named, not read as no ceiling");
+    assert_eq(rep, 1, "a repeated [shell] is named");
+    # 0.53.3: a config another user owns is not a layer
+    assert_eq(_cfg_foreign("VERSION"), 0, "this process's own file is its own");
+    _cfg_uid_seam = 123456;
+    assert_eq(_cfg_foreign("VERSION"), 1, "...and not another user's");
+    assert_eq(_cfg_foreign("/"), 0, "root's are accepted");
+    assert_eq(_cfg_foreign("build/no-such-file"), 0, "a file that is not there has no owner");
+    sys_mkdir("build", 493); sys_mkdir("build/.t_own", 493);
+    _fo = _append_cstr_cap(_ft, 0, 256, "[hoosh]\nurl = \"http://127.0.0.1:7\"\n");
+    file_write_all("build/.t_own/config.cyml", _ft, _fo);
+    var s_wd = _cfg_walk_dir;
+    _cfg_walk_dir = "build/.t_own";
+    _cfg_lpath_done = 0; _cfg_lpath_c = 0; _cfg_foreign_path = 0;
+    assert_eq(_cfg_local_path(), 0, "the walk passes over it");
+    assert(_cfg_foreign_path != 0, "...and remembers it for the notice");
+    config_load();
+    assert(streq(config_hoosh_url(), "http://127.0.0.1:8088") == 1, "the global url stays in effect");
+    sup = 0; i = 0;
+    while (i < config_suppressed_count()) { if (_ui_contains(config_suppressed_at(i), "another user owns") == 1) { sup = sup + 1; } i = i + 1; }
+    assert_eq(sup, 1, "...and the file is named");
+    _cfg_uid_seam = 0 - 1; _cfg_foreign_path = 0; _cfg_walk_dir = s_wd;
+    _cfg_lpath_c = _lp; _cfg_lpath_done = 1; _cfg_lsource = 1;
+    xunlink("build/.t_own/config.cyml"); sys_rmdir("build/.t_own");
     # [memory].enabled is global-only (audit H1): a repo cannot switch on the ungated memory injection
     _fo = _append_cstr_cap(_ft, 0, 256, "[memory]\nenabled = true\n");
     file_write_all(_lp, _ft, _fo);
@@ -3481,7 +3526,7 @@ fn test_model_id_sanitise() {
     _cfg_gpath_c = gpath; _cfg_gpath_done = 1;
     _cfg_lpath_c = lpath; _cfg_lpath_done = 1; _cfg_lsource = 1;
     # the premise, or the assertions after it could pass vacuously: the parser really hands thoth an ESC byte
-    var raw = _cfg2_str(_cfg_section_pairs(_cfg_parse_sections(lpath), "hoosh"), 0, "model");
+    var raw = _cfg2_str(_cfg_section_pairs(_cfg_parse_sections(lpath, 0), "hoosh"), 0, "model");
     assert(raw != 0, "premise: the local fixture parses");
     assert_eq(_t_count_sub(raw, strlen(raw), "\x1b[7mEVIL", 8), 1, "premise: bayan decodes the TOML unicode escape into a raw ESC byte");
     config_load();
@@ -3917,6 +3962,7 @@ fn test_session_persist() {
     assert(streq(session_history_role(1), "assistant") == 1, "...with its own role — not the 'user' an unknown token used to become");
     # the load buffer holds a full conversation of replies WITH their reasoning
     assert(SESS_READ_CAP >= (SESS_HIST_MAX * (HOOSH_ACC_MAX + MSG_REASON_CAP)), "SESS_READ_CAP covers SESS_HIST_MAX replies at their ceiling + reasoning cap");
+    assert_eq(MSG_REASON_CAP, REASON_ACC_MAX, "a landed fold holds what the live one did");
     # a store LARGER than the buffer loads its leading records only — and binding it would rewrite the file from
     # that partial picture on the next save, destroying the tail. So it is announced and NOT bound.
     var _cap0 = SESS_READ_CAP;
@@ -3930,6 +3976,7 @@ fn test_session_persist() {
     file_write(bigfd, pad, 4096); file_write(bigfd, pad, 4096);   # 8 KiB of tail past the 4 KiB cap
     file_close(bigfd);
     session_reset();
+    sys_chmod("/tmp/thoth_sess_v6big", 384);
     assert_eq(sess_persist_init("/tmp/thoth_sess_v6big"), 0 - 1, "a store larger than the load buffer refuses to bind");
     assert_eq(sess_persist_init_failed(), 2, "...with the 'larger than thoth can load' reason");
     assert_eq(sess_persist_active(), 0, "...so nothing is ever written back over the unread tail");
@@ -5335,7 +5382,7 @@ fn test_seam_text_sanitise() {
     _cfg_gpath_c = gpath; _cfg_gpath_done = 1;
     _cfg_lpath_c = lpath; _cfg_lpath_done = 1; _cfg_lsource = 1;
     # the premise, or the assertions after it could pass vacuously: the parser really hands thoth an ESC byte
-    var raw = _cfg2_str(_cfg_section_pairs(_cfg_parse_sections(lpath), "hoosh"), 0, "url");
+    var raw = _cfg2_str(_cfg_section_pairs(_cfg_parse_sections(lpath, 0), "hoosh"), 0, "url");
     assert(raw != 0, "premise: the local url fixture parses");
     assert_eq(_t_count_sub(raw, strlen(raw), "\x1b[7mURLMARK", 11), 1, "premise: bayan decodes the TOML unicode escape into a raw ESC byte");
     config_load();
@@ -6482,7 +6529,7 @@ fn test_sink_sweep_0452() {
 
     # --- S9: /rewind lists and restores a model-chosen path (cmd_rewind directly; dispatch gates it on [edit]) ---
     ckpt_reset();
-    var rwp = "/tmp/thoth_t_rw\x1b[7mRWMARK.txt";
+    var rwp = "build/thoth_t_rw\x1b[7mRWMARK.txt";
     file_write_all(rwp, "before\n", 7);
     assert_eq(ckpt_capture(rwp, 1), 1, "premise: a checkpoint of a file whose name holds ESC is taken");
     file_write_all(rwp, "after\n", 6);
@@ -6491,7 +6538,7 @@ fn test_sink_sweep_0452() {
     cmd_rewind("/rewind 1");
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_mid_feed_count("\x1b[7mRWMARK"), 0, "no /rewind line draws a raw escape from the path");
-    assert_eq(_mid_feed_count("/tmp/thoth_t_rw?[7mRWMARK.txt"), 2, "...the listing and the rewound line both name it with '?'");
+    assert_eq(_mid_feed_count("build/thoth_t_rw?[7mRWMARK.txt"), 2, "...the listing and the rewound line both name it with '?'");
     var rwb = alloc(16);
     assert_eq(file_read_all(rwp, rwb, 15), 7, "...and the restore still wrote back to the RAW path");
     xunlink(rwp);

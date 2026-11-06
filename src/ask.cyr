@@ -103,8 +103,8 @@ fn _ask_copy_clean(dst, cap, src) { return safe_label_copy(dst, cap, src); }
 fn ask_answer_buf() { _ask_alloc(); return _ask_ans; }
 fn ask_answer_cap() { return ASK_ANS_CAP; }
 
-# ask_set_answer: record a free-text answer. The operator's own words — NOT sanitised for display (it is
-# never re-displayed as chrome), but bounded like everything else.
+# ask_set_answer: record a free-text answer. The operator's own words, sent as typed and bounded like everything else; the
+# TUI's `[answered]` line draws it through the sanitiser (0.53.3).
 fn ask_set_answer(s) {
     if (_ask_alloc() == 0) { return 0; }
     var n = 0;
@@ -157,7 +157,7 @@ fn _ask_prompt_line() {
     else { ui_emit(ROLE_FAINT, "    (type your answer; empty cancels)"); oprintln(""); }
     emit("  > ");
     var buf[2048];
-    var n = read_line(&buf, 2048);
+    var n = read_line_prompt(&buf, 2048);
     if (n <= 0) { ask_cancel(); return 0; }
     ask_resolve(&buf);
     return 0;

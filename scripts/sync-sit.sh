@@ -104,7 +104,7 @@ if [ -n "${SANKOCH_LOCAL:-}" ]; then
 else
     URL="https://raw.githubusercontent.com/MacCracken/sankoch/${SK_TAG}/dist/sankoch-zlib.cyr"
     echo "Syncing sankoch-zlib $SK_TAG from $URL"
-    curl -sSf "$URL" -o "$SK_DEST"
+    curl -sSf "$URL" -o "$SK_DEST.part" && mv "$SK_DEST.part" "$SK_DEST"
 fi
 grep -q "^# Version: ${SK_TAG}\$" "$SK_DEST" || echo "WARN: $SK_DEST header != Version: $SK_TAG"
 [ "$(grep -c '\b_stream_grow\b' "$SK_DEST")" = "0" ] || echo "WARN: _stream_grow in $SK_DEST (zlib profile should have dropped stream.cyr)"

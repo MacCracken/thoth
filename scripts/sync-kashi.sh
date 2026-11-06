@@ -49,7 +49,7 @@ else
     URL="https://raw.githubusercontent.com/MacCracken/kashi/${TAG}/src/font_data.cyr"
     echo "Syncing kashi $TAG core from $URL"
     mkdir -p "$REPO_ROOT/src/vendor"
-    curl -sSf "$URL" -o "$DEST"
+    curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 fi
 
 # The freestanding contract is the whole reason we take src/font_data.cyr rather

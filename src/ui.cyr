@@ -358,7 +358,7 @@ fn ui_theme_from_name(s) {
 # spectrum without the hue crawling so fast it reads as noise.
 var UI_RAINBOW_STEP = 18;
 var UI_RAINBOW_ROW_SHIFT = 2; # 0.45.5: the DIAGONAL — each row starts its gradient this many columns further along, so the
-                              # hue runs down the feed at a slant (lolcat's look) instead of every row sharing one gradient
+# hue runs down the feed at a slant (lolcat's look) instead of every row sharing one gradient
 var _ui_rainbow_phase = 0;    # running; advances per glyph, wraps mod ANUENUE_PHASE_MOD
 var _ui_rainbow_ptr = 0;      # alloc(UI_RAINBOW_SGR_CAP): SHARED scratch for one escape
 var UI_RAINBOW_SGR_CAP = 32;  # "ESC[38;2;R;G;Bm" + NUL is <= 20; 32 is slack

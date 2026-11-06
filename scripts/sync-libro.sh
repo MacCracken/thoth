@@ -18,7 +18,7 @@ URL="https://raw.githubusercontent.com/MacCracken/libro/${TAG}/dist/libro.cyr"
 
 echo "Syncing libro $TAG from $URL"
 mkdir -p "$REPO_ROOT/src/vendor"
-curl -sSf "$URL" -o "$DEST"
+curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 
 grep -q "^# Version: ${TAG}\$" "$DEST" || {
     echo "WARN: $DEST header does not report Version: $TAG"; }

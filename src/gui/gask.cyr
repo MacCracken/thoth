@@ -44,7 +44,7 @@ var _gask_active = 0;
 var _gask_sel = 0;              # highlighted option, or -1 when the free-text field has focus
 var GASK_BUF_CAP = 1024;
 var _gask_buf = 0;              # the operator's typed answer (NOT the composer — that holds their
-                                # in-progress message and must survive the question untouched)
+# in-progress message and must survive the question untouched)
 var _gask_len = 0;
 
 # ⚠ THIS FILE OWNS ITS OWN COPY of the question and options rather than reading src/ask.cyr directly.
@@ -82,13 +82,42 @@ fn _gask_cp(dst, cap, src) {
     return i;
 }
 # gask_open: install the question + options and raise the modal. Strings are already sanitised upstream.
-fn gask_open(q) {
+# _gask_literal (0.53.3, G-1): q with every codepoint the raster would fold to ASCII swapped for U+FFFD, which draws as the box.
+# The window draws U+2018 as `'`, pixel for pixel, and a card reading `echo 'a; touch X; echo b'` ran the `touch`, since curly
+# quotes are not shell quotes. On this card a glyph must be the byte that runs, or plainly not one. Bytes past the buffer
+# set _gask_trunc, as a long question does.
+var _gask_lit = 0;
+fn _gask_literal(q) {
+    if (q == 0) { return 0; }
+    if (_gask_lit == 0) { _gask_lit = alloc(GASK_Q_CAP * 2); }
+    if (_gask_lit == 0) { return q; }
+    var o = 0;
+    var i = 0;
+    while ((load8(q + i) != 0) && (o < ((GASK_Q_CAP * 2) - 4))) {
+        var packed = gr__utf8_at(q, i);
+        var cp = packed / 8;
+        var nb = packed % 8;
+        if (nb < 1) { nb = 1; }
+        if ((cp >= 128) && (gr__cp_to_glyph(cp) != 254)) {
+            store8(_gask_lit + o, 0xEF); store8(_gask_lit + o + 1, 0xBF); store8(_gask_lit + o + 2, 0xBD);
+            o = o + 3;
+        } else {
+            var k = 0;
+            while (k < nb) { store8(_gask_lit + o, load8(q + i + k)); o = o + 1; k = k + 1; }
+        }
+        i = i + nb;
+    }
+    store8(_gask_lit + o, 0);
+    return _gask_lit;
+}
+fn gask_open(q0) {
+    var q = _gask_literal(q0);
     _gask_vm();
     _gask_trunc = 0;
     if ((q != 0) && (strlen(q) >= GASK_Q_CAP)) { _gask_trunc = 1; }
     _gask_cp(_gask_q, GASK_Q_CAP, q); _gask_nopt = 0; _gask_len = 0; _gask_sel = 0 - 1; _gask_label = GASK_LABEL_AGENT; _gask_active = 1;
     _gask_cut = 1;                     # 0.52.8 (audit G6): cut until a build at this window's size says otherwise — a key
-                                       # arriving before the first frame was judged by the PREVIOUS modal's cut
+    # arriving before the first frame was judged by the PREVIOUS modal's cut
     return 0;
 }
 
@@ -209,7 +238,7 @@ fn gask_build(cmds, w, h) {
     _gask_cut = 0;
     if (_gask_trunc == 1) { _gask_cut = 1; }                         # 0.52.8: a question cut on the way in is cut
     if ((cw > w) || (noroom == 1)) { _gask_cut = 1; }                # 0.52.8 (audits D5 + G7): a card wider than the window,
-                                                                     # or one with no room for a question row, shows it cut
+    # or one with no room for a question row, shows it cut
     if (qneed > qrows) { _gask_cut = 1; }
     if (_gask_q_more(maxcp0, qrows) == 1) { _gask_cut = 1; }            # longer than GASK_Q_ROWS itself
     var ch = GASK_PAD * 4 + GASK_ROW_H * (nopt + 2 + qrows);

@@ -156,7 +156,7 @@ fn seam_cap_full(id) {
     if (id == SEAM_HOOSH) { return "free-text turns route to a backing model; mid-session /model switch"; }
     if (id == SEAM_DAIMON) { return "MCP tool registry (/tools) + execution (/call); the agentic loop"; }
     if (id == SEAM_BOTE) { return "MCP protocol framing, in-process"; }
-    if (id == SEAM_TRON) { return "per-tool authorization on /run, /write, /call, /remember and the model's tools (thoth_shell, thoth_edit, thoth_delegate, thoth_remember); deny is final"; }
+    if (id == SEAM_TRON) { return "per-tool authorization on /run, /write, /call, /remember and the model's tools (thoth_shell, thoth_edit, thoth_delegate, thoth_remember), and [verify] (thoth_verify); deny is final"; }
     if (id == SEAM_AVATARA) { return "the Thoth/Librarian archetype steers every turn"; }
     if (id == SEAM_MEMORY) { return "mneme notes: semantic + full-text recall, auto-link, knowledge graph"; }
     if (id == SEAM_GIT) { return "branch + working-tree status (+ per-file diff) via sit's read-only .git/.sit API"; }

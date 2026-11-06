@@ -71,6 +71,13 @@ fn note_println(s) {
     emit(s);
     return oprintln("");
 }
+# note_emit_int: a number on the same channel.
+fn note_emit_int(n) {
+    var b[32];
+    var l = fmt_int_buf(n, &b);
+    store8(&b + l, 0);
+    return note_emit(&b);
+}
 fn emit_err_n(ptr, n) { syscall(SYS_WRITE, 2, ptr, n); return 0; }
 # note_emit_role (0.52.6): a notice's role-coloured LEAD — ui_emit where the normal channel draws, stderr (uncoloured)
 # where it is a discard. `ui_emit(ROLE_RED, "  [toolpin] WITHHELD ")` followed by note_* lost exactly that lead under
@@ -370,6 +377,121 @@ fn emit_raw_n(ptr, n) {
         if (w > 0) { sent = sent + w; }
         elif (w != (0 - 4)) { return 0; }
     }
+    return 0;
+}
+
+# read_line_prompt: read_line for an answer to a prompt just drawn: what was typed before it, in the terminal or in this
+# reader's carry, is dropped. A `y` typed ahead, or the tail of one pasted burst, ran a command with no key pressed for it.
+fn read_line_prompt(buf, cap) {
+    if (term_flush_input() == 1) { _rl_pos = 0; _rl_len = 0; }
+    return read_line(buf, cap);
+}
+
+# file_is_regular (0.53.3): 1 when `path` names a regular file (a final symlink followed; callers refuse links on their own
+# terms), else 0. open(2) on a FIFO blocks until a writer comes, on the main thread with Esc dead: `read_file`, `search`, `edit`,
+# `/read` and `@` all opened first and asked afterwards, and an archive can plant one. AGNOS and Windows have no FIFOs in a
+# project tree, and neither `sys_stat` of this shape, so there it asks only whether the file opens.
+fn file_is_regular(path) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    var st[256];
+    if (sys_stat(path, &st) != 0) { return 0; }
+    if ((load32(&st + STAT_MODE) & 0xF000) == 0x8000) { return 1; }
+    return 0;
+    #endif
+    #endif
+    #ifdef CYRIUS_TARGET_WIN
+    return file_exists(path);
+    #endif
+    #ifdef CYRIUS_TARGET_AGNOS
+    return file_exists(path);
+    #endif
+}
+
+# file_is_private (0.53.3): 0 when `path` is another user's, or group or others can reach it, else 1 (and 1 for a file that is
+# not there: nothing to refuse). thoth writes its stores 0600, and git checks files out 0644 or 0755, so a clone cannot carry one.
+fn file_is_private(path) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    var st[256];
+    if (sys_stat(path, &st) != 0) { return 1; }
+    if ((load32(&st + STAT_MODE) & 63) != 0) { return 0; }
+    if (load32(&st + STAT_UID) != syscall(SYS_GETUID)) { return 0; }
+    #endif
+    #endif
+    return 1;
+}
+
+# file_exists_noblock: file_exists without the open: an lstat-free answer that a FIFO cannot hang.
+fn file_exists_noblock(path) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    var st[256];
+    if (sys_stat(path, &st) == 0) { return 1; }
+    return 0;
+    #endif
+    #endif
+    #ifdef CYRIUS_TARGET_WIN
+    return file_exists(path);
+    #endif
+    #ifdef CYRIUS_TARGET_AGNOS
+    return file_exists(path);
+    #endif
+}
+
+# atomic_tmp_open (0.53.3): a fresh file beside `path`, created exclusively at `mode`, for a write that ends in a rename: the
+# old file stands until the new one is whole, and a symlink at `path` is replaced, never followed. Returns the descriptor
+# (its name in atomic_tmp_path(), good until the next call), or -1. atomic_tmp_commit: fsync, close and rename, unlinking
+# the temp on any failure; atomic_tmp_abort: close and unlink. Portability, named: AGNOS drops O_EXCL (a plain create) and
+# fsyncs the whole fs; Windows's rename is MoveFileEx(REPLACE_EXISTING).
+var _atomic_tmp = 0;
+var _atomic_tmp_cap = 0;
+fn atomic_tmp_path() { return _atomic_tmp; }
+fn atomic_tmp_open(path, mode) {
+    var pl = strlen(path);
+    if ((pl + 48) > _atomic_tmp_cap) {
+        _atomic_tmp = alloc(pl + 48);
+        _atomic_tmp_cap = pl + 48;
+    }
+    if (_atomic_tmp == 0) { _atomic_tmp_cap = 0; return 0 - 1; }
+    var tmp = _atomic_tmp;
+    var tries = 0;
+    var fd = 0 - 1;
+    while ((tries < 8) && (fd < 0)) {
+        var off = 0;
+        memcpy(tmp, path, pl); off = pl;
+        memcpy(tmp + off, ".tmp.", 5); off = off + 5;
+        var ib[24];
+        var il = fmt_int_buf(getpid(), &ib);
+        memcpy(tmp + off, &ib, il); off = off + il;
+        store8(tmp + off, 46); off = off + 1;
+        var rb[8];
+        store64(&rb, 0);
+        random_bytes(&rb, 8);
+        var k = 0;
+        while (k < 8) {
+            var b = load8(&rb + k) & 255;
+            store8(tmp + off, load8("0123456789abcdef" + (b >> 4))); off = off + 1;
+            store8(tmp + off, load8("0123456789abcdef" + (b & 15))); off = off + 1;
+            k = k + 1;
+        }
+        store8(tmp + off, 0);
+        fd = file_open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, mode);
+        tries = tries + 1;
+    }
+    return fd;
+}
+fn atomic_tmp_abort(fd) {
+    file_close(fd);
+    xunlink(_atomic_tmp);
+    return 0 - 1;
+}
+fn atomic_tmp_commit(fd, path) {
+    var ok = 1;
+    if (xfsync(fd) < 0) { ok = 0; }
+    file_close(fd);
+    if (ok == 1) { if (file_rename(_atomic_tmp, path) < 0) { ok = 0; } }
+    if (ok == 0) { xunlink(_atomic_tmp); return 0 - 1; }
     return 0;
 }
 

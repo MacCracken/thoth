@@ -42,7 +42,7 @@ else
     URL="https://raw.githubusercontent.com/MacCracken/darshana/${TAG}/dist/darshana.cyr"
     echo "Syncing darshana $TAG from $URL"
     mkdir -p "$REPO_ROOT/src/vendor"
-    curl -sSf "$URL" -o "$DEST"
+    curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 fi
 
 grep -q "^# Version: ${TAG}\$" "$DEST" || {

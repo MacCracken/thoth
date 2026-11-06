@@ -78,6 +78,7 @@ include "src/tui.cyr"
 
 include "tests/cases/testutil.cyr"
 include "tests/cases/agent.cyr"
+include "tests/cases/harden.cyr"   # 0.53.3: the P(-1) sweep, finding by finding
 include "tests/cases/proc.cyr"     # 0.52.8: a capture's process tree (the supervisor) + what its command inherits
 
 fn main() {
@@ -114,6 +115,8 @@ fn main() {
     test_par_post_tool_whole();   # 0.52.8: the parallel post_tool gets the full call (audits E3, E9)
     test_par_stop_closes_taken(); # 0.52.8: a phase-1 stop closes the calls it took (audit E8)
     test_reply_long();     # 0.53.2: a reply past 64 KiB is kept, to a ceiling that says so
+    test_reason_long();    # 0.53.3: so is reasoning; a frame's parse leaves nothing on the heap
+    test_harden();         # 0.53.3: the P(-1) sweep
     return assert_summary();
 }
 var _e = main();

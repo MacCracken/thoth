@@ -23,7 +23,7 @@ var _comp_len = 0;          # bytes in the buffer
 var _comp_cur = 0;          # cursor index [0.._comp_len]
 var _tui_key_ch = 0;        # the byte for a KEY_CHAR (set by tui_read_key)
 var _tui_line = 0;          # stable copy of a submitted line (the composer is cleared
-                            # before dispatch, so the text can't be read from _composer)
+# before dispatch, so the text can't be read from _composer)
 
 # Decoded keys.
 var KEY_NONE = 0;
@@ -75,8 +75,8 @@ var _fsearch_edit = 0;
 # Armed only inside the PT_RICH TUI dispatch window; the piped/REPL floor never decodes Ctrl-P, so byte-identical.
 var _mpick_active = 0;
 var HL_CAP = 24576;           # the per-line highlighted-render scratch (fsearch_render dst; becomes the
-                              # painter's SRC, so it is bounded by a slot + injected match escapes — NOT
-                              # by PAINT_CAP, which sizes the painter's own dst. The two moved apart at 0.38.1.)
+# painter's SRC, so it is bounded by a slot + injected match escapes — NOT
+# by PAINT_CAP, which sizes the painter's own dst. The two moved apart at 0.38.1.)
 var _hl_buf = 0;              # alloc(HL_CAP), lazy
 
 # Editor outcomes.
@@ -297,6 +297,18 @@ fn _led_is_wsep(ch) { if ((ch == 32) || (ch == 10)) { return 1; } return 0; }
 # buffer (crossing embedded newlines, which count as separators). The `i > 0` term is FIRST in each
 # leftward loop so && short-circuits BEFORE the load8(_composer + i - 1) — no OOB read at column 0
 # / on an empty buffer (the discipline the KEY_LEFT outer guard uses).
+# _led_prev / _led_next (0.53.3): the cursor one character over: the composer holds UTF-8, and a stop inside a character
+# edits half of it.
+fn _led_prev(cur) {
+    var c = cur - 1;
+    while ((c > 0) && ((load8(_composer + c) & 192) == 128)) { c = c - 1; }
+    return c;
+}
+fn _led_next(cur) {
+    var c = cur + 1;
+    while ((c < _comp_len) && ((load8(_composer + c) & 192) == 128)) { c = c + 1; }
+    return c;
+}
 fn _led_word_left() {
     var i = _comp_cur;
     while ((i > 0) && (_led_is_wsep(load8(_composer + i - 1)) == 1)) { i = i - 1; }     # skip separators
@@ -365,16 +377,18 @@ fn led_feed(key, ch) {
     }
     if (key == KEY_BACKSPACE) {
         if (_comp_cur > 0) {
-            var i = _comp_cur - 1;
-            while (i < (_comp_len - 1)) { store8(_composer + i, load8(_composer + i + 1)); i = i + 1; }
-            _comp_len = _comp_len - 1;
-            _comp_cur = _comp_cur - 1;
+            var from = _led_prev(_comp_cur);              # 0.53.3 (S-9): a whole character: one byte left `caf\xc3`, and the gateway refused the request
+            var gone = _comp_cur - from;
+            var i = from;
+            while (i < (_comp_len - gone)) { store8(_composer + i, load8(_composer + i + gone)); i = i + 1; }
+            _comp_len = _comp_len - gone;
+            _comp_cur = from;
             store8(_composer + _comp_len, 0);
         }
         return ACT_NONE;
     }
-    if (key == KEY_LEFT) { if (_comp_cur > 0) { _comp_cur = _comp_cur - 1; } return ACT_NONE; }
-    if (key == KEY_RIGHT) { if (_comp_cur < _comp_len) { _comp_cur = _comp_cur + 1; } return ACT_NONE; }
+    if (key == KEY_LEFT) { if (_comp_cur > 0) { _comp_cur = _led_prev(_comp_cur); } return ACT_NONE; }
+    if (key == KEY_RIGHT) { if (_comp_cur < _comp_len) { _comp_cur = _led_next(_comp_cur); } return ACT_NONE; }
     if (key == KEY_HOME) { _comp_cur = 0; return ACT_NONE; }
     if (key == KEY_END) { _comp_cur = _comp_len; return ACT_NONE; }
     if (key == KEY_WORD_LEFT) { _comp_cur = _led_word_left(); return ACT_NONE; }    # Ctrl/Alt-Left, Alt-b
@@ -399,11 +413,12 @@ fn led_feed(key, ch) {
 # the policy now lives on both paths, and a future caller of led_insert_cstr cannot reopen it.
 fn led_insert_cstr(s) {
     var before = _comp_len;
+    var sn = strlen(s);
     var i = 0;
     while (load8(s + i) != 0) {
         var b = load8(s + i) & 255;
         if (b == 9) { led_feed(KEY_CHAR, 32); }               # tab -> space, as led_paste does
-        elif ((b >= 32) && (b != 127)) { led_feed(KEY_CHAR, b); }
+        elif ((b >= 32) && (b != 127) && (_c1_at(s, i, sn) == 0)) { led_feed(KEY_CHAR, b); }   # 0.53.3 (S-7): the C1 half
         i = i + 1;
     }
     return _comp_len - before;
@@ -442,20 +457,29 @@ fn _tui_at_complete() {
 # correctness-critical half, unit-tested. It never submits (only KEY_NEWLINE/KEY_CHAR, both
 # ACT_NONE); a leading '/' does not dispatch — the palette is a derivation of the buffer, not a
 # flag, and any pasted space/newline makes tui_palette_active() false.
+# 0.53.3: `_led_paste_cut` says the composer filled and part of this paste is gone. It went with no mark.
+var _led_paste_cut = 0;
+fn _led_paste_key(key, ch) {
+    var was = _comp_len;
+    led_feed(key, ch);
+    if (_comp_len == was) { _led_paste_cut = 1; }
+    return 0;
+}
 fn led_paste(src, len) {
+    _led_paste_cut = 0;
     var i = 0;
     while (i < len) {
         var b = load8(src + i) & 255;
         if ((b == 10) || (b == 13)) {
-            led_feed(KEY_NEWLINE, 0);
+            _led_paste_key(KEY_NEWLINE, 0);
             # CRLF -> one newline: after a CR, swallow a following LF (guard the source boundary).
             if ((b == 13) && ((i + 1) < len) && ((load8(src + i + 1) & 255) == 10)) { i = i + 1; }
         } elif (b == 9) {
-            led_feed(KEY_CHAR, 32);                       # tab -> a single space (composer stays printable)
-        } elif ((b >= 32) && (b != 127)) {
-            led_feed(KEY_CHAR, b);                        # printable ASCII + high/UTF-8 bytes
+            _led_paste_key(KEY_CHAR, 32);                 # tab -> a single space (composer stays printable)
+        } elif ((b >= 32) && (b != 127) && (_c1_at(src, i, len) == 0)) {
+            _led_paste_key(KEY_CHAR, b);                  # printable ASCII + high/UTF-8 bytes
         }
-        # else: ESC (27), other C0 controls, DEL (127) -> dropped (no escape-injection surface)
+        # else: ESC (27), other C0 controls, DEL (127), C1 (0.53.3, S-7) -> dropped (no escape-injection surface)
         i = i + 1;
     }
     return 0;
@@ -590,6 +614,7 @@ fn _tui_csi_final(final, p1, p2) {
 var PASTE_CAP = 4096;         # content buffer cap (== COMPOSER_CAP; a paste can't outgrow the composer)
 var _paste_buf = 0;           # lazily-alloc'd slurp buffer
 var _paste_len = 0;           # content bytes buffered by the last slurp
+var _paste_over = 0;          # 0.53.3: the last slurp met PASTE_CAP, so the end of the paste is gone
 
 # _paste_end: the i-th byte of the bracketed-paste END marker "ESC [ 2 0 1 ~" (i in 0..5).
 fn _paste_end(i) {
@@ -608,6 +633,7 @@ fn _paste_end(i) {
 # can never write past the buffer (design-review fold, 0.17.0).
 fn _paste_commit(b) {
     if (_paste_len < PASTE_CAP) { store8(_paste_buf + _paste_len, b); _paste_len = _paste_len + 1; }
+    else { _paste_over = 1; }
     return 0;
 }
 
@@ -621,6 +647,7 @@ fn _paste_commit(b) {
 fn _tui_paste_slurp() {
     if (_paste_buf == 0) { _paste_buf = alloc(PASTE_CAP); }
     _paste_len = 0;
+    _paste_over = 0;
     var m = 0;
     var c[8];
     var go = 1;
@@ -1595,12 +1622,19 @@ fn _tui_pick_key(key) {
 # (emit_raw); the per-column glyph is the 3-byte U+2500, each one visible column wide, so
 # `cols` of them fill the width. 0.45.1: two of them frame the input — directly above and directly
 # below it (tui_draw_composer paints both) — with the status bar under the lower one.
+var _rule_buf = 0;
 fn tui_draw_rule(row, cols) {
     tty_move(row, 1);
     tty_clear_to_eol();
     emit_raw(ui_sgr(ROLE_FAINT));
+    # 0.53.3 (M-5): one write. It was one per column, twice a paint: 301 writes for a keystroke at 140 columns.
+    if (_rule_buf == 0) { _rule_buf = alloc(4096 * 3); }
     var i = 0;
-    while (i < cols) { emit_raw("─"); i = i + 1; }
+    while ((i < cols) && (i < 4096)) {
+        store8(_rule_buf + i * 3, 0xE2); store8(_rule_buf + i * 3 + 1, 0x94); store8(_rule_buf + i * 3 + 2, 0x80);
+        i = i + 1;
+    }
+    emit_raw_n(_rule_buf, i * 3);
     emit_raw(ui_reset());
     return 0;
 }
@@ -2184,6 +2218,8 @@ var _tui_cfm_rows = 0;            # the live size the question was sized for (0 
 var _tui_cfm_cols = 0;
 var _tui_cfm_extra = 0;           # rows the asker draws below the question (tui_ask's options, hint and prompt)
 fn tui_confirm_begin() {
+    tui_mouse_disable();                                # 0.53.3 (S-8): a cooked read takes the bytes these modes send: a wheel notch or a bracketed paste
+    tui_bpaste_disable();                               # went into an ask_user answer as raw escapes (a confirm then denied, safely, on them)
     intr_suspend();                                     # 0.34.1: leave Esc-poll mode so the cooked y/n read_line works (agentic tool-phase arming)
     var lr = _tui_rows;
     var lc = _tui_cols;
@@ -2228,13 +2264,15 @@ fn tui_confirm_still_fits() {
 fn tui_confirm_end() {
     tui_wrap_disable();                 # 0.52.6: the question may have wrapped (tui_confirm_begin); the frame never does
     tui_repaint_body();                 # 0.18.6: still OUT_FD1 here -> repaint to the SCREEN, clearing the
-                                        # confirm prompt + its cooked y/n echo and restoring the {(o> composer
-                                        # IMMEDIATELY (was: the confirm line lingered on the composer row until
-                                        # the whole turn finished, so the prompt looked stuck after approval).
+    # confirm prompt + its cooked y/n echo and restoring the {(o> composer
+    # IMMEDIATELY (was: the confirm line lingered on the composer row until
+    # the whole turn finished, so the prompt looked stuck after approval).
     out_mode_set(OUT_RING);             # resume capturing the rest of dispatch into the feed
     _spin_active = _spin_suspended;     # resume the spinner if a turn is still in flight
     spin_paint();
     intr_resume();                      # 0.34.1: re-enter Esc-poll mode for the rest of the tool phase (if suspend armed it)
+    tui_bpaste_enable();
+    tui_mouse_enable();
     return 0;
 }
 
@@ -2301,7 +2339,7 @@ fn tui_ask() {
     # tui_confirm_end's repaint erases the whole exchange and the transcript shows a tool call with an
     # answer that appears from nowhere.
     ui_emit(ROLE_ACCENT, "  [asked] "); emit(ask_question()); oprintln("");
-    if (ask_state() == 1) { ui_emit(ROLE_GREEN, "  [answered] "); emit(ask_answer_buf()); oprintln(""); }
+    if (ask_state() == 1) { ui_emit(ROLE_GREEN, "  [answered] "); emit_clean_line(ask_answer_buf()); oprintln(""); }
     elif (shrank == 1) { ui_emit(ROLE_RED, "  [declined] the terminal shrank while it was asked, and part of it may have left the screen"); oprintln(""); }
     else { ui_emit(ROLE_RED, "  [declined]"); oprintln(""); }
     return 0;
@@ -2442,7 +2480,7 @@ fn _tui_tree_enter() {
     off = _ftree_append_cstr(_tui_cmdbuf, off, 4160, _tui_pathbuf);
     store8(_tui_cmdbuf + off, 0);
     var keep = tui_run_line(_tui_cmdbuf);   # capture + dispatch + repaint feed; focus stays on the tree
-    if (keep == 0) { _tui_running = 0; } else { tui_relayout(); }
+    if (keep == 0) { _tui_running = 0; } else { tui_relayout(); tui_git_refresh(); }
     return 0;
 }
 
@@ -2528,10 +2566,20 @@ fn tui_after_edit(before_h) {
 # CAPTURED into the ring (OUT_RING) and dispatched in COOKED mode (so the gate
 # confirm's read_line works; the confirm itself brackets back to the screen).
 # On return the feed is repainted. Returns dispatch's keep-going flag (0 = quit).
+# tui_git_refresh (0.53.3, M-3): the probe a line left owing, after its repaint: it inflates every tracked blob (0.58 s on a 310-file
+# repo, 2.46 s on 3,800), and it ran before the answer drew, so the prompt came back that much later and keys waited.
+var _tui_git_due = 0;
+fn tui_git_refresh() {
+    if (_tui_git_due == 0) { return 0; }
+    _tui_git_due = 0;
+    git_probe();
+    tui_relayout();
+    return 0;
+}
 fn tui_run_line(line) {
     feed_scroll_set(0);                          # a new turn jumps back to the newest output
     out_mode_set(OUT_RING);                      # capture dispatch output into the feed ring
-    ui_emit(ROLE_ACCENT, "{(o> "); emit(line);   # echo the submitted command (captured)
+    ui_emit(ROLE_ACCENT, "{(o> "); emit_clean_text(line);   # echo the submitted command (captured); 0.53.3 (S-6): cleaned, as cmd_task's echo is: the tree's Enter builds this line from a raw $PWD
     feed_flush_pending();                        # seal the echo as its own feed line
     feed_repaint();                              # show the echo IMMEDIATELY (before a slow turn)
     spin_begin();                                # show the working indicator for the dispatch window
@@ -2539,7 +2587,7 @@ fn tui_run_line(line) {
     var keep = dispatch(line);
     spin_end();                                  # stop the indicator (the caller's relayout repaints the input)
     out_mode_set(OUT_FD1);                        # stop capturing before any chrome paints
-    git_probe();                                 # the turn may have changed the worktree (/run, agentic edit) — refresh git for the status bar (the following tui_relayout repaints it)
+    _tui_git_due = 1;                            # the turn may have changed the worktree (/run, agentic edit); 0.53.3 (M-3): probed once the prompt is back (tui_git_refresh) — refresh git for the status bar (the following tui_relayout repaints it)
     if (term_raw(0) < 0) { return 0; }           # couldn't re-enter raw -> end the session cleanly
     feed_flush_pending();                        # seal a trailing un-newlined dispatch line
     feed_repaint();                              # paint the captured output
@@ -2876,7 +2924,7 @@ fn tui_loop() {
                 tui_relayout();
             } elif (key == KEY_TOGGLE_THEME) {
                 tui_theme_next();       # cycle the axis + rebuild the SGR table (0.38.1: a real fn, so a
-                                        # test can drive the KEY path itself rather than re-typing its math)
+                # test can drive the KEY path itself rather than re-typing its math)
                 tty_clear();           # re-color the whole frame
                 tui_relayout();
             } elif (key == KEY_REPROBE) {
@@ -2933,6 +2981,14 @@ fn tui_loop() {
                 var before_hp = tui_composer_height(_tui_rows, _comp_total_rows(), _tui_show_status);
                 led_paste(_paste_buf, _paste_len);
                 tui_after_edit(before_hp);   # reflow if the paste grew the composer; else a cheap redraw
+                if ((_paste_over == 1) || (_led_paste_cut == 1)) {
+                    out_mode_set(OUT_RING);
+                    ui_emit(ROLE_RED, "paste cut short");
+                    ui_emit(ROLE_FAINT, " — the input holds 4 KB; put the rest in a file and name it with @path");
+                    feed_flush_pending();
+                    out_mode_set(OUT_FD1);
+                    tui_relayout();
+                }
             } else {
                 var before_h = tui_composer_height(_tui_rows, _comp_total_rows(), _tui_show_status);
                 var act = led_feed(key, _tui_key_ch);
@@ -2966,7 +3022,7 @@ fn tui_loop() {
                         out_mode_set(OUT_FD1);
                     }
                     if (keep == 0) { _tui_running = 0; }
-                    else { tui_relayout(); }
+                    else { tui_relayout(); tui_git_refresh(); }
                 } elif (act == ACT_EOF) {
                     _tui_running = 0;
                 } else {

@@ -32,7 +32,7 @@ fn _gtool_txt(cmds, pen, ty, color, s) {
 
 # format an int into a fresh bump-heap buffer (persists until raster), draw it, return the advanced pen.
 fn _gtool_int(cmds, pen, ty, color, n) {
-    var b = alloc(24);
+    var b = gd_num_buf();
     var len = fmt_int_buf(n, b);
     store8(b + len, 0);
     gd_push_text(cmds, pen, ty, color, b, 0);

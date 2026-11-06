@@ -142,7 +142,8 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     if (_edit_old == 0) { _edit_old = alloc(EDIT_BUF_CAP); }
     if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
     if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
-    if (file_exists(path) == 0) { return "(edit: file does not exist - use create_file to make a new file, or check the path)"; }
+    if (file_exists_noblock(path) == 0) { return "(edit: file does not exist - use create_file to make a new file, or check the path)"; }
+    if (file_is_regular(path) == 0) { return "(edit: that path is not a regular file)"; }
     var oldlen = file_read_all(path, _edit_old, EDIT_BUF_CAP - 1);
     if (oldlen < 0) { return "(edit: could not read the file)"; }
     if (oldlen >= (EDIT_BUF_CAP - 1)) { return "(edit: file too large (> 256KB) - refused rather than edit a truncated read)"; }
@@ -206,8 +207,11 @@ fn edit_tool(args_cstr) {
     if (_project_jail_ok(path) == 0) { return "(edit: refused - path is outside the project (no absolute, no '~', no '..'))"; }
     if (_project_no_symlink(path) == 0) { return "(edit: refused - a path component is a symlink; a write must not follow a link out of the project)"; }
     if (_project_sensitive(path) == 1) { return "(edit: refused - thoth's own config/state is not model-writable)"; }
+    if (_project_git_path(path) == 1) { return "(edit: refused - a write inside .git is command execution; it is not model-writable)"; }
+    if ((file_exists_noblock(path) == 1) && (file_is_regular(path) == 0)) { return "(edit: that path is not a regular file)"; }   # no prompt for a FIFO
     if (gate_authorize("thoth_edit", _params_one("path", path), "edit", path) == 0) { return "denied by authorization policy"; }
     _edit_last_allowed = 1;
+    if (_project_no_symlink(path) == 0) { return "(edit: refused - a path component became a symlink while the prompt was up)"; }   # 0.53.3: checked before the gate, used after it
     return _edit_do(path, oldstr, oldstrlen, newstr, newstrlen);
 }
 
@@ -251,7 +255,9 @@ fn _write_do(path, content, clen) {
     # 0.40.0 (T1-4): record the checkpoint AFTER the exclusive create proves the file did not exist, so
     # the recorded undo ("remove it") is true. Recording before would leave an entry claiming a file was
     # created when the create then failed — a /rewind that deletes someone else's file.
-    if (ckpt_capture(path, session_turns()) == 0) {
+    # 0.53.3: as a NEW file, which is what the exclusive create just proved. ckpt_capture looked and found it there, empty, so
+    # the "remove it" undo was dead and /rewind left an empty file behind.
+    if (ckpt_capture_new(path, session_turns()) == 0) {
         file_close(fd);
         xunlink(path);                                          # roll back the empty file we just created
         return "(create_file: refused - could not checkpoint, so the new file would not be undoable; is .thoth/ writable?)";
@@ -289,7 +295,9 @@ fn create_file_tool(args_cstr) {
     if (_project_jail_ok(path) == 0) { return "(create_file: refused - path is outside the project (no absolute, no '~', no '..'))"; }
     if (_project_no_symlink(path) == 0) { return "(create_file: refused - a path component is a symlink; a write must not follow a link out of the project)"; }
     if (_project_sensitive(path) == 1) { return "(create_file: refused - thoth's own config/state is not model-writable)"; }
+    if (_project_git_path(path) == 1) { return "(create_file: refused - a write inside .git is command execution; it is not model-writable)"; }
     if (gate_authorize("thoth_edit", _params_one("path", path), "create", path) == 0) { return "denied by authorization policy"; }
     _edit_last_allowed = 1;
+    if (_project_no_symlink(path) == 0) { return "(create_file: refused - a path component became a symlink while the prompt was up)"; }   # 0.53.3: checked before the gate, used after it
     return _write_do(path, content, clen);
 }

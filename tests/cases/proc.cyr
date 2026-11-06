@@ -196,8 +196,8 @@ fn test_capture_orphans() {
     if (leaker > 0) { sys_kill(leaker, 9); }
     xunlink("build/.thoth_e1_pg2");
 
-    # 3. a thoth started with its stdio closed: the temp file and the death pipe take 0..2, and the supervisor's own
-    #    stdio dup2s must not overwrite the pipe (were they to, the capture file polled in its place reads "ready" at once
+    # 3. a thoth started with its stdio closed: the capture and death pipes take 0..2, and the supervisor's own
+    #    stdio dup2s must not overwrite a pipe (were they to, the wrong end polled in its place reads "ready" at once
     #    and every command dies at its start). The stand-in reports its capture down a pipe.
     var qp[16];
     store64(&qp, 0);
@@ -267,8 +267,8 @@ fn test_capture_status_mapping() {
     exec_shell_capture("sleep 5", buf, cap, 300, &st);
     assert_eq(load64(&st), 0 - 2, "a deadline still reads -2");
     assert_eq(load64(&st + 8), 1, "...with the timed-out flag");
-    # a job the command leaves running after it returns is the command's business, as before: the supervisor watches
-    # the shell, and only thoth's death or a kill takes the group
+    # a job the command leaves running after it returns is the command's business, as before: only thoth's death or a kill
+    # takes the group (the watcher, test_capture_pipe)
     xunlink("build/.thoth_e1_bg");
     exec_shell_capture("(sleep 0.5; : > build/.thoth_e1_bg) > /dev/null 2>&1 & exit 0", buf, cap, 5000, &st);
     assert_eq(load64(&st), 0, "a shell that backgrounds a job and exits reads 0");
@@ -422,12 +422,114 @@ fn test_capture_inherits() {
 #endif
 #endif
 
+# test_capture_pipe (0.53.3): the capture was a temp file, read by name afterwards. A FIFO at that name hung thoth past its
+# deadline, nothing bounded it (`yes` wrote 2.5 GB to a tmpfs in a second), a job left running wrote on to it unlinked, and
+# [verify]'s tail was the tail of the first 8 KiB. A job left running also outlived a killed thoth, against ruling R4.
+fn test_capture_pipe() {
+    test_group("a capture is a pipe: no file, no name, and it knows its total (exec.cyr, 0.53.3)");
+    exec_wait_poll_set(0);
+    var cap = 4096;
+    var buf = alloc(cap + 1);
+    var st[16];
+    var n = exec_shell_capture("test -p /dev/stdout && echo a-pipe", buf, cap, 5000, &st);
+    store8(buf + n, 0);
+    assert_eq(_t_has(buf, "a-pipe"), 1, "a command's stdout is a pipe");
+    n = exec_shell_capture("head -c 300000 /dev/zero | tr '\\000' x; echo END", buf, cap, 10000, &st);
+    assert_eq(load64(&st), 0, "output past the buffer does not stall the command");
+    assert_eq(n, cap, "the head is kept");
+    assert_eq(load8(buf), 120, "...from the first byte");
+    assert_eq(exec_capture_total(), 300004, "...and every byte is counted");
+    var tb = alloc(65);
+    n = exec_shell_capture_tail("head -c 300000 /dev/zero | tr '\\000' x; echo THE-REAL-ERROR", tb, 64, 10000, &st);
+    assert_eq(n, 64, "tail mode keeps the buffer's worth");
+    store8(tb + n, 0);
+    assert_eq(_t_has(tb, "THE-REAL-ERROR"), 1, "...of the END of the output");
+    assert_eq(load8(tb + 63), 10, "...in order, to its last byte");
+    assert_eq(exec_capture_total(), 300015, "...with the true total");
+    n = exec_shell_capture_tail("printf 0123456789abcdef", tb, 8, 5000, &st);
+    store8(tb + n, 0);
+    assert(streq(tb, "89abcdef"), "a total on a multiple of the buffer reads in order");
+    n = exec_shell_capture_tail("printf 0123456789abc", tb, 8, 5000, &st);
+    store8(tb + n, 0);
+    assert(streq(tb, "56789abc"), "...and one past it");
+    n = exec_shell_capture_tail("printf hi", tb, 64, 5000, &st);
+    store8(tb + n, 0);
+    assert(streq(tb, "hi"), "short output reads as it is");
+    n = exec_shell_capture("printf 0123456789abcdef", tb, 8, 5000, &st);
+    store8(tb + n, 0);
+    assert(streq(tb, "01234567"), "the next plain capture keeps the head again");
+    var t0 = clock_now_ms();
+    n = exec_shell_capture("(sleep 3; echo late) > /dev/null 2>&1 & echo now", buf, cap, 5000, &st);
+    assert((clock_now_ms() - t0) < 2500, "a job holding nothing open does not hold the capture");
+    t0 = clock_now_ms();
+    n = exec_shell_capture("sleep 3 & echo now", buf, cap, 5000, &st);
+    assert((clock_now_ms() - t0) < 2500, "...nor does one still holding the pipe: the shell's exit ends it");
+    assert_eq(load64(&st), 0, "...with the shell's own code");
+    store8(buf + n, 0);
+    assert_eq(_t_has(buf, "now"), 1, "...and what it wrote");
+
+    test_group("a job left writing dies at its next write, and one left quiet dies with thoth (exec.cyr, 0.53.3)");
+    var hn = exec_shell_capture("command -v ps > /dev/null && echo have-ps", buf, cap, 5000, &st);
+    store8(buf + hn, 0);
+    if (_t_has(buf, "have-ps") == 0) { oprintln("  SKIP left jobs: no `ps` on this host's default PATH"); return 0; }
+    xunlink("build/.thoth_p1");
+    exec_shell_capture("ps -o pgid= -p $$ > build/.thoth_p1; yes & echo started", buf, cap, 5000, &st);
+    assert_eq(load64(&st), 0, "a shell that leaves `yes` writing reads 0");
+    var pg = _prc_read_int("build/.thoth_p1", 3000);
+    assert(pg > 0, "premise: the capture reported its group");
+    if (pg > 0) {
+        var gone = _prc_group_gone(pg, 3000);
+        assert_eq(gone, 1, "...and `yes` is gone: it wrote to an unlinked file without end, 0.53.2");
+        if (gone == 0) { sys_kill(0 - pg, 9); }
+    }
+    xunlink("build/.thoth_p1");
+    # a stand-in thoth that leaves a job running, then is killed: the job goes with it
+    xunlink("build/.thoth_p2");
+    var c = sys_fork();
+    if (c == 0) {
+        _exec_bg_wr = 0 - 1;                           # this stand-in's own watcher, not the suite's
+        exec_shell_capture("ps -o pgid= -p $$ > build/.thoth_p2; sleep 30 > /dev/null 2>&1 & exit 0", buf, cap, 5000, &st);
+        sleep_ms(30000);
+        sys_exit(0);
+    }
+    var pg2 = _prc_read_int("build/.thoth_p2", 3000);
+    assert(pg2 > 0, "premise: the second capture reported its group");
+    if (pg2 > 0) {
+        sleep_ms(300);
+        assert(_prc_group_live(pg2) >= 1, "a clean shell exit kills nothing: the job runs on");
+        sys_kill(c, 9);
+        sys_waitpid(c, &st, 0);
+        var gone2 = _prc_group_gone(pg2, 4000);
+        assert_eq(gone2, 1, "SIGKILL the thoth: the job goes too (it ran on at ppid 1, 0.53.2)");
+        if (gone2 == 0) { sys_kill(0 - pg2, 9); }
+    } else { sys_kill(c, 9); sys_waitpid(c, &st, 0); }
+    xunlink("build/.thoth_p2");
+    # ...and when thoth simply exits
+    xunlink("build/.thoth_p3");
+    var c3 = sys_fork();
+    if (c3 == 0) {
+        _exec_bg_wr = 0 - 1;
+        exec_shell_capture("ps -o pgid= -p $$ > build/.thoth_p3; sleep 30 > /dev/null 2>&1 & exit 0", buf, cap, 5000, &st);
+        sys_exit(0);
+    }
+    var pg3 = _prc_read_int("build/.thoth_p3", 3000);
+    sys_waitpid(c3, &st, 0);
+    if (pg3 > 0) {
+        var gone3 = _prc_group_gone(pg3, 4000);
+        assert_eq(gone3, 1, "a thoth that exits takes its left jobs too");
+        if (gone3 == 0) { sys_kill(0 - pg3, 9); }
+    }
+    xunlink("build/.thoth_p3");
+    return 0;
+}
+
 fn test_proc_capture() {
     #ifndef CYRIUS_TARGET_WIN
     #ifndef CYRIUS_TARGET_AGNOS
     test_capture_status_mapping();
     test_capture_orphans();
     test_capture_inherits();
+    test_capture_pipe();
     test_sigchld_ignored();
     test_run_shell_signals();
     exec_wait_poll_set(0);

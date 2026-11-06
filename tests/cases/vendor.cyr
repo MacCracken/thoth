@@ -32,6 +32,39 @@ fn _vd_read(path) {
     return _VD_LEN;
 }
 
+# test_vendor_sums (0.53.3, P-9): every bundle is the bytes src/vendor/SHA256SUMS names. `cyrius.lock` covers lib/ only, so a hand
+# edit or a half-finished sync of a bundle, t-ron among them, passed everything. scripts/vendor-sums.sh records them.
+fn test_vendor_sums() {
+    test_group("vendored bundles match their recorded sums (vendor.cyr, 0.53.3)");
+    var sb = alloc(8192);
+    var sn = file_read_all("src/vendor/SHA256SUMS", sb, 8191);
+    assert(sn > 0, "src/vendor/SHA256SUMS exists");
+    if (sn <= 0) { return 0; }
+    store8(sb + sn, 0);
+    var i = 0;
+    var seen = 0;
+    while (i < sn) {
+        var e = i;
+        while ((e < sn) && (load8(sb + e) != 10)) { e = e + 1; }
+        if ((e - i) > 66) {
+            var name = alloc(256);
+            memcpy(name, "src/vendor/", 11);
+            memcpy(name + 11, sb + i + 66, e - i - 66);
+            store8(name + 11 + (e - i - 66), 0);
+            var n = _vd_read(name);
+            assert(n > 0, "a named bundle reads");
+            if (n > 0) {
+                var got = sha256_hex(_VD_BUF, n);
+                assert_eq(memeq(got, sb + i, 64), 1, "a bundle matches its sum");
+            }
+            seen = seen + 1;
+        }
+        i = e + 1;
+    }
+    assert_eq(seen, 11, "all eleven bundles are listed");
+    return 0;
+}
+
 # Occurrences of `needle` in the bundle last read. Substring, not word-bounded and
 # blind to comments — a naive needle over a dist bundle finds the bundle's own PROSE
 # ABOUT the thing as readily as the thing. Every hazard needle below is therefore

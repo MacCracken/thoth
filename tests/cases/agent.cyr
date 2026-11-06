@@ -55,23 +55,6 @@ fn test_shell() {
     assert(dres != 0, "deny-glob command returns a refusal (before the gate)");
     assert_eq(shell_last_allowed(), 0, "deny-glob -> not allowed (roundlog DENIED)");
 
-    # --- 0.45.2: the capture file's name ends in 16 random hex digits, so its next names cannot be planted ---
-    var tpa = alloc(256);
-    var tpb = alloc(256);
-    var tpn = _exec_append_cstr(tpa, 0, _shell_tmp_path()); store8(tpa + tpn, 0);
-    var tpm = _exec_append_cstr(tpb, 0, _shell_tmp_path()); store8(tpb + tpm, 0);
-    assert_eq(memeq(tpa, "/tmp/thoth_sh_", 14), 1, "the capture file lives under /tmp/thoth_sh_");
-    var tph = 1;
-    var tpi = tpn - 16;
-    while (tpi < tpn) {
-        var tc = load8(tpa + tpi);
-        if (((tc < 48) || (tc > 57)) && ((tc < 97) || (tc > 102))) { tph = 0; }
-        tpi = tpi + 1;
-    }
-    assert_eq(tph, 1, "...and ends in 16 hex digits");
-    assert_eq(load8(tpa + tpn - 17), 95, "...after pid_counter_");
-    assert_eq(memeq(tpa + tpn - 16, tpb + tpm - 16, 16), 0, "two consecutive names differ in the random part");
-
     # --- shell_supported() on this POSIX build ---
     assert_eq(shell_supported(), 1, "shell supported on this POSIX target");
 
@@ -89,19 +72,6 @@ fn test_shell() {
     var n3 = exec_shell_capture("echo oops 1>&2", buf, cap, 5000, &st);
     store8(buf + n3, 0);
     assert(streq(buf, "oops\n"), "stderr is captured (merged into the same stream)");
-    # 0.39.0 (audit A-2): the capture temp file must be 0600, not the previous world-readable 0644.
-    # It sits in world-writable /tmp and holds the FULL merged output of a command the MODEL chose,
-    # so on a shared host 0644 exposed whatever that command printed. Asserted END TO END on the real
-    # file rather than by reading the flag back out of the source: the child's stdout IS that fd, so
-    # it can stat itself. Degrades honestly where `stat -c` is absent (non-GNU userland) rather than
-    # passing vacuously.
-    var nmode = exec_shell_capture("stat -L -c %a /proc/self/fd/1 2>/dev/null", buf, cap, 5000, &st);
-    store8(buf + nmode, 0);
-    if (nmode >= 3) {
-        assert(streq(buf, "600\n"), "capture temp file is mode 0600 (not world-readable 0644)");
-    } else {
-        oprintln("  SKIP capture-mode: no `stat -c` / /proc on this host — 0600 NOT verified here");
-    }
     exec_shell_capture("sleep 5", buf, cap, 300, &st);
     assert_eq(load64(&st + 8), 1, "sleep beyond timeout -> timed-out flag set");
     assert_eq(load64(&st), 0 - 2, "timeout exit sentinel -2");
@@ -359,6 +329,9 @@ fn test_wait_poll() {
 
     # [verify]: an interrupted check is UNVERIFIED and recorded as interrupted — not a failure of the change
     verify_reset();
+    var vsv0 = _gate_tron;
+    _gate_tron = tron_new(tron_config_default());
+    tron_load_policy(_gate_tron, "[agent.\"thoth\"]\nallow = [\"*\"]\n");
     _cfg_verify_timeout_ms = 5000;
     _cfg_verify_command = "sleep 5";
     _tw_arm(3);
@@ -372,6 +345,7 @@ fn test_wait_poll() {
     assert_eq(_t_feed_has("verify: interrupted"), 1, "...and the live line says so");
     _cfg_verify_command = 0;
     _cfg_verify_timeout_ms = 0 - 1;
+    _gate_tron = vsv0;
     verify_reset();
 
     # /run (captured — the TUI's and the window's arm): the partial output, then the stop
@@ -1385,6 +1359,117 @@ fn test_reply_long() {
     return 0;
 }
 
+# 0.53.3 (repair batch 14): reasoning had the reply's silent 64 KiB cut, and each stream frame's parse stayed on the heap.
+fn test_reason_long() {
+    test_group("long reasoning is kept, and a cut is marked in the text (hoosh.cyr, 0.53.3)");
+    var sv_acc = _reason_acc; var sv_len = _reason_acc_len; var sv_cap = _reason_acc_cap;
+    _reason_acc = 0; _reason_acc_cap = 0;
+    _hoosh_acc_reset();
+    var chunk = _trl_fill(alloc(4097), 4096);
+    var i = 0;
+    while (i < 64) { _reason_acc_append(chunk, 4096); i = i + 1; }
+    assert_eq(hoosh_last_reason_len(), 262144, "256 KiB of reasoning stays 256 KiB");
+    assert_eq(_ui_contains(hoosh_last_reason(), "not kept"), 0, "...unmarked");
+    assert_eq(strlen(hoosh_last_reason()), 262144, "...and ends in a NUL");
+    var sv_max = REASON_ACC_MAX;
+    REASON_ACC_MAX = 131072;
+    _reason_acc = 0; _reason_acc_cap = 0;
+    _hoosh_acc_reset();
+    i = 0;
+    while (i < 64) { _reason_acc_append(chunk, 4096); i = i + 1; }
+    assert_eq(hoosh_last_reason_len(), 131072 - 1 - REASON_CUT_ROOM + strlen(REASON_CUT_MARK), "past the ceiling the text stops, the mark after it");
+    assert_eq(_ui_contains(hoosh_last_reason(), "not kept"), 1, "...which says so");
+    assert(hoosh_last_reason_len() < 131072, "...inside the buffer");
+    assert_eq(load8(hoosh_last_reason() + hoosh_last_reason_len()), 0, "...ending in a NUL");
+    var held = hoosh_last_reason_len();
+    _reason_acc_append("late", 4);
+    assert_eq(hoosh_last_reason_len(), held, "nothing lands after the mark");
+    _hoosh_acc_reset();
+    assert_eq(_reason_acc_cut, 0, "the next round starts clean");
+    REASON_ACC_MAX = sv_max;
+
+    test_group("a child's reasoning grows the child's buffer, never the parent's (subagent.cyr, 0.53.3)");
+    _sub_alloc();
+    _reason_acc = 0; _reason_acc_cap = 0;
+    _hoosh_acc_reset();
+    _reason_acc_append("PARENT", 6);
+    var pa = _reason_acc; var pl = _reason_acc_len; var pc = _reason_acc_cap;
+    _sub_enter();
+    i = 0;
+    while (i < 64) { _reason_acc_append(chunk, 4096); i = i + 1; }
+    var grown = _reason_acc;
+    assert_eq(_reason_acc_len, 262144, "the child's reasoning grows past the first size");
+    _sub_exit();
+    assert(_reason_acc == pa, "the parent's buffer comes back");
+    assert_eq(_reason_acc_len, pl, "...at its length");
+    assert_eq(_reason_acc_cap, pc, "...and its size");
+    assert(_sub_reason == grown, "the child keeps its grown buffer");
+    _sub_enter();
+    assert(_reason_acc == grown, "the next child starts on it");
+    assert(_reason_acc_cap > REASON_ACC_CAP, "...knowing its size");
+    _reason_acc_cut = 1;
+    _sub_exit();
+    assert_eq(_reason_acc_cut, 0, "a child's cut is not the parent's");
+    _reason_acc = sv_acc; _reason_acc_len = sv_len; _reason_acc_cap = sv_cap;
+    _hoosh_acc_reset();
+
+    test_group("long reasoning survives /save --json and the session file (commands.cyr, session.cyr, 0.53.3)");
+    var path = "build/test_reason_long.sess";
+    var jp = "build/test_reason_long.json";
+    var rb = _trl_fill(alloc(700001), 700000);
+    store8(rb + 300000, 34);
+    session_reset();
+    session_history_append("user", "think", 5);
+    session_history_append("assistant", "done", 4);
+    session_history_reason_last_set(rb, 700000);
+    assert_eq(session_history_reason_len(1), 700000, "the message holds it whole");
+    var jfd = file_open(jp, O_WRONLY | O_CREAT | O_TRUNC, 0x180);
+    assert_eq(_save_json(jfd), 1, "/save --json writes it");
+    file_close(jfd);
+    var jl = alloc(8);
+    var jb = file_read_whole(jp, jl);
+    if (jb != 0) {
+        var jv = bayan_json_v_parse_buf(jb, load64(jl));
+        assert(jv != 0, "the export is one JSON value");
+        if (jv != 0) {
+            var jm = bayan_json_v_arr_get(bayan_json_v_obj_get_by_cstr(jv, "messages"), 1);
+            assert_eq(str_len(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(jm, "reasoning"))), 700000, "...holding all of it");
+        }
+    } else { assert(0, "the export reads back"); }
+    _sess_path = path;
+    sess_persist_save();
+    _sess_path = 0;
+    session_reset();
+    assert_eq(_sess_load_file(path), 2, "the session file loads");
+    assert_eq(session_history_reason_len(1), 700000, "...with the reasoning whole");
+    session_reset();
+    xunlink(path); xunlink(jp);
+
+    test_group("a stream's frames leave nothing on the heap (hoosh.cyr, 0.53.3)");
+    var frame = "{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"stub-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello there\"},\"finish_reason\":null}]}";
+    assert(_hoosh_frame_parse(frame) != 0, "premise: a frame parses, and the first call sets the arena up");
+    var u0 = alloc_used();
+    i = 0;
+    while (i < 2000) { _hoosh_frame_parse(frame); i = i + 1; }
+    assert_eq(alloc_used(), u0, "2,000 frames take no heap");
+    var v = _hoosh_frame_parse(frame);
+    assert_eq(str_len(bayan_json_v_str(bayan_json_v_obj_get_by_cstr(bayan_json_v_obj_get_by_cstr(bayan_json_v_arr_get(bayan_json_v_obj_get_by_cstr(v, "choices"), 0), "delta"), "content"))), 11, "...and a frame reads as it did");
+    assert_eq(_hoosh_frame_parse("{not json"), 0, "a bad frame is still refused");
+
+    test_group("a tool call's deltas outlive their frames (agent.cyr, 0.53.3)");
+    _ag_reset();
+    var f1 = "{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"t_one\",\"arguments\":\"{\\\"a\\\":\"}}";
+    var f2 = "{\"index\":0,\"function\":{\"arguments\":\"1}\"}}";
+    _agent_accum_delta(_hoosh_frame_parse(f1));
+    _agent_accum_delta(_hoosh_frame_parse(f2));
+    _hoosh_frame_parse(frame);                                  # the arena is reused over what they held
+    assert(streq(_ag_ids, "call_a"), "the id is kept");
+    assert(streq(_ag_names, "t_one"), "...the name");
+    assert(_ui_contains(_ag_args, "{\"a\":1}") == 1, "...and the arguments, across two frames");
+    _ag_reset();
+    return 0;
+}
+
 # Agentic tool-round trace (roundlog): the session-local ring /audit surfaces.
 # Pure data-structure ops — no I/O — so the recording + ring eviction is testable.
 fn test_roundlog() {
@@ -2197,7 +2282,7 @@ fn test_project() {
     assert(_ui_contains(tbuf, "INJECTED-DESC") == 0, "a pinned tool swapped to a definition too large to hash is NOT advertised");
     assert_eq(toolpin_withheld("notes"), 1, "...and is refused at the dispatcher (its pin can no longer be compared)");
     assert(toolpin_unpinnable() >= 1, "...and counted");
-    assert(bayan_json_v_parse_buf(tbuf, ul) != 0, "...while the advertisement stays valid JSON");
+    assert_eq(ul, 0, "...and a registry left with no tool is no array at all (0.53.3: `[]` was appended to as `[,{`)");
     # a FIRST sight too large to pin: withheld, never pinned
     toolpin_reset();
     agent_format_tools(tbuf, ubv);
@@ -2763,13 +2848,12 @@ fn test_project() {
     # every call on macOS. Until 0.45.2 that ALLOWED the call.
     var hk_blocked = hooks_blocked();
     var hk_fired = hooks_fired();
-    var hk_prefix = _shell_tmp_prefix;
-    _shell_tmp_prefix = "/nonexistent-thoth-test-dir/thoth_sh_";
+    _exec_cap_refuse = 1;
     _cfg_hook_pre_tool = "exit 0";                         # a hook that would ALLOW, if it ran
     assert_eq(hooks_pre_tool("shell", "{}"), 0, "a hook that could not be RUN denies — it gave no verdict");
     assert_eq(hooks_blocked(), hk_blocked + 1, "...and that denial is counted");
     assert_eq(hooks_fired(), hk_fired, "...but a hook that never ran is not counted as fired");
-    _shell_tmp_prefix = hk_prefix;
+    _exec_cap_refuse = 0;
     assert_eq(hooks_pre_tool("shell", "{}"), 1, "premise: with the capture file creatable, the same hook runs and allows");
     # ⚠ THE SECURITY PROPERTY: event facts reach the hook through the ENVIRONMENT, never interpolated
     # into the command — the tool name and args are attacker-influenced (the MODEL chose them).
@@ -2868,6 +2952,9 @@ fn test_project() {
     # config and nowhere else, which is what keeps this from being a new injection surface.
     test_group("verification loop (verify.cyr, 0.41.0)");
     verify_reset();
+    var vsv1 = _gate_tron;
+    _gate_tron = tron_new(tron_config_default());
+    tron_load_policy(_gate_tron, "[agent.\"thoth\"]\nallow = [\"*\"]\n");
     _cfg_verify_command = 0;
     assert_eq(verify_configured(), 0, "unconfigured -> the loop is off");
     assert_eq(verify_run(), 0, "...and running it is a no-op, not an error");
@@ -2891,6 +2978,7 @@ fn test_project() {
     assert(_ui_contains(vtail, "LAST-LINE-MARKER") == 1, "over-cap output keeps the TAIL (where the error is)");
     assert(_ui_contains(vtail, "filler-line-1\n") == 0, "...and drops the head rather than the tail");
     _cfg_verify_command = 0;
+    _gate_tron = vsv1;
     verify_reset();
     assert_eq(verify_runs(), 0, "reset clears the counters");
 

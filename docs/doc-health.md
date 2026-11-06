@@ -6,6 +6,8 @@ type: state
 
 # Documentation Health — thoth
 
+> **Repair batch 14 + the P(-1) sweep (0.53.3)** (2026-11-05): a new audit record (`docs/audit/2026-11-05-audit.md`, tier 6), ADR-0014 and ADR-0021 addenda, the config example (`thoth_verify`, relative policy, private session store, `[verify]`), `state.md`, the roadmap (batch 14 out, batch 15 in, three upstream rows), SECURITY's audit link, README stamps, and the stale capture-file comments in `exec.cyr`, `shell.cyr`, `hooks.cyr`, `commands.cyr`, `git.cyr` and `gpresent.cyr`.
+>
 > **Repair batch 13 (0.53.2)** (2026-11-05): a reply kept whole to a stated ceiling, blocking turns past 256 KB, the window's long-reply cost, card wrap, a popped prompt kept above its notice, the stale size skip, the worker's parse, t-ron's own name bound. Docs touched = `CHANGELOG.md`, `docs/development/state.md` (version block, Targets, Tests, Next), `docs/development/roadmap.md` (batch 13 out; batch 14 → 0.53.3, two items), `docs/development/gap-review.md` (question 8 ruled and removed; the `.html` never carried it), `README.md` (stamp), `scripts/live/stubhoosh.py` (`big:`, `bigchunked:`), source comments that gave the old 64 KiB and 163-byte facts. No full re-sweep — the tables below stand from the 0.51.1 sweep.
 >
 > **The cyrius 6.7.18 pin + every vendored bundle at its newest tag (0.53.1)** (2026-11-05): `lib/` re-synced, all eleven bundles moved, `_reg_ieq` renamed on sync, refused tool arguments stop the call on both executors, `build.sh all` on non-x86 hosts. Docs touched = `CHANGELOG.md`, `docs/development/state.md` (version block, Toolchain, vendored dists, Targets, Tests, Next), `docs/development/roadmap.md` (batch 13 re-pinned to 0.53.2 with two more items; the sit status, t-ron audit and macOS mask rows removed as closed; the Windows row rewritten), `docs/development/gap-review.md` (MCP note; question 8, the scanner), `README.md` (status, multi-target, Windows), `scripts/sync-*.sh` defaults.
@@ -211,6 +213,7 @@ The ones that mattered most, recorded so the next sweep knows where to look:
 
 | File | Status | Notes |
 |---|---|---|
+| `2026-11-05-audit.md` | 🔵 Durable | The 0.53.3 pass: 69 findings, T/W/S/G/P/M ids. A dated snapshot, citations historical by design. |
 | `2026-08-24-audit.md` | 🔵 Durable | **New tier + row** (SECURITY.md links it; no row existed). A dated snapshot: the `src/x.cyr:NNN` citations and A-1…A-12 ids are historical by design. All 11 findings fixed at 0.39.0; A-1's Windows `is_symlink` no-op is carried on the roadmap. Its standards link is the ❓ 404. |
 
 ## Refresh procedure

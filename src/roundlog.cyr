@@ -104,7 +104,10 @@ fn _rl_copy_args(dst, src) {
 # result; ms is the invoke wall-time; bytes is the result byte count (0.19.1 telemetry — 0 for a
 # call that was never invoked, i.e. denied / noname); args is the call's raw arguments (0.30.17, sanitized +
 # truncated for display — may be null). Calls past RL_MAX_CALLS in one round are dropped.
+var _roundlog_calls = 0;           # 0.53.3: every call ever added, so the window's pump sees a card grow
+fn roundlog_calls_seen() { return _roundlog_calls; }
 fn roundlog_add_call(name, kind, ok, ms, bytes, args) {
+    _roundlog_calls = _roundlog_calls + 1;
     if (_roundlog_cur == 0) { return 0; }
     var n = load64(_roundlog_cur + 16);
     if (n >= RL_MAX_CALLS) { return 0; }

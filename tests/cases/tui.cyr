@@ -322,7 +322,21 @@ fn test_tui() {
     while (bi < (COMPOSER_CAP + 8)) { store8(big + bi, 97); bi = bi + 1; }                    # all 'a'
     led_paste(big, COMPOSER_CAP + 8);
     assert_eq(led_len(), COMPOSER_CAP - 1, "over-cap paste stops at COMPOSER_CAP-1 (bounded)");
+    assert_eq(_led_paste_cut, 1, "...and says part of it is gone (0.53.3)");
     led_reset();
+    led_paste("ok", 2);
+    assert_eq(_led_paste_cut, 0, "a paste that fits says nothing");
+    led_reset();
+    led_paste(big, COMPOSER_CAP - 1);
+    assert_eq(_led_paste_cut, 0, "...up to the last byte the composer holds");
+    led_reset();
+    _paste_buf = 0; _paste_over = 0;
+    _paste_buf = alloc(PASTE_CAP); _paste_len = PASTE_CAP - 1;
+    _paste_commit(97);
+    assert_eq(_paste_over, 0, "the slurp's last byte fits");
+    _paste_commit(97);
+    assert_eq(_paste_over, 1, "the next one is what the notice is for");
+    _paste_len = 0; _paste_over = 0;
 
     # word-wise editing (0.17.1): decode + the pure editor ops. Decode gets the PARSED ints (the
     # 0.11.9 lesson — feed the decoder what the parser emits, not the wire bytes).
@@ -2375,5 +2389,54 @@ fn test_mpick_unloaded() {
     } else { assert(1, "fd 1 not capturable here (stated)"); }
     _tui_cols = sc;
     _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_unloaded = 0;
+    return 0;
+}
+
+# test_harden_tui (0.53.3): the terminal's findings from the P(-1) sweep, by id.
+fn test_harden_tui() {
+    test_group("the composer edits whole characters (S-9, tui.cyr)");
+    led_reset();
+    led_paste("caf\xc3\xa9", 5);
+    assert_eq(led_feed(KEY_BACKSPACE, 0), ACT_NONE, "premise: a backspace");
+    assert(streq(_composer, "caf"), "backspace takes the whole character (it left a lone 0xC3)");
+    led_reset();
+    led_paste("\xe7\x95\x8c!", 4);
+    led_feed(KEY_LEFT, 0);
+    led_feed(KEY_LEFT, 0);
+    assert_eq(_comp_cur, 0, "left steps a character at a time");
+    led_feed(KEY_RIGHT, 0);
+    assert_eq(_comp_cur, 3, "...and right");
+    led_reset();
+
+    test_group("C1 controls stay out of the composer (S-7, tui.cyr)");
+    led_paste("a\xc2\x9b2Jb", 6);
+    assert(streq(_composer, "a2Jb"), "a paste drops an encoded CSI");
+    led_reset();
+    led_paste("a\x9b2Jb", 5);
+    assert(streq(_composer, "a2Jb"), "...and a raw one");
+    led_reset();
+    led_insert_cstr("x\xc2\x9dy");
+    assert(streq(_composer, "xy"), "completion does too");
+    led_reset();
+
+    test_group("a feed line past its slot goes on in the next (S-5, feed.cyr)");
+    feed_init();
+    var n = FEED_LINE_CAP * 2 + 100;
+    var b = alloc(n + 16);
+    var i = 0;
+    while (i < n) { store8(b + i, 120); i = i + 1; }
+    memcpy(b + n, "TAILMARK\n", 9);
+    feed_write(b, n + 9);
+    assert_eq(feed_count(), 3, "a 4 KiB line takes three slots (it lost its tail with no mark)");
+    assert_eq(_ui_contains(feed_line_ptr(2), "TAILMARK"), 1, "...the tail among them");
+    feed_init();
+    var u = alloc(FEED_LINE_CAP + 16);
+    i = 0;
+    while (i < (FEED_LINE_CAP - 2)) { store8(u + i, 121); i = i + 1; }
+    memcpy(u + i, "\xe7\x95\x8c\n", 4);
+    feed_write(u, i + 4);
+    assert_eq(feed_count(), 2, "a character the cap would split moves to the next slot");
+    assert_eq(_ui_contains(feed_line_ptr(1), "\xe7\x95\x8c"), 1, "...whole");
+    feed_init();
     return 0;
 }

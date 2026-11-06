@@ -168,7 +168,7 @@ fn fsearch_render(dst, cap, src, len, cur_off) {
     var w = 0;
     var active_role = 0 - 1;                          # last role marker seen (-1 = none / after a reset)
     var bold_open = 0;                                # 0.18.8: raw ESC[1m (inline-markdown bold) open? — the
-                                                      # match-OFF reset clears it, so it must be re-asserted
+    # match-OFF reset clears it, so it must be re-asserted
     while ((o < len) && (w < cap)) {
         var b = load8(src + o);
         if (b == 27) {

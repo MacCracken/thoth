@@ -53,7 +53,7 @@ var _feed_vis = 0;         # alloc(FEED_ROWS*8): cached visible cols per slot
 var _feed_head = 0;        # ring index of the OLDEST live line
 var _feed_count = 0;       # live line count (<= FEED_ROWS)
 var _feed_scroll = 0;      # PHYSICAL rows scrolled back from the newest (0 = pinned bottom).
-                           # 0.11.3: physical (soft-wrapped) rows, not logical lines.
+# 0.11.3: physical (soft-wrapped) rows, not logical lines.
 
 # The in-progress (un-newlined) line. LITERAL size — MUST equal FEED_LINE_CAP
 # (Cyrius array dims can't be a `var` constant); if FEED_LINE_CAP moves, move this.
@@ -133,18 +133,24 @@ fn _feed_esc_terminated(src, i, src_len) {
     return 0;                                         # ran off end, no final byte
 }
 
-# _feed_glyph_len: byte length of the glyph starting at src[i]. ASCII = 1; a
-# UTF-8 lead is followed by its 0x80..0xBF continuations (greedy, bounded by
-# src_len so a lead at the boundary never over-reads).
+# _feed_glyph_len: byte length of the glyph starting at src[i]. ASCII = 1; a well-formed UTF-8 sequence its own length,
+# bounded by src_len. 0.53.3 (S-4, G-8): anything else is 1, one cell, as a terminal and the window's raster draw it. This
+# folded every byte in 0x80..0xBF after a lead into one glyph, so 200 stray bytes measured one column: the feed said a line
+# fitted while the terminal wrapped the text after them off the row, and a filename's bytes painted across a pane.
 fn _feed_glyph_len(src, i, src_len) {
-    if (load8(src + i) < 128) { return 1; }
-    var j = i + 1;
-    while (j < src_len) {
-        var c = load8(src + j);
-        if (c >= 128) { if (c < 192) { j = j + 1; } else { return j - i; } }
-        else { return j - i; }
+    var b = load8(src + i);
+    if (b < 192) { return 1; }
+    var want = 2;
+    if (b >= 248) { return 1; }
+    if (b >= 240) { want = 4; }
+    elif (b >= 224) { want = 3; }
+    if ((i + want) > src_len) { return 1; }
+    var k = 1;
+    while (k < want) {
+        if ((load8(src + i + k) & 192) != 128) { return 1; }
+        k = k + 1;
     }
-    return j - i;
+    return want;
 }
 
 # feed_glyph_cols: the DISPLAY WIDTH (terminal columns) of the glyph at src[i] of byte length gl (from
@@ -332,9 +338,9 @@ fn feed_clip_seg(dst, dst_cap, src, src_len, skip_cols, max_cols) {
     var sgr_open = 0;
     var rainbow = ui_rainbow_active();                # 0.38.0: hoisted — constant for the whole row
     var cur_role = 0 - 1;                             # 0.45.5: the role marker in force at this byte (-1 = none / reset),
-                                                      # tracked in BOTH phases so a wrapped segment inherits the span it
-                                                      # starts inside; a SEMANTIC role (ui_role_is_semantic) is exempt
-                                                      # from the rainbow tint — the marker's own colour stands
+    # tracked in BOTH phases so a wrapped segment inherits the span it
+    # starts inside; a SEMANTIC role (ui_role_is_semantic) is exempt
+    # from the rainbow tint — the marker's own colour stands
     var emitted = 0;                                  # 0 = SKIP phase, 1 = past the boundary
     var winend = skip_cols + max_cols;
     while (i < src_len) {
@@ -608,8 +614,25 @@ fn _feed_seal_pending() {
 # feed_write: the OUT_RING sink target (src/util.cyr's emit branch routes here
 # when capture is armed). Accumulates bytes into the pending line; a '\n' seals a
 # slot (the newline itself is NOT stored — the painter supplies row breaks,
-# mirroring println). Bytes past FEED_LINE_CAP-1 for one logical line are dropped
-# (the sealed slot is re-truncated on an escape boundary by _feed_safe_copy).
+# mirroring println). 0.53.3 (S-5): a logical line past FEED_LINE_CAP-1 goes on in the next slot. The bytes past it were
+# dropped with no mark: a `curl … | sh` after 2 KiB of spaces in a script /read showed clean never reached the screen,
+# and /save lost it too. The slot ends before a character the cap would split.
+fn _feed_spill() {
+    var keep = _feed_pending_len;
+    var back = 0;
+    while ((keep > 1) && (back < 4) && ((load8(&_feed_pending + keep - 1) & 192) == 128)) { keep = keep - 1; back = back + 1; }
+    if ((keep > 1) && (load8(&_feed_pending + keep - 1) >= 192)) { keep = keep - 1; back = back + 1; }
+    else { keep = _feed_pending_len; back = 0; }
+    var t[8];
+    var i = 0;
+    while (i < back) { store8(&t + i, load8(&_feed_pending + keep + i)); i = i + 1; }
+    _feed_pending_len = keep;
+    _feed_seal_pending();
+    i = 0;
+    while (i < back) { store8(&_feed_pending + i, load8(&t + i)); i = i + 1; }
+    _feed_pending_len = back;
+    return 0;
+}
 fn feed_write(ptr, n) {
     feed_init_ensure();
     var i = 0;
@@ -617,10 +640,9 @@ fn feed_write(ptr, n) {
         var b = load8(ptr + i);
         if (b == 10) { _feed_seal_pending(); }
         else {
-            if (_feed_pending_len < (FEED_LINE_CAP - 1)) {
-                store8(&_feed_pending + _feed_pending_len, b);
-                _feed_pending_len = _feed_pending_len + 1;
-            }
+            if (_feed_pending_len >= (FEED_LINE_CAP - 1)) { _feed_spill(); }
+            store8(&_feed_pending + _feed_pending_len, b);
+            _feed_pending_len = _feed_pending_len + 1;
         }
         i = i + 1;
     }

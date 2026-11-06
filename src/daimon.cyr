@@ -268,6 +268,16 @@ fn daimon_list_tools() {
     return 0;
 }
 
+# _daimon_post (0.53.3, M-4): a single-call POST in an arena reset before the next: each took 262 KB (sandhi's buffer, allocated at
+# its cap) from the heap that never frees. Every reader copies what it keeps: the parse lands on the global heap.
+var _daimon_arena = 0;
+fn _daimon_post(url, h, req, len) {
+    if (_daimon_arena == 0) { _daimon_arena = arena_allocator_growable(65536); }
+    if (_daimon_arena == 0) { return sandhi_http_post_opts(url, h, req, len, hoosh_http_opts()); }
+    reset_via(_daimon_arena);
+    return sandhi_http_post_opts_a(_daimon_arena, url, h, req, len, hoosh_http_opts());
+}
+
 # daimon_call: invoke one MCP tool through daimon and print the result text.
 # The caller has ALREADY passed the t-ron gate. Returns 0 on success, negative
 # on transport failure, the HTTP status on non-2xx. I/O.
@@ -278,7 +288,7 @@ fn daimon_call(name, args_json) {
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
     ui_emit(ROLE_FAINT, "  -> daimon tool '"); ui_emit(ROLE_ACCENT, name); ui_emit(ROLE_FAINT, "' "); oprintln(url);
-    var r = sandhi_http_post_opts(url, h, _daimon_req, len, hoosh_http_opts());   # 0.44.2: a tool invoke gets the TURN deadline (an MCP tool may be slow)
+    var r = _daimon_post(url, h, _daimon_req, len);   # 0.44.2: a tool invoke gets the TURN deadline (an MCP tool may be slow)
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
         return 0 - 1;
@@ -337,7 +347,7 @@ fn daimon_invoke(name, args_json) {
     var len = daimon_build_call(_daimon_req, name, args_json);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    var r = sandhi_http_post_opts(url, h, _daimon_req, len, hoosh_http_opts());   # 0.44.2: a tool invoke gets the TURN deadline (an MCP tool may be slow)
+    var r = _daimon_post(url, h, _daimon_req, len);   # 0.44.2: a tool invoke gets the TURN deadline (an MCP tool may be slow)
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);

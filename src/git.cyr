@@ -15,9 +15,9 @@
 # Freshness vs cost: git_probe() re-reads the repo (a worktree walk). It is called
 # at startup, after each dispatched turn (files may have changed via /run or an
 # agentic edit), and by /state and /git — NOT per status-bar paint. The status bar
-# reads the cache. sit's status vec + branch cstring come from sit's bump arena and
-# are not individually freeable; probing is coarse (per turn / per command), so the
-# per-probe residue is small and bounded — not a per-render leak.
+# reads the cache. sit's status vec + branch cstring come from the bump heap and
+# are not individually freeable. A probe is coarse (per turn / per command), not per
+# render, but its residue grows with the repository: see the 0.53.3 audit, P-10.
 
 var GIT_BRANCH_CAP = 256;
 var _git_probed = 0;        # 1 once git_probe has run at least once this session

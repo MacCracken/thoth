@@ -34,7 +34,7 @@ var _sess_cost_seen = 0;
 var _sess_cost_unpriced = 0;
 
 # Conversation history (0.5.1, multi-turn): a vec of message structs so the
-# backing model sees prior turns. Each message is alloc(72) (fields +0..+64 below — keep this in sync with the
+# backing model sees prior turns. Each message is alloc(88) (fields +0..+80 below — keep this in sync with the
 # alloc site; a doc/code drift here is exactly what preceded the 0.36.4 conv-struct OOB): +0 role (a stable
 # string literal "user"/"assistant"), +8 content (a STABLE COPY — the prompt
 # aliases the reused input line and the streamed reply lives in a scratch buffer,
@@ -49,7 +49,7 @@ var _sess_cost_unpriced = 0;
 # frames, so a resumed conversation keeps its tool cards), +48 reasoning (0.48.0 — a lazily-alloc'd, WRITE-ONCE
 # {len@0, bytes@8.. NUL} arena holding the chain-of-thought the reply streamed, or 0; persisted as a trailing RSN frame, so a resumed
 # conversation keeps its thinking folds — the message is the ONE store of a reply's reasoning: reasonlog.cyr's ring
-# retired at 0.48.0). Each message is alloc(72) — keep this in sync with BOTH alloc sites (append + conv_fork),
+# retired at 0.48.0). Each message is alloc(88) — keep this in sync with BOTH alloc sites (append + conv_fork),
 # which is honest since its rounds belong to a prior session's roundlog). Capped at SESS_HIST_MAX messages (oldest dropped) to
 # bound the never-freeing bump heap; the request builder byte-budgets what it
 # actually sends (see hoosh.cyr). thoth owns only this transport-side context
@@ -192,11 +192,11 @@ fn conv_fork(i) {
     var k = 0;
     while (k < n) {
         var sm = vec_get(sv, k);
-        var dm = alloc(72);
+        var dm = alloc(88);
         if (dm == 0) { return 0 - 1; }
         var b = 0;
-        while (b < 72) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included; the
-                                                                        # +48 reasoning arena is shared — write-once per reply)
+        while (b < 88) { store8(dm + b, load8(sm + b)); b = b + 1; }   # copy the RECORD (mutable fields included; the
+        # +48 reasoning arena is shared — write-once per reply)
         vec_push(dv, dm);
         k = k + 1;
     }
@@ -244,8 +244,8 @@ fn _conv_autotitle(content, clen) {
     # from untitled on reload, so it would re-derive from a different surviving message (0.33.2 round-trip fidelity).
     if (i == 0) { return 0; }
     if (done == 0) { if (clen > CONV_TITLE_MAX) {   # truncated mid-content -> ellipsis
-        store8(t + i, 46); store8(t + i + 1, 46); store8(t + i + 2, 46); i = i + 3;
-    } }
+            store8(t + i, 46); store8(t + i + 1, 46); store8(t + i + 2, 46); i = i + 3;
+        } }
     store8(t + i, 0);
     return t;
 }
@@ -383,6 +383,18 @@ fn session_history_layout_set(i, w, h) {
     store64(m + 64, h);
     return 0;
 }
+# session_history_fold: the same for message i's thinking fold, expanded (0.53.3).
+fn session_history_fold(i, w) {
+    var m = vec_get(_sess_hist_vec(), i);
+    if (load64(m + 72) != w) { return 0 - 1; }
+    return load64(m + 80);
+}
+fn session_history_fold_set(i, w, h) {
+    var m = vec_get(_sess_hist_vec(), i);
+    store64(m + 72, w);
+    store64(m + 80, h);
+    return 0;
+}
 # session_history_turn(i): the session turn this message belongs to (0.30.19). Matches roundlog_round_turn so the
 # GUI feed renders a turn's tool cards above ITS reply. 0 for a resumed/pre-session message (no roundlog rounds).
 fn session_history_turn(i)    { return load64(vec_get(_sess_hist_vec(), i) + 16); }
@@ -414,8 +426,8 @@ fn _msg_cite_title_dup(s) {
 }
 fn _msg_cite_last() {                                    # the most-recently-appended message of the active conv, or 0
     if (conv_count() == 0) { return 0; }                 # no conversation yet -> nothing to cite (and don't let
-                                                         # _sess_hist_vec's _conv_ensure spawn a spurious conv on a
-                                                         # corrupt CITE-before-any-record file)
+    # _sess_hist_vec's _conv_ensure spawn a spurious conv on a
+    # corrupt CITE-before-any-record file)
     var v = _sess_hist_vec();
     var n = vec_len(v);
     if (n == 0) { return 0; }
@@ -523,12 +535,12 @@ fn session_history_tool_args(i, j) { var e = _sess_tool_entry(i, j); if (e == 0)
 # {len@0, bytes@8.. NUL-terminated} — persisted as a trailing RSN frame and read back by INDEX, so a fold survives a
 # restart with its reply. Live capture (reasonlog_record at the four reply-finalize sites) and the file loader BOTH
 # funnel through session_history_reason_last_set, so the stored / persisted / reloaded text caps identically. The
-# store carries no reasonlog.cyr dependency. MSG_REASON_CAP matches REASON_ACC_CAP (hoosh.cyr) so a landed fold
+# store carries no reasonlog.cyr dependency. MSG_REASON_CAP matches REASON_ACC_MAX (hoosh.cyr) so a landed fold
 # shows exactly what the live fold did. The arena is WRITE-ONCE like content and model: a re-set allocates a fresh
 # one and the message points at it — never an edit in place, because conv_fork copies the record and the forked
 # message shares the arena pointer (the 0.33.x rule for every per-message field). Replies' content and reasoning
 # accrete on the never-freeing bump heap for the process lifetime; SESS_HIST_MAX bounds the count.
-var MSG_REASON_CAP = 65536;
+var MSG_REASON_CAP = 1048576;
 fn _msg_reason_last() {
     if (conv_count() == 0) { return 0; }                 # no conversation yet -> nothing to attach to (an orphan RSN
     var v = _sess_hist_vec();                            # frame before any record is a no-op, like CITE)
@@ -584,7 +596,7 @@ fn session_history_append(role, content, clen) {
 # never aliased, because session._model_buf (what session_model() returns) is one shared buffer a mid-session
 # switch overwrites; a raw alias would retroactively rewrite every earlier reply's model.
 fn _session_history_append_ex(role, content, clen, model) {
-    var m = alloc(72);
+    var m = alloc(88);
     store64(m, role);
     var c = alloc(clen + 1);
     if (clen > 0) { memcpy(c, content, clen); }
@@ -599,6 +611,8 @@ fn _session_history_append_ex(role, content, clen, model) {
     store64(m + 48, 0);                      # 0.48.0: reasoning arena (lazily alloc'd when a reply's thinking is attached)
     store64(m + 56, 0);                      # 0.53.2: the width the window last laid this message out at (0 = not yet)
     store64(m + 64, 0);                      # 0.53.2: ...and the height that gave
+    store64(m + 72, 0);                      # 0.53.3: the same for its thinking fold, expanded
+    store64(m + 80, 0);
     var v = _sess_hist_vec();
     vec_push(v, m);
     # 0.36.4: the cap is DESTRUCTIVE — the oldest message is freed from the conversation for good (gone from the
@@ -728,11 +742,11 @@ fn session_history_clear() {
 # sys_open).
 #
 # SECURITY — this writes the CONVERSATION CONTENT (your prompts + the model's replies) in PLAINTEXT on disk,
-# more sensitive than input-history keystrokes. Opt-in only. RESIDUALS (documented, not faked, same class as
-# 0.11.2): a fresh file is created 0600 on POSIX, but (1) a PRE-EXISTING looser file is left as-is (O_TRUNC
-# keeps its perms; no portable chmod to tighten — sys_chmod is absent on Windows + a no-op on AGNOS), (2)
-# AGNOS's frozen-ABI open drops the create mode, (3) no O_NOFOLLOW (a symlink at the path is followed). We
-# never assert a mode we cannot enforce.
+# more sensitive than input-history keystrokes. Opt-in only. 0.53.3: every save goes through a temp file and a rename,
+# so the file is always thoth's own at 0600 and a failed save leaves the last good store standing; a symlink at the path
+# is refused and named (O_NOFOLLOW, portable since cyrius 6.6.4), and a file thoth cannot read whole, or does not
+# recognise, is never written back. The one residual: AGNOS's frozen-ABI open drops the create mode. We never assert a
+# mode we cannot enforce.
 #
 # FORMAT (framed, length-prefixed so multi-line content needs no escaping):
 #   line 1:  THOTH-SESSION-1\n           version marker; a foreign/corrupt first line -> load skipped
@@ -745,13 +759,17 @@ fn session_history_clear() {
 var SESS_FILE_MAGIC = "THOTH-SESSION-1";     # v1 (legacy, single linear thread) — still LOADED for back-compat
 var SESS_FILE_MAGIC_V2 = "THOTH-SESSION-2";  # v2 (0.33.2) — all conversations, framed with CONV headers
 var SESS_MODE = 0x180;         # 0600 rw------- — best-effort CREATE mode (see the header note on perms)
-var SESS_READ_CAP = 201326592; # 192 MiB: the most a load reads (0.48.0: >= SESS_HIST_MAX * (HOOSH_ACC_MAX + MSG_REASON_CAP)); a larger file loads its leading records only
+var SESS_READ_CAP = 209715200; # 200 MiB: the most a load reads (0.48.0: >= SESS_HIST_MAX * (HOOSH_ACC_MAX + MSG_REASON_CAP)); a larger file loads its leading records only
 var SESS_READ_FIRST = 16777216;  # 0.53.2: the load buffer starts here, lazily, and doubles only for a file that fills it
 var _sess_path = 0;            # bound file path (0 = persistence OFF)
 var _sess_broke = 0;           # 1 if a save FAILED mid-session (persistence auto-disabled; announce once)
-var _sess_init_failed = 0;     # 1 if [session].file was set but unwritable at startup, 2 if it was larger than the load
-                               # buffer (0.48.0 — resume disabled so the truncated store is never written back); announce once
+var _sess_init_failed = 0;     # 1 if [session].file was set but unwritable at startup, SESS_BAD_* below, 2 if it was larger than the load
+# buffer (0.48.0 — resume disabled so the truncated store is never written back); announce once
 var _sess_load_overflow = 0;   # 1 when the last _sess_load_file filled SESS_READ_CAP (the file is bigger; its tail never loaded)
+var SESS_BAD_LINK = 3;         # 0.53.3, a _sess_init_failed value: the path is a symlink
+var SESS_BAD_PERM = 5;         # 0.53.3: not the operator's private file, so not a conversation they had
+var SESS_BAD_READ = 4;         # 0.53.3: the file is not a session store thoth can read, or part of it is damaged
+var _sess_load_bad = 0;        # the SESS_BAD_* of the last _sess_load_file, or 0
 var _sess_resumed = 0;         # count of messages loaded at startup (for the greeting)
 var _sess_read_buf = 0;        # lazy — whole-file load buffer
 var _sess_read_size = 0;       # bytes allocated at _sess_read_buf
@@ -881,7 +899,7 @@ fn _sess_write_tool(fd, kind, ok, name, args) {
 # index; then per conversation a "CONV\t<title_len>\n<title>\n" header followed by that conversation's records.
 # Returns 0 on success, -1 on open/short-write failure (caller degrades closed).
 fn _sess_write_file(path) {
-    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, SESS_MODE);
+    var fd = atomic_tmp_open(path, SESS_MODE);         # 0.53.3: O_TRUNC in place killed the old store before the new one existed
     if (fd < 0) { return 0 - 1; }
     if (_sess_hdr_buf == 0) { _sess_hdr_buf = alloc(64); }
     var ok = 0;
@@ -934,8 +952,8 @@ fn _sess_write_file(path) {
         }
         ci = ci + 1;
     }
-    file_close(fd);
-    return ok;
+    if (ok < 0) { return atomic_tmp_abort(fd); }
+    return atomic_tmp_commit(fd, path);
 }
 
 # _sess_read_limit: how much the load buffer may take now. _sess_read_grow: double it toward SESS_READ_CAP, keeping the `total`
@@ -961,8 +979,12 @@ fn _sess_read_grow(total) {
 # a foreign/corrupt first line, or a malformed/truncated record is handled gracefully (load what parsed, then
 # stop) — never a crash. Reads up to SESS_READ_CAP; a larger file loads its leading complete records only.
 fn _sess_load_file(path) {
-    var fd = file_open(path, 0, 0);                       # O_RDONLY; <0 -> absent, nothing to resume
-    if (fd < 0) { return 0; }
+    _sess_load_bad = 0;
+    var fd = file_open(path, O_RDONLY | O_NOFOLLOW, 0);   # <0 -> absent, nothing to resume; 0.53.3: a symlink is refused, and named
+    if (fd < 0) {
+        if (is_symlink(str_from(path)) == 1) { _sess_load_bad = SESS_BAD_LINK; }
+        return 0;
+    }
     if (_sess_read_buf == 0) { _sess_read_buf = alloc(SESS_READ_FIRST); _sess_read_size = SESS_READ_FIRST; }
     _sess_load_overflow = 0;
     var total = 0;
@@ -985,23 +1007,25 @@ fn _sess_load_file(path) {
     # v2 (0.33.2, all conversations): "THOTH-SESSION-2\t<active>\n" ...
     var mlv2 = strlen(SESS_FILE_MAGIC_V2);
     if (total >= (mlv2 + 1)) { if (_sess_eqn(_sess_read_buf, SESS_FILE_MAGIC_V2, mlv2) == 1) { if (load8(_sess_read_buf + mlv2) == 9) {
-        return _sess_load_v2(mlv2, total);
-    } } }
+                return _sess_load_v2(mlv2, total);
+            } } }
     # v1 (legacy single thread): "THOTH-SESSION-1\n" ...
     var ml = strlen(SESS_FILE_MAGIC);
     if (total >= (ml + 1)) { if (_sess_eqn(_sess_read_buf, SESS_FILE_MAGIC, ml) == 1) { if (load8(_sess_read_buf + ml) == 10) {
-        return _sess_load_v1(ml + 1, total);
-    } } }
-    return 0;                                             # not our file / too short -> skip
+                return _sess_load_v1(ml + 1, total);
+            } } }
+    if (total > 0) { _sess_load_bad = SESS_BAD_READ; }    # 0.53.3: someone else's file, or a newer thoth's: never overwritten
+    return 0;
 }
 
 # _sess_load_v1: the legacy single-thread parser — replays each "<role>\t<clen>\n<content>\n" record through
 # session_history_append (into the default conversation). `p` starts past the magic line. Returns the count.
 fn _sess_load_v1(p, total) {
     var loaded = 0;
+    var clean = 0;                                       # 0.53.3: 1 only when the parse reached the end of the file
     var parsing = 1;
     while (parsing == 1) {
-        if (p >= total) { parsing = 0; }
+        if (p >= total) { clean = 1; parsing = 0; }
         else {
             var rstart = p;                              # role token: up to '\t'
             while ((p < total) && (load8(_sess_read_buf + p) != 9) && (load8(_sess_read_buf + p) != 10)) { p = p + 1; }
@@ -1029,6 +1053,7 @@ fn _sess_load_v1(p, total) {
             }
         }
     }
+    if (clean == 0) { _sess_load_bad = SESS_BAD_READ; }
     return loaded;
 }
 
@@ -1097,13 +1122,14 @@ fn _sess_load_v2(mend, total) {
     var active_idx = 0;
     var ad = 0;
     while ((p < total) && (load8(_sess_read_buf + p) >= 48) && (load8(_sess_read_buf + p) <= 57)) { active_idx = active_idx * 10 + (load8(_sess_read_buf + p) - 48); p = p + 1; ad = ad + 1; }
-    if ((ad == 0) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { return 0; }   # malformed magic line
+    if ((ad == 0) || (p >= total) || (load8(_sess_read_buf + p) != 10)) { _sess_load_bad = SESS_BAD_READ; return 0; }   # malformed magic line
     p = p + 1;
     conv_load_begin();
     var loaded = 0;
+    var clean = 0;                                       # 0.53.3: 1 only when the parse reached the end of the file
     var parsing = 1;
     while (parsing == 1) {
-        if (p >= total) { parsing = 0; }
+        if (p >= total) { clean = 1; parsing = 0; }
         else {
             var tstart = p;                              # token up to '\t'
             while ((p < total) && (load8(_sess_read_buf + p) != 9) && (load8(_sess_read_buf + p) != 10)) { p = p + 1; }
@@ -1141,21 +1167,21 @@ fn _sess_load_v2(mend, total) {
                                 if (num > 0) { title = _sess_dup_bytes(_sess_read_buf + p, num); clean_line_n(title, strlen(title)); }
                                 conv_load_add(title);    # new conversation, becomes the append target
                             } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "CITE", 4) == 1)) {
-                                # 0.33.4: a cited-source title for the just-appended message (0.49.0: cleaned where it is
-                                # read back, like a CONV title — the GUI draws it from the file)
-                                if (num > 0) { var ct = _sess_dup_bytes(_sess_read_buf + p, num); clean_line_n(ct, strlen(ct)); session_history_cite_last_add(ct); }
-                            } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "TOOL", 4) == 1)) {
-                                # 0.33.5: a tool call for the just-appended message
-                                if (num > 0) { _sess_load_tool(p, num); }
-                            } else { if ((tlen == 3) && (_sess_eqn(_sess_read_buf + tstart, "RSN", 3) == 1)) {
-                                # 0.48.0: the just-appended reply's reasoning — copied through the one seam, then
-                                # cleaned IN the stored copy: the file is an untrusted door (project.cyr's rationale)
-                                if (num > 0) { session_history_reason_last_set(_sess_read_buf + p, num); var rl = _msg_reason_last(); if (rl != 0) { var rla = load64(rl + 48); if (rla != 0) { clean_text_n(rla + 8, load64(rla)); } } }
-                            } else { if (_sess_role_known(_sess_read_buf + tstart, tlen) == 1) {
-                                if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
-                                _session_history_append_ex(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num, model_ptr);
-                                loaded = loaded + 1;
-                            } } } } }
+                                    # 0.33.4: a cited-source title for the just-appended message (0.49.0: cleaned where it is
+                                    # read back, like a CONV title — the GUI draws it from the file)
+                                    if (num > 0) { var ct = _sess_dup_bytes(_sess_read_buf + p, num); clean_line_n(ct, strlen(ct)); session_history_cite_last_add(ct); }
+                                } else { if ((tlen == 4) && (_sess_eqn(_sess_read_buf + tstart, "TOOL", 4) == 1)) {
+                                        # 0.33.5: a tool call for the just-appended message
+                                        if (num > 0) { _sess_load_tool(p, num); }
+                                    } else { if ((tlen == 3) && (_sess_eqn(_sess_read_buf + tstart, "RSN", 3) == 1)) {
+                                            # 0.48.0: the just-appended reply's reasoning — copied through the one seam, then
+                                            # cleaned IN the stored copy: the file is an untrusted door (project.cyr's rationale)
+                                            if (num > 0) { session_history_reason_last_set(_sess_read_buf + p, num); var rl = _msg_reason_last(); if (rl != 0) { var rla = load64(rl + 48); if (rla != 0) { clean_text_n(rla + 8, load64(rla)); } } }
+                                        } else { if (_sess_role_known(_sess_read_buf + tstart, tlen) == 1) {
+                                                if (conv_count() == 0) { conv_load_add(0); }   # a record before any CONV -> default conv
+                                                _session_history_append_ex(_sess_role_literal(_sess_read_buf + tstart, tlen), _sess_read_buf + p, num, model_ptr);
+                                                loaded = loaded + 1;
+                                            } } } } }
                             # 0.48.0: any other token is a frame this thoth does not know — a NEWER thoth's — and is
                             # SKIPPED with its payload, never loaded as a message. (Before this an unknown token read
                             # as a "user" record: a file with one new frame would have replayed that frame's bytes
@@ -1169,6 +1195,7 @@ fn _sess_load_v2(mend, total) {
         }
     }
     conv_switch(active_idx);                             # restore the active conversation (clamped)
+    if (clean == 0) { _sess_load_bad = SESS_BAD_READ; }
     return loaded;
 }
 
@@ -1176,7 +1203,7 @@ fn _sess_load_v2(mend, total) {
 # or open an existing file without touching it, then close. Returns 0 if writable, -1 otherwise (so binding
 # never trims the user's file on mere startup).
 fn _sess_probe_writable(path) {
-    var fd = file_open(path, O_WRONLY | O_CREAT, SESS_MODE);   # no O_TRUNC -> content preserved
+    var fd = file_open(path, O_WRONLY | O_CREAT | O_NOFOLLOW, SESS_MODE);   # no O_TRUNC -> content preserved
     if (fd < 0) { return 0 - 1; }
     file_close(fd);
     return 0;
@@ -1191,9 +1218,16 @@ fn sess_persist_init(path) {
     _sess_init_failed = 0;
     _sess_resumed = 0;
     if (path == 0) { return 0; }                         # not configured -> OFF
+    # 0.53.3: a relative [session].file names a file in whichever repository the operator opened, which is how a per-project
+    # store works, and a repository that shipped one had its contents resumed as the operator's own turns (ADR-0021 names it).
+    if ((is_symlink(str_from(path)) == 0) && (file_is_private(path) == 0)) { _sess_init_failed = SESS_BAD_PERM; return 0 - 1; }
     _sess_load_file(path);
     _sess_resumed = session_total_messages();            # the ACTUAL resumed count across ALL conversations (post SESS_HIST_MAX per-conv eviction) — a >40-record conv parses more than it keeps; report what's really in context, never the raw parse count
     if (_sess_load_overflow == 1) { _sess_init_failed = 2; return 0 - 1; }         # 0.48.0: too large to load whole -> announce + OFF (never written back)
+    # 0.53.3: so is anything short of a clean read to the end. 0.48.0 refused one partial picture, and the next save still
+    # wrote the others back: one damaged length cost every conversation past it, and a newer thoth's store or a file
+    # [session].file named by mistake was replaced outright. What did load stays on screen for this session.
+    if (_sess_load_bad != 0) { _sess_init_failed = _sess_load_bad; return 0 - 1; }
     if (_sess_probe_writable(path) < 0) { _sess_init_failed = 1; return 0 - 1; }   # unwritable -> announce + OFF
     _sess_path = path;                                   # ACTIVE
     return _sess_resumed;
@@ -1211,6 +1245,20 @@ fn sess_persist_save() {
 fn sess_persist_active() { if (_sess_path != 0) { return 1; } return 0; }
 fn sess_persist_path() { return _sess_path; }                       # the bound file, or 0 (0.48.0: the greeting's session row)
 fn sess_persist_init_failed() { return _sess_init_failed; }
+# sess_persist_why: what the greeting says about a store that was not bound, or 0: the lead (red) and the rest (faint).
+fn sess_persist_why() {
+    if (_sess_init_failed == 2) { return "session file larger than thoth can load"; }
+    if (_sess_init_failed == SESS_BAD_LINK) { return "session file is a symlink"; }
+    if (_sess_init_failed == SESS_BAD_READ) { return "session file damaged or not thoth's"; }
+    if (_sess_init_failed == SESS_BAD_PERM) { return "session file is not private to you"; }
+    if (_sess_init_failed == 1) { return "session file not writable"; }
+    return 0;
+}
+fn sess_persist_why_rest() {
+    if (_sess_init_failed == 1) { return "resume disabled"; }
+    if (_sess_init_failed == SESS_BAD_PERM) { return "resume disabled (a repository cannot supply one; chmod 600 it if it is yours)"; }
+    return "resume disabled (nothing is written back)";
+}
 fn sess_persist_broke() { return _sess_broke; }
 fn sess_persist_broke_ack() { _sess_broke = 0; return 0; }
 fn sess_persist_resumed() { return _sess_resumed; }
@@ -1220,12 +1268,8 @@ fn sess_persist_resumed() { return _sess_resumed; }
 # Sink-aware (emit/oprintln). Honest: resumed N when messages were loaded, an unwritable note when the file
 # was set but could not be bound, nothing otherwise.
 fn sess_persist_greeting() {
-    if (_sess_init_failed == 2) {
-        emit("  "); ui_emit(ROLE_RED, "session file larger than thoth can load"); ui_emit(ROLE_FAINT, " — resume disabled (nothing is written back)"); oprintln("");
-        return 0;
-    }
-    if (_sess_init_failed == 1) {
-        emit("  "); ui_emit(ROLE_RED, "session file not writable"); ui_emit(ROLE_FAINT, " — resume disabled"); oprintln("");
+    if (sess_persist_why() != 0) {
+        emit("  "); ui_emit(ROLE_RED, sess_persist_why()); ui_emit(ROLE_FAINT, " — "); ui_emit(ROLE_FAINT, sess_persist_why_rest()); oprintln("");
         return 0;
     }
     if ((_sess_path != 0) && (_sess_resumed > 0)) {
@@ -1423,12 +1467,12 @@ fn persona_tagline() { return "Thinks, Handles, Orchestrates, Transforms, Heals"
 # banner-only: it actually steers the turn (see hoosh_send).
 var _persona_sys = 0;
 var PERSONA_SYS_CAP = 4096;    # 0.22.0: raised from 1 KB — arbitrary switched archetypes' soul+spirit prose
-                               # can exceed 1 KB; _append_cstr_cap still clamps (never overruns) if a profile
-                               # is longer still. The buffer is allocated ONCE and rebuilt in place per switch.
-                               # 0.44.1: raised again to 4 KB. The workspace clause (project_prompt_clause) is
-                               # ~500 B and lands LAST, so at 2 KB a long archetype prose would have clamped it
-                               # away silently — and the one sentence the model most needs is the one that says
-                               # where it is. Headroom, not decoration.
+# can exceed 1 KB; _append_cstr_cap still clamps (never overruns) if a profile
+# is longer still. The buffer is allocated ONCE and rebuilt in place per switch.
+# 0.44.1: raised again to 4 KB. The workspace clause (project_prompt_clause) is
+# ~500 B and lands LAST, so at 2 KB a long archetype prose would have clamped it
+# away silently — and the one sentence the model most needs is the one that says
+# where it is. Headroom, not decoration.
 # Built from avatara's emitted soul + spirit prose, which is fixed-but-not-length-
 # bounded — if the archetype's prose ever grows past PERSONA_SYS_CAP the writes must
 # clamp, not overrun the buffer. Reuses the shared bounded helper (hoosh.cyr).

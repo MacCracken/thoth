@@ -1,21 +1,230 @@
-# thoth benchmarks
-# Stdlib auto-included via cyrius.cyml
+# thoth benchmarks (0.53.3): the hot paths the P(-1) audit measured, on the real src/ code, with no network and no terminal.
 #
-# Pattern: bench_new -> bench_batch_start -> tight loop -> bench_batch_stop -> bench_report.
-# For sub-1us ops use batch_size >= 1000 to amortize clock_gettime overhead
-# (~240 ns per start/stop pair on x86_64 Linux). See lib/bench.cyr header for
-# the full overhead-vs-batching guidance.
+# Run: ./scripts/bench-history.sh   (appends bench-history.csv, rewrites benchmarks.md)
+#  or: cyrius bench tests/thoth.bcyr
+#
+# Pattern: bench_new -> bench_batch_start -> loop -> bench_batch_stop -> bench_report. The heap never frees, so each row's count
+# is what it can afford: a row that allocates per call says what that call costs.
+include "src/vendor/bote-core.cyr"
+include "src/vendor/libro.cyr"
+include "src/vendor/t-ron.cyr"
+include "src/vendor/avatara.cyr"
+include "src/vendor/vyakarana.cyr"
+include "src/vendor/darshana.cyr"
+include "src/vendor/anuenue.cyr"
+include "src/vendor/agnosai-guard.cyr"
+include "src/vendor/sankoch.cyr"
+include "src/vendor/sit-read.cyr"
+include "src/util.cyr"
+include "src/version.cyr"
+include "src/term.cyr"
+include "src/ui.cyr"
+include "src/feed.cyr"
+include "src/ftree.cyr"
+include "src/inhist.cyr"
+include "src/fsearch.cyr"
+include "src/mention.cyr"
+include "src/project.cyr"
+include "src/search.cyr"
+include "src/config.cyr"
+include "src/log.cyr"
+include "src/gate.cyr"
+include "src/git.cyr"
+include "src/seams.cyr"
+include "src/session.cyr"
+include "src/budget.cyr"
+include "src/roundlog.cyr"
+include "src/editlog.cyr"
+include "src/exec.cyr"
+include "src/intr.cyr"
+include "src/hoosh.cyr"
+include "src/mpick.cyr"
+include "src/memory.cyr"
+include "src/memlog.cyr"
+include "src/reasonlog.cyr"
+include "src/shell.cyr"
+include "src/checkpoint.cyr"
+include "src/edit.cyr"
+include "src/daimon.cyr"
+include "src/mcpres.cyr"
+include "src/guard.cyr"
+include "src/redact.cyr"
+include "src/hooks.cyr"
+include "src/verify.cyr"
+include "src/events.cyr"
+include "src/toolpin.cyr"
+include "src/ask.cyr"
+include "src/agent.cyr"
+include "src/subagent.cyr"
+include "src/diff.cyr"
+include "src/mdhl.cyr"
+include "src/mdmodel.cyr"
+include "src/surface.cyr"
+include "src/splash.cyr"
+include "src/greet.cyr"
+include "src/vendor/kashi.cyr"
+include "src/gui/gdraw.cyr"
+include "src/gui/graster.cyr"
+include "src/gui/gstatus.cyr"
+include "src/gui/ginput.cyr"
+include "src/gui/gtree.cyr"
+include "src/gui/gconv.cyr"
+include "src/gui/gtool.cyr"
+include "src/gui/gmem.cyr"
+include "src/gui/gask.cyr"
+include "src/gui/gcmd.cyr"
+include "src/gui/gfeed.cyr"
+include "src/gui/gwindow.cyr"
+include "src/commands.cyr"
+include "src/gui/gpresent.cyr"
+include "src/repl.cyr"
+include "src/oneshot.cyr"
+include "src/tui.cyr"
 
-fn bench_noop(): i64 { return 0; }
+var _bn_text = 0;
+var _bn_lines = 0;
+var _bn_run = 0;
+
+fn _bn_fill_lines(n) {
+    var b = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        if ((i % 80) == 79) { store8(b + i, 10); } else { store8(b + i, 97 + (i % 26)); }
+        i = i + 1;
+    }
+    store8(b + n, 0);
+    return b;
+}
+fn _bn_fill_run(n) {
+    var b = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(b + i, 120); i = i + 1; }
+    store8(b + n, 0);
+    return b;
+}
+fn _bn_report(b, n) { bench_batch_stop(b, n); bench_report(b); return 0; }
+
+fn bench_redact() {
+    var b = bench_new("redact_clean_60k");
+    bench_batch_start(b);
+    var i = 0;
+    while (i < 20) { redact_tool_result(_bn_lines); i = i + 1; }
+    _bn_report(b, 20);
+    b = bench_new("redact_run_8k");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 5) { redact_tool_result(_bn_run); i = i + 1; }
+    _bn_report(b, 5);
+    return 0;
+}
+fn bench_scan() {
+    var b = bench_new("guard_scan_60k");
+    bench_batch_start(b);
+    var i = 0;
+    while (i < 100) { guard_scan_text(_bn_lines); i = i + 1; }
+    _bn_report(b, 100);
+    return 0;
+}
+fn bench_wire() {
+    var dst = alloc(400000);
+    var b = bench_new("json_escape_60k");
+    bench_batch_start(b);
+    var i = 0;
+    while (i < 200) { _json_escape_n_into_cap(dst, 0, 400000, _bn_lines, 60000); i = i + 1; }
+    _bn_report(b, 200);
+    b = bench_new("acc_append_16b");
+    bench_batch_start(b);
+    i = 0;
+    _hoosh_acc_reset();
+    while (i < 1000000) {
+        _hoosh_acc_append("sixteen bytes ok", 16);
+        if ((i % 8192) == 0) { _hoosh_acc_reset(); }
+        i = i + 1;
+    }
+    _bn_report(b, 1000000);
+    _hoosh_acc_reset();
+    var frame = "{\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello there\"},\"finish_reason\":null}]}";
+    b = bench_new("sse_frame_parse");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 200000) { _hoosh_frame_parse(frame); i = i + 1; }
+    _bn_report(b, 200000);
+    return 0;
+}
+fn bench_feed() {
+    var line = "a line of ordinary output, about sixty bytes long, for the ring\n";
+    var n = strlen(line);
+    feed_init();
+    var b = bench_new("feed_write_line");
+    bench_batch_start(b);
+    var i = 0;
+    while (i < 100000) { feed_write(line, n); i = i + 1; }
+    _bn_report(b, 100000);
+    feed_init();
+    return 0;
+}
+fn bench_window() {
+    ui_force(PT_DESKTOP, CD_TRUE);
+    session_reset(); session_history_clear();
+    gd_pool_on();
+    var b = bench_new("gframe_greeting");
+    bench_batch_start(b);
+    var i = 0;
+    while (i < 500) { gframe_build(1280, 800); i = i + 1; }
+    _bn_report(b, 500);
+    session_history_append("user", "write", 5);
+    session_history_append("assistant", _bn_text, 300000);
+    b = bench_new("md_measure_300k");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 100) { _gfeed_md(0, 0, 0, 1000, _bn_text); i = i + 1; }
+    _bn_report(b, 100);
+    b = bench_new("gframe_long_reply");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 200) { gframe_build(1280, 800); i = i + 1; }
+    _bn_report(b, 200);
+    var buf = alloc(1280 * 800 * 4);
+    var cmds = gframe_build(1280, 800);
+    b = bench_new("raster_frame");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 200) { gr_fb_clear(buf, 1280, 800, 0); gr_raster(cmds, buf, 1280, 800); i = i + 1; }
+    _bn_report(b, 200);
+    session_reset(); session_history_clear();
+    return 0;
+}
+fn bench_session() {
+    session_reset();
+    var i = 0;
+    while (i < 20) {
+        session_history_append("user", "a question", 10);
+        session_history_append("assistant", _bn_lines, 4000);
+        i = i + 1;
+    }
+    _sess_path = "build/bench.sess";
+    var b = bench_new("session_save_40");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 200) { sess_persist_save(); i = i + 1; }
+    _bn_report(b, 200);
+    _sess_path = 0;
+    xunlink("build/bench.sess");
+    session_reset();
+    return 0;
+}
 
 fn main(): i64 {
     alloc_init();
-    var b = bench_new("noop");
-    bench_batch_start(b);
-    var i = 0;
-    while (i < 1000000) { bench_noop(); i = i + 1; }
-    bench_batch_stop(b, 1000000);
-    bench_report(b);
+    _bn_lines = _bn_fill_lines(60000);
+    _bn_run = _bn_fill_run(8000);
+    _bn_text = _bn_fill_lines(300000);
+    bench_redact();
+    bench_scan();
+    bench_wire();
+    bench_feed();
+    bench_window();
+    bench_session();
     return 0;
 }
 

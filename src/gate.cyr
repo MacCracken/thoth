@@ -18,7 +18,8 @@
 # target them: thoth_run (the /run shell escape), thoth_write (/write),
 # thoth_remember (/remember + the model memory_write), thoth_shell (the model
 # shell tool), thoth_edit (the model `edit` tool — 0.31.0; kept distinct from
-# thoth_write so a policy can allow the operator's /write yet deny model edits).
+# thoth_write so a policy can allow the operator's /write yet deny model edits),
+# thoth_verify ([verify].command, 0.53.3: it runs what the model just wrote).
 # MCP tool calls are authorized under their real tool name BEFORE any request
 # leaves thoth.
 
@@ -277,6 +278,49 @@ fn _confirm_refuse_unshowable(verb_label, obj_label, why) {
     note_println("");
     return 0;
 }
+# _confirm_obj_copy (0.53.3, G-2): the object as a label, with a line break shown as what it is. Every C0 byte became `?` here,
+# so `echo safe<newline>touch X` read as one `echo` of an odd word, `?` being a glob character, and "yes" ran two commands.
+fn _confirm_obj_copy(dst, cap, src) {
+    if (src == 0) { store8(dst, 0); return 0; }
+    var sn = strlen(src);
+    var o = 0;
+    var i = 0;
+    while ((i < sn) && (o < (cap - 12))) {
+        var b = load8(src + i) & 255;
+        if (b == 10) { o = _append_cstr_cap(dst, o, cap, " <newline> "); }
+        elif (b == 13) { o = _append_cstr_cap(dst, o, cap, " <cr> "); }
+        elif (b == 9) { o = _append_cstr_cap(dst, o, cap, " <tab> "); }
+        else {
+            if ((b < 32) || (b == 127) || (_c1_at(src, i, sn) == 1)) { b = 63; }
+            store8(dst + o, b);
+            o = o + 1;
+        }
+        i = i + 1;
+    }
+    store8(dst + o, 0);
+    return o;
+}
+# gate_call_obj (0.53.3, T-5): what a prompt and a grant name for an MCP call: the tool AND its arguments. Both were the bare
+# name, so "yes, for this session" on `web_fetch` of a docs page allowed the next `web_fetch` of any URL with no prompt, against
+# the grants' own rule (exact match), and the window's card showed no arguments at all. Unshowable length is refused by the
+# existing rule: a prompt shows the whole action.
+var _gate_call_buf = 0;
+var _gate_call_cap = 0;
+fn gate_call_obj(name, args) {
+    if (args == 0) { return name; }
+    if ((load8(args) == 0) || (streq(args, "{}") == 1)) { return name; }
+    var need = strlen(name) + strlen(args) + 2;
+    if (need > _gate_call_cap) {
+        _gate_call_buf = alloc(need);
+        _gate_call_cap = need;
+        if (_gate_call_buf == 0) { _gate_call_cap = 0; return name; }
+    }
+    var o = _append_cstr_cap(_gate_call_buf, 0, need, name);
+    o = _append_cstr_cap(_gate_call_buf, o, need, " ");
+    o = _append_cstr_cap(_gate_call_buf, o, need, args);
+    store8(_gate_call_buf + o, 0);
+    return _gate_call_buf;
+}
 # _confirm_labels: sanitise (verb, obj) into stable buffers for display. Returns 0 on OOM, in which case
 # the caller must fall through to a DENY — refusing to draw a prompt we cannot draw safely is the
 # fail-closed answer, and it is the same posture the jail takes when it cannot check a path.
@@ -286,7 +330,7 @@ fn _confirm_labels(verb, obj) {
     if (_confirm_verb_buf == 0) { return 0; }
     if (_confirm_obj_buf == 0) { return 0; }
     safe_label_copy(_confirm_verb_buf, CONFIRM_LABEL_CAP, verb);
-    safe_label_copy(_confirm_obj_buf, CONFIRM_LABEL_CAP, obj);
+    _confirm_obj_copy(_confirm_obj_buf, CONFIRM_LABEL_CAP, obj);
     return 1;
 }
 
@@ -385,7 +429,7 @@ fn confirm(verb, obj) {
     emit(_confirm_verb_buf); emit(" "); emit(_confirm_obj_buf);
     emit(post);
     var ans[64];
-    var n = read_line(&ans, 64);
+    var n = read_line_prompt(&ans, 64);
     var fits = 1;                                       # 0.52.8 (audit B1): a resize while asking voids the answer
     if ((capturing == 1) && (_confirm_fit_fn != 0)) { fits = fncall0(_confirm_fit_fn); }
     if ((capturing == 1) && (_confirm_end_fn != 0)) { fncall0(_confirm_end_fn); }

@@ -56,7 +56,7 @@ fn _gconv_row(cmds, ci, x, rowy, w, sel, focused) {
     # "<n> msg" subline (faint). 0.49.0: a FRESH buffer per row — gd_push_text stores the POINTER, so one shared
     # scratch made every subline raster the last row's count (the gtool _gtool_int pattern: alloc per int, bump-heap,
     # bounded per build).
-    var num = alloc(32);
+    var num = gd_num_buf();
     var n = vec_len(conv_msgs(ci));
     var ln = fmt_int_buf(n, num);
     store8(num + ln, 32); store8(num + ln + 1, 109); store8(num + ln + 2, 115); store8(num + ln + 3, 103); store8(num + ln + 4, 0);   # " msg"

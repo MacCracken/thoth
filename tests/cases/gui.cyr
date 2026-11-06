@@ -1185,6 +1185,8 @@ fn test_gui_toolcards_live() {
     roundlog_add_call("shell", RL_ALLOWED, 1, 88, 256, "{\"command\":\"cyrius test\"}");
     gturn_begin("run the tests");                     # a turn is in flight (no reply landed yet)
     session_history_clear();
+    _gturn_t0 = session_turns() - 1;                  # 0.53.3 (G-3): the prompt has landed, which is when a turn's cards draw
+    session_history_append("user", "run the tests", 13);
     _hoosh_acc_reset();
     # gfeed_build DURING the active turn must render the current turn's card (the tool name "shell")
     var cmds = gd_list_new();
@@ -2593,6 +2595,7 @@ fn _tg_runner_quit(line) { oprintln("bye"); return 0; }
 fn _tg_runner_many(line) { var i = 0; while (i < 250) { emit("row"); ofmt_int(i); oprintln(""); i = i + 1; } return 1; }
 fn _tg_runner_long(line) { var i = 0; while (i < 700) { emit("x"); i = i + 1; } oprintln(""); return 1; }
 fn _tg_runner_silent(line) { return 1; }
+fn _tg_runner_many0() { var i = 0; while (i < 250) { emit("row"); ofmt_int(i); oprintln(""); i = i + 1; } return 0; }
 # 0.50.1: zero-argument runners for gcmd_capture — a session hook that printed, and one that did not
 fn _tg_hook_loud() { ui_emit(ROLE_FAINT, "  [hook session_start] "); emit("hi"); oprintln(""); return 0; }
 fn _tg_hook_quiet() { return 0; }
@@ -3060,6 +3063,74 @@ fn test_gui_wire_bounds() {
     return 0;
 }
 
+# test_harden_window (0.53.3): the window's findings from the P(-1) sweep, by id.
+fn test_harden_frame() {
+    test_group("a frame draws from cells it rewinds (G-7, M-7, gdraw.cyr)");
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    gd_pool_on();
+    gframe_build(1280, 900);
+    var u0 = alloc_used();
+    var i = 0;
+    while (i < 200) { gframe_build(1280, 900); i = i + 1; }
+    var grew = alloc_used() - u0;
+    assert(grew < 8192, "200 greeting frames take next to no heap (60 KB each before)");
+    assert_eq(gd_kind(vec_get(gframe_build(1280, 900), 0)) >= 0, 1, "...and a frame still reads");
+    _gd_pool_on = 0;
+    return 0;
+}
+fn test_harden_window() {
+    test_harden_frame();
+    test_group("the authorization card draws what would run (G-1, G-2, gask.cyr, gate.cyr)");
+    gask_open("Authorize run shell echo \xe2\x80\x98a; touch X\xe2\x80\x99?");
+    assert_eq(_ui_contains(gask_question(), "\xe2\x80\x98"), 0, "a curly quote does not reach the card, where it drew as a straight one");
+    assert_eq(_ui_contains(gask_question(), "\xef\xbf\xbd"), 1, "...it draws as the box");
+    assert_eq(_ui_contains(gask_question(), "touch X"), 1, "...and the rest stands");
+    gask_open("caf\xc3\xa9 \xe7\x95\x8c");
+    assert_eq(_ui_contains(gask_question(), "\xe7\x95\x8c"), 1, "a glyph with no ASCII twin is untouched (it was already the box)");
+    gask_close();
+    var lb = alloc(256);
+    _confirm_obj_copy(lb, 256, "echo safe\ntouch X\tY");
+    assert(streq(lb, "echo safe <newline> touch X <tab> Y"), "a line break is shown as one (it was `?`, a glob character)");
+    _confirm_obj_copy(lb, 256, "a\x1bb\x7fc");
+    assert(streq(lb, "a?b?c"), "other control bytes stay `?`");
+    assert(streq(gate_call_obj("web_fetch", "{\"url\":\"http://x\"}"), "web_fetch {\"url\":\"http://x\"}"), "an MCP prompt names the arguments (T-5)");
+    assert(streq(gate_call_obj("t", "{}"), "t"), "...and no arguments, none");
+
+    test_group("a card line is whole, and stray bytes are cells (G-8, S-4, gcmd.cyr, feed.cyr)");
+    assert(GCMD_LINE_CAP >= FEED_LINE_CAP, "a card keeps a feed line whole");
+    var sb = "caf\xc3\xa9\xa9\xa9 x";
+    assert_eq(_feed_glyph_len(sb, 3, strlen(sb)), 2, "a well-formed character is one glyph");
+    assert_eq(_feed_glyph_len(sb, 5, strlen(sb)), 1, "a stray continuation byte is its own");
+    assert_eq(_feed_glyph_len("\xe2\x82", 0, 2), 1, "a cut sequence does not read past its end");
+
+    test_group("a long startup report leaves the greeting for the flow, which scrolls (G-12, gfeed.cyr)");
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    assert_eq(gcmd_capture("[hook session_start]", &_tg_runner_many0), 0, "premise: the hook's card is sealed");
+    var lg = gd_list_new();
+    gfeed_build(lg, 0, 0, 900, 600);
+    assert(_t_gd_text_count(lg, " more lines") >= 1, "the end of a long report is drawn");
+    assert(_tg_y_of(lg, " more lines") < 600, "...on screen, not under the greeting");
+    gcmd_clear();
+
+    test_group("a new prompt's first frame is not the last reply (G-3, ginput.cyr)");
+    session_reset(); session_history_clear(); gcmd_clear(); gscroll_reset();
+    session_bump_turn();
+    session_history_append("user", "q1", 2);
+    session_history_append("assistant", "first", 5);
+    _hoosh_acc_reset();
+    _hoosh_acc_append("OLDREPLY", 8);
+    gturn_begin("q2");
+    assert_eq(hoosh_last_reply_len(), 0, "a submit clears the partial");
+    var l = gd_list_new();
+    gfeed_build(l, 0, 0, 900, 600);
+    assert_eq(_t_gd_text_count(l, "OLDREPLY"), 0, "...so the last reply is not drawn as this prompt's answer");
+    assert(_t_gd_text_count(l, "thoth is working") >= 1, "...the working mark is");
+    gturn_end();
+
+    session_reset(); session_history_clear();
+    return 0;
+}
+
 # test_gcmd_wrap (0.53.2): a card clipped each line at its width with no mark, losing a `/run` line's tail and a refusal's
 # reason, where the TUI wraps the same lines. _tg_wrap_kept sums the codepoints a line's rows push: every byte drawn.
 var _tgw_n = 0;
@@ -3312,14 +3383,42 @@ fn test_gfeed_view() {
     gfeed_build(l4, 0, 0, 500, 600);
     assert(session_history_layout(1, 500 - GFEED_PAD - GFEED_PAD) > 0, "a new width measures again");
 
+    test_group("a long thinking fold is held and culled like a reply (gfeed.cyr, 0.53.3)");
+    session_reset(); session_history_clear(); gscroll_reset();
+    session_history_append("user", "think", 5);
+    session_history_append("assistant", "short answer", 12);
+    session_history_reason_last_set(body, n);
+    if (greason_collapsed() == 1) { greason_toggle(); }
+    var fa = 900 - GFEED_PAD - GFEED_PAD;
+    var lf = gd_list_new();
+    gfeed_build(lf, 0, 0, 900, 600);
+    assert(vec_len(lf) < 80, "a 400 KB fold puts a screenful on the list");
+    assert(_tgv_has(lf, "short answer") >= 1, "...the reply under it included");
+    var fh = session_history_fold(1, fa);
+    assert(fh > 0, "its height is held for its width");
+    assert_eq(session_history_fold(1, 500), 0 - 1, "...and for no other");
+    assert_eq(fh, _gfeed_fold_h(body, fa), "...and it is what a full walk measures");
+    assert_eq(greason_build_msg(0, 0, 0, fa, 1), fh, "the measure pass returns it");
+    gscroll_view_h_set(600);
+    gscroll_clamp(fh + 1000);
+    gscroll_by(fh + 1000);
+    var lf2 = gd_list_new();
+    gfeed_build(lf2, 0, 0, 900, 600);
+    assert(_tgv_has(lf2, "00000000") >= 1, "scrolled to the top, the fold's first line draws");
+    assert(_tgv_has(lf2, "v thinking") >= 1, "...under its header");
+    gscroll_reset();
+    greason_toggle();
+    assert_eq(greason_build_msg(0, 0, 0, fa, 1), GFEED_LH, "collapsed, it is one row, whatever is held");
+    greason_toggle();
+
     test_group("the reply still streaming is held to the view the same way (gfeed.cyr, 0.53.2)");
     session_reset(); session_history_clear();
     var sv_acc = _hoosh_acc; var sv_cap = _hoosh_acc_cap; var sv_len = _hoosh_acc_len;
     _hoosh_acc = 0; _hoosh_acc_cap = 0;
     _hoosh_acc_reset();
-    _hoosh_acc_append(body, n);
     session_bump_turn();
     gturn_begin("write");
+    _hoosh_acc_append(body, n);
     session_history_append("user", "write", 5);
     var l5 = gd_list_new();
     gfeed_build(l5, 0, 0, 900, 600);
@@ -3341,6 +3440,19 @@ fn test_gfeed_view() {
     _hoosh_acc_append(shortb, n + 8);
     gfeed_build(gd_list_new(), 0, 0, 900, 600);
     assert(_gfeed_live_h != seen, "...so the next partial is measured, at the same length");
+    # the live fold: one walk for each length, none for the second pass of a frame
+    var sv_ra = _reason_acc; var sv_rl = _reason_acc_len; var sv_rc = _reason_acc_cap;
+    _reason_acc = 0; _reason_acc_cap = 0;
+    _hoosh_acc_reset();
+    _reason_acc_append(body, n);
+    var l7 = gd_list_new();
+    gfeed_build(l7, 0, 0, 900, 600);
+    assert_eq(_gfeed_lfold_n, n, "the live fold's height is held at its length");
+    assert(vec_len(l7) < 80, "...and a long one is a screenful");
+    _hoosh_acc_reset();
+    gfeed_build(gd_list_new(), 0, 0, 900, 600);
+    assert_eq(_gfeed_lfold_n, 0, "a round with no reasoning drops it");
+    _reason_acc = sv_ra; _reason_acc_len = sv_rl; _reason_acc_cap = sv_rc;
     gturn_end();
     _hoosh_acc = sv_acc; _hoosh_acc_cap = sv_cap; _hoosh_acc_len = sv_len; _hoosh_acc_cut = 0;
     session_reset(); session_history_clear();

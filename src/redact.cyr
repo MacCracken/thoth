@@ -58,6 +58,14 @@ fn redact_active() { return config_redact_enabled(); }
 # there — trading a certain harm for a possible one. The cap is 256 KB, which is above every bounded tool
 # result thoth produces (read_file caps at 64 KB, list_dir at 16 KB, search at 24 KB, shell at its
 # configured max), so this is a guard against a future unbounded producer, not a live path.
+# REDACT_WINDOW: the most handed to the scanner at once. _redact_is_token: 1 for a byte a secret or an address is made of.
+var REDACT_WINDOW = 2048;
+fn _redact_is_token(c) {
+    c = c & 255;
+    if (((c >= 48) && (c <= 57)) || ((c >= 65) && (c <= 90)) || ((c >= 97) && (c <= 122))) { return 1; }
+    if ((c == 95) || (c == 45) || (c == 46) || (c == 37) || (c == 43) || (c == 64) || (c == 47) || (c == 61) || (c >= 128)) { return 1; }
+    return 0;
+}
 fn redact_tool_result(text) {
     if (text == 0) { return text; }
     if (redact_active() == 0) { return text; }
@@ -75,18 +83,40 @@ fn redact_tool_result(text) {
     if (_redact_buf == 0) { _redact_buf = alloc(REDACT_CAP); }
     if (_redact_buf == 0) { return text; }
 
-    # agnosai's redactor takes and returns a Str. It answers the ORIGINAL Str when nothing matched, so a
-    # pointer comparison is not a reliable "changed?" test — compare the bytes.
-    var out = agnosai_output_redact(str_new(text, n));
-    if (out == 0) { return text; }
-    var on = str_len(out);
-    var od = str_data(out);
-    if (on == n) {
-        var same = 1;
-        var i = 0;
-        while ((i < n) && (same == 1)) { if (load8(od + i) != load8(text + i)) { same = 0; } i = i + 1; }
-        if (same == 1) { return text; }                # clean — hand back the caller's own pointer
+    # 0.53.3 (W-7): a window at a time. agnosai's redactor is quadratic on a run of local-part bytes and rebuilds the whole text
+    # per replacement on the heap that never frees: `read_file` of 60 KB of `x` took 20 s with Esc dead, and 60 KB of `sk-a `
+    # peaked at 3.4 GB. A window ends at whitespace or punctuation where it can; a hard split inside a longer unbroken run could
+    # hide a secret across it, the residual named in the audit. A stop between windows withholds the result: what is unscanned
+    # must not go on. (Upstream: docs/audit/2026-11-05-audit.md.)
+    var on = 0;
+    var changed = 0;
+    var at = 0;
+    while (at < n) {
+        var e = at + REDACT_WINDOW;
+        if (e >= n) { e = n; }
+        else {
+            var j = e;
+            while ((j > (at + REDACT_WINDOW / 2)) && (_redact_is_token(load8(text + j - 1)) == 1)) { j = j - 1; }
+            if (j > (at + REDACT_WINDOW / 2)) { e = j; }
+        }
+        # agnosai's redactor takes and returns a Str. It answers the ORIGINAL Str when nothing matched, so a pointer comparison is
+        # not a reliable "changed?" test — compare the bytes.
+        var w = e - at;
+        var out = agnosai_output_redact(str_new(text + at, w));
+        if (out == 0) { return text; }
+        var wn = str_len(out);
+        var od = str_data(out);
+        if (wn != w) { changed = 1; }
+        else {
+            var i = 0;
+            while ((i < w) && (changed == 0)) { if (load8(od + i) != load8(text + at + i)) { changed = 1; } i = i + 1; }
+        }
+        if ((on + wn) < REDACT_CAP) { memcpy(_redact_buf + on, od, wn); }
+        on = on + wn;
+        at = e;
+        if ((at < n) && (intr_check() == 1)) { return "(tool result withheld: stopped before its secret scan finished)"; }
     }
+    if (changed == 0) { return text; }                 # clean — hand back the caller's own pointer
     # ⚠ 0.44.3 — THIS ARM DISCARDS A SUCCESSFUL REDACTION AND RETURNS THE SECRET. By the time control
     # reaches here the scanner has already found secret-shaped values and replaced them; `out` is the
     # CLEAN text. Returning `text` hands the model, the feed, `/save` and the next gateway request the
@@ -99,8 +129,6 @@ fn redact_tool_result(text) {
         note_println("  a secret was found but the redacted result no longer fits the scan buffer — the ORIGINAL text was passed through UNREDACTED");
         return text;
     }
-    var k = 0;
-    while (k < on) { store8(_redact_buf + k, load8(od + k)); k = k + 1; }
     store8(_redact_buf + on, 0);
     _redact_n = _redact_n + 1;
     # Announced, never silent — the user must be able to tell "[REDACTED]" from "the tool found nothing".

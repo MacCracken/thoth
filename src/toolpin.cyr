@@ -857,45 +857,15 @@ fn _tps_render(have, blen) {
 # REPLACED by the rename, never followed. Returns 0, or -1 with the temp unlinked. Portability, named: AGNOS
 # drops O_EXCL (a plain create) and fsyncs the whole fs; Windows's rename is MoveFileEx(REPLACE_EXISTING).
 fn _tps_write_atomic(path, buf, len) {
-    var pl = strlen(path);
-    var tmp = alloc(pl + 48);
-    if (tmp == 0) { return 0 - 1; }
-    var tries = 0;
-    var fd = 0 - 1;
-    while ((tries < 8) && (fd < 0)) {
-        var off = 0;
-        memcpy(tmp, path, pl); off = pl;
-        memcpy(tmp + off, ".tmp.", 5); off = off + 5;
-        var ib[24];
-        var il = fmt_int_buf(getpid(), &ib);
-        memcpy(tmp + off, &ib, il); off = off + il;
-        store8(tmp + off, 46); off = off + 1;
-        var rb[8];
-        store64(&rb, 0);
-        random_bytes(&rb, 8);
-        var k = 0;
-        while (k < 8) {
-            var b = load8(&rb + k) & 255;
-            store8(tmp + off, load8("0123456789abcdef" + (b >> 4))); off = off + 1;
-            store8(tmp + off, load8("0123456789abcdef" + (b & 15))); off = off + 1;
-            k = k + 1;
-        }
-        store8(tmp + off, 0);
-        fd = file_open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, TPS_MODE);   # 0.51.3: O_NOFOLLOW belt-and-braces with O_EXCL
-        tries = tries + 1;
-    }
+    var fd = atomic_tmp_open(path, TPS_MODE);
     if (fd < 0) { return 0 - 1; }
     var w = 0;
-    var ok = 1;
-    while ((w < len) && (ok == 1)) {
+    while (w < len) {
         var n = file_write(fd, buf + w, len - w);
-        if (n <= 0) { ok = 0; } else { w = w + n; }
+        if (n <= 0) { return atomic_tmp_abort(fd); }
+        w = w + n;
     }
-    if (ok == 1) { if (xfsync(fd) < 0) { ok = 0; } }
-    file_close(fd);
-    if (ok == 1) { if (file_rename(tmp, path) < 0) { ok = 0; } }
-    if (ok == 0) { xunlink(tmp); return 0 - 1; }
-    return 0;
+    return atomic_tmp_commit(fd, path);
 }
 # toolpin_store_flush: write the store when the table is dirty. Re-reads and re-verifies the file first — other
 # hosts' rows ride verbatim, same-host rows another session pinned since this one loaded are UNIONED into the

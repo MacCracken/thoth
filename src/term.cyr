@@ -51,6 +51,24 @@
 # that stops compiling — visible only if someone reads that lane's output. `scripts/build.sh` treats
 # `TTY_SIGMASK_WINCH` as an UNEXPECTED symbol precisely so a regression here goes red.
 
+# term_flush_input (0.53.3, S-3): discard what a terminal holds for reading: input typed before a prompt existed is not an
+# answer to it. tcflush(TCIFLUSH) on Linux, TIOCFLUSH(FREAD) on Darwin (no termios there, but the ioctl stands). A pipe is left
+# alone: piped lines are scripted answers. The other targets have neither call, and no type-ahead to speak of.
+fn term_flush_input() {
+    #ifdef CYRIUS_TARGET_LINUX
+    if (term_isatty(0) == 1) { syscall(SYS_IOCTL, 0, 0x540B, 0); return 1; }
+    #endif
+    #ifdef CYRIUS_TARGET_MACOS
+    if (term_isatty(0) == 1) {
+        var w[8];
+        store64(&w, 1);
+        syscall(SYS_IOCTL, 0, 0x80047410, &w);
+        return 1;
+    }
+    #endif
+    return 0;
+}
+
 #ifdef CYRIUS_TARGET_MACOS
 # macOS: darshana has no BSD termios peer, so raw/cooked/signalfd are honestly unavailable.
 #

@@ -117,12 +117,13 @@ fn _oneshot_task_reset() {
     return 0;
 }
 
+var _oneshot_task_cut = 0;          # 0.53.3 (W-10): 1 once the task lost bytes to the cap
 # _oneshot_task_append: append n bytes, clamped to the cap (one byte reserved for the
 # NUL). Returns the bytes actually appended.
 fn _oneshot_task_append(ptr, n) {
     if (_oneshot_task == 0) { _oneshot_task_reset(); }
     var room = ONESHOT_TASK_CAP - 1 - _oneshot_task_len;
-    if (n > room) { n = room; }
+    if (n > room) { n = room; _oneshot_task_cut = 1; }
     if (n <= 0) { return 0; }
     memcpy(_oneshot_task + _oneshot_task_len, ptr, n);
     _oneshot_task_len = _oneshot_task_len + n;
@@ -255,6 +256,8 @@ fn _oneshot_append_stdin() {
             _oneshot_task_append(&chunk, rd);
         }
     }
+    # 0.53.3 (W-10): a review of a long diff covered its first 64 KiB and never said so.
+    if (_oneshot_task_cut == 1) { emit_err("thoth: piped input past 65535 bytes was cut; the model sees only the start of it\n"); }
     return 0;
 }
 

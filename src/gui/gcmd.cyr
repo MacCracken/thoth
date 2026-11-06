@@ -22,10 +22,10 @@
 # conversation's older cards to the history's end when it SHRANK under them (/reset, /rewind) — a card never draws
 # after messages that arrived later. Past the card cap the oldest card is dropped; a
 # capture past GCMD_LINES keeps its head and says how many lines were dropped, never silently. Allocated on the
-# first record (~800 KiB), not at startup: most sessions never issue a command.
+# first record (~3 MiB), not at startup: most sessions never issue a command.
 var GCMD_CARDS = 8;
 var GCMD_LINES = 200;
-var GCMD_LINE_CAP = 512;
+var GCMD_LINE_CAP = 2048;       # 0.53.3 (G-8): a feed line, whole; 512 lost the tail of a long `/run` line with no mark
 var GCMD_HEAD_CAP = 256;
 var GCMD_PAD = 8;              # inner padding (as the tool card's)
 var GCMD_LH = 18;              # line height inside a card (as the tool card's)

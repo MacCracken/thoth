@@ -147,6 +147,7 @@ fn _search_scan_file(relpath, needle, ic) {
     _search_files_seen = _search_files_seen + 1;
     if (_search_file == 0) { _search_file = alloc(SEARCH_FILE_CAP + 1); }
     if (_search_file == 0) { return 1; }
+    if (file_is_regular(relpath) == 0) { return 0; }   # 0.53.3: a FIFO in the tree hung the search in open(2)
     var n = file_read_all(relpath, _search_file, SEARCH_FILE_CAP);
     if (n <= 0) { return 0; }                       # unreadable or empty -> not an error, just no hits
     store8(_search_file + n, 0);
@@ -287,6 +288,7 @@ fn _search_skip_dir(name) {
 # search_tool: the agentic-loop entry. {"pattern"?, "glob"?, "path"?, "ignore_case"?}.
 # At least one of pattern/glob is required — an unconstrained walk would return the whole tree.
 fn search_tool(args_cstr) {
+    _project_last_ok = 0;
     if (args_cstr == 0) { return "(search: missing arguments)"; }
     var v = bayan_json_v_parse_buf(args_cstr, strlen(args_cstr));
     if (v == 0) { return "(search: arguments are not valid JSON)"; }
@@ -334,6 +336,7 @@ fn search_tool(args_cstr) {
     _search_unread = 0;
 
     _search_walk(root, needle, ic, globpat, 0);
+    _project_last_ok = 1;                                    # the walk ran: nothing found is still an answer
 
     if (_search_hits == 0) {
         store8(_search_out + _search_off, 0);

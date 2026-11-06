@@ -8,12 +8,11 @@
 # refused Wayland, so the AGNOS window backend is a second implementation of the gwl_win_* seam, still to come). The frame ASSEMBLY (gframe_build) is pure draw-commands over the tested pipeline
 # (gstatus + graster). main-only (references gwl_win_*, which is main-only).
 #
-# Per-repaint note: gframe_build allocs the command list on the bump heap each REBUILD. Rebuilds are
-# EVENT-DRIVEN (a key, a click, a wheel step, a resize, a turn — the 120 ms throb tick (0.30.11) re-rasters the
-# CACHED list without rebuilding, and pointer MOTION wakes the poll but neither queues nor rebuilds), so the
-# per-interaction leak is bounded (matches jalwa). thoth's alloc has no mark/rewind, so alloc_reset() (a FULL-heap
-# rewind) is NOT usable per frame — a reused command-buffer pool is the future optimization if a per-frame
-# rebuild is ever added.
+# Per-repaint note: a REBUILD reuses a pool of command-list blocks (0.53.3, gdraw.cyr: `gd_pool_on`,
+# `gd_frame_rewind`), so the heap no longer grows with the frames drawn. Rebuilds are EVENT-DRIVEN (a key, a click,
+# a wheel step, a resize, a turn — the 120 ms throb tick (0.30.11) re-rasters the CACHED list without rebuilding, and
+# pointer MOTION wakes the poll but neither queues nor rebuilds). thoth's alloc has no mark/rewind, so alloc_reset()
+# (a FULL-heap rewind) stays unusable per frame.
 
 # The frame assembly (gframe_build + _gframe_bg + GFRAME_* constants) lives in gfeed.cyr — a view-builder,
 # kept there so it is headless-testable (this file is main-only). This loop just rasters + presents it.
@@ -27,8 +26,14 @@ var _gui_cmds = 0;
 var _gui_dirty = 1;
 var _gui_pending = 0;   # a redraw is wanted (dirty view or a throb step) but may await gwl_win_ready()
 
+var _gui_git_due = 0;           # 0.53.3 (M-3): the git probe owed, run once the answer is on screen: it inflates every tracked blob
 # render one frame into the present buffer + commit. Rebuilds the cached command list only when dirty; always
 # recolours the live owl eye to the current throb phase before rasterising.
+# 0.53.3 (M-8): an unchanged frame recolours the eye's one cell and damages only that: the buffer is persistent, and the idle
+# window repainted every pixel 8 times a second to do it (4.8% of a core, 0.1% now). Not while a modal is up, whose card can
+# cover the eye.
+var _gui_fb_w = 0;
+var _gui_fb_h = 0;
 fn _gpresent_frame(win) {
     var buf = gwl_win_present_begin(win);
     if (buf == 0) { return 0; }
@@ -36,6 +41,16 @@ fn _gpresent_frame(win) {
     gwl_win_size_px(win, &sz);
     var w = load64(&sz);
     var h = load64(&sz + 8);
+    if ((_gui_dirty == 0) && (_gui_cmds != 0) && (geye_cell() != 0) && (_gui_fb_w == w) && (_gui_fb_h == h) && (gask_active() == 0)) {
+        var c = geye_cell();
+        store64(c + GDC_COLOR, geye_color_now());
+        gr_ensure_font();
+        gr_clip_reset();
+        gr_fb_fill_rect(buf, w, h, gd_x(c), gd_y(c), GR_GLYPH_W, GR_GLYPH_H, _gframe_bg());
+        gr_fb_text(buf, w, h, gd_x(c), gd_y(c), gd_text(c), gd_color(c), gd_aux(c));
+        gwl_win_present_commit(win, gd_x(c), gd_y(c), GR_GLYPH_W, GR_GLYPH_H);
+        return 0;
+    }
     if ((_gui_dirty == 1) || (_gui_cmds == 0)) { _gui_cmds = gframe_build(w, h); _gui_dirty = 0; }
     if (geye_cell() != 0) { store64(geye_cell() + GDC_COLOR, geye_color_now()); }   # live owl-eye recolour
     gr_fb_clear(buf, w, h, _gframe_bg());
@@ -44,13 +59,20 @@ fn _gpresent_frame(win) {
     return 0;
 }
 
+# _gkey_once (0.53.3, G-4): 1 for a key that acts on its press alone: Enter and Esc. A held key repeats, and a repeat read as a
+# fresh press: the Enter that submitted a line answered the modal it opened, and held over an `ask_user` card it told the
+# model "delete it all" with no human choice; an Esc held to stop a turn went on to close the window.
+fn _gkey_once(code) {
+    if ((code == 28) || (code == 96) || (code == 1)) { return 1; }
+    return 0;
+}
 # drain queued keys into the composer (gcomp_key). Returns 1 if Esc (quit), 2 if Enter (submit), else 0.
 fn _gpresent_drain_keys(win) {
     var rec[24];
     var action = 0;
     while (gwl_win_next_key(win, &rec) == 1) {
         var value = load64(&rec + 8);
-        if ((value == 1) || (value == 2)) {              # press / autorepeat
+        if ((value == 1) || ((value == 2) && (_gkey_once(load64(&rec)) == 0))) {   # press / autorepeat
             var code = load64(&rec);
             var mods = load64(&rec + 16);
             var shift = 0;
@@ -58,7 +80,7 @@ fn _gpresent_drain_keys(win) {
             var ctrl = 0;
             if ((mods & 4) != 0) { ctrl = 1; }               # MOD_CTRL -> the pane-toggle chords (0.32.x)
             var a = gkey(code, shift, ctrl);                 # focus-aware dispatch (composer / tree nav / pane toggles)
-            if (a != 0) { action = a; }
+            if (a != 0) { return a; }                        # 0.53.3 (G-10): Enter ends the batch: what follows it waits for the next line, not this one
         }
     }
     return action;
@@ -126,10 +148,19 @@ fn _gstop_poll() {
     var now = clock_now_ms();
     if (_stream_should_paint(now, _gpump_last_ms) == 1) {
         _gpump_last_ms = now;
-        _gui_dirty = 1;                                       # the partial grew -> rebuild the frame's command list
-        if (gwl_win_ready(_gstop_win) == 1) { _gpresent_frame(_gstop_win); }
+        if (_gpump_changed() == 1) { _gui_dirty = 1; }        # the partial grew -> rebuild the frame's command list
+        if ((_gui_dirty == 1) && (gwl_win_ready(_gstop_win) == 1)) { _gpresent_frame(_gstop_win); }   # 0.53.3 (G-7): nothing new, nothing drawn
     }
     return 0;
+}
+# _gpump_changed: 1 when what a frame shows mid-work has moved: the reply, its reasoning, the history, a tool card, the
+# running row. The pump marked every tick dirty, and a command's wait is hours of ticks over one unchanged frame.
+var _gpump_sig = 0;
+fn _gpump_changed() {
+    var s = hoosh_last_reply_len() * 3 + hoosh_last_reason_len() * 5 + session_history_len() * 7 + roundlog_total() * 11 + roundlog_calls_seen() * 19 + gcmd_running() * 13 + gturn_active() * 17;
+    if (s == _gpump_sig) { return 0; }
+    _gpump_sig = s;
+    return 1;
 }
 
 # _gwait_poll (0.52.0, F7): the window's half of exec's wait poll (src/exec.cyr), bound by gui_run for the window's
@@ -175,6 +206,7 @@ fn gui_ask() {
     if (win == 0) { ask_cancel(); return 0; }                            # no window -> nobody to ask
     # Copy ask.cyr's already-sanitised strings into the modal's own view state. gask.cyr deliberately
     # holds no seam of its own so it stays a headless-testable view-builder; this is the bridge.
+    gwl_win_keys_forget(win);                                 # 0.53.3 (G-4): keys typed before the card existed never answer it
     gask_open(ask_question());
     # 0.44.3: pick the modal's FIXED label from who is actually asking. `confirm` poses authorization
     # prompts through this same seam (gate.cyr), and labelling one of those "the agent is asking" tells
@@ -202,7 +234,7 @@ fn gui_ask() {
             if (((ev & GWL_WIN_EV_KEY) != 0) && (done == 0)) {
                 var rec[24];
                 while ((gwl_win_next_key(win, &rec) == 1) && (done == 0)) {
-                    if ((load64(&rec + 8) == 1) || (load64(&rec + 8) == 2)) {   # a press, or a held key's repeat (0.52.3)
+                    if ((load64(&rec + 8) == 1) || ((load64(&rec + 8) == 2) && (_gkey_once(load64(&rec)) == 0))) {   # a press, or a held key's repeat (0.52.3)
                         if (_gui_dirty == 1) { _gask_layout_now(win); }      # 0.52.8: each key is judged on the card as it stands
                         var mods = load64(&rec + 16);
                         var r = _gask_key(load64(&rec), mods & 1);
@@ -269,7 +301,7 @@ fn _gpresent_submit(win) {
         gturn_settle();                       # 0.52.8 (audit A1): stopped, ended short by the provider, or failed
 
         gturn_end();                          # drop the provisional bubble; the feed now shows history (+ any notice)
-        git_probe();                          # 0.50.1: the turn may have changed the worktree (an agentic edit / shell) — the strip's git field + the tree's badges, as the TUI re-probes after every line; until now only a slash command did
+        _gui_git_due = 1;                     # 0.50.1: the turn may have changed the worktree (an agentic edit / shell) — the strip's git field + the tree's badges, as the TUI re-probes after every line; 0.53.3 (M-3): after the frame, not before it; until now only a slash command did
         return 1;
     }
     return gpresent_run_command(gcomp_cstr());
@@ -282,7 +314,7 @@ fn gpresent_run_command(line) {
     if (cls == CMD_CLEAR) { gcmd_clear(); gturn_notices_clear(); gcomp_reset(); gscroll_reset(); return 1; }   # the window's scrollback IS the cards, and a standing notice with its prompt (0.53.2)
     var keep = gcmd_submit(line, &dispatch);  # 0.52.1: copy the line + clear the composer FIRST (the window repaints while it runs), then the capture bracket (gcmd.cyr)
     gscroll_reset();                          # a fresh card is the newest thing: jump the feed to it
-    git_probe();                              # the command may have changed the worktree (/run, /rewind) — the strip's git field
+    _gui_git_due = 1;                         # the command may have changed the worktree (/run, /rewind) — the strip's git field
     _gui_dirty = 1;
     return keep;
 }
@@ -292,6 +324,11 @@ fn gui_run() {
     # into the Wayland seam — on AGNOS with calls numbered for Linux (#41 is sleep_ms there) once XDG_RUNTIME_DIR was
     # set, and otherwise with the message below naming "aethersafha on AGNOS", a path that does not exist yet.
     if (gwl_win_backend_select() == GWL_BACKEND_NONE) { emit_err(gwl_win_backend_none_reason()); return 0 - 1; }
+    # 0.53.3 (G-5): a compositor that dies mid-turn must not end the process inside a write to its socket: the pump requests the
+    # close and the turn ends in order, session_end hook included. A command's own SIGPIPE is reset in its child.
+    signal_ignore(SIGPIPE);
+    exec_sigpipe_ignored(1);
+    gd_pool_on();
     if (gwl_win_open("thoth", 960, 600) == 0) {
         emit_err("thoth gui: no Wayland compositor available.\n");
         emit_err("  set WAYLAND_DISPLAY and run under a live Wayland compositor (Hyprland, sway / wlroots, ...).\n");
@@ -374,7 +411,7 @@ fn gui_run() {
                     if ((ev & GWL_WIN_EV_RESIZE) != 0) { gwl_win_resize_apply(win); _gui_dirty = 1; _gui_pending = 1; }
                     if ((ev & GWL_WIN_EV_KEY) != 0) { running = _gpresent_keys(win); }
                     if ((ev & GWL_WIN_EV_POINTER) != 0) {                 # 0.49.0 (F4): clicks + wheel steps
-                        if (_gui_dirty == 1) { _gpresent_drop_pointer(win); }   # the drawn frame is stale (a key / resize this batch) -> drop
+                        if (_gui_dirty == 1) { if (gpointer_pump(2) == 1) { _gui_pending = 1; } }   # the drawn frame is stale (a key / resize this batch) -> drop
                         elif (gpointer_pump(0) == 1) { _gui_dirty = 1; _gui_pending = 1; }
                     }
                 }
@@ -390,6 +427,7 @@ fn gui_run() {
             if ((running == 1) && (_gui_pending == 1) && (gwl_win_ready(win) == 1)) {
                 _gpresent_frame(win);
                 _gui_pending = 0;
+                if (_gui_git_due == 1) { _gui_git_due = 0; git_probe(); _gui_dirty = 1; _gui_pending = 1; }
             }
         }
     }

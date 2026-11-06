@@ -16,6 +16,7 @@ GET /v1/models (one model: stub-model) and GET /v1/health. The LAST user message
   refuse         no content, finish_reason "content_filter" (a provider's safety refusal, as hoosh 2.8.0 maps it)
   big: <n>       about n bytes of numbered 64-byte lines ending in a line "END-OF-REPLY", in small deltas
   bigchunked: <n> the same, sent with Transfer-Encoding: chunked (what a real gateway does)
+  bigthink: <n>  about n bytes of the same lines as reasoning_content, then content "answer after thinking"
   anything else  "hello from stub"
 Each request is logged to stdout: path, stream, message count, the chosen reply.
 """
@@ -56,6 +57,8 @@ def plan(msgs):
         return "cut", None, "partial answer about " + text.split("cut:", 1)[1].strip()
     if text.strip() == "refuse":
         return "refuse", None, ""
+    if "bigthink:" in text:
+        return "bigthink", bigtext(int(text.split("bigthink:", 1)[1].strip())), "answer after thinking"
     if "bigchunked:" in text:
         return "bigchunked", None, bigtext(int(text.split("bigchunked:", 1)[1].strip()))
     if "big:" in text:
@@ -153,7 +156,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if reasoning:
                     for k in range(0, len(reasoning), 12):
                         event({"reasoning_content": reasoning[k:k + 12]})
-                        time.sleep(0.02)
+                        if not kind.startswith("big"):
+                            time.sleep(0.02)
                 for k in range(0, len(arg), 16):
                     event({"content": arg[k:k + 16]})
                     if not kind.startswith("big"):

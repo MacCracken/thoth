@@ -52,6 +52,7 @@ var _sub_work = 0;               # the child's message list (its ENTIRE context)
 var _sub_acc = 0;                # the child's reply accumulator
 var _sub_acc_cap = 0;            # ...and its size (it grows like the parent's, 0.53.2)
 var _sub_reason = 0;             # the child's reasoning accumulator
+var _sub_reason_cap = 0;         # ...and its size (0.53.3)
 var _sub_tools = 0;              # the child's narrowed tool advertisement
 var _sub_arr = 0;                # the child's reconstructed tool_calls array
 var _sub_ids = 0;
@@ -170,7 +171,8 @@ fn _sub_alloc() {
     _sub_work = alloc(AGENT_WORK_CAP);
     _sub_acc = alloc(HOOSH_ACC_CAP);
     _sub_acc_cap = HOOSH_ACC_CAP;
-    _sub_reason = alloc(HOOSH_ACC_CAP);
+    _sub_reason = alloc(REASON_ACC_CAP);
+    _sub_reason_cap = REASON_ACC_CAP;
     _sub_tools = alloc(AGENT_TOOLS_CAP);
     _sub_arr = alloc(AGENT_ARR_CAP);
     _sub_ids = alloc(AGENT_MAX_CALLS * AG_ID_CAP);
@@ -210,7 +212,7 @@ fn _sub_alloc() {
 # struct would imply a stack that must never exist.
 var _sv_work = 0; var _sv_work_len = 0;
 var _sv_acc = 0; var _sv_acc_len = 0; var _sv_acc_cap = 0; var _sv_acc_cut = 0;
-var _sv_reason = 0; var _sv_reason_len = 0;
+var _sv_reason = 0; var _sv_reason_len = 0; var _sv_reason_cap = 0; var _sv_reason_cut = 0;
 var _sv_tools = 0; var _sv_tools_len = 0; var _sv_tools_ready = 0;
 var _sv_arr = 0;
 var _sv_ids = 0; var _sv_names = 0; var _sv_args = 0; var _sv_args_len = 0; var _sv_seen = 0; var _sv_max = 0;
@@ -247,7 +249,7 @@ var _sv_finish = 0;         # 0.52.8 (audit A5): how the provider ended the roun
 fn _sub_enter() {
     _sv_work = _agent_work;            _sv_work_len = _agent_work_len;
     _sv_acc = _hoosh_acc;              _sv_acc_len = _hoosh_acc_len;  _sv_acc_cap = _hoosh_acc_cap;  _sv_acc_cut = _hoosh_acc_cut;
-    _sv_reason = _reason_acc;          _sv_reason_len = _reason_acc_len;
+    _sv_reason = _reason_acc;          _sv_reason_len = _reason_acc_len;  _sv_reason_cap = _reason_acc_cap;  _sv_reason_cut = _reason_acc_cut;
     _sv_tools = _agent_tools_buf;      _sv_tools_len = _agent_tools_len;  _sv_tools_ready = _agent_tools_ready;
     _sv_arr = _agent_arr_buf;
     _sv_ids = _ag_ids; _sv_names = _ag_names; _sv_args = _ag_args;
@@ -271,7 +273,7 @@ fn _sub_enter() {
 
     _agent_work = _sub_work;           _agent_work_len = 0;  _agent_work_full = 0;
     _hoosh_acc = _sub_acc;             _hoosh_acc_len = 0;  _hoosh_acc_cap = _sub_acc_cap;  _hoosh_acc_cut = 0;
-    _reason_acc = _sub_reason;         _reason_acc_len = 0;
+    _reason_acc = _sub_reason;         _reason_acc_len = 0;  _reason_acc_cap = _sub_reason_cap;  _reason_acc_cut = 0;
     _agent_tools_buf = _sub_tools;     _agent_tools_len = 0;  _agent_tools_ready = 0;
     _agent_arr_buf = _sub_arr;
     _ag_ids = _sub_ids; _ag_names = _sub_names; _ag_args = _sub_args;
@@ -296,7 +298,8 @@ fn _sub_exit() {
     _agent_work = _sv_work;            _agent_work_len = _sv_work_len;
     _sub_acc = _hoosh_acc;             _sub_acc_cap = _hoosh_acc_cap;     # 0.53.2: a child's reply may have grown it
     _hoosh_acc = _sv_acc;              _hoosh_acc_len = _sv_acc_len;  _hoosh_acc_cap = _sv_acc_cap;  _hoosh_acc_cut = _sv_acc_cut;
-    _reason_acc = _sv_reason;          _reason_acc_len = _sv_reason_len;
+    _sub_reason = _reason_acc;         _sub_reason_cap = _reason_acc_cap;
+    _reason_acc = _sv_reason;          _reason_acc_len = _sv_reason_len;  _reason_acc_cap = _sv_reason_cap;  _reason_acc_cut = _sv_reason_cut;
     _agent_tools_buf = _sv_tools;      _agent_tools_len = _sv_tools_len;  _agent_tools_ready = _sv_tools_ready;
     _agent_arr_buf = _sv_arr;
     _ag_ids = _sv_ids; _ag_names = _sv_names; _ag_args = _sv_args;
@@ -368,8 +371,8 @@ fn _sub_iter(model, sys, mem, tools_len) {
     sandhi_headers_set(h, "Content-Type", "application/json");
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
-    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _sub_req, len, hoosh_http_opts());   # 0.44.2: per-read deadline
-    if (sandhi_http_err_kind(r) != SANDHI_OK) { _agent_round_kind = 2; return 0; }
+    var r = _hoosh_post_blocking(_hoosh_endpoint_url(), h, _sub_req, len);   # 0.44.2: per-read deadline; 0.53.3: the parent's room
+    if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_resp_mark(sandhi_http_err_kind(r)); _agent_round_kind = 2; return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
     var blen = sandhi_http_body_len(r);
@@ -391,7 +394,11 @@ fn _sub_iter_parse(body, blen) {
         if (content != 0) { _hoosh_acc_append(str_data(content), str_len(content)); }
         _agent_round_kind = 0;
     } else {
-        var raw = _agent_raw_tool_calls(body, blen);
+        # 0.53.3 (W-6): through the parent's normalising, whose comment says a child had none of it: 0.44.3's repair stopped
+        # at the parent's blocking path, and every child is on a blocking path.
+        var raw = _agent_normalize_block(tcs, nc);
+        if (raw != 0) { _agent_set_tools_rebuilt(raw, tcs, nc); return 0; }
+        raw = _agent_raw_tool_calls(body, blen);
         if (raw == 0) { raw = "[]"; }
         _agent_set_tools(raw, tcs, nc);
     }

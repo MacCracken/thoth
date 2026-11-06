@@ -348,7 +348,10 @@ model = "claude-haiku-5-5"
 # the TAIL — a compiler names its error at the end.
 #
 # ⚠ The command is YOURS, never the model's; it cannot propose or alter it. But it
-# IS command execution, unsandboxed, same footing as /run. Esc stops a running check (0.52.0): the result
+# IS command execution, unsandboxed, same footing as /run, and it runs what the
+# model just wrote: `make test` runs the Makefile the model can edit. So since
+# 0.53.3 each run is authorized under the reserved name `thoth_verify`: a policy
+# allows it or the confirm asks, and one-shot with neither does not run it. Esc stops a running check (0.52.0): the result
 # says INTERRUPTED and the change stays UNVERIFIED; /state reads "last interrupted", not FAILED.
 # [verify]
 # command = "cyrius test"       # double-quoted; see the [hooks] quoting note below
@@ -467,8 +470,9 @@ model = "claude-haiku-5-5"
 #
 # The built-ins authorize under reserved names: thoth_run (/run), thoth_write
 # (/write), thoth_shell (the model's shell), thoth_edit (edit + create_file),
-# thoth_delegate (delegate), thoth_remember (/remember + memory_write); MCP
-# tools authorize under their real tool name.
+# thoth_delegate (delegate), thoth_remember (/remember + memory_write),
+# thoth_verify ([verify].command, 0.53.3); MCP tools authorize under their real
+# tool name.
 
 # The [ask] table (0.44.0) enables `ask_user` — the one tool that runs toward YOU. When on, the model
 # may stop mid-turn and ask a question, with suggested answers it supplies and a free-text field you can
@@ -494,7 +498,11 @@ model = "claude-haiku-5-5"
 # the literals `.thoth` and `thoth.cyml`, so `.thoth_session` (the whole conversation store, in
 # plaintext) and `tron-policy.toml` (the allow/deny list constraining the model) were both fair game.
 # If you rename one of these files, the refusal follows the name automatically.
-# policy = "tron-policy.toml"
+#
+# ⚠ 0.53.3: a relative `policy` or `[toolpin].file` is taken from ~/.thoth/, the directory of the file naming it. It
+# resolved against the working directory, so the line below named a file in whichever repository you opened, and that
+# repository chose the policy that authorizes the model.
+# policy = "tron-policy.toml"             # that is, ~/.thoth/tron-policy.toml
 # agent = "thoth"
 
 # The [log] table wires structured driver-event logging via the vendored sakshi
@@ -573,9 +581,8 @@ model = "claude-haiku-5-5"
 #
 # SECURITY — this writes the whole conversation in PLAINTEXT — the model's chain-of-thought
 # included, which can restate more of your prompt than the reply did — so it is MORE sensitive
-# than the input history. A FRESH file is created mode 0600 (owner-only) on POSIX (best-effort, same
-# residuals as [history].file: a PRE-EXISTING looser file is NOT re-tightened, AGNOS's
-# frozen-ABI open drops the create mode). Keep it in
+# than the input history. It is written mode 0600 (owner-only) on POSIX, through a temp file and a
+# rename (AGNOS's frozen-ABI open drops the create mode). Keep it in
 # a directory only YOU can write; an unwritable path is announced and the session stays
 # in-memory (degrade-closed). /reset clears it; delete the file to wipe the saved conversation.
 #
@@ -583,6 +590,9 @@ model = "claude-haiku-5-5"
 #          VERBATIM (no `~` expansion) — a relative path (from where thoth is launched) or a
 #          full absolute path.
 
+# ⚠ 0.53.3: a store must be 0600 and yours, or thoth refuses it and names why. A relative path is per-project, so it names a
+# file in whichever repository you opened, and a repository that shipped one had it resumed as your own turns. git checks
+# files out 0644 or 0755, so a clone cannot carry one. `chmod 600` a store that really is yours.
 # [session]
 # file = ".thoth_session"             # project-local; or an absolute "/home/you/.thoth_session"
 

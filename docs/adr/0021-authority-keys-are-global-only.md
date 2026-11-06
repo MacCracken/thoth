@@ -135,3 +135,28 @@ component of a granted root's own spelling, so a local root that was itself a li
 root, or ran through one, reached outside it. The walk now trusts only the operator's own prefix: the
 global root a local root sits under, or an `/allow` grant. A local root reached through a link is
 refused when it is granted, and named.
+
+## Addendum (0.53.3)
+
+Global-only was not enough. **A relative value in the global file resolves against the working directory**, so
+`policy = "tron-policy.toml"`, the template's own line, named a file in whichever repository the operator opened, and the
+repository chose the policy that authorizes the model. A relative `[tron].policy` or `[toolpin].file` now resolves under
+`~/.thoth/`, the directory of the file naming it. With no `HOME` it stays unset, which reads as absent: a confirm, never an allow.
+
+`[log].file`, `[history].file` and `[session].file` stay relative when written that way, because a per-project store is what that
+spelling is for. Links are refused on all three. **A session store must also be 0600 and the operator's** (`file_is_private`), or it
+is refused and named: this attack was named above, a repository shipping a store whose contents resume as the operator's own
+turns, and git checks files out 0644 or 0755. An archive that keeps modes can still carry one.
+
+Three more keys join the rule, under R1's safe direction: `[hoosh].max_iters`, `[subagent].max_iters` and `[shell].max_output` may
+only be lowered by a local layer, since each round is a model call and a large enough `max_output` switched the guard off.
+`[hooks].timeout_ms` is global-only, because a 1 ms value made a `pre_tool` hook deny every call.
+
+The token rule gains a case: a local `url` equal to the global's counts as no url of its own, so a local token beside it is ignored
+and named. It was D2 by another key.
+
+And the layer itself: the walk climbs 40 levels with no owner check, so `/tmp/.thoth/config.cyml` from another local user became a
+local layer for anyone working under `/tmp`. A config another user owns is skipped and named, as git's `safe.directory` does. Root's files
+stay. An operator working in a checkout another uid owns sees its config ignored, and is told.
+
+An unreadable global config now counts as a refused parse, so thoth starts unconfigured rather than running on the local layer alone.

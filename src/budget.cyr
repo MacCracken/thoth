@@ -70,14 +70,14 @@ fn budget_active() {
 # — say WHICH bound, the number, what has been spent, and the key that moves it — because a bare
 # "budget exceeded" is the same dead end the 0.38.5 iteration cap was.
 fn budget_report(st) {
+    # 0.53.3 (W-8): on the channel every surface reads: a one-shot stopped here said only `no completion returned`.
     if (st == BUDGET_TOKENS) {
-        ui_emit(ROLE_RED, "  session token budget reached");
-        ui_emit(ROLE_FAINT, " ("); ofmt_int(session_tokens());
-        ui_emit(ROLE_FAINT, " of "); ofmt_int(config_budget_tokens());
-        ui_emit(ROLE_FAINT, ") — the turn was stopped before spending more");
-        oprintln("");
-        ui_emit(ROLE_FAINT, "  raise or remove it with [budget].max_tokens; /reload picks it up mid-session");
-        oprintln("");
+        note_emit_role(ROLE_RED, "  session token budget reached");
+        note_emit(" ("); note_emit_int(session_tokens());
+        note_emit(" of "); note_emit_int(config_budget_tokens());
+        note_println(") — the turn was stopped before spending more");
+        note_println("  raise or remove it with [budget].max_tokens; /reload picks it up mid-session");
+        agent_stop_why_set("the session token budget was reached - raise or remove it with [budget].max_tokens");
         return 0;
     }
     if (st == BUDGET_COST) {
@@ -85,13 +85,12 @@ fn budget_report(st) {
         var sb[32];
         cost_fmt(&cb, session_cost_micro());
         cost_fmt(&sb, config_budget_cost_micro());
-        ui_emit(ROLE_RED, "  session cost budget reached");
-        ui_emit(ROLE_FAINT, " ("); emit(&cb);
-        ui_emit(ROLE_FAINT, " of "); emit(&sb);
-        ui_emit(ROLE_FAINT, ") — the turn was stopped before spending more");
-        oprintln("");
-        ui_emit(ROLE_FAINT, "  raise or remove it with [budget].max_cost_micro; /reload picks it up mid-session");
-        oprintln("");
+        note_emit_role(ROLE_RED, "  session cost budget reached");
+        note_emit(" ("); note_emit(&cb);
+        note_emit(" of "); note_emit(&sb);
+        note_println(") — the turn was stopped before spending more");
+        note_println("  raise or remove it with [budget].max_cost_micro; /reload picks it up mid-session");
+        agent_stop_why_set("the session cost budget was reached - raise or remove it with [budget].max_cost_micro");
         return 0;
     }
     return 0;

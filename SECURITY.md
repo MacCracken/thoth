@@ -46,7 +46,8 @@ issue for an unfixed flaw.
 
 Fixes are tracked per the AGNOS first-party process; findings are recorded
 under [`docs/audit/`](docs/audit/) — see
-[`2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md) for the standing pass.
+[`2026-11-05-audit.md`](docs/audit/2026-11-05-audit.md) for the latest pass and
+[`2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md) for the first.
 
 ## Scope notes
 

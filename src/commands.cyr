@@ -282,7 +282,7 @@ fn cmd_help() {
 # (dispatch is shared); the probe emits nothing, so it is safe under the TUI's OUT_RING.
 fn cmd_reprobe() {
     mcpres_endpoints_reset();   # 0.43.0 (T2-7): clear the resources/prompts latch too — _mcpres_unavailable
-                                # tells the user to "/reprobe after upgrading", and that advice was inert.
+    # tells the user to "/reprobe after upgrading", and that advice was inert.
     if (config_hoosh_configured() == 0) {
         ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in .thoth/config.cyml"); oprintln("");
         return 0;
@@ -314,16 +314,22 @@ fn cmd_history() {
 # (confirm — the fail-closed interactive prompt — lives in src/gate.cyr now,
 # alongside the t-ron seam binding it stands in for.)
 
-# _params_one: build {"<key>":"<escaped val>"} in a reused static buffer — the t-ron ToolCall params for the
-# built-in actions. FULLY BOUNDED (0.34.4): most callers pass an input-line-/path-bounded val (<= ~4 KiB, ~6x
-# escaping fits), but /bookmark feeds a whole assistant reply (up to HOOSH_ACC_CAP = 64 KiB) — so the value escape
-# uses the CAP-bounded escaper (reserving 3 bytes so the closing `"}` + NUL always fit). It truncates in-buffer
-# instead of overrunning `_gate_params` (the escaper is best-effort informational for the gate's policy/audit).
+# _params_one: build {"<key>":"<escaped val>"} in a reused buffer — the t-ron ToolCall params for the built-in actions.
+# ⚠ 0.53.3: sized from the value, worst-case escape included, never cut. It was 32 KiB, and the escape stopped silently at
+# the cap: a command padded with control bytes (one byte in the arguments, six escaped) fitted AGENT_ARGS_MAX, t-ron scanned
+# its harmless head and passed it, and the whole command ran. What t-ron reads is now all of what will run, and t-ron's own
+# size guard decides the rest. A refused allocation answers an object no check will pass for the action: t-ron denies on it.
 var _gate_params = 0;
-var GATE_PARAMS_CAP = 32768;
+var GATE_PARAMS_CAP = 0;
 
 fn _params_one(key, val) {
-    if (_gate_params == 0) { _gate_params = alloc(GATE_PARAMS_CAP); }
+    var need = strlen(key) + strlen(val) * 6 + 16;
+    if (need > GATE_PARAMS_CAP) {
+        var b = alloc(need);
+        if (b == 0) { return "{\"refused\":\"out of memory\"}"; }
+        _gate_params = b;
+        GATE_PARAMS_CAP = need;
+    }
     var cap = GATE_PARAMS_CAP;
     var off = 0;
     off = _append_cstr_cap(_gate_params, off, cap, "{\"");
@@ -439,7 +445,7 @@ fn cmd_state() {
     git_probe();          # 0.28.0: refresh the git cache BEFORE the snapshot so the git row is current (moved up from the git row)
     status_snapshot();    # 0.28.0: read the status producers ONCE into the shared view-model (Stage B, src/surface.cyr)
     mcpres_probe();       # 0.43.0 (T2-7): one-time resources/prompts capability probe. A USER path, never
-                          # seam_status — which must stay network-free so /dry and the status bar are cheap.
+    # seam_status — which must stay network-free so /dry and the status bar are cheap.
     ui_emit(ROLE_ACCENT, "session:"); oprintln("");
     # 0.43.2: name the config file that is ACTUALLY live. Every hint in this command says
     # ".thoth/config.cyml", which is right for the preferred path and a lie on the legacy one — a
@@ -1051,15 +1057,17 @@ fn _save_parse_fmt(arg) {
 }
 
 # _save_json_text: p[0..n) as the inside of a JSON string, escaped and flushed a chunk at a time (0.53.2): a reply can be
-# megabytes, and SAVE_JBUF holds one chunk escaped at its worst, six bytes for one. Escaping works byte by byte, so a
-# chunk may end inside a character. 1 on a full write.
+# megabytes, and SAVE_JBUF holds one chunk escaped at its worst, six bytes for one. 1 on a full write.
 var SAVE_JCHUNK = 65536;
 fn _save_json_text(fd, p, n) {
     var ok = 1;
     var i = 0;
     while (i < n) {
         var take = n - i;
-        if (take > SAVE_JCHUNK) { take = SAVE_JCHUNK; }
+        if (take > SAVE_JCHUNK) {
+            take = _acc_fit(p + i, SAVE_JCHUNK);          # a chunk ends between characters: the escaper judges each one whole
+            if (take == 0) { take = SAVE_JCHUNK; }
+        }
         var off = _json_escape_n_into_cap(_save_jbuf, 0, SAVE_JBUF, p + i, take);
         if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
         i = i + take;
@@ -1094,13 +1102,14 @@ fn _save_json(fd) {
             off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
         }
         if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
-        # 0.48.0: the reply's reasoning, when it streamed any (omit-until-present) — flushed as its OWN chunk: reasoning
-        # is up to 64 KiB and escapes to six times that
+        # 0.48.0: the reply's reasoning, when it streamed any (omit-until-present); 0.53.3: chunked like the content, since it
+        # can pass what one build holds too
         var rsn = session_history_reason(i);
         if (rsn != 0) {
             off = _append_cstr_cap(_save_jbuf, 0, cap, ",\"reasoning\":\"");
-            off = _json_escape_into_cap(_save_jbuf, off, cap, rsn);
-            off = _append_cstr_cap(_save_jbuf, off, cap, "\"");
+            if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
+            if (_save_json_text(fd, rsn, session_history_reason_len(i)) == 0) { ok = 0; }
+            off = _append_cstr_cap(_save_jbuf, 0, cap, "\"");
             if (file_write(fd, _save_jbuf, off) != off) { ok = 0; }
         }
         if (_save_write_str(fd, "}") == 0) { ok = 0; }
@@ -1522,7 +1531,8 @@ fn cmd_read(line) {
     if (path == 0) { oprintln("usage: /read <file>"); return 0; }
     # 0.45.0: the path — typed, or a repo-local [alias] expansion — is named through the LABEL sanitiser on all three
     # lines; a filename can hold a control byte, so the file is still opened with the raw bytes.
-    if (file_exists(path) == 0) { _read_note("no such file: ", path); return 0; }
+    if (file_exists_noblock(path) == 0) { _read_note("no such file: ", path); return 0; }
+    if (file_is_regular(path) == 0) { _read_note("not a regular file: ", path); return 0; }   # 0.53.3: Enter on a FIFO in the tree hung the session
     if (_read_buf == 0) { _read_buf = alloc(READ_BUF_CAP); }
     var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
     if (n < 0) { _read_note("read failed: ", path); return 0; }
@@ -1605,6 +1615,12 @@ fn cmd_write(line) {
     # below and in the diff card's header (diff_render); a filename can hold a control byte, so the gate's params and
     # the write itself keep the raw bytes. This proposal line is printed BEFORE the gate prompt.
     ui_emit(ROLE_FAINT, "propose write -> "); ui_emit_clean(ROLE_BLUE, _write_path); oprintln("");
+    # 0.53.3: the prompt shows the name, and a checked-in `notes.txt -> ../outside/bashrc` wrote through it. A relative path
+    # through a link is refused; name the real file to write it. An absolute path is unambiguous.
+    if ((load8(_write_path) != 47) && (_project_no_symlink(_write_path) == 0)) {
+        ui_emit(ROLE_RED, "  refused: a part of that path is a symlink. nothing written."); oprintln("");
+        return 0;
+    }
     var wparams = _params_one("path", _write_path);
     if (gate_authorize("thoth_write", wparams, "write to", _write_path) == 0) {
         ui_emit(ROLE_RED, "  denied. nothing written."); oprintln("");
@@ -1655,7 +1671,7 @@ fn cmd_remember(line) {
     var text = arg_after(line);
     if (text == 0) { oprintln("usage: /remember <fact>"); return 0; }
     var rparams = _params_one("text", text);
-    if (gate_authorize("thoth_remember", rparams, "remember to", memory_index_path()) == 0) {
+    if (gate_authorize("thoth_remember", rparams, "remember to", memory_write_target()) == 0) {
         ui_emit(ROLE_RED, "  denied. nothing remembered."); oprintln("");
         return 0;
     }
@@ -1693,7 +1709,7 @@ fn cmd_bookmark() {
     var reply = session_last_assistant_content();
     if (reply == 0) { oprintln("nothing to bookmark - no reply in this conversation yet."); return 0; }
     var bp = _params_one("text", reply);
-    if (gate_authorize("thoth_remember", bp, "bookmark to", memory_index_path()) == 0) {
+    if (gate_authorize("thoth_remember", bp, "bookmark to", memory_write_target()) == 0) {
         ui_emit(ROLE_RED, "  denied. nothing bookmarked."); oprintln(""); return 0;
     }
     var rc = memory_append(reply);
@@ -1871,6 +1887,7 @@ fn _search_emit_range(content, a, b, role) {
     while ((i < b) && (o < (SEARCH_BUF - 1))) {
         var c = load8(content + i);
         if (c < 32) { c = 32; }
+        if (_c1_at(content, i, b) == 1) { c = 63; }       # 0.53.3 (S-7)
         store8(_search_buf + o, c); o = o + 1;
         i = i + 1;
     }
@@ -1967,18 +1984,18 @@ fn cmd_run(line) {
     # it is searchable with Ctrl-F. The line/one-shot path keeps streaming live, byte-identical.
     if ((out_mode() == OUT_RING) && (shell_supported() == 1)) { return _cmd_run_captured(cmdline); }
     var rc = run_shell(cmdline);
-    if (rc == (0 - 1)) { oprintln("  (failed to spawn /bin/sh)"); return 0; }
+    if (rc == (0 - 1)) { oprintln("  (no exit status: it could not start, or a signal ended it)"); return 0; }   # 0.53.3 (P-11): the floor answers -1 for both
     emit("  exit "); ofmt_int(rc); oprintln("");
     return 0;
 }
 
 # _cmd_run_captured: the TUI arm of /run — same command, same gate (already passed), output routed through
-# the feed instead of the raw frame. Reuses the model shell tool's capture backend (a temp-file redirect
-# with a wall-clock timeout), so a runaway `/run` is bounded here exactly as it is for the model.
+# the feed instead of the raw frame. Reuses the model shell tool's capture backend (a drained pipe with
+# a wall-clock timeout), so a runaway `/run` is bounded here exactly as it is for the model.
 var RUN_CAP_BUF = 65536;
 var _run_cap_buf = 0;
 fn _cmd_run_captured(cmdline) {
-    if (_run_cap_buf == 0) { _run_cap_buf = alloc(RUN_CAP_BUF); }
+    if (_run_cap_buf == 0) { _run_cap_buf = alloc(RUN_CAP_BUF + 1); }   # 0.53.3: + the NUL below, which wrote into the next allocation at 64 KiB
     if (_run_cap_buf == 0) { oprintln("  (out of memory)"); return 0; }
     var status[16];
     # 0.52.0 (F7): Esc stops a /run. The TUI runs a command in COOKED mode (a lone Esc is not readable there), so the
@@ -1990,14 +2007,18 @@ fn _cmd_run_captured(cmdline) {
     intr_disarm();
     var code = load64(&status);
     var timed = load64(&status + 8);
-    if (code == (0 - 1)) { oprintln("  (could not run the command — creating the capture file, forking or waiting failed)"); return 0; }
+    if (code == (0 - 1)) { oprintln("  (could not run the command — setting up the capture, forking or waiting failed)"); return 0; }
     if (code == (0 - 3)) { oprintln("  (a capturing shell is not available on this target)"); return 0; }
     if (n > 0) {
         store8(_run_cap_buf + n, 0);
-        emit_n(_run_cap_buf, n);
+        # 0.53.3: through the text policy, like the shell tool's card and /read. emit_n put a file's OSC 52, screen clear and
+        # title change on the terminal, once for every repaint of the feed.
+        emit_clean_text_n(_run_cap_buf, n);
         if (load8(_run_cap_buf + n - 1) != 10) { oprintln(""); }   # the ring is line-oriented; never glue the exit line on
     }
-    if (n >= (RUN_CAP_BUF - 1)) { ui_emit(ROLE_FAINT, "  (output truncated at "); ofmt_int(RUN_CAP_BUF - 1); ui_emit(ROLE_FAINT, " bytes)"); oprintln(""); }
+    if (exec_capture_total() > n) {
+        ui_emit(ROLE_FAINT, "  (output truncated: the first "); ofmt_int(n); ui_emit(ROLE_FAINT, " of "); ofmt_int(exec_capture_total()); ui_emit(ROLE_FAINT, " bytes)"); oprintln("");
+    }
     if (timed == 1) { ui_emit(ROLE_RED, "  timed out"); ui_emit(ROLE_FAINT, " — killed after "); ofmt_int(config_shell_timeout_ms()); ui_emit(ROLE_FAINT, "ms"); oprintln(""); return 0; }
     if (code == (0 - 4)) { ui_emit(ROLE_MUTED, "  interrupted"); ui_emit(ROLE_FAINT, " — stopped by the operator (the process group was killed)"); oprintln(""); return 0; }   # 0.52.0 (F7)
     emit("  exit "); ofmt_int(code); oprintln("");
@@ -2122,7 +2143,7 @@ fn cmd_call(line) {
         emit("  refused: "); emit(toolpin_withheld_text(_call_name)); oprintln(". no request sent.");
         return 0;
     }
-    if (gate_authorize(_call_name, gp, "call tool", _call_name) == 0) {
+    if (gate_authorize(_call_name, gp, "call tool", gate_call_obj(_call_name, gp)) == 0) {
         oprintln("  denied. no request sent.");
         return 0;
     }
@@ -2330,7 +2351,7 @@ fn cmd_reset() {
     editlog_reset();           # 0.31.1: drop the recorded edit diffs too
     memlog_reset();            # 0.32.5: drop the per-turn memory records too
     grants_clear();            # 0.40.0 (T1-6): the answers the user gave THIS session go with it — a
-                               # grant outliving the conversation it was given in would be a surprise
+    # grant outliving the conversation it was given in would be a surprise
     hoosh_compact_floor_clear();  # 0.40.0 (T1-5): an index into a history that no longer exists
     ckpt_reset();              # 0.40.0 (T1-4): the writes belong to the conversation being cleared
     subagent_reset();          # 0.43.0 (T2-1): the delegations belonged to the conversation being cleared
@@ -2633,10 +2654,11 @@ fn cmd_prompts() {
 # that is SENT ON as well as shown: such a value is refused, where a label would only be cleaned.
 fn _line_arg_has_ctl(s) {
     if (s == 0) { return 0; }
+    var n = strlen(s);
     var i = 0;
     while (load8(s + i) != 0) {
         var b = load8(s + i) & 255;
-        if (_clean_byte(b, 0) != b) { return 1; }
+        if (_clean_at(s, i, n, 0) != b) { return 1; }     # 0.53.3 (S-7): the C1 half too
         i = i + 1;
     }
     return 0;
@@ -3164,7 +3186,7 @@ fn cmd_dry(line) {
         ui_emit(ROLE_FAINT, "           (body exceeds the feed slot — best viewed in the line REPL or piped)"); oprintln("");
     }
     ui_emit(ROLE_FAINT, "   ── request body ──"); oprintln("");
-    emit_n(buf, len); oprintln("");
+    emit_clean_text_n(buf, len); oprintln("");            # 0.53.3 (S-7): the body quotes files and history
     return 0;
 }
 
@@ -3203,6 +3225,17 @@ fn classify_final(line) {
 # and `/audit export` — each truncates whatever path it names (symlinks followed; `/save` writes model-authored
 # transcript text), so a clone's `[alias] test = "/save ../x"` replaced a file outside the project when the operator
 # typed `/test`. `/write` and `/run` are not listed: both meet the gate, which shows the path or command.
+# _cmd_has_mention: 1 when `s` holds an `@` that starts a token, the shape mention_expand reads.
+fn _cmd_has_mention(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (load8(s + i) == 64) {
+            if ((i == 0) || (load8(s + i - 1) == 32)) { return 1; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
 fn _alias_target_is_authority(ex) {
     if (ex == 0) { return 0; }
     var c = classify_input(ex);
@@ -3290,7 +3323,18 @@ fn _dispatch_d(line, depth) {
                 oprintln("' expands to an authority command (/tools trust, /allow, /save, /audit export) — it must be typed, not aliased. nothing was run.");
                 return 1;
             }
-            return _dispatch_d(ex, depth + 1);
+            # 0.53.3: a repository's alias reaches no `@file` reader. `@` is unjailed because the operator typed the path; the
+            # same words from a clone's config sent ~/.ssh and the global config's token to the gateway on `/test`. The
+            # operator's own aliases, from the global layer, keep it. Named, so a mention left literal is not a mystery.
+            var ml = config_alias_is_local(&_alias_name);
+            if ((ml == 1) && (_cmd_has_mention(ex) == 1)) {
+                ui_emit(ROLE_FAINT, "  (this repository's alias names @files: they stay as text, not read)"); oprintln("");
+            }
+            var mv = _mention_off;
+            if (ml == 1) { _mention_off = 1; }
+            var dr = _dispatch_d(ex, depth + 1);
+            _mention_off = mv;
+            return dr;
         }
         # 0.43.0 (T2-7): a server-published MCP PROMPT is usable as a slash command.
         #

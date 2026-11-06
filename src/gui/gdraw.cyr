@@ -43,8 +43,31 @@ fn gd_color(c) { return load64(c + GDC_COLOR); }
 fn gd_text(c)  { return load64(c + GDC_TEXT); }
 fn gd_aux(c)   { return load64(c + GDC_AUX); }
 
+# --- the frame's memory (0.53.3, G-7, M-7) ------------------------------------------------------------------------
+# Every rebuild took its cells and its list from the heap that never frees: 62 KB a keystroke on the greeting, and 10
+# rebuilds a second while a command waited, 228 MB an hour for a frame that was not changing. A window frame now draws from
+# chunks of cells it rewinds, with one list; gd_pool_on is the window's, and a list is good until the next rebuild (a
+# frame replaces the last whole). Off (the suite's own lists), a cell is an alloc, as before.
+var GD_CHUNK = 512;
+var _gd_pool_on = 0;
+var _gd_pool_used = 0;
+var _gd_chunks = 0;
+var _gd_vec = 0;
+fn gd_pool_on() { _gd_pool_on = 1; if (_gd_chunks == 0) { _gd_chunks = vec_new(); } return 0; }
+fn gd_frame_rewind() { _gd_pool_used = 0; return 0; }
+fn _gd_cell() {
+    if (_gd_pool_on == 0) { return alloc(GD_CELL); }
+    var idx = _gd_pool_used / GD_CHUNK;
+    if (idx >= vec_len(_gd_chunks)) { vec_push(_gd_chunks, alloc(GD_CELL * GD_CHUNK)); }
+    var c = vec_get(_gd_chunks, idx) + (_gd_pool_used % GD_CHUNK) * GD_CELL;
+    _gd_pool_used = _gd_pool_used + 1;
+    return c;
+}
+# gd_num_buf: scratch for a number drawn this frame: a text command keeps the pointer until the raster has read it. A cell is
+# 64 bytes.
+fn gd_num_buf() { return _gd_cell(); }
 fn _gd_new(kind, x, y, w, h, color, text, aux) {
-    var c = alloc(GD_CELL);
+    var c = _gd_cell();
     store64(c + GDC_KIND, kind); store64(c + GDC_X, x); store64(c + GDC_Y, y);
     store64(c + GDC_W, w); store64(c + GDC_H, h); store64(c + GDC_COLOR, color);
     store64(c + GDC_TEXT, text); store64(c + GDC_AUX, aux);
@@ -73,7 +96,12 @@ fn gd_below(y) {
 }
 
 # --- command-list builders (push onto a stdlib vec) ---
-fn gd_list_new() { return vec_new(); }
+fn gd_list_new() {
+    if (_gd_pool_on == 0) { return vec_new(); }
+    if (_gd_vec == 0) { _gd_vec = vec_new(); }
+    vec_truncate(_gd_vec, 0);
+    return _gd_vec;
+}
 fn gd_push_rect(cmds, x, y, w, h, color)   { if (gd_culled(y, h) == 1) { return 0; } vec_push(cmds, _gd_new(GD_RECT, x, y, w, h, color, 0, 0)); return 0; }
 fn gd_push_border(cmds, x, y, w, h, color) { if (gd_culled(y, h) == 1) { return 0; } vec_push(cmds, _gd_new(GD_BORDER, x, y, w, h, color, 0, 0)); return 0; }
 fn gd_push_text(cmds, x, y, color, text, max_cp) { if (gd_culled(y, GD_CULL_TEXT_H) == 1) { return 0; } vec_push(cmds, _gd_new(GD_TEXT, x, y, 0, 0, color, text, max_cp)); return 0; }

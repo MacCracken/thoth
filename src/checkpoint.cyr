@@ -69,6 +69,8 @@ fn _ckpt_bufs() {
 # _ckpt_dir_ensure: make `.thoth/checkpoints/` if it is not there. 1 on success.
 fn _ckpt_dir_ensure() {
     if (_ckpt_ready == 1) { return 1; }
+    # 0.53.3: a checked-in `.thoth/checkpoints -> ../../elsewhere` took the snapshots (repository bytes) out of the project.
+    if (_project_no_symlink(".thoth/checkpoints") == 0) { return 0; }
     xmkdir(".thoth", 448);                      # 0700 — thoth's own state; may already exist, ignore the result
     if (xmkdir(".thoth/checkpoints", 448) != 0) {
         if (is_dir(str_from(".thoth/checkpoints")) == 0) { return 0; }
@@ -93,6 +95,7 @@ fn _ckpt_snap_path(seq) {
     return _ckpt_pathbuf;
 }
 
+var _ckpt_is_new = 0;
 # ckpt_capture: snapshot `path` BEFORE it is written. Returns 1 when the caller may proceed with the
 # write, 0 when it must REFUSE.
 #
@@ -101,13 +104,21 @@ fn _ckpt_snap_path(seq) {
 # while `/rewind` sits in the help text implying they can. Fail closed, and let the caller say why.
 # The one case that is NOT a failure is a file that does not exist yet (create_file): there is nothing to
 # snapshot, and the undo is a delete, recorded as snapshot -1.
+# ckpt_capture_new: the same for a file the caller has just created exclusively, so there is nothing to keep and the undo
+# is a delete, whatever is at the path now.
+fn ckpt_capture_new(path, turn) {
+    _ckpt_is_new = 1;
+    var r = ckpt_capture(path, turn);
+    _ckpt_is_new = 0;
+    return r;
+}
 fn ckpt_capture(path, turn) {
     if (path == 0) { return 0; }
     if (_ckpt_bufs() == 0) { return 0; }
     if (strlen(path) >= CKPT_PATH_CAP) { return 0; }
     if (_ckpt_dir_ensure() == 0) { return 0; }
     var seq = 0 - 1;
-    if (file_exists(path) == 1) {
+    if ((_ckpt_is_new == 0) && (file_exists(path) == 1)) {
         var n = file_read_all(path, _ckpt_buf, CKPT_FILE_CAP);
         if (n < 0) { return 0; }
         if (n >= CKPT_FILE_CAP) { return 0; }        # too large to snapshot -> refuse the write, do not risk it
@@ -147,6 +158,10 @@ fn ckpt_restore_one(i) {
     if (_ckpt_bufs() == 0) { return 0; }
     var path = _ckpt_paths + i * CKPT_PATH_CAP;
     var seq = load64(_ckpt_snap + i * 8);
+    # 0.53.3: the path was jailed when it was written, not now: a directory swapped for a link since then had /rewind empty
+    # files outside the project.
+    if (_project_jail_ok(path) == 0) { return 0; }
+    if (_project_no_symlink(path) == 0) { return 0; }
     if (seq < 0) {
         xunlink(path);                                # it did not exist before; undo = remove it
         return 1;

@@ -58,7 +58,7 @@ fn exec_wait_poll_set(fp) { _exec_wait_poll = fp; return 0; }
 
 # The other half of the same seam: a hook fired after a child that SHARED thoth's terminal has exited, so
 # the front end can re-assert the terminal modes that child may have cleared (main.cyr binds
-# tui_modes_reassert). Only run_shell needs it — every other child in this tree redirects to a file.
+# tui_modes_reassert). Only run_shell needs it — every other child in this tree has its output captured, away from the terminal.
 var _exec_child_done = 0;
 fn exec_child_done_set(fp) { _exec_child_done = fp; return 0; }
 fn exec_child_done() { if (_exec_child_done != 0) { fncall0(_exec_child_done); } return 0; }
@@ -70,10 +70,10 @@ fn exec_child_done() { if (_exec_child_done != 0) { fncall0(_exec_child_done); }
 # feed to the model, plus a wall-clock TIMEOUT so a runaway command can't hang the loop. There
 # is no such primitive in the linked stdlib (lib/process.cyr's exec_capture has no timeout, and
 # lib/regression.cyr's timed helpers are NOT in thoth's [deps].stdlib so they can't be called).
-# So this COPIES regression.cyr's two proven patterns into thoth's own substrate module: a
-# child-stdout/err -> TEMP-FILE redirect (avoids the pipe-fill deadlock a blocking read would
-# hit, and PRESERVES partial output when the child is SIGKILLed) combined with a WNOHANG-poll-
-# with-deadline + SIGKILL reap. This is raw substrate (shell exec owned by no AGNOS domain), so
+# So this builds its own, from regression.cyr's WNOHANG-poll-with-deadline + SIGKILL reap. 0.53.3: stdout+stderr
+# come back down a PIPE that thoth drains as it polls, past the cap so the child never blocks on a full pipe. It was
+# a temp file by name, which a FIFO at that name hung past the deadline, and which grew on disk without limit behind
+# the cap. Partial output survives a kill, as it did. This is raw substrate (shell exec owned by no AGNOS domain), so
 # it lives here, not in lib/ (which is vendored) — "port the floor, never fork the spine".
 #
 # POSIX-only (fork/dup2/execve/waitpid-WNOHANG/kill + a per-arity sys_open/sys_unlink). AGNOS has
@@ -81,10 +81,10 @@ fn exec_child_done() { if (_exec_child_done != 0) { fncall0(_exec_child_done); }
 # fork/exec — so the whole body is compiled out on those targets (exactly as lib/process.cyr
 # guards its POSIX block) and shell_supported() reports 0 there so the tool is never advertised.
 
-var _shell_tmp_ctr = 0;    # per-process monotonic counter — pid alone collides in a long-lived TUI
-var _shell_tmp_buf = 0;    # lazily-allocated scratch for the temp path
+var _shell_tmp_buf = 0;    # Windows-only: lazily-allocated scratch for the temp path
+var _shell_tmp_ctr = 0;    # Windows-only: per-process monotonic counter — pid alone collides in a long-lived TUI
 var _shell_wbuf = 0;       # Windows-only: lazily-allocated 16 KiB UTF-16LE cmdline scratch, reused per call
-                           # (a fresh alloc() per call would leak — alloc is a no-free bump heap; POSIX uses none)
+# (a fresh alloc() per call would leak — alloc is a no-free bump heap; POSIX uses none)
 
 # _exec_append_cstr: raw-copy NUL-terminated s into dst at off; return new off. Pure.
 fn _exec_append_cstr(dst, off, s) {
@@ -93,41 +93,31 @@ fn _exec_append_cstr(dst, off, s) {
     return off;
 }
 
-# _shell_tmp_path: build a fresh /tmp/thoth_sh_<pid>_<counter>_<16 hex> path (NUL-terminated) into the shared scratch
-# and bump the counter. The create below is O_CREAT|O_EXCL, which refuses a pre-planted file or symlink outright (it
-# does not follow a link at the final component), so a planted name can make a create FAIL but never redirect it.
-#
-# ⚠ 0.45.2 — AND A FAILED CREATE NOW DENIES A pre_tool HOOK (src/hooks.cyr). With the old pid+counter name, which
-# anyone can read off `ps` and count from zero, another local user could plant the next names and turn every
-# hook-gated call into a denial (and every shell/verify call into a failure) for the whole session. Sixteen hex digits
-# from the floor's getrandom (routed on every target this path compiles for) make the next name unguessable. If the
-# RNG answers short the suffix is simply less random — the create stays exclusive, so that costs availability only.
-#
-# _shell_tmp_prefix is a variable for one reason: a test points it at a directory that does not exist, to make the
-# create fail for real.
-var _shell_tmp_prefix = "/tmp/thoth_sh_";
-fn _shell_tmp_path() {
-    if (_shell_tmp_buf == 0) { _shell_tmp_buf = alloc(256); }
-    var off = 0;
-    off = _exec_append_cstr(_shell_tmp_buf, off, _shell_tmp_prefix);
-    if (off > 160) { off = 160; }                            # a test prefix is short; never let one crowd the buffer
-    off = _append_int(_shell_tmp_buf, off, sys_getpid());
-    store8(_shell_tmp_buf + off, 95); off = off + 1;         # '_'
-    off = _append_int(_shell_tmp_buf, off, _shell_tmp_ctr);
-    _shell_tmp_ctr = _shell_tmp_ctr + 1;
-    store8(_shell_tmp_buf + off, 95); off = off + 1;         # '_'
-    var rb[8];
-    store64(&rb, 0);
-    random_bytes(&rb, 8);
-    var k = 0;
-    while (k < 8) {
-        var b = load8(&rb + k) & 255;
-        store8(_shell_tmp_buf + off, load8("0123456789abcdef" + (b >> 4))); off = off + 1;
-        store8(_shell_tmp_buf + off, load8("0123456789abcdef" + (b & 15))); off = off + 1;
-        k = k + 1;
-    }
-    store8(_shell_tmp_buf + off, 0);
-    return _shell_tmp_buf;
+# exec_fd_cloexec (0.53.3, P-11): a descriptor thoth holds is not a command's: the session log reached every `/run` child.
+fn exec_fd_cloexec(fd) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    if (fd >= 0) { syscall(SYS_FCNTL, fd, 2, 1); }
+    #endif
+    #endif
+    return 0;
+}
+# exec_sigpipe_ignored: the window ignores SIGPIPE for its life (gui_run); a write here must not undo that.
+var _exec_pipe_ignored = 0;
+fn exec_sigpipe_ignored(v) { _exec_pipe_ignored = v; return 0; }
+
+# --- what a capture kept (0.53.3) -----------------------------------------------------------------------------------
+# exec_capture_total: the bytes the last capture's command wrote, kept or not. exec_shell_capture_tail: a capture that keeps
+# the LAST buflen bytes instead of the first: a build names its error at the end. Windows' capture keeps the head (its
+# file is read whole, after the fact), and its total is what it returned.
+var _exec_cap_total = 0;
+var _exec_cap_tail = 0;
+fn exec_capture_total() { return _exec_cap_total; }
+fn exec_shell_capture_tail(cmdline, buf, buflen, timeout_ms, status_out) {
+    _exec_cap_tail = 1;
+    var n = exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out);
+    _exec_cap_tail = 0;
+    return n;
 }
 
 #ifdef CYRIUS_TARGET_AGNOS
@@ -145,7 +135,7 @@ fn shell_supported() { return 0; }
 #ifdef CYRIUS_TARGET_WIN
 # Windows (0.20.2): no fork/exec, but Cyrius 6.4.26 wired the timeout-kill primitive (TerminateProcess,
 # syscall 0xF01D) behind lib/process_win.cyr's _win_create_process + _win_wait_timeout, so the model's
-# `shell` tool now works on Windows via the SAME temp-file design as the POSIX path below — a FILE, never a
+# `shell` tool now works on Windows through a temp file (the POSIX path used one too, until 0.53.3) — a FILE, never a
 # pipe. A file has no writer backpressure, so the child runs to GENUINE completion (clean over-cap
 # truncation) or a GENUINE hang (real deadline kill); the pipe path would deadlock/false-timeout any command
 # whose output exceeds the ~4 KiB CreatePipe buffer, since the PE surface has no PeekNamedPipe / overlapped
@@ -278,16 +268,16 @@ fn shell_supported() { return 1; }
 # So the capture child is now a small SUPERVISOR, and the command is ITS child:
 #
 #   thoth ─fork─▶ supervisor   setsid: a new session AND process group, pgid == its pid — exec's kill(-pid) target, as
-#                  │            the shell was; stdin /dev/null, stdout+stderr the capture file; it keeps ONLY the death
+#                  │            the shell was; stdin /dev/null, stdout+stderr the capture pipe; it keeps ONLY the death
 #                  │            pipe's read end (every other descriptor it inherited is closed)
-#                  └─fork─▶ /bin/sh -c <cmd>   the same group, writing straight into the capture file; on Linux it
+#                  └─fork─▶ /bin/sh -c <cmd>   the same group, writing straight into the capture pipe; on Linux it
 #                               │             carries the parent-death signal (it fires if the supervisor dies)
 #                               └─ everything the command starts — the same group, unless it makes one of its own
 #
 # The supervisor waits for two things: the shell's exit, and thoth's death. Thoth's death is the DEATH PIPE: thoth makes
 # it, the supervisor keeps the read end, only thoth keeps the write end. When thoth dies — SIGKILL included, which runs
 # no cleanup at all — the kernel closes its descriptors, the read end reports a hang-up, and the supervisor SIGKILLs its
-# whole group, itself included, and removes the capture file nobody is left to read. A getppid check on every wakeup is
+# whole group, itself included. A getppid check on every wakeup is
 # the second witness: a write end leaked into some other process could hold the hang-up off, never the reparenting.
 # A parent-death SIGKILL on the SUPERVISOR would be wrong — it would kill the supervisor before it could kill the group.
 # The backstop goes one level down, on the shell, where it helps: if the supervisor itself is killed, the shell dies
@@ -336,8 +326,8 @@ fn _exec_child_signals_reset() {
 
 # _exec_fd_above_stdio(fd): fd when it is above 2, else a duplicate at the lowest free descriptor >= 3 (fcntl F_DUPFD,
 # 0 on Linux and Darwin) with the original closed; -1 when that fails. The supervisor makes 0, 1 and 2 its stdio, so a
-# death-pipe end that landed there (a thoth started with its own stdio closed) would be overwritten by those dup2s —
-# and the capture file, polled in its place, reads "ready" at once: the supervisor would kill every command it started.
+# pipe end that landed there (a thoth started with its own stdio closed) would be overwritten by those dup2s: the
+# supervisor would poll its own stdout for thoth's death, and kill every command it started.
 fn _exec_fd_above_stdio(fd) {
     if (fd > 2) { return fd; }
     var hi = syscall(SYS_FCNTL, fd, 0, 3);
@@ -345,21 +335,20 @@ fn _exec_fd_above_stdio(fd) {
     return hi;
 }
 
-# _exec_sv_kill_group(path): the supervisor's end when thoth is gone, or when the shell can no longer be waited for —
-# the capture file removed (path 0 leaves it), then the whole group SIGKILLed, this process with it (so the exit after
-# it is never reached). `0 - getpid()` names the group this supervisor leads; never thoth's.
-fn _exec_sv_kill_group(path) {
-    if (path != 0) { sys_unlink(path); }
+# _exec_sv_kill_group: the supervisor's end when thoth is gone, or when the shell can no longer be waited for — the whole
+# group SIGKILLed, this process with it (so the exit after it is never reached). `0 - getpid()` names the group this
+# supervisor leads; never thoth's.
+fn _exec_sv_kill_group() {
     sys_kill(0 - sys_getpid(), 9);
     sys_exit(137);
     return 0;
 }
 
-# _exec_supervise(sh, drd, tpid, path): the supervisor's wait; it returns only by exiting. The poll on the death pipe is
+# _exec_supervise(sh, drd, tpid): the supervisor's wait; it returns only by exiting. The poll on the death pipe is
 # also the sleep between looks at the shell, and a hang-up ends it at once, whatever the slice. The slice is short
 # because the shell's end reaches thoth only when this process exits: 1 ms for the first 50 ms (the common quick hook
 # or `shell` call), then 10 ms — a tenth of exec's own 100 ms tick.
-fn _exec_supervise(sh, drd, tpid, path) {
+fn _exec_supervise(sh, drd, tpid) {
     var st[4];                                        # N BYTES: wait4's status is one 4-byte int
     var slice = 1;
     var waited = 0;
@@ -370,10 +359,10 @@ fn _exec_supervise(sh, drd, tpid, path) {
             if (WIFEXITED(s) == 1) { sys_exit(WEXITSTATUS(s)); }
             if (WIFSIGNALED(s) == 1) { sys_exit(128 + WTERMSIG(s)); }   # the number exec's mapping gives a signal death
         }
-        if (w < 0) { _exec_sv_kill_group(0); }        # the shell cannot be waited for: never leave its group unwatched
+        if (w < 0) { _exec_sv_kill_group(); }        # the shell cannot be waited for: never leave its group unwatched
         var r = _proc_poll_in(drd, slice);            # > 0 only once every write end is closed (thoth never writes)
-        if (r > 0) { _exec_sv_kill_group(path); }
-        if ((_exec_sv_ppid_witness == 1) && (sys_getppid() != tpid)) { _exec_sv_kill_group(path); }   # reparented: thoth is gone, whoever holds a write end
+        if (r > 0) { _exec_sv_kill_group(); }
+        if ((_exec_sv_ppid_witness == 1) && (sys_getppid() != tpid)) { _exec_sv_kill_group(); }   # reparented: thoth is gone, whoever holds a write end
         if (r < 0) { sleep_ms(slice); }               # a poll error: never spin
         waited = waited + slice;
         if (waited >= 50) { slice = 10; }
@@ -382,18 +371,18 @@ fn _exec_supervise(sh, drd, tpid, path) {
 }
 
 # _exec_supervisor: the capture child (above). Never returns. `tpid` is thoth's pid; `drd` / `dwr` the death pipe's ends.
-fn _exec_supervisor(cmdline, envp, out_fd, drd, dwr, tpid, path) {
+fn _exec_supervisor(cmdline, envp, out_fd, drd, dwr, tpid) {
     # 0.20.1 / 0.45.2: a new session, which makes this fresh child (never a group leader) the leader of a new process
     # group with pgid == pid — exec's kill(-pid) target. The floor has no setpgid wrapper; setsid is routed on every POSIX
     # target (the raw `syscall(109, 0, 0)` it replaced was setpgid in x86_64 numbering only, so on aarch64 and macOS the
     # group never formed). Leaving the controlling terminal suits a captured command: its stdin is /dev/null, its output
     # a file, and a hang-up of thoth's terminal is not its signal — thoth's death is (the pipe).
     sys_setsid();
-    sys_dup2(out_fd, 1);                              # stdout -> the capture file
-    sys_dup2(out_fd, 2);                              # stderr -> the same file (merged, as a terminal shows it)
+    sys_dup2(out_fd, 1);                              # stdout -> the capture pipe
+    sys_dup2(out_fd, 2);                              # stderr -> the same pipe (merged, as a terminal shows it)
     var dn = sys_open("/dev/null", 0, 0);             # 0 = O_RDONLY
     if (dn > 0) { sys_dup2(dn, 0); }                  # stdin <- /dev/null (no hang on read; a dn of 0 already is stdin)
-    # Every other descriptor goes: the capture file's and /dev/null's originals, the death pipe's write end, and all of
+    # Every other descriptor goes: the capture pipe's and /dev/null's originals, the death pipe's write end, and all of
     # thoth's own — its sockets, the window's Wayland connection, another capture's pipe. None outlives thoth in here.
     sys_close(dwr);
     var fd = 3;
@@ -425,7 +414,7 @@ fn _exec_supervisor(cmdline, envp, out_fd, drd, dwr, tpid, path) {
         sys_execve("/bin/sh", &argv, ep);
         sys_exit(127);
     }
-    _exec_supervise(sh, drd, tpid, path);
+    _exec_supervise(sh, drd, tpid);
     sys_exit(127);
     return 0;
 }
@@ -443,14 +432,178 @@ fn _exec_kill_group(pid, stbuf) {
     return 0;
 }
 
+# --- the capture's PIPE (0.53.3) ---------------------------------------------------------------------------------------
+# ⚠ THROUGH 0.53.2 THE CAPTURE WAS A TEMP FILE, read by name after the command ended, and four defects came with it. A FIFO
+# swapped in at that name blocked thoth in open(2), past its deadline, with Esc dead. Nothing bounded the file: `yes` put
+# 2.5 GB in a tmpfs in a second, RAM pinned, and a job left running kept writing to it unlinked, where nothing could see
+# it. And [verify]'s "keep the tail" tailed the first 8 KiB. A pipe has none of these: thoth reads as the command writes,
+# keeps what it was asked to and discards the rest, so the capture holds no disk, has no name to swap and knows its total.
+# Reading promptly matters only for speed: a writer past the pipe's 64 KiB waits for this loop, a few ms at worst.
+# What reads differently: a job the command leaves running still holding stdout gets SIGPIPE at its next write (the read
+# end closes with the capture). Redirect one that must live on. Nothing else changes: the shell's exit ends the capture, as
+# it did, with or without a job holding the pipe open.
+var EXEC_DRAIN_CHUNK = 65536;
+var EXEC_DRAIN_LAST = 16;          # chunks read once the shell is gone: what it wrote fits, and a job left writing cannot hold the capture open
+var EXEC_WAIT_MS = 25;             # the wait's longest sleep; data and the pipe's hang-up end it at once
+var EXEC_TICK_MS = 100;            # how often the surface's poll runs
+var _exec_drain_buf = 0;           # alloc(EXEC_DRAIN_CHUNK), lazy
+var _exec_cap_refuse = 0;          # a test sets it, to make a capture fail for real where a pipe or a fork would
+
+# _exec_cap_take: `got` new bytes in `s`: the head fills buf and the rest is counted, or (tail mode) buf is a ring.
+fn _exec_cap_take(buf, buflen, s, got) {
+    if (_exec_cap_tail == 1) {
+        var i = 0;
+        while (i < got) {
+            var at = (_exec_cap_total + i) % buflen;
+            var n = buflen - at;
+            if (n > (got - i)) { n = got - i; }
+            memcpy(buf + at, s + i, n);
+            i = i + n;
+        }
+    } else {
+        var room = buflen - _exec_cap_total;
+        if (room > got) { room = got; }
+        if (room > 0) { memcpy(buf + _exec_cap_total, s, room); }
+    }
+    _exec_cap_total = _exec_cap_total + got;
+    return 0;
+}
+# _exec_cap_drain: one read of the pipe, waiting up to wait_ms for it. Returns the bytes read, 0 when there were none yet,
+# -1 at end of file (every write end closed).
+fn _exec_cap_drain(crd, buf, buflen, wait_ms) {
+    if (_proc_poll_in(crd, wait_ms) <= 0) { return 0; }
+    var got = file_read(crd, _exec_drain_buf, EXEC_DRAIN_CHUNK);
+    if (got == (0 - 4)) { return 0; }                 # interrupted: look again
+    if (got <= 0) { return 0 - 1; }
+    _exec_cap_take(buf, buflen, _exec_drain_buf, got);
+    return got;
+}
+fn _exec_rev(b, i, j) {
+    while (i < j) {
+        var c = load8(b + i);
+        store8(b + i, load8(b + j));
+        store8(b + j, c);
+        i = i + 1;
+        j = j - 1;
+    }
+    return 0;
+}
+# _exec_cap_settle: the bytes buf holds, with a ring turned so they read in order.
+fn _exec_cap_settle(buf, buflen) {
+    if (_exec_cap_total <= buflen) { return _exec_cap_total; }
+    if (_exec_cap_tail == 1) {
+        var at = _exec_cap_total % buflen;
+        if (at != 0) {
+            _exec_rev(buf, 0, at - 1);
+            _exec_rev(buf, at, buflen - 1);
+            _exec_rev(buf, 0, buflen - 1);
+        }
+    }
+    return buflen;
+}
+
+# --- a job the command leaves running (0.53.3) ---------------------------------------------------------------------------
+# A clean exit kills nothing: a dev server started by one call is there for the next. But the supervisor exits with the
+# shell, so through 0.53.2 nothing watched such a group, and ADR-0014 and ruling R4 said something did: a SIGKILLed thoth left
+# it at ppid 1. Thoth now counts the group after the reap (kill(-pid, 0)) and, for one that lives on, tells a single WATCHER,
+# forked on the first such job: its own session, every descriptor gone but one pipe from thoth. When that pipe hangs up,
+# however thoth went, the watcher SIGKILLs every group it was told about and exits. A job that must outlive thoth starts a
+# session of its own (`setsid`), which leaves the group and is the documented way out.
+var EXEC_BG_MAX = 64;
+var _exec_bg_wr = 0 - 1;           # the watcher's pipe, write end (close-on-exec; thoth holds it for life)
+var _exec_bg_pid = 0;
+
+fn _exec_bg_kill_all(g, n) {
+    var i = 0;
+    while (i < n) { sys_kill(0 - load64(g + i * 8), 9); i = i + 1; }
+    return 0;
+}
+# _exec_bg_prune: drop the groups that have ended, so a pid reused later is never killed for them. Returns the new count.
+fn _exec_bg_prune(g, n) {
+    var o = 0;
+    var i = 0;
+    while (i < n) {
+        var p = load64(g + i * 8);
+        if (sys_kill(0 - p, 0) == 0) { store64(g + o * 8, p); o = o + 1; }
+        i = i + 1;
+    }
+    return o;
+}
+# _exec_bg_watch: the watcher. Never returns.
+fn _exec_bg_watch(rd, tpid) {
+    sys_setsid();
+    var fd = 0;
+    while (fd < EXEC_SV_FD_SCAN) {
+        if (fd != rd) { sys_close(fd); }
+        fd = fd + 1;
+    }
+    var g[512];                                       # N BYTES: EXEC_BG_MAX pgids
+    var n = 0;
+    while (1 == 1) {
+        var r = _proc_poll_in(rd, 1000);
+        if (r > 0) {
+            var rec[8];
+            var got = sys_read(rd, &rec, 8);
+            if (got == 8) {
+                if (n >= EXEC_BG_MAX) { n = _exec_bg_prune(&g, n); }
+                if (n < EXEC_BG_MAX) { store64(&g + n * 8, load64(&rec)); n = n + 1; }
+            } elif (got != (0 - 4)) {                 # end of file: thoth is gone
+                _exec_bg_kill_all(&g, n);
+                sys_exit(0);
+            }
+        } else { n = _exec_bg_prune(&g, n); }
+        if (sys_getppid() != tpid) {                  # the second witness, as the supervisor's
+            _exec_bg_kill_all(&g, n);
+            sys_exit(0);
+        }
+    }
+    return 0;
+}
+# _exec_bg_note: hand group `pgid` to the watcher, starting it on the first. A watcher that cannot be started leaves the job
+# as it was before 0.53.3, unwatched. thoth ignores SIGPIPE for this one write: a watcher someone killed must not take thoth.
+fn _exec_bg_note(pgid) {
+    if (_exec_bg_wr < 0) {
+        var bp[16];
+        store64(&bp, 0);
+        if (sys_pipe(&bp) < 0) { return 0; }
+        var brd = _exec_fd_above_stdio(load32(&bp));
+        var bwr = _exec_fd_above_stdio(load32(&bp + 4));
+        if ((brd < 0) || (bwr < 0)) {
+            if (brd >= 0) { sys_close(brd); }
+            if (bwr >= 0) { sys_close(bwr); }
+            return 0;
+        }
+        syscall(SYS_FCNTL, brd, 2, 1);
+        syscall(SYS_FCNTL, bwr, 2, 1);
+        var tpid = sys_getpid();
+        var w = sys_fork();
+        if (w < 0) { sys_close(brd); sys_close(bwr); return 0; }
+        if (w == 0) { _exec_bg_watch(brd, tpid); }
+        sys_close(brd);
+        _exec_bg_wr = bwr;
+        _exec_bg_pid = w;
+    }
+    var rec[8];
+    store64(&rec, pgid);
+    signal_ignore(SIGPIPE);
+    var wrote = sys_write(_exec_bg_wr, &rec, 8);
+    if (_exec_pipe_ignored == 0) { signal_default(SIGPIPE); }
+    if (wrote != 8) {                                 # the watcher is gone: start another for the next job
+        sys_close(_exec_bg_wr);
+        _exec_bg_wr = 0 - 1;
+        sys_waitpid(_exec_bg_pid, &rec, 1);
+    }
+    return 0;
+}
+
 # exec_shell_capture: run `/bin/sh -c cmdline`, capturing merged stdout+stderr into buf[0..buflen)
-# (a temp file under the hood), enforcing a wall-clock timeout. status_out points to TWO i64 slots:
+# (a pipe, 0.53.3), enforcing a wall-clock timeout. status_out points to TWO i64 slots:
 #   [0] = exit code: 0..127 normal, 128+sig on a signal, -1 on spawn/open failure, -2 on timeout-kill,
 #         -4 when the operator STOPPED it (0.52.0: the surface's wait poll moved its generation — Esc, or the
 #         window closing; the group is killed as the deadline kills it, the partial output kept)
 #   [1] = 1 if the command was SIGKILLed by the deadline, else 0 (a stop is not a deadline: 0 with -4)
-# Returns the number of bytes captured (>= 0; may be partial on timeout). The child runs with an
-# EMPTY environment (the shell's compiled-in default PATH), matching /run's exec_vec convention;
+# Returns the number of bytes kept (<= buflen; may be partial on timeout), exec_capture_total the number written. The child
+# runs with an EMPTY environment (the shell's compiled-in default PATH), matching /run's exec_vec convention;
 # stdin is /dev/null so a command that reads input gets EOF instead of hanging until the timeout.
 # The caller owns NUL-termination of buf at the returned count (buf must be >= buflen+1).
 # 0.52.8: the command runs under the supervisor above (it kills the command's whole tree when thoth dies), with an
@@ -465,64 +618,51 @@ fn _exec_kill_group(pid, stbuf) {
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     return exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, 0);
 }
+# _exec_cap_fail: the -1 every capture that could not start reports. Closes the descriptors it is given (-1 for none).
+fn _exec_cap_fail(status_out, a, b, c, d) {
+    if (a >= 0) { sys_close(a); }
+    if (b >= 0) { sys_close(b); }
+    if (c >= 0) { sys_close(c); }
+    if (d >= 0) { sys_close(d); }
+    store64(status_out, 0 - 1);
+    store64(status_out + 8, 0);
+    return 0;
+}
 fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
-    # Open a fresh temp file with O_WRONLY|O_CREAT|O_EXCL, 0600 (384). O_EXCL fails on a pre-planted
-    # file/symlink; bump the counter and retry a few times before giving up closed.
-    #
-    # ⚠ 0.45.2: the flags were the literal 193 — O_WRONLY|O_CREAT|O_EXCL in LINUX numbering. Darwin's O_CREAT is
-    # 0x200 and its O_EXCL 0x800, so on macOS the file was never created, every capture returned the -1 sentinel,
-    # and `shell`, `[verify]` and `[hooks]` never ran there — with a pre_tool hook that could not run ALLOWING the
-    # call (src/hooks.cyr now denies). The floor's O_* names carry the right values on every POSIX peer.
-    #
-    # ⚠ 0.39.0 (audit A-2): the mode was 0644 (420) — WORLD-READABLE, in world-writable /tmp, for a file
-    # that holds the FULL merged stdout+stderr of a command the MODEL chose to run. On a multi-user host
-    # any local user could read whatever that command printed (`env`, `cat ~/.aws/credentials`, a token in
-    # a build log) for the lifetime of the capture. 0600 costs nothing here: thoth opens the fd itself and
-    # dup2s it into the child, so nothing outside this process ever needs to open the path by name — the
-    # extra bits bought no capability. Narrow (a local attacker, a shared box, a race) but free to close.
-    var out_fd = 0 - 1;
-    var path = 0;
-    var tries = 0;
-    while ((tries < 8) && (out_fd < 0)) {
-        path = _shell_tmp_path();
-        out_fd = sys_open(path, O_WRONLY | O_CREAT | O_EXCL, 384);
-        tries = tries + 1;
-    }
-    if (out_fd < 0) { store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0; }
+    _exec_cap_total = 0;
+    if (_exec_drain_buf == 0) { _exec_drain_buf = alloc(EXEC_DRAIN_CHUNK); }
+    if ((_exec_drain_buf == 0) || (_exec_cap_refuse == 1)) { return _exec_cap_fail(status_out, 0 - 1, 0 - 1, 0 - 1, 0 - 1); }
 
-    # 0.52.8 (E1): the DEATH PIPE (the supervisor, above). Thoth keeps only the write end, and never writes to it. Both
-    # ends close-on-exec (fcntl F_SETFD FD_CLOEXEC — 2 and 1 on Linux and Darwin; Darwin's pipe takes no flags word, so
-    # pipe2's would be lost), so no exec'd process — the command included — ever holds either end. A pipe that cannot be
-    # made fails the capture closed, as a capture file that cannot be made does.
+    # The capture pipe. Both ends close-on-exec, as the death pipe's are (fcntl F_SETFD FD_CLOEXEC, 2 and 1 on Linux and
+    # Darwin; Darwin's pipe takes no flags word): the supervisor's dup2 onto 1 and 2 is what the command gets, and clears it.
+    var cp[16];                                       # N BYTES: pipe writes two 4-byte fds
+    store64(&cp, 0);
+    if (sys_pipe(&cp) < 0) { return _exec_cap_fail(status_out, 0 - 1, 0 - 1, 0 - 1, 0 - 1); }
+    var crd = _exec_fd_above_stdio(load32(&cp));
+    var out_fd = _exec_fd_above_stdio(load32(&cp + 4));
+    if ((crd < 0) || (out_fd < 0)) { return _exec_cap_fail(status_out, crd, out_fd, 0 - 1, 0 - 1); }
+    syscall(SYS_FCNTL, crd, 2, 1);
+    syscall(SYS_FCNTL, out_fd, 2, 1);
+
+    # 0.52.8 (E1): the DEATH PIPE (the supervisor, above). Thoth keeps only the write end, and never writes to it. A pipe
+    # that cannot be made fails the capture closed.
     var dp[16];                                       # N BYTES: pipe writes two 4-byte fds
     store64(&dp, 0);
-    if (sys_pipe(&dp) < 0) {
-        sys_close(out_fd); sys_unlink(path);
-        store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
-    }
+    if (sys_pipe(&dp) < 0) { return _exec_cap_fail(status_out, crd, out_fd, 0 - 1, 0 - 1); }
     var drd = _exec_fd_above_stdio(load32(&dp));
     var dwr = _exec_fd_above_stdio(load32(&dp + 4));
-    if ((drd < 0) || (dwr < 0)) {
-        if (drd >= 0) { sys_close(drd); }
-        if (dwr >= 0) { sys_close(dwr); }
-        sys_close(out_fd); sys_unlink(path);
-        store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
-    }
+    if ((drd < 0) || (dwr < 0)) { return _exec_cap_fail(status_out, crd, out_fd, drd, dwr); }
     syscall(SYS_FCNTL, drd, 2, 1);
     syscall(SYS_FCNTL, dwr, 2, 1);
 
     var ppid = sys_getpid();
     var pid = sys_fork();
-    if (pid < 0) {
-        sys_close(drd); sys_close(dwr);
-        sys_close(out_fd); sys_unlink(path);
-        store64(status_out, 0 - 1); store64(status_out + 8, 0); return 0;
-    }
+    if (pid < 0) { return _exec_cap_fail(status_out, crd, out_fd, drd, dwr); }
     # 0.52.6 (audit F4) gave this child the parent-death signal, the floor's own since 6.6.6 (lib/process.cyr: "a
     # SIGKILLed parent runs no cleanup … the kernel has to do it") — it reached the shell and none of its children. Since
     # 0.52.8 the child is the supervisor, and the signal sits on the shell beneath it (above).
-    if (pid == 0) { _exec_supervisor(cmdline, envp, out_fd, drd, dwr, ppid, path); }
-    sys_close(out_fd);                  # parent's write copy; the child holds its own duped fds
+    if (pid == 0) { _exec_supervisor(cmdline, envp, out_fd, drd, dwr, ppid); }
+    sys_close(out_fd);                  # parent's write copy: the pipe's hang-up then means every writer has gone
     sys_close(drd);                     # the supervisor's end. Thoth holds the write end until the reap below
     # (0.20.1 also ran setpgid(pid, pid) here, to close the fork/setpgid race. setsid cannot be called on another
     # process, and the race needs no closing: the group is only the kills' target, no grandchild can exist before the
@@ -530,8 +670,8 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     # has not reached it yet.)
 
     var stbuf[4];                       # N BYTES: waitpid's status out-param is one 4-byte int (was [1];
-                                        # both round to the 8B minimum frame slot so [1] was benign, but
-                                        # [4] states the intent — matches lib/process.cyr's status_buf[4])
+    # both round to the 8B minimum frame slot so [1] was benign, but
+    # [4] states the intent — matches lib/process.cyr's status_buf[4])
     var elapsed = 0;
     var reaped = 0;
     var code = 0;
@@ -545,6 +685,8 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     # while the tick was a spinner glyph; the window's pump now repaints inside the tick (a full CPU raster on a large
     # window is tens of ms), and a sleep-count would let a 30 s [shell].timeout_ms run for a minute.
     var t_start = clock_now_ms();
+    var t_poll = t_start;
+    var eof = 0;
     if (_exec_wait_poll != 0) { gen0 = fncall0(_exec_wait_poll); }
     while ((elapsed < timeout_ms) && (reaped == 0) && (stop < 2)) {
         var w = sys_waitpid(pid, &stbuf, 1);          # 1 = WNOHANG
@@ -557,11 +699,17 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
         } elif (stop == 1) {
             stop = 2;                                 # asked to stop, and still running after the last look: kill it below
         } else {
-            sleep_ms(100);                            # the floor's ms sleep (poll(NULL,0,ms) where that is the primitive)
+            # The pipe is the sleep: output and the hang-up at the command's end both wake this at once. After the
+            # hang-up only the supervisor's exit is left, a few ms away.
+            if (eof == 0) { if (_exec_cap_drain(crd, buf, buflen, EXEC_WAIT_MS) < 0) { eof = 1; } }
+            else { sleep_ms(1); }
             # 0.44.2: this loop is the ONE place a running command hands the main thread back, so it is where a
             # front end gets to live. Through the seam — exec.cyr is substrate and must not reach into a front end.
             # 0.52.0: the surface's poll (the TUI's spinner + Esc drain, the window's pump) returns its generation.
-            if (_exec_wait_poll != 0) { if (fncall0(_exec_wait_poll) != gen0) { stop = 1; } }
+            if ((_exec_wait_poll != 0) && ((clock_now_ms() - t_poll) >= EXEC_TICK_MS)) {
+                t_poll = clock_now_ms();
+                if (fncall0(_exec_wait_poll) != gen0) { stop = 1; }
+            }
             elapsed = clock_now_ms() - t_start;       # after the poll: its repaint is the operator's time too
         }
     }
@@ -578,10 +726,14 @@ fn exec_shell_capture_env(cmdline, buf, buflen, timeout_ms, status_out, envp) {
     store64(status_out, code);
     store64(status_out + 8, timed);
 
-    var total = file_read_all(path, buf, buflen);     # whatever landed (partial on kill)
-    sys_unlink(path);
-    if (total < 0) { total = 0; }
-    return total;
+    var last = 0;                                     # whatever the shell wrote and this loop had not reached
+    while (last < EXEC_DRAIN_LAST) {
+        if (_exec_cap_drain(crd, buf, buflen, 0) <= 0) { last = EXEC_DRAIN_LAST; }
+        last = last + 1;
+    }
+    sys_close(crd);
+    if ((reaped == 1) && (sys_kill(0 - pid, 0) == 0)) { _exec_bg_note(pid); }   # 0.53.3: a job left running, watched from here on
+    return _exec_cap_settle(buf, buflen);
 }
 fn shell_supported() { return 1; }
 #endif

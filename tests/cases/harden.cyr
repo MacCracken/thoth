@@ -1,0 +1,440 @@
+# tests/cases/harden.cyr — the 0.53.3 P(-1) sweep (docs/audit/2026-11-05-audit.md). Each group pins one finding, by its id.
+
+var _hd_dir = "build/.thoth_hd";
+fn _hd_sh(cmd) {
+    var b = alloc(4097);
+    var st[16];
+    var n = exec_shell_capture(cmd, b, 4096, 5000, &st);
+    store8(b + n, 0);
+    return b;
+}
+fn _hd_allow(policy) {
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, policy);
+    return t;
+}
+fn _hd_file(path, text) {
+    file_write_all(path, text, strlen(text));
+    return 0;
+}
+
+fn test_harden_gate() {
+    test_group("t-ron reads all of a command, however it escapes (T-1, commands.cyr)");
+    var n = 5600;
+    var pad = alloc(n + 64);
+    store8(pad, 58); store8(pad + 1, 32);
+    var i = 2;
+    while (i < n) { store8(pad + i, 1); i = i + 1; }
+    var tail = "\ntouch PWNED; rm -rf ./x";
+    memcpy(pad + n, tail, strlen(tail) + 1);
+    var p = _params_one("command", pad);
+    assert(_ui_contains(p, "rm -rf") == 1, "the tail is in what t-ron is given (it was cut at 32 KiB)");
+    assert(bayan_json_v_parse_buf(p, strlen(p)) != 0, "...as one JSON value");
+    var sv = _gate_tron;
+    _gate_tron = _hd_allow("[agent.\"thoth\"]\nallow = [\"thoth_shell\"]\n");
+    var sm = out_mode(); out_mode_set(OUT_RING); feed_init();
+    assert_eq(gate_authorize("thoth_shell", p, "run shell", "x"), 0, "...so the scanner denies it, as it denies the short form");
+    assert_eq(gate_authorize("thoth_shell", _params_one("command", "ls"), "run shell", "ls"), 1, "an ordinary command still passes");
+    out_mode_set(sm); feed_init();
+    _gate_tron = sv;
+
+    test_group("[verify] is an action of its own (P-1, T-6, verify.cyr)");
+    verify_reset();
+    xunlink("build/.thoth_hd_ran");
+    _cfg_verify_command = "touch build/.thoth_hd_ran";
+    _gate_tron = _hd_allow("[agent.\"thoth\"]\nallow = [\"thoth_edit\"]\ndeny = [\"thoth_shell\", \"thoth_verify\"]\n");
+    sm = out_mode(); out_mode_set(OUT_RING); feed_init();
+    var r = verify_run();
+    out_mode_set(sm); feed_init();
+    assert(_ui_contains(r, "not run") == 1, "a policy denying `thoth_verify` stops the run");
+    assert(_ui_contains(r, "UNVERIFIED") == 1, "...and the model is told the change is unverified");
+    assert_eq(file_exists("build/.thoth_hd_ran"), 0, "...and nothing ran");
+    _gate_tron = _hd_allow("[agent.\"thoth\"]\nallow = [\"thoth_verify\"]\n");
+    sm = out_mode(); out_mode_set(OUT_RING); feed_init();
+    r = verify_run();
+    out_mode_set(sm); feed_init();
+    assert(_ui_contains(r, "PASSED") == 1, "a policy allowing it runs it");
+    assert_eq(file_exists("build/.thoth_hd_ran"), 1, "...for real");
+    xunlink("build/.thoth_hd_ran");
+    _cfg_verify_command = "i=0; while [ $i -lt 3000 ]; do echo filler-line-$i; i=$((i+1)); done; echo THE-REAL-ERROR; exit 1";
+    sm = out_mode(); out_mode_set(OUT_RING); feed_init();
+    r = verify_run();
+    out_mode_set(sm); feed_init();
+    assert(_ui_contains(r, "THE-REAL-ERROR") == 1, "output past the buffer: the real error at the end arrives (P-7: it was the tail of the first 8 KiB)");
+    assert(_ui_contains(r, " of 8192 bytes") == 0, "...and the total is the true one");
+    _cfg_verify_command = 0;
+    _gate_tron = sv;
+    verify_reset();
+    return 0;
+}
+
+fn test_harden_jail() {
+    test_group("a write into .git is refused, in any spelling (T-4, project.cyr, edit.cyr)");
+    assert_eq(_project_git_path(".git/config"), 1, ".git/config");
+    assert_eq(_project_git_path("sub/.git/hooks/pre-commit"), 1, "a submodule's");
+    assert_eq(_project_git_path(".GIT/config"), 1, "another case");
+    assert_eq(_project_git_path(".git. /config"), 1, "the trailing dots and spaces Windows drops");
+    assert_eq(_project_git_path(".git"), 1, "the name alone");
+    assert_eq(_project_git_path(".gitignore"), 0, ".gitignore is not it");
+    assert_eq(_project_git_path("docs/git/x"), 0, "...nor is a directory called git");
+    assert_eq(_project_git_path("x.git/y"), 0, "...nor a bare clone's name");
+    assert(_ui_contains(edit_tool("{\"path\":\".git/config\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "command execution") == 1, "edit refuses it");
+    assert(_ui_contains(create_file_tool("{\"path\":\".git/hooks/x\",\"content\":\"y\"}"), "command execution") == 1, "...create_file too");
+    assert(_ui_contains(read_file_tool("{\"path\":\".git/HEAD\"}"), "refused") == 0, "reading .git stays allowed");
+
+    test_group("thoth's own files are matched in any case (T-7, project.cyr)");
+    assert_eq(_project_sensitive(".THOTH/config.cyml"), 1, ".THOTH");
+    assert_eq(_project_sensitive(".Thoth/config.cyml"), 1, ".Thoth");
+    assert_eq(_project_sensitive("Thoth.Cyml"), 1, "Thoth.Cyml");
+    assert_eq(_project_sensitive("thothy/x"), 0, "another name is not");
+
+    test_group("a FIFO is reported, never opened (T-8, S-10)");
+    _hd_sh("rm -rf build/.thoth_hd; mkdir -p build/.thoth_hd && mkfifo build/.thoth_hd/pipe; printf hi > build/.thoth_hd/plain");
+    assert_eq(file_is_regular("build/.thoth_hd/plain"), 1, "a file is regular");
+    assert_eq(file_is_regular("build/.thoth_hd/pipe"), 0, "a FIFO is not");
+    assert_eq(file_is_regular("build/.thoth_hd"), 0, "...nor a directory");
+    assert_eq(file_is_regular("build/.thoth_hd/none"), 0, "...nor nothing");
+    assert_eq(file_exists_noblock("build/.thoth_hd/pipe"), 1, "a FIFO exists, and asking does not hang");
+    assert(_ui_contains(read_file_tool("{\"path\":\"build/.thoth_hd/pipe\"}"), "not a regular file") == 1, "read_file says so");
+    assert(_ui_contains(edit_tool("{\"path\":\"build/.thoth_hd/pipe\",\"old_string\":\"a\",\"new_string\":\"b\"}"), "not a regular file") == 1, "edit says so, before any prompt");
+    assert(search_tool("{\"pattern\":\"hi\",\"path\":\"build/.thoth_hd\"}") != 0, "search returns");
+    _mention_path = 0;
+    assert(mention_expand("see @build/.thoth_hd/pipe") != 0, "a mention returns");
+    assert_eq(mention_count(), 0, "...with the FIFO left as text");
+
+    test_group("/rewind writes only where the jail would (T-9, checkpoint.cyr)");
+    var d = "build/.thoth_hd/d";
+    _hd_sh("mkdir -p build/.thoth_hd/d build/.thoth_hd/out; printf old > build/.thoth_hd/d/f; printf outside > build/.thoth_hd/out/f");
+    ckpt_reset();
+    assert_eq(ckpt_capture("build/.thoth_hd/d/f", 41), 1, "premise: a snapshot is taken");
+    _hd_sh("cd build/.thoth_hd && mv d d.old && ln -s out d");
+    assert_eq(ckpt_restore_one(0), 0, "a directory swapped for a link: the restore refuses");
+    assert(streq(_hd_sh("cat build/.thoth_hd/out/f"), "outside"), "...and the file beyond the link is untouched");
+    ckpt_reset();
+    _hd_sh("rm -f build/.thoth_hd/new; printf x > build/.thoth_hd/new");
+    assert_eq(ckpt_capture_new("build/.thoth_hd/new", 42), 1, "a new file's checkpoint is taken though the file exists by then");
+    assert_eq(ckpt_restore_one(0), 1, "...and its undo");
+    assert_eq(file_exists("build/.thoth_hd/new"), 0, "...removes it (it left an empty file)");
+    ckpt_reset();
+    _hd_sh("rm -rf build/.thoth_hd");
+    return 0;
+}
+
+fn test_harden_stores() {
+    test_group("a session store is the operator's own (W-1, session.cyr)");
+    _hd_sh("rm -rf build/.thoth_hd; mkdir -p build/.thoth_hd");
+    var spp = _sess_path;
+    session_reset();
+    session_history_append("user", "from the repository", 1);
+    _sess_write_file("build/.thoth_hd/shipped");
+    session_reset();
+    _hd_sh("chmod 644 build/.thoth_hd/shipped");
+    assert(sess_persist_init("build/.thoth_hd/shipped") < 0, "a store as a clone checks one out is refused at the bind");
+    assert_eq(sess_persist_init_failed(), SESS_BAD_PERM, "...by name");
+    assert_eq(session_total_messages(), 0, "...and none of it was resumed");
+    assert(_ui_contains(sess_persist_why_rest(), "chmod 600") == 1, "...and it says what to do");
+    assert_eq(file_is_private("build/.thoth_hd/shipped"), 0, "group or others can read: not private");
+    _hd_sh("chmod 600 build/.thoth_hd/shipped");
+    assert_eq(file_is_private("build/.thoth_hd/shipped"), 1, "0600 is");
+    assert_eq(file_is_private("build/.thoth_hd/no-such"), 1, "a new store has nothing to refuse");
+    assert(sess_persist_init("build/.thoth_hd/shipped") >= 0, "the operator's own store binds");
+    assert_eq(session_total_messages(), 1, "...and resumes");
+    session_reset(); _sess_path = spp; _sess_init_failed = 0;
+    _hd_sh("rm -rf build/.thoth_hd");
+
+    test_group("a session store is not followed through a link, nor overwritten unread (W-2, W-3, session.cyr)");
+    _hd_sh("rm -rf build/.thoth_hd; mkdir -p build/.thoth_hd; printf precious > build/.thoth_hd/victim; ln -s victim build/.thoth_hd/link");
+    var sp = _sess_path;
+    session_reset();
+    assert(sess_persist_init("build/.thoth_hd/link") < 0, "a symlink is refused at the bind");
+    assert_eq(sess_persist_init_failed(), SESS_BAD_LINK, "...by name");
+    assert(_ui_contains(sess_persist_why(), "symlink") == 1, "...in words");
+    session_history_append("user", "x", 1);
+    sess_persist_save();
+    assert(streq(_hd_sh("cat build/.thoth_hd/victim"), "precious"), "...and nothing is written through it");
+    session_reset();
+    _hd_file("build/.thoth_hd/notes", "someone's notes\n");
+    sys_chmod("build/.thoth_hd/notes", 384);
+    assert(sess_persist_init("build/.thoth_hd/notes") < 0, "a file that is not a session store is refused");
+    assert_eq(sess_persist_init_failed(), SESS_BAD_READ, "...and named");
+    sess_persist_save();
+    assert(streq(_hd_sh("cat build/.thoth_hd/notes"), "someone's notes\n"), "...and kept");
+    _hd_file("build/.thoth_hd/newer", "THOTH-SESSION-3\t0\nfuture\n");
+    sys_chmod("build/.thoth_hd/newer", 384);
+    assert(sess_persist_init("build/.thoth_hd/newer") < 0, "so is a newer thoth's store");
+    session_reset();
+    assert_eq(sess_persist_init("build/.thoth_hd/ok"), 0, "a fresh path binds");
+    session_history_append("user", "first", 5);
+    session_history_append("assistant", "second", 6);
+    sess_persist_save();
+    assert(file_exists("build/.thoth_hd/ok") == 1, "...and saves");
+    assert(streq(_hd_sh("stat -c %a build/.thoth_hd/ok 2>/dev/null || stat -f %Lp build/.thoth_hd/ok"), "600\n"), "...at 0600");
+    assert(streq(_hd_sh("ls build/.thoth_hd | grep -c tmp"), "0\n"), "...leaving no temp behind");
+    _sess_path = 0;
+    # damage one length in the middle: what is before it loads, and the file stands
+    _hd_sh("sed -i.bak 's/^assistant\\t6/assistant\\tx/' build/.thoth_hd/ok; rm -f build/.thoth_hd/ok.bak");
+    var before = _hd_sh("wc -c < build/.thoth_hd/ok");
+    session_reset();
+    assert(sess_persist_init("build/.thoth_hd/ok") < 0, "a damaged store is not bound");
+    assert_eq(sess_persist_init_failed(), SESS_BAD_READ, "...and named");
+    assert_eq(session_history_len(), 1, "...what came before the damage still loads");
+    sess_persist_save();
+    assert(streq(_hd_sh("wc -c < build/.thoth_hd/ok"), before), "...and the next save writes nothing back");
+    session_reset();
+    _sess_init_failed = 0;
+    _sess_path = sp;
+    _hd_sh("rm -rf build/.thoth_hd");
+
+    test_group("a relative path in the global config is the global config's, not the repository's (W-1, config.cyr)");
+    var home = getenv("HOME");
+    if (home != 0) {
+        var r = _cfg_global_rel("tron-policy.toml");
+        assert(cstr_starts_with(r, home) == 1, "a relative policy resolves under HOME");
+        assert(_ui_contains(r, ".thoth/tron-policy.toml") == 1, "...in ~/.thoth");
+        assert(streq(_cfg_global_rel("/etc/thoth/p.toml"), "/etc/thoth/p.toml"), "an absolute one stands");
+        assert(_ui_contains(_cfg_global_rel("~/p.toml"), ".thoth") == 0, "`~/` expands as it did");
+    }
+    assert_eq(_cfg_global_rel(0), 0, "unset stays unset");
+
+    test_group("an unreadable config is not an absent one (W-4, config.cyr)");
+    _hd_sh("mkdir -p build/.thoth_hd; printf '[hoosh]\\nurl = \"http://x\"\\n' > build/.thoth_hd/c.cyml; chmod 000 build/.thoth_hd/c.cyml");
+    if (file_exists("build/.thoth_hd/c.cyml") == 0) {         # root reads through chmod 000
+        _cfg_parse_refused = 0;
+        _cfg_parse_sections("build/.thoth_hd/c.cyml", 1);
+        assert_eq(_cfg_parse_refused, 1, "a global config that cannot be read counts as refused");
+        _cfg_parse_refused = 0;
+        _cfg_local_unreadable = 0;
+        _cfg_parse_sections("build/.thoth_hd/c.cyml", 0);
+        assert_eq(_cfg_parse_refused, 0, "a local one does not");
+        assert_eq(_cfg_local_unreadable, 1, "...it is ignored and named");
+        _cfg_local_unreadable = 0;
+    }
+    _cfg_parse_sections("build/.thoth_hd/none.cyml", 1);
+    assert_eq(_cfg_parse_refused, 0, "a file that simply is not there is not refused");
+    _hd_sh("chmod 600 build/.thoth_hd/c.cyml; rm -rf build/.thoth_hd");
+
+    test_group("the session log is the operator's alone (W-9, log.cyr)");
+    _hd_sh("mkdir -p build/.thoth_hd; printf x > build/.thoth_hd/t; ln -s t build/.thoth_hd/l");
+    assert_eq(_log_open_safe("build/.thoth_hd/fresh.log"), 0, "a fresh log opens");
+    assert(streq(_hd_sh("stat -c %a build/.thoth_hd/fresh.log 2>/dev/null || stat -f %Lp build/.thoth_hd/fresh.log"), "600\n"), "...at 0600 (it was 0644, holding the whole conversation)");
+    assert(_log_open_safe("build/.thoth_hd/l") < 0, "a planted link is refused");
+    _hd_sh("rm -rf build/.thoth_hd");
+    return 0;
+}
+
+fn test_harden_surfaces() {
+    test_group("a repository's alias reaches no @file reader (S-2, T-2, commands.cyr)");
+    _hd_sh("mkdir -p build/.thoth_hd; printf SECRET-BODY > build/.thoth_hd/s; ln -s s build/.thoth_hd/l");
+    _mention_off = 1;
+    var e = mention_expand("run @build/.thoth_hd/s");
+    assert(_ui_contains(e, "SECRET-BODY") == 0, "with the door shut a mention is not read");
+    _mention_off = 0;
+    e = mention_expand("run @build/.thoth_hd/s");
+    assert(_ui_contains(e, "SECRET-BODY") == 1, "the operator's own mention still is");
+    e = mention_expand("run @build/.thoth_hd/l");
+    assert(_ui_contains(e, "SECRET-BODY") == 0, "a relative path through a link stays text (the name shown is not what would be sent)");
+    assert_eq(_cmd_has_mention("run @x"), 1, "a token starting with @ is a mention");
+    assert_eq(_cmd_has_mention("mail a@b.c"), 0, "an address is not");
+    _hd_sh("rm -rf build/.thoth_hd");
+
+    test_group("a refused or failed read does not read as a success (project.cyr, search.cyr)");
+    assert(_ui_contains(read_file_tool("{\"path\":\"../outside\"}"), "read_file") == 1, "premise: a path outside the jail answers in words");
+    assert_eq(project_last_ok(), 0, "...and read_file says the call failed");
+    read_file_tool("{\"path\":\"build/no-such-file\"}");
+    assert_eq(project_last_ok(), 0, "a missing file too");
+    read_file_tool("{\"path\":\"VERSION\"}");
+    assert_eq(project_last_ok(), 1, "a read that worked says so");
+    list_dir_tool("{\"path\":\"../outside\"}");
+    assert_eq(project_last_ok(), 0, "list_dir refused");
+    list_dir_tool("{\"path\":\"src\"}");
+    assert_eq(project_last_ok(), 1, "list_dir worked");
+    search_tool("{\"pattern\":\"x\",\"path\":\"../outside\"}");
+    assert_eq(project_last_ok(), 0, "search refused");
+    search_tool("{\"pattern\":\"no-such-text-anywhere-zz\",\"glob\":\"VERSION\"}");
+    assert_eq(project_last_ok(), 1, "a search that found nothing still ran");
+
+    test_group("the log's clean copy drops C1 as well (log.cyr)");
+    if (_log_buf == 0) { _log_buf = alloc(LOG_BUF_CAP + 1); }
+    var lb = alloc(8);
+    store8(lb, 65); store8(lb + 1, 0xC2); store8(lb + 2, 0x9B); store8(lb + 3, 0xC3); store8(lb + 4, 0xA9); store8(lb + 5, 66);
+    _log_off = 0;
+    _log_append_clean(lb, 6);
+    assert_eq(load8(_log_buf + 1), 63, "the C1 lead is a question mark");
+    assert_eq(load8(_log_buf + 2), 63, "...and its continuation");
+    assert_eq(load8(_log_buf + 3) & 255, 0xC3, "an ordinary accent stays");
+    assert_eq(load8(_log_buf + 4) & 255, 0xA9, "...whole");
+    _log_off = 0;
+
+    test_group("/run's output reaches the feed clean, and the buffer holds its NUL (S-1, P-6, commands.cyr)");
+    var sc = _cfg_shell_timeout_ms;
+    _cfg_shell_timeout_ms = 5000;
+    var sm = out_mode();
+    feed_init(); out_mode_set(OUT_RING);
+    _cmd_run_captured("printf 'A\\033]52;c;QUJD\\007B\\033[2JC\\n'");
+    feed_flush_pending(); out_mode_set(sm);
+    assert_eq(_t_feed_has("]52;c"), 1, "premise: the text arrives");
+    assert_eq(_t_feed_has("\x1b]52"), 0, "OSC 52 does not, as an escape");
+    assert_eq(_t_feed_has("\x1b[2J"), 0, "...nor a screen clear");
+    feed_init();
+    _cfg_shell_timeout_ms = sc;
+    return 0;
+}
+
+fn test_harden_rounds() {
+    test_group("a tool round too big for the array keeps whole calls, and says so (W-5, agent.cyr)");
+    _ag_reset();
+    var big = alloc(16000);
+    var bi = 0;
+    while (bi < 15000) { store8(big + bi, 120); bi = bi + 1; }
+    store8(big + bi, 0);
+    var i = 0;
+    while (i < 32) {
+        var o = alloc(256);
+        var ol = _append_cstr_cap(o, 0, 256, "call_");
+        ol = _append_int_cap(o, ol, 256, i);
+        store8(o + ol, 0);
+        store8(_ag_seen + i, 1);
+        _ag_copy_str(_ag_ids + (i * AG_ID_CAP), AG_ID_CAP, str_from(o));
+        _ag_copy_str(_ag_names + (i * AG_NAME_CAP), AG_NAME_CAP, str_from("t_one"));
+        var a = alloc(15100);
+        var al = _append_cstr_cap(a, 0, 15100, "{\"s\":\"");
+        al = _append_cstr_cap(a, al, 15100, big);
+        al = _append_cstr_cap(a, al, 15100, "\"}");
+        store8(a + al, 0);
+        _ag_copy_str(_ag_args + (i * AG_ARGS_CAP), AG_ARGS_CAP, str_from(a));
+        i = i + 1;
+    }
+    _ag_max = 32;
+    if (_agent_arr_buf == 0) { _agent_arr_buf = alloc(AGENT_ARR_CAP); }
+    var rl = _ag_build_array(_agent_arr_buf);
+    assert(rl < AGENT_ARR_CAP, "the array fits its buffer");
+    assert(_ag_arr_over > 0, "...the calls that did not fit are counted");
+    var v = bayan_json_v_parse_buf(_agent_arr_buf, rl);
+    assert(v != 0, "...and what is there is valid JSON, whole calls only (it was cut mid-string)");
+    if (v != 0) { assert_eq(agent_tc_count(v) + _ag_arr_over, 32, "...none lost silently"); }
+    _ag_reset();
+
+    test_group("the blocking path runs what it echoes (W-6, agent.cyr)");
+    var body = "{\"choices\":[{\"message\":{\"content\":null,\"tool_calls\":[{\"type\":\"function\",\"function\":{\"name\":\"t_one\",\"arguments\":\"{}\"}}]}}]}";
+    var tcs = agent_tool_calls(body, strlen(body));
+    var raw = _agent_normalize_block(tcs, agent_tc_count(tcs));
+    assert(raw != 0, "premise: a call with no id normalises");
+    _agent_set_tools_rebuilt(raw, tcs, agent_tc_count(tcs));
+    assert(_ui_contains(raw, "thoth_call_0") == 1, "the echo carries the minted id");
+    assert(streq(agent_tc_id(_agent_round_val, 0), "thoth_call_0"), "...and the executor reads the same id (it answered \"\")");
+    _ag_reset();
+
+    test_group("stops reach every surface (W-8)");
+    agent_stop_why_clear();
+    var sm = out_mode();
+    out_mode_set(OUT_RING); feed_init();
+    budget_report(BUDGET_TOKENS);
+    feed_flush_pending(); out_mode_set(sm); feed_init();
+    assert(_ui_contains(agent_stop_why(), "budget") == 1, "a budget stop leaves its reason for the window");
+    agent_stop_why_clear();
+
+    test_group("an invalid byte never reaches the wire (W-10, hoosh.cyr)");
+    var b = alloc(256);
+    var n = _json_escape_into_cap(b, 0, 256, "ok \xc3\xa9 \xe2\x82 end \xff \xc0\x80 \xed\xa0\x80 \xf4\x90\x80\x80");
+    store8(b + n, 0);
+    assert_eq(_ui_contains(b, "\xc3\xa9"), 1, "a good character passes whole");
+    assert_eq(_t_count_sub(b, n, "\\ufffd", 6) >= 5, 1, "every stray or overlong or surrogate byte goes out as U+FFFD");
+    assert(utf8_valid(b) == 1, "...so the text is valid UTF-8");
+    n = _json_escape_n_into_cap(b, 0, 256, "\xe2\x82\xac", 2);
+    store8(b + n, 0);
+    assert(streq(b, "\\ufffd\\ufffd"), "a character a byte cap cut in half does too");
+
+    test_group("a repository's layer cannot raise the turn's limits (T-10, W-12, config.cyr)");
+    var lp = bayan_toml_parse(str_from("[hoosh]\nmax_iters = 200\n"));
+    assert(lp != 0, "premise: a local section parses");
+    var lh = _cfg_section_pairs(lp, "hoosh");
+    _cfg_suppressed_n = 0;
+    assert_eq(_cfg2_int_capped(lh, 0, "max_iters", HOOSH_MAX_ITERS_DEFAULT, "hoosh.max_iters"), 0 - 1, "a local 200 over the default is not taken");
+    assert_eq(config_suppressed_count(), 1, "...and is named");
+    var ll = _cfg_section_pairs(bayan_toml_parse(str_from("[hoosh]\nmax_iters = 3\n")), "hoosh");
+    assert_eq(_cfg2_int_capped(ll, 0, "max_iters", HOOSH_MAX_ITERS_DEFAULT, "hoosh.max_iters"), 3, "a local 3 lowers it");
+    _cfg_suppressed_n = 0;
+    var bp = _cfg_section_pairs(bayan_toml_parse(str_from("[budget]\nmax_tokens = 1_000\n")), "budget");
+    assert_eq(_cfg_int(bp, "max_tokens"), 1000, "`1_000` is a number (W-11: it read as no ceiling)");
+
+    test_group("the tool advertisement stays well formed (T-12, agent.cyr)");
+    assert_eq(_agent_tool_is_local("read_file"), 1, "a registry tool named read_file is shadowed");
+    assert_eq(_agent_tool_is_local("fs_read"), 0, "...fs_read is not");
+    return 0;
+}
+
+fn test_harden_redact() {
+    test_group("a tool result is scanned in windows, so its cost is linear (W-7, redact.cyr)");
+    redact_reset();
+    var n = 60000;
+    var run = alloc(n + 1);
+    var i = 0;
+    while (i < n) { store8(run + i, 120); i = i + 1; }
+    store8(run + n, 0);
+    # Four times the bytes, about four times the time. Quadratic is sixteen: 60 KB took 20 s. Asked as a ratio, so an emulator's clock does not decide it.
+    var t00 = clock_now_ms();
+    store8(run + 15000, 0);
+    redact_tool_result(run);
+    var t15 = clock_now_ms() - t00;
+    store8(run + 15000, 120);
+    var t0 = clock_now_ms();
+    var r = redact_tool_result(run);
+    var t60 = clock_now_ms() - t0;
+    assert(t60 < (t15 * 9 + 100), "60 KB of an unbroken run costs about four times 15 KB");
+    assert(r == run, "...and clean text comes back as the caller's own pointer");
+    var key = "text with a key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 in it";
+    r = redact_tool_result(key);
+    assert(_ui_contains(r, "abcdefghijklmnop") == 0, "a secret in a short text is caught");
+    var lines = alloc(n + 128);
+    var o = 0;
+    while (o < (n - 200)) { o = _append_cstr_cap(lines, o, n, "plain line of text, nothing to see here\n"); }
+    o = _append_cstr_cap(lines, o, n + 100, key);
+    store8(lines + o, 0);
+    r = redact_tool_result(lines);
+    assert(_ui_contains(r, "abcdefghijklmnop") == 0, "...and one past the first window");
+    assert(_ui_contains(r, "plain line of text") == 1, "...with the rest of the text intact");
+    assert(strlen(r) < (o + 16), "...and whole");
+    redact_reset();
+
+    test_group("the display's scan is not repeated, and nothing else skips one (M-6, agent.cyr)");
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    _agent_work_reset(); store8(_agent_work, 0);
+    var shown = _agent_redact_shown("nothing secret");
+    assert(_agent_scanned == shown, "a display scan is remembered");
+    _agent_add_result("c1", shown);
+    assert_eq(_agent_scanned, 0, "...for the one result that follows");
+    var sec = "key sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 here";
+    _agent_scanned = "another string";
+    _agent_add_result("c2", sec);
+    assert(_ui_contains(_agent_work, "abcdefghijklmnop") == 0, "a different pointer is scanned: a stale memo hides no secret");
+    _agent_work_reset(); store8(_agent_work, 0);
+    redact_reset();
+
+    test_group("recalled notes meet what a tool result meets (T-3, memory.cyr)");
+    var sv = _gate_tron;
+    _gate_tron = _hd_allow("[agent.\"thoth\"]\ndeny = [\"mneme_*\"]\n");
+    var sm = out_mode(); out_mode_set(OUT_RING); feed_init();
+    assert_eq(_mem_call_ok("mneme_search", "{\"query\":\"x\"}"), 0, "a policy denying mneme_* stops the recall");
+    out_mode_set(sm); feed_init();
+    _gate_tron = 0;
+    assert_eq(_mem_call_ok("mneme_search", "{\"query\":\"x\"}"), 1, "with no policy it stays what [memory] turned on");
+    _gate_tron = sv;
+    _cfg_daimon_url_local = 1;
+    _daimon_mem_probed = 1;
+    assert_eq(memory_goes_remote(), 0, "a repository's daimon url takes no memory traffic");
+    _cfg_daimon_url_local = 0;
+    assert_eq(memory_goes_remote(), 1, "...the operator's does");
+    assert(streq(memory_write_target(), "mneme (the MCP host)"), "...and the prompt names where the note goes");
+    _daimon_mem_probed = 0;
+    return 0;
+}
+
+fn test_harden() {
+    test_harden_gate();
+    test_harden_jail();
+    test_harden_stores();
+    test_harden_surfaces();
+    test_harden_rounds();
+    test_harden_redact();
+    return 0;
+}

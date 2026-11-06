@@ -27,7 +27,7 @@ URL="https://raw.githubusercontent.com/MacCracken/bote/${TAG}/dist/bote-core.cyr
 
 echo "Syncing bote-core $TAG from $URL"
 mkdir -p "$REPO_ROOT/src/vendor"
-curl -sSf "$URL" -o "$DEST"
+curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 
 # Sanity: the bundle must be the core profile at the requested tag.
 grep -q "^# Version: ${TAG}\$" "$DEST" || {

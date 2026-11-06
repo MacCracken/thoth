@@ -46,7 +46,7 @@ fn _gstatus_folder(cmds, pen, ty, color) {
 
 # format an int into a fresh bump-heap buffer (persists until raster) and draw it; return the advanced pen.
 fn _gstatus_int(cmds, pen, ty, color, n) {
-    var b = alloc(24);
+    var b = gd_num_buf();
     var len = fmt_int_buf(n, b);
     store8(b + len, 0);
     gd_push_text(cmds, pen, ty, color, b, 0);
@@ -127,7 +127,7 @@ fn gstatus_build(cmds, x, y, w, h) {
     }
     # cost (omit-until-priced)
     if (status_present(SF_COST) == 1) {
-        var cb = alloc(24);
+        var cb = gd_num_buf();
         cost_fmt(cb, status_ival(SF_COST));
         pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_GREEN), cb) + GSTATUS_GAP;
     }

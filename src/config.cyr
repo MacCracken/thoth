@@ -44,8 +44,8 @@ var _cfg_subagent_enabled = 0;      # 0.43.0 (T2-1): [subagent].enabled — DEFA
 var _sub_depth = 0;
 
 var SUB_MAX_ITERS_DEFAULT = 8;      # 0.43.0 (T2-1): rounds ONE child may spend; smaller than the parent's on purpose.
-                                    # Declared here, not in subagent.cyr, because config_subagent_max_iters (below) reads it
-                                    # and config.cyr is included first.
+# Declared here, not in subagent.cyr, because config_subagent_max_iters (below) reads it
+# and config.cyr is included first.
 var _cfg_subagent_max_iters = 0 - 1;  # 0.43.0 (T2-1): [subagent].max_iters — unset sentinel; default+clamp in the getter
 # [budget] — SPEND enforcement (0.44.3). thoth has had token/cost ACCOUNTING since 0.10.2 and no bound
 # on it: nothing stopped a runaway loop, and delegation multiplies a turn's cost (ADR-0018 records that
@@ -401,6 +401,26 @@ fn config_path_display(path) {
 # portability claim aarch64 does not honour), so 0.45.3 recognises the file by its BYTES instead — see the
 # note inside the walk. A copy of the global config placed as a project config is folded into the global
 # layer by the same test, which changes nothing it loads.
+# _cfg_foreign (0.53.3): 1 when `path` belongs to another user. The walk climbs 40 levels with no owner check, so a
+# /tmp/.thoth/config.cyml from anyone on the machine became a local layer for everyone working under /tmp, the case git's
+# safe.directory exists for. Root's files stay: root can already do anything. AGNOS and Windows have no owner in this shape.
+var _cfg_uid_seam = 0 - 1;       # a test stands in another uid for this process's own
+var _cfg_foreign_path = 0;       # the file the walk passed over, for the notice
+fn _cfg_foreign(path) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    var st[256];
+    if (sys_stat(path, &st) != 0) { return 0; }
+    var u = load32(&st + STAT_UID);
+    var me = _cfg_uid_seam;
+    if (me < 0) { me = syscall(SYS_GETUID); }
+    if ((u == 0) || (u == me)) { return 0; }
+    return 1;
+    #endif
+    #endif
+    return 0;
+}
+
 fn _cfg_local_path() {
     if (_cfg_lpath_done == 1) { return _cfg_lpath_c; }
     _cfg_lpath_done = 1;
@@ -420,12 +440,18 @@ fn _cfg_local_path() {
             # path: the floor still has no realpath/getcwd, and $PWD is display-grade (see project_root_display).
             # The LEVEL is recorded for the root walk, which has no bytes of its own to go by.
             if (_cfg_same_bytes(cand, _cfg_global_path()) == 1) { _cfg_lglobal_lvl = lvl; return 0; }
-            _cfg_lpath_c = cand; _cfg_lsource = 1;
-            return _cfg_lpath_c;
+            if (_cfg_foreign(cand) == 0) {
+                _cfg_lpath_c = cand; _cfg_lsource = 1;
+                return _cfg_lpath_c;
+            }
+            _cfg_foreign_path = cand;
         }
         lvl = lvl + 1;
     }
-    if (file_exists(CONFIG_PATH) == 1) { _cfg_lpath_c = CONFIG_PATH; _cfg_lsource = 3; }
+    if (file_exists(CONFIG_PATH) == 1) {
+        if (_cfg_foreign(CONFIG_PATH) == 0) { _cfg_lpath_c = CONFIG_PATH; _cfg_lsource = 3; }
+        else { _cfg_foreign_path = CONFIG_PATH; }
+    }
     return _cfg_lpath_c;
 }
 
@@ -739,6 +765,19 @@ fn _cfg2_str_global_only(l, g, key, label) {
 # non-numeric (decimal digits only — pricing rates are whole micro-USD/1K), or too large for an i64 (0.47.0: a
 # 20-digit value used to WRAP into a small number and price a session at a fiction — an unrepresentable rate is
 # absent, never a wrapped one). Pure.
+# _cfg_int_bad (0.53.3, W-11): a present value thoth cannot read as an integer is named. `1e3`, `1000.0` and `0x3E8` are
+# valid TOML numbers, and a ceiling spelled that way simply did not exist.
+fn _cfg_int_bad(key) {
+    var cap = strlen(key) + 48;
+    var b = alloc(cap);
+    if (b == 0) { return 0 - 1; }
+    var o = _append_cstr_cap(b, 0, cap, key);
+    o = _append_cstr_cap(b, o, cap, " (not a plain whole number; ignored)");
+    store8(b + o, 0);
+    _cfg_note_unknown(b);
+    return 0 - 1;
+}
+
 fn _cfg_int(pairs, key) {
     if (pairs == 0) { return 0 - 1; }
     var v = bayan_toml_get_by_cstr(pairs, key);
@@ -750,12 +789,17 @@ fn _cfg_int(pairs, key) {
     var i = 0;
     while (i < n) {
         var ch = load8(d + i);
-        if ((ch < 48) || (ch > 57)) { return 0 - 1; }   # any non-digit -> reject
-        if (acc > 922337203685477580) { return 0 - 1; }  # acc * 10 would pass i64
-        acc = acc * 10;
-        if (acc > (9223372036854775807 - (ch - 48))) { return 0 - 1; }
-        acc = acc + (ch - 48);
-        i = i + 1;
+        # 0.53.3 (W-11): `1_000` is a TOML integer, and this file's own comment writes one: `[budget] max_tokens = 1_000` read as
+        # no ceiling at all, silently.
+        if ((ch == 95) && (i > 0) && (i < (n - 1))) { i = i + 1; }
+        else {
+            if ((ch < 48) || (ch > 57)) { return _cfg_int_bad(key); }   # any non-digit -> reject
+            if (acc > 922337203685477580) { return _cfg_int_bad(key); }  # acc * 10 would pass i64
+            acc = acc * 10;
+            if (acc > (9223372036854775807 - (ch - 48))) { return _cfg_int_bad(key); }
+            acc = acc + (ch - 48);
+            i = i + 1;
+        }
     }
     return acc;
 }
@@ -843,6 +887,16 @@ fn _price_raise_from(sections) {
 # _cfg2_int_ceiling (0.52.6, D1): a CEILING read strictest-wins — the lower of the two positive values; a local layer may
 # set one where the global has none (tightening) and may lower the global's, never raise, unset (0, negative) or
 # replace it with something unreadable: those keep the global value and are named. Returns -1 when neither sets one.
+# _cfg2_int_capped (0.53.3, T-10, W-12): the same for a limit with a compiled default: with no global value the default is the
+# ceiling, so a repository cannot raise it either: a clone's `[hoosh] max_iters = 200` ran 41 model calls in a turn against 8.
+fn _cfg2_int_capped(l, g, key, dflt, label) {
+    var v = _cfg2_int_ceiling(l, g, key, label);
+    if ((_cfg_int(g, key) <= 0) && (v > dflt)) {
+        _cfg_note_suppressed(label);
+        return 0 - 1;
+    }
+    return v;
+}
 fn _cfg2_int_ceiling(l, g, key, label) {
     var gv = _cfg_int(g, key);
     if (gv <= 0) { gv = 0 - 1; }
@@ -933,6 +987,7 @@ fn _alias_load2(lo, gl) {
     }
     _alias_n = 0;
     _alias_append(lo);
+    _alias_local_n = _alias_n;      # 0.53.3: entries below this came from the repository's layer
     _alias_append(gl);
     return 0;
 }
@@ -975,6 +1030,16 @@ fn _alias_append(sections) {
 # config_alias_lookup: the expansion cstring for the alias `name` (the bare token, no
 # slash), or 0 if no [alias] declares it. First-match (so a duplicate key uses the first
 # definition). Pure lookup; the dispatcher owns the expand-then-redispatch.
+# config_alias_is_local: 1 when alias `name` resolves to the repository's layer, which wins over the global's.
+var _alias_local_n = 0;
+fn config_alias_is_local(name) {
+    var i = 0;
+    while (i < _alias_local_n) {
+        if (streq(load64(_alias_names + i * 8), name) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
 fn config_alias_lookup(name) {
     var i = 0;
     while (i < _alias_n) {
@@ -1421,6 +1486,16 @@ fn _cfg_scan_unknown(sections) {
                 if (_cfg_known_key(nm, k) == 0) { _cfg_note_unknown(_cfg_join_dot(nm, k)); }
                 j = j + 1;
             }
+            # 0.53.3 (W-11): every reader takes the FIRST [shell], so a second one's allow and deny were dropped without a
+            # word. Compared against the first 256 tables only: a hostile file holds 100,000.
+            var e = 0;
+            while ((e < i) && (e < 256)) {
+                if (streq(str_cstr(bayan_toml_section_name(vec_get(sections, e))), nm) == 1) {
+                    _cfg_note_unknown(_cfg_join_dot(nm, "* (a repeated table; only the first is read)"));
+                    e = i;
+                }
+                e = e + 1;
+            }
         }
         i = i + 1;
     }
@@ -1461,10 +1536,22 @@ fn _cfg_layers_usable() {
 # _cfg_parse_sections: parse one config file into a TOML sections vec, or 0 when absent/unreadable.
 # Sets `_cfg_parse_any` when a file actually parsed, so config_parse_ok() still answers "a config was
 # read" for EITHER layer.
-fn _cfg_parse_sections(path) {
+# 0.53.3: a file that exists and cannot be read is not an absent one. A global config at chmod 000 read as "no config":
+# its policy, deny list and budget gone, while a repository's local layer applied on its own. The global counts as a refused
+# parse (starting unconfigured, named). A local layer can only add, so ignoring it is the safe side, also named.
+var _cfg_local_unreadable = 0;
+fn _cfg_read_refused(path, is_global) {
+    var fd = file_open(path, 0, 0);
+    if (fd >= 0) { file_close(fd); }
+    elif ((fd == (0 - 2)) || (fd == (0 - 20))) { return 0; }   # ENOENT, ENOTDIR: simply not there
+    if (is_global == 1) { _cfg_parse_refused = 1; }
+    else { _cfg_local_unreadable = 1; }
+    return 0;
+}
+fn _cfg_parse_sections(path, is_global) {
     if (path == 0) { return 0; }
     var r_t, r_v = bayan_cyml_parse_file_r(path);
-    if (is_err_result(r_t) == 1) { return 0; }
+    if (is_err_result(r_t) == 1) { return _cfg_read_refused(path, is_global); }
     # The value form carries the payload directly. This read used to be
     # `load64(r + 8)` — offset 8 of the BOXED Result object, which no
     # longer exists; `bayan_cyml_parse_file_r` returns Ok(doc).
@@ -1559,12 +1646,18 @@ fn config_load() {
     _cfg_parse_ok = 0;                            # 0.24.4: cleared until a file is actually read + parsed
     _cfg_parse_any = 0;
     _cfg_parse_refused = 0;
-    var gl = _cfg_parse_sections(_cfg_global_path());   # the base layer
-    var lo = _cfg_parse_sections(_cfg_local_path());    # layered on top, per key
-    if (_cfg_parse_refused == 1) { emit_err("thoth: out of memory parsing the config; starting unconfigured\n"); }
-    if (_cfg_layers_usable() == 0) { return 0; }  # no layer readable, or one refused -> not configured
+    _cfg_local_unreadable = 0;
+    var gl = _cfg_parse_sections(_cfg_global_path(), 1);   # the base layer
+    var lo = _cfg_parse_sections(_cfg_local_path(), 0);    # layered on top, per key
+    if (_cfg_parse_refused == 1) { emit_err("thoth: a config file could not be read; starting unconfigured\n"); }
+    if (_cfg_local_unreadable == 1) { emit_err("thoth: the repository's config could not be read; ignoring it\n"); }
+    if (_cfg_layers_usable() == 0) {              # no layer readable, or one refused -> not configured
+        if (_cfg_foreign_path != 0) { emit_err("thoth: a config file another user owns was not read\n"); }
+        return 0;
+    }
     _cfg_unknown_n = 0;                           # 0.43.5: re-scanned on every load (so /reload re-reports)
     _cfg_suppressed_n = 0;                        # 0.44.3: likewise for authority keys the local layer tried to set
+    if (_cfg_foreign_path != 0) { _cfg_note_suppressed("a config file another user owns (not read as a local layer)"); }
     _cfg_scan_unknown(gl);
     _cfg_scan_unknown(lo);
     _price_load2(lo, gl);
@@ -1593,23 +1686,31 @@ fn config_load() {
     # is no token.
     var lurl = _cfg_str(hoosh_l, "url");
     if (lurl != 0) { if (_cfg_str(hoosh_l, "token") == 0) {
-        var gtok = _cfg_str(hoosh_g, "token");
-        if (gtok != 0) {
-            var gurl = _cfg_str(hoosh_g, "url");
-            var redirect = 1;
-            if (gurl != 0) { if (streq(lurl, gurl) == 1) { redirect = 0; } }
-            if (redirect == 1) {
-                _cfg_hoosh_token = 0;
-                _cfg_note_suppressed("hoosh.token (withheld: the local layer redirects [hoosh].url)");
+            var gtok = _cfg_str(hoosh_g, "token");
+            if (gtok != 0) {
+                var gurl = _cfg_str(hoosh_g, "url");
+                var redirect = 1;
+                if (gurl != 0) { if (streq(lurl, gurl) == 1) { redirect = 0; } }
+                if (redirect == 1) {
+                    _cfg_hoosh_token = 0;
+                    _cfg_note_suppressed("hoosh.token (withheld: the local layer redirects [hoosh].url)");
+                }
             }
-        }
-    } }
+        } }
     # 0.52.6 (design question D2, the maintainer's ruling): the other direction — a local token with NO local url. It
     # replaced the operator's token and went to the operator's own gateway, unannounced (requests billed to, and
     # attributed to, a credential the repository chose). A local token now travels only with a url of its own layer;
     # alone it is ignored and named (the global token stays). The same value as the global's asked for nothing.
+    # 0.53.3: a local url EQUAL to the global's counts as none. It is no redirect (the block above says so), so the
+    # same pair of keys sent the repository's token to the operator's gateway, the case D2 closed, by naming the url.
     var ltok = _cfg_str(hoosh_l, "token");
-    if ((ltok != 0) && (lurl == 0)) {
+    var own_url = 0;
+    if (lurl != 0) {
+        own_url = 1;
+        var gu2 = _cfg_str(hoosh_g, "url");
+        if (gu2 != 0) { if (streq(lurl, gu2) == 1) { own_url = 0; } }
+    }
+    if ((ltok != 0) && (own_url == 0)) {
         var gtk = _cfg_str(hoosh_g, "token");
         var same = 0;
         if (gtk != 0) { if (streq(ltok, gtk) == 1) { same = 1; } }
@@ -1623,7 +1724,7 @@ fn config_load() {
     _cfg_hoosh_stream = _cfg2_bool(hoosh_l, hoosh_g, "stream", 1);    # default on
     _cfg_hoosh_history = _cfg2_bool(hoosh_l, hoosh_g, "history", 1);   # default on
     _cfg_hoosh_tools = _cfg2_bool(hoosh_l, hoosh_g, "tools", 1);        # default on
-    _cfg_hoosh_max_iters = _cfg2_int(hoosh_l, hoosh_g, "max_iters");    # -1 when absent -> default in the getter
+    _cfg_hoosh_max_iters = _cfg2_int_capped(hoosh_l, hoosh_g, "max_iters", HOOSH_MAX_ITERS_DEFAULT, "hoosh.max_iters (a local value may only lower it)");    # -1 when absent -> default in the getter
     _cfg_hoosh_timeout_ms = _cfg2_int(hoosh_l, hoosh_g, "timeout_ms");  # 0.44.2: -1/absent -> HOOSH_TIMEOUT_MS_DEFAULT
     _cfg_hoosh_compact_at = _cfg2_int(hoosh_l, hoosh_g, "compact_at");  # -1/absent -> off (0 from the getter)
     _cfg_hoosh_parallel = _cfg2_bool(hoosh_l, hoosh_g, "parallel", 1);  # default on
@@ -1646,7 +1747,7 @@ fn config_load() {
     }
     var tron_l = _cfg_section_pairs(lo, "tron");      var tron_g = _cfg_section_pairs(gl, "tron");
     # AUTHORITY — the policy that authorizes the model's tool calls, and the identity it authorizes as.
-    _cfg_tron_policy = _cfg2_str_global_only(tron_l, tron_g, "policy", "tron.policy");
+    _cfg_tron_policy = _cfg_global_rel(_cfg2_str_global_only(tron_l, tron_g, "policy", "tron.policy"));
     _cfg_tron_agent = _cfg2_str_global_only(tron_l, tron_g, "agent", "tron.agent");
     var log_l = _cfg_section_pairs(lo, "log");        var log_g = _cfg_section_pairs(gl, "log");
     # AUTHORITY — an unjailed write sink: thoth creates and appends to whatever path this names.
@@ -1691,18 +1792,18 @@ fn config_load() {
     _cfg_hook_pre_tool      = _cfg2_str_global_only(hook_l, hook_g, "pre_tool", "hooks.pre_tool");
     _cfg_hook_post_tool     = _cfg2_str_global_only(hook_l, hook_g, "post_tool", "hooks.post_tool");
     _cfg_hook_session_end   = _cfg2_str_global_only(hook_l, hook_g, "session_end", "hooks.session_end");
-    _cfg_hook_timeout_ms    = _cfg2_int(hook_l, hook_g, "timeout_ms");
+    _cfg_hook_timeout_ms    = _cfg2_int_global_only(hook_l, hook_g, "timeout_ms", "hooks.timeout_ms");   # 0.53.3 (W-12): the hooks are the global's, so is their clock: 1 ms made every pre_tool hook deny
     var tp_l = _cfg_section_pairs(lo, "toolpin");     var tp_g = _cfg_section_pairs(gl, "toolpin");
     # 0.51.0 (F6): the whole [toolpin] table is AUTHORITY. `enabled` used to layer per key, so a cloned repo's
     # `.thoth/config.cyml` could switch the rug-pull defence off (and /reload applied it live) — the class
     # ADR-0021 forbids; `file` is where thoth writes and reads back its trust record (a repo shipping a store of
     # pre-approved pins would approve a swapped definition); `durable` opts the store off, which is the same act.
     _cfg_toolpin_enabled = _cfg2_bool_global_only(tp_l, tp_g, "enabled", "toolpin.enabled", 1);   # 0.42.0 (T3): DEFAULT ON — see the getter
-    _cfg_toolpin_file = _cfg_expand_home(_cfg2_str_global_only(tp_l, tp_g, "file", "toolpin.file"));
+    _cfg_toolpin_file = _cfg_global_rel(_cfg2_str_global_only(tp_l, tp_g, "file", "toolpin.file"));
     _cfg_toolpin_durable = _cfg2_bool_global_only(tp_l, tp_g, "durable", "toolpin.durable", 1);
     var sub_l = _cfg_section_pairs(lo, "subagent");   var sub_g = _cfg_section_pairs(gl, "subagent");
     _cfg_subagent_enabled = _cfg2_bool_safe(sub_l, sub_g, "enabled", "subagent.enabled (a local layer may only turn it off)", 0, 0);   # 0.43.0 (T2-1): DEFAULT OFF — see the getter; 0.52.8 (R1): spend, safe direction only
-    _cfg_subagent_max_iters = _cfg2_int(sub_l, sub_g, "max_iters");   # -1 when absent -> default in the getter
+    _cfg_subagent_max_iters = _cfg2_int_capped(sub_l, sub_g, "max_iters", SUB_MAX_ITERS_DEFAULT, "subagent.max_iters (a local value may only lower it)");   # -1 when absent -> default in the getter
     var gd_l = _cfg_section_pairs(lo, "guard");       var gd_g = _cfg_section_pairs(gl, "guard");
     _cfg_guard_enabled = _cfg2_bool_safe(gd_l, gd_g, "enabled", "guard.enabled (a local layer may only turn it on)", 1, 1);   # 0.41.0 (T2-3): DEFAULT ON — see the getter; 0.52.8 (R1, audit F4)
     var vf_l = _cfg_section_pairs(lo, "verify");      var vf_g = _cfg_section_pairs(gl, "verify");
@@ -1716,7 +1817,7 @@ fn config_load() {
     var sh_l = _cfg_section_pairs(lo, "shell");       var sh_g = _cfg_section_pairs(gl, "shell");
     _cfg_shell_enabled = _cfg2_bool(sh_l, sh_g, "enabled", 0);    # opt-in; default off (0.16.0 shell tool)
     _cfg_shell_timeout_ms = _cfg2_int(sh_l, sh_g, "timeout_ms");  # -1 when absent -> default in the getter
-    _cfg_shell_output_cap = _cfg2_int(sh_l, sh_g, "max_output");  # -1 when absent -> default in the getter
+    _cfg_shell_output_cap = _cfg2_int_capped(sh_l, sh_g, "max_output", SHELL_OUT_DEFAULT, "shell.max_output (a local value may only lower it)");  # -1 when absent -> default in the getter
     _shell_globs_load2(sh_l, lo, sh_g, gl);                       # deny UNIONS · a local allow only narrows (0.52.6)
     var ask_l = _cfg_section_pairs(lo, "ask");        var ask_g = _cfg_section_pairs(gl, "ask");
     _cfg_ask_enabled = _cfg2_bool(ask_l, ask_g, "enabled", 0);    # 0.44.0 (T4-1): DEFAULT OFF — it interrupts a human
@@ -2179,6 +2280,19 @@ fn config_history_size() {
 # _cfg_expand_home (0.45.5): a configured path with a leading `~/` or `$HOME/` (or exactly `~` / `$HOME`)
 # resolved against $HOME — a fresh cstr; any other path, or no $HOME, comes back as given. Only the leading
 # form: `~user/…` and a `~` elsewhere are left alone, like every shell does for a quoted value.
+# _cfg_global_rel (0.53.3): a path the GLOBAL config names, with `~/` expanded and a relative one taken from `~/.thoth/`, the
+# directory of the file naming it. ADR-0021 makes [tron].policy global-only so a repository cannot choose what authorizes the
+# model, and a relative value undid that: it resolved against the working directory, so `policy = "tron-policy.toml"`, the
+# template's own line, named a file in whichever repository the operator opened. With no HOME it stays unset, and the seam
+# reads as absent: a confirm, never a silent allow. The pin store is the same case.
+fn _cfg_global_rel(path) {
+    path = _cfg_expand_home(path);
+    if (path == 0) { return 0; }
+    if (load8(path) == 47) { return path; }
+    var home = getenv("HOME");
+    if (home == 0) { return 0; }
+    return _cfg_join2(_cfg_join2(home, ".thoth"), path);
+}
 fn _cfg_expand_home(path) {
     if (path == 0) { return 0; }
     var home = getenv("HOME");

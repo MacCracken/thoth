@@ -27,7 +27,7 @@ URL="https://raw.githubusercontent.com/MacCracken/avatara/${TAG}/dist/avatara.cy
 
 echo "Syncing avatara $TAG from $URL"
 mkdir -p "$REPO_ROOT/src/vendor"
-curl -sSf "$URL" -o "$DEST"
+curl -sSf "$URL" -o "$DEST.part" && mv "$DEST.part" "$DEST"
 
 grep -q "^# Version: ${TAG}\$" "$DEST" || {
     echo "WARN: $DEST header does not report Version: $TAG"; }

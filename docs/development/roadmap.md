@@ -116,19 +116,23 @@ unsure, patch.
 > decided — the pin lands here with the decision. Everything *identified* but not committed lives in
 > [`gap-review.md`](gap-review.md).
 
-### Repair batch 14 → 0.53.3
+### Repair batch 15 → 0.53.4
 
-Two items found while keeping a long reply whole. The design questions awaiting a ruling sit in
-[`gap-review.md`](gap-review.md). thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its
-newest tag.
+What the [2026-11-05 audit](../audit/2026-11-05-audit.md) left, with the reason on each. The design questions awaiting a ruling sit
+in [`gap-review.md`](gap-review.md). thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its newest tag.
 
-1. **The reasoning accumulator keeps a silent 64 KiB cut** (`REASON_ACC_CAP`, `MSG_REASON_CAP`). Past that a thinking fold
-   and its session record stop with no mark. It needs what the reply got: growth to a ceiling that says so, with the session
-   file's frame and the window's fold checked against it.
-2. **Each stream frame's parse lands on the never-freeing heap** (`bayan_json_v_parse_buf` in `_hoosh_sse_cb` and
-   `_agent_sse_cb`). Measured: peak RSS 13.6 MB for a 1 KB reply, 126 MB for 1 MB, about 1.8 KB a frame, and it adds up
-   across a session. `bayan_json_v_parse_buf_a` on an arena reset per frame is the shape, as long as nothing a frame
-   folds keeps a pointer into the tree.
+1. **The window is dead during a silent network wait** (G-6, M-9), a streaming turn's first token included: no frames, Esc ignored, the
+   compositor's ping unanswered, and a hung gateway blocks the first frame. Measured: Esc at 1.5 s had no effect until the
+   wait ended. It takes a transport that returns between reads, for every POST.
+2. **Each window rebuild rescans every line of a long reply** (M-10). A sparse line index. 5.3 ms at 300 KB today.
+3. **SIGTERM leaves the terminal raw** (S-11). A handler or a signalfd in the input loop.
+4. **The TUI paints a frame in hundreds of syscalls** (M-5). A batched frame; the prototype needed a darshana change.
+5. **The composer has no long-line scroll and its caret is approximate** (G-9).
+6. **`git_probe` is slow on large trees and runs at startup** (P-10, M-3): 0.58 s a turn on this tree and 166 KB of heap a call, 2.6 MB on a
+   3.8k-file one. Move the TUI's startup probe after the first frame. The rest is sit's: see the waiting table.
+7. **Ctrl-C in line-mode `/run` reaches thoth** (P-11). SIGINT and SIGQUIT ignored around the wait, with the child's default restored
+   before exec.
+8. **Release rebuilds what CI tested** (P-8). Upload the CI binary and publish that one.
 
 ### Next steps — follow-ups awaiting the maintainer
 
@@ -164,9 +168,13 @@ tested on bote-core 3.8.9; thoth vendors 3.8.15, and nothing thoth reaches in t-
 | **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.8.1** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
 | **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.8.1** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
 | **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.8.1** | none — thoth prices from `[pricing]`, which has no cache rate either |
+| **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.3 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
+| **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap (P-10, M-3) | sit 1.13.0 | batch 15's item 6 moves what thoth can |
+| **sakshi** | no mode parameter on its output file | cyrius 6.7.18 | `_log_open_safe` creates the file first |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body`, `commit_tree_hex` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.13.0's `[lib.read]` still defines `cmd_reset` and leaves four unresolved (the three, and `commit_tree_hex`, all unreachable); bote 3.8.15 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.7.0** (vendored 1.7.0) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
 | **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and backslash and drive-letter paths in the jail |
+| **cyrius (floor)** | `lib/process_win.cyr:354`: `cmd.exe` is found by a search that takes in the cwd, so a planted one would run. The Windows lane is closed by the row above | cyrius 6.7.18 | none until the lane opens |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:610` and AGNOS `syscalls_x86_64_agnos.cyr:1048`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.18** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
 | **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | the 0–33 ABI (agnos 1.57.9) | degrades honestly; a candidate filing if the ABI gains a mode channel |
@@ -248,7 +256,7 @@ Recommended order, with the reason for the place. Each is ONE minor; its cuts ar
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** repair batch 14's two items.
+**Scheduled above:** repair batch 15's eight items.
 
 **Candidates above:** the pointer path Linux-Wayland only (F8).
 
