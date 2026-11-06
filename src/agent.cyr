@@ -85,12 +85,28 @@ fn _agent_work_puts(s) {
     while (load8(s + i) != 0) { _agent_work_putc(load8(s + i)); i = i + 1; }
     return 0;
 }
+# _agent_work_put_high: s[i] is a byte past ASCII. A well-formed sequence goes out whole and any other byte as \ufffd, the rule
+# `_json_escape_n_into_cap` keeps for every other request, because this writer is the second escaper that function's note says
+# there is not. A strict provider refuses the whole request over one bad byte: a Latin-1 file or a binary's output failed the turn
+# as a 502 (proven only against a real provider). Returns the source bytes it took.
+fn _agent_work_put_high(s, i, n) {
+    var sl = _json_utf8_len(s, i, n);
+    if (sl == 0) {
+        _agent_work_putc(92); _agent_work_putc(117); _agent_work_putc(102);
+        _agent_work_putc(102); _agent_work_putc(102); _agent_work_putc(100);
+        return 1;
+    }
+    var k = 0;
+    while (k < sl) { _agent_work_putc(load8(s + i + k)); k = k + 1; }
+    return sl;
+}
 # _agent_work_puts_esc: append s as a JSON string body (bounded, escaped). Stops at the tail reserve and
 # marks the value as cut IN the value — so the model reads "…[truncated" rather than silently receiving a
 # short file, and the caller's closing bytes still fit.
 fn _agent_work_puts_esc(s) {
     var i = 0;
-    while (load8(s + i) != 0) {
+    var n = strlen(s);
+    while (i < n) {
         if (_agent_work_room() <= 32) {
             _agent_work_full = 1;
             _agent_work_puts(" ...[truncated: this turn's tool working set is full]");
@@ -106,7 +122,8 @@ fn _agent_work_puts_esc(s) {
             _agent_work_putc(92); _agent_work_putc(117); _agent_work_putc(48); _agent_work_putc(48);
             _agent_work_putc(_hoosh_hex_digit(c / 16));
             _agent_work_putc(_hoosh_hex_digit(c - (c / 16) * 16));
-        } else { _agent_work_putc(c); }
+        } elif (c >= 128) { i = i + _agent_work_put_high(s, i, n) - 1; }
+        else { _agent_work_putc(c); }
         i = i + 1;
     }
     return 0;
@@ -2162,11 +2179,10 @@ fn agent_turn(prompt) {
         # used to yield a malformed one). Say which way it went — the model cannot report a tool it was
         # never told about, so silence here reads as "the agent refuses to use my MCP server".
         if (_agent_tools_skipped > 0) {
-            ui_emit(ROLE_RED, "  tool advertisement full");
-            ui_emit(ROLE_FAINT, " — "); ofmt_int(_agent_tools_skipped);
-            ui_emit(ROLE_FAINT, " tool(s) not advertised this session (registry exceeds ");
-            ofmt_int(AGENT_TOOLS_CAP); ui_emit(ROLE_FAINT, " bytes)");
-            oprintln("");
+            note_emit_role(ROLE_RED, "  tool advertisement full");
+            note_emit(" — "); note_emit_int(_agent_tools_skipped);
+            note_emit(" tool(s) not advertised this session (registry exceeds ");
+            note_emit_int(AGENT_TOOLS_CAP); note_println(" bytes)");
             log_begin("tools_truncated"); log_kv_int("skipped", _agent_tools_skipped); log_commit(SK_WARN);
         }
     }

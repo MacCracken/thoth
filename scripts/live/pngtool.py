@@ -13,6 +13,9 @@ import sys
 import zlib
 
 
+MAX_PIXELS = 1 << 25                       # 33 MP: an 8K output
+
+
 def write_png(path, w, h, rows):
     """rows: h bytes objects of w*3 RGB bytes."""
     raw = b"".join(b"\0" + r for r in rows)
@@ -32,7 +35,7 @@ def read_png(path):
     if d[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError(path + ": not a PNG")
     off = 8
-    idat = b""
+    idat = []
     w = h = 0
     ch = 3
     while off < len(d):
@@ -46,8 +49,13 @@ def read_png(path):
                 raise ValueError(path + ": only 8-bit RGB/RGBA is read")
             ch = 3 if ctype == 2 else 4
         elif t == b"IDAT":
-            idat += c
-    raw = zlib.decompress(idat)
+            idat.append(c)
+    if w == 0 or h == 0 or w * h > MAX_PIXELS:
+        raise ValueError("%s: %dx%d is outside what this tool reads" % (path, w, h))
+    need = h * (1 + w * ch)
+    raw = zlib.decompressobj().decompress(b"".join(idat), need + 1)
+    if len(raw) != need:
+        raise ValueError("%s: image data is not %dx%d" % (path, w, h))
     rows = []
     prev = bytearray(w * ch)
     i = 0

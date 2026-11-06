@@ -344,6 +344,22 @@ fn test_harden_rounds() {
     store8(b + n, 0);
     assert(streq(b, "\\ufffd\\ufffd"), "a character a byte cap cut in half does too");
 
+    test_group("a tool result reaches the wire as valid UTF-8 (agent.cyr, found by a real provider)");
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    _agent_work_reset();
+    _agent_work_puts_esc("caf\xe9 \xff\xfe ok \xc3\xa9 \xf0\x9f\x93\x9c \xe2\x82");
+    store8(_agent_work + _agent_work_len, 0);
+    assert(utf8_valid(_agent_work) == 1, "a Latin-1 file or a binary's bytes do not stop the request");
+    assert_eq(_t_count_sub(_agent_work, _agent_work_len, "\\ufffd", 6), 5, "each bad byte is one U+FFFD");
+    assert_eq(_ui_contains(_agent_work, "\xc3\xa9"), 1, "a good two-byte character passes whole");
+    assert_eq(_ui_contains(_agent_work, "\xf0\x9f\x93\x9c"), 1, "...and a four-byte one");
+    _agent_work_reset();
+    _agent_add_result("c1", "caf\xe9 result");
+    store8(_agent_work + _agent_work_len, 0);
+    assert(utf8_valid(_agent_work) == 1, "the whole tool message is valid");
+    assert_eq(_ui_contains(_agent_work, "caf\\ufffd result"), 1, "...with the text around the byte kept");
+    _agent_work_reset();
+
     test_group("a repository's layer cannot raise the turn's limits (T-10, W-12, config.cyr)");
     var lp = bayan_toml_parse(str_from("[hoosh]\nmax_iters = 200\n"));
     assert(lp != 0, "premise: a local section parses");
@@ -426,10 +442,156 @@ fn test_harden_redact() {
     assert_eq(memory_goes_remote(), 1, "...the operator's does");
     assert(streq(memory_write_target(), "mneme (the MCP host)"), "...and the prompt names where the note goes");
     _daimon_mem_probed = 0;
+
+    test_group("a search stopped by a limit says the tree was not covered (search.cyr, found on a 100k-file tree)");
+    var sv_files = SEARCH_MAX_FILES;
+    SEARCH_MAX_FILES = 3;
+    var sr = search_tool("{\"pattern\":\"zq-no-such-text-in-three-files\"}");
+    assert_eq(_ui_contains(sr, "in the 3 files"), 1, "it counts what it read");
+    assert_eq(_ui_contains(sr, "NOT searched"), 1, "...and says the rest was not");
+    SEARCH_MAX_FILES = sv_files;
+
+    test_group("the memory channel's tools meet their pins first (daimon.cyr, found against a real daimon)");
+    toolpin_reset();
+    var sv_compared = _daimon_mem_compared;
+    var sm2 = out_mode(); out_mode_set(OUT_RING); feed_init();
+    var reg = "{\"tools\":[{\"name\":\"mneme_search\",\"description\":\"swapped\",\"inputSchema\":{\"type\":\"object\"}},{\"name\":\"fs_read\",\"description\":\"x\"}]}";
+    var regv = bayan_json_v_obj_get_by_cstr(bayan_json_v_parse_buf(reg, strlen(reg)), "tools");
+    assert(regv != 0, "premise: the registry parses");
+    toolpin_check("mneme_search", "the first definition", "{\"type\":\"object\"}");
+    assert_eq(toolpin_withheld("mneme_search"), 0, "premise: before any tool list, nothing is held back");
+    _daimon_mem_tools_seam = regv;
+    _daimon_mem_compared = 0;
+    assert_eq(_mem_withheld("mneme_search"), 1, "a swap is seen before recall calls the tool, with no tool list built");
+    assert_eq(toolpin_changed(), 1, "...and named");
+    assert_eq(_mem_call_ok("mneme_search", "{\"query\":\"x\"}"), 0, "recall stops");
+    assert_eq(_daimon_mem_compared, 1, "the comparison runs once per host");
+    assert_eq(_tp_find("fs_read") < 0, 1, "it looks at mneme's tools alone");
+    assert_eq(toolpin_check("mneme_search", "swapped", "{\"type\":\"object\"}"), 0, "the tool list still withholds it");
+    assert_eq(toolpin_changed(), 1, "...without naming it a second time");
+    _daimon_mem_tools_seam = 0;
+    _daimon_mem_compared = sv_compared;
+    toolpin_reset();
+    out_mode_set(sm2); feed_init();
+    return 0;
+}
+
+# test_harden_pinstore: docs/audit/2026-11-05-not-verified-pass.md, the store half of src/toolpin.cyr, which no auditor had read.
+fn test_harden_pinstore() {
+    var sv_url = _cfg_daimon_url; var sv_en = _cfg_toolpin_enabled; var sv_du = _cfg_toolpin_durable;
+    _cfg_daimon_url = "http://a:1"; _cfg_toolpin_enabled = 1; _cfg_toolpin_durable = 1;
+    var d = "build/.thoth_hd_pins";
+    var path = "build/.thoth_hd_pins/toolpins";
+    _hd_sh("chmod 755 build/.thoth_hd_pins/locked 2>/dev/null; rm -rf build/.thoth_hd_pins; mkdir -p build/.thoth_hd_pins");
+    var sm = out_mode(); out_mode_set(OUT_RING); feed_init();
+    toolpin_reset(); toolpin_store_init(path);
+    toolpin_check("t_a", "one", "");
+    assert_eq(toolpin_store_flush(), 0, "premise: a store exists");
+
+    test_group("a store others can write is named and tightened, and another user's is refused (A-2, toolpin.cyr)");
+    _hd_sh("chmod 666 build/.thoth_hd_pins/toolpins");
+    toolpin_reset(); toolpin_store_init(path);
+    assert_eq(toolpin_store_state(), 1, "the operator's own loose store still loads: refusing it would make every tool a first sight");
+    assert_eq(toolpin_store_loose(), 1, "...and is named");
+    assert_eq(toolpin_store_dirty(), 1, "...and marked for a rewrite, with no first sight needed");
+    assert_eq(toolpin_store_flush(), 0, "the flush runs");
+    assert_eq(file_is_private(path), 1, "...and 0600 is back");
+    toolpin_reset(); toolpin_store_init(path);
+    assert_eq(toolpin_store_loose(), 0, "a tight store is not named");
+    if (syscall(SYS_GETUID) != 0) {
+        _cfg_uid_seam = 4242;
+        toolpin_reset(); toolpin_store_init(path);
+        assert_eq(toolpin_store_state(), 3, "a store another user owns is rejected");
+        _cfg_uid_seam = 0 - 1;
+    }
+
+    test_group("a thing at the store path that is no file cannot hold thoth (A-5, A-6, toolpin.cyr)");
+    _hd_sh("rm -f build/.thoth_hd_pins/toolpins; mkfifo build/.thoth_hd_pins/toolpins");
+    toolpin_reset(); toolpin_store_init(path);
+    assert_eq(toolpin_store_state(), 5, "a FIFO reads as unreadable, without hanging in open");
+    _hd_sh("rm -f build/.thoth_hd_pins/toolpins");
+    assert_eq(_tps_exists("build/.thoth_hd_pins/absent"), 0, "nothing there is absent");
+    if (syscall(SYS_GETUID) != 0) {
+        _hd_sh("mkdir -p build/.thoth_hd_pins/locked; touch build/.thoth_hd_pins/locked/toolpins; chmod 000 build/.thoth_hd_pins/locked");
+        assert_eq(_tps_exists("build/.thoth_hd_pins/locked/toolpins"), 1, "a store behind a locked directory is not absent, so it is not a first sight");
+        _hd_sh("chmod 755 build/.thoth_hd_pins/locked");
+    }
+
+    test_group("/tools trust never rewrites a file past the cap (A-9, toolpin.cyr)");
+    var sv_cap = TPS_READ_CAP;
+    _hd_file(path, "not a store, and longer than the lowered cap below, by a good way");
+    toolpin_reset(); toolpin_store_init(path);
+    assert_eq(toolpin_store_state(), 3, "premise: a rejected store");
+    TPS_READ_CAP = 32;
+    _tps_trusting = 1; _tps_dirty = 1;
+    toolpin_store_flush();
+    _tps_trusting = 0;
+    TPS_READ_CAP = sv_cap;
+    assert_eq(toolpin_store_state(), 6, "it reads as over the cap");
+    assert_eq(_ui_contains(_hd_sh("cat build/.thoth_hd_pins/toolpins"), "not a store"), 1, "...and the file is untouched");
+
+    test_group("the banner and stderr name what the pins do not cover (A-2, A-3, A-10, toolpin.cyr)");
+    feed_init();
+    toolpin_reset(); toolpin_store_init(path);
+    _tps_loose = 1;
+    var sv_dl = _cfg_daimon_url_local;
+    _cfg_daimon_url_local = 1;
+    toolpin_store_greeting();
+    feed_flush_pending();
+    assert_eq(_t_feed_has("could be written by others"), 1, "the banner names a store others could write");
+    assert_eq(_t_feed_has("[daimon].url"), 1, "...and a repository's daimon");
+    _tps_loose = 0; _cfg_daimon_url_local = sv_dl;
+    feed_init();
+    out_mode_set(OUT_NULL);
+    var efd = file_open("build/.thoth_hd_pins/err", O_WRONLY | O_CREAT | O_TRUNC, 420);
+    sys_dup2(2, 77); sys_dup2(efd, 2);
+    toolpin_reset();
+    _tp_n = TOOLPIN_MAX;
+    toolpin_check("t_over", "x", "");
+    _tp_n = 0;
+    sys_dup2(77, 2); file_close(efd); file_close(77);
+    out_mode_set(OUT_RING);
+    assert_eq(_ui_contains(_hd_sh("cat build/.thoth_hd_pins/err"), "UNPINNED"), 1, "past the table, one-shot says so on stderr");
+
+    test_group("/tools and /state tell the truth before and after a probe (A-11, A-12, toolpin.cyr)");
+    _hd_sh("rm -f build/.thoth_hd_pins/toolpins");
+    toolpin_reset(); toolpin_store_init(path);
+    toolpin_check("t_d", "one", "");
+    assert_eq(toolpin_differs("t_d", "one", ""), 0, "an unchanged definition does not differ");
+    assert_eq(toolpin_differs("t_d", "two", ""), 1, "a swapped one does, with no probe");
+    assert_eq(toolpin_differs("t_none", "x", ""), 0, "a tool with no pin has nothing to differ from");
+    assert_eq(toolpin_withheld("t_d"), 0, "reading the difference withholds nothing");
+    toolpin_check("t_d", "two", "");
+    assert_eq(toolpin_changed(), 1, "premise: one withheld");
+    toolpin_trust_one("t_d");
+    assert_eq(toolpin_changed(), 0, "trusting it by name takes it off the count");
+
+    test_group("a gateway cannot hold a blocking wait (A-1, hoosh.cyr)");
+    assert_eq(load64(hoosh_probe_opts() + SANDHI_HTTP_OPT_OFF_TOTAL_MS) > 0, 1, "a probe has a whole-call deadline, not just one per read");
+    assert_eq(load64(hoosh_catalog_opts() + SANDHI_HTTP_OPT_OFF_TOTAL_MS) > 0, 1, "...and so does the catalog the picker waits on");
+
+    test_group("the picker lists what a switch applies (A-13, A-15, mpick.cyr)");
+    mpick_init();
+    var long = alloc(MODEL_BUF_CAP + 8);
+    memset(long, 97, MODEL_BUF_CAP);
+    store8(long + MODEL_BUF_CAP, 0);
+    assert_eq(_mp_add(long), 0, "an id the model buffer would cut is refused");
+    store8(long + MODEL_BUF_CAP - 1, 0);
+    assert_eq(_mp_add(long), 1, "...and the longest that fits is kept");
+    assert_eq(_mp_add("stub\xe2\x80\x8b-model"), 0, "a zero-width space is refused: that row reads as stub-model");
+    assert_eq(_mp_add("stub\xe2\x80\x8c-model"), 0, "a joiner, which draws nothing, is refused");
+    assert_eq(_mp_add("stub\xe2\x80\xae-model"), 0, "a bidi control is refused");
+    assert_eq(_mp_add("caf\xc3\xa9-\xe6\xa8\xa1\xe5\x9e\x8b"), 1, "ordinary non-ASCII is kept");
+
+    toolpin_reset(); _tps_path = 0; _tps_state = 0; _tps_dirty = 0; _tps_loose = 0;
+    _cfg_daimon_url = sv_url; _cfg_toolpin_enabled = sv_en; _cfg_toolpin_durable = sv_du;
+    out_mode_set(sm); feed_init();
+    _hd_sh("rm -rf build/.thoth_hd_pins");
     return 0;
 }
 
 fn test_harden() {
+    test_harden_pinstore();
     test_harden_gate();
     test_harden_jail();
     test_harden_stores();

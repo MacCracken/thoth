@@ -304,7 +304,7 @@ fn _json_escape_n_into_cap(dst, off, cap, src, src_len) {
             } elif (c < 128) {
                 store8(dst + off, c); off = off + 1;
             } else {
-                # 0.53.3 (W-10): one place guarantees valid UTF-8 on the wire. Fixed byte caps cut characters all over this tree
+                # 0.53.3 (W-10): valid UTF-8 on the wire, here and in `_agent_work_puts_esc`. Fixed byte caps cut characters all over this tree
                 # (a file at read_file's cap, piped stdin, a span, a log field), and a strict parser refused the whole request.
                 # A byte that is not part of a well-formed sequence goes out as U+FFFD; a good one whole.
                 var sl = _json_utf8_len(src, i, src_len);
@@ -355,7 +355,8 @@ fn _json_utf8_len(src, i, n) {
 
 # _json_escape_into_cap: the NUL-terminated wrapper (escape up to the first 0 byte) for untrusted (model/MCP)
 # cstrings. Delegates to the length-bounded core `_json_escape_n_into_cap` at strlen(src). Pure. (0.37.0: this is
-# now the ONLY escaper — the unbounded twin was deleted; every request build funnels through the bounded core.)
+# now the only escaper for a request buffer — the unbounded twin was deleted. A tool result takes `_agent_work_puts_esc`, which
+# keeps the same rules on the agent's working set.)
 fn _json_escape_into_cap(dst, off, cap, src) {
     return _json_escape_n_into_cap(dst, off, cap, src, strlen(src));
 }
@@ -1725,6 +1726,7 @@ fn hoosh_routes_fold(arr) {
     if (bayan_json_v_tag(arr) != JTAG_ARR) { return 0 - 1; }
     var n = bayan_json_v_arr_len(arr);
     if (n == 0) { return 0 - 1; }
+    if (n > HOOSH_ROUTE_MAX) { n = HOOSH_ROUTE_MAX; }      # a catalog entry with 690,000 routes held Ctrl-P for 9 s
     var c[32];
     store64(&c, 0); store64(&c + 8, 0); store64(&c + 16, 0); store64(&c + 24, 0);
     var missing = 0;
@@ -1757,6 +1759,7 @@ fn hoosh_routes_keybad(arr) {
     if (bayan_json_v_tag(arr) != JTAG_ARR) { return 0 - 1; }
     var n = bayan_json_v_arr_len(arr);
     if (n == 0) { return 0 - 1; }
+    if (n > HOOSH_ROUTE_MAX) { n = HOOSH_ROUTE_MAX; }
     var bad = 0;
     var i = 0;
     while (i < n) {
@@ -2234,6 +2237,7 @@ fn hoosh_probe_opts() {
         sandhi_http_options_read_ms(o, HOOSH_PROBE_MS);
         sandhi_http_options_write_ms(o, HOOSH_PROBE_MS);
         sandhi_http_options_connect_ms(o, HOOSH_PROBE_CONNECT_MS);
+        sandhi_http_options_total_ms(o, HOOSH_PROBE_MS * 2);   # read_ms bounds each read: one byte a second never trips it
         _hoosh_opts_probe = o;
     }
     return _hoosh_opts_probe;
@@ -2253,6 +2257,7 @@ fn hoosh_catalog_opts() {
         sandhi_http_options_write_ms(o, HOOSH_PROBE_MS);
         sandhi_http_options_connect_ms(o, HOOSH_PROBE_CONNECT_MS);
         sandhi_http_options_max_response_bytes(o, HOOSH_CATALOG_CAP);
+        sandhi_http_options_total_ms(o, HOOSH_PROBE_MS * 2);   # the picker waits on this inside the input loop, with Esc unread
         _hoosh_opts_catalog = o;
     }
     return _hoosh_opts_catalog;

@@ -1554,10 +1554,10 @@ fn _tui_pick_apply(id) {
     session_set_model_copy(id);
     term_title_set();                             # reflect the new model in the terminal title (0.22.3)
     out_mode_set(OUT_RING);
-    ui_emit(ROLE_GREEN, "model -> "); emit(id);
+    ui_emit(ROLE_GREEN, "model -> "); emit(session_model());
     feed_flush_pending();
     out_mode_set(OUT_FD1);
-    log_begin("model_switch"); log_kv_str("model", id); log_commit(SK_INFO);
+    log_begin("model_switch"); log_kv_str("model", session_model()); log_commit(SK_INFO);
     return 0;
 }
 

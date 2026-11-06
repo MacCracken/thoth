@@ -62,10 +62,26 @@ fn mpick_init() {
 # raw (_tui_pick_emit_clip -> emit_raw_n, straight to the terminal) and a switch echoes them on the feed's "model -> "
 # line, so an escape inside a catalog id reached the screen twice. '?' keeps the byte count, so the store arithmetic
 # here is unchanged, and a hostile id stays a visible, selectable row.
+#
+# An id the model buffer cannot hold whole, or one holding a character that is blank, draws nothing or reorders the text, is refused and counted in
+# `mpick_unloaded`: the first switched to a third id neither row showed, and the second makes `stub\u200b-model` look like `stub-model`. The gate
+# already treats these as dangerous on a confirm (`_confirm_cp_class`).
+fn _mp_id_hidden(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var l = utf8_seq_len(s + i);
+        if (l < 1) { l = 1; }
+        if (l > 1) { if (_confirm_cp_class(utf8_cp(s + i)) >= 1) { return 1; } }   # no model id holds a blank, and U+200B counts as one
+        i = i + l;
+    }
+    return 0;
+}
 fn _mp_add(s) {
     if (_mp_n >= MPICK_MAX) { return 0; }
     var len = strlen(s);
     if (len == 0) { return 0; }                   # refuse an empty id (defensive: malformed catalog entry)
+    if (len >= MODEL_BUF_CAP) { return 0; }
+    if (_mp_id_hidden(s) == 1) { return 0; }
     if ((_mp_store_off + len + 1) > MPICK_STORE) { return 0; }
     var dst = _mp_store + _mp_store_off;
     safe_label_copy(dst, len + 1, s);             # len bytes + NUL; C0 and DEL become '?'

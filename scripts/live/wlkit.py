@@ -71,6 +71,7 @@ class Conn:
     def str_at(p, off):
         n = struct.unpack_from("<I", p, off)[0]
         s = p[off + 4:off + 4 + n - 1].decode("utf-8", "replace") if n else ""
+        s = "".join(c if c.isprintable() else "?" for c in s)
         return s, off + 4 + _pad(n)
 
     @staticmethod
@@ -115,12 +116,17 @@ class Conn:
         while len(self.buf) >= 8:
             oid, w = struct.unpack_from("<II", self.buf, 0)
             size, op = w >> 16, w & 0xFFFF
-            if size < 8 or len(self.buf) < size:
+            if size < 8:
+                raise RuntimeError("malformed message from the compositor (size %d)" % size)
+            if len(self.buf) < size:
                 break
             payload, self.buf = self.buf[8:size], self.buf[size:]
             h = self.handlers.get(oid)
             if h:
-                h(op, payload)
+                try:
+                    h(op, payload)
+                except struct.error as e:
+                    print("wlkit: malformed event on object %d: %s" % (oid, e), file=sys.stderr, flush=True)
         return True
 
     def roundtrip(self, timeout=5.0):
@@ -387,6 +393,8 @@ class Kit:
         if st["failed"] or not st["buf"]:
             raise RuntimeError("screencopy failed")
         fmt, w, h, stride = st["buf"]
+        if not (0 < w <= 16384 and 0 < h <= 16384 and stride >= w * 4 and stride * h < 1 << 31):
+            raise RuntimeError("screencopy offered an impossible buffer: %dx%d stride %d" % (w, h, stride))
         size = stride * h
         fd = os.memfd_create("wlkit-shot", 0)
         os.ftruncate(fd, size)
@@ -470,12 +478,16 @@ def serve(path):
         if ls in r:
             cs, _ = ls.accept()
             with cs:
-                data = b""
-                while not data.endswith(b"\n"):
-                    chunk = cs.recv(4096)
-                    if not chunk:
-                        break
-                    data += chunk
+                cs.settimeout(2)
+                data = bytearray()
+                try:
+                    while not data.endswith(b"\n") and len(data) < 1 << 16:
+                        chunk = cs.recv(4096)
+                        if not chunk:
+                            break
+                        data += chunk
+                except OSError:
+                    continue
                 line = data.decode("utf-8", "replace")
                 if line.strip() == "quit":
                     cs.sendall(b"ok\n")
@@ -485,7 +497,10 @@ def serve(path):
                 except Exception as e:         # a bad command must not kill the devices the window holds
                     reply = "ERR %s" % e
                 print(line.strip()[:120], "->", reply, flush=True)
-                cs.sendall(reply.encode() + b"\n")
+                try:
+                    cs.sendall(reply.encode() + b"\n")
+                except OSError:
+                    pass                       # the client left; the devices stay
 
 
 def send(path, words):

@@ -293,6 +293,11 @@ Each of these blocks something above. None has a default answer.
    0.52.8 ruling for the switches that guard a session (a local layer may only turn `[guard]` and `[redact]` on)
    points to the same shape here: a local level may make the log more detailed, never quieter than the global's.
 
+8. **Should a pin store thoth refuses withhold daimon's tools?** (The not-verified pass's A-4.) A rejected, linked, unreadable or oversized store is refused whole, so the table is
+   empty and every tool is a first sight for that run: a swapped definition reaches the model, with one red line said. [ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)
+   chose that, because only someone with the operator's uid reaches those states, and that person could simply delete the file. Against it: security here degrades closed everywhere else. Withholding
+   daimon's tools until `/tools trust` would close it, at the cost of a run that loses its tools over a store it cannot read.
+
 (Ruled 2026-11-05, not a question: t-ron's payload scanner stays as shipped. With a `[tron].policy` bound it reads
 `thoth_shell`'s command and every MCP tool's arguments, and denies some everyday commands, such as `git log -5; git status`.
 `edit` and `create_file` gate on the path alone.)

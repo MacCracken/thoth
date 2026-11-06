@@ -28,11 +28,15 @@ GAMMA="${SPLASH_GAMMA:-0.6}"
 command -v magick >/dev/null || { echo "gen-splash: ImageMagick 7 (magick) is required" >&2; exit 1; }
 [ -f "$SRC" ] || { echo "gen-splash: no such image: $SRC" >&2; exit 1; }
 
+case "$GAMMA" in ''|*[!0-9.]*) echo "gen-splash: SPLASH_GAMMA must be a number" >&2; exit 1 ;; esac
+for W in $WIDTHS; do case "$W" in ''|*[!0-9]*|0*) echo "gen-splash: bad width: $W" >&2; exit 1 ;; esac; done
+[ ! -L "$OUT" ] || { echo "gen-splash: $OUT is a symlink, refusing" >&2; exit 1; }
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 # 1. ink: alpha onto white, grayscale, hard threshold. Ink is BLACK here; morphology below wants it white.
-magick "$SRC" -background white -alpha remove -alpha off -colorspace gray -threshold 50% "$tmp/ink.png"
+magick -limit width 8KP -limit height 8KP -limit memory 1GiB -limit disk 2GiB "tiff:$SRC" -background white -alpha remove -alpha off -colorspace gray -threshold 50% "$tmp/ink.png"
 
 # 2. the ring = the ink component (gray(255) after -negate) with the largest bounding box.
 ring="$(magick "$tmp/ink.png" -negate \
@@ -110,5 +114,6 @@ render() {   # render W  -> rows on stdout (trailing spaces stripped)
         echo "    return 0;"
         echo "}"
     done
-} > "$OUT"
+} > "$tmp/splash.cyr"
+mv -f "$tmp/splash.cyr" "$OUT"
 echo "gen-splash: $OUT <- $SRC (figure ${FW}x${FH}; widths: $WIDTHS)"

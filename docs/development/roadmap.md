@@ -118,7 +118,6 @@ unsure, patch.
 
 | Version | Arc | Gate |
 |---|---|---|
-| none | [**Not verified**](#not-verified--go-through-these-first): seven proofs owed | none; goes first |
 | 0.54.x | [**The live wait**](#054x--the-live-wait-then-the-audits-remainder), then the audit's remainder | none for the wait; rulings for the last batch |
 | 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | a runner; the floor for rung 3 |
 | 0.56.x | [**F8 — the AGNOS window**](#056x--f8-the-agnos-window) | a stable setu contract, a waitable channel |
@@ -128,22 +127,6 @@ unsure, patch.
 | 0.60.x | [**F12 — OS-enforced sandboxing and network egress**](#060x--f12-os-enforced-sandboxing-and-network-egress) | ruling: question 1, in kavach |
 | 0.61.x | [**F13 — ACP server mode**](#061x--f13-acp-server-mode) | none |
 | 0.62.x | [**F14 — OTLP export**](#062x--f14-otlp-export-of-the-audit-trail), then the v1.0 gates | none |
-
-### Not verified — go through these first
-
-What thoth claims without having run it where the claim lives. This has no version of its own: each row is run, what it finds joins
-the next cut, and the row leaves this table when it passes. Commands are in
-[`../guides/verification-pass.md`](../guides/verification-pass.md).
-
-| ID | Not yet proven | Where |
-|---|---|---|
-| V-1 | **The real spine.** W-6 (a blocking round's and a delegated child's tool pairing) and W-10 (invalid UTF-8 mapped to U+FFFD) were checked at a strict parser, not a provider. hoosh 2.10.0 and daimon 2.5.3 have not met a live thoth, nor have mneme recall's T-3 controls and `memory_write`'s prompt. | This host: `scripts/stack.sh`, a provider key |
-| V-2 | **The project map's effect.** `list_dir` calls per turn with `[project].map` on and off. The map costs bytes every round and its benefit has never been measured. | The same session as V-1 |
-| V-3 | **A large repository.** The largest tree tried has 3.8k files: `git_probe`, `search`, the map and `/tree` at 100k are unmeasured, and so is a long session's save on disk. | This host: a generated tree |
-| V-4 | **aarch64 on iron.** Every aarch64 suite has run under `qemu-aarch64`. A cross-built `thoth --version` runs on the Pi; the suites have not. | The Pi |
-| V-5 | **macOS under attack.** The 2026-11-05 audit attacked the Linux lanes only. macOS ran the regression suites, not the hostile wire kit, the capture's attacks or the store's. | The Mac: `scripts/live/hostile-wire.py` |
-| V-6 | **Windows past `--version`.** With the lane's nine names defined, a full PE links and prints its version on Windows 11. Nothing else has run there: the capture and its `_shell_tmp_buf`, `/run`, a turn, the read jail. | The Windows host |
-| V-7 | **Six files no auditor read:** `src/mpick.cyr`, `src/toolpin.cyr`'s store, `install.sh`, `scripts/live/wlkit.py`, `scripts/live/pngtool.py`, `scripts/gen-splash.sh`. | A read, with a repro for each finding |
 
 ### 0.54.x — The live wait, then the audit's remainder
 
@@ -157,17 +140,26 @@ reads, for every POST. It also closes the network half of *What a stop cannot re
 
 **0.54.1 — Repair batch 15: the terminal and the process**
 
-1. **SIGTERM leaves the terminal raw** (S-11). A handler or a signalfd in the input loop.
-2. ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then sets VMIN and VTIME to 0 for its non-blocking
+1. **`git_probe` grows the heap on every turn** (P-10, M-3). On a 100k-file repository a session went from 37 MB to 515 MB in ten turns, 48 MB a
+   turn with no ceiling, and each probe holds the main thread for 1.8 s. It is 0.58 s and 166 KB on this tree. sit allocates on the heap that never
+   frees, so the probe needs a forked child or sit on an arena, and the TUI's startup probe moves after the first frame (1.2 s at 100k today). The rest
+   is sit's: see the waiting table.
+2. **SIGTERM leaves the terminal raw** (S-11). A handler or a signalfd in the input loop.
+3. ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then sets VMIN and VTIME to 0 for its non-blocking
    Esc poll. darshana's ADR 0003 freezes only its public surface, so any darshana release may rename or reshape it, and the next
    `scripts/sync-darshana.sh` would carry that in. The public `tty_raw_nonblock(fd)` exists, restored by `tty_cooked()`. It is not a one-word
    swap: `intr_arm` keeps a private termios copy so it does not touch darshana's single raw slot, so the move means proving that bracket
    against the post-turn `tty_raw`, live.
-3. **Ctrl-C in line-mode `/run` reaches thoth** (P-11). SIGINT and SIGQUIT ignored around the wait, with the child's default restored
+4. **Ctrl-C in line-mode `/run` reaches thoth** (P-11). SIGINT and SIGQUIT ignored around the wait, with the child's default restored
    before exec.
-4. **`git_probe` is slow on large trees and runs at startup** (P-10, M-3): 0.58 s a turn on this tree and 166 KB of heap a call, 2.6 MB on a
-   3.8k-file one. Move the TUI's startup probe after the first frame. The rest is sit's: see the waiting table.
-5. **Release rebuilds what CI tested** (P-8). Upload the CI binary and publish that one.
+5. **A gateway's error body is dropped on a streaming turn.** A 429 reading `token budget exceeded` shows as "error body not surfaced in stream mode;
+   set [hoosh].stream=false to see it".
+6. **CI and Release run a toolchain nothing here pins** (B-1, B-8). A fresh runner has no `cyrsign`, so `install.sh` trusts a sum from the tarball's own origin, in the job
+   that holds `contents: write`. Pin the SHA-256 of `install.sh` and the tarball in a tree file keyed to the pin, download both, check them, and install with
+   `CYRIUS_INSTALL_TARBALL`, which also closes a truncated `curl | sh`.
+7. **Release rebuilds what CI tested** (P-8). Upload the CI binary and publish that one.
+8. **A repository's daimon rows fill the operator's global pin store** (A-7). They never expire, and 11 runs reached the cap, after which the operator's own new tools lose the
+   between-runs defence. Keep them session-scoped, or give each host a row quota.
 
 **0.54.2 — Repair batch 16: long replies and the composer**
 
@@ -175,14 +167,17 @@ reads, for every POST. It also closes the network half of *What a stop cannot re
 2. **The composer has no long-line scroll and its caret is approximate** (G-9).
 3. **The TUI paints a frame in hundreds of syscalls** (M-5). A batched frame; the prototype needed a darshana change, so that release
    comes first and re-vendors as its own patch.
+4. **Picker rows clip by bytes, mid-character, with no mark** (A-14). Clip at a glyph boundary and draw a mark.
 
 **0.54.3 — Repair batch 17: the rulings.** Each is small once ruled, and a row leaves if the ruling is no.
 
 1. **A local `[hoosh].timeout_ms`** (gap-review question 4): `0` disables the stall deadline beside a repository-redirected gateway.
 2. **A local `[log].level`** (question 7): a clone can quieten the operator's session log.
-3. **The project map's role** (question 5): whether repository-controlled names belong in a `system` message. V-2 informs it.
+3. **The project map's role** (question 5): whether repository-controlled names belong in a `system` message. Measured with a real model, the map
+   saved 27% of tokens over nine navigation tasks (108k against 147k), six searches and two `list_dir` calls.
 4. **Pricing a turn from the gateway** (question 6): the picker shows the gateway's price and the tally ignores it, so `[budget].max_cost_micro`
    cannot fire on an unpriced model.
+5. **What a refused pin store means** (question 8): today every tool is a first sight for that run, so a swapped definition is advertised, with one line said.
 
 ### 0.55.x — A real turn on AGNOS
 
@@ -280,11 +275,13 @@ in t-ron calls into bote.
 | **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
 | **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.3 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
 | **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap (P-10, M-3) | sit 1.13.0 | batch 15 moves what thoth can |
+| **mneme** | `mneme_create_note` answers "Failed to create note" for a title it already holds, so `/remember` of a fact already saved reads as a failed write | mneme 1.1.4 | the message is true: nothing new was written |
+| **cyrius** | `scripts/install.sh`, which thoth's CI and Release run. A first install verifies no signature, and its sum sidecar can name another file (B-1); it compiles `programs/dlopen-helper.c` from the caller's working directory, and under root installs the result where setuid consumers trust it (B-2); it deletes real `bin` and `lib` directories under `CYRIUS_HOME` (B-3); its Starship snippet prints a repository's bytes raw (B-4); a broken install reports success (B-5); activation is not atomic (B-6); a fetch failure falls through to an unverified clone (B-7); a cut `curl \| sh` exits 0 (B-8); a reinstall can exit 1 (B-9); no network timeouts (B-10). Scripts and repros: [`../audit/2026-11-05-not-verified-pass.md`](../audit/2026-11-05-not-verified-pass.md) | cyrius **6.7.18** | batch 15's pin. thoth selects no libssl, so B-2 does not reach it |
 | **sakshi** | no mode parameter on its output file | cyrius 6.7.18 | `_log_open_safe` creates the file first |
 | **bayan** | an unterminated array in a config swallows the lines after it | cyrius 6.7.18 | none: that direction fails closed |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body`, `commit_tree_hex` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.13.0's `[lib.read]` still defines `cmd_reset` and leaves four unresolved (the three, and `commit_tree_hex`, all unreachable); bote 3.8.15 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.7.0** (vendored 1.7.0) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
-| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and backslash and drive-letter paths in the jail. V-6 runs what can run before then |
+| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. With those names defined a PE ran streaming and blocking turns, `read_file` and a `cmd.exe` capture with its deadline on Windows 11. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and the jail, which does not hold there: `..\x`, `sub\..\..\x`, `C:\x`, `C:/x`, `\\?\C:\x` and `\\127.0.0.1\C$\x` all read outside the project, and `CON` hangs `read_file` |
 | **cyrius (floor)** | `lib/process_win.cyr:354`: `cmd.exe` is found by a search that takes in the cwd, so a planted one would run. The Windows lane is closed by the row above | cyrius 6.7.18 | none until the lane opens |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:610` and AGNOS `syscalls_x86_64_agnos.cyr:1048`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.18** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
@@ -302,7 +299,7 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** the 0.54.x batches, with the ⛔ darshana call in batch 15; the pointer path being Linux-Wayland only (F8).
+**Scheduled above:** the 0.54.x batches, with the ⛔ darshana call in batch 15; the pointer path being Linux-Wayland only (F8). **Proofs:** the runs behind this table, and how to repeat them, are in [`../guides/verification-pass.md`](../guides/verification-pass.md).
 
 **Degradations, by design or by the floor:**
 
@@ -336,8 +333,8 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
   child (the `d_type` floor row); every agentic round re-sends the map's bytes (the same bytes each
   round, which is what prefix caching wants).
 - **Tool pins** — the ceiling is a same-uid editor or a deleted store (stated in ADR-0022 and the
-  config example); two sessions trusting the same host at once are last-writer-wins on that host's
-  rows; schema key order is part of the hash (a reordering server reads as changed — withheld, never
+  config example); two sessions writing at once are last-writer-wins, whether trusting or pinning a
+  first sight; schema key order is part of the hash (a reordering server reads as changed — withheld, never
   allowed; canonicalise if a real one appears); the mode claim holds on POSIX only (AGNOS's create
   mode and Windows's ACL — the floor rows).
 - **Memory double read — the last case** — a `~/.thoth/` reached by the root walk from below that
@@ -357,8 +354,8 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 - **macOS** — builds, runs and passes its native suite at the pin; the T2 TUI does not run there:
   `term_raw` returns -1 (the darshana row), so thoth takes the line tier. When the BSD peer lands,
   `src/term.cyr`'s macOS branch collapses into the forwarder and nothing above it changes.
-- **Windows lane** — blocked outside thoth's authored source, on nine **vendored** `VENDOR_GAP` names in t-ron and sit
-  (the waiting table). `scripts/build.sh` keeps the permanent **architectural** names as a tripwire; none surfaces.
+- **Windows lane** — blocked outside thoth's authored source, on nine **vendored** `VENDOR_GAP` names in t-ron and sit, and not
+  safe to ship past them until its read jail is written (the waiting table). `scripts/build.sh` keeps the permanent **architectural** names as a tripwire; none surfaces.
   The PE capture inherits thoth's environment, so `[hooks]` reports "could not run" there and a
   `pre_tool` denies. `TTY_SIGMASK_WINCH` stays off **every** list on
   purpose — a new raw `tty_*` call in thoth source turns the lane red, the regression tripwire.

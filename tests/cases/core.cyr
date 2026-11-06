@@ -2692,21 +2692,21 @@ fn test_state_pins_row() {
     var j = "{\"name\":\"t_ok\",\"description\":\"P.\"}";
     var jv = bayan_json_v_parse_buf(j, strlen(j));
     feed_init(); out_mode_set(OUT_RING);
-    var w1 = _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv, "name"), bayan_json_v_obj_get_by_cstr(jv, "description"));
+    var w1 = _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv, "name"), bayan_json_v_obj_get_by_cstr(jv, "description"), 0);
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(w1, 0, "a pinned row is not withheld");
     assert_eq(_mid_feed_plain_count("  pinned"), 1, "...and is marked `  pinned` (the mark, not a name)");
     var j2 = "{\"name\":\"t_gone\",\"description\":\"G!\"}";
     var jv2 = bayan_json_v_parse_buf(j2, strlen(j2));
     feed_init(); out_mode_set(OUT_RING);
-    var w2 = _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv2, "name"), bayan_json_v_obj_get_by_cstr(jv2, "description"));
+    var w2 = _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv2, "name"), bayan_json_v_obj_get_by_cstr(jv2, "description"), 0);
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(w2, 1, "a withheld row is counted");
     assert(_mid_feed_plain_count("WITHHELD") >= 1, "...and marked `WITHHELD`");
     var j3 = "{\"name\":\"t_never\",\"description\":\"N.\"}";
     var jv3 = bayan_json_v_parse_buf(j3, strlen(j3));
     feed_init(); out_mode_set(OUT_RING);
-    _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv3, "name"), bayan_json_v_obj_get_by_cstr(jv3, "description"));
+    _daimon_tool_row(bayan_json_v_obj_get_by_cstr(jv3, "name"), bayan_json_v_obj_get_by_cstr(jv3, "description"), 0);
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_mid_feed_plain_count("  pinned") + _mid_feed_plain_count("WITHHELD"), 0, "a tool no probe pinned carries no mark");
     # the local-layer daimon note
@@ -5457,7 +5457,7 @@ fn test_seam_text_sanitise() {
     assert(tv != 0, "premise: the registry entry parses");
     var rs = "r\x1b[7mRESMARK ok\nline two";
     feed_init(); out_mode_set(OUT_RING);
-    _daimon_tool_row(bayan_json_v_obj_get_by_cstr(tv, "name"), bayan_json_v_obj_get_by_cstr(tv, "description"));
+    _daimon_tool_row(bayan_json_v_obj_get_by_cstr(tv, "name"), bayan_json_v_obj_get_by_cstr(tv, "description"), 0);
     _daimon_print_str(str_new(rs, strlen(rs)));
     feed_flush_pending(); out_mode_set(OUT_FD1);
     assert_eq(_mid_feed_count("\x1b[7mTOOLMARK"), 0, "a /tools row carries no raw escape from a registry tool's name");
@@ -7494,6 +7494,16 @@ fn test_current_models() {
     assert_eq(hoosh_route_index("https://api.openai.com") >= 0, 1, "each route is recorded by its base_url");
     assert_eq(hoosh_route_catalog_status_at(hoosh_route_index("https://api.openai.com")), 401, "...with its catalog_status");
     assert_eq(hoosh_provider_key_rejected_at(hoosh_provider_index("openai")), 1, "a 401 catalog answer counts as a rejected key for the kind");
+    var rt = alloc(4096);
+    var ro = _append_cstr_cap(rt, 0, 4096, "[");
+    var ri = 0;
+    while (ri < 70) {
+        if (ri > 0) { ro = _append_cstr_cap(rt, ro, 4096, ","); }
+        ro = _append_cstr_cap(rt, ro, 4096, "\"https://api.openai.com\"");
+        ri = ri + 1;
+    }
+    ro = _append_cstr_cap(rt, ro, 4096, "]");
+    assert_eq(hoosh_routes_keybad(bayan_json_v_parse_buf(rt, ro)), HOOSH_ROUTE_MAX, "a model's route list is walked to HOOSH_ROUTE_MAX, not to what a gateway sent");
     assert_eq(hoosh_provider_key_rejected_at(hoosh_provider_index("anthropic")), 0, "a 200 does not");
     assert_eq(hoosh_route_state_at(hoosh_route_index("http://b:11434")), HOOSH_PROV_HEALTHY, "a route keeps its OWN state");
     assert_eq(hoosh_provider_state("ollama"), HOOSH_PROV_DEGRADED, "premise: the kind's routes disagree -> degraded");

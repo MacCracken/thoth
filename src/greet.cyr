@@ -208,6 +208,10 @@ fn _greet_pins_row() {
     }
     # a repo that set [daimon].url points thoth at ANOTHER daimon — its tools pin in their own namespace; say so
     # here, where the operator reads what the pins cover, rather than let a same-named tool read as first sight
+    if (toolpin_store_loose() == 1) {
+        _greet_row();
+        _greet_span(ROLE_RED, "tool pins could be written by others"); _greet_span(ROLE_FAINT, " — trust its rows only if you know why; thoth puts 0600 back");
+    }
     if (config_daimon_url_local() == 1) {
         _greet_row();
         _greet_span(ROLE_RED, "this repo's [daimon].url"); _greet_span(ROLE_FAINT, " — its tools pin in their own namespace; your global daimon's pins do not apply");

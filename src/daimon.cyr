@@ -66,6 +66,7 @@ fn daimon_endpoints_reset() {
     _daimon_tools_url = 0;
     _daimon_call_url = 0;
     _daimon_mem_probed = 0 - 1;   # re-probe: a different host may or may not front mneme
+    _daimon_mem_compared = 0;     # ...and its definitions meet their pins again
     return 0;
 }
 
@@ -196,7 +197,7 @@ fn _daimon_announce_transport_error(r, url) {
 # 0.51.0 (F6): the row ends with the tool's pin state as of the last probe — RED ` WITHHELD` (its definition
 # moved; refused at dispatch), FAINT ` pinned`, or nothing for a tool no probe has pinned. Returns 1 for a
 # withheld row (the listing's footer counts them).
-fn _daimon_tool_row(name, desc) {
+fn _daimon_tool_row(name, desc, schema) {
     emit("  ");
     # 0.39.0 (audit A-4): a THIRD-PARTY MCP server controls its own name/description, so a
     # non-string value here is attacker-reachable, not merely malformed. `bayan_json_v_str`
@@ -216,7 +217,14 @@ fn _daimon_tool_row(name, desc) {
     if ((ns != 0) && (config_toolpin_enabled() == 1)) {
         var nc = str_cstr(ns);
         if (toolpin_withheld(nc) == 1) { ui_emit(ROLE_RED, "  WITHHELD"); wh = 1; }
-        elif (toolpin_pinned(nc) == 1) { ui_emit(ROLE_FAINT, "  pinned"); }
+        elif (toolpin_pinned(nc) == 1) {
+            var dc = "";
+            var sc = "";
+            if (desc != 0) { var dd = bayan_json_v_str(desc); if (dd != 0) { dc = str_cstr(dd); } }
+            if (schema != 0) { var sb = bayan_json_v_build(schema); if (sb != 0) { sc = str_cstr(sb); } }
+            if (toolpin_differs(nc, dc, sc) == 1) { ui_emit(ROLE_RED, "  CHANGED"); wh = 1; }
+            else { ui_emit(ROLE_FAINT, "  pinned"); }
+        }
     }
     oprintln("");
     return wh;
@@ -261,7 +269,7 @@ fn daimon_list_tools() {
     var withheld = 0;
     while (i < n) {
         var t = bayan_json_v_arr_get(tools, i);
-        withheld = withheld + _daimon_tool_row(bayan_json_v_obj_get_by_cstr(t, "name"), bayan_json_v_obj_get_by_cstr(t, "description"));   # 0.45.0: sanitised
+        withheld = withheld + _daimon_tool_row(bayan_json_v_obj_get_by_cstr(t, "name"), bayan_json_v_obj_get_by_cstr(t, "description"), bayan_json_v_obj_get_by_cstr(t, "inputSchema"));   # 0.45.0: sanitised
         i = i + 1;
     }
     if (withheld > 0) { ui_emit(ROLE_FAINT, "  /tools trust accepts the changed definitions for this host"); oprintln(""); }
@@ -501,4 +509,51 @@ fn daimon_mem_probe() {
     if (_daimon_mem_probed != (0 - 1)) { return _daimon_mem_probed; }
     if (config_daimon_configured() == 0) { _daimon_mem_probed = 0; return 0; }
     return daimon_mem_scan(daimon_tools_value());
+}
+
+# _daimon_mem_pin_scan: run the registry's mneme_* definitions past their pins. Pure on the parsed value.
+fn _daimon_mem_pin_scan(tools_v) {
+    if (tools_v == 0) { return 0; }
+    var n = bayan_json_v_arr_len(tools_v);
+    var i = 0;
+    while (i < n) {
+        var t = bayan_json_v_arr_get(tools_v, i);
+        var nv = 0;
+        if (t != 0) { nv = bayan_json_v_obj_get_by_cstr(t, "name"); }
+        var ns = 0;
+        if (nv != 0) { ns = bayan_json_v_str(nv); }
+        if ((ns != 0) && (_daimon_name_is_mneme(ns) == 1)) {
+            var desc = "";
+            var schema = "";
+            var dv = bayan_json_v_obj_get_by_cstr(t, "description");
+            if (dv != 0) { var ds = bayan_json_v_str(dv); if (ds != 0) { desc = str_cstr(ds); } }
+            var sv = bayan_json_v_obj_get_by_cstr(t, "inputSchema");
+            if (sv != 0) { var sb = bayan_json_v_build(sv); if (sb != 0) { schema = str_cstr(sb); } }
+            toolpin_check(str_cstr(ns), desc, schema);
+        }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# daimon_mem_pin_compare: once per host, compare mneme's definitions with their pins before the memory channel calls one.
+# `toolpin_withheld` only knows what the tool-list build has seen, and that build runs after recall on a turn and not at all on a plain
+# turn or a command. So the first turn of every run, all a one-shot has, sent the prompt to a swapped `mneme_search` and injected the
+# answer, past the check 0.53.3 added. Found against a real daimon.
+var _daimon_mem_compared = 0;
+var _daimon_mem_tools_seam = 0;            # tests: the registry, already parsed, so a comparison needs no socket
+fn daimon_mem_pin_compare() {
+    if (_daimon_mem_compared == 1) { return 0; }
+    if (config_toolpin_enabled() == 0) { return 0; }
+    var v = _daimon_mem_tools_seam;
+    if (v == 0) {
+        if (config_daimon_configured() == 0) { return 0; }
+        v = daimon_tools_value();
+    }
+    if (v == 0) { return 0; }
+    _daimon_mem_compared = 1;
+    toolpin_store_refresh();
+    _daimon_mem_pin_scan(v);
+    toolpin_store_flush();
+    return 1;
 }

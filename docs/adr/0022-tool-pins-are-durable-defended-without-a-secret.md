@@ -145,3 +145,16 @@ default `~/.thoth/toolpins` was covered by the `.thoth` component rule; a custom
 project jail was readable and, with `[edit].enabled`, rewritable — a swapped definition re-baselined
 through thoth's own `edit`, which the digest cannot catch (the model's `edit` runs as the operator).
 Closed at 0.51.1: the pin store is the fifth configured path the jail refuses.
+
+## Addendum (the not-verified pass, 2026-11-05)
+
+Five sentences above were tighter than the code, and the code now matches them or they are qualified here.
+
+- **"A pre-existing looser file is 0600 after the first flush"** needed a first sight to flush. A store group or others can write is now marked for a rewrite at load, and named on every surface, since
+  anyone who could write it could re-sign a row. It is still loaded: refusing it would make every tool a first sight, which is worse.
+- **A store another user owns is rejected** like an edited one. Root's stays, as it does for a config layer.
+- **"Told from an absent one by stat"** missed a parent directory the operator cannot enter. EACCES now counts as present.
+- **"Never written back, not even by `/tools trust`"** now holds in every state.
+- **Last-writer-wins** covers two sessions writing a first sight, not only two trusting: 39 of 400 simultaneous starts lost one host's rows. A lost pin is a first sight at the next run. There is no lock around a flush.
+
+What a refused store should mean is open: gap-review question 8.

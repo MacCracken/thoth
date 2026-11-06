@@ -340,7 +340,13 @@ fn search_tool(args_cstr) {
 
     if (_search_hits == 0) {
         store8(_search_out + _search_off, 0);
-        if (_search_truncated == 1) { return "(search: no matches within the search limits - narrow it with 'path' or 'glob')"; }
+        if (_search_truncated == 1) {
+            # A model read "within the search limits" as "not in the project", on a 100k-file tree where the match sat past the walk.
+            _search_apc("(search: no matches in the "); _search_apint(_search_files_seen);
+            _search_apc(" files read before a limit stopped the walk, so the rest of the tree was NOT searched - narrow it with 'path' or 'glob')");
+            store8(_search_out + _search_off, 0);
+            return _search_out;
+        }
         if (_search_unread > 0) {
             _search_apc("(search: no matches, but ");
             _search_apunread();

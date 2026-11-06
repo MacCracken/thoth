@@ -47,9 +47,11 @@ jobs:
         # 6.5.24 and fails at 6.5.25, so CI was still GREEN on 0.38.5's 6.5.20
         # pin and this refresh's move to 6.5.35 is exactly what would have
         # turned it red. The installer lays out versions/<v>/{bin,lib} and
-        # symlinks bin/ + lib/ at it, and additionally does SHA256 + Ed25519
-        # signature verification the hand-rolled block skipped. Same pattern
-        # as darshana / darshini / patra / libro.
+        # symlinks bin/ + lib/ at it, and checks the SHA-256 published beside
+        # the tarball. A first install has no cyrsign, so on this runner the
+        # Ed25519 signature is NOT checked, and that sum comes from the same
+        # origin as the tarball. Same pattern as darshana / darshini / patra /
+        # libro.
         #
         # CYRIUS_HOME is deliberately NOT exported any more: the installer
         # defaults it to $HOME/.cyrius, and the wrapper appends

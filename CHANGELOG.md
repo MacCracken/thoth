@@ -4,8 +4,18 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-**The roadmap re-cut, and what was checked to do it.** No change to thoth's source. Every open item now has a place from 0.54.x through 0.62.x, behind a *Not verified*
-table of seven proofs, and [`docs/guides/verification-pass.md`](docs/guides/verification-pass.md) holds the commands.
+**The roadmap re-cut, and the not-verified list gone through.** Every open item now has a place from 0.54.x through 0.62.x. Every claim the 2026-11-05 audit had not proven was run where it lives,
+and two of 0.53.3's fixes turned out not to work on the real stack. The record is [`docs/audit/2026-11-05-not-verified-pass.md`](docs/audit/2026-11-05-not-verified-pass.md), and
+[`docs/guides/verification-pass.md`](docs/guides/verification-pass.md) has the commands.
+
+**What changes for you:**
+
+- A pin store others can write is named on every surface and rewritten 0600. One another user owns is rejected.
+- `thoth -p` says so on stderr when a repository's `[daimon].url` is in force.
+- `/tools` says CHANGED beside a swapped definition before any probe.
+- The model picker no longer lists an id of 256 bytes or more, or one holding a blank, invisible or bidi character. They count in its `+N not loaded`.
+- Catalog and health calls have a 12 s deadline for the whole call.
+- `scripts/live/__pycache__/` is gone from the tree and ignored.
 
 ### Added
 
@@ -13,9 +23,22 @@ table of seven proofs, and [`docs/guides/verification-pass.md`](docs/guides/veri
   it back. A failed run keeps the copy, because the serial log is inside it.
 - **`scripts/live/hostile-wire.py`.** The 2026-11-05 audit's wire kit, checked in so it can run on the other lanes: 151 malformed and hostile gateway responses against a real `thoth -p`.
 - **`scripts/live/stubhoosh.py`:** `curly` (a command the kit cannot type) and `read: <path>` (one `read_file` call).
+- **`docs/audit/2026-11-05-not-verified-pass.md`:** 42 findings from running what had only been read, and from the six files no auditor had. ADR-0022 has an addendum.
 
 ### Fixed
 
+Found by going through the not-verified list. Each carries a test, and each test was broken on purpose.
+
+- **A file with invalid UTF-8 failed the turn.** `read_file` on a Latin-1 file or a binary, or any tool result holding such bytes, sent raw invalid bytes, and Anthropic refused the whole
+  request: the operator saw a bare 502. W-10's fix had missed the second escaper, `_agent_work_puts_esc`. Bad bytes now go out as U+FFFD there too.
+- **A swapped `mneme_search` was still called on a session's first turn.** T-3's pin check read a table that only the tool list fills, and recall runs first, so every one-shot sent its prompt to the
+  swapped tool and injected the answer. The memory channel now compares mneme's definitions before its first call, on every path. `/notes` honours a withheld pin too.
+- **A search stopped by a limit read as "not there".** A real model took `no matches within the search limits` to mean the file was absent. It now counts the files read and says the rest was not searched.
+- **A gateway could hold Ctrl-P for as long as it liked.** `read_ms` bounds each read, so one byte a second was never a timeout, with Esc unread. Probes and the catalog have a whole-call deadline, and a model's routes stop at `HOOSH_ROUTE_MAX`.
+- **The pin store:** a store others could write was trusted in silence; a FIFO at its path hung startup with nothing printed; one behind an unreadable directory read as new; `/tools trust` overwrote a file past the cap; past the pin table, the UNPINNED notice never reached one-shot or the window; `/state` kept counting a tool trusted by name; `/tools` printed `pinned` beside a swapped definition.
+- **The picker** showed one id and applied another past 255 bytes, and let a zero-width or bidi character through.
+- **The live kit:** `wlkit.py` died when a client left, trusted a client's pacing and the compositor's screencopy geometry, and printed its strings raw; `pngtool.py` had no bound on a PNG. **`gen-splash.sh`** took its decoder from the file's content, truncated `src/splash.cyr` before working, followed a link there, and let a newline in `SPLASH_GAMMA` add source lines. The real TIFF still reproduces the committed file byte for byte.
+- **The workflow comments** said the installer verifies an Ed25519 signature. On a fresh runner it does not.
 - `agnos-run.sh` called gate 1 "gate 2" in its header and in its PASS line.
 
 ### Changed
@@ -28,11 +51,15 @@ table of seven proofs, and [`docs/guides/verification-pass.md`](docs/guides/veri
 
 ### Verified
 
+- **The real spine:** hoosh 2.10.0, daimon 2.5.3, bote, mneme and Anthropic, across streaming, blocking, delegated and parallel rounds. Stop took 1.9 s on a live stream.
 - **Ring 3:** thoth 0.53.3 and hoosh 2.10.0 each load, print their version and exit cleanly on agnos 1.57.17 with gnoboot 0.9.0.
-- **T-7 on real APFS:** `read_file` refuses `.THOTH/note.txt` and `.ThOtH/note.txt`, while an ordinary file reads.
+- **The suite:** 948 + 2381 + 1530 + 904 + 190 + 6, 5,953 assertions, 0 failed, with stdin closed and held open. All pass under `qemu-aarch64`, and natively on macOS (2372 + 1520 + 892 + 933 + 190). Warning sets match the last commit on all four lanes.
+- **Real ARM:** all five suites on a Raspberry Pi, 5,955 assertions, 0 failed.
+- **macOS:** T-7 on real APFS, `hostile-wire.py`'s 151 scenarios, and 17 checks on the capture, the stores and the jail.
+- **Windows 11:** with the lane's nine vendored names defined in a scratch copy, a PE ran streaming and blocking turns, `read_file` and a `cmd.exe` capture with its deadline. **Its read jail does not hold,** which keeps the lane closed.
 - **G-1 on screen:** the confirm card draws curly quotes and a dash as boxes, never as straight quotes.
-- **New hosts:** a cross-built `thoth --version` runs on a Raspberry Pi, and a PE with the lane's nine vendored names defined runs on Windows 11.
-- **`hostile-wire.py`:** 151 scenarios, none flagged.
+- **100,000 files:** bounded and correct everywhere but `git_probe`, which grows the heap 48 MB a turn and leads batch 15.
+- **The project map:** 27% fewer tokens over nine navigation tasks on a real model. One run each.
 
 ## [0.53.3] - 2026-11-05
 

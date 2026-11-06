@@ -28,3 +28,4 @@
 # (`/.thoth/config.cyml` above stays anchored: config discovery walks UP, so no subdirectory copy is
 # ever created.)
 **/.thoth/checkpoints/
+__pycache__/
