@@ -908,8 +908,8 @@ fn _tui_scroll_region(top, bot) {
 # caller to reposition at the composer.
 fn tui_draw_status() {
     if (_tui_show_status == 0) { return 0; }
-    tty_move(tui_status_row(_tui_rows), 1);
-    tty_clear_to_eol();
+    frame_move(tui_status_row(_tui_rows), 1);
+    frame_clear_eol();
     tui_status_emit();
     return 0;
 }
@@ -1271,7 +1271,7 @@ fn _tui_draw_search_hint() {
     if (fsearch_qlen() == 0) { ui_emit(ROLE_FAINT, "(type to search)"); }
     elif (fsearch_count() == 0) { ui_emit(ROLE_RED, "no matches"); }
     else {
-        emit(ui_sgr(ROLE_GREEN)); fmt_int(fsearch_cur() + 1); emit("/"); fmt_int(fsearch_count());
+        emit(ui_sgr(ROLE_GREEN)); ofmt_int(fsearch_cur() + 1); emit("/"); ofmt_int(fsearch_count());
         if (fsearch_saturated() == 1) { emit("+"); }   # count hit the cap — a floor, not the total (announced, never faked)
         emit(ui_reset());
     }
@@ -1283,7 +1283,7 @@ fn _tui_draw_search_hint() {
 fn _tui_park_search() {
     var col = 12 + fsearch_qlen();                # "{(o> " is 5 cols and "find: " 6 more, so the query starts at col 12
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), col);
+    frame_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), col);
     return 0;
 }
 
@@ -1389,13 +1389,36 @@ fn _tui_search_key(key) {
 # (session_set_model_copy). Runs only inside tui_loop (PT_RICH). mpick.cyr owns the pure state/filter/nav;
 # this is the render (the feed band becomes the list), the key handler, and the switch. Models Ctrl-F search.
 
-# _tui_pick_emit_clip: emit at most `max` bytes of NUL-terminated `id` to the terminal (band chrome -> fd1).
+# _tui_pick_fit(id, n, max, cols_out): how many bytes of id fit in max columns, on a glyph boundary; the columns they take at cols_out.
+fn _tui_pick_fit(id, n, max, cols_out) {
+    var i = 0;
+    var cols = 0;
+    while (i < n) {
+        var gl = _feed_glyph_len(id, i, n);
+        var gc = feed_glyph_cols(id, i, gl);
+        if ((cols + gc) > max) { break; }
+        cols = cols + gc;
+        i = i + gl;
+    }
+    store64(cols_out, cols);
+    return i;
+}
+
+# _tui_pick_emit_clip: id in at most `max` COLUMNS; returns the columns it took (0.54.2, A-14: it counted bytes, which cut a character in two
+# and left a row wider or narrower than it thought, with nothing to show the id went on). An id that does not fit ends in a mark.
 fn _tui_pick_emit_clip(id, max) {
+    if (max <= 0) { return 0; }
     var n = strlen(id);
-    if (n > max) { n = max; }
-    if (n < 0) { n = 0; }
-    emit_raw_n(id, n);
-    return n;
+    var c[8];
+    var fit = _tui_pick_fit(id, n, max, &c);
+    if (fit < n) {
+        fit = _tui_pick_fit(id, n, max - 1, &c);
+        emit_raw_n(id, fit);
+        emit_raw("…");
+        return load64(&c) + 1;
+    }
+    emit_raw_n(id, fit);
+    return load64(&c);
 }
 
 # _tui_pick_paint_row: paint one model row — a 2-col gutter ("> " selected, else "  "), the provider-health dot
@@ -1442,6 +1465,12 @@ fn _tui_pick_dot(state) {
 # then draw the query prompt inside the input and park at the caret. The status bar and tree keep their last
 # frame (unchanged while picking); only the feed region and the input row are the picker's (0.45.0).
 fn _tui_pick_paint() {
+    frame_begin();
+    _tui_pick_paint_band();
+    frame_end();
+    return 0;
+}
+fn _tui_pick_paint_band() {
     var top = tui_feed_top();
     var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
     if (bot < top) { return 0; }
@@ -1459,8 +1488,8 @@ fn _tui_pick_paint() {
     var cnt = mpick_count();
     var r = 0;
     while (r < rows) {
-        tty_move(top + r, fleft);
-        tty_clear_to_eol();
+        frame_move(top + r, fleft);
+        frame_clear_eol();
         var fi = first + r;
         if (fi < cnt) {
             var sel = 0;
@@ -1485,11 +1514,11 @@ fn _tui_draw_pick_hint() {
         else { ui_emit(ROLE_RED, "no matches"); }
         # 0.52.8 (audit B4): the id being filtered for may be one the store could not hold — the "+N not loaded" count
         # stood only beside a position, so "no matches" said nothing of the 44 never loaded.
-        if (mpick_unloaded() > 0) { ui_emit(ROLE_RED, " +"); fmt_int(mpick_unloaded()); ui_emit(ROLE_RED, " not loaded"); }
+        if (mpick_unloaded() > 0) { ui_emit(ROLE_RED, " +"); ofmt_int(mpick_unloaded()); ui_emit(ROLE_RED, " not loaded"); }
     } else {
-        emit(ui_sgr(ROLE_GREEN)); fmt_int(mpick_cur() + 1); emit("/"); fmt_int(mpick_count()); emit(ui_reset());
+        emit(ui_sgr(ROLE_GREEN)); ofmt_int(mpick_cur() + 1); emit("/"); ofmt_int(mpick_count()); emit(ui_reset());
         var _unl = 0;                                                    # 0.52.6 (audit E11): what the store could not hold
-        if (mpick_unloaded() > 0) { ui_emit(ROLE_RED, " +"); fmt_int(mpick_unloaded()); ui_emit(ROLE_RED, " not loaded"); _unl = 13 + _tui_digits(mpick_unloaded()); }
+        if (mpick_unloaded() > 0) { ui_emit(ROLE_RED, " +"); ofmt_int(mpick_unloaded()); ui_emit(ROLE_RED, " not loaded"); _unl = 13 + _tui_digits(mpick_unloaded()); }
         # 0.47.0: the selected model's provider and its health, in the state's colour — or the honest reason there is
         # none (the health GET failed: every dot is ○ then, and this says why). The segment is budgeted against the
         # row: the key legend after it must never be the part that yields ("⌃C close" is the documented way out),
@@ -1544,7 +1573,7 @@ fn _tui_pick_hint_health(room) {
 fn _tui_park_pick() {
     var col = 12 + mpick_qlen();                  # "{(o> " is 5 cols and "pick: " 6 more, so the query starts at col 12
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), col);
+    frame_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), col);
     return 0;
 }
 
@@ -1575,7 +1604,8 @@ fn _tui_pick_enter() {
     if (rc != MPICK_OK) {
         out_mode_set(OUT_RING);
         ui_emit(ROLE_RED, "model picker: ");
-        if (rc == MPICK_ERR_TRANSPORT) { ui_emit(ROLE_FAINT, "hoosh unreachable — "); emit(config_hoosh_url()); }
+        if (net_stopped() == 1) { ui_emit(ROLE_FAINT, "stopped"); }   # 0.54.0: Esc left the catalog fetch
+        elif (rc == MPICK_ERR_TRANSPORT) { ui_emit(ROLE_FAINT, "hoosh unreachable — "); emit(config_hoosh_url()); }
         elif (rc == MPICK_ERR_HTTP) { ui_emit(ROLE_FAINT, "hoosh returned an error fetching the model catalog"); }
         else { ui_emit(ROLE_FAINT, "hoosh advertises no models to pick from"); }
         feed_flush_pending(); out_mode_set(OUT_FD1);
@@ -1590,11 +1620,61 @@ fn _tui_pick_enter() {
     return 0;
 }
 
+# --- the greeting and the probe's answer (0.54.0, M-9) -----------------------------------------------------------------------
+var _tui_greet_rows = 0;      # feed rows when the greeting landed: the rebuild is only for a feed holding nothing else
+var _tui_reprobing = 0;       # 1 while a Ctrl-R waits for its answer
+
+# _tui_greet_show: the greeting block and the help line, into the feed under OUT_RING.
+fn _tui_greet_show() {
+    var up = GREET_PROBING;
+    if (hoosh_health_pending() == 0) {
+        up = 0;
+        if (hoosh_health() == HOOSH_HEALTH_UP) { up = 1; }
+    }
+    greet_build(up);
+    tui_greeting_emit(tui_feed_width(_tui_cols, _tui_show_tree), _tui_feed_rows() - 2);   # -2: the open row + the help line below
+    oprintln("");                                                 # an open row between the block and the help line (0.45.3; a bare newline seals a blank feed row — flush alone would not)
+    _tui_spaces(greet_help_indent());                              # two tabs in
+    ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");   # the first line under the block
+    feed_flush_pending();
+    _tui_greet_rows = feed_count();
+    return 0;
+}
+
+# _tui_reprobe_note: the outcome of a re-probe, in the feed.
+fn _tui_reprobe_note() {
+    _tui_reprobing = 0;
+    out_mode_set(OUT_RING);
+    if (config_hoosh_configured() == 0) { ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in .thoth/config.cyml"); }
+    elif (hoosh_health() == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "hoosh: reachable"); }
+    else { ui_emit(ROLE_RED, "hoosh: unreachable"); ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); }
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    tui_relayout();
+    return 0;
+}
+
+# _tui_probe_land: a slow probe's answer. The greeting is rewritten while it is all the feed holds. Once anything follows it, the
+# greeting stays as it was and a failure is a line of its own, so "checking hoosh" never stands as the last word.
+fn _tui_probe_land() {
+    if (hoosh_health_land() == 0) { return 0; }
+    if (_tui_reprobing == 1) { return _tui_reprobe_note(); }
+    if (feed_count() == _tui_greet_rows) {
+        out_mode_set(OUT_RING);
+        feed_clear();
+        _tui_greet_show();
+        out_mode_set(OUT_FD1);
+        tui_relayout();
+    } elif (hoosh_health() != HOOSH_HEALTH_UP) { _tui_reprobe_note(); }
+    else { tui_relayout(); }
+    return 0;
+}
+
 # _tui_pick_exit: close the picker and full-repaint (restores the real feed + composer; the status bar now
 # reflects any switch just applied).
 fn _tui_pick_exit() {
     _mpick_active = 0;
-    tty_clear();
+    frame_clear();
     tui_relayout();
     return 0;
 }
@@ -1624,8 +1704,8 @@ fn _tui_pick_key(key) {
 # below it (tui_draw_composer paints both) — with the status bar under the lower one.
 var _rule_buf = 0;
 fn tui_draw_rule(row, cols) {
-    tty_move(row, 1);
-    tty_clear_to_eol();
+    frame_move(row, 1);
+    frame_clear_eol();
     emit_raw(ui_sgr(ROLE_FAINT));
     # 0.53.3 (M-5): one write. It was one per column, twice a paint: 301 writes for a keystroke at 140 columns.
     if (_rule_buf == 0) { _rule_buf = alloc(4096 * 3); }
@@ -1653,7 +1733,7 @@ fn tui_park_cursor() {
     var vf = _comp_vscroll_first(pr, total, H);
     var col = 6 + (led_cursor_col() % _comp_avail());
     if (col > _tui_cols) { col = _tui_cols; }
-    tty_move(top + (pr - vf), col);
+    frame_move(top + (pr - vf), col);
     return 0;
 }
 
@@ -1666,6 +1746,12 @@ fn tui_park_cursor() {
 # so they always sit on the composer's current geometry — the PLACEHOLDER an empty input shows in place of a draft
 # (tui_composer_placeholder_emit), and the slash palette, which follows the typed '/token' on its row.
 fn tui_draw_composer() {
+    frame_begin();
+    _tui_draw_composer_paint();
+    frame_end();
+    return 0;
+}
+fn _tui_draw_composer_paint() {
     var a = _comp_avail();
     var total = _comp_total_rows();
     var H = tui_composer_height(_tui_rows, total, _tui_show_status);
@@ -1676,8 +1762,8 @@ fn tui_draw_composer() {
         # no draft to show: clear every composer row (a modal can open over a multi-line draft, which stays in the
         # buffer and returns when the modal closes), then the prompt + placeholder on the first row
         var r = 0;
-        while (r < H) { tty_move(top + r, 1); tty_clear_to_eol(); r = r + 1; }
-        tty_move(top, 1);
+        while (r < H) { frame_move(top + r, 1); frame_clear_eol(); r = r + 1; }
+        frame_move(top, 1);
         ui_emit(ROLE_ACCENT, "{(o> ");
         tui_composer_placeholder_emit();
         tui_park_cursor();
@@ -1697,8 +1783,8 @@ fn tui_draw_composer() {
         var sg = 0;
         while ((sg < segs) && (p < H)) {
             if (pr >= vf) {
-                tty_move(top + p, 1);
-                tty_clear_to_eol();
+                frame_move(top + p, 1);
+                frame_clear_eol();
                 if (p == 0) { ui_emit(ROLE_ACCENT, "{(o> "); } else { emit("     "); }   # prompt / continuation indent
                 var segstart = sg * a;
                 var shown = ll - segstart;
@@ -1718,9 +1804,9 @@ fn tui_draw_composer() {
     # sits on the first row whenever it fits that row), one blank column after it
     # 0.45.2: while the tree has focus the tree's keys follow the draft instead (keys go to the tree, not the palette)
     if (_tui_tree_cue_on() == 1) {
-        if (lastlen < a) { tty_move(lastrow, 7 + lastlen); _tui_tree_hint_emit(); }
+        if (lastlen < a) { frame_move(lastrow, 7 + lastlen); _tui_tree_hint_emit(); }
     } elif ((tui_palette_active() == 1) && (led_len() < a)) {
-        tty_move(top, 7 + led_len());
+        frame_move(top, 7 + led_len());
         tui_draw_palette();
     }
     tui_park_cursor();
@@ -1797,8 +1883,8 @@ fn spin_label_clear() { _spin_label = 0; spin_paint(); return 0; }
 fn spin_paint() {
     if (_spin_active == 0) { return 0; }
     if (_comp_len > 0) { return 0; }
-    tty_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), 6);
-    tty_clear_to_eol();
+    frame_move(tui_composer_top(_tui_rows, _comp_total_rows(), _tui_show_status), 6);
+    frame_clear_eol();
     emit_raw(" ");
     emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw(spin_glyph(_spin_frame)); emit_raw(ui_reset());
     emit_raw(ui_sgr(ROLE_FAINT));
@@ -1997,7 +2083,50 @@ fn spin_tick() {
 fn tui_wait_poll() {
     spin_tick();
     intr_check();
+    _tui_term_seen();
     return intr_seq();
+}
+
+# _tui_net_poll (0.54.0): the same, for a network wait (netwait.cyr). A stream arms the animator, which owns the glyph while it runs.
+fn _tui_net_poll() {
+    if (spin_anim_active() == 0) { spin_tick(); }
+    intr_check();
+    _tui_term_seen();
+    return intr_seq();
+}
+
+# --- SIGTERM and SIGHUP (0.54.1, S-11) --------------------------------------------------------------------------------------
+# They ended thoth on the spot: raw mode, the alternate screen, the kitty and mouse modes and the bracketed paste all stayed on,
+# and the shell it left behind took no typing. The floor sets no handlers (lib has signal_ignore and signal_default only), so they
+# are blocked for the session and read from a signalfd, as SIGWINCH and SIGINT are. The event loop sees them at once; a wait
+# sees them through the surface poll, which raises the stop, so a turn ends and the loop leaves through its one teardown. A
+# signal someone ignored (nohup) is discarded by the kernel and never reaches the fd. Exit status 128 + the signal.
+var _sigterm_fd = 0 - 1;
+var _tui_term_sig = 0;            # the signal that ended the session, once read
+var TUI_TERM_MASK = 16385;        # bits 0 and 14: signals 1 (HUP) and 15 (TERM)
+fn tui_term_sig() { return _tui_term_sig; }
+
+# _tui_term_seen: 1 once a signal has asked the session to end. Reads the fd once.
+fn _tui_term_seen() {
+    if (_tui_term_sig != 0) { return 1; }
+    if (_sigterm_fd < 0) { return 0; }
+    if (fd_wait_ready(_sigterm_fd, 0, 0) != 1) { return 0; }
+    var info[128];
+    if (sys_read(_sigterm_fd, &info, 128) != 128) { return 0; }
+    _tui_term_sig = load32(&info);
+    _tui_running = 0;
+    intr_signal();
+    return 1;
+}
+
+# _tui_read_wait (read_line_prompt's hook): before a cooked read, until a line can be read. 1 when a signal asked the session to end
+# first: a cooked read would otherwise sit past it, with the signal blocked, for as long as nobody answered.
+fn _tui_read_wait() {
+    if (_sigterm_fd < 0) { return 0; }
+    while (_tui_term_seen() == 0) {
+        if (fd_wait_ready(0, 0, 100) != 0) { return 0; }
+    }
+    return 1;
 }
 
 # --- the self-managed feed painter (0.9.1) --------------------------------
@@ -2057,6 +2186,12 @@ fn tui_theme_next() {
 # 0.9.2: the UNSEALED pending line (an in-progress streamed response, no newline
 # yet) is rendered as a virtual bottom row so streaming is INCREMENTAL.
 fn feed_repaint() {
+    frame_begin();
+    _feed_repaint_paint();
+    frame_end();
+    return 0;
+}
+fn _feed_repaint_paint() {
     if (_paint_buf == 0) { _paint_buf = alloc(PAINT_CAP); }
     var top = tui_feed_top();
     var bot = tui_feed_bot(_tui_rows, _comp_total_rows(), _tui_show_status);
@@ -2100,7 +2235,7 @@ fn feed_repaint() {
     # than fwidth spans several rows, each painting its visible-column window.
     var painted = 0;
     while (painted < rows) {
-        tty_move(top + painted, fleft);
+        frame_move(top + painted, fleft);
         if (li < docrows) {
             var ptr = 0;
             var len = 0;
@@ -2124,7 +2259,7 @@ fn feed_repaint() {
             sg = sg + 1;
             if (sg >= feed_rows_for(lvis2, fwidth)) { li = li + 1; sg = 0; }
         }
-        tty_clear_to_eol();
+        frame_clear_eol();
         painted = painted + 1;
     }
     feed_rainbow_row_set(0);                          # 0.45.5: a direct painter call after this (tree, tests) is row 0 again
@@ -2246,8 +2381,8 @@ fn tui_confirm_begin() {
     if (need > (bot - 1)) { return 0; }
     var top = bot - need + 1;
     var r = top;
-    while (r <= bot) { tty_move(r, 1); tty_clear_to_eol(); r = r + 1; }
-    tty_move(top, 1);
+    while (r <= bot) { frame_move(r, 1); frame_clear_eol(); r = r + 1; }
+    frame_move(top, 1);
     if (need > 1) { tui_wrap_enable(); }
     return 1;
 }
@@ -2329,7 +2464,7 @@ fn tui_ask() {
     ui_emit(ROLE_FAINT, hint); oprintln("");
     emit("  > ");
     var buf[2048];
-    var n = read_line(&buf, 2048);
+    var n = read_line_prompt(&buf, 2048);
     var shrank = 0;
     if (tui_confirm_still_fits() == 0) { shrank = 1; }   # 0.52.8 (audit B1): a resize while asking voids the answer
     if ((n <= 0) || (shrank == 1)) { ask_cancel(); } else { ask_resolve(&buf); }
@@ -2418,7 +2553,7 @@ fn _tui_paint_tree_row(li, tw, r) {
     if (vis > namew) { vis = namew; }
     var role = ROLE_MUTED;
     if (ftree_isdir(li) == 1) { role = ROLE_BLUE; }
-    tty_move(r, 1);
+    frame_move(r, 1);
     if (li == ftree_sel()) { emit_raw("\x1b[7m"); }     # reverse-video highlight bar
     if (badges == 1) {
         var kind = _tui_tree_row_gitkind(li);
@@ -2451,8 +2586,8 @@ fn tui_draw_tree() {
         var r = top + i;
         var li = first + i;
         if (li < total) { _tui_paint_tree_row(li, tw, r); }
-        else { tty_move(r, 1); _tui_pad_cols(tw); }
-        tty_move(r, tw + 1); emit_raw(ui_sgr(ROLE_FAINT)); emit_raw("│"); emit_raw(ui_reset());
+        else { frame_move(r, 1); _tui_pad_cols(tw); }
+        frame_move(r, tw + 1); emit_raw(ui_sgr(ROLE_FAINT)); emit_raw("│"); emit_raw(ui_reset());
         i = i + 1;
     }
     return 0;
@@ -2526,6 +2661,12 @@ fn tui_repaint_body() {
 # tui_relayout: re-read the terminal size, then repaint the whole frame. No scroll region
 # — the feed is self-managed now.
 fn tui_relayout() {
+    frame_begin();
+    _tui_relayout_paint();
+    frame_end();
+    return 0;
+}
+fn _tui_relayout_paint() {
     _tui_read_winsize();
     tui_repaint_body();
     return 0;
@@ -2566,14 +2707,13 @@ fn tui_after_edit(before_h) {
 # CAPTURED into the ring (OUT_RING) and dispatched in COOKED mode (so the gate
 # confirm's read_line works; the confirm itself brackets back to the screen).
 # On return the feed is repainted. Returns dispatch's keep-going flag (0 = quit).
-# tui_git_refresh (0.53.3, M-3): the probe a line left owing, after its repaint: it inflates every tracked blob (0.58 s on a 310-file
+# tui_git_refresh (0.53.3, M-3): the probe a line left owing, after its repaint; 0.54.1: in a child, landed by the event loop: it inflates every tracked blob (0.58 s on a 310-file
 # repo, 2.46 s on 3,800), and it ran before the answer drew, so the prompt came back that much later and keys waited.
 var _tui_git_due = 0;
 fn tui_git_refresh() {
     if (_tui_git_due == 0) { return 0; }
     _tui_git_due = 0;
-    git_probe();
-    tui_relayout();
+    if (git_probe_begin() == 0) { git_probe(); tui_relayout(); }
     return 0;
 }
 fn tui_run_line(line) {
@@ -2604,6 +2744,8 @@ fn tui_run_line(line) {
 # already Linux-gated and non-rich runs the REPL, so this never gates a target.
 var EV_KEY = 0;
 var EV_WINCH = 1;
+var EV_TICK = 2;              # 0.54.0: nothing to read, and a probe's answer is due
+var EV_TERM = 3;              # 0.54.1: a signal asked the session to end
 var _winch_fd = 0 - 1;
 var _sigint_fd = 0 - 1;       # the blocked-SIGINT signalfd (tracked so teardown can close it)
 var _epfd = 0 - 1;
@@ -2642,6 +2784,8 @@ fn tui_events_init() {
     if (_winch_drain == 0) { _winch_drain = alloc(128); }
     sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, 0, epoll_event_new(EPOLLIN, 0));            # stdin, data=0
     sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, _winch_fd, epoll_event_new(EPOLLIN, _winch_fd));
+    _sigterm_fd = term_open_signalfd(TUI_TERM_MASK);   # 0.54.1 (S-11): failing leaves today's behaviour, the default action
+    if (_sigterm_fd >= 0) { sys_epoll_ctl(_epfd, EPOLL_CTL_ADD, _sigterm_fd, epoll_event_new(EPOLLIN, _sigterm_fd)); }
     return 1;
     #endif
 }
@@ -2657,13 +2801,20 @@ fn tui_wait_event() {
     return EV_KEY;
     #endif
     #ifdef CYRIUS_TARGET_LINUX
-    var n = sys_epoll_wait(_epfd, _tui_epoll_buf, 2, 0 - 1);   # timeout -1: block until ready
+    var tmo = 0 - 1;                                    # block until ready, unless a probe is out (0.54.0)
+    if ((hoosh_health_pending() == 1) || (git_probe_pending() == 1)) { tmo = NET_TICK_MS; }
+    var n = sys_epoll_wait(_epfd, _tui_epoll_buf, 3, tmo);
+    if ((n == 0) && (tmo >= 0)) { return EV_TICK; }
     if (n <= 0) { return EV_KEY; }                      # EINTR/spurious -> attempt a read
     var i = 0;
+    var winch = 0;
     while (i < n) {
-        if (load64(_tui_epoll_buf + i * 12 + 4) == _winch_fd) { return EV_WINCH; }   # data @ +4
+        var d = load64(_tui_epoll_buf + i * 12 + 4);    # data @ +4
+        if (d == _sigterm_fd) { return EV_TERM; }
+        if (d == _winch_fd) { winch = 1; }
         i = i + 1;
     }
+    if (winch == 1) { return EV_WINCH; }
     return EV_KEY;
     #endif
 }
@@ -2689,6 +2840,7 @@ fn tui_events_teardown() {
     #ifdef CYRIUS_TARGET_LINUX
     if (_winch_fd >= 0) { term_close_signalfd(_winch_fd, term_sigmask_winch()); _winch_fd = 0 - 1; }
     if (_sigint_fd >= 0) { term_close_signalfd(_sigint_fd, 2); _sigint_fd = 0 - 1; }
+    if (_sigterm_fd >= 0) { term_close_signalfd(_sigterm_fd, TUI_TERM_MASK); _sigterm_fd = 0 - 1; }
     if (_epfd >= 0) { file_close(_epfd); _epfd = 0 - 1; }
     return 0;
     #endif
@@ -2836,13 +2988,15 @@ fn tui_loop() {
     # have the line REPL and one-shot call TUI painters with no alt-screen up. gui_run claims it the
     # same way for the T3 window.
     ask_hook_set(&tui_ask);
+    net_poll_set(&_tui_net_poll);                 # 0.54.0: every network wait from here on keeps Esc and the indicator alive
+    read_wait_hook_set(&_tui_read_wait);          # 0.54.1: and a cooked answer does not outwait SIGTERM
     _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize; 0 on agnos)
     tty_alt_enter();
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tui_bpaste_enable();                          # 0.17.0: bracketed paste (multi-line paste -> composer)
     tui_mouse_enable();                           # 0.17.2: SGR mouse (wheel scroll, click focus/tree)
     tui_wrap_disable();                           # 0.44.2: no autowrap — an over-long chrome row (the input's placeholder, the status bar) must clip, never scroll the frame
-    tty_clear();
+    frame_clear();
     led_reset();
     feed_init();                                  # 0.9.1: the self-managed feed ring
     inhist_init();                                # 0.11.1: the composer input-history recall ring
@@ -2866,14 +3020,11 @@ fn tui_loop() {
     # local hoosh answered -> "READY", masking that the user's config never loaded); greet_build states the
     # config source honestly, plus 0.43.2's legacy-file, 0.43.3's two-layer and 0.43.5's unknown-key notes.
     _tui_read_winsize();
-    var _up = 0;
-    if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _up = 1; }   # probe + SEED the status-bar dot
-    greet_build(_up);
-    tui_greeting_emit(tui_feed_width(_tui_cols, _tui_show_tree), _tui_feed_rows() - 2);   # -2: the open row + the help line below
-    oprintln("");                                                 # an open row between the block and the help line (0.45.3; a bare newline seals a blank feed row — flush alone would not)
-    _tui_spaces(greet_help_indent());                              # two tabs in
-    ui_emit(ROLE_FAINT, "type a task, or /help. Ctrl-X exits.");   # the first line under the block
-    feed_flush_pending();
+    # 0.54.0 (M-9): the probe seeds the status-bar dot and no longer holds the first frame. Off the event loop nothing would
+    # collect its answer, so that floor keeps the blocking probe.
+    if (_events_ok == 1) { hoosh_health_begin(); } else { hoosh_health_probe(); }
+    if ((_events_ok == 0) || (git_probe_begin() == 0)) { git_probe(); }   # 0.54.1: the walk stays off the first frame too (1.2 s at 100k files)
+    _tui_greet_show();
     # 0.38.6: announce a lost SIGINT guard rather than faking it. `tty_open_signalfd`
     # is what blocks SIGINT for the session; if it failed (EMFILE / ENOMEM) SIGINT is
     # live, and a Ctrl-C at a cooked y/n prompt will kill the process with the
@@ -2900,9 +3051,14 @@ fn tui_loop() {
         if (_events_ok == 1) { ev = tui_wait_event(); }
         if (ev == EV_WINCH) {
             tui_drain_winch();
-            tty_clear();                 # geometry changed; full repaint at the new size
+            frame_clear();                 # geometry changed; full repaint at the new size
             tui_relayout();
             if (_mpick_active == 1) { _tui_pick_paint(); }         # 0.24.0: the picker owns the feed band while open
+        } elif (ev == EV_TICK) {
+            _tui_probe_land();
+            if (git_probe_land() == 1) { tui_relayout(); }
+        } elif (ev == EV_TERM) {
+            _tui_term_seen();
         } else {
             var key = tui_read_key();
             if (_mpick_active == 1) { _tui_pick_key(key); }         # 0.24.0: the model picker owns every key while active
@@ -2911,7 +3067,7 @@ fn tui_loop() {
             elif (key == KEY_PICK) { _tui_pick_enter(); }          # Ctrl-P -> open the model picker (0.24.0)
             elif (key == KEY_TOGGLE_STATUS) {
                 if (_tui_show_status == 1) { _tui_show_status = 0; } else { _tui_show_status = 1; }
-                tty_clear();           # the feed band moves; full repaint
+                frame_clear();           # the feed band moves; full repaint
                 tui_relayout();
             } elif (key == KEY_TOGGLE_TREE) {
                 if (_tui_show_tree == 1) { _tui_show_tree = 0; _tui_focus = FOCUS_COMPOSER; }
@@ -2920,25 +3076,20 @@ fn tui_loop() {
                     if (ftree_count() == 0) { ftree_load(); }   # lazily list $PWD on first show
                     _tui_focus = FOCUS_TREE;
                 }
-                tty_clear();           # the feed narrows/widens; full repaint
+                frame_clear();           # the feed narrows/widens; full repaint
                 tui_relayout();
             } elif (key == KEY_TOGGLE_THEME) {
                 tui_theme_next();       # cycle the axis + rebuild the SGR table (0.38.1: a real fn, so a
                 # test can drive the KEY path itself rather than re-typing its math)
-                tty_clear();           # re-color the whole frame
+                frame_clear();           # re-color the whole frame
                 tui_relayout();
             } elif (key == KEY_REPROBE) {
                 # 0.19.3: Ctrl-R re-probes hoosh reachability (a silent GET; no idle timer). Probe while
                 # OUT_FD1 (it emits nothing), then note the outcome to the feed + repaint the status dot.
-                var _reach = HOOSH_HEALTH_DOWN;
-                if (config_hoosh_configured() == 1) { _reach = hoosh_health_probe(); }
-                out_mode_set(OUT_RING);
-                if (config_hoosh_configured() == 0) { ui_emit(ROLE_RED, "hoosh: absent"); ui_emit(ROLE_FAINT, " — set [hoosh].url in .thoth/config.cyml"); }
-                elif (_reach == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "hoosh: reachable"); }
-                else { ui_emit(ROLE_RED, "hoosh: unreachable"); ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); }
-                feed_flush_pending();
-                out_mode_set(OUT_FD1);
-                tui_relayout();
+                # 0.54.0: on a worker, so a hung gateway leaves the composer live; EV_TICK lands a slow answer.
+                if (config_hoosh_configured() == 0) { _tui_reprobe_note(); }
+                elif (hoosh_health_begin() == 1) { _tui_reprobe_note(); }
+                else { _tui_reprobing = 1; }
             } elif (key == KEY_TAB) {
                 # 0.21.1: in the composer, Tab on a `@<prefix>` completes the path from the file tree
                 # (consuming the Tab); otherwise Tab toggles composer<->tree focus (the prior behavior).
@@ -3041,5 +3192,6 @@ fn tui_loop() {
     _tui_scroll_region(1, _tui_rows);
     tty_alt_leave();
     tui_events_teardown();          # close the signalfds (restore the signal mask) + epoll fd
+    net_poll_set(0);                # 0.54.0: no surface now: a session_end hook's call, if any, is a plain call
     return 0;
 }

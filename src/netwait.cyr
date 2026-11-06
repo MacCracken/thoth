@@ -1,0 +1,362 @@
+# src/netwait.cyr — a network call that leaves the surface alive (0.54.0, audit G-6, M-9).
+#
+# Every sandhi call blocks its caller until the peer answers or a deadline passes: connect, the TLS handshake, the send,
+# the wait for headers, the read. On the thread that also owns the screen that made a silent wait a dead window: no frames,
+# Esc unread, the compositor's ping unanswered, for up to [hoosh].timeout_ms. sandhi's idle turn reaches a stream's body
+# only, and neither the header wait nor a buffered verb has one, so no option on the call could cover every wait.
+#
+# So the call moves. While a surface has bound its wait poll, the call runs on a worker thread and this thread stays in
+# _net_wait: it pumps the surface every NET_TICK_MS, as exec's wait does for a command, and watches the stop generation.
+#   - The worker only does the network. A stream's events are handed back one at a time and the caller's callback runs HERE,
+#     with the worker parked, so nothing a callback touches (the feed, the window, the accumulators) ever sees a second thread.
+#   - A stop walks away. Main cannot cancel a thread in recv, so it leaves the job with the worker and returns 0 at once, with
+#     net_stopped() set. The worker ends at its next idle turn or event, or at the call's own deadline if it is stuck
+#     before the first byte, then releases what it holds. With [hoosh].timeout_ms = 0 there is no such deadline, and a
+#     stuck worker keeps its thread and socket until thoth exits: that setting asks for exactly this.
+#   - A job owns everything the worker reads. The url and body are copied, because the caller's buffers are rewritten by the
+#     next round; the worker may still be sending when that happens, and two requests must not mix on the wire.
+#   - With no surface bound (one-shot, the line REPL, a test), or if a worker cannot start, the call is the plain call.
+#
+# Which thread may touch what is the invariant here: _net_on_event and _net_on_idle run on the worker and touch only the
+# job. Everything else in this file runs on the main thread.
+
+var NET_TICK_MS = 50;              # how long a wait goes without pumping the surface
+
+var NET_GET = 0;
+var NET_POST = 1;
+var NET_STREAM = 2;
+
+var NET_RUN = 0;                   # the worker has the job
+var NET_EVENT = 1;                 # a stream event waits for this thread
+var NET_DONE = 2;                  # the result is in
+var NET_LEFT = 3;                  # this thread walked away: the worker owns the job and frees it
+
+var NET_POKE_EVENT = 101;
+var NET_POKE_DONE = 100;
+
+var NJ_STATE = 0;
+var NJ_KIND = 8;
+var NJ_ARENA = 16;
+var NJ_URL = 24;
+var NJ_HDR = 32;
+var NJ_BODY = 40;
+var NJ_LEN = 48;
+var NJ_OPTS = 56;
+var NJ_CB = 64;
+var NJ_CTX = 72;
+var NJ_EV = 80;
+var NJ_EVRC = 88;
+var NJ_RES = 96;
+var NJ_WAKE_R = 104;
+var NJ_WAKE_W = 112;
+var NJ_ACK_R = 120;
+var NJ_ACK_W = 128;
+var NJ_SIZE = 136;
+
+var _net_poll = 0;                 # the surface's wait poll (the contract of exec's: it returns intr_seq); 0 = plain calls
+var _net_stopped = 0;              # 1 when this thread's last call was left on a stop
+var _net_idle = 0;                 # one job kept for the next call, with its pipes
+var _net_do = 0;                   # test seam: runs on the worker in place of the sandhi call
+var NET_SPARE_N = 4;
+var _net_spare[4];                 # arenas a left job gave back (module scope: 4 i64 slots)
+
+fn net_poll_set(fp) { _net_poll = fp; git_wait_poll_set(fp); return 0; }   # 0.54.1: the git walk's wait is the same wait
+fn net_poll_bound() { if (_net_poll != 0) { return 1; } return 0; }
+fn net_poll_now() { if (_net_poll != 0) { return fncall0(_net_poll); } return 0; }
+fn net_stopped() { return _net_stopped; }
+fn net_stopped_clear() { _net_stopped = 0; return 0; }
+fn net_do_set(fp) { _net_do = fp; return 0; }
+
+# net_arena(initial): an arena for a call site's slot: one a left job gave back, or a new one.
+fn net_arena(initial) {
+    var i = 0;
+    while (i < NET_SPARE_N) {
+        var a = atomic_load(&_net_spare + i * 8);
+        if (a != 0) {
+            if (atomic_cas(&_net_spare + i * 8, a, 0) == 1) { return a; }
+        }
+        i = i + 1;
+    }
+    return arena_allocator_growable(initial);
+}
+
+# _net_spare_give(a): the worker's half. An arena's memory is not returned to the heap, so a left arena is kept for reuse;
+# past NET_SPARE_N it is lost, which takes that many stops with every earlier worker still stuck.
+fn _net_spare_give(a) {
+    var i = 0;
+    while (i < NET_SPARE_N) {
+        if (atomic_cas(&_net_spare + i * 8, 0, a) == 1) { return 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _net_cloexec(fd) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    sys_fcntl(fd, F_SETFD, FD_CLOEXEC);
+    #endif
+    #endif
+    return 0;
+}
+
+# _net_pipe(j, off): a pipe into the job's two slots at off. A command the turn starts must not inherit either end.
+fn _net_pipe(j, off) {
+    var p[16];
+    if (sys_pipe(&p) < 0) { return 0; }
+    var rd = load32(&p);
+    var wr = load32(&p + 4);
+    _net_cloexec(rd);
+    _net_cloexec(wr);
+    store64(j + off, rd);
+    store64(j + off + 8, wr);
+    return 1;
+}
+
+fn _net_job_close(j) {
+    sys_close(load64(j + NJ_WAKE_R));
+    sys_close(load64(j + NJ_WAKE_W));
+    sys_close(load64(j + NJ_ACK_R));
+    sys_close(load64(j + NJ_ACK_W));
+    return 0;
+}
+
+fn _net_job_new() {
+    var j = _net_idle;
+    if (j != 0) { _net_idle = 0; return j; }
+    j = alloc(NJ_SIZE);
+    if (j == 0) { return 0; }
+    if (_net_pipe(j, NJ_WAKE_R) == 0) { return 0; }
+    if (_net_pipe(j, NJ_ACK_R) == 0) {
+        sys_close(load64(j + NJ_WAKE_R));
+        sys_close(load64(j + NJ_WAKE_W));
+        return 0;
+    }
+    return j;
+}
+
+fn _net_job_put(j) {
+    if (_net_idle == 0) { _net_idle = j; return 0; }
+    return _net_job_close(j);
+}
+
+# _net_copy(a, src, n): n bytes the job owns, NUL-terminated. From arena `a`, or the heap when the call has none.
+fn _net_copy(a, src, n) {
+    var d = 0;
+    if (a != 0) { d = alloc_via(a, n + 1); } else { d = alloc(n + 1); }
+    if (d == 0) { return 0; }
+    if (n > 0) { memcpy(d, src, n); }
+    store8(d + n, 0);
+    return d;
+}
+
+# _net_stream_opts(a, opts): the caller's options plus the idle turn. It is what lets a left stream end within a tick: the
+# worker is otherwise in a read that only the next byte or the deadline ends. Only the fields the stream reads are copied.
+fn _net_stream_opts(a, opts) {
+    var o = sandhi_http_options_new_a(a);
+    if (o == 0) { return 0; }
+    sandhi_http_options_read_ms(o, sandhi_http_options_get_read_ms(opts));
+    sandhi_http_options_write_ms(o, sandhi_http_options_get_write_ms(opts));
+    sandhi_http_options_connect_ms(o, sandhi_http_options_get_connect_ms(opts));
+    sandhi_http_options_total_ms(o, sandhi_http_options_get_total_ms(opts));
+    sandhi_http_options_max_response_bytes(o, sandhi_http_options_bytes(opts));
+    sandhi_http_options_tls_policy(o, sandhi_http_options_get_tls_policy(opts));
+    sandhi_http_options_idle_ms(o, NET_TICK_MS);
+    sandhi_http_options_idle_cb(o, &_net_on_idle);
+    return o;
+}
+
+fn _net_poke(fd, b) {
+    var c[8];
+    store8(&c, b);
+    return sys_write(fd, &c, 1);
+}
+
+# _net_on_event(j, ev): the worker's stream callback. Hands the event over, parks until this thread has run the caller's
+# callback, and passes its answer back to sandhi. A left job answers 0, which ends the stream.
+fn _net_on_event(j, ev) {
+    store64(j + NJ_EV, ev);
+    if (atomic_cas(j + NJ_STATE, NET_RUN, NET_EVENT) == 0) { return 0; }
+    _net_poke(load64(j + NJ_WAKE_W), NET_POKE_EVENT);
+    var c[8];
+    var n = sys_read(load64(j + NJ_ACK_R), &c, 1);
+    while (n == (0 - 4)) { n = sys_read(load64(j + NJ_ACK_R), &c, 1); }   # EINTR
+    if (n != 1) { return 0; }
+    return load64(j + NJ_EVRC);
+}
+
+# _net_on_idle(j, silent_ms): the worker's idle turn. 0 ends the stream, as a 0 from the event callback does.
+fn _net_on_idle(j, silent_ms) {
+    if (atomic_load(j + NJ_STATE) == NET_LEFT) { return 0; }
+    return 1;
+}
+
+fn _net_call(j) {
+    var k = load64(j + NJ_KIND);
+    var a = load64(j + NJ_ARENA);
+    var url = load64(j + NJ_URL);
+    var h = load64(j + NJ_HDR);
+    var o = load64(j + NJ_OPTS);
+    if (k == NET_STREAM) { return sandhi_http_stream_opts_a(a, url, "POST", h, load64(j + NJ_BODY), load64(j + NJ_LEN), &_net_on_event, j, o); }
+    if (k == NET_POST) {
+        if (a != 0) { return sandhi_http_post_opts_a(a, url, h, load64(j + NJ_BODY), load64(j + NJ_LEN), o); }
+        return sandhi_http_post_opts(url, h, load64(j + NJ_BODY), load64(j + NJ_LEN), o);
+    }
+    if (a != 0) { return sandhi_http_get_opts_a(a, url, h, o); }
+    return sandhi_http_get_opts(url, h, o);
+}
+
+# _net_worker(j): the whole of the worker thread. The wake fd is read first: once the state says DONE the job is no longer this
+# thread's to read.
+fn _net_worker(j) {
+    var r = 0;
+    if (_net_do != 0) { r = fncall1(_net_do, j); }
+    else { r = _net_call(j); }
+    store64(j + NJ_RES, r);
+    var wake = load64(j + NJ_WAKE_W);
+    if (atomic_cas(j + NJ_STATE, NET_RUN, NET_DONE) == 1) {
+        _net_poke(wake, NET_POKE_DONE);
+        return 0;
+    }
+    var a = load64(j + NJ_ARENA);
+    if (a != 0) { _net_spare_give(a); }
+    _net_job_close(j);
+    return 0;
+}
+
+# _net_start: a job on a worker, or 0 when it cannot be had (no pipe, no thread, no room): the caller then makes the plain call.
+fn _net_start(kind, a, url, h, body, len, cb, ctx, opts) {
+    var j = _net_job_new();
+    if (j == 0) { return 0; }
+    var u = _net_copy(a, url, strlen(url));
+    var b = 0;
+    if (kind != NET_GET) { b = _net_copy(a, body, len); }
+    var o = opts;
+    if (kind == NET_STREAM) { o = _net_stream_opts(a, opts); }
+    if ((u == 0) || ((kind != NET_GET) && (b == 0)) || ((kind == NET_STREAM) && (o == 0))) { _net_job_put(j); return 0; }
+    store64(j + NJ_KIND, kind);
+    store64(j + NJ_ARENA, a);
+    store64(j + NJ_URL, u);
+    store64(j + NJ_HDR, h);
+    store64(j + NJ_BODY, b);
+    store64(j + NJ_LEN, len);
+    store64(j + NJ_OPTS, o);
+    store64(j + NJ_CB, cb);
+    store64(j + NJ_CTX, ctx);
+    store64(j + NJ_RES, 0);
+    atomic_store(j + NJ_STATE, NET_RUN);
+    if (thread_create_detached(&_net_worker, j) == 0) { _net_job_put(j); return 0; }
+    return j;
+}
+
+# _net_take(j, saw_done): the worker has said DONE. Its last act is the poke, so the job is not reused until the poke is read:
+# the fd is the worker's until then.
+fn _net_take(j, saw_done) {
+    var rd = load64(j + NJ_WAKE_R);
+    var c[8];
+    while (saw_done == 0) {
+        var n = sys_read(rd, &c, 1);
+        if (n == (0 - 4)) { continue; }
+        if (n != 1) { break; }
+        if (load8(&c) == NET_POKE_DONE) { saw_done = 1; }
+    }
+    var r = load64(j + NJ_RES);
+    _net_job_put(j);
+    return r;
+}
+
+# _net_leave(j, slot): give the job to the worker. 0 when it had already moved on: an event waits or the result is in, and the
+# caller's loop deals with that. The arena is the worker's now, so the call site's slot forgets it.
+fn _net_leave(j, slot) {
+    if (atomic_cas(j + NJ_STATE, NET_RUN, NET_LEFT) == 0) { return 0; }
+    if (slot != 0) { store64(slot, 0); }
+    return 1;
+}
+
+# _net_wait(j, slot): this thread's half: the surface and the job's events until the job ends or a stop leaves it.
+fn _net_wait(j, slot) {
+    var armed = 0;
+    if (intr_armed() == 0) { intr_arm_tty(); armed = intr_armed(); }
+    var gen0 = net_poll_now();
+    var rd = load64(j + NJ_WAKE_R);
+    var last = clock_now_ms();
+    var saw_done = 0;
+    var r = 0;
+    var running = 1;
+    while (running == 1) {
+        var st = atomic_load(j + NJ_STATE);
+        if (st == NET_EVENT) {
+            store64(j + NJ_EVRC, fncall2(load64(j + NJ_CB), load64(j + NJ_CTX), load64(j + NJ_EV)));
+            atomic_store(j + NJ_STATE, NET_RUN);
+            _net_poke(load64(j + NJ_ACK_W), 97);
+        } elif (st == NET_DONE) {
+            r = _net_take(j, saw_done);
+            running = 0;
+        } else {
+            var w = fd_wait_ready(rd, 0, NET_TICK_MS);
+            if (w == 1) {
+                var c[8];
+                if ((sys_read(rd, &c, 1) == 1) && (load8(&c) == NET_POKE_DONE)) { saw_done = 1; }
+            } elif ((w < 0) && (w != (0 - 4))) { sleep_ms(NET_TICK_MS); }   # a floor with no poll: the wait is the tick
+            var now = clock_now_ms();
+            if ((now - last) >= NET_TICK_MS) {
+                last = now;
+                if (net_poll_now() != gen0) {
+                    if (_net_leave(j, slot) == 1) { _net_stopped = 1; running = 0; }
+                }
+            }
+        }
+    }
+    if (armed == 1) { intr_disarm(); }
+    return r;
+}
+
+# net_get / net_post / net_stream: sandhi's verbs, with the surface kept alive. `slot` is the ADDRESS of the call site's arena
+# variable, or 0 for the heap. 0 back with net_stopped() set means the operator stopped the wait: the call may yet land at
+# the peer. Each caller says so in its own words, and none may read a reply.
+fn net_get(slot, url, h, opts) {
+    _net_stopped = 0;
+    var a = 0;
+    if (slot != 0) { a = load64(slot); }
+    var j = 0;
+    if (_net_poll != 0) { j = _net_start(NET_GET, a, url, h, 0, 0, 0, 0, opts); }
+    if (j != 0) { return _net_wait(j, slot); }
+    if (a != 0) { return sandhi_http_get_opts_a(a, url, h, opts); }
+    return sandhi_http_get_opts(url, h, opts);
+}
+
+fn net_post(slot, url, h, body, len, opts) {
+    _net_stopped = 0;
+    var a = 0;
+    if (slot != 0) { a = load64(slot); }
+    var j = 0;
+    if (_net_poll != 0) { j = _net_start(NET_POST, a, url, h, body, len, 0, 0, opts); }
+    if (j != 0) { return _net_wait(j, slot); }
+    if (a != 0) { return sandhi_http_post_opts_a(a, url, h, body, len, opts); }
+    return sandhi_http_post_opts(url, h, body, len, opts);
+}
+
+# net_stream: the POST both streaming paths make. The arena is required: an event lives in it while this thread reads it, and a
+# left stream's buffers need an owner.
+fn net_stream(slot, url, h, body, len, cb, ctx, opts) {
+    _net_stopped = 0;
+    var a = load64(slot);
+    var j = 0;
+    if (_net_poll != 0) { j = _net_start(NET_STREAM, a, url, h, body, len, cb, ctx, opts); }
+    if (j != 0) { return _net_wait(j, slot); }
+    return sandhi_http_stream_opts_a(a, url, "POST", h, body, len, cb, ctx, opts);
+}
+
+# --- a job nobody waits on (M-9): a GET on a worker while the surface runs its own loop ---------------------------------------
+# net_get_begin: a job, or 0: the caller makes the plain call. net_job_park waits up to `ms` for the answer, net_job_done
+# says whether it is in, net_job_take collects it. `a` is the job's arena for as long as it runs, so its owner resets it only between jobs.
+fn net_get_begin(a, url, h, opts) {
+    if (_net_poll == 0) { return 0; }
+    return _net_start(NET_GET, a, url, h, 0, 0, 0, 0, opts);
+}
+fn net_job_done(j) {
+    if (atomic_load(j + NJ_STATE) == NET_DONE) { return 1; }
+    return 0;
+}
+fn net_job_park(j, ms) { return fd_wait_ready(load64(j + NJ_WAKE_R), 0, ms); }
+fn net_job_take(j) { return _net_take(j, 0); }

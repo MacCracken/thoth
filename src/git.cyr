@@ -15,9 +15,13 @@
 # Freshness vs cost: git_probe() re-reads the repo (a worktree walk). It is called
 # at startup, after each dispatched turn (files may have changed via /run or an
 # agentic edit), and by /state and /git — NOT per status-bar paint. The status bar
-# reads the cache. sit's status vec + branch cstring come from the bump heap and
-# are not individually freeable. A probe is coarse (per turn / per command), not per
-# render, but its residue grows with the repository: see the 0.53.3 audit, P-10.
+# reads the cache.
+#
+# 0.54.1 (P-10, M-3): the walk runs in a forked child. sit allocates on the heap that never frees and inflates every tracked
+# blob, so on a 100k-file repository one probe cost 48 MB of heap for good and held the main thread for 1.8 s (37 -> 515 MB in ten
+# turns). A child's heap goes with the child, and a walk that crashes on a hostile repository takes only the child. It sends a
+# small snapshot back through a pipe. The surfaces start it and carry on (git_probe_begin, collected by git_probe_land); /state and /git
+# wait for it (git_probe). Where there is no fork (Windows, AGNOS) the walk is the plain call it always was.
 
 var GIT_BRANCH_CAP = 256;
 var _git_probed = 0;        # 1 once git_probe has run at least once this session
@@ -57,12 +61,20 @@ fn _git_note_detached() {
     return 0;
 }
 
-# git_probe: (re)read the working repo through sit. sit_repo_open(".") chdirs to
-# "." (a no-op — thoth never leaves its launch cwd), detects .git/ or .sit/, and
-# returns 1/0. On a repo we snapshot the branch + the changed-file count. Returns
-# 1 if a repo is present, 0 if absent.
-fn git_probe() {
-    _git_probed = 1;
+# _git_bufs: the badge cache's reused buffers, made before a fork so child and parent share the layout.
+fn _git_bufs() {
+    if (_git_status_ptr == 0) {
+        _git_status_ptr = alloc(GIT_STATUS_MAX * 8);
+        _git_status_kind = alloc(GIT_STATUS_MAX);
+        _git_status_buf = alloc(GIT_STATUS_BUF);
+    }
+    if (_git_branch_buf == 0) { _git_branch_buf = alloc(GIT_BRANCH_CAP); }
+    return 0;
+}
+
+# _git_walk: read the repo through sit into the cache. sit_repo_open(".") chdirs to "." (a no-op — thoth never leaves its launch
+# cwd), detects .git/ or .sit/, and returns 1/0. On a repo we snapshot the branch + the changed-file count. 1 if a repo is present.
+fn _git_walk() {
     _git_present = 0;
     _git_detached = 0;
     _git_dirty = 0;
@@ -76,11 +88,7 @@ fn git_probe() {
     var st = sit_repo_status(repo);  # vec of {path, kind}; count + copy into the badge cache (before close)
     if (st != 0) {
         _git_dirty = vec_len(st);
-        if (_git_status_ptr == 0) {
-            _git_status_ptr = alloc(GIT_STATUS_MAX * 8);
-            _git_status_kind = alloc(GIT_STATUS_MAX);
-            _git_status_buf = alloc(GIT_STATUS_BUF);
-        }
+        _git_bufs();
         var off = 0;                                 # rewrite the reused buffer from the top (no accretion)
         var i = 0;
         var sn = vec_len(st);
@@ -102,6 +110,197 @@ fn git_probe() {
     return 1;
 }
 
+# --- the probe in a child (0.54.1) --------------------------------------------------------------------------------------------
+# The snapshot: 8 bytes present, 8 detached, 8 dirty, 8 entry count, the branch NUL-terminated, each entry as a kind byte and a
+# NUL-terminated path, then one end mark: a child that died part-way sends none, and the cache keeps what it had. A pipe's
+# buffer holds it whole on every target, but the parent reads as it goes either way.
+var GIT_PROBE_MS = 120000;         # a walk past this is killed, and the cache keeps what it had. Generous: a Pi takes over 5 s on this tree
+var GIT_SNAP_CAP = 34048;          # 32 + GIT_BRANCH_CAP + GIT_STATUS_MAX + GIT_STATUS_BUF + the mark
+var GIT_SNAP_END = 165;
+var _git_snap = 0;
+var _git_snap_n = 0;
+var _git_job_pid = 0;
+var _git_job_fd = 0 - 1;
+var _git_job_t0 = 0;
+var _git_child_fail = 0;           # test seam: the child dies before it writes (2: after a wait)
+var _git_wait_poll = 0;            # the surface's wait poll (net_poll_set binds it): git_probe's wait keeps the surface alive
+fn git_wait_poll_set(fp) { _git_wait_poll = fp; return 0; }
+
+fn _git_snap_build() {
+    store64(_git_snap, _git_present);
+    store64(_git_snap + 8, _git_detached);
+    store64(_git_snap + 16, _git_dirty);
+    store64(_git_snap + 24, _git_status_n);
+    var o = 32;
+    var b = git_branch();
+    var bl = strlen(b);
+    memcpy(_git_snap + o, b, bl);
+    o = o + bl;
+    store8(_git_snap + o, 0);
+    o = o + 1;
+    var i = 0;
+    while (i < _git_status_n) {
+        var p = load64(_git_status_ptr + i * 8);
+        var pl = strlen(p);
+        store8(_git_snap + o, load8(_git_status_kind + i));
+        memcpy(_git_snap + o + 1, p, pl);
+        store8(_git_snap + o + 1 + pl, 0);
+        o = o + pl + 2;
+        i = i + 1;
+    }
+    store8(_git_snap + o, GIT_SNAP_END);
+    return o + 1;
+}
+
+# _git_snap_apply: the snapshot into the cache. 0 for one with no end mark, or one that does not parse: the cache stays as it was.
+fn _git_snap_apply() {
+    var n = _git_snap_n;
+    if (n < 34) { return 0; }
+    if (load8(_git_snap + n - 1) != GIT_SNAP_END) { return 0; }
+    var end = n - 1;
+    var cnt = load64(_git_snap + 24);
+    if ((cnt < 0) || (cnt > GIT_STATUS_MAX)) { return 0; }
+    var o = 32;
+    var bo = o;
+    while ((o < end) && (load8(_git_snap + o) != 0)) { o = o + 1; }
+    if ((o >= end) || ((o - bo) >= GIT_BRANCH_CAP)) { return 0; }
+    _git_bufs();
+    memcpy(_git_branch_buf, _git_snap + bo, o - bo + 1);
+    o = o + 1;
+    var off = 0;
+    var i = 0;
+    while (i < cnt) {
+        if (o >= end) { return 0; }
+        var kind = load8(_git_snap + o);
+        o = o + 1;
+        var ps = o;
+        while ((o < end) && (load8(_git_snap + o) != 0)) { o = o + 1; }
+        if (o >= end) { return 0; }
+        var pl = o - ps;
+        if ((off + pl + 1) > GIT_STATUS_BUF) { return 0; }
+        memcpy(_git_status_buf + off, _git_snap + ps, pl + 1);
+        store64(_git_status_ptr + i * 8, _git_status_buf + off);
+        store8(_git_status_kind + i, kind);
+        off = off + pl + 1;
+        o = o + 1;
+        i = i + 1;
+    }
+    _git_status_n = cnt;
+    _git_present = load64(_git_snap);
+    _git_detached = load64(_git_snap + 8);
+    _git_dirty = load64(_git_snap + 16);
+    return 1;
+}
+
+fn _git_child(rd, wr) {
+    sys_close(rd);
+    # Only this thread exists here. A left network worker that held the allocator's lock at the fork will never release it.
+    store64(&_alloc_lock, 0);
+    if (_git_child_fail == 1) { sys_exit(3); }
+    if (_git_child_fail == 2) { sleep_ms(1500); sys_exit(3); }
+    _git_walk();
+    var n = _git_snap_build();
+    var o = 0;
+    while (o < n) {
+        var w = sys_write(wr, _git_snap + o, n - o);
+        if (w == (0 - 4)) { continue; }
+        if (w <= 0) { sys_exit(1); }
+        o = o + w;
+    }
+    sys_exit(0);
+    return 0;
+}
+
+fn git_probe_pending() { if (_git_job_pid != 0) { return 1; } return 0; }
+
+# git_probe_begin: start the walk in a child. 1 when one is running (this one, or one already out); 0 when there is no fork to be had.
+fn git_probe_begin() {
+    _git_probed = 1;
+    if (_git_job_pid != 0) { return 1; }
+    #ifdef CYRIUS_TARGET_WIN
+    return 0;
+    #endif
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    if (_git_snap == 0) { _git_snap = alloc(GIT_SNAP_CAP); }
+    if (_git_snap == 0) { return 0; }
+    _git_bufs();
+    var p[16];
+    if (sys_pipe(&p) < 0) { return 0; }
+    var rd = load32(&p);
+    var wr = load32(&p + 4);
+    sys_fcntl(rd, F_SETFD, FD_CLOEXEC);
+    sys_fcntl(wr, F_SETFD, FD_CLOEXEC);
+    var pid = sys_fork();
+    if (pid < 0) { sys_close(rd); sys_close(wr); return 0; }
+    if (pid == 0) { _git_child(rd, wr); }
+    sys_close(wr);
+    sys_fcntl(rd, F_SETFL, _fd_o_nonblock());
+    _git_job_pid = pid;
+    _git_job_fd = rd;
+    _git_job_t0 = clock_now_ms();
+    _git_snap_n = 0;
+    return 1;
+    #endif
+    #endif
+}
+
+# _git_job_end: reap the child and drop the job. `kill`: it outlived its deadline.
+fn _git_job_end(kill) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    var st[4];
+    if (kill == 1) { sys_kill(_git_job_pid, 9); }
+    sys_waitpid(_git_job_pid, &st, 0);
+    #endif
+    #endif
+    sys_close(_git_job_fd);
+    _git_job_pid = 0;
+    _git_job_fd = 0 - 1;
+    return 0;
+}
+
+# git_probe_land: read what the child has sent. 1 once the probe has ended, the cache updated if it ended well; 0 while it runs.
+fn git_probe_land() {
+    if (_git_job_pid == 0) { return 0; }
+    var room = GIT_SNAP_CAP - _git_snap_n;
+    while (room > 0) {
+        var n = sys_read(_git_job_fd, _git_snap + _git_snap_n, room);
+        if (n == 0) {
+            _git_job_end(0);
+            _git_snap_apply();
+            return 1;
+        }
+        if (n < 0) {
+            if ((clock_now_ms() - _git_job_t0) >= GIT_PROBE_MS) { _git_job_end(1); return 1; }
+            return 0;
+        }
+        _git_snap_n = _git_snap_n + n;
+        room = room - n;
+    }
+    _git_job_end(1);                   # more than a snapshot holds: not one
+    return 1;
+}
+
+# git_probe: (re)read the working repo, and wait for the answer. The surface stays alive through the wait, and a stop leaves it: the
+# cache answers for now, and the surface's loop lands the walk when it ends. 1 if a repo is present.
+fn git_probe() {
+    _git_probed = 1;
+    if (git_probe_begin() == 0) { return _git_walk(); }
+    var gen0 = 0;
+    if (_git_wait_poll != 0) { gen0 = fncall0(_git_wait_poll); }
+    while (git_probe_land() == 0) {
+        fd_wait_ready(_git_job_fd, 0, 50);
+        if (_git_wait_poll != 0) {
+            if (fncall0(_git_wait_poll) != gen0) { return _git_present; }
+        }
+    }
+    return _git_present;
+}
+
 # git_status_of: the sit status kind for repo-relative `relpath` — 1=modified, 2=new, 3=deleted, or 0 if
 # unchanged / untracked-by-status / no repo. Linear scan over the cached probe (bounded by GIT_STATUS_MAX).
 # Read-only surfacing of the already-probed status (the file-tree badges, 0.22.4) — no new worktree walk.
@@ -116,7 +315,7 @@ fn git_status_of(relpath) {
 }
 
 # git_ensure_probed: probe once lazily, for any reader that runs before the
-# startup probe (idempotent; cheap after the first call).
+# startup probe (idempotent; cheap after the first call). A surface starts its probe with git_probe_begin, which counts.
 fn git_ensure_probed() {
     if (_git_probed == 0) { git_probe(); }
     return 0;

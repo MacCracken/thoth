@@ -165,6 +165,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/feed.cyr` — the self-managed T2 feed ring + the escape-aware clip / soft-wrap (M7).
 - `src/ftree.cyr` — the togglable file-tree pane: geometry + flattened-tree model (M7).
 - `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI: the turn's level flag and (0.52.0) the stop generation `intr_seq` a running command's wait compares — an edge, so a stop left over from an earlier turn never kills a later command.
+- `src/netwait.cyr` — a network call that leaves the surface alive (0.54.0, ADR-0023): while the TUI or the window is up, every sandhi verb runs on a worker, stream events come back to the main thread one at a time, and a stop walks away from a call it cannot cancel. With no surface it is the plain call.
 - `src/tui.cyr` — the T2 alt-screen front-end: status bar, composer, palette, painter (M7).
 - `src/gui/` — the sovereign T3 desktop GUI (`thoth gui`): the draw-command IR (`gdraw`) + kashi CPU rasterizer
   (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`) + the Wayland window seam

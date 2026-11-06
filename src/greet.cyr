@@ -214,10 +214,11 @@ fn _greet_pins_row() {
     }
     if (config_daimon_url_local() == 1) {
         _greet_row();
-        _greet_span(ROLE_RED, "this repo's [daimon].url"); _greet_span(ROLE_FAINT, " — its tools pin in their own namespace; your global daimon's pins do not apply");
+        _greet_span(ROLE_RED, "this repo's [daimon].url"); _greet_span(ROLE_FAINT, " — its tools pin for this session, in their own namespace; your global daimon's pins do not apply");
     }
     return 0;
 }
+var GREET_PROBING = 2;     # 0.54.0 (M-9): `up` while the probe is out: the first frame does not wait for it
 fn greet_build(up) {
     _greet_ensure();
     _greet_rows = 0; _greet_spans = 0; _greet_tlen = 0;
@@ -242,6 +243,10 @@ fn greet_build(up) {
             _greet_span(ROLE_GREEN, "READY");
             _greet_row();
             _greet_span(ROLE_GREEN, "hoosh @ "); _greet_span_clean(ROLE_GREEN, config_hoosh_url());
+        } elif (up == GREET_PROBING) {
+            _greet_span(ROLE_MUTED, "checking hoosh");
+            _greet_row();
+            _greet_span(ROLE_MUTED, "hoosh @ "); _greet_span_clean(ROLE_MUTED, config_hoosh_url());
         } else {
             _greet_span(ROLE_RED, "hoosh unreachable");
             _greet_row();

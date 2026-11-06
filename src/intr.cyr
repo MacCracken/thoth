@@ -2,7 +2,7 @@
 #
 # EXTRACTED from tui.cyr (0.30.8 decoupling): interrupt handling is signal/termios SUBSTRATE, not TUI
 # presentation, so hoosh/agent (which poll it around a streaming turn) no longer reach UP into tui.cyr for it.
-# Depends only on the portable substrate (darshana termios constants + _tty_apply_raw_flags, util out_mode /
+# Depends only on the portable substrate (src/term.cyr's forwarders, util out_mode /
 # ui_emit / oprintln, raw syscalls) — included AFTER ui, BEFORE hoosh/agent/tui. Gated on out_mode()==OUT_RING
 # (the TUI capture path) so the REPL/piped/one-shot floor never touches the terminal and stays byte-identical.
 
@@ -14,7 +14,7 @@
 # out_mode()==OUT_RING (the TUI capture path) so the REPL/piped/one-shot floor never touches the
 # terminal and stays byte-identical. The ioctls are Linux-only (darshana's TCGETS/TCSETS are
 # #ifdef CYRIUS_TARGET_LINUX); off Linux this degrades to a no-op (no interrupt), like the base termios.
-var _intr_saved = 0;          # cooked termios saved by intr_arm (lazy 60B alloc)
+var _intr_was_raw = 0;        # 1 when intr_arm_tty found the terminal raw (the idle loop) and not cooked (a turn)
 var _intr_active = 0;         # 1 while the poll-mode termios is installed
 var _intr_flag = 0;           # 1 once Esc was seen THIS turn
 var _intr_seq = 0;            # 0.52.0 (F7): every raise, never reset — see intr_seq
@@ -30,27 +30,28 @@ fn intr_pending() { return _intr_flag; }
 # child starts (through the surface's wait poll) and stops the child when it moves.
 fn intr_seq() { return _intr_seq; }
 
-# intr_arm: install the non-canonical VMIN=0/VTIME=0 poll termios around one streaming read. Saves the
-# current (cooked) termios into a PRIVATE buffer so intr_disarm can restore it — it does NOT use
-# darshana's tty_raw/tty_cooked (which would clobber their single saved-termios / _tty_in_raw state and
-# strand the post-turn tty_raw at tui_run_line). Does NOT touch _intr_flag (that spans the whole turn).
+# intr_arm: install the non-canonical VMIN=0/VTIME=0 poll termios around one streaming read, through darshana's public
+# tty_raw_nonblock (0.54.1). Through 0.54.0 this called darshana's private _tty_apply_raw_flags on a private termios copy, to
+# stay out of darshana's single raw slot. The slot is the right owner: a turn drops to cooked first (tui_run_line), so
+# the slot is free here and tty_cooked gives it back before the post-turn tty_raw; from the idle loop the slot is
+# already held and tty_raw switches back. Does NOT touch _intr_flag (that spans the whole turn).
 fn intr_arm() {
     _intr_active = 0;
     if (out_mode() != OUT_RING) { return 0; }        # TUI-only -> floor byte-identical
+    return intr_arm_tty();
+}
+
+# intr_arm_tty (0.54.0): the poll termios, for a caller that knows a surface owns the terminal whatever out_mode says: a network
+# wait (netwait.cyr) can start from the idle loop, under OUT_FD1 and in raw mode, and the saved copy restores that.
+fn intr_arm_tty() {
+    _intr_active = 0;
     # 0.52.0: a front end that registered its own poll reads its OWN input (the window drains the Wayland fd), so the
     # terminal it was launched from is not the stop key's source — /run under the window's card bracket (OUT_RING)
     # must not flip that terminal into poll mode for the length of the command.
     if (_intr_check_fn != 0) { return 0; }
     #ifdef CYRIUS_TARGET_LINUX
-    if (_intr_saved == 0) { _intr_saved = alloc(60); }
-    if (syscall(SYS_IOCTL, 0, TCGETS, _intr_saved) < 0) { return 0; }   # not a tty -> stay disarmed
-    var work[60];
-    var i = 0;
-    while (i < 60) { store8(&work + i, load8(_intr_saved + i)); i = i + 1; }
-    _tty_apply_raw_flags(&work);                      # ICANON/ECHO/ISIG off (darshana; sets VMIN=1)
-    store8(&work + TIO_CC_BASE + TIO_VMIN, 0);         # override to VMIN=0 + VTIME=0: read returns at once
-    store8(&work + TIO_CC_BASE + TIO_VTIME, 0);
-    if (syscall(SYS_IOCTL, 0, TCSETS, &work) < 0) { return 0; }
+    _intr_was_raw = term_raw_held();
+    if (term_raw_nonblock(0) < 0) { return 0; }       # not a tty -> stay disarmed
     _intr_parse_reset();                              # 0.52.6: a sequence cut off by the last disarm is not continued
     _intr_active = 1;
     #endif
@@ -186,10 +187,13 @@ fn _intr_feed_end() {
     return 0;
 }
 
-# intr_disarm: restore the saved cooked termios (for a following read_line confirm / the next turn).
+# intr_disarm: back to the mode intr_arm_tty found: cooked for a turn (a following read_line confirm), raw from the idle loop.
 fn intr_disarm() {
     #ifdef CYRIUS_TARGET_LINUX
-    if (_intr_active == 1) { syscall(SYS_IOCTL, 0, TCSETS, _intr_saved); _intr_active = 0; }
+    if (_intr_active == 1) {
+        if (_intr_was_raw == 1) { term_raw(0); } else { term_cooked(); }
+        _intr_active = 0;
+    }
     #endif
     return 0;
 }

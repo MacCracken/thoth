@@ -221,6 +221,11 @@ model = "claude-haiku-5-5"
 #   long as it likes. A reasoning model thinking for two minutes before its first
 #   token is fine; two minutes of nothing at all is not. The floor is 1000.
 #   `0` restores the pre-0.44.2 unbounded behaviour if you really want it.
+#
+#   Since 0.54.0 Esc reaches a silent wait in the TUI and the window, whatever
+#   this says: the call is left to a worker and thoth moves on. A worker stuck
+#   before its first byte holds its thread and socket until this deadline, so with
+#   `0` it holds them until thoth exits.
 #   [hoosh]
 #   timeout_ms = 180000
 

@@ -505,6 +505,22 @@ fn test_harden_pinstore() {
         _cfg_uid_seam = 0 - 1;
     }
 
+    test_group("a repository's daimon writes nothing to the global store (A-7, toolpin.cyr, 0.54.1)");
+    toolpin_reset(); toolpin_store_init(path);
+    var sv_loc = _cfg_daimon_url_local;
+    _cfg_daimon_url_local = 1;
+    toolpin_check("t_repo", "from a clone", "");
+    assert_eq(toolpin_pinned("t_repo"), 1, "its tool pins for the session");
+    var w0 = toolpin_store_written();
+    toolpin_store_flush();
+    assert_eq(toolpin_store_written(), w0, "...and no row reaches the store, which a repository could otherwise fill to the cap");
+    toolpin_trust_all();
+    assert(toolpin_store_written() > w0, "/tools trust is the operator's own act, and still writes");
+    _cfg_daimon_url_local = sv_loc;
+    toolpin_reset(); toolpin_store_init(path);
+    toolpin_check("t_a", "one", "");
+    toolpin_store_flush();
+
     test_group("a thing at the store path that is no file cannot hold thoth (A-5, A-6, toolpin.cyr)");
     _hd_sh("rm -f build/.thoth_hd_pins/toolpins; mkfifo build/.thoth_hd_pins/toolpins");
     toolpin_reset(); toolpin_store_init(path);

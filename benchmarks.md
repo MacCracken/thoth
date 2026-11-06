@@ -1,23 +1,23 @@
 # Benchmarks
 
-Latest: **2026-11-06T03:43:35Z** — commit `f05774a`
+Latest: **2026-11-06T09:44:38Z** — commit `ae247ac`
 
 ## thoth
 
-| Benchmark | Current (`f05774a`) |
-|-----------|------|
-| `redact_clean_60k` | 32.41 ms |
-| `redact_run_8k` | 84.77 ms |
-| `guard_scan_60k` | 6.89 ms |
-| `json_escape_60k` | 374.39 us |
-| `acc_append_16b` | 41 ns |
-| `sse_frame_parse` | 3.40 us |
-| `feed_write_line` | 1.31 us |
-| `gframe_greeting` | 48.62 us |
-| `md_measure_300k` | 5.00 ms |
-| `gframe_long_reply` | 5.29 ms |
-| `raster_frame` | 5.06 ms |
-| `session_save_40` | 2.80 ms |
+| Benchmark | Previous (`f05774a`) | Current (`ae247ac`) |
+|-----------|------|------|
+| `redact_clean_60k` | 32.41 ms | 32.16 ms |
+| `redact_run_8k` | 84.77 ms | 84.48 ms |
+| `guard_scan_60k` | 6.89 ms | 6.86 ms |
+| `json_escape_60k` | 374.39 us | 350.66 us **-6%** |
+| `acc_append_16b` | 41 ns | 41 ns |
+| `sse_frame_parse` | 3.40 us | 3.39 us |
+| `feed_write_line` | 1.31 us | 1.29 us |
+| `gframe_greeting` | 48.62 us | 49.84 us |
+| `md_measure_300k` | 5.00 ms | 4.97 ms |
+| `gframe_long_reply` | 5.29 ms | 397.19 us **-92%** |
+| `raster_frame` | 5.06 ms | 5.03 ms |
+| `session_save_40` | 2.80 ms | 2.78 ms |
 
 ---
 

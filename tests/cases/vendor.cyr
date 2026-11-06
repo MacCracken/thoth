@@ -87,6 +87,45 @@ fn _vd_pin(path, header, label) {
     return 0;
 }
 
+# test_toolchain_sums (0.54.1, B-1, B-8): CI installs what scripts/toolchain.sums records, so a pin bump without it must stop here, not on a runner.
+fn test_toolchain_sums() {
+    test_group("the toolchain CI installs is the pin (scripts/toolchain.sums, 0.54.1)");
+    var b = alloc(1024);
+    var n = file_read_all("cyrius.cyml", b, 1023);
+    assert(n > 0, "cyrius.cyml reads");
+    store8(b + n, 0);
+    var i = 0;
+    while ((i < n) && (cstr_starts_with(b + i, "cyrius = \"") == 0)) { i = i + 1; }
+    assert(i < n, "the manifest names a pin");
+    var p = b + i + 10;
+    var pl = 0;
+    while ((load8(p + pl) != 34) && (pl < 32)) { pl = pl + 1; }
+    var s = alloc(1024);
+    var sn = file_read_all("scripts/toolchain.sums", s, 1023);
+    assert(sn > 0, "scripts/toolchain.sums exists");
+    store8(s + sn, 0);
+    assert(cstr_starts_with(s, "# cyrius ") == 1, "it says which pin it records");
+    assert(memeq(s + 9, p, pl) == 1, "...and that pin is the manifest's: run scripts/toolchain-sums.sh at a bump");
+    assert_eq(load8(s + 9 + pl), 10, "...exactly");
+    var l = 9 + pl + 1;
+    var rows = 0;
+    while (l < sn) {
+        var h = 0;
+        while (((l + h) < sn) && (_vd_hex(load8(s + l + h)) == 1)) { h = h + 1; }
+        assert_eq(h, 64, "each row carries a whole SHA-256");
+        while ((l < sn) && (load8(s + l) != 10)) { l = l + 1; }
+        l = l + 1;
+        rows = rows + 1;
+    }
+    assert_eq(rows, 2, "the installer and the tarball");
+    return 0;
+}
+fn _vd_hex(c) {
+    if ((c >= 48) && (c <= 57)) { return 1; }
+    if ((c >= 97) && (c <= 102)) { return 1; }
+    return 0;
+}
+
 fn test_vendor_pins() {
     test_group("vendored dist bundles report their pinned version (src/vendor/, 0.38.6)");
     _vd_pin("src/vendor/avatara.cyr",   "# Version: 2.16.1", "avatara pinned at 2.16.1");
@@ -104,7 +143,7 @@ fn test_vendor_pins() {
     # bundle whose sync script checks are ALL non-fatal (`echo "WARN: …"`, exit 0), so nothing else
     # caught it: run sync-agnosai.sh with a stale tag, get a WARN among the normal success lines, commit,
     # and the tree builds clean and passes every other test with a downgraded redactor.
-    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.2.3", "agnosai-guard pinned at 2.2.3");
+    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.2.4", "agnosai-guard pinned at 2.2.4");
 
     # kashi is the exception and deliberately so: thoth vendors kashi's FREESTANDING
     # CORE (its `src/font_data.cyr`), not the generated `dist/kashi.cyr` library face,
@@ -121,6 +160,12 @@ fn test_vendor_pins() {
 
 fn test_vendor_hazards() {
     test_group("vendored bundles stay free of the collisions/traps this tree was bitten by (0.38.6)");
+
+    # ---- 0.54.1: thoth stays on darshana's public surface. ADR 0003 there freezes only that, so a release may rename what is under it ----
+    var n_intr = _vd_read("src/intr.cyr");
+    assert(n_intr > 0, "src/intr.cyr reads");
+    assert_eq(_vd_count("_tty_apply_raw_flags("), 0, "the poll mode does not call darshana's private flag setter");
+    assert_eq(_vd_count("term_raw_nonblock(0)"), 1, "...it asks for raw with reads that return at once");
 
     # ---- darshana: SYS_IOCTL must come from the stdlib, per-arch ----
     # Through 0.9.0 darshana defined `var SYS_IOCTL = 16;` itself. thoth's own

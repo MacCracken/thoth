@@ -319,6 +319,16 @@ fn gpresent_run_command(line) {
     return keep;
 }
 
+# _gpresent_greet (0.54.0): the greeting's model for the state of the probe. The frame lays it out, so a rebuild is all a late answer takes.
+fn _gpresent_greet() {
+    var up = GREET_PROBING;
+    if (hoosh_health_pending() == 0) {
+        up = 0;
+        if (hoosh_health() == HOOSH_HEALTH_UP) { up = 1; }
+    }
+    return greet_build(up);
+}
+
 fn gui_run() {
     # 0.52.3: a build with no window backend refuses before any call is made. Through 0.52.2 AGNOS and macOS went
     # into the Wayland seam — on AGNOS with calls numbered for Linux (#41 is sleep_ms there) once XDG_RUNTIME_DIR was
@@ -349,7 +359,7 @@ fn gui_run() {
     ui_force(PT_DESKTOP, CD_TRUE);
     var win = 1;
     ftree_load();                                        # populate the file-tree pane (0.30.5)
-    git_probe();                                         # so the tree's git badges + the status git field have data
+    if (git_probe_begin() == 0) { git_probe(); }         # so the tree's git badges + the status git field have data; 0.54.1: off the first frame, landed by the loop
     ghist_bind();                                        # composer history recall ring (0.30.15) + [history].file/.size (0.50.1: bound HERE at last — main.cyr's bind sits after the `thoth gui` return)
     # 0.45.3: the greeting block's model (the framed status box beside the ibis) — built ONCE here, at this
     # front end's startup like the ask seam below, never per frame: it snapshots config + persona state and
@@ -363,9 +373,9 @@ fn gui_run() {
     # row can say what was resumed. 0.50.1: the input-history bind above sits before it for the same reason — the
     # greeting's history row (both surfaces) reads the bind's outcome.
     sess_persist_init(config_session_file());
-    var _gup = 0;
-    if (hoosh_health_probe() == HOOSH_HEALTH_UP) { _gup = 1; }
-    greet_build(_gup);
+    net_poll_set(&_gwait_poll);                          # 0.54.0: every network wait pumps the window, as a command's wait does
+    hoosh_health_begin();                                # 0.54.0 (M-9): the probe no longer holds the first frame; the loop below lands a slow answer
+    _gpresent_greet();
     gstop_set_win(win); intr_check_hook_set(&_gstop_poll);
     exec_wait_poll_set(&_gwait_poll);                    # 0.52.0 (F7): a command's wait pumps the window too (main.cyr bound the TUI's poll)
     ask_hook_set(&gui_ask);                              # 0.44.0 (T4-1): claim the ask seam for THIS front end   # 0.34.3: route the interrupt seam to the GUI stop-poll so Esc aborts a turn
@@ -419,6 +429,8 @@ fn gui_run() {
                 geye_phase_advance();
                 _gui_pending = 1;
             }
+            if (hoosh_health_land() == 1) { _gpresent_greet(); _gui_dirty = 1; _gui_pending = 1; }   # 0.54.0: the probe's answer
+            if (git_probe_land() == 1) { _gui_dirty = 1; _gui_pending = 1; }                         # 0.54.1: the walk's
             # 0.52.3: a held key's repeats come from the clock, not from an event — queued here, drained like a key batch
             if ((running == 1) && (gwl_win_repeat_tick(win) > 0)) { running = _gpresent_keys(win); }
             # present a pending redraw ONLY when the compositor has released the buffer + acked the last frame —
@@ -427,12 +439,16 @@ fn gui_run() {
             if ((running == 1) && (_gui_pending == 1) && (gwl_win_ready(win) == 1)) {
                 _gpresent_frame(win);
                 _gui_pending = 0;
-                if (_gui_git_due == 1) { _gui_git_due = 0; git_probe(); _gui_dirty = 1; _gui_pending = 1; }
+                if (_gui_git_due == 1) {
+                    _gui_git_due = 0;
+                    if (git_probe_begin() == 0) { git_probe(); _gui_dirty = 1; _gui_pending = 1; }
+                }
             }
         }
     }
     intr_check_hook_set(0); gstop_set_win(0);            # 0.34.3: unregister the GUI stop-poll before teardown
     exec_wait_poll_set(0);                               # 0.52.0: and its wait poll — session_end runs with no window to pump
+    net_poll_set(0);
     gwl_win_close(win);
     # 0.50.1: the session_end hook, after the surface is gone (main.cyr fires it after tui_loop's teardown).
     # Under OUT_NULL: the hook's stdout has no surface any more (a closed terminal's case), "could not run"

@@ -352,6 +352,100 @@ fn _gfeed_md_table(cmds, x, cy, avail, text, hs) {
     return cy;
 }
 
+# --- the sparse index (0.54.2, M-10) ------------------------------------------------------------------------------------------
+# A rebuild walked a reply from its first line to reach what is on screen: 5.3 ms at 300 KB, on every rebuild. The measuring pass, which
+# has to walk it anyway, now drops a checkpoint every GMD_CP_BYTES: the walk's whole state at a line start. A draw starts from the last
+# checkpoint above the view, and a reply still streaming measures only from its last settled checkpoint. A slot is held per (text, width)
+# and checked on every use: the bytes under its checkpoints are summed, so a buffer that now holds other text finds no slot and
+# takes the long way. A short reply never gets one.
+var GMD_SLOTS = 4;
+var GMD_CPS = 256;                 # 4 MiB at GMD_CP_BYTES; past that the later checkpoints are simply not taken
+var GMD_CP_BYTES = 16384;
+var GMD_CP_SZ = 40;                # ls, dy, in_fence, fch, flen
+var GMD_HDR = 40;                  # text, avail, count, sum, last use
+var _gmd_tab = 0;
+var _gmd_clock = 0;
+var _gmd_rec = 0;                  # the slot the measuring pass fills
+var _gmd_resume = 0;               # 1: the measuring pass starts at the slot's last settled checkpoint
+var _gmd_off = 0;                  # test seam: 1 = the long way, to compare against
+
+fn _gmd_slot_at(i) { return _gmd_tab + i * (GMD_HDR + GMD_CPS * GMD_CP_SZ); }
+fn _gmd_cp_at(slot, k) { return slot + GMD_HDR + k * GMD_CP_SZ; }
+fn _gmd_sum(slot, text) {
+    var s = 0;
+    var k = 0;
+    var n = load64(slot + 16);
+    while (k < n) {
+        s = ((s * 31) + load64(text + load64(_gmd_cp_at(slot, k)))) & 0x7FFFFFFFFFFFFF;
+        k = k + 1;
+    }
+    return s;
+}
+# _gmd_find: the slot for (text, avail) whose checkpoints still describe the text, or 0.
+fn _gmd_find(text, avail) {
+    if ((_gmd_tab == 0) || (_gmd_off == 1)) { return 0; }
+    var i = 0;
+    while (i < GMD_SLOTS) {
+        var s = _gmd_slot_at(i);
+        if ((load64(s) == text) && (load64(s + 8) == avail)) {
+            if (_gmd_sum(s, text) != load64(s + 24)) { store64(s, 0); return 0; }
+            _gmd_clock = _gmd_clock + 1;
+            store64(s + 32, _gmd_clock);
+            return s;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+# _gmd_open: a slot to measure (text, avail) into: the one it holds, else the one used longest ago, emptied.
+fn _gmd_open(text, avail) {
+    if (_gmd_off == 1) { return 0; }
+    if (_gmd_tab == 0) { _gmd_tab = alloc(GMD_SLOTS * (GMD_HDR + GMD_CPS * GMD_CP_SZ)); }
+    if (_gmd_tab == 0) { return 0; }
+    var pick = _gmd_slot_at(0);
+    var i = 0;
+    while (i < GMD_SLOTS) {
+        var s = _gmd_slot_at(i);
+        if ((load64(s) == text) && (load64(s + 8) == avail)) { pick = s; i = GMD_SLOTS; }
+        else {
+            if (load64(s + 32) < load64(pick + 32)) { pick = s; }
+            i = i + 1;
+        }
+    }
+    store64(pick, text);
+    store64(pick + 8, avail);
+    store64(pick + 16, 0);
+    store64(pick + 24, 0);
+    _gmd_clock = _gmd_clock + 1;
+    store64(pick + 32, _gmd_clock);
+    return pick;
+}
+fn _gmd_cp_add(slot, text, ls, dy, in_fence, fch, flen) {
+    var n = load64(slot + 16);
+    if (n >= GMD_CPS) { return 0; }
+    var c = _gmd_cp_at(slot, n);
+    store64(c, ls);
+    store64(c + 8, dy);
+    store64(c + 16, in_fence);
+    store64(c + 24, fch);
+    store64(c + 32, flen);
+    store64(slot + 16, n + 1);
+    store64(slot + 24, ((load64(slot + 24) * 31) + load64(text + ls)) & 0x7FFFFFFFFFFFFF);
+    return 1;
+}
+# _gmd_seek: the last checkpoint wholly above the view, for a reply drawn from y = cy0; 0 when there is none.
+fn _gmd_seek(slot, cy0) {
+    var top = gd_cull_top();
+    var lo = 0;
+    var hi = load64(slot + 16);
+    while (lo < hi) {
+        var mid = (lo + hi) / 2;
+        if ((cy0 + load64(_gmd_cp_at(slot, mid) + 8)) <= top) { lo = mid + 1; } else { hi = mid; }
+    }
+    if (lo == 0) { return 0; }
+    return _gmd_cp_at(slot, lo - 1);
+}
+
 # _gfeed_md: the GUI structural-markdown renderer — walk a NUL-terminated reply line-by-line, tracking fenced-code
 # state, and draw each block. Replaces _gfeed_para for ASSISTANT content (landed + the live partial). A lone
 # trailing blank line (reply ending in '\n') adds no spurious gap. Returns the y below the reply.
@@ -363,8 +457,40 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
     var flen = 0;
     var ls = 0;
     var done = 0;
+    var cy0 = cy;
+    var rec = 0;                                     # 0.54.2 (M-10): the measuring pass drops checkpoints; a draw starts from one
+    var next_cp = GMD_CP_BYTES;
+    var cp = 0;
+    if (cmds == 0) {
+        rec = _gmd_rec;
+        if ((rec != 0) && (_gmd_resume == 1)) {
+            var have = load64(rec + 16);
+            var keep = 0;
+            if (have >= 2) {                         # the last one may sit on a line a later byte reinterprets (a table's delimiter row)
+                cp = _gmd_cp_at(rec, have - 2);
+                keep = have - 1;
+                next_cp = load64(cp) + GMD_CP_BYTES;
+            }
+            store64(rec + 16, keep);
+            store64(rec + 24, _gmd_sum(rec, text));
+        }
+    } elif (gd_cull_on() == 1) {
+        var sl = _gmd_find(text, avail);
+        if (sl != 0) { cp = _gmd_seek(sl, cy0); }
+    }
+    if (cp != 0) {
+        ls = load64(cp);
+        cy = cy0 + load64(cp + 8);
+        in_fence = load64(cp + 16);
+        fch = load64(cp + 24);
+        flen = load64(cp + 32);
+    }
     while (done == 0) {
         if ((cmds != 0) && (gd_below(cy) == 1)) { return cy; }   # 0.53.2: the rest is under the view; a caller on a band holds the height
+        if ((rec != 0) && (ls >= next_cp)) {
+            _gmd_cp_add(rec, text, ls, cy - cy0, in_fence, fch, flen);
+            next_cp = ls + GMD_CP_BYTES;
+        }
         var le = ls;
         while ((load8(text + le) != 0) && (load8(text + le) != 10)) { le = le + 1; }
         var llen = le - ls;
@@ -414,24 +540,48 @@ fn _gfeed_md(cmds, x, cy, avail, text) {
 fn _gfeed_msg_md(cmds, x, cy, avail, i, content) {
     var h = session_history_layout(i, avail);
     if (h < 0) {
-        h = _gfeed_md(0, x, 0, avail, content);
+        h = _gmd_measure(x, avail, content);
         session_history_layout_set(i, avail, h);
     }
-    if ((cmds != 0) && (gd_culled(cy, h) == 0)) { _gfeed_md(cmds, x, cy, avail, content); }
+    if ((cmds != 0) && (gd_culled(cy, h) == 0)) {
+        # a long reply that lost its slot to four others gets it back the first time it is on screen
+        if ((strlen(content) >= (GMD_CP_BYTES * 2)) && (_gmd_find(content, avail) == 0)) { _gmd_measure(x, avail, content); }
+        _gfeed_md(cmds, x, cy, avail, content);
+    }
     return cy + h;
+}
+# _gmd_measure: the height of a reply, leaving checkpoints when it is long enough to need them.
+fn _gmd_measure(x, avail, content) {
+    if (strlen(content) >= (GMD_CP_BYTES * 2)) { _gmd_rec = _gmd_open(content, avail); }
+    var h = _gfeed_md(0, x, 0, avail, content);
+    _gmd_rec = 0;
+    return h;
 }
 # _gfeed_live_md: the same for the reply still streaming: its height holds for as long as its length and the width do,
 # which is the two passes of one frame (no SSE frame lands between them).
 var _gfeed_live_n = 0;
 var _gfeed_live_w = 0;
 var _gfeed_live_h = 0;
+var _gfeed_live_gen = 0;
 fn _gfeed_live_md(cmds, x, cy, avail) {
     var text = hoosh_last_reply();
     var n = hoosh_last_reply_len();
     if ((n != _gfeed_live_n) || (avail != _gfeed_live_w)) {
+        # 0.54.2 (M-10): a reply growing at the same width re-measures from its last settled checkpoint. A new reply in the same buffer has a
+        # new generation and starts over: the sum alone would pass a reply that begins the same way.
+        var same = 0;
+        if ((n > _gfeed_live_n) && (avail == _gfeed_live_w) && (hoosh_reply_gen() == _gfeed_live_gen)) { same = 1; }
+        if ((n >= (GMD_CP_BYTES * 2)) && (_gmd_off == 0)) {
+            if (same == 1) { _gmd_rec = _gmd_find(text, avail); }
+            if (_gmd_rec != 0) { _gmd_resume = 1; }
+            else { _gmd_rec = _gmd_open(text, avail); }
+        }
         _gfeed_live_h = _gfeed_md(0, x, 0, avail, text);
+        _gmd_rec = 0;
+        _gmd_resume = 0;
         _gfeed_live_n = n;
         _gfeed_live_w = avail;
+        _gfeed_live_gen = hoosh_reply_gen();
     }
     if ((cmds != 0) && (gd_culled(cy, _gfeed_live_h) == 0)) { _gfeed_md(cmds, x, cy, avail, text); }
     return cy + _gfeed_live_h;
@@ -1003,8 +1153,20 @@ fn gframe_build(w, h) {
     if (gcomp_len() == 0) {
         gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FAINT), "type a message  -  Tab: panes  -  Enter: send  -  Esc: close", 0);
     } else {
-        gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FG), gcomp_cstr(), 0);
-        ccx = 54 + gcomp_len() * GR_GLYPH_W + 1;
+        # 0.54.2 (G-9): the tail of a line wider than the window, with a mark for what is off to the left; the caret counts cells, not bytes.
+        var ccols = (w - 54 - 8) / GR_GLYPH_W;
+        if (ccols < 2) { ccols = 2; }
+        var from = gcomp_view_from(ccols);
+        var tx = 54;
+        var shown = gcomp_glyphs();
+        if (from > 0) {
+            from = gcomp_view_from(ccols - 1);
+            gd_push_text(cmds, 54, cty, _ui_rgb(ROLE_FAINT), "<", 0);
+            tx = 54 + GR_GLYPH_W;
+            shown = ccols - 1;
+        }
+        gd_push_text(cmds, tx, cty, _ui_rgb(ROLE_FG), gcomp_cstr() + from, 0);
+        ccx = tx + shown * GR_GLYPH_W + 1;
     }
     # the caret shows ONLY when the composer is focused (0.30.10) — a clear active-pane cue.
     if (gfocus() == GFOCUS_COMPOSER) { gd_push_rect(cmds, ccx, cty, 2, GR_GLYPH_H, _ui_rgb(ROLE_ACCENT)); }

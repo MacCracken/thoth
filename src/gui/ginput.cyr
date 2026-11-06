@@ -69,6 +69,31 @@ fn gcomp_backspace() {
 fn gcomp_len() { return _gcomp_len; }
 # gcomp_cstr: NUL-terminate the buffer and return it (stable until the next edit). Empty -> "".
 fn gcomp_cstr() { _gcomp_ensure(); store8(_gcomp_buf + _gcomp_len, 0); return _gcomp_buf; }
+# gcomp_glyphs(): the characters typed, which is what a cell holds: the caret counted bytes, and sat past the text after any accent.
+fn gcomp_glyphs() {
+    var n = 0;
+    var i = 0;
+    while (i < _gcomp_len) {
+        if ((load8(_gcomp_buf + i) & 192) != 128) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+# gcomp_view_from(cols) (0.54.2, G-9): the byte the composer's view starts at, so the end of the line stays in `cols` cells: the caret sits at the
+# end of the text, and a line longer than the window used to run off it with the caret out of sight.
+fn gcomp_view_from(cols) {
+    var over = gcomp_glyphs() - cols;
+    if (over <= 0) { return 0; }
+    var i = 0;
+    while ((i < _gcomp_len) && (over > 0)) {
+        i = i + 1;
+        while ((i < _gcomp_len) && ((load8(_gcomp_buf + i) & 192) == 128)) { i = i + 1; }
+        over = over - 1;
+    }
+    return i;
+}
+
 # gcomp_set: REPLACE the composer content with len bytes from ptr (clamped to the cap). Used by history recall.
 fn gcomp_set(ptr, len) {
     _gcomp_ensure();

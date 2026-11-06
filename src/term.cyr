@@ -105,6 +105,8 @@ fn term_winsize(fd, out_rows, out_cols) {
 # -1 == "could not enter raw mode", the contract every caller already branches on (tui_loop degrades to
 # repl_loop, tui_dispatch ends the session cleanly). Identical to darshana's AGNOS peer.
 fn term_raw(fd) { return 0 - 1; }
+fn term_raw_nonblock(fd) { return 0 - 1; }
+fn term_raw_held() { return 0; }
 # Idempotent success: raw was never entered, so there is no termios state to restore. Matches both of
 # darshana's peers, whose Linux `tty_cooked` is likewise a no-op when not raw.
 fn term_cooked() { return 0; }
@@ -124,6 +126,8 @@ fn term_can_probe() { return 0; }
 fn term_isatty(fd) { return 0; }
 fn term_winsize(fd, out_rows, out_cols) { return 0 - 1; }
 fn term_raw(fd) { return 0 - 1; }
+fn term_raw_nonblock(fd) { return 0 - 1; }
+fn term_raw_held() { return 0; }
 fn term_cooked() { return 0; }
 fn term_open_signalfd(sigmask) { return 0 - 1; }
 fn term_close_signalfd(fd, sigmask) { return 0; }
@@ -146,8 +150,17 @@ fn term_have() { return 1; }
 fn term_can_probe() { return 1; }
 fn term_isatty(fd) { return tty_isatty(fd); }
 fn term_winsize(fd, out_rows, out_cols) { return tty_winsize(fd, out_rows, out_cols); }
-fn term_raw(fd) { return tty_raw(fd); }
-fn term_cooked() { return tty_cooked(); }
+# term_raw_nonblock (0.54.1): raw with reads that return at once: intr.cyr's poll mode. darshana's one raw slot, so term_cooked restores it,
+# and term_raw switches back. _term_raw_on says which of the two to do: darshana does not publish it.
+var _term_raw_on = 0;
+fn term_raw(fd) {
+    var rc = tty_raw(fd);
+    if (rc == 0) { _term_raw_on = 1; }
+    return rc;
+}
+fn term_raw_nonblock(fd) { return tty_raw_nonblock(fd); }
+fn term_raw_held() { return _term_raw_on; }
+fn term_cooked() { _term_raw_on = 0; return tty_cooked(); }
 fn term_open_signalfd(sigmask) { return tty_open_signalfd(sigmask); }
 fn term_close_signalfd(fd, sigmask) { return tty_close_signalfd(fd, sigmask); }
 fn term_sigmask_winch() { return TTY_SIGMASK_WINCH; }

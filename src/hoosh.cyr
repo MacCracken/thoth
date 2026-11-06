@@ -60,7 +60,9 @@ var _hoosh_acc_cap = 0;            # bytes allocated at _hoosh_acc
 var _hoosh_acc_cut = 0;            # 1 once this reply lost text to HOOSH_ACC_MAX, or to a refused allocation
 var HOOSH_ACC_CAP = 65536;         # the first allocation
 var HOOSH_ACC_MAX = 4194304;       # 4 MiB
-fn _hoosh_acc_reset() { _hoosh_acc_len = 0; _hoosh_acc_cut = 0; _hoosh_resp_bad = 0; _reason_acc_reset(); _hoosh_finish = HOOSH_FIN_NONE; return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round); 0.52.7: so does the finish reason
+var _hoosh_reply_gen = 0;          # 0.54.2: moves when the reply buffer starts over, for what holds a position in it (the window's index)
+fn hoosh_reply_gen() { return _hoosh_reply_gen; }
+fn _hoosh_acc_reset() { _hoosh_reply_gen = _hoosh_reply_gen + 1; _hoosh_acc_len = 0; _hoosh_acc_cut = 0; _hoosh_resp_bad = 0; _reason_acc_reset(); _hoosh_finish = HOOSH_FIN_NONE; return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round); 0.52.7: so does the finish reason
 
 # hoosh_last_reply / _len (0.11.0): the most recent turn's full assistant text and
 # its byte length (the blocking path copies the parsed content here, streaming
@@ -601,6 +603,7 @@ var HOOSH_SUM_OK = 0;
 var HOOSH_SUM_TRANSPORT = 1;
 var HOOSH_SUM_HTTP = 2;
 var HOOSH_SUM_EMPTY = 3;
+var HOOSH_SUM_STOPPED = 4;
 var _hoosh_sum_req = 0;
 var _hoosh_sum_err = 0;
 fn hoosh_recap_err() { return _hoosh_sum_err; }
@@ -613,6 +616,7 @@ fn hoosh_recap_err_msg(code) {
     if (code == HOOSH_SUM_TRANSPORT) { return "the gateway did not answer (transport error)"; }
     if (code == HOOSH_SUM_HTTP) { return "the gateway returned an HTTP error"; }
     if (code == HOOSH_SUM_EMPTY) { return "the gateway returned no recap text"; }
+    if (code == HOOSH_SUM_STOPPED) { return "stopped by the operator"; }
     return "no recap was produced";
 }
 var HOOSH_SUM_SYS = "You compress conversation history. Reply with a terse third-person recap of the exchange below: decisions made, facts established, and open threads. No preamble, no markdown, under 150 words.";
@@ -657,7 +661,8 @@ fn hoosh_recap_call(span) {
     # spelling that restores the pre-0.44.2 unbounded behaviour — did not restore it here, because the
     # probe profile ignores the config entirely. It is bounded, and bounded by the knob that means
     # "how long may a model call take".
-    var r = sandhi_http_post_opts(_hoosh_endpoint_url(), h, _hoosh_sum_req, len, hoosh_http_opts());
+    var r = net_post(0, _hoosh_endpoint_url(), h, _hoosh_sum_req, len, hoosh_http_opts());
+    if (net_stopped() == 1) { _hoosh_sum_err = HOOSH_SUM_STOPPED; return 0; }
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_sum_err = HOOSH_SUM_TRANSPORT; return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
@@ -1258,8 +1263,53 @@ fn hoosh_health_note(rc) {
 # hoosh_health_probe: an on-demand silent reachability probe (startup + Ctrl-R) — updates + returns the
 # cached state. Blocking (the same GET a turn's connect uses); no idle polling.
 fn hoosh_health_probe() {
-    if (hoosh_reachable() == 1) { _hoosh_health = HOOSH_HEALTH_UP; } else { _hoosh_health = HOOSH_HEALTH_DOWN; }
+    var up = hoosh_reachable();
+    if (net_stopped() == 1) { return _hoosh_health; }   # 0.54.0: a stopped probe says nothing about the gateway
+    if (up == 1) { _hoosh_health = HOOSH_HEALTH_UP; } else { _hoosh_health = HOOSH_HEALTH_DOWN; }
     return _hoosh_health;
+}
+
+# --- the probe that does not hold the first frame (0.54.0, M-9) -----------------------------------------------------------
+# A hung gateway held the first frame for the whole probe, up to the probe profile's 12 s. The surfaces now start the
+# probe on a worker, wait HOOSH_PROBE_FAST_MS for the answer the common case has already got (a local gateway, or a refused
+# connect), and otherwise paint with the answer outstanding. hoosh_health_land reports it when it arrives.
+var HOOSH_PROBE_FAST_MS = 150;
+var _hoosh_probe_job = 0;
+var _hoosh_probe_arena = 0;
+
+fn hoosh_health_pending() { if (_hoosh_probe_job != 0) { return 1; } return 0; }
+
+# hoosh_health_land: 1 once a probe's answer has been taken. A turn's own outcome is newer than a probe that outlasted it.
+fn hoosh_health_land() {
+    if (_hoosh_probe_job == 0) { return 0; }
+    if (net_job_done(_hoosh_probe_job) == 0) { return 0; }
+    var r = net_job_take(_hoosh_probe_job);
+    _hoosh_probe_job = 0;
+    if (_hoosh_health == HOOSH_HEALTH_UNKNOWN) {
+        if (sandhi_http_err_kind(r) == SANDHI_OK) { _hoosh_health = HOOSH_HEALTH_UP; } else { _hoosh_health = HOOSH_HEALTH_DOWN; }
+    }
+    return 1;
+}
+
+# hoosh_health_begin: start the probe. 1 when its answer is already in hoosh_health(); 0 when it is outstanding. A second begin while one
+# runs answers 0, and the one running lands. With no surface bound, or no worker to be had, this is the plain blocking probe.
+fn hoosh_health_begin() {
+    if (_hoosh_probe_job != 0) { return 0; }
+    var h = sandhi_headers_new();
+    var auth = _hoosh_auth_header();
+    if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
+    _hoosh_health = HOOSH_HEALTH_UNKNOWN;
+    if (_hoosh_probe_arena == 0) { _hoosh_probe_arena = net_arena(16384); }   # its own: another fetch resets the health arena under it
+    if (_hoosh_probe_arena != 0) { reset_via(_hoosh_probe_arena); }
+    _hoosh_probe_job = net_get_begin(_hoosh_probe_arena, _hoosh_models_url(), h, hoosh_probe_opts());
+    if (_hoosh_probe_job == 0) { hoosh_health_probe(); return 1; }
+    var t0 = clock_now_ms();
+    var left = HOOSH_PROBE_FAST_MS;
+    while ((left > 0) && (net_job_done(_hoosh_probe_job) == 0)) {
+        net_job_park(_hoosh_probe_job, left);
+        left = HOOSH_PROBE_FAST_MS - (clock_now_ms() - t0);
+    }
+    return hoosh_health_land();
 }
 
 # hoosh_list_models: GET the gateway's model catalog and print each model id,
@@ -1285,6 +1335,7 @@ fn hoosh_list_models() {
             r = _hoosh_get_in(ca, url, h2, hoosh_catalog_opts());
         }
     }
+    if (net_stopped() == 1) { oprintln("  stopped by the operator"); return 0; }   # 0.54.0
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(ename);
@@ -2038,6 +2089,7 @@ fn hoosh_list_provider_models(provider) {
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     ui_emit(ROLE_FAINT, "  -> hoosh "); oprintln(url);
     var r = _hoosh_get_in(_hoosh_cat_arena_reset(), url, h, hoosh_catalog_opts());   # 0.44.2: fail fast; 0.52.8 (A7): the catalog's arena and cap
+    if (net_stopped() == 1) { oprintln("  stopped by the operator"); return 0; }   # 0.54.0
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
         emit("  hoosh transport error: "); oprintln(ename);
@@ -2191,10 +2243,10 @@ fn hoosh_block_opts() {
 }
 # _hoosh_post_blocking: the POST both blocking turn paths make. No arena: the default buffer on the global heap, as before.
 fn _hoosh_post_blocking(url, h, req, len) {
-    if (_hoosh_block_arena == 0) { _hoosh_block_arena = arena_allocator_growable(65536); }
-    if (_hoosh_block_arena == 0) { return sandhi_http_post_opts(url, h, req, len, hoosh_http_opts()); }
+    if (_hoosh_block_arena == 0) { _hoosh_block_arena = net_arena(65536); }
+    if (_hoosh_block_arena == 0) { return net_post(0, url, h, req, len, hoosh_http_opts()); }
     reset_via(_hoosh_block_arena);
-    return sandhi_http_post_opts_a(_hoosh_block_arena, url, h, req, len, hoosh_block_opts());
+    return net_post(&_hoosh_block_arena, url, h, req, len, hoosh_block_opts());
 }
 # _hoosh_resp_mark: 1 when a blocking POST failed on the response itself (sandhi's PROTOCOL: past the cap, or malformed), which
 # reached the turn as "unreachable, is the gateway up?" about a gateway that had just answered. Read until the next turn.
@@ -2221,10 +2273,10 @@ fn _hoosh_frame_parse(data) {
 }
 # _hoosh_stream_post: the POST both streaming turn paths make. No arena: the global heap, as before.
 fn _hoosh_stream_post(url, h, req, len, cb, ctx) {
-    if (_hoosh_stream_arena == 0) { _hoosh_stream_arena = arena_allocator_growable(1048576); }
-    if (_hoosh_stream_arena == 0) { return sandhi_http_stream_opts(url, "POST", h, req, len, cb, ctx, hoosh_http_opts()); }
+    if (_hoosh_stream_arena == 0) { _hoosh_stream_arena = net_arena(1048576); }
+    if (_hoosh_stream_arena == 0) { net_stopped_clear(); return sandhi_http_stream_opts(url, "POST", h, req, len, cb, ctx, hoosh_http_opts()); }
     reset_via(_hoosh_stream_arena);
-    return sandhi_http_stream_opts_a(_hoosh_stream_arena, url, "POST", h, req, len, cb, ctx, hoosh_http_opts());
+    return net_stream(&_hoosh_stream_arena, url, h, req, len, cb, ctx, hoosh_http_opts());
 }
 
 # hoosh_probe_opts: the PROBE profile. Fixed, not configurable — its whole purpose is to be short, and a
@@ -2270,19 +2322,23 @@ fn hoosh_catalog_opts() {
 var _hoosh_cat_arena = 0;
 var _hoosh_hp_arena = 0;
 fn _hoosh_cat_arena_reset() {
-    if (_hoosh_cat_arena == 0) { _hoosh_cat_arena = arena_allocator_growable(65536); }
+    if (_hoosh_cat_arena == 0) { _hoosh_cat_arena = net_arena(65536); }
     if (_hoosh_cat_arena != 0) { reset_via(_hoosh_cat_arena); }
     return _hoosh_cat_arena;
 }
 fn _hoosh_hp_arena_reset() {
-    if (_hoosh_hp_arena == 0) { _hoosh_hp_arena = arena_allocator_growable(16384); }
+    if (_hoosh_hp_arena == 0) { _hoosh_hp_arena = net_arena(16384); }
     if (_hoosh_hp_arena != 0) { reset_via(_hoosh_hp_arena); }
     return _hoosh_hp_arena;
 }
-# _hoosh_get_in(a, url, h, opts): a GET into arena `a`, or the global heap when there is none.
+# _hoosh_get_in(a, url, h, opts): a GET into arena `a`, or the global heap when there is none. A stopped GET gives the arena to
+# its worker, so every caller returns on a failed GET and none passes `a` again.
 fn _hoosh_get_in(a, url, h, opts) {
-    if (a == 0) { return sandhi_http_get_opts(url, h, opts); }
-    return sandhi_http_get_opts_a(a, url, h, opts);
+    var slot = 0;
+    if (a != 0) {
+        if (a == _hoosh_cat_arena) { slot = &_hoosh_cat_arena; } else { slot = &_hoosh_hp_arena; }
+    }
+    return net_get(slot, url, h, opts);
 }
 
 # _hoosh_auth_header: cache and return the "Bearer <token>" header value, or 0
@@ -2434,6 +2490,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
         return 0 - 1;
     }
     var status = sandhi_stream_status(sr);
+    if (status >= 400) { return status; }            # 0.54.1: hoosh_send asks once more without streaming, for the body
     if ((status < 200) || (status >= 300)) {
         emit("  hoosh returned HTTP "); ofmt_int(status); oprintln("");
         oprintln("  (error body not surfaced in stream mode; set [hoosh].stream=false to see it)");
@@ -2455,6 +2512,7 @@ fn _hoosh_stream_turn(url, h, len, model) {
 fn _hoosh_blocking_turn(url, h, len, model) {
     ui_emit(ROLE_FAINT, "  -> hoosh ("); ui_emit(ROLE_ACCENT, model); ui_emit(ROLE_FAINT, ") "); oprintln(url);
     var r = _hoosh_post_blocking(url, h, _hoosh_req, len);   # 0.44.2: per-read deadline; 0.53.2: a long reply fits
+    if (net_stopped() == 1) { intr_note(); return 0; }       # 0.54.0: rc 0 with no reply: hoosh_send rolls the user turn back, as a stream stopped before its first frame does
     var ek = sandhi_http_err_kind(r);
     if (ek != SANDHI_OK) {
         if (_hoosh_resp_mark(ek) == 1) { emit("  "); oprintln(hoosh_resp_bad_text()); return 0 - 1; }
@@ -2506,6 +2564,7 @@ fn _hoosh_blocking_show(body, blen) {
 # non-2xx response. Degrades honestly: an unreachable gateway is announced, not
 # faked. I/O — the only impure path in this module.
 fn hoosh_send(prompt) {
+    intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn; 0.54.0: before recall, whose wait a stop can leave now
     var url = _hoosh_endpoint_url();
     var model = _hoosh_model();
     if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
@@ -2523,7 +2582,6 @@ fn hoosh_send(prompt) {
     var want_stream = config_hoosh_stream();
     var multi = config_hoosh_history();
     _hoosh_acc_reset();
-    intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
 
     var len = 0;
     if (multi == 1) {
@@ -2540,7 +2598,18 @@ fn hoosh_send(prompt) {
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
 
     var rc = 0;
-    if (want_stream == 1) { rc = _hoosh_stream_turn(url, h, len, model); }
+    if (intr_pending() == 1) { intr_note(); }      # 0.54.0: a stop in recall or the recap: no request follows it
+    elif (want_stream == 1) {
+        rc = _hoosh_stream_turn(url, h, len, model);
+        # 0.54.1: a stream's result has no body: see _agent_iter_stream.
+        if (rc >= 400) {
+            log_begin("stream_refused"); log_kv_int("status", rc); log_commit(SK_WARN);
+            if (multi == 1) { len = hoosh_build_messages(_hoosh_req, model, sys, mem, 0); }
+            else { len = hoosh_build_request(_hoosh_req, model, sys, mem, prompt, 0); }
+            sandhi_headers_set(h, "Accept", "application/json");
+            rc = _hoosh_blocking_turn(url, h, len, model);
+        }
+    }
     else { rc = _hoosh_blocking_turn(url, h, len, model); }
     if ((rc == 0) && (_hoosh_acc_len > 0)) { hoosh_finish_note(); }   # 0.52.7: a reply cut short or refused says so
 

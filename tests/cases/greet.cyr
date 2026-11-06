@@ -46,6 +46,221 @@ fn _tg_row_has(r, needle) {
     return 0;
 }
 
+# test_greet_probing (0.54.0, M-9): the first frame goes up with the probe outstanding. It says so, and claims neither answer.
+fn test_greet_probing() {
+    test_group("the greeting while the probe is out (greet.cyr, 0.54.0)");
+    var sv = _cfg_hoosh_url;
+    var sv_c = config_hoosh_configured();
+    if (sv_c == 0) { _cfg_hoosh_url = "http://127.0.0.1:9"; }
+    greet_build(GREET_PROBING);
+    var r = 0; var chk = 0; var ready = 0; var bad = 0;
+    while (r < greet_rows()) {
+        if (_tg_row_has(r, "checking hoosh") == 1) { chk = 1; }
+        if (_tg_row_has(r, "READY") == 1) { ready = 1; }
+        if (_tg_row_has(r, "hoosh unreachable") == 1) { bad = 1; }
+        r = r + 1;
+    }
+    assert_eq(chk, 1, "the status row says it is checking");
+    assert_eq(ready, 0, "...and not READY");
+    assert_eq(bad, 0, "...and not unreachable");
+    greet_build(0);
+    r = 0; chk = 0; bad = 0;
+    while (r < greet_rows()) {
+        if (_tg_row_has(r, "checking hoosh") == 1) { chk = 1; }
+        if (_tg_row_has(r, "hoosh unreachable") == 1) { bad = 1; }
+        r = r + 1;
+    }
+    assert_eq(chk, 0, "an answer replaces it");
+    assert_eq(bad, 1, "...in the words it always had");
+    _cfg_hoosh_url = sv;
+    greet_build(1);
+    return 0;
+}
+
+# test_tui_probe_land (0.54.0, M-9): a slow probe's answer rewrites a greeting that stands alone, and never rewrites a feed with
+# something after it: "checking hoosh" must not stay the last word, and a conversation must not be cleared under it.
+var _tgp_release = 0;
+fn _tgp_hold(j) { while (atomic_load(&_tgp_release) == 0) { sleep_ms(1); } return 0; }
+fn _tgp_poll() { return intr_seq(); }
+fn _tgp_feed_has(needle) {
+    var i = 0;
+    while (i < feed_count()) {
+        if (_t_count_sub(feed_line_ptr(i), feed_line_len(i), needle, strlen(needle)) > 0) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn _tgp_land() {
+    atomic_store(&_tgp_release, 1);
+    var i = 0;
+    while ((i < 2000) && (hoosh_health_pending() == 1) && (net_job_done(_hoosh_probe_job) == 0)) { sleep_ms(1); i = i + 1; }
+    _tui_probe_land();
+    atomic_store(&_tgp_release, 0);
+    return 0;
+}
+fn test_tui_probe_land() {
+    test_group("a slow probe lands on the greeting (tui.cyr, 0.54.0)");
+    var sv = _cfg_hoosh_url;
+    var sv_mode = out_mode();
+    _cfg_hoosh_url = "http://127.0.0.1:9";
+    atomic_store(&_tgp_release, 0);
+    net_poll_set(&_tgp_poll);
+    net_do_set(&_tgp_hold);
+    _t_fd1_to("build/.thoth_tgp_out");
+    feed_init();
+    assert_eq(hoosh_health_begin(), 0, "premise: the probe is out");
+    out_mode_set(OUT_RING);
+    _tui_greet_show();
+    out_mode_set(sv_mode);
+    assert_eq(_tgp_feed_has("checking hoosh"), 1, "the greeting says it is checking");
+    _tgp_land();
+    assert_eq(_tgp_feed_has("checking hoosh"), 0, "the answer rewrites it");
+    assert_eq(_tgp_feed_has("hoosh unreachable"), 1, "...to the answer");
+    feed_init();
+    assert_eq(hoosh_health_begin(), 0, "premise: a second probe is out");
+    out_mode_set(OUT_RING);
+    _tui_greet_show();
+    ui_emit(ROLE_MUTED, "a conversation line");
+    feed_flush_pending();
+    out_mode_set(sv_mode);
+    _tgp_land();
+    assert_eq(_tgp_feed_has("a conversation line"), 1, "a feed holding more than the greeting is not cleared");
+    assert_eq(_tgp_feed_has("hoosh: unreachable"), 1, "...and the failure is a line of its own");
+    _t_fd1_restore();
+    net_poll_set(0); net_do_set(0);
+    _cfg_hoosh_url = sv;
+    feed_init();
+    xunlink("build/.thoth_tgp_out");
+    return 0;
+}
+
+# test_tui_term_signal (0.54.1, S-11): a signal read from the fd ends the session through the stop. SIGUSR1 stands in: a test that took
+# SIGTERM for real and then failed would leave the suite dead.
+fn test_tui_term_signal() {
+    #ifndef CYRIUS_TARGET_LINUX
+    return 0;                                    # the signalfd is the Linux TUI's, and no other target has a TUI to leave
+    #endif
+    #ifdef CYRIUS_TARGET_LINUX
+    test_group("a signal asks the session to end (tui.cyr, 0.54.1)");
+    var sv_run = _tui_running;
+    var mask = 512;                              # bit 9: signal 10
+    _sigterm_fd = term_open_signalfd(mask);
+    assert(_sigterm_fd >= 0, "premise: the signalfd");
+    _tui_term_sig = 0; _tui_running = 1;
+    var seq0 = intr_seq();
+    assert_eq(_tui_term_seen(), 0, "nothing pending: nothing seen");
+    assert_eq(_tui_running, 1, "...and the loop runs");
+    sys_kill(sys_getpid(), 10);
+    assert_eq(_tui_term_seen(), 1, "a blocked signal is read from the fd");
+    assert_eq(tui_term_sig(), 10, "...by number: main exits 128 + it");
+    assert_eq(_tui_running, 0, "the loop ends");
+    assert(intr_seq() != seq0, "...and a turn or a command in the way is stopped");
+    assert_eq(_tui_term_seen(), 1, "it stays seen");
+    assert_eq(_tui_read_wait(), 1, "a cooked prompt does not read past it (a confirm's no answer refuses)");
+    term_close_signalfd(_sigterm_fd, mask);
+    _sigterm_fd = 0 - 1;
+    _tui_term_sig = 0; _tui_running = sv_run;
+    intr_reset();
+    return 0;
+    #endif
+}
+
+# test_tui_frame_batch (0.54.2, M-5): a frame is one write, and it holds exactly the bytes it would have written piecemeal, in that order.
+fn _tfb_read(path) {
+    var b = alloc(262144);
+    var n = file_read_all(path, b, 262143);
+    if (n < 0) { n = 0; }
+    store8(b + n, 0);
+    return b;
+}
+fn test_tui_frame_batch() {
+    test_group("a TUI frame is one write (util.cyr, tui.cyr, 0.54.2)");
+    var path = "build/.thoth_tfb";
+    var sv_mode = out_mode();
+    feed_init();
+    _tui_cols = 100; _tui_rows = 30;
+    out_mode_set(OUT_RING);
+    var i = 0;
+    while (i < 40) { ui_emit(ROLE_MUTED, "a line of the feed, with a colour"); oprintln(""); ofmt_int(i); oprintln(""); i = i + 1; }
+    feed_flush_pending();
+    out_mode_set(OUT_FD1);
+    _t_fd1_to(path);
+    var w0 = _frame_writes;
+    tui_relayout();
+    var w1 = _frame_writes;
+    _t_fd1_restore();
+    assert_eq(w1 - w0, 1, "a whole frame takes one write");
+    var batched = _tfb_read(path);
+    var bn = strlen(batched);
+    assert(bn > 1000, "premise: the frame painted");
+    _frame_off = 1;
+    _t_fd1_to(path);
+    tui_relayout();
+    _t_fd1_restore();
+    _frame_off = 0;
+    var plain = _tfb_read(path);
+    assert_eq(strlen(plain), bn, "it holds as many bytes as the frame written piecemeal");
+    assert_eq(memeq(batched, plain, bn), 1, "...the same bytes in the same order, which is what every direct writer in a frame would break");
+    # every writer a painter uses, mixed
+    _t_fd1_to(path);
+    frame_begin();
+    emit_raw("a"); frame_move(2, 3); emit("b"); ofmt_int(42); oprintln("c"); frame_clear_eol(); emit_n("dd", 1); emit_raw_n("ee", 1); frame_clear();
+    frame_begin();
+    emit_raw("f");
+    frame_end();
+    assert_eq(_frame_len > 0, 1, "an inner bracket does not flush");
+    frame_end();
+    _t_fd1_restore();
+    assert(streq(_tfb_read(path), "a\x1b[2;3Hb42c\n\x1b[Kde\x1b[2Jf") == 1, "each writer lands in its place");
+    assert_eq(_frame_len, 0, "the outer bracket flushes");
+    # a span past the buffer stays in order
+    _t_fd1_to(path);
+    frame_begin();
+    emit_raw("x");
+    var big = alloc(FRAME_CAP + 10);
+    memset(big, 121, FRAME_CAP + 9);
+    store8(big + FRAME_CAP + 9, 0);
+    emit_raw_n(big, FRAME_CAP + 9);
+    emit_raw("z");
+    frame_end();
+    _t_fd1_restore();
+    var got = _tfb_read(path);
+    assert_eq(strlen(got), FRAME_CAP + 11, "a span past the buffer goes whole");
+    assert_eq(load8(got), 120, "...after what came first");
+    assert_eq(load8(got + FRAME_CAP + 10), 122, "...and before what came next");
+    xunlink(path);
+    out_mode_set(sv_mode);
+    feed_init();
+    return 0;
+}
+
+# test_tui_pick_clip (0.54.2, A-14): a picker row clips by columns, on a glyph boundary, and says so.
+fn _tpc(id, max, cols_want, want) {
+    var path = "build/.thoth_tpc";
+    _t_fd1_to(path);
+    var c = _tui_pick_emit_clip(id, max);
+    _t_fd1_restore();
+    var b = alloc(1024);
+    var n = file_read_all(path, b, 1023);
+    if (n < 0) { n = 0; }
+    store8(b + n, 0);
+    xunlink(path);
+    assert_eq(c, cols_want, "the columns it took");
+    assert(streq(b, want) == 1, want);
+    return 0;
+}
+fn test_tui_pick_clip() {
+    test_group("a picker row clips by columns (tui.cyr, 0.54.2)");
+    _tpc("short", 10, 5, "short");
+    _tpc("exactly-10", 10, 10, "exactly-10");
+    _tpc("one-too-long", 11, 11, "one-too-lo…");
+    _tpc("caf\xc3\xa9-model", 4, 4, "caf…");
+    _tpc("\xe6\xa8\xa1\xe5\x9e\x8b\xe5\x90\x8d", 4, 3, "模…");
+    _tpc("\xe6\xa8\xa1\xe5\x9e\x8b", 4, 4, "模型");
+    _tpc("x", 0, 0, "");
+    return 0;
+}
+
 # test_greet_suppressed_row (0.52.8): the local keys thoth refused have a greeting row, on both surfaces. ADR-0021 said the
 # greeting names them; only stderr did, and the TUI's alternate screen and the window's first frame cover stderr.
 fn test_greet_suppressed_row() {
@@ -627,7 +842,7 @@ fn test_greet_red_reserve() {
         r = r + 1;
     }
     assert(drow >= 0, "the daimon warning row survives a 3.9 KB local [hoosh].url (it was dropped, 0.52.5)");
-    assert(_tg_row_has(drow, " — its tools pin in their own namespace; your global daimon's pins do not apply") == 1, "...with its explanation");
+    assert(_tg_row_has(drow, " — its tools pin for this session, in their own namespace; your global daimon's pins do not apply") == 1, "...with its explanation");
     assert(urow >= 0, "the url row is still drawn");
     var ul = 0; var k = 0;
     while (k < greet_row_spans(urow)) { ul = ul + strlen(greet_span_text(urow, k)); k = k + 1; }

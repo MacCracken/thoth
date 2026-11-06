@@ -1186,6 +1186,7 @@ var _par_args = 0;           # PAR_MAX args buffers (PAR_ARGS_CAP each)
 var _par_id = 0;             # PAR_MAX id buffers (PAR_ID_CAP each)
 var _par_ctx = 0;            # PAR_MAX ctx structs (PAR_CTX_SZ each)
 var _par_thread = 0;         # PAR_MAX thread handles (i64 each)
+var _par_left = 0;           # PAR_MAX bytes: 1 = a stop left this slot's worker running (0.54.0)
 var _par_has_name = 0;       # PAR_MAX byte flags: 1 if the call had a name
 var _par_allowed = 0;        # PAR_MAX byte flags: 1 if the gate allowed it
 var _par_kind = 0;           # PAR_MAX i64 roundlog verdict kinds
@@ -1223,6 +1224,7 @@ fn _par_alloc() {
     _par_nm = alloc(PAR_MAX * 8);
     _par_ga = alloc(PAR_MAX * 8);
     _par_stopped = alloc(PAR_MAX);
+    _par_left = alloc(PAR_MAX);
     # 0.44.3: an unchecked alloc here is a NULL WRITE on the first `store8`/`store64` of phase 1 — the
     # arena loop below already refuses on OOM and the caller already falls back to the serial executor,
     # so the honest thing is to take that same exit for every slot buffer rather than only the arenas.
@@ -1234,7 +1236,7 @@ fn _par_alloc() {
     if (_par_args == 0) { ok = 0; }
     if (_par_id == 0) { ok = 0; }
     if (_par_ctx == 0) { ok = 0; }
-    if ((_par_nm == 0) || (_par_ga == 0) || (_par_stopped == 0)) { ok = 0; }
+    if ((_par_nm == 0) || (_par_ga == 0) || (_par_stopped == 0) || (_par_left == 0)) { ok = 0; }
     if (_par_thread == 0) { ok = 0; }
     if (_par_has_name == 0) { ok = 0; }
     if (_par_allowed == 0) { ok = 0; }
@@ -1297,6 +1299,64 @@ fn _agent_tool_ok(text_ok, is_error) {
     if (text_ok == 0) { return 0; }        # no parseable text -> failure
     if (is_error == 1) { return 0; }       # isError:true -> failure even with text present
     return 1;
+}
+
+# AGENT_LEFT_TEXT (0.54.0): what the model is told of a call the operator's stop walked away from: it went out, and its effect
+# is unknown. Saying "no result" or "not run" would invite a repeat of something that may have happened.
+var AGENT_LEFT_TEXT = "(interrupted by the operator - the call was sent and may still complete at the host)";
+
+# _par_reap (0.54.0): collect the workers that have finished; the count still running. Join consumes a handle, so it is cleared.
+var PAR_TICK_MS = 10;
+fn _par_reap() {
+    var n = 0;
+    var s = 0;
+    while (s < PAR_MAX) {
+        var th = load64(_par_thread + s * 8);
+        if (th != 0) {
+            if (thread_is_done(th) == 1) { thread_join(th); store64(_par_thread + s * 8, 0); }
+            else { n = n + 1; }
+        }
+        s = s + 1;
+    }
+    return n;
+}
+
+# _par_busy (0.54.0): 1 while a stopped batch's worker still runs. Its slot's buffers are in use, so the next round takes the serial
+# executor, which shares none of them.
+fn _par_busy() {
+    if (_par_ready == 0) { return 0; }
+    if (_par_reap() > 0) { return 1; }
+    return 0;
+}
+
+# _par_join(batch) (0.54.0): the batch's network wait. The main thread sat in thread_join for the slowest call: the window was dead,
+# and a stop waited for a hung host. It now polls the surface between looks at its workers. On a stop it returns 1 at once, with each
+# worker still running marked in _par_left: phase 3 reports those calls as left, and _par_busy keeps their slots out of use.
+fn _par_join(batch) {
+    var s = 0;
+    while (s < batch) { store8(_par_left + s, 0); s = s + 1; }
+    if (net_poll_bound() == 0) {
+        s = 0;
+        while (s < batch) {
+            var th = load64(_par_thread + s * 8);
+            if (th != 0) { thread_join(th); store64(_par_thread + s * 8, 0); }
+            s = s + 1;
+        }
+        return 0;
+    }
+    var gen0 = net_poll_now();
+    while (_par_reap() > 0) {
+        if (net_poll_now() != gen0) {
+            s = 0;
+            while (s < batch) {
+                if (load64(_par_thread + s * 8) != 0) { store8(_par_left + s, 1); }
+                s = s + 1;
+            }
+            return 1;
+        }
+        sleep_ms(PAR_TICK_MS);
+    }
+    return 0;
 }
 
 # _agent_run_calls_par: the phased parallel executor (see the block comment above).
@@ -1421,12 +1481,7 @@ fn _agent_run_calls_par(tcs, nc) {
         # batch, and the workers do only network — nothing on this side writes to the terminal until
         # phase 3. That is exactly the window the animator was built for.
         spin_anim_arm();
-        s = 0;
-        while (s < batch) {
-            var th = load64(_par_thread + s * 8);
-            if (th != 0) { thread_join(th); }
-            s = s + 1;
-        }
+        if (_par_join(batch) == 1) { stopped = 1; }
         spin_anim_disarm();                 # before phase 3 prints anything
         spin_label_clear();                 # 0.19.1: batch joined -> back to the generic indicator
         # Phase 3 — print + record + append results in deterministic call order.
@@ -1437,6 +1492,10 @@ fn _agent_run_calls_par(tcs, nc) {
             var res = 0;
             var ms = 0;                                          # 0.19.1: this call's wall-time (0 if not invoked)
             if (kind2 == RL_NONAME) { res = "(no tool name)"; }
+            elif (load8(_par_left + k) == 1) {                   # 0.54.0: its worker is still out, and nothing of the slot is ours to read
+                res = AGENT_LEFT_TEXT;
+                ui_emit(ROLE_FAINT, "  result: "); emit_clean_text(res); oprintln("");
+            }
             elif (load8(_par_allowed + k) == 1) {
                 ms = load64(_par_ctx_ptr(k) + 48);               # 0.19.1: worker-measured elapsed
                 var rlen = load64(_par_ctx_ptr(k) + 40);
@@ -1589,7 +1648,7 @@ fn _agent_run_calls(tcs, nc) {
     # operator's blocking security hook for exactly the calls they can see least. It also shares the one
     # bank of _par_* slots with the parent, whose delegate call is live on the stack.
     if (_sub_depth > 0) { return _agent_run_calls_serial(tcs, nc); }
-    if ((config_hoosh_parallel() == 1) && (nc > 1) && (_agent_round_has_local(tcs, nc) == 0) && (_par_alloc() == 1)) { return _agent_run_calls_par(tcs, nc); }
+    if ((config_hoosh_parallel() == 1) && (nc > 1) && (_agent_round_has_local(tcs, nc) == 0) && (_par_alloc() == 1) && (_par_busy() == 0)) { return _agent_run_calls_par(tcs, nc); }
     return _agent_run_calls_serial(tcs, nc);
 }
 
@@ -1784,7 +1843,10 @@ fn _agent_run_calls_serial(tcs, nc) {
             res = daimon_invoke(nm, ar);
             spin_anim_disarm();
             var text_ok = 0; if (res != 0) { text_ok = 1; }         # parsed a result?  (before the placeholder reassign)
-            if (res == 0) { res = "(tool returned no result)"; }
+            if (res == 0) {
+                res = "(tool returned no result)";
+                if (net_stopped() == 1) { res = AGENT_LEFT_TEXT; }   # 0.54.0: not "no result": nobody knows yet
+            }
             rl_ok = _agent_tool_ok(text_ok, daimon_invoke_is_error());   # 0.30.18: text parsed AND not an MCP isError
             # 0.44.1: a host file tool that MISSED a file this project has is the wrong-tree mistake; say so,
             # and name the call that works. Only on a failure, so a working host tool is left alone.
@@ -1982,6 +2044,7 @@ fn _agent_iter_block(model, sys, mem, tools_buf, tools_len) {
     spin_anim_arm();
     var r = _hoosh_post_blocking(_hoosh_endpoint_url(), h, _agent_req, len);   # 0.44.2: per-read deadline (see config_hoosh_timeout_ms); 0.53.2: a long reply fits
     spin_anim_disarm();
+    if (net_stopped() == 1) { _agent_round_kind = 4; return 0; }   # 0.54.0: Esc left the wait, as on the stream path
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         if (_hoosh_resp_mark(sandhi_http_err_kind(r)) == 1) { emit("  "); oprintln(hoosh_resp_bad_text()); _agent_round_kind = 2; return 0; }
         var en = sandhi_err_kind_name(sandhi_http_err_kind(r));
@@ -2049,6 +2112,13 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
         _agent_round_kind = 2; return 0;
     }
     var status = sandhi_stream_status(sr);
+    # 0.54.1: a stream's result has no body, and a gateway's refusal is not SSE, so "token budget exceeded" read as a bare 429. The round
+    # is asked once more without streaming, whose path prints the body. A gateway that refuses refuses again, at no provider
+    # cost; if the second try is answered, that answer is the round's.
+    if (status >= 400) {
+        log_begin("stream_refused"); log_kv_int("status", status); log_commit(SK_WARN);
+        return _agent_iter_block(model, sys, mem, tools_buf, tools_len);
+    }
     if ((status < 200) || (status >= 300)) {
         emit("  hoosh returned HTTP "); ofmt_int(status); oprintln("");
         oprintln("  (error body not surfaced in stream mode; set [hoosh].stream=false to see it)");
@@ -2134,6 +2204,7 @@ fn _agent_finish_interrupted(iter) {
 # back out of history (completed exchanges only). 0.34.1: Esc cancels mid-round (during
 # tool execution / between rounds), not just streaming. I/O — the orchestrator.
 fn agent_turn(prompt) {
+    intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn; 0.54.0: before recall and the tool fetch, whose waits a stop can leave now
     var model = _hoosh_model();
     var sys = 0;
     if (seam_status(SEAM_AVATARA) == SEAM_NATIVE) { sys = persona_system_prompt(); }
@@ -2194,7 +2265,6 @@ fn agent_turn(prompt) {
     # ONCE per turn, before the loop — the rounds re-frame the same history, and this must never land mid-round.
     hoosh_recap_ensure(AGENT_REQ_CAP - AGENT_WORK_CAP - AGENT_TOOLS_CAP);
     _agent_work_reset();
-    intr_reset();      # 0.17.4: clear any stale Esc-interrupt flag at the start of the turn
     ask_turn_reset();  # 0.44.0 (T4-1): a fresh question budget per turn (session totals survive; /reset clears them)
     subagent_turn_reset();  # 0.44.1: clear the same-task delegation guard — repeating a task in a LATER turn is a
     # new request, not a loop (see src/subagent.cyr)
@@ -2232,7 +2302,9 @@ fn agent_turn(prompt) {
         log_kv_int("work_bytes", _agent_work_len);
         if (want_stream == 1) { log_kv_str("mode", "stream"); } else { log_kv_str("mode", "block"); }
         log_commit(SK_DEBUG);
-        if (want_stream == 1) { _agent_iter_stream(model, sys, mem, _agent_tools_buf, tools_len); }
+        # 0.54.0: a stop in recall, the tool fetch or the recap left its wait with nothing else to end. No round follows it.
+        if (intr_pending() == 1) { _agent_round_kind = 4; }
+        elif (want_stream == 1) { _agent_iter_stream(model, sys, mem, _agent_tools_buf, tools_len); }
         else { _agent_iter_block(model, sys, mem, _agent_tools_buf, tools_len); }
         # 0.17.4: a SINGLE if/elif chain — exactly one arm runs. (Was three bare `if`s; k==2/k==3
         # returned so they never fell through, but the new non-returning k==4 arm MUST NOT fall into

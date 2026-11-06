@@ -1,0 +1,617 @@
+# tests/cases/netwait.cyr — a network call that leaves the surface alive (src/netwait.cyr, 0.54.0, audit G-6, M-9).
+#
+# The worker's half is replaced through net_do_set where a test needs a call to hold still, so the state machine is driven
+# by hand with no timing guess. The last group uses a real socket: a listener that never accepts is a gateway that goes silent.
+
+var _nt_calls = 0;                 # the fake surface poll's call count
+var _nt_stop_at = 0;               # raise the stop on this poll call (0 = never)
+var _nt_release = 0;               # atomic: the fake call returns once this is 1
+var _nt_ran = 0;                   # atomic: the fake call ran
+var _nt_ev_n = 0;
+var _nt_ev_sum = 0;
+var _nt_ev_limit = 0;
+var _nt_ev_stack = 0;              # the address of a local in the last callback
+var _nt_stopped_at = 0;
+var _nt_body_ok = 0;
+
+fn _nt_poll() {
+    _nt_calls = _nt_calls + 1;
+    if ((_nt_stop_at != 0) && (_nt_calls == _nt_stop_at)) { intr_signal(); }
+    return intr_seq();
+}
+fn _nt_arm(stop_at) {
+    _nt_calls = 0; _nt_stop_at = stop_at;
+    atomic_store(&_nt_release, 1); sleep_ms(3);    # any fake a stop left behind ends first
+    atomic_store(&_nt_release, 0); atomic_store(&_nt_ran, 0);
+    net_poll_set(&_nt_poll);
+    return 0;
+}
+fn _nt_disarm() { net_poll_set(0); net_do_set(0); intr_reset(); return 0; }
+
+fn _nt_fake_fast(j) { atomic_store(&_nt_ran, 1); return 55; }
+fn _nt_fake_hold(j) {
+    atomic_store(&_nt_ran, 1);
+    while (atomic_load(&_nt_release) == 0) { sleep_ms(1); }
+    return 77;
+}
+fn _nt_fake_body(j) {
+    var b = load64(j + NJ_BODY);
+    var ok = 1;
+    if (load8(b) != 104) { ok = 0; }            # 'h'
+    if (load8(b + 4) != 111) { ok = 0; }        # 'o'
+    if (load8(b + 5) != 0) { ok = 0; }
+    atomic_store(&_nt_ran, 1);
+    while (atomic_load(&_nt_release) == 0) { sleep_ms(1); }
+    if ((load8(b) != 104) || (load8(b + 4) != 111)) { ok = 0; }
+    _nt_body_ok = ok;
+    return 66;
+}
+fn _nt_fake_stream(j) {
+    var i = 1;
+    while (i <= 5) {
+        if (_net_on_event(j, i) == 0) { _nt_stopped_at = i; return 33; }
+        i = i + 1;
+    }
+    return 44;
+}
+fn _nt_cb(ctx, ev) {
+    var here[8];
+    _nt_ev_stack = &here;
+    _nt_ev_n = _nt_ev_n + 1;
+    _nt_ev_sum = _nt_ev_sum + ev;
+    store64(ctx, load64(ctx) + 1);
+    if (_nt_ev_n == _nt_ev_limit) { return 0; }
+    return 1;
+}
+fn _nt_wait_spare(a) {
+    var i = 0;
+    while (i < 5000) {
+        var s = 0;
+        while (s < NET_SPARE_N) {
+            if (atomic_load(&_net_spare + s * 8) == a) { return 1; }
+            s = s + 1;
+        }
+        sleep_ms(1);
+        i = i + 1;
+    }
+    return 0;
+}
+
+# test_net_floor: with no surface nothing changes: no worker, no job.
+fn test_net_floor() {
+    test_group("no surface bound: a plain call, as before (netwait.cyr, 0.54.0)");
+    net_poll_set(0);
+    assert_eq(net_poll_bound(), 0, "premise: nothing bound");
+    var h = sandhi_headers_new();
+    assert_eq(net_get_begin(0, "http://127.0.0.1:9/", h, hoosh_probe_opts()), 0, "no job is started");
+    var seen0 = load64(&_nt_ran);
+    net_do_set(&_nt_fake_fast);
+    atomic_store(&_nt_ran, 0);
+    var r = net_get(0, "http://127.0.0.1:9/", h, hoosh_probe_opts());
+    assert_eq(atomic_load(&_nt_ran), 0, "the worker's seam is not reached");
+    assert(sandhi_http_err_kind(r) != SANDHI_OK, "the plain verb ran, and a closed port is an error");
+    assert_eq(net_stopped(), 0, "...which is not a stop");
+    net_do_set(0);
+    return seen0;
+}
+
+# test_net_job: a call that ends on its own, on the worker, with the surface polled meanwhile.
+fn test_net_job() {
+    test_group("a call runs on a worker while the surface is polled (netwait.cyr, 0.54.0)");
+    var h = sandhi_headers_new();
+    _nt_arm(0);
+    net_do_set(&_nt_fake_fast);
+    var r = net_post(0, "http://x/", h, "hello", 5, 0);
+    assert_eq(r, 55, "the result comes back");
+    assert_eq(net_stopped(), 0, "not a stop");
+    assert(_nt_calls >= 1, "the surface was polled for the generation");
+    var j0 = _net_idle;
+    assert(j0 != 0, "the job is kept for the next call");
+    var r2 = net_get(0, "http://x/", h, 0);
+    assert_eq(r2, 55, "a second call");
+    assert_eq(_net_idle, j0, "...on the same job and pipes");
+    _nt_arm(0);
+    net_do_set(&_nt_fake_hold);
+    var t = thread_create(&_nt_releaser, 80);
+    var r3 = net_post(0, "http://x/", h, "hello", 5, 0);
+    assert_eq(r3, 77, "a slow call ends in its own time");
+    assert(_nt_calls >= 2, "...with the surface polled during the wait");
+    if (t != 0) { thread_join(t); }
+    # a level left up by an earlier stop is not a stop of THIS call: the poll's generation does not move
+    intr_signal();
+    _nt_arm(0);
+    net_do_set(&_nt_fake_hold);
+    var t4 = thread_create(&_nt_releaser, 160);
+    var r4 = net_post(0, "http://x/", h, "hello", 5, 0);
+    assert_eq(r4, 77, "a stop raised before the call does not leave it (the wait reads an edge, as exec's does)");
+    assert_eq(net_stopped(), 0, "...and it is no stop");
+    assert(_nt_calls >= 3, "...across several ticks that saw the flag up");
+    if (t4 != 0) { thread_join(t4); }
+    _nt_disarm();
+    return 0;
+}
+fn _nt_releaser(ms) { sleep_ms(ms); atomic_store(&_nt_release, 1); return 0; }
+
+# test_net_stop: a stop leaves the call at once: the arena and the body go with the worker, and it hands the arena back.
+fn test_net_stop() {
+    test_group("a stop walks away from a call that cannot be cancelled (netwait.cyr, 0.54.0)");
+    var h = sandhi_headers_new();
+    var a = net_arena(4096);
+    var slot[8];
+    store64(&slot, a);
+    var body = alloc(16);
+    memcpy(body, "hello", 5); store8(body + 5, 0);
+    _nt_arm(3);
+    net_do_set(&_nt_fake_body);
+    var t0 = clock_now_ms();
+    var r = net_post(&slot, "http://x/", h, body, 5, 0);
+    var el = clock_now_ms() - t0;
+    assert_eq(r, 0, "no response to read");
+    assert_eq(net_stopped(), 1, "net_stopped says why");
+    assert(el < 1000, "the call returned at the tick the stop arrived");
+    assert_eq(load64(&slot), 0, "the arena left the call site: nothing resets it under the worker");
+    assert_eq(atomic_load(&_nt_ran), 1, "premise: the worker was in the call");
+    # the caller's next round rewrites its request buffer while the worker may still be sending the last one
+    memcpy(body, "XXXXX", 5);
+    var live_before = _net_idle;
+    atomic_store(&_nt_release, 1);
+    assert_eq(_nt_wait_spare(a), 1, "the worker gives the arena back when it ends");
+    assert_eq(_nt_body_ok, 1, "the bytes it sent were its own copy, unchanged by the caller's rewrite");
+    assert_eq(_net_idle, live_before, "...and a left job does not come back to the idle slot");
+    assert_eq(net_arena(4096), a, "the next arena is that one, not more heap");
+    # a stop while a call on the heap is out
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    var r2 = net_get(0, "http://x/", h, 0);
+    assert_eq(r2, 0, "a GET is left the same way");
+    assert_eq(net_stopped(), 1, "...stopped");
+    atomic_store(&_nt_release, 1);
+    # after a stop the next call starts clean
+    _nt_arm(0);
+    net_do_set(&_nt_fake_fast);
+    var r3 = net_post(0, "http://x/", h, "hello", 5, 0);
+    assert_eq(r3, 55, "the next call works");
+    assert_eq(net_stopped(), 0, "...and clears the stop");
+    _nt_disarm();
+    return 0;
+}
+
+# test_net_stream: events run on THIS thread, in order, and a callback's 0 reaches the worker.
+fn test_net_stream() {
+    test_group("a stream's events run on the main thread (netwait.cyr, 0.54.0)");
+    var h = sandhi_headers_new();
+    var a = net_arena(65536);
+    var slot[8];
+    store64(&slot, a);
+    var cell[8];
+    store64(&cell, 0);
+    _nt_arm(0);
+    net_do_set(&_nt_fake_stream);
+    _nt_ev_n = 0; _nt_ev_sum = 0; _nt_ev_limit = 0; _nt_stopped_at = 0;
+    var r = net_stream(&slot, "http://x/", h, "hello", 5, &_nt_cb, &cell, 0);
+    assert_eq(r, 44, "the stream ran to its end");
+    assert_eq(_nt_ev_n, 5, "every event was delivered");
+    assert_eq(_nt_ev_sum, 15, "...each one");
+    assert_eq(load64(&cell), 5, "...with the caller's own ctx");
+    var mine[8];
+    var d = &mine - _nt_ev_stack;
+    if (d < 0) { d = 0 - d; }
+    assert(d < 1048576, "the callback ran on this thread's stack, not the worker's");
+    _nt_ev_n = 0; _nt_ev_sum = 0; _nt_ev_limit = 3; _nt_stopped_at = 0;
+    var r2 = net_stream(&slot, "http://x/", h, "hello", 5, &_nt_cb, &cell, 0);
+    assert_eq(r2, 33, "a callback's 0 stops the stream");
+    assert_eq(_nt_ev_n, 3, "...at that event");
+    assert_eq(_nt_stopped_at, 3, "...and the worker saw it");
+    assert_eq(net_stopped(), 0, "the stream stopped itself: no job was left");
+    assert_eq(load64(&slot), a, "...and the arena stayed");
+    # the stream options carry the idle turn, or a left stream would sit in its read until the deadline
+    var o = _net_stream_opts(a, hoosh_http_opts());
+    assert_eq(sandhi_http_options_get_idle_ms(o), NET_TICK_MS, "a stream asks for idle turns");
+    assert_eq(sandhi_http_options_get_idle_cb(o), &_net_on_idle, "...through the job's own check");
+    assert_eq(sandhi_http_options_get_read_ms(o), sandhi_http_options_get_read_ms(hoosh_http_opts()), "the caller's deadlines are kept");
+    assert_eq(sandhi_http_options_get_connect_ms(o), sandhi_http_options_get_connect_ms(hoosh_http_opts()), "...all of them");
+    var j[136];
+    atomic_store(&j + NJ_STATE, NET_RUN);
+    assert_eq(_net_on_idle(&j, 100), 1, "an idle turn keeps a live job waiting");
+    atomic_store(&j + NJ_STATE, NET_LEFT);
+    assert_eq(_net_on_idle(&j, 100), 0, "...and ends a left one");
+    assert_eq(_net_on_event(&j, 1), 0, "a left job takes no event");
+    _nt_disarm();
+    return 0;
+}
+
+# test_net_silent_gateway: the real verbs, against a listener nobody accepts from. Connect succeeds, the request lands in a
+# socket buffer and no byte ever comes back: the wait the window died in.
+fn test_net_silent_gateway() {
+    test_group("a silent gateway, on a real socket (netwait.cyr, 0.54.0)");
+    var st, fd = tcp_socket();
+    var port = 20000 + (clock_now_ms() % 20000);
+    var bt, bv = sock_bind(fd, INADDR_LOOPBACK(), port);
+    var lt, lv = sock_listen(fd, 8);
+    assert_eq(is_err_result(bt) + is_err_result(lt), 0, "premise: a listener");
+    var url = alloc(64);
+    var o = _append_cstr(url, 0, "http://127.0.0.1:");
+    o = _append_int(url, o, port);
+    o = _append_cstr(url, o, "/v1/chat/completions");
+    store8(url + o, 0);
+    var opts = sandhi_http_options_new();
+    sandhi_http_options_read_ms(opts, 900);
+    sandhi_http_options_write_ms(opts, 900);
+    sandhi_http_options_connect_ms(opts, 900);
+    var h = sandhi_headers_new();
+    sandhi_headers_set(h, "Content-Type", "application/json");
+    _nt_arm(0);
+    var t0 = clock_now_ms();
+    var r = net_post(0, url, h, "{}", 2, opts);
+    var el = clock_now_ms() - t0;
+    assert(sandhi_http_err_kind(r) == SANDHI_ERR_TIMEOUT, "with no stop the call ends at its own deadline, as before");
+    assert(el >= 800, "...having really waited");
+    assert(_nt_calls >= 3, "...and the surface was polled through the wait");
+    assert_eq(net_stopped(), 0, "a deadline is not a stop");
+    _nt_arm(3);
+    t0 = clock_now_ms();
+    var a = net_arena(1048576);
+    var slot[8];
+    store64(&slot, a);
+    var cell[8];
+    var sr = net_stream(&slot, url, h, "{}", 2, &_nt_cb, &cell, opts);
+    el = clock_now_ms() - t0;
+    assert_eq(sr, 0, "a stream stopped before its headers has no result");
+    assert_eq(net_stopped(), 1, "...and says so");
+    assert(el < 700, "Esc in the header wait: back at once, not at the read deadline");
+    assert_eq(_nt_wait_spare(a), 1, "the worker ends at the deadline and returns its arena");
+    _nt_disarm();
+    sock_close(fd);
+    return 0;
+}
+
+# test_net_stopped_callers: each caller says what a stop means, and none reads a reply that never came.
+var _ntc_arena = 0;
+fn test_net_stopped_callers() {
+    test_group("every caller of a stopped call (0.54.0)");
+    var sv_daimon = _cfg_daimon_url;
+    var sv_mode = out_mode();
+    out_mode_set(OUT_NULL);
+    # the recap is told apart from a failure
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    assert_eq(hoosh_recap_call("span"), 0, "a stopped recap yields nothing");
+    assert_eq(hoosh_recap_err(), HOOSH_SUM_STOPPED, "...and says stopped, not transport");
+    assert(streq(hoosh_recap_err_msg(HOOSH_SUM_STOPPED), "stopped by the operator") == 1, "...in those words");
+    atomic_store(&_nt_release, 1);
+    # a blocking round is an interrupted round, not a transport failure
+    if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    _agent_work_reset();
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    _agent_round_kind = 0;
+    _agent_iter_block("m", 0, 0, 0, 0);
+    assert_eq(_agent_round_kind, 4, "a stopped blocking round is kind 4, as a stopped stream is");
+    assert_eq(_hoosh_block_arena, 0, "...and its arena went with the worker");
+    atomic_store(&_nt_release, 1);
+    # a plain blocking turn lands its marker and rolls back
+    if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    var hh = sandhi_headers_new();
+    assert_eq(_hoosh_blocking_turn("http://x/", hh, 2, "m"), 0, "a stopped plain turn is rc 0 (no reply: hoosh_send pops the user turn)");
+    atomic_store(&_nt_release, 1);
+    # an MCP call the operator walked away from
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    daimon_endpoints_reset();
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    assert_eq(daimon_invoke("t", "{}"), 0, "a stopped MCP call returns no text");
+    assert_eq(net_stopped(), 1, "...and the agent can tell that from an empty result");
+    atomic_store(&_nt_release, 1);
+    # the pin comparison that a stop left unmade holds the memory call back
+    _daimon_mem_compared = 0;
+    var sv_pin = _cfg_toolpin_enabled;
+    _cfg_toolpin_enabled = 1;
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    assert_eq(_mem_withheld("mneme_search"), 1, "a stopped pin comparison lets no memory call out");
+    assert_eq(_daimon_mem_compared, 0, "...and does not count as compared");
+    atomic_store(&_nt_release, 1);
+    _nt_disarm();
+    _cfg_toolpin_enabled = sv_pin;
+    # MCP resources: a stopped probe latches nothing
+    mcpres_endpoints_reset();
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    mcpres_probe();
+    assert_eq(_mcpres_probed, 0 - 1, "a stopped MCP probe stays unprobed (the next try asks again)");
+    atomic_store(&_nt_release, 1);
+    _nt_disarm();
+    _cfg_daimon_url = sv_daimon;
+    daimon_endpoints_reset();
+    mcpres_endpoints_reset();
+    out_mode_set(sv_mode);
+    return 0;
+}
+
+# test_net_turn_stop: a stop in the tool fetch ends the turn before any request goes out.
+var _ntt_calls = 0;
+fn _ntt_fake(j) {
+    _ntt_calls = _ntt_calls + 1;
+    atomic_store(&_nt_ran, 1);
+    while (atomic_load(&_nt_release) == 0) { sleep_ms(1); }
+    return 0;
+}
+fn test_net_turn_stop() {
+    test_group("a stop before the first round ends the turn there (agent.cyr, 0.54.0)");
+    var sv_daimon = _cfg_daimon_url;
+    var sv_mode = out_mode();
+    var sv_ready = _agent_tools_ready;
+    out_mode_set(OUT_NULL);
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    daimon_endpoints_reset();
+    _agent_tools_ready = 0;
+    _ntt_calls = 0;
+    var turns0 = session_history_len();
+    _nt_arm(2);
+    net_do_set(&_ntt_fake);
+    agent_turn("hello");
+    assert_eq(_ntt_calls, 1, "the tool fetch was the only call: no request followed the stop");
+    assert_eq(intr_pending(), 1, "the stop stands for the turn (agent_turn clears it first, not after recall and the fetch)");
+    assert_eq(session_history_len(), turns0, "...and the unanswered user turn is rolled back");
+    atomic_store(&_nt_release, 1);
+    _nt_disarm();
+    _cfg_daimon_url = sv_daimon;
+    daimon_endpoints_reset();
+    _agent_tools_ready = sv_ready;
+    out_mode_set(sv_mode);
+    return 0;
+}
+
+# test_net_par_join: the parallel batch's wait polls the surface, and a stop returns with the slots still busy.
+var _ntp_hold = 0;
+fn _ntp_worker(arg) {
+    while (atomic_load(&_ntp_hold) == 1) { sleep_ms(1); }
+    return 0;
+}
+fn test_net_par_join() {
+    test_group("the parallel batch's wait (agent.cyr, 0.54.0)");
+    assert_eq(_par_alloc(), 1, "premise: the slots");
+    atomic_store(&_ntp_hold, 0);
+    store64(_par_thread, thread_create(&_ntp_worker, 0));
+    store64(_par_thread + 8, thread_create(&_ntp_worker, 0));
+    _nt_arm(0);
+    assert_eq(_par_join(2), 0, "workers that end: no stop");
+    assert_eq(load64(_par_thread), 0, "their handles are consumed");
+    assert_eq(_par_busy(), 0, "nothing busy");
+    atomic_store(&_ntp_hold, 1);
+    store64(_par_thread, thread_create(&_ntp_worker, 0));
+    store64(_par_thread + 8, 0);
+    _nt_arm(3);
+    assert_eq(_par_join(2), 1, "a stop returns while a worker is out");
+    assert_eq(load8(_par_left), 1, "that slot is marked left");
+    assert_eq(load8(_par_left + 1), 0, "...and an empty one is not");
+    assert_eq(_par_busy(), 1, "its slot is busy, so the next round runs serial");
+    atomic_store(&_ntp_hold, 0);
+    var i = 0;
+    while ((i < 2000) && (_par_busy() == 1)) { sleep_ms(1); i = i + 1; }
+    assert_eq(_par_busy(), 0, "once it ends the slots are free");
+    # no surface: a plain join, and the floor's handles are consumed too
+    net_poll_set(0);
+    store64(_par_thread, thread_create(&_ntp_worker, 0));
+    assert_eq(_par_join(1), 0, "no surface: a plain join");
+    assert_eq(load64(_par_thread), 0, "...which consumes the handle");
+    _nt_disarm();
+    return 0;
+}
+
+# test_net_left_calls: what the model is told of a tool call the operator walked away from, on both executors.
+fn test_net_left_calls() {
+    test_group("a tool call left by a stop (agent.cyr, 0.54.0)");
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    var sv_daimon = _cfg_daimon_url; var sv_tron = _gate_tron;
+    var tg = tron_new(tron_config_default());
+    tron_load_policy(tg, "[agent.\"thoth\"]\nallow = [\"*\"]\n");
+    _gate_tron = tg;
+    # the serial executor
+    _cfg_daimon_url = "http://127.0.0.1:9";
+    daimon_endpoints_reset();
+    var one = _tg_calls_json("t_one", 0);
+    var ov = bayan_json_v_parse_buf(one, strlen(one));
+    intr_reset();
+    _agent_work_reset(); store8(_agent_work, 0);
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    _agent_run_calls_serial(ov, 1);
+    atomic_store(&_nt_release, 1);
+    assert(_t_count_sub(_agent_work, _agent_work_len, "may still complete", 18) == 1, "serial: the model is told the call went out and may still land");
+    assert_eq(_t_count_sub(_agent_work, _agent_work_len, "no result", 9), 0, "...not that it returned nothing");
+    net_do_set(0);
+    intr_reset();
+    # the parallel executor: two calls into a host that accepts and says nothing
+    var st, fd = tcp_socket();
+    var port = 20000 + ((clock_now_ms() + 7) % 20000);
+    var bt, bv = sock_bind(fd, INADDR_LOOPBACK(), port);
+    var lt, lv = sock_listen(fd, 8);
+    var url = alloc(64);
+    var o = _append_cstr(url, 0, "http://127.0.0.1:");
+    o = _append_int(url, o, port);
+    store8(url + o, 0);
+    _cfg_daimon_url = url;
+    daimon_endpoints_reset();
+    var sv_to = _cfg_hoosh_timeout_ms;
+    _cfg_hoosh_timeout_ms = 1500;
+    var pj = _tg_calls_json("t_one", "t_two");
+    var pv = bayan_json_v_parse_buf(pj, strlen(pj));
+    _agent_work_reset(); store8(_agent_work, 0);
+    _nt_arm(3);
+    var t0 = clock_now_ms();
+    _agent_run_calls_par(pv, 2);
+    var el = clock_now_ms() - t0;
+    assert(el < 1200, "parallel: the stop returns before the host's silence ends");
+    assert_eq(_t_count_sub(_agent_work, _agent_work_len, "may still complete", 18), 2, "...and both calls are reported left");
+    assert_eq(_par_busy(), 1, "their workers are still out");
+    # a busy slot sends the next round down the serial executor
+    _agent_work_reset(); store8(_agent_work, 0);
+    _ntt_calls = 0;
+    _nt_arm(0);
+    atomic_store(&_nt_release, 1);
+    net_do_set(&_ntt_fake);
+    intr_reset();
+    _agent_run_calls(pv, 2);
+    assert_eq(_ntt_calls, 2, "the next round runs serially past a busy slot");
+    net_do_set(0);
+    var i = 0;
+    while ((i < 5000) && (_par_busy() == 1)) { sleep_ms(1); i = i + 1; }
+    assert_eq(_par_busy(), 0, "...and the left workers end at their own deadline");
+    _cfg_hoosh_timeout_ms = sv_to;
+    sock_close(fd);
+    _nt_disarm();
+    _cfg_daimon_url = sv_daimon; _gate_tron = sv_tron;
+    daimon_endpoints_reset();
+    out_mode_set(sv_mode); feed_init();
+    return 0;
+}
+
+# test_net_child_stop: a stop in a delegated child's POST ends the child as interrupted, not as an unreachable gateway.
+fn test_net_child_stop() {
+    test_group("a stop in a child's round (subagent.cyr, 0.54.0)");
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    _sub_alloc();
+    var sv_mode = out_mode(); out_mode_set(OUT_NULL);
+    _nt_arm(2);
+    net_do_set(&_nt_fake_hold);
+    _agent_round_kind = 0;
+    _sub_iter("m", 0, 0, 0);
+    atomic_store(&_nt_release, 1);
+    assert_eq(_agent_round_kind, 4, "a stopped child round is kind 4");
+    _nt_disarm();
+    out_mode_set(sv_mode);
+    return 0;
+}
+
+# test_net_refused_stream (0.54.1): a stream's result has no body, so the round is asked again without streaming, whose path prints it.
+var _ntr_stream = 0;
+var _ntr_post = 0;
+var _ntr_ok = 0;
+fn _ntr_fake(j) {
+    var a = load64(j + NJ_ARENA);
+    if (load64(j + NJ_KIND) == NET_STREAM) {
+        _ntr_stream = _ntr_stream + 1;
+        return _sandhi_stream_result_a(a, 429, 0, SANDHI_OK, 0);
+    }
+    _ntr_post = _ntr_post + 1;
+    var body = "{\"error\":{\"message\":\"token budget exceeded\"}}";
+    var st = "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 46\r\n\r\n";
+    if (_ntr_ok == 1) {
+        body = "{\"choices\":[{\"message\":{\"content\":\"answered at last\"}}]}";
+        st = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 56\r\n\r\n";
+    }
+    var sl = strlen(st);
+    var bl = strlen(body);
+    var b = alloc_via(a, sl + bl + 1);
+    memcpy(b, st, sl);
+    memcpy(b + sl, body, bl);
+    store8(b + sl + bl, 0);
+    return sandhi_http_response_parse_a(a, b, sl + bl);
+}
+fn _ntr_feed_has(needle) {
+    feed_flush_pending();
+    var i = 0;
+    while (i < feed_count()) {
+        if (_t_count_sub(feed_line_ptr(i), feed_line_len(i), needle, strlen(needle)) > 0) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+fn test_net_refused_stream() {
+    test_group("a gateway's refusal of a stream says why (agent.cyr, hoosh.cyr, 0.54.1)");
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    _agent_work_reset();
+    _ntr_stream = 0; _ntr_post = 0; _ntr_ok = 0;
+    _nt_arm(0);
+    net_do_set(&_ntr_fake);
+    intr_reset();
+    _agent_iter_stream("m", 0, 0, 0, 0);
+    assert_eq(_ntr_stream, 1, "the stream was asked");
+    assert_eq(_ntr_post, 1, "...and the round once more, unstreamed");
+    assert_eq(_agent_round_kind, 3, "an HTTP error, as before");
+    assert_eq(_agent_round_status, 429, "...with its status");
+    assert_eq(_ntr_feed_has("token budget exceeded"), 1, "the gateway's own words reach the operator");
+    assert_eq(_ntr_feed_has("not surfaced"), 0, "...not the note that they could not");
+    # if the second try is answered, that answer is the round's
+    feed_init();
+    _hoosh_acc_reset();
+    _ntr_ok = 1;
+    _agent_iter_stream("m", 0, 0, 0, 0);
+    assert_eq(_agent_round_kind, 0, "an answer on the second try ends the round normally");
+    assert_eq(_ntr_feed_has("answered at last"), 1, "...and is shown");
+    # the plain path: [hoosh].tools off
+    feed_init();
+    _ntr_stream = 0; _ntr_post = 0; _ntr_ok = 0;
+    var sv_url = _cfg_hoosh_url;
+    if (sv_url == 0) { _cfg_hoosh_url = "http://127.0.0.1:9"; }
+    if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
+    var hist0 = session_history_len();
+    var rc = hoosh_send("plain turn");
+    assert_eq(_ntr_stream, 1, "a plain turn's stream was asked");
+    assert_eq(_ntr_post, 1, "...and asked once more, unstreamed");
+    assert_eq(rc, 429, "it reports the status");
+    assert_eq(_ntr_feed_has("token budget exceeded"), 1, "...and the gateway's words");
+    assert_eq(session_history_len(), hist0, "the unanswered turn is rolled back");
+    _cfg_hoosh_url = sv_url;
+    _nt_disarm();
+    out_mode_set(sv_mode); feed_init();
+    return 0;
+}
+
+# test_net_probe: the probe that does not hold the first frame.
+fn _nt_fake_noresp(j) { _nt_fake_hold(j); return 0; }
+fn test_net_probe() {
+    test_group("the startup probe (hoosh.cyr, 0.54.0, M-9)");
+    var sv = hoosh_health();
+    _nt_arm(0);
+    net_do_set(&_nt_fake_noresp);
+    atomic_store(&_nt_release, 1);
+    assert_eq(hoosh_health_begin(), 1, "an answer inside the fast window is in hand");
+    assert_eq(hoosh_health_pending(), 0, "...with nothing outstanding");
+    assert_eq(hoosh_health(), HOOSH_HEALTH_DOWN, "...and the answer is read (no response: unreachable)");
+    atomic_store(&_nt_release, 0);
+    var t0 = clock_now_ms();
+    assert_eq(hoosh_health_begin(), 0, "a gateway that says nothing leaves it outstanding");
+    assert(clock_now_ms() - t0 < 1000, "...after the fast window, not the probe's deadline");
+    assert_eq(hoosh_health_pending(), 1, "...pending");
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UNKNOWN, "...and the dot says unknown, not a guess");
+    assert_eq(hoosh_health_begin(), 0, "a second begin does not start a second probe");
+    assert_eq(hoosh_health_land(), 0, "not landed yet");
+    assert(_hoosh_probe_arena != 0, "the probe has an arena of its own: a Ctrl-R on the heap cost 256 KB for good");
+    hoosh_health_mark_up();                      # a turn's own outcome arrives first
+    atomic_store(&_nt_release, 1);
+    var i = 0;
+    var got = 0;
+    while ((i < 2000) && (got == 0)) { got = hoosh_health_land(); sleep_ms(1); i = i + 1; }
+    assert_eq(got, 1, "the probe lands");
+    assert_eq(hoosh_health(), HOOSH_HEALTH_UP, "...and does not overwrite a turn's newer outcome");
+    assert_eq(hoosh_health_pending(), 0, "...and nothing is outstanding");
+    _nt_disarm();
+    _hoosh_health = sv;
+    return 0;
+}
+
+fn test_netwait() {
+    test_net_floor();
+    test_net_job();
+    test_net_stop();
+    test_net_stream();
+    test_net_silent_gateway();
+    test_net_stopped_callers();
+    test_net_turn_stop();
+    test_net_par_join();
+    test_net_left_calls();
+    test_net_child_stop();
+    test_net_refused_stream();
+    test_net_probe();
+    return 0;
+}

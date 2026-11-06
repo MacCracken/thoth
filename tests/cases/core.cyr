@@ -3542,6 +3542,110 @@ fn test_model_id_sanitise() {
     return 0;
 }
 
+var _tgc_calls = 0;
+fn _tgc_poll() {
+    _tgc_calls = _tgc_calls + 1;
+    if (_tgc_calls == 3) { intr_signal(); }
+    return intr_seq();
+}
+# test_git_child (0.54.1, P-10, M-3): the walk's heap is the child's, and what comes back is checked before the cache takes it.
+fn test_git_child() {
+    test_group("the git walk runs in a child (git.cyr, 0.54.1)");
+    git_probe();
+    var p0 = alloc(8);
+    git_probe(); git_probe(); git_probe();
+    assert((alloc(8) - p0) < 4096, "three probes leave nothing on this heap (166 KB each here, 48 MB each at 100k files)");
+    assert_eq(git_probe_pending(), 0, "a probe that waited leaves nothing out");
+    var was = git_present();
+    assert_eq(git_probe_begin(), 1, "a surface can start one");
+    assert_eq(git_probe_pending(), 1, "...and it is out");
+    assert_eq(git_probe_begin(), 1, "a second begin joins it");
+    var i = 0;
+    var got = 0;
+    while ((i < 60000) && (got == 0)) { got = git_probe_land(); sleep_ms(1); i = i + 1; }
+    assert_eq(got, 1, "it lands");
+    assert_eq(git_present(), was, "...with the same answer the wait gives");
+    # a child that dies leaves the cache as it was
+    _git_present = 1; _git_dirty = 41; _git_detached = 0; _git_status_n = 0;
+    _git_copy_branch("kept");
+    _git_child_fail = 1;
+    git_probe();
+    _git_child_fail = 0;
+    assert_eq(git_dirty(), 41, "a walk that dies changes nothing: it used to take thoth with it");
+    assert_eq(git_present(), 1, "...the repository's presence neither");
+    assert(streq(git_branch(), "kept") == 1, "...the branch either");
+    # a stop leaves the wait, and the walk lands later
+    _git_child_fail = 2;
+    _tgc_calls = 0;
+    git_wait_poll_set(&_tgc_poll);
+    var t0 = clock_now_ms();
+    git_probe();
+    var el = clock_now_ms() - t0;
+    git_wait_poll_set(0);
+    _git_child_fail = 0;
+    intr_reset();
+    assert(el < 1200, "a stop leaves git_probe's wait");
+    assert_eq(git_probe_pending(), 1, "...with the walk still out");
+    assert_eq(git_dirty(), 41, "...and the cache answering meanwhile");
+    i = 0; got = 0;
+    while ((i < 60000) && (got == 0)) { got = git_probe_land(); sleep_ms(1); i = i + 1; }
+    assert_eq(got, 1, "it lands later");
+    # the snapshot, end to end
+    _git_bufs();
+    memcpy(_git_status_buf, "a.txt\0", 6);
+    memcpy(_git_status_buf + 6, "dir/b.c\0", 8);
+    store64(_git_status_ptr, _git_status_buf);
+    store64(_git_status_ptr + 8, _git_status_buf + 6);
+    store8(_git_status_kind, 1);
+    store8(_git_status_kind + 1, 2);
+    _git_status_n = 2; _git_present = 1; _git_detached = 1; _git_dirty = 900;
+    _git_copy_branch("feature");
+    var n = _git_snap_build();
+    _git_status_n = 0; _git_present = 0; _git_detached = 0; _git_dirty = 0;
+    _git_copy_branch("?");
+    _git_snap_n = n;
+    assert_eq(_git_snap_apply(), 1, "a whole snapshot applies");
+    assert_eq(git_present(), 1, "present");
+    assert_eq(git_detached(), 1, "detached");
+    assert_eq(git_dirty(), 900, "the true count, past the badge cache");
+    assert(streq(git_branch(), "feature") == 1, "the branch");
+    assert_eq(git_status_of("a.txt"), 1, "an entry's kind");
+    assert_eq(git_status_of("dir/b.c"), 2, "...and the next one's");
+    # anything less is refused whole
+    _git_dirty = 5;
+    _git_snap_n = n - 1;
+    assert_eq(_git_snap_apply(), 0, "a snapshot cut short has no end mark");
+    assert_eq(git_dirty(), 5, "...and the cache stays");
+    _git_snap_n = n;
+    store8(_git_snap + n - 1, 7);
+    assert_eq(_git_snap_apply(), 0, "...or a wrong one");
+    store8(_git_snap + n - 1, GIT_SNAP_END);
+    # enough entries to run past the cache's tables, each two bytes: the count is what stands in the way
+    var o2 = 32 + strlen(_git_snap + 32) + 1;
+    var e2 = 0;
+    while (e2 <= GIT_STATUS_MAX) {
+        store8(_git_snap + o2, 1);
+        store8(_git_snap + o2 + 1, 0);
+        o2 = o2 + 2;
+        e2 = e2 + 1;
+    }
+    store8(_git_snap + o2, GIT_SNAP_END);
+    _git_snap_n = o2 + 1;
+    store64(_git_snap + 24, GIT_STATUS_MAX + 1);
+    assert_eq(_git_snap_apply(), 0, "more entries than the cache holds");
+    _git_snap_n = n;
+    n = _git_snap_build();
+    _git_snap_n = n;
+    store64(_git_snap + 24, 3);
+    assert_eq(_git_snap_apply(), 0, "an entry count past the bytes");
+    store64(_git_snap + 24, 2);
+    _git_snap_n = 8;
+    assert_eq(_git_snap_apply(), 0, "a header cut short");
+    assert_eq(git_dirty(), 5, "the cache stayed through all of it");
+    git_probe();
+    return 0;
+}
+
 fn test_git() {
     test_group("git producer (git.cyr / SEAM_GIT, 0.13.0)");
     # seam registration on the capability ladder

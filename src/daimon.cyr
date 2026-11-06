@@ -181,6 +181,7 @@ fn _daimon_print_str(s) {
 
 # _daimon_announce_transport_error: honest degradation for an unreachable host.
 fn _daimon_announce_transport_error(r, url) {
+    if (net_stopped() == 1) { oprintln("  stopped by the operator - the request may still reach the host"); return 0; }   # 0.54.0
     var ename = sandhi_err_kind_name(sandhi_http_err_kind(r));
     emit("  daimon transport error: "); oprintln(ename);
     emit("  endpoint "); emit(url);
@@ -236,7 +237,7 @@ fn daimon_list_tools() {
     var url = _daimon_tools_endpoint();
     var h = sandhi_headers_new();
     ui_emit(ROLE_FAINT, "  -> daimon "); oprintln(url);
-    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: registry/probe GET — fail fast
+    var r = net_get(0, url, h, hoosh_probe_opts());   # 0.44.2: registry/probe GET — fail fast
     if (sandhi_http_err_kind(r) != SANDHI_OK) {
         _daimon_announce_transport_error(r, url);
         return 0 - 1;
@@ -280,10 +281,10 @@ fn daimon_list_tools() {
 # its cap) from the heap that never frees. Every reader copies what it keeps: the parse lands on the global heap.
 var _daimon_arena = 0;
 fn _daimon_post(url, h, req, len) {
-    if (_daimon_arena == 0) { _daimon_arena = arena_allocator_growable(65536); }
-    if (_daimon_arena == 0) { return sandhi_http_post_opts(url, h, req, len, hoosh_http_opts()); }
+    if (_daimon_arena == 0) { _daimon_arena = net_arena(65536); }
+    if (_daimon_arena == 0) { return net_post(0, url, h, req, len, hoosh_http_opts()); }
     reset_via(_daimon_arena);
-    return sandhi_http_post_opts_a(_daimon_arena, url, h, req, len, hoosh_http_opts());
+    return net_post(&_daimon_arena, url, h, req, len, hoosh_http_opts());
 }
 
 # daimon_call: invoke one MCP tool through daimon and print the result text.
@@ -436,7 +437,7 @@ fn daimon_fetch_into(a, req_buf, name, args_json, out, out_cap, st_out) {
 fn daimon_tools_value() {
     var url = _daimon_tools_endpoint();
     var h = sandhi_headers_new();
-    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2: registry/probe GET — fail fast
+    var r = net_get(0, url, h, hoosh_probe_opts());   # 0.44.2: registry/probe GET — fail fast
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }

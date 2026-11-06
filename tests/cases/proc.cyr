@@ -523,9 +523,33 @@ fn test_capture_pipe() {
     return 0;
 }
 
+# test_run_shell_signals (0.54.1, P-11): line-mode /run hands the terminal to a child, and the terminal's Ctrl-C goes to both of them.
+fn test_run_shell_signals() {
+    test_group("a Ctrl-C in line-mode /run stops the command, not thoth (exec.cyr, 0.54.1)");
+    assert_eq(run_shell("kill -INT $PPID; exit 7"), 7, "SIGINT at thoth during the wait: thoth lives, and the command's exit code comes back");
+    assert_eq(run_shell("kill -QUIT $PPID; exit 8"), 8, "...SIGQUIT too");
+    assert_eq(run_shell("kill -INT $$; exit 9"), 0 - 1, "the command itself takes SIGINT's default back: it dies of the signal");
+    #ifdef CYRIUS_TARGET_LINUX
+    # bash takes no SIGQUIT from itself, so this reads what a command inherits: an ignored signal survives execve.
+    assert_eq(run_shell("s=$(grep SigIgn /proc/self/status); case \"$s\" in *[0189]) exit 6;; *) exit 5;; esac"), 6, "a command inherits neither signal ignored");
+    var b = alloc(4096);
+    var n = file_read_all("/proc/self/status", b, 4095);
+    assert(n > 0, "premise: /proc/self/status reads");
+    store8(b + n, 0);
+    var i = 0;
+    while ((i < n) && (cstr_starts_with(b + i, "SigIgn:") == 0)) { i = i + 1; }
+    var last = load8(b + i + 8 + 15);
+    var bits = last - 48;
+    if (last >= 97) { bits = last - 97 + 10; }
+    assert_eq(bits & 6, 0, "the wait over, thoth takes SIGINT and SIGQUIT back: the bits are clear");
+    #endif
+    return 0;
+}
+
 fn test_proc_capture() {
     #ifndef CYRIUS_TARGET_WIN
     #ifndef CYRIUS_TARGET_AGNOS
+    test_run_shell_signals();
     test_capture_status_mapping();
     test_capture_orphans();
     test_capture_inherits();

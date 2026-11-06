@@ -4,6 +4,83 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.54.2] - 2026-11-06
+
+**Repair batch 16: long replies and the composer.** A TUI frame is one write, a long reply no longer costs a full walk on every rebuild, a line wider than the window stays in view, and a picker row clips on a character.
+
+**What changes for you:**
+
+- The window's composer shows the end of a long line, with `<` for what is off to the left, and the caret stays on screen.
+- A model id too wide for the picker ends in `…` and is never cut through a character.
+
+### Fixed
+
+- **The TUI paints in one write** (M-5). A full repaint took 174 `write` calls and a keystroke 17; they take 2 and 1, for the same 7,425 bytes. Frames go through a buffer in `src/util.cyr`, using darshana's existing `_buf` forms. The roadmap said this needed a darshana release, and it did not. Rendered screens match the old binary at all 22 steps of a scripted session.
+- **A rebuild walked a long reply from its first line** (M-10). The measuring pass now leaves a checkpoint every 16 KB, and a draw starts from the last one above the view: 5.29 ms to 0.40 ms a rebuild at 300 KB. A reply still streaming re-measures from its last settled checkpoint. A checkpoint is checked against the text under it on every use.
+- **The composer ran off the window, and its caret counted bytes** (G-9). `é` moved the caret two cells.
+- **Picker rows clipped by bytes** (A-14), which cut a character in two and left a row's width wrong.
+
+### Changed
+
+- **Tests:** the TUI's picker expects the mark. The index is compared command by command against the long way, at a band just above every checkpoint.
+
+### Verified
+
+- See 0.54.0: the three cuts were verified together, on this tree.
+
+## [0.54.1] - 2026-11-06
+
+**Repair batch 15: the terminal and the process.** The git walk moves to a child, SIGTERM restores the terminal, the toolchain CI runs is pinned, and Release publishes the binary CI tested.
+
+**What changes for you:**
+
+- `kill` or a closed terminal leaves your shell usable: thoth restores the terminal, runs `session_end`, and exits 143 (SIGTERM) or 129 (SIGHUP).
+- A Ctrl-C in line-mode `/run` stops the command and leaves thoth running.
+- A streaming turn the gateway refuses now shows the gateway's own words. To get them the round is asked once more without streaming. If that second try is answered, the answer is used.
+- A repository's `[daimon].url` pins its tools for the session and writes nothing to your global pin store. `/tools trust` still writes.
+- At a pin bump, run `scripts/toolchain-sums.sh`: the suite fails until `scripts/toolchain.sums` matches `cyrius.cyml`.
+
+### Fixed
+
+- **`git_probe` grew the heap 48 MB a turn on a 100k-file repository** (P-10, M-3), with no ceiling, and held the main thread for 1.8 s a probe. The walk runs in a forked child and sends a small snapshot back through a pipe, so its heap goes with the child, and a walk that crashes on a hostile repository takes only the child. At 100k files the first frame is 0.01 s (1.2 s before) and RSS stays at 17 MB over ten turns (37 to 515 MB before).
+- **SIGTERM left the terminal raw** (S-11), with the alternate screen, the kitty keyboard and bracketed paste still on. SIGTERM and SIGHUP are read from a signalfd, as SIGWINCH is. The event loop sees them at once, a wait sees them through its poll, and a cooked confirm no longer outwaits one: no answer refuses.
+- **A Ctrl-C in line-mode `/run` killed thoth too** (P-11). The wait ignores SIGINT and SIGQUIT, as a shell does for its job, and the child takes the defaults back before exec.
+- **A streaming refusal read as a bare status.** A stream's result has no body, so a 429 reading `token budget exceeded` showed as "error body not surfaced in stream mode". Proven against a real hoosh budget.
+- **A repository's daimon rows filled the global pin store** (A-7). 11 runs reached the cap, after which your own new tools lost the between-runs defence. See ADR-0022's addendum.
+- **CI and Release ran a toolchain nothing here pinned** (B-1, B-8). `scripts/toolchain-install.sh` downloads the installer and the tarball, checks both against `scripts/toolchain.sums`, and only then runs them. A tampered sum refuses, and a cut download can no longer run half a script.
+- **Release rebuilt what CI tested** (P-8). CI uploads the tested binary, and Release checks its version and publishes those bytes. The job holding `contents: write` now installs and builds nothing.
+
+### Changed
+
+- **thoth is on darshana's public surface.** `intr_arm` called the private `_tty_apply_raw_flags` on a private termios copy. It now uses `tty_raw_nonblock`, and `src/term.cyr` remembers which mode to go back to: cooked after a turn, raw from the idle loop. `tests/cases/vendor.cyr` holds it there.
+- `src/main.cyr` returns 128 + the signal when one ended the session.
+
+## [0.54.0] - 2026-11-06
+
+**The window and the TUI stay alive through a network wait.** This is the minor's arc. Every network call now runs on a worker while a surface is up, so a silent gateway no longer freezes anything, and Esc reaches it. The cut also holds the roadmap re-cut, the not-verified pass and the agnosai refresh.
+
+**What changes for you:**
+
+- Esc stops any wait on the network in under 50 ms: a hung gateway, a first token, a blocking turn, an MCP call, a delegated child, Ctrl-P. thoth moves on at once, and the abandoned call ends on its own at `[hoosh].timeout_ms`.
+- A tool call you stop this way is reported to the model as sent and possibly still completing, not as failed.
+- The first frame no longer waits for hoosh. The greeting says `checking hoosh` until the answer lands, and a local gateway answers before you see that.
+- In the window, the compositor's pings are answered and close works during a wait.
+- agnosai is at 2.2.4. thoth's guard profile is unchanged apart from its version line.
+
+### Added
+
+- **`src/netwait.cyr`** (ADR-0023). While a surface has bound its wait poll, each sandhi call runs on a worker and the main thread stays with the surface. Stream events come back one at a time and the caller's callback runs on the main thread, so no callback changed. A stop walks away from a call it cannot cancel; a job owns the url, body and arena its worker reads. With no surface it is the plain call, byte for byte, so one-shot and the line REPL do not change.
+
+### Fixed
+
+- **The window was dead during a silent network wait** (G-6). On the wire, 18 of 24 compositor pings went unanswered; every one is answered now, inside 50 ms.
+- **A hung gateway held the first frame** (M-9): 6.3 s to map the window, which now takes 0.27 s. The probe runs on a worker with a 150 ms grace, and a slow answer lands on the greeting.
+- **The parallel batch sat in `thread_join`.** It now polls the surface. A stop returns while workers are out, those calls are reported as left, and the next round takes the serial executor until their slots are free.
+- **A stop in recall, the tool fetch or a recap was lost**, because each turn cleared the flag after them. The flag is cleared first, and no round follows a stop.
+- **A stopped MCP probe would have latched "absent".** It latches nothing, and makes no second call.
+- **A stopped pin comparison lets no memory call out.**
+- `main` ends with `sys_exit_group`: a bare `SYS_EXIT` ends one thread, and thoth would have stayed running behind a stuck worker.
+
 **The roadmap re-cut, and the not-verified list gone through.** Every open item now has a place from 0.54.x through 0.62.x. Every claim the 2026-11-05 audit had not proven was run where it lives,
 and two of 0.53.3's fixes turned out not to work on the real stack. The record is [`docs/audit/2026-11-05-not-verified-pass.md`](docs/audit/2026-11-05-not-verified-pass.md), and
 [`docs/guides/verification-pass.md`](docs/guides/verification-pass.md) has the commands.
@@ -60,6 +137,17 @@ Found by going through the not-verified list. Each carries a test, and each test
 - **G-1 on screen:** the confirm card draws curly quotes and a dash as boxes, never as straight quotes.
 - **100,000 files:** bounded and correct everywhere but `git_probe`, which grows the heap 48 MB a turn and leads batch 15.
 - **The project map:** 27% fewer tokens over nine navigation tasks on a real model. One run each.
+
+### Verified on 0.54.2, for all three cuts
+
+- **The suite:** 971 + 2421 + 1655 + 949 + 190 + 6, 6,186 assertions, 0 failed, with stdin closed and held open. All five suites pass under `qemu-aarch64`, on a real Raspberry Pi (6,186, 0 failed) and natively on macOS (2411 + 1643 + 927 + 954 + 190), where `hostile-wire.py` flags nothing. Warning sets match the last commit on all four lanes.
+- **Ring 3:** thoth 0.54.2 loads and runs on agnos 1.57.17 with gnoboot 0.9.0.
+- **The real spine:** hoosh 2.10.0, daimon 2.5.3, bote, mneme and Anthropic, across streaming and blocking turns, parallel daimon calls and a delegated child. Stops landed on both paths and the next turn worked. A real budget refusal showed its body on a streaming turn.
+- **Silent gateways, old binary against new, in a pty and in the window:** a gateway that says nothing, one that sends headers and stops, and a blocking turn. Esc returned at once on the new binary and did nothing on the old one, and a stuck worker did not hold up exit.
+- **SIGTERM on a real pty:** idle, in a turn and in a command, the old binary left the terminal raw with the alternate screen up; the new one restored it and exited 143.
+- **Break tests:** 65 mutations, one for each decision above, all caught. Eight got through at first, and their tests were tightened until they failed.
+- **100,000 files:** see 0.54.1. The Pi found the walk's first deadline too tight: it takes over 5 s on this tree there, so the limit is 120 s, and Esc leaves a `/state` wait.
+- **Not proven by a test:** `sys_exit_group`, the raw-mode restore from the idle loop, and the window's greeting rebuild were each proven live only.
 
 ## [0.53.3] - 2026-11-05
 

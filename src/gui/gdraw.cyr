@@ -84,6 +84,8 @@ var _gd_cull_top = 0;
 var _gd_cull_bot = 0;
 fn gd_cull_set(top, bot) { _gd_cull = 1; _gd_cull_top = top; _gd_cull_bot = bot; return 0; }
 fn gd_cull_clear() { _gd_cull = 0; return 0; }
+fn gd_cull_on() { return _gd_cull; }
+fn gd_cull_top() { return _gd_cull_top; }
 # gd_culled: 1 when a box from y, h tall, misses the band (never, with no band set). gd_below: 1 when y is under it.
 fn gd_culled(y, h) {
     if (_gd_cull == 0) { return 0; }

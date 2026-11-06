@@ -490,7 +490,9 @@ fn _mem_recall_mneme(query) {
 
 # _mem_withheld: 1 when a pin holds `tool` back. The comparison comes first: this channel calls before any tool list is built.
 fn _mem_withheld(tool) {
+    net_stopped_clear();
     daimon_mem_pin_compare();
+    if (net_stopped() == 1) { return 1; }   # 0.54.0: a stop left the comparison unmade, and no call goes out past one
     return toolpin_withheld(tool);
 }
 

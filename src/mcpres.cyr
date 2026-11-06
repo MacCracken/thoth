@@ -88,7 +88,7 @@ fn mcpres_endpoints_reset() {
 fn _mcpres_get_array(url, key) {
     if (url == 0) { return 0; }                 # [daimon].url unset — see the builders above
     var h = sandhi_headers_new();
-    var r = sandhi_http_get_opts(url, h, hoosh_probe_opts());   # 0.44.2
+    var r = net_get(0, url, h, hoosh_probe_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }
@@ -139,7 +139,9 @@ fn mcpres_probe() {
     if (_mcpres_probed != (0 - 1)) { return _mcpres_probed; }
     if (config_daimon_configured() == 0) { _mcpres_probed = 0; return 0; }
     var rv = daimon_resources_value();
+    if (net_stopped() == 1) { return 0; }       # 0.54.0: nothing proven either way, so nothing latched, and no second call
     var pv = daimon_prompts_value();
+    if (net_stopped() == 1) { return 0; }
     if ((rv == 0) && (pv == 0)) { _mcpres_probed = 0; return 0; }
     _mcpres_probed = 1;
     if (rv != 0) { _mcpres_n_res = bayan_json_v_arr_len(rv); }
@@ -177,7 +179,7 @@ fn mcpres_read(uri) {
     if (n == 0) { return 0; }
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    var r = sandhi_http_post_opts(ep, h, _mcpres_req, n, hoosh_http_opts());   # 0.44.2
+    var r = net_post(0, ep, h, _mcpres_req, n, hoosh_http_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }
@@ -226,7 +228,7 @@ fn mcpres_prompt_get(name, args_json) {
     store8(_mcpres_req + off, 0);
     var h = sandhi_headers_new();
     sandhi_headers_set(h, "Content-Type", "application/json");
-    var r = sandhi_http_post_opts(ep, h, _mcpres_req, off, hoosh_http_opts());   # 0.44.2
+    var r = net_post(0, ep, h, _mcpres_req, off, hoosh_http_opts());   # 0.44.2
     if (sandhi_http_err_kind(r) != SANDHI_OK) { return 0; }
     var status = sandhi_http_status(r);
     if ((status < 200) || (status >= 300)) { return 0; }

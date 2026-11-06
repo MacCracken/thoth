@@ -367,10 +367,15 @@ fn one_shot_set(v) { _one_shot = v; return 0; }
 # directly and MUST bypass the capture branch — else feed paint would feed its
 # own bytes back into the ring (self-recursion) and the chrome would be captured
 # rather than shown.
-fn emit_raw(s) { syscall(SYS_WRITE, 1, s, strlen(s)); return 0; }
+fn emit_raw(s) {
+    if (_frame_depth > 0) { return _frame_put(s, strlen(s)); }
+    syscall(SYS_WRITE, 1, s, strlen(s));
+    return 0;
+}
 # 0.53.2: all of it. A reply can be megabytes now, and one write to a pipe or a tty may take part of that; an interrupted
 # write goes round again.
 fn emit_raw_n(ptr, n) {
+    if (_frame_depth > 0) { return _frame_put(ptr, n); }
     var sent = 0;
     while (sent < n) {
         var w = syscall(SYS_WRITE, 1, ptr + sent, n - sent);
@@ -380,10 +385,79 @@ fn emit_raw_n(ptr, n) {
     return 0;
 }
 
+# --- the batched frame (0.54.2, M-5) -----------------------------------------------------------------------------------------
+# A TUI frame was hundreds of write(2) calls: every move, every colour, every span. Each one is a syscall and a chance for the terminal
+# to draw half a row. Between frame_begin and frame_end everything bound for fd 1 lands here and goes out in one write, flushed early
+# only if it outgrows the buffer. darshana's writers go straight to fd 1, so the TUI moves through frame_move and its peers, which
+# use darshana's own _buf forms. Main thread only: the spinner's animator keeps its one self-contained write. Brackets nest.
+var FRAME_CAP = 131072;
+var _frame_depth = 0;
+var _frame_buf = 0;
+var _frame_len = 0;
+var _frame_writes = 0;            # write calls frames have cost (a test's meter)
+
+fn _frame_flush() {
+    if (_frame_len == 0) { return 0; }
+    var sent = 0;
+    while (sent < _frame_len) {
+        var w = syscall(SYS_WRITE, 1, _frame_buf + sent, _frame_len - sent);
+        if (w > 0) { sent = sent + w; }
+        elif (w != (0 - 4)) { break; }
+    }
+    _frame_len = 0;
+    _frame_writes = _frame_writes + 1;
+    return 0;
+}
+fn _frame_put(p, n) {
+    if (n > (FRAME_CAP - _frame_len)) { _frame_flush(); }
+    if (n > FRAME_CAP) {                  # a span past the whole buffer goes straight out, in order
+        var d = _frame_depth;
+        _frame_depth = 0;
+        emit_raw_n(p, n);
+        _frame_depth = d;
+        return 0;
+    }
+    memcpy(_frame_buf + _frame_len, p, n);
+    _frame_len = _frame_len + n;
+    return 0;
+}
+var _frame_off = 0;               # test seam: 1 = the bytes go out as they are made, to compare against
+fn frame_begin() {
+    if (_frame_off == 1) { return 0; }
+    if (_frame_buf == 0) { _frame_buf = alloc(FRAME_CAP); }
+    if (_frame_buf != 0) { _frame_depth = _frame_depth + 1; }
+    return 0;
+}
+fn frame_end() {
+    if (_frame_depth == 0) { return 0; }
+    _frame_depth = _frame_depth - 1;
+    if (_frame_depth == 0) { _frame_flush(); }
+    return 0;
+}
+fn frame_move(row, col) {
+    if (_frame_depth == 0) { return tty_move(row, col); }
+    var b[16];
+    var n = tty_move_buf(&b, 0, row, col);
+    if (n > 0) { _frame_put(&b, n); }
+    return 0;
+}
+fn frame_clear_eol() {
+    if (_frame_depth == 0) { return tty_clear_to_eol(); }
+    return _frame_put("\x1b[K", 3);
+}
+fn frame_clear() {
+    if (_frame_depth == 0) { return tty_clear(); }
+    return _frame_put("\x1b[2J", 4);
+}
+
+var _rl_wait = 0;                 # the surface's hook before a prompt's read; 1 = do not read (0.54.1)
+fn read_wait_hook_set(fp) { _rl_wait = fp; return 0; }
+
 # read_line_prompt: read_line for an answer to a prompt just drawn: what was typed before it, in the terminal or in this
 # reader's carry, is dropped. A `y` typed ahead, or the tail of one pasted burst, ran a command with no key pressed for it.
 fn read_line_prompt(buf, cap) {
     if (term_flush_input() == 1) { _rl_pos = 0; _rl_len = 0; }
+    if (_rl_wait != 0) { if (fncall0(_rl_wait) == 1) { return 0; } }   # 0.54.1: a surface can end the wait: no answer, which refuses
     return read_line(buf, cap);
 }
 
@@ -500,6 +574,7 @@ fn atomic_tmp_commit(fd, path) {
 fn emit(s) {
     if (_out_mode == OUT_RING) { _ring_emit(s, strlen(s)); return 0; }
     if (_out_mode == OUT_NULL) { return 0; }
+    if (_frame_depth > 0) { return _frame_put(s, strlen(s)); }
     syscall(SYS_WRITE, 1, s, strlen(s));
     return 0;
 }
@@ -508,6 +583,7 @@ fn emit(s) {
 fn emit_n(ptr, n) {
     if (_out_mode == OUT_RING) { _ring_emit(ptr, n); return 0; }
     if (_out_mode == OUT_NULL) { return 0; }
+    if (_frame_depth > 0) { return _frame_put(ptr, n); }
     syscall(SYS_WRITE, 1, ptr, n);
     return 0;
 }
@@ -521,6 +597,7 @@ fn emit_n(ptr, n) {
 fn oprintln(s) {
     if (_out_mode == OUT_RING) { _ring_emit(s, strlen(s)); _ring_emit("\n", 1); return 0; }
     if (_out_mode == OUT_NULL) { return 0; }
+    if (_frame_depth > 0) { _frame_put(s, strlen(s)); return _frame_put("\n", 1); }
     return println(s);
 }
 fn ofmt_int(n) {
@@ -531,6 +608,10 @@ fn ofmt_int(n) {
         return 0;
     }
     if (_out_mode == OUT_NULL) { return 0; }
+    if (_frame_depth > 0) {
+        var fb[24];
+        return _frame_put(&fb, fmt_int_buf(n, &fb));
+    }
     return fmt_int(n);
 }
 

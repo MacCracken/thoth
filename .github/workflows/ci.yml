@@ -24,38 +24,12 @@ jobs:
           persist-credentials: false
 
       - name: Install Cyrius toolchain
-        # The cyrius.cyml `[package].cyrius` pin is the single source of truth
-        # for the toolchain version (CLAUDE.md "no hardcoded toolchain versions
-        # in CI YAML") — read the pin and hand it to the upstream installer.
-        #
-        # Do NOT hand-roll this by untarring the release asset into
-        # $HOME/.cyrius/{bin,lib}: that is the pre-6.5.25 layout, and it is
-        # what this step replaced at 0.38.6. `cyrius deps` resolves the stdlib
-        # snapshot from $HOME/.cyrius/versions/$CYRIUS_VERSION/lib and hard
-        # fails with "pins version X but it is not installed" when only the
-        # flattened dirs exist — so the hand-rolled block did not merely skip
-        # verification, it stopped working outright.
-        #
-        # Bisected rather than assumed: the flat layout resolves fine at
-        # 6.5.24 and fails at 6.5.25, so CI was still GREEN on 0.38.5's 6.5.20
-        # pin and this refresh's move to 6.5.35 is exactly what would have
-        # turned it red. The installer lays out versions/<v>/{bin,lib} and
-        # symlinks bin/ + lib/ at it, and checks the SHA-256 published beside
-        # the tarball. A first install has no cyrsign, so on this runner the
-        # Ed25519 signature is NOT checked, and that sum comes from the same
-        # origin as the tarball. Same pattern as darshana / darshini / patra /
-        # libro.
-        #
-        # CYRIUS_HOME is deliberately NOT exported any more: the installer
-        # defaults it to $HOME/.cyrius, and the wrapper appends
-        # versions/<pin>/lib to whatever it is set to — so a stale or
-        # over-specific value resolves to versions/<v>/versions/<v>/lib.
+        # cyrius.cyml's [package].cyrius is the single source of truth for the version (CLAUDE.md: no hardcoded toolchain versions in CI YAML).
+        # The script downloads the installer and the tarball, checks both against scripts/toolchain.sums, and only then runs them: on a
+        # fresh runner the installer itself has no cyrsign to check a signature with, and trusts a sum from the tarball's own origin.
+        # CYRIUS_HOME stays unset: the installer defaults it, and the wrapper appends versions/<pin>/lib to whatever it is set to.
         run: |
-          set -e
-          CYRIUS_VERSION="$(grep '^cyrius = ' cyrius.cyml | head -1 | sed 's/cyrius = "\(.*\)"/\1/')"
-          echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sSf "https://raw.githubusercontent.com/MacCracken/cyrius/$CYRIUS_VERSION/scripts/install.sh" | \
-            CYRIUS_VERSION="$CYRIUS_VERSION" sh
+          sh scripts/toolchain-install.sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
       - name: Verify toolchain layout
@@ -86,6 +60,15 @@ jobs:
         # stub didn't exist (Issue 1) and also wouldn't ever exercise
         # tests/${proj}.tcyr.
         run: cyrius test
+
+      - name: Keep the tested binary
+        # Release publishes this file, not a rebuild of it: what ships is what the suite ran beside.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: thoth-linux-x86_64
+          path: build/thoth
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Cross lanes (aarch64 / agnos / win) — non-gating
         # 0.43.2: until now CI built ONLY the linux lane, so a regression that

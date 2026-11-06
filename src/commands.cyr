@@ -288,6 +288,7 @@ fn cmd_reprobe() {
         return 0;
     }
     var reach = hoosh_health_probe();
+    if (net_stopped() == 1) { ui_emit(ROLE_FAINT, "hoosh: probe stopped"); oprintln(""); return 0; }   # 0.54.0
     if (reach == HOOSH_HEALTH_UP) { ui_emit(ROLE_GREEN, "hoosh: reachable"); oprintln(""); }
     else { ui_emit(ROLE_RED, "hoosh: unreachable"); ui_emit(ROLE_FAINT, " — "); emit(config_hoosh_url()); oprintln(""); }
     return 0;
@@ -423,7 +424,7 @@ fn _state_pins_row() {
     if (toolpin_changed() > 0) { emit(" · "); ui_emit(ROLE_RED, ""); ofmt_int(toolpin_changed()); ui_emit(ROLE_RED, " withheld this session"); }
     oprintln("");
     if ((config_daimon_url_local() == 1) && (st != 8)) {                   # a repo pointed thoth at its own daimon: another namespace, said
-        ui_label("          : "); ui_emit(ROLE_RED, "this repo's [daimon].url"); ui_emit(ROLE_FAINT, " — its tools pin in their own namespace; your global daimon's pins do not apply here"); oprintln("");
+        ui_label("          : "); ui_emit(ROLE_RED, "this repo's [daimon].url"); ui_emit(ROLE_FAINT, " — its tools pin for this session, in their own namespace; your global daimon's pins do not apply here"); oprintln("");
     }
     return 0;
 }
@@ -2551,6 +2552,7 @@ fn cmd_audit(line) {
 # "no resources" and "this hop does not exist" are different facts and conflating them is exactly the
 # silent-degradation the house rules forbid.
 fn _mcpres_unavailable(noun) {
+    if (net_stopped() == 1) { ui_emit(ROLE_FAINT, "stopped"); oprintln(""); return 0; }   # 0.54.0
     if (config_daimon_configured() == 0) {
         ui_emit(ROLE_FAINT, "no daimon seam wired — MCP "); emit(noun);
         ui_emit(ROLE_FAINT, " are hosted by daimon. set [daimon].url in .thoth/config.cyml."); oprintln("");

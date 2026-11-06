@@ -372,6 +372,7 @@ fn _sub_iter(model, sys, mem, tools_len) {
     var auth = _hoosh_auth_header();
     if (auth != 0) { sandhi_headers_set(h, "Authorization", auth); }
     var r = _hoosh_post_blocking(_hoosh_endpoint_url(), h, _sub_req, len);   # 0.44.2: per-read deadline; 0.53.3: the parent's room
+    if (net_stopped() == 1) { _agent_round_kind = 4; return 0; }   # 0.54.0: a stop left the wait
     if (sandhi_http_err_kind(r) != SANDHI_OK) { _hoosh_resp_mark(sandhi_http_err_kind(r)); _agent_round_kind = 2; return 0; }
     var status = sandhi_http_status(r);
     var body = sandhi_http_body(r);
@@ -477,6 +478,7 @@ fn subagent_run(task, max_iters) {
         _hoosh_acc_len = 0; _hoosh_acc_cut = 0;   # the child's acc (swapped), not the parent's
         _sub_iter(model, sys, mem, tools_len);
         var k = _agent_round_kind;
+        if (k == 4) { _sub_rounds_last = round_no; return _sub_fail("it was interrupted"); }   # 0.54.0: a stop left the child's POST
         # _sub_rounds_last is set on EVERY exit, not just the happy one — otherwise subagent_end and the
         # "returned after N rounds" line report the PREVIOUS delegation's count, which reads as a real
         # measurement and is not one.

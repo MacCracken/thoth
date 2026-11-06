@@ -6,6 +6,8 @@ type: state
 
 # Documentation Health — thoth
 
+> **0.54.0–0.54.2** (2026-11-06): ADR-0023 (new), ADR-0022's second addendum, the roadmap's shipped batches removed and the stop note, sit and cyrius rows corrected, `state.md`, the module guide, the config example on `timeout_ms`, and `verification-pass.md`'s V-3.
+>
 > **The not-verified pass** (2026-11-05, after the re-cut): a new record (`audit/2026-11-05-not-verified-pass.md`, tier 6), ADR-0022's addendum, gap-review question 8 in both twins, the roadmap's *Not verified* table run down and removed with its leftovers placed in batches 15–17, `state.md`'s Targets block, and the guide corrected by running it (the rsync exclude was deleting a tracked fixture; a lab under `~` reads the real `~/.thoth`).
 >
 > **The roadmap re-cut** (2026-11-05, after 0.53.3): every open item has a place from 0.54.x through 0.62.x, with a *Not verified* table ahead of them and its commands in a new guide (`guides/verification-pass.md`, tier 5). Every waiting row was re-read against today's repos (hoosh 2.10.0, daimon 2.5.3, agnos 1.57.17, gnoboot 0.9.0, setu 0.8.13, aethersafha 0.17.7, kavach 3.14.2). Three claims were false and are corrected: `agnos-run.sh` was "ready to stage" the spine and is not, a current `hoosh_agnos` was the blocker and it builds in two seconds, and `fmt --check`'s 12 complaints are gone. `gap-review.md` + `.html` lost gap 3 (closed at 0.51.0), the budget note and two narrations, and renumbered: gap N in the roadmap follows. The HTML twin's gap 8 had still said bote 3.3.13. `state.md`'s current-state block corrected from four gates to three.
@@ -189,7 +191,7 @@ The ones that mattered most, recorded so the next sweep knows where to look:
 
 | File | Status | Notes |
 |---|---|---|
-| `README.md` (index) | ✅ Fresh (stale → fixed) | **All 22 ADRs (0001–0022) have a row** (the 0.43.2 row said 18). **Fixed**: the 0016 and 0019 rows carry their supersession; the 0008 row says AGNOS runs / macOS runs / Windows on the socket gap (and points at the matrix); the 0014 row says POSIX + Windows. |
+| `README.md` (index) | ✅ Fresh (stale → fixed) | **All 23 ADRs (0001–0023) have a row** (the 0.43.2 row said 18). **Fixed**: the 0016 and 0019 rows carry their supersession; the 0008 row says AGNOS runs / macOS runs / Windows on the socket gap (and points at the matrix); the 0014 row says POSIX + Windows. |
 | `0022-tool-pins-are-durable-defended-without-a-secret.md` | 🔵 Durable | **New row** (0.51.0). Verified against `src/toolpin.cyr` end to end; gained the `TPS_ROWS_MAX`/`TPS_READ_CAP` numbers, the 128 → 1024 table note, the ten states, and a 0.51.1 addendum for the `_project_sensitive` gap the sweep found (closed). |
 | `0021-authority-keys-are-global-only.md` | ✅ Fresh (stale → fixed) | Key list matches the `_cfg2_*_global_only` callers exactly. **Fixed**: the macOS "every local authority key suppressed" paragraph closed at 0.44.5 (cyrius 6.5.45 `getenv`). |
 | `0019-layered-config-global-base-local-override.md` | ✅ Fresh (stale → fixed) | Per-key layering verified. **Fixed**: the 0.45.3 addendum's "double read stays" → narrowed at 0.45.5 by `_thoth_index_is_global`; the last case named. |

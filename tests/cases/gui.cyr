@@ -3485,3 +3485,228 @@ fn test_gcmd_ring_head() {
     gcmd_clear(); session_history_clear();
     return 0;
 }
+
+# test_gcomp_view (0.54.2, G-9): a line wider than the window shows its tail with a mark, and the caret counts cells.
+fn _tcv_caret(cmds, comp_y) {
+    var i = 0;
+    var x = 0 - 1;
+    var n = vec_len(cmds);
+    while (i < n) {
+        var c = vec_get(cmds, i);
+        if ((gd_kind(c) == GD_RECT) && (gd_w(c) == 2) && (gd_h(c) == GR_GLYPH_H)) { x = gd_x(c); }
+        i = i + 1;
+    }
+    return x;
+}
+fn test_gcomp_view() {
+    test_group("the composer holds a line wider than the window (ginput.cyr, gfeed.cyr, 0.54.2)");
+    gcomp_reset();
+    var i = 0;
+    while (i < 10) { gcomp_append(97 + i); i = i + 1; }
+    assert_eq(gcomp_glyphs(), 10, "ten letters are ten cells");
+    assert_eq(gcomp_view_from(20), 0, "a line that fits starts at its start");
+    assert_eq(gcomp_view_from(4), 6, "one that does not shows its last cells");
+    gcomp_reset();
+    gcomp_set("caf\xc3\xa9 \xe6\xa8\xa1", 9);
+    assert_eq(gcomp_glyphs(), 6, "a character is one cell whatever its bytes");
+    assert_eq(gcomp_view_from(3), 3, "the view starts on a character, not inside one");
+    assert_eq(gcomp_view_from(2), 5, "...at any width");
+    assert_eq(gcomp_view_from(1), 6, "...the last one included");
+    gcomp_reset();
+    var w = 400;
+    var cols = (w - 54 - 8) / GR_GLYPH_W;
+    # short: the caret follows the text, by cells
+    gcomp_set("caf\xc3\xa9", 5);
+    var f1 = gframe_build(w, 300);
+    assert_eq(_tcv_caret(f1, 0), 54 + 4 * GR_GLYPH_W + 1, "the caret after `café` is four cells along, not five");
+    # long: the caret stays in the window, with the mark at the left
+    var k = 0;
+    gcomp_reset();
+    while (k < 200) { gcomp_append(120); k = k + 1; }
+    var f2 = gframe_build(w, 300);
+    var cx = _tcv_caret(f2, 0);
+    assert(cx < w, "the caret of a long line is on screen");
+    assert_eq(cx, 54 + GR_GLYPH_W + (cols - 1) * GR_GLYPH_W + 1, "...at the end of what is shown");
+    var saw = 0;
+    var n = vec_len(f2);
+    var i2 = 0;
+    while (i2 < n) {
+        var c = vec_get(f2, i2);
+        if ((gd_kind(c) == GD_TEXT) && (gd_x(c) == 54) && (gd_text(c) != 0)) { if (streq(gd_text(c), "<") == 1) { saw = 1; } }
+        i2 = i2 + 1;
+    }
+    assert_eq(saw, 1, "...and a mark says there is more to the left");
+    gcomp_reset();
+    return 0;
+}
+
+# test_gmd_index (0.54.2, M-10): a draw from a checkpoint is the same draw, and a checkpoint is never trusted past its text.
+fn _tgm_text(a, cap) {
+    var o = 0;
+    var i = 0;
+    while (o < (cap - 400)) {
+        o = _append_cstr(a, o, "# Heading ");
+        o = _append_int(a, o, i);
+        o = _append_cstr(a, o, "\n\nA paragraph of some length with **bold** and `code` that wraps across a line or two of the window when it is drawn at this width.\n\n");
+        if ((i % 40) == 7) {                     # a fence long enough to hold a checkpoint: the walk's state has to come back with it
+            o = _append_cstr(a, o, "```text\n");
+            var fl = 0;
+            while (fl < 1200) { o = _append_cstr(a, o, "inside the fence # not a heading | not | a table\n"); fl = fl + 1; }
+            o = _append_cstr(a, o, "```\n\n");
+        }
+        if ((i % 3) == 0) { o = _append_cstr(a, o, "```python\ndef f(x):\n    return x\n```\n\n"); }
+        if ((i % 3) == 1) { o = _append_cstr(a, o, "| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\n"); }
+        if ((i % 3) == 2) { o = _append_cstr(a, o, "- one\n- two\n  - three\n\n> a quote\n\n"); }
+        i = i + 1;
+    }
+    store8(a + o, 0);
+    return o;
+}
+fn _tgm_same(a, b) {
+    if (vec_len(a) != vec_len(b)) { return 0; }
+    var i = 0;
+    var n = vec_len(a);
+    while (i < n) {
+        var x = vec_get(a, i);
+        var y = vec_get(b, i);
+        if ((gd_kind(x) != gd_kind(y)) || (gd_x(x) != gd_x(y)) || (gd_y(x) != gd_y(y)) || (gd_color(x) != gd_color(y))) { return 0; }
+        if (gd_text(x) != gd_text(y)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+fn test_gmd_index() {
+    test_group("the sparse index draws what the long way draws (gfeed.cyr, 0.54.2)");
+    var cap = 200000;
+    var t = alloc(cap);
+    var n = _tgm_text(t, cap);
+    var avail = 700;
+    var h = _gmd_measure(0, avail, t);
+    var s = _gmd_find(t, avail);
+    assert(s != 0, "a long reply has a slot");
+    assert(load64(s + 16) >= 8, "...with checkpoints");
+    assert(strlen(t) == n, "premise: the text is whole");
+    _gmd_off = 1;
+    assert_eq(_gfeed_md(0, 0, 0, avail, t), h, "the height is the walk's");
+    _gmd_off = 0;
+    var bad = 0;
+    var deep = 0;
+    var step = h / 13;
+    var top = 0;
+    while (top < h) {
+        gd_cull_set(top, top + 500);
+        var sl = _gmd_find(t, avail);
+        if (top > (h / 2)) { if (_gmd_seek(sl, 0) != 0) { deep = deep + 1; } }
+        var a = gd_list_new();
+        _gfeed_md(a, 0, 0, avail, t);
+        _gmd_off = 1;
+        var b = gd_list_new();
+        _gfeed_md(b, 0, 0, avail, t);
+        _gmd_off = 0;
+        if (_tgm_same(a, b) == 0) { bad = bad + 1; }
+        top = top + step;
+    }
+    # a band just above each checkpoint: the rows between it and the checkpoint belong to the view, so a seek too far loses them
+    var k = 0;
+    var nc = load64(s + 16);
+    while (k < nc) {
+        var dy = load64(_gmd_cp_at(s, k) + 8);
+        gd_cull_set(dy - 300, dy + 200);
+        var a3 = gd_list_new();
+        _gfeed_md(a3, 0, 0, avail, t);
+        _gmd_off = 1;
+        var b3 = gd_list_new();
+        _gfeed_md(b3, 0, 0, avail, t);
+        _gmd_off = 0;
+        if (_tgm_same(a3, b3) == 0) { bad = bad + 1; }
+        k = k + 1;
+    }
+    var infence = 0;
+    k = 0;
+    while (k < nc) { if (load64(_gmd_cp_at(s, k) + 16) == 1) { infence = infence + 1; } k = k + 1; }
+    assert(infence >= 2, "premise: checkpoints inside a fence");
+    # a reply scrolled away from y 0, as a real view has it
+    gd_cull_set(1000, 1500);
+    var a2 = gd_list_new();
+    _gfeed_md(a2, 0, 0 - 4000, avail, t);
+    _gmd_off = 1;
+    var b2 = gd_list_new();
+    _gfeed_md(b2, 0, 0 - 4000, avail, t);
+    _gmd_off = 0;
+    if (_tgm_same(a2, b2) == 0) { bad = bad + 1; }
+    gd_cull_clear();
+    assert_eq(bad, 0, "every band, at every depth, is the same commands in the same order");
+    assert(deep >= 4, "...and a deep view starts from a checkpoint, not line 0");
+    # the buffer now holds other text: no checkpoint is trusted
+    var saved = load8(t + load64(_gmd_cp_at(s, 2)));
+    store8(t + load64(_gmd_cp_at(s, 2)), 33);
+    assert_eq(_gmd_find(t, avail), 0, "a checkpoint over changed text finds no slot");
+    store8(t + load64(_gmd_cp_at(s, 2)), saved);
+    # a reply growing: each re-measure from a settled checkpoint gives the height of the whole walk
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    _hoosh_acc_reset();
+    var off = 0;
+    var chunk = 7001;
+    var wrong = 0;
+    _gfeed_live_n = 0;
+    while (off < n) {
+        var c = chunk;
+        if ((off + c) > n) { c = n - off; }
+        _hoosh_acc_append(t + off, c);
+        off = off + c;
+        var lh = _gfeed_live_md(0, 0, 0, avail);
+        _gmd_off = 1;
+        var full = _gfeed_md(0, 0, 0, avail, hoosh_last_reply());
+        _gmd_off = 0;
+        if (lh != full) { wrong = wrong + 1; }
+    }
+    assert_eq(wrong, 0, "a growing reply measures what the whole walk measures, at every step");
+    var ls = _gmd_find(hoosh_last_reply(), avail);
+    assert(ls != 0, "...through the index");
+    # the next reply in the same buffer starts over: it can agree with the last under every checkpoint and still differ above one
+    _hoosh_acc_reset();
+    _gfeed_live_n = 0;
+    _hoosh_acc_append(t, 40000);
+    _gfeed_live_md(0, 0, 0, avail);
+    _hoosh_acc_reset();
+    var t2 = alloc(60001);
+    memcpy(t2, t, 60000);
+    store8(t2 + 60000, 0);
+    var nl = 0;
+    var ix = 2;
+    while ((ix < 8000) && (nl < 60)) {         # lines joined above the first checkpoint: the height moves, and no checkpoint's bytes do
+        if ((load8(t2 + ix) == 10) && (load8(t2 + ix + 1) != 10) && (load8(t2 + ix - 1) != 10)) { store8(t2 + ix, 10); store8(t2 + ix + 1, 10); nl = nl + 1; }
+        ix = ix + 1;
+    }
+    _hoosh_acc_append(t2, 60000);
+    var lh2 = _gfeed_live_md(0, 0, 0, avail);
+    _gmd_off = 1;
+    var full2 = _gfeed_md(0, 0, 0, avail, hoosh_last_reply());
+    _gmd_off = 0;
+    assert_eq(lh2, full2, "a new reply in the same buffer is measured from its own start");
+    # the delimiter row of a table arrives after its header: the checkpoint on that row is not settled, so a growing reply steps back one
+    var tb = alloc(70000);
+    var o3 = 0;
+    while (o3 < 32704) {
+        var q = 0;
+        while (q < 63) { store8(tb + o3 + q, 121); q = q + 1; }
+        store8(tb + o3 + 63, 10);
+        o3 = o3 + 64;
+    }
+    o3 = _append_cstr(tb, o3, "| a header long enough to pass the checkpoint mark, by some way | bb | cc |\n|---|---");
+    store8(tb + o3, 0);
+    var tail = "|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n\nmore text\n";
+    _hoosh_acc_reset();
+    _gfeed_live_n = 0;
+    _hoosh_acc_append(tb, o3);
+    _gfeed_live_md(0, 0, 0, avail);
+    _hoosh_acc_append(tail, strlen(tail));
+    var lh3 = _gfeed_live_md(0, 0, 0, avail);
+    _gmd_off = 1;
+    var full3 = _gfeed_md(0, 0, 0, avail, hoosh_last_reply());
+    _gmd_off = 0;
+    assert_eq(lh3, full3, "a table whose delimiter came late measures as a table");
+    _hoosh_acc_reset();
+    _gfeed_live_n = 0;
+    return 0;
+}

@@ -589,7 +589,7 @@ fn one_shot_run() {
     var t0 = clock_now_ms();
     # The two facts the greeting names and one-shot, the surface ADR-0022 calls most exposed, had no line for.
     if (config_toolpin_enabled() == 1) {
-        if (config_daimon_url_local() == 1) { emit_err("thoth: this repo's [daimon].url is in force: its tools pin in their own namespace, and your global daimon's pins do not apply\n"); }
+        if (config_daimon_url_local() == 1) { emit_err("thoth: this repo's [daimon].url is in force: its tools pin for this session, in their own namespace, and your global daimon's pins do not apply\n"); }
         if (toolpin_store_loose() == 1) { emit_err("thoth: the tool pin store could be written by others: trust its rows only if you know why; thoth puts 0600 back\n"); }
     }
     # 0.51.0 (F6): a pin store thoth refused at startup makes this run's pins session-scoped — one line on stderr

@@ -38,6 +38,7 @@ include "src/roundlog.cyr"
 include "src/editlog.cyr"  # model edit diff ring (0.31.1)
 include "src/exec.cyr"
 include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from tui (0.30.8); before hoosh/agent poll it
+include "src/netwait.cyr"  # a network call that leaves the surface alive (0.54.0); after intr, before every caller
 include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0)
 include "src/memory.cyr"
@@ -131,6 +132,7 @@ fn main() {
     test_state_reason_row();
     test_state_map_row(); test_dry_map(); test_state_paths_clean(); test_state_history_row(); test_help_strings(); test_history_dropped(); test_recap(); test_recap_drop_shift(); test_recap_fail_report();
     test_git();
+    test_git_child();
     test_save(); test_save_formats();
     test_session_persist();
     test_ui_niceties();
@@ -148,7 +150,7 @@ fn main() {
     test_content_sanitise();
     test_title_sanitise();
     test_sink_sweep_0452();
-    test_vendor_pins(); test_vendor_hazards(); test_vendor_sums(); test_src_globals_apart();   # 0.52.6: runs test_src_globals_once first (thoth's own names), then checks them across the boundary
+    test_vendor_pins(); test_vendor_hazards(); test_vendor_sums(); test_toolchain_sums(); test_src_globals_apart();   # 0.52.6: runs test_src_globals_once first (thoth's own names), then checks them across the boundary
     return assert_summary();
 }
 var _e = main();

@@ -33,7 +33,7 @@ include "src/vendor/darshana.cyr"
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
-# agnosai (2.2.3 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
+# agnosai (2.2.4 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
 # TWO modules, ~530 lines: agnosai's units + output_filter. NOT the orchestration engine — thoth consumes
 # hoosh for inference and daimon for tools, and agnosai's own llm/ layer names thoth's hoosh.cyr as its
 # reference implementation. The profile was published upstream at thoth's request rather than the two
@@ -79,6 +79,7 @@ include "src/roundlog.cyr"
 include "src/editlog.cyr"  # model `edit` diff ring (0.31.1) — records edit changes keyed by (turn,round,call); after sit-read (compute_file_diff), before agent (fed there) + gui (read there)
 include "src/exec.cyr"
 include "src/intr.cyr"    # turn-interrupt substrate (Esc abort); extracted from tui (0.30.8); before hoosh/agent poll it
+include "src/netwait.cyr"  # a network call that leaves the surface alive (0.54.0); after intr, before every caller
 include "src/hoosh.cyr"
 include "src/mpick.cyr"    # model-picker palette state/filter/nav (0.24.0); after hoosh (uses hoosh_catalog_fetch), before tui (wires the modal)
 include "src/memory.cyr"   # project-local .thoth/memory reader — mneme fallback (0.12.0, ADR-0012)
@@ -248,7 +249,7 @@ fn main() {
     # Warm the git producer once so the first status-bar paint / /state reflects the
     # working repo (0.13.0). Interactive-only — one-shot never shows git, so it skips
     # the worktree walk. Absent repo -> the seam reports absent honestly.
-    git_ensure_probed();
+    if (tui_active() == 0) { git_ensure_probed(); }   # 0.54.1: the TUI starts its own, off the first frame
     term_title_set();          # 0.22.3: set the terminal title (thoth - <model>); no-op at PT_PLAIN. Interactive-only (one-shot returned above).
     # T2 rich-TUI when the tier resolves to PT_RICH on a real tty; otherwise the
     # line-mode REPL (the guaranteed fallback — pipes / CI / T0-T1 / no raw mode).
@@ -258,6 +259,7 @@ fn main() {
     if (tui_active() == 1) {
         tui_loop();
         hooks_session_end();
+        if (tui_term_sig() != 0) { return 128 + tui_term_sig(); }   # 0.54.1 (S-11): a signal ended the session
     } else {
         print_banner();
         # 0.27.0: line-mode input history — record submits + persist to [history].file, PARITY with the TUI
@@ -279,4 +281,4 @@ fn main() {
 }
 
 var r = main();
-syscall(SYS_EXIT, r);
+sys_exit_group(r);   # 0.54.0: a stopped network call's worker may still be in a read; a bare exit would leave the process running behind it

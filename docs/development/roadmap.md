@@ -118,7 +118,7 @@ unsure, patch.
 
 | Version | Arc | Gate |
 |---|---|---|
-| 0.54.x | [**The live wait**](#054x--the-live-wait-then-the-audits-remainder), then the audit's remainder | none for the wait; rulings for the last batch |
+| 0.54.x | [**The audit's remainder**](#054x--the-audits-remainder) | rulings: gap-review questions 4–8 |
 | 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | a runner; the floor for rung 3 |
 | 0.56.x | [**F8 — the AGNOS window**](#056x--f8-the-agnos-window) | a stable setu contract, a waitable channel |
 | 0.57.x | [**F9 — untrusted reads through the subagent context**](#057x--f9-untrusted-reads-through-the-subagent-context) | ruling: gap-review question 2 |
@@ -128,48 +128,9 @@ unsure, patch.
 | 0.61.x | [**F13 — ACP server mode**](#061x--f13-acp-server-mode) | none |
 | 0.62.x | [**F14 — OTLP export**](#062x--f14-otlp-export-of-the-audit-trail), then the v1.0 gates | none |
 
-### 0.54.x — The live wait, then the audit's remainder
+### 0.54.x — The audit's remainder
 
-Batch 15 is split by size, so the largest item opens the minor. Its IDs are the
-[2026-11-05 audit](../audit/2026-11-05-audit.md)'s. thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its newest tag.
-
-**0.54.0 — The window stays alive through a network wait** (G-6, M-9). The new capability this minor is named for. Today the window is
-dead during a silent network wait, a streaming turn's first token included: no frames, Esc ignored, the compositor's ping unanswered, and
-a hung gateway blocks the first frame. Measured: Esc at 1.5 s had no effect until the wait ended. It takes a transport that returns between
-reads, for every POST. It also closes the network half of *What a stop cannot reach* below.
-
-**0.54.1 — Repair batch 15: the terminal and the process**
-
-1. **`git_probe` grows the heap on every turn** (P-10, M-3). On a 100k-file repository a session went from 37 MB to 515 MB in ten turns, 48 MB a
-   turn with no ceiling, and each probe holds the main thread for 1.8 s. It is 0.58 s and 166 KB on this tree. sit allocates on the heap that never
-   frees, so the probe needs a forked child or sit on an arena, and the TUI's startup probe moves after the first frame (1.2 s at 100k today). The rest
-   is sit's: see the waiting table.
-2. **SIGTERM leaves the terminal raw** (S-11). A handler or a signalfd in the input loop.
-3. ⛔ **thoth calls darshana's private `_tty_apply_raw_flags`** (`src/intr.cyr:50`) and then sets VMIN and VTIME to 0 for its non-blocking
-   Esc poll. darshana's ADR 0003 freezes only its public surface, so any darshana release may rename or reshape it, and the next
-   `scripts/sync-darshana.sh` would carry that in. The public `tty_raw_nonblock(fd)` exists, restored by `tty_cooked()`. It is not a one-word
-   swap: `intr_arm` keeps a private termios copy so it does not touch darshana's single raw slot, so the move means proving that bracket
-   against the post-turn `tty_raw`, live.
-4. **Ctrl-C in line-mode `/run` reaches thoth** (P-11). SIGINT and SIGQUIT ignored around the wait, with the child's default restored
-   before exec.
-5. **A gateway's error body is dropped on a streaming turn.** A 429 reading `token budget exceeded` shows as "error body not surfaced in stream mode;
-   set [hoosh].stream=false to see it".
-6. **CI and Release run a toolchain nothing here pins** (B-1, B-8). A fresh runner has no `cyrsign`, so `install.sh` trusts a sum from the tarball's own origin, in the job
-   that holds `contents: write`. Pin the SHA-256 of `install.sh` and the tarball in a tree file keyed to the pin, download both, check them, and install with
-   `CYRIUS_INSTALL_TARBALL`, which also closes a truncated `curl | sh`.
-7. **Release rebuilds what CI tested** (P-8). Upload the CI binary and publish that one.
-8. **A repository's daimon rows fill the operator's global pin store** (A-7). They never expire, and 11 runs reached the cap, after which the operator's own new tools lose the
-   between-runs defence. Keep them session-scoped, or give each host a row quota.
-
-**0.54.2 — Repair batch 16: long replies and the composer**
-
-1. **Each window rebuild rescans every line of a long reply** (M-10). A sparse line index. 5.3 ms at 300 KB today.
-2. **The composer has no long-line scroll and its caret is approximate** (G-9).
-3. **The TUI paints a frame in hundreds of syscalls** (M-5). A batched frame; the prototype needed a darshana change, so that release
-   comes first and re-vendors as its own patch.
-4. **Picker rows clip by bytes, mid-character, with no mark** (A-14). Clip at a glyph boundary and draw a mark.
-
-**0.54.3 — Repair batch 17: the rulings.** Each is small once ruled, and a row leaves if the ruling is no.
+Each is small once ruled, and a row leaves if the ruling is no. thoth is on cyrius **6.7.18**, the newest release, with every vendored bundle at its newest tag.
 
 1. **A local `[hoosh].timeout_ms`** (gap-review question 4): `0` disables the stall deadline beside a repository-redirected gateway.
 2. **A local `[log].level`** (question 7): a clone can quieten the operator's session log.
@@ -273,10 +234,10 @@ in t-ron calls into bote.
 | **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.10.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
 | **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.10.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
 | **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
-| **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.3 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
-| **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap (P-10, M-3) | sit 1.13.0 | batch 15 moves what thoth can |
+| **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.4 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
+| **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap | sit 1.13.0 | done: the walk runs in a child, off the main thread, so neither costs thoth more than a repository's own walk |
 | **mneme** | `mneme_create_note` answers "Failed to create note" for a title it already holds, so `/remember` of a fact already saved reads as a failed write | mneme 1.1.4 | the message is true: nothing new was written |
-| **cyrius** | `scripts/install.sh`, which thoth's CI and Release run. A first install verifies no signature, and its sum sidecar can name another file (B-1); it compiles `programs/dlopen-helper.c` from the caller's working directory, and under root installs the result where setuid consumers trust it (B-2); it deletes real `bin` and `lib` directories under `CYRIUS_HOME` (B-3); its Starship snippet prints a repository's bytes raw (B-4); a broken install reports success (B-5); activation is not atomic (B-6); a fetch failure falls through to an unverified clone (B-7); a cut `curl \| sh` exits 0 (B-8); a reinstall can exit 1 (B-9); no network timeouts (B-10). Scripts and repros: [`../audit/2026-11-05-not-verified-pass.md`](../audit/2026-11-05-not-verified-pass.md) | cyrius **6.7.18** | batch 15's pin. thoth selects no libssl, so B-2 does not reach it |
+| **cyrius** | `scripts/install.sh`, which thoth's CI and Release run. A first install verifies no signature, and its sum sidecar can name another file (B-1); it compiles `programs/dlopen-helper.c` from the caller's working directory, and under root installs the result where setuid consumers trust it (B-2); it deletes real `bin` and `lib` directories under `CYRIUS_HOME` (B-3); its Starship snippet prints a repository's bytes raw (B-4); a broken install reports success (B-5); activation is not atomic (B-6); a fetch failure falls through to an unverified clone (B-7); a cut `curl \| sh` exits 0 (B-8); a reinstall can exit 1 (B-9); no network timeouts (B-10). Scripts and repros: [`../audit/2026-11-05-not-verified-pass.md`](../audit/2026-11-05-not-verified-pass.md) | cyrius **6.7.18** | done: `scripts/toolchain-install.sh` runs a checked installer on a checked tarball, and thoth selects no libssl, so B-2 does not reach it. Refresh `scripts/toolchain.sums` at a pin bump |
 | **sakshi** | no mode parameter on its output file | cyrius 6.7.18 | `_log_open_safe` creates the file first |
 | **bayan** | an unterminated array in a config swallows the lines after it | cyrius 6.7.18 | none: that direction fails closed |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body`, `commit_tree_hex` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.13.0's `[lib.read]` still defines `cmd_reset` and leaves four unresolved (the three, and `commit_tree_hex`, all unreachable); bote 3.8.15 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
@@ -299,7 +260,7 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 > owner above) or an honest degradation gated on a primitive thoth does not have. Every entry names
 > where it is scheduled. Recorded here so it is not lost in code comments.
 
-**Scheduled above:** the 0.54.x batches, with the ⛔ darshana call in batch 15; the pointer path being Linux-Wayland only (F8). **Proofs:** the runs behind this table, and how to repeat them, are in [`../guides/verification-pass.md`](../guides/verification-pass.md).
+**Scheduled above:** the pointer path being Linux-Wayland only (F8). **Proofs:** the runs behind this table, and how to repeat them, are in [`../guides/verification-pass.md`](../guides/verification-pass.md).
 
 **Degradations, by design or by the floor:**
 
@@ -308,9 +269,11 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
   fractional scaling) would draw both crisp at the output's density; a feature if it earns a slot, not a repair.
 - **What a stop cannot reach** — Esc stops a command only where a wait loop hands control back. A Windows
   capture is one blocking wait inside `lib/process_win.cyr` (it still ends at its deadline; the lane is closed
-  anyway); line mode's streaming `/run` gives the child the terminal; and a blocking
-  network call — `daimon_invoke`, a non-streaming round, `hoosh_health_probe` — is a socket read with no poll in it,
-  so the window is not pumped during one (bounded by `[hoosh].timeout_ms`). 0.54.0 closes the network half.
+  anyway), and line mode's streaming `/run` gives the child the terminal. A stop walks away from a network call and cannot
+  cancel it: a call stuck before its first byte keeps its worker and socket until `[hoosh].timeout_ms`, and with
+  `0` until thoth exits ([ADR-0023](../adr/0023-the-network-waits-on-a-worker.md)).
+- **`/git` walks the repository on the main heap** — the probe moved to a child and this listing did not: it prints as it goes, so a 100k-file
+  repository costs about 48 MB of heap per `/git`. The operator asks for each one, and every other reader of git state runs in the child.
 - **The TUI prints `session_start`'s report to the primary screen** — main.cyr fires the hook
   (`:242`) before `tui_loop` raises the alt screen (`:244`), so a hook that printed is visible
   only after exit. Harmless; the window shows the same report as a card.

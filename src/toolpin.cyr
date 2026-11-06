@@ -145,7 +145,7 @@ fn toolpin_store_greeting() {
     var st = _tps_state;
     if (st == 8) { return 0; }
     if (_tps_loose == 1) { emit("  "); ui_emit(ROLE_RED, "tool pins: this store could be written by others"); ui_emit(ROLE_FAINT, " — trust its rows only if you know why; thoth puts 0600 back"); oprintln(""); }
-    if (config_daimon_url_local() == 1) { emit("  "); ui_emit(ROLE_RED, "this repo's [daimon].url"); ui_emit(ROLE_FAINT, " — its tools pin in their own namespace; your global daimon's pins do not apply"); oprintln(""); }
+    if (config_daimon_url_local() == 1) { emit("  "); ui_emit(ROLE_RED, "this repo's [daimon].url"); ui_emit(ROLE_FAINT, " — its tools pin for this session, in their own namespace; your global daimon's pins do not apply"); oprintln(""); }
     emit("  ");
     if (st == 1) {
         emit(ui_sgr(ROLE_FAINT)); emit("tool pins: "); emit_clean_line(config_path_display(_tps_path)); emit(" ("); ofmt_int(_tps_loaded); emit(" pinned for this host");
@@ -920,6 +920,10 @@ fn _tps_fail(why) {
 fn toolpin_store_flush() {
     if (_tps_path == 0) { return 0; }
     if (_tps_dirty == 0) { return 0; }
+    # 0.54.1 (A-7): a repository's daimon pins for this session and writes nothing. Its rows landed in the operator's global store
+    # and never expired: 11 runs filled it to TPS_ROWS_MAX, after which the operator's own new tools lost the between-runs
+    # defence. A repository can name a new host every run, so no per-host quota bounds that. `/tools trust` is the operator's own act.
+    if ((config_daimon_url_local() == 1) && (_tps_trusting == 0)) { return 0; }
     if ((_tps_state == 4) || (_tps_state == 6)) { return 0; }                # never written: a symlink, a file not read whole
     if ((_tps_state == 3) || (_tps_state == 5) || (_tps_state == 9)) {
         if (_tps_trusting == 0) { return 0; }                                 # session-scoped this run

@@ -26,14 +26,55 @@ fn exec_signals_init() {
 # (0 - 1) on spawn failure) — honest on every target, no capture-vs-empty
 # ambiguity. Explicit argv (exec_vec form) per the CLAUDE.md "exec_vec, not
 # sys_system" rule: the cmdline is the user's own, authorized this turn.
+#
+# 0.54.1 (P-11): a Ctrl-C in a line-mode /run reached thoth too: the terminal sends it to the whole foreground group, the shell
+# died with the session, and the REPL went with it. On POSIX the wait now ignores SIGINT and SIGQUIT, as a shell does for its
+# foreground job, and the child takes the default back before exec (an ignored signal survives execve). Set before the
+# fork, or a Ctrl-C in the gap ends thoth.
 fn run_shell(cmdline) {
+    #ifndef CYRIUS_TARGET_WIN
+    #ifndef CYRIUS_TARGET_AGNOS
+    var argv[40];
+    store64(&argv, "/bin/sh");
+    store64(&argv + 8, "-c");
+    store64(&argv + 16, cmdline);
+    store64(&argv + 24, 0);
+    var env0[16];
+    store64(&env0, 0);
+    signal_ignore(SIGINT);
+    signal_ignore(SIGQUIT);
+    var ppid = sys_getpid();
+    var pid = sys_fork();
+    if (pid == 0) {
+        _proc_child_guard(ppid);
+        signal_default(SIGINT);
+        signal_default(SIGQUIT);
+        sys_execve("/bin/sh", &argv, &env0);
+        sys_exit(127);
+    }
+    var rc = 0 - 1;
+    if (pid > 0) {
+        var stbuf[4];
+        var reaped = _proc_wait_deadline(pid, &stbuf, proc_timeout_ms());
+        if (reaped == 0) { rc = 0 - 2; }
+        elif (reaped > 0) {
+            var st = load32(&stbuf);
+            if (WIFEXITED(st) == 1) { rc = WEXITSTATUS(st); }
+        }
+    }
+    signal_default(SIGINT);
+    signal_default(SIGQUIT);
+    exec_child_done();   # 0.44.2: the child owned the terminal: let the front end re-assert its keyboard and mouse modes
+    return rc;
+    #endif
+    #endif
     var args = vec_new();
     vec_push(args, "/bin/sh");
     vec_push(args, "-c");
     vec_push(args, cmdline);
-    var rc = exec_vec(args);
-    exec_child_done();   # 0.44.2: the child owned the terminal — let the front end re-assert its modes
-    return rc;
+    var rc2 = exec_vec(args);
+    exec_child_done();
+    return rc2;
 }
 
 # --- the wait-loop poll seam (0.44.2 a tick; 0.52.0 a poll, F7) ---------------------------------------

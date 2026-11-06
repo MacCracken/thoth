@@ -158,3 +158,9 @@ Five sentences above were tighter than the code, and the code now matches them o
 - **Last-writer-wins** covers two sessions writing a first sight, not only two trusting: 39 of 400 simultaneous starts lost one host's rows. A lost pin is a first sight at the next run. There is no lock around a flush.
 
 What a refused store should mean is open: gap-review question 8.
+
+## Addendum (0.54.1): a repository's daimon pins for the session
+
+A local `[daimon].url` no longer writes rows to the store. Its rows landed in the operator's global file and never expired: 11 runs reached `TPS_ROWS_MAX`, after which the operator's own new tools lost the
+between-runs defence (audit A-7). A per-host quota would not bound that, because a repository can name a new host on every run. Its tools still pin in memory, rows already stored still
+apply, and `/tools trust` still writes, because that is the operator's own act.

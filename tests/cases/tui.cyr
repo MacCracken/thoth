@@ -1876,7 +1876,7 @@ fn test_mpick_health() {
         _t_pick_read(path, raw, vis, 4096);
         assert_eq(_t_vis(vis, "  ● claude-x *\n"), 1, "one column short: the rate is dropped, the id and star intact");
         assert_eq(_t_vis(vis, "  ● claude-x *  $3.00/$15.00 per M\n"), 1, "at exactly the width the rate shows");
-        assert_eq(_t_vis(vis, "  ● claud\n"), 1, "a band narrower than the id clips the id (no rate, no star)");
+        assert_eq(_t_vis(vis, "  ● clau…\n"), 1, "a band narrower than the id clips the id, with a mark (no rate, no star)");
     } else { assert(1, "fd 1 not capturable here (stated)"); }
     # 0.52.7: a model the operator has not priced shows the GATEWAY's price when hoosh's catalog published one,
     # marked "(hoosh)" — and the operator's rate still wins where it exists

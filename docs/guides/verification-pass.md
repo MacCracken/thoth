@@ -88,7 +88,7 @@ subprocess.run(['git','-c','user.name=v','-c','user.email=v@example.invalid','co
 
 Drive thoth in it against `scripts/live/stubhoosh.py`, with `scripts/live/ptydrive.py` for the TUI:
 
-- time to the first frame, and a turn's wall time (`git_probe`);
+- time to the first frame, and a turn's wall time (the git walk runs in a child, so neither should see it);
 - `/tree`, the `search` tool and the project map, each of which must finish, stay bounded and name any cut;
 - RSS over ten turns;
 - a long session's save on this disk: 200 turns of 4 KB each. The store holds a bounded history, so per-turn time should stay flat.
