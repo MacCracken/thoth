@@ -7,7 +7,7 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: 0.54.3 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
+> **Status: 0.54.4 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
 > default) / REPL, a native Wayland GUI (`thoth gui`, with the mouse since 0.49.0), and a one-shot/argv
 > front-door with `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
 > switching with a picker that shows each provider's health and rate; jailed project read tools +
@@ -49,8 +49,9 @@ scripts/gui-live.sh down                 # stop it all
 
 `scripts/live/ptydrive.py` drives the TUI in a pty from a step script (`send`, `keys \x1b`, `wait TEXT`,
 `gone sleep`), and `scripts/live/stubhoosh.py` is the scripted gateway both use (`run: <cmd>` makes a `shell` call,
-`think:` streams reasoning, `slow:` a long stream, `md` markdown). Run a throwaway project OUTSIDE any checkout: thoth
+`think:` streams reasoning, `slow:` a long stream, `stall:` a stream held open with only keep-alive comments, `md` markdown). Run a throwaway project OUTSIDE any checkout: thoth
 reads the nearest `.thoth/config.cyml` up the tree, and a checkout's would send the prompts to a real gateway.
+`scripts/live/silentprovider.py` is a provider that goes quiet, for a real hoosh to stand in front of.
 `scripts/live/wlproxy.py` logs a window's Wayland traffic both ways and `scripts/live/wlprobe.py` is a minimal
 control client for an A/B.
 

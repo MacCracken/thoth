@@ -8,7 +8,7 @@ and iterates. Its signature move is being a **model-switching scribe** — it ca
 switch the backing model mid-session, routing a turn to a different LLM, tier,
 or provider when that serves the work.
 
-> **Status: 0.54.3 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
+> **Status: 0.54.4 (pre-1.0).** The full AGNOS spine is wired, the agentic loop closes, and thoth reads *and
 > writes* code. **It also runs on AGNOS** — the `--agnos` ELF loads and executes in ring 3 on the real kernel
 > (`./scripts/agnos-run.sh`). Real and usable daily; SemVer `0.x` while the surface still moves.
 
@@ -61,7 +61,7 @@ request; **`[guard]`** marks untrusted prose (file reads, recalled notes, MCP re
 instructions; **`[hooks]`** gives the operator a blocking `pre_tool` deny a prompt cannot argue with;
 **`[toolpin]`** pins every MCP tool definition on first sight and *withholds* one whose definition changes
 underneath you (CVE-2025-54136) — across runs since 0.51.0, from a store under `~/.thoth` that is refused
-whole if it does not verify (what it cannot catch, a same-uid editor, is said plainly); **`[verify]`** runs your project's own check after a model write and feeds
+whole if it does not verify (what it cannot catch, a same-uid editor, is said plainly), and with no pin of its own thoth takes daimon's; **`[verify]`** runs your project's own check after a model write and feeds
 the result back. `/audit` surfaces the hash-linked libro chain of every gated action and `/audit export`
 writes it out. The honest half: the shell glob filter is a pre-filter, not a sandbox, and the project jail is
 a boundary, not a sandbox — thoth says so where it matters.
@@ -84,7 +84,7 @@ Memory layers the same way. What grants the model authority, bounds its spend or
 (`[shell].allow`, `[project].read_roots`, `[budget]`, `[pricing]`, `[hoosh].reasoning` / `max_tokens`, `[guard]`,
 `[redact]`, `[subagent]`) the local layer may only *tighten*, while `[shell].deny` unions and the authority keys are
 global-only ([ADR-0021](docs/adr/0021-authority-keys-are-global-only.md)) — authority never accumulates from the
-less-trusted side. Multi-target (re-measured at 0.54.3 on the 6.7.18 pin, the AGNOS ring-3 run included): x86_64 Linux ships;
+less-trusted side. Multi-target (re-measured at 0.54.4 on the 6.7.18 pin, the AGNOS ring-3 run included): x86_64 Linux ships;
 aarch64 Linux builds, all five test suites and the desktop window verified under `qemu-aarch64`; **AGNOS builds *and runs*** — the cross-built ELF loads and executes in ring 3 on
 the real kernel under QEMU (`./scripts/agnos-run.sh`); **macOS builds and runs** on Apple Silicon at the line tier
 (no BSD termios peer yet, so no rich TUI; the desktop window is Wayland, on Linux), with its full test suite passing natively; Windows is staged on POSIX-only paths in two vendored bundles (t-ron's signal half and parts of sit), none of which thoth

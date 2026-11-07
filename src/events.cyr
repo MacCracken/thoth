@@ -164,18 +164,31 @@ fn _ev_depth_field(off) {
 # events_tool_pinned / events_tool_withheld (0.51.2): a machine consumer of --events must learn a tool's pin
 # state at the advertisement, where a between-runs swap is caught — not only from the withhold note on stderr.
 # `first_sight` = a pin taken this run; `withheld` = its definition changed since a previous run pinned it
-# (`from_store` 1) or since this session did (0). Byte-identical when --events is off (the `_ev_on` guard).
+# (`from_store` 1), since this session did (0), or since daimon did (2, 0.54.4). Byte-identical when --events is off
+# (the `_ev_on` guard).
 fn events_tool_pinned(name) {
     if (_ev_on == 0) { return 0; }
     var off = _ev_begin("tool_pinned", session_turns());
     off = _ev_str_field(off, "name", name, 256);
     return _ev_end(off);
 }
+# events_tool_pinned_daimon (0.54.4): the pin came from daimon's record, not from a first sight here.
+fn events_tool_pinned_daimon(name, pinned_at) {
+    if (_ev_on == 0) { return 0; }
+    var off = _ev_begin("tool_pinned", session_turns());
+    off = _ev_str_field(off, "name", name, 256);
+    off = _ev_bool_field(off, "from_daimon", 1);
+    if (pinned_at > 0) { off = _ev_int_field(off, "pinned_at", pinned_at); }
+    return _ev_end(off);
+}
 fn events_tool_withheld(name, from_store, pinned_at) {
     if (_ev_on == 0) { return 0; }
     var off = _ev_begin("tool_withheld", session_turns());
     off = _ev_str_field(off, "name", name, 256);
-    off = _ev_bool_field(off, "between_runs", from_store);
+    var between = 0;
+    if (from_store != 0) { between = 1; }
+    off = _ev_bool_field(off, "between_runs", between);
+    if (from_store == 2) { off = _ev_bool_field(off, "from_daimon", 1); }
     if (pinned_at > 0) { off = _ev_int_field(off, "pinned_at", pinned_at); }
     return _ev_end(off);
 }
@@ -215,6 +228,13 @@ fn events_finish_set(fword) { _ev_finish = fword; return 0; }
 var _ev_reply_cut = 0;           # 0.53.2: 1 when thoth kept only part of the reply; passed in the same way
 fn events_reply_cut_set(cut) { _ev_reply_cut = cut; return 0; }
 
+# ev_error_text (0.54.4): the message of an `error` event. ev_fail_text_f, unless thoth itself knows better: a stream it ended on the
+# stall clock read as an unreachable gateway, and a stop it made read as "no completion returned".
+fn ev_error_text(rc, seam_absent, fword) {
+    if ((rc < 0) && (net_stalled() == 1)) { return net_stall_text(); }
+    if ((rc == 0) && (seam_absent == 0) && (agent_stop_why() != 0)) { return agent_stop_why(); }
+    return ev_fail_text_f(rc, seam_absent, fword);
+}
 # events_error: the failure twin of `events_response`. `http` is present ONLY for a real status code
 # (rc > 0) — the same omit-until-present discipline `tokens` follows, since a faked 0 would read as a
 # status a consumer could branch on.
@@ -226,7 +246,8 @@ fn events_reply_cut_set(cut) { _ev_reply_cut = cut; return 0; }
 fn events_error(turn, rc, seam_absent, up_code, up_msg) {
     if (_ev_on == 0) { return 0; }
     var off = _ev_begin("error", turn);
-    off = _ev_str_field(off, "message", ev_fail_text_f(rc, seam_absent, _ev_finish), 1024);
+    off = _ev_str_field(off, "message", ev_error_text(rc, seam_absent, _ev_finish), 1024);
+    if ((rc == 0) && (seam_absent == 0) && (agent_stop_word() != 0)) { off = _ev_str_field(off, "stopped", agent_stop_word(), 32); }
     if ((rc == 0) && (_ev_finish != 0)) { off = _ev_str_field(off, "finish_reason", _ev_finish, 32); }
     if (rc > 0) { off = _ev_int_field(off, "http", rc); }
     if (up_code > 0) { off = _ev_int_field(off, "upstream_http", up_code); }

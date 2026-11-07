@@ -77,7 +77,7 @@ fn budget_report(st) {
         note_emit(" of "); note_emit_int(config_budget_tokens());
         note_println(") — the turn was stopped before spending more");
         note_println("  raise or remove it with [budget].max_tokens; /reload picks it up mid-session");
-        agent_stop_why_set("the session token budget was reached - raise or remove it with [budget].max_tokens");
+        agent_stop_set("budget", "the session token budget was reached - raise or remove it with [budget].max_tokens");
         return 0;
     }
     if (st == BUDGET_COST) {
@@ -90,7 +90,7 @@ fn budget_report(st) {
         note_emit(" of "); note_emit(&sb);
         note_println(") — the turn was stopped before spending more");
         note_println("  raise or remove it with [budget].max_cost_micro; /reload picks it up mid-session");
-        agent_stop_why_set("the session cost budget was reached - raise or remove it with [budget].max_cost_micro");
+        agent_stop_set("budget", "the session cost budget was reached - raise or remove it with [budget].max_cost_micro");
         return 0;
     }
     return 0;

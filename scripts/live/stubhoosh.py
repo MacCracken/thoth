@@ -12,6 +12,7 @@ GET /v1/models (one model: stub-model) and GET /v1/health. The LAST user message
   read: <path>   one `read_file` tool call on <path>; once a result follows it, the reply is "done"
   think: <x>     reasoning_content, then content "answer about <x>"
   slow: <x>      60 short content deltas 0.5 s apart (a stream to stop, or to close the window on)
+  stall: <n>     one content delta, then only `: keep-alive` comments for n seconds: hoosh with a provider gone quiet
   md             a markdown reply (heading, bold, inline code, a list, a fenced block, a table, a quote)
   cut: <x>       content "partial answer about <x>", then finish_reason "length" (the output ceiling)
   thinkcut: <x>  reasoning_content only, then finish_reason "length" with no content (cut while thinking)
@@ -72,6 +73,8 @@ def plan(msgs):
     if "think:" in text:
         x = text.split("think:", 1)[1].strip()
         return "text", "pondering %s: first consider the premise, then weigh it, then conclude." % x, "answer about " + x
+    if "stall:" in text:
+        return "stall", None, text.split("stall:", 1)[1].strip()
     if "slow:" in text:
         return "slow", None, None
     if text.strip() == "md":
@@ -107,6 +110,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         stream = bool(body.get("stream"))
         kind, reasoning, arg = plan(msgs)
         print("POST", self.path, "stream", stream, "msgs", len(msgs), "reply", kind, flush=True)
+        for t in body.get("tools") or []:
+            f = t.get("function", {})
+            print("TOOL", f.get("name"), "|", f.get("description"), flush=True)
         if kind == "slowtool":
             time.sleep(2)
             kind = "tool"
@@ -154,6 +160,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                             "function": {"name": tool_name, "arguments": ""}}]})
                 event({"tool_calls": [{"index": 0, "function": {"arguments": json.dumps(tool_args)}}]})
                 event({}, "tool_calls")
+            elif kind == "stall":
+                event({"role": "assistant", "content": "stalled "})
+                for k in range(int(float(arg) * 2)):
+                    time.sleep(0.5)
+                    send(b": keep-alive\n\n")
+                    self.wfile.flush()
+                event({}, "stop")
             elif kind == "slow":
                 event({"role": "assistant", "content": ""})
                 for k in range(60):
@@ -172,6 +185,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if not kind.startswith("big"):
                         time.sleep(0.02)
                 event({}, finish_word)
+            if (body.get("stream_options") or {}).get("include_usage"):
+                send(b"data: " + json.dumps({"id": "c1", "object": "chat.completion.chunk", "model": "stub-model", "choices": [],
+                                             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}).encode() + b"\n\n")
             send(b"data: [DONE]\n\n")
             if chunked:
                 self.wfile.write(b"0\r\n\r\n")

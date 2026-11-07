@@ -427,6 +427,7 @@ fn _sub_tools_build() {
     toolpin_store_refresh();                                  # 0.52.6 (audit A2): the parent's rule — another session's stored pins compared first
     var tl = agent_format_tools(_sub_tools, dtv);
     toolpin_store_flush();                                    # 0.51.0 (F6): the child's probe pins into the same host-scoped table — persist them too
+    toolpin_daimon_note();
     # 0.52.8 (audit D7): an older pin adopted during the CHILD's probe (its refresh or its flush) withholds the tool — the
     # child's own advertisement is built after the refresh and leaves it out, but the parent's cached one (restored by
     # _sub_exit) still carried its definition for every later turn. It is re-built next turn.

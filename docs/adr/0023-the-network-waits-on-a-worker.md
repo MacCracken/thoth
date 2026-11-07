@@ -54,3 +54,11 @@ lives in `src/netwait.cyr`.
 - **The idle turn alone.** It proves the common case and leaves a hung gateway exactly as dead as before, which is what the audit filed.
 - **A shorter `SO_RCVTIMEO` and a retry.** Native TLS fails a context for good on an expired read, and a record cut off mid-read cannot resume.
 - **thoth's own HTTP client on sandhi's connection API.** A fork of the transport, by another name.
+
+## Addendum (0.54.4): the stall clock
+
+`[hoosh].timeout_ms` reached a stream as sandhi's read deadline, and any byte restarts that. hoosh sends a `: keep-alive` comment through a silent stream every 15 s, so a provider gone quiet behind it never tripped the deadline. Reproduced on real hoosh 2.10.0 with a provider that sends one token and stops: with an 18 s deadline, 0.54.3 was still hung when killed at 42 s, and the one-shot has no Esc.
+
+sandhi never hands a comment to the stream callback, so a clock kept where events pass counts frames, and the idle turn this ADR already uses reads it. The job holds the clock on the worker path, and a small wrapper holds it on the plain path, which now takes idle turns as well. Past the deadline with no frame, the idle turn ends the stream and `net_stalled()` says why, so the turn can say the gateway answered and the provider did not, and the status bar stays up.
+
+Two limits. A gateway sending frames keeps a turn alive however little they carry, so this catches a stalled provider and not a gateway set on holding thoth. And the idle turn needs `fd_wait_ready`, which AGNOS's floor answers with -38, so there a keep-alive still restarts the deadline.

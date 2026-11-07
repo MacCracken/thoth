@@ -388,6 +388,29 @@ fn _state_history_row() {
     ui_emit(ROLE_MUTED, " ([history].file; composer recall persisted across restarts)"); oprintln("");
     return 0;
 }
+# _state_pins_daimon_row (0.54.4): what daimon's record added this session, omitted until daimon says something. A store it refused or
+# cannot keep is named: pins read from it then go no further back than its current run.
+fn _state_pins_daimon_row() {
+    var ds = toolpin_daimon_store_state();
+    var taken = toolpin_taken();
+    var off = toolpin_digest_off();
+    var moved = toolpin_daimon_changed();
+    if ((ds == 0) && (taken == 0) && (off == 0) && (moved == 0)) { return 0; }
+    ui_label("          : "); ui_emit(ROLE_FAINT, "daimon's record ");
+    if (ds == TP_DSTORE_LOADED) { ui_emit(ROLE_FAINT, "loaded"); }
+    elif (ds == TP_DSTORE_NEW) { ui_emit(ROLE_FAINT, "new"); }
+    elif (ds == TP_DSTORE_REJECTED) { ui_emit(ROLE_RED, "REJECTED by daimon"); }
+    elif (ds == TP_DSTORE_UNAVAILABLE) { ui_emit(ROLE_RED, "unavailable"); }
+    if ((ds != 0) && (toolpin_daimon_store_durable() == 0)) { ui_emit(ROLE_FAINT, ", not durable"); }
+    if (taken > 0) {
+        ui_emit(ROLE_FAINT, " · "); ofmt_int(taken); ui_emit(ROLE_FAINT, " taken here");
+        if (toolpin_taken_stored() > 0) { ui_emit(ROLE_FAINT, " ("); ofmt_int(toolpin_taken_stored()); ui_emit(ROLE_FAINT, " from its earlier runs)"); }
+    }
+    if (moved > 0) { ui_emit(ROLE_FAINT, " · "); ofmt_int(moved); ui_emit(ROLE_FAINT, " read as changed there"); }
+    if (off > 0) { emit(" · "); ui_emit(ROLE_RED, ""); ofmt_int(off); ui_emit(ROLE_RED, " with a different digest"); }
+    oprintln("");
+    return 0;
+}
 # _state_pins_row (0.51.0, F6): the tool-pin store — ALWAYS a row (the defence is default-on, so its absence is a
 # fact): the bound path with this host's count, or the reason pins are session-scoped (RED for a store thoth
 # refused), or off. The per-session withheld count rides the row in red when a definition moved.
@@ -423,6 +446,7 @@ fn _state_pins_row() {
     }
     if (toolpin_changed() > 0) { emit(" · "); ui_emit(ROLE_RED, ""); ofmt_int(toolpin_changed()); ui_emit(ROLE_RED, " withheld this session"); }
     oprintln("");
+    _state_pins_daimon_row();
     if ((config_daimon_url_local() == 1) && (st != 8)) {                   # a repo pointed thoth at its own daimon: another namespace, said
         ui_label("          : "); ui_emit(ROLE_RED, "this repo's [daimon].url"); ui_emit(ROLE_FAINT, " — its tools pin for this session, in their own namespace; your global daimon's pins do not apply here"); oprintln("");
     }
@@ -2931,8 +2955,9 @@ fn _task_dispatch(prompt) {
     # which this cannot do: only the loop knows a turn is about to buy another round.
     # Reported and logged by budget_block; the events consumer is told the same way the absent-seam arm
     # above tells it, so a machine consumer never reads an empty stream and a bare exit code.
+    agent_stop_why_clear();                    # 0.54.4: a stop speaks for the turn it ended
     if (budget_block() == 1) {
-        events_error(session_turns(), 0, 1, 0, 0);
+        events_error(session_turns(), 0, 0, 0, 0);   # 0.54.4: was seam_absent = 1, so a budget stop read "no model backend wired"
         return 0;
     }
     # When daimon is wired and tools are on, drive the agentic tool-calling loop

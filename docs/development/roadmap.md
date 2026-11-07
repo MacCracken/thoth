@@ -149,7 +149,7 @@ The GUI's half of "AGNOS canonical", and the last part of thoth that runs only o
 thoth's seam mirrors. Off Linux `thoth gui` refuses before any call (`gwl_win_backend_select`, the seam's one switch); an AGNOS backend slots
 in there, with `gwl_win_wait` as its wait.
 
-**Gate — re-read from the source against setu 0.8.13, aethersafha 0.17.7 and agnos 1.57.17, not met:**
+**Gate — re-read from the source against setu 0.9.1, aethersafha 0.17.7 and agnos 1.57.17, not met:**
 
 - **The contract is not declared stable.** There is no protocol version on the wire (`SETU_HELLO` is defined but aethersafha's handshake
   refuses anything before `CREATE_SURFACE`), and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
@@ -209,19 +209,17 @@ stay **out of scope**. Data fields follow **omit-until-present** ([ADR-0010](../
 
 ### Waiting on upstream or the floor (repairs owned elsewhere — re-vendor as their own patch)
 
-Each row carries the version it was last checked against, and every row was re-read on 2026-11-05. A release re-checks the list; a closed item becomes a
-re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`. t-ron 2.2.4 was tested on bote-core 3.8.9; thoth vendors 3.8.15, and nothing thoth reaches
-in t-ron calls into bote.
+Each row carries the version it was last checked against, and every row was re-read on 2026-11-06. A release re-checks the list; a closed item becomes a
+re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **hoosh** | an `--agnos` lane: nothing in its CI or scripts builds one, so the `hoosh_agnos` on disk is 2.4.11. `cyrius build --agnos src/main.cyr` makes a current one | hoosh **2.10.0** · daimon 2.5.3 | 0.55.0's runner builds its own |
-| **daimon** | pin once for every consumer (ADR-0022's end state): a persisted registry, a `definition_sha256` + `pinned_at` per manifest element in `/v1/mcp/tools`, an audit event when a registration changes a definition, a per-consumer trust verb through t-ron; today `POST /v1/mcp/tools` takes no auth (`src/api_mcp.cyr:11`; daimon's roadmap puts caller auth at 2.6.x) and re-registering an external name overwrites it (`map_set`, `src/mcp.cyr:125`); manifest entries carry name, description and `inputSchema` only (`:133-140`). Filed as daimon's `docs/development/issues/2026-11-06-a-client-that-loses-its-tool-pins-has-nothing-to-repair-from.md`: a client that loses its pins has nothing to repair trust from | daimon **2.5.3** | thoth's own pin store (ADR-0022) stays the client-side floor. When daimon ships this, a refused store rebuilds from daimon's pins instead of counting every tool as a first sight, and thoth compares its own hash to the manifest's (a mismatch = the two canonicalise differently, announced) |
+| **hoosh** | an `--agnos` lane: nothing in its CI or scripts builds one, so the `hoosh_agnos` on disk is 2.4.11. `cyrius build --agnos src/main.cyr` makes a current one | hoosh **2.10.0** · daimon 2.5.5 | 0.55.0's runner builds its own |
 | **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:543`) and a plain `{role,content}` passes through verbatim, so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.10.0** | none yet — thoth sends text only |
 | **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.10.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
 | **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.10.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
 | **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
-| **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.4 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
+| **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.5 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
 | **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap | sit 1.13.0 | done: the walk runs in a child, off the main thread, so neither costs thoth more than a repository's own walk |
 | **mneme** | `mneme_create_note` answers "Failed to create note" for a title it already holds, so `/remember` of a fact already saved reads as a failed write | mneme 1.1.4 | the message is true: nothing new was written |
 | **cyrius** | `scripts/install.sh`, which thoth's CI and Release run. A first install verifies no signature, and its sum sidecar can name another file (B-1); it compiles `programs/dlopen-helper.c` from the caller's working directory, and under root installs the result where setuid consumers trust it (B-2); it deletes real `bin` and `lib` directories under `CYRIUS_HOME` (B-3); its Starship snippet prints a repository's bytes raw (B-4); a broken install reports success (B-5); activation is not atomic (B-6); a fetch failure falls through to an unverified clone (B-7); a cut `curl \| sh` exits 0 (B-8); a reinstall can exit 1 (B-9); no network timeouts (B-10). Scripts and repros: [`../audit/2026-11-05-not-verified-pass.md`](../audit/2026-11-05-not-verified-pass.md) | cyrius **6.7.18** | done: `scripts/toolchain-install.sh` runs a checked installer on a checked tarball, and thoth selects no libssl, so B-2 does not reach it. Refresh `scripts/toolchain.sums` at a pin bump |
@@ -229,7 +227,7 @@ in t-ron calls into bote.
 | **bayan** | an unterminated array in a config swallows the lines after it | cyrius 6.7.18 | none: that direction fails closed |
 | **sit + bote profiles** | the sit `[lib.read]` carve (drops the `cmd_reset` duplicate and the `undefined function` warnings — `load_signing_seed`, `sign_commit_body`, `verify_commit_body`, `commit_tree_hex` — every lane prints; expected output, not a regression) and a bote `[lib.jsonx]` micro-profile (233 fns → 7) — warning hygiene only | neither exists upstream: sit 1.13.0's `[lib.read]` still defines `cmd_reset` and leaves four unresolved (the three, and `commit_tree_hex`, all unreachable); bote 3.8.15 has `[lib]` and `[lib.core]` only | `sync-*.sh` re-vendor when they do |
 | **darshana** | a BSD termios peer → the T2 TUI on macOS (`src/termios.cyr:80` keeps macOS out of scope; thoth's `term_raw` returns -1 there and the line tier is the degradation) | darshana **1.7.0** (vendored 1.7.0) | `src/term.cyr`'s macOS branch collapses into the forwarder when it lands |
-| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.4** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. With those names defined a PE ran streaming and blocking turns, `read_file` and a `cmd.exe` capture with its deadline on Windows 11. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and the jail, which does not hold there: `..\x`, `sub\..\..\x`, `C:\x`, `C:/x`, `\\?\C:\x` and `\\127.0.0.1\C$\x` all read outside the project, and `CON` hangs `read_file` |
+| **t-ron / sit** | the Windows lane's blockers, every one in a vendored bundle and none reached by a thoth call: t-ron's `sighup_init` (`SIGHUP`, `SIG_BLOCK`, `SIG_SETMASK`), and POSIX-only paths sit 1.13.0 does not gate (`SYS_GETEUID`, `SYS_FCHMOD`, `SYS_GETCWD`, `O_CLOEXEC`, `O_NONBLOCK`, `sys_fstat`). Through sit 1.7.0 only t-ron's first two stood in the way, and a full PE linked with them defined | t-ron **2.2.5** · sit **1.13.0** | `scripts/build.sh` names them as `VENDOR_GAP`; `TTY_SIGMASK_WINCH` stays off every list as the tripwire. With those names defined a PE ran streaming and blocking turns, `read_file` and a `cmd.exe` capture with its deadline on Windows 11. Before anything ships on PE: a capture that carries an environment block (the PE capture inherits, so `[hooks]` reports "could not run" and a `pre_tool` denies; the floor's `_win_create_process` takes a block, `src/exec.cyr` passes 0), and the jail, which does not hold there: `..\x`, `sub\..\..\x`, `C:\x`, `C:/x`, `\\?\C:\x` and `\\127.0.0.1\C$\x` all read outside the project, and `CON` hangs `read_file` |
 | **cyrius (floor)** | `lib/process_win.cyr:354`: `cmd.exe` is found by a search that takes in the cwd, so a planted one would run. The Windows lane is closed by the row above | cyrius 6.7.18 | none until the lane opens |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:610` and AGNOS `syscalls_x86_64_agnos.cyr:1048`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.18** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
@@ -249,18 +247,14 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 
 **Scheduled above:** the pointer path being Linux-Wayland only (F8). **Proofs:** the runs behind this table, and how to repeat them, are in [`../guides/verification-pass.md`](../guides/verification-pass.md).
 
-**⛔ For the next repair batch:** a budget stop in one-shot `--json` prints no object. The stop is named on stderr, stdout is empty and the exit is 1, so a script reading the
-JSON gets nothing to parse. The cost ceiling firing out of the box since 0.54.3 makes this easier to reach.
-
-**⛔ Also for that batch:** a provider that stalls behind hoosh may never trip `[hoosh].timeout_ms`. hoosh sends an SSE `: keep-alive` comment through a silent stream every 15 s, and the deadline is per read, so
-the comments restart it. Seen on 2026-11-06: a claude-haiku-5-5 stream sat silent past 300 s until the run was killed. The cause is read from hoosh's source, not reproduced. A one-shot has no Esc, so a stall detector should
-count data frames, not bytes.
-
 **Degradations, by design or by the floor:**
 
 - **The window renders at buffer scale 1** — on a scaled output the compositor upscales it, so at scale 2 (Hyprland,
   verified live) the text and the 12×19 arrow are soft rather than small. `wl_surface.set_buffer_scale` (or
   fractional scaling) would draw both crisp at the output's density; a feature if it earns a slot, not a repair.
+- **The stall deadline needs a poll** — `[hoosh].timeout_ms` counts a stream's frames at sandhi's idle turn, and AGNOS has no `fd_wait_ready`, so there a keep-alive
+  comment still restarts it and hoosh's own 300 s ends the wait. A stall drops a partial reply, as any stream failure does. sandhi measures a stream's read deadline from
+  the last read, so a callback slower than the deadline (a line REPL's terminal paused that long) ends the stream with a timeout; the TUI and the window have had that since 0.54.0.
 - **What a stop cannot reach** — Esc stops a command only where a wait loop hands control back. A Windows
   capture is one blocking wait inside `lib/process_win.cyr` (it still ends at its deadline; the lane is closed
   anyway), and line mode's streaming `/run` gives the child the terminal. A stop walks away from a network call and cannot
@@ -289,7 +283,7 @@ count data frames, not bytes.
   map (`dir_list_into` errors past its caps, never a short read); the dirs-first order probes every
   child (the `d_type` floor row); every agentic round re-sends the map's bytes (the same bytes each
   round, which is what prefix caching wants).
-- **Tool pins** — the ceiling is a same-uid editor or a deleted store (stated in ADR-0022 and the
+- **Tool pins** — the ceiling is a same-uid editor, or a deleted store where daimon has no pin to take (stated in ADR-0022 and the
   config example); two sessions writing at once are last-writer-wins, whether trusting or pinning a
   first sight; schema key order is part of the hash (a reordering server reads as changed — withheld, never
   allowed; canonicalise if a real one appears); the mode claim holds on POSIX only (AGNOS's create

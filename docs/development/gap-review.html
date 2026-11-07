@@ -305,6 +305,10 @@
       <div class="rec-head"><span class="rec-id">08</span><h3>MCP 2026-07-28 conformance</h3><span class="chip c-conflict">spine</span></div>
       <p>Vendored bote 3.8.15 serves 2026-07-28, the stateless revision, alongside the older ones; <code>initialize</code> still negotiates 2025-11-25 because the new revision has no <code>initialize</code>. thoth&rsquo;s t-ron path does not reach any of it. What is left is daimon&rsquo;s, as the host thoth actually speaks to.</p>
     </div>
+    <div class="rec" style="--tier: var(--lapis)">
+      <div class="rec-head"><span class="rec-id">09</span><h3><code>/tools trust</code> through daimon&rsquo;s per-consumer accept</h3></div>
+      <p>daimon 2.5.5 records an acceptance per consumer, gated through t-ron, without moving its shared pin. thoth&rsquo;s <code>/tools trust</code> stays local, so after an upgrade the operator accepted here, daimon keeps reading <code>changed</code> and <code>/tools</code> says so. Taking the accept means holding a token from <code>daimon consumer add</code>, the first secret thoth would keep (ADR-0022 says it has none), and a new key, so it is a minor and not a patch. Nothing is unsafe in the meantime: the local pin is the check either way.</p>
+    </div>
 
     <h2 id="declined"><span class="num">Recorded</span>Declined, with reasons</h2>
     <p class="lede">Listed so each decision reads as deliberate rather than as an oversight.</p>
@@ -377,7 +381,7 @@
       <div class="rec-head"><span class="rec-id">Q3</span><h3>Should thoth drive sit&rsquo;s write surface at all?</h3></div>
       <p>Gap&nbsp;7 &mdash; or does the read-only git producer stay the boundary?</p>
     </div>
-    <p>Ruled 2026-11-06, not questions: a repository may only shorten <code>[hoosh].timeout_ms</code> and only add detail to <code>[log].level</code>; the project map is a user message; the tally falls back to the gateway&rsquo;s figure, only from a gateway the operator chose. All four shipped at 0.54.3. A pin store thoth refuses stays first sight with a red line, because an agent without its tools has lost the thing it is for. The repair is filed with daimon and sits on the roadmap&rsquo;s waiting table.</p>
+    <p>Ruled 2026-11-06, not questions: a repository may only shorten <code>[hoosh].timeout_ms</code> and only add detail to <code>[log].level</code>; the project map is a user message; the tally falls back to the gateway&rsquo;s figure, only from a gateway the operator chose. All four shipped at 0.54.3. A pin store thoth refuses stays first sight with a red line, because an agent without its tools has lost the thing it is for. The repair shipped in daimon 2.5.4, and at 0.54.4 such a store takes daimon&rsquo;s pins, so a definition daimon reads as changed is withheld with no local pin.</p>
     <p>Residual recorded at 0.52.6, not a question: the picker folds provider names clipped to 31 bytes and matched ignoring case into one slot, so two kinds sharing that prefix would share a health row (audit E11); no gateway in use names kinds that long.</p>
 
     <footer>

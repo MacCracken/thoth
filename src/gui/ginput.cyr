@@ -203,6 +203,7 @@ fn gturn_settle() {
         if (intr_pending() == 1) { gturn_stop(); }
         elif (shortk != 0) { gturn_note_set(shortk, hoosh_finish_sentence()); }
         elif (hoosh_resp_bad() == 1) { gturn_note_set(1, hoosh_resp_bad_text()); }
+        elif (net_stalled() == 1) { gturn_note_set(1, net_stall_text()); }
         elif (agent_stop_why() != 0) { gturn_note_set(1, agent_stop_why()); }   # 0.53.3 (W-8): a budget or a full working set, not "is hoosh reachable?"
         else { gturn_fail(); }
     } elif ((shortk == 2) || (hoosh_reply_cut() == 1)) { gturn_note_set(3, hoosh_finish_sentence()); }

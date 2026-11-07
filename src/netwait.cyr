@@ -19,6 +19,14 @@
 #
 # Which thread may touch what is the invariant here: _net_on_event and _net_on_idle run on the worker and touch only the
 # job. Everything else in this file runs on the main thread.
+#
+# A STREAM'S STALL CLOCK (0.54.4). `[hoosh].timeout_ms` reached a stream as sandhi's read deadline, and any byte restarts that. hoosh
+# sends a `: keep-alive` comment through a silent stream every 15 s, so a provider that went quiet behind it never tripped the deadline
+# and a one-shot sat until hoosh gave up at 300 s. A comment never reaches a stream callback, so the clock here counts the frames that
+# do: past the deadline with none, the stream is ended and net_stalled() says why. Each path keeps its own clock, the job on a worker
+# and the module on the plain path, and both are read at sandhi's idle turn. Two limits are real. It catches a provider that stalled,
+# not a gateway set on holding thoth: anything sending frames keeps a turn alive. And the idle turn needs a poll, so AGNOS's floor has
+# neither: there a keep-alive still restarts the deadline, and the 300 s at hoosh's end is what ends the wait.
 
 var NET_TICK_MS = 50;              # how long a wait goes without pumping the surface
 
@@ -51,10 +59,14 @@ var NJ_WAKE_R = 104;
 var NJ_WAKE_W = 112;
 var NJ_ACK_R = 120;
 var NJ_ACK_W = 128;
-var NJ_SIZE = 136;
+var NJ_FRAME = 136;                # when the last frame arrived; the worker's alone
+var NJ_READ = 144;                 # the stream's read deadline, 0 for none
+var NJ_STALL = 152;                # the worker ended the stream on the stall clock; read once the job is DONE
+var NJ_SIZE = 160;
 
 var _net_poll = 0;                 # the surface's wait poll (the contract of exec's: it returns intr_seq); 0 = plain calls
 var _net_stopped = 0;              # 1 when this thread's last call was left on a stop
+var _net_stalled = 0;              # 1 when this thread's last stream was ended on the stall clock
 var _net_idle = 0;                 # one job kept for the next call, with its pipes
 var _net_do = 0;                   # test seam: runs on the worker in place of the sandhi call
 var NET_SPARE_N = 4;
@@ -64,7 +76,16 @@ fn net_poll_set(fp) { _net_poll = fp; git_wait_poll_set(fp); return 0; }   # 0.5
 fn net_poll_bound() { if (_net_poll != 0) { return 1; } return 0; }
 fn net_poll_now() { if (_net_poll != 0) { return fncall0(_net_poll); } return 0; }
 fn net_stopped() { return _net_stopped; }
-fn net_stopped_clear() { _net_stopped = 0; return 0; }
+fn net_stopped_clear() { _net_stopped = 0; _net_stalled = 0; return 0; }
+fn net_stalled() { return _net_stalled; }
+fn net_stall_clear() { _net_stalled = 0; return 0; }
+fn net_stall_text() { return "the gateway held the stream open but the model sent nothing within [hoosh].timeout_ms - the provider has stalled; raise that key if the model is only slow"; }
+# _net_stall_due: 1 when a stream with this read deadline has gone too long without a frame. No deadline means no stall.
+fn _net_stall_due(last, now, ms) {
+    if (ms <= 0) { return 0; }
+    if ((now - last) >= ms) { return 1; }
+    return 0;
+}
 fn net_do_set(fp) { _net_do = fp; return 0; }
 
 # net_arena(initial): an arena for a call site's slot: one a left job gave back, or a new one.
@@ -150,9 +171,10 @@ fn _net_copy(a, src, n) {
     return d;
 }
 
-# _net_stream_opts(a, opts): the caller's options plus the idle turn. It is what lets a left stream end within a tick: the
-# worker is otherwise in a read that only the next byte or the deadline ends. Only the fields the stream reads are copied.
-fn _net_stream_opts(a, opts) {
+# _net_stream_opts(a, opts, idle): the caller's options plus the idle turn. It is what lets a left stream end within a tick (the
+# worker is otherwise in a read that only the next byte or the deadline ends) and what reads the stall clock. Only the fields the
+# stream reads are copied.
+fn _net_stream_opts(a, opts, idle) {
     var o = sandhi_http_options_new_a(a);
     if (o == 0) { return 0; }
     sandhi_http_options_read_ms(o, sandhi_http_options_get_read_ms(opts));
@@ -162,7 +184,7 @@ fn _net_stream_opts(a, opts) {
     sandhi_http_options_max_response_bytes(o, sandhi_http_options_bytes(opts));
     sandhi_http_options_tls_policy(o, sandhi_http_options_get_tls_policy(opts));
     sandhi_http_options_idle_ms(o, NET_TICK_MS);
-    sandhi_http_options_idle_cb(o, &_net_on_idle);
+    sandhi_http_options_idle_cb(o, idle);
     return o;
 }
 
@@ -175,6 +197,7 @@ fn _net_poke(fd, b) {
 # _net_on_event(j, ev): the worker's stream callback. Hands the event over, parks until this thread has run the caller's
 # callback, and passes its answer back to sandhi. A left job answers 0, which ends the stream.
 fn _net_on_event(j, ev) {
+    store64(j + NJ_FRAME, clock_now_ms());
     store64(j + NJ_EV, ev);
     if (atomic_cas(j + NJ_STATE, NET_RUN, NET_EVENT) == 0) { return 0; }
     _net_poke(load64(j + NJ_WAKE_W), NET_POKE_EVENT);
@@ -188,7 +211,23 @@ fn _net_on_event(j, ev) {
 # _net_on_idle(j, silent_ms): the worker's idle turn. 0 ends the stream, as a 0 from the event callback does.
 fn _net_on_idle(j, silent_ms) {
     if (atomic_load(j + NJ_STATE) == NET_LEFT) { return 0; }
+    if (_net_stall_due(load64(j + NJ_FRAME), clock_now_ms(), load64(j + NJ_READ)) == 1) { store64(j + NJ_STALL, 1); return 0; }
     return 1;
+}
+
+# The plain path's half of the stall clock. It runs on the calling thread, one stream at a time.
+var _net_pl_cb = 0;
+var _net_pl_ctx = 0;
+var _net_pl_frame = 0;
+var _net_pl_read = 0;
+fn _net_plain_event(unused, ev) {
+    _net_pl_frame = clock_now_ms();
+    return fncall2(_net_pl_cb, _net_pl_ctx, ev);
+}
+fn _net_plain_idle(unused, silent_ms) {
+    if (_net_stall_due(_net_pl_frame, clock_now_ms(), _net_pl_read) == 0) { return 1; }
+    _net_stalled = 1;
+    return 0;
 }
 
 fn _net_call(j) {
@@ -232,7 +271,7 @@ fn _net_start(kind, a, url, h, body, len, cb, ctx, opts) {
     var b = 0;
     if (kind != NET_GET) { b = _net_copy(a, body, len); }
     var o = opts;
-    if (kind == NET_STREAM) { o = _net_stream_opts(a, opts); }
+    if (kind == NET_STREAM) { o = _net_stream_opts(a, opts, &_net_on_idle); }
     if ((u == 0) || ((kind != NET_GET) && (b == 0)) || ((kind == NET_STREAM) && (o == 0))) { _net_job_put(j); return 0; }
     store64(j + NJ_KIND, kind);
     store64(j + NJ_ARENA, a);
@@ -244,6 +283,9 @@ fn _net_start(kind, a, url, h, body, len, cb, ctx, opts) {
     store64(j + NJ_CB, cb);
     store64(j + NJ_CTX, ctx);
     store64(j + NJ_RES, 0);
+    store64(j + NJ_FRAME, clock_now_ms());
+    store64(j + NJ_READ, sandhi_http_options_get_read_ms(opts));
+    store64(j + NJ_STALL, 0);
     atomic_store(j + NJ_STATE, NET_RUN);
     if (thread_create_detached(&_net_worker, j) == 0) { _net_job_put(j); return 0; }
     return j;
@@ -261,6 +303,7 @@ fn _net_take(j, saw_done) {
         if (load8(&c) == NET_POKE_DONE) { saw_done = 1; }
     }
     var r = load64(j + NJ_RES);
+    _net_stalled = load64(j + NJ_STALL);
     _net_job_put(j);
     return r;
 }
@@ -340,11 +383,20 @@ fn net_post(slot, url, h, body, len, opts) {
 # left stream's buffers need an owner.
 fn net_stream(slot, url, h, body, len, cb, ctx, opts) {
     _net_stopped = 0;
+    _net_stalled = 0;
     var a = load64(slot);
     var j = 0;
     if (_net_poll != 0) { j = _net_start(NET_STREAM, a, url, h, body, len, cb, ctx, opts); }
     if (j != 0) { return _net_wait(j, slot); }
-    return sandhi_http_stream_opts_a(a, url, "POST", h, body, len, cb, ctx, opts);
+    var ms = sandhi_http_options_get_read_ms(opts);
+    var o = 0;
+    if (ms > 0) { o = _net_stream_opts(a, opts, &_net_plain_idle); }
+    if (o == 0) { return sandhi_http_stream_opts_a(a, url, "POST", h, body, len, cb, ctx, opts); }
+    _net_pl_cb = cb;
+    _net_pl_ctx = ctx;
+    _net_pl_read = ms;
+    _net_pl_frame = clock_now_ms();
+    return sandhi_http_stream_opts_a(a, url, "POST", h, body, len, &_net_plain_event, 0, o);
 }
 
 # --- a job nobody waits on (M-9): a GET on a worker while the surface runs its own loop ---------------------------------------

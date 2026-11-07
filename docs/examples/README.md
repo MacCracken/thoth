@@ -82,7 +82,9 @@ source <(thoth --completion bash)                          # tab-complete thoth'
 ```
 
 The `--json` envelope is `{response, model, turns, tokens?, cost?, elapsed_ms}` — token/cost
-fields appear only once the gateway reports usage (omit-until-present), never faked.
+fields appear only once the gateway reports usage (omit-until-present), never faked. A turn thoth
+stopped itself prints the same object with an empty `response`, plus `stopped` (`budget`, `iterations`
+or `work_set`) and `stopped_why`, and still exits 1. Any other failure prints nothing to stdout.
 
 ## 4b. Capturing a session that crashes, hangs, or is killed
 

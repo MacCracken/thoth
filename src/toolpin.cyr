@@ -59,6 +59,19 @@
 #
 # Hashing is sigil's SHA-256 (already linked via the vendored bundle), NOT a cheap non-cryptographic hash.
 # The attacker CHOOSES the replacement text, so a hash they can find a collision for is no control at all.
+#
+# DAIMON'S WORD (0.54.4, ADR-0022's addendum). daimon 2.5.4 pins too, and keeps its pin through a restart: each manifest entry carries
+# `definition_sha256`, and `pinned_sha256` + `pinned_at` + `pin_from_store` for the first definition it saw. Used like this:
+#   * thoth's digest is compared with `definition_sha256` on every probe. A mismatch means the two read different bytes, so nothing
+#     else daimon says about that tool can be compared. It is announced, and the tool stays under thoth's own pin or first sight.
+#   * With NO local pin (a refused store, a deleted one, a new machine) the pin is taken from daimon's record. That was the hole: every
+#     tool a first sight, so a swap made while thoth had no record reached the model. A definition daimon reads as changed now takes
+#     the same CHANGED path as any other, and is withheld. One that matches passes, and the pin is stored like a first sight.
+#   * A LOCAL PIN WINS. daimon's pin is not moved by a client's `/tools trust`, so it stays `changed` after a legitimate upgrade the
+#     operator accepted here, and thoth's own pins are the check on a swap by daimon itself. `/tools` shows the disagreement.
+#   * `/tools trust` drops a pin and the next probe re-pins, so a trusted name skips daimon's word at that probe, or the trust undoes itself.
+# A daimon older than 2.5.4 sends none of this, and everything here behaves as it did. The per-consumer accept (2.5.5) needs a token
+# thoth does not hold, so it is not used: an operator's trust stays local.
 
 var TOOLPIN_MAX = 1024;            # pins in the table — live first sights AND a store's rows for this host (0.51.0: was 128; stored rows are only ever added, so they must not crowd out a live registry); past it the rest is advertised UNPINNED, and said
 var TOOLPIN_NAME_CAP = 128;
@@ -73,7 +86,11 @@ var _tp_changed = 0;               # tools withheld this probe because their def
 var _tp_withheld = 0;              # TOOLPIN_MAX bytes, parallel to _tp_names: 1 = this tool is withheld
 var _tp_overflow = 0;              # 1 if the registry exceeded TOOLPIN_MAX
 var _tp_pinned_at = 0;             # 0.51.0: TOOLPIN_MAX i64 slots (8 B each), parallel to _tp_names: epoch secs the pin was taken (0 = unknown)
-var _tp_from_store = 0;            # 0.51.0: TOOLPIN_MAX bytes, parallel to _tp_names: 1 = the pin was loaded from the store (a previous run's)
+var _tp_from_store = 0;            # 0.51.0: TOOLPIN_MAX bytes, parallel to _tp_names: 1 = the pin was loaded from the store (a previous run's), 2 = taken from daimon's record (0.54.4)
+var _tp_word = 0;                  # 0.54.4: TOOLPIN_MAX bytes, parallel to _tp_names: what daimon said at the last probe (TP_WORD_*)
+var TP_WORD_NONE = 0;              # nothing to say, or it agrees
+var TP_WORD_DIGEST = 1;            # its digest of this definition is not thoth's
+var TP_WORD_CHANGED = 2;           # it reads this definition as changed from its own pin
 
 fn toolpin_count() { return _tp_n; }
 fn toolpin_changed() { return _tp_changed; }
@@ -106,7 +123,7 @@ fn toolpin_withheld(name) {
 fn toolpin_withheld_text(name) {
     if (_tp_unpinnable(name) != 0) { return "(tool withheld: thoth cannot pin its definition — its name is empty, over 127 bytes, or holds a control byte)"; }
     if (_tp_unpin_has(name) == 1) { return "(tool withheld: its definition is over 32 KB, so thoth cannot pin it)"; }
-    return "(tool definition changed this session; withheld — `/tools trust` to accept and re-pin)";
+    return "(tool definition changed since it was pinned; withheld — `/tools trust` to accept and re-pin)";
 }
 # _tp_unpinnable (0.52.6): why `name` cannot be pinned, or 0 when it can — empty, TOOLPIN_NAME_CAP bytes or more (the
 # table's slot), or holding a C0 / DEL byte (the store's row format cannot carry it: a pin that could not persist left
@@ -118,7 +135,7 @@ fn _tp_unpinnable(name) {
     if (_tps_name_storable(name) == 0) { return "its name holds a control byte"; }
     return 0;
 }
-fn toolpin_reset() { _tp_n = 0; _tp_changed = 0; _tp_overflow = 0; return 0; }
+fn toolpin_reset() { _tp_n = 0; _tp_changed = 0; _tp_overflow = 0; _tp_word_reset(); return 0; }
 # toolpin_pinned (0.51.0): 1 when `name` has a pin in the table (this session's or the store's).
 fn toolpin_pinned(name) {
     if (name == 0) { return 0; }
@@ -176,12 +193,14 @@ fn _tp_bufs() {
     if (_tp_withheld == 0) { _tp_withheld = alloc(TOOLPIN_MAX); }
     if (_tp_pinned_at == 0) { _tp_pinned_at = alloc(TOOLPIN_MAX * 8); }
     if (_tp_from_store == 0) { _tp_from_store = alloc(TOOLPIN_MAX); }
+    if (_tp_word == 0) { _tp_word = alloc(TOOLPIN_MAX); }
     if (_tp_names == 0) { return 0; }
     if (_tp_hashes == 0) { return 0; }
     if (_tp_blob == 0) { return 0; }
     if (_tp_withheld == 0) { return 0; }
     if (_tp_pinned_at == 0) { return 0; }
     if (_tp_from_store == 0) { return 0; }
+    if (_tp_word == 0) { return 0; }
     return 1;
 }
 # _tp_add (0.51.0): append a pin row to the table — the one writer of _tp_names/_tp_hashes and their parallels
@@ -199,6 +218,7 @@ fn _tp_add(name, h, at, from_store) {
     store8(_tp_withheld + _tp_n, 0);
     store64(_tp_pinned_at + _tp_n * 8, at);
     store8(_tp_from_store + _tp_n, from_store);
+    store8(_tp_word + _tp_n, TP_WORD_NONE);
     _tp_n = _tp_n + 1;
     return _tp_n - 1;
 }
@@ -244,6 +264,11 @@ fn _tp_digest(name, desc, schema) {
 # and one the store cannot carry (a C0 / DEL byte) took the same early exit. Now each is withheld and announced; a
 # PINNED tool whose definition can no longer be hashed is marked withheld, so the dispatcher refuses it too.
 fn toolpin_check(name, desc, schema) {
+    var vdef = _tp_view_def;                                  # taken first: a word is for one tool, whichever way this returns
+    var vpin = _tp_view_pin;
+    var vat = _tp_view_at;
+    var vstored = _tp_view_stored;
+    _tp_view_clear();
     if (config_toolpin_enabled() == 0) { return 1; }
     if (_tp_bufs() == 0) { return 1; }
     var why = _tp_unpinnable(name);
@@ -251,6 +276,9 @@ fn toolpin_check(name, desc, schema) {
     if (why == 0) { h = _tp_digest(name, desc, schema); if (h == 0) { why = "its definition is over 32 KB"; } }
     if (why != 0) { return _tp_refuse_unpinnable(name, why); }
     _tp_unpin_drop(name);                                     # 0.52.8 (D4): pinnable now — the table's own verdict governs from here
+    var word = TP_WORD_NONE;
+    if ((vdef != 0) && (streq(vdef, h) == 0)) { word = TP_WORD_DIGEST; vpin = 0; }   # read as different bytes: its pin compares with nothing here
+    elif ((vpin != 0) && (streq(vpin, h) == 0)) { word = TP_WORD_CHANGED; }
     var idx = _tp_find(name);
     if (idx < 0) {
         # TRUST ON FIRST USE. Silent by design: a first sighting has nothing to compare against.
@@ -262,16 +290,11 @@ fn toolpin_check(name, desc, schema) {
             }
             return 1;                                        # honest: unpinned, and said so
         }
-        _tp_add(name, h, clock_epoch_secs(), 0);
-        # 0.51.0: a new pin is a store change (flushed after the probe by the two probe sites); logged only when a
-        # store is bound so the unbound path's log stays byte-identical to 0.50.x
-        if (_tps_bound() == 1) {
-            _tps_dirty = 1;
-            log_begin("toolpin"); log_kv_str("tool", name); log_kv_str("result", "pinned_first_sight"); log_commit(SK_INFO);
-        }
-        events_tool_pinned(name);              # 0.51.2: --events (no-op when off)
-        return 1;
+        idx = _tp_first_sight(name, h, vpin, vat, vstored);
+        store8(_tp_word + idx, word);
+        if (word != TP_WORD_CHANGED) { return 1; }            # a pin of daimon's that matches, or a first sight here
     }
+    store8(_tp_word + idx, word);
     if (streq(_tp_hashes + idx * TOOLPIN_HASH_CAP, h) == 1) { store8(_tp_withheld + idx, 0); return 1; }   # unchanged — stay quiet, and lift any prior withhold
 
     if (load8(_tp_withheld + idx) == 1) { return 0; }     # already withheld and named: the memory channel compares before the tool list does
@@ -286,22 +309,184 @@ fn toolpin_check(name, desc, schema) {
     note_emit_label(name);                      # 0.45.2: the MCP server's own name for its tool — the label policy
     # 0.51.0: a pin from the STORE is a previous run's — the operator must be able to tell a between-runs swap
     # (the store's whole point) from an in-session one
-    if (load8(_tp_from_store + idx) == 1) {
+    var pin_src = load8(_tp_from_store + idx);
+    if (pin_src == 1) {
         var when = load64(_tp_pinned_at + idx * 8);
         if (when > 0) {
             var db[24];
             _tps_date_into(&db, when);
             note_emit(" — its MCP definition CHANGED since it was pinned on "); note_emit(&db); note_println(" (a previous run).");
         } else { note_println(" — its MCP definition CHANGED since a previous run pinned it."); }
+    } elif (pin_src == 2) {                                   # 0.54.4: daimon's record, and thoth held no pin of its own
+        var dd[24];
+        _tps_date_into(&dd, load64(_tp_pinned_at + idx * 8));
+        note_emit(" — its MCP definition CHANGED since daimon pinned it on "); note_emit(&dd); note_println(".");
     } else {
         note_println(" — its MCP definition CHANGED since this session pinned it.");
     }
     note_println("  a tool description is read by the model as instructions, so a silent swap is an injection with");
     note_println("  approval already granted. Not advertised this turn. `/tools trust` to accept and re-pin.");
     log_begin("toolpin"); log_kv_str("tool", name); log_kv_str("result", "withheld_definition_changed");
-    if (load8(_tp_from_store + idx) == 1) { log_kv_int("pinned_at", load64(_tp_pinned_at + idx * 8)); }
+    if (pin_src != 0) { log_kv_int("pinned_at", load64(_tp_pinned_at + idx * 8)); }
     log_commit(SK_WARN);
-    events_tool_withheld(name, load8(_tp_from_store + idx), load64(_tp_pinned_at + idx * 8));   # 0.51.2: --events
+    events_tool_withheld(name, pin_src, load64(_tp_pinned_at + idx * 8));   # 0.51.2: --events
+    return 0;
+}
+
+# --- daimon's word (0.54.4, the header says how it is used) ----------------------------------------------------------------------
+var _tp_view_def = 0;              # this tool's manifest word, set by toolpin_view and taken by the next toolpin_check
+var _tp_view_pin = 0;
+var _tp_view_at = 0;
+var _tp_view_stored = 0;
+var _tp_taken = 0;                 # pins taken from daimon's record this session
+var _tp_taken_stored = 0;          # ...of them, ones daimon held from a previous run of its own (`pin_from_store`)
+var _tp_taken_said = 0;
+var _tp_off_said = 0;
+var _tp_dstore = 0;                # daimon's own store: 0 not said, then TP_DSTORE_*
+var _tp_ddurable = 0;
+var TP_DSTORE_LOADED = 1;
+var TP_DSTORE_NEW = 2;
+var TP_DSTORE_REJECTED = 3;
+var TP_DSTORE_UNAVAILABLE = 4;
+var _tp_trust_names = 0;           # TOOLPIN_MAX * TOOLPIN_NAME_CAP: names the operator trusted, until the next probe re-pins them
+var _tp_trust_n = 0;
+
+fn _tp_view_clear() { _tp_view_def = 0; _tp_view_pin = 0; _tp_view_at = 0; _tp_view_stored = 0; return 0; }
+# _tp_hash_ok: exactly 64 lowercase hex digits and an end. The bytes are a daimon's, so anything else is no digest at all.
+fn _tp_hash_ok(h) {
+    if (h == 0) { return 0; }
+    if (_tps_hex_ok(h, 64) == 0) { return 0; }             # stops at the first non-hex byte, so a short string's NUL ends it
+    if (load8(h + 64) != 0) { return 0; }
+    return 1;
+}
+# toolpin_view: hold one manifest entry's word for the toolpin_check that follows. Pure over its arguments. A digest that is not
+# one is absent, so a daimon that sends garbage is a daimon older than 2.5.4. A date past what the store can carry is dropped.
+fn toolpin_view(def, pin, at, stored) {
+    _tp_view_clear();
+    if (_tp_hash_ok(def) == 0) { return 0; }
+    _tp_view_def = def;
+    if (_tp_hash_ok(pin) == 0) { return 1; }
+    _tp_view_pin = pin;
+    if ((at > 0) && (at <= TPS_SECS_MAX)) { _tp_view_at = at; }
+    if (stored == 1) { _tp_view_stored = 1; }
+    return 1;
+}
+# toolpin_daimon_store: what the manifest says of daimon's own store. A name this does not know is not said.
+fn toolpin_daimon_store(state, durable) {
+    _tp_dstore = 0;
+    _tp_ddurable = 0;
+    if (state == 0) { return 0; }
+    if (streq(state, "loaded") == 1) { _tp_dstore = TP_DSTORE_LOADED; }
+    elif (streq(state, "new") == 1) { _tp_dstore = TP_DSTORE_NEW; }
+    elif (streq(state, "rejected") == 1) { _tp_dstore = TP_DSTORE_REJECTED; }
+    elif (streq(state, "unavailable") == 1) { _tp_dstore = TP_DSTORE_UNAVAILABLE; }
+    if (durable == 1) { _tp_ddurable = 1; }
+    return 0;
+}
+fn toolpin_daimon_store_state() { return _tp_dstore; }
+fn toolpin_daimon_store_durable() { return _tp_ddurable; }
+fn toolpin_taken() { return _tp_taken; }
+fn toolpin_taken_stored() { return _tp_taken_stored; }
+fn _tp_word_reset() {
+    _tp_taken = 0; _tp_taken_stored = 0; _tp_taken_said = 0; _tp_off_said = 0; _tp_trust_n = 0;
+    _tp_dstore = 0; _tp_ddurable = 0;
+    _tp_view_clear();
+    return 0;
+}
+# _tp_word_count: rows whose last word was this one.
+fn _tp_word_count(word) {
+    if (_tp_word == 0) { return 0; }
+    var i = 0;
+    var n = 0;
+    while (i < _tp_n) { if (load8(_tp_word + i) == word) { n = n + 1; } i = i + 1; }
+    return n;
+}
+fn toolpin_digest_off() { return _tp_word_count(TP_WORD_DIGEST); }
+fn toolpin_daimon_changed() { return _tp_word_count(TP_WORD_CHANGED); }
+# toolpin_row_word / toolpin_row_taken: one tool's row, for `/tools`.
+fn toolpin_row_word(name) {
+    if ((name == 0) || (_tp_names == 0)) { return TP_WORD_NONE; }
+    var idx = _tp_find(name);
+    if (idx < 0) { return TP_WORD_NONE; }
+    return load8(_tp_word + idx);
+}
+fn toolpin_row_taken(name) {
+    if ((name == 0) || (_tp_names == 0)) { return 0; }
+    var idx = _tp_find(name);
+    if (idx < 0) { return 0; }
+    if (load8(_tp_from_store + idx) == 2) { return 1; }
+    return 0;
+}
+fn _tp_trusted_find(name) {
+    if (_tp_trust_names == 0) { return 0 - 1; }
+    var i = 0;
+    while (i < _tp_trust_n) {
+        if (streq(_tp_trust_names + i * TOOLPIN_NAME_CAP, name) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+fn _tp_trusted_add(name) {
+    if (_tp_trust_names == 0) { _tp_trust_names = alloc(TOOLPIN_MAX * TOOLPIN_NAME_CAP); }
+    if (_tp_trust_names == 0) { return 0; }
+    if (_tp_trusted_find(name) >= 0) { return 1; }
+    if (_tp_trust_n >= TOOLPIN_MAX) { return 0; }
+    var d = _tp_trust_names + _tp_trust_n * TOOLPIN_NAME_CAP;
+    var i = 0;
+    while ((load8(name + i) != 0) && (i < (TOOLPIN_NAME_CAP - 1))) { store8(d + i, load8(name + i)); i = i + 1; }
+    store8(d + i, 0);
+    _tp_trust_n = _tp_trust_n + 1;
+    return 1;
+}
+# _tp_trusted_take: 1 when the operator trusted `name` and this probe is re-pinning it. The mark is spent here.
+fn _tp_trusted_take(name) {
+    var i = _tp_trusted_find(name);
+    if (i < 0) { return 0; }
+    _tp_trust_n = _tp_trust_n - 1;
+    if (i != _tp_trust_n) { memcpy(_tp_trust_names + i * TOOLPIN_NAME_CAP, _tp_trust_names + _tp_trust_n * TOOLPIN_NAME_CAP, TOOLPIN_NAME_CAP); }
+    return 1;
+}
+# _tp_first_sight: pin a tool this table has no row for. Returns the row, which the caller has room for. `vpin` is daimon's pin, or 0:
+# taken as the baseline, so when it is not this definition the caller's compare finds the change.
+fn _tp_first_sight(name, h, vpin, vat, vstored) {
+    var trusted = _tp_trusted_take(name);
+    var idx = 0;
+    var taken = 0;
+    if ((vpin != 0) && (trusted == 0)) { taken = 1; }
+    if (taken == 1) {
+        var at = vat;
+        if (at == 0) { at = clock_epoch_secs(); }
+        idx = _tp_add(name, vpin, at, 2);
+        _tp_taken = _tp_taken + 1;
+        if (vstored == 1) { _tp_taken_stored = _tp_taken_stored + 1; }
+    } else { idx = _tp_add(name, h, clock_epoch_secs(), 0); }
+    # 0.51.0: a new pin is a store change (flushed after the probe by the two probe sites); logged only when a
+    # store is bound so the unbound path's log stays byte-identical to 0.50.x
+    if (_tps_bound() == 1) {
+        _tps_dirty = 1;
+        log_begin("toolpin"); log_kv_str("tool", name);
+        if (taken == 1) { log_kv_str("result", "pinned_from_daimon"); } else { log_kv_str("result", "pinned_first_sight"); }
+        log_commit(SK_INFO);
+    }
+    if (taken == 0) { events_tool_pinned(name); }          # 0.51.2: --events (no-op when off)
+    elif (streq(vpin, h) == 1) { events_tool_pinned_daimon(name, load64(_tp_pinned_at + idx * 8)); }
+    return idx;
+}
+# toolpin_daimon_note: after a probe, say what daimon's word did. Both lines are said once for what is new, and a healthy store with
+# a healthy daimon says nothing.
+fn toolpin_daimon_note() {
+    if (_tp_taken > _tp_taken_said) {
+        note_emit_role(ROLE_FAINT, "  [toolpin] "); note_emit_int(_tp_taken - _tp_taken_said);
+        note_println(" pin(s) taken from daimon's record: thoth held none for those tools.");
+        _tp_taken_said = _tp_taken;
+    }
+    var off = toolpin_digest_off();
+    if (off > _tp_off_said) {
+        note_emit_role(ROLE_RED, "  [toolpin] daimon's digest differs from thoth's on "); note_emit_int(off);
+        note_println(" tool definition(s): the two read different bytes, so daimon's pins are not used for them.");
+        log_begin("toolpin"); log_kv_str("result", "digest_differs"); log_kv_int("tools", off); log_commit(SK_WARN);
+        _tp_off_said = off;
+    }
     return 0;
 }
 
@@ -383,6 +568,7 @@ fn toolpin_trust_one(name) {
     var idx = _tp_find(name);
     if (idx < 0) { return 0; }
     if ((load8(_tp_withheld + idx) == 1) && (_tp_changed > 0)) { _tp_changed = _tp_changed - 1; }   # /state counts what is still held back
+    _tp_trusted_add(name);                                  # 0.54.4: the next probe's pin is this act's, not daimon's
     var last = _tp_n - 1;
     if (idx != last) {
         memcpy(_tp_names + idx * TOOLPIN_NAME_CAP, _tp_names + last * TOOLPIN_NAME_CAP, TOOLPIN_NAME_CAP);
@@ -390,6 +576,7 @@ fn toolpin_trust_one(name) {
         store8(_tp_withheld + idx, load8(_tp_withheld + last));
         store64(_tp_pinned_at + idx * 8, load64(_tp_pinned_at + last * 8));
         store8(_tp_from_store + idx, load8(_tp_from_store + last));
+        store8(_tp_word + idx, load8(_tp_word + last));
     }
     store8(_tp_withheld + last, 0);
     _tp_n = last;
@@ -406,6 +593,8 @@ fn toolpin_trust_one(name) {
 }
 fn toolpin_trust_all() {
     var had = _tp_n;
+    var tn = 0;
+    while (tn < _tp_n) { _tp_trusted_add(_tp_names + tn * TOOLPIN_NAME_CAP); tn = tn + 1; }   # 0.54.4: as toolpin_trust_one
     _tp_n = 0;
     _tp_changed = 0;
     _tp_overflow = 0;
@@ -972,7 +1161,7 @@ fn toolpin_store_flush() {
 fn toolpin_host_rebind() {
     if (_tps_host_moved() == 0) { return 0; }
     toolpin_store_flush();
-    _tp_n = 0; _tp_changed = 0; _tp_overflow = 0;
+    _tp_n = 0; _tp_changed = 0; _tp_overflow = 0; _tp_word_reset();
     if (_tp_withheld != 0) { var i = 0; while (i < TOOLPIN_MAX) { store8(_tp_withheld + i, 0); i = i + 1; } }
     _tps_host_set();
     _tps_dirty = 0;

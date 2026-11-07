@@ -160,6 +160,13 @@ Vendored bote 3.8.15 serves 2026-07-28, the stateless revision, alongside the ol
 negotiates 2025-11-25 because the new revision has no `initialize`. thoth's t-ron path does not reach any of it.
 What is left is daimon's, as the host thoth actually speaks to.
 
+### 9 · `/tools trust` through daimon's per-consumer accept — **partial**
+
+daimon 2.5.5 records an acceptance per consumer, gated through t-ron, without moving its shared pin. thoth's `/tools trust` stays local, so after an upgrade the operator
+accepted here, daimon keeps reading `changed` and `/tools` says so. Taking the accept means holding a token from `daimon consumer add`, which would be the first secret thoth
+keeps (ADR-0022 says it has none), and a new key, so it is a minor and not a patch. daimon's token means something on this route and in a manifest only until its caller
+identity lands at 2.6.x, which may be the better moment. Nothing is unsafe in the meantime: the local pin is the check either way.
+
 ### Declined, with reasons recorded
 
 - **A2A (Agent2Agent).** No terminal coding harness implements it; its center of gravity is
@@ -268,7 +275,7 @@ Each of these blocks something above. None has a default answer.
 
 (Ruled 2026-11-06, not questions: a repository may only shorten `[hoosh].timeout_ms` and only add detail to `[log].level`; the project map is a user message; the tally falls back to the
 gateway's figure, only from a gateway the operator chose. All four shipped at 0.54.3. A pin store thoth refuses stays first sight with a red line, because an agent without its tools has
-lost the thing it is for. The repair is filed with daimon and sits on the roadmap's waiting table.)
+lost the thing it is for. The repair shipped in daimon 2.5.4, and at 0.54.4 such a store takes daimon's pins, so a definition daimon reads as changed is withheld with no local pin.)
 
 (Ruled 2026-11-05, not a question: t-ron's payload scanner stays as shipped. With a `[tron].policy` bound it reads
 `thoth_shell`'s command and every MCP tool's arguments, and denies some everyday commands, such as `git log -5; git status`.

@@ -62,7 +62,7 @@ var HOOSH_ACC_CAP = 65536;         # the first allocation
 var HOOSH_ACC_MAX = 4194304;       # 4 MiB
 var _hoosh_reply_gen = 0;          # 0.54.2: moves when the reply buffer starts over, for what holds a position in it (the window's index)
 fn hoosh_reply_gen() { return _hoosh_reply_gen; }
-fn _hoosh_acc_reset() { _hoosh_reply_gen = _hoosh_reply_gen + 1; _hoosh_acc_len = 0; _hoosh_acc_cut = 0; _hoosh_resp_bad = 0; _reason_acc_reset(); _hoosh_finish = HOOSH_FIN_NONE; return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round); 0.52.7: so does the finish reason
+fn _hoosh_acc_reset() { _hoosh_reply_gen = _hoosh_reply_gen + 1; _hoosh_acc_len = 0; _hoosh_acc_cut = 0; _hoosh_resp_bad = 0; net_stall_clear(); _reason_acc_reset(); _hoosh_finish = HOOSH_FIN_NONE; return 0; }   # 0.35.2: reasoning resets with the reply (turn start + each round); 0.52.7: so does the finish reason
 
 # hoosh_last_reply / _len (0.11.0): the most recent turn's full assistant text and
 # its byte length (the blocking path copies the parsed content here, streaming
@@ -114,9 +114,11 @@ fn _hoosh_acc_append(p, n) {
 
 # _agent_stop_why (0.53.3): why the last turn stopped short of an answer, when thoth stopped it; the window's notice reads it.
 var _agent_stop_why = 0;
+var _agent_stop_word = 0;                  # 0.54.4: the same fact in one word, for --json
 fn agent_stop_why() { return _agent_stop_why; }
-fn agent_stop_why_clear() { _agent_stop_why = 0; return 0; }
-fn agent_stop_why_set(s) { _agent_stop_why = s; return 0; }
+fn agent_stop_word() { return _agent_stop_word; }
+fn agent_stop_why_clear() { _agent_stop_why = 0; _agent_stop_word = 0; return 0; }
+fn agent_stop_set(word, why) { _agent_stop_word = word; _agent_stop_why = why; return 0; }
 
 # Reasoning accumulator (0.35.2): when a model exposes its chain-of-thought,
 # hoosh translates the provider's native thinking stream into `reasoning_content`
@@ -2503,6 +2505,12 @@ fn _hoosh_stream_turn(url, h, len, model) {
         if (emitted > 0) { oprintln(""); }            # end the streamed line
         intr_note();                                  # the "— interrupted" marker (feed-only)
         return 0;                                     # rc==0 -> hoosh_send appends the partial (consistent pair)
+    }
+    if (net_stalled() == 1) {                         # 0.54.4: the gateway answered and the provider went quiet: not "is the gateway up?"
+        if (emitted > 0) { oprintln(""); }
+        emit("  "); oprintln(net_stall_text());
+        log_begin("stream_stalled"); log_kv_int("timeout_ms", config_hoosh_timeout_ms()); log_commit(SK_WARN);
+        return 0 - 1;
     }
     if (serr != SANDHI_OK) {
         if (emitted > 0) { oprintln(""); }

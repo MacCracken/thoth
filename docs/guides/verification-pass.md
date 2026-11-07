@@ -194,6 +194,20 @@ executable from `cass` when done.
 Done on 2026-11-05: `src/mpick.cyr`, the store half of `src/toolpin.cyr`, `install.sh`, `scripts/live/wlkit.py`, `scripts/live/pngtool.py` and `scripts/gen-splash.sh`. For the next ones, read them as
 the audit read the rest: one area, a frozen copy of the tree, and a reproduction before anything is filed. Findings go in a dated file under `docs/audit/`.
 
+## V-8 — A provider gone quiet behind hoosh
+
+Done at 0.54.4, on hoosh 2.10.0. Run a private hoosh with one Ollama route at `scripts/live/silentprovider.py`, which sends one token and stops:
+
+```bash
+python3 -I scripts/live/silentprovider.py 18212
+```
+
+Its config is `[server]` with a free port and `health_check_interval_secs = 0`, plus `[[providers]]` with `type = "Ollama"`, `base_url = "http://127.0.0.1:18212"`, `models = ["silent*"]` and `catalog = "static"`. `curl -sN` against it shows a data frame, then `: keep-alive` every 15 s. Point a lab `HOME` at it with `timeout_ms = 18000` and run `thoth -p`: the deadline must end it within a second, and an older thoth stays hung until hoosh's own 300 s. `stall: <n>` in `scripts/live/stubhoosh.py` is the same shape with no hoosh, for the paths this does not reach. It sends a comment every 500 ms.
+
+## V-9 — Tool pins against a real daimon
+
+Done at 0.54.4, on daimon 2.5.5. `daimon serve PORT --data-dir DIR`, register a tool with `POST /v1/mcp/tools`, and run `thoth -p` once so it pins. Re-register the same name with a new description, then run with the store deleted, and again with garbage in it. Read the verdict off the wire: `scripts/live/stubhoosh.py` prints a `TOOL name | description` line for every tool a request advertises. The swapped description must not appear, the other tools must, and a refused store must be left as it was. `daimon --version` starts a server: its verb is `daimon version`.
+
 ## The ring-3 smoke
 
 This is not a table row, because every release runs it. `--private` builds the selftest kernel in a throwaway copy of the agnos tree, so the operator's own `build/agnos` is

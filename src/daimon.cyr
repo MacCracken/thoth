@@ -224,7 +224,12 @@ fn _daimon_tool_row(name, desc, schema) {
             if (desc != 0) { var dd = bayan_json_v_str(desc); if (dd != 0) { dc = str_cstr(dd); } }
             if (schema != 0) { var sb = bayan_json_v_build(schema); if (sb != 0) { sc = str_cstr(sb); } }
             if (toolpin_differs(nc, dc, sc) == 1) { ui_emit(ROLE_RED, "  CHANGED"); wh = 1; }
-            else { ui_emit(ROLE_FAINT, "  pinned"); }
+            else {
+                ui_emit(ROLE_FAINT, "  pinned");
+                if (toolpin_row_taken(nc) == 1) { ui_emit(ROLE_FAINT, " (from daimon)"); }
+                if (toolpin_row_word(nc) == TP_WORD_CHANGED) { ui_emit(ROLE_FAINT, " · daimon reads it as changed"); }
+                elif (toolpin_row_word(nc) == TP_WORD_DIGEST) { ui_emit(ROLE_RED, " · digests differ"); }
+            }
         }
     }
     oprintln("");
@@ -251,6 +256,7 @@ fn daimon_list_tools() {
     var blen = sandhi_http_body_len(r);
     var v = bayan_json_v_parse_buf(body, blen);
     if (v == 0) { oprintln("  daimon: response received but not parseable."); return 0 - 1; }
+    _daimon_pins_read(v);
     var tools = bayan_json_v_obj_get_by_cstr(v, "tools");
     if (tools == 0) { oprintln("  daimon: no tools array in response."); return 0 - 1; }
     var n = bayan_json_v_arr_len(tools);
@@ -445,7 +451,34 @@ fn daimon_tools_value() {
     var blen = sandhi_http_body_len(r);
     var v = bayan_json_v_parse_buf(body, blen);
     if (v == 0) { return 0; }
+    _daimon_pins_read(v);
     return bayan_json_v_obj_get_by_cstr(v, "tools");
+}
+
+# What a manifest says about pins (daimon 2.5.4). Every field is the registry's to send or not, so each is read for its type and a
+# wrong one is the same as an absent one. toolpin.cyr's header says how the word is used.
+fn _daimon_pin_str(t, key) {
+    var v = bayan_json_v_obj_get_by_cstr(t, key);
+    if (v == 0) { return 0; }
+    var s = bayan_json_v_str(v);
+    if (s == 0) { return 0; }
+    return str_cstr(s);
+}
+fn _daimon_pin_bool(t, key) {
+    if (bayan_json_v_bool(bayan_json_v_obj_get_by_cstr(t, key)) == 1) { return 1; }   # 0 for an absent key or another type
+    return 0;
+}
+# daimon_pin_view: one manifest entry's word, for the toolpin_check that follows.
+fn daimon_pin_view(t) {
+    if (t == 0) { return toolpin_view(0, 0, 0, 0); }
+    var at = bayan_json_v_int(bayan_json_v_obj_get_by_cstr(t, "pinned_at"));   # 0 for an absent key or another type; toolpin_view bounds the rest
+    return toolpin_view(_daimon_pin_str(t, "definition_sha256"), _daimon_pin_str(t, "pinned_sha256"), at, _daimon_pin_bool(t, "pin_from_store"));
+}
+# _daimon_pins_read: the manifest's `pins` block, on daimon's own store.
+fn _daimon_pins_read(v) {
+    var p = bayan_json_v_obj_get_by_cstr(v, "pins");
+    if (p == 0) { return toolpin_daimon_store(0, 0); }
+    return toolpin_daimon_store(_daimon_pin_str(p, "state"), _daimon_pin_bool(p, "durable"));
 }
 
 # --- mneme memory-seam probe (0.32.0) ------------------------------------------
@@ -530,6 +563,7 @@ fn _daimon_mem_pin_scan(tools_v) {
             if (dv != 0) { var ds = bayan_json_v_str(dv); if (ds != 0) { desc = str_cstr(ds); } }
             var sv = bayan_json_v_obj_get_by_cstr(t, "inputSchema");
             if (sv != 0) { var sb = bayan_json_v_build(sv); if (sb != 0) { schema = str_cstr(sb); } }
+            daimon_pin_view(t);
             toolpin_check(str_cstr(ns), desc, schema);
         }
         i = i + 1;
@@ -556,5 +590,6 @@ fn daimon_mem_pin_compare() {
     toolpin_store_refresh();
     _daimon_mem_pin_scan(v);
     toolpin_store_flush();
+    toolpin_daimon_note();
     return 1;
 }

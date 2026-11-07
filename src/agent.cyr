@@ -369,6 +369,7 @@ fn agent_format_tools(dst, tools_arr) {
             if (ds != 0) { var dsp = bayan_json_v_str(ds); if (dsp != 0) { pin_desc = str_cstr(dsp); } }
             var scp = bayan_json_v_obj_get_by_cstr(t, "inputSchema");
             if (scp != 0) { var scb = bayan_json_v_build(scp); if (scb != 0) { pin_schema = str_cstr(scb); } }
+            daimon_pin_view(t);                  # 0.54.4: what the manifest says about this definition, for the check below
             if (toolpin_check(pin_name, pin_desc, pin_schema) == 0) { i = i + 1; }
             elif (_agent_tool_is_local(pin_name) == 1) { _agent_tools_shadowed = _agent_tools_shadowed + 1; i = i + 1; }   # 0.53.3 (T-12): thoth's own arm would win
             else {
@@ -2106,6 +2107,11 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     mdhl_finish();   # drain the filter (residual line + open block) before the finishing newline / status branching
     if (_hoosh_acc_len > 0) { oprintln(""); }   # finish the streamed line
     if (intr_pending() == 1) { _agent_round_kind = 4; return 0; }   # 0.17.4: Esc aborted — kind 4, before tool-parse
+    if (net_stalled() == 1) {                                       # 0.54.4: the gateway answered and the provider went quiet
+        emit("  "); oprintln(net_stall_text());
+        log_begin("stream_stalled"); log_kv_int("timeout_ms", config_hoosh_timeout_ms()); log_commit(SK_WARN);
+        _agent_round_kind = 2; return 0;
+    }
     if (sandhi_stream_err(sr) != SANDHI_OK) {
         var en = sandhi_err_kind_name(sandhi_stream_err(sr));
         emit("  hoosh stream error: "); oprintln(en);
@@ -2155,6 +2161,41 @@ fn _agent_iter_stream(model, sys, mem, tools_buf, tools_len) {
     return 0;
 }
 
+# _agent_round_health: what a finished round says about the gateway. A round's transport failure marks the spine DOWN (0.19.3), and
+# any answered round marks it UP; Esc (kind 4) says nothing. A stream ended on the stall clock had a gateway that answered, so it says
+# nothing either (0.54.4): the status bar read DOWN about a gateway that was up.
+fn _agent_round_health(k) {
+    if (k == 2) {
+        if (net_stalled() == 0) { hoosh_health_mark_down(); }
+        return 0;
+    }
+    if (k != 4) { hoosh_health_mark_up(); }
+    return 0;
+}
+
+# _agent_finish_capped: the turn used every round [hoosh].max_iters allows and has no answer.
+fn _agent_finish_capped(max_iters, iter) {
+    # 0.40.0 (T1-2): name the cap and how to raise it. A bare "hit the iteration cap" tells the user
+    # nothing actionable — and thoth has been bitten by exactly that: the 0.38.5 tool-argument bug
+    # presented as this message every time, with no hint that the ceiling was 8 or that it moves.
+    ui_emit(ROLE_RED, "  agentic loop hit the iteration cap");
+    ui_emit(ROLE_FAINT, " ("); ofmt_int(max_iters); ui_emit(ROLE_FAINT, " rounds, no final answer)");
+    oprintln("");
+    ui_emit(ROLE_FAINT, "  raise it with [hoosh].max_iters (ceiling ");
+    ofmt_int(HOOSH_MAX_ITERS_CEILING); ui_emit(ROLE_FAINT, ") — each round is a full model call");
+    oprintln("");
+    session_history_pop_last();
+    agent_stop_set("iterations", "the agentic loop hit its iteration cap with no final answer - raise it with [hoosh].max_iters");   # 0.54.4: read as a hoosh failure in the window, and as nothing in --json
+    # No FINAL answer was produced — clear the reply accumulator so a one-shot run
+    # reports failure (exit nonzero) instead of printing the last capped round's
+    # interim narration as if it were the answer (the streaming path appends content
+    # even on a tool-call round). The interactive REPL is unaffected (it ignores this
+    # return and the narration already streamed live). 0.11.0.
+    _hoosh_acc_reset();
+    log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "max_iters"); log_commit(SK_WARN);
+    return 0;
+}
+
 # _agent_finish_workfull (0.44.2): land a turn that ran out of TOOL WORKING SET honestly.
 #
 # The working set (_agent_work) holds this turn's assistant tool-call echoes and every tool result. It is
@@ -2170,7 +2211,7 @@ fn _agent_finish_workfull(iter) {
     note_emit(" ("); note_emit_int(_agent_work_len / 1024); note_emit(" KB of tool results across ");
     note_emit_int(iter + 1); note_println(" rounds) — stopping here rather than sending a truncated conversation");
     note_println("  ask a narrower follow-up, or /compact to free room, and the answer so far is kept");
-    _agent_stop_why = "this turn's tool working set is full - ask a narrower follow-up, or /compact to free room";
+    agent_stop_set("work_set", "this turn's tool working set is full - ask a narrower follow-up, or /compact to free room");
     if (_hoosh_acc_len > 0) {
         session_history_append("assistant", _hoosh_acc, _hoosh_acc_len);
         citations_attach_to_last(); roundlog_attach_calls_to_last(session_turns());
@@ -2240,6 +2281,7 @@ fn agent_turn(prompt) {
         _agent_tools_len = tl;
         var _pin_ad = toolpin_store_adopted();
         toolpin_store_flush();                                # 0.51.0 (F6): first-sight pins this probe took go to the store (a no-op when nothing is dirty or no store is bound)
+        toolpin_daimon_note();
         # Cache ONLY on a good daimon fetch (or no daimon). 0.23.0: the always-on project tools make tl>0
         # unconditionally, so `tl>0` can no longer stand in for "daimon fetch succeeded" — a transient
         # daimon-down would latch an empty registry forever. Gate on the daimon fetch (dtv) so a daimon-down
@@ -2310,8 +2352,7 @@ fn agent_turn(prompt) {
         # returned so they never fell through, but the new non-returning k==4 arm MUST NOT fall into
         # the k==1/else block below, or it would double-append / double-pop history.)
         var k = _agent_round_kind;
-        if (k == 2) { hoosh_health_mark_down(); }     # 0.19.3: a round's transport failure -> spine DOWN
-        elif (k != 4) { hoosh_health_mark_up(); }     # any answered round (tool/http/final) -> UP; k==4 (Esc) neutral
+        _agent_round_health(k);
         if (k == 2) {
             session_history_pop_last();
             log_begin("agent_turn"); log_kv_str("result", "transport_error"); log_commit(SK_WARN);
@@ -2422,23 +2463,7 @@ fn agent_turn(prompt) {
         log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "budget"); log_commit(SK_WARN);
     }
     if ((done == 0) && (budget_stop == 0)) {
-        # 0.40.0 (T1-2): name the cap and how to raise it. A bare "hit the iteration cap" tells the user
-        # nothing actionable — and thoth has been bitten by exactly that: the 0.38.5 tool-argument bug
-        # presented as this message every time, with no hint that the ceiling was 8 or that it moves.
-        ui_emit(ROLE_RED, "  agentic loop hit the iteration cap");
-        ui_emit(ROLE_FAINT, " ("); ofmt_int(max_iters); ui_emit(ROLE_FAINT, " rounds, no final answer)");
-        oprintln("");
-        ui_emit(ROLE_FAINT, "  raise it with [hoosh].max_iters (ceiling ");
-        ofmt_int(HOOSH_MAX_ITERS_CEILING); ui_emit(ROLE_FAINT, ") — each round is a full model call");
-        oprintln("");
-        session_history_pop_last();
-        # No FINAL answer was produced — clear the reply accumulator so a one-shot run
-        # reports failure (exit nonzero) instead of printing the last capped round's
-        # interim narration as if it were the answer (the streaming path appends content
-        # even on a tool-call round). The interactive REPL is unaffected (it ignores this
-        # return and the narration already streamed live). 0.11.0.
-        _hoosh_acc_reset();
-        log_begin("agent_turn"); log_kv_int("iters", iter); log_kv_str("result", "max_iters"); log_commit(SK_WARN);
+        _agent_finish_capped(max_iters, iter);
     }
     return 0;
 }

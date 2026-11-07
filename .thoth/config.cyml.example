@@ -217,10 +217,17 @@ model = "claude-haiku-5-5"
 #   ISIG and blocked SIGINT for the session, so Ctrl-C was neither a signal nor a
 #   readable byte. `kill` from another terminal was the only way out.
 #
-#   This is a STALL detector, not a latency budget: it is a PER-READ deadline, so
-#   a stream that keeps producing frames resets it on every frame and may run as
-#   long as it likes. A reasoning model thinking for two minutes before its first
-#   token is fine; two minutes of nothing at all is not. The floor is 1000.
+#   This is a STALL detector, not a latency budget: a stream that keeps producing
+#   frames resets it on every frame and may run as long as it likes. A reasoning
+#   model thinking for two minutes before its first token is fine as long as hoosh
+#   forwards the thinking, and two minutes of nothing at all is not. The floor is 1000.
+#
+#   ⚠ Since 0.54.4 a stream counts FRAMES, not bytes. hoosh sends a `: keep-alive`
+#   comment through a silent stream every 15 s, and those reset this deadline, so a
+#   provider gone quiet held a turn until hoosh gave up at 300 s. A model that is
+#   silent for longer than this before its first frame (a local model loading, say)
+#   now ends the turn with a line that names this key: raise it. AGNOS has no poll
+#   to run this on, so there a keep-alive still resets it.
 #   `0` restores the pre-0.44.2 unbounded behaviour if you really want it, from
 #   this global file only: a repository may shorten the deadline, and that is all.
 #
@@ -318,6 +325,16 @@ model = "claude-haiku-5-5"
 # (a swap during a session, or across /reload, was all they caught). A registry
 # over 1024 pins (0.51.0; it was 128) advertises the rest unpinned, and says so.
 #
+# DAIMON'S RECORD since 0.54.4: daimon 2.5.4 and later keep a pin of their own. With
+# no pin here (a deleted store, a refused one, a new machine) thoth takes daimon's,
+# so a definition daimon reads as changed is withheld, announced as `CHANGED since
+# daimon pinned it on <date>`, where it used to be a first sight. A pin you hold
+# here always wins, and `/tools trust` still accepts for this client alone, so
+# `/tools` can read `pinned · daimon reads it as changed` after an upgrade you
+# accepted. thoth's digest is compared with daimon's on every probe: if they differ
+# it says so and leaves daimon's pin unused for that tool. An older daimon sends
+# none of this, and pins work as they did.
+#
 # The whole [toolpin] table is AUTHORITY (global-only, ADR-0021): a cloned repo's
 # config cannot switch the defence off, redirect the store, or opt it out — a
 # local attempt is named as suppressed.
@@ -337,7 +354,7 @@ model = "claude-haiku-5-5"
 #             the run's pins are then session-scoped, announced on every surface, and
 #             only `/tools trust` rewrites the store. What the digest cannot catch: a
 #             user or process with YOUR uid editing or deleting the file (a deleted
-#             store is a first sight next run — the greeting reads `new`). Keep it
+#             store is a first sight next run where daimon has no pin to give back — the greeting reads `new`). Keep it
 #             where only you can write. GLOBAL-ONLY.
 #   durable — false keeps pins session-scoped (no store). GLOBAL-ONLY.
 #

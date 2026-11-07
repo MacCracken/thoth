@@ -82,7 +82,7 @@ fn oneshot_log_level() { return _oneshot_log_level; }
 # triggers and the object is always complete, valid JSON. Memory-safe regardless (every
 # append/escape is cap-bounded); only a pathological multi-KB config `model` value could clip
 # the field — the same accepted bound the hoosh request builders already carry.
-var ONESHOT_JSON_CAP = 0;   # computed from the reply (its length*6 + MODEL_BUF_CAP*6 + 256)
+var ONESHOT_JSON_CAP = 0;   # computed from the reply: _oneshot_json_room
 var _oneshot_json_buf = 0;
 
 # The assembled task (argv positionals joined by spaces, then the stdin payload).
@@ -301,7 +301,9 @@ fn oneshot_print_help() {
     emit_raw("use while an agentic turn is still going. stdout is PURE NDJSON: the answer arrives\n");
     emit_raw("as the response event, not as bare text (-o still receives the plain reply).\n");
     emit_raw("--json (or -j) prints {response, model, turns, tokens?, cost?, elapsed_ms} per\n");
-    emit_raw("turn instead of the plain answer; tokens/cost appear only once reported. On any\n");
+    emit_raw("turn instead of the plain answer; tokens/cost appear only once reported. A turn\n");
+    emit_raw("thoth stopped itself (a [budget] ceiling, the iteration cap, a full working set)\n");
+    emit_raw("prints the object too, with stopped and stopped_why, and exits nonzero. On any other\n");
     emit_raw("failure nothing goes to stdout (diagnostic on stderr, nonzero exit).\n\n");
     emit_raw("--logs <file> APPENDS a session log for this run, bound before the config is even\n");
     emit_raw("read, so a session that crashes, hangs or is killed still leaves a record: the task,\n");
@@ -414,8 +416,9 @@ fn _oneshot_report_error(rc) {
     if ((rc < 0) && (hoosh_resp_bad() == 1)) { emit_err("thoth: "); emit_err(hoosh_resp_bad_text()); emit_err("\n"); return 0; }
     var absent = 0;
     if (seam_status(SEAM_HOOSH) == SEAM_ABSENT) { absent = 1; }
-    emit_err("thoth: "); emit_err(ev_fail_text_f(rc, absent, hoosh_finish_known()));   # 0.52.8 (A2): a refusal / cut named
+    emit_err("thoth: "); emit_err(ev_error_text(rc, absent, hoosh_finish_known()));   # 0.52.8 (A2): a refusal / cut named; 0.54.4: a stall or a stop thoth made
     if (absent == 1) { emit_err(" — set [hoosh].url in .thoth/config.cyml (degraded, not faked)\n"); return 0; }
+    if ((rc < 0) && (net_stalled() == 1)) { emit_err("\n"); return 0; }
     if (rc < 0) { emit_err(" — is it up?\n"); return 0; }
     if (rc > 0) {
         emit_err(" "); emit_err_int(rc);
@@ -440,11 +443,12 @@ fn _oneshot_report_error(rc) {
 
 # oneshot_json_envelope: serialize one turn's result as a single JSON object into dst (cap
 # bounded, NUL-terminated), returning the byte length:
-#   {"response":<reply>,"model":<id>,"turns":N[,"tokens":N][,"cost":"$d.cc"],"elapsed_ms":N}
+#   {"response":<reply>,"model":<id>,"turns":N[,"tokens":N][,"cost":"$d.cc"][,"stopped":<word>,"stopped_why":<why>],"elapsed_ms":N}
 # `reply`/`reply_len` is the model's text (held BY LENGTH — escaped with the length-bounded
 # escaper so an embedded NUL survives). `tokens`/`cost` follow ADR-0010 omit-until-present
 # (shown only once hoosh reports usage / a [pricing] rate prices it — never a faked 0/$0).
 # `elapsed_ms` is passed in (one_shot_run measures it) so this stays a pure, testable function.
+var _oneshot_stopped = 0;                  # 1 while the envelope speaks for a turn thoth stopped itself
 fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
     var off = 0;
     off = _append_cstr_cap(dst, off, cap, "{\"response\":\"");
@@ -476,6 +480,13 @@ fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
         off = _append_cstr_cap(dst, off, cap, "\"");
     }
     if (hoosh_reply_cut() == 1) { off = _append_cstr_cap(dst, off, cap, ",\"reply_cut\":true"); }   # 0.53.2: thoth kept part of it
+    if (_oneshot_stopped == 1) {                           # 0.54.4: thoth ended the turn itself, so `response` is empty on purpose
+        off = _append_cstr_cap(dst, off, cap, ",\"stopped\":\"");
+        off = _json_escape_into_cap(dst, off, cap, agent_stop_word());
+        off = _append_cstr_cap(dst, off, cap, "\",\"stopped_why\":\"");
+        off = _json_escape_into_cap(dst, off, cap, agent_stop_why());
+        off = _append_cstr_cap(dst, off, cap, "\"");
+    }
     off = _append_cstr_cap(dst, off, cap, ",\"elapsed_ms\":");
     off = _append_int_cap(dst, off, cap, elapsed_ms);
     off = _append_cstr_cap(dst, off, cap, "}");
@@ -565,6 +576,30 @@ fn _oneshot_run_task() {
     return _task_dispatch(prompt);
 }
 
+# _oneshot_json_room: the object's buffer, sized for a reply of `olen` so nothing is truncated. 0 when it cannot be had.
+fn _oneshot_json_room(olen) {
+    var jneed = olen;
+    if (jneed < HOOSH_ACC_CAP) { jneed = HOOSH_ACC_CAP; }
+    jneed = jneed * 6 + MODEL_BUF_CAP * 6 + 1024;
+    if (jneed > ONESHOT_JSON_CAP) {
+        _oneshot_json_buf = alloc(jneed);
+        ONESHOT_JSON_CAP = jneed;
+    }
+    if (_oneshot_json_buf == 0) { return 0; }
+    return 1;
+}
+# _oneshot_stop_object: the one object a stopped turn prints, to stdout and to the `-o` file, as a reply's is.
+fn _oneshot_stop_object(elapsed) {
+    if (_oneshot_json_room(0) == 0) { return 0; }
+    _oneshot_stopped = 1;
+    var n = oneshot_json_envelope(_oneshot_json_buf, ONESHOT_JSON_CAP, "", 0, elapsed);
+    _oneshot_stopped = 0;
+    if (_oneshot_out_path != 0) { _oneshot_write_out(_oneshot_out_path, _oneshot_json_buf, n); }
+    emit_raw_n(_oneshot_json_buf, n);
+    emit_raw("\n");
+    return 1;
+}
+
 fn one_shot_run() {
     # Append piped stdin as the payload (never read an interactive tty here).
     #
@@ -627,14 +662,7 @@ fn one_shot_run() {
         if (_oneshot_json == 1) {
             # one JSON object (clean for jq/CI); honest fields (tokens/cost omit-until-present),
             # the buffer sized so it never truncates.
-            var jneed = olen;
-            if (jneed < HOOSH_ACC_CAP) { jneed = HOOSH_ACC_CAP; }
-            jneed = jneed * 6 + MODEL_BUF_CAP * 6 + 256;
-            if (jneed > ONESHOT_JSON_CAP) {
-                _oneshot_json_buf = alloc(jneed);
-                ONESHOT_JSON_CAP = jneed;
-            }
-            if (_oneshot_json_buf == 0) { emit_err("thoth: out of memory building the JSON reply\n"); return 1; }
+            if (_oneshot_json_room(olen) == 0) { emit_err("thoth: out of memory building the JSON reply\n"); return 1; }
             olen = oneshot_json_envelope(_oneshot_json_buf, ONESHOT_JSON_CAP, obuf, olen, elapsed);
             obuf = _oneshot_json_buf;
         }
@@ -654,6 +682,9 @@ fn one_shot_run() {
     }
     # Failure: nothing to stdout in EITHER mode (no partial/invalid JSON) — a concise
     # diagnostic to stderr and a nonzero exit; the jq/CI consumer checks the exit code.
+    # 0.54.4: a stop thoth made itself is the one exception, under --json alone. Nothing failed: a ceiling or a cap did what it was set to
+    # do, and the object carries what a script stopped there wants, the spend so far and the reason. The exit is still 1, as no answer came.
+    if ((rc == 0) && (_oneshot_json == 1) && (events_enabled() == 0) && (agent_stop_word() != 0)) { _oneshot_stop_object(elapsed); }
     _oneshot_report_error(rc);
     return 1;
 }

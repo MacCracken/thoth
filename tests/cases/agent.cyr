@@ -2342,7 +2342,7 @@ fn test_project() {
     assert_eq(toolpin_check("no\x01tes", "d", ""), 0, "a name holding a control byte is withheld (no store row could carry its pin)");
     assert_eq(toolpin_withheld("no\x01tes"), 1, "...and refused");
     assert(_ui_contains(toolpin_withheld_text(ulong), "cannot pin") == 1, "the executors tell the model why");
-    assert(_ui_contains(toolpin_withheld_text("fs_read"), "changed this session") == 1, "...a changed tool keeps its own reason");
+    assert(_ui_contains(toolpin_withheld_text("fs_read"), "changed since it was pinned") == 1, "...a changed tool keeps its own reason");
     assert_eq(toolpin_withheld("plain_unknown"), 0, "an ordinary never-seen name is still not withheld (no baseline, nothing changed)");
     toolpin_reset();
 

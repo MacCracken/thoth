@@ -205,14 +205,24 @@ fn test_net_stream() {
     assert_eq(net_stopped(), 0, "the stream stopped itself: no job was left");
     assert_eq(load64(&slot), a, "...and the arena stayed");
     # the stream options carry the idle turn, or a left stream would sit in its read until the deadline
-    var o = _net_stream_opts(a, hoosh_http_opts());
+    var o = _net_stream_opts(a, hoosh_http_opts(), &_net_on_idle);
     assert_eq(sandhi_http_options_get_idle_ms(o), NET_TICK_MS, "a stream asks for idle turns");
     assert_eq(sandhi_http_options_get_idle_cb(o), &_net_on_idle, "...through the job's own check");
     assert_eq(sandhi_http_options_get_read_ms(o), sandhi_http_options_get_read_ms(hoosh_http_opts()), "the caller's deadlines are kept");
     assert_eq(sandhi_http_options_get_connect_ms(o), sandhi_http_options_get_connect_ms(hoosh_http_opts()), "...all of them");
-    var j[136];
+    var j[160];
     atomic_store(&j + NJ_STATE, NET_RUN);
+    store64(&j + NJ_FRAME, clock_now_ms());
+    store64(&j + NJ_READ, 60000);
+    store64(&j + NJ_STALL, 0);
     assert_eq(_net_on_idle(&j, 100), 1, "an idle turn keeps a live job waiting");
+    assert_eq(load64(&j + NJ_STALL), 0, "...with no stall to report");
+    store64(&j + NJ_FRAME, clock_now_ms() - 60001);
+    assert_eq(_net_on_idle(&j, 100), 0, "past the deadline with no frame, it ends the stream");
+    assert_eq(load64(&j + NJ_STALL), 1, "...and says why");
+    store64(&j + NJ_READ, 0);
+    store64(&j + NJ_STALL, 0);
+    assert_eq(_net_on_idle(&j, 100), 1, "with no deadline there is no stall");
     atomic_store(&j + NJ_STATE, NET_LEFT);
     assert_eq(_net_on_idle(&j, 100), 0, "...and ends a left one");
     assert_eq(_net_on_event(&j, 1), 0, "a left job takes no event");
@@ -567,6 +577,171 @@ fn test_net_refused_stream() {
     return 0;
 }
 
+# A gateway on a real socket, as hoosh behaves in front of a provider that has gone quiet: it answers, then sends only comments. The
+# thread takes one connection, reads the request, and writes the script, stopping early when told to.
+var _nts_fd = 0;
+var _nts_frames = 0;               # data frames to send
+var _nts_comments = 0;             # keep-alive comments to send after them
+var _nts_gap = 0;                  # ms between writes
+var _nts_stop = 0;                 # atomic: the client is done
+var _nts_done = 0;                 # atomic: the thread is out
+fn _nts_serve(unused) {
+    var at, cfd = sock_accept(_nts_fd);
+    if (is_err_result(at) == 1) { atomic_store(&_nts_done, 1); return 0; }
+    var buf[2048];
+    sock_recv(cfd, &buf, 2048);
+    var head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+    sock_send_all(cfd, head, strlen(head));
+    var i = 0;
+    while ((i < _nts_frames) && (atomic_load(&_nts_stop) == 0)) {
+        sock_send_all(cfd, "data: {\"x\":1}\n\n", 15);
+        sleep_ms(_nts_gap);
+        i = i + 1;
+    }
+    i = 0;
+    while ((i < _nts_comments) && (atomic_load(&_nts_stop) == 0)) {
+        sock_send_all(cfd, ": keep-alive\n\n", 14);
+        sleep_ms(_nts_gap);
+        i = i + 1;
+    }
+    sock_close(cfd);
+    atomic_store(&_nts_done, 1);
+    return 0;
+}
+fn _nts_go(frames, comments, gap) {
+    _nts_frames = frames; _nts_comments = comments; _nts_gap = gap;
+    atomic_store(&_nts_stop, 0);
+    atomic_store(&_nts_done, 0);
+    thread_create_detached(&_nts_serve, 0);
+    return 0;
+}
+fn _nts_end() {
+    atomic_store(&_nts_stop, 1);
+    var i = 0;
+    while ((i < 400) && (atomic_load(&_nts_done) == 0)) { sleep_ms(5); i = i + 1; }
+    return 0;
+}
+fn _nts_stream(url, h, opts) {
+    var a = net_arena(1048576);
+    var slot[8];
+    store64(&slot, a);
+    var cell[8];
+    store64(&cell, 0);
+    _nt_ev_n = 0; _nt_ev_sum = 0; _nt_ev_limit = 1000;
+    return net_stream(&slot, url, h, "{}", 2, &_nt_cb, &cell, opts);
+}
+fn test_net_stall() {
+    test_group("a stream held open with no frames ends at the deadline (netwait.cyr, 0.54.4)");
+    assert_eq(_net_stall_due(1000, 1499, 500), 0, "within the deadline, no stall");
+    assert_eq(_net_stall_due(1000, 1500, 500), 1, "at it, a stall");
+    assert_eq(_net_stall_due(1000, 900000, 0), 0, "[hoosh].timeout_ms = 0 asks for no deadline, so nothing stalls");
+    var st, fd = tcp_socket();
+    var port = 20000 + ((clock_now_ms() + 7777) % 20000);
+    var bt, bv = sock_bind(fd, INADDR_LOOPBACK(), port);
+    var lt, lv = sock_listen(fd, 8);
+    assert_eq(is_err_result(bt) + is_err_result(lt), 0, "premise: a listener");
+    _nts_fd = fd;
+    var url = alloc(64);
+    var o = _append_cstr(url, 0, "http://127.0.0.1:");
+    o = _append_int(url, o, port);
+    o = _append_cstr(url, o, "/v1/chat/completions");
+    store8(url + o, 0);
+    var opts = sandhi_http_options_new();
+    sandhi_http_options_read_ms(opts, 500);
+    sandhi_http_options_write_ms(opts, 500);
+    sandhi_http_options_connect_ms(opts, 900);
+    var h = sandhi_headers_new();
+    # no surface bound: the path one-shot and the line REPL take. A comment every 200 ms would hold a read deadline of 500 ms open for ever.
+    _nts_go(1, 60, 200);
+    var t0 = clock_now_ms();
+    var sr = _nts_stream(url, h, opts);
+    var el = clock_now_ms() - t0;
+    _nts_end();
+    assert_eq(net_stalled(), 1, "plain path: the stall is named");
+    assert_eq(sandhi_stream_err(sr), SANDHI_OK, "...so the transport has nothing to report");
+    assert_eq(_nt_ev_n, 1, "...and the frame before it arrived");
+    assert(el >= 450, "...having waited the deadline");
+    assert(el < 2500, "...and not the 12 s the gateway would have held it");
+    # a surface bound: the worker path
+    _nt_arm(0);
+    _nts_go(1, 60, 200);
+    t0 = clock_now_ms();
+    sr = _nts_stream(url, h, opts);
+    el = clock_now_ms() - t0;
+    _nts_end();
+    _nt_disarm();
+    assert_eq(net_stalled(), 1, "worker path: the stall is named");
+    assert_eq(net_stopped(), 0, "...and is not a stop");
+    assert(el < 2500, "...at the deadline");
+    # frames keep a stream alive however long it runs, and a clean end clears the word
+    _nts_go(8, 0, 200);
+    t0 = clock_now_ms();
+    sr = _nts_stream(url, h, opts);
+    el = clock_now_ms() - t0;
+    _nts_end();
+    assert_eq(_nt_ev_n, 8, "a stream that keeps sending frames runs past the deadline: all eight");
+    assert_eq(net_stalled(), 0, "...with no stall");
+    assert(el >= 1200, "premise: it outlived the deadline");
+    _nt_arm(0);
+    _nts_go(8, 0, 200);
+    sr = _nts_stream(url, h, opts);
+    _nts_end();
+    _nt_disarm();
+    assert_eq(_nt_ev_n, 8, "...on the worker path too");
+    assert_eq(net_stalled(), 0, "...with no stall");
+    sock_close(fd);
+    return 0;
+}
+
+# test_net_stall_callers: what a stall reads as on each path. The transport had no fault and the gateway answered.
+fn _nts_fake_stall(j) {
+    store64(j + NJ_STALL, 1);
+    return _sandhi_stream_result_a(load64(j + NJ_ARENA), 200, 0, SANDHI_OK, 1);
+}
+fn test_net_stall_callers() {
+    test_group("a stall says what happened, on every path (0.54.4)");
+    var sv_mode = out_mode(); out_mode_set(OUT_RING); feed_init();
+    if (_agent_req == 0) { _agent_req = alloc(AGENT_REQ_CAP); }
+    if (_agent_work == 0) { _agent_work = alloc(AGENT_WORK_CAP); }
+    if (_hoosh_acc == 0) { _hoosh_acc = alloc(HOOSH_ACC_CAP); }
+    _agent_work_reset();
+    _nt_arm(0);
+    net_do_set(&_nts_fake_stall);
+    intr_reset();
+    _agent_iter_stream("m", 0, 0, 0, 0);
+    assert_eq(_agent_round_kind, 2, "a round ends as a failure");
+    assert_eq(net_stalled(), 1, "...read as a stall");
+    assert_eq(_ntr_feed_has("the provider has stalled"), 1, "...in those words");
+    assert_eq(_ntr_feed_has("hoosh stream error"), 0, "...and not as a transport error");
+    feed_init();
+    var sv_url = _cfg_hoosh_url;
+    if (sv_url == 0) { _cfg_hoosh_url = "http://127.0.0.1:9"; }
+    if (_hoosh_req == 0) { _hoosh_req = alloc(HOOSH_REQ_CAP); }
+    var hist0 = session_history_len();
+    var rc = hoosh_send("plain turn");
+    assert(rc < 0, "a plain turn fails too");
+    assert_eq(_ntr_feed_has("the provider has stalled"), 1, "...in the same words");
+    assert_eq(_ntr_feed_has("is the gateway up"), 0, "...and does not ask whether the gateway is up");
+    assert_eq(session_history_len(), hist0, "the unanswered turn is rolled back");
+    assert_eq(_ui_contains(net_stall_text(), "[hoosh].timeout_ms"), 1, "the words name the key that moves it");
+    assert_eq(_ui_contains(ev_error_text(0 - 1, 0, 0), "has stalled"), 1, "--events reads the same");
+    hoosh_health_mark_up();
+    _agent_round_health(2);
+    assert_eq(_hoosh_health, HOOSH_HEALTH_UP, "a stalled provider does not mark the gateway down");
+    _hoosh_acc_reset();
+    assert_eq(net_stalled(), 0, "the next round starts clear, so a later blocking failure is not read as this stall");
+    _agent_round_health(2);
+    assert_eq(_hoosh_health, HOOSH_HEALTH_DOWN, "...and that failure does mark it down");
+    _agent_round_health(4);
+    assert_eq(_hoosh_health, HOOSH_HEALTH_DOWN, "Esc says nothing about the gateway");
+    _agent_round_health(0);
+    assert_eq(_hoosh_health, HOOSH_HEALTH_UP, "an answered round marks it up");
+    _cfg_hoosh_url = sv_url;
+    _nt_disarm();
+    out_mode_set(sv_mode); feed_init();
+    return 0;
+}
+
 # test_net_probe: the probe that does not hold the first frame.
 fn _nt_fake_noresp(j) { _nt_fake_hold(j); return 0; }
 fn test_net_probe() {
@@ -612,6 +787,8 @@ fn test_netwait() {
     test_net_left_calls();
     test_net_child_stop();
     test_net_refused_stream();
+    test_net_stall();
+    test_net_stall_callers();
     test_net_probe();
     return 0;
 }

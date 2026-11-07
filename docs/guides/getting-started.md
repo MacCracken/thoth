@@ -106,8 +106,9 @@ thoth --help                             # the one-shot flag reference (thoth gu
 its authorization verdict and result size, and the reply — and binds **before the config is read**,
 so a run that crashes, hangs or is killed still leaves a record. `/save <file>` writes a readable
 markdown transcript of a session that ended normally. `[hoosh].timeout_ms` (default 3 minutes) is
-the per-read socket deadline: before 0.44.2 a gateway that accepted a connection and then went
-silent hung thoth with no way out but `kill`.
+the stall deadline: before 0.44.2 a gateway that accepted a connection and then went silent hung
+thoth with no way out but `kill`. On a stream it counts frames from the model, so a gateway keeping
+a stalled stream open with comments no longer holds a turn past it.
 
 Define `[alias]` macros in `.thoth/config.cyml` (`ship = "/run git status"`) to add your own
 slash commands; an unknown `/<name>` expands and re-dispatches. In the rich TUI, **Ctrl-P**
@@ -165,7 +166,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/feed.cyr` — the self-managed T2 feed ring + the escape-aware clip / soft-wrap (M7).
 - `src/ftree.cyr` — the togglable file-tree pane: geometry + flattened-tree model (M7).
 - `src/intr.cyr` — the turn-interrupt substrate (Esc-abort), decoupled from the TUI: the turn's level flag and (0.52.0) the stop generation `intr_seq` a running command's wait compares — an edge, so a stop left over from an earlier turn never kills a later command.
-- `src/netwait.cyr` — a network call that leaves the surface alive (0.54.0, ADR-0023): while the TUI or the window is up, every sandhi verb runs on a worker, stream events come back to the main thread one at a time, and a stop walks away from a call it cannot cancel. With no surface it is the plain call.
+- `src/netwait.cyr` — a network call that leaves the surface alive (0.54.0, ADR-0023): while the TUI or the window is up, every sandhi verb runs on a worker, stream events come back to the main thread one at a time, and a stop walks away from a call it cannot cancel. With no surface it is the plain call. Since 0.54.4 a stream's `[hoosh].timeout_ms` counts frames on every path, so a gateway's keep-alive comments do not hold a stalled provider.
 - `src/tui.cyr` — the T2 alt-screen front-end: status bar, composer, palette, painter (M7).
 - `src/gui/` — the sovereign T3 desktop GUI (`thoth gui`): the draw-command IR (`gdraw`) + kashi CPU rasterizer
   (`graster`) + view-builders (`gstatus`/`gtree`/`gtool`/`gfeed`/`gmem`/`gconv`) + the Wayland window seam
@@ -200,7 +201,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/budget.cyr` — `[budget]` spend enforcement (0.44.3): session token / cost ceilings checked before every turn and between agentic rounds, delegated children billed to the same tally — and an announcement when the gateway reports no usage, because a ceiling nothing measures is not a bound.
 - `src/mcpres.cyr` — MCP resources + prompts (`/resources`, `/resource`, `/prompts`) via daimon.
 - `src/hooks.cyr` — operator lifecycle hooks (`[hooks]`); `pre_tool` can BLOCK a tool call.
-- `src/toolpin.cyr` — trust-on-first-use SHA-256 pinning of tool definitions (the rug-pull defence, `[toolpin]`); since 0.51.0 the pins are durable across runs in a 0600 store at `[toolpin].file` (default `~/.thoth/toolpins`, a global-only authority key — [ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)): `/tools` marks each row `pinned` / `WITHHELD` and names the store, `/tools trust` accepts changed definitions and rewrites it, `/state` and the greeting box carry a pins row.
+- `src/toolpin.cyr` — trust-on-first-use SHA-256 pinning of tool definitions (the rug-pull defence, `[toolpin]`); since 0.51.0 the pins are durable across runs in a 0600 store at `[toolpin].file` (default `~/.thoth/toolpins`, a global-only authority key — [ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)): `/tools` marks each row `pinned` / `WITHHELD` and names the store, `/tools trust` accepts changed definitions and rewrites it, `/state` and the greeting box carry a pins row. Since 0.54.4 it compares its digest with daimon's on every probe and takes daimon's pin where it holds none, with a local pin winning.
 - `src/guard.cyr` — the injection-heuristic envelope over untrusted prose (`[guard]`).
 - `src/redact.cyr` — secret/PII redaction of tool results (`[redact]`, on by default).
 - `src/verify.cyr` — the post-edit `[verify].command` gate (run the build/tests after a model write).

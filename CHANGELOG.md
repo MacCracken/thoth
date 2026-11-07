@@ -4,6 +4,41 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.54.4] - 2026-11-06
+
+**Repair batch 18: daimon's pin record, a stall hoosh was hiding, and a stop `--json` could not see.** thoth takes daimon 2.5.4's tool pins where it holds none of its own, so a swapped definition no longer reaches the model after a store is lost. `[hoosh].timeout_ms` counts a stream's frames, so a provider gone quiet behind hoosh ends the turn. A turn thoth stops itself prints its object under `--json`. t-ron and agnosai-guard move to 2.2.5, and the rest of the stack was already current.
+
+**What changes for you:**
+
+- With daimon 2.5.4 or later, a tool thoth holds no pin for takes daimon's pin, whether the store was deleted, refused, or this is a new machine. A definition daimon reads as changed is withheld, where it used to be a first sight. The first run on a fresh store says how many pins it took.
+- A provider that stalls now ends the turn at `[hoosh].timeout_ms`, with a line saying so. A model silent for longer than that before its first frame (a local model loading, say) stops too: raise the key.
+- A budget stop, the iteration cap or a full working set now prints the `--json` object, with `stopped` and `stopped_why`. The exit is still 1. Stderr names the stop and the key that moves it, instead of `no completion returned`.
+
+### Changed
+
+- **thoth reads daimon's pin record** (ADR-0022's addendum). thoth's digest is compared with `definition_sha256` on every probe, and if they differ it says so and leaves daimon's pin unused for that tool. With no local pin it takes `pinned_sha256`, so a change daimon saw takes the ordinary CHANGED path. On a real daimon 2.5.5 with a swapped description, 0.54.3 sent it to the model with the store deleted and with the store refused. 0.54.4 withholds it in both and keeps the other 13 tools. A refused store stays on disk as evidence.
+- **A local pin wins, both ways.** `/tools trust` accepts for this client, so daimon can keep reading `changed` after an upgrade you accepted, and `/tools` shows `pinned · daimon reads it as changed`. A trusted name skips daimon's word at the next probe, or the trust would undo itself. daimon's per-consumer accept needs a token thoth does not hold, so it is a gap-review candidate.
+- `/state` adds a row for daimon's record: the state of its store, how many pins came from it and how many from its earlier runs, what it reads as changed, and any digest that differs. `/tools` marks `pinned (from daimon)`. `--events` carries `from_daimon` on `tool_pinned` and `tool_withheld`.
+- **t-ron 2.2.4 → 2.2.5:** two internal constructors renamed, which thoth never called, and bote-core 3.8.15, the same as thoth's. **agnosai-guard 2.2.4 → 2.2.5:** allocator forms, and a redactor that builds by runs. A 6,211-case corpus of secrets, near misses, NULs and noise gives byte-identical redaction and scan results on both bundles.
+- The waiting table is re-read: daimon's row is closed, and setu 0.9.1 changes no wire, so F8's gate stands. cyrius 6.7.18, hoosh 2.10.0, bote 3.8.15 and every other bundle are already their newest tags.
+
+### Fixed
+
+- **A provider gone quiet behind hoosh never tripped `[hoosh].timeout_ms`.** The deadline was per read, and hoosh's `: keep-alive` comment every 15 s restarted it. Reproduced for the first time on real hoosh 2.10.0, with a provider that sends one token and stops: with an 18 s deadline, 0.54.3 was still hung when killed at 42 s and 0.54.4 stops at 18.0 s. On the stub, a 1.5 s deadline now ends both a plain and an agentic turn within 0.1 s of it. A stream sending frames runs past the deadline as before, and `timeout_ms = 0` still means none. On AGNOS the deadline has no poll to run on, so a keep-alive still restarts it.
+- **A stall read as an unreachable gateway.** It now says the gateway held the stream open and the provider stalled, on every surface, `--events` included, and the status bar stays up.
+- **A budget stop printed no object under `--json`,** so a script got nothing to parse. The iteration cap and a full working set had the same gap, and all three now print one, `-o` included.
+- **`--events` reported a budget stop at the dispatch chokepoint as `no model backend wired`.** It now gives the stop's reason, with `stopped`.
+- **The iteration cap read as a hoosh failure in the window.** It now shows its own notice.
+- The tool result a withheld tool returns said the definition changed "this session", which was wrong for a pin from an earlier run or from daimon.
+
+### Verified
+
+- Suite 971 + 2599 + 1723 + 949 + 190 = 6,432, 0 failed (+146). A copy with `.git` and an empty `HOME` passes 6,434, with stdin closed and held open.
+- Break tests: 44 of 44 mutations failed a test.
+- Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` and on a Raspberry Pi (6,434 each), macOS is green natively (2590 + 1711 + 928 + 956 + 190), the hostile wire flags 0 of 152 rows on Linux and on macOS, and ring 3 passes.
+- The TUI in a pty against a real daimon, with a refused store, a swapped tool and a stall, and the window on a headless compositor through a stall: the line renders, the gateway stays up, and the next turn answers. hoosh and daimon were real binaries where it mattered: hoosh for the stall, daimon for every pin run.
+- Not run: the Windows lane past its warning set, and the stall on AGNOS, which has no idle turn to run it.
+
 ## [0.54.3] - 2026-11-06
 
 **Repair batch 17: the audit's remainder, ruled.** A repository can tighten the stall deadline and the log and do nothing else to them, the project map leaves the `system` role, and a cost ceiling works with no `[pricing]` table. The fifth item, the pin store thoth refuses, stays as shipped, and its repair is filed with daimon. This closes 0.54.x: the next arc is 0.55.0.
