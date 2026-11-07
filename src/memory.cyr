@@ -32,7 +32,10 @@ fn memory_dir() {
     if (_mem_dir_c != 0) { return _mem_dir_c; }
     var root = _thoth_root_resolve();
     if (root != 0) { _mem_dir_c = _cfg_join2(root, "memory"); }
-    if (root == 0) { _mem_dir_c = ".thoth/memory"; }
+    if (root == 0) {
+        _mem_dir_c = ".thoth/memory";
+        if (fs_root() != 0) { _mem_dir_c = _cfg_join2(fs_root(), ".thoth/memory"); }
+    }
     return _mem_dir_c;
 }
 # memory_global_dir / memory_global_index (0.43.3): the GLOBAL memory store at `~/.thoth/memory`, or 0.
@@ -129,7 +132,10 @@ fn memory_index_path() {
     if (_mem_idx_c != 0) { return _mem_idx_c; }
     var root = _thoth_root_resolve();
     if (root != 0) { _mem_idx_c = _cfg_join2(root, "memory/MEMORY.md"); }
-    if (root == 0) { _mem_idx_c = ".thoth/memory/MEMORY.md"; }
+    if (root == 0) {
+        _mem_idx_c = ".thoth/memory/MEMORY.md";
+        if (fs_root() != 0) { _mem_idx_c = _cfg_join2(fs_root(), ".thoth/memory/MEMORY.md"); }
+    }
     return _mem_idx_c;
 }
 var MEMORY_SYS_CAP = 4096;      # max bytes of memory injected per turn (4x persona)
@@ -684,8 +690,8 @@ fn memory_feedback(search_id, note_id) {
 # `memory/` reached THROUGH the link) into the operator's GLOBAL store, while the reply said `.thoth/memory/…`.
 # The components above `.thoth` are `..` climbs from the launch directory, which no link can rename.
 fn _mem_link_refused() {
-    if (is_symlink(str_from(memory_dir())) == 1) { return 1; }
-    if (is_symlink(str_from(memory_index_path())) == 1) { return 1; }
+    if (fs_is_link(str_from(memory_dir())) == 1) { return 1; }
+    if (fs_is_link(str_from(memory_index_path())) == 1) { return 1; }
     if (_mem_link_free(memory_index_path(), _mem_walk_project()) == 0) { return 1; }
     return 0;
 }

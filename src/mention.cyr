@@ -113,7 +113,7 @@ var MENTION_UNTRUSTED = " [UNTRUSTED: this file contains text resembling instruc
 fn _mention_resolve() {
     var tries = 0;
     while (tries < 4) {
-        if (file_exists_noblock(_mention_path) == 1) { return 1; }
+        if (file_exists_noblock(fs_path(_mention_path)) == 1) { return 1; }
         var n = strlen(_mention_path);
         if (n == 0) { return 0; }
         var last = load8(_mention_path + n - 1);
@@ -148,12 +148,12 @@ fn _mention_seen_add() {
 # so the mention stays literal). Sets _mention_last_added to the content bytes appended (for the cap).
 fn _mention_inject(o, budget) {
     _mention_last_added = 0;
-    if (file_is_regular(_mention_path) == 0) { return o; }   # 0.53.3: a directory, or a FIFO that would hang the open
+    if (file_is_regular(fs_path(_mention_path)) == 0) { return o; }   # 0.53.3: a directory, or a FIFO that would hang the open
     # 0.53.3: a mention is the operator's own hand, so the jail does not bind it, but the name they typed is what they
     # reviewed: a repository's `docs/spec.md -> ../../outside` sent the outside file under the innocent name. A relative
     # path through a link stays literal. An absolute path, or `~/`, is unambiguous and stays theirs.
     if ((load8(_mention_path) != 47) && (_project_no_symlink(_mention_path) == 0)) { return o; }
-    var n = file_read_all(_mention_path, _mention_read, MENTION_FILE_CAP + 1);
+    var n = file_read_all(fs_path(_mention_path), _mention_read, MENTION_FILE_CAP + 1);
     # n <= 0 -> nothing to inject, leave literal. A DIRECTORY reads as -EISDIR (file_open succeeds O_RDONLY
     # and the first read fails; through cyrius 6.6.5 file_read_all treated that as EOF and returned 0); a
     # genuinely empty file is 0. Both stay literal (portable — avoids a per-target is-dir stat; xstat is a

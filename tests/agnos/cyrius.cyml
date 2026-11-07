@@ -1,0 +1,15 @@
+[package]
+name = "agnos-hostile"
+version = "0.1.0"
+description = "the ring-3 half of scripts/live/agnos-hostile.py: runs a list of thoth processes on AGNOS and reports each"
+license = "GPL-3.0-only"
+language = "cyrius"
+cyrius = "6.7.18"
+
+[build]
+entry = "hostile.cyr"
+output = "build/hostile"
+
+# AGNOS ONLY: cyrius build --agnos hostile.cyr <out>
+[deps]
+stdlib = ["syscalls", "string", "alloc", "atomic", "fnptr", "poison", "str", "io"]

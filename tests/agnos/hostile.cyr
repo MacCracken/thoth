@@ -1,0 +1,211 @@
+# hostile.cyr — the ring-3 half of scripts/live/agnos-hostile.py. Seeded as /bin/agnsh, so kybernet runs it on a plain kernel.
+#
+# It works through /etc/runs, one line each, tab-separated:
+#   S  argv                         start a service in the background, and give it a moment
+#   L  port                         listen on a port and never accept: a gateway that took the connection and went no further
+#   R  id  ms  HOME  PWD  argv [stdin]    run a process to its end, or kill it at `ms`. Byte 1 in `stdin` is a newline.
+# A run gets its own HOME and PWD, and its stdout and stderr go down a pipe that this drains. thoth's replies are hostile by
+# design and a 5 MB one would crawl over the console, so only a tail is printed. Each run ends in one line the driver parses:
+#   RUN id status S ms M out N
+#   HEAD id <the first bytes it wrote, printable only>
+#   TAIL id <the last bytes it wrote, printable only>
+# The waits use pause#14, never sleep_ms#41, which holds the CPU from the process being waited for.
+
+var RUNS_CAP = 262144;
+var TAIL_CAP = 200;
+var _tail[64];                     # module scope: 64 i64 slots, 512 bytes
+var _tail_n = 0;
+var _head[64];
+var _head_n = 0;
+
+fn _put(s) { sys_write(1, s, strlen(s)); return 0; }
+fn _put_int(n) {
+    var b[24];
+    var i = 23;
+    var neg = 0;
+    if (n < 0) { neg = 1; n = 0 - n; }
+    store8(&b + i, 0);
+    if (n == 0) { i = i - 1; store8(&b + i, 48); }
+    while (n > 0) { i = i - 1; store8(&b + i, 48 + (n % 10)); n = n / 10; }
+    if (neg == 1) { i = i - 1; store8(&b + i, 45); }
+    return _put(&b + i);
+}
+fn _now_ms() {
+    var us = sys_uptime_us();
+    if (us >= 0) { return us / 1000; }
+    return sys_uptime_ms();
+}
+fn _wait_ms(ms) {
+    var t0 = _now_ms();
+    while ((_now_ms() - t0) < ms) { sys_pause(); }
+    return 0;
+}
+# _tail_add: keep the first and the last TAIL_CAP bytes of what a run wrote.
+fn _tail_add(p, n) {
+    var i = 0;
+    while (i < n) {
+        if (_head_n < TAIL_CAP) { store8(&_head + _head_n, load8(p + i)); _head_n = _head_n + 1; }
+        if (_tail_n == TAIL_CAP) { memcpy(&_tail, &_tail + 1, TAIL_CAP - 1); _tail_n = TAIL_CAP - 1; }
+        store8(&_tail + _tail_n, load8(p + i));
+        _tail_n = _tail_n + 1;
+        i = i + 1;
+    }
+    return 0;
+}
+fn _clean_put(p, n) {
+    var i = 0;
+    while (i < n) {
+        var b = load8(p + i) & 255;
+        if ((b < 32) || (b > 126)) { store8(p + i, 32); }
+        i = i + 1;
+    }
+    store8(p + n, 0);
+    return _put(p);
+}
+# _blob_words: `a b c` as `a\0b\0c\0` in dst. Returns the length.
+fn _blob_words(dst, s, n) {
+    var i = 0;
+    while (i < n) {
+        var b = load8(s + i);
+        if (b == 32) { b = 0; }
+        store8(dst + i, b);
+        i = i + 1;
+    }
+    store8(dst + n, 0);
+    return n + 1;
+}
+fn _start(argv, n) {
+    var b[1100];
+    var len = _blob_words(&b, argv, n);
+    var pid = sys_spawn_argv(&b, len, 0, 0, 0);
+    _put("HOSTILE service pid "); _put_int(pid); _put("\n");
+    return pid;
+}
+fn _listen(port) {
+    var id = sys_sock_listen(port);
+    _put("HOSTILE listen "); _put_int(port); _put(" -> "); _put_int(id); _put("\n");
+    return id;
+}
+fn _run(id, ms, home, hn, pwd, pn, argv, an, input, inn) {
+    var b[1100];
+    var e[1100];
+    var len = _blob_words(&b, argv, an);
+    var o = 0;
+    memcpy(&e + o, "HOME=", 5); o = o + 5;
+    memcpy(&e + o, home, hn); o = o + hn;
+    store8(&e + o, 0); o = o + 1;
+    memcpy(&e + o, "PWD=", 4); o = o + 4;
+    memcpy(&e + o, pwd, pn); o = o + pn;
+    store8(&e + o, 0); o = o + 1;
+    var fds[16];
+    if (sys_pipe(&fds) < 0) { _put("RUN "); _put(id); _put(" status -9 ms 0 out 0\n"); return 0; }
+    var rfd = load64(&fds);
+    var wfd = load64(&fds + 8);
+    sys_exec_redirect(1, wfd);
+    sys_exec_redirect_add(2, wfd);
+    var ifds[16];
+    var irfd = 0 - 1;
+    if (inn > 0) {                                 # a pipe holds 4080 B, far more than a script here, so this cannot block
+        if (sys_pipe(&ifds) == 0) {
+            irfd = load64(&ifds);
+            var iw = load64(&ifds + 8);
+            var k = 0;
+            while (k < inn) {
+                var ch = load8(input + k);
+                if (ch == 1) { ch = 10; }
+                var one[8];
+                store8(&one, ch);
+                sys_write(iw, &one, 1);
+                k = k + 1;
+            }
+            sys_close(iw);
+            sys_exec_redirect_add(0, irfd);
+        }
+    }
+    var t0 = _now_ms();
+    var pid = sys_spawn_argv(&b, len, &e, o, SPAWN_F_CLEANFD);
+    sys_close(wfd);
+    if (irfd >= 0) { sys_close(irfd); }
+    var st = 0 - 9;
+    var total = 0;
+    _tail_n = 0;
+    _head_n = 0;
+    if (pid >= 0) {
+        var buf[4096];
+        var open = 1;
+        var done = 0;
+        while (done == 0) {
+            var moved = 0;
+            if (open == 1) {
+                var n = sys_read_nb(rfd, &buf, 4096);
+                if (n > 0) { total = total + n; _tail_add(&buf, n); moved = 1; }
+                elif (n != (0 - 2)) { open = 0; }
+            }
+            var w = sys_waitpid(pid);
+            if (w != (0 - 2)) { st = w; done = 1; }
+            elif ((_now_ms() - t0) >= ms) {
+                sys_kill_tree(pid, 9);
+                sys_waitpid_block(pid);
+                st = 0 - 2;
+                done = 1;
+            }
+            if (moved == 0) { sys_pause(); }
+        }
+    }
+    var el = _now_ms() - t0;
+    sys_close(rfd);
+    _put("RUN "); _put(id); _put(" status "); _put_int(st); _put(" ms "); _put_int(el); _put(" out "); _put_int(total); _put("\n");
+    _put("HEAD "); _put(id); _put(" "); _clean_put(&_head, _head_n); _put("\n");
+    _put("TAIL "); _put(id); _put(" "); _clean_put(&_tail, _tail_n); _put("\n");
+    return 0;
+}
+fn _field_end(p, e) {
+    while ((p < e) && (load8(p) != 9)) { p = p + 1; }
+    return p;
+}
+fn _atoi(p, e) {
+    var n = 0;
+    while (p < e) { n = n * 10 + (load8(p) - 48); p = p + 1; }
+    return n;
+}
+# _cstr: a NUL-terminated copy of a field, in a slot that lives for the line.
+var _idbuf[8];
+fn _line(p, e) {
+    var k = load8(p);
+    p = p + 2;
+    if (k == 83) { _start(p, e - p); _wait_ms(2500); return 0; }     # S
+    if (k == 76) { _listen(_atoi(p, e)); return 0; }                  # L
+    if (k != 82) { return 0; }                                        # R
+    var f1 = _field_end(p, e);
+    var il = f1 - p;
+    if (il > 40) { il = 40; }
+    memcpy(&_idbuf, p, il); store8(&_idbuf + il, 0);
+    var p2 = f1 + 1; var f2 = _field_end(p2, e);
+    var p3 = f2 + 1; var f3 = _field_end(p3, e);
+    var p4 = f3 + 1; var f4 = _field_end(p4, e);
+    var p5 = f4 + 1;
+    var f5 = _field_end(p5, e);
+    var p6 = f5 + 1;
+    var inn = 0;
+    if (p6 < e) { inn = e - p6; }
+    return _run(&_idbuf, _atoi(p2, f2), p3, f3 - p3, p4, f4 - p4, p5, f5 - p5, p6, inn);
+}
+
+_put("HOSTILE start\n");
+var fd = file_open("/etc/runs", O_RDONLY, 0);
+if (fd < 0) { _put("HOSTILE no /etc/runs\n"); }
+else {
+    var buf = alloc(RUNS_CAP);
+    var have = 0;
+    var r = file_read(fd, buf, RUNS_CAP);
+    while (r > 0) { have = have + r; r = file_read(fd, buf + have, RUNS_CAP - have); }
+    var at = 0;
+    while (at < have) {
+        var end = at;
+        while ((end < have) && (load8(buf + end) != 10)) { end = end + 1; }
+        if (end > at) { _line(buf + at, buf + end); }
+        at = end + 1;
+    }
+}
+_put("HOSTILE DONE\n");
+sys_exit(0);

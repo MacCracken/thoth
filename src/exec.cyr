@@ -162,9 +162,10 @@ fn exec_shell_capture_tail(cmdline, buf, buflen, timeout_ms, status_out) {
 }
 
 #ifdef CYRIUS_TARGET_AGNOS
-# AGNOS: no /bin/sh, no fork/exec/dup2, no WNOHANG waitpid, different sys_open/sys_unlink arity —
-# so a capturing shell is architecturally impossible (the deferred-clipboard precedent). Announce,
-# never fake: report unsupported (-3) and 0 bytes; shell_supported() returns 0 so it is unadvertised.
+# AGNOS: no /bin/sh. The floor has what a capture needs now (fork#96, spawn_path#43 with an argv, redirects, a non-blocking wait
+# and a tree kill: lib/process_agnos.cyr), so this file's old "architecturally impossible" no longer holds, and what is missing is
+# a shell to hand a command line to. Announce, never fake: report unsupported (-3) and 0 bytes. shell_supported() is 0, so the
+# tool is unadvertised, a call naming it anyway is refused, [verify] claims nothing, and [hooks] says it cannot run.
 fn exec_shell_capture(cmdline, buf, buflen, timeout_ms, status_out) {
     store64(status_out, 0 - 3); store64(status_out + 8, 0); return 0;
 }

@@ -29,3 +29,6 @@
 # ever created.)
 **/.thoth/checkpoints/
 __pycache__/
+
+# built beside the AGNOS launcher by cyrius build
+tests/agnos/lib/

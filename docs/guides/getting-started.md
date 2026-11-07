@@ -183,7 +183,7 @@ posture, made real (see [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) and
 - `src/memory.cyr` — the memory seam: consumes **mneme** via daimon when hosted (`/remember`, semantic recall, citations, grounding, `/notes`), degrading to the local `.thoth/memory/` reader otherwise.
 - `src/memlog.cyr` — the per-turn ring of recalled-source titles + grounding verdict (feeds the GUI `gmem` strip, 0.32.5).
 - `src/mention.cyr` — `@file` mention expansion (appends a file's contents to the message).
-- `src/project.cyr` — the default-on jailed `read_file` / `list_dir` tools the agent uses to see the project, and (0.50.0) the project-map hint every turn carries as a user message (`[project].map`).
+- `src/project.cyr` — the default-on jailed `read_file` / `list_dir` tools the agent uses to see the project, and (0.50.0) the project-map hint every turn carries as a user message (`[project].map`). A relative path goes through `fs_path` before the filesystem sees it, because AGNOS has no cwd ([note 005](../architecture/005-a-relative-path-is-not-the-kernels-to-resolve.md)).
 - `src/edit.cyr` — the opt-in, jailed, `thoth_edit`-gated model `edit` / `create_file` write tools (ADR-0017).
 - `src/editlog.cyr` — the session ring of each edit's diff (keyed by turn/round/call), for the GUI diff cards.
 - `src/git.cyr` — the git producer (`/state` row, `/git`, status-bar branch) — consumes sit.

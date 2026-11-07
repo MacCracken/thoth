@@ -147,8 +147,9 @@ fn _search_scan_file(relpath, needle, ic) {
     _search_files_seen = _search_files_seen + 1;
     if (_search_file == 0) { _search_file = alloc(SEARCH_FILE_CAP + 1); }
     if (_search_file == 0) { return 1; }
-    if (file_is_regular(relpath) == 0) { return 0; }   # 0.53.3: a FIFO in the tree hung the search in open(2)
-    var n = file_read_all(relpath, _search_file, SEARCH_FILE_CAP);
+    var fp = fs_path(relpath);
+    if (file_is_regular(fp) == 0) { return 0; }        # 0.53.3: a FIFO in the tree hung the search in open(2)
+    var n = file_read_all(fp, _search_file, SEARCH_FILE_CAP);
     if (n <= 0) { return 0; }                       # unreadable or empty -> not an error, just no hits
     store8(_search_file + n, 0);
     # 0.44.3 - A FILE CUT AT THE CAP IS A TRUNCATED SEARCH, and this never said so. `_search_truncated`
@@ -198,8 +199,8 @@ fn _search_apunread() {
 # `needle` may be 0 (name-only search). Returns 1 when a bound says stop.
 fn _search_walk(dir, needle, ic, globpat, depth) {
     if (depth > SEARCH_MAX_DEPTH) { _search_truncated = 1; return 0; }
-    var dirstr = str_from(".");
-    if (load8(dir) != 0) { dirstr = str_from(dir); }
+    var dirstr = str_from(fs_path("."));
+    if (load8(dir) != 0) { dirstr = str_from(fs_path(dir)); }
     # 0.52.9: `dir_list` answers empty for a directory it cannot read, which reads as nothing to find there.
     var v = vec_new();
     if (v == 0) { return 0; }
@@ -235,7 +236,7 @@ fn _search_walk(dir, needle, ic, globpat, depth) {
                 _search_entries = _search_entries + 1;
                 if (_search_entries > SEARCH_MAX_ENTRIES) { _search_truncated = 1; return 1; }
                 if (intr_check() == 1) { _search_truncated = 1; return 1; }
-                if (is_dir(str_from(_search_path)) == 1) {
+                if (is_dir(str_from(fs_path(_search_path))) == 1) {
                     var sub = alloc(o + 1);
                     if (sub != 0) {
                         memcpy(sub, _search_path, o); store8(sub + o, 0);
@@ -326,7 +327,7 @@ fn search_tool(args_cstr) {
         if (_project_read_ok(root) == 0) { return project_refuse_outside("search", root); }
         if (_project_no_symlink(root) == 0) { return "(search: refused - a component of 'path' is a symlink; the jail does not follow links out of the project)"; }
         if (_project_sensitive(root) == 1) { return "(search: refused - that is thoth's own config/state, not project source)"; }
-        if (is_dir(str_from(root)) == 0) { return "(search: 'path' is not a directory in this project)"; }
+        if (is_dir(str_from(fs_path(root))) == 0) { return "(search: 'path' is not a directory in this project)"; }
     }
 
     if (_search_out == 0) { _search_out = alloc(SEARCH_OUT_CAP); }

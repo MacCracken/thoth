@@ -2479,6 +2479,114 @@ fn test_toolpin_daimon() {
     return 0;
 }
 
+# test_fs_no_cwd (0.55.1): a target with no working directory. AGNOS has no cwd, so `.` was the disk and the project was everything
+# on it. The seam is flipped here, so the AGNOS logic runs on every lane. The root is relative only because a test may not assume
+# where it runs: fs_root itself refuses a relative $PWD, which the first group holds.
+fn _t_fs_put(path, text) { return file_write_all(path, text, strlen(text)); }
+fn test_fs_no_cwd() {
+    test_group("a root from $PWD is absolute, and is not the disk (0.55.1)");
+    assert_eq(_fs_root_from(0), 0, "no $PWD: no root");
+    assert_eq(_fs_root_from("rel/dir"), 0, "a relative $PWD is no root");
+    assert_eq(_fs_root_from("/"), 0, "`/` is the disk: nothing to prefix");
+    assert_eq(_fs_root_from("///"), 0, "...however it is spelled");
+    assert(streq(_fs_root_from("/a/b/"), "/a/b") == 1, "trailing slashes go");
+    assert_eq(_fs_root_from("/a/../b"), 0, "a `..` component is refused");
+    assert_eq(_fs_root_from("/a/.."), 0, "...at the end too");
+    assert_eq(_fs_root_from("/.."), 0, "...and alone");
+    assert(streq(_fs_root_from("/a/..b/c."), "/a/..b/c.") == 1, "a name that only starts with dots is a name");
+    assert_eq(fs_root(), 0, "this target has a cwd: no root");
+    assert(streq(fs_path("a.txt"), "a.txt") == 1, "...and a path is itself");
+
+    test_group("a relative path is the project's, not the disk's (0.55.1, found on AGNOS)");
+    var r = "build/.fsroot";
+    xmkdir(r, 448);
+    _t_fs_put("build/.fsroot/inside.txt", "INSIDE the project\n");
+    _t_fs_put("build/.fsoutside.txt", "OUTSIDE the project\n");
+    xmkdir("build/.fsroot/sub", 448);
+    _t_fs_put("build/.fsroot/sub/deep.txt", "DEEP in the project\n");
+    var sv_ec = _cfg_edit_enabled;
+    var sv_ck = _ckpt_ready; var sv_cn = _ckpt_n;       # the checkpoint directory below is the root's: its latch must not outlive this test
+    _ckpt_ready = 0;
+    _fs_no_cwd = 1; _fs_root_done = 1; _fs_root_c = r;
+    assert(streq(fs_path("a.txt"), "build/.fsroot/a.txt") == 1, "a name lands under the root");
+    assert(streq(fs_path("./a.txt"), "build/.fsroot/a.txt") == 1, "...`./` adds nothing");
+    assert(streq(fs_path("."), r) == 1, "`.` is the root");
+    assert(streq(fs_path(""), r) == 1, "...and so is nothing");
+    assert(streq(fs_path("/abs/x"), "/abs/x") == 1, "an absolute path is itself");
+    var longp = alloc(5000);
+    var i = 0;
+    while (i < 4999) { store8(longp + i, 97); i = i + 1; }
+    store8(longp + 4999, 0);
+    var lp = fs_path(longp);
+    assert_eq(strlen(lp), strlen(r) + 1 + 4999, "a path past the ring's slot is whole");
+    assert(memeq(lp, r, strlen(r)) == 1, "...and still under the root: a fallback to the relative form is the disk");
+    var a = fs_path("one");
+    var b = fs_path("two");
+    assert(streq(a, "build/.fsroot/one") == 1, "two paths held at once stay apart, as a rename needs");
+    assert(streq(b, "build/.fsroot/two") == 1, "...both");
+    assert(_ui_contains(read_file_tool("{\"path\":\"inside.txt\"}"), "INSIDE") == 1, "read_file reads the project's file");
+    assert(_ui_contains(read_file_tool("{\"path\":\"VERSION\"}"), "no such file") == 1, "...and not the same name at the process's `.`");
+    assert(_ui_contains(read_file_tool("{\"path\":\"../.fsoutside.txt\"}"), "refused") == 1, "`..` is still refused");
+    assert(_ui_contains(list_dir_tool("{}"), "inside.txt") == 1, "list_dir lists the project");
+    assert_eq(_ui_contains(list_dir_tool("{}"), "cyrius.cyml"), 0, "...and not the process's `.`");
+    var sr = search_tool("{\"pattern\":\"INSIDE the project\"}");
+    assert(_ui_contains(sr, "inside.txt:1") == 1, "search finds the project's file, by its project path");
+    assert_eq(_ui_contains(sr, "build/.fsroot"), 0, "...not by where the disk keeps it");
+    assert_eq(_ui_contains(search_tool("{\"pattern\":\"OUTSIDE the project\"}"), ".fsoutside"), 0, "...and walks nothing above the root");
+    assert(_ui_contains(search_tool("{\"pattern\":\"DEEP in the project\"}"), "sub/deep.txt:1") == 1, "...and walks down from it");
+    assert(streq(_cfg_updir(0, ".thoth"), "build/.fsroot/.thoth") == 1, "the config walk starts where the operator is");
+    assert(streq(_cfg_updir_abs("/a/b/c", 1, ".thoth"), "/a/b/.thoth") == 1, "...and climbs a level at a time");
+    assert(streq(_cfg_updir_abs("/a/b/c", 3, ".thoth"), "/.thoth") == 1, "...to the disk root");
+    assert(streq(_cfg_updir_abs("/a/b/c", 9, ".thoth"), "/.thoth") == 1, "...and stops there");
+    assert(_ui_contains(mention_expand("see @inside.txt please"), "INSIDE") == 1, "an @mention reads the project's file");
+    assert_eq(_ui_contains(mention_expand("see @VERSION please"), "0."), 0, "...and not the same name at the process's `.`");
+    var sm = out_mode();
+    feed_init(); out_mode_set(OUT_RING);
+    cmd_read("/read inside.txt");
+    feed_flush_pending(); out_mode_set(sm);
+    assert(_mid_feed_plain_count("INSIDE the project") >= 1, "the operator's /read does too");
+    assert_eq(_oneshot_write_out("out.txt", "x\n", 2), 0, "-o writes");
+    assert_eq(file_exists("build/.fsroot/out.txt"), 1, "...under the root");
+    assert_eq(file_exists("out.txt"), 0, "...and not at the process's `.`");
+
+    test_group("a link in the project is walked from the project (0.55.1)");
+    xunlink("build/.fsroot/out");
+    xsymlink("../.fsoutside.txt", "build/.fsroot/out");
+    assert(_ui_contains(read_file_tool("{\"path\":\"out\"}"), "symlink") == 1, "a link out is refused by name");
+    assert_eq(_project_no_symlink("out"), 0, "...by the walk");
+    assert_eq(_project_no_symlink("inside.txt"), 1, "...which lets a plain name through");
+    xunlink("build/.fsroot/out");
+    assert(streq(_pmap_root_cstr(), r) == 1, "the project map lists the root");
+    xunlink("build/.fslink");
+    xsymlink(".fsroot", "build/.fslink");
+    _fs_root_c = "build/.fslink";
+    assert_eq(_project_no_symlink("inside.txt"), 1, "a $PWD that is itself a link is the operator's: only the model's components are walked");
+    _fs_root_c = r;
+    xunlink("build/.fslink");
+
+    test_group("the write tools land in the project, and their undo with them (0.55.1)");
+    var cr = _write_do("made.txt", "made\n", 5);
+    assert(_ui_contains(cr, "could not") == 0, "create_file creates");
+    assert_eq(file_exists("build/.fsroot/made.txt"), 1, "...under the root");
+    assert_eq(file_exists("made.txt"), 0, "...and not at the process's `.`");
+    assert_eq(is_dir(str_from("build/.fsroot/.thoth/checkpoints")), 1, "its checkpoint lands in the project's .thoth");
+    var er = _edit_do("made.txt", "made", 4, "edited", 6);
+    assert(_ui_contains(er, "could not") == 0, "edit edits");
+    var eb = alloc(64);
+    var en = file_read_all("build/.fsroot/made.txt", eb, 63);
+    store8(eb + en, 0);
+    assert(streq(eb, "edited\n") == 1, "...the project's file");
+    assert_eq(ckpt_restore_turn(session_turns()), 2, "/rewind undoes the turn: the edit and the create");
+    assert_eq(file_exists("build/.fsroot/made.txt"), 0, "...in the project, so the new file is gone");
+
+    _fs_no_cwd = 0; _fs_root_done = 0; _fs_root_c = 0;
+    _cfg_edit_enabled = sv_ec;
+    _ckpt_ready = sv_ck; _ckpt_n = sv_cn;
+    assert(streq(fs_path("a.txt"), "a.txt") == 1, "premise for the rest of the suite: the seam is back");
+    xunlink("build/.fsoutside.txt");
+    return 0;
+}
+
 fn test_toolpin_store_merge() {
     test_group("durable tool pins: a flush re-reads and UNIONS what another session pinned (0.51.0 / F6)");
     var sv_url = _cfg_daimon_url; var sv_en = _cfg_toolpin_enabled;

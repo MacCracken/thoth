@@ -502,7 +502,7 @@ fn oneshot_json_envelope(dst, cap, reply, reply_len, elapsed_ms) {
 # lib/io.cyr wrappers (the AGNOS `AO_*` open bridge — never a raw `sys_open`). Returns 0 on
 # success, -1 on any open / short / newline write failure (so one_shot_run degrades closed).
 fn _oneshot_write_out(path, buf, len) {
-    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0x1A4 = 0644
+    var fd = file_open(fs_path(path), O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0x1A4 = 0644
     if (fd < 0) { return 0 - 1; }
     var w = file_write(fd, buf, len);
     if (w == len) {

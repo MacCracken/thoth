@@ -4,6 +4,104 @@
 # interface and never touch the capability spine. Both src/main.cyr and the
 # test suite include this module; keep it free of top-level execution.
 
+# --- a target with no working directory (0.55.1) ---------------------------------------------------------------------
+#
+# Every path thoth calls project-relative leans on the kernel: `a.txt` is the project's because the process's cwd is. AGNOS has
+# no cwd, and none is to be added: "CWD is userland-owned" (its userland ABI, § 3.2). A relative name is rooted at /, and a
+# program's relative operands are its own to resolve against $PWD. thoth did not, so on AGNOS the project was the whole disk:
+# read_file("etc/x") read /etc/x, search walked every file, and only a missing checkpoint directory stopped create_file.
+#
+# So a jail check still reads the relative spelling, and fs_path turns that spelling into what the filesystem gets. On a
+# target with a kernel cwd it is the identity. An oversized path gets its own allocation and never falls back to the relative
+# form, which on AGNOS would be the same name at the disk root.
+#ifdef CYRIUS_TARGET_AGNOS
+var _fs_no_cwd = 1;
+#endif
+#ifndef CYRIUS_TARGET_AGNOS
+var _fs_no_cwd = 0;
+#endif
+var _fs_root_done = 0;
+var _fs_root_c = 0;                # $PWD, checked; 0 when the disk root is the project, or the target has a cwd
+var FS_RING_N = 8;                 # paths live at once: a rename takes two, and a tool holds one across a check
+var FS_PATH_CAP = 4200;
+var _fs_ring = 0;
+var _fs_ring_at = 0;
+# _fs_root_from: `p` as a project root: an owned copy with trailing slashes gone, or 0 when it is not absolute, is the disk root,
+# or holds a `..` component, which only the operator could have put there and which nothing here resolves.
+fn _fs_root_from(p) {
+    if (p == 0) { return 0; }
+    if (load8(p) != 47) { return 0; }
+    var n = strlen(p);
+    while ((n > 0) && (load8(p + n - 1) == 47)) { n = n - 1; }
+    if (n == 0) { return 0; }
+    var i = 0;
+    while ((i + 1) < n) {
+        if ((load8(p + i) == 47) && (load8(p + i + 1) == 46) && ((i + 2) < n)) {
+            if (load8(p + i + 2) == 46) {
+                if (((i + 3) == n) || (load8(p + i + 3) == 47)) { return 0; }
+            }
+        }
+        i = i + 1;
+    }
+    var c = alloc(n + 1);
+    if (c == 0) { return 0; }
+    memcpy(c, p, n);
+    store8(c + n, 0);
+    return c;
+}
+fn fs_root() {
+    if (_fs_no_cwd == 0) { return 0; }
+    if (_fs_root_done == 0) { _fs_root_done = 1; _fs_root_c = _fs_root_from(getenv("PWD")); }
+    return _fs_root_c;
+}
+# fs_is_link: 1 when `path` (a Str) is a symlink. On AGNOS the stdlib's is_symlink asks readlink#70 with an 8-byte buffer, and
+# that call refuses a target longer than the buffer where Linux truncates, so a link with a target past 8 bytes read as no link
+# and every check built on it passed. lstat#102 answers with no buffer to outgrow. A path too long to ask about counts as a link:
+# the question is whether to follow it.
+fn fs_is_link(path) {
+    #ifdef CYRIUS_TARGET_AGNOS
+    var n = str_len(path);
+    if (n >= 4096) { return 1; }
+    var cp[4096];
+    var st[256];
+    memcpy(&cp, str_data(path), n);
+    store8(&cp + n, 0);
+    if (sys_lstat(&cp, n, &st) != 0) { return 0; }
+    if ((load64(&st + STAT_MODE) & 0xF000) == 0xA000) { return 1; }
+    return 0;
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    return is_symlink(path);
+    #endif
+}
+# fs_path: where a relative path really is. An absolute path, and any path on a target with a cwd, is itself. The result stays
+# good for the next FS_RING_N calls.
+fn fs_path(path) {
+    var r = fs_root();
+    if ((r == 0) || (path == 0)) { return path; }
+    if (load8(path) == 47) { return path; }
+    if (load8(path) == 0) { return r; }
+    if ((load8(path) == 46) && (load8(path + 1) == 0)) { return r; }
+    if ((load8(path) == 46) && (load8(path + 1) == 47)) { path = path + 2; }
+    var rl = strlen(r);
+    var pl = strlen(path);
+    var d = 0;
+    if ((rl + pl + 2) > FS_PATH_CAP) { d = alloc(rl + pl + 2); }
+    else {
+        if (_fs_ring == 0) { _fs_ring = alloc(FS_RING_N * FS_PATH_CAP); }
+        if (_fs_ring != 0) {
+            d = _fs_ring + _fs_ring_at * FS_PATH_CAP;
+            _fs_ring_at = (_fs_ring_at + 1) % FS_RING_N;
+        }
+    }
+    if (d == 0) { return "/nonexistent"; }     # no memory: a path that cannot exist, never the relative one
+    memcpy(d, r, rl);
+    store8(d + rl, 47);
+    memcpy(d + rl + 1, path, pl);
+    store8(d + rl + 1 + pl, 0);
+    return d;
+}
+
 # Buffered stdin line reader state. The carry buffer lets one read() satisfy
 # many lines (Linux pipes deliver multi-line blobs) while still returning
 # exactly one line per call (agnos line-discipline delivers one).

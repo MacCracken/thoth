@@ -71,9 +71,9 @@ fn _ckpt_dir_ensure() {
     if (_ckpt_ready == 1) { return 1; }
     # 0.53.3: a checked-in `.thoth/checkpoints -> ../../elsewhere` took the snapshots (repository bytes) out of the project.
     if (_project_no_symlink(".thoth/checkpoints") == 0) { return 0; }
-    xmkdir(".thoth", 448);                      # 0700 — thoth's own state; may already exist, ignore the result
-    if (xmkdir(".thoth/checkpoints", 448) != 0) {
-        if (is_dir(str_from(".thoth/checkpoints")) == 0) { return 0; }
+    xmkdir(fs_path(".thoth"), 448);             # 0700 — thoth's own state; may already exist, ignore the result
+    if (xmkdir(fs_path(".thoth/checkpoints"), 448) != 0) {
+        if (is_dir(str_from(fs_path(".thoth/checkpoints"))) == 0) { return 0; }
     }
     _ckpt_ready = 1;
     return 1;
@@ -118,13 +118,13 @@ fn ckpt_capture(path, turn) {
     if (strlen(path) >= CKPT_PATH_CAP) { return 0; }
     if (_ckpt_dir_ensure() == 0) { return 0; }
     var seq = 0 - 1;
-    if ((_ckpt_is_new == 0) && (file_exists(path) == 1)) {
-        var n = file_read_all(path, _ckpt_buf, CKPT_FILE_CAP);
+    if ((_ckpt_is_new == 0) && (file_exists(fs_path(path)) == 1)) {
+        var n = file_read_all(fs_path(path), _ckpt_buf, CKPT_FILE_CAP);
         if (n < 0) { return 0; }
         if (n >= CKPT_FILE_CAP) { return 0; }        # too large to snapshot -> refuse the write, do not risk it
         _ckpt_seq = _ckpt_seq + 1;
         seq = _ckpt_seq;
-        if (file_write_atomic(_ckpt_snap_path(seq), _ckpt_buf, n) != 0) { return 0; }
+        if (file_write_atomic(fs_path(_ckpt_snap_path(seq)), _ckpt_buf, n) != 0) { return 0; }
     }
     # ring: drop the oldest when full, keeping the newest CKPT_MAX
     if (_ckpt_n >= CKPT_MAX) {
@@ -163,12 +163,12 @@ fn ckpt_restore_one(i) {
     if (_project_jail_ok(path) == 0) { return 0; }
     if (_project_no_symlink(path) == 0) { return 0; }
     if (seq < 0) {
-        xunlink(path);                                # it did not exist before; undo = remove it
+        xunlink(fs_path(path));                       # it did not exist before; undo = remove it
         return 1;
     }
-    var n = file_read_all(_ckpt_snap_path(seq), _ckpt_buf, CKPT_FILE_CAP);
+    var n = file_read_all(fs_path(_ckpt_snap_path(seq)), _ckpt_buf, CKPT_FILE_CAP);
     if (n < 0) { return 0; }
-    if (file_write_atomic(path, _ckpt_buf, n) != 0) { return 0; }
+    if (file_write_atomic(fs_path(path), _ckpt_buf, n) != 0) { return 0; }
     return 1;
 }
 

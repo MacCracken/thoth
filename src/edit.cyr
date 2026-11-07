@@ -142,9 +142,10 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     if (_edit_old == 0) { _edit_old = alloc(EDIT_BUF_CAP); }
     if (_edit_new == 0) { _edit_new = alloc(EDIT_BUF_CAP); }
     if (_edit_res == 0) { _edit_res = alloc(EDIT_RES_CAP); }
-    if (file_exists_noblock(path) == 0) { return "(edit: file does not exist - use create_file to make a new file, or check the path)"; }
-    if (file_is_regular(path) == 0) { return "(edit: that path is not a regular file)"; }
-    var oldlen = file_read_all(path, _edit_old, EDIT_BUF_CAP - 1);
+    var fp = fs_path(path);
+    if (file_exists_noblock(fp) == 0) { return "(edit: file does not exist - use create_file to make a new file, or check the path)"; }
+    if (file_is_regular(fp) == 0) { return "(edit: that path is not a regular file)"; }
+    var oldlen = file_read_all(fp, _edit_old, EDIT_BUF_CAP - 1);
     if (oldlen < 0) { return "(edit: could not read the file)"; }
     if (oldlen >= (EDIT_BUF_CAP - 1)) { return "(edit: file too large (> 256KB) - refused rather than edit a truncated read)"; }
     var newlen = _edit_apply(_edit_old, oldlen, oldstr, oldstrlen, newstr, newstrlen, _edit_new, EDIT_BUF_CAP);
@@ -162,7 +163,7 @@ fn _edit_do(path, oldstr, oldstrlen, newstr, newstrlen) {
     if (ckpt_capture(path, session_turns()) == 0) {
         return "(edit: refused - could not checkpoint the file first, so the edit would not be undoable; is .thoth/ writable, or the file over 256KB?)";
     }
-    var rc = file_write_atomic(path, _edit_new, newlen);
+    var rc = file_write_atomic(fs_path(path), _edit_new, newlen);
     if (rc != 0) { return "(edit: the write to disk failed (disk full?) - the file is unchanged)"; }
     _edit_last_ok = 1;
     # 0.31.1: stash this edit's path + old/new lengths for editlog_record (the dispatch calls it right after,
@@ -208,7 +209,7 @@ fn edit_tool(args_cstr) {
     if (_project_no_symlink(path) == 0) { return "(edit: refused - a path component is a symlink; a write must not follow a link out of the project)"; }
     if (_project_sensitive(path) == 1) { return "(edit: refused - thoth's own config/state is not model-writable)"; }
     if (_project_git_path(path) == 1) { return "(edit: refused - a write inside .git is command execution; it is not model-writable)"; }
-    if ((file_exists_noblock(path) == 1) && (file_is_regular(path) == 0)) { return "(edit: that path is not a regular file)"; }   # no prompt for a FIFO
+    if ((file_exists_noblock(fs_path(path)) == 1) && (file_is_regular(fs_path(path)) == 0)) { return "(edit: that path is not a regular file)"; }   # no prompt for a FIFO
     if (gate_authorize("thoth_edit", _params_one("path", path), "edit", path) == 0) { return "denied by authorization policy"; }
     _edit_last_allowed = 1;
     if (_project_no_symlink(path) == 0) { return "(edit: refused - a path component became a symlink while the prompt was up)"; }   # 0.53.3: checked before the gate, used after it
@@ -249,7 +250,7 @@ fn _write_do(path, content, clen) {
     # regardless of read permission (so it also covers the writable-but-UNREADABLE mode-0200 file that a plain
     # file_exists O_RDONLY probe would miss) and refuses to follow a trailing symlink. AGNOS and Windows are atomic
     # the same way, through their own exclusive-create bits; that per-target handling lives in the stdlib, not here.
-    var fd = file_create_exclusive(path, 0x1A4);
+    var fd = file_create_exclusive(fs_path(path), 0x1A4);
     if (fd == (0 - 17)) { return "(create_file: that file already exists - use edit to modify it)"; }
     if (fd < 0) { return "(create_file: could not create the file (the path may be unwritable))"; }
     # 0.40.0 (T1-4): record the checkpoint AFTER the exclusive create proves the file did not exist, so
@@ -259,7 +260,7 @@ fn _write_do(path, content, clen) {
     # the "remove it" undo was dead and /rewind left an empty file behind.
     if (ckpt_capture_new(path, session_turns()) == 0) {
         file_close(fd);
-        xunlink(path);                                          # roll back the empty file we just created
+        xunlink(fs_path(path));                                 # roll back the empty file we just created
         return "(create_file: refused - could not checkpoint, so the new file would not be undoable; is .thoth/ writable?)";
     }
     var wr = clen;

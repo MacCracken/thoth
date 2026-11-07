@@ -227,6 +227,14 @@ Rung 2 runs beside it, on the same terms. `--turn` builds hoosh and daimon `--ag
 
 `HOOSH_BIN` or `DAIMON_BIN` names a binary to use as it stands, which is how to test a candidate. The runner's gates read the guest's console and the provider's log, so a tool round counts only if its result reached the model. A failed run keeps its private copy, with both logs in `build/agnos-private.*/build/spine-turn-smoke-logs/`. `--logs` on a guest writes to the image: read it back with `debugfs` on the ext2 partition, which starts 33 MiB in.
 
+The hostile pass runs the same way, and belongs in every release that touches a file path or the wire:
+
+```bash
+./scripts/agnos-run.sh --hostile
+```
+
+It boots once and works through the audit's attacks: the 151 wire scenarios, a gateway going silent at each stage, the jail, the capture and the stores. Each run gets its own `HOME` and `PWD` through `tests/agnos/hostile.cyr`, and the verdicts come from the wire, the exit status and the image read back after the run. The report is `/var/tmp/thoth-agnos-hostile/report.txt`. `THOTH_HOSTILE_ONLY=jail` runs one class, about a minute. Every store has a control that must write it: on the first pass the session control wrote nothing, so four "held" session attacks had proved nothing, and sessions now run in the line REPL on a scripted stdin. A scenario added to the kit needs an expectation in `EXPECT`, or a regression only scrolls past.
+
 Run it serially. The harness writes one log per name and overwrites it, so a parallel run can read another's failed boot as its own. To check that a pass means something, give it a wrong expect string and watch it fail.
 
 ## A turn that gets stuck or comes back empty

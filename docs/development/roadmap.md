@@ -67,8 +67,9 @@ Three gates remain, in dependency order.
 
 2. **Security review pass (process gate) — the external sign-off.** What remains is whatever "pass"
    means to someone who is not the author. Its reading list: the fail-closed posture and the t-ron
-   choke point (the internal audits of record are [`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md)
-   and [`../audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md)),
+   choke point (the internal audits of record are [`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md),
+   [`../audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md) and, on AGNOS,
+   [`../audit/2026-11-06-agnos-hostile-pass.md`](../audit/2026-11-06-agnos-hostile-pass.md)),
    the parallel executor's concurrency, the GUI's authorization path — the `ask_user` modal answering
    `confirm` and the session grant it can record
    ([ADR-0020](../adr/0020-ask-user-the-tool-that-runs-toward-the-operator.md)) — and the durable
@@ -127,11 +128,8 @@ unsure, patch.
 
 ### 0.55.x — A real turn on AGNOS
 
-v1.0 gate 1. A real turn runs on AGNOS: `scripts/agnos-run.sh --turn` stages thoth, hoosh and daimon on one image, through `agnos/scripts/smoke/spine-turn-smoke.sh`.
+v1.0 gate 1. A real turn runs on AGNOS: `scripts/agnos-run.sh --turn` stages thoth, hoosh and daimon on one image, through `agnos/scripts/smoke/spine-turn-smoke.sh`, and `--hostile` runs the audit's attacks there.
 
-- **0.55.1 — The AGNOS hostile pass.** With a turn running, the attacks the 2026-11-05 audit ran on Linux: the wire kit, the capture and the
-  stores. Known to start from: a gateway that takes the connection and never reads it took 38 s to fail against a 15 s `[hoosh].timeout_ms`, because AGNOS's
-  `sock_connect` blocks on its own clock. The stall deadline has no poll there (the degradations below).
 - **0.55.2 — Rung 3.** **Gate:** the floor. A `#97` terminal channel now carries a window size, so an emulator's terminal end is worth reading as
   a route that does not need raw console reads.
 
@@ -149,7 +147,7 @@ in there, with `gwl_win_wait` as its wait.
   refuses anything before `CREATE_SURFACE`), and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
   present, a per-surface opt-in for pointer motion.
 - **The channel fd cannot be waited on.** `epoll_wait` takes a deadline now but watches signalfd, timerfd and TCP only, so the wait is a
-  non-blocking poll and `sys_pause`, crab's way.
+  non-blocking poll and `sys_pause`, crab's way. Filed with agnos, in the waiting table.
 
 What the backend must honour — aethersafha's written client contract
 ([`001-setu-client-contract.md`](https://github.com/MacCracken/aethersafha/blob/main/docs/architecture/001-setu-client-contract.md)):
@@ -224,7 +222,10 @@ re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
 | **cyrius (floor)** | `lib/process_win.cyr:354`: `cmd.exe` is found by a search that takes in the cwd, so a planted one would run. The Windows lane is closed by the row above | cyrius 6.7.18 | none until the lane opens |
 | **cyrius (floor)** | a portable `chmod`/`fchmod` (tighten a pre-existing history or pin store to `0600`; `sys_chmod` is a return-0 stub on Windows `syscalls_windows.cyr:610` and AGNOS `syscalls_x86_64_agnos.cyr:1048`; `file_write_atomic` keeps an existing mode on Linux and macOS but never tightens one) | cyrius **6.7.18** | never assert a mode thoth cannot enforce; documented in `.thoth/config.cyml.example` |
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
-| **agnos (floor)** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs | agnos **1.57.17** | degrades honestly; a candidate filing if the ABI gains a mode channel |
+| **agnos** | `readlink#70` refuses a buffer shorter than the target where Linux truncates, so the stdlib's 8-byte `is_symlink` reads any longer link as no link, for every consumer. Filed: `docs/development/issues/2026-11-06-readlink-refuses-a-buffer-shorter-than-the-target.md` | agnos **1.57.17** | done: `fs_is_link` asks `lstat#102`, and can go back to `is_symlink` when this lands |
+| **agnos** | a readiness wait on one fd with a deadline, for sockets and channels; `sock_connect#47` also blocks about 8 s on its own clock. Filed: `docs/development/issues/2026-11-06-no-readiness-wait-on-one-fd.md`. It holds F8's second gate | agnos **1.57.17** | the stall deadline's AGNOS half (the degradation below); cyrius's `fd_wait_ready` then forwards |
+| **agnos** | a working directory the kernel holds. A ruling: the ABI says none is to be added. Filed: `docs/development/issues/2026-11-06-a-relative-path-has-no-working-directory.md` | agnos **1.57.17** | done: `fs_path` resolves against `$PWD`, as the ABI asks, and becomes the identity if this lands |
+| **agnos** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs. Filed: `docs/development/issues/2026-11-06-open-has-no-create-mode.md` | agnos **1.57.17** | degrades honestly |
 | **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:1107`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry. The map is refreshed just before the call, which narrows the window and does not close it | gnoboot **0.9.0** | done — `scripts/agnos-run.sh` classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
 | **bhava** | the sentiment→mood loop — bhava is **2.0.0** and still Rust; consume it when it is ported, never reimplement | bhava 2.0.0 | none |
 | **secureyeoman** | its model choice, left until its port is further along, by the maintainer's call: spot fixes are not worth making first. It keeps its own catalog, pricing and context tables (TypeScript `model-registry.ts`, `cost-calculator.ts`, `context-compactor.ts`) plus Rust defaults in `sy-core`, its `HooshDelegate` falls back to `gpt-4o`, and about a dozen internal tasks hardcode `claude-haiku-3-5-20241022`, which is not an Anthropic id. The port should read hoosh's `/v1/models/catalog` the way thoth does. agnosai's B33 and agnostic's M9 model picker carry their halves on their own roadmaps | secureyeoman | none: its chat surface comes to thoth anyway |
@@ -245,7 +246,9 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 - **The window renders at buffer scale 1** — on a scaled output the compositor upscales it, so at scale 2 (Hyprland,
   verified live) the text and the 12×19 arrow are soft rather than small. `wl_surface.set_buffer_scale` (or
   fractional scaling) would draw both crisp at the output's density; a feature if it earns a slot, not a repair.
-- **The stall deadline needs a poll** — `[hoosh].timeout_ms` counts a stream's frames at sandhi's idle turn, and AGNOS has no `fd_wait_ready`, so there a keep-alive
+- **A `pre_tool` hook does not run on AGNOS** — there is no shell to run it, so it is announced on every surface and the tool proceeds. That is the 0.44.2 ruling: a blanket deny would stop thoth
+  on the target it is built for. `shell` and `[verify]` are unadvertised there too.
+- **The stall deadline needs a poll** — `[hoosh].timeout_ms` counts a stream's frames at sandhi's idle turn, and AGNOS has no `fd_wait_ready` (filed), so there a keep-alive
   comment still restarts it and hoosh's own 300 s ends the wait. A stall drops a partial reply, as any stream failure does. sandhi measures a stream's read deadline from
   the last read, so a callback slower than the deadline (a line REPL's terminal paused that long) ends the stream with a timeout; the TUI and the window have had that since 0.54.0.
 - **What a stop cannot reach** — Esc stops a command only where a wait loop hands control back. A Windows

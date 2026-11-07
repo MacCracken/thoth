@@ -6,6 +6,10 @@ bodies, each driven through a real `thoth -p` under a throwaway HOME and project
 (`CRASH`) or when thoth then POSTs invalid JSON (`BADREQ`). Local only: it listens on 127.0.0.1 and reaches nothing else.
 
 Usage: hostile-wire.py BIN [NAME-FILTER]      BIN = the thoth under test, on this host
+       hostile-wire.py --serve PORT [TOOLS]   the same scenarios for a thoth somewhere else: scripts/live/agnos-hostile.py
+                                              runs it. A request names its scenario with `wire:<n>` in the prompt.
+                                              TOOLS is a JSON file of [name, tool, args-json] scripted tool calls.
+                                              It prints `INDEX n name mode` for each, then one line per request.
 Env:   THOTH_HOSTILE_PORT (default 18741) · THOTH_HOSTILE_DIR (default a new temp dir)
        THOTH_HOSTILE_PAIRS=1 also prints each round's tool-call ids against its results
 Exit:  0 when no scenario was flagged, 1 otherwise.
@@ -13,12 +17,14 @@ Exit:  0 when no scenario was flagged, 1 otherwise.
 import socket, threading, json, subprocess, os, sys, time, signal, re, tempfile
 if len(sys.argv) < 2:
     sys.exit(__doc__)
-BIN=os.path.abspath(sys.argv[1])
-A=os.environ.get('THOTH_HOSTILE_DIR') or tempfile.mkdtemp(prefix='thoth-hostile.')
-PORT=int(os.environ.get('THOTH_HOSTILE_PORT','18741'))
-H=A+'/lab/fz/home'; P=A+'/lab/fz/proj'
-os.makedirs(H+'/.thoth',exist_ok=True); os.makedirs(P,exist_ok=True)
-open(P+'/a.txt','w').write('hello\n')
+SERVE = sys.argv[1]=='--serve'
+BIN=None if SERVE else os.path.abspath(sys.argv[1])
+A=None if SERVE else (os.environ.get('THOTH_HOSTILE_DIR') or tempfile.mkdtemp(prefix='thoth-hostile.'))
+PORT=int(sys.argv[2]) if SERVE else int(os.environ.get('THOTH_HOSTILE_PORT','18741'))
+if not SERVE:
+    H=A+'/lab/fz/home'; P=A+'/lab/fz/proj'
+    os.makedirs(H+'/.thoth',exist_ok=True); os.makedirs(P,exist_ok=True)
+    open(P+'/a.txt','w').write('hello\n')
 def cfg(stream):
     open(H+'/.thoth/config.cyml','w').write(f'''[hoosh]
 url = "http://127.0.0.1:{PORT}"
@@ -125,6 +131,26 @@ badd('b_usage_huge',dict(M(content="x"),usage={"total_tokens":2**70,"prompt_toke
 badd('b_big',M(content="x"*5000000)); badd('b_notjson',b'<html>'); badd('b_empty',b''); badd('b_trailing',b'{"choices":[]} x'); badd('b_dup',b'{"choices":[],"choices":[]}')
 badd('b_depth',b'['*100000)
 cur=None; mode='stream'; reqs=[]; tool_dump=bool(os.environ.get('THOTH_HOSTILE_PAIRS')); cur_name=''
+# --serve: every scenario in one table, by number.
+ALL=[(n,'stream',p,True) for n,p in S.items()]+[('raw_'+n,'raw',p,True) for n,p in RAW.items()]+[(n,'block',p,False) for n,p in B.items()]
+def hold(c,secs):
+    try: c.settimeout(secs); c.recv(1)
+    except Exception: pass
+def silent_accept(c): hold(c,40)
+def silent_mid(c):
+    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: '+D(content="partial")+b'\n\n'); hold(c,40)
+def keepalive(c):
+    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: '+D(content="partial")+b'\n\n')
+    for _ in range(20):
+        time.sleep(0.5); c.sendall(b': keep-alive\n\n')
+def trickle_body(c):
+    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100000\r\nConnection: close\r\n\r\n{')
+    for _ in range(20):
+        time.sleep(0.5); c.sendall(b' ')
+if SERVE:
+    ALL+=[('silent_accept','x',silent_accept,True),('silent_mid','x',silent_mid,True),('keepalive','x',keepalive,True),('trickle_body','x',trickle_body,True)]
+    if len(sys.argv)>3:
+        for n,t,a in json.load(open(sys.argv[3])): ALL.append((n,'tool',(t,a),True))
 def srv():
     s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',PORT)); s.listen(32)
     while True:
@@ -149,6 +175,20 @@ def one(c):
         try: j=json.loads(body)
         except Exception: ok=False; j={}
         reqs.append((ok,len(body),body if not ok else None))
+        cm=mode; cc=cur
+        if SERVE:
+            k=re.search(rb'wire:(\d+)',body)
+            if not k: c.sendall(blockwrap(J(M(content="no marker")))); return
+            idx=int(k.group(1)); nm,cm,cc,_=ALL[idx]
+            print('REQ',idx,nm,'ok' if ok else 'BADREQ',len(body),flush=True)
+            if not ok: print('BADBODY',idx,body[-120:],flush=True)
+            for tm in j.get('messages',[]):
+                if tm.get('role')=='tool': print('RESULT',idx,nm,json.dumps(tm.get('content'))[:400],flush=True)
+            if cm=='x': return cc(c)
+            if cm=='tool':
+                if any(m.get('role')=='tool' for m in j.get('messages',[])):
+                    c.sendall(wrap(sse([D(content="final")]))); return
+                c.sendall(wrap(sse([TC(index=0,id='call_1',function=FN(cc[0],cc[1]))]))); return
         if tool_dump and ok and any(m.get('role')=='tool' for m in j.get('messages',[])):
             ms=j['messages']; ids=[]; res=[]
             for m in ms:
@@ -157,10 +197,10 @@ def one(c):
             print('PAIR',cur_name,'echo',len(ids),[(i or '')[:24] for i in ids][:6],'results',len(res),[(r or '')[:24] for r in res][:6],'lens',[len(i or '') for i in ids][:3],[len(r or '') for r in res][:3],flush=True)
         tool=any(m.get('role')=='tool' for m in j.get('messages',[]))
         if tool:
-            r=(wrap(sse([D(content="final")])) if mode=='stream' else blockwrap(J(M(content="final"))))
-        elif mode=='raw': r=cur
-        elif mode=='stream': r=wrap(cur)
-        else: r=blockwrap(cur)
+            r=(wrap(sse([D(content="final")])) if cm!='block' else blockwrap(J(M(content="final"))))
+        elif cm=='raw': r=cc
+        elif cm=='stream': r=wrap(cc)
+        else: r=blockwrap(cc)
         c.sendall(r)
     except Exception: pass
     finally:
@@ -168,6 +208,10 @@ def one(c):
         except: pass
         c.close()
 threading.Thread(target=srv,daemon=True).start(); time.sleep(0.3)
+if SERVE:
+    for i,a in enumerate(ALL): print('INDEX',i,a[0],a[1],int(a[3]),flush=True)
+    print('SERVING',flush=True)
+    while True: time.sleep(3600)
 bad=[]; res=[]
 def run(name,m,payload,stream):
     global cur,mode,reqs,cur_name

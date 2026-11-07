@@ -1178,7 +1178,7 @@ fn cmd_save(line) {
         ui_emit(ROLE_FAINT, "nothing to save — no feed scrollback and no conversation yet"); oprintln(""); return 0;
     }
     if (_save_buf == 0) { _save_buf = alloc(SAVE_BUF); }
-    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0644, like the -o tee
+    var fd = file_open(fs_path(path), O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);   # 0644, like the -o tee
     # 0.45.0: `path` is the operator's argument — typed, or a repo-local [alias] expansion — and a filename can hold a
     # control byte, so every result line below names it through the LABEL sanitiser; the file is opened with the raw bytes.
     if (fd < 0) { ui_emit(ROLE_RED, "could not open "); emit_clean_line(path); ui_emit(ROLE_FAINT, " for writing"); oprintln(""); return 0; }
@@ -1562,10 +1562,10 @@ fn cmd_read(line) {
     if (path == 0) { oprintln("usage: /read <file>"); return 0; }
     # 0.45.0: the path — typed, or a repo-local [alias] expansion — is named through the LABEL sanitiser on all three
     # lines; a filename can hold a control byte, so the file is still opened with the raw bytes.
-    if (file_exists_noblock(path) == 0) { _read_note("no such file: ", path); return 0; }
-    if (file_is_regular(path) == 0) { _read_note("not a regular file: ", path); return 0; }   # 0.53.3: Enter on a FIFO in the tree hung the session
+    if (file_exists_noblock(fs_path(path)) == 0) { _read_note("no such file: ", path); return 0; }
+    if (file_is_regular(fs_path(path)) == 0) { _read_note("not a regular file: ", path); return 0; }   # 0.53.3: Enter on a FIFO in the tree hung the session
     if (_read_buf == 0) { _read_buf = alloc(READ_BUF_CAP); }
-    var n = file_read_all(path, _read_buf, READ_BUF_CAP - 1);
+    var n = file_read_all(fs_path(path), _read_buf, READ_BUF_CAP - 1);
     if (n < 0) { _read_note("read failed: ", path); return 0; }
     store8(_read_buf + n, 0);
     # 0.45.5: the CONTENT goes through the TEXT policy too (newlines and tabs kept, a CRLF's CR a space, every other
@@ -1609,7 +1609,7 @@ fn _write_incomplete_note(path, rc, want) {
 # reached. Returns -1 when the open failed (the file as it was), else the bytes written: len, or fewer when a write
 # failed partway.
 fn _write_in_place(path, buf, len) {
-    var fd = file_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    var fd = file_open(fs_path(path), O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
     if (fd < 0) { return 0 - 1; }
     var off = 0;
     var go = 1;
@@ -1666,8 +1666,8 @@ fn cmd_write(line) {
     if (_write_old == 0) { _write_old = alloc(WRITE_OLD_CAP); }
     var oldlen = 0;
     var old_toobig = 0;
-    if (file_exists(_write_path) == 1) {
-        var rn = file_read_all(_write_path, _write_old, WRITE_OLD_CAP - 1);
+    if (file_exists(fs_path(_write_path)) == 1) {
+        var rn = file_read_all(fs_path(_write_path), _write_old, WRITE_OLD_CAP - 1);
         if (rn >= (WRITE_OLD_CAP - 1)) { old_toobig = 1; }   # truncated read -> don't diff a lie
         elif (rn > 0) { oldlen = rn; }
     }

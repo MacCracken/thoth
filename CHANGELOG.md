@@ -4,6 +4,40 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.55.1] - 2026-11-06
+
+**The AGNOS hostile pass.** The 2026-11-05 audit's attacks had only ever run on Linux, and they now run against thoth in ring 3: `./scripts/agnos-run.sh --hostile`. It found two high-severity defects, both about what a path means on AGNOS, and both are fixed. Four kernel capabilities are filed with agnos.
+
+**What changes for you:**
+
+- On AGNOS a relative path now means `$PWD`, as agnos's userland ABI asks. `read_file`, `list_dir`, `search`, `edit`, `create_file`, `@file`, `/read`, `/write`, `-o`, the project map and the config walk all used to reach from the disk root. agnsh exports `PWD`, so a session started there lands in the directory it was started in.
+- `edit` and `create_file` work on AGNOS now. They had no `.thoth/` to checkpoint in, unless one sat at the disk root.
+- Nothing changes on any other platform.
+
+### Fixed
+
+- **The jail was the whole disk on AGNOS.** AGNOS has no working directory, so `.` is `/`, and "relative, with no `..`" meant anywhere. `read_file("etc/secret.txt")` returned the file, `list_dir(".")` listed the disk root, `search` walked every file, and `create_file("etc/x")` was stopped only by a missing checkpoint directory, which an image with `HOME=/` has. Each tool still checks the path as written, then resolves it through `fs_path`. [Note 005](docs/architecture/005-a-relative-path-is-not-the-kernels-to-resolve.md) is the rule.
+- **A link with a target over 8 bytes read as no link on AGNOS.** The stdlib's `is_symlink` asks `readlink#70` with an 8-byte buffer, and agnos refuses a short buffer where Linux truncates. `read_file` and `search` followed `link-out -> /etc/secret.txt`, while `link-dir -> /etc` was refused. `fs_is_link` asks `lstat#102`, which has no buffer to outgrow. Every link check in thoth now goes through it.
+- **A project's own `.thoth/config.cyml` under `$PWD` was never found on AGNOS,** because the walk started at the disk root.
+
+### Added
+
+- **`./scripts/agnos-run.sh --hostile`** (`scripts/live/agnos-hostile.py`, `tests/agnos/hostile.cyr`). One boot works through 198 scenarios: the 151 wire attacks, a gateway going silent at each stage, the jail, the capture and the stores, each with its own `HOME` and `PWD`. Verdicts come from the exit status, the wire and the image read back afterwards, and every store has a control that must write it. `hostile-wire.py --serve` serves the same scenarios to a thoth elsewhere.
+- **Filed with agnos:** `readlink#70` truncating, a readiness wait on one fd, a kernel-held working directory (for a ruling), and a create mode on `open`. The wait also holds F8's second gate. They are on the roadmap's waiting table.
+
+### Changed
+
+- `src/exec.cyr` said a capturing shell on AGNOS was architecturally impossible. The floor has what one needs now, and what is missing is `/bin/sh`.
+- The roadmap's "38 s against a 15 s deadline" was stock hoosh's `sleep_ms` loop holding the CPU, and not `sock_connect`. A listener that never accepts takes about 8 s, inside the connect deadline.
+
+### Verified
+
+- [The audit record](docs/audit/2026-11-06-agnos-hostile-pass.md). The wire kit on AGNOS: 151 of 151, no crash, no hang, no invalid JSON, no kernel fault.
+- Suite 971 + 2655 + 1723 + 949 + 190 = 6,488, 0 failed (+53). A fresh copy with `.git` and an empty `HOME` passes 6,490, with stdin closed and held open.
+- Break tests: 25 of 25 mutations failed a test, and on the guest, removing the seam flags 9 scenarios and restoring `is_symlink` flags exactly the two link scenarios.
+- Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` and on a Raspberry Pi (6,490 each), macOS is green natively (2646 + 1711 + 928 + 956 + 190), the hostile wire flags 0 of 152 rows on Linux and on macOS, rung 2 passes and ring 3 passes.
+- Not covered: a real provider, which means TLS from the guest; modes and owners, with one user on AGNOS; FIFOs, which it does not have; the TUI; and iron. All of it ran under QEMU.
+
 ## [0.55.0] - 2026-11-06
 
 **A real turn on AGNOS.** thoth, hoosh and daimon run natively on one image, and thoth drives a turn in ring 3 to a model on the host: a streamed reply, a tool round through t-ron and daimon, and `--json`. This is the rung the v1.0 gate's wording asks for. `./scripts/agnos-run.sh --turn` runs it. The turn found one real defect, in hoosh, and that is fixed in hoosh 2.10.1.

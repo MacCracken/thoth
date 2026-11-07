@@ -903,7 +903,7 @@ fn _tps_conflict(ix, name, hash, secs) {
 # is left for the flush to find and report.
 fn toolpin_store_refresh() {
     if (_tps_bound() == 0) { return 0; }
-    if (is_symlink(str_from(_tps_path)) == 1) { return 0; }
+    if (fs_is_link(str_from(_tps_path)) == 1) { return 0; }
     var n = _tps_read(_tps_path);
     if (n < 0) { return 0; }
     if (_tps_parse(_tps_buf, n, 0) == 0) { return 0; }
@@ -961,7 +961,7 @@ fn _tps_group_writable(path) {
 # _tps_load: bind-time load — sets _tps_state and fills the table for the bound host. Never prints.
 fn _tps_load(path) {
     _tps_loaded = 0; _tps_other = 0; _tps_loose = 0;
-    if (is_symlink(str_from(path)) == 1) { _tps_state = 4; return 0; }
+    if (fs_is_link(str_from(path)) == 1) { _tps_state = 4; return 0; }
     if (_cfg_foreign(path) == 1) { _tps_state = 3; return 0; }
     var n = _tps_read(path);
     if (n == (0 - 2)) { _tps_state = 6; return 0; }
@@ -1116,7 +1116,7 @@ fn toolpin_store_flush() {
     if ((_tps_state == 4) || (_tps_state == 6)) { return 0; }                # never written: a symlink, a file not read whole
     if ((_tps_state == 3) || (_tps_state == 5) || (_tps_state == 9)) {
         if (_tps_trusting == 0) { return 0; }                                 # session-scoped this run
-        if (is_symlink(str_from(_tps_path)) == 1) { _tps_state = 4; return 0; }
+        if (fs_is_link(str_from(_tps_path)) == 1) { _tps_state = 4; return 0; }
         # 0.52.6 (audit A3): the OTHER hosts' rows are kept whenever the file verifies now — a store that failed one
         # write (9), or was unreadable and reads again (5), is a valid store; the fresh image dropped every other
         # daimon's pins for a transient failure, and /state names `/tools trust` as the way back from 9. A REJECTED
@@ -1135,7 +1135,7 @@ fn toolpin_store_flush() {
         log_begin("toolpin_store"); log_kv_str("result", "rewritten_after_reject"); log_kv_str("host", _tps_host_cstr()); log_kv_int("pins", _tp_n); log_kv_int("kept_other", _tps_other); log_commit(SK_WARN);
         return 0;
     }
-    if (is_symlink(str_from(_tps_path)) == 1) { _tps_state = 4; _tps_broke = 1; return 0 - 1; }   # a link planted after the bind: refused, never written through
+    if (fs_is_link(str_from(_tps_path)) == 1) { _tps_state = 4; _tps_broke = 1; return 0 - 1; }   # a link planted after the bind: refused, never written through
     var have = 0;
     var n = _tps_read(_tps_path);
     if (n == (0 - 2)) { _tps_state = 6; _tps_broke = 1; return 0 - 1; }   # grown past the cap underneath: never written back

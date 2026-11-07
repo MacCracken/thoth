@@ -41,6 +41,8 @@
 #   ./scripts/agnos-run.sh --classify LOG   # say whether a serial log's boot reached the kernel (no run)
 #   ./scripts/agnos-run.sh --turn       # rung 2: a real turn through hoosh and daimon on one image. Always a plain kernel in a
 #                                       # private copy. Combines with --no-build, which reuses build/thoth_agnos.
+#   ./scripts/agnos-run.sh --hostile    # the 2026-11-05 audit's attacks on thoth in ring 3: scripts/live/agnos-hostile.py, about
+#                                       # 5 minutes. A plain kernel in a private copy, like --turn. Combines with --no-build.
 #
 # Env:
 #   AGNOS_REPO   path to the agnos checkout   (default: ../agnos relative to this repo)
@@ -84,16 +86,18 @@ boot_reached_kernel() {
 DO_BUILD=1
 PRIVATE=0
 TURN=0
+HOSTILE=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) DO_BUILD=0 ;;
         --private)  PRIVATE=1 ;;
         --turn)     TURN=1; PRIVATE=1 ;;
+        --hostile)  HOSTILE=1; PRIVATE=1 ;;
         --classify)
             [ -f "${2:-}" ] || { echo "usage: $0 --classify SERIAL_LOG" >&2; exit 2; }
             if why="$(boot_reached_kernel "$2")"; then echo "kernel-ran"; else echo "pre-kernel: $why"; fi
             exit 0 ;;
-        *) echo "usage: $0 [--no-build] [--private] [--turn] | --classify LOG" >&2; exit 2 ;;
+        *) echo "usage: $0 [--no-build] [--private] [--turn | --hostile] | --classify LOG" >&2; exit 2 ;;
     esac
     shift
 done
@@ -141,7 +145,7 @@ if [ "$PRIVATE" -eq 1 ]; then
     mkdir -p "$PRIV/build"
     rsync -a --exclude build --exclude .git "$AGNOS_REPO/" "$PRIV/" || { echo "SKIP: could not copy $AGNOS_REPO — nothing was executed." >&2; exit 2; }
     KBUILD="BASESTACK_SELFTEST=1"
-    [ "$TURN" -eq 1 ] && KBUILD="BASESTACK_SELFTEST="      # rung 2 runs on the kernel as it ships
+    [ $(( TURN + HOSTILE )) -gt 0 ] && KBUILD="BASESTACK_SELFTEST="      # these run on the kernel as it ships
     if ! ( cd "$PRIV" && env "$KBUILD" sh scripts/build.sh ) > "$PRIV/build/selftest-build.log" 2>&1; then
         tail -5 "$PRIV/build/selftest-build.log" >&2
         echo "SKIP: the kernel did not build — nothing was executed." >&2
@@ -166,6 +170,21 @@ spine_bin() {
     fi
     echo "$dst/build/agnos"
 }
+
+# The hostile pass: its report is the verdict, and it reads AGNOS's own image and boot helpers from the private copy.
+if [ "$HOSTILE" -eq 1 ]; then
+    [ -n "${DAIMON_BIN:-}" ] || { DAIMON_BIN="$(spine_bin daimon)" || exit 2; }
+    echo "==> attacking thoth in ring 3 (the report lands in ${THOTH_HOSTILE_WORK:-/var/tmp/thoth-agnos-hostile}/report.txt)"
+    python3 -I "$ROOT/scripts/live/agnos-hostile.py" "$AGNOS_REPO" "$KERNEL" "$ELF" "$DAIMON_BIN"
+    rc=$?
+    echo ""
+    case "$rc" in
+        0) echo "agnos-run: PASS — the hostile pass flagged nothing on AGNOS." ;;
+        2) echo "SKIP: no boot reached the kernel — nothing was executed." >&2 ;;
+        *) echo "agnos-run: FAIL — see the report."; KEEP_PRIV=1 ;;
+    esac
+    exit "$rc"
+fi
 
 # Rung 2: the runner's own gates are the verdict, and its helper retries a boot that never reached the kernel.
 if [ "$TURN" -eq 1 ]; then

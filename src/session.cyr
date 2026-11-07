@@ -986,7 +986,7 @@ fn _sess_load_file(path) {
     _sess_load_bad = 0;
     var fd = file_open(path, O_RDONLY | O_NOFOLLOW, 0);   # <0 -> absent, nothing to resume; 0.53.3: a symlink is refused, and named
     if (fd < 0) {
-        if (is_symlink(str_from(path)) == 1) { _sess_load_bad = SESS_BAD_LINK; }
+        if (fs_is_link(str_from(path)) == 1) { _sess_load_bad = SESS_BAD_LINK; }
         return 0;
     }
     if (_sess_read_buf == 0) { _sess_read_buf = alloc(SESS_READ_FIRST); _sess_read_size = SESS_READ_FIRST; }
@@ -1224,7 +1224,7 @@ fn sess_persist_init(path) {
     if (path == 0) { return 0; }                         # not configured -> OFF
     # 0.53.3: a relative [session].file names a file in whichever repository the operator opened, which is how a per-project
     # store works, and a repository that shipped one had its contents resumed as the operator's own turns (ADR-0021 names it).
-    if ((is_symlink(str_from(path)) == 0) && (file_is_private(path) == 0)) { _sess_init_failed = SESS_BAD_PERM; return 0 - 1; }
+    if ((fs_is_link(str_from(path)) == 0) && (file_is_private(path) == 0)) { _sess_init_failed = SESS_BAD_PERM; return 0 - 1; }
     _sess_load_file(path);
     _sess_resumed = session_total_messages();            # the ACTUAL resumed count across ALL conversations (post SESS_HIST_MAX per-conv eviction) — a >40-record conv parses more than it keeps; report what's really in context, never the raw parse count
     if (_sess_load_overflow == 1) { _sess_init_failed = 2; return 0 - 1; }         # 0.48.0: too large to load whole -> announce + OFF (never written back)

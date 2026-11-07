@@ -150,8 +150,27 @@ fn _cfg_join2(a, b) {
     return out;
 }
 
+# _cfg_updir_abs: the same walk on a target with no cwd: `name` under the directory `lvl` levels above `root`, stopping at /.
+fn _cfg_updir_abs(root, lvl, name) {
+    var n = strlen(root);
+    var i = 0;
+    while ((i < lvl) && (n > 0)) {
+        n = n - 1;
+        while ((n > 0) && (load8(root + n) != 47)) { n = n - 1; }
+        i = i + 1;
+    }
+    var ln = strlen(name);
+    var out = alloc(n + ln + 2);
+    memcpy(out, root, n);
+    store8(out + n, 47);
+    memcpy(out + n + 1, name, ln);
+    store8(out + n + 1 + ln, 0);
+    return out;
+}
+
 # _cfg_updir: fresh cstr "../" repeated `lvl` times followed by `name`.
 fn _cfg_updir(lvl, name) {
+    if (fs_root() != 0) { return _cfg_updir_abs(fs_root(), lvl, name); }   # 0.55.1: `../` from no cwd is `/`, wherever the operator is
     var ln = strlen(name);
     var out = alloc(lvl * 3 + ln + 1);
     var off = 0;
