@@ -140,6 +140,7 @@ var _cfg_source = 0;          # 0 none · 1 <root>/config.cyml · 3 legacy ./tho
 # _cfg_join2: fresh cstr "a/b".
 fn _cfg_join2(a, b) {
     var la = strlen(a);
+    while ((la > 0) && (load8(a + la - 1) == 47)) { la = la - 1; }   # 0.55.0: HOME is `/` on AGNOS, and this made `//.thoth`
     var lb = strlen(b);
     var out = alloc(la + lb + 2);
     memcpy(out, a, la);

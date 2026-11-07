@@ -27,12 +27,20 @@
 # hoosh, no daimon, no turn. This is rung 1 of that gate — necessary, not
 # sufficient. Do not report a PASS here as gate 1 cleared. See docs/development/roadmap.md.
 #
+# RUNG 2 (--turn, 0.55.0). The same consume pattern, one rung up: agnos/scripts/smoke/spine-turn-smoke.sh stages thoth,
+# hoosh and daimon on one image, starts the services, and drives real one-shot turns against a model on the host, a tool
+# round through t-ron and daimon among them. Its launcher sits in the /bin/agnsh slot on a PLAIN kernel, so this needs no
+# hook. The three binaries are built here, in copies under build/agnos-spine: nothing writes into a sibling. HOOSH_BIN or
+# DAIMON_BIN names a binary to use as it stands.
+#
 # Usage:
 #   ./scripts/agnos-run.sh              # build the agnos lane, then run it
 #   ./scripts/agnos-run.sh --no-build   # run whatever is already at build/thoth_agnos
 #   ./scripts/agnos-run.sh --private    # build the selftest kernel in a throwaway copy of the agnos tree; agnos's own
 #                                       # build/ is never touched. Combines with --no-build.
 #   ./scripts/agnos-run.sh --classify LOG   # say whether a serial log's boot reached the kernel (no run)
+#   ./scripts/agnos-run.sh --turn       # rung 2: a real turn through hoosh and daimon on one image. Always a plain kernel in a
+#                                       # private copy. Combines with --no-build, which reuses build/thoth_agnos.
 #
 # Env:
 #   AGNOS_REPO   path to the agnos checkout   (default: ../agnos relative to this repo)
@@ -75,15 +83,17 @@ boot_reached_kernel() {
 
 DO_BUILD=1
 PRIVATE=0
+TURN=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) DO_BUILD=0 ;;
         --private)  PRIVATE=1 ;;
+        --turn)     TURN=1; PRIVATE=1 ;;
         --classify)
             [ -f "${2:-}" ] || { echo "usage: $0 --classify SERIAL_LOG" >&2; exit 2; }
             if why="$(boot_reached_kernel "$2")"; then echo "kernel-ran"; else echo "pre-kernel: $why"; fi
             exit 0 ;;
-        *) echo "usage: $0 [--no-build] [--private] | --classify LOG" >&2; exit 2 ;;
+        *) echo "usage: $0 [--no-build] [--private] [--turn] | --classify LOG" >&2; exit 2 ;;
     esac
     shift
 done
@@ -97,6 +107,7 @@ EXPECT="thoth $VERSION"
 
 miss() { echo "  ⚠ $1" >&2; }
 
+[ "$TURN" -eq 1 ] && HARNESS="$AGNOS_REPO/scripts/smoke/spine-turn-smoke.sh"
 if [ ! -f "$HARNESS" ]; then
     echo "SKIP: no AGNOS runner — nothing was executed." >&2
     miss "expected the harness at $HARNESS"
@@ -129,14 +140,48 @@ if [ "$PRIVATE" -eq 1 ]; then
     echo "==> building a selftest kernel in a private copy of $AGNOS_REPO"
     mkdir -p "$PRIV/build"
     rsync -a --exclude build --exclude .git "$AGNOS_REPO/" "$PRIV/" || { echo "SKIP: could not copy $AGNOS_REPO — nothing was executed." >&2; exit 2; }
-    if ! ( cd "$PRIV" && BASESTACK_SELFTEST=1 sh scripts/build.sh ) > "$PRIV/build/selftest-build.log" 2>&1; then
+    KBUILD="BASESTACK_SELFTEST=1"
+    [ "$TURN" -eq 1 ] && KBUILD="BASESTACK_SELFTEST="      # rung 2 runs on the kernel as it ships
+    if ! ( cd "$PRIV" && env "$KBUILD" sh scripts/build.sh ) > "$PRIV/build/selftest-build.log" 2>&1; then
         tail -5 "$PRIV/build/selftest-build.log" >&2
-        echo "SKIP: the selftest kernel did not build — nothing was executed." >&2
+        echo "SKIP: the kernel did not build — nothing was executed." >&2
         exit 2
     fi
     AGNOS_REPO="$PRIV"
     HARNESS="$AGNOS_REPO/scripts/smoke/basestack-run-smoke.sh"
     KERNEL="$AGNOS_REPO/build/agnos"
+fi
+
+# spine_bin NAME: build a sibling --agnos in a copy under build/agnos-spine, and print the binary's path. A sibling is only read.
+spine_bin() {
+    local src="${SIBLINGS_ROOT:-$(cd "$ROOT/.." && pwd)}/$1" dst="$ROOT/build/agnos-spine/$1"
+    [ -d "$src" ] || { echo "SKIP: no $src — nothing was executed." >&2; return 1; }
+    rm -rf "$dst"; mkdir -p "$dst"
+    rsync -a --exclude build --exclude .git "$src/" "$dst/" || return 1
+    mkdir -p "$dst/build"
+    if ! ( cd "$dst" && cyrius build --agnos src/main.cyr build/agnos ) > "$dst/build.log" 2>&1; then
+        tail -5 "$dst/build.log" >&2
+        echo "SKIP: $1 did not build --agnos — nothing was executed." >&2
+        return 1
+    fi
+    echo "$dst/build/agnos"
+}
+
+# Rung 2: the runner's own gates are the verdict, and its helper retries a boot that never reached the kernel.
+if [ "$TURN" -eq 1 ]; then
+    [ -n "${HOOSH_BIN:-}" ]  || { HOOSH_BIN="$(spine_bin hoosh)"   || exit 2; }
+    [ -n "${DAIMON_BIN:-}" ] || { DAIMON_BIN="$(spine_bin daimon)" || exit 2; }
+    echo "==> handing thoth, hoosh and daimon to the AGNOS runner"
+    HOOSH_BIN="$HOOSH_BIN" DAIMON_BIN="$DAIMON_BIN" THOTH_BIN="$ELF" STUB_PROVIDER="$ROOT/scripts/live/stubhoosh.py" \
+        SPINE_KERNEL="$KERNEL" bash "$AGNOS_REPO/scripts/smoke/spine-turn-smoke.sh"
+    rc=$?
+    echo ""
+    case "$rc" in
+        0) echo "agnos-run: PASS — a real turn ran on AGNOS, through hoosh and daimon (v1.0 gate 1 RUNG 2)." ;;
+        2) echo "SKIP: no boot reached the kernel — nothing was executed." >&2 ;;
+        *) echo "agnos-run: FAIL — see the logs the runner named."; KEEP_PRIV=1 ;;
+    esac
+    exit "$rc"
 fi
 
 # The kernel must carry the BASESTACK_SELFTEST hook; without it the box boots to

@@ -4,6 +4,39 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-11-06
+
+**A real turn on AGNOS.** thoth, hoosh and daimon run natively on one image, and thoth drives a turn in ring 3 to a model on the host: a streamed reply, a tool round through t-ron and daimon, and `--json`. This is the rung the v1.0 gate's wording asks for. `./scripts/agnos-run.sh --turn` runs it. The turn found one real defect, in hoosh, and that is fixed in hoosh 2.10.1.
+
+**What changes for you:**
+
+- thoth on AGNOS needs hoosh 2.10.1. On anything earlier hoosh logs that it is serving and never reads a request, so a turn fails as an unreachable gateway. Nothing changes on other platforms.
+
+### Added
+
+- **`scripts/agnos-run.sh --turn`.** It builds hoosh and daimon `--agnos` in copies under `build/agnos-spine`, builds a plain kernel in a private copy, and hands everything to `agnos/scripts/smoke/spine-turn-smoke.sh`. A launcher in the `/bin/agnsh` slot starts the two services and runs three one-shot turns, so no kernel hook is involved and it tests the kernel as it ships. `HOOSH_BIN` or `DAIMON_BIN` names a binary to test as it stands.
+- **The runner reads the wire, not thoth's word.** A tool round passes only if its result is in the provider's log and the model answered after it. Its gates hold: stock hoosh 2.10.0 fails them, hoosh with only its pool guard removed fails them, and a t-ron policy denying the tool fails the tool-round gate alone.
+- `stubhoosh.py` gains `call: <tool>`, which calls any tool by name and logs what comes back.
+
+### Fixed
+
+- **hoosh never read a request on AGNOS** (hoosh 2.10.1). `thread_create` has no second thread there and runs its body inline, so hoosh's first forever-loop never returned and the accept loop never ran. hoosh printed that it was serving, and a client connected and waited. The fix keys on `THREADS_CONCURRENT`: no forever-thread starts, and the accept loop runs each job itself.
+- A path joined to a home of `/` read `//.thoth/toolpins`. `HOME` is `/` on AGNOS.
+
+### Changed
+
+- **hoosh 2.10.1,** which also moves bote-core 3.8.12 → 3.8.15, its one dep behind latest. `tools/list` and a `tools/call` are byte-identical to 2.10.0's. Its gates are clean, 1,737 assertions pass, and its benchmarks are recorded.
+- On AGNOS, hoosh serves one request at a time and nothing runs on a timer. It says so at startup.
+- The roadmap's waiting table loses the hoosh `--agnos` row, and rung 1's `--version` smoke stays in every release.
+
+### Verified
+
+- Suite 971 + 2602 + 1723 + 949 + 190 = 6,435, 0 failed (+3). A copy with `.git` and an empty `HOME` passes 6,437, with stdin closed and held open.
+- Rung 2 passes from the trees as they stand, on agnos 1.57.17, hoosh 2.10.1 and daimon 2.5.5.
+- Break tests: 7 of 7 mutations of this cut's code failed a test, and the three controls above failed the runner.
+- Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` and on a Raspberry Pi (6,437 each), macOS is green natively (2593 + 1711 + 928 + 956 + 190), the hostile wire flags 0 of 152 rows on Linux and on macOS, and ring 3 passes.
+- Not run: the Windows lane past its warning set, a real provider on AGNOS, which means TLS from the guest, or thoth's REPL there. The turn is one-shot.
+
 ## [0.54.4] - 2026-11-06
 
 **Repair batch 18: daimon's pin record, a stall hoosh was hiding, and a stop `--json` could not see.** thoth takes daimon 2.5.4's tool pins where it holds none of its own, so a swapped definition no longer reaches the model after a store is lost. `[hoosh].timeout_ms` counts a stream's frames, so a provider gone quiet behind hoosh ends the turn. A turn thoth stops itself prints its object under `--json`. t-ron and agnosai-guard move to 2.2.5, and the rest of the stack was already current.

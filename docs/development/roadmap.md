@@ -57,15 +57,13 @@ string from `VERSION`, so it cannot pass on a stale binary.
 
 Three gates remain, in dependency order.
 
-1. **At least one downstream consumer green on AGNOS (end-to-end).** Two rungs remain above the
-   ring-3 smoke, and both are scheduled as [0.55.x](#055x--a-real-turn-on-agnos):
-   - **Rung 2 — a real turn against the spine, staged on the same image.** The rung that satisfies
-     the gate's wording. hoosh and daimon both build `--agnos`; what is missing is a runner, because
-     the smoke stages one `/bin/probe` and execs `--version`.
+1. **At least one downstream consumer green on AGNOS (end-to-end).** `scripts/agnos-run.sh --turn` meets the
+   gate's wording: a real turn through hoosh and daimon, native on one image. One rung remains, scheduled as
+   [0.55.2](#055x--a-real-turn-on-agnos):
    - **Rung 3 — the interactive TUI over agnsh.** Least urgent, and gated on the floor: AGNOS has no
      raw terminal (no termios; every console fd reads the cooked line, which drops every key without
      an ASCII value), so the TUI takes the line REPL there.
-   **Status: blocking · owner: thoth.**
+   **Status: blocking until rung 3 or a ruling that the wording is enough · owner: thoth.**
 
 2. **Security review pass (process gate) — the external sign-off.** What remains is whatever "pass"
    means to someone who is not the author. Its reading list: the fail-closed posture and the t-ron
@@ -84,7 +82,7 @@ Three gates remain, in dependency order.
 
 ### v1.0 criteria checklist
 
-- [ ] **At least one downstream consumer green on AGNOS** — gate 1, rungs 2–3
+- [ ] **At least one downstream consumer green on AGNOS** — gate 1, rung 3
 - [ ] **Security review pass** — gate 2, the external sign-off
 - [ ] **1.0 versioning scheme decided (SemVer vs CalVer)** — gate 3
 
@@ -118,7 +116,7 @@ unsure, patch.
 
 | Version | Arc | Gate |
 |---|---|---|
-| 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | a runner; the floor for rung 3 |
+| 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | the floor, for rung 3 |
 | 0.56.x | [**F8 — the AGNOS window**](#056x--f8-the-agnos-window) | a stable setu contract, a waitable channel |
 | 0.57.x | [**F9 — untrusted reads through the subagent context**](#057x--f9-untrusted-reads-through-the-subagent-context) | ruling: gap-review question 2 |
 | 0.58.x | [**F11 — git write operations through sit**](#058x--f11-git-write-operations-through-sit) | ruling: question 3 |
@@ -129,15 +127,11 @@ unsure, patch.
 
 ### 0.55.x — A real turn on AGNOS
 
-v1.0 gate 1. thoth and hoosh both print their versions in ring 3; nothing else of the spine's has run there with thoth.
+v1.0 gate 1. A real turn runs on AGNOS: `scripts/agnos-run.sh --turn` stages thoth, hoosh and daimon on one image, through `agnos/scripts/smoke/spine-turn-smoke.sh`.
 
-- **0.55.0 — Rung 2.** A runner that stages hoosh, daimon, a config and thoth on one image, starts the two services, gives hoosh a provider
-  (a stub on the host, over QEMU's network) and drives `thoth -p` to a reply on the serial console. `basestack-run-smoke.sh` cannot do it:
-  it stages one `/bin/probe`, and the selftest hook execs `--version`. A runner for AGNOS is AGNOS's domain, so it lands in `agnos/scripts/smoke/`
-  and `scripts/agnos-run.sh` shells out to it, as it does today. `bote-mcp-smoke.sh` is the nearest pattern: a kernel hook preloading a
-  ring-3 program. Whatever the first real turn finds, in thoth or the floor, is the arc's work.
 - **0.55.1 — The AGNOS hostile pass.** With a turn running, the attacks the 2026-11-05 audit ran on Linux: the wire kit, the capture and the
-  stores. It cannot start sooner, because `--version` reaches none of them.
+  stores. Known to start from: a gateway that takes the connection and never reads it took 38 s to fail against a 15 s `[hoosh].timeout_ms`, because AGNOS's
+  `sock_connect` blocks on its own clock. The stall deadline has no poll there (the degradations below).
 - **0.55.2 — Rung 3.** **Gate:** the floor. A `#97` terminal channel now carries a window size, so an emulator's terminal end is worth reading as
   a route that does not need raw console reads.
 
@@ -214,11 +208,10 @@ re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
 
 | Owner | What | Checked against | thoth's half |
 |---|---|---|---|
-| **hoosh** | an `--agnos` lane: nothing in its CI or scripts builds one, so the `hoosh_agnos` on disk is 2.4.11. `cyrius build --agnos src/main.cyr` makes a current one | hoosh **2.10.0** · daimon 2.5.5 | 0.55.0's runner builds its own |
-| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:543`) and a plain `{role,content}` passes through verbatim, so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.10.0** | none yet — thoth sends text only |
-| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.10.0** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
-| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.10.0** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
-| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.0** | none — thoth prices from `[pricing]`, which has no cache rate either |
+| **hoosh** | multimodal content parts: `_build_anthropic_body_x` reads `content` as a string (`src/lib/provider.cyr:543`) and a plain `{role,content}` passes through verbatim, so an OpenAI-shaped `image_url` part is never translated to Anthropic `image` / Gemini `inline_data`; the per-model `vision` bit is there (the compiled table, and each live catalog entry's `capabilities.vision`) — the prerequisite for candidate F10 | hoosh **2.10.1** | none yet — thoth sends text only |
+| **hoosh** | an OpenAI **Responses API** path: gpt-6-astra and gpt-6.1-sol take no function calling on Chat Completions (OpenAI serves their tools through `/v1/responses` only), and hoosh speaks Chat Completions — so an agentic thoth turn cannot drive them | hoosh **2.10.1** | none — pick another model for agentic turns; a plain turn (`[hoosh].tools = false`) works |
+| **hoosh** | `reasoning_effort` on **Gemini and Ollama**: mapped to Anthropic thinking and forwarded to OpenAI-compatible reasoning models, but not to Gemini's `thinkingConfig` or Ollama's `think` | hoosh **2.10.1** | done — thoth sends `reasoning_effort`; the row lights up when hoosh maps it |
+| **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.1** | none — thoth prices from `[pricing]`, which has no cache rate either |
 | **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.5 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
 | **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap | sit 1.13.0 | done: the walk runs in a child, off the main thread, so neither costs thoth more than a repository's own walk |
 | **mneme** | `mneme_create_note` answers "Failed to create note" for a title it already holds, so `/remember` of a fact already saved reads as a failed write | mneme 1.1.4 | the message is true: nothing new was written |

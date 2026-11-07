@@ -12,6 +12,7 @@ GET /v1/models (one model: stub-model) and GET /v1/health. The LAST user message
   read: <path>   one `read_file` tool call on <path>; once a result follows it, the reply is "done"
   think: <x>     reasoning_content, then content "answer about <x>"
   slow: <x>      60 short content deltas 0.5 s apart (a stream to stop, or to close the window on)
+  call: <tool>   one tool call of that name with no arguments, then "done" once its result comes back (the result is logged)
   stall: <n>     one content delta, then only `: keep-alive` comments for n seconds: hoosh with a provider gone quiet
   md             a markdown reply (heading, bold, inline code, a list, a fenced block, a table, a quote)
   cut: <x>       content "partial answer about <x>", then finish_reason "length" (the output ceiling)
@@ -48,9 +49,14 @@ def plan(msgs):
     if isinstance(text, list):
         text = " ".join(p.get("text", "") for p in text if isinstance(p, dict))
     if any(m.get("role") == "tool" for m in tail):
+        for m in tail:
+            if m.get("role") == "tool":
+                print("TOOLRESULT", str(m.get("content"))[:300], flush=True)
         return "text", None, "done"
     if text.strip() == "curly":  # a command the kit cannot type: the confirm card must draw these bytes, not ASCII
         return "tool", None, "echo \u201cquoted\u201d \u2014 done"
+    if "call:" in text:
+        return "calltool", None, text.split("call:", 1)[1].strip()
     if "read:" in text:
         return "readtool", None, text.split("read:", 1)[1].strip()
     if "slowrun:" in text:
@@ -119,6 +125,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         tool_name, tool_args = "shell", {"command": arg}
         if kind == "readtool":
             kind, tool_name, tool_args = "tool", "read_file", {"path": arg}
+        if kind == "calltool":
+            kind, tool_name, tool_args = "tool", arg, {}
         finish_word = {"cut": "length", "refuse": "content_filter"}.get(kind, "stop")
         if not stream:
             if kind == "tool":

@@ -7,7 +7,7 @@ standards. Read the genesis repo's
 [`CLAUDE.md`](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 
-> **Status: 0.54.4 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
+> **Status: 0.55.0 — built and shipping (pre-1.0).** thoth has a real interactive TUI (rich by
 > default) / REPL, a native Wayland GUI (`thoth gui`, with the mouse since 0.49.0), and a one-shot/argv
 > front-door with `--json` / `--events`; the full AGNOS spine wired; mid-session model / persona / role
 > switching with a picker that shows each provider's health and rate; jailed project read tools +
@@ -17,7 +17,7 @@ and this repo's [`CLAUDE.md`](CLAUDE.md) before starting.
 > `[hooks]`, `[toolpin]` (durable across runs since 0.51.0), `[guard]`, `[redact]`, `[verify]`,
 > `[budget]` — over a layered global-base / per-key-local config whose authority keys are read
 > global-only (ADR-0019/0021); a comprehensive unit suite; x86_64 Linux ships, aarch64 builds, AGNOS
-> builds and runs in ring 3 under QEMU, macOS builds and runs natively at the line tier (see
+> builds and runs in ring 3 under QEMU, where a real turn runs through hoosh and daimon, macOS builds and runs natively at the line tier (see
 > `docs/development/state.md` for the matrix). The remaining road to v1.0 is dominated by AGNOS lighting up, not feature work — see
 > [`docs/development/roadmap.md`](docs/development/roadmap.md) and
 > [`docs/development/state.md`](docs/development/state.md). Contributions follow the one rule

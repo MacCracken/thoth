@@ -6,6 +6,8 @@ type: state
 
 # Documentation Health — thoth
 
+> **A real turn on AGNOS (0.55.0)** (2026-11-06): the roadmap's gate 1, checklist, 0.55.x arc and waiting table, `verification-pass.md`'s ring-3 section, `state.md`, the README and CONTRIBUTING status lines.
+>
 > **Repair batch 18 (0.54.4)** (2026-11-06): ADR-0022's and ADR-0023's addenda, the roadmap's two defects and daimon row out, its waiting table re-read and a stall degradation in, gap-review gap 9 in both twins and the ruling's note, the config example on `timeout_ms` and daimon's record, `getting-started.md`, the `--json` shape in `docs/examples`, `verification-pass.md`'s V-8 and V-9, `state.md`, and the README and CONTRIBUTING stamps.
 >
 > **Repair batch 17 (0.54.3)** (2026-11-06): the five gap-review rulings. ADR-0021's addendum, ADR-0022's ruling, `architecture/003` and the module guide on the map's role, the config example on `timeout_ms`, `[log].level`, `[budget]`, `[pricing]` and `[project].map`, gap-review questions 4–8 out of both twins, the roadmap's 0.54.x arc out and two defects in, the daimon row, `state.md`, README and CONTRIBUTING stamps (CONTRIBUTING's had sat at 0.52.8), and `verification-pass.md`'s V-2 and clone traps.

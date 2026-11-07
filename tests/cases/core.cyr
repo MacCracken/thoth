@@ -2172,6 +2172,10 @@ fn _t_tpd_check(name, desc, schema) {
 }
 fn _t_tpd_entry(json) { return bayan_json_v_parse_buf(json, strlen(json)); }
 fn test_toolpin_daimon() {
+    test_group("a path joined to a home of `/` has one slash (0.55.0, found on AGNOS)");
+    assert(streq(_cfg_join2("/", ".thoth"), "/.thoth") == 1, "HOME=/ joins once");
+    assert(streq(_cfg_join2("/home/u/", ".thoth"), "/home/u/.thoth") == 1, "...as a trailing slash does");
+    assert(streq(_cfg_join2("/home/u", ".thoth"), "/home/u/.thoth") == 1, "...and a plain home is as it was");
     test_group("tool pins: the digest is compared, and a missing pin comes from daimon's record (0.54.4)");
     var sv_url = _cfg_daimon_url; var sv_en = _cfg_toolpin_enabled; var sv_log = _log_enabled;
     _log_enabled = 0;

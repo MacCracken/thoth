@@ -219,6 +219,14 @@ never replaced:
 
 The same copy shape runs any other `--agnos` binary, through `agnos/scripts/smoke/basestack-run-smoke.sh ELF EXPECT NAME`.
 
+Rung 2 runs beside it, on the same terms. `--turn` builds hoosh and daimon `--agnos` in copies under `build/agnos-spine`, builds a plain kernel in a private copy, and hands all of it to `agnos/scripts/smoke/spine-turn-smoke.sh`:
+
+```bash
+./scripts/agnos-run.sh --turn
+```
+
+`HOOSH_BIN` or `DAIMON_BIN` names a binary to use as it stands, which is how to test a candidate. The runner's gates read the guest's console and the provider's log, so a tool round counts only if its result reached the model. A failed run keeps its private copy, with both logs in `build/agnos-private.*/build/spine-turn-smoke-logs/`. `--logs` on a guest writes to the image: read it back with `debugfs` on the ext2 partition, which starts 33 MiB in.
+
 Run it serially. The harness writes one log per name and overwrites it, so a parallel run can read another's failed boot as its own. To check that a pass means something, give it a wrong expect string and watch it fail.
 
 ## A turn that gets stuck or comes back empty
