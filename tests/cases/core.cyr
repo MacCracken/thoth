@@ -8336,3 +8336,125 @@ fn test_current_models() {
     _mp_n = 0; _mp_store_off = 0; _mp_fn = 0; _mp_cur = 0;
     return 0;
 }
+
+# --- what sit can say it does not know (git.cyr, commands.cyr, sit 1.13.2, 0.55.3) --------------------------------------------
+# A status record is {path, kind} (sit_status_path, sit_status_kind), so the suite can hand the surfaces what a real repository only
+# gives on a tree bomb or a held store. scripts/live/agnos-hostile.py and the 0.55.3 lab run the real ones.
+fn _t_st_rec(path, kind) {
+    var r = alloc(16);
+    store64(r, path);
+    store64(r + 8, kind);
+    return r;
+}
+fn _t_git_out(st, why, arg) {
+    var path = "build/.thoth_gitrows";
+    _t_fd1_to(path);
+    if (arg != 0) { _git_no_diff(arg, why); } else { _git_status_rows(st, why); }
+    _t_fd1_restore();
+    var b = alloc(4096);
+    var n = file_read_all(path, b, 4095);
+    if (n < 0) { n = 0; }
+    store8(b + n, 0);
+    xunlink(path);
+    return b;
+}
+fn _t_git_reset() {
+    _git_present = 0; _git_detached = 0; _git_dirty = 0; _git_status_n = 0;
+    return 0;
+}
+fn test_git_no_answer() {
+    test_group("sit's no answer is not a clean tree (git.cyr, commands.cyr, 0.55.3)");
+    var sv_tier = ui_tier();
+    var sv_depth = ui_color_depth();
+    ui_force(PT_PLAIN, CD_NONE);
+    # the words
+    var r = 1;
+    while (r <= 9) {
+        assert(streq(git_result_text(r), "sit gave no reason") == 0, "every result sit 1.13.2 names has its own words");
+        r = r + 1;
+    }
+    assert(streq(git_result_text(99), "sit gave no reason") == 1, "...and one it does not yet name still says something");
+    assert_eq(SIT_OK, 0, "SIT_OK is what an untouched result reads");
+    # the cache
+    var st = vec_new();
+    vec_push(st, _t_st_rec("m.txt", 1));
+    vec_push(st, _t_st_rec("big.bin", GIT_NOT_COMPARED));
+    vec_push(st, _t_st_rec("n.txt", 2));
+    _t_git_reset();
+    _git_cache_status(st, SIT_OK);
+    assert_eq(git_dirty(), 2, "a file sit could not compare is not a change it saw");
+    _git_present = 1;
+    assert_eq(git_status_of("big.bin"), GIT_NOT_COMPARED, "...and it keeps its badge");
+    assert_eq(git_status_of("n.txt"), 2, "the next file's kind is its own");
+    assert_eq(git_not_compared(), 1, "...and it is counted apart, so /state does not call the tree clean");
+    _t_git_reset();
+    _git_cache_status(vec_new(), SIT_TREE_TOO_BIG);
+    assert_eq(git_dirty(), GIT_NO_ANSWER, "an empty vec with a result is no answer, not clean");
+    _t_git_reset();
+    _git_cache_status(vec_new(), SIT_OK);
+    assert_eq(git_dirty(), 0, "an empty vec with SIT_OK is clean");
+    _t_git_reset();
+    _git_cache_status(0, SIT_BUSY);
+    assert_eq(git_dirty(), GIT_NO_ANSWER, "no vec at all, the same");
+    _t_git_reset();
+    _git_cache_status(st, SIT_HEAD_CORRUPT);
+    assert_eq(git_dirty(), GIT_NO_ANSWER, "records that came with a result do not make it an answer");
+    _git_present = 1;
+    assert_eq(git_status_of("m.txt"), 1, "...though their badges stay");
+    var many = vec_new();
+    var i = 0;
+    while (i < (GIT_STATUS_MAX + 40)) { vec_push(many, _t_st_rec("f", 1)); i = i + 1; }
+    _t_git_reset();
+    _git_cache_status(many, SIT_OK);
+    assert_eq(git_dirty(), GIT_STATUS_MAX + 40, "the count takes every file");
+    assert_eq(_git_status_n, GIT_STATUS_MAX, "...and the badge cache stops at its bound");
+    # /git
+    var o = _t_git_out(vec_new(), SIT_OK, 0);
+    assert(_ui_contains(o, "clean") == 1, "/git: clean when sit says so");
+    o = _t_git_out(vec_new(), SIT_TREE_TOO_BIG, 0);
+    assert(_ui_contains(o, "clean") == 0, "/git: not clean on no answer");
+    assert(_ui_contains(o, "no answer") == 1, "...it says so");
+    assert(_ui_contains(o, "past the walk's budget") == 1, "...and why");
+    o = _t_git_out(st, SIT_OK, 0);
+    assert(_ui_contains(o, "2 changed") == 1, "/git counts what changed");
+    assert(_ui_contains(o, "1 not compared") == 1, "...and apart from it, what it could not tell");
+    assert(_ui_contains(o, "? big.bin") == 1, "...with its row");
+    assert(_ui_contains(o, "M m.txt") == 1, "a modified row");
+    assert(_ui_contains(o, "A n.txt") == 1, "a new row");
+    o = _t_git_out(st, SIT_HEAD_CORRUPT, 0);
+    assert(_ui_contains(o, "no answer") == 1, "records with a result: no answer");
+    assert(_ui_contains(o, "M m.txt") == 1, "...and what came back is still shown");
+    assert(_ui_contains(o, " changed") == 0, "...with no count to rest on");
+    o = _t_git_out(0, SIT_OK, "f.c");
+    assert(_ui_contains(o, "no changes vs HEAD") == 1, "/git <path>: no changes");
+    o = _t_git_out(0, SIT_DIFF_TOO_BIG, "f.c");
+    assert(_ui_contains(o, "no changes") == 0, "/git <path>: too big to diff is not no changes");
+    assert(_ui_contains(o, "past its budget") == 1, "...it says what it is");
+    # real repositories, by hand: rooted at the fixture as AGNOS roots at $PWD
+    var fx = "build/.gitfx";
+    xmkdir(fx, 448); xmkdir("build/.gitfx/.git", 448); xmkdir("build/.gitfx/.git/refs", 448); xmkdir("build/.gitfx/.git/refs/heads", 448);
+    xmkdir("build/.gitfx/.git/objects", 448);
+    _t_fs_put("build/.gitfx/.git/HEAD", "ref: refs/heads/main\n");
+    _t_fs_put("build/.gitfx/.git/refs/heads/main", "1111111111111111111111111111111111111111\n");
+    xmkdir("build/.gitout", 448); xmkdir("build/.gitout/sub", 448);
+    var sv_no = _fs_no_cwd; var sv_done = _fs_root_done; var sv_c = _fs_root_c;
+    _fs_no_cwd = 1; _fs_root_done = 1; _fs_root_c = fx;
+    _t_git_reset();
+    assert_eq(_git_walk(), 1, "a repository at the root is found, wherever the process stands");
+    assert_eq(git_dirty(), GIT_NO_ANSWER, "HEAD names an object that is not here: no answer, where 1.13.0 listed every file as new");
+    assert_eq(_api_wait_ms, GIT_STORE_WAIT_MS, "the store wait is bounded before the first call");
+    assert_eq(_api_max_bytes, GIT_DIFF_MAX_BYTES, "...and so is a diff's size");
+    assert_eq(_api_max_lines, GIT_DIFF_MAX_LINES, "...and its lines");
+    if (xsymlink("../../.gitfx/.git", "build/.gitout/sub/.git") == 0) {
+        _fs_root_c = "build/.gitout/sub";
+        _t_git_reset();
+        assert_eq(_git_walk(), 0, "a .git link out of the directory is refused");
+        assert_eq(git_present(), 0, "...so another repository's branch reaches no surface");
+        xunlink("build/.gitout/sub/.git");
+    }
+    _fs_no_cwd = sv_no; _fs_root_done = sv_done; _fs_root_c = sv_c;
+    _t_git_reset();
+    git_probe();
+    ui_force(sv_tier, sv_depth);
+    return 0;
+}

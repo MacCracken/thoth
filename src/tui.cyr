@@ -1033,6 +1033,8 @@ fn tui_status_emit() {
         emit(ui_reset());
         if (status_ival(SF_GIT) > 0) {
             ui_emit(ROLE_FAINT, " +"); emit(ui_sgr(ROLE_FG)); ofmt_int(status_ival(SF_GIT)); emit(ui_reset());
+        } elif (status_ival(SF_GIT) == GIT_NO_ANSWER) {
+            ui_emit(ROLE_RED, " ?");                    # sit could not say, and that is not a clean tree (0.55.3)
         }
         lead = 1;
     }
@@ -2582,6 +2584,7 @@ fn _tui_paint_tree_row(li, tw, r) {
         if (kind == 1) { emit_raw(ui_sgr(ROLE_ACCENT)); emit_raw("M "); }    # modified — amber
         elif (kind == 2) { emit_raw(ui_sgr(ROLE_GREEN)); emit_raw("A "); }   # new — green
         elif (kind == 3) { emit_raw(ui_sgr(ROLE_RED)); emit_raw("D "); }     # deleted — red
+        elif (kind == GIT_NOT_COMPARED) { emit_raw(ui_sgr(ROLE_MUTED)); emit_raw("? "); }   # sit could not tell (1.13.2)
         else { emit_raw("  "); }                                             # unchanged / dir — blank gutter
     }
     emit_raw(ui_sgr(role));                             # name (overrides the badge fg; reverse persists if selected)

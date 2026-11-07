@@ -10,6 +10,7 @@ The attacks are the Linux audit's, moved to where they have never run. One boot 
   jail     read_file, list_dir, search and the write tools, pointed out of the project
   capture  a model naming `shell`, and [hooks] and [verify], which all need a shell AGNOS does not have
   store    the pin and session stores and the logs, as links, garbage, directories and oversized files
+  repo     real repositories read through sit: found at $PWD, a .git link out of the project, a HEAD that names nothing
 tests/agnos/hostile.cyr runs the list in the guest, each scenario with its own HOME and PWD. Verdicts come from the exit status,
 the host's log of the wire, and the image read back after the run, so a store is checked by what is on the disk.
 Exit: 0 when nothing was flagged, 1 otherwise, 2 when the kernel never started. Results are in WORK/report.txt.
@@ -23,7 +24,7 @@ WORK = os.environ.get("THOTH_HOSTILE_WORK", "/var/tmp/thoth-agnos-hostile")
 SEED = WORK + "/seed"
 TIMEOUT_MS = 2500
 BOOT_S = int(os.environ.get("QEMU_TIMEOUT", "1500"))
-ONLY = os.environ.get("THOTH_HOSTILE_ONLY", "")     # a class to run alone: wire, time, jail, capture, store
+ONLY = os.environ.get("THOTH_HOSTILE_ONLY", "")     # a class to run alone: wire, time, jail, capture, store, repo
 
 
 def sh(*a, **k):
@@ -115,6 +116,58 @@ EXPECT = {
 TIME_MAX = {"silent_accept": 5, "silent_mid": 5, "refused": 3, "blackhole": 11, "noaccept": 11, "keepalive": 12, "trickle_body": 12}
 
 
+def git(cwd, *a):
+    env = {"PATH": "/usr/bin:/bin", "HOME": WORK, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    return subprocess.run(["git", *a], cwd=cwd, env=env, capture_output=True, check=True).stdout.decode().strip()
+
+
+def repo_at(path, branch):
+    """A real repository in the seed, with one commit on `branch`."""
+    os.makedirs(path, exist_ok=True)
+    git(path, "init", "-q", "--template=", "-b", branch)
+    open(path + "/a.txt", "w").write("committed\n")
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "x")
+
+
+def repo_homes():
+    """What /git prints in the line REPL. Each entry: name, its HOME, what must show, what must not, the command."""
+    out = []
+    h = home("r_here")
+    repo_at(SEED + h + "/proj", "rooted-at-pwd")
+    open(SEED + h + "/proj/a.txt", "w").write("edited\n")
+    out.append(("r_here", h, "rooted-at-pwd", "no git/.sit", "/git"))
+    h = home("r_link")
+    os.unlink(SEED + h + "/proj/a.txt")
+    os.rmdir(SEED + h + "/proj")
+    os.makedirs(SEED + h + "/proj")
+    repo_at(SEED + h + "/v", "victim-branch")
+    link(h + "/proj/.git", "../v/.git")
+    out.append(("r_link", h, "no git/.sit", "victim-branch", "/git"))
+    h = home("r_broken")
+    repo_at(SEED + h + "/proj", "main")
+    tree = git(SEED + h + "/proj", "rev-parse", "HEAD^{tree}")
+    os.unlink(f"{SEED}{h}/proj/.git/objects/{tree[:2]}/{tree[2:]}")
+    out.append(("r_broken", h, "no answer", "clean", "/git"))
+    h = home("r_head")                                # a HEAD that is a link to another repository's
+    repo_at(SEED + h + "/v", "victim-head")
+    os.unlink(SEED + h + "/proj/a.txt")
+    repo_at(SEED + h + "/proj", "main")
+    os.unlink(SEED + h + "/proj/.git/HEAD")
+    link(h + "/proj/.git/HEAD", "../../v/.git/HEAD")
+    out.append(("r_head", h, "no git/.sit", "victim-head", "/git"))
+    h = home("r_difflink")                            # a tracked link, retargeted at a file outside the project
+    os.unlink(SEED + h + "/proj/a.txt")
+    os.makedirs(SEED + h + "/proj", exist_ok=True)
+    put(h + "/outside.txt", "SECRET-OUTSIDE-THE-PROJECT\n")
+    os.symlink("a.txt", SEED + h + "/proj/l")
+    repo_at(SEED + h + "/proj", "main")
+    os.unlink(SEED + h + "/proj/l")
+    os.symlink("../outside.txt", SEED + h + "/proj/l")
+    out.append(("r_difflink", h, "+1 -1", "SECRET-OUTSIDE", "/git l"))
+    return out
+
+
 def store_homes():
     """Each store attack gets a HOME of its own. `check` is read back off the image afterwards."""
     out = []
@@ -162,6 +215,7 @@ def main():
     home("s", stream=True); home("b", stream=False)
     jail = stage_tools()
     stores = store_homes()
+    repos = repo_homes()
     json.dump(TOOLS, open(WORK + "/tools.json", "w"))
     r = sh("cyrius", "build", "--agnos", "hostile.cyr", WORK + "/launcher", cwd=REPO + "/tests/agnos", capture_output=True)
     if r.returncode != 0:
@@ -210,6 +264,9 @@ def main():
         if want("store"):
             for name, h, check, argv, made, repl in stores:
                 run("s_" + name, "store", name, h, idx["comments"][0], extra=argv or "", repl=repl)
+        if want("repo"):
+            for name, h, must, not_, script in repos:
+                run(name, "repo", name, h, 0, repl=script)
         put("/etc/runs", "\n".join(RUNS) + "\n")
         boot = f'''
 set -u
@@ -252,7 +309,7 @@ ring3_seed_boot "{WORK}/H.img" "{WORK}/serial.log" "HOSTILE DONE" {BOOT_S} "{WOR
         r = runs.get(rid)
         if r is None:
             flagged.append((rid, "NO RESULT")); continue
-        if cls in ("wire", "time", "jail", "capture", "store") and r["st"] not in (0, 1, 256):
+        if cls in ("wire", "time", "jail", "capture", "store", "repo") and r["st"] not in (0, 1, 256):
             flagged.append((rid, f"status {r['st']}"))
     if badreq: flagged.append(("wire", f"invalid JSON sent on {len(badreq)} scenarios: {badreq[:5]}"))
     say("-- time")
@@ -294,6 +351,14 @@ ring3_seed_boot "{WORK}/H.img" "{WORK}/serial.log" "HOSTILE DONE" {BOOT_S} "{WOR
             flagged.append((rid, "/read a.txt did not read the project's file"))
         note = (runs[rid].get("head", "") + " | " + runs[rid]["tail"])[:150]
         say(f"  {name:13s} status {runs[rid]['st']:>4} {runs[rid]['ms']/1000:5.1f} s {verdict:14s} {note}")
+    say("-- repo")
+    for name, h, must, not_, script in repos:
+        if name not in runs: continue
+        seen = runs[name].get("head", "") + " " + runs[name]["tail"]
+        verdict = "held"
+        if must not in seen: verdict = f"MISSING {must!r}"; flagged.append((name, verdict))
+        if not_ in seen: verdict = f"SHOWED {not_!r}"; flagged.append((name, verdict))
+        say(f"  {name:10s} status {runs[name]['st']:>4} {verdict:14s} {runs[name]['tail'][-120:]}")
     wr = [runs[r] for r, (c, _) in CLASS.items() if c == "wire" and r in runs]
     if wr:
         say(f"-- wire: {len(wr)} scenarios, slowest {max(x['ms'] for x in wr)/1000:.1f} s, statuses {sorted(set(x['st'] for x in wr))}")

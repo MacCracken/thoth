@@ -92,6 +92,7 @@ fn _gtree_row(cmds, li, x, rowy, w, badges) {
         if (kind == 1) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_ACCENT), "M", 0); }        # modified — amber
         elif (kind == 2) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_GREEN), "A", 0); }        # new — green
         elif (kind == 3) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_RED), "D", 0); }          # deleted — red
+        elif (kind == GIT_NOT_COMPARED) { gd_push_text(cmds, px, rowy, _ui_rgb(ROLE_MUTED), "?", 0); }   # sit could not tell (1.13.2)
         px = px + 2 * GR_GLYPH_W;                                                              # gutter (blank for dir/unchanged)
     }
     px = px + ftree_depth(li) * GTREE_INDENT;

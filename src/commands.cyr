@@ -607,7 +607,11 @@ fn cmd_state() {
     else {
         if (status_state(SF_GIT) == SF_GIT_DETACHED) { ui_emit(ROLE_ACCENT, "(detached HEAD)"); }
         else { ui_emit(ROLE_ACCENT, status_sval(SF_GIT)); }
-        if (status_ival(SF_GIT) == 0) { ui_emit(ROLE_MUTED, " - clean"); }
+        if (status_ival(SF_GIT) == 0) {
+            if (git_not_compared() > 0) { emit(" - "); ofmt_int(git_not_compared()); ui_emit(ROLE_MUTED, " not compared (/git lists them)"); }
+            else { ui_emit(ROLE_MUTED, " - clean"); }
+        }
+        elif (status_ival(SF_GIT) == GIT_NO_ANSWER) { ui_emit(ROLE_RED, " - no answer"); ui_emit(ROLE_MUTED, " (/git says why)"); }
         else { emit(" - "); ofmt_int(status_ival(SF_GIT)); ui_emit(ROLE_MUTED, " changed (HEAD vs worktree, via sit)"); }
         oprintln("");
     }
@@ -795,6 +799,51 @@ fn cmd_state() {
     return 0;
 }
 
+# _git_no_diff: /git <path> when sit_diff_path gave no ops: nothing to show, or no answer.
+fn _git_no_diff(arg, why) {
+    emit("  "); ui_emit_clean(ROLE_BLUE, arg);
+    if (why != SIT_OK) { ui_emit(ROLE_RED, " — no diff: "); ui_emit(ROLE_MUTED, git_result_text(why)); }
+    else { ui_emit(ROLE_MUTED, " — no changes vs HEAD (unchanged, or untracked and absent)"); }
+    oprintln("");
+    return 0;
+}
+
+# _git_status_rows: /git's status block. An empty vec is "clean" only when sit says so.
+fn _git_status_rows(st, why) {
+    var n = 0;
+    if (st != 0) { n = vec_len(st); }
+    var unk = 0;                                                  # sit_status_kind 4: tracked, and sit cannot tell (1.13.2)
+    var c = 0;
+    while (c < n) {
+        if (sit_status_kind(vec_get(st, c)) == GIT_NOT_COMPARED) { unk = unk + 1; }
+        c = c + 1;
+    }
+    ui_label("  status : ");
+    if (why != SIT_OK) {
+        ui_emit(ROLE_RED, "no answer"); ui_emit(ROLE_MUTED, " — "); ui_emit(ROLE_MUTED, git_result_text(why));
+    } elif (n == 0) {
+        ui_emit(ROLE_GREEN, "clean"); ui_emit(ROLE_MUTED, " (working tree matches HEAD)");
+    } else {
+        ofmt_int(n - unk); ui_emit(ROLE_MUTED, " changed (HEAD vs worktree)");
+        if (unk > 0) { ui_emit(ROLE_MUTED, ", "); ofmt_int(unk); ui_emit(ROLE_MUTED, " not compared"); }
+        ui_emit(ROLE_MUTED, ":");
+    }
+    oprintln("");
+    var i = 0;
+    while (i < n) {
+        var rec = vec_get(st, i);
+        var kind = sit_status_kind(rec);
+        emit("    ");
+        if (kind == 1) { ui_emit(ROLE_ACCENT, "M "); }        # modified
+        elif (kind == 2) { ui_emit(ROLE_GREEN, "A "); }       # new (untracked)
+        elif (kind == 3) { ui_emit(ROLE_RED, "D "); }         # deleted
+        else { ui_emit(ROLE_MUTED, "? "); }                   # not compared, and any kind a later sit adds
+        emit_clean_line(sit_status_path(rec)); oprintln("");   # 0.45.2: an untracked name is the worktree's own text
+        i = i + 1;
+    }
+    return 0;
+}
+
 # cmd_git: /git — the working repository's branch + per-file changed list, read
 # through sit's read-only VCS API (0.13.0). thoth owns no VCS logic; sit owns the
 # domain. Own open->read->close for the detailed listing, then git_probe() to sync
@@ -802,25 +851,23 @@ fn cmd_state() {
 # off a repo (sit reads at cwd; no ancestor walk).
 fn cmd_git(line) {
     var arg = arg_after(line);
-    var repo = sit_repo_open(".");
+    var repo = git_repo_open();
     if (repo == 0) {
         ui_emit(ROLE_FAINT, "git: no git/.sit repo at the working directory"); oprintln("");
-        ui_emit(ROLE_MUTED, "  (sit reads at the cwd; it does not walk up to an ancestor repo)"); oprintln("");
+        ui_emit(ROLE_MUTED, "  (sit reads at the cwd; it does not walk up to an ancestor repo, or follow a .git link out of this directory)"); oprintln("");
         git_probe();
         return 0;
     }
     # 0.19.2: `/git <path>` renders that file's diff (HEAD blob vs working tree) via sit_diff_path through
-    # the colored diff renderer. sit_diff_path returns 0 when the file is unchanged / untracked-and-absent /
-    # too large to diff — reported honestly, never a blank or a fake diff.
+    # the colored diff renderer. sit_diff_path returns 0 when the file is unchanged or untracked-and-absent, and
+    # when it has no answer, which sit_last_result tells apart (0.55.3) — reported honestly, never a blank or a fake diff.
     # 0.45.0: the path is drawn through the LABEL sanitiser, here and in diff_render_ann's header. It is the operator's
     # argument (typed, or a repo-local [alias] expansion) and a filename can hold a control byte, so sit gets it raw.
     if (arg != 0) {
         var ops = sit_diff_path(repo, arg);
-        if (ops == 0) {
-            emit("  "); ui_emit_clean(ROLE_BLUE, arg); ui_emit(ROLE_MUTED, " — no changes vs HEAD (unchanged, untracked-and-absent, or too large)"); oprintln("");
-        } else {
-            diff_render_ann(arg, ops);
-        }
+        var dwhy = sit_last_result();
+        if ((dwhy != SIT_OK) || (ops == 0)) { _git_no_diff(arg, dwhy); }
+        else { diff_render_ann(arg, ops); }
         sit_repo_close(repo);
         return 0;
     }
@@ -829,25 +876,7 @@ fn cmd_git(line) {
     if (br == 0) { ui_emit(ROLE_ACCENT, "(detached HEAD)"); } else { ui_emit(ROLE_ACCENT, br); }
     oprintln("");
     var st = sit_repo_status(repo);
-    var n = 0;
-    if (st != 0) { n = vec_len(st); }
-    if (n == 0) {
-        ui_label("  status : "); ui_emit(ROLE_GREEN, "clean"); ui_emit(ROLE_MUTED, " (working tree matches HEAD)"); oprintln("");
-    } else {
-        ui_label("  status : "); ofmt_int(n); ui_emit(ROLE_MUTED, " changed (HEAD vs worktree):"); oprintln("");
-        var i = 0;
-        while (i < n) {
-            var rec = vec_get(st, i);
-            var kind = sit_status_kind(rec);
-            emit("    ");
-            if (kind == 1) { ui_emit(ROLE_ACCENT, "M "); }        # modified
-            elif (kind == 2) { ui_emit(ROLE_GREEN, "A "); }       # new (untracked)
-            elif (kind == 3) { ui_emit(ROLE_RED, "D "); }         # deleted
-            else { emit("? "); }
-            emit_clean_line(sit_status_path(rec)); oprintln("");   # 0.45.2: an untracked name is the worktree's own text
-            i = i + 1;
-        }
-    }
+    _git_status_rows(st, sit_last_result());
     sit_repo_close(repo);
     git_probe();     # sync the cached producer so the status bar matches what /git showed
     return 0;

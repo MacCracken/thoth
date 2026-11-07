@@ -81,6 +81,8 @@ fn gstatus_build(cmds, x, y, w, h) {
         if (status_ival(SF_GIT) > 0) {
             pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_FAINT), " +");
             pen = _gstatus_int(cmds, pen, ty, _ui_rgb(ROLE_FG), status_ival(SF_GIT));
+        } elif (status_ival(SF_GIT) == GIT_NO_ANSWER) {
+            pen = _gstatus_txt(cmds, pen, ty, _ui_rgb(ROLE_RED), " ?");
         }
         lead = 1;
     }

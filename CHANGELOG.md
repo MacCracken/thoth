@@ -4,6 +4,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.55.3] - 2026-11-06
+
+**Repair batch 19: sit 1.13.3, and a repository thoth cannot read is no longer a clean one.** sit moves from 1.13.0 to 1.13.3. Its new read API can say it has no answer, and thoth now asks, so a broken repository, a tree bomb or a held store stops reading as clean. Its link and memory fixes come with it. A guest run and the Mac suite found that sit's symlink guards were all off on AGNOS and macOS, so 1.13.3 was patched here to turn them on. agnosai-guard moves to 2.3.0.
+
+**What changes for you:**
+
+- `/git` says `no answer` and why when sit cannot tell, and `/state` and the status bar say so too (`main ?`). A broken HEAD used to list every file as new.
+- A file sit cannot compare, such as one under a `filter` or over 16 MiB, shows `?` in the tree and in `/git`. It is not counted as changed, and `/state` no longer calls that tree clean.
+- **A `.git` link that leaves the directory no longer reads.** That includes Android `repo` checkouts (`.git -> ../../.repo/projects/...`), because the shape cannot be told from the attack. Move the store into the directory, or link it from inside.
+- A CRLF working copy of an LF blob under `.gitattributes` is clean, as git has it.
+- `/git <file>` takes up to 8 MiB and 50,000 lines, and says so past that. A store lock is waited on for 1 s, not 60.
+- On AGNOS, `/git` and the status bar find the repository at `$PWD`.
+
+### Fixed
+
+- **A planted `.git` link showed another repository.** `.git -> ../victim/.git` put its branch and status on the status bar and in `/git`. Refused now (sit 1.13.1).
+- **`/git <path>` read through a tracked link.** A link retargeted in the worktree put the file it pointed at into the diff, wherever that was. A link's side is its target now, as git stores it (sit 1.13.2).
+- **"Could not read it" read as an answer.** A missing HEAD tree listed every file as new, a tree bomb listed one, a broken blob diffed as all-added, and too big to diff read as no changes. `/git`, `/state`, the status bar and the window now ask `sit_last_result` and say `no answer`.
+- **A held store hung `/git` for ever.** `flock` needs only read access, so anyone who could read a shared `.sit` could do it. A wait now ends at 1 s, so a hostile store costs `/git` about 3 s across its three calls. On the same lab 0.55.2 was still hung when killed.
+- **A diff's size had no limit.** Two million lines cost 329 MB. They now cost 14 MB and a line saying why.
+- **`/git` and the status bar never found a repository at `$PWD` on AGNOS.** `sit_repo_open(".")` read the disk root, where `.` lands with no working directory. It was the one project-relative path 0.55.1 missed. Every `/git` on the guest said no repository.
+- **Every symlink guard in sit was off on AGNOS.** `path_is_symlink` was a deliberate no-op, on the belief that AGNOS has no lstat, and `lstat#102` has been there since agnos 1.56.53. Rooting `/git` at `$PWD` made that reachable: on the guest a planted `.git` showed the other repository, and a tracked link put an outside file in a diff. Fixed in sit 1.13.3, with a fallback for FAT volumes, which cannot hold a link.
+- **They were off on macOS too.** sit passed Linux's `AT_FDCWD` and `AT_SYMLINK_NOFOLLOW` to Darwin, so every lstat failed and read as "not a link". This cut's suite caught it on a real Mac. Fixed in sit 1.13.3, with per-target values.
+
+### Changed
+
+- **sit 1.13.0 → 1.13.3,** vendored from the local tree: 1.13.3 needs its tag before `scripts/sync-sit.sh` can fetch it. `git_repo_open` is the one way to a repository now, and sets the store wait and diff limit before the first call. `commit_tree_hex` leaves every lane's warning set.
+- **agnosai-guard 2.2.5 → 2.3.0.** The bundle's only change is its version line: 2.3.0's tool loop is outside the guard profile.
+
+### Added
+
+- **`repo` scenarios in `./scripts/agnos-run.sh --hostile`:** real repositories read through sit on the guest, at `$PWD`, behind a `.git` link and a linked HEAD, with a broken HEAD and a retargeted tracked link. The pass is 203 runs now.
+
+### Verified
+
+- 971 (gui) + 2701 (core) + 1723 (agent) + 1074 (tui) + 190 (render) = 6,659 assertions, 0 failures, from a clean copy with stdin closed and with it held open.
+- Break tests: 17 mutants in isolated copies, all caught. With sit's lstat fix reverted in a copy, the guest leaks the other repository's branch, its HEAD and the outside file, 5 flags.
+- Warning sets match 0.55.2's on all four lanes, less `commit_tree_hex`. All five suites pass under `qemu-aarch64` and on a Raspberry Pi (6,659 each), macOS is green natively (2690 + 1711 + 1053 + 956 + 190), the hostile wire flags 0 of 152 on Linux and macOS, and rung 1, rung 2, rung 3 and the hostile pass on AGNOS all pass.
+- An A/B lab on real repositories against 0.55.2 reproduced each attack above and each fix. The TUI in a pty and the window on a headless compositor show `main ?` and the `?` badge. `--tui` passes all 61 steps on a plain kernel, and the hostile pass all 203 runs.
+- sit 1.13.3 through its own gates: 816 unit tests, 1,219 integration assertions, fuzz, poison A/B, the bundles reproducing, `--agnos` and `--aarch64` builds, and the 816 again on a real Mac. thoth's vendored bundle matches its dist byte for byte.
+- Not run: iron, a repository on a FAT volume on AGNOS, and a real provider over TLS from the guest. On Windows sit's guards stay off, and that lane does not build past its POSIX-only paths, so nothing reaches them yet.
+
 ## [0.55.2] - 2026-11-06
 
 **Rung 3: the TUI on AGNOS.** Type `thoth` at agnsh and the rich TUI comes up on the console, driven by real keys. The gate read "no termios" as "no raw terminal", and AGNOS has two routes to one: `kbscan#42` on the console, and a sized `#97` terminal channel under an emulator. Everything above `src/term.cyr` is unchanged. This closes v1.0's AGNOS gate.

@@ -12,6 +12,8 @@ So a tool works in two steps:
 
 `_project_no_symlink` resolves for itself, and skips `$PWD`'s own spelling: that part is the operator's.
 
+A library that opens a path of its own gets the root too: `git_repo_open` hands `fs_root()` to `sit_repo_open`, because `.` there is the disk root. 0.55.1 missed that one, and `/git` found no repository on AGNOS until 0.55.3.
+
 On a target with a kernel cwd `fs_path` is the identity, so a call site that forgets it passes every suite on Linux and is a jail escape on AGNOS. **`test_fs_no_cwd` flips `_fs_no_cwd` so the logic runs on every lane, and `./scripts/agnos-run.sh --hostile` is the proof.** A new tool that reads a path belongs in both.
 
 `fs_path` never falls back to the relative form, on an oversized path or a failed allocation. On AGNOS that fallback is the same name at the disk root.

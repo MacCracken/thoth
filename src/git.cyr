@@ -28,11 +28,11 @@ var _git_probed = 0;        # 1 once git_probe has run at least once this sessio
 var _git_present = 0;       # 1 if a git/.sit repo was found at the working directory
 var _git_branch_buf = 0;    # owner-copied branch name (sit's cstring is arena-owned)
 var _git_detached = 0;      # 1 if HEAD is detached / not a branch ref
-var _git_dirty = 0;         # count of changed files (modified/new/deleted, HEAD vs worktree)
+var _git_dirty = 0;         # count of changed files (modified/new/deleted, HEAD vs worktree), or GIT_NO_ANSWER
 
 # Per-file status cache for file-tree badges (0.22.4): copied from sit's status vec at probe time (sit's
 # paths are arena-owned, freed on close) into REUSED buffers (rewritten each probe, so no accretion over a
-# session). Repo-relative paths + a kind byte (1=modified, 2=new/untracked, 3=deleted). Bounded.
+# session). Repo-relative paths + a kind byte (1=modified, 2=new/untracked, 3=deleted, 4=not compared). Bounded.
 var GIT_STATUS_MAX = 512;   # max changed files tracked for badges
 var GIT_STATUS_BUF = 32768; # reused path storage (32 KiB); entries past it are skipped
 var _git_status_n = 0;      # cached entry count
@@ -72,6 +72,71 @@ fn _git_bufs() {
     return 0;
 }
 
+# --- what sit can say it does not know (sit 1.13.2, 0.55.3) -----------------------------------------------------------------
+# sit_repo_status and sit_diff_path return what they return for "nothing to report" when they have no answer, and only
+# sit_last_result tells the two apart. So an unreadable HEAD, a tree too big to walk and a held store all read as clean until a
+# caller asks. Both calls ask, and a surface says "no answer" rather than a clean tree it does not know about.
+var GIT_NOT_COMPARED = 4;          # sit_status_kind: tracked, and sit cannot tell whether it changed
+var GIT_NO_ANSWER = 0 - 1;         # git_dirty(): sit could not say
+# /git runs on the thread that owns the surface, and the status walk can too, so sit's 60 s on a store lock anyone who can read the
+# repository can hold is too long. sit keeps about 160 bytes a diff line on a heap that never frees, so these bound a diff to about 8 MB.
+var GIT_STORE_WAIT_MS = 1000;
+var GIT_DIFF_MAX_BYTES = 8388608;
+var GIT_DIFF_MAX_LINES = 50000;
+
+# git_repo_open: the one way to a repository. sit reads at the path it is given, and AGNOS has no cwd for "." to mean (note 005).
+fn git_repo_open() {
+    sit_set_store_wait(GIT_STORE_WAIT_MS);
+    sit_set_diff_limit(GIT_DIFF_MAX_BYTES, GIT_DIFF_MAX_LINES);
+    var root = fs_root();
+    if (root == 0) { root = "."; }
+    return sit_repo_open(root);
+}
+
+# git_result_text: why sit has no answer, in the operator's words.
+fn git_result_text(r) {
+    if (r == SIT_BUSY) { return "another process holds the store"; }
+    if (r == SIT_HEAD_TOO_BIG) { return "HEAD's copy is over the size limit"; }
+    if (r == SIT_HEAD_MISSING) { return "HEAD names an object that is not here"; }
+    if (r == SIT_HEAD_CORRUPT) { return "HEAD's object does not read"; }
+    if (r == SIT_WORK_TOO_BIG) { return "the working copy is over the size limit"; }
+    if (r == SIT_WORK_UNREADABLE) { return "the working copy cannot be read"; }
+    if (r == SIT_DIFF_TOO_BIG) { return "the diff is past its budget"; }
+    if (r == SIT_NOT_COMPARABLE) { return "a filter, ident or encoding applies, and sit runs none"; }
+    if (r == SIT_TREE_TOO_BIG) { return "HEAD's tree is past the walk's budget"; }
+    return "sit gave no reason";
+}
+
+# _git_cache_status: sit's status vec and its result into the badge cache. A file sit could not compare is kept for its badge, and is
+# not a change it saw. With no answer the count says so, and whatever came back still gets its badges.
+fn _git_cache_status(st, why) {
+    if (st != 0) {
+        _git_bufs();
+        var off = 0;                                 # rewrite the reused buffer from the top (no accretion)
+        var i = 0;
+        var sn = vec_len(st);
+        while (i < sn) {
+            var kind = sit_status_kind(vec_get(st, i));
+            if (kind != GIT_NOT_COMPARED) { _git_dirty = _git_dirty + 1; }
+            if (_git_status_n < GIT_STATUS_MAX) {
+                var path = sit_status_path(vec_get(st, i));
+                var plen = strlen(path);
+                if ((off + plen + 1) <= GIT_STATUS_BUF) {
+                    memcpy(_git_status_buf + off, path, plen);
+                    store8(_git_status_buf + off + plen, 0);
+                    store64(_git_status_ptr + _git_status_n * 8, _git_status_buf + off);
+                    store8(_git_status_kind + _git_status_n, kind);
+                    _git_status_n = _git_status_n + 1;
+                    off = off + plen + 1;
+                }
+            }
+            i = i + 1;
+        }
+    }
+    if (why != SIT_OK) { _git_dirty = GIT_NO_ANSWER; }
+    return 0;
+}
+
 # _git_walk: read the repo through sit into the cache. sit_repo_open(".") chdirs to "." (a no-op — thoth never leaves its launch
 # cwd), detects .git/ or .sit/, and returns 1/0. On a repo we snapshot the branch + the changed-file count. 1 if a repo is present.
 fn _git_walk() {
@@ -79,33 +144,14 @@ fn _git_walk() {
     _git_detached = 0;
     _git_dirty = 0;
     _git_status_n = 0;
-    var repo = sit_repo_open(".");
-    if (repo == 0) { return 0; }     # no .git/ or .sit/ at the working directory
+    var repo = git_repo_open();
+    if (repo == 0) { return 0; }     # no .git/ or .sit/ at the working directory, or a link out of it, which sit refuses
     _git_present = 1;
     var br = sit_repo_branch(repo);  # heap cstring, or 0 when HEAD is detached
     if (br == 0) { _git_note_detached(); }
     else { _git_copy_branch(br); }
     var st = sit_repo_status(repo);  # vec of {path, kind}; count + copy into the badge cache (before close)
-    if (st != 0) {
-        _git_dirty = vec_len(st);
-        _git_bufs();
-        var off = 0;                                 # rewrite the reused buffer from the top (no accretion)
-        var i = 0;
-        var sn = vec_len(st);
-        while ((i < sn) && (_git_status_n < GIT_STATUS_MAX)) {
-            var path = sit_status_path(vec_get(st, i));
-            var plen = strlen(path);
-            if ((off + plen + 1) <= GIT_STATUS_BUF) {
-                memcpy(_git_status_buf + off, path, plen);
-                store8(_git_status_buf + off + plen, 0);
-                store64(_git_status_ptr + _git_status_n * 8, _git_status_buf + off);
-                store8(_git_status_kind + _git_status_n, sit_status_kind(vec_get(st, i)));
-                _git_status_n = _git_status_n + 1;
-                off = off + plen + 1;
-            }
-            i = i + 1;
-        }
-    }
+    _git_cache_status(st, sit_last_result());
     sit_repo_close(repo);
     return 1;
 }
@@ -301,7 +347,18 @@ fn git_probe() {
     return _git_present;
 }
 
-# git_status_of: the sit status kind for repo-relative `relpath` — 1=modified, 2=new, 3=deleted, or 0 if
+# git_not_compared: how many cached files sit could not compare. A tree with these is not known clean, though nothing was seen to change.
+fn git_not_compared() {
+    var n = 0;
+    var i = 0;
+    while (i < _git_status_n) {
+        if (load8(_git_status_kind + i) == GIT_NOT_COMPARED) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+# git_status_of: the sit status kind for repo-relative `relpath` — 1=modified, 2=new, 3=deleted, 4=not compared, or 0 if
 # unchanged / untracked-by-status / no repo. Linear scan over the cached probe (bounded by GIT_STATUS_MAX).
 # Read-only surfacing of the already-probed status (the file-tree badges, 0.22.4) — no new worktree walk.
 fn git_status_of(relpath) {

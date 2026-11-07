@@ -132,7 +132,7 @@ fn test_vendor_pins() {
     _vd_pin("src/vendor/bote-core.cyr", "# Version: 3.8.15", "bote-core pinned at 3.8.15");
     _vd_pin("src/vendor/libro.cyr",     "# Version: 2.11.3", "libro pinned at 2.11.3");
     _vd_pin("src/vendor/t-ron.cyr",     "# Version: 2.2.5", "t-ron pinned at 2.2.5");
-    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.13.0",  "sit-read pinned at 1.13.0");
+    _vd_pin("src/vendor/sit-read.cyr",  "# Version: 1.13.3",  "sit-read pinned at 1.13.3");
     _vd_pin("src/vendor/sankoch.cyr",   "# Version: 2.8.9",  "sankoch-zlib pinned at 2.8.9");
     _vd_pin("src/vendor/vyakarana.cyr", "# Version: 2.10.0",  "vyakarana pinned at 2.10.0");
     _vd_pin("src/vendor/darshana.cyr",  "# Version: 1.7.0",  "darshana pinned at 1.7.0");
@@ -143,7 +143,7 @@ fn test_vendor_pins() {
     # bundle whose sync script checks are ALL non-fatal (`echo "WARN: …"`, exit 0), so nothing else
     # caught it: run sync-agnosai.sh with a stale tag, get a WARN among the normal success lines, commit,
     # and the tree builds clean and passes every other test with a downgraded redactor.
-    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.2.5", "agnosai-guard pinned at 2.2.5");
+    _vd_pin("src/vendor/agnosai-guard.cyr", "# Version: 2.3.0", "agnosai-guard pinned at 2.3.0");
 
     # kashi is the exception and deliberately so: thoth vendors kashi's FREESTANDING
     # CORE (its `src/font_data.cyr`), not the generated `dist/kashi.cyr` library face,

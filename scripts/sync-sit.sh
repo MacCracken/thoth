@@ -58,10 +58,10 @@
 # bundle's `# Version:` header against the pin. That test is the real gate; this
 # comment is the reminder.
 #
-# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.13.0 2.8.9)
+# Usage: ./scripts/sync-sit.sh [sit_tag] [sankoch_tag]   (default: 1.13.3 2.8.9)
 set -euo pipefail
 
-SIT_TAG="${1:-1.13.0}"
+SIT_TAG="${1:-1.13.3}"
 SK_TAG="${2:-2.8.9}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIT_DEST="$REPO_ROOT/src/vendor/sit-read.cyr"

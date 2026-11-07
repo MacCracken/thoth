@@ -33,7 +33,7 @@ include "src/vendor/darshana.cyr"
 # no stdlib module of its own and no collision with darshana's ANSI. thoth authors only
 # the phase->SGR glue in ui.cyr, which is why this must precede it. See scripts/sync-anuenue.sh.
 include "src/vendor/anuenue.cyr"
-# agnosai (2.2.5 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
+# agnosai (2.3.0 [lib.guard] profile) — the secret/PII scanner + redactor behind [redact] (0.40.0, T1-3).
 # TWO modules, ~530 lines: agnosai's units + output_filter. NOT the orchestration engine — thoth consumes
 # hoosh for inference and daimon for tools, and agnosai's own llm/ layer names thoth's hoosh.cyr as its
 # reference implementation. The profile was published upstream at thoth's request rather than the two
