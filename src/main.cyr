@@ -132,6 +132,7 @@ include "src/tui.cyr"       # T2 rich-TUI front-end (alt-screen); active only at
 
 fn main() {
     alloc_init();
+    term_out_init();        # 0.55.2: before the first byte: the AGNOS console's filter
     args_init();            # snapshot the command line (one-shot/argv front-door, 0.11.0)
     exec_signals_init();    # 0.52.9: an inherited SIGCHLD ignore would cost every child's exit status
     out_ring_sink_set(&feed_write);   # wire the OUT_RING sink to the feed ring (TUI-decoupling); only the TUI arms OUT_RING

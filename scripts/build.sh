@@ -88,7 +88,7 @@ ARCH_GAP='SYS_EPOLL_CREATE1|SYS_EPOLL_WAIT|SYS_EPOLL_CTL|SYS_FUTEX|EPOLL_CTL_ADD
 #     ARCHITECTURAL SYS_EPOLL_CREATE1 (IOCP) gap instead, where it should stop.
 #   SIGHUP — the agnos peer omitted the signal-NUMBER constants (the signal infra
 #     itself was DONE: sigprocmask#17/signalfd#18). Now defined — the agnos lane
-#     BUILDS a valid ELF (v1.0 gate 1's build blocker cleared; runtime is gate 2).
+#     BUILDS a valid ELF (the v1.0 AGNOS gate's build blocker cleared).
 #   (The 6.2.15-era SYS_LSEEK entry cleared earlier the same way.)
 TRANSIENT_GAP=''
 

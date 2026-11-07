@@ -49,23 +49,13 @@ See [ADR-0001](../adr/0001-os-agnostic-agnos-primary.md) for the full reasoning,
 
 ## Path to v1.0 — the blocking gates
 
-v1.0 is an **AGNOS gate**: the downstream-green criterion is satisfied **on AGNOS**, where
-the whole spine is native. Everything thoth owns is shipping; what remains is AGNOS lighting
-up plus two process gates. Every release re-runs the ring-3 smoke the gates build on:
-`scripts/agnos-run.sh` shells out to AGNOS's own `basestack-run-smoke.sh` and derives the expected
-string from `VERSION`, so it cannot pass on a stale binary.
+v1.0 is an **AGNOS gate**, and it is met under QEMU: a consumer is green on AGNOS end to end, where the whole spine is native, through
+`scripts/agnos-run.sh`, `--turn` and `--tui`. Every release re-runs them. The bare run shells out to AGNOS's own `basestack-run-smoke.sh`
+and derives the expected string from `VERSION`, so it cannot pass on a stale binary. Everything thoth owns is shipping.
 
-Three gates remain, in dependency order.
+Two gates remain, both process gates, in dependency order.
 
-1. **At least one downstream consumer green on AGNOS (end-to-end).** `scripts/agnos-run.sh --turn` meets the
-   gate's wording: a real turn through hoosh and daimon, native on one image. One rung remains, scheduled as
-   [0.55.2](#055x--a-real-turn-on-agnos):
-   - **Rung 3 — the interactive TUI over agnsh.** Least urgent, and gated on the floor: AGNOS has no
-     raw terminal (no termios; every console fd reads the cooked line, which drops every key without
-     an ASCII value), so the TUI takes the line REPL there.
-   **Status: blocking until rung 3 or a ruling that the wording is enough · owner: thoth.**
-
-2. **Security review pass (process gate) — the external sign-off.** What remains is whatever "pass"
+1. **Security review pass (process gate) — the external sign-off.** What remains is whatever "pass"
    means to someone who is not the author. Its reading list: the fail-closed posture and the t-ron
    choke point (the internal audits of record are [`../audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md),
    [`../audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md) and, on AGNOS,
@@ -76,21 +66,20 @@ Three gates remain, in dependency order.
    tool-pin store ([ADR-0022](../adr/0022-tool-pins-are-durable-defended-without-a-secret.md)). It closes
    the 0.x line, after the last arc, so the reviewer reads what ships. **Status: blocking · owner: TBD.**
 
-3. **1.0 versioning scheme decided (deferred ADR).** thoth stays SemVer `0.x` through pre-1.0
+2. **1.0 versioning scheme decided (deferred ADR).** thoth stays SemVer `0.x` through pre-1.0
    by design ([ADR-0004](../adr/0004-semver-pre-release.md)). Whether 1.0 adopts CalVer (the
    binary standard) or stays SemVer is deferred to a later ADR. **Status: deferred · owner:
    thoth · decide before the 1.0 tag.**
 
 ### v1.0 criteria checklist
 
-- [ ] **At least one downstream consumer green on AGNOS** — gate 1, rung 3
-- [ ] **Security review pass** — gate 2, the external sign-off
-- [ ] **1.0 versioning scheme decided (SemVer vs CalVer)** — gate 3
+- [ ] **Security review pass** — gate 1, the external sign-off
+- [ ] **1.0 versioning scheme decided (SemVer vs CalVer)** — gate 2
 
 ## Versioning
 
 thoth uses **SemVer `0.x`** through its pre-1.0 phase — see
-[ADR-0004](../adr/0004-semver-pre-release.md). The 1.0 scheme is gate 3 above.
+[ADR-0004](../adr/0004-semver-pre-release.md). The 1.0 scheme is gate 2 above.
 
 **Arc discipline:** a feature **arc** is ONE minor; the incremental cuts inside it are
 **patches** (`X.Y.0` → `X.Y.1` → …). A new minor is for a genuinely new capability arc. When
@@ -117,7 +106,6 @@ unsure, patch.
 
 | Version | Arc | Gate |
 |---|---|---|
-| 0.55.x | [**A real turn on AGNOS**](#055x--a-real-turn-on-agnos): v1.0 gate 1 | the floor, for rung 3 |
 | 0.56.x | [**F8 — the AGNOS window**](#056x--f8-the-agnos-window) | a stable setu contract, a waitable channel |
 | 0.57.x | [**F9 — untrusted reads through the subagent context**](#057x--f9-untrusted-reads-through-the-subagent-context) | ruling: gap-review question 2 |
 | 0.58.x | [**F11 — git write operations through sit**](#058x--f11-git-write-operations-through-sit) | ruling: question 3 |
@@ -125,13 +113,6 @@ unsure, patch.
 | 0.60.x | [**F12 — OS-enforced sandboxing and network egress**](#060x--f12-os-enforced-sandboxing-and-network-egress) | ruling: question 1, in kavach |
 | 0.61.x | [**F13 — ACP server mode**](#061x--f13-acp-server-mode) | none |
 | 0.62.x | [**F14 — OTLP export**](#062x--f14-otlp-export-of-the-audit-trail), then the v1.0 gates | none |
-
-### 0.55.x — A real turn on AGNOS
-
-v1.0 gate 1. A real turn runs on AGNOS: `scripts/agnos-run.sh --turn` stages thoth, hoosh and daimon on one image, through `agnos/scripts/smoke/spine-turn-smoke.sh`, and `--hostile` runs the audit's attacks there.
-
-- **0.55.2 — Rung 3.** **Gate:** the floor. A `#97` terminal channel now carries a window size, so an emulator's terminal end is worth reading as
-  a route that does not need raw console reads.
 
 ### 0.56.x — F8: the AGNOS window
 
@@ -141,7 +122,7 @@ The GUI's half of "AGNOS canonical", and the last part of thoth that runs only o
 thoth's seam mirrors. Off Linux `thoth gui` refuses before any call (`gwl_win_backend_select`, the seam's one switch); an AGNOS backend slots
 in there, with `gwl_win_wait` as its wait.
 
-**Gate — re-read from the source against setu 0.9.1, aethersafha 0.17.7 and agnos 1.57.17, not met:**
+**Gate — re-read from the source against setu 0.9.1, aethersafha 0.18.2 and agnos 1.57.17, not met:**
 
 - **The contract is not declared stable.** There is no protocol version on the wire (`SETU_HELLO` is defined but aethersafha's handshake
   refuses anything before `CREATE_SURFACE`), and aethersafha names wire work still to come: modifier state on key events, damage rectangles on
@@ -187,7 +168,7 @@ front end's worth of surface, for distribution value.
 
 Emit the libro chain to a collector under the OpenTelemetry GenAI conventions (gap 4). **Gate:** none; low priority for an interactive TUI.
 
-**Then the v1.0 gates**, on this minor's last patches: a final P(-1) sweep, the external security review (gate 2) and the versioning ADR (gate 3).
+**Then the v1.0 gates**, on this minor's last patches: a final P(-1) sweep, the external security review (gate 1) and the versioning ADR (gate 3).
 
 ### No slot yet
 
@@ -212,6 +193,8 @@ re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
 | **hoosh** | **cache tokens**: Anthropic's `cache_creation_input_tokens` / `cache_read_input_tokens` and every provider's cached-input rate are not modelled, so a cached prompt is costed at the full input rate | hoosh **2.10.1** | none — thoth prices from `[pricing]`, which has no cache rate either |
 | **agnosai** | `agnosai_redact_email` rescans the run from every byte, `agnosai_output_redact` rebuilds the string per hit, and `_ssn` and `_email` rebuild with no match (M-1, M-2, M-6). A fix is proven against the shipped behaviour: 300,000 fuzz cases, 0 differences | agnosai-guard 2.2.5 | `REDACT_WINDOW` holds it at 2 KiB, and a secret straddling a hard split in an unbroken run is the residual; drop the window on the fix |
 | **sit** | `_status_blob_differs` inflates every tracked blob, 84% of a probe in zlib; `.git/index` stat data would spare it. `sit_repo_close` returns nothing to the heap | sit 1.13.0 | done: the walk runs in a child, off the main thread, so neither costs thoth more than a repository's own walk |
+| **sit** | 1.13.1 refuses a `.git` link that leaves the directory, in `sit_repo_open` as well: on 1.13.0 a planted link can show another repository's branch and status in thoth's status bar. A security patch, LOW to MEDIUM upstream | sit **1.13.1** (vendored 1.13.0) | re-vendor as its own patch: a repair for the next batch |
+| **puka** | no size on its child's terminal (agnos's `CH_WINSZ_SET`, 1.57.17), and a line discipline a child cannot step out of, so Esc, the arrows and the Ctrl keys never reach a program. thoth takes a size to mean keys, so the two must land together: a sized, cooked puka would give a TUI with none of them | puka **0.6.25** | done: an unsized end keeps the line REPL, and `--tui` runs a real puka window |
 | **mneme** | `mneme_create_note` answers "Failed to create note" for a title it already holds, so `/remember` of a fact already saved reads as a failed write | mneme 1.1.4 | the message is true: nothing new was written |
 | **cyrius** | `scripts/install.sh`, which thoth's CI and Release run. A first install verifies no signature, and its sum sidecar can name another file (B-1); it compiles `programs/dlopen-helper.c` from the caller's working directory, and under root installs the result where setuid consumers trust it (B-2); it deletes real `bin` and `lib` directories under `CYRIUS_HOME` (B-3); its Starship snippet prints a repository's bytes raw (B-4); a broken install reports success (B-5); activation is not atomic (B-6); a fetch failure falls through to an unverified clone (B-7); a cut `curl \| sh` exits 0 (B-8); a reinstall can exit 1 (B-9); no network timeouts (B-10). Scripts and repros: [`../audit/2026-11-05-not-verified-pass.md`](../audit/2026-11-05-not-verified-pass.md) | cyrius **6.7.18** | done: `scripts/toolchain-install.sh` runs a checked installer on a checked tarball, and thoth selects no libssl, so B-2 does not reach it. Refresh `scripts/toolchain.sums` at a pin bump |
 | **sakshi** | no mode parameter on its output file | cyrius 6.7.18 | `_log_open_safe` creates the file first |
@@ -224,6 +207,8 @@ re-vendor patch with a line-anchored needle in `tests/cases/vendor.cyr`.
 | **cyrius (floor)** | `dir_list_into` surfaces no `d_type` (`lib/fs.cyr:310`), so the map's dirs-first order probes every child (`_pmap_is_dir`, up to 256 × 256 opens a turn on a wide tree); an arm that did would make the walk one `getdents` per directory | cyrius **6.7.18** | the per-child probe is `O_NONBLOCK` + `getdents` so a FIFO cannot hang a turn |
 | **agnos** | `readlink#70` refuses a buffer shorter than the target where Linux truncates, so the stdlib's 8-byte `is_symlink` reads any longer link as no link, for every consumer. Filed: `docs/development/issues/2026-11-06-readlink-refuses-a-buffer-shorter-than-the-target.md` | agnos **1.57.17** | done: `fs_is_link` asks `lstat#102`, and can go back to `is_symlink` when this lands |
 | **agnos** | a readiness wait on one fd with a deadline, for sockets and channels; `sock_connect#47` also blocks about 8 s on its own clock. Filed: `docs/development/issues/2026-11-06-no-readiness-wait-on-one-fd.md`. It holds F8's second gate | agnos **1.57.17** | the stall deadline's AGNOS half (the degradation below); cyrius's `fd_wait_ready` then forwards |
+| **agnos** | a write to a terminal channel drops the oldest record when the inbox is full, and the writer is never told: a 20 KB reply into an unread channel left 4,037 bytes. Filed: `docs/development/issues/2026-11-06-a-channel-write-drops-the-oldest-record-and-nobody-is-told.md` | agnos **1.57.17** | done: `fd1_write` keeps to 2 KB per 17 ms, which holds only while the emulator keeps up |
+| **agnos** | the console draws ASCII and three sequences, every byte is mirrored to COM1, and a line that scrolls costs 200 ms at 2048x2048. Filed: `docs/development/issues/2026-11-06-the-console-is-short-of-a-terminal.md` | agnos **1.57.17** | done: `src/term.cyr`'s filter ([note 006](../architecture/006-the-agnos-console-is-not-a-terminal.md)), and each gap the kernel closes comes out of it |
 | **agnos** | a working directory the kernel holds. A ruling: the ABI says none is to be added. Filed: `docs/development/issues/2026-11-06-a-relative-path-has-no-working-directory.md` | agnos **1.57.17** | done: `fs_path` resolves against `$PWD`, as the ABI asks, and becomes the identity if this lands |
 | **agnos** | `sys_open(name, namelen, ao_flags)` carries no create-mode channel (`lib/io.cyr:108`; the kernel's `ext2_create` sets `0644`) — a file created on AGNOS lands at the kernel default, not `0600`; and `fsync` syncs the whole fs. Filed: `docs/development/issues/2026-11-06-open-has-no-create-mode.md` | agnos **1.57.17** | degrades honestly |
 | **gnoboot (AGNOS boot)** | `ExitBootServices` is called once and a failure is final (`src/main.cyr:1107`): the UEFI spec's answer to a stale map key (`EFI_INVALID_PARAMETER`) is to call `GetMemoryMap` again and retry. The map is refreshed just before the call, which narrows the window and does not close it | gnoboot **0.9.0** | done — `scripts/agnos-run.sh` classifies a boot that died before the kernel, retries it (announced) and SKIPs when none gets there; never a thoth FAIL |
@@ -246,6 +231,9 @@ epoll/futex set no longer appears; `scripts/build.sh`'s `ARCH_GAP` pattern keeps
 - **The window renders at buffer scale 1** — on a scaled output the compositor upscales it, so at scale 2 (Hyprland,
   verified live) the text and the 12×19 arrow are soft rather than small. `wl_surface.set_buffer_scale` (or
   fractional scaling) would draw both crisp at the output's density; a feature if it earns a slot, not a repair.
+- **The AGNOS console is short of a terminal** — US keys only; no mouse, paste or clipboard; ASCII cells; bold, dim and underline do not show; and a kernel log line can land on the frame until the next repaint.
+  Threads are serial there, so a wait does not pump the surface: the spinner moves when a frame arrives, Esc is read at the next frame, and a stall before the first byte holds the TUI to its deadline. A full repaint costs about
+  0.3 s at 128x64 under QEMU. The filter comes out as the kernel takes each gap (filed). Iron is unmeasured.
 - **A `pre_tool` hook does not run on AGNOS** — there is no shell to run it, so it is announced on every surface and the tool proceeds. That is the 0.44.2 ruling: a blanket deny would stop thoth
   on the target it is built for. `shell` and `[verify]` are unadvertised there too.
 - **The stall deadline needs a poll** — `[hoosh].timeout_ms` counts a stream's frames at sandhi's idle turn, and AGNOS has no `fd_wait_ready` (filed), so there a keep-alive

@@ -2440,3 +2440,256 @@ fn test_harden_tui() {
     feed_init();
     return 0;
 }
+
+# --- keys and fd 1 on AGNOS (term.cyr, 0.55.2) ----------------------------------------------------------------------------------
+# The decoder and the console filter are pure and compiled on every target, so they run here. What is AGNOS-only (kbscan#42, the route
+# term_raw picks, winsize) is driven on the guest by scripts/live/agnos-tui.py.
+
+# _tk_is(sc..., want): feed `n` scancodes at `codes`, in one batch, and compare the bytes that come out.
+fn _tk_is(codes, n, want, msg) {
+    term_kbd_reset();
+    var i = 0;
+    while (i < n) { term_kbd_feed(load8(codes + i)); i = i + 1; }
+    var got[64];
+    var k = 0;
+    var b = term_kbd_take();
+    while ((b >= 0) && (k < 63)) { store8(&got + k, b); k = k + 1; b = term_kbd_take(); }
+    store8(&got + k, 0);
+    assert_eq(streq(&got, want), 1, msg);
+    return 0;
+}
+fn test_term_kbd() {
+    test_group("scancodes become the bytes a terminal sends (term.cyr, 0.55.2)");
+    assert_eq(load8(_TK_MAP + 57), 32, "the map's last slot is Space: the table is the length TK_MAP_N says");
+    assert_eq(load8(_TK_SHIFT + 57), 32, "and so is the shifted one's");
+    assert_eq(load8(_TK_MAP + 43), 92, "backslash sits at 0x2B");
+    assert_eq(load8(_TK_SHIFT + 40), 34, "the double quote at 0x28");
+    _tk_is("\x10\x90", 2, "q", "a make gives a byte, and its break none");
+    _tk_is("\x2a\x10\x90\xaa\x10", 5, "Qq", "Shift holds until its break");
+    _tk_is("\x36\x02\xb6", 3, "!", "right Shift, on a digit");
+    _tk_is("\x3a\xba\x10\x2a\x10\xaa\x02", 7, "Qq1", "Caps inverts a letter, Shift inverts it back, and a digit ignores Caps");
+    _tk_is("\x1d\x2d\x9d\x2d", 4, "\x18x", "Ctrl-X is 24, and Ctrl's break ends it");
+    _tk_is("\xe0\x1d\x2e\xe0\x9d", 5, "\x03", "right Ctrl is 0xE0 1D");
+    _tk_is("\x01", 1, "\x1b", "Esc");
+    _tk_is("\x1c\x0e\x0f", 3, "\r\x7f\t", "Enter is CR, Backspace DEL, Tab Tab");
+    _tk_is("\x2a\x0f", 2, "\x1b[Z", "Shift-Tab");
+    _tk_is("\x2a\x1c", 2, "\x1b[13;2u", "Shift-Enter is the kitty form tui_read_key reads as a newline");
+    _tk_is("\x1d\x1c", 2, "\x1b[13;2u", "and so is Ctrl-Enter");
+    _tk_is("\x38\x1c", 2, "\x1b\r", "Alt-Enter is ESC CR");
+    _tk_is("\x38\x30", 2, "\x1bb", "Alt-b is ESC b");
+    _tk_is("\xe0\x48\xe0\xc8", 4, "\x1b[A", "Up, once: the break of an extended key says nothing");
+    _tk_is("\xe0\x50\xe0\x4d\xe0\x4b", 6, "\x1b[B\x1b[C\x1b[D", "Down, Right, Left");
+    _tk_is("\x2a\xe0\x48", 3, "\x1b[1;2A", "Shift-Up carries the modifier: the feed scroll key");
+    _tk_is("\x1d\xe0\x4b", 3, "\x1b[1;5D", "Ctrl-Left");
+    _tk_is("\x38\xe0\x4d", 3, "\x1b[1;3C", "Alt-Right");
+    _tk_is("\xe0\x47\xe0\x4f", 4, "\x1b[H\x1b[F", "Home and End");
+    _tk_is("\xe0\x49\xe0\x51", 4, "\x1b[5~\x1b[6~", "PgUp and PgDn");
+    _tk_is("\xe0\x53", 2, "\x1b[3~", "Delete");
+    _tk_is("\xe0\x2a\x10\xe0\xaa", 5, "q", "E0 2A is a fake shift from the keyboard's own firmware, and is no Shift");
+    _tk_is("\xe0\x1c\xe0\x35", 4, "\r/", "the keypad's Enter and slash");
+    _tk_is("\xe1\x1d\x45\xe1\x9d\xc5\x10", 7, "q", "Pause is six bytes and no key: its 1D is no Ctrl");
+    _tk_is("\xe1\x1d\x45\x10", 4, "q", "not even between its two halves");
+    _tk_is("\x2a\xe0\xaa\x10", 4, "Q", "the release of a fake shift is no release of a real one");
+    _tk_is("\x3b\x57\x54\x7f", 4, "", "keys with nothing to send send nothing");
+    # the batch boundary: a drain can end on the prefix, or between a modifier and its key
+    term_kbd_reset();
+    term_kbd_feed(0xE0);
+    assert_eq(term_key_fill(), 0, "a prefix alone is no key yet");
+    term_kbd_feed(0x10);
+    assert_eq(term_kbd_take(), 0 - 1, "and E0 10, a media key, split over two drains, is not `q`");
+    # the buffer holds whatever a drain can hold
+    term_kbd_reset();
+    var i = 0;
+    while (i < 200) { term_kbd_feed(0x1C); term_kbd_feed(0xE0); term_kbd_feed(0x53); i = i + 1; }
+    assert_eq(_tk_len <= TK_CAP, 1, "more keys than the buffer holds are dropped, never written past it");
+    term_kbd_reset();
+    return 0;
+}
+
+var _tc_buf = 0;
+var TC_TEST_CAP = 65536;
+# _tc_run: `s` through the filter on a 10x20 grid, reset first. The bytes the console would get, as a C string.
+fn _tc_more(s) {
+    fd1_all(s, strlen(s));
+    store8(_tc_buf + term_con_taken(), 0);
+    return _tc_buf;
+}
+fn _tc_run(s) {
+    if (_tc_buf == 0) { _tc_buf = alloc(TC_TEST_CAP); }
+    term_con_test(10, 20, _tc_buf);
+    return _tc_more(s);
+}
+fn _tc_alt_run(s) {
+    _tc_run("\x1b[?1049h");
+    _tc_tapn = 0;
+    return _tc_more(s);
+}
+fn test_term_con_text() {
+    test_group("the console filter: a glyph is one ASCII cell (term.cyr, 0.55.2)");
+    assert_eq(streq(_tc_run("plain"), "plain"), 1, "ASCII passes");
+    assert_eq(streq(_tc_run("a─b│c┌d┘e"), "a-b|c+d+e"), 1, "box drawing keeps its shape");
+    assert_eq(streq(_tc_run("x — y · z…"), "x - y . z."), 1, "the dash and dots the chrome uses");
+    assert_eq(streq(_tc_run("● ○ ▸ ▾ ↑ ↓ ← → ⌃ ↳"), "* o > v ^ v < > ^ >"), 1, "and its marks");
+    assert_eq(streq(_tc_run("café"), "cafe"), 1, "a Latin letter keeps its base");
+    assert_eq(streq(_tc_run("漢字"), "??"), 1, "a glyph with no ASCII form is one `?`: the row stays as wide as it was measured");
+    var spin = _tc_run("⠋");
+    assert_eq((load8(spin) == 45) || (load8(spin) == 92) || (load8(spin) == 124) || (load8(spin) == 47), 1, "the spinner's braille turns");
+    assert_eq(_tc_col, 2, "one glyph, one column");
+    assert_eq(streq(_tc_run("\xe2\x94x"), "?x"), 1, "a lead byte with its tail cut off is one bad cell, and the next byte stands");
+    assert_eq(streq(_tc_run("a\x80\xbfb"), "ab"), 1, "a stray continuation byte is dropped");
+    assert_eq(streq(_tc_run("a\x01\x7fb"), "ab"), 1, "a control byte the console would print or drop is dropped here");
+    assert_eq(streq(_tc_run("a\tb"), "a       b"), 1, "a Tab, which the console drops, is spaces to the next stop");
+    # the sequence is split between two writes: the frame buffer flushes where it likes
+    _tc_run("\xe2\x94");
+    assert_eq(streq(_tc_more("\x80"), "-"), 1, "a glyph split over two writes is one cell");
+    _tc_run("\x1b");
+    assert_eq(streq(_tc_more("[2;3Hx"), "\x1b[2;3Hx"), 1, "and so is a sequence");
+    assert_eq(streq(_tc_run("a\x1b]0;a title\x07b"), "ab"), 1, "an OSC is dropped: the console prints its text");
+    assert_eq(streq(_tc_run("a\x1b]52;c;QUJD\x1b\\b"), "ab"), 1, "ST ends one too");
+    assert_eq(streq(_tc_run("a\x1bPq#0;2\x1b\\b"), "ab"), 1, "a DCS as well");
+    assert_eq(streq(_tc_run("a\x1b[>1ub\x1b[?2004hc\x1b[?1000h\x1b[?1006hd"), "abcd"), 1, "modes the console has no use for go nowhere");
+    return 0;
+}
+fn test_term_con_frame() {
+    test_group("the console filter: the frame (term.cyr, 0.55.2)");
+    assert_eq(streq(_tc_run("\x1b[?1049h"), "\x1b[0m\x1b[2J\x1b[1;1H"), 1, "the alternate screen is a clear");
+    assert_eq(streq(_tc_more("\x1b[?1049h"), "\x1b[0m\x1b[2J\x1b[1;1H"), 1, "and entering it again changes nothing: tui_modes_reassert does");
+    assert_eq(_tc_alt, 1, "premise: in the frame");
+    _tc_tapn = 0;
+    assert_eq(streq(_tc_more("\x1b[?1049l"), "\x1b[0m\x1b[2J\x1b[1;1H"), 1, "leaving clears too, so the shell's prompt lands on a clean screen");
+    assert_eq(_tc_alt, 0, "and the frame is over");
+    assert_eq(streq(_tc_alt_run("\x1b[3;4H"), "\x1b[3;4H"), 1, "CUP passes, and is tracked");
+    assert_eq(_tc_row, 3, "the row");
+    assert_eq(_tc_col, 4, "the column");
+    assert_eq(streq(_tc_alt_run("\x1b[99;99H"), "\x1b[10;20H"), 1, "clamped to the grid");
+    assert_eq(streq(_tc_alt_run("\x1b[H"), "\x1b[1;1H"), 1, "home has no parameters");
+    assert_eq(streq(_tc_alt_run("\x1b[2;5H\x1b[A\x1b[2C\x1b[B\x1b[3D\x1b[7G"), "\x1b[2;5H\x1b[1;5H\x1b[1;7H\x1b[2;7H\x1b[2;4H\x1b[2;7H"), 1, "relative moves, which the console ignores, become CUP");
+    assert_eq(streq(_tc_alt_run("\x1b[5;5H\x1b7\x1b[1;1H\x1b8"), "\x1b[5;5H\x1b[1;1H\x1b[5;5H"), 1, "DECSC and DECRC");
+    # a row past the width does not wrap, and a bottom-row LF does not scroll
+    var full = _tc_alt_run("\x1b[1;18Habcdef");
+    assert_eq(streq(full, "\x1b[1;18Habc"), 1, "the frame clips at the right edge: the console would wrap the next glyph");
+    assert_eq(streq(_tc_alt_run("\x1b[10;1H\n"), "\x1b[10;1H"), 1, "an LF on the last row is dropped: the console would scroll the whole frame");
+    assert_eq(streq(_tc_alt_run("\x1b[2;1H\n"), "\x1b[2;1H\n"), 1, "one above it moves down");
+    # EL: spaces to the last inked cell on the default background, all the way on a coloured one
+    _tc_alt_run("\x1b[1;1Habcdef");
+    _tc_tapn = 0;
+    assert_eq(streq(_tc_more("\x1b[1;3H\x1b[K"), "\x1b[1;3H    \x1b[1;3H"), 1, "EL becomes spaces to the row's end of ink, and the cursor stays");
+    _tc_tapn = 0;
+    assert_eq(streq(_tc_more("\x1b[1;3H\x1b[K"), "\x1b[1;3H"), 1, "a row already blank costs nothing");
+    _tc_alt_run("\x1b[48;5;22m\x1b[1;19H\x1b[K");
+    assert_eq(_t_count_sub(_tc_buf, term_con_taken(), "  ", 2) > 0, 1, "on a coloured background EL paints to the edge");
+    assert_eq(_tc_bg, 1, "the filter knows the background is not the default");
+    _tc_more("\x1b[0m");
+    assert_eq(_tc_bg, 0, "SGR 0 ends it");
+    _tc_more("\x1b[42m");
+    assert_eq(_tc_bg, 1, "a 16-colour background counts");
+    _tc_more("\x1b[49m");
+    assert_eq(_tc_bg, 0, "SGR 49 ends it");
+    _tc_more("\x1b[38;5;48m");
+    assert_eq(_tc_bg, 0, "a foreground whose colour number looks like 48 is no background");
+    _tc_more("\x1b[38;2;48;49;40m");
+    assert_eq(_tc_bg, 0, "nor are its three channels");
+    # the kernel keeps eight parameters of one sequence
+    assert_eq(streq(_tc_alt_run("\x1b[38;2;1;2;3m"), "\x1b[38;2;1;2;3m"), 1, "SGR passes as written");
+    assert_eq(_t_count_sub(TC_INVERSE, strlen(TC_INVERSE), "\x1b[", 2), 2, "the filter's own colour pair is two sequences, each within the kernel's eight");
+    var rv = _tc_alt_run("\x1b[7mx\x1b[27m");
+    assert_eq(_t_count_sub(rv, term_con_taken(), "48;2;208;208;208", 16), 1, "reverse, which the console ignores, becomes colour");
+    assert_eq(_t_count_sub(rv, term_con_taken(), "\x1b[39;49m", 8), 1, "and SGR 27 puts it back");
+    var rz = _tc_alt_run("\x1b[7mx\x1b[0;38;5;9my");
+    assert_eq(_t_count_sub(rz, term_con_taken(), "\x1b[39;49m", 8), 0, "a reset that sets a colour in the same breath is not undone");
+    assert_eq(_tc_rev, 0, "and it ended reverse");
+    # the caret
+    var c1 = _tc_alt_run("ab\x1b[1;2H\x1b[?7777h");
+    assert_eq(_t_count_sub(c1, term_con_taken(), "b\x1b[0m\x1b[1;2H", 11), 1, "the caret repaints the cell under it, and the cursor goes back");
+    assert_eq(_tc_car_r, 1, "and it is remembered");
+    _tc_tapn = 0;
+    var c2 = _tc_more("\x1b[1;1H\x1b[?7777h");
+    assert_eq(_t_count_sub(c2, term_con_taken(), "\x1b[1;2Hb\x1b[0m", 11), 1, "moving it puts the old cell back, its glyph off the grid");
+    assert_eq(_tc_car_c, 1, "and the new one is the caret");
+    _tc_more("\x1b[1;1Hz");
+    assert_eq(_tc_car_r, 0, "a glyph painted over the caret ended it: there is nothing to restore");
+    # what a bad size or a long sequence must not reach
+    _tc_run("");
+    assert_eq(_tc_grid_p(11, 1), 0, "the grid has no row past the last");
+    assert_eq(_tc_grid_p(1, 21), 0, "no column past the last");
+    assert_eq(_tc_grid_p(0, 1), 0, "and no row 0");
+    assert_eq(_tc_grid_p(1, 0), 0, "or column 0");
+    _tc_run("\x1b[");
+    var lp = 0;
+    while (lp < 400) { _tc_feed(49); _tc_feed(59); lp = lp + 1; }
+    assert_eq(_tc_pn <= TC_P_CAP, 1, "a CSI past the limit stops collecting: it does not run off the buffer");
+    _tc_feed(109);
+    assert_eq(_tc_st, TC_GROUND, "and its final byte still ends it");
+    assert_eq(_tc_nc <= 16, 1, "the parameters it does keep fit their table");
+    term_con_test(0, 0, 0);
+    return 0;
+}
+fn test_term_con_line() {
+    test_group("the console filter: outside a frame (term.cyr, 0.55.2)");
+    assert_eq(streq(_tc_run("abc\r\x1b[K"), "abc\r"), 1, "no EL: ofmt_int writes past the filter, so the tracked column is a guess there");
+    assert_eq(streq(_tc_run("\x1b[A"), ""), 1, "no relative move, for the same reason");
+    assert_eq(streq(_tc_run("\x1b[1;1H"), "\x1b[1;1H"), 1, "CUP is absolute, and passes");
+    assert_eq(streq(_tc_run("a\nb"), "a\nb"), 1, "LF passes");
+    assert_eq(streq(_tc_run("\x1b[10;1H\n"), "\x1b[10;1H\n"), 1, "even on the bottom row: a line tier scrolls");
+    assert_eq(streq(_tc_run("123456789012345678901"), "123456789012345678901"), 1, "and it wraps, as the console does");
+    assert_eq(_tc_row, 2, "the tracker wraps with it");
+    assert_eq(_tc_col, 2, "to the second column");
+    term_con_test(0, 0, 0);
+    assert_eq(term_con_on(), 0, "off again: every other target's bytes stay as written");
+    return 0;
+}
+# The prompt's line editor, on the decoder's buffer: _term_src says the keys are in hand, and the bytes are already queued.
+fn _tk_queue(s) {
+    term_kbd_reset();
+    var i = 0;
+    while (load8(s + i) != 0) { _tk_put(load8(s + i)); i = i + 1; }
+    return 0;
+}
+fn _t_keys_arrive() { _tk_queue("y\r"); return 0; }
+fn test_term_line() {
+    test_group("a prompt's answer, with the keys in hand (term.cyr, 0.55.2)");
+    var sv = _term_src;
+    _term_src = TERM_SRC_KBD;
+    _tc_run("");
+    var b[64];
+    _tk_queue("yes\r");
+    assert_eq(term_line_read(&b, 64), 3, "CR ends the line");
+    assert_eq(streq(&b, "yes"), 1, "and the bytes are the answer");
+    assert_eq(streq(_tc_buf, ""), 0, "premise: it echoed");
+    _tk_queue("no\n");
+    assert_eq(term_line_read(&b, 64), 2, "LF does too");
+    _tk_queue("ab\x7f\x7f\x7fc\r");
+    assert_eq(term_line_read(&b, 64), 1, "Backspace erases, and stops at the start of the line");
+    assert_eq(streq(&b, "c"), 1, "leaving what was typed after it");
+    _tk_queue("\x1b[Ay\r");
+    assert_eq(term_line_read(&b, 64), 1, "an arrow is no answer");
+    assert_eq(streq(&b, "y"), 1, "and it leaves no bytes in one");
+    _tk_queue("\x03\x18y\r");
+    assert_eq(term_line_read(&b, 64), 1, "nor is a control byte");
+    _tk_queue("abcdefgh\r");
+    assert_eq(term_line_read(&b, 4), 3, "a long answer stops at the buffer");
+    assert_eq(streq(&b, "abc"), 1, "with its head intact");
+    _tk_queue("\x04");
+    assert_eq(term_line_read(&b, 64), 0 - 1, "Ctrl-D on an empty line is EOF, which refuses");
+    _tk_queue("y\r");
+    assert_eq(term_flush_input(), 1, "a prompt flushes the keys in hand first (S-3)");
+    assert_eq(term_key_fill(), 0, "so a y typed ahead is gone before the question is asked");
+    read_wait_hook_set(&_t_keys_arrive);            # runs after the flush, as keys pressed once the question is up do
+    assert_eq(read_line_prompt(&b, 64), 1, "a prompt reads the keys: nothing below it would cook a line");
+    assert_eq(streq(&b, "y"), 1, "and gets the answer");
+    read_wait_hook_set(0);
+    _tk_queue("x");
+    var c[8];
+    assert_eq(_intr_read(&c), 1, "the stop key's poll reads the same keys");
+    assert_eq(load8(&c), 120, "the byte");
+    assert_eq(_intr_read(&c), 0, "and an empty source is nothing to read, not an error");
+    _tui_pushback = 0 - 1;
+    _tk_queue("Z");
+    assert_eq(_tui_getb(&c), 1, "the TUI's own reader comes here too");
+    assert_eq(load8(&c), 90, "the byte");
+    assert_eq(_tui_getb_timed(&c, 5), 0, "and the timed form gives up on time, or a lone Esc would hang");
+    _term_src = sv;
+    term_kbd_reset();
+    term_con_test(0, 0, 0);
+    return 0;
+}

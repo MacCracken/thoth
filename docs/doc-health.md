@@ -6,6 +6,8 @@ type: state
 
 # Documentation Health — thoth
 
+> **Rung 3 (0.55.2)** (2026-11-06): new `architecture/006`, the roadmap's path to v1.0 with its gates renumbered, the 0.55.x arc out, F8's re-read, the waiting table and degradations, `verification-pass.md`'s ring-3 section, the module guide's term row, `state.md`, and the README and CONTRIBUTING stamps.
+>
 > **The AGNOS hostile pass (0.55.1)** (2026-11-06): new `audit/2026-11-06-agnos-hostile-pass.md` and `architecture/005`, the roadmap's 0.55.x arc, gate 2's reading list, waiting table and degradations, `verification-pass.md`'s ring-3 section, the module guide's project row, `state.md`, and the README and CONTRIBUTING status lines.
 >
 > **A real turn on AGNOS (0.55.0)** (2026-11-06): the roadmap's gate 1, checklist, 0.55.x arc and waiting table, `verification-pass.md`'s ring-3 section, `state.md`, the README and CONTRIBUTING status lines.

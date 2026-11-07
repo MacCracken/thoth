@@ -233,7 +233,15 @@ The hostile pass runs the same way, and belongs in every release that touches a 
 ./scripts/agnos-run.sh --hostile
 ```
 
-It boots once and works through the audit's attacks: the 151 wire scenarios, a gateway going silent at each stage, the jail, the capture and the stores. Each run gets its own `HOME` and `PWD` through `tests/agnos/hostile.cyr`, and the verdicts come from the wire, the exit status and the image read back after the run. The report is `/var/tmp/thoth-agnos-hostile/report.txt`. `THOTH_HOSTILE_ONLY=jail` runs one class, about a minute. Every store has a control that must write it: on the first pass the session control wrote nothing, so four "held" session attacks had proved nothing, and sessions now run in the line REPL on a scripted stdin. A scenario added to the kit needs an expectation in `EXPECT`, or a regression only scrolls past.
+The TUI has its own lane, and belongs in every release that touches a surface, `src/term.cyr` or a write to fd 1:
+
+```bash
+./scripts/agnos-run.sh --tui
+```
+
+It boots once and drives thoth from QEMU's keyboard, through the real agnsh: typing, a turn, recall, the chords, the tree and picker, a long reply, Esc, a confirm, `/quit`, then the other tiers, and a ring-3 emulator on a `#97` channel. A real puka window runs between them. The steps replay the serial log into a grid, and the framebuffer lands as PNGs in `/var/tmp/thoth-agnos-tui`. Look at them: the serial log cannot show what the console refused to draw, and that is how the caret's lost background was found. Text markers cannot see a dropped record either, so check the `EMU exit ... bytes` count against the last run.
+
+The hostile pass boots once and works through the audit's attacks: the 151 wire scenarios, a gateway going silent at each stage, the jail, the capture and the stores. Each run gets its own `HOME` and `PWD` through `tests/agnos/hostile.cyr`, and the verdicts come from the wire, the exit status and the image read back after the run. The report is `/var/tmp/thoth-agnos-hostile/report.txt`. `THOTH_HOSTILE_ONLY=jail` runs one class, about a minute. Every store has a control that must write it: on the first pass the session control wrote nothing, so four "held" session attacks had proved nothing, and sessions now run in the line REPL on a scripted stdin. A scenario added to the kit needs an expectation in `EXPECT`, or a regression only scrolls past.
 
 Run it serially. The harness writes one log per name and overwrites it, so a parallel run can read another's failed boot as its own. To check that a pass means something, give it a wrong expect string and watch it fail.
 

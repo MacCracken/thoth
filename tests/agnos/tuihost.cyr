@@ -1,0 +1,252 @@
+# tuihost.cyr — the ring-3 half of scripts/live/agnos-tui.py. Seeded as /bin/agnsh, so kybernet runs it on a plain kernel.
+#
+# It starts hoosh and daimon as a system would, then hands the console to the real shell, /bin/agnsh0, and waits. Everything after
+# that comes from the keyboard: the driver types into QEMU, agnsh runs thoth, and thoth reads the keys. When the shell exits, this
+# plays a terminal emulator on a #97 channel, twice:
+#   sized     mint, size the terminal 100x30, endow it as stdio, spawn thoth, type at it, resize it to 120x40, quit
+#   unsized   the same with no size set, which is puka 0.6.25: thoth must take the line REPL
+# Each ends in one line the driver parses. Waits use pause#14, never sleep_ms#41, which holds the CPU from the process waited on.
+
+var HOOSH_PORT = 8088;
+var DAIMON_PORT = 8090;
+var LOOPBACK = 0x7F000001;
+var CAP = 1048576;
+var FRAME_MS = 16;                 # the emulator drains once a frame, as puka does: anything faster hides a writer that outruns it
+var _seen = 0;                     # all the emulator has read from the child
+var _seen_n = 0;
+var _mark = 0;                     # where the current step's search starts
+
+fn _put(s) { sys_write(1, s, strlen(s)); return 0; }
+fn _put_int(n) {
+    var b[24];
+    var i = 23;
+    var neg = 0;
+    if (n < 0) { neg = 1; n = 0 - n; }
+    store8(&b + i, 0);
+    if (n == 0) { i = i - 1; store8(&b + i, 48); }
+    while (n > 0) { i = i - 1; store8(&b + i, 48 + (n % 10)); n = n / 10; }
+    if (neg == 1) { i = i - 1; store8(&b + i, 45); }
+    return _put(&b + i);
+}
+fn _now_ms() {
+    var us = sys_uptime_us();
+    if (us >= 0) { return us / 1000; }
+    return sys_uptime_ms();
+}
+fn _wait_ms(ms) {
+    var t0 = _now_ms();
+    while ((_now_ms() - t0) < ms) { sys_pause(); }
+    return 0;
+}
+fn _listening(port) {
+    var t0 = _now_ms();
+    while ((_now_ms() - t0) < 60000) {
+        var c = sys_sock_connect(LOOPBACK, port, 0);
+        if (c >= 0) { sys_sock_close(c); return 1; }
+        _wait_ms(100);
+    }
+    return 0;
+}
+# A service logs to the file seeded for it: its stderr on the console would write over the frame, and no system runs them that way.
+fn _start(line, log) {
+    var fd = sys_open(log, strlen(log), 1);
+    if (fd >= 0) { sys_exec_redirect(1, fd); sys_exec_redirect_add(2, fd); }
+    var pid = sys_spawn_path(line, strlen(line));
+    if (fd >= 0) { sys_close(fd); }
+    _put("TUIHOST started "); _put(line); _put(" as pid "); _put_int(pid); _put("\n");
+    return pid;
+}
+fn _pump(fa) {
+    var rec[64];
+    var n = sys_chan_recv(fa, &rec, 64);
+    while (n > 0) {
+        if ((_seen_n + n) < CAP) { memcpy(_seen + _seen_n, &rec, n); _seen_n = _seen_n + n; }
+        n = sys_chan_recv(fa, &rec, 64);
+    }
+    return n;
+}
+fn _found(from, s) {
+    var sl = strlen(s);
+    var i = from;
+    while ((i + sl) <= _seen_n) {
+        var j = 0;
+        while ((j < sl) && (load8(_seen + i + j) == load8(s + j))) { j = j + 1; }
+        if (j == sl) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+# _until: pump until `s` turns up past the step's mark. Its offset, or -1 at the deadline.
+fn _until(fa, s, ms) {
+    var t0 = _now_ms();
+    while ((_now_ms() - t0) < ms) {
+        _pump(fa);
+        var at = _found(_mark, s);
+        if (at >= 0) { _mark = at + strlen(s); return at; }
+        _wait_ms(FRAME_MS);
+    }
+    return 0 - 1;
+}
+fn _type(fa, s) {
+    var i = 0;
+    var n = strlen(s);
+    while (i < n) { sys_chan_send(fa, s + i, 1); _settle(fa, 5); i = i + 1; }
+    return 0;
+}
+# _say: a step's result, held until the child has gone. A line on the console can cost this process 200 ms when it scrolls the framebuffer,
+# and a child writing meanwhile fills the inbox: the emulator's own logging lost a frame its top rows.
+var _said = 0;
+var _said_n = 0;
+fn _say_add(s) {
+    var n = strlen(s);
+    if ((_said_n + n) < 8192) { memcpy(_said + _said_n, s, n); _said_n = _said_n + n; }
+    return 0;
+}
+fn _say(name, ok) {
+    _say_add("EMU "); _say_add(name); _say_add(" ");
+    if (ok >= 0) { _say_add("ok\n"); } else { _say_add("FAIL\n"); }
+    return 0;
+}
+# _settle: wait as an emulator does, draining.
+fn _settle(fa, ms) {
+    var t0 = _now_ms();
+    while ((_now_ms() - t0) < ms) { _pump(fa); _wait_ms(FRAME_MS); }
+    return 0;
+}
+# _wait_rows: every row of the frame the resize asked for arrived, from `from` back to the clear before it. A full inbox drops its
+# OLDEST records and nobody is told, so the sparse markers above cannot see a frame that lost its top rows: unpaced, this one does.
+fn _wait_rows(fa, from) {
+    _settle(fa, 1500);
+    var clear = from;
+    while ((clear > 0) && ((load8(_seen + clear) != 27) || (load8(_seen + clear + 1) != 91) || (load8(_seen + clear + 2) != 50) || (load8(_seen + clear + 3) != 74))) { clear = clear - 1; }
+    var miss = 0;
+    var r = 1;
+    while (r <= 40) {
+        var want[16];
+        var n = 0;
+        store8(&want, 27); store8(&want + 1, 91);
+        n = 2;
+        if (r >= 10) { store8(&want + n, 48 + (r / 10)); n = n + 1; }
+        store8(&want + n, 48 + (r % 10)); n = n + 1;
+        store8(&want + n, 59); n = n + 1;
+        store8(&want + n, 0);
+        if (_found(clear, &want) < 0) { miss = miss + 1; }
+        r = r + 1;
+    }
+    _put("EMU rows-missing "); _put_int(miss); _put("\n");
+    if (miss == 0) { _say("every-row-of-the-frame", 0); } else { _say("every-row-of-the-frame", 0 - 1); }
+    return 0;
+}
+
+# _emulate: one child on a terminal channel. `sized`: 1 runs the TUI's steps, 0 the REPL's.
+fn _emulate(sized) {
+    var fds[16];
+    if (sys_chan_mint(&fds) != 0) { _put("EMU mint FAIL\n"); return 1; }
+    var fa = load64(&fds);
+    var fb = load64(&fds + 8);
+    if (sized == 1) {
+        if (syscall(97, 6, fa, (100 << 16) | 30, 0) != 0) { _put("EMU size FAIL\n"); return 1; }
+    }
+    _seen_n = 0;
+    _mark = 0;
+    if (sys_chan_endow_stdio(fb) < 0) { _put("EMU endow FAIL\n"); return 1; }
+    var pid = sys_spawn_path("/bin/thoth", 10);
+    if (pid < 0) { _put("EMU spawn FAIL\n"); return 1; }
+    if (sized == 1) {
+        _say("alt-screen", _until(fa, "\x1b[?1049h", 30000));
+        _say("first-frame", _until(fa, "{(o> ", 30000));
+        _mark = 0;
+        _say("bottom-row-30", _until(fa, "\x1b[30;", 30000));
+        _settle(fa, 1500);
+        _type(fa, "hello\r");
+        _say("reply", _until(fa, "hello from stub", 30000));
+        _settle(fa, 500);
+        _type(fa, "call: libro_verify\r");
+        _say("confirm-asks", _until(fa, "authorize", 30000));
+        _settle(fa, 300);
+        _type(fa, "y\r");
+        _say("confirm-answered", _until(fa, "done", 30000));
+        _settle(fa, 500);
+        _type(fa, "slow: x\r");
+        _say("stream-starts", _until(fa, "working", 30000));
+        _settle(fa, 2500);
+        _type(fa, "\x1b");
+        _say("esc-stops", _until(fa, "interrupted", 30000));
+        _settle(fa, 500);
+        _type(fa, "big: 20000\r");
+        _say("big-reply", _until(fa, "END-OF-REPLY", 60000));
+        _settle(fa, 500);
+        syscall(97, 6, fa, (120 << 16) | 40, 0);
+        _say("resize-clear", _until(fa, "\x1b[2J", 10000));
+        _say("resize-row-40", _until(fa, "\x1b[40;", 10000));
+        _wait_rows(fa, _mark);
+        _settle(fa, 500);
+        _type(fa, "/quit\r");
+        _say("alt-leave", _until(fa, "\x1b[?1049l", 15000));
+    } else {
+        var alt = _until(fa, "\x1b[?1049h", 6000);
+        if (alt >= 0) { _say("no-alt", 0 - 1); } else { _say("no-alt", 0); }
+        _mark = 0;
+        _say("line-repl", _until(fa, "thoth", 15000));
+        _type(fa, "/quit\n");
+    }
+    var t0 = _now_ms();
+    var st = 0 - 2;
+    while ((st == (0 - 2)) && ((_now_ms() - t0) < 20000)) {
+        _pump(fa);
+        st = syscall(SYS_WAITPID, pid);
+        _wait_ms(FRAME_MS);
+    }
+    _pump(fa);
+    sys_write(1, _said, _said_n);
+    _said_n = 0;
+    _put("EMU exit "); _put_int(st); _put(" bytes "); _put_int(_seen_n); _put("\n");
+    sys_chan_close(fa);
+    return 0;
+}
+
+# _flood: what a full inbox does. A sized child writes a 20 KB reply into a channel nobody is reading, and the emulator reads what is left
+# once it has exited. The filing with agnos quotes this. It says what the kernel does today, so it is no gate.
+fn _flood() {
+    var fds[16];
+    if (sys_chan_mint(&fds) != 0) { return 1; }
+    var fa = load64(&fds);
+    syscall(97, 6, fa, (100 << 16) | 30, 0);
+    if (sys_chan_endow_stdio(load64(&fds + 8)) < 0) { return 1; }
+    var line = "/bin/thoth -p big:20000";
+    var pid = sys_spawn_path(line, strlen(line));
+    if (pid < 0) { return 1; }
+    var t0 = _now_ms();
+    var st = 0 - 2;
+    while ((st == (0 - 2)) && ((_now_ms() - t0) < 30000)) {
+        st = syscall(SYS_WAITPID, pid);
+        sys_pause();
+    }
+    _seen_n = 0;
+    _pump(fa);
+    _put("EMU flood exit "); _put_int(st); _put(" read "); _put_int(_seen_n); _put(" of about 20000 bytes\n");
+    return 0;
+}
+
+# puka spawns /bin/agnsh, which is this file: in a terminal, be the shell.
+if (sys_fd_kind(0) == FDK_CHAN) {
+    var inner = sys_spawn_path("/bin/agnsh0", 11);
+    if (inner >= 0) { syscall(SYS_WAITPID, 0x100 | inner); }
+    sys_exit(0);
+}
+_put("TUIHOST start\n");
+_seen = alloc(CAP);
+_said = alloc(8192);
+_start("/bin/hoosh serve -c /etc/hoosh.cyml", "/log/hoosh");
+if (_listening(HOOSH_PORT) == 0) { _put("TUIHOST hoosh never listened\n"); }
+_start("/bin/daimon serve 8090 --data-dir /d", "/log/daimon");
+if (_listening(DAIMON_PORT) == 0) { _put("TUIHOST daimon never listened\n"); }
+var sh = sys_spawn_path("/bin/agnsh0", 11);
+_put("TUIHOST shell pid "); _put_int(sh); _put("\n");
+var st = syscall(SYS_WAITPID, 0x100 | sh);
+_put("TUIHOST shell exit "); _put_int(st); _put("\n");
+_emulate(1);
+_emulate(0);
+_flood();
+_put("TUIHOST DONE\n");
+sys_exit(0);

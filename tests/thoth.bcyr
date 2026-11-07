@@ -215,6 +215,26 @@ fn bench_session() {
     return 0;
 }
 
+# 0.55.2: the AGNOS console's filter, on a feed row as the TUI writes one, and the scancode decoder on a key's make and break.
+fn bench_term() {
+    var tap = alloc(65536);
+    term_con_test(64, 128, tap);
+    var row = "\x1b[3;1H\x1b[38;2;109;101;83m── a feed row of ordinary length, with a rule and a dash — and its end ──\x1b[0m\x1b[K";
+    var n = strlen(row);
+    var b = bench_new("term_con_filter_row");
+    bench_batch_start(b);
+    var i = 0;
+    while (i < 20000) { _tc_tapn = 0; fd1_write(row, n); i = i + 1; }
+    _bn_report(b, 20000);
+    term_con_test(0, 0, 0);
+    b = bench_new("term_kbd_key");
+    bench_batch_start(b);
+    i = 0;
+    while (i < 200000) { term_kbd_feed(0x10); term_kbd_feed(0x90); _tk_len = 0; _tk_pos = 0; i = i + 1; }
+    _bn_report(b, 200000);
+    return 0;
+}
+
 fn main(): i64 {
     alloc_init();
     _bn_lines = _bn_fill_lines(60000);
@@ -226,6 +246,7 @@ fn main(): i64 {
     bench_feed();
     bench_window();
     bench_session();
+    bench_term();
     return 0;
 }
 

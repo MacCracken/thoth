@@ -127,6 +127,10 @@ fn _net_pipe(j, off) {
     if (sys_pipe(&p) < 0) { return 0; }
     var rd = load32(&p);
     var wr = load32(&p + 4);
+    #ifdef CYRIUS_TARGET_AGNOS
+    rd = load64(&p);                               # 0.55.2: two u64s there. It went unnoticed because _net_start never gets here on AGNOS
+    wr = load64(&p + 8);
+    #endif
     _net_cloexec(rd);
     _net_cloexec(wr);
     store64(j + off, rd);
@@ -265,6 +269,7 @@ fn _net_worker(j) {
 
 # _net_start: a job on a worker, or 0 when it cannot be had (no pipe, no thread, no room): the caller then makes the plain call.
 fn _net_start(kind, a, url, h, body, len, cb, ctx, opts) {
+    if (THREADS_CONCURRENT == 0) { return 0; }     # 0.55.2: AGNOS runs a thread's body inline, and a worker parked for this thread would wait on itself
     var j = _net_job_new();
     if (j == 0) { return 0; }
     var u = _net_copy(a, url, strlen(url));

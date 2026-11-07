@@ -3,7 +3,7 @@
 #
 # `scripts/build.sh agnos` proves the SOURCE is agnos-shaped: it emits a valid
 # statically-linked x86_64-AGNOS ELF with no unresolved symbol. That is v1.0
-# gate 1's build half, and it says nothing about whether the thing runs — the
+# AGNOS gate's build half, and it says nothing about whether the thing runs — the
 # ELF targets the AGNOS syscall ABI, so a Linux host cannot exercise it.
 #
 # This script closes that loop. It does NOT contain a runner: AGNOS already owns
@@ -22,10 +22,10 @@
 # the multi-MB ELF streams off ext2 via exec-from-disk, elf_load maps it, ring-3
 # code reaches write(1), and the process exits cleanly without faulting the box.
 #
-# ⚠ WHAT IT DOES NOT PROVE. v1.0 gate 1's criterion is "the spine native and a
+# ⚠ WHAT IT DOES NOT PROVE. The v1.0 AGNOS gate's criterion is "the spine native and a
 # consumer green end to end". A `--version` print-and-exit exercises NEITHER: no
 # hoosh, no daimon, no turn. This is rung 1 of that gate — necessary, not
-# sufficient. Do not report a PASS here as gate 1 cleared. See docs/development/roadmap.md.
+# sufficient. Do not report a PASS here as that gate met. --turn and --tui are the rungs above it.
 #
 # RUNG 2 (--turn, 0.55.0). The same consume pattern, one rung up: agnos/scripts/smoke/spine-turn-smoke.sh stages thoth,
 # hoosh and daimon on one image, starts the services, and drives real one-shot turns against a model on the host, a tool
@@ -43,6 +43,9 @@
 #                                       # private copy. Combines with --no-build, which reuses build/thoth_agnos.
 #   ./scripts/agnos-run.sh --hostile    # the 2026-11-05 audit's attacks on thoth in ring 3: scripts/live/agnos-hostile.py, about
 #                                       # 5 minutes. A plain kernel in a private copy, like --turn. Combines with --no-build.
+#   ./scripts/agnos-run.sh --tui        # rung 3: the TUI over the real agnsh, driven from QEMU's keyboard, then a real puka window
+#                                       # and a #97 terminal channel: scripts/live/agnos-tui.py, about 4 minutes. A plain kernel in a private copy.
+#                                       # The frames land as PNGs in /var/tmp/thoth-agnos-tui. Combines with --no-build.
 #
 # Env:
 #   AGNOS_REPO   path to the agnos checkout   (default: ../agnos relative to this repo)
@@ -87,17 +90,19 @@ DO_BUILD=1
 PRIVATE=0
 TURN=0
 HOSTILE=0
+TUI=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --no-build) DO_BUILD=0 ;;
         --private)  PRIVATE=1 ;;
         --turn)     TURN=1; PRIVATE=1 ;;
         --hostile)  HOSTILE=1; PRIVATE=1 ;;
+        --tui)      TUI=1; PRIVATE=1 ;;
         --classify)
             [ -f "${2:-}" ] || { echo "usage: $0 --classify SERIAL_LOG" >&2; exit 2; }
             if why="$(boot_reached_kernel "$2")"; then echo "kernel-ran"; else echo "pre-kernel: $why"; fi
             exit 0 ;;
-        *) echo "usage: $0 [--no-build] [--private] [--turn | --hostile] | --classify LOG" >&2; exit 2 ;;
+        *) echo "usage: $0 [--no-build] [--private] [--turn | --hostile | --tui] | --classify LOG" >&2; exit 2 ;;
     esac
     shift
 done
@@ -145,7 +150,7 @@ if [ "$PRIVATE" -eq 1 ]; then
     mkdir -p "$PRIV/build"
     rsync -a --exclude build --exclude .git "$AGNOS_REPO/" "$PRIV/" || { echo "SKIP: could not copy $AGNOS_REPO — nothing was executed." >&2; exit 2; }
     KBUILD="BASESTACK_SELFTEST=1"
-    [ $(( TURN + HOSTILE )) -gt 0 ] && KBUILD="BASESTACK_SELFTEST="      # these run on the kernel as it ships
+    [ $(( TURN + HOSTILE + TUI )) -gt 0 ] && KBUILD="BASESTACK_SELFTEST="      # these run on the kernel as it ships
     if ! ( cd "$PRIV" && env "$KBUILD" sh scripts/build.sh ) > "$PRIV/build/selftest-build.log" 2>&1; then
         tail -5 "$PRIV/build/selftest-build.log" >&2
         echo "SKIP: the kernel did not build — nothing was executed." >&2
@@ -156,20 +161,40 @@ if [ "$PRIVATE" -eq 1 ]; then
     KERNEL="$AGNOS_REPO/build/agnos"
 fi
 
-# spine_bin NAME: build a sibling --agnos in a copy under build/agnos-spine, and print the binary's path. A sibling is only read.
+# spine_bin NAME [ENTRY]: build a sibling --agnos in a copy under build/agnos-spine, and print the binary's path. A sibling is only read.
 spine_bin() {
     local src="${SIBLINGS_ROOT:-$(cd "$ROOT/.." && pwd)}/$1" dst="$ROOT/build/agnos-spine/$1"
     [ -d "$src" ] || { echo "SKIP: no $src — nothing was executed." >&2; return 1; }
     rm -rf "$dst"; mkdir -p "$dst"
     rsync -a --exclude build --exclude .git "$src/" "$dst/" || return 1
     mkdir -p "$dst/build"
-    if ! ( cd "$dst" && cyrius build --agnos src/main.cyr build/agnos ) > "$dst/build.log" 2>&1; then
+    if ! ( cd "$dst" && cyrius build --agnos "${2:-src/main.cyr}" build/agnos ) > "$dst/build.log" 2>&1; then
         tail -5 "$dst/build.log" >&2
         echo "SKIP: $1 did not build --agnos — nothing was executed." >&2
         return 1
     fi
     echo "$dst/build/agnos"
 }
+
+# Rung 3: the steps in its report are the verdict.
+if [ "$TUI" -eq 1 ]; then
+    [ -n "${HOOSH_BIN:-}" ]  || { HOOSH_BIN="$(spine_bin hoosh)"   || exit 2; }
+    [ -n "${DAIMON_BIN:-}" ] || { DAIMON_BIN="$(spine_bin daimon)" || exit 2; }
+    [ -n "${AGNSH_BIN:-}" ]  || { AGNSH_BIN="$(spine_bin agnoshi src/agnsh.cyr)" || exit 2; }
+    [ -n "${PUKA_BIN:-}" ]   || { PUKA_BIN="$(spine_bin puka)" || exit 2; }
+    [ -n "${AETHERSAFHA_BIN:-}" ] || { AETHERSAFHA_BIN="$(spine_bin aethersafha)" || exit 2; }
+    export PUKA_BIN AETHERSAFHA_BIN
+    echo "==> the TUI on AGNOS, from the keyboard (the report lands in ${THOTH_TUI_WORK:-/var/tmp/thoth-agnos-tui}/report.txt)"
+    python3 -I "$ROOT/scripts/live/agnos-tui.py" "$AGNOS_REPO" "$KERNEL" "$ELF" "$HOOSH_BIN" "$DAIMON_BIN" "$AGNSH_BIN"
+    rc=$?
+    echo ""
+    case "$rc" in
+        0) echo "agnos-run: PASS — the TUI ran on AGNOS over agnsh, and on a terminal channel (the v1.0 AGNOS gate's RUNG 3)." ;;
+        2) echo "SKIP: no boot reached the kernel — nothing was executed." >&2 ;;
+        *) echo "agnos-run: FAIL — see the report."; KEEP_PRIV=1 ;;
+    esac
+    exit "$rc"
+fi
 
 # The hostile pass: its report is the verdict, and it reads AGNOS's own image and boot helpers from the private copy.
 if [ "$HOSTILE" -eq 1 ]; then
@@ -196,7 +221,7 @@ if [ "$TURN" -eq 1 ]; then
     rc=$?
     echo ""
     case "$rc" in
-        0) echo "agnos-run: PASS — a real turn ran on AGNOS, through hoosh and daimon (v1.0 gate 1 RUNG 2)." ;;
+        0) echo "agnos-run: PASS — a real turn ran on AGNOS, through hoosh and daimon (the v1.0 AGNOS gate's RUNG 2)." ;;
         2) echo "SKIP: no boot reached the kernel — nothing was executed." >&2 ;;
         *) echo "agnos-run: FAIL — see the logs the runner named."; KEEP_PRIV=1 ;;
     esac
@@ -244,8 +269,8 @@ done
 echo ""
 if [ "$rc" -eq 0 ]; then
     echo "agnos-run: PASS — thoth $VERSION loads and runs in ring 3 on AGNOS."
-    echo "  This is v1.0 gate 1 RUNG 1 only. Gate 1 wants the spine native and a"
-    echo "  consumer green end to end; a --version print exercises neither."
+    echo "  This is rung 1 of the v1.0 AGNOS gate only. It wants the spine native and a"
+    echo "  consumer green end to end; a --version print exercises neither. --turn and --tui do."
 else
     echo "agnos-run: FAIL — see the serial log named above."
     [ "$PRIVATE" -eq 1 ] && KEEP_PRIV=1

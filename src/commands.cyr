@@ -3071,7 +3071,7 @@ fn cmd_edit(line) {
 # on-screen feed.
 fn cmd_clear() {
     if (out_mode() == OUT_RING) { feed_clear(); return 0; }
-    if (ui_tier() != PT_PLAIN) { tty_clear(); tty_cursor_home(); }
+    if (ui_tier() != PT_PLAIN) { frame_clear(); emit_raw("\x1b[H"); }
     return 0;
 }
 
@@ -3093,13 +3093,14 @@ fn cmd_copy() {
     # launching one), and emit_raw is blind to out_mode, so the OSC-52 went there (the term_title_set class).
     if (ui_tier() == PT_DESKTOP) { oprintln("copy: the OSC-52 clipboard is the terminal TUI's — the window has no terminal to write it to"); return 0; }
     if (ui_isatty(1) == 0) { oprintln("clipboard copy needs a terminal (stdout is not a tty)"); return 0; }
+    if (term_con_on() == 1) { oprintln("copy: the AGNOS console has no clipboard to write to"); return 0; }   # 0.55.2
     var b64 = bayan_base64_encode(hoosh_last_reply(), n);
     var enc = ((n + 2) / 3) * 4;                          # base64 length (standard, '=' padded)
     emit_raw("\x1b]52;c;");                                # OSC 52 set-clipboard, selection 'c'
     var sent = 0;
     var ok = 1;
     while (sent < enc) {                                   # write-all: a single tty write() can short-write
-        var w = syscall(SYS_WRITE, 1, b64 + sent, enc - sent);
+        var w = fd1_write(b64 + sent, enc - sent);
         if (w <= 0) { ok = 0; sent = enc; } else { sent = sent + w; }
     }
     emit_raw("\x07");                                      # BEL terminator

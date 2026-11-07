@@ -95,20 +95,9 @@ var UI_SGR_BUF_CAP = 320;
 # The mechanism changes on Linux too, from TCGETS to TIOCGWINSZ (darshana's `tty_isatty`), and the
 # verdict does not: both ioctls succeed on exactly the set of TTYs, which is the equivalence darshana's
 # own header documents and glibc's isatty(3) relies on.
-fn ui_isatty(fd) {
-    #ifdef CYRIUS_TARGET_AGNOS
-    # agnos has no ioctl(TCGETS) tty probe — and Linux syscall 16 (SYS_IOCTL)
-    # is `kill` on agnos, so the raw call would be actively wrong, not merely
-    # undefined. The agnos fb console interprets ANSI/SGR, so treat any fd as
-    # an interactive terminal and let thoth emit its colored TUI. (Deliberately
-    # NOT term_isatty, whose agnos peer answers from the framebuffer console
-    # grid and so says 0 before the fb is up — this must stay unconditional.)
-    return 1;
-    #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    return term_isatty(fd);
-    #endif
-}
+#
+# 0.55.2: AGNOS asks too. fd_kind#111 (1.57.13) answers per fd, where this used to say 1 for every fd, a pipe and a file included.
+fn ui_isatty(fd) { return term_isatty(fd); }
 
 # _ui_dec: write non-negative n as decimal into buf at off; return new off.
 fn _ui_dec(buf, off, n) {
@@ -463,6 +452,7 @@ fn ui_rainbow_step_phase() {
 
 # _ui_detect_depth: truecolor (COLORTERM) -> 256 (TERM *-256color) -> 16.
 fn _ui_detect_depth() {
+    if (term_con_on() == 1) { return CD_TRUE; }           # 0.55.2: the AGNOS console packs 38;2 into the framebuffer's own pixel
     var ct = getenv("COLORTERM");
     if (ct != 0) {
         if (streq(ct, "truecolor") == 1) { return CD_TRUE; }
@@ -499,6 +489,9 @@ fn _ui_color_capable() {
     if (_ui_env_has("NO_COLOR") == 1) { return 0; }
     if (ui_isatty(1) == 0) { return 0; }
     var term = getenv("TERM");
+    #ifdef CYRIUS_TARGET_AGNOS
+    if ((term == 0) || (load8(term) == 0)) { return term_kernel_terminal(1); }   # 0.55.2: no TERM on a bare AGNOS: the kernel says
+    #endif
     if (term == 0) { return 0; }
     if (load8(term) == 0) { return 0; }
     if (streq(term, "dumb") == 1) { return 0; }

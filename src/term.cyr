@@ -51,10 +51,671 @@
 # that stops compiling — visible only if someone reads that lane's output. `scripts/build.sh` treats
 # `TTY_SIGMASK_WINCH` as an UNEXPECTED symbol precisely so a regression here goes red.
 
+# --- keys and fd 1 on AGNOS (0.55.2) -------------------------------------------------------------------------------------------
+# AGNOS has no termios, and the rung 3 gate read that as no raw terminal. It has two routes to one, and neither is termios:
+#
+#   the console     kbscan#42 drains raw Set-1 scancodes, which is how cyim and chakshu run full-screen there. darshana's owner
+#                   ruling leaves decoding them to the consumer. term_kbd_feed turns them into the bytes a terminal would send, so
+#                   tui_read_key stays one parser. fd 1 is the kernel's console, which draws ASCII and knows SGR, CUP and ED 2 only:
+#                   the filter below turns what the TUI writes into that.
+#   a terminal      a #97 channel end an emulator endowed as stdio carries bytes as the emulator sends them, and CH_WINSZ_GET
+#   channel         answers on it. Only a SIZED end counts, which is the ring-3 answer to "is this a terminal": puka 0.6.25 sets no
+#                   size and cooks its own lines, so a program in a puka window keeps the line REPL.
+#
+# The filter and the decoder are pure and compiled on every target, so the suites run them on a host. They do nothing until
+# term_out_init or term_raw turns them on, and those only do so on AGNOS.
+var TERM_SRC_NONE = 0;
+var TERM_SRC_KBD = 1;
+var TERM_SRC_CHAN = 2;
+var _term_src = 0;                # where keys come from while the TUI is up
+var _term_con = 0;                # 1: fd 1 is the AGNOS console, and its bytes pass the filter
+var _term_on_chan = 0;            # 1: fd 1 is a #97 channel, so its writes keep to the pace below
+var _term_paced = 0;              # bytes written to it since the last wait
+var TERM_PACE = 2048;             # half an inbox...
+var TERM_PACE_MS = 17;            # ...a frame of a 60 Hz emulator, which drains once a frame
+
+fn term_key_src() { return _term_src; }
+fn term_con_on() { return _term_con; }
+
+# fd1_write: every byte bound for fd 1, one write's worth. A #97 inbox holds 4 KB and a full one drops its OLDEST record, with no
+# blocking and no count (filed with agnos), which cost a frame its top rows in a live run. Nothing says when the emulator has read, so
+# this keeps to a rate it can hold. pause#14 alone is no pace: with a CPU idle it returns at once.
+fn fd1_write(p, n) {
+    if (_term_con == 1) { return _tc_write(p, n); }
+    var w = syscall(SYS_WRITE, 1, p, n);
+    #ifdef CYRIUS_TARGET_AGNOS
+    if ((_term_on_chan == 1) && (w > 0)) {
+        _term_paced = _term_paced + w;
+        if (_term_paced >= TERM_PACE) {
+            _term_paced = 0;
+            var t0 = clock_now_ms();
+            while ((clock_now_ms() - t0) < TERM_PACE_MS) { sys_pause(); }
+        }
+    }
+    #endif
+    return w;
+}
+# fd1_all: all of it. One write can take part of a span, and a channel takes 64 bytes a call. Returns the bytes taken.
+fn fd1_all(p, n) {
+    var sent = 0;
+    while (sent < n) {
+        var w = fd1_write(p + sent, n - sent);
+        if (w > 0) { sent = sent + w; }
+        elif (w != (0 - 4)) { return sent; }
+    }
+    return sent;
+}
+fn term_alt_enter() { fd1_all("\x1b[?1049h", 8); return 0; }
+fn term_alt_leave() { fd1_all("\x1b[?1049l", 8); return 0; }
+fn term_cursor_show() { fd1_all("\x1b[?25h", 6); return 0; }
+
+# --- the scancode decoder: Set-1 to the bytes a terminal sends. US layout, as the kernel's own cooked line is. ---
+var _tk_out[64];                  # 512 bytes: 7 a scancode at most, 64 scancodes a drain, or one channel record
+var TK_CAP = 512;
+var _tk_len = 0;
+var _tk_pos = 0;
+var _tk_shift = 0;
+var _tk_ctrl = 0;
+var _tk_alt = 0;
+var _tk_caps = 0;
+var _tk_ext = 0;                  # an 0xE0 prefix, carried: a drain can end on one
+var _tk_skip = 0;                 # scancodes left of a Pause sequence, which is E1 xx yy twice
+var _TK_MAP = "\x01\x011234567890-=\x01\x01qwertyuiop[]\x01\x01asdfghjkl;'`\x01\\zxcvbnm,./\x01*\x01 ";
+var _TK_SHIFT = "\x01\x01!@#$%^&*()_+\x01\x01QWERTYUIOP{}\x01\x01ASDFGHJKL:\"~\x01|ZXCVBNM<>?\x01*\x01 ";
+var TK_MAP_N = 58;
+
+fn term_kbd_reset() {
+    _tk_len = 0; _tk_pos = 0; _tk_shift = 0; _tk_ctrl = 0; _tk_alt = 0; _tk_caps = 0; _tk_ext = 0; _tk_skip = 0;
+    return 0;
+}
+fn _tk_put(b) {
+    if (_tk_len < TK_CAP) { store8(&_tk_out + _tk_len, b); _tk_len = _tk_len + 1; }
+    return 0;
+}
+# _tk_cursor: ESC [ final, or ESC [ 1 ; mod final with a modifier held. mod is xterm's: 1 + shift 1, alt 2, ctrl 4.
+fn _tk_cursor(final) {
+    var m = 1 + _tk_shift + (_tk_alt * 2) + (_tk_ctrl * 4);
+    _tk_put(27); _tk_put(91);
+    if (m > 1) { _tk_put(49); _tk_put(59); _tk_put(48 + m); }
+    _tk_put(final);
+    return 0;
+}
+fn _tk_tilde(n) { _tk_put(27); _tk_put(91); _tk_put(48 + n); _tk_put(126); return 0; }
+fn _tk_enter() {
+    if ((_tk_shift == 1) || (_tk_ctrl == 1)) {                # the newline chord: the kitty form tui_read_key already reads
+        var s = "\x1b[13;2u";
+        var i = 0;
+        while (i < 7) { _tk_put(load8(s + i)); i = i + 1; }
+        return 0;
+    }
+    if (_tk_alt == 1) { _tk_put(27); }
+    _tk_put(13);
+    return 0;
+}
+fn _tk_make_ext(sc) {
+    if (sc == 0x1D) { _tk_ctrl = 1; return 0; }
+    if (sc == 0x38) { _tk_alt = 1; return 0; }
+    if (sc == 0x1C) { return _tk_enter(); }                   # keypad Enter
+    if (sc == 0x35) { _tk_put(47); return 0; }                # keypad /
+    if (sc == 0x48) { return _tk_cursor(65); }
+    if (sc == 0x50) { return _tk_cursor(66); }
+    if (sc == 0x4D) { return _tk_cursor(67); }
+    if (sc == 0x4B) { return _tk_cursor(68); }
+    if (sc == 0x47) { return _tk_cursor(72); }                # Home
+    if (sc == 0x4F) { return _tk_cursor(70); }                # End
+    if (sc == 0x52) { return _tk_tilde(2); }                  # Insert
+    if (sc == 0x53) { return _tk_tilde(3); }                  # Delete
+    if (sc == 0x49) { return _tk_tilde(5); }                  # PgUp
+    if (sc == 0x51) { return _tk_tilde(6); }                  # PgDn
+    return 0;                                                 # E0 2A and E0 36 are fake shifts: they must not reach the plain path
+}
+fn _tk_make(sc) {
+    if ((sc == 0x2A) || (sc == 0x36)) { _tk_shift = 1; return 0; }
+    if (sc == 0x1D) { _tk_ctrl = 1; return 0; }
+    if (sc == 0x38) { _tk_alt = 1; return 0; }
+    if (sc == 0x3A) { _tk_caps = 1 - _tk_caps; return 0; }
+    if (sc == 0x01) { _tk_put(27); return 0; }
+    if (sc == 0x1C) { return _tk_enter(); }
+    if (sc == 0x0E) { _tk_put(127); return 0; }
+    if (sc == 0x0F) {
+        if (_tk_shift == 1) { _tk_put(27); _tk_put(91); _tk_put(90); return 0; }
+        _tk_put(9);
+        return 0;
+    }
+    if (sc >= TK_MAP_N) { return 0; }
+    var base = load8(_TK_MAP + sc);
+    if (base == 1) { return 0; }
+    var letter = 0;
+    if ((base >= 97) && (base <= 122)) { letter = 1; }
+    if ((_tk_ctrl == 1) && (letter == 1)) { _tk_put(base - 96); return 0; }
+    var up = _tk_shift;
+    if ((letter == 1) && (_tk_caps == 1)) { up = 1 - up; }
+    var ch = base;
+    if (up == 1) { ch = load8(_TK_SHIFT + sc); }
+    if (_tk_alt == 1) { _tk_put(27); }
+    _tk_put(ch);
+    return 0;
+}
+fn _tk_break(sc, ext) {
+    if ((ext == 0) && ((sc == 0x2A) || (sc == 0x36))) { _tk_shift = 0; }
+    if (sc == 0x1D) { _tk_ctrl = 0; }
+    if (sc == 0x38) { _tk_alt = 0; }
+    return 0;
+}
+# term_kbd_feed: one scancode, in any batch: the prefix and the modifiers outlive a drain.
+fn term_kbd_feed(sc) {
+    if (_tk_skip > 0) { _tk_skip = _tk_skip - 1; return 0; }
+    if (sc == 0xE1) { _tk_skip = 2; return 0; }
+    if (sc == 0xE0) { _tk_ext = 1; return 0; }
+    var ext = _tk_ext;
+    _tk_ext = 0;
+    if (sc >= 128) { return _tk_break(sc - 128, ext); }
+    if (ext == 1) { return _tk_make_ext(sc); }
+    return _tk_make(sc);
+}
+fn term_kbd_take() {
+    if (_tk_pos >= _tk_len) { return 0 - 1; }
+    var b = load8(&_tk_out + _tk_pos);
+    _tk_pos = _tk_pos + 1;
+    return b;
+}
+
+# term_key_fill: bytes waiting after one look at the source, or -1 when an emulator has gone.
+fn term_key_fill() {
+    if (_tk_pos < _tk_len) { return _tk_len - _tk_pos; }
+    _tk_pos = 0;
+    _tk_len = 0;
+    #ifdef CYRIUS_TARGET_AGNOS
+    if (_term_src == TERM_SRC_KBD) {
+        var sc[64];
+        var n = sys_kbscan(&sc, 64);
+        if (n > 64) { n = 64; }                               # the kernel's count is input like any other
+        var i = 0;
+        while (i < n) { term_kbd_feed(load8(&sc + i)); i = i + 1; }
+    } elif (_term_src == TERM_SRC_CHAN) {
+        var r = sys_read_nb(0, &_tk_out, 64);
+        if (r > 0) { _tk_len = r; }
+        elif (r != (0 - 2)) { return 0 - 1; }                 # 0: the peer closed; -2 is only "nothing yet"
+    }
+    #endif
+    return _tk_len - _tk_pos;
+}
+fn term_key_idle() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    sys_pause();                                              # not sleep_ms#41, which keeps the CPU from whoever is being waited on
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    sleep_ms(1);
+    #endif
+    return 0;
+}
+# term_key_getb: the next byte into `out`: 1, 0 past `ms` (below 0 waits for ever), -1 when the source has gone.
+fn term_key_getb(out, ms) {
+    var t0 = clock_now_ms();
+    while (1 == 1) {
+        var n = term_key_fill();
+        if (n < 0) { return 0 - 1; }
+        if (n > 0) { store8(out, term_kbd_take()); return 1; }
+        if ((ms >= 0) && ((clock_now_ms() - t0) >= ms)) { return 0; }
+        term_key_idle();
+    }
+    return 0;
+}
+fn term_key_drain() {
+    while (term_key_fill() > 0) { _tk_pos = _tk_len; }
+    return 0;
+}
+# term_keys_release: the TUI is leaving, so reads go back to fd 0.
+fn term_keys_release() { term_key_drain(); _term_src = TERM_SRC_NONE; return 0; }
+
+# term_line_read: the answer to a prompt, with the keys in hand. No kernel line discipline sits between thoth and these keys, so
+# this is the small one a y/n needs: it echoes, Backspace erases, CR or LF ends the line, and an escape sequence is not an answer.
+fn term_line_read(buf, cap) {
+    var i = 0;
+    var c[8];
+    while (1 == 1) {
+        var r = term_key_getb(&c, 0 - 1);
+        if (r <= 0) {
+            if (i == 0) { return 0 - 1; }
+            store8(buf + i, 0);
+            return i;
+        }
+        var b = load8(&c);
+        if ((b == 13) || (b == 10)) { store8(buf + i, 0); emit_raw("\r\n"); return i; }
+        if ((b == 4) && (i == 0)) { return 0 - 1; }               # Ctrl-D on an empty line is EOF, as a cooked tty has it
+        if ((b == 127) || (b == 8)) {
+            if (i > 0) { i = i - 1; emit_raw("\x08 \x08"); }
+        } elif (b == 27) {
+            if (term_key_getb(&c, 30) == 1) {
+                if (load8(&c) == 91) {
+                    var go = 1;
+                    while (go == 1) {
+                        if (term_key_getb(&c, 30) != 1) { go = 0; }
+                        elif ((load8(&c) >= 64) && (load8(&c) <= 126)) { go = 0; }
+                    }
+                }
+            }
+        } elif ((b >= 32) && (b < 127) && (i < (cap - 1))) {
+            store8(buf + i, b);
+            i = i + 1;
+            emit_raw_n(&c, 1);
+        }
+    }
+    return 0 - 1;
+}
+
+# --- the console filter: what the TUI writes, as the AGNOS console can draw it ---------------------------------------------------
+# fb_console takes SGR colour, CUP and ED 2. It drops every byte past 0x7E, so a rule is not drawn and the rest of its row slides
+# left; it ignores EL, so a shorter row keeps the old one's tail; it prints an OSC's text; it scrolls on a bottom-row LF; and it draws
+# no cursor. Fixing those belongs to the kernel (filed with agnos), and this stands in until it does: a tracked cursor, one ASCII cell
+# per glyph, EL as spaces, a frame that never wraps, the alternate screen as a clear, reverse video as colour, and a painted caret.
+var TC_GROUND = 0;
+var TC_ESC = 1;
+var TC_CSI = 2;
+var TC_STR = 3;                   # an OSC, DCS, APC, PM or SOS: all of it is dropped
+var TC_STR_ESC = 4;
+var TC_UTF8 = 5;
+var TC_OUT_CAP = 8192;
+var TC_P_CAP = 40;
+var TC_INVERSE = "\x1b[38;2;16;16;16m\x1b[48;2;208;208;208m";   # two sequences: the kernel keeps 8 parameters of one
+var TC_CARET = 7777;              # a private mode: "the cursor rests here". Nothing else sees it: term_caret checks _term_con
+var _tc_st = 0;
+var _tc_out = 0;
+var _tc_outn = 0;
+var _tc_tap = 0;                  # tests: the bytes land here, not on fd 1
+var _tc_tapn = 0;
+var _tc_rows = 25;
+var _tc_cols = 80;
+var _tc_row = 1;
+var _tc_col = 1;
+var _tc_sr = 1;
+var _tc_sc = 1;
+var _tc_alt = 0;
+var _tc_bg = 0;                   # 1 while the active background is not the default: a blank then has to be painted
+var _tc_rev = 0;
+var _tc_pb[8];                    # module scope: 8 i64 slots, 64 bytes, of which TC_P_CAP are used
+var _tc_pn = 0;
+var _tc_nv[16];
+var _tc_nc = 0;
+var _tc_priv = 0;
+var _tc_cp = 0;
+var _tc_need = 0;
+var _tc_grid = 0;                 # one byte a cell, for the caret and for EL: 0 is a blank on the default background
+var _tc_cells = 0;
+var _tc_car_r = 0;                # the caret's cell, 0 when none is painted
+var _tc_car_c = 0;
+
+fn _tc_flush() {
+    if (_tc_outn == 0) { return 0; }
+    if (_tc_tap != 0) {
+        memcpy(_tc_tap + _tc_tapn, _tc_out, _tc_outn);
+        _tc_tapn = _tc_tapn + _tc_outn;
+    } else {
+        var sent = 0;
+        while (sent < _tc_outn) {
+            var w = syscall(SYS_WRITE, 1, _tc_out + sent, _tc_outn - sent);
+            if (w > 0) { sent = sent + w; }
+            elif (w != (0 - 4)) { sent = _tc_outn; }
+        }
+    }
+    _tc_outn = 0;
+    return 0;
+}
+fn _tc_b(b) {
+    if (_tc_out == 0) { _tc_out = alloc(TC_OUT_CAP); }
+    if (_tc_outn >= TC_OUT_CAP) { _tc_flush(); }
+    store8(_tc_out + _tc_outn, b);
+    _tc_outn = _tc_outn + 1;
+    return 0;
+}
+fn _tc_s(s) {
+    var i = 0;
+    while (load8(s + i) != 0) { _tc_b(load8(s + i)); i = i + 1; }
+    return 0;
+}
+fn _tc_int(n) {
+    if (n >= 10) { _tc_int(n / 10); }
+    _tc_b(48 + (n % 10));
+    return 0;
+}
+fn _tc_at(r, c) {
+    _tc_b(27); _tc_b(91); _tc_int(r); _tc_b(59); _tc_int(c); _tc_b(72);
+    return 0;
+}
+fn _tc_grid_p(r, c) {
+    if (_tc_grid == 0) { return 0; }
+    if ((r < 1) || (r > _tc_rows) || (c < 1) || (c > _tc_cols)) { return 0; }
+    return _tc_grid + ((r - 1) * _tc_cols) + (c - 1);
+}
+fn _tc_note(r, c, b) {
+    var p = _tc_grid_p(r, c);
+    if (p != 0) {
+        if ((b == 32) && (_tc_bg == 0)) { store8(p, 0); } else { store8(p, b); }
+    }
+    if ((r == _tc_car_r) && (c == _tc_car_c)) { _tc_car_r = 0; }
+    return 0;
+}
+# term_con_geom: the grid. It grows and is never given back, and a console grid does not change in a session.
+fn term_con_geom(rows, cols) {
+    if ((rows <= 0) || (cols <= 0)) { return 0; }
+    if ((rows == _tc_rows) && (cols == _tc_cols) && (_tc_grid != 0)) { return 0; }
+    _tc_rows = rows;
+    _tc_cols = cols;
+    if ((rows * cols) > _tc_cells) {
+        _tc_grid = alloc(rows * cols);
+        if (_tc_grid == 0) { _tc_cells = 0; return 0; }
+        _tc_cells = rows * cols;
+    }
+    if (_tc_grid != 0) { memset(_tc_grid, 0, _tc_cells); }
+    _tc_car_r = 0;
+    return 0;
+}
+fn _tc_cell(b) {
+    if (_tc_col > _tc_cols) {
+        if (_tc_alt == 1) { return 0; }                       # the frame never wraps, whatever a row measured
+        _tc_col = 1;
+        if (_tc_row < _tc_rows) { _tc_row = _tc_row + 1; }
+    }
+    _tc_note(_tc_row, _tc_col, b);
+    _tc_b(b);
+    _tc_col = _tc_col + 1;
+    return 0;
+}
+fn _tc_box(cp) {
+    if ((cp == 0x2502) || (cp == 0x2503) || (cp == 0x2551)) { return 124; }
+    if ((cp == 0x2500) || (cp == 0x2501) || (cp == 0x2550)) { return 45; }
+    if ((cp >= 0x2504) && (cp <= 0x250B)) {
+        if ((cp & 2) == 0) { return 45; }
+        return 124;
+    }
+    return 43;
+}
+# _tc_ascii: one ASCII cell for one glyph, so a row stays as wide as the TUI measured it.
+fn _tc_ascii(cp) {
+    if ((cp >= 0x2500) && (cp <= 0x257F)) { return _tc_box(cp); }
+    if ((cp >= 0x2580) && (cp <= 0x259F)) { return 35; }
+    if ((cp >= 0x2800) && (cp <= 0x28FF)) { return load8("-\\|/" + (cp % 4)); }     # the spinner still turns
+    if ((cp == 0x2013) || (cp == 0x2014) || (cp == 0x2212)) { return 45; }
+    if ((cp == 0xB7) || (cp == 0x2026) || (cp == 0x2219)) { return 46; }
+    if ((cp == 0x2022) || (cp == 0x25CF) || (cp == 0x25C6)) { return 42; }
+    if ((cp == 0x25CB) || (cp == 0x25E6)) { return 111; }
+    if ((cp == 0x2192) || (cp == 0x21B3) || (cp == 0x25B8) || (cp == 0x25B6)) { return 62; }
+    if (cp == 0x2190) { return 60; }
+    if ((cp == 0x2191) || (cp == 0x2303) || (cp == 0x25B2)) { return 94; }
+    if ((cp == 0x2193) || (cp == 0x25BE) || (cp == 0x25BC)) { return 118; }
+    if ((cp == 0x2018) || (cp == 0x2019)) { return 39; }
+    if ((cp == 0x201C) || (cp == 0x201D)) { return 34; }
+    if ((cp == 0x2713) || (cp == 0x2714)) { return 43; }
+    if ((cp == 0x2717) || (cp == 0x2718) || (cp == 0xD7)) { return 120; }
+    if (cp == 0xA0) { return 32; }
+    if (cp == 0xF07B) { return 43; }                          # the tree's folder glyph
+    if ((cp >= 0xC0) && (cp <= 0xC5)) { return 65; }
+    if ((cp >= 0xC8) && (cp <= 0xCB)) { return 69; }
+    if ((cp >= 0xE0) && (cp <= 0xE5)) { return 97; }
+    if ((cp >= 0xE8) && (cp <= 0xEB)) { return 101; }
+    return 63;
+}
+fn _tc_parse() {
+    _tc_nc = 0;
+    _tc_priv = 0;
+    var i = 0;
+    var cur = 0 - 1;
+    if ((_tc_pn > 0) && (load8(&_tc_pb) >= 60)) { _tc_priv = load8(&_tc_pb); i = 1; }
+    while (i < _tc_pn) {
+        var c = load8(&_tc_pb + i);
+        if ((c >= 48) && (c <= 57)) {
+            if (cur < 0) { cur = 0; }
+            if (cur < 100000) { cur = cur * 10 + (c - 48); }
+        } elif ((c == 59) && (_tc_nc < 15)) {
+            store64(&_tc_nv + _tc_nc * 8, cur);
+            _tc_nc = _tc_nc + 1;
+            cur = 0 - 1;
+        }
+        i = i + 1;
+    }
+    store64(&_tc_nv + _tc_nc * 8, cur);
+    _tc_nc = _tc_nc + 1;
+    return 0;
+}
+fn _tc_arg(i, def) {
+    if (i >= _tc_nc) { return def; }
+    var v = load64(&_tc_nv + i * 8);
+    if (v <= 0) { return def; }
+    return v;
+}
+fn _tc_goto(r, c) {
+    if (r < 1) { r = 1; }
+    if (r > _tc_rows) { r = _tc_rows; }
+    if (c < 1) { c = 1; }
+    if (c > _tc_cols) { c = _tc_cols; }
+    _tc_row = r;
+    _tc_col = c;
+    _tc_at(r, c);
+    return 0;
+}
+fn _tc_clear() {
+    _tc_s("\x1b[2J");
+    if (_tc_grid != 0) { memset(_tc_grid, 0, _tc_cells); }
+    _tc_car_r = 0;
+    _tc_at(_tc_row, _tc_col);                                 # the kernel's clear homes its cursor, and ED does not
+    return 0;
+}
+# _tc_el: EL as spaces, in the active background. On the default one only to the row's last inked cell: a repaint is every row.
+fn _tc_el() {
+    if (_tc_col > _tc_cols) { return 0; }
+    var end = _tc_cols;
+    if ((_tc_bg == 0) && (_tc_grid != 0)) {
+        while ((end >= _tc_col) && (load8(_tc_grid_p(_tc_row, end)) == 0)) { end = end - 1; }
+    }
+    if (end < _tc_col) { return 0; }
+    var c = _tc_col;
+    while (c <= end) { _tc_note(_tc_row, c, 32); _tc_b(32); c = c + 1; }
+    _tc_at(_tc_row, _tc_col);
+    return 0;
+}
+fn _tc_caret_cell(r, c, sgr) {
+    var ch = 32;
+    var p = _tc_grid_p(r, c);
+    if ((p != 0) && (load8(p) != 0)) { ch = load8(p); }
+    _tc_at(r, c);
+    _tc_s(sgr);
+    _tc_b(ch);
+    _tc_s("\x1b[0m");
+    return 0;
+}
+# _tc_caret: the cursor has come to rest, so draw the one the console does not.
+fn _tc_caret() {
+    if (_tc_col > _tc_cols) { return 0; }
+    if ((_tc_car_r != 0) && ((_tc_car_r != _tc_row) || (_tc_car_c != _tc_col))) { _tc_caret_cell(_tc_car_r, _tc_car_c, ""); }
+    _tc_caret_cell(_tc_row, _tc_col, TC_INVERSE);
+    _tc_car_r = _tc_row;
+    _tc_car_c = _tc_col;
+    _tc_bg = 0;
+    _tc_rev = 0;
+    _tc_at(_tc_row, _tc_col);
+    return 0;
+}
+fn _tc_mode(n, set) {
+    if (n == TC_CARET) {
+        if (set == 1) { _tc_caret(); }
+        return 0;
+    }
+    if ((n != 1049) || (set == _tc_alt)) { return 0; }
+    _tc_alt = set;
+    _tc_s("\x1b[0m");
+    _tc_bg = 0;
+    _tc_rev = 0;
+    _tc_row = 1;
+    _tc_col = 1;
+    return _tc_clear();
+}
+# _tc_sgr: the sequence goes through, and the kernel takes what it knows. Only reverse needs help, and the bookkeeping for EL.
+fn _tc_sgr() {
+    var rev = _tc_rev;
+    var zero = 0;
+    var i = 0;
+    while (i < _tc_nc) {
+        var p = load64(&_tc_nv + i * 8);
+        if (p <= 0) { _tc_bg = 0; rev = 0; zero = 1; }
+        elif ((p == 38) || (p == 48)) {
+            if (p == 48) { _tc_bg = 1; }
+            if (_tc_arg(i + 1, 0) == 5) { i = i + 2; }
+            elif (_tc_arg(i + 1, 0) == 2) { i = i + 4; }
+        }
+        elif (p == 49) { _tc_bg = 0; }
+        elif (((p >= 40) && (p <= 47)) || ((p >= 100) && (p <= 107))) { _tc_bg = 1; }
+        elif (p == 7) { rev = 1; }
+        elif (p == 27) { rev = 0; }
+        i = i + 1;
+    }
+    _tc_b(27); _tc_b(91);
+    i = 0;
+    while (i < _tc_pn) { _tc_b(load8(&_tc_pb + i)); i = i + 1; }
+    _tc_b(109);
+    if (rev != _tc_rev) {
+        if (rev == 1) { _tc_s(TC_INVERSE); _tc_bg = 1; }
+        elif (zero == 0) { _tc_s("\x1b[39;49m"); _tc_bg = 0; }
+        _tc_rev = rev;
+    }
+    return 0;
+}
+fn _tc_csi(f) {
+    _tc_parse();
+    if (_tc_priv == 63) {
+        if ((f != 104) && (f != 108)) { return 0; }
+        var set = 0;
+        if (f == 104) { set = 1; }
+        var j = 0;
+        while (j < _tc_nc) { _tc_mode(load64(&_tc_nv + j * 8), set); j = j + 1; }
+        return 0;
+    }
+    if (_tc_priv != 0) { return 0; }
+    if (f == 109) { return _tc_sgr(); }
+    if ((f == 72) || (f == 102)) { return _tc_goto(_tc_arg(0, 1), _tc_arg(1, 1)); }
+    if (f == 75) {
+        if ((_tc_alt == 1) && (_tc_arg(0, 0) == 0)) { _tc_el(); }
+        return 0;
+    }
+    if (f == 74) {
+        if (_tc_arg(0, 0) == 2) { _tc_clear(); }
+        return 0;
+    }
+    if (_tc_alt == 0) { return 0; }                           # outside a frame the tracked cursor is a guess: ofmt_int writes past the filter
+    if (f == 65) { return _tc_goto(_tc_row - _tc_arg(0, 1), _tc_col); }
+    if (f == 66) { return _tc_goto(_tc_row + _tc_arg(0, 1), _tc_col); }
+    if (f == 67) { return _tc_goto(_tc_row, _tc_col + _tc_arg(0, 1)); }
+    if (f == 68) { return _tc_goto(_tc_row, _tc_col - _tc_arg(0, 1)); }
+    if (f == 71) { return _tc_goto(_tc_row, _tc_arg(0, 1)); }
+    return 0;
+}
+fn _tc_ground(b) {
+    if ((b >= 32) && (b < 127)) { return _tc_cell(b); }
+    if (b == 27) { _tc_st = TC_ESC; return 0; }
+    if (b >= 240) { _tc_st = TC_UTF8; _tc_need = 3; _tc_cp = b & 7; return 0; }
+    if (b >= 224) { _tc_st = TC_UTF8; _tc_need = 2; _tc_cp = b & 15; return 0; }
+    if (b >= 192) { _tc_st = TC_UTF8; _tc_need = 1; _tc_cp = b & 31; return 0; }
+    if (b == 13) { _tc_col = 1; _tc_b(13); return 0; }
+    if (b == 10) {
+        if ((_tc_alt == 1) && (_tc_row >= _tc_rows)) { return 0; }   # the console would scroll the whole frame
+        if (_tc_row < _tc_rows) { _tc_row = _tc_row + 1; }
+        _tc_col = 1;
+        _tc_b(10);
+        return 0;
+    }
+    if (b == 8) {
+        if (_tc_col > 1) { _tc_col = _tc_col - 1; _tc_note(_tc_row, _tc_col, 32); _tc_b(8); }
+        return 0;
+    }
+    if (b == 9) {
+        var n = 8 - ((_tc_col - 1) % 8);
+        while (n > 0) { _tc_cell(32); n = n - 1; }
+    }
+    return 0;
+}
+fn _tc_feed(b) {
+    if (_tc_st == TC_GROUND) { return _tc_ground(b); }
+    if (_tc_st == TC_ESC) {
+        _tc_st = TC_GROUND;
+        if (b == 91) { _tc_st = TC_CSI; _tc_pn = 0; }
+        elif ((b == 93) || (b == 80) || (b == 95) || (b == 94) || (b == 88)) { _tc_st = TC_STR; }
+        elif (b == 55) { _tc_sr = _tc_row; _tc_sc = _tc_col; }
+        elif (b == 56) { _tc_goto(_tc_sr, _tc_sc); }
+        return 0;
+    }
+    if (_tc_st == TC_CSI) {
+        if ((b >= 64) && (b <= 126)) { _tc_st = TC_GROUND; _tc_csi(b); return 0; }
+        if (b == 27) { _tc_st = TC_ESC; return 0; }
+        if (_tc_pn < TC_P_CAP) { store8(&_tc_pb + _tc_pn, b); _tc_pn = _tc_pn + 1; }
+        return 0;
+    }
+    if (_tc_st == TC_STR) {
+        if (b == 7) { _tc_st = TC_GROUND; }
+        elif (b == 27) { _tc_st = TC_STR_ESC; }
+        return 0;
+    }
+    if (_tc_st == TC_STR_ESC) {
+        if (b == 92) { _tc_st = TC_GROUND; } else { _tc_st = TC_STR; }
+        return 0;
+    }
+    if ((b & 192) == 128) {
+        _tc_cp = (_tc_cp << 6) | (b & 63);
+        _tc_need = _tc_need - 1;
+        if (_tc_need == 0) { _tc_st = TC_GROUND; _tc_cell(_tc_ascii(_tc_cp)); }
+        return 0;
+    }
+    _tc_st = TC_GROUND;                                       # a lead with its tail cut off is one bad cell, and this byte starts over
+    _tc_cell(63);
+    return _tc_feed(b);
+}
+fn _tc_write(p, n) {
+    var i = 0;
+    while (i < n) { _tc_feed(load8(p + i) & 255); i = i + 1; }
+    _tc_flush();
+    return n;
+}
+# term_con_test: run the filter on a host. `tap` takes the bytes; 0 turns it off and puts everything back.
+fn term_con_test(rows, cols, tap) {
+    _tc_st = 0; _tc_row = 1; _tc_col = 1; _tc_alt = 0; _tc_bg = 0; _tc_rev = 0; _tc_car_r = 0; _tc_tapn = 0; _tc_outn = 0;
+    _tc_tap = tap;
+    if (tap == 0) { _term_con = 0; return 0; }
+    term_con_geom(rows, cols);
+    if (_tc_grid != 0) { memset(_tc_grid, 0, _tc_cells); }
+    _term_con = 1;
+    return 0;
+}
+fn term_con_taken() { return _tc_tapn; }
+
+# term_caret: the frame's last word: the cursor rests where it was just moved. A terminal with a cursor needs no telling.
+fn term_caret() {
+    if (_term_con == 1) { emit_raw("\x1b[?7777h"); }
+    return 0;
+}
+
+# term_out_init: before the first byte. A file or a pipe on fd 1 keeps every byte as it was written.
+fn term_out_init() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    var k = sys_fd_kind(1);
+    if (k == FDK_CONSOLE) {
+        var rr[8];
+        var cc[8];
+        store64(&rr, 0); store64(&cc, 0);
+        if (tty_winsize(1, &rr, &cc) == 0) { term_con_geom(load64(&rr), load64(&cc)); }
+        _term_con = 1;
+    }
+    if (k == FDK_CHAN) { _term_on_chan = 1; }
+    #endif
+    return 0;
+}
+
 # term_flush_input (0.53.3, S-3): discard what a terminal holds for reading: input typed before a prompt existed is not an
 # answer to it. tcflush(TCIFLUSH) on Linux, TIOCFLUSH(FREAD) on Darwin (no termios there, but the ioctl stands). A pipe is left
-# alone: piped lines are scripted answers. The other targets have neither call, and no type-ahead to speak of.
+# alone: piped lines are scripted answers. AGNOS has CM_FLUSH for the console's line (0.55.2), and the keys in hand are drained
+# the same way. Windows has neither call, and no type-ahead to speak of.
 fn term_flush_input() {
+    if (_term_src != TERM_SRC_NONE) { term_key_drain(); return 1; }
+    #ifdef CYRIUS_TARGET_AGNOS
+    if (tty_flush_input(0) == 0) { return 1; }
+    #endif
     #ifdef CYRIUS_TARGET_LINUX
     if (term_isatty(0) == 1) { syscall(SYS_IOCTL, 0, 0x540B, 0); return 1; }
     #endif
@@ -136,31 +797,67 @@ fn term_sigmask_winch() { return 0; }
 
 #ifndef CYRIUS_TARGET_MACOS
 #ifndef CYRIUS_TARGET_WIN
-# Linux (x86_64 + aarch64) and AGNOS: darshana ships a real peer for BOTH, so these are pure
-# forwarders and the generated code is identical to the pre-0.44.3 direct calls. Both capabilities
+# Linux (x86_64 + aarch64) and AGNOS: darshana ships a real peer for BOTH. On Linux these are pure
+# forwarders, and the generated code is identical to the pre-0.44.3 direct calls. Both capabilities
 # report 1 — terminal control and the tty probe are genuinely available.
 #
-# The AGNOS peer's semantics differ from Linux's in ways that are DELIBERATE and already relied on:
-# `tty_raw` returns -1 (no raw-input mechanism on the fb console yet, so thoth takes the line REPL),
-# `tty_isatty` answers from the framebuffer console-grid syscall, and `TTY_SIGMASK_WINCH` uses agnos's
-# `1 << sig` set layout rather than Linux's `1 << (sig-1)`. Forwarding preserves each verbatim —
-# `term_sigmask_winch()` is a FUNCTION, not a re-exported constant, so the right per-target value is
-# carried without this module duplicating either number.
+# AGNOS has its own arms for raw and the window size (0.55.2): darshana's `tty_raw` answers -1 by ruling
+# and leaves the keys to the consumer, and its `tty_winsize` reads the console whatever the fd. `TTY_SIGMASK_WINCH`
+# uses agnos's `1 << sig` set layout rather than Linux's `1 << (sig-1)`, and `term_sigmask_winch()` is a FUNCTION,
+# not a re-exported constant, so the right per-target value is carried without this module duplicating either number.
 fn term_have() { return 1; }
 fn term_can_probe() { return 1; }
 fn term_isatty(fd) { return tty_isatty(fd); }
-fn term_winsize(fd, out_rows, out_cols) { return tty_winsize(fd, out_rows, out_cols); }
 # term_raw_nonblock (0.54.1): raw with reads that return at once: intr.cyr's poll mode. darshana's one raw slot, so term_cooked restores it,
 # and term_raw switches back. _term_raw_on says which of the two to do: darshana does not publish it.
 var _term_raw_on = 0;
+fn term_raw_held() { return _term_raw_on; }
+#ifndef CYRIUS_TARGET_AGNOS
+fn term_winsize(fd, out_rows, out_cols) { return tty_winsize(fd, out_rows, out_cols); }
 fn term_raw(fd) {
     var rc = tty_raw(fd);
     if (rc == 0) { _term_raw_on = 1; }
     return rc;
 }
 fn term_raw_nonblock(fd) { return tty_raw_nonblock(fd); }
-fn term_raw_held() { return _term_raw_on; }
 fn term_cooked() { _term_raw_on = 0; return tty_cooked(); }
+#endif
+#ifdef CYRIUS_TARGET_AGNOS
+# CH_WINSZ_GET#97 on `fd`: `(cols << 16) | rows`, or at most 0 for anything that is not a terminal end with a size. Op 7 by number:
+# the cyrius peer is still filed (cyrius 2026-11-04-agnos-chan-winsz-ops-peer).
+fn _term_chan_size(fd) { return syscall(97, 7, fd, 0, 0); }
+# term_kernel_terminal: 1 when the kernel itself says `fd` is a terminal thoth can drive, with no TERM to say so: kybernet
+# seeds none, and nothing else on a bare AGNOS would.
+fn term_kernel_terminal(fd) {
+    var k = sys_fd_kind(fd);
+    if (k == FDK_CONSOLE) { return 1; }
+    if ((k == FDK_CHAN) && (_term_chan_size(fd) > 0)) { return 1; }
+    return 0;
+}
+fn term_winsize(fd, out_rows, out_cols) {
+    if (sys_fd_kind(fd) == FDK_CHAN) {
+        var w = _term_chan_size(fd);
+        if (w <= 0) { return 0 - 1; }
+        store64(out_rows, w & 0xFFFF);
+        store64(out_cols, (w >> 16) & 0xFFFF);
+        return 0;
+    }
+    var rc = tty_winsize(fd, out_rows, out_cols);
+    if ((rc == 0) && (_term_con == 1)) { term_con_geom(load64(out_rows), load64(out_cols)); }
+    return rc;
+}
+fn term_raw(fd) {
+    if (_term_src == TERM_SRC_NONE) {
+        if (term_kernel_terminal(fd) == 0) { return 0 - 1; }
+        if (term_kernel_terminal(1) == 0) { return 0 - 1; }
+        if (sys_fd_kind(fd) == FDK_CONSOLE) { _term_src = TERM_SRC_KBD; } else { _term_src = TERM_SRC_CHAN; }
+    }
+    _term_raw_on = 1;
+    return 0;
+}
+fn term_raw_nonblock(fd) { return term_raw(fd); }
+fn term_cooked() { _term_raw_on = 0; return 0; }           # the keys stay in hand: prompts read them with term_line_read
+#endif
 fn term_open_signalfd(sigmask) { return tty_open_signalfd(sigmask); }
 fn term_close_signalfd(fd, sigmask) { return tty_close_signalfd(fd, sigmask); }
 fn term_sigmask_winch() { return TTY_SIGMASK_WINCH; }

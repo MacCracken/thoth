@@ -104,6 +104,7 @@ fn main() {
     test_spinner();
     test_key_decode_0442();
     test_stream_throttle();
+    test_term_kbd(); test_term_con_text(); test_term_con_frame(); test_term_con_line(); test_term_line();   # 0.55.2: keys and fd 1 on AGNOS
     test_ftree();
     test_theme();
     test_rainbow();

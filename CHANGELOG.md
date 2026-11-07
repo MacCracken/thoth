@@ -4,6 +4,48 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.55.2] - 2026-11-06
+
+**Rung 3: the TUI on AGNOS.** Type `thoth` at agnsh and the rich TUI comes up on the console, driven by real keys. The gate read "no termios" as "no raw terminal", and AGNOS has two routes to one: `kbscan#42` on the console, and a sized `#97` terminal channel under an emulator. Everything above `src/term.cyr` is unchanged. This closes v1.0's AGNOS gate.
+
+**What changes for you:**
+
+- On the AGNOS console `thoth` opens the TUI: the feed, the composer, the status bar, the file tree, the model picker, confirms from the keyboard, and Esc to stop a stream. Every key and chord works, on a US layout.
+- The console draws ASCII, so a rule is dashes and `·` is `.`, one cell per glyph. It has no mouse, paste or clipboard, and `/copy` says so.
+- Under an emulator that sizes its child's terminal, thoth runs the TUI there too, and follows a resize.
+- A puka 0.6.25 window keeps the line REPL: puka sets no size and cooks its own lines, so Esc and the Ctrl keys would never arrive. Long lines there are no longer cut at 64 bytes.
+- A `thoth -p` at agnsh and the line tier print clean ASCII on the console too. Nothing changes on Linux, macOS or Windows: their bytes are as they were.
+
+### Added
+
+- **Keys on the console** (`src/term.cyr`). `term_kbd_feed` decodes Set-1 scancodes into the bytes a terminal sends, modifiers and the `0xE0` prefix carried across drains, so `tui_read_key` stays one parser. It is pure, and runs in the suites on every host.
+- **A console filter** (`src/term.cyr`). `fb_console` takes SGR colour, CUP and ED 2, drops every byte past 0x7E, prints an OSC's text, and draws no cursor. The filter gives it one ASCII cell per glyph, EL as spaces, a frame that never wraps or scrolls, the alternate screen as a clear, reverse video as colour, and a painted caret. [Note 006](docs/architecture/006-the-agnos-console-is-not-a-terminal.md) has the rules.
+- **A sized terminal channel is a terminal.** `term_raw` takes keys from an end with a `CH_WINSZ_GET` size, `term_winsize` reads it, and the idle loop follows a change. An unsized end stays the line REPL.
+- **`./scripts/agnos-run.sh --tui`** (`scripts/live/agnos-tui.py`, `tests/agnos/tuihost.cyr`). 61 steps from QEMU's keyboard, through the real agnsh, read back from the serial log and from screendumps, then a real puka window and a ring-3 emulator on a channel.
+- **Filed with agnos:** a channel write drops the oldest record with no back-pressure, and the console's gaps, in the order thoth would retire its filter. Both are on the roadmap's waiting table.
+
+### Fixed
+
+- **AGNOS answered "a terminal" for every fd,** a pipe and a file included, and the tier needed a `TERM` no bare AGNOS sets. `ui_isatty` asks `fd_kind#111` now, and where `TERM` is unset the kernel's word stands in for it. A `TERM` that is set is still honoured, `dumb` included.
+- **Two workers would have hung on AGNOS,** where `thread_create` runs the body inline. A network call with a surface bound parked for itself, and the spinner's worker never returned. Both now check `THREADS_CONCURRENT`. So on AGNOS a wait does not pump the surface, and Esc lands at the next frame.
+- **A write of more than 64 bytes to a channel was cut off.** `emit`, `emit_n`, `emit_raw` and `oprintln` made one write, and `write#1` takes 64 bytes of a channel. All of them go through `fd1_all` now.
+- **A channel lost a frame's bytes with nobody told.** A full inbox drops its oldest record. thoth keeps to 2 KB per 17 ms on every channel write: to a host draining at 60 Hz, the same session delivered about 160 KB before that and about 310 KB after. A kernel fix is filed, because this is a guess at the emulator's rate.
+- **A prompt on AGNOS honoured a key typed ahead.** `term_flush_input` had no AGNOS arm: S-3 now holds there, through `CM_FLUSH` on a cooked console and by draining the keys in hand.
+- `_net_pipe` read AGNOS's two u64 pipe fds as ints, so a poke went to stdin. It is unreachable on AGNOS while threads are serial.
+
+### Changed
+
+- A stream on the console paints for a quarter of its time at most: each console byte is a glyph and a COM1 write. A 20 KB reply went from over 90 s to under 5 s, and Esc from 2.3 s to 0.9 s.
+- `frame_move`, `frame_clear`, `frame_clear_eol`, `/clear` and the alternate screen go through `fd1_write` instead of darshana's direct writers. The bytes are the same.
+
+### Verified
+
+- 971 (gui) + 2657 (core) + 1723 (agent) + 1074 (tui) + 190 (render) = 6,615 assertions, 0 failures, from a clean copy with stdin closed and with it held open.
+- Break tests: 63 mutants in isolated copies, all caught, 51 by the suites and 12 on the guest. Eight survived at first, and each now has a test: the pacing mutant only fell once the test host drained at 60 Hz and checked every row of a frame.
+- Warning sets are unchanged on all four lanes. All five suites pass under `qemu-aarch64` and on a Raspberry Pi (6,615 each), macOS is green natively (2646 + 1711 + 1053 + 956 + 190), the hostile wire flags 0 of 152 on Linux and macOS, and rung 1, rung 2 and the hostile pass on AGNOS all pass. `./scripts/agnos-run.sh --tui` passes all 61 steps on a plain kernel, a real puka window among them. A 168 KB TUI session on Linux is byte-identical to 0.55.1's, apart from the version.
+- A real puka 0.6.25 window on aethersafha 0.18.2: thoth took the line REPL and completed a turn. Screendumps of every scene were read by eye, which is what caught the caret's lost background.
+- Not run: iron. All of it ran under QEMU, so a real 16550 and a real keyboard are unproven, and the console's speed on iron is unmeasured. Not covered: a real provider over TLS from the guest, and a keyboard layout other than US.
+
 ## [0.55.1] - 2026-11-06
 
 **The AGNOS hostile pass.** The 2026-11-05 audit's attacks had only ever run on Linux, and they now run against thoth in ring 3: `./scripts/agnos-run.sh --hostile`. It found two high-severity defects, both about what a path means on AGNOS, and both are fixed. Four kernel capabilities are filed with agnos.

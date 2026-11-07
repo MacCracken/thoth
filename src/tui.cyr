@@ -740,6 +740,10 @@ var TUI_ESC_SEQ_MS = 30;        # how long the byte after ESC has to arrive befo
 # _tui_getb: blocking read of one byte, honouring the pushback. 1 = a byte is in `out`, 0 = EOF.
 fn _tui_getb(out) {
     if (_tui_pushback >= 0) { store8(out, _tui_pushback); _tui_pushback = 0 - 1; return 1; }
+    if (term_key_src() != 0) {
+        if (term_key_getb(out, 0 - 1) == 1) { return 1; }
+        return 0;
+    }
     if (syscall(SYS_READ, 0, out, 1) <= 0) { return 0; }
     return 1;
 }
@@ -754,6 +758,10 @@ fn _tui_getb(out) {
 # to the blocking read, which is exactly the pre-0.44.2 behaviour: no regression, just no improvement.
 fn _tui_getb_timed(out, ms) {
     if (_tui_pushback >= 0) { store8(out, _tui_pushback); _tui_pushback = 0 - 1; return 1; }
+    if (term_key_src() != 0) {
+        if (term_key_getb(out, ms) == 1) { return 1; }
+        return 0;
+    }
     #ifdef CYRIUS_TARGET_LINUX
     var pfd[8];
     var z = 0;
@@ -1724,6 +1732,11 @@ fn tui_draw_rule(row, cols) {
 # segment. Called after any paint that left the cursor elsewhere (the feed, the spinner) so it returns to
 # where you type.
 fn tui_park_cursor() {
+    _tui_park_place();
+    term_caret();                                                 # 0.55.2: the AGNOS console draws no cursor of its own
+    return 0;
+}
+fn _tui_park_place() {
     if (_mpick_active == 1) { _tui_park_pick(); return 0; }       # 0.24.0: while picking, the cursor lives at the query caret
     if (_fsearch_active == 1) { _tui_park_search(); return 0; }   # 0.18.4: while searching, the cursor lives at the query caret (covers WINCH / /theme / /find full-repaints)
     var total = _comp_total_rows();
@@ -1999,7 +2012,7 @@ fn _spin_anim_worker(arg) {
             if (atomic_cas(_spin_anim_state, SPIN_ANIM_ARMED, SPIN_ANIM_PAINTING) == 1) {
                 spin_advance();
                 var n = _spin_anim_frame(row);
-                if (n > 0) { syscall(SYS_WRITE, 1, _spin_anim_buf, n); }
+                if (n > 0) { fd1_write(_spin_anim_buf, n); }
                 atomic_store(_spin_anim_state, SPIN_ANIM_ARMED);
             }
         }
@@ -2011,6 +2024,7 @@ fn _spin_anim_worker(arg) {
 # spinner-only: off the alt-screen (OUT_RING is the TUI's sink) or with no dispatch in flight there is
 # nothing to animate and this is a no-op, so the line REPL, one-shot and the GUI are untouched.
 fn spin_anim_arm() {
+    if (THREADS_CONCURRENT == 0) { return 0; }         # 0.55.2: on AGNOS thread_create runs the body inline, and this one loops
     if (_spin_active == 0) { return 0; }
     if (_comp_len > 0) { return 0; }                   # 0.45.2: a draft owns the row (see spin_paint)
     if (out_mode() != OUT_RING) { return 0; }
@@ -2319,14 +2333,22 @@ fn _stream_should_paint(now, last) {
 # STREAM_FRAME_MS budget (_stream_should_paint). Dropping an intra-budget tick never
 # withholds content — the bytes are already in the ring, and the guaranteed
 # post-dispatch feed_repaint (tui.cyr run-line, ~1045) always lands the final state.
+var _stream_hold_ms = 0;              # 0.55.2: no paint before this, set where a frame is dear (below)
 fn feed_stream_tick() {
     if (out_mode() != OUT_RING) { return 0; }
     var now = clock_now_ms();
+    if (now < _stream_hold_ms) { return 0; }
     if (_stream_should_paint(now, _stream_last_paint_ms) == 0) { return 0; }
     _stream_last_paint_ms = now;
     spin_advance();
     feed_repaint();
     spin_paint();
+    # 0.55.2: the AGNOS console mirrors every byte to COM1, so a frame can cost more than the budget. A paint takes a quarter of the stream
+    # at most, or the reply waits on its own repaints: 20 KB took over 90 s on a 128x64 grid.
+    if (term_con_on() == 1) {
+        var after = clock_now_ms();
+        _stream_hold_ms = after + ((after - now) * 3);
+    }
     return 0;
 }
 
@@ -2766,7 +2788,7 @@ fn tui_events_init() {
     #ifndef CYRIUS_TARGET_LINUX
     # Everywhere but Linux, thoth takes its own bare-blocking-read fallback (instant resize disabled —
     # an acceptable, already-coded degradation) and this whole multiplex is compiled out.
-    #   agnos  — no signalfd, no epoll-on-signalfd multiplex, and the fb console emits no SIGWINCH.
+    #   agnos  — keys are a poll there, so the loop polls (_tui_wait_keys, 0.55.2) and the probes stay blocking.
     #   macOS  — kqueue, not epoll; darshana has no BSD termios/signalfd peer (see src/term.cyr).
     #   win    — IOCP, not epoll; no signalfd at all.
     # ⚠ 0.44.3 WIDENED this gate from `CYRIUS_TARGET_AGNOS` to "not Linux". The old gate compiled the
@@ -2790,14 +2812,35 @@ fn tui_events_init() {
     #endif
 }
 
+# _tui_wait_keys (0.55.2): the event wait where keys are a poll. A resize is one too: winsize#60 and CH_WINSZ_GET are one load each,
+# and a tick of pause#14 gives the CPU away between looks. A kernel SIGWINCH would only say to look.
+fn _tui_wait_keys() {
+    while (1 == 1) {
+        if (term_key_fill() != 0) { return EV_KEY; }
+        var rr[8];
+        var cc[8];
+        store64(&rr, 0); store64(&cc, 0);
+        if (term_winsize(1, &rr, &cc) == 0) {
+            var r = load64(&rr);
+            var c = load64(&cc);
+            if (((r > 4) && (r != _tui_rows)) || ((c > 0) && (c != _tui_cols))) { return EV_WINCH; }
+        }
+        term_key_idle();
+    }
+    return EV_KEY;
+}
+
 # tui_wait_event: block until stdin or the WINCH signalfd is readable. Returns
 # EV_WINCH (resize) or EV_KEY (a keypress awaits tui_read_key). WINCH is prioritized
 # so a key is decoded against the NEW geometry. Level-triggered epoll: a ready fd not
 # acted on re-fires next call, so returning one event per call loses nothing.
 fn tui_wait_event() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return _tui_wait_keys();
+    #endif
     #ifndef CYRIUS_TARGET_LINUX
-    # Unreachable off Linux (_events_ok is 0 → the loop uses the bare read), but it must still
-    # COMPILE: no non-Linux target has sys_epoll_wait. Safe default EV_KEY.
+    # Unreachable off Linux and AGNOS (_events_ok is 0 → the loop uses the bare read), but it must still
+    # COMPILE: no other target has sys_epoll_wait. Safe default EV_KEY.
     return EV_KEY;
     #endif
     #ifdef CYRIUS_TARGET_LINUX
@@ -2909,7 +2952,7 @@ fn tui_modes_reassert() {
     # the user staring at a blank one. `_tui_running` is set inside tui_loop and cleared on exit, so it
     # is the only flag that answers "is an alt screen up right now".
     if (_tui_running == 0) { return 0; }
-    tty_alt_enter();
+    term_alt_enter();
     tui_kitty_enable();
     tui_bpaste_enable();
     tui_mouse_enable();
@@ -2991,7 +3034,7 @@ fn tui_loop() {
     net_poll_set(&_tui_net_poll);                 # 0.54.0: every network wait from here on keeps Esc and the indicator alive
     read_wait_hook_set(&_tui_read_wait);          # 0.54.1: and a cooked answer does not outwait SIGTERM
     _events_ok = tui_events_init();      # the stdin + SIGWINCH epoll multiplex (instant resize; 0 on agnos)
-    tty_alt_enter();
+    term_alt_enter();
     tui_kitty_enable();                           # 0.11.9: Shift+Enter via the kitty keyboard protocol
     tui_bpaste_enable();                          # 0.17.0: bracketed paste (multi-line paste -> composer)
     tui_mouse_enable();                           # 0.17.2: SGR mouse (wheel scroll, click focus/tree)
@@ -3048,7 +3091,7 @@ fn tui_loop() {
     while (_tui_running == 1) {
         # wait on stdin + the SIGWINCH signalfd (instant resize); EV_KEY -> read a key.
         var ev = EV_KEY;
-        if (_events_ok == 1) { ev = tui_wait_event(); }
+        if ((_events_ok == 1) || (term_key_src() != 0)) { ev = tui_wait_event(); }
         if (ev == EV_WINCH) {
             tui_drain_winch();
             frame_clear();                 # geometry changed; full repaint at the new size
@@ -3187,10 +3230,11 @@ fn tui_loop() {
     tui_mouse_disable();            # 0.17.2: stop SGR mouse reporting (don't leave the terminal in it)
     tui_bpaste_disable();           # 0.17.0: pop bracketed-paste mode
     tui_kitty_disable();            # 0.11.9: pop the kitty keyboard protocol (restore legacy keys)
-    tty_cursor_show();
+    term_cursor_show();
     term_cooked();
     _tui_scroll_region(1, _tui_rows);
-    tty_alt_leave();
+    term_alt_leave();
+    term_keys_release();            # 0.55.2: a hook at session end, or nothing at all, reads fd 0 again
     tui_events_teardown();          # close the signalfds (restore the signal mask) + epoll fd
     net_poll_set(0);                # 0.54.0: no surface now: a session_end hook's call, if any, is a plain call
     return 0;

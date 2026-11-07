@@ -49,6 +49,9 @@ fn intr_arm_tty() {
     # terminal it was launched from is not the stop key's source — /run under the window's card bracket (OUT_RING)
     # must not flip that terminal into poll mode for the length of the command.
     if (_intr_check_fn != 0) { return 0; }
+    #ifdef CYRIUS_TARGET_AGNOS
+    if (term_key_src() != 0) { _intr_parse_reset(); _intr_active = 1; }   # 0.55.2: the keys are already a poll
+    #endif
     #ifdef CYRIUS_TARGET_LINUX
     _intr_was_raw = term_raw_held();
     if (term_raw_nonblock(0) < 0) { return 0; }       # not a tty -> stay disarmed
@@ -73,13 +76,20 @@ fn intr_arm_tty() {
 # Esc (nothing follows it in the drain) or kitty's encoding of the Esc key, `ESC[27u` (with any modifier field).
 # 0.52.8 (ruling R3): and an Esc followed in the same drain by a byte that begins no terminal sequence — Esc, then Enter
 # or a letter, typed inside one 100 ms tick (0.52.6 read that as an Alt chord, and the command ran on).
+fn _intr_read(c) {
+    if (term_key_src() != 0) {
+        if (term_key_getb(c, 0) == 1) { return 1; }
+        return 0;
+    }
+    return syscall(SYS_READ, 0, c, 1);
+}
 fn intr_poll() {
     if (_intr_active == 0) { return _intr_flag; }
     var c[8];
-    var n = syscall(SYS_READ, 0, &c, 1);
+    var n = _intr_read(&c);
     while (n > 0) {
         if (_intr_feed(load8(&c) & 255) == 1) { intr_signal(); }
-        n = syscall(SYS_READ, 0, &c, 1);
+        n = _intr_read(&c);
     }
     if (_intr_feed_end() == 1) { intr_signal(); }
     return _intr_flag;
@@ -189,6 +199,9 @@ fn _intr_feed_end() {
 
 # intr_disarm: back to the mode intr_arm_tty found: cooked for a turn (a following read_line confirm), raw from the idle loop.
 fn intr_disarm() {
+    #ifdef CYRIUS_TARGET_AGNOS
+    _intr_active = 0;
+    #endif
     #ifdef CYRIUS_TARGET_LINUX
     if (_intr_active == 1) {
         if (_intr_was_raw == 1) { term_raw(0); } else { term_cooked(); }
